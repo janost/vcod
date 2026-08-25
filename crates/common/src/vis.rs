@@ -68,18 +68,18 @@ pub struct WorldVis {
     tree_end: Vec<u32>,
     aabb_nodes: Vec<bsp::AabbNode>,
     cull_groups: Vec<bsp::CullGroup>,
-    // Unread until Task 4's portal walk.
-    #[allow(dead_code)]
-    cull_indices: Vec<u32>,
     cells: Vec<bsp::Cell>,
-    #[allow(dead_code)]
-    portals: Vec<bsp::Portal>,
-    #[allow(dead_code)]
-    portal_verts: Vec<Vec3>,
     nodes: Vec<bsp::Node>,
     leafs: Vec<bsp::Leaf>,
     /// `(n, dist)`, front where `n·p - dist > 0`.
     planes: Vec<(Vec3, f32)>,
+    // Unread until Task 4's portal walk.
+    #[allow(dead_code)]
+    cull_indices: Vec<u32>,
+    #[allow(dead_code)]
+    portals: Vec<bsp::Portal>,
+    #[allow(dead_code)]
+    portal_verts: Vec<Vec3>,
 }
 
 const EMPTY: (Vec3, Vec3) = (Vec3::INFINITY, Vec3::NEG_INFINITY);
@@ -113,6 +113,7 @@ impl WorldVis {
             if root < bsp.aabb_nodes.len() && tree_end[root] == 0 {
                 walk_bounds(
                     root,
+                    0,
                     &bsp.aabb_nodes,
                     &soup_bounds,
                     &mut node_bounds,
@@ -126,10 +127,7 @@ impl WorldVis {
             tree_end,
             aabb_nodes: bsp.aabb_nodes.clone(),
             cull_groups: bsp.cull_groups.clone(),
-            cull_indices: bsp.cull_indices.clone(),
             cells: bsp.cells.clone(),
-            portals: bsp.portals.clone(),
-            portal_verts: bsp.portal_verts.iter().map(|&v| Vec3::from(v)).collect(),
             nodes: bsp.nodes.clone(),
             leafs: bsp.leafs.clone(),
             planes: bsp
@@ -137,6 +135,9 @@ impl WorldVis {
                 .iter()
                 .map(|p| (Vec3::from(p.normal), p.dist))
                 .collect(),
+            cull_indices: bsp.cull_indices.clone(),
+            portals: bsp.portals.clone(),
+            portal_verts: bsp.portal_verts.iter().map(|&v| Vec3::from(v)).collect(),
         }
     }
 
@@ -179,6 +180,7 @@ impl WorldVis {
         for ci in 0..self.cells.len() {
             if self.mark_tree(self.cells[ci].first_aabb, frustum, &mut vis) {
                 vis.cells[ci] = true;
+                vis.stats.cells_visited += 1;
             }
         }
         for g in &self.cull_groups {
@@ -260,15 +262,20 @@ impl WorldVis {
 }
 
 /// Bottom-up bounds and preorder ends; returns the index after the subtree.
-/// Depth is bounded by `child_count` chains from the tree; guards against a
-/// hostile forest with an out-of-range or repeated (`tree_end[i] != 0`) node.
+/// Guards against a hostile forest two ways: an out-of-range or repeated
+/// (`tree_end[i] != 0`) child is skipped, and `depth` caps recursion at
+/// `nodes.len()` so a `child_count: 1` chain cannot overflow the stack.
 fn walk_bounds(
     i: usize,
+    depth: usize,
     nodes: &[bsp::AabbNode],
     soup_bounds: &[(Vec3, Vec3)],
     node_bounds: &mut [(Vec3, Vec3)],
     tree_end: &mut [u32],
 ) -> usize {
+    if depth > nodes.len() {
+        return i;
+    }
     let node = nodes[i];
     let mut b = (node.first_soup as usize..(node.first_soup + node.soup_count) as usize)
         .fold(EMPTY, |b, s| union(b, soup_bounds[s]));
@@ -278,7 +285,7 @@ fn walk_bounds(
             break;
         }
         let child = j;
-        j = walk_bounds(child, nodes, soup_bounds, node_bounds, tree_end);
+        j = walk_bounds(child, depth + 1, nodes, soup_bounds, node_bounds, tree_end);
         b = union(b, node_bounds[child]);
     }
     node_bounds[i] = b;
@@ -431,10 +438,10 @@ mod tests {
     use super::*;
 
     /// 90 degree vertical FOV, square aspect, looking along `dir` from `eye`.
-    #[allow(deprecated)] // glam 0.33 points these at the new camera module; behavior is unchanged
     pub(crate) fn frustum_at(eye: Vec3, dir: Vec3) -> Frustum {
-        let view = Mat4::look_to_rh(eye, dir, Vec3::Z);
-        let proj = Mat4::perspective_rh(90f32.to_radians(), 1.0, 4.0, 10000.0);
+        let view = glam::camera::rh::view::look_to_mat4(eye, dir, Vec3::Z);
+        let proj =
+            glam::camera::rh::proj::directx::perspective(90f32.to_radians(), 1.0, 4.0, 10000.0);
         Frustum::from_view_proj(proj * view)
     }
 
@@ -484,6 +491,67 @@ mod tests {
     }
 
     #[test]
+    fn nested_tree_unions_bounds_and_tests_every_sibling_once() {
+        use crate::bsp::AabbNode;
+        let mut bsp = two_cell_world();
+        // A 3-node tree: root (no soups of its own) over two leaf children,
+        // where the fixture's aabb_nodes previously only ever had child_count
+        // 0, never exercising walk_bounds's child loop or mark_tree's skip.
+        bsp.aabb_nodes = vec![
+            AabbNode {
+                first_soup: 0,
+                soup_count: 0,
+                child_count: 2,
+            },
+            AabbNode {
+                first_soup: 1,
+                soup_count: 1,
+                child_count: 0,
+            },
+            AabbNode {
+                first_soup: 2,
+                soup_count: 1,
+                child_count: 0,
+            },
+        ];
+        bsp.cells[0].first_aabb = 0;
+        bsp.cells[1].first_aabb = 0;
+        let vis = WorldVis::build(&bsp);
+        assert_eq!(vis.tree_end, vec![3, 2, 3]);
+        let (a_lo, a_hi) = vis.node_bounds[1];
+        let (b_lo, b_hi) = vis.node_bounds[2];
+        assert_eq!(
+            vis.node_bounds[0],
+            (a_lo.min(b_lo), a_hi.max(b_hi)),
+            "root's bounds are the union of its children's"
+        );
+
+        // near=4, far=100 from x=-90 reaches child A (closest point x=-50,
+        // distance 40) but not child B (closest point x=50, distance 140);
+        // the root's own union bounds still touch A, so it is hit too.
+        let eye = Vec3::new(-90.0, 0.0, 0.0);
+        let view = glam::camera::rh::view::look_to_mat4(eye, Vec3::X, Vec3::Z);
+        let proj =
+            glam::camera::rh::proj::directx::perspective(90f32.to_radians(), 1.0, 4.0, 100.0);
+        let f = Frustum::from_view_proj(proj * view);
+
+        let mut v = Visible {
+            soups: vec![false; vis.soup_count()],
+            cells: vec![false; vis.cell_count()],
+            stats: VisStats::default(),
+        };
+        assert!(vis.mark_tree(0, &f, &mut v), "root itself is hit");
+        assert!(v.soups[1], "child A is inside the shortened far plane");
+        assert!(!v.soups[2], "child B is past it");
+        // Root, A and B are each visited once: the preorder range is
+        // contiguous and a failing leaf's own tree_end is just itself + 1,
+        // so it can't skip past its sibling. The skip only pays off for a
+        // failing internal node with descendants beyond it (mp_pavlov's
+        // real trees have those; this fixture keeps the two-node case).
+        assert_eq!(v.stats.nodes_tested, 3);
+    }
+
+    #[test]
     fn finds_the_cell_of_a_point() {
         let vis = WorldVis::build(&two_cell_world());
         assert_eq!(vis.cell_for_point(Vec3::new(-50.0, 0.0, 0.0)), Some(0));
@@ -493,13 +561,33 @@ mod tests {
             ..two_cell_world()
         });
         assert_eq!(no_tree.cell_for_point(Vec3::ZERO), None);
+
+        let solid = WorldVis::build(&Bsp {
+            leafs: vec![
+                bsp::Leaf {
+                    cluster: 0,
+                    cell: -1,
+                },
+                bsp::Leaf {
+                    cluster: 1,
+                    cell: 1,
+                },
+            ],
+            ..two_cell_world()
+        });
+        assert_eq!(
+            solid.cell_for_point(Vec3::new(-50.0, 0.0, 0.0)),
+            None,
+            "a solid leaf (cell -1) has no cell"
+        );
     }
 
     #[test]
     fn frustum_fallback_marks_whatever_the_frustum_contains() {
         let vis = WorldVis::build(&two_cell_world());
         let eye = Vec3::new(-90.0, 0.0, 0.0);
-        let v = vis.visible_fallback(&frustum_at(eye, Vec3::X));
+        let f = frustum_at(eye, Vec3::X);
+        let v = vis.visible_fallback(&f);
         assert!(v.stats.fallback);
         assert_eq!(
             v.soups,
@@ -507,6 +595,11 @@ mod tests {
             "both cells' soups are ahead, the cull group is off to the side"
         );
         assert_eq!(v.cells, vec![true, true]);
+        assert_eq!(
+            vis.visible(eye, &f).soups,
+            v.soups,
+            "visible() is still the fallback stub"
+        );
         let v = vis.visible_fallback(&frustum_at(eye, -Vec3::X));
         assert_eq!(v.soups, vec![false, false, false]);
         let v = vis.visible_fallback(&frustum_at(Vec3::new(-45.0, 0.0, 0.0), Vec3::Y));
