@@ -234,11 +234,17 @@ From the materials lump, per brush via `brush.material`:
 |---|---|
 | `0x1` | solid |
 | `0x4` | seen on terrain (snow) materials, which have no brushes |
+| `0x20` | water |
 | `0x800` | sky |
 | `0x10000` | playerclip |
 | `0x20000` | monsterclip |
 
 The brush collision mask is `(content_flags & (0x1 | 0x10000)) != 0`. `collision.rs` defines `CONTENTS_SOLID`, `CONTENTS_PLAYERCLIP` and `CONTENTS_SKY` only; monsterclip is not referenced by any code path.
+
+Census over all 49 stock maps (SP and MP) in `pak[0-4].pk3` pins two more bits, both VERIFIED by decoding every lump-0 material of every map:
+
+- **Water is `content_flags & 0x20`**, Q3's `CONTENTS_WATER` value unchanged. Every liquid texture carries it (`textures/common/water` 0x28000020 = translucent+detail+water, `textures/sfx/*water*` 0x20000020 or 0x28000020, bare waterfalls 0x20); no other low bit behaves like a fluid, and lava/slime (Q3 0x8/0x10) never appear on a brush-referenced material. Of the stock MP maps only mp_harbor has water brushes.
+- **Ladders are `surface_flags & 0x8`** (Q3's `SURF_LADDER`) on `textures/common/ladder`, whose brushes are playerclip (content 0x28010000 = translucent+detail+playerclip). The flag rides the material, so a trace hit can read it from the brush's material word without new lumps. Nine of the fourteen stock MP maps carry ladder brushes: bocage, depot, harbor, powcamp, railyard, rocket, ship, stalingrad, tigertown. Because they are playerclip they are already inside vcod's collision mask - today you walk into them as solid walls; ladder climbing takes over when the forward detection trace sees the flag.
 
 ## Terrain has no brushes
 
