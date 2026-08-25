@@ -207,7 +207,7 @@ decompiler output or disassembly listings.
   height, which fails once the eye looks over them). The soup lump is laid out
   `[cull-group soups][cell-tree soups][submodel soups]`, and leaf surfaces
   (lump 23) index the terrain collision partitions, not draw soups.
-- The F3 `audio` line reads `v N plays N miss N cull N drop N N.NNms`: live
+- The F3 `audio` line reads `v N plays N miss N cull N drop N steal N N.NNms`: live
   voices, cues started, aliases not in the table, cues already past `dist_max`
   when they fired, and sounds kira refused for lack of capacity.
 - `--connect` opens the window before the gamestate arrives; the

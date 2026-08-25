@@ -22,15 +22,16 @@ use crate::audio::bank::SoundBank;
 use crate::audio::cues::{Cue, CueCtx, Source};
 use crate::audio::handle::{start_sound, Handle};
 use crate::audio::spatial::{amplitude_db, Listener};
-use crate::audio::voices::{NewVoice, VoiceId, VoiceTable};
+use crate::audio::voices::{Admitted, NewVoice, VoiceId, VoiceTable, ENDLESS_MS};
 use crate::fx::registry::{EV_AMMO_PICKUP, EV_ITEM_PICKUP};
 use crate::fx::sim::{FxSound, Rng};
 use vcod_common::net::events::GameEvent;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::weapon::WeaponSounds;
 
-/// Kira's per-track sound cap. Retail's pools are smaller (research doc,
-/// section 2) but steal voices; vcod refuses the new sound instead.
+/// Kira's per-track sound cap. Retail's pools (research doc, section 2) are
+/// enforced per class in `VoiceTable`, which evicts a victim instead; this
+/// only backstops kira itself.
 const SOUND_CAPACITY: usize = 256;
 
 /// Applied to every alias's random volume; `FUN_0044d5c0` @ `CoDMP.exe
@@ -55,8 +56,12 @@ pub struct AudioStats {
     /// the failure), a stream once per attempt. Only the tests read it.
     #[cfg_attr(not(test), allow(dead_code))]
     pub decode_failures: u64,
-    /// Sounds kira refused for lack of capacity.
+    /// Sounds refused for lack of capacity: every pool slot was held by
+    /// voices the newcomer may not steal, or kira itself refused.
     pub drops: u64,
+    /// Voices ended early to make room (`FUN_0044c350`, research doc,
+    /// section 2).
+    pub steals: u64,
     pub step_ms: f32,
 }
 
@@ -312,17 +317,65 @@ impl AudioSystem {
             }
             return None;
         }
-        let (id, replaced) = self.table.add(NewVoice {
-            source: cue.source,
-            channel: row.channel,
-            volume,
-            dist: row.dist,
-            master_slave: row.master_slave,
-            spatial,
-            looping: row.looping,
-        });
-        for r in replaced {
-            self.stop_voice(r);
+        // Static files are decoded before admission so a failed load never
+        // steals a pool slot; their length feeds the steal tiebreak.
+        // Streams have no length before playback (research doc approximation,
+        // section 10).
+        let static_data = (!row.streamed)
+            .then(|| self.bank.get(fs, &row.file))
+            .flatten();
+        if !row.streamed && static_data.is_none() {
+            // The bank already counted and warned about the failure.
+            return None;
+        }
+        let duration_ms = static_data
+            .as_ref()
+            .map(|d| u32::try_from(d.duration().as_millis()).unwrap_or(ENDLESS_MS))
+            .unwrap_or(ENDLESS_MS);
+        let (id, replaced, stolen) = match self.table.add(
+            NewVoice {
+                source: cue.source,
+                channel: row.channel,
+                volume,
+                dist: row.dist,
+                master_slave: row.master_slave,
+                spatial,
+                looping: row.looping,
+                streamed: row.streamed,
+                duration_ms,
+                protected: matches!(
+                    cue.source,
+                    Source::Entity {
+                        num: cues::AMBIENT_ENTITY,
+                        ..
+                    }
+                ),
+            },
+            |id| {
+                self.handles
+                    .get(&id)
+                    .is_some_and(|h| h.state() == PlaybackState::Stopped)
+            },
+        ) {
+            Err(_) => {
+                // Every slot was held by voices this sound may not steal;
+                // retail's allocator comes up empty in the same case.
+                self.stats.drops += 1;
+                return None;
+            }
+            Ok(Admitted::Started {
+                id,
+                replaced,
+                stolen,
+            }) => (id, replaced, stolen),
+        };
+        self.stats.steals += stolen.len() as u64;
+        // Replacement and stealing already removed the victims from the
+        // table; only their kira handles remain.
+        for r in replaced.iter().chain(stolen.iter()) {
+            if let Some(mut h) = self.handles.remove(r) {
+                h.stop();
+            }
         }
         // Initial gain/pan so the first audio chunk is already placed.
         let (db, pan) = self
@@ -372,7 +425,7 @@ impl AudioSystem {
                 }
             }
         } else {
-            match self.bank.get(fs, &row.file) {
+            match static_data {
                 // The bank already counted and warned about a failure.
                 None => None,
                 Some(data) => Some(start_sound!(

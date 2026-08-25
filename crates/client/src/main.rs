@@ -251,8 +251,14 @@ fn hud_lines(
     let (hud_quads, hud_ms, hud_unknown) = hud_counts;
     lines.push(format!("hud q{hud_quads} {hud_ms:.2}ms unk {hud_unknown}"));
     lines.push(format!(
-        "audio v{} plays {} miss {} cull {} drop {} {:.2}ms",
-        audio.voices, audio.plays, audio.misses, audio.culled, audio.drops, audio.step_ms
+        "audio v{} plays {} miss {} cull {} drop {} steal {} {:.2}ms",
+        audio.voices,
+        audio.plays,
+        audio.misses,
+        audio.culled,
+        audio.drops,
+        audio.steals,
+        audio.step_ms
     ));
     let cam_line = |tag: &str, pos: Vec3, yaw: f32, pitch: f32| {
         format!(
