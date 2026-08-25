@@ -209,7 +209,9 @@ decompiler output or disassembly listings.
   (lump 23) index the terrain collision partitions, not draw soups.
 - The F3 `audio` line reads `v N plays N miss N cull N drop N steal N N.NNms`: live
   voices, cues started, aliases not in the table, cues already past `dist_max`
-  when they fired, and sounds kira refused for lack of capacity.
+  when they fired, cues refused because every pool slot was held by
+  higher-priority voices (or kira's own cap hit), and voices evicted by the
+  steal rule.
 - `--connect` opens the window before the gamestate arrives; the
   connecting/loading phases draw HUD text only.
 - Movement constants come from retail rodata, not community lore: the table
