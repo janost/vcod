@@ -70,6 +70,13 @@ impl SnapshotRing {
         self.baselines = baselines;
     }
 
+    /// A new gamestate: every frame deltas against dead baselines.
+    pub fn clear(&mut self) {
+        self.slots.iter_mut().for_each(|s| *s = None);
+        self.newest_num = None;
+        self.dropped = None;
+    }
+
     fn slot(num: u32) -> usize {
         num as usize % RING_CAP
     }
@@ -685,5 +692,58 @@ mod tests {
             "no packet entities decoded across the run"
         );
         assert!(max_clients > 0, "no clientStates decoded across the run");
+    }
+
+    #[test]
+    fn clear_forgets_every_frame_but_keeps_nothing_stale() {
+        use crate::net::gamestate;
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+
+        let gs_data = crate::testing::fixture("net/gamestate.bin");
+        let mut gr = MsgReader::new(&gs_data[4..], &h);
+        let gs = gamestate::parse(&mut gr, p).unwrap();
+        let mut ring = SnapshotRing::new();
+        ring.set_baselines(gs.baselines.clone());
+
+        let data = crate::testing::fixture("net/snapshots.bin");
+        let mut off = 0usize;
+
+        while off + 8 <= data.len() {
+            let message_num = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+            let len = u32::from_le_bytes(data[off + 4..off + 8].try_into().unwrap()) as usize;
+            off += 8;
+            let msg = &data[off..off + len];
+            off += len;
+
+            // four plain reliableAcknowledge bytes, then the huffman block
+            assert!(msg.len() >= 4, "message {message_num} shorter than the ack");
+            let mut r = MsgReader::new(&msg[4..], &h);
+
+            loop {
+                if r.is_overflowed() {
+                    break;
+                }
+                match r.read_byte() {
+                    SVC_NOP => {}
+                    SVC_SERVER_COMMAND => {
+                        r.read_long();
+                        r.read_big_string();
+                    }
+                    SVC_SNAPSHOT => {
+                        ring.parse_into(&mut r, p, message_num).unwrap();
+                        break;
+                    }
+                    SVC_EOF => break,
+                    _ => break,
+                }
+            }
+        }
+
+        let newest = ring.newest().expect("fixture ring has frames").message_num;
+        ring.clear();
+        assert!(ring.newest().is_none());
+        assert!(ring.get(newest).is_none());
+        assert!(ring.two_for_time(0).is_none());
     }
 }

@@ -516,7 +516,9 @@ impl<T: Transport> NetClient<T> {
                 SVC_GAMESTATE => {
                     match gamestate::parse_body(&mut r, self.proto) {
                         Ok(gs) => {
-                            if self.state == NetState::LoadingGamestate {
+                            // A map change re-sends the gamestate with the netchan up
+                            // (protocol-1.1.md, "map_restart and sv_serverid").
+                            if matches!(self.state, NetState::LoadingGamestate | NetState::Active) {
                                 if self.capture.is_some() {
                                     self.captured_gamestate = Some(msg.to_vec());
                                 }
@@ -657,6 +659,7 @@ impl<T: Transport> NetClient<T> {
 
     fn on_gamestate(&mut self, gs: Gamestate) {
         self.configstrings = gs.configstrings.clone();
+        self.snapshots.clear();
         self.snapshots.set_baselines(gs.baselines.clone());
         self.server_id = server_id_from_gamestate(&gs);
         self.checksum_feed = gs.checksum_feed;
@@ -998,6 +1001,35 @@ mod tests {
         assert!(c.gamestate().is_some());
         assert!(c.configstring(0).contains("mapname"));
         assert_ne!(c.server_id, 0);
+    }
+
+    #[test]
+    fn a_gamestate_while_active_reloads() {
+        let gs = crate::testing::fixture("net/gamestate.bin");
+        let seq = 100u32;
+        let challenge = seq as i32;
+        let t0 = Instant::now();
+        let mut c = NetClient::start(FakeTransport::default(), t0);
+        c.transport
+            .incoming
+            .push_back(oob("challengeResponse", &format!(" {challenge}")));
+        c.pump_at(t0);
+        c.transport.incoming.push_back(oob("connectResponse", ""));
+        c.pump_at(t0);
+        c.transport.incoming.push_back(server_packet(seq, &gs));
+        c.pump_at(t0);
+        assert_eq!(c.state(), NetState::Active);
+        // the server switches maps: the same gamestate again, one sequence later.
+        // +256 keeps `challenge ^ sequence` zero in the scramble seed's low byte,
+        // so the decode stays a no-op like the comment on `server_packet` says.
+        c.transport
+            .incoming
+            .push_back(server_packet(seq + 256, &gs));
+        let events = c.pump_at(t0);
+        assert!(events.contains(&NetEvent::GamestateReady));
+        assert_eq!(c.state(), NetState::Active);
+        assert!(c.snapshots().newest().is_none());
+        assert!(c.configstring(0).contains("mapname"));
     }
 
     #[test]
