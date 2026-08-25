@@ -157,7 +157,9 @@ Click to capture the mouse, Esc to release it, mouse to look around.
 | Scroll | Adjust fly speed |
 
 In spectate mode the position comes from the server; the mouse drives the look
-angles. Hold Tab for the scoreboard.
+angles. Hold Tab for the scoreboard. A map change on the server shows a loading
+screen (and downloads a missing pak the way the connect does) and continues on
+the new map.
 
 These work in every mode:
 
@@ -213,7 +215,7 @@ These work in every mode:
   channel replacement, ducking) but not yet confirmed by ear against the real
   game.
 - The server sends no snapshots, so a connected client waits at the loaded map
-  until it times out. Map changes mid-session are unsupported in the client.
+  until it times out.
 
 ## Documentation
 

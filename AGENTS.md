@@ -108,6 +108,10 @@ engineering setup works.
   restart. Add `--save-fixture` or `--save-snapshots` only when the capture is
   meant to replace the committed evidence; the flag docs in
   `crates/client/src/main.rs` say why the two are separate.
+- A map change is a re-sent gamestate on the live netchan; the net client
+  applies it while `Active` and clears its snapshot ring. The client's per-map
+  state lives in `App.world`, the renderer's `WorldGpu` and `Phase::Live`;
+  `loading.rs` is the pure download/load state machine the redraw loop steps.
 - Two local servers, don't confuse them. `tools/run_server.sh [map]` runs the
   **retail** 1.1d Linux dedicated binary (not in the repo; see the script
   header for where it goes and what it needs). It is the oracle for every wire
@@ -206,3 +210,5 @@ decompiler output or disassembly listings.
 - The F3 `audio` line reads `v N plays N miss N cull N drop N N.NNms`: live
   voices, cues started, aliases not in the table, cues already past `dist_max`
   when they fired, and sounds kira refused for lack of capacity.
+- `--connect` opens the window before the gamestate arrives; the
+  connecting/loading phases draw HUD text only.
