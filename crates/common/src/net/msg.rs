@@ -509,6 +509,60 @@ fn read_ps_float(r: &mut MsgReader) -> i32 {
     }
 }
 
+/// Inverse of [`read_ps_float`]: integral selector unless out of the biased
+/// 13-bit range.
+fn write_ps_float(w: &mut MsgWriter, raw: i32) {
+    let f = f32::from_bits(raw as u32);
+    let trunc = f as i32;
+    let biased = trunc.wrapping_add(FLOAT_INT_BIAS);
+    if trunc as f32 == f && (0..(1 << FLOAT_INT_BITS)).contains(&biased) {
+        w.write_bits(0, 1);
+        w.write_packed_bits(biased, FLOAT_INT_BITS);
+    } else {
+        w.write_bits(1, 1);
+        w.write_long(raw);
+    }
+}
+
+/// Mirror of [`read_delta_playerstate`]. The trailing array blocks go out
+/// empty: the vcod server carries no stats, ammo or HUD state. Unlike the
+/// entity codec there is no zero-flag bit here, so a `-0.0` float reads back
+/// `+0.0`; retail loses the sign the same way.
+pub fn write_delta_playerstate(
+    w: &mut MsgWriter,
+    p: &Protocol,
+    from: &PlayerState,
+    to: &PlayerState,
+) {
+    debug_assert_eq!(from.fields.len(), to.fields.len());
+    let lc = from
+        .fields
+        .iter()
+        .zip(&to.fields)
+        .rposition(|(a, b)| a != b)
+        .map_or(0, |i| i + 1);
+    debug_assert!(lc <= 255);
+    w.write_byte(lc as u8);
+    for i in 0..lc {
+        if from.fields[i] == to.fields[i] {
+            w.write_bits(0, 1);
+            continue;
+        }
+        w.write_bits(1, 1);
+        if p.player_fields[i].bits == 0 {
+            write_ps_float(w, to.fields[i]);
+        } else {
+            // Unsigned width |bits|, matching the reader's plain packed read.
+            w.write_packed_bits(to.fields[i], p.player_fields[i].bits);
+        }
+    }
+    // Array-block gates: block 1, block 2, block 3's four sub-arrays,
+    // blocks 4 and 5.
+    for _ in 0..8 {
+        w.write_bits(0, 1);
+    }
+}
+
 /// Widths of the 34-entry HUD field table (cod_lnxded 0x80de384). 0..6 back
 /// the per-weapon block, 6..34 the two HUD arrays.
 #[rustfmt::skip]
@@ -905,6 +959,7 @@ impl<'a> MsgWriter<'a> {
 mod tests {
     use super::*;
     use crate::net::huffman::Huffman;
+    use crate::net::protocol::PROTOCOL_V1;
 
     fn rt(f: impl Fn(&mut MsgWriter), g: impl Fn(&mut MsgReader)) {
         let h = Huffman::new();
@@ -1497,6 +1552,94 @@ mod tests {
         assert_eq!(ps.fields, from.fields);
         assert_eq!(r.read_bits(10), 0x155);
         assert!(!r.is_overflowed());
+    }
+
+    /// A playerstate holding the pinned retail spectator values (provenance:
+    /// docs/design/2026-08-26-server-snapshots-plan.md header). Built by name so
+    /// table order cannot break the test silently.
+    fn spectator_playerstate(p: &Protocol) -> PlayerState {
+        let mut ps = PlayerState::null(p);
+        let mut set = |name: &str, v: i32| {
+            ps.fields[PlayerState::field_index(p, name).unwrap()] = v;
+        };
+        set("commandTime", 1_149_798);
+        set("origin[0]", 384f32.to_bits() as i32);
+        set("origin[1]", (-624f32).to_bits() as i32);
+        set("origin[2]", 184f32.to_bits() as i32);
+        set("eFlags", 24);
+        set("delta_angles[1]", 16_384);
+        set("speed", 400);
+        set("pm_type", 4);
+        set("mins[0]", (-15f32).to_bits() as i32);
+        set("mins[1]", (-15f32).to_bits() as i32);
+        set("maxs[0]", 15f32.to_bits() as i32);
+        set("maxs[1]", 15f32.to_bits() as i32);
+        set("maxs[2]", 70f32.to_bits() as i32);
+        set("proneViewHeight", 11);
+        set("crouchViewHeight", 40);
+        set("standViewHeight", 60);
+        set("deadViewHeight", 8);
+        set("walkSpeedScale", 0.4f32.to_bits() as i32);
+        set("runSpeedScale", 1f32.to_bits() as i32);
+        set("proneSpeedScale", 0.15f32.to_bits() as i32);
+        set("crouchSpeedScale", 0.65f32.to_bits() as i32);
+        set("strafeSpeedScale", 0.8f32.to_bits() as i32);
+        set("backSpeedScale", 0.7f32.to_bits() as i32);
+        set("leanSpeedScale", 0.4f32.to_bits() as i32);
+        set("friction", 1f32.to_bits() as i32);
+        ps
+    }
+
+    #[test]
+    fn written_playerstate_round_trips_from_null() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let to = spectator_playerstate(p);
+        let mut w = MsgWriter::new(&h);
+        write_delta_playerstate(&mut w, p, &PlayerState::null(p), &to);
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        assert_eq!(read_delta_playerstate(&mut r, p, &PlayerState::null(p)), to);
+        assert_eq!(
+            r.bits_read(),
+            bits,
+            "writer and reader must agree bit for bit"
+        );
+    }
+
+    #[test]
+    fn written_playerstate_deltas_from_a_base() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let base = spectator_playerstate(p);
+        let mut to = base.clone();
+        let oi = PlayerState::field_index(p, "origin[0]").unwrap();
+        to.fields[oi] = 512f32.to_bits() as i32;
+        // An int field at its negative-width boundary (viewheights are -8).
+        let vi = PlayerState::field_index(p, "standViewHeight").unwrap();
+        to.fields[vi] = 255;
+
+        let mut w = MsgWriter::new(&h);
+        write_delta_playerstate(&mut w, p, &base, &to);
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        assert_eq!(read_delta_playerstate(&mut r, p, &base), to);
+    }
+
+    #[test]
+    fn unchanged_playerstate_writes_only_the_empty_arrays() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let ps = PlayerState::null(p);
+        let mut w = MsgWriter::new(&h);
+        write_delta_playerstate(&mut w, p, &ps, &ps);
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        assert_eq!(read_delta_playerstate(&mut r, p, &ps), ps);
+        // lc byte plus eight zero array-gate bits.
+        assert_eq!(bits, 8 + 8);
     }
 
     /// The count byte after a 2-bit clc op lands at the byte cursor, alone and
