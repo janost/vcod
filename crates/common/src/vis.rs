@@ -44,6 +44,41 @@ impl Frustum {
             n.dot(p) + d >= 0.0
         })
     }
+
+    /// One plane per polygon edge through `eye`, oriented so the polygon's
+    /// centroid is inside; the child frustum of a portal.
+    pub fn from_polygon(eye: Vec3, poly: &[Vec3]) -> Self {
+        let centroid = poly.iter().sum::<Vec3>() / poly.len() as f32;
+        let planes = (0..poly.len())
+            .filter_map(|i| {
+                let a = poly[i] - eye;
+                let b = poly[(i + 1) % poly.len()] - eye;
+                let n = a.cross(b).try_normalize()?;
+                let n = if n.dot(centroid - eye) >= 0.0 { n } else { -n };
+                Some((n, -n.dot(eye)))
+            })
+            .collect();
+        Frustum { planes }
+    }
+}
+
+/// Sutherland-Hodgman against one plane, keeping `n·p + d >= 0`.
+pub fn clip_polygon(poly: &[Vec3], (n, d): (Vec3, f32)) -> Vec<Vec3> {
+    let mut out = Vec::with_capacity(poly.len() + 1);
+    for i in 0..poly.len() {
+        let a = poly[i];
+        let b = poly[(i + 1) % poly.len()];
+        let da = n.dot(a) + d;
+        let db = n.dot(b) + d;
+        if da >= 0.0 {
+            out.push(a);
+        }
+        if (da >= 0.0) != (db >= 0.0) {
+            let t = da / (da - db);
+            out.push(a + (b - a) * t);
+        }
+    }
+    out
 }
 
 #[derive(Default, Clone, Debug)]
@@ -73,13 +108,18 @@ pub struct WorldVis {
     leafs: Vec<bsp::Leaf>,
     /// `(n, dist)`, front where `n·p - dist > 0`.
     planes: Vec<(Vec3, f32)>,
-    // Unread until Task 4's portal walk.
-    #[allow(dead_code)]
     cull_indices: Vec<u32>,
-    #[allow(dead_code)]
     portals: Vec<bsp::Portal>,
-    #[allow(dead_code)]
     portal_verts: Vec<Vec3>,
+}
+
+/// State threaded through the portal recursion: the eye and the unnarrowed
+/// frustum are fixed for the walk, the marks and the portal stack accumulate.
+struct Walk<'a> {
+    eye: Vec3,
+    camera: &'a Frustum,
+    vis: Visible,
+    on_stack: Vec<bool>,
 }
 
 const EMPTY: (Vec3, Vec3) = (Vec3::INFINITY, Vec3::NEG_INFINITY);
@@ -190,11 +230,77 @@ impl WorldVis {
         vis
     }
 
-    /// Stub: Task 4 adds the portal walk from the camera cell. Until then,
-    /// falls back to frustum-only visibility regardless of `eye`.
+    /// Retail's walk when the eye is in a cell, the frustum fallback otherwise.
     pub fn visible(&self, eye: Vec3, frustum: &Frustum) -> Visible {
-        let _ = eye;
-        self.visible_fallback(frustum)
+        let Some(cell) = self.cell_for_point(eye) else {
+            return self.visible_fallback(frustum);
+        };
+        let mut w = Walk {
+            eye,
+            camera: frustum,
+            vis: self.empty_visible(),
+            on_stack: vec![false; self.portals.len()],
+        };
+        self.walk(cell, frustum, &mut w, 0);
+        w.vis.stats.soups = w.vis.soups.iter().filter(|&&s| s).count();
+        w.vis
+    }
+
+    /// Marks the cell's geometry, then recurses through every portal whose
+    /// polygon still has area inside `frustum`, narrowed to that polygon.
+    fn walk(&self, cell: usize, frustum: &Frustum, w: &mut Walk, depth: usize) {
+        // retail has no depth limit; this only guards hostile data
+        if depth > 64 {
+            return;
+        }
+        w.vis.cells[cell] = true;
+        w.vis.stats.cells_visited += 1;
+        let c = self.cells[cell];
+        self.mark_tree(c.first_aabb, frustum, &mut w.vis);
+        for &gi in &self.cull_indices
+            [c.first_cull_index as usize..(c.first_cull_index + c.cull_count) as usize]
+        {
+            self.mark_group(&self.cull_groups[gi as usize], frustum, &mut w.vis);
+        }
+        for pi in c.first_portal as usize..(c.first_portal + c.portal_count) as usize {
+            if w.on_stack[pi] {
+                continue;
+            }
+            let p = self.portals[pi];
+            let (n, dist) = self.planes[p.plane as usize];
+            // the plane faces out of this cell; past it the portal shows nothing
+            let side = n.dot(w.eye) - dist;
+            if side > 1.0 {
+                continue;
+            }
+            let verts =
+                &self.portal_verts[p.first_vert as usize..(p.first_vert + p.vert_count) as usize];
+            let mut child;
+            // within a unit of the plane the polygon degenerates: keep the parent
+            let next = if side >= -1.0 {
+                frustum
+            } else {
+                let mut poly = verts.to_vec();
+                for &plane in &frustum.planes {
+                    poly = clip_polygon(&poly, plane);
+                    if poly.len() < 3 {
+                        break;
+                    }
+                }
+                if poly.len() < 3 {
+                    continue;
+                }
+                child = Frustum::from_polygon(w.eye, &poly);
+                // every edge plane runs through the eye, so the cone on its own
+                // also reaches backwards; the camera's planes keep the child a
+                // subset of the frustum pass instead of a differently-shaped one
+                child.planes.extend_from_slice(&w.camera.planes);
+                &child
+            };
+            w.on_stack[pi] = true;
+            self.walk(p.cell as usize, next, w, depth + 1);
+            w.on_stack[pi] = false;
+        }
     }
 
     /// In the fallback the frustum decides alone; otherwise the prop must
@@ -599,11 +705,6 @@ mod tests {
             "both cells' soups are ahead, the cull group is off to the side"
         );
         assert_eq!(v.cells, vec![true, true]);
-        assert_eq!(
-            vis.visible(eye, &f).soups,
-            v.soups,
-            "visible() is still the fallback stub"
-        );
         let v = vis.visible_fallback(&frustum_at(eye, -Vec3::X));
         assert_eq!(v.soups, vec![false, false, false]);
         let v = vis.visible_fallback(&frustum_at(Vec3::new(-45.0, 0.0, 0.0), Vec3::Y));
@@ -667,5 +768,134 @@ mod tests {
         let n = v.soups.iter().filter(|&&s| s).count();
         assert!(n > 0 && n < bsp.soups.len(), "{n} of {}", bsp.soups.len());
         assert_eq!(v.stats.soups, n);
+    }
+
+    #[test]
+    fn clips_a_polygon_against_a_plane() {
+        let square = [
+            Vec3::new(-1.0, -1.0, 0.0),
+            Vec3::new(1.0, -1.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(-1.0, 1.0, 0.0),
+        ];
+        // keep x >= 0
+        let half = clip_polygon(&square, (Vec3::X, 0.0));
+        assert_eq!(half.len(), 4);
+        assert!(half.iter().all(|p| p.x >= -1e-6));
+        assert!(half.iter().any(|p| (p.x - 1.0).abs() < 1e-6));
+        // keep x >= 2: nothing survives
+        assert!(clip_polygon(&square, (Vec3::X, -2.0)).is_empty());
+        // keep x >= -5: untouched
+        assert_eq!(clip_polygon(&square, (Vec3::X, 5.0)).len(), 4);
+    }
+
+    #[test]
+    fn frustum_from_polygon_contains_what_the_portal_shows() {
+        let eye = Vec3::new(-100.0, 0.0, 0.0);
+        let portal = [
+            Vec3::new(0.0, -50.0, -50.0),
+            Vec3::new(0.0, 50.0, -50.0),
+            Vec3::new(0.0, 50.0, 50.0),
+            Vec3::new(0.0, -50.0, 50.0),
+        ];
+        let f = Frustum::from_polygon(eye, &portal);
+        assert_eq!(f.planes.len(), 4);
+        assert!(f.contains_point(Vec3::new(100.0, 0.0, 0.0)));
+        assert!(
+            f.contains_point(Vec3::new(100.0, 90.0, 0.0)),
+            "just inside the cone through the edge"
+        );
+        assert!(!f.contains_point(Vec3::new(100.0, 110.0, 0.0)));
+        assert!(!f.contains_point(Vec3::new(100.0, 0.0, 120.0)));
+        // reversed winding gives the same volume
+        let rev: Vec<Vec3> = portal.iter().rev().copied().collect();
+        let g = Frustum::from_polygon(eye, &rev);
+        assert!(g.contains_point(Vec3::new(100.0, 90.0, 0.0)));
+        assert!(!g.contains_point(Vec3::new(100.0, 110.0, 0.0)));
+    }
+
+    #[test]
+    fn portal_walk_sees_the_neighbour_only_through_the_portal() {
+        let vis = WorldVis::build(&two_cell_world());
+        let eye = Vec3::new(-90.0, 0.0, 0.0);
+        let v = vis.visible(eye, &frustum_at(eye, Vec3::X));
+        assert!(!v.stats.fallback);
+        assert_eq!(v.cells, vec![true, true]);
+        assert_eq!(v.soups, vec![false, true, true]);
+        // facing away: B is not visited, its soup stays hidden
+        let v = vis.visible(eye, &frustum_at(eye, -Vec3::X));
+        assert_eq!(v.cells, vec![true, false]);
+        assert_eq!(v.soups, vec![false, false, false]);
+        // looking +X but from high up in A so the portal square is below the frustum
+        let eye = Vec3::new(-10.0, 0.0, 90.0);
+        let v = vis.visible(eye, &frustum_at(eye, Vec3::X));
+        assert_eq!(v.cells, vec![true, false], "portal outside the frustum");
+        // eye in no cell: fallback. The fixture's single-plane tree puts every
+        // point in a cell, so this needs the solid-leaf (cell -1) variant.
+        let solid = WorldVis::build(&Bsp {
+            leafs: vec![
+                bsp::Leaf {
+                    cluster: 0,
+                    cell: -1,
+                },
+                bsp::Leaf {
+                    cluster: 1,
+                    cell: 1,
+                },
+            ],
+            ..two_cell_world()
+        });
+        let eye = Vec3::new(-90.0, 0.0, 0.0);
+        let v = solid.visible(eye, &frustum_at(eye, Vec3::X));
+        assert!(v.stats.fallback);
+    }
+
+    #[test]
+    fn mp_pavlov_portal_walk_is_a_subset_of_the_fallback() {
+        let Some(data) = crate::testing::real_bsp() else {
+            return;
+        };
+        let bsp = bsp::parse(&data).unwrap();
+        let vis = WorldVis::build(&bsp);
+        let mut spawns = 0;
+        let mut tighter = 0;
+        for e in bsp::entity_blocks(&bsp.entities) {
+            let Some(origin) = e.get("origin").and_then(|s| bsp::parse_vec3(s)) else {
+                continue;
+            };
+            if !e.get("classname").is_some_and(|c| c.starts_with("mp_")) {
+                continue;
+            }
+            let yaw: f32 = e
+                .get("angle")
+                .and_then(|a| a.trim().parse().ok())
+                .unwrap_or(0.0);
+            let eye = Vec3::from(origin) + Vec3::Z * 60.0;
+            let dir = Vec3::new(yaw.to_radians().cos(), yaw.to_radians().sin(), 0.0);
+            let f = frustum_at(eye, dir);
+            let walk = vis.visible(eye, &f);
+            if walk.stats.fallback {
+                continue;
+            }
+            let all = vis.visible_fallback(&f);
+            for (w, a) in walk.soups.iter().zip(&all.soups) {
+                assert!(
+                    !w || *a,
+                    "portal walk drew a soup the frustum alone would not"
+                );
+            }
+            spawns += 1;
+            if walk.stats.soups < all.stats.soups {
+                tighter += 1;
+            }
+            if spawns == 5 {
+                break;
+            }
+        }
+        assert!(spawns >= 3, "found {spawns} spawns inside cells");
+        assert!(
+            tighter >= 1,
+            "portals never culled anything the frustum kept"
+        );
     }
 }
