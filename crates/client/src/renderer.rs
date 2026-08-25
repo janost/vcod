@@ -387,20 +387,9 @@ struct DynamicPass {
     bone_mats: Vec<[f32; 16]>,
 }
 
-pub struct Renderer {
-    surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
-    msaa_view: wgpu::TextureView,
-    depth_view: wgpu::TextureView,
-    pipeline: wgpu::RenderPipeline,
-    prop_pipeline: wgpu::RenderPipeline,
-    layer_pipeline: wgpu::RenderPipeline,
-    overlay_pipeline: wgpu::RenderPipeline,
-    camera_buf: wgpu::Buffer,
-    camera_bg: wgpu::BindGroup,
-    fx_lights_buf: wgpu::Buffer,
+/// Everything built from one map: buffers, material bind groups, batches,
+/// visibility. Dropped whole on a map change.
+struct WorldGpu {
     vertex_buf: wgpu::Buffer,
     index_buf: wgpu::Buffer,
     bind_groups: Vec<wgpu::BindGroup>,
@@ -421,6 +410,28 @@ pub struct Renderer {
     /// Last frame's mode, so `Locked` and `Off` skip re-uploading indices
     /// that cannot have changed.
     last_cull: Option<CullMode>,
+}
+
+pub struct Renderer {
+    surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+    msaa_view: wgpu::TextureView,
+    depth_view: wgpu::TextureView,
+    pipeline: wgpu::RenderPipeline,
+    prop_pipeline: wgpu::RenderPipeline,
+    layer_pipeline: wgpu::RenderPipeline,
+    overlay_pipeline: wgpu::RenderPipeline,
+    camera_buf: wgpu::Buffer,
+    camera_bg: wgpu::BindGroup,
+    fx_lights_buf: wgpu::Buffer,
+    /// Device-stage state `load_world` builds map bind groups from.
+    material_layout: wgpu::BindGroupLayout,
+    diffuse_sampler: wgpu::Sampler,
+    lightmap_sampler: wgpu::Sampler,
+    white_view: wgpu::TextureView,
+    world: Option<WorldGpu>,
     vis_counts: VisCounts,
     vm_pass: VmPass,
     dynamic: DynamicPass,
@@ -436,7 +447,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(window: Arc<winit::window::Window>, bsp: &Bsp, fs: &Pk3Fs) -> Result<Renderer> {
+    pub fn new(window: Arc<winit::window::Window>, fs: &Pk3Fs) -> Result<Renderer> {
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
 
@@ -499,46 +510,6 @@ impl Renderer {
         surface.configure(&device, &config);
         let msaa_view = create_msaa_view(&device, format, width, height);
         let depth_view = create_depth_view(&device, width, height);
-
-        // Props (misc_model entities) are baked to world space on the CPU in
-        // the same vertex format and extend the map's buffers.
-        let (mut indices, batches, soup_ranges) = mesh::build_batches(bsp);
-        if batches.is_empty() {
-            bail!("map has no drawable surfaces");
-        }
-        let props = props::build(fs, &bsp.entities);
-        let prop_first_index = indices.len() as u32;
-        let prop_first_vertex = bsp.verts.len() as u32;
-        indices.extend(props.indices.iter().map(|i| i + prop_first_vertex));
-        // prop batches follow the world's in `batch_draws`, prop indices follow
-        // the world's in the merged buffer
-        let prop_ranges: Vec<(u32, IndexRange)> = props
-            .ranges
-            .iter()
-            .map(|&(p, r)| {
-                (
-                    p,
-                    IndexRange {
-                        batch: r.batch + batches.len() as u32,
-                        first: r.first + prop_first_index,
-                        count: r.count,
-                    },
-                )
-            })
-            .collect();
-        let mut vertices = bsp.verts.clone();
-        vertices.extend_from_slice(&props.verts);
-
-        let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("map vertices"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("map indices"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-        });
 
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera layout"),
@@ -642,44 +613,6 @@ impl Renderer {
             ..Default::default()
         });
 
-        let fallback_px = fallback_pixels();
-        let shaders = assets::load_shaders(fs);
-        let mut material_views: HashMap<u16, wgpu::TextureView> = HashMap::new();
-        let (mut loaded, mut fallbacks) = (0usize, 0usize);
-        for batch in &batches {
-            if material_views.contains_key(&batch.material) {
-                continue;
-            }
-            let name = &bsp.materials[batch.material as usize].name;
-            let img = assets::load_material_image(fs, &shaders.image, name);
-            if is_fallback(&img, &fallback_px) {
-                fallbacks += 1;
-            } else {
-                loaded += 1;
-            }
-            material_views.insert(batch.material, upload_image(&device, &queue, name, &img));
-        }
-
-        // One RGBA lightmap page per BSP page, plus a white 1x1 for unlit soups.
-        let lightmap_views: Vec<wgpu::TextureView> = bsp
-            .lightmaps
-            .iter()
-            .enumerate()
-            .map(|(i, page)| {
-                let mut rgba = Vec::with_capacity(page.len() / 3 * 4);
-                for px in page.as_chunks::<3>().0 {
-                    rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
-                }
-                upload_rgba(
-                    &device,
-                    &queue,
-                    &format!("lightmap {i}"),
-                    bsp::LIGHTMAP_SIZE as u32,
-                    bsp::LIGHTMAP_SIZE as u32,
-                    &rgba,
-                )
-            })
-            .collect();
         let white_view = upload_rgba(
             &device,
             &queue,
@@ -689,92 +622,7 @@ impl Renderer {
             &[255, 255, 255, 255],
         );
 
-        let mut bind_groups: Vec<wgpu::BindGroup> = Vec::new();
-        let mut cache: HashMap<(u16, u16), usize> = HashMap::new();
-        let mut batch_draws = Vec::with_capacity(batches.len());
-        for Batch {
-            material, lightmap, ..
-        } in &batches
-        {
-            let idx = *cache.entry((*material, *lightmap)).or_insert_with(|| {
-                let lm = match *lightmap {
-                    bsp::NO_LIGHTMAP => &white_view,
-                    i => lightmap_views.get(i as usize).unwrap_or(&white_view),
-                };
-                bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("material bind group"),
-                    layout: &material_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&material_views[material]),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(lm),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
-                        },
-                    ],
-                }));
-                bind_groups.len() - 1
-            });
-            let mat = &bsp.materials[*material as usize];
-            let pass = if mesh::is_overlay(mat) {
-                Pass::Overlay
-            } else if shaders.polygon_offset.contains(&mat.name.to_lowercase()) {
-                Pass::Layer
-            } else {
-                Pass::Opaque
-            };
-            batch_draws.push(DrawCall {
-                bind_group: idx,
-                pass,
-            });
-        }
-
-        // Prop materials are skin filenames, not `textures/...` names, so
-        // `load_skin_image` resolves them.
-        let mut skin_cache: HashMap<&str, usize> = HashMap::new();
-        for batch in &props.batches {
-            let idx = *skin_cache.entry(batch.skin.as_str()).or_insert_with(|| {
-                let img = assets::load_skin_image(fs, &batch.skin);
-                let view = upload_image(&device, &queue, &batch.skin, &img);
-                bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("prop skin bind group"),
-                    layout: &material_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&white_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
-                        },
-                    ],
-                }));
-                bind_groups.len() - 1
-            });
-            batch_draws.push(DrawCall {
-                bind_group: idx,
-                pass: Pass::Prop,
-            });
-        }
+        let shaders = assets::load_shaders(fs);
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -894,25 +742,6 @@ impl Renderer {
             true,
             cull_back,
         );
-
-        let count = |p: Pass| batch_draws.iter().filter(|d| d.pass == p).count();
-        println!(
-            "{} batches ({} opaque, {} prop, {} layer, {} overlay), {} draw indices, {} vertices",
-            batch_draws.len(),
-            count(Pass::Opaque),
-            count(Pass::Prop),
-            count(Pass::Layer),
-            count(Pass::Overlay),
-            indices.len(),
-            vertices.len()
-        );
-        println!(
-            "{} textures loaded, {} fallback checkerboards, {} lightmap pages",
-            loaded,
-            fallbacks,
-            lightmap_views.len()
-        );
-
         let vm_pass = create_vm_pass(&device, format);
         let dynamic = create_dynamic_pass(&device, format, &camera_layout, &vm_pass.skin_layout);
         let fx = create_fx_pass(&device, format, &camera_layout, &vm_pass.skin_layout);
@@ -933,6 +762,218 @@ impl Renderer {
             camera_buf,
             camera_bg,
             fx_lights_buf,
+            material_layout,
+            diffuse_sampler,
+            lightmap_sampler,
+            white_view,
+            world: None,
+            vis_counts: VisCounts::default(),
+            vm_pass,
+            dynamic,
+            fx,
+            hud,
+            hud_pass,
+            hud_quad_cap_warned: false,
+            shader_images: shaders.image,
+            additive_shaders: shaders.additive,
+        })
+    }
+
+    /// Builds the map's GPU state; a previous map is dropped first.
+    pub fn load_world(&mut self, bsp: &Bsp, fs: &Pk3Fs) -> Result<()> {
+        self.unload_world();
+        let device = &self.device;
+        let queue = &self.queue;
+        let material_layout = &self.material_layout;
+        let diffuse_sampler = &self.diffuse_sampler;
+        let lightmap_sampler = &self.lightmap_sampler;
+        let white_view = &self.white_view;
+
+        // Props (misc_model entities) are baked to world space on the CPU in
+        // the same vertex format and extend the map's buffers.
+        let (mut indices, batches, soup_ranges) = mesh::build_batches(bsp);
+        if batches.is_empty() {
+            bail!("map has no drawable surfaces");
+        }
+        let props = props::build(fs, &bsp.entities);
+        let prop_first_index = indices.len() as u32;
+        let prop_first_vertex = bsp.verts.len() as u32;
+        indices.extend(props.indices.iter().map(|i| i + prop_first_vertex));
+        // prop batches follow the world's in `batch_draws`, prop indices follow
+        // the world's in the merged buffer
+        let prop_ranges: Vec<(u32, IndexRange)> = props
+            .ranges
+            .iter()
+            .map(|&(p, r)| {
+                (
+                    p,
+                    IndexRange {
+                        batch: r.batch + batches.len() as u32,
+                        first: r.first + prop_first_index,
+                        count: r.count,
+                    },
+                )
+            })
+            .collect();
+        let mut vertices = bsp.verts.clone();
+        vertices.extend_from_slice(&props.verts);
+
+        let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("map vertices"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("map indices"),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let fallback_px = fallback_pixels();
+        let shaders = assets::load_shaders(fs);
+        let mut material_views: HashMap<u16, wgpu::TextureView> = HashMap::new();
+        let (mut loaded, mut fallbacks) = (0usize, 0usize);
+        for batch in &batches {
+            if material_views.contains_key(&batch.material) {
+                continue;
+            }
+            let name = &bsp.materials[batch.material as usize].name;
+            let img = assets::load_material_image(fs, &shaders.image, name);
+            if is_fallback(&img, &fallback_px) {
+                fallbacks += 1;
+            } else {
+                loaded += 1;
+            }
+            material_views.insert(batch.material, upload_image(device, queue, name, &img));
+        }
+
+        // One RGBA lightmap page per BSP page, plus a white 1x1 for unlit soups.
+        let lightmap_views: Vec<wgpu::TextureView> = bsp
+            .lightmaps
+            .iter()
+            .enumerate()
+            .map(|(i, page)| {
+                let mut rgba = Vec::with_capacity(page.len() / 3 * 4);
+                for px in page.as_chunks::<3>().0 {
+                    rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+                }
+                upload_rgba(
+                    device,
+                    queue,
+                    &format!("lightmap {i}"),
+                    bsp::LIGHTMAP_SIZE as u32,
+                    bsp::LIGHTMAP_SIZE as u32,
+                    &rgba,
+                )
+            })
+            .collect();
+
+        let mut bind_groups: Vec<wgpu::BindGroup> = Vec::new();
+        let mut cache: HashMap<(u16, u16), usize> = HashMap::new();
+        let mut batch_draws = Vec::with_capacity(batches.len());
+        for Batch {
+            material, lightmap, ..
+        } in &batches
+        {
+            let idx = *cache.entry((*material, *lightmap)).or_insert_with(|| {
+                let lm = match *lightmap {
+                    bsp::NO_LIGHTMAP => white_view,
+                    i => lightmap_views.get(i as usize).unwrap_or(white_view),
+                };
+                bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("material bind group"),
+                    layout: material_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&material_views[material]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(lm),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(diffuse_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(lightmap_sampler),
+                        },
+                    ],
+                }));
+                bind_groups.len() - 1
+            });
+            let mat = &bsp.materials[*material as usize];
+            let pass = if mesh::is_overlay(mat) {
+                Pass::Overlay
+            } else if shaders.polygon_offset.contains(&mat.name.to_lowercase()) {
+                Pass::Layer
+            } else {
+                Pass::Opaque
+            };
+            batch_draws.push(DrawCall {
+                bind_group: idx,
+                pass,
+            });
+        }
+
+        // Prop materials are skin filenames, not `textures/...` names, so
+        // `load_skin_image` resolves them.
+        let mut skin_cache: HashMap<&str, usize> = HashMap::new();
+        for batch in &props.batches {
+            let idx = *skin_cache.entry(batch.skin.as_str()).or_insert_with(|| {
+                let img = assets::load_skin_image(fs, &batch.skin);
+                let view = upload_image(device, queue, &batch.skin, &img);
+                bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("prop skin bind group"),
+                    layout: material_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(white_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(diffuse_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(lightmap_sampler),
+                        },
+                    ],
+                }));
+                bind_groups.len() - 1
+            });
+            batch_draws.push(DrawCall {
+                bind_group: idx,
+                pass: Pass::Prop,
+            });
+        }
+
+        let count = |p: Pass| batch_draws.iter().filter(|d| d.pass == p).count();
+        println!(
+            "{} batches ({} opaque, {} prop, {} layer, {} overlay), {} draw indices, {} vertices",
+            batch_draws.len(),
+            count(Pass::Opaque),
+            count(Pass::Prop),
+            count(Pass::Layer),
+            count(Pass::Overlay),
+            indices.len(),
+            vertices.len()
+        );
+        println!(
+            "{} textures loaded, {} fallback checkerboards, {} lightmap pages",
+            loaded,
+            fallbacks,
+            lightmap_views.len()
+        );
+
+        self.world = Some(WorldGpu {
             vertex_buf,
             index_buf,
             bind_groups,
@@ -947,16 +988,23 @@ impl Renderer {
             gather_scratch: Vec::new(),
             locked: None,
             last_cull: None,
-            vis_counts: VisCounts::default(),
-            vm_pass,
-            dynamic,
-            fx,
-            hud,
-            hud_pass,
-            hud_quad_cap_warned: false,
-            shader_images: shaders.image,
-            additive_shaders: shaders.additive,
-        })
+        });
+        Ok(())
+    }
+
+    /// Drops the map and every model uploaded for it, so no `ModelHandle`
+    /// from the old map can index a new upload.
+    pub fn unload_world(&mut self) {
+        self.world = None;
+        self.dynamic.models.clear();
+        self.dynamic.instances.clear();
+        self.dynamic.bone_mats.clear();
+        self.vis_counts = VisCounts::default();
+    }
+
+    #[allow(dead_code)] // map-change callers land in a later task
+    pub fn has_world(&self) -> bool {
+        self.world.is_some()
     }
 
     /// Quads in draw order (already back-to-front). Unseen shader names
@@ -1197,7 +1245,7 @@ impl Renderer {
     /// (world draw calls, dynamic instances, bone matrices) for the debug overlay.
     pub fn debug_counts(&self) -> (usize, usize, usize) {
         (
-            self.draws.len(),
+            self.world.as_ref().map_or(0, |w| w.draws.len()),
             self.dynamic.instances.len(),
             self.dynamic.bone_mats.len(),
         )
@@ -1218,14 +1266,14 @@ impl Renderer {
 
     /// The visible set and the prop flags that go with it. A placement whose
     /// model failed to load has zero bounds and is never drawn or counted.
-    fn cull(&self, eye: glam::Vec3, frustum: &Frustum) -> (Visible, Vec<bool>) {
-        let v = self.vis.visible(eye, frustum);
-        let prop_ok = self
+    fn cull(world: &WorldGpu, eye: glam::Vec3, frustum: &Frustum) -> (Visible, Vec<bool>) {
+        let v = world.vis.visible(eye, frustum);
+        let prop_ok = world
             .prop_bounds
             .iter()
             .map(|&(lo, hi)| {
                 (lo, hi) != (glam::Vec3::ZERO, glam::Vec3::ZERO)
-                    && self.vis.prop_visible(&v, frustum, lo, hi)
+                    && world.vis.prop_visible(&v, frustum, lo, hi)
             })
             .collect();
         (v, prop_ok)
@@ -1241,81 +1289,85 @@ impl Renderer {
         );
         let t0 = std::time::Instant::now();
         let frustum = Frustum::from_view_proj(frame.view_proj);
-        let visible = match frame.cull {
-            CullMode::Off => None,
-            CullMode::Locked => Some(match self.locked.take() {
-                Some(v) => v,
-                None => {
-                    // a fresh freeze: the index buffer holds some other set
-                    self.last_cull = None;
-                    self.cull(frame.eye, &frustum)
-                }
-            }),
-            CullMode::On => Some(self.cull(frame.eye, &frustum)),
-        };
-        let mut props_drawn = 0usize;
-        let ranges: Vec<IndexRange> = match &visible {
-            None => self
-                .soup_ranges
-                .iter()
-                .flatten()
-                .copied()
-                .chain(self.prop_ranges.iter().map(|&(_, r)| r))
-                .collect(),
-            Some((v, prop_ok)) => {
-                props_drawn = prop_ok.iter().filter(|&&b| b).count();
-                self.soup_ranges
+        if let Some(world) = &mut self.world {
+            let visible = match frame.cull {
+                CullMode::Off => None,
+                CullMode::Locked => Some(match world.locked.take() {
+                    Some(v) => v,
+                    None => {
+                        // a fresh freeze: the index buffer holds some other set
+                        world.last_cull = None;
+                        Self::cull(world, frame.eye, &frustum)
+                    }
+                }),
+                CullMode::On => Some(Self::cull(world, frame.eye, &frustum)),
+            };
+            let mut props_drawn = 0usize;
+            let ranges: Vec<IndexRange> = match &visible {
+                None => world
+                    .soup_ranges
                     .iter()
-                    .zip(&v.soups)
-                    .filter_map(|(r, &vis)| if vis { *r } else { None })
-                    .chain(
-                        self.prop_ranges
-                            .iter()
-                            .filter(|(p, _)| prop_ok[*p as usize])
-                            .map(|&(_, r)| r),
-                    )
-                    .collect()
+                    .flatten()
+                    .copied()
+                    .chain(world.prop_ranges.iter().map(|&(_, r)| r))
+                    .collect(),
+                Some((v, prop_ok)) => {
+                    props_drawn = prop_ok.iter().filter(|&&b| b).count();
+                    world
+                        .soup_ranges
+                        .iter()
+                        .zip(&v.soups)
+                        .filter_map(|(r, &vis)| if vis { *r } else { None })
+                        .chain(
+                            world
+                                .prop_ranges
+                                .iter()
+                                .filter(|(p, _)| prop_ok[*p as usize])
+                                .map(|&(_, r)| r),
+                        )
+                        .collect()
+                }
+            };
+            world.draws = gather(
+                &world.cpu_indices,
+                ranges,
+                world.batch_draws.len(),
+                &mut world.gathered,
+                &mut world.gather_scratch,
+            );
+            // in Locked and Off the gathered set is the same every frame
+            let unchanged = frame.cull != CullMode::On && world.last_cull == Some(frame.cull);
+            if !unchanged {
+                self.queue
+                    .write_buffer(&world.index_buf, 0, bytemuck::cast_slice(&world.gathered));
             }
-        };
-        self.draws = gather(
-            &self.cpu_indices,
-            ranges,
-            self.batch_draws.len(),
-            &mut self.gathered,
-            &mut self.gather_scratch,
-        );
-        // in Locked and Off the gathered set is the same every frame
-        let unchanged = frame.cull != CullMode::On && self.last_cull == Some(frame.cull);
-        if !unchanged {
-            self.queue
-                .write_buffer(&self.index_buf, 0, bytemuck::cast_slice(&self.gathered));
-        }
-        self.last_cull = Some(frame.cull);
-        let cell_total = self.vis.cell_count();
-        self.vis_counts = VisCounts {
-            mode: Some(frame.cull),
-            cells: visible.as_ref().map_or((cell_total, cell_total), |(v, _)| {
-                (v.cells.iter().filter(|&&c| c).count(), cell_total)
-            }),
-            soups: visible.as_ref().map_or(
-                (self.soup_ranges.len(), self.soup_ranges.len()),
-                |(v, _)| (v.stats.soups, self.soup_ranges.len()),
-            ),
-            tris: (self.gathered.len() / 3, self.cpu_indices.len() / 3),
-            props: (
-                if visible.is_some() {
-                    props_drawn
-                } else {
-                    self.prop_bounds.len()
-                },
-                self.prop_bounds.len(),
-            ),
-            gather_ms: t0.elapsed().as_secs_f32() * 1000.0,
-        };
-        if frame.cull == CullMode::Locked {
-            self.locked = visible;
-        } else {
-            self.locked = None;
+            world.last_cull = Some(frame.cull);
+            let cell_total = world.vis.cell_count();
+            self.vis_counts = VisCounts {
+                mode: Some(frame.cull),
+                cells: visible.as_ref().map_or((cell_total, cell_total), |(v, _)| {
+                    (v.cells.iter().filter(|&&c| c).count(), cell_total)
+                }),
+                soups: visible.as_ref().map_or(
+                    (world.soup_ranges.len(), world.soup_ranges.len()),
+                    |(v, _)| (v.stats.soups, world.soup_ranges.len()),
+                ),
+                tris: (world.gathered.len() / 3, world.cpu_indices.len() / 3),
+                props: (
+                    if visible.is_some() {
+                        props_drawn
+                    } else {
+                        world.prop_bounds.len()
+                    },
+                    world.prop_bounds.len(),
+                ),
+                gather_ms: t0.elapsed().as_secs_f32() * 1000.0,
+            };
+            if frame.cull == CullMode::Locked {
+                world.locked = visible;
+            } else {
+                world.locked = None;
+            }
         }
         // The glyph cap truncates whole quads, so a cut readout stays legible.
         let hud_quads = if frame.hud_lines.is_empty() {
@@ -1422,22 +1474,24 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.camera_bg, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buf.slice(..));
-            pass.set_index_buffer(self.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-            for (pipeline, want) in [
-                (&self.pipeline, Pass::Opaque),
-                (&self.prop_pipeline, Pass::Prop),
-                (&self.layer_pipeline, Pass::Layer),
-                (&self.overlay_pipeline, Pass::Overlay),
-            ] {
-                pass.set_pipeline(pipeline);
-                for draw in &self.draws {
-                    let call = &self.batch_draws[draw.batch as usize];
-                    if call.pass != want {
-                        continue;
+            if let Some(world) = &self.world {
+                pass.set_vertex_buffer(0, world.vertex_buf.slice(..));
+                pass.set_index_buffer(world.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                for (pipeline, want) in [
+                    (&self.pipeline, Pass::Opaque),
+                    (&self.prop_pipeline, Pass::Prop),
+                    (&self.layer_pipeline, Pass::Layer),
+                    (&self.overlay_pipeline, Pass::Overlay),
+                ] {
+                    pass.set_pipeline(pipeline);
+                    for draw in &world.draws {
+                        let call = &world.batch_draws[draw.batch as usize];
+                        if call.pass != want {
+                            continue;
+                        }
+                        pass.set_bind_group(1, &world.bind_groups[call.bind_group], &[]);
+                        pass.draw_indexed(draw.first..draw.first + draw.count, 0, 0..1);
                     }
-                    pass.set_bind_group(1, &self.bind_groups[call.bind_group], &[]);
-                    pass.draw_indexed(draw.first..draw.first + draw.count, 0, 0..1);
                 }
             }
 

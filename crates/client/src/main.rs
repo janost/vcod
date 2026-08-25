@@ -866,8 +866,11 @@ impl ApplicationHandler for App {
                 )
             }
         };
-        match Renderer::new(window.clone(), &self.bsp, &self.fs) {
+        match Renderer::new(window.clone(), &self.fs) {
             Ok(mut r) => {
+                if let Err(e) = r.load_world(&self.bsp, &self.fs) {
+                    return self.fail(event_loop, e);
+                }
                 if !self.viewmodel.is_empty() {
                     r.set_viewmodel(&self.fs, &self.viewmodel);
                 }
