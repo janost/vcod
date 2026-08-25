@@ -1,0 +1,13 @@
+/target
+/tmp/
+/private/
+/docs/design/
+/.claude/
+/.superpowers/
+/CLAUDE.local.md
+__pycache__/
+*.pyc
+*.log
+.idea/
+.vscode/
+*.swp

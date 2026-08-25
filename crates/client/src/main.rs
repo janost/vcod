@@ -1,0 +1,1550 @@
+mod audio;
+mod camera;
+mod entities;
+mod fx;
+mod hud;
+mod hud_text;
+mod probe;
+mod props;
+mod renderer;
+mod viewmodel;
+
+use anyhow::{bail, Context, Result};
+use clap::{CommandFactory, Parser};
+use glam::Vec3;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use winit::application::ApplicationHandler;
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::{CursorGrabMode, Window, WindowId};
+
+use vcod_common::pk3::Pk3Fs;
+use vcod_common::{bsp, collision, mesh, net, pmove, skeleton, weapon, xanim, xmodel};
+
+use camera::{FlyCamera, InputState};
+use renderer::{DynamicModelInstance, Renderer};
+
+#[derive(Parser)]
+#[command(about = "Call of Duty (2003) map viewer and spectator client")]
+struct Args {
+    /// Map name, e.g. mp_pavlov
+    map: Option<String>,
+    /// List all maps found in the pk3 search path
+    #[arg(long)]
+    list: bool,
+    /// Game install (holds main/). Defaults to $COD_DIR, else the executable's directory.
+    #[arg(long, default_value_os_t = vcod_common::game_dir::default_game_dir())]
+    game_dir: std::path::PathBuf,
+    /// Pk3 subdirectory: main for CoD1, uo for United Offensive (untested)
+    #[arg(long, default_value = "main")]
+    mod_dir: String,
+    /// Spawn as a soldier and walk (first person) instead of flying
+    #[arg(long)]
+    walk: bool,
+    /// Start with the debug overlay visible (F3 toggles it at runtime)
+    #[arg(long)]
+    debug_overlay: bool,
+    /// Headless: connect to a CoD server, dump the gamestate, then exit
+    #[arg(long)]
+    net_probe: Option<String>,
+    /// Connect to a CoD server (ip:port) and spectate
+    #[arg(long)]
+    connect: Option<String>,
+    /// Overwrite the committed gamestate.bin fixture with the --net-probe capture.
+    /// Off by default: the parser tests pin that file, and a capture from another
+    /// map or a mid-round server is not a drop-in. Otherwise the probe writes to tmp/.
+    #[arg(long)]
+    save_fixture: bool,
+    /// Overwrite the committed snapshots.bin fixture only; gamestate.bin stays pinned.
+    #[arg(long)]
+    save_snapshots: bool,
+    /// Seconds --net-probe stays connected; an SD round boundary needs a few minutes
+    #[arg(long, default_value_t = 65)]
+    probe_secs: u64,
+    /// Run without sound (also what happens when no output device opens).
+    #[arg(long)]
+    no_audio: bool,
+    /// Master volume, 0.0 to 1.0.
+    #[arg(long, default_value_t = 1.0)]
+    volume: f32,
+}
+
+enum Mode {
+    Fly(FlyCamera),
+    /// Position follows the interpolated server playerState; look angles are
+    /// local and echoed to the server each frame, like a Q3 free spectator.
+    Spectate {
+        /// Boxed to keep the variants a similar size.
+        net: Box<net::NetClient<net::UdpTransport>>,
+        cam: FlyCamera,
+        input: InputState,
+        /// Angles seeded once from the first interpolated playerState; the
+        /// mouse owns them after.
+        seeded: bool,
+        clock: ServerClock,
+        events: net::events::EventTracker,
+        world: collision::CollisionWorld,
+    },
+    Walk {
+        world: collision::CollisionWorld,
+        ps: pmove::PlayerState,
+        input: pmove::PmInput,
+        keys: WalkKeys,
+        motion: viewmodel::ViewmodelMotion,
+        /// `None` when the anims failed to load; the viewmodel then draws
+        /// statically. Boxed to keep the variants a similar size.
+        view_weapon: Option<Box<ViewWeapon>>,
+        /// Raw counts since the last frame, drained into the sway once per redraw.
+        mouse_delta: (f32, f32),
+        /// Press edges latched until the next redraw; `ads_held` is level.
+        fire_edge: bool,
+        reload_edge: bool,
+        ads_held: bool,
+    },
+}
+
+struct ViewWeapon {
+    skeleton: skeleton::Skeleton,
+    pose: skeleton::PoseBuffer,
+    state: weapon::WeaponState,
+    def: weapon::WeaponDef,
+    /// Missing entries fall back to Idle's clip.
+    anims: HashMap<weapon::WeaponAnim, (xanim::XAnim, skeleton::AnimBinding)>,
+}
+
+/// Held movement keys, folded into `PmInput`'s float axes once per frame.
+#[derive(Default)]
+struct WalkKeys {
+    w: bool,
+    s: bool,
+    a: bool,
+    d: bool,
+}
+
+impl WalkKeys {
+    /// (forward, right) in -1..1, opposite keys cancel.
+    fn axes(&self) -> (f32, f32) {
+        let axis = |pos: bool, neg: bool| (pos as i32 - neg as i32) as f32;
+        (axis(self.w, self.s), axis(self.d, self.a))
+    }
+}
+
+/// Render this far behind the newest snapshot so a straddling pair is always
+/// buffered; tolerates one dropped snapshot at 20 Hz.
+const INTERP_DELAY_MS: i32 = 100;
+
+/// Server now = newest snapshot time plus wall time since it was first seen,
+/// so interpolation sweeps between 20 Hz snapshots instead of stepping. A new
+/// snapshot re-anchors: continuous when on schedule, a snap after a long gap.
+struct ServerClock {
+    /// (newest snapshot server time, local ms it was first seen).
+    anchor: Option<(i32, f64)>,
+}
+
+impl ServerClock {
+    fn new() -> Self {
+        Self { anchor: None }
+    }
+
+    /// Server time to interpolate at; `local_ms` is a monotonic wall clock.
+    fn render_time(&mut self, local_ms: f64, newest: i32) -> i32 {
+        match self.anchor {
+            Some((t, _)) if t == newest => {}
+            _ => self.anchor = Some((newest, local_ms)),
+        }
+        let (anchor_time, anchor_local) = self.anchor.unwrap();
+        let server_now = anchor_time as f64 + (local_ms - anchor_local);
+        (server_now - INTERP_DELAY_MS as f64) as i32
+    }
+}
+
+/// F3 overlay text, top line first. A free function because the caller holds
+/// the renderer borrowed out of `App`.
+#[allow(clippy::too_many_arguments)]
+fn hud_lines(
+    mode: &Mode,
+    scene: &entities::EntityScene,
+    stats: &hud_text::HudStats,
+    // (build_instances, render, fx step+build_quads) ms
+    cpu_ms: (f32, f32, f32),
+    // (events drained, of those unrecognized)
+    ev_counts: (u64, u64),
+    // (particles, decals, lights)
+    fx_counts: (usize, usize, usize),
+    // (hud quads, hud build+upload ms, Hud::unknown); zeros outside Spectate
+    hud_counts: (usize, f32, u64),
+    audio: audio::AudioStats,
+    r: &Renderer,
+) -> Vec<String> {
+    let fps = if stats.dt_smooth > 0.0 {
+        1.0 / stats.dt_smooth
+    } else {
+        0.0
+    };
+    let (build_ms, render_ms, fx_ms) = cpu_ms;
+    let mut lines = vec![
+        format!(
+            "fps {fps:5.1}  ({:5.2} ms, worst {:5.1})",
+            stats.dt_smooth * 1000.0,
+            stats.worst_ms
+        ),
+        format!("cpu ms: build {build_ms:5.2}  render {render_ms:5.2}"),
+    ];
+    let (fx_particles, fx_decals, fx_lights) = fx_counts;
+    lines.push(format!(
+        "fx p{fx_particles} d{fx_decals} l{fx_lights} {fx_ms:.2}ms"
+    ));
+    let (draws, insts, bones) = r.debug_counts();
+    lines.push(format!("draw: world {draws}  inst {insts}  bones {bones}"));
+    let (hud_quads, hud_ms, hud_unknown) = hud_counts;
+    lines.push(format!("hud q{hud_quads} {hud_ms:.2}ms unk {hud_unknown}"));
+    lines.push(format!(
+        "audio v{} plays {} miss {} cull {} drop {} {:.2}ms",
+        audio.voices, audio.plays, audio.misses, audio.culled, audio.drops, audio.step_ms
+    ));
+    let cam_line = |tag: &str, pos: Vec3, yaw: f32, pitch: f32| {
+        format!(
+            "{tag}: {:6.0} {:6.0} {:5.0}  yaw {:4.0} pitch {:3.0}",
+            pos.x,
+            pos.y,
+            pos.z,
+            yaw.to_degrees(),
+            pitch.to_degrees()
+        )
+    };
+    match mode {
+        Mode::Fly(cam) => lines.push(cam_line("fly", cam.pos, cam.yaw, cam.pitch)),
+        Mode::Walk { ps, .. } => {
+            lines.push(cam_line("walk", ps.origin, ps.yaw, ps.pitch));
+            lines.push(format!(
+                "vel {:4.0}  ground {}",
+                ps.velocity.length(),
+                ps.on_ground as u8
+            ));
+        }
+        Mode::Spectate { net, cam, .. } => {
+            lines.push(cam_line("spec", cam.pos, cam.yaw, cam.pitch));
+            lines.push(format!(
+                "net: {:?}  drops {}",
+                net.state(),
+                net.packet_drops()
+            ));
+            if let Some(snap) = net.snapshots().newest() {
+                lines.push(format!(
+                    "snap: ents {}  players {}  age {:3} ms",
+                    snap.entities.len(),
+                    snap.clients.len(),
+                    net.snapshot_age().as_millis()
+                ));
+            }
+            lines.push(format!(
+                "interp miss/s {:4.1}  anim restarts/s {:4.1}",
+                stats.misses_per_s, stats.restarts_per_s
+            ));
+            if scene.stats.pending_assemblies > 0 {
+                lines.push(format!(
+                    "loading: {} assemblies pending",
+                    scene.stats.pending_assemblies
+                ));
+            }
+            if let Some((got, size)) = net.download_progress() {
+                lines.push(format!("download: {got}/{size} bytes"));
+            }
+            let (ev_seen, ev_unknown) = ev_counts;
+            lines.push(format!("ev {ev_seen} unk {ev_unknown}"));
+        }
+    }
+    lines
+}
+
+fn main() -> Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    let args = Args::parse();
+
+    let dir = args.game_dir.join(&args.mod_dir);
+
+    if let Some(addr) = &args.net_probe {
+        // Sound cue resolution needs the game data, the wire-level prints do
+        // not, so a failed open only costs the audio line.
+        let fs = match Pk3Fs::open(&dir) {
+            Ok(fs) => Some(fs),
+            Err(e) => {
+                log::warn!(
+                    "cannot open game data in {} ({e:#}); the probe will not resolve sound aliases",
+                    dir.display()
+                );
+                None
+            }
+        };
+        return probe::probe(
+            addr,
+            args.save_fixture,
+            args.save_snapshots,
+            args.probe_secs,
+            fs.as_ref(),
+        );
+    }
+
+    let mut fs =
+        Pk3Fs::open(&dir).with_context(|| format!("cannot open game data in {}", dir.display()))?;
+
+    if args.list {
+        for name in fs.find_maps() {
+            println!("{name}");
+        }
+        return Ok(());
+    }
+
+    let (map, mut net_client) = if let Some(addr) = &args.connect {
+        let net = connect_and_load(addr)?;
+        let serverinfo = net.configstring(0).to_string();
+        let Some(name) = net::info_value_for_key(&serverinfo, "mapname") else {
+            bail!("server sent no mapname in its serverinfo: {serverinfo:?}");
+        };
+        (name.to_string(), Some(net))
+    } else {
+        let Some(map) = args.map.as_deref() else {
+            Args::command()
+                .error(
+                    clap::error::ErrorKind::MissingRequiredArgument,
+                    "a map name is required (or pass --list to see the available maps)",
+                )
+                .exit();
+        };
+        (map.to_string(), None)
+    };
+
+    if let Some(net) = net_client.as_mut() {
+        if fs.resolve_map(&map).is_none() {
+            download_map_paks(net, &map, &args.game_dir, &args.mod_dir, &mut fs)?;
+        }
+    }
+
+    let Some(path) = fs.resolve_map(&map) else {
+        if args.connect.is_some() {
+            bail!(
+                "map '{map}' not found in local pk3s — install the map or check the server's mod"
+            );
+        }
+        let all = fs.find_maps();
+        let needle = map.to_lowercase();
+        let similar: Vec<String> = all
+            .iter()
+            .filter(|m| m.to_lowercase().contains(&needle))
+            .cloned()
+            .collect();
+        let suggestions = if similar.is_empty() { all } else { similar };
+        bail!("map '{map}' not found; similar: {}", suggestions.join(", "));
+    };
+
+    let data = fs
+        .read(&path)
+        .with_context(|| format!("cannot read {path}"))?;
+    let bsp = bsp::parse(&data).with_context(|| format!("cannot parse {path}"))?;
+
+    let (viewmodel, view_weapon) = if args.walk {
+        load_view_weapon(&fs).unwrap_or_else(|| {
+            log::warn!("no viewmodel; walking without one");
+            (Vec::new(), None)
+        })
+    } else {
+        (Vec::new(), None)
+    };
+
+    let hud = if net_client.is_some() {
+        match hud::Hud::new(&fs) {
+            Ok(hud) => Some(hud),
+            Err(e) => {
+                log::warn!("hud: {e}, disabling the on-screen HUD");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Fly and walk have no aliases, but `.efx` spawns carry cues and need a listener.
+    let mut audio = audio::AudioSystem::new(
+        &fs,
+        audio::AudioOpts {
+            enabled: !args.no_audio,
+            volume: args.volume,
+        },
+    );
+    audio.on_gamestate(&map);
+    // The map ambient rides configstring 3 (docs/research/cod11-sound-system.md,
+    // section 9), already in the gamestate; a `d 3` may never come.
+    if let Some(net) = &net_client {
+        audio.set_ambient(&fs, net::info_value_for_key(net.configstring(3), "n"));
+    }
+    if !audio.enabled() {
+        println!("audio: silent (no output device, or --no-audio)");
+    }
+
+    let mode = if let Some(net) = net_client {
+        Mode::Spectate {
+            net: Box::new(net),
+            cam: FlyCamera::new(Vec3::ZERO, 0.0),
+            input: InputState::default(),
+            seeded: false,
+            clock: ServerClock::new(),
+            events: net::events::EventTracker::new(),
+            world: collision::CollisionWorld::build(&bsp),
+        }
+    } else if args.walk {
+        walk_mode(&map, &bsp, view_weapon)?
+    } else {
+        Mode::Fly(match bsp::find_spawn(&bsp.entities) {
+            Some((origin, yaw)) => FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw),
+            None => {
+                let (min, max) = mesh::map_bounds(&bsp);
+                let center = (Vec3::from(min) + Vec3::from(max)) * 0.5;
+                log::warn!("no player spawn found, starting at the center of the map");
+                FlyCamera::new(center, 0.0)
+            }
+        })
+    };
+
+    println!("click to capture mouse, Esc to release");
+    if args.walk {
+        println!("WASD move, Space jump, Ctrl crouch, Z prone, Q/E lean, Shift walk");
+        println!("LMB fire, RMB aim, R reload");
+    } else if args.connect.is_some() {
+        println!("WASD move (server-authoritative), mouse look; look up/down to ascend/descend");
+    } else {
+        println!("WASD + Space/Ctrl fly, Shift boost, scroll changes speed");
+    }
+
+    fx::registry::init(&fs);
+
+    let event_loop = EventLoop::new()?;
+    event_loop.set_control_flow(ControlFlow::Poll);
+    let mut app = App {
+        title: format!("vcod — {map}"),
+        bsp,
+        fs,
+        mode,
+        viewmodel,
+        input: InputState::default(),
+        window: None,
+        renderer: None,
+        grabbed: false,
+        scene: entities::EntityScene::new(),
+        fx: fx::sim::FxSystem::new(),
+        start: Instant::now(),
+        last_frame: Instant::now(),
+        debug_overlay: args.debug_overlay,
+        hud_stats: hud_text::HudStats::new(),
+        interp_misses: 0,
+        ev_seen: 0,
+        ev_unknown: 0,
+        build_ms: 0.0,
+        render_ms: 0.0,
+        fx_ms: 0.0,
+        hud,
+        hud_ms: 0.0,
+        audio,
+        last_loop_snap: None,
+        error: None,
+    };
+    event_loop.run_app(&mut app)?;
+    match app.error.take() {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+/// Block until the gamestate has arrived and the client is Active; 10 s
+/// timeout. Chat/print during the handshake goes to the terminal.
+fn connect_and_load(addr: &str) -> Result<net::NetClient<net::UdpTransport>> {
+    let mut net =
+        net::NetClient::connect(addr).with_context(|| format!("cannot open a socket to {addr}"))?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        for ev in net.pump() {
+            match ev {
+                net::NetEvent::Chat { text, .. } => println!("{}", net::strip_colors(&text)),
+                net::NetEvent::Print(s) => println!("{s}"),
+                net::NetEvent::Dropped(why) => bail!("disconnected before gamestate: {why}"),
+                _ => {}
+            }
+        }
+        if net.state() == net::NetState::Active && net.gamestate().is_some() {
+            return Ok(net);
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out after 10s connecting to {addr} (never reached an active gamestate)");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Fetch the server's missing pk3s (likeliest first) until the map resolves,
+/// then reload the search path. Files land in `<game_dir>/<mod_dir>` where the
+/// real client puts them; existing files are never overwritten.
+fn download_map_paks(
+    net: &mut net::NetClient<net::UdpTransport>,
+    map: &str,
+    game_dir: &std::path::Path,
+    mod_dir: &str,
+    fs: &mut Pk3Fs,
+) -> Result<()> {
+    // A whole rotation at UDP-download rates could take hours.
+    const MAX_TRIES: usize = 4;
+
+    let fs_dir = game_dir.join(mod_dir);
+    let systeminfo = net.configstring(1).to_string();
+    let candidates = net::download::candidates_for_map(&systeminfo, map, mod_dir, |rel| {
+        game_dir.join(rel).exists()
+    });
+    if candidates.is_empty() {
+        bail!("map '{map}' not found in local pk3s and the server lists nothing downloadable");
+    }
+    println!("map '{map}' is not installed locally; downloading from the server");
+
+    let mut fetched = false;
+    let mut resolved = false;
+    for name in candidates.iter().take(MAX_TRIES) {
+        let rel = net::download::safe_rel_path(name, mod_dir).unwrap();
+        let dest = game_dir.join(&rel);
+        let remote = format!("{name}.pk3");
+        net.begin_download(&remote, &dest)?;
+        run_download(net, &remote)?;
+        *fs = Pk3Fs::open(&fs_dir)
+            .with_context(|| format!("cannot reopen game data in {}", fs_dir.display()))?;
+        fetched = true;
+        if fs.resolve_map(map).is_some() {
+            resolved = true;
+            break;
+        }
+    }
+    if fetched {
+        net.finish_downloads();
+        wait_for_regamestate(net)?;
+    }
+    if !resolved {
+        bail!(
+            "map '{map}' still not found after downloading {} of the server's pk3s",
+            candidates.len().min(MAX_TRIES)
+        );
+    }
+    Ok(())
+}
+
+/// Pump until the transfer completes. A drop or a 30 s stall is fatal.
+fn run_download(net: &mut net::NetClient<net::UdpTransport>, remote: &str) -> Result<()> {
+    let start = Instant::now();
+    let mut last_print = Instant::now();
+    let mut last_progress = Instant::now();
+    let mut last_bytes = 0u64;
+    loop {
+        for ev in net.pump() {
+            match ev {
+                net::NetEvent::Dropped(why) => bail!("download of {remote} failed: {why}"),
+                net::NetEvent::DownloadComplete(_) => {
+                    println!(
+                        "  {remote}: done ({} KB in {:.0}s)",
+                        last_bytes / 1024,
+                        start.elapsed().as_secs_f32()
+                    );
+                    return Ok(());
+                }
+                net::NetEvent::Chat { text, .. } => println!("{}", net::strip_colors(&text)),
+                net::NetEvent::Print(s) => println!("{s}"),
+                _ => {}
+            }
+        }
+        if let Some((got, total)) = net.download_progress() {
+            if got != last_bytes {
+                last_bytes = got;
+                last_progress = Instant::now();
+            }
+            if last_print.elapsed() >= Duration::from_secs(2) {
+                last_print = Instant::now();
+                let rate = got as f32 / 1024.0 / start.elapsed().as_secs_f32().max(0.001);
+                println!(
+                    "  {remote}: {}/{} KB ({rate:.0} KB/s)",
+                    got / 1024,
+                    total as u64 / 1024
+                );
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            }
+        }
+        if last_progress.elapsed() >= Duration::from_secs(30) {
+            bail!("download of {remote} stalled (no data for 30s)");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// After `donedl` the server re-sends the gamestate; wait until Active again.
+fn wait_for_regamestate(net: &mut net::NetClient<net::UdpTransport>) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        for ev in net.pump() {
+            if let net::NetEvent::Dropped(why) = ev {
+                bail!("disconnected after download: {why}");
+            }
+        }
+        if net.state() == net::NetState::Active {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!("no gamestate after download completion");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// `ANGLE2SHORT` (q_shared.h).
+fn angle2short(deg: f32) -> i32 {
+    (deg * 65536.0 / 360.0) as i32 & 0xffff
+}
+
+/// Position is server-authoritative, so only movement axes and look angles;
+/// `server_time` is filled by `send_frame`.
+fn usercmd_from_input(input: &InputState, cam: &FlyCamera) -> net::msg::UserCmd {
+    let axis = |pos: bool, neg: bool| (pos as i32 - neg as i32) as i8 * 127;
+    // Camera pitch is up-positive, usercmd pitch is down-positive.
+    let pitch_deg = -cam.pitch.to_degrees();
+    let yaw_deg = cam.yaw.to_degrees();
+    net::msg::UserCmd {
+        angles: [angle2short(pitch_deg), angle2short(yaw_deg), 0],
+        forward: axis(input.forward, input.back),
+        right: axis(input.right, input.left),
+        // `up` is not in the compact move encoding; a noclip spectator climbs
+        // by looking up and moving forward.
+        ..Default::default()
+    }
+}
+
+/// Synthetic muzzle for playerState-ring fire events (`entity_num ==
+/// u32::MAX` in `net::events`): the ridden body is `skip_num`, never drawn,
+/// so it has no real muzzle. 20 forward, 4 right, 3 down of the camera,
+/// aimed down the view forward. Same shape as `BuiltScene::muzzles` entries.
+fn view_muzzle(cam_pos: Vec3, forward: Vec3, right: Vec3, up: Vec3) -> (Vec3, Vec3) {
+    (cam_pos + forward * 20.0 + right * 4.0 - up * 3.0, forward)
+}
+
+fn walk_mode(map: &str, bsp: &bsp::Bsp, view_weapon: Option<Box<ViewWeapon>>) -> Result<Mode> {
+    let Some((origin, yaw)) = bsp::find_spawn(&bsp.entities) else {
+        bail!("map {map} has no player spawn; run without --walk to fly");
+    };
+    let world = collision::CollisionWorld::build(bsp);
+    if world.brushes.is_empty() && world.tris.is_empty() {
+        bail!("no collidable geometry in {map}; run without --walk to fly");
+    }
+
+    let mut ps = pmove::PlayerState::spawn(Vec3::from(origin) + Vec3::Z * 2.0, yaw);
+    let drop = world.box_trace(
+        ps.origin,
+        ps.origin - Vec3::Z * 4096.0,
+        ps.mins(),
+        ps.maxs(),
+    );
+    if drop.startsolid {
+        // CoD spawns anyway; pmove usually pushes out of solid in the first frames.
+        log::warn!("spawn point is inside solid geometry, spawning there anyway");
+    } else if drop.fraction < 1.0 {
+        ps.origin = drop.endpos;
+    } else {
+        log::warn!("no ground within 4096 units below the spawn point");
+    }
+
+    Ok(Mode::Walk {
+        world,
+        ps,
+        input: pmove::PmInput::default(),
+        keys: WalkKeys::default(),
+        motion: viewmodel::ViewmodelMotion::new(),
+        view_weapon,
+        mouse_delta: (0.0, 0.0),
+        fire_edge: false,
+        reload_edge: false,
+        ads_held: false,
+    })
+}
+
+/// Hands first so the gun draws over them and the shared skeleton takes the
+/// hands' bones as its base. `None` if a model is missing (walk mode then has
+/// no viewmodel); the inner `None` means the models loaded but the anims did not.
+fn load_view_weapon(fs: &Pk3Fs) -> Option<(Vec<xmodel::XModel>, Option<Box<ViewWeapon>>)> {
+    let text = fs.read("weapons/mp/kar98k_mp")?;
+    let weapon = xmodel::parse_weapon(&String::from_utf8_lossy(&text));
+    let mut models = Vec::new();
+    for key in ["handModel", "gunModel"] {
+        let name = weapon.get(key)?;
+        match xmodel::load(fs, name) {
+            Ok(mut m) => {
+                if key == "handModel" {
+                    xmodel::apply_viewhands_placeholder_override(&mut m);
+                }
+                models.push(m);
+            }
+            Err(e) => {
+                log::warn!("viewmodel {name}: {e:#}");
+                return None;
+            }
+        }
+    }
+    let animated = load_anims(fs, &weapon, &models).map(Box::new);
+    Some((models, animated))
+}
+
+/// A clip that is unnamed or fails to load is skipped and its state plays
+/// idle. Without idle there is no fallback, so the rig is dropped and the
+/// viewmodel draws in bind pose.
+fn load_anims(
+    fs: &Pk3Fs,
+    weapon: &HashMap<String, String>,
+    models: &[xmodel::XModel],
+) -> Option<ViewWeapon> {
+    let [hands, gun] = models else {
+        return None;
+    };
+    // same order as set_viewmodel, so bone_sets[i] matches model i
+    let skeleton = skeleton::Skeleton::build(&[hands, gun]);
+
+    let mut anims = HashMap::new();
+    for which in weapon::WeaponAnim::ALL {
+        let key = which.key();
+        let Some(name) = weapon.get(key).map(|n| n.trim()).filter(|n| !n.is_empty()) else {
+            log::warn!("weapon: no {key}, that state will play idle");
+            continue;
+        };
+        match xanim::load(fs, name) {
+            Ok(anim) => {
+                let binding = skeleton.bind(&anim);
+                anims.insert(which, (anim, binding));
+            }
+            Err(e) => log::warn!("xanim {name} ({key}): {e:#}"),
+        }
+    }
+    if !anims.contains_key(&weapon::WeaponAnim::Idle) {
+        log::warn!("no idle anim loaded; drawing the viewmodel statically");
+        return None;
+    }
+
+    let def = weapon::WeaponDef::from_map(weapon);
+    Some(ViewWeapon {
+        pose: skeleton::PoseBuffer::new(&skeleton),
+        skeleton,
+        state: weapon::WeaponState::new(def.clone()),
+        def,
+        anims,
+    })
+}
+
+struct App {
+    title: String,
+    bsp: bsp::Bsp,
+    fs: Pk3Fs,
+    mode: Mode,
+    viewmodel: Vec<xmodel::XModel>,
+    /// Fly-mode keys; walk keeps its own in `Mode::Walk`.
+    input: InputState,
+    window: Option<Arc<Window>>,
+    renderer: Option<Renderer>,
+    grabbed: bool,
+    scene: entities::EntityScene,
+    fx: fx::sim::FxSystem,
+    /// Origin of the clock effects are timed against.
+    start: Instant,
+    last_frame: Instant,
+    debug_overlay: bool,
+    hud_stats: hud_text::HudStats,
+    /// Spectate frames without a straddling snapshot pair. Cumulative; the
+    /// overlay shows the rate.
+    interp_misses: u64,
+    /// Cumulative events drained, and those with an unrecognized code.
+    ev_seen: u64,
+    ev_unknown: u64,
+    build_ms: f32,
+    render_ms: f32,
+    fx_ms: f32,
+    hud: Option<hud::Hud>,
+    hud_ms: f32,
+    audio: audio::AudioSystem,
+    /// `message_num` of the snapshot whose `loopSound` fields were last reconciled.
+    last_loop_snap: Option<u32>,
+    error: Option<anyhow::Error>,
+}
+
+impl App {
+    fn fail(&mut self, event_loop: &ActiveEventLoop, err: anyhow::Error) {
+        self.error = Some(err);
+        event_loop.exit();
+    }
+
+    fn set_grab(&mut self, grabbed: bool) {
+        let Some(window) = &self.window else { return };
+        if grabbed {
+            if window.set_cursor_grab(CursorGrabMode::Locked).is_err()
+                && window.set_cursor_grab(CursorGrabMode::Confined).is_err()
+            {
+                log::warn!("this platform does not support grabbing the cursor");
+                return;
+            }
+        } else if window.set_cursor_grab(CursorGrabMode::None).is_err() {
+            return;
+        }
+        window.set_cursor_visible(!grabbed);
+        self.grabbed = grabbed;
+    }
+
+    /// On grab release or focus loss, so no held key stays latched. Prone
+    /// stays, it is a stance toggle. The scoreboard drops, Tab is held too.
+    fn clear_held_keys(&mut self) {
+        match &mut self.mode {
+            Mode::Fly(_) => self.input = InputState::default(),
+            Mode::Spectate { input, .. } => *input = InputState::default(),
+            Mode::Walk {
+                input,
+                keys,
+                fire_edge,
+                reload_edge,
+                ads_held,
+                ..
+            } => {
+                *keys = WalkKeys::default();
+                input.jump = false;
+                input.crouch = false;
+                input.walk_slow = false;
+                input.lean_left = false;
+                input.lean_right = false;
+                *fire_edge = false;
+                *reload_edge = false;
+                *ads_held = false;
+            }
+        }
+        if let Some(hud) = &mut self.hud {
+            hud.scoreboard.visible = false;
+        }
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title(&self.title)
+            .with_inner_size(winit::dpi::LogicalSize::new(1600.0, 900.0));
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                return self.fail(
+                    event_loop,
+                    anyhow::Error::new(e).context("cannot create a window"),
+                )
+            }
+        };
+        match Renderer::new(window.clone(), &self.bsp, &self.fs) {
+            Ok(mut r) => {
+                if !self.viewmodel.is_empty() {
+                    r.set_viewmodel(&self.fs, &self.viewmodel);
+                }
+                self.renderer = Some(r);
+            }
+            Err(e) => return self.fail(event_loop, e),
+        }
+        window.request_redraw();
+        self.window = Some(window);
+        self.last_frame = Instant::now();
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => {
+                if let Some(r) = &mut self.renderer {
+                    r.resize(size.width, size.height);
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let pressed = event.state == ElementState::Pressed;
+                let PhysicalKey::Code(code) = event.physical_key else {
+                    return;
+                };
+                // auto-repeat would retrigger the jump and the prone toggle
+                if event.repeat {
+                    return;
+                }
+                if code == KeyCode::Escape && pressed {
+                    self.set_grab(false);
+                    self.clear_held_keys();
+                    return;
+                }
+                if code == KeyCode::F3 && pressed {
+                    self.debug_overlay = !self.debug_overlay;
+                    return;
+                }
+                let grabbed = self.grabbed;
+                match &mut self.mode {
+                    Mode::Fly(_) => match code {
+                        KeyCode::KeyW => self.input.forward = pressed,
+                        KeyCode::KeyS => self.input.back = pressed,
+                        KeyCode::KeyA => self.input.left = pressed,
+                        KeyCode::KeyD => self.input.right = pressed,
+                        KeyCode::Space => self.input.up = pressed,
+                        KeyCode::ControlLeft => self.input.down = pressed,
+                        KeyCode::ShiftLeft => self.input.boost = pressed,
+                        _ => {}
+                    },
+                    Mode::Spectate { net, input, .. } => match code {
+                        KeyCode::KeyW => input.forward = pressed,
+                        KeyCode::KeyS => input.back = pressed,
+                        KeyCode::KeyA => input.left = pressed,
+                        KeyCode::KeyD => input.right = pressed,
+                        KeyCode::Space => input.up = pressed,
+                        KeyCode::ControlLeft => input.down = pressed,
+                        // The server never pushes scores: send `score` on the
+                        // down edge, and every 2 s while held (see the redraw
+                        // tick; docs/research/cod11-hud-protocol.md, section 4).
+                        KeyCode::Tab => {
+                            if let Some(hud) = &mut self.hud {
+                                hud.scoreboard.visible = pressed;
+                                if pressed {
+                                    let now = (Instant::now() - self.start).as_secs_f32();
+                                    net.send_reliable("score");
+                                    hud.scoreboard.mark_requested(now);
+                                }
+                            }
+                        }
+                        _ => {}
+                    },
+                    Mode::Walk {
+                        input,
+                        keys,
+                        reload_edge,
+                        ..
+                    } => match code {
+                        // weapon actions count only while the mouse is captured
+                        KeyCode::KeyR if pressed && grabbed => *reload_edge = true,
+                        KeyCode::KeyW => keys.w = pressed,
+                        KeyCode::KeyS => keys.s = pressed,
+                        KeyCode::KeyA => keys.a = pressed,
+                        KeyCode::KeyD => keys.d = pressed,
+                        KeyCode::Space => input.jump = pressed,
+                        KeyCode::ControlLeft => input.crouch = pressed,
+                        KeyCode::KeyZ if pressed => input.prone = !input.prone,
+                        KeyCode::KeyQ => input.lean_left = pressed,
+                        KeyCode::KeyE => input.lean_right = pressed,
+                        KeyCode::ShiftLeft => input.walk_slow = pressed,
+                        _ => {}
+                    },
+                }
+            }
+            WindowEvent::Focused(false) => self.clear_held_keys(),
+            WindowEvent::MouseInput { state, button, .. } => {
+                use winit::event::MouseButton;
+                let pressed = state == ElementState::Pressed;
+                // the click that captures the mouse must not also fire
+                if button == MouseButton::Left && pressed && !self.grabbed {
+                    self.set_grab(true);
+                    return;
+                }
+                if !self.grabbed {
+                    return;
+                }
+                let Mode::Walk {
+                    fire_edge,
+                    ads_held,
+                    ..
+                } = &mut self.mode
+                else {
+                    return;
+                };
+                match button {
+                    MouseButton::Left if pressed => *fire_edge = true,
+                    MouseButton::Right => *ads_held = pressed,
+                    _ => {}
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let Mode::Fly(cam) = &mut self.mode else {
+                    return;
+                };
+                let scroll = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,
+                };
+                cam.adjust_speed(scroll);
+            }
+            WindowEvent::RedrawRequested => {
+                let now = Instant::now();
+                let dt = (now - self.last_frame).as_secs_f32().min(0.1);
+                self.last_frame = now;
+                let elapsed = now - self.start;
+                let time = elapsed.as_secs_f32();
+                let local_ms = elapsed.as_secs_f64() * 1000.0;
+                let Some(r) = &mut self.renderer else { return };
+                let aspect = r.aspect();
+                let (mut frame, vm) = match &mut self.mode {
+                    Mode::Fly(cam) => {
+                        cam.update(&self.input, dt);
+                        let (cam_forward, cam_right, cam_up) = camera::basis(cam.yaw, cam.pitch);
+                        // u32::MAX: no entity pinned to the camera.
+                        self.audio
+                            .set_listener(cam.pos, cam_forward, cam_right, cam_up, u32::MAX);
+                        // no CollisionWorld in fly mode, so usePhysics fx don't collide
+                        let fx_t0 = Instant::now();
+                        self.fx.step(dt, time, None);
+                        self.audio.step(&HashMap::new());
+                        r.set_fx_quads(
+                            &self.fs,
+                            self.fx.build_quads(cam.pos, cam_right, cam_up, time),
+                        );
+                        r.set_fx_lights(&self.fx.lights(cam.pos, time));
+                        self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
+                        (
+                            renderer::Frame {
+                                view_proj: cam.view_proj(aspect),
+                                hud_lines: Vec::new(),
+                            },
+                            None,
+                        )
+                    }
+                    Mode::Spectate {
+                        net,
+                        cam,
+                        input,
+                        seeded,
+                        clock,
+                        events,
+                        world,
+                    } => {
+                        let p = &net::protocol::PROTOCOL_V1;
+                        for ev in net.pump() {
+                            if let Some(hud) = &mut self.hud {
+                                hud.on_net_event(&ev, time);
+                            }
+                            match ev {
+                                net::NetEvent::Chat { text, .. } => {
+                                    println!("{}", net::strip_colors(&text))
+                                }
+                                net::NetEvent::Print(s) => println!("{s}"),
+                                net::NetEvent::Dropped(why) => {
+                                    eprintln!("disconnected: {why}");
+                                    event_loop.exit();
+                                }
+                                // Map ambient; each round restart re-sends it
+                                // with a new fade deadline, which is ignored.
+                                net::NetEvent::ConfigstringChanged(3) => {
+                                    self.audio.set_ambient(
+                                        &self.fs,
+                                        net::info_value_for_key(net.configstring(3), "n"),
+                                    );
+                                }
+                                // `s <idx>` is the announcer; quick chat too.
+                                net::NetEvent::ServerCommand(ref tokens) => {
+                                    self.audio.on_server_command(
+                                        &self.fs,
+                                        tokens,
+                                        net.configstrings(),
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // Re-send `score` every 2 s while Tab is held, as the
+                        // stock client does (cod11-hud-protocol.md, section 4).
+                        if let Some(hud) = &mut self.hud {
+                            if hud.scoreboard.due(time) {
+                                net.send_reliable("score");
+                                hud.scoreboard.mark_requested(time);
+                            }
+                        }
+
+                        let client_num = net.gamestate().map_or(-1, |g| g.client_num);
+                        // While following, ps.clientNum is the followed
+                        // client's (docs/research/cod11-events-and-fx.md,
+                        // section 7); the camera sits inside that body, so
+                        // skip it instead of ours.
+                        let ps_client = net
+                            .snapshots()
+                            .newest()
+                            .map_or(-1, |s| s.ps.field_i32(p, "clientNum"));
+                        let following = ps_client >= 0 && ps_client != client_num;
+                        let skip_num = if following { ps_client } else { client_num };
+                        // Rebuilt every frame so absent entities (PVS churn) drop out.
+                        let mut instances: Vec<DynamicModelInstance> = Vec::new();
+                        // Per-shooter muzzle transforms for flashes and tracers.
+                        let mut muzzles: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
+                        let mut weapon_flash: HashMap<i32, String> = HashMap::new();
+                        let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
+
+                        if let Some(newest_time) = net.snapshots().newest().map(|s| s.server_time) {
+                            let render_time = clock.render_time(local_ms, newest_time);
+                            if let Some((a, b)) = net.snapshots().two_for_time(render_time) {
+                                let oa = Vec3::from(a.ps.origin(p));
+                                let ob = Vec3::from(b.ps.origin(p));
+                                let f = ((render_time - a.server_time) as f32
+                                    / (b.server_time - a.server_time).max(1) as f32)
+                                    .clamp(0.0, 1.0);
+                                let t0 = Instant::now();
+                                let built = entities::build_instances(
+                                    &mut self.scene,
+                                    (a, b, f),
+                                    render_time,
+                                    skip_num,
+                                    net.configstrings(),
+                                    &self.fs,
+                                    &self.bsp,
+                                    r,
+                                    p,
+                                );
+                                self.build_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                                instances = built.instances;
+                                muzzles = built.muzzles;
+                                weapon_flash = built.weapon_flash;
+                                entity_pos = built.entity_pos;
+                                // Over 512 u is a teleport, not motion.
+                                let pos = if oa.distance(ob) > 512.0 {
+                                    ob
+                                } else {
+                                    oa.lerp(ob, f)
+                                };
+                                // viewHeightCurrent: eye offset above the feet origin.
+                                let vh = a.ps.field_f32(p, "viewHeightCurrent") * (1.0 - f)
+                                    + b.ps.field_f32(p, "viewHeightCurrent") * f;
+                                cam.pos = pos + Vec3::Z * vh;
+                                if !*seeded {
+                                    let va_a = a.ps.viewangles(p);
+                                    let va_b = b.ps.viewangles(p);
+                                    cam.yaw = camera::lerp_angle(va_a[1], va_b[1], f).to_radians();
+                                    cam.pitch =
+                                        -camera::lerp_angle(va_a[0], va_b[0], f).to_radians();
+                                    *seeded = true;
+                                }
+                            } else if let Some(newest) = net.snapshots().newest() {
+                                self.interp_misses += 1;
+                                // too few snapshots to straddle; sit on newest
+                                cam.pos = Vec3::from(newest.ps.origin(p))
+                                    + Vec3::Z * newest.ps.field_f32(p, "viewHeightCurrent");
+                            }
+                        }
+
+                        let (cam_forward, cam_right, cam_up) = camera::basis(cam.yaw, cam.pitch);
+                        // The ridden body is `skip_num`, never in `entity_pos`,
+                        // so the listener is told which entity rides the camera.
+                        self.audio.set_listener(
+                            cam.pos,
+                            cam_forward,
+                            cam_right,
+                            cam_up,
+                            audio::cues::ps_entity(ps_client),
+                        );
+
+                        let (muzzle_pos, muzzle_dir) =
+                            view_muzzle(cam.pos, cam_forward, cam_right, cam_up);
+                        muzzles.insert(u32::MAX, (muzzle_pos, muzzle_dir));
+                        // While following, the followed player's bullet hits
+                        // carry `other_entity_num == ps_client`, and that body
+                        // is excluded from the muzzle map, so key the view
+                        // muzzle under `ps_client` too or they get no tracer.
+                        if following {
+                            muzzles.insert(ps_client as u32, (muzzle_pos, muzzle_dir));
+                        }
+
+                        r.set_dynamic_models(&instances);
+
+                        // Every frame; also the keepalive.
+                        net.send_frame(&usercmd_from_input(input, cam));
+
+                        // Step before this frame's events spawn, or the
+                        // [now-dt, now] integration would move particles born
+                        // at `now` (a tracer would start ahead of its muzzle).
+                        let fx_t0 = Instant::now();
+                        self.fx.step(dt, time, Some(&*world));
+
+                        let (screen_w, screen_h) = r.screen_size();
+
+                        let no_clients = BTreeMap::new();
+                        let newest = net.snapshots().newest();
+                        let hud_frame = hud::HudFrame {
+                            now: time,
+                            screen_w,
+                            screen_h,
+                            configstrings: net.configstrings(),
+                            clients: newest.map_or(&no_clients, |s| &s.clients),
+                            protocol: p,
+                            server_time: newest.map_or(0, |s| s.server_time),
+                            fs: &self.fs,
+                        };
+
+                        // Events use the newest snapshot, not the interpolation
+                        // pair; they must not wait out the interp delay.
+                        if let Some(newest) = newest {
+                            let ctx = fx::registry::ResolveCtx {
+                                muzzles: &muzzles,
+                                weapon_flash: &weapon_flash,
+                            };
+                            for ev in events.drain(newest, p) {
+                                self.ev_seen += 1;
+                                if let Some(hud) = &mut self.hud {
+                                    hud.on_game_event(&ev, &hud_frame);
+                                }
+                                self.audio.on_game_event(
+                                    &self.fs,
+                                    &ev,
+                                    net.configstrings(),
+                                    &muzzles,
+                                );
+                                for r in fx::registry::resolve(&ev, &ctx) {
+                                    match r {
+                                        fx::registry::Resolved::Spawn { path, at } => {
+                                            let sounds = self.fx.spawn(&self.fs, &path, at, time);
+                                            self.audio.play_fx(&self.fs, sounds);
+                                        }
+                                        fx::registry::Resolved::Tracer { muzzle, impact } => {
+                                            self.fx.spawn_tracer(muzzle, impact, time);
+                                        }
+                                        fx::registry::Resolved::Known => {}
+                                        fx::registry::Resolved::Unknown => {
+                                            self.ev_unknown += 1;
+                                            log::debug!(
+                                                "unknown event {} parm {}",
+                                                ev.event,
+                                                ev.parm
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // `es.loopSound` (docs/research/cod11-sound-system.md,
+                        // section 9), reconciled once per snapshot. An entity
+                        // that left the snapshot is absent from the map, which
+                        // is what stops its loop.
+                        if let Some(newest) = newest {
+                            if self.last_loop_snap != Some(newest.message_num) {
+                                self.last_loop_snap = Some(newest.message_num);
+                                let loops: HashMap<u32, (i32, Vec3)> = newest
+                                    .entities
+                                    .iter()
+                                    .filter_map(|(&num, e)| {
+                                        let idx = e.field_i32(p, "loopSound");
+                                        (idx != 0).then(|| (num, (idx, Vec3::from(e.origin(p)))))
+                                    })
+                                    .collect();
+                                self.audio
+                                    .set_loop_sounds(&self.fs, net.configstrings(), &loops);
+                            }
+                        }
+
+                        // After the drain, so new voices get this frame's positions.
+                        self.audio.step(&entity_pos);
+
+                        r.set_fx_quads(
+                            &self.fs,
+                            self.fx.build_quads(cam.pos, cam_right, cam_up, time),
+                        );
+                        r.set_fx_lights(&self.fx.lights(cam.pos, time));
+                        self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
+
+                        if let Some(hud) = &mut self.hud {
+                            let hud_t0 = Instant::now();
+                            let quads = hud.build(&hud_frame);
+                            r.set_hud_quads(&self.fs, quads);
+                            self.hud_ms = hud_t0.elapsed().as_secs_f32() * 1000.0;
+                        }
+
+                        (
+                            renderer::Frame {
+                                view_proj: cam.view_proj(aspect),
+                                hud_lines: Vec::new(),
+                            },
+                            None,
+                        )
+                    }
+                    Mode::Walk {
+                        world,
+                        ps,
+                        input,
+                        keys,
+                        motion,
+                        view_weapon,
+                        mouse_delta,
+                        fire_edge,
+                        reload_edge,
+                        ads_held,
+                    } => {
+                        // Before this frame's fire event spawns, or the
+                        // [now-dt, now] integration would move the new tracer
+                        // ahead of its muzzle.
+                        let fx_t0 = Instant::now();
+                        self.fx.step(dt, time, Some(&*world));
+
+                        (input.forward, input.right) = keys.axes();
+                        pmove::pmove(ps, input, world, dt);
+                        input.jump = false; // Q3: a held jump doesn't autohop
+                        let ground_speed = if ps.on_ground {
+                            ps.velocity.truncate().length()
+                        } else {
+                            0.0
+                        };
+
+                        let v = ps.view();
+                        let (eye_forward, eye_right, eye_up) = camera::basis(v.yaw, v.pitch);
+                        self.audio
+                            .set_listener(v.eye, eye_forward, eye_right, eye_up, u32::MAX);
+                        let mut bone_sets = Vec::new();
+                        let mut fov = camera::DEFAULT_FOV_DEG;
+                        let mut damp = 1.0;
+                        if let Some(w) = view_weapon {
+                            let out = w.state.update(
+                                dt,
+                                weapon::WeaponInput {
+                                    fire: *fire_edge,
+                                    ads: *ads_held,
+                                    reload: *reload_edge,
+                                },
+                            );
+                            let clip = w
+                                .anims
+                                .get(&out.anim)
+                                .or_else(|| w.anims.get(&weapon::WeaponAnim::Idle));
+                            if let Some((anim, binding)) = clip {
+                                let frame = anim.frame_pos(out.anim_time, out.looping);
+                                w.pose.apply(anim, binding, frame);
+                                // two models, hands then gun, in set_viewmodel order
+                                bone_sets = (0..2)
+                                    .map(|m| w.pose.skin_matrices(&w.skeleton, m))
+                                    .collect();
+                            }
+                            fov = camera::DEFAULT_FOV_DEG
+                                + (w.def.ads_zoom_fov - camera::DEFAULT_FOV_DEG) * out.ads_frac;
+                            damp = 1.0 + (w.def.ads_view_bob_mult - 1.0) * out.ads_frac;
+                            if out.fired {
+                                /// Q3/CoD bullet trace length.
+                                const FIRE_RANGE: f32 = 8192.0;
+                                // a point trace: bullets are not boxes
+                                let tr = world.box_trace(
+                                    v.eye,
+                                    v.eye + eye_forward * FIRE_RANGE,
+                                    Vec3::ZERO,
+                                    Vec3::ZERO,
+                                );
+                                // A muzzle inside solid returns no normal, which
+                                // would build a NaN quad that never leaves the ring.
+                                if tr.fraction < 1.0 && !tr.startsolid {
+                                    let sounds = self.fx.spawn(
+                                        &self.fs,
+                                        // no surface type locally, so the csv's default row
+                                        "fx/impacts/default_hit.efx",
+                                        fx::sim::SpawnAt::Surface {
+                                            pos: tr.endpos,
+                                            normal: tr.normal,
+                                        },
+                                        time,
+                                    );
+                                    self.audio.play_fx(&self.fs, sounds);
+                                }
+                            }
+                        }
+                        *fire_edge = false;
+                        *reload_edge = false;
+
+                        motion.update(
+                            dt,
+                            ground_speed,
+                            ps.on_ground,
+                            mouse_delta.0,
+                            mouse_delta.1,
+                            damp,
+                        );
+                        *mouse_delta = (0.0, 0.0);
+                        self.audio.step(&HashMap::new());
+                        r.set_fx_quads(
+                            &self.fs,
+                            self.fx.build_quads(v.eye, eye_right, eye_up, time),
+                        );
+                        r.set_fx_lights(&self.fx.lights(v.eye, time));
+                        self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
+                        (
+                            renderer::Frame {
+                                view_proj: camera::view_proj_from(
+                                    v.eye, v.yaw, v.pitch, v.roll, fov, aspect,
+                                ),
+                                hud_lines: Vec::new(),
+                            },
+                            Some(renderer::VmDraw {
+                                transform: motion.transform(),
+                                bone_sets,
+                            }),
+                        )
+                    }
+                };
+                self.hud_stats
+                    .frame(dt, self.scene.stats.anim_restarts, self.interp_misses);
+                if self.debug_overlay {
+                    frame.hud_lines = hud_lines(
+                        &self.mode,
+                        &self.scene,
+                        &self.hud_stats,
+                        (self.build_ms, self.render_ms, self.fx_ms),
+                        (self.ev_seen, self.ev_unknown),
+                        self.fx.counts(),
+                        (
+                            r.hud_quad_count(),
+                            self.hud_ms,
+                            self.hud.as_ref().map_or(0, |h| h.unknown),
+                        ),
+                        self.audio.stats(),
+                        r,
+                    );
+                }
+                let t0 = Instant::now();
+                r.render(frame, vm);
+                self.render_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+        if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
+            if !self.grabbed {
+                return;
+            }
+            let (dx, dy) = (dx as f32, dy as f32);
+            match &mut self.mode {
+                Mode::Fly(cam) => cam.mouse_delta(dx, dy),
+                Mode::Spectate { cam, .. } => cam.mouse_delta(dx, dy),
+                Mode::Walk {
+                    ps, mouse_delta, ..
+                } => {
+                    // same sensitivity and pitch clamp as FlyCamera::mouse_delta
+                    const SENS: f32 = 0.003;
+                    ps.yaw -= dx * SENS;
+                    ps.pitch =
+                        (ps.pitch - dy * SENS).clamp(-89.0f32.to_radians(), 89.0f32.to_radians());
+                    // raw counts; the sway spring scales them
+                    mouse_delta.0 += dx;
+                    mouse_delta.1 += dy;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drives the real kar98k through the redraw loop's calls without a window.
+    /// Reaches idle, fire, rechamber, ADS up and ADS fire; not LastShot,
+    /// AdsDown or Reloading.
+    #[test]
+    fn real_kar98k_animates_through_a_fire_and_ads_cycle() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let (models, view_weapon) = load_view_weapon(&fs).expect("kar98k viewmodel");
+        assert_eq!(models.len(), 2);
+        let mut w = view_weapon.expect("kar98k anim rig");
+        assert!(
+            w.anims.contains_key(&weapon::WeaponAnim::Idle),
+            "the rig only exists when idle loaded"
+        );
+
+        // fire every 40th frame so the bolt cycle completes; ADS for the second half
+        let mut poses = Vec::new();
+        for step in 0..240 {
+            let out = w.state.update(
+                1.0 / 60.0,
+                weapon::WeaponInput {
+                    fire: step > 60 && step % 40 == 0,
+                    ads: step > 120,
+                    reload: false,
+                },
+            );
+            let (anim, binding) = w
+                .anims
+                .get(&out.anim)
+                .or_else(|| w.anims.get(&weapon::WeaponAnim::Idle))
+                .unwrap_or_else(|| panic!("{:?} has no clip and no idle fallback", out.anim));
+            let frame = anim.frame_pos(out.anim_time, out.looping);
+            assert!(
+                frame.is_finite() && frame >= 0.0 && frame <= (anim.frame_count - 1) as f32,
+                "{:?} frame {frame} out of range",
+                out.anim
+            );
+            w.pose.apply(anim, binding, frame);
+            for (i, model) in models.iter().enumerate() {
+                let mats = w.pose.skin_matrices(&w.skeleton, i);
+                assert_eq!(mats.len(), model.bones.len(), "model {i} bone count");
+                assert!(mats.iter().all(|m| m.is_finite()), "model {i} step {step}");
+            }
+            poses.push(w.pose.skin_matrices(&w.skeleton, 1));
+        }
+        // a static rig would be a silent failure
+        assert!(
+            poses.iter().any(|p| p != &poses[0]),
+            "the gun never moved across 240 frames"
+        );
+    }
+
+    /// Snapshots arrive at 20 Hz and the window redraws at 60 Hz, so render
+    /// time must advance every frame, not per snapshot.
+    #[test]
+    fn interp_clock_advances_between_snapshots() {
+        let mut clock = ServerClock::new();
+        let t0 = clock.render_time(0.0, 10_000);
+        let t1 = clock.render_time(16.0, 10_000);
+        let t2 = clock.render_time(32.0, 10_000);
+        let t3 = clock.render_time(48.0, 10_000);
+        assert!(
+            t0 < t1 && t1 < t2 && t2 < t3,
+            "render time froze between snapshots: {t0} {t1} {t2} {t3}"
+        );
+    }
+
+    #[test]
+    fn view_muzzle_offsets_20_forward_4_right_3_down() {
+        let cam_pos = Vec3::new(100.0, 200.0, 300.0);
+        let forward = Vec3::X;
+        let right = Vec3::Y;
+        let up = Vec3::Z;
+        let (pos, dir) = view_muzzle(cam_pos, forward, right, up);
+        assert_eq!(pos, Vec3::new(120.0, 204.0, 297.0));
+        assert_eq!(dir, forward);
+    }
+
+    /// A snapshot arriving on schedule must not lurch the render time by an
+    /// interval.
+    #[test]
+    fn interp_clock_is_continuous_across_arrival() {
+        let mut clock = ServerClock::new();
+        clock.render_time(0.0, 10_000);
+        let before = clock.render_time(48.0, 10_000);
+        let after = clock.render_time(50.0, 10_050);
+        assert!(
+            (after - before).abs() <= 8,
+            "render time jumped across the snapshot seam: {before} -> {after}"
+        );
+    }
+
+    /// A long gap (tab-out, map change) re-pegs instead of interpolating across it.
+    #[test]
+    fn interp_clock_repegs_on_large_jump() {
+        let mut clock = ServerClock::new();
+        clock.render_time(0.0, 10_000);
+        clock.render_time(16.0, 10_000);
+        let rt = clock.render_time(30_016.0, 40_000);
+        assert!(
+            (rt - (40_000 - INTERP_DELAY_MS)).abs() <= 4,
+            "clock did not re-peg after a large jump: {rt}"
+        );
+    }
+}

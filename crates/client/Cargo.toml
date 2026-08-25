@@ -1,0 +1,23 @@
+[package]
+name = "vcod"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Call of Duty (2003) map viewer and spectator client"
+
+[dependencies]
+vcod-common.workspace = true
+anyhow.workspace = true
+bytemuck.workspace = true
+clap.workspace = true
+env_logger.workspace = true
+glam.workspace = true
+kira.workspace = true
+log.workspace = true
+pollster.workspace = true
+winit.workspace = true
+wgpu.workspace = true

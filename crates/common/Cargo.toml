@@ -1,0 +1,21 @@
+[package]
+name = "vcod-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Call of Duty (2003) formats, collision, movement and the 1.1 network protocol, shared by the vcod client and server"
+
+[dependencies]
+anyhow.workspace = true
+bytemuck.workspace = true
+glam.workspace = true
+image.workspace = true
+log.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,1222 @@
+//! Contains routines ported from the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company.
+//! See NOTICE.
+//!
+//! The server state machine, transport-free. `main.rs` owns the socket, the
+//! tests own a queue. Ported from RTCW-MP sv_main.c / sv_client.c; reply
+//! strings come from docs/research/cod11-server-handshake.md.
+
+use crate::client::{sanitize_name, Client, ClientState};
+use crate::configstrings;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::time::{Duration, Instant};
+use vcod_common::net::connectionless::{build_oob, parse_connect, parse_oob, Info};
+use vcod_common::net::gamestate::{self, Gamestate};
+use vcod_common::net::huffman::Huffman;
+use vcod_common::net::msg::{
+    self, read_delta_usercmd, MsgReader, MsgWriter, UserCmd, NULL_USERCMD,
+};
+use vcod_common::net::netchan::{ClientMessage, ServerNetchan, MAX_RELIABLE_COMMANDS};
+use vcod_common::net::protocol::{Protocol, PROTOCOL_V1};
+use vcod_common::net::{com_hash_key, info_value_for_key};
+
+/// `MAX_CHALLENGES`, server.h:198.
+const MAX_CHALLENGES: usize = 1024;
+/// A challenge nobody asked about for this long is dropped when a new one
+/// is issued, so a spoof flood has to keep up with real clients to evict them.
+const CHALLENGE_TTL: Duration = Duration::from_secs(60);
+/// `sv_timeout` default (cod_lnxded 0x80d56c0).
+const TIMEOUT: Duration = Duration::from_secs(240);
+/// `sv_reconnectlimit` default. Also how long a slot must have been silent
+/// before a connect carrying a different challenge may reclaim it.
+const RECONNECT_LIMIT: Duration = Duration::from_secs(3);
+/// ioq3 `SVC_RateLimitAddress`: per source ip, a burst of 10 connectionless
+/// requests, one back per second.
+const ADDR_BURST: u32 = 10;
+const ADDR_PERIOD: Duration = Duration::from_secs(1);
+/// ioq3 `outboundLeakyBucket`: all connectionless replies, 10 per 100 ms.
+const GLOBAL_BURST: u32 = 10;
+const GLOBAL_PERIOD: Duration = Duration::from_millis(100);
+/// Source ips tracked at once; the least recently seen is evicted.
+const MAX_BUCKETS: usize = 1024;
+/// clc ops, 2 bits on the wire.
+const CLC_MOVE: i32 = 0;
+const CLC_MOVE_NO_DELTA: i32 = 1;
+const CLC_CLIENT_COMMAND: i32 = 2;
+const CLC_EOF: i32 = 3;
+const MAX_PACKET_USERCMDS: u8 = 32;
+
+pub struct ServerConfig {
+    pub map: String,
+    pub hostname: String,
+    pub max_clients: usize,
+    /// `g_gametype` as text (`dm`, `tdm`, `sd`).
+    pub gametype: String,
+}
+
+/// `challenge_t`. Entries past `CHALLENGE_TTL` go on the next insert; the
+/// oldest slot is recycled when the table is still full.
+struct Challenge {
+    addr: SocketAddr,
+    challenge: i32,
+    time: Instant,
+    connected: bool,
+}
+
+/// ioq3 `leakyBucket_t`: `used` tokens, one drained per period.
+struct Bucket {
+    last: Instant,
+    used: u32,
+}
+
+impl Bucket {
+    /// `SVC_RateLimit`. True when this request is over the limit.
+    fn limited(&mut self, now: Instant, burst: u32, period: Duration) -> bool {
+        let interval = now.saturating_duration_since(self.last);
+        let expired = interval.as_micros() / period.as_micros();
+        if expired > u128::from(self.used) {
+            self.used = 0;
+            self.last = now;
+        } else {
+            self.used -= expired as u32;
+            self.last += period * expired as u32;
+        }
+        if self.used < burst {
+            self.used += 1;
+            return false;
+        }
+        true
+    }
+}
+
+/// The connectionless reply limiter, so `getstatus` cannot be used as a
+/// reflector: a bucket per source ip in front of one for all replies.
+struct RateLimiter {
+    global: Bucket,
+    addrs: HashMap<IpAddr, Bucket>,
+}
+
+impl RateLimiter {
+    fn new(now: Instant) -> Self {
+        RateLimiter {
+            global: Bucket { last: now, used: 0 },
+            addrs: HashMap::new(),
+        }
+    }
+
+    /// `SVC_RateLimitAddress`. The global bucket is untouched by a request
+    /// this rejects.
+    fn addr_limited(&mut self, from: IpAddr, now: Instant) -> bool {
+        if !self.addrs.contains_key(&from) && self.addrs.len() >= MAX_BUCKETS {
+            let oldest = *self.addrs.iter().min_by_key(|(_, b)| b.last).unwrap().0;
+            self.addrs.remove(&oldest);
+        }
+        self.addrs
+            .entry(from)
+            .or_insert(Bucket { last: now, used: 0 })
+            .limited(now, ADDR_BURST, ADDR_PERIOD)
+    }
+
+    /// Both buckets, in ioq3's order; true when the reply must not go out.
+    fn reply_limited(&mut self, from: IpAddr, now: Instant) -> bool {
+        self.addr_limited(from, now) || self.global.limited(now, GLOBAL_BURST, GLOBAL_PERIOD)
+    }
+}
+
+/// One op of a client message, read out before any of it is applied.
+enum ClientOp {
+    Command {
+        seq: i32,
+        text: String,
+    },
+    /// The last usercmd of a move; the earlier ones only carry the delta.
+    Move(UserCmd),
+}
+
+pub struct Server {
+    cfg: ServerConfig,
+    huff: Huffman,
+    proto: &'static Protocol,
+    /// `sv_serverid`, `0x10` per map load plus the restart count in the low
+    /// nibble. u8 because the client echoes it in a one-byte header field.
+    server_id: u8,
+    checksum_feed: i32,
+    configstrings: Vec<String>,
+    challenges: Vec<Challenge>,
+    clients: Vec<Option<Client>>,
+    outbox: Vec<(SocketAddr, Vec<u8>)>,
+    limiter: RateLimiter,
+    rng: u64,
+}
+
+/// OOB argument text, minus a trailing line terminator.
+fn oob_arg(rest: &[u8]) -> String {
+    String::from_utf8_lossy(rest)
+        .trim_end_matches(['\n', '\0'])
+        .to_string()
+}
+
+/// `Cmd_Argv(1)`. The token goes back out inside an info string, so the info
+/// separators come off it and the length is capped.
+fn challenge_arg(arg: &str) -> String {
+    const MAX: usize = 32;
+    let mut out = String::with_capacity(MAX);
+    for c in arg
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| *c != '\\' && *c != '"')
+    {
+        if out.len() + c.len_utf8() > MAX {
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// `SV_UpdateServerCommandsToClient`. The caller bounds `from_ack` to
+/// `0..=reliable_sequence`, so the range is empty or inside the ring.
+fn write_pending_commands(w: &mut MsgWriter, nc: &ServerNetchan, from_ack: i32) {
+    for seq in (from_ack + 1)..=(nc.reliable_sequence as i32) {
+        msg::write_server_command(
+            w,
+            seq,
+            &nc.reliable[seq as usize & (MAX_RELIABLE_COMMANDS - 1)],
+        );
+    }
+}
+
+impl Server {
+    pub fn new(cfg: ServerConfig, now: Instant) -> Self {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0x9e37_79b9_7f4a_7c15, |d| d.as_nanos() as u64)
+            | 1;
+        let server_id = 0x10;
+        let mut sv = Server {
+            configstrings: configstrings::static_configstrings(&cfg, server_id),
+            clients: (0..cfg.max_clients).map(|_| None).collect(),
+            cfg,
+            huff: Huffman::new(),
+            proto: &PROTOCOL_V1,
+            server_id,
+            checksum_feed: 0,
+            challenges: Vec::new(),
+            outbox: Vec::new(),
+            limiter: RateLimiter::new(now),
+            rng: seed,
+        };
+        // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
+        sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
+        sv
+    }
+
+    /// xorshift64*, masked to 31 bits like glibc's `rand()` so that
+    /// `(rand() << 16) ^ rand()` wraps into the sign bit and challenges come
+    /// out signed like retail's.
+    fn rand(&mut self) -> i32 {
+        self.rng ^= self.rng >> 12;
+        self.rng ^= self.rng << 25;
+        self.rng ^= self.rng >> 27;
+        (self.rng.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 33) as i32 & 0x7fff_ffff
+    }
+
+    pub fn configstring(&self, i: usize) -> &str {
+        self.configstrings.get(i).map_or("", String::as_str)
+    }
+
+    pub fn client_count(&self) -> usize {
+        self.clients.iter().flatten().count()
+    }
+
+    pub fn take_outgoing(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
+        std::mem::take(&mut self.outbox)
+    }
+
+    fn send_oob(&mut self, to: SocketAddr, text: &str) {
+        self.outbox.push((to, build_oob(text)));
+    }
+
+    /// `SV_PacketEvent`.
+    pub fn handle_packet(&mut self, from: SocketAddr, pkt: &[u8], now: Instant) {
+        match parse_oob(pkt) {
+            Some((cmd, rest)) => {
+                let cmd = cmd.to_string();
+                self.handle_oob(from, &cmd, rest, pkt, now);
+            }
+            None => self.handle_client_packet(from, pkt, now),
+        }
+    }
+
+    /// `connect` re-parses `raw` because its body is compressed; only the
+    /// browser queries read `rest` as text. The queries are rate limited
+    /// before anything is looked at; a limited request is dropped silently.
+    fn handle_oob(&mut self, from: SocketAddr, cmd: &str, rest: &[u8], raw: &[u8], now: Instant) {
+        match cmd {
+            "getinfo" | "getstatus" | "getchallenge" => {
+                if self.limiter.reply_limited(from.ip(), now) {
+                    log::debug!("{from}: {cmd} rate limited");
+                    return;
+                }
+                match cmd {
+                    "getinfo" => self.svc_info(from, &oob_arg(rest)),
+                    "getstatus" => self.svc_status(from, &oob_arg(rest)),
+                    _ => self.svc_get_challenge(from, now),
+                }
+            }
+            "connect" => self.svc_direct_connect(from, raw, now),
+            // Retail drops by source address alone; the bucket keeps a spoofer
+            // from cycling a slot faster than the client can reconnect.
+            "disconnect" => {
+                if self.limiter.addr_limited(from.ip(), now) {
+                    log::debug!("{from}: disconnect rate limited");
+                    return;
+                }
+                self.oob_disconnect(from)
+            }
+            other => log::debug!("{from}: unhandled oob {other:?}"),
+        }
+    }
+
+    /// `SVC_Info` (cod_lnxded 0x808c1ac). Key order is retail's;
+    /// `minPing`/`maxPing`/`game` only appear when the matching cvar is set.
+    fn svc_info(&mut self, from: SocketAddr, challenge: &str) {
+        let mut i = Info::new();
+        i.set("challenge", challenge_arg(challenge))
+            .set("protocol", PROTOCOL_V1.version)
+            .set("hostname", &self.cfg.hostname)
+            .set("mapname", &self.cfg.map)
+            .set("clients", self.client_count())
+            .set("sv_maxclients", self.cfg.max_clients)
+            .set("gametype", &self.cfg.gametype)
+            .set("pure", 0)
+            .set("sv_allowAnonymous", 0)
+            .set("pswrd", 0);
+        self.send_oob(from, &format!("infoResponse\n{i}"));
+    }
+
+    /// `SVC_Status` (0x808bd50).
+    fn svc_status(&mut self, from: SocketAddr, challenge: &str) {
+        let mut i = configstrings::serverinfo(&self.cfg);
+        i.set("challenge", challenge_arg(challenge)).set("pswrd", 0);
+        let mut lines = String::new();
+        for c in self.clients.iter().flatten() {
+            lines.push_str(&format!("0 0 \"{}\"\n", c.name));
+        }
+        self.send_oob(from, &format!("statusResponse\n{i}\n{lines}"));
+    }
+
+    /// `SV_GetChallenge` without the authorize-server detour. A client still
+    /// asking keeps its entry fresh; stale entries go before a new insert.
+    fn svc_get_challenge(&mut self, from: SocketAddr, now: Instant) {
+        let challenge = match self
+            .challenges
+            .iter_mut()
+            .find(|c| !c.connected && c.addr == from)
+        {
+            Some(c) => {
+                c.time = now;
+                c.challenge
+            }
+            None => {
+                self.challenges
+                    .retain(|c| now.duration_since(c.time) < CHALLENGE_TTL);
+                let challenge = (self.rand() << 16) ^ self.rand();
+                let entry = Challenge {
+                    addr: from,
+                    challenge,
+                    time: now,
+                    connected: false,
+                };
+                if self.challenges.len() < MAX_CHALLENGES {
+                    self.challenges.push(entry);
+                } else {
+                    let oldest = (0..self.challenges.len())
+                        .min_by_key(|&i| self.challenges[i].time)
+                        .unwrap();
+                    self.challenges[oldest] = entry;
+                }
+                challenge
+            }
+        };
+        self.send_oob(from, &format!("challengeResponse {challenge}"));
+    }
+
+    /// `SV_DirectConnect` (sv_client.c:252) with CoD's rejection strings.
+    fn svc_direct_connect(&mut self, from: SocketAddr, raw: &[u8], now: Instant) {
+        let userinfo = match parse_connect(raw) {
+            Ok(u) => u,
+            Err(e) => {
+                log::debug!("{from}: bad connect: {e}");
+                return;
+            }
+        };
+        let val = |k: &str| info_value_for_key(&userinfo, k).and_then(|v| v.parse::<i32>().ok());
+        if val("protocol") != Some(self.proto.version as i32) {
+            self.send_oob(from, "error\nEXE_SERVER_IS_DIFFERENT_VER 1.1");
+            return;
+        }
+        let (Some(challenge), Some(qport)) = (val("challenge"), val("qport")) else {
+            self.send_oob(from, "error\nEXE_BAD_CHALLENGE");
+            return;
+        };
+        let qport = qport as u16;
+        let same_peer = |c: &Client| {
+            c.addr.ip() == from.ip() && (c.netchan.qport == qport || c.addr.port() == from.port())
+        };
+        if self
+            .clients
+            .iter()
+            .flatten()
+            .any(|c| same_peer(c) && now.duration_since(c.last_connect) < RECONNECT_LIMIT)
+        {
+            log::debug!("{from}: reconnect rejected, too soon");
+            return;
+        }
+        // By ip alone, as retail does: the port may have moved behind a NAT.
+        let Some(ci) = self
+            .challenges
+            .iter()
+            .position(|c| c.addr.ip() == from.ip() && c.challenge == challenge)
+        else {
+            self.send_oob(from, "error\nEXE_BAD_CHALLENGE");
+            return;
+        };
+        self.challenges[ci].connected = true;
+        let slot = match self
+            .clients
+            .iter()
+            .position(|c| c.as_ref().is_some_and(same_peer))
+        {
+            Some(i) => {
+                // Retail hands the slot to any challenge issued to this ip, so
+                // a neighbour behind the same NAT who knows the qport can take
+                // over a live player. Only the slot's own challenge (the
+                // client's connect retry) may replace a client still heard
+                // from; a silent slot (crash, lost disconnect) is reclaimable.
+                let c = self.clients[i].as_ref().unwrap();
+                if c.netchan.challenge != challenge
+                    && now.duration_since(c.last_packet) < RECONNECT_LIMIT
+                {
+                    log::info!(
+                        "{from}: connect with a foreign challenge refused, client {i} is live"
+                    );
+                    return;
+                }
+                log::info!("{from}: reconnect");
+                i
+            }
+            None => match self.clients.iter().position(Option::is_none) {
+                Some(i) => i,
+                None => {
+                    self.send_oob(from, "error\nEXE_SERVERISFULL");
+                    return;
+                }
+            },
+        };
+        let client = Client::new(from, qport, challenge, userinfo, now);
+        log::info!("client {slot} {:?} connected from {from}", client.name);
+        self.clients[slot] = Some(client);
+        self.send_oob(from, "connectResponse");
+    }
+
+    /// OOB `disconnect` (0x808c827).
+    fn oob_disconnect(&mut self, from: SocketAddr) {
+        if let Some(slot) = self
+            .clients
+            .iter()
+            .position(|c| c.as_ref().is_some_and(|c| c.addr == from))
+        {
+            self.drop_client(slot, "EXE_DISCONNECTED");
+        }
+    }
+
+    /// The netchan half of `SV_PacketEvent`, then `SV_ExecuteClientMessage`.
+    /// The slot changes only once the message has passed every check the
+    /// plain header and the op stream allow (`Client::accept`), so a packet
+    /// forged with the client's ip and qport cannot stall it behind a huge
+    /// sequence, redirect its replies or keep a dead slot alive.
+    fn handle_client_packet(&mut self, from: SocketAddr, pkt: &[u8], now: Instant) {
+        if pkt.len() < 6 {
+            log::debug!("{from}: netchan packet too short ({} bytes)", pkt.len());
+            return;
+        }
+        let qport = u16::from_le_bytes([pkt[4], pkt[5]]);
+        let Some(slot) = self.clients.iter().position(|c| {
+            c.as_ref()
+                .is_some_and(|c| c.addr.ip() == from.ip() && c.netchan.qport == qport)
+        }) else {
+            log::debug!("{from}: netchan packet from no client (qport {qport})");
+            return;
+        };
+        let Some(c) = self.clients[slot].as_ref() else {
+            return;
+        };
+        let Some(m) = c.netchan.process_in(pkt) else {
+            return;
+        };
+        // messageAcknowledge names a message we sent, so it is below
+        // outgoing_sequence; retail only rejects a negative one.
+        if m.message_ack < 0 || m.message_ack >= c.netchan.outgoing_sequence as i32 {
+            log::debug!(
+                "client {slot}: messageAcknowledge {} out of range",
+                m.message_ack
+            );
+            return;
+        }
+        // 0x808ca1a drops an ack too far behind. One ahead of what we sent is
+        // bogus too; `write_pending_commands` walks `reliable_ack + 1 ..=
+        // reliable_sequence`, so an unbounded value overflows or loops for ages.
+        let reliable_seq = c.netchan.reliable_sequence as i32;
+        if m.reliable_ack < 0
+            || m.reliable_ack > reliable_seq
+            || reliable_seq.saturating_sub(m.reliable_ack) > MAX_RELIABLE_COMMANDS as i32 - 1
+        {
+            log::debug!(
+                "client {slot}: reliableAcknowledge {} out of range",
+                m.reliable_ack
+            );
+            return;
+        }
+
+        if m.server_id != self.server_id {
+            let c = self.clients[slot].as_mut().unwrap();
+            if m.server_id & 0xf0 != self.server_id & 0xf0 {
+                // A map change from the client's view (a fresh client, serverId
+                // 0, looks the same). Resend the gamestate once its ack is past
+                // the last one. Until snapshots exist the gamestate is our only
+                // message, so a lost one never advances the ack and the client
+                // falls to its own timeout.
+                if i64::from(m.message_ack) > c.gamestate_message_num {
+                    c.accept(&m, now);
+                    self.send_gamestate(slot);
+                }
+            } else if c.state == ClientState::Primed {
+                // Restart path; retail promotes to CS_ACTIVE here. No snapshots yet.
+                c.accept(&m, now);
+                log::debug!("client {slot}: map_restart catch-up without snapshots");
+            }
+            return;
+        }
+
+        let Some(ops) = self.parse_client_ops(c, &m) else {
+            log::debug!("client {slot}: message from {from} does not decode");
+            return;
+        };
+        let c = self.clients[slot].as_mut().unwrap();
+        c.accept(&m, now);
+        c.addr = from; // NAT may move the port; the qport is the identity
+        for op in ops {
+            match op {
+                ClientOp::Command { seq, text } => {
+                    if !self.client_command(slot, seq, text) {
+                        return;
+                    }
+                }
+                ClientOp::Move(last) => self.user_move(slot, last),
+            }
+        }
+    }
+
+    /// `SV_ExecuteClientMessage`'s op walk, read to the end before any op is
+    /// applied. `None` when the stream does not decode: an overflow anywhere
+    /// or a bad usercmd count, which is what a forged block looks like once
+    /// the scramble key is wrong.
+    fn parse_client_ops(&self, c: &Client, m: &ClientMessage) -> Option<Vec<ClientOp>> {
+        let mut r = MsgReader::new(&m.ops, &self.huff);
+        let mut ops = Vec::new();
+        loop {
+            let op = r.read_bits(2);
+            if r.is_overflowed() {
+                return None;
+            }
+            match op {
+                CLC_CLIENT_COMMAND => {
+                    let seq = r.read_long();
+                    let text = r.read_string();
+                    if r.is_overflowed() {
+                        return None;
+                    }
+                    ops.push(ClientOp::Command { seq, text });
+                }
+                CLC_EOF => return Some(ops),
+                CLC_MOVE | CLC_MOVE_NO_DELTA => {
+                    ops.push(ClientOp::Move(self.parse_move(c, &mut r, m)?));
+                    return Some(ops);
+                }
+                // `read_bits(2)` yields 0..=3; unreachable.
+                _ => return None,
+            }
+        }
+    }
+
+    /// `SV_UserMove`'s parse: every usercmd is read to stay in step with the
+    /// delta chain, the last one is returned.
+    fn parse_move(&self, c: &Client, r: &mut MsgReader, m: &ClientMessage) -> Option<UserCmd> {
+        let count = r.read_byte();
+        if !(1..=MAX_PACKET_USERCMDS).contains(&count) {
+            return None;
+        }
+        let cmd = &c.netchan.reliable[m.reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)];
+        let key = self.checksum_feed ^ m.message_ack ^ com_hash_key(cmd, 32);
+        let mut prev = NULL_USERCMD;
+        for _ in 0..count {
+            match read_delta_usercmd(r, key, &prev) {
+                Ok(next) => prev = next,
+                Err(e) => {
+                    log::debug!("usercmd not parsed: {e}");
+                    return None;
+                }
+            }
+        }
+        Some(prev)
+    }
+
+    /// `SV_ClientCommand`. Returns false when the client is gone.
+    fn client_command(&mut self, slot: usize, seq: i32, s: String) -> bool {
+        let Some(c) = self.clients[slot].as_mut() else {
+            return false;
+        };
+        if seq <= c.last_client_command {
+            return true;
+        }
+        if seq > c.last_client_command.saturating_add(1) {
+            self.drop_client(slot, "EXE_LOSTRELIABLECOMMANDS");
+            return false;
+        }
+        // Split rather than slice; the command may arrive with leading whitespace.
+        let trimmed = s.trim_start();
+        let (word, args) = trimmed
+            .split_once(char::is_whitespace)
+            .unwrap_or((trimmed, ""));
+        match word {
+            "disconnect" => {
+                self.drop_client(slot, "EXE_DISCONNECTED");
+                return false;
+            }
+            "userinfo" => {
+                let ui = args.trim().trim_matches('"').to_string();
+                if let Some(c) = self.clients[slot].as_mut() {
+                    if let Some(name) = info_value_for_key(&ui, "name") {
+                        c.name = sanitize_name(name);
+                    }
+                    c.userinfo = ui;
+                }
+            }
+            other => log::debug!("client {slot}: command {other:?} ignored"),
+        }
+        let Some(c) = self.clients[slot].as_mut() else {
+            return false;
+        };
+        c.last_client_command = seq;
+        c.netchan.last_client_command_string = s;
+        true
+    }
+
+    /// `SV_UserMove` past the parse; runs nothing yet.
+    fn user_move(&mut self, slot: usize, last: UserCmd) {
+        let Some(c) = self.clients[slot].as_mut() else {
+            return;
+        };
+        if c.state == ClientState::Primed && !c.enter_world_logged {
+            c.enter_world_logged = true;
+            log::info!(
+                "client {slot} {:?} sent its first move (serverTime {}); it would enter the world here, snapshots are not implemented",
+                c.name,
+                last.server_time
+            );
+        }
+    }
+
+    /// `SV_SendClientGameState`, with no baselines yet.
+    fn send_gamestate(&mut self, slot: usize) {
+        let Some(c) = self.clients[slot].as_mut() else {
+            return;
+        };
+        c.state = ClientState::Primed;
+        c.gamestate_message_num = i64::from(c.netchan.outgoing_sequence);
+        let mut w = MsgWriter::new(&self.huff);
+        write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
+        let gs = Gamestate {
+            configstrings: self.configstrings.clone(),
+            baselines: Default::default(),
+            client_num: slot as i32,
+            checksum_feed: self.checksum_feed,
+            server_command_sequence: c.netchan.reliable_sequence as i32,
+        };
+        gamestate::write(&mut w, self.proto, &gs);
+        let ops = w.into_ops();
+        log::info!("client {slot}: gamestate, {} bytes", ops.len());
+        for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
+            self.outbox.push((c.addr, pkt));
+        }
+    }
+
+    /// `SV_AddServerCommand` plus an immediate message, so a drop notice
+    /// reaches the client before its slot is freed.
+    fn send_server_command(&mut self, slot: usize, cmd: &str) {
+        let Some(c) = self.clients[slot].as_mut() else {
+            return;
+        };
+        c.netchan.reliable_sequence += 1;
+        let seq = c.netchan.reliable_sequence;
+        c.netchan.reliable[seq as usize & (MAX_RELIABLE_COMMANDS - 1)] = cmd.to_string();
+        let mut w = MsgWriter::new(&self.huff);
+        write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
+        // The netchan appends the `svc_EOF`.
+        for pkt in c
+            .netchan
+            .transmit(c.last_client_command, &w.into_ops(), &self.huff)
+        {
+            self.outbox.push((c.addr, pkt));
+        }
+    }
+
+    /// `SV_DropClient` (cod_lnxded 0x8085cf4). No zombie state; nothing here
+    /// needs the grace period.
+    fn drop_client(&mut self, slot: usize, reason: &str) {
+        self.send_server_command(slot, &format!("w \"{reason}\""));
+        let Some(c) = self.clients[slot].take() else {
+            return;
+        };
+        // Match on ip, not `ch.addr == c.addr`; NAT may have moved the port
+        // since the challenge was issued and the slot would stay `connected`.
+        for ch in &mut self.challenges {
+            if ch.addr.ip() == c.addr.ip() && ch.challenge == c.netchan.challenge {
+                ch.connected = false;
+            }
+        }
+        log::info!("client {slot} {:?} dropped: {reason}", c.name);
+    }
+
+    /// `SV_CheckTimeouts` with `sv_timeout` and no timeoutCount hysteresis.
+    fn check_timeouts(&mut self, now: Instant) {
+        let stale: Vec<usize> = self
+            .clients
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                c.as_ref()
+                    .filter(|c| now.duration_since(c.last_packet) > TIMEOUT)
+                    .map(|_| i)
+            })
+            .collect();
+        for slot in stale {
+            self.drop_client(slot, "EXE_TIMEDOUT");
+        }
+    }
+
+    pub fn tick(&mut self, now: Instant) {
+        self.check_timeouts(now);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vcod_common::net::connectionless::{
+        build_connect, build_oob, info_value_for_key, parse_oob,
+    };
+    use vcod_common::net::netchan::Netchan;
+
+    const QPORT: u16 = 0x2001;
+
+    fn cfg() -> ServerConfig {
+        ServerConfig {
+            map: "mp_carentan".into(),
+            hostname: "vcod test".into(),
+            max_clients: 4,
+            gametype: "dm".into(),
+        }
+    }
+    fn addr(port: u16) -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], port))
+    }
+    fn oob(cmd: &str) -> Vec<u8> {
+        build_oob(cmd)
+    }
+    fn reply(sv: &mut Server) -> (SocketAddr, String, Vec<u8>) {
+        let mut out = sv.take_outgoing();
+        assert_eq!(out.len(), 1, "expected one packet");
+        let (to, pkt) = out.remove(0);
+        let (cmd, rest) = parse_oob(&pkt).expect("oob reply");
+        (to, cmd.to_string(), rest.to_vec())
+    }
+    fn reply_text(sv: &mut Server) -> (String, String) {
+        let (_, cmd, rest) = reply(sv);
+        (cmd, String::from_utf8_lossy(&rest).trim().to_string())
+    }
+    fn challenge_for(sv: &mut Server, from: SocketAddr, now: Instant) -> i32 {
+        sv.handle_packet(from, &oob("getchallenge"), now);
+        let (cmd, body) = reply_text(sv);
+        assert_eq!(cmd, "challengeResponse");
+        body.parse().expect("a numeric challenge")
+    }
+    fn connect_pkt(challenge: i32, qport: u16, protocol: u32) -> Vec<u8> {
+        build_connect(&format!(
+            "\\name\\vcod\\protocol\\{protocol}\\qport\\{qport}\\challenge\\{challenge}"
+        ))
+    }
+    fn connected(sv: &mut Server, from: SocketAddr, now: Instant) -> Netchan {
+        let challenge = challenge_for(sv, from, now);
+        sv.handle_packet(
+            from,
+            &connect_pkt(challenge, QPORT, PROTOCOL_V1.version),
+            now,
+        );
+        assert_eq!(reply_text(sv).0, "connectResponse");
+        Netchan::new(QPORT, challenge)
+    }
+    fn server_commands(nc: &mut Netchan, pkt: &[u8], huff: &Huffman) -> Vec<String> {
+        let msg = nc
+            .process_in(pkt, huff)
+            .expect("a netchan packet")
+            .expect("a whole message");
+        let mut r = MsgReader::new(&msg[4..], huff);
+        let mut out = Vec::new();
+        while !r.is_overflowed() {
+            match r.read_byte() {
+                msg::SVC_SERVER_COMMAND => {
+                    r.read_long();
+                    out.push(r.read_big_string());
+                }
+                _ => break,
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn getinfo_echoes_the_challenge_and_names_the_map() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.handle_packet(addr(5), &oob("getinfo 4242"), now);
+        let (to, cmd, rest) = reply(&mut sv);
+        assert_eq!(to, addr(5));
+        assert_eq!(cmd, "infoResponse");
+        let info = String::from_utf8_lossy(&rest);
+        assert_eq!(info_value_for_key(&info, "challenge"), Some("4242"));
+        assert_eq!(info_value_for_key(&info, "mapname"), Some("mp_carentan"));
+        assert_eq!(info_value_for_key(&info, "protocol"), Some("1"));
+        assert_eq!(info_value_for_key(&info, "clients"), Some("0"));
+        assert_eq!(info_value_for_key(&info, "sv_maxclients"), Some("4"));
+        assert_eq!(info_value_for_key(&info, "gametype"), Some("dm"));
+        assert_eq!(info_value_for_key(&info, "pswrd"), Some("0"));
+        // Key order is retail's; pin the whole string.
+        assert_eq!(
+            info,
+            "\\challenge\\4242\\protocol\\1\\hostname\\vcod test\\mapname\\mp_carentan\\clients\\0\\sv_maxclients\\4\\gametype\\dm\\pure\\0\\sv_allowAnonymous\\0\\pswrd\\0"
+        );
+    }
+
+    #[test]
+    fn getinfo_sanitizes_the_challenge_argument() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.handle_packet(addr(5), &oob("getinfo a\\pure\\1 extra"), now);
+        let (_, cmd, rest) = reply(&mut sv);
+        assert_eq!(cmd, "infoResponse");
+        let info = String::from_utf8_lossy(&rest);
+        assert_eq!(info_value_for_key(&info, "challenge"), Some("apure1"));
+        assert_eq!(info_value_for_key(&info, "pure"), Some("0"));
+    }
+
+    #[test]
+    fn getstatus_has_serverinfo_and_no_player_lines() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.handle_packet(addr(5), &oob("getstatus 7"), now);
+        let (_, cmd, rest) = reply(&mut sv);
+        assert_eq!(cmd, "statusResponse");
+        let text = String::from_utf8_lossy(&rest);
+        let (info, players) = text.split_once('\n').unwrap();
+        assert_eq!(info_value_for_key(info, "sv_hostname"), Some("vcod test"));
+        assert_eq!(info_value_for_key(info, "challenge"), Some("7"));
+        assert_eq!(players, "");
+    }
+
+    #[test]
+    fn getchallenge_is_stable_per_address() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.handle_packet(addr(5), &oob("getchallenge"), now);
+        let (_, cmd, a) = reply(&mut sv);
+        assert_eq!(cmd, "challengeResponse");
+        sv.handle_packet(addr(5), &oob("getchallenge"), now);
+        let (_, _, b) = reply(&mut sv);
+        assert_eq!(a, b);
+        sv.handle_packet(addr(6), &oob("getchallenge"), now);
+        let (_, _, c) = reply(&mut sv);
+        assert_ne!(a, c);
+        assert!(String::from_utf8_lossy(&a).trim().parse::<i32>().is_ok());
+    }
+
+    #[test]
+    fn serverinfo_is_configstring_zero() {
+        let sv = Server::new(cfg(), Instant::now());
+        let cs0 = sv.configstring(0);
+        assert_eq!(info_value_for_key(cs0, "mapname"), Some("mp_carentan"));
+        assert_eq!(
+            info_value_for_key(sv.configstring(1), "sv_serverid"),
+            Some("16")
+        );
+        assert!(sv.configstring(7).contains("kar98k_mp"));
+    }
+
+    #[test]
+    fn a_valid_connect_takes_a_slot() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let challenge = challenge_for(&mut sv, addr(5), now);
+        sv.handle_packet(
+            addr(5),
+            &connect_pkt(challenge, QPORT, PROTOCOL_V1.version),
+            now,
+        );
+        let (to, cmd, _) = reply(&mut sv);
+        assert_eq!(to, addr(5));
+        assert_eq!(cmd, "connectResponse");
+        assert_eq!(sv.client_count(), 1);
+    }
+
+    #[test]
+    fn a_connect_on_the_wrong_protocol_is_rejected() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let challenge = challenge_for(&mut sv, addr(5), now);
+        sv.handle_packet(addr(5), &connect_pkt(challenge, QPORT, 6), now);
+        assert_eq!(
+            reply_text(&mut sv),
+            (
+                "error".to_string(),
+                "EXE_SERVER_IS_DIFFERENT_VER 1.1".to_string()
+            )
+        );
+        assert_eq!(sv.client_count(), 0);
+    }
+
+    #[test]
+    fn a_connect_with_a_challenge_we_never_issued_is_rejected() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let challenge = challenge_for(&mut sv, addr(5), now);
+        sv.handle_packet(
+            addr(5),
+            &connect_pkt(challenge.wrapping_add(1), QPORT, PROTOCOL_V1.version),
+            now,
+        );
+        assert_eq!(
+            reply_text(&mut sv),
+            ("error".to_string(), "EXE_BAD_CHALLENGE".to_string())
+        );
+        assert_eq!(sv.client_count(), 0);
+    }
+
+    #[test]
+    fn a_full_server_rejects_the_next_connect() {
+        let now = Instant::now();
+        let mut sv = Server::new(
+            ServerConfig {
+                max_clients: 1,
+                ..cfg()
+            },
+            now,
+        );
+        connected(&mut sv, addr(5), now);
+        assert_eq!(sv.client_count(), 1);
+
+        // Neither qport nor port matches, so not a reconnect of the first client.
+        let challenge = challenge_for(&mut sv, addr(6), now);
+        sv.handle_packet(
+            addr(6),
+            &connect_pkt(challenge, QPORT + 1, PROTOCOL_V1.version),
+            now,
+        );
+        assert_eq!(
+            reply_text(&mut sv),
+            ("error".to_string(), "EXE_SERVERISFULL".to_string())
+        );
+        assert_eq!(sv.client_count(), 1);
+    }
+
+    #[test]
+    fn a_message_with_an_out_of_range_reliable_acknowledge_is_ignored() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = connected(&mut sv, addr(5), now);
+        let huff = Huffman::new();
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_EOF, 2);
+        let ops = w.into_ops();
+
+        // serverId 0 asks for a gamestate; only the ack makes this inadmissible.
+        let pkt = nc.build_out(0, 0, i32::MIN, &ops, &huff).unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+        assert!(sv.take_outgoing().is_empty(), "bogus ack got a reply");
+
+        let pkt = nc.build_out(0, 0, 1, &ops, &huff).unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+        assert!(sv.take_outgoing().is_empty(), "ack ahead of us got a reply");
+
+        // messageAcknowledge names a message we sent; we have sent none.
+        let pkt = nc.build_out(0, 1, 0, &ops, &huff).unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+        assert!(
+            sv.take_outgoing().is_empty(),
+            "messageAcknowledge ahead of us got a reply"
+        );
+
+        let pkt = nc.build_out(0, 0, 0, &ops, &huff).unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+        assert!(
+            !sv.take_outgoing().is_empty(),
+            "no gamestate for a good ack"
+        );
+        assert_eq!(sv.client_count(), 1);
+    }
+
+    #[test]
+    fn a_gap_in_the_client_command_sequence_drops_the_client() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = connected(&mut sv, addr(5), now);
+        let huff = Huffman::new();
+
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_CLIENT_COMMAND, 2);
+        w.write_long(2); // skips sequence 1, which we never sent
+        w.write_string("say hi");
+        w.write_bits(CLC_EOF, 2);
+        let pkt = nc
+            .build_out(i32::from(sv.server_id), 0, 0, &w.into_ops(), &huff)
+            .unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+
+        assert_eq!(sv.client_count(), 0);
+        let mut out = sv.take_outgoing();
+        assert_eq!(out.len(), 1, "expected the drop notice");
+        let (to, pkt) = out.remove(0);
+        assert_eq!(to, addr(5));
+        assert_eq!(
+            server_commands(&mut nc, &pkt, &huff),
+            vec!["w \"EXE_LOSTRELIABLECOMMANDS\"".to_string()]
+        );
+    }
+
+    fn count_replies(sv: &mut Server, to: SocketAddr) -> usize {
+        sv.take_outgoing().iter().filter(|(a, _)| *a == to).count()
+    }
+
+    #[test]
+    fn getstatus_is_rate_limited_per_address() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let a = SocketAddr::from(([10, 0, 0, 1], 5));
+        let b = SocketAddr::from(([10, 0, 0, 2], 5));
+        for _ in 0..ADDR_BURST + 1 {
+            sv.handle_packet(a, &oob("getstatus x"), now);
+        }
+        assert_eq!(count_replies(&mut sv, a), ADDR_BURST as usize);
+        // One global period on, so the burst above is not what limits b.
+        let t1 = now + GLOBAL_PERIOD;
+        sv.handle_packet(b, &oob("getstatus x"), t1);
+        assert_eq!(count_replies(&mut sv, b), 1);
+        // The same bucket covers getinfo; one token comes back per period.
+        sv.handle_packet(a, &oob("getinfo x"), t1);
+        assert_eq!(count_replies(&mut sv, a), 0);
+        let t2 = now + ADDR_PERIOD;
+        sv.handle_packet(a, &oob("getinfo x"), t2);
+        assert_eq!(count_replies(&mut sv, a), 1);
+        sv.handle_packet(a, &oob("getinfo x"), t2);
+        assert_eq!(count_replies(&mut sv, a), 0);
+    }
+
+    #[test]
+    fn connectionless_replies_share_a_global_bucket() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut answered = 0;
+        for i in 0..GLOBAL_BURST + 5 {
+            let from = SocketAddr::from(([10, 1, (i >> 8) as u8, i as u8], 5));
+            sv.handle_packet(from, &oob("getchallenge"), now);
+            answered += count_replies(&mut sv, from);
+        }
+        assert_eq!(answered, GLOBAL_BURST as usize);
+        let late = SocketAddr::from(([10, 2, 0, 1], 5));
+        sv.handle_packet(late, &oob("getchallenge"), now + GLOBAL_PERIOD);
+        assert_eq!(count_replies(&mut sv, late), 1);
+    }
+
+    #[test]
+    fn the_address_table_is_bounded() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        for i in 0..MAX_BUCKETS as u32 + 8 {
+            let from = SocketAddr::from(([10, (i >> 16) as u8, (i >> 8) as u8, i as u8], 5));
+            // Spread over time so the global bucket stays open and the
+            // eviction order is defined.
+            sv.handle_packet(from, &oob("getinfo x"), now + GLOBAL_PERIOD * i);
+        }
+        assert_eq!(sv.limiter.addrs.len(), MAX_BUCKETS);
+        // The least recently seen address went first.
+        assert!(!sv
+            .limiter
+            .addrs
+            .contains_key(&std::net::IpAddr::from([10, 0, 0, 0])));
+    }
+
+    #[test]
+    fn oob_disconnect_honours_the_address_limit() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        connected(&mut sv, addr(5), now);
+        // The challenge took one token; spend the rest on getinfo.
+        for _ in 1..ADDR_BURST {
+            sv.handle_packet(addr(5), &oob("getinfo x"), now);
+        }
+        sv.take_outgoing();
+        sv.handle_packet(addr(5), &oob("disconnect"), now);
+        assert_eq!(
+            sv.client_count(),
+            1,
+            "a rate-limited disconnect went through"
+        );
+        sv.handle_packet(addr(5), &oob("disconnect"), now + ADDR_PERIOD);
+        assert_eq!(sv.client_count(), 0);
+    }
+
+    /// A forged packet carrying the victim's ip and qport must not advance the
+    /// netchan, move the address or refresh the timeout; the real client's
+    /// next packet still goes through.
+    #[test]
+    fn a_spoofed_packet_leaves_the_client_untouched() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = connected(&mut sv, addr(5), now);
+        let huff = Huffman::new();
+        let mut eof = MsgWriter::new(&huff);
+        eof.write_bits(CLC_EOF, 2);
+        let eof = eof.into_ops();
+        let later = now + Duration::from_secs(5);
+        let spoofer = addr(6);
+        let mut forged = Netchan::new(QPORT, nc.challenge);
+        let snapshot = |sv: &Server| {
+            let c = sv.clients[0].as_ref().unwrap();
+            (c.netchan.incoming_sequence, c.addr, c.last_packet)
+        };
+        let before = snapshot(&sv);
+
+        // Header checks: an ack we never sent.
+        forged.outgoing_sequence = 0x7fff_fffe;
+        let pkt = forged.build_out(0, 0, 1, &eof, &huff).unwrap();
+        sv.handle_packet(spoofer, &pkt, later);
+        assert_eq!(snapshot(&sv), before, "a bad ack committed state");
+
+        // A stale serverId with nothing to resend.
+        forged.outgoing_sequence = 0x7fff_fffe;
+        let pkt = forged
+            .build_out(i32::from(sv.server_id) ^ 0x01, 0, 0, &eof, &huff)
+            .unwrap();
+        sv.handle_packet(spoofer, &pkt, later);
+        assert_eq!(snapshot(&sv), before, "a stale serverId committed state");
+
+        // Right header, ops that end inside a command.
+        forged.outgoing_sequence = 0x7fff_fffe;
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_CLIENT_COMMAND, 2);
+        w.write_long(1);
+        let pkt = forged
+            .build_out(i32::from(sv.server_id), 0, 0, &w.into_ops(), &huff)
+            .unwrap();
+        sv.handle_packet(spoofer, &pkt, later);
+        assert_eq!(
+            snapshot(&sv),
+            before,
+            "a truncated op stream committed state"
+        );
+        assert!(sv.take_outgoing().is_empty());
+
+        // The legitimate client's first message, sequence 1, asks for the gamestate.
+        let pkt = nc.build_out(0, 0, 0, &eof, &huff).unwrap();
+        sv.handle_packet(addr(5), &pkt, later);
+        assert_eq!(snapshot(&sv), (1, addr(5), later));
+        assert!(
+            !sv.take_outgoing().is_empty(),
+            "no gamestate after the spoofs"
+        );
+    }
+
+    #[test]
+    fn a_foreign_challenge_cannot_replace_a_live_client() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = connected(&mut sv, addr(5), now);
+        let huff = Huffman::new();
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_EOF, 2);
+        let eof = w.into_ops();
+        let own = nc.challenge;
+
+        // The client is heard from just before the attempt.
+        let t1 = now + RECONNECT_LIMIT + Duration::from_millis(100);
+        let pkt = nc.build_out(0, 0, 0, &eof, &huff).unwrap();
+        sv.handle_packet(addr(5), &pkt, t1);
+        sv.take_outgoing();
+
+        // A neighbour behind the same NAT holds a valid challenge for this ip
+        // and knows the qport. Past sv_reconnectlimit, retail would hand it the slot.
+        let foreign = challenge_for(&mut sv, addr(7), t1);
+        let t2 = t1 + Duration::from_millis(100);
+        sv.handle_packet(
+            addr(7),
+            &connect_pkt(foreign, QPORT, PROTOCOL_V1.version),
+            t2,
+        );
+        assert!(sv.take_outgoing().is_empty(), "the takeover got a reply");
+        let c = sv.clients[0].as_ref().unwrap();
+        assert_eq!((c.addr, c.netchan.challenge), (addr(5), own));
+
+        // The client's own connect retry, same challenge, still resets its slot.
+        sv.handle_packet(addr(5), &connect_pkt(own, QPORT, PROTOCOL_V1.version), t2);
+        assert_eq!(reply_text(&mut sv).0, "connectResponse");
+        assert_eq!(sv.client_count(), 1);
+
+        // Once the slot has been silent for sv_reconnectlimit, a crashed client
+        // coming back with a new challenge may reclaim it.
+        let t3 = t2 + RECONNECT_LIMIT + Duration::from_millis(100);
+        sv.handle_packet(
+            addr(7),
+            &connect_pkt(foreign, QPORT, PROTOCOL_V1.version),
+            t3,
+        );
+        assert_eq!(reply_text(&mut sv).0, "connectResponse");
+        assert_eq!(sv.client_count(), 1);
+        let c = sv.clients[0].as_ref().unwrap();
+        assert_eq!((c.addr, c.netchan.challenge), (addr(7), foreign));
+    }
+
+    #[test]
+    fn stale_challenges_expire_when_a_new_one_is_issued() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let old = challenge_for(&mut sv, addr(5), now);
+        // Asking again refreshes the entry rather than issuing a new one.
+        let t1 = now + CHALLENGE_TTL - Duration::from_secs(1);
+        assert_eq!(challenge_for(&mut sv, addr(5), t1), old);
+        let t2 = now + CHALLENGE_TTL + Duration::from_secs(1);
+        challenge_for(&mut sv, addr(6), t2);
+        assert_eq!(sv.challenges.len(), 2, "a refreshed entry was expired");
+
+        let t3 = t1 + CHALLENGE_TTL + Duration::from_secs(1);
+        challenge_for(&mut sv, addr(8), t3);
+        assert_eq!(sv.challenges.len(), 2);
+        assert!(sv.challenges.iter().all(|c| c.addr != addr(5)));
+        sv.handle_packet(addr(5), &connect_pkt(old, QPORT, PROTOCOL_V1.version), t3);
+        assert_eq!(
+            reply_text(&mut sv),
+            ("error".to_string(), "EXE_BAD_CHALLENGE".to_string())
+        );
+    }
+}
