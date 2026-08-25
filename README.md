@@ -205,10 +205,13 @@ These work in every mode:
   Spectate mode picks the per-surface effect the way the retail client does.
 - No mantling - which retail 1.1 MP turns out not to have either; ledge hops
   are plain jumps and step-ups (docs/research/cod11-mantle.md).
-- No occlusion and no doppler: a sound through a wall is as loud as one in the
-  open. The engine's same-entity channel replacement is implemented, but there
-  is no priority-based voice stealing; when kira's mixer is full new sounds are
-  dropped.
+- No doppler, matching retail: the 1.1 engine never sets a Miles velocity
+  (`docs/research/cod11-sound-system.md`, section 11). Occlusion is a vcod
+  addition the retail client does not have: a wall between the listener and an
+  emitter quiets it to about -12 dB.
+- Voice pools and priority stealing follow the retail engine: at most 32
+  spatial, 32 flat and 8 streamed voices, and a full pool evicts a lower-
+  priority victim instead of refusing the new sound.
 - Quick chat (`vsay`) is not handled. The server commands that carry it
   (`j`/`k`/`l`) are documented in [docs/protocol-1.1.md](docs/protocol-1.1.md)
   only.

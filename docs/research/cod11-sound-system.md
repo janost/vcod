@@ -1040,10 +1040,18 @@ describe, with the reason.
   simplification costs nothing there.
 - **World-space voices and voice stealing.** Fixed-point voices
   (`Source::Point`) carry entity 1022 (`ENTITYNUM_WORLD`) for the (entity,
-  channel) replacement rule, as in retail, and `auto` never replaces. vcod has
-  no voice stealing; when the output has no capacity the new sound is refused
-  and counted as `drop` on the debug overlay, where retail (section 2) would
-  evict a voice of equal or lower channel index.
+  channel) replacement rule, as in retail, and `auto` never replaces. Pools
+  and stealing follow section 2 (32/32/8 with the `FUN_0044c350` preference
+  order); kira's own track capacity only backstops. Two documented
+  approximations: stream lengths are unknowable before decode, so streamed
+  voices never win the earliest-end tiebreak, and the ambient is unstealable,
+  extending its reserved-slot divergence below.
+- **Occlusion.** Retail has none (section 11), vcod does: a zero-extent trace
+  per spatial voice every few frames (staggered by voice id) multiplies the
+  distance term by 0.25 when the path to the listener is blocked, approached
+  over a few frames to avoid zipper noise, and disabled where no collision
+  world exists (fly mode). The factor sits inside the distance scale, so the
+  master/slave cap still bounds ducked voices.
 - **Ambient on a reserved entity.** Retail keeps the ambient in reserved
   stream slots (section 2), outside the (entity, channel) rule. vcod plays it
   as a `local` voice on a reserved entity identity (`AMBIENT_ENTITY`) and

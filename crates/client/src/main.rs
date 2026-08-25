@@ -1070,7 +1070,7 @@ impl ApplicationHandler for App {
                         // no CollisionWorld in fly mode, so usePhysics fx don't collide
                         let fx_t0 = Instant::now();
                         self.fx.step(dt, time, None);
-                        self.audio.step(&HashMap::new());
+                        self.audio.step(&HashMap::new(), None);
                         r.set_fx_quads(
                             &self.fs,
                             self.fx.build_quads(cam.pos, cam_right, cam_up, time),
@@ -1462,7 +1462,7 @@ impl ApplicationHandler for App {
                                     }
 
                                     // After the drain, so new voices get this frame's positions.
-                                    self.audio.step(&entity_pos);
+                                    self.audio.step(&entity_pos, Some(&*world));
 
                                     r.set_fx_quads(
                                         &self.fs,
@@ -1586,7 +1586,7 @@ impl ApplicationHandler for App {
                             damp,
                         );
                         *mouse_delta = (0.0, 0.0);
-                        self.audio.step(&HashMap::new());
+                        self.audio.step(&HashMap::new(), None);
                         r.set_fx_quads(
                             &self.fs,
                             self.fx.build_quads(v.eye, eye_right, eye_up, time),

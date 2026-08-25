@@ -247,15 +247,34 @@ impl VoiceTable {
         self.voices.iter().map(|v| v.id).collect()
     }
 
+    /// Current emitter position of every spatial voice, for the occlusion
+    /// traces.
+    pub fn spatial_positions(&self) -> Vec<(VoiceId, Vec3)> {
+        self.voices
+            .iter()
+            .filter(|v| v.spatial)
+            .map(|v| {
+                let p = match v.source {
+                    Source::Point(p) => p,
+                    Source::Entity { pos, .. } => pos,
+                };
+                (v.id, p)
+            })
+            .collect()
+    }
+
     /// Per-frame gain and pan. `Entity` sources take the entity's current
     /// position when known, else the last one. A non-spatial voice gets
     /// `volume * duck * master_volume` at pan 0. A `Slave(level)` voice is
     /// capped at `level` while any `Master` is live, before `master_volume`
-    /// (research doc, section 4).
+    /// (research doc, section 4). The per-voice `occlusion` factor from
+    /// [`crate::audio::occlusion`] scales into the distance term, so the
+    /// duck cap still bounds it.
     pub fn update(
         &mut self,
         listener: &Listener,
         entity_pos: &HashMap<u32, Vec3>,
+        occlusion: &HashMap<VoiceId, f32>,
         master_volume: f32,
     ) -> Vec<VoiceUpdate> {
         let master_live = self
@@ -277,7 +296,8 @@ impl VoiceTable {
                     Source::Entity { pos, .. } => pos,
                 };
                 (
-                    falloff(p.distance(listener.pos), v.dist.0, v.dist.1),
+                    falloff(p.distance(listener.pos), v.dist.0, v.dist.1)
+                        * occlusion.get(&v.id).copied().unwrap_or(1.0),
                     pan(listener, p),
                 )
             } else {
@@ -405,7 +425,7 @@ mod tests {
         let loc = put(&mut t, nv2d(Channel::Auto));
         let mut pos = HashMap::new();
         pos.insert(3u32, -l.right * 100.0);
-        let ups = t.update(&l, &pos, 1.0);
+        let ups = t.update(&l, &pos, &HashMap::new(), 1.0);
         let get = |id| ups.iter().find(|u| u.id == id).unwrap();
         assert!((get(p).gain - 0.5).abs() < 1e-5); // 600 into a 100..1100 range
         assert!((get(p).pan - 1.0).abs() < 1e-5);
@@ -413,7 +433,7 @@ mod tests {
         assert!((get(e).pan + 1.0).abs() < 1e-5);
         assert_eq!((get(loc).gain, get(loc).pan), (1.0, 0.0));
         // Entity gone from the map: keeps its last position.
-        let ups = t.update(&l, &HashMap::new(), 1.0);
+        let ups = t.update(&l, &HashMap::new(), &HashMap::new(), 1.0);
         assert!((get_from(&ups, e).pan + 1.0).abs() < 1e-5);
     }
 
@@ -427,7 +447,7 @@ mod tests {
         let mut v = nv2d(Channel::Auto);
         v.volume = 1.5;
         let id = put(&mut t, v);
-        let ups = t.update(&Listener::default(), &HashMap::new(), 0.5);
+        let ups = t.update(&Listener::default(), &HashMap::new(), &HashMap::new(), 0.5);
         assert!((get_from(&ups, id).gain - 0.75).abs() < 1e-5);
     }
 
@@ -437,16 +457,16 @@ mod tests {
         let mut slave = nv2d(Channel::Auto);
         slave.master_slave = MasterSlave::Slave(0.25);
         let s = put(&mut t, slave);
-        let ups = t.update(&Listener::default(), &HashMap::new(), 1.0);
+        let ups = t.update(&Listener::default(), &HashMap::new(), &HashMap::new(), 1.0);
         assert_eq!(get_from(&ups, s).gain, 1.0);
         let mut master = nv2d(Channel::Auto);
         master.master_slave = MasterSlave::Master;
         let m = put(&mut t, master);
-        let ups = t.update(&Listener::default(), &HashMap::new(), 1.0);
+        let ups = t.update(&Listener::default(), &HashMap::new(), &HashMap::new(), 1.0);
         assert!((get_from(&ups, s).gain - 0.25).abs() < 1e-5);
         assert_eq!(get_from(&ups, m).gain, 1.0);
         t.remove(m);
-        let ups = t.update(&Listener::default(), &HashMap::new(), 1.0);
+        let ups = t.update(&Listener::default(), &HashMap::new(), &HashMap::new(), 1.0);
         assert_eq!(get_from(&ups, s).gain, 1.0);
     }
 
@@ -460,7 +480,7 @@ mod tests {
         let mut master = nv2d(Channel::Auto);
         master.master_slave = MasterSlave::Master;
         put(&mut t, master);
-        let ups = t.update(&Listener::default(), &HashMap::new(), 1.0);
+        let ups = t.update(&Listener::default(), &HashMap::new(), &HashMap::new(), 1.0);
         assert!((get_from(&ups, s).gain - 0.2).abs() < 1e-5);
     }
 
@@ -492,7 +512,7 @@ mod tests {
         master.master_slave = MasterSlave::Master;
         put(&mut t, master);
         // falloff(600, 100, 1100) = 0.5; min(0.5, 0.25) * 0.5 = 0.125.
-        let ups = t.update(&l, &HashMap::new(), 0.5);
+        let ups = t.update(&l, &HashMap::new(), &HashMap::new(), 0.5);
         assert!((get_from(&ups, s).gain - 0.125).abs() < 1e-5);
 
         // Cap above scale*v; min(0.5, 0.75) * 0.5 = 0.25.
@@ -504,7 +524,7 @@ mod tests {
         let mut master = nv2d(Channel::Auto);
         master.master_slave = MasterSlave::Master;
         put(&mut t, master);
-        let ups = t.update(&l, &HashMap::new(), 0.5);
+        let ups = t.update(&l, &HashMap::new(), &HashMap::new(), 0.5);
         assert!((get_from(&ups, s).gain - 0.25).abs() < 1e-5);
     }
 

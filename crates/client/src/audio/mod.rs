@@ -4,6 +4,7 @@ pub mod alias;
 pub mod bank;
 pub mod cues;
 mod handle;
+pub mod occlusion;
 pub mod spatial;
 pub mod voices;
 
@@ -25,6 +26,7 @@ use crate::audio::spatial::{amplitude_db, Listener};
 use crate::audio::voices::{Admitted, NewVoice, VoiceId, VoiceTable, ENDLESS_MS};
 use crate::fx::registry::{EV_AMMO_PICKUP, EV_ITEM_PICKUP};
 use crate::fx::sim::{FxSound, Rng};
+use vcod_common::collision::CollisionWorld;
 use vcod_common::net::events::GameEvent;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::weapon::WeaponSounds;
@@ -76,6 +78,9 @@ pub struct AudioSystem {
     bank: SoundBank,
     table: VoiceTable,
     handles: HashMap<VoiceId, Handle>,
+    /// Line-of-sight gain per spatial voice (`occlusion.rs`); empty without
+    /// a collision world.
+    occlusion: occlusion::Occlusion,
     listener: Listener,
     /// Entity whose playerState we ride. Its body is never drawn, so `step`
     /// pins its voices to the camera. `u32::MAX` before the first
@@ -138,6 +143,7 @@ impl AudioSystem {
             bank: SoundBank::default(),
             table: VoiceTable::new(),
             handles: HashMap::new(),
+            occlusion: occlusion::Occlusion::default(),
             listener: Listener::default(),
             ps_entity: u32::MAX,
             last_pick: HashMap::new(),
@@ -377,10 +383,17 @@ impl AudioSystem {
                 h.stop();
             }
         }
-        // Initial gain/pan so the first audio chunk is already placed.
+        // Initial gain/pan so the first audio chunk is already placed. The
+        // occlusion map is empty here; a voice born behind a wall settles
+        // over the next few frames like any other change.
         let (db, pan) = self
             .table
-            .update(&self.listener, &HashMap::new(), self.master_volume)
+            .update(
+                &self.listener,
+                &HashMap::new(),
+                &HashMap::new(),
+                self.master_volume,
+            )
             .into_iter()
             .find(|u| u.id == id)
             .map(|u| (amplitude_db(u.gain), u.pan))
@@ -624,8 +637,10 @@ impl AudioSystem {
         }
     }
 
-    /// Once per frame, after the event drain.
-    pub fn step(&mut self, entity_pos: &HashMap<u32, Vec3>) {
+    /// Once per frame, after the event drain. `world` is the collision world
+    /// in game mode and `None` where there is none (fly mode), which disables
+    /// occlusion.
+    pub fn step(&mut self, entity_pos: &HashMap<u32, Vec3>, world: Option<&CollisionWorld>) {
         let t0 = Instant::now();
         let handles = &mut self.handles;
         self.table.retain(|id| match handles.get(&id) {
@@ -647,9 +662,19 @@ impl AudioSystem {
             // carries it.
             let mut positions = entity_pos.clone();
             positions.insert(self.ps_entity, self.listener.pos);
+            let occluded = match world {
+                Some(w) => {
+                    self.occlusion
+                        .compute(&self.table.spatial_positions(), self.listener.pos, w)
+                }
+                None => {
+                    self.occlusion.reset();
+                    HashMap::new()
+                }
+            };
             for u in self
                 .table
-                .update(&self.listener, &positions, self.master_volume)
+                .update(&self.listener, &positions, &occluded, self.master_volume)
             {
                 if let Some(h) = handles.get_mut(&u.id) {
                     h.set_volume(amplitude_db(u.gain));
@@ -712,7 +737,7 @@ mod tests {
                 delay_s: 0.0,
             },
         );
-        a.step(&HashMap::new());
+        a.step(&HashMap::new(), None);
         let s = a.stats();
         assert_eq!((s.plays, s.misses, s.voices, s.culled), (0, 1, 0, 1));
     }
@@ -837,7 +862,7 @@ mod tests {
 
         // A looping voice that lost its table entry is restarted next
         // snapshot.
-        a.step(&HashMap::new());
+        a.step(&HashMap::new(), None);
         assert_eq!(a.table.len(), 0);
         a.set_loop_sounds(&fs, &cs, &loops);
         assert_eq!(a.loop_voices.len(), 1);
@@ -872,7 +897,7 @@ mod tests {
         a.set_loop_sounds(&fs, &cs, &loops);
         let id = a.loop_voices[&13].id;
         assert!(!a.loop_voices[&13].looping);
-        a.step(&HashMap::new());
+        a.step(&HashMap::new(), None);
         assert_eq!(a.table.len(), 0);
         a.set_loop_sounds(&fs, &cs, &loops);
         assert_eq!(a.loop_voices[&13].id, id); // not restarted
@@ -1013,7 +1038,7 @@ mod tests {
         assert!(a.table.looping(id).is_some(), "the ambient was replaced");
 
         // No handles on a silent system, so `step` reaps every voice.
-        a.step(&HashMap::new());
+        a.step(&HashMap::new(), None);
         assert!(a.table.looping(id).is_none());
         a.set_ambient(&fs, Some("ambient_mp_carentan"));
         assert_ne!(a.ambient.as_ref().unwrap().1, id);
