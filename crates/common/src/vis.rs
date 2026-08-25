@@ -62,6 +62,33 @@ impl Frustum {
     }
 }
 
+/// Below this angular width (radians) a clipped portal is a numerical sliver
+/// at a shared edge, not an opening: its cone loses planes or wobbles.
+const SLIVER_EPS: f32 = 1e-4;
+
+/// The polygon's narrowest extent over its distance from `eye`: the angle
+/// it subtends across its thin direction.
+fn angular_width(eye: Vec3, poly: &[Vec3]) -> f32 {
+    let mut area2 = 0.0;
+    for i in 1..poly.len().saturating_sub(1) {
+        area2 += (poly[i] - poly[0]).cross(poly[i + 1] - poly[0]).length();
+    }
+    let mut longest = 0.0f32;
+    for i in 0..poly.len() {
+        for j in i + 1..poly.len() {
+            longest = longest.max((poly[i] - poly[j]).length());
+        }
+    }
+    let dist = poly
+        .iter()
+        .map(|v| (*v - eye).length())
+        .fold(f32::INFINITY, f32::min);
+    if longest <= 0.0 || dist <= 0.0 {
+        return 0.0;
+    }
+    area2 / longest / dist
+}
+
 /// Sutherland-Hodgman against one plane, keeping `n·p + d >= 0`.
 pub fn clip_polygon(poly: &[Vec3], (n, d): (Vec3, f32)) -> Vec<Vec3> {
     let mut out = Vec::with_capacity(poly.len() + 1);
@@ -242,6 +269,21 @@ impl WorldVis {
             on_stack: vec![false; self.portals.len()],
         };
         self.walk(cell, frustum, &mut w, 0);
+        // above a cell's top the eye looks over its portal-less walls, which
+        // the graph treats as full height: such cells are open from above
+        for (ci, c) in self.cells.iter().enumerate() {
+            if ci == cell || c.maxs[2] >= eye.z {
+                continue;
+            }
+            if self.mark_tree(c.first_aabb, frustum, &mut w.vis) {
+                w.vis.cells[ci] = true;
+            }
+            for &gi in &self.cull_indices
+                [c.first_cull_index as usize..(c.first_cull_index + c.cull_count) as usize]
+            {
+                self.mark_group(&self.cull_groups[gi as usize], frustum, &mut w.vis);
+            }
+        }
         w.vis.stats.soups = w.vis.soups.iter().filter(|&&s| s).count();
         w.vis
     }
@@ -290,7 +332,7 @@ impl WorldVis {
                     break;
                 }
             }
-            if poly.len() < 3 {
+            if poly.len() < 3 || angular_width(w.eye, &poly) < SLIVER_EPS {
                 continue;
             }
             let mut child;
@@ -556,6 +598,102 @@ pub fn two_cell_world() -> Bsp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Nearest corner along each normal: true only when the whole box is inside.
+    fn fully_inside(f: &Frustum, lo: Vec3, hi: Vec3) -> bool {
+        f.planes.iter().all(|(n, d)| {
+            let p = Vec3::select(n.cmpge(Vec3::ZERO), lo, hi);
+            n.dot(p) + d >= 0.0
+        })
+    }
+
+    #[test]
+    fn slivers_are_narrower_than_doorways() {
+        let eye = Vec3::new(-1000.0, 0.0, 0.0);
+        let door = [
+            Vec3::new(0.0, -30.0, -60.0),
+            Vec3::new(0.0, 30.0, -60.0),
+            Vec3::new(0.0, 30.0, 60.0),
+            Vec3::new(0.0, -30.0, 60.0),
+        ];
+        assert!(angular_width(eye, &door) > 0.05);
+        let sliver = [
+            Vec3::new(0.0, -30.0, 0.0),
+            Vec3::new(0.0, 30.0, 0.0),
+            Vec3::new(0.0, 30.0, 0.01),
+            Vec3::new(0.0, -30.0, 0.01),
+        ];
+        assert!(angular_width(eye, &sliver) < SLIVER_EPS);
+    }
+
+    /// An eye above a cell's top looks over its portal-less walls; the cell
+    /// is marked with the camera frustum, not only through its portals.
+    #[test]
+    fn a_cell_below_the_eye_is_seen_from_above() {
+        let mut b = two_cell_world();
+        b.cells[0].maxs[2] = 300.0;
+        let vis = WorldVis::build(&b);
+        let eye = Vec3::new(-50.0, 0.0, 150.0);
+        assert_eq!(vis.cell_for_point(eye), Some(0));
+        // the ray to B's soup crosses x = 0 at z ~ 79, above the portal's top edge
+        let v = vis.visible(eye, &frustum_at(eye, Vec3::new(0.6, 0.0, -0.8)));
+        assert!(!v.stats.fallback);
+        assert!(v.soups[2], "B's soup is seen over the portal's top edge");
+        // at eye height inside the cells the portal alone decides
+        let eye = Vec3::new(-50.0, 0.0, 0.0);
+        let v = vis.visible(eye, &frustum_at(eye, Vec3::new(0.6, 0.0, -0.8)));
+        assert!(!v.soups[2], "below B's top the ray misses the portal");
+    }
+
+    /// Flying above the map, no soup that is fully on screen in two
+    /// consecutive frames may switch between drawn and culled.
+    #[test]
+    fn high_flight_over_mp_brecourt_does_not_pop() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let Some(data) = fs.read("maps/mp/mp_brecourt.bsp") else {
+            return;
+        };
+        let b = bsp::parse(&data).unwrap();
+        let vis = WorldVis::build(&b);
+        let (lo, hi) = crate::mesh::map_bounds(&b);
+        let (lo, hi) = (Vec3::from(lo), Vec3::from(hi));
+        let z = hi.z - 300.0;
+        let y = (lo.y + hi.y) * 0.5;
+        let dir = Vec3::new(
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            -std::f32::consts::FRAC_1_SQRT_2,
+        );
+        let mut prev: Option<(Visible, Frustum)> = None;
+        let mut x = lo.x;
+        while x <= hi.x {
+            let eye = Vec3::new(x, y, z);
+            let f = frustum_at(eye, dir);
+            let v = vis.visible(eye, &f);
+            // a sample inside solid falls back to the frustum, which cannot pop
+            if v.stats.fallback {
+                prev = None;
+                x += 48.0;
+                continue;
+            }
+            if let Some((pv, pf)) = &prev {
+                for (s, (a, b_)) in pv.soups.iter().zip(&v.soups).enumerate() {
+                    if a == b_ {
+                        continue;
+                    }
+                    let (slo, shi) = vis.soup_bounds[s];
+                    assert!(
+                        !(fully_inside(&f, slo, shi) && fully_inside(pf, slo, shi)),
+                        "soup {s} popped at x = {x}: {a} -> {b_}"
+                    );
+                }
+            }
+            prev = Some((v, f));
+            x += 48.0;
+        }
+    }
 
     /// 90 degree vertical FOV, square aspect, looking along `dir` from `eye`.
     pub(crate) fn frustum_at(eye: Vec3, dir: Vec3) -> Frustum {

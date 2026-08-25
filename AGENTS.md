@@ -196,7 +196,11 @@ decompiler output or disassembly listings.
 - The server's per-client drop notice is the reliable command `w "<reason>"`
   (`SV_DropClient` 0x8085cf4). Bare `disconnect` only travels client to server.
 - A portal's plane faces out of its owning cell; the walk skips a portal when
-  the eye is past it (`n·eye - dist > 1`). The soup lump is laid out
+  the eye is past it (`n·eye - dist > 1`). Two vcod additions to the walk:
+  clipped portal polygons narrower than `SLIVER_EPS` are skipped (slivers at
+  shared edges made cones flicker), and cells whose top is below the eye are
+  marked with the camera frustum (the graph treats portal-less walls as full
+  height, which fails once the eye looks over them). The soup lump is laid out
   `[cull-group soups][cell-tree soups][submodel soups]`, and leaf surfaces
   (lump 23) index the terrain collision partitions, not draw soups.
 - The F3 `audio` line reads `v N plays N miss N cull N drop N N.NNms`: live

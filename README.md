@@ -192,7 +192,8 @@ These work in every mode:
 - Visibility follows the retail cells and portals but without the portal
   bevel planes and the brushmodel occluder volumes, so a little more is drawn
   through doorways than retail draws. Outside every cell (fly mode above the
-  map) only the frustum culls.
+  map) only the frustum culls, and a cell whose top is below the camera is
+  frustum-culled directly: retail assumes nobody looks over a cell's walls.
 - Alpha surfaces (foliage, fences) are alpha-tested only, and they collide as
   drawn, so a bush or a wire fence stops the player like a solid wall.
 - Submodels (doors, exploding walls, moving platforms) collide by their render
