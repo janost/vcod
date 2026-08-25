@@ -581,6 +581,13 @@ impl FxSystem {
         self.cache.insert(path.to_string(), effect);
     }
 
+    /// A new map: world-space particles and decals are meaningless there.
+    #[allow(dead_code)] // called by the loading task
+    pub fn clear(&mut self) {
+        self.particles.clear();
+        self.decals.clear();
+    }
+
     /// Missing or broken files warn once and no-op. Returns the `Sound`
     /// cues for the audio system.
     pub fn spawn(&mut self, fs: &Pk3Fs, path: &str, at: SpawnAt, now: f32) -> Vec<FxSound> {
@@ -1159,6 +1166,22 @@ mod tests {
             assert!(!s.spawn_tracer(Vec3::ZERO, Vec3::new(80.0, 0.0, 0.0), 0.0));
         }
         assert_eq!(s.counts().0, 0);
+    }
+
+    #[test]
+    fn clear_drops_particles_and_decals_but_keeps_the_cache() {
+        let mut fx = FxSystem::new();
+        // Chance roll is 0.4; retry until a tracer lands.
+        for _ in 0..50 {
+            if fx.spawn_tracer(Vec3::ZERO, Vec3::new(4000.0, 0.0, 0.0), 0.0) {
+                break;
+            }
+        }
+        assert!(fx.counts().0 > 0);
+        fx.cache.insert("x".into(), None);
+        fx.clear();
+        assert_eq!(fx.counts(), (0, 0, 0));
+        assert!(fx.cache.contains_key("x"));
     }
 
     #[test]

@@ -206,6 +206,12 @@ impl Scoreboard {
         self.next_request = now + REQUEST_INTERVAL;
     }
 
+    /// Drop the rows; the totals, visibility and request timer stay.
+    #[allow(dead_code)] // called by the loading task
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     /// Rows matching `is_member(team)`, score descending.
     fn sorted_rows(entries: &[ScoreEntry], is_member: impl Fn(i32) -> bool) -> Vec<&ScoreEntry> {
         let mut rows: Vec<&ScoreEntry> = entries.iter().filter(|e| is_member(e.team)).collect();

@@ -73,6 +73,45 @@ struct Args {
     volume: f32,
 }
 
+/// The map every mode reads: the renderer builds from it, entities resolve
+/// submodels in it. `None` while the spectator is between maps.
+struct World {
+    #[allow(dead_code)] // read by the loading task
+    map: String,
+    bsp: bsp::Bsp,
+}
+
+/// Where the spectator is between connecting and drawing a map.
+enum Phase {
+    #[allow(dead_code)] // built in the loading task
+    Connecting { since: Instant },
+    #[allow(dead_code)]
+    Loading { loader: loading::MapLoader },
+    /// Boxed to keep the variants a similar size.
+    Live(Box<LivePhase>),
+}
+
+/// Everything the spectator needs to draw a map.
+struct LivePhase {
+    world: collision::CollisionWorld,
+    scene: entities::EntityScene,
+    events: net::events::EventTracker,
+    clock: ServerClock,
+    seeded: bool,
+    last_loop_snap: Option<u32>,
+}
+
+fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp) -> Phase {
+    Phase::Live(Box::new(LivePhase {
+        world: collision::CollisionWorld::build(bsp, &props::collision_tris(fs, &bsp.entities)),
+        scene: entities::EntityScene::new(),
+        events: net::events::EventTracker::new(),
+        clock: ServerClock::new(),
+        seeded: false,
+        last_loop_snap: None,
+    }))
+}
+
 enum Mode {
     Fly(FlyCamera),
     /// Position follows the interpolated server playerState; look angles are
@@ -82,12 +121,7 @@ enum Mode {
         net: Box<net::NetClient<net::UdpTransport>>,
         cam: FlyCamera,
         input: InputState,
-        /// Angles seeded once from the first interpolated playerState; the
-        /// mouse owns them after.
-        seeded: bool,
-        clock: ServerClock,
-        events: net::events::EventTracker,
-        world: collision::CollisionWorld,
+        phase: Phase,
     },
     Walk {
         world: collision::CollisionWorld,
@@ -167,7 +201,8 @@ impl ServerClock {
 #[allow(clippy::too_many_arguments)]
 fn hud_lines(
     mode: &Mode,
-    scene: &entities::EntityScene,
+    // The spectate entity scene; fly/walk have none.
+    scene: Option<&entities::EntityScene>,
     stats: &hud_text::HudStats,
     // (build_instances, render, fx step+build_quads) ms
     cpu_ms: (f32, f32, f32),
@@ -259,11 +294,13 @@ fn hud_lines(
                 "interp miss/s {:4.1}  anim restarts/s {:4.1}",
                 stats.misses_per_s, stats.restarts_per_s
             ));
-            if scene.stats.pending_assemblies > 0 {
-                lines.push(format!(
-                    "loading: {} assemblies pending",
-                    scene.stats.pending_assemblies
-                ));
+            if let Some(scene) = scene {
+                if scene.stats.pending_assemblies > 0 {
+                    lines.push(format!(
+                        "loading: {} assemblies pending",
+                        scene.stats.pending_assemblies
+                    ));
+                }
             }
             if let Some((got, size)) = net.download_progress() {
                 lines.push(format!("download: {got}/{size} bytes"));
@@ -404,13 +441,7 @@ fn main() -> Result<()> {
             net: Box::new(net),
             cam: FlyCamera::new(Vec3::ZERO, 0.0),
             input: InputState::default(),
-            seeded: false,
-            clock: ServerClock::new(),
-            events: net::events::EventTracker::new(),
-            world: collision::CollisionWorld::build(
-                &bsp,
-                &props::collision_tris(&fs, &bsp.entities),
-            ),
+            phase: live_phase(&fs, &bsp),
         }
     } else if args.walk {
         walk_mode(&map, &bsp, &fs, view_weapon)?
@@ -442,7 +473,10 @@ fn main() -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
         title: format!("vcod — {map}"),
-        bsp,
+        world: Some(World {
+            map: map.clone(),
+            bsp,
+        }),
         fs,
         mode,
         viewmodel,
@@ -450,7 +484,6 @@ fn main() -> Result<()> {
         window: None,
         renderer: None,
         grabbed: false,
-        scene: entities::EntityScene::new(),
         fx: fx::sim::FxSystem::new(),
         start: Instant::now(),
         last_frame: Instant::now(),
@@ -466,7 +499,6 @@ fn main() -> Result<()> {
         hud,
         hud_ms: 0.0,
         audio,
-        last_loop_snap: None,
         error: None,
     };
     event_loop.run_app(&mut app)?;
@@ -764,7 +796,7 @@ fn load_anims(
 
 struct App {
     title: String,
-    bsp: bsp::Bsp,
+    world: Option<World>,
     fs: Pk3Fs,
     mode: Mode,
     viewmodel: Vec<xmodel::XModel>,
@@ -773,7 +805,6 @@ struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     grabbed: bool,
-    scene: entities::EntityScene,
     fx: fx::sim::FxSystem,
     /// Origin of the clock effects are timed against.
     start: Instant,
@@ -793,8 +824,6 @@ struct App {
     hud: Option<hud::Hud>,
     hud_ms: f32,
     audio: audio::AudioSystem,
-    /// `message_num` of the snapshot whose `loopSound` fields were last reconciled.
-    last_loop_snap: Option<u32>,
     error: Option<anyhow::Error>,
 }
 
@@ -870,8 +899,10 @@ impl ApplicationHandler for App {
         };
         match Renderer::new(window.clone(), &self.fs) {
             Ok(mut r) => {
-                if let Err(e) = r.load_world(&self.bsp, &self.fs) {
-                    return self.fail(event_loop, e);
+                if let Some(w) = &self.world {
+                    if let Err(e) = r.load_world(&w.bsp, &self.fs) {
+                        return self.fail(event_loop, e);
+                    }
                 }
                 if !self.viewmodel.is_empty() {
                     r.set_viewmodel(&self.fs, &self.viewmodel);
@@ -1048,11 +1079,20 @@ impl ApplicationHandler for App {
                         net,
                         cam,
                         input,
-                        seeded,
-                        clock,
-                        events,
-                        world,
+                        phase,
                     } => {
+                        let Phase::Live(live) = phase else {
+                            unreachable!("only Live is constructed until the loading task")
+                        };
+                        let LivePhase {
+                            world,
+                            scene,
+                            events,
+                            clock,
+                            seeded,
+                            last_loop_snap,
+                        } = &mut **live;
+                        let bsp = &self.world.as_ref().expect("live phase has a map").bsp;
                         let p = &net::protocol::PROTOCOL_V1;
                         for ev in net.pump() {
                             if let Some(hud) = &mut self.hud {
@@ -1124,13 +1164,13 @@ impl ApplicationHandler for App {
                                     .clamp(0.0, 1.0);
                                 let t0 = Instant::now();
                                 let built = entities::build_instances(
-                                    &mut self.scene,
+                                    scene,
                                     (a, b, f),
                                     render_time,
                                     skip_num,
                                     net.configstrings(),
                                     &self.fs,
-                                    &self.bsp,
+                                    bsp,
                                     r,
                                     p,
                                 );
@@ -1259,8 +1299,8 @@ impl ApplicationHandler for App {
                         // that left the snapshot is absent from the map, which
                         // is what stops its loop.
                         if let Some(newest) = newest {
-                            if self.last_loop_snap != Some(newest.message_num) {
-                                self.last_loop_snap = Some(newest.message_num);
+                            if *last_loop_snap != Some(newest.message_num) {
+                                *last_loop_snap = Some(newest.message_num);
                                 let loops: HashMap<u32, (i32, Vec3)> = newest
                                     .entities
                                     .iter()
@@ -1421,12 +1461,24 @@ impl ApplicationHandler for App {
                         )
                     }
                 };
-                self.hud_stats
-                    .frame(dt, self.scene.stats.anim_restarts, self.interp_misses);
+                // The scene lives in the spectate phase now, so pull it back
+                // out for the overlay after the mode's mutable borrows end.
+                let scene = match &self.mode {
+                    Mode::Spectate {
+                        phase: Phase::Live(live),
+                        ..
+                    } => Some(&live.scene),
+                    _ => None,
+                };
+                self.hud_stats.frame(
+                    dt,
+                    scene.map_or(0, |s| s.stats.anim_restarts),
+                    self.interp_misses,
+                );
                 if self.debug_overlay {
                     frame.hud_lines = hud_lines(
                         &self.mode,
-                        &self.scene,
+                        scene,
                         &self.hud_stats,
                         (self.build_ms, self.render_ms, self.fx_ms),
                         (self.ev_seen, self.ev_unknown),

@@ -33,6 +33,12 @@ impl Chat {
         }
     }
 
+    /// Test hook; production reads go through [`Self::build`].
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
     /// Newest line at `y = screen_h - 40`, older lines one `line_height`
     /// above each. Alpha fades over the last second of `CHAT_LIFE`.
     pub fn build(&self, font: &Font, scale: f32, screen_h: f32, now: f32, out: &mut Vec<HudQuad>) {

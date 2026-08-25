@@ -91,6 +91,14 @@ impl Hud {
         }
     }
 
+    /// A new gamestate: CS 7 indices and the scoreboard change, chat does not.
+    #[allow(dead_code)] // called by the loading task
+    pub fn on_gamestate(&mut self) {
+        self.kill_icons.clear();
+        self.killfeed.clear();
+        self.scoreboard.clear();
+    }
+
     /// `EV_OBITUARY` to the killfeed. Entity number == clientNum for players
     /// (docs/research/cod11-hud-protocol.md, section 1). An unresolved victim
     /// drops the row and counts toward `unknown`; an unresolved attacker
@@ -178,5 +186,45 @@ impl Hud {
             );
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn on_gamestate_forgets_the_map_but_keeps_chat() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let mut hud = Hud::new(&fs).expect("hud");
+        hud.kill_icons.insert(3, None);
+        hud.killfeed.push(killfeed::Entry {
+            attacker: None,
+            victim: ("victim".into(), [1.0, 1.0, 1.0, 1.0]),
+            icon: "gfx/hud/icon".into(),
+            icon_wide: false,
+            spawn: 0.0,
+        });
+        hud.scoreboard.on_server_command(&[
+            "b".into(),
+            "1".into(),
+            "0".into(),
+            "0".into(),
+            "2".into(),
+            "10".into(),
+            "50".into(),
+            "3".into(),
+            "0".into(),
+        ]);
+        hud.chat.push("hello", false, 0.0);
+
+        hud.on_gamestate();
+
+        assert!(hud.kill_icons.is_empty());
+        assert!(hud.killfeed.is_empty());
+        assert!(hud.scoreboard.rows_for_team(1).is_empty());
+        assert!(!hud.chat.is_empty());
     }
 }

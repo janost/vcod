@@ -130,6 +130,16 @@ impl Killfeed {
         }
     }
 
+    #[allow(dead_code)] // called by the loading task
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Row `i` at `y = 16 + line_h * i`: attacker, icon (`2 * line_h` wide
     /// when `icon_wide`), victim. Alpha fades over the last second of
     /// [`FEED_LIFE`].
