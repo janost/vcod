@@ -9,6 +9,7 @@ pub mod mesh;
 pub mod net;
 pub mod pk3;
 pub mod pmove;
+pub mod props;
 pub mod skeleton;
 pub mod testing;
 pub mod weapon;

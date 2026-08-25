@@ -1,11 +1,14 @@
-//! `misc_model` props from the BSP entity lump, baked to world space and emitted
-//! in the map vertex format so they draw unlit through the map pipeline.
+//! `misc_model` props from the BSP entity lump: baked to world space in the
+//! map vertex format so they draw unlit through the map pipeline (`build`),
+//! and their solid collision triangles for the collision world
+//! (`collision_tris`).
 
+use crate::bsp::{self, DrawVert};
+use crate::collision::CONTENTS_SOLID;
+use crate::pk3::Pk3Fs;
+use crate::xmodel;
 use glam::{Mat3, Vec3};
 use std::collections::{BTreeMap, HashMap};
-use vcod_common::bsp::{self, DrawVert};
-use vcod_common::pk3::Pk3Fs;
-use vcod_common::xmodel;
 
 /// One `misc_model` placement.
 #[derive(Debug, PartialEq)]
@@ -131,8 +134,14 @@ fn bake(p: &Placement, rot: Mat3, v: &xmodel::VmVert) -> DrawVert {
     }
 }
 
-/// Bakes every placed prop into world geometry, one batch per skin. A model
-/// that fails to load is warned once and its placements dropped.
+/// A model that fails to load is warned once and its placements dropped.
+fn load_model(fs: &Pk3Fs, name: &str) -> Option<xmodel::XModel> {
+    xmodel::load(fs, name)
+        .map_err(|e| log::warn!("prop {name}: {e:#}, skipping its placements"))
+        .ok()
+}
+
+/// Bakes every placed prop into world geometry, one batch per skin.
 pub fn build(fs: &Pk3Fs, entities: &str) -> Props {
     let placements = placements(entities);
     let mut cache: HashMap<String, Option<xmodel::XModel>> = HashMap::new();
@@ -141,11 +150,9 @@ pub fn build(fs: &Pk3Fs, entities: &str) -> Props {
     let mut drawn = 0usize;
 
     for p in &placements {
-        let model = cache.entry(p.model.clone()).or_insert_with(|| {
-            xmodel::load(fs, &p.model)
-                .map_err(|e| log::warn!("prop {}: {e:#}, skipping its placements", p.model))
-                .ok()
-        });
+        let model = cache
+            .entry(p.model.clone())
+            .or_insert_with(|| load_model(fs, &p.model));
         let Some(model) = model else { continue };
         drawn += 1;
         let rot = rotation(p.angles);
@@ -186,9 +193,115 @@ pub fn build(fs: &Pk3Fs, entities: &str) -> Props {
     }
 }
 
+/// World-space triangles of one placement's solid collision surfaces, placed
+/// like `bake` places render vertices. Canopies and glass (`contents` without
+/// the solid bit) are left out, as retail leaves them passable.
+pub fn placed_collision_tris(p: &Placement, model: &xmodel::XModel, out: &mut Vec<[Vec3; 3]>) {
+    let rot = rotation(p.angles);
+    let place = |v: Vec3| rot * (p.scale * v) + p.origin;
+    for surf in &model.collision {
+        if surf.contents & CONTENTS_SOLID == 0 {
+            continue;
+        }
+        out.extend(surf.tris.iter().map(|t| t.map(place)));
+    }
+}
+
+/// Every solid collision triangle of every placed prop, for
+/// `CollisionWorld::build`. Models load once each.
+pub fn collision_tris(fs: &Pk3Fs, entities: &str) -> Vec<[Vec3; 3]> {
+    let placements = placements(entities);
+    let mut cache: HashMap<String, Option<xmodel::XModel>> = HashMap::new();
+    let mut out = Vec::new();
+    let mut collidable = 0usize;
+    for p in &placements {
+        let model = cache
+            .entry(p.model.clone())
+            .or_insert_with(|| load_model(fs, &p.model));
+        let Some(model) = model else { continue };
+        let before = out.len();
+        placed_collision_tris(p, model, &mut out);
+        collidable += (out.len() > before) as usize;
+    }
+    log::info!(
+        "props: {collidable}/{} placements collide, {} triangles",
+        placements.len(),
+        out.len()
+    );
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn placed_collision_keeps_solid_surfaces_and_transforms_them() {
+        let tri = [Vec3::ZERO, Vec3::X, Vec3::Y];
+        let model = xmodel::XModel {
+            lod: "t0".into(),
+            surfaces: vec![],
+            materials: vec![],
+            bones: vec![],
+            collision: vec![
+                xmodel::CollSurf {
+                    contents: CONTENTS_SOLID,
+                    flags: 0,
+                    tris: vec![tri],
+                },
+                xmodel::CollSurf {
+                    contents: 0,
+                    flags: 0,
+                    tris: vec![tri],
+                },
+            ],
+        };
+        let p = Placement {
+            model: "t".into(),
+            origin: Vec3::new(10.0, 0.0, 0.0),
+            angles: Vec3::new(0.0, 90.0, 0.0),
+            scale: Vec3::splat(2.0),
+            color: [255; 4],
+        };
+        let mut out = Vec::new();
+        placed_collision_tris(&p, &model, &mut out);
+        assert_eq!(out.len(), 1, "the contents-0 surface is skipped");
+        // scale first, then yaw 90 turns +X into +Y and +Y into -X
+        assert!(
+            out[0][0].abs_diff_eq(Vec3::new(10.0, 0.0, 0.0), 1e-4),
+            "{out:?}"
+        );
+        assert!(
+            out[0][1].abs_diff_eq(Vec3::new(10.0, 2.0, 0.0), 1e-4),
+            "{out:?}"
+        );
+        assert!(
+            out[0][2].abs_diff_eq(Vec3::new(8.0, 0.0, 0.0), 1e-4),
+            "{out:?}"
+        );
+    }
+
+    /// End to end on retail data: a ray dropped onto a placed prop stops
+    /// earlier with the prop soup than without it, for at least one prop.
+    #[test]
+    fn mp_pavlov_props_stop_traces() {
+        use crate::collision::CollisionWorld;
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let bsp = bsp::parse(&crate::testing::real_bsp().unwrap()).unwrap();
+        let tris = collision_tris(&fs, &bsp.entities);
+        assert!(tris.len() > 1000, "{}", tris.len());
+        let bare = CollisionWorld::build(&bsp, &[]);
+        let world = CollisionWorld::build(&bsp, &tris);
+        let blocked = placements(&bsp.entities).iter().any(|p| {
+            let (top, bottom) = (p.origin + Vec3::Z * 200.0, p.origin - Vec3::Z * 10.0);
+            let with = world.box_trace(top, bottom, Vec3::ZERO, Vec3::ZERO);
+            let without = bare.box_trace(top, bottom, Vec3::ZERO, Vec3::ZERO);
+            with.fraction < without.fraction - 0.01
+        });
+        assert!(blocked);
+    }
 
     const ENTS: &str = r#"{
 "classname" "worldspawn"
@@ -321,7 +434,7 @@ mod tests {
     /// Counts measured from the shipped BSP.
     #[test]
     fn parses_real_mp_neuville_props() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        let Some(fs) = crate::testing::game_fs() else {
             return;
         };
         let data = fs.read("maps/mp/mp_neuville.bsp").unwrap();
@@ -342,8 +455,8 @@ mod tests {
 
     /// Size alone doesn't say: some real skins (`metal@civcar2tread.dds`) are
     /// 64x64 too, so the pixels must match.
-    fn is_checkerboard(img: &vcod_common::assets::Image) -> bool {
-        use vcod_common::assets::{checkerboard, ImageData};
+    fn is_checkerboard(img: &crate::assets::Image) -> bool {
+        use crate::assets::{checkerboard, ImageData};
         let (ImageData::Rgba8(px), ImageData::Rgba8(cb)) = (&img.data, checkerboard().data) else {
             return false;
         };
@@ -352,8 +465,8 @@ mod tests {
 
     #[test]
     fn loads_a_real_prop_model_and_its_skins() {
-        use vcod_common::assets::load_skin_image;
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        use crate::assets::load_skin_image;
+        let Some(fs) = crate::testing::game_fs() else {
             return;
         };
         let shrub = xmodel::load(&fs, "fullspikeyshrub").unwrap();
@@ -373,8 +486,8 @@ mod tests {
 
     #[test]
     fn builds_mp_neuville_props() {
-        use vcod_common::assets::load_skin_image;
-        let Some(fs) = vcod_common::testing::game_fs() else {
+        use crate::assets::load_skin_image;
+        let Some(fs) = crate::testing::game_fs() else {
             return;
         };
         let data = fs.read("maps/mp/mp_neuville.bsp").unwrap();

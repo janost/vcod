@@ -690,7 +690,7 @@ mod tests {
             return;
         };
         let bsp = crate::bsp::parse(&data).unwrap();
-        let world = CollisionWorld::build(&bsp);
+        let world = CollisionWorld::build(&bsp, &[]);
         let (origin, yaw) = crate::bsp::find_spawn(&bsp.entities).unwrap();
         let mut ps = PlayerState::spawn(Vec3::from(origin) + Vec3::Z * 2.0, yaw);
         // must land on terrain triangles near the spawn, not fall to bedrock

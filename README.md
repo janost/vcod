@@ -177,9 +177,6 @@ F3 toggles the debug overlay in every mode.
 
 ## Known limitations
 
-- Props don't collide: `misc_model` xmodels (trees, hedgerows, crates) render
-  as world geometry, but their triangles stay out of the collision world, so
-  in walk mode you pass straight through a tree trunk.
 - Shadow-decal prop models (`shadow_tree_*`, `shadow_crate` and similar) should
   draw as coplanar decals; they go through the opaque prop pipeline and show
   up as hard-edged dark patches.

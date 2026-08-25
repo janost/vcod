@@ -3,7 +3,7 @@
 
 use crate::pk3::Pk3Fs;
 use anyhow::{anyhow, ensure, Result};
-use glam::{Quat, Vec3};
+use glam::{DMat3, DVec3, Quat, Vec3};
 use std::collections::HashMap;
 
 pub struct XModel {
@@ -12,6 +12,18 @@ pub struct XModel {
     pub surfaces: Vec<Surface>,
     pub materials: Vec<String>, // skin filenames, index-aligned with surfaces
     pub bones: Vec<Bone>,
+    /// The descriptor's collision mesh, baked to model space. Empty for the
+    /// models that have none (`collision_lod == -1`).
+    pub collision: Vec<CollSurf>,
+}
+
+/// One collision surface. Only `contents & collision::CONTENTS_SOLID` stops
+/// the player; tree canopies and signs carry 0, lamp glass 0x10.
+/// docs/research/xmodel-v14-format.md, "Collision block".
+pub struct CollSurf {
+    pub contents: u32,
+    pub flags: u32,
+    pub tris: Vec<[Vec3; 3]>,
 }
 
 pub struct Surface {
@@ -91,6 +103,10 @@ impl<'a> Reader<'a> {
         Ok(i16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
 
+    fn i32(&mut self) -> Result<i32> {
+        Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+
     fn u32(&mut self) -> Result<u32> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
@@ -117,6 +133,34 @@ struct Descriptor {
     lod0: String,
     /// Index-aligned with surfaces.
     materials: Vec<String>,
+    collision: Vec<RawCollSurf>,
+}
+
+/// A collision surface before the bone bake; triangles in bone space.
+#[derive(Debug)]
+struct RawCollSurf {
+    bone: i32,
+    contents: u32,
+    flags: u32,
+    tris: Vec<[Vec3; 3]>,
+}
+
+/// A collision triangle is stored as its plane and two barycentric edge
+/// planes, `u = svec·p - svec.w` and `v = tvec·p - tvec.w`; the vertices are
+/// the points at (u,v) = (0,0), (1,0), (0,1). Emitted as (v0, v2, v1) so the
+/// winding's cross product matches the stored normal. `None` when the three
+/// planes are not independent.
+fn coll_tri_verts(rec: &[f32; 12]) -> Option<[Vec3; 3]> {
+    let row = |i: usize| DVec3::new(rec[i] as f64, rec[i + 1] as f64, rec[i + 2] as f64);
+    let a = DMat3::from_cols(row(0), row(4), row(8)).transpose();
+    let det = a.determinant();
+    if !det.is_finite() || det.abs() < 1e-12 {
+        return None;
+    }
+    let inv = a.inverse();
+    let (d, sw, tw) = (rec[3] as f64, rec[7] as f64, rec[11] as f64);
+    let at = |u: f64, v: f64| (inv * DVec3::new(d, u + sw, v + tw)).as_vec3();
+    Some([at(0.0, 0.0), at(0.0, 1.0), at(1.0, 0.0)])
 }
 
 fn parse_descriptor(data: &[u8]) -> Result<Descriptor> {
@@ -134,11 +178,36 @@ fn parse_descriptor(data: &[u8]) -> Result<Descriptor> {
         r.f32()?; // dist
         lod_names.push(r.cstr()?);
     }
-    r.skip(4)?; // collision LOD (i32)
-    let pad_count = r.u32()?;
-    for _ in 0..pad_count {
-        let sub = r.u32()?;
-        r.skip(sub as usize * 48 + 36)?;
+    r.skip(4)?; // collision LOD (i32), -1 when there is no collision
+    let surf_count = r.u32()?;
+    let mut collision = Vec::with_capacity(surf_count.min(64) as usize);
+    let mut degenerate = 0usize;
+    for _ in 0..surf_count {
+        let tri_count = r.u32()?;
+        let mut tris = Vec::with_capacity(tri_count.min(1024) as usize);
+        for _ in 0..tri_count {
+            let mut rec = [0f32; 12];
+            for v in &mut rec {
+                *v = r.f32()?;
+            }
+            match coll_tri_verts(&rec) {
+                Some(t) => tris.push(t),
+                None => degenerate += 1,
+            }
+        }
+        r.skip(24)?; // mins[3], maxs[3], bone space
+        let bone = r.i32()?;
+        let contents = r.u32()?;
+        let flags = r.u32()?;
+        collision.push(RawCollSurf {
+            bone,
+            contents,
+            flags,
+            tris,
+        });
+    }
+    if degenerate > 0 {
+        log::debug!("xmodel: dropped {degenerate} degenerate collision triangles");
     }
     let mut lod0 = None;
     let mut materials = Vec::new();
@@ -157,7 +226,11 @@ fn parse_descriptor(data: &[u8]) -> Result<Descriptor> {
         }
     }
     let lod0 = lod0.ok_or_else(|| anyhow!("xmodel descriptor has no LOD present"))?;
-    Ok(Descriptor { lod0, materials })
+    Ok(Descriptor {
+        lod0,
+        materials,
+        collision,
+    })
 }
 
 /// Hands bones whose stored bind position is a placeholder; zeroed before
@@ -393,11 +466,29 @@ fn parse_model(name: &str, desc: &[u8], parts: &[u8], surfs: &[u8]) -> Result<XM
         surfaces.len(),
         descriptor.materials.len()
     );
+    let mut collision = Vec::with_capacity(descriptor.collision.len());
+    for s in descriptor.collision {
+        let bone = usize::try_from(s.bone)
+            .ok()
+            .and_then(|b| bones.get(b))
+            .ok_or_else(|| anyhow!("collision surface references bone {} out of range", s.bone))?;
+        let tris = s
+            .tris
+            .iter()
+            .map(|t| t.map(|v| bone.rot * v + bone.pos))
+            .collect();
+        collision.push(CollSurf {
+            contents: s.contents,
+            flags: s.flags,
+            tris,
+        });
+    }
     Ok(XModel {
         lod: name.to_string(),
         surfaces,
         materials: descriptor.materials,
         bones,
+        collision,
     })
 }
 
@@ -453,6 +544,103 @@ pub fn parse_weapon(text: &str) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Encodes a triangle the way the descriptor does and decodes it back.
+    #[test]
+    fn collision_triangle_round_trips_through_plane_form() {
+        use glam::Mat3;
+        let (a, b, c) = (
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(5.0, 2.5, 3.5),
+            Vec3::new(1.5, 7.0, 2.0),
+        );
+        let n = (c - a).cross(b - a).normalize();
+        // rows n, b-a, c-a: s has u(a)=0, u(b)=1, u(c)=0 and lies in the plane
+        let inv = Mat3::from_cols(n, b - a, c - a).transpose().inverse();
+        let s = inv * Vec3::Y;
+        let t = inv * Vec3::Z;
+        let rec = [
+            n.x,
+            n.y,
+            n.z,
+            n.dot(a),
+            s.x,
+            s.y,
+            s.z,
+            s.dot(a),
+            t.x,
+            t.y,
+            t.z,
+            t.dot(a),
+        ];
+        let v = coll_tri_verts(&rec).unwrap();
+        assert!(v[0].abs_diff_eq(a, 1e-3), "{v:?}");
+        assert!(v[1].abs_diff_eq(c, 1e-3), "{v:?}");
+        assert!(v[2].abs_diff_eq(b, 1e-3), "{v:?}");
+        let wind = (v[1] - v[0]).cross(v[2] - v[0]).normalize();
+        assert!(wind.abs_diff_eq(n, 1e-3));
+        let flat = [n.x, n.y, n.z, 0.0, n.x, n.y, n.z, 0.0, n.x, n.y, n.z, 0.0];
+        assert!(coll_tri_verts(&flat).is_none());
+    }
+
+    #[test]
+    fn crate_misc1a_collision_block() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let m = load(&fs, "crate_misc1a").unwrap();
+        let counts: Vec<usize> = m.collision.iter().map(|s| s.tris.len()).collect();
+        assert_eq!(counts, [16, 12]);
+        assert!(m
+            .collision
+            .iter()
+            .all(|s| s.contents == crate::collision::CONTENTS_SOLID));
+        // first floor triangle: half of the 24x48 base at z = 1.33
+        let t = m.collision[0].tris[0];
+        let close = |v: Vec3, x: f32, y: f32| v.abs_diff_eq(Vec3::new(x, y, 1.331), 0.01);
+        assert!(close(t[0], -12.028, 24.055), "{t:?}");
+        assert!(close(t[1], 12.028, -24.055), "{t:?}");
+        assert!(close(t[2], -12.028, -24.055), "{t:?}");
+    }
+
+    #[test]
+    fn tree_trunk_is_solid_and_canopy_is_not() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let m = load(&fs, "tree_shortspruce").unwrap();
+        assert_eq!(m.collision.len(), 5);
+        assert_eq!(m.collision[0].tris.len(), 163);
+        assert_eq!(m.collision[0].contents, crate::collision::CONTENTS_SOLID);
+        assert!(m.collision[1..].iter().all(|s| s.contents == 0));
+        let trunk = m.collision[0]
+            .tris
+            .iter()
+            .flatten()
+            .fold(Vec3::ZERO, |m, v| m.max(v.abs()));
+        assert!(
+            trunk.x < 13.0 && trunk.y < 13.0 && trunk.z > 200.0,
+            "{trunk}"
+        );
+    }
+
+    /// Surfaces on non-root bones are stored in bone space; the bake puts the
+    /// tank's tracks on the ground instead of 23 units under it.
+    #[test]
+    fn multi_bone_collision_bakes_through_bone_binds() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let m = load(&fs, "static_vehicle_tank_tiger_d").unwrap();
+        assert!(m.collision.iter().any(|s| !s.tris.is_empty()));
+        let min_z = m
+            .collision
+            .iter()
+            .flat_map(|s| s.tris.iter().flatten())
+            .map(|v| v.z)
+            .fold(f32::MAX, f32::min);
+        assert!((-3.0..1.0).contains(&min_z), "{min_z}");
+    }
 
     fn err_of<T>(r: Result<T>) -> String {
         match r {
@@ -705,6 +893,7 @@ mod tests {
             surfaces: Vec::new(),
             materials: vec!["some@other.dds".to_string(); 4],
             bones: Vec::new(),
+            collision: Vec::new(),
         };
         let before = m.materials.clone();
         apply_viewhands_placeholder_override(&mut m);
@@ -715,6 +904,7 @@ mod tests {
             surfaces: Vec::new(),
             materials: vec!["viewhands@default.jpg".to_string(); 3],
             bones: Vec::new(),
+            collision: Vec::new(),
         };
         let before3 = m3.materials.clone();
         apply_viewhands_placeholder_override(&mut m3);

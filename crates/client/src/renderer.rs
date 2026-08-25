@@ -6,11 +6,11 @@ use wgpu::util::DeviceExt;
 use crate::fx::sim::{FxLight, FxQuad, MAX_LIGHTS};
 use crate::hud::HudQuad;
 use crate::hud_text::{self, HudVert};
-use crate::props;
 use vcod_common::assets::{self, Image, ImageData};
 use vcod_common::bsp::{self, Bsp, DrawVert};
 use vcod_common::mesh::{self, Batch};
 use vcod_common::pk3::Pk3Fs;
+use vcod_common::props;
 use vcod_common::xmodel::{self, VmVert};
 
 // The vertex layout below hardcodes the BSP drawvert stride.

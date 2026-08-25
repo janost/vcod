@@ -1346,6 +1346,7 @@ main
             surfaces: vec![],
             materials: vec![],
             bones: vec![],
+            collision: Vec::new(),
         };
         (Rc::new(m), ModelHandle(0))
     }
@@ -1426,6 +1427,7 @@ main
             surfaces: vec![],
             materials: vec![],
             bones,
+            collision: Vec::new(),
         }
     }
 

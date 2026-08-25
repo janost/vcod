@@ -9,7 +9,7 @@ engineering setup works.
 ## Layout and where facts live
 
 - Cargo workspace. `crates/common` (`vcod-common`): formats (`bsp.rs`, `xmodel.rs`,
-  `xanim.rs`, `animtree.rs`, `pk3.rs`, `assets.rs`), `collision.rs`, `pmove.rs`,
+  `xanim.rs`, `animtree.rs`, `pk3.rs`, `assets.rs`), `collision.rs`, `props.rs`, `pmove.rs`,
   `weapon.rs`, `skeleton.rs`, `game_dir.rs`, `testing.rs` and `net/` (the CoD
   1.1 protocol,
   both directions). `crates/client` (`vcod`): window, renderer, entities, hud,

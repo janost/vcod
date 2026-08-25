@@ -5,7 +5,6 @@ mod fx;
 mod hud;
 mod hud_text;
 mod probe;
-mod props;
 mod renderer;
 mod viewmodel;
 
@@ -22,7 +21,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use vcod_common::pk3::Pk3Fs;
-use vcod_common::{bsp, collision, mesh, net, pmove, skeleton, weapon, xanim, xmodel};
+use vcod_common::{bsp, collision, mesh, net, pmove, props, skeleton, weapon, xanim, xmodel};
 
 use camera::{FlyCamera, InputState};
 use renderer::{DynamicModelInstance, Renderer};
@@ -392,10 +391,13 @@ fn main() -> Result<()> {
             seeded: false,
             clock: ServerClock::new(),
             events: net::events::EventTracker::new(),
-            world: collision::CollisionWorld::build(&bsp),
+            world: collision::CollisionWorld::build(
+                &bsp,
+                &props::collision_tris(&fs, &bsp.entities),
+            ),
         }
     } else if args.walk {
-        walk_mode(&map, &bsp, view_weapon)?
+        walk_mode(&map, &bsp, &fs, view_weapon)?
     } else {
         Mode::Fly(match bsp::find_spawn(&bsp.entities) {
             Some((origin, yaw)) => FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw),
@@ -629,11 +631,16 @@ fn view_muzzle(cam_pos: Vec3, forward: Vec3, right: Vec3, up: Vec3) -> (Vec3, Ve
     (cam_pos + forward * 20.0 + right * 4.0 - up * 3.0, forward)
 }
 
-fn walk_mode(map: &str, bsp: &bsp::Bsp, view_weapon: Option<Box<ViewWeapon>>) -> Result<Mode> {
+fn walk_mode(
+    map: &str,
+    bsp: &bsp::Bsp,
+    fs: &Pk3Fs,
+    view_weapon: Option<Box<ViewWeapon>>,
+) -> Result<Mode> {
     let Some((origin, yaw)) = bsp::find_spawn(&bsp.entities) else {
         bail!("map {map} has no player spawn; run without --walk to fly");
     };
-    let world = collision::CollisionWorld::build(bsp);
+    let world = collision::CollisionWorld::build(bsp, &props::collision_tris(fs, &bsp.entities));
     if world.brushes.is_empty() && world.tris.is_empty() {
         bail!("no collidable geometry in {map}; run without --walk to fly");
     }

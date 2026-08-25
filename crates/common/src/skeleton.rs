@@ -240,6 +240,7 @@ mod tests {
             surfaces: vec![],
             materials: vec![],
             bones,
+            collision: Vec::new(),
         }
     }
 

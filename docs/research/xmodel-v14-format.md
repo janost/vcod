@@ -6,7 +6,7 @@ Byte layouts of the three files that make up a CoD 1 model, verified against the
 
 | pk3 entry | Holds |
 |---|---|
-| `xmodel/<name>` | descriptor: bounds, LOD slots, collision data, texture list per LOD |
+| `xmodel/<name>` | descriptor: bounds, LOD slots, collision mesh, texture list per LOD |
 | `xmodelparts/<lod>` | bone hierarchy and bind pose |
 | `xmodelsurfs/<lod>` | surfaces: triangle strips and vertices in bone space |
 
@@ -18,9 +18,14 @@ The descriptor's first present LOD name selects the parts and surfs entries. Tex
 u16 version                 // 14
 f32 mins[3], maxs[3]        // bounds (kar98k: +-36.2, hands: +-23.7)
 3 x { f32 dist; cstr name } // LOD slots; empty name = unused
-i32 collision_lod           // skipped
-u32 pad_count
-pad_count x { u32 sub; skip sub * 48 + 36 }   // collision data, skipped
+i32 collision_lod           // -1 when the model has no collision mesh
+u32 surf_count
+surf_count x {              // collision surfaces, see "Collision block"
+  u32 tri_count
+  tri_count x { f32 plane[4]; f32 svec[4]; f32 tvec[4] }
+  f32 mins[3], maxs[3]      // bone space
+  i32 bone; u32 contents; u32 surf_flags
+}
 per present LOD: u16 tex_count; tex_count x cstr   // texture filenames, one per surface
 ```
 
@@ -28,6 +33,18 @@ per present LOD: u16 tex_count; tex_count x cstr   // texture filenames, one per
 - kar98k: one LOD `viewmodel_kar982`, five textures `viewmodel@woodk98.dds, viewmodel@K98.dds, viewmodel@K98.dds, viewmodel@stockviewk98.dds, metal@k98clip.dds`. Hands: one LOD `viewmodel_hands_new4`, four times `viewhands@default.jpg`.
 - The LOD name's last character encodes the model type: `'0'` rigid, `'1'` animated, `'2'` viewmodel, `'3'` playerbody, `'4'` viewhands. The parser reads it off the LOD name it is given.
 - `viewhands@default.jpg` is a 4x4 white placeholder; the engine substitutes the real skin per surface at runtime. Surfaces 0 and 1 of the hands are the left and right hand meshes, whose UVs match the `viewhands@hand.dds` atlas; surfaces 2 and 3 are the forearm sleeves, whose UVs match the 512x512 `viewhands@vsleeve_<nation>` textures. vcod substitutes `viewhands@hand.dds` and `viewhands@vsleeve_whermact.tga` when, and only when, a model's materials are exactly the four placeholders.
+
+### Collision block
+
+The layout is CoD2's `XModelCollSurf_s` / `XModelCollTri_s` unchanged. VERIFIED on every descriptor in the stock paks (1018 models; each parses to exact EOF and every reconstructed vertex but 9 of 544k lies inside its surface bounds within 0.5).
+
+- `collision_lod` is -1 on the 624 models without collision, which then have `surf_count` 0. Otherwise it names the LOD the mesh was built from; 308 use LOD 0.
+- A triangle is a unit `plane` (`n·p = d`) and two barycentric edge planes: `u = svec·p - svec.w`, `v = tvec·p - tvec.w`, the point is inside when `u >= 0`, `v >= 0`, `u + v <= 1`. The vertices are the solutions of the 3x3 system `{n, svec.xyz, tvec.xyz} · p = {d, u + svec.w, v + tvec.w}` at (u,v) = (0,0), (1,0), (0,1); `coll_tri_verts` in `xmodel.rs` solves it in f64. The stored normal equals `normalize(cross(v2 - v0, v1 - v0))` (181k of 181k non-degenerate triangles), so the parser emits (v0, v2, v1). A crate floor decodes to its two exact halves.
+- Coordinates and the per-surface `mins`/`maxs` are in `bone`'s space. Rigid props use bone 0 (1161 of 1449 surfaces); vehicles and artillery spread surfaces across their bones, and only the bone world bind (`pos = bone.rot * p + bone.pos`, as for render vertices) puts a tank's tracks on the ground instead of 23 units under it.
+- `contents` values seen: `0x1` (solid, 1418 surfaces), `0x0` (288: tree canopies, hanging signs), `0x10` (112, on 38 models: lamp and headlight glass; meaning not verified). A tree is one solid trunk surface plus canopy surfaces at 0, which is why the player walks through the canopy in retail. vcod collides on the solid bit only.
+- `surf_flags` values seen: `0xd00000` (942), `0x1500000` (247, trunks and crates), `0xd04000`, `0x4000` (canopies), `0x900000` (glass), `0x400000`, `0xb00000`, `0x4010`, `0x0`. Not decoded; they look like the BSP material surface flags and are kept on `CollSurf` for whoever needs them.
+- The render mesh is far denser: `barrel_high0` has 372 triangles, its collision surface 28.
+- Stock MP maps place 7168 `misc_model`s over 235 models; 2700 placements (184 models) carry collision. The 51 placed models without (`bookrow`, `grasstuft`, `bottle_wine`, `doorknobcrystal`, `boxhedge`, every `shadow_*`) are passable in retail too. `spawnflags` on those entities is only ever 0 or 2, mostly on winter trees; its meaning is unknown and vcod ignores it (INFERRED to be collision-unrelated, not verified).
 
 ## `xmodelparts/<lod>`
 

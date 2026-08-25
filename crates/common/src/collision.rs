@@ -8,7 +8,8 @@
 use crate::bsp::Bsp;
 use glam::Vec3;
 
-const CONTENTS_SOLID: u32 = 0x1;
+/// Shared with the xmodel collision surfaces, which use the same bits.
+pub const CONTENTS_SOLID: u32 = 0x1;
 const CONTENTS_PLAYERCLIP: u32 = 0x10000;
 const CONTENTS_SKY: u32 = 0x800;
 
@@ -156,8 +157,23 @@ pub struct CollisionWorld {
 
 const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
 
+/// Drops slivers, pads the AABB by 0.25 so the BVH query finds a triangle
+/// the box merely touches.
+fn push_tri(tris: &mut Vec<[Vec3; 3]>, prims: &mut Vec<(Prim, Vec3, Vec3)>, [a, b, c]: [Vec3; 3]) {
+    if (b - a).cross(c - a).length_squared() < 1e-6 {
+        return;
+    }
+    let lo = a.min(b).min(c) - Vec3::splat(0.25);
+    let hi = a.max(b).max(c) + Vec3::splat(0.25);
+    prims.push((Prim::Tri(tris.len() as u32), lo, hi));
+    tris.push([a, b, c]);
+}
+
 impl CollisionWorld {
-    pub fn build(bsp: &Bsp) -> Self {
+    /// `extra_tris` are world-space triangles from outside the BSP (the props'
+    /// collision meshes, `props::collision_tris`); they get the same treatment
+    /// as soup triangles.
+    pub fn build(bsp: &Bsp, extra_tris: &[[Vec3; 3]]) -> Self {
         let mut brushes = Vec::new();
         let mut prims = Vec::new();
 
@@ -201,16 +217,11 @@ impl CollisionWorld {
                 let p = |i: usize| {
                     Vec3::from_array(bsp.verts[soup.first_vertex as usize + tri[i] as usize].pos)
                 };
-                let (a, b, c) = (p(0), p(1), p(2));
-                if (b - a).cross(c - a).length_squared() < 1e-6 {
-                    continue;
-                }
-                let lo = a.min(b).min(c) - Vec3::splat(0.25);
-                let hi = a.max(b).max(c) + Vec3::splat(0.25);
-                let idx = tris.len() as u32;
-                tris.push([a, b, c]);
-                prims.push((Prim::Tri(idx), lo, hi));
+                push_tri(&mut tris, &mut prims, [p(0), p(1), p(2)]);
             }
+        }
+        for t in extra_tris {
+            push_tri(&mut tris, &mut prims, *t);
         }
 
         let mut nodes = Vec::new();
@@ -351,34 +362,67 @@ pub fn test_world(extra: &[(Vec3, Vec3)]) -> CollisionWorld {
         }
     }
     let n = brushes.len() as u32;
-    CollisionWorld::build(&crate::bsp::Bsp {
-        materials: vec![crate::bsp::Material {
-            name: "textures/test/solid".into(),
-            surface_flags: 0,
-            content_flags: 0x1,
-        }],
-        lightmaps: vec![],
-        soups: vec![],
-        verts: vec![],
-        indices: vec![],
-        entities: String::new(),
-        planes: vec![],
-        brush_sides,
-        brushes,
-        models: vec![crate::bsp::Model {
-            mins: [-1024.0; 3],
-            maxs: [1024.0; 3],
-            first_soup: 0,
-            num_soups: 0,
-            first_brush: 0,
-            num_brushes: n,
-        }],
-    })
+    CollisionWorld::build(
+        &crate::bsp::Bsp {
+            materials: vec![crate::bsp::Material {
+                name: "textures/test/solid".into(),
+                surface_flags: 0,
+                content_flags: 0x1,
+            }],
+            lightmaps: vec![],
+            soups: vec![],
+            verts: vec![],
+            indices: vec![],
+            entities: String::new(),
+            planes: vec![],
+            brush_sides,
+            brushes,
+            models: vec![crate::bsp::Model {
+                mins: [-1024.0; 3],
+                maxs: [1024.0; 3],
+                first_soup: 0,
+                num_soups: 0,
+                first_brush: 0,
+                num_brushes: n,
+            }],
+        },
+        &[],
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Triangles from outside the BSP (props) clip like soup triangles.
+    #[test]
+    fn extra_triangles_stop_a_trace() {
+        let wall = [
+            [
+                Vec3::new(5000.0, -50.0, 0.0),
+                Vec3::new(5000.0, 50.0, 0.0),
+                Vec3::new(5000.0, 50.0, 100.0),
+            ],
+            [
+                Vec3::new(5000.0, -50.0, 0.0),
+                Vec3::new(5000.0, 50.0, 100.0),
+                Vec3::new(5000.0, -50.0, 100.0),
+            ],
+        ];
+        let (start, end) = (Vec3::new(4900.0, 0.0, 50.0), Vec3::new(5100.0, 0.0, 50.0));
+        let bare = CollisionWorld::build(&tiny_world(), &[]);
+        assert_eq!(
+            bare.box_trace(start, end, Vec3::ZERO, Vec3::ZERO).fraction,
+            1.0
+        );
+        let world = CollisionWorld::build(&tiny_world(), &wall);
+        let t = world.box_trace(start, end, Vec3::ZERO, Vec3::ZERO);
+        assert!(
+            t.fraction < 1.0 && (t.endpos.x - 5000.0).abs() < 0.5,
+            "{t:?}"
+        );
+        assert!(t.normal.abs_diff_eq(-Vec3::X, 1e-4), "{t:?}");
+    }
     use crate::bsp::{self, Bsp};
     use glam::Vec3;
 
@@ -448,7 +492,7 @@ mod tests {
 
     #[test]
     fn builds_brush_planes_from_axial_bounds() {
-        let world = CollisionWorld::build(&tiny_world());
+        let world = CollisionWorld::build(&tiny_world(), &[]);
         assert_eq!(world.brushes.len(), 1);
         let planes = &world.brushes[0].planes;
         assert_eq!(planes.len(), 6);
@@ -464,7 +508,7 @@ mod tests {
 
     #[test]
     fn harvests_triangles_and_answers_aabb_queries() {
-        let world = CollisionWorld::build(&tiny_world());
+        let world = CollisionWorld::build(&tiny_world(), &[]);
         assert_eq!(world.tris.len(), 1);
         let mut out = Vec::new();
         world.candidates(
@@ -495,7 +539,7 @@ mod tests {
             return;
         };
         let bsp = crate::bsp::parse(&data).unwrap();
-        let world = CollisionWorld::build(&bsp);
+        let world = CollisionWorld::build(&bsp, &[]);
         // solid+playerclip subset of model 0's 7575 brushes
         assert!(!world.brushes.is_empty() && world.brushes.len() <= 7575);
         assert!(world.tris.len() > 10_000);
@@ -558,7 +602,7 @@ mod tests {
     }
 
     fn world() -> CollisionWorld {
-        CollisionWorld::build(&tiny_world())
+        CollisionWorld::build(&tiny_world(), &[])
     }
 
     #[test]
@@ -641,7 +685,7 @@ mod tests {
 
     #[test]
     fn answers_aabb_queries_across_a_multi_node_bvh() {
-        let world = CollisionWorld::build(&spread_tris_world());
+        let world = CollisionWorld::build(&spread_tris_world(), &[]);
         assert_eq!(world.tris.len(), 6);
 
         // low-X triangle: only reachable from the true root
