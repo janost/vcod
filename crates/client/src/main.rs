@@ -4,6 +4,8 @@ mod entities;
 mod fx;
 mod hud;
 mod hud_text;
+#[allow(dead_code)] // wired in the map-change task
+mod loading;
 mod probe;
 mod renderer;
 mod viewmodel;
