@@ -1243,11 +1243,14 @@ impl Renderer {
         let frustum = Frustum::from_view_proj(frame.view_proj);
         let visible = match frame.cull {
             CullMode::Off => None,
-            CullMode::Locked => Some(
-                self.locked
-                    .take()
-                    .unwrap_or_else(|| self.cull(frame.eye, &frustum)),
-            ),
+            CullMode::Locked => Some(match self.locked.take() {
+                Some(v) => v,
+                None => {
+                    // a fresh freeze: the index buffer holds some other set
+                    self.last_cull = None;
+                    self.cull(frame.eye, &frustum)
+                }
+            }),
             CullMode::On => Some(self.cull(frame.eye, &frustum)),
         };
         let mut props_drawn = 0usize;

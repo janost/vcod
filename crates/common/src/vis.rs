@@ -266,6 +266,7 @@ impl WorldVis {
         {
             self.mark_group(&self.cull_groups[gi as usize], frustum, &mut w.vis);
         }
+        let near = w.camera.planes.get(4).copied();
         for pi in c.first_portal as usize..(c.first_portal + c.portal_count) as usize {
             if w.on_stack[pi] {
                 continue;
@@ -280,7 +281,10 @@ impl WorldVis {
             let verts =
                 &self.portal_verts[p.first_vert as usize..(p.first_vert + p.vert_count) as usize];
             let mut poly = verts.to_vec();
-            for &plane in &frustum.planes {
+            // a portal closer than the near plane still shows its cell, so that
+            // one plane is left out; every frustum here carries the camera's
+            // copy of it, the parent's own or the one appended to the cone
+            for &plane in frustum.planes.iter().filter(|&&p| Some(p) != near) {
                 poly = clip_polygon(&poly, plane);
                 if poly.len() < 3 {
                     break;
@@ -880,6 +884,18 @@ mod tests {
         let eye = Vec3::new(-90.0, 0.0, 0.0);
         let v = solid.visible(eye, &frustum_at(eye, Vec3::X));
         assert!(v.stats.fallback);
+    }
+
+    #[test]
+    fn a_portal_closer_than_the_near_plane_still_opens_its_cell() {
+        let vis = WorldVis::build(&two_cell_world());
+        let eye = Vec3::new(-0.5, 0.0, 0.0);
+        let v = vis.visible(eye, &frustum_at(eye, Vec3::X));
+        assert_eq!(
+            v.cells,
+            vec![true, true],
+            "the 4-unit near plane must not clip the portal away"
+        );
     }
 
     #[test]
