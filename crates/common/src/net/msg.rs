@@ -295,6 +295,27 @@ impl ClientState {
             .map(|&b| b as char)
             .collect()
     }
+
+    /// A fresh entry: team plus the name packed LE u32 chunk per
+    /// `name[0..28]` field, NUL padded, capped at 31 bytes like the C array.
+    pub fn named(p: &Protocol, client_num: u32, team: i32, name: &str) -> Self {
+        let mut cs = ClientState::null(p);
+        cs.client_num = client_num;
+        if let Some(i) = Self::field_index(p, "team") {
+            cs.fields[i] = team;
+        }
+        let mut bytes: Vec<u8> = name.bytes().take(31).collect();
+        bytes.resize(32, 0);
+        for (chunk, off) in bytes.chunks(4).zip((0..32).step_by(4)) {
+            let Some(idx) = Self::field_index(p, &format!("name[{off}]")) else {
+                break;
+            };
+            let mut word = [0u8; 4];
+            word[..chunk.len()].copy_from_slice(chunk);
+            cs.fields[idx] = u32::from_le_bytes(word) as i32;
+        }
+        cs
+    }
 }
 
 /// `MSG_ReadDeltaClient` body (cod_lnxded 0x807f758). The presence bit and the
@@ -320,6 +341,38 @@ pub fn read_delta_client(
         to.fields[i] = read_delta_field(r, to.fields[i], field.bits);
     }
     Some(to)
+}
+
+/// Inverse of [`read_delta_client`]. The caller has written the presence bit
+/// and the 6-bit client number; `None` writes the removed bit.
+pub fn write_delta_client(
+    w: &mut MsgWriter,
+    p: &Protocol,
+    from: &ClientState,
+    to: Option<&ClientState>,
+) {
+    let Some(to) = to else {
+        w.write_bits(1, 1); // removed
+        return;
+    };
+    debug_assert_eq!(from.fields.len(), to.fields.len());
+    w.write_bits(0, 1);
+    let lc = from
+        .fields
+        .iter()
+        .zip(&to.fields)
+        .rposition(|(a, b)| a != b)
+        .map_or(0, |i| i + 1);
+    debug_assert!(lc <= 255);
+    if lc == 0 {
+        w.write_bits(0, 1); // no delta
+        return;
+    }
+    w.write_bits(1, 1);
+    w.write_byte(lc as u8);
+    for i in 0..lc {
+        write_delta_field(w, from.fields[i], to.fields[i], p.client_fields[i].bits);
+    }
 }
 
 /// One delta field (cod_lnxded 0x807c904): change bit, zero flag, then the
@@ -1370,6 +1423,47 @@ mod tests {
         put(&mut cs, "name[4]", u32::from_le_bytes(*b"oy\0\0"));
         assert_eq!(cs.name(p), "kilroy");
         assert_eq!(ClientState::null(p).name(p), "");
+    }
+
+    #[test]
+    fn named_client_state_round_trips_through_the_writer() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let cs = ClientState::named(p, 0, 3, "vcod");
+        assert_eq!(cs.name(p), "vcod");
+        assert_eq!(cs.field_i32(p, "team"), 3);
+
+        let null = ClientState::null(p);
+        let mut w = MsgWriter::new(&h);
+        w.write_bits(1, 1); // a client follows
+        w.write_bits(0, 6); // index 0
+        write_delta_client(&mut w, p, &null, Some(&cs));
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        assert_eq!(r.read_bits(1), 1);
+        assert_eq!(r.read_bits(6), 0);
+        assert_eq!(read_delta_client(&mut r, p, &null, 0), Some(cs));
+        assert_eq!(r.bits_read(), bits);
+    }
+
+    #[test]
+    fn long_names_are_capped_and_the_removed_bit_round_trips() {
+        let p = &PROTOCOL_V1;
+        let cs = ClientState::named(p, 5, 3, &"x".repeat(40));
+        assert_eq!(cs.name(p), "x".repeat(31));
+
+        let h = Huffman::new();
+        let null = ClientState::null(p);
+        let mut w = MsgWriter::new(&h);
+        w.write_bits(1, 1);
+        w.write_bits(5, 6);
+        write_delta_client(&mut w, p, &null, None); // disconnect
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        assert_eq!(r.read_bits(1), 1);
+        assert_eq!(r.read_bits(6), 5);
+        assert_eq!(read_delta_client(&mut r, p, &null, 5), None);
     }
 
     #[test]
