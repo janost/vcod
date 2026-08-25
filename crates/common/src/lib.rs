@@ -12,6 +12,7 @@ pub mod pmove;
 pub mod props;
 pub mod skeleton;
 pub mod testing;
+pub mod vis;
 pub mod weapon;
 pub mod xanim;
 pub mod xmodel;
