@@ -145,11 +145,9 @@ struct RawCollSurf {
     tris: Vec<[Vec3; 3]>,
 }
 
-/// A collision triangle is stored as its plane and two barycentric edge
-/// planes, `u = svec·p - svec.w` and `v = tvec·p - tvec.w`; the vertices are
-/// the points at (u,v) = (0,0), (1,0), (0,1). Emitted as (v0, v2, v1) so the
-/// winding's cross product matches the stored normal. `None` when the three
-/// planes are not independent.
+/// Plane + two barycentric edge planes to vertices, emitted (v0, v2, v1) so
+/// the winding matches the stored normal. docs/research/xmodel-v14-format.md,
+/// "Collision block". `None` when the planes are not independent.
 fn coll_tri_verts(rec: &[f32; 12]) -> Option<[Vec3; 3]> {
     let row = |i: usize| DVec3::new(rec[i] as f64, rec[i + 1] as f64, rec[i + 2] as f64);
     let a = DMat3::from_cols(row(0), row(4), row(8)).transpose();
