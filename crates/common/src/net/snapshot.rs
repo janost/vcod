@@ -6,7 +6,7 @@
 
 use super::msg::{
     read_delta_client, read_delta_entity, read_delta_playerstate, ClientState, EntityState,
-    MsgReader, PlayerState,
+    MsgReader, MsgWriter, PlayerState,
 };
 use super::protocol::{Protocol, ENTITYNUM_NONE, GENTITYNUM_BITS};
 use std::collections::{BTreeMap, HashMap};
@@ -250,6 +250,32 @@ fn parse_clients(
         }
     }
     new
+}
+
+/// The body of an uncompressed snapshot (`SV_WriteSnapshotToClient` with
+/// `deltaNum = 0`): header, playerstate from null, an empty packet-entity
+/// run, then one full clientState entry per connected client. No areamask on
+/// CoD 1.1. Entities join when the world has any.
+pub fn write_uncompressed(
+    w: &mut MsgWriter,
+    p: &Protocol,
+    server_time: i32,
+    ps_to: &PlayerState,
+    clients: &[(u32, ClientState)],
+) {
+    use super::msg::{write_delta_client, write_delta_playerstate};
+    w.write_long(server_time);
+    w.write_byte(0); // deltaNum: uncompressed
+    w.write_byte(0); // snapFlags
+    write_delta_playerstate(w, p, &PlayerState::null(p), ps_to);
+    w.write_bits(ENTITYNUM_NONE as i32, GENTITYNUM_BITS as i32);
+    let null = ClientState::null(p);
+    for &(num, ref cs) in clients {
+        w.write_bits(1, 1);
+        w.write_bits(num as i32, 6);
+        write_delta_client(w, p, &null, Some(cs));
+    }
+    w.write_bits(0, 1);
 }
 
 #[cfg(test)]
@@ -685,5 +711,33 @@ mod tests {
             "no packet entities decoded across the run"
         );
         assert!(max_clients > 0, "no clientStates decoded across the run");
+    }
+
+    #[test]
+    fn written_snapshot_round_trips_through_the_ring() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let mut ring = SnapshotRing::new();
+
+        let mut ps = PlayerState::null(p);
+        ps.fields[PlayerState::field_index(p, "pm_type").unwrap()] = 4;
+        ps.fields[PlayerState::field_index(p, "origin[0]").unwrap()] = 384f32.to_bits() as i32;
+        let clients = vec![(0u32, ClientState::named(p, 0, 3, "vcod"))];
+
+        let mut w = MsgWriter::new(&h);
+        write_uncompressed(&mut w, p, 48_000, &ps, &clients);
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        let s = ring.parse_into(&mut r, p, 10).unwrap();
+        assert!(s.valid);
+        assert_eq!(s.delta_num, -1);
+        assert_eq!(s.server_time, 48_000);
+        assert_eq!(s.ps.origin(p)[0], 384.0);
+        assert_eq!(s.ps.field_i32(p, "pm_type"), 4);
+        assert_eq!(s.clients[&0].name(p), "vcod");
+        assert!(s.entities.is_empty());
+        assert!(!r.is_overflowed());
+        assert_eq!(r.bits_read(), bits);
     }
 }
