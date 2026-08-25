@@ -849,20 +849,18 @@ mod tests {
                 );
             }
         }
-        assert!(hits > 0, "no sweep hit anything; widen the box");
+        assert!(hits > 20, "too few hits to trust the oracle: {hits}");
     }
 
     #[test]
     fn ordered_walk_matches_brute_force_on_synthetic_worlds() {
         let w = spread_tris_world();
-        // wide bounds so the walk exercises a multi-node BVH; the two reachable
-        // triangles are tiny relative to the cube, so this needs many sweeps to
-        // land a hit reliably (300 from the brief drew zero against this seed)
+        // bounds hug triangle 0 so 300 sweeps land plenty of hits
         check_against_brute(
             &CollisionWorld::build(&w, &[]),
-            Vec3::splat(-1500.0),
-            Vec3::splat(1500.0),
-            5000,
+            Vec3::new(-20.0, -20.0, -20.0),
+            Vec3::new(30.0, 30.0, 30.0),
+            300,
             0x9E3779B97F4A7C15,
         );
         let w = test_world(&[(Vec3::new(50.0, -400.0, 0.0), Vec3::new(100.0, 400.0, 100.0))]);
