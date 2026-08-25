@@ -54,6 +54,15 @@ engineering setup works.
   because live-server map downloads drop third-party `zzz_*.pk3` files into
   `main/`; a failing census on a custom pak is not a regression.
 
+## Code comments
+
+- A comment earns its place only where the code alone does not explain
+  itself: a non-obvious invariant, a unit or sign convention, a workaround
+  and what it works around. Code that reads plainly gets none.
+- Keep each one as short as it can be, typically one line.
+- Facts that live in `docs/research/*.md`, `docs/protocol-1.1.md` or another
+  doc stay there; the comment, if any, is the pointer, not a copy.
+
 ## Running and visual verification
 
 - `RUST_LOG` drives env_logger (default `info`). wgpu picks the backend;
