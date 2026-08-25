@@ -61,7 +61,7 @@ used below (case numbers in that dispatcher, engine function in parentheses):
 | `0xc1` | `0x434260` | alias by 1-based index into the map set |
 | `0xc2` | `0x44d7d0` | start sound: `(record, entnum, origin, 0)`, returns length in ms |
 | `0xc3` | `0x44d980` | start a blend of two alias records (shellshock loop, `eType 9` entities) |
-| `0xd0` | stores `0x143a988..990` | a listener position read by `FUN_00414ef0` @ `0x414ef0` (trace-based check, purpose unknown) |
+| `0xd0` | stores `0x143a988..990` | a listener position read by `FUN_00414ef0` @ `0x414ef0` (six-ray LOS test in the snapshot encoders, section 11c) |
 | `0xd1` | `0x44bd60` | `S_Respatialize(clientNum, origin, axis)` |
 | `0xd2` | `0x44e600` | end-of-frame: kill looping voices not refreshed this frame |
 | `0xd3` | `0x44fa40` | stop all sounds |
@@ -846,7 +846,77 @@ the ambients are 2D loops (`local`).
 
 ---
 
-## 11. Module md5s and image bases
+## 11. Doppler and occlusion: absent in 1.1 MP
+
+Both questions were asked because vcod had neither and the README lists them
+as gaps. The binary answers "retail had neither" for doppler, and "not in the
+sound path" for occlusion.
+
+### 11a. Doppler: no velocity ever reaches Miles
+
+`VERIFIED` (import surface). The complete set of `_AIL_*` imports of
+`CoDMP.exe` contains every spatial API the engine uses —
+`AIL_set_3D_position_16`, `AIL_set_3D_sample_distances_12`,
+`AIL_set_3D_distance_factor_8`, `AIL_set_3D_sample_volume_8`,
+`AIL_set_3D_sample_playback_rate_8`, `AIL_set_3D_room_type_8` — and **no
+velocity or doppler entry point**: there is no
+`AIL_set_3D_sample_velocity`, no `AIL_set_3D_doppler_factor`, nothing with
+velocity in its name. MSS derives doppler solely from emitter/listener
+velocities; `S_Respatialize` (`FUN_0044bd60`, section 3) stores origin and
+axis only. A sound therefore never shifts pitch with relative motion in
+retail, and vcod builds no doppler.
+
+### 11b. No occlusion term in the audio paths
+
+The per-frame gain for every voice class is read out in full in sections 2-4
+(`FUN_0044cb90` start, `FUN_0044eea0` 3D samples, `FUN_0044f070` 2D samples,
+`FUN_0044f100` streams): gain = `s_volume * channelVol * scale * v` with
+`scale` pure distance falloff, plus the master/slave cap. No ray test, no
+wall factor, no lowpass appears anywhere in those paths or in the start path
+`FUN_0044d670`. Retail 1.1 MP plays a sound behind a wall at the same gain
+as one in the open.
+
+### 11c. What syscall `0xd0` actually is
+
+`VERIFIED` (decompilation), closing the "(trace-based check, purpose
+unknown)" note under the syscall table. Syscall `0xd0` stores cgame's
+vieworg at `DAT_0143a988..990`; the only reader is `FUN_00414ef0` @
+`0x414ef0`: a six-ray line-of-sight test from that stored listener position
+to a register-passed entity record's origin (`+0x18..0x20`). It traces via
+`FUN_00424530` to six points around the entity's upper body and returns 1
+only when **all** rays are blocked:
+
+| Ray | Target | Constants |
+|---|---|---|
+| 1 | centre, z +16 (or +40 when `+0xe0 == 0`) | `_DAT_00568e64`=0, `local_70` |
+| 2 | centre, z +32 (or +56) | `_DAT_00568ec8` = 16 |
+| 3 | centre, z −24 (or +0) | second `_DAT_00568ec8`, `local_70` again |
+| 4 | xy ± perp·18, z + (−24 or 0) + 8 | `_DAT_00569114` = 18, `_DAT_00568ef4` = 8 |
+| 5 | xy ∓ other-perp·10, z + (−24 or 0) + 52 (or 28) | `_DAT_00569118` = 10, `_DAT_00569110`=28 / `_DAT_0056910c`=52 |
+| 6 | mirrored side, z + (−24 or 0) + 36 (or 16) | `_DAT_00568e9c` = −1.0 mirrors the offsets; `_DAT_00569108` = 36 |
+
+The `+0xe0` flag selects between two height sets, so the fan covers head and
+torso for either stance. Its two callers are both snapshot delta encoders:
+`FUN_00415350 @ 0x415350` (single entity, called for "baseline" and "delta"
+entities) and `FUN_00415460 @ 0x415460` ("unchanged" carry-over loop; debug
+strings `%3i: baseline: %i`, `delta`, `unchanged`, `Entities in packet: %i`).
+The gate is `DAT_015ce990 != 0 && entnum < 0x40` — players only, behind a
+numeric option parsed into `DAT_015ce990` from a command handler near
+`0x410a4d`. On the hidden verdict the encoder sets bit `0x100` of the
+entity-state word at record `+0x08` (the `eFlags` slot); on any visible ray
+it clears the bit. `DAT_01617360[entnum]` timestamps the last visible test,
+and a newly-hidden entity keeps its old bit until it has stayed hidden for
+over 600 ms (`now - 600 <= last_seen` skips the update) — hysteresis against
+flicker.
+
+So the flag rides the network stream on player entities; what any consumer
+does with `eFlags & 0x100` is an open item (below). What matters here: the
+mechanism never touches a gain, a pool decision or the mix, and it exists in
+the listen-server snapshot writer, not the sound system.
+
+---
+
+## 12. Module md5s and image bases
 
 Same conventions as `cod11-events-and-fx.md`:
 
@@ -1013,3 +1083,7 @@ describe, with the reason.
    trigger times were not read.
 9. **`svFlags` bit 8** set by `playSound` on entities is unnamed in the
    CoDExtended headers; whether it affects delivery to spectators is untested.
+10. **Consumer of `eFlags & 0x100`** (section 11c): the hidden-from-host bit
+    the listen-server snapshot encoder sets on player entities. Whether any
+    cgame or engine code reads it back, and for what, is unread; no audio
+    path reads it.
