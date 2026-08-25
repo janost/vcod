@@ -211,10 +211,10 @@ impl CollisionWorld {
             trigger: bool,
         }
         let mut placements = vec![
-            (Placement {
+            Placement {
                 origin: Vec3::ZERO,
                 trigger: false,
-            });
+            };
             bsp.models.len()
         ];
         for block in crate::bsp::entity_blocks(&bsp.entities) {
