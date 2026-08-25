@@ -415,7 +415,9 @@ pub struct Renderer {
     vis: WorldVis,
     gathered: Vec<u32>,
     gather_scratch: Vec<Vec<IndexRange>>,
-    locked: Option<Visible>,
+    /// The frozen set and the prop flags it was computed with, so `Locked`
+    /// holds props still too.
+    locked: Option<(Visible, Vec<bool>)>,
     vis_counts: VisCounts,
     vm_pass: VmPass,
     dynamic: DynamicPass,
@@ -1210,6 +1212,21 @@ impl Renderer {
         (self.config.width as f32, self.config.height as f32)
     }
 
+    /// The visible set and the prop flags that go with it. A placement whose
+    /// model failed to load has zero bounds and is never drawn or counted.
+    fn cull(&self, eye: glam::Vec3, frustum: &Frustum) -> (Visible, Vec<bool>) {
+        let v = self.vis.visible(eye, frustum);
+        let prop_ok = self
+            .prop_bounds
+            .iter()
+            .map(|&(lo, hi)| {
+                (lo, hi) != (glam::Vec3::ZERO, glam::Vec3::ZERO)
+                    && self.vis.prop_visible(&v, frustum, lo, hi)
+            })
+            .collect();
+        (v, prop_ok)
+    }
+
     /// `vm` is `None` to draw the world only. Skips the frame if no
     /// swapchain texture can be acquired.
     pub fn render(&mut self, frame: Frame, vm: Option<VmDraw>) {
@@ -1225,9 +1242,9 @@ impl Renderer {
             CullMode::Locked => Some(
                 self.locked
                     .take()
-                    .unwrap_or_else(|| self.vis.visible(frame.eye, &frustum)),
+                    .unwrap_or_else(|| self.cull(frame.eye, &frustum)),
             ),
-            CullMode::On => Some(self.vis.visible(frame.eye, &frustum)),
+            CullMode::On => Some(self.cull(frame.eye, &frustum)),
         };
         let mut props_drawn = 0usize;
         let ranges: Vec<IndexRange> = match &visible {
@@ -1238,12 +1255,7 @@ impl Renderer {
                 .copied()
                 .chain(self.prop_ranges.iter().map(|&(_, r)| r))
                 .collect(),
-            Some(v) => {
-                let prop_ok: Vec<bool> = self
-                    .prop_bounds
-                    .iter()
-                    .map(|&(lo, hi)| self.vis.prop_visible(v, &frustum, lo, hi))
-                    .collect();
+            Some((v, prop_ok)) => {
                 props_drawn = prop_ok.iter().filter(|&&b| b).count();
                 self.soup_ranges
                     .iter()
@@ -1270,14 +1282,13 @@ impl Renderer {
         let cell_total = self.vis.cell_count();
         self.vis_counts = VisCounts {
             mode: Some(frame.cull),
-            cells: visible.as_ref().map_or((cell_total, cell_total), |v| {
+            cells: visible.as_ref().map_or((cell_total, cell_total), |(v, _)| {
                 (v.cells.iter().filter(|&&c| c).count(), cell_total)
             }),
-            soups: visible
-                .as_ref()
-                .map_or((self.soup_ranges.len(), self.soup_ranges.len()), |v| {
-                    (v.stats.soups, self.soup_ranges.len())
-                }),
+            soups: visible.as_ref().map_or(
+                (self.soup_ranges.len(), self.soup_ranges.len()),
+                |(v, _)| (v.stats.soups, self.soup_ranges.len()),
+            ),
             tris: (self.gathered.len() / 3, self.cpu_indices.len() / 3),
             props: (
                 if visible.is_some() {
