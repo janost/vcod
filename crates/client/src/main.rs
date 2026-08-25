@@ -4,13 +4,12 @@ mod entities;
 mod fx;
 mod hud;
 mod hud_text;
-#[allow(dead_code)] // wired in the map-change task
 mod loading;
 mod probe;
 mod renderer;
 mod viewmodel;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{CommandFactory, Parser};
 use glam::Vec3;
 use std::collections::{BTreeMap, HashMap};
@@ -76,17 +75,17 @@ struct Args {
 /// The map every mode reads: the renderer builds from it, entities resolve
 /// submodels in it. `None` while the spectator is between maps.
 struct World {
-    #[allow(dead_code)] // read by the loading task
-    map: String,
     bsp: bsp::Bsp,
 }
 
 /// Where the spectator is between connecting and drawing a map.
 enum Phase {
-    #[allow(dead_code)] // built in the loading task
-    Connecting { since: Instant },
-    #[allow(dead_code)]
-    Loading { loader: loading::MapLoader },
+    Connecting {
+        since: Instant,
+    },
+    Loading {
+        loader: loading::MapLoader,
+    },
     /// Boxed to keep the variants a similar size.
     Live(Box<LivePhase>),
 }
@@ -340,7 +339,7 @@ fn main() -> Result<()> {
         );
     }
 
-    let mut fs =
+    let fs =
         Pk3Fs::open(&dir).with_context(|| format!("cannot open game data in {}", dir.display()))?;
 
     if args.list {
@@ -350,14 +349,17 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let (map, mut net_client) = if let Some(addr) = &args.connect {
-        let net = connect_and_load(addr)?;
-        let serverinfo = net.configstring(0).to_string();
-        let Some(name) = net::info_value_for_key(&serverinfo, "mapname") else {
-            bail!("server sent no mapname in its serverinfo: {serverinfo:?}");
-        };
-        (name.to_string(), Some(net))
-    } else {
+    let net_client = match &args.connect {
+        Some(addr) => Some(
+            net::NetClient::connect(addr)
+                .with_context(|| format!("cannot open a socket to {addr}"))?,
+        ),
+        None => None,
+    };
+
+    // Fly and walk need their map up front; spectate learns it from the
+    // server inside the loop and loads through the same path as a map change.
+    let local = if net_client.is_none() {
         let Some(map) = args.map.as_deref() else {
             Args::command()
                 .error(
@@ -366,38 +368,27 @@ fn main() -> Result<()> {
                 )
                 .exit();
         };
-        (map.to_string(), None)
+        let Some(path) = fs.resolve_map(map) else {
+            let all = fs.find_maps();
+            let needle = map.to_lowercase();
+            let similar: Vec<String> = all
+                .iter()
+                .filter(|m| m.to_lowercase().contains(&needle))
+                .cloned()
+                .collect();
+            let suggestions = if similar.is_empty() { all } else { similar };
+            bail!("map '{map}' not found; similar: {}", suggestions.join(", "));
+        };
+        let data = fs
+            .read(&path)
+            .with_context(|| format!("cannot read {path}"))?;
+        let bsp = bsp::parse(&data).with_context(|| format!("cannot parse {path}"))?;
+        Some((map.to_string(), bsp))
+    } else {
+        None
     };
 
-    if let Some(net) = net_client.as_mut() {
-        if fs.resolve_map(&map).is_none() {
-            download_map_paks(net, &map, &args.game_dir, &args.mod_dir, &mut fs)?;
-        }
-    }
-
-    let Some(path) = fs.resolve_map(&map) else {
-        if args.connect.is_some() {
-            bail!(
-                "map '{map}' not found in local pk3s — install the map or check the server's mod"
-            );
-        }
-        let all = fs.find_maps();
-        let needle = map.to_lowercase();
-        let similar: Vec<String> = all
-            .iter()
-            .filter(|m| m.to_lowercase().contains(&needle))
-            .cloned()
-            .collect();
-        let suggestions = if similar.is_empty() { all } else { similar };
-        bail!("map '{map}' not found; similar: {}", suggestions.join(", "));
-    };
-
-    let data = fs
-        .read(&path)
-        .with_context(|| format!("cannot read {path}"))?;
-    let bsp = bsp::parse(&data).with_context(|| format!("cannot parse {path}"))?;
-
-    let (viewmodel, view_weapon) = if args.walk {
+    let (viewmodel, view_weapon) = if args.walk && net_client.is_none() {
         load_view_weapon(&fs).unwrap_or_else(|| {
             log::warn!("no viewmodel; walking without one");
             (Vec::new(), None)
@@ -426,35 +417,40 @@ fn main() -> Result<()> {
             volume: args.volume,
         },
     );
-    audio.on_gamestate(&map);
-    // The map ambient rides configstring 3 (docs/research/cod11-sound-system.md,
-    // section 9), already in the gamestate; a `d 3` may never come.
-    if let Some(net) = &net_client {
-        audio.set_ambient(&fs, net::info_value_for_key(net.configstring(3), "n"));
-    }
     if !audio.enabled() {
         println!("audio: silent (no output device, or --no-audio)");
     }
 
-    let mode = if let Some(net) = net_client {
-        Mode::Spectate {
-            net: Box::new(net),
-            cam: FlyCamera::new(Vec3::ZERO, 0.0),
-            input: InputState::default(),
-            phase: live_phase(&fs, &bsp),
-        }
-    } else if args.walk {
-        walk_mode(&map, &bsp, &fs, view_weapon)?
+    let (mode, world, title) = if let Some(net) = net_client {
+        (
+            Mode::Spectate {
+                net: Box::new(net),
+                cam: FlyCamera::new(Vec3::ZERO, 0.0),
+                input: InputState::default(),
+                phase: Phase::Connecting {
+                    since: Instant::now(),
+                },
+            },
+            None,
+            "vcod — connecting".to_string(),
+        )
     } else {
-        Mode::Fly(match bsp::find_spawn(&bsp.entities) {
-            Some((origin, yaw)) => FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw),
-            None => {
-                let (min, max) = mesh::map_bounds(&bsp);
-                let center = (Vec3::from(min) + Vec3::from(max)) * 0.5;
-                log::warn!("no player spawn found, starting at the center of the map");
-                FlyCamera::new(center, 0.0)
-            }
-        })
+        let (map, bsp) = local.expect("fly or walk without a local map");
+        audio.on_gamestate(&map);
+        let mode = if args.walk {
+            walk_mode(&map, &bsp, &fs, view_weapon)?
+        } else {
+            Mode::Fly(match bsp::find_spawn(&bsp.entities) {
+                Some((origin, yaw)) => FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw),
+                None => {
+                    let (min, max) = mesh::map_bounds(&bsp);
+                    let center = (Vec3::from(min) + Vec3::from(max)) * 0.5;
+                    log::warn!("no player spawn found, starting at the center of the map");
+                    FlyCamera::new(center, 0.0)
+                }
+            })
+        };
+        (mode, Some(World { bsp }), format!("vcod — {map}"))
     };
 
     println!("click to capture mouse, Esc to release");
@@ -472,12 +468,12 @@ fn main() -> Result<()> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
-        title: format!("vcod — {map}"),
-        world: Some(World {
-            map: map.clone(),
-            bsp,
-        }),
+        title,
+        world,
         fs,
+        game_dir: args.game_dir.clone(),
+        mod_dir: args.mod_dir.clone(),
+        connect_addr: args.connect.clone(),
         mode,
         viewmodel,
         input: InputState::default(),
@@ -505,148 +501,6 @@ fn main() -> Result<()> {
     match app.error.take() {
         Some(e) => Err(e),
         None => Ok(()),
-    }
-}
-
-/// Block until the gamestate has arrived and the client is Active; 10 s
-/// timeout. Chat/print during the handshake goes to the terminal.
-fn connect_and_load(addr: &str) -> Result<net::NetClient<net::UdpTransport>> {
-    let mut net =
-        net::NetClient::connect(addr).with_context(|| format!("cannot open a socket to {addr}"))?;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        for ev in net.pump() {
-            match ev {
-                net::NetEvent::Chat { text, .. } => println!("{}", net::strip_colors(&text)),
-                net::NetEvent::Print(s) => println!("{s}"),
-                net::NetEvent::Dropped(why) => bail!("disconnected before gamestate: {why}"),
-                _ => {}
-            }
-        }
-        if net.state() == net::NetState::Active && net.gamestate().is_some() {
-            return Ok(net);
-        }
-        if Instant::now() >= deadline {
-            bail!("timed out after 10s connecting to {addr} (never reached an active gamestate)");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-/// Fetch the server's missing pk3s (likeliest first) until the map resolves,
-/// then reload the search path. Files land in `<game_dir>/<mod_dir>` where the
-/// real client puts them; existing files are never overwritten.
-fn download_map_paks(
-    net: &mut net::NetClient<net::UdpTransport>,
-    map: &str,
-    game_dir: &std::path::Path,
-    mod_dir: &str,
-    fs: &mut Pk3Fs,
-) -> Result<()> {
-    // A whole rotation at UDP-download rates could take hours.
-    const MAX_TRIES: usize = 4;
-
-    let fs_dir = game_dir.join(mod_dir);
-    let systeminfo = net.configstring(1).to_string();
-    let candidates = net::download::candidates_for_map(&systeminfo, map, mod_dir, |rel| {
-        game_dir.join(rel).exists()
-    });
-    if candidates.is_empty() {
-        bail!("map '{map}' not found in local pk3s and the server lists nothing downloadable");
-    }
-    println!("map '{map}' is not installed locally; downloading from the server");
-
-    let mut fetched = false;
-    let mut resolved = false;
-    for name in candidates.iter().take(MAX_TRIES) {
-        let rel = net::download::safe_rel_path(name, mod_dir).unwrap();
-        let dest = game_dir.join(&rel);
-        let remote = format!("{name}.pk3");
-        net.begin_download(&remote, &dest)?;
-        run_download(net, &remote)?;
-        *fs = Pk3Fs::open(&fs_dir)
-            .with_context(|| format!("cannot reopen game data in {}", fs_dir.display()))?;
-        fetched = true;
-        if fs.resolve_map(map).is_some() {
-            resolved = true;
-            break;
-        }
-    }
-    if fetched {
-        net.finish_downloads();
-        wait_for_regamestate(net)?;
-    }
-    if !resolved {
-        bail!(
-            "map '{map}' still not found after downloading {} of the server's pk3s",
-            candidates.len().min(MAX_TRIES)
-        );
-    }
-    Ok(())
-}
-
-/// Pump until the transfer completes. A drop or a 30 s stall is fatal.
-fn run_download(net: &mut net::NetClient<net::UdpTransport>, remote: &str) -> Result<()> {
-    let start = Instant::now();
-    let mut last_print = Instant::now();
-    let mut last_progress = Instant::now();
-    let mut last_bytes = 0u64;
-    loop {
-        for ev in net.pump() {
-            match ev {
-                net::NetEvent::Dropped(why) => bail!("download of {remote} failed: {why}"),
-                net::NetEvent::DownloadComplete(_) => {
-                    println!(
-                        "  {remote}: done ({} KB in {:.0}s)",
-                        last_bytes / 1024,
-                        start.elapsed().as_secs_f32()
-                    );
-                    return Ok(());
-                }
-                net::NetEvent::Chat { text, .. } => println!("{}", net::strip_colors(&text)),
-                net::NetEvent::Print(s) => println!("{s}"),
-                _ => {}
-            }
-        }
-        if let Some((got, total)) = net.download_progress() {
-            if got != last_bytes {
-                last_bytes = got;
-                last_progress = Instant::now();
-            }
-            if last_print.elapsed() >= Duration::from_secs(2) {
-                last_print = Instant::now();
-                let rate = got as f32 / 1024.0 / start.elapsed().as_secs_f32().max(0.001);
-                println!(
-                    "  {remote}: {}/{} KB ({rate:.0} KB/s)",
-                    got / 1024,
-                    total as u64 / 1024
-                );
-                let _ = std::io::Write::flush(&mut std::io::stdout());
-            }
-        }
-        if last_progress.elapsed() >= Duration::from_secs(30) {
-            bail!("download of {remote} stalled (no data for 30s)");
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-/// After `donedl` the server re-sends the gamestate; wait until Active again.
-fn wait_for_regamestate(net: &mut net::NetClient<net::UdpTransport>) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        for ev in net.pump() {
-            if let net::NetEvent::Dropped(why) = ev {
-                bail!("disconnected after download: {why}");
-            }
-        }
-        if net.state() == net::NetState::Active {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            bail!("no gamestate after download completion");
-        }
-        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -678,6 +532,150 @@ fn usercmd_from_input(input: &InputState, cam: &FlyCamera) -> net::msg::UserCmd 
 /// aimed down the view forward. Same shape as `BuiltScene::muzzles` entries.
 fn view_muzzle(cam_pos: Vec3, forward: Vec3, right: Vec3, up: Vec3) -> (Vec3, Vec3) {
     (cam_pos + forward * 20.0 + right * 4.0 - up * 3.0, forward)
+}
+
+/// Leave the live map and enter Loading for the server's new map: drop the
+/// GPU world and per-map state, reset what a gamestate invalidates, and list
+/// the paks the client is missing.
+#[allow(clippy::too_many_arguments)]
+fn start_loading(
+    net: &net::NetClient<net::UdpTransport>,
+    hud: &mut Option<hud::Hud>,
+    audio: &mut audio::AudioSystem,
+    fx: &mut fx::sim::FxSystem,
+    world: &mut Option<World>,
+    r: &mut Renderer,
+    window: Option<&Window>,
+    title: &mut String,
+    game_dir: &std::path::Path,
+    mod_dir: &str,
+) -> Result<Phase> {
+    let map = net::info_value_for_key(net.configstring(0), "mapname")
+        .map(str::to_string)
+        .context("the server sent no mapname in its serverinfo")?;
+    r.unload_world();
+    *world = None;
+    if let Some(hud) = hud {
+        hud.on_gamestate();
+    }
+    audio.on_gamestate(&map);
+    fx.clear();
+    *title = format!("vcod — loading {map}");
+    if let Some(window) = window {
+        window.set_title(title);
+    }
+    // Same candidate order as the old blocking downloader; `MapLoader` caps it.
+    let systeminfo = net.configstring(1).to_string();
+    let candidates = net::download::candidates_for_map(&systeminfo, &map, mod_dir, |rel| {
+        game_dir.join(rel).exists()
+    })
+    .into_iter()
+    .filter_map(|name| {
+        let rel = net::download::safe_rel_path(&name, mod_dir)?;
+        Some((format!("{name}.pk3"), game_dir.join(rel)))
+    })
+    .collect();
+    Ok(Phase::Loading {
+        loader: loading::MapLoader::new(map, candidates),
+    })
+}
+
+/// Parse the map, upload it to the GPU and hand back the live phase.
+#[allow(clippy::too_many_arguments)]
+fn load_map(
+    map: &str,
+    net: &net::NetClient<net::UdpTransport>,
+    fs: &mut Pk3Fs,
+    audio: &mut audio::AudioSystem,
+    world: &mut Option<World>,
+    r: &mut Renderer,
+    window: Option<&Window>,
+    title: &mut String,
+) -> Result<Phase> {
+    let Some(path) = fs.resolve_map(map) else {
+        bail!("map '{map}' did not resolve in the pk3 search path");
+    };
+    let data = fs
+        .read(&path)
+        .with_context(|| format!("cannot read {path}"))?;
+    let bsp = bsp::parse(&data).with_context(|| format!("cannot parse {path}"))?;
+    // The ambient rides configstring 3 (docs/research/cod11-sound-system.md,
+    // section 9); a fresh gamestate may have changed it.
+    audio.set_ambient(fs, net::info_value_for_key(net.configstring(3), "n"));
+    *title = format!("vcod — {map}");
+    if let Some(window) = window {
+        window.set_title(title);
+    }
+    let phase = live_phase(fs, &bsp);
+    r.load_world(&bsp, fs)?;
+    *world = Some(World { bsp });
+    Ok(phase)
+}
+
+/// The between-maps frame: the status text over an empty view, with chat
+/// still flowing through the normal HUD build (no snapshot clients).
+#[allow(clippy::too_many_arguments)]
+fn loading_frame(
+    r: &mut Renderer,
+    fs: &Pk3Fs,
+    hud: &mut Option<hud::Hud>,
+    now: f32,
+    aspect: f32,
+    cull: renderer::CullMode,
+    configstrings: &[String],
+    text: String,
+) -> renderer::Frame {
+    if let Some(hud) = hud {
+        let (screen_w, screen_h) = r.screen_size();
+        let no_clients = BTreeMap::new();
+        let f = hud::HudFrame {
+            now,
+            screen_w,
+            screen_h,
+            configstrings,
+            clients: &no_clients,
+            protocol: &net::protocol::PROTOCOL_V1,
+            server_time: 0,
+            fs,
+        };
+        let quads = hud.build(&f);
+        r.set_hud_quads(fs, quads);
+    }
+    renderer::Frame {
+        // Nothing is drawn, so any projection works.
+        view_proj: camera::view_proj_from(
+            Vec3::ZERO,
+            0.0,
+            0.0,
+            0.0,
+            camera::DEFAULT_FOV_DEG,
+            aspect,
+        ),
+        eye: Vec3::ZERO,
+        cull,
+        hud_lines: vec![text],
+    }
+}
+
+/// `size == 0` means no block has named the pak's size yet.
+fn loading_text(map: &str, progress: Option<loading::Progress>) -> String {
+    match progress {
+        None => format!("Loading {map}"),
+        Some(p) => {
+            let size_kb = if p.size == 0 {
+                "?".to_string()
+            } else {
+                format!("{}", p.size as u64 / 1024)
+            };
+            format!(
+                "Downloading {map}: pak {}/{}  {} / {} KB",
+                p.pak,
+                p.paks,
+                p.received / 1024,
+                size_kb
+            )
+        }
+    }
 }
 
 fn walk_mode(
@@ -798,6 +796,11 @@ struct App {
     title: String,
     world: Option<World>,
     fs: Pk3Fs,
+    /// Where downloads land and the pk3 path reopens from.
+    game_dir: std::path::PathBuf,
+    mod_dir: String,
+    /// `--connect` target, for the connecting screen text.
+    connect_addr: Option<String>,
     mode: Mode,
     viewmodel: Vec<xmodel::XModel>,
     /// Fly-mode keys; walk keeps its own in `Mode::Walk`.
@@ -1048,6 +1051,9 @@ impl ApplicationHandler for App {
                 let cull = self.cull_mode;
                 let Some(r) = &mut self.renderer else { return };
                 let aspect = r.aspect();
+                // Set inside the spectate arm where `self` is borrowed out
+                // field-by-field; acted on once the borrows end.
+                let mut fatal: Option<anyhow::Error> = None;
                 let (mut frame, vm) = match &mut self.mode {
                     Mode::Fly(cam) => {
                         cam.update(&self.input, dt);
@@ -1081,31 +1087,19 @@ impl ApplicationHandler for App {
                         input,
                         phase,
                     } => {
-                        let Phase::Live(live) = phase else {
-                            unreachable!("only Live is constructed until the loading task")
-                        };
-                        let LivePhase {
-                            world,
-                            scene,
-                            events,
-                            clock,
-                            seeded,
-                            last_loop_snap,
-                        } = &mut **live;
-                        let bsp = &self.world.as_ref().expect("live phase has a map").bsp;
-                        let p = &net::protocol::PROTOCOL_V1;
-                        for ev in net.pump() {
+                        let events = net.pump();
+                        let mut gamestate_ready = false;
+                        for ev in &events {
                             if let Some(hud) = &mut self.hud {
-                                hud.on_net_event(&ev, time);
+                                hud.on_net_event(ev, time);
                             }
                             match ev {
                                 net::NetEvent::Chat { text, .. } => {
-                                    println!("{}", net::strip_colors(&text))
+                                    println!("{}", net::strip_colors(text))
                                 }
                                 net::NetEvent::Print(s) => println!("{s}"),
                                 net::NetEvent::Dropped(why) => {
-                                    eprintln!("disconnected: {why}");
-                                    event_loop.exit();
+                                    fatal = Some(anyhow!("disconnected: {why}"))
                                 }
                                 // Map ambient; each round restart re-sends it
                                 // with a new fade deadline, which is ignored.
@@ -1123,6 +1117,7 @@ impl ApplicationHandler for App {
                                         net.configstrings(),
                                     );
                                 }
+                                net::NetEvent::GamestateReady => gamestate_ready = true,
                                 _ => {}
                             }
                         }
@@ -1136,210 +1131,357 @@ impl ApplicationHandler for App {
                             }
                         }
 
-                        let client_num = net.gamestate().map_or(-1, |g| g.client_num);
-                        // While following, ps.clientNum is the followed
-                        // client's (docs/research/cod11-events-and-fx.md,
-                        // section 7); the camera sits inside that body, so
-                        // skip it instead of ours.
-                        let ps_client = net
-                            .snapshots()
-                            .newest()
-                            .map_or(-1, |s| s.ps.field_i32(p, "clientNum"));
-                        let following = ps_client >= 0 && ps_client != client_num;
-                        let skip_num = if following { ps_client } else { client_num };
-                        // Rebuilt every frame so absent entities (PVS churn) drop out.
-                        let mut instances: Vec<DynamicModelInstance> = Vec::new();
-                        // Per-shooter muzzle transforms for flashes and tracers.
-                        let mut muzzles: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
-                        let mut weapon_flash: HashMap<i32, String> = HashMap::new();
-                        let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
-
-                        if let Some(newest_time) = net.snapshots().newest().map(|s| s.server_time) {
-                            let render_time = clock.render_time(local_ms, newest_time);
-                            if let Some((a, b)) = net.snapshots().two_for_time(render_time) {
-                                let oa = Vec3::from(a.ps.origin(p));
-                                let ob = Vec3::from(b.ps.origin(p));
-                                let f = ((render_time - a.server_time) as f32
-                                    / (b.server_time - a.server_time).max(1) as f32)
-                                    .clamp(0.0, 1.0);
-                                let t0 = Instant::now();
-                                let built = entities::build_instances(
-                                    scene,
-                                    (a, b, f),
-                                    render_time,
-                                    skip_num,
-                                    net.configstrings(),
-                                    &self.fs,
-                                    bsp,
+                        let progress = net.download_progress();
+                        let frame = match phase {
+                            Phase::Connecting { since } => {
+                                if gamestate_ready {
+                                    match start_loading(
+                                        net,
+                                        &mut self.hud,
+                                        &mut self.audio,
+                                        &mut self.fx,
+                                        &mut self.world,
+                                        r,
+                                        self.window.as_deref(),
+                                        &mut self.title,
+                                        &self.game_dir,
+                                        &self.mod_dir,
+                                    ) {
+                                        Ok(next) => *phase = next,
+                                        Err(e) => fatal = Some(e),
+                                    }
+                                } else if since.elapsed() > Duration::from_secs(10) {
+                                    fatal = Some(anyhow!("no gamestate from the server in 10 s"));
+                                }
+                                loading_frame(
                                     r,
-                                    p,
-                                );
-                                self.build_ms = t0.elapsed().as_secs_f32() * 1000.0;
-                                instances = built.instances;
-                                muzzles = built.muzzles;
-                                weapon_flash = built.weapon_flash;
-                                entity_pos = built.entity_pos;
-                                // Over 512 u is a teleport, not motion.
-                                let pos = if oa.distance(ob) > 512.0 {
-                                    ob
-                                } else {
-                                    oa.lerp(ob, f)
-                                };
-                                // viewHeightCurrent: eye offset above the feet origin.
-                                let vh = a.ps.field_f32(p, "viewHeightCurrent") * (1.0 - f)
-                                    + b.ps.field_f32(p, "viewHeightCurrent") * f;
-                                cam.pos = pos + Vec3::Z * vh;
-                                if !*seeded {
-                                    let va_a = a.ps.viewangles(p);
-                                    let va_b = b.ps.viewangles(p);
-                                    cam.yaw = camera::lerp_angle(va_a[1], va_b[1], f).to_radians();
-                                    cam.pitch =
-                                        -camera::lerp_angle(va_a[0], va_b[0], f).to_radians();
-                                    *seeded = true;
-                                }
-                            } else if let Some(newest) = net.snapshots().newest() {
-                                self.interp_misses += 1;
-                                // too few snapshots to straddle; sit on newest
-                                cam.pos = Vec3::from(newest.ps.origin(p))
-                                    + Vec3::Z * newest.ps.field_f32(p, "viewHeightCurrent");
-                            }
-                        }
-
-                        let (cam_forward, cam_right, cam_up) = camera::basis(cam.yaw, cam.pitch);
-                        // The ridden body is `skip_num`, never in `entity_pos`,
-                        // so the listener is told which entity rides the camera.
-                        self.audio.set_listener(
-                            cam.pos,
-                            cam_forward,
-                            cam_right,
-                            cam_up,
-                            audio::cues::ps_entity(ps_client),
-                        );
-
-                        let (muzzle_pos, muzzle_dir) =
-                            view_muzzle(cam.pos, cam_forward, cam_right, cam_up);
-                        muzzles.insert(u32::MAX, (muzzle_pos, muzzle_dir));
-                        // While following, the followed player's bullet hits
-                        // carry `other_entity_num == ps_client`, and that body
-                        // is excluded from the muzzle map, so key the view
-                        // muzzle under `ps_client` too or they get no tracer.
-                        if following {
-                            muzzles.insert(ps_client as u32, (muzzle_pos, muzzle_dir));
-                        }
-
-                        r.set_dynamic_models(&instances);
-
-                        // Every frame; also the keepalive.
-                        net.send_frame(&usercmd_from_input(input, cam));
-
-                        // Step before this frame's events spawn, or the
-                        // [now-dt, now] integration would move particles born
-                        // at `now` (a tracer would start ahead of its muzzle).
-                        let fx_t0 = Instant::now();
-                        self.fx.step(dt, time, Some(&*world));
-
-                        let (screen_w, screen_h) = r.screen_size();
-
-                        let no_clients = BTreeMap::new();
-                        let newest = net.snapshots().newest();
-                        let hud_frame = hud::HudFrame {
-                            now: time,
-                            screen_w,
-                            screen_h,
-                            configstrings: net.configstrings(),
-                            clients: newest.map_or(&no_clients, |s| &s.clients),
-                            protocol: p,
-                            server_time: newest.map_or(0, |s| s.server_time),
-                            fs: &self.fs,
-                        };
-
-                        // Events use the newest snapshot, not the interpolation
-                        // pair; they must not wait out the interp delay.
-                        if let Some(newest) = newest {
-                            let ctx = fx::registry::ResolveCtx {
-                                muzzles: &muzzles,
-                                weapon_flash: &weapon_flash,
-                            };
-                            for ev in events.drain(newest, p) {
-                                self.ev_seen += 1;
-                                if let Some(hud) = &mut self.hud {
-                                    hud.on_game_event(&ev, &hud_frame);
-                                }
-                                self.audio.on_game_event(
                                     &self.fs,
-                                    &ev,
+                                    &mut self.hud,
+                                    time,
+                                    aspect,
+                                    cull,
                                     net.configstrings(),
-                                    &muzzles,
-                                );
-                                for r in fx::registry::resolve(&ev, &ctx) {
-                                    match r {
-                                        fx::registry::Resolved::Spawn { path, at } => {
-                                            let sounds = self.fx.spawn(&self.fs, &path, at, time);
-                                            self.audio.play_fx(&self.fs, sounds);
+                                    format!(
+                                        "Connecting to {}...",
+                                        self.connect_addr.as_deref().unwrap_or("?")
+                                    ),
+                                )
+                            }
+                            Phase::Loading { loader } => {
+                                let map = loader.map().to_string();
+                                let map_resolves = self.fs.resolve_map(&map).is_some();
+                                let mut waited = None;
+                                // A Ready or Failed loader is never stepped again:
+                                // Ready swaps the phase, Failed exits.
+                                match loader.step(&events, progress, map_resolves, now) {
+                                    loading::Action::BeginDownload { remote, dest } => {
+                                        if let Err(e) = net.begin_download(&remote, &dest) {
+                                            fatal = Some(e.context("cannot start the download"));
                                         }
-                                        fx::registry::Resolved::Tracer { muzzle, impact } => {
-                                            self.fx.spawn_tracer(muzzle, impact, time);
+                                    }
+                                    loading::Action::Reopen => {
+                                        match Pk3Fs::open(&self.game_dir.join(&self.mod_dir)) {
+                                            Ok(reopened) => self.fs = reopened,
+                                            Err(e) => fatal = Some(e),
                                         }
-                                        fx::registry::Resolved::Known => {}
-                                        fx::registry::Resolved::Unknown => {
-                                            self.ev_unknown += 1;
-                                            log::debug!(
-                                                "unknown event {} parm {}",
-                                                ev.event,
-                                                ev.parm
+                                    }
+                                    loading::Action::FinishDownloads => net.finish_downloads(),
+                                    loading::Action::Ready => {
+                                        match load_map(
+                                            &map,
+                                            net,
+                                            &mut self.fs,
+                                            &mut self.audio,
+                                            &mut self.world,
+                                            r,
+                                            self.window.as_deref(),
+                                            &mut self.title,
+                                        ) {
+                                            Ok(next) => *phase = next,
+                                            Err(e) => fatal = Some(e),
+                                        }
+                                    }
+                                    loading::Action::Failed(msg) => fatal = Some(anyhow!(msg)),
+                                    loading::Action::Wait(p) => waited = p,
+                                }
+                                loading_frame(
+                                    r,
+                                    &self.fs,
+                                    &mut self.hud,
+                                    time,
+                                    aspect,
+                                    cull,
+                                    net.configstrings(),
+                                    loading_text(&map, waited),
+                                )
+                            }
+                            Phase::Live(live) => {
+                                if gamestate_ready {
+                                    match start_loading(
+                                        net,
+                                        &mut self.hud,
+                                        &mut self.audio,
+                                        &mut self.fx,
+                                        &mut self.world,
+                                        r,
+                                        self.window.as_deref(),
+                                        &mut self.title,
+                                        &self.game_dir,
+                                        &self.mod_dir,
+                                    ) {
+                                        Ok(next) => *phase = next,
+                                        Err(e) => fatal = Some(e),
+                                    }
+                                    let map = match phase {
+                                        Phase::Loading { loader } => loader.map().to_string(),
+                                        _ => String::new(),
+                                    };
+                                    loading_frame(
+                                        r,
+                                        &self.fs,
+                                        &mut self.hud,
+                                        time,
+                                        aspect,
+                                        cull,
+                                        net.configstrings(),
+                                        format!("Loading {map}"),
+                                    )
+                                } else {
+                                    let LivePhase {
+                                        world,
+                                        scene,
+                                        events,
+                                        clock,
+                                        seeded,
+                                        last_loop_snap,
+                                    } = &mut **live;
+                                    let bsp =
+                                        &self.world.as_ref().expect("live phase has a map").bsp;
+                                    let p = &net::protocol::PROTOCOL_V1;
+                                    let client_num = net.gamestate().map_or(-1, |g| g.client_num);
+                                    // While following, ps.clientNum is the followed
+                                    // client's (docs/research/cod11-events-and-fx.md,
+                                    // section 7); the camera sits inside that body, so
+                                    // skip it instead of ours.
+                                    let ps_client = net
+                                        .snapshots()
+                                        .newest()
+                                        .map_or(-1, |s| s.ps.field_i32(p, "clientNum"));
+                                    let following = ps_client >= 0 && ps_client != client_num;
+                                    let skip_num = if following { ps_client } else { client_num };
+                                    // Rebuilt every frame so absent entities (PVS churn) drop out.
+                                    let mut instances: Vec<DynamicModelInstance> = Vec::new();
+                                    // Per-shooter muzzle transforms for flashes and tracers.
+                                    let mut muzzles: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
+                                    let mut weapon_flash: HashMap<i32, String> = HashMap::new();
+                                    let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
+
+                                    if let Some(newest_time) =
+                                        net.snapshots().newest().map(|s| s.server_time)
+                                    {
+                                        let render_time = clock.render_time(local_ms, newest_time);
+                                        if let Some((a, b)) =
+                                            net.snapshots().two_for_time(render_time)
+                                        {
+                                            let oa = Vec3::from(a.ps.origin(p));
+                                            let ob = Vec3::from(b.ps.origin(p));
+                                            let f = ((render_time - a.server_time) as f32
+                                                / (b.server_time - a.server_time).max(1) as f32)
+                                                .clamp(0.0, 1.0);
+                                            let t0 = Instant::now();
+                                            let built = entities::build_instances(
+                                                scene,
+                                                (a, b, f),
+                                                render_time,
+                                                skip_num,
+                                                net.configstrings(),
+                                                &self.fs,
+                                                bsp,
+                                                r,
+                                                p,
+                                            );
+                                            self.build_ms = t0.elapsed().as_secs_f32() * 1000.0;
+                                            instances = built.instances;
+                                            muzzles = built.muzzles;
+                                            weapon_flash = built.weapon_flash;
+                                            entity_pos = built.entity_pos;
+                                            // Over 512 u is a teleport, not motion.
+                                            let pos = if oa.distance(ob) > 512.0 {
+                                                ob
+                                            } else {
+                                                oa.lerp(ob, f)
+                                            };
+                                            // viewHeightCurrent: eye offset above the feet origin.
+                                            let vh = a.ps.field_f32(p, "viewHeightCurrent")
+                                                * (1.0 - f)
+                                                + b.ps.field_f32(p, "viewHeightCurrent") * f;
+                                            cam.pos = pos + Vec3::Z * vh;
+                                            if !*seeded {
+                                                let va_a = a.ps.viewangles(p);
+                                                let va_b = b.ps.viewangles(p);
+                                                cam.yaw = camera::lerp_angle(va_a[1], va_b[1], f)
+                                                    .to_radians();
+                                                cam.pitch =
+                                                    -camera::lerp_angle(va_a[0], va_b[0], f)
+                                                        .to_radians();
+                                                *seeded = true;
+                                            }
+                                        } else if let Some(newest) = net.snapshots().newest() {
+                                            self.interp_misses += 1;
+                                            // too few snapshots to straddle; sit on newest
+                                            cam.pos = Vec3::from(newest.ps.origin(p))
+                                                + Vec3::Z
+                                                    * newest.ps.field_f32(p, "viewHeightCurrent");
+                                        }
+                                    }
+
+                                    let (cam_forward, cam_right, cam_up) =
+                                        camera::basis(cam.yaw, cam.pitch);
+                                    // The ridden body is `skip_num`, never in `entity_pos`,
+                                    // so the listener is told which entity rides the camera.
+                                    self.audio.set_listener(
+                                        cam.pos,
+                                        cam_forward,
+                                        cam_right,
+                                        cam_up,
+                                        audio::cues::ps_entity(ps_client),
+                                    );
+
+                                    let (muzzle_pos, muzzle_dir) =
+                                        view_muzzle(cam.pos, cam_forward, cam_right, cam_up);
+                                    muzzles.insert(u32::MAX, (muzzle_pos, muzzle_dir));
+                                    // While following, the followed player's bullet hits
+                                    // carry `other_entity_num == ps_client`, and that body
+                                    // is excluded from the muzzle map, so key the view
+                                    // muzzle under `ps_client` too or they get no tracer.
+                                    if following {
+                                        muzzles.insert(ps_client as u32, (muzzle_pos, muzzle_dir));
+                                    }
+
+                                    r.set_dynamic_models(&instances);
+
+                                    // Every frame; also the keepalive.
+                                    net.send_frame(&usercmd_from_input(input, cam));
+
+                                    // Step before this frame's events spawn, or the
+                                    // [now-dt, now] integration would move particles born
+                                    // at `now` (a tracer would start ahead of its muzzle).
+                                    let fx_t0 = Instant::now();
+                                    self.fx.step(dt, time, Some(&*world));
+
+                                    let (screen_w, screen_h) = r.screen_size();
+
+                                    let no_clients = BTreeMap::new();
+                                    let newest = net.snapshots().newest();
+                                    let hud_frame = hud::HudFrame {
+                                        now: time,
+                                        screen_w,
+                                        screen_h,
+                                        configstrings: net.configstrings(),
+                                        clients: newest.map_or(&no_clients, |s| &s.clients),
+                                        protocol: p,
+                                        server_time: newest.map_or(0, |s| s.server_time),
+                                        fs: &self.fs,
+                                    };
+
+                                    // Events use the newest snapshot, not the interpolation
+                                    // pair; they must not wait out the interp delay.
+                                    if let Some(newest) = newest {
+                                        let ctx = fx::registry::ResolveCtx {
+                                            muzzles: &muzzles,
+                                            weapon_flash: &weapon_flash,
+                                        };
+                                        for ev in events.drain(newest, p) {
+                                            self.ev_seen += 1;
+                                            if let Some(hud) = &mut self.hud {
+                                                hud.on_game_event(&ev, &hud_frame);
+                                            }
+                                            self.audio.on_game_event(
+                                                &self.fs,
+                                                &ev,
+                                                net.configstrings(),
+                                                &muzzles,
+                                            );
+                                            for r in fx::registry::resolve(&ev, &ctx) {
+                                                match r {
+                                                    fx::registry::Resolved::Spawn { path, at } => {
+                                                        let sounds = self
+                                                            .fx
+                                                            .spawn(&self.fs, &path, at, time);
+                                                        self.audio.play_fx(&self.fs, sounds);
+                                                    }
+                                                    fx::registry::Resolved::Tracer {
+                                                        muzzle,
+                                                        impact,
+                                                    } => {
+                                                        self.fx.spawn_tracer(muzzle, impact, time);
+                                                    }
+                                                    fx::registry::Resolved::Known => {}
+                                                    fx::registry::Resolved::Unknown => {
+                                                        self.ev_unknown += 1;
+                                                        log::debug!(
+                                                            "unknown event {} parm {}",
+                                                            ev.event,
+                                                            ev.parm
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // `es.loopSound` (docs/research/cod11-sound-system.md,
+                                    // section 9), reconciled once per snapshot. An entity
+                                    // that left the snapshot is absent from the map, which
+                                    // is what stops its loop.
+                                    if let Some(newest) = newest {
+                                        if *last_loop_snap != Some(newest.message_num) {
+                                            *last_loop_snap = Some(newest.message_num);
+                                            let loops: HashMap<u32, (i32, Vec3)> = newest
+                                                .entities
+                                                .iter()
+                                                .filter_map(|(&num, e)| {
+                                                    let idx = e.field_i32(p, "loopSound");
+                                                    (idx != 0).then(|| {
+                                                        (num, (idx, Vec3::from(e.origin(p))))
+                                                    })
+                                                })
+                                                .collect();
+                                            self.audio.set_loop_sounds(
+                                                &self.fs,
+                                                net.configstrings(),
+                                                &loops,
                                             );
                                         }
                                     }
+
+                                    // After the drain, so new voices get this frame's positions.
+                                    self.audio.step(&entity_pos);
+
+                                    r.set_fx_quads(
+                                        &self.fs,
+                                        self.fx.build_quads(cam.pos, cam_right, cam_up, time),
+                                    );
+                                    r.set_fx_lights(&self.fx.lights(cam.pos, time));
+                                    self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
+
+                                    if let Some(hud) = &mut self.hud {
+                                        let hud_t0 = Instant::now();
+                                        let quads = hud.build(&hud_frame);
+                                        r.set_hud_quads(&self.fs, quads);
+                                        self.hud_ms = hud_t0.elapsed().as_secs_f32() * 1000.0;
+                                    }
+
+                                    renderer::Frame {
+                                        view_proj: cam.view_proj(aspect),
+                                        eye: cam.pos,
+                                        cull,
+                                        hud_lines: Vec::new(),
+                                    }
                                 }
                             }
-                        }
-
-                        // `es.loopSound` (docs/research/cod11-sound-system.md,
-                        // section 9), reconciled once per snapshot. An entity
-                        // that left the snapshot is absent from the map, which
-                        // is what stops its loop.
-                        if let Some(newest) = newest {
-                            if *last_loop_snap != Some(newest.message_num) {
-                                *last_loop_snap = Some(newest.message_num);
-                                let loops: HashMap<u32, (i32, Vec3)> = newest
-                                    .entities
-                                    .iter()
-                                    .filter_map(|(&num, e)| {
-                                        let idx = e.field_i32(p, "loopSound");
-                                        (idx != 0).then(|| (num, (idx, Vec3::from(e.origin(p)))))
-                                    })
-                                    .collect();
-                                self.audio
-                                    .set_loop_sounds(&self.fs, net.configstrings(), &loops);
-                            }
-                        }
-
-                        // After the drain, so new voices get this frame's positions.
-                        self.audio.step(&entity_pos);
-
-                        r.set_fx_quads(
-                            &self.fs,
-                            self.fx.build_quads(cam.pos, cam_right, cam_up, time),
-                        );
-                        r.set_fx_lights(&self.fx.lights(cam.pos, time));
-                        self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
-
-                        if let Some(hud) = &mut self.hud {
-                            let hud_t0 = Instant::now();
-                            let quads = hud.build(&hud_frame);
-                            r.set_hud_quads(&self.fs, quads);
-                            self.hud_ms = hud_t0.elapsed().as_secs_f32() * 1000.0;
-                        }
-
-                        (
-                            renderer::Frame {
-                                view_proj: cam.view_proj(aspect),
-                                eye: cam.pos,
-                                cull,
-                                hud_lines: Vec::new(),
-                            },
-                            None,
-                        )
+                        };
+                        (frame, None)
                     }
                     Mode::Walk {
                         world,
@@ -1461,6 +1603,10 @@ impl ApplicationHandler for App {
                         )
                     }
                 };
+                if let Some(err) = fatal {
+                    self.fail(event_loop, err);
+                    return;
+                }
                 // The scene lives in the spectate phase now, so pull it back
                 // out for the overlay after the mode's mutable borrows end.
                 let scene = match &self.mode {

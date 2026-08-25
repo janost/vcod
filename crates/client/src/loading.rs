@@ -46,9 +46,7 @@ enum State {
         last_progress: Instant,
         received: u64,
     },
-    Reopening {
-        idx: usize,
-    },
+    Reopening,
     AwaitGamestate {
         since: Instant,
     },
@@ -130,7 +128,7 @@ impl MapLoader {
                     .any(|e| matches!(e, NetEvent::DownloadComplete(_)))
                 {
                     self.downloaded += 1;
-                    self.state = State::Reopening { idx };
+                    self.state = State::Reopening;
                     return Action::Reopen;
                 }
                 let (got, size) = progress.unwrap_or((0, 0));
@@ -152,7 +150,7 @@ impl MapLoader {
                     size,
                 }))
             }
-            State::Reopening { .. } => {
+            State::Reopening => {
                 // the caller reopened before this step; decide on the new fs
                 self.state = State::Resolve;
                 self.step(&[], None, map_resolves, now)
