@@ -197,6 +197,8 @@ i32 first_vert, vert_count // into lump 11, 4 vertices per portal on the stock m
 
 Portals are stored once per side: a cell's `portal_count` portals each name the neighbouring cell.
 
+The plane faces out of the owning cell: for every one of the 2474 stock portals, the polygon centroid moved 8 units against the normal lies inside the owning cell's bounds and moved along it inside the neighbour's (VERIFIED).
+
 ### Lump 20, nodes, and lump 21, leafs (36 bytes each)
 
 ```

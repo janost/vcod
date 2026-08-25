@@ -159,7 +159,12 @@ Click to capture the mouse, Esc to release it, mouse to look around.
 In spectate mode the position comes from the server; the mouse drives the look
 angles. Hold Tab for the scoreboard.
 
-F3 toggles the debug overlay in every mode.
+These work in every mode:
+
+| Input | Action |
+|---|---|
+| F3 | Toggle the debug overlay |
+| F4 | Culling: on, locked (freeze the visible set), off |
 
 ### Walk mode (`--walk`)
 
@@ -184,8 +189,10 @@ F3 toggles the debug overlay in every mode.
   colour for the whole model. The engine samples its light grid per vertex.
 - No shader effects: Q3-style shader script semantics (blending, animation,
   scrolling) aren't implemented.
-- No culling: the whole map is drawn every frame. Walk-mode traces go through
-  a BVH over every collidable brush and triangle, not the BSP tree.
+- Visibility follows the retail cells and portals but without the portal
+  bevel planes and the brushmodel occluder volumes, so a little more is drawn
+  through doorways than retail draws. Outside every cell (fly mode above the
+  map) only the frustum culls.
 - Alpha surfaces (foliage, fences) are alpha-tested only, and they collide as
   drawn, so a bush or a wire fence stops the player like a solid wall.
 - Submodels (doors, exploding walls, moving platforms) collide by their render

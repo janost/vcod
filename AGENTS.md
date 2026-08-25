@@ -70,6 +70,10 @@ engineering setup works.
 - `--debug-overlay` or F3 at runtime: frame time, worst frame, draw stats, net
   interp misses and anim restarts per second, `ev seen/unk` and the `audio`
   line (format under Gotchas).
+- F4 cycles culling `on -> locked -> off`. `locked` freezes the visible set
+  so you can fly out and see what the camera was drawing; `off` is the
+  unculled A/B. The F3 `vis` line reads `vis: <mode> cells n/m soups a/b
+  tris c/d props p/q X.XXms`.
 - A handful of `vkAcquireNextImageKHR` fence validation errors per run are
   pre-existing noise on the Vulkan backend.
 - Screenshots: capture the active window only; whichever tool the desktop
@@ -191,6 +195,10 @@ decompiler output or disassembly listings.
   agree. Both rings, and the scramble key that indexes them, are sized off it.
 - The server's per-client drop notice is the reliable command `w "<reason>"`
   (`SV_DropClient` 0x8085cf4). Bare `disconnect` only travels client to server.
+- A portal's plane faces out of its owning cell; the walk skips a portal when
+  the eye is past it (`n·eye - dist > 1`). The soup lump is laid out
+  `[cull-group soups][cell-tree soups][submodel soups]`, and leaf surfaces
+  (lump 23) index the terrain collision partitions, not draw soups.
 - The F3 `audio` line reads `v N plays N miss N cull N drop N N.NNms`: live
   voices, cues started, aliases not in the table, cues already past `dist_max`
   when they fired, and sounds kira refused for lack of capacity.
