@@ -198,6 +198,20 @@ fn hud_lines(
     ));
     let (draws, insts, bones) = r.debug_counts();
     lines.push(format!("draw: world {draws}  inst {insts}  bones {bones}"));
+    let vc = r.vis_counts();
+    lines.push(format!(
+        "vis: {} cells {}/{} soups {}/{} tris {}/{} props {}/{}  {:.2}ms",
+        vc.mode.map_or("-".to_string(), |m| m.to_string()),
+        vc.cells.0,
+        vc.cells.1,
+        vc.soups.0,
+        vc.soups.1,
+        vc.tris.0,
+        vc.tris.1,
+        vc.props.0,
+        vc.props.1,
+        vc.gather_ms
+    ));
     let (hud_quads, hud_ms, hud_unknown) = hud_counts;
     lines.push(format!("hud q{hud_quads} {hud_ms:.2}ms unk {hud_unknown}"));
     lines.push(format!(
@@ -439,6 +453,7 @@ fn main() -> Result<()> {
         start: Instant::now(),
         last_frame: Instant::now(),
         debug_overlay: args.debug_overlay,
+        cull_mode: renderer::CullMode::On,
         hud_stats: hud_text::HudStats::new(),
         interp_misses: 0,
         ev_seen: 0,
@@ -762,6 +777,7 @@ struct App {
     start: Instant,
     last_frame: Instant,
     debug_overlay: bool,
+    cull_mode: renderer::CullMode,
     hud_stats: hud_text::HudStats,
     /// Spectate frames without a straddling snapshot pair. Cumulative; the
     /// overlay shows the rate.
@@ -890,6 +906,10 @@ impl ApplicationHandler for App {
                     self.debug_overlay = !self.debug_overlay;
                     return;
                 }
+                if code == KeyCode::F4 && pressed {
+                    self.cull_mode = self.cull_mode.next();
+                    return;
+                }
                 let grabbed = self.grabbed;
                 match &mut self.mode {
                     Mode::Fly(_) => match code {
@@ -989,6 +1009,7 @@ impl ApplicationHandler for App {
                 let elapsed = now - self.start;
                 let time = elapsed.as_secs_f32();
                 let local_ms = elapsed.as_secs_f64() * 1000.0;
+                let cull = self.cull_mode;
                 let Some(r) = &mut self.renderer else { return };
                 let aspect = r.aspect();
                 let (mut frame, vm) = match &mut self.mode {
@@ -1011,6 +1032,8 @@ impl ApplicationHandler for App {
                         (
                             renderer::Frame {
                                 view_proj: cam.view_proj(aspect),
+                                eye: cam.pos,
+                                cull,
                                 hud_lines: Vec::new(),
                             },
                             None,
@@ -1266,6 +1289,8 @@ impl ApplicationHandler for App {
                         (
                             renderer::Frame {
                                 view_proj: cam.view_proj(aspect),
+                                eye: cam.pos,
+                                cull,
                                 hud_lines: Vec::new(),
                             },
                             None,
@@ -1380,6 +1405,8 @@ impl ApplicationHandler for App {
                                 view_proj: camera::view_proj_from(
                                     v.eye, v.yaw, v.pitch, v.roll, fov, aspect,
                                 ),
+                                eye: v.eye,
+                                cull,
                                 hud_lines: Vec::new(),
                             },
                             Some(renderer::VmDraw {

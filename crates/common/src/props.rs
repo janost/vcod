@@ -5,6 +5,7 @@
 
 use crate::bsp::{self, DrawVert};
 use crate::collision::CONTENTS_SOLID;
+use crate::mesh::IndexRange;
 use crate::pk3::Pk3Fs;
 use crate::xmodel;
 use glam::{Mat3, Vec3};
@@ -39,6 +40,11 @@ pub struct Props {
     /// Relative to `verts`; the renderer rebases them onto the combined buffer.
     pub indices: Vec<u32>,
     pub batches: Vec<Batch>,
+    /// (placement index, range) for every placement/skin pair; `batch`
+    /// indexes `batches`.
+    pub ranges: Vec<(u32, IndexRange)>,
+    /// World AABB per placement, index-aligned with `placements(entities)`.
+    pub bounds: Vec<(Vec3, Vec3)>,
 }
 
 /// Q3 `AnglesToAxis` (code/game/q_math.c): `Rz(yaw) * Ry(pitch) * Rx(roll)`,
@@ -149,29 +155,55 @@ pub fn build(fs: &Pk3Fs, entities: &str) -> Props {
     let mut groups: BTreeMap<String, Vec<u32>> = BTreeMap::new();
     let mut drawn = 0usize;
 
-    for p in &placements {
+    // per placement: skin -> (offset in the group, count); plus bounds
+    let mut runs: Vec<(u32, String, u32, u32)> = Vec::new();
+    let mut bounds: Vec<(Vec3, Vec3)> = Vec::new();
+    for (pi, p) in placements.iter().enumerate() {
         let model = cache
             .entry(p.model.clone())
             .or_insert_with(|| load_model(fs, &p.model));
-        let Some(model) = model else { continue };
+        let Some(model) = model else {
+            bounds.push((Vec3::ZERO, Vec3::ZERO));
+            continue;
+        };
         drawn += 1;
         let rot = rotation(p.angles);
+        let mut lo = Vec3::INFINITY;
+        let mut hi = Vec3::NEG_INFINITY;
+        // a placement's surfaces sharing a skin land consecutively in that
+        // skin's group, so one (offset, count) per skin stays contiguous
+        let mut this: HashMap<&str, (u32, u32)> = HashMap::new();
         for surf in &model.surfaces {
             let Some(skin) = model.materials.get(surf.material) else {
                 continue;
             };
             let base = verts.len() as u32;
-            verts.extend(surf.verts.iter().map(|v| bake(p, rot, v)));
-            groups
-                .entry(skin.clone())
-                .or_default()
-                .extend(surf.indices.iter().map(|&i| base + i as u32));
+            for v in &surf.verts {
+                let dv = bake(p, rot, v);
+                lo = lo.min(Vec3::from(dv.pos));
+                hi = hi.max(Vec3::from(dv.pos));
+                verts.push(dv);
+            }
+            let group = groups.entry(skin.clone()).or_default();
+            let run = this.entry(skin.as_str()).or_insert((group.len() as u32, 0));
+            group.extend(surf.indices.iter().map(|&i| base + i as u32));
+            run.1 += surf.indices.len() as u32;
         }
+        for (skin, (offset, count)) in this {
+            runs.push((pi as u32, skin.to_string(), offset, count));
+        }
+        bounds.push(if lo.x <= hi.x {
+            (lo, hi)
+        } else {
+            (Vec3::ZERO, Vec3::ZERO)
+        });
     }
 
     let mut indices = Vec::new();
     let mut batches = Vec::new();
+    let mut batch_of: HashMap<String, (u32, u32)> = HashMap::new();
     for (skin, idx) in groups {
+        batch_of.insert(skin.clone(), (batches.len() as u32, indices.len() as u32));
         batches.push(Batch {
             skin,
             first_index: indices.len() as u32,
@@ -179,6 +211,20 @@ pub fn build(fs: &Pk3Fs, entities: &str) -> Props {
         });
         indices.extend(idx);
     }
+    let ranges = runs
+        .into_iter()
+        .map(|(pi, skin, offset, count)| {
+            let (batch, first) = batch_of[&skin];
+            (
+                pi,
+                IndexRange {
+                    batch,
+                    first: first + offset,
+                    count,
+                },
+            )
+        })
+        .collect();
     log::info!(
         "props: {drawn}/{} placements over {} models, {} vertices in {} skin batches",
         placements.len(),
@@ -190,6 +236,8 @@ pub fn build(fs: &Pk3Fs, entities: &str) -> Props {
         verts,
         indices,
         batches,
+        ranges,
+        bounds,
     }
 }
 
@@ -481,6 +529,31 @@ mod tests {
                 !is_checkerboard(&load_skin_image(&fs, skin)),
                 "{skin} fell back to the checkerboard"
             );
+        }
+    }
+
+    #[test]
+    fn build_reports_placement_ranges_and_bounds() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let ents = "{\n\"model\" \"xmodel/crate_misc1a\"\n\"origin\" \"100 200 300\"\n\"classname\" \"misc_model\"\n}";
+        let props = build(&fs, ents);
+        assert_eq!(props.bounds.len(), 1);
+        let (lo, hi) = props.bounds[0];
+        assert!(
+            lo.x > 50.0 && hi.x < 150.0 && lo.z >= 300.0 && hi.z < 340.0,
+            "{lo} {hi}"
+        );
+        let total: u32 = props.ranges.iter().map(|(_, r)| r.count).sum();
+        assert_eq!(total as usize, props.indices.len());
+        assert!(props
+            .ranges
+            .iter()
+            .all(|(p, r)| *p == 0 && (r.batch as usize) < props.batches.len()));
+        for (_, r) in &props.ranges {
+            let b = &props.batches[r.batch as usize];
+            assert!(r.first >= b.first_index && r.first + r.count <= b.first_index + b.index_count);
         }
     }
 

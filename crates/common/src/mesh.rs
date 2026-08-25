@@ -20,23 +20,45 @@ pub fn is_overlay(material: &Material) -> bool {
     base.starts_with("decal") || base.split('@').next().unwrap_or("").ends_with("_masked")
 }
 
-/// One absolute u32 index buffer, one contiguous batch per (material, lightmap).
-pub fn build_batches(bsp: &Bsp) -> (Vec<u32>, Vec<Batch>) {
+/// A soup's or prop placement's slice of the merged index array.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IndexRange {
+    pub batch: u32,
+    pub first: u32,
+    pub count: u32,
+}
+
+/// Where a soup landed while grouping: (group key, offset in the group, count).
+type Placed = Option<((u16, u16), u32, u32)>;
+
+/// One absolute u32 index buffer, one contiguous batch per (material,
+/// lightmap), and each soup's range inside its batch (`None` when skipped).
+pub fn build_batches(bsp: &Bsp) -> (Vec<u32>, Vec<Batch>, Vec<Option<IndexRange>>) {
     use std::collections::BTreeMap;
     let mut groups: BTreeMap<(u16, u16), Vec<u32>> = BTreeMap::new();
+    let mut placed: Vec<Placed> = Vec::with_capacity(bsp.soups.len());
     for soup in &bsp.soups {
         if should_skip(&bsp.materials[soup.material as usize]) {
+            placed.push(None);
             continue;
         }
-        let dst = groups.entry((soup.material, soup.lightmap)).or_default();
+        let key = (soup.material, soup.lightmap);
+        let dst = groups.entry(key).or_default();
+        let offset = dst.len() as u32;
         let fi = soup.first_index as usize;
         for &rel in &bsp.indices[fi..fi + soup.index_count as usize] {
             dst.push(soup.first_vertex + rel as u32);
         }
+        placed.push(Some((key, offset, soup.index_count as u32)));
     }
     let mut indices = Vec::new();
     let mut batches = Vec::new();
+    let mut batch_of: BTreeMap<(u16, u16), (u32, u32)> = BTreeMap::new();
     for ((material, lightmap), idx) in groups {
+        batch_of.insert(
+            (material, lightmap),
+            (batches.len() as u32, indices.len() as u32),
+        );
         batches.push(Batch {
             material,
             lightmap,
@@ -45,7 +67,20 @@ pub fn build_batches(bsp: &Bsp) -> (Vec<u32>, Vec<Batch>) {
         });
         indices.extend(idx);
     }
-    (indices, batches)
+    let ranges = placed
+        .into_iter()
+        .map(|p| {
+            p.map(|(key, offset, count)| {
+                let (batch, first) = batch_of[&key];
+                IndexRange {
+                    batch,
+                    first: first + offset,
+                    count,
+                }
+            })
+        })
+        .collect();
+    (indices, batches, ranges)
 }
 
 /// Bounds over the drawn soups' vertices; the spawn fallback.
@@ -190,8 +225,44 @@ mod tests {
     }
 
     #[test]
+    fn reports_each_soups_range_in_its_batch() {
+        let (indices, batches, ranges) = build_batches(&test_bsp());
+        assert_eq!(ranges.len(), 4);
+        assert_eq!(ranges[1], None, "clip soup has no range");
+        assert_eq!(
+            ranges[0],
+            Some(IndexRange {
+                batch: 0,
+                first: 0,
+                count: 3
+            })
+        );
+        assert_eq!(
+            ranges[2],
+            Some(IndexRange {
+                batch: 0,
+                first: 3,
+                count: 3
+            })
+        );
+        assert_eq!(
+            ranges[3],
+            Some(IndexRange {
+                batch: 1,
+                first: batches[1].first_index,
+                count: 3
+            })
+        );
+        let r = ranges[2].unwrap();
+        assert_eq!(
+            &indices[r.first as usize..(r.first + r.count) as usize],
+            &[6, 7, 8]
+        );
+    }
+
+    #[test]
     fn merges_batches_and_rebases_indices() {
-        let (indices, batches) = build_batches(&test_bsp());
+        let (indices, batches, _) = build_batches(&test_bsp());
         assert_eq!(batches.len(), 2);
         let b0 = &batches[0];
         assert_eq!((b0.material, b0.lightmap, b0.index_count), (0, 0, 6));

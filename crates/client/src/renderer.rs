@@ -8,9 +8,10 @@ use crate::hud::HudQuad;
 use crate::hud_text::{self, HudVert};
 use vcod_common::assets::{self, Image, ImageData};
 use vcod_common::bsp::{self, Bsp, DrawVert};
-use vcod_common::mesh::{self, Batch};
+use vcod_common::mesh::{self, Batch, IndexRange};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::props;
+use vcod_common::vis::{Frustum, Visible, WorldVis};
 use vcod_common::xmodel::{self, VmVert};
 
 // The vertex layout below hardcodes the BSP drawvert stride.
@@ -67,9 +68,79 @@ enum Pass {
 
 struct DrawCall {
     bind_group: usize,
-    first_index: u32,
-    index_count: u32,
     pass: Pass,
+}
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum CullMode {
+    On,
+    Locked,
+    Off,
+}
+
+impl CullMode {
+    pub fn next(self) -> Self {
+        match self {
+            CullMode::On => CullMode::Locked,
+            CullMode::Locked => CullMode::Off,
+            CullMode::Off => CullMode::On,
+        }
+    }
+}
+
+impl std::fmt::Display for CullMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            CullMode::On => "on",
+            CullMode::Locked => "locked",
+            CullMode::Off => "off",
+        })
+    }
+}
+
+/// A per-frame draw: `batch` picks the bind group and pass, the range is in
+/// the gathered index buffer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DrawRange {
+    pub batch: u32,
+    pub first: u32,
+    pub count: u32,
+}
+
+/// Copies the visible `ranges` out of `src` batch by batch into `out`, one
+/// `DrawRange` per batch that got anything. `per_batch` is scratch, kept
+/// between frames.
+pub(crate) fn gather(
+    src: &[u32],
+    ranges: impl IntoIterator<Item = IndexRange>,
+    batch_count: usize,
+    out: &mut Vec<u32>,
+    per_batch: &mut Vec<Vec<IndexRange>>,
+) -> Vec<DrawRange> {
+    per_batch.resize_with(batch_count, Vec::new);
+    for b in per_batch.iter_mut() {
+        b.clear();
+    }
+    for r in ranges {
+        per_batch[r.batch as usize].push(r);
+    }
+    out.clear();
+    let mut draws = Vec::new();
+    for (batch, rs) in per_batch.iter().enumerate() {
+        if rs.is_empty() {
+            continue;
+        }
+        let first = out.len() as u32;
+        for r in rs {
+            out.extend_from_slice(&src[r.first as usize..(r.first + r.count) as usize]);
+        }
+        draws.push(DrawRange {
+            batch: batch as u32,
+            first,
+            count: out.len() as u32 - first,
+        });
+    }
+    draws
 }
 
 struct VmSurface {
@@ -178,8 +249,22 @@ pub struct VmDraw {
 
 pub struct Frame {
     pub view_proj: glam::Mat4,
+    /// Camera position, the cell the visibility walk starts from.
+    pub eye: glam::Vec3,
+    pub cull: CullMode,
     /// Debug-HUD lines, top line first; empty when the overlay is off.
     pub hud_lines: Vec<String>,
+}
+
+/// Drawn/total per frame for the F3 `vis` line.
+#[derive(Clone, Debug, Default)]
+pub struct VisCounts {
+    pub mode: Option<CullMode>,
+    pub cells: (usize, usize),
+    pub soups: (usize, usize),
+    pub tris: (usize, usize),
+    pub props: (usize, usize),
+    pub gather_ms: f32,
 }
 
 /// Matches `FxLights` in shader.wgsl and dynamic_model.wgsl (std140, vec4 aligned).
@@ -319,7 +404,19 @@ pub struct Renderer {
     vertex_buf: wgpu::Buffer,
     index_buf: wgpu::Buffer,
     bind_groups: Vec<wgpu::BindGroup>,
-    draws: Vec<DrawCall>,
+    /// Merged CPU indices (world then props); `index_buf` holds the gathered visible subset.
+    cpu_indices: Vec<u32>,
+    soup_ranges: Vec<Option<IndexRange>>,
+    prop_ranges: Vec<(u32, IndexRange)>,
+    prop_bounds: Vec<(glam::Vec3, glam::Vec3)>,
+    /// Static per-batch draw descriptors; `draws` is rebuilt each frame from them.
+    batch_draws: Vec<DrawCall>,
+    draws: Vec<DrawRange>,
+    vis: WorldVis,
+    gathered: Vec<u32>,
+    gather_scratch: Vec<Vec<IndexRange>>,
+    locked: Option<Visible>,
+    vis_counts: VisCounts,
     vm_pass: VmPass,
     dynamic: DynamicPass,
     fx: FxPass,
@@ -400,7 +497,7 @@ impl Renderer {
 
         // Props (misc_model entities) are baked to world space on the CPU in
         // the same vertex format and extend the map's buffers.
-        let (mut indices, batches) = mesh::build_batches(bsp);
+        let (mut indices, batches, soup_ranges) = mesh::build_batches(bsp);
         if batches.is_empty() {
             bail!("map has no drawable surfaces");
         }
@@ -408,6 +505,22 @@ impl Renderer {
         let prop_first_index = indices.len() as u32;
         let prop_first_vertex = bsp.verts.len() as u32;
         indices.extend(props.indices.iter().map(|i| i + prop_first_vertex));
+        // prop batches follow the world's in `batch_draws`, prop indices follow
+        // the world's in the merged buffer
+        let prop_ranges: Vec<(u32, IndexRange)> = props
+            .ranges
+            .iter()
+            .map(|&(p, r)| {
+                (
+                    p,
+                    IndexRange {
+                        batch: r.batch + batches.len() as u32,
+                        first: r.first + prop_first_index,
+                        count: r.count,
+                    },
+                )
+            })
+            .collect();
         let mut vertices = bsp.verts.clone();
         vertices.extend_from_slice(&props.verts);
 
@@ -419,7 +532,7 @@ impl Renderer {
         let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("map indices"),
             contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
         });
 
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -573,12 +686,9 @@ impl Renderer {
 
         let mut bind_groups: Vec<wgpu::BindGroup> = Vec::new();
         let mut cache: HashMap<(u16, u16), usize> = HashMap::new();
-        let mut draws = Vec::with_capacity(batches.len());
+        let mut batch_draws = Vec::with_capacity(batches.len());
         for Batch {
-            material,
-            lightmap,
-            first_index,
-            index_count,
+            material, lightmap, ..
         } in &batches
         {
             let idx = *cache.entry((*material, *lightmap)).or_insert_with(|| {
@@ -618,10 +728,8 @@ impl Renderer {
             } else {
                 Pass::Opaque
             };
-            draws.push(DrawCall {
+            batch_draws.push(DrawCall {
                 bind_group: idx,
-                first_index: *first_index,
-                index_count: *index_count,
                 pass,
             });
         }
@@ -657,10 +765,8 @@ impl Renderer {
                 }));
                 bind_groups.len() - 1
             });
-            draws.push(DrawCall {
+            batch_draws.push(DrawCall {
                 bind_group: idx,
-                first_index: prop_first_index + batch.first_index,
-                index_count: batch.index_count,
                 pass: Pass::Prop,
             });
         }
@@ -784,10 +890,10 @@ impl Renderer {
             cull_back,
         );
 
-        let count = |p: Pass| draws.iter().filter(|d| d.pass == p).count();
+        let count = |p: Pass| batch_draws.iter().filter(|d| d.pass == p).count();
         println!(
             "{} batches ({} opaque, {} prop, {} layer, {} overlay), {} draw indices, {} vertices",
-            draws.len(),
+            batch_draws.len(),
             count(Pass::Opaque),
             count(Pass::Prop),
             count(Pass::Layer),
@@ -825,7 +931,17 @@ impl Renderer {
             vertex_buf,
             index_buf,
             bind_groups,
-            draws,
+            cpu_indices: indices,
+            soup_ranges,
+            prop_ranges,
+            prop_bounds: props.bounds,
+            batch_draws,
+            draws: Vec::new(),
+            vis: WorldVis::build(bsp),
+            gathered: Vec::new(),
+            gather_scratch: Vec::new(),
+            locked: None,
+            vis_counts: VisCounts::default(),
             vm_pass,
             dynamic,
             fx,
@@ -1081,6 +1197,10 @@ impl Renderer {
         )
     }
 
+    pub fn vis_counts(&self) -> &VisCounts {
+        &self.vis_counts
+    }
+
     pub fn aspect(&self) -> f32 {
         self.config.width as f32 / self.config.height.max(1) as f32
     }
@@ -1098,6 +1218,82 @@ impl Renderer {
             0,
             bytemuck::cast_slice(&frame.view_proj.to_cols_array()),
         );
+        let t0 = std::time::Instant::now();
+        let frustum = Frustum::from_view_proj(frame.view_proj);
+        let visible = match frame.cull {
+            CullMode::Off => None,
+            CullMode::Locked => Some(
+                self.locked
+                    .take()
+                    .unwrap_or_else(|| self.vis.visible(frame.eye, &frustum)),
+            ),
+            CullMode::On => Some(self.vis.visible(frame.eye, &frustum)),
+        };
+        let mut props_drawn = 0usize;
+        let ranges: Vec<IndexRange> = match &visible {
+            None => self
+                .soup_ranges
+                .iter()
+                .flatten()
+                .copied()
+                .chain(self.prop_ranges.iter().map(|&(_, r)| r))
+                .collect(),
+            Some(v) => {
+                let prop_ok: Vec<bool> = self
+                    .prop_bounds
+                    .iter()
+                    .map(|&(lo, hi)| self.vis.prop_visible(v, &frustum, lo, hi))
+                    .collect();
+                props_drawn = prop_ok.iter().filter(|&&b| b).count();
+                self.soup_ranges
+                    .iter()
+                    .zip(&v.soups)
+                    .filter_map(|(r, &vis)| if vis { *r } else { None })
+                    .chain(
+                        self.prop_ranges
+                            .iter()
+                            .filter(|(p, _)| prop_ok[*p as usize])
+                            .map(|&(_, r)| r),
+                    )
+                    .collect()
+            }
+        };
+        self.draws = gather(
+            &self.cpu_indices,
+            ranges,
+            self.batch_draws.len(),
+            &mut self.gathered,
+            &mut self.gather_scratch,
+        );
+        self.queue
+            .write_buffer(&self.index_buf, 0, bytemuck::cast_slice(&self.gathered));
+        let cell_total = self.vis.cell_count();
+        self.vis_counts = VisCounts {
+            mode: Some(frame.cull),
+            cells: visible.as_ref().map_or((cell_total, cell_total), |v| {
+                (v.cells.iter().filter(|&&c| c).count(), cell_total)
+            }),
+            soups: visible
+                .as_ref()
+                .map_or((self.soup_ranges.len(), self.soup_ranges.len()), |v| {
+                    (v.stats.soups, self.soup_ranges.len())
+                }),
+            tris: (self.gathered.len() / 3, self.cpu_indices.len() / 3),
+            props: (
+                if visible.is_some() {
+                    props_drawn
+                } else {
+                    self.prop_bounds.len()
+                },
+                self.prop_bounds.len(),
+            ),
+            gather_ms: t0.elapsed().as_secs_f32() * 1000.0,
+        };
+        if frame.cull == CullMode::Locked {
+            self.locked = visible;
+        } else {
+            self.locked = None;
+        }
         // The glyph cap truncates whole quads, so a cut readout stays legible.
         let hud_quads = if frame.hud_lines.is_empty() {
             0
@@ -1212,13 +1408,13 @@ impl Renderer {
                 (&self.overlay_pipeline, Pass::Overlay),
             ] {
                 pass.set_pipeline(pipeline);
-                for draw in self.draws.iter().filter(|d| d.pass == want) {
-                    pass.set_bind_group(1, &self.bind_groups[draw.bind_group], &[]);
-                    pass.draw_indexed(
-                        draw.first_index..draw.first_index + draw.index_count,
-                        0,
-                        0..1,
-                    );
+                for draw in &self.draws {
+                    let call = &self.batch_draws[draw.batch as usize];
+                    if call.pass != want {
+                        continue;
+                    }
+                    pass.set_bind_group(1, &self.bind_groups[call.bind_group], &[]);
+                    pass.draw_indexed(draw.first..draw.first + draw.count, 0, 0..1);
                 }
             }
 
@@ -2401,6 +2597,50 @@ fn is_fallback(img: &Image, fallback_px: &[u8]) -> bool {
 mod tests {
     use super::*;
     use glam::Mat4;
+
+    #[test]
+    fn gather_copies_visible_ranges_batch_by_batch() {
+        use vcod_common::mesh::IndexRange;
+        let src: Vec<u32> = (0..12).collect();
+        let ranges = [
+            IndexRange {
+                batch: 1,
+                first: 6,
+                count: 3,
+            },
+            IndexRange {
+                batch: 0,
+                first: 0,
+                count: 3,
+            },
+            IndexRange {
+                batch: 1,
+                first: 9,
+                count: 3,
+            },
+        ];
+        let mut out = Vec::new();
+        let mut scratch = Vec::new();
+        let draws = gather(&src, ranges, 3, &mut out, &mut scratch);
+        assert_eq!(out, vec![0, 1, 2, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(
+            draws,
+            vec![
+                DrawRange {
+                    batch: 0,
+                    first: 0,
+                    count: 3
+                },
+                DrawRange {
+                    batch: 1,
+                    first: 3,
+                    count: 6
+                },
+            ]
+        );
+        let draws = gather(&src, [], 3, &mut out, &mut scratch);
+        assert!(draws.is_empty() && out.is_empty());
+    }
 
     #[test]
     fn packs_identity_block_and_bone_bases() {
