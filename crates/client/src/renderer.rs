@@ -418,6 +418,9 @@ pub struct Renderer {
     /// The frozen set and the prop flags it was computed with, so `Locked`
     /// holds props still too.
     locked: Option<(Visible, Vec<bool>)>,
+    /// Last frame's mode, so `Locked` and `Off` skip re-uploading indices
+    /// that cannot have changed.
+    last_cull: Option<CullMode>,
     vis_counts: VisCounts,
     vm_pass: VmPass,
     dynamic: DynamicPass,
@@ -943,6 +946,7 @@ impl Renderer {
             gathered: Vec::new(),
             gather_scratch: Vec::new(),
             locked: None,
+            last_cull: None,
             vis_counts: VisCounts::default(),
             vm_pass,
             dynamic,
@@ -1277,8 +1281,13 @@ impl Renderer {
             &mut self.gathered,
             &mut self.gather_scratch,
         );
-        self.queue
-            .write_buffer(&self.index_buf, 0, bytemuck::cast_slice(&self.gathered));
+        // in Locked and Off the gathered set is the same every frame
+        let unchanged = frame.cull != CullMode::On && self.last_cull == Some(frame.cull);
+        if !unchanged {
+            self.queue
+                .write_buffer(&self.index_buf, 0, bytemuck::cast_slice(&self.gathered));
+        }
+        self.last_cull = Some(frame.cull);
         let cell_total = self.vis.cell_count();
         self.vis_counts = VisCounts {
             mode: Some(frame.cull),

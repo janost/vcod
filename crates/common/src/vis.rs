@@ -253,6 +253,10 @@ impl WorldVis {
         if depth > 64 {
             return;
         }
+        // a portal graph that revisits cells cannot cost more than this
+        if w.vis.stats.cells_visited > 8 * self.cells.len() {
+            return;
+        }
         w.vis.cells[cell] = true;
         w.vis.stats.cells_visited += 1;
         let c = self.cells[cell];
@@ -275,26 +279,28 @@ impl WorldVis {
             }
             let verts =
                 &self.portal_verts[p.first_vert as usize..(p.first_vert + p.vert_count) as usize];
+            let mut poly = verts.to_vec();
+            for &plane in &frustum.planes {
+                poly = clip_polygon(&poly, plane);
+                if poly.len() < 3 {
+                    break;
+                }
+            }
+            if poly.len() < 3 {
+                continue;
+            }
             let mut child;
             // within a unit of the plane the polygon degenerates: keep the parent
             let next = if side >= -1.0 {
                 frustum
             } else {
-                let mut poly = verts.to_vec();
-                for &plane in &frustum.planes {
-                    poly = clip_polygon(&poly, plane);
-                    if poly.len() < 3 {
-                        break;
-                    }
-                }
-                if poly.len() < 3 {
-                    continue;
-                }
                 child = Frustum::from_polygon(w.eye, &poly);
-                // every edge plane runs through the eye, so the cone on its own
-                // also reaches backwards; the camera's planes keep the child a
-                // subset of the frustum pass instead of a differently-shaped one
-                child.planes.extend_from_slice(&w.camera.planes);
+                // every edge plane runs through the eye, so the cone reaches
+                // backwards and past the far plane; the camera's near and far
+                // planes cap it, its side planes already contain it
+                child
+                    .planes
+                    .extend_from_slice(w.camera.planes.get(4..6).unwrap_or_default());
                 &child
             };
             w.on_stack[pi] = true;
@@ -367,10 +373,13 @@ impl WorldVis {
     }
 }
 
+/// Stock trees are a few levels deep; past this the file is hostile.
+const MAX_TREE_DEPTH: usize = 128;
+
 /// Bottom-up bounds and preorder ends; returns the index after the subtree.
 /// Guards against a hostile forest two ways: an out-of-range or repeated
-/// (`tree_end[i] != 0`) child is skipped, and `depth` caps recursion at
-/// `nodes.len()` so a `child_count: 1` chain cannot overflow the stack.
+/// (`tree_end[i] != 0`) child is skipped, and `depth` stops the recursion at
+/// `MAX_TREE_DEPTH` so a `child_count: 1` chain cannot overflow the stack.
 fn walk_bounds(
     i: usize,
     depth: usize,
@@ -379,7 +388,7 @@ fn walk_bounds(
     node_bounds: &mut [(Vec3, Vec3)],
     tree_end: &mut [u32],
 ) -> usize {
-    if depth > nodes.len() {
+    if depth > MAX_TREE_DEPTH {
         return i;
     }
     let node = nodes[i];
@@ -414,7 +423,8 @@ pub fn two_cell_world() -> Bsp {
         normal: [0.0, 0.0, 1.0],
         color: [255; 4],
     };
-    // soup 0: A, soup 1: B, soup 2: A's cull group, up on the +Y wall
+    // three triangles: A's, B's, and A's cull group up on the +Y wall. `soups`
+    // reorders them, so soup 0 is the cull group, soup 1 is A, soup 2 is B
     let tri = |x: f32, y: f32| {
         [
             vert(x, y, -10.0),
@@ -603,10 +613,7 @@ mod tests {
         // A 4-node tree in preorder: root (child_count: 2, no soups of its
         // own) over child A (child_count: 1, no soups of its own) and leaf
         // child B; A's single child is a leaf grandchild carrying A's soup.
-        // This is the minimal shape where mark_tree's `i = self.tree_end[i]`
-        // skip actually saves a test: a flat root+2-leaves tree can't show
-        // it, since testing a sibling leaf can't be skipped without first
-        // testing it (see the fix report on this commit).
+        // a flat tree can't skip a sibling without testing it; the grandchild shows the skip
         bsp.aabb_nodes = vec![
             AabbNode {
                 first_soup: 0,
@@ -659,6 +666,31 @@ mod tests {
         // root(1) + A(2, fails) + B(3) = 3: A's failure jumps straight to
         // its tree_end (3), so its grandchild at index 2 is never tested.
         assert_eq!(v.stats.nodes_tested, 3);
+    }
+
+    #[test]
+    fn a_deep_child_chain_stops_at_the_depth_cap() {
+        use crate::bsp::AabbNode;
+        let mut bsp = two_cell_world();
+        let mut chain = vec![
+            AabbNode {
+                first_soup: 1,
+                soup_count: 0,
+                child_count: 1,
+            };
+            200
+        ];
+        chain[199].child_count = 0;
+        bsp.aabb_nodes = chain;
+        bsp.cells[0].first_aabb = 0;
+        bsp.cells[1].first_aabb = 0;
+        let vis = WorldVis::build(&bsp);
+        assert_ne!(vis.tree_end[0], 0, "the root was walked");
+        assert_eq!(
+            vis.tree_end[MAX_TREE_DEPTH + 1],
+            0,
+            "the walk stopped at the cap"
+        );
     }
 
     #[test]
