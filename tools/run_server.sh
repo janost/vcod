@@ -39,4 +39,5 @@ exec "$BIN" \
     +set net_port "${PORT:-28960}" \
     +set sv_maxclients 8 \
     +set sv_pure 0 \
+    +set sv_allowDownload 1 \
     +map "$MAP"
