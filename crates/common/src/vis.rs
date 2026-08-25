@@ -491,63 +491,67 @@ mod tests {
     }
 
     #[test]
-    fn nested_tree_unions_bounds_and_tests_every_sibling_once() {
+    fn nested_tree_unions_bounds_and_skips_a_culled_grandchild() {
         use crate::bsp::AabbNode;
         let mut bsp = two_cell_world();
-        // A 3-node tree: root (no soups of its own) over two leaf children,
-        // where the fixture's aabb_nodes previously only ever had child_count
-        // 0, never exercising walk_bounds's child loop or mark_tree's skip.
+        // A 4-node tree in preorder: root (child_count: 2, no soups of its
+        // own) over child A (child_count: 1, no soups of its own) and leaf
+        // child B; A's single child is a leaf grandchild carrying A's soup.
+        // This is the minimal shape where mark_tree's `i = self.tree_end[i]`
+        // skip actually saves a test: a flat root+2-leaves tree can't show
+        // it, since testing a sibling leaf can't be skipped without first
+        // testing it (see the fix report on this commit).
         bsp.aabb_nodes = vec![
             AabbNode {
                 first_soup: 0,
                 soup_count: 0,
                 child_count: 2,
-            },
+            }, // 0: root
+            AabbNode {
+                first_soup: 0,
+                soup_count: 0,
+                child_count: 1,
+            }, // 1: A
             AabbNode {
                 first_soup: 1,
                 soup_count: 1,
                 child_count: 0,
-            },
+            }, // 2: A's grandchild
             AabbNode {
                 first_soup: 2,
                 soup_count: 1,
                 child_count: 0,
-            },
+            }, // 3: B
         ];
         bsp.cells[0].first_aabb = 0;
         bsp.cells[1].first_aabb = 0;
         let vis = WorldVis::build(&bsp);
-        assert_eq!(vis.tree_end, vec![3, 2, 3]);
-        let (a_lo, a_hi) = vis.node_bounds[1];
-        let (b_lo, b_hi) = vis.node_bounds[2];
+        assert_eq!(vis.tree_end, vec![4, 3, 3, 4]);
         assert_eq!(
             vis.node_bounds[0],
-            (a_lo.min(b_lo), a_hi.max(b_hi)),
-            "root's bounds are the union of its children's"
+            union(vis.node_bounds[1], vis.node_bounds[3]),
+            "root's bounds are the union of A's and B's"
+        );
+        let (a_lo, a_hi) = vis.node_bounds[1];
+        let (g_lo, g_hi) = vis.node_bounds[2];
+        assert!(
+            a_lo.cmple(g_lo).all() && a_hi.cmpge(g_hi).all(),
+            "A's bounds include its grandchild's"
         );
 
-        // near=4, far=100 from x=-90 reaches child A (closest point x=-50,
-        // distance 40) but not child B (closest point x=50, distance 140);
-        // the root's own union bounds still touch A, so it is hit too.
-        let eye = Vec3::new(-90.0, 0.0, 0.0);
-        let view = glam::camera::rh::view::look_to_mat4(eye, Vec3::X, Vec3::Z);
-        let proj =
-            glam::camera::rh::proj::directx::perspective(90f32.to_radians(), 1.0, 4.0, 100.0);
-        let f = Frustum::from_view_proj(proj * view);
-
+        // eye between A and B, facing B: A (x -50..-40) is behind the
+        // camera and fails outright, B (x 50..60) is ahead and passes.
+        let f = frustum_at(Vec3::new(40.0, 0.0, 0.0), Vec3::X);
         let mut v = Visible {
             soups: vec![false; vis.soup_count()],
             cells: vec![false; vis.cell_count()],
             stats: VisStats::default(),
         };
-        assert!(vis.mark_tree(0, &f, &mut v), "root itself is hit");
-        assert!(v.soups[1], "child A is inside the shortened far plane");
-        assert!(!v.soups[2], "child B is past it");
-        // Root, A and B are each visited once: the preorder range is
-        // contiguous and a failing leaf's own tree_end is just itself + 1,
-        // so it can't skip past its sibling. The skip only pays off for a
-        // failing internal node with descendants beyond it (mp_pavlov's
-        // real trees have those; this fixture keeps the two-node case).
+        assert!(vis.mark_tree(0, &f, &mut v), "root is hit through B");
+        assert!(!v.soups[1], "A's soup, behind the eye, is not visible");
+        assert!(v.soups[2], "B's soup is visible");
+        // root(1) + A(2, fails) + B(3) = 3: A's failure jumps straight to
+        // its tree_end (3), so its grandchild at index 2 is never tested.
         assert_eq!(v.stats.nodes_tested, 3);
     }
 
