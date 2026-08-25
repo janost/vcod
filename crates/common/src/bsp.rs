@@ -16,6 +16,14 @@ const LUMP_DRAWVERTS: usize = 7;
 const LUMP_DRAWINDICES: usize = 8;
 const LUMP_MODELS: usize = 27;
 const LUMP_ENTITIES: usize = 29;
+const LUMP_CULL_GROUPS: usize = 9;
+const LUMP_CULL_INDICES: usize = 10;
+const LUMP_PORTAL_VERTS: usize = 11;
+const LUMP_AABB_NODES: usize = 16;
+const LUMP_CELLS: usize = 17;
+const LUMP_PORTALS: usize = 18;
+const LUMP_NODES: usize = 20;
+const LUMP_LEAFS: usize = 21;
 
 #[derive(Debug)]
 pub struct Material {
@@ -83,6 +91,60 @@ pub struct Model {
     pub num_brushes: u32,
 }
 
+/// Layouts: docs/research/bsp-ibsp59-format.md, "Visibility and tree lumps".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CullGroup {
+    pub mins: [f32; 3],
+    pub maxs: [f32; 3],
+    pub first_soup: u32,
+    pub soup_count: u32,
+}
+
+/// Children follow their parent in preorder; a node carries no bounds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AabbNode {
+    pub first_soup: u32,
+    pub soup_count: u32,
+    pub child_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cell {
+    pub mins: [f32; 3],
+    pub maxs: [f32; 3],
+    pub first_aabb: u32,
+    pub first_portal: u32,
+    pub portal_count: u32,
+    pub first_cull_index: u32,
+    pub cull_count: u32,
+}
+
+/// `plane` faces out of the owning cell, into `cell`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Portal {
+    pub plane: u32,
+    pub cell: u32,
+    pub first_vert: u32,
+    pub vert_count: u32,
+}
+
+/// `children[0]` is the front side; a negative child is leaf `-(c + 1)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Node {
+    pub plane: u32,
+    pub children: [i32; 2],
+    pub mins: [i32; 3],
+    pub maxs: [i32; 3],
+}
+
+/// The other seven ints (area, leaf surface/brush/light ranges) are skipped.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Leaf {
+    pub cluster: i32,
+    /// -1 in solid leafs.
+    pub cell: i32,
+}
+
 #[derive(Debug)]
 pub struct Bsp {
     pub materials: Vec<Material>,
@@ -95,12 +157,46 @@ pub struct Bsp {
     pub brush_sides: Vec<BrushSide>,
     pub brushes: Vec<Brush>,
     pub models: Vec<Model>,
+    pub cull_groups: Vec<CullGroup>,
+    pub cull_indices: Vec<u32>,
+    pub portal_verts: Vec<[f32; 3]>,
+    pub aabb_nodes: Vec<AabbNode>,
+    pub cells: Vec<Cell>,
+    pub portals: Vec<Portal>,
+    pub nodes: Vec<Node>,
+    pub leafs: Vec<Leaf>,
 }
 
 fn lump<'a>(data: &'a [u8], dir: &[(u32, u32)], i: usize) -> Result<&'a [u8]> {
     let (len, off) = (dir[i].0 as usize, dir[i].1 as usize);
     ensure!(off + len <= data.len(), "lump {i} out of bounds");
     Ok(&data[off..off + len])
+}
+
+fn le_u32(b: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes(b[off..off + 4].try_into().unwrap())
+}
+
+fn le_i32(b: &[u8], off: usize) -> i32 {
+    i32::from_le_bytes(b[off..off + 4].try_into().unwrap())
+}
+
+fn le_f32(b: &[u8], off: usize) -> f32 {
+    f32::from_le_bytes(b[off..off + 4].try_into().unwrap())
+}
+
+fn le_vec3(b: &[u8], off: usize) -> [f32; 3] {
+    [le_f32(b, off), le_f32(b, off + 4), le_f32(b, off + 8)]
+}
+
+/// Fixed-size records; a lump length that is not a multiple is an error.
+fn records<T>(lump: &[u8], size: usize, name: &str, f: impl Fn(&[u8]) -> T) -> Result<Vec<T>> {
+    ensure!(
+        lump.len().is_multiple_of(size),
+        "{name} lump size {} not divisible by {size}",
+        lump.len()
+    );
+    Ok(lump.chunks_exact(size).map(f).collect())
 }
 
 pub fn parse(data: &[u8]) -> Result<Bsp> {
@@ -366,6 +462,132 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
         .trim_end_matches('\0')
         .to_string();
 
+    let cull_groups = records(
+        lump(data, &dir, LUMP_CULL_GROUPS)?,
+        32,
+        "cull groups",
+        |b| CullGroup {
+            mins: le_vec3(b, 0),
+            maxs: le_vec3(b, 12),
+            first_soup: le_u32(b, 24),
+            soup_count: le_u32(b, 28),
+        },
+    )?;
+    let cull_indices = records(
+        lump(data, &dir, LUMP_CULL_INDICES)?,
+        4,
+        "cull indices",
+        |b| le_u32(b, 0),
+    )?;
+    let portal_verts = records(
+        lump(data, &dir, LUMP_PORTAL_VERTS)?,
+        12,
+        "portal verts",
+        |b| le_vec3(b, 0),
+    )?;
+    let aabb_nodes = records(lump(data, &dir, LUMP_AABB_NODES)?, 12, "aabb nodes", |b| {
+        AabbNode {
+            first_soup: le_u32(b, 0),
+            soup_count: le_u32(b, 4),
+            child_count: le_u32(b, 8),
+        }
+    })?;
+    let cells = records(lump(data, &dir, LUMP_CELLS)?, 52, "cells", |b| Cell {
+        mins: le_vec3(b, 0),
+        maxs: le_vec3(b, 12),
+        first_aabb: le_u32(b, 24),
+        first_portal: le_u32(b, 28),
+        portal_count: le_u32(b, 32),
+        first_cull_index: le_u32(b, 36),
+        cull_count: le_u32(b, 40),
+    })?;
+    let portals = records(lump(data, &dir, LUMP_PORTALS)?, 16, "portals", |b| Portal {
+        plane: le_u32(b, 0),
+        cell: le_u32(b, 4),
+        first_vert: le_u32(b, 8),
+        vert_count: le_u32(b, 12),
+    })?;
+    let nodes = records(lump(data, &dir, LUMP_NODES)?, 36, "nodes", |b| Node {
+        plane: le_u32(b, 0),
+        children: [le_i32(b, 4), le_i32(b, 8)],
+        mins: [le_i32(b, 12), le_i32(b, 16), le_i32(b, 20)],
+        maxs: [le_i32(b, 24), le_i32(b, 28), le_i32(b, 32)],
+    })?;
+    let leafs = records(lump(data, &dir, LUMP_LEAFS)?, 36, "leafs", |b| Leaf {
+        cluster: le_i32(b, 0),
+        cell: le_i32(b, 24),
+    })?;
+
+    let soup_count = soups.len() as u64;
+    let in_soups = |first: u32, count: u32| first as u64 + count as u64 <= soup_count;
+    for (i, g) in cull_groups.iter().enumerate() {
+        ensure!(
+            in_soups(g.first_soup, g.soup_count),
+            "cull group {i} soup range out of bounds"
+        );
+    }
+    for (i, &c) in cull_indices.iter().enumerate() {
+        ensure!(
+            (c as usize) < cull_groups.len(),
+            "cull index {i} out of bounds"
+        );
+    }
+    for (i, n) in aabb_nodes.iter().enumerate() {
+        ensure!(
+            in_soups(n.first_soup, n.soup_count),
+            "aabb node {i} soup range out of bounds"
+        );
+        ensure!(
+            i as u64 + 1 + n.child_count as u64 <= aabb_nodes.len() as u64,
+            "aabb node {i} child count out of bounds"
+        );
+    }
+    for (i, p) in portals.iter().enumerate() {
+        ensure!(
+            (p.plane as usize) < planes.len(),
+            "portal {i} plane out of bounds"
+        );
+        ensure!(
+            (p.cell as usize) < cells.len(),
+            "portal {i} cell out of bounds"
+        );
+        ensure!(
+            p.first_vert as u64 + p.vert_count as u64 <= portal_verts.len() as u64,
+            "portal {i} vertex range out of bounds"
+        );
+    }
+    for (i, c) in cells.iter().enumerate() {
+        ensure!(
+            (c.first_aabb as usize) < aabb_nodes.len() || aabb_nodes.is_empty(),
+            "cell {i} aabb tree out of bounds"
+        );
+        ensure!(
+            c.first_portal as u64 + c.portal_count as u64 <= portals.len() as u64,
+            "cell {i} portal range out of bounds"
+        );
+        ensure!(
+            c.first_cull_index as u64 + c.cull_count as u64 <= cull_indices.len() as u64,
+            "cell {i} cull index range out of bounds"
+        );
+    }
+    for (i, n) in nodes.iter().enumerate() {
+        ensure!(
+            (n.plane as usize) < planes.len(),
+            "node {i} plane out of bounds"
+        );
+        for c in n.children {
+            let ok = if c >= 0 {
+                (c as usize) < nodes.len()
+            } else {
+                ((-(c as i64) - 1) as usize) < leafs.len()
+            };
+            ensure!(ok, "node {i} child {c} out of bounds");
+        }
+    }
+    for (i, l) in leafs.iter().enumerate() {
+        ensure!(l.cell < cells.len() as i32, "leaf {i} cell out of bounds");
+    }
+
     Ok(Bsp {
         materials,
         lightmaps,
@@ -377,6 +599,14 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
         brush_sides,
         brushes,
         models,
+        cull_groups,
+        cull_indices,
+        portal_verts,
+        aabb_nodes,
+        cells,
+        portals,
+        nodes,
+        leafs,
     })
 }
 
@@ -717,5 +947,86 @@ mod tests {
                 assert!((side.plane_or_dist as usize) < bsp.planes.len());
             }
         }
+    }
+
+    #[test]
+    fn parses_visibility_lumps_in_mp_pavlov() {
+        let Some(data) = crate::testing::real_bsp() else {
+            return;
+        };
+        let bsp = parse(&data).unwrap();
+        assert_eq!(bsp.cull_groups.len(), 122);
+        assert_eq!(bsp.cull_indices.len(), 125);
+        assert_eq!(bsp.portal_verts.len(), 568);
+        assert_eq!(bsp.aabb_nodes.len(), 335);
+        assert_eq!(bsp.cells.len(), 20);
+        assert_eq!(bsp.portals.len(), 124);
+        assert_eq!(bsp.nodes.len(), 1752);
+        assert_eq!(bsp.leafs.len(), 1788);
+        // cell ranges chain: portals and cull indices are laid out cell by cell
+        for w in bsp.cells.windows(2) {
+            assert_eq!(w[0].first_portal + w[0].portal_count, w[1].first_portal);
+            assert_eq!(
+                w[0].first_cull_index + w[0].cull_count,
+                w[1].first_cull_index
+            );
+        }
+        let last = bsp.cells.last().unwrap();
+        assert_eq!(last.first_portal + last.portal_count, 124);
+        assert_eq!(last.first_cull_index + last.cull_count, 125);
+        // the soup lump is [cull-group soups][cell-tree soups]
+        let cg_end = bsp
+            .cull_groups
+            .iter()
+            .map(|g| g.first_soup + g.soup_count)
+            .max()
+            .unwrap();
+        assert_eq!(cg_end, 437);
+        assert_eq!(bsp.aabb_nodes[0].first_soup, 437);
+        // node 0 is cell 0's own root, not the whole forest: its range covers only
+        // cell 0's share (1873 of the 2188 cell-tree soups; the other 19 cells'
+        // roots, found via each cell's first_aabb, chain to cover the rest)
+        assert_eq!(
+            bsp.aabb_nodes[0].first_soup + bsp.aabb_nodes[0].soup_count,
+            2310
+        );
+        // root node of the tree splits on a plane and both children exist
+        assert!(bsp.nodes[0].children.iter().all(|&c| c != 0));
+        assert_eq!(bsp.leafs[0].cell, 0);
+        assert_eq!(
+            bsp.portals[0],
+            Portal {
+                plane: 58,
+                cell: 14,
+                first_vert: 72,
+                vert_count: 4
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_a_truncated_cells_lump() {
+        let Some(mut data) = crate::testing::real_bsp() else {
+            return;
+        };
+        // shorten lump 17 by one byte: 8 + 17 * 8 is its length word
+        let off = 8 + 17 * 8;
+        let len = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+        data[off..off + 4].copy_from_slice(&(len - 1).to_le_bytes());
+        let err = parse(&data).unwrap_err().to_string();
+        assert!(err.contains("cells"), "{err}");
+    }
+
+    #[test]
+    fn rejects_a_portal_past_the_vertex_lump() {
+        let Some(mut data) = crate::testing::real_bsp() else {
+            return;
+        };
+        // lump 18 offset; portal 0's first_vert is its third u32
+        let dir = 8 + 18 * 8;
+        let off = u32::from_le_bytes(data[dir + 4..dir + 8].try_into().unwrap()) as usize;
+        data[off + 8..off + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+        let err = parse(&data).unwrap_err().to_string();
+        assert!(err.contains("portal"), "{err}");
     }
 }

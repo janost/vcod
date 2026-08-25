@@ -385,6 +385,14 @@ pub fn test_world(extra: &[(Vec3, Vec3)]) -> CollisionWorld {
                 first_brush: 0,
                 num_brushes: n,
             }],
+            cull_groups: vec![],
+            cull_indices: vec![],
+            portal_verts: vec![],
+            aabb_nodes: vec![],
+            cells: vec![],
+            portals: vec![],
+            nodes: vec![],
+            leafs: vec![],
         },
         &[],
     )
@@ -477,6 +485,14 @@ mod tests {
                 first_brush: 0,
                 num_brushes: 1,
             }],
+            cull_groups: vec![],
+            cull_indices: vec![],
+            portal_verts: vec![],
+            aabb_nodes: vec![],
+            cells: vec![],
+            portals: vec![],
+            nodes: vec![],
+            leafs: vec![],
         }
     }
 
@@ -598,6 +614,14 @@ mod tests {
                 first_brush: 0,
                 num_brushes: 0,
             }],
+            cull_groups: vec![],
+            cull_indices: vec![],
+            portal_verts: vec![],
+            aabb_nodes: vec![],
+            cells: vec![],
+            portals: vec![],
+            nodes: vec![],
+            leafs: vec![],
         }
     }
 

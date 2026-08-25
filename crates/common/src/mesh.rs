@@ -149,6 +149,14 @@ mod tests {
             brush_sides: vec![],
             brushes: vec![],
             models: vec![],
+            cull_groups: vec![],
+            cull_indices: vec![],
+            portal_verts: vec![],
+            aabb_nodes: vec![],
+            cells: vec![],
+            portals: vec![],
+            nodes: vec![],
+            leafs: vec![],
         }
     }
 

@@ -24,6 +24,14 @@ The directory entry is `(length, offset)`, the opposite of Q3's `(offset, length
 | 6 | triangle soups | 16 | 2625 |
 | 7 | draw verts | 44 | 94886 |
 | 8 | draw indices | 2 | 183840 |
+| 9 | cull groups | 32 | 122 |
+| 10 | cull group indices | 4 | 125 |
+| 11 | portal vertices | 12 | 568 |
+| 16 | AABB tree nodes | 12 | 335 |
+| 17 | cells | 52 | 20 |
+| 18 | portals | 16 | 124 |
+| 20 | BSP nodes | 36 | 1752 |
+| 21 | BSP leafs | 36 | 1788 |
 | 27 | models | 48 | 35 |
 | 29 | entities | text | one block per entity |
 
