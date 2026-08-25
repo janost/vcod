@@ -12,10 +12,14 @@ use glam::Vec3;
 pub const CONTENTS_SOLID: u32 = 0x1;
 const CONTENTS_PLAYERCLIP: u32 = 0x10000;
 const CONTENTS_SKY: u32 = 0x800;
+/// Census-proven water bit: docs/research/bsp-ibsp59-format.md, "Content flags".
+pub const CONTENTS_WATER: u32 = 0x20;
 
 /// A brush as clip planes: point p is inside iff n·p <= d for every plane.
 pub struct BrushPlanes {
     pub planes: Vec<(Vec3, f32)>,
+    /// Lump-0 surface flags of the brush's material (SURF_LADDER and friends).
+    pub surface_flags: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -29,6 +33,7 @@ pub struct Trace {
     pub fraction: f32, // 1.0 = made it to end
     pub endpos: Vec3,
     pub normal: Vec3, // valid when fraction < 1.0
+    pub surface_flags: u32,
     pub startsolid: bool,
     pub allsolid: bool,
 }
@@ -36,7 +41,13 @@ pub struct Trace {
 pub const SURFACE_CLIP_EPSILON: f32 = 0.125;
 
 /// Q3 `cm_trace.c` `CM_TraceThroughBrush`, on planes already expanded by the box.
-fn clip_segment(trace: &mut Trace, start: Vec3, end: Vec3, planes: &[(Vec3, f32)]) {
+fn clip_segment(
+    trace: &mut Trace,
+    start: Vec3,
+    end: Vec3,
+    planes: &[(Vec3, f32)],
+    surface_flags: u32,
+) {
     let mut enter = -1.0f32;
     let mut leave = 1.0f32;
     let mut clip_normal = Vec3::ZERO;
@@ -80,6 +91,7 @@ fn clip_segment(trace: &mut Trace, start: Vec3, end: Vec3, planes: &[(Vec3, f32)
         if !getout {
             trace.allsolid = true;
             trace.fraction = 0.0;
+            trace.surface_flags = 0;
         }
         return;
     }
@@ -88,6 +100,7 @@ fn clip_segment(trace: &mut Trace, start: Vec3, end: Vec3, planes: &[(Vec3, f32)
     if enter <= leave && enter > -1.0 && enter < trace.fraction {
         trace.fraction = enter.max(0.0);
         trace.normal = clip_normal;
+        trace.surface_flags = surface_flags;
     }
 }
 
@@ -153,6 +166,14 @@ pub struct CollisionWorld {
     pub tris: Vec<[Vec3; 3]>,
     nodes: Vec<BvhNode>,
     prims: Vec<(Prim, Vec3, Vec3)>,
+    water: Vec<WaterVolume>,
+}
+
+/// A water brush as clip planes plus its axial bounds for the cheap reject.
+struct WaterVolume {
+    planes: Vec<(Vec3, f32)>,
+    lo: Vec3,
+    hi: Vec3,
 }
 
 const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
@@ -173,41 +194,106 @@ impl CollisionWorld {
     /// `extra_tris` are world-space triangles from outside the BSP (the props'
     /// collision meshes, `props::collision_tris`); they get the same treatment
     /// as soup triangles.
+    ///
+    /// Every model's brushes enter (submodels translated by the entity origin
+    /// from the entities lump), except those of `trigger*` entities: their
+    /// brushes carry plain CONTENTS_SOLID in the lump, but retail leaves them
+    /// hollow to movement. Render triangles come from model 0 only - submodel
+    /// meshes are local-space and their brush hulls replace them.
     pub fn build(bsp: &Bsp, extra_tris: &[[Vec3; 3]]) -> Self {
         let mut brushes = Vec::new();
         let mut prims = Vec::new();
+        let mut water = Vec::new();
 
-        let model = &bsp.models[0];
-        let brush_range =
-            model.first_brush as usize..(model.first_brush + model.num_brushes) as usize;
-        for b in &bsp.brushes[brush_range] {
-            let content = bsp.materials[b.material as usize].content_flags;
-            if content & (CONTENTS_SOLID | CONTENTS_PLAYERCLIP) == 0 {
+        #[derive(Clone, Copy)]
+        struct Placement {
+            origin: Vec3,
+            trigger: bool,
+        }
+        let mut placements = vec![
+            (Placement {
+                origin: Vec3::ZERO,
+                trigger: false,
+            });
+            bsp.models.len()
+        ];
+        for block in crate::bsp::entity_blocks(&bsp.entities) {
+            let Some(idx) = block
+                .get("model")
+                .and_then(|m| m.strip_prefix('*'))
+                .and_then(|n| n.parse::<usize>().ok())
+            else {
+                continue;
+            };
+            if idx == 0 || idx >= placements.len() {
                 continue;
             }
-            let sides = &bsp.brush_sides[b.first_side as usize..][..b.num_sides as usize];
-            let mut planes = Vec::with_capacity(sides.len());
-            let mut lo = Vec3::ZERO;
-            let mut hi = Vec3::ZERO;
-            for axis in 0..3 {
-                let axis_lo = f32::from_bits(sides[axis * 2].plane_or_dist);
-                let axis_hi = f32::from_bits(sides[axis * 2 + 1].plane_or_dist);
-                planes.push((-AXES[axis], -axis_lo));
-                planes.push((AXES[axis], axis_hi));
-                lo[axis] = axis_lo;
-                hi[axis] = axis_hi;
+            let p = &mut placements[idx];
+            if let Some([x, y, z]) = block.get("origin").and_then(|o| crate::bsp::parse_vec3(o)) {
+                p.origin = Vec3::new(x, y, z);
             }
-            for s in &sides[6..] {
-                let p = &bsp.planes[s.plane_or_dist as usize];
-                planes.push((Vec3::from_array(p.normal), p.dist));
+            if block
+                .get("classname")
+                .is_some_and(|c| c.starts_with("trigger"))
+            {
+                p.trigger = true;
             }
-            let idx = brushes.len() as u32;
-            brushes.push(BrushPlanes { planes });
-            prims.push((Prim::Brush(idx), lo, hi));
+        }
+
+        for (mi, model) in bsp.models.iter().enumerate() {
+            let placement = &placements[mi];
+            let brush_range =
+                model.first_brush as usize..(model.first_brush + model.num_brushes) as usize;
+            for b in &bsp.brushes[brush_range] {
+                let mat = &bsp.materials[b.material as usize];
+                if placement.trigger
+                    || mat.content_flags & (CONTENTS_SOLID | CONTENTS_PLAYERCLIP | CONTENTS_WATER)
+                        == 0
+                {
+                    continue;
+                }
+                let sides = &bsp.brush_sides[b.first_side as usize..][..b.num_sides as usize];
+                let mut planes = Vec::with_capacity(sides.len());
+                let mut lo = Vec3::ZERO;
+                let mut hi = Vec3::ZERO;
+                for axis in 0..3 {
+                    let axis_lo =
+                        f32::from_bits(sides[axis * 2].plane_or_dist) + placement.origin[axis];
+                    let axis_hi =
+                        f32::from_bits(sides[axis * 2 + 1].plane_or_dist) + placement.origin[axis];
+                    planes.push((-AXES[axis], -axis_lo));
+                    planes.push((AXES[axis], axis_hi));
+                    lo[axis] = axis_lo;
+                    hi[axis] = axis_hi;
+                }
+                for s in &sides[6..] {
+                    let p = &bsp.planes[s.plane_or_dist as usize];
+                    let n = Vec3::from_array(p.normal);
+                    planes.push((n, p.dist + n.dot(placement.origin)));
+                }
+                if mat.content_flags & CONTENTS_WATER != 0 {
+                    water.push(WaterVolume {
+                        planes: planes.clone(),
+                        lo,
+                        hi,
+                    });
+                }
+                if mat.content_flags & (CONTENTS_SOLID | CONTENTS_PLAYERCLIP) != 0 {
+                    let idx = brushes.len() as u32;
+                    brushes.push(BrushPlanes {
+                        planes,
+                        surface_flags: mat.surface_flags,
+                    });
+                    prims.push((Prim::Brush(idx), lo, hi));
+                }
+            }
         }
 
         let mut tris = Vec::new();
-        for soup in &bsp.soups {
+        let world_model = &bsp.models[0];
+        let soup_range = world_model.first_soup as usize
+            ..(world_model.first_soup + world_model.num_soups) as usize;
+        for soup in &bsp.soups[soup_range] {
             let content = bsp.materials[soup.material as usize].content_flags;
             if content & CONTENTS_SKY != 0 {
                 continue;
@@ -234,7 +320,21 @@ impl CollisionWorld {
             tris,
             nodes,
             prims,
+            water,
         }
+    }
+
+    /// Fluid contents at a point; `CONTENTS_WATER` when inside any water brush.
+    pub fn point_contents(&self, p: Vec3) -> u32 {
+        for v in &self.water {
+            if p.cmple(v.hi).all()
+                && p.cmpge(v.lo).all()
+                && v.planes.iter().all(|&(n, d)| n.dot(p) <= d)
+            {
+                return CONTENTS_WATER;
+            }
+        }
+        0
     }
 
     /// `mins == maxs == ZERO` is a ray trace.
@@ -243,6 +343,7 @@ impl CollisionWorld {
             fraction: 1.0,
             endpos: end,
             normal: Vec3::ZERO,
+            surface_flags: 0,
             startsolid: false,
             allsolid: false,
         };
@@ -280,12 +381,13 @@ impl CollisionWorld {
             for (prim, _, _) in &self.prims[first..first + node.count as usize] {
                 match *prim {
                     Prim::Brush(b) => {
-                        expand_brush(&self.brushes[b as usize].planes, mins, maxs, scratch);
-                        clip_segment(trace, start, end, scratch);
+                        let brush = &self.brushes[b as usize];
+                        expand_brush(&brush.planes, mins, maxs, scratch);
+                        clip_segment(trace, start, end, scratch, brush.surface_flags);
                     }
                     Prim::Tri(t) => {
                         triangle_planes(&self.tris[t as usize], mins, maxs, scratch);
-                        clip_segment(trace, start, end, scratch);
+                        clip_segment(trace, start, end, scratch, 0);
                     }
                 }
             }
@@ -518,7 +620,7 @@ mod tests {
                 mins: [-64.0, -64.0, -16.0],
                 maxs: [64.0, 64.0, 0.0],
                 first_soup: 0,
-                num_soups: 0,
+                num_soups: 1,
                 first_brush: 0,
                 num_brushes: 1,
             }],
@@ -593,8 +695,9 @@ mod tests {
         };
         let bsp = crate::bsp::parse(&data).unwrap();
         let world = CollisionWorld::build(&bsp, &[]);
-        // solid+playerclip subset of model 0's 7575 brushes
-        assert!(!world.brushes.is_empty() && world.brushes.len() <= 7575);
+        // model 0's 7575 solid+playerclip brushes plus its two stray
+        // non-trigger submodel clips; the 32 trigger brushes stay hollow
+        assert_eq!(world.brushes.len(), 7577);
         assert!(world.tris.len() > 10_000);
         // a query around a known spawn; only holds if candidates() walks from the root
         let mut out = Vec::new();
@@ -647,7 +750,7 @@ mod tests {
                 mins: [0.0, 0.0, 0.0],
                 maxs: [0.0, 0.0, 0.0],
                 first_soup: 0,
-                num_soups: 0,
+                num_soups: N as u32,
                 first_brush: 0,
                 num_brushes: 0,
             }],
@@ -790,6 +893,7 @@ mod tests {
             fraction: 1.0,
             endpos: end,
             normal: Vec3::ZERO,
+            surface_flags: 0,
             startsolid: false,
             allsolid: false,
         };
@@ -797,12 +901,13 @@ mod tests {
         for (prim, _, _) in &world.prims {
             match *prim {
                 Prim::Brush(i) => {
-                    expand_brush(&world.brushes[i as usize].planes, mins, maxs, &mut scratch);
-                    clip_segment(&mut trace, start, end, &scratch);
+                    let brush = &world.brushes[i as usize];
+                    expand_brush(&brush.planes, mins, maxs, &mut scratch);
+                    clip_segment(&mut trace, start, end, &scratch, brush.surface_flags);
                 }
                 Prim::Tri(i) => {
                     triangle_planes(&world.tris[i as usize], mins, maxs, &mut scratch);
-                    clip_segment(&mut trace, start, end, &scratch);
+                    clip_segment(&mut trace, start, end, &scratch, 0);
                 }
             }
         }
@@ -898,5 +1003,374 @@ mod tests {
             hits += (a.fraction < 1.0) as usize;
         }
         assert!(hits > 20, "{hits}");
+    }
+
+    /// Model 0: floor z -16..0 over +-1024. Model 1: a door brush local
+    /// (-8..8)^2 x 0..64 plus a stray render triangle at local x -60..-20,
+    /// placed by an entity at (200, 0, 0).
+    fn two_model_world(classname: &str) -> Bsp {
+        let dist = |v: f32| v.to_bits();
+        let side = |v: f32| bsp::BrushSide {
+            plane_or_dist: dist(v),
+            material: 0,
+        };
+        let mut brush_sides = Vec::new();
+        let mut push_box = |lo: [f32; 3], hi: [f32; 3]| {
+            for axis in 0..3 {
+                brush_sides.push(side(lo[axis]));
+                brush_sides.push(side(hi[axis]));
+            }
+        };
+        push_box([-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0]);
+        push_box([-8.0, -8.0, 0.0], [8.0, 8.0, 64.0]);
+        Bsp {
+            materials: vec![bsp::Material {
+                name: "textures/test/solid".into(),
+                surface_flags: 0,
+                content_flags: 0x1,
+            }],
+            lightmaps: vec![],
+            soups: vec![bsp::TriangleSoup {
+                material: 0,
+                lightmap: bsp::NO_LIGHTMAP,
+                first_vertex: 0,
+                vertex_count: 3,
+                index_count: 3,
+                first_index: 0,
+            }],
+            verts: vec![
+                vert([-60.0, 0.0, 30.0]),
+                vert([-20.0, 0.0, 30.0]),
+                vert([-60.0, 40.0, 30.0]),
+            ],
+            indices: vec![0, 1, 2],
+            entities: format!(
+                "{{\n\"classname\" \"{classname}\"\n\"model\" \"*1\"\n\"origin\" \"200 0 0\"\n}}"
+            ),
+            planes: vec![],
+            brush_sides,
+            brushes: vec![
+                bsp::Brush {
+                    first_side: 0,
+                    num_sides: 6,
+                    material: 0,
+                },
+                bsp::Brush {
+                    first_side: 6,
+                    num_sides: 6,
+                    material: 0,
+                },
+            ],
+            models: vec![
+                bsp::Model {
+                    mins: [-1024.0; 3],
+                    maxs: [1024.0; 3],
+                    first_soup: 1,
+                    num_soups: 0,
+                    first_brush: 0,
+                    num_brushes: 1,
+                },
+                bsp::Model {
+                    mins: [-8.0, -8.0, 0.0],
+                    maxs: [8.0, 8.0, 64.0],
+                    first_soup: 0,
+                    num_soups: 1,
+                    first_brush: 1,
+                    num_brushes: 1,
+                },
+            ],
+            cull_groups: vec![],
+            cull_indices: vec![],
+            portal_verts: vec![],
+            aabb_nodes: vec![],
+            cells: vec![],
+            portals: vec![],
+            nodes: vec![],
+            leafs: vec![],
+        }
+    }
+
+    #[test]
+    fn submodel_brush_collides_at_its_entity_origin() {
+        let world = CollisionWorld::build(&two_model_world("script_brushmodel"), &[]);
+        let t = world.box_trace(
+            Vec3::new(150.0, 0.0, 32.0),
+            Vec3::new(250.0, 0.0, 32.0),
+            Vec3::ZERO,
+            Vec3::ZERO,
+        );
+        assert!(t.fraction < 1.0, "ray should hit the placed door: {t:?}");
+        assert!(
+            (t.endpos.x - 192.0).abs() < 1.0,
+            "should stop at the door face, got {t:?}"
+        );
+    }
+
+    #[test]
+    fn trigger_submodels_do_not_collide() {
+        let world = CollisionWorld::build(&two_model_world("trigger_multiple"), &[]);
+        let t = world.box_trace(
+            Vec3::new(150.0, 0.0, 32.0),
+            Vec3::new(250.0, 0.0, 32.0),
+            Vec3::ZERO,
+            Vec3::ZERO,
+        );
+        assert_eq!(t.fraction, 1.0, "trigger brushes must stay hollow: {t:?}");
+    }
+
+    #[test]
+    fn submodel_render_triangles_leave_collision() {
+        let world = CollisionWorld::build(&two_model_world("script_brushmodel"), &[]);
+        // through the triangle's untranslated local spot: only the floor may stop this
+        let t = world.box_trace(
+            Vec3::new(-40.0, 20.0, 30.0),
+            Vec3::new(-40.0, 20.0, -100.0),
+            Vec3::ZERO,
+            Vec3::ZERO,
+        );
+        assert!(
+            (t.endpos.z - 0.0).abs() < 0.5,
+            "should land on the floor, got {t:?}"
+        );
+    }
+
+    fn water_world() -> Bsp {
+        let dist = |v: f32| v.to_bits();
+        let side = |m: u32, v: f32| bsp::BrushSide {
+            plane_or_dist: dist(v),
+            material: m,
+        };
+        let mut brush_sides = Vec::new();
+        let mut brushes = Vec::new();
+        for (m, lo, hi) in [
+            (0u32, [-256.0, -256.0, -16.0], [256.0, 256.0, 0.0]),
+            (1u32, [100.0, -100.0, -16.0], [300.0, 100.0, 36.0]),
+        ] {
+            for axis in 0..3 {
+                brush_sides.push(side(m, lo[axis]));
+                brush_sides.push(side(m, hi[axis]));
+            }
+            brushes.push(bsp::Brush {
+                first_side: (brushes.len() * 6) as u32,
+                num_sides: 6,
+                material: m as u16,
+            });
+        }
+        Bsp {
+            materials: vec![
+                bsp::Material {
+                    name: "textures/test/solid".into(),
+                    surface_flags: 0,
+                    content_flags: 0x1,
+                },
+                bsp::Material {
+                    name: "textures/common/water".into(),
+                    surface_flags: 0,
+                    content_flags: 0x20,
+                },
+            ],
+            lightmaps: vec![],
+            soups: vec![],
+            verts: vec![],
+            indices: vec![],
+            entities: String::new(),
+            planes: vec![],
+            brush_sides,
+            brushes,
+            models: vec![bsp::Model {
+                mins: [-256.0; 3],
+                maxs: [256.0; 3],
+                first_soup: 0,
+                num_soups: 0,
+                first_brush: 0,
+                num_brushes: 2,
+            }],
+            cull_groups: vec![],
+            cull_indices: vec![],
+            portal_verts: vec![],
+            aabb_nodes: vec![],
+            cells: vec![],
+            portals: vec![],
+            nodes: vec![],
+            leafs: vec![],
+        }
+    }
+
+    #[test]
+    fn point_contents_reports_water() {
+        let world = CollisionWorld::build(&water_world(), &[]);
+        assert_ne!(
+            world.point_contents(Vec3::new(200.0, 0.0, 10.0)) & CONTENTS_WATER,
+            0,
+            "inside the pool"
+        );
+        assert_eq!(
+            world.point_contents(Vec3::new(200.0, 0.0, 60.0)) & CONTENTS_WATER,
+            0,
+            "above the surface"
+        );
+        assert_eq!(
+            world.point_contents(Vec3::new(0.0, 0.0, -8.0)) & CONTENTS_WATER,
+            0,
+            "dry ground next to the pool"
+        );
+    }
+
+    /// One flagged playerclip wall at x 50..54 spanning y -200..200, z 0..100.
+    fn ladder_wall_world(surface_flags: u32) -> Bsp {
+        let dist = |v: f32| v.to_bits();
+        let side = |v: f32| bsp::BrushSide {
+            plane_or_dist: dist(v),
+            material: 0,
+        };
+        Bsp {
+            materials: vec![bsp::Material {
+                name: "textures/common/ladder".into(),
+                surface_flags,
+                content_flags: 0x10000,
+            }],
+            lightmaps: vec![],
+            soups: vec![],
+            verts: vec![],
+            indices: vec![],
+            entities: String::new(),
+            planes: vec![],
+            brush_sides: vec![
+                side(50.0),
+                side(54.0),
+                side(-200.0),
+                side(200.0),
+                side(0.0),
+                side(100.0),
+            ],
+            brushes: vec![bsp::Brush {
+                first_side: 0,
+                num_sides: 6,
+                material: 0,
+            }],
+            models: vec![bsp::Model {
+                mins: [50.0, -200.0, 0.0],
+                maxs: [54.0, 200.0, 100.0],
+                first_soup: 0,
+                num_soups: 0,
+                first_brush: 0,
+                num_brushes: 1,
+            }],
+            cull_groups: vec![],
+            cull_indices: vec![],
+            portal_verts: vec![],
+            aabb_nodes: vec![],
+            cells: vec![],
+            portals: vec![],
+            nodes: vec![],
+            leafs: vec![],
+        }
+    }
+
+    #[test]
+    fn trace_reports_ladder_surface_flag() {
+        let world = CollisionWorld::build(&ladder_wall_world(0x8), &[]);
+        let t = world.box_trace(
+            Vec3::new(0.0, 0.0, 50.0),
+            Vec3::new(100.0, 0.0, 50.0),
+            Vec3::new(-15.0, -15.0, 0.0),
+            Vec3::new(15.0, 15.0, 60.0),
+        );
+        assert!(t.fraction < 1.0 && t.surface_flags & 0x8 != 0, "{t:?}");
+        let plain = CollisionWorld::build(&ladder_wall_world(0x0), &[]);
+        let t = plain.box_trace(
+            Vec3::new(0.0, 0.0, 50.0),
+            Vec3::new(100.0, 0.0, 50.0),
+            Vec3::new(-15.0, -15.0, 0.0),
+            Vec3::new(15.0, 15.0, 60.0),
+        );
+        assert!(t.fraction < 1.0 && t.surface_flags == 0, "{t:?}");
+    }
+
+    /// mp_harbor carries both stock-MP water and ladders; both must survive
+    /// into the built world. Derived from the BSP itself, no hardcoded spots.
+    #[test]
+    fn harbor_water_volumes_and_ladder_flags_survive_build() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let Some(data) = fs.read("maps/mp/mp_harbor.bsp") else {
+            return;
+        };
+        let bsp = crate::bsp::parse(&data).unwrap();
+
+        let axial_bounds = |b: &crate::bsp::Brush| -> ([f32; 3], [f32; 3]) {
+            let sides = &bsp.brush_sides[b.first_side as usize..][..b.num_sides as usize];
+            let mut lo = [0.0f32; 3];
+            let mut hi = [0.0f32; 3];
+            for axis in 0..3 {
+                lo[axis] = f32::from_bits(sides[axis * 2].plane_or_dist);
+                hi[axis] = f32::from_bits(sides[axis * 2 + 1].plane_or_dist);
+            }
+            (lo, hi)
+        };
+
+        let water = bsp
+            .brushes
+            .iter()
+            .find(|b| bsp.materials[b.material as usize].content_flags & 0x20 != 0);
+        let ladders: Vec<&crate::bsp::Brush> = bsp
+            .brushes
+            .iter()
+            .filter(|b| bsp.materials[b.material as usize].surface_flags & 0x8 != 0)
+            .collect();
+        let (Some(water), Some(_)) = (water, ladders.first()) else {
+            panic!("census says harbor has water and ladders");
+        };
+
+        let world = CollisionWorld::build(&bsp, &[]);
+
+        let (wlo, whi) = axial_bounds(water);
+        let mid = Vec3::new(
+            (wlo[0] + whi[0]) * 0.5,
+            (wlo[1] + whi[1]) * 0.5,
+            (wlo[2] + whi[2]) * 0.5,
+        );
+        assert_ne!(
+            world.point_contents(mid) & CONTENTS_WATER,
+            0,
+            "water brush interior at {mid}"
+        );
+        assert_eq!(
+            world.point_contents(mid + Vec3::Z * (whi[2] - wlo[2] + 8.0)) & CONTENTS_WATER,
+            0,
+            "above the water surface"
+        );
+
+        // Ladder volumes sit inside staircases and walls; probe each from a
+        // few offsets along its thinnest axis until one reports the flag.
+        let player_box = (Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 60.0));
+        let mut flagged = false;
+        for ladder in &ladders {
+            let (llo, lhi) = axial_bounds(ladder);
+            let ex = lhi[0] - llo[0];
+            let ey = lhi[1] - llo[1];
+            let center = Vec3::new(
+                (llo[0] + lhi[0]) * 0.5,
+                (llo[1] + lhi[1]) * 0.5,
+                ((llo[2] + lhi[2]) * 0.5).min(llo[2] + 40.0),
+            );
+            let dir = if ex < ey { Vec3::X } else { Vec3::Y };
+            let span = (if ex < ey { ex } else { ey }) * 0.5;
+            for back in [24.0, 40.0, 64.0] {
+                for sign in [-1.0, 1.0] {
+                    let t = world.box_trace(
+                        center - dir * sign * (span + back),
+                        center,
+                        player_box.0,
+                        player_box.1,
+                    );
+                    if !t.startsolid && t.fraction < 1.0 && t.surface_flags & 0x8 != 0 {
+                        flagged = true;
+                    }
+                }
+            }
+        }
+        assert!(flagged, "no approach reported the ladder flag");
     }
 }
