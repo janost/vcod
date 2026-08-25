@@ -28,7 +28,7 @@ engineering setup works.
   Ghidra decompilations, and old task plans. `tmp/` is scratch: probe captures
   land there. `private/` and `docs/design/` exist only on my machine, so a
   public clone does not have them.
-- Feature work happens on a branch in a worktree; master is merge-only.
+- Feature work happens on a branch; master is merge-only.
   Conventional commit prefixes (`feat:`, `fix:`, `docs:`, `test:`, `perf:`,
   `style:`, `chore:`).
 
