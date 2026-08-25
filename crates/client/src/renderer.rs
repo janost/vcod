@@ -1002,11 +1002,6 @@ impl Renderer {
         self.vis_counts = VisCounts::default();
     }
 
-    #[allow(dead_code)] // map-change callers land in a later task
-    pub fn has_world(&self) -> bool {
-        self.world.is_some()
-    }
-
     /// Quads in draw order (already back-to-front). Unseen shader names
     /// resolve lazily; an unresolvable one warns once and is cached as
     /// `None`. Names in `additive_shaders` go on the additive pipeline,

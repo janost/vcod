@@ -207,7 +207,6 @@ impl Scoreboard {
     }
 
     /// Drop the rows; the totals, visibility and request timer stay.
-    #[allow(dead_code)] // called by the loading task
     pub fn clear(&mut self) {
         self.entries.clear();
     }

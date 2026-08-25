@@ -92,7 +92,6 @@ impl Hud {
     }
 
     /// A new gamestate: CS 7 indices and the scoreboard change, chat does not.
-    #[allow(dead_code)] // called by the loading task
     pub fn on_gamestate(&mut self) {
         self.kill_icons.clear();
         self.killfeed.clear();

@@ -582,7 +582,6 @@ impl FxSystem {
     }
 
     /// A new map: world-space particles and decals are meaningless there.
-    #[allow(dead_code)] // called by the loading task
     pub fn clear(&mut self) {
         self.particles.clear();
         self.decals.clear();
