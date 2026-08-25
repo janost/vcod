@@ -247,29 +247,66 @@ impl CollisionWorld {
             allsolid: false,
         };
 
-        let query_lo = (start + mins).min(end + mins) - Vec3::ONE;
-        let query_hi = (start + maxs).max(end + maxs) + Vec3::ONE;
-        let mut cand = Vec::new();
-        self.candidates(query_lo, query_hi, &mut cand);
-
-        let mut scratch = Vec::new();
-        for prim in cand {
-            match prim {
-                Prim::Brush(i) => {
-                    expand_brush(&self.brushes[i as usize].planes, mins, maxs, &mut scratch);
-                    clip_segment(&mut trace, start, end, &scratch);
-                }
-                Prim::Tri(i) => {
-                    triangle_planes(&self.tris[i as usize], mins, maxs, &mut scratch);
-                    clip_segment(&mut trace, start, end, &scratch);
-                }
-            }
+        if !self.nodes.is_empty() {
+            let mut scratch = Vec::new();
+            self.trace_node(0, start, end, mins, maxs, &mut trace, &mut scratch);
         }
-
         trace.endpos = start + (end - start) * trace.fraction;
         trace
     }
 
+    /// Nearest child first; the sweep box shrinks with `trace.fraction`, so
+    /// prims past the current hit are never clipped.
+    #[allow(clippy::too_many_arguments)]
+    fn trace_node(
+        &self,
+        i: u32,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        trace: &mut Trace,
+        scratch: &mut Vec<(Vec3, f32)>,
+    ) {
+        let node = &self.nodes[i as usize];
+        let cur_end = start + (end - start) * trace.fraction;
+        let lo = start.min(cur_end) + mins - Vec3::ONE;
+        let hi = start.max(cur_end) + maxs + Vec3::ONE;
+        if !(lo.cmple(node.hi).all() && hi.cmpge(node.lo).all()) {
+            return;
+        }
+        if node.count > 0 {
+            let first = node.first as usize;
+            for (prim, _, _) in &self.prims[first..first + node.count as usize] {
+                match *prim {
+                    Prim::Brush(b) => {
+                        expand_brush(&self.brushes[b as usize].planes, mins, maxs, scratch);
+                        clip_segment(trace, start, end, scratch);
+                    }
+                    Prim::Tri(t) => {
+                        triangle_planes(&self.tris[t as usize], mins, maxs, scratch);
+                        clip_segment(trace, start, end, scratch);
+                    }
+                }
+            }
+            return;
+        }
+        let dir = end - start;
+        let along = |n: u32| {
+            let node = &self.nodes[n as usize];
+            ((node.lo + node.hi) * 0.5 - start).dot(dir)
+        };
+        let (near, far) = if along(node.first) <= along(node.second) {
+            (node.first, node.second)
+        } else {
+            (node.second, node.first)
+        };
+        self.trace_node(near, start, end, mins, maxs, trace, scratch);
+        self.trace_node(far, start, end, mins, maxs, trace, scratch);
+    }
+
+    /// Only the tests call this now; `box_trace` walks the BVH itself via `trace_node`.
+    #[cfg(test)]
     fn candidates(&self, lo: Vec3, hi: Vec3, out: &mut Vec<Prim>) {
         if self.nodes.is_empty() {
             return;
@@ -739,5 +776,129 @@ mod tests {
             &mut out,
         );
         assert!(out.is_empty());
+    }
+
+    /// Every prim clipped, no traversal: the oracle for the ordered walk.
+    fn brute_trace(
+        world: &CollisionWorld,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+    ) -> Trace {
+        let mut trace = Trace {
+            fraction: 1.0,
+            endpos: end,
+            normal: Vec3::ZERO,
+            startsolid: false,
+            allsolid: false,
+        };
+        let mut scratch = Vec::new();
+        for (prim, _, _) in &world.prims {
+            match *prim {
+                Prim::Brush(i) => {
+                    expand_brush(&world.brushes[i as usize].planes, mins, maxs, &mut scratch);
+                    clip_segment(&mut trace, start, end, &scratch);
+                }
+                Prim::Tri(i) => {
+                    triangle_planes(&world.tris[i as usize], mins, maxs, &mut scratch);
+                    clip_segment(&mut trace, start, end, &scratch);
+                }
+            }
+        }
+        trace.endpos = start + (end - start) * trace.fraction;
+        trace
+    }
+
+    /// Deterministic xorshift, so a failure reproduces.
+    fn rng(seed: &mut u64) -> f32 {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        (*seed >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    fn check_against_brute(world: &CollisionWorld, lo: Vec3, hi: Vec3, sweeps: usize, seed: u64) {
+        let mut s = seed;
+        let mut hits = 0;
+        for _ in 0..sweeps {
+            let r = |s: &mut u64| Vec3::new(rng(s), rng(s), rng(s));
+            let start = lo + (hi - lo) * r(&mut s);
+            let end = lo + (hi - lo) * r(&mut s);
+            let (mins, maxs) = if rng(&mut s) < 0.5 {
+                (Vec3::ZERO, Vec3::ZERO)
+            } else {
+                (Vec3::new(-15.0, -15.0, 0.0), Vec3::new(15.0, 15.0, 60.0))
+            };
+            let a = world.box_trace(start, end, mins, maxs);
+            let b = brute_trace(world, start, end, mins, maxs);
+            assert!(
+                (a.fraction - b.fraction).abs() <= 1e-5,
+                "{start} -> {end}: {a:?} vs {b:?}"
+            );
+            assert_eq!(
+                (a.startsolid, a.allsolid),
+                (b.startsolid, b.allsolid),
+                "{start} -> {end}"
+            );
+            if a.fraction < 1.0 {
+                hits += 1;
+                assert!(
+                    a.normal.abs_diff_eq(b.normal, 1e-4),
+                    "{start} -> {end}: {a:?} vs {b:?}"
+                );
+            }
+        }
+        assert!(hits > 0, "no sweep hit anything; widen the box");
+    }
+
+    #[test]
+    fn ordered_walk_matches_brute_force_on_synthetic_worlds() {
+        let w = spread_tris_world();
+        // wide bounds so the walk exercises a multi-node BVH; the two reachable
+        // triangles are tiny relative to the cube, so this needs many sweeps to
+        // land a hit reliably (300 from the brief drew zero against this seed)
+        check_against_brute(
+            &CollisionWorld::build(&w, &[]),
+            Vec3::splat(-1500.0),
+            Vec3::splat(1500.0),
+            5000,
+            0x9E3779B97F4A7C15,
+        );
+        let w = test_world(&[(Vec3::new(50.0, -400.0, 0.0), Vec3::new(100.0, 400.0, 100.0))]);
+        check_against_brute(
+            &w,
+            Vec3::new(-300.0, -300.0, -50.0),
+            Vec3::new(300.0, 300.0, 200.0),
+            300,
+            0xD1B54A32D192ED03,
+        );
+    }
+
+    #[test]
+    fn ordered_walk_matches_brute_force_on_mp_pavlov() {
+        let Some(data) = crate::testing::real_bsp() else {
+            return;
+        };
+        let bsp = crate::bsp::parse(&data).unwrap();
+        let world = CollisionWorld::build(&bsp, &[]);
+        let (lo, hi) = crate::mesh::map_bounds(&bsp);
+        // short sweeps so most of them hit something
+        let mut s = 0x2545F4914F6CDD1Du64;
+        let mut hits = 0;
+        for _ in 0..200 {
+            let r = |s: &mut u64| Vec3::new(rng(s), rng(s), rng(s));
+            let start = Vec3::from(lo) + (Vec3::from(hi) - Vec3::from(lo)) * r(&mut s);
+            let end = start + (r(&mut s) - Vec3::splat(0.5)) * 600.0;
+            let a = world.box_trace(start, end, Vec3::ZERO, Vec3::ZERO);
+            let b = brute_trace(&world, start, end, Vec3::ZERO, Vec3::ZERO);
+            assert!(
+                (a.fraction - b.fraction).abs() <= 1e-5,
+                "{start} -> {end}: {a:?} vs {b:?}"
+            );
+            assert_eq!((a.startsolid, a.allsolid), (b.startsolid, b.allsolid));
+            hits += (a.fraction < 1.0) as usize;
+        }
+        assert!(hits > 20, "{hits}");
     }
 }
