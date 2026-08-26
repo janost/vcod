@@ -243,10 +243,12 @@ pub fn pmove(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
         water_move(ps, input, world, dt);
     } else {
         // retail ground jump (fn 0x316F4 @0x31CC0): gated on forward input,
-        // stance-dependent height, horizontal velocity kept. Prone refuses:
-        // PM_UpdateAimDownSightFlag sets pm_flags bit 0x20 (@0x37286) and the
-        // gate tests it (@0x31ccb). No cooldown timer exists on this path.
-        if input.jump && ps.on_ground && input.forward != 0.0 && ps.stance != Stance::Prone {
+        // stance-dependent height, horizontal velocity kept. Its bit-0x20
+        // check (@0x31ccb) reads the ADS-active flag PM_UpdateAimDownSightFlag
+        // maintains (@0x37247+: set only while the ADS button is held); vcod
+        // has no ADS input, so nothing of that gate ports. No cooldown timer
+        // exists on this path either (ps.jumpTime is never written here).
+        if input.jump && ps.on_ground && input.forward != 0.0 {
             let height = match ps.stance {
                 Stance::Stand => JUMP_HEIGHT_STAND,
                 _ => JUMP_HEIGHT_LOW,
@@ -727,10 +729,13 @@ fn ladder_move(
         let d = ps.velocity.x * n.x + ps.velocity.y * n.y;
         ps.velocity.x -= d * n.x;
         ps.velocity.y -= d * n.y;
-        // the 500 selector compares the climb wish sign (@0x33d2e), which the
-        // pitch upscale zeroes looking steeply down (@0x33a33)
+        // the 500 selector reads the climb-rate slot's sign (@0x33a50/
+        // @0x33ab4 -> @0x33d2e): forward * 0.5 * upscale * cmdScale plus a
+        // strafe term through pml.right.z, zeroed upstream (@0x339c6) - so
+        // the sign is forward * upscale, which crosses zero at pitch
+        // fz = -0.25 and goes negative beyond (0.25@0x70cb4, 2.5@0x70cb8)
         let u = ((forward3(ps).z + LADDER_UPSCALE_BIAS) * LADDER_UPSCALE_GAIN).clamp(-1.0, 1.0);
-        let k = if input.forward > 0.0 && u != 0.0 {
+        let k = if input.forward * u > 0.0 {
             -500.0
         } else {
             -250.0
@@ -1072,24 +1077,28 @@ mod tests {
     }
 
     #[test]
-    fn prone_blocks_ground_jump() {
-        // PM_UpdateAimDownSightFlag sets pm_flags bit 0x20 whenever prone
-        // (@0x37286) and the ground-jump gate refuses on it (@0x31ccb)
+    fn prone_jumps_at_the_low_height() {
+        // bit 0x20 (the ground jump's extra gate @0x31ccb) is set only while
+        // the ADS button is held (@0x37247); without ADS modeled, prone jumps
+        // like crouch at the 24-unit height (@0x70bec)
         let w = flat();
-        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
-        tick(&mut ps, &PmInput::default(), &w, 50); // settle
         let hop = PmInput {
             forward: 1.0,
             jump: true,
             prone: true,
             ..Default::default()
         };
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &hop, &w, 50); // settle prone
         let mut apex = 0.0f32;
         for _ in 0..60 {
             pmove(&mut ps, &hop, &w, 1.0 / 125.0);
             apex = apex.max(ps.origin.z);
         }
-        assert!(apex < 2.0, "prone must not jump, apex {apex}");
+        assert!(
+            (apex - JUMP_HEIGHT_LOW).abs() < 2.5,
+            "prone apex {apex}, expected ~{JUMP_HEIGHT_LOW}"
+        );
     }
 
     #[test]
@@ -1735,6 +1744,11 @@ mod tests {
         ps.since_jump_ms = LADDER_REJUMP_COOLDOWN_MS - 1.0;
         assert!(!ladder_push_off(&mut ps, &jump, n), "inside the cooldown");
 
+        // boundary: retail allows at delta > 499, so exactly 500 passes
+        let mut ps = mk(Stance::Stand);
+        ps.since_jump_ms = LADDER_REJUMP_COOLDOWN_MS;
+        assert!(ladder_push_off(&mut ps, &jump, n), "500 ms allows");
+
         let mut ps = mk(Stance::Stand);
         ps.jump_latched = true;
         assert!(
@@ -1874,6 +1888,85 @@ mod tests {
             ps.velocity.y
         );
         assert!((ps.velocity.x - 250.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn glue_strength_follows_the_climb_rate_sign() {
+        // selector @0x33d2e reads the climb-rate slot's sign: forward *
+        // 0.5 * upscale * cmdScale (@0x33a50), so W past the fz=-0.25 pitch
+        // falls back to 250 and S below it strengthens to 500
+        let w = flat();
+        let n = Vec3::new(-1.0, 0.0, 0.0);
+        let vx = |pitch_deg: f32, forward: f32| {
+            let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 40.0), 0.0);
+            ps.on_ground = false;
+            ps.pitch = pitch_deg.to_radians();
+            ladder_move(
+                &mut ps,
+                &PmInput {
+                    forward,
+                    ..Default::default()
+                },
+                n,
+                false,
+                &w,
+                1.0 / 125.0,
+            );
+            ps.velocity.x
+        };
+        assert!((vx(0.0, 1.0) - 500.0).abs() < 1.0, "W level: 500");
+        // -30 deg: fz = -0.5, u = -0.625 -> sign flips
+        assert!((vx(-30.0, 1.0) - 250.0).abs() < 1.0, "W down: 250");
+        assert!((vx(-30.0, -1.0) - 500.0).abs() < 1.0, "S down: 500");
+        assert!((vx(30.0, -1.0) - 250.0).abs() < 1.0, "S up: 250");
+    }
+
+    #[test]
+    fn push_off_is_pitch_invariant_on_a_vertical_wall() {
+        // the composition dots the FLAT normalized forward against the ladder
+        // vec (locals built @0x2ec7e-0x2ec90 with a literal-zero z lane; the
+        // pitched forward feeds only the facing gate @0x2eca2-0x2ecd3), so a
+        // vertical wall pushes 128 horizontally at any look pitch
+        let n = Vec3::new(-1.0, 0.0, 0.0);
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.pitch = 45f32.to_radians();
+        assert!(ladder_push_off(
+            &mut ps,
+            &PmInput {
+                jump: true,
+                ..Default::default()
+            },
+            n
+        ));
+        assert!((ps.velocity.x + LADDER_PUSHOFF_SPEED).abs() < 0.1);
+        assert!(ps.velocity.y.abs() < 0.1);
+        assert!((ps.velocity.z - 187.35).abs() < 0.1);
+    }
+
+    #[test]
+    fn push_off_normalizes_the_3d_reflection_before_scaling_xy() {
+        // tilted normal: retail normalizes the full 3D reflected vector
+        // (@0x2ed36) and only then scales x/y by 128 (@0x2ed5a)
+        let n = Vec3::new(-2.0, 0.0, 1.0).normalize();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        assert!(ladder_push_off(
+            &mut ps,
+            &PmInput {
+                jump: true,
+                ..Default::default()
+            },
+            n
+        ));
+        // yaw 0 -> f = (1,0,0); d2 = f.n = n.x; R = f - 2*d2*n
+        let d2 = n.x;
+        let r = Vec3::new(1.0 - 2.0 * d2 * n.x, 0.0, -2.0 * d2 * n.z);
+        let expect_x = r.x / r.length() * LADDER_PUSHOFF_SPEED;
+        assert!(
+            (ps.velocity.x - expect_x).abs() < 0.1,
+            "vx {} vs expected {expect_x}",
+            ps.velocity.x
+        );
+        assert!(ps.velocity.y.abs() < 0.1);
     }
 
     #[test]
