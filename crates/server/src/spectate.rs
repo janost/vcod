@@ -89,16 +89,9 @@ impl SpectatorSim {
         let yaw = self.ps.yaw.to_degrees();
         set("viewangles[0]", pitch.to_bits() as i32);
         set("viewangles[1]", yaw.to_bits() as i32);
-        // Retail keeps delta_angles = sent view - cmd angles; both sides come
-        // off the same cmd here, so prediction matches what we send.
-        set(
-            "delta_angles[0]",
-            ((pitch * ANGLE2SHORT).round() as i32) & 0xffff,
-        );
-        set(
-            "delta_angles[1]",
-            ((yaw * ANGLE2SHORT).round() as i32) & 0xffff,
-        );
+        // delta_angles stay zero: we never force-turn a client, so there is
+        // no teleport correction; the client's cmd angles are already the
+        // absolute view `step` simulates from.
         w
     }
 }
@@ -155,14 +148,16 @@ mod tests {
     }
 
     #[test]
-    fn delta_angles_track_the_sent_view() {
+    fn delta_angles_stay_zero() {
         let p = &PROTOCOL_V1;
         let mut sim = SpectatorSim::new([0.0; 3], 0.0);
         sim.ps.yaw = 90f32.to_radians();
         let w = sim.to_wire(p, 0, 0);
-        let expected_yaw = (90.0f32 * ANGLE2SHORT).round() as i32 & 0xffff;
-        assert_eq!(w.field_i32(p, "delta_angles[1]") & 0xffff, expected_yaw);
+        // No force-turn means no correction term; the client's compensation
+        // must be identity.
         assert_eq!(w.field_i32(p, "delta_angles[0]"), 0);
+        assert_eq!(w.field_i32(p, "delta_angles[1]"), 0);
+        assert_eq!(w.viewangles(p)[1], 90.0);
     }
 
     #[test]
