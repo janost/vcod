@@ -795,4 +795,77 @@ mod tests {
         assert!(!r.is_overflowed());
         assert_eq!(r.bits_read(), bits);
     }
+
+    /// Testing layer 2 from the design doc: parse a committed capture
+    /// snapshot to full state, rebuild it uncompressed with our writers from
+    /// null, parse again, and hold the result against retail's bytes.
+    #[test]
+    fn reencoded_capture_snapshot_round_trips() {
+        use crate::net::gamestate;
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+
+        let gs_data = crate::testing::fixture("net/gamestate.bin");
+        let mut gr = MsgReader::new(&gs_data[4..], &h);
+        let gs = gamestate::parse(&mut gr, p).unwrap();
+        let mut ring = SnapshotRing::new();
+        ring.set_baselines(gs.baselines.clone());
+
+        let data = crate::testing::fixture("net/snapshots.bin");
+        let mut off = 0usize;
+        let mut found: Option<Snapshot> = None;
+        while found.is_none() && off + 8 <= data.len() {
+            let message_num = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+            let len = u32::from_le_bytes(data[off + 4..off + 8].try_into().unwrap()) as usize;
+            off += 8;
+            let msg = &data[off..off + len];
+            off += len;
+
+            let mut r = MsgReader::new(&msg[4..], &h);
+            while !r.is_overflowed() {
+                match r.read_byte() {
+                    SVC_NOP => {}
+                    SVC_SERVER_COMMAND => {
+                        r.read_long();
+                        r.read_big_string();
+                    }
+                    SVC_SNAPSHOT => {
+                        let s = ring.parse_into(&mut r, p, message_num).unwrap();
+                        if s.valid {
+                            found = Some(s.clone());
+                        }
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        let cap = found.expect("capture holds no valid snapshot");
+        assert!(!cap.clients.is_empty(), "no clientStates in the snapshot");
+
+        let max_slot = *cap.clients.keys().max().unwrap() as usize;
+        let mut to_clients: Vec<Option<ClientState>> = vec![None; max_slot + 1];
+        for (&num, cs) in &cap.clients {
+            to_clients[num as usize] = Some(cs.clone());
+        }
+
+        let mut w = MsgWriter::new(&h);
+        write_uncompressed(&mut w, p, cap.server_time, &cap.ps, &to_clients);
+        let d = w.finish();
+        let mut out_ring = SnapshotRing::new();
+        let mut r = MsgReader::new(&d, &h);
+        let back = out_ring.parse_into(&mut r, p, cap.message_num).unwrap();
+        assert!(back.valid);
+        assert!(!r.is_overflowed());
+
+        assert_eq!(back.server_time, cap.server_time);
+        assert_eq!(back.ps, cap.ps);
+        assert_eq!(
+            back.clients.keys().copied().collect::<Vec<_>>(),
+            cap.clients.keys().copied().collect::<Vec<_>>()
+        );
+        for (&num, cs) in &cap.clients {
+            assert_eq!(back.clients[&num].fields, cs.fields, "client {num}");
+        }
+    }
 }
