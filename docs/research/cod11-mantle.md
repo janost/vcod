@@ -127,7 +127,7 @@ from `BG_GetSpeed` scaled by `ps.speed`-related scales, accelerate
 called from `PM_LadderMove` and the steep-slope mover only:
 
 - Requires `cmd.serverTime - ps.jumpTime > 499` (500 ms cooldown, compare at
-  0x2EBB3), not prone, not blocked by two higher pm_flags bits (0x800/0x2000),
+  0x2EBB3), not prone, not crouched (@0x2EBF5), not blocked by two higher pm_flags bits (0x800/0x2000),
   and `cmd.upmove > 9`.
 - Vertical velocity `sqrt(gravity * 78)` = ~250 at gravity 800 (constants 78.0
   and 39.0 at 0x708C8/0x708CC); sets `ps.fJumpOriginZ` (ps+0x68) =
@@ -150,8 +150,8 @@ called from `PM_LadderMove` and the steep-slope mover only:
 
 Note vcod implements the stance-dependent ground jump described above
 (heights 34/24, `sqrt(2*height*gravity)`, forwardmove gate); its old flat
-`JUMP_VELOCITY = 250.0` constant is gone. The ladder push-off path is not
-ported; see port notes for what landed.
+`JUMP_VELOCITY = 250.0` constant is gone. The ladder push-off path is
+ported too - port note 4 lists exactly what landed.
 
 ## Ladders
 
@@ -186,8 +186,9 @@ So ladders are brushes flagged at the material level, not entities.
   ladder plane via `ProjectPointOnPlane`, applies `pm_ladderfriction` (16.0)
   and `pm_ladderScale` (0.5) speed scaling, moves with the normal mover, and
   clamps vertical velocity against the ladder top/bottom.
-- Wall glue, misread earlier as a backwards hop: while walking on a ladder
-  (gate reads `[pm+0x2C]`, the static pmove_t's walking flag @0x33CF1), the
+- Wall glue, misread earlier as a backwards hop: while NOT walking - i.e.
+  airborne on the ladder (the gate at @0x33CF1 runs it only when the static
+  pml_t's walking flag is zero), the
   velocity's component along the ladder plane is stripped and then
   K * vLadderVec is ADDED with K selected between **-500.0** (@0x70CD4) and
   **-250.0** (@0x70CD8) by the SIGN of the climb-rate slot
@@ -240,10 +241,10 @@ only place those values are ever produced - there is no non-ladder route to
 | 0x04 | set by the ground-jump gate; read by viewheight-lerp timing | 0x31CD5, 0x345C9 |
 | 0x10 | LADDER | set at 0x33937, cleared at 0x3377C/0x2ED7A |
 | 0x80 | affects ladder-anim speed-scale choice | 0x323D7 |
-| 0x20 | ADS held (blocks ground jump); set by PM_UpdateAimDownSightFlag | tested at 0x31CCB |
+| 0x20 | ADS held (blocks ground jump); set/cleared by PM_UpdateAimDownSightFlag | set @0x372A4/0x372B7, clear @0x3ABDC, tested at 0x31CCB |
 
 (`PMF_PRONE`, `PMF_CROUCH`, `PMF_LADDER`, `PMF_SLIDING=0x100` agree with
-CoDExtended's `shared.h`; bits 0x04/0x20/0x80/0x800/0x2000 are INFERRED from
+CoDExtended's `shared.h`; bits 0x04/0x80/0x800/0x2000 are INFERRED from
 usage sites only.)
 
 ## Tunables (all read directly from rodata, VERIFIED values)
