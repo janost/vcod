@@ -105,8 +105,6 @@ pub struct AudioSystem {
     /// Aliases already warned about on the `loopSound` path, which retries
     /// every snapshot.
     warned_loops: HashSet<String>,
-    /// `j`/`k`/`l` letters already logged as unhandled.
-    quick_chat_seen: HashSet<String>,
 }
 
 /// One live `es.loopSound`. `looping` is the alias row's flag. Only a
@@ -156,7 +154,6 @@ impl AudioSystem {
             ambient: None,
             loop_voices: HashMap::new(),
             warned_loops: HashSet::new(),
-            quick_chat_seen: HashSet::new(),
         }
     }
 
@@ -625,14 +622,8 @@ impl AudioSystem {
                 }
                 true
             }
-            // Quick chat (research doc, section 9). Recognised, not played;
-            // the id-to-alias table is an open item.
-            "j" | "k" | "l" => {
-                if self.quick_chat_seen.insert(cmd.clone()) {
-                    log::debug!("audio: quick chat {cmd:?} not played (no id->alias table yet)");
-                }
-                true
-            }
+            // Quick chat (`j`/`k`/`l`) is handled by `quick_chat::QuickChat`
+            // before commands reach here.
             _ => false,
         }
     }
@@ -992,10 +983,9 @@ mod tests {
         assert!(a.on_server_command(&fs, &tok(&["s", "0"]), &cs));
         assert_eq!(a.table.len(), 1);
 
-        // Quick chat is recognised but not played.
-        for c in ["j", "k", "l"] {
-            assert!(a.on_server_command(&fs, &tok(&[c, "0", "0", "0", "yes_sir"]), &cs));
-        }
+        // Quick chat (`j`/`k`/`l`) is owned by `quick_chat::QuickChat`
+        // upstream; the audio layer no longer recognises it.
+        assert!(!a.on_server_command(&fs, &tok(&["j", "0", "0", "0", "yes_sir"]), &cs));
         assert_eq!(a.table.len(), 1);
 
         // The HUD's scoreboard command, not ours.

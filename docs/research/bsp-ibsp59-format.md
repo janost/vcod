@@ -133,11 +133,11 @@ Census over the 14 stock MP maps (`maps/MP/*.bsp` in `pak[0-9].pk3`; note the up
 | 5 | | empty in every map | 0 |
 | 9 | 32 | cull groups: `f32 mins[3], maxs[3]; i32 first_soup, soup_count` | 122 |
 | 10 | 4 | cull group indices (`i32`), referenced by cells | 125 |
-| 11 | 12 | portal vertices (`f32 xyz`), referenced by portals | 568 |
-| 12 | 20 | occluders, INFERRED from CoD2's `{first_plane, plane_count, first_edge, edge_count, flags}`; 7 maps have none | 9 |
-| 13 | 24 | occluder planes? one record per occluder, INFERRED | 9 |
-| 14 | 48 | occluder quads? one record per occluder, INFERRED | 9 |
-| 15 | 2 | occluder indices, INFERRED | 11 |
+| 11 | 12 | portal/occluder vertices (`f32 xyz`), referenced by portals and occluders | 568 |
+| 12 | 20 | occluder headers: `u32 first_plane; u16 num_planes, num_edges; u32 first_edge, first_vert; u16 vert_count, pad` | 9 |
+| 13 | 4 | occluder plane indices (`u32` into lump 2) | 54 |
+| 14 | 4 | occluder edges (`u8 plane0, plane1, vert0, vert1`, all relative to one occluder) | 108 |
+| 15 | 2 | per-cell occluder index lists (`u16` into lump 12) | 11 |
 | 16 | 12 | AABB tree nodes: `i32 first_soup, soup_count, child_count` | 335 |
 | 17 | 52 | cells | 20 |
 | 18 | 16 | portals: `i32 plane, cell, first_vert, vert_count` | 124 |
@@ -150,9 +150,9 @@ Census over the 14 stock MP maps (`maps/MP/*.bsp` in `pak[0-9].pk3`; note the up
 | 25 | 12 | terrain collision vertices (`f32 xyz`) | 6291 |
 | 26 | 6 | terrain collision triangles (`u16 x 3` into lump 25); mp_ship has none | 4496 |
 | 28 | 8 (+rows) | PVS: `i32 cluster_count, row_bytes` then `cluster_count` bit rows; mp_neuville has none | 666 x 88 |
-| 30 | 72 | lights (one per `r_showLeafLights` entry; `i32 type; f32 color[3] ...`), not decoded | 22 |
+| 30 | 48 | lights (one per `r_showLeafLights` entry; retail rejects other lengths, `FUN_004db240`), see `cod11-light-grid-and-leaf-lights.md` | 22 |
 | 31 | | empty in every map | 0 |
-| 32 | 3145728 | light grid, fixed 128x128x64x3 bytes in every map, not decoded | 1 |
+| 32 | 3145728 | light grid: 262144 (128x128x64) cells x 48 bytes; compiled but never sampled in MP (same doc) | 1 |
 
 Lump 23 is not a list of draw surfaces: on mp_brecourt its indices reach 701 with only 548 soups, and on mp_bocage it references exactly the 626 records of lump 24. Draw-surface visibility never goes through leafs.
 
@@ -169,10 +169,22 @@ i32 first_portal           // into lump 18
 i32 portal_count
 i32 first_cull_group_index // into lump 10
 i32 cull_group_count
-i32 unknown_a, unknown_b   // small, mostly 0
+i32 first_occluder         // into lump 15; the per-cell occluder index list
+i32 occluder_count
 ```
 
-VERIFIED by chaining: `first_portal + portal_count` of each cell equals the next cell's `first_portal` and ends at the portal count; the same for cull group indices; and walking each cell's AABB tree in preorder from `first_aabb_tree` ends exactly at the next cell's tree (all maps but mp_rocket, where one tree ends early). Cell 0 on every map is the large outdoor cell; mp_pavlov's cell 0 holds 44 of the 124 portals and 114 of the 125 cull group references.
+VERIFIED by chaining: `first_portal + portal_count` of each cell equals the next cell's `first_portal` and ends at the portal count; the same for cull group indices and for the occluder lists (lump 15's 11 entries are exactly cell 0's 9 plus one each for cells 3 and 12 on mp_pavlov); and walking each cell's AABB tree in preorder from `first_aabb_tree` ends exactly at the next cell's tree (all maps but mp_rocket, where one tree ends early). Cell 0 on every map is the large outdoor cell; mp_pavlov's cell 0 holds 44 of the 124 portals, 114 of the 125 cull group references and all 9 occluders (cells 3 and 12 re-share occluder 0).
+
+### Lumps 12-15, occluders
+
+Decoded from the `CoDMP.exe` 1.1 loaders (`FUN_004dcd00` @ `0x4dcd00` reads lumps 12/13/14; `FUN_004dca00` @ `0x4dca00` the vertices; `FUN_004dcf90` @ `0x4dcf90` the index lists) and the census below. The earlier CoD2-derived guesses (24-byte lump 13, 48-byte lump 14) were wrong; the real consumers want 4-byte plane and edge records.
+
+- **Lump 12**, occluder headers (20 bytes, one per occluder): `u32 first_plane; u16 num_planes; u16 num_edges; u32 first_edge; u32 first_vert; u16 vert_count; u16 pad`. The `first_*` fields index lumps 13, 14 and 11 respectively. mp_pavlov: 9 records, plane/edge sums 54 / 108, matching lumps 13 and 14. The 8-vert slabs all index low lump-11 offsets.
+- **Lump 13**, `u32` indices into lump 2 (the brush planes). Resolved at load into runtime planes `{n, d - eps}` with precomputed box-sign bytes and a per-frame front/back flag.
+- **Lump 14**, edges, 4 bytes `{u8 plane0, plane1, vert0, vert1}`: the plane indices are relative to one occluder's own plane slice (adjacency). The vertex bytes are the occluder's absolute lump-11 slot **taken modulo 256** - on mp_depot, whose occluders sit past vertex 256 in the pool, the byte reads `first_vert + local - 256`; recover `local ≡ B - first_vert (mod 256)`, unique because `vert_count` stays far below 256.
+- **Lump 15**, `u16` per-cell lists of occluder indices, packed contiguously so a cell's `[first_occluder, first_occluder + occluder_count)` is its list. Real lists can repeat an occluder across cells.
+
+The runtime occluder is 36 bytes: `{planes, num_planes, num_edges, edges, vert_count, verts}` with 20-byte planes, 16-byte edge records (`plane0*, plane1*, vert0*, vert1*`) and 12-byte vertex records (`f32 xyz`).
 
 ### Lump 16, AABB tree nodes (12 bytes)
 
@@ -219,7 +231,11 @@ VERIFIED: every plane, child, brush and lump-24 reference is in range; `cluster`
 From the Ghidra decompilation of `CoDMP.exe` 1.1 (image base `0x00400000`); VERIFIED by reading the decompiled functions, inferred where marked. The cvar table sits at `0x4e2be0`'s neighbourhood: `r_showportals`, `r_showaabbtrees`, `r_portalbevels`, `r_lockpvs`, `r_noportals`, `r_singlecell`, `r_cullXModels`, `r_showCullSModels`.
 
 - Camera cell, `0x4e2be0`: walks the BSP from the root, `dot(vieworg, plane) - dist <= eps` takes the back child, and returns the leaf's `cell`. A negative cell is legal (camera outside every cell). Its caller `0x4e4c10` then skips the portal walk entirely and frustum-tests every cell's AABB tree (`0x4e4080`) and every cull group (`0x4e4120`) instead, so outside the map the world is frustum-culled only. `r_singlecell` visits only the camera cell.
-- Portal recursion, `0x4e44d0`: per visited cell, build the cell's occluder volumes (`0x4e2860`), walk its AABB tree, mark its cull groups and static models (`0x4e4440`), then for each portal skip it if it is already on the recursion stack, if the eye is behind its plane, if its polygon is outside the current frustum (`0x4e2c60`), or if it lies fully inside an occluder volume (`0x4e2cc0`). Otherwise `0x4e2ee0` clips the portal polygon against the near and fog planes and every plane of the current frustum (Sutherland-Hodgman, `0x4e2d20`, 1024-point cap) and `0x4e19b0` builds the child frustum: one plane per surviving edge through the eye, plus four screen-space bevel planes when `r_portalbevels > 0`. An eye within eps of the portal plane inherits the parent frustum unchanged. There is no depth limit; the stack flag and an empty clipped polygon end the recursion. `r_noportals` only affects mirror surfaces (`0x4d4c30`), not this walk.
+- Portal recursion, `0x4e44d0`: per visited cell, build the cell's occluder volumes (`0x4e2860`), walk its AABB tree, mark its cull groups and static models (`0x4e4440`), then for each portal skip it if it is already on the recursion stack, if the eye is behind its plane, if its polygon is outside the current frustum (`0x4e2c60`), or if it lies fully inside an occluder volume (`0x4e2cc0`). Otherwise `0x4e2ee0` clips the portal polygon against the near and fog planes and every plane of the current frustum (Sutherland-Hodgman, `0x4e2d20`, 1024-point cap) and `0x4e19b0` builds the child frustum: one plane per surviving edge through the eye, plus four screen-space bevel planes when `r_portalbevels > 0` (its retail default is `0.7`, so bevels are on). An eye within eps of the portal plane inherits the parent frustum unchanged. There is no depth limit; the stack flag and an empty clipped polygon end the recursion. `r_noportals` only affects mirror surfaces (`0x4d4c30`), not this walk.
+
+Occluder volumes, `0x4e2860`: for each occluder of the cell (its runtime list is the cell's +0x2c/0x30 slice of the lump-15 lists), any vertex in front of the eye plane makes it a candidate; each of its box planes is flagged front/back against the eye position, the front-facing planes are kept as volume planes (their `d` already pulled in by eps at load), and every silhouette edge whose two planes straddle the eye contributes one plane through the eye and the edge's two vertices (`d = eye·n - eps`). The volume planes pool per frame (cap `0x1800`), grouped per occluder (per-occluder plane count at `+0x1c`, active volume cap `0x400`). A portal is hidden when every one of its vertices is on the negative side of every plane of one volume (`0x4e2cc0`): all `n·v <= d`, tested vertex by vertex, volume by volume. The clip-and-frustum path then runs only on portals that survived both frustum and occluder tests.
+
+Bevel planes, `0x4e19b0`: with `r_portalbevels > 0`, the clipped portal polygon's vertices are projected into screen space, the min/max `s`/`t` are clamped to `[-1, 1]`, and four planes are built through the eye, each through one edge of the screen-space box of the projection (normals derived from the projection matrix rows `_DAT_011cc1d8..214`). They hug the portal's silhouette, so a frustum that would sweep wide because the polygon is partially clipped by the near plane cannot pull in cells beside the portal.
 - AABB tree, `0x4e3210`: node bounds are tested against the frustum with the plane sign trick (near corner first, then far corner); a node fully inside is marked without further tests, otherwise the leaf pass `0x4e3070` tests each surface's own bounds against the frustum and the occluder volumes before marking it. So the runtime node carries bounds (`mins` at +0, `maxs` at +0xc) and every surface carries bounds; both are computed at load, since the lump has neither (the load-time builder was not located).
 - Cull groups, `0x4e4120`: the group's bounds only; every surface in the group is marked without a per-surface test.
 - Static models (`misc_model`) hang off a per-cell linked list walked in `0x4e4440` and tested by bounds (`0x4e42b0`, `r_showCullSModels`). Entities (xmodels) are box-walked through the BSP each frame (`0x4e39d0`) and linked into a per-cell reference list (`0x4e3940`, "Max xmodel refs (%i) exceeded", 4096), re-tested when the cell is visited (`0x4e3560`); `r_cullXModels` and a size threshold gate that path. Which lump feeds the static-model list was not located; INFERRED to be the entity lump at load.

@@ -34,6 +34,7 @@ pub fn probe(
     if save_fixture || save_snapshots {
         client.enable_capture();
     }
+    let mut quick_chat = crate::quick_chat::QuickChat::new(0x51ee);
 
     let start = Instant::now();
     let mut last_summary = start;
@@ -136,6 +137,27 @@ pub fn probe(
                             },
                             None => {
                                 println!("  playLocalSound: <unparsed index {:?}>", tokens.get(1))
+                            }
+                        }
+                    }
+                    // Quick chat (`j/k/l`): resolve the category against the
+                    // `.voice` tables when they exist; stock installs ship none.
+                    if let Some(fs) = fs {
+                        let newest = client.snapshots().newest();
+                        let protocol = &net::protocol::PROTOCOL_V1;
+                        let handled = quick_chat.on_server_command(fs, &tokens, |num| {
+                            newest
+                                .and_then(|s| s.clients.get(&num))
+                                .map(|c| c.field_i32(protocol, "team"))
+                        });
+                        if handled {
+                            while let Some(line) = quick_chat.drain(f32::INFINITY) {
+                                println!(
+                                    "  quickchat: {:?} -> {:?} ({line_text})",
+                                    line.cue.source,
+                                    line.cue.alias,
+                                    line_text = line.text
+                                );
                             }
                         }
                     }

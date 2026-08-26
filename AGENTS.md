@@ -73,7 +73,8 @@ engineering setup works.
 - F4 cycles culling `on -> locked -> off`. `locked` freezes the visible set
   so you can fly out and see what the camera was drawing; `off` is the
   unculled A/B. The F3 `vis` line reads `vis: <mode> cells n/m soups a/b
-  tris c/d props p/q  X.XXms`.
+  tris c/d props p/q occ o h  X.XXms`, where `occ o` counts occluder volumes
+  built for the visited cells and `h` the portals they hid (On mode only).
 - A handful of `vkAcquireNextImageKHR` fence validation errors per run are
   pre-existing noise on the Vulkan backend.
 - Screenshots: capture the active window only; whichever tool the desktop

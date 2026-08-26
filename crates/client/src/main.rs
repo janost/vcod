@@ -6,6 +6,7 @@ mod hud;
 mod hud_text;
 mod loading;
 mod probe;
+mod quick_chat;
 mod renderer;
 mod sky;
 mod viewmodel;
@@ -272,7 +273,7 @@ fn hud_lines(
     lines.push(format!("draw: world {draws}  inst {insts}  bones {bones}"));
     let vc = r.vis_counts();
     lines.push(format!(
-        "vis: {} cells {}/{} soups {}/{} tris {}/{} props {}/{}  {:.2}ms",
+        "vis: {} cells {}/{} soups {}/{} tris {}/{} props {}/{} occ {} {}  {:.2}ms",
         vc.mode.map_or("-".to_string(), |m| m.to_string()),
         vc.cells.0,
         vc.cells.1,
@@ -282,6 +283,8 @@ fn hud_lines(
         vc.tris.1,
         vc.props.0,
         vc.props.1,
+        vc.occluders,
+        vc.portals_occluded,
         vc.gather_ms
     ));
     let (hud_quads, hud_ms, hud_unknown) = hud_counts;
@@ -546,6 +549,7 @@ fn main() -> Result<()> {
         hud,
         hud_ms: 0.0,
         audio,
+        quick_chat: quick_chat::QuickChat::new(0x51ee),
         error: None,
     };
     event_loop.run_app(&mut app)?;
@@ -896,6 +900,7 @@ struct App {
     hud: Option<hud::Hud>,
     hud_ms: f32,
     audio: audio::AudioSystem,
+    quick_chat: quick_chat::QuickChat,
     error: Option<anyhow::Error>,
 }
 
@@ -1193,17 +1198,47 @@ impl ApplicationHandler for App {
                                         net::info_value_for_key(net.configstring(3), "n"),
                                     );
                                 }
-                                // `s <idx>` is the announcer; quick chat too.
+                                // `j/k/l` is quick chat; `s <idx>` is the announcer.
                                 net::NetEvent::ServerCommand(ref tokens) => {
-                                    self.audio.on_server_command(
+                                    let newest = net.snapshots().newest();
+                                    let protocol = &net::protocol::PROTOCOL_V1;
+                                    let quick_chat = self.quick_chat.on_server_command(
                                         &self.fs,
                                         tokens,
-                                        net.configstrings(),
+                                        |num| {
+                                            newest
+                                                .and_then(|s| s.clients.get(&num))
+                                                .map(|c| c.field_i32(protocol, "team"))
+                                        },
                                     );
+                                    if !quick_chat {
+                                        self.audio.on_server_command(
+                                            &self.fs,
+                                            tokens,
+                                            net.configstrings(),
+                                        );
+                                    }
                                 }
                                 net::NetEvent::GamestateReady => gamestate_ready = true,
                                 _ => {}
                             }
+                        }
+
+                        // One quick-chat line per second, played and shown
+                        // like a chat line (retail queues text + alias).
+                        if let Some(line) = self.quick_chat.drain(time) {
+                            let name = net
+                                .snapshots()
+                                .newest()
+                                .and_then(|s| s.clients.get(&line.client_num))
+                                .map(|c| c.name(&net::protocol::PROTOCOL_V1))
+                                .unwrap_or_else(|| format!("player {}", line.client_num));
+                            println!("{}", net::strip_colors(&format!("{name}: {}", line.text)));
+                            if let Some(hud) = &mut self.hud {
+                                hud.chat
+                                    .push(&format!("{name}: {}", line.text), false, time);
+                            }
+                            self.audio.play(&self.fs, line.cue);
                         }
 
                         // Re-send `score` every 2 s while Tab is held, as the
