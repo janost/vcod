@@ -244,6 +244,82 @@ pub fn map_sort_token(tok: &str) -> Option<f32> {
     }
 }
 
+pub const SORT_OPAQUE: f32 = 3.0;
+pub const SORT_DECAL: f32 = 4.0;
+pub const SORT_SEETHROUGH: f32 = 5.0;
+pub const SORT_BANNER: f32 = 6.0;
+pub const SORT_WATER: f32 = 8.75;
+pub const SORT_BLEND0: f32 = 9.0;
+pub const SORT_ADDITIVE: f32 = 10.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawClass {
+    Opaque,
+    Blend,
+    Additive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClassedStage {
+    pub class: DrawClass,
+    pub depth_write: bool,
+    pub bias: bool,
+    pub two_sided: bool,
+}
+
+/// Start true; a blend clears it unless it degenerates to (One, Zero); an
+/// explicit `depthWrite` keyword wins over both.
+fn depth_write(st: &Stage) -> bool {
+    if let Some(dw) = st.depth_write {
+        return dw;
+    }
+    match &st.blend {
+        None => true,
+        Some(pair) => *pair == (BlendFactor::One, BlendFactor::Zero),
+    }
+}
+
+impl Shader {
+    /// Explicit `sort` wins; otherwise the RTCW FinishShader defaults in
+    /// sky > polygon offset > stage-0 blend order.
+    pub fn sort_value(&self) -> f32 {
+        self.sort.unwrap_or_else(|| {
+            if self.sky.is_some() {
+                2.0
+            } else if self.polygon_offset {
+                SORT_DECAL
+            } else {
+                match self.stages.first().map(|s| &s.blend) {
+                    Some(Some(_)) if depth_write(self.stages.first().unwrap()) => SORT_SEETHROUGH,
+                    Some(Some(_)) => SORT_BLEND0,
+                    _ => SORT_OPAQUE,
+                }
+            }
+        })
+    }
+
+    /// Per-stage draw facts; `None` when `idx` is out of range.
+    pub fn classify_stage(&self, idx: usize) -> Option<ClassedStage> {
+        let st = self.stages.get(idx)?;
+        let class = match st.blend {
+            None => DrawClass::Opaque,
+            Some((_, BlendFactor::One)) | Some((_, BlendFactor::SrcAlphaSaturate)) => {
+                DrawClass::Additive
+            }
+            Some(_) => DrawClass::Blend,
+        };
+        // exact compare is sound: both sides come from the same 4.0 literal
+        // or its exact decimal parse
+        let bias = self.polygon_offset || self.sort == Some(SORT_DECAL);
+        Some(ClassedStage {
+            class,
+            depth_write: depth_write(st),
+            bias,
+            two_sided: self.two_sided,
+        })
+    }
+}
+
 /// Dedupes warnings by `(shader name, message)` so a malformed script shape
 /// logs once no matter how many shaders hit it.
 pub struct WarnSet {
@@ -1491,5 +1567,225 @@ textures/sfx/test_water
         assert_eq!(map_sort_token("16"), Some(16.0));
         assert_eq!(map_sort_token("WATER"), Some(8.75));
         assert_eq!(map_sort_token("bogus"), None);
+    }
+
+    // ---- classification and sort mapping ----
+
+    fn stage_of(blend: Option<(BlendFactor, BlendFactor)>, depth_write: Option<bool>) -> Stage {
+        Stage {
+            bundles: Vec::new(),
+            blend,
+            depth_write,
+            alpha_func: None,
+            rgb_gen: RgbGen::Identity,
+            alpha_gen: AlphaGen::Identity,
+        }
+    }
+
+    fn shader_of(stages: Vec<Stage>) -> Shader {
+        Shader {
+            name: "t".to_string(),
+            stages,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn sort_constants_match_the_controller_table() {
+        assert_eq!(
+            (
+                SORT_OPAQUE,
+                SORT_DECAL,
+                SORT_SEETHROUGH,
+                SORT_BANNER,
+                SORT_WATER,
+                SORT_BLEND0,
+                SORT_ADDITIVE
+            ),
+            (3.0, 4.0, 5.0, 6.0, 8.75, 9.0, 10.0)
+        );
+    }
+
+    #[test]
+    fn explicit_sort_beats_every_derived_default() {
+        let mut sh = shader_of(vec![stage_of(
+            Some((BlendFactor::One, BlendFactor::One)),
+            None,
+        )]);
+        sh.sky = Some(SkyParms {
+            env: String::new(),
+            cloud_height: 512.0,
+        });
+        sh.polygon_offset = true;
+        for v in [1.0, 2.0, SORT_OPAQUE, SORT_DECAL, 15.0] {
+            sh.sort = Some(v);
+            assert_eq!(sh.sort_value(), v, "{v}");
+        }
+    }
+
+    #[test]
+    fn derived_sort_defaults_follow_finish_rule_order() {
+        assert_eq!(shader_of(Vec::new()).sort_value(), SORT_OPAQUE);
+        assert_eq!(
+            shader_of(vec![stage_of(None, None)]).sort_value(),
+            SORT_OPAQUE
+        );
+
+        let mut sky = shader_of(vec![stage_of(None, None)]);
+        sky.sky = Some(SkyParms {
+            env: String::new(),
+            cloud_height: 512.0,
+        });
+        assert_eq!(sky.sort_value(), 2.0);
+
+        let mut decal = shader_of(vec![stage_of(None, None)]);
+        decal.polygon_offset = true;
+        assert_eq!(decal.sort_value(), SORT_DECAL);
+        // sky outranks polygon offset
+        let mut sky_decal = sky;
+        sky_decal.polygon_offset = true;
+        assert_eq!(sky_decal.sort_value(), 2.0);
+
+        // stage0 blended and still writing depth -> see-through
+        let seethrough = shader_of(vec![stage_of(
+            Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha)),
+            Some(true),
+        )]);
+        assert_eq!(seethrough.sort_value(), SORT_SEETHROUGH);
+        // stage0 blended without depth write -> blend0
+        let blend0 = shader_of(vec![stage_of(
+            Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha)),
+            None,
+        )]);
+        assert_eq!(blend0.sort_value(), SORT_BLEND0);
+        // (One, Zero) is still a blend here but keeps depth write
+        let degen = shader_of(vec![stage_of(
+            Some((BlendFactor::One, BlendFactor::Zero)),
+            None,
+        )]);
+        assert_eq!(degen.sort_value(), SORT_SEETHROUGH);
+        assert!(degen.classify_stage(0).unwrap().depth_write);
+        // polygon offset outranks the stage-derived keys
+        let mut decal_blend = shader_of(vec![stage_of(
+            Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha)),
+            None,
+        )]);
+        decal_blend.polygon_offset = true;
+        assert_eq!(decal_blend.sort_value(), SORT_DECAL);
+    }
+
+    #[test]
+    fn stage_depth_write_rules() {
+        for (blend, explicit, want) in [
+            (None, None, true),
+            (None, Some(true), true),
+            (None, Some(false), false),
+            (
+                Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha)),
+                None,
+                false,
+            ),
+            (
+                Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha)),
+                Some(true),
+                true,
+            ),
+            (Some((BlendFactor::One, BlendFactor::Zero)), None, true),
+            (
+                Some((BlendFactor::One, BlendFactor::Zero)),
+                Some(false),
+                false,
+            ),
+        ] {
+            let sh = shader_of(vec![stage_of(blend.clone(), explicit)]);
+            let cs = sh.classify_stage(0).unwrap();
+            assert_eq!(cs.depth_write, want, "{blend:?} {explicit:?}");
+        }
+    }
+
+    #[test]
+    fn draw_class_from_dst_factor() {
+        for (blend, want) in [
+            (None, DrawClass::Opaque),
+            (
+                Some((BlendFactor::One, BlendFactor::One)),
+                DrawClass::Additive,
+            ),
+            (
+                Some((BlendFactor::SrcAlpha, BlendFactor::One)),
+                DrawClass::Additive,
+            ),
+            (
+                Some((BlendFactor::DstColor, BlendFactor::SrcAlphaSaturate)),
+                DrawClass::Additive,
+            ),
+            (
+                Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha)),
+                DrawClass::Blend,
+            ),
+            (
+                Some((BlendFactor::One, BlendFactor::Zero)),
+                DrawClass::Blend,
+            ),
+            (
+                Some((BlendFactor::One, BlendFactor::OneMinusSrcColor)),
+                DrawClass::Blend,
+            ),
+        ] {
+            let sh = shader_of(vec![stage_of(blend.clone(), None)]);
+            assert_eq!(sh.classify_stage(0).unwrap().class, want, "{blend:?}");
+        }
+    }
+
+    #[test]
+    fn out_of_range_stage_is_none() {
+        let sh = shader_of(vec![stage_of(None, None)]);
+        assert_eq!(sh.classify_stage(1), None);
+        assert_eq!(shader_of(Vec::new()).classify_stage(0), None);
+    }
+
+    #[test]
+    fn bias_and_two_sided_flags() {
+        let mut sh = shader_of(vec![stage_of(None, None)]);
+        let cs = sh.classify_stage(0).unwrap();
+        assert!(!cs.bias);
+        assert!(!cs.two_sided);
+        sh.two_sided = true;
+        assert!(sh.classify_stage(0).unwrap().two_sided);
+
+        sh.two_sided = false;
+        sh.polygon_offset = true;
+        assert!(sh.classify_stage(0).unwrap().bias);
+
+        let mut named = shader_of(vec![stage_of(None, None)]);
+        named.sort = map_sort_token("decal");
+        assert!(named.classify_stage(0).unwrap().bias);
+        assert_eq!(named.sort_value(), SORT_DECAL);
+
+        let mut num = shader_of(vec![stage_of(None, None)]);
+        num.sort = Some(4.0);
+        assert!(num.classify_stage(0).unwrap().bias);
+
+        let mut other = shader_of(vec![stage_of(None, None)]);
+        other.sort = Some(4.25);
+        assert!(!other.classify_stage(0).unwrap().bias);
+    }
+
+    #[test]
+    fn classify_end_to_end_through_the_parser() {
+        let sh = parse_one(
+            "t { cull none polygonoffset sort decal \
+             { blendFunc GL_SRC_ALPHA GL_ONE_MINUS_SRC_ALPHA map a.tga depthWrite } }",
+        );
+        assert_eq!(sh.sort_value(), SORT_DECAL);
+        assert_eq!(
+            sh.classify_stage(0),
+            Some(ClassedStage {
+                class: DrawClass::Blend,
+                depth_write: true,
+                bias: true,
+                two_sided: true,
+            })
+        );
     }
 }
