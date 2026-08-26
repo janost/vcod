@@ -185,9 +185,10 @@ These work in every mode:
 | Z | Toggle prone |
 | Q / E | Lean left / right |
 | Shift | Slow walk |
-| LMB | Fire (hitscan, leaves an impact mark) |
+| LMB | Fire (hitscan, per-surface impact effect and tracer) |
 | RMB | Aim down sights (held) |
 | R | Reload |
+| 1-6 | Weapon: colt, thompson, mp40, mp44, enfield, kar98k |
 
 ## Known limitations
 
@@ -209,13 +210,16 @@ These work in every mode:
   through doorways than retail draws. Outside every cell (fly mode above the
   map) only the frustum culls, and a cell whose top is below the camera is
   frustum-culled directly: retail assumes nobody looks over a cell's walls.
-- Foliage, fences and other alpha-cutout surfaces collide as drawn, so a bush
-  or a wire fence stops the player like a solid wall.
+- Alpha-cutout surfaces without a clip bit (bushes, treelines, ground decals)
+  no longer collide; masked wire and iron fences carry PLAYERCLIP in the BSP
+  and still stop the player, but bullets pass them, as on a retail server.
 - Submodels (doors, exploding walls) collide by their brush hulls, but only
   as static geometry: no entity-driven movers, so there is nothing to ride.
-- Bullet impacts in walk mode are one generic mark plus a smoke puff. Marks
-  share the 256-entry decal ring with spectate effects; the oldest go first.
-  Spectate mode picks the per-surface effect the way the retail client does.
+- Walk-mode bullet impacts resolve per surface through `fx/iw_impacts.csv`
+  like spectate does, plus tracers. No penetration, grenades or projectiles.
+- Walk mode carries six weapons on keys 1-6 (colt, thompson, mp40, mp44,
+  enfield, kar98k) with per-weapon viewmodel, anims, sounds and reserve
+  ammo; sniper scope overlays are not drawn.
 - No mantling - which retail 1.1 MP turns out not to have either; ledge hops
   are plain jumps and step-ups (docs/research/cod11-mantle.md).
 - No doppler, matching retail: the 1.1 engine never sets a Miles velocity

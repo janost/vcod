@@ -1,8 +1,10 @@
 //! Weapon state machine: picks the viewmodel clip (idle, fire, rechamber,
 //! reload, ADS) from LMB/RMB/R input and weapon-file times. Pure logic.
 //!
-//! Only checked against kar98k. `adsBobFactor` and `rechamberWhileAds` are
-//! never read (kar98k ships both as 1); a weapon that differs needs them wired.
+//! Checked against the six WALK_LOADOUT files. Not modelled: sway, kick,
+//! segmented reloads, altWeapon. `adsBobFactor` semantics are INFERRED from
+//! its values (1 on rifles, 0 on thompson/springfield); no decompilation
+//! evidence yet.
 
 use crate::pk3::Pk3Fs;
 use anyhow::{anyhow, Result};
@@ -297,6 +299,11 @@ impl WeaponState {
         }
     }
 
+    /// Rounds left in the clip, for HUD readouts.
+    pub fn ammo(&self) -> u32 {
+        self.ammo
+    }
+
     pub fn update(&mut self, dt: f32, input: WeaponInput) -> WeaponOut {
         let mut fired = false;
 
@@ -304,8 +311,7 @@ impl WeaponState {
             // No input buffering; RMB still integrates below.
             State::Raising | State::Firing | State::Rechambering | State::Reloading => {}
             State::Idle | State::AdsIdle | State::AdsUp | State::AdsDown => {
-                let trigger =
-                    input.fire || (!self.def.semi_auto && input.fire_held);
+                let trigger = input.fire || (!self.def.semi_auto && input.fire_held);
                 if trigger && self.ammo > 0 {
                     self.enter_firing();
                     fired = true;
@@ -523,7 +529,8 @@ mod tests {
     }
 
     #[test]
-    fn retail_files_parse_semi_auto_start_ammo_and_ads_bob() {        let Some(fs) = crate::testing::game_fs() else {
+    fn retail_files_parse_semi_auto_start_ammo_and_ads_bob() {
+        let Some(fs) = crate::testing::game_fs() else {
             return;
         };
         let kar = load(&fs, "kar98k_mp").unwrap();
@@ -679,6 +686,24 @@ mod tests {
             shots += w.update(1.0 / 60.0, held).fired as usize;
         }
         assert_eq!(shots, 2, "fires on raise settle, then once more by 0.66 s");
+    }
+
+    #[test]
+    fn ammo_getter_reads_the_clip() {
+        let mut w = WeaponState::new(auto_def());
+        assert_eq!(w.ammo(), 5);
+        step(&mut w, 0.6, WeaponInput::default());
+        assert!(
+            w.update(
+                1.0 / 60.0,
+                WeaponInput {
+                    fire: true,
+                    ..Default::default()
+                }
+            )
+            .fired
+        );
+        assert_eq!(w.ammo(), 4);
     }
 
     #[test]

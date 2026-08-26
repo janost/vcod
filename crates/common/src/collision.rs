@@ -435,14 +435,7 @@ impl CollisionWorld {
         self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, TRACE_MASK_SHOT)
     }
 
-    fn trace_with_mask(
-        &self,
-        start: Vec3,
-        end: Vec3,
-        mins: Vec3,
-        maxs: Vec3,
-        mask: u32,
-    ) -> Trace {
+    fn trace_with_mask(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> Trace {
         let mut trace = Trace {
             fraction: 1.0,
             endpos: end,
@@ -1593,8 +1586,11 @@ mod tests {
     /// Census words from bsp-ibsp59-format.md "Content flags": bushwalls are
     /// TRANSLUCENT|WINDOW, brushless terrain bare 0x4, masked fences carry
     /// TRANSLUCENT|PLAYERCLIP|MONSTERCLIP.
-    const BUSH_WALL: (&str, u32, u32) =
-        ("textures/global_use/foliage_masked@bushwall1", 0x2000_0002, 8_454_176);
+    const BUSH_WALL: (&str, u32, u32) = (
+        "textures/global_use/foliage_masked@bushwall1",
+        0x2000_0002,
+        8_454_176,
+    );
     const TERRAIN: (&str, u32, u32) = ("textures/normandy/ground/a_grass1a", 0x4, 10 << 20);
     const BARBED_FENCE: (&str, u32, u32) = (
         "textures/normandy/transparents/metal_masked@barbed_fence1",
@@ -1612,7 +1608,12 @@ mod tests {
         assert!(world.tris.is_empty(), "the bush soup must not be harvested");
         assert_eq!(
             world
-                .box_trace(Vec3::new(0.0, 0.0, 50.0), Vec3::new(200.0, 0.0, 50.0), Vec3::ZERO, Vec3::ZERO)
+                .box_trace(
+                    Vec3::new(0.0, 0.0, 50.0),
+                    Vec3::new(200.0, 0.0, 50.0),
+                    Vec3::ZERO,
+                    Vec3::ZERO
+                )
                 .fraction,
             1.0
         );
@@ -1632,17 +1633,26 @@ mod tests {
             Vec3::ZERO,
             Vec3::ZERO,
         );
-        assert!(down.fraction < 1.0 && (down.endpos.z - 10.0).abs() < 0.2, "{down:?}");
-        assert!(world.shot_trace(
-            Vec3::new(150.0, 0.0, 100.0),
-            Vec3::new(150.0, 0.0, -100.0)
-        ).fraction < 1.0);
+        assert!(
+            down.fraction < 1.0 && (down.endpos.z - 10.0).abs() < 0.2,
+            "{down:?}"
+        );
+        assert!(
+            world
+                .shot_trace(Vec3::new(150.0, 0.0, 100.0), Vec3::new(150.0, 0.0, -100.0))
+                .fraction
+                < 1.0
+        );
     }
 
     #[test]
     fn playerclip_fence_soups_stop_movement_but_not_shots() {
         let world = synthetic_soup_world(&[BARBED_FENCE], &[(0, wall_tri(100.0))]);
-        assert_eq!(world.tris.len(), 1, "a clipped fence soup stays in the world");
+        assert_eq!(
+            world.tris.len(),
+            1,
+            "a clipped fence soup stays in the world"
+        );
         let (start, end) = (Vec3::new(0.0, 0.0, 50.0), Vec3::new(200.0, 0.0, 50.0));
         let box_mins = Vec3::new(-15.0, -15.0, 0.0);
         let box_maxs = Vec3::new(15.0, 15.0, 60.0);
@@ -1654,8 +1664,10 @@ mod tests {
 
     #[test]
     fn solid_soups_stop_movement_and_shots() {
-        let world =
-            synthetic_soup_world(&[("textures/test/solid", 0x1, 5 << 20)], &[(0, wall_tri(100.0))]);
+        let world = synthetic_soup_world(
+            &[("textures/test/solid", 0x1, 5 << 20)],
+            &[(0, wall_tri(100.0))],
+        );
         let (start, end) = (Vec3::new(0.0, 0.0, 50.0), Vec3::new(200.0, 0.0, 50.0));
         assert!(
             world.box_trace(start, end, Vec3::ZERO, Vec3::ZERO).fraction < 1.0,
