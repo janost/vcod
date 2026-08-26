@@ -110,6 +110,19 @@ Per-stage state rides to the GPU in 176-byte `StageParams` slots
 (`renderer.rs`; size pinned by a const assert), one bind group per stage, with
 animated stages re-evaluated per frame.
 
+Ruling on blend-sort granularity, recorded so nobody re-litigates it: sorting
+keys on per-batch centroids (material x lightmap), not per-soup, so translucent
+soups sharing a batch never reorder against each other. The numeric sorts
+between SEE_THROUGH and BLEND0 (water 8.75, banner 6, underwater 8) collapse
+into one unsorted seethrough band. Fly-throughs on mp_harbor and noville showed
+no artifacts from that collapse; I revisit only if overlapping same-material
+translucency ever does.
+
+One sampler pair serves every stage (`stage_bind_groups`, `renderer.rs`), so
+when either bundle of a stage is clamped both currently sample with
+ClampToEdge and a repeat bundle-0 + clamp bundle-1 stage would wrap its
+bundle-0 incorrectly; zero known corpus hits.
+
 ## 4. Runtime math
 
 - Wave forms index a 1024-entry sin table built over SIZE-1 degrees of arc, so

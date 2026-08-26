@@ -1940,6 +1940,14 @@ impl Renderer {
                     let Some((variant, two_sided, _, _)) = stage_draw_facts(sh, si) else {
                         continue;
                     };
+                    // a sky stage may carry explicit depthWrite; the dome must
+                    // still never write depth, it draws first at far depth
+                    let variant = match variant {
+                        StageVariant::BlendDepthWrite => StageVariant::Blend,
+                        StageVariant::AdditiveFixedDepthWrite => StageVariant::AdditiveFixed,
+                        StageVariant::AdditiveFadedDepthWrite => StageVariant::AdditiveFaded,
+                        other => other,
+                    };
                     // the block's slots were allocated with every other material's
                     let slot = slot_of[&(mat_idx, si)];
                     let (mat, stage) = stage_bind_groups(
