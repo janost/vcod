@@ -13,13 +13,23 @@ pub const SPEED_RUN: f32 = 190.0;
 pub const SCALE_WALK: f32 = 0.4;
 pub const SCALE_CROUCH: f32 = 0.65;
 pub const SCALE_PRONE: f32 = 0.15;
-pub const JUMP_VELOCITY: f32 = 250.0;
-pub const PM_ACCELERATE: f32 = 10.0;
+/// Ground-jump heights: vz = sqrt(2 * height * GRAVITY). Retail rodata
+/// 0x70BE8/0x70BEC, applied in fn 0x316F4 @0x31CC0 (game.mp.i386.so).
+pub const JUMP_HEIGHT_STAND: f32 = 34.0;
+pub const JUMP_HEIGHT_LOW: f32 = 24.0;
+// Accelerate/friction/stopspeed: retail CoD 1.1 rodata (game.mp.i386.so),
+// loaded by PM_Friction @0x2e460 and the movers.
+pub const PM_ACCELERATE: f32 = 9.0;
+/// Stance accelerates selected per stance in the mover @0x2f49b-0x2f4c8.
+pub const PM_DUCKED_ACCELERATE: f32 = 12.0;
+pub const PM_PRONE_ACCELERATE: f32 = 19.0;
 pub const PM_AIRACCELERATE: f32 = 1.0;
-pub const PM_FRICTION: f32 = 6.0;
-// Not Q3's 100; the doc section explains the ratio and the stance scaling in `friction`.
-pub const PM_STOPSPEED: f32 = 60.0;
+pub const PM_FRICTION: f32 = 5.5;
+/// Friction control floor: drop uses max(speed, stopspeed) (@0x2e500).
+pub const PM_STOPSPEED: f32 = 100.0;
 pub const STEPSIZE: f32 = 18.0;
+/// Step height while prone (PM_StepSlideMove @0x35045 tests pm_flags bit 0x1).
+pub const STEPSIZE_PRONE: f32 = 10.0;
 pub const OVERCLIP: f32 = 1.001;
 pub const MIN_WALK_NORMAL: f32 = 0.7;
 pub const MAX_CLIP_PLANES: usize = 5;
@@ -201,8 +211,14 @@ pub fn pmove(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
     } else if ps.water_level > 1 {
         water_move(ps, input, world, dt);
     } else {
-        if input.jump && ps.on_ground && ps.stance == Stance::Stand {
-            ps.velocity.z = JUMP_VELOCITY;
+        // retail ground jump (fn 0x316F4 @0x31CC0): gated on forward input,
+        // stance-dependent height, horizontal velocity kept
+        if input.jump && ps.on_ground && input.forward != 0.0 {
+            let height = match ps.stance {
+                Stance::Stand => JUMP_HEIGHT_STAND,
+                _ => JUMP_HEIGHT_LOW,
+            };
+            ps.velocity.z = (2.0 * height * GRAVITY).sqrt();
             ps.on_ground = false;
         }
         if ps.on_ground {
@@ -330,9 +346,10 @@ fn friction(ps: &mut PlayerState, on_ladder: bool, dt: f32) {
     }
     let mut drop = 0.0;
     if ps.on_ground && ps.water_level <= 1 {
-        // Stop-speed floor scaled by stance so slow stances reach their wish
-        // speed. Standing must stay under the ~54 u/s a shallow wall slide
-        // leaves, or the player stalls on the wall.
+        // Retail floors drop at a flat 100 (@0x2e500), which stalls prone
+        // under the Q3 accelerate shape (4.4 loss vs 4.33 gain per frame);
+        // stance-scaling the floor is the labeled deviation that keeps every
+        // stance moving.
         let control = speed.max(PM_STOPSPEED * ps.stance.speed_scale());
         drop += control * PM_FRICTION * dt;
     }
@@ -387,16 +404,17 @@ fn walk_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
         water_move(ps, input, world, dt);
         return;
     }
-    let (dir, mut wishspeed) = wish(ps, input);
-    // wading clamp: linear from full speed at the ankles to the swim scale
-    // with water at the eyes (RTCW `PM_WalkMove`)
-    if ps.water_level > 0 {
-        let ws = 1.0 - (1.0 - SCALE_SWIM) * (ps.water_level as f32 / 3.0);
-        wishspeed = wishspeed.min(SPEED_RUN * ws);
-    }
+    let (dir, wishspeed) = wish(ps, input);
+    // accelerate per stance: 9 / 12 ducked / 19 prone, selected in retail's
+    // mover @0x2f49b-0x2f4c8
+    let accel = match ps.stance {
+        Stance::Stand => PM_ACCELERATE,
+        Stance::Crouch => PM_DUCKED_ACCELERATE,
+        Stance::Prone => PM_PRONE_ACCELERATE,
+    };
     // along the slope, so it costs no speed
     let dir = clip_velocity(dir, ps.ground_normal).normalize_or_zero();
-    accelerate(ps, dir, wishspeed, PM_ACCELERATE, dt);
+    accelerate(ps, dir, wishspeed, accel, dt);
     ps.velocity = clip_velocity(ps.velocity, ps.ground_normal);
     if ps.velocity.x == 0.0 && ps.velocity.y == 0.0 {
         return;
@@ -709,8 +727,14 @@ fn slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bo
     bumps != 0
 }
 
-/// Q3 `bg_slidemove.c` `PM_StepSlideMove`.
+/// Q3 `bg_slidemove.c` `PM_StepSlideMove`. Step height 18, or 10 while prone
+/// (retail picks the height off pm_flags bit 0x1 @0x35045, not ladder state).
 fn step_slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bool) {
+    let step_size = if ps.stance == Stance::Prone {
+        STEPSIZE_PRONE
+    } else {
+        STEPSIZE
+    };
     let start_o = ps.origin;
     let start_v = ps.velocity;
     if !slide_move(ps, world, dt, gravity) {
@@ -721,7 +745,7 @@ fn step_slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravit
 
     // `allsolid`, not `startsolid`: a bbox merely touching the floor is
     // startsolid, and stepping up is how that resolves.
-    let up = world.box_trace(start_o, start_o + Vec3::Z * STEPSIZE, mins, maxs);
+    let up = world.box_trace(start_o, start_o + Vec3::Z * step_size, mins, maxs);
     let step = up.endpos.z - start_o.z;
     if up.allsolid || step <= 0.0 {
         return;
@@ -835,26 +859,126 @@ mod tests {
     }
 
     #[test]
-    fn jump_apex_matches_constants() {
+    fn ground_jump_apex_matches_stance_height() {
         let w = flat();
+        let run = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        // retail: vz = sqrt(2 * height * g), height 34 standing (0x70be8)
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50); // settle
         let mut apex = 0.0f32;
-        let jump = PmInput {
+        let launch = PmInput {
+            forward: 1.0,
             jump: true,
             ..Default::default()
         };
-        pmove(&mut ps, &jump, &w, 1.0 / 125.0);
+        pmove(&mut ps, &launch, &w, 1.0 / 125.0);
         for _ in 0..200 {
-            pmove(&mut ps, &PmInput::default(), &w, 1.0 / 125.0);
+            pmove(&mut ps, &run, &w, 1.0 / 125.0);
             apex = apex.max(ps.origin.z);
         }
-        let expect = JUMP_VELOCITY * JUMP_VELOCITY / (2.0 * GRAVITY); // ~39
         assert!(
-            (apex - expect).abs() < 3.0,
-            "apex {apex}, expected ~{expect}"
+            (apex - JUMP_HEIGHT_STAND).abs() < 2.0,
+            "standing apex {apex}, expected ~{}",
+            JUMP_HEIGHT_STAND
         );
         assert!(ps.on_ground);
+
+        // crouched jumps too, at the lower 24-unit height (0x70bec)
+        let launch = PmInput {
+            forward: 1.0,
+            jump: true,
+            crouch: true,
+            ..Default::default()
+        };
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.stance = Stance::Crouch;
+        tick(&mut ps, &launch, &w, 50); // settle crouched
+        let mut apex = 0.0f32;
+        pmove(&mut ps, &launch, &w, 1.0 / 125.0);
+        for _ in 0..200 {
+            pmove(&mut ps, &launch, &w, 1.0 / 125.0);
+            apex = apex.max(ps.origin.z);
+        }
+        assert!(
+            (apex - JUMP_HEIGHT_LOW).abs() < 2.0,
+            "crouch apex {apex}, expected ~{}",
+            JUMP_HEIGHT_LOW
+        );
+    }
+
+    #[test]
+    fn ground_jump_needs_forward_input() {
+        // retail gate fn 0x316F4 @0x31CC0: cmd.forwardmove != 0
+        let w = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 50); // settle
+        tick(
+            &mut ps,
+            &PmInput {
+                jump: true,
+                ..Default::default()
+            },
+            &w,
+            10,
+        );
+        assert!(ps.on_ground, "must not jump without forward input");
+        assert!(ps.origin.z < 0.5);
+    }
+
+    #[test]
+    fn prone_steps_lower_than_standing() {
+        // retail picks the 10-unit step height off pm_flags bit 0x1
+        // (PM_StepSlideMove @0x35045), 18 otherwise (@0x35034)
+        let w = test_world(&[(Vec3::new(50.0, -200.0, 0.0), Vec3::new(1024.0, 200.0, 14.0))]);
+        let mut stand = PlayerState::spawn(Vec3::new(30.0, 0.0, 0.0), 0.0);
+        stand.velocity = Vec3::new(200.0, 0.0, 0.0);
+        for _ in 0..20 {
+            stand.velocity.x = 200.0;
+            step_slide_move(&mut stand, &w, 1.0 / 125.0, false);
+        }
+        assert!(
+            (stand.origin.z - 14.0).abs() < 0.5,
+            "standing should step 14, at {}",
+            stand.origin
+        );
+
+        let mut prone = PlayerState::spawn(Vec3::new(30.0, 0.0, 0.0), 0.0);
+        prone.stance = Stance::Prone;
+        for _ in 0..20 {
+            prone.velocity.x = 200.0;
+            step_slide_move(&mut prone, &w, 1.0 / 125.0, false);
+        }
+        assert!(
+            prone.origin.z < 1.0 && prone.origin.x < 36.0,
+            "prone must not step 14, at {}",
+            prone.origin
+        );
+    }
+
+    #[test]
+    fn ankle_deep_water_barely_slows_running() {
+        // retail has no wading wish clamp: nothing references
+        // pm_waterSwimScale/pm_waterWadeScale and the walk mover (0x2F03C)
+        // never reads water level - only the water-friction term slows you
+        let w = pool_world();
+        let run = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        let mut dry = PlayerState::spawn(Vec3::new(-400.0, 0.0, 1.0), 0.0);
+        tick(&mut dry, &run, &w, 100);
+        let mut wet = PlayerState::spawn(Vec3::new(-150.0, 200.0, 30.2), 0.0);
+        tick(&mut wet, &run, &w, 100);
+        assert_eq!(wet.water_level, 1);
+        let dry_speed = dry.velocity.truncate().length();
+        let wet_speed = wet.velocity.truncate().length();
+        assert!(
+            wet_speed > 160.0 && wet_speed > dry_speed - 12.0,
+            "ankle-deep run {wet_speed} vs dry {dry_speed}"
+        );
     }
 
     #[test]
@@ -913,11 +1037,13 @@ mod tests {
                 ..Default::default()
             },
             &w,
-            250,
+            400,
         );
         assert!(ps.origin.x < 50.0 - HALF_WIDTH + 1.0);
+        // retail constants (accel 9, stopspeed floor 100) give a lower
+        // tangential plateau than the old Q3-derived ones
         assert!(
-            ps.origin.y.abs() > 50.0,
+            ps.origin.y.abs() > 30.0,
             "should have slid along the wall, at {}",
             ps.origin
         );
@@ -1162,32 +1288,6 @@ mod tests {
             "should bob at the chest line, at {}",
             ps.origin
         );
-    }
-
-    #[test]
-    fn wading_is_slower_than_dry_running() {
-        let w = pool_world();
-        let mut ps = PlayerState::spawn(Vec3::new(-150.0, 200.0, 30.2), 0.0);
-        tick(&mut ps, &PmInput::default(), &w, 5);
-        assert_eq!(ps.water_level, 1);
-        // sample while still on the shelf: the run must not reach its edge
-        tick(
-            &mut ps,
-            &PmInput {
-                forward: 1.0,
-                ..Default::default()
-            },
-            &w,
-            100,
-        );
-        assert!(ps.origin.x < 100.0, "still on the shelf at {}", ps.origin);
-        let h = ps.velocity.truncate().length();
-        let expect = SPEED_RUN * (1.0 - (1.0 - SCALE_SWIM) * (1.0 / 3.0));
-        assert!(
-            (h - expect).abs() < 6.0,
-            "wade speed {h}, expected ~{expect}"
-        );
-        assert_eq!(ps.water_level, 1);
     }
 
     #[test]
