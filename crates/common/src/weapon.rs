@@ -230,6 +230,20 @@ pub struct WeaponOut {
     pub looping: bool,  // only Idle
     pub ads_frac: f32,  // 0..1
     pub fired: bool,
+    /// Sound cue the client plays this frame; consumed once.
+    pub cue: Option<WeaponCue>,
+}
+
+/// The state transitions that carry a weapon-file sound
+/// (docs/research/cod11-sound-system.md, section 8).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WeaponCue {
+    Fire,
+    LastShot,
+    Rechamber,
+    Reload,
+    ReloadFromEmpty,
+    Raise,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -253,6 +267,8 @@ pub struct WeaponState {
     /// Hip or Ads* clips for the Firing/Rechambering pair, fixed at the fire edge.
     ads_variant: bool,
     fire_anim: WeaponAnim,
+    /// Set by the transitions that make a sound; `output` hands it out once.
+    pending_cue: Option<WeaponCue>,
 }
 
 impl WeaponState {
@@ -265,6 +281,7 @@ impl WeaponState {
             def,
             ads_variant: false,
             fire_anim: WeaponAnim::Fire,
+            pending_cue: Some(WeaponCue::Raise),
         }
     }
 
@@ -279,6 +296,11 @@ impl WeaponState {
                     self.enter_firing();
                     fired = true;
                 } else if input.reload && self.ammo < self.def.clip_size {
+                    self.pending_cue = Some(if self.ammo == 0 {
+                        WeaponCue::ReloadFromEmpty
+                    } else {
+                        WeaponCue::Reload
+                    });
                     self.enter(State::Reloading, 0.0);
                 } else {
                     self.handle_ads_toggle(input.ads);
@@ -304,6 +326,11 @@ impl WeaponState {
     fn enter_firing(&mut self) {
         self.ammo -= 1;
         let last_shot = self.ammo == 0;
+        self.pending_cue = Some(if last_shot {
+            WeaponCue::LastShot
+        } else {
+            WeaponCue::Fire
+        });
         self.ads_variant = self.ads_frac >= 0.5;
         self.fire_anim = match (self.ads_variant, last_shot) {
             (false, false) => WeaponAnim::Fire,
@@ -387,6 +414,7 @@ impl WeaponState {
             State::AdsDown => self.enter(State::Idle, 0.0),
             State::Firing => {
                 if self.def.bolt_action && self.ammo > 0 {
+                    self.pending_cue = Some(WeaponCue::Rechamber);
                     self.enter(State::Rechambering, 0.0);
                 } else {
                     self.goto_ads(ads);
@@ -401,7 +429,7 @@ impl WeaponState {
         }
     }
 
-    fn output(&self, fired: bool) -> WeaponOut {
+    fn output(&mut self, fired: bool) -> WeaponOut {
         let rechamber_anim = if self.ads_variant {
             WeaponAnim::AdsRechamber
         } else {
@@ -424,6 +452,7 @@ impl WeaponState {
             looping,
             ads_frac: self.ads_frac,
             fired,
+            cue: self.pending_cue.take(),
         }
     }
 }
@@ -496,6 +525,50 @@ mod tests {
             out = Some(w.update(1.0 / 60.0, input));
         }
         out.unwrap()
+    }
+
+    /// The bolt-action drain: Raise, then Fire/Rechamber per shot, the
+    /// emptying shot as LastShot with no rechamber after it.
+    #[test]
+    fn cues_follow_the_transitions() {
+        let mut w = WeaponState::new(def());
+        let fire = WeaponInput {
+            fire: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            w.update(0.0, WeaponInput::default()).cue,
+            Some(WeaponCue::Raise)
+        );
+        // consumed once
+        assert_eq!(w.update(1.0 / 60.0, WeaponInput::default()).cue, None);
+        step(&mut w, 0.6, WeaponInput::default());
+
+        for _ in 0..4 {
+            let out = w.update(1.0 / 60.0, fire);
+            assert_eq!(out.cue, Some(WeaponCue::Fire));
+            // fire_time 0.33 + rechamber 1.0: the rechamber cue fires on the
+            // completion frame
+            let cues: Vec<_> = (0..84)
+                .filter_map(|_| w.update(1.0 / 60.0, WeaponInput::default()).cue)
+                .collect();
+            assert_eq!(cues, vec![WeaponCue::Rechamber]);
+            step(&mut w, 0.05, WeaponInput::default());
+        }
+
+        let out = w.update(1.0 / 60.0, fire);
+        assert_eq!(out.cue, Some(WeaponCue::LastShot));
+        let cues: Vec<_> = (0..84)
+            .filter_map(|_| w.update(1.0 / 60.0, WeaponInput::default()).cue)
+            .collect();
+        assert!(cues.is_empty(), "empty clip must not rechamber: {cues:?}");
+
+        let reload = WeaponInput {
+            reload: true,
+            ..Default::default()
+        };
+        let out = w.update(1.0 / 60.0, reload);
+        assert_eq!(out.cue, Some(WeaponCue::ReloadFromEmpty));
     }
 
     #[test]

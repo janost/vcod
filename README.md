@@ -18,10 +18,13 @@ combat effects.
 - Loads any stock or custom map from an installed copy of the game and
   renders it textured, lightmapped, props included. Skies, water, fences,
   foliage and terrain detail blends draw through their authored Q3-style
-  shader scripts. Fly around freely.
+  shader scripts. Fly around freely. The map's ambient loop plays in fly
+  and walk mode.
 - `--walk` spawns you as a soldier with Quake 3 derived movement: gravity,
   stances, stepping, wall sliding, leaning, and the kar98k viewmodel playing
-  the game's own xanim clips.
+  the game's own xanim clips. Footsteps follow the retail cadence per surface,
+  the weapon plays its file's fire/rechamber/reload sounds, and landings pick
+  their alias from fall speed.
 - `--connect <ip:port>` joins a CoD 1.1 server as a spectator. The client does
   the handshake, Huffman coding, netchan, delta snapshots and usercmds, follows
   the server's spectator camera, and renders every player as an assembled

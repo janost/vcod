@@ -132,6 +132,9 @@ enum Mode {
         /// `None` when the anims failed to load; the viewmodel then draws
         /// statically. Boxed to keep the variants a similar size.
         view_weapon: Option<Box<ViewWeapon>>,
+        /// Minimal configstring table so weapon cues resolve through the same
+        /// path as spectate: CS 7 carries the one local weapon.
+        configstrings: Vec<String>,
         /// Raw counts since the last frame, drained into the sway once per redraw.
         mouse_delta: (f32, f32),
         /// Press edges latched until the next redraw; `ads_held` is level.
@@ -449,6 +452,10 @@ fn main() -> Result<()> {
     } else {
         let (map, bsp) = local.expect("fly or walk without a local map");
         audio.on_gamestate(&map);
+        // No server to send configstring 3; every stock MP map ships an
+        // `ambient_<map>` alias (iw_sound.csv), unknown names just stay silent.
+        let ambient = format!("ambient_{map}");
+        audio.set_ambient(&fs, Some(&ambient));
         let mode = if args.walk {
             walk_mode(&map, &bsp, &fs, view_weapon)?
         } else {
@@ -721,6 +728,10 @@ fn walk_mode(
         log::warn!("no ground within 4096 units below the spawn point");
     }
 
+    let mut configstrings = vec![String::new(); 8];
+    // `entityState.weapon` is 1-based into CS 7; walk mode carries one weapon.
+    configstrings[7] = "kar98k_mp".to_string();
+
     Ok(Mode::Walk {
         world,
         ps,
@@ -728,6 +739,7 @@ fn walk_mode(
         keys: WalkKeys::default(),
         motion: viewmodel::ViewmodelMotion::new(),
         view_weapon,
+        configstrings,
         mouse_delta: (0.0, 0.0),
         fire_edge: false,
         reload_edge: false,
@@ -1505,6 +1517,7 @@ impl ApplicationHandler for App {
                         keys,
                         motion,
                         view_weapon,
+                        configstrings,
                         mouse_delta,
                         fire_edge,
                         reload_edge,
@@ -1517,7 +1530,26 @@ impl ApplicationHandler for App {
                         self.fx.step(dt, time, Some(&*world));
 
                         (input.forward, input.right) = keys.axes();
-                        pmove::pmove(ps, input, world, dt);
+                        for ev in pmove::pmove(ps, input, world, dt) {
+                            self.audio.on_game_event(
+                                &self.fs,
+                                &net::events::GameEvent {
+                                    event: ev.event,
+                                    parm: 0,
+                                    // playerState-ring form: no entity, rides the listener
+                                    entity_num: u32::MAX,
+                                    client_num: -1,
+                                    weapon: 0,
+                                    surf_type: 0,
+                                    pos: ps.origin.to_array(),
+                                    dir: [0.0; 3],
+                                    other_entity_num: u32::MAX,
+                                    attacker_entity_num: -1,
+                                },
+                                configstrings,
+                                &HashMap::new(),
+                            );
+                        }
                         input.jump = false; // Q3: a held jump doesn't autohop
                         let ground_speed = if ps.on_ground {
                             ps.velocity.truncate().length()
@@ -1556,6 +1588,40 @@ impl ApplicationHandler for App {
                             fov = camera::DEFAULT_FOV_DEG
                                 + (w.def.ads_zoom_fov - camera::DEFAULT_FOV_DEG) * out.ads_frac;
                             damp = 1.0 + (w.def.ads_view_bob_mult - 1.0) * out.ads_frac;
+                            if let Some(cue) = out.cue {
+                                self.audio.on_game_event(
+                                    &self.fs,
+                                    &net::events::GameEvent {
+                                        event: match cue {
+                                            weapon::WeaponCue::Fire => fx::registry::EV_FIRE_WEAPON,
+                                            weapon::WeaponCue::LastShot => {
+                                                fx::registry::EV_FIRE_WEAPON_LASTSHOT
+                                            }
+                                            weapon::WeaponCue::Rechamber => {
+                                                fx::registry::EV_RECHAMBER_WEAPON
+                                            }
+                                            weapon::WeaponCue::Reload => fx::registry::EV_RELOAD,
+                                            weapon::WeaponCue::ReloadFromEmpty => {
+                                                fx::registry::EV_RELOAD_FROM_EMPTY
+                                            }
+                                            weapon::WeaponCue::Raise => {
+                                                fx::registry::EV_RAISE_WEAPON
+                                            }
+                                        },
+                                        parm: 0,
+                                        entity_num: u32::MAX,
+                                        client_num: -1,
+                                        weapon: 1,
+                                        surf_type: 0,
+                                        pos: ps.origin.to_array(),
+                                        dir: [0.0; 3],
+                                        other_entity_num: u32::MAX,
+                                        attacker_entity_num: -1,
+                                    },
+                                    configstrings,
+                                    &HashMap::new(),
+                                );
+                            }
                             if out.fired {
                                 /// Q3/CoD bullet trace length.
                                 const FIRE_RANGE: f32 = 8192.0;

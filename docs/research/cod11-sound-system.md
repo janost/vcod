@@ -823,6 +823,120 @@ block, never snapshot it at connect.
 
 ---
 
+## 9a. Footstep and landing cadence (`game.mp.i386.so`, pmove side)
+
+Everything here is read off the disassembly (`gamemp.asm`, virtual addresses ==
+file offsets); none of it is live-verified against a running server, because a
+footstep event is indistinguishable in a spectator capture from any other
+entity event of the same id. The client-side half (which alias each id plays)
+is section 7b.
+
+The exported name `PM_ShouldMakeFootsteps` (@0x3221c) belongs to the *audibility
+predicate*, not the driver: effective stance prone or crouched -> 0, walk key
+(pm_flags bit 0x80) set -> 0, otherwise 1. Its result gates the grounded step
+event only; water steps bypass it and the ladder branch hardcodes audible.
+The driver is the next function (@0x322c8-0x328ca), called once per
+`PmoveSingle` on the normal path; I call it `PM_Footsteps` below.
+
+**State.** The phase counter is `ps->bobCycle` (ps+0x8, networked byte). Each
+frame: `new = round_nearest(old + pml.msec * rate) & 0xff`, and one step event
+fires per crossing of the `(old + 64) ^ (new + 64)` sign boundary - i.e. at
+phase 64 and 192, twice per 256-tick ring, never at the wrap itself.
+
+**Rate table** (ticks/ms; rodata 0x70c28-0x70c44). The full formula is
+`rate = pm_speed / W * K`, but with MP-default speed scales every weight term
+is 1.0 and `W` collapses to the speed itself (verified by simulating the FPU
+block @0x324fb-0x326c4 for forward/side/back/diagonal inputs), leaving bare K:
+
+| stance | walking | K | backpedal only affects stand |
+|---|---|---|---|
+| stand | no | 0.335 | 0.36 |
+| stand | yes | 0.305 | 0.325 |
+| crouch | no | 0.34 | - |
+| crouch | yes | 0.315 | - |
+| prone | no | 0.25 | - |
+| prone | yes | 0.24 | - |
+
+"Backpedal" is pm_flags bit 0x40, set by `PmoveSingle` when
+`cmd.forwardmove < 0`. At full run (190) that is one step every ~380 ms;
+per-frame rounding quantizes the effective period (at fixed 8 ms frames the
+2.68-tick advance always rounds to 3).
+
+**Gates**, in driver order:
+
+1. `pm_type > 5` produces nothing.
+2. Airborne without the ladder flag: nothing (the cycle freezes).
+3. Airborne on a ladder: interval `vz / 95.25 * k` with k = 0.35 walking /
+   0.45 running (rodata 0x70c10-18), same crossing rule, audible regardless of
+   the predicate. The surface comes from a probe box (mins/maxs shrunk 6 per
+   side, z floored at 8) swept from the feet along `-vLadderVec * 31`; a miss
+   or material 0 substitutes **material 13 (metal)**, and the event is always
+   run-numbered (`1 + mat`) (@0x32039-0x3214c). There is also a 299 ms quiet
+   window after `ps->jumpTime` is stamped (ladder push-off).
+4. Grounded under speed 10: nothing, and the cycle resets to 0 above speed 1
+   (creep) (@0x324af-0x324f4).
+5. Grounded at speed >= 10: timer advances always; the step event needs move
+   keys held (`cmd.forwardmove | cmd.rightmove != 0` as a word test @0x3282a)
+   **and** the predicate. Keys-released glide updates the timer and plays no
+   events, whatever the speed (@0x32831-0x328c1).
+
+**Event choice** (`PM_FootstepEvent` @0x31fe4), first match wins:
+
+- water level 1 or 2: fixed ids 67 / 44 / 21 (prone / walk-key / run; base +
+  material 20), bypassing the predicate; level 3: nothing (@0x3200a, 0x321b0).
+- ground trace from the movement code (`pml + 0x50`): `sf & 0x2000` or
+  material 0 -> EV_NONE; else `base + mat` with bases run 1, walk 24 (walk
+  key), prone 47 (@0x32156-0x321a3).
+
+**Jump**: the ordinary ground jump (fn 0x316F4 @0x31CC0) emits **no event**.
+Only `PM_Jump`'s ladder push-off / steep-slope launch emits `EV_JUMP_*`
+(70 + mat from the then-current ground-trace flags; material 0 -> nothing)
+(@0x2ed7a-0x2edb9). Jump grunts on ordinary jumps are animscript business.
+
+**Landing** (`PM_CrashLand` @0x2fd68, called by the ground-trace helper on an
+air -> ground transition): water level 3 skips; damage-free impact ladder on
+the kinematic landing speed: <= 4 silent, < 8 a walk-step id (24 + mat),
+< 12 a run-step id (1 + mat), >= 12 an `EV_LANDING_*` (93 + mat) plus a x0.67
+velocity damp; `sf & 0x2000`/material 0 degrade to silence. Damage routes to
+`EV_LANDING_PAIN_*` (116 + mat, parm = damage percent) instead - sound-wise
+that alias pair resolves through section 7b like the rest.
+
+Other movement emitters seen while in there, for completeness: stair-step 143
+(parm = clamped step delta + 128), foliage rustle 139 (cvar-driven interval
+trace @0x328cc), water enter/leave 144/145, forced stance 140/141/142.
+
+### vcod port notes and divergences
+
+- Implemented in `pmove.rs` (`footsteps`, `ground_step_event`,
+  `ladder_step_event`, `landing_event`), emitting wire ids straight into the
+  shared cue resolver; `collision::sound_material` extracts `(sf >> 20) &
+  0x1f`, now threaded through triangle hits as well as brushes.
+- The rate uses bare K (see weight collapse above); `ps.speed` int truncation
+  is not replicated.
+- Stances are instant in vcod, so the viewheight-lerp classification and the
+  transition blend between speed scales have no equivalent.
+- The ladder push-off jump itself landed separately (movement side); its
+  `EV_JUMP_*` event reads the last ground trace's material like retail, which
+  in practice means push-offs from the base are audible and mid-wall push-offs
+  are not (the downward trace of a climb hits nothing). The 299 ms quiet
+  window after a push-off gates the climb steps.
+- Landing impact approximates retail's kinematic value with the fastest
+  downward speed sampled while airborne (within one frame of gravity).
+- Fall damage does not exist locally, so only the damage-free landing ladder
+  applies; the x0.67 hard-landing velocity damp is not ported (movement, not
+  sound).
+- Foliage rustle (139) is not ported.
+
+### Ambient without a server
+
+Local fly/walk modes derive the ambient track offline: every stock MP map has
+an `ambient_<mapname>` row in `soundaliases/iw_sound.csv` (all twelve verified
+in pak1.pk3), so vcod plays `ambient_<map>` at load and stays silent when a
+custom map has no such row. This mirrors what a gametype script's
+`ambientPlay` would have put in configstring 3.
+
+---
+
 ## 10. Streamed playback
 
 `VERIFIED`. `type=streamed` changes loading (no decode at map load; only a

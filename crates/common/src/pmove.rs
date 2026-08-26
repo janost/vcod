@@ -86,6 +86,69 @@ pub const LADDER_REJUMP_COOLDOWN_MS: f32 = 500.0;
 /// (pm_ladderPushOff, rodata 0x708d8).
 pub const LADDER_PUSHOFF_SPEED: f32 = 128.0;
 
+// Footstep cadence, decoded from PM_ShouldMakeFootsteps @0x322c8 and
+// PM_FootstepEvent @0x31fe4 (game.mp.i386.so); facts live in
+// docs/research/cod11-sound-system.md, "Footstep and landing cadence".
+/// Wire `EV_*` group bases; the sound surface index is added to the base.
+const EV_FOOTSTEP_RUN_BASE: i32 = 1;
+const EV_FOOTSTEP_WALK_BASE: i32 = 24;
+const EV_FOOTSTEP_PRONE_BASE: i32 = 47;
+const EV_JUMP_BASE: i32 = 70;
+const EV_LANDING_BASE: i32 = 93;
+/// Ladder climb steps stay quiet this long after a push-off
+/// (`cmd.serverTime - ps->jumpTime <= 0x12b`, @0x323b9-0x323c8).
+const LADDER_STEP_QUIET_MS: f32 = 299.0;
+/// Water-material footstep ids (base + 20), fixed regardless of ground surface.
+const EV_FOOTSTEP_PRONE_WATER: i32 = 67;
+const EV_FOOTSTEP_WALK_WATER: i32 = 44;
+const EV_FOOTSTEP_RUN_WATER: i32 = 21;
+/// Material surfaceparm that silences footsteps and landings
+/// (`sf & 0x2000`, PM_FootstepEvent @0x32167, PM_CrashLand @0x30108).
+const SURF_NO_SOUND: u32 = 0x2000;
+/// Ladder-step interval divisor and rate keys (rodata 0x70c10-18).
+const LADDER_STEP_DIVISOR: f32 = 95.25;
+const LADDER_STEP_K_WALK: f32 = 0.35;
+const LADDER_STEP_K_RUN: f32 = 0.45;
+/// Ladder probe: box shrink per side, z floor, reach along -ladder_normal
+/// (rodata 0x70c04/08/0c). A missed trace or material 0 defaults to metal (13).
+const LADDER_STEP_PROBE: f32 = 31.0;
+const DEFAULT_MATERIAL: i32 = 13;
+
+/// One movement event a frame produced, in wire `EV_*` numbering so the
+/// client's cue resolver handles it unchanged.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PmEvent {
+    pub event: i32,
+}
+
+/// Ticks per millisecond for each gait; with MP-default speed scales the
+/// retail weight `W` collapses to the current speed, leaving bare K
+/// (PM_ShouldMakeFootsteps 0x326c4-0x327cc, rodata 0x70c28-0x70c44).
+fn step_rate(stance: Stance, walking: bool, backpedal: bool) -> f32 {
+    match stance {
+        Stance::Stand => match (walking, backpedal) {
+            (true, true) => 0.325,
+            (true, false) => 0.305,
+            (false, true) => 0.36,
+            (false, false) => 0.335,
+        },
+        Stance::Crouch if walking => 0.315,
+        Stance::Crouch => 0.34,
+        Stance::Prone if walking => 0.24,
+        Stance::Prone => 0.25,
+    }
+}
+
+/// Advance the bob cycle; one step event fires per crossing of a multiple of
+/// 128, which is `(old + 64) ^ (new + 64)` going negative on the byte ring.
+fn tick_bob_cycle(old: u8, advance: f32) -> u8 {
+    ((old as f32 + advance).round() as i32 & 0xff) as u8
+}
+
+fn crossed_step_boundary(old: u8, new: u8) -> bool {
+    (old.wrapping_add(64) ^ new.wrapping_add(64)) & 0x80 != 0
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stance {
     Stand,
@@ -149,6 +212,14 @@ pub struct PlayerState {
     /// A held jump key blocks another ladder push-off until released
     /// (pm_flags bit 0x8: set @0x2ec34, cleared @0x34135 when upmove <= 9).
     pub jump_latched: bool,
+    /// Footstep phase counter, retail `ps->bobCycle` (ps+0x8). Steps fire on
+    /// 128-tick crossings.
+    pub bob_cycle: u8,
+    /// Lump-0 `surface_flags` of the ground we stand on; 0 while airborne.
+    pub ground_surface_flags: u32,
+    /// Fastest downward speed sampled while airborne; feeds the landing
+    /// sound thresholds (PM_CrashLand's kinematic impact, approximated).
+    air_speed_peak: f32,
 }
 
 impl PlayerState {
@@ -168,6 +239,9 @@ impl PlayerState {
             ladder_normal: Vec3::ZERO,
             since_jump_ms: f32::INFINITY,
             jump_latched: false,
+            bob_cycle: 0,
+            ground_surface_flags: 0,
+            air_speed_peak: 0.0,
         }
     }
 
@@ -214,13 +288,24 @@ pub struct PmInput {
     pub lean_right: bool,
 }
 
-/// `dt` in seconds, clamped to `MAX_FRAME_MS`.
-pub fn pmove(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
+/// `dt` in seconds, clamped to `MAX_FRAME_MS`. Returns the frame's movement
+/// sound events in wire `EV_*` numbering.
+pub fn pmove(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    world: &CollisionWorld,
+    dt: f32,
+) -> Vec<PmEvent> {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
     ps.since_jump_ms += dt * 1000.0;
     // retail clears the held-jump latch post-move when upmove drops (@0x34135)
     if !input.jump {
         ps.jump_latched = false;
+    }
+    let mut events = Vec::new();
+    let was_on_ground = ps.on_ground;
+    if ps.on_ground {
+        ps.air_speed_peak = 0.0;
     }
     update_stance(ps, input, world);
     update_lean(ps, input, world, dt);
@@ -236,7 +321,7 @@ pub fn pmove(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
     // them before waterjump/water
     let ladder = check_ladder_move(ps, input, world);
     if let Some((normal, ladderforward)) = ladder {
-        ladder_move(ps, input, normal, ladderforward, world, dt);
+        ladder_move(ps, input, normal, ladderforward, world, dt, &mut events);
     } else if ps.waterjump_ms > 0.0 {
         water_jump_move(ps, world, dt);
     } else if ps.water_level > 1 {
@@ -265,6 +350,189 @@ pub fn pmove(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
     }
     ground_trace(ps, world);
     set_water_level(ps, world);
+
+    // PM_Footsteps @0x322c8 runs once per move, after the final ground trace.
+    footsteps(ps, input, world, dt, &mut events);
+    if !was_on_ground && ps.on_ground {
+        crash_land(ps, &mut events);
+    }
+    events
+}
+
+/// Retail footstep cadence (`PM_Footsteps` @0x322c8). The bob cycle ticks by
+/// `msec * rate`; a step event fires on each 128-tick crossing while move
+/// keys are held and the gait is audible. The ladder branch runs ahead of the
+/// speed gates (@0x323a2 precedes the fcom @0x3249f).
+fn footsteps(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    world: &CollisionWorld,
+    dt: f32,
+    events: &mut Vec<PmEvent>,
+) {
+    let msec = dt * 1000.0;
+    if ps.on_ground {
+        let speed = (ps.velocity.x * ps.velocity.x + ps.velocity.y * ps.velocity.y).sqrt();
+        if speed >= 10.0 {
+            let walking = input.walk_slow;
+            let backpedal = input.forward < 0.0;
+            let rate = step_rate(ps.stance, walking, backpedal);
+            let old = ps.bob_cycle;
+            ps.bob_cycle = tick_bob_cycle(old, msec * rate);
+            if input.forward != 0.0 || input.right != 0.0 {
+                // Audible only upright with the walk key released
+                // (PM_ShouldMakeFootsteps @0x3221c).
+                let enable = ps.stance == Stance::Stand && !walking;
+                ground_step_event(ps, old, ps.bob_cycle, walking, enable, events);
+            }
+        } else if speed > 1.0 {
+            // creep: freeze at phase zero so the next gait starts together (@0x324ba)
+            ps.bob_cycle = 0;
+        }
+    } else if ps.on_ladder {
+        // quiet for 299 ms after a push-off (@0x323b9)
+        if ps.since_jump_ms > LADDER_STEP_QUIET_MS {
+            let k = if input.walk_slow {
+                LADDER_STEP_K_WALK
+            } else {
+                LADDER_STEP_K_RUN
+            };
+            let rate = ps.velocity.z / LADDER_STEP_DIVISOR * k;
+            let old = ps.bob_cycle;
+            ps.bob_cycle = tick_bob_cycle(old, msec * rate);
+            ladder_step_event(ps, world, old, ps.bob_cycle, events);
+        }
+    }
+}
+
+/// `PM_FootstepEvent` @0x31fe4 for a grounded step: water ids first, then the
+/// ground trace's material.
+fn ground_step_event(
+    ps: &PlayerState,
+    old: u8,
+    new: u8,
+    walking: bool,
+    enable: bool,
+    events: &mut Vec<PmEvent>,
+) {
+    if !crossed_step_boundary(old, new) {
+        return;
+    }
+    match ps.water_level {
+        1 | 2 => {
+            // Fixed water-material ids; they bypass the enable gate.
+            let id = match ps.stance {
+                Stance::Prone => EV_FOOTSTEP_PRONE_WATER,
+                _ if walking => EV_FOOTSTEP_WALK_WATER,
+                _ => EV_FOOTSTEP_RUN_WATER,
+            };
+            events.push(PmEvent { event: id });
+            return;
+        }
+        3 => return,
+        _ => {}
+    }
+    if !enable {
+        return;
+    }
+    push_surface_step(
+        ps,
+        EV_FOOTSTEP_RUN_BASE,
+        EV_FOOTSTEP_WALK_BASE,
+        EV_FOOTSTEP_PRONE_BASE,
+        walking,
+        events,
+    );
+}
+
+fn push_surface_step(
+    ps: &PlayerState,
+    run_base: i32,
+    walk_base: i32,
+    prone_base: i32,
+    walking: bool,
+    events: &mut Vec<PmEvent>,
+) {
+    let sf = ps.ground_surface_flags;
+    if sf & SURF_NO_SOUND != 0 {
+        return;
+    }
+    let mat = crate::collision::sound_material(sf);
+    if mat == 0 {
+        return;
+    }
+    let base = match ps.stance {
+        Stance::Prone => prone_base,
+        _ if walking => walk_base,
+        _ => run_base,
+    };
+    events.push(PmEvent { event: base + mat });
+}
+
+/// `PM_FootstepEvent`'s airborne branch: probe into the ladder face and use
+/// its material, run-numbered; miss or material 0 defaults to metal (@0x32039).
+fn ladder_step_event(
+    ps: &PlayerState,
+    world: &CollisionWorld,
+    old: u8,
+    new: u8,
+    events: &mut Vec<PmEvent>,
+) {
+    if !crossed_step_boundary(old, new) || !ps.on_ladder {
+        return;
+    }
+    let mins = Vec3::new(-HALF_WIDTH + 6.0, -HALF_WIDTH + 6.0, 8.0);
+    let maxs = Vec3::new(
+        HALF_WIDTH - 6.0,
+        HALF_WIDTH - 6.0,
+        ps.stance.height().max(8.0),
+    );
+    let t = world.box_trace(
+        ps.origin,
+        ps.origin - ps.ladder_normal * LADDER_STEP_PROBE,
+        mins,
+        maxs,
+    );
+    let mut mat = crate::collision::sound_material(t.surface_flags);
+    if t.fraction >= 1.0 || mat == 0 {
+        mat = DEFAULT_MATERIAL;
+    }
+    events.push(PmEvent {
+        event: EV_FOOTSTEP_RUN_BASE + mat,
+    });
+}
+
+/// Landing sound from `PM_CrashLand`'s damage-free ladder (@0x30141): nothing
+/// at or under 4, a walk-step to 8, a run-step to 12, a land event past that.
+fn crash_land(ps: &mut PlayerState, events: &mut Vec<PmEvent>) {
+    let impact = std::mem::take(&mut ps.air_speed_peak);
+    if let Some(ev) = landing_event(impact, ps) {
+        events.push(ev);
+    }
+}
+
+fn landing_event(impact: f32, ps: &PlayerState) -> Option<PmEvent> {
+    if ps.water_level >= 3 {
+        return None;
+    }
+    let sf = ps.ground_surface_flags;
+    if sf & SURF_NO_SOUND != 0 {
+        return None;
+    }
+    let mat = crate::collision::sound_material(sf);
+    if mat == 0 {
+        return None;
+    }
+    let id = if impact >= 12.0 {
+        EV_LANDING_BASE + mat
+    } else if impact >= 8.0 {
+        EV_FOOTSTEP_RUN_BASE + mat
+    } else if impact > 4.0 {
+        EV_FOOTSTEP_WALK_BASE + mat
+    } else {
+        return None;
+    };
+    Some(PmEvent { event: id })
 }
 
 /// Standing back up needs headroom for the taller bbox.
@@ -337,11 +605,13 @@ fn ground_trace(ps: &mut PlayerState, world: &CollisionWorld) {
     if t.fraction < 1.0 && t.normal.z >= MIN_WALK_NORMAL && !thrown_off {
         ps.on_ground = true;
         ps.ground_normal = t.normal;
+        ps.ground_surface_flags = t.surface_flags;
         // RTCW clears the waterjump lock on touching walkable ground
         ps.waterjump_ms = 0.0;
     } else {
         ps.on_ground = false;
         ps.ground_normal = Vec3::Z;
+        ps.ground_surface_flags = 0;
     }
 }
 
@@ -665,10 +935,20 @@ fn ladder_move(
     ladderforward: bool,
     world: &CollisionWorld,
     dt: f32,
+    events: &mut Vec<PmEvent>,
 ) {
     // retail tries the push-off first; a jump runs the normal mover this
     // frame and stamps jumpTime (@0x3394c-0x33964)
     if ladder_push_off(ps, input, normal) {
+        // PM_Jump @0x2eda8-0x2edb9: 70 + material off the last ground trace;
+        // material 0 or the silent surfaceparm emits nothing
+        let sf = ps.ground_surface_flags;
+        let mat = crate::collision::sound_material(sf);
+        if mat != 0 && sf & SURF_NO_SOUND == 0 {
+            events.push(PmEvent {
+                event: EV_JUMP_BASE + mat,
+            });
+        }
         air_move(ps, input, world, dt);
         ps.since_jump_ms = 0.0;
         return;
@@ -749,6 +1029,7 @@ fn ladder_move(
 
 /// Q3 `bg_pmove.c` `PM_AirMove`.
 fn air_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
+    ps.air_speed_peak = ps.air_speed_peak.max(-ps.velocity.z);
     let (dir, wishspeed) = wish(ps, input);
     accelerate(ps, dir, wishspeed, PM_AIRACCELERATE, dt);
     step_slide_move(ps, world, dt, true);
@@ -904,6 +1185,33 @@ mod tests {
         test_world(&[])
     }
 
+    /// Flat ground whose material carries the dirt sound surface (6).
+    fn dirt_flat() -> CollisionWorld {
+        crate::collision::synthetic_world(
+            &[(
+                "textures/test/dirt",
+                crate::collision::CONTENTS_SOLID,
+                6 << 20,
+            )],
+            &[(0, [-2048.0, -2048.0, -16.0], [2048.0, 2048.0, 0.0])],
+        )
+    }
+
+    /// Ankle-deep water over a floor at -6; both materials carry no sound
+    /// surface, so any footstep id can only come from the fixed water ids.
+    fn shallow_water() -> CollisionWorld {
+        crate::collision::synthetic_world(
+            &[
+                ("textures/test/solid", crate::collision::CONTENTS_SOLID, 0),
+                ("textures/common/water", crate::collision::CONTENTS_WATER, 0),
+            ],
+            &[
+                (0, [-1024.0, -1024.0, -22.0], [1024.0, 1024.0, -6.0]),
+                (1, [-1024.0, -1024.0, -74.0], [1024.0, 1024.0, 10.0]),
+            ],
+        )
+    }
+
     /// A pool: dry ground west, deep water (surface z=36) over a floor at
     /// -74, a chest-deep shelf (top 0) and an ankle-deep shelf (top 30), an
     /// exit wall at x=200 rising to 15, and landing ground east of it.
@@ -939,6 +1247,278 @@ mod tests {
         assert!(ps.on_ground);
         assert!(ps.origin.z.abs() < 0.5, "settled at {}", ps.origin.z);
         assert!(ps.velocity.length() < 1.0);
+    }
+
+    /// Full run on dirt: rate 0.335 ticks/ms puts a step every ~382 ms
+    /// (rodata 0x70c44, PM_Footsteps @0x327f8).
+    #[test]
+    fn running_steps_fire_on_the_retail_cadence() {
+        let w = dirt_flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        let run = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..125 {
+            pmove(&mut ps, &run, &w, 1.0 / 125.0);
+        }
+        assert!(ps.velocity.truncate().length() > 180.0);
+        let mut steps = Vec::new();
+        for _ in 0..375 {
+            steps.extend(
+                pmove(&mut ps, &run, &w, 8.0 / 1000.0)
+                    .into_iter()
+                    .map(|e| e.event),
+            );
+        }
+        assert!(
+            steps.iter().all(|&e| e == EV_FOOTSTEP_RUN_BASE + 6),
+            "{steps:?}"
+        );
+        // Retail rounds the cycle per frame (fistp @0x32819), so at fixed 8 ms
+        // frames the 2.68-tick advance quantizes to 3 and the period shrinks
+        // to ~340 ms; 7..9 covers both that and the settle-phase offset.
+        assert!(
+            steps.len() >= 7 && steps.len() <= 9,
+            "{} events",
+            steps.len()
+        );
+    }
+
+    /// The enable gate: walk key and the crouched/prone gaits tick the cycle
+    /// but never emit (PM_ShouldMakeFootsteps @0x3221c).
+    #[test]
+    fn walk_key_and_stances_are_silent() {
+        let w = dirt_flat();
+        for (name, input) in [
+            (
+                "walk key",
+                PmInput {
+                    forward: 1.0,
+                    walk_slow: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "crouch",
+                PmInput {
+                    forward: 1.0,
+                    crouch: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "prone",
+                PmInput {
+                    forward: 1.0,
+                    prone: true,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+            for _ in 0..125 {
+                pmove(&mut ps, &input, &w, 1.0 / 125.0);
+            }
+            let speed = ps.velocity.truncate().length();
+            assert!(speed > 10.0, "{name} must still move, at {speed}");
+            let events: Vec<_> = (0..250)
+                .flat_map(|_| pmove(&mut ps, &input, &w, 8.0 / 1000.0))
+                .collect();
+            assert!(events.is_empty(), "{name} played {events:?}");
+        }
+    }
+
+    /// Keys released: the timer advances but no event fires (@0x32831 path).
+    #[test]
+    fn glide_suppresses_step_events() {
+        let w = dirt_flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        let run = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..125 {
+            pmove(&mut ps, &run, &w, 1.0 / 125.0);
+        }
+        let idle = PmInput::default();
+        let mut events = Vec::new();
+        while ps.velocity.truncate().length() > 10.0 {
+            events.extend(pmove(&mut ps, &idle, &w, 8.0 / 1000.0));
+        }
+        assert!(events.is_empty(), "{events:?}");
+    }
+
+    #[test]
+    fn landing_plays_one_event_from_the_impact_bands() {
+        let w = dirt_flat();
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 200.0), 0.0);
+        let idle = PmInput::default();
+        let mut events = Vec::new();
+        for _ in 0..500 {
+            events.extend(pmove(&mut ps, &idle, &w, 8.0 / 1000.0));
+        }
+        assert!(ps.on_ground);
+        let ids: Vec<i32> = events.into_iter().map(|e| e.event).collect();
+        assert_eq!(ids, vec![EV_LANDING_BASE + 6], "a long fall lands once");
+    }
+
+    #[test]
+    fn landing_sound_bands_follow_impact() {
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.ground_surface_flags = 6 << 20;
+        let band = |impact: f32| landing_event(impact, &ps).map(|e| e.event);
+        assert_eq!(band(4.0), None);
+        assert_eq!(band(4.5), Some(EV_FOOTSTEP_WALK_BASE + 6));
+        assert_eq!(band(11.5), Some(EV_FOOTSTEP_RUN_BASE + 6));
+        assert_eq!(band(12.0), Some(EV_LANDING_BASE + 6));
+    }
+
+    /// Water level 1-2 replaces the ground material with the fixed water ids
+    /// and ignores the enable gate (PM_FootstepEvent @0x321b0).
+    #[test]
+    fn water_steps_use_the_fixed_water_ids() {
+        let w = shallow_water();
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, -6.0), 0.0);
+        let run = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..125 {
+            pmove(&mut ps, &run, &w, 1.0 / 125.0);
+        }
+        assert_eq!(ps.water_level, 1);
+        let mut ids = Vec::new();
+        for _ in 0..250 {
+            ids.extend(
+                pmove(&mut ps, &run, &w, 8.0 / 1000.0)
+                    .into_iter()
+                    .map(|e| e.event),
+            );
+        }
+        assert!(!ids.is_empty());
+        assert!(ids.iter().all(|&e| e == EV_FOOTSTEP_RUN_WATER), "{ids:?}");
+    }
+
+    /// The airborne ladder branch probes into the wall face; a miss or a
+    /// material-less hit defaults to metal (@0x32039-0x32135).
+    #[test]
+    fn ladder_steps_probe_into_the_face_and_default_to_metal() {
+        let input = PmInput::default();
+        let dt = 0.05;
+
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.on_ground = false;
+        ps.on_ladder = true;
+        // normal points away from the wall, so the probe reaches back into it
+        ps.ladder_normal = -Vec3::X;
+        ps.velocity.z = 80.0;
+        let mut events = Vec::new();
+        for _ in 0..20 {
+            footsteps(&mut ps, &input, &dirt_flat(), dt, &mut events);
+        }
+        assert!(!events.is_empty(), "climbing at vz=80 must step");
+        assert!(events
+            .iter()
+            .all(|e| e.event == EV_FOOTSTEP_RUN_BASE + DEFAULT_MATERIAL));
+
+        // same climb against a wooden wall: the probe reports wood
+        let wall = crate::collision::synthetic_world(
+            &[(
+                "textures/test/wood",
+                crate::collision::CONTENTS_SOLID,
+                21 << 20,
+            )],
+            &[(0, [16.0, -1024.0, -16.0], [32.0, 1024.0, 512.0])],
+        );
+        let mut ps = PlayerState::spawn(Vec3::new(1.0, 0.0, 40.0), 0.0);
+        ps.on_ground = false;
+        ps.on_ladder = true;
+        ps.ladder_normal = -Vec3::X;
+        ps.velocity.z = 80.0;
+        let mut events = Vec::new();
+        for _ in 0..20 {
+            footsteps(&mut ps, &input, &wall, dt, &mut events);
+        }
+        assert!(!events.is_empty());
+        assert!(events.iter().all(|e| e.event == EV_FOOTSTEP_RUN_BASE + 21));
+    }
+
+    /// PM_Jump @0x2eda8: the push-off event carries the last ground trace's
+    /// material; from mid-wall (no ground under the climb) it stays silent.
+    #[test]
+    fn push_off_jump_event_reads_the_last_ground() {
+        let n = Vec3::new(-1.0, 0.0, 0.0);
+        let jump = PmInput {
+            jump: true,
+            ..Default::default()
+        };
+        let wall = crate::collision::synthetic_world(
+            &[
+                (
+                    "textures/test/wood",
+                    crate::collision::CONTENTS_SOLID,
+                    21 << 20,
+                ),
+                (
+                    "textures/common/ladder",
+                    crate::collision::CONTENTS_SOLID,
+                    0x8,
+                ),
+            ],
+            &[
+                (0, [-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0]),
+                (1, [16.0, -1024.0, 0.0], [32.0, 1024.0, 512.0]),
+            ],
+        );
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.0), 0.0);
+        ps.since_jump_ms = 10_000.0;
+        pmove(&mut ps, &PmInput::default(), &wall, 1.0 / 125.0);
+        assert_eq!(ps.ground_surface_flags, 21 << 20);
+        let mut events = Vec::new();
+        ladder_move(&mut ps, &jump, n, false, &wall, 1.0 / 125.0, &mut events);
+        assert_eq!(
+            events,
+            vec![PmEvent {
+                event: EV_JUMP_BASE + 21
+            }]
+        );
+
+        // mid-wall: the last ground trace hit nothing, so no event
+        let mut ps = PlayerState::spawn(Vec3::new(1.0, 0.0, 200.0), 0.0);
+        ps.on_ground = false;
+        ps.since_jump_ms = 10_000.0;
+        let mut events = Vec::new();
+        ladder_move(&mut ps, &jump, n, false, &wall, 1.0 / 125.0, &mut events);
+        assert!(ladder_push_off_ran(&ps));
+        assert!(events.is_empty());
+    }
+
+    /// The 299 ms post-push-off quiet window (@0x323b9).
+    #[test]
+    fn ladder_steps_stay_quiet_after_a_push_off() {
+        let input = PmInput::default();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.on_ground = false;
+        ps.on_ladder = true;
+        ps.ladder_normal = -Vec3::X;
+        ps.velocity.z = 80.0;
+        ps.since_jump_ms = 0.0;
+        let mut events = Vec::new();
+        for _ in 0..5 {
+            ps.since_jump_ms += 50.0;
+            footsteps(&mut ps, &input, &dirt_flat(), 0.05, &mut events);
+        }
+        assert!(events.is_empty(), "quiet for 299 ms, got {events:?}");
+        for _ in 0..20 {
+            ps.since_jump_ms += 50.0;
+            footsteps(&mut ps, &input, &dirt_flat(), 0.05, &mut events);
+        }
+        assert!(!events.is_empty(), "climbing must step once quiet");
+    }
+
+    fn ladder_push_off_ran(ps: &PlayerState) -> bool {
+        ps.jump_latched && ps.since_jump_ms == 0.0
     }
 
     #[test]
@@ -1851,7 +2431,15 @@ mod tests {
 
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 40.0), 0.0);
         ps.on_ground = false;
-        ladder_move(&mut ps, &PmInput::default(), n, false, &w, 1.0 / 125.0);
+        ladder_move(
+            &mut ps,
+            &PmInput::default(),
+            n,
+            false,
+            &w,
+            1.0 / 125.0,
+            &mut Vec::new(),
+        );
         assert!(
             (ps.velocity.x - 250.0).abs() < 1.0,
             "neutral vx {}",
@@ -1870,6 +2458,7 @@ mod tests {
             false,
             &w,
             1.0 / 125.0,
+            &mut Vec::new(),
         );
         assert!(
             (ps.velocity.x - 500.0).abs() < 1.0,
@@ -1881,7 +2470,15 @@ mod tests {
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 40.0), 0.0);
         ps.on_ground = false;
         ps.velocity = Vec3::new(0.0, 100.0, 0.0);
-        ladder_move(&mut ps, &PmInput::default(), n, false, &w, 1.0 / 125.0);
+        ladder_move(
+            &mut ps,
+            &PmInput::default(),
+            n,
+            false,
+            &w,
+            1.0 / 125.0,
+            &mut Vec::new(),
+        );
         assert!(
             (72.0..92.0).contains(&ps.velocity.y),
             "tangential vy survives, {}",
@@ -1911,6 +2508,7 @@ mod tests {
                 false,
                 &w,
                 1.0 / 125.0,
+                &mut Vec::new(),
             );
             ps.velocity.x
         };

@@ -44,6 +44,13 @@ pub struct Trace {
 
 pub const SURFACE_CLIP_EPSILON: f32 = 0.125;
 
+/// The 5-bit sound-surface index every trace consumer reads
+/// (`cod11-events-and-fx.md`, section 4). 0 means the material carries no
+/// surfaceparm and retail emits no footstep for it.
+pub fn sound_material(surface_flags: u32) -> i32 {
+    ((surface_flags >> 20) & 0x1f) as i32
+}
+
 /// Q3 `cm_trace.c` `CM_TraceThroughBrush`, on planes already expanded by the box.
 fn clip_segment(
     trace: &mut Trace,
@@ -168,6 +175,9 @@ struct BvhNode {
 pub struct CollisionWorld {
     pub brushes: Vec<BrushPlanes>,
     pub tris: Vec<[Vec3; 3]>,
+    /// Per-triangle material `surface_flags`, parallel to `tris`. The sound
+    /// surface rides bits 20-24 (`cod11-events-and-fx.md`, section 4).
+    tris_surf: Vec<u32>,
     nodes: Vec<BvhNode>,
     prims: Vec<(Prim, Vec3, Vec3)>,
     water: Vec<WaterVolume>,
@@ -184,7 +194,13 @@ const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
 
 /// Drops slivers, pads the AABB by 0.25 so the BVH query finds a triangle
 /// the box merely touches.
-fn push_tri(tris: &mut Vec<[Vec3; 3]>, prims: &mut Vec<(Prim, Vec3, Vec3)>, [a, b, c]: [Vec3; 3]) {
+fn push_tri(
+    tris: &mut Vec<[Vec3; 3]>,
+    tris_surf: &mut Vec<u32>,
+    prims: &mut Vec<(Prim, Vec3, Vec3)>,
+    [a, b, c]: [Vec3; 3],
+    surface_flags: u32,
+) {
     if (b - a).cross(c - a).length_squared() < 1e-6 {
         return;
     }
@@ -192,6 +208,7 @@ fn push_tri(tris: &mut Vec<[Vec3; 3]>, prims: &mut Vec<(Prim, Vec3, Vec3)>, [a, 
     let hi = a.max(b).max(c) + Vec3::splat(0.25);
     prims.push((Prim::Tri(tris.len() as u32), lo, hi));
     tris.push([a, b, c]);
+    tris_surf.push(surface_flags);
 }
 
 impl CollisionWorld {
@@ -295,12 +312,13 @@ impl CollisionWorld {
         }
 
         let mut tris = Vec::new();
+        let mut tris_surf = Vec::new();
         let world_model = &bsp.models[0];
         let soup_range = world_model.first_soup as usize
             ..(world_model.first_soup + world_model.num_soups) as usize;
         for soup in &bsp.soups[soup_range] {
-            let content = bsp.materials[soup.material as usize].content_flags;
-            if content & CONTENTS_SKY != 0 {
+            let mat = &bsp.materials[soup.material as usize];
+            if mat.content_flags & CONTENTS_SKY != 0 {
                 continue;
             }
             let idx = &bsp.indices[soup.first_index as usize..][..soup.index_count as usize];
@@ -308,11 +326,17 @@ impl CollisionWorld {
                 let p = |i: usize| {
                     Vec3::from_array(bsp.verts[soup.first_vertex as usize + tri[i] as usize].pos)
                 };
-                push_tri(&mut tris, &mut prims, [p(0), p(1), p(2)]);
+                push_tri(
+                    &mut tris,
+                    &mut tris_surf,
+                    &mut prims,
+                    [p(0), p(1), p(2)],
+                    mat.surface_flags,
+                );
             }
         }
         for t in extra_tris {
-            push_tri(&mut tris, &mut prims, *t);
+            push_tri(&mut tris, &mut tris_surf, &mut prims, *t, 0);
         }
 
         let mut nodes = Vec::new();
@@ -323,6 +347,7 @@ impl CollisionWorld {
         CollisionWorld {
             brushes,
             tris,
+            tris_surf,
             nodes,
             prims,
             water,
@@ -406,7 +431,7 @@ impl CollisionWorld {
                     }
                     Prim::Tri(t) => {
                         triangle_planes(&self.tris[t as usize], mins, maxs, scratch);
-                        clip_segment(trace, start, end, scratch, 0);
+                        clip_segment(trace, start, end, scratch, self.tris_surf[t as usize]);
                     }
                 }
             }
@@ -1325,6 +1350,24 @@ mod tests {
             Vec3::new(15.0, 15.0, 60.0),
         );
         assert!(t.fraction < 1.0 && t.surface_flags == 0, "{t:?}");
+    }
+
+    /// The sound surface rides the soup material's `surface_flags` bits 20-24,
+    /// which a trace must carry through triangle hits too.
+    #[test]
+    fn triangle_hits_carry_the_sound_material() {
+        let mut bsp = tiny_world();
+        bsp.materials[0].surface_flags = 6 << 20; // dirt
+        let world = CollisionWorld::build(&bsp, &[]);
+        // straight down through the z=10 triangle
+        let t = world.box_trace(
+            Vec3::new(150.0, 150.0, 30.0),
+            Vec3::new(150.0, 150.0, -8.0),
+            Vec3::ZERO,
+            Vec3::ZERO,
+        );
+        assert!(t.fraction < 1.0 && t.normal.z > 0.9, "{t:?}");
+        assert_eq!(super::sound_material(t.surface_flags), 6);
     }
 
     /// mp_harbor carries both stock-MP water and ladders; both must survive
