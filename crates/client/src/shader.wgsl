@@ -31,6 +31,8 @@ struct StageParams {
     vec0_t: vec4<f32>,
     vec1_s: vec4<f32>,
     vec1_t: vec4<f32>,
+    // sky dome draws: view origin added to the vertex when F_EYE_OFFSET is set
+    eye_off: vec4<f32>,
 };
 @group(2) @binding(0) var<uniform> stage: StageParams;
 // Bundle 1's image when it is neither lightmap nor absent (white is bound then).
@@ -45,6 +47,7 @@ const F_AF_LT128: u32 = 32u;
 const F_AF_GE128: u32 = 48u;
 const F_BUNDLE0_VECTOR: u32 = 64u;
 const F_BUNDLE1_VECTOR: u32 = 128u;
+const F_EYE_OFFSET: u32 = 256u;
 // glAlphaFunc thresholds are 128/255 for both LT128 and GE128.
 const ATEST128: f32 = 0.5019607843137255;
 
@@ -111,9 +114,14 @@ fn bundle_uv(
 @vertex
 fn vs_stage(in: VsIn) -> VsOut {
     var out: VsOut;
-    out.clip = camera.view_proj * vec4<f32>(in.pos, 1.0);
+    // sky dome vertices are box-space; the view origin rides in StageParams
+    var pos = in.pos;
+    if ((stage.flags & F_EYE_OFFSET) != 0u) {
+        pos = pos + stage.eye_off.xyz;
+    }
+    out.clip = camera.view_proj * vec4<f32>(pos, 1.0);
     out.color = in.color;
-    out.world_pos = in.pos;
+    out.world_pos = pos;
     out.lm_uv = in.lm_uv;
     out.uv = bundle_uv(
         in.uv,

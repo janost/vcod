@@ -7,6 +7,7 @@ mod hud_text;
 mod loading;
 mod probe;
 mod renderer;
+mod sky;
 mod viewmodel;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -252,7 +253,8 @@ fn hud_lines(
     lines.push(format!("hud q{hud_quads} {hud_ms:.2}ms unk {hud_unknown}"));
     let (stage_draws, dropped, warns) = r.shader_stats();
     lines.push(format!(
-        "shader: sky none  stages {stage_draws}  dropped {dropped}  warns {warns}"
+        "shader: sky {}  stages {stage_draws}  dropped {dropped}  warns {warns}",
+        r.sky_name().unwrap_or("none")
     ));
     lines.push(format!(
         "audio v{} plays {} miss {} cull {} drop {} {:.2}ms",

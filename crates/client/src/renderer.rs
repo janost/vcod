@@ -3,9 +3,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
+use crate::camera::{Z_FAR, Z_NEAR};
 use crate::fx::sim::{FxLight, FxQuad, MAX_LIGHTS};
 use crate::hud::HudQuad;
 use crate::hud_text::{self, HudVert};
+use crate::sky;
 use vcod_common::assets::{self, Image, ImageData};
 use vcod_common::bsp::{self, Bsp, DrawVert};
 use vcod_common::mesh::{self, Batch, IndexRange, MaterialKind};
@@ -365,12 +367,15 @@ pub const STAGE_FLAG_ALPHAFUNC_LT128: u32 = 32;
 pub const STAGE_FLAG_ALPHAFUNC_GE128: u32 = 48;
 pub const STAGE_FLAG_BUNDLE0_VECTOR: u32 = 64;
 pub const STAGE_FLAG_BUNDLE1_VECTOR: u32 = 128;
+/// Sky dome draws only: add the view origin (StageParams.eye_off) to vertices.
+pub const STAGE_FLAG_EYE_OFFSET: u32 = 256;
 
 /// Per-stage draw parameters, one dynamic-offset slot per stage batch. WGSL
 /// mirror is `StageParams` in shader.wgsl; byte offsets:
 /// uv0 @0 and uv1 @24 as mat3x2 (column-major, matching [`bundle_affine`]),
 /// turb01 @48, tint @64, flags @80, pad @84..96, then the two tcGen vector
-/// bases padded to vec4: vec0_s @96, vec0_t @112, vec1_s @128, vec1_t @144.
+/// bases padded to vec4: vec0_s @96, vec0_t @112, vec1_s @128, vec1_t @144,
+/// and the sky dome's view-origin offset @160.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct StageParams {
@@ -384,9 +389,10 @@ pub struct StageParams {
     pub(crate) vec0_t: [f32; 4],
     pub(crate) vec1_s: [f32; 4],
     pub(crate) vec1_t: [f32; 4],
+    pub(crate) eye_off: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<StageParams>() == 160);
+const _: () = assert!(std::mem::size_of::<StageParams>() == 176);
 const STAGE_PARAMS_SIZE: u64 = std::mem::size_of::<StageParams>() as u64;
 
 const UV_AFFINE_IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
@@ -448,6 +454,7 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
         vec0_t: [0.0; 4],
         vec1_s: [0.0; 4],
         vec1_t: [0.0; 4],
+        eye_off: [0.0; 4],
     };
     if let Some(v) = b0.vector.as_ref() {
         flags |= STAGE_FLAG_BUNDLE0_VECTOR;
@@ -587,6 +594,106 @@ fn stage_animated(sh: &Shader, idx: usize) -> bool {
         || matches!(st.alpha_gen, AlphaGen::Wave(_))
 }
 
+/// Group(1) and group(2) bind groups for one authored stage, shared by the
+/// world stage-batch loop and the cloud dome. `lm_view` is the batch's
+/// lightmap page (bundle-0 `$lightmap` samples it through the flag).
+#[allow(clippy::too_many_arguments)]
+fn stage_bind_groups(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    fs: &Pk3Fs,
+    material_layout: &wgpu::BindGroupLayout,
+    stage_layout: &wgpu::BindGroupLayout,
+    params_buf: &wgpu::Buffer,
+    params_size: u64,
+    white_view: &wgpu::TextureView,
+    lm_view: Option<&wgpu::TextureView>,
+    diffuse_sampler: &wgpu::Sampler,
+    lightmap_sampler: &wgpu::Sampler,
+    bundle_views: &mut HashMap<String, wgpu::TextureView>,
+    st: &vcod_common::shader::Stage,
+) -> (AnimFrames, AnimFrames) {
+    let b0 = &st.bundles[0];
+    let b1 = st.bundles.get(1);
+    // a clamped bundle needs ClampToEdge; the lightmap sampler is
+    // already exactly that
+    let clamp = b0.clamp || b1.is_some_and(|b| b.clamp);
+    let diff_sampler = if clamp {
+        lightmap_sampler
+    } else {
+        diffuse_sampler
+    };
+    let mat_group = |b0_view: &wgpu::TextureView| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("stage material bind group"),
+            layout: material_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(b0_view),
+                },
+                // bundle-0 lightmaps sample here via the flag
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(lm_view.unwrap_or(white_view)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(diff_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(lightmap_sampler),
+                },
+            ],
+        })
+    };
+    let stage_group = |b1_view: &wgpu::TextureView| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("stage draw bind group"),
+            layout: stage_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: params_buf,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(params_size),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(b1_view),
+                },
+            ],
+        })
+    };
+    let mut resolve = |p: &str| upload_bundle_view(device, queue, fs, bundle_views, p);
+    let mat = match (&b0.anim, &b0.image) {
+        (Some(anim), _) => AnimFrames {
+            fps: anim.fps,
+            groups: anim.paths.iter().map(|p| mat_group(&resolve(p))).collect(),
+        },
+        (None, ImageRef::Path(p)) => AnimFrames::static_(mat_group(&resolve(p))),
+        // $whiteimage draws white; $lightmap samples t_lightmap
+        // through the flag, so bundle 0's own slot stays neutral
+        (None, _) => AnimFrames::static_(mat_group(white_view)),
+    };
+    let stage = match b1.map(|b| (&b.anim, &b.image)) {
+        Some((Some(anim), _)) => AnimFrames {
+            fps: anim.fps,
+            groups: anim
+                .paths
+                .iter()
+                .map(|p| stage_group(&resolve(p)))
+                .collect(),
+        },
+        Some((None, ImageRef::Path(p))) => AnimFrames::static_(stage_group(&resolve(p))),
+        _ => AnimFrames::static_(stage_group(white_view)),
+    };
+    (mat, stage)
+}
+
 /// World-space fx quads. Two pipelines that differ only in blend state:
 /// straight alpha, and `GL_ONE GL_ONE` for [`assets::Shaders::is_additive`]
 /// materials. One draw call per contiguous same-shader run.
@@ -664,6 +771,9 @@ struct WorldGpu {
     stages_of_batch: Vec<Vec<u32>>,
     /// Animated stages: (shader clone, stage idx, params slot); rewritten each frame.
     animated: Vec<(Shader, usize, u32)>,
+    /// Cloud-dome stages: like `animated` but every entry also gets the view
+    /// origin stamped into its params each frame.
+    sky_stages: Vec<(Shader, usize, u32)>,
     /// Per-legacy-batch vertex average, the blend-band sort key.
     centroids: Vec<glam::Vec3>,
     /// This frame's emission-ordered draw list.
@@ -686,6 +796,231 @@ struct WorldGpu {
     last_cull: Option<CullMode>,
 }
 
+/// One cloud-dome draw: a stage of the active sky block over the whole dome
+/// mesh, through the shared stage pipelines and params slots.
+struct DomeStage {
+    variant: StageVariant,
+    two_sided: bool,
+    slot: u32,
+    mat: AnimFrames,
+    stage: AnimFrames,
+}
+
+struct DomeLayer {
+    vertex_buf: wgpu::Buffer,
+    index_buf: wgpu::Buffer,
+    index_count: u32,
+    stages: Vec<DomeStage>,
+}
+
+/// The farbox cube. Absent from [`SkyRender`] when the env art is missing:
+/// retail gates the whole box on `outerbox[0]` having loaded
+/// (RB_StageIteratorSky tr_sky.c :994) and draws nothing otherwise.
+struct SkyBox {
+    pipeline: wgpu::RenderPipeline,
+    vertex_buf: wgpu::Buffer,
+    index_buf: wgpu::Buffer,
+    /// View origin per frame; the cube never rotates (sky.wgsl).
+    eye_buf: wgpu::Buffer,
+    eye_bg: wgpu::BindGroup,
+    /// Per-axis bind groups in [`sky::AXIS_SUFFIX`] order.
+    side_bgs: Vec<wgpu::BindGroup>,
+    /// Index ranges per axis into `index_buf`.
+    sides: [(u32, u32); 6],
+}
+
+/// The map's active sky: the farbox cube plus optional cloud dome. Built at
+/// load, drawn FIRST every frame with depth-always / write-off / cull-off so
+/// the world overdraws it everywhere geometry exists (retail draws at depth
+/// range 1.0 before everything; same net effect).
+struct SkyRender {
+    /// Chosen block name, for the F3 overlay and the load log.
+    name: String,
+    farbox: Option<SkyBox>,
+    dome: Option<DomeLayer>,
+}
+
+/// Builds the farbox for the block's env name. Missing non-rt sides land in
+/// `upload_bundle_view`'s checkerboard with a warn (once per path per load).
+#[allow(clippy::too_many_arguments)]
+fn build_sky_box(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    fs: &Pk3Fs,
+    camera_layout: &wgpu::BindGroupLayout,
+    bundle_views: &mut HashMap<String, wgpu::TextureView>,
+    env: &str,
+    sh_name: &str,
+) -> SkyBox {
+    let size = sky::box_size(Z_FAR, Z_NEAR);
+    let mut verts: Vec<sky::SkyBoxVert> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+    let mut sides = [(0u32, 0u32); 6];
+    for (axis, side_slot) in sides.iter_mut().enumerate() {
+        let side = sky::box_side(axis, size);
+        let first = indices.len() as u32;
+        indices.extend(side.indices.iter().map(|&i| i + verts.len() as u32));
+        *side_slot = (first, indices.len() as u32);
+        verts.extend(side.verts);
+    }
+    let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("sky box vertices"),
+        contents: bytemuck::cast_slice(&verts),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("sky box indices"),
+        contents: bytemuck::cast_slice(&indices),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+
+    // ClampToEdge per ParseSkyParms' GL_CLAMP; linear filtering + mips like
+    // every other colour texture.
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("sky box sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        ..Default::default()
+    });
+    let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("sky side layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+    let mut side_bgs = Vec::with_capacity(6);
+    for suffix in sky::AXIS_SUFFIX {
+        let path = format!("{env}_{suffix}");
+        let view = upload_bundle_view(device, queue, fs, bundle_views, &path);
+        let label = format!("sky {sh_name}_{suffix}");
+        side_bgs.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&label),
+            layout: &tex_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        }));
+    }
+
+    let eye_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("sky eye"),
+        size: 16,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let eye_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("sky eye layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    });
+    let eye_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("sky eye bind group"),
+        layout: &eye_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: eye_buf.as_entire_binding(),
+        }],
+    });
+
+    let module = device.create_shader_module(wgpu::include_wgsl!("sky.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("sky pipeline layout"),
+        bind_group_layouts: &[Some(camera_layout), Some(&tex_layout), Some(&eye_layout)],
+        immediate_size: 0,
+    });
+    let box_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("sky box pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<sky::SkyBoxVert>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2],
+            })],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            // interior faces of a closed box: no culling to second-guess
+            front_face: wgpu::FrontFace::Cw,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            // drawn first; the world must overwrite it without a fight
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: MSAA_SAMPLES,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        multiview_mask: None,
+        cache: None,
+    });
+
+    SkyBox {
+        pipeline: box_pipeline,
+        vertex_buf,
+        index_buf,
+        eye_buf,
+        eye_bg,
+        side_bgs,
+        sides,
+    }
+}
+
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -700,6 +1035,7 @@ pub struct Renderer {
     /// `[variant][two_sided][bias]`; built at startup so shader.wgsl validates
     /// even mapless.
     stage_pipelines: [[[wgpu::RenderPipeline; 2]; 2]; STAGE_VARIANTS],
+    camera_layout: wgpu::BindGroupLayout,
     camera_buf: wgpu::Buffer,
     camera_bg: wgpu::BindGroup,
     fx_lights_buf: wgpu::Buffer,
@@ -725,6 +1061,9 @@ pub struct Renderer {
     shaders: assets::Shaders,
     /// Parsed shader scripts; Task 7 classifies map materials against it.
     shader_lib: ShaderLib,
+    /// The map's active sky (farbox + optional cloud dome); `None` without a
+    /// matching sky block.
+    sky: Option<SkyRender>,
     hud_quad_cap_warned: bool,
 }
 
@@ -1153,6 +1492,7 @@ impl Renderer {
             layer_pipeline,
             overlay_pipeline,
             stage_pipelines,
+            camera_layout,
             camera_buf,
             camera_bg,
             fx_lights_buf,
@@ -1173,6 +1513,7 @@ impl Renderer {
             hud_quad_cap_warned: false,
             shaders,
             shader_lib: lib,
+            sky: None,
         })
     }
 
@@ -1201,6 +1542,34 @@ impl Renderer {
                 None => mesh::material_kind(&m.name, false, false, false),
             })
             .collect();
+
+        // Active sky: authored blocks named by this map's materials, ranked
+        // by soup reference count, ties alphabetical.
+        let norm = |s: &str| s.to_lowercase().replace('\\', "/");
+        let mut material_idx: HashMap<String, u16> = HashMap::new();
+        for (i, m) in bsp.materials.iter().enumerate() {
+            material_idx.entry(norm(&m.name)).or_insert(i as u16);
+        }
+        let mut soup_refs: HashMap<u16, u32> = HashMap::new();
+        for s in &bsp.soups {
+            if kinds[s.material as usize] == MaterialKind::Sky {
+                *soup_refs.entry(s.material).or_default() += 1;
+            }
+        }
+        let candidates: Vec<(String, u16)> = self
+            .shader_lib
+            .sky_blocks()
+            .filter_map(|sh| material_idx.get(&sh.name).map(|&mi| (sh.name.clone(), mi)))
+            .collect();
+        let active_sky = {
+            let with_refs: Vec<(String, u32)> = candidates
+                .iter()
+                .map(|(n, mi)| (n.clone(), soup_refs.get(mi).copied().unwrap_or(0)))
+                .collect();
+            sky::pick_sky(&with_refs)
+                .and_then(|picked| candidates.iter().find(|(n, _)| *n == picked))
+                .cloned()
+        };
 
         // Props (misc_model entities) are baked to world space on the CPU in
         // the same vertex format and extend the map's buffers.
@@ -1459,90 +1828,21 @@ impl Renderer {
                     continue;
                 };
                 let slot = slot_of[&(batch.material, si)];
-                let st = &sh.stages[si];
-                let b0 = &st.bundles[0];
-                let b1 = st.bundles.get(1);
-                // a clamped bundle needs ClampToEdge; the lightmap sampler is
-                // already exactly that
-                let clamp = b0.clamp || b1.is_some_and(|b| b.clamp);
-                let diff_sampler = if clamp {
-                    lightmap_sampler
-                } else {
-                    diffuse_sampler
-                };
-                let mat_group = |b0_view: &wgpu::TextureView| {
-                    device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("stage material bind group"),
-                        layout: material_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(b0_view),
-                            },
-                            // bundle-0 lightmaps sample here via the flag
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::TextureView(
-                                    lm_view.unwrap_or(white_view),
-                                ),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: wgpu::BindingResource::Sampler(diff_sampler),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 3,
-                                resource: wgpu::BindingResource::Sampler(lightmap_sampler),
-                            },
-                        ],
-                    })
-                };
-                let stage_group = |b1_view: &wgpu::TextureView| {
-                    device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("stage draw bind group"),
-                        layout: &self.stage_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                    buffer: &stage_params_buf,
-                                    offset: 0,
-                                    size: wgpu::BufferSize::new(STAGE_PARAMS_SIZE),
-                                }),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::TextureView(b1_view),
-                            },
-                        ],
-                    })
-                };
-                let mut resolve =
-                    |p: &str| upload_bundle_view(device, queue, fs, &mut bundle_views, p);
-                let mat = match (&b0.anim, &b0.image) {
-                    (Some(anim), _) => AnimFrames {
-                        fps: anim.fps,
-                        groups: anim.paths.iter().map(|p| mat_group(&resolve(p))).collect(),
-                    },
-                    (None, ImageRef::Path(p)) => AnimFrames::static_(mat_group(&resolve(p))),
-                    // $whiteimage draws white; $lightmap samples t_lightmap
-                    // through the flag, so bundle 0's own slot stays neutral
-                    (None, _) => AnimFrames::static_(mat_group(white_view)),
-                };
-                let stage = match b1.map(|b| (&b.anim, &b.image)) {
-                    Some((Some(anim), _)) => AnimFrames {
-                        fps: anim.fps,
-                        groups: anim
-                            .paths
-                            .iter()
-                            .map(|p| stage_group(&resolve(p)))
-                            .collect(),
-                    },
-                    Some((None, ImageRef::Path(p))) => {
-                        AnimFrames::static_(stage_group(&resolve(p)))
-                    }
-                    _ => AnimFrames::static_(stage_group(white_view)),
-                };
+                let (mat, stage) = stage_bind_groups(
+                    device,
+                    queue,
+                    fs,
+                    material_layout,
+                    &self.stage_layout,
+                    &stage_params_buf,
+                    STAGE_PARAMS_SIZE,
+                    white_view,
+                    lm_view,
+                    diffuse_sampler,
+                    lightmap_sampler,
+                    &mut bundle_views,
+                    &sh.stages[si],
+                );
                 if stage_animated(sh, si) {
                     animated.push((sh.clone(), si, slot));
                 }
@@ -1571,6 +1871,108 @@ impl Renderer {
             dropped_stages,
             self.shader_lib.warn_count()
         );
+
+        // ---- sky pass: farbox now, cloud dome through the stage path ----
+        self.sky = None;
+        let mut sky_stages: Vec<(Shader, usize, u32)> = Vec::new();
+        if let Some((name, mat_idx)) = active_sky {
+            let sh = self
+                .shader_lib
+                .get(&name)
+                .expect("sky candidate comes from the lib");
+            let parms = sh.sky.as_ref().expect("sky_blocks only yields skyparms");
+            log::info!(
+                "sky: {name}  env {}  cloud height {}  stages {}",
+                parms.env,
+                parms.cloud_height,
+                sh.stages.len()
+            );
+            // retail skips the whole box when outerbox[0] fails to load
+            let mut farbox = None;
+            if parms.env.is_empty() {
+                log::info!("sky {name}: skyParms '-' outerbox, drawing no farbox");
+            } else {
+                let rt = format!("{}_rt", parms.env);
+                if fs.contains(&rt) || assets::probe_image_path(fs, &rt).is_some() {
+                    farbox = Some(build_sky_box(
+                        device,
+                        queue,
+                        self.config.format,
+                        fs,
+                        &self.camera_layout,
+                        &mut bundle_views,
+                        &parms.env,
+                        &name,
+                    ));
+                } else {
+                    log::warn!("sky {name}: env image {rt} not found, drawing no farbox");
+                }
+            }
+            let mut dome = None;
+            if !sh.stages.is_empty() {
+                let size = sky::box_size(Z_FAR, Z_NEAR);
+                let (verts, idx) = sky::dome_mesh(size, parms.cloud_height);
+                let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("sky dome vertices"),
+                    contents: bytemuck::cast_slice(&verts),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("sky dome indices"),
+                    contents: bytemuck::cast_slice(&idx),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+                let mut dome_stages = Vec::new();
+                for si in 0..sh.stages.len() {
+                    if sh.stages[si].bundles.is_empty() {
+                        continue;
+                    }
+                    let Some((variant, two_sided, _, _)) = stage_draw_facts(sh, si) else {
+                        continue;
+                    };
+                    // the block's slots were allocated with every other material's
+                    let slot = slot_of[&(mat_idx, si)];
+                    let (mat, stage) = stage_bind_groups(
+                        device,
+                        queue,
+                        fs,
+                        material_layout,
+                        &self.stage_layout,
+                        &stage_params_buf,
+                        STAGE_PARAMS_SIZE,
+                        white_view,
+                        None,
+                        diffuse_sampler,
+                        lightmap_sampler,
+                        &mut bundle_views,
+                        &sh.stages[si],
+                    );
+                    // dome params ride the per-frame rewrite with the eye offset
+                    sky_stages.push((sh.clone(), si, slot));
+                    dome_stages.push(DomeStage {
+                        variant,
+                        two_sided,
+                        slot,
+                        mat,
+                        stage,
+                    });
+                }
+                if !dome_stages.is_empty() {
+                    println!(
+                        "cloud dome: {} stage(s), {} verts",
+                        dome_stages.len(),
+                        verts.len()
+                    );
+                    dome = Some(DomeLayer {
+                        vertex_buf,
+                        index_buf,
+                        index_count: idx.len() as u32,
+                        stages: dome_stages,
+                    });
+                }
+            }
+            self.sky = Some(SkyRender { name, farbox, dome });
+        }
 
         // Per-batch vertex average for blend-band sorting.
         let mut centroid_sum = vec![glam::Vec3::ZERO; batches.len()];
@@ -1603,6 +2005,7 @@ impl Renderer {
             stage_batches,
             stages_of_batch,
             animated,
+            sky_stages,
             centroids,
             frame_draws: Vec::new(),
             stage_draws_last: 0,
@@ -1621,6 +2024,7 @@ impl Renderer {
     /// from the old map can index a new upload.
     pub fn unload_world(&mut self) {
         self.world = None;
+        self.sky = None;
         self.dynamic.models.clear();
         self.dynamic.instances.clear();
         self.dynamic.bone_mats.clear();
@@ -1885,6 +2289,11 @@ impl Renderer {
         )
     }
 
+    /// Name of the map's active sky block, for the F3 `sky` field.
+    pub fn sky_name(&self) -> Option<&str> {
+        self.sky.as_ref().map(|s| s.name.as_str())
+    }
+
     /// `[variant][two_sided][bias]`.
     fn stage_pipeline(
         &self,
@@ -1928,6 +2337,15 @@ impl Renderer {
         camera[16] = frame.time;
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(&camera));
+        if let Some(sky) = &self.sky {
+            if let Some(farbox) = &sky.farbox {
+                self.queue.write_buffer(
+                    &farbox.eye_buf,
+                    0,
+                    bytemuck::bytes_of(&[frame.eye.x, frame.eye.y, frame.eye.z, 0.0f32]),
+                );
+            }
+        }
         let t0 = std::time::Instant::now();
         let frustum = Frustum::from_view_proj(frame.view_proj);
         if let Some(world) = &mut self.world {
@@ -1979,6 +2397,18 @@ impl Renderer {
             // Animated stages get fresh params; static slots keep the load fill.
             for (sh, si, slot) in &world.animated {
                 if let Some(p) = stage_params(sh, *si, frame.time) {
+                    self.queue.write_buffer(
+                        &world.stage_params_buf,
+                        u64::from(*slot) * world.stage_params_stride,
+                        bytemuck::bytes_of(&p),
+                    );
+                }
+            }
+            // Dome stages always carry the view origin, animated or not.
+            for (sh, si, slot) in &world.sky_stages {
+                if let Some(mut p) = stage_params(sh, *si, frame.time) {
+                    p.flags |= STAGE_FLAG_EYE_OFFSET;
+                    p.eye_off = [frame.eye.x, frame.eye.y, frame.eye.z, 0.0];
                     self.queue.write_buffer(
                         &world.stage_params_buf,
                         u64::from(*slot) * world.stage_params_stride,
@@ -2183,6 +2613,42 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.camera_bg, &[]);
+            // The sky draws first so every world draw overwrites it; the box
+            // and dome both ignore depth (cleared 1.0) and write none.
+            if let (Some(world), Some(sky)) = (&self.world, &self.sky) {
+                if let Some(farbox) = &sky.farbox {
+                    pass.set_pipeline(&farbox.pipeline);
+                    pass.set_bind_group(2, &farbox.eye_bg, &[]);
+                    pass.set_vertex_buffer(0, farbox.vertex_buf.slice(..));
+                    pass.set_index_buffer(farbox.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    for (axis, &(first, end)) in farbox.sides.iter().enumerate() {
+                        pass.set_bind_group(1, &farbox.side_bgs[axis], &[]);
+                        pass.draw_indexed(first..end, 0, 0..1);
+                    }
+                }
+                if let Some(dome) = &sky.dome {
+                    pass.set_vertex_buffer(0, dome.vertex_buf.slice(..));
+                    pass.set_index_buffer(dome.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    let mut bound: Option<(StageVariant, bool)> = None;
+                    for ds in &dome.stages {
+                        let key = (ds.variant, ds.two_sided);
+                        if bound != Some(key) {
+                            pass.set_pipeline(self.stage_pipeline(ds.variant, ds.two_sided, false));
+                            bound = Some(key);
+                        }
+                        pass.set_bind_group(1, ds.mat.bind_group(frame.time), &[]);
+                        pass.set_bind_group(
+                            2,
+                            ds.stage.bind_group(frame.time),
+                            &[
+                                u32::try_from(u64::from(ds.slot) * world.stage_params_stride)
+                                    .unwrap_or(0),
+                            ],
+                        );
+                        pass.draw_indexed(0..dome.index_count, 0, 0..1);
+                    }
+                }
+            }
             if let Some(world) = &self.world {
                 pass.set_vertex_buffer(0, world.vertex_buf.slice(..));
                 pass.set_index_buffer(world.index_buf.slice(..), wgpu::IndexFormat::Uint32);
@@ -3643,7 +4109,7 @@ mod tests {
 
     #[test]
     fn stage_params_is_std140_shaped_and_pod_roundtrips() {
-        assert_eq!(std::mem::size_of::<StageParams>(), 160);
+        assert_eq!(std::mem::size_of::<StageParams>(), 176);
         let p = StageParams {
             uv0: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
             uv1: [7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
@@ -3655,12 +4121,49 @@ mod tests {
             vec0_t: [0.0, 1.0, 0.0, 0.0],
             vec1_s: [0.0, 0.0, 1.0, 0.0],
             vec1_t: [0.0, 0.0, 0.0, 1.0],
+            eye_off: [9.0, 8.0, 7.0, 0.0],
         };
         // slot-shaped write/read, like the UBO dynamic-offset path
         let mut slot = [0u8; std::mem::size_of::<StageParams>()];
         slot[..bytemuck::bytes_of(&p).len()].copy_from_slice(bytemuck::bytes_of(&p));
         let q: &StageParams = bytemuck::try_from_bytes(&slot).unwrap();
         assert_eq!(*q, p);
+    }
+
+    /// Sky dome stages ride the same UBO slots with the eye-offset flag set.
+    #[test]
+    fn stage_params_eye_offset_flag_marks_dome_draws() {
+        let sh = Shader {
+            name: "test/skydome".into(),
+            stages: vec![Stage {
+                bundles: vec![Bundle {
+                    image: ImageRef::Path("clouds".into()),
+                    anim: None,
+                    clamp: false,
+                    tcmods: vec![TcMod::Scroll(0.004, 0.004), TcMod::Scale(3.0, 3.0)],
+                    vector: None,
+                }],
+                blend: Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha)),
+                depth_write: None,
+                alpha_func: None,
+                rgb_gen: RgbGen::Identity,
+                alpha_gen: AlphaGen::Identity,
+            }],
+            ..Default::default()
+        };
+        let mut p = stage_params(&sh, 0, 5.0).unwrap();
+        p.flags |= STAGE_FLAG_EYE_OFFSET;
+        p.eye_off = [100.0, 200.0, 300.0, 0.0];
+        assert_eq!(p.flags & STAGE_FLAG_EYE_OFFSET, STAGE_FLAG_EYE_OFFSET);
+        // the affine still carries scroll+scale for the dome's raw-radian uvs
+        assert_eq!(
+            p.uv0,
+            bundle_affine(&[TcMod::Scroll(0.004, 0.004), TcMod::Scale(3.0, 3.0)], 5.0)
+        );
+        // world draws never set the flag; the default params stay put
+        let world_p = stage_params(&sh, 0, 5.0).unwrap();
+        assert_eq!(world_p.flags & STAGE_FLAG_EYE_OFFSET, 0);
+        assert_eq!(world_p.eye_off, [0.0; 4]);
     }
 
     #[test]

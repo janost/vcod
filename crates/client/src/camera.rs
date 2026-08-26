@@ -3,6 +3,11 @@ use glam::{Mat4, Quat, Vec3};
 /// Default (non-ADS) vertical FOV, degrees.
 pub const DEFAULT_FOV_DEG: f32 = vcod_common::weapon::DEFAULT_FOV;
 
+/// Frame projection planes; the sky pass sizes its box off them
+/// (`box_size(Z_FAR, Z_NEAR)`).
+pub const Z_NEAR: f32 = 4.0;
+pub const Z_FAR: f32 = 60000.0;
+
 /// (forward, right, up) for a yaw/pitch pair. Z-up, yaw 0 = +X, so right is
 /// -Y at rest. No roll, since the fire trace and impact billboards must not
 /// tilt with a lean.
@@ -29,7 +34,7 @@ pub fn view_proj_from(
 ) -> Mat4 {
     let (forward, _, _) = basis(yaw, pitch);
     let up = Quat::from_axis_angle(forward, roll) * Vec3::Z;
-    glam::camera::rh::proj::directx::perspective(fov_deg.to_radians(), aspect, 4.0, 60000.0)
+    glam::camera::rh::proj::directx::perspective(fov_deg.to_radians(), aspect, Z_NEAR, Z_FAR)
         * glam::camera::rh::view::look_to_mat4(pos, forward, up)
 }
 
