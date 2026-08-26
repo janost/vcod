@@ -235,6 +235,9 @@ struct Walk<'a> {
     view_proj: Option<Mat4>,
     vis: Visible,
     on_stack: Vec<bool>,
+    /// Cells whose boundary portal an occluder volume hid; the post-walk
+    /// frustum expansion must not reach them (an_occluder_hides_the_portal).
+    sealed: Vec<bool>,
 }
 
 const EMPTY: (Vec3, Vec3) = (Vec3::INFINITY, Vec3::NEG_INFINITY);
@@ -391,6 +394,7 @@ impl WorldVis {
             view_proj,
             vis: self.empty_visible(),
             on_stack: vec![false; self.portals.len()],
+            sealed: vec![false; self.cells.len()],
         };
         self.walk(cell, frustum, &mut w, 0);
         // above a cell's top the eye looks over its portal-less walls, which
@@ -417,7 +421,7 @@ impl WorldVis {
         while grew {
             grew = false;
             for (ci, c) in self.cells.iter().enumerate() {
-                if w.vis.cells[ci] {
+                if w.vis.cells[ci] || w.sealed[ci] {
                     continue;
                 }
                 let touches_visited = (c.first_portal as usize
@@ -485,6 +489,7 @@ impl WorldVis {
                 &self.portal_verts[p.first_vert as usize..(p.first_vert + p.vert_count) as usize];
             if !volumes.is_empty() && self.portal_in_occluders(&p, &volumes) {
                 w.vis.stats.portals_occluded += 1;
+                w.sealed[p.cell as usize] = true;
                 continue;
             }
             let mut poly = verts.to_vec();
@@ -1386,7 +1391,7 @@ mod tests {
         // the spectator spot from the live comparison, aimed over the rail
         let eye = Vec3::new(1354.0, 845.0, -282.0);
         let frustum = frustum_at(eye, Vec3::new(1.0, 0.12, 0.0).normalize());
-        let v = vis.visible(eye, &frustum);
+        let v = vis.visible(eye, &frustum, None);
         assert!(
             v.soups[ocean_soup],
             "the ocean soup must be visible from the deck"
