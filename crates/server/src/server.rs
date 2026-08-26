@@ -1260,12 +1260,6 @@ mod tests {
                 }
             }
         }
-        eprintln!(
-            "DBG notices={} first={:?} last3={:?}",
-            notices.len(),
-            notices.first(),
-            notices.iter().rev().take(3).rev().collect::<Vec<_>>()
-        );
         assert_eq!(
             notices.last().map(String::as_str),
             Some("w \"EXE_LOSTRELIABLECOMMANDS\"")

@@ -241,7 +241,7 @@ Preamble, both branches:
 | `0x807b8e6` | none | `to.buttons &= 0xfe` |
 | `0x807b900` | 1 bit | `== key & 1` selects the compact branch, otherwise the full branch at `0x807bba0` |
 
-Compact branch (`0x807b956`), the one vcod's `write_delta_usercmd` emits unless the cmd carries upmove, which only the full branch below can express. `key ^= to.serverTime` first, then:
+Compact branch (`0x807b956`), the one vcod's `write_delta_usercmd` emits when nothing the branch omits differs from the previous sent cmd (upmove, weapon, wbuttons and the upper button bits are full-branch only). `key ^= to.serverTime` first, then:
 
 | VA | Field | Wire | Keyed with |
 |---|---|---|---|
