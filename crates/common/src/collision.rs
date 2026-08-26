@@ -20,6 +20,8 @@ pub struct BrushPlanes {
     pub planes: Vec<(Vec3, f32)>,
     /// Lump-0 surface flags of the brush's material (SURF_LADDER and friends).
     pub surface_flags: u32,
+    /// Lump-0 content flags, reported by `point_contents`.
+    pub content_flags: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -283,6 +285,7 @@ impl CollisionWorld {
                     brushes.push(BrushPlanes {
                         planes,
                         surface_flags: mat.surface_flags,
+                        content_flags: mat.content_flags,
                     });
                     prims.push((Prim::Brush(idx), lo, hi));
                 }
@@ -324,17 +327,31 @@ impl CollisionWorld {
         }
     }
 
-    /// Fluid contents at a point; `CONTENTS_WATER` when inside any water brush.
+    /// Contents at a point: `CONTENTS_WATER` inside any water brush, plus the
+    /// content flags of any solid brush containing it (Q3 `CM_PointContents`
+    /// over the brushes that made it into the world).
     pub fn point_contents(&self, p: Vec3) -> u32 {
+        let mut out = 0;
         for v in &self.water {
             if p.cmple(v.hi).all()
                 && p.cmpge(v.lo).all()
                 && v.planes.iter().all(|&(n, d)| n.dot(p) <= d)
             {
-                return CONTENTS_WATER;
+                out |= CONTENTS_WATER;
+                break;
             }
         }
-        0
+        for (prim, lo, hi) in &self.prims {
+            if let Prim::Brush(b) = prim {
+                if p.cmple(*hi).all() && p.cmpge(*lo).all() {
+                    let brush = &self.brushes[*b as usize];
+                    if brush.planes.iter().all(|&(n, d)| n.dot(p) <= d) {
+                        out |= brush.content_flags;
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// `mins == maxs == ZERO` is a ray trace.
@@ -483,31 +500,57 @@ pub fn test_world(extra: &[(Vec3, Vec3)]) -> CollisionWorld {
         Vec3::new(1024.0, 1024.0, 0.0),
     )];
     boxes.extend_from_slice(extra);
-    let side = |v: f32| crate::bsp::BrushSide {
+    let mut specs: Vec<(usize, [f32; 3], [f32; 3])> =
+        vec![(0, [-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0])];
+    specs.extend(
+        extra
+            .iter()
+            .map(|(lo, hi)| (0, lo.to_array(), hi.to_array())),
+    );
+    synthetic_world(&[("textures/test/solid", CONTENTS_SOLID, 0)], &specs)
+}
+
+/// Test helper: axial brushes with named materials `(name, contents, surface)`.
+#[doc(hidden)]
+pub fn synthetic_world(
+    materials: &[(&str, u32, u32)],
+    brushes: &[(usize, [f32; 3], [f32; 3])],
+) -> CollisionWorld {
+    let side = |m: u32, v: f32| crate::bsp::BrushSide {
         plane_or_dist: v.to_bits(),
-        material: 0,
+        material: m,
     };
     let mut brush_sides = Vec::new();
-    let mut brushes = Vec::new();
-    for (i, (mins, maxs)) in boxes.iter().enumerate() {
-        brushes.push(crate::bsp::Brush {
+    let mut bsp_brushes = Vec::new();
+    for (i, (mat, lo, hi)) in brushes.iter().enumerate() {
+        bsp_brushes.push(crate::bsp::Brush {
             first_side: (i * 6) as u32,
             num_sides: 6,
-            material: 0,
+            material: *mat as u16,
         });
         for axis in 0..3 {
-            brush_sides.push(side(mins[axis]));
-            brush_sides.push(side(maxs[axis]));
+            brush_sides.push(side(*mat as u32, lo[axis]));
+            brush_sides.push(side(*mat as u32, hi[axis]));
         }
     }
-    let n = brushes.len() as u32;
+    let n = bsp_brushes.len() as u32;
+    let (mut mins, mut maxs) = ([0.0f32; 3], [0.0f32; 3]);
+    for (_, lo, hi) in brushes {
+        for axis in 0..3 {
+            mins[axis] = mins[axis].min(lo[axis]);
+            maxs[axis] = maxs[axis].max(hi[axis]);
+        }
+    }
     CollisionWorld::build(
         &crate::bsp::Bsp {
-            materials: vec![crate::bsp::Material {
-                name: "textures/test/solid".into(),
-                surface_flags: 0,
-                content_flags: 0x1,
-            }],
+            materials: materials
+                .iter()
+                .map(|(name, content, surface)| crate::bsp::Material {
+                    name: name.to_string(),
+                    surface_flags: *surface,
+                    content_flags: *content,
+                })
+                .collect(),
             lightmaps: vec![],
             soups: vec![],
             verts: vec![],
@@ -515,10 +558,10 @@ pub fn test_world(extra: &[(Vec3, Vec3)]) -> CollisionWorld {
             entities: String::new(),
             planes: vec![],
             brush_sides,
-            brushes,
+            brushes: bsp_brushes,
             models: vec![crate::bsp::Model {
-                mins: [-1024.0; 3],
-                maxs: [1024.0; 3],
+                mins,
+                maxs,
                 first_soup: 0,
                 num_soups: 0,
                 first_brush: 0,

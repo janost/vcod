@@ -35,6 +35,17 @@ pub const LEAN_MAX: f32 = 28.0; // eye offset in units; roll is lean/2 degrees
 pub const LEAN_TIME_TO_MS: f32 = 280.0;
 pub const LEAN_TIME_FROM_MS: f32 = 350.0;
 
+// Water: RTCW-MP bg_pmove.c multipliers against CoD's absolute speeds.
+// Swim cap is SCALE_SWIM * SPEED_RUN; no lava/slime exists in CoD maps.
+pub const SCALE_SWIM: f32 = 0.5;
+pub const WATER_ACCELERATE: f32 = 4.0;
+pub const WATER_FRICTION: f32 = 1.0;
+/// Idle wish toward the bottom while swimming.
+pub const WATER_SINK_SPEED: f32 = 60.0;
+pub const WATERJUMP_FORWARD: f32 = 200.0;
+pub const WATERJUMP_UP: f32 = 350.0;
+pub const WATERJUMP_TIME_MS: f32 = 2000.0;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stance {
     Stand,
@@ -81,6 +92,10 @@ pub struct PlayerState {
     pub on_ground: bool,
     pub ground_normal: Vec3,
     pub lean: f32, // -LEAN_MAX..LEAN_MAX
+    /// 0 dry, 1 feet, 2 waist, 3 eyes under (RTCW waterlevel).
+    pub water_level: u32,
+    /// Remaining control lock while flying out of water; 0 when free.
+    pub waterjump_ms: f32,
 }
 
 impl PlayerState {
@@ -94,6 +109,8 @@ impl PlayerState {
             on_ground: false,
             ground_normal: Vec3::Z,
             lean: 0.0,
+            water_level: 0,
+            waterjump_ms: 0.0,
         }
     }
 
@@ -145,18 +162,32 @@ pub fn pmove(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
     update_stance(ps, input, world);
     update_lean(ps, input, world, dt);
+    set_water_level(ps, world);
     ground_trace(ps, world);
-    if input.jump && ps.on_ground && ps.stance == Stance::Stand {
-        ps.velocity.z = JUMP_VELOCITY;
-        ps.on_ground = false;
+    if ps.waterjump_ms > 0.0 {
+        ps.waterjump_ms -= dt * 1000.0;
+        if ps.waterjump_ms < 0.0 {
+            ps.waterjump_ms = 0.0;
+        }
     }
-    if ps.on_ground {
-        friction(ps, dt);
-        walk_move(ps, input, world, dt);
+    if ps.waterjump_ms > 0.0 {
+        water_jump_move(ps, world, dt);
+    } else if ps.water_level > 1 {
+        water_move(ps, input, world, dt);
     } else {
-        air_move(ps, input, world, dt);
+        if input.jump && ps.on_ground && ps.stance == Stance::Stand {
+            ps.velocity.z = JUMP_VELOCITY;
+            ps.on_ground = false;
+        }
+        if ps.on_ground {
+            friction(ps, dt);
+            walk_move(ps, input, world, dt);
+        } else {
+            air_move(ps, input, world, dt);
+        }
     }
     ground_trace(ps, world);
+    set_water_level(ps, world);
 }
 
 /// Standing back up needs headroom for the taller bbox.
@@ -229,25 +260,58 @@ fn ground_trace(ps: &mut PlayerState, world: &CollisionWorld) {
     if t.fraction < 1.0 && t.normal.z >= MIN_WALK_NORMAL && !thrown_off {
         ps.on_ground = true;
         ps.ground_normal = t.normal;
+        // RTCW clears the waterjump lock on touching walkable ground
+        ps.waterjump_ms = 0.0;
     } else {
         ps.on_ground = false;
         ps.ground_normal = Vec3::Z;
     }
 }
 
-/// Q3 `bg_pmove.c` `PM_Friction`.
+/// Feet, waist and eye point-contents samples; swimming starts at waist-deep.
+fn set_water_level(ps: &mut PlayerState, world: &CollisionWorld) {
+    use crate::collision::CONTENTS_WATER;
+    ps.water_level = 0;
+    let o = ps.origin;
+    if world.point_contents(Vec3::new(o.x, o.y, o.z + 1.0)) & CONTENTS_WATER == 0 {
+        return;
+    }
+    ps.water_level = 1;
+    let vh = ps.view_height();
+    let at = |z: f32| world.point_contents(Vec3::new(o.x, o.y, z)) & CONTENTS_WATER != 0;
+    if at(o.z + vh * 0.5) {
+        ps.water_level = 2;
+        if at(o.z + vh) {
+            ps.water_level = 3;
+        }
+    }
+}
+
+/// RTCW `bg_pmove.c` `PM_Friction`: ground friction only while walking in
+/// water level <= 1, plus a water term that already applies while wading.
 fn friction(ps: &mut PlayerState, dt: f32) {
-    let speed = ps.velocity.length();
+    // when walking, slope movement along z does not count toward the speed
+    let mut planar = ps.velocity;
+    if ps.on_ground {
+        planar.z = 0.0;
+    }
+    let speed = planar.length();
     if speed < 1.0 {
         ps.velocity.x = 0.0;
         ps.velocity.y = 0.0;
         return;
     }
-    // Stop-speed floor scaled by stance so slow stances reach their wish
-    // speed. Standing must stay under the ~54 u/s a shallow wall slide
-    // leaves, or the player stalls on the wall.
-    let control = speed.max(PM_STOPSPEED * ps.stance.speed_scale());
-    let drop = control * PM_FRICTION * dt;
+    let mut drop = 0.0;
+    if ps.on_ground && ps.water_level <= 1 {
+        // Stop-speed floor scaled by stance so slow stances reach their wish
+        // speed. Standing must stay under the ~54 u/s a shallow wall slide
+        // leaves, or the player stalls on the wall.
+        let control = speed.max(PM_STOPSPEED * ps.stance.speed_scale());
+        drop += control * PM_FRICTION * dt;
+    }
+    if ps.water_level > 0 {
+        drop += speed * WATER_FRICTION * ps.water_level as f32 * dt;
+    }
     let scale = ((speed - drop) / speed).max(0.0);
     ps.velocity *= scale;
 }
@@ -288,7 +352,18 @@ fn clip_velocity(vel: Vec3, normal: Vec3) -> Vec3 {
 
 /// Q3 `bg_pmove.c` `PM_WalkMove`.
 fn walk_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
-    let (dir, wishspeed) = wish(ps, input);
+    // eye-deep and looking up an upward slope: swim instead of trudging
+    if ps.water_level > 2 && forward3(ps).dot(ps.ground_normal) > 0.0 {
+        water_move(ps, input, world, dt);
+        return;
+    }
+    let (dir, mut wishspeed) = wish(ps, input);
+    // wading clamp: linear from full speed at the ankles to the swim scale
+    // with water at the eyes (RTCW `PM_WalkMove`)
+    if ps.water_level > 0 {
+        let ws = 1.0 - (1.0 - SCALE_SWIM) * (ps.water_level as f32 / 3.0);
+        wishspeed = wishspeed.min(SPEED_RUN * ws);
+    }
     // along the slope, so it costs no speed
     let dir = clip_velocity(dir, ps.ground_normal).normalize_or_zero();
     accelerate(ps, dir, wishspeed, PM_ACCELERATE, dt);
@@ -297,6 +372,98 @@ fn walk_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
         return;
     }
     step_slide_move(ps, world, dt, false);
+}
+
+/// Look direction including pitch; pitch is up-positive.
+fn forward3(ps: &PlayerState) -> Vec3 {
+    Vec3::new(
+        ps.pitch.cos() * ps.yaw.cos(),
+        ps.pitch.cos() * ps.yaw.sin(),
+        ps.pitch.sin(),
+    )
+}
+
+/// Q3 `bg_pmove.c` `PM_CmdScale`: input magnitude in command units. Q3 only
+/// reads forward/right here, so a lone up key would scale to zero and the
+/// sink wish would win; CoD-style play expects jump alone to swim up, so up
+/// joins the magnitude.
+fn cmd_scale(input: &PmInput) -> f32 {
+    let up = if input.jump { 1.0 } else { 0.0 };
+    let max = input.forward.abs().max(input.right.abs()).max(up);
+    if max <= 0.0 {
+        return 0.0;
+    }
+    let total = (input.forward * input.forward + input.right * input.right + up * up).sqrt();
+    total / max * (127.0 / 128.0)
+}
+
+/// RTCW `bg_pmove.c` `PM_WaterMove`. No gravity: buoyancy is implicit, the
+/// idle sink is a wish toward the bottom, jump is the up command.
+fn water_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
+    if try_start_water_jump(ps, world) {
+        water_jump_move(ps, world, dt);
+        return;
+    }
+    friction(ps, dt);
+    let m = cmd_scale(input) * 127.0;
+    let right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
+    let wishvel = if m == 0.0 {
+        Vec3::new(0.0, 0.0, -WATER_SINK_SPEED)
+    } else {
+        let mut w = forward3(ps) * (input.forward * m) + right * (input.right * m);
+        w.z += if input.jump { m } else { 0.0 };
+        w
+    };
+    let wishspeed = wishvel.length();
+    let wishdir = if wishspeed > 0.0 {
+        wishvel / wishspeed
+    } else {
+        Vec3::ZERO
+    };
+    let cap = SPEED_RUN * SCALE_SWIM;
+    let wishspeed = if wishspeed > cap { cap } else { wishspeed };
+    accelerate(ps, wishdir, wishspeed, WATER_ACCELERATE, dt);
+
+    // crawl up underwater slopes without losing speed. RTCW also re-scales
+    // the clipped velocity to its old length here, which mirrors a full sink
+    // into the floor into a full-power launch the frame grounding starts
+    // (their "FIXME: still have z friction underwater?" marks this spot);
+    // dropping the re-scale keeps bottom contact settled.
+    if ps.on_ground && ps.velocity.dot(ps.ground_normal) < 0.0 {
+        ps.velocity = clip_velocity(ps.velocity, ps.ground_normal);
+    }
+    slide_move(ps, world, dt, false);
+}
+
+/// RTCW `bg_pmove.c` `PM_CheckWaterJump`: chest-deep against a low lip, the
+/// probe 4 units up must hit solid and 20 units up must be clear.
+fn try_start_water_jump(ps: &mut PlayerState, world: &CollisionWorld) -> bool {
+    use crate::collision::CONTENTS_SOLID;
+    if ps.waterjump_ms > 0.0 || ps.water_level != 2 {
+        return false;
+    }
+    let flat = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0);
+    let spot = ps.origin + flat * 30.0 + Vec3::Z * 4.0;
+    if world.point_contents(spot) & CONTENTS_SOLID == 0 {
+        return false;
+    }
+    if world.point_contents(spot + Vec3::Z * 16.0) != 0 {
+        return false;
+    }
+    ps.velocity = forward3(ps) * WATERJUMP_FORWARD;
+    ps.velocity.z = WATERJUMP_UP;
+    ps.waterjump_ms = WATERJUMP_TIME_MS;
+    true
+}
+
+/// RTCW `bg_pmove.c` `PM_WaterJumpMove`: no control, extra gravity, cancels
+/// once falling again (landing clears via ground_trace).
+fn water_jump_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
+    step_slide_move(ps, world, dt, true);
+    ps.velocity.z -= GRAVITY * dt;
+    if ps.velocity.z < 0.0 {
+        ps.waterjump_ms = 0.0;
+    }
 }
 
 /// Q3 `bg_pmove.c` `PM_AirMove`.
@@ -448,6 +615,27 @@ mod tests {
 
     fn flat() -> CollisionWorld {
         test_world(&[])
+    }
+
+    /// A pool: dry ground west, deep water (surface z=36) over a floor at
+    /// -74, a chest-deep shelf (top 0) and an ankle-deep shelf (top 30), an
+    /// exit wall at x=200 rising to 15, and landing ground east of it.
+    fn pool_world() -> CollisionWorld {
+        crate::collision::synthetic_world(
+            &[
+                ("textures/test/solid", crate::collision::CONTENTS_SOLID, 0),
+                ("textures/common/water", crate::collision::CONTENTS_WATER, 0),
+            ],
+            &[
+                (0, [-600.0, -300.0, -16.0], [-200.0, 300.0, 0.0]),
+                (0, [-200.0, -300.0, -90.0], [200.0, 300.0, -74.0]),
+                (0, [-160.0, -100.0, -84.0], [185.0, 100.0, 0.0]),
+                (0, [-200.0, 150.0, -84.0], [200.0, 260.0, 30.0]),
+                (0, [200.0, -300.0, -90.0], [216.0, 300.0, 15.0]),
+                (0, [240.0, -300.0, -16.0], [600.0, 300.0, 0.0]),
+                (1, [-200.0, -300.0, -74.0], [200.0, 300.0, 36.0]),
+            ],
+        )
     }
 
     fn tick(ps: &mut PlayerState, input: &PmInput, w: &CollisionWorld, n: usize) {
@@ -743,5 +931,170 @@ mod tests {
         let v = ps.view();
         assert!(v.roll > 0.1, "leaning right should roll the view");
         assert!(v.eye.y < -1.0, "yaw 0 lean right offsets eye toward -Y");
+    }
+
+    // --- water ---
+
+    #[test]
+    fn water_level_tracks_depth() {
+        let w = pool_world();
+        // deep floor: only the eye stays above the surface? no - fully under
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -73.0), 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 5);
+        assert_eq!(ps.water_level, 3, "on the pool bottom at {}", ps.origin);
+
+        // chest-deep shelf: feet+1 and waist wet, eyes dry
+        let mut ps = PlayerState::spawn(Vec3::new(150.0, 0.0, 0.2), 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 5);
+        assert_eq!(ps.water_level, 2, "on the shelf at {}", ps.origin);
+
+        // ankle-deep shelf
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 200.0, 30.2), 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 5);
+        assert_eq!(ps.water_level, 1, "ankle-deep at {}", ps.origin);
+
+        // dry ground west of the pool
+        let mut ps = PlayerState::spawn(Vec3::new(-400.0, 0.0, 1.0), 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 5);
+        assert_eq!(ps.water_level, 0);
+    }
+
+    #[test]
+    fn swimming_caps_at_the_swim_speed() {
+        let w = pool_world();
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -20.0), 0.0);
+        tick(
+            &mut ps,
+            &PmInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+            &w,
+            100,
+        );
+        let h = ps.velocity.truncate().length();
+        assert!(
+            (h - SPEED_RUN * SCALE_SWIM).abs() < 6.0,
+            "swim speed {h}, expected ~{}",
+            SPEED_RUN * SCALE_SWIM
+        );
+    }
+
+    #[test]
+    fn idle_player_sinks_without_freefall() {
+        let w = pool_world();
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -20.0), 0.0);
+        let start = ps.origin.z;
+        let input = PmInput::default();
+        // the sink wish is an acceleration target, not a velocity cap: speed
+        // builds over ~half a second, so watch the whole descent
+        let mut worst_fall = 0.0f32;
+        for _ in 0..150 {
+            pmove(&mut ps, &input, &w, 1.0 / 125.0);
+            worst_fall = worst_fall.max(-ps.velocity.z);
+        }
+        assert!(
+            ps.origin.z < start - 40.0,
+            "should reach the bottom, at {}",
+            ps.origin
+        );
+        assert!(ps.on_ground, "settled on the pool floor at {}", ps.origin);
+        assert!(worst_fall < 130.0, "sink must not freefall: {worst_fall}");
+    }
+
+    #[test]
+    fn jump_key_swims_up() {
+        let w = pool_world();
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -30.0), 0.0);
+        tick(
+            &mut ps,
+            &PmInput {
+                jump: true,
+                ..Default::default()
+            },
+            &w,
+            150,
+        );
+        // hovers chest-deep: above that line the waist sample dries, swim
+        // gives way to air, and he sinks back into it
+        assert!(
+            (-6.0..15.0).contains(&ps.origin.z),
+            "should bob at the chest line, at {}",
+            ps.origin
+        );
+    }
+
+    #[test]
+    fn wading_is_slower_than_dry_running() {
+        let w = pool_world();
+        let mut ps = PlayerState::spawn(Vec3::new(-150.0, 200.0, 30.2), 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 5);
+        assert_eq!(ps.water_level, 1);
+        // sample while still on the shelf: the run must not reach its edge
+        tick(
+            &mut ps,
+            &PmInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+            &w,
+            100,
+        );
+        assert!(ps.origin.x < 100.0, "still on the shelf at {}", ps.origin);
+        let h = ps.velocity.truncate().length();
+        let expect = SPEED_RUN * (1.0 - (1.0 - SCALE_SWIM) * (1.0 / 3.0));
+        assert!(
+            (h - expect).abs() < 6.0,
+            "wade speed {h}, expected ~{expect}"
+        );
+        assert_eq!(ps.water_level, 1);
+    }
+
+    #[test]
+    fn looking_up_while_submerged_walk_turns_into_swim() {
+        let w = pool_world();
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -73.0), 0.0);
+        ps.pitch = 20.0f32.to_radians();
+        tick(
+            &mut ps,
+            &PmInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+            &w,
+            30,
+        );
+        assert!(
+            ps.velocity.z > 5.0 || ps.origin.z > -60.0,
+            "should swim up off the bottom: vz {} z {}",
+            ps.velocity.z,
+            ps.origin.z
+        );
+    }
+
+    #[test]
+    fn water_jump_leaps_out_of_the_pool() {
+        let w = pool_world();
+        // far enough from the lip that the bbox clears it only after rising
+        let mut ps = PlayerState::spawn(Vec3::new(172.0, 0.0, 0.2), 0.0);
+        let input = PmInput {
+            forward: 1.0,
+            jump: true,
+            ..Default::default()
+        };
+        pmove(&mut ps, &input, &w, 1.0 / 125.0);
+        assert!(
+            ps.waterjump_ms > 0.0,
+            "waterjump should trigger from the shelf"
+        );
+        assert!(ps.velocity.z > 300.0, "boost vz {}", ps.velocity.z);
+        // hands off for the flight: holding jump would bunny-hop after landing
+        tick(&mut ps, &PmInput::default(), &w, 120);
+        assert!(
+            ps.origin.x > 255.0 && ps.origin.z < 20.0,
+            "should land east of the wall, at {}",
+            ps.origin
+        );
+        assert!(ps.on_ground && ps.waterjump_ms == 0.0, "{:?}", ps.origin);
     }
 }

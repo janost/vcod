@@ -85,13 +85,13 @@ fn main() {
         let mut seen: std::collections::BTreeSet<&str> = Default::default();
         for mat in &bsp.materials {
             let n = mat.name.to_lowercase();
-            if n.contains("water") || n.contains("ladder") || n.contains("liquid") {
-                if seen.insert(&mat.name) {
-                    println!(
-                        "{map:>14}: {:<40} content={:#x} surface={:#x}",
-                        mat.name, mat.content_flags, mat.surface_flags
-                    );
-                }
+            if (n.contains("water") || n.contains("ladder") || n.contains("liquid"))
+                && seen.insert(mat.name.as_str())
+            {
+                println!(
+                    "{map:>14}: {:<40} content={:#x} surface={:#x}",
+                    mat.name, mat.content_flags, mat.surface_flags
+                );
             }
         }
     }
