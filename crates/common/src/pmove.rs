@@ -65,6 +65,8 @@ pub const WATERJUMP_TIME_MS: f32 = 2000.0;
 /// Forward-trace reach while walking / airborne.
 pub const LADDER_TRACE_DIST_WALK: f32 = 8.0;
 pub const LADDER_TRACE_DIST_AIR: f32 = 30.0;
+/// Horizontal shrink per side of the ladder probe box (rodata 0x70CB0).
+pub const LADDER_PROBE_SHRINK: f32 = 6.0;
 pub const LADDER_UPSCALE_BIAS: f32 = 0.25;
 pub const LADDER_UPSCALE_GAIN: f32 = 2.5;
 pub const LADDER_CLIMB_SCALE: f32 = 0.5;
@@ -127,6 +129,9 @@ pub struct PlayerState {
     pub waterjump_ms: f32,
     /// Touching a climbable surface (trace hit with SURF_LADDER) this frame.
     pub on_ladder: bool,
+    /// Plane normal of that surface; persists while off the wall so the
+    /// airborne probe can stick with the ladder we left.
+    pub ladder_normal: Vec3,
 }
 
 impl PlayerState {
@@ -143,6 +148,7 @@ impl PlayerState {
             water_level: 0,
             waterjump_ms: 0.0,
             on_ladder: false,
+            ladder_normal: Vec3::ZERO,
         }
     }
 
@@ -515,9 +521,12 @@ fn water_jump_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
     }
 }
 
-/// RTCW `bg_pmove.c` `PM_CheckLadderMove` with retail CoD 1.1 reach and gates
-/// (const provenance above). Sets `ps.on_ladder`; returns the ladder plane
-/// normal plus whether this frame is a grab-from-above push.
+/// Retail `PM_CheckLadderMove` (game.mp.i386.so @0x336e8): reach 30/8,
+/// forwardmove gate while walking, probe bbox shrunk 6 per horizontal side
+/// with the top lowered by the probe distance (@0x70cb0), direction
+/// `-vLadderVec` when already on a ladder and airborne. Sets `ps.on_ladder`
+/// and `ps.ladder_normal`; returns the ladder plane normal plus whether this
+/// frame is a grab-from-above push (RTCW's guard, kept from the port).
 fn check_ladder_move(
     ps: &mut PlayerState,
     input: &PmInput,
@@ -534,12 +543,24 @@ fn check_ladder_move(
     } else {
         LADDER_TRACE_DIST_AIR
     };
-    let flatforward = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0).normalize_or_zero();
+    // stick with the wall we left instead of requiring facing it
+    let dir = if ps.on_ladder && !walking && ps.ladder_normal != Vec3::ZERO {
+        -ps.ladder_normal
+    } else {
+        Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0).normalize_or_zero()
+    };
+    let mut probe_mins = ps.mins();
+    probe_mins.x += LADDER_PROBE_SHRINK;
+    probe_mins.y += LADDER_PROBE_SHRINK;
+    let mut probe_maxs = ps.maxs();
+    probe_maxs.x -= LADDER_PROBE_SHRINK;
+    probe_maxs.y -= LADDER_PROBE_SHRINK;
+    probe_maxs.z -= tracedist;
     let t = world.box_trace(
         ps.origin,
-        ps.origin + flatforward * tracedist,
-        ps.mins(),
-        ps.maxs(),
+        ps.origin + dir * tracedist,
+        probe_mins,
+        probe_maxs,
     );
     let mut ladder = t.fraction < 1.0 && t.surface_flags & crate::collision::SURF_LADDER != 0;
     let normal = t.normal;
@@ -548,9 +569,12 @@ fn check_ladder_move(
         // grab-from-above guard: only trust a far hit when a backwards trace
         // confirms the wall behind us, else it would fling us off the top
         ladder = false;
-        let mut mins = ps.mins();
-        mins.z = -1.0;
-        let back = world.box_trace(ps.origin, ps.origin - normal * tracedist, mins, ps.maxs());
+        let back = world.box_trace(
+            ps.origin,
+            ps.origin - normal * tracedist,
+            probe_mins,
+            probe_maxs,
+        );
         if back.fraction < 1.0 && back.surface_flags & crate::collision::SURF_LADDER != 0 {
             ladder = true;
             ladderforward = true;
@@ -561,6 +585,9 @@ fn check_ladder_move(
         ladder = false;
     }
     ps.on_ladder = ladder;
+    if ladder {
+        ps.ladder_normal = normal;
+    }
     ladder.then_some((normal, ladderforward))
 }
 
@@ -1457,6 +1484,60 @@ mod tests {
         assert!(
             ps.origin.z > hang_z - 8.0,
             "must not slide down, {} -> {}",
+            hang_z,
+            ps.origin.z
+        );
+    }
+
+    #[test]
+    fn ladder_probe_box_is_shrunk() {
+        // retail shrinks the probe bbox horizontally (@0x70cb0), so a
+        // sideways hover this close to the wall must NOT grab
+        let w = ladder_world();
+        let input = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        let mut ps = PlayerState::spawn(Vec3::new(8.0, 0.0, 40.0), 0.0);
+        pmove(&mut ps, &input, &w, 1.0 / 125.0);
+        assert!(!ps.on_ladder, "full-box probe would grab from here");
+
+        // just past the shrunken reach it still grabs
+        let mut ps = PlayerState::spawn(Vec3::new(13.0, 0.0, 40.0), 0.0);
+        pmove(&mut ps, &input, &w, 1.0 / 125.0);
+        assert!(ps.on_ladder, "should grab within shrunk reach");
+    }
+
+    #[test]
+    fn facing_away_mid_climb_keeps_the_grab() {
+        let w = ladder_world();
+        let run = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        let mut ps = PlayerState::spawn(Vec3::new(20.0, 0.0, 0.2), 0.0);
+        for _ in 0..200 {
+            pmove(&mut ps, &run, &w, 1.0 / 125.0);
+            if ps.on_ladder && ps.origin.z > 25.0 {
+                break;
+            }
+        }
+        assert!(ps.on_ladder && ps.origin.z > 25.0, "set up: {}", ps.origin);
+        assert!(
+            (ps.ladder_normal + Vec3::X).length() < 0.01,
+            "stored normal {:?}",
+            ps.ladder_normal
+        );
+
+        // turn around mid-climb: retail probes along -vLadderVec, so the
+        // grab survives facing away while airborne
+        ps.yaw += std::f32::consts::PI;
+        let hang_z = ps.origin.z;
+        tick(&mut ps, &run, &w, 10);
+        assert!(ps.on_ladder, "must keep the grab facing away");
+        assert!(
+            ps.origin.z > hang_z - 5.0,
+            "must not fall off, {} -> {}",
             hang_z,
             ps.origin.z
         );

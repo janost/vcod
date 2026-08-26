@@ -138,8 +138,10 @@ called from `PM_LadderMove` and the steep-slope mover only:
   sign of forwardmove, then callers store `cmd.serverTime` into
   `ps.jumpTime`.
 
-Note vcod's current `JUMP_VELOCITY = 250.0` corresponds to neither path
-exactly; see port notes.
+Note vcod implements the stance-dependent ground jump described above
+(heights 34/24, `sqrt(2*height*gravity)`, forwardmove gate); its old flat
+`JUMP_VELOCITY = 250.0` constant is gone. The ladder push-off path is not
+ported; see port notes for what landed.
 
 ## Ladders
 
@@ -255,26 +257,28 @@ step 18/10.
 
 ## Port notes (for crates/common/src/pmove.rs)
 
-If the goal is "feel like retail 1.1", in priority order:
+Status after the pmove work landed on this branch:
 
-1. Replace `JUMP_VELOCITY = 250.0` with the stance-dependent form:
-   `vz = sqrt(2 * height * gravity)`, height 34 standing / 24 crouched-prone;
-   keep horizontal velocity. Gate on forwardmove != 0. This is the biggest
-   behavioural divergence found.
-2. Friction/accelerate constants differ from the Q3-derived ones currently in
-   the file: friction 5.5 (not 6), accelerate 9 (not 10), stopspeed 100 (not
-   60), plus stance-specific accelerate (prone 19, ducked 12).
-3. Step-up: keep 18, but drop to 10 while PRONE.
-4. Ladders, if implemented: brush surfaces with surface flag 0x8; probe =
-   shrunken bbox (top lowered by probe length) pushed 30 units along horizontal
-   forward (8 while sliding, -lastNormal when already on a ladder and
-   airborne); store plane normal as `vLadderVec`; move with wishdir projected
-   onto the ladder plane at 0.5 scale and 16.0 friction; jump-off = vz *
-   sqrt(78*g) * 0.75 with horizontal := 128 * reflected dir; backward dismount
-   -250/-500 along view forward; lock yaw to ±75° of the ladder yaw; play
-   pb_climbup/pb_climbdown by velocity.z sign while airborne on the ladder.
-   500 ms (ground jump) and 300 ms (ladder re-grab/push-off) timers on
-   `ps.jumpTime` are part of the feel.
-5. Mantle: do not add one. If ledge-climbing is wanted as a feature, it would be
-   a vcod extension with no retail counterpart - decide its constants, don't
-   dig for them in the binary; this document is the negative result.
+1. SHIPPED - stance-dependent ground jump: `vz = sqrt(2 * height * gravity)`,
+   height 34 standing / 24 crouched-prone, forwardmove gate, horizontal
+   velocity kept.
+2. SHIPPED - friction 5.5, accelerate 9, stopspeed 100, stance accelerates
+   12 ducked / 19 prone. One labeled deviation: vcod scales the stopspeed
+   control floor by stance (flat 100 verifiably stalls prone under the Q3
+   accelerate shape; retail's compensation was not recoverable from the x87
+   flow).
+3. SHIPPED, with a correction to this document: step height is 10 while
+   PRONE - the chooser @0x35034 tests pm_flags bit 0x1, not ladder state as
+   this section previously claimed. vcod implements prone.
+4. PARTIAL - ladder detection/movement shipped: brush flag 0x8, probe reach
+   30/8, probe bbox shrunk horizontally with top lowered by the probe
+   distance, `-vLadderVec` stick-with-wall direction when airborne,
+   ProjectPointOnPlane wishdir at 0.5 scale with 16.0 friction and command
+   scaling. NOT ported: push-off jump (the PM_Jump body - `sqrt(78*g)`
+   vertical, 0.75 scale, 128-unit horizontal reset), the +/-75 degree yaw
+   lock, the 500 ms / 299 ms jumpTime timers, the backward dismount hop, and
+   climb anim events.
+5. Stands as the negative result: no mantle exists in retail 1.1. If
+   ledge-climbing is wanted as a feature it would be a vcod extension with
+   no retail counterpart - decide its constants, don't dig for them in the
+   binary.
