@@ -119,30 +119,37 @@ impl MsgReader {
         v as i32
     }
 
-    /// `MSG_ReadString`: `%` and high ascii become `.`.
+    /// `MSG_ReadString` (CoDMP.exe 0x444e60 family).
     pub fn read_string(&mut self) -> String {
-        self.read_string_capped(MAX_STRING_CHARS, true)
+        self.read_string_capped(MAX_STRING_CHARS)
     }
 
-    /// `MSG_ReadBigString`: high ascii kept as latin-1, `%` still neutered.
+    /// `MSG_ReadBigString` (CoDMP.exe 0x444e00): same byte mapping, bigger cap.
     pub fn read_big_string(&mut self) -> String {
-        self.read_string_capped(BIG_INFO_STRING, false)
+        self.read_string_capped(BIG_INFO_STRING)
     }
 
-    fn read_string_capped(&mut self, cap: usize, strip_high: bool) -> String {
+    /// CoD 1.1 maps `%` -> `.`, 0x92 -> `'` and every other byte over 127 ->
+    /// `.` in BOTH readers, unlike Q3/RTCW where the big reader keeps high
+    /// bytes. Faithfulness matters beyond display: the usercmd delta key
+    /// hashes the stored server-command string (`Com_HashKey` on raw bytes),
+    /// so a client keeping high bytes - worse, re-encoded as two-byte UTF-8 -
+    /// hashes differently from the server and every move it sends decodes as
+    /// garbage until an ASCII-only command rotates into the acked slot
+    /// (docs/protocol-1.1.md, divergence list).
+    fn read_string_capped(&mut self, cap: usize) -> String {
         let mut s = String::new();
-        // The cap counts bytes read; a latin-1 char above 127 is two utf-8
-        // bytes in `s`.
         let mut n = 0;
         while n < cap - 1 {
             let c = self.read_byte();
             if c == 0 || self.overflowed {
                 break;
             }
-            let c = if c == b'%' || (strip_high && c > 127) {
-                b'.'
-            } else {
-                c
+            let c = match c {
+                b'%' => b'.',
+                0x92 => b'\'',
+                c if c > 127 => b'.',
+                c => c,
             };
             s.push(c as char);
             n += 1;
@@ -1130,18 +1137,21 @@ mod tests {
         }
     }
 
+    /// CoDMP.exe 0x444e00: `%` -> `.`, 0x92 -> `'`, other high bytes -> `.`,
+    /// in the big reader too (CoD divergence from Q3, which keeps high bytes
+    /// there). The usercmd delta key hashes these strings, so the mapping is
+    /// wire-compatibility, not cosmetics.
     #[test]
-    fn big_string_keeps_high_bytes() {
+    fn big_string_maps_percent_and_high_bytes_like_retail() {
         let h = Huffman::new();
         let mut w = MsgWriter::new(&h);
-        for &b in b"caf\xe9%s" {
+        for &b in b"caf\xe9%s\x92\x15" {
             w.write_byte(b);
         }
         w.write_byte(0);
         let data = w.finish();
         let mut r = MsgReader::new(&data, &h);
-        // '%' still neutered, 0xe9 kept as latin-1.
-        assert_eq!(r.read_big_string(), "caf\u{e9}.s");
+        assert_eq!(r.read_big_string(), "caf..s'\u{15}");
         assert!(!r.is_overflowed());
     }
 
