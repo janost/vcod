@@ -3020,67 +3020,79 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.camera_bg, &[]);
+            // Linear fog hides the whole sky (RTCW-MP tr_sky.c:966-972,
+            // drawsky=false): the backdrop is the cleared fog colour alone.
+            let sky_drawable = !(self.fog.set && self.fog.live.linear);
             // The sky draws first so every world draw overwrites it; the box
             // and dome both ignore depth (cleared 1.0) and write none.
-            if let (Some(world), Some(sky)) = (&self.world, &self.sky) {
-                if let Some(farbox) = &sky.farbox {
-                    pass.set_pipeline(&farbox.pipeline);
-                    pass.set_bind_group(2, &farbox.eye_bg, &[]);
-                    pass.set_vertex_buffer(0, farbox.vertex_buf.slice(..));
-                    pass.set_index_buffer(farbox.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                    for (axis, &(first, end)) in farbox.sides.iter().enumerate() {
-                        pass.set_bind_group(1, &farbox.side_bgs[axis], &[]);
-                        pass.draw_indexed(first..end, 0, 0..1);
-                    }
-                }
-                // The sunfile disc: additive billboard along the sun
-                // direction at farbox distance, camera-facing via world axes.
-                if let Some(sun) = &sky.sun {
-                    let center = frame.eye + sun.dir * sky::box_size(Z_FAR, Z_NEAR);
-                    let up = glam::Vec3::Z;
-                    let right = up.cross(sun.dir).normalize_or_zero();
-                    let quad_up = sun.dir.cross(right);
-                    let r = right * sun.half_extent;
-                    let u = quad_up * sun.half_extent;
-                    let corner = |dr: f32, du: f32| sky::SkyBoxVert {
-                        pos: (center + r * dr + u * du).to_array(),
-                        uv: [(dr + 1.0) * 0.5, 1.0 - (du + 1.0) * 0.5],
-                    };
-                    let verts = [
-                        corner(-1.0, -1.0),
-                        corner(1.0, -1.0),
-                        corner(1.0, 1.0),
-                        corner(-1.0, -1.0),
-                        corner(1.0, 1.0),
-                        corner(-1.0, 1.0),
-                    ];
-                    self.queue
-                        .write_buffer(&sun.vertex_buf, 0, bytemuck::cast_slice(&verts));
-                    pass.set_pipeline(&sun.pipeline);
-                    pass.set_bind_group(1, &sun.bind_group, &[]);
-                    pass.set_vertex_buffer(0, sun.vertex_buf.slice(..));
-                    pass.draw(0..6, 0..1);
-                }
-                if let Some(dome) = &sky.dome {
-                    pass.set_vertex_buffer(0, dome.vertex_buf.slice(..));
-                    pass.set_index_buffer(dome.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                    let mut bound: Option<(StageVariant, bool)> = None;
-                    for ds in &dome.stages {
-                        let key = (ds.variant, ds.two_sided);
-                        if bound != Some(key) {
-                            pass.set_pipeline(self.stage_pipeline(ds.variant, ds.two_sided, false));
-                            bound = Some(key);
-                        }
-                        pass.set_bind_group(1, ds.mat.bind_group(frame.time), &[]);
-                        pass.set_bind_group(
-                            2,
-                            ds.stage.bind_group(frame.time),
-                            &[
-                                u32::try_from(u64::from(ds.slot) * world.stage_params_stride)
-                                    .expect("stage params slot offset fits a dynamic offset"),
-                            ],
+            if sky_drawable {
+                if let (Some(world), Some(sky)) = (&self.world, &self.sky) {
+                    if let Some(farbox) = &sky.farbox {
+                        pass.set_pipeline(&farbox.pipeline);
+                        pass.set_bind_group(2, &farbox.eye_bg, &[]);
+                        pass.set_vertex_buffer(0, farbox.vertex_buf.slice(..));
+                        pass.set_index_buffer(
+                            farbox.index_buf.slice(..),
+                            wgpu::IndexFormat::Uint32,
                         );
-                        pass.draw_indexed(0..dome.index_count, 0, 0..1);
+                        for (axis, &(first, end)) in farbox.sides.iter().enumerate() {
+                            pass.set_bind_group(1, &farbox.side_bgs[axis], &[]);
+                            pass.draw_indexed(first..end, 0, 0..1);
+                        }
+                    }
+                    // The sunfile disc: additive billboard along the sun
+                    // direction at farbox distance, camera-facing via world axes.
+                    if let Some(sun) = &sky.sun {
+                        let center = frame.eye + sun.dir * sky::box_size(Z_FAR, Z_NEAR);
+                        let up = glam::Vec3::Z;
+                        let right = up.cross(sun.dir).normalize_or_zero();
+                        let quad_up = sun.dir.cross(right);
+                        let r = right * sun.half_extent;
+                        let u = quad_up * sun.half_extent;
+                        let corner = |dr: f32, du: f32| sky::SkyBoxVert {
+                            pos: (center + r * dr + u * du).to_array(),
+                            uv: [(dr + 1.0) * 0.5, 1.0 - (du + 1.0) * 0.5],
+                        };
+                        let verts = [
+                            corner(-1.0, -1.0),
+                            corner(1.0, -1.0),
+                            corner(1.0, 1.0),
+                            corner(-1.0, -1.0),
+                            corner(1.0, 1.0),
+                            corner(-1.0, 1.0),
+                        ];
+                        self.queue
+                            .write_buffer(&sun.vertex_buf, 0, bytemuck::cast_slice(&verts));
+                        pass.set_pipeline(&sun.pipeline);
+                        pass.set_bind_group(1, &sun.bind_group, &[]);
+                        pass.set_vertex_buffer(0, sun.vertex_buf.slice(..));
+                        pass.draw(0..6, 0..1);
+                    }
+                    if let Some(dome) = &sky.dome {
+                        pass.set_vertex_buffer(0, dome.vertex_buf.slice(..));
+                        pass.set_index_buffer(dome.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                        let mut bound: Option<(StageVariant, bool)> = None;
+                        for ds in &dome.stages {
+                            let key = (ds.variant, ds.two_sided);
+                            if bound != Some(key) {
+                                pass.set_pipeline(self.stage_pipeline(
+                                    ds.variant,
+                                    ds.two_sided,
+                                    false,
+                                ));
+                                bound = Some(key);
+                            }
+                            pass.set_bind_group(1, ds.mat.bind_group(frame.time), &[]);
+                            pass.set_bind_group(
+                                2,
+                                ds.stage.bind_group(frame.time),
+                                &[
+                                    u32::try_from(u64::from(ds.slot) * world.stage_params_stride)
+                                        .expect("stage params slot offset fits a dynamic offset"),
+                                ],
+                            );
+                            pass.draw_indexed(0..dome.index_count, 0, 0..1);
+                        }
                     }
                 }
             }
