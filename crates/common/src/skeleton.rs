@@ -44,14 +44,26 @@ impl Skeleton {
 
     /// Each later model's root aliases the skeleton bone its tag names, or,
     /// absent a tag, the bone with the same name (the engine default). Its
-    /// other bones append with remapped parents; duplicate names are not merged.
+    /// other bones alias same-named base-rig bones too (the engine shares one
+    /// bone tree: a head model's own `bip01 neck`/`bip01 head` must ride the
+    /// body's animated copies, not unkeyed duplicates); genuinely new bones
+    /// append with remapped parents.
     pub fn build_grafted(models: &[(&XModel, Option<&str>)]) -> Skeleton {
         let mut bones: Vec<SkelBone> = Vec::new();
         let mut maps: Vec<Vec<usize>> = Vec::new();
         let mut inv_binds: Vec<Vec<Mat4>> = Vec::new();
         for (mi, (model, graft_tag)) in models.iter().enumerate() {
+            // Merges scope to model 0's bones so two attachments that happen to
+            // share a bone name never alias each other.
+            let base_len = if mi == 0 { 0 } else { maps[0].len() };
             let mut map = Vec::with_capacity(model.bones.len());
             for (bi, b) in model.bones.iter().enumerate() {
+                if mi > 0 && bi > 0 {
+                    if let Some(si) = bones[..base_len].iter().position(|s| s.name == b.name) {
+                        map.push(si);
+                        continue;
+                    }
+                }
                 // The graft point: a later model's root aliases an existing bone.
                 if mi > 0 && bi == 0 {
                     let target = graft_tag.unwrap_or(b.name.as_str());
@@ -342,6 +354,34 @@ mod tests {
         assert!(p.abs_diff_eq(Vec3::Z, 1e-5), "{p}");
     }
 
+    /// head-model shape: the attachment's root and part of its chain duplicate
+    /// base bones; only genuinely new bones (jaw) may append, or the duplicates
+    /// hold bind pose while the base copy animates (helmet-in-skull).
+    #[test]
+    fn shared_nonroot_bones_merge_onto_the_base_rig() {
+        let mut bb = vec![bone("spine", -1, Vec3::ZERO, Quat::IDENTITY, &[])];
+        bb.push(bone("neck", 0, Vec3::Z, Quat::IDENTITY, &bb));
+        bb.push(bone("head", 1, Vec3::Z, Quat::IDENTITY, &bb));
+        let base = model(bb);
+        let mut ab = vec![bone("spine", -1, Vec3::ZERO, Quat::IDENTITY, &[])];
+        ab.push(bone("neck", 0, Vec3::Z, Quat::IDENTITY, &ab));
+        ab.push(bone("head", 1, Vec3::Z, Quat::IDENTITY, &ab));
+        ab.push(bone("jaw", 2, Vec3::X, Quat::IDENTITY, &ab));
+        let attach = model(ab);
+
+        let skel = Skeleton::build_grafted(&[(&base, None), (&attach, None)]);
+        assert_eq!(skel.bone_count(), 4); // spine, neck, head, jaw
+
+        // a clip keying the shared bone must move the attachment with the base
+        let anim = one_track_anim("neck", Vec3::new(5.0, 0.0, 0.0), Quat::IDENTITY);
+        let mut pose = PoseBuffer::new(&skel);
+        pose.apply(&anim, &skel.bind(&anim), 0.0);
+        let sm = pose.skin_matrices(&skel, 1);
+        // attachment's head bone (index 2), bind world (0,0,2), offset +5 in x
+        let p = sm[2].transform_point3(Vec3::new(0.0, 0.0, 2.0));
+        assert!(p.abs_diff_eq(Vec3::new(5.0, 0.0, 2.0), 1e-4), "{p}");
+    }
+
     #[test]
     fn missing_tag_attaches_as_new_root_with_warning() {
         let hb = vec![bone("a", -1, Vec3::ZERO, Quat::IDENTITY, &[])];
@@ -486,6 +526,47 @@ mod tests {
         assert!(
             weapon_root_skin.abs_diff_eq(tag_bind, 1e-2),
             "weapon root skin {weapon_root_skin:?} != tag_weapon_right bind {tag_bind:?}"
+        );
+    }
+
+    /// The head xmodel carries its own copy of the body's spine/neck/head
+    /// chain; those must merge onto the body rig so the face tracks the
+    /// animated head bone the helmet rides (else the head clips the helmet).
+    #[test]
+    fn real_head_shares_the_body_neck_chain() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let body = crate::xmodel::load(&fs, "playerbody_american_airborne").unwrap();
+        let head = crate::xmodel::load(&fs, "basehead2").unwrap();
+        let shared = head
+            .bones
+            .iter()
+            .filter(|hb| body.bones.iter().any(|bb| bb.name == hb.name))
+            .count();
+        assert!(shared >= 3, "expected a shared spine/neck/head chain");
+
+        let skel = Skeleton::build_grafted(&[(&body, None), (&head, None)]);
+        assert_eq!(
+            skel.bone_count(),
+            body.bones.len() + head.bones.len() - shared
+        );
+
+        // posed head bone must land in the same place through either model
+        let clip = crate::xanim::load(&fs, "pb_stand_alert").unwrap();
+        let mut pose = PoseBuffer::new(&skel);
+        pose.apply(&clip, &skel.bind(&clip), 0.0);
+        let world_via = |model: usize, bones: &[Bone]| {
+            let bi = bones
+                .iter()
+                .position(|b| b.name == "bip01 head")
+                .expect("both rigs have bip01 head");
+            pose.skin_matrices(&skel, model)[bi].transform_point3(bones[bi].pos)
+        };
+        let (via_body, via_head) = (world_via(0, &body.bones), world_via(1, &head.bones));
+        assert!(
+            via_body.abs_diff_eq(via_head, 1e-3),
+            "body {via_body} vs head {via_head}"
         );
     }
 
