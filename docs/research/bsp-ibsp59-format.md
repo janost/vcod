@@ -266,6 +266,7 @@ Ground-level spawns on mp_pavlov sit 200 or more units above the first brush bel
 | `PM_DUCKED_ACCELERATE / PM_PRONE_ACCELERATE` | 12 / 19 | retail rodata; selected in the steep-slope mover @0x2f4b0-0x2f4ca, walk-path application INFERRED (`cod11-mantle.md`) |
 | `PM_AIRACCELERATE` | 1 | retail rodata 0x70848, same as Q3 |
 | `PM_FRICTION` | 5.5 | retail rodata 0x70854; Q3/RTCW-MP have 6 |
+| `PM_SPECTATOR_FRICTION` | 5 | retail rodata 0x70860; spectators use Q3's `PM_Friction` with this constant instead of the walk one |
 | `PM_STOPSPEED` | 100 | retail rodata 0x70824 (flat); vcod scales it per stance - see below |
 | `STEPSIZE` | 18 | `bg_local.h`; retail drops to 10 while PRONE (chooser @0x35045) |
 | `OVERCLIP` | 1.001 | `bg_local.h` |
