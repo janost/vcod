@@ -192,9 +192,9 @@ These work in every mode:
 
 ## Known limitations
 
-- Shadow-decal prop models (`shadow_tree_*`, `shadow_crate` and similar) should
-  draw as coplanar decals; they go through the opaque prop pipeline and show
-  up as hard-edged dark patches.
+- Shadow-decal prop models (`shadow_tree_*`, `shadow_crate` and similar) draw
+  as coplanar, alpha-blended decals on the ground, depth-biased against
+  z-fighting.
 - Props are lit by the compiler's per-entity `lightingPrecalc` tint, one
   colour for the whole model. The engine samples its light grid per vertex.
 - Shader scripts drive skies, water and blends, but the tail of the grammar
