@@ -565,13 +565,25 @@ fn ladder_move(
     let fwd = forward3(ps);
     let upscale = ((fwd.z + LADDER_UPSCALE_BIAS) * LADDER_UPSCALE_GAIN).clamp(-1.0, 1.0);
     let flat_right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
-    // retail projects right onto the plane perpendicular to the ladder normal
-    // (`ProjectPointOnPlane(pml.right, ..., ps->vLadderVec)`), so strafing
-    // slides along the face instead of into or off it
+    // VERIFIED (game.mp.i386.so PM_LadderMove @0x339fa):
+    // ProjectPointOnPlane(pml.right, flat_right, ps->vLadderVec @ps+0x58), so
+    // strafing slides along the face instead of into or off it
     let tangent_right = flat_right - normal * flat_right.dot(normal);
 
-    let mut wishvel = tangent_right * (LADDER_STRAFE_SCALE * SPEED_RUN * input.right);
-    wishvel.z = LADDER_CLIMB_SCALE * upscale * SPEED_RUN * input.forward;
+    // VERIFIED (call @0x33a0b -> PM_CmdShape fn @0x2e5bc): retail multiplies
+    // both terms by speed * max / (127 * total) * stance scale, so combined
+    // inputs shrink each axis; here normalized to SPEED_RUN for a lone full key
+    let up = if input.jump { 1.0 } else { 0.0 };
+    let max = input.forward.abs().max(input.right.abs()).max(up);
+    let total = (input.forward * input.forward + input.right * input.right + up * up).sqrt();
+    let mag = if max <= 0.0 {
+        0.0
+    } else {
+        SPEED_RUN * max / total
+    };
+
+    let mut wishvel = tangent_right * (LADDER_STRAFE_SCALE * mag * input.right);
+    wishvel.z = LADDER_CLIMB_SCALE * upscale * mag * input.forward;
 
     friction(ps, true, dt);
     let wishspeed = wishvel.length().min(LADDER_WISHSPEED_CAP);
@@ -1288,6 +1300,36 @@ mod tests {
             level.velocity.z
         );
         assert!(up.origin.z > level.origin.z);
+    }
+
+    #[test]
+    fn diagonal_input_climbs_slower_than_pure_forward() {
+        // retail runs the wish through PM_CmdScale, so W+D must not beat the
+        // vertical rate of W alone (up 30 deg for a climb-dominated wish)
+        let w = ladder_world();
+        let climb = |right: f32| {
+            let mut ps = PlayerState::spawn(Vec3::new(33.0, 0.0, 5.0), 0.0);
+            ps.pitch = 30.0f32.to_radians();
+            tick(
+                &mut ps,
+                &PmInput {
+                    forward: 1.0,
+                    right,
+                    ..Default::default()
+                },
+                &w,
+                100,
+            );
+            assert!(ps.on_ladder);
+            ps.velocity.z
+        };
+        let solo = climb(0.0);
+        let diag = climb(1.0);
+        let ratio = diag / solo;
+        assert!(
+            diag < solo && (0.7..0.95).contains(&ratio),
+            "W+D must climb slower than W alone, {solo} -> {diag} (x{ratio})"
+        );
     }
 
     #[test]
