@@ -103,6 +103,8 @@ VERIFIED live (two populated servers, 2026-08-24): `eType == 2` is `ET_CORPSE` a
 
 `crates/client/src/entities.rs` routes `ET_CORPSE = 2` and `ET_ITEM = 3` on this basis.
 
+A corpse resolves through `clientState[clientNum]` every frame, so its body lives only as long as the dead client's roster entry keeps a `modelindex`. Inferred (not yet wire-verified): the entry clears when the dead player drops to limbo/spectator, which made corpses vanish about a second after death; the S&D symptom matches. vcod caches the last roster-resolved visual per entity and lets a corpse fall back to it, and seeds a fresh corpse entity's anim channels from the dead player's entity (`entities.rs`) so the death clip keeps its phase instead of replaying.
+
 ## ET_MOVER and inline BSP submodels
 
 `crates/common/src/bsp.rs` lump 27 (`models`) is a 48-byte-stride array; besides

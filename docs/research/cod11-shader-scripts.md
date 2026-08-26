@@ -72,6 +72,16 @@ one/one 51, src_alpha/one 18, dst_color/zero 17, plus the shorthands
 water `$lightmap` bundles, terrain blends, foliage, facades, windows, flags —
 so two-bundle stages are core CoD grammar, not an exotic corner.
 
+A `$lightmap` bundle must carry the same overbright as the implicit
+texture-times-lightmap path, or coplanar surfaces split in brightness:
+`scripts/terrain.shader` overlays (`rgbGen exactVertex` + `alphagen vertex`
+over `map $lightmap` `blendFunc filter`, polygonOffset) sit on base ground
+soups whose material is the raw image path with no script at all, and the
+pair must shade identically for the vertex-alpha cross-fade to read as one
+surface (mp_brecourt: 19 staged overlay soups over 65 implicit base soups).
+vcod applies its x2 overbright and fx-light term to `$lightmap` bundles in
+`fs_stage` for this reason (`shader.wgsl`).
+
 Sky: every stock MP map carries at least one sky-parms material among its soup
 materials (pinned by the corpus test's skyless assertion), and every stock
 skyParms line is `skyParms env/<name> 512 -`: farbox plus cloud dome at height
