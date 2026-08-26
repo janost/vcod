@@ -405,8 +405,8 @@ fn walk_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
         return;
     }
     let (dir, wishspeed) = wish(ps, input);
-    // accelerate per stance: 9 / 12 ducked / 19 prone, selected in retail's
-    // mover @0x2f49b-0x2f4c8
+    // accelerate per stance: values selected at 0x2f4b0-0x2f4ca in the
+    // steep-slope mover; walk-path application INFERRED
     let accel = match ps.stance {
         Stance::Stand => PM_ACCELERATE,
         Stance::Crouch => PM_DUCKED_ACCELERATE,
