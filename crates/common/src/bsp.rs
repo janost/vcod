@@ -786,6 +786,18 @@ pub fn entity_blocks(entities: &str) -> Vec<std::collections::HashMap<String, St
         .collect()
 }
 
+/// The worldspawn `sundirection` key, the vector pointing toward the sun
+/// (`"x y z"`; mp_ship.bsp carries `-45 110 0`). Stock MP skies use it for
+/// the `sunfile` sprite; absent on maps without one.
+pub fn sun_direction(entities: &str) -> Option<[f32; 3]> {
+    for b in entity_blocks(entities) {
+        if b.get("classname").map(String::as_str) == Some("worldspawn") {
+            return b.get("sundirection").and_then(|v| parse_vec3(v));
+        }
+    }
+    None
+}
+
 /// `(origin, yaw degrees)` of the first spawn in classname priority order.
 pub fn find_spawn(entities: &str) -> Option<([f32; 3], f32)> {
     const CLASSES: [&str; 4] = [
@@ -1013,6 +1025,34 @@ mod tests {
         };
         let bsp = parse(&data).unwrap();
         assert!(find_spawn(&bsp.entities).is_some());
+    }
+
+    #[test]
+    fn reads_sundirection_from_worldspawn() {
+        let ents = r#"{
+"sundirection" "-45 110 0"
+"suncolor" ".9 .9 .89"
+"classname" "worldspawn"
+}
+{
+"classname" "misc_model"
+"sundirection" "1 2 3"
+}"#;
+        // only worldspawn counts, and later blocks never shadow it
+        assert_eq!(sun_direction(ents), Some([-45.0, 110.0, 0.0]));
+        assert_eq!(sun_direction("{\n\"classname\" \"worldspawn\"\n}"), None);
+    }
+
+    #[test]
+    fn mp_ship_worldspawn_carries_sundirection() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let Some(data) = fs.read("maps/MP/mp_ship.bsp") else {
+            return;
+        };
+        let bsp = parse(&data).unwrap();
+        assert_eq!(sun_direction(&bsp.entities), Some([-45.0, 110.0, 0.0]));
     }
 
     #[test]

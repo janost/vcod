@@ -237,9 +237,17 @@ Each omission with its census justification:
   behind a `requires` gate this profile fails, so dropping them reproduces
   retail-on-fallback-hardware. stalin_1wet's single ungated `tcGen environment`
   stage drops too (unsupported tcGen warning); it is one window effect.
-- `sunfile` sun disc: parsed, stored, not rendered. It draws a static glow
-  billboard in retail; no stock MP map's look depends on it beyond that spot
-  in the sky. Deferred until someone misses it.
+- `sunfile` sun disc: rendered since 2026-08-26. The token names
+  `scripts/<name>.sun` — a cvar dump (CoDMP.exe loads it via
+  `"scripts/%s.sun"`; cvars `r_sunsprite_*` registered at CoDMP.exe
+  `0x54cc10`/`0x54cbfc`), of which vcod consumes `r_sunsprite_shader`
+  ("0" disables the disc, as mp_harbor.sun does) and `r_sunsprite_size`;
+  the flare/glare/blind keys are ignored. The disc direction is not in the
+  `.sun` file: it is the worldspawn `sundirection` key (mp_ship.bsp:
+  `-45 110 0`, alongside `suncolor`/`sunlight`). vcod draws an additive
+  billboard at farbox distance when both a sprite image and the direction
+  exist; maps whose active sky block has no sunfile get no disc, matching
+  retail. Flare/glare/blind screen effects remain unimplemented.
 - `deformVertexes` (the ocean-sort water blocks): BSP soups are rigid buffers
   here, so vertex waves would need CPU-side tessellation like Q3's grid mesh
   path. Affected surfaces are mp_ship-style ocean planes; they draw flat.

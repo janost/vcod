@@ -55,3 +55,27 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     return c;
 }
+
+// The sunfile sprite: vertices arrive already in world space (rebuilt per
+// frame on the CPU around the view origin).
+@vertex
+fn vs_sun(in: VsIn) -> VsOut {
+    var out: VsOut;
+    out.clip = camera.view_proj * vec4<f32>(in.pos, 1.0);
+    out.uv = in.uv;
+    out.world_pos = in.pos;
+    return out;
+}
+
+@fragment
+fn fs_sun(in: VsOut) -> @location(0) vec4<f32> {
+    var c = textureSample(t_side, s_side, in.uv);
+    // Additive glow; fogged exactly like the farbox.
+    var rgb = c.rgb * c.a;
+    if (camera.eye_fog_mode.w == 1.0) {
+        let d = distance(in.world_pos, camera.eye_fog_mode.xyz);
+        let f = 1.0 - exp(-camera.fog_color_density.a * d);
+        rgb = mix(rgb, camera.fog_color_density.rgb, f);
+    }
+    return vec4<f32>(rgb, 1.0);
+}

@@ -141,6 +141,47 @@ pub struct Shader {
     pub surface: SurfaceBits,
 }
 
+/// `scripts/<name>.sun`, the cvar dump a sky block's `sunfile <name>` token
+/// names (loaded by CoDMP.exe via `"scripts/%s.sun"`). Only the sprite fields
+/// the renderer consumes are kept; the flare/glare/blind keys are ignored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SunFile {
+    /// `r_sunsprite_shader`; `None` draws no disc ("0" is how mp_harbor.sun
+    /// disables it).
+    pub sprite: Option<String>,
+    /// `r_sunsprite_size`, degrees across.
+    pub size_deg: f32,
+}
+
+impl SunFile {
+    /// Engine default for `r_sunsprite_size`; every stock `.sun` that wants a
+    /// disc sets both fields explicitly, so this only covers partial files.
+    pub const DEFAULT_SIZE_DEG: f32 = 16.0;
+
+    pub fn parse(text: &str) -> SunFile {
+        let mut sprite = None;
+        let mut size_deg = Self::DEFAULT_SIZE_DEG;
+        for line in text.lines() {
+            let Some((key, value)) = line.trim().split_once(char::is_whitespace) else {
+                continue;
+            };
+            let value = value.trim().trim_matches('"');
+            match key.trim() {
+                "r_sunsprite_shader" => {
+                    sprite = (!value.is_empty() && value != "0").then(|| value.to_string());
+                }
+                "r_sunsprite_size" => {
+                    if let Ok(n) = value.parse() {
+                        size_deg = n;
+                    }
+                }
+                _ => {}
+            }
+        }
+        SunFile { sprite, size_deg }
+    }
+}
+
 /// Script tokens: comments (`//` to end of line, `/* */` across lines) gone,
 /// glued braces split off as standalone `{`/`}` tokens. Slices point into
 /// `text`; delimiters are ASCII, so token boundaries are always char edges.
@@ -2157,6 +2198,23 @@ textures/sfx/test_water
         assert!(sh.nopicmip);
         assert_eq!(sh.stages.len(), 1);
         assert!(!w.fired(&name, "unknown token 512"));
+    }
+
+    #[test]
+    fn sun_file_parses_sprite_cvars() {
+        // scripts/mp_harbor.sun: disc disabled, flare only
+        let harbor = SunFile::parse("r_sunsprite_shader \"0\"\nr_sunsprite_size \"16\"\n");
+        assert_eq!(harbor.sprite, None);
+        assert_eq!(harbor.size_deg, 16.0);
+        // scripts/ship.sun: moon at 32 degrees
+        let ship =
+            SunFile::parse("r_sunsprite_shader \"gfx/sun/moon_full\"\n\nr_sunsprite_size \"32\"\n");
+        assert_eq!(ship.sprite.as_deref(), Some("gfx/sun/moon_full"));
+        assert_eq!(ship.size_deg, 32.0);
+        // partial file keeps the size default; unknown keys are ignored
+        let partial = SunFile::parse("r_sunflare_shader \"gfx/sun/global_flare\"\n");
+        assert_eq!(partial.sprite, None);
+        assert_eq!(partial.size_deg, SunFile::DEFAULT_SIZE_DEG);
     }
 
     #[test]

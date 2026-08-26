@@ -16,7 +16,7 @@ use vcod_common::pk3::Pk3Fs;
 use vcod_common::props;
 use vcod_common::shader::{
     bundle_affine, bundle_turb, has_animated_tcmods, wave_value, AlphaFunc, AlphaGen, BlendFactor,
-    DrawClass, ImageRef, RgbGen, Shader, ShaderLib, SORT_BLEND0, SORT_DECAL,
+    DrawClass, ImageRef, RgbGen, Shader, ShaderLib, SunFile, SORT_BLEND0, SORT_DECAL,
 };
 use vcod_common::vis::{Frustum, Visible, WorldVis};
 use vcod_common::xmodel::{self, VmVert};
@@ -942,6 +942,19 @@ struct SkyRender {
     name: String,
     farbox: Option<SkyBox>,
     dome: Option<DomeLayer>,
+    /// `sunfile` glow sprite; needs both a resolvable `.sun` sprite image and
+    /// a worldspawn `sundirection`.
+    sun: Option<SunSprite>,
+}
+
+/// The `sunfile` disc: an additive billboard along the worldspawn sun
+/// direction at farbox distance, rebuilt per frame around the view origin.
+struct SunSprite {
+    pipeline: wgpu::RenderPipeline,
+    vertex_buf: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    dir: glam::Vec3,
+    half_extent: f32,
 }
 
 /// Builds the farbox for the block's env name. Missing non-rt sides draw
@@ -1131,6 +1144,154 @@ fn build_sky_box(
         side_bgs,
         sides,
     }
+}
+
+/// Builds the sunfile sprite for a parsed `.sun` file and worldspawn
+/// direction. `None` when the sprite image does not resolve.
+#[allow(clippy::too_many_arguments)]
+fn build_sun_sprite(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    fs: &Pk3Fs,
+    camera_layout: &wgpu::BindGroupLayout,
+    bundle_views: &mut HashMap<String, wgpu::TextureView>,
+    sprite: &str,
+    dir: [f32; 3],
+    size_deg: f32,
+) -> Option<SunSprite> {
+    if assets::resolve_bundle_image(fs, sprite).is_none() {
+        log::warn!("sunfile: sprite image {sprite} not found, drawing no sun");
+        return None;
+    }
+    let view = upload_bundle_view(device, queue, fs, bundle_views, sprite);
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("sun sprite sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        ..Default::default()
+    });
+    let tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("sun sprite layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("sun sprite bind group"),
+        layout: &tex_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    });
+
+    let module = device.create_shader_module(wgpu::include_wgsl!("sky.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("sun sprite pipeline layout"),
+        bind_group_layouts: &[Some(camera_layout), Some(&tex_layout)],
+        immediate_size: 0,
+    });
+    // Additive like the corpus glow blocks (`blendFunc GL_ONE GL_ONE` with
+    // the texture's alpha folded into rgb by fs_sun); depth-always so the
+    // disc draws behind everything.
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("sun sprite pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs_sun"),
+            compilation_options: Default::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<sky::SkyBoxVert>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2],
+            })],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs_sun"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent::REPLACE,
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            front_face: wgpu::FrontFace::Cw,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: MSAA_SAMPLES,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        multiview_mask: None,
+        cache: None,
+    });
+
+    let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("sun sprite vertices"),
+        size: 6 * std::mem::size_of::<sky::SkyBoxVert>() as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let dir = glam::Vec3::from_array(dir).normalize_or_zero();
+    if dir.length_squared() < 0.5 {
+        log::warn!("sunfile: degenerate sundirection, drawing no sun");
+        return None;
+    }
+    // Angular size -> world half-extent at farbox distance.
+    let dist = sky::box_size(Z_FAR, Z_NEAR);
+    let half_extent = (size_deg.to_radians() * 0.5).tan() * dist;
+    Some(SunSprite {
+        pipeline,
+        vertex_buf,
+        bind_group,
+        dir,
+        half_extent,
+    })
 }
 
 pub struct Renderer {
@@ -2096,7 +2257,52 @@ impl Renderer {
                     });
                 }
             }
-            self.sky = Some(SkyRender { name, farbox, dome });
+            // The sunfile disc needs a resolvable sprite image plus the
+            // worldspawn sun direction.
+            let mut sun = None;
+            if let Some(sun_name) = &sh.sunfile {
+                let parsed = fs
+                    .read(&format!("scripts/{sun_name}.sun"))
+                    .map(|b| SunFile::parse(&String::from_utf8_lossy(&b)));
+                match parsed {
+                    Some(sf) if sf.sprite.is_some() => match bsp::sun_direction(&bsp.entities) {
+                        Some(dir) => {
+                            let sprite = sf.sprite.expect("checked above");
+                            log::info!(
+                                "sky {name}: sunfile {sun_name} sprite {sprite} {} deg",
+                                sf.size_deg
+                            );
+                            sun = build_sun_sprite(
+                                device,
+                                queue,
+                                self.config.format,
+                                fs,
+                                &self.camera_layout,
+                                &mut bundle_views,
+                                &sprite,
+                                dir,
+                                sf.size_deg,
+                            );
+                        }
+                        None => {
+                            log::info!(
+                                "sky {name}: sunfile {sun_name} has no worldspawn \
+                                 sundirection, drawing no sun"
+                            );
+                        }
+                    },
+                    Some(_) => {
+                        log::info!("sky {name}: sunfile {sun_name} disables its sprite");
+                    }
+                    None => log::warn!("sunfile: scripts/{sun_name}.sun not found"),
+                }
+            }
+            self.sky = Some(SkyRender {
+                name,
+                farbox,
+                dome,
+                sun,
+            });
         }
 
         // Per-batch vertex average for blend-band sorting.
@@ -2804,6 +3010,34 @@ impl Renderer {
                         pass.set_bind_group(1, &farbox.side_bgs[axis], &[]);
                         pass.draw_indexed(first..end, 0, 0..1);
                     }
+                }
+                // The sunfile disc: additive billboard along the sun
+                // direction at farbox distance, camera-facing via world axes.
+                if let Some(sun) = &sky.sun {
+                    let center = frame.eye + sun.dir * sky::box_size(Z_FAR, Z_NEAR);
+                    let up = glam::Vec3::Z;
+                    let right = up.cross(sun.dir).normalize_or_zero();
+                    let quad_up = sun.dir.cross(right);
+                    let r = right * sun.half_extent;
+                    let u = quad_up * sun.half_extent;
+                    let corner = |dr: f32, du: f32| sky::SkyBoxVert {
+                        pos: (center + r * dr + u * du).to_array(),
+                        uv: [(dr + 1.0) * 0.5, 1.0 - (du + 1.0) * 0.5],
+                    };
+                    let verts = [
+                        corner(-1.0, -1.0),
+                        corner(1.0, -1.0),
+                        corner(1.0, 1.0),
+                        corner(-1.0, -1.0),
+                        corner(1.0, 1.0),
+                        corner(-1.0, 1.0),
+                    ];
+                    self.queue
+                        .write_buffer(&sun.vertex_buf, 0, bytemuck::cast_slice(&verts));
+                    pass.set_pipeline(&sun.pipeline);
+                    pass.set_bind_group(1, &sun.bind_group, &[]);
+                    pass.set_vertex_buffer(0, sun.vertex_buf.slice(..));
+                    pass.draw(0..6, 0..1);
                 }
                 if let Some(dome) = &sky.dome {
                     pass.set_vertex_buffer(0, dome.vertex_buf.slice(..));
