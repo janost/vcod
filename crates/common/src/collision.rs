@@ -16,6 +16,15 @@ const CONTENTS_SKY: u32 = 0x800;
 pub const CONTENTS_WATER: u32 = 0x20;
 /// Ladder-climb flag on brush materials; pmove grabs ladders from trace hits carrying it.
 pub const SURF_LADDER: u32 = 0x8;
+/// Brushless terrain is the one collidable material word without SOLID or
+/// PLAYERCLIP (bsp-ibsp59-format.md, "Content flags").
+const CONTENTS_TERRAIN: u32 = 0x4;
+
+/// Movement sweeps stop on both clips; shots stop on SOLID only, so
+/// playerclip-only geometry (masked wire fences) blocks players but not
+/// bullets, like retail's MASK_SHOT.
+const TRACE_MASK_MOVE: u32 = CONTENTS_SOLID | CONTENTS_PLAYERCLIP;
+const TRACE_MASK_SHOT: u32 = CONTENTS_SOLID;
 
 /// A brush as clip planes: point p is inside iff n·p <= d for every plane.
 pub struct BrushPlanes {
@@ -49,6 +58,21 @@ pub const SURFACE_CLIP_EPSILON: f32 = 0.125;
 /// surfaceparm and retail emits no footstep for it.
 pub fn sound_material(surface_flags: u32) -> i32 {
     ((surface_flags >> 20) & 0x1f) as i32
+}
+
+/// Build-time soup filter. Census over all 49 stock maps (`flag_census`
+/// example): the walk-through cutouts (bushwalls, treelines, ground decals,
+/// autosprite wire, sfx water) are TRANSLUCENT/WINDOW/DETAIL words with no
+/// clip bit; everything collidable carries SOLID or PLAYERCLIP except bare
+/// terrain 0x4. Kept tris store only their mask-relevant bits.
+fn tri_contents(content_flags: u32) -> Option<u32> {
+    if content_flags & (CONTENTS_SOLID | CONTENTS_PLAYERCLIP) != 0 {
+        Some(content_flags & (CONTENTS_SOLID | CONTENTS_PLAYERCLIP))
+    } else if content_flags == CONTENTS_TERRAIN {
+        Some(CONTENTS_SOLID)
+    } else {
+        None
+    }
 }
 
 /// Q3 `cm_trace.c` `CM_TraceThroughBrush`, on planes already expanded by the box.
@@ -178,6 +202,8 @@ pub struct CollisionWorld {
     /// Per-triangle material `surface_flags`, parallel to `tris`. The sound
     /// surface rides bits 20-24 (`cod11-events-and-fx.md`, section 4).
     tris_surf: Vec<u32>,
+    /// Per-triangle mask-relevant content flags, parallel to `tris`.
+    tris_contents: Vec<u32>,
     nodes: Vec<BvhNode>,
     prims: Vec<(Prim, Vec3, Vec3)>,
     water: Vec<WaterVolume>,
@@ -197,9 +223,11 @@ const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
 fn push_tri(
     tris: &mut Vec<[Vec3; 3]>,
     tris_surf: &mut Vec<u32>,
+    tris_contents: &mut Vec<u32>,
     prims: &mut Vec<(Prim, Vec3, Vec3)>,
     [a, b, c]: [Vec3; 3],
     surface_flags: u32,
+    contents: u32,
 ) {
     if (b - a).cross(c - a).length_squared() < 1e-6 {
         return;
@@ -209,6 +237,7 @@ fn push_tri(
     prims.push((Prim::Tri(tris.len() as u32), lo, hi));
     tris.push([a, b, c]);
     tris_surf.push(surface_flags);
+    tris_contents.push(contents);
 }
 
 impl CollisionWorld {
@@ -313,6 +342,7 @@ impl CollisionWorld {
 
         let mut tris = Vec::new();
         let mut tris_surf = Vec::new();
+        let mut tris_contents = Vec::new();
         let world_model = &bsp.models[0];
         let soup_range = world_model.first_soup as usize
             ..(world_model.first_soup + world_model.num_soups) as usize;
@@ -321,6 +351,9 @@ impl CollisionWorld {
             if mat.content_flags & CONTENTS_SKY != 0 {
                 continue;
             }
+            let Some(contents) = tri_contents(mat.content_flags) else {
+                continue;
+            };
             let idx = &bsp.indices[soup.first_index as usize..][..soup.index_count as usize];
             for tri in idx.as_chunks::<3>().0 {
                 let p = |i: usize| {
@@ -329,14 +362,24 @@ impl CollisionWorld {
                 push_tri(
                     &mut tris,
                     &mut tris_surf,
+                    &mut tris_contents,
                     &mut prims,
                     [p(0), p(1), p(2)],
                     mat.surface_flags,
+                    contents,
                 );
             }
         }
         for t in extra_tris {
-            push_tri(&mut tris, &mut tris_surf, &mut prims, *t, 0);
+            push_tri(
+                &mut tris,
+                &mut tris_surf,
+                &mut tris_contents,
+                &mut prims,
+                *t,
+                0,
+                CONTENTS_SOLID,
+            );
         }
 
         let mut nodes = Vec::new();
@@ -348,6 +391,7 @@ impl CollisionWorld {
             brushes,
             tris,
             tris_surf,
+            tris_contents,
             nodes,
             prims,
             water,
@@ -381,8 +425,24 @@ impl CollisionWorld {
         out
     }
 
-    /// `mins == maxs == ZERO` is a ray trace.
+    /// Movement sweep (`mins == maxs == ZERO` is a ray).
     pub fn box_trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3) -> Trace {
+        self.trace_with_mask(start, end, mins, maxs, TRACE_MASK_MOVE)
+    }
+
+    /// Bullet sweep against solids only; see [`TRACE_MASK_SHOT`].
+    pub fn shot_trace(&self, start: Vec3, end: Vec3) -> Trace {
+        self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, TRACE_MASK_SHOT)
+    }
+
+    fn trace_with_mask(
+        &self,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        mask: u32,
+    ) -> Trace {
         let mut trace = Trace {
             fraction: 1.0,
             endpos: end,
@@ -394,7 +454,7 @@ impl CollisionWorld {
 
         if !self.nodes.is_empty() {
             let mut scratch = Vec::new();
-            self.trace_node(0, start, end, mins, maxs, &mut trace, &mut scratch);
+            self.trace_node(0, start, end, mins, maxs, mask, &mut trace, &mut scratch);
         }
         trace.endpos = start + (end - start) * trace.fraction;
         trace
@@ -410,6 +470,7 @@ impl CollisionWorld {
         end: Vec3,
         mins: Vec3,
         maxs: Vec3,
+        mask: u32,
         trace: &mut Trace,
         scratch: &mut Vec<(Vec3, f32)>,
     ) {
@@ -426,10 +487,16 @@ impl CollisionWorld {
                 match *prim {
                     Prim::Brush(b) => {
                         let brush = &self.brushes[b as usize];
+                        if brush.content_flags & mask == 0 {
+                            continue;
+                        }
                         expand_brush(&brush.planes, mins, maxs, scratch);
                         clip_segment(trace, start, end, scratch, brush.surface_flags);
                     }
                     Prim::Tri(t) => {
+                        if self.tris_contents[t as usize] & mask == 0 {
+                            continue;
+                        }
                         triangle_planes(&self.tris[t as usize], mins, maxs, scratch);
                         clip_segment(trace, start, end, scratch, self.tris_surf[t as usize]);
                     }
@@ -447,8 +514,8 @@ impl CollisionWorld {
         } else {
             (node.second, node.first)
         };
-        self.trace_node(near, start, end, mins, maxs, trace, scratch);
-        self.trace_node(far, start, end, mins, maxs, trace, scratch);
+        self.trace_node(near, start, end, mins, maxs, mask, trace, scratch);
+        self.trace_node(far, start, end, mins, maxs, mask, trace, scratch);
     }
 
     /// Only the tests call this now; `box_trace` walks the BVH itself via `trace_node`.
@@ -1455,5 +1522,145 @@ mod tests {
             }
         }
         assert!(flagged, "no approach reported the ladder flag");
+    }
+
+    /// Axial-free test helper: one triangle per soup entry against named
+    /// `(name, contents, surface)` materials. Model 0 only, no brushes.
+    #[doc(hidden)]
+    pub fn synthetic_soup_world(
+        materials: &[(&str, u32, u32)],
+        soups: &[(usize, [[f32; 3]; 3])],
+    ) -> CollisionWorld {
+        let mut verts = Vec::new();
+        let mut indices = Vec::new();
+        let mut soup_lump = Vec::new();
+        for (mat, tri) in soups {
+            let first_vertex = verts.len() as u32;
+            for pos in tri {
+                verts.push(vert(*pos));
+            }
+            let first_index = indices.len() as u16;
+            indices.extend_from_slice(&[first_index, first_index + 1, first_index + 2]);
+            soup_lump.push(crate::bsp::TriangleSoup {
+                material: *mat as u16,
+                lightmap: crate::bsp::NO_LIGHTMAP,
+                first_vertex,
+                vertex_count: 3,
+                index_count: 3,
+                first_index: first_index as u32,
+            });
+        }
+        let soup_count = soup_lump.len() as u32;
+        CollisionWorld::build(
+            &crate::bsp::Bsp {
+                materials: materials
+                    .iter()
+                    .map(|(name, content, surface)| crate::bsp::Material {
+                        name: name.to_string(),
+                        surface_flags: *surface,
+                        content_flags: *content,
+                    })
+                    .collect(),
+                lightmaps: vec![],
+                soups: soup_lump,
+                verts,
+                indices,
+                entities: String::new(),
+                planes: vec![],
+                brush_sides: vec![],
+                brushes: vec![],
+                models: vec![crate::bsp::Model {
+                    mins: [0.0; 3],
+                    maxs: [0.0; 3],
+                    first_soup: 0,
+                    num_soups: soup_count,
+                    first_brush: 0,
+                    num_brushes: 0,
+                }],
+                cull_groups: vec![],
+                cull_indices: vec![],
+                portal_verts: vec![],
+                aabb_nodes: vec![],
+                cells: vec![],
+                portals: vec![],
+                nodes: vec![],
+                leafs: vec![],
+            },
+            &[],
+        )
+    }
+
+    /// Census words from bsp-ibsp59-format.md "Content flags": bushwalls are
+    /// TRANSLUCENT|WINDOW, brushless terrain bare 0x4, masked fences carry
+    /// TRANSLUCENT|PLAYERCLIP|MONSTERCLIP.
+    const BUSH_WALL: (&str, u32, u32) =
+        ("textures/global_use/foliage_masked@bushwall1", 0x2000_0002, 8_454_176);
+    const TERRAIN: (&str, u32, u32) = ("textures/normandy/ground/a_grass1a", 0x4, 10 << 20);
+    const BARBED_FENCE: (&str, u32, u32) = (
+        "textures/normandy/transparents/metal_masked@barbed_fence1",
+        0x2003_0000,
+        13_713_440,
+    );
+
+    fn wall_tri(x: f32) -> [[f32; 3]; 3] {
+        [[x, -50.0, 0.0], [x, 50.0, 0.0], [x, 50.0, 100.0]]
+    }
+
+    #[test]
+    fn cutout_foliage_soups_enter_no_collision() {
+        let world = synthetic_soup_world(&[BUSH_WALL], &[(0, wall_tri(100.0))]);
+        assert!(world.tris.is_empty(), "the bush soup must not be harvested");
+        assert_eq!(
+            world
+                .box_trace(Vec3::new(0.0, 0.0, 50.0), Vec3::new(200.0, 0.0, 50.0), Vec3::ZERO, Vec3::ZERO)
+                .fraction,
+            1.0
+        );
+    }
+
+    #[test]
+    fn terrain_soups_stay_solid() {
+        let floor = [
+            [100.0, -50.0, 10.0],
+            [100.0, 50.0, 10.0],
+            [300.0, 0.0, 10.0],
+        ];
+        let world = synthetic_soup_world(&[TERRAIN], &[(0, floor)]);
+        let down = world.box_trace(
+            Vec3::new(150.0, 0.0, 100.0),
+            Vec3::new(150.0, 0.0, -100.0),
+            Vec3::ZERO,
+            Vec3::ZERO,
+        );
+        assert!(down.fraction < 1.0 && (down.endpos.z - 10.0).abs() < 0.2, "{down:?}");
+        assert!(world.shot_trace(
+            Vec3::new(150.0, 0.0, 100.0),
+            Vec3::new(150.0, 0.0, -100.0)
+        ).fraction < 1.0);
+    }
+
+    #[test]
+    fn playerclip_fence_soups_stop_movement_but_not_shots() {
+        let world = synthetic_soup_world(&[BARBED_FENCE], &[(0, wall_tri(100.0))]);
+        assert_eq!(world.tris.len(), 1, "a clipped fence soup stays in the world");
+        let (start, end) = (Vec3::new(0.0, 0.0, 50.0), Vec3::new(200.0, 0.0, 50.0));
+        let box_mins = Vec3::new(-15.0, -15.0, 0.0);
+        let box_maxs = Vec3::new(15.0, 15.0, 60.0);
+        let movement = world.box_trace(start, end, box_mins, box_maxs);
+        assert!(movement.fraction < 1.0, "players are stopped: {movement:?}");
+        let shot = world.shot_trace(start, end);
+        assert_eq!(shot.fraction, 1.0, "bullets pass playerclip-only geometry");
+    }
+
+    #[test]
+    fn solid_soups_stop_movement_and_shots() {
+        let world =
+            synthetic_soup_world(&[("textures/test/solid", 0x1, 5 << 20)], &[(0, wall_tri(100.0))]);
+        let (start, end) = (Vec3::new(0.0, 0.0, 50.0), Vec3::new(200.0, 0.0, 50.0));
+        assert!(
+            world.box_trace(start, end, Vec3::ZERO, Vec3::ZERO).fraction < 1.0,
+            "movement stops"
+        );
+        assert!(world.shot_trace(start, end).fraction < 1.0, "shots stop");
     }
 }
