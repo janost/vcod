@@ -128,6 +128,9 @@ pub struct SurfaceBits {
 pub struct Shader {
     pub name: String,
     pub stages: Vec<Stage>,
+    /// Stage blocks killed by a failed `requires` or an unsupported tcGen;
+    /// diagnostic only.
+    pub dropped_stages: usize,
     pub two_sided: bool,
     pub sort: Option<f32>,
     pub polygon_offset: bool,
@@ -341,14 +344,18 @@ impl WarnSet {
         }
     }
 
-    #[cfg(test)]
-    fn fired(&self, name: &str, msg: &str) -> bool {
-        self.seen.contains(&format!("{name}\0{msg}"))
+    /// Unique warnings fired so far.
+    pub fn len(&self) -> usize {
+        self.seen.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.seen.is_empty()
     }
 
     #[cfg(test)]
-    fn entries(&self) -> usize {
-        self.seen.len()
+    fn fired(&self, name: &str, msg: &str) -> bool {
+        self.seen.contains(&format!("{name}\0{msg}"))
     }
 }
 
@@ -1060,8 +1067,11 @@ pub fn parse_shader(name: &str, body: &[&str], warns: &mut WarnSet) -> Shader {
                     }
                     i += 1;
                 }
+                let alive = sb.alive;
                 if let Some(st) = sb.finish() {
                     sh.stages.push(st);
+                } else if !alive {
+                    sh.dropped_stages += 1;
                 }
             }
             "}" => i += 1,
@@ -1085,6 +1095,8 @@ pub struct ShaderLib {
     /// stripped): what the implicit-material loader used to read off the
     /// minimal parser in `assets.rs`.
     images: HashMap<String, String>,
+    /// Unique parse warnings fired during the scan.
+    warns: usize,
 }
 
 impl ShaderLib {
@@ -1092,6 +1104,7 @@ impl ShaderLib {
         let mut lib = Self {
             by_name: HashMap::new(),
             images: HashMap::new(),
+            warns: 0,
         };
         // one set for the whole scan: repeated damage across many files
         // warns once per (shader, message)
@@ -1113,6 +1126,7 @@ impl ShaderLib {
                 lib.by_name.insert(name, sh);
             }
         }
+        lib.warns = warns.len();
         lib
     }
 
@@ -1152,6 +1166,11 @@ impl ShaderLib {
 
     pub fn uses_polygon_offset(&self, name: &str) -> bool {
         self.get(name).is_some_and(|s| s.polygon_offset)
+    }
+
+    /// Unique parse warnings fired while building the library.
+    pub fn warn_count(&self) -> usize {
+        self.warns
     }
 
     pub fn sky_blocks(&self) -> impl Iterator<Item = &Shader> {
@@ -1806,7 +1825,7 @@ textures/sfx/test_water
             !warns.fired(&name, "unknown token waterMap"),
             "dropped stage must not reach field parsing"
         );
-        assert_eq!(warns.entries(), 0);
+        assert_eq!(warns.len(), 0);
         let st = &sh.stages[0];
         assert_eq!(st.bundles.len(), 2);
         let b0 = &st.bundles[0];
@@ -1836,6 +1855,17 @@ textures/sfx/test_water
         assert_eq!(kept.stages.len(), 1);
         let dropped = parse_one("t { requires GL_MAX_TEXTURE_UNITS_ARB < 4 { map a.tga } }");
         assert!(dropped.stages.is_empty());
+    }
+
+    /// Dropped stages are counted on the shader for the F3 overlay.
+    #[test]
+    fn dropped_stages_are_counted() {
+        let sh = parse_one(
+            "t { requires GL_MAX_TEXTURE_UNITS_ARB < 4 { map a.tga } \
+             { tcGen bogus { map b.tga } } { map c.tga } }",
+        );
+        assert_eq!(sh.stages.len(), 1);
+        assert_eq!(sh.dropped_stages, 2);
     }
 
     #[test]
@@ -1933,7 +1963,7 @@ textures/sfx/test_water
         let sh = parse_shader(&name, &body, &mut w);
         assert_eq!(sh.stages.len(), 1);
         assert!(w.fired(&name, "unknown token fooBar"));
-        assert_eq!(w.entries(), 1);
+        assert_eq!(w.len(), 1);
     }
 
     #[test]
@@ -2021,7 +2051,7 @@ textures/sfx/test_water
         let st = &sh.stages[0];
         assert_eq!(st.bundles[0].vector, None);
         assert_eq!(st.bundles[1].vector, Some([0.5, 0.0, 0.0, 0.0, 0.5, 0.0]));
-        assert_eq!(w.entries(), 0, "supported form must not warn");
+        assert_eq!(w.len(), 0, "supported form must not warn");
     }
 
     #[test]
@@ -2031,7 +2061,7 @@ textures/sfx/test_water
         let sh = parse_shader(&name, &body, &mut w);
         assert_eq!(sh.stages[0].bundles[0].vector, Some([0.0; 6]));
         assert!(w.fired(&name, "malformed tcGen vector"));
-        assert_eq!(w.entries(), 1);
+        assert_eq!(w.len(), 1);
     }
 
     #[test]
@@ -2076,7 +2106,7 @@ textures/sfx/test_water
         let sh = parse_shader(&name, &body, &mut w);
         assert_eq!(sh.stages[0].rgb_gen, RgbGen::IdentityLighting);
         assert!(w.fired(&name, "unknown wave form in rgbGen"));
-        assert_eq!(w.entries(), 1);
+        assert_eq!(w.len(), 1);
     }
 
     #[test]

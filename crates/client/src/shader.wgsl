@@ -74,6 +74,8 @@ fn vs_main(in: VsIn) -> VsOut {
     out.lm_uv = in.lm_uv;
     out.color = in.color;
     out.world_pos = in.pos;
+    // legacy draws have no second bundle
+    out.uv1 = vec2<f32>(0.0);
     return out;
 }
 

@@ -7,10 +7,55 @@ pub struct Batch {
     pub index_count: u32,
 }
 
-/// Gameplay-only surfaces (clip, caulk) and sky; the sky reads as the clear color.
-pub fn should_skip(material: &Material) -> bool {
-    let n = material.name.as_str();
-    n.starts_with("textures/common/") || n.starts_with("textures/skies/") || n.contains("sky")
+/// Per-material draw decision, computed once at load from the shader lib
+/// plus the material name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaterialKind {
+    /// Normal world geometry.
+    Draw,
+    /// Never drawn (clip brushes, nodraw surfaces).
+    Skip,
+    /// Sky-box geometry; routed to the sky pass.
+    Sky,
+}
+
+/// Pure per-material decision over what the renderer knows at load: whether
+/// an authored block exists and its parsed surface bits (`sky` folds in
+/// `skyparms`), with the material name as the implicit-material fallback.
+pub fn material_kind(name: &str, has_block: bool, nodraw: bool, sky: bool) -> MaterialKind {
+    if !has_block {
+        return implicit_kind(name);
+    }
+    if nodraw {
+        MaterialKind::Skip
+    } else if sky {
+        MaterialKind::Sky
+    } else {
+        MaterialKind::Draw
+    }
+}
+
+/// Name rules for materials without an authored block: the `textures/common`
+/// gameplay families never draw (other common materials do — water renders);
+/// unscripted sky names stay invisible. Everything else draws. Public for
+/// lib-less callers (bounds, submodels, the asset census).
+pub fn implicit_kind(name: &str) -> MaterialKind {
+    let skip = if let Some(rest) = name.strip_prefix("textures/common/") {
+        let base = rest.split('@').next().unwrap_or(rest);
+        base.starts_with("clip")
+            || base.starts_with("trigger")
+            || base.starts_with("origin")
+            || base.starts_with("caulk")
+            || base.starts_with("areaportal")
+            || base.starts_with("hint")
+    } else {
+        name.starts_with("textures/skies/") || name.contains("sky")
+    };
+    if skip {
+        MaterialKind::Skip
+    } else {
+        MaterialKind::Draw
+    }
 }
 
 /// Coplanar surfaces that need a depth bias, marked by the surface-type
@@ -32,13 +77,17 @@ pub struct IndexRange {
 type Placed = Option<((u16, u16), u32, u32)>;
 
 /// One absolute u32 index buffer, one contiguous batch per (material,
-/// lightmap), and each soup's range inside its batch (`None` when skipped).
-pub fn build_batches(bsp: &Bsp) -> (Vec<u32>, Vec<Batch>, Vec<Option<IndexRange>>) {
+/// lightmap), and each soup's range inside its batch (`None` for `Skip` and
+/// `Sky` materials; the sky pass owns the sky soups).
+pub fn build_batches(
+    bsp: &Bsp,
+    kinds: &[MaterialKind],
+) -> (Vec<u32>, Vec<Batch>, Vec<Option<IndexRange>>) {
     use std::collections::BTreeMap;
     let mut groups: BTreeMap<(u16, u16), Vec<u32>> = BTreeMap::new();
     let mut placed: Vec<Placed> = Vec::with_capacity(bsp.soups.len());
     for soup in &bsp.soups {
-        if should_skip(&bsp.materials[soup.material as usize]) {
+        if kinds[soup.material as usize] != MaterialKind::Draw {
             placed.push(None);
             continue;
         }
@@ -83,12 +132,13 @@ pub fn build_batches(bsp: &Bsp) -> (Vec<u32>, Vec<Batch>, Vec<Option<IndexRange>
     (indices, batches, ranges)
 }
 
-/// Bounds over the drawn soups' vertices; the spawn fallback.
+/// Bounds over the drawn soups' vertices; the spawn fallback. Name rules
+/// only: callers here have no shader lib.
 pub fn map_bounds(bsp: &Bsp) -> ([f32; 3], [f32; 3]) {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
     for soup in &bsp.soups {
-        if should_skip(&bsp.materials[soup.material as usize]) {
+        if implicit_kind(&bsp.materials[soup.material as usize].name) != MaterialKind::Draw {
             continue;
         }
         let fv = soup.first_vertex as usize;
@@ -123,6 +173,11 @@ mod tests {
             normal: [0.0, 0.0, 1.0],
             color: [255; 4],
         }
+    }
+
+    /// wall draws, clip skips, floor draws — matching the implicit name rules.
+    fn test_kinds() -> Vec<MaterialKind> {
+        vec![MaterialKind::Draw, MaterialKind::Skip, MaterialKind::Draw]
     }
 
     fn test_bsp() -> Bsp {
@@ -196,11 +251,47 @@ mod tests {
     }
 
     #[test]
-    fn skips_common_and_sky() {
-        assert!(should_skip(&mat("textures/common/clip_nosight")));
-        assert!(should_skip(&mat("textures/common/caulk")));
-        assert!(should_skip(&mat("textures/skies/stalingrad_sky")));
-        assert!(!should_skip(&mat("textures/normandy/walls/brick")));
+    fn implicit_names_fall_back_to_gameplay_prefixes() {
+        // gameplay families never draw
+        for name in [
+            "textures/common/clip",
+            "textures/common/clip_nosight",
+            "textures/common/trigger",
+            "textures/common/trigger_nodraw",
+            "textures/common/origin",
+            "textures/common/caulk",
+            "textures/common/areaportal",
+            "textures/common/hintskip",
+            "textures/skies/stalingrad_sky",
+        ] {
+            assert_eq!(
+                material_kind(name, false, false, false),
+                MaterialKind::Skip,
+                "{name}"
+            );
+        }
+        // everything else draws, water included
+        for name in [
+            "textures/common/water",
+            "textures/common/white",
+            "textures/normandy/walls/brick",
+        ] {
+            assert_eq!(
+                material_kind(name, false, false, false),
+                MaterialKind::Draw,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn authored_blocks_classify_from_surface_bits() {
+        let k = |nodraw, sky| material_kind("textures/anything", true, nodraw, sky);
+        assert_eq!(k(false, false), MaterialKind::Draw);
+        assert_eq!(k(true, false), MaterialKind::Skip);
+        assert_eq!(k(false, true), MaterialKind::Sky);
+        // nodraw wins over sky
+        assert_eq!(k(true, true), MaterialKind::Skip);
     }
 
     #[test]
@@ -226,7 +317,7 @@ mod tests {
 
     #[test]
     fn reports_each_soups_range_in_its_batch() {
-        let (indices, batches, ranges) = build_batches(&test_bsp());
+        let (indices, batches, ranges) = build_batches(&test_bsp(), &test_kinds());
         assert_eq!(ranges.len(), 4);
         assert_eq!(ranges[1], None, "clip soup has no range");
         assert_eq!(
@@ -262,7 +353,7 @@ mod tests {
 
     #[test]
     fn merges_batches_and_rebases_indices() {
-        let (indices, batches, _) = build_batches(&test_bsp());
+        let (indices, batches, _) = build_batches(&test_bsp(), &test_kinds());
         assert_eq!(batches.len(), 2);
         let b0 = &batches[0];
         assert_eq!((b0.material, b0.lightmap, b0.index_count), (0, 0, 6));

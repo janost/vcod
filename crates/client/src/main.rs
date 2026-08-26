@@ -250,6 +250,10 @@ fn hud_lines(
     ));
     let (hud_quads, hud_ms, hud_unknown) = hud_counts;
     lines.push(format!("hud q{hud_quads} {hud_ms:.2}ms unk {hud_unknown}"));
+    let (stage_draws, dropped, warns) = r.shader_stats();
+    lines.push(format!(
+        "shader: sky none  stages {stage_draws}  dropped {dropped}  warns {warns}"
+    ));
     lines.push(format!(
         "audio v{} plays {} miss {} cull {} drop {} {:.2}ms",
         audio.voices, audio.plays, audio.misses, audio.culled, audio.drops, audio.step_ms

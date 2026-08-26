@@ -778,7 +778,10 @@ gfx/effects/second_stage_only
                         let mut missing = Vec::new();
                         for mi in used {
                             let mat = &bsp.materials[mi as usize];
-                            if !crate::mesh::should_skip(mat) && !resolves(&mat.name) {
+                            if crate::mesh::implicit_kind(&mat.name)
+                                == crate::mesh::MaterialKind::Draw
+                                && !resolves(&mat.name)
+                            {
                                 missing.push(mat.name.clone());
                             }
                         }

@@ -8,12 +8,12 @@ use crate::hud::HudQuad;
 use crate::hud_text::{self, HudVert};
 use vcod_common::assets::{self, Image, ImageData};
 use vcod_common::bsp::{self, Bsp, DrawVert};
-use vcod_common::mesh::{self, Batch, IndexRange};
+use vcod_common::mesh::{self, Batch, IndexRange, MaterialKind};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::props;
 use vcod_common::shader::{
-    bundle_affine, bundle_turb, wave_value, AlphaFunc, AlphaGen, ImageRef, RgbGen, Shader,
-    ShaderLib,
+    bundle_affine, bundle_turb, has_animated_tcmods, wave_value, AlphaFunc, AlphaGen, BlendFactor,
+    DrawClass, ImageRef, RgbGen, Shader, ShaderLib, SORT_BLEND0, SORT_DECAL,
 };
 use vcod_common::vis::{Frustum, Visible, WorldVis};
 use vcod_common::xmodel::{self, VmVert};
@@ -61,13 +61,15 @@ const _: () = assert!(std::mem::size_of::<FxVert>() == 36);
 
 /// Render passes in draw order. Layers (polygonOffset terrain blends) and
 /// overlays (decals, masked cutouts) are coplanar with the world and draw
-/// depth-biased on top.
+/// depth-biased on top. `Stage` marks batches expanded into per-stage draws
+/// instead; their placement comes from the stage bands.
 #[derive(Copy, Clone, PartialEq)]
 enum Pass {
     Opaque,
     Prop,
     Layer,
     Overlay,
+    Stage,
 }
 
 struct DrawCall {
@@ -109,6 +111,21 @@ pub(crate) struct DrawRange {
     pub batch: u32,
     pub first: u32,
     pub count: u32,
+}
+
+/// One entry of a frame's emission-ordered list.
+#[derive(Copy, Clone)]
+enum DrawRef {
+    /// A legacy batch on its fixed pipeline.
+    Legacy(Pass),
+    /// An authored stage draw; index into `WorldGpu::stage_batches`.
+    Stage(u32),
+}
+
+struct FrameDraw {
+    kind: DrawRef,
+    /// Index into `WorldGpu::draws`, the gathered visible range.
+    src: u32,
 }
 
 /// Copies the visible `ranges` out of `src` batch by batch into `out`, one
@@ -446,18 +463,42 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
     Some(p)
 }
 
-/// One animMap bundle resolved to per-frame bind groups. Task 7 populates
-/// these during batch expansion and picks a frame with `bind_group(t)`.
+/// A frame-indexed set of bind groups: one per animMap frame, or a single
+/// static entry (fps 0 sticks at index 0).
 struct AnimFrames {
     fps: f32,
     groups: Vec<wgpu::BindGroup>,
 }
 
 impl AnimFrames {
-    #[allow(dead_code)] // Task 7 consumes
+    /// A single, non-animating entry (fps 0 sticks at index 0).
+    fn static_(group: wgpu::BindGroup) -> Self {
+        Self {
+            fps: 0.0,
+            groups: vec![group],
+        }
+    }
+
     fn bind_group(&self, t: f32) -> &wgpu::BindGroup {
         &self.groups[anim_frame_index(self.fps, self.groups.len(), t)]
     }
+}
+
+/// One authored stage expanded over its parent batch's index range. Batches
+/// of one material share the params slot per stage.
+struct StageBatch {
+    /// Parent legacy batch whose gathered range this draw emits.
+    batch: u32,
+    /// Dynamic-offset slot of this (material, stage)'s params.
+    slot: u32,
+    variant: StageVariant,
+    two_sided: bool,
+    bias: bool,
+    band: u8,
+    /// group(1): bundle-0 image + lightmap page + samplers.
+    mat: AnimFrames,
+    /// group(2): params UBO slot + bundle-1 image.
+    stage: AnimFrames,
 }
 
 /// floor(t * fps) % len, clamped to a valid frame; static or empty anims stick at 0.
@@ -468,8 +509,8 @@ fn anim_frame_index(fps: f32, len: usize, t: f32) -> usize {
     (t.max(0.0) * fps) as usize % len
 }
 
-/// Which prebuilt stage pipeline a StageBatch draws with; Task 7 selects via
-/// `ClassedStage`.
+/// Which prebuilt stage pipeline a StageBatch draws with; selected from
+/// `ClassedStage` plus the stage's blend pair.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum StageVariant {
     /// Unblended: depth write on, alphafunc discard in fs_stage.
@@ -478,12 +519,73 @@ enum StageVariant {
     Blend,
     /// Blend that kept depth write (explicit depthWrite keyword).
     BlendDepthWrite,
-    /// dst factor exactly GL_ONE, drawn One/One.
+    /// dst factor exactly GL_ONE with src GL_ONE, drawn One/One.
     AdditiveFixed,
-    /// Any other dst-One pair, drawn SrcAlpha/One so source alpha carries.
+    /// Any other additive pair, drawn SrcAlpha/One so source alpha carries.
     AdditiveFaded,
+    /// Additive stages that kept depth write (explicit depthWrite keyword).
+    AdditiveFixedDepthWrite,
+    AdditiveFadedDepthWrite,
 }
-const STAGE_VARIANTS: usize = 5;
+const STAGE_VARIANTS: usize = 7;
+
+/// Emission bands for the draw list: opaque (incl. cutouts), the coplanar
+/// decal slot, see-through blends, back-to-front blends, additives last.
+const BAND_OPAQUE: u8 = 0;
+const BAND_DECAL: u8 = 1;
+const BAND_SEETHROUGH: u8 = 2;
+const BAND_BLEND: u8 = 3;
+const BAND_ADDITIVE: u8 = 4;
+
+/// Pipeline variant plus the draw facts a StageBatch needs. `None` when
+/// `idx` is out of range.
+fn stage_draw_facts(sh: &Shader, idx: usize) -> Option<(StageVariant, bool, bool, u8)> {
+    let cs = sh.classify_stage(idx)?;
+    let st = &sh.stages[idx];
+    let variant = match cs.class {
+        DrawClass::Opaque => StageVariant::Opaque,
+        DrawClass::Blend => {
+            if cs.depth_write {
+                StageVariant::BlendDepthWrite
+            } else {
+                StageVariant::Blend
+            }
+        }
+        DrawClass::Additive => {
+            let fixed = st.blend == Some((BlendFactor::One, BlendFactor::One));
+            match (fixed, cs.depth_write) {
+                (true, false) => StageVariant::AdditiveFixed,
+                (true, true) => StageVariant::AdditiveFixedDepthWrite,
+                (false, true) => StageVariant::AdditiveFadedDepthWrite,
+                (false, false) => StageVariant::AdditiveFaded,
+            }
+        }
+    };
+    // class wins over sort except for the coplanar decal slot
+    let sort = sh.sort_value();
+    let band = if cs.class == DrawClass::Additive {
+        BAND_ADDITIVE
+    } else if sort == SORT_DECAL || cs.bias {
+        BAND_DECAL
+    } else if cs.class == DrawClass::Opaque {
+        BAND_OPAQUE
+    } else if sort < SORT_BLEND0 {
+        BAND_SEETHROUGH
+    } else {
+        BAND_BLEND
+    };
+    Some((variant, cs.two_sided, cs.bias, band))
+}
+
+/// Whether the stage's params change over time and need per-frame rewrites.
+fn stage_animated(sh: &Shader, idx: usize) -> bool {
+    let Some(st) = sh.stages.get(idx) else {
+        return false;
+    };
+    st.bundles.iter().any(|b| has_animated_tcmods(&b.tcmods))
+        || matches!(st.rgb_gen, RgbGen::Wave(_))
+        || matches!(st.alpha_gen, AlphaGen::Wave(_))
+}
 
 /// World-space fx quads. Two pipelines that differ only in blend state:
 /// straight alpha, and `GL_ONE GL_ONE` for [`assets::Shaders::is_additive`]
@@ -556,16 +658,22 @@ struct WorldGpu {
     /// Static per-batch draw descriptors; `draws` is rebuilt each frame from them.
     batch_draws: Vec<DrawCall>,
     draws: Vec<DrawRange>,
-    /// Per-stage params UBO (one dynamic-offset slot per stage batch) and its
-    /// group(2) bind group. Task 7 assigns slots and streams animated stages.
-    #[allow(dead_code)] // Task 7 consumes
+    /// Authored stages expanded from their parent batches.
+    stage_batches: Vec<StageBatch>,
+    /// Parent batch id -> indices into `stage_batches`.
+    stages_of_batch: Vec<Vec<u32>>,
+    /// Animated stages: (shader clone, stage idx, params slot); rewritten each frame.
+    animated: Vec<(Shader, usize, u32)>,
+    /// Per-legacy-batch vertex average, the blend-band sort key.
+    centroids: Vec<glam::Vec3>,
+    /// This frame's emission-ordered draw list.
+    frame_draws: Vec<FrameDraw>,
+    /// Stage draws emitted last frame, for the F3 overlay.
+    stage_draws_last: usize,
+    /// Per-stage params UBO (one dynamic-offset slot per (material, stage)).
+    /// Group(2) bind groups are per stage batch: bundle 1's image varies.
     stage_params_buf: wgpu::Buffer,
-    #[allow(dead_code)] // Task 7 consumes
-    stage_params_bg: wgpu::BindGroup,
-    #[allow(dead_code)] // Task 7 consumes
-    stage_params_slots: usize,
     /// StageParams size rounded up to `min_uniform_buffer_offset_alignment`.
-    #[allow(dead_code)] // Task 7 consumes
     stage_params_stride: u64,
     vis: WorldVis,
     gathered: Vec<u32>,
@@ -589,9 +697,9 @@ pub struct Renderer {
     prop_pipeline: wgpu::RenderPipeline,
     layer_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
-    /// `[variant][two_sided]`; built at startup so shader.wgsl validates even mapless.
-    #[allow(dead_code)] // Task 7 selects these per StageBatch
-    stage_pipelines: [[wgpu::RenderPipeline; 2]; STAGE_VARIANTS],
+    /// `[variant][two_sided][bias]`; built at startup so shader.wgsl validates
+    /// even mapless.
+    stage_pipelines: [[[wgpu::RenderPipeline; 2]; 2]; STAGE_VARIANTS],
     camera_buf: wgpu::Buffer,
     camera_bg: wgpu::BindGroup,
     fx_lights_buf: wgpu::Buffer,
@@ -603,6 +711,10 @@ pub struct Renderer {
     white_view: wgpu::TextureView,
     world: Option<WorldGpu>,
     vis_counts: VisCounts,
+    /// Stage draws emitted last frame; stages dropped at the current map's
+    /// load; unique ShaderLib warnings. The F3 `shader:` line.
+    shader_dropped: usize,
+    lib_warn_count: usize,
     vm_pass: VmPass,
     dynamic: DynamicPass,
     fx: FxPass,
@@ -995,22 +1107,31 @@ impl Renderer {
             ),
             (StageVariant::AdditiveFixed, Some(one_one), false),
             (StageVariant::AdditiveFaded, Some(srcalpha_one), false),
+            // explicit depthWrite on additive stages
+            (StageVariant::AdditiveFixedDepthWrite, Some(one_one), true),
+            (
+                StageVariant::AdditiveFadedDepthWrite,
+                Some(srcalpha_one),
+                true,
+            ),
         ];
-        let stage_pipelines: [[wgpu::RenderPipeline; 2]; STAGE_VARIANTS] =
+        let stage_pipelines: [[[wgpu::RenderPipeline; 2]; 2]; STAGE_VARIANTS] =
             std::array::from_fn(|v| {
                 let (variant, blend, depth_write) = variant_states[v];
                 [false, true].map(|two_sided| {
-                    make_pipeline(
-                        &format!("stage {variant:?} twosided={two_sided}"),
-                        &stage_pipeline_layout,
-                        "vs_stage",
-                        Default::default(),
-                        "fs_stage",
-                        false,
-                        blend,
-                        depth_write,
-                        if two_sided { None } else { cull_back },
-                    )
+                    [false, true].map(|want_bias| {
+                        make_pipeline(
+                            &format!("stage {variant:?} twosided={two_sided} bias={want_bias}"),
+                            &stage_pipeline_layout,
+                            "vs_stage",
+                            if want_bias { bias } else { Default::default() },
+                            "fs_stage",
+                            false,
+                            blend,
+                            depth_write,
+                            if two_sided { None } else { cull_back },
+                        )
+                    })
                 })
             });
         let vm_pass = create_vm_pass(&device, format);
@@ -1019,6 +1140,7 @@ impl Renderer {
         let hud = create_hud_text_pass(&device, &queue, format);
         let hud_pass = create_hud_pass(&device, format);
 
+        let lib = ShaderLib::load(fs);
         Ok(Renderer {
             surface,
             device,
@@ -1041,6 +1163,8 @@ impl Renderer {
             white_view,
             world: None,
             vis_counts: VisCounts::default(),
+            shader_dropped: 0,
+            lib_warn_count: lib.warn_count(),
             vm_pass,
             dynamic,
             fx,
@@ -1048,7 +1172,7 @@ impl Renderer {
             hud_pass,
             hud_quad_cap_warned: false,
             shaders,
-            shader_lib: ShaderLib::load(fs),
+            shader_lib: lib,
         })
     }
 
@@ -1062,9 +1186,25 @@ impl Renderer {
         let lightmap_sampler = &self.lightmap_sampler;
         let white_view = &self.white_view;
 
+        // Per-material draw decision: authored blocks classify from their
+        // parsed surface bits, implicit names from the gameplay prefixes.
+        let kinds: Vec<MaterialKind> = bsp
+            .materials
+            .iter()
+            .map(|m| match self.shader_lib.get(&m.name) {
+                Some(sh) => mesh::material_kind(
+                    &m.name,
+                    true,
+                    sh.surface.nodraw,
+                    sh.surface.sky || sh.sky.is_some(),
+                ),
+                None => mesh::material_kind(&m.name, false, false, false),
+            })
+            .collect();
+
         // Props (misc_model entities) are baked to world space on the CPU in
         // the same vertex format and extend the map's buffers.
-        let (mut indices, batches, soup_ranges) = mesh::build_batches(bsp);
+        let (mut indices, batches, soup_ranges) = mesh::build_batches(bsp, &kinds);
         if batches.is_empty() {
             bail!("map has no drawable surfaces");
         }
@@ -1247,12 +1387,16 @@ impl Renderer {
         );
 
         // One dynamic-offset slot per authored stage of every map material
-        // that resolves in the shader lib (upper bound of Task 7's stage
-        // batches; legacy fast-path batches use no slots).
+        // that resolves in the shader lib; batches of one material share the
+        // slot per stage. Implicit materials use no slots.
         let mut stage_slots: Vec<(&Shader, usize)> = Vec::new();
-        for mat in &bsp.materials {
+        let mut slot_of: HashMap<(u16, usize), u32> = HashMap::new();
+        for (mi, mat) in bsp.materials.iter().enumerate() {
             if let Some(sh) = self.shader_lib.get(&mat.name) {
-                stage_slots.extend((0..sh.stages.len()).map(|idx| (sh, idx)));
+                for idx in 0..sh.stages.len() {
+                    slot_of.insert((mi as u16, idx), stage_slots.len() as u32);
+                    stage_slots.push((sh, idx));
+                }
             }
         }
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
@@ -1263,27 +1407,8 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let stage_params_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("stage params"),
-            layout: &self.stage_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &stage_params_buf,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(STAGE_PARAMS_SIZE),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(white_view),
-                },
-            ],
-        });
         // Provisional fill at t = 0 so every slot starts valid (static stages
-        // keep these values); Task 7 owns final slot assignment and streams
-        // animated stages per frame.
+        // keep these values; animated ones are rewritten each frame).
         for (i, (sh, idx)) in stage_slots.iter().enumerate() {
             if let Some(p) = stage_params(sh, *idx, 0.0) {
                 queue.write_buffer(
@@ -1298,6 +1423,173 @@ impl Renderer {
             stage_slots.len()
         );
 
+        // Expand authored materials: one StageBatch per parsed stage sharing
+        // the parent batch's index range. Implicit materials and blocks with
+        // no effective stages keep the legacy fast path.
+        let mut stage_batches: Vec<StageBatch> = Vec::new();
+        let mut stages_of_batch: Vec<Vec<u32>> = vec![Vec::new(); batches.len()];
+        let mut animated: Vec<(Shader, usize, u32)> = Vec::new();
+        let mut bundle_views: HashMap<String, wgpu::TextureView> = HashMap::new();
+        // once per material, not per batch: a material can hold several batches
+        let dropped_stages: usize = bsp
+            .materials
+            .iter()
+            .zip(&kinds)
+            .filter(|(_, k)| **k == MaterialKind::Draw)
+            .filter_map(|(m, _)| self.shader_lib.get(&m.name))
+            .map(|sh| sh.dropped_stages)
+            .sum();
+        for (bi, batch) in batches.iter().enumerate() {
+            if kinds[batch.material as usize] != MaterialKind::Draw {
+                continue;
+            }
+            let name = &bsp.materials[batch.material as usize].name;
+            let Some(sh) = self.shader_lib.get(name) else {
+                continue;
+            };
+            if sh.stages.is_empty() {
+                continue;
+            }
+            let lm_view = match batch.lightmap {
+                bsp::NO_LIGHTMAP => None,
+                i => lightmap_views.get(i as usize),
+            };
+            for si in 0..sh.stages.len() {
+                let Some((variant, two_sided, bias, band)) = stage_draw_facts(sh, si) else {
+                    continue;
+                };
+                let slot = slot_of[&(batch.material, si)];
+                let st = &sh.stages[si];
+                let b0 = &st.bundles[0];
+                let b1 = st.bundles.get(1);
+                // a clamped bundle needs ClampToEdge; the lightmap sampler is
+                // already exactly that
+                let clamp = b0.clamp || b1.is_some_and(|b| b.clamp);
+                let diff_sampler = if clamp {
+                    lightmap_sampler
+                } else {
+                    diffuse_sampler
+                };
+                let mat_group = |b0_view: &wgpu::TextureView| {
+                    device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("stage material bind group"),
+                        layout: material_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(b0_view),
+                            },
+                            // bundle-0 lightmaps sample here via the flag
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(
+                                    lm_view.unwrap_or(white_view),
+                                ),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::Sampler(diff_sampler),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: wgpu::BindingResource::Sampler(lightmap_sampler),
+                            },
+                        ],
+                    })
+                };
+                let stage_group = |b1_view: &wgpu::TextureView| {
+                    device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("stage draw bind group"),
+                        layout: &self.stage_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                    buffer: &stage_params_buf,
+                                    offset: 0,
+                                    size: wgpu::BufferSize::new(STAGE_PARAMS_SIZE),
+                                }),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(b1_view),
+                            },
+                        ],
+                    })
+                };
+                let mut resolve =
+                    |p: &str| upload_bundle_view(device, queue, fs, &mut bundle_views, p);
+                let mat = match (&b0.anim, &b0.image) {
+                    (Some(anim), _) => AnimFrames {
+                        fps: anim.fps,
+                        groups: anim.paths.iter().map(|p| mat_group(&resolve(p))).collect(),
+                    },
+                    (None, ImageRef::Path(p)) => AnimFrames::static_(mat_group(&resolve(p))),
+                    // $whiteimage draws white; $lightmap samples t_lightmap
+                    // through the flag, so bundle 0's own slot stays neutral
+                    (None, _) => AnimFrames::static_(mat_group(white_view)),
+                };
+                let stage = match b1.map(|b| (&b.anim, &b.image)) {
+                    Some((Some(anim), _)) => AnimFrames {
+                        fps: anim.fps,
+                        groups: anim
+                            .paths
+                            .iter()
+                            .map(|p| stage_group(&resolve(p)))
+                            .collect(),
+                    },
+                    Some((None, ImageRef::Path(p))) => {
+                        AnimFrames::static_(stage_group(&resolve(p)))
+                    }
+                    _ => AnimFrames::static_(stage_group(white_view)),
+                };
+                if stage_animated(sh, si) {
+                    animated.push((sh.clone(), si, slot));
+                }
+                stages_of_batch[bi].push(stage_batches.len() as u32);
+                stage_batches.push(StageBatch {
+                    batch: bi as u32,
+                    slot,
+                    variant,
+                    two_sided,
+                    bias,
+                    band,
+                    mat,
+                    stage,
+                });
+            }
+        }
+        for (bi, sbs) in stages_of_batch.iter().enumerate() {
+            if !sbs.is_empty() {
+                batch_draws[bi].pass = Pass::Stage;
+            }
+        }
+        self.shader_dropped = dropped_stages;
+        println!(
+            "shader scripts: {} stage batches, {} dropped stages, {} lib warnings",
+            stage_batches.len(),
+            dropped_stages,
+            self.shader_lib.warn_count()
+        );
+
+        // Per-batch vertex average for blend-band sorting.
+        let mut centroid_sum = vec![glam::Vec3::ZERO; batches.len()];
+        let mut centroid_n = vec![0u64; batches.len()];
+        for (si, r) in soup_ranges.iter().enumerate() {
+            let Some(r) = r else { continue };
+            let soup = &bsp.soups[si];
+            let fv = soup.first_vertex as usize;
+            for v in &bsp.verts[fv..fv + soup.vertex_count as usize] {
+                centroid_sum[r.batch as usize] += glam::Vec3::from_slice(&v.pos);
+            }
+            centroid_n[r.batch as usize] += u64::from(soup.vertex_count);
+        }
+        let centroids = centroid_sum
+            .into_iter()
+            .zip(centroid_n)
+            .map(|(s, n)| if n == 0 { s } else { s / n as f32 })
+            .collect();
+
         self.world = Some(WorldGpu {
             vertex_buf,
             index_buf,
@@ -1308,9 +1600,13 @@ impl Renderer {
             prop_bounds: props.bounds,
             batch_draws,
             draws: Vec::new(),
+            stage_batches,
+            stages_of_batch,
+            animated,
+            centroids,
+            frame_draws: Vec::new(),
+            stage_draws_last: 0,
             stage_params_buf,
-            stage_params_bg,
-            stage_params_slots: stage_slots.len(),
             stage_params_stride,
             vis: WorldVis::build(bsp),
             gathered: Vec::new(),
@@ -1579,28 +1875,24 @@ impl Renderer {
         &self.vis_counts
     }
 
-    /// Writes one stage's evaluated params into UBO slot `index`. Task 7
-    /// calls this per animated stage each frame; static stages keep their
-    /// load-time fill.
-    #[allow(dead_code)] // Task 7 consumes
-    fn write_stage_params(&self, index: usize, shader: &Shader, stage_idx: usize, t: f32) {
-        let Some(world) = &self.world else {
-            return;
-        };
-        let Some(p) = stage_params(shader, stage_idx, t) else {
-            return;
-        };
-        self.queue.write_buffer(
-            &world.stage_params_buf,
-            index as u64 * world.stage_params_stride,
-            bytemuck::bytes_of(&p),
-        );
+    /// (stage draws emitted last frame, stages dropped at load, unique
+    /// shader-lib warnings) for the F3 `shader:` line.
+    pub fn shader_stats(&self) -> (usize, usize, usize) {
+        (
+            self.world.as_ref().map_or(0, |w| w.stage_draws_last),
+            self.shader_dropped,
+            self.lib_warn_count,
+        )
     }
 
-    /// `[variant][two_sided]`.
-    #[allow(dead_code)] // Task 7 selects these per StageBatch
-    fn stage_pipeline(&self, variant: StageVariant, two_sided: bool) -> &wgpu::RenderPipeline {
-        &self.stage_pipelines[variant as usize][usize::from(two_sided)]
+    /// `[variant][two_sided][bias]`.
+    fn stage_pipeline(
+        &self,
+        variant: StageVariant,
+        two_sided: bool,
+        bias: bool,
+    ) -> &wgpu::RenderPipeline {
+        &self.stage_pipelines[variant as usize][usize::from(two_sided)][usize::from(bias)]
     }
 
     pub fn aspect(&self) -> f32 {
@@ -1684,6 +1976,74 @@ impl Renderer {
                 &mut world.gathered,
                 &mut world.gather_scratch,
             );
+            // Animated stages get fresh params; static slots keep the load fill.
+            for (sh, si, slot) in &world.animated {
+                if let Some(p) = stage_params(sh, *si, frame.time) {
+                    self.queue.write_buffer(
+                        &world.stage_params_buf,
+                        u64::from(*slot) * world.stage_params_stride,
+                        bytemuck::bytes_of(&p),
+                    );
+                }
+            }
+            // Emission order: opaque (legacy then staged cutouts), props, the
+            // legacy biased passes, the staged decal slot, see-through blends,
+            // back-to-front blends, additives. Sky soups are not in `draws`.
+            let mut legacy: [Vec<u32>; 4] = Default::default();
+            let mut bands: [Vec<(u32, u32)>; 5] = Default::default();
+            for (di, d) in world.draws.iter().enumerate() {
+                match world.batch_draws[d.batch as usize].pass {
+                    Pass::Stage => {
+                        for &sb in &world.stages_of_batch[d.batch as usize] {
+                            let band = world.stage_batches[sb as usize].band;
+                            bands[band as usize].push((sb, di as u32));
+                        }
+                    }
+                    p => legacy[p as usize].push(di as u32),
+                }
+            }
+            let eye = frame.eye;
+            bands[BAND_BLEND as usize].sort_by(|(a, _), (b, _)| {
+                let da = (world.centroids[world.stage_batches[*a as usize].batch as usize] - eye)
+                    .length_squared();
+                let db = (world.centroids[world.stage_batches[*b as usize].batch as usize] - eye)
+                    .length_squared();
+                db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            world.frame_draws.clear();
+            for &di in &legacy[Pass::Opaque as usize] {
+                world.frame_draws.push(FrameDraw {
+                    kind: DrawRef::Legacy(Pass::Opaque),
+                    src: di,
+                });
+            }
+            for &(sb, di) in &bands[BAND_OPAQUE as usize] {
+                world.frame_draws.push(FrameDraw {
+                    kind: DrawRef::Stage(sb),
+                    src: di,
+                });
+            }
+            for pass in [Pass::Prop, Pass::Layer, Pass::Overlay] {
+                for &di in &legacy[pass as usize] {
+                    world.frame_draws.push(FrameDraw {
+                        kind: DrawRef::Legacy(pass),
+                        src: di,
+                    });
+                }
+            }
+            for band in [BAND_DECAL, BAND_SEETHROUGH, BAND_BLEND, BAND_ADDITIVE] {
+                for &(sb, di) in &bands[band as usize] {
+                    world.frame_draws.push(FrameDraw {
+                        kind: DrawRef::Stage(sb),
+                        src: di,
+                    });
+                }
+            }
+            world.stage_draws_last = world
+                .frame_draws
+                .iter()
+                .filter(|fd| matches!(fd.kind, DrawRef::Stage(_)))
+                .count();
             // in Locked and Off the gathered set is the same every frame
             let unchanged = frame.cull != CullMode::On && world.last_cull == Some(frame.cull);
             if !unchanged {
@@ -1826,21 +2186,54 @@ impl Renderer {
             if let Some(world) = &self.world {
                 pass.set_vertex_buffer(0, world.vertex_buf.slice(..));
                 pass.set_index_buffer(world.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                for (pipeline, want) in [
-                    (&self.pipeline, Pass::Opaque),
-                    (&self.prop_pipeline, Pass::Prop),
-                    (&self.layer_pipeline, Pass::Layer),
-                    (&self.overlay_pipeline, Pass::Overlay),
-                ] {
-                    pass.set_pipeline(pipeline);
-                    for draw in &world.draws {
-                        let call = &world.batch_draws[draw.batch as usize];
-                        if call.pass != want {
-                            continue;
+                // The flat list mixes two pipeline layouts; switch only on change.
+                #[derive(Copy, Clone, PartialEq)]
+                enum Bound {
+                    Legacy(Pass),
+                    Stage(StageVariant, bool, bool),
+                }
+                let mut bound: Option<Bound> = None;
+                for fd in &world.frame_draws {
+                    let draw = &world.draws[fd.src as usize];
+                    match fd.kind {
+                        DrawRef::Legacy(want) => {
+                            if bound != Some(Bound::Legacy(want)) {
+                                pass.set_pipeline(match want {
+                                    Pass::Opaque => &self.pipeline,
+                                    Pass::Prop => &self.prop_pipeline,
+                                    Pass::Layer => &self.layer_pipeline,
+                                    Pass::Overlay => &self.overlay_pipeline,
+                                    Pass::Stage => continue,
+                                });
+                                bound = Some(Bound::Legacy(want));
+                            }
+                            let call = &world.batch_draws[draw.batch as usize];
+                            pass.set_bind_group(1, &world.bind_groups[call.bind_group], &[]);
                         }
-                        pass.set_bind_group(1, &world.bind_groups[call.bind_group], &[]);
-                        pass.draw_indexed(draw.first..draw.first + draw.count, 0, 0..1);
+                        DrawRef::Stage(sb_idx) => {
+                            let sb = &world.stage_batches[sb_idx as usize];
+                            let key = Bound::Stage(sb.variant, sb.two_sided, sb.bias);
+                            if bound != Some(key) {
+                                pass.set_pipeline(self.stage_pipeline(
+                                    sb.variant,
+                                    sb.two_sided,
+                                    sb.bias,
+                                ));
+                                bound = Some(key);
+                            }
+                            // animMap stages pick their frame per draw
+                            pass.set_bind_group(1, sb.mat.bind_group(frame.time), &[]);
+                            pass.set_bind_group(
+                                2,
+                                sb.stage.bind_group(frame.time),
+                                &[
+                                    u32::try_from(u64::from(sb.slot) * world.stage_params_stride)
+                                        .unwrap_or(0),
+                                ],
+                            );
+                        }
                     }
+                    pass.draw_indexed(draw.first..draw.first + draw.count, 0, 0..1);
                 }
             }
 
@@ -3005,6 +3398,35 @@ fn upload_rgba(
     texture.create_view(&Default::default())
 }
 
+/// Resolves a bundle image path through the asset probe chain; a missing
+/// file warns and lands in the checkerboard. Views are deduped per load.
+fn upload_bundle_view(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    fs: &Pk3Fs,
+    cache: &mut HashMap<String, wgpu::TextureView>,
+    path: &str,
+) -> wgpu::TextureView {
+    if let Some(v) = cache.get(path) {
+        return v.clone();
+    }
+    // script paths may carry a real extension; try as-is, then probe exts
+    let img = if fs.contains(path) {
+        assets::load_path_image(fs, path)
+    } else {
+        match assets::probe_image_path(fs, path) {
+            Some(full) => assets::load_path_image(fs, &full),
+            None => {
+                log::warn!("shader image {path} not found, using checkerboard");
+                assets::checkerboard()
+            }
+        }
+    };
+    let v = upload_image(device, queue, path, &img);
+    cache.insert(path.to_string(), v.clone());
+    v
+}
+
 fn fallback_pixels() -> Vec<u8> {
     match assets::checkerboard().data {
         ImageData::Rgba8(px) => px,
@@ -3471,5 +3893,157 @@ mod tests {
         assert_eq!(anim_frame_index(-1.0, 3, 5.0), 0);
         assert_eq!(anim_frame_index(5.0, 0, 5.0), 0);
         assert_eq!(anim_frame_index(5.0, 3, -1.0), 0);
+    }
+
+    // ---- StageBatch classification ----
+
+    use vcod_common::shader::{SkyParms, SurfaceBits};
+
+    /// One-bundle shader from blend pair plus top-level knobs.
+    fn script(
+        blend: Option<(BlendFactor, BlendFactor)>,
+        sort: Option<f32>,
+        offset: bool,
+    ) -> Shader {
+        Shader {
+            name: "test/script".into(),
+            stages: vec![Stage {
+                bundles: vec![Bundle {
+                    image: ImageRef::Path("a".into()),
+                    anim: None,
+                    clamp: false,
+                    tcmods: vec![],
+                    vector: None,
+                }],
+                blend,
+                depth_write: None,
+                alpha_func: None,
+                rgb_gen: RgbGen::Identity,
+                alpha_gen: AlphaGen::Identity,
+            }],
+            sort,
+            polygon_offset: offset,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn opaque_and_blend_variants_follow_class_and_depth_write() {
+        let (v, _, _, band) = stage_draw_facts(&script(None, None, false), 0).unwrap();
+        assert_eq!(v, StageVariant::Opaque);
+        assert_eq!(band, BAND_OPAQUE);
+
+        let alpha = Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha));
+        // plain blends land in the back-to-front band
+        let (v, _, _, band) = stage_draw_facts(&script(alpha.clone(), None, false), 0).unwrap();
+        assert_eq!(v, StageVariant::Blend);
+        assert_eq!(band, BAND_BLEND);
+
+        // explicit depthWrite keeps writing
+        let mut sh = script(alpha, None, false);
+        sh.stages[0].depth_write = Some(true);
+        assert_eq!(
+            stage_draw_facts(&sh, 0).unwrap().0,
+            StageVariant::BlendDepthWrite
+        );
+
+        // default sorts put unblended-but-offset scripts in the decal slot
+        let (_, _, _, band) = stage_draw_facts(&script(None, None, true), 0).unwrap();
+        assert_eq!(band, BAND_DECAL);
+        let (_, _, _, band) =
+            stage_draw_facts(&script(None, Some(SORT_DECAL - 1.0), false), 0).unwrap();
+        assert_eq!(band, BAND_OPAQUE);
+    }
+
+    /// Additive depthWrite must reach the pipeline (Task-6 carry-over): the
+    /// variants exist instead of silently drawing without depth writes.
+    #[test]
+    fn additive_depth_write_selects_a_depth_writing_variant() {
+        let one_one = Some((BlendFactor::One, BlendFactor::One));
+        let src_one = Some((BlendFactor::SrcAlpha, BlendFactor::One));
+
+        let mut sh = script(one_one, None, false);
+        assert_eq!(
+            stage_draw_facts(&sh, 0).unwrap().0,
+            StageVariant::AdditiveFixed
+        );
+        sh.stages[0].depth_write = Some(true);
+        assert_eq!(
+            stage_draw_facts(&sh, 0).unwrap().0,
+            StageVariant::AdditiveFixedDepthWrite
+        );
+
+        let mut sh = script(src_one, None, false);
+        assert_eq!(
+            stage_draw_facts(&sh, 0).unwrap().0,
+            StageVariant::AdditiveFaded
+        );
+        sh.stages[0].depth_write = Some(true);
+        assert_eq!(
+            stage_draw_facts(&sh, 0).unwrap().0,
+            StageVariant::AdditiveFadedDepthWrite
+        );
+        // additives always emit last regardless of sort
+        assert_eq!(stage_draw_facts(&sh, 0).unwrap().3, BAND_ADDITIVE);
+    }
+
+    #[test]
+    fn sort_bands_split_seethrough_from_blend() {
+        let alpha = Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha));
+        for (sort, want) in [
+            (Some(4.0), BAND_DECAL),
+            (Some(4.5), BAND_SEETHROUGH),
+            (Some(8.75), BAND_SEETHROUGH),
+            (Some(9.0), BAND_BLEND),
+            (None, BAND_BLEND),
+        ] {
+            let (_, _, _, band) = stage_draw_facts(&script(alpha.clone(), sort, false), 0).unwrap();
+            assert_eq!(band, want, "sort {sort:?}");
+        }
+    }
+
+    #[test]
+    fn animated_params_track_tcmods_and_wave_gens() {
+        let mut sh = script(None, None, false);
+        assert!(!stage_animated(&sh, 0));
+        sh.stages[0].bundles[0].tcmods.push(TcMod::Scroll(0.1, 0.0));
+        assert!(stage_animated(&sh, 0));
+
+        let mut sh = script(None, None, false);
+        sh.stages[0].rgb_gen = RgbGen::Wave(Wave {
+            form: WaveForm::Sin,
+            base: 1.0,
+            amp: 0.0,
+            phase: 0.0,
+            freq: 1.0,
+        });
+        assert!(stage_animated(&sh, 0));
+
+        // scale/transform are static affines; no rewrite needed
+        let mut sh = script(None, None, false);
+        sh.stages[0].bundles[0].tcmods.push(TcMod::Scale(2.0, 2.0));
+        assert!(!stage_animated(&sh, 0));
+    }
+
+    /// Sky materials classify through their block's surface bits so the sky
+    /// pass can pick them up.
+    #[test]
+    fn surface_bits_carry_sky_and_nodraw_classification() {
+        let mut bits = SurfaceBits::default();
+        assert!(!bits.sky && !bits.nodraw);
+        bits.sky = true;
+        let sh = Shader {
+            name: "test/sky".into(),
+            stages: vec![],
+            sky: Some(SkyParms {
+                env: "textures/skies/x".into(),
+                cloud_height: 512.0,
+            }),
+            surface: bits.clone(),
+            ..Default::default()
+        };
+        // either signal routes to Sky at load time
+        assert!(sh.surface.sky || sh.sky.is_some());
+        assert!(mesh::material_kind("textures/skies/x", true, false, true) == MaterialKind::Sky);
     }
 }
