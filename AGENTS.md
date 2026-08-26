@@ -212,6 +212,10 @@ decompiler output or disassembly listings.
   when they fired, cues refused because every pool slot was held by
   higher-priority voices (or kira's own cap hit), and voices evicted by the
   steal rule.
+- A stock map load logs roughly 360-415 unique ShaderLib warnings, each once;
+  the corpus is full of tokens vcod skips by design (hw-path stages, fog
+  keywords), so the count is noise. The F3 `shader:` line shows it as
+  `warns`; shader-script facts live in `docs/research/cod11-shader-scripts.md`.
 - `--connect` opens the window before the gamestate arrives; the
   connecting/loading phases draw HUD text only.
 - Movement constants come from retail rodata, not community lore: the table

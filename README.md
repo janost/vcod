@@ -16,7 +16,9 @@ combat effects.
 ## What it does today
 
 - Loads any stock or custom map from an installed copy of the game and
-  renders it textured, lightmapped, props included. Fly around freely.
+  renders it textured, lightmapped, props included. Skies, water, fences,
+  foliage and terrain detail blends draw through their authored Q3-style
+  shader scripts. Fly around freely.
 - `--walk` spawns you as a soldier with Quake 3 derived movement: gravity,
   stances, stepping, wall sliding, leaning, and the kar98k viewmodel playing
   the game's own xanim clips.
@@ -115,8 +117,10 @@ vcod mp_pavlov --game-dir /path/to/CallOfDuty
 - The first positional argument is the map name (case-insensitive).
 - `--list` prints every `.bsp` in the search path instead of opening a window.
 - `--mod-dir` selects which subdirectory's pk3s to index: `main` for retail
-  CoD1 (default). `uo` for United Offensive is accepted but untested; nothing
-  proves its maps load.
+  CoD1 (default), `uo` for United Offensive. Only one directory mounts at a
+  time, so a UO map whose art ships in `main/` shows checkerboards; noville
+  was flown this way and renders apart from that. Anything beyond noville is
+  untested.
 - `--walk` starts at a player spawn point as a collidable soldier. Needs a map
   with a spawn entity and collidable geometry.
 - `--connect ip:port` spectates a live server. To find a populated one, the
@@ -189,15 +193,21 @@ These work in every mode:
   up as hard-edged dark patches.
 - Props are lit by the compiler's per-entity `lightingPrecalc` tint, one
   colour for the whole model. The engine samples its light grid per vertex.
-- No shader effects: Q3-style shader script semantics (blending, animation,
-  scrolling) aren't implemented.
+- Shader scripts drive skies, water and blends, but the tail of the grammar
+  is missing: no fog (`fogvars` and friends parse and do nothing), no
+  `deformVertexes` so ocean waves draw flat, the `sunfile` sun disc is not
+  drawn, and NV/ATI hardware-path stages are dropped exactly as retail dropped
+  them on machines without those extensions. Engine-generated `$dlight`
+  bundle images and the ship's deckflag texture have no file to load and draw
+  checkerboard (neuville windows, mp_ship flag decks). Details in
+  [docs/research/cod11-shader-scripts.md](docs/research/cod11-shader-scripts.md).
 - Visibility follows the retail cells and portals but without the portal
   bevel planes and the brushmodel occluder volumes, so a little more is drawn
   through doorways than retail draws. Outside every cell (fly mode above the
   map) only the frustum culls, and a cell whose top is below the camera is
   frustum-culled directly: retail assumes nobody looks over a cell's walls.
-- Alpha surfaces (foliage, fences) are alpha-tested only, and they collide as
-  drawn, so a bush or a wire fence stops the player like a solid wall.
+- Foliage, fences and other alpha-cutout surfaces collide as drawn, so a bush
+  or a wire fence stops the player like a solid wall.
 - Submodels (doors, exploding walls) collide by their brush hulls, but only
   as static geometry: no entity-driven movers, so there is nothing to ride.
 - Bullet impacts in walk mode are one generic mark plus a smoke puff. Marks
@@ -228,9 +238,10 @@ These work in every mode:
 - [docs/research/](docs/research/): per-subsystem notes recovered from the
   binaries and confirmed live: the BSP, xmodel and xanim formats, the
   clientState stream, the player model and animation system, the event and
-  effect tables, the efx grammar, the HUD protocol, the sound system, and the
-  retail server's handshake. Each claim cites the module and address it rests
-  on and says whether it was verified live or inferred.
+  effect tables, the efx grammar, the HUD protocol, the sound system, the
+  retail server's handshake, and the shader scripts. Each claim cites the
+  module and address it rests on and says whether it was verified live or
+  inferred.
 - [tools/re/](tools/re/): the small scripts used to pull tables out of the
   binaries (event enum, netfield tables, xrefs, a Ghidra export script) and
   the disassembly notes for the Linux server.

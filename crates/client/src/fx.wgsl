@@ -2,7 +2,7 @@
 // multiplies the texture. `fs_main` is straight alpha, `fs_additive` is
 // `GL_ONE GL_ONE` for glow materials (`assets::Shaders::additive`).
 
-struct Camera { view_proj: mat4x4<f32> }
+struct Camera { view_proj: mat4x4<f32>, time_pad: vec4<f32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;

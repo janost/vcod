@@ -1,7 +1,10 @@
 // Snapshot entities: GPU-skinned xmodel instances in world space. Unlit; a
 // fixed key light stands in for the engine's light grid.
 
-struct Camera { view_proj: mat4x4<f32> };
+struct Camera {
+    view_proj: mat4x4<f32>,
+    time_pad: vec4<f32>, // .x = seconds since start; yzw reserved
+};
 @group(0) @binding(0) var<uniform> camera: Camera;
 
 struct FxLights {

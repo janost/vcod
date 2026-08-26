@@ -623,7 +623,7 @@ impl Bsp {
         let mut materials = Vec::new();
         for soup in &self.soups[model.first_soup as usize..][..model.num_soups as usize] {
             let material = &self.materials[soup.material as usize];
-            if crate::mesh::should_skip(material) {
+            if crate::mesh::implicit_kind(&material.name) != crate::mesh::MaterialKind::Draw {
                 continue;
             }
             let fv = soup.first_vertex as usize;

@@ -7,6 +7,7 @@ mod hud_text;
 mod loading;
 mod probe;
 mod renderer;
+mod sky;
 mod viewmodel;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -250,6 +251,11 @@ fn hud_lines(
     ));
     let (hud_quads, hud_ms, hud_unknown) = hud_counts;
     lines.push(format!("hud q{hud_quads} {hud_ms:.2}ms unk {hud_unknown}"));
+    let (stage_draws, dropped, warns) = r.shader_stats();
+    lines.push(format!(
+        "shader: sky {}  stages {stage_draws}  dropped {dropped}  warns {warns}",
+        r.sky_name().unwrap_or("none")
+    ));
     lines.push(format!(
         "audio v{} plays {} miss {} cull {} drop {} steal {} {:.2}ms",
         audio.voices,
@@ -658,6 +664,7 @@ fn loading_frame(
             aspect,
         ),
         eye: Vec3::ZERO,
+        time: now,
         cull,
         hud_lines: vec![text],
     }
@@ -1081,6 +1088,7 @@ impl ApplicationHandler for App {
                             renderer::Frame {
                                 view_proj: cam.view_proj(aspect),
                                 eye: cam.pos,
+                                time,
                                 cull,
                                 hud_lines: Vec::new(),
                             },
@@ -1481,6 +1489,7 @@ impl ApplicationHandler for App {
                                     renderer::Frame {
                                         view_proj: cam.view_proj(aspect),
                                         eye: cam.pos,
+                                        time,
                                         cull,
                                         hud_lines: Vec::new(),
                                     }
@@ -1599,6 +1608,7 @@ impl ApplicationHandler for App {
                                     v.eye, v.yaw, v.pitch, v.roll, fov, aspect,
                                 ),
                                 eye: v.eye,
+                                time,
                                 cull,
                                 hud_lines: Vec::new(),
                             },
