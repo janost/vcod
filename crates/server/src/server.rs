@@ -48,6 +48,10 @@ const CLC_MOVE_NO_DELTA: i32 = 1;
 const CLC_CLIENT_COMMAND: i32 = 2;
 const CLC_EOF: i32 = 3;
 const MAX_PACKET_USERCMDS: u8 = 32;
+/// Retail's `MAX_CLIENTS`. Client slots index a 6-bit wire field
+/// (clientState entries; `ps.clientNum` gets 8), so more than 64 would
+/// collide silently.
+const MAX_CLIENTS: usize = 64;
 
 pub struct ServerConfig {
     pub map: String,
@@ -197,7 +201,8 @@ fn write_pending_commands(w: &mut MsgWriter, nc: &ServerNetchan, from_ack: i32) 
 }
 
 impl Server {
-    pub fn new(cfg: ServerConfig, now: Instant) -> Self {
+    pub fn new(mut cfg: ServerConfig, now: Instant) -> Self {
+        cfg.max_clients = cfg.max_clients.min(MAX_CLIENTS);
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0x9e37_79b9_7f4a_7c15, |d| d.as_nanos() as u64)
