@@ -94,8 +94,9 @@ engineering setup works.
   the log shows whether the server still applies moves, dumps captures to
   `tmp/`, exits on drop. It also prints the model list at gamestate and flags
   per second any player/corpse whose body is not a `playerbody_*`, any client
-  body `modelindex` change, and any moving map prop, so a "wrong model" report
-  can be chased without the GUI. For audio it prints the ambient configstring
+  body `modelindex` change, each corpse's appear/vanish with its lifetime and
+  the dead client's `modelindex`, and any moving map prop, so a "wrong model"
+  report can be chased without the GUI. For audio it prints the ambient configstring
   3, the `CS_SOUNDS` (524+) alias block at gamestate and every later update
   inside it, each `EV_SOUND_ALIAS` with its resolved alias name and origin,
   every `loopSound` transition, and every server command the client does not
