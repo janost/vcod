@@ -160,6 +160,15 @@ accepts deliberately (full parity). The alternative - shipping our own
 `.voice` files built from `dialog_mp.csv` - would be new game data, not RE,
 and is out of scope.
 
+A live sweep against three populated public servers (2026-08-26,
+`51.195.89.86:28960` TDM, `167.235.192.175:23120`, `13.60.184.96:28962`
+S&D, 75-90 s each) sent no `j`/`k`/`l` command at all. All three are
+moddedicated servers (`g_scriptMainMenu` sets `team_*`, `i`/`f`/`v`/`t`/
+`n`/`h`/`s` commands, `MPSCRIPT_*`/`scr_fm_*` text), which relay voice
+lines through `s <idx>`/events instead. The stock `j`/`k`/`l` path remains
+unobserved live and is not exercised by the current public-server
+population.
+
 ## vcod behaviour and deliberate divergences
 
 - Parser: `crates/common/src/voicechat.rs`, mirrors the grammar above
