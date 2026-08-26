@@ -261,19 +261,22 @@ fn alphafunc_pass(a: f32) -> bool {
 }
 
 // Authored shader-script stage: multiply up to two bundles, tint and vertex
-// colour per flags, discard by alphaFunc. The lightmap is just another bundle
-// here, so no implicit shade() boost or fx lights.
+// colour per flags, discard by alphaFunc. A $lightmap bundle carries the same
+// x2 overbright and fx-light term as shade(), so a staged surface matches the
+// implicit-path surface it is coplanar with (terrain overlays over base ground).
 @fragment
 fn fs_stage(in: VsOut) -> @location(0) vec4<f32> {
     var c0: vec4<f32>;
     if ((stage.flags & F_BUNDLE0_LIGHTMAP) != 0u) {
-        c0 = textureSample(t_lightmap, s_lightmap, in.uv);
+        let lm = textureSample(t_lightmap, s_lightmap, in.uv);
+        c0 = vec4<f32>(lm.rgb * 2.0 + fx_light_term(in.world_pos), lm.a);
     } else {
         c0 = textureSample(t_diffuse, s_diffuse, in.uv);
     }
     var c1: vec4<f32>;
     if ((stage.flags & F_BUNDLE1_LIGHTMAP) != 0u) {
-        c1 = textureSample(t_lightmap, s_lightmap, in.uv1);
+        let lm = textureSample(t_lightmap, s_lightmap, in.uv1);
+        c1 = vec4<f32>(lm.rgb * 2.0 + fx_light_term(in.world_pos), lm.a);
     } else {
         // white (or the lightmap page) is bound when bundle 1 has no image
         c1 = textureSample(t_bundle1, s_diffuse, in.uv1);
