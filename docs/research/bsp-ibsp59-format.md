@@ -246,9 +246,25 @@ Census over all 49 stock maps (SP and MP) in `pak[0-4].pk3` pins two more bits, 
 - **Water is `content_flags & 0x20`**, Q3's `CONTENTS_WATER` value unchanged. Every liquid texture carries it (`textures/common/water` 0x28000020 = translucent+detail+water, `textures/sfx/*water*` 0x20000020 or 0x28000020, bare waterfalls 0x20); no other low bit behaves like a fluid, and lava/slime (Q3 0x8/0x10) never appear on a brush-referenced material. Of the stock MP maps only mp_harbor has water brushes.
 - **Ladders are `surface_flags & 0x8`** (Q3's `SURF_LADDER`) on `textures/common/ladder`, whose brushes are playerclip (content 0x28010000 = translucent+detail+playerclip). The flag rides the material, so a trace hit can read it from the brush's material word without new lumps. Nine of the fourteen stock MP maps carry ladder brushes: bocage, depot, harbor, powcamp, railyard, rocket, ship, stalingrad, tigertown. Because they are playerclip they are already inside vcod's collision mask - today you walk into them as solid walls; ladder climbing takes over when the forward detection trace sees the flag.
 
+### Soup-side content words
+
+The same census run per soup material (the `flag_census` example, names printed for soup uses) splits the world-model soups into collidable and walk-through classes, all VERIFIED by lump decoding:
+
+| content word | soup use | materials |
+|---|---|---|
+| `0x1` | ~2900 | every solid wall/floor/terrain-with-brushes surface |
+| `0x4` bare | 72 | brushless terrain (`a_grass1a/b`, `dirt_earthbase`, snow, rubble) and in-wall decals |
+| `0x10000`/`0x30000` + TRANSLUCENT | 213 | masked metal/wood fences (`ironfence1a`, `barbed_fence1`, `rooflattice`) - PLAYERCLIP/MONSTERCLIP |
+| `0x20000004` | 385 | ground/wall decals (`decal@road512`, plugo patches) |
+| `0x20000002`/`0x2` | 71 | foliage bushwalls, treelines, background trees |
+| `0x8000000` | 14 | autosprite2 masked wire fences |
+| `0x20000020`/`0x20` | 21 | sfx water planes |
+
+vcod's rule (VERIFIED as data, the retail behaviour INFERRED from the bit names): a soup collides when its material carries `0x1` or `0x10000`, or is bare `0x4` (brushless terrain normalized to solid); everything else drops out of the collision build. So bushes and decals are walk-through, while masked wire/iron fences keep stopping players. Bullets sweep solids only (`shot_trace`), so they pass playerclip-only geometry like Q3/RTCW's MASK_SHOT; not yet checked against `Bullet_Fire_Extended` in the retail binary.
+
 ## Terrain has no brushes
 
-Ground-level spawns on mp_pavlov sit 200 or more units above the first brush below them (bedrock at z = -192). Terrain and patch surfaces exist only as render triangle soups, so brush collision alone drops the player through the ground and a triangle collider is required, not a fallback. `CollisionWorld::build` harvests every triangle of every soup whose material lacks the sky flag, from all models, skipping degenerate triangles (cross product under 1e-6) and padding each triangle's AABB by 0.25 units before building the BVH. Brushes and triangles are then swept with the same Q3 `CM_TraceThroughBrush` clip against plane sets expanded by the box (triangles get face, axis and edge-cross bevels).
+Ground-level spawns on mp_pavlov sit 200 or more units above the first brush below them (bedrock at z = -192). Terrain and patch surfaces exist only as render triangle soups, so brush collision alone drops the player through the ground and a triangle collider is required, not a fallback. `CollisionWorld::build` harvests the world model's soups (submodel meshes are replaced by their brush hulls), skipping sky materials and everything the soup-side content-word rule above drops, plus degenerate triangles (cross product under 1e-6); each triangle's AABB is padded by 0.25 units before building the BVH. Brushes and triangles are then swept with the same Q3 `CM_TraceThroughBrush` clip against plane sets expanded by the box (triangles get face, axis and edge-cross bevels).
 
 ## Movement constants and their provenance
 

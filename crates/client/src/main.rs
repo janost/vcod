@@ -124,7 +124,8 @@ enum Mode {
         phase: Phase,
     },
     Walk {
-        world: collision::CollisionWorld,
+        /// Boxed to keep the variants a similar size.
+        world: Box<collision::CollisionWorld>,
         ps: pmove::PlayerState,
         input: pmove::PmInput,
         keys: WalkKeys,
@@ -133,12 +134,19 @@ enum Mode {
         /// statically. Boxed to keep the variants a similar size.
         view_weapon: Option<Box<ViewWeapon>>,
         /// Minimal configstring table so weapon cues resolve through the same
-        /// path as spectate: CS 7 carries the one local weapon.
+        /// path as spectate: CS 7 carries [`WALK_LOADOUT`].
         configstrings: Vec<String>,
+        /// Active index into [`WALK_LOADOUT`].
+        weapon_slot: usize,
+        /// Rounds behind the clip; refilled per weapon from its file.
+        reserve: u32,
+        /// Digit press latched until the next redraw loads that slot.
+        switch_to: Option<usize>,
         /// Raw counts since the last frame, drained into the sway once per redraw.
         mouse_delta: (f32, f32),
-        /// Press edges latched until the next redraw; `ads_held` is level.
+        /// Press edges latched until the next redraw; `ads_held`/`fire_held` are level.
         fire_edge: bool,
+        fire_held: bool,
         reload_edge: bool,
         ads_held: bool,
     },
@@ -160,6 +168,30 @@ struct WalkKeys {
     s: bool,
     a: bool,
     d: bool,
+}
+
+/// The walk-mode arsenal on number keys 1..=N: every retail archetype (semi
+/// pistol, full-auto SMGs, auto rifle, big-clip bolt rifle) plus kar98k as
+/// the baseline. Files carry `semiAuto`, `startAmmo`, `adsBobFactor`.
+const WALK_LOADOUT: [&str; 6] = [
+    "colt_mp",
+    "thompson_mp",
+    "mp40_mp",
+    "mp44_mp",
+    "enfield_mp",
+    "kar98k_mp",
+];
+
+fn digit_slot(code: KeyCode) -> Option<usize> {
+    Some(match code {
+        KeyCode::Digit1 => 0,
+        KeyCode::Digit2 => 1,
+        KeyCode::Digit3 => 2,
+        KeyCode::Digit4 => 3,
+        KeyCode::Digit5 => 4,
+        KeyCode::Digit6 => 5,
+        _ => return None,
+    })
 }
 
 impl WalkKeys {
@@ -404,7 +436,7 @@ fn main() -> Result<()> {
     };
 
     let (viewmodel, view_weapon) = if args.walk && net_client.is_none() {
-        load_view_weapon(&fs).unwrap_or_else(|| {
+        load_view_weapon(&fs, "kar98k_mp").unwrap_or_else(|| {
             log::warn!("no viewmodel; walking without one");
             (Vec::new(), None)
         })
@@ -475,7 +507,7 @@ fn main() -> Result<()> {
     println!("click to capture mouse, Esc to release");
     if args.walk {
         println!("WASD move, Space jump, Ctrl crouch, Z prone, Q/E lean, Shift walk");
-        println!("LMB fire, RMB aim, R reload");
+        println!("LMB fire, RMB aim, R reload, 1-6 weapons");
     } else if args.connect.is_some() {
         println!("WASD move (server-authoritative), mouse look; look up/down to ascend/descend");
     } else {
@@ -729,19 +761,28 @@ fn walk_mode(
     }
 
     let mut configstrings = vec![String::new(); 8];
-    // `entityState.weapon` is 1-based into CS 7; walk mode carries one weapon.
-    configstrings[7] = "kar98k_mp".to_string();
+    // `entityState.weapon` is 1-based into CS 7; walk mode carries the loadout.
+    configstrings[7] = WALK_LOADOUT.join(" ");
+    let start_slot = WALK_LOADOUT
+        .iter()
+        .position(|&w| w == "kar98k_mp")
+        .unwrap_or(0);
+    let reserve = view_weapon.as_ref().map_or(0, |w| w.def.start_ammo);
 
     Ok(Mode::Walk {
-        world,
+        world: Box::new(world),
         ps,
         input: pmove::PmInput::default(),
         keys: WalkKeys::default(),
         motion: viewmodel::ViewmodelMotion::new(),
         view_weapon,
         configstrings,
+        weapon_slot: start_slot,
+        reserve,
+        switch_to: None,
         mouse_delta: (0.0, 0.0),
         fire_edge: false,
+        fire_held: false,
         reload_edge: false,
         ads_held: false,
     })
@@ -750,8 +791,11 @@ fn walk_mode(
 /// Hands first so the gun draws over them and the shared skeleton takes the
 /// hands' bones as its base. `None` if a model is missing (walk mode then has
 /// no viewmodel); the inner `None` means the models loaded but the anims did not.
-fn load_view_weapon(fs: &Pk3Fs) -> Option<(Vec<xmodel::XModel>, Option<Box<ViewWeapon>>)> {
-    let text = fs.read("weapons/mp/kar98k_mp")?;
+fn load_view_weapon(
+    fs: &Pk3Fs,
+    name: &str,
+) -> Option<(Vec<xmodel::XModel>, Option<Box<ViewWeapon>>)> {
+    let text = fs.read(&format!("weapons/mp/{name}"))?;
     let weapon = xmodel::parse_weapon(&String::from_utf8_lossy(&text));
     let mut models = Vec::new();
     for key in ["handModel", "gunModel"] {
@@ -887,6 +931,7 @@ impl App {
                 input,
                 keys,
                 fire_edge,
+                fire_held,
                 reload_edge,
                 ads_held,
                 ..
@@ -898,6 +943,7 @@ impl App {
                 input.lean_left = false;
                 input.lean_right = false;
                 *fire_edge = false;
+                *fire_held = false;
                 *reload_edge = false;
                 *ads_held = false;
             }
@@ -1012,6 +1058,7 @@ impl ApplicationHandler for App {
                         input,
                         keys,
                         reload_edge,
+                        switch_to,
                         ..
                     } => match code {
                         // weapon actions count only while the mouse is captured
@@ -1026,7 +1073,13 @@ impl ApplicationHandler for App {
                         KeyCode::KeyQ => input.lean_left = pressed,
                         KeyCode::KeyE => input.lean_right = pressed,
                         KeyCode::ShiftLeft => input.walk_slow = pressed,
-                        _ => {}
+                        _ => {
+                            if pressed && grabbed {
+                                if let Some(slot) = digit_slot(code) {
+                                    *switch_to = Some(slot);
+                                }
+                            }
+                        }
                     },
                 }
             }
@@ -1044,6 +1097,7 @@ impl ApplicationHandler for App {
                 }
                 let Mode::Walk {
                     fire_edge,
+                    fire_held,
                     ads_held,
                     ..
                 } = &mut self.mode
@@ -1051,7 +1105,11 @@ impl ApplicationHandler for App {
                     return;
                 };
                 match button {
-                    MouseButton::Left if pressed => *fire_edge = true,
+                    MouseButton::Left if pressed => {
+                        *fire_edge = true;
+                        *fire_held = true;
+                    }
+                    MouseButton::Left => *fire_held = false,
                     MouseButton::Right => *ads_held = pressed,
                     _ => {}
                 }
@@ -1518,8 +1576,12 @@ impl ApplicationHandler for App {
                         motion,
                         view_weapon,
                         configstrings,
+                        weapon_slot,
+                        reserve,
+                        switch_to,
                         mouse_delta,
                         fire_edge,
+                        fire_held,
                         reload_edge,
                         ads_held,
                     } => {
@@ -1528,6 +1590,25 @@ impl ApplicationHandler for App {
                         // ahead of its muzzle.
                         let fx_t0 = Instant::now();
                         self.fx.step(dt, time, Some(&*world));
+
+                        if let Some(slot) = switch_to.take() {
+                            if slot != *weapon_slot && slot < WALK_LOADOUT.len() {
+                                let name = WALK_LOADOUT[slot];
+                                match load_view_weapon(&self.fs, name) {
+                                    Some((models, vw)) => {
+                                        r.set_viewmodel(&self.fs, &models);
+                                        *reserve = vw.as_ref().map_or(0, |w| w.def.start_ammo);
+                                        self.viewmodel = models;
+                                        *view_weapon = vw;
+                                        *weapon_slot = slot;
+                                    }
+                                    None => log::warn!(
+                                        "weapon {name} failed to load; keeping {}",
+                                        WALK_LOADOUT[*weapon_slot]
+                                    ),
+                                }
+                            }
+                        }
 
                         (input.forward, input.right) = keys.axes();
                         for ev in pmove::pmove(ps, input, world, dt) {
@@ -1569,6 +1650,7 @@ impl ApplicationHandler for App {
                                 dt,
                                 weapon::WeaponInput {
                                     fire: *fire_edge,
+                                    fire_held: *fire_held,
                                     ads: *ads_held,
                                     reload: *reload_edge,
                                 },
@@ -1588,7 +1670,15 @@ impl ApplicationHandler for App {
                             fov = camera::DEFAULT_FOV_DEG
                                 + (w.def.ads_zoom_fov - camera::DEFAULT_FOV_DEG) * out.ads_frac;
                             damp = 1.0 + (w.def.ads_view_bob_mult - 1.0) * out.ads_frac;
+                            damp *= 1.0 + (w.def.ads_bob_factor - 1.0) * out.ads_frac;
                             if let Some(cue) = out.cue {
+                                if matches!(
+                                    cue,
+                                    weapon::WeaponCue::Reload | weapon::WeaponCue::ReloadFromEmpty
+                                ) {
+                                    let need = w.def.clip_size.saturating_sub(w.state.ammo());
+                                    *reserve -= need.min(*reserve);
+                                }
                                 self.audio.on_game_event(
                                     &self.fs,
                                     &net::events::GameEvent {
@@ -1611,7 +1701,8 @@ impl ApplicationHandler for App {
                                         parm: 0,
                                         entity_num: u32::MAX,
                                         client_num: -1,
-                                        weapon: 1,
+                                        // 1-based CS7 index of the active loadout slot
+                                        weapon: *weapon_slot as i32 + 1,
                                         surf_type: 0,
                                         pos: ps.origin.to_array(),
                                         dir: [0.0; 3],
@@ -1625,27 +1716,48 @@ impl ApplicationHandler for App {
                             if out.fired {
                                 /// Q3/CoD bullet trace length.
                                 const FIRE_RANGE: f32 = 8192.0;
-                                // a point trace: bullets are not boxes
-                                let tr = world.box_trace(
-                                    v.eye,
-                                    v.eye + eye_forward * FIRE_RANGE,
-                                    Vec3::ZERO,
-                                    Vec3::ZERO,
-                                );
+                                // a point trace against solids only: playerclip-only
+                                // geometry stops movement but not bullets
+                                let tr = world.shot_trace(v.eye, v.eye + eye_forward * FIRE_RANGE);
                                 // A muzzle inside solid returns no normal, which
                                 // would build a NaN quad that never leaves the ring.
                                 if tr.fraction < 1.0 && !tr.startsolid {
-                                    let sounds = self.fx.spawn(
-                                        &self.fs,
-                                        // no surface type locally, so the csv's default row
-                                        "fx/impacts/default_hit.efx",
-                                        fx::sim::SpawnAt::Surface {
-                                            pos: tr.endpos,
-                                            normal: tr.normal,
-                                        },
-                                        time,
+                                    // Same csv resolution as a server-driven hit:
+                                    // surfType rides the surface flags' bits 20-24.
+                                    let mut muzzles = HashMap::new();
+                                    muzzles.insert(
+                                        u32::MAX,
+                                        (v.eye + eye_forward * 16.0 - Vec3::Z * 2.0, eye_forward),
                                     );
-                                    self.audio.play_fx(&self.fs, sounds);
+                                    let ctx = fx::registry::ResolveCtx {
+                                        muzzles: &muzzles,
+                                        weapon_flash: &HashMap::new(),
+                                    };
+                                    let ev = net::events::GameEvent {
+                                        event: fx::registry::EV_BULLET_HIT_SMALL,
+                                        parm: net::events::dir_to_byte(tr.normal.to_array()),
+                                        entity_num: u32::MAX,
+                                        client_num: -1,
+                                        weapon: *weapon_slot as i32 + 1,
+                                        surf_type: collision::sound_material(tr.surface_flags),
+                                        pos: tr.endpos.to_array(),
+                                        dir: [0.0; 3],
+                                        other_entity_num: u32::MAX,
+                                        attacker_entity_num: -1,
+                                    };
+                                    for r in fx::registry::resolve(&ev, &ctx) {
+                                        match r {
+                                            fx::registry::Resolved::Spawn { path, at } => {
+                                                let sounds =
+                                                    self.fx.spawn(&self.fs, &path, at, time);
+                                                self.audio.play_fx(&self.fs, sounds);
+                                            }
+                                            fx::registry::Resolved::Tracer { muzzle, impact } => {
+                                                self.fx.spawn_tracer(muzzle, impact, time);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1676,7 +1788,13 @@ impl ApplicationHandler for App {
                                 eye: v.eye,
                                 time,
                                 cull,
-                                hud_lines: Vec::new(),
+                                hud_lines: vec![format!(
+                                    "[{}] {} {} / {}",
+                                    *weapon_slot + 1,
+                                    WALK_LOADOUT[*weapon_slot],
+                                    view_weapon.as_ref().map_or(0, |w| w.state.ammo()),
+                                    reserve
+                                )],
                             },
                             Some(renderer::VmDraw {
                                 transform: motion.transform(),
@@ -1769,7 +1887,7 @@ mod tests {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
-        let (models, view_weapon) = load_view_weapon(&fs).expect("kar98k viewmodel");
+        let (models, view_weapon) = load_view_weapon(&fs, "kar98k_mp").expect("kar98k viewmodel");
         assert_eq!(models.len(), 2);
         let mut w = view_weapon.expect("kar98k anim rig");
         assert!(
@@ -1784,6 +1902,7 @@ mod tests {
                 1.0 / 60.0,
                 weapon::WeaponInput {
                     fire: step > 60 && step % 40 == 0,
+                    fire_held: false,
                     ads: step > 120,
                     reload: false,
                 },
