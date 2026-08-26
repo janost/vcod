@@ -2,7 +2,11 @@
 //! silently otherwise (same gate as every game-data test).
 
 use std::collections::BTreeSet;
-use vcod_common::{bsp, pk3::Pk3Fs, shader::ShaderLib};
+use vcod_common::{
+    assets, bsp,
+    pk3::Pk3Fs,
+    shader::{ImageRef, ShaderLib},
+};
 
 /// A `Pk3Fs` over symlinks to only the stock `pak<N>.pk3` archives, so
 /// third-party paks downloaded into main/ cannot move the census numbers.
@@ -83,5 +87,74 @@ fn stock_shader_corpus_census() {
     assert!(
         (250..350).contains(&reference_sum),
         "{reference_sum} world-referenced shader blocks, expected the 250..350 band"
+    );
+}
+
+/// Stage image paths allowed to miss every stock pak.
+/// - `$dlight` is CoD's engine-generated dlight blob (perlight stages, e.g.
+///   pak9 window.shader:29), never a file.
+/// - `textures/battleship/deckflag_np.tga` (mp_ship flagfore/flagaft second
+///   bundle, pak4 jeff.shader:603) ships in no stock pak under any extension;
+///   retail binds its default image there too.
+const UNRESOLVED_STAGE_IMAGES: &[&str] = &["$dlight", "textures/battleship/deckflag_np.tga"];
+
+/// Every stage image path of every authored material on every stock MP map
+/// must resolve through the renderer's probe chain
+/// (`assets::resolve_bundle_image`). Fails listing unresolved paths - catches
+/// probe regressions and silent checkerboard fallbacks.
+#[test]
+fn stock_mp_stage_images_resolve() {
+    let Some((_tmp, fs)) = stock_paks() else {
+        return;
+    };
+    let lib = ShaderLib::load(&fs);
+    let maps: Vec<String> = fs
+        .find_maps()
+        .into_iter()
+        .filter(|m| m.starts_with("mp_"))
+        .collect();
+    assert!(!maps.is_empty(), "no MP maps found in stock paks");
+
+    let mut unresolved: BTreeSet<String> = BTreeSet::new();
+    let mut checked = 0usize;
+    for map in &maps {
+        let entry = fs.resolve_map(map).unwrap();
+        let b = bsp::parse(&fs.read(&entry).unwrap()).unwrap();
+        let mats: BTreeSet<String> = b
+            .soups
+            .iter()
+            .map(|s| {
+                b.materials[s.material as usize]
+                    .name
+                    .to_lowercase()
+                    .replace('\\', "/")
+            })
+            .collect();
+        for mat in &mats {
+            let Some(sh) = lib.get(mat) else { continue };
+            for st in &sh.stages {
+                for bundle in &st.bundles {
+                    let mut paths: Vec<&str> = match &bundle.image {
+                        ImageRef::Path(p) => vec![p.as_str()],
+                        _ => vec![],
+                    };
+                    if let Some(anim) = &bundle.anim {
+                        paths.extend(anim.paths.iter().map(String::as_str));
+                    }
+                    for p in paths {
+                        checked += 1;
+                        let resolved = assets::resolve_bundle_image(&fs, p).is_some();
+                        if !resolved && !UNRESOLVED_STAGE_IMAGES.contains(&p) {
+                            unresolved.insert(p.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        unresolved.is_empty(),
+        "{checked} stage image paths checked, {} unresolved: {unresolved:?}",
+        unresolved.len()
     );
 }
