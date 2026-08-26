@@ -216,6 +216,19 @@ fn fs_layer(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(apply_fog(shade(in, albedo), in.world_pos), albedo.a * in.color.a);
 }
 
+// Coplanar shadow decals (`shadow_*` / `*_shadow` props): soft-edged dark
+// skins, so the sampled alpha reaches the blend; nearly-empty texels discard
+// to save the overdraw.
+@fragment
+fn fs_prop_decal(in: VsOut) -> @location(0) vec4<f32> {
+    let albedo = textureSample(t_diffuse, s_diffuse, in.uv);
+    if (albedo.a < 0.01) { discard; }
+    return vec4<f32>(
+        apply_fog(shade(in, albedo), in.world_pos) * albedo.a * in.color.a,
+        albedo.a * in.color.a,
+    );
+}
+
 // alphaFunc decode; GE128 carries both low bits so test the pair first.
 fn alphafunc_pass(a: f32) -> bool {
     if ((stage.flags & F_AF_GE128) == F_AF_GE128) {

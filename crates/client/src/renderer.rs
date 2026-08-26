@@ -70,6 +70,7 @@ const _: () = assert!(std::mem::size_of::<FxVert>() == 36);
 enum Pass {
     Opaque,
     Prop,
+    PropDecal,
     Layer,
     Overlay,
     Stage,
@@ -1303,6 +1304,7 @@ pub struct Renderer {
     depth_view: wgpu::TextureView,
     pipeline: wgpu::RenderPipeline,
     prop_pipeline: wgpu::RenderPipeline,
+    prop_decal_pipeline: wgpu::RenderPipeline,
     layer_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
     /// `[variant][two_sided][bias]`; built at startup so shader.wgsl validates
@@ -1643,8 +1645,8 @@ impl Renderer {
         // Props take the opaque alpha-test path: `*_masked` skins are cutouts
         // on real geometry, not coplanar decals, so no overlay depth bias.
         // Unculled like the viewmodel (xmodel winding), and foliage cross
-        // planes need both sides anyway. Known gap: shadow-decal props
-        // (shadow_tree_*, shadow_crate) are coplanar decals and z-fight here.
+        // planes need both sides anyway. Shadow-decal props go through
+        // `prop_decal_pipeline` instead.
         let prop_pipeline = make_pipeline(
             "prop pipeline",
             &pipeline_layout,
@@ -1654,6 +1656,20 @@ impl Renderer {
             false,
             None,
             true,
+            None,
+        );
+        // Coplanar shadow decals (`shadow_*` / `*_shadow`) pull toward the
+        // viewer and alpha-blend, so they sit on the ground instead of
+        // z-fighting against it.
+        let prop_decal_pipeline = make_pipeline(
+            "prop decal pipeline",
+            &pipeline_layout,
+            "vs_main",
+            bias,
+            "fs_prop_decal",
+            false,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+            false,
             None,
         );
         // Blend layers alpha-blend over the base ground by vertex alpha. No
@@ -1765,6 +1781,7 @@ impl Renderer {
             depth_view,
             pipeline,
             prop_pipeline,
+            prop_decal_pipeline,
             layer_pipeline,
             overlay_pipeline,
             stage_pipelines,
@@ -2010,16 +2027,21 @@ impl Renderer {
             });
             batch_draws.push(DrawCall {
                 bind_group: idx,
-                pass: Pass::Prop,
+                pass: if batch.shadow_decal {
+                    Pass::PropDecal
+                } else {
+                    Pass::Prop
+                },
             });
         }
 
         let count = |p: Pass| batch_draws.iter().filter(|d| d.pass == p).count();
         println!(
-            "{} batches ({} opaque, {} prop, {} layer, {} overlay), {} draw indices, {} vertices",
+            "{} batches ({} opaque, {} prop, {} prop decal, {} layer, {} overlay), {} draw indices, {} vertices",
             batch_draws.len(),
             count(Pass::Opaque),
             count(Pass::Prop),
+            count(Pass::PropDecal),
             count(Pass::Layer),
             count(Pass::Overlay),
             indices.len(),
@@ -2788,7 +2810,7 @@ impl Renderer {
             // Emission order: opaque (legacy then staged cutouts), props, the
             // legacy biased passes, the staged decal slot, see-through blends,
             // back-to-front blends, additives. Sky soups are not in `draws`.
-            let mut legacy: [Vec<u32>; 4] = Default::default();
+            let mut legacy: [Vec<u32>; 5] = Default::default();
             let mut bands: [Vec<(u32, u32)>; 5] = Default::default();
             for (di, d) in world.draws.iter().enumerate() {
                 match world.batch_draws[d.batch as usize].pass {
@@ -2822,7 +2844,7 @@ impl Renderer {
                     src: di,
                 });
             }
-            for pass in [Pass::Prop, Pass::Layer, Pass::Overlay] {
+            for pass in [Pass::Prop, Pass::PropDecal, Pass::Layer, Pass::Overlay] {
                 for &di in &legacy[pass as usize] {
                     world.frame_draws.push(FrameDraw {
                         kind: DrawRef::Legacy(pass),
@@ -3080,6 +3102,7 @@ impl Renderer {
                                 pass.set_pipeline(match want {
                                     Pass::Opaque => &self.pipeline,
                                     Pass::Prop => &self.prop_pipeline,
+                                    Pass::PropDecal => &self.prop_decal_pipeline,
                                     Pass::Layer => &self.layer_pipeline,
                                     Pass::Overlay => &self.overlay_pipeline,
                                     Pass::Stage => continue,
