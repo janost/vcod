@@ -413,15 +413,17 @@ fn main() -> Result<()> {
     } else if args.walk {
         walk_mode(&map, &bsp, &fs, view_weapon)?
     } else {
-        Mode::Fly(match bsp::find_spawn(&bsp.entities) {
-            Some((origin, yaw)) => FlyCamera::new(Vec3::from(origin) + Vec3::Z * 60.0, yaw),
+        // TEMPORARY diagnostic override; remove before committing.
+        let fly = match bsp::find_spawn(&bsp.entities) {
+            Some((origin, yaw)) => (Vec3::from(origin) + Vec3::Z * 60.0, yaw),
             None => {
                 let (min, max) = mesh::map_bounds(&bsp);
                 let center = (Vec3::from(min) + Vec3::from(max)) * 0.5;
                 log::warn!("no player spawn found, starting at the center of the map");
-                FlyCamera::new(center, 0.0)
+                (center, 0.0)
             }
-        })
+        };
+        Mode::Fly(FlyCamera::new(fly.0, fly.1))
     };
 
     println!("click to capture mouse, Esc to release");

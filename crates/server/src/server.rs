@@ -196,11 +196,6 @@ fn challenge_arg(arg: &str) -> String {
 
 /// `SV_UpdateServerCommandsToClient`. The caller bounds `from_ack` to
 /// `0..=reliable_sequence`, so the range is empty or inside the ring.
-/// Throwaway diagnostic gate; remove with its two eprintln sites.
-fn netlog_enabled() -> bool {
-    std::env::var_os("VCOD_NETLOG").is_some()
-}
-
 fn write_pending_commands(w: &mut MsgWriter, nc: &ServerNetchan, from_ack: i32) {
     for seq in (from_ack + 1)..=(nc.reliable_sequence as i32) {
         msg::write_server_command(
@@ -836,11 +831,9 @@ impl Server {
             // SV_UserMove: one pmove step per usercmd, dt off the cmd clocks.
             // Stale cmds (dt <= 0) are skipped whole; a flood past the per-tick
             // cap resyncs to the newest cmd and keeps only the tail.
-            let mut nl_cmd = NULL_USERCMD;
             let mut processed = 0usize;
             while !c.pending.is_empty() {
                 let cmd = c.pending[0];
-                nl_cmd = cmd;
                 if processed >= MAX_CMDS_PER_TICK {
                     c.last_processed_st =
                         c.pending.last().unwrap().server_time.wrapping_sub(FRAME_MS);
@@ -858,22 +851,6 @@ impl Server {
                 processed += 1;
             }
             let command_time = c.last_processed_st.max(self.sv_time_ms - FRAME_MS);
-            // Throwaway diagnostic (VCOD_NETLOG): the commandTime stream a
-            // client sees, and its raw cmd clock beside it.
-            if netlog_enabled() {
-                eprintln!(
-                    "NETLOG snap t={} slot={} ct={command_time} raw_st={} fwd={} up={} o=[{:.1},{:.1},{:.1}] yaw={:.1}",
-                    self.sv_time_ms,
-                    slot,
-                    nl_cmd.server_time,
-                    nl_cmd.forward,
-                    nl_cmd.up,
-                    sim.ps.origin.x,
-                    sim.ps.origin.y,
-                    sim.ps.origin.z,
-                    sim.ps.yaw.to_degrees()
-                );
-            }
             let wire = sim.to_wire(self.proto, slot as i32, command_time);
 
             let mut w = MsgWriter::new(&self.huff);
