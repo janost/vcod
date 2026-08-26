@@ -20,6 +20,11 @@ use vcod_common::xmodel::{self, XModel};
 /// `legsAnim`/`torsoAnim`: anim index in the low 9 bits, restart toggle in bit 512.
 const ANIM_INDEX_MASK: i32 = 511;
 
+/// Cross-fade length when a channel switches clips. Retail blends animtree
+/// nodes per-transition; one flat engine-scale value covers the visible cases
+/// (stance and movement changes).
+const ANIM_BLEND_MS: i32 = 200;
+
 /// How long an entity's anim state survives unseen. Long enough to ride out PVS
 /// churn, short enough that a player who left drops.
 const STATE_TTL_MS: i32 = 5000;
@@ -44,7 +49,7 @@ pub const ET_SCRIPTMOVER: i32 = 8;
 pub const ET_EVENTS: i32 = 12;
 
 /// What one snapshot entity draws as.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EntityVisual {
     /// Body xmodel name plus up to 6 (model name, tag name) attachments.
     Player {
@@ -364,10 +369,15 @@ fn finalize_assembly(pending: PendingAssembly) -> Option<Rc<Assembly>> {
 /// One anim channel (legs or torso). `raw` is the last wire value; the server
 /// flips the toggle bit on every anim (re)start, the only signal that a repeat
 /// of the same anim should restart from frame 0.
+#[derive(Clone, Copy)]
 struct Channel {
     raw: i32,
     /// Render-clock time the current playback started at.
     start_ms: i32,
+    /// The clip playing before the last switch, kept for the cross-fade:
+    /// `(raw, start_ms)`. `None` once the fade is over, on a same-clip
+    /// restart (re-fires stay snappy), and before the first anim.
+    prev: Option<(i32, i32)>,
 }
 
 impl Channel {
@@ -376,6 +386,7 @@ impl Channel {
         Channel {
             raw: -1,
             start_ms: 0,
+            prev: None,
         }
     }
 
@@ -388,6 +399,8 @@ impl Channel {
         if self.raw == raw {
             return false; // same anim, same toggle: keep the phase
         }
+        let switched_clip = self.raw >= 0 && (self.raw ^ raw) & ANIM_INDEX_MASK != 0;
+        self.prev = switched_clip.then_some((self.raw, self.start_ms));
         self.raw = raw;
         self.start_ms = now_ms;
         true
@@ -582,6 +595,11 @@ struct EntityAnim {
     /// `Skeleton::bind` per clip name. Small enough to keep per entity.
     bindings: HashMap<String, AnimBinding>,
     last_seen_ms: i32,
+    /// Roster-resolved visual from the last frame this entity resolved (body
+    /// plus attachments, no held weapon). A corpse re-resolves through the
+    /// dead client's live roster entry, which clears when they drop to limbo;
+    /// the corpse then draws this instead of vanishing.
+    visual: EntityVisual,
 }
 
 impl EntityAnim {
@@ -593,6 +611,7 @@ impl EntityAnim {
             torso: Channel::new(),
             bindings: HashMap::new(),
             last_seen_ms: now_ms,
+            visual: EntityVisual::None,
         }
     }
 }
@@ -832,7 +851,18 @@ pub fn build_instances(
         if num as i32 == skip_num {
             continue; // the body the camera is inside, if the server sends it
         }
-        let visual = resolve_visual(ent, &b.clients, configstrings, p);
+        let etype = ent.field_i32(p, "eType");
+        let mut visual = resolve_visual(ent, &b.clients, configstrings, p);
+        // A corpse carries no model of its own; it resolves through the dead
+        // client's roster entry, which clears when they enter limbo. Fall back
+        // to the visual cached while the corpse (or the player it copies) was
+        // still resolvable, instead of dropping the body with it.
+        if matches!(visual, EntityVisual::None) && etype == ET_CORPSE {
+            let cn = ent.field_i32(p, "clientNum") as u32;
+            if let Some(st) = states.get(&num).or_else(|| states.get(&cn)) {
+                visual = st.visual.clone();
+            }
+        }
         if matches!(visual, EntityVisual::None) {
             continue;
         }
@@ -901,6 +931,12 @@ pub fn build_instances(
                 body,
                 mut attachments,
             } => {
+                // Kept before the held weapon joins: the corpse fallback
+                // re-resolves the weapon from its own entityState.
+                let roster_visual = EntityVisual::Player {
+                    body: body.clone(),
+                    attachments: attachments.clone(),
+                };
                 // The held weapon is one more attachment on tag_weapon_right,
                 // so a weapon switch changes the assembly key like a gear change.
                 let weapon_index = ent.field_i32(p, "weapon");
@@ -934,9 +970,21 @@ pub fn build_instances(
                 ) else {
                     continue;
                 };
-                let st = states.entry(num).or_insert_with(|| {
-                    EntityAnim::new(key.clone(), &assembly.skeleton, render_time)
-                });
+                if !states.contains_key(&num) {
+                    let mut ea = EntityAnim::new(key.clone(), &assembly.skeleton, render_time);
+                    // A corpse is the dead player's entityState copied to a
+                    // fresh number; carry that entity's channels so the death
+                    // clip keeps its phase instead of replaying from frame 0.
+                    if etype == ET_CORPSE {
+                        let cn = ent.field_i32(p, "clientNum") as u32;
+                        if let Some(src) = states.get(&cn) {
+                            ea.legs = src.legs;
+                            ea.torso = src.torso;
+                        }
+                    }
+                    states.insert(num, ea);
+                }
+                let st = states.get_mut(&num).expect("inserted above");
                 if st.key != key {
                     // Channels hold only the wire index and start time, so
                     // carry them across a loadout change instead of restarting
@@ -950,8 +998,10 @@ pub fn build_instances(
                         torso,
                         bindings: HashMap::new(),
                         last_seen_ms: st.last_seen_ms,
+                        visual: EntityVisual::None,
                     };
                 }
+                st.visual = roster_visual;
                 st.last_seen_ms = render_time;
                 stats.anim_restarts +=
                     u64::from(st.legs.update(ent.field_i32(p, "legsAnim"), render_time));
@@ -977,21 +1027,46 @@ pub fn build_instances(
                     let lean = lerp_field("leanf");
 
                     // Legs first: `pb_*` keys the whole body, then `pt_*`
-                    // overwrites only the bones it keys.
-                    for ch in [&st.legs, &st.torso] {
+                    // overwrites only the bones it keys. A clip switch
+                    // cross-fades from the outgoing clip: retail smooths
+                    // stance/movement changes by blending animtree nodes,
+                    // there are no transition clips in multiplayer.atr.
+                    for ch in [&mut st.legs, &mut st.torso] {
                         let Some(name) = clip_name(anims, ch.index(), pitch, 0.0) else {
                             continue;
                         };
                         let Some(clip) = load_clip(clips, fs, name) else {
                             continue;
                         };
+                        let fade = (render_time - ch.start_ms) as f32 / ANIM_BLEND_MS as f32;
+                        if fade >= 1.0 {
+                            ch.prev = None;
+                        }
+                        if let Some((praw, pstart)) = ch.prev {
+                            let pclip = clip_name(anims, praw & ANIM_INDEX_MASK, pitch, 0.0)
+                                .map(|n| (n.to_string(), load_clip(clips, fs, n)));
+                            if let Some((pname, Some(pclip))) = pclip {
+                                let pb = st
+                                    .bindings
+                                    .entry(pname)
+                                    .or_insert_with(|| assembly.skeleton.bind(&pclip));
+                                let pt = (render_time - pstart).max(0) as f32 / 1000.0;
+                                st.pose
+                                    .apply(&pclip, pb, pclip.frame_pos(pt, pclip.looping));
+                            }
+                        }
                         let binding = st
                             .bindings
                             .entry(name.to_string())
                             .or_insert_with(|| assembly.skeleton.bind(&clip));
                         let t = (render_time - ch.start_ms).max(0) as f32 / 1000.0;
+                        let w = if ch.prev.is_some() {
+                            fade.max(0.0)
+                        } else {
+                            1.0
+                        };
                         st.pose
-                            .apply(&clip, binding, clip.frame_pos(t, clip.looping));
+                            .apply_weighted(&clip, binding, clip.frame_pos(t, clip.looping), w);
                     }
 
                     // Corpses keep their death-clip pose; their aim fields are
@@ -1232,14 +1307,14 @@ mod tests {
 
     #[test]
     fn toggle_bit_restarts_channel() {
-        let mut ch = Channel {
-            raw: -1,
-            start_ms: 0,
-        };
+        let mut ch = Channel::new();
         assert!(ch.update(5, 1000)); // first sight: (re)start
+        assert_eq!(ch.prev, None); // nothing to fade from
         assert!(!ch.update(5, 1500)); // same raw: keep phase
         assert!(ch.update(5 | 512, 2000)); // toggle flip: restart
+        assert_eq!(ch.prev, None); // same clip re-trigger: no fade
         assert!(ch.update(6 | 512, 2500)); // index change: restart
+        assert_eq!(ch.prev, Some((5 | 512, 2000))); // fade from the old clip
         assert_eq!(ch.index(), 6);
         assert_eq!(ch.start_ms, 2500);
     }

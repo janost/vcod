@@ -235,6 +235,8 @@ pub fn probe(
 #[derive(Default)]
 struct ProbeWatch {
     client_models: std::collections::HashMap<u32, i32>,
+    /// Live eType-2 corpses: entity -> (clientNum, first-seen serverTime).
+    corpses: std::collections::HashMap<u32, (i32, i32)>,
     prop_origins: std::collections::HashMap<u32, (String, [f32; 3])>,
     loop_sounds: std::collections::HashMap<u32, i32>,
     events: vcod_common::net::events::EventTracker,
@@ -280,6 +282,38 @@ impl ProbeWatch {
                         name(mi)
                     );
                 }
+            }
+        }
+        // Corpse lifecycle (1 Hz, so times are +-1 s): a corpse resolves
+        // through the dead client's roster entry, so log appear/vanish with
+        // that entry's modelindex - the evidence for how long the wire keeps
+        // bodies and whether the roster clears first.
+        let mi_of = |cn: i32| {
+            s.clients
+                .get(&(cn as u32))
+                .map_or(-1, |c| c.field_i32(p, "modelindex"))
+        };
+        self.corpses.retain(|&num, &mut (cn, t0)| {
+            if s.entities.contains_key(&num) {
+                return true;
+            }
+            println!(
+                "corpse {num} gone after {} ms (clientNum {cn} modelindex {})",
+                s.server_time - t0,
+                mi_of(cn)
+            );
+            false
+        });
+        for (&num, ent) in &s.entities {
+            if ent.field_i32(p, "eType") == crate::entities::ET_CORPSE {
+                let cn = ent.field_i32(p, "clientNum");
+                self.corpses.entry(num).or_insert_with(|| {
+                    println!(
+                        "corpse {num} appeared clientNum {cn} modelindex {}",
+                        mi_of(cn)
+                    );
+                    (cn, s.server_time)
+                });
             }
         }
         for (&num, ent) in &s.entities {
