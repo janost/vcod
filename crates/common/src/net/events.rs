@@ -104,6 +104,21 @@ pub fn byte_to_dir(b: i32) -> [f32; 3] {
     }
 }
 
+/// Nearest table entry by dot product: what a server writes into `eventParm`
+/// when it emits a wall hit from its own trace normal.
+pub fn dir_to_byte(dir: [f32; 3]) -> i32 {
+    let mut best = 0;
+    let mut best_dot = f32::MIN;
+    for (i, v) in BYTE_DIRS.iter().enumerate() {
+        let d = v[0] * dir[0] + v[1] * dir[1] + v[2] * dir[2];
+        if d > best_dot {
+            best_dot = d;
+            best = i as i32;
+        }
+    }
+    best
+}
+
 pub struct EventTracker {
     /// Per-entity eventSequence at the last drain.
     seq: HashMap<u32, i32>,
@@ -435,6 +450,19 @@ mod tests {
             let len_sq: f32 = v.iter().map(|x| x * x).sum();
             assert!((len_sq - 1.0).abs() < 1e-4, "{v:?} len_sq={len_sq}");
         }
+    }
+
+    #[test]
+    fn dir_to_byte_round_trips_every_entry() {
+        for b in 0..162 {
+            assert_eq!(dir_to_byte(byte_to_dir(b)), b, "entry {b}");
+        }
+    }
+
+    #[test]
+    fn dir_to_byte_snaps_a_trace_normal_to_the_nearest_entry() {
+        let decoded = byte_to_dir(dir_to_byte([0.0, 0.0, 1.0]));
+        assert!(decoded[2] > 0.85, "{decoded:?}");
     }
 
     #[test]

@@ -125,6 +125,14 @@ pub struct WeaponDef {
     pub ads_trans_out: f32,
     pub ads_zoom_fov: f32, // DEFAULT_FOV means no zoom
     pub ads_view_bob_mult: f32,
+    /// Second ADS bob multiplier the files carry separately; 1.0 changes
+    /// nothing, thompson/springfield ship 0 (bob frozen when fully aimed).
+    /// Semantics INFERRED from the values; no decompilation evidence yet.
+    pub ads_bob_factor: f32,
+    /// `semiAuto 0` fires while the button is held at `fireTime` cadence.
+    pub semi_auto: bool,
+    /// Reserve rounds behind the clip (`startAmmo`).
+    pub start_ammo: u32,
     pub bolt_action: bool,
     /// Dropped-weapon xmodel, `xmodel/` prefix stripped.
     pub world_model: Option<String>,
@@ -204,6 +212,9 @@ impl WeaponDef {
             ads_trans_out: parse_f32(map, "adsTransOutTime", 0.0),
             ads_zoom_fov: parse_f32(map, "adsZoomFov", DEFAULT_FOV),
             ads_view_bob_mult: parse_f32(map, "adsViewBobMult", 1.0),
+            ads_bob_factor: parse_f32(map, "adsBobFactor", 1.0),
+            semi_auto: parse_bool(map, "semiAuto", true),
+            start_ammo: parse_u32(map, "startAmmo", 0),
             bolt_action: parse_bool(map, "boltAction", false),
             world_model: map
                 .get("worldModel")
@@ -219,9 +230,10 @@ impl WeaponDef {
 /// Debounced by the caller.
 #[derive(Default, Copy, Clone)]
 pub struct WeaponInput {
-    pub fire: bool,   // LMB edge this frame
-    pub ads: bool,    // RMB held
-    pub reload: bool, // R edge this frame
+    pub fire: bool,      // LMB edge this frame
+    pub fire_held: bool, // LMB down; only full-auto (`semiAuto 0`) acts on it
+    pub ads: bool,       // RMB held
+    pub reload: bool,    // R edge this frame
 }
 
 pub struct WeaponOut {
@@ -292,7 +304,9 @@ impl WeaponState {
             // No input buffering; RMB still integrates below.
             State::Raising | State::Firing | State::Rechambering | State::Reloading => {}
             State::Idle | State::AdsIdle | State::AdsUp | State::AdsDown => {
-                if input.fire && self.ammo > 0 {
+                let trigger =
+                    input.fire || (!self.def.semi_auto && input.fire_held);
+                if trigger && self.ammo > 0 {
                     self.enter_firing();
                     fired = true;
                 } else if input.reload && self.ammo < self.def.clip_size {
@@ -312,7 +326,7 @@ impl WeaponState {
         self.integrate_ads_frac(dt, input.ads);
 
         if self.t >= self.duration() {
-            self.complete(input.ads);
+            self.complete(input.ads, input.fire_held, &mut fired);
         }
 
         self.output(fired)
@@ -407,15 +421,25 @@ impl WeaponState {
         }
     }
 
-    fn complete(&mut self, ads: bool) {
+    fn complete(&mut self, ads: bool, fire_held: bool, fired: &mut bool) {
         match self.state {
-            State::Raising => self.enter(State::Idle, 0.0),
+            State::Raising => {
+                if !self.def.semi_auto && fire_held && self.ammo > 0 {
+                    self.enter_firing();
+                    *fired = true;
+                } else {
+                    self.enter(State::Idle, 0.0);
+                }
+            }
             State::AdsUp => self.enter(State::AdsIdle, 0.0),
             State::AdsDown => self.enter(State::Idle, 0.0),
             State::Firing => {
                 if self.def.bolt_action && self.ammo > 0 {
                     self.pending_cue = Some(WeaponCue::Rechamber);
                     self.enter(State::Rechambering, 0.0);
+                } else if !self.def.semi_auto && fire_held && self.ammo > 0 {
+                    self.enter_firing();
+                    *fired = true;
                 } else {
                     self.goto_ads(ads);
                 }
@@ -498,6 +522,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn retail_files_parse_semi_auto_start_ammo_and_ads_bob() {        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let kar = load(&fs, "kar98k_mp").unwrap();
+        assert!(kar.semi_auto);
+        assert_eq!(kar.start_ammo, 60);
+        assert!((kar.ads_bob_factor - 1.0).abs() < 1e-6);
+        let thompson = load(&fs, "thompson_mp").unwrap();
+        assert!(!thompson.semi_auto, "thompson is full-auto");
+        assert_eq!(thompson.start_ammo, 270);
+        assert_eq!(thompson.ads_bob_factor, 0.0);
+    }
+
     fn def() -> WeaponDef {
         WeaponDef {
             clip_size: 5,
@@ -509,6 +547,9 @@ mod tests {
             ads_trans_out: 0.4,
             ads_zoom_fov: 50.0,
             ads_view_bob_mult: 0.2,
+            ads_bob_factor: 1.0,
+            semi_auto: true,
+            start_ammo: 60,
             bolt_action: true,
             world_model: None,
             world_flash_effect: None,
@@ -569,6 +610,75 @@ mod tests {
         };
         let out = w.update(1.0 / 60.0, reload);
         assert_eq!(out.cue, Some(WeaponCue::ReloadFromEmpty));
+    }
+
+    fn auto_def() -> WeaponDef {
+        WeaponDef {
+            semi_auto: false,
+            bolt_action: false,
+            fire_time: 0.12,
+            ..def()
+        }
+    }
+
+    #[test]
+    fn auto_weapon_refires_while_held_at_fire_cadence() {
+        let mut w = WeaponState::new(auto_def());
+        step(&mut w, 0.6, WeaponInput::default());
+        let press = WeaponInput {
+            fire: true,
+            fire_held: true,
+            ..Default::default()
+        };
+        assert!(w.update(1.0 / 60.0, press).fired);
+        let held = WeaponInput {
+            fire_held: true,
+            ..Default::default()
+        };
+        // 0.3 s at fire_time 0.12: exactly two more shots, no new edge needed
+        let mut shots = 0;
+        for _ in 0..18 {
+            shots += w.update(1.0 / 60.0, held).fired as usize;
+        }
+        assert_eq!(shots, 2, "one shot per fireTime while held");
+    }
+
+    #[test]
+    fn semi_weapon_needs_a_new_edge_per_shot() {
+        let mut d = def();
+        d.bolt_action = false;
+        let mut w = WeaponState::new(d);
+        step(&mut w, 0.6, WeaponInput::default());
+        let press = WeaponInput {
+            fire: true,
+            fire_held: true,
+            ..Default::default()
+        };
+        assert!(w.update(1.0 / 60.0, press).fired);
+        let held = WeaponInput {
+            fire_held: true,
+            ..Default::default()
+        };
+        let mut shots = 0;
+        for _ in 0..60 {
+            shots += w.update(1.0 / 60.0, held).fired as usize;
+        }
+        assert_eq!(shots, 0, "holding a semi-auto trigger must not refire");
+    }
+
+    #[test]
+    fn auto_starts_firing_when_the_button_is_already_down_after_raise() {
+        let mut w = WeaponState::new(auto_def());
+        let held = WeaponInput {
+            fire_held: true,
+            ..Default::default()
+        };
+        assert!(!w.update(1.0 / 60.0, held).fired, "still raising");
+        let mut shots = 0;
+        for _ in 0..40 {
+            shots += w.update(1.0 / 60.0, held).fired as usize;
+        }
+        assert_eq!(shots, 2, "fires on raise settle, then once more by 0.66 s");
     }
 
     #[test]
