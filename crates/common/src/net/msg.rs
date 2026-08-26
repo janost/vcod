@@ -774,15 +774,16 @@ fn fr_bucket(forward: i8, right: i8) -> i32 {
 /// one cmd, which retail also lives with.
 /// docs/protocol-1.1.md, "Client to server message body".
 pub fn write_delta_usercmd(w: &mut MsgWriter, key: i32, from: &UserCmd, to: &UserCmd) {
-    // serverTime: 1 = 8-bit delta from the base, 0 = 32-bit absolute.
-    let dt = to.server_time.wrapping_sub(from.server_time);
-    if (0..256).contains(&dt) {
-        w.write_bits(1, 1);
-        w.write_byte(dt as u8);
-    } else {
-        w.write_bits(0, 1);
-        w.write_long(to.server_time);
-    }
+    // serverTime preamble: 1 = 8-bit delta from the base, 0 = 32-bit absolute.
+    // The server decodes the 8-bit delta against its last *received* cmd, while
+    // `from` here is our last *sent* one. We send a single usercmd per message
+    // with no backup copies, so one dropped or reordered packet desyncs the two
+    // chains and the server then rejects every later cmd (commandTime freezes,
+    // spectator flight stops until reconnect). Retail's redundant backup cmds
+    // heal such a gap; lacking those, always send the absolute serverTime.
+    let _ = from;
+    w.write_bits(0, 1);
+    w.write_long(to.server_time);
 
     // Changed bit (!= key & 1), then the branch bit (== key & 1 picks compact).
     let full = to.up != from.up
@@ -1785,6 +1786,33 @@ mod tests {
 
     /// The count byte after a 2-bit clc op lands at the byte cursor, alone and
     /// behind a reliable `clc_clientCommand`.
+    /// The serverTime must survive a decode against a base the server never
+    /// received (a dropped usercmd): we send absolute time, so it reconstructs
+    /// correctly regardless of the server's stored base. An 8-bit delta anchored
+    /// to our last sent cmd would reconstruct wrong here and freeze commandTime.
+    #[test]
+    fn server_time_survives_a_gap_in_the_received_chain() {
+        let h = Huffman::new();
+        let key = 0x1122_3344i32;
+        let sent = UserCmd {
+            server_time: 100_500,
+            forward: 127,
+            ..NULL_USERCMD
+        };
+        // Our previous sent cmd was at 100_484 (16 ms back); the server, having
+        // dropped everything since NULL, decodes against server_time 0.
+        let our_prev = UserCmd {
+            server_time: 100_484,
+            ..NULL_USERCMD
+        };
+        let mut w = MsgWriter::new(&h);
+        write_delta_usercmd(&mut w, key, &our_prev, &sent);
+        let mut r = MsgReader::new(&w.finish(), &h);
+        let got = read_delta_usercmd(&mut r, key, &NULL_USERCMD).unwrap();
+        assert_eq!(got.server_time, 100_500);
+        assert_eq!(got.forward, 127);
+    }
+
     #[test]
     fn move_ops_count_reads_back() {
         let h = Huffman::new();
