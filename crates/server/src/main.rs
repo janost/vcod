@@ -1,5 +1,6 @@
 //! `vcod-server`, a CoD 1.1 dedicated server in progress. Answers browsers,
-//! accepts connections and sends the gamestate; no snapshots yet.
+//! accepts connections, sends the gamestate and uncompressed snapshots with
+//! spectator flight.
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -48,7 +49,7 @@ fn main() -> Result<()> {
     };
     // A corrupt map fails here rather than at first use.
     let bsp_bytes = fs.read(&bsp_path).context("reading the bsp")?;
-    vcod_common::bsp::parse(&bsp_bytes).context("parsing the bsp")?;
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).context("parsing the bsp")?;
 
     let sock = UdpSocket::bind(("0.0.0.0", args.port))
         .with_context(|| format!("binding udp/{}", args.port))?;
@@ -63,6 +64,7 @@ fn main() -> Result<()> {
         },
         Instant::now(),
     );
+    server.load_world(vcod_server::world::World::from_bsp(&bsp));
     let mut buf = vec![0u8; 65536];
     loop {
         let now = Instant::now();

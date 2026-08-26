@@ -10,6 +10,11 @@ use glam::Vec3;
 
 pub const GRAVITY: f32 = 800.0;
 pub const SPEED_RUN: f32 = 190.0;
+/// Wire `ps.speed` of a captured retail spectator.
+pub const SPEED_SPECTATOR: f32 = 400.0;
+/// Retail rodata 0x70860; a spectator's fly friction (Q3's PM_Friction with
+/// pm_spectatorfriction instead of the walk constant).
+pub const PM_SPECTATOR_FRICTION: f32 = 5.0;
 pub const SCALE_WALK: f32 = 0.4;
 pub const SCALE_CROUCH: f32 = 0.65;
 pub const SCALE_PRONE: f32 = 0.15;
@@ -533,6 +538,38 @@ fn landing_event(impact: f32, ps: &PlayerState) -> Option<PmEvent> {
         return None;
     };
     Some(PmEvent { event: id })
+}
+
+/// Q3 `bg_pmove.c` `PM_SpectatorMove` minus the noclip branch: fly
+/// accelerate, friction always, slide against the world, no ground stick
+/// and no stepping. Axes are usercmd values scaled to -1..1.
+pub fn spectator_move(
+    ps: &mut PlayerState,
+    forward: f32,
+    right: f32,
+    up: f32,
+    world: &CollisionWorld,
+    dt: f32,
+) {
+    let dt = dt.min(MAX_FRAME_MS / 1000.0);
+    ps.on_ground = false;
+    let fwd = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0);
+    let rt = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
+    let wishdir = (fwd * forward + rt * right + Vec3::Z * up).normalize_or_zero();
+    // Q3's PM_SpectatorMove applies PM_Friction unconditionally with
+    // `pm_spectatorfriction`; master's friction() gates ground friction on
+    // `on_ground`, which a flier never sets, so apply it here directly.
+    let speed = ps.velocity.length();
+    if speed < 1.0 {
+        ps.velocity.x = 0.0;
+        ps.velocity.y = 0.0;
+    } else {
+        let control = speed.max(PM_STOPSPEED);
+        let drop = control * PM_SPECTATOR_FRICTION * dt;
+        ps.velocity *= ((speed - drop) / speed).max(0.0);
+    }
+    accelerate(ps, wishdir, SPEED_SPECTATOR, PM_ACCELERATE, dt);
+    slide_move(ps, world, dt, false);
 }
 
 /// Standing back up needs headroom for the taller bbox.
@@ -2711,5 +2748,57 @@ mod tests {
             ps.origin
         );
         assert!(ps.on_ground && ps.waterjump_ms == 0.0, "{:?}", ps.origin);
+    }
+
+    const FULL: f32 = 127.0;
+
+    #[test]
+    fn spectator_flies_forward_at_spectator_speed() {
+        let w = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 90.0); // yaw 90 deg faces +Y
+        for _ in 0..250 {
+            spectator_move(&mut ps, FULL, 0.0, 0.0, &w, 1.0 / 125.0);
+        }
+        let h = ps.velocity.truncate().length();
+        assert!((h - SPEED_SPECTATOR).abs() < 6.0, "speed {h}");
+        assert!(ps.velocity.y > 350.0 && ps.velocity.x.abs() < 1.0);
+    }
+
+    #[test]
+    fn spectator_rises_with_upmove_and_stops_on_friction() {
+        let w = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        for _ in 0..63 {
+            spectator_move(&mut ps, 0.0, 0.0, FULL, &w, 1.0 / 125.0);
+        }
+        assert!(ps.velocity.z > 100.0, "climbing, vz {}", ps.velocity.z);
+        for _ in 0..250 {
+            spectator_move(&mut ps, 0.0, 0.0, 0.0, &w, 1.0 / 125.0);
+        }
+        assert!(ps.velocity.length() < 1.0, "friction must stop the fly");
+    }
+
+    #[test]
+    fn spectator_slides_along_walls() {
+        let w = test_world(&[(
+            Vec3::new(50.0, -400.0, -100.0),
+            Vec3::new(100.0, 400.0, 200.0),
+        )]);
+        let mut ps = PlayerState::spawn(Vec3::new(-200.0, 0.0, 30.0), 0.0);
+        // A hair of right input: dead-straight flight into an axial wall has
+        // nothing to slide with and stops dead, as in Q3.
+        for _ in 0..250 {
+            spectator_move(&mut ps, FULL, FULL * 0.3, 0.0, &w, 1.0 / 125.0);
+        }
+        assert!(
+            ps.origin.x < 50.0 - HALF_WIDTH + 1.0,
+            "blocked at {}",
+            ps.origin.x
+        );
+        assert!(
+            ps.origin.y.abs() > 50.0,
+            "slid along the wall to {}",
+            ps.origin
+        );
     }
 }

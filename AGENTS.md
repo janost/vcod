@@ -118,9 +118,10 @@ engineering setup works.
   question: when ours and retail disagree, retail is right, and the answer
   goes in a research doc with the bytes. It answers the handshake and
   gamestate but sends no snapshots to a lone spectator; snapshots need a
-  player in the game. `cargo run -p vcod-server -- <map>` runs **ours**, still
-  a skeleton: the handshake, the gamestate, client commands and moves, no
-  snapshots, so a connected client sits at the loaded map until it times out.
+  player in the game. `cargo run -p vcod-server -- <map>` runs **ours**:
+  the handshake, the gamestate, client commands and moves, and uncompressed
+  snapshots with pmove-driven spectator flight (no deltas, no entities, no
+  restarts yet).
 - Live captures so far came from populated public servers (a TDM server on
   2026-08-24, an S&D server on 2026-08-25); a 60-100 s capture during a round
   is enough to see every combat event. The master at
@@ -199,6 +200,7 @@ decompiler output or disassembly listings.
   agree. Both rings, and the scramble key that indexes them, are sized off it.
 - The server's per-client drop notice is the reliable command `w "<reason>"`
   (`SV_DropClient` 0x8085cf4). Bare `disconnect` only travels client to server.
+- The retail client omits unchanged usercmd fields (change-bit 0, angles included, relative to its previous sent cmd); the server must decode each message's delta chain against its stored last received cmd, not `NULL_USERCMD`, or every omission reads as zero — this was the retail client's "spectator flash" (one-frame view snaps, invisible until yaw first went nonzero).
 - A portal's plane faces out of its owning cell; the walk skips a portal when
   the eye is past it (`n·eye - dist > 1`). Two vcod additions to the walk:
   clipped portal polygons narrower than `SLIVER_EPS` are skipped (slivers at

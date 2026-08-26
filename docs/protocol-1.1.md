@@ -241,7 +241,7 @@ Preamble, both branches:
 | `0x807b8e6` | none | `to.buttons &= 0xfe` |
 | `0x807b900` | 1 bit | `== key & 1` selects the compact branch, otherwise the full branch at `0x807bba0` |
 
-Compact branch (`0x807b956`), the one a spectator needs and the one vcod's `write_delta_usercmd` emits. `key ^= to.serverTime` first, then:
+Compact branch (`0x807b956`), the one vcod's `write_delta_usercmd` emits when nothing the branch omits differs from the previous sent cmd (upmove, weapon, wbuttons and the upper button bits are full-branch only). `key ^= to.serverTime` first, then:
 
 | VA | Field | Wire | Keyed with |
 |---|---|---|---|
@@ -267,6 +267,8 @@ Full-field branch (`0x807bba0`). The serverTime is mixed into the key only after
 | `0x807c041` | `weapon` | change bit, then 6 bits | `key & 0x3f` | `from.weapon` |
 
 `flags` (offset 7) is never transmitted by either branch. `to.buttons` is rebuilt, not patched: bit 0 comes from the first field, and `0x807be45` clears bits 1-7 again before the 6-bit field is ORed back in shifted left by one (`add %al,%al`). The movement axes are never analog on the wire: each is a 2-bit code with a +/-10 deadzone (`> 10` sets bit 0, `< -10` sets bit 1) that decodes to 127, -127 or 0 (`0x807bb52` for forward/right, `0x807c013` for up), and the same derivation runs on the base cmd to produce the default, so a base `forward = 100` reads back as 127. Forward and right share one nibble (forward in bits 0/1, right in bits 2/3).
+
+The angle change bits are not vestigial: VERIFIED live 2026-08-26, a retail 1.1 client sent roughly 624 moves in a 3-minute session with a cleared change bit on pitch or yaw, keeping the previous sent cmd's angle instead of announcing it. Each one flashes the view to zero for a frame unless the server decodes it the same way retail does, against its persistent last received cmd for that client (`cl->lastUsercmd`, reset when the client enters the world like the client's own outCmd ring).
 
 Transcribed from disassembly. Widths and order VERIFIED live 2026-08-25: a retail 1.1 client's moves parsed against vcod's server for a whole session with no truncation error (`docs/research/cod11-server-handshake.md`, "Retail client check"). Field values are still unchecked, since the server parses and discards them.
 

@@ -1,8 +1,9 @@
-//! One connected client's server-side state (`client_t`). `Active` does not
-//! exist yet; nothing sends snapshots.
+//! One connected client's server-side state (`client_t`).
 
+use crate::spectate::SpectatorSim;
 use std::net::SocketAddr;
 use std::time::Instant;
+use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
 use vcod_common::net::netchan::{ClientMessage, ServerNetchan};
 
 /// `MAX_NAME_LENGTH`, a byte cap since the value is remote input.
@@ -14,6 +15,8 @@ pub enum ClientState {
     Connected,
     /// `CS_PRIMED`, gamestate sent, no move received yet.
     Primed,
+    /// `CS_ACTIVE`, flying.
+    Active,
 }
 
 pub struct Client {
@@ -31,7 +34,18 @@ pub struct Client {
     /// The client's `reliableAcknowledge`, what it has seen of our server commands.
     pub reliable_ack: i32,
     pub message_ack: i32,
-    pub enter_world_logged: bool,
+    /// The serverTime of the last usercmd the sim consumed; cmd-to-cmd
+    /// deltas drive the pmove dt, retail-style.
+    pub last_processed_st: i32,
+    /// Usercmds received but not yet replayed, oldest first. Bounded so a
+    /// flooded client cannot build unbounded latency.
+    pub pending: Vec<UserCmd>,
+    /// The last usercmd successfully decoded from this message stream; the
+    /// delta base for the next clc_move (`cl->lastUsercmd`). Omitted fields
+    /// decode against it, so it commits only after a whole message parses.
+    pub last_cmd: UserCmd,
+    /// Set once the client enters the world.
+    pub sim: Option<SpectatorSim>,
 }
 
 impl Client {
@@ -57,7 +71,10 @@ impl Client {
             last_client_command: 0,
             reliable_ack: 0,
             message_ack: 0,
-            enter_world_logged: false,
+            last_processed_st: 0,
+            pending: Vec::new(),
+            last_cmd: NULL_USERCMD,
+            sim: None,
         }
     }
 

@@ -295,6 +295,27 @@ impl ClientState {
             .map(|&b| b as char)
             .collect()
     }
+
+    /// A fresh entry: team plus the name packed LE u32 chunk per
+    /// `name[0..28]` field, NUL padded, capped at 31 bytes like the C array.
+    pub fn named(p: &Protocol, client_num: u32, team: i32, name: &str) -> Self {
+        let mut cs = ClientState::null(p);
+        cs.client_num = client_num;
+        if let Some(i) = Self::field_index(p, "team") {
+            cs.fields[i] = team;
+        }
+        let mut bytes: Vec<u8> = name.bytes().take(31).collect();
+        bytes.resize(32, 0);
+        for (chunk, off) in bytes.chunks(4).zip((0..32).step_by(4)) {
+            let Some(idx) = Self::field_index(p, &format!("name[{off}]")) else {
+                break;
+            };
+            let mut word = [0u8; 4];
+            word[..chunk.len()].copy_from_slice(chunk);
+            cs.fields[idx] = u32::from_le_bytes(word) as i32;
+        }
+        cs
+    }
 }
 
 /// `MSG_ReadDeltaClient` body (cod_lnxded 0x807f758). The presence bit and the
@@ -320,6 +341,38 @@ pub fn read_delta_client(
         to.fields[i] = read_delta_field(r, to.fields[i], field.bits);
     }
     Some(to)
+}
+
+/// Inverse of [`read_delta_client`]. The caller has written the presence bit
+/// and the 6-bit client number; `None` writes the removed bit.
+pub fn write_delta_client(
+    w: &mut MsgWriter,
+    p: &Protocol,
+    from: &ClientState,
+    to: Option<&ClientState>,
+) {
+    let Some(to) = to else {
+        w.write_bits(1, 1); // removed
+        return;
+    };
+    debug_assert_eq!(from.fields.len(), to.fields.len());
+    w.write_bits(0, 1);
+    let lc = from
+        .fields
+        .iter()
+        .zip(&to.fields)
+        .rposition(|(a, b)| a != b)
+        .map_or(0, |i| i + 1);
+    debug_assert!(lc <= 255);
+    if lc == 0 {
+        w.write_bits(0, 1); // no delta
+        return;
+    }
+    w.write_bits(1, 1);
+    w.write_byte(lc as u8);
+    for i in 0..lc {
+        write_delta_field(w, from.fields[i], to.fields[i], p.client_fields[i].bits);
+    }
 }
 
 /// One delta field (cod_lnxded 0x807c904): change bit, zero flag, then the
@@ -509,6 +562,60 @@ fn read_ps_float(r: &mut MsgReader) -> i32 {
     }
 }
 
+/// Inverse of [`read_ps_float`]: integral selector unless out of the biased
+/// 13-bit range.
+fn write_ps_float(w: &mut MsgWriter, raw: i32) {
+    let f = f32::from_bits(raw as u32);
+    let trunc = f as i32;
+    let biased = trunc.wrapping_add(FLOAT_INT_BIAS);
+    if trunc as f32 == f && (0..(1 << FLOAT_INT_BITS)).contains(&biased) {
+        w.write_bits(0, 1);
+        w.write_packed_bits(biased, FLOAT_INT_BITS);
+    } else {
+        w.write_bits(1, 1);
+        w.write_long(raw);
+    }
+}
+
+/// Mirror of [`read_delta_playerstate`]. The trailing array blocks go out
+/// empty: the vcod server carries no stats, ammo or HUD state. Unlike the
+/// entity codec there is no zero-flag bit here, so a `-0.0` float reads back
+/// `+0.0`; retail loses the sign the same way.
+pub fn write_delta_playerstate(
+    w: &mut MsgWriter,
+    p: &Protocol,
+    from: &PlayerState,
+    to: &PlayerState,
+) {
+    debug_assert_eq!(from.fields.len(), to.fields.len());
+    let lc = from
+        .fields
+        .iter()
+        .zip(&to.fields)
+        .rposition(|(a, b)| a != b)
+        .map_or(0, |i| i + 1);
+    debug_assert!(lc <= 255);
+    w.write_byte(lc as u8);
+    for i in 0..lc {
+        if from.fields[i] == to.fields[i] {
+            w.write_bits(0, 1);
+            continue;
+        }
+        w.write_bits(1, 1);
+        if p.player_fields[i].bits == 0 {
+            write_ps_float(w, to.fields[i]);
+        } else {
+            // Unsigned width |bits|, matching the reader's plain packed read.
+            w.write_packed_bits(to.fields[i], p.player_fields[i].bits);
+        }
+    }
+    // Array-block gates: block 1, block 2, block 3's four sub-arrays,
+    // blocks 4 and 5.
+    for _ in 0..8 {
+        w.write_bits(0, 1);
+    }
+}
+
 /// Widths of the 34-entry HUD field table (cod_lnxded 0x80de384). 0..6 back
 /// the per-weapon block, 6..34 the two HUD arrays.
 #[rustfmt::skip]
@@ -597,10 +704,11 @@ fn consume_hud_array(r: &mut MsgReader) {
     }
 }
 
-/// `usercmd_t` (codextended shared.h:811). The compact encoding
-/// [`write_delta_usercmd`] emits carries none of `up`, `weapon`, `wbuttons`,
-/// `flags` or `angles[2]`. Layout: docs/protocol-1.1.md, "Client to server
-/// message body".
+/// `usercmd_t` (codextended shared.h:811). The writer's compact branch
+/// carries none of `up`, `weapon`, `wbuttons`, `flags` or `angles[2]`; a
+/// change in the first three (or button bits above 0) selects the
+/// full-field branch. Layout:
+/// docs/protocol-1.1.md, "Client to server message body".
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UserCmd {
     pub server_time: i32,
@@ -646,14 +754,18 @@ fn fr_bucket(forward: i8, right: i8) -> i32 {
 }
 
 /// `MSG_WriteDeltaUsercmdKey`, reconstructed from the reader at cod_lnxded
-/// 0x807b7f8. Emits only the compact branch: serverTime, button bit 0, keyed
-/// pitch and yaw, a 4-bit forward/right code. Forward/right can only be +127,
-/// -127 or 0; `up`, `weapon`, `wbuttons` and roll stay at the base.
+/// 0x807b7f8. Emits the compact branch unless a field it cannot carry
+/// (`up`, `weapon`, `wbuttons`, button bits above 0) differs from `from`:
+/// the compact encoding has no slot for them, so the receiver would keep
+/// its stored value. Forward/right can only be +127, -127 or 0; `flags`
+/// is never sent.
 ///
-/// Angles and the forward/right code are always sent, never delta-omitted:
-/// the server keeps an omitted field at its stored previous cmd, so a
-/// self-contained cmd survives a dropped packet. `from` only feeds the
-/// serverTime delta. docs/protocol-1.1.md, "Client to server message body".
+/// Angles and the forward/right code are always announced; every other
+/// field rides a change bit against `from`, so an omitted field decodes
+/// against the receiver's stored previous cmd — retail's outCmd chaining,
+/// where `from` is the client's last *sent* cmd. A lost packet degrades
+/// one cmd, which retail also lives with.
+/// docs/protocol-1.1.md, "Client to server message body".
 pub fn write_delta_usercmd(w: &mut MsgWriter, key: i32, from: &UserCmd, to: &UserCmd) {
     // serverTime: 1 = 8-bit delta from the base, 0 = 32-bit absolute.
     let dt = to.server_time.wrapping_sub(from.server_time);
@@ -666,8 +778,17 @@ pub fn write_delta_usercmd(w: &mut MsgWriter, key: i32, from: &UserCmd, to: &Use
     }
 
     // Changed bit (!= key & 1), then the branch bit (== key & 1 picks compact).
+    let full = to.up != from.up
+        || to.weapon != from.weapon
+        || to.wbuttons != from.wbuttons
+        || (to.buttons & !1) != (from.buttons & !1);
     w.write_bits((key & 1) ^ 1, 1);
-    w.write_bits(key & 1, 1);
+    w.write_bits(if full { (key & 1) ^ 1 } else { key & 1 }, 1);
+
+    if full {
+        write_full_usercmd(w, key, to.server_time, to);
+        return;
+    }
 
     // The reader mixes the serverTime into the key from here (0x807b95d).
     let key = key ^ to.server_time;
@@ -680,6 +801,29 @@ pub fn write_delta_usercmd(w: &mut MsgWriter, key: i32, from: &UserCmd, to: &Use
     let flag = fr_bucket(to.forward, to.right);
     w.write_bits(1, 1);
     w.write_bits(flag ^ (key & 0xf), 4);
+}
+
+/// Writer mirror of [`read_full_usercmd`] (cod_lnxded 0x807bba0): every keyed
+/// field announced, in the reader's order, first four under the raw key and
+/// the rest under the serverTime-mixed one.
+fn write_full_usercmd(w: &mut MsgWriter, key: i32, server_time: i32, to: &UserCmd) {
+    w.write_bits(((to.buttons as i32) & 1) ^ (key & 1), 1);
+    write_keyed_angle(w, key, to.angles[0]);
+    write_keyed_angle(w, key, to.angles[1]);
+    let flag = fr_bucket(to.forward, to.right);
+    w.write_bits(1, 1);
+    w.write_bits(flag ^ (key & 0xf), 4);
+
+    let key = key ^ server_time;
+    write_keyed_angle(w, key, to.angles[2]);
+    w.write_bits(1, 1);
+    w.write_bits((i32::from(to.buttons >> 1) & 0x3f) ^ (key & 0x3f), 6);
+    w.write_bits(1, 1);
+    w.write_byte(to.wbuttons ^ (key as u8));
+    w.write_bits(1, 1);
+    w.write_bits(up_bucket(to.up) ^ (key & 0x3), 2);
+    w.write_bits(1, 1);
+    w.write_bits(i32::from(to.weapon) ^ (key & 0x3f), 6);
 }
 
 /// Change bit set, then `value ^ key` as a short (cod_lnxded 0x807b9bd).
@@ -905,6 +1049,7 @@ impl<'a> MsgWriter<'a> {
 mod tests {
     use super::*;
     use crate::net::huffman::Huffman;
+    use crate::net::protocol::PROTOCOL_V1;
 
     fn rt(f: impl Fn(&mut MsgWriter), g: impl Fn(&mut MsgReader)) {
         let h = Huffman::new();
@@ -1318,6 +1463,47 @@ mod tests {
     }
 
     #[test]
+    fn named_client_state_round_trips_through_the_writer() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let cs = ClientState::named(p, 0, 3, "vcod");
+        assert_eq!(cs.name(p), "vcod");
+        assert_eq!(cs.field_i32(p, "team"), 3);
+
+        let null = ClientState::null(p);
+        let mut w = MsgWriter::new(&h);
+        w.write_bits(1, 1); // a client follows
+        w.write_bits(0, 6); // index 0
+        write_delta_client(&mut w, p, &null, Some(&cs));
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        assert_eq!(r.read_bits(1), 1);
+        assert_eq!(r.read_bits(6), 0);
+        assert_eq!(read_delta_client(&mut r, p, &null, 0), Some(cs));
+        assert_eq!(r.bits_read(), bits);
+    }
+
+    #[test]
+    fn long_names_are_capped_and_the_removed_bit_round_trips() {
+        let p = &PROTOCOL_V1;
+        let cs = ClientState::named(p, 5, 3, &"x".repeat(40));
+        assert_eq!(cs.name(p), "x".repeat(31));
+
+        let h = Huffman::new();
+        let null = ClientState::null(p);
+        let mut w = MsgWriter::new(&h);
+        w.write_bits(1, 1);
+        w.write_bits(5, 6);
+        write_delta_client(&mut w, p, &null, None); // disconnect
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        assert_eq!(r.read_bits(1), 1);
+        assert_eq!(r.read_bits(6), 5);
+        assert_eq!(read_delta_client(&mut r, p, &null, 5), None);
+    }
+
+    #[test]
     fn bit_cursors_match() {
         let h = Huffman::new();
         let mut w = MsgWriter::new(&h);
@@ -1499,6 +1685,94 @@ mod tests {
         assert!(!r.is_overflowed());
     }
 
+    /// A playerstate holding the pinned retail spectator values (provenance:
+    /// docs/design/2026-08-26-server-snapshots-plan.md header). Built by name so
+    /// table order cannot break the test silently.
+    fn spectator_playerstate(p: &Protocol) -> PlayerState {
+        let mut ps = PlayerState::null(p);
+        let mut set = |name: &str, v: i32| {
+            ps.fields[PlayerState::field_index(p, name).unwrap()] = v;
+        };
+        set("commandTime", 1_149_798);
+        set("origin[0]", 384f32.to_bits() as i32);
+        set("origin[1]", (-624f32).to_bits() as i32);
+        set("origin[2]", 184f32.to_bits() as i32);
+        set("eFlags", 24);
+        set("delta_angles[1]", 16_384);
+        set("speed", 400);
+        set("pm_type", 4);
+        set("mins[0]", (-15f32).to_bits() as i32);
+        set("mins[1]", (-15f32).to_bits() as i32);
+        set("maxs[0]", 15f32.to_bits() as i32);
+        set("maxs[1]", 15f32.to_bits() as i32);
+        set("maxs[2]", 70f32.to_bits() as i32);
+        set("proneViewHeight", 11);
+        set("crouchViewHeight", 40);
+        set("standViewHeight", 60);
+        set("deadViewHeight", 8);
+        set("walkSpeedScale", 0.4f32.to_bits() as i32);
+        set("runSpeedScale", 1f32.to_bits() as i32);
+        set("proneSpeedScale", 0.15f32.to_bits() as i32);
+        set("crouchSpeedScale", 0.65f32.to_bits() as i32);
+        set("strafeSpeedScale", 0.8f32.to_bits() as i32);
+        set("backSpeedScale", 0.7f32.to_bits() as i32);
+        set("leanSpeedScale", 0.4f32.to_bits() as i32);
+        set("friction", 1f32.to_bits() as i32);
+        ps
+    }
+
+    #[test]
+    fn written_playerstate_round_trips_from_null() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let to = spectator_playerstate(p);
+        let mut w = MsgWriter::new(&h);
+        write_delta_playerstate(&mut w, p, &PlayerState::null(p), &to);
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        assert_eq!(read_delta_playerstate(&mut r, p, &PlayerState::null(p)), to);
+        assert_eq!(
+            r.bits_read(),
+            bits,
+            "writer and reader must agree bit for bit"
+        );
+    }
+
+    #[test]
+    fn written_playerstate_deltas_from_a_base() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let base = spectator_playerstate(p);
+        let mut to = base.clone();
+        let oi = PlayerState::field_index(p, "origin[0]").unwrap();
+        to.fields[oi] = 512f32.to_bits() as i32;
+        // An int field at its negative-width boundary (viewheights are -8).
+        let vi = PlayerState::field_index(p, "standViewHeight").unwrap();
+        to.fields[vi] = 255;
+
+        let mut w = MsgWriter::new(&h);
+        write_delta_playerstate(&mut w, p, &base, &to);
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        assert_eq!(read_delta_playerstate(&mut r, p, &base), to);
+    }
+
+    #[test]
+    fn unchanged_playerstate_writes_only_the_empty_arrays() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let ps = PlayerState::null(p);
+        let mut w = MsgWriter::new(&h);
+        write_delta_playerstate(&mut w, p, &ps, &ps);
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        assert_eq!(read_delta_playerstate(&mut r, p, &ps), ps);
+        // lc byte plus eight zero array-gate bits.
+        assert_eq!(bits, 8 + 8);
+    }
+
     /// The count byte after a 2-bit clc op lands at the byte cursor, alone and
     /// behind a reliable `clc_clientCommand`.
     #[test]
@@ -1672,6 +1946,126 @@ mod tests {
         );
         assert_eq!(r.read_bits(2), 3, "clc op after the move");
         assert!(!r.is_overflowed());
+    }
+
+    /// The full-field branch is the only one that carries `up`; a nonzero
+    /// upmove must select it on write and survive the keyed decode exactly,
+    /// bit count included.
+    #[test]
+    fn written_upmove_round_trips_through_the_full_branch() {
+        let h = Huffman::new();
+        let cases = [
+            UserCmd {
+                server_time: 1050,
+                buttons: 0x15,
+                wbuttons: 3,
+                weapon: 5,
+                angles: [0x1234, 0xabcd, 0xbeef],
+                forward: 127,
+                right: -127,
+                up: 127,
+                ..NULL_USERCMD
+            },
+            UserCmd {
+                server_time: 1150,
+                buttons: 0x2a,
+                wbuttons: 0x81,
+                weapon: 42,
+                angles: [0xffff, 0, 0x1234],
+                forward: -127,
+                right: 127,
+                up: -127,
+                ..NULL_USERCMD
+            },
+        ];
+        for key in [0, 1, 0x1122_3344, -1] {
+            let mut w = MsgWriter::new(&h);
+            let mut from = NULL_USERCMD;
+            for to in &cases {
+                write_delta_usercmd(&mut w, key, &from, to);
+                from = *to;
+            }
+            let bits = w.bits_written();
+            let mut r = MsgReader::new(&w.finish(), &h);
+            let mut from = NULL_USERCMD;
+            for to in &cases {
+                let got = read_delta_usercmd(&mut r, key, &from).unwrap();
+                assert_eq!(got, *to, "key {key:#x}");
+                from = got;
+            }
+            assert_eq!(
+                r.bits_read(),
+                bits,
+                "writer and reader must agree bit for bit (key {key:#x})"
+            );
+            assert!(!r.is_overflowed());
+        }
+    }
+
+    /// Press then release: the release (up back to 0) differs from the
+    /// previous sent cmd in a field the compact branch cannot carry, so the
+    /// writer must take the full branch again. Chained decode must read the
+    /// release as 0, not replay the jump off the receiver's stored cmd.
+    #[test]
+    fn released_upmove_takes_the_full_branch_again_on_the_way_down() {
+        let h = Huffman::new();
+        let key = 0x1122_3344i32;
+        let press = UserCmd {
+            server_time: 500,
+            up: 127,
+            ..NULL_USERCMD
+        };
+        let release = UserCmd {
+            server_time: 550,
+            ..NULL_USERCMD
+        };
+
+        let mut w = MsgWriter::new(&h);
+        write_delta_usercmd(&mut w, key, &NULL_USERCMD, &press);
+        write_delta_usercmd(&mut w, key, &press, &release);
+        let mut r = MsgReader::new(&w.finish(), &h);
+        let got_press = read_delta_usercmd(&mut r, key, &NULL_USERCMD).unwrap();
+        assert_eq!(got_press, press);
+        let got_release = read_delta_usercmd(&mut r, key, &got_press).unwrap();
+        assert_eq!(got_release.up, 0, "the release must not replay the jump");
+        assert_eq!(got_release, release);
+
+        // Up never leaves 0 across the pair: both cmds ride the compact branch.
+        let quiet_a = UserCmd {
+            server_time: 500,
+            ..NULL_USERCMD
+        };
+        let quiet_b = UserCmd {
+            server_time: 550,
+            ..NULL_USERCMD
+        };
+        let mut w = MsgWriter::new(&h);
+        write_delta_usercmd(&mut w, key, &NULL_USERCMD, &quiet_a);
+        write_delta_usercmd(&mut w, key, &quiet_a, &quiet_b);
+        let mut r = MsgReader::new(&w.finish(), &h);
+        let got_a = read_delta_usercmd(&mut r, key, &NULL_USERCMD).unwrap();
+        assert_eq!(got_a, quiet_a);
+        let got_b = read_delta_usercmd(&mut r, key, &got_a).unwrap();
+        assert_eq!(got_b, quiet_b);
+    }
+
+    /// A cmd without upmove must encode exactly as before the full branch
+    /// existed, byte for byte.
+    #[test]
+    fn zero_upmove_writes_the_compact_bytes_unchanged() {
+        let h = Huffman::new();
+        let to = UserCmd {
+            server_time: 1100,
+            buttons: 1,
+            angles: [0x1234, 0xabcd, 0],
+            forward: 127,
+            right: -127,
+            ..NULL_USERCMD
+        };
+        let mut w = MsgWriter::new(&h);
+        write_delta_usercmd(&mut w, 0x1122_3344, &NULL_USERCMD, &to);
+        let d = w.finish();
+        assert_eq!(d, [249, 118, 14, 213, 145, 242, 63, 126, 37, 1]);
     }
 
     #[test]

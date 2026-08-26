@@ -7,6 +7,8 @@
 
 use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
+use crate::spectate::SpectatorSim;
+use crate::world::World;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
@@ -18,7 +20,8 @@ use vcod_common::net::msg::{
 };
 use vcod_common::net::netchan::{ClientMessage, ServerNetchan, MAX_RELIABLE_COMMANDS};
 use vcod_common::net::protocol::{Protocol, PROTOCOL_V1};
-use vcod_common::net::{com_hash_key, info_value_for_key};
+use vcod_common::net::{com_hash_key, info_value_for_key, snapshot};
+use vcod_common::pmove::MAX_FRAME_MS;
 
 /// `MAX_CHALLENGES`, server.h:198.
 const MAX_CHALLENGES: usize = 1024;
@@ -45,6 +48,17 @@ const CLC_MOVE_NO_DELTA: i32 = 1;
 const CLC_CLIENT_COMMAND: i32 = 2;
 const CLC_EOF: i32 = 3;
 const MAX_PACKET_USERCMDS: u8 = 32;
+/// Queued-but-unreplayed usercmds per client; past this a flood drops the
+/// oldest rather than building latency.
+const MAX_PENDING_CMDS: usize = 64;
+/// pmove steps per snapshot tick; a flood beyond this fast-forwards.
+const MAX_CMDS_PER_TICK: usize = 32;
+/// The tick pace (`1000 / sv_fps`), also the dt floor a fresh sim starts from.
+const FRAME_MS: i32 = 50;
+/// Retail's `MAX_CLIENTS`. Client slots index a 6-bit wire field
+/// (clientState entries; `ps.clientNum` gets 8), so more than 64 would
+/// collide silently.
+const MAX_CLIENTS: usize = 64;
 
 pub struct ServerConfig {
     pub map: String,
@@ -129,8 +143,8 @@ enum ClientOp {
         seq: i32,
         text: String,
     },
-    /// The last usercmd of a move; the earlier ones only carry the delta.
-    Move(UserCmd),
+    /// Every usercmd of a move block, in wire order.
+    Move(Vec<UserCmd>),
 }
 
 pub struct Server {
@@ -147,6 +161,10 @@ pub struct Server {
     outbox: Vec<(SocketAddr, Vec<u8>)>,
     limiter: RateLimiter,
     rng: u64,
+    /// The map's collision and spawn, loaded by the binary; tests run without.
+    world: Option<World>,
+    /// `svs.time`, advanced one frame per tick.
+    sv_time_ms: i32,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -189,7 +207,8 @@ fn write_pending_commands(w: &mut MsgWriter, nc: &ServerNetchan, from_ack: i32) 
 }
 
 impl Server {
-    pub fn new(cfg: ServerConfig, now: Instant) -> Self {
+    pub fn new(mut cfg: ServerConfig, now: Instant) -> Self {
+        cfg.max_clients = cfg.max_clients.min(MAX_CLIENTS);
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0x9e37_79b9_7f4a_7c15, |d| d.as_nanos() as u64)
@@ -207,6 +226,8 @@ impl Server {
             outbox: Vec::new(),
             limiter: RateLimiter::new(now),
             rng: seed,
+            world: None,
+            sv_time_ms: 0,
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -494,20 +515,34 @@ impl Server {
                     self.send_gamestate(slot);
                 }
             } else if c.state == ClientState::Primed {
-                // Restart path; retail promotes to CS_ACTIVE here. No snapshots yet.
+                // Restart path; retail promotes to CS_ACTIVE here.
                 c.accept(&m, now);
-                log::debug!("client {slot}: map_restart catch-up without snapshots");
+                self.enter_world(slot);
             }
             return;
         }
 
-        let Some(ops) = self.parse_client_ops(c, &m) else {
+        let base = c.last_cmd;
+        let Some((ops, last_cmd)) = self.parse_client_ops(c, &m, base) else {
             log::debug!("client {slot}: message from {from} does not decode");
             return;
         };
-        let c = self.clients[slot].as_mut().unwrap();
-        c.accept(&m, now);
-        c.addr = from; // NAT may move the port; the qport is the identity
+        // The new delta base commits before any op runs; a message that fails
+        // to decode left it alone above.
+        self.clients[slot].as_mut().unwrap().last_cmd = last_cmd;
+        // Acking the gamestate message is the enter-world trigger. Equal, not
+        // strictly past: a message's fragments share one sequence, so the
+        // client's first ack lands exactly on gamestate_message_num, and no
+        // later server message exists yet to push it past.
+        let entering = {
+            let c = self.clients[slot].as_mut().unwrap();
+            c.accept(&m, now);
+            c.addr = from; // NAT may move the port; the qport is the identity
+            c.state == ClientState::Primed && i64::from(m.message_ack) >= c.gamestate_message_num
+        };
+        if entering {
+            self.enter_world(slot);
+        }
         for op in ops {
             match op {
                 ClientOp::Command { seq, text } => {
@@ -523,10 +558,18 @@ impl Server {
     /// `SV_ExecuteClientMessage`'s op walk, read to the end before any op is
     /// applied. `None` when the stream does not decode: an overflow anywhere
     /// or a bad usercmd count, which is what a forged block looks like once
-    /// the scramble key is wrong.
-    fn parse_client_ops(&self, c: &Client, m: &ClientMessage) -> Option<Vec<ClientOp>> {
+    /// the scramble key is wrong. On success the new delta base comes back
+    /// with the ops: the last cmd decoded, for the next move message to
+    /// chain from.
+    fn parse_client_ops(
+        &self,
+        c: &Client,
+        m: &ClientMessage,
+        base: UserCmd,
+    ) -> Option<(Vec<ClientOp>, UserCmd)> {
         let mut r = MsgReader::new(&m.ops, &self.huff);
         let mut ops = Vec::new();
+        let mut prev = base;
         loop {
             let op = r.read_bits(2);
             if r.is_overflowed() {
@@ -541,10 +584,11 @@ impl Server {
                     }
                     ops.push(ClientOp::Command { seq, text });
                 }
-                CLC_EOF => return Some(ops),
+                CLC_EOF => return Some((ops, prev)),
                 CLC_MOVE | CLC_MOVE_NO_DELTA => {
-                    ops.push(ClientOp::Move(self.parse_move(c, &mut r, m)?));
-                    return Some(ops);
+                    let cmds = self.parse_move(c, &mut r, m, &mut prev)?;
+                    ops.push(ClientOp::Move(cmds));
+                    return Some((ops, prev));
                 }
                 // `read_bits(2)` yields 0..=3; unreachable.
                 _ => return None,
@@ -552,26 +596,36 @@ impl Server {
         }
     }
 
-    /// `SV_UserMove`'s parse: every usercmd is read to stay in step with the
-    /// delta chain, the last one is returned.
-    fn parse_move(&self, c: &Client, r: &mut MsgReader, m: &ClientMessage) -> Option<UserCmd> {
+    /// `SV_UserMove`'s parse: the whole block, in order, so the sim can
+    /// replay every cmd like retail's pmove does. `prev` enters as the
+    /// client's stored delta base and leaves as the last cmd of the block.
+    fn parse_move(
+        &self,
+        c: &Client,
+        r: &mut MsgReader,
+        m: &ClientMessage,
+        prev: &mut UserCmd,
+    ) -> Option<Vec<UserCmd>> {
         let count = r.read_byte();
         if !(1..=MAX_PACKET_USERCMDS).contains(&count) {
             return None;
         }
         let cmd = &c.netchan.reliable[m.reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)];
         let key = self.checksum_feed ^ m.message_ack ^ com_hash_key(cmd, 32);
-        let mut prev = NULL_USERCMD;
+        let mut out = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            match read_delta_usercmd(r, key, &prev) {
-                Ok(next) => prev = next,
+            match read_delta_usercmd(r, key, prev) {
+                Ok(next) => {
+                    out.push(next);
+                    *prev = next;
+                }
                 Err(e) => {
                     log::debug!("usercmd not parsed: {e}");
                     return None;
                 }
             }
         }
-        Some(prev)
+        Some(out)
     }
 
     /// `SV_ClientCommand`. Returns false when the client is gone.
@@ -605,6 +659,19 @@ impl Server {
                     c.userinfo = ui;
                 }
             }
+            // DeathmatchScoreboardMessage (.so 0x459c0); grammar in
+            // docs/research/cod11-hud-protocol.md section 3. Nothing is
+            // measured, so team totals use the "no score" sentinel and rows
+            // zero out.
+            "score" => {
+                let mut text = format!("b {} -9999 -9999", self.client_count());
+                for (cs_slot, c) in self.clients.iter().enumerate() {
+                    if c.is_some() {
+                        text.push_str(&format!(" {cs_slot} 0 0 0 0"));
+                    }
+                }
+                self.send_server_command(slot, &text);
+            }
             other => log::debug!("client {slot}: command {other:?} ignored"),
         }
         let Some(c) = self.clients[slot].as_mut() else {
@@ -615,19 +682,15 @@ impl Server {
         true
     }
 
-    /// `SV_UserMove` past the parse; runs nothing yet.
-    fn user_move(&mut self, slot: usize, last: UserCmd) {
+    /// `SV_UserMove` past the parse: queue the block for the next tick's
+    /// replay. A flood past the cap drops the oldest cmds, not the newest.
+    fn user_move(&mut self, slot: usize, cmds: Vec<UserCmd>) {
         let Some(c) = self.clients[slot].as_mut() else {
             return;
         };
-        if c.state == ClientState::Primed && !c.enter_world_logged {
-            c.enter_world_logged = true;
-            log::info!(
-                "client {slot} {:?} sent its first move (serverTime {}); it would enter the world here, snapshots are not implemented",
-                c.name,
-                last.server_time
-            );
-        }
+        c.pending.extend(cmds);
+        let excess = c.pending.len().saturating_sub(MAX_PENDING_CMDS);
+        c.pending.drain(..excess);
     }
 
     /// `SV_SendClientGameState`, with no baselines yet.
@@ -655,8 +718,30 @@ impl Server {
     }
 
     /// `SV_AddServerCommand` plus an immediate message, so a drop notice
-    /// reaches the client before its slot is freed.
+    /// reaches the client before its slot is freed. A client whose acks fall
+    /// a whole ring behind has stopped consuming reliables; overwriting an
+    /// unsacked slot would desync both ends' scramble keys, so that is fatal
+    /// (`EXE_LOSTRELIABLECOMMANDS`), mirroring the reference client's own
+    /// outbound guard.
     fn send_server_command(&mut self, slot: usize, cmd: &str) {
+        let overflow = match self.clients[slot].as_ref() {
+            Some(c) => {
+                i64::from(c.netchan.reliable_sequence) - i64::from(c.reliable_ack)
+                    >= MAX_RELIABLE_COMMANDS as i64
+            }
+            None => return,
+        };
+        if overflow {
+            self.drop_client(slot, "EXE_LOSTRELIABLECOMMANDS");
+            return;
+        }
+        self.write_server_command(slot, cmd);
+    }
+
+    /// The unconditional tail of [`Self::send_server_command`]. The drop
+    /// notice goes out through here, so freeing the slot cannot recurse and
+    /// the notice is never guarded away.
+    fn write_server_command(&mut self, slot: usize, cmd: &str) {
         let Some(c) = self.clients[slot].as_mut() else {
             return;
         };
@@ -677,7 +762,7 @@ impl Server {
     /// `SV_DropClient` (cod_lnxded 0x8085cf4). No zombie state; nothing here
     /// needs the grace period.
     fn drop_client(&mut self, slot: usize, reason: &str) {
-        self.send_server_command(slot, &format!("w \"{reason}\""));
+        self.write_server_command(slot, &format!("w \"{reason}\""));
         let Some(c) = self.clients[slot].take() else {
             return;
         };
@@ -708,18 +793,114 @@ impl Server {
         }
     }
 
+    /// Swap in the map built by the binary; tests run without one.
+    pub fn load_world(&mut self, world: World) {
+        self.world = Some(world);
+    }
+
+    const FALLBACK_SPAWN: ([f32; 3], f32) = ([0.0, 0.0, 64.0], 0.0);
+
+    /// `SV_ClientEnterWorld` for a spectator: park the sim at the spawn, start
+    /// snapping.
+    fn enter_world(&mut self, slot: usize) {
+        let spawn = self
+            .world
+            .as_ref()
+            .map_or(Self::FALLBACK_SPAWN, |w| w.spawn);
+        let Some(c) = self.clients[slot].as_mut() else {
+            return;
+        };
+        c.state = ClientState::Active;
+        // Fresh start, matching the client's own outCmd reset on map entry.
+        c.last_cmd = NULL_USERCMD;
+        c.sim = Some(SpectatorSim::new(spawn.0, spawn.1));
+        // One frame back, so the first cmd's dt is a sane 50 ms rather than
+        // the whole age of the client's clock.
+        c.last_processed_st = self.sv_time_ms.wrapping_sub(FRAME_MS);
+        log::info!("client {slot} {:?} begin (spectator)", c.name);
+    }
+
     pub fn tick(&mut self, now: Instant) {
         self.check_timeouts(now);
+        self.send_snapshots();
+    }
+
+    /// One uncompressed snapshot per active client; the main loop paces calls
+    /// at sv_fps. The sim replays every queued usercmd first, dt off the
+    /// cmd clocks, matching the client's own prediction.
+    fn send_snapshots(&mut self) {
+        self.sv_time_ms = self.sv_time_ms.wrapping_add(FRAME_MS);
+
+        // One clientState entry per online client, rebuilt each frame; slot ==
+        // index, empty slots None (the reader restarts the roster every frame).
+        let cs_list: Vec<Option<msg::ClientState>> = self
+            .clients
+            .iter()
+            .map(|c| {
+                c.as_ref()
+                    .map(|c| msg::ClientState::named(self.proto, 0, 3, &c.name))
+            })
+            .collect();
+
+        for slot in 0..self.clients.len() {
+            let world = self.world.as_ref().map(|w| &w.collision);
+            let Some(c) = self.clients[slot].as_mut() else {
+                continue;
+            };
+            let Some(sim) = c.sim.as_mut() else {
+                continue;
+            };
+            // SV_UserMove: one pmove step per usercmd, dt off the cmd clocks.
+            // Stale cmds (dt <= 0) are skipped whole; a flood past the per-tick
+            // cap resyncs to the newest cmd and keeps only the tail.
+            let mut processed = 0usize;
+            while !c.pending.is_empty() {
+                let cmd = c.pending[0];
+                if processed >= MAX_CMDS_PER_TICK {
+                    // The resync keeps the newest two cmds and sets the base
+                    // as if only the last replays, so the penultimate may
+                    // double-count one frame; harmless for flight.
+                    c.last_processed_st =
+                        c.pending.last().unwrap().server_time.wrapping_sub(FRAME_MS);
+                    c.pending.drain(..c.pending.len().saturating_sub(2));
+                    break;
+                }
+                c.pending.remove(0);
+                let dt_ms = cmd.server_time.wrapping_sub(c.last_processed_st);
+                if dt_ms <= 0 {
+                    continue;
+                }
+                let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
+                sim.step(&cmd, world, dt);
+                c.last_processed_st = cmd.server_time;
+                processed += 1;
+            }
+            let command_time = c.last_processed_st.max(self.sv_time_ms - FRAME_MS);
+            let wire = sim.to_wire(self.proto, slot as i32, command_time);
+
+            let mut w = MsgWriter::new(&self.huff);
+            write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
+            w.write_byte(snapshot::SVC_SNAPSHOT);
+            snapshot::write_uncompressed(&mut w, self.proto, self.sv_time_ms, &wire, &cs_list);
+            let ops = w.into_ops();
+            for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
+                self.outbox.push((c.addr, pkt));
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::World;
+    use vcod_common::collision::test_world;
     use vcod_common::net::connectionless::{
         build_connect, build_oob, info_value_for_key, parse_oob,
     };
+    use vcod_common::net::msg::write_delta_usercmd;
     use vcod_common::net::netchan::Netchan;
+    use vcod_common::net::snapshot::{SnapshotRing, SVC_SNAPSHOT};
 
     const QPORT: u16 = 0x2001;
 
@@ -1005,6 +1186,127 @@ mod tests {
         );
     }
 
+    /// Score requests pipelined faster than the client acks their replies
+    /// would wrap the reliable ring and overwrite unsacked slots, corrupting
+    /// the wire and the scramble key. Past 64 unacked commands the client is
+    /// dropped instead, and the slot works for a fresh connect. The whole
+    /// burst rides one message: a later message would fail the incoming
+    /// ack-range check before any op ran.
+    #[test]
+    fn score_spam_past_the_reliable_ring_drops_the_client() {
+        let now = Instant::now();
+        let huff = Huffman::new();
+        let scores = |sv: &mut Server, nc: &mut Netchan, first: i32, last: i32| {
+            let mut w = MsgWriter::new(&huff);
+            for seq in first..=last {
+                w.write_bits(CLC_CLIENT_COMMAND, 2);
+                w.write_long(seq);
+                w.write_string("score");
+            }
+            w.write_bits(CLC_EOF, 2);
+            sv.handle_packet(
+                addr(5),
+                &nc.build_out(
+                    i32::from(sv.server_id),
+                    nc.incoming_sequence as i32,
+                    0,
+                    &w.into_ops(),
+                    &huff,
+                )
+                .unwrap(),
+                now,
+            );
+        };
+
+        // Exactly the ring's worth of unacked commands is not yet fatal.
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = active(&mut sv, now);
+        sv.take_outgoing();
+        // Each reply is scrambled with the last client command string, so the
+        // receiving netchan needs its own sent-command ring filled (reply 1
+        // went out before any command was stored and stays undecodable here).
+        for s in 2..=70 {
+            nc.reliable[(s as usize) & 63] = "score".to_string();
+        }
+        scores(&mut sv, &mut nc, 1, 64);
+        assert_eq!(sv.client_count(), 1, "a full ring is not yet fatal");
+        assert!(
+            !sv.take_outgoing().is_empty(),
+            "the ring-full boundary must still answer"
+        );
+
+        // One pipelined request too many drops the client, notice last.
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = active(&mut sv, now);
+        sv.take_outgoing();
+        for s in 2..=70 {
+            nc.reliable[(s as usize) & 63] = "score".to_string();
+        }
+        scores(&mut sv, &mut nc, 1, 65);
+        assert_eq!(sv.client_count(), 0);
+        let mut notices = Vec::new();
+        for (_, pkt) in sv.take_outgoing() {
+            let res = nc.process_in(&pkt, &huff);
+            if let Ok(Some(msg)) = res {
+                let mut r = MsgReader::new(&msg[4..], &huff);
+                while !r.is_overflowed() {
+                    match r.read_byte() {
+                        msg::SVC_SERVER_COMMAND => {
+                            r.read_long();
+                            notices.push(r.read_big_string());
+                        }
+                        _ => break,
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            notices.last().map(String::as_str),
+            Some("w \"EXE_LOSTRELIABLECOMMANDS\"")
+        );
+
+        // The freed slot takes a fresh client.
+        let t2 = now + RECONNECT_LIMIT + Duration::from_millis(100);
+        connected(&mut sv, addr(5), t2);
+        assert_eq!(sv.client_count(), 1);
+    }
+
+    #[test]
+    fn a_score_request_gets_a_deathmatch_scoreboard() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = active(&mut sv, now);
+        sv.take_outgoing();
+
+        let huff = Huffman::new();
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_CLIENT_COMMAND, 2);
+        w.write_long(1);
+        w.write_string("score");
+        w.write_bits(CLC_EOF, 2);
+        let pkt = nc
+            .build_out(
+                i32::from(sv.server_id),
+                nc.incoming_sequence as i32,
+                0,
+                &w.into_ops(),
+                &huff,
+            )
+            .unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+
+        let out = sv.take_outgoing();
+        assert_eq!(out.len(), 1, "expected one reply frame");
+        assert_eq!(out[0].0, addr(5));
+        let cmds = server_commands(&mut nc, &out[0].1, &huff);
+        assert_eq!(cmds.len(), 1);
+        assert!(
+            cmds[0].starts_with("b 1 -9999 -9999 0 0 0 0 0"),
+            "{:?}",
+            cmds[0]
+        );
+    }
+
     fn count_replies(sv: &mut Server, to: SocketAddr) -> usize {
         sv.take_outgoing().iter().filter(|(a, _)| *a == to).count()
     }
@@ -1217,6 +1519,617 @@ mod tests {
         assert_eq!(
             reply_text(&mut sv),
             ("error".to_string(), "EXE_BAD_CHALLENGE".to_string())
+        );
+    }
+
+    /// clc_move ops carrying one usercmd, keyed the way the server decodes it.
+    fn move_ops(checksum_feed: i32, message_ack: i32, cmd: UserCmd) -> Vec<u8> {
+        move_ops_cmds(checksum_feed, message_ack, &[cmd])
+    }
+
+    /// clc_move ops carrying several usercmds, chained as a real client
+    /// chains them: each deltas from its predecessor.
+    fn move_ops_cmds(checksum_feed: i32, message_ack: i32, cmds: &[UserCmd]) -> Vec<u8> {
+        let huff = Huffman::new();
+        let key = checksum_feed ^ message_ack ^ com_hash_key("", 32);
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_MOVE, 2);
+        w.write_byte(cmds.len() as u8);
+        let mut prev = NULL_USERCMD;
+        for cmd in cmds {
+            write_delta_usercmd(&mut w, key, &prev, cmd);
+            prev = *cmd;
+        }
+        w.write_bits(CLC_EOF, 2);
+        w.into_ops()
+    }
+
+    /// Move-message encoder that keeps the delta base across messages, the
+    /// way the real client chains its sent cmds. A fresh null base per
+    /// message would let a changed-then-released field encode compact
+    /// against nothing.
+    struct MoveChain {
+        checksum_feed: i32,
+        prev: UserCmd,
+    }
+
+    impl MoveChain {
+        fn new(checksum_feed: i32) -> Self {
+            MoveChain {
+                checksum_feed,
+                prev: NULL_USERCMD,
+            }
+        }
+
+        fn ops(&mut self, message_ack: i32, cmds: &[UserCmd]) -> Vec<u8> {
+            let huff = Huffman::new();
+            let key = self.checksum_feed ^ message_ack ^ com_hash_key("", 32);
+            let mut w = MsgWriter::new(&huff);
+            w.write_bits(CLC_MOVE, 2);
+            w.write_byte(cmds.len() as u8);
+            for cmd in cmds {
+                write_delta_usercmd(&mut w, key, &self.prev, cmd);
+                self.prev = *cmd;
+            }
+            w.write_bits(CLC_EOF, 2);
+            w.into_ops()
+        }
+    }
+    /// clc_move carrying one cmd whose pitch and yaw ride change bit 0
+    /// (omitted, unchanged from the server's stored cmd), what a retail client
+    /// sends when the mouse did not move this packet. Forward/right stay
+    /// announced; the serverTime is absolute so the test isolates the angle
+    /// base from the serverTime base.
+    fn move_ops_omit_angles(checksum_feed: i32, message_ack: i32, st: i32) -> Vec<u8> {
+        let huff = Huffman::new();
+        let key = checksum_feed ^ message_ack ^ com_hash_key("", 32);
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_MOVE, 2);
+        w.write_byte(1);
+        w.write_bits(0, 1); // serverTime: 32-bit absolute
+        w.write_long(st);
+        // Not the whole-cmd shortcut, and the branch bit picks the compact one.
+        w.write_bits((key & 1) ^ 1, 1);
+        w.write_bits(key & 1, 1);
+        let key = key ^ st;
+        w.write_bits(key & 1, 1); // buttons bit 0, announced as 0
+        w.write_bits(0, 1); // pitch omitted
+        w.write_bits(0, 1); // yaw omitted
+        w.write_bits(1, 1); // forward/right announced
+        w.write_bits(1 ^ (key & 0xf), 4); // forward 127: bucket 1
+        w.write_bits(CLC_EOF, 2);
+        w.into_ops()
+    }
+
+    /// clc_move whose count byte is past the usercmd cap: the header decodes,
+    /// the move block cannot.
+    fn garbled_move_ops() -> Vec<u8> {
+        let huff = Huffman::new();
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_MOVE, 2);
+        w.write_byte(u8::MAX);
+        w.write_bits(CLC_EOF, 2);
+        w.into_ops()
+    }
+
+    /// Ack-only ops: an empty command/move run still ends in clc_EOF, which is
+    /// what `parse_client_ops` demands before it commits anything.
+    fn ack_ops() -> Vec<u8> {
+        let huff = Huffman::new();
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_EOF, 2);
+        w.into_ops()
+    }
+
+    /// Connect, ask for the gamestate (a fresh client sends serverId 0),
+    /// drain it, ack past it. Returns the live client netchan; the server now
+    /// considers slot 0 Active.
+    fn active(sv: &mut Server, now: Instant) -> Netchan {
+        let huff = Huffman::new();
+        let mut nc = connected(sv, addr(5), now);
+        let pkt = nc.build_out(0, 0, 0, &ack_ops(), &huff).unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+        for (_, pkt) in sv.take_outgoing() {
+            let _ = nc.process_in(&pkt, &huff).unwrap();
+        }
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(0x10, ack, 0, &ack_ops(), &huff).unwrap(),
+            now,
+        );
+        nc
+    }
+
+    /// Tick once and parse the newest queued frame as a client would.
+    fn latest_snapshot(
+        sv: &mut Server,
+        nc: &mut Netchan,
+        ring: &mut SnapshotRing,
+        now: Instant,
+    ) -> vcod_common::net::snapshot::Snapshot {
+        let huff = Huffman::new();
+        let p = &PROTOCOL_V1;
+        sv.tick(now);
+        let mut snap = None;
+        for (_, pkt) in sv.take_outgoing() {
+            if let Ok(Some(msgbytes)) = nc.process_in(&pkt, &huff) {
+                let num = nc.incoming_sequence;
+                let mut r = MsgReader::new(&msgbytes[4..], &huff);
+                while !r.is_overflowed() {
+                    if r.read_byte() == SVC_SNAPSHOT {
+                        snap = Some(ring.parse_into(&mut r, p, num).unwrap().clone());
+                        break;
+                    }
+                }
+            }
+        }
+        snap.expect("a snapshot arrived")
+    }
+
+    #[test]
+    fn an_acked_client_receives_snapshots_and_flies_forward() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        // A flat floor to fly over; without a world the sim freezes.
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = active(&mut sv, now);
+
+        let mut ring = SnapshotRing::new();
+        let s = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
+        assert!(s.valid && s.delta_num == -1);
+        let p = &PROTOCOL_V1;
+        assert_eq!(s.ps.field_i32(p, "pm_type"), 4);
+        assert_eq!(s.clients[&0].name(p), "vcod");
+
+        // Forward nudge; yaw 0 faces +X.
+        let later = now + std::time::Duration::from_millis(50);
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops(
+                    sv.checksum_feed,
+                    ack,
+                    UserCmd {
+                        forward: 127,
+                        ..Default::default()
+                    },
+                ),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            now,
+        );
+        let s2 = latest_snapshot(&mut sv, &mut nc, &mut ring, later);
+        let moved = s2.ps.origin(p)[0] - s.ps.origin(p)[0];
+        assert!(moved > 1.0, "should have flown +X, dx {moved}");
+    }
+
+    /// A block whose mouse turns mid-flight: per-cmd replay must cover both
+    /// headings. The old last-cmd-only step integrated once at yaw 90 and
+    /// never moved along +X.
+    #[test]
+    fn turning_cmds_integrate_per_cmd() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = active(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        let t0 = now;
+        let t1 = now + std::time::Duration::from_millis(50);
+        let s = latest_snapshot(&mut sv, &mut nc, &mut ring, t0);
+
+        // Forward at yaw 0 (faces +X), then the mouse swings to yaw 90 (+Y).
+        let ack = nc.incoming_sequence as i32;
+        let cmds = [
+            UserCmd {
+                server_time: 0,
+                forward: 127,
+                angles: [0, 0, 0],
+                ..Default::default()
+            },
+            UserCmd {
+                server_time: 50,
+                forward: 127,
+                angles: [0, 16384, 0],
+                ..Default::default()
+            },
+        ];
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops_cmds(sv.checksum_feed, ack, &cmds),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            now,
+        );
+        let s2 = latest_snapshot(&mut sv, &mut nc, &mut ring, t1);
+        let o1 = s.ps.origin(&PROTOCOL_V1);
+        let o2 = s2.ps.origin(&PROTOCOL_V1);
+        assert!(
+            o2[0] - o1[0] > 2.0,
+            "cmd A should have flown +X, dx {}",
+            o2[0] - o1[0]
+        );
+        assert!(
+            o2[1] - o1[1] > 2.0,
+            "cmd B should have flown +Y, dy {}",
+            o2[1] - o1[1]
+        );
+    }
+
+    /// A cmd from before the processed clock is stale: skipped whole, no
+    /// motion, no panic.
+    #[test]
+    fn stale_cmds_are_skipped() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = active(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        let mut chain = MoveChain::new(sv.checksum_feed);
+        let mut tick_at = now + std::time::Duration::from_millis(50);
+
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &chain.ops(
+                    ack,
+                    &[UserCmd {
+                        server_time: 500,
+                        forward: 127,
+                        ..Default::default()
+                    }],
+                ),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            now,
+        );
+        let s1 = latest_snapshot(&mut sv, &mut nc, &mut ring, tick_at);
+        assert!(
+            s1.ps.origin(&PROTOCOL_V1)[0] > 1.0,
+            "the fresh cmd must move the sim first, at {}",
+            s1.ps.origin(&PROTOCOL_V1)[0]
+        );
+
+        // A reordered/duplicated cmd from before serverTime 500.
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &chain.ops(
+                    ack,
+                    &[UserCmd {
+                        server_time: 0,
+                        forward: 127,
+                        ..Default::default()
+                    }],
+                ),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            now,
+        );
+        tick_at += std::time::Duration::from_millis(50);
+        let s2 = latest_snapshot(&mut sv, &mut nc, &mut ring, tick_at);
+        assert_eq!(
+            s2.ps.origin(&PROTOCOL_V1),
+            s1.ps.origin(&PROTOCOL_V1),
+            "a stale cmd must not move the sim"
+        );
+    }
+
+    /// More cmds than a tick may replay arrive back to back; the queue stays
+    /// bounded and snapshotting carries on.
+    #[test]
+    fn flood_is_bounded() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = active(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        let mut chain = MoveChain::new(sv.checksum_feed);
+        let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
+
+        let cmds: Vec<UserCmd> = (0..100)
+            .map(|i| UserCmd {
+                server_time: i * 20,
+                forward: 127,
+                ..Default::default()
+            })
+            .collect();
+        for chunk in cmds.chunks(MAX_PACKET_USERCMDS as usize) {
+            let ack = nc.incoming_sequence as i32;
+            sv.handle_packet(
+                addr(5),
+                &nc.build_out(0x10, ack, 0, &chain.ops(ack, chunk), &Huffman::new())
+                    .unwrap(),
+                now,
+            );
+        }
+        let s = latest_snapshot(
+            &mut sv,
+            &mut nc,
+            &mut ring,
+            now + std::time::Duration::from_millis(50),
+        );
+        assert!(s.valid && s.delta_num == -1);
+        assert!(
+            sv.clients[0].as_ref().unwrap().pending.len() <= 2,
+            "flood left {} cmds queued",
+            sv.clients[0].as_ref().unwrap().pending.len()
+        );
+        let s2 = latest_snapshot(
+            &mut sv,
+            &mut nc,
+            &mut ring,
+            now + std::time::Duration::from_millis(100),
+        );
+        assert!(s2.valid && s2.delta_num == -1, "snapshots must continue");
+    }
+
+    /// A retail client omits unchanged angle fields (change bit 0) instead of
+    /// announcing them, so the server must decode them against the cmd it last
+    /// stored for this client. Against a null base the view flashes to 0.
+    #[test]
+    fn omitted_angles_decode_against_the_stored_last_cmd() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = active(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
+
+        // Turn to yaw -45, announced like vcod's own client always does.
+        let yaw = ((-45.0f32) * 65536.0 / 360.0) as i32 & 0xffff;
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops(
+                    sv.checksum_feed,
+                    ack,
+                    UserCmd {
+                        server_time: 500,
+                        forward: 127,
+                        angles: [0, yaw, 0],
+                        ..Default::default()
+                    },
+                ),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            now,
+        );
+        let t1 = now + std::time::Duration::from_millis(50);
+        let s1 = latest_snapshot(&mut sv, &mut nc, &mut ring, t1);
+        assert!((s1.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01);
+
+        // Next packet: the mouse did not move, so pitch and yaw ride change
+        // bit 0 off the cmd the server just stored.
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops_omit_angles(sv.checksum_feed, ack, 520),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            t1,
+        );
+        let s2 = latest_snapshot(
+            &mut sv,
+            &mut nc,
+            &mut ring,
+            t1 + std::time::Duration::from_millis(50),
+        );
+        assert!(
+            (s2.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01,
+            "omitted angles must keep the stored yaw, got {}",
+            s2.ps.viewangles(&PROTOCOL_V1)[1]
+        );
+        // Guard against a vacuous pass: the second cmd carries forward 127,
+        // so the sim must have moved between the snapshots.
+        let d = s2.ps.origin(&PROTOCOL_V1)[0] - s1.ps.origin(&PROTOCOL_V1)[0];
+        assert!(d > 0.5, "the omitted-angle cmd was not applied, dx {d}");
+    }
+
+    /// Press then release, end to end: the release must decode up=0 against
+    /// the server's stored base, or the sim replays the jump forever.
+    #[test]
+    fn released_upmove_stops_the_climb() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = active(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        let mut chain = MoveChain::new(sv.checksum_feed);
+        let p = &PROTOCOL_V1;
+
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &chain.ops(
+                    ack,
+                    &[UserCmd {
+                        server_time: 500,
+                        up: 127,
+                        ..Default::default()
+                    }],
+                ),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            now,
+        );
+        let t1 = now + std::time::Duration::from_millis(50);
+        let s1 = latest_snapshot(&mut sv, &mut nc, &mut ring, t1);
+        let vz = s1.ps.field_f32(p, "velocity[2]");
+        assert!(vz > 100.0, "holding up must climb, vz {vz}");
+
+        // A burst of release frames: friction alone has to bring the climb
+        // back to rest. With spectator friction 5.0 the decay is geometric
+        // (scale ~0.75/tick at the stopspeed boundary); 32 frames (the wire
+        // per-message cap) take a 237 u/s climb to ~0.02.
+        let releases: Vec<UserCmd> = (0..32)
+            .map(|i| UserCmd {
+                server_time: 550 + i * 50,
+                ..Default::default()
+            })
+            .collect();
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(0x10, ack, 0, &chain.ops(ack, &releases), &Huffman::new())
+                .unwrap(),
+            t1,
+        );
+        let s2 = latest_snapshot(
+            &mut sv,
+            &mut nc,
+            &mut ring,
+            t1 + std::time::Duration::from_millis(50),
+        );
+        let vz = s2.ps.field_f32(p, "velocity[2]");
+        // Q3's PM_Friction zeroes only xy below speed 1, leaving a ~0.18 u/s
+        // vertical floor (retail-faithful); anything under half a unit is rest.
+        assert!(
+            vz.abs() < 0.5,
+            "released upmove must decay to rest, vz {vz}"
+        );
+    }
+
+    /// A move message that fails to decode is discarded whole: the next good
+    /// one still chains from the last successfully decoded cmd.
+    #[test]
+    fn a_garbled_message_does_not_poison_the_base() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = active(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
+
+        let yaw = ((-45.0f32) * 65536.0 / 360.0) as i32 & 0xffff;
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops(
+                    sv.checksum_feed,
+                    ack,
+                    UserCmd {
+                        server_time: 500,
+                        forward: 127,
+                        angles: [0, yaw, 0],
+                        ..Default::default()
+                    },
+                ),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            now,
+        );
+        let t1 = now + std::time::Duration::from_millis(50);
+        let s1 = latest_snapshot(&mut sv, &mut nc, &mut ring, t1);
+        assert!((s1.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01);
+
+        // Garbage that cannot parse, then a good packet whose angles are
+        // omitted: they must come off the pre-failure base.
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(0x10, ack, 0, &garbled_move_ops(), &Huffman::new())
+                .unwrap(),
+            t1,
+        );
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops_omit_angles(sv.checksum_feed, ack, 520),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            t1,
+        );
+        let s2 = latest_snapshot(
+            &mut sv,
+            &mut nc,
+            &mut ring,
+            t1 + std::time::Duration::from_millis(50),
+        );
+        assert!(s2.valid && s2.delta_num == -1, "snapshots must continue");
+        assert!(
+            (s2.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01,
+            "the garbled packet must not reset the base, got {}",
+            s2.ps.viewangles(&PROTOCOL_V1)[1]
+        );
+    }
+
+    #[test]
+    fn an_unacked_client_gets_no_snapshots() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let _nc = connected(&mut sv, addr(5), now);
+        sv.take_outgoing(); // drop the gamestate frames
+        sv.tick(now);
+        assert!(
+            sv.take_outgoing().is_empty(),
+            "nothing before the gamestate is acked"
         );
     }
 }

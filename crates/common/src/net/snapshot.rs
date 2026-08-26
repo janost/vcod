@@ -6,7 +6,7 @@
 
 use super::msg::{
     read_delta_client, read_delta_entity, read_delta_playerstate, ClientState, EntityState,
-    MsgReader, PlayerState,
+    MsgReader, MsgWriter, PlayerState,
 };
 use super::protocol::{Protocol, ENTITYNUM_NONE, GENTITYNUM_BITS};
 use std::collections::{BTreeMap, HashMap};
@@ -233,7 +233,8 @@ fn parse_packet_entities(
 /// The clientState stream: repeated `[1 bit][6-bit index][delta]`, a 0 bit
 /// terminates (`SV_WriteSnapshotToClient` 0x808e1fd;
 /// docs/research/clientstate-wire-format.md). Unmentioned clients carry
-/// forward; a removed delta drops the client.
+/// forward; a removed delta drops the client. On an uncompressed frame the
+/// caller passes no oldframe, so the roster restarts from null.
 fn parse_clients(
     r: &mut MsgReader,
     p: &Protocol,
@@ -257,6 +258,40 @@ fn parse_clients(
         }
     }
     new
+}
+
+/// The body of an uncompressed snapshot (`SV_WriteSnapshotToClient` with
+/// `deltaNum = 0`): header, playerstate from null, an empty packet-entity
+/// run, then one full clientState entry per connected client. No areamask on
+/// CoD 1.1. Entities join when the world has any.
+///
+/// Each slot present in `to_clients` (slot == client num) goes out as a full
+/// state from null, matching retail's encoding of uncompressed frames: force
+/// only suppresses entry omission and never widens `lc`, so elided zero
+/// fields decode right only against a null base. Unmentioned clients need no
+/// removal bit: an uncompressed frame restarts the reader's roster, so they
+/// vanish at parse. Explicit removals come back with delta frames.
+pub fn write_uncompressed(
+    w: &mut MsgWriter,
+    p: &Protocol,
+    server_time: i32,
+    ps_to: &PlayerState,
+    to_clients: &[Option<ClientState>],
+) {
+    use super::msg::{write_delta_client, write_delta_playerstate};
+    w.write_long(server_time);
+    w.write_byte(0); // deltaNum: uncompressed
+    w.write_byte(0); // snapFlags
+    write_delta_playerstate(w, p, &PlayerState::null(p), ps_to);
+    w.write_bits(ENTITYNUM_NONE as i32, GENTITYNUM_BITS as i32);
+    let null = ClientState::null(p);
+    for (slot, cs) in to_clients.iter().enumerate() {
+        let Some(cs) = cs else { continue };
+        w.write_bits(1, 1);
+        w.write_bits(slot as i32, 6);
+        write_delta_client(w, p, &null, Some(cs));
+    }
+    w.write_bits(0, 1);
 }
 
 #[cfg(test)]
@@ -745,5 +780,153 @@ mod tests {
         assert!(ring.newest().is_none());
         assert!(ring.get(newest).is_none());
         assert!(ring.two_for_time(0).is_none());
+    }
+
+    /// Three frames through one ring: a join, a shortening rename plus a
+    /// second join, then a disconnect with a surviving client whose team
+    /// clears to zero. Entries go out as full states from null, so every
+    /// frame decodes standalone.
+    #[test]
+    fn written_snapshot_client_lifecycle_round_trips() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let mut ring = SnapshotRing::new();
+
+        let mut ps = PlayerState::null(p);
+        ps.fields[PlayerState::field_index(p, "pm_type").unwrap()] = 4;
+        ps.fields[PlayerState::field_index(p, "origin[0]").unwrap()] = 384f32.to_bits() as i32;
+
+        // Frame A: client 0 appears out of nothing.
+        let a_to = vec![Some(ClientState::named(p, 0, 3, "vcod"))];
+        let mut w = MsgWriter::new(&h);
+        write_uncompressed(&mut w, p, 48_000, &ps, &a_to);
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        let s = ring.parse_into(&mut r, p, 10).unwrap();
+        assert!(s.valid);
+        assert_eq!(s.delta_num, -1);
+        assert_eq!(s.server_time, 48_000);
+        assert_eq!(s.ps.origin(p)[0], 384.0);
+        assert_eq!(s.ps.field_i32(p, "pm_type"), 4);
+        assert_eq!(s.clients[&0].name(p), "vcod");
+        assert!(s.entities.is_empty());
+        assert!(!r.is_overflowed());
+        assert_eq!(r.bits_read(), bits);
+
+        // Frame B: client 0 renamed shorter, client 3 joins. Slot indexes are
+        // client numbers, so the gap stays None.
+        let b_to = vec![
+            Some(ClientState::named(p, 0, 3, "bob")),
+            None,
+            None,
+            Some(ClientState::named(p, 3, 1, "eve")),
+        ];
+        let mut w = MsgWriter::new(&h);
+        write_uncompressed(&mut w, p, 48_050, &ps, &b_to);
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        let s = ring.parse_into(&mut r, p, 11).unwrap();
+        assert!(s.valid);
+        assert_eq!(s.clients[&0].name(p), "bob");
+        assert_eq!(s.clients[&3].name(p), "eve");
+        assert!(!r.is_overflowed());
+        assert_eq!(r.bits_read(), bits);
+
+        // Frame C: client 0 leaves by omission. An uncompressed frame
+        // restarts the reader's roster, so no removal bit exists; the
+        // survivor is re-sent as a full state from null with its team cleared
+        // back to zero, and that field must decode as zero rather than the
+        // roster carry-forward a non-null resolve would produce.
+        let mut eve_cleared = ClientState::named(p, 3, 1, "eve");
+        let ti = ClientState::field_index(p, "team").unwrap();
+        eve_cleared.fields[ti] = 0;
+        let c_to = vec![None, None, None, Some(eve_cleared)];
+        let mut w = MsgWriter::new(&h);
+        write_uncompressed(&mut w, p, 48_100, &ps, &c_to);
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        let s = ring.parse_into(&mut r, p, 12).unwrap();
+        assert!(s.valid);
+        assert_eq!(s.clients.keys().copied().collect::<Vec<_>>(), vec![3]);
+        assert_eq!(s.clients[&3].name(p), "eve");
+        assert_eq!(s.clients[&3].field_i32(p, "team"), 0);
+        assert!(!r.is_overflowed());
+        assert_eq!(r.bits_read(), bits);
+    }
+
+    /// Testing layer 2 from the design doc: parse a committed capture
+    /// snapshot to full state, rebuild it uncompressed with our writers from
+    /// null, parse again, and hold the result against retail's bytes.
+    #[test]
+    fn reencoded_capture_snapshot_round_trips() {
+        use crate::net::gamestate;
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+
+        let gs_data = crate::testing::fixture("net/gamestate.bin");
+        let mut gr = MsgReader::new(&gs_data[4..], &h);
+        let gs = gamestate::parse(&mut gr, p).unwrap();
+        let mut ring = SnapshotRing::new();
+        ring.set_baselines(gs.baselines.clone());
+
+        let data = crate::testing::fixture("net/snapshots.bin");
+        let mut off = 0usize;
+        let mut found: Option<Snapshot> = None;
+        while found.is_none() && off + 8 <= data.len() {
+            let message_num = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+            let len = u32::from_le_bytes(data[off + 4..off + 8].try_into().unwrap()) as usize;
+            off += 8;
+            let msg = &data[off..off + len];
+            off += len;
+
+            let mut r = MsgReader::new(&msg[4..], &h);
+            while !r.is_overflowed() {
+                match r.read_byte() {
+                    SVC_NOP => {}
+                    SVC_SERVER_COMMAND => {
+                        r.read_long();
+                        r.read_big_string();
+                    }
+                    SVC_SNAPSHOT => {
+                        let s = ring.parse_into(&mut r, p, message_num).unwrap();
+                        if s.valid {
+                            found = Some(s.clone());
+                        }
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        let cap = found.expect("capture holds no valid snapshot");
+        assert!(!cap.clients.is_empty(), "no clientStates in the snapshot");
+
+        let max_slot = *cap.clients.keys().max().unwrap() as usize;
+        let mut to_clients: Vec<Option<ClientState>> = vec![None; max_slot + 1];
+        for (&num, cs) in &cap.clients {
+            to_clients[num as usize] = Some(cs.clone());
+        }
+
+        let mut w = MsgWriter::new(&h);
+        write_uncompressed(&mut w, p, cap.server_time, &cap.ps, &to_clients);
+        let d = w.finish();
+        let mut out_ring = SnapshotRing::new();
+        let mut r = MsgReader::new(&d, &h);
+        let back = out_ring.parse_into(&mut r, p, cap.message_num).unwrap();
+        assert!(back.valid);
+        assert!(!r.is_overflowed());
+
+        assert_eq!(back.server_time, cap.server_time);
+        assert_eq!(back.ps, cap.ps);
+        assert_eq!(
+            back.clients.keys().copied().collect::<Vec<_>>(),
+            cap.clients.keys().copied().collect::<Vec<_>>()
+        );
+        for (&num, cs) in &cap.clients {
+            assert_eq!(back.clients[&num].fields, cs.fields, "client {num}");
+        }
     }
 }

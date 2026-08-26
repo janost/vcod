@@ -4,5 +4,7 @@
 pub mod client;
 pub mod configstrings;
 pub mod server;
+pub mod spectate;
+pub mod world;
 
 pub use server::{Server, ServerConfig};
