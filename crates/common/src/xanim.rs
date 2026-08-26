@@ -426,8 +426,10 @@ mod tests {
             }
         }
         assert!(failed.is_empty(), "unparsed xanims: {failed:?}");
-        // 2957 in the stock paks; downloaded map paks only add
-        assert!(ok >= 2957, "corpus shrank: {ok}");
+        // 2957 in the Deluxe paks, 2947 in a stock 1.1 install (the 1.5
+        // paks add ten, e.g. the viewmodel_kar98mp set); downloaded map
+        // paks only add
+        assert!(ok >= 2900, "corpus shrank: {ok}");
         let run = load(&fs, "pb_combatrun_forward_loop").unwrap();
         assert!(run.looping, "movement loop anim must set the loop flag");
     }
@@ -437,6 +439,10 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
+        // The 1.5 paks repackaged the view anims; a stock 1.1 install has none.
+        if fs.read("xanim/viewmodel_kar98mp_idle").is_none() {
+            return;
+        }
         // (name, frame_count, track_count)
         for (name, frames, bones) in [
             ("viewmodel_kar98mp_idle", 1, 48),

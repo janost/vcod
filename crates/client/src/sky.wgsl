@@ -11,8 +11,16 @@ struct Camera {
     fog_color_density: vec4<f32>,
     // x near, y far (GL_LINEAR)
     fog_range: vec4<f32>,
+    // xyz unit view forward; fog depth rides along it
+    view_fwd: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
+
+// Eye-space Z depth, the fixed-function fog coordinate without
+// GL_NV_fog_distance - retail on non-NVIDIA GPUs.
+fn fog_depth(world_pos: vec3<f32>) -> f32 {
+    return max(dot(world_pos - camera.eye_fog_mode.xyz, camera.view_fwd.xyz), 0.0);
+}
 
 @group(1) @binding(0) var t_side: texture_2d<f32>;
 @group(1) @binding(1) var s_side: sampler;
@@ -49,8 +57,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var c = textureSample(t_side, s_side, in.uv);
     // Linear farclip fog never touches the sky (RTCW drawsky=false); exp does.
     if (camera.eye_fog_mode.w == 1.0) {
-        let d = distance(in.world_pos, camera.eye_fog_mode.xyz);
-        let f = 1.0 - exp(-camera.fog_color_density.a * d);
+        let f = 1.0 - exp(-camera.fog_color_density.a * fog_depth(in.world_pos));
         c = vec4<f32>(mix(c.rgb, camera.fog_color_density.rgb, f), c.a);
     }
     return c;
@@ -73,8 +80,7 @@ fn fs_sun(in: VsOut) -> @location(0) vec4<f32> {
     // Additive glow; fogged exactly like the farbox.
     var rgb = c.rgb * c.a;
     if (camera.eye_fog_mode.w == 1.0) {
-        let d = distance(in.world_pos, camera.eye_fog_mode.xyz);
-        let f = 1.0 - exp(-camera.fog_color_density.a * d);
+        let f = 1.0 - exp(-camera.fog_color_density.a * fog_depth(in.world_pos));
         rgb = mix(rgb, camera.fog_color_density.rgb, f);
     }
     return vec4<f32>(rgb, 1.0);

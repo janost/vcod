@@ -612,12 +612,14 @@ mod tests {
             .any(|r| r.file == "null.wav" && r.probability == 5));
         let amb = &t.get("ambient_mp_carentan").unwrap()[0];
         assert!(amb.streamed && amb.looping && amb.channel == Channel::Local);
-        // pak1 has a `local` row, pak9 an `auto` one; see
+        // pak1 has a `local` row on every install; the Deluxe paks add an
+        // `auto` one (iw_sound2.csv) the 1.1 install lacks. See
         // `AudioSystem::set_ambient`.
         let ooa = t.get("player_out_of_ammo").unwrap();
-        assert_eq!(ooa.len(), 2);
         assert!(ooa.iter().any(|r| r.channel == Channel::Local));
-        assert!(ooa.iter().any(|r| r.channel == Channel::Auto));
+        if ooa.len() > 1 {
+            assert!(ooa.iter().any(|r| r.channel == Channel::Auto));
+        }
         // Retail csvs carry blank-first-cell rows after the header; those are
         // comments, not `skipped`.
         assert_eq!(t.skipped, 0, "retail rows should all parse");

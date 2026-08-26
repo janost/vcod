@@ -519,7 +519,10 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let data = fs.read("maps/mp/mp_neuville.bsp").unwrap();
+        // mp_neuville is a UO map; a stock 1.1 install does not carry it.
+        let Some(data) = fs.read("maps/mp/mp_neuville.bsp") else {
+            return;
+        };
         let bsp = bsp::parse(&data).unwrap();
         let p = placements(&bsp.entities);
         assert_eq!(p.len(), 236);
@@ -597,7 +600,10 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let data = fs.read("maps/mp/mp_neuville.bsp").unwrap();
+        // mp_neuville is a UO map; a stock 1.1 install does not carry it.
+        let Some(data) = fs.read("maps/mp/mp_neuville.bsp") else {
+            return;
+        };
         let bsp = bsp::parse(&data).unwrap();
         let props = build(&fs, &bsp.entities);
         assert!(props.verts.len() > 10_000, "{}", props.verts.len());

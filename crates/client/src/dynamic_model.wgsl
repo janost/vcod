@@ -10,6 +10,8 @@ struct Camera {
     fog_color_density: vec4<f32>,
     // x near, y far (GL_LINEAR)
     fog_range: vec4<f32>,
+    // xyz unit view forward; fog depth rides along it
+    view_fwd: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
@@ -77,13 +79,14 @@ fn fx_light_term(world_pos: vec3<f32>) -> vec3<f32> {
     return sum;
 }
 
-// glFog GL_EXP / GL_LINEAR factors (see shader.wgsl).
+// glFog GL_EXP / GL_LINEAR factors (see shader.wgsl); depth along the view
+// forward, the fixed-function fog coordinate without GL_NV_fog_distance.
 fn fog_amount(world_pos: vec3<f32>) -> f32 {
     let mode = camera.eye_fog_mode.w;
     if (mode == 0.0) {
         return 0.0;
     }
-    let d = distance(world_pos, camera.eye_fog_mode.xyz);
+    let d = max(dot(world_pos - camera.eye_fog_mode.xyz, camera.view_fwd.xyz), 0.0);
     if (mode == 1.0) {
         return 1.0 - exp(-camera.fog_color_density.a * d);
     }

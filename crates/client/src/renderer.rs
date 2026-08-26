@@ -276,6 +276,9 @@ pub struct Frame {
     pub view_proj: glam::Mat4,
     /// Camera position, the cell the visibility walk starts from.
     pub eye: glam::Vec3,
+    /// Unit view forward. Fog depth is measured along it (eye-space Z),
+    /// matching retail without GL_NV_fog_distance.
+    pub fwd: glam::Vec3,
     /// Seconds since start; drives tcMod and wave animation in the stage shaders.
     pub time: f32,
     pub cull: CullMode,
@@ -473,6 +476,9 @@ pub const STAGE_FLAG_EYE_OFFSET: u32 = 256;
 /// Sky dome draws only: fog applies in exp mode, never in linear mode
 /// (RTCW-MP tr_main.c R_SetFog sets drawsky per mode).
 pub const STAGE_FLAG_SKY: u32 = 512;
+/// `rgbGen vertex` halves the vertex rgb by identityLight; `exactVertex`
+/// stays raw (RTCW-MP tr_shade.c CGEN_VERTEX vs CGEN_EXACT_VERTEX).
+pub const STAGE_FLAG_VERTEX_RGB_HALF: u32 = 1024;
 
 /// Per-stage draw parameters, one dynamic-offset slot per stage batch. WGSL
 /// mirror is `StageParams` in shader.wgsl; byte offsets:
@@ -523,14 +529,30 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
     }
 
     let mut rgb = [1.0f32; 3];
+    // Retail runs one overbright bit (RTCW-MP tr_image.c: identityLight =
+    // 1/(1 << overbrightBits)), which halves the gens that read back through
+    // the vertex-colour path; identity, const and exactVertex pass through
+    // unscaled (tr_shade.c CGEN switch).
+    const IDENTITY_LIGHT: f32 = 0.5;
     match &st.rgb_gen {
-        RgbGen::Vertex | RgbGen::ExactVertex => flags |= STAGE_FLAG_VERTEX_RGB,
-        RgbGen::Const(c) | RgbGen::ConstLighting(c) => rgb = *c,
+        RgbGen::Vertex => {
+            flags |= STAGE_FLAG_VERTEX_RGB | STAGE_FLAG_VERTEX_RGB_HALF;
+        }
+        RgbGen::ExactVertex => flags |= STAGE_FLAG_VERTEX_RGB,
+        RgbGen::Identity => {}
+        RgbGen::IdentityLighting => rgb = [IDENTITY_LIGHT; 3],
+        RgbGen::Const(c) => rgb = *c,
+        RgbGen::ConstLighting(c) => {
+            rgb = [
+                c[0] * IDENTITY_LIGHT,
+                c[1] * IDENTITY_LIGHT,
+                c[2] * IDENTITY_LIGHT,
+            ]
+        }
         RgbGen::Wave(w) => {
-            let v = wave_value(w, t);
+            let v = wave_value(w, t) * IDENTITY_LIGHT;
             rgb = [v, v, v];
         }
-        RgbGen::Identity | RgbGen::IdentityLighting => {}
     }
     let alpha = match &st.alpha_gen {
         AlphaGen::Vertex => {
@@ -1487,8 +1509,9 @@ impl Renderer {
 
         let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera uniform"),
-            // proj + time + eye/fog tail, matching Camera in the WGSL modules
-            size: 128,
+            // proj + time + eye/fog tail + view forward, matching Camera in
+            // the WGSL modules
+            size: 144,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -2711,10 +2734,10 @@ impl Renderer {
     /// `vm` is `None` to draw the world only. Skips the frame if no
     /// swapchain texture can be acquired.
     pub fn render(&mut self, frame: Frame, vm: Option<VmDraw>) {
-        // `proj` (64) + `time_pad` (16) + eye/fog tail (48), matching Camera
-        // in the WGSL modules.
+        // `proj` (64) + `time_pad` (16) + eye/fog tail (48) + view forward
+        // (16), matching Camera in the WGSL modules.
         self.fog.advance(frame.time);
-        let mut camera = [0.0f32; 32];
+        let mut camera = [0.0f32; 36];
         camera[..16].copy_from_slice(&frame.view_proj.to_cols_array());
         camera[16] = frame.time;
         if self.fog.set {
@@ -2725,6 +2748,7 @@ impl Renderer {
         } else {
             camera[20..24].copy_from_slice(&[frame.eye.x, frame.eye.y, frame.eye.z, 0.0]);
         }
+        camera[32..36].copy_from_slice(&[frame.fwd.x, frame.fwd.y, frame.fwd.z, 0.0]);
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(&camera));
         if let Some(sky) = &self.sky {
@@ -3020,79 +3044,69 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.camera_bg, &[]);
-            // Linear fog hides the whole sky (RTCW-MP tr_sky.c:966-972,
-            // drawsky=false): the backdrop is the cleared fog colour alone.
-            let sky_drawable = !(self.fog.set && self.fog.live.linear);
             // The sky draws first so every world draw overwrites it; the box
-            // and dome both ignore depth (cleared 1.0) and write none.
-            if sky_drawable {
-                if let (Some(world), Some(sky)) = (&self.world, &self.sky) {
-                    if let Some(farbox) = &sky.farbox {
-                        pass.set_pipeline(&farbox.pipeline);
-                        pass.set_bind_group(2, &farbox.eye_bg, &[]);
-                        pass.set_vertex_buffer(0, farbox.vertex_buf.slice(..));
-                        pass.set_index_buffer(
-                            farbox.index_buf.slice(..),
-                            wgpu::IndexFormat::Uint32,
+            // and dome both ignore depth (cleared 1.0) and write none. CoD
+            // keeps the sky visible under linear fog (VERIFIED live on
+            // mp_ship, unlike RTCW's drawsky=false).
+            if let (Some(world), Some(sky)) = (&self.world, &self.sky) {
+                if let Some(farbox) = &sky.farbox {
+                    pass.set_pipeline(&farbox.pipeline);
+                    pass.set_bind_group(2, &farbox.eye_bg, &[]);
+                    pass.set_vertex_buffer(0, farbox.vertex_buf.slice(..));
+                    pass.set_index_buffer(farbox.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    for (axis, &(first, end)) in farbox.sides.iter().enumerate() {
+                        pass.set_bind_group(1, &farbox.side_bgs[axis], &[]);
+                        pass.draw_indexed(first..end, 0, 0..1);
+                    }
+                }
+                // The sunfile disc: additive billboard along the sun
+                // direction at farbox distance, camera-facing via world axes.
+                if let Some(sun) = &sky.sun {
+                    let center = frame.eye + sun.dir * sky::box_size(Z_FAR, Z_NEAR);
+                    let up = glam::Vec3::Z;
+                    let right = up.cross(sun.dir).normalize_or_zero();
+                    let quad_up = sun.dir.cross(right);
+                    let r = right * sun.half_extent;
+                    let u = quad_up * sun.half_extent;
+                    let corner = |dr: f32, du: f32| sky::SkyBoxVert {
+                        pos: (center + r * dr + u * du).to_array(),
+                        uv: [(dr + 1.0) * 0.5, 1.0 - (du + 1.0) * 0.5],
+                    };
+                    let verts = [
+                        corner(-1.0, -1.0),
+                        corner(1.0, -1.0),
+                        corner(1.0, 1.0),
+                        corner(-1.0, -1.0),
+                        corner(1.0, 1.0),
+                        corner(-1.0, 1.0),
+                    ];
+                    self.queue
+                        .write_buffer(&sun.vertex_buf, 0, bytemuck::cast_slice(&verts));
+                    pass.set_pipeline(&sun.pipeline);
+                    pass.set_bind_group(1, &sun.bind_group, &[]);
+                    pass.set_vertex_buffer(0, sun.vertex_buf.slice(..));
+                    pass.draw(0..6, 0..1);
+                }
+                if let Some(dome) = &sky.dome {
+                    pass.set_vertex_buffer(0, dome.vertex_buf.slice(..));
+                    pass.set_index_buffer(dome.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    let mut bound: Option<(StageVariant, bool)> = None;
+                    for ds in &dome.stages {
+                        let key = (ds.variant, ds.two_sided);
+                        if bound != Some(key) {
+                            pass.set_pipeline(self.stage_pipeline(ds.variant, ds.two_sided, false));
+                            bound = Some(key);
+                        }
+                        pass.set_bind_group(1, ds.mat.bind_group(frame.time), &[]);
+                        pass.set_bind_group(
+                            2,
+                            ds.stage.bind_group(frame.time),
+                            &[
+                                u32::try_from(u64::from(ds.slot) * world.stage_params_stride)
+                                    .expect("stage params slot offset fits a dynamic offset"),
+                            ],
                         );
-                        for (axis, &(first, end)) in farbox.sides.iter().enumerate() {
-                            pass.set_bind_group(1, &farbox.side_bgs[axis], &[]);
-                            pass.draw_indexed(first..end, 0, 0..1);
-                        }
-                    }
-                    // The sunfile disc: additive billboard along the sun
-                    // direction at farbox distance, camera-facing via world axes.
-                    if let Some(sun) = &sky.sun {
-                        let center = frame.eye + sun.dir * sky::box_size(Z_FAR, Z_NEAR);
-                        let up = glam::Vec3::Z;
-                        let right = up.cross(sun.dir).normalize_or_zero();
-                        let quad_up = sun.dir.cross(right);
-                        let r = right * sun.half_extent;
-                        let u = quad_up * sun.half_extent;
-                        let corner = |dr: f32, du: f32| sky::SkyBoxVert {
-                            pos: (center + r * dr + u * du).to_array(),
-                            uv: [(dr + 1.0) * 0.5, 1.0 - (du + 1.0) * 0.5],
-                        };
-                        let verts = [
-                            corner(-1.0, -1.0),
-                            corner(1.0, -1.0),
-                            corner(1.0, 1.0),
-                            corner(-1.0, -1.0),
-                            corner(1.0, 1.0),
-                            corner(-1.0, 1.0),
-                        ];
-                        self.queue
-                            .write_buffer(&sun.vertex_buf, 0, bytemuck::cast_slice(&verts));
-                        pass.set_pipeline(&sun.pipeline);
-                        pass.set_bind_group(1, &sun.bind_group, &[]);
-                        pass.set_vertex_buffer(0, sun.vertex_buf.slice(..));
-                        pass.draw(0..6, 0..1);
-                    }
-                    if let Some(dome) = &sky.dome {
-                        pass.set_vertex_buffer(0, dome.vertex_buf.slice(..));
-                        pass.set_index_buffer(dome.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                        let mut bound: Option<(StageVariant, bool)> = None;
-                        for ds in &dome.stages {
-                            let key = (ds.variant, ds.two_sided);
-                            if bound != Some(key) {
-                                pass.set_pipeline(self.stage_pipeline(
-                                    ds.variant,
-                                    ds.two_sided,
-                                    false,
-                                ));
-                                bound = Some(key);
-                            }
-                            pass.set_bind_group(1, ds.mat.bind_group(frame.time), &[]);
-                            pass.set_bind_group(
-                                2,
-                                ds.stage.bind_group(frame.time),
-                                &[
-                                    u32::try_from(u64::from(ds.slot) * world.stage_params_stride)
-                                        .expect("stage params slot offset fits a dynamic offset"),
-                                ],
-                            );
-                            pass.draw_indexed(0..dome.index_count, 0, 0..1);
-                        }
+                        pass.draw_indexed(0..dome.index_count, 0, 0..1);
                     }
                 }
             }
@@ -4680,7 +4694,10 @@ mod tests {
         let p = stage_params(&sh, 0, 0.0).unwrap();
         assert_eq!(
             p.flags,
-            STAGE_FLAG_BUNDLE0_VECTOR | STAGE_FLAG_VERTEX_RGB | STAGE_FLAG_VERTEX_ALPHA
+            STAGE_FLAG_BUNDLE0_VECTOR
+                | STAGE_FLAG_VERTEX_RGB
+                | STAGE_FLAG_VERTEX_RGB_HALF
+                | STAGE_FLAG_VERTEX_ALPHA
         );
         assert_eq!(p.vec0_s, [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(p.vec0_t, [0.0, 1.0, 0.0, 0.0]);
@@ -4726,23 +4743,20 @@ mod tests {
         let p = stage_params(&sh, 0, 123.0).unwrap();
         let rv = vcod_common::shader::wave_value(&rgb_wave, 123.0);
         let av = vcod_common::shader::wave_value(&a_wave, 123.0);
+        // rgb wave rides the identityLight halving; alpha waves do not
         assert!(
-            (p.tint[0] - rv).abs() < 1e-6 && (rv - 1.5).abs() < 1e-3,
+            (p.tint[0] - rv * 0.5).abs() < 1e-6 && (rv - 1.5).abs() < 1e-3,
             "{p:?}"
         );
-        assert_eq!(p.tint[1], rv);
-        assert_eq!(p.tint[2], rv);
+        assert_eq!(p.tint[1], rv * 0.5);
+        assert_eq!(p.tint[2], rv * 0.5);
         assert!((p.tint[3] - av).abs() < 1e-6 && (av - 0.25).abs() < 1e-6);
         assert_eq!(p.flags, 0);
     }
 
     #[test]
     fn stage_params_identity_gens_stay_white_without_flags() {
-        for rgb in [
-            RgbGen::Identity,
-            RgbGen::IdentityLighting,
-            RgbGen::ExactVertex,
-        ] {
+        for rgb in [RgbGen::Identity, RgbGen::ExactVertex] {
             let sh = Shader {
                 name: "test/id".into(),
                 stages: vec![Stage {
@@ -4768,6 +4782,39 @@ mod tests {
                 p.flags,
                 u32::from(rgb == RgbGen::ExactVertex) * STAGE_FLAG_VERTEX_RGB
             );
+        }
+    }
+
+    /// One overbright bit halves identityLighting, constLighting and
+    /// rgbGen vertex; identity, const and exactVertex pass through
+    /// (RTCW-MP tr_shade.c CGEN switch, identityLight = 1/(1<<overbrightBits)).
+    #[test]
+    fn stage_params_identity_light_halves_the_lighting_gens() {
+        let cases: &[(RgbGen, [f32; 3])] = &[
+            (RgbGen::IdentityLighting, [0.5; 3]),
+            (RgbGen::ConstLighting([0.6, 0.65, 0.7]), [0.3, 0.325, 0.35]),
+        ];
+        for (rgb, want) in cases {
+            let sh = Shader {
+                name: "test/il".into(),
+                stages: vec![Stage {
+                    bundles: vec![Bundle {
+                        image: ImageRef::Path("a".into()),
+                        anim: None,
+                        clamp: false,
+                        tcmods: vec![],
+                        vector: None,
+                    }],
+                    blend: None,
+                    depth_write: None,
+                    alpha_func: None,
+                    rgb_gen: rgb.clone(),
+                    alpha_gen: AlphaGen::Identity,
+                }],
+                ..Default::default()
+            };
+            let p = stage_params(&sh, 0, 9.0).unwrap();
+            assert_eq!(p.tint[..3], want[..], "{rgb:?}");
         }
     }
 

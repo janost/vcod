@@ -385,6 +385,10 @@ mod tests {
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
+        // The 1.5 paks repackaged the view anims; the pose bind needs one.
+        if fs.read("xanim/viewmodel_kar98mp_idle").is_none() {
+            return;
+        };
         let hands = crate::xmodel::load(&fs, "viewmodel_hands_new").unwrap();
         let gun = crate::xmodel::load(&fs, "viewmodel_kar98k").unwrap();
         let skel = Skeleton::build(&[&hands, &gun]);

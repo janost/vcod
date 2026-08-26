@@ -7,6 +7,8 @@ struct Camera {
     fog_color_density: vec4<f32>,
     // x near, y far (GL_LINEAR)
     fog_range: vec4<f32>,
+    // xyz unit view forward; fog depth rides along it
+    view_fwd: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
@@ -55,6 +57,8 @@ const F_BUNDLE0_VECTOR: u32 = 64u;
 const F_BUNDLE1_VECTOR: u32 = 128u;
 const F_EYE_OFFSET: u32 = 256u;
 const F_SKY: u32 = 512u;
+// rgbGen vertex: vertex rgb halved by identityLight (overbright)
+const F_VERTEX_HALF: u32 = 1024u;
 // glAlphaFunc thresholds are 128/255 for both LT128 and GE128.
 const ATEST128: f32 = 0.5019607843137255;
 
@@ -170,13 +174,15 @@ fn fx_light_term(world_pos: vec3<f32>) -> vec3<f32> {
 }
 
 // glFog GL_EXP / GL_LINEAR factors; retail's two fog modes from
-// configstring 12 (RTCW-MP tr_main.c R_SetFog picks the GL mode).
+// configstring 12 (RTCW-MP tr_main.c R_SetFog picks the GL mode). The fog
+// coordinate is eye-space Z (depth along the view forward), the fixed-
+// function default without GL_NV_fog_distance - retail on non-NVIDIA GPUs.
 fn fog_amount(world_pos: vec3<f32>) -> f32 {
     let mode = camera.eye_fog_mode.w;
     if (mode == 0.0) {
         return 0.0;
     }
-    let d = distance(world_pos, camera.eye_fog_mode.xyz);
+    let d = max(dot(world_pos - camera.eye_fog_mode.xyz, camera.view_fwd.xyz), 0.0);
     if (mode == 1.0) {
         return 1.0 - exp(-camera.fog_color_density.a * d);
     }
@@ -264,7 +270,11 @@ fn fs_stage(in: VsOut) -> @location(0) vec4<f32> {
 
     var col = c0 * c1 * vec4<f32>(stage.tint.rgb, 1.0);
     if ((stage.flags & F_VERTEX_RGB) != 0u) {
-        col = vec4<f32>(col.rgb * in.color.rgb, col.a);
+        var vrgb = in.color.rgb;
+        if ((stage.flags & F_VERTEX_HALF) != 0u) {
+            vrgb = vrgb * 0.5;
+        }
+        col = vec4<f32>(col.rgb * vrgb, col.a);
     }
     col.a = c0.a * c1.a * stage.tint.a;
     if ((stage.flags & F_VERTEX_ALPHA) != 0u) {
