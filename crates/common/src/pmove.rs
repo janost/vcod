@@ -76,6 +76,15 @@ pub const LADDER_ACCELERATE: f32 = 9.0;
 pub const PM_LADDER_FRICTION: f32 = 16.0;
 /// RTCW's grab-from-above push into the wall (`ladderforward`).
 pub const LADDER_PUSH_SPEED: f32 = 200.0;
+/// Re-grab lock after a ladder push-off: pm_ladderJumpTime = 300 int
+/// (rodata 0x70830, compared as delta <= 299 @0x33822).
+pub const LADDER_REGRAB_LOCK_MS: f32 = 300.0;
+/// Re-jump gate on the ladder push-off: cmd.serverTime - ps.jumpTime > 499
+/// (@0x2ebb3).
+pub const LADDER_REJUMP_COOLDOWN_MS: f32 = 500.0;
+/// Horizontal reset along the reflected forward when leaving a ladder
+/// (pm_ladderPushOff, rodata 0x708d8).
+pub const LADDER_PUSHOFF_SPEED: f32 = 128.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stance {
@@ -132,6 +141,14 @@ pub struct PlayerState {
     /// Plane normal of that surface; persists while off the wall so the
     /// airborne probe can stick with the ladder we left.
     pub ladder_normal: Vec3,
+    /// ms elapsed since the last ladder push-off; INFINITY when never. Retail
+    /// stamps cmd.serverTime into ps.jumpTime on the ladder/steep jumps only
+    /// and compares deltas (@0x2ebb3, @0x33822) - there is no ground-jump
+    /// timer to port.
+    pub since_jump_ms: f32,
+    /// A held jump key blocks another ladder push-off until released
+    /// (pm_flags bit 0x8: set @0x2ec34, cleared @0x34135 when upmove <= 9).
+    pub jump_latched: bool,
 }
 
 impl PlayerState {
@@ -149,6 +166,8 @@ impl PlayerState {
             waterjump_ms: 0.0,
             on_ladder: false,
             ladder_normal: Vec3::ZERO,
+            since_jump_ms: f32::INFINITY,
+            jump_latched: false,
         }
     }
 
@@ -198,6 +217,11 @@ pub struct PmInput {
 /// `dt` in seconds, clamped to `MAX_FRAME_MS`.
 pub fn pmove(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
+    ps.since_jump_ms += dt * 1000.0;
+    // retail clears the held-jump latch post-move when upmove drops (@0x34135)
+    if !input.jump {
+        ps.jump_latched = false;
+    }
     update_stance(ps, input, world);
     update_lean(ps, input, world, dt);
     set_water_level(ps, world);
@@ -219,8 +243,10 @@ pub fn pmove(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
         water_move(ps, input, world, dt);
     } else {
         // retail ground jump (fn 0x316F4 @0x31CC0): gated on forward input,
-        // stance-dependent height, horizontal velocity kept
-        if input.jump && ps.on_ground && input.forward != 0.0 {
+        // stance-dependent height, horizontal velocity kept. Prone refuses:
+        // PM_UpdateAimDownSightFlag sets pm_flags bit 0x20 (@0x37286) and the
+        // gate tests it (@0x31ccb). No cooldown timer exists on this path.
+        if input.jump && ps.on_ground && input.forward != 0.0 && ps.stance != Stance::Prone {
             let height = match ps.stance {
                 Stance::Stand => JUMP_HEIGHT_STAND,
                 _ => JUMP_HEIGHT_LOW,
@@ -537,6 +563,12 @@ fn check_ladder_move(
         ps.on_ladder = false;
         return None;
     }
+    // skip detection within pm_ladderJumpTime of a push-off (@0x33822): this
+    // is what makes a push-off actually leave the wall
+    if ps.since_jump_ms < LADDER_REGRAB_LOCK_MS {
+        ps.on_ladder = false;
+        return None;
+    }
     let walking = ps.on_ground;
     let tracedist = if walking {
         LADDER_TRACE_DIST_WALK
@@ -591,6 +623,36 @@ fn check_ladder_move(
     ladder.then_some((normal, ladderforward))
 }
 
+/// Retail `PM_Jump` body (@0x2eb98), reached from a ladder only. vz =
+/// sqrt(GRAVITY * 78) scaled x0.75 leaving the wall (@0x708c8/0x708d0);
+/// horizontal reset to 128 along the horizontal forward reflected off the
+/// ladder plane while facing it (@0x2eca2-0x2ed36, coefficient -2.0
+/// @0x708d4), else along the plain forward. The weapon-state gates at
+/// @0x2ebcc-0x2ec03 have no vcod counterpart; events/anim are out of scope.
+fn ladder_push_off(ps: &mut PlayerState, input: &PmInput, normal: Vec3) -> bool {
+    if !input.jump
+        || ps.stance != Stance::Stand
+        || ps.jump_latched
+        || ps.since_jump_ms <= LADDER_REJUMP_COOLDOWN_MS - 1.0
+    {
+        return false;
+    }
+    let f = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0).normalize_or_zero();
+    // reflection only when looking into the wall (n.forward < 0, @0x2ecd5)
+    let dir = if normal.dot(forward3(ps)) < 0.0 {
+        let d2 = f.x * normal.x + f.y * normal.y;
+        (f - normal * (2.0 * d2)).normalize_or_zero()
+    } else {
+        f
+    };
+    ps.velocity.x = dir.x * LADDER_PUSHOFF_SPEED;
+    ps.velocity.y = dir.y * LADDER_PUSHOFF_SPEED;
+    ps.velocity.z = (GRAVITY * 78.0).sqrt() * 0.75;
+    ps.on_ladder = false;
+    ps.jump_latched = true;
+    true
+}
+
 /// RTCW `bg_pmove.c` `PM_LadderMove` with retail CoD 1.1 coefficients (const
 /// provenance above). Pitch drives the climb rate; strafe slides along the
 /// ladder face.
@@ -602,6 +664,14 @@ fn ladder_move(
     world: &CollisionWorld,
     dt: f32,
 ) {
+    // retail tries the push-off first; a jump runs the normal mover this
+    // frame and stamps jumpTime (@0x3394c-0x33964)
+    if ladder_push_off(ps, input, normal) {
+        air_move(ps, input, world, dt);
+        ps.since_jump_ms = 0.0;
+        return;
+    }
+
     if ladderforward {
         let push = -LADDER_PUSH_SPEED;
         ps.velocity.x = normal.x * push;
@@ -647,6 +717,26 @@ fn ladder_move(
         } else {
             ps.velocity.z = (ps.velocity.z + GRAVITY * dt).min(0.0);
         }
+    }
+    // airborne wall glue (@0x33cf1, gated on pml.walking == 0): strip
+    // velocity along the ladder normal and press back into the wall - 500
+    // holding forward, else 250 (@0x70cd4/0x70cd8). This is retail's sticky
+    // grip, not a dismount hop; leaving happens via the push-off above.
+    if !ps.on_ground {
+        let n = Vec3::new(normal.x, normal.y, 0.0);
+        let d = ps.velocity.x * n.x + ps.velocity.y * n.y;
+        ps.velocity.x -= d * n.x;
+        ps.velocity.y -= d * n.y;
+        // the 500 selector compares the climb wish sign (@0x33d2e), which the
+        // pitch upscale zeroes looking steeply down (@0x33a33)
+        let u = ((forward3(ps).z + LADDER_UPSCALE_BIAS) * LADDER_UPSCALE_GAIN).clamp(-1.0, 1.0);
+        let k = if input.forward > 0.0 && u != 0.0 {
+            -500.0
+        } else {
+            -250.0
+        };
+        ps.velocity.x += k * n.x;
+        ps.velocity.y += k * n.y;
     }
     // no gravity while going up a ladder
     step_slide_move(ps, world, dt, false);
@@ -954,6 +1044,52 @@ mod tests {
         );
         assert!(ps.on_ground, "must not jump without forward input");
         assert!(ps.origin.z < 0.5);
+    }
+
+    #[test]
+    fn ground_jumps_chain_while_holding_forward_and_jump() {
+        // no cooldown to port: retail's ps.jumpTime is written only by the
+        // ladder push-off (@0x33964) and steep-slope jump (@0x2f279), never
+        // by the ground jump; its bit-0x20 gate is ADS idle state, not a timer
+        let w = flat();
+        let hop = PmInput {
+            forward: 1.0,
+            jump: true,
+            ..Default::default()
+        };
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 50); // settle
+        let mut launches = 0;
+        let mut prev_vz = ps.velocity.z;
+        for _ in 0..300 {
+            pmove(&mut ps, &hop, &w, 1.0 / 125.0);
+            if prev_vz < 100.0 && ps.velocity.z > 200.0 {
+                launches += 1;
+            }
+            prev_vz = ps.velocity.z;
+        }
+        assert!(launches >= 3, "expected chained jumps, got {launches}");
+    }
+
+    #[test]
+    fn prone_blocks_ground_jump() {
+        // PM_UpdateAimDownSightFlag sets pm_flags bit 0x20 whenever prone
+        // (@0x37286) and the ground-jump gate refuses on it (@0x31ccb)
+        let w = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 50); // settle
+        let hop = PmInput {
+            forward: 1.0,
+            jump: true,
+            prone: true,
+            ..Default::default()
+        };
+        let mut apex = 0.0f32;
+        for _ in 0..60 {
+            pmove(&mut ps, &hop, &w, 1.0 / 125.0);
+            apex = apex.max(ps.origin.z);
+        }
+        assert!(apex < 2.0, "prone must not jump, apex {apex}");
     }
 
     #[test]
@@ -1567,6 +1703,177 @@ mod tests {
             "pushed into the wall instead of falling, at {}",
             ps.origin
         );
+    }
+
+    #[test]
+    fn ladder_push_off_gate_matrix() {
+        // PM_Jump gates @0x2ebb3-0x2ec13: 500 ms since the last push-off, not
+        // crouched/prone, jump key released since the previous one
+        let n = Vec3::new(-1.0, 0.0, 0.0);
+        let mk = |stance: Stance| {
+            let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+            ps.stance = stance;
+            ps.on_ladder = true;
+            ps.since_jump_ms = 10000.0;
+            ps
+        };
+        let jump = PmInput {
+            jump: true,
+            ..Default::default()
+        };
+
+        let mut ps = mk(Stance::Stand);
+        assert!(ladder_push_off(&mut ps, &jump, n));
+        // facing straight into the wall (yaw 0, normal -1): reflection sends
+        // the push straight back; vz = sqrt(78 * g) * 0.75 = 187.35
+        assert!((ps.velocity.z - 187.35).abs() < 0.1, "vz {}", ps.velocity.z);
+        assert!((ps.velocity.x + 128.0).abs() < 0.1, "vx {}", ps.velocity.x);
+        assert!(ps.velocity.y.abs() < 0.1);
+        assert!(ps.jump_latched);
+
+        let mut ps = mk(Stance::Stand);
+        ps.since_jump_ms = LADDER_REJUMP_COOLDOWN_MS - 1.0;
+        assert!(!ladder_push_off(&mut ps, &jump, n), "inside the cooldown");
+
+        let mut ps = mk(Stance::Stand);
+        ps.jump_latched = true;
+        assert!(
+            !ladder_push_off(&mut ps, &jump, n),
+            "held key must release first"
+        );
+
+        let mut ps = mk(Stance::Crouch);
+        assert!(!ladder_push_off(&mut ps, &jump, n), "crouch refuses");
+        let mut ps = mk(Stance::Prone);
+        assert!(!ladder_push_off(&mut ps, &jump, n), "prone refuses");
+
+        let mut ps = mk(Stance::Stand);
+        assert!(
+            !ladder_push_off(&mut ps, &PmInput::default(), n),
+            "no jump key"
+        );
+    }
+
+    #[test]
+    fn ladder_push_off_leaves_the_wall_with_reflected_forward() {
+        let w = ladder_world();
+        let climb = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        let mut ps = PlayerState::spawn(Vec3::new(20.0, 0.0, 0.2), 0.0);
+        for _ in 0..200 {
+            pmove(&mut ps, &climb, &w, 1.0 / 125.0);
+            if ps.on_ladder && ps.origin.z > 25.0 {
+                break;
+            }
+        }
+        assert!(ps.on_ladder && ps.origin.z > 25.0, "set up: {}", ps.origin);
+
+        // facing straight into the wall (yaw 0, wall face at x=50): the
+        // reflection (@0x2eca2-0x2ed36) sends the push straight back out
+        pmove(
+            &mut ps,
+            &PmInput {
+                forward: 1.0,
+                jump: true,
+                ..Default::default()
+            },
+            &w,
+            1.0 / 125.0,
+        );
+        assert!(!ps.on_ladder, "push-off must clear the ladder");
+        // impulse values pinned in the gate-matrix unit test; here the normal
+        // mover also ran this frame (air accel + gravity), so ranges only
+        assert!(
+            (170.0..190.0).contains(&ps.velocity.z),
+            "push-off vz {}",
+            ps.velocity.z
+        );
+        assert!(
+            (-130.0..-124.0).contains(&ps.velocity.x),
+            "push-off vx {}",
+            ps.velocity.x
+        );
+        assert!(ps.since_jump_ms < 16.0, "push-off stamps the timer");
+    }
+
+    #[test]
+    fn ladder_regrab_locks_for_300ms_after_a_push_off() {
+        // detection is skipped while within pm_ladderJumpTime of a push-off
+        // (@0x33822, pm_ladderJumpTime = 300 @0x70830)
+        let w = ladder_world();
+        let climb = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+
+        let mut locked = PlayerState::spawn(Vec3::new(33.0, 0.0, 0.2), 0.0);
+        locked.since_jump_ms = 100.0;
+        tick(&mut locked, &climb, &w, 10);
+        assert!(
+            !locked.on_ladder,
+            "must not regrab inside the lock, at {}",
+            locked.origin
+        );
+
+        let mut free = PlayerState::spawn(Vec3::new(33.0, 0.0, 0.2), 0.0);
+        free.since_jump_ms = LADDER_REGRAB_LOCK_MS - 40.0;
+        tick(&mut free, &climb, &w, 10);
+        assert!(
+            free.on_ladder,
+            "must regrab once the lock elapses, at {}",
+            free.origin
+        );
+    }
+
+    #[test]
+    fn airborne_ladder_glue_presses_back_into_the_wall() {
+        // PM_LadderMove tail @0x33cf1: while airborne on a ladder, strip
+        // velocity along the ladder normal and press into the wall at 250,
+        // or 500 holding forward (rodata 0x70cd4/0x70cd8)
+        let w = flat();
+        let n = Vec3::new(-1.0, 0.0, 0.0); // wall to the east, normal west
+
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 40.0), 0.0);
+        ps.on_ground = false;
+        ladder_move(&mut ps, &PmInput::default(), n, false, &w, 1.0 / 125.0);
+        assert!(
+            (ps.velocity.x - 250.0).abs() < 1.0,
+            "neutral vx {}",
+            ps.velocity.x
+        );
+
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 40.0), 0.0);
+        ps.on_ground = false;
+        ladder_move(
+            &mut ps,
+            &PmInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+            n,
+            false,
+            &w,
+            1.0 / 125.0,
+        );
+        assert!(
+            (ps.velocity.x - 500.0).abs() < 1.0,
+            "forward vx {}",
+            ps.velocity.x
+        );
+
+        // tangential motion survives the glue (minus ladder friction)
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 40.0), 0.0);
+        ps.on_ground = false;
+        ps.velocity = Vec3::new(0.0, 100.0, 0.0);
+        ladder_move(&mut ps, &PmInput::default(), n, false, &w, 1.0 / 125.0);
+        assert!(
+            (72.0..92.0).contains(&ps.velocity.y),
+            "tangential vy survives, {}",
+            ps.velocity.y
+        );
+        assert!((ps.velocity.x - 250.0).abs() < 1.0);
     }
 
     #[test]
