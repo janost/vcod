@@ -1,7 +1,9 @@
 //! Q3-style shader scripts: the type model, the block splitter and the stage
 //! parser shared by every later parsing pass.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+use crate::pk3::Pk3Fs;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlendFactor {
@@ -1071,6 +1073,130 @@ pub fn parse_shader(name: &str, body: &[&str], warns: &mut WarnSet) -> Shader {
     sh
 }
 
+// ---- library ----
+
+/// Every `.shader` script in the mod's paks, parsed and keyed by material
+/// name. Later archives win because `Pk3Fs` resolves each script path to its
+/// highest layer already, and a name repeated inside one script takes the
+/// last block, like RTCW's hash insert.
+pub struct ShaderLib {
+    by_name: HashMap<String, Shader>,
+    /// First texture path per material (lowercased, known image extension
+    /// stripped): what the implicit-material loader used to read off the
+    /// minimal parser in `assets.rs`.
+    images: HashMap<String, String>,
+}
+
+impl ShaderLib {
+    pub fn load(fs: &Pk3Fs) -> Self {
+        let mut lib = Self {
+            by_name: HashMap::new(),
+            images: HashMap::new(),
+        };
+        // one set for the whole scan: repeated damage across many files
+        // warns once per (shader, message)
+        let mut warns = WarnSet::new();
+        for path in fs.names_with_suffix(".shader") {
+            let Some(raw) = fs.read(&path) else { continue };
+            let text = String::from_utf8_lossy(&raw);
+            for (name, body) in split_blocks(&text) {
+                // glued `}{` continuation blocks carry no name of their own
+                if name.is_empty() {
+                    continue;
+                }
+                let sh = parse_shader(&name, &body, &mut warns);
+                // from the raw body, not the parsed stages: a gated-out or
+                // dropped stage must still yield the material's texture
+                if let Some(img) = body_image(&body) {
+                    lib.images.insert(name.clone(), img);
+                }
+                lib.by_name.insert(name, sh);
+            }
+        }
+        lib
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Shader> {
+        self.by_name.get(&norm_key(name))
+    }
+
+    /// First `map`/`clampmap` image path of the shader (see [`body_image`]);
+    /// `None` when the block references no real texture.
+    pub fn image(&self, name: &str) -> Option<&str> {
+        self.images.get(&norm_key(name)).map(String::as_str)
+    }
+
+    /// The whole material->image table, for helpers that take the map form.
+    pub fn image_map(&self) -> &HashMap<String, String> {
+        &self.images
+    }
+
+    /// Whether the fx quad pass draws this material on the additive
+    /// pipeline: the stage carrying the material's first image blends onto
+    /// GL_ONE (`add`, `GL_ONE GL_ONE`, `GL_SRC_ALPHA GL_ONE`). Scoping to
+    /// the image's stage keeps two-stage decal scripts (alpha base plus a
+    /// perlight overlay) from being retagged by the later stage; scoping to
+    /// any stage instead flips 58 stock materials' rendering.
+    pub fn is_additive(&self, name: &str) -> bool {
+        self.get(name).is_some_and(|s| {
+            s.stages
+                .iter()
+                .find(|st| {
+                    st.bundles
+                        .iter()
+                        .any(|b| matches!(b.image, ImageRef::Path(_)))
+                })
+                .is_some_and(|st| matches!(st.blend, Some((_, BlendFactor::One))))
+        })
+    }
+
+    pub fn uses_polygon_offset(&self, name: &str) -> bool {
+        self.get(name).is_some_and(|s| s.polygon_offset)
+    }
+
+    pub fn sky_blocks(&self) -> impl Iterator<Item = &Shader> {
+        self.by_name.values().filter(|s| s.sky.is_some())
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_name.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_name.is_empty()
+    }
+}
+
+fn norm_key(name: &str) -> String {
+    name.to_lowercase().replace('\\', "/")
+}
+
+/// The first `map`/`clampmap` image of a raw block body, normalized the way
+/// the minimal parser stored them: lowercased, leading slash and known image
+/// extension gone, `$lightmap`/`*white` skipped, `clamp`/`clampY`/
+/// `heightToNormal` treated as modifiers before the path.
+fn body_image(body: &[&str]) -> Option<String> {
+    let mut want = false;
+    for &tok in body {
+        let t = tok.to_ascii_lowercase();
+        if want {
+            want = false;
+            if matches!(t.as_str(), "clamp" | "clampy" | "heighttonormal") {
+                want = true;
+            } else if !t.starts_with(['$', '*']) {
+                let stripped = [".tga", ".jpg", ".dds"]
+                    .iter()
+                    .find_map(|e| t.strip_suffix(e))
+                    .unwrap_or(&t);
+                return Some(stripped.trim_start_matches('/').to_string());
+            }
+            continue;
+        }
+        want = t == "map" || t == "clampmap";
+    }
+    None
+}
+
 // ---- tcMod runtime evaluation ----
 // Math pinned to RTCW-MP src/renderer/tr_shade_calc.c; table build loop is
 // tr_init.c R_Init.
@@ -1488,7 +1614,10 @@ mod tests {
             phase: 0.25,
             freq: 0.5,
         };
-        assert_eq!(bundle_turb(&[turb.clone()], 3.0), [2.0, 1.75, 2.0, 1.75]);
+        assert_eq!(
+            bundle_turb(std::slice::from_ref(&turb), 3.0),
+            [2.0, 1.75, 2.0, 1.75]
+        );
         // the affine pass leaves turbulence untouched
         assert_eq!(
             bundle_affine(
@@ -2258,5 +2387,44 @@ textures/sfx/test_water
                 two_sided: true,
             })
         );
+    }
+
+    // ---- library ----
+
+    fn make_pk3(dir: &std::path::Path, file: &str, script: &str) {
+        use std::io::Write;
+        let f = std::fs::File::create(dir.join(file)).unwrap();
+        let mut z = zip::ZipWriter::new(f);
+        z.start_file("scripts/s.shader", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(script.as_bytes()).unwrap();
+        z.finish().unwrap();
+    }
+
+    #[test]
+    fn later_archive_wins_and_anonymous_blocks_are_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        make_pk3(
+            dir.path(),
+            "pak0.pk3",
+            "textures/x/dupe\n{\n\t{\n\t\tmap textures/x/a.tga\n\t}\n}\n",
+        );
+        // the glued `}{` block is a nameless continuation, not a material
+        make_pk3(
+            dir.path(),
+            "pak1.pk3",
+            "textures/x/dupe\n{\n\t{\n\t\tmap textures/x/b.tga\n\t}\n}{\n\tmap $lightmap\n}\n",
+        );
+        let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
+        let lib = ShaderLib::load(&fs);
+        assert_eq!(lib.len(), 1);
+        let sh = lib.get("textures/x/dupe").unwrap();
+        assert_eq!(
+            sh.stages[0].bundles[0].image,
+            ImageRef::Path("textures/x/b.tga".to_string())
+        );
+        assert!(lib
+            .image("textures/x/dupe")
+            .is_some_and(|p| p.ends_with("b")));
     }
 }

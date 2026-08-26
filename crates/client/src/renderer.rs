@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -331,7 +331,7 @@ mod fx_lights_uniform_tests {
 }
 
 /// World-space fx quads. Two pipelines that differ only in blend state:
-/// straight alpha, and `GL_ONE GL_ONE` for [`assets::Shaders::additive`]
+/// straight alpha, and `GL_ONE GL_ONE` for [`assets::Shaders::is_additive`]
 /// materials. One draw call per contiguous same-shader run.
 struct FxPass {
     pipeline: wgpu::RenderPipeline,
@@ -440,10 +440,8 @@ pub struct Renderer {
     hud_pass: HudPass,
     /// Kept past map load so later inline submodels resolve `textures/...`
     /// names the same way the world did.
-    shader_images: HashMap<String, String>,
+    shaders: assets::Shaders,
     hud_quad_cap_warned: bool,
-    /// `assets::Shaders::additive`, consulted per new fx shader name.
-    additive_shaders: HashSet<String>,
 }
 
 impl Renderer {
@@ -774,8 +772,7 @@ impl Renderer {
             hud,
             hud_pass,
             hud_quad_cap_warned: false,
-            shader_images: shaders.image,
-            additive_shaders: shaders.additive,
+            shaders,
         })
     }
 
@@ -838,7 +835,7 @@ impl Renderer {
                 continue;
             }
             let name = &bsp.materials[batch.material as usize].name;
-            let img = assets::load_material_image(fs, &shaders.image, name);
+            let img = assets::load_material_image(fs, &shaders, name);
             if is_fallback(&img, &fallback_px) {
                 fallbacks += 1;
             } else {
@@ -907,7 +904,7 @@ impl Renderer {
             let mat = &bsp.materials[*material as usize];
             let pass = if mesh::is_overlay(mat) {
                 Pass::Overlay
-            } else if shaders.polygon_offset.contains(&mat.name.to_lowercase()) {
+            } else if shaders.uses_polygon_offset(&mat.name) {
                 Pass::Layer
             } else {
                 Pass::Opaque
@@ -1004,8 +1001,8 @@ impl Renderer {
 
     /// Quads in draw order (already back-to-front). Unseen shader names
     /// resolve lazily; an unresolvable one warns once and is cached as
-    /// `None`. Names in `additive_shaders` go on the additive pipeline,
-    /// everything else on straight alpha.
+    /// `None`. Additive materials (see `Shaders::is_additive`) go on the
+    /// additive pipeline, everything else on straight alpha.
     pub fn set_fx_quads(&mut self, fs: &Pk3Fs, quads: Vec<FxQuad>) {
         // build_quads is capped by construction; the vertex buffer is sized
         // exactly, so truncate anyway.
@@ -1029,7 +1026,7 @@ impl Renderer {
                     &self.vm_pass.skin_layout,
                     &self.fx.sampler,
                     fs,
-                    &self.shader_images,
+                    self.shaders.image_map(),
                     &quad.shader,
                 );
                 self.fx.textures.insert(quad.shader.clone(), bg);
@@ -1045,7 +1042,7 @@ impl Renderer {
             match runs.last_mut() {
                 Some((name, _, count)) if *name == quad.shader => *count += 1,
                 _ => {
-                    let additive = self.additive_shaders.contains(&quad.shader);
+                    let additive = self.shaders.is_additive(&quad.shader);
                     runs.push((quad.shader.clone(), additive, 1));
                 }
             }
@@ -1186,7 +1183,7 @@ impl Renderer {
             vm,
             surfaces,
             materials,
-            &|name| assets::load_material_image(fs, &self.shader_images, name),
+            &|name| assets::load_material_image(fs, &self.shaders, name),
         )?;
         self.dynamic.models.push(uploaded);
         Some(ModelHandle(self.dynamic.models.len() - 1))
@@ -2815,11 +2812,11 @@ mod tests {
         };
         let shaders = vcod_common::assets::load_shaders(&fs);
         assert_eq!(
-            resolve_fx_path(&shaders.image, &fs, "gfx/misc/tracer"),
+            resolve_fx_path(shaders.image_map(), &fs, "gfx/misc/tracer"),
             Some("textures/sfx/tracer.jpg".to_string())
         );
         assert_eq!(
-            resolve_fx_path(&shaders.image, &fs, "gfx/effects/whitesmoke"),
+            resolve_fx_path(shaders.image_map(), &fs, "gfx/effects/whitesmoke"),
             Some("gfx/effects/whitesmoke.tga".to_string())
         );
         for name in [
@@ -2829,10 +2826,10 @@ mod tests {
             "gfx/misc/tracer",
         ] {
             assert!(
-                resolve_fx_path(&shaders.image, &fs, name).is_some(),
+                resolve_fx_path(shaders.image_map(), &fs, name).is_some(),
                 "{name} should resolve"
             );
-            assert!(shaders.additive.contains(name), "{name} should be additive");
+            assert!(shaders.is_additive(name), "{name} should be additive");
         }
     }
 

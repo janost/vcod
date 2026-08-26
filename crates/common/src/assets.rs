@@ -1,6 +1,6 @@
 use crate::pk3::Pk3Fs;
 use anyhow::{bail, ensure, Result};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Block-compressed layouts from `parse_dds`. Variant names mirror
 /// `wgpu::TextureFormat` so the renderer's mapping is a lookup; no wgpu here.
@@ -145,154 +145,38 @@ pub fn checkerboard() -> Image {
 }
 
 /// Material facts from `scripts/*.shader` (world) and `fxshaders/*.shader`
-/// (effects, pak5); the scan is by suffix, not directory.
+/// (effects, pak5); the scan is by suffix, not directory. Thin queries over
+/// [`ShaderLib`] for the consumers that predate the full parser.
 pub struct Shaders {
-    /// Material name -> image path of its first texture stage, extension stripped.
-    pub image: HashMap<String, String>,
-    /// Declares `polygonOffset`: coplanar blend layers (terrain). Drawn
-    /// unbiased they z-fight.
-    pub polygon_offset: HashSet<String>,
-    /// First textured stage blends additively (see `blend_is_additive`).
-    /// Fx textures are bright-on-black; straight alpha draws them as milky quads.
-    pub additive: HashSet<String>,
+    lib: crate::shader::ShaderLib,
 }
 
-/// Additive iff the destination factor is `GL_ONE` (`add`, `GL_ONE GL_ONE`,
-/// `GL_SRC_ALPHA GL_ONE`); the fx pass approximates the last by dropping
-/// `* src.a`. Modulate forms (`filter`, `multiply`) stay on the alpha path.
-fn blend_is_additive(args: &[&str]) -> bool {
-    match args {
-        [one] => one.eq_ignore_ascii_case("add"),
-        [src, dst] => {
-            dst.eq_ignore_ascii_case("gl_one")
-                && (src.eq_ignore_ascii_case("gl_one") || src.eq_ignore_ascii_case("gl_src_alpha"))
-        }
-        _ => false,
+impl Shaders {
+    /// First texture path of the material (lowercased, image extension
+    /// stripped), for implicit-material loading.
+    pub fn image(&self, name: &str) -> Option<&str> {
+        self.lib.image(name)
+    }
+
+    /// The whole material->image table, for helpers that take the map form.
+    pub fn image_map(&self) -> &HashMap<String, String> {
+        self.lib.image_map()
+    }
+
+    /// The stage carrying the material's first image blends onto GL_ONE;
+    /// the fx pass draws such quads additive.
+    pub fn is_additive(&self, name: &str) -> bool {
+        self.lib.is_additive(name)
+    }
+    pub fn uses_polygon_offset(&self, name: &str) -> bool {
+        self.lib.uses_polygon_offset(name)
     }
 }
 
 pub fn load_shaders(fs: &Pk3Fs) -> Shaders {
-    let mut shaders = Shaders {
-        image: HashMap::new(),
-        polygon_offset: HashSet::new(),
-        additive: HashSet::new(),
-    };
-    for path in fs.names_with_suffix(".shader") {
-        let Some(raw) = fs.read(&path) else { continue };
-        let text = String::from_utf8_lossy(&raw);
-        parse_shader_script(&text, &mut shaders);
+    Shaders {
+        lib: crate::shader::ShaderLib::load(fs),
     }
-    shaders
-}
-
-/// Q3-style `name { { map <image> ... } }`. Records the first non-builtin
-/// `map`/`clampmap` image, that stage's `blendFunc`, and `polygonOffset`.
-/// CoD allows `map clamp|clampY|heightToNormal <image>`, and some
-/// `fxshaders/` paths carry a leading slash that no pk3 key has.
-fn parse_shader_script(text: &str, shaders: &mut Shaders) {
-    let mut depth = 0u32;
-    let mut pending_name: Option<String> = None;
-    let mut current: Option<String> = None;
-    let mut have_image = false;
-    let mut want_image = false;
-    // Per-stage state, committed when the stage closes, so `blendFunc` may
-    // precede or follow `map`.
-    let mut stage_has_image = false;
-    let mut stage_additive = false;
-    for line in text.lines() {
-        let line = line.split("//").next().unwrap_or("");
-        // blendFunc's arguments sit on one brace-free line; take it whole.
-        let mut words = line.split_whitespace();
-        if let Some(first) = words.next() {
-            if first.eq_ignore_ascii_case("blendfunc") {
-                let args: Vec<&str> = words.collect();
-                stage_additive = blend_is_additive(&args);
-                continue;
-            }
-        }
-        for tok in line.split_whitespace().flat_map(split_braces) {
-            match tok {
-                "{" => {
-                    if depth == 0 {
-                        current = pending_name.take();
-                        have_image = false;
-                    } else if depth == 1 {
-                        stage_has_image = false;
-                        stage_additive = false;
-                    }
-                    depth += 1;
-                }
-                "}" => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 1 {
-                        if stage_has_image && stage_additive {
-                            if let Some(name) = &current {
-                                shaders.additive.insert(name.clone());
-                            }
-                        }
-                        stage_has_image = false;
-                        stage_additive = false;
-                    }
-                    if depth == 0 {
-                        current = None;
-                    }
-                }
-                _ if depth == 0 => pending_name = Some(tok.to_lowercase()),
-                // modifier keywords between `map` and the image
-                _ if want_image
-                    && (tok.eq_ignore_ascii_case("clamp")
-                        || tok.eq_ignore_ascii_case("clampy")
-                        || tok.eq_ignore_ascii_case("heighttonormal")) => {}
-                _ if want_image => {
-                    want_image = false;
-                    // $lightmap / *white are builtins
-                    if !tok.starts_with(['$', '*']) && !have_image {
-                        if let Some(name) = &current {
-                            let img = tok.to_lowercase();
-                            let img = img.trim_start_matches('/');
-                            let img = [".tga", ".jpg", ".dds"]
-                                .iter()
-                                .find_map(|ext| img.strip_suffix(ext))
-                                .unwrap_or(img);
-                            shaders.image.insert(name.clone(), img.to_string());
-                            have_image = true;
-                            stage_has_image = true;
-                        }
-                    }
-                }
-                _ if current.is_some()
-                    && (tok.eq_ignore_ascii_case("map")
-                        || tok.eq_ignore_ascii_case("clampmap")) =>
-                {
-                    want_image = true;
-                }
-                _ if tok.eq_ignore_ascii_case("polygonoffset") => {
-                    if let Some(name) = &current {
-                        shaders.polygon_offset.insert(name.clone());
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
-// "foo{" -> "foo", "{"
-fn split_braces(tok: &str) -> impl Iterator<Item = &str> {
-    let mut rest = tok;
-    std::iter::from_fn(move || {
-        if rest.is_empty() {
-            return None;
-        }
-        let split = if rest.starts_with(['{', '}']) {
-            1
-        } else {
-            rest.find(['{', '}']).unwrap_or(rest.len())
-        };
-        let (head, tail) = rest.split_at(split);
-        rest = tail;
-        Some(head)
-    })
 }
 
 /// Probed in this order.
@@ -353,11 +237,11 @@ fn try_load_image(fs: &Pk3Fs, name: &str) -> Option<Image> {
 
 /// File probe first, then the shader script image. Never fails: missing or
 /// broken assets warn and return the checkerboard.
-pub fn load_material_image(fs: &Pk3Fs, shaders: &HashMap<String, String>, name: &str) -> Image {
+pub fn load_material_image(fs: &Pk3Fs, shaders: &Shaders, name: &str) -> Image {
     if let Some(img) = try_load_image(fs, name) {
         return img;
     }
-    if let Some(mapped) = shaders.get(&name.to_lowercase()) {
+    if let Some(mapped) = shaders.image(name) {
         if let Some(img) = try_load_image(fs, mapped) {
             return img;
         }
@@ -688,14 +572,16 @@ textures/x/dds_ref
         let dir = tempfile::tempdir().unwrap();
         make_pk3(dir.path(), "pak0.pk3", &[("scripts/test.shader", script)]);
         let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
-        let map = load_shaders(&fs).image;
-        assert_eq!(map["textures/x/fancy"], "textures/x/real@img");
-        assert_eq!(map["textures/x/lightmap_first"], "textures/x/other");
-        assert_eq!(map["textures/x/modifiers"], "textures/x/clamped");
-        assert_eq!(map["textures/x/clampy_mod"], "textures/x/vert");
-        assert_eq!(map["textures/x/star_builtin"], "textures/x/bump");
-        assert_eq!(map["textures/x/jpg_ref"], "textures/x/window@pane");
-        assert_eq!(map["textures/x/dds_ref"], "textures/x/detail");
+        let s = load_shaders(&fs);
+        let img = |n: &str| s.image(n).unwrap();
+        assert_eq!(img("textures/x/fancy"), "textures/x/real@img");
+        // $lightmap first: the lookup falls through to the real image
+        assert_eq!(img("textures/x/lightmap_first"), "textures/x/other");
+        assert_eq!(img("textures/x/modifiers"), "textures/x/clamped");
+        assert_eq!(img("textures/x/clampy_mod"), "textures/x/vert");
+        assert_eq!(img("textures/x/star_builtin"), "textures/x/bump");
+        assert_eq!(img("textures/x/jpg_ref"), "textures/x/window@pane");
+        assert_eq!(img("textures/x/dds_ref"), "textures/x/detail");
     }
 
     #[test]
@@ -705,9 +591,12 @@ textures/x/dds_ref
         make_pk3(dir.path(), "pak0.pk3", &[("scripts/test.shader", script)]);
         let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
         let shaders = load_shaders(&fs);
-        assert!(shaders.polygon_offset.contains("textures/x/blendlayer"));
-        assert!(!shaders.polygon_offset.contains("textures/x/plain"));
-        assert_eq!(shaders.image["textures/x/blendlayer"], "textures/x/img");
+        assert!(shaders.uses_polygon_offset("textures/x/blendlayer"));
+        assert!(!shaders.uses_polygon_offset("textures/x/plain"));
+        assert_eq!(
+            shaders.image("textures/x/blendlayer"),
+            Some("textures/x/img")
+        );
     }
 
     #[test]
@@ -762,18 +651,21 @@ gfx/effects/second_stage_only
         let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
         let s = load_shaders(&fs);
 
-        assert_eq!(s.image["gfx/effects/flash"], "gfx/effects/flash");
-        assert_eq!(s.image["gfx/effects/smoke"], "gfx/effects/smoke");
+        assert_eq!(s.image("gfx/effects/flash"), Some("gfx/effects/flash"));
+        assert_eq!(s.image("gfx/effects/smoke"), Some("gfx/effects/smoke"));
 
-        assert!(s.additive.contains("gfx/effects/flash"));
-        assert!(!s.additive.contains("gfx/effects/smoke"));
+        assert!(s.is_additive("gfx/effects/flash"));
+        assert!(!s.is_additive("gfx/effects/smoke"));
         // `add` shorthand, blendFunc written before its stage's `map`
-        assert!(s.additive.contains("gfx/effects/shorthand"));
-        assert_eq!(s.image["gfx/effects/shorthand"], "gfx/effects/spark");
-        assert!(s.additive.contains("gfx/effects/premult"));
+        assert!(s.is_additive("gfx/effects/shorthand"));
+        assert_eq!(s.image("gfx/effects/shorthand"), Some("gfx/effects/spark"));
+        assert!(s.is_additive("gfx/effects/premult"));
         // only the image's stage decides; a later additive stage does not retag
-        assert_eq!(s.image["gfx/effects/second_stage_only"], "gfx/effects/base");
-        assert!(!s.additive.contains("gfx/effects/second_stage_only"));
+        assert_eq!(
+            s.image("gfx/effects/second_stage_only"),
+            Some("gfx/effects/base")
+        );
+        assert!(!s.is_additive("gfx/effects/second_stage_only"));
     }
 
     #[test]
@@ -783,21 +675,27 @@ gfx/effects/second_stage_only
         };
         let s = load_shaders(&fs);
 
-        assert_eq!(s.image["gfx/effects/muzflash2"], "gfx/effects/muzflash2");
-        assert!(s.additive.contains("gfx/effects/muzflash2"));
-        assert!(s.additive.contains("gfx/effects/muzflash2a"));
+        assert_eq!(
+            s.image("gfx/effects/muzflash2"),
+            Some("gfx/effects/muzflash2")
+        );
+        assert!(s.is_additive("gfx/effects/muzflash2"));
+        assert!(s.is_additive("gfx/effects/muzflash2a"));
 
         // pj_fx.shader writes `map /gfx/effects/whitesmoke`
-        assert_eq!(s.image["gfx/effects/whitesmoke"], "gfx/effects/whitesmoke");
+        assert_eq!(
+            s.image("gfx/effects/whitesmoke"),
+            Some("gfx/effects/whitesmoke")
+        );
         assert!(fs.contains("gfx/effects/whitesmoke.tga"));
-        assert!(!s.additive.contains("gfx/effects/whitesmoke")); // blendfunc blend
+        assert!(!s.is_additive("gfx/effects/whitesmoke")); // blendfunc blend
 
         // image path differs from the material name
-        assert_eq!(s.image["gfx/misc/tracer"], "textures/sfx/tracer");
-        assert!(s.additive.contains("gfx/misc/tracer"));
+        assert_eq!(s.image("gfx/misc/tracer"), Some("textures/sfx/tracer"));
+        assert!(s.is_additive("gfx/misc/tracer"));
 
-        assert!(!s.additive.contains("gfx/impact/bullethole1"));
-        assert!(!s.additive.contains("gfx/impact/dustlayer1"));
+        assert!(!s.is_additive("gfx/impact/bullethole1"));
+        assert!(!s.is_additive("gfx/impact/dustlayer1"));
     }
 
     #[test]
@@ -817,7 +715,7 @@ gfx/effects/second_stage_only
             ],
         );
         let fs = crate::pk3::Pk3Fs::open(dir.path()).unwrap();
-        let shaders = load_shaders(&fs).image;
+        let shaders = load_shaders(&fs);
         let img = load_material_image(&fs, &shaders, "textures/x/fancy");
         assert_eq!((img.width, img.height), (1, 1));
         assert!(matches!(img.data, ImageData::Rgba8(_)));
@@ -842,7 +740,7 @@ gfx/effects/second_stage_only
         let exists = |n: &str| IMAGE_EXTS.iter().any(|e| fs.contains(&format!("{n}{e}")));
         let resolves = |name: &str| {
             let n = name.to_lowercase();
-            exists(&n) || shaders.image.get(&n).is_some_and(|m| exists(m))
+            exists(&n) || shaders.image(&n).is_some_and(exists)
         };
 
         // stock paks only; downloaded custom paks carry CoD2 material refs
@@ -909,34 +807,25 @@ gfx/effects/second_stage_only
         };
         let all = load_shaders(&fs);
         // mp_neuville terrain blend layer
-        assert!(all
-            .polygon_offset
-            .contains("textures/normandy/ground/dirt_oldpacked"));
-        let shaders = all.image;
-        let img = load_material_image(
-            &fs,
-            &shaders,
-            "textures/normandy/walls/brick@damagedwall1_p4",
-        );
+        assert!(all.uses_polygon_offset("textures/normandy/ground/dirt_oldpacked"));
+        let img = load_material_image(&fs, &all, "textures/normandy/walls/brick@damagedwall1_p4");
         assert!(
             matches!(img.data, ImageData::Bc { .. }),
             "expected a DDS BC texture"
         );
         // mp_pavlov spells this material with '_' where the file has '@'
-        let alias =
-            load_material_image(&fs, &shaders, "textures/belgium/ground/snow_1024lightfill");
+        let alias = load_material_image(&fs, &all, "textures/belgium/ground/snow_1024lightfill");
         assert!(
             matches!(alias.data, ImageData::Bc { .. }),
             "expected '@' alias to resolve"
         );
         // mp_dawnville material defined in scripts/terrain.shader, not a file
-        let scripted =
-            load_material_image(&fs, &shaders, "textures/normandy/ground/dirt_earthbase");
+        let scripted = load_material_image(&fs, &all, "textures/normandy/ground/dirt_earthbase");
         assert!(
             matches!(scripted.data, ImageData::Bc { .. }),
             "expected shader-script material to resolve"
         );
-        let fb = load_material_image(&fs, &shaders, "textures/does/not/exist");
+        let fb = load_material_image(&fs, &all, "textures/does/not/exist");
         assert_eq!((fb.width, fb.height), (64, 64));
     }
 
