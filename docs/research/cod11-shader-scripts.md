@@ -261,15 +261,15 @@ Each omission with its census justification:
   Open question: whether an exp-fog map's density rides the wire raw or with
   RTCW's +0.1 client-side offset; settle on the first exp-fog server capture
   (neuville/bocage would show a black wall if we over-thicken).
-- `$dlight` bundle images: engine-generated light-blob textures, never files
-  on disk (corpus whitelist in `shader_corpus.rs`, which cites the pak9
-  window.shader occurrence). An unresolvable stage image binds the
-  checkerboard placeholder (`renderer.rs` `load_material_image`), so those
-  bundles draw checkerboard - visible on the neuville window glass. The
-  mp_ship flag decks checkerboard for the sibling reason that
+- `$dlight` bundle images: engine-generated light blobs, never files on disk
+  (corpus whitelist in `shader_corpus.rs`, which cites the pak9
+  window.shader occurrence). vcod binds a generated radial falloff blob
+  (`assets::dlight_blob`) since 2026-08-26, so the neuville window glass
+  shows a soft glow instead of the checkerboard placeholder. The mp_ship
+  flag decks bind 1x1 white for the same reason that
   `textures/battleship/deckflag_np.tga` (flagfore/flagaft's second bundle)
   ships in no stock pak under any extension; retail binds its own default
-  image there too, so the same two paths sit in the corpus whitelist.
+  image there too, so both stay in the corpus whitelist.
 - `clampY` is approximated (warns once), `heightToNormal` ignored: neither
   occurs in a world block of the stock corpus.
 

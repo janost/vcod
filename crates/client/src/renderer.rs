@@ -4312,11 +4312,19 @@ fn upload_bundle_view(
     if let Some(v) = cache.get(path) {
         return v.clone();
     }
-    let img = match assets::resolve_bundle_image(fs, path) {
-        Some(full) => assets::load_path_image(fs, &full),
-        None => {
-            log::warn!("shader image {path} not found, using checkerboard");
-            assets::checkerboard()
+    let img = if path == "$dlight" {
+        // engine-generated light blob, never a file on disk (research doc §8)
+        assets::dlight_blob()
+    } else if path == "textures/battleship/deckflag_np.tga" {
+        // ships in no stock pak; retail binds its default image there too
+        assets::white_1x1()
+    } else {
+        match assets::resolve_bundle_image(fs, path) {
+            Some(full) => assets::load_path_image(fs, &full),
+            None => {
+                log::warn!("shader image {path} not found, using checkerboard");
+                assets::checkerboard()
+            }
         }
     };
     let v = upload_image(device, queue, path, &img);

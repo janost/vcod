@@ -144,6 +144,45 @@ pub fn checkerboard() -> Image {
     }
 }
 
+/// 1x1 opaque white; bound for bundle images that retail binds its own
+/// default for (e.g. `textures/battleship/deckflag_np.tga` ships in no pak).
+pub fn white_1x1() -> Image {
+    Image {
+        width: 1,
+        height: 1,
+        data: ImageData::Rgba8(vec![255, 255, 255, 255]),
+    }
+}
+
+/// The engine-generated `$dlight` light blob, never a file on disk (CoDMP
+/// binds it for `perlight` bundles, e.g. the pak9 window.shader one). A
+/// bright white core falling off smoothly to transparent; the neuville
+/// window glass samples it so the panes show a soft glow instead of the
+/// checkerboard placeholder.
+pub fn dlight_blob() -> Image {
+    const DIM: u32 = 64;
+    let r = (DIM as f32) * 0.5;
+    let mut px = Vec::with_capacity((DIM * DIM * 4) as usize);
+    for y in 0..DIM {
+        for x in 0..DIM {
+            // Q3's dlight image is a smooth white radial falloff; square the
+            // distance so the core stays bright and the edge fades out.
+            let dx = x as f32 + 0.5 - r;
+            let dy = y as f32 + 0.5 - r;
+            let d = (dx * dx + dy * dy).sqrt();
+            let a = (1.0 - (d / r)).max(0.0);
+            let a = a * a;
+            let v = (255.0 * a) as u8;
+            px.extend_from_slice(&[255, 255, 255, v]);
+        }
+    }
+    Image {
+        width: DIM,
+        height: DIM,
+        data: ImageData::Rgba8(px),
+    }
+}
+
 /// Material facts from `scripts/*.shader` (world) and `fxshaders/*.shader`
 /// (effects, pak5); the scan is by suffix, not directory. Thin queries over
 /// [`ShaderLib`] for the consumers that predate the full parser.
@@ -742,6 +781,27 @@ gfx/effects/second_stage_only
             ImageData::Rgba8(px) => assert_eq!(px.len(), (img.width * img.height * 4) as usize),
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn dlight_blob_is_bright_centre_and_transparent_edge() {
+        let img = dlight_blob();
+        assert_eq!((img.width, img.height), (64, 64));
+        let ImageData::Rgba8(px) = &img.data else {
+            panic!()
+        };
+        let at = |x: u32, y: u32| {
+            let i = ((y * 64 + x) * 4) as usize;
+            (px[i], px[i + 1], px[i + 2], px[i + 3])
+        };
+        // centre is near-opaque white
+        assert!(at(32, 32).3 >= 240);
+        assert_eq!((at(32, 32).0, at(32, 32).1, at(32, 32).2), (255, 255, 255));
+        // corners fade to transparent
+        assert_eq!(at(0, 0).3, 0);
+        // monotone falloff: a midpoint ring is brighter than the outer corner
+        assert!(at(48, 32).3 > at(60, 32).3);
+        assert!(at(32, 32).3 >= at(48, 32).3);
     }
 
     /// Pins the exact set of materials absent from the retail pk3s.
