@@ -497,11 +497,6 @@ fn build_bvh(prims: &mut [(Prim, Vec3, Vec3)], base: u32, nodes: &mut Vec<BvhNod
 /// solid brushes. Always compiled: the client's fx tests use it.
 #[doc(hidden)]
 pub fn test_world(extra: &[(Vec3, Vec3)]) -> CollisionWorld {
-    let mut boxes = vec![(
-        Vec3::new(-1024.0, -1024.0, -16.0),
-        Vec3::new(1024.0, 1024.0, 0.0),
-    )];
-    boxes.extend_from_slice(extra);
     let mut specs: Vec<(usize, [f32; 3], [f32; 3])> =
         vec![(0, [-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0])];
     specs.extend(
