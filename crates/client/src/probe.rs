@@ -192,14 +192,18 @@ pub fn probe(
                     + (o[1] - base[1]).powi(2)
                     + (o[2] - base[2]).powi(2))
                 .sqrt();
+                // `cmdLag` is serverTime minus the echoed ps.commandTime: how
+                // far behind the server's execution of our usercmds runs. A
+                // healthy live connection stays under ~100 ms.
                 println!(
-                    "[{:>3}s] {:?} sid={} snap #{} delta={} t={} ps.origin=[{:.0},{:.0},{:.0}] moved {:.0}u, {} entities",
+                    "[{:>3}s] {:?} sid={} snap #{} delta={} t={} cmdLag={} ps.origin=[{:.0},{:.0},{:.0}] moved {:.0}u, {} entities",
                     now.duration_since(start).as_secs(),
                     client.state(),
                     client.server_id(),
                     s.message_num,
                     s.delta_num,
                     s.server_time,
+                    s.server_time - s.ps.field_i32(&net::protocol::PROTOCOL_V1, "commandTime"),
                     o[0],
                     o[1],
                     o[2],
@@ -314,6 +318,20 @@ impl ProbeWatch {
                     );
                     (cn, s.server_time)
                 });
+                // The trajectory decides whether a closed-form evaluation sinks
+                // the body: TR_GRAVITY with a frozen trTime drops z by
+                // 400*age^2 per second.
+                let tr = net::trajectory::Trajectory::read(ent, p, "pos");
+                let eval = tr.evaluate(s.server_time);
+                println!(
+                    "corpse {num} trType {} trTime {} (age {} ms) base z {:.0} delta {:?} eval z {:.0}",
+                    tr.tr_type,
+                    tr.tr_time,
+                    s.server_time - tr.tr_time,
+                    tr.base.z,
+                    tr.delta,
+                    eval.z
+                );
             }
         }
         for (&num, ent) in &s.entities {
