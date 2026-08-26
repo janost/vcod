@@ -483,6 +483,14 @@ linear ramp. This is common: 101 of the corpus's 1089 `size` blocks carry no
 Evaluated results land on the primitive instance: current size at `+0xb8`,
 current size2 at `+0xa0`, current length (tail only) at `+0x154`.
 
+The corpus does carry `length` on non-tail blocks: the `muzflash2a`
+`Particle` in `fx/muzzleflashes/heavy.efx` (`length 12 -> 275`, MP40, MP44,
+BAR), `german_mg.efx`, `thompson.efx` and `russian_mg.efx` (`42 -> 375` and
+`42 -> 275`). The sprite path (R4) reads only size and size2, so the value is
+inert in retail. Inferred from the decompilation; honouring it as a tail
+length drew a 60-140 unit streak trailing back through the shooter on every
+MP40 shot, so vcod drops `length` on sprites.
+
 ## R4. `size` is a half-extent; a sprite draws `2 * size` across
 
 The primitive instance embeds a `refEntity_t` at instance `+0x3c` (`0x9c`
@@ -644,7 +652,7 @@ setup, not `CG_BloodSpray`.
 ## What vcod implements from this, and what it doesn't
 
 Implemented in `crates/client/src/fx/sim.rs`: R3 (unflagged curves hold
-`start`), R4's half-extent reading, R5 (tail anchoring and full length), R6's
+`start`; `length` only on `Tail`/`Line`), R4's half-extent reading, R5 (tail anchoring and full length), R6's
 spawn-flag handling, R7's per-key defaults, and R8 (`FxSystem::spawn_tracer`,
 fed by `Resolved::Tracer`).
 

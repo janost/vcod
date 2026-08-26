@@ -347,7 +347,12 @@ fn spawn_emitter(
         let rot = sample_r1(rng, em.rotation);
         let rot_delta = sample_r1(rng, em.rotation_delta);
         let (size0, size1) = sample_curve(rng, &em.size);
-        let (len0, len1) = sample_curve(rng, &em.length);
+        // `length` is a tail-only field (grammar doc R3); sprites carrying
+        // one (fx/muzzleflashes/heavy.efx) stay square.
+        let (len0, len1) = match sample_curve(rng, &em.length) {
+            l if behavior == Behavior::Stretch => l,
+            _ => (0.0, 0.0),
+        };
         let (alpha0, alpha1) = sample_curve(rng, &em.alpha);
         let (rgb0, rgb1) = sample_curve_v3(rng, &em.rgb);
         let physics = em.flags.iter().any(|f| f == "usePhysics");
@@ -1086,6 +1091,29 @@ mod tests {
         // Head sits exactly on the particle (y = 0), tail 8 units behind it.
         assert!(max.abs() < 1e-4, "{ys:?}");
         assert!((min + 8.0).abs() < 1e-4, "{ys:?}");
+    }
+
+    /// `fx/muzzleflashes/heavy.efx` carries a `Particle` with `length 12 ->
+    /// 275`; retail evaluates `length` for tails only (grammar doc R3), so
+    /// the sprite stays `2 * size` square instead of trailing back down the
+    /// barrel.
+    #[test]
+    fn length_curve_on_a_particle_does_not_stretch_it() {
+        let mut e = simple_emitter();
+        e.gravity = R1 { a: 0.0, b: 0.0 };
+        e.length = Curve {
+            start: R1 { a: 12.0, b: 12.0 },
+            end: R1 { a: 275.0, b: 275.0 },
+            flags: vec!["linear".into()],
+        };
+        let s = sys_with(e, SpawnAt::Point { pos: Vec3::ZERO });
+        let q = s.build_quads(Vec3::new(0.0, -100.0, 0.0), Vec3::X, Vec3::Z, 0.5);
+        assert_eq!(q.len(), 1);
+        let w = (Vec3::from(q[0].verts[1]) - Vec3::from(q[0].verts[0])).length();
+        let h = (Vec3::from(q[0].verts[2]) - Vec3::from(q[0].verts[1])).length();
+        // size at t = 0.5 is 3, so 6 across both ways.
+        assert!((w - 6.0).abs() < 1e-3, "{w}");
+        assert!((h - 6.0).abs() < 1e-3, "{h}");
     }
 
     #[test]
