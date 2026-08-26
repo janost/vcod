@@ -198,12 +198,13 @@ These work in every mode:
   frustum-culled directly: retail assumes nobody looks over a cell's walls.
 - Alpha surfaces (foliage, fences) are alpha-tested only, and they collide as
   drawn, so a bush or a wire fence stops the player like a solid wall.
-- Submodels (doors, exploding walls, moving platforms) collide by their render
-  triangles, not their brush hulls.
+- Submodels (doors, exploding walls) collide by their brush hulls, but only
+  as static geometry: no entity-driven movers, so there is nothing to ride.
 - Bullet impacts in walk mode are one generic mark plus a smoke puff. Marks
   share the 256-entry decal ring with spectate effects; the oldest go first.
   Spectate mode picks the per-surface effect the way the retail client does.
-- No swimming, ladders or mantling. Water collides like solid ground.
+- No mantling - which retail 1.1 MP turns out not to have either; ledge hops
+  are plain jumps and step-ups (docs/research/cod11-mantle.md).
 - No occlusion and no doppler: a sound through a wall is as loud as one in the
   open. The engine's same-entity channel replacement is implemented, but there
   is no priority-based voice stealing; when kira's mixer is full new sounds are

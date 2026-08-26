@@ -212,3 +212,7 @@ decompiler output or disassembly listings.
   when they fired, and sounds kira refused for lack of capacity.
 - `--connect` opens the window before the gamestate arrives; the
   connecting/loading phases draw HUD text only.
+- Movement constants come from retail rodata, not community lore: the table
+  and the two deliberate divergences are in docs/research/cod11-mantle.md and
+  bsp-ibsp59-format.md ("Movement constants"). Mantling does not exist in
+  retail 1.1 MP; cod11-mantle.md is the negative result.

@@ -261,12 +261,13 @@ Ground-level spawns on mp_pavlov sit 200 or more units above the first brush bel
 | `SCALE_WALK` | 0.4 | CoD slow-walk modifier |
 | `SCALE_CROUCH` | 0.65 | CoD |
 | `SCALE_PRONE` | 0.15 | CoD |
-| `JUMP_VELOCITY` | 250 | `sqrt(2 * 800 * 39)` for CoD's 39-unit jump apex; Q3 `bg_local.h` has 270 |
-| `PM_ACCELERATE` | 10 | `bg_pmove.c` `pm_accelerate` |
-| `PM_AIRACCELERATE` | 1 | `bg_pmove.c` `pm_airaccelerate` |
-| `PM_FRICTION` | 6 | `bg_pmove.c` `pm_friction` |
-| `PM_STOPSPEED` | 60 | Q3 `bg_pmove.c` `pm_stopspeed` is 100; see below |
-| `STEPSIZE` | 18 | `bg_local.h` |
+| `JUMP_HEIGHT_STAND / LOW` | 34 / 24 | retail rodata 0x70BE8/0x70BEC; vz = sqrt(2 * height * gravity), gate forwardmove != 0 (`cod11-mantle.md`, "Jumps") |
+| `PM_ACCELERATE` | 9 | retail rodata 0x70844; Q3's is 10, RTCW-MP's 10 too - the community-documented "Q3 exact copy" was wrong |
+| `PM_DUCKED_ACCELERATE / PM_PRONE_ACCELERATE` | 12 / 19 | retail rodata; selected in the steep-slope mover @0x2f4b0-0x2f4ca, walk-path application INFERRED (`cod11-mantle.md`) |
+| `PM_AIRACCELERATE` | 1 | retail rodata 0x70848, same as Q3 |
+| `PM_FRICTION` | 5.5 | retail rodata 0x70854; Q3/RTCW-MP have 6 |
+| `PM_STOPSPEED` | 100 | retail rodata 0x70824 (flat); vcod scales it per stance - see below |
+| `STEPSIZE` | 18 | `bg_local.h`; retail drops to 10 while PRONE (chooser @0x35045) |
 | `OVERCLIP` | 1.001 | `bg_local.h` |
 | `MIN_WALK_NORMAL` | 0.7 | `bg_local.h` (steeper than about 45.6 degrees is not ground) |
 | `MAX_CLIP_PLANES` | 5 | `bg_slidemove.c` |
@@ -278,4 +279,18 @@ Ground-level spawns on mp_pavlov sit 200 or more units above the first brush bel
 | `LEAN_MAX` | 28 | RTCW-MP `bg_pmove.c` `LEAN_MAX 28.0f` (eye offset in units; roll is lean / 2 degrees) |
 | `LEAN_TIME_TO_MS / FROM_MS` | 280 / 350 | attributed in `pmove.rs` to RTCW-SP `bg_pmove.c`; UNVERIFIED, RTCW-MP has 200 / 300 |
 
-`PM_STOPSPEED` is the one value I changed from Q3 on purpose. Q3's 100 is 31% of its 320 u/s run speed; 31% of 190 is about 59, so 60 keeps the stop feel by ratio. The friction floor makes any wish speed under `PM_STOPSPEED * PM_FRICTION / PM_ACCELERATE` unreachable, which at 100 is 60 u/s and at 60 unscaled is 36 u/s, still above prone's 28.5, so `pmove.rs` scales the floor by the stance as well (stand 36, crouch 23, prone 5.4). The lean code is RTCW's `PM_UpdateLean` with two deliberate differences: CoD leans while moving, so the `!cmd->forwardmove` gate is dropped, and prone blocks leaning outright.
+The friction/accelerate/jump rows were re-sourced from the retail binaries
+during the water/ladder work: the dedicated server's rodata table
+(`cod11-mantle.md`, "Tunables") contradicted the community-documented values
+this section used to carry. Two deliberate divergences remain. First,
+`PM_STOPSPEED`: retail's flat 100 makes prone unable to accelerate at all -
+gain per frame is `19 * dt * 28.5` = 4.33 against a floor loss of
+`100 * 5.5 * dt` = 4.40 - so `pmove.rs` keeps the floor scaled by stance
+until someone recovers how retail actually compensates. Second, there is no
+wading wish clamp: retail references neither wade-scale float anywhere in the
+walk mover, so shallow-water slowdown comes from the water friction term alone.
+Water and ladder mechanics are documented in `pmove.rs`'s constant blocks with
+their sources; the full retail ladder constants live in `cod11-mantle.md`.
+The lean code is RTCW's `PM_UpdateLean` with two deliberate differences: CoD
+leans while moving, so the `!cmd->forwardmove` gate is dropped, and prone
+blocks leaning outright.

@@ -20,7 +20,8 @@ pub const JUMP_HEIGHT_LOW: f32 = 24.0;
 // Accelerate/friction/stopspeed: retail CoD 1.1 rodata (game.mp.i386.so),
 // loaded by PM_Friction @0x2e460 and the movers.
 pub const PM_ACCELERATE: f32 = 9.0;
-/// Stance accelerates selected per stance in the mover @0x2f49b-0x2f4c8.
+/// Stance accelerates: values selected at 0x2f4b0-0x2f4ca in the steep-slope
+/// mover; their walk-path application is INFERRED from that selection.
 pub const PM_DUCKED_ACCELERATE: f32 = 12.0;
 pub const PM_PRONE_ACCELERATE: f32 = 19.0;
 pub const PM_AIRACCELERATE: f32 = 1.0;

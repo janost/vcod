@@ -151,7 +151,8 @@ exactly; see port notes.
 3. Direction: `-vLadderVec` if already on a ladder and airborne (sticking with
    the wall you left), else the horizontal forward.
 4. Gates: clears `PMF_LADDER` first; skip when within `pm_ladderJumpTime` =
-   299 ms (int at rodata 0x70830) of `ps.jumpTime` (compare 0x12B at 0x33822);
+   300 ms (int at rodata 0x70830; bytes 2c 01 00 00 - an earlier read of
+   this file said 299) of `ps.jumpTime` (compare 0x12B at 0x33822);
    on a steep slope additionally require `forwardmove > 0`.
 5. Geometry: box trace from origin, mins/maxs taken from `pm->mins/maxs`
    (which PmoveSingle refreshes each frame from `ps.mins/maxs`, ps+0x324/0x330)
@@ -183,7 +184,7 @@ So ladders are brushes flagged at the material level, not entities.
   pairing looks odd; flagged unverified).
 
 **Animation**: the movement-anim update (fn 0x322C8) selects, when airborne on
-a ladder and outside the 299 ms post-jump lockout, MOVETYPE CLIMBUP (value 16)
+a ladder and outside the 300 ms post-jump lockout, MOVETYPE CLIMBUP (value 16)
 or CLIMBDOWN (17) by the sign of `velocity.z` scaled against speed scales
 (decision block 0x323CE..0x3242E, threshold constant 95.25 at 0x70C10 and
 factor 0.45 at 0x70C18). These condition values resolve to `pb_climbup` /
@@ -195,8 +196,9 @@ only place those values are ever produced - there is no non-ladder route to
 ## Step-up and steep slopes
 
 - `PM_StepSlideMove` (exported, 0x34FBC): step height 18 units, reduced to 10
-  while on a ladder (constants 18.0/10.0 at 0x70EEC/0x70EE8, chosen at 0x35034
-  based on walking && !on-ladder). Uses `ps.fJumpOriginZ` (compared ±0.001) as
+  while PRONE (constants 18.0/10.0 at 0x70EEC/0x70EE8; the chooser at 0x35045
+  tests pm_flags bit 0x1 = PRONE - an earlier read of this file said
+  walking && !on-ladder, contradicted by its own bytes). Uses `ps.fJumpOriginZ` (compared ±0.001) as
   part of the step decision.
 - The ground-trace function (0x30474) classifies the ground contact: impact
   velocity along the normal > 10 leaves the ground and fires the JUMP/JUMPBK
@@ -232,7 +234,7 @@ usage sites only.)
 | pm_stopspeed | 0x70824 | 100.0 |
 | pm_ladderScale | 0x70828 | 0.5 |
 | pm_ladderPushOff | 0x7082C | 128.0 |
-| pm_ladderJumpTime | 0x70830 | 299 (ms, int) |
+| pm_ladderJumpTime | 0x70830 | 300 (ms, int) |
 | pm_waterSwimScale | 0x70834 | 0.5 |
 | pm_waterWadeScale | 0x70838 | 0.7 |
 | pm_prone_accelerate | 0x7083C | 19.0 |
@@ -262,7 +264,7 @@ If the goal is "feel like retail 1.1", in priority order:
 2. Friction/accelerate constants differ from the Q3-derived ones currently in
    the file: friction 5.5 (not 6), accelerate 9 (not 10), stopspeed 100 (not
    60), plus stance-specific accelerate (prone 19, ducked 12).
-3. Step-up: keep 18, but drop to 10 while on a ladder.
+3. Step-up: keep 18, but drop to 10 while PRONE.
 4. Ladders, if implemented: brush surfaces with surface flag 0x8; probe =
    shrunken bbox (top lowered by probe length) pushed 30 units along horizontal
    forward (8 while sliding, -lastNormal when already on a ladder and
@@ -271,7 +273,7 @@ If the goal is "feel like retail 1.1", in priority order:
    sqrt(78*g) * 0.75 with horizontal := 128 * reflected dir; backward dismount
    -250/-500 along view forward; lock yaw to ±75° of the ladder yaw; play
    pb_climbup/pb_climbdown by velocity.z sign while airborne on the ladder.
-   500 ms (ground jump) and 299 ms (ladder re-grab/push-off) timers on
+   500 ms (ground jump) and 300 ms (ladder re-grab/push-off) timers on
    `ps.jumpTime` are part of the feel.
 5. Mantle: do not add one. If ledge-climbing is wanted as a feature, it would be
    a vcod extension with no retail counterpart - decide its constants, don't
