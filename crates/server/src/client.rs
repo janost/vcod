@@ -3,7 +3,7 @@
 use crate::spectate::SpectatorSim;
 use std::net::SocketAddr;
 use std::time::Instant;
-use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
+use vcod_common::net::msg::UserCmd;
 use vcod_common::net::netchan::{ClientMessage, ServerNetchan};
 
 /// `MAX_NAME_LENGTH`, a byte cap since the value is remote input.
@@ -34,8 +34,12 @@ pub struct Client {
     /// The client's `reliableAcknowledge`, what it has seen of our server commands.
     pub reliable_ack: i32,
     pub message_ack: i32,
-    /// The last usercmd of the newest move; the next tick flies it.
-    pub last_cmd: UserCmd,
+    /// The serverTime of the last usercmd the sim consumed; cmd-to-cmd
+    /// deltas drive the pmove dt, retail-style.
+    pub last_processed_st: i32,
+    /// Usercmds received but not yet replayed, oldest first. Bounded so a
+    /// flooded client cannot build unbounded latency.
+    pub pending: Vec<UserCmd>,
     /// Set once the client enters the world.
     pub sim: Option<SpectatorSim>,
 }
@@ -63,7 +67,8 @@ impl Client {
             last_client_command: 0,
             reliable_ack: 0,
             message_ack: 0,
-            last_cmd: NULL_USERCMD,
+            last_processed_st: 0,
+            pending: Vec::new(),
             sim: None,
         }
     }
