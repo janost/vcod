@@ -408,6 +408,38 @@ impl WorldVis {
                 self.mark_group(&self.cull_groups[gi as usize], frustum, &mut w.vis);
             }
         }
+        // Sightlines that leave the graph over low geometry — bulwarks, rails
+        // (mp_ship's deck over the ocean) — under-mark: the walk treats those
+        // walls as sealed. Any cell sharing a portal with a visited cell is
+        // frustum-tested directly, to a fixpoint; the camera frustum is the
+        // conservative bound, same as the fallback path.
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for (ci, c) in self.cells.iter().enumerate() {
+                if w.vis.cells[ci] {
+                    continue;
+                }
+                let touches_visited = (c.first_portal as usize
+                    ..(c.first_portal + c.portal_count) as usize)
+                    .any(|pi| w.vis.cells[self.portals[pi].cell as usize]);
+                if !touches_visited
+                    || !frustum.intersects_aabb(Vec3::from(c.mins), Vec3::from(c.maxs))
+                {
+                    continue;
+                }
+                if self.mark_tree(c.first_aabb, frustum, &mut w.vis) {
+                    w.vis.cells[ci] = true;
+                    w.vis.stats.cells_visited += 1;
+                    grew = true;
+                }
+                for &gi in &self.cull_indices
+                    [c.first_cull_index as usize..(c.first_cull_index + c.cull_count) as usize]
+                {
+                    self.mark_group(&self.cull_groups[gi as usize], frustum, &mut w.vis);
+                }
+            }
+        }
         w.vis.stats.soups = w.vis.soups.iter().filter(|&&s| s).count();
         w.vis
     }
@@ -1326,6 +1358,39 @@ mod tests {
         // root(1) + A(2, fails) + B(3) = 3: A's failure jumps straight to
         // its tree_end (3), so its grandchild at index 2 is never tested.
         assert_eq!(v.stats.nodes_tested, 3);
+    }
+
+    /// Spectating from mp_ship's deck looks down over the bulwark at ocean
+    /// cells the portal walk seals off; the frustum expansion must surface
+    /// the ocean soup anyway (found live 2026-08-26: cells 4/40 from the
+    /// deck, flat farbox grey where the water should be).
+    #[test]
+    fn mp_ship_ocean_visible_from_the_deck() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let Some(data) = fs.read("maps/MP/mp_ship.bsp") else {
+            return;
+        };
+        let bsp = bsp::parse(&data).unwrap();
+        let vis = WorldVis::build(&bsp);
+        let ocean_soup = bsp
+            .soups
+            .iter()
+            .position(|s| {
+                bsp.materials[s.material as usize]
+                    .name
+                    .contains("mp_ship_ocean")
+            })
+            .expect("mp_ship carries the ocean");
+        // the spectator spot from the live comparison, aimed over the rail
+        let eye = Vec3::new(1354.0, 845.0, -282.0);
+        let frustum = frustum_at(eye, Vec3::new(1.0, 0.12, 0.0).normalize());
+        let v = vis.visible(eye, &frustum);
+        assert!(
+            v.soups[ocean_soup],
+            "the ocean soup must be visible from the deck"
+        );
     }
 
     #[test]

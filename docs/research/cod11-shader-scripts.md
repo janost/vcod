@@ -248,9 +248,14 @@ Each omission with its census justification:
   billboard at farbox distance when both a sprite image and the direction
   exist; maps whose active sky block has no sunfile get no disc, matching
   retail. Flare/glare/blind screen effects remain unimplemented.
-- `deformVertexes` (the ocean-sort water blocks): BSP soups are rigid buffers
-  here, so vertex waves would need CPU-side tessellation like Q3's grid mesh
-  path. Affected surfaces are mp_ship-style ocean planes; they draw flat.
+- `deformVertexes wave`: implemented 2026-08-26 after the ocean blocks made
+  mp_ship's water read as a flat sheet next to retail. Only the `wave` form
+  exists in a world block (mp_ship-style ocean planes); the BSP already
+  ships those surfaces subdivided (one 1052-vertex soup on mp_ship), so the
+  displacement runs in the vertex shader with no CPU tessellation:
+  `pos += normal * (base + amp * sin(2pi * (phase + t*rate + (x+y+z)/div)))`
+  (RTCW-MP tr_shade_calc.c RB_CalcDeformVertexes). Other deform kinds
+  consume their args and stay inert.
 - Fog: the script keywords stay inert, but stock MP fog does not come from
   them. `fogvars` / `skyfogvars` occur only in SP sky blocks (pak4/pak9
   `sky.shader`), `waterfogvars` nowhere at all; `nofog` sits only on fx/gfx

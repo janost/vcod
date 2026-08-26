@@ -479,6 +479,9 @@ pub const STAGE_FLAG_SKY: u32 = 512;
 /// `rgbGen vertex` halves the vertex rgb by identityLight; `exactVertex`
 /// stays raw (RTCW-MP tr_shade.c CGEN_VERTEX vs CGEN_EXACT_VERTEX).
 pub const STAGE_FLAG_VERTEX_RGB_HALF: u32 = 1024;
+/// deformVertexes wave: displace vertices along their normals by
+/// StageParams.wave = [base, amp, phase + t * rate, spread].
+pub const STAGE_FLAG_DEFORM_WAVE: u32 = 2048;
 
 /// Per-stage draw parameters, one dynamic-offset slot per stage batch. WGSL
 /// mirror is `StageParams` in shader.wgsl; byte offsets:
@@ -500,9 +503,12 @@ pub struct StageParams {
     pub(crate) vec1_s: [f32; 4],
     pub(crate) vec1_t: [f32; 4],
     pub(crate) eye_off: [f32; 4],
+    /// deformVertexes wave: [base, amp, phase + t * rate, spread = 1/div];
+    /// the VS displaces along the vertex normal when F_DEFORM_WAVE is set.
+    pub(crate) wave: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<StageParams>() == 176);
+const _: () = assert!(std::mem::size_of::<StageParams>() == 192);
 const STAGE_PARAMS_SIZE: u64 = std::mem::size_of::<StageParams>() as u64;
 
 const UV_AFFINE_IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
@@ -582,6 +588,7 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
         vec1_s: [0.0; 4],
         vec1_t: [0.0; 4],
         eye_off: [0.0; 4],
+        wave: [0.0; 4],
     };
     if let Some(v) = b0.vector.as_ref() {
         flags |= STAGE_FLAG_BUNDLE0_VECTOR;
@@ -592,6 +599,10 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
         flags |= STAGE_FLAG_BUNDLE1_VECTOR;
         p.vec1_s = [v[0], v[1], v[2], 0.0];
         p.vec1_t = [v[3], v[4], v[5], 0.0];
+    }
+    if let Some((w, spread)) = &shader.deform_wave {
+        flags |= STAGE_FLAG_DEFORM_WAVE;
+        p.wave = [w.base, w.amp, w.phase + t * w.freq, *spread];
     }
     p.flags = flags;
     Some(p)
@@ -716,7 +727,8 @@ fn stage_animated(sh: &Shader, idx: usize) -> bool {
     let Some(st) = sh.stages.get(idx) else {
         return false;
     };
-    st.bundles.iter().any(|b| has_animated_tcmods(&b.tcmods))
+    sh.deform_wave.is_some()
+        || st.bundles.iter().any(|b| has_animated_tcmods(&b.tcmods))
         || matches!(st.rgb_gen, RgbGen::Wave(_))
         || matches!(st.alpha_gen, AlphaGen::Wave(_))
 }
@@ -4574,7 +4586,7 @@ mod tests {
 
     #[test]
     fn stage_params_is_std140_shaped_and_pod_roundtrips() {
-        assert_eq!(std::mem::size_of::<StageParams>(), 176);
+        assert_eq!(std::mem::size_of::<StageParams>(), 192);
         let p = StageParams {
             uv0: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
             uv1: [7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
@@ -4587,6 +4599,7 @@ mod tests {
             vec1_s: [0.0, 0.0, 1.0, 0.0],
             vec1_t: [0.0, 0.0, 0.0, 1.0],
             eye_off: [9.0, 8.0, 7.0, 0.0],
+            wave: [1.0, 2.0, 3.0, 4.0],
         };
         // slot-shaped write/read, like the UBO dynamic-offset path
         let mut slot = [0u8; std::mem::size_of::<StageParams>()];

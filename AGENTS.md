@@ -207,7 +207,11 @@ decompiler output or disassembly listings.
   clipped portal polygons narrower than `SLIVER_EPS` are skipped (slivers at
   shared edges made cones flicker), and cells whose top is below the eye are
   marked with the camera frustum (the graph treats portal-less walls as full
-  height, which fails once the eye looks over them). The soup lump is laid out
+  height, which fails once the eye looks over them). A third, from the same
+  mp_ship deck that motivated the second: sightlines over low geometry
+  (bulwarks, rails) still under-mark, so after the walk every cell sharing a
+  portal with a visited cell is frustum-tested to a fixpoint (`visible`).
+  The soup lump is laid out
   `[cull-group soups][cell-tree soups][submodel soups]`, and leaf surfaces
   (lump 23) index the terrain collision partitions, not draw soups.
 - The F3 `audio` line reads `v N plays N miss N cull N drop N steal N N.NNms`: live

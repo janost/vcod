@@ -41,6 +41,8 @@ struct StageParams {
     vec1_t: vec4<f32>,
     // sky dome draws: view origin added to the vertex when F_EYE_OFFSET is set
     eye_off: vec4<f32>,
+    // deformVertexes wave: [base, amp, phase + t * rate, spread]
+    wave: vec4<f32>,
 };
 @group(2) @binding(0) var<uniform> stage: StageParams;
 // Bundle 1's image when it is neither lightmap nor absent (white is bound then).
@@ -59,6 +61,8 @@ const F_EYE_OFFSET: u32 = 256u;
 const F_SKY: u32 = 512u;
 // rgbGen vertex: vertex rgb halved by identityLight (overbright)
 const F_VERTEX_HALF: u32 = 1024u;
+// deformVertexes wave: displace along the vertex normal
+const F_DEFORM_WAVE: u32 = 2048u;
 // glAlphaFunc thresholds are 128/255 for both LT128 and GE128.
 const ATEST128: f32 = 0.5019607843137255;
 
@@ -128,6 +132,13 @@ fn vs_stage(in: VsIn) -> VsOut {
     var out: VsOut;
     // sky dome vertices are box-space; the view origin rides in StageParams
     var pos = in.pos;
+    // deformVertexes wave (RB_CalcDeformVertexes): a wave travelling along
+    // +x+y+z, displacing along the vertex normal
+    if ((stage.flags & F_DEFORM_WAVE) != 0u) {
+        let scale = stage.wave.x
+            + stage.wave.y * sin(6.2831853 * (stage.wave.z + (pos.x + pos.y + pos.z) * stage.wave.w));
+        pos = pos + in.normal * scale;
+    }
     if ((stage.flags & F_EYE_OFFSET) != 0u) {
         pos = pos + stage.eye_off.xyz;
     }

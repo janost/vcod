@@ -138,6 +138,12 @@ pub struct Shader {
     pub nomipmaps: bool,
     pub sky: Option<SkyParms>,
     pub sunfile: Option<String>,
+    /// `deformVertexes wave <div> <func> <base> <amp> <phase> <rate>` — the
+    /// ocean-swell form. Vertices displace along their normals by
+    /// `base + amp * sin(2pi * (phase + t * rate + (x+y+z)/div))`
+    /// (RTCW-MP tr_shade_calc.c RB_CalcDeformVertexes); stored as
+    /// (wave, spread = 1/div).
+    pub deform_wave: Option<(Wave, f32)>,
     pub surface: SurfaceBits,
 }
 
@@ -551,6 +557,7 @@ fn is_known_kw(tok: &str) -> bool {
                 | "surfaceparm"
                 | "skyparms"
                 | "sunfile"
+                | "deformvertexes"
                 | "nofog"
                 | "entitymergable"
                 | "skyfogvars"
@@ -1051,6 +1058,30 @@ fn top_token(
                 sh.sunfile = Some(norm_path(t));
             }
             usize::from(one_arg().is_some())
+        }
+        "deformvertexes" => {
+            // `wave <div> <func> <base> <amp> <phase> <rate>` is the only
+            // form the world corpus carries (the ocean-swell blocks); other
+            // deform kinds consume their args and stay inert.
+            if args.first().map(|t| t.to_ascii_lowercase()).as_deref() == Some("wave") {
+                match parse_wave(&args[2..]) {
+                    Some(w) => {
+                        let div = args
+                            .get(1)
+                            .map(|t| fnum(t))
+                            .filter(|&d| d.abs() > 1e-6)
+                            .unwrap_or(1.0);
+                        sh.deform_wave = Some((w, 1.0 / div));
+                        7.min(args.len())
+                    }
+                    None => {
+                        warns.warn_once(sname, "unknown deformVertexes wave form");
+                        until_keyword(args)
+                    }
+                }
+            } else {
+                until_keyword(args)
+            }
         }
         "skyfogvars" | "waterfogvars" | "fogvars" | "nofog" | "entitymergable" | "tesssize"
         | "light" => until_keyword(args),
@@ -2215,6 +2246,28 @@ textures/sfx/test_water
         let partial = SunFile::parse("r_sunflare_shader \"gfx/sun/global_flare\"\n");
         assert_eq!(partial.sprite, None);
         assert_eq!(partial.size_deg, SunFile::DEFAULT_SIZE_DEG);
+    }
+
+    #[test]
+    fn parse_deform_vertexes_wave() {
+        let (name, body) =
+            first_block("t { deformVertexes wave 1600 sin 16 16 0 .25 { map a.tga } }");
+        let mut w = WarnSet::new();
+        let sh = parse_shader(&name, &body, &mut w);
+        let (wv, spread) = sh.deform_wave.expect("ocean wave parsed");
+        assert_eq!(wv.form, WaveForm::Sin);
+        assert_eq!(
+            (wv.base, wv.amp, wv.phase, wv.freq),
+            (16.0, 16.0, 0.0, 0.25)
+        );
+        assert!((spread - 1.0 / 1600.0).abs() < 1e-9);
+        assert!(!w.fired(&name, "unknown token"), "args consumed cleanly");
+        // other deform kinds stay inert without warnings
+        let (name, body) = first_block("t { deformVertexes move 1 2 3 4 { map a.tga } }");
+        let mut w = WarnSet::new();
+        let sh = parse_shader(&name, &body, &mut w);
+        assert!(sh.deform_wave.is_none());
+        assert!(!w.fired(&name, "unknown token"));
     }
 
     #[test]
