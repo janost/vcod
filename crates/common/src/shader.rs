@@ -1071,9 +1071,480 @@ pub fn parse_shader(name: &str, body: &[&str], warns: &mut WarnSet) -> Shader {
     sh
 }
 
+// ---- tcMod runtime evaluation ----
+// Math pinned to RTCW-MP src/renderer/tr_shade_calc.c; table build loop is
+// tr_init.c R_Init.
+
+const FUNCTABLE_SIZE: usize = 1024;
+const FUNCTABLE_MASK: i64 = (FUNCTABLE_SIZE - 1) as i64;
+
+/// Compile-time stand-in for libm sin(): quadrant reduction then Maclaurin.
+const fn sin_deg(deg: f64) -> f64 {
+    let mut x = deg % 360.0;
+    if x > 180.0 {
+        x -= 360.0;
+    } else if x < -180.0 {
+        x += 360.0;
+    }
+    if x > 90.0 {
+        x = 180.0 - x;
+    } else if x < -90.0 {
+        x = -180.0 - x;
+    }
+    let r = x * std::f64::consts::PI / 180.0;
+    let sq = -r * r;
+    let mut term = r;
+    let mut sum = r;
+    let mut k = 2.0f64;
+    while k < 30.0 {
+        term *= sq / (k * (k + 1.0));
+        sum += term;
+        k += 2.0;
+    }
+    sum
+}
+
+const fn build_sin_table() -> [f32; FUNCTABLE_SIZE] {
+    let mut t = [0.0f32; FUNCTABLE_SIZE];
+    let mut i = 0usize;
+    while i < FUNCTABLE_SIZE {
+        // RTCW spans the table over SIZE-1 degrees of arc, so entry 256 is
+        // sin(90.088deg), not exactly 1
+        t[i] = sin_deg(i as f64 * 360.0 / (FUNCTABLE_SIZE - 1) as f64) as f32;
+        i += 1;
+    }
+    t
+}
+
+const fn build_square_table() -> [f32; FUNCTABLE_SIZE] {
+    let mut t = [0.0f32; FUNCTABLE_SIZE];
+    let mut i = 0usize;
+    while i < FUNCTABLE_SIZE {
+        t[i] = if i < FUNCTABLE_SIZE / 2 { 1.0 } else { -1.0 };
+        i += 1;
+    }
+    t
+}
+
+const fn build_sawtooth_table() -> [f32; FUNCTABLE_SIZE] {
+    let mut t = [0.0f32; FUNCTABLE_SIZE];
+    let mut i = 0usize;
+    while i < FUNCTABLE_SIZE {
+        t[i] = i as f32 / FUNCTABLE_SIZE as f32;
+        i += 1;
+    }
+    t
+}
+
+const fn build_inverse_sawtooth_table() -> [f32; FUNCTABLE_SIZE] {
+    let mut t = [0.0f32; FUNCTABLE_SIZE];
+    let mut i = 0usize;
+    while i < FUNCTABLE_SIZE {
+        t[i] = 1.0 - i as f32 / FUNCTABLE_SIZE as f32;
+        i += 1;
+    }
+    t
+}
+
+const fn build_triangle_table() -> [f32; FUNCTABLE_SIZE] {
+    let mut t = [0.0f32; FUNCTABLE_SIZE];
+    let mut i = 0usize;
+    while i < FUNCTABLE_SIZE {
+        t[i] = if i < FUNCTABLE_SIZE / 2 {
+            if i < FUNCTABLE_SIZE / 4 {
+                i as f32 / (FUNCTABLE_SIZE / 4) as f32
+            } else {
+                1.0 - t[i - FUNCTABLE_SIZE / 4]
+            }
+        } else {
+            -t[i - FUNCTABLE_SIZE / 2]
+        };
+        i += 1;
+    }
+    t
+}
+
+const SIN_TABLE: [f32; FUNCTABLE_SIZE] = build_sin_table();
+const SQUARE_TABLE: [f32; FUNCTABLE_SIZE] = build_square_table();
+const TRIANGLE_TABLE: [f32; FUNCTABLE_SIZE] = build_triangle_table();
+const SAWTOOTH_TABLE: [f32; FUNCTABLE_SIZE] = build_sawtooth_table();
+const INVERSE_SAWTOOTH_TABLE: [f32; FUNCTABLE_SIZE] = build_inverse_sawtooth_table();
+
+/// WAVEVALUE (tr_shade_calc.c:34): base + table[idx]*amp with
+/// idx = ftol(phase + t*freq, scaled by 1024) & 1023. myftol is x87 fistp,
+/// which rounds to nearest even, so 511.9 indexes 512 where an `as` cast
+/// would truncate to 511.
+pub fn wave_value(w: &Wave, t: f32) -> f32 {
+    let table = match w.form {
+        WaveForm::Sin => &SIN_TABLE,
+        WaveForm::Square => &SQUARE_TABLE,
+        WaveForm::Triangle => &TRIANGLE_TABLE,
+        WaveForm::Sawtooth => &SAWTOOTH_TABLE,
+        WaveForm::InverseSawtooth => &INVERSE_SAWTOOTH_TABLE,
+    };
+    let x = (w.phase + t * w.freq) * FUNCTABLE_SIZE as f32;
+    let idx = x.round_ties_even() as i64 & FUNCTABLE_MASK;
+    w.base + table[idx as usize] * w.amp
+}
+
+/// Column-major like wgpu mat3x2: [a,b,c,d,tx,ty] means
+/// s' = a*s + c*t + tx ; t' = b*s + d*t + ty.
+type Affine = [f32; 6];
+
+const AFFINE_IDENTITY: Affine = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+/// outer applied after inner.
+fn compose_affine(o: &Affine, i: &Affine) -> Affine {
+    [
+        o[0] * i[0] + o[2] * i[1],
+        o[1] * i[0] + o[3] * i[1],
+        o[0] * i[2] + o[2] * i[3],
+        o[1] * i[2] + o[3] * i[3],
+        o[0] * i[4] + o[2] * i[5] + o[4],
+        o[1] * i[4] + o[3] * i[5] + o[5],
+    ]
+}
+
+/// Folds the tcMods of one bundle left from identity in listed order.
+/// Turb is not affine and rides separately in [`bundle_turb`].
+pub fn bundle_affine(tcmods: &[TcMod], t: f32) -> [f32; 6] {
+    let mut acc = AFFINE_IDENTITY;
+    for m in tcmods {
+        let next = match m {
+            TcMod::Scroll(sx, sy) => {
+                // RB_CalcScrollTexCoords keeps the fractional part only
+                let fx = sx * t;
+                let fy = sy * t;
+                [1.0, 0.0, 0.0, 1.0, fx - fx.floor(), fy - fy.floor()]
+            }
+            TcMod::Scale(sx, sy) => [*sx, 0.0, 0.0, *sy, 0.0, 0.0],
+            TcMod::Rotate(dps) => {
+                // RB_CalcRotateTexCoords: negated degrees, index truncated
+                // toward zero before masking, cos read a quarter ahead
+                let degs = -dps * t;
+                let idx = (degs * (FUNCTABLE_SIZE as f32 / 360.0)) as i64 & FUNCTABLE_MASK;
+                let sin_v = SIN_TABLE[idx as usize];
+                let cos_v =
+                    SIN_TABLE[(idx + FUNCTABLE_SIZE as i64 / 4) as usize & FUNCTABLE_MASK as usize];
+                [
+                    cos_v,
+                    sin_v,
+                    -sin_v,
+                    cos_v,
+                    0.5 - 0.5 * cos_v + 0.5 * sin_v,
+                    0.5 - 0.5 * sin_v - 0.5 * cos_v,
+                ]
+            }
+            TcMod::Stretch(w) => {
+                // RB_CalcStretchTexCoords: uniform 1/waveform about centre
+                let p = 1.0 / wave_value(w, t);
+                [p, 0.0, 0.0, p, 0.5 - 0.5 * p, 0.5 - 0.5 * p]
+            }
+            // args stored m00 m01 m10 m11 tS tT map verbatim onto this layout
+            TcMod::Transform(a) => *a,
+            TcMod::Turb { .. } => continue,
+        };
+        acc = compose_affine(&next, &acc);
+    }
+    acc
+}
+
+/// [amp0, now0, amp1, now1] with now = phase + t*freq for the last Turb of
+/// the list; zeros when there is none. The VS adds
+/// amp*sin(worldpos_axis/1024 + now) per axis.
+pub fn bundle_turb(tcmods: &[TcMod], t: f32) -> [f32; 4] {
+    let mut out = [0.0f32; 4];
+    for m in tcmods {
+        if let TcMod::Turb { amp, phase, freq } = m {
+            let now = phase + t * freq;
+            out = [*amp, now, *amp, now];
+        }
+    }
+    out
+}
+
+/// Scale/Transform are static; everything else animates with time.
+pub fn has_animated_tcmods(tcmods: &[TcMod]) -> bool {
+    tcmods
+        .iter()
+        .any(|m| !matches!(m, TcMod::Scale(_, _) | TcMod::Transform(_)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- tcMod runtime evaluation ----
+
+    fn apply(m: &[f32; 6], s: f32, t: f32) -> (f32, f32) {
+        (m[0] * s + m[2] * t + m[4], m[1] * s + m[3] * t + m[5])
+    }
+
+    fn close(a: f32, b: f32, eps: f32) -> bool {
+        (a - b).abs() <= eps
+    }
+
+    fn assert_mat6(got: &[f32; 6], want: [f32; 6], eps: f32) {
+        for i in 0..6 {
+            assert!(
+                close(got[i], want[i], eps),
+                "[{i}] got {} want {}",
+                got[i],
+                want[i]
+            );
+        }
+    }
+
+    #[test]
+    fn scroll_translates_fractional_speed_times_time() {
+        // 0.5 * 2.3 = 1.15, wrapped to 0.15
+        assert_mat6(
+            &bundle_affine(&[TcMod::Scroll(0.5, 0.0)], 2.3),
+            [1.0, 0.0, 0.0, 1.0, 0.15, 0.0],
+            1e-6,
+        );
+        // negative speeds wrap upward: -0.75 -> 0.25, -0.25 -> 0.75
+        assert_mat6(
+            &bundle_affine(&[TcMod::Scroll(-0.75, -0.25)], 1.0),
+            [1.0, 0.0, 0.0, 1.0, 0.25, 0.75],
+            1e-6,
+        );
+    }
+
+    #[test]
+    fn rotate_negates_degrees_per_second() {
+        // 90 deg/s for 1s: degs = -90, quarter turn about (0.5, 0.5) sends
+        // UV point (1, 0.5) to (0.5, 0)
+        let m = bundle_affine(&[TcMod::Rotate(90.0)], 1.0);
+        assert_mat6(&m, [0.0, -1.0, 1.0, 0.0, 0.0, 1.0], 1e-4);
+        let (sp, tp) = apply(&m, 1.0, 0.5);
+        assert!(close(sp, 0.5, 1e-4) && close(tp, 0.0, 1e-4));
+
+        // small positive time, CCW-positive speed: (1, 0.5) drifts toward
+        // negative t (RB_CalcRotateTexCoords negates first)
+        let m = bundle_affine(&[TcMod::Rotate(90.0)], 0.01);
+        let (sp, tp) = apply(&m, 1.0, 0.5);
+        assert!(sp > 0.99 && sp < 1.01, "s' {sp}");
+        assert!(tp < 0.499, "t' must drop below 0.5, got {tp}");
+    }
+
+    #[test]
+    fn stretch_inverts_wave_about_centre() {
+        // phase+freq*t lands exactly on table index 256: sin ~= 1,
+        // waveform = 1 + 0.5 ~= 1.5, p = 1/1.5 = 2/3
+        let w = Wave {
+            form: WaveForm::Sin,
+            base: 1.0,
+            amp: 0.5,
+            phase: 0.0,
+            freq: 0.25,
+        };
+        let m = bundle_affine(&[TcMod::Stretch(w)], 1.0);
+        let p = m[0];
+        assert!(close(p, 2.0 / 3.0, 1e-4), "p {p}");
+        assert_mat6(&m, [p, 0.0, 0.0, p, 0.5 - 0.5 * p, 0.5 - 0.5 * p], 1e-6);
+        // centre is a fixed point
+        let (sp, tp) = apply(&m, 0.5, 0.5);
+        assert!(close(sp, 0.5, 1e-5) && close(tp, 0.5, 1e-5));
+    }
+
+    #[test]
+    fn transform_matrix_applies_verbatim_args() {
+        let ident = bundle_affine(&[TcMod::Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])], 7.0);
+        assert_eq!(ident, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+
+        // args arrive m00 m01 m10 m11 tS tT; lone transform comes back
+        // verbatim in [a,b,c,d,tx,ty] layout
+        let args = [2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let m = bundle_affine(&[TcMod::Transform(args)], 7.0);
+        assert_eq!(m, args);
+        // s' = m00*s + m10*t + tS ; t' = m01*s + m11*t + tT
+        let (sp, tp) = apply(&m, 0.3, 0.8);
+        assert!(close(sp, 2.0 * 0.3 + 4.0 * 0.8 + 6.0, 1e-5));
+        assert!(close(tp, 3.0 * 0.3 + 5.0 * 0.8 + 7.0, 1e-5));
+    }
+
+    #[test]
+    fn tcmod_composition_order_matters() {
+        // scroll-then-scale carries the translation through the scale
+        let a = bundle_affine(&[TcMod::Scroll(0.5, 0.0), TcMod::Scale(2.0, 2.0)], 2.3);
+        assert_mat6(&a, [2.0, 0.0, 0.0, 2.0, 0.3, 0.0], 1e-6);
+        // scale-then-scroll does not
+        let b = bundle_affine(&[TcMod::Scale(2.0, 2.0), TcMod::Scroll(0.5, 0.0)], 2.3);
+        assert_mat6(&b, [2.0, 0.0, 0.0, 2.0, 0.15, 0.0], 1e-6);
+    }
+
+    #[test]
+    fn square_wave_flips_at_half_cycle_with_nearest_index() {
+        let w = Wave {
+            form: WaveForm::Square,
+            base: 0.0,
+            amp: 1.0,
+            phase: 0.0,
+            freq: 1.0,
+        };
+        assert!(close(wave_value(&w, 0.499), 1.0, 1e-6));
+        // 0.4999 * 1024 = 511.898: myftol rounds to nearest, indexing 512
+        // (truncation would stay on 511 and read +1)
+        assert!(close(wave_value(&w, 0.4999), -1.0, 1e-6));
+        assert!(close(wave_value(&w, 0.5), -1.0, 1e-6));
+        assert!(close(wave_value(&w, 1.0), 1.0, 1e-6));
+    }
+
+    #[test]
+    fn wave_value_matches_hand_computed_table_entries() {
+        // sawtooth table[i] = i/1024: index 256 reads 0.25 exactly
+        let saw = Wave {
+            form: WaveForm::Sawtooth,
+            base: 0.0,
+            amp: 1.0,
+            phase: 0.25,
+            freq: 0.0,
+        };
+        assert!(close(wave_value(&saw, 123.0), 0.25, 1e-6));
+        // inverse sawtooth mirrors it
+        let inv = Wave {
+            form: WaveForm::InverseSawtooth,
+            ..saw.clone()
+        };
+        assert!(close(wave_value(&inv, 123.0), 0.75, 1e-6));
+        // triangle peaks at the quarter, bottoms past three quarters
+        let tri = |phase: f32| Wave {
+            form: WaveForm::Triangle,
+            base: 0.0,
+            amp: 1.0,
+            phase,
+            freq: 0.0,
+        };
+        assert!(close(wave_value(&tri(0.125), 0.0), 0.5, 1e-6));
+        assert!(close(wave_value(&tri(0.25), 0.0), 1.0, 1e-6));
+        assert!(close(wave_value(&tri(0.75), 0.0), -1.0, 1e-6));
+        // sin near its peak: sinTable[256] = sin(256*360/1023 deg)
+        let sin = Wave {
+            form: WaveForm::Sin,
+            base: 100.0,
+            amp: 20.0,
+            phase: 0.25,
+            freq: 0.0,
+        };
+        assert!(close(wave_value(&sin, 0.0), 120.0, 1e-4));
+        // negative phases index through the mask, not negative slots
+        let neg = Wave {
+            form: WaveForm::Sawtooth,
+            base: 0.0,
+            amp: 1.0,
+            phase: -0.25,
+            freq: 0.0,
+        };
+        assert!(close(wave_value(&neg, 0.0), 0.75, 1e-6));
+    }
+
+    #[test]
+    fn sin_table_matches_libm_over_full_range() {
+        for (i, v) in SIN_TABLE.iter().enumerate() {
+            let want = (i as f64 * 360.0 / (FUNCTABLE_SIZE - 1) as f64)
+                .to_radians()
+                .sin() as f32;
+            assert!((v - want).abs() < 1e-5, "SIN_TABLE[{i}] {v} vs libm {want}");
+        }
+    }
+
+    #[test]
+    fn wave_value_is_periodic_over_one_cycle() {
+        let forms = [
+            WaveForm::Sin,
+            WaveForm::Square,
+            WaveForm::Triangle,
+            WaveForm::Sawtooth,
+            WaveForm::InverseSawtooth,
+        ];
+        for form in forms {
+            let label = format!("{form:?}");
+            let w = Wave {
+                form: form.clone(),
+                base: 0.3,
+                amp: 0.8,
+                phase: 0.11,
+                freq: 1.0,
+            };
+            let mut t = 0.0f32;
+            while t < 1.0 {
+                assert!(
+                    close(wave_value(&w, t), wave_value(&w, t + 1.0), 1e-4),
+                    "{label} at t={t}"
+                );
+                t += 0.037;
+            }
+        }
+    }
+
+    #[test]
+    fn turb_bundle_folds_time_into_now_last_wins() {
+        assert_eq!(bundle_turb(&[], 3.0), [0.0; 4]);
+        assert_eq!(bundle_turb(&[TcMod::Scroll(1.0, 1.0)], 3.0), [0.0; 4]);
+        // now = phase + freq*t, unwrapped; same now for both axes
+        let turb = TcMod::Turb {
+            amp: 2.0,
+            phase: 0.25,
+            freq: 0.5,
+        };
+        assert_eq!(bundle_turb(&[turb.clone()], 3.0), [2.0, 1.75, 2.0, 1.75]);
+        // the affine pass leaves turbulence untouched
+        assert_eq!(
+            bundle_affine(
+                &[TcMod::Turb {
+                    amp: 2.0,
+                    phase: 0.25,
+                    freq: 0.5
+                }],
+                3.0
+            ),
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        );
+        // later Turb replaces earlier
+        let late = TcMod::Turb {
+            amp: 3.0,
+            phase: 1.0,
+            freq: 1.0,
+        };
+        assert_eq!(
+            bundle_turb(&[turb, TcMod::Scale(2.0, 2.0), late], 2.0),
+            [3.0, 3.0, 3.0, 3.0]
+        );
+    }
+
+    #[test]
+    fn has_animated_tcmods_truth_table() {
+        assert!(!has_animated_tcmods(&[]));
+        assert!(!has_animated_tcmods(&[TcMod::Scale(2.0, 2.0)]));
+        assert!(!has_animated_tcmods(&[TcMod::Transform([1.0; 6])]));
+        assert!(has_animated_tcmods(&[TcMod::Scroll(0.1, 0.0)]));
+        assert!(has_animated_tcmods(&[TcMod::Rotate(30.0)]));
+        assert!(has_animated_tcmods(&[TcMod::Stretch(Wave {
+            form: WaveForm::Sin,
+            base: 1.0,
+            amp: 0.1,
+            phase: 0.0,
+            freq: 1.0
+        })]));
+        assert!(has_animated_tcmods(&[TcMod::Turb {
+            amp: 1.0,
+            phase: 0.0,
+            freq: 1.0
+        }]));
+        // static mods alongside an animated one still animate
+        assert!(has_animated_tcmods(&[
+            TcMod::Scale(2.0, 2.0),
+            TcMod::Scroll(0.1, 0.0)
+        ]));
+    }
+
+    #[test]
+    fn empty_tcmods_yield_identity_affine() {
+        assert_eq!(bundle_affine(&[], 5.0), [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    }
+
+    // ---- stage parser ----
 
     const SAMPLE: &str = r#"
 textures\walls\big // the big wall
