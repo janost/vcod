@@ -65,6 +65,8 @@ pub struct Bundle {
     pub anim: Option<AnimSpec>,
     pub clamp: bool,
     pub tcmods: Vec<TcMod>,
+    /// `tcGen vector` basis, sx sy sz tx ty tz; renderer dots world position.
+    pub vector: Option<[f32; 6]>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -509,6 +511,7 @@ impl StageBuf {
             slot.image = b.image;
             slot.anim = b.anim;
             slot.clamp = b.clamp;
+            slot.vector = b.vector;
         } else {
             self.bundles.push(b);
         }
@@ -631,6 +634,7 @@ fn add_image(
         anim: None,
         clamp,
         tcmods: Vec::new(),
+        vector: None,
     });
     k + 1
 }
@@ -651,6 +655,7 @@ fn add_anim(sb: &mut StageBuf, args: &[&str], sname: &str, warns: &mut WarnSet) 
         anim: Some(AnimSpec { fps, paths }),
         clamp: false,
         tcmods: Vec::new(),
+        vector: None,
     });
     1 + n
 }
@@ -711,20 +716,43 @@ fn tc_gen(sb: &mut StageBuf, args: &[&str], sname: &str, warns: &mut WarnSet) ->
             } else {
                 sb.want_lm = true;
             }
+            1
         }
-        // The brief's drop-on-unknown-tcGen rule contradicts its own water
-        // fallback evidence, where every kept stage carries `tcgen vector`;
-        // vector therefore only skips its matrix, other forms drop the stage.
-        "vector" => warns.warn_once(sname, "unsupported tcGen vector"),
+        // q3map_globaltexture idiom: dot world position with the basis in the
+        // VS (renderer side); the parser only stores it.
+        "vector" => {
+            let mut vals = [0.0f32; 6];
+            let mut bad = false;
+            let mut k = 1;
+            for slot in vals.iter_mut() {
+                while matches!(args.get(k), Some(&"(") | Some(&")")) {
+                    k += 1;
+                }
+                match args.get(k) {
+                    Some(t) => match t.trim_matches(|c| c == '(' || c == ')').parse::<f32>() {
+                        Ok(v) => *slot = v,
+                        Err(_) => bad = true,
+                    },
+                    None => bad = true,
+                }
+                k += 1;
+            }
+            while matches!(args.get(k), Some(&")")) {
+                k += 1;
+            }
+            if bad {
+                warns.warn_once(sname, "malformed tcGen vector");
+            }
+            if let Some(b) = sb.bundles.get_mut(sb.target) {
+                b.vector = Some(vals);
+            }
+            k
+        }
         _ => {
             warns.warn_once(sname, "unsupported tcGen");
             sb.alive = false;
+            1 + until_keyword(&args[1..])
         }
-    }
-    if form == "lightmap" {
-        1
-    } else {
-        1 + until_keyword(&args[1..])
     }
 }
 
@@ -1101,8 +1129,7 @@ textures/sfx/test_water
             !warns.fired(&name, "unknown token waterMap"),
             "dropped stage must not reach field parsing"
         );
-        assert!(warns.fired(&name, "unsupported tcGen vector"));
-        assert_eq!(warns.entries(), 1);
+        assert_eq!(warns.entries(), 0);
         let st = &sh.stages[0];
         assert_eq!(st.bundles.len(), 2);
         let b0 = &st.bundles[0];
@@ -1113,6 +1140,11 @@ textures/sfx/test_water
         assert_eq!(
             b0.tcmods,
             vec![TcMod::Scroll(0.05, 0.0), TcMod::Scale(4.0, 4.0)]
+        );
+        // tcGen vector basis, sx sy sz tx ty tz as written
+        assert_eq!(
+            b0.vector,
+            Some([0.001953125, 0.0, 0.0, 0.0, 0.001953125, 0.0])
         );
         assert_eq!(st.bundles[1].image, ImageRef::Lightmap);
         assert_eq!(st.rgb_gen, RgbGen::ExactVertex);
@@ -1300,6 +1332,38 @@ textures/sfx/test_water
             ImageRef::Path("tex/a.tga".to_string())
         );
         assert!(w.fired(&name, "redundant tcGen lightmap"));
+    }
+
+    #[test]
+    fn tcgen_vector_lands_in_current_fill_target_without_warning() {
+        let (name, body) = first_block(
+            r#"t { { map a.tga nextbundle map $lightmap tcGen vector (.5 0 0) (0 .5 0) } }"#,
+        );
+        let mut w = WarnSet::new();
+        let sh = parse_shader(&name, &body, &mut w);
+        let st = &sh.stages[0];
+        assert_eq!(st.bundles[0].vector, None);
+        assert_eq!(st.bundles[1].vector, Some([0.5, 0.0, 0.0, 0.0, 0.5, 0.0]));
+        assert_eq!(w.entries(), 0, "supported form must not warn");
+    }
+
+    #[test]
+    fn tcgen_vector_malformed_defaults_to_zero_with_warning() {
+        let (name, body) = first_block("t { { map a.tga tcGen vector ( x y z ) ( 0 q 0 ) } }");
+        let mut w = WarnSet::new();
+        let sh = parse_shader(&name, &body, &mut w);
+        assert_eq!(sh.stages[0].bundles[0].vector, Some([0.0; 6]));
+        assert!(w.fired(&name, "malformed tcGen vector"));
+        assert_eq!(w.entries(), 1);
+    }
+
+    #[test]
+    fn unsupported_tcgen_forms_drop_the_stage() {
+        let (name, body) = first_block("t { { map a.tga tcGen environment } { map b.tga } }");
+        let mut w = WarnSet::new();
+        let sh = parse_shader(&name, &body, &mut w);
+        assert_eq!(sh.stages.len(), 1);
+        assert!(w.fired(&name, "unsupported tcGen"));
     }
 
     #[test]
