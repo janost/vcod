@@ -527,10 +527,14 @@ impl Server {
             return;
         }
 
-        let Some(ops) = self.parse_client_ops(c, &m) else {
+        let base = c.last_cmd;
+        let Some((ops, last_cmd)) = self.parse_client_ops(c, &m, base) else {
             log::debug!("client {slot}: message from {from} does not decode");
             return;
         };
+        // The new delta base commits before any op runs; a message that fails
+        // to decode left it alone above.
+        self.clients[slot].as_mut().unwrap().last_cmd = last_cmd;
         // Acking the gamestate message is the enter-world trigger. Equal, not
         // strictly past: a message's fragments share one sequence, so the
         // client's first ack lands exactly on gamestate_message_num, and no
@@ -559,10 +563,18 @@ impl Server {
     /// `SV_ExecuteClientMessage`'s op walk, read to the end before any op is
     /// applied. `None` when the stream does not decode: an overflow anywhere
     /// or a bad usercmd count, which is what a forged block looks like once
-    /// the scramble key is wrong.
-    fn parse_client_ops(&self, c: &Client, m: &ClientMessage) -> Option<Vec<ClientOp>> {
+    /// the scramble key is wrong. On success the new delta base comes back
+    /// with the ops: the last cmd decoded, for the next move message to
+    /// chain from.
+    fn parse_client_ops(
+        &self,
+        c: &Client,
+        m: &ClientMessage,
+        base: UserCmd,
+    ) -> Option<(Vec<ClientOp>, UserCmd)> {
         let mut r = MsgReader::new(&m.ops, &self.huff);
         let mut ops = Vec::new();
+        let mut prev = base;
         loop {
             let op = r.read_bits(2);
             if r.is_overflowed() {
@@ -577,10 +589,11 @@ impl Server {
                     }
                     ops.push(ClientOp::Command { seq, text });
                 }
-                CLC_EOF => return Some(ops),
+                CLC_EOF => return Some((ops, prev)),
                 CLC_MOVE | CLC_MOVE_NO_DELTA => {
-                    ops.push(ClientOp::Move(self.parse_move(c, &mut r, m)?));
-                    return Some(ops);
+                    let cmds = self.parse_move(c, &mut r, m, &mut prev)?;
+                    ops.push(ClientOp::Move(cmds));
+                    return Some((ops, prev));
                 }
                 // `read_bits(2)` yields 0..=3; unreachable.
                 _ => return None,
@@ -589,21 +602,27 @@ impl Server {
     }
 
     /// `SV_UserMove`'s parse: the whole block, in order, so the sim can
-    /// replay every cmd like retail's pmove does.
-    fn parse_move(&self, c: &Client, r: &mut MsgReader, m: &ClientMessage) -> Option<Vec<UserCmd>> {
+    /// replay every cmd like retail's pmove does. `prev` enters as the
+    /// client's stored delta base and leaves as the last cmd of the block.
+    fn parse_move(
+        &self,
+        c: &Client,
+        r: &mut MsgReader,
+        m: &ClientMessage,
+        prev: &mut UserCmd,
+    ) -> Option<Vec<UserCmd>> {
         let count = r.read_byte();
         if !(1..=MAX_PACKET_USERCMDS).contains(&count) {
             return None;
         }
         let cmd = &c.netchan.reliable[m.reliable_ack as usize & (MAX_RELIABLE_COMMANDS - 1)];
         let key = self.checksum_feed ^ m.message_ack ^ com_hash_key(cmd, 32);
-        let mut prev = NULL_USERCMD;
         let mut out = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            match read_delta_usercmd(r, key, &prev) {
+            match read_delta_usercmd(r, key, prev) {
                 Ok(next) => {
                     out.push(next);
-                    prev = next;
+                    *prev = next;
                 }
                 Err(e) => {
                     log::debug!("usercmd not parsed: {e}");
@@ -775,6 +794,8 @@ impl Server {
             return;
         };
         c.state = ClientState::Active;
+        // Fresh start, matching the client's own outCmd reset on map entry.
+        c.last_cmd = NULL_USERCMD;
         c.sim = Some(SpectatorSim::new(spawn.0, spawn.1));
         // One frame back, so the first cmd's dt is a sane 50 ms rather than
         // the whole age of the client's clock.
@@ -1436,6 +1457,43 @@ mod tests {
         w.into_ops()
     }
 
+    /// clc_move carrying one cmd whose pitch and yaw ride change bit 0
+    /// (omitted, unchanged from the server's stored cmd), what a retail client
+    /// sends when the mouse did not move this packet. Forward/right stay
+    /// announced; the serverTime is absolute so the test isolates the angle
+    /// base from the serverTime base.
+    fn move_ops_omit_angles(checksum_feed: i32, message_ack: i32, st: i32) -> Vec<u8> {
+        let huff = Huffman::new();
+        let key = checksum_feed ^ message_ack ^ com_hash_key("", 32);
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_MOVE, 2);
+        w.write_byte(1);
+        w.write_bits(0, 1); // serverTime: 32-bit absolute
+        w.write_long(st);
+        // Not the whole-cmd shortcut, and the branch bit picks the compact one.
+        w.write_bits((key & 1) ^ 1, 1);
+        w.write_bits(key & 1, 1);
+        let key = key ^ st;
+        w.write_bits(key & 1, 1); // buttons bit 0, announced as 0
+        w.write_bits(0, 1); // pitch omitted
+        w.write_bits(0, 1); // yaw omitted
+        w.write_bits(1, 1); // forward/right announced
+        w.write_bits(1 ^ (key & 0xf), 4); // forward 127: bucket 1
+        w.write_bits(CLC_EOF, 2);
+        w.into_ops()
+    }
+
+    /// clc_move whose count byte is past the usercmd cap: the header decodes,
+    /// the move block cannot.
+    fn garbled_move_ops() -> Vec<u8> {
+        let huff = Huffman::new();
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_MOVE, 2);
+        w.write_byte(u8::MAX);
+        w.write_bits(CLC_EOF, 2);
+        w.into_ops()
+    }
+
     /// Ack-only ops: an empty command/move run still ends in clc_EOF, which is
     /// what `parse_client_ops` demands before it commits anything.
     fn ack_ops() -> Vec<u8> {
@@ -1724,6 +1782,158 @@ mod tests {
             now + std::time::Duration::from_millis(100),
         );
         assert!(s2.valid && s2.delta_num == -1, "snapshots must continue");
+    }
+
+    /// A retail client omits unchanged angle fields (change bit 0) instead of
+    /// announcing them, so the server must decode them against the cmd it last
+    /// stored for this client. Against a null base the view flashes to 0.
+    #[test]
+    fn omitted_angles_decode_against_the_stored_last_cmd() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = active(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
+
+        // Turn to yaw -45, announced like vcod's own client always does.
+        let yaw = ((-45.0f32) * 65536.0 / 360.0) as i32 & 0xffff;
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops(
+                    sv.checksum_feed,
+                    ack,
+                    UserCmd {
+                        server_time: 500,
+                        forward: 127,
+                        angles: [0, yaw, 0],
+                        ..Default::default()
+                    },
+                ),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            now,
+        );
+        let t1 = now + std::time::Duration::from_millis(50);
+        let s1 = latest_snapshot(&mut sv, &mut nc, &mut ring, t1);
+        assert!((s1.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01);
+
+        // Next packet: the mouse did not move, so pitch and yaw ride change
+        // bit 0 off the cmd the server just stored.
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops_omit_angles(sv.checksum_feed, ack, 520),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            t1,
+        );
+        let s2 = latest_snapshot(
+            &mut sv,
+            &mut nc,
+            &mut ring,
+            t1 + std::time::Duration::from_millis(50),
+        );
+        assert!(
+            (s2.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01,
+            "omitted angles must keep the stored yaw, got {}",
+            s2.ps.viewangles(&PROTOCOL_V1)[1]
+        );
+        // Guard against a vacuous pass: the second cmd carries forward 127,
+        // so the sim must have moved between the snapshots.
+        let d = s2.ps.origin(&PROTOCOL_V1)[0] - s1.ps.origin(&PROTOCOL_V1)[0];
+        assert!(d > 0.5, "the omitted-angle cmd was not applied, dx {d}");
+    }
+
+    /// A move message that fails to decode is discarded whole: the next good
+    /// one still chains from the last successfully decoded cmd.
+    #[test]
+    fn a_garbled_message_does_not_poison_the_base() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = active(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
+
+        let yaw = ((-45.0f32) * 65536.0 / 360.0) as i32 & 0xffff;
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops(
+                    sv.checksum_feed,
+                    ack,
+                    UserCmd {
+                        server_time: 500,
+                        forward: 127,
+                        angles: [0, yaw, 0],
+                        ..Default::default()
+                    },
+                ),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            now,
+        );
+        let t1 = now + std::time::Duration::from_millis(50);
+        let s1 = latest_snapshot(&mut sv, &mut nc, &mut ring, t1);
+        assert!((s1.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01);
+
+        // Garbage that cannot parse, then a good packet whose angles are
+        // omitted: they must come off the pre-failure base.
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(0x10, ack, 0, &garbled_move_ops(), &Huffman::new())
+                .unwrap(),
+            t1,
+        );
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops_omit_angles(sv.checksum_feed, ack, 520),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            t1,
+        );
+        let s2 = latest_snapshot(
+            &mut sv,
+            &mut nc,
+            &mut ring,
+            t1 + std::time::Duration::from_millis(50),
+        );
+        assert!(s2.valid && s2.delta_num == -1, "snapshots must continue");
+        assert!(
+            (s2.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01,
+            "the garbled packet must not reset the base, got {}",
+            s2.ps.viewangles(&PROTOCOL_V1)[1]
+        );
     }
 
     #[test]

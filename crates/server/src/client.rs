@@ -3,7 +3,7 @@
 use crate::spectate::SpectatorSim;
 use std::net::SocketAddr;
 use std::time::Instant;
-use vcod_common::net::msg::UserCmd;
+use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
 use vcod_common::net::netchan::{ClientMessage, ServerNetchan};
 
 /// `MAX_NAME_LENGTH`, a byte cap since the value is remote input.
@@ -40,6 +40,10 @@ pub struct Client {
     /// Usercmds received but not yet replayed, oldest first. Bounded so a
     /// flooded client cannot build unbounded latency.
     pub pending: Vec<UserCmd>,
+    /// The last usercmd successfully decoded from this message stream; the
+    /// delta base for the next clc_move (`cl->lastUsercmd`). Omitted fields
+    /// decode against it, so it commits only after a whole message parses.
+    pub last_cmd: UserCmd,
     /// Set once the client enters the world.
     pub sim: Option<SpectatorSim>,
 }
@@ -69,6 +73,7 @@ impl Client {
             message_ack: 0,
             last_processed_st: 0,
             pending: Vec::new(),
+            last_cmd: NULL_USERCMD,
             sim: None,
         }
     }
