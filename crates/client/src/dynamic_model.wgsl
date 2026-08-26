@@ -4,6 +4,12 @@
 struct Camera {
     view_proj: mat4x4<f32>,
     time_pad: vec4<f32>, // .x = seconds since start; yzw reserved
+    // xyz view origin; w fog mode: 0 off, 1 GL_EXP, 2 GL_LINEAR (configstring 12)
+    eye_fog_mode: vec4<f32>,
+    // rgb fog colour, a density (GL_EXP)
+    fog_color_density: vec4<f32>,
+    // x near, y far (GL_LINEAR)
+    fog_range: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
@@ -71,6 +77,20 @@ fn fx_light_term(world_pos: vec3<f32>) -> vec3<f32> {
     return sum;
 }
 
+// glFog GL_EXP / GL_LINEAR factors (see shader.wgsl).
+fn fog_amount(world_pos: vec3<f32>) -> f32 {
+    let mode = camera.eye_fog_mode.w;
+    if (mode == 0.0) {
+        return 0.0;
+    }
+    let d = distance(world_pos, camera.eye_fog_mode.xyz);
+    if (mode == 1.0) {
+        return 1.0 - exp(-camera.fog_color_density.a * d);
+    }
+    let span = max(camera.fog_range.y - camera.fog_range.x, 0.0001);
+    return clamp((d - camera.fog_range.x) / span, 0.0, 1.0);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let tex = textureSample(t_diffuse, s_diffuse, in.uv);
@@ -79,5 +99,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let light = normalize(vec3<f32>(-0.4, -0.3, 0.9));
     let half_lambert = max(dot(n, light), 0.0) * 0.5 + 0.5;
-    return vec4<f32>(tex.rgb * (half_lambert + fx_light_term(in.world_pos)), 1.0);
+    let rgb = tex.rgb * (half_lambert + fx_light_term(in.world_pos));
+    return vec4<f32>(mix(rgb, camera.fog_color_density.rgb, fog_amount(in.world_pos)), 1.0);
 }

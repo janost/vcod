@@ -294,6 +294,7 @@ fn hud_lines(
         "shader: sky {}  stages {stage_draws}  dropped {dropped}  warns {warns}",
         r.sky_name().unwrap_or("none")
     ));
+    lines.push(format!("fog: {}", r.fog_debug()));
     lines.push(format!(
         "audio v{} plays {} miss {} cull {} drop {} steal {} {:.2}ms",
         audio.voices,
@@ -1582,6 +1583,12 @@ impl ApplicationHandler for App {
                                         self.fx.build_quads(cam.pos, cam_right, cam_up, time),
                                     );
                                     r.set_fx_lights(&self.fx.lights(cam.pos, time));
+                                    r.set_fog(
+                                        net::FogParams::parse(
+                                            net.configstring(net::protocol::CS_FOG_V1),
+                                        ),
+                                        time,
+                                    );
                                     self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
 
                                     if let Some(hud) = &mut self.hud {
@@ -1814,6 +1821,15 @@ impl ApplicationHandler for App {
                             self.fx.build_quads(v.eye, eye_right, eye_up, time),
                         );
                         r.set_fx_lights(&self.fx.lights(v.eye, time));
+                        r.set_fog(
+                            net::FogParams::parse(
+                                configstrings
+                                    .get(net::protocol::CS_FOG_V1)
+                                    .map(String::as_str)
+                                    .unwrap_or(""),
+                            ),
+                            time,
+                        );
                         self.fx_ms = fx_t0.elapsed().as_secs_f32() * 1000.0;
                         (
                             renderer::Frame {

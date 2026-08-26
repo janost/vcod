@@ -11,6 +11,7 @@ use crate::sky;
 use vcod_common::assets::{self, Image, ImageData};
 use vcod_common::bsp::{self, Bsp, DrawVert};
 use vcod_common::mesh::{self, Batch, IndexRange, MaterialKind};
+use vcod_common::net::FogParams;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::props;
 use vcod_common::shader::{
@@ -317,6 +318,102 @@ impl FxLightsUniform {
     }
 }
 
+/// The fog values as currently displayed.
+#[derive(Copy, Clone, Default, PartialEq)]
+struct FogLive {
+    linear: bool,
+    color: [f32; 3],
+    density: f32,
+    near: f32,
+    far: f32,
+}
+
+impl FogLive {
+    fn of(p: &FogParams) -> Self {
+        FogLive {
+            linear: p.is_linear(),
+            color: p.color,
+            density: p.density,
+            near: p.near,
+            far: p.far,
+        }
+    }
+
+    /// 1 = GL_EXP, 2 = GL_LINEAR — the WGSL Camera mode encoding; the off
+    /// state is carried by [`FogState::set`], not here.
+    fn mode(&self) -> f32 {
+        if self.linear {
+            2.0
+        } else {
+            1.0
+        }
+    }
+}
+
+/// Global fog from configstring 12, faded toward each new target. Same-mode
+/// transitions lerp over the script's fade time; cross-mode changes snap and
+/// linear fog clears to the fog colour — RTCW-MP tr_main.c R_SetFog /
+/// R_AddFogInterpolation.
+#[derive(Default)]
+struct FogState {
+    set: bool,
+    live: FogLive,
+    from: FogLive,
+    /// target params, transition start (frame seconds), duration (s)
+    target: Option<(FogParams, f32, f32)>,
+}
+
+impl FogState {
+    fn set_target(&mut self, p: FogParams, now: f32) {
+        // No fade, first fog, or a mode change snaps like retail.
+        let snap = !self.set || p.fade_ms == 0 || self.live.linear != p.is_linear();
+        self.from = self.live;
+        self.target = Some((p, now, p.fade_ms as f32 / 1000.0));
+        self.set = true;
+        if snap {
+            self.finish();
+        }
+    }
+
+    fn clear(&mut self) {
+        self.set = false;
+        self.target = None;
+    }
+
+    fn finish(&mut self) {
+        if let Some((p, _, _)) = self.target.take() {
+            self.live = FogLive::of(&p);
+        }
+    }
+
+    fn advance(&mut self, now: f32) {
+        if self.target.is_none() {
+            return;
+        }
+        let (_, t0, dur) = self.target.unwrap();
+        let k = ((now - t0) / dur.max(f32::EPSILON)).clamp(0.0, 1.0);
+        let to = match self.target {
+            Some((p, _, _)) => FogLive::of(&p),
+            None => return,
+        };
+        let f = &self.from;
+        self.live = FogLive {
+            linear: to.linear,
+            color: [
+                f.color[0] + (to.color[0] - f.color[0]) * k,
+                f.color[1] + (to.color[1] - f.color[1]) * k,
+                f.color[2] + (to.color[2] - f.color[2]) * k,
+            ],
+            density: f.density + (to.density - f.density) * k,
+            near: f.near + (to.near - f.near) * k,
+            far: f.far + (to.far - f.far) * k,
+        };
+        if k >= 1.0 {
+            self.target = None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod fx_lights_uniform_tests {
     use super::*;
@@ -372,6 +469,9 @@ pub const STAGE_FLAG_BUNDLE0_VECTOR: u32 = 64;
 pub const STAGE_FLAG_BUNDLE1_VECTOR: u32 = 128;
 /// Sky dome draws only: add the view origin (StageParams.eye_off) to vertices.
 pub const STAGE_FLAG_EYE_OFFSET: u32 = 256;
+/// Sky dome draws only: fog applies in exp mode, never in linear mode
+/// (RTCW-MP tr_main.c R_SetFog sets drawsky per mode).
+pub const STAGE_FLAG_SKY: u32 = 512;
 
 /// Per-stage draw parameters, one dynamic-offset slot per stage batch. WGSL
 /// mirror is `StageParams` in shader.wgsl; byte offsets:
@@ -1076,6 +1176,8 @@ pub struct Renderer {
     /// The map's active sky (farbox + optional cloud dome); `None` without a
     /// matching sky block.
     sky: Option<SkyRender>,
+    /// Global fog from configstring 12; the F3 `fog:` line.
+    fog: FogState,
     hud_quad_cap_warned: bool,
 }
 
@@ -1154,7 +1256,7 @@ impl Renderer {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -1222,7 +1324,8 @@ impl Renderer {
 
         let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera uniform"),
-            size: 80,
+            // proj + time + eye/fog tail, matching Camera in the WGSL modules
+            size: 128,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1526,6 +1629,7 @@ impl Renderer {
             shaders,
             shader_lib: lib,
             sky: None,
+            fog: FogState::default(),
         })
     }
 
@@ -2315,6 +2419,28 @@ impl Renderer {
         self.sky.as_ref().map(|s| s.name.as_str())
     }
 
+    /// New global fog target from configstring 12; `None` clears it.
+    pub fn set_fog(&mut self, fog: Option<FogParams>, now: f32) {
+        match fog {
+            Some(p) => self.fog.set_target(p, now),
+            None => self.fog.clear(),
+        }
+    }
+
+    /// The displayed fog, for the F3 `fog:` line.
+    pub fn fog_debug(&self) -> String {
+        if !self.fog.set {
+            return "off".to_string();
+        }
+        let f = &self.fog.live;
+        let tail = if self.fog.target.is_some() { " ->" } else { "" };
+        if f.linear {
+            format!("linear {}..{} {:?}{tail}", f.near, f.far, f.color)
+        } else {
+            format!("exp den {:.6} {:?}{tail}", f.density, f.color)
+        }
+    }
+
     /// `[variant][two_sided][bias]`.
     fn stage_pipeline(
         &self,
@@ -2357,10 +2483,20 @@ impl Renderer {
     /// `vm` is `None` to draw the world only. Skips the frame if no
     /// swapchain texture can be acquired.
     pub fn render(&mut self, frame: Frame, vm: Option<VmDraw>) {
-        // `proj` (64) + `time_pad` (16), matching Camera in the WGSL modules.
-        let mut camera = [0.0f32; 20];
+        // `proj` (64) + `time_pad` (16) + eye/fog tail (48), matching Camera
+        // in the WGSL modules.
+        self.fog.advance(frame.time);
+        let mut camera = [0.0f32; 32];
         camera[..16].copy_from_slice(&frame.view_proj.to_cols_array());
         camera[16] = frame.time;
+        if self.fog.set {
+            let f = &self.fog.live;
+            camera[20..24].copy_from_slice(&[frame.eye.x, frame.eye.y, frame.eye.z, f.mode()]);
+            camera[24..28].copy_from_slice(&[f.color[0], f.color[1], f.color[2], f.density]);
+            camera[28..32].copy_from_slice(&[f.near, f.far, 0.0, 0.0]);
+        } else {
+            camera[20..24].copy_from_slice(&[frame.eye.x, frame.eye.y, frame.eye.z, 0.0]);
+        }
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(&camera));
         if let Some(sky) = &self.sky {
@@ -2430,10 +2566,11 @@ impl Renderer {
                     );
                 }
             }
-            // Dome stages always carry the view origin, animated or not.
+            // Dome stages always carry the view origin, animated or not, and
+            // the sky flag so linear fog skips them.
             for (sh, si, slot) in &world.sky_stages {
                 if let Some(mut p) = stage_params(sh, *si, frame.time) {
-                    p.flags |= STAGE_FLAG_EYE_OFFSET;
+                    p.flags |= STAGE_FLAG_EYE_OFFSET | STAGE_FLAG_SKY;
                     p.eye_off = [frame.eye.x, frame.eye.y, frame.eye.z, 0.0];
                     self.queue.write_buffer(
                         &world.stage_params_buf,
@@ -2613,6 +2750,23 @@ impl Renderer {
                 label: Some("frame"),
             });
         {
+            // Linear fog clears to the fog colour (RTCW clearscreen=true);
+            // otherwise the fixed steel blue stands in until the sky draws.
+            let clear = if self.fog.set && self.fog.live.linear {
+                wgpu::Color {
+                    r: self.fog.live.color[0] as f64,
+                    g: self.fog.live.color[1] as f64,
+                    b: self.fog.live.color[2] as f64,
+                    a: 1.0,
+                }
+            } else {
+                wgpu::Color {
+                    r: 0.35,
+                    g: 0.42,
+                    b: 0.50,
+                    a: 1.0,
+                }
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("map pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2620,12 +2774,7 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: Some(&view),
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.35,
-                            g: 0.42,
-                            b: 0.50,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(clear),
                         // only the resolved single-sample image is needed
                         store: wgpu::StoreOp::Discard,
                     },

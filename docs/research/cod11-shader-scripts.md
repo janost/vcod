@@ -243,10 +243,16 @@ Each omission with its census justification:
 - `deformVertexes` (the ocean-sort water blocks): BSP soups are rigid buffers
   here, so vertex waves would need CPU-side tessellation like Q3's grid mesh
   path. Affected surfaces are mp_ship-style ocean planes; they draw flat.
-- Fog: `fogvars` / `skyfogvars` / `waterfogvars` / `nofog` parse and do
-  nothing. Retail applies global GL fog from these; porting it needs a fog
-  uniform across every pipeline. Absence changes atmosphere, not surface
-  correctness.
+- Fog: the script keywords stay inert, but stock MP fog does not come from
+  them. `fogvars` / `skyfogvars` occur only in SP sky blocks (pak4/pak9
+  `sky.shader`), `waterfogvars` nowhere at all; `nofog` sits only on fx/gfx
+  blocks, which vcod does not fog. The fog every MP map shows is set by gsc
+  (`setCullFog` / `setExpFog`, e.g. `mp_ship.gsc`) and reaches the client as
+  configstring 12; vcod parses and applies it since 2026-08-26 — wire format
+  in docs/protocol-1.1.md, mode rules from RTCW-MP tr_main.c R_SetFog.
+  Open question: whether an exp-fog map's density rides the wire raw or with
+  RTCW's +0.1 client-side offset; settle on the first exp-fog server capture
+  (neuville/bocage would show a black wall if we over-thicken).
 - `$dlight` bundle images: engine-generated light-blob textures, never files
   on disk (corpus whitelist in `shader_corpus.rs`, which cites the pak9
   window.shader occurrence). An unresolvable stage image binds the

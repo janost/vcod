@@ -11,6 +11,7 @@ pub mod huffman;
 pub mod msg;
 pub mod netchan;
 pub mod protocol;
+pub use protocol::{FogParams, CS_FOG_V1};
 pub mod snapshot;
 pub mod trajectory;
 

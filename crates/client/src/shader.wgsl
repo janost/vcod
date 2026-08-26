@@ -1,6 +1,12 @@
 struct Camera {
     view_proj: mat4x4<f32>,
     time_pad: vec4<f32>, // .x = seconds since start; yzw reserved
+    // xyz view origin; w fog mode: 0 off, 1 GL_EXP, 2 GL_LINEAR (configstring 12)
+    eye_fog_mode: vec4<f32>,
+    // rgb fog colour, a density (GL_EXP)
+    fog_color_density: vec4<f32>,
+    // x near, y far (GL_LINEAR)
+    fog_range: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 
@@ -48,6 +54,7 @@ const F_AF_GE128: u32 = 48u;
 const F_BUNDLE0_VECTOR: u32 = 64u;
 const F_BUNDLE1_VECTOR: u32 = 128u;
 const F_EYE_OFFSET: u32 = 256u;
+const F_SKY: u32 = 512u;
 // glAlphaFunc thresholds are 128/255 for both LT128 and GE128.
 const ATEST128: f32 = 0.5019607843137255;
 
@@ -162,6 +169,25 @@ fn fx_light_term(world_pos: vec3<f32>) -> vec3<f32> {
     return sum;
 }
 
+// glFog GL_EXP / GL_LINEAR factors; retail's two fog modes from
+// configstring 12 (RTCW-MP tr_main.c R_SetFog picks the GL mode).
+fn fog_amount(world_pos: vec3<f32>) -> f32 {
+    let mode = camera.eye_fog_mode.w;
+    if (mode == 0.0) {
+        return 0.0;
+    }
+    let d = distance(world_pos, camera.eye_fog_mode.xyz);
+    if (mode == 1.0) {
+        return 1.0 - exp(-camera.fog_color_density.a * d);
+    }
+    let span = max(camera.fog_range.y - camera.fog_range.x, 0.0001);
+    return clamp((d - camera.fog_range.x) / span, 0.0, 1.0);
+}
+
+fn apply_fog(rgb: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+    return mix(rgb, camera.fog_color_density.rgb, fog_amount(world_pos));
+}
+
 fn shade(in: VsOut, albedo: vec4<f32>) -> vec3<f32> {
     // Lightmapped surfaces have white vertex color; vertex-lit surfaces get a
     // white 1x1 lightmap bound instead. Multiplying all three covers both.
@@ -173,21 +199,21 @@ fn shade(in: VsOut, albedo: vec4<f32>) -> vec3<f32> {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = textureSample(t_diffuse, s_diffuse, in.uv);
     if (albedo.a < 0.5) { discard; }
-    return vec4<f32>(shade(in, albedo), 1.0);
+    return vec4<f32>(apply_fog(shade(in, albedo), in.world_pos), 1.0);
 }
 
 // Alpha-to-coverage: sampled alpha drives MSAA coverage for antialiased cutout edges.
 @fragment
 fn fs_overlay(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = textureSample(t_diffuse, s_diffuse, in.uv);
-    return vec4<f32>(shade(in, albedo), albedo.a);
+    return vec4<f32>(apply_fog(shade(in, albedo), in.world_pos), albedo.a);
 }
 
 // polygonOffset terrain blends, weighted by vertex alpha (`alphagen vertex`).
 @fragment
 fn fs_layer(in: VsOut) -> @location(0) vec4<f32> {
     let albedo = textureSample(t_diffuse, s_diffuse, in.uv);
-    return vec4<f32>(shade(in, albedo), albedo.a * in.color.a);
+    return vec4<f32>(apply_fog(shade(in, albedo), in.world_pos), albedo.a * in.color.a);
 }
 
 // alphaFunc decode; GE128 carries both low bits so test the pair first.
@@ -234,5 +260,11 @@ fn fs_stage(in: VsOut) -> @location(0) vec4<f32> {
     if (!alphafunc_pass(col.a)) {
         discard;
     }
-    return vec4<f32>(col.rgb, col.a);
+    // Linear fog leaves the sky alone (RTCW drawsky=false); exp fogs it.
+    let sky_unfogged = (stage.flags & F_SKY) != 0u && camera.eye_fog_mode.w != 1.0;
+    var rgb = col.rgb;
+    if (!sky_unfogged) {
+        rgb = apply_fog(rgb, in.world_pos);
+    }
+    return vec4<f32>(rgb, col.a);
 }
