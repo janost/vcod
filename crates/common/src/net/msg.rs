@@ -706,7 +706,8 @@ fn consume_hud_array(r: &mut MsgReader) {
 
 /// `usercmd_t` (codextended shared.h:811). The writer's compact branch
 /// carries none of `up`, `weapon`, `wbuttons`, `flags` or `angles[2]`; a
-/// nonzero `up` selects the full-field branch. Layout:
+/// change in the first three (or button bits above 0) selects the
+/// full-field branch. Layout:
 /// docs/protocol-1.1.md, "Client to server message body".
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UserCmd {
@@ -753,14 +754,18 @@ fn fr_bucket(forward: i8, right: i8) -> i32 {
 }
 
 /// `MSG_WriteDeltaUsercmdKey`, reconstructed from the reader at cod_lnxded
-/// 0x807b7f8. Emits the compact branch, except when `to.up` is nonzero,
-/// which only the full-field branch can carry. Forward/right can only be
-/// +127, -127 or 0; `flags` is never sent.
+/// 0x807b7f8. Emits the compact branch unless a field it cannot carry
+/// (`up`, `weapon`, `wbuttons`, button bits above 0) differs from `from`:
+/// the compact encoding has no slot for them, so the receiver would keep
+/// its stored value. Forward/right can only be +127, -127 or 0; `flags`
+/// is never sent.
 ///
-/// Angles and the forward/right code are always sent, never delta-omitted:
-/// the server keeps an omitted field at its stored previous cmd, so a
-/// self-contained cmd survives a dropped packet. `from` only feeds the
-/// serverTime delta. docs/protocol-1.1.md, "Client to server message body".
+/// Angles and the forward/right code are always announced; every other
+/// field rides a change bit against `from`, so an omitted field decodes
+/// against the receiver's stored previous cmd — retail's outCmd chaining,
+/// where `from` is the client's last *sent* cmd. A lost packet degrades
+/// one cmd, which retail also lives with.
+/// docs/protocol-1.1.md, "Client to server message body".
 pub fn write_delta_usercmd(w: &mut MsgWriter, key: i32, from: &UserCmd, to: &UserCmd) {
     // serverTime: 1 = 8-bit delta from the base, 0 = 32-bit absolute.
     let dt = to.server_time.wrapping_sub(from.server_time);
@@ -773,7 +778,10 @@ pub fn write_delta_usercmd(w: &mut MsgWriter, key: i32, from: &UserCmd, to: &Use
     }
 
     // Changed bit (!= key & 1), then the branch bit (== key & 1 picks compact).
-    let full = to.up != 0;
+    let full = to.up != from.up
+        || to.weapon != from.weapon
+        || to.wbuttons != from.wbuttons
+        || (to.buttons & !1) != (from.buttons & !1);
     w.write_bits((key & 1) ^ 1, 1);
     w.write_bits(if full { (key & 1) ^ 1 } else { key & 1 }, 1);
 
@@ -1992,6 +2000,53 @@ mod tests {
             );
             assert!(!r.is_overflowed());
         }
+    }
+
+    /// Press then release: the release (up back to 0) differs from the
+    /// previous sent cmd in a field the compact branch cannot carry, so the
+    /// writer must take the full branch again. Chained decode must read the
+    /// release as 0, not replay the jump off the receiver's stored cmd.
+    #[test]
+    fn released_upmove_takes_the_full_branch_again_on_the_way_down() {
+        let h = Huffman::new();
+        let key = 0x1122_3344i32;
+        let press = UserCmd {
+            server_time: 500,
+            up: 127,
+            ..NULL_USERCMD
+        };
+        let release = UserCmd {
+            server_time: 550,
+            ..NULL_USERCMD
+        };
+
+        let mut w = MsgWriter::new(&h);
+        write_delta_usercmd(&mut w, key, &NULL_USERCMD, &press);
+        write_delta_usercmd(&mut w, key, &press, &release);
+        let mut r = MsgReader::new(&w.finish(), &h);
+        let got_press = read_delta_usercmd(&mut r, key, &NULL_USERCMD).unwrap();
+        assert_eq!(got_press, press);
+        let got_release = read_delta_usercmd(&mut r, key, &got_press).unwrap();
+        assert_eq!(got_release.up, 0, "the release must not replay the jump");
+        assert_eq!(got_release, release);
+
+        // Up never leaves 0 across the pair: both cmds ride the compact branch.
+        let quiet_a = UserCmd {
+            server_time: 500,
+            ..NULL_USERCMD
+        };
+        let quiet_b = UserCmd {
+            server_time: 550,
+            ..NULL_USERCMD
+        };
+        let mut w = MsgWriter::new(&h);
+        write_delta_usercmd(&mut w, key, &NULL_USERCMD, &quiet_a);
+        write_delta_usercmd(&mut w, key, &quiet_a, &quiet_b);
+        let mut r = MsgReader::new(&w.finish(), &h);
+        let got_a = read_delta_usercmd(&mut r, key, &NULL_USERCMD).unwrap();
+        assert_eq!(got_a, quiet_a);
+        let got_b = read_delta_usercmd(&mut r, key, &got_a).unwrap();
+        assert_eq!(got_b, quiet_b);
     }
 
     /// A cmd without upmove must encode exactly as before the full branch

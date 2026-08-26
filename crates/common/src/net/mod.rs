@@ -130,6 +130,11 @@ pub struct NetClient<T: Transport> {
     server_time: i32,
     server_time_at: Instant,
 
+    /// The last usercmd put on the wire; the delta base for the next move
+    /// (retail's outCmd chaining). Reset at every gamestate, matching the
+    /// client's own outCmd reset on map entry.
+    last_sent_cmd: UserCmd,
+
     // Timers, all measured against the `now` handed to `pump_at`.
     now: Instant,
     tries: u32,
@@ -188,6 +193,7 @@ impl<T: Transport> NetClient<T> {
             command_sequence: 0,
             server_time: 0,
             server_time_at: now,
+            last_sent_cmd: NULL_USERCMD,
             now,
             tries: 0,
             last_send: now,
@@ -663,6 +669,9 @@ impl<T: Transport> NetClient<T> {
         self.client_num = gs.client_num;
         self.command_sequence = gs.server_command_sequence;
         self.gamestate = Some(gs);
+        // A map change re-sends the gamestate on the live netchan; the cmd
+        // stream starts over, so the delta base does too.
+        self.last_sent_cmd = NULL_USERCMD;
         self.state = NetState::Active;
         self.last_snapshot = self.now;
         self.events.push(NetEvent::GamestateReady);
@@ -745,6 +754,7 @@ impl<T: Transport> NetClient<T> {
             w.write_long(seq as i32);
             w.write_string(&s);
         }
+        let mut sent = None;
         if let Some(to) = cmd {
             let key = self.usercmd_key(message_ack, reliable_ack);
             // clc_moveNoDelta sets our deltaMessage to -1 and every snapshot back
@@ -757,7 +767,8 @@ impl<T: Transport> NetClient<T> {
             };
             w.write_bits(clc, 2);
             w.write_byte(1); // one usercmd
-            write_delta_usercmd(&mut w, key, &NULL_USERCMD, &to);
+            write_delta_usercmd(&mut w, key, &self.last_sent_cmd, &to);
+            sent = Some(to);
         }
         w.write_bits(CLC_EOF, 2);
         let ops = w.into_ops();
@@ -767,6 +778,9 @@ impl<T: Transport> NetClient<T> {
                 .build_out(self.server_id, message_ack, reliable_ack, &ops, &self.huff)
         {
             self.transport.send(&pkt);
+            if let Some(to) = sent {
+                self.last_sent_cmd = to;
+            }
         }
     }
 
@@ -1344,6 +1358,74 @@ mod tests {
         assert_ne!(c.state(), NetState::Disconnected);
         c.send_reliable("one too many");
         assert_eq!(c.state(), NetState::Disconnected);
+    }
+
+    /// Decode packet `i` the way the server would: unscramble, decompress,
+    /// walk to the clc_move, delta-decode its first cmd against `base`.
+    fn decoded_move_cmd(
+        c: &NetClient<FakeTransport>,
+        h: &Huffman,
+        i: usize,
+        base: &UserCmd,
+    ) -> Option<UserCmd> {
+        let pkt = &c.transport.sent[i];
+        let body = &pkt[6..];
+        let server_id = body[0] as i32;
+        let message_ack = i32::from_le_bytes(body[1..5].try_into().unwrap());
+        let reliable_ack = i32::from_le_bytes(body[5..9].try_into().unwrap());
+        let mut comp = body[9..].to_vec();
+        let string = c.netchan.server_commands[reliable_ack as usize & 63].as_bytes();
+        let mut key = (c.netchan.challenge as u32 ^ server_id as u32 ^ message_ack as u32) as u8;
+        let mut index = 0usize;
+        for (n, b) in comp.iter_mut().enumerate() {
+            if index >= string.len() {
+                index = 0;
+            }
+            key ^= string.get(index).copied().unwrap_or(0) << (n & 1);
+            index += 1;
+            *b ^= key;
+        }
+        // MsgReader::new block-decompresses; the body only needed unscrambling.
+        let key = c.usercmd_key(message_ack, reliable_ack);
+        let mut r = MsgReader::new(&comp, h);
+        loop {
+            match r.read_bits(2) {
+                CLC_MOVE | CLC_MOVE_NO_DELTA => {
+                    r.read_byte(); // count
+                    return msg::read_delta_usercmd(&mut r, key, base).ok();
+                }
+                CLC_CLIENT_COMMAND => {
+                    r.read_long();
+                    r.read_string();
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Moves chain from the last sent cmd, retail outCmd-style. From a null
+    /// base every cmd looks unchanged to itself and a release (up back to 0)
+    /// encodes compact, which cannot carry `up`; the server then replays the
+    /// jump forever.
+    #[test]
+    fn sent_moves_chain_from_the_last_sent_cmd() {
+        let mut c = active_client();
+        let base_pkt = c.transport.sent.len();
+        c.send_frame(&UserCmd {
+            up: 127,
+            ..Default::default()
+        });
+        c.send_frame(&UserCmd {
+            up: 0,
+            ..Default::default()
+        });
+        assert_eq!(c.transport.sent.len(), base_pkt + 2);
+
+        let h = Huffman::new();
+        let press = decoded_move_cmd(&c, &h, base_pkt, &NULL_USERCMD).expect("first move decodes");
+        assert_eq!(press.up, 127);
+        let release = decoded_move_cmd(&c, &h, base_pkt + 1, &press).expect("second move decodes");
+        assert_eq!(release.up, 0, "release must decode as 0, not replay 127");
     }
 
     #[test]

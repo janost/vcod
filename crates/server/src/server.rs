@@ -1434,6 +1434,37 @@ mod tests {
         w.into_ops()
     }
 
+    /// Move-message encoder that keeps the delta base across messages, the
+    /// way the real client chains its sent cmds. A fresh null base per
+    /// message would let a changed-then-released field encode compact
+    /// against nothing.
+    struct MoveChain {
+        checksum_feed: i32,
+        prev: UserCmd,
+    }
+
+    impl MoveChain {
+        fn new(checksum_feed: i32) -> Self {
+            MoveChain {
+                checksum_feed,
+                prev: NULL_USERCMD,
+            }
+        }
+
+        fn ops(&mut self, message_ack: i32, cmds: &[UserCmd]) -> Vec<u8> {
+            let huff = Huffman::new();
+            let key = self.checksum_feed ^ message_ack ^ com_hash_key("", 32);
+            let mut w = MsgWriter::new(&huff);
+            w.write_bits(CLC_MOVE, 2);
+            w.write_byte(cmds.len() as u8);
+            for cmd in cmds {
+                write_delta_usercmd(&mut w, key, &self.prev, cmd);
+                self.prev = *cmd;
+            }
+            w.write_bits(CLC_EOF, 2);
+            w.into_ops()
+        }
+    }
     /// clc_move carrying one cmd whose pitch and yaw ride change bit 0
     /// (omitted, unchanged from the server's stored cmd), what a retail client
     /// sends when the mouse did not move this packet. Forward/right stay
@@ -1643,6 +1674,7 @@ mod tests {
         });
         let mut nc = active(&mut sv, now);
         let mut ring = SnapshotRing::new();
+        let mut chain = MoveChain::new(sv.checksum_feed);
         let mut tick_at = now + std::time::Duration::from_millis(50);
 
         let ack = nc.incoming_sequence as i32;
@@ -1652,8 +1684,7 @@ mod tests {
                 0x10,
                 ack,
                 0,
-                &move_ops_cmds(
-                    sv.checksum_feed,
+                &chain.ops(
                     ack,
                     &[UserCmd {
                         server_time: 500,
@@ -1681,8 +1712,7 @@ mod tests {
                 0x10,
                 ack,
                 0,
-                &move_ops_cmds(
-                    sv.checksum_feed,
+                &chain.ops(
                     ack,
                     &[UserCmd {
                         server_time: 0,
@@ -1716,6 +1746,7 @@ mod tests {
         });
         let mut nc = active(&mut sv, now);
         let mut ring = SnapshotRing::new();
+        let mut chain = MoveChain::new(sv.checksum_feed);
         let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
 
         let cmds: Vec<UserCmd> = (0..100)
@@ -1729,14 +1760,8 @@ mod tests {
             let ack = nc.incoming_sequence as i32;
             sv.handle_packet(
                 addr(5),
-                &nc.build_out(
-                    0x10,
-                    ack,
-                    0,
-                    &move_ops_cmds(sv.checksum_feed, ack, chunk),
-                    &Huffman::new(),
-                )
-                .unwrap(),
+                &nc.build_out(0x10, ack, 0, &chain.ops(ack, chunk), &Huffman::new())
+                    .unwrap(),
                 now,
             );
         }
@@ -1834,6 +1859,74 @@ mod tests {
         // so the sim must have moved between the snapshots.
         let d = s2.ps.origin(&PROTOCOL_V1)[0] - s1.ps.origin(&PROTOCOL_V1)[0];
         assert!(d > 0.5, "the omitted-angle cmd was not applied, dx {d}");
+    }
+
+    /// Press then release, end to end: the release must decode up=0 against
+    /// the server's stored base, or the sim replays the jump forever.
+    #[test]
+    fn released_upmove_stops_the_climb() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = active(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        let mut chain = MoveChain::new(sv.checksum_feed);
+        let p = &PROTOCOL_V1;
+
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &chain.ops(
+                    ack,
+                    &[UserCmd {
+                        server_time: 500,
+                        up: 127,
+                        ..Default::default()
+                    }],
+                ),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            now,
+        );
+        let t1 = now + std::time::Duration::from_millis(50);
+        let s1 = latest_snapshot(&mut sv, &mut nc, &mut ring, t1);
+        let vz = s1.ps.field_f32(p, "velocity[2]");
+        assert!(vz > 100.0, "holding up must climb, vz {vz}");
+
+        // A burst of release frames: friction alone has to bring the climb
+        // back to rest.
+        let releases: Vec<UserCmd> = (0..24)
+            .map(|i| UserCmd {
+                server_time: 550 + i * 50,
+                ..Default::default()
+            })
+            .collect();
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(0x10, ack, 0, &chain.ops(ack, &releases), &Huffman::new())
+                .unwrap(),
+            t1,
+        );
+        let s2 = latest_snapshot(
+            &mut sv,
+            &mut nc,
+            &mut ring,
+            t1 + std::time::Duration::from_millis(50),
+        );
+        let vz = s2.ps.field_f32(p, "velocity[2]");
+        assert!(
+            vz.abs() < 0.1,
+            "released upmove must decay to rest, vz {vz}"
+        );
     }
 
     /// A move message that fails to decode is discarded whole: the next good
