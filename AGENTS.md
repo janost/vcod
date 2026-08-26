@@ -114,9 +114,10 @@ engineering setup works.
   question: when ours and retail disagree, retail is right, and the answer
   goes in a research doc with the bytes. It answers the handshake and
   gamestate but sends no snapshots to a lone spectator; snapshots need a
-  player in the game. `cargo run -p vcod-server -- <map>` runs **ours**, still
-  a skeleton: the handshake, the gamestate, client commands and moves, no
-  snapshots, so a connected client sits at the loaded map until it times out.
+  player in the game. `cargo run -p vcod-server -- <map>` runs **ours**:
+  the handshake, the gamestate, client commands and moves, and uncompressed
+  snapshots with pmove-driven spectator flight (no deltas, no entities, no
+  restarts yet).
 - Live captures so far came from populated public servers (a TDM server on
   2026-08-24, an S&D server on 2026-08-25); a 60-100 s capture during a round
   is enough to see every combat event. The master at

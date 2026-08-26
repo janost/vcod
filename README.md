@@ -212,8 +212,9 @@ These work in every mode:
 - Audio fidelity is matched to the retail engine on paper (falloff, panning,
   channel replacement, ducking) but not yet confirmed by ear against the real
   game.
-- The server sends no snapshots, so a connected client waits at the loaded map
-  until it times out. Map changes mid-session are unsupported in the client.
+- The server sends uncompressed snapshots and moves spectators itself; it
+  simulates nothing else. No delta compression yet, so frames are larger
+  than retail's, and map changes mid-session are unsupported in the client.
 
 ## Documentation
 

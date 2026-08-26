@@ -24,6 +24,8 @@ bit 0                          0x808e24f   client terminator
 
 The entity sentinel logic uses `9999` internally as the "no more" marker, same shape as Q3's `SV_EmitPacketEntities`.
 
+On an uncompressed frame retail still writes the full clients block: `SV_WriteSnapshotToClient` (`cod_lnxded`) zeroes its locals at `0x808e043` and passes NULL from-state into every client delta (`0x808e216`, `0x808e22d`), so each entry encodes against zero. In the generic delta writer at `0x807c4c8`, `lc` is computed as the last differing field regardless of `force`; `force` only suppresses entry omission when nothing changed (bare epilogue at `0x807c8fa` versus the fall-through that writes an entry).
+
 ## clientState_t layout
 
 Netfield table at vaddr `0x080d2058` in `cod_lnxded`, 22 fields. Struct size `0x5C` = 92 bytes (confirmed: `bzero $0x5c` at `0x807f766`).

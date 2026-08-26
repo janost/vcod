@@ -776,9 +776,8 @@ mod tests {
         // Frame C: client 0 leaves by omission. An uncompressed frame
         // restarts the reader's roster, so no removal bit exists; the
         // survivor is re-sent as a full state from null with its team cleared
-        // back to zero, and that field must decode as zero rather than a
-        // stale nonzero (this pins any return of last-sent encoding or
-        // non-null resolve).
+        // back to zero, and that field must decode as zero rather than the
+        // roster carry-forward a non-null resolve would produce.
         let mut eve_cleared = ClientState::named(p, 3, 1, "eve");
         let ti = ClientState::field_index(p, "team").unwrap();
         eve_cleared.fields[ti] = 0;
