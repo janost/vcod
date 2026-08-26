@@ -807,7 +807,8 @@ fn apply_gen(
             1
         }
         "wave" => {
-            match parse_wave(args) {
+            // args[0] is the `wave` keyword itself; parse_wave wants the form
+            match parse_wave(&args[1..]) {
                 Some(w) => {
                     if rgb {
                         sb.rgb_gen = Some(RgbGen::Wave(w));
@@ -1364,6 +1365,42 @@ textures/sfx/test_water
         let sh = parse_shader(&name, &body, &mut w);
         assert_eq!(sh.stages.len(), 1);
         assert!(w.fired(&name, "unsupported tcGen"));
+    }
+
+    #[test]
+    fn rgbgen_and_alphagen_wave_parse_end_to_end() {
+        let sh = parse_one("t { { map a.tga rgbGen wave sin 0.5 0.25 0 1 } }");
+        assert_eq!(
+            sh.stages[0].rgb_gen,
+            RgbGen::Wave(Wave {
+                form: WaveForm::Sin,
+                base: 0.5,
+                amp: 0.25,
+                phase: 0.0,
+                freq: 1.0
+            })
+        );
+        let sh = parse_one("t { { map a.tga alphaGen wave square 1 1 0.5 2 } }");
+        assert_eq!(
+            sh.stages[0].alpha_gen,
+            AlphaGen::Wave(Wave {
+                form: WaveForm::Square,
+                base: 1.0,
+                amp: 1.0,
+                phase: 0.5,
+                freq: 2.0
+            })
+        );
+    }
+
+    #[test]
+    fn malformed_gen_wave_warns_once_and_keeps_default() {
+        let (name, body) = first_block("t { { map a.tga rgbGen wave bogus 1 2 3 } }");
+        let mut w = WarnSet::new();
+        let sh = parse_shader(&name, &body, &mut w);
+        assert_eq!(sh.stages[0].rgb_gen, RgbGen::IdentityLighting);
+        assert!(w.fired(&name, "unknown wave form in rgbGen"));
+        assert_eq!(w.entries(), 1);
     }
 
     #[test]
