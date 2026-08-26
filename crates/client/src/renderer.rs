@@ -441,7 +441,8 @@ fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
     let mut p = StageParams {
         uv0: bundle_affine(&b0.tcmods, t),
         uv1: b1.map_or(UV_AFFINE_IDENTITY, |b| bundle_affine(&b.tcmods, t)),
-        // [amp0, now0, amp1, now1]; the VS adds amp*sin(worldpos/1024 + now)
+        // [amp0, now0, amp1, now1]; the VS adds amp*sin(pos_axis/1024 + now),
+        // s on x+z, t on y (RB_CalcTurbulentTexCoords)
         turb01: {
             let tb0 = bundle_turb(&b0.tcmods, t);
             let tb1 = b1.map_or([0.0; 4], |b| bundle_turb(&b.tcmods, t));
@@ -840,8 +841,8 @@ struct SkyRender {
     dome: Option<DomeLayer>,
 }
 
-/// Builds the farbox for the block's env name. Missing non-rt sides land in
-/// `upload_bundle_view`'s checkerboard with a warn (once per path per load).
+/// Builds the farbox for the block's env name. Missing non-rt sides draw
+/// tr.defaultImage flat white (tr_shader.c:1170), warned per load.
 #[allow(clippy::too_many_arguments)]
 fn build_sky_box(
     device: &wgpu::Device,
@@ -850,6 +851,7 @@ fn build_sky_box(
     fs: &Pk3Fs,
     camera_layout: &wgpu::BindGroupLayout,
     bundle_views: &mut HashMap<String, wgpu::TextureView>,
+    white_view: &wgpu::TextureView,
     env: &str,
     sh_name: &str,
 ) -> SkyBox {
@@ -911,7 +913,14 @@ fn build_sky_box(
     let mut side_bgs = Vec::with_capacity(6);
     for suffix in sky::AXIS_SUFFIX {
         let path = format!("{env}_{suffix}");
-        let view = upload_bundle_view(device, queue, fs, bundle_views, &path);
+        let found = assets::resolve_bundle_image(fs, &path).is_some();
+        let view = if found {
+            upload_bundle_view(device, queue, fs, bundle_views, &path)
+        } else {
+            // retail binds tr.defaultImage for a side the paks lack
+            log::warn!("sky {sh_name}: env image {path} not found, drawing white");
+            white_view.clone()
+        };
         let label = format!("sky {sh_name}_{suffix}");
         side_bgs.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(&label),
@@ -1893,7 +1902,7 @@ impl Renderer {
                 log::info!("sky {name}: skyParms '-' outerbox, drawing no farbox");
             } else {
                 let rt = format!("{}_rt", parms.env);
-                if fs.contains(&rt) || assets::probe_image_path(fs, &rt).is_some() {
+                if assets::resolve_bundle_image(fs, &rt).is_some() {
                     farbox = Some(build_sky_box(
                         device,
                         queue,
@@ -1901,6 +1910,7 @@ impl Renderer {
                         fs,
                         &self.camera_layout,
                         &mut bundle_views,
+                        white_view,
                         &parms.env,
                         &name,
                     ));
@@ -1958,7 +1968,7 @@ impl Renderer {
                     });
                 }
                 if !dome_stages.is_empty() {
-                    println!(
+                    log::info!(
                         "cloud dome: {} stage(s), {} verts",
                         dome_stages.len(),
                         verts.len()
@@ -2642,7 +2652,7 @@ impl Renderer {
                             ds.stage.bind_group(frame.time),
                             &[
                                 u32::try_from(u64::from(ds.slot) * world.stage_params_stride)
-                                    .unwrap_or(0),
+                                    .expect("stage params slot offset fits a dynamic offset"),
                             ],
                         );
                         pass.draw_indexed(0..dome.index_count, 0, 0..1);
@@ -2694,7 +2704,7 @@ impl Renderer {
                                 sb.stage.bind_group(frame.time),
                                 &[
                                     u32::try_from(u64::from(sb.slot) * world.stage_params_stride)
-                                        .unwrap_or(0),
+                                        .expect("stage params slot offset fits a dynamic offset"),
                                 ],
                             );
                         }
@@ -3876,16 +3886,11 @@ fn upload_bundle_view(
     if let Some(v) = cache.get(path) {
         return v.clone();
     }
-    // script paths may carry a real extension; try as-is, then probe exts
-    let img = if fs.contains(path) {
-        assets::load_path_image(fs, path)
-    } else {
-        match assets::probe_image_path(fs, path) {
-            Some(full) => assets::load_path_image(fs, &full),
-            None => {
-                log::warn!("shader image {path} not found, using checkerboard");
-                assets::checkerboard()
-            }
+    let img = match assets::resolve_bundle_image(fs, path) {
+        Some(full) => assets::load_path_image(fs, &full),
+        None => {
+            log::warn!("shader image {path} not found, using checkerboard");
+            assets::checkerboard()
         }
     };
     let v = upload_image(device, queue, path, &img);

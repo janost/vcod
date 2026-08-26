@@ -190,6 +190,20 @@ pub fn probe_image_path(fs: &Pk3Fs, base: &str) -> Option<String> {
         .find(|path| fs.contains(path))
 }
 
+/// The bundle-image probe the renderer and the corpus test share: path as-is,
+/// else with a known extension stripped, probed over [`IMAGE_EXTS`] (scripts
+/// often name the `.tga` while the art ships as `.dds`, e.g. killIcon).
+pub fn resolve_bundle_image(fs: &Pk3Fs, path: &str) -> Option<String> {
+    if fs.contains(path) {
+        return Some(path.to_string());
+    }
+    let base = match path.rfind('.') {
+        Some(i) if IMAGE_EXTS.iter().any(|e| path[i..].eq_ignore_ascii_case(e)) => &path[..i],
+        _ => path,
+    };
+    probe_image_path(fs, base)
+}
+
 fn rgba_image(img: image::DynamicImage) -> Image {
     let rgba = img.to_rgba8();
     Image {

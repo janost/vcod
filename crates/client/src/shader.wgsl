@@ -104,8 +104,9 @@ fn bundle_uv(
         // column-major affine: s' = col0*s + col1*t + col2
         uv = affine * vec3<f32>(base, 1.0);
     }
+    // RB_CalcTurbulentTexCoords (tr_shade_calc.c:917): s rides x+z, t rides y
     if (turb.x != 0.0 || turb.y != 0.0) {
-        uv.x += turb.x * sin(world_pos.x / 1024.0 + turb.y);
+        uv.x += turb.x * sin((world_pos.x + world_pos.z) / 1024.0 + turb.y);
         uv.y += turb.x * sin(world_pos.y / 1024.0 + turb.y);
     }
     return uv;
