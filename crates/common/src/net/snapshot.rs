@@ -128,10 +128,19 @@ impl SnapshotRing {
         } else {
             (PlayerState::null(p), None, None, false)
         };
+        // An uncompressed frame rebuilds the roster (unmentioned clients
+        // drop), but its resent entries still resolve against the last parsed
+        // state; retail never sends a non-forced client there, so this only
+        // matters for our own writer.
+        let resolve_clients = if delta_num <= 0 {
+            self.newest().map(|s| s.clients.clone())
+        } else {
+            base_clients.clone()
+        };
 
         let ps = read_delta_playerstate(r, p, &base_ps);
         let entities = parse_packet_entities(r, p, base_entities.as_ref(), &self.baselines);
-        let clients = parse_clients(r, p, base_clients);
+        let clients = parse_clients(r, p, base_clients, resolve_clients.as_ref());
 
         anyhow::ensure!(
             !r.is_overflowed(),
@@ -225,21 +234,27 @@ fn parse_packet_entities(
 
 /// The clientState stream: repeated `[1 bit][6-bit index][delta]`, a 0 bit
 /// terminates (`SV_WriteSnapshotToClient` 0x808e1fd;
-/// docs/research/clientstate-wire-format.md). Unmentioned clients carry
-/// forward; a removed delta drops the client.
+/// docs/research/clientstate-wire-format.md). `carry` holds the clients
+/// unmentioned entries keep (the previous frame on a delta frame; none on an
+/// uncompressed one, which restarts the roster). Those same states stay
+/// available through `resolve`, so a resent unchanged entry copies the last
+/// sent state instead of collapsing to zeros.
 fn parse_clients(
     r: &mut MsgReader,
     p: &Protocol,
-    oldframe: Option<BTreeMap<u32, ClientState>>,
+    carry: Option<BTreeMap<u32, ClientState>>,
+    resolve: Option<&BTreeMap<u32, ClientState>>,
 ) -> BTreeMap<u32, ClientState> {
-    let mut new = oldframe.unwrap_or_default();
+    let mut new = carry.unwrap_or_default();
+    let empty = BTreeMap::new();
+    let resolve = resolve.unwrap_or(&empty);
     let null = ClientState::null(p);
     while r.read_bits(1) == 1 {
         if r.is_overflowed() {
             break;
         }
         let num = r.read_bits(6) as u32;
-        let base = new.get(&num).unwrap_or(&null).clone();
+        let base = resolve.get(&num).unwrap_or(&null).clone();
         match read_delta_client(r, p, &base, num) {
             Some(cs) => {
                 new.insert(num, cs);
@@ -256,12 +271,20 @@ fn parse_clients(
 /// `deltaNum = 0`): header, playerstate from null, an empty packet-entity
 /// run, then one full clientState entry per connected client. No areamask on
 /// CoD 1.1. Entities join when the world has any.
+///
+/// Client slots delta from what the caller last sent per connection
+/// (`from_clients`, slot == client num; pass an empty slice on the first
+/// frame and hand this frame's `to_clients` back next frame). A slot present
+/// only in `from_clients` writes the removed bit. An uncompressed frame
+/// restarts the reader's roster, so survivors are re-sent even when nothing
+/// about them changed.
 pub fn write_uncompressed(
     w: &mut MsgWriter,
     p: &Protocol,
     server_time: i32,
     ps_to: &PlayerState,
-    clients: &[(u32, ClientState)],
+    from_clients: &[Option<ClientState>],
+    to_clients: &[Option<ClientState>],
 ) {
     use super::msg::{write_delta_client, write_delta_playerstate};
     w.write_long(server_time);
@@ -270,10 +293,22 @@ pub fn write_uncompressed(
     write_delta_playerstate(w, p, &PlayerState::null(p), ps_to);
     w.write_bits(ENTITYNUM_NONE as i32, GENTITYNUM_BITS as i32);
     let null = ClientState::null(p);
-    for &(num, ref cs) in clients {
-        w.write_bits(1, 1);
-        w.write_bits(num as i32, 6);
-        write_delta_client(w, p, &null, Some(cs));
+    for slot in 0..from_clients.len().max(to_clients.len()) {
+        let from = from_clients.get(slot).and_then(|c| c.as_ref());
+        let to = to_clients.get(slot).and_then(|c| c.as_ref());
+        match (from, to) {
+            (_, Some(cs)) => {
+                w.write_bits(1, 1);
+                w.write_bits(slot as i32, 6);
+                write_delta_client(w, p, from.unwrap_or(&null), Some(cs));
+            }
+            (Some(from_cs), None) => {
+                w.write_bits(1, 1);
+                w.write_bits(slot as i32, 6);
+                write_delta_client(w, p, from_cs, None); // disconnect
+            }
+            (None, None) => {} // never connected or already gone
+        }
     }
     w.write_bits(0, 1);
 }
@@ -712,9 +747,12 @@ mod tests {
         );
         assert!(max_clients > 0, "no clientStates decoded across the run");
     }
-
+    /// Three frames through one ring: a join, a shortening rename plus a
+    /// second join, then a disconnect. Each frame's `from_clients` is exactly
+    /// the previous frame's `to_clients`, mirroring what the reader carried
+    /// forward.
     #[test]
-    fn written_snapshot_round_trips_through_the_ring() {
+    fn written_snapshot_client_lifecycle_round_trips() {
         let p = &PROTOCOL_V1;
         let h = Huffman::new();
         let mut ring = SnapshotRing::new();
@@ -722,10 +760,11 @@ mod tests {
         let mut ps = PlayerState::null(p);
         ps.fields[PlayerState::field_index(p, "pm_type").unwrap()] = 4;
         ps.fields[PlayerState::field_index(p, "origin[0]").unwrap()] = 384f32.to_bits() as i32;
-        let clients = vec![(0u32, ClientState::named(p, 0, 3, "vcod"))];
 
+        // Frame A: client 0 appears out of nothing.
+        let a_to = vec![Some(ClientState::named(p, 0, 3, "vcod"))];
         let mut w = MsgWriter::new(&h);
-        write_uncompressed(&mut w, p, 48_000, &ps, &clients);
+        write_uncompressed(&mut w, p, 48_000, &ps, &[], &a_to);
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
@@ -737,6 +776,42 @@ mod tests {
         assert_eq!(s.ps.field_i32(p, "pm_type"), 4);
         assert_eq!(s.clients[&0].name(p), "vcod");
         assert!(s.entities.is_empty());
+        assert!(!r.is_overflowed());
+        assert_eq!(r.bits_read(), bits);
+
+        // Frame B: client 0 renamed shorter, client 3 joins. Slot indexes are
+        // client numbers, so the gap stays None.
+        let b_to = vec![
+            Some(ClientState::named(p, 0, 3, "bob")),
+            None,
+            None,
+            Some(ClientState::named(p, 3, 1, "eve")),
+        ];
+        let mut w = MsgWriter::new(&h);
+        write_uncompressed(&mut w, p, 48_050, &ps, &a_to, &b_to);
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        let s = ring.parse_into(&mut r, p, 11).unwrap();
+        assert!(s.valid);
+        assert_eq!(s.clients[&0].name(p), "bob");
+        assert_eq!(s.clients[&3].name(p), "eve");
+        assert!(!r.is_overflowed());
+        assert_eq!(r.bits_read(), bits);
+
+        // Frame C: client 0 leaves, client 3 re-sent unchanged. An
+        // uncompressed frame starts the client map empty on the reader side,
+        // so survivors go out again even untouched.
+        let c_to = vec![None, None, None, b_to[3].clone()];
+        let mut w = MsgWriter::new(&h);
+        write_uncompressed(&mut w, p, 48_100, &ps, &b_to, &c_to);
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        let s = ring.parse_into(&mut r, p, 12).unwrap();
+        assert!(s.valid);
+        assert_eq!(s.clients.keys().copied().collect::<Vec<_>>(), vec![3]);
+        assert_eq!(s.clients[&3].name(p), "eve");
         assert!(!r.is_overflowed());
         assert_eq!(r.bits_read(), bits);
     }
