@@ -210,5 +210,9 @@ decompiler output or disassembly listings.
 - The F3 `audio` line reads `v N plays N miss N cull N drop N N.NNms`: live
   voices, cues started, aliases not in the table, cues already past `dist_max`
   when they fired, and sounds kira refused for lack of capacity.
+- A stock map load logs roughly 360-415 unique ShaderLib warnings, each once;
+  the corpus is full of tokens vcod skips by design (hw-path stages, fog
+  keywords), so the count is noise. The F3 `shader:` line shows it as
+  `warns`; shader-script facts live in `docs/research/cod11-shader-scripts.md`.
 - `--connect` opens the window before the gamestate arrives; the
   connecting/loading phases draw HUD text only.
