@@ -631,6 +631,19 @@ impl Server {
                     c.userinfo = ui;
                 }
             }
+            // DeathmatchScoreboardMessage (.so 0x459c0); grammar in
+            // docs/research/cod11-hud-protocol.md section 3. Nothing is
+            // measured, so team totals use the "no score" sentinel and rows
+            // zero out.
+            "score" => {
+                let mut text = format!("b {} -9999 -9999", self.client_count());
+                for (slot, c) in self.clients.iter().enumerate() {
+                    if c.is_some() {
+                        text.push_str(&format!(" {slot} 0 0 0 0"));
+                    }
+                }
+                self.send_server_command(slot, &text);
+            }
             other => log::debug!("client {slot}: command {other:?} ignored"),
         }
         let Some(c) = self.clients[slot].as_mut() else {
@@ -1092,6 +1105,42 @@ mod tests {
         assert_eq!(
             server_commands(&mut nc, &pkt, &huff),
             vec!["w \"EXE_LOSTRELIABLECOMMANDS\"".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_score_request_gets_a_deathmatch_scoreboard() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = active(&mut sv, now);
+        sv.take_outgoing();
+
+        let huff = Huffman::new();
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_CLIENT_COMMAND, 2);
+        w.write_long(1);
+        w.write_string("score");
+        w.write_bits(CLC_EOF, 2);
+        let pkt = nc
+            .build_out(
+                i32::from(sv.server_id),
+                nc.incoming_sequence as i32,
+                0,
+                &w.into_ops(),
+                &huff,
+            )
+            .unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+
+        let out = sv.take_outgoing();
+        assert_eq!(out.len(), 1, "expected one reply frame");
+        assert_eq!(out[0].0, addr(5));
+        let cmds = server_commands(&mut nc, &out[0].1, &huff);
+        assert_eq!(cmds.len(), 1);
+        assert!(
+            cmds[0].starts_with("b 1 -9999 -9999 0 0 0 0 0"),
+            "{:?}",
+            cmds[0]
         );
     }
 
