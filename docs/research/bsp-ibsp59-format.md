@@ -150,9 +150,9 @@ Census over the 14 stock MP maps (`maps/MP/*.bsp` in `pak[0-9].pk3`; note the up
 | 25 | 12 | terrain collision vertices (`f32 xyz`) | 6291 |
 | 26 | 6 | terrain collision triangles (`u16 x 3` into lump 25); mp_ship has none | 4496 |
 | 28 | 8 (+rows) | PVS: `i32 cluster_count, row_bytes` then `cluster_count` bit rows; mp_neuville has none | 666 x 88 |
-| 30 | 72 | lights (one per `r_showLeafLights` entry; `i32 type; f32 color[3] ...`), not decoded | 22 |
+| 30 | 48 | lights (one per `r_showLeafLights` entry; retail rejects other lengths, `FUN_004db240`), see `cod11-light-grid-and-leaf-lights.md` | 22 |
 | 31 | | empty in every map | 0 |
-| 32 | 3145728 | light grid, fixed 128x128x64x3 bytes in every map, not decoded | 1 |
+| 32 | 3145728 | light grid: 262144 (128x128x64) cells x 48 bytes; compiled but never sampled in MP (same doc) | 1 |
 
 Lump 23 is not a list of draw surfaces: on mp_brecourt its indices reach 701 with only 548 soups, and on mp_bocage it references exactly the 626 records of lump 24. Draw-surface visibility never goes through leafs.
 
