@@ -632,8 +632,7 @@ fn usercmd_from_input(input: &InputState, cam: &FlyCamera) -> net::msg::UserCmd 
         angles: [angle2short(pitch_deg), angle2short(yaw_deg), 0],
         forward: axis(input.forward, input.back),
         right: axis(input.right, input.left),
-        // `up` is not in the compact move encoding; a noclip spectator climbs
-        // by looking up and moving forward.
+        up: axis(input.up, input.down),
         ..Default::default()
     }
 }
@@ -1542,6 +1541,29 @@ mod tests {
             t0 < t1 && t1 < t2 && t2 < t3,
             "render time froze between snapshots: {t0} {t1} {t2} {t3}"
         );
+    }
+
+    /// Space/Ctrl must reach the server: `up` is the only field that forces
+    /// the full usercmd branch on the wire.
+    #[test]
+    fn usercmd_carries_the_vertical_axis() {
+        let cam = FlyCamera::new(Vec3::ZERO, 0.0);
+        let up = InputState {
+            up: true,
+            ..InputState::default()
+        };
+        let down = InputState {
+            down: true,
+            ..InputState::default()
+        };
+        let both = InputState {
+            up: true,
+            down: true,
+            ..InputState::default()
+        };
+        assert_eq!(usercmd_from_input(&up, &cam).up, 127);
+        assert_eq!(usercmd_from_input(&down, &cam).up, -127);
+        assert_eq!(usercmd_from_input(&both, &cam).up, 0);
     }
 
     #[test]

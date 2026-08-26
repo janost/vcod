@@ -704,10 +704,10 @@ fn consume_hud_array(r: &mut MsgReader) {
     }
 }
 
-/// `usercmd_t` (codextended shared.h:811). The compact encoding
-/// [`write_delta_usercmd`] emits carries none of `up`, `weapon`, `wbuttons`,
-/// `flags` or `angles[2]`. Layout: docs/protocol-1.1.md, "Client to server
-/// message body".
+/// `usercmd_t` (codextended shared.h:811). The writer's compact branch
+/// carries none of `up`, `weapon`, `wbuttons`, `flags` or `angles[2]`; a
+/// nonzero `up` selects the full-field branch. Layout:
+/// docs/protocol-1.1.md, "Client to server message body".
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UserCmd {
     pub server_time: i32,
@@ -753,9 +753,9 @@ fn fr_bucket(forward: i8, right: i8) -> i32 {
 }
 
 /// `MSG_WriteDeltaUsercmdKey`, reconstructed from the reader at cod_lnxded
-/// 0x807b7f8. Emits only the compact branch: serverTime, button bit 0, keyed
-/// pitch and yaw, a 4-bit forward/right code. Forward/right can only be +127,
-/// -127 or 0; `up`, `weapon`, `wbuttons` and roll stay at the base.
+/// 0x807b7f8. Emits the compact branch, except when `to.up` is nonzero,
+/// which only the full-field branch can carry. Forward/right can only be
+/// +127, -127 or 0; `flags` is never sent.
 ///
 /// Angles and the forward/right code are always sent, never delta-omitted:
 /// the server keeps an omitted field at its stored previous cmd, so a
@@ -773,8 +773,14 @@ pub fn write_delta_usercmd(w: &mut MsgWriter, key: i32, from: &UserCmd, to: &Use
     }
 
     // Changed bit (!= key & 1), then the branch bit (== key & 1 picks compact).
+    let full = to.up != 0;
     w.write_bits((key & 1) ^ 1, 1);
-    w.write_bits(key & 1, 1);
+    w.write_bits(if full { (key & 1) ^ 1 } else { key & 1 }, 1);
+
+    if full {
+        write_full_usercmd(w, key, to.server_time, to);
+        return;
+    }
 
     // The reader mixes the serverTime into the key from here (0x807b95d).
     let key = key ^ to.server_time;
@@ -787,6 +793,29 @@ pub fn write_delta_usercmd(w: &mut MsgWriter, key: i32, from: &UserCmd, to: &Use
     let flag = fr_bucket(to.forward, to.right);
     w.write_bits(1, 1);
     w.write_bits(flag ^ (key & 0xf), 4);
+}
+
+/// Writer mirror of [`read_full_usercmd`] (cod_lnxded 0x807bba0): every keyed
+/// field announced, in the reader's order, first four under the raw key and
+/// the rest under the serverTime-mixed one.
+fn write_full_usercmd(w: &mut MsgWriter, key: i32, server_time: i32, to: &UserCmd) {
+    w.write_bits(((to.buttons as i32) & 1) ^ (key & 1), 1);
+    write_keyed_angle(w, key, to.angles[0]);
+    write_keyed_angle(w, key, to.angles[1]);
+    let flag = fr_bucket(to.forward, to.right);
+    w.write_bits(1, 1);
+    w.write_bits(flag ^ (key & 0xf), 4);
+
+    let key = key ^ server_time;
+    write_keyed_angle(w, key, to.angles[2]);
+    w.write_bits(1, 1);
+    w.write_bits((i32::from(to.buttons >> 1) & 0x3f) ^ (key & 0x3f), 6);
+    w.write_bits(1, 1);
+    w.write_byte(to.wbuttons ^ (key as u8));
+    w.write_bits(1, 1);
+    w.write_bits(up_bucket(to.up) ^ (key & 0x3), 2);
+    w.write_bits(1, 1);
+    w.write_bits(i32::from(to.weapon) ^ (key & 0x3f), 6);
 }
 
 /// Change bit set, then `value ^ key` as a short (cod_lnxded 0x807b9bd).
@@ -1909,6 +1938,79 @@ mod tests {
         );
         assert_eq!(r.read_bits(2), 3, "clc op after the move");
         assert!(!r.is_overflowed());
+    }
+
+    /// The full-field branch is the only one that carries `up`; a nonzero
+    /// upmove must select it on write and survive the keyed decode exactly,
+    /// bit count included.
+    #[test]
+    fn written_upmove_round_trips_through_the_full_branch() {
+        let h = Huffman::new();
+        let cases = [
+            UserCmd {
+                server_time: 1050,
+                buttons: 0x15,
+                wbuttons: 3,
+                weapon: 5,
+                angles: [0x1234, 0xabcd, 0xbeef],
+                forward: 127,
+                right: -127,
+                up: 127,
+                ..NULL_USERCMD
+            },
+            UserCmd {
+                server_time: 1150,
+                buttons: 0x2a,
+                wbuttons: 0x81,
+                weapon: 42,
+                angles: [0xffff, 0, 0x1234],
+                forward: -127,
+                right: 127,
+                up: -127,
+                ..NULL_USERCMD
+            },
+        ];
+        for key in [0, 1, 0x1122_3344, -1] {
+            let mut w = MsgWriter::new(&h);
+            let mut from = NULL_USERCMD;
+            for to in &cases {
+                write_delta_usercmd(&mut w, key, &from, to);
+                from = *to;
+            }
+            let bits = w.bits_written();
+            let mut r = MsgReader::new(&w.finish(), &h);
+            let mut from = NULL_USERCMD;
+            for to in &cases {
+                let got = read_delta_usercmd(&mut r, key, &from).unwrap();
+                assert_eq!(got, *to, "key {key:#x}");
+                from = got;
+            }
+            assert_eq!(
+                r.bits_read(),
+                bits,
+                "writer and reader must agree bit for bit (key {key:#x})"
+            );
+            assert!(!r.is_overflowed());
+        }
+    }
+
+    /// A cmd without upmove must encode exactly as before the full branch
+    /// existed, byte for byte.
+    #[test]
+    fn zero_upmove_writes_the_compact_bytes_unchanged() {
+        let h = Huffman::new();
+        let to = UserCmd {
+            server_time: 1100,
+            buttons: 1,
+            angles: [0x1234, 0xabcd, 0],
+            forward: 127,
+            right: -127,
+            ..NULL_USERCMD
+        };
+        let mut w = MsgWriter::new(&h);
+        write_delta_usercmd(&mut w, 0x1122_3344, &NULL_USERCMD, &to);
+        let d = w.finish();
+        assert_eq!(d, [249, 118, 14, 213, 145, 242, 63, 126, 37, 1]);
     }
 
     #[test]
