@@ -196,6 +196,7 @@ decompiler output or disassembly listings.
   agree. Both rings, and the scramble key that indexes them, are sized off it.
 - The server's per-client drop notice is the reliable command `w "<reason>"`
   (`SV_DropClient` 0x8085cf4). Bare `disconnect` only travels client to server.
+- The retail client omits unchanged usercmd fields (change-bit 0, angles included, relative to its previous sent cmd); the server must decode each message's delta chain against its stored last received cmd, not `NULL_USERCMD`, or every omission reads as zero — this was the retail client's "spectator flash" (one-frame view snaps, invisible until yaw first went nonzero).
 - A portal's plane faces out of its owning cell; the walk skips a portal when
   the eye is past it (`n·eye - dist > 1`). Two vcod additions to the walk:
   clipped portal polygons narrower than `SLIVER_EPS` are skipped (slivers at
