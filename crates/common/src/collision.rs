@@ -14,6 +14,8 @@ const CONTENTS_PLAYERCLIP: u32 = 0x10000;
 const CONTENTS_SKY: u32 = 0x800;
 /// Census-proven water bit: docs/research/bsp-ibsp59-format.md, "Content flags".
 pub const CONTENTS_WATER: u32 = 0x20;
+/// Ladder-climb flag on brush materials; pmove grabs ladders from trace hits carrying it.
+pub const SURF_LADDER: u32 = 0x8;
 
 /// A brush as clip planes: point p is inside iff n·p <= d for every plane.
 pub struct BrushPlanes {

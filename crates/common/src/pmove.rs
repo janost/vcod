@@ -46,6 +46,24 @@ pub const WATERJUMP_FORWARD: f32 = 200.0;
 pub const WATERJUMP_UP: f32 = 350.0;
 pub const WATERJUMP_TIME_MS: f32 = 2000.0;
 
+// Ladders: structure from RTCW-MP bg_pmove.c PM_CheckLadderMove/PM_LadderMove;
+// numbers from retail CoD 1.1 (game.mp.i386.so: PM_CheckLadderMove @0x336e8,
+// PM_LadderMove @0x33944, .rodata floats, pm_ladderfriction data symbol),
+// which retunes RTCW's 1/48 reach, 0.5 upscale bias, 0.9 climb / 0.5 strafe
+// coeffs, 100-cap-less wishspeed and friction 14.
+/// Forward-trace reach while walking / airborne.
+pub const LADDER_TRACE_DIST_WALK: f32 = 8.0;
+pub const LADDER_TRACE_DIST_AIR: f32 = 30.0;
+pub const LADDER_UPSCALE_BIAS: f32 = 0.25;
+pub const LADDER_UPSCALE_GAIN: f32 = 2.5;
+pub const LADDER_CLIMB_SCALE: f32 = 0.5;
+pub const LADDER_STRAFE_SCALE: f32 = 0.2;
+pub const LADDER_WISHSPEED_CAP: f32 = 100.0;
+pub const LADDER_ACCELERATE: f32 = 9.0;
+pub const PM_LADDER_FRICTION: f32 = 16.0;
+/// RTCW's grab-from-above push into the wall (`ladderforward`).
+pub const LADDER_PUSH_SPEED: f32 = 200.0;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stance {
     Stand,
@@ -96,6 +114,8 @@ pub struct PlayerState {
     pub water_level: u32,
     /// Remaining control lock while flying out of water; 0 when free.
     pub waterjump_ms: f32,
+    /// Touching a climbable surface (trace hit with SURF_LADDER) this frame.
+    pub on_ladder: bool,
 }
 
 impl PlayerState {
@@ -111,6 +131,7 @@ impl PlayerState {
             lean: 0.0,
             water_level: 0,
             waterjump_ms: 0.0,
+            on_ladder: false,
         }
     }
 
@@ -170,7 +191,12 @@ pub fn pmove(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
             ps.waterjump_ms = 0.0;
         }
     }
-    if ps.waterjump_ms > 0.0 {
+    // retail checks ladders right after the first ground trace and dispatches
+    // them before waterjump/water
+    let ladder = check_ladder_move(ps, input, world);
+    if let Some((normal, ladderforward)) = ladder {
+        ladder_move(ps, input, normal, ladderforward, world, dt);
+    } else if ps.waterjump_ms > 0.0 {
         water_jump_move(ps, world, dt);
     } else if ps.water_level > 1 {
         water_move(ps, input, world, dt);
@@ -180,7 +206,7 @@ pub fn pmove(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
             ps.on_ground = false;
         }
         if ps.on_ground {
-            friction(ps, dt);
+            friction(ps, ps.on_ladder, dt);
             walk_move(ps, input, world, dt);
         } else {
             air_move(ps, input, world, dt);
@@ -288,8 +314,9 @@ fn set_water_level(ps: &mut PlayerState, world: &CollisionWorld) {
 }
 
 /// RTCW `bg_pmove.c` `PM_Friction`: ground friction only while walking in
-/// water level <= 1, plus a water term that already applies while wading.
-fn friction(ps: &mut PlayerState, dt: f32) {
+/// water level <= 1, plus a water term that already applies while wading, and
+/// the ladder term whenever on a ladder.
+fn friction(ps: &mut PlayerState, on_ladder: bool, dt: f32) {
     // when walking, slope movement along z does not count toward the speed
     let mut planar = ps.velocity;
     if ps.on_ground {
@@ -311,6 +338,9 @@ fn friction(ps: &mut PlayerState, dt: f32) {
     }
     if ps.water_level > 0 {
         drop += speed * WATER_FRICTION * ps.water_level as f32 * dt;
+    }
+    if on_ladder {
+        drop += speed * PM_LADDER_FRICTION * dt;
     }
     let scale = ((speed - drop) / speed).max(0.0);
     ps.velocity *= scale;
@@ -404,7 +434,7 @@ fn water_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt:
         water_jump_move(ps, world, dt);
         return;
     }
-    friction(ps, dt);
+    friction(ps, ps.on_ladder, dt);
     let m = cmd_scale(input) * 127.0;
     let right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
     let wishvel = if m == 0.0 {
@@ -464,6 +494,104 @@ fn water_jump_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
     if ps.velocity.z < 0.0 {
         ps.waterjump_ms = 0.0;
     }
+}
+
+/// RTCW `bg_pmove.c` `PM_CheckLadderMove` with retail CoD 1.1 reach and gates
+/// (const provenance above). Sets `ps.on_ladder`; returns the ladder plane
+/// normal plus whether this frame is a grab-from-above push.
+fn check_ladder_move(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    world: &CollisionWorld,
+) -> Option<(Vec3, bool)> {
+    // retail's pm_time gate covers exactly this lock in vcod
+    if ps.waterjump_ms > 0.0 {
+        ps.on_ladder = false;
+        return None;
+    }
+    let walking = ps.on_ground;
+    let tracedist = if walking {
+        LADDER_TRACE_DIST_WALK
+    } else {
+        LADDER_TRACE_DIST_AIR
+    };
+    let flatforward = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0).normalize_or_zero();
+    let t = world.box_trace(
+        ps.origin,
+        ps.origin + flatforward * tracedist,
+        ps.mins(),
+        ps.maxs(),
+    );
+    let mut ladder = t.fraction < 1.0 && t.surface_flags & crate::collision::SURF_LADDER != 0;
+    let normal = t.normal;
+    let mut ladderforward = false;
+    if ladder && !walking && t.fraction * tracedist > 1.0 {
+        // grab-from-above guard: only trust a far hit when a backwards trace
+        // confirms the wall behind us, else it would fling us off the top
+        ladder = false;
+        let mut mins = ps.mins();
+        mins.z = -1.0;
+        let back = world.box_trace(ps.origin, ps.origin - normal * tracedist, mins, ps.maxs());
+        if back.fraction < 1.0 && back.surface_flags & crate::collision::SURF_LADDER != 0 {
+            ladder = true;
+            ladderforward = true;
+        }
+    }
+    // standing at the base only climbs while pushing forward
+    if ladder && walking && input.forward <= 0.0 {
+        ladder = false;
+    }
+    ps.on_ladder = ladder;
+    ladder.then_some((normal, ladderforward))
+}
+
+/// RTCW `bg_pmove.c` `PM_LadderMove` with retail CoD 1.1 coefficients (const
+/// provenance above). Pitch drives the climb rate; strafe slides along the
+/// ladder face.
+fn ladder_move(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    normal: Vec3,
+    ladderforward: bool,
+    world: &CollisionWorld,
+    dt: f32,
+) {
+    if ladderforward {
+        let push = -LADDER_PUSH_SPEED;
+        ps.velocity.x = normal.x * push;
+        ps.velocity.y = normal.y * push;
+    }
+
+    let fwd = forward3(ps);
+    let upscale = ((fwd.z + LADDER_UPSCALE_BIAS) * LADDER_UPSCALE_GAIN).clamp(-1.0, 1.0);
+    let flat_right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
+    // retail projects right onto the plane perpendicular to the ladder normal
+    // (`ProjectPointOnPlane(pml.right, ..., ps->vLadderVec)`), so strafing
+    // slides along the face instead of into or off it
+    let tangent_right = flat_right - normal * flat_right.dot(normal);
+
+    let mut wishvel = tangent_right * (LADDER_STRAFE_SCALE * SPEED_RUN * input.right);
+    wishvel.z = LADDER_CLIMB_SCALE * upscale * SPEED_RUN * input.forward;
+
+    friction(ps, true, dt);
+    let wishspeed = wishvel.length().min(LADDER_WISHSPEED_CAP);
+    let wishdir = if wishspeed > 0.0 {
+        wishvel / wishspeed
+    } else {
+        Vec3::ZERO
+    };
+    accelerate(ps, wishdir, wishspeed, LADDER_ACCELERATE, dt);
+    if wishvel.z == 0.0 {
+        // no climb input: vertical velocity decays toward zero instead of
+        // falling (RTCW)
+        if ps.velocity.z > 0.0 {
+            ps.velocity.z = (ps.velocity.z - GRAVITY * dt).max(0.0);
+        } else {
+            ps.velocity.z = (ps.velocity.z + GRAVITY * dt).min(0.0);
+        }
+    }
+    // no gravity while going up a ladder
+    step_slide_move(ps, world, dt, false);
 }
 
 /// Q3 `bg_pmove.c` `PM_AirMove`.
@@ -1070,6 +1198,271 @@ mod tests {
             ps.velocity.z,
             ps.origin.z
         );
+    }
+
+    // --- ladders ---
+
+    /// Dry floor at z=0 plus a playerclip ladder wall (SURF_LADDER) spanning
+    /// x 50..54, y -200..200, z 0..220.
+    fn ladder_world() -> CollisionWorld {
+        crate::collision::synthetic_world(
+            &[
+                ("textures/test/solid", crate::collision::CONTENTS_SOLID, 0),
+                // CONTENTS_PLAYERCLIP is private to collision.rs
+                ("textures/common/ladder", 0x10000, 0x8),
+            ],
+            &[
+                (0, [-600.0, -300.0, -16.0], [600.0, 300.0, 0.0]),
+                (1, [50.0, -200.0, 0.0], [54.0, 200.0, 220.0]),
+            ],
+        )
+    }
+
+    #[test]
+    fn grabs_a_ladder_and_climbs_it_holding_forward() {
+        let w = ladder_world();
+        let mut ps = PlayerState::spawn(Vec3::new(20.0, 0.0, 0.2), 0.0);
+        tick(
+            &mut ps,
+            &PmInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+            &w,
+            150,
+        );
+        assert!(ps.on_ladder, "should be on the ladder at {}", ps.origin);
+        // hugging the face: center stops a half-width short of x=50
+        assert!(
+            (30.0..40.0).contains(&ps.origin.x),
+            "should press against the face, at {}",
+            ps.origin
+        );
+        assert!(ps.origin.z > 30.0, "should have climbed, at {}", ps.origin);
+        assert!(ps.velocity.z > 20.0, "climb vz {}", ps.velocity.z);
+    }
+
+    #[test]
+    fn no_ladder_grab_when_idle_or_backing_off() {
+        let w = ladder_world();
+        let mut ps = PlayerState::spawn(Vec3::new(33.0, 0.0, 0.2), 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 30);
+        assert!(!ps.on_ladder, "idle at the base must not grab");
+        tick(
+            &mut ps,
+            &PmInput {
+                forward: -1.0,
+                ..Default::default()
+            },
+            &w,
+            30,
+        );
+        assert!(!ps.on_ladder, "backing away must not grab");
+        assert!(ps.origin.x < 30.0, "moved away, at {}", ps.origin);
+    }
+
+    #[test]
+    fn climb_rate_follows_pitch() {
+        let w = ladder_world();
+        let input = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        // two units off the face; compare settled climb speeds (retail
+        // equilibrium: accel 9 fighting friction 16 gives ~0.56 * wish)
+        let mut level = PlayerState::spawn(Vec3::new(33.0, 0.0, 5.0), 0.0);
+        tick(&mut level, &input, &w, 100);
+        let mut up = PlayerState::spawn(Vec3::new(33.0, 0.0, 5.0), 0.0);
+        up.pitch = 30.0f32.to_radians();
+        tick(&mut up, &input, &w, 100);
+        assert!(level.on_ladder && up.on_ladder);
+        assert!(
+            level.velocity.z > 25.0 && level.velocity.z < 40.0,
+            "level climb vz {}",
+            level.velocity.z
+        );
+        assert!(
+            up.velocity.z - level.velocity.z > 15.0,
+            "looking up must climb faster: up {}, level {}",
+            up.velocity.z,
+            level.velocity.z
+        );
+        assert!(up.origin.z > level.origin.z);
+    }
+
+    #[test]
+    fn releasing_input_mid_climb_hangs_without_sliding() {
+        let w = ladder_world();
+        let mut ps = PlayerState::spawn(Vec3::new(20.0, 0.0, 0.2), 0.0);
+        tick(
+            &mut ps,
+            &PmInput {
+                forward: 1.0,
+                ..Default::default()
+            },
+            &w,
+            100,
+        );
+        let hang_z = ps.origin.z;
+        tick(&mut ps, &PmInput::default(), &w, 50);
+        assert!(ps.on_ladder, "must stay on the ladder while hanging");
+        assert!(
+            ps.velocity.z.abs() < 5.0,
+            "vertical speed should damp to zero, vz {}",
+            ps.velocity.z
+        );
+        assert!(
+            ps.origin.z > hang_z - 8.0,
+            "must not slide down, {} -> {}",
+            hang_z,
+            ps.origin.z
+        );
+    }
+
+    #[test]
+    fn dropping_onto_the_ladder_from_above_catches() {
+        let w = ladder_world();
+        // past the face plane, above the wall top region, falling; facing the
+        // wall so the first trace hits it more than a unit away and the
+        // grab-from-above guard pushes back into it
+        let mut ps = PlayerState::spawn(Vec3::new(75.0, 0.0, 80.0), 180.0);
+        let input = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        let mut grabbed = false;
+        for _ in 0..150 {
+            pmove(&mut ps, &input, &w, 1.0 / 125.0);
+            grabbed |= ps.on_ladder;
+        }
+        assert!(grabbed, "should catch the ladder, at {}", ps.origin);
+        // pressed against the face (54 + half-width ~ 69) and climbing, not
+        // fallen to the floor
+        assert!(
+            ps.origin.x < 72.0 && ps.origin.z > 60.0,
+            "pushed into the wall instead of falling, at {}",
+            ps.origin
+        );
+    }
+
+    #[test]
+    fn ladder_friction_bleeds_speed_far_faster_than_plain_air() {
+        let w = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.velocity = Vec3::new(100.0, 0.0, 50.0);
+        friction(&mut ps, true, 1.0 / 125.0);
+        let ladder_speed = ps.velocity.length();
+        // drop = |v| * 16 * dt ~ 14.4 of the initial 111.8
+        assert!(
+            (97.0..99.5).contains(&ladder_speed),
+            "ladder friction should shed ~14 per frame, got {ladder_speed}"
+        );
+
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.velocity = Vec3::new(100.0, 0.0, 50.0);
+        friction(&mut ps, false, 1.0 / 125.0);
+        assert_eq!(
+            ps.velocity.length(),
+            111.8034,
+            "off-ladder airborne friction must stay a no-op here"
+        );
+        let _ = w;
+    }
+
+    /// Stock maps carry real SURF_LADDER brushes; find one from the BSP like
+    /// collision.rs does for harbor water, stand outside its thinnest axis and
+    /// climb.
+    #[test]
+    fn climbs_a_real_map_ladder() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        for map in ["maps/mp/mp_powcamp.bsp", "maps/mp/mp_harbor.bsp"] {
+            let Some(data) = fs.read(map) else {
+                continue;
+            };
+            let Ok(bsp) = crate::bsp::parse(&data) else {
+                continue;
+            };
+            let world = CollisionWorld::build(&bsp, &[]);
+            let axial_bounds = |b: &crate::bsp::Brush| -> ([f32; 3], [f32; 3]) {
+                let sides = &bsp.brush_sides[b.first_side as usize..][..b.num_sides as usize];
+                let mut lo = [0.0f32; 3];
+                let mut hi = [0.0f32; 3];
+                for axis in 0..3 {
+                    lo[axis] = f32::from_bits(sides[axis * 2].plane_or_dist);
+                    hi[axis] = f32::from_bits(sides[axis * 2 + 1].plane_or_dist);
+                }
+                (lo, hi)
+            };
+            for b in &bsp.brushes {
+                if bsp.materials[b.material as usize].surface_flags & 0x8 == 0 {
+                    continue;
+                }
+                let (lo, hi) = axial_bounds(b);
+                let ex = hi[0] - lo[0];
+                let ey = hi[1] - lo[1];
+                if ex <= 0.0 || ey <= 0.0 || hi[2] - lo[2] < 40.0 {
+                    continue;
+                }
+                // thinnest horizontal axis is the climb direction
+                let (dir, span) = if ex < ey {
+                    (Vec3::X, ex * 0.5)
+                } else {
+                    (Vec3::Y, ey * 0.5)
+                };
+                let mid_other = if ex < ey {
+                    (lo[1] + hi[1]) * 0.5
+                } else {
+                    (lo[0] + hi[0]) * 0.5
+                };
+                for sign in [-1.0f32, 1.0] {
+                    let yaw = if dir == Vec3::X {
+                        if sign > 0.0 {
+                            180.0f32
+                        } else {
+                            0.0
+                        }
+                    } else if sign > 0.0 {
+                        90.0
+                    } else {
+                        -90.0
+                    };
+                    let base = Vec3::new(
+                        if dir == Vec3::X {
+                            (lo[0] + hi[0]) * 0.5 + sign * (span + 16.0)
+                        } else {
+                            mid_other
+                        },
+                        if dir == Vec3::X {
+                            mid_other
+                        } else {
+                            (lo[1] + hi[1]) * 0.5 + sign * (span + 16.0)
+                        },
+                        0.0,
+                    );
+                    for dz in [24.0f32, 48.0] {
+                        let start = base + Vec3::Z * (lo[2] + dz);
+                        let mut ps = PlayerState::spawn(start, yaw);
+                        let before = ps.origin.z;
+                        tick(
+                            &mut ps,
+                            &PmInput {
+                                forward: 1.0,
+                                ..Default::default()
+                            },
+                            &world,
+                            90,
+                        );
+                        if ps.on_ladder && ps.origin.z - before > 10.0 {
+                            return; // found a working ladder on this map
+                        }
+                    }
+                }
+            }
+            panic!("no approach to any {map} ladder grabbed and climbed");
+        }
+        panic!("powcamp/harbor not found under $COD_DIR");
     }
 
     #[test]
