@@ -258,18 +258,17 @@ fn parse_clients(
 /// run, then one full clientState entry per connected client. No areamask on
 /// CoD 1.1. Entities join when the world has any.
 ///
-/// Slots present in `to_clients` (slot == client num) go out as full states
-/// from null, matching retail's encoding of uncompressed frames: force only
-/// suppresses entry omission and never widens `lc`, so elided zero fields
-/// decode right only against a null base. A slot present only in
-/// `from_clients` writes the removed bit; that slice exists for removals
-/// alone.
+/// Each slot present in `to_clients` (slot == client num) goes out as a full
+/// state from null, matching retail's encoding of uncompressed frames: force
+/// only suppresses entry omission and never widens `lc`, so elided zero
+/// fields decode right only against a null base. Unmentioned clients need no
+/// removal bit: an uncompressed frame restarts the reader's roster, so they
+/// vanish at parse. Explicit removals come back with delta frames.
 pub fn write_uncompressed(
     w: &mut MsgWriter,
     p: &Protocol,
     server_time: i32,
     ps_to: &PlayerState,
-    from_clients: &[Option<ClientState>],
     to_clients: &[Option<ClientState>],
 ) {
     use super::msg::{write_delta_client, write_delta_playerstate};
@@ -279,22 +278,11 @@ pub fn write_uncompressed(
     write_delta_playerstate(w, p, &PlayerState::null(p), ps_to);
     w.write_bits(ENTITYNUM_NONE as i32, GENTITYNUM_BITS as i32);
     let null = ClientState::null(p);
-    for slot in 0..from_clients.len().max(to_clients.len()) {
-        let from = from_clients.get(slot).and_then(|c| c.as_ref());
-        let to = to_clients.get(slot).and_then(|c| c.as_ref());
-        match (from, to) {
-            (_, Some(cs)) => {
-                w.write_bits(1, 1);
-                w.write_bits(slot as i32, 6);
-                write_delta_client(w, p, &null, Some(cs));
-            }
-            (Some(from_cs), None) => {
-                w.write_bits(1, 1);
-                w.write_bits(slot as i32, 6);
-                write_delta_client(w, p, from_cs, None); // disconnect
-            }
-            (None, None) => {} // never connected or already gone
-        }
+    for (slot, cs) in to_clients.iter().enumerate() {
+        let Some(cs) = cs else { continue };
+        w.write_bits(1, 1);
+        w.write_bits(slot as i32, 6);
+        write_delta_client(w, p, &null, Some(cs));
     }
     w.write_bits(0, 1);
 }
@@ -750,7 +738,7 @@ mod tests {
         // Frame A: client 0 appears out of nothing.
         let a_to = vec![Some(ClientState::named(p, 0, 3, "vcod"))];
         let mut w = MsgWriter::new(&h);
-        write_uncompressed(&mut w, p, 48_000, &ps, &[], &a_to);
+        write_uncompressed(&mut w, p, 48_000, &ps, &a_to);
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
@@ -774,7 +762,7 @@ mod tests {
             Some(ClientState::named(p, 3, 1, "eve")),
         ];
         let mut w = MsgWriter::new(&h);
-        write_uncompressed(&mut w, p, 48_050, &ps, &a_to, &b_to);
+        write_uncompressed(&mut w, p, 48_050, &ps, &b_to);
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
@@ -785,17 +773,18 @@ mod tests {
         assert!(!r.is_overflowed());
         assert_eq!(r.bits_read(), bits);
 
-        // Frame C: client 0 leaves; client 3 survives with its team cleared
-        // back to zero. The roster restarts at the reader each uncompressed
-        // frame, so the survivor is re-sent as a full state from null and the
-        // zeroed field must decode as zero, not as a stale nonzero (this pins
-        // both from-based writing and non-null resolve).
+        // Frame C: client 0 leaves by omission. An uncompressed frame
+        // restarts the reader's roster, so no removal bit exists; the
+        // survivor is re-sent as a full state from null with its team cleared
+        // back to zero, and that field must decode as zero rather than a
+        // stale nonzero (this pins any return of last-sent encoding or
+        // non-null resolve).
         let mut eve_cleared = ClientState::named(p, 3, 1, "eve");
         let ti = ClientState::field_index(p, "team").unwrap();
         eve_cleared.fields[ti] = 0;
         let c_to = vec![None, None, None, Some(eve_cleared)];
         let mut w = MsgWriter::new(&h);
-        write_uncompressed(&mut w, p, 48_100, &ps, &b_to, &c_to);
+        write_uncompressed(&mut w, p, 48_100, &ps, &c_to);
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
