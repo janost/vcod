@@ -107,7 +107,14 @@ from `BG_GetSpeed` scaled by `ps.speed`-related scales, accelerate
 
 **Ground jump**, inside fn 0x316F4 at 0x31CC0:
 
-- Gated on: no `pm_flags & 0x20` timer bit, `cmd.forwardmove != 0`.
+- Gated on: `pm_flags & 0x20` clear and `cmd.forwardmove != 0`. Bit 0x20 is
+  the ADS (aim-down-sight) flag, not a timer: `PM_UpdateAimDownSightFlag`
+  (@0x37230) sets it while the ADS button is held - unconditionally when not
+  prone, behind idle checks when prone - and clears it otherwise, with a second
+  unconditional clearer at 0x3ABDC. So holding ADS blocks the ground jump; no
+  stance does. There is NO time comparison anywhere in this block:
+  `ps.jumpTime` (ps+0x64) is written only by the ladder push-off stamp
+  (@0x33964) and the steep-slope mover (@0x2F279).
 - Jump height depends on stance: standing (`(pm_flags & 3) == 0`, flag derived
   at 0x317E8) gives height 34 units, crouched/prone gives 24. Vertical velocity
   is `sqrt(2 * height * gravity)` with gravity read from `ps.gravity` (int,
@@ -128,9 +135,12 @@ called from `PM_LadderMove` and the steep-slope mover only:
 - Horizontal velocity is *reset* to 128 units along a direction vector
   (`pm_ladderPushOff` = 128.0, rodata 0x7082C, applied at 0x2ED5A):
   - on a ladder the direction is the push-off away from the ladder plane
-    (reflection-style composition of wish-forward with `-vLadderVec`,
-    0x2ECA2..0x2ED36) and vertical velocity is first scaled by 0.75
-    (0x708D0);
+    (composition @0x2EC7E..0x2ED36: dot of vLadderVec with the FULL pitched
+    pml.forward gates reflection @0x2ECAA-0x2ECD3; the reflected vector is
+    built from a flattened forward copy whose z lane is a literal zero,
+    normalized in 3D @0x2ED36, then x/y alone scale by 128 @0x2ED5A - so the
+    horizontal push is exactly 128 at any pitch) and vertical velocity is
+    first scaled by 0.75 (0x708D0);
   - off a ladder the direction is the horizontal forward from pml.
 - Clears `PMF_LADDER`, fires `EV_JUMP_*` (base 70 + surface index; hardcoded
   83 = `EV_JUMP_METAL` when leaving a ladder, 0x2ED86), adds 64 to
@@ -176,9 +186,16 @@ So ladders are brushes flagged at the material level, not entities.
   ladder plane via `ProjectPointOnPlane`, applies `pm_ladderfriction` (16.0)
   and `pm_ladderScale` (0.5) speed scaling, moves with the normal mover, and
   clamps vertical velocity against the ladder top/bottom.
-- Pressing back (+up?) pushes off with velocity -250 or -500 along the view
-  forward (constants at 0x70CD4/0x70CD8, applied around 0x33D47) - the
-  backwards dismount hop.
+- Wall glue, misread earlier as a backwards hop: while walking on a ladder
+  (gate reads `[pm+0x2C]`, the static pmove_t's walking flag @0x33CF1), the
+  velocity's component along the ladder plane is stripped and then
+  K * vLadderVec is ADDED with K selected between **-500.0** (@0x70CD4) and
+  **-250.0** (@0x70CD8) by the SIGN of the climb-rate slot
+  (`forwardmove*0.5*upscale*cmdScale + sidemove*0.2*cmdScale*right.z`, where
+  right.z is compile-time zeroed @0x339c6): positive climb rate glues at
+  -500, otherwise -250 (selector @0x33D2E-0x33D43, applied before the step
+  slide). The constants are negative - this presses you INTO the wall while
+  climbing or hanging, it never hops off.
 - Yaw lock: `AngleDelta(vectoyaw(vLadderVec), viewYaw)` clamped to ±75 degrees
   (0x4B; cvar-backed float `bg_ladder_yawcap`, .bss 0x16E9C0) is stored to
   ps+0x7C (a movement-direction field; exact client-side use unverified).
@@ -223,7 +240,7 @@ only place those values are ever produced - there is no non-ladder route to
 | 0x04 | set by the ground-jump gate; read by viewheight-lerp timing | 0x31CD5, 0x345C9 |
 | 0x10 | LADDER | set at 0x33937, cleared at 0x3377C/0x2ED7A |
 | 0x80 | affects ladder-anim speed-scale choice | 0x323D7 |
-| 0x20 | jump-inhibiting timer bit | tested at 0x31CCB |
+| 0x20 | ADS held (blocks ground jump); set by PM_UpdateAimDownSightFlag | tested at 0x31CCB |
 
 (`PMF_PRONE`, `PMF_CROUCH`, `PMF_LADDER`, `PMF_SLIDING=0x100` agree with
 CoDExtended's `shared.h`; bits 0x04/0x20/0x80/0x800/0x2000 are INFERRED from
@@ -270,14 +287,16 @@ Status after the pmove work landed on this branch:
 3. SHIPPED, with a correction to this document: step height is 10 while
    PRONE - the chooser @0x35034 tests pm_flags bit 0x1, not ladder state as
    this section previously claimed. vcod implements prone.
-4. PARTIAL - ladder detection/movement shipped: brush flag 0x8, probe reach
-   30/8, probe bbox shrunk horizontally with top lowered by the probe
-   distance, `-vLadderVec` stick-with-wall direction when airborne,
-   ProjectPointOnPlane wishdir at 0.5 scale with 16.0 friction and command
-   scaling. NOT ported: push-off jump (the PM_Jump body - `sqrt(78*g)`
-   vertical, 0.75 scale, 128-unit horizontal reset), the +/-75 degree yaw
-   lock, the 500 ms / 299 ms jumpTime timers, the backward dismount hop, and
-   climb anim events.
+4. SHIPPED - ladder detection/movement: brush flag 0x8, probe reach 30/8,
+   probe bbox shrunk horizontally with top lowered by the probe distance,
+   `-vLadderVec` stick-with-wall direction when airborne, ProjectPointOnPlane
+   wishdir at 0.5 scale with 16.0 friction and command scaling, the 300 ms
+   re-grab lock after a jump, the PM_Jump push-off body (`sqrt(78*g)` then
+   x0.75 vertical, flattened-reflection horizontal reset to exactly 128), and
+   the wall glue (negative-magnitude K*vLadderVec by climb-rate sign).
+   NOT ported: the +/-75 degree yaw lock (its ps+0x7C consumer is unverified)
+   and climb anim events (walk mode has no event consumer yet). vcod models
+   jumpTime as a dt-advanced ms counter instead of cmd.serverTime.
 5. Stands as the negative result: no mantle exists in retail 1.1. If
    ledge-climbing is wanted as a feature it would be a vcod extension with
    no retail counterpart - decide its constants, don't dig for them in the
