@@ -20,6 +20,11 @@ use vcod_common::xmodel::{self, XModel};
 /// `legsAnim`/`torsoAnim`: anim index in the low 9 bits, restart toggle in bit 512.
 const ANIM_INDEX_MASK: i32 = 511;
 
+/// Cross-fade length when a channel switches clips. Retail blends animtree
+/// nodes per-transition; one flat engine-scale value covers the visible cases
+/// (stance and movement changes).
+const ANIM_BLEND_MS: i32 = 200;
+
 /// How long an entity's anim state survives unseen. Long enough to ride out PVS
 /// churn, short enough that a player who left drops.
 const STATE_TTL_MS: i32 = 5000;
@@ -368,6 +373,10 @@ struct Channel {
     raw: i32,
     /// Render-clock time the current playback started at.
     start_ms: i32,
+    /// The clip playing before the last switch, kept for the cross-fade:
+    /// `(raw, start_ms)`. `None` once the fade is over, on a same-clip
+    /// restart (re-fires stay snappy), and before the first anim.
+    prev: Option<(i32, i32)>,
 }
 
 impl Channel {
@@ -376,6 +385,7 @@ impl Channel {
         Channel {
             raw: -1,
             start_ms: 0,
+            prev: None,
         }
     }
 
@@ -388,6 +398,8 @@ impl Channel {
         if self.raw == raw {
             return false; // same anim, same toggle: keep the phase
         }
+        let switched_clip = self.raw >= 0 && (self.raw ^ raw) & ANIM_INDEX_MASK != 0;
+        self.prev = switched_clip.then_some((self.raw, self.start_ms));
         self.raw = raw;
         self.start_ms = now_ms;
         true
@@ -977,21 +989,46 @@ pub fn build_instances(
                     let lean = lerp_field("leanf");
 
                     // Legs first: `pb_*` keys the whole body, then `pt_*`
-                    // overwrites only the bones it keys.
-                    for ch in [&st.legs, &st.torso] {
+                    // overwrites only the bones it keys. A clip switch
+                    // cross-fades from the outgoing clip: retail smooths
+                    // stance/movement changes by blending animtree nodes,
+                    // there are no transition clips in multiplayer.atr.
+                    for ch in [&mut st.legs, &mut st.torso] {
                         let Some(name) = clip_name(anims, ch.index(), pitch, 0.0) else {
                             continue;
                         };
                         let Some(clip) = load_clip(clips, fs, name) else {
                             continue;
                         };
+                        let fade = (render_time - ch.start_ms) as f32 / ANIM_BLEND_MS as f32;
+                        if fade >= 1.0 {
+                            ch.prev = None;
+                        }
+                        if let Some((praw, pstart)) = ch.prev {
+                            let pclip = clip_name(anims, praw & ANIM_INDEX_MASK, pitch, 0.0)
+                                .map(|n| (n.to_string(), load_clip(clips, fs, n)));
+                            if let Some((pname, Some(pclip))) = pclip {
+                                let pb = st
+                                    .bindings
+                                    .entry(pname)
+                                    .or_insert_with(|| assembly.skeleton.bind(&pclip));
+                                let pt = (render_time - pstart).max(0) as f32 / 1000.0;
+                                st.pose
+                                    .apply(&pclip, pb, pclip.frame_pos(pt, pclip.looping));
+                            }
+                        }
                         let binding = st
                             .bindings
                             .entry(name.to_string())
                             .or_insert_with(|| assembly.skeleton.bind(&clip));
                         let t = (render_time - ch.start_ms).max(0) as f32 / 1000.0;
+                        let w = if ch.prev.is_some() {
+                            fade.max(0.0)
+                        } else {
+                            1.0
+                        };
                         st.pose
-                            .apply(&clip, binding, clip.frame_pos(t, clip.looping));
+                            .apply_weighted(&clip, binding, clip.frame_pos(t, clip.looping), w);
                     }
 
                     // Corpses keep their death-clip pose; their aim fields are
@@ -1232,14 +1269,14 @@ mod tests {
 
     #[test]
     fn toggle_bit_restarts_channel() {
-        let mut ch = Channel {
-            raw: -1,
-            start_ms: 0,
-        };
+        let mut ch = Channel::new();
         assert!(ch.update(5, 1000)); // first sight: (re)start
+        assert_eq!(ch.prev, None); // nothing to fade from
         assert!(!ch.update(5, 1500)); // same raw: keep phase
         assert!(ch.update(5 | 512, 2000)); // toggle flip: restart
+        assert_eq!(ch.prev, None); // same clip re-trigger: no fade
         assert!(ch.update(6 | 512, 2500)); // index change: restart
+        assert_eq!(ch.prev, Some((5 | 512, 2000))); // fade from the old clip
         assert_eq!(ch.index(), 6);
         assert_eq!(ch.start_ms, 2500);
     }

@@ -177,14 +177,28 @@ impl PoseBuffer {
     /// from the bind local, not absolutes. An unkeyed channel keeps its local.
     /// docs/research/xanim-v14-format.md, "Sampling and the translation-key gotcha".
     pub fn apply(&mut self, anim: &XAnim, binding: &AnimBinding, frame_pos: f32) {
+        self.apply_weighted(anim, binding, frame_pos, 1.0);
+    }
+
+    /// `apply` cross-faded onto the current pose: the clip's keyed channels
+    /// lerp from whatever the buffer holds toward the sampled pose. Weight 1
+    /// replaces outright; the anim-switch blend ramps it 0 -> 1.
+    pub fn apply_weighted(
+        &mut self,
+        anim: &XAnim,
+        binding: &AnimBinding,
+        frame_pos: f32,
+        weight: f32,
+    ) {
         for (track, slot) in anim.tracks.iter().zip(&binding.0) {
             let Some(bi) = *slot else { continue };
             let (p, q) = track.sample(frame_pos);
             if let Some(p) = p {
-                self.locals[bi].0 = self.bind_pos[bi] + p;
+                let target = self.bind_pos[bi] + p;
+                self.locals[bi].0 = self.locals[bi].0.lerp(target, weight);
             }
             if let Some(q) = q {
-                self.locals[bi].1 = q;
+                self.locals[bi].1 = self.locals[bi].1.slerp(q, weight);
             }
         }
     }
@@ -389,6 +403,26 @@ mod tests {
         let (base, attach) = (model(hb), model(gb));
         let skel = Skeleton::build_grafted(&[(&base, None), (&attach, Some("tag_nope"))]);
         assert_eq!(skel.bone_count(), 2); // fell back to appending
+    }
+
+    /// Cross-fade support: weight 0 keeps the current pose, 1 equals `apply`,
+    /// between lerps - the stance/anim switch blend.
+    #[test]
+    fn apply_weighted_lerps_between_poses() {
+        let (h, g) = two_model_skel();
+        let skel = Skeleton::build(&[&h, &g]);
+        let from = one_track_anim("tag_weapon", Vec3::new(0.0, 0.0, 2.0), Quat::IDENTITY);
+        let to = one_track_anim("tag_weapon", Vec3::new(0.0, 0.0, 6.0), Quat::IDENTITY);
+        let mut pose = PoseBuffer::new(&skel);
+        pose.apply(&from, &skel.bind(&from), 0.0);
+        pose.apply_weighted(&to, &skel.bind(&to), 0.0, 0.5);
+        // tag_weapon local z blends 2 -> 6 at half weight: 4 (+ bind X)
+        let (p, _) = pose.bone_world(&skel, 1);
+        assert!(p.abs_diff_eq(Vec3::new(1.0, 0.0, 4.0), 1e-4), "{p}");
+
+        pose.apply_weighted(&to, &skel.bind(&to), 0.0, 1.0);
+        let (p, _) = pose.bone_world(&skel, 1);
+        assert!(p.abs_diff_eq(Vec3::new(1.0, 0.0, 6.0), 1e-4), "{p}");
     }
 
     fn two_bone_chain() -> Skeleton {

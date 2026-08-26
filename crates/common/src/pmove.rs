@@ -51,6 +51,12 @@ pub const LEAN_MAX: f32 = 28.0; // eye offset in units; roll is lean/2 degrees
 pub const LEAN_TIME_TO_MS: f32 = 280.0;
 pub const LEAN_TIME_FROM_MS: f32 = 350.0;
 
+/// Viewheight lerp times: PM_GetViewHeightLerpTime @0x345B8 (200 ms for the
+/// stand/crouch family) and the bg_duck2prone_time/bg_prone2duck_time
+/// defaults (400, docs/research/cod11-server-handshake.md).
+pub const VIEW_LERP_MS: f32 = 200.0;
+pub const VIEW_LERP_PRONE_MS: f32 = 400.0;
+
 // Water: RTCW-MP bg_pmove.c multipliers against CoD's absolute speeds.
 // Swim cap is SCALE_SWIM * SPEED_RUN; no lava/slime exists in CoD maps.
 pub const SCALE_SWIM: f32 = 0.5;
@@ -225,6 +231,11 @@ pub struct PlayerState {
     /// Fastest downward speed sampled while airborne; feeds the landing
     /// sound thresholds (PM_CrashLand's kinematic impact, approximated).
     air_speed_peak: f32,
+    /// Eased eye height; trails `stance.view_height()` after a stance change
+    /// (retail lerps the view while the bbox snaps).
+    view_height_cur: f32,
+    /// Lerp pace in units/s, fixed per transition when the stance flips.
+    view_height_speed: f32,
 }
 
 impl PlayerState {
@@ -247,6 +258,8 @@ impl PlayerState {
             bob_cycle: 0,
             ground_surface_flags: 0,
             air_speed_peak: 0.0,
+            view_height_cur: Stance::Stand.view_height(),
+            view_height_speed: 0.0,
         }
     }
 
@@ -259,7 +272,7 @@ impl PlayerState {
     }
 
     pub fn view_height(&self) -> f32 {
-        self.stance.view_height()
+        self.view_height_cur
     }
 
     /// Eye and angles with the lean offset; roll = lean/2 degrees (RTCW).
@@ -312,7 +325,7 @@ pub fn pmove(
     if ps.on_ground {
         ps.air_speed_peak = 0.0;
     }
-    update_stance(ps, input, world);
+    update_stance(ps, input, world, dt);
     update_lean(ps, input, world, dt);
     set_water_level(ps, world);
     ground_trace(ps, world);
@@ -573,7 +586,8 @@ pub fn spectator_move(
 }
 
 /// Standing back up needs headroom for the taller bbox.
-fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld) {
+fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
+    let before = ps.stance;
     let desired = if input.prone {
         Stance::Prone
     } else if input.crouch {
@@ -583,13 +597,28 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld) 
     };
     if desired.height() <= ps.stance.height() {
         ps.stance = desired;
-        return;
+    } else {
+        let maxs = Vec3::new(HALF_WIDTH, HALF_WIDTH, desired.height());
+        let t = world.box_trace(ps.origin, ps.origin, ps.mins(), maxs);
+        if !t.startsolid {
+            ps.stance = desired;
+        }
     }
-    let maxs = Vec3::new(HALF_WIDTH, HALF_WIDTH, desired.height());
-    let t = world.box_trace(ps.origin, ps.origin, ps.mins(), maxs);
-    if !t.startsolid {
-        ps.stance = desired;
+
+    // The bbox snaps; the eye eases. PM_GetViewHeightLerpTime (@0x345B8):
+    // 200 ms stand/crouch family, the 400 ms bg_duck2prone_time/
+    // bg_prone2duck_time defaults into and out of prone.
+    if ps.stance != before {
+        let ms = if ps.stance == Stance::Prone || before == Stance::Prone {
+            VIEW_LERP_PRONE_MS
+        } else {
+            VIEW_LERP_MS
+        };
+        ps.view_height_speed = (ps.stance.view_height() - ps.view_height_cur).abs() / ms * 1000.0;
     }
+    let step = ps.view_height_speed * dt;
+    let gap = ps.stance.view_height() - ps.view_height_cur;
+    ps.view_height_cur += gap.clamp(-step, step);
 }
 
 /// RTCW `bg_pmove.c` `PM_UpdateLean`. Differences: leans while moving (no
@@ -1274,6 +1303,38 @@ mod tests {
         for _ in 0..n {
             pmove(ps, input, w, 1.0 / 125.0);
         }
+    }
+
+    /// Stance changes ease the eye instead of snapping: 200 ms for the
+    /// stand/crouch family, 400 ms into/out of prone
+    /// (PM_GetViewHeightLerpTime @0x345B8; bg_duck2prone_time/
+    /// bg_prone2duck_time default 400, docs/research/cod11-server-handshake.md).
+    #[test]
+    fn viewheight_lerps_on_stance_change() {
+        let w = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 50); // settle on the ground
+        assert_eq!(ps.view_height(), VIEW_STAND);
+
+        let crouch = PmInput {
+            crouch: true,
+            ..PmInput::default()
+        };
+        tick(&mut ps, &crouch, &w, 12); // ~100 ms: partway down
+        let mid = ps.view_height();
+        assert!(mid < VIEW_STAND - 2.0 && mid > VIEW_CROUCH + 2.0, "{mid}");
+        tick(&mut ps, &crouch, &w, 14); // ~200 ms total: settled
+        assert_eq!(ps.view_height(), VIEW_CROUCH);
+
+        let prone = PmInput {
+            prone: true,
+            ..PmInput::default()
+        };
+        tick(&mut ps, &prone, &w, 25); // ~200 ms: prone runs at the 400 ms pace
+        let mid = ps.view_height();
+        assert!(mid > VIEW_PRONE + 2.0 && mid < VIEW_CROUCH, "{mid}");
+        tick(&mut ps, &prone, &w, 26); // ~400 ms total
+        assert_eq!(ps.view_height(), VIEW_PRONE);
     }
 
     #[test]
