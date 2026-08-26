@@ -2492,6 +2492,7 @@ dependencies = [
  "anyhow",
  "clap",
  "env_logger",
+ "glam",
  "log",
  "vcod-common",
 ]
