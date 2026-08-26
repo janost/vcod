@@ -115,6 +115,15 @@ Mechanics, all VERIFIED against the decompilation and asm:
 }
 ```
 
+The head-icon slot is a **same-line** read: every other token comes from
+`GetToken(allowLineBreaks = 1)` but the slot after a sound alias uses
+`GetToken(0)` (second call site in `FUN_3002cbd0`, flag 0 vs 1 elsewhere).
+An entry therefore pairs within one line - `alias` alone, or
+`alias headicon`; an `}` in that slot is pushed back (`UngetToken`) and the
+default icon applies. Two aliases on one line make the second one the
+first's head icon, not a new entry; tokens for categories and braces flow
+across lines freely.
+
 - Each `soundAlias` is registered with syscall `0xbf`, stored into array A.
   The same syscall registers known sound aliases like
   `mp_announce_g_twominutes` right next door in `FUN_30020a00`, so it is
