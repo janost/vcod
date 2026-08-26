@@ -665,9 +665,9 @@ impl Server {
             // zero out.
             "score" => {
                 let mut text = format!("b {} -9999 -9999", self.client_count());
-                for (slot, c) in self.clients.iter().enumerate() {
+                for (cs_slot, c) in self.clients.iter().enumerate() {
                     if c.is_some() {
-                        text.push_str(&format!(" {slot} 0 0 0 0"));
+                        text.push_str(&format!(" {cs_slot} 0 0 0 0"));
                     }
                 }
                 self.send_server_command(slot, &text);
@@ -718,8 +718,30 @@ impl Server {
     }
 
     /// `SV_AddServerCommand` plus an immediate message, so a drop notice
-    /// reaches the client before its slot is freed.
+    /// reaches the client before its slot is freed. A client whose acks fall
+    /// a whole ring behind has stopped consuming reliables; overwriting an
+    /// unsacked slot would desync both ends' scramble keys, so that is fatal
+    /// (`EXE_LOSTRELIABLECOMMANDS`), mirroring the reference client's own
+    /// outbound guard.
     fn send_server_command(&mut self, slot: usize, cmd: &str) {
+        let overflow = match self.clients[slot].as_ref() {
+            Some(c) => {
+                i64::from(c.netchan.reliable_sequence) - i64::from(c.reliable_ack)
+                    >= MAX_RELIABLE_COMMANDS as i64
+            }
+            None => return,
+        };
+        if overflow {
+            self.drop_client(slot, "EXE_LOSTRELIABLECOMMANDS");
+            return;
+        }
+        self.write_server_command(slot, cmd);
+    }
+
+    /// The unconditional tail of [`Self::send_server_command`]. The drop
+    /// notice goes out through here, so freeing the slot cannot recurse and
+    /// the notice is never guarded away.
+    fn write_server_command(&mut self, slot: usize, cmd: &str) {
         let Some(c) = self.clients[slot].as_mut() else {
             return;
         };
@@ -740,7 +762,7 @@ impl Server {
     /// `SV_DropClient` (cod_lnxded 0x8085cf4). No zombie state; nothing here
     /// needs the grace period.
     fn drop_client(&mut self, slot: usize, reason: &str) {
-        self.send_server_command(slot, &format!("w \"{reason}\""));
+        self.write_server_command(slot, &format!("w \"{reason}\""));
         let Some(c) = self.clients[slot].take() else {
             return;
         };
@@ -835,6 +857,9 @@ impl Server {
             while !c.pending.is_empty() {
                 let cmd = c.pending[0];
                 if processed >= MAX_CMDS_PER_TICK {
+                    // The resync keeps the newest two cmds and sets the base
+                    // as if only the last replays, so the penultimate may
+                    // double-count one frame; harmless for flight.
                     c.last_processed_st =
                         c.pending.last().unwrap().server_time.wrapping_sub(FRAME_MS);
                     c.pending.drain(..c.pending.len().saturating_sub(2));
@@ -1159,6 +1184,97 @@ mod tests {
             server_commands(&mut nc, &pkt, &huff),
             vec!["w \"EXE_LOSTRELIABLECOMMANDS\"".to_string()]
         );
+    }
+
+    /// Score requests pipelined faster than the client acks their replies
+    /// would wrap the reliable ring and overwrite unsacked slots, corrupting
+    /// the wire and the scramble key. Past 64 unacked commands the client is
+    /// dropped instead, and the slot works for a fresh connect. The whole
+    /// burst rides one message: a later message would fail the incoming
+    /// ack-range check before any op ran.
+    #[test]
+    fn score_spam_past_the_reliable_ring_drops_the_client() {
+        let now = Instant::now();
+        let huff = Huffman::new();
+        let scores = |sv: &mut Server, nc: &mut Netchan, first: i32, last: i32| {
+            let mut w = MsgWriter::new(&huff);
+            for seq in first..=last {
+                w.write_bits(CLC_CLIENT_COMMAND, 2);
+                w.write_long(seq);
+                w.write_string("score");
+            }
+            w.write_bits(CLC_EOF, 2);
+            sv.handle_packet(
+                addr(5),
+                &nc.build_out(
+                    i32::from(sv.server_id),
+                    nc.incoming_sequence as i32,
+                    0,
+                    &w.into_ops(),
+                    &huff,
+                )
+                .unwrap(),
+                now,
+            );
+        };
+
+        // Exactly the ring's worth of unacked commands is not yet fatal.
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = active(&mut sv, now);
+        sv.take_outgoing();
+        // Each reply is scrambled with the last client command string, so the
+        // receiving netchan needs its own sent-command ring filled (reply 1
+        // went out before any command was stored and stays undecodable here).
+        for s in 2..=70 {
+            nc.reliable[(s as usize) & 63] = "score".to_string();
+        }
+        scores(&mut sv, &mut nc, 1, 64);
+        assert_eq!(sv.client_count(), 1, "a full ring is not yet fatal");
+        assert!(
+            !sv.take_outgoing().is_empty(),
+            "the ring-full boundary must still answer"
+        );
+
+        // One pipelined request too many drops the client, notice last.
+        let mut sv = Server::new(cfg(), now);
+        let mut nc = active(&mut sv, now);
+        sv.take_outgoing();
+        for s in 2..=70 {
+            nc.reliable[(s as usize) & 63] = "score".to_string();
+        }
+        scores(&mut sv, &mut nc, 1, 65);
+        assert_eq!(sv.client_count(), 0);
+        let mut notices = Vec::new();
+        for (_, pkt) in sv.take_outgoing() {
+            let res = nc.process_in(&pkt, &huff);
+            if let Ok(Some(msg)) = res {
+                let mut r = MsgReader::new(&msg[4..], &huff);
+                while !r.is_overflowed() {
+                    match r.read_byte() {
+                        msg::SVC_SERVER_COMMAND => {
+                            r.read_long();
+                            notices.push(r.read_big_string());
+                        }
+                        _ => break,
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "DBG notices={} first={:?} last3={:?}",
+            notices.len(),
+            notices.first(),
+            notices.iter().rev().take(3).rev().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            notices.last().map(String::as_str),
+            Some("w \"EXE_LOSTRELIABLECOMMANDS\"")
+        );
+
+        // The freed slot takes a fresh client.
+        let t2 = now + RECONNECT_LIMIT + Duration::from_millis(100);
+        connected(&mut sv, addr(5), t2);
+        assert_eq!(sv.client_count(), 1);
     }
 
     #[test]

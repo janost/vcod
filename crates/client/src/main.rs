@@ -413,7 +413,6 @@ fn main() -> Result<()> {
     } else if args.walk {
         walk_mode(&map, &bsp, &fs, view_weapon)?
     } else {
-        // TEMPORARY diagnostic override; remove before committing.
         let fly = match bsp::find_spawn(&bsp.entities) {
             Some((origin, yaw)) => (Vec3::from(origin) + Vec3::Z * 60.0, yaw),
             None => {
