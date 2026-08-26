@@ -11,6 +11,10 @@ use vcod_common::bsp::{self, Bsp, DrawVert};
 use vcod_common::mesh::{self, Batch, IndexRange};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::props;
+use vcod_common::shader::{
+    bundle_affine, bundle_turb, wave_value, AlphaFunc, AlphaGen, ImageRef, RgbGen, Shader,
+    ShaderLib,
+};
 use vcod_common::vis::{Frustum, Visible, WorldVis};
 use vcod_common::xmodel::{self, VmVert};
 
@@ -251,6 +255,8 @@ pub struct Frame {
     pub view_proj: glam::Mat4,
     /// Camera position, the cell the visibility walk starts from.
     pub eye: glam::Vec3,
+    /// Seconds since start; drives tcMod and wave animation in the stage shaders.
+    pub time: f32,
     pub cull: CullMode,
     /// Debug-HUD lines, top line first; empty when the overlay is off.
     pub hud_lines: Vec<String>,
@@ -330,6 +336,155 @@ mod fx_lights_uniform_tests {
     }
 }
 
+// ---- shader-script stage machinery (consumed by Tasks 7-8) ----
+
+pub const STAGE_FLAG_VERTEX_RGB: u32 = 1;
+pub const STAGE_FLAG_VERTEX_ALPHA: u32 = 2;
+pub const STAGE_FLAG_BUNDLE1_LIGHTMAP: u32 = 4;
+pub const STAGE_FLAG_BUNDLE0_LIGHTMAP: u32 = 8;
+// alphaFunc encoding in bits 16..32: 0 = none, GT0 = 16, LT128 = 32, GE128 = both
+pub const STAGE_FLAG_ALPHAFUNC_GT0: u32 = 16;
+pub const STAGE_FLAG_ALPHAFUNC_LT128: u32 = 32;
+pub const STAGE_FLAG_ALPHAFUNC_GE128: u32 = 48;
+pub const STAGE_FLAG_BUNDLE0_VECTOR: u32 = 64;
+pub const STAGE_FLAG_BUNDLE1_VECTOR: u32 = 128;
+
+/// Per-stage draw parameters, one dynamic-offset slot per stage batch. WGSL
+/// mirror is `StageParams` in shader.wgsl; byte offsets:
+/// uv0 @0 and uv1 @24 as mat3x2 (column-major, matching [`bundle_affine`]),
+/// turb01 @48, tint @64, flags @80, pad @84..96, then the two tcGen vector
+/// bases padded to vec4: vec0_s @96, vec0_t @112, vec1_s @128, vec1_t @144.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct StageParams {
+    pub(crate) uv0: [f32; 6],
+    pub(crate) uv1: [f32; 6],
+    pub(crate) turb01: [f32; 4],
+    pub(crate) tint: [f32; 4],
+    pub(crate) flags: u32,
+    pub(crate) _pad: [u32; 3],
+    pub(crate) vec0_s: [f32; 4],
+    pub(crate) vec0_t: [f32; 4],
+    pub(crate) vec1_s: [f32; 4],
+    pub(crate) vec1_t: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<StageParams>() == 160);
+const STAGE_PARAMS_SIZE: u64 = std::mem::size_of::<StageParams>() as u64;
+
+const UV_AFFINE_IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+/// Evaluates one stage's draw parameters at time `t`: bundle affines/turb,
+/// tint from rgbGen/alphaGen, and the flag bits the WGSL reads. `None` when
+/// `idx` is out of range or the stage has no bundles.
+fn stage_params(shader: &Shader, idx: usize, t: f32) -> Option<StageParams> {
+    let st = shader.stages.get(idx)?;
+    let b0 = st.bundles.first()?;
+    let b1 = st.bundles.get(1);
+
+    let mut flags = match &st.alpha_func {
+        None => 0,
+        Some(AlphaFunc::Gt0) => STAGE_FLAG_ALPHAFUNC_GT0,
+        Some(AlphaFunc::Lt128) => STAGE_FLAG_ALPHAFUNC_LT128,
+        Some(AlphaFunc::Ge128) => STAGE_FLAG_ALPHAFUNC_GE128,
+    };
+    if b0.image == ImageRef::Lightmap {
+        flags |= STAGE_FLAG_BUNDLE0_LIGHTMAP;
+    }
+    if b1.is_some_and(|b| b.image == ImageRef::Lightmap) {
+        flags |= STAGE_FLAG_BUNDLE1_LIGHTMAP;
+    }
+
+    let mut rgb = [1.0f32; 3];
+    match &st.rgb_gen {
+        RgbGen::Vertex | RgbGen::ExactVertex => flags |= STAGE_FLAG_VERTEX_RGB,
+        RgbGen::Const(c) | RgbGen::ConstLighting(c) => rgb = *c,
+        RgbGen::Wave(w) => {
+            let v = wave_value(w, t);
+            rgb = [v, v, v];
+        }
+        RgbGen::Identity | RgbGen::IdentityLighting => {}
+    }
+    let alpha = match &st.alpha_gen {
+        AlphaGen::Vertex => {
+            flags |= STAGE_FLAG_VERTEX_ALPHA;
+            1.0
+        }
+        AlphaGen::Const(v) => *v,
+        AlphaGen::Wave(w) => wave_value(w, t),
+        AlphaGen::Identity => 1.0,
+    };
+
+    let mut p = StageParams {
+        uv0: bundle_affine(&b0.tcmods, t),
+        uv1: b1.map_or(UV_AFFINE_IDENTITY, |b| bundle_affine(&b.tcmods, t)),
+        // [amp0, now0, amp1, now1]; the VS adds amp*sin(worldpos/1024 + now)
+        turb01: {
+            let tb0 = bundle_turb(&b0.tcmods, t);
+            let tb1 = b1.map_or([0.0; 4], |b| bundle_turb(&b.tcmods, t));
+            [tb0[0], tb0[1], tb1[0], tb1[1]]
+        },
+        tint: [rgb[0], rgb[1], rgb[2], alpha],
+        flags,
+        _pad: [0; 3],
+        vec0_s: [0.0; 4],
+        vec0_t: [0.0; 4],
+        vec1_s: [0.0; 4],
+        vec1_t: [0.0; 4],
+    };
+    if let Some(v) = b0.vector.as_ref() {
+        flags |= STAGE_FLAG_BUNDLE0_VECTOR;
+        p.vec0_s = [v[0], v[1], v[2], 0.0];
+        p.vec0_t = [v[3], v[4], v[5], 0.0];
+    }
+    if let Some(v) = b1.and_then(|b| b.vector.as_ref()) {
+        flags |= STAGE_FLAG_BUNDLE1_VECTOR;
+        p.vec1_s = [v[0], v[1], v[2], 0.0];
+        p.vec1_t = [v[3], v[4], v[5], 0.0];
+    }
+    p.flags = flags;
+    Some(p)
+}
+
+/// One animMap bundle resolved to per-frame bind groups. Task 7 populates
+/// these during batch expansion and picks a frame with `bind_group(t)`.
+struct AnimFrames {
+    fps: f32,
+    groups: Vec<wgpu::BindGroup>,
+}
+
+impl AnimFrames {
+    #[allow(dead_code)] // Task 7 consumes
+    fn bind_group(&self, t: f32) -> &wgpu::BindGroup {
+        &self.groups[anim_frame_index(self.fps, self.groups.len(), t)]
+    }
+}
+
+/// floor(t * fps) % len, clamped to a valid frame; static or empty anims stick at 0.
+fn anim_frame_index(fps: f32, len: usize, t: f32) -> usize {
+    if fps <= 0.0 || len == 0 {
+        return 0;
+    }
+    (t.max(0.0) * fps) as usize % len
+}
+
+/// Which prebuilt stage pipeline a StageBatch draws with; Task 7 selects via
+/// `ClassedStage`.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum StageVariant {
+    /// Unblended: depth write on, alphafunc discard in fs_stage.
+    Opaque,
+    /// SrcAlpha/OneMinusSrcAlpha, no depth write.
+    Blend,
+    /// Blend that kept depth write (explicit depthWrite keyword).
+    BlendDepthWrite,
+    /// dst factor exactly GL_ONE, drawn One/One.
+    AdditiveFixed,
+    /// Any other dst-One pair, drawn SrcAlpha/One so source alpha carries.
+    AdditiveFaded,
+}
+const STAGE_VARIANTS: usize = 5;
+
 /// World-space fx quads. Two pipelines that differ only in blend state:
 /// straight alpha, and `GL_ONE GL_ONE` for [`assets::Shaders::is_additive`]
 /// materials. One draw call per contiguous same-shader run.
@@ -401,6 +556,17 @@ struct WorldGpu {
     /// Static per-batch draw descriptors; `draws` is rebuilt each frame from them.
     batch_draws: Vec<DrawCall>,
     draws: Vec<DrawRange>,
+    /// Per-stage params UBO (one dynamic-offset slot per stage batch) and its
+    /// group(2) bind group. Task 7 assigns slots and streams animated stages.
+    #[allow(dead_code)] // Task 7 consumes
+    stage_params_buf: wgpu::Buffer,
+    #[allow(dead_code)] // Task 7 consumes
+    stage_params_bg: wgpu::BindGroup,
+    #[allow(dead_code)] // Task 7 consumes
+    stage_params_slots: usize,
+    /// StageParams size rounded up to `min_uniform_buffer_offset_alignment`.
+    #[allow(dead_code)] // Task 7 consumes
+    stage_params_stride: u64,
     vis: WorldVis,
     gathered: Vec<u32>,
     gather_scratch: Vec<Vec<IndexRange>>,
@@ -423,11 +589,15 @@ pub struct Renderer {
     prop_pipeline: wgpu::RenderPipeline,
     layer_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
+    /// `[variant][two_sided]`; built at startup so shader.wgsl validates even mapless.
+    #[allow(dead_code)] // Task 7 selects these per StageBatch
+    stage_pipelines: [[wgpu::RenderPipeline; 2]; STAGE_VARIANTS],
     camera_buf: wgpu::Buffer,
     camera_bg: wgpu::BindGroup,
     fx_lights_buf: wgpu::Buffer,
     /// Device-stage state `load_world` builds map bind groups from.
     material_layout: wgpu::BindGroupLayout,
+    stage_layout: wgpu::BindGroupLayout,
     diffuse_sampler: wgpu::Sampler,
     lightmap_sampler: wgpu::Sampler,
     white_view: wgpu::TextureView,
@@ -441,6 +611,8 @@ pub struct Renderer {
     /// Kept past map load so later inline submodels resolve `textures/...`
     /// names the same way the world did.
     shaders: assets::Shaders,
+    /// Parsed shader scripts; Task 7 classifies map materials against it.
+    shader_lib: ShaderLib,
     hud_quad_cap_warned: bool,
 }
 
@@ -480,7 +652,12 @@ impl Renderer {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("vcod device"),
             required_features: wgpu::Features::TEXTURE_COMPRESSION_BC,
-            required_limits: wgpu::Limits::default(),
+            // One stage-params UBO must stay reachable through dynamic offsets,
+            // past the default 64 KiB uniform binding window.
+            required_limits: wgpu::Limits {
+                max_uniform_buffer_binding_size: adapter.limits().max_uniform_buffer_binding_size,
+                ..Default::default()
+            },
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::Performance,
             trace: wgpu::Trace::Off,
@@ -561,10 +738,28 @@ impl Renderer {
                 sampler_entry(3),
             ],
         });
+        // Group 2 of the stage pipelines: the per-stage params slot plus
+        // bundle 1's image (white is bound when bundle 1 has none).
+        let stage_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("stage params layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(STAGE_PARAMS_SIZE),
+                    },
+                    count: None,
+                },
+                texture_entry(1),
+            ],
+        });
 
         let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera uniform"),
-            size: 64,
+            size: 80,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -628,7 +823,19 @@ impl Renderer {
             bind_group_layouts: &[Some(&camera_layout), Some(&material_layout)],
             immediate_size: 0,
         });
+        let stage_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("stage pipeline layout"),
+                bind_group_layouts: &[
+                    Some(&camera_layout),
+                    Some(&material_layout),
+                    Some(&stage_layout),
+                ],
+                immediate_size: 0,
+            });
         let make_pipeline = |label: &str,
+                             layout: &wgpu::PipelineLayout,
+                             vs_entry: &str,
                              bias: wgpu::DepthBiasState,
                              fs_entry: &str,
                              alpha_to_coverage: bool,
@@ -637,10 +844,10 @@ impl Renderer {
                              cull: Option<wgpu::Face>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&pipeline_layout),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: Some("vs_main"),
+                    entry_point: Some(vs_entry),
                     compilation_options: Default::default(),
                     buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: 44,
@@ -697,6 +904,8 @@ impl Renderer {
         let cull_back = Some(wgpu::Face::Back);
         let pipeline = make_pipeline(
             "map pipeline",
+            &pipeline_layout,
+            "vs_main",
             Default::default(),
             "fs_main",
             false,
@@ -711,6 +920,8 @@ impl Renderer {
         // (shadow_tree_*, shadow_crate) are coplanar decals and z-fight here.
         let prop_pipeline = make_pipeline(
             "prop pipeline",
+            &pipeline_layout,
+            "vs_main",
             Default::default(),
             "fs_main",
             false,
@@ -722,6 +933,8 @@ impl Renderer {
         // depth write: the base wrote depth, and stacked layers must all draw.
         let layer_pipeline = make_pipeline(
             "layer pipeline",
+            &pipeline_layout,
+            "vs_main",
             bias,
             "fs_layer",
             false,
@@ -733,6 +946,8 @@ impl Renderer {
         // offset (Q3 defaults -1/-2); their alpha drives MSAA coverage.
         let overlay_pipeline = make_pipeline(
             "overlay pipeline",
+            &pipeline_layout,
+            "vs_main",
             bias,
             "fs_overlay",
             true,
@@ -740,6 +955,64 @@ impl Renderer {
             true,
             cull_back,
         );
+        // One twin pair per variant, [back-culled, two-sided], picked per
+        // StageBatch by ClassedStage in Task 7.
+        let one_one = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let srcalpha_one = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let variant_states = [
+            (StageVariant::Opaque, None, true),
+            (
+                StageVariant::Blend,
+                Some(wgpu::BlendState::ALPHA_BLENDING),
+                false,
+            ),
+            (
+                StageVariant::BlendDepthWrite,
+                Some(wgpu::BlendState::ALPHA_BLENDING),
+                true,
+            ),
+            (StageVariant::AdditiveFixed, Some(one_one), false),
+            (StageVariant::AdditiveFaded, Some(srcalpha_one), false),
+        ];
+        let stage_pipelines: [[wgpu::RenderPipeline; 2]; STAGE_VARIANTS] =
+            std::array::from_fn(|v| {
+                let (variant, blend, depth_write) = variant_states[v];
+                [false, true].map(|two_sided| {
+                    make_pipeline(
+                        &format!("stage {variant:?} twosided={two_sided}"),
+                        &stage_pipeline_layout,
+                        "vs_stage",
+                        Default::default(),
+                        "fs_stage",
+                        false,
+                        blend,
+                        depth_write,
+                        if two_sided { None } else { cull_back },
+                    )
+                })
+            });
         let vm_pass = create_vm_pass(&device, format);
         let dynamic = create_dynamic_pass(&device, format, &camera_layout, &vm_pass.skin_layout);
         let fx = create_fx_pass(&device, format, &camera_layout, &vm_pass.skin_layout);
@@ -757,10 +1030,12 @@ impl Renderer {
             prop_pipeline,
             layer_pipeline,
             overlay_pipeline,
+            stage_pipelines,
             camera_buf,
             camera_bg,
             fx_lights_buf,
             material_layout,
+            stage_layout,
             diffuse_sampler,
             lightmap_sampler,
             white_view,
@@ -773,6 +1048,7 @@ impl Renderer {
             hud_pass,
             hud_quad_cap_warned: false,
             shaders,
+            shader_lib: ShaderLib::load(fs),
         })
     }
 
@@ -970,6 +1246,58 @@ impl Renderer {
             lightmap_views.len()
         );
 
+        // One dynamic-offset slot per authored stage of every map material
+        // that resolves in the shader lib (upper bound of Task 7's stage
+        // batches; legacy fast-path batches use no slots).
+        let mut stage_slots: Vec<(&Shader, usize)> = Vec::new();
+        for mat in &bsp.materials {
+            if let Some(sh) = self.shader_lib.get(&mat.name) {
+                stage_slots.extend((0..sh.stages.len()).map(|idx| (sh, idx)));
+            }
+        }
+        let align = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let stage_params_stride = STAGE_PARAMS_SIZE.div_ceil(align) * align;
+        let stage_params_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("stage params"),
+            size: (stage_slots.len() as u64 * stage_params_stride).max(stage_params_stride),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let stage_params_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("stage params"),
+            layout: &self.stage_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &stage_params_buf,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(STAGE_PARAMS_SIZE),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(white_view),
+                },
+            ],
+        });
+        // Provisional fill at t = 0 so every slot starts valid (static stages
+        // keep these values); Task 7 owns final slot assignment and streams
+        // animated stages per frame.
+        for (i, (sh, idx)) in stage_slots.iter().enumerate() {
+            if let Some(p) = stage_params(sh, *idx, 0.0) {
+                queue.write_buffer(
+                    &stage_params_buf,
+                    i as u64 * stage_params_stride,
+                    bytemuck::bytes_of(&p),
+                );
+            }
+        }
+        println!(
+            "stage params: {} slots x {STAGE_PARAMS_SIZE} B (stride {stage_params_stride})",
+            stage_slots.len()
+        );
+
         self.world = Some(WorldGpu {
             vertex_buf,
             index_buf,
@@ -980,6 +1308,10 @@ impl Renderer {
             prop_bounds: props.bounds,
             batch_draws,
             draws: Vec::new(),
+            stage_params_buf,
+            stage_params_bg,
+            stage_params_slots: stage_slots.len(),
+            stage_params_stride,
             vis: WorldVis::build(bsp),
             gathered: Vec::new(),
             gather_scratch: Vec::new(),
@@ -1247,6 +1579,30 @@ impl Renderer {
         &self.vis_counts
     }
 
+    /// Writes one stage's evaluated params into UBO slot `index`. Task 7
+    /// calls this per animated stage each frame; static stages keep their
+    /// load-time fill.
+    #[allow(dead_code)] // Task 7 consumes
+    fn write_stage_params(&self, index: usize, shader: &Shader, stage_idx: usize, t: f32) {
+        let Some(world) = &self.world else {
+            return;
+        };
+        let Some(p) = stage_params(shader, stage_idx, t) else {
+            return;
+        };
+        self.queue.write_buffer(
+            &world.stage_params_buf,
+            index as u64 * world.stage_params_stride,
+            bytemuck::bytes_of(&p),
+        );
+    }
+
+    /// `[variant][two_sided]`.
+    #[allow(dead_code)] // Task 7 selects these per StageBatch
+    fn stage_pipeline(&self, variant: StageVariant, two_sided: bool) -> &wgpu::RenderPipeline {
+        &self.stage_pipelines[variant as usize][usize::from(two_sided)]
+    }
+
     pub fn aspect(&self) -> f32 {
         self.config.width as f32 / self.config.height.max(1) as f32
     }
@@ -1274,11 +1630,12 @@ impl Renderer {
     /// `vm` is `None` to draw the world only. Skips the frame if no
     /// swapchain texture can be acquired.
     pub fn render(&mut self, frame: Frame, vm: Option<VmDraw>) {
-        self.queue.write_buffer(
-            &self.camera_buf,
-            0,
-            bytemuck::cast_slice(&frame.view_proj.to_cols_array()),
-        );
+        // `proj` (64) + `time_pad` (16), matching Camera in the WGSL modules.
+        let mut camera = [0.0f32; 20];
+        camera[..16].copy_from_slice(&frame.view_proj.to_cols_array());
+        camera[16] = frame.time;
+        self.queue
+            .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(&camera));
         let t0 = std::time::Instant::now();
         let frustum = Frustum::from_view_proj(frame.view_proj);
         if let Some(world) = &mut self.world {
@@ -2666,6 +3023,7 @@ fn is_fallback(img: &Image, fallback_px: &[u8]) -> bool {
 mod tests {
     use super::*;
     use glam::Mat4;
+    use vcod_common::shader::{BlendFactor, Bundle, Stage, TcMod, Wave, WaveForm};
 
     #[test]
     fn gather_copies_visible_ranges_batch_by_batch() {
@@ -2857,5 +3215,261 @@ mod tests {
         let (raw, mats) = pack_instances(&[(0, id, Some(big.as_slice()))]);
         assert_eq!(raw[0].bone_base, MAX_INSTANCE_BONES as u32);
         assert_eq!(mats.len(), 2 * MAX_INSTANCE_BONES); // identity block + truncated set
+    }
+
+    // ---- StageParams ----
+
+    #[test]
+    fn stage_params_is_std140_shaped_and_pod_roundtrips() {
+        assert_eq!(std::mem::size_of::<StageParams>(), 160);
+        let p = StageParams {
+            uv0: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            uv1: [7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            turb01: [13.0, 14.0, 15.0, 16.0],
+            tint: [17.0, 18.0, 19.0, 20.0],
+            flags: STAGE_FLAG_VERTEX_RGB | STAGE_FLAG_VERTEX_ALPHA,
+            _pad: [0; 3],
+            vec0_s: [1.0, 0.0, 0.0, 0.0],
+            vec0_t: [0.0, 1.0, 0.0, 0.0],
+            vec1_s: [0.0, 0.0, 1.0, 0.0],
+            vec1_t: [0.0, 0.0, 0.0, 1.0],
+        };
+        // slot-shaped write/read, like the UBO dynamic-offset path
+        let mut slot = [0u8; std::mem::size_of::<StageParams>()];
+        slot[..bytemuck::bytes_of(&p).len()].copy_from_slice(bytemuck::bytes_of(&p));
+        let q: &StageParams = bytemuck::try_from_bytes(&slot).unwrap();
+        assert_eq!(*q, p);
+    }
+
+    #[test]
+    fn stage_params_encodes_const_gens_lightmap_and_alphafunc() {
+        let sh = Shader {
+            name: "test/mat".into(),
+            stages: vec![Stage {
+                bundles: vec![
+                    Bundle {
+                        image: ImageRef::Path("a".into()),
+                        anim: None,
+                        clamp: false,
+                        tcmods: vec![TcMod::Scroll(0.25, 0.0)],
+                        vector: None,
+                    },
+                    Bundle {
+                        image: ImageRef::Lightmap,
+                        anim: None,
+                        clamp: false,
+                        tcmods: vec![],
+                        vector: None,
+                    },
+                ],
+                blend: Some((BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha)),
+                depth_write: None,
+                alpha_func: Some(AlphaFunc::Ge128),
+                rgb_gen: RgbGen::Const([0.5, 0.25, 0.125]),
+                alpha_gen: AlphaGen::Const(0.75),
+            }],
+            ..Default::default()
+        };
+        let p = stage_params(&sh, 0, 2.0).unwrap();
+        assert_eq!(
+            p.flags,
+            STAGE_FLAG_BUNDLE1_LIGHTMAP | STAGE_FLAG_ALPHAFUNC_GE128
+        );
+        assert_eq!(p.uv0, bundle_affine(&[TcMod::Scroll(0.25, 0.0)], 2.0));
+        assert_eq!(p.uv1, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(p.tint, [0.5, 0.25, 0.125, 0.75]);
+        assert_eq!(p.turb01, [0.0; 4]);
+    }
+
+    #[test]
+    fn stage_params_vector_bundle_sets_flag_and_carries_basis() {
+        let sh = Shader {
+            name: "test/vec".into(),
+            stages: vec![Stage {
+                bundles: vec![Bundle {
+                    image: ImageRef::White,
+                    anim: None,
+                    clamp: false,
+                    tcmods: vec![],
+                    vector: Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                }],
+                blend: None,
+                depth_write: None,
+                alpha_func: None,
+                rgb_gen: RgbGen::Vertex,
+                alpha_gen: AlphaGen::Vertex,
+            }],
+            ..Default::default()
+        };
+        let p = stage_params(&sh, 0, 0.0).unwrap();
+        assert_eq!(
+            p.flags,
+            STAGE_FLAG_BUNDLE0_VECTOR | STAGE_FLAG_VERTEX_RGB | STAGE_FLAG_VERTEX_ALPHA
+        );
+        assert_eq!(p.vec0_s, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(p.vec0_t, [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(p.vec1_s, [0.0; 4]);
+        // vertex gens leave tint white; the flags carry the instruction
+        assert_eq!(p.tint, [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn stage_params_wave_gens_evaluate_at_time() {
+        let rgb_wave = Wave {
+            form: WaveForm::Sin,
+            base: 1.0,
+            amp: 0.5,
+            phase: 0.25,
+            freq: 0.0,
+        };
+        let a_wave = Wave {
+            form: WaveForm::Sawtooth,
+            base: 0.0,
+            amp: 1.0,
+            phase: 0.25,
+            freq: 0.0,
+        };
+        let sh = Shader {
+            name: "test/wave".into(),
+            stages: vec![Stage {
+                bundles: vec![Bundle {
+                    image: ImageRef::Path("a".into()),
+                    anim: None,
+                    clamp: false,
+                    tcmods: vec![],
+                    vector: None,
+                }],
+                blend: None,
+                depth_write: None,
+                alpha_func: None,
+                rgb_gen: RgbGen::Wave(rgb_wave.clone()),
+                alpha_gen: AlphaGen::Wave(a_wave.clone()),
+            }],
+            ..Default::default()
+        };
+        let p = stage_params(&sh, 0, 123.0).unwrap();
+        let rv = vcod_common::shader::wave_value(&rgb_wave, 123.0);
+        let av = vcod_common::shader::wave_value(&a_wave, 123.0);
+        assert!(
+            (p.tint[0] - rv).abs() < 1e-6 && (rv - 1.5).abs() < 1e-3,
+            "{p:?}"
+        );
+        assert_eq!(p.tint[1], rv);
+        assert_eq!(p.tint[2], rv);
+        assert!((p.tint[3] - av).abs() < 1e-6 && (av - 0.25).abs() < 1e-6);
+        assert_eq!(p.flags, 0);
+    }
+
+    #[test]
+    fn stage_params_identity_gens_stay_white_without_flags() {
+        for rgb in [
+            RgbGen::Identity,
+            RgbGen::IdentityLighting,
+            RgbGen::ExactVertex,
+        ] {
+            let sh = Shader {
+                name: "test/id".into(),
+                stages: vec![Stage {
+                    bundles: vec![Bundle {
+                        image: ImageRef::Path("a".into()),
+                        anim: None,
+                        clamp: false,
+                        tcmods: vec![],
+                        vector: None,
+                    }],
+                    blend: None,
+                    depth_write: None,
+                    alpha_func: None,
+                    rgb_gen: rgb.clone(),
+                    alpha_gen: AlphaGen::Identity,
+                }],
+                ..Default::default()
+            };
+            let p = stage_params(&sh, 0, 9.0).unwrap();
+            assert_eq!(p.tint, [1.0, 1.0, 1.0, 1.0], "{rgb:?}");
+            // ExactVertex routes through the vertex-colour flag like Vertex
+            assert_eq!(
+                p.flags,
+                u32::from(rgb == RgbGen::ExactVertex) * STAGE_FLAG_VERTEX_RGB
+            );
+        }
+    }
+
+    #[test]
+    fn stage_params_single_bundle_leaves_slot_one_neutral() {
+        let sh = Shader {
+            name: "test/one".into(),
+            stages: vec![Stage {
+                bundles: vec![Bundle {
+                    image: ImageRef::Path("a".into()),
+                    anim: None,
+                    clamp: false,
+                    tcmods: vec![TcMod::Scale(2.0, 3.0)],
+                    vector: None,
+                }],
+                blend: None,
+                depth_write: None,
+                alpha_func: Some(AlphaFunc::Lt128),
+                rgb_gen: RgbGen::Identity,
+                alpha_gen: AlphaGen::Identity,
+            }],
+            ..Default::default()
+        };
+        let p = stage_params(&sh, 0, 1.0).unwrap();
+        assert_eq!(p.flags, STAGE_FLAG_ALPHAFUNC_LT128);
+        assert_eq!(p.uv1, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(p.turb01[2..], [0.0, 0.0]);
+        assert_eq!(p.vec1_s, [0.0; 4]);
+    }
+
+    #[test]
+    fn stage_params_turb_rides_separate_from_affine() {
+        let tcmods = vec![
+            TcMod::Scroll(0.5, 0.5),
+            TcMod::Turb {
+                amp: 3.0,
+                phase: 0.1,
+                freq: 0.5,
+            },
+        ];
+        let sh = Shader {
+            name: "test/turb".into(),
+            stages: vec![Stage {
+                bundles: vec![Bundle {
+                    image: ImageRef::Path("a".into()),
+                    anim: None,
+                    clamp: false,
+                    tcmods: tcmods.clone(),
+                    vector: None,
+                }],
+                blend: None,
+                depth_write: None,
+                alpha_func: None,
+                rgb_gen: RgbGen::Identity,
+                alpha_gen: AlphaGen::Identity,
+            }],
+            ..Default::default()
+        };
+        let p = stage_params(&sh, 0, 4.0).unwrap();
+        assert_eq!(p.uv0, bundle_affine(&tcmods, 4.0));
+        assert_eq!(p.turb01, [3.0, 0.1 + 0.5 * 4.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn stage_params_out_of_range_stage_is_none() {
+        let sh = Shader::default();
+        assert_eq!(stage_params(&sh, 0, 0.0), None);
+    }
+
+    #[test]
+    fn anim_frame_index_floors_wraps_and_clamps() {
+        assert_eq!(anim_frame_index(5.0, 3, 0.0), 0);
+        assert_eq!(anim_frame_index(5.0, 3, 0.21), 1);
+        assert_eq!(anim_frame_index(5.0, 3, 0.999), 1); // floor(4.995)=4, 4%3
+        assert_eq!(anim_frame_index(5.0, 3, 10.0), 2); // 50 % 3
+        assert_eq!(anim_frame_index(0.0, 3, 5.0), 0);
+        assert_eq!(anim_frame_index(-1.0, 3, 5.0), 0);
+        assert_eq!(anim_frame_index(5.0, 0, 5.0), 0);
+        assert_eq!(anim_frame_index(5.0, 3, -1.0), 0);
     }
 }

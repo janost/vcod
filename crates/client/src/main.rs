@@ -652,6 +652,7 @@ fn loading_frame(
             aspect,
         ),
         eye: Vec3::ZERO,
+        time: now,
         cull,
         hud_lines: vec![text],
     }
@@ -1075,6 +1076,7 @@ impl ApplicationHandler for App {
                             renderer::Frame {
                                 view_proj: cam.view_proj(aspect),
                                 eye: cam.pos,
+                                time,
                                 cull,
                                 hud_lines: Vec::new(),
                             },
@@ -1475,6 +1477,7 @@ impl ApplicationHandler for App {
                                     renderer::Frame {
                                         view_proj: cam.view_proj(aspect),
                                         eye: cam.pos,
+                                        time,
                                         cull,
                                         hud_lines: Vec::new(),
                                     }
@@ -1593,6 +1596,7 @@ impl ApplicationHandler for App {
                                     v.eye, v.yaw, v.pitch, v.roll, fov, aspect,
                                 ),
                                 eye: v.eye,
+                                time,
                                 cull,
                                 hud_lines: Vec::new(),
                             },
