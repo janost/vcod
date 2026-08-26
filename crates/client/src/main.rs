@@ -241,7 +241,7 @@ fn hud_lines(
     lines.push(format!("draw: world {draws}  inst {insts}  bones {bones}"));
     let vc = r.vis_counts();
     lines.push(format!(
-        "vis: {} cells {}/{} soups {}/{} tris {}/{} props {}/{}  {:.2}ms",
+        "vis: {} cells {}/{} soups {}/{} tris {}/{} props {}/{} occ {} {}  {:.2}ms",
         vc.mode.map_or("-".to_string(), |m| m.to_string()),
         vc.cells.0,
         vc.cells.1,
@@ -251,6 +251,8 @@ fn hud_lines(
         vc.tris.1,
         vc.props.0,
         vc.props.1,
+        vc.occluders,
+        vc.portals_occluded,
         vc.gather_ms
     ));
     let (hud_quads, hud_ms, hud_unknown) = hud_counts;

@@ -181,7 +181,7 @@ Decoded from the `CoDMP.exe` 1.1 loaders (`FUN_004dcd00` @ `0x4dcd00` reads lump
 
 - **Lump 12**, occluder headers (20 bytes, one per occluder): `u32 first_plane; u16 num_planes; u16 num_edges; u32 first_edge; u32 first_vert; u16 vert_count; u16 pad`. The `first_*` fields index lumps 13, 14 and 11 respectively. mp_pavlov: 9 records, plane/edge sums 54 / 108, matching lumps 13 and 14. The 8-vert slabs all index low lump-11 offsets.
 - **Lump 13**, `u32` indices into lump 2 (the brush planes). Resolved at load into runtime planes `{n, d - eps}` with precomputed box-sign bytes and a per-frame front/back flag.
-- **Lump 14**, edges, 4 bytes `{u8 plane0, plane1, vert0, vert1}`, indices relative to one occluder's planes and vertices: the two planes the edge shares (adjacency) and the two verts it spans.
+- **Lump 14**, edges, 4 bytes `{u8 plane0, plane1, vert0, vert1}`: the plane indices are relative to one occluder's own plane slice (adjacency). The vertex bytes are the occluder's absolute lump-11 slot **taken modulo 256** - on mp_depot, whose occluders sit past vertex 256 in the pool, the byte reads `first_vert + local - 256`; recover `local ≡ B - first_vert (mod 256)`, unique because `vert_count` stays far below 256.
 - **Lump 15**, `u16` per-cell lists of occluder indices, packed contiguously so a cell's `[first_occluder, first_occluder + occluder_count)` is its list. Real lists can repeat an occluder across cells.
 
 The runtime occluder is 36 bytes: `{planes, num_planes, num_edges, edges, vert_count, verts}` with 20-byte planes, 16-byte edge records (`plane0*, plane1*, vert0*, vert1*`) and 12-byte vertex records (`f32 xyz`).

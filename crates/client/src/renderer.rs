@@ -289,6 +289,9 @@ pub struct VisCounts {
     pub soups: (usize, usize),
     pub tris: (usize, usize),
     pub props: (usize, usize),
+    /// Occluder volumes built and portals hidden by them this frame (On mode).
+    pub occluders: usize,
+    pub portals_occluded: usize,
     pub gather_ms: f32,
 }
 
@@ -2333,8 +2336,13 @@ impl Renderer {
 
     /// The visible set and the prop flags that go with it. A placement whose
     /// model failed to load has zero bounds and is never drawn or counted.
-    fn cull(world: &WorldGpu, eye: glam::Vec3, frustum: &Frustum) -> (Visible, Vec<bool>) {
-        let v = world.vis.visible(eye, frustum);
+    fn cull(
+        world: &WorldGpu,
+        eye: glam::Vec3,
+        view_proj: &glam::Mat4,
+        frustum: &Frustum,
+    ) -> (Visible, Vec<bool>) {
+        let v = world.vis.visible(eye, frustum, Some(*view_proj));
         let prop_ok = world
             .prop_bounds
             .iter()
@@ -2374,10 +2382,10 @@ impl Renderer {
                     None => {
                         // a fresh freeze: the index buffer holds some other set
                         world.last_cull = None;
-                        Self::cull(world, frame.eye, &frustum)
+                        Self::cull(world, frame.eye, &frame.view_proj, &frustum)
                     }
                 }),
-                CullMode::On => Some(Self::cull(world, frame.eye, &frustum)),
+                CullMode::On => Some(Self::cull(world, frame.eye, &frame.view_proj, &frustum)),
             };
             let mut props_drawn = 0usize;
             let ranges: Vec<IndexRange> = match &visible {
@@ -2518,6 +2526,10 @@ impl Renderer {
                     },
                     world.prop_bounds.len(),
                 ),
+                occluders: visible.as_ref().map_or(0, |(v, _)| v.stats.occluders),
+                portals_occluded: visible
+                    .as_ref()
+                    .map_or(0, |(v, _)| v.stats.portals_occluded),
                 gather_ms: t0.elapsed().as_secs_f32() * 1000.0,
             };
             if frame.cull == CullMode::Locked {

@@ -19,6 +19,10 @@ const LUMP_ENTITIES: usize = 29;
 const LUMP_CULL_GROUPS: usize = 9;
 const LUMP_CULL_INDICES: usize = 10;
 const LUMP_PORTAL_VERTS: usize = 11;
+const LUMP_OCCLUDERS: usize = 12;
+const LUMP_OCCLUDER_PLANES: usize = 13;
+const LUMP_OCCLUDER_EDGES: usize = 14;
+const LUMP_OCCLUDER_INDICES: usize = 15;
 const LUMP_AABB_NODES: usize = 16;
 const LUMP_CELLS: usize = 17;
 const LUMP_PORTALS: usize = 18;
@@ -117,6 +121,22 @@ pub struct Cell {
     pub portal_count: u32,
     pub first_cull_index: u32,
     pub cull_count: u32,
+    /// Into lump 15; the cell's occluder index list.
+    pub first_occluder: u32,
+    pub occluder_count: u32,
+}
+
+/// One occluder polyhedron (lumps 12-15; docs/research/bsp-ibsp59-format.md,
+/// "Lumps 12-15, occluders"). The `first_*` fields index the plane-index,
+/// edge and vertex lumps 13/14/11.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Occluder {
+    pub first_plane: u32,
+    pub num_planes: u16,
+    pub num_edges: u16,
+    pub first_edge: u32,
+    pub first_vert: u32,
+    pub vert_count: u16,
 }
 
 /// `plane` faces out of the owning cell, into `cell`.
@@ -160,6 +180,10 @@ pub struct Bsp {
     pub cull_groups: Vec<CullGroup>,
     pub cull_indices: Vec<u32>,
     pub portal_verts: Vec<[f32; 3]>,
+    pub occluders: Vec<Occluder>,
+    pub occluder_plane_indices: Vec<u32>,
+    pub occluder_edges: Vec<[u8; 4]>,
+    pub occluder_indices: Vec<u16>,
     pub aabb_nodes: Vec<AabbNode>,
     pub cells: Vec<Cell>,
     pub portals: Vec<Portal>,
@@ -500,7 +524,37 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
         portal_count: le_u32(b, 32),
         first_cull_index: le_u32(b, 36),
         cull_count: le_u32(b, 40),
+        first_occluder: le_u32(b, 44),
+        occluder_count: le_u32(b, 48),
     })?;
+    let occluders = records(lump(data, &dir, LUMP_OCCLUDERS)?, 20, "occluders", |b| {
+        Occluder {
+            first_plane: le_u32(b, 0),
+            num_planes: u16::from_le_bytes([b[4], b[5]]),
+            num_edges: u16::from_le_bytes([b[6], b[7]]),
+            first_edge: le_u32(b, 8),
+            first_vert: le_u32(b, 12),
+            vert_count: u16::from_le_bytes([b[16], b[17]]),
+        }
+    })?;
+    let occluder_plane_indices = records(
+        lump(data, &dir, LUMP_OCCLUDER_PLANES)?,
+        4,
+        "occluder planes",
+        |b| le_u32(b, 0),
+    )?;
+    let occluder_edges = records(
+        lump(data, &dir, LUMP_OCCLUDER_EDGES)?,
+        4,
+        "occluder edges",
+        |b| [b[0], b[1], b[2], b[3]],
+    )?;
+    let occluder_indices = records(
+        lump(data, &dir, LUMP_OCCLUDER_INDICES)?,
+        2,
+        "occluder indices",
+        |b| u16::from_le_bytes([b[0], b[1]]),
+    )?;
     let portals = records(lump(data, &dir, LUMP_PORTALS)?, 16, "portals", |b| Portal {
         plane: le_u32(b, 0),
         cell: le_u32(b, 4),
@@ -587,6 +641,52 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
     for (i, l) in leafs.iter().enumerate() {
         ensure!(l.cell < cells.len() as i32, "leaf {i} cell out of bounds");
     }
+    // Occluder range validation: everything references something, per-map.
+    for oc in occluders.iter() {
+        let prange = oc.first_plane as usize..oc.first_plane as usize + oc.num_planes as usize;
+        ensure!(
+            prange.end <= occluder_plane_indices.len(),
+            "occluder planes out of range"
+        );
+        let erange = oc.first_edge as usize..oc.first_edge as usize + oc.num_edges as usize;
+        ensure!(
+            erange.end <= occluder_edges.len(),
+            "occluder edges out of range"
+        );
+        let vrange = oc.first_vert as usize..oc.first_vert as usize + oc.vert_count as usize;
+        ensure!(
+            vrange.end <= portal_verts.len(),
+            "occluder verts out of range"
+        );
+        for pi in &occluder_plane_indices[prange] {
+            let in_range = (*pi as usize) < planes.len();
+            ensure!(in_range, "occluder references {pi} out of plane range");
+        }
+        for e in &occluder_edges[erange] {
+            // plane sub-indices are relative to the occluder's own planes.
+            // Vertex ones are the occluder's absolute lump-11 slots taken
+            // modulo 256 (a u8 in the file): recover the local index as
+            // `B - first_vert (mod 256)`; vert_count stays far below 256.
+            let plane_ok = |s: &u8| (*s as usize) < oc.num_planes as usize;
+            let r = (oc.first_vert % 256) as usize;
+            let vert_ok = |s: &u8| (((*s as usize) + 256 - r) % 256) < oc.vert_count as usize;
+            ensure!(
+                e[..2].iter().all(plane_ok),
+                "occluder edge plane sub-index out of range"
+            );
+            ensure!(
+                e[2..].iter().all(vert_ok),
+                "occluder edge vertex sub-index out of range"
+            );
+        }
+    }
+    for (i, c) in cells.iter().enumerate() {
+        let list = c.first_occluder as usize..c.first_occluder as usize + c.occluder_count as usize;
+        ensure!(
+            list.end <= occluder_indices.len(),
+            "cell {i} occluders out of range"
+        );
+    }
 
     Ok(Bsp {
         materials,
@@ -602,6 +702,10 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
         cull_groups,
         cull_indices,
         portal_verts,
+        occluders,
+        occluder_plane_indices,
+        occluder_edges,
+        occluder_indices,
         aabb_nodes,
         cells,
         portals,
@@ -958,11 +1062,41 @@ mod tests {
         assert_eq!(bsp.cull_groups.len(), 122);
         assert_eq!(bsp.cull_indices.len(), 125);
         assert_eq!(bsp.portal_verts.len(), 568);
+        assert_eq!(bsp.occluders.len(), 9);
+        assert_eq!(bsp.occluder_plane_indices.len(), 54);
+        assert_eq!(bsp.occluder_edges.len(), 108);
+        assert_eq!(bsp.occluder_indices.len(), 11);
         assert_eq!(bsp.aabb_nodes.len(), 335);
         assert_eq!(bsp.cells.len(), 20);
         assert_eq!(bsp.portals.len(), 124);
         assert_eq!(bsp.nodes.len(), 1752);
         assert_eq!(bsp.leafs.len(), 1788);
+        // occluder ranges chain inside their lumps: all 6-plane boxes
+        for w in bsp.occluders.windows(2) {
+            assert_eq!(w[0].first_plane + w[0].num_planes as u32, w[1].first_plane);
+            assert_eq!(w[0].first_edge + w[0].num_edges as u32, w[1].first_edge);
+            assert_eq!(w[0].first_vert + w[0].vert_count as u32, w[1].first_vert);
+        }
+        // the shared pool leads with the occluders' corners: their runs tile [0,72)
+        // and the remaining 568-72 slots belong to the portals
+        let last_occ = bsp.occluders.last().unwrap();
+        assert_eq!(last_occ.first_vert + last_occ.vert_count as u32, 72);
+        assert!(bsp
+            .portals
+            .iter()
+            .all(|p| p.first_vert >= last_occ.first_vert + last_occ.vert_count as u32));
+        // cells 0/3/12 carry the 11 occluder references (all of them no. 0)
+        let refering: Vec<(u32, u32)> = bsp
+            .cells
+            .iter()
+            .map(|c| (c.occluder_count, c.first_occluder))
+            .filter(|&(n, _)| n > 0)
+            .collect();
+        assert_eq!(
+            refering,
+            vec![(9, 0), (1, 9), (1, 10)],
+            "cell 0 holds nine, cells 3 and 12 one each"
+        );
         // cell ranges chain: portals and cull indices are laid out cell by cell
         for w in bsp.cells.windows(2) {
             assert_eq!(w[0].first_portal + w[0].portal_count, w[1].first_portal);

@@ -60,11 +60,79 @@ impl Frustum {
             .collect();
         Frustum { planes }
     }
+
+    /// [`Self::from_polygon`] plus the four screen-space bevel planes retail
+    /// adds when `r_portalbevels > 0` (default 0.7, so always on): the portal
+    /// polygon's projection is clamped to the screen box `[-1,1]` and one
+    /// plane is built through the eye and each edge of that box. Hugging the
+    /// silhouette keeps a frustum narrowed too far by near-plane clipping
+    /// from admitting cells beside the portal (CoDMP.exe `0x4e19b0`).
+    pub fn from_polygon_beveled(eye: Vec3, poly: &[Vec3], view_proj: Mat4) -> Self {
+        let mut f = Self::from_polygon(eye, poly);
+        let (mut s0, mut s1, mut t0, mut t1) = (1.0f32, -1.0f32, 1.0f32, -1.0f32);
+        for &v in poly {
+            let c = view_proj * glam::Vec4::new(v.x, v.y, v.z, 1.0);
+            let (s, t) = (c.x / c.w, c.y / c.w);
+            s0 = s0.min(s);
+            s1 = s1.max(s);
+            t0 = t0.min(t);
+            t1 = t1.max(t);
+        }
+        let (s0, s1, t0, t1) = (
+            s0.clamp(-1.0, 1.0),
+            s1.clamp(-1.0, 1.0),
+            t0.clamp(-1.0, 1.0),
+            t1.clamp(-1.0, 1.0),
+        );
+        let inv = view_proj.inverse();
+        // unproject the clip-space point (mind the perspective divide), then
+        // aim the ray from the eye
+        let ray = |s: f32, t: f32| {
+            let p = inv.mul_vec4(glam::Vec4::new(s, t, 1.0, 1.0));
+            ((p.truncate() / p.w) - eye).normalize()
+        };
+        let centroid = poly.iter().sum::<Vec3>() / poly.len() as f32;
+        // clamping can collapse the box along an axis; merge corners that landed
+        // on the same spot modulo float dust (a segment yields one plane
+        // through its two surviving rays)
+        let mut uniq: Vec<(f32, f32)> = Vec::new();
+        for c in [(s0, t0), (s1, t0), (s1, t1), (s0, t1)] {
+            if !uniq
+                .iter()
+                .any(|p| (p.0 - c.0).abs() < 1e-4 && (p.1 - c.1).abs() < 1e-4)
+            {
+                uniq.push(c);
+            }
+        }
+        if uniq.len() > 1 {
+            for k in 0..uniq.len() {
+                let (sa, ta) = uniq[k];
+                let (sb, tb) = uniq[(k + 1) % uniq.len()];
+                let (ra, rb) = (ray(sa, ta), ray(sb, tb));
+                // near-collinear rays mean a collapsed edge: skip it
+                if ra.dot(rb) > 0.999_999 {
+                    continue;
+                }
+                if let Some(mut n) = ra.cross(rb).try_normalize() {
+                    // contains the eye by construction; point it so the portal
+                    // polygon stays on the inside, like the edge planes above
+                    if n.dot(centroid - eye) < 0.0 {
+                        n = -n;
+                    }
+                    f.planes.push((n, -n.dot(eye)));
+                }
+            }
+        }
+        f
+    }
 }
 
 /// Below this angular width (radians) a clipped portal is a numerical sliver
 /// at a shared edge, not an opening: its cone loses planes or wobbles.
 const SLIVER_EPS: f32 = 1e-4;
+/// Occluder box planes are pulled in by this (units) at build time, like
+/// retail's `d - eps` at load, so a portal brushing a wall is not occluded.
+const OCC_D_EPS: f32 = 1e-3;
 
 /// The polygon's narrowest extent over its distance from `eye`: the angle
 /// it subtends across its thin direction.
@@ -113,6 +181,10 @@ pub struct VisStats {
     pub cells_visited: usize,
     pub soups: usize,
     pub nodes_tested: usize,
+    /// Occluder volumes built for the visited cells.
+    pub occluders: usize,
+    /// Portals hidden because they sat behind an occluder volume.
+    pub portals_occluded: usize,
     /// No camera cell: every tree and cull group was frustum-tested.
     pub fallback: bool,
 }
@@ -121,6 +193,18 @@ pub struct Visible {
     pub soups: Vec<bool>,
     pub cells: Vec<bool>,
     pub stats: VisStats,
+}
+
+/// One occluder's geometry, resolved from lumps 12-15 at build time. Hidden
+/// here (outside `bsp`) because it is per-frame eye work, not a lump parse.
+struct Occ {
+    /// Box planes, `d` pulled in by a hair: a portal brushing the wall is
+    /// not occluded by it.
+    planes: Vec<(Vec3, f32)>,
+    verts: Vec<Vec3>,
+    /// `(plane_a, plane_b, vert_a, vert_b)`; the two planes the edge shares
+    /// and the two verts it spans.
+    edges: Vec<[usize; 4]>,
 }
 
 pub struct WorldVis {
@@ -138,6 +222,8 @@ pub struct WorldVis {
     cull_indices: Vec<u32>,
     portals: Vec<bsp::Portal>,
     portal_verts: Vec<Vec3>,
+    occluders: Vec<Occ>,
+    occluder_indices: Vec<u16>,
 }
 
 /// State threaded through the portal recursion: the eye and the unnarrowed
@@ -145,6 +231,8 @@ pub struct WorldVis {
 struct Walk<'a> {
     eye: Vec3,
     camera: &'a Frustum,
+    /// Enables the bevel planes of child frusta; `None` for synthetic tests.
+    view_proj: Option<Mat4>,
     vis: Visible,
     on_stack: Vec<bool>,
 }
@@ -205,6 +293,39 @@ impl WorldVis {
             cull_indices: bsp.cull_indices.clone(),
             portals: bsp.portals.clone(),
             portal_verts: bsp.portal_verts.iter().map(|&v| Vec3::from(v)).collect(),
+            occluders: bsp
+                .occluders
+                .iter()
+                .map(|oc| {
+                    let pb = oc.first_plane as usize;
+                    let planes = bsp.occluder_plane_indices[pb..pb + oc.num_planes as usize]
+                        .iter()
+                        .map(|&pi| {
+                            let p = &bsp.planes[pi as usize];
+                            (Vec3::from(p.normal), p.dist - OCC_D_EPS)
+                        })
+                        .collect();
+                    let vb = oc.first_vert as usize;
+                    let verts = bsp.portal_verts[vb..vb + oc.vert_count as usize]
+                        .iter()
+                        .map(|&v| Vec3::from(v))
+                        .collect();
+                    let eb = oc.first_edge as usize;
+                    // edge vertex bytes are `first_vert + local (mod 256)`
+                    let r = (oc.first_vert % 256) as usize;
+                    let local = |b: u8| ((b as usize) + 256 - r) % 256;
+                    let edges = bsp.occluder_edges[eb..eb + oc.num_edges as usize]
+                        .iter()
+                        .map(|e| [e[0] as usize, e[1] as usize, local(e[2]), local(e[3])])
+                        .collect();
+                    Occ {
+                        planes,
+                        verts,
+                        edges,
+                    }
+                })
+                .collect(),
+            occluder_indices: bsp.occluder_indices.clone(),
         }
     }
 
@@ -258,13 +379,16 @@ impl WorldVis {
     }
 
     /// Retail's walk when the eye is in a cell, the frustum fallback otherwise.
-    pub fn visible(&self, eye: Vec3, frustum: &Frustum) -> Visible {
+    /// A `view_proj` enables the bevel planes of child frusta (retail's
+    /// `r_portalbevels`, default on); synthetic test frusta pass `None`.
+    pub fn visible(&self, eye: Vec3, frustum: &Frustum, view_proj: Option<Mat4>) -> Visible {
         let Some(cell) = self.cell_for_point(eye) else {
             return self.visible_fallback(frustum);
         };
         let mut w = Walk {
             eye,
             camera: frustum,
+            view_proj,
             vis: self.empty_visible(),
             on_stack: vec![false; self.portals.len()],
         };
@@ -308,6 +432,11 @@ impl WorldVis {
         {
             self.mark_group(&self.cull_groups[gi as usize], frustum, &mut w.vis);
         }
+        // the cell's occluder volumes, built once against the fixed eye; each
+        // volume is a set of planes a portal is hidden behind when every one
+        // of its vertices is on the negative side of them all (CoDMP 0x4e2860)
+        let volumes = self.occluder_volumes(cell, w.eye);
+        w.vis.stats.occluders += volumes.len();
         let near = w.camera.planes.get(4).copied();
         for pi in c.first_portal as usize..(c.first_portal + c.portal_count) as usize {
             if w.on_stack[pi] {
@@ -322,6 +451,10 @@ impl WorldVis {
             }
             let verts =
                 &self.portal_verts[p.first_vert as usize..(p.first_vert + p.vert_count) as usize];
+            if !volumes.is_empty() && self.portal_in_occluders(&p, &volumes) {
+                w.vis.stats.portals_occluded += 1;
+                continue;
+            }
             let mut poly = verts.to_vec();
             // a portal closer than the near plane still shows its cell, so that
             // one plane is left out; every frustum here carries the camera's
@@ -340,7 +473,10 @@ impl WorldVis {
             let next = if side >= -1.0 {
                 frustum
             } else {
-                child = Frustum::from_polygon(w.eye, &poly);
+                child = match w.view_proj {
+                    Some(m) => Frustum::from_polygon_beveled(w.eye, &poly, m),
+                    None => Frustum::from_polygon(w.eye, &poly),
+                };
                 // every edge plane runs through the eye, so the cone reaches
                 // backwards and past the far plane; the camera's near and far
                 // planes cap it, its side planes already contain it
@@ -353,6 +489,66 @@ impl WorldVis {
             self.walk(p.cell as usize, next, w, depth + 1);
             w.on_stack[pi] = false;
         }
+    }
+
+    /// The cell's occluder volumes against `eye` (CoDMP 0x4e2860): each
+    /// front-facing box plane stays, and every silhouette edge whose two
+    /// planes straddle the eye contributes one plane through the eye. No
+    /// volume (no occluders, or the call had none) is an empty slice.
+    fn occluder_volumes(&self, cell: usize, eye: Vec3) -> Vec<Vec<(Vec3, f32)>> {
+        let c = &self.cells[cell];
+        let list = &self.occluder_indices
+            [c.first_occluder as usize..(c.first_occluder + c.occluder_count) as usize];
+        list.iter()
+            .filter_map(|&oi| {
+                let occ = &self.occluders[oi as usize];
+                let front: Vec<bool> = occ.planes.iter().map(|&(n, d)| n.dot(eye) > d).collect();
+                if front.iter().all(|&f| !f) {
+                    // every wall points away: the eye is past the occluder
+                    return None;
+                }
+                let mut planes: Vec<(Vec3, f32)> = occ
+                    .planes
+                    .iter()
+                    .zip(&front)
+                    .filter_map(|(&(n, d), &f)| if f { Some((n, d)) } else { None })
+                    .collect();
+                for e in &occ.edges {
+                    if front[e[0]] != front[e[1]] {
+                        let a = occ.verts[e[2]] - eye;
+                        let b = occ.verts[e[3]] - eye;
+                        if let Some(mut n) = a.cross(b).try_normalize() {
+                            // orient toward the occluder (its centroid is the
+                            // negative side), so what lies beyond is under it
+                            let centroid = occ.verts.iter().sum::<Vec3>() / occ.verts.len() as f32;
+                            if n.dot(centroid - eye) > 0.0 {
+                                n = -n;
+                            }
+                            // hidden side reads `n·v <= d`; the eye sits on the
+                            // plane by construction, eps behind it hides just
+                            planes.push((n, n.dot(eye) - OCC_D_EPS));
+                        }
+                    }
+                }
+                if planes.is_empty() {
+                    None
+                } else {
+                    Some(planes)
+                }
+            })
+            .collect()
+    }
+
+    /// Portal hidden when every vertex is on the negative side of every
+    /// plane of one volume (CoDMP 0x4e2cc0).
+    fn portal_in_occluders(&self, p: &bsp::Portal, volumes: &[Vec<(Vec3, f32)>]) -> bool {
+        let verts =
+            &self.portal_verts[p.first_vert as usize..(p.first_vert + p.vert_count) as usize];
+        volumes.iter().any(|volume| {
+            volume
+                .iter()
+                .all(|&(n, d)| verts.iter().all(|&v| n.dot(v) <= d))
+        })
     }
 
     /// In the fallback the frustum decides alone; otherwise the prop must
@@ -528,6 +724,10 @@ pub fn two_cell_world() -> Bsp {
             [0.0, 50.0, 50.0],
             [0.0, 50.0, -50.0],
         ],
+        occluders: vec![],
+        occluder_plane_indices: vec![],
+        occluder_edges: vec![],
+        occluder_indices: vec![],
         aabb_nodes: vec![
             AabbNode {
                 first_soup: 1,
@@ -549,6 +749,8 @@ pub fn two_cell_world() -> Bsp {
                 portal_count: 1,
                 first_cull_index: 0,
                 cull_count: 1,
+                first_occluder: 0,
+                occluder_count: 0,
             },
             Cell {
                 mins: [0.0, -100.0, -100.0],
@@ -558,6 +760,8 @@ pub fn two_cell_world() -> Bsp {
                 portal_count: 1,
                 first_cull_index: 1,
                 cull_count: 0,
+                first_occluder: 0,
+                occluder_count: 0,
             },
         ],
         // a portal's plane faces out of its cell: A's points +X, B's points -X
@@ -598,6 +802,8 @@ pub fn two_cell_world() -> Bsp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use crate::bsp::{AabbNode, Cell, DrawVert, Leaf, Material, Node, Plane, Portal, TriangleSoup};
 
     /// Nearest corner along each normal: true only when the whole box is inside.
     fn fully_inside(f: &Frustum, lo: Vec3, hi: Vec3) -> bool {
@@ -636,12 +842,12 @@ mod tests {
         let eye = Vec3::new(-50.0, 0.0, 150.0);
         assert_eq!(vis.cell_for_point(eye), Some(0));
         // the ray to B's soup crosses x = 0 at z ~ 79, above the portal's top edge
-        let v = vis.visible(eye, &frustum_at(eye, Vec3::new(0.6, 0.0, -0.8)));
+        let v = vis.visible(eye, &frustum_at(eye, Vec3::new(0.6, 0.0, -0.8)), None);
         assert!(!v.stats.fallback);
         assert!(v.soups[2], "B's soup is seen over the portal's top edge");
         // at eye height inside the cells the portal alone decides
         let eye = Vec3::new(-50.0, 0.0, 0.0);
-        let v = vis.visible(eye, &frustum_at(eye, Vec3::new(0.6, 0.0, -0.8)));
+        let v = vis.visible(eye, &frustum_at(eye, Vec3::new(0.6, 0.0, -0.8)), None);
         assert!(!v.soups[2], "below B's top the ray misses the portal");
     }
 
@@ -671,7 +877,7 @@ mod tests {
         while x <= hi.x {
             let eye = Vec3::new(x, y, z);
             let f = frustum_at(eye, dir);
-            let v = vis.visible(eye, &f);
+            let v = vis.visible(eye, &f, None);
             // a sample inside solid falls back to the frustum, which cannot pop
             if v.stats.fallback {
                 prev = None;
@@ -728,6 +934,318 @@ mod tests {
             !f.intersects_aabb(Vec3::new(50.0, 200.0, -1.0), Vec3::new(60.0, 300.0, 1.0)),
             "box fully outside"
         );
+    }
+
+    #[test]
+    fn bevel_planes_add_the_screen_box_without_ejecting_the_portal() {
+        // a portal quad hanging above the screen centre: its projection is
+        // partly clamped away, yet the edge planes still carry it and the
+        // four extra planes must not reject it (they only ever trim regions
+        // the near-plane-clipped cone would leak into, which needs the full
+        // walk to show up in the counters)
+        let eye = Vec3::new(-200.0, 0.0, 0.0);
+        let poly = [
+            Vec3::new(50.0, -20.0, 140.0),
+            Vec3::new(50.0, 20.0, 140.0),
+            Vec3::new(50.0, 20.0, 160.0),
+            Vec3::new(50.0, -20.0, 160.0),
+        ];
+        let view = glam::camera::rh::view::look_to_mat4(eye, Vec3::X, Vec3::Z);
+        let proj =
+            glam::camera::rh::proj::directx::perspective(90f32.to_radians(), 1.0, 4.0, 10000.0);
+        let view_proj = proj * view;
+        let beveled = Frustum::from_polygon_beveled(eye, &poly, view_proj);
+        let plain = Frustum::from_polygon(eye, &poly).planes.len();
+        assert!(beveled.planes.len() > plain && beveled.planes.len() <= plain + 4);
+        // verts sit on their own edge planes; float noise demands an epsilon
+        let inside = |p: Vec3| beveled.planes.iter().all(|(n, d)| n.dot(p) + d > -1e-2);
+        for v in &poly {
+            assert!(inside(*v), "the portal itself stays in");
+        }
+        let midpoint = eye.lerp(poly[0], 0.5) + Vec3::Y;
+        assert!(inside(midpoint), "the cone interior too");
+    }
+
+    /// A fully off-screen quad exercises the clamp/degenerate paths: corner
+    /// rays may collapse, and whatever planes survive must not eject it.
+    #[test]
+    fn bevel_planes_survive_a_fully_offscreen_portal() {
+        let eye = Vec3::ZERO;
+        let poly = [
+            Vec3::new(50.0, -5.0, 100.0),
+            Vec3::new(50.0, 5.0, 100.0),
+            Vec3::new(50.0, 5.0, 110.0),
+            Vec3::new(50.0, -5.0, 110.0),
+        ];
+        let view = glam::camera::rh::view::look_to_mat4(eye, Vec3::X, Vec3::Z);
+        let proj =
+            glam::camera::rh::proj::directx::perspective(90f32.to_radians(), 1.0, 4.0, 10000.0);
+        let beveled = Frustum::from_polygon_beveled(eye, &poly, proj * view);
+        for v in &poly {
+            assert!(
+                beveled.planes.iter().all(|(n, d)| n.dot(*v) + d > -1e-2),
+                "verts survive their own edge planes plus the bevels"
+            );
+        }
+    }
+
+    /// A | B | C corridor with an occluder slab in B covering the far portal:
+    /// walking B skips the C-portal (retail 0x4e2860/0x4e2cc0) and never
+    /// marks C; without the occluder it does.
+    #[test]
+    fn an_occluder_hides_the_portal_behind_it() {
+        let mut b = occluder_world();
+        b.cells[1].occluder_count = 0;
+        let bare = WorldVis::build(&b);
+        let eye = Vec3::new(-250.0, 0.0, 0.0);
+        let f = frustum_at(eye, Vec3::X);
+        let v = bare.visible(eye, &f, None);
+        assert!(!v.stats.fallback);
+        assert!(v.soups[2], "C's soup seen without the occluder");
+        assert_eq!(v.stats.portals_occluded, 0);
+
+        b.cells[1].occluder_count = 1;
+        let vis = WorldVis::build(&b);
+        let v = vis.visible(eye, &f, None);
+        assert!(!v.stats.fallback);
+        assert_eq!(v.stats.occluders, 1, "B built its volume");
+        assert_eq!(v.stats.portals_occluded, 1, "the C-portal was hidden");
+        assert!(!v.soups[2], "C is unreachable behind the slab");
+        assert!(v.soups[1], "B itself is still drawn");
+    }
+
+    /// Every store keeps its corners in a run of lump 11 and hides behind
+    /// real slab geometry with portal walks intact.
+    fn occluder_world() -> Bsp {
+        let vert = |x: f32, y: f32, z: f32| DrawVert {
+            pos: [x, y, z],
+            uv: [0.0; 2],
+            lm_uv: [0.0; 2],
+            normal: [0.0, 0.0, 1.0],
+            color: [255; 4],
+        };
+        // one soup per cell at -150 / 0 / +150
+        let tri = |x: f32| {
+            [
+                vert(x, 0.0, -10.0),
+                vert(x + 10.0, 0.0, -10.0),
+                vert(x, 0.0, 10.0),
+            ]
+        };
+        let verts: Vec<DrawVert> = [tri(-150.0), tri(0.0), tri(150.0)].concat();
+        let soup = |i: u32| TriangleSoup {
+            material: 0,
+            lightmap: bsp::NO_LIGHTMAP,
+            first_vertex: i * 3,
+            vertex_count: 3,
+            index_count: 3,
+            first_index: 0,
+        };
+        let p = |normal: [f32; 3], dist: f32| Plane { normal, dist };
+        let plane = |normal: [f32; 3], dist: f32| p(normal, dist);
+        let plane_idx = |normal: [f32; 3], dist: f32, planes: &mut Vec<Plane>| {
+            planes.push(plane(normal, dist));
+            planes.len() as u32 - 1
+        };
+        let mut planes: Vec<Plane> = vec![plane([1.0, 0.0, 0.0], 0.0)]; // placeholder
+        planes.clear();
+        // portal planes: A/B walls at x=-100, B/C walls at x=+100
+        let ab_front = plane_idx([1.0, 0.0, 0.0], -100.0, &mut planes);
+        let ab_back = plane_idx([-1.0, 0.0, 0.0], 100.0, &mut planes);
+        let bc_front = plane_idx([1.0, 0.0, 0.0], 100.0, &mut planes);
+        let bc_back = plane_idx([-1.0, 0.0, 0.0], -100.0, &mut planes);
+        // occluder slab x [0,10], y/z [-60,60]: six outward walls
+        let s_xp = plane_idx([1.0, 0.0, 0.0], 10.0, &mut planes);
+        let s_xn = plane_idx([-1.0, 0.0, 0.0], 0.0, &mut planes);
+        let s_yp = plane_idx([0.0, 1.0, 0.0], 60.0, &mut planes);
+        let s_yn = plane_idx([0.0, -1.0, 0.0], 60.0, &mut planes);
+        let s_zp = plane_idx([0.0, 0.0, 1.0], 60.0, &mut planes);
+        let s_zn = plane_idx([0.0, 0.0, -1.0], 60.0, &mut planes);
+
+        // pool: 8 slab corners first, then two portal quads
+        let corner = |x: u8, y: u8, z: u8| {
+            [
+                if x == 1 { 10.0 } else { 0.0 },
+                if y == 1 { 60.0 } else { -60.0 },
+                if z == 1 { 60.0 } else { -60.0 },
+            ]
+        };
+        let mut portal_verts: Vec<[f32; 3]> = (0u8..8)
+            .map(|c| corner(c >> 2 & 1, c >> 1 & 1, c & 1))
+            .collect();
+        let quad = |x: f32, base: usize, out: &mut Vec<[f32; 3]>| {
+            out.extend_from_slice(&[
+                [x, -50.0, -50.0],
+                [x, 50.0, -50.0],
+                [x, 50.0, 50.0],
+                [x, -50.0, 50.0],
+            ]);
+            base as u32
+        };
+        let _ = quad(-100.0, 8, &mut portal_verts); // slots 8..12
+        let bc_base = quad(100.0, 12, &mut portal_verts); // slots 12..16
+
+        // cube corners indexed by bit: x*4 + y*2 + z; edges connect corners
+        // differing in one bit and are adjacent to the two walls perpendicular
+        // to the OTHER two axes
+        // cube corners indexed by bit x*4+y*2+z: 0=(0,-60,-60) .. 7=(10,60,60);
+        // relative plane ids 0..6 = [+x,-x,+y,-y,+z,-z]. Each edge carries the
+        // two walls it borders and its endpoint slots.
+        let edges: Vec<[u8; 4]> = vec![
+            // along x, faces +-y / +-z
+            [3, 5, 0, 4],
+            [3, 4, 1, 5],
+            [2, 5, 2, 6],
+            [2, 4, 3, 7],
+            // along y, faces +-x / +-z
+            [1, 5, 0, 2],
+            [1, 4, 1, 3],
+            [0, 5, 4, 6],
+            [0, 4, 5, 7],
+            // along z, faces +-x / +-y
+            [1, 3, 0, 1],
+            [1, 2, 2, 3],
+            [0, 3, 4, 5],
+            [0, 2, 6, 7],
+        ];
+        Bsp {
+            materials: vec![Material {
+                name: "textures/test/wall".into(),
+                surface_flags: 0,
+                content_flags: 1,
+            }],
+            lightmaps: vec![],
+            soups: vec![soup(0), soup(1), soup(2)],
+            verts,
+            indices: vec![0, 1, 2],
+            entities: String::new(),
+            planes,
+            brush_sides: vec![],
+            brushes: vec![],
+            models: vec![],
+            cull_groups: vec![],
+            cull_indices: vec![],
+            portal_verts,
+            occluders: vec![bsp::Occluder {
+                first_plane: 0,
+                num_planes: 6,
+                num_edges: edges.len() as u16,
+                first_edge: 0,
+                first_vert: 0,
+                vert_count: 8,
+            }],
+            occluder_plane_indices: vec![s_xp, s_xn, s_yp, s_yn, s_zp, s_zn],
+            occluder_edges: edges,
+            occluder_indices: vec![0],
+            aabb_nodes: vec![
+                AabbNode {
+                    first_soup: 0,
+                    soup_count: 1,
+                    child_count: 0,
+                },
+                AabbNode {
+                    first_soup: 1,
+                    soup_count: 1,
+                    child_count: 0,
+                },
+                AabbNode {
+                    first_soup: 2,
+                    soup_count: 1,
+                    child_count: 0,
+                },
+            ],
+            cells: vec![
+                Cell {
+                    mins: [-300.0, -300.0, -300.0],
+                    maxs: [-100.0, 300.0, 300.0],
+                    first_aabb: 0,
+                    first_portal: 0,
+                    portal_count: 1,
+                    first_cull_index: 0,
+                    cull_count: 0,
+                    first_occluder: 0,
+                    occluder_count: 0,
+                },
+                Cell {
+                    mins: [-100.0, -300.0, -300.0],
+                    maxs: [100.0, 300.0, 300.0],
+                    first_aabb: 1,
+                    first_portal: 1,
+                    portal_count: 2,
+                    first_cull_index: 0,
+                    cull_count: 0,
+                    first_occluder: 0,
+                    occluder_count: 1,
+                },
+                Cell {
+                    mins: [100.0, -300.0, -300.0],
+                    maxs: [300.0, 300.0, 300.0],
+                    first_aabb: 2,
+                    first_portal: 3,
+                    portal_count: 1,
+                    first_cull_index: 0,
+                    cull_count: 0,
+                    first_occluder: 0,
+                    occluder_count: 0,
+                },
+            ],
+            portals: vec![
+                Portal {
+                    plane: ab_front,
+                    cell: 1,
+                    first_vert: 8,
+                    vert_count: 4,
+                },
+                Portal {
+                    plane: ab_back,
+                    cell: 0,
+                    first_vert: 8,
+                    vert_count: 4,
+                },
+                Portal {
+                    plane: bc_front,
+                    cell: 2,
+                    first_vert: bc_base,
+                    vert_count: 4,
+                },
+                Portal {
+                    plane: bc_back,
+                    cell: 1,
+                    first_vert: bc_base,
+                    vert_count: 4,
+                },
+            ],
+            // BSP route: front of the A/B wall is B or C, back of it A; the B/C wall
+            // then splits B (back) from C (front)
+            nodes: vec![
+                Node {
+                    plane: ab_front,
+                    children: [1, -1],
+                    mins: [-300; 3],
+                    maxs: [300; 3],
+                },
+                Node {
+                    plane: bc_front,
+                    children: [-3, -2],
+                    mins: [-100; 3],
+                    maxs: [300; 3],
+                },
+            ],
+            leafs: vec![
+                Leaf {
+                    cluster: 0,
+                    cell: 0,
+                },
+                Leaf {
+                    cluster: 1,
+                    cell: 1,
+                },
+                Leaf {
+                    cluster: 2,
+                    cell: 2,
+                },
+            ],
+        }
     }
 
     #[test]
@@ -992,17 +1510,17 @@ mod tests {
     fn portal_walk_sees_the_neighbour_only_through_the_portal() {
         let vis = WorldVis::build(&two_cell_world());
         let eye = Vec3::new(-90.0, 0.0, 0.0);
-        let v = vis.visible(eye, &frustum_at(eye, Vec3::X));
+        let v = vis.visible(eye, &frustum_at(eye, Vec3::X), None);
         assert!(!v.stats.fallback);
         assert_eq!(v.cells, vec![true, true]);
         assert_eq!(v.soups, vec![false, true, true]);
         // facing away: B is not visited, its soup stays hidden
-        let v = vis.visible(eye, &frustum_at(eye, -Vec3::X));
+        let v = vis.visible(eye, &frustum_at(eye, -Vec3::X), None);
         assert_eq!(v.cells, vec![true, false]);
         assert_eq!(v.soups, vec![false, false, false]);
         // looking +X but from high up in A so the portal square is below the frustum
         let eye = Vec3::new(-10.0, 0.0, 90.0);
-        let v = vis.visible(eye, &frustum_at(eye, Vec3::X));
+        let v = vis.visible(eye, &frustum_at(eye, Vec3::X), None);
         assert_eq!(v.cells, vec![true, false], "portal outside the frustum");
         // eye in no cell: fallback. The fixture's single-plane tree puts every
         // point in a cell, so this needs the solid-leaf (cell -1) variant.
@@ -1020,7 +1538,7 @@ mod tests {
             ..two_cell_world()
         });
         let eye = Vec3::new(-90.0, 0.0, 0.0);
-        let v = solid.visible(eye, &frustum_at(eye, Vec3::X));
+        let v = solid.visible(eye, &frustum_at(eye, Vec3::X), None);
         assert!(v.stats.fallback);
     }
 
@@ -1028,7 +1546,7 @@ mod tests {
     fn a_portal_closer_than_the_near_plane_still_opens_its_cell() {
         let vis = WorldVis::build(&two_cell_world());
         let eye = Vec3::new(-0.5, 0.0, 0.0);
-        let v = vis.visible(eye, &frustum_at(eye, Vec3::X));
+        let v = vis.visible(eye, &frustum_at(eye, Vec3::X), None);
         assert_eq!(
             v.cells,
             vec![true, true],
@@ -1059,7 +1577,7 @@ mod tests {
             let eye = Vec3::from(origin) + Vec3::Z * 60.0;
             let dir = Vec3::new(yaw.to_radians().cos(), yaw.to_radians().sin(), 0.0);
             let f = frustum_at(eye, dir);
-            let walk = vis.visible(eye, &f);
+            let walk = vis.visible(eye, &f, None);
             if walk.stats.fallback {
                 continue;
             }
