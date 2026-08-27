@@ -18,8 +18,8 @@ combat effects.
 - Loads any stock or custom map from an installed copy of the game and
   renders it textured, lightmapped, props included. Skies, water, fences,
   foliage and terrain detail blends draw through their authored Q3-style
-  shader scripts. Fly around freely. The map's ambient loop plays in fly
-  and walk mode.
+  shader scripts, with the sun disc and the map's fog. Fly around freely.
+  The map's ambient loop plays in fly and walk mode.
 - `--walk` spawns you as a soldier with Quake 3 derived movement: gravity,
   stances, stepping, wall sliding, leaning, and the kar98k viewmodel playing
   the game's own xanim clips. Footsteps follow the retail cadence per surface,
@@ -34,7 +34,9 @@ combat effects.
   install lacks, the way the retail client does, so mod paks arrive along with
   the map's own.
 - `vcod-server` answers server browsers, accepts connections and hands out the
-  gamestate, so a retail 1.1 client loads the map. It sends no snapshots yet.
+  gamestate, so a retail 1.1 client loads the map, then keeps it alive with
+  uncompressed snapshots and flies it around as a spectator on the shared
+  pmove. It simulates nothing else yet.
 
 The whole thing runs on wgpu and winit, so in principle it is cross-platform.
 I have only run it on Linux.
@@ -207,20 +209,26 @@ These work in every mode:
   z-fighting.
 - Props are lit by the compiler's per-entity `lightingPrecalc` tint, one
   colour for the whole model. The engine samples its light grid per vertex.
-- Shader scripts drive skies, water and blends, but the tail of the grammar
-  is missing: no fog (`fogvars` and friends parse and do nothing), no
-  `deformVertexes` so ocean waves draw flat, the `sunfile` sun disc is not
-  drawn, and NV/ATI hardware-path stages are dropped exactly as retail dropped
-  them on machines without those extensions. Engine-generated `$dlight`
-  bundle images and the ship's deckflag texture have no file to load, so a
-  generated light blob and a white pixel stand in for them (neuville windows,
-  mp_ship flag decks). Details in
+- Shader scripts drive skies, water, blends, the `sunfile` sun disc and the
+  ocean's `deformVertexes wave`. What is left of the grammar: the other
+  `deformVertexes` forms parse and stay inert, and NV/ATI hardware-path
+  stages are dropped exactly as retail dropped them on machines without
+  those extensions. The script fog keywords (`fogvars` and friends) stay
+  inert too; no stock MP map sets fog from a script. The fog every map shows
+  is set by gsc and arrives on the wire in configstring 12, which vcod
+  renders.
+  Engine-generated `$dlight` bundle images and the ship's deckflag texture
+  have no file to load, so a generated light blob and a white pixel stand in
+  for them (neuville windows, mp_ship flag decks). Details in
   [docs/research/cod11-shader-scripts.md](docs/research/cod11-shader-scripts.md).
-- Visibility follows the retail cells and portals but without the portal
-  bevel planes and the brushmodel occluder volumes, so a little more is drawn
-  through doorways than retail draws. Outside every cell (fly mode above the
-  map) only the frustum culls, and a cell whose top is below the camera is
-  frustum-culled directly: retail assumes nobody looks over a cell's walls.
+- Visibility follows the retail cells, portals, bevel planes and occluder
+  volumes. Three deliberate divergences draw a little more than retail:
+  clipped portal polygons narrower than a sliver epsilon are skipped, cells
+  whose top is below the eye are marked with the camera frustum instead of a
+  portal cone, and after the walk every cell sharing a portal with a visited
+  cell is frustum-tested to a fixpoint. Retail assumes nobody looks over a
+  cell's walls; the mp_ship decks prove otherwise. Outside every cell (fly
+  mode above the map) only the frustum culls.
 - Alpha-cutout surfaces without a clip bit (bushes, treelines, ground decals)
   no longer collide; masked wire and iron fences carry PLAYERCLIP in the BSP
   and still stop the player, but bullets pass them, as on a retail server.
@@ -240,9 +248,12 @@ These work in every mode:
 - Voice pools and priority stealing follow the retail engine: at most 32
   spatial, 32 flat and 8 streamed voices, and a full pool evicts a lower-
   priority victim instead of refusing the new sound.
-- Quick chat (`vsay`) is not handled. The server commands that carry it
-  (`j`/`k`/`l`) are documented in [docs/protocol-1.1.md](docs/protocol-1.1.md)
-  only.
+- Quick chat (`vsay`) is handled and inert on a stock install, exactly as
+  retail is: the `j`/`k`/`l` commands resolve against mod-provided `.voice`
+  tables, which no stock pak ships. The speaker's head icon is not drawn and
+  category strings display unlocalized. A sweep of three populated public
+  servers sent no `j`/`k`/`l` at all, so the path is unobserved live
+  ([docs/research/cod11-quick-chat.md](docs/research/cod11-quick-chat.md)).
 - Audio fidelity is matched to the retail engine on paper (falloff, panning,
   channel replacement, ducking) but not yet confirmed by ear against the real
   game.

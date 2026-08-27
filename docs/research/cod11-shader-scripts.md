@@ -107,8 +107,8 @@ anchors from `tr_shader.c` unless noted.
 | cull / polygonOffset / nopicmip / nomipmaps / surfaceParm | ParseShader :1367 | surfaceParm sets water/sky flags among others |
 | sort | sort-name table tr_shader.c :1224-1242 | mapping in §5 |
 | skyParms | ParseSkyParms :1152 | farbox + cloud dome; see §6 |
-| sunfile | no RTCW anchor (CoD-only) | argument stored on the block (`Shader::sunfile`), not rendered yet |
-| fogvars / skyfogvars / waterfogvars / nofog / tesssize / light / entityMergable / qer_* / q3map_* | ParseShader :1367 | consumed as known tokens; fog values inert until fog exists (§8) |
+| sunfile | no RTCW anchor (CoD-only) | argument stored on the block (`Shader::sunfile`), resolved to `scripts/<name>.sun` and drawn as the sun disc (§8) |
+| fogvars / skyfogvars / waterfogvars / nofog / tesssize / light / entityMergable / qer_* / q3map_* | ParseShader :1367 | consumed as known tokens; script fog values stay inert, MP fog rides configstring 12 (§8) |
 
 Classification and ordering: `Shader::classify_stage` sorts each stage into
 Opaque / Blend / Additive (dst factor One or SrcAlphaSaturate means additive),
@@ -320,8 +320,9 @@ Each omission with its census justification:
   above proves the surfaces render as authored; only side-by-side comparison
   with the real game can prove the last percent of blending and sky shading.
 - Known divergences, all logged in §8: NV/ATI hw-path stages dropped (retail
-  fallback parity), sun disc absent, ocean deformVertexes flat, fog absent,
-  `$dlight` bundles and the mp_ship deckflag image have substitutes rather
-  than files, noville's missing textures under `--mod-dir uo` are the
+  fallback parity), `deformVertexes` forms other than `wave` inert, script fog
+  keywords inert (no stock MP map sets fog from a script; the fog every map
+  shows arrives in configstring 12 and is rendered), `$dlight` bundles and the
+  mp_ship deckflag image have substitutes rather than files, noville's missing textures under `--mod-dir uo` are the
   documented single-mod-dir mounting limitation (its textures ship in main/
   pak0/pak1), turb axis follows tr_shade_calc.c.
