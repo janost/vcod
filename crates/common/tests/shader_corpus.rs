@@ -101,7 +101,7 @@ const UNRESOLVED_STAGE_IMAGES: &[&str] = &["$dlight", "textures/battleship/deckf
 /// Every stage image path of every authored material on every stock MP map
 /// must resolve through the renderer's probe chain
 /// (`assets::resolve_bundle_image`). Fails listing unresolved paths - catches
-/// probe regressions and silent checkerboard fallbacks.
+/// probe regressions and silent default-image fallbacks.
 #[test]
 fn stock_mp_stage_images_resolve() {
     let Some((_tmp, fs)) = stock_paks() else {

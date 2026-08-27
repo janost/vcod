@@ -124,22 +124,25 @@ pub fn parse_dds(data: &[u8]) -> Result<Image> {
     }
 }
 
-pub fn checkerboard() -> Image {
-    let (w, h) = (64u32, 64u32);
-    let mut px = Vec::with_capacity((w * h * 4) as usize);
-    for y in 0..h {
-        for x in 0..w {
-            let on = ((x / 8) + (y / 8)) % 2 == 0;
-            px.extend_from_slice(if on {
-                &[255, 0, 255, 255]
-            } else {
-                &[0, 0, 0, 255]
-            });
-        }
+/// Retail's `*default`, bound for every material whose image cannot be found:
+/// 16x16 of RGBA (32, 32, 32, 32) inside a one-pixel opaque black border.
+/// From `R_CreateDefaultImage`, CoDMP.exe 1.1 @ 0x4f0380.
+pub fn default_image() -> Image {
+    const DIM: u32 = 16;
+    let mut px = vec![32u8; (DIM * DIM * 4) as usize];
+    let mut edge = |x: u32, y: u32| {
+        let o = ((y * DIM + x) * 4) as usize;
+        px[o..o + 4].copy_from_slice(&[0, 0, 0, 255]);
+    };
+    for i in 0..DIM {
+        edge(i, 0);
+        edge(i, DIM - 1);
+        edge(0, i);
+        edge(DIM - 1, i);
     }
     Image {
-        width: w,
-        height: h,
+        width: DIM,
+        height: DIM,
         data: ImageData::Rgba8(px),
     }
 }
@@ -158,7 +161,7 @@ pub fn white_1x1() -> Image {
 /// binds it for `perlight` bundles, e.g. the pak9 window.shader one). A
 /// bright white core falling off smoothly to transparent; the neuville
 /// window glass samples it so the panes show a soft glow instead of the
-/// checkerboard placeholder.
+/// default-image placeholder.
 pub fn dlight_blob() -> Image {
     const DIM: u32 = 64;
     let r = (DIM as f32) * 0.5;
@@ -289,7 +292,7 @@ fn try_load_image(fs: &Pk3Fs, name: &str) -> Option<Image> {
 }
 
 /// File probe first, then the shader script image. Never fails: missing or
-/// broken assets warn and return the checkerboard.
+/// broken assets warn and return retail's default image.
 pub fn load_material_image(fs: &Pk3Fs, shaders: &Shaders, name: &str) -> Image {
     if let Some(img) = try_load_image(fs, name) {
         return img;
@@ -300,8 +303,8 @@ pub fn load_material_image(fs: &Pk3Fs, shaders: &Shaders, name: &str) -> Image {
         }
         log::warn!("shader {name} maps to missing image {mapped}");
     }
-    log::warn!("no texture found for material {name}, using checkerboard");
-    checkerboard()
+    log::warn!("no texture found for material {name}, using the default image");
+    default_image()
 }
 
 /// Foliage skins (`foliage_masked@`, `foliage_detail@`, tga and dds) store
@@ -370,8 +373,8 @@ fn invert_bc3_alpha(b: &mut [u8]) {
     b[2..8].copy_from_slice(&out.to_le_bytes()[..6]);
 }
 
-/// Loads `skins/<filename>`; missing or undecodable warns and returns the
-/// checkerboard.
+/// Loads `skins/<filename>`; missing or undecodable warns and returns
+/// retail's default image.
 pub fn load_skin_image(fs: &Pk3Fs, filename: &str) -> Image {
     let path = format!("skins/{filename}");
     // some prop skins spell the extension in caps ("wood@pine1.TGA")
@@ -390,12 +393,12 @@ pub fn load_skin_image(fs: &Pk3Fs, filename: &str) -> Image {
             Err(e) => log::warn!("bad {ext} for {path}: {e}"),
         }
     }
-    log::warn!("no texture found for {path}, using checkerboard");
-    checkerboard()
+    log::warn!("no texture found for {path}, using the default image");
+    default_image()
 }
 
 /// Loads by full pk3 path, extension included; no probing, no shader lookup.
-/// Missing or undecodable warns and returns the checkerboard.
+/// Missing or undecodable warns and returns retail's default image.
 pub fn load_path_image(fs: &Pk3Fs, path: &str) -> Image {
     let ext = path
         .rfind('.')
@@ -407,8 +410,8 @@ pub fn load_path_image(fs: &Pk3Fs, path: &str) -> Image {
             Err(e) => log::warn!("bad {ext} for {path}: {e}"),
         }
     }
-    log::warn!("no texture found for {path}, using checkerboard");
-    checkerboard()
+    log::warn!("no texture found for {path}, using the default image");
+    default_image()
 }
 
 #[cfg(test)]
@@ -775,11 +778,17 @@ gfx/effects/second_stage_only
     }
 
     #[test]
-    fn checkerboard_is_rgba() {
-        let img = checkerboard();
-        match img.data {
-            ImageData::Rgba8(px) => assert_eq!(px.len(), (img.width * img.height * 4) as usize),
-            _ => panic!(),
+    fn default_image_matches_retail() {
+        let img = default_image();
+        assert_eq!((img.width, img.height), (16, 16));
+        let ImageData::Rgba8(px) = &img.data else {
+            panic!("the default image is RGBA");
+        };
+        assert_eq!(px.len(), 16 * 16 * 4);
+        let at = |x: usize, y: usize| &px[(y * 16 + x) * 4..][..4];
+        assert_eq!(at(8, 8), [32, 32, 32, 32], "interior");
+        for (x, y) in [(0, 0), (15, 0), (0, 15), (15, 15), (7, 0), (0, 7)] {
+            assert_eq!(at(x, y), [0, 0, 0, 255], "border at {x},{y}");
         }
     }
 
@@ -903,7 +912,7 @@ gfx/effects/second_stage_only
             "expected shader-script material to resolve"
         );
         let fb = load_material_image(&fs, &all, "textures/does/not/exist");
-        assert_eq!((fb.width, fb.height), (64, 64));
+        assert_eq!((fb.width, fb.height), (16, 16));
     }
 
     #[test]
@@ -911,7 +920,7 @@ gfx/effects/second_stage_only
         let Some(fs) = crate::testing::game_fs() else {
             return;
         };
-        let fallback = checkerboard();
+        let fallback = default_image();
         for path in ["gfx/impact/bullethole1.tga", "gfx/impact/dusty_puff.tga"] {
             let img = load_path_image(&fs, path);
             let ImageData::Rgba8(px) = &img.data else {
@@ -920,7 +929,7 @@ gfx/effects/second_stage_only
             assert!(img.width >= 64 && img.height >= 64, "{path} is tiny");
             assert!(
                 !matches!(&fallback.data, ImageData::Rgba8(fb) if fb == px),
-                "{path} fell back to the checkerboard"
+                "{path} fell back to the default image"
             );
             // both are cutouts
             assert!(
@@ -929,7 +938,7 @@ gfx/effects/second_stage_only
             );
         }
         let fb = load_path_image(&fs, "gfx/impact/no_such_file.tga");
-        assert_eq!((fb.width, fb.height), (64, 64));
+        assert_eq!((fb.width, fb.height), (16, 16));
     }
 
     #[test]
@@ -948,7 +957,7 @@ gfx/effects/second_stage_only
             "expected decoded jpg"
         );
         let fb = load_skin_image(&fs, "no@such.dds");
-        assert_eq!((fb.width, fb.height), (64, 64));
+        assert_eq!((fb.width, fb.height), (16, 16));
     }
 
     /// The format sniffer cannot detect TGA, so the decoder must be picked by

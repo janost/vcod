@@ -868,8 +868,8 @@ mod tests {
         );
         assert_ne!(
             (hand.width, hand.height),
-            (64, 64),
-            "must not be the checkerboard fallback"
+            (16, 16),
+            "must not be the default-image fallback"
         );
 
         let sleeve = load_skin_image(&fs, "viewhands@vsleeve_whermact.tga");
@@ -879,8 +879,8 @@ mod tests {
         );
         assert_ne!(
             (sleeve.width, sleeve.height),
-            (64, 64),
-            "must not be the checkerboard fallback"
+            (16, 16),
+            "must not be the default-image fallback"
         );
     }
 

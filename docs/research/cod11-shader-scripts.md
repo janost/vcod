@@ -276,11 +276,23 @@ Each omission with its census justification:
   Open question: whether an exp-fog map's density rides the wire raw or with
   RTCW's +0.1 client-side offset; settle on the first exp-fog server capture
   (neuville/bocage would show a black wall if we over-thicken).
+- Missing images bind retail's `*default`: 16x16 of RGBA (32, 32, 32, 32)
+  inside a one-pixel opaque black border. `R_CreateDefaultImage`, CoDMP.exe
+  1.1 @ 0x4f0380 (`mov eax,0x20202020` + `rep stos` over 0x400 bytes, then the
+  four border runs written RGB 0 / alpha 0xff, registered 16x16 under the
+  `.rdata` string `*default` @ 0x54b57c). `R_FindShader` reaches it through the
+  `Couldn't find image for shader %s` branch @ 0x4fc7fc, which flags the
+  material and lets FinishShader return the default shader. INFERRED from
+  decompilation; not yet compared against a retail frame. `assets::default_image`
+  matches those bytes, so a material whose file no pak ships reads as a dark
+  surface rather than a placeholder pattern (`textures/cod2/egypt_wire_black`
+  on the custom map mp_burgundy is the case that motivated it: the map
+  references it and ships it in neither of the server's referenced paks).
 - `$dlight` bundle images: engine-generated light blobs, never files on disk
   (corpus whitelist in `shader_corpus.rs`, which cites the pak9
   window.shader occurrence). vcod binds a generated radial falloff blob
   (`assets::dlight_blob`) since 2026-08-26, so the neuville window glass
-  shows a soft glow instead of the checkerboard placeholder. The mp_ship
+  shows a soft glow instead of the default-image placeholder. The mp_ship
   flag decks bind 1x1 white for the same reason that
   `textures/battleship/deckflag_np.tga` (flagfore/flagaft's second bundle)
   ships in no stock pak under any extension; retail binds its own default
@@ -302,14 +314,14 @@ Each omission with its census justification:
 - Live fly-throughs, VERIFIED by me on the Deluxe install: mp_pavlov (night
   sky), mp_harbor, mp_bocage (overcast hedgerow sky, fence and foliage
   cutouts, terrain detail blends), noville (dusk cloud dome, scrolling cloud
-  stage visible), burnville. Zero checkerboards on stock main maps; 94-145 fps
+  stage visible), burnville. Zero missing textures on stock main maps; 94-145 fps
   during the passes.
 - PENDING HUMAN REVIEW: pixel-truth against the retail renderer. Everything
   above proves the surfaces render as authored; only side-by-side comparison
   with the real game can prove the last percent of blending and sky shading.
 - Known divergences, all logged in §8: NV/ATI hw-path stages dropped (retail
   fallback parity), sun disc absent, ocean deformVertexes flat, fog absent,
-  `$dlight` bundles checkerboard on neuville windows and the mp_ship flag
-  decks checkerboard on their missing deckflag image, noville checkerboards
-  under `--mod-dir uo` are the documented single-mod-dir mounting limitation
-  (its textures ship in main/ pak0/pak1), turb axis follows tr_shade_calc.c.
+  `$dlight` bundles and the mp_ship deckflag image have substitutes rather
+  than files, noville's missing textures under `--mod-dir uo` are the
+  documented single-mod-dir mounting limitation (its textures ship in main/
+  pak0/pak1), turb axis follows tr_shade_calc.c.

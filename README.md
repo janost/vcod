@@ -122,7 +122,7 @@ vcod mp_pavlov --game-dir /path/to/CallOfDuty
 - `--list` prints every `.bsp` in the search path instead of opening a window.
 - `--mod-dir` selects which subdirectory's pk3s to index: `main` for retail
   CoD1 (default), `uo` for United Offensive. Only one directory mounts at a
-  time, so a UO map whose art ships in `main/` shows checkerboards; noville
+  time, so a UO map whose art ships in `main/` shows missing textures; noville
   was flown this way and renders apart from that. Anything beyond noville is
   untested.
 - `--walk` starts at a player spawn point as a collidable soldier. Needs a map
@@ -203,8 +203,9 @@ These work in every mode:
   `deformVertexes` so ocean waves draw flat, the `sunfile` sun disc is not
   drawn, and NV/ATI hardware-path stages are dropped exactly as retail dropped
   them on machines without those extensions. Engine-generated `$dlight`
-  bundle images and the ship's deckflag texture have no file to load and draw
-  checkerboard (neuville windows, mp_ship flag decks). Details in
+  bundle images and the ship's deckflag texture have no file to load, so a
+  generated light blob and a white pixel stand in for them (neuville windows,
+  mp_ship flag decks). Details in
   [docs/research/cod11-shader-scripts.md](docs/research/cod11-shader-scripts.md).
 - Visibility follows the retail cells and portals but without the portal
   bevel planes and the brushmodel occluder volumes, so a little more is drawn

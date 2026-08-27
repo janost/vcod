@@ -538,14 +538,14 @@ mod tests {
         assert_eq!(counts["crate_ger_rola"], 8);
     }
 
-    /// Size alone doesn't say: some real skins (`metal@civcar2tread.dds`) are
-    /// 64x64 too, so the pixels must match.
-    fn is_checkerboard(img: &crate::assets::Image) -> bool {
-        use crate::assets::{checkerboard, ImageData};
-        let (ImageData::Rgba8(px), ImageData::Rgba8(cb)) = (&img.data, checkerboard().data) else {
+    /// Size alone doesn't say: a real skin could be 16x16 too, so the pixels
+    /// must match.
+    fn is_default_image(img: &crate::assets::Image) -> bool {
+        use crate::assets::{default_image, ImageData};
+        let (ImageData::Rgba8(px), ImageData::Rgba8(d)) = (&img.data, default_image().data) else {
             return false;
         };
-        (img.width, img.height) == (64, 64) && *px == cb
+        (img.width, img.height) == (16, 16) && *px == d
     }
 
     #[test]
@@ -563,8 +563,8 @@ mod tests {
         for skin in &shrub.materials {
             assert!(skin.contains('.'), "expected a filename, got {skin}");
             assert!(
-                !is_checkerboard(&load_skin_image(&fs, skin)),
-                "{skin} fell back to the checkerboard"
+                !is_default_image(&load_skin_image(&fs, skin)),
+                "{skin} fell back to the default image"
             );
         }
     }
@@ -616,8 +616,8 @@ mod tests {
             .all(|&i| (i as usize) < props.verts.len()));
         for b in &props.batches {
             assert!(
-                !is_checkerboard(&load_skin_image(&fs, &b.skin)),
-                "{} fell back to the checkerboard",
+                !is_default_image(&load_skin_image(&fs, &b.skin)),
+                "{} fell back to the default image",
                 b.skin
             );
         }

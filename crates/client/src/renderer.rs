@@ -2083,7 +2083,7 @@ impl Renderer {
             vertices.len()
         );
         println!(
-            "{} textures loaded, {} fallback checkerboards, {} lightmap pages",
+            "{} textures loaded, {} missing, {} lightmap pages",
             loaded,
             fallbacks,
             lightmap_views.len()
@@ -3466,8 +3466,8 @@ fn create_fx_pass(
 }
 
 /// Resolves an fx shader name to a loadable texture path. `load_path_image`
-/// never fails (a missing file becomes the checkerboard), so unresolvable
-/// names must be caught here or they draw checkerboard quads. `.efx` names
+/// never fails (a missing file becomes the default image), so unresolvable
+/// names must be caught here or they draw default-image quads. `.efx` names
 /// are usually extensionless material names, probed like
 /// `assets::probe_image_path`. A name with a known extension is tried as-is
 /// first; if that file is missing the other extensions are probed too, since
@@ -4339,7 +4339,7 @@ fn upload_rgba(
 }
 
 /// Resolves a bundle image path through the asset probe chain; a missing
-/// file warns and lands in the checkerboard. Views are deduped per load.
+/// file warns and lands in the default image. Views are deduped per load.
 fn upload_bundle_view(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -4360,8 +4360,8 @@ fn upload_bundle_view(
         match assets::resolve_bundle_image(fs, path) {
             Some(full) => assets::load_path_image(fs, &full),
             None => {
-                log::warn!("shader image {path} not found, using checkerboard");
-                assets::checkerboard()
+                log::warn!("shader image {path} not found, using the default image");
+                assets::default_image()
             }
         }
     };
@@ -4371,16 +4371,16 @@ fn upload_bundle_view(
 }
 
 fn fallback_pixels() -> Vec<u8> {
-    match assets::checkerboard().data {
+    match assets::default_image().data {
         ImageData::Rgba8(px) => px,
         _ => Vec::new(),
     }
 }
 
-/// True for `load_material_image`'s checkerboard placeholder.
+/// True for `load_material_image`'s default-image placeholder.
 fn is_fallback(img: &Image, fallback_px: &[u8]) -> bool {
-    img.width == 64
-        && img.height == 64
+    img.width == 16
+        && img.height == 16
         && matches!(&img.data, ImageData::Rgba8(px) if px == fallback_px)
 }
 
