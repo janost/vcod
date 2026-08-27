@@ -1193,9 +1193,10 @@ mod tests {
 
             let mut r = MsgReader::new(&msg[4..], &h);
             loop {
-                if r.is_overflowed() {
-                    break;
-                }
+                assert!(
+                    !r.is_overflowed(),
+                    "message {message_num} ran out before svc_EOF"
+                );
                 let op = r.read_byte();
                 if op == SVC_EOF {
                     break;
@@ -1238,18 +1239,18 @@ mod tests {
                             delta_frames += 1;
                         }
                     }
-                    _ => break,
+                    // A capture carrying an op this walk cannot follow would
+                    // silently drop every frame behind it.
+                    _ => panic!("unhandled svc op {op} in {snap_fixture}"),
                 }
             }
         }
         (checked, delta_frames)
     }
 
-    /// Every captured retail frame re-encodes to the identical byte string.
-    /// The gamestate writer is pinned the same way
-    /// (`writer_reproduces_the_captured_gamestate_byte_for_byte`); this is the
-    /// only evidence that our encoder makes retail's choices rather than merely
-    /// self-consistent ones.
+    /// Every captured retail frame re-encodes to the identical byte string,
+    /// the bar `writer_reproduces_the_captured_gamestate_byte_for_byte` sets
+    /// for the gamestate.
     ///
     /// Two captured runs. `snapshots.bin` is the first 24 messages of a
     /// connection, every frame uncompressed: the server has no acked frame to
@@ -1257,16 +1258,45 @@ mod tests {
     /// `snapshots-delta.bin` is 400 messages off the retail 1.1d dedicated
     /// server on mp_carentan, past the point where the client's acks start
     /// arriving, so every frame but the first is a delta.
+    ///
+    /// What the two runs actually pin, since a capture only exercises the
+    /// arms its own contents reach: the header, the playerState scalar delta
+    /// (`lc`, the change bits, the integral/full float path selection), the
+    /// omission of an entity unchanged from the base frame, an entity delta
+    /// taken against its gamestate baseline, and the roster's uncompressed
+    /// arm, a client written full from null, plus its terminator. What
+    /// they do not: an entity delta against a base-frame entity, the removal
+    /// bit, and the roster's delta-against-a-base-entry arm. Both captures
+    /// are of a lone spectator on a map whose twelve entities never move, so
+    /// no entity ever differs from its base and the roster never changes.
+    /// Those arms are covered by round trip against scripted moving entities,
+    /// not here.
+    ///
+    /// The playerState array blocks are pinned only as far as their bit
+    /// widths reach. `PlayerState::arrays` is a tape of primitives, so the
+    /// replay reproduces the bytes without deriving a single gate bit, mask
+    /// or count; a wrong width would misalign everything after it, a wrong
+    /// reading of a mask would not.
     #[test]
     fn writer_reproduces_the_captured_snapshots_byte_for_byte() {
-        let (connect, _) = regate("net/gamestate.bin", "net/snapshots.bin");
-        assert!(connect > 0, "no snapshots in the connect-time capture");
+        let (connect, delta) = regate("net/gamestate.bin", "net/snapshots.bin");
+        assert_eq!(
+            (connect, delta),
+            (24, 0),
+            "the connect-time capture changed"
+        );
 
+        // Floors, not bounds: a refreshed capture may be longer, but one that
+        // shrank back to connect-time frames would pin nothing about deltas
+        // while staying green.
         let (steady, delta_frames) = regate("net/gamestate-delta.bin", "net/snapshots-delta.bin");
-        assert!(
-            steady > connect,
+        assert_eq!(
+            steady, 400,
             "the steady-state capture shrank: {steady} frames"
         );
-        assert!(delta_frames > 0, "capture carried no delta frames to pin");
+        assert!(
+            delta_frames >= 399,
+            "only {delta_frames} delta frames to pin"
+        );
     }
 }

@@ -574,8 +574,10 @@ pub fn read_delta_playerstate(r: &mut MsgReader, p: &Protocol, from: &PlayerStat
             // The change bit says the C saw two different ints, but this codec
             // has no zero flag, so a `-0.0` comes back `+0.0` and would
             // re-encode as unchanged. Keep the sign the entity codec keeps
-            // (docs/protocol-1.1.md, "PlayerState delta").
-            if v == to.fields[i] {
+            // (docs/protocol-1.1.md, "PlayerState delta"). The integral path
+            // is exact for everything else, so `v == base` can only mean the
+            // two zeroes; the guard says so rather than trusting it.
+            if v == 0 && to.fields[i] == 0 {
                 (-0f32).to_bits() as i32
             } else {
                 v
