@@ -74,6 +74,17 @@ impl Pk3Fs {
         })
     }
 
+    /// A filesystem with no archives; every lookup misses. For tests that
+    /// need the type but not the game.
+    pub fn empty() -> Self {
+        Self {
+            archives: Vec::new(),
+            index: HashMap::new(),
+            alias_index: HashMap::new(),
+            open: Mutex::new(HashMap::new()),
+        }
+    }
+
     /// Same lookup as `read`, without touching the archive.
     pub fn contains(&self, path: &str) -> bool {
         let key = path.to_lowercase();

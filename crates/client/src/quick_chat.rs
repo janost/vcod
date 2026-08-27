@@ -222,8 +222,9 @@ mod tests {
         assert!(qc.on_server_command(&fs(), &cmd("l", 2, "praise"), |_| None));
     }
 
+    // Every test here injects its tables, so the fs is never read.
     fn fs() -> Pk3Fs {
-        vcod_common::testing::game_fs().expect("COD_DIR set for tests")
+        Pk3Fs::empty()
     }
 
     #[test]

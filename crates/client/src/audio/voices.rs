@@ -723,7 +723,7 @@ mod tests {
         // A loaded 2D voice goes to the flat pool instead; a different
         // channel so the (entity, channel) replacement cannot touch the
         // world-space streams.
-        let mut other = nv2d(Channel::Menu);
+        let other = nv2d(Channel::Menu);
         put(&mut t, other);
         assert_eq!(t.ids().len(), STREAM_POOL + 1);
     }
