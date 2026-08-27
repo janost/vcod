@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::Protocol;
+use vcod_common::net::protocol::{Protocol, ENTITYNUM_NONE};
 use vcod_common::net::trajectory::TR_LINEAR;
 use vcod_common::{bsp, collision::CollisionWorld};
 
@@ -38,6 +38,10 @@ const FIRST_TEST_ENT: u32 = 32;
 /// The last entity vanishes for 2 s out of every 8 s.
 const CYCLE_MS: i32 = 8000;
 const GONE_MS: i32 = 2000;
+/// The highest `--test-entities` count that keeps every scripted entity
+/// number below `ENTITYNUM_NONE`; past this, the highest-numbered entity
+/// collides with the packet-entities terminator and corrupts the wire.
+pub const MAX_TEST_ENTITIES: usize = (ENTITYNUM_NONE - FIRST_TEST_ENT) as usize;
 
 impl TestEntities {
     pub fn new(count: usize, around: [f32; 3]) -> Self {
@@ -133,5 +137,26 @@ mod tests {
         let bl = te.baselines(p);
         assert_eq!(bl.len(), 3);
         assert!(bl.contains_key(&32));
+    }
+
+    #[test]
+    fn max_test_entities_is_the_last_count_below_entitynum_none() {
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+
+        let at_max = TestEntities::new(MAX_TEST_ENTITIES, [0.0, 0.0, 64.0]);
+        let highest = *at_max.baselines(p).keys().max().unwrap();
+        assert_eq!(
+            highest,
+            ENTITYNUM_NONE - 1,
+            "MAX_TEST_ENTITIES should use every number up to ENTITYNUM_NONE - 1"
+        );
+
+        let one_over = TestEntities::new(MAX_TEST_ENTITIES + 1, [0.0, 0.0, 64.0]);
+        let highest_over = *one_over.baselines(p).keys().max().unwrap();
+        assert_eq!(
+            highest_over, ENTITYNUM_NONE,
+            "one past MAX_TEST_ENTITIES reaches ENTITYNUM_NONE, which is what \
+             the --test-entities startup check rejects"
+        );
     }
 }

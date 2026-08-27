@@ -44,6 +44,13 @@ const MAX_PACKETS_PER_FRAME: usize = 256;
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
+    if args.test_entities > vcod_server::world::MAX_TEST_ENTITIES {
+        bail!(
+            "--test-entities {} exceeds {}, the most that fits below ENTITYNUM_NONE",
+            args.test_entities,
+            vcod_server::world::MAX_TEST_ENTITIES
+        );
+    }
     let dir = args.game_dir.join(&args.mod_dir);
     let fs =
         Pk3Fs::open(&dir).with_context(|| format!("opening game data in {}", dir.display()))?;

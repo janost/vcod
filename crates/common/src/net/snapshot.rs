@@ -281,7 +281,19 @@ pub fn write(
     w.write_long(to.server_time);
     // deltaNum rides the wire as the offset back to the base, not its number.
     let delta_byte = match from {
-        Some(base) => (to.message_num - base.message_num) as u8,
+        Some(base) => {
+            let back = to.message_num.wrapping_sub(base.message_num);
+            // The offset has to fit the wire byte and can't be 0 (that reads
+            // as "uncompressed"); the server caller already filters this, but
+            // the invariant belongs on the public API, not just its one caller.
+            debug_assert!(
+                (1..=255).contains(&back),
+                "delta offset {back} out of the u8 wire range (to {}, base {})",
+                to.message_num,
+                base.message_num
+            );
+            back as u8
+        }
         None => 0,
     };
     w.write_byte(delta_byte);
@@ -343,6 +355,13 @@ fn write_packet_entities(
 
     let nums: BTreeSet<u32> = base.keys().chain(to.keys()).copied().collect();
     for num in nums {
+        // A number at or past ENTITYNUM_NONE is indistinguishable on the
+        // wire from the packet-entities terminator: it would truncate the
+        // stream mid-run and desync every entity read after it, silently.
+        debug_assert!(
+            num < ENTITYNUM_NONE,
+            "entity {num} not below ENTITYNUM_NONE"
+        );
         let old = base.get(&num);
         let new = to.get(&num);
         match (old, new) {
@@ -1101,6 +1120,61 @@ mod tests {
             w_ref.into_ops(),
             "identical frames emit only the terminator"
         );
+    }
+
+    /// A number at or past ENTITYNUM_NONE is indistinguishable on the wire
+    /// from the terminator; unguarded, it truncates the packet-entity stream
+    /// mid-run and every entity after it silently vanishes rather than
+    /// erroring (`{32, 1022, 1023, 1055}` parses back as `[32, 1022]`). The
+    /// debug_assert! turns that into a loud test failure instead.
+    #[test]
+    #[should_panic(expected = "not below ENTITYNUM_NONE")]
+    fn write_packet_entities_rejects_a_number_at_entitynum_none() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let ent = |x: i32| {
+            let mut e = EntityState::null(p);
+            let o0 = EntityState::field_index(p, "pos.trBase[0]").unwrap();
+            e.fields[o0] = x;
+            e
+        };
+        let mut to = BTreeMap::new();
+        for &num in &[
+            32u32,
+            ENTITYNUM_NONE - 1,
+            ENTITYNUM_NONE,
+            ENTITYNUM_NONE + 32,
+        ] {
+            to.insert(num, ent(num as i32));
+        }
+
+        let mut w = MsgWriter::new(&h);
+        write_packet_entities(&mut w, p, None, &to, &HashMap::new());
+    }
+
+    /// The caller (`server.rs`) already filters the base to a 1..=255 offset
+    /// from the frame it sends, but `write` is the public API and shouldn't
+    /// rely on being the only caller to keep that filter correct.
+    #[test]
+    #[should_panic(expected = "out of the u8 wire range")]
+    fn write_rejects_a_zero_delta_offset() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let base = Snapshot {
+            message_num: 5,
+            valid: true,
+            ps: PlayerState::null(p),
+            ..Default::default()
+        };
+        let to = Snapshot {
+            message_num: 5,
+            valid: true,
+            ps: PlayerState::null(p),
+            ..Default::default()
+        };
+
+        let mut w = MsgWriter::new(&h);
+        write(&mut w, p, Some(&base), &to, &HashMap::new());
     }
 
     /// Testing layer 2 from the design doc: parse a committed capture
