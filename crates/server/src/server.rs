@@ -165,6 +165,9 @@ pub struct Server {
     world: Option<World>,
     /// `svs.time`, advanced one frame per tick.
     sv_time_ms: i32,
+    /// Gamestate entity baselines a delta frame may omit an unchanged entity
+    /// against; empty until entities exist (task 5).
+    baselines: HashMap<u32, msg::EntityState>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -228,6 +231,7 @@ impl Server {
             rng: seed,
             world: None,
             sv_time_ms: 0,
+            baselines: HashMap::new(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -832,9 +836,9 @@ impl Server {
         self.sv_time_ms = self.sv_time_ms.wrapping_add(FRAME_MS);
 
         // One clientState entry per online client, rebuilt each frame; slot ==
-        // index. Every frame is still sent uncompressed (`from: None`), so the
-        // reader restarts its roster each time regardless of this map's shape.
-        let cs_map: BTreeMap<u32, msg::ClientState> = self
+        // index. `snapshot::write` deltas this against each client's own
+        // base roster, or sends it full when that client has none.
+        let roster: BTreeMap<u32, msg::ClientState> = self
             .clients
             .iter()
             .enumerate()
@@ -843,6 +847,8 @@ impl Server {
                     .map(|c| (i as u32, msg::ClientState::named(self.proto, 0, 3, &c.name)))
             })
             .collect();
+        // No entities yet (task 5).
+        let entities: BTreeMap<u32, msg::EntityState> = BTreeMap::new();
 
         for slot in 0..self.clients.len() {
             let world = self.world.as_ref().map(|w| &w.collision);
@@ -878,27 +884,42 @@ impl Server {
                 processed += 1;
             }
             let command_time = c.last_processed_st.max(self.sv_time_ms - FRAME_MS);
-            let wire = sim.to_wire(self.proto, slot as i32, command_time);
+            let message_num = c.netchan.outgoing_sequence;
+
+            let frame = snapshot::Snapshot {
+                server_time: self.sv_time_ms,
+                message_num,
+                delta_num: -1,
+                snap_flags: 0,
+                ps: sim.to_wire(self.proto, slot as i32, command_time),
+                entities: entities.clone(),
+                clients: roster.clone(),
+                valid: true,
+            };
+
+            // The base is the frame the client last acked, if it is still in
+            // the ring and close enough for the byte-wide deltaNum offset.
+            let base = c
+                .sent_frame(c.message_ack.max(0) as u32)
+                .filter(|b| {
+                    let back = message_num.saturating_sub(b.message_num);
+                    (1..=255).contains(&back)
+                })
+                .cloned();
 
             let mut w = MsgWriter::new(&self.huff);
             write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
             w.write_byte(snapshot::SVC_SNAPSHOT);
-            // No delta base yet: every frame goes out uncompressed (task 4
-            // wires up the ring and base selection).
-            let frame = snapshot::Snapshot {
-                server_time: self.sv_time_ms,
-                ps: wire,
-                clients: cs_map.clone(),
-                ..Default::default()
-            };
             snapshot::write(
                 &mut w,
                 self.proto,
-                c.netchan.outgoing_sequence,
-                None,
+                message_num,
+                base.as_ref(),
                 &frame,
-                &HashMap::new(),
+                &self.baselines,
             );
+            c.record_frame(frame);
+
             let ops = w.into_ops();
             for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
                 self.outbox.push((c.addr, pkt));
@@ -1898,7 +1919,7 @@ mod tests {
             &mut ring,
             now + std::time::Duration::from_millis(50),
         );
-        assert!(s.valid && s.delta_num == -1);
+        assert!(s.valid);
         assert!(
             sv.clients[0].as_ref().unwrap().pending.len() <= 2,
             "flood left {} cmds queued",
@@ -1910,7 +1931,7 @@ mod tests {
             &mut ring,
             now + std::time::Duration::from_millis(100),
         );
-        assert!(s2.valid && s2.delta_num == -1, "snapshots must continue");
+        assert!(s2.valid, "snapshots must continue");
     }
 
     /// A retail client omits unchanged angle fields (change bit 0) instead of
@@ -2129,7 +2150,7 @@ mod tests {
             &mut ring,
             t1 + std::time::Duration::from_millis(50),
         );
-        assert!(s2.valid && s2.delta_num == -1, "snapshots must continue");
+        assert!(s2.valid, "snapshots must continue");
         assert!(
             (s2.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01,
             "the garbled packet must not reset the base, got {}",

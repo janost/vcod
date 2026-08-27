@@ -190,3 +190,57 @@ fn silent_client_times_out() {
     sv.tick(now + Duration::from_secs(241));
     assert_eq!(sv.client_count(), 0);
 }
+
+/// Once the client acks a frame, later frames delta against it; when acks
+/// stop for longer than the ring, the server falls back to uncompressed and
+/// recovers when they resume.
+#[test]
+fn frames_delta_against_the_acked_base_and_fall_back_when_acks_stop() {
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut sv = server();
+    let mut now = Instant::now();
+    let mut cl = connect(&mut sv, &q, &mut now);
+
+    let mut seen_delta = false;
+    let mut seen_uncompressed_during_silence = false;
+    let mut seen_delta_after_recovery = false;
+
+    for tick in 0..80 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&NULL_USERCMD);
+        // Ack every frame for the first 40 ticks, then go silent for 35
+        // (past the 32-deep ring), then resume.
+        let acking = !(40..75).contains(&tick);
+        if !acking {
+            // The client still sends; the server just never sees it, as if
+            // every ack packet were lost in flight.
+            q.borrow_mut().to_server.clear();
+        }
+        step(&mut sv, &q, &mut cl, now);
+
+        if let Some(s) = cl.snapshots().newest() {
+            if s.delta_num > 0 {
+                seen_delta = true;
+                if tick >= 75 {
+                    seen_delta_after_recovery = true;
+                }
+            } else if (40..75).contains(&tick) {
+                seen_uncompressed_during_silence = true;
+            }
+        }
+    }
+
+    assert!(seen_delta, "no delta frame while the client was acking");
+    assert!(
+        seen_uncompressed_during_silence,
+        "server kept deltaing against a base the client never acked"
+    );
+    assert!(
+        seen_delta_after_recovery,
+        "deltas never resumed once acks came back"
+    );
+    assert!(
+        cl.snapshots().last_invalid().is_none(),
+        "client failed to resolve a delta base"
+    );
+}

@@ -102,6 +102,12 @@ impl SnapshotRing {
             .filter(|s| s.valid)
     }
 
+    /// The last frame parsed with an unresolved base, if any; a sender that
+    /// deltas against a base the peer never acked produces one of these.
+    pub fn last_invalid(&self) -> Option<&Snapshot> {
+        self.dropped.as_ref()
+    }
+
     /// Parse from after the `svc_snapshot` op. A frame whose base is missing
     /// parses to `valid = false` and is not kept.
     pub fn parse_into(

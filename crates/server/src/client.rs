@@ -5,9 +5,13 @@ use std::net::SocketAddr;
 use std::time::Instant;
 use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
 use vcod_common::net::netchan::{ClientMessage, ServerNetchan};
+use vcod_common::net::snapshot::Snapshot;
 
 /// `MAX_NAME_LENGTH`, a byte cap since the value is remote input.
 const MAX_NAME: usize = 32;
+
+/// Retail's `PACKET_BACKUP`; the client's own `SnapshotRing` ring size matches.
+pub const SV_PACKET_BACKUP: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientState {
@@ -46,6 +50,9 @@ pub struct Client {
     pub last_cmd: UserCmd,
     /// Set once the client enters the world.
     pub sim: Option<SpectatorSim>,
+    /// Frames sent to this client, indexed message_num % SV_PACKET_BACKUP;
+    /// the delta base for a later frame is picked from here by message_ack.
+    pub frames: Vec<Option<Snapshot>>,
 }
 
 impl Client {
@@ -75,7 +82,21 @@ impl Client {
             pending: Vec::new(),
             last_cmd: NULL_USERCMD,
             sim: None,
+            frames: vec![None; SV_PACKET_BACKUP],
         }
+    }
+
+    /// The frame sent as `message_num`, if still in the ring.
+    pub fn sent_frame(&self, message_num: u32) -> Option<&Snapshot> {
+        self.frames[message_num as usize % SV_PACKET_BACKUP]
+            .as_ref()
+            .filter(|s| s.message_num == message_num)
+    }
+
+    /// File a frame under the sequence its packet will carry.
+    pub fn record_frame(&mut self, snap: Snapshot) {
+        let idx = snap.message_num as usize % SV_PACKET_BACKUP;
+        self.frames[idx] = Some(snap);
     }
 
     /// Commits a message that passed every check: the netchan sequence, the
