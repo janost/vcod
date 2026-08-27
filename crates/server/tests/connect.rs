@@ -7,7 +7,8 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::connectionless::info_value_for_key;
-use vcod_common::net::msg::NULL_USERCMD;
+use vcod_common::net::msg::{EntityState, NULL_USERCMD};
+use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::{NetClient, NetEvent, NetState, Transport};
 use vcod_server::{Server, ServerConfig};
 
@@ -34,12 +35,17 @@ impl Transport for ClientEnd {
 }
 
 fn server() -> Server {
+    server_with_entities(0)
+}
+
+fn server_with_entities(test_entities: usize) -> Server {
     Server::new(
         ServerConfig {
             map: "mp_carentan".into(),
             hostname: "loop".into(),
             max_clients: 2,
             gametype: "dm".into(),
+            test_entities,
         },
         Instant::now(),
     )
@@ -231,6 +237,9 @@ fn frames_delta_against_the_acked_base_and_fall_back_when_acks_stop() {
     // packet's real netchan sequence rather than any renumbering of its own
     // — a uniform off-by-one between the two cancels on every other frame in
     // this test, but not across this gap. See `step_dropping_reply`.
+    // Keep this inside 0..40 (acking) and away from the acking/silence
+    // boundary at 40 and the loop's end at 80; ticks 38-40 and 78-79 are dead
+    // zones where the test silently stops catching what it names.
     const DROPPED_REPLY_TICK: i32 = 10;
 
     for tick in 0..80 {
@@ -271,6 +280,118 @@ fn frames_delta_against_the_acked_base_and_fall_back_when_acks_stop() {
         seen_delta_after_recovery,
         "deltas never resumed once acks came back"
     );
+    assert!(
+        cl.snapshots().last_invalid().is_none(),
+        "client failed to resolve a delta base"
+    );
+}
+
+/// Scripted entities end to end, asserted against the client's own parsed
+/// ring: they appear at their gamestate numbers, entity 32's trajectory
+/// restarts (the only field `TestEntities::at` actually varies with time)
+/// between two frames while the client is acking, so the delta writer must
+/// re-encode it against the base-frame entity, and the cycling entity
+/// disappears (the removal bit) and returns (a re-add through the baseline
+/// path).
+#[test]
+fn scripted_entities_move_cycle_out_and_return() {
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut sv = server_with_entities(2);
+    let mut now = Instant::now();
+    let mut cl = connect(&mut sv, &q, &mut now);
+
+    let p = &PROTOCOL_V1;
+    let time_idx = EntityState::field_index(p, "pos.trTime").unwrap();
+
+    let mut saw_both_entities = false;
+    let mut first_time_at_32: Option<i32> = None;
+    let mut saw_time_change = false;
+    let mut saw_gone = false;
+    let mut saw_return_after_gone = false;
+
+    // 50 ms/tick (sv_fps 20); 260 ticks span 13 s, past a full 8 s cycle of
+    // the entity that vanishes for 2 s of every cycle, with room to spare.
+    for _ in 0..260 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&NULL_USERCMD);
+        step(&mut sv, &q, &mut cl, now);
+
+        let Some(s) = cl.snapshots().newest() else {
+            continue;
+        };
+        if s.entities.contains_key(&32) && s.entities.contains_key(&33) {
+            saw_both_entities = true;
+        }
+        if let Some(e32) = s.entities.get(&32) {
+            let t = e32.fields[time_idx];
+            match first_time_at_32 {
+                None => first_time_at_32 = Some(t),
+                Some(first) if t != first => saw_time_change = true,
+                _ => {}
+            }
+        }
+        if !s.entities.contains_key(&33) {
+            saw_gone = true;
+        } else if saw_gone {
+            saw_return_after_gone = true;
+        }
+    }
+
+    assert!(
+        saw_both_entities,
+        "the scripted entities never appeared at 32 and 33"
+    );
+    assert!(
+        saw_time_change,
+        "entity 32's trajectory never re-encoded against its base"
+    );
+    assert!(saw_gone, "the cycling entity never disappeared");
+    assert!(
+        saw_return_after_gone,
+        "the cycling entity never returned after cycling out"
+    );
+    assert!(
+        cl.snapshots().last_invalid().is_none(),
+        "client failed to resolve a delta base"
+    );
+}
+
+/// A userinfo rename after entering the game changes an existing roster
+/// entry in place. None of the other snapshot tests touch this: a lone
+/// client whose name never changes always compares equal to its own base, so
+/// the roster's delta-against-a-base-entry arm (an entry present on both
+/// sides that actually differs) is otherwise never taken.
+#[test]
+fn a_renamed_client_deltas_against_its_roster_base() {
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut sv = server();
+    let mut now = Instant::now();
+    let mut cl = connect(&mut sv, &q, &mut now);
+
+    let p = &PROTOCOL_V1;
+    let mut saw_original_name = false;
+    let mut saw_new_name = false;
+
+    for tick in 0..40 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&NULL_USERCMD);
+        if tick == 5 {
+            cl.send_reliable("userinfo \\name\\bob");
+        }
+        step(&mut sv, &q, &mut cl, now);
+
+        let Some(s) = cl.snapshots().newest() else {
+            continue;
+        };
+        match s.clients.get(&0).map(|c| c.name(p)).as_deref() {
+            Some("vcod") => saw_original_name = true,
+            Some("bob") => saw_new_name = true,
+            _ => {}
+        }
+    }
+
+    assert!(saw_original_name, "never saw the original name");
+    assert!(saw_new_name, "the userinfo rename never reached a snapshot");
     assert!(
         cl.snapshots().last_invalid().is_none(),
         "client failed to resolve a delta base"

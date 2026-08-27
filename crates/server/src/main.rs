@@ -29,6 +29,9 @@ struct Args {
     /// sv_maxclients
     #[arg(long, default_value_t = 8)]
     max_clients: usize,
+    /// Scripted entities that exercise the packet-entity wire path. 0 is off.
+    #[arg(long, default_value_t = 0)]
+    test_entities: usize,
 }
 
 /// `sv_fps 20`.
@@ -61,6 +64,7 @@ fn main() -> Result<()> {
             hostname: args.hostname,
             max_clients: args.max_clients,
             gametype: "dm".into(),
+            test_entities: args.test_entities,
         },
         Instant::now(),
     );

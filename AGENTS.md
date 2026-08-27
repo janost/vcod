@@ -130,8 +130,9 @@ engineering setup works.
   goes in a research doc with the bytes. It answers the handshake and
   gamestate but sends no snapshots to a lone spectator; snapshots need a
   player in the game. `cargo run -p vcod-server -- <map>` runs **ours**:
-  the handshake, the gamestate, client commands and moves, and uncompressed
-  snapshots with pmove-driven spectator flight (no deltas, no entities, no
+  the handshake, the gamestate, client commands and moves, and snapshots
+  delta-compressed against the client's acked frame, with pmove-driven
+  spectator flight and `--test-entities` for scripted packet entities (no
   restarts yet).
 - Live captures so far came from populated public servers (a TDM server on
   2026-08-24, an S&D server on 2026-08-25); a 60-100 s capture during a round

@@ -8,7 +8,7 @@
 use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
 use crate::spectate::SpectatorSim;
-use crate::world::World;
+use crate::world::{TestEntities, World};
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
@@ -66,6 +66,8 @@ pub struct ServerConfig {
     pub max_clients: usize,
     /// `g_gametype` as text (`dm`, `tdm`, `sd`).
     pub gametype: String,
+    /// Scripted entities that exercise the packet-entity wire path. 0 is off.
+    pub test_entities: usize,
 }
 
 /// `challenge_t`. Entries past `CHALLENGE_TTL` go on the next insert; the
@@ -166,8 +168,11 @@ pub struct Server {
     /// `svs.time`, advanced one frame per tick.
     sv_time_ms: i32,
     /// Gamestate entity baselines a delta frame may omit an unchanged entity
-    /// against; empty until entities exist (task 5).
+    /// against; empty when `test_entities` is off.
     baselines: HashMap<u32, msg::EntityState>,
+    /// Scripted entities driving the packet-entity path; `None` when
+    /// `cfg.test_entities` is 0.
+    test_entities: Option<TestEntities>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -232,9 +237,15 @@ impl Server {
             world: None,
             sv_time_ms: 0,
             baselines: HashMap::new(),
+            test_entities: None,
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
+        if sv.cfg.test_entities > 0 {
+            let te = TestEntities::new(sv.cfg.test_entities, [0.0, 0.0, 64.0]);
+            sv.baselines = te.baselines(sv.proto);
+            sv.test_entities = Some(te);
+        }
         sv
     }
 
@@ -697,7 +708,7 @@ impl Server {
         c.pending.drain(..excess);
     }
 
-    /// `SV_SendClientGameState`, with no baselines yet.
+    /// `SV_SendClientGameState`.
     fn send_gamestate(&mut self, slot: usize) {
         let Some(c) = self.clients[slot].as_mut() else {
             return;
@@ -708,7 +719,7 @@ impl Server {
         write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
         let gs = Gamestate {
             configstrings: self.configstrings.clone(),
-            baselines: Default::default(),
+            baselines: self.baselines.clone(),
             client_num: slot as i32,
             checksum_feed: self.checksum_feed,
             server_command_sequence: c.netchan.reliable_sequence as i32,
@@ -849,8 +860,10 @@ impl Server {
                     .map(|c| (i as u32, msg::ClientState::named(self.proto, 0, 3, &c.name)))
             })
             .collect();
-        // No entities yet (task 5).
-        let entities: BTreeMap<u32, msg::EntityState> = BTreeMap::new();
+        let entities: BTreeMap<u32, msg::EntityState> = self
+            .test_entities
+            .as_ref()
+            .map_or_else(BTreeMap::new, |te| te.at(self.proto, self.sv_time_ms));
 
         for slot in 0..self.clients.len() {
             let world = self.world.as_ref().map(|w| &w.collision);
@@ -947,6 +960,7 @@ mod tests {
             hostname: "vcod test".into(),
             max_clients: 4,
             gametype: "dm".into(),
+            test_entities: 0,
         }
     }
     fn addr(port: u16) -> SocketAddr {

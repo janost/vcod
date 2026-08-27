@@ -35,8 +35,10 @@ combat effects.
   the map's own.
 - `vcod-server` answers server browsers, accepts connections and hands out the
   gamestate, so a retail 1.1 client loads the map, then keeps it alive with
-  uncompressed snapshots and flies it around as a spectator on the shared
-  pmove. It simulates nothing else yet.
+  delta-compressed snapshots against the client's last acked frame and flies
+  it around as a spectator on the shared pmove. `--test-entities` adds
+  scripted moving entities to exercise the packet-entity path; it simulates
+  no real gameplay yet.
 
 The whole thing runs on wgpu and winit, so in principle it is cross-platform.
 I have only run it on Linux.
@@ -158,7 +160,9 @@ vcod --connect 127.0.0.1:28960
 The server binds `0.0.0.0` and, like the retail server, answers `getstatus`
 from anyone and honours an out-of-band `disconnect` by source address. Run it
 on a LAN or behind a firewall you control. `--max-clients` sets
-`sv_maxclients` (default 8). `--game-dir`, `--mod-dir` and `COD_DIR` work the
+`sv_maxclients` (default 8). `--test-entities <n>` adds `n` scripted moving
+entities, one of which cycles in and out, to exercise the packet-entity wire
+path; 0 (the default) is off. `--game-dir`, `--mod-dir` and `COD_DIR` work the
 same way as for the client.
 
 ## Controls
@@ -257,9 +261,12 @@ These work in every mode:
 - Audio fidelity is matched to the retail engine on paper (falloff, panning,
   channel replacement, ducking) but not yet confirmed by ear against the real
   game.
-- The server sends uncompressed snapshots and moves spectators itself; it
-  simulates nothing else. No delta compression yet, so frames are larger
-  than retail's.
+- The server deltas snapshots against the client's last acked frame and moves
+  spectators itself; it simulates no real gameplay. `--test-entities` adds
+  scripted entities so the packet-entity wire path (baselines, moving
+  deltas, removal and re-add) has something to exercise; their encoding is
+  round-trip tested, not pinned against a retail capture the way the rest of
+  the snapshot writer is, since no entity in the captured frames ever moves.
 
 ## Documentation
 
