@@ -3,6 +3,18 @@ name: Nightly
 on:
   push:
     branches: [master]
+    # Docs and dev tooling do not change the binaries, so they do not earn a
+    # three-platform build. LICENSE and NOTICE are left off the list on
+    # purpose: the Stage step ships them in the archive. So does README.md,
+    # which a docs-only push therefore leaves one code push behind; run the
+    # workflow by hand to refresh it.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'tools/**'
+      - '.github/workflows/ci.yml'
+      - '.gitignore'
+      - 'opencode.json'
   workflow_dispatch:
 
 concurrency:

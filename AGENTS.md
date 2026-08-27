@@ -55,8 +55,10 @@ engineering setup works.
   no `COD_DIR`, so anything that hard-requires game data breaks it; a test
   that needs the paks goes through `game_fs()` and returns early, or uses
   `Pk3Fs::empty()`. `nightly.yml` builds release binaries for linux amd64,
-  windows amd64 and macos arm64 on every master push and replaces the rolling
-  `nightly` release with them.
+  windows amd64 and macos arm64 and replaces the rolling `nightly` release
+  with them. It skips master pushes that only touch docs or `tools/`
+  (`paths-ignore`); `workflow_dispatch` forces a build when you want one
+  anyway.
 - The all-maps material and parser census tests scope to stock `pak[0-9].pk3`
   because live-server map downloads drop third-party `zzz_*.pk3` files into
   `main/`; a failing census on a custom pak is not a regression.
