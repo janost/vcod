@@ -89,6 +89,7 @@ Prebuilt binaries for Linux amd64, Windows amd64 and macOS arm64 are on the
 [nightly release](https://github.com/janost/vcod/releases/tag/nightly), rebuilt
 from `master` on every push. It is a rolling tag: the assets are replaced in
 place, so the download URLs never change and the previous build is gone.
+Linux and macOS ship as `.tar.zst`, Windows as `.zip`.
 
 To build it yourself:
 

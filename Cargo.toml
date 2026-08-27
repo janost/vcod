@@ -26,6 +26,11 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 tempfile = "3"
 vcod-common = { path = "crates/common" }
 
+# Release binaries ship to the nightly release; the symbol table is most of
+# their size and nothing reads it. Panic backtraces lose function names.
+[profile.release]
+strip = "symbols"
+
 # kira/symphonia/cpal are unusably slow unoptimized (crackle, seconds per
 # decode); optimizing every dependency in dev builds costs one cold build.
 # Profiles only take effect at the workspace root.

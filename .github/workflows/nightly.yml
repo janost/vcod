@@ -58,9 +58,11 @@ jobs:
           done
           cp README.md LICENSE NOTICE "$dir/"
 
-      - name: Archive (tar.gz)
+      # Piped through the zstd binary rather than `tar --zstd`, which the
+      # macOS runner's bsdtar does not carry.
+      - name: Archive (tar.zst)
         if: runner.os != 'Windows'
-        run: tar czf vcod-${{ matrix.name }}.tar.gz vcod-${{ matrix.name }}
+        run: tar cf - vcod-${{ matrix.name }} | zstd -19 -T0 -o vcod-${{ matrix.name }}.tar.zst
 
       - name: Archive (zip)
         if: runner.os == 'Windows'
