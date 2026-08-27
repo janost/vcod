@@ -272,7 +272,6 @@ fn parse_clients(
 pub fn write(
     w: &mut MsgWriter,
     p: &Protocol,
-    message_num: u32,
     from: Option<&Snapshot>,
     to: &Snapshot,
     baselines: &HashMap<u32, EntityState>,
@@ -282,7 +281,7 @@ pub fn write(
     w.write_long(to.server_time);
     // deltaNum rides the wire as the offset back to the base, not its number.
     let delta_byte = match from {
-        Some(base) => (message_num - base.message_num) as u8,
+        Some(base) => (to.message_num - base.message_num) as u8,
         None => 0,
     };
     w.write_byte(delta_byte);
@@ -882,7 +881,7 @@ mod tests {
         };
         a.clients.insert(0, ClientState::named(p, 0, 3, "vcod"));
         let mut w = MsgWriter::new(&h);
-        write(&mut w, p, 10, None, &a, &HashMap::new());
+        write(&mut w, p, None, &a, &HashMap::new());
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
@@ -909,7 +908,7 @@ mod tests {
         b.clients.insert(0, ClientState::named(p, 0, 3, "bob"));
         b.clients.insert(3, ClientState::named(p, 3, 1, "eve"));
         let mut w = MsgWriter::new(&h);
-        write(&mut w, p, 11, None, &b, &HashMap::new());
+        write(&mut w, p, None, &b, &HashMap::new());
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
@@ -937,7 +936,7 @@ mod tests {
         };
         c.clients.insert(3, eve_cleared);
         let mut w = MsgWriter::new(&h);
-        write(&mut w, p, 12, None, &c, &HashMap::new());
+        write(&mut w, p, None, &c, &HashMap::new());
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
@@ -981,7 +980,7 @@ mod tests {
         to.clients.insert(3, ClientState::named(p, 3, 3, "dave"));
 
         let mut w = MsgWriter::new(&h);
-        write(&mut w, p, 11, Some(&base), &to, &HashMap::new());
+        write(&mut w, p, Some(&base), &to, &HashMap::new());
 
         let mut ring = SnapshotRing::new();
         ring.insert(base.clone());
@@ -1052,7 +1051,7 @@ mod tests {
         to.entities.insert(7, ent(700));
 
         let mut w = MsgWriter::new(&h);
-        write(&mut w, p, 21, Some(&base), &to, &baselines);
+        write(&mut w, p, Some(&base), &to, &baselines);
         let bits = w.bits_written();
 
         let mut ring = SnapshotRing::new();
@@ -1152,7 +1151,7 @@ mod tests {
         assert!(!cap.clients.is_empty(), "no clientStates in the snapshot");
 
         let mut w = MsgWriter::new(&h);
-        write(&mut w, p, cap.message_num, None, &cap, &HashMap::new());
+        write(&mut w, p, None, &cap, &HashMap::new());
         let d = w.finish();
         let mut out_ring = SnapshotRing::new();
         let mut r = MsgReader::new(&d, &h);
@@ -1232,7 +1231,7 @@ mod tests {
                         };
 
                         let mut w = MsgWriter::new(&h);
-                        write(&mut w, p, message_num, base.as_ref(), &snap, &gs.baselines);
+                        write(&mut w, p, base.as_ref(), &snap, &gs.baselines);
                         let re = w.into_ops();
 
                         assert_eq!(

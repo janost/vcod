@@ -64,6 +64,27 @@ fn step(
     cl.pump_at(now)
 }
 
+/// Like `step`, but the server's reply never reaches the client — a lost
+/// snapshot packet, not a lost ack. The client's next real ack then names a
+/// frame it received without having received the one right before it, the
+/// only case where a server-side message_num that has drifted from the
+/// packet's actual netchan sequence is observable on the wire (see
+/// `frames_delta_against_the_acked_base_and_fall_back_when_acks_stop`).
+fn step_dropping_reply(
+    sv: &mut Server,
+    q: &Rc<RefCell<Queues>>,
+    cl: &mut NetClient<ClientEnd>,
+    now: Instant,
+) -> Vec<NetEvent> {
+    let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
+    for p in pending {
+        sv.handle_packet(ADDR, &p, now);
+    }
+    sv.tick(now);
+    sv.take_outgoing();
+    cl.pump_at(now)
+}
+
 fn connect(sv: &mut Server, q: &Rc<RefCell<Queues>>, now: &mut Instant) -> NetClient<ClientEnd> {
     let mut cl = NetClient::start(ClientEnd(q.clone()), *now);
     for _ in 0..40 {
@@ -204,6 +225,13 @@ fn frames_delta_against_the_acked_base_and_fall_back_when_acks_stop() {
     let mut seen_delta = false;
     let mut seen_uncompressed_during_silence = false;
     let mut seen_delta_after_recovery = false;
+    // A single mid-stream lost reply, well before the long ack silence below.
+    // The client's ack the tick after this jumps straight past the sequence
+    // it never received, so the base the server picks must line up with the
+    // packet's real netchan sequence rather than any renumbering of its own
+    // — a uniform off-by-one between the two cancels on every other frame in
+    // this test, but not across this gap. See `step_dropping_reply`.
+    const DROPPED_REPLY_TICK: i32 = 10;
 
     for tick in 0..80 {
         now += Duration::from_millis(50);
@@ -216,7 +244,11 @@ fn frames_delta_against_the_acked_base_and_fall_back_when_acks_stop() {
             // every ack packet were lost in flight.
             q.borrow_mut().to_server.clear();
         }
-        step(&mut sv, &q, &mut cl, now);
+        if tick == DROPPED_REPLY_TICK {
+            step_dropping_reply(&mut sv, &q, &mut cl, now);
+        } else {
+            step(&mut sv, &q, &mut cl, now);
+        }
 
         if let Some(s) = cl.snapshots().newest() {
             if s.delta_num > 0 {

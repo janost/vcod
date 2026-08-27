@@ -829,9 +829,11 @@ impl Server {
         self.send_snapshots();
     }
 
-    /// One uncompressed snapshot per active client; the main loop paces calls
-    /// at sv_fps. The sim replays every queued usercmd first, dt off the
-    /// cmd clocks, matching the client's own prediction.
+    /// One snapshot per active client per tick, the main loop pacing calls at
+    /// sv_fps: a delta against the frame the client last acked when one is
+    /// still in its ring, uncompressed otherwise. The sim replays every
+    /// queued usercmd first, dt off the cmd clocks, matching the client's own
+    /// prediction.
     fn send_snapshots(&mut self) {
         self.sv_time_ms = self.sv_time_ms.wrapping_add(FRAME_MS);
 
@@ -899,6 +901,10 @@ impl Server {
 
             // The base is the frame the client last acked, if it is still in
             // the ring and close enough for the byte-wide deltaNum offset.
+            // Safe at a full SV_PACKET_BACKUP depth (no margin, unlike
+            // retail's SV_WriteSnapshotToClient, which keeps PACKET_BACKUP -
+            // 3) only because both this ring and the client's own read a slot
+            // before either side can overwrite it.
             let base = c
                 .sent_frame(c.message_ack.max(0) as u32)
                 .filter(|b| {
@@ -910,14 +916,7 @@ impl Server {
             let mut w = MsgWriter::new(&self.huff);
             write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
             w.write_byte(snapshot::SVC_SNAPSHOT);
-            snapshot::write(
-                &mut w,
-                self.proto,
-                message_num,
-                base.as_ref(),
-                &frame,
-                &self.baselines,
-            );
+            snapshot::write(&mut w, self.proto, base.as_ref(), &frame, &self.baselines);
             c.record_frame(frame);
 
             let ops = w.into_ops();
