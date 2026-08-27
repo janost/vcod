@@ -5,8 +5,8 @@
 //! ring of recent snapshots a delta frame resolves its base from.
 
 use super::msg::{
-    read_delta_client, read_delta_entity, read_delta_playerstate, ClientState, EntityState,
-    MsgReader, MsgWriter, PlayerState,
+    read_delta_client, read_delta_entity, read_delta_playerstate, write_delta_entity, ClientState,
+    EntityState, MsgReader, MsgWriter, PlayerState,
 };
 use super::protocol::{Protocol, ENTITYNUM_NONE, GENTITYNUM_BITS};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -321,14 +321,42 @@ pub fn write(
     w.write_bits(0, 1);
 }
 
-/// Placeholder until Task 2: an empty packet-entity run.
+/// `SV_EmitPacketEntities`. Ascending numbers, `ENTITYNUM_NONE` terminates.
+/// An entity unchanged from the base frame is omitted and the reader carries
+/// it forward; one absent from the base is always written, even unchanged
+/// from its baseline, or the reader never learns it exists.
 fn write_packet_entities(
     w: &mut MsgWriter,
-    _p: &Protocol,
-    _from: Option<&BTreeMap<u32, EntityState>>,
-    _to: &BTreeMap<u32, EntityState>,
-    _baselines: &HashMap<u32, EntityState>,
+    p: &Protocol,
+    from: Option<&BTreeMap<u32, EntityState>>,
+    to: &BTreeMap<u32, EntityState>,
+    baselines: &HashMap<u32, EntityState>,
 ) {
+    let empty = BTreeMap::new();
+    let base = from.unwrap_or(&empty);
+    let null = EntityState::null(p);
+
+    let nums: BTreeSet<u32> = base.keys().chain(to.keys()).copied().collect();
+    for num in nums {
+        let old = base.get(&num);
+        let new = to.get(&num);
+        match (old, new) {
+            (Some(o), Some(n)) if o == n => continue,
+            (Some(o), Some(n)) => {
+                w.write_bits(num as i32, GENTITYNUM_BITS as i32);
+                write_delta_entity(w, p, o, Some(n));
+            }
+            (None, Some(n)) => {
+                w.write_bits(num as i32, GENTITYNUM_BITS as i32);
+                write_delta_entity(w, p, baselines.get(&num).unwrap_or(&null), Some(n));
+            }
+            (Some(o), None) => {
+                w.write_bits(num as i32, GENTITYNUM_BITS as i32);
+                write_delta_entity(w, p, o, None);
+            }
+            (None, None) => unreachable!("number came from one of the two maps"),
+        }
+    }
     w.write_bits(ENTITYNUM_NONE as i32, GENTITYNUM_BITS as i32);
 }
 
@@ -966,6 +994,77 @@ mod tests {
             "unchanged carries forward"
         );
         assert_eq!(got.clients[&3], to.clients[&3], "new client from null");
+    }
+
+    /// The four packet-entity cases: new-from-baseline, changed, unchanged
+    /// (omitted, carried forward), removed.
+    #[test]
+    fn delta_entities_cover_new_changed_unchanged_and_removed() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let o0 = EntityState::field_index(p, "pos.trBase[0]").unwrap();
+
+        let ent = |x: i32| {
+            let mut e = EntityState::null(p);
+            e.fields[o0] = x;
+            e
+        };
+
+        // Entity 7 has a baseline and is new to this frame at its baseline value.
+        let mut baselines = HashMap::new();
+        baselines.insert(7u32, ent(700));
+
+        let mut base = Snapshot {
+            message_num: 20,
+            server_time: 2000,
+            valid: true,
+            ps: PlayerState::null(p),
+            ..Default::default()
+        };
+        base.entities.insert(4, ent(400)); // unchanged
+        base.entities.insert(5, ent(500)); // changed
+        base.entities.insert(6, ent(600)); // removed
+
+        let mut to = Snapshot {
+            message_num: 21,
+            server_time: 2050,
+            valid: true,
+            ps: PlayerState::null(p),
+            ..Default::default()
+        };
+        to.entities.insert(4, ent(400));
+        to.entities.insert(5, ent(555));
+        to.entities.insert(7, ent(700));
+
+        let mut w = MsgWriter::new(&h);
+        write(&mut w, p, 21, Some(&base), &to, &baselines);
+        let bits = w.bits_written();
+
+        let mut ring = SnapshotRing::new();
+        ring.set_baselines(baselines.clone());
+        ring.insert(base.clone());
+        // finish(), not into_ops(): MsgReader::new always block-decompresses,
+        // so the reader needs huffman-coded bytes, not the plain wire bits.
+        let bytes = w.finish();
+        let mut r = MsgReader::new(&bytes, &h);
+        let got = ring.parse_into(&mut r, p, 21).unwrap().clone();
+
+        assert!(got.valid);
+        assert_eq!(
+            got.entities.keys().copied().collect::<Vec<_>>(),
+            vec![4, 5, 7]
+        );
+        assert_eq!(
+            got.entities[&4].fields[o0], 400,
+            "unchanged carried forward"
+        );
+        assert_eq!(got.entities[&5].fields[o0], 555, "changed deltas from base");
+        assert_eq!(
+            got.entities[&7].fields[o0], 700,
+            "new entity from its baseline"
+        );
+        assert!(!r.is_overflowed());
+        assert_eq!(r.bits_read(), bits);
     }
 
     /// Testing layer 2 from the design doc: parse a committed capture
