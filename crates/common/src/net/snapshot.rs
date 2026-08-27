@@ -1164,4 +1164,109 @@ mod tests {
             assert_eq!(back.clients[&num].fields, cs.fields, "client {num}");
         }
     }
+
+    /// Re-encodes every snapshot in one captured run against the base the
+    /// parse resolved, and returns `(frames, delta frames)`.
+    fn regate(gs_fixture: &str, snap_fixture: &str) -> (usize, usize) {
+        use crate::net::gamestate;
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+
+        let gs_data = crate::testing::fixture(gs_fixture);
+        let mut gr = MsgReader::new(&gs_data[4..], &h);
+        let gs = gamestate::parse(&mut gr, p).unwrap();
+
+        let mut ring = SnapshotRing::new();
+        ring.set_baselines(gs.baselines.clone());
+
+        let data = crate::testing::fixture(snap_fixture);
+        let mut off = 0usize;
+        let mut checked = 0usize;
+        let mut delta_frames = 0usize;
+
+        while off + 8 <= data.len() {
+            let message_num = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+            let len = u32::from_le_bytes(data[off + 4..off + 8].try_into().unwrap()) as usize;
+            off += 8;
+            let msg = &data[off..off + len];
+            off += len;
+
+            let mut r = MsgReader::new(&msg[4..], &h);
+            loop {
+                if r.is_overflowed() {
+                    break;
+                }
+                let op = r.read_byte();
+                if op == SVC_EOF {
+                    break;
+                }
+                match op {
+                    SVC_NOP => {}
+                    SVC_SERVER_COMMAND => {
+                        r.read_long();
+                        r.read_big_string();
+                    }
+                    SVC_SNAPSHOT => {
+                        let start_bits = r.bits_read();
+                        assert_eq!(start_bits % 8, 0, "frame body starts byte-aligned");
+
+                        let snap = ring.parse_into(&mut r, p, message_num).unwrap().clone();
+                        let end_bits = r.bits_read();
+
+                        // Both cursors interleave bits and bytes the same way,
+                        // and the terminator's unused high bits are zero on
+                        // both sides, so the span compares as whole bytes.
+                        let original = r.plain()[start_bits / 8..end_bits.div_ceil(8)].to_vec();
+
+                        let base = if snap.delta_num > 0 {
+                            ring.get(snap.delta_num as u32).cloned()
+                        } else {
+                            None
+                        };
+
+                        let mut w = MsgWriter::new(&h);
+                        write(&mut w, p, message_num, base.as_ref(), &snap, &gs.baselines);
+                        let re = w.into_ops();
+
+                        assert_eq!(
+                            re, original,
+                            "frame {message_num} (delta_num {}) re-encoded differently",
+                            snap.delta_num
+                        );
+                        checked += 1;
+                        if snap.delta_num > 0 {
+                            delta_frames += 1;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        }
+        (checked, delta_frames)
+    }
+
+    /// Every captured retail frame re-encodes to the identical byte string.
+    /// The gamestate writer is pinned the same way
+    /// (`writer_reproduces_the_captured_gamestate_byte_for_byte`); this is the
+    /// only evidence that our encoder makes retail's choices rather than merely
+    /// self-consistent ones.
+    ///
+    /// Two captured runs. `snapshots.bin` is the first 24 messages of a
+    /// connection, every frame uncompressed: the server has no acked frame to
+    /// delta against yet, so that run pins nothing about deltas.
+    /// `snapshots-delta.bin` is 400 messages off the retail 1.1d dedicated
+    /// server on mp_carentan, past the point where the client's acks start
+    /// arriving, so every frame but the first is a delta.
+    #[test]
+    fn writer_reproduces_the_captured_snapshots_byte_for_byte() {
+        let (connect, _) = regate("net/gamestate.bin", "net/snapshots.bin");
+        assert!(connect > 0, "no snapshots in the connect-time capture");
+
+        let (steady, delta_frames) = regate("net/gamestate-delta.bin", "net/snapshots-delta.bin");
+        assert!(
+            steady > connect,
+            "the steady-state capture shrank: {steady} frames"
+        );
+        assert!(delta_frames > 0, "capture carried no delta frames to pin");
+    }
 }
