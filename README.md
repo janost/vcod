@@ -30,8 +30,9 @@ combat effects.
   the server's spectator camera, and renders every player as an assembled
   soldier playing the server-driven animations. Kill feed, chat, scoreboard,
   sounds, tracers, impacts and muzzle flashes come from the same events the
-  retail client reads. It downloads maps it does not have, the way the retail
-  client does.
+  retail client reads. It downloads every pak the server references and the
+  install lacks, the way the retail client does, so mod paks arrive along with
+  the map's own.
 - `vcod-server` answers server browsers, accepts connections and hands out the
   gamestate, so a retail 1.1 client loads the map. It sends no snapshots yet.
 
@@ -165,7 +166,7 @@ Click to capture the mouse, Esc to release it, mouse to look around.
 
 In spectate mode the position comes from the server; the mouse drives the look
 angles. Hold Tab for the scoreboard. A map change on the server shows a loading
-screen (and downloads a missing pak the way the connect does) and continues on
+screen (and downloads missing paks the way the connect does) and continues on
 the new map.
 
 These work in every mode:

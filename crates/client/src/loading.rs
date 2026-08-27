@@ -36,8 +36,10 @@ pub enum Action {
 const STALL: Duration = Duration::from_secs(30);
 /// How long to wait for the re-sent gamestate after `donedl`.
 const REGAMESTATE: Duration = Duration::from_secs(10);
-/// Referenced paks tried per map, as before.
-const MAX_CANDIDATES: usize = 4;
+/// Referenced paks fetched per map. All of them are wanted, not just the one
+/// that carries the .bsp; the cap only bounds what a hostile server can make
+/// the client pull in one connect.
+const MAX_CANDIDATES: usize = 8;
 
 enum State {
     Resolve,
@@ -97,26 +99,29 @@ impl MapLoader {
         }
         match self.state {
             State::Resolve => {
-                if map_resolves {
-                    if self.downloaded > 0 {
-                        self.state = State::AwaitGamestate { since: now };
-                        return Action::FinishDownloads;
-                    }
-                    self.state = State::Done;
-                    return Action::Ready;
+                // Every referenced pak the client lacks, not just the one that
+                // resolves the map: the mod pak holds the skins, models and
+                // sounds the map's own pak does not.
+                if let Some((remote, dest)) = self.candidates.get(self.next).cloned() {
+                    let idx = self.next;
+                    self.next += 1;
+                    self.state = State::Downloading {
+                        idx,
+                        last_progress: now,
+                        received: 0,
+                    };
+                    return Action::BeginDownload { remote, dest };
                 }
-                let Some((remote, dest)) = self.candidates.get(self.next).cloned() else {
+                if !map_resolves {
                     self.state = State::Done;
                     return Action::Failed(format!("map {} is not on the server", self.map));
-                };
-                let idx = self.next;
-                self.next += 1;
-                self.state = State::Downloading {
-                    idx,
-                    last_progress: now,
-                    received: 0,
-                };
-                Action::BeginDownload { remote, dest }
+                }
+                if self.downloaded > 0 {
+                    self.state = State::AwaitGamestate { since: now };
+                    return Action::FinishDownloads;
+                }
+                self.state = State::Done;
+                Action::Ready
             }
             State::Downloading {
                 idx,
@@ -251,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pak_without_the_map_moves_to_the_next_candidate() {
+    fn every_candidate_is_downloaded_in_turn() {
         let t0 = Instant::now();
         let mut l = MapLoader::new("mp_x".into(), cands(2));
         assert!(matches!(
@@ -267,6 +272,33 @@ mod tests {
                 dest: PathBuf::from("/tmp/zzz_1.pk3")
             }
         );
+    }
+
+    /// The mod pak is referenced but holds no .bsp, so the map resolves from
+    /// the first pak; the rest must still be fetched.
+    #[test]
+    fn a_resolvable_map_still_pulls_the_remaining_paks() {
+        let t0 = Instant::now();
+        let mut l = MapLoader::new("mp_x".into(), cands(2));
+        assert_eq!(
+            l.step(&[], None, true, t0),
+            Action::BeginDownload {
+                remote: "main/zzz_0.pk3".into(),
+                dest: PathBuf::from("/tmp/zzz_0.pk3")
+            }
+        );
+        let done = [NetEvent::DownloadComplete("main/zzz_0.pk3".into())];
+        assert_eq!(l.step(&done, None, true, t0), Action::Reopen);
+        assert_eq!(
+            l.step(&[], None, true, t0),
+            Action::BeginDownload {
+                remote: "main/zzz_1.pk3".into(),
+                dest: PathBuf::from("/tmp/zzz_1.pk3")
+            }
+        );
+        let done = [NetEvent::DownloadComplete("main/zzz_1.pk3".into())];
+        assert_eq!(l.step(&done, None, true, t0), Action::Reopen);
+        assert_eq!(l.step(&[], None, true, t0), Action::FinishDownloads);
     }
 
     #[test]
