@@ -50,6 +50,13 @@ engineering setup works.
   run on a machine without the game proves nothing about parsers. Set `COD_DIR`
   when running the suite. Net parser tests read the committed captures in
   `crates/common/tests/fixtures/net/` and run anywhere.
+- CI is two workflows in `.github/workflows/`. `ci.yml` runs fmt, clippy
+  (`-D warnings`) and the suite on every PR and master push, on ubuntu with
+  no `COD_DIR`, so anything that hard-requires game data breaks it; a test
+  that needs the paks goes through `game_fs()` and returns early, or uses
+  `Pk3Fs::empty()`. `nightly.yml` builds release binaries for linux amd64,
+  windows amd64 and macos arm64 on every master push and replaces the rolling
+  `nightly` release with them.
 - The all-maps material and parser census tests scope to stock `pak[0-9].pk3`
   because live-server map downloads drop third-party `zzz_*.pk3` files into
   `main/`; a failing census on a custom pak is not a regression.

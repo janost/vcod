@@ -1,0 +1,100 @@
+name: Nightly
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-amd64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-amd64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev
+
+      - run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --workspace --target ${{ matrix.target }}
+
+      - name: Stage
+        shell: bash
+        run: |
+          dir=vcod-${{ matrix.name }}
+          mkdir "$dir"
+          for bin in vcod vcod-server; do
+            src=target/${{ matrix.target }}/release/$bin
+            if [ -f "$src.exe" ]; then src=$src.exe; fi
+            cp "$src" "$dir/"
+          done
+          cp README.md LICENSE NOTICE "$dir/"
+
+      - name: Archive (tar.gz)
+        if: runner.os != 'Windows'
+        run: tar czf vcod-${{ matrix.name }}.tar.gz vcod-${{ matrix.name }}
+
+      - name: Archive (zip)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path vcod-${{ matrix.name }} -DestinationPath vcod-${{ matrix.name }}.zip
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vcod-${{ matrix.name }}
+          path: vcod-${{ matrix.name }}.*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Rolling release: the previous nightly and its tag go, then both are
+      # recreated at this commit, so the download URLs stay stable.
+      - name: Publish nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --yes --cleanup-tag || true
+          gh release create nightly \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Nightly" \
+            --notes "Built from master at ${GITHUB_SHA:0:8} on $(date -u '+%Y-%m-%d %H:%M UTC'). Unstable by definition." \
+            dist/*

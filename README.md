@@ -85,6 +85,13 @@ reference implementation.
 
 ## Building and installing
 
+Prebuilt binaries for Linux amd64, Windows amd64 and macOS arm64 are on the
+[nightly release](https://github.com/janost/vcod/releases/tag/nightly), rebuilt
+from `master` on every push. It is a rolling tag: the assets are replaced in
+place, so the download URLs never change and the previous build is gone.
+
+To build it yourself:
+
 ```
 cargo build --release
 ```
@@ -107,6 +114,7 @@ COD_DIR=/path/to/CallOfDuty cargo test
 Without `COD_DIR` the tests that need game data return early and report ok,
 so a green run on a machine without the game proves nothing about the
 parsers. The net-protocol tests read committed captures and run anywhere.
+CI runs the suite this way, since the game data cannot ship with it.
 
 ## Usage
 
