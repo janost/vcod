@@ -341,7 +341,10 @@ fn write_packet_entities(
         let old = base.get(&num);
         let new = to.get(&num);
         match (old, new) {
-            (Some(o), Some(n)) if o == n => continue,
+            // Compare fields only, not the whole EntityState: `number` is not
+            // meaningful in `o` unless it came off the same construction path
+            // as `n`, and retail's own unchanged test is `lc == 0` over fields.
+            (Some(o), Some(n)) if o.fields == n.fields => continue,
             (Some(o), Some(n)) => {
                 w.write_bits(num as i32, GENTITYNUM_BITS as i32);
                 write_delta_entity(w, p, o, Some(n));
@@ -1003,6 +1006,7 @@ mod tests {
         let p = &PROTOCOL_V1;
         let h = Huffman::new();
         let o0 = EntityState::field_index(p, "pos.trBase[0]").unwrap();
+        let o1 = EntityState::field_index(p, "pos.trBase[1]").unwrap();
 
         let ent = |x: i32| {
             let mut e = EntityState::null(p);
@@ -1022,7 +1026,12 @@ mod tests {
             ..Default::default()
         };
         base.entities.insert(4, ent(400)); // unchanged
-        base.entities.insert(5, ent(500)); // changed
+                                           // Changed, with a second field (o1: 42 -> 0) that only the correct
+                                           // base (the base-frame entity, not the unrelated baseline/null) makes
+                                           // `lc` reach far enough to write.
+        let mut e5 = ent(500);
+        e5.fields[o1] = 42;
+        base.entities.insert(5, e5);
         base.entities.insert(6, ent(600)); // removed
 
         let mut to = Snapshot {
@@ -1060,11 +1069,33 @@ mod tests {
         );
         assert_eq!(got.entities[&5].fields[o0], 555, "changed deltas from base");
         assert_eq!(
+            got.entities[&5].fields[o1], 0,
+            "changed deltas from the base-frame entity, not the baseline or null \
+             (a wrong base would stop lc short of this field and leave 42)"
+        );
+        assert_eq!(
             got.entities[&7].fields[o0], 700,
             "new entity from its baseline"
         );
         assert!(!r.is_overflowed());
         assert_eq!(r.bits_read(), bits);
+
+        // Identical frames must emit nothing but the terminator: an entity
+        // unchanged from the base is omitted, not re-sent as a no-delta entry.
+        // Compared against a reference writer that only writes the
+        // terminator, not a literal bit count: a fresh MsgWriter rounds
+        // bits_written() up to the next byte on a pure-bits write (out.len()
+        // pre-allocates a byte at each 8-bit boundary), so GENTITYNUM_BITS
+        // itself is not what a correct call reports.
+        let mut w2 = MsgWriter::new(&h);
+        write_packet_entities(&mut w2, p, Some(&base.entities), &base.entities, &baselines);
+        let mut w_ref = MsgWriter::new(&h);
+        w_ref.write_bits(ENTITYNUM_NONE as i32, GENTITYNUM_BITS as i32);
+        assert_eq!(
+            w2.into_ops(),
+            w_ref.into_ops(),
+            "identical frames emit only the terminator"
+        );
     }
 
     /// Testing layer 2 from the design doc: parse a committed capture
