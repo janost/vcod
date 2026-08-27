@@ -9,7 +9,7 @@ use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
 use crate::spectate::SpectatorSim;
 use crate::world::World;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 use vcod_common::net::connectionless::{build_oob, parse_connect, parse_oob, Info};
@@ -832,13 +832,15 @@ impl Server {
         self.sv_time_ms = self.sv_time_ms.wrapping_add(FRAME_MS);
 
         // One clientState entry per online client, rebuilt each frame; slot ==
-        // index, empty slots None (the reader restarts the roster every frame).
-        let cs_list: Vec<Option<msg::ClientState>> = self
+        // index. Every frame is still sent uncompressed (`from: None`), so the
+        // reader restarts its roster each time regardless of this map's shape.
+        let cs_map: BTreeMap<u32, msg::ClientState> = self
             .clients
             .iter()
-            .map(|c| {
+            .enumerate()
+            .filter_map(|(i, c)| {
                 c.as_ref()
-                    .map(|c| msg::ClientState::named(self.proto, 0, 3, &c.name))
+                    .map(|c| (i as u32, msg::ClientState::named(self.proto, 0, 3, &c.name)))
             })
             .collect();
 
@@ -881,7 +883,22 @@ impl Server {
             let mut w = MsgWriter::new(&self.huff);
             write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
             w.write_byte(snapshot::SVC_SNAPSHOT);
-            snapshot::write_uncompressed(&mut w, self.proto, self.sv_time_ms, &wire, &cs_list);
+            // No delta base yet: every frame goes out uncompressed (task 4
+            // wires up the ring and base selection).
+            let frame = snapshot::Snapshot {
+                server_time: self.sv_time_ms,
+                ps: wire,
+                clients: cs_map.clone(),
+                ..Default::default()
+            };
+            snapshot::write(
+                &mut w,
+                self.proto,
+                c.netchan.outgoing_sequence,
+                None,
+                &frame,
+                &HashMap::new(),
+            );
             let ops = w.into_ops();
             for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
                 self.outbox.push((c.addr, pkt));

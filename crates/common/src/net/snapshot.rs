@@ -9,7 +9,7 @@ use super::msg::{
     MsgReader, MsgWriter, PlayerState,
 };
 use super::protocol::{Protocol, ENTITYNUM_NONE, GENTITYNUM_BITS};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// `svc_ops_e` (confirmed against cod_lnxded 1.1d).
 pub const SVC_BAD: u8 = 0;
@@ -260,38 +260,76 @@ fn parse_clients(
     new
 }
 
-/// The body of an uncompressed snapshot (`SV_WriteSnapshotToClient` with
-/// `deltaNum = 0`): header, playerstate from null, an empty packet-entity
-/// run, then one full clientState entry per connected client. No areamask on
-/// CoD 1.1. Entities join when the world has any.
-///
-/// Each slot present in `to_clients` (slot == client num) goes out as a full
-/// state from null, matching retail's encoding of uncompressed frames: force
-/// only suppresses entry omission and never widens `lc`, so elided zero
-/// fields decode right only against a null base. Unmentioned clients need no
-/// removal bit: an uncompressed frame restarts the reader's roster, so they
-/// vanish at parse. Explicit removals come back with delta frames.
-pub fn write_uncompressed(
+/// `SV_WriteSnapshotToClient`. `from` is the base frame the client acked, or
+/// `None` for an uncompressed frame. No areamask on CoD 1.1: the header goes
+/// straight into the playerstate delta (docs/protocol-1.1.md, divergence 6).
+pub fn write(
     w: &mut MsgWriter,
     p: &Protocol,
-    server_time: i32,
-    ps_to: &PlayerState,
-    to_clients: &[Option<ClientState>],
+    message_num: u32,
+    from: Option<&Snapshot>,
+    to: &Snapshot,
+    baselines: &HashMap<u32, EntityState>,
 ) {
     use super::msg::{write_delta_client, write_delta_playerstate};
-    w.write_long(server_time);
-    w.write_byte(0); // deltaNum: uncompressed
-    w.write_byte(0); // snapFlags
-    write_delta_playerstate(w, p, &PlayerState::null(p), ps_to);
-    w.write_bits(ENTITYNUM_NONE as i32, GENTITYNUM_BITS as i32);
-    let null = ClientState::null(p);
-    for (slot, cs) in to_clients.iter().enumerate() {
-        let Some(cs) = cs else { continue };
-        w.write_bits(1, 1);
-        w.write_bits(slot as i32, 6);
-        write_delta_client(w, p, &null, Some(cs));
+
+    w.write_long(to.server_time);
+    // deltaNum rides the wire as the offset back to the base, not its number.
+    let delta_byte = match from {
+        Some(base) => (message_num - base.message_num) as u8,
+        None => 0,
+    };
+    w.write_byte(delta_byte);
+    w.write_byte(to.snap_flags as u8);
+
+    let null_ps = PlayerState::null(p);
+    let base_ps = from.map_or(&null_ps, |b| &b.ps);
+    write_delta_playerstate(w, p, base_ps, &to.ps);
+
+    write_packet_entities(w, p, from.map(|b| &b.entities), &to.entities, baselines);
+
+    let null_cs = ClientState::null(p);
+    match from {
+        // Every present client full from null; the reader restarts its roster
+        // on an uncompressed frame, so departures need no removal bit.
+        None => {
+            for (&num, cs) in &to.clients {
+                w.write_bits(1, 1);
+                w.write_bits(num as i32, 6);
+                write_delta_client(w, p, &null_cs, Some(cs));
+            }
+        }
+        Some(base) => {
+            let nums: BTreeSet<u32> = base
+                .clients
+                .keys()
+                .chain(to.clients.keys())
+                .copied()
+                .collect();
+            for num in nums {
+                let old = base.clients.get(&num);
+                let new = to.clients.get(&num);
+                if old == new {
+                    continue;
+                }
+                w.write_bits(1, 1);
+                w.write_bits(num as i32, 6);
+                write_delta_client(w, p, old.unwrap_or(&null_cs), new);
+            }
+        }
     }
     w.write_bits(0, 1);
+}
+
+/// Placeholder until Task 2: an empty packet-entity run.
+fn write_packet_entities(
+    w: &mut MsgWriter,
+    _p: &Protocol,
+    _from: Option<&BTreeMap<u32, EntityState>>,
+    _to: &BTreeMap<u32, EntityState>,
+    _baselines: &HashMap<u32, EntityState>,
+) {
+    w.write_bits(ENTITYNUM_NONE as i32, GENTITYNUM_BITS as i32);
 }
 
 #[cfg(test)]
@@ -300,6 +338,7 @@ mod tests {
     use crate::net::huffman::Huffman;
     use crate::net::msg::MsgWriter;
     use crate::net::protocol::PROTOCOL_V1;
+    use std::collections::HashMap;
 
     /// Write a changed integral-float entity/player field.
     fn wfloat(w: &mut MsgWriter, v: f32) {
@@ -797,9 +836,16 @@ mod tests {
         ps.fields[PlayerState::field_index(p, "origin[0]").unwrap()] = 384f32.to_bits() as i32;
 
         // Frame A: client 0 appears out of nothing.
-        let a_to = vec![Some(ClientState::named(p, 0, 3, "vcod"))];
+        let mut a = Snapshot {
+            message_num: 10,
+            server_time: 48_000,
+            valid: true,
+            ps: ps.clone(),
+            ..Default::default()
+        };
+        a.clients.insert(0, ClientState::named(p, 0, 3, "vcod"));
         let mut w = MsgWriter::new(&h);
-        write_uncompressed(&mut w, p, 48_000, &ps, &a_to);
+        write(&mut w, p, 10, None, &a, &HashMap::new());
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
@@ -815,15 +861,18 @@ mod tests {
         assert_eq!(r.bits_read(), bits);
 
         // Frame B: client 0 renamed shorter, client 3 joins. Slot indexes are
-        // client numbers, so the gap stays None.
-        let b_to = vec![
-            Some(ClientState::named(p, 0, 3, "bob")),
-            None,
-            None,
-            Some(ClientState::named(p, 3, 1, "eve")),
-        ];
+        // client numbers, so the gap stays absent.
+        let mut b = Snapshot {
+            message_num: 11,
+            server_time: 48_050,
+            valid: true,
+            ps: ps.clone(),
+            ..Default::default()
+        };
+        b.clients.insert(0, ClientState::named(p, 0, 3, "bob"));
+        b.clients.insert(3, ClientState::named(p, 3, 1, "eve"));
         let mut w = MsgWriter::new(&h);
-        write_uncompressed(&mut w, p, 48_050, &ps, &b_to);
+        write(&mut w, p, 11, None, &b, &HashMap::new());
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
@@ -842,9 +891,16 @@ mod tests {
         let mut eve_cleared = ClientState::named(p, 3, 1, "eve");
         let ti = ClientState::field_index(p, "team").unwrap();
         eve_cleared.fields[ti] = 0;
-        let c_to = vec![None, None, None, Some(eve_cleared)];
+        let mut c = Snapshot {
+            message_num: 12,
+            server_time: 48_100,
+            valid: true,
+            ps: ps.clone(),
+            ..Default::default()
+        };
+        c.clients.insert(3, eve_cleared);
         let mut w = MsgWriter::new(&h);
-        write_uncompressed(&mut w, p, 48_100, &ps, &c_to);
+        write(&mut w, p, 12, None, &c, &HashMap::new());
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
@@ -855,6 +911,61 @@ mod tests {
         assert_eq!(s.clients[&3].field_i32(p, "team"), 0);
         assert!(!r.is_overflowed());
         assert_eq!(r.bits_read(), bits);
+    }
+
+    /// A delta frame's roster: an unchanged client is omitted, a changed one
+    /// deltas against the base entry, a departed one gets the removal bit.
+    #[test]
+    fn delta_roster_omits_unchanged_and_removes_departed() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+
+        let mut base = Snapshot {
+            message_num: 10,
+            server_time: 1000,
+            valid: true,
+            ps: PlayerState::null(p),
+            ..Default::default()
+        };
+        base.clients.insert(0, ClientState::named(p, 0, 3, "alice"));
+        base.clients.insert(1, ClientState::named(p, 1, 3, "bob"));
+        base.clients.insert(2, ClientState::named(p, 2, 3, "carol"));
+
+        // alice unchanged, bob renamed, carol gone, dave new.
+        let mut to = Snapshot {
+            message_num: 11,
+            server_time: 1050,
+            valid: true,
+            ps: PlayerState::null(p),
+            ..Default::default()
+        };
+        to.clients.insert(0, ClientState::named(p, 0, 3, "alice"));
+        to.clients.insert(1, ClientState::named(p, 1, 3, "robert"));
+        to.clients.insert(3, ClientState::named(p, 3, 3, "dave"));
+
+        let mut w = MsgWriter::new(&h);
+        write(&mut w, p, 11, Some(&base), &to, &HashMap::new());
+
+        let mut ring = SnapshotRing::new();
+        ring.insert(base.clone());
+        // finish(), not into_ops(): MsgReader::new always block-decompresses,
+        // so the reader needs huffman-coded bytes, not the plain wire bits.
+        let bytes = w.finish();
+        let mut r = MsgReader::new(&bytes, &h);
+        let got = ring.parse_into(&mut r, p, 11).unwrap().clone();
+
+        assert!(got.valid, "delta frame resolved its base");
+        assert_eq!(got.delta_num, 10);
+        assert_eq!(
+            got.clients.keys().copied().collect::<Vec<_>>(),
+            vec![0, 1, 3]
+        );
+        assert_eq!(got.clients[&1], to.clients[&1], "renamed client");
+        assert_eq!(
+            got.clients[&0], base.clients[&0],
+            "unchanged carries forward"
+        );
+        assert_eq!(got.clients[&3], to.clients[&3], "new client from null");
     }
 
     /// Testing layer 2 from the design doc: parse a committed capture
@@ -904,14 +1015,8 @@ mod tests {
         let cap = found.expect("capture holds no valid snapshot");
         assert!(!cap.clients.is_empty(), "no clientStates in the snapshot");
 
-        let max_slot = *cap.clients.keys().max().unwrap() as usize;
-        let mut to_clients: Vec<Option<ClientState>> = vec![None; max_slot + 1];
-        for (&num, cs) in &cap.clients {
-            to_clients[num as usize] = Some(cs.clone());
-        }
-
         let mut w = MsgWriter::new(&h);
-        write_uncompressed(&mut w, p, cap.server_time, &cap.ps, &to_clients);
+        write(&mut w, p, cap.message_num, None, &cap, &HashMap::new());
         let d = w.finish();
         let mut out_ring = SnapshotRing::new();
         let mut r = MsgReader::new(&d, &h);
