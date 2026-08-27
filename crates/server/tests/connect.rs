@@ -361,6 +361,15 @@ fn scripted_entities_move_cycle_out_and_return() {
 /// client whose name never changes always compares equal to its own base, so
 /// the roster's delta-against-a-base-entry arm (an entry present on both
 /// sides that actually differs) is otherwise never taken.
+///
+/// The second rename matters as much as the first: "vcod" -> "robertson"
+/// fills `name[4]` and `name[8]` (the name packs 4 bytes per netfield), then
+/// "robertson" -> "abcd" clears them again. A base that only ever compares
+/// against null cannot tell "always zero" from "just cleared", so shrinking
+/// the name is what actually exercises a wrong base — a single short-to-short
+/// rename (e.g. "vcod" -> "bob") never leaves the null-compared and
+/// true-base-compared writers disagreeing, since both names live entirely in
+/// `name[0]`, which is non-zero either way.
 #[test]
 fn a_renamed_client_deltas_against_its_roster_base() {
     let q = Rc::new(RefCell::new(Queues::default()));
@@ -370,28 +379,39 @@ fn a_renamed_client_deltas_against_its_roster_base() {
 
     let p = &PROTOCOL_V1;
     let mut saw_original_name = false;
-    let mut saw_new_name = false;
+    let mut saw_long_name = false;
+    let mut last_name: Option<String> = None;
 
     for tick in 0..40 {
         now += Duration::from_millis(50);
         cl.send_frame(&NULL_USERCMD);
         if tick == 5 {
-            cl.send_reliable("userinfo \\name\\bob");
+            cl.send_reliable("userinfo \\name\\robertson");
+        }
+        if tick == 20 {
+            cl.send_reliable("userinfo \\name\\abcd");
         }
         step(&mut sv, &q, &mut cl, now);
 
         let Some(s) = cl.snapshots().newest() else {
             continue;
         };
-        match s.clients.get(&0).map(|c| c.name(p)).as_deref() {
+        let name = s.clients.get(&0).map(|c| c.name(p));
+        match name.as_deref() {
             Some("vcod") => saw_original_name = true,
-            Some("bob") => saw_new_name = true,
+            Some("robertson") => saw_long_name = true,
             _ => {}
         }
+        last_name = name;
     }
 
     assert!(saw_original_name, "never saw the original name");
-    assert!(saw_new_name, "the userinfo rename never reached a snapshot");
+    assert!(saw_long_name, "the long rename never reached a snapshot");
+    assert_eq!(
+        last_name.as_deref(),
+        Some("abcd"),
+        "shrinking the name must clear name[4] and name[8], not leave a stale tail"
+    );
     assert!(
         cl.snapshots().last_invalid().is_none(),
         "client failed to resolve a delta base"

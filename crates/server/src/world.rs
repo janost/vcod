@@ -30,7 +30,10 @@ pub struct TestEntities {
     around: [f32; 3],
 }
 
-/// Entity numbers start past the client slots so they never collide.
+/// Entity numbers start at 32, clear of client slots for the default
+/// `--max-clients` (8) and any run up to 32; CoD 1.1 allows up to 64
+/// clients, so a server started with more than 32 collides a live slot
+/// with a test entity number.
 const FIRST_TEST_ENT: u32 = 32;
 /// The last entity vanishes for 2 s out of every 8 s.
 const CYCLE_MS: i32 = 8000;
@@ -46,26 +49,29 @@ impl TestEntities {
         // `number` takes part in EntityState equality; stamp it so a built
         // entity compares equal to the same entity read back off the wire.
         e.number = FIRST_TEST_ENT + i as u32;
-        let set = |e: &mut EntityState, name: &str, v: i32| {
+        let seti = |e: &mut EntityState, name: &str, v: i32| {
             if let Some(idx) = EntityState::field_index(p, name) {
                 e.fields[idx] = v;
             }
         };
-        // A linear track along x, offset per entity, restarted each lap so the
-        // client's BG_EvaluateTrajectory does the interpolation, not us.
+        // pos.trBase and pos.trDelta are `bits: 0` fields: the wire value is
+        // an f32 bit pattern, not a raw integer (fields_v1.rs).
+        let setf = |e: &mut EntityState, name: &str, v: f32| {
+            if let Some(idx) = EntityState::field_index(p, name) {
+                e.fields[idx] = v.to_bits() as i32;
+            }
+        };
+        // Entities sit 64 units apart along x and drift along y at 100
+        // units/s; the trajectory restarts every lap so pos.trTime changes
+        // on the wire without pos.trBase itself needing to move.
         let lap = 4000;
         let phase = server_time.rem_euclid(lap);
-        set(&mut e, "pos.trType", TR_LINEAR);
-        set(&mut e, "pos.trTime", server_time - phase);
-        set(
-            &mut e,
-            "pos.trBase[0]",
-            self.around[0] as i32 + (i as i32) * 64,
-        );
-        set(&mut e, "pos.trBase[1]", self.around[1] as i32);
-        set(&mut e, "pos.trBase[2]", self.around[2] as i32);
-        // 100 units/s along y.
-        set(&mut e, "pos.trDelta[1]", 100);
+        seti(&mut e, "pos.trType", TR_LINEAR);
+        seti(&mut e, "pos.trTime", server_time - phase);
+        setf(&mut e, "pos.trBase[0]", self.around[0] + i as f32 * 64.0);
+        setf(&mut e, "pos.trBase[1]", self.around[1]);
+        setf(&mut e, "pos.trBase[2]", self.around[2]);
+        setf(&mut e, "pos.trDelta[1]", 100.0);
         e
     }
 
@@ -77,8 +83,9 @@ impl TestEntities {
 
     pub fn at(&self, p: &Protocol, server_time: i32) -> BTreeMap<u32, EntityState> {
         let cycled_out = server_time.rem_euclid(CYCLE_MS) >= CYCLE_MS - GONE_MS;
+        let last = self.count.saturating_sub(1);
         (0..self.count)
-            .filter(|i| !(cycled_out && *i == self.count - 1))
+            .filter(|i| !(cycled_out && *i == last))
             .map(|i| (FIRST_TEST_ENT + i as u32, self.ent(p, i, server_time)))
             .collect()
     }
