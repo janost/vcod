@@ -8,7 +8,7 @@ use super::msg::{
     read_delta_client, read_delta_entity, read_delta_playerstate, write_delta_entity, ClientState,
     EntityState, MsgReader, MsgWriter, PlayerState,
 };
-use super::protocol::{Protocol, ENTITYNUM_NONE, GENTITYNUM_BITS};
+use super::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD, GENTITYNUM_BITS};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// `svc_ops_e` (confirmed against cod_lnxded 1.1d).
@@ -355,12 +355,14 @@ fn write_packet_entities(
 
     let nums: BTreeSet<u32> = base.keys().chain(to.keys()).copied().collect();
     for num in nums {
-        // A number at or past ENTITYNUM_NONE is indistinguishable on the
-        // wire from the packet-entities terminator: it would truncate the
-        // stream mid-run and desync every entity read after it, silently.
+        // A number at or past ENTITYNUM_WORLD is either the reserved world
+        // slot or indistinguishable on the wire from the packet-entities
+        // terminator: the former is never a legitimate dynamic entity, and
+        // the latter would truncate the stream mid-run and desync every
+        // entity read after it, silently.
         debug_assert!(
-            num < ENTITYNUM_NONE,
-            "entity {num} not below ENTITYNUM_NONE"
+            num < ENTITYNUM_WORLD,
+            "entity {num} not below ENTITYNUM_WORLD"
         );
         let old = base.get(&num);
         let new = to.get(&num);
@@ -1122,14 +1124,15 @@ mod tests {
         );
     }
 
-    /// A number at or past ENTITYNUM_NONE is indistinguishable on the wire
-    /// from the terminator; unguarded, it truncates the packet-entity stream
-    /// mid-run and every entity after it silently vanishes rather than
-    /// erroring (`{32, 1022, 1023, 1055}` parses back as `[32, 1022]`). The
-    /// debug_assert! turns that into a loud test failure instead.
+    /// A number at or past ENTITYNUM_WORLD is either the reserved world slot
+    /// or indistinguishable on the wire from the terminator; unguarded, the
+    /// latter truncates the packet-entity stream mid-run and every entity
+    /// after it silently vanishes rather than erroring (`{32, 1022, 1023,
+    /// 1055}` parses back as `[32]`). The debug_assert! turns that into a
+    /// loud test failure instead.
     #[test]
-    #[should_panic(expected = "not below ENTITYNUM_NONE")]
-    fn write_packet_entities_rejects_a_number_at_entitynum_none() {
+    #[should_panic(expected = "not below ENTITYNUM_WORLD")]
+    fn write_packet_entities_rejects_a_number_at_entitynum_world() {
         let p = &PROTOCOL_V1;
         let h = Huffman::new();
         let ent = |x: i32| {
@@ -1141,7 +1144,8 @@ mod tests {
         let mut to = BTreeMap::new();
         for &num in &[
             32u32,
-            ENTITYNUM_NONE - 1,
+            ENTITYNUM_WORLD - 1,
+            ENTITYNUM_WORLD,
             ENTITYNUM_NONE,
             ENTITYNUM_NONE + 32,
         ] {

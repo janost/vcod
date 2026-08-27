@@ -46,7 +46,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
     if args.test_entities > vcod_server::world::MAX_TEST_ENTITIES {
         bail!(
-            "--test-entities {} exceeds {}, the most that fits below ENTITYNUM_NONE",
+            "--test-entities {} exceeds {}, the most that fits below ENTITYNUM_WORLD",
             args.test_entities,
             vcod_server::world::MAX_TEST_ENTITIES
         );

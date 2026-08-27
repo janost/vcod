@@ -88,6 +88,8 @@ impl FogParams {
 pub const GENTITYNUM_BITS: u32 = 10; // codextended/src/shared.h:395
 pub const MAX_GENTITIES: usize = 1 << GENTITYNUM_BITS;
 pub const ENTITYNUM_NONE: u32 = (MAX_GENTITIES - 1) as u32;
+/// Reserved slot for the world entity (`worldspawn`); never a dynamic entity number.
+pub const ENTITYNUM_WORLD: u32 = (MAX_GENTITIES - 2) as u32;
 
 #[cfg(test)]
 mod tests {

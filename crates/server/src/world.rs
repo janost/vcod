@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::net::msg::EntityState;
-use vcod_common::net::protocol::{Protocol, ENTITYNUM_NONE};
+use vcod_common::net::protocol::{Protocol, ENTITYNUM_WORLD};
 use vcod_common::net::trajectory::TR_LINEAR;
 use vcod_common::{bsp, collision::CollisionWorld};
 
@@ -39,9 +39,9 @@ const FIRST_TEST_ENT: u32 = 32;
 const CYCLE_MS: i32 = 8000;
 const GONE_MS: i32 = 2000;
 /// The highest `--test-entities` count that keeps every scripted entity
-/// number below `ENTITYNUM_NONE`; past this, the highest-numbered entity
-/// collides with the packet-entities terminator and corrupts the wire.
-pub const MAX_TEST_ENTITIES: usize = (ENTITYNUM_NONE - FIRST_TEST_ENT) as usize;
+/// number below `ENTITYNUM_WORLD`; past this, the highest-numbered entity
+/// collides with the reserved world slot or the packet-entities terminator.
+pub const MAX_TEST_ENTITIES: usize = (ENTITYNUM_WORLD - FIRST_TEST_ENT) as usize;
 
 impl TestEntities {
     pub fn new(count: usize, around: [f32; 3]) -> Self {
@@ -140,22 +140,22 @@ mod tests {
     }
 
     #[test]
-    fn max_test_entities_is_the_last_count_below_entitynum_none() {
+    fn max_test_entities_is_the_last_count_below_entitynum_world() {
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
 
         let at_max = TestEntities::new(MAX_TEST_ENTITIES, [0.0, 0.0, 64.0]);
         let highest = *at_max.baselines(p).keys().max().unwrap();
         assert_eq!(
             highest,
-            ENTITYNUM_NONE - 1,
-            "MAX_TEST_ENTITIES should use every number up to ENTITYNUM_NONE - 1"
+            ENTITYNUM_WORLD - 1,
+            "MAX_TEST_ENTITIES should use every number up to ENTITYNUM_WORLD - 1"
         );
 
         let one_over = TestEntities::new(MAX_TEST_ENTITIES + 1, [0.0, 0.0, 64.0]);
         let highest_over = *one_over.baselines(p).keys().max().unwrap();
         assert_eq!(
-            highest_over, ENTITYNUM_NONE,
-            "one past MAX_TEST_ENTITIES reaches ENTITYNUM_NONE, which is what \
+            highest_over, ENTITYNUM_WORLD,
+            "one past MAX_TEST_ENTITIES reaches ENTITYNUM_WORLD, which is what \
              the --test-entities startup check rejects"
         );
     }
