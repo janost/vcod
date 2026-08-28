@@ -74,6 +74,14 @@ impl Cx<'_> {
         self.interner.resolve(a)
     }
 
+    /// The folded spelling, for a host dispatching on a builtin's name.
+    /// `resolve` returns the atom's as-written text (`logPrint`), which is
+    /// what a script built for display needs; a dispatch table needs the
+    /// folded form and should not allocate to get it.
+    pub fn resolve_folded(&self, a: Atom) -> &str {
+        self.interner.resolve_folded(a)
+    }
+
     pub fn new_struct(&mut self) -> StructId {
         self.heap.new_struct()
     }
