@@ -9,6 +9,27 @@ pub struct ParseError {
     pub msg: String,
 }
 
+// The inverse of `lex::keyword`, for the one place a keyword token is
+// legal as a plain word: a field name after `.`.
+fn keyword_text(tok: &Tok) -> Option<&'static str> {
+    Some(match tok {
+        Tok::If => "if",
+        Tok::Else => "else",
+        Tok::While => "while",
+        Tok::Do => "do",
+        Tok::For => "for",
+        Tok::Switch => "switch",
+        Tok::Case => "case",
+        Tok::Default => "default",
+        Tok::Break => "break",
+        Tok::Continue => "continue",
+        Tok::Return => "return",
+        Tok::Thread => "thread",
+        Tok::Wait => "wait",
+        _ => return None,
+    })
+}
+
 pub struct Parser<'a> {
     t: &'a [Spanned],
     i: usize,
@@ -60,6 +81,20 @@ impl<'a> Parser<'a> {
             }
             _ => Err(self.err("expected an identifier")),
         }
+    }
+
+    // A field name after `.`: any of the language's keywords is also a
+    // legal field name, since the engine doesn't reserve them there
+    // (`self.Wait`, maps/_load.gsc:1416). The keyword form loses its
+    // original case, folding to the lexer's canonical spelling; this
+    // matches every other identifier-like token in the grammar, which is
+    // already compared case-insensitively.
+    fn field_name(&mut self) -> Result<String, ParseError> {
+        if let Some(kw) = keyword_text(self.peek()) {
+            self.bump();
+            return Ok(kw.to_string());
+        }
+        self.ident_name()
     }
 
     pub fn expr(&mut self) -> Result<Expr, ParseError> {
@@ -150,7 +185,7 @@ impl<'a> Parser<'a> {
             match self.peek().clone() {
                 Tok::Dot => {
                     self.bump();
-                    let name = self.ident_name()?;
+                    let name = self.field_name()?;
                     base = Expr::Field(Box::new(base), name);
                 }
                 // Two adjacent `[` is a method-style call through a
@@ -723,6 +758,18 @@ mod tests {
             panic!("{e:?}")
         };
         assert!(matches!(*obj, Expr::Field(_, _)));
+    }
+
+    /// `maps/_load.gsc:1416` `if (self.Wait > 0)`: `Wait` is a keyword
+    /// everywhere else, but legal as a field name.
+    #[test]
+    fn field_name_can_be_a_keyword() {
+        let e = expr("self.Wait");
+        let Expr::Field(recv, name) = e else {
+            panic!("{e:?}")
+        };
+        assert!(matches!(*recv, Expr::SelfRef));
+        assert_eq!(name, "wait");
     }
 
     #[test]
