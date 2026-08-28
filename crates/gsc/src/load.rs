@@ -300,6 +300,28 @@ mod tests {
         assert_eq!(l.loaded_count(), 0);
     }
 
+    /// A second `load` call that fails must not undo the first call's
+    /// success: `load_one`'s early return on an already-`loaded` path means
+    /// the failing call never re-visits "a", so it stays both marked loaded
+    /// and installed. Nothing pinned this before; it is correct only by
+    /// construction of the early return above.
+    #[test]
+    fn a_failed_second_load_does_not_undo_an_earlier_successful_one() {
+        let src = source(&[
+            ("a", "main() { }"),
+            ("c", r#"main() { a::main(); maps\mp\gone::main(); }"#),
+        ]);
+        let mut vm = Vm::new();
+        let mut l = Loader::new(Box::new(src));
+        l.load(&mut vm, "a").unwrap();
+        assert!(l.load(&mut vm, "c").is_err());
+        // "a" must still be marked loaded and still installed/callable.
+        let f = vm.func_ref("a", "main");
+        assert!(vm
+            .call_now(&mut TestHost::default(), 0, f, None, vec![])
+            .is_ok());
+    }
+
     /// In a 799-file corpus a broken reference is hard to trace from the
     /// missing path alone; the message names which file wanted it. (The
     /// brief's own test pins `e.path` to the missing path itself, so the
