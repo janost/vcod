@@ -82,16 +82,33 @@ pub enum Expr {
     Cast(Cast, Box<Expr>),
 }
 
+/// A `case` label, or `default`, which is not a value test but a fallback:
+/// its position among the arms is semantically load-bearing exactly like a
+/// `case`'s, since a subject that matches nothing falls into `default`
+/// wherever it lexically sits and keeps falling through from there.
+#[derive(Clone, PartialEq, Debug)]
+pub enum ArmLabel {
+    Case(Expr),
+    Default,
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct SwitchArm {
-    /// The case label. Always a literal in the corpus.
-    pub label: Expr,
+    pub label: ArmLabel,
     /// Empty when this case falls through to the next.
     pub body: Vec<Stmt>,
 }
 
+/// A statement paired with its source line, so a compile error or an
+/// eventual runtime `ScriptError` can name the line that produced it.
 #[derive(Clone, PartialEq, Debug)]
-pub enum Stmt {
+pub struct Stmt {
+    pub line: u32,
+    pub kind: StmtKind,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum StmtKind {
     Expr(Expr),
     /// `target = value`. `target` is a `Local`, `Field` or `Index`.
     Assign {
@@ -119,10 +136,11 @@ pub enum Stmt {
         step: Option<Box<Stmt>>,
         body: Vec<Stmt>,
     },
+    /// Arms in source order; `default` is one of them (`ArmLabel::Default`),
+    /// not a separate field, because its lexical position matters.
     Switch {
         subject: Expr,
         arms: Vec<SwitchArm>,
-        default: Option<Vec<Stmt>>,
     },
     Return(Option<Expr>),
     Break,

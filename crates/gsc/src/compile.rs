@@ -9,7 +9,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{self, BinOp, CallTarget, Cast, Expr, FuncDef, Stmt, SwitchArm, UnOp};
+use crate::ast::{
+    self, ArmLabel, BinOp, CallTarget, Cast, Expr, FuncDef, Stmt, StmtKind, SwitchArm, UnOp,
+};
 use crate::atom::{Atom, Interner};
 use crate::bytecode::{Function, Op};
 use crate::value::{FuncRef, Value};
@@ -56,6 +58,7 @@ pub fn compile_file(
             cur_line: f.line,
             break_stack: Vec::new(),
             continue_stack: Vec::new(),
+            switch_counter: 0,
         };
         out.push(c.compile_function(f)?);
     }
@@ -79,6 +82,10 @@ struct Compiler<'a> {
     /// does not push a frame, so `continue` inside one reaches the loop
     /// around it.
     continue_stack: Vec<Vec<usize>>,
+    /// Numbers each switch's hidden subject local (`$switch0`, `$switch1`,
+    /// ...) so nested or sequential switches in one function get distinct
+    /// slots. `$` cannot start a source identifier, so these never collide.
+    switch_counter: u32,
 }
 
 impl<'a> Compiler<'a> {
@@ -95,22 +102,42 @@ impl<'a> Compiler<'a> {
         self.code.len() - 1
     }
 
-    fn add_const(&mut self, v: Value) -> u16 {
+    fn add_const(&mut self, v: Value) -> Result<u16, CompileError> {
         self.consts.push(v);
-        (self.consts.len() - 1) as u16
+        u16::try_from(self.consts.len() - 1).map_err(|_| self.err("too many constants"))
     }
 
-    fn push_const(&mut self, v: Value) {
-        let idx = self.add_const(v);
+    fn push_const(&mut self, v: Value) -> Result<(), CompileError> {
+        let idx = self.add_const(v)?;
         self.emit(Op::Const(idx));
+        Ok(())
     }
 
     /// Gets or allocates a stable slot for a local, case-folded like every
-    /// other identifier the engine matches.
-    fn local_slot(&mut self, name: &str) -> u16 {
+    /// other identifier the engine matches. Re-mentioning an existing name
+    /// (including a parameter) reuses its slot; `declare_param` is the only
+    /// place a repeat is rejected instead.
+    fn local_slot(&mut self, name: &str) -> Result<u16, CompileError> {
         let folded = name.to_ascii_lowercase();
-        let next = self.locals.len() as u16;
-        *self.locals.entry(folded).or_insert(next)
+        if let Some(&slot) = self.locals.get(&folded) {
+            return Ok(slot);
+        }
+        let slot = u16::try_from(self.locals.len()).map_err(|_| self.err("too many locals"))?;
+        self.locals.insert(folded, slot);
+        Ok(slot)
+    }
+
+    /// Allocates a parameter's slot, rejecting a name already taken by an
+    /// earlier parameter (`m(a, a)`), which `local_slot`'s get-or-insert
+    /// would otherwise silently alias to one slot.
+    fn declare_param(&mut self, name: &str) -> Result<(), CompileError> {
+        let folded = name.to_ascii_lowercase();
+        if self.locals.contains_key(&folded) {
+            return Err(self.err(format!("duplicate parameter `{name}`")));
+        }
+        let slot = u16::try_from(self.locals.len()).map_err(|_| self.err("too many locals"))?;
+        self.locals.insert(folded, slot);
+        Ok(())
     }
 
     fn patch(&mut self, idx: usize, target: u32) {
@@ -122,24 +149,33 @@ impl<'a> Compiler<'a> {
 
     fn compile_function(mut self, def: &FuncDef) -> Result<Function, CompileError> {
         for p in &def.params {
-            self.local_slot(p);
+            self.declare_param(p)?;
         }
-        let params = def.params.len() as u8;
+        let params = u8::try_from(def.params.len()).map_err(|_| self.err("too many parameters"))?;
         self.compile_block(&def.body)?;
-        // Every function returns; append the implicit undefined return
-        // unless the body's last emitted instruction is already one.
-        match self.code.last() {
-            Some(Op::Return) | Some(Op::ReturnUndef) => {}
-            _ => {
-                self.emit(Op::ReturnUndef);
-            }
+        // Every function returns. A jump already patched to land just past
+        // the body (e.g. an `if` with no `else`, ending in `return`) relies
+        // on this instruction actually being there, so the rule has to be
+        // syntactic — the AST's last statement, not whichever op happened
+        // to be emitted last — or such a jump lands one past the end of
+        // `code`.
+        let last_is_return = matches!(
+            def.body.last(),
+            Some(Stmt {
+                kind: StmtKind::Return(_),
+                ..
+            })
+        );
+        if !last_is_return {
+            self.emit(Op::ReturnUndef);
         }
         let name = self.interner.intern(&def.name);
+        let locals = u16::try_from(self.locals.len()).map_err(|_| self.err("too many locals"))?;
         Ok(Function {
             file: self.file_atom,
             name,
             params,
-            locals: self.locals.len() as u16,
+            locals,
             code: self.code,
             consts: self.consts,
             lines: self.lines,
@@ -154,31 +190,30 @@ impl<'a> Compiler<'a> {
     }
 
     fn compile_stmt(&mut self, s: &Stmt) -> Result<(), CompileError> {
-        match s {
-            Stmt::Expr(e) => {
+        // The AST attributes a line to the statement, not the instruction;
+        // every op and error this statement produces is attributed to it.
+        self.cur_line = s.line;
+        match &s.kind {
+            StmtKind::Expr(e) => {
                 self.compile_expr(e)?;
                 self.emit(Op::Pop);
             }
-            Stmt::Assign { target, value } => self.compile_assign(target, value)?,
-            Stmt::If {
+            StmtKind::Assign { target, value } => self.compile_assign(target, value)?,
+            StmtKind::If {
                 cond,
                 then,
                 otherwise,
             } => self.compile_if(cond, then, otherwise.as_deref())?,
-            Stmt::While { cond, body } => self.compile_while(cond, body)?,
-            Stmt::DoWhile { body, cond } => self.compile_do_while(body, cond)?,
-            Stmt::For {
+            StmtKind::While { cond, body } => self.compile_while(cond, body)?,
+            StmtKind::DoWhile { body, cond } => self.compile_do_while(body, cond)?,
+            StmtKind::For {
                 init,
                 cond,
                 step,
                 body,
             } => self.compile_for(init.as_deref(), cond.as_ref(), step.as_deref(), body)?,
-            Stmt::Switch {
-                subject,
-                arms,
-                default,
-            } => self.compile_switch(subject, arms, default.as_deref())?,
-            Stmt::Return(e) => match e {
+            StmtKind::Switch { subject, arms } => self.compile_switch(subject, arms)?,
+            StmtKind::Return(e) => match e {
                 Some(e) => {
                     self.compile_expr(e)?;
                     self.emit(Op::Return);
@@ -187,9 +222,9 @@ impl<'a> Compiler<'a> {
                     self.emit(Op::ReturnUndef);
                 }
             },
-            Stmt::Break => self.compile_break()?,
-            Stmt::Continue => self.compile_continue()?,
-            Stmt::Wait(e) => {
+            StmtKind::Break => self.compile_break()?,
+            StmtKind::Continue => self.compile_continue()?,
+            StmtKind::Wait(e) => {
                 self.compile_expr(e)?;
                 self.emit(Op::Wait);
             }
@@ -201,7 +236,7 @@ impl<'a> Compiler<'a> {
         match target {
             Expr::Local(name) => {
                 self.compile_expr(value)?;
-                let slot = self.local_slot(name);
+                let slot = self.local_slot(name)?;
                 self.emit(Op::StoreLocal(slot));
             }
             Expr::Field(obj, name) => {
@@ -328,57 +363,83 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    // Emits the label-test chain, then the bodies in order so an empty case
-    // falls into the next one. Every possible entry point into the body
-    // region (each arm whose body isn't merged into a later one, plus the
-    // default) starts with its own `Pop` of the duplicated subject; arms
-    // with an empty body are folded into whichever body comes next by
-    // patching their `JumpIfTrue` to that body's `Pop`, so the subject is
-    // popped exactly once no matter which label matched.
-    fn compile_switch(
-        &mut self,
-        subject: &Expr,
-        arms: &[SwitchArm],
-        default: Option<&[Stmt]>,
-    ) -> Result<(), CompileError> {
+    // The subject goes into a hidden local rather than staying `Dup`'d on
+    // the operand stack: bodies fall through into each other with no `Pop`
+    // between them, so the stack depth carried into a body can't depend on
+    // which label jumped there, and a body that runs off its end (an
+    // idiomatic final case with no `break`) needs no matching pop either.
+    //
+    // Arms are walked in source order, `default` included among them: a
+    // `case` tests the hidden local and jumps to this arm's landing
+    // address; `default` isn't tested, it's the address the label chain
+    // falls back to when nothing matches. Either way, an arm with an empty
+    // body has no landing address of its own — its jump site (a `case`'s)
+    // or its role as the fallback (`default`'s) is queued and resolved
+    // against whichever body comes next, which is exactly the fallthrough
+    // the corpus's stacked labels rely on.
+    fn compile_switch(&mut self, subject: &Expr, arms: &[SwitchArm]) -> Result<(), CompileError> {
         self.compile_expr(subject)?;
+        let tmp_name = format!("$switch{}", self.switch_counter);
+        self.switch_counter += 1;
+        let tmp = self.local_slot(&tmp_name)?;
+        self.emit(Op::StoreLocal(tmp));
 
-        let mut jump_sites = Vec::with_capacity(arms.len());
+        let mut case_sites = Vec::with_capacity(arms.len());
         for arm in arms {
-            self.emit(Op::Dup);
-            self.compile_expr(&arm.label)?;
-            self.emit(Op::Eq);
-            jump_sites.push(self.emit(Op::JumpIfTrue(0)));
+            if let ArmLabel::Case(label) = &arm.label {
+                self.emit(Op::LoadLocal(tmp));
+                self.compile_expr(label)?;
+                self.emit(Op::Eq);
+                case_sites.push(self.emit(Op::JumpIfTrue(0)));
+            }
         }
         let chain_end = self.emit(Op::Jump(0));
 
         self.break_stack.push(Vec::new());
+        let mut case_site = case_sites.into_iter();
         let mut pending: Vec<usize> = Vec::new();
-        for (arm, &jidx) in arms.iter().zip(jump_sites.iter()) {
+        let mut default_pending = false;
+        let mut default_addr: Option<u32> = None;
+
+        for arm in arms {
+            let is_default = matches!(arm.label, ArmLabel::Default);
+            let case_jidx = if is_default {
+                None
+            } else {
+                Some(case_site.next().expect("one jump site per case arm"))
+            };
             if arm.body.is_empty() {
-                pending.push(jidx);
+                if let Some(jidx) = case_jidx {
+                    pending.push(jidx);
+                }
+                default_pending |= is_default;
                 continue;
             }
             let addr = self.code.len() as u32;
-            self.patch(jidx, addr);
+            if let Some(jidx) = case_jidx {
+                self.patch(jidx, addr);
+            }
             for p in pending.drain(..) {
                 self.patch(p, addr);
             }
-            self.emit(Op::Pop);
+            if default_pending || is_default {
+                default_addr = Some(addr);
+                default_pending = false;
+            }
             self.compile_block(&arm.body)?;
         }
 
-        let default_addr = self.code.len() as u32;
-        self.patch(chain_end, default_addr);
-        for p in pending.drain(..) {
-            self.patch(p, default_addr);
-        }
-        self.emit(Op::Pop);
-        if let Some(default_body) = default {
-            self.compile_block(default_body)?;
-        }
-
+        // Whatever's left over — trailing empty cases, a trailing empty
+        // `default`, or no `default` at all — lands at the switch's end.
         let epilogue = self.code.len() as u32;
+        for p in pending.drain(..) {
+            self.patch(p, epilogue);
+        }
+        if default_pending {
+            default_addr = Some(epilogue);
+        }
+        self.patch(chain_end, default_addr.unwrap_or(epilogue));
+
         for idx in self.break_stack.pop().unwrap() {
             self.patch(idx, epilogue);
         }
@@ -405,24 +466,24 @@ impl<'a> Compiler<'a> {
 
     fn compile_expr(&mut self, e: &Expr) -> Result<(), CompileError> {
         match e {
-            Expr::Undefined => self.push_const(Value::Undefined),
-            Expr::Int(n) => self.push_const(Value::Int(*n)),
-            Expr::Float(f) => self.push_const(Value::Float(*f)),
+            Expr::Undefined => self.push_const(Value::Undefined)?,
+            Expr::Int(n) => self.push_const(Value::Int(*n))?,
+            Expr::Float(f) => self.push_const(Value::Float(*f))?,
             Expr::Str(s) => {
                 let a = self.interner.intern(s);
-                self.push_const(Value::String(a));
+                self.push_const(Value::String(a))?;
             }
             Expr::Localized(s) => {
                 let a = self.interner.intern(s);
-                self.push_const(Value::Localized(a));
+                self.push_const(Value::Localized(a))?;
             }
             Expr::Anim(s) => {
                 let a = self.interner.intern(s);
-                self.push_const(Value::Anim(a));
+                self.push_const(Value::Anim(a))?;
             }
             Expr::AnimtreeRef => match self.animtree {
-                Some(a) => self.push_const(Value::Anim(a)),
-                None => self.push_const(Value::Undefined),
+                Some(a) => self.push_const(Value::Anim(a))?,
+                None => self.push_const(Value::Undefined)?,
             },
             Expr::VectorLit(x, y, z) => {
                 self.compile_expr(x)?;
@@ -434,7 +495,7 @@ impl<'a> Compiler<'a> {
                 self.emit(Op::NewArray);
             }
             Expr::Local(name) => {
-                let slot = self.local_slot(name);
+                let slot = self.local_slot(name)?;
                 self.emit(Op::LoadLocal(slot));
             }
             Expr::SelfRef => {
@@ -471,7 +532,7 @@ impl<'a> Compiler<'a> {
                 self.push_const(Value::Function(FuncRef {
                     file: file_atom,
                     name: name_atom,
-                }));
+                }))?;
             }
             Expr::Call {
                 recv,
@@ -555,7 +616,7 @@ impl<'a> Compiler<'a> {
         for a in args {
             self.compile_expr(a)?;
         }
-        let argc = args.len() as u8;
+        let argc = u8::try_from(args.len()).map_err(|_| self.err("too many arguments"))?;
         let has_recv = recv.is_some();
         match target {
             CallTarget::Name(name) => {
@@ -621,12 +682,12 @@ impl<'a> Compiler<'a> {
             let Expr::Local(n) = b else {
                 return Err(self.err("waittill bind target must be a local variable"));
             };
-            binds.push(self.local_slot(n));
+            binds.push(self.local_slot(n)?);
         }
         self.emit(Op::WaitTill {
             binds: binds.into_boxed_slice(),
         });
-        self.push_const(Value::Undefined);
+        self.push_const(Value::Undefined)?;
         Ok(())
     }
 
@@ -646,10 +707,9 @@ impl<'a> Compiler<'a> {
         for a in extra {
             self.compile_expr(a)?;
         }
-        self.emit(Op::Notify {
-            argc: extra.len() as u8,
-        });
-        self.push_const(Value::Undefined);
+        let argc = u8::try_from(extra.len()).map_err(|_| self.err("too many notify arguments"))?;
+        self.emit(Op::Notify { argc });
+        self.push_const(Value::Undefined)?;
         Ok(())
     }
 
@@ -667,7 +727,7 @@ impl<'a> Compiler<'a> {
         };
         self.compile_expr(name_expr)?;
         self.emit(Op::EndOn);
-        self.push_const(Value::Undefined);
+        self.push_const(Value::Undefined)?;
         Ok(())
     }
 }
@@ -701,6 +761,14 @@ mod tests {
         let ast = crate::parse::parse_file(src).unwrap();
         let mut i = Interner::default();
         let fns = compile_file(&ast, "test/script", &mut i).unwrap();
+        // Every function this suite compiles must pass the abstract stack
+        // walk: a bad jump target or an inconsistent stack depth on some
+        // path is exactly the class of bug a test asserting on isolated
+        // ops (e.g. "one `go` and one `no`") can pass right over.
+        for f in &fns {
+            crate::bytecode::stack_depth(f)
+                .unwrap_or_else(|e| panic!("stack_depth on {:?}: {e}", i.resolve(f.name)));
+        }
         (i, fns)
     }
 
@@ -720,9 +788,71 @@ mod tests {
         let len = f[0].code.len() as u32;
         for op in &f[0].code {
             if let Op::Jump(t) | Op::JumpIfFalse(t) | Op::JumpIfTrue(t) = op {
-                assert!(*t <= len, "jump to {t} outside 0..={len}");
+                assert!(*t < len, "jump to {t} outside 0..{len}");
             }
         }
+    }
+
+    /// A function's last statement is an `if` with no `else`, whose only
+    /// branch ends in `return`. The `if`'s `JumpIfFalse` was patched to
+    /// land right after the then-branch, at the code length measured
+    /// *then* — a real instruction only if the compiler still appends the
+    /// implicit `ReturnUndef` despite the then-branch's `Op::Return` being
+    /// the last op emitted. Checking the AST's last statement rather than
+    /// the last op is what keeps that patch in bounds.
+    #[test]
+    fn a_trailing_if_with_no_else_ending_in_return_still_terminates_in_bounds() {
+        let (_, f) = compile("m() { if(a) { return 1; } }");
+        assert_eq!(f[0].code.last(), Some(&Op::ReturnUndef));
+        let len = f[0].code.len() as u32;
+        for op in &f[0].code {
+            if let Op::Jump(t) | Op::JumpIfFalse(t) | Op::JumpIfTrue(t) = op {
+                assert!(*t < len, "jump to {t} outside 0..{len}");
+            }
+        }
+    }
+
+    /// A case with no trailing `break` is idiomatic and must fall through
+    /// into the next body without leaving a stray value behind — the
+    /// `compile()` helper's `stack_depth` check is the real assertion
+    /// here; a build without the fix panics inside `compile()` itself.
+    #[test]
+    fn a_case_with_no_trailing_break_falls_through_cleanly() {
+        compile(r#"m() { switch(r) { case "a": go(); case "b": no(); break; } }"#);
+    }
+
+    /// `default` in the middle of a switch, with the following case falling
+    /// into it exactly as it falls into any other case: `cover_stand.gsc`'s
+    /// shape (`default:` sets state and falls into the case that acts on
+    /// it). Checked by op order — the default's `StoreField` must precede
+    /// the matched case's call, proving the default body physically
+    /// precedes and falls into it rather than being appended at the end.
+    #[test]
+    fn a_non_trailing_default_falls_into_the_following_case() {
+        let (_, f) = compile(
+            r#"m() { switch(x) { default: self.pose = "y"; case "z": playanim(); break; } }"#,
+        );
+        let store_at = f[0]
+            .code
+            .iter()
+            .position(|o| matches!(o, Op::StoreField(_)))
+            .expect("default's assignment compiles to StoreField");
+        let call_at = f[0]
+            .code
+            .iter()
+            .position(|o| matches!(o, Op::CallBuiltin { .. }))
+            .expect("the case's call");
+        assert!(
+            store_at < call_at,
+            "default's body must fall into the following case, not follow it"
+        );
+    }
+
+    #[test]
+    fn duplicate_parameters_are_a_compile_error() {
+        let ast = crate::parse::parse_file("m(a, a) { }").unwrap();
+        let mut i = Interner::default();
+        assert!(compile_file(&ast, "test/script", &mut i).is_err());
     }
 
     #[test]

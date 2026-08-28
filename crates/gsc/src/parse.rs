@@ -502,30 +502,49 @@ impl<'a> Parser<'a> {
             Tok::For => Ok(vec![self.for_stmt()?]),
             Tok::Switch => Ok(vec![self.switch_stmt()?]),
             Tok::Return => {
+                let line = self.line();
                 self.bump();
                 if self.eat(&Tok::Semi) {
-                    Ok(vec![Stmt::Return(None)])
+                    Ok(vec![Stmt {
+                        line,
+                        kind: StmtKind::Return(None),
+                    }])
                 } else {
                     let e = self.expr()?;
                     self.expect(&Tok::Semi)?;
-                    Ok(vec![Stmt::Return(Some(e))])
+                    Ok(vec![Stmt {
+                        line,
+                        kind: StmtKind::Return(Some(e)),
+                    }])
                 }
             }
             Tok::Break => {
+                let line = self.line();
                 self.bump();
                 self.expect(&Tok::Semi)?;
-                Ok(vec![Stmt::Break])
+                Ok(vec![Stmt {
+                    line,
+                    kind: StmtKind::Break,
+                }])
             }
             Tok::Continue => {
+                let line = self.line();
                 self.bump();
                 self.expect(&Tok::Semi)?;
-                Ok(vec![Stmt::Continue])
+                Ok(vec![Stmt {
+                    line,
+                    kind: StmtKind::Continue,
+                }])
             }
             Tok::Wait => {
+                let line = self.line();
                 self.bump();
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
-                Ok(vec![Stmt::Wait(e)])
+                Ok(vec![Stmt {
+                    line,
+                    kind: StmtKind::Wait(e),
+                }])
             }
             // `expr()` has no branch for a leading `thread`: the only form
             // it handles is the receiver-attached one in `postfix`. A
@@ -533,11 +552,15 @@ impl<'a> Parser<'a> {
             // so this is the one place that consumes the keyword itself.
             // The target may itself be a deref, e.g. `thread [[shoot]]();`.
             Tok::Thread => {
+                let line = self.line();
                 self.bump();
                 let target = self.call_target()?;
                 let call = self.finish_call(None, target, true)?;
                 self.expect(&Tok::Semi)?;
-                Ok(vec![Stmt::Expr(call)])
+                Ok(vec![Stmt {
+                    line,
+                    kind: StmtKind::Expr(call),
+                }])
             }
             _ => {
                 let s = self.simple_stmt()?;
@@ -548,6 +571,7 @@ impl<'a> Parser<'a> {
     }
 
     fn if_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.line();
         self.bump(); // `if`
         self.expect(&Tok::LParen)?;
         let cond = self.expr()?;
@@ -558,25 +582,33 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        Ok(Stmt::If {
-            cond,
-            then,
-            otherwise,
+        Ok(Stmt {
+            line,
+            kind: StmtKind::If {
+                cond,
+                then,
+                otherwise,
+            },
         })
     }
 
     fn while_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.line();
         self.bump(); // `while`
         self.expect(&Tok::LParen)?;
         let cond = self.expr()?;
         self.expect(&Tok::RParen)?;
         let body = self.body()?;
-        Ok(Stmt::While { cond, body })
+        Ok(Stmt {
+            line,
+            kind: StmtKind::While { cond, body },
+        })
     }
 
     // The body runs before the condition is first tested, which is the
     // whole difference from `while`.
     fn do_while_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.line();
         self.bump(); // `do`
         let body = self.body()?;
         self.expect(&Tok::While)?;
@@ -584,10 +616,14 @@ impl<'a> Parser<'a> {
         let cond = self.expr()?;
         self.expect(&Tok::RParen)?;
         self.expect(&Tok::Semi)?;
-        Ok(Stmt::DoWhile { body, cond })
+        Ok(Stmt {
+            line,
+            kind: StmtKind::DoWhile { body, cond },
+        })
     }
 
     fn for_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.line();
         self.bump(); // `for`
         self.expect(&Tok::LParen)?;
         let init = if *self.peek() == Tok::Semi {
@@ -609,18 +645,24 @@ impl<'a> Parser<'a> {
         };
         self.expect(&Tok::RParen)?;
         let body = self.body()?;
-        Ok(Stmt::For {
-            init,
-            cond,
-            step,
-            body,
+        Ok(Stmt {
+            line,
+            kind: StmtKind::For {
+                init,
+                cond,
+                step,
+                body,
+            },
         })
     }
 
     // Statements accumulate into the most recently seen label's body, so a
     // label immediately followed by another label leaves that arm's body
     // empty: this IS the fallthrough representation, not a bug to fix later.
+    // `default` becomes an arm like any other case, in source position,
+    // since where it sits among the cases is semantically load-bearing.
     fn switch_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.line();
         self.bump(); // `switch`
         self.expect(&Tok::LParen)?;
         let subject = self.expr()?;
@@ -628,8 +670,6 @@ impl<'a> Parser<'a> {
         self.expect(&Tok::LBrace)?;
 
         let mut arms: Vec<SwitchArm> = Vec::new();
-        let mut default: Option<Vec<Stmt>> = None;
-        let mut in_default = false;
 
         while *self.peek() != Tok::RBrace {
             match self.peek().clone() {
@@ -638,35 +678,31 @@ impl<'a> Parser<'a> {
                     let label = self.expr()?;
                     self.expect(&Tok::Colon)?;
                     arms.push(SwitchArm {
-                        label,
+                        label: ArmLabel::Case(label),
                         body: Vec::new(),
                     });
-                    in_default = false;
                 }
                 Tok::Default => {
                     self.bump();
                     self.expect(&Tok::Colon)?;
-                    default = Some(Vec::new());
-                    in_default = true;
+                    arms.push(SwitchArm {
+                        label: ArmLabel::Default,
+                        body: Vec::new(),
+                    });
                 }
                 _ => {
                     let stmts = self.statement()?;
-                    if in_default {
-                        default.as_mut().expect("case label seen").extend(stmts);
-                    } else {
-                        arms.last_mut()
-                            .ok_or_else(|| self.err("statement before any case label"))?
-                            .body
-                            .extend(stmts);
-                    }
+                    arms.last_mut()
+                        .ok_or_else(|| self.err("statement before any case label"))?
+                        .body
+                        .extend(stmts);
                 }
             }
         }
         self.bump(); // `}`
-        Ok(Stmt::Switch {
-            subject,
-            arms,
-            default,
+        Ok(Stmt {
+            line,
+            kind: StmtKind::Switch { subject, arms },
         })
     }
 
@@ -674,12 +710,13 @@ impl<'a> Parser<'a> {
     // assignment and increment/decrement into `Assign`, without consuming a
     // trailing `;` — a `for` clause needs none, everywhere else adds one.
     fn simple_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let line = self.line();
         let target = self.expr()?;
-        Ok(match self.peek().clone() {
+        let kind = match self.peek().clone() {
             Tok::Assign => {
                 self.bump();
                 let value = self.expr()?;
-                Stmt::Assign { target, value }
+                StmtKind::Assign { target, value }
             }
             Tok::PlusAssign => self.compound_assign(target, BinOp::Add)?,
             Tok::MinusAssign => self.compound_assign(target, BinOp::Sub)?,
@@ -694,20 +731,21 @@ impl<'a> Parser<'a> {
                 self.bump();
                 self.step_assign(target, BinOp::Sub)
             }
-            _ => Stmt::Expr(target),
-        })
+            _ => StmtKind::Expr(target),
+        };
+        Ok(Stmt { line, kind })
     }
 
-    fn compound_assign(&mut self, target: Expr, op: BinOp) -> Result<Stmt, ParseError> {
+    fn compound_assign(&mut self, target: Expr, op: BinOp) -> Result<StmtKind, ParseError> {
         self.bump();
         let rhs = self.expr()?;
         let value = Expr::Bin(op, Box::new(target.clone()), Box::new(rhs));
-        Ok(Stmt::Assign { target, value })
+        Ok(StmtKind::Assign { target, value })
     }
 
-    fn step_assign(&mut self, target: Expr, op: BinOp) -> Stmt {
+    fn step_assign(&mut self, target: Expr, op: BinOp) -> StmtKind {
         let value = Expr::Bin(op, Box::new(target.clone()), Box::new(Expr::Int(1)));
-        Stmt::Assign { target, value }
+        StmtKind::Assign { target, value }
     }
 }
 
@@ -970,40 +1008,40 @@ mod tests {
         assert_eq!(f.funcs.len(), 1);
         assert_eq!(f.funcs[0].name, "greet");
         assert_eq!(f.funcs[0].params, vec!["a", "b"]);
-        assert!(matches!(f.funcs[0].body[0], Stmt::Return(Some(_))));
+        assert!(matches!(f.funcs[0].body[0].kind, StmtKind::Return(Some(_))));
     }
 
     #[test]
     fn if_else_and_while() {
         let f = file("m() { if(a) b(); else c(); while(d) e(); }");
         assert!(matches!(
-            f.funcs[0].body[0],
-            Stmt::If {
+            f.funcs[0].body[0].kind,
+            StmtKind::If {
                 otherwise: Some(_),
                 ..
             }
         ));
-        assert!(matches!(f.funcs[0].body[1], Stmt::While { .. }));
+        assert!(matches!(f.funcs[0].body[1].kind, StmtKind::While { .. }));
     }
 
     #[test]
     fn for_with_and_without_clauses() {
         let f = file("m() { for(i = 0; i < 10; i++) x(); for(;;) y(); }");
-        let Stmt::For {
+        let StmtKind::For {
             init: Some(_),
             cond: Some(_),
             step: Some(_),
             ..
-        } = &f.funcs[0].body[0]
+        } = &f.funcs[0].body[0].kind
         else {
             panic!()
         };
-        let Stmt::For {
+        let StmtKind::For {
             init: None,
             cond: None,
             step: None,
             ..
-        } = &f.funcs[0].body[1]
+        } = &f.funcs[0].body[1].kind
         else {
             panic!()
         };
@@ -1026,21 +1064,24 @@ mod tests {
             }
         }"#,
         );
-        let Stmt::Switch { arms, default, .. } = &f.funcs[0].body[0] else {
+        let StmtKind::Switch { arms, .. } = &f.funcs[0].body[0].kind else {
             panic!()
         };
-        assert_eq!(arms.len(), 3);
+        // `default` is now one more arm, in source position, not a
+        // separate field.
+        assert_eq!(arms.len(), 4);
         assert!(arms[0].body.is_empty());
         assert!(arms[1].body.is_empty());
         assert_eq!(arms[2].body.len(), 2);
-        assert!(default.is_some());
+        assert_eq!(arms[3].label, ArmLabel::Default);
+        assert_eq!(arms[3].body.len(), 2);
     }
 
     /// One script in the corpus uses this, animscripts/predict.gsc.
     #[test]
     fn do_while_runs_its_body_before_testing() {
         let f = file("m() { do { x(); } while (cond); }");
-        let Stmt::DoWhile { body, .. } = &f.funcs[0].body[0] else {
+        let StmtKind::DoWhile { body, .. } = &f.funcs[0].body[0].kind else {
             panic!()
         };
         assert_eq!(body.len(), 1);
@@ -1050,10 +1091,10 @@ mod tests {
     #[test]
     fn pipe_assign_desugars_to_bitwise_or() {
         let f = file("m() { iDFlags |= level.iDFLAGS_NO_KNOCKBACK; }");
-        let Stmt::Assign {
+        let StmtKind::Assign {
             value: Expr::Bin(BinOp::BitOr, _, _),
             ..
-        } = &f.funcs[0].body[0]
+        } = &f.funcs[0].body[0].kind
         else {
             panic!("|= must desugar to a BitOr assignment")
         };
@@ -1062,10 +1103,10 @@ mod tests {
     #[test]
     fn binary_and_parses_as_bitwise() {
         let f = file("m() { if(iDFlags & level.iDFLAGS_NO_PROTECTION) x(); }");
-        let Stmt::If {
+        let StmtKind::If {
             cond: Expr::Bin(BinOp::BitAnd, _, _),
             ..
-        } = &f.funcs[0].body[0]
+        } = &f.funcs[0].body[0].kind
         else {
             panic!()
         };
@@ -1074,26 +1115,26 @@ mod tests {
     #[test]
     fn wait_is_a_statement_without_parens() {
         let f = file("m() { wait 0.05; }");
-        assert!(matches!(f.funcs[0].body[0], Stmt::Wait(_)));
+        assert!(matches!(f.funcs[0].body[0].kind, StmtKind::Wait(_)));
     }
 
     #[test]
     fn assignment_forms() {
         let f = file("m() { a = 1; a += 2; a -= 3; a *= 4; a /= 5; a++; a--; }");
         assert_eq!(f.funcs[0].body.len(), 7);
-        assert!(matches!(f.funcs[0].body[0], Stmt::Assign { .. }));
+        assert!(matches!(f.funcs[0].body[0].kind, StmtKind::Assign { .. }));
         // Compound forms desugar to Assign with a Bin right-hand side.
-        let Stmt::Assign {
+        let StmtKind::Assign {
             value: Expr::Bin(BinOp::Add, _, _),
             ..
-        } = &f.funcs[0].body[1]
+        } = &f.funcs[0].body[1].kind
         else {
             panic!()
         };
-        let Stmt::Assign {
+        let StmtKind::Assign {
             value: Expr::Bin(BinOp::Add, _, _),
             ..
-        } = &f.funcs[0].body[5]
+        } = &f.funcs[0].body[5].kind
         else {
             panic!("a++ desugars to a = a + 1")
         };
@@ -1102,27 +1143,27 @@ mod tests {
     #[test]
     fn threaded_and_method_call_statements() {
         let f = file(r#"m() { thread go(); self thread go(); self waittill("e", a, b); }"#);
-        let Stmt::Expr(Expr::Call {
+        let StmtKind::Expr(Expr::Call {
             threaded: true,
             recv: None,
             ..
-        }) = &f.funcs[0].body[0]
+        }) = &f.funcs[0].body[0].kind
         else {
             panic!()
         };
-        let Stmt::Expr(Expr::Call {
+        let StmtKind::Expr(Expr::Call {
             threaded: true,
             recv: Some(_),
             ..
-        }) = &f.funcs[0].body[1]
+        }) = &f.funcs[0].body[1].kind
         else {
             panic!()
         };
-        let Stmt::Expr(Expr::Call {
+        let StmtKind::Expr(Expr::Call {
             target: CallTarget::Name(n),
             args,
             ..
-        }) = &f.funcs[0].body[2]
+        }) = &f.funcs[0].body[2].kind
         else {
             panic!()
         };
@@ -1135,21 +1176,21 @@ mod tests {
     #[test]
     fn threaded_calls_can_target_a_dereferenced_pointer() {
         let f = file(r#"m() { thread [[shoot]](turret); level thread [[process]](x); }"#);
-        let Stmt::Expr(Expr::Call {
+        let StmtKind::Expr(Expr::Call {
             recv: None,
             target: CallTarget::Deref(_),
             threaded: true,
             ..
-        }) = &f.funcs[0].body[0]
+        }) = &f.funcs[0].body[0].kind
         else {
             panic!("{:?}", f.funcs[0].body[0])
         };
-        let Stmt::Expr(Expr::Call {
+        let StmtKind::Expr(Expr::Call {
             recv: Some(_),
             target: CallTarget::Deref(_),
             threaded: true,
             ..
-        }) = &f.funcs[0].body[1]
+        }) = &f.funcs[0].body[1].kind
         else {
             panic!("{:?}", f.funcs[0].body[1])
         };
@@ -1164,12 +1205,12 @@ mod tests {
     #[test]
     fn statement_level_thread_can_target_a_namespaced_path() {
         let f = file(r#"m() { thread maps\_utility::foo(); }"#);
-        let Stmt::Expr(Expr::Call {
+        let StmtKind::Expr(Expr::Call {
             recv: None,
             target: CallTarget::Path { file, name },
             threaded: true,
             ..
-        }) = &f.funcs[0].body[0]
+        }) = &f.funcs[0].body[0].kind
         else {
             panic!("{:?}", f.funcs[0].body[0])
         };
