@@ -609,5 +609,15 @@ mod tests {
             toks("99999999999"),
             vec![Tok::Float("99999999999".parse().unwrap()), Tok::Eof]
         );
+        // The anti-panic property this test replaced wasn't scoped to one
+        // digit width past i32::MAX; pin it against a pathological input
+        // too, one that overflows f32 itself into infinity.
+        let hundred_digits = "9".repeat(100);
+        let t = toks(&hundred_digits);
+        match &t[0] {
+            Tok::Float(f) => assert!(f.is_infinite(), "expected overflow to infinity, got {f}"),
+            other => panic!("expected a float token, got {other:?}"),
+        }
+        assert_eq!(t[1], Tok::Eof);
     }
 }
