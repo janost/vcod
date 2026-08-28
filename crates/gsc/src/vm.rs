@@ -704,6 +704,14 @@ impl Vm {
         Ok(())
     }
 
+    /// Removes previously installed functions, for a loader that rolls back
+    /// a partially loaded reference chain after a later file in it fails.
+    pub fn uninstall(&mut self, refs: &[FuncRef]) {
+        for r in refs {
+            self.functions.remove(r);
+        }
+    }
+
     pub fn func_ref(&mut self, path: &str, name: &str) -> FuncRef {
         FuncRef {
             file: self.interner.intern(path),

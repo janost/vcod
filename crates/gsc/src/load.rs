@@ -6,7 +6,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use crate::bytecode::Op;
-use crate::value::Value;
+use crate::value::{FuncRef, Value};
 use crate::vm::Vm;
 
 /// Lowercase, backslashes to forward slashes, `.gsc` suffix dropped.
@@ -57,22 +57,54 @@ impl Loader {
     /// call target or a bare `::name` function pointer. `path` need not be
     /// canonical; every path discovered from compiled output already is
     /// (the compiler canonicalizes both halves of a `FuncRef`).
+    ///
+    /// Atomic at this entry point: if any file reached from `path` fails to
+    /// load, every function this call installed is removed again and every
+    /// path it newly marked loaded is unmarked, so a failed load leaves the
+    /// `Vm` exactly as it found it (a half-loaded gametype that still looks
+    /// loaded is worse than a clean refusal) and a retry — e.g. once a
+    /// missing file exists — does not silently no-op on a path this call
+    /// already gave up on.
     pub fn load(&mut self, vm: &mut Vm, path: &str) -> Result<(), LoadError> {
-        self.load_one(vm, &canonical(path))
+        let mut installed = Vec::new();
+        let mut visited = Vec::new();
+        self.load_one(vm, &canonical(path), None, &mut installed, &mut visited)
+            .inspect_err(|_| {
+                vm.uninstall(&installed);
+                for p in &visited {
+                    self.loaded.remove(p);
+                }
+            })
     }
 
-    fn load_one(&mut self, vm: &mut Vm, path: &str) -> Result<(), LoadError> {
+    /// `referrer` is the canonical path that named `path`, for the missing-
+    /// file error message; `None` at the top-level call. `installed` and
+    /// `visited` accumulate across the whole recursion so `load` can undo
+    /// exactly what this call did, and nothing older.
+    fn load_one(
+        &mut self,
+        vm: &mut Vm,
+        path: &str,
+        referrer: Option<&str>,
+        installed: &mut Vec<FuncRef>,
+        visited: &mut Vec<String>,
+    ) -> Result<(), LoadError> {
         // Marked loaded before compiling, not after: two stock scripts
         // referencing each other is ordinary, and marking after would
         // recurse forever on the cycle.
         if !self.loaded.insert(path.to_string()) {
             return Ok(());
         }
+        visited.push(path.to_string());
 
         let text = self.source.read(path).ok_or_else(|| LoadError {
             path: path.to_string(),
+            // No source line exists for "the file itself is missing".
             line: 0,
-            msg: "script not found".to_string(),
+            msg: match referrer {
+                Some(r) => format!("script not found (referenced from {r})"),
+                None => "script not found".to_string(),
+            },
         })?;
 
         let ast = crate::parse::parse_file(&text).map_err(|e| LoadError {
@@ -107,14 +139,27 @@ impl Loader {
             }
         }
 
+        // Also computed before the move into `install`, but only recorded
+        // as newly installed once `install` actually accepts them.
+        let new_funcs: Vec<FuncRef> = fns
+            .iter()
+            .map(|f| FuncRef {
+                file: f.file,
+                name: f.name,
+            })
+            .collect();
+
+        // No source line either: this rejects the whole function set from
+        // one file at once, not one statement.
         vm.install(fns).map_err(|msg| LoadError {
             path: path.to_string(),
             line: 0,
             msg,
         })?;
+        installed.extend(new_funcs);
 
         for r in refs {
-            self.load_one(vm, &r)?;
+            self.load_one(vm, &r, Some(path), installed, visited)?;
         }
         Ok(())
     }
@@ -186,6 +231,26 @@ mod tests {
         assert!(host.calls.iter().any(|(n, _)| n == "loaded"));
     }
 
+    /// A bare `::name` pointer with no call around it (`x = file::fn;`)
+    /// lowers to a `Value::Function` constant, not an `Op::Call` — the shape
+    /// every stock gametype uses to register its engine callbacks. Deleting
+    /// the constant-pool scan in `load_one` would still pass every other
+    /// test in this file; only this one would catch it.
+    #[test]
+    fn a_bare_function_pointer_pulls_in_its_file() {
+        let src = source(&[
+            ("a", r#"main() { x = maps\mp\b::cb; }"#),
+            ("maps/mp/b", "cb() { }"),
+        ]);
+        let mut vm = Vm::new();
+        let mut l = Loader::new(Box::new(src));
+        l.load(&mut vm, "a").unwrap();
+
+        let mut host = TestHost::default();
+        let f = vm.func_ref("maps/mp/b", "cb");
+        assert!(vm.call_now(&mut host, 0, f, None, vec![]).is_ok());
+    }
+
     #[test]
     fn a_file_referenced_twice_is_compiled_once() {
         let src = source(&[
@@ -217,6 +282,39 @@ mod tests {
         let mut l = Loader::new(Box::new(src));
         let e = l.load(&mut vm, "a").unwrap_err();
         assert_eq!(e.path, "maps/mp/gone");
+    }
+
+    /// A failed load must not leave the referencing file's functions
+    /// installed: a half-loaded gametype that looks loaded is worse than a
+    /// clean refusal a caller can retry.
+    #[test]
+    fn a_failed_load_leaves_no_functions_installed() {
+        let src = source(&[(
+            "a",
+            r#"main() { helper(); maps\mp\gone::main(); } helper() { }"#,
+        )]);
+        let mut vm = Vm::new();
+        let mut l = Loader::new(Box::new(src));
+        assert!(l.load(&mut vm, "a").is_err());
+        assert_eq!(vm.functions().count(), 0);
+        assert_eq!(l.loaded_count(), 0);
+    }
+
+    /// In a 799-file corpus a broken reference is hard to trace from the
+    /// missing path alone; the message names which file wanted it. (The
+    /// brief's own test pins `e.path` to the missing path itself, so the
+    /// referrer goes into `msg`, not `path`.)
+    #[test]
+    fn a_missing_file_error_names_the_file_that_referenced_it() {
+        let src = source(&[("maps/mp/mp_pavlov", r#"main() { maps\mp\gone::main(); }"#)]);
+        let mut vm = Vm::new();
+        let mut l = Loader::new(Box::new(src));
+        let e = l.load(&mut vm, "maps/mp/mp_pavlov").unwrap_err();
+        assert!(
+            e.msg.contains("maps/mp/mp_pavlov"),
+            "expected the referrer in the message, got: {}",
+            e.msg
+        );
     }
 
     #[test]
