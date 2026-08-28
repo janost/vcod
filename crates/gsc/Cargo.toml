@@ -1,0 +1,18 @@
+[package]
+name = "vcod-gsc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Virtual machine for the Call of Duty (2003) 1.1 GSC script language"
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+vcod-common.workspace = true

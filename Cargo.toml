@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/common", "crates/client", "crates/server"]
+members = ["crates/common", "crates/client", "crates/server", "crates/gsc"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,6 +25,7 @@ wgpu = "30"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 tempfile = "3"
 vcod-common = { path = "crates/common" }
+vcod-gsc = { path = "crates/gsc" }
 
 # Release binaries ship to the nightly release; the symbol table is most of
 # their size and nothing reads it. Panic backtraces lose function names.

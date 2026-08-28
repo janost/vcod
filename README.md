@@ -44,11 +44,15 @@ combat effects.
 The whole thing runs on wgpu and winit, so in principle it is cross-platform.
 I have only run it on Linux.
 
-It is a Cargo workspace of three crates. `crates/common` holds the file
+It is a Cargo workspace of four crates. `crates/common` holds the file
 formats, collision, movement and the 1.1 protocol, shared by the client and
 the server; nothing in it imports wgpu, winit or kira. `crates/client` is the
 window, renderer, HUD, effects and audio; `crates/server` is the dedicated
-server. [AGENTS.md](AGENTS.md) is the contributor guide.
+server. `crates/gsc` is a virtual machine for CoD's own script language
+(`.gsc`), so the dedicated server can eventually run Activision's shipped
+gameplay scripts instead of hand-written rules; it depends on neither
+`vcod-common` nor the client's rendering stack. [AGENTS.md](AGENTS.md) is
+the contributor guide.
 
 ## Why
 

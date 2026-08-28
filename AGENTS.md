@@ -14,9 +14,14 @@ engineering setup works.
   1.1 protocol,
   both directions). `crates/client` (`vcod`): window, renderer, entities, hud,
   fx, audio, `probe.rs`. `crates/server` (`vcod-server`): the dedicated server.
-  Nothing in `common` may import wgpu, winit or kira; `cargo tree -p vcod-common
-  -i wgpu` proves it. `cargo build -p vcod` / `-p vcod-server` build one; plain
-  `cargo build` both.
+  `crates/gsc` (`vcod-gsc`): a virtual machine for CoD's script language
+  (`.gsc`) — lexer, parser, bytecode compiler, instruction loop, thread
+  scheduler and cross-file loader, so the dedicated server can eventually run
+  Activision's own shipped gameplay scripts. `vcod-gsc` must not depend on
+  `vcod-common` either, same rule as `common` itself: `cargo tree -p vcod-gsc
+  -e normal` shows only `anyhow` and `log`. Nothing in `common` may import
+  wgpu, winit or kira; `cargo tree -p vcod-common -i wgpu` proves it. `cargo
+  build -p vcod` / `-p vcod-server` build one; plain `cargo build` both.
 - `docs/protocol-1.1.md` is the wire-protocol reference. `docs/research/*.md`
   hold verified format and engine facts with binary addresses as evidence. Read
   the research doc before touching the subsystem it covers; extend it when you
