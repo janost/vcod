@@ -13,6 +13,7 @@ pub enum Tok {
     If,
     Else,
     While,
+    Do,
     For,
     Switch,
     Case,
@@ -32,6 +33,7 @@ pub enum Tok {
     MinusAssign,
     StarAssign,
     SlashAssign,
+    PipeAssign,
     PlusPlus,
     MinusMinus,
     EqEq,
@@ -43,6 +45,7 @@ pub enum Tok {
     AndAnd,
     OrOr,
     Not,
+    Amp,
     Dot,
     Comma,
     Semi,
@@ -100,6 +103,7 @@ fn keyword(text: &str) -> Option<Tok> {
         "if" => Tok::If,
         "else" => Tok::Else,
         "while" => Tok::While,
+        "do" => Tok::Do,
         "for" => Tok::For,
         "switch" => Tok::Switch,
         "case" => Tok::Case,
@@ -199,8 +203,8 @@ impl<'a> Lexer<'a> {
     }
 
     // Reads a `"`-delimited string starting at the opening quote, handling
-    // `\\`, `\"` and `\n` escapes. Any other `\x` drops the backslash and
-    // keeps `x` literally.
+    // `\\`, `\"` and `\n` escapes. Any other `\x` is not a defined escape
+    // and keeps both bytes.
     fn read_string(&mut self) -> Result<String, LexError> {
         let open_line = self.line;
         self.i += 1; // opening quote
@@ -217,11 +221,23 @@ impl<'a> Lexer<'a> {
                     self.i += 1;
                     match self.peek() {
                         None => return Err(self.err(open_line, "unterminated string")),
+                        Some(b'\\') => {
+                            out.push(b'\\');
+                            self.i += 1;
+                        }
+                        Some(b'"') => {
+                            out.push(b'"');
+                            self.i += 1;
+                        }
                         Some(b'n') => {
                             out.push(b'\n');
                             self.i += 1;
                         }
+                        // Any other `\x` is not a defined escape: keep both
+                        // bytes, so a diagnostic string quoting a script
+                        // path like `\shared::` does not lose the `\`.
                         Some(other) => {
+                            out.push(b'\\');
                             out.push(other);
                             self.i += 1;
                         }
@@ -250,7 +266,8 @@ impl<'a> Lexer<'a> {
     }
 
     // A digit, or `.` followed by a digit; no exponents, no hex, no sign.
-    fn read_number(&mut self) -> Tok {
+    fn read_number(&mut self) -> Result<Tok, LexError> {
+        let open_line = self.line;
         let start = self.i;
         let mut has_dot = false;
         if self.peek() == Some(b'.') {
@@ -272,9 +289,11 @@ impl<'a> Lexer<'a> {
         }
         let text = std::str::from_utf8(&self.b[start..self.i]).expect("digits are ascii");
         if has_dot {
-            Tok::Float(text.parse().expect("well-formed float literal"))
+            Ok(Tok::Float(text.parse().expect("well-formed float literal")))
         } else {
-            Tok::Int(text.parse().expect("well-formed int literal"))
+            text.parse()
+                .map(Tok::Int)
+                .map_err(|_| self.err(open_line, format!("integer literal '{text}' out of range")))
         }
     }
 
@@ -315,6 +334,7 @@ impl<'a> Lexer<'a> {
             (b'-', Some(b'=')) => Tok::MinusAssign,
             (b'*', Some(b'=')) => Tok::StarAssign,
             (b'/', Some(b'=')) => Tok::SlashAssign,
+            (b'|', Some(b'=')) => Tok::PipeAssign,
             (b'+', Some(b'+')) => Tok::PlusPlus,
             (b'-', Some(b'-')) => Tok::MinusMinus,
             _ => return None,
@@ -333,6 +353,7 @@ impl<'a> Lexer<'a> {
             b'<' => Tok::Lt,
             b'>' => Tok::Gt,
             b'!' => Tok::Not,
+            b'&' => Tok::Amp,
             b'.' => Tok::Dot,
             b',' => Tok::Comma,
             b';' => Tok::Semi,
@@ -374,7 +395,7 @@ impl<'a> Lexer<'a> {
             } else if c.is_ascii_digit()
                 || (c == b'.' && matches!(self.peek_at(1), Some(d) if d.is_ascii_digit()))
             {
-                self.read_number()
+                self.read_number()?
             } else if is_ident_start(c) {
                 let text = self.read_ident();
                 keyword(&text).unwrap_or(Tok::Ident(text))
@@ -421,11 +442,12 @@ mod tests {
     #[test]
     fn keywords_are_their_own_tokens() {
         assert_eq!(
-            toks("if else while for switch case default break continue return thread wait"),
+            toks("if else while do for switch case default break continue return thread wait"),
             vec![
                 Tok::If,
                 Tok::Else,
                 Tok::While,
+                Tok::Do,
                 Tok::For,
                 Tok::Switch,
                 Tok::Case,
@@ -459,6 +481,14 @@ mod tests {
         assert_eq!(toks(r#""a\\b""#), vec![Tok::Str("a\\b".into()), Tok::Eof]);
         assert_eq!(toks(r#""a\"b""#), vec![Tok::Str("a\"b".into()), Tok::Eof]);
         assert_eq!(toks(r#""a\nb""#), vec![Tok::Str("a\nb".into()), Tok::Eof]);
+    }
+
+    // Diagnostic strings quote script paths like `\shared::`; an escape
+    // outside {\\, \", \n} is not defined, so both bytes are kept rather
+    // than silently dropping the backslash.
+    #[test]
+    fn unrecognized_escapes_keep_the_backslash() {
+        assert_eq!(toks(r#""a\sb""#), vec![Tok::Str("a\\sb".into()), Tok::Eof]);
     }
 
     #[test]
@@ -501,7 +531,7 @@ mod tests {
     #[test]
     fn every_operator() {
         assert_eq!(
-            toks("+ - * / % = += -= *= /= ++ -- == != < > <= >= && || ! . , ( ) { }"),
+            toks("+ - * / % = += -= *= /= |= ++ -- == != < > <= >= && || & ! . , ( ) { }"),
             vec![
                 Tok::Plus,
                 Tok::Minus,
@@ -513,6 +543,7 @@ mod tests {
                 Tok::MinusAssign,
                 Tok::StarAssign,
                 Tok::SlashAssign,
+                Tok::PipeAssign,
                 Tok::PlusPlus,
                 Tok::MinusMinus,
                 Tok::EqEq,
@@ -523,6 +554,7 @@ mod tests {
                 Tok::Ge,
                 Tok::AndAnd,
                 Tok::OrOr,
+                Tok::Amp,
                 Tok::Not,
                 Tok::Dot,
                 Tok::Comma,
@@ -547,5 +579,13 @@ mod tests {
     fn an_unterminated_string_names_its_line() {
         let e = lex("a\nb\n\"oops").unwrap_err();
         assert_eq!(e.line, 3);
+    }
+
+    // A literal past i32::MAX must not panic the lexer: a third-party map
+    // script can ship a bad literal, and load errors should be recoverable.
+    #[test]
+    fn an_oversized_int_literal_is_a_lex_error_not_a_panic() {
+        let e = lex("99999999999").unwrap_err();
+        assert_eq!(e.line, 1);
     }
 }
