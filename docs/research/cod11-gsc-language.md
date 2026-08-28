@@ -531,6 +531,17 @@ past `i32::MAX` as an effectively-infinite sentinel
 - **String comparison against a localized string** (`&"KEY"`), and whether a
   localized string renders as its key or its resolved text when
   concatenated. No stock script does either.
+- **`format_g`'s exponent form.** No probe has driven a float outside
+  roughly `1e-4 .. 1e6`, so whether retail's `%g` prints `1e+06` or
+  something else is unmeasured; `format_g` (`crates/gsc/src/value.rs`)
+  spells it Rust's way (`1e6`) and, being unmeasured either way,
+  `format_g(999999.5)` currently rounds to `"1000000"` rather than
+  switching to exponent form.
+- **Cross-type equality outside the pairs above** (`vector == "a"`,
+  `entity == "a"`, and so on). `values_equal`'s catch-all
+  (`crates/gsc/src/vm/interp.rs`) answers `false` via `a == b`; retail's
+  "pair has unmatching types" message suggests these are fatal there, but
+  no probe has measured a mismatched pair outside `undefined`.
 
 ## 10. Divergences kept as documentation, not code
 

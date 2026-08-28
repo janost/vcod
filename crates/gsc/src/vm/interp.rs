@@ -95,6 +95,10 @@ fn values_equal(interner: &Interner, a: Value, b: Value) -> Result<bool, ErrorKi
         (Value::Undefined, _) | (_, Value::Undefined) => Err(ErrorKind::BadType(
             "cannot compare undefined against a value",
         )),
+        // Not measured: a cross-type pair here (vector against a string, an
+        // entity against a string) reads false rather than the fatal
+        // "pair has unmatching types" retail's error text suggests for a
+        // mismatch. No probe has driven this arm.
         _ => Ok(a == b),
     }
 }

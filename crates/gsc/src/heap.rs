@@ -61,6 +61,8 @@ impl Heap {
     pub fn set_field(&mut self, s: StructId, f: Atom, v: Value) {
         if let Some(fields) = self.structs.get_mut(s.0 as usize) {
             fields.insert(f, v);
+        } else {
+            log::warn!("dropped a write to struct {} (out of range)", s.0);
         }
     }
 
@@ -78,6 +80,8 @@ impl Heap {
     pub fn set_index(&mut self, a: ArrayId, k: ArrayKey, v: Value) {
         if let Some(elems) = self.arrays.get_mut(a.0 as usize) {
             elems.insert(k, v);
+        } else {
+            log::warn!("dropped a write to array {} (out of range)", a.0);
         }
     }
 

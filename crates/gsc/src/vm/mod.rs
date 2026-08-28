@@ -51,6 +51,25 @@ pub struct ScriptError {
     pub kind: ErrorKind,
 }
 
+/// Why `Vm::install` rejected a batch of functions.
+#[derive(Clone, PartialEq, Debug)]
+pub enum InstallError {
+    /// `bytecode::stack_depth`'s abstract stack walk rejected one of the
+    /// functions before any of the batch was installed.
+    BadStack(String),
+    /// Two installed functions share a `FuncRef`.
+    Duplicate(FuncRef),
+}
+
+impl std::fmt::Display for InstallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstallError::BadStack(msg) => write!(f, "{msg}"),
+            InstallError::Duplicate(r) => write!(f, "duplicate function {r:?}"),
+        }
+    }
+}
+
 /// Everything a `Host` callback may reach inside the VM. Borrows disjoint
 /// fields of `Vm`, which is what makes a builtin able to allocate: a single
 /// `&mut Vm` cannot be handed out while `run_frame` holds one.
@@ -290,6 +309,17 @@ impl Vm {
         Target::Struct(self.game)
     }
 
+    /// `level`'s struct id. `level()` returns a `Target` for notify and call
+    /// receivers; this is for the host's own heap reads.
+    pub fn level_id(&self) -> StructId {
+        self.level
+    }
+
+    /// `game`'s struct id, the `Target::Struct` counterpart to `level_id`.
+    pub fn game_id(&self) -> StructId {
+        self.game
+    }
+
     /// Every installed function, for a loader's cross-file scan and
     /// builtin pre-scan.
     pub fn functions(&self) -> impl Iterator<Item = &Function> {
@@ -301,10 +331,24 @@ impl Vm {
     /// standing between a compiler bug and a panic in `step_frames` (which
     /// trusts the stack discipline it proves), so it has to run here, on
     /// every function this ever accepts — not just in the compiler's own
-    /// test suite, which is the only place it ran before.
-    pub fn install(&mut self, fns: Vec<Function>) -> Result<(), String> {
+    /// test suite, which is the only place it ran before. Also rejects a
+    /// function whose `FuncRef` collides with one already installed, rather
+    /// than silently overwriting it. Both checks run over the whole batch
+    /// before anything is inserted, so a rejected `install` call changes
+    /// nothing.
+    pub fn install(&mut self, fns: Vec<Function>) -> Result<(), InstallError> {
         for f in &fns {
-            crate::bytecode::stack_depth(f)?;
+            crate::bytecode::stack_depth(f).map_err(InstallError::BadStack)?;
+        }
+        let mut seen = std::collections::HashSet::new();
+        for f in &fns {
+            let key = FuncRef {
+                file: f.file,
+                name: f.name,
+            };
+            if self.functions.contains_key(&key) || !seen.insert(key) {
+                return Err(InstallError::Duplicate(key));
+            }
         }
         for f in fns {
             let key = FuncRef {
@@ -538,9 +582,7 @@ pub(crate) mod tests {
         assert!(matches!(e.kind, ErrorKind::SuspendedInImmediateCall));
     }
 
-    // --- Fix round 1: `level`/`game` as call and notify/waittill/endon
-    // receivers, and the four brief rules that previously rested only on
-    // review. ---
+    // --- `level`/`game` as call and notify/waittill/endon receivers. ---
 
     /// `level f()` and friends are the majority of the corpus's control
     /// flow (996 `level notify`, 956 `level waittill`, 728 `level thread`,
@@ -630,6 +672,33 @@ pub(crate) mod tests {
             lines: vec![1, 1],
         };
         assert!(vm.install(vec![bad]).is_err());
+    }
+
+    /// A second function sharing a `FuncRef` with one already installed is
+    /// rejected rather than silently replacing it, and rejection is
+    /// all-or-nothing: an earlier function in the same batch is not left
+    /// installed either.
+    #[test]
+    fn install_rejects_a_duplicate_func_ref_and_installs_neither() {
+        let mut vm = Vm::new();
+        let file = vm.interner_mut().intern_folded("test/dup");
+        let f = |vm: &mut Vm, name: &str| crate::bytecode::Function {
+            file,
+            name: vm.interner_mut().intern_folded(name),
+            params: 0,
+            locals: 0,
+            code: vec![crate::bytecode::Op::ReturnUndef],
+            consts: Vec::new(),
+            lines: vec![1],
+        };
+        let first = f(&mut vm, "main");
+        vm.install(vec![first]).unwrap();
+
+        let other = f(&mut vm, "other");
+        let dup = f(&mut vm, "main");
+        let err = vm.install(vec![other, dup]).unwrap_err();
+        assert!(matches!(err, InstallError::Duplicate(_)));
+        assert_eq!(vm.functions().count(), 1);
     }
 
     #[test]
@@ -753,7 +822,9 @@ pub(crate) mod tests {
                 r#"main() { return "PROBE " + (1, 2, 3); }"#,
                 "PROBE (1.00, 2.00, 3.00)",
             ),
-            // The mirror: a number on the left of a string still concatenates.
+            // Inference, not measurement: every probe put the string first,
+            // so no capture pins a number on the left. Asserted here on the
+            // assumption `+` is symmetric in which side renders.
             (r#"main() { return 5 + " PROBE"; }"#, "5 PROBE"),
         ];
         for (src, want) in cases {
@@ -870,6 +941,18 @@ pub(crate) mod tests {
         };
         vm.heap_mut().set_field(level_id, mark, Value::Int(1));
         assert_ne!(vm.level(), vm.game());
+    }
+
+    /// A host reads and writes `level` constantly; without this it needs an
+    /// `unreachable!` arm on the `Target` match every time.
+    #[test]
+    fn level_and_game_ids_are_reachable_without_matching_on_target() {
+        let mut vm = Vm::new();
+        let f = vm.interner_mut().intern_folded("mark");
+        let id = vm.level_id();
+        vm.heap_mut().set_field(id, f, Value::Int(1));
+        assert_eq!(vm.heap().get_field(vm.level_id(), f), Value::Int(1));
+        assert_ne!(vm.level_id(), vm.game_id());
     }
 
     /// The G1 blocker: a builtin needs to allocate and populate a heap array
