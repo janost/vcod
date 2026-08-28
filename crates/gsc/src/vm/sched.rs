@@ -1,6 +1,8 @@
 //! The frame scheduler. A thread suspends by being left unstepped, which is
 //! the whole reason the compiler emits bytecode rather than walking the AST.
 
+use std::rc::Rc;
+
 use crate::atom::Atom;
 use crate::bytecode::Function;
 use crate::value::{FuncRef, Value};
@@ -73,7 +75,7 @@ impl Vm {
         // needs to observe them starts the thread suspended (e.g. behind
         // a leading `wait 0;`) and lets `run_frame` step it instead.
         let mut errors = Vec::new();
-        self.spawn(host, func, &f, recv, args, &mut errors)
+        self.spawn(host, func, f, recv, args, &mut errors)
     }
 
     /// A thread whose immediate run itself spawns a thread nested this
@@ -108,7 +110,7 @@ impl Vm {
         &mut self,
         host: &mut dyn Host,
         func: FuncRef,
-        f: &Function,
+        f: Rc<Function>,
         recv: Option<Target>,
         args: Vec<Value>,
         errors: &mut Vec<ScriptError>,
@@ -411,7 +413,7 @@ impl Vm {
                 line: 0,
                 kind: ErrorKind::Custom("no such function".to_string()),
             })?;
-        let mut frames = vec![self.make_frame(func, &f, recv, args)];
+        let mut frames = vec![self.make_frame(func, f, recv, args)];
         let mut notifies = Vec::new();
         // Errors from a threaded call spawned (and immediately run) during
         // this call have nowhere to go through this function's `Result

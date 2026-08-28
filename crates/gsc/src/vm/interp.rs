@@ -1,6 +1,8 @@
 //! The instruction loop: walks `bytecode::Op` over a frame stack until it
 //! suspends, returns, or the caller-supplied budget runs out.
 
+use std::rc::Rc;
+
 use crate::atom::{Atom, Interner};
 use crate::bytecode::{Function, Op};
 use crate::heap::ArrayKey;
@@ -16,6 +18,15 @@ use super::{Cx, ErrorKind, Host, ScriptError, Target, Vm};
 #[derive(Debug)]
 pub(crate) struct Frame {
     pub func: FuncRef,
+    /// The installed function `func` resolves to, cached at frame creation
+    /// so `step_frames`'s hot loop reads it straight off the frame instead
+    /// of hitting `Vm::functions` on every single instruction. Every path
+    /// that produces a `Frame` goes through `make_frame`, which sets this;
+    /// a suspended frame just carries it along in `Thread::frames` across
+    /// the wait, unchanged, rather than being rebuilt on resume. `func`
+    /// stays alongside it, unresolved, for error attribution -- a
+    /// `ScriptError` names the file/function by `Atom`, not by the `Rc`.
+    pub func_rc: Rc<Function>,
     pub ip: u32,
     pub locals: Vec<Value>,
     pub stack: Vec<Value>,
@@ -248,15 +259,16 @@ impl Vm {
     pub(crate) fn make_frame(
         &self,
         func: FuncRef,
-        f: &Function,
+        func_rc: Rc<Function>,
         recv: Option<Target>,
         args: Vec<Value>,
     ) -> Frame {
-        let mut locals = vec![Value::Undefined; f.locals as usize];
-        let take = args.len().min(f.params as usize);
+        let mut locals = vec![Value::Undefined; func_rc.locals as usize];
+        let take = args.len().min(func_rc.params as usize);
         locals[..take].copy_from_slice(&args[..take]);
         Frame {
             func,
+            func_rc,
             ip: 0,
             locals,
             stack: Vec::new(),
@@ -310,12 +322,7 @@ impl Vm {
             }
             remaining -= 1;
             let top = frames.len() - 1;
-            let func_ref = frames[top].func;
-            let func = self
-                .functions
-                .get(&func_ref)
-                .expect("frame references an installed function")
-                .clone();
+            let func = frames[top].func_rc.clone();
             let ip = frames[top].ip as usize;
             let op = func.code[ip].clone();
             let line = func.lines[ip];
@@ -503,10 +510,10 @@ impl Vm {
                         )))
                     })?;
                     if threaded {
-                        self.spawn(host, target, &callee, recv, args, errors);
+                        self.spawn(host, target, callee, recv, args, errors);
                         push!(Value::Undefined);
                     } else {
-                        frames.push(self.make_frame(target, &callee, recv, args));
+                        frames.push(self.make_frame(target, callee, recv, args));
                     }
                 }
                 Op::CallBuiltin {
@@ -555,10 +562,10 @@ impl Vm {
                         )))
                     })?;
                     if threaded {
-                        self.spawn(host, target, &callee, recv, args, errors);
+                        self.spawn(host, target, callee, recv, args, errors);
                         push!(Value::Undefined);
                     } else {
-                        frames.push(self.make_frame(target, &callee, recv, args));
+                        frames.push(self.make_frame(target, callee, recv, args));
                     }
                 }
                 Op::Add => {

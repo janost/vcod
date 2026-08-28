@@ -266,13 +266,23 @@ impl Vm {
         self.threads.len()
     }
 
+    /// `ErrorKind`'s own `Debug` prints `MissingBuiltin`'s `Atom` as a bare
+    /// index (`MissingBuiltin(Atom(43))`) -- useless as the work list this
+    /// log line exists to be, since nothing else here names the builtin.
+    /// `ErrorKind` keeps the `Atom` for its callers, which match on it; only
+    /// the logged text resolves it.
     fn log_script_error(&self, e: &ScriptError) {
+        let kind = match &e.kind {
+            ErrorKind::MissingBuiltin(name) => {
+                format!("MissingBuiltin({:?})", self.interner.resolve(*name))
+            }
+            other => format!("{other:?}"),
+        };
         log::warn!(
-            "gsc: thread aborted in {}::{}:{}: {:?}",
+            "gsc: thread aborted in {}::{}:{}: {kind}",
             self.interner.resolve(e.file),
             self.interner.resolve(e.func),
             e.line,
-            e.kind
         );
     }
 

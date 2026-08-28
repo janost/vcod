@@ -81,6 +81,9 @@ pub enum Op {
     EndOn,
 }
 
+/// `Debug` only, for `Frame`'s derive (`vm/interp.rs`) -- nothing formats a
+/// `Function` directly.
+#[derive(Debug)]
 pub struct Function {
     pub file: Atom,
     pub name: Atom,
