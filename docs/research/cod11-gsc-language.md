@@ -180,8 +180,8 @@ Checked and confirmed absent: `&=`, `^=`, `<<=`, `>>=`, and any standalone
 `|` outside `||`/`|=`. So the bitwise surface the corpus actually needs is
 exactly two operators, not zero: binary `&` and compound `|=`. **Re-verified
 against the real parser and compile census:** `parse_file` accepts both
-(`BinOp::BitAnd`, and `|=` desugars to `BinOp::BitOr` — see the comment in
-`crates/gsc/src/ast.rs`), and the compile census agrees with the classifier
+(`BinOp::BitAnd`, and `|=` desugars to `BinOp::BitOr` — see the comment on
+`BinOp::BitOr` in `crates/gsc/src/ast.rs`), and the compile census agrees with the classifier
 count exactly — 11 files, 24 call sites for binary `&`; 5 files, 5 call
 sites for `|=`, one per stock gametype (`dm`, `tdm`, `sd`, `re`, `bel`),
 confirming "all five" from live bytecode rather than a source grep. A VM
@@ -470,8 +470,13 @@ fatal `divide by 0`.
 
 **Number-to-string rendering: C's `%g`, VERIFIED.** Concatenating a number
 onto a string gives `5` -> `5`, `-5` -> `-5`, `0.5` -> `0.5`, `2.0` -> `2`,
-`0.8` -> `0.8`, `1.0 / 3` -> `0.333333`, `1000000` -> `1000000`. Six
-significant digits, trailing zeros dropped. A vector renders by a different
+`0.8` -> `0.8`, `1.0 / 3` -> `0.333333`. Six significant digits, trailing
+zeros dropped. The probe's `1000000` case (`probe_concat.gsc:22`) is *not*
+evidence for `%g`: it concatenates an int, which never reaches the float
+formatter. So the exponent boundary is untested — vcod's `format_g` switches
+to Rust's `1e6` there, and it is the formatter `set_cull_fog` uses, so a fog
+distance past six digits would go out in that spelling unchecked. A vector
+renders by a different
 rule: `(1, 2, 3)` -> `(1.00, 2.00, 3.00)`, two decimals per component.
 `"str" + undefined` is a fatal `pair has unmatching types 'string' and
 'undefined'`.
@@ -500,9 +505,12 @@ too: `"abcd".size` is 4.
 **Notify wake order: start order, VERIFIED.** Two threads waiting on one
 event on `level` wake in the order they were started.
 
-**`getentarray` order: ascending entity number, VERIFIED.** A map's own
-`script_origin` entities come back before three the probe spawned, and those
-three in spawn order.
+**`getentarray` order: map entities first, then spawn order, VERIFIED.** The
+map's own four `script_origin` entities come back before three the probe
+spawned, and those three in spawn order. The probe prints only `targetname`
+(`probe_ents.gsc:32`), so the ordering *within* the map's own four is not
+measured and the underlying key — entity number or otherwise — is not
+established.
 
 **`i%count` compiles on retail, VERIFIED.** The tight spelling of modulo
 evaluates to `1` for `7 % 3`, so retail's lexer does not read `%` before an
@@ -537,15 +545,17 @@ past `i32::MAX` as an effectively-infinite sentinel
   spells it Rust's way (`1e6`) and, being unmeasured either way,
   `format_g(999999.5)` currently rounds to `"1000000"` rather than
   switching to exponent form.
-- **Cross-type equality outside the pairs above** (`vector == "a"`,
-  `entity == "a"`, and so on). `values_equal`'s catch-all
-  (`crates/gsc/src/vm/interp.rs`) answers `false` via `a == b`; retail's
-  "pair has unmatching types" message suggests these are fatal there, but
-  no probe has measured a mismatched pair outside `undefined`.
+- **Equality outside the pairs above.** `values_equal`'s catch-all
+  (`crates/gsc/src/vm/interp.rs`) is `a == b` on `Value`'s derived
+  `PartialEq`, so a genuinely mixed pair (`vector == "a"`, `entity == "a"`)
+  answers `false`, but two vectors, entities, arrays or function pointers
+  compare by value and can answer **true**. Retail's "pair has unmatching
+  types" message suggests the mixed case is fatal there; the same-type cases
+  are plausible but unmeasured. No probe has driven either.
 
 ## 10. Divergences kept as documentation, not code
 
-Four places where the implementation made a deliberate call the corpus
+Seven places where the implementation made a deliberate call the corpus
 cannot settle, recorded here rather than silently baked into behaviour that
 looks authoritative:
 
@@ -560,8 +570,9 @@ looks authoritative:
   notify("tick", 2);` in one step against a loop doing `self
   waittill("tick", v)` twice receives only `1`, then hangs forever on the
   second `waittill` — one frame apart (each notify in its own step) both
-  arrive. Retail runs the waiter synchronously off `notify`, so it sees
-  both. This is a direct consequence of vcod's choice that a notify can
+  arrive. Retail runs the waiter synchronously off `notify`, so it sees both
+  (INFERRED from the engine's dispatch shape; the double-notify case has not
+  been put to a retail server). This is a direct consequence of vcod's choice that a notify can
   never reenter the VM (`step_thread`'s own doc comment); fixing it without
   reopening reentrancy would mean re-checking, at flush time, which of a
   step's queued notifies still have a live waiter, in queue order, deferred
@@ -609,3 +620,21 @@ looks authoritative:
   exception. The eventual fix belongs in the parser, which is the only layer
   that still knows each function's source position relative to the
   directives around it.
+- **Array iteration order is interning order, not retail's.** `ArrayKey`'s
+  derived `Ord` (`crates/gsc/src/heap.rs`) puts every `Int` before every
+  `Str` and orders `Str(Atom)` by the order the atoms were interned, not by
+  text. Deterministic, which is all iteration needs while nothing lists
+  keys, and knowingly not retail's enumeration order — a `getarraykeys`-
+  style builtin will have to settle that against a probe first.
+- **A float array subscript truncates toward zero.** `array_key`
+  (`crates/gsc/src/vm/interp.rs`) turns `a[1.9]` into `a[1]`, matching the
+  `(int)` cast rather than rejecting it, on the reasoning that a loop
+  counter that drifted to a float is likelier than a script meaning to key
+  by a fractional value. Retail's behaviour here is unmeasured; it may well
+  be fatal.
+- **Every endon kill lands before any notify wake.** `Vm::notify`
+  (`crates/gsc/src/vm/sched.rs`) makes two passes over `threads` — kills
+  first, then wakes — so a thread that has both an `endon` and a `waittill`
+  on one event is killed rather than woken, regardless of which it
+  registered first. The wake order *within* each pass is measured (start
+  order, `# probe_notify`); the ordering *between* the two passes is not.

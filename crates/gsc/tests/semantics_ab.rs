@@ -164,8 +164,8 @@ fn captures() -> BTreeMap<String, (Vec<String>, Option<String>)> {
 }
 
 /// `probe_ents` measures getentarray's return order and needs real map
-/// entities; the object model arrives in stage 2. Its recorded order is
-/// what that implementation has to reproduce.
+/// entities, which need an object model this VM does not have yet. Its
+/// recorded order is what that implementation has to reproduce.
 const NOT_YET_RUNNABLE: &[&str] = &["probe_ents"];
 
 #[test]

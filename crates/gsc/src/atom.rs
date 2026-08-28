@@ -1,41 +1,19 @@
-//! Interned script strings. The engine interns every script string
-//! (`GScr_AllocString`), which is why `Atom` equality is a `u32` compare.
+//! Interned script strings; `Atom` equality is a `u32` compare.
 //!
-//! Interning has two roles, because retail folds case for one and not the
-//! other (`tests/fixtures/semantics/retail-captures.txt`):
+//! Two entry points over one storage vector, because retail folds case for
+//! identifier-role names and not for string values or array keys.
+//! `intern_folded` dedups on the lowercased text, `intern_exact` on the
+//! exact text; both store the spelling they were given verbatim, and
+//! `resolve` returns it. Which role takes which, the measurements behind
+//! the split and the corpus counts are in
+//! docs/research/cod11-gsc-language.md, "Atom identity and case folding".
 //!
-//! - `intern_folded` dedups on the case-folded text. Identifiers, field
-//!   names, file paths, function names and event names (`notify`/
-//!   `waittill`/`endon`) are matched case-insensitively, so two spellings
-//!   of one key must share an atom: `# probe_field_case` reads
-//!   `level.myField` back through `level.myfield`, and a `waittill` waiting
-//!   on one spelling has to see a `notify` fired with the other.
-//! - `intern_exact` dedups on the exact text. String values and array keys
-//!   do not fold: `# probe_cmp` has `"ABC" == "abc"` false, and
-//!   `# probe_arraykey_case` has `a["medFire"]` and `a["medfire"]` as two
-//!   entries with a `.size` of 2.
-//!
-//! Both store the text verbatim, and `resolve` returns that stored spelling
-//! rather than a folded one: `Value::String`/`Localized`/`Anim` atoms come
-//! from this same table, so folding on storage would lowercase every
-//! script-built display string (`"Round " + "won"` -> `"round won"`) and
-//! every literal containing a capital, of which the shipped corpus has 2553.
-//!
-//! `resolve_folded` returns the lowercased form on demand, for matching a
-//! resolved name against a fixed lowercase literal, e.g. builtin dispatch
-//! (`IPrintLn(...)` must still reach a host matching on `"iprintln"`).
-//! `fold_atom` is the same idea one level up: it maps any atom to the atom
-//! `intern_folded` would have returned for its text, which is how an event
-//! name that arrived as a case-preserving string value (a literal, a
-//! concatenation, a host-supplied atom) still matches the other spellings
-//! of the same event.
-//!
-//! Whichever spelling of a folded key is interned first wins for display:
-//! `Panzerfaust` and `panzerfaust` share one atom in identifier roles and
-//! `resolve` returns whichever the compiler saw first. The shipped corpus
-//! has 86 such multi-spelling keys, all weapon or tag names, never display
-//! text; the ones used as array keys or string values no longer collapse at
-//! all.
+//! The invariant everything else leans on: whichever entry point sees a
+//! folded key first owns it, so the two can never hand out different atoms
+//! for one identifier, and `fold_atom` maps any atom onto that owner. Event
+//! names reach the VM as case-preserved string values, so `Op::WaitTill`,
+//! `Op::EndOn` and `Vm::notify` fold before matching -- if one stopped, a
+//! waiting thread would hang with nothing logged.
 //!
 //! Runtime-built strings (e.g. `s = s + "x"` in a loop) intern permanently,
 //! with no reclamation. Not fixed here: the heap this feeds is dropped

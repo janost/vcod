@@ -1,5 +1,5 @@
-//! Stage 1's gate: the map script's own body writes configstrings 3 and 12,
-//! and they match what retail writes for the same map.
+//! The map script's own body writes configstrings 3 and 12, and they match
+//! what retail writes for the same map.
 
 fn cfg(map: &str) -> vcod_server::ServerConfig {
     vcod_server::ServerConfig {

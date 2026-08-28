@@ -30,6 +30,7 @@ Probes emit `PROBE at <name>` before an expression that might be fatal, so a
 run that dies names what killed it.
 
 `probe_ents` measures `getentarray`'s return order and needs real map
-entities, so it is captured but not run through `vcod-gsc`: the object model
-arrives in stage 2. Its recorded order (ascending entity number) is what that
-implementation has to reproduce.
+entities, so it is captured but not run through `vcod-gsc`: there is no
+entity object model yet. Its recorded order — the map's own entities first,
+then spawned ones in spawn order — is what that implementation has to
+reproduce.

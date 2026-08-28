@@ -178,7 +178,10 @@ pub struct Server {
     test_entities: Option<TestEntities>,
     /// Wall clock of the previous tick, for the trace's send-interval column.
     last_tick: Option<Instant>,
-    /// The map script, run once at load; `None` until `load_scripts` succeeds.
+    /// The map script, run once at load; `None` until `load_scripts`
+    /// succeeds. Written and never read: `tick` will step it per frame once
+    /// the host outlives one call, which needs `GameHost` to own the
+    /// configstring table rather than borrow it through `std::mem::take`.
     script: Option<crate::game::script::ScriptRuntime>,
 }
 
@@ -825,7 +828,7 @@ impl Server {
     /// Loads and runs the map script. Called once at map load, before any
     /// client connects, so the configstring table is final by the time a
     /// gamestate goes out; a script write after that would need the `d`
-    /// configstring-update command, which arrives in a later stage.
+    /// configstring-update command, which the server does not send yet.
     pub fn load_scripts(&mut self, fs: std::rc::Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
         let mut rt = crate::game::script::ScriptRuntime::load(fs, &self.cfg.map)?;
         let mut host = crate::game::host::GameHost::new(std::mem::take(&mut self.configstrings));

@@ -1,5 +1,5 @@
-//! Builtins that only produce output. `iPrintLn` reaches clients in stage 4;
-//! until then all three go to the server log, which is what the probe reads.
+//! Builtins that only produce output. All three go to the server log, which
+//! is what the probe reads; `iPrintLn` does not reach clients yet.
 
 use vcod_gsc::{Cx, ErrorKind, Value};
 

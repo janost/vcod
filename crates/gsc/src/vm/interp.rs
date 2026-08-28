@@ -106,10 +106,12 @@ fn values_equal(interner: &Interner, a: Value, b: Value) -> Result<bool, ErrorKi
         (Value::Undefined, _) | (_, Value::Undefined) => Err(ErrorKind::BadType(
             "cannot compare undefined against a value",
         )),
-        // Not measured: a cross-type pair here (vector against a string, an
-        // entity against a string) reads false rather than the fatal
-        // "pair has unmatching types" retail's error text suggests for a
-        // mismatch. No probe has driven this arm.
+        // Not measured. `Value`'s derived `PartialEq`, so a mixed pair
+        // (vector against a string) reads false rather than the fatal
+        // "pair has unmatching types" retail's error text suggests, and two
+        // vectors, entities, arrays or function pointers compare by value
+        // and can read true. No probe has driven this arm (§9 of the
+        // research doc).
         _ => Ok(a == b),
     }
 }
