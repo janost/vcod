@@ -32,8 +32,10 @@ pub enum Target {
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum ErrorKind {
-    /// The host has no such builtin. The pre-scan in Task 9 exists so this
-    /// is reached only for a name that appeared dynamically.
+    /// The host has no such builtin. Kills the thread that reached it and
+    /// nothing else. `Loader::missing_builtins` lists the statically
+    /// visible ones at load time so this is not the first place a host gap
+    /// shows up, but it is still reachable for every one of them.
     MissingBuiltin(Atom),
     BadType(&'static str),
     /// Per-frame instruction cap; see Task 8.

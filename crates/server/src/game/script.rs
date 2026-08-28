@@ -43,6 +43,19 @@ impl ScriptRuntime {
         loader
             .load(&mut vm, &entry)
             .map_err(|e| anyhow::anyhow!("loading {entry}: {e:?}"))?;
+
+        // The closure calls far more builtins than the host answers yet.
+        // Listing them once here beats discovering them one aborted thread
+        // at a time, and a missing builtin must not stop the map serving:
+        // a thread that reaches one dies, the rest of the script runs.
+        let missing = loader.missing_builtins(&vm, &|n| crate::game::host::is_builtin(n));
+        if !missing.is_empty() {
+            log::info!(
+                "gsc: {entry} calls {} builtins the host does not implement: {}",
+                missing.len(),
+                missing.join(" ")
+            );
+        }
         Ok(ScriptRuntime { vm, entry })
     }
 
@@ -65,9 +78,9 @@ mod tests {
     use super::*;
 
     /// The map script's closure resolves out of the stock paks and `main`
-    /// starts. Its body needs builtins that arrive in task 10, so this
-    /// asserts only that loading and starting work, not that the thread
-    /// survives.
+    /// starts. Its body calls builtins the host does not implement yet, so
+    /// this asserts only that loading and starting work, not that the
+    /// thread survives.
     #[test]
     fn the_map_script_closure_loads_from_the_paks() {
         let Some(fs) = vcod_common::testing::game_fs() else {

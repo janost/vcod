@@ -1,10 +1,25 @@
 //! The CoD side of `vcod_gsc::Host`: builtin dispatch and entity field
-//! routing. Field routing arrives with the object model in stage 2; until
-//! then an entity field read is `Undefined` and a write is refused, so a
-//! script that reaches one fails by name instead of silently working.
+//! routing. There is no entity object model yet, so a field read is
+//! `Undefined` and a write is refused: a script that reaches one fails by
+//! name instead of silently working.
 
 use crate::game::builtins;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
+
+/// Every builtin `GameHost::builtin` dispatches, folded, so the load-time
+/// pre-scan can list what a map script calls that the host does not answer
+/// yet. `every_listed_builtin_dispatches` keeps this in step with the match.
+pub const BUILTINS: &[&str] = &[
+    "setcullfog",
+    "ambientplay",
+    "println",
+    "iprintln",
+    "logprint",
+];
+
+pub fn is_builtin(name: &str) -> bool {
+    BUILTINS.contains(&name)
+}
 
 pub struct GameHost {
     pub configstrings: Vec<String>,
@@ -57,8 +72,8 @@ mod tests {
     use super::*;
 
     /// `mp_pavlov.gsc` opens with exactly these two calls, and they are the
-    /// whole of stage 1's configstring gate: slot 12 from setCullFog, slot 3
-    /// from ambientPlay (docs/research/clientstate-wire-format.md).
+    /// only configstrings the script writes so far: slot 12 from setCullFog
+    /// (docs/protocol-1.1.md, "Configstrings") and slot 3 from ambientPlay.
     #[test]
     fn setcullfog_and_ambientplay_write_their_configstring_slots() {
         let mut vm = vcod_gsc::Vm::new();
@@ -75,5 +90,29 @@ mod tests {
 
         assert_eq!(host.configstrings[12], "0 6000 1 0.8 0.8 0.8 0");
         assert_eq!(host.configstrings[3], "n\\ambient_mp_pavlov\\t\\0");
+    }
+
+    /// `BUILTINS` drives the load-time pre-scan while the match below drives
+    /// dispatch; a name dropped from one and not the other would make the
+    /// pre-scan lie. Argument errors are fine here, `MissingBuiltin` is not.
+    #[test]
+    fn every_listed_builtin_dispatches() {
+        for name in BUILTINS {
+            let mut vm = vcod_gsc::Vm::new();
+            let mut host = GameHost::new(vec![String::new(); 2048]);
+            let src = format!("main() {{ {name}(); }}");
+            let ast = vcod_gsc::parse::parse_file(&src).unwrap();
+            let fns = vcod_gsc::compile::compile_file(&ast, "test", vm.interner_mut()).unwrap();
+            vm.install(fns).unwrap();
+            let f = vm.func_ref("test", "main");
+            let err = vm.call_now(&mut host, 0, f, None, Vec::new()).err();
+            assert!(
+                !matches!(
+                    err.map(|e| e.kind),
+                    Some(vcod_gsc::ErrorKind::MissingBuiltin(_))
+                ),
+                "{name} is listed but does not dispatch"
+            );
+        }
     }
 }
