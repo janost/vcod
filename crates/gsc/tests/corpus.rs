@@ -85,3 +85,112 @@ fn every_stock_script_parses() {
         failures.join("\n")
     );
 }
+
+/// The strongest check this crate has: not just "parses," but "compiles to
+/// bytecode `stack_depth` accepts." `stack_depth` is an abstract-interpretation
+/// walk that catches stack-discipline and out-of-range-jump defects a parse
+/// alone cannot see, and until this test existed it had only ever run
+/// against hand-written snippets in bytecode.rs's own unit tests, never real
+/// scripts.
+#[test]
+fn every_stock_script_compiles() {
+    let Some((_tmp, fs)) = stock_paks() else {
+        return;
+    };
+    let names = fs.names_with_suffix(".gsc");
+    let mut interner = vcod_gsc::Interner::default();
+    let mut failures = Vec::new();
+    let mut functions = 0usize;
+
+    for name in &names {
+        let Some(bytes) = fs.read(name) else { continue };
+        let src = String::from_utf8_lossy(&bytes);
+        let ast = match vcod_gsc::parse::parse_file(&src) {
+            Ok(a) => a,
+            Err(e) => {
+                failures.push(format!("{name}:{}: parse: {}", e.line, e.msg));
+                continue;
+            }
+        };
+        let path = vcod_gsc::canonical(name);
+        match vcod_gsc::compile::compile_file(&ast, &path, &mut interner) {
+            Ok(fns) => {
+                for f in &fns {
+                    if let Err(e) = vcod_gsc::bytecode::stack_depth(f) {
+                        failures.push(format!(
+                            "{name}: stack_depth: {}::{}: {e}",
+                            interner.resolve(f.file),
+                            interner.resolve(f.name)
+                        ));
+                    }
+                }
+                functions += fns.len();
+            }
+            Err(e) => failures.push(format!("{name}:{}: compile: {}", e.line, e.msg)),
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} of {} scripts failed:\n{}",
+        failures.len(),
+        names.len(),
+        failures.join("\n")
+    );
+    // Measured (docs/research/cod11-gsc-language.md §1): 799 files compile
+    // to 4834 functions. Margin of a few hundred either way absorbs a stock
+    // pak revision; a real change to the compiler's function count (e.g. a
+    // desugar that starts or stops synthesizing helper functions) should
+    // move this deliberately, not silently.
+    assert!(
+        (4700..5000).contains(&functions),
+        "function count moved to {functions}, expected roughly 4834"
+    );
+}
+
+/// The builtin surface the stock corpus actually calls, as a tripwire: if a
+/// grammar change starts mis-classifying script calls as builtins, this
+/// number moves. It is not a target, just a pinned observation.
+#[test]
+fn the_corpus_builtin_surface_is_stable() {
+    let Some((_tmp, fs)) = stock_paks() else {
+        return;
+    };
+    let mut interner = vcod_gsc::Interner::default();
+    let mut names = std::collections::BTreeSet::new();
+    for path in fs.names_with_suffix(".gsc") {
+        let Some(bytes) = fs.read(&path) else {
+            continue;
+        };
+        let src = String::from_utf8_lossy(&bytes);
+        let Ok(ast) = vcod_gsc::parse::parse_file(&src) else {
+            continue;
+        };
+        let canon = vcod_gsc::canonical(&path);
+        let Ok(fns) = vcod_gsc::compile::compile_file(&ast, &canon, &mut interner) else {
+            continue;
+        };
+        for f in &fns {
+            for op in &f.code {
+                if let vcod_gsc::bytecode::Op::CallBuiltin { name, .. } = op {
+                    names.insert(interner.resolve(*name).to_string());
+                }
+            }
+        }
+    }
+    // Measured (docs/research/cod11-gsc-language.md §1): 339 distinct names.
+    // The engine's own name table holds 144 (§7); the corpus surface is
+    // larger because this per-file pass compiles each file in isolation
+    // with no cross-file resolution, so every unqualified call to a
+    // function this file does not itself define — a genuine call to
+    // another script's function, not just a real engine builtin — compiles
+    // to `CallBuiltin` and is counted here. A grammar change to call
+    // classification, or a change to what this scan resolves before
+    // counting, is what should move this number.
+    assert!(
+        (300..400).contains(&names.len()),
+        "builtin surface moved to {}: {:?}",
+        names.len(),
+        names
+    );
+}
