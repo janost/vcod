@@ -93,7 +93,10 @@ pub struct Function {
 }
 
 /// (pops, pushes) for one instruction, independent of the values involved.
-fn stack_effect(op: &Op) -> (i32, i32) {
+/// `pub(crate)` rather than private: `vm::tests` checks the instruction loop
+/// against this same table (see its `run` helper), the only mechanical
+/// tripwire between this table and `step_frames` actually agreeing.
+pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
     match op {
         Op::Const(_)
         | Op::LoadLocal(_)

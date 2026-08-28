@@ -73,23 +73,36 @@ pub trait Host {
     ) -> Result<(), ErrorKind>;
 }
 
+/// Interpreter-internal: not part of the public API, since nothing outside
+/// this crate drives `step_frames` directly, and doing so needs the
+/// non-empty-`frames` precondition its doc comment states -- one an
+/// embedder has no way to satisfy correctly from outside the scheduler.
 #[derive(Debug)]
-pub struct Frame {
+pub(crate) struct Frame {
     pub func: FuncRef,
     pub ip: u32,
     pub locals: Vec<Value>,
     pub stack: Vec<Value>,
     pub recv: Option<Target>,
+    /// Test-only: what this frame's `stack` length must be once the call
+    /// currently running on top of it returns, per `stack_effect`'s
+    /// declared `(pop, push)` for that `Call`/`CallPtr`. Lives on the frame,
+    /// not a local in `step_frames`, because a call can suspend (`wait`)
+    /// several layers deep and resume in a later `step_frames` invocation —
+    /// this has to survive that.
+    #[cfg(test)]
+    stack_effect_check: Option<i32>,
 }
 
-/// What one step of the interpreter can produce.
-pub enum Step {
+/// What one step of the interpreter can produce. Interpreter-internal, same
+/// as `Frame`.
+pub(crate) enum Step {
     Running,
     Returned(Value),
     Suspend(Suspend),
 }
 
-pub enum Suspend {
+pub(crate) enum Suspend {
     Wait {
         seconds: f32,
     },
@@ -760,6 +773,8 @@ impl Vm {
             locals,
             stack: Vec::new(),
             recv,
+            #[cfg(test)]
+            stack_effect_check: None,
         }
     }
 
@@ -791,7 +806,7 @@ impl Vm {
     /// call (`spawn` recurses into `step_thread`, which recurses back into
     /// this function on the new thread's own frames) -- a nested spawn's
     /// failure does not abort this thread's own execution, only its own.
-    pub fn step_frames(
+    pub(crate) fn step_frames(
         &mut self,
         host: &mut dyn Host,
         frames: &mut Vec<Frame>,
@@ -838,6 +853,36 @@ impl Vm {
                     frames[top].stack.push($v)
                 };
             }
+
+            // Test-only: captured before `op` is consumed by the match
+            // below, so `stack_effect`'s table can be checked against what
+            // this instruction actually does to the operand stack. A
+            // non-threaded `Call`/`CallPtr` doesn't push its declared
+            // return value onto *this* frame -- it pushes a new one and the
+            // value lands on this frame only once the callee's `Return`
+            // runs, possibly in a later `step_frames` call -- so those, and
+            // `Return`/`ReturnUndef`, are checked as a pair via
+            // `Frame::stack_effect_check` instead of a same-instruction
+            // delta.
+            #[cfg(test)]
+            let (dbg_pop, dbg_push) = crate::bytecode::stack_effect(&op);
+            #[cfg(test)]
+            let dbg_is_call = matches!(
+                op,
+                Op::Call {
+                    threaded: false,
+                    ..
+                } | Op::CallPtr {
+                    threaded: false,
+                    ..
+                }
+            );
+            #[cfg(test)]
+            let dbg_is_return = matches!(op, Op::Return | Op::ReturnUndef);
+            #[cfg(test)]
+            let dbg_stack_before = frames[top].stack.len() as i32;
+            #[cfg(test)]
+            let dbg_op_repr = format!("{op:?}");
 
             match op {
                 Op::Const(idx) => push!(func.consts[idx as usize]),
@@ -1206,6 +1251,37 @@ impl Vm {
                         }
                     }
                 }
+            }
+
+            // Not reached for an op that returned out of `step_frames`
+            // directly (`Wait`, `WaitTill`, or a `?`-propagated error) --
+            // those never got this far, and there is nothing to check for
+            // them here in any case (frames unchanged, and `pop!` already
+            // panics on an over-declared pop).
+            #[cfg(test)]
+            if dbg_is_call {
+                let caller = frames.len() - 2;
+                frames[caller].stack_effect_check = Some(dbg_stack_before - dbg_pop + dbg_push);
+            } else if dbg_is_return {
+                if let Some(caller) = frames.last_mut() {
+                    let expected = caller.stack_effect_check.take().unwrap_or_else(|| {
+                        panic!(
+                            "{dbg_op_repr} returned into a frame with no pending call expectation"
+                        )
+                    });
+                    assert_eq!(
+                        caller.stack.len() as i32,
+                        expected,
+                        "stack_effect disagreement across a call/return pair at {dbg_op_repr}"
+                    );
+                }
+            } else {
+                let actual = frames[top].stack.len() as i32;
+                assert_eq!(
+                    actual,
+                    dbg_stack_before - dbg_pop + dbg_push,
+                    "stack_effect disagreement at {dbg_op_repr} (before {dbg_stack_before}, pop {dbg_pop}, push {dbg_push})"
+                );
             }
         }
     }

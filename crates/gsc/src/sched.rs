@@ -7,8 +7,11 @@ use crate::vm::{Frame, Target};
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct ThreadId(pub u32);
 
+// `Thread`/`ThreadState` are `pub(crate)`, not `pub`: `Vm` never hands one
+// out (only a `ThreadId`, to name a thread without exposing its innards),
+// so nothing outside this crate can obtain one to act on.
 #[derive(Debug)]
-pub enum ThreadState {
+pub(crate) enum ThreadState {
     Runnable,
     /// Server milliseconds at which this thread becomes runnable again.
     WaitingUntil(i32),
@@ -20,7 +23,7 @@ pub enum ThreadState {
 }
 
 #[derive(Debug)]
-pub struct Thread {
+pub(crate) struct Thread {
     pub id: ThreadId,
     pub frames: Vec<Frame>,
     pub state: ThreadState,
@@ -365,6 +368,26 @@ mod tests {
     /// `5_000`, not `0` -- `run_frame(&mut host, 5_000)` (right after
     /// `start_thread`, same clock reading) must not fire it, only
     /// `run_frame(&mut host, 6_000)` should.
+    /// A plain (non-threaded) call whose callee suspends on `wait` leaves
+    /// the caller's frame mid-call across the suspend -- exactly the case
+    /// `Frame::stack_effect_check` (vm.rs, test-only) has to survive rather
+    /// than lose track of, since the caller and callee frames persist
+    /// through separate `step_frames` invocations on either side of the
+    /// wait. This would panic on a wrong `stack_effect` entry or a bug in
+    /// that check itself; it existing and passing is the regression test.
+    #[test]
+    fn a_plain_call_whose_callee_waits_resumes_and_returns_to_its_caller() {
+        let mut vm = vm_with("main() { helper(); done(); } helper() { wait 1; }");
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.run_frame(&mut host, 0);
+        assert!(!host.calls.iter().any(|(n, _)| n == "done"), "not yet");
+        vm.run_frame(&mut host, 1000);
+        assert!(host.calls.iter().any(|(n, _)| n == "done"), "resumed");
+        assert_eq!(vm.thread_count(), 0);
+    }
+
     #[test]
     fn start_thread_threads_a_wait_against_its_own_now_ms_not_zero() {
         let mut vm = vm_with("main() { thread f(); } f() { wait 1; done(); }");

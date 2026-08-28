@@ -17,6 +17,8 @@ pub mod vm;
 
 pub use atom::{Atom, Interner};
 pub use load::{canonical, LoadError, Loader, ScriptSource};
-pub use sched::{Thread, ThreadId, ThreadState};
+// `Thread`/`ThreadState` are not re-exported: no `Vm` API returns one, so
+// there is nothing for a consumer to do with either.
+pub use sched::ThreadId;
 pub use value::{ArrayId, EntId, FuncRef, StructId, Value};
 pub use vm::{ErrorKind, Host, ScriptError, Target, Vm};
