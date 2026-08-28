@@ -553,17 +553,14 @@ fn landing_event(impact: f32, ps: &PlayerState) -> Option<PmEvent> {
     Some(PmEvent { event: id })
 }
 
-/// Q3 `bg_pmove.c` `PM_SpectatorMove` minus the noclip branch: fly
-/// accelerate, friction always, slide against the world, no ground stick
-/// and no stepping. Axes are usercmd values scaled to -1..1.
-pub fn spectator_move(
-    ps: &mut PlayerState,
-    forward: f32,
-    right: f32,
-    up: f32,
-    world: &CollisionWorld,
-    dt: f32,
-) {
+/// A CoD 1.1 spectator: fly accelerate, friction always, and no collision at
+/// all. Axes are usercmd values scaled to -1..1.
+///
+/// The position integrates straight off the velocity, as Q3's `PM_NoclipMove`
+/// does, rather than sliding against the world. This is a divergence from the
+/// RTCW lineage, which sends `PM_SPECTATOR` to the colliding `PM_FlyMove`;
+/// CoD 1.1 does not (docs/protocol-1.1.md, "Spectator").
+pub fn spectator_move(ps: &mut PlayerState, forward: f32, right: f32, up: f32, dt: f32) {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
     ps.on_ground = false;
     let fwd = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0);
@@ -582,7 +579,7 @@ pub fn spectator_move(
         ps.velocity *= ((speed - drop) / speed).max(0.0);
     }
     accelerate(ps, wishdir, SPEED_SPECTATOR, PM_ACCELERATE, dt);
-    slide_move(ps, world, dt, false);
+    ps.origin += ps.velocity * dt;
 }
 
 /// Standing back up needs headroom for the taller bbox.
@@ -2815,10 +2812,9 @@ mod tests {
 
     #[test]
     fn spectator_flies_forward_at_spectator_speed() {
-        let w = flat();
         let mut ps = PlayerState::spawn(Vec3::ZERO, 90.0); // yaw 90 deg faces +Y
         for _ in 0..250 {
-            spectator_move(&mut ps, FULL, 0.0, 0.0, &w, 1.0 / 125.0);
+            spectator_move(&mut ps, FULL, 0.0, 0.0, 1.0 / 125.0);
         }
         let h = ps.velocity.truncate().length();
         assert!((h - SPEED_SPECTATOR).abs() < 6.0, "speed {h}");
@@ -2827,39 +2823,37 @@ mod tests {
 
     #[test]
     fn spectator_rises_with_upmove_and_stops_on_friction() {
-        let w = flat();
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         for _ in 0..63 {
-            spectator_move(&mut ps, 0.0, 0.0, FULL, &w, 1.0 / 125.0);
+            spectator_move(&mut ps, 0.0, 0.0, FULL, 1.0 / 125.0);
         }
         assert!(ps.velocity.z > 100.0, "climbing, vz {}", ps.velocity.z);
         for _ in 0..250 {
-            spectator_move(&mut ps, 0.0, 0.0, 0.0, &w, 1.0 / 125.0);
+            spectator_move(&mut ps, 0.0, 0.0, 0.0, 1.0 / 125.0);
         }
         assert!(ps.velocity.length() < 1.0, "friction must stop the fly");
     }
 
+    /// A spectator passes through solid geometry. VERIFIED live 2026-08-28 by
+    /// A/B against the retail server with a retail client: retail clips
+    /// through wires, decoration cars, walls and the ground; vcod blocked on
+    /// all of them until this. CoD 1.1 diverges from RTCW here, which sends
+    /// PM_SPECTATOR to the colliding PM_FlyMove.
     #[test]
-    fn spectator_slides_along_walls() {
-        let w = test_world(&[(
-            Vec3::new(50.0, -400.0, -100.0),
-            Vec3::new(100.0, 400.0, 200.0),
-        )]);
+    fn spectator_flies_through_solid_geometry() {
         let mut ps = PlayerState::spawn(Vec3::new(-200.0, 0.0, 30.0), 0.0);
-        // A hair of right input: dead-straight flight into an axial wall has
-        // nothing to slide with and stops dead, as in Q3.
         for _ in 0..250 {
-            spectator_move(&mut ps, FULL, FULL * 0.3, 0.0, &w, 1.0 / 125.0);
+            spectator_move(&mut ps, FULL, 0.0, 0.0, 1.0 / 125.0);
         }
         assert!(
-            ps.origin.x < 50.0 - HALF_WIDTH + 1.0,
-            "blocked at {}",
+            ps.origin.x > 100.0,
+            "must pass through a wall spanning x 50..100, stopped at {}",
             ps.origin.x
         );
         assert!(
-            ps.origin.y.abs() > 50.0,
-            "slid along the wall to {}",
-            ps.origin
+            ps.origin.y.abs() < 1.0,
+            "and fly straight through rather than slide: y {}",
+            ps.origin.y
         );
     }
 }

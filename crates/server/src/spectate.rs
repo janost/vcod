@@ -1,7 +1,6 @@
 //! Server-side spectator state: usercmds in, wire playerstate out.
 
 use glam::Vec3;
-use vcod_common::collision::CollisionWorld;
 use vcod_common::net::msg::{self, UserCmd};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::pmove;
@@ -27,10 +26,10 @@ impl SpectatorSim {
         }
     }
 
-    /// Advance one frame. Without a collision world the state stays put; the
-    /// axes arrive quantized to ±127/0 and dt comes off the frame clock.
-    pub fn step(&mut self, cmd: &UserCmd, world: Option<&CollisionWorld>, dt: f32) {
-        let Some(world) = world else { return };
+    /// Advance one frame. A spectator noclips, so no collision world is
+    /// needed; the axes arrive quantized to ±127/0 and dt comes off the
+    /// frame clock.
+    pub fn step(&mut self, cmd: &UserCmd, dt: f32) {
         self.ps.yaw = short_deg(cmd.angles[1]).to_radians();
         // Wire pitch is positive down; the sim stores the camera's convention.
         self.ps.pitch = -short_deg(cmd.angles[0]).to_radians();
@@ -39,7 +38,6 @@ impl SpectatorSim {
             f32::from(cmd.forward) / 127.0,
             f32::from(cmd.right) / 127.0,
             f32::from(cmd.up) / 127.0,
-            world,
             dt,
         );
     }
@@ -99,7 +97,6 @@ impl SpectatorSim {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vcod_common::bsp;
     use vcod_common::net::protocol::PROTOCOL_V1;
 
     fn cmd(forward: i8, pitch_short: i32, yaw_short: i32) -> UserCmd {
@@ -160,30 +157,24 @@ mod tests {
         assert_eq!(w.viewangles(p)[1], 90.0);
     }
 
+    /// A spectator noclips, so flight needs no collision world and a server
+    /// whose map failed to load still flies its spectators.
     #[test]
-    fn step_turns_cmds_into_motion_on_a_real_map() {
-        let Some(data) = vcod_common::testing::real_bsp() else {
-            return;
-        };
-        let parsed = bsp::parse(&data).unwrap();
-        let world = CollisionWorld::build(&parsed, &[]);
-        let mut sim = SpectatorSim::new([0.0, 0.0, 64.0], 0.0);
+    fn step_flies_without_a_collision_world() {
+        let mut sim = SpectatorSim::new([1.0, 2.0, 3.0], 0.0);
         let c = cmd(127, 0, 0);
         for _ in 0..125 {
-            sim.step(&c, Some(&world), 1.0 / 125.0);
+            sim.step(&c, 1.0 / 125.0);
         }
         assert!(
+            sim.ps.origin.x > 1.0,
+            "yaw 0 faces +X, origin {:?}",
+            sim.ps.origin
+        );
+        assert!(
             sim.ps.velocity.truncate().length() > 250.0,
-            "v {:?}",
+            "and accelerates to spectator speed, v {:?}",
             sim.ps.velocity
         );
-    }
-
-    #[test]
-    fn step_without_a_world_freezes_the_sim() {
-        let mut sim = SpectatorSim::new([1.0, 2.0, 3.0], 0.0);
-        sim.step(&cmd(127, 0, 0), None, 0.05);
-        assert_eq!(sim.ps.origin, Vec3::new(1.0, 2.0, 3.0));
-        assert_eq!(sim.ps.velocity, Vec3::ZERO);
     }
 }

@@ -879,7 +879,6 @@ impl Server {
             .map_or_else(BTreeMap::new, |te| te.at(self.proto, self.sv_time_ms));
 
         for slot in 0..self.clients.len() {
-            let world = self.world.as_ref().map(|w| &w.collision);
             let Some(c) = self.clients[slot].as_mut() else {
                 continue;
             };
@@ -908,7 +907,7 @@ impl Server {
                     continue;
                 }
                 let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
-                sim.step(&cmd, world, dt);
+                sim.step(&cmd, dt);
                 c.last_processed_st = cmd.server_time;
                 first_cmd_st.get_or_insert(cmd.server_time);
                 last_cmd_st = Some(cmd.server_time);
