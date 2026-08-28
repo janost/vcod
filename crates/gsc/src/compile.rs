@@ -479,11 +479,11 @@ impl<'a> Compiler<'a> {
             // names fold (atom.rs). `&"..."` is a display string too, but
             // `%anim` is a bare identifier token, so it folds with the rest.
             Expr::Str(s) => {
-                let a = self.interner.intern(s);
+                let a = self.interner.intern_exact(s);
                 self.push_const(Value::String(a))?;
             }
             Expr::Localized(s) => {
-                let a = self.interner.intern(s);
+                let a = self.interner.intern_exact(s);
                 self.push_const(Value::Localized(a))?;
             }
             Expr::Anim(s) => {

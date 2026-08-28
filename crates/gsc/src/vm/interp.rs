@@ -4,7 +4,7 @@
 use crate::atom::{Atom, Interner};
 use crate::bytecode::{Function, Op};
 use crate::heap::ArrayKey;
-use crate::value::{FuncRef, Value};
+use crate::value::{format_number, FuncRef, Value};
 
 use super::sched::ThreadId;
 use super::{Cx, ErrorKind, Host, ScriptError, Target, Vm};
@@ -72,39 +72,65 @@ fn array_key(v: Value) -> Option<ArrayKey> {
     }
 }
 
-/// Numeric equality promotes across Int/Float; anything else (including a
-/// type mismatch) falls back to `Value`'s derived structural equality,
-/// which is `false` for two different variants. This is what lets scripts
-/// compare a possibly-`undefined` value with `==` and never error.
-fn values_equal(a: Value, b: Value) -> bool {
+/// Numeric equality promotes across Int/Float. A number against a string
+/// is rendered and compared textually, and `undefined` against anything
+/// else is an error, both measured
+/// (tests/fixtures/semantics/retail-captures.txt, `# probe_cmp*`).
+fn values_equal(interner: &Interner, a: Value, b: Value) -> Result<bool, ErrorKind> {
     match (a, b) {
-        (Value::Int(x), Value::Int(y)) => x == y,
+        (Value::Int(x), Value::Int(y)) => Ok(x == y),
         (Value::Int(_) | Value::Float(_), Value::Int(_) | Value::Float(_)) => {
-            to_f32(a) == to_f32(b)
+            Ok(to_f32(a) == to_f32(b))
         }
-        _ => a == b,
+        // `"5" == 5` holds, `"5.0" == 5` does not.
+        (Value::String(s), n @ (Value::Int(_) | Value::Float(_)))
+        | (n @ (Value::Int(_) | Value::Float(_)), Value::String(s)) => {
+            Ok(interner.resolve(s) == format_number(n, interner).expect("a number renders"))
+        }
+        // Atoms, so this is case-sensitive: `"ABC" == "abc"` is false.
+        (Value::String(x), Value::String(y)) => Ok(x == y),
+        // Not measured; retail's message names a "pair has unmatching
+        // types", which two `undefined`s are not (§9 of the research doc).
+        (Value::Undefined, Value::Undefined) => Ok(true),
+        (Value::Undefined, _) | (_, Value::Undefined) => Err(ErrorKind::BadType(
+            "cannot compare undefined against a value",
+        )),
+        _ => Ok(a == b),
     }
 }
 
 /// `x op y` for one of the four ordering comparisons, promoting Int/Float
-/// like every other arithmetic op. A non-numeric operand is not an error
-/// here either: it reads as `false`, the same rule as `Eq`/`Ne`.
-fn numeric_cmp(a: Value, b: Value, f: impl Fn(f32, f32) -> bool) -> Value {
+/// like every other arithmetic op. Retail has no ordering outside numbers:
+/// `"a" < "b"` is fatal there (`# probe_cmp_order`).
+fn numeric_cmp(a: Value, b: Value, f: impl Fn(f32, f32) -> bool) -> Result<Value, ErrorKind> {
     match (to_f32(a), to_f32(b)) {
-        (Some(x), Some(y)) => Value::Int(f(x, y) as i32),
-        _ => Value::Int(0),
+        (Some(x), Some(y)) => Ok(Value::Int(f(x, y) as i32)),
+        _ => Err(ErrorKind::BadType("< > <= >= need numbers")),
     }
 }
 
 fn eval_add(interner: &mut Interner, a: Value, b: Value) -> Result<Value, ErrorKind> {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(y))),
-        (Value::String(x), Value::String(y)) => {
-            let s = format!("{}{}", interner.resolve(x), interner.resolve(y));
-            Ok(Value::String(interner.intern(&s)))
-        }
         (Value::Vector(x), Value::Vector(y)) => {
             Ok(Value::Vector([x[0] + y[0], x[1] + y[1], x[2] + y[2]]))
+        }
+        // A string on either side concatenates whatever renders
+        // (`# probe_concat`); `intern_exact`, not `intern_folded`, so a built
+        // display string keeps its case.
+        (Value::String(x), other) => {
+            let rhs = format_number(other, interner).ok_or(ErrorKind::BadType(
+                "+ cannot concatenate that onto a string",
+            ))?;
+            let s = format!("{}{rhs}", interner.resolve(x));
+            Ok(Value::String(interner.intern_exact(&s)))
+        }
+        (other, Value::String(y)) => {
+            let lhs = format_number(other, interner).ok_or(ErrorKind::BadType(
+                "+ cannot concatenate that onto a string",
+            ))?;
+            let s = format!("{lhs}{}", interner.resolve(y));
+            Ok(Value::String(interner.intern_exact(&s)))
         }
         (a, b) => match (to_f32(a), to_f32(b)) {
             (Some(x), Some(y)) => Ok(Value::Float(x + y)),
@@ -569,32 +595,34 @@ impl Vm {
                 Op::Eq => {
                     let b = pop!();
                     let a = pop!();
-                    push!(Value::Int(values_equal(a, b) as i32));
+                    let eq = values_equal(&self.interner, a, b).map_err(err)?;
+                    push!(Value::Int(eq as i32));
                 }
                 Op::Ne => {
                     let b = pop!();
                     let a = pop!();
-                    push!(Value::Int(!values_equal(a, b) as i32));
+                    let eq = values_equal(&self.interner, a, b).map_err(err)?;
+                    push!(Value::Int(!eq as i32));
                 }
                 Op::Lt => {
                     let b = pop!();
                     let a = pop!();
-                    push!(numeric_cmp(a, b, |x, y| x < y));
+                    push!(numeric_cmp(a, b, |x, y| x < y).map_err(err)?);
                 }
                 Op::Gt => {
                     let b = pop!();
                     let a = pop!();
-                    push!(numeric_cmp(a, b, |x, y| x > y));
+                    push!(numeric_cmp(a, b, |x, y| x > y).map_err(err)?);
                 }
                 Op::Le => {
                     let b = pop!();
                     let a = pop!();
-                    push!(numeric_cmp(a, b, |x, y| x <= y));
+                    push!(numeric_cmp(a, b, |x, y| x <= y).map_err(err)?);
                 }
                 Op::Ge => {
                     let b = pop!();
                     let a = pop!();
-                    push!(numeric_cmp(a, b, |x, y| x >= y));
+                    push!(numeric_cmp(a, b, |x, y| x >= y).map_err(err)?);
                 }
                 Op::Neg => {
                     let v = pop!();
@@ -602,7 +630,7 @@ impl Vm {
                 }
                 Op::Not => {
                     let v = pop!();
-                    push!(Value::Int(!v.is_truthy() as i32));
+                    push!(Value::Int(!v.as_bool().map_err(err)? as i32));
                 }
                 Op::CastInt => {
                     let v = pop!();
@@ -632,13 +660,13 @@ impl Vm {
                 Op::Jump(t) => frames[top].ip = t,
                 Op::JumpIfFalse(t) => {
                     let c = pop!();
-                    if !c.is_truthy() {
+                    if !c.as_bool().map_err(err)? {
                         frames[top].ip = t;
                     }
                 }
                 Op::JumpIfTrue(t) => {
                     let c = pop!();
-                    if c.is_truthy() {
+                    if c.as_bool().map_err(err)? {
                         frames[top].ip = t;
                     }
                 }

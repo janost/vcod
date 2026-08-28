@@ -69,7 +69,7 @@ impl Cx<'_> {
     /// For a string value a builtin returns or stores. Case-preserving; a
     /// name the engine matches case-insensitively wants `intern_folded`.
     pub fn intern(&mut self, s: &str) -> Atom {
-        self.interner.intern(s)
+        self.interner.intern_exact(s)
     }
 
     /// For a field name, function name, file path or event name (atom.rs).
@@ -117,20 +117,11 @@ impl Cx<'_> {
         self.heap.array_len(a)
     }
 
-    /// The `%g` rendering task 7 measures against retail, so a builtin
-    /// formatting a number for a configstring cannot drift from what the
-    /// VM does for string concatenation. `None` for a value that has no
-    /// rendering.
+    /// The same `%g` rendering string concatenation uses, so a builtin
+    /// formatting a number for a configstring cannot drift from it.
+    /// `None` for a value that has no rendering.
     pub fn format_number(&self, v: Value) -> Option<String> {
-        match v {
-            Value::Int(i) => Some(i.to_string()),
-            // Placeholder: task 7 replaces this with the measured %g
-            // rendering (docs/research/cod11-gsc-language.md).
-            Value::Float(f) => Some(format!("{f}")),
-            Value::String(a) | Value::Localized(a) => Some(self.interner.resolve(a).to_string()),
-            Value::Vector([x, y, z]) => Some(format!("({x:.2}, {y:.2}, {z:.2})")),
-            _ => None,
-        }
+        crate::value::format_number(v, self.interner)
     }
 
     pub fn level(&self) -> Target {
@@ -399,6 +390,19 @@ pub(crate) mod tests {
         (v, host, vm)
     }
 
+    /// The mirror of `run` for an expression retail treats as fatal.
+    fn run_err(src: &str) -> ErrorKind {
+        let ast = crate::parse::parse_file(src).unwrap();
+        let mut vm = Vm::new();
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        vm.call_now(&mut host, 0, main, None, vec![])
+            .expect_err("expected a runtime error")
+            .kind
+    }
+
     #[test]
     fn arithmetic_and_precedence() {
         let (v, _, _) = run("main() { return 1 + 2 * 3; }");
@@ -427,20 +431,18 @@ pub(crate) mod tests {
         assert_eq!(v, Value::Float(3.0));
     }
 
-    /// No lexed integer literal spells `i32::MIN`: `2147483648` overflows
-    /// `read_number`'s `i32` parse and falls back to a float, so
-    /// `-2147483648` compiles as `Neg` on `Float(2147483648.0)`. It is
-    /// still reachable through `(int)` of that float -- a saturating cast
-    /// since Rust 1.45 -- because `2147483648.0` is exact in `f32` (a power
-    /// of two) and already in range, so the cast lands exactly on
-    /// `i32::MIN` rather than clamping short of it.
-    /// (docs/research/cod11-gsc-language.md §9)
+    /// `i32::MIN` is not spellable: the magnitude saturates at `i32::MAX`
+    /// before the unary minus applies, so `-2147483648` is `-2147483647`
+    /// both directly and through `(int)`. Measured on retail
+    /// (tests/fixtures/semantics/retail-captures.txt, `# probe_lexer`).
     #[test]
-    fn int_min_is_reachable_only_through_a_float_cast_not_a_direct_literal() {
+    fn an_integer_literal_past_i32_max_saturates_before_the_minus_applies() {
         let (v, _, _) = run("main() { return -2147483648; }");
-        assert_eq!(v, Value::Float(-2147483648.0), "no direct int literal");
+        assert_eq!(v, Value::Int(-2147483647));
         let (v, _, _) = run("main() { return (int)-2147483648; }");
-        assert_eq!(v, Value::Int(i32::MIN), "reachable via a saturating cast");
+        assert_eq!(v, Value::Int(-2147483647));
+        let (v, _, _) = run("main() { return 999999999999; }");
+        assert_eq!(v, Value::Int(i32::MAX));
     }
 
     #[test]
@@ -692,10 +694,109 @@ pub(crate) mod tests {
         assert_eq!(v, Value::Vector([2.0, 4.0, 6.0]));
     }
 
+    /// Retail has no ordering outside numbers: `"a" < "b"` is a fatal
+    /// `pair has unmatching types 'string' and 'string'`
+    /// (tests/fixtures/semantics/retail-captures.txt, `# probe_cmp_order`).
     #[test]
-    fn comparing_across_incompatible_types_reads_false_not_error() {
-        let (v, _, _) = run(r#"main() { return "foo" > 1; }"#);
+    fn ordering_a_non_number_is_an_error_not_a_false_reading() {
+        assert!(matches!(
+            run_err(r#"main() { return "a" < "b"; }"#),
+            ErrorKind::BadType(_)
+        ));
+        assert!(matches!(
+            run_err(r#"main() { return "foo" > 1; }"#),
+            ErrorKind::BadType(_)
+        ));
+        assert!(matches!(
+            run_err("main() { return undefined >= 1; }"),
+            ErrorKind::BadType(_)
+        ));
+    }
+
+    /// Only numbers have a boolean reading; everything else in a condition
+    /// kills the retail server (`# probe_truthy`, `# probe_truthy_empty`,
+    /// `# probe_truthy_vec`, `# probe_truthy_undef`). vcod raises the
+    /// equivalent error and aborts the thread instead.
+    #[test]
+    fn a_non_numeric_condition_is_an_error() {
+        let (v, _, _) = run("main() { if (0) return 1; return 0; }");
         assert_eq!(v, Value::Int(0));
+        let (v, _, _) = run("main() { if (0.5) return 1; return 0; }");
+        assert_eq!(v, Value::Int(1));
+        for src in [
+            r#"main() { if ("a") return 1; return 0; }"#,
+            r#"main() { if ("") return 1; return 0; }"#,
+            "main() { v = (0,0,0); if (v) return 1; return 0; }",
+            "main() { if (level.nope) return 1; return 0; }",
+            "main() { if (!undefined) return 1; return 0; }",
+        ] {
+            assert!(matches!(run_err(src), ErrorKind::BadType(_)), "{src}");
+        }
+    }
+
+    /// A number concatenated onto a string renders through `%g`; anything
+    /// with no rendering is fatal (`# probe_concat`, `# probe_concat_vec`).
+    #[test]
+    fn concatenation_renders_numbers_and_vectors_the_way_retail_does() {
+        let cases = [
+            (r#"main() { return "PROBE " + 5; }"#, "PROBE 5"),
+            (r#"main() { return "PROBE " + (0 - 5); }"#, "PROBE -5"),
+            (r#"main() { return "PROBE " + 0.5; }"#, "PROBE 0.5"),
+            (r#"main() { return "PROBE " + 2.0; }"#, "PROBE 2"),
+            (r#"main() { return "PROBE " + 0.8; }"#, "PROBE 0.8"),
+            (
+                r#"main() { return "PROBE " + (1.0 / 3); }"#,
+                "PROBE 0.333333",
+            ),
+            (r#"main() { return "PROBE " + 1000000; }"#, "PROBE 1000000"),
+            (
+                r#"main() { return "PROBE " + (1, 2, 3); }"#,
+                "PROBE (1.00, 2.00, 3.00)",
+            ),
+            // The mirror: a number on the left of a string still concatenates.
+            (r#"main() { return 5 + " PROBE"; }"#, "5 PROBE"),
+        ];
+        for (src, want) in cases {
+            let (v, _, mut vm) = run(src);
+            let Value::String(a) = v else {
+                panic!("{src} did not produce a string: {v:?}");
+            };
+            assert_eq!(vm.interner_mut().resolve(a), want, "{src}");
+        }
+        assert!(matches!(
+            run_err(r#"main() { return "PROBE " + undefined; }"#),
+            ErrorKind::BadType(_)
+        ));
+    }
+
+    /// Equality is neither structural nor numeric: a number compared with a
+    /// string is rendered and matched textually, and `undefined` against
+    /// anything else is fatal (`# probe_cmp`, `# probe_cmp_mixed`,
+    /// `# probe_cmp_coerce`).
+    #[test]
+    fn equality_renders_a_number_before_comparing_it_with_a_string() {
+        for (src, want) in [
+            ("main() { return 1 == 1.0; }", 1),
+            (r#"main() { return "abc" == "abc"; }"#, 1),
+            (r#"main() { return "ABC" == "abc"; }"#, 0),
+            (r#"main() { return "5" == 5; }"#, 1),
+            (r#"main() { return 5 == "5"; }"#, 1),
+            (r#"main() { return "5.0" == 5; }"#, 0),
+            (r#"main() { return "05" == 5; }"#, 0),
+            (r#"main() { return "abc" == 0; }"#, 0),
+            (r#"main() { return "5" != 5; }"#, 0),
+        ] {
+            let (v, _, _) = run(src);
+            assert_eq!(v, Value::Int(want), "{src}");
+        }
+        assert!(matches!(
+            run_err("main() { return undefined == 0; }"),
+            ErrorKind::BadType(_)
+        ));
+        // Not measured; retail's message names a "pair has unmatching
+        // types", which two `undefined`s are not (research doc §9).
+        let (v, _, _) = run("main() { return undefined == undefined; }");
+        assert_eq!(v, Value::Int(1));
     }
 
     #[test]

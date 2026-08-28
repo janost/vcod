@@ -508,8 +508,8 @@ mod tests {
         vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(4))), vec![]);
         vm.run_frame(&mut host, 0);
 
-        let menu = vm.interner_mut().intern("team_americangerman");
-        let resp = vm.interner_mut().intern("allies");
+        let menu = vm.interner_mut().intern_exact("team_americangerman");
+        let resp = vm.interner_mut().intern_exact("allies");
         let ev = vm.interner_mut().intern_folded("menuresponse");
         vm.notify(EntId(4), ev, &[Value::String(menu), Value::String(resp)]);
         vm.run_frame(&mut host, 50);
@@ -588,7 +588,7 @@ mod tests {
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 2);
 
-        let ev = vm.interner_mut().intern("playerCONNECT");
+        let ev = vm.interner_mut().intern_exact("playerCONNECT");
         vm.notify(EntId(5), ev, &[]);
         vm.run_frame(&mut host, 2000);
         assert!(host.calls.iter().any(|(n, _)| n == "done"), "waiter woken");
@@ -870,6 +870,37 @@ mod tests {
         vm.run_frame(&mut host, 1000);
         assert!(host.calls.iter().any(|(n, _)| n == "done"), "resumed");
         assert_eq!(vm.thread_count(), 0);
+    }
+
+    /// Two threads waiting on one event on one target wake in the order
+    /// they were started: retail logs `first` before `second`
+    /// (tests/fixtures/semantics/retail-captures.txt, `# probe_notify`).
+    /// vcod gets this from `Vm::notify` walking `threads`, which is kept in
+    /// start order; pinned here so a change to that walk fails loudly.
+    #[test]
+    fn two_waiters_on_one_event_wake_in_start_order() {
+        let mut vm = vm_with(
+            r#"waiter(tag) { level waittill("probe_event"); got(tag); }
+            pump() { level notify("probe_event"); }"#,
+        );
+        let mut host = TestHost::default();
+        let waiter = vm.func_ref("test/script", "waiter");
+        let pump = vm.func_ref("test/script", "pump");
+        vm.start_thread(&mut host, 0, waiter, None, vec![Value::Int(1)]);
+        vm.start_thread(&mut host, 0, waiter, None, vec![Value::Int(2)]);
+        vm.run_frame(&mut host, 0);
+        assert_eq!(vm.thread_count(), 2, "both waiting");
+
+        vm.start_thread(&mut host, 0, pump, None, vec![]);
+        vm.run_frame(&mut host, 0);
+
+        let seen: Vec<Value> = host
+            .calls
+            .iter()
+            .filter(|(n, _)| n == "got")
+            .map(|(_, args)| args[0])
+            .collect();
+        assert_eq!(seen, vec![Value::Int(1), Value::Int(2)]);
     }
 
     // --- Divergences kept as documentation

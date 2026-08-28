@@ -98,7 +98,7 @@ mod tests {
         let mut h = Heap::new();
         let mut i = Interner::default();
         let s = h.new_struct();
-        let f = i.intern("hp");
+        let f = i.intern_exact("hp");
         assert_eq!(h.get_field(s, f), Value::Undefined);
     }
 
@@ -107,7 +107,7 @@ mod tests {
         let mut h = Heap::new();
         let mut i = Interner::default();
         let s = h.new_struct();
-        let f = i.intern("hp");
+        let f = i.intern_exact("hp");
         h.set_field(s, f, Value::Int(100));
         assert_eq!(h.get_field(s, f), Value::Int(100));
     }
@@ -134,7 +134,7 @@ mod tests {
     fn an_out_of_range_id_reads_undefined_and_a_write_is_a_no_op() {
         let mut h = Heap::new();
         let mut i = Interner::default();
-        let f = i.intern("hp");
+        let f = i.intern_exact("hp");
         let bad_struct = StructId(99);
         let bad_array = ArrayId(99);
         assert_eq!(h.get_field(bad_struct, f), Value::Undefined);
@@ -151,7 +151,7 @@ mod tests {
         let mut i = Interner::default();
         let a = h.new_struct();
         let b = h.new_struct();
-        let f = i.intern("hp");
+        let f = i.intern_exact("hp");
         h.set_field(a, f, Value::Int(1));
         assert_eq!(h.get_field(b, f), Value::Undefined);
     }

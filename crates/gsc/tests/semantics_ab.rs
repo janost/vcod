@@ -168,7 +168,6 @@ fn captures() -> BTreeMap<String, (Vec<String>, Option<String>)> {
 /// what that implementation has to reproduce.
 const NOT_YET_RUNNABLE: &[&str] = &["probe_ents"];
 
-#[ignore = "fails until the divergences in the semantics fix task are done"]
 #[test]
 fn vcod_matches_retail_on_every_probe() {
     let mut failures = Vec::new();
@@ -190,8 +189,10 @@ fn vcod_matches_retail_on_every_probe() {
             ));
         }
         // Where retail dies, vcod raises an error and aborts the thread
-        // instead of the server; what has to match is that it stopped at the
-        // same point, not how loudly.
+        // instead of the server. This only checks that both sides stopped,
+        // not that they stopped in the same place or said the same thing --
+        // the line comparison above is what catches a differing stopping
+        // point, since a side that ran on emits the lines the other didn't.
         match (retail_fatal.is_some(), ours.error.is_some()) {
             (true, false) => failures.push(format!(
                 "{name} ({}): retail died ({}) and vcod carried on",

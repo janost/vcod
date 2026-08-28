@@ -10,8 +10,8 @@
 //!   of one key must share an atom: `# probe_field_case` reads
 //!   `level.myField` back through `level.myfield`, and a `waittill` waiting
 //!   on one spelling has to see a `notify` fired with the other.
-//! - `intern` dedups on the exact text. String values and array keys do not
-//!   fold: `# probe_cmp` has `"ABC" == "abc"` false, and
+//! - `intern_exact` dedups on the exact text. String values and array keys
+//!   do not fold: `# probe_cmp` has `"ABC" == "abc"` false, and
 //!   `# probe_arraykey_case` has `a["medFire"]` and `a["medfire"]` as two
 //!   entries with a `.size` of 2.
 //!
@@ -63,15 +63,15 @@ pub struct Interner {
 
 impl Interner {
     /// Interns by exact text: two spellings of one word get two atoms.
-    pub fn intern(&mut self, s: &str) -> Atom {
+    pub fn intern_exact(&mut self, s: &str) -> Atom {
         if let Some(&a) = self.by_exact.get(s) {
             return a;
         }
         let folded = s.to_ascii_lowercase();
         let a = Atom(self.text.len() as u32);
-        // Claims the folded key too if nothing holds it yet, so `intern` and
-        // `intern_folded` can never disagree about which atom a folded key
-        // resolves to, whichever role saw the text first.
+        // Claims the folded key too if nothing holds it yet, so
+        // `intern_exact` and `intern_folded` can never disagree about which
+        // atom a folded key resolves to, whichever role saw the text first.
         let canon = *self.by_folded.entry(folded.clone()).or_insert(a);
         self.text.push(s.to_string());
         self.folded.push(folded);
@@ -99,7 +99,7 @@ impl Interner {
     }
 
     /// Looks up an exact spelling without interning it.
-    pub fn get(&self, s: &str) -> Option<Atom> {
+    pub fn get_exact(&self, s: &str) -> Option<Atom> {
         self.by_exact.get(s).copied()
     }
 
@@ -135,9 +135,9 @@ mod tests {
     #[test]
     fn interning_the_same_text_twice_yields_the_same_atom() {
         let mut i = Interner::default();
-        let a = i.intern("allies");
-        let b = i.intern("allies");
-        let c = i.intern("axis");
+        let a = i.intern_exact("allies");
+        let b = i.intern_exact("allies");
+        let c = i.intern_exact("axis");
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(i.resolve(a), "allies");
@@ -151,10 +151,10 @@ mod tests {
     fn folding_is_per_role_not_global() {
         let mut i = Interner::default();
         assert_eq!(i.intern_folded("myField"), i.intern_folded("myfield"));
-        assert_ne!(i.intern("ABC"), i.intern("abc"));
-        assert_eq!(i.intern("abc"), i.intern("abc"));
+        assert_ne!(i.intern_exact("ABC"), i.intern_exact("abc"));
+        assert_eq!(i.intern_exact("abc"), i.intern_exact("abc"));
         // A case-preserving intern still returns exactly what went in.
-        let a = i.intern("MedFire");
+        let a = i.intern_exact("MedFire");
         assert_eq!(i.resolve(a), "MedFire");
     }
 
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn resolve_folded_returns_the_lowercase_form_regardless_of_spelling() {
         let mut i = Interner::default();
-        let a = i.intern("MaIn");
+        let a = i.intern_exact("MaIn");
         assert_eq!(i.resolve_folded(a), "main");
     }
 
@@ -186,8 +186,8 @@ mod tests {
     #[test]
     fn fold_atom_maps_every_spelling_onto_one_atom() {
         let mut i = Interner::default();
-        let explode = i.intern("Explode");
-        let lower = i.intern("explode");
+        let explode = i.intern_exact("Explode");
+        let lower = i.intern_exact("explode");
         assert_ne!(explode, lower);
         assert_eq!(i.fold_atom(explode), i.fold_atom(lower));
         assert_eq!(i.fold_atom(lower), i.intern_folded("EXPLODE"));
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn an_exact_intern_claims_the_folded_key_it_is_the_first_spelling_of() {
         let mut i = Interner::default();
-        let literal = i.intern("Panzerfaust");
+        let literal = i.intern_exact("Panzerfaust");
         assert_eq!(i.intern_folded("panzerfaust"), literal);
         assert_eq!(i.resolve(literal), "Panzerfaust");
     }
@@ -214,17 +214,17 @@ mod tests {
     fn a_folded_intern_claims_its_own_exact_spelling() {
         let mut i = Interner::default();
         let field = i.intern_folded("medFire");
-        assert_eq!(i.intern("medFire"), field);
-        assert_ne!(i.intern("medfire"), field);
+        assert_eq!(i.intern_exact("medFire"), field);
+        assert_ne!(i.intern_exact("medfire"), field);
     }
 
     #[test]
-    fn get_does_not_intern() {
+    fn get_exact_does_not_intern() {
         let mut i = Interner::default();
-        assert!(i.get("nope").is_none());
-        let a = i.intern("yes");
-        assert_eq!(i.get("yes"), Some(a));
-        assert_eq!(i.get("YES"), None);
+        assert!(i.get_exact("nope").is_none());
+        let a = i.intern_exact("yes");
+        assert_eq!(i.get_exact("yes"), Some(a));
+        assert_eq!(i.get_exact("YES"), None);
         assert_eq!(i.get_folded("YES"), Some(a));
     }
 }

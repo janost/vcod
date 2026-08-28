@@ -381,7 +381,7 @@ identifiers, field names, file paths and event names (`notify`/`waittill`/
 case-sensitively (measured; see below). `vcod-gsc`'s interner
 (`crates/gsc/src/atom.rs`) therefore has two entry points over one storage
 vector: `intern_folded` dedups on the lowercased text, so two spellings of
-an identifier-role key share one `Atom`, and `intern` dedups on the exact
+an identifier-role key share one `Atom`, and `intern_exact` dedups on the exact
 text, so `"ABC"` and `"abc"` are two atoms. Both store the spelling they
 were given verbatim, and `Interner::resolve` returns it, so a script-built
 display string never gets silently lowercased. Whichever entry point sees a
@@ -435,7 +435,9 @@ Everything below was measured on the retail 1.1d Linux dedicated server, not
 inferred. The probes are `crates/gsc/tests/fixtures/semantics/probe_*.gsc`,
 run as gametype scripts by `tools/run_probe.sh`; retail's answers are
 committed beside them in `retail-captures.txt`, and
-`crates/gsc/tests/semantics_ab.rs` diffs vcod against them.
+`crates/gsc/tests/semantics_ab.rs` diffs vcod against them on every test run.
+It is green on all 18 runnable probes; `probe_ents` is captured but not run,
+since `getentarray` needs the object model that arrives with the entity work.
 
 Three facts about the retail side shaped how the measurement had to be taken,
 and each is worth knowing before writing another probe:
@@ -504,19 +506,28 @@ three in spawn order.
 
 **`i%count` compiles on retail, VERIFIED.** The tight spelling of modulo
 evaluates to `1` for `7 % 3`, so retail's lexer does not read `%` before an
-identifier as an animation reference in that position. vcod's does; the
-divergence is recorded in §10.
+identifier as an animation reference in that position. vcod's lexer gives the
+`%` scan a one-token lookback: it is an animation reference only where the
+previous token cannot already have ended an operand (not an identifier,
+number, `)` or `]`). Across the 799-file corpus that reclassifies nothing —
+3432 `Anim` tokens before and after.
 
 **`-2147483648` is not reachable on retail, VERIFIED.** Both the direct
-literal and `(int)(-2147483648)` yield `-2147483647`. vcod lands exactly on
-`i32::MIN`; §10 records the one-unit gap.
+literal and `(int)(-2147483648)` yield `-2147483647`, so the magnitude
+saturates at `i32::MAX` before the unary minus applies: an overflowing
+integer literal clamps rather than widening to a float. vcod's `read_number`
+does the same, which is also what the two stock scripts that ship a literal
+past `i32::MAX` as an effectively-infinite sentinel
+(`maps/carride.gsc:1606`, `maps/redsquare.gsc:1547`) mean by it.
 
 ### Still unestablished
 
 - **`undefined == undefined`.** Not probed. Retail's error message for the
   mixed case names a "pair has unmatching types", which two `undefined`s are
   not, so equal is the reading that message supports — but that is inference,
-  not measurement.
+  not measurement. vcod answers true on that inference (`values_equal`,
+  `crates/gsc/src/vm/interp.rs`); every *mixed* pair with `undefined` errors,
+  which is the measured half.
 - **String comparison against a localized string** (`&"KEY"`), and whether a
   localized string renders as its key or its resolved text when
   concatenated. No stock script does either.
@@ -529,10 +540,10 @@ looks authoritative:
 
 - **Two `notify`s of the same event on the same target queued within one
   scheduling step coalesce; the second is lost.** `Op::Notify` queues rather
-  than resolving inline (`vm.rs`, `step_frames`'s `Notify` arm), and
+  than resolving inline (`vm/interp.rs`, `step_frames`'s `Notify` arm), and
   `step_thread` flushes the queue only after the whole step
-  (`vm.rs:step_thread`) — so if a step queues two notifies of the same event
-  at the same target, the first flush wakes the waiter (flips it out of
+  (`vm/sched.rs:step_thread`) — so if a step queues two notifies of the same
+  event at the same target, the first flush wakes the waiter (flips it out of
   `WaitingNotify`), and the second flush finds no matching waiter and drops
   it silently. Measured: a pump firing `self notify("tick", 1); self
   notify("tick", 2);` in one step against a loop doing `self
@@ -566,13 +577,16 @@ looks authoritative:
   killing itself via a nested spawn's notify, mid-step) no corpus script
   seems to rely on either way; deferred to the next project. Pinned by
   `sched::tests::a_thread_killed_by_its_own_endon_mid_step_still_runs_to_its_next_suspend`.
-- **Ordering comparisons against `undefined` read false, where retail is
-  believed to error.** `numeric_cmp` (`crates/gsc/src/vm.rs`) returns
-  `Value::Int(0)` for `<`/`>`/`<=`/`>=` whenever either operand does not
-  convert to a number, `undefined` included — a deliberate choice per the
-  implementation brief, not something the corpus exercises either way (same
-  gap as "comparison across incompatible types" above), and unverified
-  against the retail server.
+- **A runtime error aborts the thread, where retail kills the server.**
+  Every fatal in §9 — a non-numeric condition, `"str" + undefined`,
+  `undefined == 0`, `"a" < "b"`, `1 / 0` — raises the equivalent
+  `ErrorKind` in vcod, which unwinds that thread's frames and logs; the
+  other threads and the server keep running. Retail prints a `script
+  runtime error` block and shuts the server down. This is deliberate and
+  predates the measurement: a third-party map script must not be able to
+  take the server down. `crates/gsc/tests/semantics_ab.rs` therefore checks
+  only that both sides *stopped* at the same expression, which the compared
+  output lines pin, not that they stopped the same way.
 - **Multiple `#using_animtree` directives in one file resolve to the last
   one.** `compile_file` (`crates/gsc/src/compile.rs`) takes
   `file.animtrees.last()` because the AST does not track which directive was

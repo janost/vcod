@@ -19,6 +19,6 @@ pub use heap::ArrayKey;
 pub use load::{canonical, LoadError, Loader, ScriptSource};
 // `Thread`/`ThreadState` are not re-exported: no `Vm` API returns one, so
 // there is nothing for a consumer to do with either.
-pub use value::{ArrayId, EntId, FuncRef, StructId, Value};
+pub use value::{format_number, ArrayId, EntId, FuncRef, StructId, Value};
 pub use vm::sched::ThreadId;
 pub use vm::{Cx, ErrorKind, Host, ScriptError, Target, Vm};
