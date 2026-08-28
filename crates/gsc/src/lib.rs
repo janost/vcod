@@ -3,8 +3,10 @@
 //! Language surface and the evidence behind it:
 //! docs/research/cod11-gsc-language.md.
 
+pub mod ast;
 pub mod atom;
 pub mod lex;
+pub mod parse;
 pub mod value;
 
 pub use atom::{Atom, Interner};
