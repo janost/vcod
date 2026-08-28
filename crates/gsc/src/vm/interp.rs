@@ -755,6 +755,10 @@ impl Vm {
                     let Value::String(event) = event else {
                         return Err(err(ErrorKind::BadType("notify needs a string event name")));
                     };
+                    // Redundant, not load-bearing: every path that drains
+                    // `notifies` goes through `Vm::notify`, which folds
+                    // again. Kept so the queued atom matches what
+                    // `waittill`/`endon` stored.
                     let event = self.interner.fold_atom(event);
                     let target = as_target(recv).ok_or_else(|| {
                         err(ErrorKind::BadType(

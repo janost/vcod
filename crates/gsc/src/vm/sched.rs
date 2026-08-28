@@ -556,10 +556,16 @@ mod tests {
     /// are two atoms, and only `Interner::fold_atom` at the op keeps them
     /// matching. If it stopped, the waiter would hang forever and nothing
     /// would error. `brecourt.gsc` ships exactly this shape.
+    ///
+    /// `pump` compiles first on purpose: that makes `"explode"` the
+    /// canonical atom and the `waittill`'s `"EXPLODE"` a second one. With
+    /// the two the other way round the `waittill` matches whether or not
+    /// `Op::WaitTill` folds, and this test cannot fail under the mutation
+    /// it names.
     #[test]
     fn a_notify_wakes_a_waittill_that_spelled_the_event_differently() {
         let mut vm = vm_with(
-            r#"main() { self waittill("Explode"); done(); } pump() { self notify("explode"); }"#,
+            r#"pump() { self notify("explode"); } main() { self waittill("EXPLODE"); done(); }"#,
         );
         let mut host = TestHost::default();
         let waiter = vm.func_ref("test/script", "main");
@@ -575,12 +581,14 @@ mod tests {
 
     /// The same rule from the host side: a host interning an event name
     /// case-sensitively still reaches a `waittill` and an `endon` spelled
-    /// the other way.
+    /// the other way. `dier`'s `"PLAYERCONNECT"` is deliberately not the
+    /// canonical spelling -- `waiter` compiles first and claims it -- so the
+    /// kill below lands only if `Op::EndOn` folds.
     #[test]
     fn a_host_notify_folds_the_event_name_it_was_given() {
         let mut vm = vm_with(
             r#"waiter() { self waittill("PlayerConnect"); done(); }
-               dier() { self endon("PlayerConnect"); wait 1; survived(); }"#,
+               dier() { self endon("PLAYERCONNECT"); wait 1; survived(); }"#,
         );
         let mut host = TestHost::default();
         let waiter = vm.func_ref("test/script", "waiter");
@@ -845,15 +853,6 @@ mod tests {
         );
     }
 
-    /// The `now_ms = 0` every other `start_thread` test in this suite
-    /// passes can't distinguish "the fix is present" from "the fix was
-    /// reverted": `Vm::now_ms` already defaults to `0`, so a reverted
-    /// `self.now_ms = now_ms;` and a working one behave identically at
-    /// that value. This test uses a clock that isn't the default: `main`
-    /// threads `f`, whose own `wait 1` (1000 ms) must deadline against
-    /// `5_000`, not `0` -- `run_frame(&mut host, 5_000)` (right after
-    /// `start_thread`, same clock reading) must not fire it, only
-    /// `run_frame(&mut host, 6_000)` should.
     /// A plain (non-threaded) call whose callee suspends on `wait` leaves
     /// the caller's frame mid-call across the suspend -- exactly the case
     /// `Frame::stack_effect_check` (vm.rs, test-only) has to survive rather
@@ -871,6 +870,42 @@ mod tests {
         assert!(!host.calls.iter().any(|(n, _)| n == "done"), "not yet");
         vm.run_frame(&mut host, 1000);
         assert!(host.calls.iter().any(|(n, _)| n == "done"), "resumed");
+        assert_eq!(vm.thread_count(), 0);
+    }
+
+    /// `Frame::func_rc` is cached at frame creation and carried across a
+    /// suspend rather than rebuilt on resume. The test above only ever
+    /// resumes into the same two functions it suspended in; here the
+    /// resumed thread calls a *third* one, with a different parameter and
+    /// local count, so a frame that reused the suspended frame's cached
+    /// `Rc<Function>` would run the wrong code and drop the argument.
+    #[test]
+    fn a_resumed_thread_calling_a_different_function_gets_that_functions_code() {
+        let mut vm = vm_with(
+            "main() { waiter(); other(7); } \
+             waiter() { wait 1; } \
+             other(n) { seen(n); }",
+        );
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.run_frame(&mut host, 0);
+        assert!(
+            !host.calls.iter().any(|(n, _)| n == "seen"),
+            "still waiting"
+        );
+
+        vm.run_frame(&mut host, 1000);
+        let seen = host
+            .calls
+            .iter()
+            .find(|(n, _)| n == "seen")
+            .expect("other() ran after the resume");
+        assert_eq!(
+            seen.1,
+            vec![Value::Int(7)],
+            "its own parameter, not waiter's"
+        );
         assert_eq!(vm.thread_count(), 0);
     }
 
@@ -1017,6 +1052,15 @@ mod tests {
         );
     }
 
+    /// The `now_ms = 0` every other `start_thread` test in this suite
+    /// passes can't distinguish "the fix is present" from "the fix was
+    /// reverted": `Vm::now_ms` already defaults to `0`, so a reverted
+    /// `self.now_ms = now_ms;` and a working one behave identically at
+    /// that value. This test uses a clock that isn't the default: `main`
+    /// threads `f`, whose own `wait 1` (1000 ms) must deadline against
+    /// `5_000`, not `0` -- `run_frame(&mut host, 5_000)` (right after
+    /// `start_thread`, same clock reading) must not fire it, only
+    /// `run_frame(&mut host, 6_000)` should.
     #[test]
     fn start_thread_threads_a_wait_against_its_own_now_ms_not_zero() {
         let mut vm = vm_with("main() { thread f(); } f() { wait 1; done(); }");
