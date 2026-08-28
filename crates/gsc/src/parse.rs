@@ -153,6 +153,13 @@ impl<'a> Parser<'a> {
                     let name = self.ident_name()?;
                     base = Expr::Field(Box::new(base), name);
                 }
+                // Two adjacent `[` is a method-style call through a
+                // dereferenced pointer (`self [[anim.SetPoseMovement]](...)`),
+                // not indexing; a single `[` is `Expr::Index` as usual.
+                Tok::LBracket if self.t.get(self.i + 1).map(|s| &s.tok) == Some(&Tok::LBracket) => {
+                    let target = self.call_target()?;
+                    base = self.finish_call(Some(Box::new(base)), target, false)?;
+                }
                 Tok::LBracket => {
                     self.bump();
                     let idx = self.expr()?;
@@ -744,6 +751,25 @@ mod tests {
             panic!("{e:?}")
         };
         assert!(matches!(*inner, Expr::Field(_, _)));
+    }
+
+    /// `animscripts/cover_prone.gsc:23` `self [[anim.SetPoseMovement]](...)`,
+    /// a receiver-attached call through a dereferenced pointer, no `thread`.
+    #[test]
+    fn method_call_can_target_a_dereferenced_pointer() {
+        let e = expr(r#"self [[anim.SetPoseMovement]]("prone", "stop")"#);
+        let Expr::Call {
+            recv: Some(recv),
+            target: CallTarget::Deref(inner),
+            args,
+            threaded: false,
+        } = e
+        else {
+            panic!("{e:?}")
+        };
+        assert!(matches!(*recv, Expr::SelfRef));
+        assert!(matches!(*inner, Expr::Field(_, _)));
+        assert_eq!(args.len(), 2);
     }
 
     #[test]
