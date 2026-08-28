@@ -194,7 +194,22 @@ pub fn stack_depth(f: &Function) -> Result<(), String> {
         let depth_out = depth_in - pop + push;
 
         match op {
-            Op::Return | Op::ReturnUndef => {} // terminal: function exits, no successor
+            // Terminal: function exits, no successor. Also the check for a
+            // miscompile that leaves a value behind (or drops one) evenly
+            // on every straight-line path, which no join disagreement would
+            // ever catch: `Return` must leave exactly its return value, and
+            // `ReturnUndef` must leave nothing.
+            Op::Return if depth_in != 1 => {
+                return Err(format!(
+                    "instruction {ip} (Return) exits with stack depth {depth_in}, expected 1"
+                ))
+            }
+            Op::ReturnUndef if depth_in != 0 => {
+                return Err(format!(
+                    "instruction {ip} (ReturnUndef) exits with stack depth {depth_in}, expected 0"
+                ))
+            }
+            Op::Return | Op::ReturnUndef => {}
             Op::Jump(t) => visit(
                 &mut entry_depth,
                 &mut queue,
@@ -260,6 +275,23 @@ mod tests {
     #[test]
     fn a_bare_pop_with_nothing_pushed_underflows() {
         let f = func(vec![Op::Pop, Op::ReturnUndef]);
+        assert!(stack_depth(&f).is_err());
+    }
+
+    /// A value pushed on every path and never popped or returned: no join
+    /// ever disagrees on the depth, so only a terminal-depth check catches
+    /// this leak.
+    #[test]
+    fn return_undef_with_a_value_still_on_the_stack_is_rejected() {
+        let f = func(vec![Op::Const(0), Op::ReturnUndef]);
+        assert!(stack_depth(&f).is_err());
+    }
+
+    /// The mirror leak for `Return`: it must exit with exactly its return
+    /// value on the stack, not that value plus something left behind.
+    #[test]
+    fn return_with_an_extra_value_still_on_the_stack_is_rejected() {
+        let f = func(vec![Op::Const(0), Op::Const(0), Op::Return]);
         assert!(stack_depth(&f).is_err());
     }
 

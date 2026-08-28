@@ -52,9 +52,9 @@ pub fn compile_file(
             code: Vec::new(),
             consts: Vec::new(),
             lines: Vec::new(),
-            // Statements carry no line of their own in this AST; every
-            // instruction and error in a function is attributed to the
-            // function's declaration line.
+            // Seeded from the function's declaration line; compile_stmt
+            // overwrites it with each statement's own line before that
+            // statement emits anything.
             cur_line: f.line,
             break_stack: Vec::new(),
             continue_stack: Vec::new(),

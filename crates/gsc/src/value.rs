@@ -54,10 +54,16 @@ mod tests {
         assert!(!Value::Undefined.is_truthy());
         assert!(!Value::Int(0).is_truthy());
         assert!(!Value::Float(0.0).is_truthy());
+        // IEEE `-0.0 == 0.0`, so negative zero is false too.
+        assert!(!Value::Float(-0.0).is_truthy());
         assert!(Value::Int(1).is_truthy());
         assert!(Value::Int(-1).is_truthy());
         assert!(Value::Float(0.5).is_truthy());
+        // NAN compares unequal to everything, including 0.0, so it reads true.
+        assert!(Value::Float(f32::NAN).is_truthy());
         assert!(Value::String(i.intern("")).is_truthy());
         assert!(Value::Entity(EntId(0)).is_truthy());
+        // Only the Float(0.0) arm is false; a zero vector isn't matched by it.
+        assert!(Value::Vector([0.0, 0.0, 0.0]).is_truthy());
     }
 }
