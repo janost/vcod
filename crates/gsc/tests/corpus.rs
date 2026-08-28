@@ -13,6 +13,7 @@ use vcod_common::pk3::Pk3Fs;
 /// is expected to succeed: a `main/` that exists but is missing its stock
 /// paks, unreadable, or otherwise broken must fail the test loudly rather
 /// than silently degrade to an empty corpus that still reports green.
+#[cfg(unix)]
 fn stock_paks() -> Option<(tempfile::TempDir, Pk3Fs)> {
     let main = vcod_common::testing::game_dir().join("main");
     if !main.is_dir() {
@@ -40,6 +41,15 @@ fn stock_paks() -> Option<(tempfile::TempDir, Pk3Fs)> {
     let fs =
         Pk3Fs::open(tmp.path()).unwrap_or_else(|e| panic!("open the stock-pak symlink dir: {e}"));
     Some((tmp, fs))
+}
+
+/// No unix-style symlinks off Windows; every census in this file goes
+/// through this gate, so without it the whole test crate fails to *compile*
+/// on Windows (not just "the census can't run"), even though `nightly.yml`
+/// ships a Windows binary. Skips there, the same as an absent `COD_DIR`.
+#[cfg(not(unix))]
+fn stock_paks() -> Option<(tempfile::TempDir, Pk3Fs)> {
+    None
 }
 
 #[test]
@@ -101,9 +111,13 @@ fn every_stock_script_compiles() {
     let mut interner = vcod_gsc::Interner::default();
     let mut failures = Vec::new();
     let mut functions = 0usize;
+    let mut unreadable = 0usize;
 
     for name in &names {
-        let Some(bytes) = fs.read(name) else { continue };
+        let Some(bytes) = fs.read(name) else {
+            unreadable += 1;
+            continue;
+        };
         let src = String::from_utf8_lossy(&bytes);
         let ast = match vcod_gsc::parse::parse_file(&src) {
             Ok(a) => a,
@@ -130,6 +144,12 @@ fn every_stock_script_compiles() {
         }
     }
 
+    assert_eq!(
+        unreadable,
+        0,
+        "{unreadable} of {} stock scripts could not be read from their pak",
+        names.len()
+    );
     assert!(
         failures.is_empty(),
         "{} of {} scripts failed:\n{}",
