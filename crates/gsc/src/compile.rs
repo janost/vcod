@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::{
     self, ArmLabel, BinOp, CallTarget, Cast, Expr, FuncDef, Stmt, StmtKind, SwitchArm, UnOp,
 };
-use crate::atom::{Atom, Interner, StrAtom};
+use crate::atom::{Atom, Interner};
 use crate::bytecode::{Function, Op};
 use crate::value::{FuncRef, Value};
 
@@ -34,8 +34,7 @@ pub fn compile_file(
     // The AST does not track which `#using_animtree` was active at each
     // function's lexical position, so a bare `#animtree` resolves against
     // the last directive in the file. No stock MP script reads it back.
-    // It surfaces as `Value::Anim` content, so it is interned unfolded.
-    let animtree = file.animtrees.last().map(|s| interner.intern_str(s));
+    let animtree = file.animtrees.last().map(|s| interner.intern(s));
 
     let mut local_funcs = HashSet::new();
     for f in &file.funcs {
@@ -70,7 +69,7 @@ struct Compiler<'a> {
     interner: &'a mut Interner,
     file_atom: Atom,
     local_funcs: &'a HashSet<Atom>,
-    animtree: Option<StrAtom>,
+    animtree: Option<Atom>,
     locals: HashMap<String, u16>,
     code: Vec<Op>,
     consts: Vec<Value>,
@@ -471,15 +470,15 @@ impl<'a> Compiler<'a> {
             Expr::Int(n) => self.push_const(Value::Int(*n))?,
             Expr::Float(f) => self.push_const(Value::Float(*f))?,
             Expr::Str(s) => {
-                let a = self.interner.intern_str(s);
+                let a = self.interner.intern(s);
                 self.push_const(Value::String(a))?;
             }
             Expr::Localized(s) => {
-                let a = self.interner.intern_str(s);
+                let a = self.interner.intern(s);
                 self.push_const(Value::Localized(a))?;
             }
             Expr::Anim(s) => {
-                let a = self.interner.intern_str(s);
+                let a = self.interner.intern(s);
                 self.push_const(Value::Anim(a))?;
             }
             Expr::AnimtreeRef => match self.animtree {
@@ -910,6 +909,24 @@ mod tests {
             panic!("no WaitTill emitted")
         };
         assert_eq!(binds.len(), 2, "menu and response");
+    }
+
+    /// Mirrors `brecourt.gsc`'s shape: a `notify` and a `waittill` on the
+    /// same event whose literal spelling differs only in case. The engine
+    /// matches event names case-insensitively, same as any other
+    /// identifier, so both event-name literals must intern to the same
+    /// atom — otherwise the `waittill` would wait forever on a `notify`
+    /// that, textually, never fires.
+    #[test]
+    fn event_names_differing_only_by_case_intern_to_the_same_atom() {
+        let (_, f) = compile(r#"m() { level notify("Explode"); level waittill("explode"); }"#);
+        let mut string_consts = f[0].consts.iter().filter_map(|c| match c {
+            Value::String(a) => Some(*a),
+            _ => None,
+        });
+        let notify_event = string_consts.next().expect("notify's event string");
+        let waittill_event = string_consts.next().expect("waittill's event string");
+        assert_eq!(notify_event, waittill_event);
     }
 
     #[test]

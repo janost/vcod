@@ -1,51 +1,58 @@
 //! Interned script strings. The engine interns every script string
 //! (`GScr_AllocString`), which is why `Atom` equality is a `u32` compare.
 //!
-//! Two separate tables, not one: the engine matches identifiers, field
-//! names and file paths case-insensitively, so those fold. String
-//! *content* (`Value::String`/`Localized`/`Anim`) does not fold — folding
-//! it would lowercase every script-built message before it reaches a
-//! player. A single dedup-on-folded-form table can't serve both: a host
-//! resolving a builtin name needs the folded spelling to match its own
-//! lowercase literals, while a host reading a string value needs the
-//! original spelling back. `Atom` and `StrAtom` are distinct types so a
-//! folded identifier atom and a verbatim content atom can't be swapped by
-//! mistake and silently resolved against the wrong table.
+//! `intern` keys its dedup on the case-folded text — the engine matches
+//! identifiers, field names, file paths and event names (`notify`/
+//! `waittill`/`endon`) case-insensitively, so two spellings of one key must
+//! share an atom or a `waittill` waiting on one spelling never sees a
+//! `notify` fired with the other. But it stores the *first* spelling it
+//! saw, verbatim, and `resolve` returns that stored spelling rather than a
+//! folded one: `Value::String`/`Localized`/`Anim` atoms come from this same
+//! table, so folding on storage would lowercase every script-built display
+//! string (`"Round " + "won"` -> `"round won"`) and every literal
+//! containing a capital, of which the shipped corpus has 2553.
 //!
-//! Content is interned permanently, with no reclamation: a script that
-//! loops `s = s + "x"` grows the content table without bound for the life
-//! of the process. Not fixed here — the heap this feeds is dropped whole on
-//! map change, and G1 has no GC.
+//! `resolve_folded` returns the lowercased form on demand, for the one case
+//! that still needs it: matching a resolved name against a fixed lowercase
+//! literal, e.g. builtin dispatch (`IPrintLn(...)` must still reach a host
+//! matching on `"iprintln"`).
+//!
+//! Because two spellings collapse onto one atom, whichever was interned
+//! first wins for display purposes: `Panzerfaust` and `panzerfaust` share
+//! an atom and `resolve` always returns whichever the compiler saw first.
+//! The shipped corpus has 86 such pairs, all weapon or tag names, never
+//! display text. Storing both spellings and comparing case-insensitively
+//! instead would get display exactly right, but only by giving `Value` a
+//! custom `PartialEq` that any future `==` on it would silently bypass —
+//! worse than a bounded spelling collision.
+//!
+//! Runtime-built strings (e.g. `s = s + "x"` in a loop) intern permanently,
+//! with no reclamation. Not fixed here: the heap this feeds is dropped
+//! whole on map change, and G1 has no GC.
 
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Atom(pub u32);
 
-/// An interned string-content atom: `Value::String`, `Value::Localized` or
-/// `Value::Anim`. Distinct from `Atom` so it never resolves against the
-/// folding table.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct StrAtom(pub u32);
-
 #[derive(Default)]
 pub struct Interner {
     by_text: HashMap<String, Atom>,
+    /// The spelling first interned for each atom; what `resolve` returns.
     text: Vec<String>,
-    by_str: HashMap<String, StrAtom>,
-    str_text: Vec<String>,
+    /// The case-folded form of the same atom; what `resolve_folded` returns.
+    folded: Vec<String>,
 }
 
 impl Interner {
-    /// Interns an identifier, field name, function name or file path,
-    /// case-folded to match the engine's case-insensitive lookup.
     pub fn intern(&mut self, s: &str) -> Atom {
         let folded = s.to_ascii_lowercase();
         if let Some(&a) = self.by_text.get(&folded) {
             return a;
         }
         let a = Atom(self.text.len() as u32);
-        self.text.push(folded.clone());
+        self.text.push(s.to_string());
+        self.folded.push(folded.clone());
         self.by_text.insert(folded, a);
         a
     }
@@ -54,24 +61,15 @@ impl Interner {
         self.by_text.get(&s.to_ascii_lowercase()).copied()
     }
 
+    /// The spelling first interned for this atom, verbatim.
     pub fn resolve(&self, a: Atom) -> &str {
         &self.text[a.0 as usize]
     }
 
-    /// Interns string content verbatim: no case folding, no lookup by
-    /// folded form.
-    pub fn intern_str(&mut self, s: &str) -> StrAtom {
-        if let Some(&a) = self.by_str.get(s) {
-            return a;
-        }
-        let a = StrAtom(self.str_text.len() as u32);
-        self.str_text.push(s.to_string());
-        self.by_str.insert(s.to_string(), a);
-        a
-    }
-
-    pub fn resolve_str(&self, a: StrAtom) -> &str {
-        &self.str_text[a.0 as usize]
+    /// The case-folded form of this atom's text, for matching against a
+    /// fixed lowercase literal.
+    pub fn resolve_folded(&self, a: Atom) -> &str {
+        &self.folded[a.0 as usize]
     }
 }
 
@@ -90,15 +88,23 @@ mod tests {
         assert_eq!(i.resolve(a), "allies");
     }
 
-    /// gsc identifiers and script paths are matched case-insensitively by
-    /// the engine, so the interner folds case and `resolve` returns the
-    /// folded form.
+    /// gsc identifiers, paths and event names are matched case-insensitively
+    /// by the engine, so two spellings of one key still intern to the same
+    /// atom. `resolve` no longer folds, though: it returns whichever
+    /// spelling was interned first, verbatim.
     #[test]
-    fn interning_folds_case() {
+    fn interning_folds_identity_but_resolve_keeps_the_first_spelling() {
         let mut i = Interner::default();
         assert_eq!(i.intern("PlayerConnect"), i.intern("playerconnect"));
         let main = i.intern("MaIn");
-        assert_eq!(i.resolve(main), "main");
+        assert_eq!(i.resolve(main), "MaIn");
+    }
+
+    #[test]
+    fn resolve_folded_returns_the_lowercase_form_regardless_of_spelling() {
+        let mut i = Interner::default();
+        let a = i.intern("MaIn");
+        assert_eq!(i.resolve_folded(a), "main");
     }
 
     #[test]
@@ -107,26 +113,5 @@ mod tests {
         assert!(i.get("nope").is_none());
         let a = i.intern("yes");
         assert_eq!(i.get("YES"), Some(a));
-    }
-
-    /// String content is not case-folded: two spellings differing only in
-    /// case are two distinct atoms, and each resolves back to what was
-    /// interned, not to a lowercased form.
-    #[test]
-    fn interning_str_does_not_fold_case() {
-        let mut i = Interner::default();
-        let a = i.intern_str("Objective Complete");
-        let b = i.intern_str("objective complete");
-        assert_ne!(a, b);
-        assert_eq!(i.resolve_str(a), "Objective Complete");
-        assert_eq!(i.resolve_str(b), "objective complete");
-    }
-
-    #[test]
-    fn interning_the_same_str_content_twice_yields_the_same_atom() {
-        let mut i = Interner::default();
-        let a = i.intern_str("Round won");
-        let b = i.intern_str("Round won");
-        assert_eq!(a, b);
     }
 }

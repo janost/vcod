@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::atom::{Atom, Interner, StrAtom};
+use crate::atom::{Atom, Interner};
 use crate::bytecode::{Function, Op};
 use crate::heap::{ArrayKey, Heap};
 use crate::value::{EntId, FuncRef, StructId, Value};
@@ -93,7 +93,7 @@ pub enum Suspend {
     },
     WaitTill {
         target: Target,
-        event: StrAtom,
+        event: Atom,
         binds: Box<[u16]>,
     },
 }
@@ -149,8 +149,8 @@ fn eval_add(interner: &mut Interner, a: Value, b: Value) -> Result<Value, ErrorK
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(y))),
         (Value::String(x), Value::String(y)) => {
-            let s = format!("{}{}", interner.resolve_str(x), interner.resolve_str(y));
-            Ok(Value::String(interner.intern_str(&s)))
+            let s = format!("{}{}", interner.resolve(x), interner.resolve(y));
+            Ok(Value::String(interner.intern(&s)))
         }
         (Value::Vector(x), Value::Vector(y)) => {
             Ok(Value::Vector([x[0] + y[0], x[1] + y[1], x[2] + y[2]]))
@@ -805,7 +805,10 @@ mod tests {
             _recv: Option<Target>,
             args: &[Value],
         ) -> Result<Value, ErrorKind> {
-            let n = interner.resolve(name).to_string();
+            // Builtin dispatch matches against a fixed lowercase literal, so
+            // it resolves folded: `IPrintLn(...)` must still reach the
+            // "iprintln" arm below.
+            let n = interner.resolve_folded(name).to_string();
             self.calls.push((n.clone(), args.to_vec()));
             match n.as_str() {
                 "double" => match args[0] {
@@ -1052,7 +1055,7 @@ mod tests {
         let Value::String(a) = v else {
             panic!("expected a string, got {v:?}")
         };
-        assert_eq!(vm.interner_mut().resolve_str(a), "foobar");
+        assert_eq!(vm.interner_mut().resolve(a), "foobar");
     }
 
     /// The defect this task fixes: string *content* must not be case-folded.
@@ -1064,7 +1067,7 @@ mod tests {
         let Value::String(a) = v else {
             panic!("expected a string, got {v:?}")
         };
-        assert_eq!(vm.interner_mut().resolve_str(a), "Round won");
+        assert_eq!(vm.interner_mut().resolve(a), "Round won");
     }
 
     /// Builtin dispatch still resolves the callee's name folded: a host

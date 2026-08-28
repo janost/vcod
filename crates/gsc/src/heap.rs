@@ -6,20 +6,20 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::atom::{Atom, StrAtom};
+use crate::atom::Atom;
 use crate::value::{ArrayId, StructId, Value};
 
 /// An array index: gsc arrays are associative, keyed by either a string
 /// (`a["allies"]`) or an integer (`a[0]`). Ordered so iteration over an
 /// array is deterministic. The derived `Ord` puts every `Int` before every
-/// `Str`, and orders `Str(StrAtom)` by interning order, not lexicographically
+/// `Str`, and orders `Str(Atom)` by interning order, not lexicographically
 /// by the text it names — deterministic, which is all iteration needs
 /// today, but it will not match retail's enumeration order once a
 /// key-listing builtin (e.g. `getarraykeys`) exists.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum ArrayKey {
     Int(i32),
-    Str(StrAtom),
+    Str(Atom),
 }
 
 #[derive(Default)]

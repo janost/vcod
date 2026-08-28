@@ -1,6 +1,6 @@
 //! Script values. gsc is dynamically typed; every slot holds one of these.
 
-use crate::atom::{Atom, StrAtom};
+use crate::atom::Atom;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct EntId(pub u32);
@@ -22,16 +22,16 @@ pub enum Value {
     Undefined,
     Int(i32),
     Float(f32),
-    String(StrAtom),
+    String(Atom),
     /// `&"KEY"`, resolved by the client, opaque here.
-    Localized(StrAtom),
+    Localized(Atom),
     Vector([f32; 3]),
     Entity(EntId),
     Struct(StructId),
     Array(ArrayId),
     Function(FuncRef),
     /// `%anim_name`. Parsed and carried; the MP scripts never read one back.
-    Anim(StrAtom),
+    Anim(Atom),
 }
 
 impl Value {
@@ -61,7 +61,7 @@ mod tests {
         assert!(Value::Float(0.5).is_truthy());
         // NAN compares unequal to everything, including 0.0, so it reads true.
         assert!(Value::Float(f32::NAN).is_truthy());
-        assert!(Value::String(i.intern_str("")).is_truthy());
+        assert!(Value::String(i.intern("")).is_truthy());
         assert!(Value::Entity(EntId(0)).is_truthy());
         // Only the Float(0.0) arm is false; a zero vector isn't matched by it.
         assert!(Value::Vector([0.0, 0.0, 0.0]).is_truthy());
