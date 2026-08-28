@@ -161,7 +161,9 @@ engineering setup works.
   writes the combined `retail-captures.txt` the A/B test in
   `crates/gsc/tests/semantics_ab.rs` compares vcod's VM against. Both need
   the same setup `run_server.sh` documents; a full capture takes a couple of
-  minutes because every probe boots the server.
+  minutes because every probe boots the server. Read that directory's
+  `README.md` before writing a new probe: three engine behaviours dictate its
+  shape, and each costs a wasted run to rediscover.
 - Live captures so far came from populated public servers (a TDM server on
   2026-08-24, an S&D server on 2026-08-25); a 60-100 s capture during a round
   is enough to see every combat event. The master at
@@ -235,6 +237,13 @@ decompiler output or disassembly listings.
 - `[profile.dev.package."*"] opt-level = 3` in `Cargo.toml` is for kira:
   symphonia and cpal crackle and take seconds per decode unoptimized. It costs
   one cold build and applies to wgpu/winit too.
+- gsc folds case for identifiers, field names, file paths and event names
+  (`intern_folded`) but not for string values or array keys (`intern_exact`);
+  both halves are measured against retail. A misrouted event name fails
+  silently: the `waittill` never sees its `notify` and the thread hangs with
+  nothing logged. The two tests in `vm/sched.rs` are written to fail when
+  either `fold_atom` call is removed; re-run that mutation if you touch the
+  fold sites.
 - `MAX_RELIABLE_COMMANDS` is 64 on CoD 1.1, not RTCW's 256: CoDExtended's
   `shared.h:135` and the `& 63` masks in `SV_UserMove` (cod_lnxded 0x8087043)
   agree. Both rings, and the scramble key that indexes them, are sized off it.
