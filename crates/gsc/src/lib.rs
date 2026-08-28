@@ -4,6 +4,7 @@
 //! docs/research/cod11-gsc-language.md.
 
 pub mod atom;
+pub mod lex;
 pub mod value;
 
 pub use atom::{Atom, Interner};
