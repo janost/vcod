@@ -172,6 +172,9 @@ pub struct Vm {
     functions: HashMap<FuncRef, Rc<Function>>,
     level: StructId,
     game: StructId,
+    /// `.size` on an array or string, interned once here rather than per
+    /// `LoadField` — `_load.gsc` reads it inside three loops.
+    size_atom: Atom,
     /// Kept in start order so a `run_frame` walk, and a `notify` wake, are
     /// both deterministic.
     threads: Vec<Thread>,
@@ -213,12 +216,15 @@ impl Vm {
         let mut heap = Heap::new();
         let level = heap.new_struct();
         let game = heap.new_struct();
+        let mut interner = Interner::default();
+        let size_atom = interner.intern("size");
         Vm {
-            interner: Interner::default(),
+            interner,
             heap,
             functions: HashMap::new(),
             level,
             game,
+            size_atom,
             threads: Vec::new(),
             next_thread: 0,
             budget: 1_000_000,
@@ -645,6 +651,18 @@ pub(crate) mod tests {
     fn field_access_is_still_case_insensitive() {
         let (v, _, _) = run("main() { level.Origin = 3; return level.origin; }");
         assert_eq!(v, Value::Int(3));
+    }
+
+    /// `_load.gsc:6` reads `ents.size`. Both arms measured against retail in
+    /// tests/fixtures/semantics/retail-captures.txt.
+    #[test]
+    fn size_counts_array_keys_and_string_characters() {
+        let (v, _, _) = run(r#"main() { a = []; a[0] = 1; a[1] = 2; a["k"] = 3; return a.size; }"#);
+        assert_eq!(v, Value::Int(3), "every key counts, whatever its type");
+        let (v, _, _) = run(r#"main() { a = []; return a.size; }"#);
+        assert_eq!(v, Value::Int(0));
+        let (v, _, _) = run(r#"main() { s = "abcd"; return s.size; }"#);
+        assert_eq!(v, Value::Int(4));
     }
 
     #[test]

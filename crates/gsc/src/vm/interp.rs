@@ -366,6 +366,13 @@ impl Vm {
                             };
                             host.get_field(&mut cx, id, name)
                         }
+                        // The only field an array or a string has. `_load.gsc` loops on it.
+                        Value::Array(id) if name == self.size_atom => {
+                            Value::Int(self.heap.array_len(id) as i32)
+                        }
+                        Value::String(a) if name == self.size_atom => {
+                            Value::Int(self.interner.resolve(a).len() as i32)
+                        }
                         _ => {
                             return Err(err(ErrorKind::BadType(
                                 "field access needs a struct or entity",
