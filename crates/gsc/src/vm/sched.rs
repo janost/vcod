@@ -2,7 +2,11 @@
 //! the whole reason the compiler emits bytecode rather than walking the AST.
 
 use crate::atom::Atom;
-use crate::vm::{Frame, Target};
+use crate::bytecode::Function;
+use crate::value::{FuncRef, Value};
+
+use super::interp::{Frame, Step, Suspend};
+use super::{ErrorKind, Host, ScriptError, Target, Vm};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct ThreadId(pub u32);
@@ -28,6 +32,430 @@ pub(crate) struct Thread {
     pub frames: Vec<Frame>,
     pub state: ThreadState,
     pub endons: Vec<(Target, Atom)>,
+}
+
+impl Vm {
+    /// Starts a new thread running `func` from its first instruction and
+    /// returns its id. The function must already be installed. Runs the
+    /// thread immediately, to its own suspend/return/error, before
+    /// returning -- see `spawn`. `now_ms` is the caller's own clock
+    /// reading (matching `run_frame`'s parameter of the same name) and
+    /// sets `self.now_ms` before the immediate run, so a `wait` the new
+    /// thread's first instructions hit resolves against the real clock
+    /// even when called before the first `run_frame` -- e.g. a host
+    /// starting level-load threads at startup, ahead of the frame loop.
+    ///
+    /// The returned `ThreadId` can already refer to a finished, errored,
+    /// or killed thread by the time this returns: the immediate run can
+    /// carry the thread all the way to completion (or a nested `spawn`
+    /// during that run can get it killed by its own endon), and this API
+    /// has no liveness query. A caller that needs to know only cares once
+    /// it goes looking for the thread again (e.g. to `notify` something
+    /// it expects still to be listening), at which point a vanished id is
+    /// already handled the same way a genuinely-later removal is.
+    pub fn start_thread(
+        &mut self,
+        host: &mut dyn Host,
+        now_ms: i32,
+        func: FuncRef,
+        recv: Option<Target>,
+        args: Vec<Value>,
+    ) -> ThreadId {
+        self.now_ms = now_ms;
+        let f = self
+            .functions
+            .get(&func)
+            .cloned()
+            .expect("start_thread target must be installed");
+        // Errors from this immediate run have nowhere to go through this
+        // signature (`-> ThreadId`, matching the public API); they are
+        // still logged by `step_thread` as they happen. A caller that
+        // needs to observe them starts the thread suspended (e.g. behind
+        // a leading `wait 0;`) and lets `run_frame` step it instead.
+        let mut errors = Vec::new();
+        self.spawn(host, func, &f, recv, args, &mut errors)
+    }
+
+    /// A thread whose immediate run itself spawns a thread nested this
+    /// deep runs the native Rust stack out (`spawn` -> `step_thread` ->
+    /// `step_frames` -> `spawn` -> ...) long before `budget` would catch
+    /// it, since each level only costs one `Call`-equivalent instruction
+    /// against its *own* fresh budget. No corpus script nests a `thread`
+    /// statement inside another spawned thread's own immediate execution
+    /// more than one or two levels deep; this is purely a backstop against
+    /// a spawn bomb (a thread whose first act is spawning another), not a
+    /// limit real scripts should ever approach.
+    const MAX_SPAWN_DEPTH: u32 = 64;
+
+    /// Pushes a new `Runnable` thread and immediately steps it to its own
+    /// suspend, return, or error — never leaving it merely `Runnable` for
+    /// a later scheduling pass to discover cold. Retail scripts pair a
+    /// `thread` statement with a `notify` a line or two later expecting
+    /// the spawned thread to have already reached its `waittill`
+    /// (`animscripts/predict.gsc:102-108`; 246 corpus sites do this within
+    /// three lines): a deferred spawn would let the notify fire before the
+    /// thread registers for it, dropping the event and hanging the
+    /// `waittill` forever. Spawning is therefore recursive — the spawned
+    /// thread's own immediate run may itself spawn and immediately run a
+    /// further thread — bounded by `MAX_SPAWN_DEPTH`, since each nesting
+    /// level costs Rust native stack, not `budget` (see its doc comment).
+    /// Past that depth the new thread is left merely `Runnable`, the
+    /// pre-immediate-run behavior, for the next `run_frame` to pick up
+    /// instead of stepping it here: still correct (nothing hangs, nothing
+    /// panics), it just loses "runs before its spawner continues" at a
+    /// depth no real script reaches.
+    pub(crate) fn spawn(
+        &mut self,
+        host: &mut dyn Host,
+        func: FuncRef,
+        f: &Function,
+        recv: Option<Target>,
+        args: Vec<Value>,
+        errors: &mut Vec<ScriptError>,
+    ) -> ThreadId {
+        let frame = self.make_frame(func, f, recv, args);
+        let id = ThreadId(self.next_thread);
+        self.next_thread += 1;
+        self.threads.push(Thread {
+            id,
+            frames: vec![frame],
+            state: ThreadState::Runnable,
+            endons: Vec::new(),
+        });
+        if self.spawn_depth < Self::MAX_SPAWN_DEPTH {
+            self.spawn_depth += 1;
+            self.step_thread(host, id, errors);
+            self.spawn_depth -= 1;
+        } else {
+            // Silent otherwise, this degrades into exactly the deadlock
+            // that running a spawned thread immediately (rather than
+            // merely `Runnable`, see this function's doc comment) exists
+            // to prevent: two threads left waiting on each other with
+            // nothing to say why. A named constant and the function that
+            // tripped it is enough to spot "a script nests `thread` this
+            // deep" during triage.
+            log::warn!(
+                "gsc: MAX_SPAWN_DEPTH ({}) exceeded spawning {}::{}; thread left runnable for the next scheduling pass instead of running immediately",
+                Self::MAX_SPAWN_DEPTH,
+                self.interner.resolve(func.file),
+                self.interner.resolve(func.name)
+            );
+        }
+        id
+    }
+
+    /// Kills every thread endon-registered against `(target, event)`, then
+    /// wakes every thread waiting on it, binding `args` into the locals the
+    /// `waittill` recorded (a missing argument writes `Undefined`). Both
+    /// passes walk `threads` in start order, so two waiters on the same
+    /// event always wake oldest first, and every endon kill lands before
+    /// any notify wake. Waking only flips a thread's state to `Runnable`;
+    /// it does not run here, so a notify can never reenter the VM.
+    pub fn notify(&mut self, target: impl Into<Target>, event: Atom, args: &[Value]) {
+        let target = target.into();
+        let mut i = 0;
+        while i < self.threads.len() {
+            if self.threads[i]
+                .endons
+                .iter()
+                .any(|&(t, e)| t == target && e == event)
+            {
+                self.threads.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        for t in &mut self.threads {
+            let matches_wait = matches!(
+                &t.state,
+                ThreadState::WaitingNotify { target: wt, event: we, .. }
+                    if *wt == target && *we == event
+            );
+            if !matches_wait {
+                continue;
+            }
+            let ThreadState::WaitingNotify { binds, .. } =
+                std::mem::replace(&mut t.state, ThreadState::Runnable)
+            else {
+                unreachable!("matches_wait only true for WaitingNotify");
+            };
+            let frame = t
+                .frames
+                .last_mut()
+                .expect("a waiting thread always retains its frame stack");
+            for (arg_idx, &slot) in binds.iter().enumerate() {
+                frame.locals[slot as usize] =
+                    args.get(arg_idx).copied().unwrap_or(Value::Undefined);
+            }
+        }
+    }
+
+    /// Steps the thread `id` -- assumed `Runnable`, a no-op otherwise or if
+    /// it no longer exists (see below) -- until it suspends, returns, or
+    /// errors, then updates its stored state or removes it, and flushes
+    /// any notify it queued along the way (`Op::Notify` is never resolved
+    /// from inside `step_frames` itself, so a notify can't reenter the
+    /// VM). A threaded call reached during the step recursively spawns and
+    /// immediately runs the new thread to *its* suspend/return/error
+    /// before this call returns (`spawn`), so by the time control comes
+    /// back here `self.threads` may have gained, lost, or reordered
+    /// entries; every write-back below re-resolves `id` to its current
+    /// index rather than trusting the one taken before the step, and
+    /// tolerates it having vanished -- a thread killed by an endon fired
+    /// from a thread it itself spawned, mid-step, is simply gone by the
+    /// time we look again, and there is nothing left to write back to.
+    /// Errors, whether this thread's own or a nested spawn's, are pushed
+    /// into `errors` as they occur; the caller (`run_frame`, or an
+    /// enclosing `step_thread` for a nested spawn) owns collecting them.
+    /// `Op::EndOn` inside `step_frames` writes straight into
+    /// `self.threads[..].endons` as soon as it executes (passed this
+    /// thread's own id), not through an accumulate-then-write-back vec
+    /// like `notifies`: an endon registered earlier in this very step has
+    /// to be visible to a notify a nested spawn fires later in the same
+    /// step (`main() { self endon("x"); thread killer(); ... }`, where
+    /// `killer`'s immediate run notifies `"x"` before this call ever
+    /// reaches its own suspend point to write anything back).
+    fn step_thread(&mut self, host: &mut dyn Host, id: ThreadId, errors: &mut Vec<ScriptError>) {
+        let Some(idx) = self.threads.iter().position(|t| t.id == id) else {
+            return;
+        };
+        if !matches!(self.threads[idx].state, ThreadState::Runnable) {
+            return;
+        }
+
+        let mut frames = std::mem::take(&mut self.threads[idx].frames);
+        let mut notifies = Vec::new();
+        let budget = self.budget;
+        let result = self.step_frames(host, &mut frames, budget, Some(id), &mut notifies, errors);
+
+        match result {
+            Ok(Step::Returned(_)) => {
+                if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                    self.threads.remove(idx);
+                }
+            }
+            Ok(Step::Suspend(Suspend::Wait { seconds })) => {
+                let delay_ms = (seconds.max(0.0) * 1000.0) as i32;
+                let deadline = self.now_ms + delay_ms;
+                if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                    self.threads[idx].frames = frames;
+                    self.threads[idx].state = ThreadState::WaitingUntil(deadline);
+                }
+            }
+            Ok(Step::Suspend(Suspend::WaitTill {
+                target,
+                event,
+                binds,
+            })) => {
+                if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                    self.threads[idx].frames = frames;
+                    self.threads[idx].state = ThreadState::WaitingNotify {
+                        target,
+                        event,
+                        binds,
+                    };
+                }
+            }
+            Ok(Step::Running) => {
+                let top = frames
+                    .last()
+                    .expect("budget exhaustion always leaves a frame on top");
+                let func = self
+                    .functions
+                    .get(&top.func)
+                    .expect("frame references an installed function");
+                let line = func.lines[(top.ip as usize).saturating_sub(1)];
+                let e = ScriptError {
+                    file: func.file,
+                    func: func.name,
+                    line,
+                    kind: ErrorKind::Budget,
+                };
+                self.log_script_error(&e);
+                errors.push(e);
+                if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                    self.threads.remove(idx);
+                }
+            }
+            Err(e) => {
+                self.log_script_error(&e);
+                errors.push(e);
+                if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
+                    self.threads.remove(idx);
+                }
+            }
+        }
+
+        for (target, event, args) in notifies {
+            self.notify(target, event, &args);
+        }
+    }
+
+    /// A ceiling on how many ids the id-ascending watermark walk visits in
+    /// one `run_frame` call -- not how many threads it actually steps:
+    /// the walk picks the next id regardless of state, and `step_thread`
+    /// is the one that returns early for a non-`Runnable` thread, so a
+    /// waiting thread costs an iteration here without being stepped.
+    /// `spawn`'s own `MAX_SPAWN_DEPTH` bounds any *one* nested spawn
+    /// chain's native-stack depth, but a spawn bomb's chain still unwinds
+    /// leaving one fresh dangling thread behind for this very walk to
+    /// pick straight back up -- so without a separate cap here, the walk
+    /// would discover an unending sequence of "one more thread" and this
+    /// call would never return, hanging the server's frame loop outright.
+    /// Since the watermark restarts at `None` every call, a VM holding
+    /// more live threads than this constant would walk only the same
+    /// lowest-id prefix every frame and never reach the rest -- silent,
+    /// permanent starvation past this many concurrently live threads.
+    /// 1,000 is still far above any real frame (CoD's own entity cap is
+    /// 1024) while keeping a spawn bomb's worst-case per-frame cost
+    /// bounded to roughly a tenth of what 10,000 cost.
+    const MAX_THREADS_PER_FRAME: u32 = 1_000;
+
+    /// Runs one server frame: promotes every `WaitingUntil` thread whose
+    /// deadline has passed to `Runnable`, then walks ids in ascending
+    /// order, up to `MAX_THREADS_PER_FRAME` of them, stepping
+    /// (`step_thread`) whichever are `Runnable`. A thread spawned
+    /// mid-frame (a threaded call, run immediately by `spawn`) is visited
+    /// too, since its id is higher than the watermark that admitted it;
+    /// the watermark is a `ThreadId`, not a cached index, since a step's
+    /// deferred notify can add, remove or reorder `self.threads` before
+    /// the walk reaches its next entry. The errors are collected and
+    /// returned rather than propagated, so one bad thread never stops the
+    /// rest of the server.
+    pub fn run_frame(&mut self, host: &mut dyn Host, now_ms: i32) -> Vec<ScriptError> {
+        self.now_ms = now_ms;
+        for t in &mut self.threads {
+            if let ThreadState::WaitingUntil(deadline) = t.state {
+                if deadline <= now_ms {
+                    t.state = ThreadState::Runnable;
+                }
+            }
+        }
+
+        let mut errors = Vec::new();
+        let mut last_id: Option<u32> = None;
+        let mut steps = 0;
+        // `self.threads` stays sorted by id -- `spawn` only ever appends
+        // (`next_thread` is monotonic), and `notify`'s kill pass only
+        // removes, which preserves order -- so the next id above the
+        // watermark is a binary search, not a linear scan: O(n log n)
+        // total for a frame instead of the O(n²) the old `filter` +
+        // `min_by_key` walk cost once a frame holds many live threads.
+        while steps < Self::MAX_THREADS_PER_FRAME {
+            let idx = self
+                .threads
+                .partition_point(|t| last_id.is_some_and(|l| t.id.0 <= l));
+            let Some(t) = self.threads.get(idx) else {
+                break;
+            };
+            let tid = t.id;
+            last_id = Some(tid.0);
+            self.step_thread(host, tid, &mut errors);
+            steps += 1;
+        }
+        if steps == Self::MAX_THREADS_PER_FRAME
+            && self
+                .threads
+                .partition_point(|t| last_id.is_some_and(|l| t.id.0 <= l))
+                < self.threads.len()
+        {
+            // Was silent before: a VM past this many concurrently live
+            // threads just stopped simulating the rest with nothing in the
+            // log to say why. Still doesn't step them -- reaping starved
+            // threads is a design question for the next project -- but a
+            // triage now has something to search for.
+            log::warn!(
+                "gsc: MAX_THREADS_PER_FRAME ({}) reached in one run_frame call; threads above the watermark are starved this frame",
+                Self::MAX_THREADS_PER_FRAME
+            );
+        }
+        errors
+    }
+
+    /// Runs `func` to completion on a fresh one-frame stack. A `wait` or
+    /// `waittill` it reaches on *this* frame stack is a script error, not
+    /// a hang: there is no scheduler here to come back to it later. But a
+    /// threaded call inside `func` spawns and immediately runs a real,
+    /// independent thread (`spawn`), and that thread's own `wait` is not
+    /// an error -- it's an ordinary suspend, resolved into a
+    /// `WaitingUntil` deadline the same way `run_frame`/`start_thread`
+    /// would. `now_ms` (matching their parameter of the same name) is
+    /// what that deadline is computed against; without it (before this
+    /// existed, `self.now_ms` stayed whatever the default or the last
+    /// `run_frame` call left it at) a thread spawned from inside a
+    /// `call_now`-driven script -- e.g. a host's `CodeCallback_
+    /// PlayerConnect`-style callback threading off a waiting worker --
+    /// could fire its wait on the very next `run_frame` instead of after
+    /// the real delay.
+    pub fn call_now(
+        &mut self,
+        host: &mut dyn Host,
+        now_ms: i32,
+        func: FuncRef,
+        recv: Option<Target>,
+        args: Vec<Value>,
+    ) -> Result<Value, ScriptError> {
+        self.now_ms = now_ms;
+        let f = self
+            .functions
+            .get(&func)
+            .cloned()
+            .ok_or_else(|| ScriptError {
+                file: func.file,
+                func: func.name,
+                line: 0,
+                kind: ErrorKind::Custom("no such function".to_string()),
+            })?;
+        let mut frames = vec![self.make_frame(func, &f, recv, args)];
+        let mut notifies = Vec::new();
+        // Errors from a threaded call spawned (and immediately run) during
+        // this call have nowhere to go through this function's `Result
+        // <Value, ScriptError>` either; they are still logged as they
+        // happen (`step_thread`), same as `start_thread`.
+        let mut errors = Vec::new();
+        let budget = self.budget;
+        // No real thread to register an `endon` against here (`None`); a
+        // one-shot `call_now` script that calls `endon` simply drops it.
+        let result = self.step_frames(host, &mut frames, budget, None, &mut notifies, &mut errors);
+        // A notify fired before the failure below still had its effect.
+        for (target, event, args) in notifies {
+            self.notify(target, event, &args);
+        }
+        match result? {
+            Step::Returned(v) => Ok(v),
+            Step::Suspend(_) => {
+                let top = frames
+                    .last()
+                    .expect("a suspend always leaves a frame on top");
+                let f = self
+                    .functions
+                    .get(&top.func)
+                    .expect("frame references an installed function");
+                Err(ScriptError {
+                    file: f.file,
+                    func: f.name,
+                    line: f.lines[(top.ip as usize).saturating_sub(1)],
+                    kind: ErrorKind::SuspendedInImmediateCall,
+                })
+            }
+            Step::Running => {
+                let top = frames
+                    .last()
+                    .expect("budget exhaustion always leaves a frame on top");
+                let f = self
+                    .functions
+                    .get(&top.func)
+                    .expect("frame references an installed function");
+                Err(ScriptError {
+                    file: f.file,
+                    func: f.name,
+                    line: f.lines[(top.ip as usize).saturating_sub(1)],
+                    kind: ErrorKind::Budget,
+                })
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -508,6 +936,36 @@ mod tests {
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
         vm.start_thread(&mut host, 5_000, f, None, vec![]);
+        assert_eq!(vm.thread_count(), 1, "f is alive, waiting on its own wait");
+
+        vm.run_frame(&mut host, 5_000);
+        assert!(
+            !host.calls.iter().any(|(n, _)| n == "done"),
+            "not due yet -- 6_000, not 1_000"
+        );
+        vm.run_frame(&mut host, 6_000);
+        assert!(host.calls.iter().any(|(n, _)| n == "done"), "due now");
+    }
+
+    /// A thread spawned by a `call_now`-driven script (a host callback
+    /// like `CodeCallback_PlayerConnect`, say) is a real, independent
+    /// thread, not the throwaway one-shot stack `call_now` itself runs
+    /// on -- its own `wait` is an ordinary suspend, not an immediate-call
+    /// error, and has to resolve against `call_now`'s caller's clock
+    /// reading, not always 0. `f`'s `wait 1` (1000 ms) taken during
+    /// `main`'s `call_now`-driven run at `now_ms = 5_000` must deadline at
+    /// 6_000, not 1_000: a `run_frame` at 5_000 (right after) must not
+    /// fire it, and one at 6_000 must.
+    #[test]
+    fn call_now_threads_a_wait_against_its_own_now_ms_not_zero() {
+        let ast =
+            crate::parse::parse_file("main() { thread f(); } f() { wait 1; done(); }").unwrap();
+        let mut vm = Vm::new();
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        vm.call_now(&mut host, 5_000, main, None, vec![]).unwrap();
         assert_eq!(vm.thread_count(), 1, "f is alive, waiting on its own wait");
 
         vm.run_frame(&mut host, 5_000);
