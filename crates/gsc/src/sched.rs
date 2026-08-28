@@ -317,12 +317,14 @@ mod tests {
     /// An `endon` registered earlier in a step must be visible to a notify
     /// fired by a thread spawned *later in that same step*, not just to
     /// notifies that arrive after the step returns: `main` registers its
-    /// endon, then threads `killer`, which runs immediately (this round's
-    /// item 1) and notifies the very event `main` just registered against,
-    /// all before `main`'s own step ever reaches `wait 5`. If the endon
-    /// were only visible once `main` suspends (the bug this test pins),
-    /// the notify would find no waiter, and `main` would wake up 5 "ms"
-    /// later and run `done()` instead of having been killed immediately.
+    /// endon, then threads `killer`, which runs immediately (a threaded
+    /// call always runs its callee to its own suspend/return before the
+    /// caller's step continues, see `Vm::spawn`) and notifies the very
+    /// event `main` just registered against, all before `main`'s own step
+    /// ever reaches `wait 5`. Were the endon visible only once `main`
+    /// suspends, the notify would find no waiter, and `main` would wake up
+    /// 5 "ms" later and run `done()` instead of having been killed
+    /// immediately.
     #[test]
     fn an_endon_registered_before_a_nested_spawn_is_visible_to_that_spawns_own_notify() {
         let mut vm = vm_with(
@@ -340,12 +342,12 @@ mod tests {
         assert!(!host.calls.iter().any(|(n, _)| n == "done"));
     }
 
-    /// `start_thread`'s immediate run can error just as easily as
-    /// `run_frame`-driven one can; that path (the thread is removed, not
-    /// left dangling or panicking) had no direct coverage until now, since
-    /// the round-1 error tests were rewritten to route their error through
-    /// `run_frame` instead (their leading `wait 0;`), for the unrelated
-    /// reason that `start_thread` has nowhere to return the error to.
+    /// `start_thread`'s immediate run can error just as easily as a
+    /// `run_frame`-driven one can; this pins that path directly (the
+    /// thread is removed, not left dangling or panicking). The budget and
+    /// recursion tests above route their error through `run_frame` instead
+    /// (their leading `wait 0;`), for the unrelated reason that
+    /// `start_thread` has nowhere to return the error to.
     #[test]
     fn a_thread_that_errors_during_start_threads_immediate_run_is_removed() {
         let mut vm = vm_with(r#"main() { double("no"); }"#);

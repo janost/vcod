@@ -1197,11 +1197,12 @@ mod tests {
     }
 
     // A bare (receiverless) `thread` at statement level whose target is a
-    // namespaced path, not a plain name or a deref: the largest single
-    // share of the first census's failures (76 of 138, all "expected
-    // LParen, found Backslash"), and covered only by the census until now
-    // — the deref form is covered above, and the receiver-attached form by
-    // `method_call_target_can_be_namespaced`.
+    // namespaced path, not a plain name or a deref: this shape accounted
+    // for the largest single share of the corpus census's parse failures
+    // (76 of 138, all "expected LParen, found Backslash") before this rule
+    // was handled, and is pinned here as a focused unit test rather than
+    // relying on the census alone -- the deref form is covered above, and
+    // the receiver-attached form by `method_call_target_can_be_namespaced`.
     #[test]
     fn statement_level_thread_can_target_a_namespaced_path() {
         let f = file(r#"m() { thread maps\_utility::foo(); }"#);

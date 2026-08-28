@@ -452,10 +452,12 @@ impl Vm {
             self.spawn_depth -= 1;
         } else {
             // Silent otherwise, this degrades into exactly the deadlock
-            // this round's immediate-run fix removed: two threads left
-            // waiting on each other with nothing to say why. A named
-            // constant and the function that tripped it is enough to spot
-            // "a script nests `thread` this deep" during triage.
+            // that running a spawned thread immediately (rather than
+            // merely `Runnable`, see this function's doc comment) exists
+            // to prevent: two threads left waiting on each other with
+            // nothing to say why. A named constant and the function that
+            // tripped it is enough to spot "a script nests `thread` this
+            // deep" during triage.
             log::warn!(
                 "gsc: MAX_SPAWN_DEPTH ({}) exceeded spawning {}::{}; thread left runnable for the next scheduling pass instead of running immediately",
                 Self::MAX_SPAWN_DEPTH,
@@ -1233,8 +1235,10 @@ impl Vm {
                 // `endon` is resolved immediately below instead of queued,
                 // unlike `notify`: it only ever adds a registration, never
                 // runs anything, so there is no reentrancy risk, and
-                // queuing it would reopen exactly the visibility gap this
-                // round closed (see `step_thread`'s doc comment).
+                // queuing it would reopen the visibility gap `step_thread`'s
+                // doc comment describes (an endon registered earlier in a
+                // step must be visible to a notify a nested spawn fires
+                // later in that same step).
                 Op::Notify { argc } => {
                     let mut args = Vec::with_capacity(argc as usize);
                     for _ in 0..argc {
@@ -1266,7 +1270,7 @@ impl Vm {
                     })?;
                     // No thread to register against under `call_now`
                     // (`thread_id` is `None` there); the registration is
-                    // simply dropped, same as before this round.
+                    // simply dropped.
                     if let Some(id) = thread_id {
                         if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
                             self.threads[idx].endons.push((target, event));
