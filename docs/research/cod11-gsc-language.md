@@ -377,13 +377,16 @@ for whoever picks up the mover-entity builtins in a later sub-project.
 
 The engine interns every script string (`GScr_AllocString`), and matches
 identifiers, field names, file paths and event names (`notify`/`waittill`/
-`endon`) case-insensitively — `vcod-gsc`'s interner (`crates/gsc/src/atom.rs`)
-folds every string to its lowercase form for identity, so two spellings of
-one key share one `Atom`, but stores and returns the *first* spelling it
-saw, verbatim (`Interner::resolve`), so a script-built display string never
-gets silently lowercased. `Value::String`/`Localized`/`Anim` all resolve
-through the same table as identifiers, since the corpus gives no reason to
-maintain two interners.
+`endon`) case-insensitively, but compares string *values* and array keys
+case-sensitively (measured; see below). `vcod-gsc`'s interner
+(`crates/gsc/src/atom.rs`) therefore has two entry points over one storage
+vector: `intern_folded` dedups on the lowercased text, so two spellings of
+an identifier-role key share one `Atom`, and `intern` dedups on the exact
+text, so `"ABC"` and `"abc"` are two atoms. Both store the spelling they
+were given verbatim, and `Interner::resolve` returns it, so a script-built
+display string never gets silently lowercased. Whichever entry point sees a
+folded key first owns it, so the two can never hand out different atoms for
+one identifier.
 
 **Re-verified against the real parser and compile census:** walking every
 string literal in the corpus and grouping by its case-folded form finds 86
@@ -396,28 +399,35 @@ weapon, tag, animation-tree-model or asset-path names (`Panzerfaust`/
 `waittill`/`endon` (e.g. `"SPAWNED"`/`"spawned"`, `"DIED"`/`"died"`), and 17
 are used at least once as a literal `array["key"]` index.
 
-**Settled against retail, and vcod is wrong here:** §9's measurement shows
-retail folds identifiers and field names but treats string *values* and array
-keys as case-sensitive — `"ABC" == "abc"` is false, and `a["medFire"]` and
-`a["medfire"]` are two separate entries. vcod folds all four through one
-identity table, so two spellings share one `Atom` and the original text is
-unrecoverable. Folding is genuinely required for the identifier roles: a
-`waittill` on one spelling of an event name has to see a `notify` fired with
-another. It is wrong for the value roles. The fix is the one this section
-already anticipated — a second, unfolded lookup for `Value::String` and array
-keys, distinct from the folded one identifiers use — and the count above
-splits accordingly: of the 86 multi-spelling keys, those used as identifiers
-stay one atom and those used as array keys or literals become distinct.
+**Settled against retail** (`crates/gsc/tests/fixtures/semantics/retail-captures.txt`,
+`# probe_field_case`, `# probe_arraykey_case`, `# probe_cmp`): retail folds
+identifiers and field names but treats string values and array keys as
+case-sensitive — `level.myField` reads back through `level.myfield`, while
+`a["medFire"]` and `a["medfire"]` are two entries with a `.size` of 2, and
+`"ABC" == "abc"` is false. vcod originally folded all four through one
+identity table; it now routes each call site to the matching entry point,
+and the count above splits with it: of the 86 multi-spelling keys, those
+used as identifiers, field names, paths or event names still collapse onto
+one atom, and those used as array keys or string literals no longer do.
 
-**A second, smaller divergence from the same design:** when two spellings
-of one key collapse onto one atom, `resolve` always returns whichever
-spelling was interned first, so which of the two a script observes (via
-`print`, string concatenation, etc.) depends on load order, not on which
-spelling that particular call site used. Storing every spelling and
-comparing case-insensitively at read time would get this exactly right, at
-the cost of giving `Value` a custom `PartialEq` that any future `==` on it
-would need to know about — judged not worth it for a collision bounded at
-86 keys, none of them display text.
+Folding is genuinely required for the event-name role, and that is the one
+place the split is dangerous: a `waittill` on one spelling has to see a
+`notify` fired with another, and if it stops the thread hangs rather than
+erroring. An event name is written as a string literal, so it reaches the VM
+case-preserved; `Op::WaitTill`, `Op::Notify`, `Op::EndOn` and the host-facing
+`Vm::notify` each map it through `Interner::fold_atom` before matching. That
+covers a dynamically built name (`self notify(level.eventName)`) too, which
+compile-time routing could not.
+
+**A second, smaller divergence from the same design:** when two spellings of
+one identifier-role key collapse onto one atom, `resolve` always returns
+whichever spelling was interned first, so which of the two a script observes
+(via `print`, string concatenation, etc.) depends on load order, not on which
+spelling that particular call site used. Storing every spelling and comparing
+case-insensitively at read time would get this exactly right, at the cost of
+giving `Value` a custom `PartialEq` that any future `==` on it would need to
+know about — judged not worth it for a collision now bounded to the
+identifier roles alone.
 
 ## 9. Semantics measured against retail
 

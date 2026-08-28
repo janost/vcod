@@ -686,6 +686,10 @@ impl Vm {
                             "waittill needs a string event name",
                         )));
                     };
+                    // Event names fold, string values do not, so the name a
+                    // literal or a concatenation produced is folded here
+                    // rather than at the interner (atom.rs).
+                    let event = self.interner.fold_atom(event);
                     return Ok(Step::Suspend(Suspend::WaitTill {
                         target,
                         event,
@@ -712,6 +716,7 @@ impl Vm {
                     let Value::String(event) = event else {
                         return Err(err(ErrorKind::BadType("notify needs a string event name")));
                     };
+                    let event = self.interner.fold_atom(event);
                     let target = as_target(recv).ok_or_else(|| {
                         err(ErrorKind::BadType(
                             "notify needs an entity or struct receiver",
@@ -725,6 +730,7 @@ impl Vm {
                     let Value::String(event) = event else {
                         return Err(err(ErrorKind::BadType("endon needs a string event name")));
                     };
+                    let event = self.interner.fold_atom(event);
                     let target = as_target(recv).ok_or_else(|| {
                         err(ErrorKind::BadType(
                             "endon needs an entity or struct receiver",

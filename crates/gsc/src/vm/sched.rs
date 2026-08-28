@@ -151,8 +151,12 @@ impl Vm {
     /// event always wake oldest first, and every endon kill lands before
     /// any notify wake. Waking only flips a thread's state to `Runnable`;
     /// it does not run here, so a notify can never reenter the VM.
+    ///
+    /// The event folds first: `waittill`/`endon` store the folded atom, and
+    /// the name here may have arrived as any spelling of it (atom.rs).
     pub fn notify(&mut self, target: impl Into<Target>, event: Atom, args: &[Value]) {
         let target = target.into();
+        let event = self.interner.fold_atom(event);
         let mut i = 0;
         while i < self.threads.len() {
             if self.threads[i]
@@ -506,7 +510,7 @@ mod tests {
 
         let menu = vm.interner_mut().intern("team_americangerman");
         let resp = vm.interner_mut().intern("allies");
-        let ev = vm.interner_mut().intern("menuresponse");
+        let ev = vm.interner_mut().intern_folded("menuresponse");
         vm.notify(EntId(4), ev, &[Value::String(menu), Value::String(resp)]);
         vm.run_frame(&mut host, 50);
 
@@ -522,7 +526,7 @@ mod tests {
         vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1))), vec![]);
         vm.run_frame(&mut host, 0);
 
-        let ev = vm.interner_mut().intern("e");
+        let ev = vm.interner_mut().intern_folded("e");
         vm.notify(EntId(2), ev, &[]);
         vm.run_frame(&mut host, 50);
         assert!(!host.calls.iter().any(|(n, _)| n == "done"));
@@ -538,11 +542,61 @@ mod tests {
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 1);
 
-        let ev = vm.interner_mut().intern("death");
+        let ev = vm.interner_mut().intern_folded("death");
         vm.notify(EntId(7), ev, &[]);
         vm.run_frame(&mut host, 2000);
         assert_eq!(vm.thread_count(), 0, "killed, not resumed");
         assert!(!host.calls.iter().any(|(n, _)| n == "done"));
+    }
+
+    /// The failure this whole case-folding split has to not cause: string
+    /// values are case-sensitive now, so the two event-name literals below
+    /// are two atoms, and only `Interner::fold_atom` at the op keeps them
+    /// matching. If it stopped, the waiter would hang forever and nothing
+    /// would error. `brecourt.gsc` ships exactly this shape.
+    #[test]
+    fn a_notify_wakes_a_waittill_that_spelled_the_event_differently() {
+        let mut vm = vm_with(
+            r#"main() { self waittill("Explode"); done(); } pump() { self notify("explode"); }"#,
+        );
+        let mut host = TestHost::default();
+        let waiter = vm.func_ref("test/script", "main");
+        let pump = vm.func_ref("test/script", "pump");
+        vm.start_thread(&mut host, 0, waiter, Some(Target::Entity(EntId(3))), vec![]);
+        vm.run_frame(&mut host, 0);
+        assert_eq!(vm.thread_count(), 1, "waiting");
+
+        vm.start_thread(&mut host, 50, pump, Some(Target::Entity(EntId(3))), vec![]);
+        vm.run_frame(&mut host, 50);
+        assert!(host.calls.iter().any(|(n, _)| n == "done"), "woken");
+    }
+
+    /// The same rule from the host side: a host interning an event name
+    /// case-sensitively still reaches a `waittill` and an `endon` spelled
+    /// the other way.
+    #[test]
+    fn a_host_notify_folds_the_event_name_it_was_given() {
+        let mut vm = vm_with(
+            r#"waiter() { self waittill("PlayerConnect"); done(); }
+               dier() { self endon("PlayerConnect"); wait 1; survived(); }"#,
+        );
+        let mut host = TestHost::default();
+        let waiter = vm.func_ref("test/script", "waiter");
+        let dier = vm.func_ref("test/script", "dier");
+        vm.start_thread(&mut host, 0, waiter, Some(Target::Entity(EntId(5))), vec![]);
+        vm.start_thread(&mut host, 0, dier, Some(Target::Entity(EntId(5))), vec![]);
+        vm.run_frame(&mut host, 0);
+        assert_eq!(vm.thread_count(), 2);
+
+        let ev = vm.interner_mut().intern("playerCONNECT");
+        vm.notify(EntId(5), ev, &[]);
+        vm.run_frame(&mut host, 2000);
+        assert!(host.calls.iter().any(|(n, _)| n == "done"), "waiter woken");
+        assert!(
+            !host.calls.iter().any(|(n, _)| n == "survived"),
+            "endon killed the other thread"
+        );
+        assert_eq!(vm.thread_count(), 0);
     }
 
     #[test]
@@ -633,7 +687,7 @@ mod tests {
         vm.start_thread(&mut host, 0, fa, Some(Target::Entity(EntId(1))), vec![]);
         vm.start_thread(&mut host, 0, fb, Some(Target::Entity(EntId(1))), vec![]);
         vm.run_frame(&mut host, 0);
-        let ev = vm.interner_mut().intern("e");
+        let ev = vm.interner_mut().intern_folded("e");
         vm.notify(EntId(1), ev, &[]);
         vm.run_frame(&mut host, 50);
         let order: Vec<&str> = host.calls.iter().map(|(n, _)| n.as_str()).collect();

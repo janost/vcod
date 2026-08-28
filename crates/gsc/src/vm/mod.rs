@@ -66,8 +66,15 @@ pub struct Cx<'a> {
 }
 
 impl Cx<'_> {
+    /// For a string value a builtin returns or stores. Case-preserving; a
+    /// name the engine matches case-insensitively wants `intern_folded`.
     pub fn intern(&mut self, s: &str) -> Atom {
         self.interner.intern(s)
+    }
+
+    /// For a field name, function name, file path or event name (atom.rs).
+    pub fn intern_folded(&mut self, s: &str) -> Atom {
+        self.interner.intern_folded(s)
     }
 
     pub fn resolve(&self, a: Atom) -> &str {
@@ -225,7 +232,7 @@ impl Vm {
         let level = heap.new_struct();
         let game = heap.new_struct();
         let mut interner = Interner::default();
-        let size_atom = interner.intern("size");
+        let size_atom = interner.intern_folded("size");
         Vm {
             interner,
             heap,
@@ -328,8 +335,8 @@ impl Vm {
 
     pub fn func_ref(&mut self, path: &str, name: &str) -> FuncRef {
         FuncRef {
-            file: self.interner.intern(path),
-            name: self.interner.intern(name),
+            file: self.interner.intern_folded(path),
+            name: self.interner.intern_folded(name),
         }
     }
 }
@@ -609,8 +616,8 @@ pub(crate) mod tests {
     #[test]
     fn install_rejects_a_function_that_fails_the_stack_walk() {
         let mut vm = Vm::new();
-        let file = vm.interner_mut().intern("test/bad");
-        let name = vm.interner_mut().intern("main");
+        let file = vm.interner_mut().intern_folded("test/bad");
+        let name = vm.interner_mut().intern_folded("main");
         let bad = crate::bytecode::Function {
             file,
             name,
@@ -703,13 +710,34 @@ pub(crate) mod tests {
         assert!(matches!(e.kind, ErrorKind::BadType(_)));
     }
 
-    /// The interner folds atom identity case-insensitively, and array keys
-    /// intern the same way field names do, so two differently-cased string
-    /// literals used as a key collide on write and read alike. The corpus
-    /// has three such pairs; nothing pinned this before.
+    /// Array keys are case-sensitive on retail: `a["medFire"]` and
+    /// `a["medfire"]` are two entries
+    /// (tests/fixtures/semantics/retail-captures.txt, `# probe_arraykey_case`,
+    /// which reports size 2 and reads 1 and 2 back). Field names are not; see
+    /// `fields_fold_case`.
     #[test]
-    fn array_keys_fold_case_like_field_names() {
-        let (v, _, _) = run(r#"main() { a = []; a["medFire"] = 1; return a["medfire"]; }"#);
+    fn array_keys_are_case_sensitive_unlike_field_names() {
+        let (v, _, _) =
+            run(r#"main() { a = []; a["medFire"] = 1; a["medfire"] = 2; return a.size; }"#);
+        assert_eq!(v, Value::Int(2));
+        let (v, _, _) =
+            run(r#"main() { a = []; a["medFire"] = 1; a["medfire"] = 2; return a["medFire"]; }"#);
+        assert_eq!(v, Value::Int(1));
+    }
+
+    /// The other half of the same rule: a field name still folds.
+    #[test]
+    fn fields_fold_case() {
+        let (v, _, _) = run(r#"main() { level.myField = 7; return level.myfield; }"#);
+        assert_eq!(v, Value::Int(7));
+    }
+
+    /// And string values do not: `# probe_cmp` has `"ABC" == "abc"` false.
+    #[test]
+    fn string_equality_is_case_sensitive() {
+        let (v, _, _) = run(r#"main() { return "ABC" == "abc"; }"#);
+        assert_eq!(v, Value::Int(0));
+        let (v, _, _) = run(r#"main() { return "abc" == "abc"; }"#);
         assert_eq!(v, Value::Int(1));
     }
 
@@ -721,7 +749,7 @@ pub(crate) mod tests {
     #[test]
     fn a_host_can_allocate_and_populate_a_struct_and_array_and_reach_level_and_game() {
         let mut vm = Vm::new();
-        let hp = vm.interner_mut().intern("hp");
+        let hp = vm.interner_mut().intern_folded("hp");
         let s = vm.heap_mut().new_struct();
         vm.heap_mut().set_field(s, hp, Value::Int(3));
         assert_eq!(vm.heap().get_field(s, hp), Value::Int(3));
@@ -734,7 +762,7 @@ pub(crate) mod tests {
             Value::Int(9)
         );
 
-        let mark = vm.interner_mut().intern("mark");
+        let mark = vm.interner_mut().intern_folded("mark");
         let level_id = match vm.level() {
             Target::Struct(id) => id,
             Target::Entity(_) => unreachable!("level is always a struct"),
