@@ -125,7 +125,12 @@ impl Loader {
         // pointer lowers to a `Value::Function` constant instead, since
         // `Expr::FuncRef` is an AST node compilation resolves away. Both
         // already carry a canonical file, resolved at compile time.
-        let mut refs: HashSet<String> = HashSet::new();
+        // A `BTreeSet`, not a `HashSet`: this drives the recursive load
+        // below, so hash iteration order would make which file a broken
+        // reference gets blamed on, and which spelling of a folded key
+        // `resolve` keeps (`atom.rs`'s "whichever the compiler saw first"),
+        // nondeterministic run to run.
+        let mut refs: BTreeSet<String> = BTreeSet::new();
         for f in &fns {
             for op in &f.code {
                 if let Op::Call { func, .. } = op {
@@ -273,6 +278,23 @@ mod tests {
         let mut l = Loader::new(Box::new(src));
         l.load(&mut vm, "a").unwrap();
         assert_eq!(l.loaded_count(), 2);
+    }
+
+    /// `refs` (the set driving recursive loading) is a `BTreeSet`, so with
+    /// several broken references from one file, the one reported is always
+    /// the alphabetically first — deterministic run to run, not whichever a
+    /// `HashSet`'s hash-seed-dependent iteration order happened to visit
+    /// first.
+    #[test]
+    fn several_broken_references_always_blame_the_alphabetically_first() {
+        let src = source(&[(
+            "a",
+            r#"main() { z\gone::main(); a\gone::main(); m\gone::main(); }"#,
+        )]);
+        let mut vm = Vm::new();
+        let mut l = Loader::new(Box::new(src));
+        let e = l.load(&mut vm, "a").unwrap_err();
+        assert_eq!(e.path, "a/gone");
     }
 
     #[test]
