@@ -678,6 +678,31 @@ impl Vm {
         &self.interner
     }
 
+    /// The struct/array store, for a host that needs to allocate an array
+    /// or struct (`getentarray`, `spawnstruct`) or read/write a field or
+    /// element from outside the instruction loop. `Heap`'s own methods are
+    /// the API — bounds-checked, so an id the host mishandles reads
+    /// `Undefined` or drops a write rather than panicking.
+    pub fn heap(&self) -> &Heap {
+        &self.heap
+    }
+
+    pub fn heap_mut(&mut self) -> &mut Heap {
+        &mut self.heap
+    }
+
+    /// `level` as a call/notify/waittill/endon target, for a host driving
+    /// e.g. `level notify(...)` or reading `level.callbackStartGameType`
+    /// from outside a script.
+    pub fn level(&self) -> Target {
+        Target::Struct(self.level)
+    }
+
+    /// `game`, the other heap struct every `Vm` preallocates.
+    pub fn game(&self) -> Target {
+        Target::Struct(self.game)
+    }
+
     /// Every installed function, for a loader's cross-file scan and
     /// builtin pre-scan.
     pub fn functions(&self) -> impl Iterator<Item = &Function> {
@@ -1657,5 +1682,35 @@ pub(crate) mod tests {
     fn array_keys_fold_case_like_field_names() {
         let (v, _, _) = run(r#"main() { a = []; a["medFire"] = 1; return a["medfire"]; }"#);
         assert_eq!(v, Value::Int(1));
+    }
+
+    /// A host builtin (`getentarray`, `spawnstruct`) needs to mint a
+    /// struct/array and populate it from outside the instruction loop, and
+    /// to reach `level`/`game` to notify or read a field on them; all four
+    /// go through `Vm::heap`/`heap_mut`/`level`/`game`, not through
+    /// crate-internal knowledge of allocation order.
+    #[test]
+    fn a_host_can_allocate_and_populate_a_struct_and_array_and_reach_level_and_game() {
+        let mut vm = Vm::new();
+        let hp = vm.interner_mut().intern("hp");
+        let s = vm.heap_mut().new_struct();
+        vm.heap_mut().set_field(s, hp, Value::Int(3));
+        assert_eq!(vm.heap().get_field(s, hp), Value::Int(3));
+
+        let a = vm.heap_mut().new_array();
+        vm.heap_mut()
+            .set_index(a, crate::heap::ArrayKey::Int(0), Value::Int(9));
+        assert_eq!(
+            vm.heap().get_index(a, crate::heap::ArrayKey::Int(0)),
+            Value::Int(9)
+        );
+
+        let mark = vm.interner_mut().intern("mark");
+        let level_id = match vm.level() {
+            Target::Struct(id) => id,
+            Target::Entity(_) => unreachable!("level is always a struct"),
+        };
+        vm.heap_mut().set_field(level_id, mark, Value::Int(1));
+        assert_ne!(vm.level(), vm.game());
     }
 }
