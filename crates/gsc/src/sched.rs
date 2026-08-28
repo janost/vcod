@@ -471,6 +471,35 @@ mod tests {
         );
     }
 
+    /// Past `MAX_THREADS_PER_FRAME` (1,000) live threads, the ones above
+    /// the id watermark are starved for the frame -- `run_frame`'s walk
+    /// still only visits the lowest 1,000 ids, whether that walk is the old
+    /// linear scan or the `partition_point` binary search it was replaced
+    /// with. This pins the behavior (and, incidentally, that the
+    /// replacement didn't change it) rather than the `log::warn!` that now
+    /// also fires when it happens, which nothing in this suite captures.
+    #[test]
+    fn starving_past_max_threads_per_frame_leaves_the_excess_unstepped_this_frame() {
+        let mut vm = vm_with("main() { wait 1; done(); }");
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        for _ in 0..1002 {
+            vm.start_thread(&mut host, 0, f, None, vec![]);
+        }
+        assert_eq!(
+            vm.thread_count(),
+            1002,
+            "all spawned, all waiting on their own wait"
+        );
+
+        vm.run_frame(&mut host, 2000);
+        assert_eq!(
+            vm.thread_count(),
+            2,
+            "the two threads past the watermark were starved this frame"
+        );
+    }
+
     #[test]
     fn start_thread_threads_a_wait_against_its_own_now_ms_not_zero() {
         let mut vm = vm_with("main() { thread f(); } f() { wait 1; done(); }");

@@ -667,18 +667,40 @@ impl Vm {
 
         let mut errors = Vec::new();
         let mut last_id: Option<u32> = None;
-        for _ in 0..Self::MAX_THREADS_PER_FRAME {
-            let next = self
+        let mut steps = 0;
+        // `self.threads` stays sorted by id -- `spawn` only ever appends
+        // (`next_thread` is monotonic), and `notify`'s kill pass only
+        // removes, which preserves order -- so the next id above the
+        // watermark is a binary search, not a linear scan: O(n log n)
+        // total for a frame instead of the O(n²) the old `filter` +
+        // `min_by_key` walk cost once a frame holds many live threads.
+        while steps < Self::MAX_THREADS_PER_FRAME {
+            let idx = self
                 .threads
-                .iter()
-                .filter(|t| last_id.is_none_or(|l| t.id.0 > l))
-                .min_by_key(|t| t.id.0)
-                .map(|t| t.id);
-            let Some(tid) = next else {
+                .partition_point(|t| last_id.is_some_and(|l| t.id.0 <= l));
+            let Some(t) = self.threads.get(idx) else {
                 break;
             };
+            let tid = t.id;
             last_id = Some(tid.0);
             self.step_thread(host, tid, &mut errors);
+            steps += 1;
+        }
+        if steps == Self::MAX_THREADS_PER_FRAME
+            && self
+                .threads
+                .partition_point(|t| last_id.is_some_and(|l| t.id.0 <= l))
+                < self.threads.len()
+        {
+            // Was silent before: a VM past this many concurrently live
+            // threads just stopped simulating the rest with nothing in the
+            // log to say why. Still doesn't step them -- reaping starved
+            // threads is a design question for the next project -- but a
+            // triage now has something to search for.
+            log::warn!(
+                "gsc: MAX_THREADS_PER_FRAME ({}) reached in one run_frame call; threads above the watermark are starved this frame",
+                Self::MAX_THREADS_PER_FRAME
+            );
         }
         errors
     }
