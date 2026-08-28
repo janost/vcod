@@ -161,8 +161,8 @@ impl<'a> Parser<'a> {
                 }
                 Tok::Thread => {
                     self.bump();
-                    let name = self.ident_name()?;
-                    base = self.finish_call(Some(Box::new(base)), CallTarget::Name(name), true)?;
+                    let target = self.call_target()?;
+                    base = self.finish_call(Some(Box::new(base)), target, true)?;
                 }
                 Tok::Ident(name) => {
                     self.bump();
@@ -192,6 +192,25 @@ impl<'a> Parser<'a> {
             return Ok(CallTarget::Path { file, name });
         }
         Ok(CallTarget::Name(first))
+    }
+
+    // A call target in callee position generally: `[[ expr ]]` (a
+    // dereferenced function pointer, e.g. `thread [[shoot]](turret);`) or
+    // an identifier, optionally namespaced via `call_target_from`. Used
+    // wherever a bare callee is expected, not attached to a `.`/`[]` chain.
+    fn call_target(&mut self) -> Result<CallTarget, ParseError> {
+        if *self.peek() == Tok::LBracket
+            && self.t.get(self.i + 1).map(|s| &s.tok) == Some(&Tok::LBracket)
+        {
+            self.bump(); // first `[`
+            self.bump(); // second `[`
+            let inner = self.expr()?;
+            self.expect(&Tok::RBracket)?;
+            self.expect(&Tok::RBracket)?;
+            return Ok(CallTarget::Deref(Box::new(inner)));
+        }
+        let name = self.ident_name()?;
+        self.call_target_from(name)
     }
 
     // `expect(LParen)`, then `args_list()`, then the `Expr::Call` node.
@@ -451,10 +470,11 @@ impl<'a> Parser<'a> {
             // it handles is the receiver-attached one in `postfix`. A
             // receiverless `thread f();` only occurs in statement position,
             // so this is the one place that consumes the keyword itself.
+            // The target may itself be a deref, e.g. `thread [[shoot]]();`.
             Tok::Thread => {
                 self.bump();
-                let name = self.ident_name()?;
-                let call = self.finish_call(None, CallTarget::Name(name), true)?;
+                let target = self.call_target()?;
+                let call = self.finish_call(None, target, true)?;
                 self.expect(&Tok::Semi)?;
                 Ok(vec![Stmt::Expr(call)])
             }
@@ -953,6 +973,31 @@ mod tests {
         };
         assert_eq!(n, "waittill");
         assert_eq!(args.len(), 3);
+    }
+
+    /// `animscripts/mg42/common.gsc:42` `thread [[shoot]](turret);` and
+    /// `maps/_utility.gsc:181` `level thread [[process]](ents[i], var);`.
+    #[test]
+    fn threaded_calls_can_target_a_dereferenced_pointer() {
+        let f = file(r#"m() { thread [[shoot]](turret); level thread [[process]](x); }"#);
+        let Stmt::Expr(Expr::Call {
+            recv: None,
+            target: CallTarget::Deref(_),
+            threaded: true,
+            ..
+        }) = &f.funcs[0].body[0]
+        else {
+            panic!("{:?}", f.funcs[0].body[0])
+        };
+        let Stmt::Expr(Expr::Call {
+            recv: Some(_),
+            target: CallTarget::Deref(_),
+            threaded: true,
+            ..
+        }) = &f.funcs[0].body[1]
+        else {
+            panic!("{:?}", f.funcs[0].body[1])
+        };
     }
 
     #[test]
