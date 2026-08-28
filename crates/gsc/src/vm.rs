@@ -1167,15 +1167,29 @@ impl Vm {
     }
 
     /// Runs `func` to completion on a fresh one-frame stack. A `wait` or
-    /// `waittill` it reaches is a script error, not a hang: there is no
-    /// scheduler here to come back to it later.
+    /// `waittill` it reaches on *this* frame stack is a script error, not
+    /// a hang: there is no scheduler here to come back to it later. But a
+    /// threaded call inside `func` spawns and immediately runs a real,
+    /// independent thread (`spawn`), and that thread's own `wait` is not
+    /// an error -- it's an ordinary suspend, resolved into a
+    /// `WaitingUntil` deadline the same way `run_frame`/`start_thread`
+    /// would. `now_ms` (matching their parameter of the same name) is
+    /// what that deadline is computed against; without it (before this
+    /// existed, `self.now_ms` stayed whatever the default or the last
+    /// `run_frame` call left it at) a thread spawned from inside a
+    /// `call_now`-driven script -- e.g. a host's `CodeCallback_
+    /// PlayerConnect`-style callback threading off a waiting worker --
+    /// could fire its wait on the very next `run_frame` instead of after
+    /// the real delay.
     pub fn call_now(
         &mut self,
         host: &mut dyn Host,
+        now_ms: i32,
         func: FuncRef,
         recv: Option<Target>,
         args: Vec<Value>,
     ) -> Result<Value, ScriptError> {
+        self.now_ms = now_ms;
         let f = self
             .functions
             .get(&func)
@@ -1299,7 +1313,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        let v = vm.call_now(&mut host, main, None, vec![]).unwrap();
+        let v = vm.call_now(&mut host, 0, main, None, vec![]).unwrap();
         (v, host, vm)
     }
 
@@ -1408,7 +1422,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
+        let e = vm.call_now(&mut host, 0, main, None, vec![]).unwrap_err();
         assert_eq!(e.line, 3);
     }
 
@@ -1420,8 +1434,38 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
+        let e = vm.call_now(&mut host, 0, main, None, vec![]).unwrap_err();
         assert!(matches!(e.kind, ErrorKind::SuspendedInImmediateCall));
+    }
+
+    /// A thread spawned by a `call_now`-driven script (a host callback
+    /// like `CodeCallback_PlayerConnect`, say) is a real, independent
+    /// thread, not the throwaway one-shot stack `call_now` itself runs
+    /// on -- its own `wait` is an ordinary suspend, not an immediate-call
+    /// error, and has to resolve against `call_now`'s caller's clock
+    /// reading, not always 0. `f`'s `wait 1` (1000 ms) taken during
+    /// `main`'s `call_now`-driven run at `now_ms = 5_000` must deadline at
+    /// 6_000, not 1_000: a `run_frame` at 5_000 (right after) must not
+    /// fire it, and one at 6_000 must.
+    #[test]
+    fn call_now_threads_a_wait_against_its_own_now_ms_not_zero() {
+        let ast =
+            crate::parse::parse_file("main() { thread f(); } f() { wait 1; done(); }").unwrap();
+        let mut vm = Vm::new();
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        vm.call_now(&mut host, 5_000, main, None, vec![]).unwrap();
+        assert_eq!(vm.thread_count(), 1, "f is alive, waiting on its own wait");
+
+        vm.run_frame(&mut host, 5_000);
+        assert!(
+            !host.calls.iter().any(|(n, _)| n == "done"),
+            "not due yet -- 6_000, not 1_000"
+        );
+        vm.run_frame(&mut host, 6_000);
+        assert!(host.calls.iter().any(|(n, _)| n == "done"), "due now");
     }
 
     // --- Fix round 1: `level`/`game` as call and notify/waittill/endon
@@ -1468,7 +1512,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
+        let e = vm.call_now(&mut host, 0, main, None, vec![]).unwrap_err();
         assert!(matches!(e.kind, ErrorKind::SuspendedInImmediateCall));
     }
 
@@ -1493,7 +1537,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
+        let e = vm.call_now(&mut host, 0, main, None, vec![]).unwrap_err();
         assert!(matches!(e.kind, ErrorKind::BadType(_)));
     }
 
@@ -1582,7 +1626,7 @@ pub(crate) mod tests {
         vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
-        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
+        let e = vm.call_now(&mut host, 0, main, None, vec![]).unwrap_err();
         assert!(matches!(e.kind, ErrorKind::BadType(_)));
     }
 
