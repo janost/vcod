@@ -674,6 +674,16 @@ impl Vm {
         &mut self.interner
     }
 
+    pub fn interner(&self) -> &Interner {
+        &self.interner
+    }
+
+    /// Every installed function, for a loader's cross-file scan and
+    /// builtin pre-scan.
+    pub fn functions(&self) -> impl Iterator<Item = &Function> {
+        self.functions.values().map(Rc::as_ref)
+    }
+
     /// Rejects a function that fails `bytecode::stack_depth`'s abstract
     /// stack walk instead of installing it. That check is the only thing
     /// standing between a compiler bug and a panic in `step_frames` (which
