@@ -214,3 +214,93 @@ fn the_corpus_builtin_surface_is_stable() {
         names
     );
 }
+
+/// Reads stock scripts for `Loader`, which the census above never drives:
+/// each of those compiles every file in isolation, so cross-file
+/// resolution, the transitive closure over `Op::Call`/bare-pointer
+/// references, the rollback on a failed load, and the pre-scan are only
+/// ever exercised against small hand-written fixtures in `load.rs`'s own
+/// tests. This is `Loader` against real content instead.
+struct StockSource(std::rc::Rc<Pk3Fs>);
+
+impl vcod_gsc::ScriptSource for StockSource {
+    fn read(&self, canonical: &str) -> Option<String> {
+        let bytes = self.0.read(&format!("{canonical}.gsc"))?;
+        Some(String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
+/// One gametype/map entry point's expected shape: file and function counts
+/// are ranges, not exact values, so a stock pak revision doesn't break this
+/// outright -- but narrow enough that a real regression (a broken reference,
+/// a resolution bug that silently drops half the closure) still fails it.
+struct Expect {
+    entry: &'static str,
+    files: std::ops::RangeInclusive<usize>,
+    functions: std::ops::RangeInclusive<usize>,
+}
+
+#[test]
+fn loader_resolves_the_transitive_closure_of_real_gametype_and_map_scripts() {
+    let Some((_tmp, fs)) = stock_paks() else {
+        return;
+    };
+    let fs = std::rc::Rc::new(fs);
+
+    // Measured (the reviewer ran this exact census):
+    //   maps/mp/gametypes/dm:  79 files, 238 functions
+    //   maps/mp/gametypes/tdm: 79 files, 238 functions
+    //   maps/mp/gametypes/sd:  79 files, 246 functions
+    //   maps/mp/mp_pavlov:      6 files,  34 functions
+    //   maps/mp/_load:          4 files,  31 functions
+    let cases = [
+        Expect {
+            entry: "maps/mp/gametypes/dm",
+            files: 74..=84,
+            functions: 220..=256,
+        },
+        Expect {
+            entry: "maps/mp/gametypes/tdm",
+            files: 74..=84,
+            functions: 220..=256,
+        },
+        Expect {
+            entry: "maps/mp/gametypes/sd",
+            files: 74..=84,
+            functions: 228..=264,
+        },
+        Expect {
+            entry: "maps/mp/mp_pavlov",
+            files: 3..=9,
+            functions: 25..=45,
+        },
+        Expect {
+            entry: "maps/mp/_load",
+            files: 2..=7,
+            functions: 22..=40,
+        },
+    ];
+
+    for c in cases {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut loader = vcod_gsc::Loader::new(Box::new(StockSource(fs.clone())));
+        loader
+            .load(&mut vm, c.entry)
+            .unwrap_or_else(|e| panic!("{}: {e:?}", c.entry));
+
+        let files = loader.loaded_count();
+        assert!(
+            c.files.contains(&files),
+            "{}: loaded {files} files, expected {:?}",
+            c.entry,
+            c.files
+        );
+        let functions = vm.functions().count();
+        assert!(
+            c.functions.contains(&functions),
+            "{}: installed {functions} functions, expected {:?}",
+            c.entry,
+            c.functions
+        );
+    }
+}
