@@ -54,6 +54,11 @@ impl MsgReader {
         self.bit.max(self.readcount * 8)
     }
 
+    /// The decompressed message, for spanning a region a parse just consumed.
+    pub fn plain(&self) -> &[u8] {
+        &self.data
+    }
+
     /// Set once a read ran past the end; every read after that returns 0.
     pub fn is_overflowed(&self) -> bool {
         self.overflowed
@@ -492,17 +497,32 @@ fn write_float_field(w: &mut MsgWriter, raw: i32) {
     }
 }
 
+/// One primitive read from the playerState's trailing array blocks, in the
+/// order the parse took it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PsArrayOp {
+    Bits(i32, i32),
+    Packed(i32, i32),
+    Byte(u8),
+    Short(i16),
+    Long(i32),
+}
+
 /// Raw wire values in `Protocol::player_fields` order, floats as bit patterns.
-/// The trailing stat/HUD arrays are consumed but not stored.
+/// The trailing stat/HUD arrays are not decoded into fields; `arrays` keeps
+/// the primitives the parse consumed so a captured state writes back out bit
+/// for bit.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct PlayerState {
     pub fields: Vec<i32>,
+    pub arrays: Vec<PsArrayOp>,
 }
 
 impl PlayerState {
     pub fn null(p: &Protocol) -> Self {
         PlayerState {
             fields: vec![0; p.player_fields.len()],
+            arrays: Vec::new(),
         }
     }
 
@@ -542,6 +562,7 @@ impl PlayerState {
 pub fn read_delta_playerstate(r: &mut MsgReader, p: &Protocol, from: &PlayerState) -> PlayerState {
     let mut to = PlayerState {
         fields: from.fields.clone(),
+        arrays: Vec::new(),
     };
     let lc = (r.read_byte() as usize).min(p.player_fields.len());
     for (i, field) in p.player_fields.iter().take(lc).enumerate() {
@@ -549,13 +570,24 @@ pub fn read_delta_playerstate(r: &mut MsgReader, p: &Protocol, from: &PlayerStat
             continue;
         }
         to.fields[i] = if field.bits == 0 {
-            read_ps_float(r)
+            let v = read_ps_float(r);
+            // The change bit says the C saw two different ints, but this codec
+            // has no zero flag, so a `-0.0` comes back `+0.0` and would
+            // re-encode as unchanged. Keep the sign the entity codec keeps
+            // (docs/protocol-1.1.md, "PlayerState delta"). The integral path
+            // is exact for everything else, so `v == base` can only mean the
+            // two zeroes; the guard says so rather than trusting it.
+            if v == 0 && to.fields[i] == 0 {
+                (-0f32).to_bits() as i32
+            } else {
+                v
+            }
         } else {
             // Unsigned, width `|bits|`, no sign extension (0x807e5d7).
             r.read_packed_bits(field.bits)
         };
     }
-    consume_ps_arrays(r);
+    to.arrays = read_ps_arrays(r);
     to
 }
 
@@ -584,10 +616,11 @@ fn write_ps_float(w: &mut MsgWriter, raw: i32) {
     }
 }
 
-/// Mirror of [`read_delta_playerstate`]. The trailing array blocks go out
-/// empty: the vcod server carries no stats, ammo or HUD state. Unlike the
-/// entity codec there is no zero-flag bit here, so a `-0.0` float reads back
-/// `+0.0`; retail loses the sign the same way.
+/// Mirror of [`read_delta_playerstate`]. The trailing array blocks are
+/// replayed from `to.arrays`, empty for a server-built state: vcod carries no
+/// stats, ammo or HUD state of its own. Unlike the entity codec there is no
+/// zero-flag bit here, so a `-0.0` float goes out as `+0.0`; the reader keeps
+/// the sign so the field still counts as changed.
 pub fn write_delta_playerstate(
     w: &mut MsgWriter,
     p: &Protocol,
@@ -616,10 +649,27 @@ pub fn write_delta_playerstate(
             w.write_packed_bits(to.fields[i], p.player_fields[i].bits);
         }
     }
-    // Array-block gates: block 1, block 2, block 3's four sub-arrays,
-    // blocks 4 and 5.
-    for _ in 0..8 {
-        w.write_bits(0, 1);
+    write_ps_arrays(w, &to.arrays);
+}
+
+/// Replays what [`read_ps_arrays`] recorded. A state that never came off the
+/// wire has none, and goes out as the five empty blocks: gates for blocks 1
+/// and 2, block 3's four ungated sub-arrays, then blocks 4 and 5.
+fn write_ps_arrays(w: &mut MsgWriter, ops: &[PsArrayOp]) {
+    if ops.is_empty() {
+        for _ in 0..8 {
+            w.write_bits(0, 1);
+        }
+        return;
+    }
+    for &op in ops {
+        match op {
+            PsArrayOp::Bits(bits, v) => w.write_bits(v, bits),
+            PsArrayOp::Packed(bits, v) => w.write_packed_bits(v, bits),
+            PsArrayOp::Byte(v) => w.write_byte(v),
+            PsArrayOp::Short(v) => w.write_short(v),
+            PsArrayOp::Long(v) => w.write_long(v),
+        }
     }
 }
 
@@ -632,63 +682,127 @@ const HUD_FIELD_BITS: [i32; 34] = [
     2, 32, 4, 8, 8, 10, 10, 0, 32, 32, 16, 32, 16, 10, 0, 8, 10, 32, 16, 10, 10, 32,
 ];
 
-/// The trailing array blocks (cod_lnxded 0x807e7b3..0x807eeb6), values
-/// discarded.
-fn consume_ps_arrays(r: &mut MsgReader) {
+/// Records every primitive it reads, so [`write_ps_arrays`] can put the
+/// blocks back on the wire unchanged.
+struct ArrayReader<'a> {
+    r: &'a mut MsgReader,
+    ops: Vec<PsArrayOp>,
+}
+
+impl ArrayReader<'_> {
+    fn bits(&mut self, bits: i32) -> i32 {
+        let v = self.r.read_bits(bits);
+        self.ops.push(PsArrayOp::Bits(bits, v));
+        v
+    }
+
+    fn packed(&mut self, bits: i32) {
+        let v = self.r.read_packed_bits(bits);
+        self.ops.push(PsArrayOp::Packed(bits, v));
+    }
+
+    fn byte(&mut self) {
+        let v = self.r.read_byte();
+        self.ops.push(PsArrayOp::Byte(v));
+    }
+
+    fn short(&mut self) -> i16 {
+        let v = self.r.read_short();
+        self.ops.push(PsArrayOp::Short(v));
+        v
+    }
+
+    fn long(&mut self) {
+        let v = self.r.read_long();
+        self.ops.push(PsArrayOp::Long(v));
+    }
+
+    /// [`read_delta_field`] with the value thrown away; the base is always 0
+    /// inside these blocks.
+    fn delta_field(&mut self, bits: i32) {
+        if self.bits(1) == 0 {
+            return;
+        }
+        if bits == 0 {
+            // Zero flag, then the integral/full selector.
+            if self.bits(1) == 0 {
+                return;
+            }
+            if self.bits(1) == 0 {
+                self.packed(FLOAT_INT_BITS);
+            } else {
+                self.long();
+            }
+        } else if self.bits(1) != 0 {
+            self.packed(bits);
+        }
+    }
+}
+
+/// The trailing array blocks (cod_lnxded 0x807e7b3..0x807eeb6). The values
+/// are not decoded; the primitives are kept for the writer.
+fn read_ps_arrays(r: &mut MsgReader) -> Vec<PsArrayOp> {
+    let mut a = ArrayReader { r, ops: Vec::new() };
     // Block 1: a 6-bit mask selecting up to six scalars.
-    if r.read_bits(1) == 1 {
-        let m = r.read_bits(6);
+    if a.bits(1) == 1 {
+        let m = a.bits(6);
         if m & 0x01 != 0 {
-            r.read_short();
+            a.short();
         }
         if m & 0x02 != 0 {
-            r.read_short();
+            a.short();
         }
         if m & 0x04 != 0 {
-            r.read_short();
+            a.short();
         }
         if m & 0x08 != 0 {
-            r.read_bits(6);
+            a.bits(6);
         }
         if m & 0x10 != 0 {
-            r.read_short();
+            a.short();
         }
         if m & 0x20 != 0 {
-            r.read_byte();
+            a.byte();
         }
     }
     // Block 2: gated group of four 16-entry short arrays.
-    if r.read_bits(1) == 1 {
-        consume_short_array_group(r);
+    if a.bits(1) == 1 {
+        read_short_array_group(&mut a);
     }
     // Block 3: the same, with no group gate.
-    consume_short_array_group(r);
+    read_short_array_group(&mut a);
     // Block 4: 16 weapons, each a 3-bit value then six delta fields.
-    if r.read_bits(1) == 1 {
+    if a.bits(1) == 1 {
         for _ in 0..16 {
-            r.read_bits(3);
-            if r.read_bits(1) == 1 {
+            a.bits(3);
+            if a.bits(1) == 1 {
                 for &bits in &HUD_FIELD_BITS[0..6] {
-                    read_delta_field(r, 0, bits);
+                    a.delta_field(bits);
                 }
             }
         }
     }
     // Block 5: two HUD-element arrays.
-    if r.read_bits(1) == 1 {
-        consume_hud_array(r);
-        consume_hud_array(r);
+    if a.bits(1) == 1 {
+        read_hud_array(&mut a);
+        read_hud_array(&mut a);
     }
+    // Five empty blocks and an empty record mean the same eight zero bits, and
+    // dropping them lets a parsed state compare equal to a built one.
+    if a.ops.iter().all(|&op| op == PsArrayOp::Bits(1, 0)) {
+        return Vec::new();
+    }
+    a.ops
 }
 
 /// Four gated 16-entry short arrays (cod_lnxded 0x807ea4b / 0x807eb49).
-fn consume_short_array_group(r: &mut MsgReader) {
+fn read_short_array_group(a: &mut ArrayReader) {
     for _ in 0..4 {
-        if r.read_bits(1) == 1 {
-            let mask = r.read_short() as u16 as u32;
+        if a.bits(1) == 1 {
+            let mask = a.short() as u16 as u32;
             for i in 0..16 {
                 if mask & (1u32 << i) != 0 {
-                    r.read_short();
+                    a.short();
                 }
             }
         }
@@ -696,15 +810,15 @@ fn consume_short_array_group(r: &mut MsgReader) {
 }
 
 /// One HUD-element array (cod_lnxded 0x807cf5c).
-fn consume_hud_array(r: &mut MsgReader) {
-    let count = r.read_bits(5);
+fn read_hud_array(a: &mut ArrayReader) {
+    let count = a.bits(5);
     for _ in 0..count {
-        let j = r.read_bits(5);
+        let j = a.bits(5);
         for k in 0..=j {
             let idx = (6 + k) as usize;
             let bits = HUD_FIELD_BITS.get(idx).copied().unwrap_or(0);
-            read_delta_field(r, 0, bits);
-            if r.is_overflowed() {
+            a.delta_field(bits);
+            if a.r.is_overflowed() {
                 return;
             }
         }

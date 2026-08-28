@@ -5,11 +5,11 @@
 //! ring of recent snapshots a delta frame resolves its base from.
 
 use super::msg::{
-    read_delta_client, read_delta_entity, read_delta_playerstate, ClientState, EntityState,
-    MsgReader, MsgWriter, PlayerState,
+    read_delta_client, read_delta_entity, read_delta_playerstate, write_delta_entity, ClientState,
+    EntityState, MsgReader, MsgWriter, PlayerState,
 };
-use super::protocol::{Protocol, ENTITYNUM_NONE, GENTITYNUM_BITS};
-use std::collections::{BTreeMap, HashMap};
+use super::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD, GENTITYNUM_BITS};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// `svc_ops_e` (confirmed against cod_lnxded 1.1d).
 pub const SVC_BAD: u8 = 0;
@@ -100,6 +100,12 @@ impl SnapshotRing {
         self.newest_num
             .and_then(|n| self.slots[Self::slot(n)].as_ref())
             .filter(|s| s.valid)
+    }
+
+    /// The last frame parsed with an unresolved base, if any; a sender that
+    /// deltas against a base the peer never acked produces one of these.
+    pub fn last_invalid(&self) -> Option<&Snapshot> {
+        self.dropped.as_ref()
     }
 
     /// Parse from after the `svc_snapshot` op. A frame whose base is missing
@@ -260,38 +266,127 @@ fn parse_clients(
     new
 }
 
-/// The body of an uncompressed snapshot (`SV_WriteSnapshotToClient` with
-/// `deltaNum = 0`): header, playerstate from null, an empty packet-entity
-/// run, then one full clientState entry per connected client. No areamask on
-/// CoD 1.1. Entities join when the world has any.
-///
-/// Each slot present in `to_clients` (slot == client num) goes out as a full
-/// state from null, matching retail's encoding of uncompressed frames: force
-/// only suppresses entry omission and never widens `lc`, so elided zero
-/// fields decode right only against a null base. Unmentioned clients need no
-/// removal bit: an uncompressed frame restarts the reader's roster, so they
-/// vanish at parse. Explicit removals come back with delta frames.
-pub fn write_uncompressed(
+/// `SV_WriteSnapshotToClient`. `from` is the base frame the client acked, or
+/// `None` for an uncompressed frame. No areamask on CoD 1.1: the header goes
+/// straight into the playerstate delta (docs/protocol-1.1.md, divergence 6).
+pub fn write(
     w: &mut MsgWriter,
     p: &Protocol,
-    server_time: i32,
-    ps_to: &PlayerState,
-    to_clients: &[Option<ClientState>],
+    from: Option<&Snapshot>,
+    to: &Snapshot,
+    baselines: &HashMap<u32, EntityState>,
 ) {
     use super::msg::{write_delta_client, write_delta_playerstate};
-    w.write_long(server_time);
-    w.write_byte(0); // deltaNum: uncompressed
-    w.write_byte(0); // snapFlags
-    write_delta_playerstate(w, p, &PlayerState::null(p), ps_to);
-    w.write_bits(ENTITYNUM_NONE as i32, GENTITYNUM_BITS as i32);
-    let null = ClientState::null(p);
-    for (slot, cs) in to_clients.iter().enumerate() {
-        let Some(cs) = cs else { continue };
-        w.write_bits(1, 1);
-        w.write_bits(slot as i32, 6);
-        write_delta_client(w, p, &null, Some(cs));
+
+    w.write_long(to.server_time);
+    // deltaNum rides the wire as the offset back to the base, not its number.
+    let delta_byte = match from {
+        Some(base) => {
+            let back = to.message_num.wrapping_sub(base.message_num);
+            // The offset has to fit the wire byte and can't be 0 (that reads
+            // as "uncompressed"); the server caller already filters this, but
+            // the invariant belongs on the public API, not just its one caller.
+            debug_assert!(
+                (1..=255).contains(&back),
+                "delta offset {back} out of the u8 wire range (to {}, base {})",
+                to.message_num,
+                base.message_num
+            );
+            back as u8
+        }
+        None => 0,
+    };
+    w.write_byte(delta_byte);
+    w.write_byte(to.snap_flags as u8);
+
+    let null_ps = PlayerState::null(p);
+    let base_ps = from.map_or(&null_ps, |b| &b.ps);
+    write_delta_playerstate(w, p, base_ps, &to.ps);
+
+    write_packet_entities(w, p, from.map(|b| &b.entities), &to.entities, baselines);
+
+    let null_cs = ClientState::null(p);
+    match from {
+        // Every present client full from null; the reader restarts its roster
+        // on an uncompressed frame, so departures need no removal bit.
+        None => {
+            for (&num, cs) in &to.clients {
+                w.write_bits(1, 1);
+                w.write_bits(num as i32, 6);
+                write_delta_client(w, p, &null_cs, Some(cs));
+            }
+        }
+        Some(base) => {
+            let nums: BTreeSet<u32> = base
+                .clients
+                .keys()
+                .chain(to.clients.keys())
+                .copied()
+                .collect();
+            for num in nums {
+                let old = base.clients.get(&num);
+                let new = to.clients.get(&num);
+                if old == new {
+                    continue;
+                }
+                w.write_bits(1, 1);
+                w.write_bits(num as i32, 6);
+                write_delta_client(w, p, old.unwrap_or(&null_cs), new);
+            }
+        }
     }
     w.write_bits(0, 1);
+}
+
+/// `SV_EmitPacketEntities`. Ascending numbers, `ENTITYNUM_NONE` terminates.
+/// An entity unchanged from the base frame is omitted and the reader carries
+/// it forward; one absent from the base is always written, even unchanged
+/// from its baseline, or the reader never learns it exists.
+fn write_packet_entities(
+    w: &mut MsgWriter,
+    p: &Protocol,
+    from: Option<&BTreeMap<u32, EntityState>>,
+    to: &BTreeMap<u32, EntityState>,
+    baselines: &HashMap<u32, EntityState>,
+) {
+    let empty = BTreeMap::new();
+    let base = from.unwrap_or(&empty);
+    let null = EntityState::null(p);
+
+    let nums: BTreeSet<u32> = base.keys().chain(to.keys()).copied().collect();
+    for num in nums {
+        // A number at or past ENTITYNUM_WORLD is either the reserved world
+        // slot or indistinguishable on the wire from the packet-entities
+        // terminator: the former is never a legitimate dynamic entity, and
+        // the latter would truncate the stream mid-run and desync every
+        // entity read after it, silently.
+        debug_assert!(
+            num < ENTITYNUM_WORLD,
+            "entity {num} not below ENTITYNUM_WORLD"
+        );
+        let old = base.get(&num);
+        let new = to.get(&num);
+        match (old, new) {
+            // Compare fields only, not the whole EntityState: `number` is not
+            // meaningful in `o` unless it came off the same construction path
+            // as `n`, and retail's own unchanged test is `lc == 0` over fields.
+            (Some(o), Some(n)) if o.fields == n.fields => continue,
+            (Some(o), Some(n)) => {
+                w.write_bits(num as i32, GENTITYNUM_BITS as i32);
+                write_delta_entity(w, p, o, Some(n));
+            }
+            (None, Some(n)) => {
+                w.write_bits(num as i32, GENTITYNUM_BITS as i32);
+                write_delta_entity(w, p, baselines.get(&num).unwrap_or(&null), Some(n));
+            }
+            (Some(o), None) => {
+                w.write_bits(num as i32, GENTITYNUM_BITS as i32);
+                write_delta_entity(w, p, o, None);
+            }
+            (None, None) => unreachable!("number came from one of the two maps"),
+        }
+    }
+    w.write_bits(ENTITYNUM_NONE as i32, GENTITYNUM_BITS as i32);
 }
 
 #[cfg(test)]
@@ -300,6 +395,7 @@ mod tests {
     use crate::net::huffman::Huffman;
     use crate::net::msg::MsgWriter;
     use crate::net::protocol::PROTOCOL_V1;
+    use std::collections::HashMap;
 
     /// Write a changed integral-float entity/player field.
     fn wfloat(w: &mut MsgWriter, v: f32) {
@@ -797,9 +893,16 @@ mod tests {
         ps.fields[PlayerState::field_index(p, "origin[0]").unwrap()] = 384f32.to_bits() as i32;
 
         // Frame A: client 0 appears out of nothing.
-        let a_to = vec![Some(ClientState::named(p, 0, 3, "vcod"))];
+        let mut a = Snapshot {
+            message_num: 10,
+            server_time: 48_000,
+            valid: true,
+            ps: ps.clone(),
+            ..Default::default()
+        };
+        a.clients.insert(0, ClientState::named(p, 0, 3, "vcod"));
         let mut w = MsgWriter::new(&h);
-        write_uncompressed(&mut w, p, 48_000, &ps, &a_to);
+        write(&mut w, p, None, &a, &HashMap::new());
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
@@ -815,15 +918,18 @@ mod tests {
         assert_eq!(r.bits_read(), bits);
 
         // Frame B: client 0 renamed shorter, client 3 joins. Slot indexes are
-        // client numbers, so the gap stays None.
-        let b_to = vec![
-            Some(ClientState::named(p, 0, 3, "bob")),
-            None,
-            None,
-            Some(ClientState::named(p, 3, 1, "eve")),
-        ];
+        // client numbers, so the gap stays absent.
+        let mut b = Snapshot {
+            message_num: 11,
+            server_time: 48_050,
+            valid: true,
+            ps: ps.clone(),
+            ..Default::default()
+        };
+        b.clients.insert(0, ClientState::named(p, 0, 3, "bob"));
+        b.clients.insert(3, ClientState::named(p, 3, 1, "eve"));
         let mut w = MsgWriter::new(&h);
-        write_uncompressed(&mut w, p, 48_050, &ps, &b_to);
+        write(&mut w, p, None, &b, &HashMap::new());
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
@@ -842,9 +948,16 @@ mod tests {
         let mut eve_cleared = ClientState::named(p, 3, 1, "eve");
         let ti = ClientState::field_index(p, "team").unwrap();
         eve_cleared.fields[ti] = 0;
-        let c_to = vec![None, None, None, Some(eve_cleared)];
+        let mut c = Snapshot {
+            message_num: 12,
+            server_time: 48_100,
+            valid: true,
+            ps: ps.clone(),
+            ..Default::default()
+        };
+        c.clients.insert(3, eve_cleared);
         let mut w = MsgWriter::new(&h);
-        write_uncompressed(&mut w, p, 48_100, &ps, &c_to);
+        write(&mut w, p, None, &c, &HashMap::new());
         let bits = w.bits_written();
         let d = w.finish();
         let mut r = MsgReader::new(&d, &h);
@@ -855,6 +968,217 @@ mod tests {
         assert_eq!(s.clients[&3].field_i32(p, "team"), 0);
         assert!(!r.is_overflowed());
         assert_eq!(r.bits_read(), bits);
+    }
+
+    /// A delta frame's roster: an unchanged client is omitted, a changed one
+    /// deltas against the base entry, a departed one gets the removal bit.
+    #[test]
+    fn delta_roster_omits_unchanged_and_removes_departed() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+
+        let mut base = Snapshot {
+            message_num: 10,
+            server_time: 1000,
+            valid: true,
+            ps: PlayerState::null(p),
+            ..Default::default()
+        };
+        base.clients.insert(0, ClientState::named(p, 0, 3, "alice"));
+        base.clients.insert(1, ClientState::named(p, 1, 3, "bob"));
+        base.clients.insert(2, ClientState::named(p, 2, 3, "carol"));
+
+        // alice unchanged, bob renamed, carol gone, dave new.
+        let mut to = Snapshot {
+            message_num: 11,
+            server_time: 1050,
+            valid: true,
+            ps: PlayerState::null(p),
+            ..Default::default()
+        };
+        to.clients.insert(0, ClientState::named(p, 0, 3, "alice"));
+        to.clients.insert(1, ClientState::named(p, 1, 3, "robert"));
+        to.clients.insert(3, ClientState::named(p, 3, 3, "dave"));
+
+        let mut w = MsgWriter::new(&h);
+        write(&mut w, p, Some(&base), &to, &HashMap::new());
+
+        let mut ring = SnapshotRing::new();
+        ring.insert(base.clone());
+        // finish(), not into_ops(): MsgReader::new always block-decompresses,
+        // so the reader needs huffman-coded bytes, not the plain wire bits.
+        let bytes = w.finish();
+        let mut r = MsgReader::new(&bytes, &h);
+        let got = ring.parse_into(&mut r, p, 11).unwrap().clone();
+
+        assert!(got.valid, "delta frame resolved its base");
+        assert_eq!(got.delta_num, 10);
+        assert_eq!(
+            got.clients.keys().copied().collect::<Vec<_>>(),
+            vec![0, 1, 3]
+        );
+        assert_eq!(got.clients[&1], to.clients[&1], "renamed client");
+        assert_eq!(
+            got.clients[&0], base.clients[&0],
+            "unchanged carries forward"
+        );
+        assert_eq!(got.clients[&3], to.clients[&3], "new client from null");
+    }
+
+    /// The four packet-entity cases: new-from-baseline, changed, unchanged
+    /// (omitted, carried forward), removed.
+    #[test]
+    fn delta_entities_cover_new_changed_unchanged_and_removed() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let o0 = EntityState::field_index(p, "pos.trBase[0]").unwrap();
+        let o1 = EntityState::field_index(p, "pos.trBase[1]").unwrap();
+
+        let ent = |x: i32| {
+            let mut e = EntityState::null(p);
+            e.fields[o0] = x;
+            e
+        };
+
+        // Entity 7 has a baseline and is new to this frame at its baseline value.
+        let mut baselines = HashMap::new();
+        baselines.insert(7u32, ent(700));
+
+        let mut base = Snapshot {
+            message_num: 20,
+            server_time: 2000,
+            valid: true,
+            ps: PlayerState::null(p),
+            ..Default::default()
+        };
+        base.entities.insert(4, ent(400)); // unchanged
+                                           // Changed, with a second field (o1: 42 -> 0) that only the correct
+                                           // base (the base-frame entity, not the unrelated baseline/null) makes
+                                           // `lc` reach far enough to write.
+        let mut e5 = ent(500);
+        e5.fields[o1] = 42;
+        base.entities.insert(5, e5);
+        base.entities.insert(6, ent(600)); // removed
+
+        let mut to = Snapshot {
+            message_num: 21,
+            server_time: 2050,
+            valid: true,
+            ps: PlayerState::null(p),
+            ..Default::default()
+        };
+        to.entities.insert(4, ent(400));
+        to.entities.insert(5, ent(555));
+        to.entities.insert(7, ent(700));
+
+        let mut w = MsgWriter::new(&h);
+        write(&mut w, p, Some(&base), &to, &baselines);
+        let bits = w.bits_written();
+
+        let mut ring = SnapshotRing::new();
+        ring.set_baselines(baselines.clone());
+        ring.insert(base.clone());
+        // finish(), not into_ops(): MsgReader::new always block-decompresses,
+        // so the reader needs huffman-coded bytes, not the plain wire bits.
+        let bytes = w.finish();
+        let mut r = MsgReader::new(&bytes, &h);
+        let got = ring.parse_into(&mut r, p, 21).unwrap().clone();
+
+        assert!(got.valid);
+        assert_eq!(
+            got.entities.keys().copied().collect::<Vec<_>>(),
+            vec![4, 5, 7]
+        );
+        assert_eq!(
+            got.entities[&4].fields[o0], 400,
+            "unchanged carried forward"
+        );
+        assert_eq!(got.entities[&5].fields[o0], 555, "changed deltas from base");
+        assert_eq!(
+            got.entities[&5].fields[o1], 0,
+            "changed deltas from the base-frame entity, not the baseline or null \
+             (a wrong base would stop lc short of this field and leave 42)"
+        );
+        assert_eq!(
+            got.entities[&7].fields[o0], 700,
+            "new entity from its baseline"
+        );
+        assert!(!r.is_overflowed());
+        assert_eq!(r.bits_read(), bits);
+
+        // Identical frames must emit nothing but the terminator: an entity
+        // unchanged from the base is omitted, not re-sent as a no-delta entry.
+        // Compared against a reference writer that only writes the
+        // terminator, not a literal bit count: a fresh MsgWriter rounds
+        // bits_written() up to the next byte on a pure-bits write (out.len()
+        // pre-allocates a byte at each 8-bit boundary), so GENTITYNUM_BITS
+        // itself is not what a correct call reports.
+        let mut w2 = MsgWriter::new(&h);
+        write_packet_entities(&mut w2, p, Some(&base.entities), &base.entities, &baselines);
+        let mut w_ref = MsgWriter::new(&h);
+        w_ref.write_bits(ENTITYNUM_NONE as i32, GENTITYNUM_BITS as i32);
+        assert_eq!(
+            w2.into_ops(),
+            w_ref.into_ops(),
+            "identical frames emit only the terminator"
+        );
+    }
+
+    /// A number at or past ENTITYNUM_WORLD is either the reserved world slot
+    /// or indistinguishable on the wire from the terminator; unguarded, the
+    /// latter truncates the packet-entity stream mid-run and every entity
+    /// after it silently vanishes rather than erroring (`{32, 1022, 1023,
+    /// 1055}` parses back as `[32]`). The debug_assert! turns that into a
+    /// loud test failure instead.
+    #[test]
+    #[should_panic(expected = "not below ENTITYNUM_WORLD")]
+    fn write_packet_entities_rejects_a_number_at_entitynum_world() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let ent = |x: i32| {
+            let mut e = EntityState::null(p);
+            let o0 = EntityState::field_index(p, "pos.trBase[0]").unwrap();
+            e.fields[o0] = x;
+            e
+        };
+        let mut to = BTreeMap::new();
+        for &num in &[
+            32u32,
+            ENTITYNUM_WORLD - 1,
+            ENTITYNUM_WORLD,
+            ENTITYNUM_NONE,
+            ENTITYNUM_NONE + 32,
+        ] {
+            to.insert(num, ent(num as i32));
+        }
+
+        let mut w = MsgWriter::new(&h);
+        write_packet_entities(&mut w, p, None, &to, &HashMap::new());
+    }
+
+    /// The caller (`server.rs`) already filters the base to a 1..=255 offset
+    /// from the frame it sends, but `write` is the public API and shouldn't
+    /// rely on being the only caller to keep that filter correct.
+    #[test]
+    #[should_panic(expected = "out of the u8 wire range")]
+    fn write_rejects_a_zero_delta_offset() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let base = Snapshot {
+            message_num: 5,
+            valid: true,
+            ps: PlayerState::null(p),
+            ..Default::default()
+        };
+        let to = Snapshot {
+            message_num: 5,
+            valid: true,
+            ps: PlayerState::null(p),
+            ..Default::default()
+        };
+
+        let mut w = MsgWriter::new(&h);
+        write(&mut w, p, Some(&base), &to, &HashMap::new());
     }
 
     /// Testing layer 2 from the design doc: parse a committed capture
@@ -904,14 +1228,8 @@ mod tests {
         let cap = found.expect("capture holds no valid snapshot");
         assert!(!cap.clients.is_empty(), "no clientStates in the snapshot");
 
-        let max_slot = *cap.clients.keys().max().unwrap() as usize;
-        let mut to_clients: Vec<Option<ClientState>> = vec![None; max_slot + 1];
-        for (&num, cs) in &cap.clients {
-            to_clients[num as usize] = Some(cs.clone());
-        }
-
         let mut w = MsgWriter::new(&h);
-        write_uncompressed(&mut w, p, cap.server_time, &cap.ps, &to_clients);
+        write(&mut w, p, None, &cap, &HashMap::new());
         let d = w.finish();
         let mut out_ring = SnapshotRing::new();
         let mut r = MsgReader::new(&d, &h);
@@ -928,5 +1246,140 @@ mod tests {
         for (&num, cs) in &cap.clients {
             assert_eq!(back.clients[&num].fields, cs.fields, "client {num}");
         }
+    }
+
+    /// Re-encodes every snapshot in one captured run against the base the
+    /// parse resolved, and returns `(frames, delta frames)`.
+    fn regate(gs_fixture: &str, snap_fixture: &str) -> (usize, usize) {
+        use crate::net::gamestate;
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+
+        let gs_data = crate::testing::fixture(gs_fixture);
+        let mut gr = MsgReader::new(&gs_data[4..], &h);
+        let gs = gamestate::parse(&mut gr, p).unwrap();
+
+        let mut ring = SnapshotRing::new();
+        ring.set_baselines(gs.baselines.clone());
+
+        let data = crate::testing::fixture(snap_fixture);
+        let mut off = 0usize;
+        let mut checked = 0usize;
+        let mut delta_frames = 0usize;
+
+        while off + 8 <= data.len() {
+            let message_num = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+            let len = u32::from_le_bytes(data[off + 4..off + 8].try_into().unwrap()) as usize;
+            off += 8;
+            let msg = &data[off..off + len];
+            off += len;
+
+            let mut r = MsgReader::new(&msg[4..], &h);
+            loop {
+                assert!(
+                    !r.is_overflowed(),
+                    "message {message_num} ran out before svc_EOF"
+                );
+                let op = r.read_byte();
+                if op == SVC_EOF {
+                    break;
+                }
+                match op {
+                    SVC_NOP => {}
+                    SVC_SERVER_COMMAND => {
+                        r.read_long();
+                        r.read_big_string();
+                    }
+                    SVC_SNAPSHOT => {
+                        let start_bits = r.bits_read();
+                        assert_eq!(start_bits % 8, 0, "frame body starts byte-aligned");
+
+                        let snap = ring.parse_into(&mut r, p, message_num).unwrap().clone();
+                        let end_bits = r.bits_read();
+
+                        // Both cursors interleave bits and bytes the same way,
+                        // and the terminator's unused high bits are zero on
+                        // both sides, so the span compares as whole bytes.
+                        let original = r.plain()[start_bits / 8..end_bits.div_ceil(8)].to_vec();
+
+                        let base = if snap.delta_num > 0 {
+                            ring.get(snap.delta_num as u32).cloned()
+                        } else {
+                            None
+                        };
+
+                        let mut w = MsgWriter::new(&h);
+                        write(&mut w, p, base.as_ref(), &snap, &gs.baselines);
+                        let re = w.into_ops();
+
+                        assert_eq!(
+                            re, original,
+                            "frame {message_num} (delta_num {}) re-encoded differently",
+                            snap.delta_num
+                        );
+                        checked += 1;
+                        if snap.delta_num > 0 {
+                            delta_frames += 1;
+                        }
+                    }
+                    // A capture carrying an op this walk cannot follow would
+                    // silently drop every frame behind it.
+                    _ => panic!("unhandled svc op {op} in {snap_fixture}"),
+                }
+            }
+        }
+        (checked, delta_frames)
+    }
+
+    /// Every captured retail frame re-encodes to the identical byte string,
+    /// the bar `writer_reproduces_the_captured_gamestate_byte_for_byte` sets
+    /// for the gamestate.
+    ///
+    /// Two captured runs. `snapshots.bin` is the first 24 messages of a
+    /// connection, every frame uncompressed: the server has no acked frame to
+    /// delta against yet, so that run pins nothing about deltas.
+    /// `snapshots-delta.bin` is 400 messages off the retail 1.1d dedicated
+    /// server on mp_carentan, past the point where the client's acks start
+    /// arriving, so every frame but the first is a delta.
+    ///
+    /// What the two runs actually pin, since a capture only exercises the
+    /// arms its own contents reach: the header, the playerState scalar delta
+    /// (`lc`, the change bits, the integral/full float path selection), the
+    /// omission of an entity unchanged from the base frame, an entity delta
+    /// taken against its gamestate baseline, and the roster's uncompressed
+    /// arm, a client written full from null, plus its terminator. What
+    /// they do not: an entity delta against a base-frame entity, the removal
+    /// bit, and the roster's delta-against-a-base-entry arm. Both captures
+    /// are of a lone spectator on a map whose twelve entities never move, so
+    /// no entity ever differs from its base and the roster never changes.
+    /// Those arms are covered by round trip against scripted moving entities,
+    /// not here.
+    ///
+    /// The playerState array blocks are pinned only as far as their bit
+    /// widths reach. `PlayerState::arrays` is a tape of primitives, so the
+    /// replay reproduces the bytes without deriving a single gate bit, mask
+    /// or count; a wrong width would misalign everything after it, a wrong
+    /// reading of a mask would not.
+    #[test]
+    fn writer_reproduces_the_captured_snapshots_byte_for_byte() {
+        let (connect, delta) = regate("net/gamestate.bin", "net/snapshots.bin");
+        assert_eq!(
+            (connect, delta),
+            (24, 0),
+            "the connect-time capture changed"
+        );
+
+        // Floors, not bounds: a refreshed capture may be longer, but one that
+        // shrank back to connect-time frames would pin nothing about deltas
+        // while staying green.
+        let (steady, delta_frames) = regate("net/gamestate-delta.bin", "net/snapshots-delta.bin");
+        assert_eq!(
+            steady, 400,
+            "the steady-state capture shrank: {steady} frames"
+        );
+        assert!(
+            delta_frames >= 399,
+            "only {delta_frames} delta frames to pin"
+        );
     }
 }

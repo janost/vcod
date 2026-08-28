@@ -118,7 +118,19 @@ engineering setup works.
   `--probe-secs N` extends the default 65 s; a few minutes spans an SD round
   restart. Add `--save-fixture` or `--save-snapshots` only when the capture is
   meant to replace the committed evidence; the flag docs in
-  `crates/client/src/main.rs` say why the two are separate.
+  `crates/client/src/main.rs` say why the two are separate. `--save-snapshots`
+  stops at `SNAP_CAPTURE_TARGET` (24) messages, which is enough to pin the
+  uncompressed connect-time frames but not a single delta. The
+  `gamestate-delta.bin` / `snapshots-delta.bin` pair
+  (`writer_reproduces_the_captured_snapshots_byte_for_byte`, snapshot.rs) came
+  from raising that cap locally and running `--net-probe` with
+  `--save-fixture --save-snapshots` for ~400 messages against
+  `tools/run_server.sh mp_carentan`, as a lone spectator that never joins a
+  team. Each snapshot fixture is a run of `[u32 message_num][u32 len][len
+  bytes]` triples (`SnapshotCapture`, `crates/common/src/net/mod.rs`); each
+  payload is `[u32 reliableAcknowledge][huffman block]`. The gate pins the
+  frame counts exactly (400 steady, 399+ of them deltas), so a refresh has to
+  hit the same count or the assertions need updating alongside it.
 - A map change is a re-sent gamestate on the live netchan; the net client
   applies it while `Active` and clears its snapshot ring. The client's per-map
   state lives in `App.world`, the renderer's `WorldGpu` and `Phase::Live`;
@@ -127,11 +139,13 @@ engineering setup works.
   **retail** 1.1d Linux dedicated binary (not in the repo; see the script
   header for where it goes and what it needs). It is the oracle for every wire
   question: when ours and retail disagree, retail is right, and the answer
-  goes in a research doc with the bytes. It answers the handshake and
-  gamestate but sends no snapshots to a lone spectator; snapshots need a
-  player in the game. `cargo run -p vcod-server -- <map>` runs **ours**:
-  the handshake, the gamestate, client commands and moves, and uncompressed
-  snapshots with pmove-driven spectator flight (no deltas, no entities, no
+  goes in a research doc with the bytes. It answers the handshake, the
+  gamestate, and sends snapshots to a lone spectator too, with no need to
+  join a team (`crates/common/tests/fixtures/net/snapshots-delta.bin` is
+  exactly that capture). `cargo run -p vcod-server -- <map>` runs **ours**:
+  the handshake, the gamestate, client commands and moves, and snapshots
+  delta-compressed against the client's acked frame, with pmove-driven
+  spectator flight and `--test-entities` for scripted packet entities (no
   restarts yet).
 - Live captures so far came from populated public servers (a TDM server on
   2026-08-24, an S&D server on 2026-08-25); a 60-100 s capture during a round

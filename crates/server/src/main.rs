@@ -29,6 +29,9 @@ struct Args {
     /// sv_maxclients
     #[arg(long, default_value_t = 8)]
     max_clients: usize,
+    /// Scripted entities that exercise the packet-entity wire path. 0 is off.
+    #[arg(long, default_value_t = 0)]
+    test_entities: usize,
 }
 
 /// `sv_fps 20`.
@@ -41,6 +44,13 @@ const MAX_PACKETS_PER_FRAME: usize = 256;
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
+    if args.test_entities > vcod_server::world::MAX_TEST_ENTITIES {
+        bail!(
+            "--test-entities {} exceeds {}, the most that fits below ENTITYNUM_WORLD",
+            args.test_entities,
+            vcod_server::world::MAX_TEST_ENTITIES
+        );
+    }
     let dir = args.game_dir.join(&args.mod_dir);
     let fs =
         Pk3Fs::open(&dir).with_context(|| format!("opening game data in {}", dir.display()))?;
@@ -61,6 +71,7 @@ fn main() -> Result<()> {
             hostname: args.hostname,
             max_clients: args.max_clients,
             gametype: "dm".into(),
+            test_entities: args.test_entities,
         },
         Instant::now(),
     );

@@ -8,8 +8,8 @@
 use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
 use crate::spectate::SpectatorSim;
-use crate::world::World;
-use std::collections::HashMap;
+use crate::world::{TestEntities, World};
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 use vcod_common::net::connectionless::{build_oob, parse_connect, parse_oob, Info};
@@ -66,6 +66,8 @@ pub struct ServerConfig {
     pub max_clients: usize,
     /// `g_gametype` as text (`dm`, `tdm`, `sd`).
     pub gametype: String,
+    /// Scripted entities that exercise the packet-entity wire path. 0 is off.
+    pub test_entities: usize,
 }
 
 /// `challenge_t`. Entries past `CHALLENGE_TTL` go on the next insert; the
@@ -165,6 +167,12 @@ pub struct Server {
     world: Option<World>,
     /// `svs.time`, advanced one frame per tick.
     sv_time_ms: i32,
+    /// Gamestate entity baselines a delta frame may omit an unchanged entity
+    /// against; empty when `test_entities` is off.
+    baselines: HashMap<u32, msg::EntityState>,
+    /// Scripted entities driving the packet-entity path; `None` when
+    /// `cfg.test_entities` is 0.
+    test_entities: Option<TestEntities>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -228,9 +236,16 @@ impl Server {
             rng: seed,
             world: None,
             sv_time_ms: 0,
+            baselines: HashMap::new(),
+            test_entities: None,
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
+        if sv.cfg.test_entities > 0 {
+            let te = TestEntities::new(sv.cfg.test_entities, [0.0, 0.0, 64.0]);
+            sv.baselines = te.baselines(sv.proto);
+            sv.test_entities = Some(te);
+        }
         sv
     }
 
@@ -693,7 +708,7 @@ impl Server {
         c.pending.drain(..excess);
     }
 
-    /// `SV_SendClientGameState`, with no baselines yet.
+    /// `SV_SendClientGameState`.
     fn send_gamestate(&mut self, slot: usize) {
         let Some(c) = self.clients[slot].as_mut() else {
             return;
@@ -704,7 +719,7 @@ impl Server {
         write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
         let gs = Gamestate {
             configstrings: self.configstrings.clone(),
-            baselines: Default::default(),
+            baselines: self.baselines.clone(),
             client_num: slot as i32,
             checksum_feed: self.checksum_feed,
             server_command_sequence: c.netchan.reliable_sequence as i32,
@@ -825,22 +840,30 @@ impl Server {
         self.send_snapshots();
     }
 
-    /// One uncompressed snapshot per active client; the main loop paces calls
-    /// at sv_fps. The sim replays every queued usercmd first, dt off the
-    /// cmd clocks, matching the client's own prediction.
+    /// One snapshot per active client per tick, the main loop pacing calls at
+    /// sv_fps: a delta against the frame the client last acked when one is
+    /// still in its ring, uncompressed otherwise. The sim replays every
+    /// queued usercmd first, dt off the cmd clocks, matching the client's own
+    /// prediction.
     fn send_snapshots(&mut self) {
         self.sv_time_ms = self.sv_time_ms.wrapping_add(FRAME_MS);
 
         // One clientState entry per online client, rebuilt each frame; slot ==
-        // index, empty slots None (the reader restarts the roster every frame).
-        let cs_list: Vec<Option<msg::ClientState>> = self
+        // index. `snapshot::write` deltas this against each client's own
+        // base roster, or sends it full when that client has none.
+        let roster: BTreeMap<u32, msg::ClientState> = self
             .clients
             .iter()
-            .map(|c| {
+            .enumerate()
+            .filter_map(|(i, c)| {
                 c.as_ref()
-                    .map(|c| msg::ClientState::named(self.proto, 0, 3, &c.name))
+                    .map(|c| (i as u32, msg::ClientState::named(self.proto, 0, 3, &c.name)))
             })
             .collect();
+        let entities: BTreeMap<u32, msg::EntityState> = self
+            .test_entities
+            .as_ref()
+            .map_or_else(BTreeMap::new, |te| te.at(self.proto, self.sv_time_ms));
 
         for slot in 0..self.clients.len() {
             let world = self.world.as_ref().map(|w| &w.collision);
@@ -876,12 +899,39 @@ impl Server {
                 processed += 1;
             }
             let command_time = c.last_processed_st.max(self.sv_time_ms - FRAME_MS);
-            let wire = sim.to_wire(self.proto, slot as i32, command_time);
+            let message_num = c.netchan.outgoing_sequence;
+
+            let frame = snapshot::Snapshot {
+                server_time: self.sv_time_ms,
+                message_num,
+                delta_num: -1,
+                snap_flags: 0,
+                ps: sim.to_wire(self.proto, slot as i32, command_time),
+                entities: entities.clone(),
+                clients: roster.clone(),
+                valid: true,
+            };
+
+            // The base is the frame the client last acked, if it is still in
+            // the ring and close enough for the byte-wide deltaNum offset.
+            // Safe at a full SV_PACKET_BACKUP depth (no margin, unlike
+            // retail's SV_WriteSnapshotToClient, which keeps PACKET_BACKUP -
+            // 3) only because both this ring and the client's own read a slot
+            // before either side can overwrite it.
+            let base = c
+                .sent_frame(c.message_ack.max(0) as u32)
+                .filter(|b| {
+                    let back = message_num.saturating_sub(b.message_num);
+                    (1..=255).contains(&back)
+                })
+                .cloned();
 
             let mut w = MsgWriter::new(&self.huff);
             write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
             w.write_byte(snapshot::SVC_SNAPSHOT);
-            snapshot::write_uncompressed(&mut w, self.proto, self.sv_time_ms, &wire, &cs_list);
+            snapshot::write(&mut w, self.proto, base.as_ref(), &frame, &self.baselines);
+            c.record_frame(frame);
+
             let ops = w.into_ops();
             for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
                 self.outbox.push((c.addr, pkt));
@@ -910,6 +960,7 @@ mod tests {
             hostname: "vcod test".into(),
             max_clients: 4,
             gametype: "dm".into(),
+            test_entities: 0,
         }
     }
     fn addr(port: u16) -> SocketAddr {
@@ -1881,7 +1932,7 @@ mod tests {
             &mut ring,
             now + std::time::Duration::from_millis(50),
         );
-        assert!(s.valid && s.delta_num == -1);
+        assert!(s.valid);
         assert!(
             sv.clients[0].as_ref().unwrap().pending.len() <= 2,
             "flood left {} cmds queued",
@@ -1893,7 +1944,7 @@ mod tests {
             &mut ring,
             now + std::time::Duration::from_millis(100),
         );
-        assert!(s2.valid && s2.delta_num == -1, "snapshots must continue");
+        assert!(s2.valid, "snapshots must continue");
     }
 
     /// A retail client omits unchanged angle fields (change bit 0) instead of
@@ -2112,7 +2163,7 @@ mod tests {
             &mut ring,
             t1 + std::time::Duration::from_millis(50),
         );
-        assert!(s2.valid && s2.delta_num == -1, "snapshots must continue");
+        assert!(s2.valid, "snapshots must continue");
         assert!(
             (s2.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01,
             "the garbled packet must not reset the base, got {}",
