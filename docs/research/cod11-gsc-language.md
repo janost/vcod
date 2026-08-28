@@ -460,6 +460,30 @@ trusted as ground truth rather than a best guess.
   Settle by spawning several `mp_deathmatch_spawn` entities in a known
   input order on a test map and diffing `getentarray`'s returned order
   against retail's.
+- **`i%count` is a parse error.** `lex.rs`'s number/operator scan resolves a
+  `%` immediately followed by an identifier-start character unconditionally
+  as an anim reference (`%count` lexes as `Tok::Anim("count")`), with no
+  lookback at what precedes it — so `i % count` (spaced) lexes as modulo,
+  but `i%count` (tight) lexes as `Ident("i")` followed by `Anim("count")`
+  with no operator between them, which the parser rejects. No stock script
+  spells modulo this way (the corpus always spaces it), but this crate's
+  stated posture is that it also runs third-party map scripts, where a
+  tightly-spelled modulo is plausible. Whether retail's lexer has the same
+  ambiguity — it would need the same kind of one-character lookahead choice
+  — is unverified.
+- **`-2147483648` is unreachable as a literal, but reachable via a cast.**
+  No lexed integer literal can spell `i32::MIN`: `read_number` (`lex.rs`)
+  parses only the unsigned digit run, and `2147483648` (one past
+  `i32::MAX`) overflows `i32::from_str`, so it falls back to `Tok::Float`
+  the same way any oversized literal does (see the "sentinel" comment next
+  to that fallback). `-2147483648` therefore compiles as `Neg` applied to
+  `Float(2147483648.0)`, evaluated through `eval_neg`'s float arm to
+  `Float(-2147483648.0)`, exactly representable since `2^31` fits an f32
+  mantissa exactly. `(int)` of that goes through `CastInt`'s `f as i32`,
+  a saturating cast since Rust 1.45 — and lands exactly on `i32::MIN`,
+  since the float value is exact and already in range, not clamped. So the
+  value is reachable, just never as a direct `Op::Const(Value::Int(...))`.
+  Pinned by `vm::tests::int_min_is_reachable_only_through_a_float_cast_not_a_direct_literal`.
 
 ## 10. Divergences kept as documentation, not code
 

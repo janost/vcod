@@ -1491,6 +1491,22 @@ pub(crate) mod tests {
         assert_eq!(v, Value::Float(3.0));
     }
 
+    /// No lexed integer literal spells `i32::MIN`: `2147483648` overflows
+    /// `read_number`'s `i32` parse and falls back to a float, so
+    /// `-2147483648` compiles as `Neg` on `Float(2147483648.0)`. It is
+    /// still reachable through `(int)` of that float -- a saturating cast
+    /// since Rust 1.45 -- because `2147483648.0` is exact in `f32` (a power
+    /// of two) and already in range, so the cast lands exactly on
+    /// `i32::MIN` rather than clamping short of it.
+    /// (docs/research/cod11-gsc-language.md §9)
+    #[test]
+    fn int_min_is_reachable_only_through_a_float_cast_not_a_direct_literal() {
+        let (v, _, _) = run("main() { return -2147483648; }");
+        assert_eq!(v, Value::Float(-2147483648.0), "no direct int literal");
+        let (v, _, _) = run("main() { return (int)-2147483648; }");
+        assert_eq!(v, Value::Int(i32::MIN), "reachable via a saturating cast");
+    }
+
     #[test]
     fn vectors_add_componentwise() {
         let (v, _, _) = run("main() { return (1,2,3) + (10,20,30); }");
