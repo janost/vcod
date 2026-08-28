@@ -576,8 +576,9 @@ fn usercmd_from_input(input: &InputState, cam: &FlyCamera) -> net::msg::UserCmd 
         angles: [angle2short(pitch_deg), angle2short(yaw_deg), 0],
         forward: axis(input.forward, input.back),
         right: axis(input.right, input.left),
-        // `up` is not in the compact move encoding; a noclip spectator climbs
-        // by looking up and moving forward.
+        // A nonzero `up` selects the full usercmd branch, which carries it;
+        // the compact branch is the one that cannot (write_delta_usercmd).
+        up: axis(input.up, input.down),
         ..Default::default()
     }
 }
@@ -1933,6 +1934,41 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Space and Ctrl reach the server. `up` rides the full usercmd branch,
+    /// not the compact one, so it needs the axis set like forward and right.
+    #[test]
+    fn usercmd_carries_the_up_axis() {
+        let cam = FlyCamera::new(Vec3::ZERO, 0.0);
+
+        let rising = usercmd_from_input(
+            &InputState {
+                up: true,
+                ..Default::default()
+            },
+            &cam,
+        );
+        assert_eq!(rising.up, 127, "Space must climb");
+
+        let falling = usercmd_from_input(
+            &InputState {
+                down: true,
+                ..Default::default()
+            },
+            &cam,
+        );
+        assert_eq!(falling.up, -127, "Ctrl must descend");
+
+        let held = usercmd_from_input(
+            &InputState {
+                up: true,
+                down: true,
+                ..Default::default()
+            },
+            &cam,
+        );
+        assert_eq!(held.up, 0, "both held cancels");
+    }
 
     /// Drives the real kar98k through the redraw loop's calls without a window.
     /// Reaches idle, fire, rechamber, ADS up and ADS fire; not LastShot,
