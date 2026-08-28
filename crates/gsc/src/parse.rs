@@ -222,9 +222,12 @@ impl<'a> Parser<'a> {
     // bare name. Shared by method calls on a receiver and `thread` targets,
     // both of which are always followed by a call, unlike `ident_primary`'s
     // own copy of this logic, which also has to produce a bare `FuncRef` or
-    // local variable when no call follows.
+    // local variable when no call follows. A path with segments but no
+    // closing `::` (`self a\b\c(1);`) is a genuine syntax error, not a call
+    // to `a` with the rest silently dropped: every valid script closes a
+    // multi-segment path with `::`.
     fn call_target_from(&mut self, first: String) -> Result<CallTarget, ParseError> {
-        let mut path = vec![first.clone()];
+        let mut path = vec![first];
         while self.eat(&Tok::Backslash) {
             path.push(self.ident_name()?);
         }
@@ -233,7 +236,12 @@ impl<'a> Parser<'a> {
             let file = path.join("/").to_ascii_lowercase();
             return Ok(CallTarget::Path { file, name });
         }
-        Ok(CallTarget::Name(first))
+        if path.len() > 1 {
+            return Err(self.err("expected :: to close a namespaced path"));
+        }
+        Ok(CallTarget::Name(
+            path.pop().expect("path always has one segment"),
+        ))
     }
 
     // A call target in callee position generally: `[[ expr ]]` (a
@@ -409,6 +417,13 @@ impl<'a> Parser<'a> {
                 return self.finish_call(None, CallTarget::Path { file, name }, false);
             }
             return Ok(Expr::FuncRef { file, name });
+        }
+
+        // A path with segments but no closing `::` (`maps\_load(1);`, or
+        // just `maps\_load` as a bare value) is a syntax error, not a local
+        // variable named `maps` with the rest of the path silently dropped.
+        if path.len() > 1 {
+            return Err(self.err("expected :: to close a namespaced path"));
         }
 
         if *self.peek() == Tok::LParen {
@@ -715,6 +730,12 @@ mod tests {
         p.expr().unwrap()
     }
 
+    fn expr_err(src: &str) -> ParseError {
+        let toks = crate::lex::lex(src).unwrap();
+        let mut p = Parser::new(&toks);
+        p.expr().unwrap_err()
+    }
+
     #[test]
     fn precedence_binds_tighter_for_multiplication() {
         // 1 + 2 * 3 parses as 1 + (2 * 3)
@@ -772,6 +793,40 @@ mod tests {
         assert_eq!(name, "wait");
     }
 
+    // `keyword_text` is a hand-maintained inverse of `lex::keyword`, with
+    // nothing tying the two together; a keyword added to the lexer and
+    // forgotten here would only surface as a much later census regression.
+    // Pins the round trip for all thirteen: `keyword_text`'s spelling must
+    // re-lex to the same token.
+    #[test]
+    fn keyword_text_round_trips_every_keyword() {
+        let keywords = [
+            Tok::If,
+            Tok::Else,
+            Tok::While,
+            Tok::Do,
+            Tok::For,
+            Tok::Switch,
+            Tok::Case,
+            Tok::Default,
+            Tok::Break,
+            Tok::Continue,
+            Tok::Return,
+            Tok::Thread,
+            Tok::Wait,
+        ];
+        assert_eq!(keywords.len(), 13);
+        for tok in &keywords {
+            let text = keyword_text(tok).unwrap_or_else(|| panic!("no keyword_text for {tok:?}"));
+            let relexed = crate::lex::lex(text).expect("keyword text always lexes");
+            assert_eq!(
+                &relexed[0].tok, tok,
+                "{text:?} relexes to {:?}, not back to {tok:?}",
+                relexed[0].tok
+            );
+        }
+    }
+
     #[test]
     fn namespaced_call_and_function_reference() {
         let call = expr(r#"maps\mp\_load::main()"#);
@@ -789,6 +844,15 @@ mod tests {
 
         let fp = expr(r#"mptype\american_airborne::main"#);
         assert!(matches!(fp, Expr::FuncRef { .. }));
+    }
+
+    // A multi-segment path that never closes with `::` is not valid gsc;
+    // it must not silently resolve to a local variable named for the first
+    // segment with the rest of the path dropped.
+    #[test]
+    fn a_namespaced_path_without_double_colon_is_an_error() {
+        expr_err(r#"maps\_load(1)"#);
+        expr_err(r#"maps\_load"#);
     }
 
     #[test]
@@ -869,6 +933,14 @@ mod tests {
         assert_eq!(file, "animscripts/wounded");
         assert_eq!(name, "combat");
         assert_eq!(args.len(), 1);
+    }
+
+    // `self a\b\c(1);` must not become a call to `a` with `\b\c` silently
+    // dropped; a receiver-attached path is held to the same `::`-closes-it
+    // rule as `ident_primary`'s copy, above.
+    #[test]
+    fn a_namespaced_receiver_call_without_double_colon_is_an_error() {
+        expr_err(r#"self a\b\c(1)"#);
     }
 
     #[test]
@@ -1081,6 +1153,28 @@ mod tests {
         else {
             panic!("{:?}", f.funcs[0].body[1])
         };
+    }
+
+    // A bare (receiverless) `thread` at statement level whose target is a
+    // namespaced path, not a plain name or a deref: the largest single
+    // share of the first census's failures (76 of 138, all "expected
+    // LParen, found Backslash"), and covered only by the census until now
+    // — the deref form is covered above, and the receiver-attached form by
+    // `method_call_target_can_be_namespaced`.
+    #[test]
+    fn statement_level_thread_can_target_a_namespaced_path() {
+        let f = file(r#"m() { thread maps\_utility::foo(); }"#);
+        let Stmt::Expr(Expr::Call {
+            recv: None,
+            target: CallTarget::Path { file, name },
+            threaded: true,
+            ..
+        }) = &f.funcs[0].body[0]
+        else {
+            panic!("{:?}", f.funcs[0].body[0])
+        };
+        assert_eq!(file, "maps/_utility");
+        assert_eq!(name, "foo");
     }
 
     #[test]
