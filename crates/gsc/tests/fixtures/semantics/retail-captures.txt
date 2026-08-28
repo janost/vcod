@@ -18,14 +18,6 @@ PROBE arraykey_size_both 2
 PROBE arraykey_read_orig 1
 PROBE arraykey_read_lower 2
 
-# probe_cmp_coerce
-PROBE at eq_str_dotzero_int
-PROBE eq_str_dotzero_int 0
-PROBE at eq_str_padded_int
-PROBE eq_str_padded_int 0
-PROBE at eq_str_word_zero
-PROBE eq_str_word_zero 0
-
 # probe_cmp
 PROBE at eq_int_float
 PROBE eq_int_float 1
@@ -35,6 +27,14 @@ PROBE at eq_string_same
 PROBE eq_string_same 1
 PROBE at eq_undefined_int
 PROBE_FATAL pair has unmatching types 'undefined' and 'int'
+
+# probe_cmp_coerce
+PROBE at eq_str_dotzero_int
+PROBE eq_str_dotzero_int 0
+PROBE at eq_str_padded_int
+PROBE eq_str_padded_int 0
+PROBE at eq_str_word_zero
+PROBE eq_str_word_zero 0
 
 # probe_cmp_mixed
 PROBE at eq_string_int
@@ -93,13 +93,13 @@ PROBE size_empty_array 0
 PROBE at size_string
 PROBE size_string 4
 
-# probe_truthy_empty
-PROBE at truthy_empty_string
-PROBE_FATAL cannot cast "" to bool
-
 # probe_truthy
 PROBE at truthy_nonempty_string
 PROBE_FATAL cannot cast "a" to bool
+
+# probe_truthy_empty
+PROBE at truthy_empty_string
+PROBE_FATAL cannot cast "" to bool
 
 # probe_truthy_num
 PROBE at truthy_int_zero

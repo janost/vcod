@@ -10,6 +10,10 @@
 #   tools/capture_probes.sh > crates/gsc/tests/fixtures/semantics/retail-captures.txt
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Pins the glob's sort order: under a UTF-8 locale the underscore is ignored
+# at the first collation level, which reorders sections against the committed
+# file and turns any regeneration into a whole-file diff.
+export LC_ALL=C
 for src in crates/gsc/tests/fixtures/semantics/probe_*.gsc; do
     name="$(basename "$src" .gsc)"
     echo "# $name"
