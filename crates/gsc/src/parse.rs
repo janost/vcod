@@ -240,6 +240,18 @@ impl<'a> Parser<'a> {
                 self.bump();
                 self.ident_primary(name)
             }
+            // A bare local function pointer, e.g. `::Callback_StartGameType`:
+            // no file segment, unlike the `path\path::name` form in
+            // `ident_primary`. All five stock gametypes register their
+            // engine callbacks this way.
+            Tok::ColonColon => {
+                self.bump();
+                let name = self.ident_name()?;
+                Ok(Expr::FuncRef {
+                    file: String::new(),
+                    name,
+                })
+            }
             _ => Err(self.err("expected an expression")),
         }
     }
@@ -709,6 +721,18 @@ mod tests {
         assert!(matches!(*recv, Expr::SelfRef));
         assert_eq!(n, "playsound");
         assert_eq!(args.len(), 1);
+    }
+
+    /// All five stock gametypes register callbacks this way, e.g.
+    /// `dm.gsc:70` `level.callbackStartGameType = ::Callback_StartGameType;`.
+    #[test]
+    fn bare_colon_colon_is_a_local_function_pointer() {
+        let e = expr("::Callback_StartGameType");
+        let Expr::FuncRef { file, name } = e else {
+            panic!("{e:?}")
+        };
+        assert!(file.is_empty());
+        assert_eq!(name, "Callback_StartGameType");
     }
 
     #[test]

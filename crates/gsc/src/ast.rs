@@ -60,6 +60,9 @@ pub enum Expr {
     AnimRef,
     Field(Box<Expr>, String),
     Index(Box<Expr>, Box<Expr>),
+    /// A function pointer value. `file` is empty for a bare `::name`
+    /// pointer, resolved against this file's own functions first, same
+    /// rule as `CallTarget::Name`.
     FuncRef {
         file: String,
         name: String,
