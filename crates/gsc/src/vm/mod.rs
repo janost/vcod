@@ -22,8 +22,8 @@ pub mod sched;
 /// waittill`, `level thread`, `level endon` number in the thousands), so
 /// this cannot be `EntId` alone. Two `u32` newtypes rather than `Option
 /// <Value>`: `Value` carries an `f32` and is neither `Eq` nor `Hash`, and
-/// Task 8 uses `Target` as a map key and as `Thread::endons`'s element
-/// type.
+/// the scheduler uses `Target` as a map key and as `Thread::endons`'s
+/// element type.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Target {
     Entity(EntId),
@@ -38,7 +38,7 @@ pub enum ErrorKind {
     /// shows up, but it is still reachable for every one of them.
     MissingBuiltin(Atom),
     BadType(&'static str),
-    /// Per-frame instruction cap; see Task 8.
+    /// Per-frame instruction cap (`Vm::budget`).
     Budget,
     /// A `wait` or `waittill` reached inside `call_now`.
     SuspendedInImmediateCall,
@@ -323,11 +323,17 @@ impl Vm {
 
     /// `level`'s struct id. `level()` returns a `Target` for notify and call
     /// receivers; this is for the host's own heap reads.
+    ///
+    /// Unused outside this file's tests, and it will stay that way until
+    /// `Cx` grows the same pair: a host reading `level.<field>` from inside
+    /// a builtin holds a `Cx`, not a `Vm`. Reachable today only from a host
+    /// that owns the `Vm` between frames.
     pub fn level_id(&self) -> StructId {
         self.level
     }
 
-    /// `game`'s struct id, the `Target::Struct` counterpart to `level_id`.
+    /// `game`'s struct id, the `Target::Struct` counterpart to `level_id`,
+    /// with the same caveat.
     pub fn game_id(&self) -> StructId {
         self.game
     }
@@ -409,9 +415,10 @@ pub(crate) mod tests {
             args: &[Value],
         ) -> Result<Value, ErrorKind> {
             // Builtin dispatch matches against a fixed lowercase literal, so
-            // it resolves folded: `IPrintLn(...)` must still reach the
-            // "iprintln" arm below.
-            let n = cx.resolve(name).to_ascii_lowercase();
+            // it goes through `resolve_folded`: `IPrintLn(...)` must still
+            // reach the "iprintln" arm below. This host is the shape an
+            // embedder copies, so it uses the API rather than folding here.
+            let n = cx.resolve_folded(name).to_string();
             self.calls.push((n.clone(), args.to_vec()));
             match n.as_str() {
                 "double" => match args[0] {
