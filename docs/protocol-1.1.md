@@ -280,7 +280,17 @@ A client is only sent snapshots once it's CS_ACTIVE, and that requires the serve
 
 ## Spectator
 
-On a DM server the client auto-spawns as `GAME_SPECTATOR`, no team command needed. Send usercmds (movement axes plus `ANGLE2SHORT` view angles) every frame; the server runs spectator noclip and the position comes back in the playerState. `forward = 127` moved my playerstate origin about 636 units over 2 seconds and stopped when I stopped sending it, which is the cheapest end-to-end proof the move path works.
+On a DM server the client auto-spawns as `GAME_SPECTATOR`, no team command needed. Send usercmds (movement axes plus `ANGLE2SHORT` view angles) every frame; the server flies the spectator and the position comes back in the playerState. "Free-fly", not noclip: RTCW-MP dispatches `PM_SPECTATOR` to `PM_FlyMove`, which ends in `PM_StepSlideMove` and so collides with world geometry (`bg_pmove.c:3927`), where `PM_NOCLIP` is a separate pm_type that does not. vcod collides to match, which is why a spectator rides up a slope instead of passing through it. INFERRED from the RTCW lineage; whether CoD 1.1 kept it is untested, and driving a probe into a wall against `tools/run_server.sh` would settle it. `forward = 127` moved my playerstate origin about 636 units over 2 seconds and stopped when I stopped sending it, which is the cheapest end-to-end proof the move path works.
+
+### Spectator view angles: `delta_angles`, not `viewangles`
+
+A retail server does not maintain `ps.viewangles` for a spectator. VERIFIED from both committed captures: `viewangles[0]` and `viewangles[1]` are 0.0 on every frame of both, while `delta_angles[1]` holds 16384 (= 90 degrees, the spawn yaw) throughout. The probe that took those captures sends `cmd.angles = [0,0,0]` and never moves its view, so if the server were running RTCW's `PM_UpdateViewAngles` (`ps.viewangles[i] = SHORT2ANGLE(cmd.angles[i] + ps.delta_angles[i])`) the capture would read 90 degrees, not 0.
+
+The angles live in the `cmd.angles` / `delta_angles` pair instead. `delta_angles` is set once at spawn as `ANGLE2SHORT(spawn_angle[i]) - cmd.angles[i]` (RTCW `SetClientViewAngle`, `g_client.c:437`), the client subtracts it when building each usercmd, and the client owns its view between snapshots. vcod's own client already does the subtraction (`crates/common/src/net/mod.rs`).
+
+vcod's server does the inverse: it pins `delta_angles` to zero and writes `viewangles` from the last simulated usercmd every frame. No symptom is known to follow from it now that `commandTime` is honest, and both clients look correct, so it stands as a documented divergence rather than a fix. Changing it is a coordinated three-part edit, not a one-liner: `delta_angles` set at spawn, `SpectatorSim::step` reading `SHORT2ANGLE(cmd.angles + delta_angles)` rather than the raw cmd angle, and `viewangles` dropped; getting one without the others rotates the move basis.
+
+Four more fields a retail spectator's playerstate carries that vcod's does not, meaning unestablished: `bobCycle` 12, `eventSequence` 1, and the pair `events[0]` 143 / `eventParms[0]` 136. `crates/common/examples/snapshot_timing.rs` prints all of them from the captures.
 
 ### `ps.commandTime` and client prediction
 

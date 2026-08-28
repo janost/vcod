@@ -41,6 +41,7 @@ fn report(gs_name: &str, snap_name: &str, p: &Protocol) {
     let mut off = 0usize;
     let mut rows: Vec<(u32, i32, i32, i32)> = Vec::new();
     let mut last_ps: Option<vcod_common::net::msg::PlayerState> = None;
+    let mut angles: Vec<(u32, f32, f32, i32, i32)> = Vec::new();
 
     while off + 8 <= data.len() {
         let message_num = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
@@ -68,6 +69,15 @@ fn report(gs_name: &str, snap_name: &str, p: &Protocol) {
                     let snap = ring.parse_into(&mut r, p, message_num).unwrap().clone();
                     last_ps = Some(snap.ps.clone());
                     let ct = snap.ps.field_i32(p, "commandTime");
+                    if angles.len() < 8 {
+                        angles.push((
+                            snap.message_num,
+                            snap.ps.field_f32(p, "viewangles[0]"),
+                            snap.ps.field_f32(p, "viewangles[1]"),
+                            snap.ps.field_i32(p, "delta_angles[0]"),
+                            snap.ps.field_i32(p, "delta_angles[1]"),
+                        ));
+                    }
                     rows.push((
                         snap.message_num,
                         snap.server_time,
@@ -122,6 +132,18 @@ fn report(gs_name: &str, snap_name: &str, p: &Protocol) {
         .map(|(l, n)| format!("{l}:{n}"))
         .collect();
     println!("  most common leads: {}", top.join(" "));
+
+    println!("  view/delta angles, first frames:");
+    println!(
+        "  {:>8} {:>12} {:>12} {:>14} {:>14}",
+        "msg", "viewang[0]", "viewang[1]", "delta_ang[0]", "delta_ang[1]"
+    );
+    for a in &angles {
+        println!(
+            "  {:>8} {:>12} {:>12} {:>14} {:>14}",
+            a.0, a.1, a.2, a.3, a.4
+        );
+    }
 
     // Every non-zero playerstate field of the last frame: this capture is a
     // lone spectator, so it is the oracle for what our own to_wire should
