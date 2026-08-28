@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::atom::{Atom, Interner};
+use crate::atom::{Atom, Interner, StrAtom};
 use crate::bytecode::{Function, Op};
 use crate::heap::{ArrayKey, Heap};
 use crate::value::{EntId, FuncRef, StructId, Value};
@@ -93,7 +93,7 @@ pub enum Suspend {
     },
     WaitTill {
         target: Target,
-        event: Atom,
+        event: StrAtom,
         binds: Box<[u16]>,
     },
 }
@@ -149,8 +149,8 @@ fn eval_add(interner: &mut Interner, a: Value, b: Value) -> Result<Value, ErrorK
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(y))),
         (Value::String(x), Value::String(y)) => {
-            let s = format!("{}{}", interner.resolve(x), interner.resolve(y));
-            Ok(Value::String(interner.intern(&s)))
+            let s = format!("{}{}", interner.resolve_str(x), interner.resolve_str(y));
+            Ok(Value::String(interner.intern_str(&s)))
         }
         (Value::Vector(x), Value::Vector(y)) => {
             Ok(Value::Vector([x[0] + y[0], x[1] + y[1], x[2] + y[2]]))
@@ -1052,7 +1052,36 @@ mod tests {
         let Value::String(a) = v else {
             panic!("expected a string, got {v:?}")
         };
-        assert_eq!(vm.interner_mut().resolve(a), "foobar");
+        assert_eq!(vm.interner_mut().resolve_str(a), "foobar");
+    }
+
+    /// The defect this task fixes: string *content* must not be case-folded.
+    /// Folding here would send every script-built message to players
+    /// lowercase.
+    #[test]
+    fn string_concatenation_preserves_case() {
+        let (v, _, mut vm) = run(r#"main() { return "Round " + "won"; }"#);
+        let Value::String(a) = v else {
+            panic!("expected a string, got {v:?}")
+        };
+        assert_eq!(vm.interner_mut().resolve_str(a), "Round won");
+    }
+
+    /// Builtin dispatch still resolves the callee's name folded: a host
+    /// matches on a lowercase literal like "iprintln" regardless of the
+    /// case the script called it with.
+    #[test]
+    fn a_builtin_name_still_resolves_folded_even_when_called_with_mixed_case() {
+        let (_, host, _) = run(r#"main() { IPrintLn("hi"); }"#);
+        assert!(host.calls.iter().any(|(n, _)| n == "iprintln"));
+    }
+
+    /// Field names are identifiers, not content, so access stays
+    /// case-insensitive: `level.Origin` and `level.origin` name the same slot.
+    #[test]
+    fn field_access_is_still_case_insensitive() {
+        let (v, _, _) = run("main() { level.Origin = 3; return level.origin; }");
+        assert_eq!(v, Value::Int(3));
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::{
     self, ArmLabel, BinOp, CallTarget, Cast, Expr, FuncDef, Stmt, StmtKind, SwitchArm, UnOp,
 };
-use crate::atom::{Atom, Interner};
+use crate::atom::{Atom, Interner, StrAtom};
 use crate::bytecode::{Function, Op};
 use crate::value::{FuncRef, Value};
 
@@ -34,7 +34,8 @@ pub fn compile_file(
     // The AST does not track which `#using_animtree` was active at each
     // function's lexical position, so a bare `#animtree` resolves against
     // the last directive in the file. No stock MP script reads it back.
-    let animtree = file.animtrees.last().map(|s| interner.intern(s));
+    // It surfaces as `Value::Anim` content, so it is interned unfolded.
+    let animtree = file.animtrees.last().map(|s| interner.intern_str(s));
 
     let mut local_funcs = HashSet::new();
     for f in &file.funcs {
@@ -69,7 +70,7 @@ struct Compiler<'a> {
     interner: &'a mut Interner,
     file_atom: Atom,
     local_funcs: &'a HashSet<Atom>,
-    animtree: Option<Atom>,
+    animtree: Option<StrAtom>,
     locals: HashMap<String, u16>,
     code: Vec<Op>,
     consts: Vec<Value>,
@@ -470,15 +471,15 @@ impl<'a> Compiler<'a> {
             Expr::Int(n) => self.push_const(Value::Int(*n))?,
             Expr::Float(f) => self.push_const(Value::Float(*f))?,
             Expr::Str(s) => {
-                let a = self.interner.intern(s);
+                let a = self.interner.intern_str(s);
                 self.push_const(Value::String(a))?;
             }
             Expr::Localized(s) => {
-                let a = self.interner.intern(s);
+                let a = self.interner.intern_str(s);
                 self.push_const(Value::Localized(a))?;
             }
             Expr::Anim(s) => {
-                let a = self.interner.intern(s);
+                let a = self.interner.intern_str(s);
                 self.push_const(Value::Anim(a))?;
             }
             Expr::AnimtreeRef => match self.animtree {

@@ -13,6 +13,6 @@ pub mod parse;
 pub mod value;
 pub mod vm;
 
-pub use atom::{Atom, Interner};
+pub use atom::{Atom, Interner, StrAtom};
 pub use value::{ArrayId, EntId, FuncRef, StructId, Value};
 pub use vm::{ErrorKind, Host, ScriptError, Vm};
