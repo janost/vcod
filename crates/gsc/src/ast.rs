@@ -51,6 +51,10 @@ pub enum Expr {
     Str(String),
     Localized(String),
     Anim(String),
+    /// Bare `#animtree`, no parens: the tree name set by an earlier
+    /// `#using_animtree("name");` in this file, read back in expression
+    /// position, e.g. `self UseAnimTree(#animtree);`.
+    AnimtreeRef,
     VectorLit(Box<Expr>, Box<Expr>, Box<Expr>),
     EmptyArray,
     Local(String),

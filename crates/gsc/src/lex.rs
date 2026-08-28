@@ -10,6 +10,9 @@ pub enum Tok {
     Localized(String),
     Anim(String),
     UsingAnimtree(String),
+    /// Bare `#animtree`, no parens: distinct from `UsingAnimtree`, which
+    /// always carries a name.
+    AnimtreeRef,
     If,
     Else,
     While,
@@ -297,7 +300,8 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    // `#using_animtree("name")`; any other `#` directive is an error.
+    // `#using_animtree("name")` or bare `#animtree`; any other `#`
+    // directive is an error.
     fn read_directive(&mut self) -> Result<Tok, LexError> {
         let line = self.line;
         self.i += 1; // '#'
@@ -306,6 +310,9 @@ impl<'a> Lexer<'a> {
         } else {
             return Err(self.err(line, "unexpected '#'"));
         };
+        if word.eq_ignore_ascii_case("animtree") {
+            return Ok(Tok::AnimtreeRef);
+        }
         if !word.eq_ignore_ascii_case("using_animtree") {
             return Err(self.err(line, format!("unknown directive '#{word}'")));
         }
@@ -579,6 +586,13 @@ mod tests {
     fn an_unterminated_string_names_its_line() {
         let e = lex("a\nb\n\"oops").unwrap_err();
         assert_eq!(e.line, 3);
+    }
+
+    // Distinct from `#using_animtree("name")`: no parens, and it appears in
+    // expression position, e.g. `self UseAnimTree(#animtree);`.
+    #[test]
+    fn bare_animtree_directive_is_its_own_token() {
+        assert_eq!(toks("#animtree"), vec![Tok::AnimtreeRef, Tok::Eof]);
     }
 
     // A literal past i32::MAX must not panic the lexer: a third-party map

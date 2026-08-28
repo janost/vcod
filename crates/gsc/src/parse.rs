@@ -280,6 +280,10 @@ impl<'a> Parser<'a> {
                 self.bump();
                 Ok(Expr::Anim(s))
             }
+            Tok::AnimtreeRef => {
+                self.bump();
+                Ok(Expr::AnimtreeRef)
+            }
             Tok::LBracket => self.bracket_primary(),
             Tok::LParen => self.paren_primary(),
             Tok::Ident(name) => {
@@ -823,6 +827,12 @@ mod tests {
     #[test]
     fn empty_array_literal() {
         assert!(matches!(expr("[]"), Expr::EmptyArray));
+    }
+
+    /// `animscripts/b30cal/prone.gsc:51` `self UseAnimTree(#animtree);`.
+    #[test]
+    fn bare_animtree_directive_is_an_expression() {
+        assert!(matches!(expr("#animtree"), Expr::AnimtreeRef));
     }
 
     #[test]
