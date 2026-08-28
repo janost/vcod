@@ -12,6 +12,7 @@ use std::rc::Rc;
 use crate::atom::{Atom, Interner};
 use crate::bytecode::{Function, Op};
 use crate::heap::{ArrayKey, Heap};
+use crate::sched::{Thread, ThreadId, ThreadState};
 use crate::value::{EntId, FuncRef, StructId, Value};
 
 /// `self`/a call's receiver, once resolved to something field access and
@@ -263,12 +264,33 @@ fn target_to_value(t: Target) -> Value {
     }
 }
 
+impl From<EntId> for Target {
+    fn from(e: EntId) -> Self {
+        Target::Entity(e)
+    }
+}
+
+impl From<StructId> for Target {
+    fn from(s: StructId) -> Self {
+        Target::Struct(s)
+    }
+}
+
 pub struct Vm {
     interner: Interner,
     heap: Heap,
     functions: HashMap<FuncRef, Rc<Function>>,
     level: StructId,
     game: StructId,
+    /// Kept in start order so a `run_frame` walk, and a `notify` wake, are
+    /// both deterministic.
+    threads: Vec<Thread>,
+    next_thread: u32,
+    /// Instructions a thread may run in one `run_frame` call before it is
+    /// aborted with `ErrorKind::Budget`. Every instruction counts against
+    /// it, `Call`/`CallPtr` included, so unbounded recursion is caught the
+    /// same as an unbounded loop.
+    budget: u32,
 }
 
 impl Default for Vm {
@@ -288,7 +310,214 @@ impl Vm {
             functions: HashMap::new(),
             level,
             game,
+            threads: Vec::new(),
+            next_thread: 0,
+            budget: 1_000_000,
         }
+    }
+
+    pub fn set_budget(&mut self, budget: u32) {
+        self.budget = budget;
+    }
+
+    pub fn thread_count(&self) -> usize {
+        self.threads.len()
+    }
+
+    /// Starts a new thread running `func` from its first instruction and
+    /// returns its id. The function must already be installed. The public
+    /// entry point only ever hands a thread an entity: a `level`/`game`
+    /// (struct) receiver reaches a thread through the in-script `thread`
+    /// path (`self.spawn` from `Op::Call`), which already carries a full
+    /// `Target`.
+    pub fn start_thread(
+        &mut self,
+        func: FuncRef,
+        recv: Option<EntId>,
+        args: Vec<Value>,
+    ) -> ThreadId {
+        let f = self
+            .functions
+            .get(&func)
+            .cloned()
+            .expect("start_thread target must be installed");
+        self.spawn(func, &f, recv.map(Target::Entity), args)
+    }
+
+    fn spawn(
+        &mut self,
+        func: FuncRef,
+        f: &Function,
+        recv: Option<Target>,
+        args: Vec<Value>,
+    ) -> ThreadId {
+        let frame = self.make_frame(func, f, recv, args);
+        let id = ThreadId(self.next_thread);
+        self.next_thread += 1;
+        self.threads.push(Thread {
+            id,
+            frames: vec![frame],
+            state: ThreadState::Runnable,
+            endons: Vec::new(),
+        });
+        id
+    }
+
+    /// Kills every thread endon-registered against `(target, event)`, then
+    /// wakes every thread waiting on it, binding `args` into the locals the
+    /// `waittill` recorded (a missing argument writes `Undefined`). Both
+    /// passes walk `threads` in start order, so two waiters on the same
+    /// event always wake oldest first, and every endon kill lands before
+    /// any notify wake. Waking only flips a thread's state to `Runnable`;
+    /// it does not run here, so a notify can never reenter the VM.
+    pub fn notify(&mut self, target: impl Into<Target>, event: Atom, args: &[Value]) {
+        let target = target.into();
+        let mut i = 0;
+        while i < self.threads.len() {
+            if self.threads[i]
+                .endons
+                .iter()
+                .any(|&(t, e)| t == target && e == event)
+            {
+                self.threads.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        for t in &mut self.threads {
+            let matches_wait = matches!(
+                &t.state,
+                ThreadState::WaitingNotify { target: wt, event: we, .. }
+                    if *wt == target && *we == event
+            );
+            if !matches_wait {
+                continue;
+            }
+            let ThreadState::WaitingNotify { binds, .. } =
+                std::mem::replace(&mut t.state, ThreadState::Runnable)
+            else {
+                unreachable!("matches_wait only true for WaitingNotify");
+            };
+            let frame = t
+                .frames
+                .last_mut()
+                .expect("a waiting thread always retains its frame stack");
+            for (arg_idx, &slot) in binds.iter().enumerate() {
+                frame.locals[slot as usize] =
+                    args.get(arg_idx).copied().unwrap_or(Value::Undefined);
+            }
+        }
+    }
+
+    fn log_script_error(&self, e: &ScriptError) {
+        log::warn!(
+            "gsc: thread aborted in {}::{}:{}: {:?}",
+            self.interner.resolve(e.file),
+            self.interner.resolve(e.func),
+            e.line,
+            e.kind
+        );
+    }
+
+    /// Runs one server frame: promotes every `WaitingUntil` thread whose
+    /// deadline has passed to `Runnable`, then steps every runnable thread
+    /// in start order with a fresh budget until it returns, suspends, or
+    /// errors. A thread spawned mid-frame (a threaded call) is visited too,
+    /// since its id is higher than the watermark that admitted it; one
+    /// endon-killed or notified by another thread's step is re-resolved by
+    /// id rather than by a cached index, since that step's deferred notify
+    /// can add, remove or reorder entries first. A returned, errored or
+    /// budget-exhausted thread is removed; the errors are collected and
+    /// returned rather than propagated, so one bad thread never stops the
+    /// rest of the server.
+    pub fn run_frame(&mut self, host: &mut dyn Host, now_ms: i32) -> Vec<ScriptError> {
+        for t in &mut self.threads {
+            if let ThreadState::WaitingUntil(deadline) = t.state {
+                if deadline <= now_ms {
+                    t.state = ThreadState::Runnable;
+                }
+            }
+        }
+
+        let mut errors = Vec::new();
+        let mut last_id: Option<u32> = None;
+        loop {
+            let next = self
+                .threads
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| last_id.is_none_or(|l| t.id.0 > l))
+                .min_by_key(|(_, t)| t.id.0)
+                .map(|(i, t)| (i, t.id));
+            let Some((idx, tid)) = next else {
+                break;
+            };
+            last_id = Some(tid.0);
+            if !matches!(self.threads[idx].state, ThreadState::Runnable) {
+                continue;
+            }
+
+            let mut frames = std::mem::take(&mut self.threads[idx].frames);
+            let mut endons = Vec::new();
+            let mut notifies = Vec::new();
+            let budget = self.budget;
+            let result = self.step_frames(host, &mut frames, budget, &mut endons, &mut notifies);
+
+            match result {
+                Ok(Step::Returned(_)) => {
+                    self.threads.remove(idx);
+                }
+                Ok(Step::Suspend(Suspend::Wait { seconds })) => {
+                    let delay_ms = (seconds.max(0.0) * 1000.0) as i32;
+                    self.threads[idx].frames = frames;
+                    self.threads[idx].endons.extend(endons);
+                    self.threads[idx].state = ThreadState::WaitingUntil(now_ms + delay_ms);
+                }
+                Ok(Step::Suspend(Suspend::WaitTill {
+                    target,
+                    event,
+                    binds,
+                })) => {
+                    self.threads[idx].frames = frames;
+                    self.threads[idx].endons.extend(endons);
+                    self.threads[idx].state = ThreadState::WaitingNotify {
+                        target,
+                        event,
+                        binds,
+                    };
+                }
+                Ok(Step::Running) => {
+                    let top = frames
+                        .last()
+                        .expect("budget exhaustion always leaves a frame on top");
+                    let func = self
+                        .functions
+                        .get(&top.func)
+                        .expect("frame references an installed function");
+                    let line = func.lines[(top.ip as usize).saturating_sub(1)];
+                    let e = ScriptError {
+                        file: func.file,
+                        func: func.name,
+                        line,
+                        kind: ErrorKind::Budget,
+                    };
+                    self.log_script_error(&e);
+                    errors.push(e);
+                    self.threads.remove(idx);
+                }
+                Err(e) => {
+                    self.log_script_error(&e);
+                    errors.push(e);
+                    self.threads.remove(idx);
+                }
+            }
+
+            for (target, event, args) in notifies {
+                self.notify(target, event, &args);
+            }
+        }
+        errors
     }
 
     pub fn interner_mut(&mut self) -> &mut Interner {
@@ -347,16 +576,32 @@ impl Vm {
     /// here yet, so `Step::Running` is not produced; Task 8's scheduler
     /// adds that and consumes it.
     ///
-    /// Precondition: `frames` is non-empty. A caller (Task 8's scheduler,
-    /// once it resumes a thread from its saved frame stack) must never
-    /// invoke this with an empty stack; it panics rather than doing
-    /// nothing, since there is no frame to attribute a `ScriptError` to.
+    /// Precondition: `frames` is non-empty. A caller (the scheduler, once
+    /// it resumes a thread from its saved frame stack) must never invoke
+    /// this with an empty stack; it panics rather than doing nothing,
+    /// since there is no frame to attribute a `ScriptError` to.
+    ///
+    /// `budget` is the number of instructions this call may run before
+    /// giving up with `Step::Running`; every instruction counts against it
+    /// uniformly, `Call`/`CallPtr` included, so the caller decides what
+    /// "budget exhausted" means (the scheduler treats it as an error).
+    /// `endons` and `notifies` collect every `Op::EndOn`/`Op::Notify` this
+    /// call reaches, in order, for the caller to apply: a notify is never
+    /// resolved here, so a script cannot wake a thread mid-instruction.
     pub fn step_frames(
         &mut self,
         host: &mut dyn Host,
         frames: &mut Vec<Frame>,
+        budget: u32,
+        endons: &mut Vec<(Target, Atom)>,
+        notifies: &mut Vec<(Target, Atom, Vec<Value>)>,
     ) -> Result<Step, ScriptError> {
+        let mut remaining = budget;
         loop {
+            if remaining == 0 {
+                return Ok(Step::Running);
+            }
+            remaining -= 1;
             let top = frames.len() - 1;
             let func_ref = frames[top].func;
             let func = self
@@ -482,7 +727,7 @@ impl Vm {
                     func: target,
                     argc,
                     has_recv,
-                    threaded: _,
+                    threaded,
                 } => {
                     let mut args = Vec::with_capacity(argc as usize);
                     for _ in 0..argc {
@@ -497,7 +742,12 @@ impl Vm {
                             self.interner.resolve(target.name)
                         )))
                     })?;
-                    frames.push(self.make_frame(target, &callee, recv, args));
+                    if threaded {
+                        self.spawn(target, &callee, recv, args);
+                        push!(Value::Undefined);
+                    } else {
+                        frames.push(self.make_frame(target, &callee, recv, args));
+                    }
                 }
                 Op::CallBuiltin {
                     name,
@@ -518,7 +768,7 @@ impl Vm {
                 Op::CallPtr {
                     argc,
                     has_recv,
-                    threaded: _,
+                    threaded,
                 } => {
                     let ptr = pop!();
                     let Value::Function(target) = ptr else {
@@ -539,7 +789,12 @@ impl Vm {
                             self.interner.resolve(target.name)
                         )))
                     })?;
-                    frames.push(self.make_frame(target, &callee, recv, args));
+                    if threaded {
+                        self.spawn(target, &callee, recv, args);
+                        push!(Value::Undefined);
+                    } else {
+                        frames.push(self.make_frame(target, &callee, recv, args));
+                    }
                 }
                 Op::Add => {
                     let b = pop!();
@@ -702,38 +957,41 @@ impl Vm {
                         binds,
                     }));
                 }
-                // Neither op has a scheduler to reach yet (Task 8 owns the
-                // waiting-thread registry both would signal or register
-                // against), but the receiver is still type-checked and
-                // resolved to a `Target` here so that wiring dispatch up
-                // in Task 8 means touching this match arm, not adding a
-                // new one beside code that silently discarded it.
+                // Queued for the caller rather than resolved here: `notify`
+                // must not wake another thread mid-instruction, and `endon`
+                // has no thread to register against (`frames` alone does
+                // not say which `Thread` this is, or whether there is one
+                // at all — `call_now` has none).
                 Op::Notify { argc } => {
+                    let mut args = Vec::with_capacity(argc as usize);
                     for _ in 0..argc {
-                        pop!();
+                        args.push(pop!());
                     }
+                    args.reverse();
                     let event = pop!();
                     let recv = pop!();
-                    let Value::String(_event) = event else {
+                    let Value::String(event) = event else {
                         return Err(err(ErrorKind::BadType("notify needs a string event name")));
                     };
-                    let _target = as_target(recv).ok_or_else(|| {
+                    let target = as_target(recv).ok_or_else(|| {
                         err(ErrorKind::BadType(
                             "notify needs an entity or struct receiver",
                         ))
                     })?;
+                    notifies.push((target, event, args));
                 }
                 Op::EndOn => {
                     let event = pop!();
                     let recv = pop!();
-                    let Value::String(_event) = event else {
+                    let Value::String(event) = event else {
                         return Err(err(ErrorKind::BadType("endon needs a string event name")));
                     };
-                    let _target = as_target(recv).ok_or_else(|| {
+                    let target = as_target(recv).ok_or_else(|| {
                         err(ErrorKind::BadType(
                             "endon needs an entity or struct receiver",
                         ))
                     })?;
+                    endons.push((target, event));
                 }
             }
         }
@@ -760,39 +1018,61 @@ impl Vm {
                 kind: ErrorKind::Custom("no such function".to_string()),
             })?;
         let mut frames = vec![self.make_frame(func, &f, recv, args)];
-        loop {
-            match self.step_frames(host, &mut frames)? {
-                Step::Running => continue,
-                Step::Returned(v) => return Ok(v),
-                Step::Suspend(_) => {
-                    let top = frames
-                        .last()
-                        .expect("a suspend always leaves a frame on top");
-                    let f = self
-                        .functions
-                        .get(&top.func)
-                        .expect("frame references an installed function");
-                    return Err(ScriptError {
-                        file: f.file,
-                        func: f.name,
-                        line: f.lines[top.ip as usize - 1],
-                        kind: ErrorKind::SuspendedInImmediateCall,
-                    });
-                }
+        let mut endons = Vec::new();
+        let mut notifies = Vec::new();
+        let budget = self.budget;
+        let result = self.step_frames(host, &mut frames, budget, &mut endons, &mut notifies);
+        // A notify fired before the failure below still had its effect;
+        // there is no thread here to attach the endons to, so those are
+        // dropped.
+        for (target, event, args) in notifies {
+            self.notify(target, event, &args);
+        }
+        match result? {
+            Step::Returned(v) => Ok(v),
+            Step::Suspend(_) => {
+                let top = frames
+                    .last()
+                    .expect("a suspend always leaves a frame on top");
+                let f = self
+                    .functions
+                    .get(&top.func)
+                    .expect("frame references an installed function");
+                Err(ScriptError {
+                    file: f.file,
+                    func: f.name,
+                    line: f.lines[top.ip as usize - 1],
+                    kind: ErrorKind::SuspendedInImmediateCall,
+                })
+            }
+            Step::Running => {
+                let top = frames
+                    .last()
+                    .expect("budget exhaustion always leaves a frame on top");
+                let f = self
+                    .functions
+                    .get(&top.func)
+                    .expect("frame references an installed function");
+                Err(ScriptError {
+                    file: f.file,
+                    func: f.name,
+                    line: f.lines[top.ip as usize - 1],
+                    kind: ErrorKind::Budget,
+                })
             }
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::atom::Interner;
     use crate::value::{EntId, Value};
     use std::collections::HashMap;
 
     #[derive(Default)]
-    struct TestHost {
+    pub(crate) struct TestHost {
         pub calls: Vec<(String, Vec<Value>)>,
         pub fields: HashMap<(u32, String), Value>,
     }
@@ -975,15 +1255,17 @@ mod tests {
     // receivers, and the four brief rules that previously rested only on
     // review. ---
 
-    /// `level thread f()` and friends are the majority of the corpus's
-    /// control flow (996 `level notify`, 956 `level waittill`, 728 `level
-    /// thread`, 408 `level endon` sites). `self` inside the callee must
-    /// bind to the same heap struct `level` names, not fall back to
-    /// `Undefined` the way a non-entity receiver used to.
+    /// `level f()` and friends are the majority of the corpus's control
+    /// flow (996 `level notify`, 956 `level waittill`, 728 `level thread`,
+    /// 408 `level endon` sites). `self` inside the callee must bind to the
+    /// same heap struct `level` names, not fall back to `Undefined` the way
+    /// a non-entity receiver used to. A plain call, not `thread`: since
+    /// Task 8, a threaded call spawns a scheduled thread rather than
+    /// running inline, and `call_now` has no scheduler to run it.
     #[test]
     fn level_can_be_a_call_receiver_and_self_binds_to_it() {
         let (v, _, _) =
-            run("main() { level thread helper(); return level.mark; } helper() { self.mark = 7; }");
+            run("main() { level helper(); return level.mark; } helper() { self.mark = 7; }");
         assert_eq!(v, Value::Int(7));
     }
 
@@ -1115,5 +1397,15 @@ mod tests {
         let main = vm.func_ref("test/script", "main");
         let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
         assert!(matches!(e.kind, ErrorKind::BadType(_)));
+    }
+
+    /// The interner folds atom identity case-insensitively, and array keys
+    /// intern the same way field names do, so two differently-cased string
+    /// literals used as a key collide on write and read alike. The corpus
+    /// has three such pairs; nothing pinned this before.
+    #[test]
+    fn array_keys_fold_case_like_field_names() {
+        let (v, _, _) = run(r#"main() { a = []; a["medFire"] = 1; return a["medfire"]; }"#);
+        assert_eq!(v, Value::Int(1));
     }
 }
