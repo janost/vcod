@@ -61,6 +61,8 @@ impl Heap {
     pub fn set_field(&mut self, s: StructId, f: Atom, v: Value) {
         if let Some(fields) = self.structs.get_mut(s.0 as usize) {
             fields.insert(f, v);
+        } else {
+            log::warn!("dropped a write to struct {} (out of range)", s.0);
         }
     }
 
@@ -78,7 +80,15 @@ impl Heap {
     pub fn set_index(&mut self, a: ArrayId, k: ArrayKey, v: Value) {
         if let Some(elems) = self.arrays.get_mut(a.0 as usize) {
             elems.insert(k, v);
+        } else {
+            log::warn!("dropped a write to array {} (out of range)", a.0);
         }
+    }
+
+    /// An array's element count, for `.size` and for a host that walks one.
+    /// An id out of range reads as 0, the same no-panic rule as the accessors.
+    pub fn array_len(&self, a: ArrayId) -> usize {
+        self.arrays.get(a.0 as usize).map_or(0, |e| e.len())
     }
 }
 
@@ -92,7 +102,7 @@ mod tests {
         let mut h = Heap::new();
         let mut i = Interner::default();
         let s = h.new_struct();
-        let f = i.intern("hp");
+        let f = i.intern_folded("hp");
         assert_eq!(h.get_field(s, f), Value::Undefined);
     }
 
@@ -101,7 +111,7 @@ mod tests {
         let mut h = Heap::new();
         let mut i = Interner::default();
         let s = h.new_struct();
-        let f = i.intern("hp");
+        let f = i.intern_folded("hp");
         h.set_field(s, f, Value::Int(100));
         assert_eq!(h.get_field(s, f), Value::Int(100));
     }
@@ -128,7 +138,7 @@ mod tests {
     fn an_out_of_range_id_reads_undefined_and_a_write_is_a_no_op() {
         let mut h = Heap::new();
         let mut i = Interner::default();
-        let f = i.intern("hp");
+        let f = i.intern_folded("hp");
         let bad_struct = StructId(99);
         let bad_array = ArrayId(99);
         assert_eq!(h.get_field(bad_struct, f), Value::Undefined);
@@ -145,7 +155,7 @@ mod tests {
         let mut i = Interner::default();
         let a = h.new_struct();
         let b = h.new_struct();
-        let f = i.intern("hp");
+        let f = i.intern_folded("hp");
         h.set_field(a, f, Value::Int(1));
         assert_eq!(h.get_field(b, f), Value::Undefined);
     }

@@ -16,8 +16,10 @@ engineering setup works.
   fx, audio, `probe.rs`. `crates/server` (`vcod-server`): the dedicated server.
   `crates/gsc` (`vcod-gsc`): a virtual machine for CoD's script language
   (`.gsc`) — lexer, parser, bytecode compiler, instruction loop, thread
-  scheduler and cross-file loader, so the dedicated server can eventually run
-  Activision's own shipped gameplay scripts. `vcod-gsc` must not depend on
+  scheduler and cross-file loader. The dedicated server loads and runs the
+  map script at map load; the rest of Activision's shipped gameplay scripts
+  wait on the entity object model and the builtins they call.
+  `vcod-gsc` must not depend on
   `vcod-common` either, same rule as `common` itself: `cargo tree -p vcod-gsc
   -e normal` shows only `anyhow` and `log`. Nothing in `common` may import
   wgpu, winit or kira; `cargo tree -p vcod-common -i wgpu` proves it. `cargo
@@ -152,6 +154,14 @@ engineering setup works.
   delta-compressed against the client's acked frame, with pmove-driven
   spectator flight and `--test-entities` for scripted packet entities (no
   restarts yet).
+- `tools/run_probe.sh <probe> [map]` drives the same retail binary as the
+  gsc oracle: it drops one `crates/gsc/tests/fixtures/semantics/probe_*.gsc`
+  in as a gametype script, boots the server, and prints the `PROBE` lines
+  the script logged. `tools/capture_probes.sh` runs every probe that way and
+  writes the combined `retail-captures.txt` the A/B test in
+  `crates/gsc/tests/semantics_ab.rs` compares vcod's VM against. Both need
+  the same setup `run_server.sh` documents; a full capture takes a couple of
+  minutes because every probe boots the server.
 - Live captures so far came from populated public servers (a TDM server on
   2026-08-24, an S&D server on 2026-08-25); a 60-100 s capture during a round
   is enough to see every combat event. The master at

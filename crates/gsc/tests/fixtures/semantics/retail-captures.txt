@@ -1,0 +1,121 @@
+# probe_arith
+PROBE div_int_int 0
+PROBE div_int_int_exact 2
+PROBE div_mixed 1.5
+PROBE mul_int_int 9
+PROBE mul_mixed 4.5
+PROBE add_int_int 3
+PROBE add_mixed 1.5
+PROBE mod_int_int 1
+PROBE mod_negative -1
+PROBE neg_int -5
+PROBE at div_by_zero
+PROBE_FATAL divide by 0
+
+# probe_arraykey_case
+PROBE arraykey_size_after_two_spellings 1
+PROBE arraykey_size_both 2
+PROBE arraykey_read_orig 1
+PROBE arraykey_read_lower 2
+
+# probe_cmp
+PROBE at eq_int_float
+PROBE eq_int_float 1
+PROBE at eq_string_case
+PROBE eq_string_case 0
+PROBE at eq_string_same
+PROBE eq_string_same 1
+PROBE at eq_undefined_int
+PROBE_FATAL pair has unmatching types 'undefined' and 'int'
+
+# probe_cmp_coerce
+PROBE at eq_str_dotzero_int
+PROBE eq_str_dotzero_int 0
+PROBE at eq_str_padded_int
+PROBE eq_str_padded_int 0
+PROBE at eq_str_word_zero
+PROBE eq_str_word_zero 0
+
+# probe_cmp_mixed
+PROBE at eq_string_int
+PROBE eq_string_int 1
+
+# probe_cmp_order
+PROBE at lt_string_string
+PROBE_FATAL pair has unmatching types 'string' and 'string'
+
+# probe_concat
+PROBE concat_int 5
+PROBE concat_negative_int -5
+PROBE concat_float_half 0.5
+PROBE concat_float_whole 2
+PROBE concat_float_long 0.8
+PROBE concat_float_third 0.333333
+PROBE concat_big 1000000
+PROBE at concat_undefined
+PROBE_FATAL pair has unmatching types 'string' and 'undefined'
+
+# probe_concat_vec
+PROBE at concat_vector
+PROBE concat_vector (1.00, 2.00, 3.00)
+
+# probe_ents
+PROBE at ents_deferred
+PROBE entarray_count 7
+PROBE entarray_order 0 auto5
+PROBE entarray_order 1 auto4
+PROBE entarray_order 2 auto3
+PROBE entarray_order 3 auto6
+PROBE entarray_order 4 probe_a
+PROBE entarray_order 5 probe_b
+PROBE entarray_order 6 probe_c
+
+# probe_field_case
+PROBE field_read_same_case 7
+PROBE at field_read_other_case
+PROBE field_read_other_case 7
+
+# probe_lexer
+PROBE mod_tight 1
+PROBE int_min_cast -2147483647
+PROBE int_min_direct -2147483647
+
+# probe_notify
+PROBE notify_order first
+PROBE notify_order second
+PROBE notify_done 1
+
+# probe_size
+PROBE size_array 3
+PROBE size_empty_array 0
+
+# probe_size_string
+PROBE at size_string
+PROBE size_string 4
+
+# probe_truthy
+PROBE at truthy_nonempty_string
+PROBE_FATAL cannot cast "a" to bool
+
+# probe_truthy_empty
+PROBE at truthy_empty_string
+PROBE_FATAL cannot cast "" to bool
+
+# probe_truthy_num
+PROBE at truthy_int_zero
+PROBE truthy_int_zero 0
+PROBE at truthy_int_one
+PROBE truthy_int_one 1
+PROBE at truthy_float_zero
+PROBE truthy_float_zero 0
+PROBE at truthy_float_half
+PROBE truthy_float_half 1
+
+# probe_truthy_undef
+PROBE at truthy_unset_field
+PROBE_FATAL cannot cast undefined to bool
+
+# probe_truthy_vec
+PROBE at truthy_zero_vector
+PROBE_FATAL cannot cast vector to bool
+

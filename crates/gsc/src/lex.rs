@@ -99,6 +99,16 @@ fn is_ident_cont(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
 }
 
+/// Whether the token before a `%` could be the end of an operand, which is
+/// the one-token lookback that tells `i%count` (modulo) from `%anim_name`
+/// (an animation reference). Both spellings occur; see `run`.
+fn ends_an_expression(prev: Option<&Tok>) -> bool {
+    matches!(
+        prev,
+        Some(Tok::Ident(_) | Tok::Int(_) | Tok::Float(_) | Tok::RParen | Tok::RBracket)
+    )
+}
+
 // Case-insensitive: the engine matches keywords and identifiers alike
 // without regard to case.
 fn keyword(text: &str) -> Option<Tok> {
@@ -269,7 +279,7 @@ impl<'a> Lexer<'a> {
     }
 
     // A digit, or `.` followed by a digit; no exponents, no hex, no sign.
-    // Never fails: a literal past i32::MAX falls back to a float.
+    // Never fails: a literal past i32::MAX saturates there.
     fn read_number(&mut self) -> Tok {
         let start = self.i;
         let mut has_dot = false;
@@ -294,15 +304,13 @@ impl<'a> Lexer<'a> {
         if has_dot {
             return Tok::Float(text.parse().expect("well-formed float literal"));
         }
-        match text.parse() {
-            Ok(n) => Tok::Int(n),
-            // A literal past i32::MAX (maps/carride.gsc:1606,
-            // maps/redsquare.gsc:1547 both use one as an effectively-infinite
-            // sentinel) falls back to a float rather than erroring; a script
-            // that wrote a huge number meant "big", not a specific bit
-            // pattern.
-            Err(_) => Tok::Float(text.parse().expect("digits parse as a float")),
-        }
+        // A literal past i32::MAX (maps/carride.gsc:1606,
+        // maps/redsquare.gsc:1547 both use one as an effectively-infinite
+        // sentinel) saturates rather than erroring or widening to a float,
+        // which is what retail does: `-2147483648` is `-2147483647` there,
+        // magnitude clamped before the unary minus
+        // (tests/fixtures/semantics/retail-captures.txt, `# probe_lexer`).
+        Tok::Int(text.parse().unwrap_or(i32::MAX))
     }
 
     // `#using_animtree("name")` or bare `#animtree`; any other `#`
@@ -384,7 +392,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn run(mut self) -> Result<Vec<Spanned>, LexError> {
-        let mut out = Vec::new();
+        let mut out: Vec<Spanned> = Vec::new();
         loop {
             self.skip_trivia()?;
             let line = self.line;
@@ -397,7 +405,14 @@ impl<'a> Lexer<'a> {
                 Tok::Localized(self.read_string()?)
             } else if c == b'%' {
                 self.i += 1;
-                if matches!(self.peek(), Some(c2) if is_ident_start(c2)) {
+                // `%name` is an animation reference, but retail also accepts
+                // the tight `i%count` spelling of modulo
+                // (tests/fixtures/semantics/retail-captures.txt,
+                // `# probe_lexer`), so a `%` that follows something able to
+                // end an expression is the operator.
+                if matches!(self.peek(), Some(c2) if is_ident_start(c2))
+                    && !ends_an_expression(out.last().map(|s| &s.tok))
+                {
                     Tok::Anim(self.read_ident())
                 } else {
                     Tok::Percent
@@ -602,22 +617,48 @@ mod tests {
 
     // A literal past i32::MAX must not panic the lexer, and two stock
     // scripts genuinely ship one as an effectively-infinite sentinel value
-    // (maps/carride.gsc:1606, maps/redsquare.gsc:1547): it lexes as a float.
+    // (maps/carride.gsc:1606, maps/redsquare.gsc:1547). It saturates at
+    // i32::MAX, which is how retail reaches -2147483647 for `-2147483648`
+    // (tests/fixtures/semantics/retail-captures.txt, `# probe_lexer`).
     #[test]
-    fn an_oversized_int_literal_falls_back_to_float() {
+    fn an_oversized_int_literal_saturates_at_i32_max() {
+        assert_eq!(toks("99999999999"), vec![Tok::Int(i32::MAX), Tok::Eof]);
+        assert_eq!(toks("2147483648"), vec![Tok::Int(i32::MAX), Tok::Eof]);
+        // The anti-panic property is not scoped to one digit width past
+        // i32::MAX; pin it against a pathological input too.
+        let t = toks(&"9".repeat(100));
+        assert_eq!(t, vec![Tok::Int(i32::MAX), Tok::Eof]);
+    }
+
+    /// Retail accepts the tight `i%count` spelling of modulo, so `%` before
+    /// an identifier is an animation reference only where an operand cannot
+    /// already have ended (tests/fixtures/semantics/retail-captures.txt,
+    /// `# probe_lexer`).
+    #[test]
+    fn a_tight_modulo_lexes_as_modulo_and_an_anim_reference_still_lexes() {
         assert_eq!(
-            toks("99999999999"),
-            vec![Tok::Float("99999999999".parse().unwrap()), Tok::Eof]
+            toks("i%count"),
+            vec![
+                Tok::Ident("i".into()),
+                Tok::Percent,
+                Tok::Ident("count".into()),
+                Tok::Eof,
+            ]
         );
-        // The anti-panic property this test replaced wasn't scoped to one
-        // digit width past i32::MAX; pin it against a pathological input
-        // too, one that overflows f32 itself into infinity.
-        let hundred_digits = "9".repeat(100);
-        let t = toks(&hundred_digits);
-        match &t[0] {
-            Tok::Float(f) => assert!(f.is_infinite(), "expected overflow to infinity, got {f}"),
-            other => panic!("expected a float token, got {other:?}"),
-        }
-        assert_eq!(t[1], Tok::Eof);
+        assert_eq!(toks("i%count"), toks("i % count"));
+        // After `)` and `]` too, both of which end an operand.
+        assert_eq!(toks("(a)%b")[3], Tok::Percent);
+        assert_eq!(toks("a[0]%b")[4], Tok::Percent);
+        assert_eq!(toks("7%count")[1], Tok::Percent);
+        // Anywhere an operand cannot have ended, `%name` is still an anim.
+        assert_eq!(
+            toks("f(%pb_stand_alert)")[2],
+            Tok::Anim("pb_stand_alert".into())
+        );
+        assert_eq!(
+            toks("x = %pb_stand_alert")[2],
+            Tok::Anim("pb_stand_alert".into())
+        );
+        assert_eq!(toks("f(a, %pb_run)")[4], Tok::Anim("pb_run".into()));
     }
 }

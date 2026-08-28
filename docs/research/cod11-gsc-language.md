@@ -180,8 +180,8 @@ Checked and confirmed absent: `&=`, `^=`, `<<=`, `>>=`, and any standalone
 `|` outside `||`/`|=`. So the bitwise surface the corpus actually needs is
 exactly two operators, not zero: binary `&` and compound `|=`. **Re-verified
 against the real parser and compile census:** `parse_file` accepts both
-(`BinOp::BitAnd`, and `|=` desugars to `BinOp::BitOr` — see the comment in
-`crates/gsc/src/ast.rs`), and the compile census agrees with the classifier
+(`BinOp::BitAnd`, and `|=` desugars to `BinOp::BitOr` — see the comment on
+`BinOp::BitOr` in `crates/gsc/src/ast.rs`), and the compile census agrees with the classifier
 count exactly — 11 files, 24 call sites for binary `&`; 5 files, 5 call
 sites for `|=`, one per stock gametype (`dm`, `tdm`, `sd`, `re`, `bel`),
 confirming "all five" from live bytecode rather than a source grep. A VM
@@ -377,13 +377,16 @@ for whoever picks up the mover-entity builtins in a later sub-project.
 
 The engine interns every script string (`GScr_AllocString`), and matches
 identifiers, field names, file paths and event names (`notify`/`waittill`/
-`endon`) case-insensitively — `vcod-gsc`'s interner (`crates/gsc/src/atom.rs`)
-folds every string to its lowercase form for identity, so two spellings of
-one key share one `Atom`, but stores and returns the *first* spelling it
-saw, verbatim (`Interner::resolve`), so a script-built display string never
-gets silently lowercased. `Value::String`/`Localized`/`Anim` all resolve
-through the same table as identifiers, since the corpus gives no reason to
-maintain two interners.
+`endon`) case-insensitively, but compares string *values* and array keys
+case-sensitively (measured; see below). `vcod-gsc`'s interner
+(`crates/gsc/src/atom.rs`) therefore has two entry points over one storage
+vector: `intern_folded` dedups on the lowercased text, so two spellings of
+an identifier-role key share one `Atom`, and `intern_exact` dedups on the exact
+text, so `"ABC"` and `"abc"` are two atoms. Both store the spelling they
+were given verbatim, and `Interner::resolve` returns it, so a script-built
+display string never gets silently lowercased. Whichever entry point sees a
+folded key first owns it, so the two can never hand out different atoms for
+one identifier.
 
 **Re-verified against the real parser and compile census:** walking every
 string literal in the corpus and grouping by its case-folded form finds 86
@@ -396,114 +399,180 @@ weapon, tag, animation-tree-model or asset-path names (`Panzerfaust`/
 `waittill`/`endon` (e.g. `"SPAWNED"`/`"spawned"`, `"DIED"`/`"died"`), and 17
 are used at least once as a literal `array["key"]` index.
 
-**Divergence, kept as documentation rather than fixed:** whether gsc string
-comparison (`==`) is case-insensitive at all is not established against
-retail — no corpus script relies on it either way, the same way no script's
-`waittill` and `notify` pairing in this corpus depends on their event-name
-spellings matching by case rather than being identical outright. As
-implemented, it *is* case-insensitive, but only as an unintended consequence
-of identifiers and string content sharing one identity table for a reason
-that has nothing to do with `==`: folding is required so a `waittill`
-waiting on one spelling of an event name sees a `notify` fired with another.
-A future host that needs case-sensitive string equality would need a second,
-unfolded table for `Value::String` distinct from the one identifiers use.
+**Settled against retail** (`crates/gsc/tests/fixtures/semantics/retail-captures.txt`,
+`# probe_field_case`, `# probe_arraykey_case`, `# probe_cmp`): retail folds
+identifiers and field names but treats string values and array keys as
+case-sensitive — `level.myField` reads back through `level.myfield`, while
+`a["medFire"]` and `a["medfire"]` are two entries with a `.size` of 2, and
+`"ABC" == "abc"` is false. vcod originally folded all four through one
+identity table; it now routes each call site to the matching entry point,
+and the count above splits with it: of the 86 multi-spelling keys, those
+used as identifiers, field names, paths or event names still collapse onto
+one atom, and those used as array keys or string literals no longer do.
 
-**A second, smaller divergence from the same design:** when two spellings
-of one key collapse onto one atom, `resolve` always returns whichever
-spelling was interned first, so which of the two a script observes (via
-`print`, string concatenation, etc.) depends on load order, not on which
-spelling that particular call site used. Storing every spelling and
-comparing case-insensitively at read time would get this exactly right, at
-the cost of giving `Value` a custom `PartialEq` that any future `==` on it
-would need to know about — judged not worth it for a collision bounded at
-86 keys, none of them display text.
+Folding is genuinely required for the event-name role, and that is the one
+place the split is dangerous: a `waittill` on one spelling has to see a
+`notify` fired with another, and if it stops the thread hangs rather than
+erroring. An event name is written as a string literal, so it reaches the VM
+case-preserved; `Op::WaitTill`, `Op::Notify`, `Op::EndOn` and the host-facing
+`Vm::notify` each map it through `Interner::fold_atom` before matching. That
+covers a dynamically built name (`self notify(level.eventName)`) too, which
+compile-time routing could not.
 
-## 9. Semantics not yet established
+**A second, smaller divergence from the same design:** when two spellings of
+one identifier-role key collapse onto one atom, `resolve` always returns
+whichever spelling was interned first, so which of the two a script observes
+(via `print`, string concatenation, etc.) depends on load order, not on which
+spelling that particular call site used. Storing every spelling and comparing
+case-insensitively at read time would get this exactly right, at the cost of
+giving `Value` a custom `PartialEq` that any future `==` on it would need to
+know about — judged not worth it for a collision now bounded to the
+identifier roles alone.
 
-Each of these was read from scripts or inferred from decompilation, never
-observed live. Each is a candidate for a retail A/B (`tools/run_server.sh`
-plus a small custom test script logged through `iPrintLn`/`logPrint`,
-diffed against vcod's VM on the same script) before G1's semantics tests are
-trusted as ground truth rather than a best guess.
+## 9. Semantics measured against retail
 
-- **Is an empty string truthy?** `if (getcvar("scr_allies") != "")` (`dm.gsc`)
-  is the corpus's actual idiom for "cvar not set," always spelled as an
-  explicit `!= ""` comparison rather than `if (getcvar(...))`. That means the
-  corpus itself never settles what `Value::is_truthy` should do with `""` —
-  no stock script relies on it either way. Settle it by writing a one-line
-  test script that does `if ("") iprintln("truthy"); else
-  iprintln("falsy");` and running it on the retail server.
-- **Int/float promotion in arithmetic.** Whether `1 / 2` truncates to `0`
-  (both operands int) versus promotes, and whether a mixed `int op float`
-  always yields float, is nowhere pinned by reading scripts — arithmetic in
-  the corpus is uniformly written with float-looking literals or cvar-derived
-  floats where precision would matter. Settle by comparing `iprintln(1/2)`
-  and `iprintln(3/2.0)` against retail's printed values.
-- **Comparison across incompatible types.** What `"5" == 5` or
-  `undefined == 0` evaluate to is not exercised anywhere in the corpus in a
-  way that pins the rule (every comparison in the stock scripts compares
-  same-typed operands, e.g. string-vs-string constants or int-vs-int
-  counters). Settle by a small matrix of cross-type `==`/`<` comparisons
-  logged against retail.
-- **Notify wake order.** When `notify(event, ...)` has multiple threads
-  waiting on the same event via `waittill`, the corpus never depends on a
-  specific wake order (each `waittill` site in the stock scripts is the only
-  waiter on its event within its own thread lineage, as far as a source read
-  can show — proving the negative would need a cross-file call-graph, which
-  this pass did not build). Settle by spawning two threads that both
-  `self waittill("x")` on the same entity, firing one `notify("x")`, and
-  observing which runs first on retail.
-- **`getentarray` ordering.** Whether it returns entities in spawn order,
-  entity-number order, or something else is unverified; scripts that consume
-  it (e.g. spawnpoint selection in `_spawnlogic.gsc`) either iterate the
-  whole array or pick randomly, never assuming a specific position matters.
-  Settle by spawning several `mp_deathmatch_spawn` entities in a known
-  input order on a test map and diffing `getentarray`'s returned order
-  against retail's.
-- **`i%count` is a parse error.** `lex.rs`'s number/operator scan resolves a
-  `%` immediately followed by an identifier-start character unconditionally
-  as an anim reference (`%count` lexes as `Tok::Anim("count")`), with no
-  lookback at what precedes it — so `i % count` (spaced) lexes as modulo,
-  but `i%count` (tight) lexes as `Ident("i")` followed by `Anim("count")`
-  with no operator between them, which the parser rejects. No stock script
-  spells modulo this way (the corpus always spaces it), but this crate's
-  stated posture is that it also runs third-party map scripts, where a
-  tightly-spelled modulo is plausible. Whether retail's lexer has the same
-  ambiguity — it would need the same kind of one-character lookahead choice
-  — is unverified.
-- **`-2147483648` is unreachable as a literal, but reachable via a cast.**
-  No lexed integer literal can spell `i32::MIN`: `read_number` (`lex.rs`)
-  parses only the unsigned digit run, and `2147483648` (one past
-  `i32::MAX`) overflows `i32::from_str`, so it falls back to `Tok::Float`
-  the same way any oversized literal does (see the "sentinel" comment next
-  to that fallback). `-2147483648` therefore compiles as `Neg` applied to
-  `Float(2147483648.0)`, evaluated through `eval_neg`'s float arm to
-  `Float(-2147483648.0)`, exactly representable since `2^31` fits an f32
-  mantissa exactly. `(int)` of that goes through `CastInt`'s `f as i32`,
-  a saturating cast since Rust 1.45 — and lands exactly on `i32::MIN`,
-  since the float value is exact and already in range, not clamped. So the
-  value is reachable, just never as a direct `Op::Const(Value::Int(...))`.
-  Pinned by `vm::tests::int_min_is_reachable_only_through_a_float_cast_not_a_direct_literal`.
+Everything below was measured on the retail 1.1d Linux dedicated server, not
+inferred. The probes are `crates/gsc/tests/fixtures/semantics/probe_*.gsc`,
+run as gametype scripts by `tools/run_probe.sh`; retail's answers are
+committed beside them in `retail-captures.txt`, and
+`crates/gsc/tests/semantics_ab.rs` diffs vcod against them on every test run.
+It is green on all 18 runnable probes; `probe_ents` is captured but not run,
+since `getentarray` needs the object model that arrives with the entity work.
+
+Three facts about the retail side shaped how the measurement had to be taken,
+and each is worth knowing before writing another probe:
+
+- **`logPrint` is the only output channel** a dedicated server with no
+  clients shows. `print` and `println` produce nothing on the console even
+  with `developer 1`; `iPrintLn` needs a client. `logPrint` writes to
+  `games_mp.log` with a leading `m:ss ` stamp.
+- **A script runtime error terminates the server**, not just the thread:
+  the console prints a `******* script runtime error *******` block with the
+  file, line and a caret under the offending token, then `ERROR: script
+  runtime error` and `----- Server Shutdown -----`. This is why each probe
+  group is a separate file.
+- **A gametype needs a one-line `.txt` description file** beside its `.gsc`,
+  or the engine warns and refuses to load the map.
+
+**Boolean reading: numbers only, VERIFIED.** `if (x)` accepts `Int` and
+`Float` and nothing else. `0` and `0.0` are false; `1` and `0.5` are true.
+`""`, `"a"`, a vector and an unset field each raise `cannot cast X to bool`
+and kill the server. So the design's old question "is an empty string
+truthy?" was the wrong question: no string has a boolean reading at all,
+empty or not. That is why the corpus spells every such test as `isDefined(x)`
+or `x != ""` rather than `if (x)`.
+
+**Arithmetic: VERIFIED, and every earlier inference was right.** `1 / 2` is
+`0` (integer division truncates), `4 / 2` is `2`, `3 / 2.0` is `1.5`,
+`3 * 3` is `9`, `3 * 1.5` is `4.5`, `1 + 2` is `3`, `1 + 0.5` is `1.5`,
+`7 % 3` is `1`, `(0 - 7) % 3` is `-1` (truncating toward zero). `1 / 0` is a
+fatal `divide by 0`.
+
+**Number-to-string rendering: C's `%g`, VERIFIED.** Concatenating a number
+onto a string gives `5` -> `5`, `-5` -> `-5`, `0.5` -> `0.5`, `2.0` -> `2`,
+`0.8` -> `0.8`, `1.0 / 3` -> `0.333333`. Six significant digits, trailing
+zeros dropped. The probe's `1000000` case (`probe_concat.gsc:22`) is *not*
+evidence for `%g`: it concatenates an int, which never reaches the float
+formatter. So the exponent boundary is untested — vcod's `format_g` switches
+to Rust's `1e6` there, and it is the formatter `set_cull_fog` uses, so a fog
+distance past six digits would go out in that spelling unchecked. A vector
+renders by a different
+rule: `(1, 2, 3)` -> `(1.00, 2.00, 3.00)`, two decimals per component.
+`"str" + undefined` is a fatal `pair has unmatching types 'string' and
+'undefined'`.
+
+**Equality: VERIFIED, and it is neither structural nor numeric.**
+`1 == 1.0` is true. `"abc" == "abc"` is true. `"ABC" == "abc"` is **false**.
+`"5" == 5` is **true**, but `"5.0" == 5`, `"05" == 5` and `"abc" == 0` are
+all false — so a number compared against a string is rendered to its `%g`
+text and compared textually, not parsed as a number. `undefined == 0` is a
+fatal `pair has unmatching types 'undefined' and 'int'`.
+
+**Ordering: numbers only, VERIFIED.** `"a" < "b"` is a fatal `pair has
+unmatching types 'string' and 'string'`. There is no string collation.
+
+**Case folding is per role, VERIFIED, and this corrects §8.** Field names
+fold: `level.myField` reads back through `level.myfield`. Array keys do
+**not**: `a["medFire"]` and `a["medfire"]` are two entries, and the array's
+`.size` is 2. Together with `"ABC" == "abc"` being false, this means retail
+folds identifiers and field names but treats string *values* and array keys
+as case-sensitive. One interner folding everything cannot express that.
+
+**`.size`, VERIFIED.** On an array it counts every key regardless of type: an
+array with keys `0`, `1` and `"k"` reports 3, an empty one 0. Strings have it
+too: `"abcd".size` is 4.
+
+**Notify wake order: start order, VERIFIED.** Two threads waiting on one
+event on `level` wake in the order they were started.
+
+**`getentarray` order: map entities first, then spawn order, VERIFIED.** The
+map's own four `script_origin` entities come back before three the probe
+spawned, and those three in spawn order. The probe prints only `targetname`
+(`probe_ents.gsc:32`), so the ordering *within* the map's own four is not
+measured and the underlying key — entity number or otherwise — is not
+established.
+
+**`i%count` compiles on retail, VERIFIED.** The tight spelling of modulo
+evaluates to `1` for `7 % 3`, so retail's lexer does not read `%` before an
+identifier as an animation reference in that position. vcod's lexer gives the
+`%` scan a one-token lookback: it is an animation reference only where the
+previous token cannot already have ended an operand (not an identifier,
+number, `)` or `]`). Across the 799-file corpus that reclassifies nothing —
+3432 `Anim` tokens before and after.
+
+**`-2147483648` is not reachable on retail, VERIFIED.** Both the direct
+literal and `(int)(-2147483648)` yield `-2147483647`, so the magnitude
+saturates at `i32::MAX` before the unary minus applies: an overflowing
+integer literal clamps rather than widening to a float. vcod's `read_number`
+does the same, which is also what the two stock scripts that ship a literal
+past `i32::MAX` as an effectively-infinite sentinel
+(`maps/carride.gsc:1606`, `maps/redsquare.gsc:1547`) mean by it.
+
+### Still unestablished
+
+- **`undefined == undefined`.** Not probed. Retail's error message for the
+  mixed case names a "pair has unmatching types", which two `undefined`s are
+  not, so equal is the reading that message supports — but that is inference,
+  not measurement. vcod answers true on that inference (`values_equal`,
+  `crates/gsc/src/vm/interp.rs`); every *mixed* pair with `undefined` errors,
+  which is the measured half.
+- **String comparison against a localized string** (`&"KEY"`), and whether a
+  localized string renders as its key or its resolved text when
+  concatenated. No stock script does either.
+- **`format_g`'s exponent form.** No probe has driven a float outside
+  roughly `1e-4 .. 1e6`, so whether retail's `%g` prints `1e+06` or
+  something else is unmeasured; `format_g` (`crates/gsc/src/value.rs`)
+  spells it Rust's way (`1e6`) and, being unmeasured either way,
+  `format_g(999999.5)` currently rounds to `"1000000"` rather than
+  switching to exponent form.
+- **Equality outside the pairs above.** `values_equal`'s catch-all
+  (`crates/gsc/src/vm/interp.rs`) is `a == b` on `Value`'s derived
+  `PartialEq`, so a genuinely mixed pair (`vector == "a"`, `entity == "a"`)
+  answers `false`, but two vectors, entities, arrays or function pointers
+  compare by value and can answer **true**. Retail's "pair has unmatching
+  types" message suggests the mixed case is fatal there; the same-type cases
+  are plausible but unmeasured. No probe has driven either.
 
 ## 10. Divergences kept as documentation, not code
 
-Four places where the implementation made a deliberate call the corpus
+Seven places where the implementation made a deliberate call the corpus
 cannot settle, recorded here rather than silently baked into behaviour that
 looks authoritative:
 
 - **Two `notify`s of the same event on the same target queued within one
   scheduling step coalesce; the second is lost.** `Op::Notify` queues rather
-  than resolving inline (`vm.rs`, `step_frames`'s `Notify` arm), and
+  than resolving inline (`vm/interp.rs`, `step_frames`'s `Notify` arm), and
   `step_thread` flushes the queue only after the whole step
-  (`vm.rs:step_thread`) — so if a step queues two notifies of the same event
-  at the same target, the first flush wakes the waiter (flips it out of
+  (`vm/sched.rs:step_thread`) — so if a step queues two notifies of the same
+  event at the same target, the first flush wakes the waiter (flips it out of
   `WaitingNotify`), and the second flush finds no matching waiter and drops
   it silently. Measured: a pump firing `self notify("tick", 1); self
   notify("tick", 2);` in one step against a loop doing `self
   waittill("tick", v)` twice receives only `1`, then hangs forever on the
   second `waittill` — one frame apart (each notify in its own step) both
-  arrive. Retail runs the waiter synchronously off `notify`, so it sees
-  both. This is a direct consequence of vcod's choice that a notify can
+  arrive. Retail runs the waiter synchronously off `notify`, so it sees both
+  (INFERRED from the engine's dispatch shape; the double-notify case has not
+  been put to a retail server). This is a direct consequence of vcod's choice that a notify can
   never reenter the VM (`step_thread`'s own doc comment); fixing it without
   reopening reentrancy would mean re-checking, at flush time, which of a
   step's queued notifies still have a live waiter, in queue order, deferred
@@ -530,13 +599,16 @@ looks authoritative:
   killing itself via a nested spawn's notify, mid-step) no corpus script
   seems to rely on either way; deferred to the next project. Pinned by
   `sched::tests::a_thread_killed_by_its_own_endon_mid_step_still_runs_to_its_next_suspend`.
-- **Ordering comparisons against `undefined` read false, where retail is
-  believed to error.** `numeric_cmp` (`crates/gsc/src/vm.rs`) returns
-  `Value::Int(0)` for `<`/`>`/`<=`/`>=` whenever either operand does not
-  convert to a number, `undefined` included — a deliberate choice per the
-  implementation brief, not something the corpus exercises either way (same
-  gap as "comparison across incompatible types" above), and unverified
-  against the retail server.
+- **A runtime error aborts the thread, where retail kills the server.**
+  Every fatal in §9 — a non-numeric condition, `"str" + undefined`,
+  `undefined == 0`, `"a" < "b"`, `1 / 0` — raises the equivalent
+  `ErrorKind` in vcod, which unwinds that thread's frames and logs; the
+  other threads and the server keep running. Retail prints a `script
+  runtime error` block and shuts the server down. This is deliberate and
+  predates the measurement: a third-party map script must not be able to
+  take the server down. `crates/gsc/tests/semantics_ab.rs` therefore checks
+  only that both sides *stopped* at the same expression, which the compared
+  output lines pin, not that they stopped the same way.
 - **Multiple `#using_animtree` directives in one file resolve to the last
   one.** `compile_file` (`crates/gsc/src/compile.rs`) takes
   `file.animtrees.last()` because the AST does not track which directive was
@@ -548,3 +620,21 @@ looks authoritative:
   exception. The eventual fix belongs in the parser, which is the only layer
   that still knows each function's source position relative to the
   directives around it.
+- **Array iteration order is interning order, not retail's.** `ArrayKey`'s
+  derived `Ord` (`crates/gsc/src/heap.rs`) puts every `Int` before every
+  `Str` and orders `Str(Atom)` by the order the atoms were interned, not by
+  text. Deterministic, which is all iteration needs while nothing lists
+  keys, and knowingly not retail's enumeration order — a `getarraykeys`-
+  style builtin will have to settle that against a probe first.
+- **A float array subscript truncates toward zero.** `array_key`
+  (`crates/gsc/src/vm/interp.rs`) turns `a[1.9]` into `a[1]`, matching the
+  `(int)` cast rather than rejecting it, on the reasoning that a loop
+  counter that drifted to a float is likelier than a script meaning to key
+  by a fractional value. Retail's behaviour here is unmeasured; it may well
+  be fatal.
+- **Every endon kill lands before any notify wake.** `Vm::notify`
+  (`crates/gsc/src/vm/sched.rs`) makes two passes over `threads` — kills
+  first, then wakes — so a thread that has both an `endon` and a `waittill`
+  on one event is killed rather than woken, regardless of which it
+  registered first. The wake order *within* each pass is measured (start
+  order, `# probe_notify`); the ordering *between* the two passes is not.

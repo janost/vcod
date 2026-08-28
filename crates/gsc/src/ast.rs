@@ -16,8 +16,9 @@ pub enum BinOp {
     Ge,
     And,
     Or,
-    /// Binary `&`, and the target of the `|=` desugar. Integer only.
+    /// Binary `&`. Integer only, as is `BitOr`.
     BitAnd,
+    /// The target of the `|=` desugar; the corpus has no standalone `|`.
     BitOr,
 }
 

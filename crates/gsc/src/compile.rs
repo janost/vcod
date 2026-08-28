@@ -30,15 +30,15 @@ pub fn compile_file(
     path: &str,
     interner: &mut Interner,
 ) -> Result<Vec<Function>, CompileError> {
-    let file_atom = interner.intern(path);
+    let file_atom = interner.intern_folded(path);
     // The AST does not track which `#using_animtree` was active at each
     // function's lexical position, so a bare `#animtree` resolves against
     // the last directive in the file. No stock MP script reads it back.
-    let animtree = file.animtrees.last().map(|s| interner.intern(s));
+    let animtree = file.animtrees.last().map(|s| interner.intern_folded(s));
 
     let mut local_funcs = HashSet::new();
     for f in &file.funcs {
-        local_funcs.insert(interner.intern(&f.name));
+        local_funcs.insert(interner.intern_folded(&f.name));
     }
 
     let mut out = Vec::with_capacity(file.funcs.len());
@@ -175,7 +175,7 @@ impl<'a> Compiler<'a> {
         if !last_is_return {
             self.emit(Op::ReturnUndef);
         }
-        let name = self.interner.intern(&def.name);
+        let name = self.interner.intern_folded(&def.name);
         let locals = u16::try_from(self.locals.len()).map_err(|_| self.err("too many locals"))?;
         Ok(Function {
             file: self.file_atom,
@@ -248,7 +248,7 @@ impl<'a> Compiler<'a> {
             Expr::Field(obj, name) => {
                 self.compile_expr(obj)?;
                 self.compile_expr(value)?;
-                let a = self.interner.intern(name);
+                let a = self.interner.intern_folded(name);
                 self.emit(Op::StoreField(a));
             }
             Expr::Index(obj, idx) => {
@@ -475,16 +475,19 @@ impl<'a> Compiler<'a> {
             Expr::Undefined => self.push_const(Value::Undefined)?,
             Expr::Int(n) => self.push_const(Value::Int(*n))?,
             Expr::Float(f) => self.push_const(Value::Float(*f))?,
+            // A string value keeps its exact spelling; only identifier-role
+            // names fold (atom.rs). `&"..."` is a display string too, but
+            // `%anim` is a bare identifier token, so it folds with the rest.
             Expr::Str(s) => {
-                let a = self.interner.intern(s);
+                let a = self.interner.intern_exact(s);
                 self.push_const(Value::String(a))?;
             }
             Expr::Localized(s) => {
-                let a = self.interner.intern(s);
+                let a = self.interner.intern_exact(s);
                 self.push_const(Value::Localized(a))?;
             }
             Expr::Anim(s) => {
-                let a = self.interner.intern(s);
+                let a = self.interner.intern_folded(s);
                 self.push_const(Value::Anim(a))?;
             }
             Expr::AnimtreeRef => match self.animtree {
@@ -518,7 +521,7 @@ impl<'a> Compiler<'a> {
             }
             Expr::Field(obj, name) => {
                 self.compile_expr(obj)?;
-                let a = self.interner.intern(name);
+                let a = self.interner.intern_folded(name);
                 self.emit(Op::LoadField(a));
             }
             Expr::Index(obj, idx) => {
@@ -532,9 +535,9 @@ impl<'a> Compiler<'a> {
                 let file_atom = if file.is_empty() {
                     self.file_atom
                 } else {
-                    self.interner.intern(file)
+                    self.interner.intern_folded(file)
                 };
-                let name_atom = self.interner.intern(name);
+                let name_atom = self.interner.intern_folded(name);
                 self.push_const(Value::Function(FuncRef {
                     file: file_atom,
                     name: name_atom,
@@ -626,7 +629,7 @@ impl<'a> Compiler<'a> {
         let has_recv = recv.is_some();
         match target {
             CallTarget::Name(name) => {
-                let atom = self.interner.intern(name);
+                let atom = self.interner.intern_folded(name);
                 if self.local_funcs.contains(&atom) {
                     self.emit(Op::Call {
                         func: FuncRef {
@@ -646,8 +649,8 @@ impl<'a> Compiler<'a> {
                 }
             }
             CallTarget::Path { file, name } => {
-                let file_atom = self.interner.intern(file);
-                let name_atom = self.interner.intern(name);
+                let file_atom = self.interner.intern_folded(file);
+                let name_atom = self.interner.intern_folded(name);
                 self.emit(Op::Call {
                     func: FuncRef {
                         file: file_atom,
@@ -892,7 +895,7 @@ mod tests {
     fn a_call_to_a_function_in_this_file_resolves_to_call_not_builtin() {
         let (i, f) = compile("m() { helper(); } helper() { }");
         // Both functions take no arguments, so find `m` by name, not by shape.
-        let want = i.get("m").unwrap();
+        let want = i.get_folded("m").unwrap();
         let m = f.iter().find(|f| f.name == want).unwrap();
         assert!(m.code.iter().any(|o| matches!(o, Op::Call { .. })));
         assert!(!m.code.iter().any(|o| matches!(o, Op::CallBuiltin { .. })));
@@ -901,7 +904,7 @@ mod tests {
     #[test]
     fn an_unknown_bare_name_compiles_to_a_builtin_call() {
         let (i, f) = compile(r#"m() { iprintln("hi"); }"#);
-        let name = i.get("iprintln").unwrap();
+        let name = i.get_folded("iprintln").unwrap();
         assert!(f[0]
             .code
             .iter()
@@ -926,21 +929,25 @@ mod tests {
     }
 
     /// Mirrors `brecourt.gsc`'s shape: a `notify` and a `waittill` on the
-    /// same event whose literal spelling differs only in case. The engine
-    /// matches event names case-insensitively, same as any other
-    /// identifier, so both event-name literals must intern to the same
-    /// atom — otherwise the `waittill` would wait forever on a `notify`
-    /// that, textually, never fires.
+    /// same event whose literal spelling differs only in case. An event name
+    /// compiles to an ordinary string constant, and string values are
+    /// case-sensitive, so the two constants are two atoms; they fold onto
+    /// one only when the VM reaches the op (`Interner::fold_atom`).
+    /// Otherwise the `waittill` would wait forever on a `notify` that,
+    /// textually, never fires. `sched.rs`'s
+    /// `a_notify_wakes_a_waittill_that_spelled_the_event_differently` is the
+    /// end-to-end half of this.
     #[test]
-    fn event_names_differing_only_by_case_intern_to_the_same_atom() {
-        let (_, f) = compile(r#"m() { level notify("Explode"); level waittill("explode"); }"#);
+    fn event_name_literals_keep_their_spelling_but_fold_to_one_atom() {
+        let (i, f) = compile(r#"m() { level notify("Explode"); level waittill("explode"); }"#);
         let mut string_consts = f[0].consts.iter().filter_map(|c| match c {
             Value::String(a) => Some(*a),
             _ => None,
         });
         let notify_event = string_consts.next().expect("notify's event string");
         let waittill_event = string_consts.next().expect("waittill's event string");
-        assert_eq!(notify_event, waittill_event);
+        assert_ne!(notify_event, waittill_event);
+        assert_eq!(i.fold_atom(notify_event), i.fold_atom(waittill_event));
     }
 
     #[test]

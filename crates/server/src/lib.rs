@@ -3,6 +3,7 @@
 
 pub mod client;
 pub mod configstrings;
+pub mod game;
 pub mod server;
 pub mod spectate;
 pub mod world;

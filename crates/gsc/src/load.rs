@@ -156,10 +156,10 @@ impl Loader {
 
         // No source line either: this rejects the whole function set from
         // one file at once, not one statement.
-        vm.install(fns).map_err(|msg| LoadError {
+        vm.install(fns).map_err(|e| LoadError {
             path: path.to_string(),
             line: 0,
-            msg,
+            msg: e.to_string(),
         })?;
         installed.extend(new_funcs);
 

@@ -247,7 +247,7 @@ fn loader_resolves_the_transitive_closure_of_real_gametype_and_map_scripts() {
     };
     let fs = std::rc::Rc::new(fs);
 
-    // Measured (the reviewer ran this exact census):
+    // Measured by running this exact census against the stock paks:
     //   maps/mp/gametypes/dm:  79 files, 238 functions
     //   maps/mp/gametypes/tdm: 79 files, 238 functions
     //   maps/mp/gametypes/sd:  79 files, 246 functions
