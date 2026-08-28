@@ -5,6 +5,8 @@
 
 pub mod ast;
 pub mod atom;
+pub mod bytecode;
+pub mod compile;
 pub mod lex;
 pub mod parse;
 pub mod value;
