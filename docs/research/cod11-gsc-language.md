@@ -396,17 +396,18 @@ weapon, tag, animation-tree-model or asset-path names (`Panzerfaust`/
 `waittill`/`endon` (e.g. `"SPAWNED"`/`"spawned"`, `"DIED"`/`"died"`), and 17
 are used at least once as a literal `array["key"]` index.
 
-**Divergence, kept as documentation rather than fixed:** whether gsc string
-comparison (`==`) is case-insensitive at all is not established against
-retail — no corpus script relies on it either way, the same way no script's
-`waittill` and `notify` pairing in this corpus depends on their event-name
-spellings matching by case rather than being identical outright. As
-implemented, it *is* case-insensitive, but only as an unintended consequence
-of identifiers and string content sharing one identity table for a reason
-that has nothing to do with `==`: folding is required so a `waittill`
-waiting on one spelling of an event name sees a `notify` fired with another.
-A future host that needs case-sensitive string equality would need a second,
-unfolded table for `Value::String` distinct from the one identifiers use.
+**Settled against retail, and vcod is wrong here:** §9's measurement shows
+retail folds identifiers and field names but treats string *values* and array
+keys as case-sensitive — `"ABC" == "abc"` is false, and `a["medFire"]` and
+`a["medfire"]` are two separate entries. vcod folds all four through one
+identity table, so two spellings share one `Atom` and the original text is
+unrecoverable. Folding is genuinely required for the identifier roles: a
+`waittill` on one spelling of an event name has to see a `notify` fired with
+another. It is wrong for the value roles. The fix is the one this section
+already anticipated — a second, unfolded lookup for `Value::String` and array
+keys, distinct from the folded one identifiers use — and the count above
+splits accordingly: of the 86 multi-spelling keys, those used as identifiers
+stay one atom and those used as array keys or literals become distinct.
 
 **A second, smaller divergence from the same design:** when two spellings
 of one key collapse onto one atom, `resolve` always returns whichever
@@ -418,72 +419,97 @@ the cost of giving `Value` a custom `PartialEq` that any future `==` on it
 would need to know about — judged not worth it for a collision bounded at
 86 keys, none of them display text.
 
-## 9. Semantics not yet established
+## 9. Semantics measured against retail
 
-Each of these was read from scripts or inferred from decompilation, never
-observed live. Each is a candidate for a retail A/B (`tools/run_server.sh`
-plus a small custom test script logged through `iPrintLn`/`logPrint`,
-diffed against vcod's VM on the same script) before G1's semantics tests are
-trusted as ground truth rather than a best guess.
+Everything below was measured on the retail 1.1d Linux dedicated server, not
+inferred. The probes are `crates/gsc/tests/fixtures/semantics/probe_*.gsc`,
+run as gametype scripts by `tools/run_probe.sh`; retail's answers are
+committed beside them in `retail-captures.txt`, and
+`crates/gsc/tests/semantics_ab.rs` diffs vcod against them.
 
-- **Is an empty string truthy?** `if (getcvar("scr_allies") != "")` (`dm.gsc`)
-  is the corpus's actual idiom for "cvar not set," always spelled as an
-  explicit `!= ""` comparison rather than `if (getcvar(...))`. That means the
-  corpus itself never settles what `Value::is_truthy` should do with `""` —
-  no stock script relies on it either way. Settle it by writing a one-line
-  test script that does `if ("") iprintln("truthy"); else
-  iprintln("falsy");` and running it on the retail server.
-- **Int/float promotion in arithmetic.** Whether `1 / 2` truncates to `0`
-  (both operands int) versus promotes, and whether a mixed `int op float`
-  always yields float, is nowhere pinned by reading scripts — arithmetic in
-  the corpus is uniformly written with float-looking literals or cvar-derived
-  floats where precision would matter. Settle by comparing `iprintln(1/2)`
-  and `iprintln(3/2.0)` against retail's printed values.
-- **Comparison across incompatible types.** What `"5" == 5` or
-  `undefined == 0` evaluate to is not exercised anywhere in the corpus in a
-  way that pins the rule (every comparison in the stock scripts compares
-  same-typed operands, e.g. string-vs-string constants or int-vs-int
-  counters). Settle by a small matrix of cross-type `==`/`<` comparisons
-  logged against retail.
-- **Notify wake order.** When `notify(event, ...)` has multiple threads
-  waiting on the same event via `waittill`, the corpus never depends on a
-  specific wake order (each `waittill` site in the stock scripts is the only
-  waiter on its event within its own thread lineage, as far as a source read
-  can show — proving the negative would need a cross-file call-graph, which
-  this pass did not build). Settle by spawning two threads that both
-  `self waittill("x")` on the same entity, firing one `notify("x")`, and
-  observing which runs first on retail.
-- **`getentarray` ordering.** Whether it returns entities in spawn order,
-  entity-number order, or something else is unverified; scripts that consume
-  it (e.g. spawnpoint selection in `_spawnlogic.gsc`) either iterate the
-  whole array or pick randomly, never assuming a specific position matters.
-  Settle by spawning several `mp_deathmatch_spawn` entities in a known
-  input order on a test map and diffing `getentarray`'s returned order
-  against retail's.
-- **`i%count` is a parse error.** `lex.rs`'s number/operator scan resolves a
-  `%` immediately followed by an identifier-start character unconditionally
-  as an anim reference (`%count` lexes as `Tok::Anim("count")`), with no
-  lookback at what precedes it — so `i % count` (spaced) lexes as modulo,
-  but `i%count` (tight) lexes as `Ident("i")` followed by `Anim("count")`
-  with no operator between them, which the parser rejects. No stock script
-  spells modulo this way (the corpus always spaces it), but this crate's
-  stated posture is that it also runs third-party map scripts, where a
-  tightly-spelled modulo is plausible. Whether retail's lexer has the same
-  ambiguity — it would need the same kind of one-character lookahead choice
-  — is unverified.
-- **`-2147483648` is unreachable as a literal, but reachable via a cast.**
-  No lexed integer literal can spell `i32::MIN`: `read_number` (`lex.rs`)
-  parses only the unsigned digit run, and `2147483648` (one past
-  `i32::MAX`) overflows `i32::from_str`, so it falls back to `Tok::Float`
-  the same way any oversized literal does (see the "sentinel" comment next
-  to that fallback). `-2147483648` therefore compiles as `Neg` applied to
-  `Float(2147483648.0)`, evaluated through `eval_neg`'s float arm to
-  `Float(-2147483648.0)`, exactly representable since `2^31` fits an f32
-  mantissa exactly. `(int)` of that goes through `CastInt`'s `f as i32`,
-  a saturating cast since Rust 1.45 — and lands exactly on `i32::MIN`,
-  since the float value is exact and already in range, not clamped. So the
-  value is reachable, just never as a direct `Op::Const(Value::Int(...))`.
-  Pinned by `vm::tests::int_min_is_reachable_only_through_a_float_cast_not_a_direct_literal`.
+Three facts about the retail side shaped how the measurement had to be taken,
+and each is worth knowing before writing another probe:
+
+- **`logPrint` is the only output channel** a dedicated server with no
+  clients shows. `print` and `println` produce nothing on the console even
+  with `developer 1`; `iPrintLn` needs a client. `logPrint` writes to
+  `games_mp.log` with a leading `m:ss ` stamp.
+- **A script runtime error terminates the server**, not just the thread:
+  the console prints a `******* script runtime error *******` block with the
+  file, line and a caret under the offending token, then `ERROR: script
+  runtime error` and `----- Server Shutdown -----`. This is why each probe
+  group is a separate file.
+- **A gametype needs a one-line `.txt` description file** beside its `.gsc`,
+  or the engine warns and refuses to load the map.
+
+**Boolean reading: numbers only, VERIFIED.** `if (x)` accepts `Int` and
+`Float` and nothing else. `0` and `0.0` are false; `1` and `0.5` are true.
+`""`, `"a"`, a vector and an unset field each raise `cannot cast X to bool`
+and kill the server. So the design's old question "is an empty string
+truthy?" was the wrong question: no string has a boolean reading at all,
+empty or not. That is why the corpus spells every such test as `isDefined(x)`
+or `x != ""` rather than `if (x)`.
+
+**Arithmetic: VERIFIED, and every earlier inference was right.** `1 / 2` is
+`0` (integer division truncates), `4 / 2` is `2`, `3 / 2.0` is `1.5`,
+`3 * 3` is `9`, `3 * 1.5` is `4.5`, `1 + 2` is `3`, `1 + 0.5` is `1.5`,
+`7 % 3` is `1`, `(0 - 7) % 3` is `-1` (truncating toward zero). `1 / 0` is a
+fatal `divide by 0`.
+
+**Number-to-string rendering: C's `%g`, VERIFIED.** Concatenating a number
+onto a string gives `5` -> `5`, `-5` -> `-5`, `0.5` -> `0.5`, `2.0` -> `2`,
+`0.8` -> `0.8`, `1.0 / 3` -> `0.333333`, `1000000` -> `1000000`. Six
+significant digits, trailing zeros dropped. A vector renders by a different
+rule: `(1, 2, 3)` -> `(1.00, 2.00, 3.00)`, two decimals per component.
+`"str" + undefined` is a fatal `pair has unmatching types 'string' and
+'undefined'`.
+
+**Equality: VERIFIED, and it is neither structural nor numeric.**
+`1 == 1.0` is true. `"abc" == "abc"` is true. `"ABC" == "abc"` is **false**.
+`"5" == 5` is **true**, but `"5.0" == 5`, `"05" == 5` and `"abc" == 0` are
+all false — so a number compared against a string is rendered to its `%g`
+text and compared textually, not parsed as a number. `undefined == 0` is a
+fatal `pair has unmatching types 'undefined' and 'int'`.
+
+**Ordering: numbers only, VERIFIED.** `"a" < "b"` is a fatal `pair has
+unmatching types 'string' and 'string'`. There is no string collation.
+
+**Case folding is per role, VERIFIED, and this corrects §8.** Field names
+fold: `level.myField` reads back through `level.myfield`. Array keys do
+**not**: `a["medFire"]` and `a["medfire"]` are two entries, and the array's
+`.size` is 2. Together with `"ABC" == "abc"` being false, this means retail
+folds identifiers and field names but treats string *values* and array keys
+as case-sensitive. One interner folding everything cannot express that.
+
+**`.size`, VERIFIED.** On an array it counts every key regardless of type: an
+array with keys `0`, `1` and `"k"` reports 3, an empty one 0. Strings have it
+too: `"abcd".size` is 4.
+
+**Notify wake order: start order, VERIFIED.** Two threads waiting on one
+event on `level` wake in the order they were started.
+
+**`getentarray` order: ascending entity number, VERIFIED.** A map's own
+`script_origin` entities come back before three the probe spawned, and those
+three in spawn order.
+
+**`i%count` compiles on retail, VERIFIED.** The tight spelling of modulo
+evaluates to `1` for `7 % 3`, so retail's lexer does not read `%` before an
+identifier as an animation reference in that position. vcod's does; the
+divergence is recorded in §10.
+
+**`-2147483648` is not reachable on retail, VERIFIED.** Both the direct
+literal and `(int)(-2147483648)` yield `-2147483647`. vcod lands exactly on
+`i32::MIN`; §10 records the one-unit gap.
+
+### Still unestablished
+
+- **`undefined == undefined`.** Not probed. Retail's error message for the
+  mixed case names a "pair has unmatching types", which two `undefined`s are
+  not, so equal is the reading that message supports — but that is inference,
+  not measurement.
+- **String comparison against a localized string** (`&"KEY"`), and whether a
+  localized string renders as its key or its resolved text when
+  concatenated. No stock script does either.
 
 ## 10. Divergences kept as documentation, not code
 
