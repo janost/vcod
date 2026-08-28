@@ -463,10 +463,49 @@ trusted as ground truth rather than a best guess.
 
 ## 10. Divergences kept as documentation, not code
 
-Two more places where the implementation made a deliberate call the corpus
+Four places where the implementation made a deliberate call the corpus
 cannot settle, recorded here rather than silently baked into behaviour that
 looks authoritative:
 
+- **Two `notify`s of the same event on the same target queued within one
+  scheduling step coalesce; the second is lost.** `Op::Notify` queues rather
+  than resolving inline (`vm.rs`, `step_frames`'s `Notify` arm), and
+  `step_thread` flushes the queue only after the whole step
+  (`vm.rs:step_thread`) — so if a step queues two notifies of the same event
+  at the same target, the first flush wakes the waiter (flips it out of
+  `WaitingNotify`), and the second flush finds no matching waiter and drops
+  it silently. Measured: a pump firing `self notify("tick", 1); self
+  notify("tick", 2);` in one step against a loop doing `self
+  waittill("tick", v)` twice receives only `1`, then hangs forever on the
+  second `waittill` — one frame apart (each notify in its own step) both
+  arrive. Retail runs the waiter synchronously off `notify`, so it sees
+  both. This is a direct consequence of vcod's choice that a notify can
+  never reenter the VM (`step_thread`'s own doc comment); fixing it without
+  reopening reentrancy would mean re-checking, at flush time, which of a
+  step's queued notifies still have a live waiter, in queue order, deferred
+  to the next project. Pinned by
+  `sched::tests::two_notifies_of_the_same_event_in_one_step_coalesce_and_the_second_is_lost`.
+- **A thread killed by its own `endon` mid-step keeps executing to its next
+  suspend.** `main`'s `self thread killer();` runs `killer` synchronously
+  (`Vm::spawn`), and if `killer` notifies the event `main` just registered
+  via `endon`, that notify (`Vm::notify`) removes `main`'s entry from
+  `self.threads` immediately — while `main`'s own `step_frames` call is
+  still running further up the native call stack, oblivious, since it only
+  consults `self.threads` for endon registration and to kill/wake others,
+  never to check whether its own thread id still exists. `main` runs on to
+  its next `wait`/`waittill`/return; only then does the outer `step_thread`
+  look for `main`'s entry to write the suspended frames back, find it
+  already gone, and drop them — matching `step_thread`'s own doc comment
+  ("simply gone by the time we look again"). Measured: `main() { self
+  endon("die"); self thread killer(); sideEffectA(); sideEffectB(); wait 5;
+  done(); }` ends with `threads=0`, but both side effects having run for
+  real; `done()` never does, since the thread that would have called it was
+  already discarded by the time its `wait 5` resolved. The alternative —
+  `step_frames` re-checking `self.threads` for its own id after every
+  instruction — is real reentrancy-safety cost for a pattern (a thread
+  killing itself via a nested spawn's notify, mid-step) no corpus script
+  seems to rely on either way; deferred to the next project. Pinned by
+  `sched::tests::a_thread_killed_by_its_own_endon_mid_step_still_runs_to_its_next_suspend`.
 - **Ordering comparisons against `undefined` read false, where retail is
   believed to error.** `numeric_cmp` (`crates/gsc/src/vm.rs`) returns
   `Value::Int(0)` for `<`/`>`/`<=`/`>=` whenever either operand does not

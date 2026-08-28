@@ -388,6 +388,89 @@ mod tests {
         assert_eq!(vm.thread_count(), 0);
     }
 
+    // --- Divergences kept as documentation
+    // (docs/research/cod11-gsc-language.md §10), pinned so a later change to
+    // notify/kill ordering is deliberate rather than accidental. ---
+
+    /// Two `notify`s of the same event on the same target queued within one
+    /// step coalesce: `notify` only flips a waiter's state (`Vm::notify`),
+    /// it never re-checks whether a later notify in the same flush still has
+    /// a waiter, so the first wakes it and the second, finding it no longer
+    /// `WaitingNotify`, is dropped. `pump`'s two `notify`s both queue during
+    /// its own single step and flush together after it (`step_thread`); by
+    /// the time the second flushes, `waiter` has already been marked
+    /// `Runnable` by the first, so it never sees `2` -- and never runs
+    /// again to look, since its second `waittill` is now waiting on a tick
+    /// that already happened.
+    #[test]
+    fn two_notifies_of_the_same_event_in_one_step_coalesce_and_the_second_is_lost() {
+        let mut vm = vm_with(
+            r#"waiter() { self waittill("tick", v); got(v); self waittill("tick", v); got(v); }
+            pump() { self notify("tick", 1); self notify("tick", 2); }"#,
+        );
+        let mut host = TestHost::default();
+        let waiter = vm.func_ref("test/script", "waiter");
+        let pump = vm.func_ref("test/script", "pump");
+        vm.start_thread(&mut host, 0, waiter, Some(Target::Entity(EntId(1))), vec![]);
+        vm.run_frame(&mut host, 0);
+        assert_eq!(vm.thread_count(), 1, "waiting on the first tick");
+
+        vm.start_thread(&mut host, 0, pump, Some(Target::Entity(EntId(1))), vec![]);
+        vm.run_frame(&mut host, 0);
+
+        let seen: Vec<Value> = host
+            .calls
+            .iter()
+            .filter(|(n, _)| n == "got")
+            .map(|(_, args)| args[0])
+            .collect();
+        assert_eq!(seen, vec![Value::Int(1)], "only the first tick was seen");
+        assert_eq!(
+            vm.thread_count(),
+            1,
+            "waiting forever on a second tick that already happened"
+        );
+    }
+
+    /// A thread killed by its own `endon` mid-step (via a nested spawn's
+    /// notify, run synchronously inside `main`'s own `Op::Call{threaded:
+    /// true}`) keeps executing to its next suspend: the kill removes it from
+    /// `self.threads`, but the `step_frames` call already running its
+    /// `frames` has no way to notice mid-instruction, so it runs on. `main`
+    /// registers its endon, threads `killer` (which notifies "die"
+    /// synchronously, killing `main`'s entry in `self.threads` before
+    /// `main`'s own step ever returns to the outer loop), then still runs
+    /// both side effects and reaches its own `wait 5` before the outer
+    /// `step_thread` looks for `main`'s entry again to write back the
+    /// suspended frames -- finds it already gone -- and simply drops them:
+    /// the side effects already ran for real, but `main` never resumes to
+    /// call `done()`.
+    #[test]
+    fn a_thread_killed_by_its_own_endon_mid_step_still_runs_to_its_next_suspend() {
+        let mut vm = vm_with(
+            r#"main() {
+                self endon("die");
+                self thread killer();
+                sideEffectA();
+                sideEffectB();
+                wait 5;
+                done();
+            }
+            killer() { self notify("die"); }"#,
+        );
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1))), vec![]);
+
+        assert_eq!(vm.thread_count(), 0, "killed by its own endon mid-step");
+        assert!(host.calls.iter().any(|(n, _)| n == "sideeffecta"));
+        assert!(host.calls.iter().any(|(n, _)| n == "sideeffectb"));
+        assert!(
+            !host.calls.iter().any(|(n, _)| n == "done"),
+            "never resumed past its own wait to reach this"
+        );
+    }
+
     #[test]
     fn start_thread_threads_a_wait_against_its_own_now_ms_not_zero() {
         let mut vm = vm_with("main() { thread f(); } f() { wait 1; done(); }");
