@@ -178,6 +178,8 @@ pub struct Server {
     test_entities: Option<TestEntities>,
     /// Wall clock of the previous tick, for the trace's send-interval column.
     last_tick: Option<Instant>,
+    /// The map script, run once at load; `None` until `load_scripts` succeeds.
+    script: Option<crate::game::script::ScriptRuntime>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -244,6 +246,7 @@ impl Server {
             baselines: HashMap::new(),
             test_entities: None,
             last_tick: None,
+            script: None,
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -817,6 +820,20 @@ impl Server {
     /// Swap in the map built by the binary; tests run without one.
     pub fn load_world(&mut self, world: World) {
         self.world = Some(world);
+    }
+
+    /// Loads and runs the map script. Called once at map load, before any
+    /// client connects, so the configstring table is final by the time a
+    /// gamestate goes out; a script write after that would need the `d`
+    /// configstring-update command, which arrives in a later stage.
+    pub fn load_scripts(&mut self, fs: std::rc::Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
+        let mut rt = crate::game::script::ScriptRuntime::load(fs, &self.cfg.map)?;
+        let mut host = crate::game::host::GameHost::new(std::mem::take(&mut self.configstrings));
+        rt.start_map_main(&mut host, self.sv_time_ms);
+        rt.run_frame(&mut host, self.sv_time_ms);
+        self.configstrings = std::mem::take(&mut host.configstrings);
+        self.script = Some(rt);
+        Ok(())
     }
 
     const FALLBACK_SPAWN: ([f32; 3], f32) = ([0.0, 0.0, 64.0], 0.0);

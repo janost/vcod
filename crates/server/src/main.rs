@@ -58,8 +58,9 @@ fn main() -> Result<()> {
         );
     }
     let dir = args.game_dir.join(&args.mod_dir);
-    let fs =
-        Pk3Fs::open(&dir).with_context(|| format!("opening game data in {}", dir.display()))?;
+    let fs = std::rc::Rc::new(
+        Pk3Fs::open(&dir).with_context(|| format!("opening game data in {}", dir.display()))?,
+    );
     let Some(bsp_path) = fs.resolve_map(&args.map) else {
         bail!("map {} not found in {}", args.map, dir.display());
     };
@@ -83,6 +84,9 @@ fn main() -> Result<()> {
         Instant::now(),
     );
     server.load_world(vcod_server::world::World::from_bsp(&bsp));
+    if let Err(e) = server.load_scripts(fs.clone()) {
+        log::error!("loading map script: {e:#}");
+    }
     let mut buf = vec![0u8; 65536];
     loop {
         let now = Instant::now();
