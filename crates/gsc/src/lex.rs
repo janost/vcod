@@ -269,8 +269,8 @@ impl<'a> Lexer<'a> {
     }
 
     // A digit, or `.` followed by a digit; no exponents, no hex, no sign.
-    fn read_number(&mut self) -> Result<Tok, LexError> {
-        let open_line = self.line;
+    // Never fails: a literal past i32::MAX falls back to a float.
+    fn read_number(&mut self) -> Tok {
         let start = self.i;
         let mut has_dot = false;
         if self.peek() == Some(b'.') {
@@ -292,11 +292,16 @@ impl<'a> Lexer<'a> {
         }
         let text = std::str::from_utf8(&self.b[start..self.i]).expect("digits are ascii");
         if has_dot {
-            Ok(Tok::Float(text.parse().expect("well-formed float literal")))
-        } else {
-            text.parse()
-                .map(Tok::Int)
-                .map_err(|_| self.err(open_line, format!("integer literal '{text}' out of range")))
+            return Tok::Float(text.parse().expect("well-formed float literal"));
+        }
+        match text.parse() {
+            Ok(n) => Tok::Int(n),
+            // A literal past i32::MAX (maps/carride.gsc:1606,
+            // maps/redsquare.gsc:1547 both use one as an effectively-infinite
+            // sentinel) falls back to a float rather than erroring; a script
+            // that wrote a huge number meant "big", not a specific bit
+            // pattern.
+            Err(_) => Tok::Float(text.parse().expect("digits parse as a float")),
         }
     }
 
@@ -402,7 +407,7 @@ impl<'a> Lexer<'a> {
             } else if c.is_ascii_digit()
                 || (c == b'.' && matches!(self.peek_at(1), Some(d) if d.is_ascii_digit()))
             {
-                self.read_number()?
+                self.read_number()
             } else if is_ident_start(c) {
                 let text = self.read_ident();
                 keyword(&text).unwrap_or(Tok::Ident(text))
@@ -595,11 +600,14 @@ mod tests {
         assert_eq!(toks("#animtree"), vec![Tok::AnimtreeRef, Tok::Eof]);
     }
 
-    // A literal past i32::MAX must not panic the lexer: a third-party map
-    // script can ship a bad literal, and load errors should be recoverable.
+    // A literal past i32::MAX must not panic the lexer, and two stock
+    // scripts genuinely ship one as an effectively-infinite sentinel value
+    // (maps/carride.gsc:1606, maps/redsquare.gsc:1547): it lexes as a float.
     #[test]
-    fn an_oversized_int_literal_is_a_lex_error_not_a_panic() {
-        let e = lex("99999999999").unwrap_err();
-        assert_eq!(e.line, 1);
+    fn an_oversized_int_literal_falls_back_to_float() {
+        assert_eq!(
+            toks("99999999999"),
+            vec![Tok::Float("99999999999".parse().unwrap()), Tok::Eof]
+        );
     }
 }
