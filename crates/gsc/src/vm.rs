@@ -14,6 +14,20 @@ use crate::bytecode::{Function, Op};
 use crate::heap::{ArrayKey, Heap};
 use crate::value::{EntId, FuncRef, StructId, Value};
 
+/// `self`/a call's receiver, once resolved to something field access and
+/// notify/waittill/endon can key on. `level` and `game` are heap structs
+/// and are receivers throughout the corpus (`level notify`, `level
+/// waittill`, `level thread`, `level endon` number in the thousands), so
+/// this cannot be `EntId` alone. Two `u32` newtypes rather than `Option
+/// <Value>`: `Value` carries an `f32` and is neither `Eq` nor `Hash`, and
+/// Task 8 uses `Target` as a map key and as `Thread::endons`'s element
+/// type.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Target {
+    Entity(EntId),
+    Struct(StructId),
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum ErrorKind {
     /// The host has no such builtin. The pre-scan in Task 9 exists so this
@@ -41,7 +55,7 @@ pub trait Host {
         &mut self,
         interner: &Interner,
         name: Atom,
-        recv: Option<EntId>,
+        recv: Option<Target>,
         args: &[Value],
     ) -> Result<Value, ErrorKind>;
 
@@ -63,7 +77,7 @@ pub struct Frame {
     pub ip: u32,
     pub locals: Vec<Value>,
     pub stack: Vec<Value>,
-    pub recv: Option<EntId>,
+    pub recv: Option<Target>,
 }
 
 /// What one step of the interpreter can produce.
@@ -78,7 +92,7 @@ pub enum Suspend {
         seconds: f32,
     },
     WaitTill {
-        ent: EntId,
+        target: Target,
         event: Atom,
         binds: Box<[u16]>,
     },
@@ -230,13 +244,22 @@ fn eval_neg(v: Value) -> Result<Value, ErrorKind> {
     }
 }
 
-/// A call's receiver reads as `EntId` when it is one; anything else
-/// (`level`, `game`, `undefined`) leaves the callee's `self` unbound rather
-/// than erroring, since `Frame::recv` has no way to represent it.
-fn as_ent(v: Value) -> Option<EntId> {
+/// A call's receiver reads as a `Target` when it is an entity or a heap
+/// struct (`level`, `game` are both, and both are common receivers in the
+/// corpus); `undefined` and any other value leave the callee's `self`
+/// unbound rather than erroring.
+fn as_target(v: Value) -> Option<Target> {
     match v {
-        Value::Entity(e) => Some(e),
+        Value::Entity(e) => Some(Target::Entity(e)),
+        Value::Struct(s) => Some(Target::Struct(s)),
         _ => None,
+    }
+}
+
+fn target_to_value(t: Target) -> Value {
+    match t {
+        Target::Entity(e) => Value::Entity(e),
+        Target::Struct(s) => Value::Struct(s),
     }
 }
 
@@ -272,7 +295,16 @@ impl Vm {
         &mut self.interner
     }
 
-    pub fn install(&mut self, fns: Vec<Function>) {
+    /// Rejects a function that fails `bytecode::stack_depth`'s abstract
+    /// stack walk instead of installing it. That check is the only thing
+    /// standing between a compiler bug and a panic in `step_frames` (which
+    /// trusts the stack discipline it proves), so it has to run here, on
+    /// every function this ever accepts — not just in the compiler's own
+    /// test suite, which is the only place it ran before.
+    pub fn install(&mut self, fns: Vec<Function>) -> Result<(), String> {
+        for f in &fns {
+            crate::bytecode::stack_depth(f)?;
+        }
         for f in fns {
             let key = FuncRef {
                 file: f.file,
@@ -280,6 +312,7 @@ impl Vm {
             };
             self.functions.insert(key, Rc::new(f));
         }
+        Ok(())
     }
 
     pub fn func_ref(&mut self, path: &str, name: &str) -> FuncRef {
@@ -293,7 +326,7 @@ impl Vm {
         &self,
         func: FuncRef,
         f: &Function,
-        recv: Option<EntId>,
+        recv: Option<Target>,
         args: Vec<Value>,
     ) -> Frame {
         let mut locals = vec![Value::Undefined; f.locals as usize];
@@ -313,6 +346,11 @@ impl Vm {
     /// execution reaches a `wait`/`waittill`. There is no per-step budget
     /// here yet, so `Step::Running` is not produced; Task 8's scheduler
     /// adds that and consumes it.
+    ///
+    /// Precondition: `frames` is non-empty. A caller (Task 8's scheduler,
+    /// once it resumes a thread from its saved frame stack) must never
+    /// invoke this with an empty stack; it panics rather than doing
+    /// nothing, since there is no frame to attribute a `ScriptError` to.
     pub fn step_frames(
         &mut self,
         host: &mut dyn Host,
@@ -416,7 +454,7 @@ impl Vm {
                 Op::LoadSelf => {
                     let v = frames[top]
                         .recv
-                        .map(Value::Entity)
+                        .map(target_to_value)
                         .unwrap_or(Value::Undefined);
                     push!(v);
                 }
@@ -451,7 +489,7 @@ impl Vm {
                         args.push(pop!());
                     }
                     args.reverse();
-                    let recv = if has_recv { as_ent(pop!()) } else { None };
+                    let recv = if has_recv { as_target(pop!()) } else { None };
                     let callee = self.functions.get(&target).cloned().ok_or_else(|| {
                         err(ErrorKind::Custom(format!(
                             "no such function {}::{}",
@@ -471,7 +509,7 @@ impl Vm {
                         args.push(pop!());
                     }
                     args.reverse();
-                    let recv = if has_recv { as_ent(pop!()) } else { None };
+                    let recv = if has_recv { as_target(pop!()) } else { None };
                     let v = host
                         .builtin(&self.interner, name, recv, &args)
                         .map_err(err)?;
@@ -493,7 +531,7 @@ impl Vm {
                         args.push(pop!());
                     }
                     args.reverse();
-                    let recv = if has_recv { as_ent(pop!()) } else { None };
+                    let recv = if has_recv { as_target(pop!()) } else { None };
                     let callee = self.functions.get(&target).cloned().ok_or_else(|| {
                         err(ErrorKind::Custom(format!(
                             "no such function {}::{}",
@@ -648,26 +686,54 @@ impl Vm {
                 Op::WaitTill { binds } => {
                     let event = pop!();
                     let recv = pop!();
-                    let Value::Entity(ent) = recv else {
-                        return Err(err(ErrorKind::BadType("waittill needs an entity receiver")));
-                    };
+                    let target = as_target(recv).ok_or_else(|| {
+                        err(ErrorKind::BadType(
+                            "waittill needs an entity or struct receiver",
+                        ))
+                    })?;
                     let Value::String(event) = event else {
                         return Err(err(ErrorKind::BadType(
                             "waittill needs a string event name",
                         )));
                     };
-                    return Ok(Step::Suspend(Suspend::WaitTill { ent, event, binds }));
+                    return Ok(Step::Suspend(Suspend::WaitTill {
+                        target,
+                        event,
+                        binds,
+                    }));
                 }
+                // Neither op has a scheduler to reach yet (Task 8 owns the
+                // waiting-thread registry both would signal or register
+                // against), but the receiver is still type-checked and
+                // resolved to a `Target` here so that wiring dispatch up
+                // in Task 8 means touching this match arm, not adding a
+                // new one beside code that silently discarded it.
                 Op::Notify { argc } => {
                     for _ in 0..argc {
                         pop!();
                     }
-                    pop!(); // event name
-                    pop!(); // receiver
+                    let event = pop!();
+                    let recv = pop!();
+                    let Value::String(_event) = event else {
+                        return Err(err(ErrorKind::BadType("notify needs a string event name")));
+                    };
+                    let _target = as_target(recv).ok_or_else(|| {
+                        err(ErrorKind::BadType(
+                            "notify needs an entity or struct receiver",
+                        ))
+                    })?;
                 }
                 Op::EndOn => {
-                    pop!(); // event name
-                    pop!(); // receiver
+                    let event = pop!();
+                    let recv = pop!();
+                    let Value::String(_event) = event else {
+                        return Err(err(ErrorKind::BadType("endon needs a string event name")));
+                    };
+                    let _target = as_target(recv).ok_or_else(|| {
+                        err(ErrorKind::BadType(
+                            "endon needs an entity or struct receiver",
+                        ))
+                    })?;
                 }
             }
         }
@@ -680,7 +746,7 @@ impl Vm {
         &mut self,
         host: &mut dyn Host,
         func: FuncRef,
-        recv: Option<EntId>,
+        recv: Option<Target>,
         args: Vec<Value>,
     ) -> Result<Value, ScriptError> {
         let f = self
@@ -736,7 +802,7 @@ mod tests {
             &mut self,
             interner: &Interner,
             name: Atom,
-            _recv: Option<EntId>,
+            _recv: Option<Target>,
             args: &[Value],
         ) -> Result<Value, ErrorKind> {
             let n = interner.resolve(name).to_string();
@@ -774,7 +840,7 @@ mod tests {
         let ast = crate::parse::parse_file(src).unwrap();
         let mut vm = Vm::new();
         let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
-        vm.install(fns);
+        vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
         let v = vm.call_now(&mut host, main, None, vec![]).unwrap();
@@ -883,7 +949,7 @@ mod tests {
         let ast = crate::parse::parse_file("main() {\n  x = 1;\n  double(\"no\");\n}").unwrap();
         let mut vm = Vm::new();
         let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
-        vm.install(fns);
+        vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
         let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
@@ -895,10 +961,127 @@ mod tests {
         let ast = crate::parse::parse_file("main() { wait 1; }").unwrap();
         let mut vm = Vm::new();
         let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
-        vm.install(fns);
+        vm.install(fns).unwrap();
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
         let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
         assert!(matches!(e.kind, ErrorKind::SuspendedInImmediateCall));
+    }
+
+    // --- Fix round 1: `level`/`game` as call and notify/waittill/endon
+    // receivers, and the four brief rules that previously rested only on
+    // review. ---
+
+    /// `level thread f()` and friends are the majority of the corpus's
+    /// control flow (996 `level notify`, 956 `level waittill`, 728 `level
+    /// thread`, 408 `level endon` sites). `self` inside the callee must
+    /// bind to the same heap struct `level` names, not fall back to
+    /// `Undefined` the way a non-entity receiver used to.
+    #[test]
+    fn level_can_be_a_call_receiver_and_self_binds_to_it() {
+        let (v, _, _) =
+            run("main() { level thread helper(); return level.mark; } helper() { self.mark = 7; }");
+        assert_eq!(v, Value::Int(7));
+    }
+
+    /// Before `Target`, `WaitTill` accepted only `Value::Entity` and a
+    /// `level`/`game` receiver was a `BadType` script error, not a
+    /// suspend — every stock gametype's round-end wait would have failed
+    /// outright rather than blocking.
+    #[test]
+    fn level_waittill_suspends_rather_than_failing_on_receiver_type() {
+        let ast = crate::parse::parse_file(r#"main() { level waittill("round_end"); }"#).unwrap();
+        let mut vm = Vm::new();
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
+        assert!(matches!(e.kind, ErrorKind::SuspendedInImmediateCall));
+    }
+
+    /// `Notify`/`EndOn` used to pop and discard their receiver with no
+    /// type check at all, so this was silently accepted either way. Now
+    /// that the receiver is resolved to a `Target`, a `level`/`game`
+    /// receiver must still be accepted, not newly rejected.
+    #[test]
+    fn level_notify_and_endon_accept_a_struct_receiver() {
+        let (v, _, _) = run(r#"main() { level notify("go"); level endon("stop"); return 1; }"#);
+        assert_eq!(v, Value::Int(1));
+    }
+
+    /// The other half of that same fix: a receiver that resolves to
+    /// neither an entity nor a struct is now a reported `BadType`, not a
+    /// silent no-op that leaves every waiting thread hanging forever.
+    #[test]
+    fn notify_with_an_undefined_receiver_is_a_bad_type_error_not_a_silent_no_op() {
+        let ast = crate::parse::parse_file(r#"main() { x = undefined; x notify("go"); }"#).unwrap();
+        let mut vm = Vm::new();
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
+        assert!(matches!(e.kind, ErrorKind::BadType(_)));
+    }
+
+    /// `Vm::install` now runs `bytecode::stack_depth` over every function
+    /// before accepting it, so a compiler bug that leaks or underflows the
+    /// stack is a rejected install, not a panic the first time
+    /// `step_frames` reaches the bad instruction.
+    #[test]
+    fn install_rejects_a_function_that_fails_the_stack_walk() {
+        let mut vm = Vm::new();
+        let file = vm.interner_mut().intern("test/bad");
+        let name = vm.interner_mut().intern("main");
+        let bad = crate::bytecode::Function {
+            file,
+            name,
+            params: 0,
+            locals: 0,
+            code: vec![crate::bytecode::Op::Pop, crate::bytecode::Op::ReturnUndef],
+            consts: Vec::new(),
+            lines: vec![1, 1],
+        };
+        assert!(vm.install(vec![bad]).is_err());
+    }
+
+    #[test]
+    fn strings_concatenate_via_add() {
+        let (v, _, mut vm) = run(r#"main() { return "foo" + "bar"; }"#);
+        let Value::String(a) = v else {
+            panic!("expected a string, got {v:?}")
+        };
+        assert_eq!(vm.interner_mut().resolve(a), "foobar");
+    }
+
+    #[test]
+    fn a_vector_scales_by_a_trailing_scalar() {
+        let (v, _, _) = run("main() { return (1,2,3) * 2; }");
+        assert_eq!(v, Value::Vector([2.0, 4.0, 6.0]));
+    }
+
+    #[test]
+    fn a_vector_scales_by_a_leading_scalar() {
+        let (v, _, _) = run("main() { return 2 * (1,2,3); }");
+        assert_eq!(v, Value::Vector([2.0, 4.0, 6.0]));
+    }
+
+    #[test]
+    fn comparing_across_incompatible_types_reads_false_not_error() {
+        let (v, _, _) = run(r#"main() { return "foo" > 1; }"#);
+        assert_eq!(v, Value::Int(0));
+    }
+
+    #[test]
+    fn integer_division_by_zero_is_a_bad_type_error_not_a_panic() {
+        let ast = crate::parse::parse_file("main() { return 1 / 0; }").unwrap();
+        let mut vm = Vm::new();
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        let e = vm.call_now(&mut host, main, None, vec![]).unwrap_err();
+        assert!(matches!(e.kind, ErrorKind::BadType(_)));
     }
 }
