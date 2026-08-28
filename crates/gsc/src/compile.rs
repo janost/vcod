@@ -115,8 +115,7 @@ impl<'a> Compiler<'a> {
 
     /// Gets or allocates a stable slot for a local, case-folded like every
     /// other identifier the engine matches. Re-mentioning an existing name
-    /// (including a parameter) reuses its slot; `declare_param` is the only
-    /// place a repeat is rejected instead.
+    /// (including a parameter) reuses its slot.
     fn local_slot(&mut self, name: &str) -> Result<u16, CompileError> {
         let folded = name.to_ascii_lowercase();
         if let Some(&slot) = self.locals.get(&folded) {
@@ -127,14 +126,21 @@ impl<'a> Compiler<'a> {
         Ok(slot)
     }
 
-    /// Allocates a parameter's slot, rejecting a name already taken by an
-    /// earlier parameter (`m(a, a)`), which `local_slot`'s get-or-insert
-    /// would otherwise silently alias to one slot.
+    /// Allocates a parameter's slot. Unlike `local_slot`, this always
+    /// allocates a fresh slot rather than reusing one for a repeated name:
+    /// `make_frame` binds call arguments to `locals[0..params]` purely by
+    /// position, so every formal parameter needs its own slot regardless of
+    /// its name, or the argument count and the slot count disagree.
+    ///
+    /// A repeated name (`m(nTarget, eMG42, nGunner, nTarget)`, shipped in
+    /// `maps/redsquare.gsc`) still gets a slot per occurrence; re-inserting
+    /// the name maps every later body reference to the *last* parameter
+    /// that declared it, so an earlier same-named parameter's slot is
+    /// filled but unreachable by name. This was rejected as a compile error
+    /// until the census found this file, which the retail engine plainly
+    /// accepts.
     fn declare_param(&mut self, name: &str) -> Result<(), CompileError> {
         let folded = name.to_ascii_lowercase();
-        if self.locals.contains_key(&folded) {
-            return Err(self.err(format!("duplicate parameter `{name}`")));
-        }
         let slot = u16::try_from(self.locals.len()).map_err(|_| self.err("too many locals"))?;
         self.locals.insert(folded, slot);
         Ok(())
@@ -848,11 +854,19 @@ mod tests {
         );
     }
 
+    /// `maps/redsquare.gsc` ships `mg42_target(nTarget, eMG42, nGunner,
+    /// nTarget)` (`nTarget` repeated); retail accepts it, so this compiles
+    /// rather than errors. Reduced here to the same shape with two names:
+    /// `a` still gets one slot per occurrence (three formal parameters,
+    /// three call-argument slots), but a body reference to `a` resolves to
+    /// the *last* parameter that declared it, not the first.
     #[test]
-    fn duplicate_parameters_are_a_compile_error() {
-        let ast = crate::parse::parse_file("m(a, a) { }").unwrap();
-        let mut i = Interner::default();
-        assert!(compile_file(&ast, "test/script", &mut i).is_err());
+    fn a_duplicate_parameter_name_compiles_and_the_last_one_wins() {
+        let (_, f) = compile("m(a, b, a) { x = a; }");
+        assert_eq!(f[0].params, 3);
+        // `a`'s body reference must load the third parameter's slot (2),
+        // the one the second `a` declared, not the first.
+        assert!(f[0].code.contains(&Op::LoadLocal(2)));
     }
 
     #[test]
