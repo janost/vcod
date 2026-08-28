@@ -293,13 +293,14 @@ pub struct Vm {
     /// same as an unbounded loop.
     budget: u32,
     /// The clock a `Suspend::Wait` hit during an immediate run resolves
-    /// against: set by `run_frame` on entry, and by `start_thread` before
-    /// its own immediate run, so a `wait` a thread's first instructions
-    /// hit -- whether stepped by `run_frame` or by a fresh `start_thread`
-    /// call before any `run_frame` has ever run -- always sees the real
-    /// clock, never the `0` this defaults to. A nested `spawn` (recursing
-    /// from inside either) reads whichever of the two set it last, which
-    /// is always correct since neither changes it mid-recursion.
+    /// against: set by `run_frame` on entry, and by `start_thread` and
+    /// `call_now` before their own immediate runs, so a `wait` a thread's
+    /// first instructions hit -- whether stepped by `run_frame` or by a
+    /// fresh `start_thread`/`call_now` call before any `run_frame` has
+    /// ever run -- always sees the real clock, never the `0` this
+    /// defaults to. A nested `spawn` (recursing from inside any of the
+    /// three) reads whichever last set it, which is always correct since
+    /// none of them changes it mid-recursion.
     now_ms: i32,
     /// How many `spawn` calls are currently nested on the native Rust
     /// stack (a thread whose immediate run itself spawns a thread, whose

@@ -355,4 +355,30 @@ mod tests {
             "removed, not left dangling after its own error"
         );
     }
+
+    /// The `now_ms = 0` every other `start_thread` test in this suite
+    /// passes can't distinguish "the fix is present" from "the fix was
+    /// reverted": `Vm::now_ms` already defaults to `0`, so a reverted
+    /// `self.now_ms = now_ms;` and a working one behave identically at
+    /// that value. This test uses a clock that isn't the default: `main`
+    /// threads `f`, whose own `wait 1` (1000 ms) must deadline against
+    /// `5_000`, not `0` -- `run_frame(&mut host, 5_000)` (right after
+    /// `start_thread`, same clock reading) must not fire it, only
+    /// `run_frame(&mut host, 6_000)` should.
+    #[test]
+    fn start_thread_threads_a_wait_against_its_own_now_ms_not_zero() {
+        let mut vm = vm_with("main() { thread f(); } f() { wait 1; done(); }");
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 5_000, f, None, vec![]);
+        assert_eq!(vm.thread_count(), 1, "f is alive, waiting on its own wait");
+
+        vm.run_frame(&mut host, 5_000);
+        assert!(
+            !host.calls.iter().any(|(n, _)| n == "done"),
+            "not due yet -- 6_000, not 1_000"
+        );
+        vm.run_frame(&mut host, 6_000);
+        assert!(host.calls.iter().any(|(n, _)| n == "done"), "due now");
+    }
 }
