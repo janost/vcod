@@ -2486,6 +2486,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vcod-gsc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+]
+
+[[package]]
 name = "vcod-server"
 version = "0.1.0"
 dependencies = [
