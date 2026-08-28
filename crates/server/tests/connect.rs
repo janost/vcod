@@ -46,6 +46,7 @@ fn server_with_entities(test_entities: usize) -> Server {
             max_clients: 2,
             gametype: "dm".into(),
             test_entities,
+            trace: false,
         },
         Instant::now(),
     )

@@ -68,6 +68,9 @@ pub struct ServerConfig {
     pub gametype: String,
     /// Scripted entities that exercise the packet-entity wire path. 0 is off.
     pub test_entities: usize,
+    /// Log one line per snapshot per client with the numbers that drive a
+    /// client's prediction. Off by default; a busy server would flood.
+    pub trace: bool,
 }
 
 /// `challenge_t`. Entries past `CHALLENGE_TTL` go on the next insert; the
@@ -173,6 +176,8 @@ pub struct Server {
     /// Scripted entities driving the packet-entity path; `None` when
     /// `cfg.test_entities` is 0.
     test_entities: Option<TestEntities>,
+    /// Wall clock of the previous tick, for the trace's send-interval column.
+    last_tick: Option<Instant>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -238,6 +243,7 @@ impl Server {
             sv_time_ms: 0,
             baselines: HashMap::new(),
             test_entities: None,
+            last_tick: None,
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -837,7 +843,7 @@ impl Server {
 
     pub fn tick(&mut self, now: Instant) {
         self.check_timeouts(now);
-        self.send_snapshots();
+        self.send_snapshots(now);
     }
 
     /// One snapshot per active client per tick, the main loop pacing calls at
@@ -845,8 +851,15 @@ impl Server {
     /// still in its ring, uncompressed otherwise. The sim replays every
     /// queued usercmd first, dt off the cmd clocks, matching the client's own
     /// prediction.
-    fn send_snapshots(&mut self) {
+    fn send_snapshots(&mut self, now: Instant) {
         self.sv_time_ms = self.sv_time_ms.wrapping_add(FRAME_MS);
+        // Wall gap between ticks: sv_time always advances exactly FRAME_MS, so
+        // a gap far off it means the frames the client interpolates between
+        // are not arriving at the rate their timestamps claim.
+        let wall_ms = self
+            .last_tick
+            .map(|t| now.saturating_duration_since(t).as_secs_f32() * 1000.0);
+        self.last_tick = Some(now);
 
         // One clientState entry per online client, rebuilt each frame; slot ==
         // index. `snapshot::write` deltas this against each client's own
@@ -877,6 +890,7 @@ impl Server {
             // Stale cmds (dt <= 0) are skipped whole; a flood past the per-tick
             // cap resyncs to the newest cmd and keeps only the tail.
             let mut processed = 0usize;
+            let (mut first_cmd_st, mut last_cmd_st) = (None::<i32>, None::<i32>);
             while !c.pending.is_empty() {
                 let cmd = c.pending[0];
                 if processed >= MAX_CMDS_PER_TICK {
@@ -896,9 +910,15 @@ impl Server {
                 let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
                 sim.step(&cmd, world, dt);
                 c.last_processed_st = cmd.server_time;
+                first_cmd_st.get_or_insert(cmd.server_time);
+                last_cmd_st = Some(cmd.server_time);
                 processed += 1;
             }
-            let command_time = c.last_processed_st.max(self.sv_time_ms - FRAME_MS);
+            // Exactly the serverTime of the last cmd the sim consumed, and
+            // nothing else: the client replays everything past it, so a
+            // commandTime we never simulated drops that slice of its input
+            // and its prediction judders (docs/protocol-1.1.md).
+            let command_time = c.last_processed_st;
             let message_num = c.netchan.outgoing_sequence;
 
             let frame = snapshot::Snapshot {
@@ -933,6 +953,35 @@ impl Server {
             c.record_frame(frame);
 
             let ops = w.into_ops();
+
+            if self.cfg.trace {
+                // The prediction contract: a client replays every usercmd
+                // newer than ps.commandTime, so `lead` at or below zero means
+                // we claim to have simulated past our own frame clock and the
+                // client has nothing left to replay. Retail's captures run a
+                // lead of 0..34 ms, never negative (examples/snapshot_timing).
+                let lead = self.sv_time_ms - command_time;
+                let queued = c.pending.len();
+                let span = match (first_cmd_st, last_cmd_st) {
+                    (Some(a), Some(b)) => format!("{a}..{b}"),
+                    _ => "-".into(),
+                };
+                let ack_behind = message_num as i64 - i64::from(c.message_ack);
+                let base_desc = match base.as_ref() {
+                    Some(b) => format!("d{}", message_num - b.message_num),
+                    None => "uncompressed".into(),
+                };
+                log::info!(
+                    "trace c{slot} msg {message_num} wall {} sv {} ct {} lead {} \
+cmds {processed} span {span} queued {queued} ack {} behind {ack_behind} {base_desc} {} B",
+                    wall_ms.map_or("-".into(), |w| format!("{w:.1}")),
+                    self.sv_time_ms,
+                    command_time,
+                    lead,
+                    c.message_ack,
+                    ops.len(),
+                );
+            }
             for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
                 self.outbox.push((c.addr, pkt));
             }
@@ -961,6 +1010,7 @@ mod tests {
             max_clients: 4,
             gametype: "dm".into(),
             test_entities: 0,
+            trace: false,
         }
     }
     fn addr(port: u16) -> SocketAddr {
@@ -1716,6 +1766,60 @@ mod tests {
             }
         }
         snap.expect("a snapshot arrived")
+    }
+
+    /// `ps.commandTime` must name a usercmd we actually simulated, never a
+    /// later moment. A client replays every cmd past commandTime, so claiming
+    /// to have simulated further than we have silently drops that slice of
+    /// its input on every frame and its prediction judders (retail trace,
+    /// 2026-08-28: commandTime ran 11-24 ms ahead on 100% of frames).
+    #[test]
+    fn command_time_never_runs_ahead_of_the_last_simulated_cmd() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = active(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        let p = &PROTOCOL_V1;
+
+        // A client whose cmd clock trails the server's, as a real one's does:
+        // it runs its own serverTime behind so it has frames to interpolate.
+        let mut at = now;
+        let mut cmd_time = 0i32;
+        for _ in 0..8 {
+            at += std::time::Duration::from_millis(50);
+            cmd_time += 40; // 10 ms per frame behind the server's 50
+            let ack = nc.incoming_sequence as i32;
+            sv.handle_packet(
+                addr(5),
+                &nc.build_out(
+                    0x10,
+                    ack,
+                    0,
+                    &move_ops(
+                        sv.checksum_feed,
+                        ack,
+                        UserCmd {
+                            server_time: cmd_time,
+                            forward: 127,
+                            ..Default::default()
+                        },
+                    ),
+                    &Huffman::new(),
+                )
+                .unwrap(),
+                at,
+            );
+            let s = latest_snapshot(&mut sv, &mut nc, &mut ring, at);
+            let ct = s.ps.field_i32(p, "commandTime");
+            assert!(
+                ct <= cmd_time,
+                "commandTime {ct} is ahead of the newest cmd we simulated ({cmd_time})"
+            );
+        }
     }
 
     #[test]

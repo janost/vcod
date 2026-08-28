@@ -282,6 +282,14 @@ A client is only sent snapshots once it's CS_ACTIVE, and that requires the serve
 
 On a DM server the client auto-spawns as `GAME_SPECTATOR`, no team command needed. Send usercmds (movement axes plus `ANGLE2SHORT` view angles) every frame; the server runs spectator noclip and the position comes back in the playerState. `forward = 127` moved my playerstate origin about 636 units over 2 seconds and stopped when I stopped sending it, which is the cheapest end-to-end proof the move path works.
 
+### `ps.commandTime` and client prediction
+
+`ps.commandTime` must carry the `serverTime` of the last usercmd the server actually simulated for that client, and nothing else. A client replays every usercmd newer than it on top of the snapshot's playerstate, so a `commandTime` naming a moment the server never simulated silently drops that slice of the client's own input from its prediction, every frame.
+
+VERIFIED live 2026-08-28 against the retail 1.1 client, both directions of the experiment. vcod's server clamped `commandTime` up to `serverTime - sv_fps_interval`, which put it 11-24 ms past the newest cmd it had simulated on 100% of 801 traced frames; retail rendered smooth movement with a view that juddered at snapshot rate, because position is predicted while the view angles were being reset from the stale snapshot 20 times a second. Reporting the true last-simulated cmd time made `commandTime - last_simulated` exactly 0 on all 446 frames of the confirming trace and the judder went away.
+
+The lead (`serverTime - commandTime`) is a consequence, not a target: it is however far behind the client's own clock runs. The committed captures, taken with vcod's probe against the retail server, show 0-34 ms (mean 16); a retail client against vcod's server shows 63-74 ms, because a retail client deliberately runs its `serverTime` estimate behind so it always has frames to interpolate between. Clamping the lead to hide that difference is what caused the bug. `crates/common/examples/snapshot_timing.rs` prints the capture side of this; `vcod-server --trace` prints the live side.
+
 ## Constants worth having
 
 | Constant | Value |

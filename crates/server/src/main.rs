@@ -32,6 +32,12 @@ struct Args {
     /// Scripted entities that exercise the packet-entity wire path. 0 is off.
     #[arg(long, default_value_t = 0)]
     test_entities: usize,
+
+    /// Log one line per snapshot per client: send interval, the serverTime and
+    /// commandTime a client predicts from, the usercmds consumed, and whether
+    /// the frame went out as a delta.
+    #[arg(long)]
+    trace: bool,
 }
 
 /// `sv_fps 20`.
@@ -72,6 +78,7 @@ fn main() -> Result<()> {
             max_clients: args.max_clients,
             gametype: "dm".into(),
             test_entities: args.test_entities,
+            trace: args.trace,
         },
         Instant::now(),
     );
