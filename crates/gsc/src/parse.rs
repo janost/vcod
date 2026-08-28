@@ -162,30 +162,34 @@ impl<'a> Parser<'a> {
                 Tok::Thread => {
                     self.bump();
                     let name = self.ident_name()?;
-                    self.expect(&Tok::LParen)?;
-                    let args = self.args_list()?;
-                    base = Expr::Call {
-                        recv: Some(Box::new(base)),
-                        target: CallTarget::Name(name),
-                        args,
-                        threaded: true,
-                    };
+                    base = self.finish_call(Some(Box::new(base)), CallTarget::Name(name), true)?;
                 }
                 Tok::Ident(name) => {
                     self.bump();
-                    self.expect(&Tok::LParen)?;
-                    let args = self.args_list()?;
-                    base = Expr::Call {
-                        recv: Some(Box::new(base)),
-                        target: CallTarget::Name(name),
-                        args,
-                        threaded: false,
-                    };
+                    base = self.finish_call(Some(Box::new(base)), CallTarget::Name(name), false)?;
                 }
                 _ => break,
             }
         }
         Ok(base)
+    }
+
+    // `expect(LParen)`, then `args_list()`, then the `Expr::Call` node.
+    // Shared by every call form: bare, path, deref, method and threaded.
+    fn finish_call(
+        &mut self,
+        recv: Option<Box<Expr>>,
+        target: CallTarget,
+        threaded: bool,
+    ) -> Result<Expr, ParseError> {
+        self.expect(&Tok::LParen)?;
+        let args = self.args_list()?;
+        Ok(Expr::Call {
+            recv,
+            target,
+            args,
+            threaded,
+        })
     }
 
     fn args_list(&mut self) -> Result<Vec<Expr>, ParseError> {
@@ -252,14 +256,8 @@ impl<'a> Parser<'a> {
         let inner = self.expr()?;
         self.expect(&Tok::RBracket)?;
         self.expect(&Tok::RBracket)?;
-        if self.eat(&Tok::LParen) {
-            let args = self.args_list()?;
-            return Ok(Expr::Call {
-                recv: None,
-                target: CallTarget::Deref(Box::new(inner)),
-                args,
-                threaded: false,
-            });
+        if *self.peek() == Tok::LParen {
+            return self.finish_call(None, CallTarget::Deref(Box::new(inner)), false);
         }
         // The corpus never leaves a deref uncalled; fall back to the
         // referenced value itself rather than invent an AST node for it.
@@ -303,33 +301,310 @@ impl<'a> Parser<'a> {
         while self.eat(&Tok::Backslash) {
             path.push(self.ident_name()?);
         }
+        // A bare `name::func`, with zero backslash segments, takes this
+        // branch too: a census over all 799 shipped scripts found no such
+        // occurrence, so the rule is permissive rather than load-bearing.
         if *self.peek() == Tok::ColonColon {
             self.bump();
             let name = self.ident_name()?;
             let file = path.join("/").to_ascii_lowercase();
-            if self.eat(&Tok::LParen) {
-                let args = self.args_list()?;
-                return Ok(Expr::Call {
-                    recv: None,
-                    target: CallTarget::Path { file, name },
-                    args,
-                    threaded: false,
-                });
+            if *self.peek() == Tok::LParen {
+                return self.finish_call(None, CallTarget::Path { file, name }, false);
             }
             return Ok(Expr::FuncRef { file, name });
         }
 
-        if self.eat(&Tok::LParen) {
-            let args = self.args_list()?;
-            return Ok(Expr::Call {
-                recv: None,
-                target: CallTarget::Name(first),
-                args,
-                threaded: false,
-            });
+        if *self.peek() == Tok::LParen {
+            return self.finish_call(None, CallTarget::Name(first), false);
         }
         Ok(Expr::Local(first))
     }
+
+    fn file(&mut self) -> Result<File, ParseError> {
+        let mut file = File::default();
+        while *self.peek() != Tok::Eof {
+            match self.peek().clone() {
+                Tok::UsingAnimtree(name) => {
+                    self.bump();
+                    self.expect(&Tok::Semi)?;
+                    file.animtrees.push(name);
+                }
+                _ => file.funcs.push(self.func_def()?),
+            }
+        }
+        Ok(file)
+    }
+
+    fn func_def(&mut self) -> Result<FuncDef, ParseError> {
+        let line = self.line();
+        let name = self.ident_name()?;
+        self.expect(&Tok::LParen)?;
+        let mut params = Vec::new();
+        if !self.eat(&Tok::RParen) {
+            loop {
+                params.push(self.ident_name()?);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(&Tok::RParen)?;
+        }
+        let body = self.block()?;
+        Ok(FuncDef {
+            name,
+            params,
+            body,
+            line,
+        })
+    }
+
+    fn block(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        self.expect(&Tok::LBrace)?;
+        let mut stmts = Vec::new();
+        while *self.peek() != Tok::RBrace {
+            stmts.extend(self.statement()?);
+        }
+        self.bump(); // `}`
+        Ok(stmts)
+    }
+
+    // If/while/for/do bodies accept a `{ ... }` block or one bare statement;
+    // `statement()` already flattens both shapes into a `Vec<Stmt>`.
+    fn body(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        self.statement()
+    }
+
+    // Almost always produces exactly one statement. A nested `{ ... }`
+    // block has no `Stmt` variant of its own, so it flattens into its
+    // contained statements; a bare `;` produces none.
+    fn statement(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        match self.peek().clone() {
+            Tok::LBrace => self.block(),
+            Tok::Semi => {
+                self.bump();
+                Ok(Vec::new())
+            }
+            Tok::If => Ok(vec![self.if_stmt()?]),
+            Tok::While => Ok(vec![self.while_stmt()?]),
+            Tok::Do => Ok(vec![self.do_while_stmt()?]),
+            Tok::For => Ok(vec![self.for_stmt()?]),
+            Tok::Switch => Ok(vec![self.switch_stmt()?]),
+            Tok::Return => {
+                self.bump();
+                if self.eat(&Tok::Semi) {
+                    Ok(vec![Stmt::Return(None)])
+                } else {
+                    let e = self.expr()?;
+                    self.expect(&Tok::Semi)?;
+                    Ok(vec![Stmt::Return(Some(e))])
+                }
+            }
+            Tok::Break => {
+                self.bump();
+                self.expect(&Tok::Semi)?;
+                Ok(vec![Stmt::Break])
+            }
+            Tok::Continue => {
+                self.bump();
+                self.expect(&Tok::Semi)?;
+                Ok(vec![Stmt::Continue])
+            }
+            Tok::Wait => {
+                self.bump();
+                let e = self.expr()?;
+                self.expect(&Tok::Semi)?;
+                Ok(vec![Stmt::Wait(e)])
+            }
+            // `expr()` has no branch for a leading `thread`: the only form
+            // it handles is the receiver-attached one in `postfix`. A
+            // receiverless `thread f();` only occurs in statement position,
+            // so this is the one place that consumes the keyword itself.
+            Tok::Thread => {
+                self.bump();
+                let name = self.ident_name()?;
+                let call = self.finish_call(None, CallTarget::Name(name), true)?;
+                self.expect(&Tok::Semi)?;
+                Ok(vec![Stmt::Expr(call)])
+            }
+            _ => {
+                let s = self.simple_stmt()?;
+                self.expect(&Tok::Semi)?;
+                Ok(vec![s])
+            }
+        }
+    }
+
+    fn if_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.bump(); // `if`
+        self.expect(&Tok::LParen)?;
+        let cond = self.expr()?;
+        self.expect(&Tok::RParen)?;
+        let then = self.body()?;
+        let otherwise = if self.eat(&Tok::Else) {
+            Some(self.body()?)
+        } else {
+            None
+        };
+        Ok(Stmt::If {
+            cond,
+            then,
+            otherwise,
+        })
+    }
+
+    fn while_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.bump(); // `while`
+        self.expect(&Tok::LParen)?;
+        let cond = self.expr()?;
+        self.expect(&Tok::RParen)?;
+        let body = self.body()?;
+        Ok(Stmt::While { cond, body })
+    }
+
+    // The body runs before the condition is first tested, which is the
+    // whole difference from `while`.
+    fn do_while_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.bump(); // `do`
+        let body = self.body()?;
+        self.expect(&Tok::While)?;
+        self.expect(&Tok::LParen)?;
+        let cond = self.expr()?;
+        self.expect(&Tok::RParen)?;
+        self.expect(&Tok::Semi)?;
+        Ok(Stmt::DoWhile { body, cond })
+    }
+
+    fn for_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.bump(); // `for`
+        self.expect(&Tok::LParen)?;
+        let init = if *self.peek() == Tok::Semi {
+            None
+        } else {
+            Some(Box::new(self.simple_stmt()?))
+        };
+        self.expect(&Tok::Semi)?;
+        let cond = if *self.peek() == Tok::Semi {
+            None
+        } else {
+            Some(self.expr()?)
+        };
+        self.expect(&Tok::Semi)?;
+        let step = if *self.peek() == Tok::RParen {
+            None
+        } else {
+            Some(Box::new(self.simple_stmt()?))
+        };
+        self.expect(&Tok::RParen)?;
+        let body = self.body()?;
+        Ok(Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        })
+    }
+
+    // Statements accumulate into the most recently seen label's body, so a
+    // label immediately followed by another label leaves that arm's body
+    // empty: this IS the fallthrough representation, not a bug to fix later.
+    fn switch_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.bump(); // `switch`
+        self.expect(&Tok::LParen)?;
+        let subject = self.expr()?;
+        self.expect(&Tok::RParen)?;
+        self.expect(&Tok::LBrace)?;
+
+        let mut arms: Vec<SwitchArm> = Vec::new();
+        let mut default: Option<Vec<Stmt>> = None;
+        let mut in_default = false;
+
+        while *self.peek() != Tok::RBrace {
+            match self.peek().clone() {
+                Tok::Case => {
+                    self.bump();
+                    let label = self.expr()?;
+                    self.expect(&Tok::Colon)?;
+                    arms.push(SwitchArm {
+                        label,
+                        body: Vec::new(),
+                    });
+                    in_default = false;
+                }
+                Tok::Default => {
+                    self.bump();
+                    self.expect(&Tok::Colon)?;
+                    default = Some(Vec::new());
+                    in_default = true;
+                }
+                _ => {
+                    let stmts = self.statement()?;
+                    if in_default {
+                        default.as_mut().expect("case label seen").extend(stmts);
+                    } else {
+                        arms.last_mut()
+                            .ok_or_else(|| self.err("statement before any case label"))?
+                            .body
+                            .extend(stmts);
+                    }
+                }
+            }
+        }
+        self.bump(); // `}`
+        Ok(Stmt::Switch {
+            subject,
+            arms,
+            default,
+        })
+    }
+
+    // One expression-or-assignment statement, desugaring compound
+    // assignment and increment/decrement into `Assign`, without consuming a
+    // trailing `;` — a `for` clause needs none, everywhere else adds one.
+    fn simple_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let target = self.expr()?;
+        Ok(match self.peek().clone() {
+            Tok::Assign => {
+                self.bump();
+                let value = self.expr()?;
+                Stmt::Assign { target, value }
+            }
+            Tok::PlusAssign => self.compound_assign(target, BinOp::Add)?,
+            Tok::MinusAssign => self.compound_assign(target, BinOp::Sub)?,
+            Tok::StarAssign => self.compound_assign(target, BinOp::Mul)?,
+            Tok::SlashAssign => self.compound_assign(target, BinOp::Div)?,
+            Tok::PipeAssign => self.compound_assign(target, BinOp::BitOr)?,
+            Tok::PlusPlus => {
+                self.bump();
+                self.step_assign(target, BinOp::Add)
+            }
+            Tok::MinusMinus => {
+                self.bump();
+                self.step_assign(target, BinOp::Sub)
+            }
+            _ => Stmt::Expr(target),
+        })
+    }
+
+    fn compound_assign(&mut self, target: Expr, op: BinOp) -> Result<Stmt, ParseError> {
+        self.bump();
+        let rhs = self.expr()?;
+        let value = Expr::Bin(op, Box::new(target.clone()), Box::new(rhs));
+        Ok(Stmt::Assign { target, value })
+    }
+
+    fn step_assign(&mut self, target: Expr, op: BinOp) -> Stmt {
+        let value = Expr::Bin(op, Box::new(target.clone()), Box::new(Expr::Int(1)));
+        Stmt::Assign { target, value }
+    }
+}
+
+/// Lexes and parses a whole script file.
+pub fn parse_file(src: &str) -> Result<File, ParseError> {
+    let toks = crate::lex::lex(src).map_err(|e| ParseError {
+        line: e.line,
+        msg: e.msg,
+    })?;
+    Parser::new(&toks).file()
 }
 
 #[cfg(test)]
@@ -445,5 +720,188 @@ mod tests {
     fn unary_minus_and_not() {
         assert!(matches!(expr("-x"), Expr::Un(UnOp::Neg, _)));
         assert!(matches!(expr("!x"), Expr::Un(UnOp::Not, _)));
+    }
+
+    fn file(src: &str) -> File {
+        parse_file(src).unwrap()
+    }
+
+    #[test]
+    fn a_function_definition_with_params() {
+        let f = file("greet(a, b) { return a; }");
+        assert_eq!(f.funcs.len(), 1);
+        assert_eq!(f.funcs[0].name, "greet");
+        assert_eq!(f.funcs[0].params, vec!["a", "b"]);
+        assert!(matches!(f.funcs[0].body[0], Stmt::Return(Some(_))));
+    }
+
+    #[test]
+    fn if_else_and_while() {
+        let f = file("m() { if(a) b(); else c(); while(d) e(); }");
+        assert!(matches!(
+            f.funcs[0].body[0],
+            Stmt::If {
+                otherwise: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(f.funcs[0].body[1], Stmt::While { .. }));
+    }
+
+    #[test]
+    fn for_with_and_without_clauses() {
+        let f = file("m() { for(i = 0; i < 10; i++) x(); for(;;) y(); }");
+        let Stmt::For {
+            init: Some(_),
+            cond: Some(_),
+            step: Some(_),
+            ..
+        } = &f.funcs[0].body[0]
+        else {
+            panic!()
+        };
+        let Stmt::For {
+            init: None,
+            cond: None,
+            step: None,
+            ..
+        } = &f.funcs[0].body[1]
+        else {
+            panic!()
+        };
+    }
+
+    /// dm.gsc:249 stacks three empty cases before one body.
+    #[test]
+    fn switch_cases_fall_through_when_empty() {
+        let f = file(
+            r#"m() {
+            switch(r) {
+            case "allies":
+            case "axis":
+            case "autoassign":
+                pick();
+                break;
+            default:
+                nope();
+                break;
+            }
+        }"#,
+        );
+        let Stmt::Switch { arms, default, .. } = &f.funcs[0].body[0] else {
+            panic!()
+        };
+        assert_eq!(arms.len(), 3);
+        assert!(arms[0].body.is_empty());
+        assert!(arms[1].body.is_empty());
+        assert_eq!(arms[2].body.len(), 2);
+        assert!(default.is_some());
+    }
+
+    /// One script in the corpus uses this, animscripts/predict.gsc.
+    #[test]
+    fn do_while_runs_its_body_before_testing() {
+        let f = file("m() { do { x(); } while (cond); }");
+        let Stmt::DoWhile { body, .. } = &f.funcs[0].body[0] else {
+            panic!()
+        };
+        assert_eq!(body.len(), 1);
+    }
+
+    /// All five stock gametypes use `|=` on the iDFLAGS_* damage flags.
+    #[test]
+    fn pipe_assign_desugars_to_bitwise_or() {
+        let f = file("m() { iDFlags |= level.iDFLAGS_NO_KNOCKBACK; }");
+        let Stmt::Assign {
+            value: Expr::Bin(BinOp::BitOr, _, _),
+            ..
+        } = &f.funcs[0].body[0]
+        else {
+            panic!("|= must desugar to a BitOr assignment")
+        };
+    }
+
+    #[test]
+    fn binary_and_parses_as_bitwise() {
+        let f = file("m() { if(iDFlags & level.iDFLAGS_NO_PROTECTION) x(); }");
+        let Stmt::If {
+            cond: Expr::Bin(BinOp::BitAnd, _, _),
+            ..
+        } = &f.funcs[0].body[0]
+        else {
+            panic!()
+        };
+    }
+
+    #[test]
+    fn wait_is_a_statement_without_parens() {
+        let f = file("m() { wait 0.05; }");
+        assert!(matches!(f.funcs[0].body[0], Stmt::Wait(_)));
+    }
+
+    #[test]
+    fn assignment_forms() {
+        let f = file("m() { a = 1; a += 2; a -= 3; a *= 4; a /= 5; a++; a--; }");
+        assert_eq!(f.funcs[0].body.len(), 7);
+        assert!(matches!(f.funcs[0].body[0], Stmt::Assign { .. }));
+        // Compound forms desugar to Assign with a Bin right-hand side.
+        let Stmt::Assign {
+            value: Expr::Bin(BinOp::Add, _, _),
+            ..
+        } = &f.funcs[0].body[1]
+        else {
+            panic!()
+        };
+        let Stmt::Assign {
+            value: Expr::Bin(BinOp::Add, _, _),
+            ..
+        } = &f.funcs[0].body[5]
+        else {
+            panic!("a++ desugars to a = a + 1")
+        };
+    }
+
+    #[test]
+    fn threaded_and_method_call_statements() {
+        let f = file(r#"m() { thread go(); self thread go(); self waittill("e", a, b); }"#);
+        let Stmt::Expr(Expr::Call {
+            threaded: true,
+            recv: None,
+            ..
+        }) = &f.funcs[0].body[0]
+        else {
+            panic!()
+        };
+        let Stmt::Expr(Expr::Call {
+            threaded: true,
+            recv: Some(_),
+            ..
+        }) = &f.funcs[0].body[1]
+        else {
+            panic!()
+        };
+        let Stmt::Expr(Expr::Call {
+            target: CallTarget::Name(n),
+            args,
+            ..
+        }) = &f.funcs[0].body[2]
+        else {
+            panic!()
+        };
+        assert_eq!(n, "waittill");
+        assert_eq!(args.len(), 3);
+    }
+
+    #[test]
+    fn using_animtree_is_collected_not_a_statement() {
+        let f = file(r#"#using_animtree("30cal"); m() { }"#);
+        assert_eq!(f.animtrees, vec!["30cal"]);
+        assert_eq!(f.funcs.len(), 1);
+    }
+
+    #[test]
+    fn a_parse_error_names_its_line() {
+        let e = parse_file("m() {\n\n  a = ;\n}").unwrap_err();
+        assert_eq!(e.line, 3);
     }
 }
