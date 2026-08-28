@@ -166,12 +166,32 @@ impl<'a> Parser<'a> {
                 }
                 Tok::Ident(name) => {
                     self.bump();
-                    base = self.finish_call(Some(Box::new(base)), CallTarget::Name(name), false)?;
+                    let target = self.call_target_from(name)?;
+                    base = self.finish_call(Some(Box::new(base)), target, false)?;
                 }
                 _ => break,
             }
         }
         Ok(base)
+    }
+
+    // A call target starting from an already-consumed leading identifier:
+    // optional backslash path segments and a closing `::name`, else the
+    // bare name. Shared by method calls on a receiver and `thread` targets,
+    // both of which are always followed by a call, unlike `ident_primary`'s
+    // own copy of this logic, which also has to produce a bare `FuncRef` or
+    // local variable when no call follows.
+    fn call_target_from(&mut self, first: String) -> Result<CallTarget, ParseError> {
+        let mut path = vec![first.clone()];
+        while self.eat(&Tok::Backslash) {
+            path.push(self.ident_name()?);
+        }
+        if self.eat(&Tok::ColonColon) {
+            let name = self.ident_name()?;
+            let file = path.join("/").to_ascii_lowercase();
+            return Ok(CallTarget::Path { file, name });
+        }
+        Ok(CallTarget::Name(first))
     }
 
     // `expect(LParen)`, then `args_list()`, then the `Expr::Call` node.
@@ -733,6 +753,25 @@ mod tests {
         };
         assert!(file.is_empty());
         assert_eq!(name, "Callback_StartGameType");
+    }
+
+    /// `animscripts/combat.gsc:15` `self animscripts\wounded::combat(...);`.
+    #[test]
+    fn method_call_target_can_be_namespaced() {
+        let e = expr(r#"self animscripts\wounded::combat("pose is wounded")"#);
+        let Expr::Call {
+            recv: Some(recv),
+            target: CallTarget::Path { file, name },
+            args,
+            ..
+        } = e
+        else {
+            panic!("{e:?}")
+        };
+        assert!(matches!(*recv, Expr::SelfRef));
+        assert_eq!(file, "animscripts/wounded");
+        assert_eq!(name, "combat");
+        assert_eq!(args.len(), 1);
     }
 
     #[test]
