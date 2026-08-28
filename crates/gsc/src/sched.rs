@@ -46,7 +46,7 @@ mod tests {
         let mut vm = vm_with(r#"main() { wait 0.1; done(); }"#);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, f, None, vec![]);
+        vm.start_thread(&mut host, 0, f, None, vec![]);
 
         vm.run_frame(&mut host, 0);
         assert!(!host.calls.iter().any(|(n, _)| n == "done"), "not yet");
@@ -70,7 +70,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, f, Some(Target::Entity(EntId(4))), vec![]);
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(4))), vec![]);
         vm.run_frame(&mut host, 0);
 
         let menu = vm.interner_mut().intern("team_americangerman");
@@ -88,7 +88,7 @@ mod tests {
         let mut vm = vm_with(r#"main() { self waittill("e"); done(); }"#);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, f, Some(Target::Entity(EntId(1))), vec![]);
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1))), vec![]);
         vm.run_frame(&mut host, 0);
 
         let ev = vm.interner_mut().intern("e");
@@ -103,7 +103,7 @@ mod tests {
         let mut vm = vm_with(r#"main() { self endon("death"); wait 1; done(); }"#);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, f, Some(Target::Entity(EntId(7))), vec![]);
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(7))), vec![]);
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 1);
 
@@ -121,7 +121,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, f, None, vec![]);
+        vm.start_thread(&mut host, 0, f, None, vec![]);
         vm.run_frame(&mut host, 0);
         assert!(
             host.calls.iter().any(|(n, _)| n == "parent_done"),
@@ -144,7 +144,7 @@ mod tests {
         vm.set_budget(10_000);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, f, None, vec![]);
+        vm.start_thread(&mut host, 0, f, None, vec![]);
         let errs = vm.run_frame(&mut host, 0);
         assert_eq!(errs.len(), 1);
         assert!(matches!(errs[0].kind, crate::vm::ErrorKind::Budget));
@@ -166,7 +166,7 @@ mod tests {
         vm.set_budget(10_000);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, f, None, vec![]);
+        vm.start_thread(&mut host, 0, f, None, vec![]);
         let errs = vm.run_frame(&mut host, 0);
         assert_eq!(errs.len(), 1);
         assert!(matches!(errs[0].kind, crate::vm::ErrorKind::Budget));
@@ -184,7 +184,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, f, None, vec![]);
+        vm.start_thread(&mut host, 0, f, None, vec![]);
         let errs = vm.run_frame(&mut host, 0);
         assert_eq!(errs.len(), 1);
         assert!(host.calls.iter().any(|(n, _)| n == "ok"));
@@ -199,8 +199,8 @@ mod tests {
         let mut host = TestHost::default();
         let fa = vm.func_ref("test/script", "a");
         let fb = vm.func_ref("test/script", "b");
-        vm.start_thread(&mut host, fa, Some(Target::Entity(EntId(1))), vec![]);
-        vm.start_thread(&mut host, fb, Some(Target::Entity(EntId(1))), vec![]);
+        vm.start_thread(&mut host, 0, fa, Some(Target::Entity(EntId(1))), vec![]);
+        vm.start_thread(&mut host, 0, fb, Some(Target::Entity(EntId(1))), vec![]);
         vm.run_frame(&mut host, 0);
         let ev = vm.interner_mut().intern("e");
         vm.notify(EntId(1), ev, &[]);
@@ -239,7 +239,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, f, Some(Target::Entity(EntId(1))), vec![]);
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1))), vec![]);
         // Neither wake runs inline (a notify never reenters the VM): one
         // frame steps `getNotetrack` past its wait to fire "reply", the
         // next steps `main` past its own wait to run `got()`. Nothing in
@@ -277,9 +277,9 @@ mod tests {
         // three are `WaitingUntil` before `run_frame` ever runs; the
         // interesting part (the in-script kill) happens on their *second*
         // step, driven by `run_frame`'s own watermark walk.
-        vm.start_thread(&mut host, victim, None, vec![]);
-        vm.start_thread(&mut host, killer, None, vec![]);
-        vm.start_thread(&mut host, witness, None, vec![]);
+        vm.start_thread(&mut host, 0, victim, None, vec![]);
+        vm.start_thread(&mut host, 0, killer, None, vec![]);
+        vm.start_thread(&mut host, 0, witness, None, vec![]);
 
         vm.run_frame(&mut host, 0);
         assert!(
@@ -305,9 +305,54 @@ mod tests {
         let mut vm = vm_with("main() { thread main(); }");
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, f, None, vec![]);
+        vm.start_thread(&mut host, 0, f, None, vec![]);
         assert_eq!(vm.thread_count(), 1);
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 1, "still bounded after another pass");
+    }
+
+    /// An `endon` registered earlier in a step must be visible to a notify
+    /// fired by a thread spawned *later in that same step*, not just to
+    /// notifies that arrive after the step returns: `main` registers its
+    /// endon, then threads `killer`, which runs immediately (this round's
+    /// item 1) and notifies the very event `main` just registered against,
+    /// all before `main`'s own step ever reaches `wait 5`. If the endon
+    /// were only visible once `main` suspends (the bug this test pins),
+    /// the notify would find no waiter, and `main` would wake up 5 "ms"
+    /// later and run `done()` instead of having been killed immediately.
+    #[test]
+    fn an_endon_registered_before_a_nested_spawn_is_visible_to_that_spawns_own_notify() {
+        let mut vm = vm_with(
+            r#"main() { self endon("die"); self thread killer(); wait 5; done(); }
+            killer() { self notify("die"); }"#,
+        );
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1))), vec![]);
+        assert_eq!(
+            vm.thread_count(),
+            0,
+            "killed before its wait, not left alive"
+        );
+        assert!(!host.calls.iter().any(|(n, _)| n == "done"));
+    }
+
+    /// `start_thread`'s immediate run can error just as easily as
+    /// `run_frame`-driven one can; that path (the thread is removed, not
+    /// left dangling or panicking) had no direct coverage until now, since
+    /// the round-1 error tests were rewritten to route their error through
+    /// `run_frame` instead (their leading `wait 0;`), for the unrelated
+    /// reason that `start_thread` has nowhere to return the error to.
+    #[test]
+    fn a_thread_that_errors_during_start_threads_immediate_run_is_removed() {
+        let mut vm = vm_with(r#"main() { double("no"); }"#);
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 0, f, None, vec![]);
+        assert_eq!(
+            vm.thread_count(),
+            0,
+            "removed, not left dangling after its own error"
+        );
     }
 }
