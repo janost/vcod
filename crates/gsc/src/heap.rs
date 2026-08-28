@@ -80,6 +80,12 @@ impl Heap {
             elems.insert(k, v);
         }
     }
+
+    /// An array's element count, for `.size` and for a host that walks one.
+    /// An id out of range reads as 0, the same no-panic rule as the accessors.
+    pub fn array_len(&self, a: ArrayId) -> usize {
+        self.arrays.get(a.0 as usize).map_or(0, |e| e.len())
+    }
 }
 
 #[cfg(test)]

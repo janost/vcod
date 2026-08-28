@@ -7,7 +7,7 @@ use crate::heap::ArrayKey;
 use crate::value::{FuncRef, Value};
 
 use super::sched::ThreadId;
-use super::{ErrorKind, Host, ScriptError, Target, Vm};
+use super::{Cx, ErrorKind, Host, ScriptError, Target, Vm};
 
 /// Interpreter-internal: not part of the public API, since nothing outside
 /// this crate drives `step_frames` directly, and doing so needs the
@@ -356,7 +356,16 @@ impl Vm {
                     let obj = pop!();
                     let v = match obj {
                         Value::Struct(id) => self.heap.get_field(id, name),
-                        Value::Entity(id) => host.get_field(&self.interner, id, name),
+                        Value::Entity(id) => {
+                            let mut cx = Cx {
+                                interner: &mut self.interner,
+                                heap: &mut self.heap,
+                                level: self.level,
+                                game: self.game,
+                                notifies,
+                            };
+                            host.get_field(&mut cx, id, name)
+                        }
                         _ => {
                             return Err(err(ErrorKind::BadType(
                                 "field access needs a struct or entity",
@@ -371,7 +380,14 @@ impl Vm {
                     match obj {
                         Value::Struct(id) => self.heap.set_field(id, name, v),
                         Value::Entity(id) => {
-                            host.set_field(&self.interner, id, name, v).map_err(err)?
+                            let mut cx = Cx {
+                                interner: &mut self.interner,
+                                heap: &mut self.heap,
+                                level: self.level,
+                                game: self.game,
+                                notifies,
+                            };
+                            host.set_field(&mut cx, id, name, v).map_err(err)?
                         }
                         _ => {
                             return Err(err(ErrorKind::BadType(
@@ -467,9 +483,14 @@ impl Vm {
                     }
                     args.reverse();
                     let recv = if has_recv { as_target(pop!()) } else { None };
-                    let v = host
-                        .builtin(&self.interner, name, recv, &args)
-                        .map_err(err)?;
+                    let mut cx = Cx {
+                        interner: &mut self.interner,
+                        heap: &mut self.heap,
+                        level: self.level,
+                        game: self.game,
+                        notifies,
+                    };
+                    let v = host.builtin(&mut cx, name, recv, &args).map_err(err)?;
                     push!(v);
                 }
                 Op::CallPtr {

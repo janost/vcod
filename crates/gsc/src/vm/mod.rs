@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use crate::atom::{Atom, Interner};
 use crate::bytecode::Function;
-use crate::heap::Heap;
-use crate::value::{EntId, FuncRef, StructId, Value};
+use crate::heap::{ArrayKey, Heap};
+use crate::value::{ArrayId, EntId, FuncRef, StructId, Value};
 use sched::Thread;
 
 mod interp;
@@ -51,11 +51,91 @@ pub struct ScriptError {
     pub kind: ErrorKind,
 }
 
+/// Everything a `Host` callback may reach inside the VM. Borrows disjoint
+/// fields of `Vm`, which is what makes a builtin able to allocate: a single
+/// `&mut Vm` cannot be handed out while `run_frame` holds one.
+///
+/// `notify` queues rather than resolving: a builtin can no more reenter the
+/// VM than `Op::Notify` can (see `step_thread`).
+pub struct Cx<'a> {
+    interner: &'a mut Interner,
+    heap: &'a mut Heap,
+    level: StructId,
+    game: StructId,
+    notifies: &'a mut Vec<(Target, Atom, Vec<Value>)>,
+}
+
+impl Cx<'_> {
+    pub fn intern(&mut self, s: &str) -> Atom {
+        self.interner.intern(s)
+    }
+
+    pub fn resolve(&self, a: Atom) -> &str {
+        self.interner.resolve(a)
+    }
+
+    pub fn new_struct(&mut self) -> StructId {
+        self.heap.new_struct()
+    }
+
+    pub fn new_array(&mut self) -> ArrayId {
+        self.heap.new_array()
+    }
+
+    pub fn get_field(&self, s: StructId, f: Atom) -> Value {
+        self.heap.get_field(s, f)
+    }
+
+    pub fn set_field(&mut self, s: StructId, f: Atom, v: Value) {
+        self.heap.set_field(s, f, v);
+    }
+
+    pub fn get_index(&self, a: ArrayId, k: ArrayKey) -> Value {
+        self.heap.get_index(a, k)
+    }
+
+    pub fn set_index(&mut self, a: ArrayId, k: ArrayKey, v: Value) {
+        self.heap.set_index(a, k, v);
+    }
+
+    pub fn array_len(&self, a: ArrayId) -> usize {
+        self.heap.array_len(a)
+    }
+
+    /// The `%g` rendering task 7 measures against retail, so a builtin
+    /// formatting a number for a configstring cannot drift from what the
+    /// VM does for string concatenation. `None` for a value that has no
+    /// rendering.
+    pub fn format_number(&self, v: Value) -> Option<String> {
+        match v {
+            Value::Int(i) => Some(i.to_string()),
+            // Placeholder: task 7 replaces this with the measured %g
+            // rendering (docs/research/cod11-gsc-language.md).
+            Value::Float(f) => Some(format!("{f}")),
+            Value::String(a) | Value::Localized(a) => Some(self.interner.resolve(a).to_string()),
+            Value::Vector([x, y, z]) => Some(format!("({x:.2}, {y:.2}, {z:.2})")),
+            _ => None,
+        }
+    }
+
+    pub fn level(&self) -> Target {
+        Target::Struct(self.level)
+    }
+
+    pub fn game(&self) -> Target {
+        Target::Struct(self.game)
+    }
+
+    pub fn notify(&mut self, target: Target, event: Atom, args: Vec<Value>) {
+        self.notifies.push((target, event, args));
+    }
+}
+
 /// Everything CoD-specific the VM can reach.
 pub trait Host {
     fn builtin(
         &mut self,
-        interner: &Interner,
+        cx: &mut Cx,
         name: Atom,
         recv: Option<Target>,
         args: &[Value],
@@ -63,11 +143,11 @@ pub trait Host {
 
     /// Reading an unset field yields `Undefined` in gsc, so there is no
     /// error to report.
-    fn get_field(&mut self, interner: &Interner, ent: EntId, field: Atom) -> Value;
+    fn get_field(&mut self, cx: &mut Cx, ent: EntId, field: Atom) -> Value;
 
     fn set_field(
         &mut self,
-        interner: &Interner,
+        cx: &mut Cx,
         ent: EntId,
         field: Atom,
         value: Value,
@@ -243,7 +323,6 @@ impl Vm {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::atom::Interner;
     use crate::value::{EntId, Value};
     use std::collections::HashMap;
 
@@ -256,7 +335,7 @@ pub(crate) mod tests {
     impl Host for TestHost {
         fn builtin(
             &mut self,
-            interner: &Interner,
+            cx: &mut Cx,
             name: Atom,
             _recv: Option<Target>,
             args: &[Value],
@@ -264,7 +343,7 @@ pub(crate) mod tests {
             // Builtin dispatch matches against a fixed lowercase literal, so
             // it resolves folded: `IPrintLn(...)` must still reach the
             // "iprintln" arm below.
-            let n = interner.resolve_folded(name).to_string();
+            let n = cx.resolve(name).to_ascii_lowercase();
             self.calls.push((n.clone(), args.to_vec()));
             match n.as_str() {
                 "double" => match args[0] {
@@ -276,20 +355,13 @@ pub(crate) mod tests {
             }
         }
 
-        fn get_field(&mut self, interner: &Interner, e: EntId, f: Atom) -> Value {
-            let k = (e.0, interner.resolve(f).to_string());
+        fn get_field(&mut self, cx: &mut Cx, e: EntId, f: Atom) -> Value {
+            let k = (e.0, cx.resolve(f).to_string());
             self.fields.get(&k).copied().unwrap_or(Value::Undefined)
         }
 
-        fn set_field(
-            &mut self,
-            interner: &Interner,
-            e: EntId,
-            f: Atom,
-            v: Value,
-        ) -> Result<(), ErrorKind> {
-            self.fields
-                .insert((e.0, interner.resolve(f).to_string()), v);
+        fn set_field(&mut self, cx: &mut Cx, e: EntId, f: Atom, v: Value) -> Result<(), ErrorKind> {
+            self.fields.insert((e.0, cx.resolve(f).to_string()), v);
             Ok(())
         }
     }
@@ -643,5 +715,50 @@ pub(crate) mod tests {
         };
         vm.heap_mut().set_field(level_id, mark, Value::Int(1));
         assert_ne!(vm.level(), vm.game());
+    }
+
+    /// The G1 blocker: a builtin needs to allocate and populate a heap array
+    /// during the call, which `&Interner` could not express (E0499 against the
+    /// `&mut Vm` `run_frame` holds).
+    #[test]
+    fn a_builtin_can_mint_and_populate_an_array_and_the_script_reads_it_back() {
+        struct ArrayHost;
+        impl Host for ArrayHost {
+            fn builtin(
+                &mut self,
+                cx: &mut Cx,
+                _name: Atom,
+                _recv: Option<Target>,
+                _args: &[Value],
+            ) -> Result<Value, ErrorKind> {
+                let a = cx.new_array();
+                let v = cx.intern("hello");
+                cx.set_index(a, ArrayKey::Int(0), Value::String(v));
+                cx.set_index(a, ArrayKey::Int(1), Value::Int(7));
+                Ok(Value::Array(a))
+            }
+            fn get_field(&mut self, _cx: &mut Cx, _e: EntId, _f: Atom) -> Value {
+                Value::Undefined
+            }
+            fn set_field(
+                &mut self,
+                _cx: &mut Cx,
+                _e: EntId,
+                _f: Atom,
+                _v: Value,
+            ) -> Result<(), ErrorKind> {
+                Ok(())
+            }
+        }
+
+        let src = "main() { a = getentarray(\"x\", \"classname\"); return a[1]; }";
+        let mut vm = Vm::new();
+        let ast = crate::parse::parse_file(src).unwrap();
+        let fns = crate::compile::compile_file(&ast, "test", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = ArrayHost;
+        let f = vm.func_ref("test", "main");
+        let out = vm.call_now(&mut host, 0, f, None, Vec::new()).unwrap();
+        assert_eq!(out, Value::Int(7));
     }
 }
