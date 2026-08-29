@@ -292,7 +292,9 @@ pub fn is_defined(
 
 /// `isTouching(other)`. Entities gain real bounds in stage 5; until then
 /// this compares origins within a small box rather than pretending to be a
-/// real intersection test.
+/// real intersection test. `BOX` is invented, not measured: nothing has been
+/// read out of retail about what its `isTouching` compares, so the number is
+/// only a stand-in until entities carry bounds and the real test replaces it.
 pub fn is_touching(
     host: &mut GameHost,
     cx: &mut Cx,

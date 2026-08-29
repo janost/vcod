@@ -11,9 +11,11 @@ use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
 use crate::game::fields::{self, FieldType, Route};
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 
-/// Every builtin `GameHost::builtin` dispatches, folded, so the load-time
-/// pre-scan can list what a map script calls that the host does not answer
-/// yet. `every_listed_builtin_dispatches` keeps this in step with the match.
+/// The builtins `GameHost::builtin` answers from its own match, folded: the
+/// env and io names, which have no family module of their own. Every other
+/// builtin comes from a family's `NAMES`, and `is_builtin` walks both so the
+/// load-time pre-scan sees the same set dispatch does.
+/// `every_listed_builtin_dispatches` keeps this list in step with the match.
 pub const BUILTINS: &[&str] = &[
     "setcullfog",
     "ambientplay",

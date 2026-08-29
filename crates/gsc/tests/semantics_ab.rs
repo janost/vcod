@@ -253,17 +253,30 @@ fn every_skipped_probe_names_a_real_capture_section() {
     }
 }
 
-/// Every capture section is claimed by exactly one runner. Without this a
-/// probe could be dropped from `captures()` and from the server test at
-/// once and nothing would notice.
+/// Every probe file has a capture section and every capture section has a
+/// probe file: a probe added without a retail measurement, or a section left
+/// behind by a deleted probe, is a gap in the A/B that nothing else notices.
+/// A section this file skips into another crate has to be named by that
+/// crate's test, or it is measured nowhere.
 #[test]
-fn every_capture_section_has_a_runner() {
-    let names: Vec<String> = captures().keys().cloned().collect();
+fn every_probe_file_and_capture_section_are_paired() {
+    // `captures()` is a BTreeMap, so its keys come out sorted.
+    let sections: Vec<String> = captures().keys().cloned().collect();
+    assert!(!sections.is_empty(), "retail-captures.txt has no sections");
+    let mut files: Vec<String> = std::fs::read_dir("tests/fixtures/semantics")
+        .expect("read the semantics fixture directory")
+        .map(|e| e.expect("a directory entry").file_name())
+        .filter_map(|n| n.to_string_lossy().strip_suffix(".gsc").map(str::to_string))
+        .collect();
+    files.sort();
+    assert_eq!(sections, files, "probe files and capture sections differ");
+
+    let server_test = std::fs::read_to_string("../server/tests/semantics_ents.rs")
+        .expect("read the server crate's probe test");
     for n in RUN_IN_SERVER_CRATE {
         assert!(
-            names.iter().any(|c| c == n),
-            "{n} is claimed by the server crate but is not a capture section"
+            server_test.contains(n),
+            "{n} is skipped here but the server crate's test never names it"
         );
     }
-    assert!(!names.is_empty());
 }
