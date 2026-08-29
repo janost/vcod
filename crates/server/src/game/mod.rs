@@ -3,5 +3,6 @@
 
 pub mod builtins;
 pub mod entity;
+pub mod fields;
 pub mod host;
 pub mod script;
