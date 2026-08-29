@@ -248,7 +248,8 @@ the only reading I can construct, but I have not watched it happen.
    apply every spawn var, `G_SetOrigin`, `G_SetAngle`, `G_SpawnItem`.
 3. `spawns` (section 8), stride 8, matched with `strcmp`. Hit means `G_Spawn`,
    apply every spawn var, `G_SetOrigin`, `G_SetAngle`, then call the record's
-   `SP_` function.
+   `SP_` function. Five of those functions free the entity again, so the
+   block ends up with none (section 13).
 4. Neither table matched. `G_Spawn`, apply every spawn var, `G_SetOrigin`,
    `G_SetAngle`, and nothing else.
 
@@ -311,7 +312,8 @@ trigger_lookat      SP_trigger_lookat
 ```
 
 `func_group` deliberately maps to `SP_info_null`; grouping is a compile-time
-concept and the runtime entity is inert. `mp_target_location` shares
+concept and the runtime entity is inert, and `SP_info_null` frees it outright
+(section 13). `mp_target_location` shares
 `SP_target_location`, and `misc_mg42` and `misc_turret` share `SP_turret`.
 `worldspawn` is absent because `G_SpawnEntitiesFromString` handles entity 0
 before this loop.
@@ -395,9 +397,15 @@ than a special case for the engine table.
 ## 11. Entity numbering, VERIFIED
 
 `G_InitGame` (0x4fb14) sets `level.num_entities = 72` at 0x4fdc6. `G_Spawn`
-(0x667e0) hands out `level.num_entities` and increments, falling back to a
-scan for a freed slot only once the counter reaches 0x3fe, which is
-`ENTITYNUM_WORLD` (1022). `Scr_GetEntArray` reads the same `level+0xc`.
+(0x667e0) checks the free list first (section 14) and only bumps
+`level.num_entities` when it is empty; a bump that would hand out 0x3fe,
+which is `ENTITYNUM_WORLD` (1022), goes to `G_Error` instead.
+`Scr_GetEntArray` reads the same `level+0xc`.
+
+A previous pass read that 0x3fe compare as the point where `G_Spawn` starts
+looking for freed slots. It is the other way round: the free-list check is
+unconditional and comes first, at 0x667e9, and 0x3fe is the exhaustion
+error. Section 14 has the structure and the live measurement.
 
 So the first entity the map load creates is number 72, whatever
 `sv_maxclients` is. That corrects the gameplay design's "allocating upward
@@ -411,32 +419,6 @@ and only then loops `G_ParseSpawnVars` plus `G_CallSpawn` over the rest. The
 world is therefore not allocated through `G_Spawn` and does not consume a
 number in the 72-and-up range.
 
-## 13. An `SP_` function can consume the block without an entity, VERIFIED
-
-Section 12's handoff bullet said the lump produces a `gentity_t` for every
-block with a classname whether or not the classname is in `spawns`. That is
-wrong, measured on the retail 1.1d server against `mp_pavlov` (2026-08-29).
-
-`getEntArray("misc_model", "classname")` and `getEntArray("light",
-"classname")` both return 0 there, while the entity lump holds 96
-`misc_model` blocks and 21 `light` blocks. Both classnames are in the
-`spawns` table (section 8), mapped to `SP_misc_model` and `SP_light`, and
-both are baked into the compiled BSP by the map compiler, so the spawn
-function has nothing left to keep. 96 + 21 = 117, and 117 is exactly the
-numbering gap: the fourth `script_origin`, at lump index 344, is entity 298
-on retail, where one-entity-per-block would put it at 415.
-
-Retail entity numbers from `probe_ents`, for the four map `script_origin`s
-and three entities the probe spawns afterwards: 73, 74, 75, 298, 299, 300,
-301. Classnames whose blocks do allocate, first entity number in each:
-`mp_retrieval_spawn_axis` 76, `script_model` 77, `trigger_multiple` 78,
-`mp_teamdeathmatch_spawn` 81, `mp_deathmatch_spawn` 107,
-`mpweapon_panzerfaust` 258.
-
-`func_group` maps to `SP_info_null` (section 8), which frees in Q3's
-lineage, so `info_null` and `func_group` blocks are likely to behave the
-same way. `mp_pavlov` has neither, so neither has been measured.
-
 ## 12. What stage 2 takes from this
 
 - The object handle table needs four kinds, and the field id is the
@@ -447,14 +429,125 @@ same way. `mp_pavlov` has neither, so neither has been measured.
   be a `u16` in the host.
 - `getentarray` sees case-four entities, in ascending entity number, which is
   BSP entity lump order. Numbering runs from 72 up. It is *not* one entity per
-  block with a classname: see section 13, measured after this handoff was
-  written.
+  block with a classname: five classnames free the entity their `SP_`
+  function was handed and the slot is reused at once, so those blocks
+  consume no number (sections 13 and 14).
 - A Radiant key that is neither an engine field nor in `radiant/keys.txt` is
   dropped at load. Stage 2 should drop it too, not stash it, or scripts will
   see fields retail does not have.
 - 216 builtin names is the ceiling for the host's dispatch, and the
   five-table split with its lookup order is the shape to copy. The 37 names
   `mp_pavlov` needs are a subset of it.
+
+## 13. Five classnames consume their block without an entity, VERIFIED
+
+An earlier version of section 12 said the lump produces a `gentity_t` for
+every block with a classname whether or not the classname is in `spawns`.
+That is wrong. `G_CallSpawn`'s third case runs the record's `SP_` function
+after the entity is built, and four of those functions are nothing but
+`G_FreeEntity(self)`:
+
+| function | address | classnames it serves |
+|---|---|---|
+| `SP_info_null` | 0x531cc | `info_null`, `func_group` |
+| `SP_light` | 0x53204 | `light` |
+| `SP_misc_model` | 0x53224 | `misc_model` |
+| `SP_corona` | 0x53274 | `corona` |
+
+Each body is identical: push the argument, one `R_386_PC32` call relocated
+against `G_FreeEntity` (at 0x531d9, 0x53211, 0x53231, 0x53281), return. No
+branch, no condition. `python3 tools/re/dump_builtins.py <game.mp.i386.so>
+spawns` marks these five rows `frees`; the check is a scan of the function's
+`.rel.text` relocations for `G_FreeEntity`, so it covers all 27 records
+whatever a map happens to contain.
+
+Freeing the entity does not leave a hole, because `G_Spawn` hands the slot
+straight back out (section 14). A block with one of these classnames
+therefore consumes no entity number at all.
+
+### The live counts
+
+`probe_spawnfree`, a throwaway gametype script, logged
+`getEntArray(<classname>, "classname").size` for all 27 `spawns` classnames
+on the retail 1.1d Linux dedicated server (2026-08-29, `sv_maxclients 8`).
+Lump counts are from the shipped BSPs. Every classname whose live count is
+below its lump count is one of the five above; every other classname's live
+count equals its lump count exactly.
+
+| classname | mp_railyard lump / live | mp_chateau lump / live | mp_powcamp lump / live |
+|---|---|---|---|
+| `info_null` | 7 / **0** | 2 / **0** | 38 / **0** |
+| `info_notnull` | 0 / 0 | 1 / 1 | 0 / 0 |
+| `trigger_multiple` | 3 / 3 | 2 / 2 | 3 / 3 |
+| `trigger_hurt` | 2 / 2 | 11 / 11 | 1 / 1 |
+| `light` | 42 / **0** | 145 / **0** | 65 / **0** |
+| `misc_model` | 246 / **0** | 883 / **0** | 601 / **0** |
+| `misc_mg42` | 1 / 1 | 0 / 0 | 0 / 0 |
+| `corona` | 33 / **0** | 0 / 0 | 60 / **0** |
+| `trigger_use` | 1 / 1 | 2 / 2 | 1 / 1 |
+| `trigger_lookat` | 1 / 1 | 0 / 0 | 1 / 1 |
+| `script_brushmodel` | 2 / 2 | 2 / 2 | 5 / 5 |
+| `script_model` | 9 / 9 | 4 / 4 | 89 / 89 |
+| `script_origin` | 4 / 4 | 2 / 2 | 19 / 19 |
+
+The remaining 14 `spawns` classnames reported 0 live on all three maps and
+appear in no stock MP map's entity lump, so the live measurement says
+nothing about them: `func_door`, `func_static`, `func_rotating`,
+`func_bobbing`, `func_pendulum`, `func_group`, `func_door_rotating`,
+`trigger_once`, `target_location`, `mp_target_location`,
+`misc_teleporter_dest`, `misc_turret`, `misc_spawner`, `trigger_damage`.
+The relocation scan above covers them, and it puts only `func_group` in the
+freeing set. `misc_teleporter_dest`'s `SP_` function (0x5321c) is an empty
+body, which is a keep, not a free.
+
+### The arithmetic checks out on every stock map
+
+Number of the first entity spawned after the map load, retail against
+`72 + (blocks - 1 - freeing blocks)`:
+
+| map | lump blocks | freeing blocks | predicted | retail |
+|---|---|---|---|---|
+| mp_pavlov | 345 | 117 | 299 | 299 |
+| mp_chateau | 1176 | 1030 | 217 | 217 |
+| mp_powcamp | 1065 | 764 | 372 | 372 |
+| mp_railyard | 533 | 328 | 276 | 276 |
+
+mp_pavlov's figure is `# probe_ents` in
+`crates/gsc/tests/fixtures/semantics/retail-captures.txt`, whose three
+script-spawned entities are 299, 300 and 301 behind the map's four
+`script_origin`s at 73, 74, 75 and 298. The other three are
+`probe_spawnfree`'s `spawn1` line. No stock MP map's lump has a block
+without a classname, so the block count is the whole story.
+
+## 14. `G_Spawn` drains a free list before it bumps the counter, VERIFIED
+
+`level` carries a singly linked FIFO of freed entities: head at `level+0x10`,
+tail at `level+0x14`, next pointer at `gentity+0x304`.
+
+`G_Spawn` (0x667e0) reads the head at 0x667e9 and, when it is not null,
+takes that entity (0x668c8), pops it, and clears the tail too if the list
+is now empty. Only an empty list reaches the counter path at 0x6688b, and
+only that path can hit the 0x3fe `G_Error`.
+
+`G_FreeEntity` (0x66948) appends at the tail (0x66bb3), after a guard at
+0x66bb1 that skips entities whose index is 71 or below, so the 0..71
+reserved range never enters the list. It also bumps a per-entity generation
+counter at `gentity+0x300`, which is what stale script handles are checked
+against.
+
+Measured on mp_chateau (2026-08-29): after the map load the first spawn was
+217 and the second 218. Deleting the first and spawning again gave 219, not
+217; a fourth spawn gave 220. After `wait 0.5` the next spawn was 217, the
+deleted entity's number, and the one after it 221, continuing from the
+high-water mark. Two facts fall out of that:
+
+- A freed slot **is** handed back out, ahead of the counter, in FIFO order.
+- `delete()` does not free the entity when it is called. The `delete` entity
+  method (0x5da14) notifies, unlinks, clears the touch and use handlers, and
+  sets `think = G_FreeEntity` with `nextthink = level.time + 100`
+  (0x5da9a, 0x5daa4). The free happens a tenth of a second later, off the
+  entity think. During the map load the `SP_` functions call `G_FreeEntity`
+  directly, so there is no such delay there.
 
 ## Open, and worth a probe
 

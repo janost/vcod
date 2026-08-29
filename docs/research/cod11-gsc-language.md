@@ -695,31 +695,24 @@ looks authoritative:
   callback runs, not after. This is architectural, following directly from
   `Cx`'s no-reentrancy rule, not something a probe measured retail
   disagreeing on.
-- **No `SP_` spawn function runs, so every entity block with a classname
-  gets an entity; retail gives some of them none.** `spawn_entities_from_string`
-  (`crates/server/src/game/spawn.rs`) allocates one object per entity block
-  and never consults the `spawns` classname table (section 8 of
-  docs/research/cod11-gsc-object-model.md), which this branch dumped but
-  does not use: every classname takes `G_CallSpawn`'s fourth case. Retail's
-  `SP_` functions can free the entity they were handed, and two of them do
-  on a stock map. VERIFIED on mp_pavlov against the retail 1.1d server
-  (2026-08-29): `getEntArray("misc_model", "classname")` and
-  `getEntArray("light", "classname")` both return 0 entities there, while
-  the lump holds 96 `misc_model` and 21 `light` blocks. That is a 117-entity
-  gap, and it is exactly the gap in the numbering: the fourth
-  `script_origin`, at lump index 344, is entity 298 on retail and 415 here,
-  and the three entities the probe spawns afterwards are 299..301 on retail
-  against 416..418 here (`# probe_ents` in
-  crates/gsc/tests/fixtures/semantics/retail-captures.txt). `func_group`
-  maps to `SP_info_null`, which frees in Q3's lineage, so a map carrying
-  `info_null` or `func_group` blocks is likely to shift the same way;
-  neither appears in mp_pavlov, so neither has been measured. Closing this
-  means running the `spawns` table for real, which is its own stage.
-- **A full entity table errors instead of reusing a freed slot.** Retail's
-  `G_Spawn` only starts scanning for a freed slot once `level.num_entities`
-  reaches `ENTITYNUM_WORLD` (1022); `ObjectTable::spawn`
-  (`crates/server/src/game/entity.rs`) raises
-  `ErrorKind::BadType("entity table full")` at that same threshold instead
-  of scanning, on the reasoning that a map allocating close to 950 entities
-  is a bug worth seeing, not a slot to recycle. Pinned by
-  `entity::tests::the_table_stops_at_entitynum_world`.
+- **Only the freeing half of the `SP_` layer runs.**
+  `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces
+  `G_CallSpawn`'s third case for the five classnames whose `SP_` function is
+  an unconditional `G_FreeEntity(self)`, because that half decides entity
+  numbering (section 13 of docs/research/cod11-gsc-object-model.md). The
+  other 22 spawn functions do not run: no brush model is bound, no trigger
+  is linked, no turret is built. Those entities are live and script-visible
+  with every Radiant key applied, which is what the corpus reads them for,
+  but their engine-side setup is absent. Nothing measured so far depends on
+  it; a script that asks a `func_door` to move is the case that would.
+- **`delete()` frees the entity at once; retail frees it 100 ms later.**
+  The `delete` entity method (0x5da14) notifies the entity, unlinks it,
+  clears its touch and use handlers and then sets `think = G_FreeEntity` and
+  `nextthink = level.time + 100`; the slot stays live until that think runs.
+  VERIFIED on the retail 1.1d server (2026-08-29): a spawn immediately after
+  a `delete()` got a fresh number, and only a spawn after `wait 0.5` got the
+  deleted entity's number back (section 14 of
+  docs/research/cod11-gsc-object-model.md). `builtins/entity.rs::delete`
+  frees on the spot, so vcod recycles the number a tenth of a second early
+  and drops the entity out of `getEntArray` a tenth of a second early.
+  Closing it needs the entity think scheduler, which stage 2 does not have.
