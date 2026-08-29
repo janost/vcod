@@ -413,7 +413,7 @@ inferred. The probes are `crates/gsc/tests/fixtures/semantics/probe_*.gsc`,
 run as gametype scripts by `tools/run_probe.sh`; retail's answers are
 committed beside them in `retail-captures.txt`, and
 `crates/gsc/tests/semantics_ab.rs` diffs vcod against them on every test run.
-It is green on all 18 runnable probes; `probe_ents` is captured but not run,
+It is green on all 19 runnable probes; `probe_ents` is captured but not run,
 since `getentarray` needs the object model that arrives with the entity work.
 
 Three facts about the retail side shaped how the measurement had to be taken,
@@ -479,6 +479,20 @@ as case-sensitive. One interner folding everything cannot express that.
 array with keys `0`, `1` and `"k"` reports 3, an empty one 0. Strings have it
 too: `"abcd".size` is 4.
 
+**Assigning to an index of `undefined` auto-vivifies an array, VERIFIED
+(`probe_autoviv`).** `a[0] = "x"` on a local that was never set turns it
+into a one-element array; a non-zero first index (`b[3] = "x"`) and a string
+key (`c["k"] = "v"`) behave the same way, each yielding a `.size` of 1 --
+retail's arrays are sparse, so a non-zero first write does not backfill the
+lower indices. The same holds through a struct field
+(`level.myArray[0] = "y"`), which is exactly what `_load.gsc`'s
+`add_to_array(level._script_expoders, ...)` relies on for a field that is
+never otherwise initialised. Indexing a value that is defined but *not* an
+array is still fatal: `e = 5; e[0] = "x";` dies with `int is not an array`.
+vcod raises `BadType("indexing needs an array")` in that case instead,
+same reachable outcome (both sides stop, per `semantics_ab.rs`'s error
+check) with a different message text, which the harness does not compare.
+
 **Notify wake order: start order, VERIFIED.** Two threads waiting on one
 event on `level` wake in the order they were started.
 
@@ -507,6 +521,26 @@ past `i32::MAX` as an effectively-infinite sentinel
 
 ### Still unestablished
 
+- **`game["key"]` bracket access on the `game` object.** Not probed; found
+  by running vcod-server against a live retail-derived map script after the
+  auto-vivification fix above, not by a `probe_*` measurement, so this is
+  corpus inference, not a retail capture. Every stock MP map's `main()` sets
+  team pairing this way within its first ~20 lines (`mp_pavlov.gsc:9`,
+  `game["allies"] = "russian";`), and the 18-file MP corpus has 840 more
+  `game["..."]`/`level["..."]` occurrences. `game` is never written with dot
+  notation anywhere in the MP corpus (0 hits for `game.`) and never appears
+  as a `notify`/`waittill`/`thread`/`endon` receiver, while `level` is never
+  bracket-indexed (0 hits for `level["`) and only ever dot-accessed (616
+  hits) — the two objects use disjoint syntax, which reads as `game` being a
+  genuinely array-typed object in retail rather than a struct that happens
+  to also accept string-keyed brackets. vcod currently models both `level`
+  and `game` as `StructId` (`Vm::level`, `Vm::game`), and `Op::LoadIndex`/
+  `Op::StoreIndex` only accept `Value::Array`, so `game["allies"] = ...`
+  raises `BadType("indexing needs an array")` and kills the map script's own
+  main thread before it finishes. This blocks every stock MP map at load and
+  needs its own task: representing `game` as an array (or otherwise letting
+  a struct answer to bracket access), with retail probe coverage before
+  vcod's answer is trusted.
 - **`undefined == undefined`.** Not probed. Retail's error message for the
   mixed case names a "pair has unmatching types", which two `undefined`s are
   not, so equal is the reading that message supports — but that is inference,

@@ -252,12 +252,42 @@ impl<'a> Compiler<'a> {
                 self.emit(Op::StoreField(a));
             }
             Expr::Index(obj, idx) => {
-                self.compile_expr(obj)?;
+                self.compile_ensure_array(obj)?;
                 self.compile_expr(idx)?;
                 self.compile_expr(value)?;
                 self.emit(Op::StoreIndex);
             }
             _ => return Err(self.err("assignment target must be a variable, field or index")),
+        }
+        Ok(())
+    }
+
+    /// Compiles the object half of an index-assignment target so that an
+    /// `Undefined` value there auto-vivifies into a new array instead of
+    /// making `StoreIndex` fail (measured,
+    /// tests/fixtures/semantics/retail-captures.txt `# probe_autoviv`).
+    /// Only recurses through the shapes that have somewhere to write the
+    /// new array back to -- a local slot, a struct/entity field, or another
+    /// array's element; anything else (a call result, `self`, `level`, ...)
+    /// compiles as a plain value and leans on `StoreIndex`'s existing
+    /// not-an-array error.
+    fn compile_ensure_array(&mut self, obj: &Expr) -> Result<(), CompileError> {
+        match obj {
+            Expr::Local(name) => {
+                let slot = self.local_slot(name)?;
+                self.emit(Op::EnsureArrayLocal(slot));
+            }
+            Expr::Field(inner, name) => {
+                self.compile_expr(inner)?;
+                let a = self.interner.intern_folded(name);
+                self.emit(Op::EnsureArrayField(a));
+            }
+            Expr::Index(inner, idx) => {
+                self.compile_ensure_array(inner)?;
+                self.compile_expr(idx)?;
+                self.emit(Op::EnsureArrayIndex);
+            }
+            _ => self.compile_expr(obj)?,
         }
         Ok(())
     }

@@ -550,6 +550,92 @@ pub(crate) mod tests {
         assert_eq!(v, Value::Undefined);
     }
 
+    // --- Auto-vivification: `x[i] = v` where `x` was `Undefined` becomes a
+    // new array, per `tests/fixtures/semantics/retail-captures.txt`
+    // `# probe_autoviv`. `_utility.gsc`'s `add_to_array` ships on every
+    // stock map relying on exactly this for an uninitialised `level` field.
+
+    /// Asserts `v` is the string `"x"`, resolving through `vm`'s interner.
+    fn assert_is_x(v: Value, vm: &mut Vm) {
+        let Value::String(a) = v else {
+            panic!("expected a string, got {v:?}")
+        };
+        assert_eq!(vm.interner_mut().resolve(a), "x");
+    }
+
+    #[test]
+    fn assigning_to_an_index_of_an_undefined_local_auto_vivifies_an_array() {
+        let (v, _, mut vm) = run("main() { a[0] = \"x\"; return a[0]; }");
+        assert_is_x(v, &mut vm);
+        let (v, _, _) = run("main() { a[0] = \"x\"; return a.size; }");
+        assert_eq!(v, Value::Int(1));
+    }
+
+    #[test]
+    fn a_nonzero_first_index_still_vivifies_and_the_array_holds_one_element() {
+        let (v, _, _) = run("main() { a[3] = \"x\"; return a.size; }");
+        assert_eq!(v, Value::Int(1));
+    }
+
+    #[test]
+    fn a_string_key_on_an_undefined_local_also_vivifies() {
+        let (v, _, mut vm) = run(r#"main() { a["k"] = "x"; return a["k"]; }"#);
+        assert_is_x(v, &mut vm);
+    }
+
+    #[test]
+    fn assigning_to_an_index_of_an_undefined_struct_field_auto_vivifies_an_array() {
+        let (v, _, mut vm) = run("main() { level.foo[0] = \"x\"; return level.foo[0]; }");
+        assert_is_x(v, &mut vm);
+    }
+
+    #[test]
+    fn assigning_to_an_index_of_an_undefined_entity_field_auto_vivifies_an_array() {
+        let ast = crate::parse::parse_file("main() { self.foo[0] = \"x\"; return self.foo[0]; }")
+            .unwrap();
+        let mut vm = Vm::new();
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        let v = vm
+            .call_now(&mut host, 0, main, Some(Target::Entity(EntId(1))), vec![])
+            .unwrap();
+        assert_is_x(v, &mut vm);
+    }
+
+    #[test]
+    fn assigning_to_an_index_of_an_undefined_array_element_auto_vivifies_an_array() {
+        let (v, _, mut vm) = run(r#"main() { a = []; a[0][0] = "x"; return a[0][0]; }"#);
+        assert_is_x(v, &mut vm);
+    }
+
+    #[test]
+    fn assigning_to_an_index_of_a_defined_non_array_is_still_a_bad_type_error() {
+        let e = run_err("main() { a = 5; a[0] = \"x\"; }");
+        assert!(matches!(e, ErrorKind::BadType(_)));
+    }
+
+    #[test]
+    fn add_to_arrays_own_shape_from_an_undefined_argument_returns_a_one_element_array() {
+        let (v, _, _) = run(r#"
+            main() {
+                d = add_to_array(undefined, "ent1");
+                return d.size;
+            }
+            add_to_array(array, ent) {
+                if(!isdefined(ent))
+                    return array;
+                if(!isdefined(array))
+                    array[0] = ent;
+                else
+                    array[array.size] = ent;
+                return array;
+            }
+            "#);
+        assert_eq!(v, Value::Int(1));
+    }
+
     #[test]
     fn level_fields_persist_across_calls_within_a_run() {
         let (v, _, _) =

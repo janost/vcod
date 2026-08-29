@@ -465,6 +465,91 @@ impl Vm {
                     })?;
                     self.heap.set_index(id, k, v);
                 }
+                // Retail auto-vivifies an `Undefined` index-assignment target
+                // into a new empty array (measured,
+                // tests/fixtures/semantics/retail-captures.txt `# probe_autoviv`);
+                // `_load.gsc`'s `add_to_array` ships on every stock map
+                // relying on exactly this for an uninitialised `level` field.
+                Op::EnsureArrayLocal(slot) => {
+                    let id = match frames[top].locals[slot as usize] {
+                        Value::Array(id) => id,
+                        Value::Undefined => {
+                            let id = self.heap.new_array();
+                            frames[top].locals[slot as usize] = Value::Array(id);
+                            id
+                        }
+                        _ => return Err(err(ErrorKind::BadType("indexing needs an array"))),
+                    };
+                    push!(Value::Array(id));
+                }
+                Op::EnsureArrayField(name) => {
+                    let obj = pop!();
+                    let id = match obj {
+                        Value::Struct(sid) => match self.heap.get_field(sid, name) {
+                            Value::Array(id) => id,
+                            Value::Undefined => {
+                                let id = self.heap.new_array();
+                                self.heap.set_field(sid, name, Value::Array(id));
+                                id
+                            }
+                            _ => return Err(err(ErrorKind::BadType("indexing needs an array"))),
+                        },
+                        Value::Entity(eid) => {
+                            let mut cx = Cx {
+                                interner: &mut self.interner,
+                                heap: &mut self.heap,
+                                level: self.level,
+                                game: self.game,
+                                notifies,
+                            };
+                            match host.get_field(&mut cx, eid, name) {
+                                Value::Array(id) => id,
+                                Value::Undefined => {
+                                    let id = self.heap.new_array();
+                                    let mut cx = Cx {
+                                        interner: &mut self.interner,
+                                        heap: &mut self.heap,
+                                        level: self.level,
+                                        game: self.game,
+                                        notifies,
+                                    };
+                                    host.set_field(&mut cx, eid, name, Value::Array(id))
+                                        .map_err(err)?;
+                                    id
+                                }
+                                _ => {
+                                    return Err(err(ErrorKind::BadType("indexing needs an array")))
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(err(ErrorKind::BadType(
+                                "field assignment needs a struct or entity",
+                            )))
+                        }
+                    };
+                    push!(Value::Array(id));
+                }
+                Op::EnsureArrayIndex => {
+                    let key = pop!();
+                    let obj = pop!();
+                    let Value::Array(outer) = obj else {
+                        return Err(err(ErrorKind::BadType("indexing needs an array")));
+                    };
+                    let k = array_key(key).ok_or_else(|| {
+                        err(ErrorKind::BadType("array key must be a string or a number"))
+                    })?;
+                    let id = match self.heap.get_index(outer, k) {
+                        Value::Array(id) => id,
+                        Value::Undefined => {
+                            let id = self.heap.new_array();
+                            self.heap.set_index(outer, k, Value::Array(id));
+                            id
+                        }
+                        _ => return Err(err(ErrorKind::BadType("indexing needs an array"))),
+                    };
+                    push!(Value::Array(id));
+                }
                 Op::LoadSelf => {
                     let v = frames[top]
                         .recv

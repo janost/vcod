@@ -18,6 +18,25 @@ PROBE arraykey_size_both 2
 PROBE arraykey_read_orig 1
 PROBE arraykey_read_lower 2
 
+# probe_autoviv
+PROBE at viv_zero_index
+PROBE viv_zero_index_size 1
+PROBE viv_zero_index_value x
+PROBE at viv_nonzero_index
+PROBE viv_nonzero_index_size 1
+PROBE viv_nonzero_index_value x
+PROBE at viv_string_key
+PROBE viv_string_key_size 1
+PROBE viv_string_key_value v
+PROBE at add_to_array_shape
+PROBE add_to_array_size 1
+PROBE add_to_array_value ent1
+PROBE at viv_field
+PROBE viv_field_size 1
+PROBE viv_field_value y
+PROBE at viv_non_array
+PROBE_FATAL int is not an array
+
 # probe_cmp
 PROBE at eq_int_float
 PROBE eq_int_float 1
