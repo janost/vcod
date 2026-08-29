@@ -11,6 +11,7 @@ use crate::spectate::SpectatorSim;
 use crate::world::{TestEntities, World};
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::connectionless::{build_oob, parse_connect, parse_oob, Info};
 use vcod_common::net::gamestate::{self, Gamestate};
@@ -166,8 +167,10 @@ pub struct Server {
     outbox: Vec<(SocketAddr, Vec<u8>)>,
     limiter: RateLimiter,
     rng: u64,
-    /// The map's collision and spawn, loaded by the binary; tests run without.
-    world: Option<World>,
+    /// The map's collision and spawn, loaded by the binary; tests run
+    /// without. `Rc` so `GameHost.world` can point at the same map for
+    /// `bulletTrace`, which needs real geometry to trace against.
+    world: Option<Rc<World>>,
     /// `svs.time`, advanced one frame per tick.
     sv_time_ms: i32,
     /// Gamestate entity baselines a delta frame may omit an unchanged entity
@@ -178,10 +181,8 @@ pub struct Server {
     test_entities: Option<TestEntities>,
     /// Wall clock of the previous tick, for the trace's send-interval column.
     last_tick: Option<Instant>,
-    /// The map script, run once at load; `None` until `load_scripts`
-    /// succeeds. Written and never read: `tick` will step it per frame once
-    /// the host outlives one call, which needs `GameHost` to own the
-    /// configstring table rather than borrow it through `std::mem::take`.
+    /// The map script; `None` until `load_scripts` succeeds. `tick` steps it
+    /// once per frame.
     script: Option<crate::game::script::ScriptRuntime>,
 }
 
@@ -822,19 +823,40 @@ impl Server {
 
     /// Swap in the map built by the binary; tests run without one.
     pub fn load_world(&mut self, world: World) {
-        self.world = Some(world);
+        self.world = Some(Rc::new(world));
+    }
+
+    /// The cvars a gametype script reads. `g_gametype`, `sv_hostname` and
+    /// `sv_maxclients` mirror this run's `ServerConfig`; `debug` is retail's
+    /// default off, which is what `_utility.gsc`'s exploder logic
+    /// (`getCvar("debug") != "1"`) expects when nobody has set it.
+    fn cvars(&self) -> HashMap<String, String> {
+        HashMap::from([
+            ("g_gametype".to_string(), self.cfg.gametype.clone()),
+            ("sv_hostname".to_string(), self.cfg.hostname.clone()),
+            (
+                "sv_maxclients".to_string(),
+                self.cfg.max_clients.to_string(),
+            ),
+            ("debug".to_string(), "0".to_string()),
+        ])
     }
 
     /// Loads and runs the map script. Called once at map load, before any
     /// client connects, so the configstring table is final by the time a
     /// gamestate goes out; a script write after that would need the `d`
     /// configstring-update command, which the server does not send yet.
-    pub fn load_scripts(&mut self, fs: std::rc::Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
-        let mut rt = crate::game::script::ScriptRuntime::load(fs, &self.cfg.map)?;
-        let mut host = crate::game::host::GameHost::new(std::mem::take(&mut self.configstrings));
-        rt.start_map_main(&mut host, self.sv_time_ms);
-        rt.run_frame(&mut host, self.sv_time_ms);
-        self.configstrings = std::mem::take(&mut host.configstrings);
+    pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
+        let cvars = self.cvars();
+        let rt = crate::game::script::ScriptRuntime::load(
+            fs,
+            &self.cfg.map,
+            std::mem::take(&mut self.configstrings),
+            cvars,
+            self.world.clone(),
+            self.sv_time_ms,
+        )?;
+        self.configstrings = rt.configstrings().to_vec();
         self.script = Some(rt);
         Ok(())
     }
@@ -864,6 +886,9 @@ impl Server {
     pub fn tick(&mut self, now: Instant) {
         self.check_timeouts(now);
         self.send_snapshots(now);
+        if let Some(rt) = self.script.as_mut() {
+            rt.run_frame(self.sv_time_ms);
+        }
     }
 
     /// One snapshot per active client per tick, the main loop pacing calls at
