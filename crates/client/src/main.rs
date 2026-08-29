@@ -63,6 +63,13 @@ struct Args {
     /// Overwrite the committed snapshots.bin fixture only; gamestate.bin stays pinned.
     #[arg(long)]
     save_snapshots: bool,
+    /// Write the retail server's non-empty configstring table to
+    /// crates/server/tests/fixtures/configstrings/<map>-<gametype>.txt, the
+    /// fixture crates/server/tests/configstrings_ab.rs diffs against. Separate
+    /// from --save-fixture because that pair pins the parser's byte-exact
+    /// captures and this one pins the game module's table.
+    #[arg(long)]
+    save_configstrings: bool,
     /// Seconds --net-probe stays connected; an SD round boundary needs a few minutes
     #[arg(long, default_value_t = 65)]
     probe_secs: u64,
@@ -385,6 +392,7 @@ fn main() -> Result<()> {
             addr,
             args.save_fixture,
             args.save_snapshots,
+            args.save_configstrings,
             args.probe_secs,
             fs.as_ref(),
         );

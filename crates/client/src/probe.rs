@@ -27,6 +27,7 @@ pub fn probe(
     addr: &str,
     save_fixture: bool,
     save_snapshots: bool,
+    save_configstrings: bool,
     secs: u64,
     fs: Option<&vcod_common::pk3::Pk3Fs>,
 ) -> anyhow::Result<()> {
@@ -63,6 +64,9 @@ pub fn probe(
                         if !cs.is_empty() {
                             log::debug!("cs[{i}] = {cs:?}");
                         }
+                    }
+                    if save_configstrings {
+                        write_configstrings_fixture(client.configstrings())?;
                     }
                     for (i, m) in gs.configstrings.iter().enumerate().skip(269).take(255) {
                         if !m.is_empty() {
@@ -504,5 +508,49 @@ fn write_fixture(path: &str, data: &[u8]) -> anyhow::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     std::fs::write(p, data)?;
+    Ok(())
+}
+
+/// Directory `crates/server/tests/configstrings_ab.rs` reads its fixtures
+/// from.
+const CONFIGSTRINGS_FIXTURE_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../server/tests/fixtures/configstrings"
+);
+
+/// Writes the non-empty configstring table to
+/// `<map>-<gametype>.txt`. The map, gametype, client count and pureness come
+/// out of cs 0 (serverinfo) itself, so nothing here is hand-typed.
+fn write_configstrings_fixture(configstrings: &[String]) -> anyhow::Result<()> {
+    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
+    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let map = key("mapname");
+    let gametype = key("g_gametype");
+    let max_clients = key("sv_maxclients");
+    let pure = key("sv_pure");
+
+    // Values are raw: a configstring cannot contain a newline, so the
+    // `<index> <value>` line format needs no escaping.
+    let mut out = String::new();
+    out.push_str("# Retail CoD 1.1d dedicated server configstring table at gamestate.\n");
+    out.push_str(&format!(
+        "# map {map}, g_gametype {gametype}, sv_maxclients {max_clients}, sv_pure {pure}, dedicated 1, stock scr_* defaults.\n"
+    ));
+    out.push_str("# Captured with tools/run_server.sh and --net-probe at debug level.\n");
+    out.push_str("# One '<index> <value>' line per non-empty slot, ascending. Values are raw;\n");
+    out.push_str("# a configstring cannot contain a newline, so no escaping is needed.\n");
+    out.push_str("# 0 (serverinfo) and 1 (systeminfo) are recorded for provenance and excluded\n");
+    out.push_str(
+        "# from the diff: they carry pak checksums and server config, not script output.\n",
+    );
+    for (i, cs) in configstrings.iter().enumerate() {
+        if !cs.is_empty() {
+            out.push_str(&format!("{i} {cs}\n"));
+        }
+    }
+
+    let path = format!("{CONFIGSTRINGS_FIXTURE_DIR}/{map}-{gametype}.txt");
+    std::fs::write(&path, out)?;
+    println!("configstrings: {} bytes -> {path}", configstrings.len());
     Ok(())
 }
