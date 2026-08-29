@@ -284,3 +284,8 @@ decompiler output or disassembly listings.
   and the two deliberate divergences are in docs/research/cod11-mantle.md and
   bsp-ibsp59-format.md ("Movement constants"). Mantling does not exist in
   retail 1.1 MP; cod11-mantle.md is the negative result.
+- A BSP entity key reaches script only if it is in the entity field table or
+  in `radiant/keys.txt`; anything else is dropped at load, silently, exactly
+  as retail drops it. So a script reading a Radiant key nobody registered
+  gets `undefined` and no warning. The three-way split and both tables are
+  in `docs/research/cod11-gsc-object-model.md`.

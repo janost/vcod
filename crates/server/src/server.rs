@@ -11,6 +11,7 @@ use crate::spectate::SpectatorSim;
 use crate::world::{TestEntities, World};
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::connectionless::{build_oob, parse_connect, parse_oob, Info};
 use vcod_common::net::gamestate::{self, Gamestate};
@@ -58,7 +59,7 @@ const FRAME_MS: i32 = 50;
 /// Retail's `MAX_CLIENTS`. Client slots index a 6-bit wire field
 /// (clientState entries; `ps.clientNum` gets 8), so more than 64 would
 /// collide silently.
-const MAX_CLIENTS: usize = 64;
+pub(crate) const MAX_CLIENTS: usize = 64;
 
 pub struct ServerConfig {
     pub map: String,
@@ -166,8 +167,10 @@ pub struct Server {
     outbox: Vec<(SocketAddr, Vec<u8>)>,
     limiter: RateLimiter,
     rng: u64,
-    /// The map's collision and spawn, loaded by the binary; tests run without.
-    world: Option<World>,
+    /// The map's collision and spawn, loaded by the binary; tests run
+    /// without. `Rc` so `GameHost.world` can point at the same map for
+    /// `bulletTrace`, which needs real geometry to trace against.
+    world: Option<Rc<World>>,
     /// `svs.time`, advanced one frame per tick.
     sv_time_ms: i32,
     /// Gamestate entity baselines a delta frame may omit an unchanged entity
@@ -178,10 +181,8 @@ pub struct Server {
     test_entities: Option<TestEntities>,
     /// Wall clock of the previous tick, for the trace's send-interval column.
     last_tick: Option<Instant>,
-    /// The map script, run once at load; `None` until `load_scripts`
-    /// succeeds. Written and never read: `tick` will step it per frame once
-    /// the host outlives one call, which needs `GameHost` to own the
-    /// configstring table rather than borrow it through `std::mem::take`.
+    /// The map script; `None` until `load_scripts` succeeds. `tick` steps it
+    /// once per frame.
     script: Option<crate::game::script::ScriptRuntime>,
 }
 
@@ -822,19 +823,48 @@ impl Server {
 
     /// Swap in the map built by the binary; tests run without one.
     pub fn load_world(&mut self, world: World) {
-        self.world = Some(world);
+        self.world = Some(Rc::new(world));
+    }
+
+    /// The cvars a gametype script reads. `g_gametype`, `sv_hostname` and
+    /// `sv_maxclients` mirror this run's `ServerConfig`; `debug` is retail's
+    /// default off, which is what `_utility.gsc`'s exploder logic
+    /// (`getCvar("debug") != "1"`) expects when nobody has set it.
+    fn cvars(&self) -> HashMap<String, String> {
+        HashMap::from([
+            ("g_gametype".to_string(), self.cfg.gametype.clone()),
+            ("sv_hostname".to_string(), self.cfg.hostname.clone()),
+            (
+                "sv_maxclients".to_string(),
+                self.cfg.max_clients.to_string(),
+            ),
+            ("debug".to_string(), "0".to_string()),
+        ])
     }
 
     /// Loads and runs the map script. Called once at map load, before any
-    /// client connects, so the configstring table is final by the time a
-    /// gamestate goes out; a script write after that would need the `d`
-    /// configstring-update command, which the server does not send yet.
-    pub fn load_scripts(&mut self, fs: std::rc::Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
-        let mut rt = crate::game::script::ScriptRuntime::load(fs, &self.cfg.map)?;
-        let mut host = crate::game::host::GameHost::new(std::mem::take(&mut self.configstrings));
-        rt.start_map_main(&mut host, self.sv_time_ms);
-        rt.run_frame(&mut host, self.sv_time_ms);
-        self.configstrings = std::mem::take(&mut host.configstrings);
+    /// client connects. The script keeps allocating configstrings after that
+    /// (any `setModel`, `loadFX`, `playSound` or `ambientPlay` from a thread
+    /// that has passed a `wait`), so the table is not final at gamestate
+    /// time; `tick` copies the script's table back every frame. A client
+    /// already connected does not see a post-gamestate allocation, because
+    /// the server does not send the `d` configstring-update command yet.
+    ///
+    /// The table is cloned in, not moved: `ScriptRuntime::load` fails on a
+    /// missing `.gsc`, an unresolvable map, a bad BSP or a failed entity
+    /// spawn, and `main.rs` keeps serving after such a failure, so a failed
+    /// load has to leave `self.configstrings` exactly as it was.
+    pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
+        let cvars = self.cvars();
+        let rt = crate::game::script::ScriptRuntime::load(
+            fs,
+            &self.cfg.map,
+            self.configstrings.clone(),
+            cvars,
+            self.world.clone(),
+            self.sv_time_ms,
+        )?;
+        self.configstrings = rt.configstrings().to_vec();
         self.script = Some(rt);
         Ok(())
     }
@@ -864,6 +894,15 @@ impl Server {
     pub fn tick(&mut self, now: Instant) {
         self.check_timeouts(now);
         self.send_snapshots(now);
+        if let Some(rt) = self.script.as_mut() {
+            rt.run_frame(self.sv_time_ms);
+            // The script owns the table while it runs and allocates into it
+            // from any thread, so the server re-reads it rather than trusting
+            // the copy `load_scripts` took. A whole-table copy per frame is
+            // cheap next to a snapshot, and there is no single write choke
+            // point on the host's table to hang a dirty flag off.
+            self.configstrings = rt.configstrings().to_vec();
+        }
     }
 
     /// One snapshot per active client per tick, the main loop pacing calls at
@@ -1164,6 +1203,41 @@ mod tests {
             Some("16")
         );
         assert!(sv.configstring(7).contains("kar98k_mp"));
+    }
+
+    /// A script load that fails part way must not cost the server its
+    /// configstrings: `main.rs` logs the error and keeps serving, so every
+    /// later gamestate would ship an empty table.
+    #[test]
+    fn a_failed_script_load_leaves_the_configstrings_alone() {
+        let mut sv = Server::new(cfg(), Instant::now());
+        let before: Vec<String> = sv.configstrings.clone();
+        // No paks, so the map script does not resolve and `load` fails at its
+        // first step.
+        let err = sv.load_scripts(Rc::new(vcod_common::pk3::Pk3Fs::empty()));
+        assert!(err.is_err());
+        assert_eq!(sv.configstrings, before);
+        assert!(sv.configstring(7).contains("kar98k_mp"));
+    }
+
+    /// The script keeps allocating configstrings after map load, from any
+    /// thread that has passed a `wait`. The server re-reads the script's
+    /// table each tick, so such an allocation reaches it.
+    #[test]
+    fn a_configstring_allocated_after_a_wait_reaches_the_server() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.script = Some(crate::game::script::ScriptRuntime::for_test(
+            "main() { wait 0.5; loadfx(\"fx/impacts/newimps/minefield.efx\"); }",
+        ));
+        // sv_time starts at 0 and each tick advances it one 50 ms frame, so
+        // the thread is still suspended after the first.
+        sv.tick(now);
+        assert_eq!(sv.configstring(781), "");
+        for _ in 0..12 {
+            sv.tick(now);
+        }
+        assert_eq!(sv.configstring(781), "fx/impacts/newimps/minefield.efx");
     }
 
     #[test]

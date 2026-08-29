@@ -18,6 +18,9 @@ Scr_GetFunction's caller as a second out-parameter.
 `spawns` (0x7eb30) is the classname table `G_CallSpawn` searches: a classname
 in it becomes an engine entity built by its SP_ function, one not in it stays
 a bare script-visible entity. Its records are 8 bytes and end at a null name.
+A row marked `frees` has an SP_ function that relocates against
+`G_FreeEntity`, so the block leaves no live entity and consumes no entity
+number; see docs/research/cod11-gsc-object-model.md section 13.
 """
 import struct
 import sys
@@ -54,10 +57,14 @@ class Elf:
         dyn = self.sec(".dynsym")
         dstr = self.sec(".dynstr")
         syms = []
+        self.func = {}
         for i in range(dyn["size"] // 16):
             o = dyn["off"] + i * 16
-            nm, = struct.unpack("<I", d[o:o + 4])
-            syms.append(d[dstr["off"] + nm:d.index(b"\0", dstr["off"] + nm)].decode())
+            nm, val, size = struct.unpack("<III", d[o:o + 12])
+            name = d[dstr["off"] + nm:d.index(b"\0", dstr["off"] + nm)].decode()
+            syms.append(name)
+            if val and size:
+                self.func.setdefault(name, (val, size))
         self.rels = {}
         for name in (".rel.text", ".rel.data", ".rel.rodata"):
             s = self.sec(name)
@@ -85,6 +92,14 @@ class Elf:
         f = self.vf(v)
         return struct.unpack("<I", self.d[f:f + 4])[0]
 
+    def calls(self, name, callee):
+        """Whether the exported function `name` relocates against `callee`."""
+        span = self.func.get(name)
+        if span is None:
+            return False
+        va, size = span
+        return any(self.rels.get(o) == callee for o in range(va, va + size))
+
 
 def dump(e, kind):
     addr, stride, count, origin = TABLES[kind]
@@ -97,6 +112,10 @@ def dump(e, kind):
             break
         fn = e.rels.get(v + 4) or f"{e.word(v + 4):#x}"
         extra = f"  flag={e.word(v + 8)}" if stride == 12 else ""
+        # An SP_ function that is nothing but G_FreeEntity(self) leaves the
+        # block with no live entity and so consumes no entity number.
+        if kind == "spawns" and e.calls(fn, "G_FreeEntity"):
+            extra += "  frees"
         print(f"  [{i:3}] {name:<28} {fn}{extra}")
         i += 1
     print(f"# {i} entries\n")

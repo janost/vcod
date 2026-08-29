@@ -413,8 +413,11 @@ inferred. The probes are `crates/gsc/tests/fixtures/semantics/probe_*.gsc`,
 run as gametype scripts by `tools/run_probe.sh`; retail's answers are
 committed beside them in `retail-captures.txt`, and
 `crates/gsc/tests/semantics_ab.rs` diffs vcod against them on every test run.
-It is green on all 18 runnable probes; `probe_ents` is captured but not run,
-since `getentarray` needs the object model that arrives with the entity work.
+It is green on all 21 runnable probes; `probe_ents` is captured but not run,
+since `getentarray` needs the object model that arrives with the entity work,
+and three more (`probe_game_dotwrite`, `probe_level_bracket`,
+`probe_level_size`) are captured but skipped for the reasons `§10` and
+`semantics_ab.rs`'s `KNOWN_GAPS_OUT_OF_SCOPE` give.
 
 Three facts about the retail side shaped how the measurement had to be taken,
 and each is worth knowing before writing another probe:
@@ -479,6 +482,20 @@ as case-sensitive. One interner folding everything cannot express that.
 array with keys `0`, `1` and `"k"` reports 3, an empty one 0. Strings have it
 too: `"abcd".size` is 4.
 
+**Assigning to an index of `undefined` auto-vivifies an array, VERIFIED
+(`probe_autoviv`).** `a[0] = "x"` on a local that was never set turns it
+into a one-element array; a non-zero first index (`b[3] = "x"`) and a string
+key (`c["k"] = "v"`) behave the same way, each yielding a `.size` of 1 --
+retail's arrays are sparse, so a non-zero first write does not backfill the
+lower indices. The same holds through a struct field
+(`level.myArray[0] = "y"`), which is exactly what `_load.gsc`'s
+`add_to_array(level._script_expoders, ...)` relies on for a field that is
+never otherwise initialised. Indexing a value that is defined but *not* an
+array is still fatal: `e = 5; e[0] = "x";` dies with `int is not an array`.
+vcod raises `BadType("indexing needs an array")` in that case instead,
+same reachable outcome (both sides stop, per `semantics_ab.rs`'s error
+check) with a different message text, which the harness does not compare.
+
 **Notify wake order: start order, VERIFIED.** Two threads waiting on one
 event on `level` wake in the order they were started.
 
@@ -505,8 +522,40 @@ does the same, which is also what the two stock scripts that ship a literal
 past `i32::MAX` as an effectively-infinite sentinel
 (`maps/carride.gsc:1606`, `maps/redsquare.gsc:1547`) mean by it.
 
+**`game` is array-typed, not a struct, VERIFIED (`probe_game`).**
+`game["allies"] = "russian"` then reading `game["allies"]` back round-trips,
+`game.size` is 1 after one bracket write and 2 after two, and the value
+survives a `wait` (`game["allies"]` still reads `"russian"` afterward) —
+`game` is the cross-map persistent global retail keeps it as. `game.foo = 1`
+is not merely fatal at runtime the way an out-of-place index assignment is
+(§9's `probe_autoviv` case): it is a *compile*-time rejection, `not an
+object`, that voids the whole script before `main()` runs at all
+(`probe_game_dotwrite`). `level["k"] = "v"` gets the same compile-time
+treatment the other way, `not an array, string, or vector`
+(`probe_level_bracket`) — retail's compiler statically knows each global's
+access mode and rejects the wrong one before any code runs, not just the
+line that reaches it. This settles the "still unestablished" entry the
+previous task left here: `game` is genuinely array-typed, not a struct that
+also answers to brackets, and vcod now models it as one (`Vm::game`,
+`ArrayId`, `Op::LoadGame` pushes `Value::Array`). Section 10 covers why
+vcod does not reproduce the compile-time half.
+
+Also measured, though out of the scope that motivated the above:
+**`level.size` reads a constant `1`, not a field count (`probe_level_size`).**
+Set one dot-field on `level` or two, `level.size` reads `1` either way —
+unlike `game.size`/an array's `.size`, which do count keys. vcod's
+`LoadField` only special-cases `.size` for `Value::Array`/`Value::String`,
+so `level.size` in vcod reads `Undefined` and then fails to concatenate.
+Not fixed here; see the "Still unestablished" entry below.
+
 ### Still unestablished
 
+- **What `level.size` actually is.** `probe_level_size` (above) shows retail
+  answers `1` regardless of field count, but not why — whether it is a
+  generic non-array-non-string `.size` default, an engine-native property
+  unrelated to field count, or something else. `level.foo`-style field reads
+  are otherwise ordinary (§9's `field_read_*` cases), so this looks specific
+  to the name `size`. No probe has isolated the cause.
 - **`undefined == undefined`.** Not probed. Retail's error message for the
   mixed case names a "pair has unmatching types", which two `undefined`s are
   not, so equal is the reading that message supports — but that is inference,
@@ -532,7 +581,7 @@ past `i32::MAX` as an effectively-infinite sentinel
 
 ## 10. Divergences kept as documentation, not code
 
-Seven places where the implementation made a deliberate call the corpus
+Twelve places where the implementation made a deliberate call the corpus
 cannot settle, recorded here rather than silently baked into behaviour that
 looks authoritative:
 
@@ -576,6 +625,24 @@ looks authoritative:
   killing itself via a nested spawn's notify, mid-step) no corpus script
   seems to rely on either way; deferred to the next project. Pinned by
   `sched::tests::a_thread_killed_by_its_own_endon_mid_step_still_runs_to_its_next_suspend`.
+- **`game.foo = 1` and `level["k"] = "v"` compile in vcod; retail rejects
+  each at compile time.** Measured (`probe_game_dotwrite`,
+  `probe_level_bracket`): retail's compiler statically knows `game` is
+  array-typed and `level` is a struct, so the wrong access mode on either
+  bare identifier is a `script compile error` that voids the whole script
+  before `main()` runs, not a fault at the line that reaches it. vcod's
+  compiler (`crates/gsc/src/compile.rs`) does no such static typing of
+  `level`/`game`; both constructs compile and only fail once the
+  instruction loop reaches them (`Op::StoreField`/`Op::StoreIndex`
+  rejecting an array/struct operand), by which point any `logPrint` before
+  the failing line has already run — a real, observable divergence from
+  retail's all-or-nothing compile failure, not just message-text. Adding
+  static typing for these two identifiers to the compiler would fix it;
+  out of scope for the task that made `game` array-typed, since neither
+  construct appears anywhere in the corpus (`game.` and `level["` are both
+  zero-hit). `crates/gsc/tests/semantics_ab.rs`'s
+  `KNOWN_GAPS_OUT_OF_SCOPE` skips both probes rather than asserting a false
+  pass.
 - **A runtime error aborts the thread, where retail kills the server.**
   Every fatal in §9 — a non-numeric condition, `"str" + undefined`,
   `undefined == 0`, `"a" < "b"`, `1 / 0` — raises the equivalent
@@ -615,3 +682,54 @@ looks authoritative:
   on one event is killed rather than woken, regardless of which it
   registered first. The wake order *within* each pass is measured (start
   order, `# probe_notify`); the ordering *between* the two passes is not.
+- **Damage from `radiusDamage` is queued and drained after `run_frame`, not
+  dispatched inline.** Retail runs `CodeCallback_PlayerDamage` synchronously
+  from inside `radiusDamage`, a builtin calling back into script mid-call.
+  `Cx` deliberately keeps no route back into the VM, the same reason
+  `notify` is queued rather than resolved inline (the first entry above), so
+  `radiusDamage` pushes a `DamageEvent` onto `GameHost.damage`
+  (`crates/server/src/game/damage.rs`) instead of calling script directly;
+  the server drains the queue after `run_frame` returns, which stage 6
+  wires up. Observable: a script that calls `radiusDamage` and then reads
+  `self.health` in the same expression sees the value from before the
+  callback runs, not after. This is architectural, following directly from
+  `Cx`'s no-reentrancy rule, not something a probe measured retail
+  disagreeing on.
+- **Only the freeing half of the `SP_` layer runs.**
+  `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces
+  `G_CallSpawn`'s third case for the five classnames whose `SP_` function is
+  an unconditional `G_FreeEntity(self)`, because that half decides entity
+  numbering (section 13 of docs/research/cod11-gsc-object-model.md). The
+  other 22 spawn functions do not run: no brush model is bound, no trigger
+  is linked, no turret is built. Those entities are live and script-visible
+  with every Radiant key applied, which is what the corpus reads them for,
+  but their engine-side setup is absent. Nothing measured so far depends on
+  it; a script that asks a `func_door` to move is the case that would.
+- **`delete()` frees the entity at once; retail frees it 100 ms later.**
+  The `delete` entity method (0x5da14) notifies the entity, unlinks it,
+  clears its touch and use handlers and then sets `think = G_FreeEntity` and
+  `nextthink = level.time + 100`; the slot stays live until that think runs.
+  VERIFIED on the retail 1.1d server (2026-08-29): a spawn immediately after
+  a `delete()` got a fresh number, and only a spawn after `wait 0.5` got the
+  deleted entity's number back (section 14 of
+  docs/research/cod11-gsc-object-model.md). `builtins/entity.rs::delete`
+  frees on the spot, so vcod recycles the number a tenth of a second early
+  and drops the entity out of `getEntArray` a tenth of a second early.
+  Closing it needs the entity think scheduler, which stage 2 does not have.
+- **A script entity handle carries no generation, so a stale one silently
+  aliases whatever spawns into the freed slot next.** Retail bumps a
+  per-entity generation counter at `gentity+0x300` on every free and checks
+  a script handle against it, which is what a stale handle is caught by
+  (section 14 of docs/research/cod11-gsc-object-model.md, `G_FreeEntity`
+  0x66948). `Value::Entity(EntId)` (`crates/gsc/src/value.rs:7`) is a bare
+  entity number with no such tag, and now that `ObjectTable`'s free list
+  (`crates/server/src/game/entity.rs`) hands a freed slot straight back out
+  to the next spawn, a script holding a handle to the deleted entity reads
+  the new occupant's fields under the old handle instead of hitting an
+  error. Before slot reuse landed, the same stale handle pointed at a dead
+  slot and failed cleanly instead; this branch made an existing gap
+  reachable rather than opening a new one. Not reachable by any script in
+  the corpus today, since nothing in it holds an entity handle across a
+  delete and a respawn, but a real hazard for a third-party script that
+  does. Closing it needs a generation counter stored beside the slot and
+  checked on every handle dereference, not a fix to the free list itself.

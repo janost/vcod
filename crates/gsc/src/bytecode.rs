@@ -17,6 +17,18 @@ pub enum Op {
     LoadIndex,
     /// Pops the value, the key, then the object.
     StoreIndex,
+    /// Auto-vivifying counterpart to `LoadLocal` for an index-assignment
+    /// target: an `Undefined` local becomes a new empty array, written back
+    /// to the slot; an existing array is left alone; anything else is a
+    /// `BadType` error. Either way pushes the array.
+    EnsureArrayLocal(u16),
+    /// Pops the object (struct or entity); same auto-vivification as
+    /// `EnsureArrayLocal`, but writes the new array back to the field.
+    EnsureArrayField(Atom),
+    /// Pops the key then the array; same auto-vivification as
+    /// `EnsureArrayLocal`, but writes the new array back to that element --
+    /// the `array[i][j] = v` case.
+    EnsureArrayIndex,
     LoadSelf,
     LoadLevel,
     LoadGame,
@@ -115,11 +127,16 @@ pub(crate) fn stack_effect(op: &Op) -> (i32, i32) {
         | Op::JumpIfTrue(_)
         | Op::Wait
         | Op::Return => (1, 0),
-        Op::LoadField(_) | Op::Neg | Op::Not | Op::CastInt | Op::CastFloat | Op::CastVector => {
-            (1, 1)
-        }
+        Op::LoadField(_)
+        | Op::Neg
+        | Op::Not
+        | Op::CastInt
+        | Op::CastFloat
+        | Op::CastVector
+        | Op::EnsureArrayField(_) => (1, 1),
+        Op::EnsureArrayLocal(_) => (0, 1),
         Op::StoreField(_) => (2, 0),
-        Op::LoadIndex => (2, 1),
+        Op::LoadIndex | Op::EnsureArrayIndex => (2, 1),
         Op::StoreIndex => (3, 0),
         Op::MakeVector => (3, 1),
         Op::Add

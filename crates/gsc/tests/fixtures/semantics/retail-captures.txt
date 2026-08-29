@@ -18,6 +18,25 @@ PROBE arraykey_size_both 2
 PROBE arraykey_read_orig 1
 PROBE arraykey_read_lower 2
 
+# probe_autoviv
+PROBE at viv_zero_index
+PROBE viv_zero_index_size 1
+PROBE viv_zero_index_value x
+PROBE at viv_nonzero_index
+PROBE viv_nonzero_index_size 1
+PROBE viv_nonzero_index_value x
+PROBE at viv_string_key
+PROBE viv_string_key_size 1
+PROBE viv_string_key_value v
+PROBE at add_to_array_shape
+PROBE add_to_array_size 1
+PROBE add_to_array_value ent1
+PROBE at viv_field
+PROBE viv_field_size 1
+PROBE viv_field_value y
+PROBE at viv_non_array
+PROBE_FATAL int is not an array
+
 # probe_cmp
 PROBE at eq_int_float
 PROBE eq_int_float 1
@@ -69,16 +88,44 @@ PROBE entarray_order 3 auto6
 PROBE entarray_order 4 probe_a
 PROBE entarray_order 5 probe_b
 PROBE entarray_order 6 probe_c
+PROBE at ents_numbers
+PROBE entarray_number 0 73
+PROBE entarray_number 1 74
+PROBE entarray_number 2 75
+PROBE entarray_number 3 298
+PROBE entarray_number 4 299
+PROBE entarray_number 5 300
+PROBE entarray_number 6 301
 
 # probe_field_case
 PROBE field_read_same_case 7
 PROBE at field_read_other_case
 PROBE field_read_other_case 7
 
+# probe_game
+PROBE at game_bracket_write
+PROBE game_bracket_read russian
+PROBE game_size_after_one 1
+PROBE game_size_after_two 2
+PROBE at game_persist
+PROBE game_persist_after_wait russian
+
+# probe_game_dotwrite
+
 # probe_lexer
 PROBE mod_tight 1
 PROBE int_min_cast -2147483647
 PROBE int_min_direct -2147483647
+
+# probe_level
+PROBE at level_dot_write
+PROBE level_dot_read 1
+
+# probe_level_bracket
+
+# probe_level_size
+PROBE level_size_after_one_field 1
+PROBE level_size_after_two_fields 1
 
 # probe_notify
 PROBE notify_order first

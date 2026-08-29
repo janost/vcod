@@ -239,9 +239,11 @@ fn eval_neg(v: Value) -> Result<Value, ErrorKind> {
 }
 
 /// A call's receiver reads as a `Target` when it is an entity or a heap
-/// struct (`level`, `game` are both, and both are common receivers in the
-/// corpus); `undefined` and any other value leave the callee's `self`
-/// unbound rather than erroring.
+/// struct (`level` is one, and a common receiver in the corpus); `game` is
+/// array-typed, not a struct, so it falls through to `None` here like any
+/// other non-entity, non-struct value -- no corpus script uses `game` as a
+/// receiver, which is what makes that safe. `undefined` and any other
+/// value leave the callee's `self` unbound rather than erroring.
 fn as_target(v: Value) -> Option<Target> {
     match v {
         Value::Entity(e) => Some(Target::Entity(e)),
@@ -465,6 +467,91 @@ impl Vm {
                     })?;
                     self.heap.set_index(id, k, v);
                 }
+                // Retail auto-vivifies an `Undefined` index-assignment target
+                // into a new empty array (measured,
+                // tests/fixtures/semantics/retail-captures.txt `# probe_autoviv`);
+                // `_load.gsc`'s `add_to_array` ships on every stock map
+                // relying on exactly this for an uninitialised `level` field.
+                Op::EnsureArrayLocal(slot) => {
+                    let id = match frames[top].locals[slot as usize] {
+                        Value::Array(id) => id,
+                        Value::Undefined => {
+                            let id = self.heap.new_array();
+                            frames[top].locals[slot as usize] = Value::Array(id);
+                            id
+                        }
+                        _ => return Err(err(ErrorKind::BadType("indexing needs an array"))),
+                    };
+                    push!(Value::Array(id));
+                }
+                Op::EnsureArrayField(name) => {
+                    let obj = pop!();
+                    let id = match obj {
+                        Value::Struct(sid) => match self.heap.get_field(sid, name) {
+                            Value::Array(id) => id,
+                            Value::Undefined => {
+                                let id = self.heap.new_array();
+                                self.heap.set_field(sid, name, Value::Array(id));
+                                id
+                            }
+                            _ => return Err(err(ErrorKind::BadType("indexing needs an array"))),
+                        },
+                        Value::Entity(eid) => {
+                            let mut cx = Cx {
+                                interner: &mut self.interner,
+                                heap: &mut self.heap,
+                                level: self.level,
+                                game: self.game,
+                                notifies,
+                            };
+                            match host.get_field(&mut cx, eid, name) {
+                                Value::Array(id) => id,
+                                Value::Undefined => {
+                                    let id = self.heap.new_array();
+                                    let mut cx = Cx {
+                                        interner: &mut self.interner,
+                                        heap: &mut self.heap,
+                                        level: self.level,
+                                        game: self.game,
+                                        notifies,
+                                    };
+                                    host.set_field(&mut cx, eid, name, Value::Array(id))
+                                        .map_err(err)?;
+                                    id
+                                }
+                                _ => {
+                                    return Err(err(ErrorKind::BadType("indexing needs an array")))
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(err(ErrorKind::BadType(
+                                "field assignment needs a struct or entity",
+                            )))
+                        }
+                    };
+                    push!(Value::Array(id));
+                }
+                Op::EnsureArrayIndex => {
+                    let key = pop!();
+                    let obj = pop!();
+                    let Value::Array(outer) = obj else {
+                        return Err(err(ErrorKind::BadType("indexing needs an array")));
+                    };
+                    let k = array_key(key).ok_or_else(|| {
+                        err(ErrorKind::BadType("array key must be a string or a number"))
+                    })?;
+                    let id = match self.heap.get_index(outer, k) {
+                        Value::Array(id) => id,
+                        Value::Undefined => {
+                            let id = self.heap.new_array();
+                            self.heap.set_index(outer, k, Value::Array(id));
+                            id
+                        }
+                        _ => return Err(err(ErrorKind::BadType("indexing needs an array"))),
+                    };
+                    push!(Value::Array(id));
+                }
                 Op::LoadSelf => {
                     let v = frames[top]
                         .recv
@@ -473,10 +560,13 @@ impl Vm {
                     push!(v);
                 }
                 Op::LoadLevel => push!(Value::Struct(self.level)),
-                Op::LoadGame => push!(Value::Struct(self.game)),
+                // `game` is array-typed on retail, measured
+                // tests/fixtures/semantics/retail-captures.txt `# probe_game`.
+                Op::LoadGame => push!(Value::Array(self.game)),
                 // No stock MP script reads a bare `anim` back (every use is
                 // inside a `/# #/` developer block, which the lexer drops
-                // whole); `level`/`game` are the only preallocated structs.
+                // whole); `level` is the only preallocated struct (`game`
+                // preallocates too, but as an array, not a struct).
                 Op::LoadAnim => push!(Value::Undefined),
                 Op::NewArray => {
                     let id = self.heap.new_array();

@@ -17,10 +17,13 @@ mod interp;
 pub mod sched;
 
 /// `self`/a call's receiver, once resolved to something field access and
-/// notify/waittill/endon can key on. `level` and `game` are heap structs
-/// and are receivers throughout the corpus (`level notify`, `level
-/// waittill`, `level thread`, `level endon` number in the thousands), so
-/// this cannot be `EntId` alone. Two `u32` newtypes rather than `Option
+/// notify/waittill/endon can key on. `level` is a heap struct and a
+/// receiver throughout the corpus (`level notify`, `level waittill`,
+/// `level thread`, `level endon` number in the thousands), so this cannot
+/// be `EntId` alone. `game` is array-typed (measured,
+/// tests/fixtures/semantics/retail-captures.txt `# probe_game`) and never
+/// a receiver in the corpus, so it never reaches `Target` at all. Two
+/// `u32` newtypes rather than `Option
 /// <Value>`: `Value` carries an `f32` and is neither `Eq` nor `Hash`, and
 /// the scheduler uses `Target` as a map key and as `Thread::endons`'s
 /// element type.
@@ -82,14 +85,14 @@ pub struct Cx<'a> {
     interner: &'a mut Interner,
     heap: &'a mut Heap,
     level: StructId,
-    game: StructId,
+    game: ArrayId,
     notifies: &'a mut Vec<(Target, Atom, Vec<Value>)>,
 }
 
 impl Cx<'_> {
     /// For a string value a builtin returns or stores. Case-preserving; a
     /// name the engine matches case-insensitively wants `intern_folded`.
-    pub fn intern(&mut self, s: &str) -> Atom {
+    pub fn intern_exact(&mut self, s: &str) -> Atom {
         self.interner.intern_exact(s)
     }
 
@@ -149,8 +152,13 @@ impl Cx<'_> {
         Target::Struct(self.level)
     }
 
-    pub fn game(&self) -> Target {
-        Target::Struct(self.game)
+    /// `game`'s array id. Not a `Target`: `game` is array-typed on retail
+    /// (measured, tests/fixtures/semantics/retail-captures.txt `# probe_game`)
+    /// and, unlike `level`, never appears as a notify/waittill/thread/endon
+    /// receiver anywhere in the corpus, so it has no need for `Target`'s
+    /// entity-or-struct shape.
+    pub fn game(&self) -> ArrayId {
+        self.game
     }
 
     pub fn notify(&mut self, target: Target, event: Atom, args: Vec<Value>) {
@@ -198,7 +206,7 @@ pub struct Vm {
     heap: Heap,
     functions: HashMap<FuncRef, Rc<Function>>,
     level: StructId,
-    game: StructId,
+    game: ArrayId,
     /// `.size` on an array or string, interned once here rather than per
     /// `LoadField` — `_load.gsc` reads it inside three loops.
     size_atom: Atom,
@@ -242,7 +250,7 @@ impl Vm {
     pub fn new() -> Self {
         let mut heap = Heap::new();
         let level = heap.new_struct();
-        let game = heap.new_struct();
+        let game = heap.new_array();
         let mut interner = Interner::default();
         let size_atom = interner.intern_folded("size");
         Vm {
@@ -316,11 +324,6 @@ impl Vm {
         Target::Struct(self.level)
     }
 
-    /// `game`, the other heap struct every `Vm` preallocates.
-    pub fn game(&self) -> Target {
-        Target::Struct(self.game)
-    }
-
     /// `level`'s struct id. `level()` returns a `Target` for notify and call
     /// receivers; this is for the host's own heap reads.
     ///
@@ -332,9 +335,14 @@ impl Vm {
         self.level
     }
 
-    /// `game`'s struct id, the `Target::Struct` counterpart to `level_id`,
-    /// with the same caveat.
-    pub fn game_id(&self) -> StructId {
+    /// `game`'s array id, the other heap object every `Vm` preallocates.
+    /// `game` is array-typed on retail (measured,
+    /// tests/fixtures/semantics/retail-captures.txt `# probe_game`) and
+    /// never a notify/call receiver in the corpus, so there is no
+    /// `Target`-returning counterpart the way `level()`/`level_id()` split;
+    /// this is the only accessor. Same caveat as `level_id`: unused outside
+    /// this file's tests until a host needs it from inside a builtin.
+    pub fn game_id(&self) -> ArrayId {
         self.game
     }
 
@@ -391,6 +399,24 @@ impl Vm {
             file: self.interner.intern_folded(path),
             name: self.interner.intern_folded(name),
         }
+    }
+
+    /// Runs `f` with a `Cx` over this `Vm`'s interner and heap, for a host that
+    /// needs them before any thread exists (building an object table at map
+    /// load). A `Cx::notify` here has no scheduler step to drain it, so the
+    /// queue is discarded on return; load-time code must not notify.
+    pub fn with_cx<R>(&mut self, f: impl FnOnce(&mut Cx) -> R) -> R {
+        let mut notifies = Vec::new();
+        let mut cx = Cx {
+            interner: &mut self.interner,
+            heap: &mut self.heap,
+            level: self.level,
+            game: self.game,
+            notifies: &mut notifies,
+        };
+        let out = f(&mut cx);
+        debug_assert!(notifies.is_empty(), "load-time code must not notify");
+        out
     }
 }
 
@@ -530,6 +556,114 @@ pub(crate) mod tests {
     fn reading_an_unset_array_key_is_undefined() {
         let (v, _, _) = run(r#"main() { a = []; return a["nope"]; }"#);
         assert_eq!(v, Value::Undefined);
+    }
+
+    // --- `game` is array-typed on retail, not a struct like `level`
+    // (measured, tests/fixtures/semantics/retail-captures.txt `# probe_game`
+    // and `# probe_game_dotwrite`).
+
+    #[test]
+    fn game_is_bracket_accessed_like_an_array_and_its_size_grows() {
+        let (v, _, _) = run(r#"main() { game["allies"] = "russian"; return game.size; }"#);
+        assert_eq!(v, Value::Int(1));
+        let (v, _, mut vm) =
+            run(r#"main() { game["allies"] = "russian"; return game["allies"]; }"#);
+        let Value::String(a) = v else {
+            panic!("expected a string, got {v:?}")
+        };
+        assert_eq!(vm.interner_mut().resolve(a), "russian");
+    }
+
+    #[test]
+    fn game_dot_field_assignment_is_a_bad_type_error() {
+        let e = run_err("main() { game.foo = 1; }");
+        assert!(matches!(e, ErrorKind::BadType(_)));
+    }
+
+    // --- Auto-vivification: `x[i] = v` where `x` was `Undefined` becomes a
+    // new array, per `tests/fixtures/semantics/retail-captures.txt`
+    // `# probe_autoviv`. `_utility.gsc`'s `add_to_array` ships on every
+    // stock map relying on exactly this for an uninitialised `level` field.
+
+    /// Asserts `v` is the string `"x"`, resolving through `vm`'s interner.
+    fn assert_is_x(v: Value, vm: &mut Vm) {
+        let Value::String(a) = v else {
+            panic!("expected a string, got {v:?}")
+        };
+        assert_eq!(vm.interner_mut().resolve(a), "x");
+    }
+
+    #[test]
+    fn assigning_to_an_index_of_an_undefined_local_auto_vivifies_an_array() {
+        let (v, _, mut vm) = run("main() { a[0] = \"x\"; return a[0]; }");
+        assert_is_x(v, &mut vm);
+        let (v, _, _) = run("main() { a[0] = \"x\"; return a.size; }");
+        assert_eq!(v, Value::Int(1));
+    }
+
+    #[test]
+    fn a_nonzero_first_index_still_vivifies_and_the_array_holds_one_element() {
+        let (v, _, _) = run("main() { a[3] = \"x\"; return a.size; }");
+        assert_eq!(v, Value::Int(1));
+    }
+
+    #[test]
+    fn a_string_key_on_an_undefined_local_also_vivifies() {
+        let (v, _, mut vm) = run(r#"main() { a["k"] = "x"; return a["k"]; }"#);
+        assert_is_x(v, &mut vm);
+    }
+
+    #[test]
+    fn assigning_to_an_index_of_an_undefined_struct_field_auto_vivifies_an_array() {
+        let (v, _, mut vm) = run("main() { level.foo[0] = \"x\"; return level.foo[0]; }");
+        assert_is_x(v, &mut vm);
+    }
+
+    #[test]
+    fn assigning_to_an_index_of_an_undefined_entity_field_auto_vivifies_an_array() {
+        let ast = crate::parse::parse_file("main() { self.foo[0] = \"x\"; return self.foo[0]; }")
+            .unwrap();
+        let mut vm = Vm::new();
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        let v = vm
+            .call_now(&mut host, 0, main, Some(Target::Entity(EntId(1))), vec![])
+            .unwrap();
+        assert_is_x(v, &mut vm);
+    }
+
+    #[test]
+    fn assigning_to_an_index_of_an_undefined_array_element_auto_vivifies_an_array() {
+        let (v, _, mut vm) = run(r#"main() { a = []; a[0][0] = "x"; return a[0][0]; }"#);
+        assert_is_x(v, &mut vm);
+    }
+
+    #[test]
+    fn assigning_to_an_index_of_a_defined_non_array_is_still_a_bad_type_error() {
+        let e = run_err("main() { a = 5; a[0] = \"x\"; }");
+        assert!(matches!(e, ErrorKind::BadType(_)));
+    }
+
+    #[test]
+    fn add_to_arrays_own_shape_from_an_undefined_argument_returns_a_one_element_array() {
+        let (v, _, _) = run(r#"
+            main() {
+                d = add_to_array(undefined, "ent1");
+                return d.size;
+            }
+            add_to_array(array, ent) {
+                if(!isdefined(ent))
+                    return array;
+                if(!isdefined(array))
+                    array[0] = ent;
+                else
+                    array[array.size] = ent;
+                return array;
+            }
+            "#);
+        assert_eq!(v, Value::Int(1));
     }
 
     #[test]
@@ -934,8 +1068,8 @@ pub(crate) mod tests {
 
     /// A host builtin (`getentarray`, `spawnstruct`) needs to mint a
     /// struct/array and populate it from outside the instruction loop, and
-    /// to reach `level`/`game` to notify or read a field on them; all four
-    /// go through `Vm::heap`/`heap_mut`/`level`/`game`, not through
+    /// to reach `level`/`game` to notify or read a field/index on them; all
+    /// four go through `Vm::heap`/`heap_mut`/`level`/`game_id`, not through
     /// crate-internal knowledge of allocation order.
     #[test]
     fn a_host_can_allocate_and_populate_a_struct_and_array_and_reach_level_and_game() {
@@ -959,11 +1093,21 @@ pub(crate) mod tests {
             Target::Entity(_) => unreachable!("level is always a struct"),
         };
         vm.heap_mut().set_field(level_id, mark, Value::Int(1));
-        assert_ne!(vm.level(), vm.game());
+
+        // `game` is array-typed, not a `Target`; reached through `game_id`.
+        let game_id = vm.game_id();
+        vm.heap_mut()
+            .set_index(game_id, crate::heap::ArrayKey::Int(0), Value::Int(2));
+        assert_eq!(
+            vm.heap().get_index(game_id, crate::heap::ArrayKey::Int(0)),
+            Value::Int(2)
+        );
     }
 
     /// A host reads and writes `level` constantly; without this it needs an
-    /// `unreachable!` arm on the `Target` match every time.
+    /// `unreachable!` arm on the `Target` match every time. `game` has no
+    /// `Target` shape to match on at all (array-typed, measured
+    /// `# probe_game`), so `game_id` is reachable directly too.
     #[test]
     fn level_and_game_ids_are_reachable_without_matching_on_target() {
         let mut vm = Vm::new();
@@ -971,7 +1115,11 @@ pub(crate) mod tests {
         let id = vm.level_id();
         vm.heap_mut().set_field(id, f, Value::Int(1));
         assert_eq!(vm.heap().get_field(vm.level_id(), f), Value::Int(1));
-        assert_ne!(vm.level_id(), vm.game_id());
+
+        let k = crate::heap::ArrayKey::Int(0);
+        let game_id = vm.game_id();
+        vm.heap_mut().set_index(game_id, k, Value::Int(9));
+        assert_eq!(vm.heap().get_index(game_id, k), Value::Int(9));
     }
 
     /// The G1 blocker: a builtin needs to allocate and populate a heap array
@@ -989,7 +1137,7 @@ pub(crate) mod tests {
                 _args: &[Value],
             ) -> Result<Value, ErrorKind> {
                 let a = cx.new_array();
-                let v = cx.intern("hello");
+                let v = cx.intern_exact("hello");
                 cx.set_index(a, ArrayKey::Int(0), Value::String(v));
                 cx.set_index(a, ArrayKey::Int(1), Value::Int(7));
                 Ok(Value::Array(a))
@@ -1017,5 +1165,22 @@ pub(crate) mod tests {
         let f = vm.func_ref("test", "main");
         let out = vm.call_now(&mut host, 0, f, None, Vec::new()).unwrap();
         assert_eq!(out, Value::Int(7));
+    }
+
+    /// A host has to build its object table before any thread runs, which
+    /// needs the heap and the interner together. `Cx` is the only type that
+    /// borrows them disjointly, so it has to be reachable outside a builtin.
+    /// Notifies queued here have no `step_frames` to drain them, so this
+    /// discards them; nothing calls `notify` at load time.
+    #[test]
+    fn with_cx_reaches_the_heap_before_any_thread_runs() {
+        let mut vm = Vm::new();
+        let (s, a) = vm.with_cx(|cx| {
+            let s = cx.new_struct();
+            let f = cx.intern_folded("Health");
+            cx.set_field(s, f, Value::Int(100));
+            (s, f)
+        });
+        assert_eq!(vm.heap().get_field(s, a), Value::Int(100));
     }
 }

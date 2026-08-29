@@ -1,10 +1,17 @@
 //! Builtins that only produce output. All three go to the server log, which
 //! is what the probe reads; `iPrintLn` does not reach clients yet.
 
+use crate::game::host::GameHost;
 use vcod_gsc::{Cx, ErrorKind, Value};
 
-pub fn print_line(cx: &Cx, args: &[Value]) -> Result<Value, ErrorKind> {
-    log::info!("script: {}", render(cx, args));
+pub fn print_line(host: &mut GameHost, cx: &Cx, args: &[Value]) -> Result<Value, ErrorKind> {
+    let line = render(cx, args);
+    log::info!("script: {line}");
+    // Retail's log splits a multi-line string into separate log lines; a
+    // capture diff reads it the same way.
+    for l in line.lines() {
+        host.script_log.push(l.to_string());
+    }
     Ok(Value::Undefined)
 }
 
