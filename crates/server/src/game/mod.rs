@@ -7,6 +7,7 @@ pub mod entity;
 pub mod fields;
 pub mod host;
 pub mod script;
+pub mod spawn;
 
 #[cfg(test)]
 pub mod testing {
