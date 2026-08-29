@@ -89,7 +89,7 @@ pub struct Cx<'a> {
 impl Cx<'_> {
     /// For a string value a builtin returns or stores. Case-preserving; a
     /// name the engine matches case-insensitively wants `intern_folded`.
-    pub fn intern(&mut self, s: &str) -> Atom {
+    pub fn intern_exact(&mut self, s: &str) -> Atom {
         self.interner.intern_exact(s)
     }
 
@@ -391,6 +391,24 @@ impl Vm {
             file: self.interner.intern_folded(path),
             name: self.interner.intern_folded(name),
         }
+    }
+
+    /// Runs `f` with a `Cx` over this `Vm`'s interner and heap, for a host that
+    /// needs them before any thread exists (building an object table at map
+    /// load). A `Cx::notify` here has no scheduler step to drain it, so the
+    /// queue is discarded on return; load-time code must not notify.
+    pub fn with_cx<R>(&mut self, f: impl FnOnce(&mut Cx) -> R) -> R {
+        let mut notifies = Vec::new();
+        let mut cx = Cx {
+            interner: &mut self.interner,
+            heap: &mut self.heap,
+            level: self.level,
+            game: self.game,
+            notifies: &mut notifies,
+        };
+        let out = f(&mut cx);
+        debug_assert!(notifies.is_empty(), "load-time code must not notify");
+        out
     }
 }
 
@@ -989,7 +1007,7 @@ pub(crate) mod tests {
                 _args: &[Value],
             ) -> Result<Value, ErrorKind> {
                 let a = cx.new_array();
-                let v = cx.intern("hello");
+                let v = cx.intern_exact("hello");
                 cx.set_index(a, ArrayKey::Int(0), Value::String(v));
                 cx.set_index(a, ArrayKey::Int(1), Value::Int(7));
                 Ok(Value::Array(a))
@@ -1017,5 +1035,22 @@ pub(crate) mod tests {
         let f = vm.func_ref("test", "main");
         let out = vm.call_now(&mut host, 0, f, None, Vec::new()).unwrap();
         assert_eq!(out, Value::Int(7));
+    }
+
+    /// A host has to build its object table before any thread runs, which
+    /// needs the heap and the interner together. `Cx` is the only type that
+    /// borrows them disjointly, so it has to be reachable outside a builtin.
+    /// Notifies queued here have no `step_frames` to drain them, so this
+    /// discards them; nothing calls `notify` at load time.
+    #[test]
+    fn with_cx_reaches_the_heap_before_any_thread_runs() {
+        let mut vm = Vm::new();
+        let (s, a) = vm.with_cx(|cx| {
+            let s = cx.new_struct();
+            let f = cx.intern_folded("Health");
+            cx.set_field(s, f, Value::Int(100));
+            (s, f)
+        });
+        assert_eq!(vm.heap().get_field(s, a), Value::Int(100));
     }
 }
