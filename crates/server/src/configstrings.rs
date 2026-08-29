@@ -183,47 +183,37 @@ pub fn static_configstrings(cfg: &ServerConfig, server_id: u8) -> Vec<String> {
 /// mirroring one engine indexer. Ranges are from
 /// docs/research/clientstate-wire-format.md; the indexer each mirrors is in
 /// docs/design/2026-08-28-gsc-gameplay-design.md.
+///
+/// Only the four blocks a builtin actually allocates into. The other engine
+/// indexers (status icons, head icons, menus, hint strings, localized
+/// strings, shaders) get a variant when a builtin needs one and its start
+/// has been checked against `STATIC`, not before: several of those blocks
+/// begin on a slot `STATIC` already fills, so a speculative range would
+/// have overwritten a configstring the client needs on its first
+/// allocation.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum CsRange {
-    StatusIcon,
-    HeadIcon,
     Tag,
     Model,
     SoundAlias,
     Effect,
-    Menu,
-    HintString,
-    Localized,
-    Shader,
 }
 
 impl CsRange {
-    pub const ALL: [CsRange; 10] = [
-        CsRange::StatusIcon,
-        CsRange::HeadIcon,
+    pub const ALL: [CsRange; 4] = [
         CsRange::Tag,
         CsRange::Model,
         CsRange::SoundAlias,
         CsRange::Effect,
-        CsRange::Menu,
-        CsRange::HintString,
-        CsRange::Localized,
-        CsRange::Shader,
     ];
 
     /// Inclusive.
     pub fn bounds(self) -> (usize, usize) {
         match self {
-            CsRange::StatusIcon => (22, 27),
-            CsRange::HeadIcon => (30, 42),
             CsRange::Tag => (109, 139),
             CsRange::Model => (269, 523),
             CsRange::SoundAlias => (525, 779),
             CsRange::Effect => (781, 843),
-            CsRange::Menu => (1181, 1210),
-            CsRange::HintString => (1212, 1213),
-            CsRange::Localized => (1245, 1499),
-            CsRange::Shader => (1501, 1627),
         }
     }
 }
@@ -232,48 +222,39 @@ impl CsRange {
 /// order array: `next_mut`'s match is exhaustive, so a range added to the enum
 /// without a matching field here is a compile error instead of a silent
 /// misindex into the wrong allocator.
-#[derive(Default)]
+///
+/// `Default` is hand-written rather than derived: derived, it would give
+/// all-zero cursors and the first allocation would land in configstring 0,
+/// the serverinfo slot.
 pub struct Allocators {
-    status_icon: usize,
-    head_icon: usize,
     tag: usize,
     model: usize,
     sound_alias: usize,
     effect: usize,
-    menu: usize,
-    hint_string: usize,
-    localized: usize,
-    shader: usize,
+}
+
+impl Default for Allocators {
+    fn default() -> Self {
+        Allocators::new()
+    }
 }
 
 impl Allocators {
     pub fn new() -> Self {
         Allocators {
-            status_icon: CsRange::StatusIcon.bounds().0,
-            head_icon: CsRange::HeadIcon.bounds().0,
             tag: CsRange::Tag.bounds().0,
             model: CsRange::Model.bounds().0,
             sound_alias: CsRange::SoundAlias.bounds().0,
             effect: CsRange::Effect.bounds().0,
-            menu: CsRange::Menu.bounds().0,
-            hint_string: CsRange::HintString.bounds().0,
-            localized: CsRange::Localized.bounds().0,
-            shader: CsRange::Shader.bounds().0,
         }
     }
 
     fn next_mut(&mut self, range: CsRange) -> &mut usize {
         match range {
-            CsRange::StatusIcon => &mut self.status_icon,
-            CsRange::HeadIcon => &mut self.head_icon,
             CsRange::Tag => &mut self.tag,
             CsRange::Model => &mut self.model,
             CsRange::SoundAlias => &mut self.sound_alias,
             CsRange::Effect => &mut self.effect,
-            CsRange::Menu => &mut self.menu,
-            CsRange::HintString => &mut self.hint_string,
-            CsRange::Localized => &mut self.localized,
-            CsRange::Shader => &mut self.shader,
         }
     }
 
@@ -321,9 +302,12 @@ mod tests {
         );
     }
 
-    /// Ranges do not overlap and each starts where the research doc says.
+    /// Ranges do not overlap, each starts where the research doc says, and
+    /// none of them covers a slot the static table already fills: the first
+    /// allocation into such a range would overwrite a configstring the
+    /// client needs, silently.
     #[test]
-    fn the_ranges_are_the_documented_ones() {
+    fn the_ranges_are_the_documented_ones_and_clear_of_the_static_table() {
         assert_eq!(CsRange::Model.bounds(), (269, 523));
         assert_eq!(CsRange::SoundAlias.bounds(), (525, 779));
         assert_eq!(CsRange::Effect.bounds(), (781, 843));
@@ -337,6 +321,14 @@ mod tests {
                 "{r:?} overlaps a range already declared"
             );
             seen.push((lo, hi));
+            // 0, 1, 179, 243 and 1501 are set by `static_configstrings`
+            // outside the `STATIC` list.
+            for i in STATIC.iter().map(|&(i, _)| i).chain([0, 1, 179, 243, 1501]) {
+                assert!(
+                    i < lo || i > hi,
+                    "{r:?} covers configstring {i}, which the static table sets"
+                );
+            }
         }
     }
 
