@@ -25,27 +25,19 @@ use vcod_gsc::{Atom, Cx, EntId, ErrorKind, StructId, Value};
 
 /// One script-visible object. `engine` is indexed by the dense slot
 /// `fields::route_entity` returns, so two aliased names hit one cell.
+/// Liveness is the `Option` in `ObjectTable::ents`, not a flag on the entity:
+/// retail's `inuse` byte and a `None` slot would be two representations of
+/// one fact, and they disagree the moment anything is freed.
 pub struct GEntity {
-    pub inuse: bool,
     pub engine: Vec<Value>,
     /// Script-defined fields, including every radiant key. There is exactly
     /// one key-value store per object and it is the VM's.
     pub script: StructId,
-    /// Stage 4 attaches a client here; until then a client-routed field is
-    /// the same error retail raises for a null `ent->client`.
-    pub client: Option<usize>,
     pub solid: bool,
     pub hidden: bool,
     /// `(model, tag)` pairs from `attach`, in call order; `getAttachSize`
     /// and friends index into this.
     pub attachments: Vec<(Atom, Atom)>,
-    /// Set by `moveGravity`/`rotateVelocity`; stage 5 integrates it into the
-    /// entity's motion once entities go on the wire.
-    pub velocity: [f32; 3],
-    /// The duration argument both mover verbs take alongside a velocity, in
-    /// milliseconds. Stored for the same reason `velocity` is: stage 5's
-    /// integrator needs it and nothing before then reads it back.
-    pub move_time: f32,
 }
 
 pub struct ObjectTable {
@@ -84,15 +76,11 @@ impl ObjectTable {
         self.num_entities += 1;
         let script = cx.new_struct();
         self.ents[id.0 as usize] = Some(GEntity {
-            inuse: true,
             engine: vec![Value::Undefined; engine_slot_count()],
             script,
-            client: None,
             solid: true,
             hidden: false,
             attachments: Vec::new(),
-            velocity: [0.0, 0.0, 0.0],
-            move_time: 0.0,
         });
         Ok(id)
     }
