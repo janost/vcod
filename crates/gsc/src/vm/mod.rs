@@ -17,10 +17,13 @@ mod interp;
 pub mod sched;
 
 /// `self`/a call's receiver, once resolved to something field access and
-/// notify/waittill/endon can key on. `level` and `game` are heap structs
-/// and are receivers throughout the corpus (`level notify`, `level
-/// waittill`, `level thread`, `level endon` number in the thousands), so
-/// this cannot be `EntId` alone. Two `u32` newtypes rather than `Option
+/// notify/waittill/endon can key on. `level` is a heap struct and a
+/// receiver throughout the corpus (`level notify`, `level waittill`,
+/// `level thread`, `level endon` number in the thousands), so this cannot
+/// be `EntId` alone. `game` is array-typed (measured,
+/// tests/fixtures/semantics/retail-captures.txt `# probe_game`) and never
+/// a receiver in the corpus, so it never reaches `Target` at all. Two
+/// `u32` newtypes rather than `Option
 /// <Value>`: `Value` carries an `f32` and is neither `Eq` nor `Hash`, and
 /// the scheduler uses `Target` as a map key and as `Thread::endons`'s
 /// element type.

@@ -2,7 +2,7 @@
 //	to read 1 on retail regardless of how many fields `level` carries (not
 //	the array-style key count `.size` gives an array or the character count
 //	it gives a string), a struct `.size` semantic this task's scope did not
-//	call for fixing -- see semantics_ab.rs's COMPILE_TIME_ON_RETAIL_ONLY
+//	call for fixing -- see semantics_ab.rs's KNOWN_GAPS_OUT_OF_SCOPE
 //	sibling comment and docs/research/cod11-gsc-language.md section 9.
 //	Alone in its own file so this open question does not cost
 //	probe_level.gsc's dot write/read measurement, which already matches.

@@ -239,9 +239,11 @@ fn eval_neg(v: Value) -> Result<Value, ErrorKind> {
 }
 
 /// A call's receiver reads as a `Target` when it is an entity or a heap
-/// struct (`level`, `game` are both, and both are common receivers in the
-/// corpus); `undefined` and any other value leave the callee's `self`
-/// unbound rather than erroring.
+/// struct (`level` is one, and a common receiver in the corpus); `game` is
+/// array-typed, not a struct, so it falls through to `None` here like any
+/// other non-entity, non-struct value -- no corpus script uses `game` as a
+/// receiver, which is what makes that safe. `undefined` and any other
+/// value leave the callee's `self` unbound rather than erroring.
 fn as_target(v: Value) -> Option<Target> {
     match v {
         Value::Entity(e) => Some(Target::Entity(e)),
@@ -563,7 +565,8 @@ impl Vm {
                 Op::LoadGame => push!(Value::Array(self.game)),
                 // No stock MP script reads a bare `anim` back (every use is
                 // inside a `/# #/` developer block, which the lexer drops
-                // whole); `level`/`game` are the only preallocated structs.
+                // whole); `level` is the only preallocated struct (`game`
+                // preallocates too, but as an array, not a struct).
                 Op::LoadAnim => push!(Value::Undefined),
                 Op::NewArray => {
                     let id = self.heap.new_array();

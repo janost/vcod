@@ -38,7 +38,7 @@ way:
   same as a fatal runtime one, or it costs every measurement in the file,
   not just the ones after it (`probe_game_dotwrite.gsc`,
   `probe_level_bracket.gsc`, both skipped in `semantics_ab.rs`'s
-  `COMPILE_TIME_ON_RETAIL_ONLY` since vcod's compiler has no equivalent
+  `KNOWN_GAPS_OUT_OF_SCOPE` since vcod's compiler has no equivalent
   static check to reproduce the empty-capture result).
 
 Probes emit `PROBE at <name>` before an expression that might be fatal, so a

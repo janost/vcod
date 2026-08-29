@@ -238,3 +238,16 @@ fn vcod_matches_retail_on_every_probe() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
+
+/// A skip name that matches no capture section is inert, and an inert skip
+/// silently stops covering the probe it was meant to exempt.
+#[test]
+fn every_skipped_probe_names_a_real_capture_section() {
+    let names: Vec<String> = captures().keys().cloned().collect();
+    for n in NOT_YET_RUNNABLE.iter().chain(KNOWN_GAPS_OUT_OF_SCOPE) {
+        assert!(
+            names.iter().any(|c| c == n),
+            "{n} is skipped but is not a capture section"
+        );
+    }
+}
