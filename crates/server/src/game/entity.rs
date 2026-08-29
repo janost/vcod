@@ -43,6 +43,9 @@ pub struct GEntity {
 pub struct ObjectTable {
     ents: Vec<Option<GEntity>>,
     num_entities: u32,
+    /// `level.firstFreeEnt`/`level.lastFreeEnt` (level+0x10, level+0x14): a
+    /// FIFO of freed slots that `G_Spawn` drains before it bumps the counter.
+    free_list: std::collections::VecDeque<u32>,
 }
 
 impl Default for ObjectTable {
@@ -56,6 +59,7 @@ impl ObjectTable {
         ObjectTable {
             ents: (0..MAX_GENTITIES).map(|_| None).collect(),
             num_entities: FIRST_MAP_ENTITY,
+            free_list: std::collections::VecDeque::new(),
         }
     }
 
@@ -63,17 +67,22 @@ impl ObjectTable {
         self.num_entities
     }
 
-    /// `G_Spawn`: hand out the counter and increment. Retail only starts
-    /// scanning for a freed slot once the counter reaches
-    /// `ENTITYNUM_WORLD`; there we raise instead, because a map that
-    /// allocates 950 entities is a bug we want to see, not a slot to reuse.
-    /// That divergence is documented in the language doc's divergence list.
+    /// `G_Spawn` (0x667e0): pop the head of the free list if it has one,
+    /// otherwise hand out `level.num_entities` and increment. Retail calls
+    /// `G_Error` when the counter reaches `ENTITYNUM_WORLD` with nothing
+    /// free; we raise instead.
     pub fn spawn(&mut self, cx: &mut Cx) -> Result<EntId, ErrorKind> {
-        if self.num_entities >= ENTITYNUM_WORLD {
-            return Err(ErrorKind::BadType("entity table full"));
-        }
-        let id = EntId(self.num_entities);
-        self.num_entities += 1;
+        let id = match self.free_list.pop_front() {
+            Some(n) => EntId(n),
+            None => {
+                if self.num_entities >= ENTITYNUM_WORLD {
+                    return Err(ErrorKind::BadType("entity table full"));
+                }
+                let id = EntId(self.num_entities);
+                self.num_entities += 1;
+                id
+            }
+        };
         let script = cx.new_struct();
         self.ents[id.0 as usize] = Some(GEntity {
             engine: vec![Value::Undefined; engine_slot_count()],
@@ -85,9 +94,15 @@ impl ObjectTable {
         Ok(id)
     }
 
+    /// `G_FreeEntity` (0x66948): clear the slot and put it on the tail of
+    /// the free list, but only for numbers above the reserved range (the
+    /// `index <= 71` skip at 0x66bb1).
     pub fn free(&mut self, id: EntId) {
-        if let Some(slot) = self.ents.get_mut(id.0 as usize) {
-            *slot = None;
+        let Some(slot) = self.ents.get_mut(id.0 as usize) else {
+            return;
+        };
+        if slot.take().is_some() && id.0 >= FIRST_MAP_ENTITY {
+            self.free_list.push_back(id.0);
         }
     }
 
@@ -144,12 +159,13 @@ mod tests {
         });
     }
 
-    /// Freeing a slot below the high-water mark does not renumber anything:
-    /// retail only reuses a freed slot once the counter reaches
-    /// `ENTITYNUM_WORLD`, which no map load approaches, so a freed slot simply
-    /// stops appearing.
+    /// A freed slot leaves the iteration and is handed out again by the next
+    /// spawn, ahead of the counter. Measured on the retail server: after a
+    /// `delete()` had actually taken effect, the next spawn returned the
+    /// deleted entity's number and the one after that continued from the
+    /// high-water mark (docs/research/cod11-gsc-object-model.md section 14).
     #[test]
-    fn a_freed_slot_leaves_the_iteration_and_the_numbering_alone() {
+    fn a_freed_slot_is_handed_out_again_before_the_counter() {
         let mut vm = vcod_gsc::Vm::new();
         vm.with_cx(|cx| {
             let mut t = ObjectTable::new();
@@ -160,7 +176,27 @@ mod tests {
                 t.iter_inuse().map(|(id, _)| id).collect::<Vec<_>>(),
                 vec![b]
             );
+            assert_eq!(t.spawn(cx).unwrap(), a);
             assert_eq!(t.spawn(cx).unwrap(), EntId(74));
+        });
+    }
+
+    /// The free list is a FIFO, matching `G_FreeEntity`'s append-at-tail and
+    /// `G_Spawn`'s pop-from-head, and a slot freed twice is only queued once.
+    #[test]
+    fn the_free_list_is_first_in_first_out() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let mut t = ObjectTable::new();
+            let a = t.spawn(cx).unwrap();
+            let b = t.spawn(cx).unwrap();
+            let c = t.spawn(cx).unwrap();
+            t.free(b);
+            t.free(a);
+            t.free(a);
+            assert_eq!(t.spawn(cx).unwrap(), b);
+            assert_eq!(t.spawn(cx).unwrap(), a);
+            assert_eq!(t.spawn(cx).unwrap(), EntId(c.0 + 1));
         });
     }
 

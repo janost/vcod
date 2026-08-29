@@ -57,13 +57,11 @@ fn retail_probe_ents_lines() -> Vec<String> {
 /// entity numbers are lower (docs/research/cod11-gsc-object-model.md section
 /// 10).
 ///
-/// The order matches retail; the numbers do not, and this test fails on
-/// them. vcod allocates an entity for every block with a classname, where
-/// retail's `SP_misc_model` and `SP_light` free theirs, which on mp_pavlov
-/// is 117 entities and puts the fourth `script_origin` at 415 here against
-/// 298 on retail. The expectation is retail's capture and stays that way:
-/// section 13 of the object-model doc has the measurement, and running the
-/// `spawns` table is what closes it.
+/// The jump from 75 to 298 is what makes this a gate rather than a
+/// formality: mp_pavlov's 117 `light` and `misc_model` blocks sit between
+/// those two `script_origin`s and consume no entity number, because their
+/// `SP_` function frees the entity and `G_Spawn` hands the slot back out
+/// (docs/research/cod11-gsc-object-model.md sections 13 and 14).
 #[test]
 fn probe_ents_matches_retail() {
     let Some(fs) = vcod_common::testing::game_fs() else {

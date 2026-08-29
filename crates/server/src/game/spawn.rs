@@ -10,11 +10,8 @@ use vcod_gsc::{Cx, EntId, ErrorKind, Host, Value};
 /// takes `G_CallSpawn`'s fourth case and becomes a live, script-visible
 /// entity, which is what keeps the gametype spawn markers alive.
 ///
-/// Nothing consults this yet: `spawn_entities_from_string` takes the fourth
-/// case for every classname. That is a measured divergence, not a harmless
-/// one, because an `SP_` function may free the entity it was handed and the
-/// numbering then shifts. See docs/research/cod11-gsc-object-model.md
-/// section 13.
+/// The only part of an `SP_` function stage 2 reproduces is whether it frees
+/// the entity it was handed; see `SPAWN_FREES`.
 pub const SPAWN_CLASSNAMES: &[&str] = &[
     "info_null",
     "info_notnull",
@@ -45,13 +42,23 @@ pub const SPAWN_CLASSNAMES: &[&str] = &[
     "script_origin",
 ];
 
-/// One object per entity block with a classname, in lump order. Retail
-/// additionally runs the block's `SP_` function when its classname is in
-/// `SPAWN_CLASSNAMES`, and two of those functions (`SP_misc_model`,
-/// `SP_light`) free the entity again, so retail ends up with fewer entities
-/// and different numbers than this does. Measured on mp_pavlov;
-/// docs/research/cod11-gsc-object-model.md section 13 has the numbers, and
-/// `crates/server/tests/semantics_ents.rs` fails on them today.
+/// The five `spawns` classnames whose `SP_` function is nothing but
+/// `G_FreeEntity(self)`, so the block leaves no live entity behind. Three
+/// distinct functions cover them: `SP_info_null` 0x531cc (`info_null` and
+/// `func_group`), `SP_light` 0x53204, `SP_misc_model` 0x53224 and
+/// `SP_corona` 0x53274, each a single unconditional call.
+/// docs/research/cod11-gsc-object-model.md section 13 has the evidence and
+/// the live per-classname counts.
+pub const SPAWN_FREES: &[&str] = &["info_null", "func_group", "light", "misc_model", "corona"];
+
+/// One object per entity block with a classname, in lump order, then
+/// `G_CallSpawn`'s third case: a classname whose `SP_` function frees is
+/// spawned, keyed and freed again, and `G_Spawn` hands the slot straight
+/// back out. The net effect is that such a block consumes no entity number,
+/// which is what makes vcod's numbers retail's numbers.
+///
+/// The classname match is `strcmp` in retail, so it is case-sensitive here
+/// too, unlike the key names `parse_field` folds.
 pub fn spawn_entities_from_string(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -65,14 +72,17 @@ pub fn spawn_entities_from_string(
         return Err(ErrorKind::BadType("first entity block is not worldspawn"));
     }
     for block in blocks {
-        if !block.contains_key("classname") {
+        let Some(classname) = block.get("classname").cloned() else {
             // `G_CallSpawn` warns and creates nothing.
             log::warn!("gsc: entity block with no classname, dropped");
             continue;
-        }
+        };
         let id = host.ents.spawn(cx)?;
         for (k, v) in &block {
             parse_field(host, cx, id, k, v);
+        }
+        if SPAWN_FREES.contains(&classname.as_str()) {
+            host.ents.free(id);
         }
     }
     Ok(())
@@ -247,6 +257,47 @@ mod tests {
         assert!(super::SPAWN_CLASSNAMES.contains(&"trigger_multiple"));
         assert!(!super::SPAWN_CLASSNAMES.contains(&"mp_deathmatch_spawn"));
         assert!(!super::SPAWN_CLASSNAMES.contains(&"worldspawn"));
+    }
+
+    /// A block whose `SP_` function frees consumes no entity number: the
+    /// slot goes back on the free list and the next block takes it. Measured
+    /// on the retail server, where `light` and `misc_model` report zero live
+    /// entities on every stock map (docs/research/cod11-gsc-object-model.md
+    /// section 13).
+    #[test]
+    fn a_freeing_classname_consumes_no_entity_number() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            super::spawn_entities_from_string(
+                &mut host,
+                cx,
+                "{\n\"classname\" \"worldspawn\"\n}\n\
+                 {\n\"classname\" \"script_origin\"\n\"targetname\" \"a\"\n}\n\
+                 {\n\"classname\" \"misc_model\"\n}\n\
+                 {\n\"classname\" \"light\"\n}\n\
+                 {\n\"classname\" \"corona\"\n}\n\
+                 {\n\"classname\" \"info_null\"\n}\n\
+                 {\n\"classname\" \"func_group\"\n}\n\
+                 {\n\"classname\" \"script_origin\"\n\"targetname\" \"b\"\n}\n",
+            )
+            .unwrap();
+            let ids: Vec<_> = host.ents.iter_inuse().map(|(i, _)| i).collect();
+            assert_eq!(ids, vec![EntId(72), EntId(73)]);
+        });
+    }
+
+    /// Every classname that frees is also in the `spawns` table, since the
+    /// free is the table's `SP_` function running.
+    #[test]
+    fn the_freeing_classnames_are_a_subset_of_the_spawn_table() {
+        assert_eq!(super::SPAWN_FREES.len(), 5);
+        for cn in super::SPAWN_FREES {
+            assert!(super::SPAWN_CLASSNAMES.contains(cn), "{cn} not in spawns");
+        }
+        // `misc_teleporter_dest`'s SP_ function is empty, not a free, and
+        // `info_notnull` keeps its entity: both measured live.
+        assert!(!super::SPAWN_FREES.contains(&"misc_teleporter_dest"));
+        assert!(!super::SPAWN_FREES.contains(&"info_notnull"));
     }
 
     /// mp_pavlov's lump has 345 blocks, four of them `script_origin` at lump

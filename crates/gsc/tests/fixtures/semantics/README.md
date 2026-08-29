@@ -57,8 +57,8 @@ order. `mp_pavlov`'s four `script_origin` blocks sit at lump indices 2, 3, 4
 and 344 as auto5, auto4, auto3, auto6, exactly what retail returned
 (`docs/research/cod11-gsc-object-model.md` section 10).
 
-The numbers are not settled, and `probe_ents_matches_retail` fails on them
-today. Retail numbers those four 73, 74, 75, 298; vcod numbers them 73, 74,
-75, 415, because vcod allocates an entity for every block with a classname
-and retail's `SP_misc_model` and `SP_light` allocate none. Section 13 of
-`docs/research/cod11-gsc-object-model.md` has the measurement.
+The numbers are settled too: retail numbers those four 73, 74, 75 and 298,
+and vcod matches. The 298 is the point: five `spawns` classnames free the
+entity their `SP_` function was handed, `G_Spawn` reuses the slot at once,
+and their blocks consume no entity number. Sections 13 and 14 of
+`docs/research/cod11-gsc-object-model.md` have the measurement.
