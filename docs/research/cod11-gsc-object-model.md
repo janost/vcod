@@ -364,7 +364,54 @@ The movers are the scriptent table, ordinary code pointers in `.data`:
 in `.data`, which is probably why the previous pass mistook the region for a
 `.rodata` string list.
 
-## 10. What stage 2 takes from this
+## 10. `getEntArray` returns ascending entity number, VERIFIED
+
+The stage 2 handoff recorded this as unproven, because the capture only shows
+targetnames and "ascending entity number" was a guess at the mechanism. It is
+now measured from both ends.
+
+`Scr_GetEntArray` (0x61980) walks `esi` from 0 to `level.num_entities`
+(`level`+0xc), skips a slot whose `inuse` byte at +0x160 is clear, and appends
+matches in that order. The keyed branch first checks the entity field table
+type at 0x78e70 is 3, the interned-string form, which is why the keys the
+corpus actually passes (`targetname`, `classname`, `target`, `teamname`, and
+script-defined string keys) are all type 3 or script-defined and no numeric
+field is ever used as a key.
+
+The capture confirms it. `probe_ents` ran on `mp_pavlov` and retail returned
+the four map `script_origin` entities as auto5, auto4, auto3, auto6, which
+looks arbitrary until you read the BSP. `mp_pavlov.bsp`'s entity lump holds
+345 blocks, and its four `script_origin` blocks sit at indices 2, 3, 4 and
+344, with exactly those targetnames in exactly that order. Entity lump order
+gives entity number, entity number gives `getEntArray` order.
+
+The corpus passes six distinct keys: `targetname` (1183 call sites across both
+builtins), `classname` (131), `script_noteworthy` (31), `target` (5), `export`
+(2) and `team` (1). Two of those are `radiant/keys.txt` entries and one
+(`team`) is neither an engine field nor a radiant key, so the lookup has to go
+through the same three-way field resolution as a plain `.name` read rather
+than a special case for the engine table.
+
+## 11. Entity numbering, VERIFIED
+
+`G_InitGame` (0x4fb14) sets `level.num_entities = 72` at 0x4fdc6. `G_Spawn`
+(0x667e0) hands out `level.num_entities` and increments, falling back to a
+scan for a freed slot only once the counter reaches 0x3fe, which is
+`ENTITYNUM_WORLD` (1022). `Scr_GetEntArray` reads the same `level+0xc`.
+
+So the first entity the map load creates is number 72, whatever
+`sv_maxclients` is. That corrects the gameplay design's "allocating upward
+from `sv_maxclients`". `MAX_CLIENTS` is 64 on CoD 1.1, and slots 64 to 71 are
+reserved and never handed out by `G_Spawn`; I have not established what
+reserves them.
+
+`G_SpawnEntitiesFromString` (0x622dc) parses the first entity block, calls
+`G_Error` if its classname is not `worldspawn`, runs `SP_worldspawn` on it,
+and only then loops `G_ParseSpawnVars` plus `G_CallSpawn` over the rest. The
+world is therefore not allocated through `G_Spawn` and does not consume a
+number in the 72-and-up range.
+
+## 12. What stage 2 takes from this
 
 - The object handle table needs four kinds, and the field id is the
   discriminator on two of them: a plain index for entity, `| 0xC000` for
@@ -372,9 +419,10 @@ in `.data`, which is probably why the previous pass mistook the region for a
 - Field lookup by name is case-insensitive, both at script level and for
   Radiant keys during the map load. Field ids are dense small integers and can
   be a `u16` in the host.
-- `getentarray` sees case-four entities. The BSP entity lump must produce a
-  `gentity_t` for every block with a classname, whether or not the classname
-  is in `spawns`.
+- `getentarray` sees case-four entities, in ascending entity number, which is
+  BSP entity lump order. The lump must produce a `gentity_t` for every block
+  with a classname, whether or not the classname is in `spawns`, numbered
+  from 72 up.
 - A Radiant key that is neither an engine field nor in `radiant/keys.txt` is
   dropped at load. Stage 2 should drop it too, not stash it, or scripts will
   see fields retail does not have.

@@ -30,7 +30,12 @@ Probes emit `PROBE at <name>` before an expression that might be fatal, so a
 run that dies names what killed it.
 
 `probe_ents` measures `getentarray`'s return order and needs real map
-entities, so it is captured but not run through `vcod-gsc`: there is no
-entity object model yet. Its recorded order — the map's own entities first,
-then spawned ones in spawn order — is what that implementation has to
-reproduce.
+entities, so it does not run here. It runs in `crates/server`, against the
+object model and a real `mp_pavlov` load, and diffs this same file.
+`every_capture_section_has_a_runner` keeps the split honest: a capture
+section belongs to exactly one of the two runners.
+
+Its order is settled: ascending entity number, which is BSP entity lump
+order. `mp_pavlov`'s four `script_origin` blocks sit at lump indices 2, 3, 4
+and 344 as auto5, auto4, auto3, auto6, exactly what retail returned
+(`docs/research/cod11-gsc-object-model.md` section 10).
