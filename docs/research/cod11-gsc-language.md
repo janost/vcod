@@ -581,7 +581,7 @@ Not fixed here; see the "Still unestablished" entry below.
 
 ## 10. Divergences kept as documentation, not code
 
-Eleven places where the implementation made a deliberate call the corpus
+Twelve places where the implementation made a deliberate call the corpus
 cannot settle, recorded here rather than silently baked into behaviour that
 looks authoritative:
 
@@ -716,3 +716,20 @@ looks authoritative:
   frees on the spot, so vcod recycles the number a tenth of a second early
   and drops the entity out of `getEntArray` a tenth of a second early.
   Closing it needs the entity think scheduler, which stage 2 does not have.
+- **A script entity handle carries no generation, so a stale one silently
+  aliases whatever spawns into the freed slot next.** Retail bumps a
+  per-entity generation counter at `gentity+0x300` on every free and checks
+  a script handle against it, which is what a stale handle is caught by
+  (section 14 of docs/research/cod11-gsc-object-model.md, `G_FreeEntity`
+  0x66948). `Value::Entity(EntId)` (`crates/gsc/src/value.rs:7`) is a bare
+  entity number with no such tag, and now that `ObjectTable`'s free list
+  (`crates/server/src/game/entity.rs`) hands a freed slot straight back out
+  to the next spawn, a script holding a handle to the deleted entity reads
+  the new occupant's fields under the old handle instead of hitting an
+  error. Before slot reuse landed, the same stale handle pointed at a dead
+  slot and failed cleanly instead; this branch made an existing gap
+  reachable rather than opening a new one. Not reachable by any script in
+  the corpus today, since nothing in it holds an entity handle across a
+  delete and a respawn, but a real hazard for a third-party script that
+  does. Closing it needs a generation counter stored beside the slot and
+  checked on every handle dereference, not a fix to the free list itself.

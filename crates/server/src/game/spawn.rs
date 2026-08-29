@@ -43,7 +43,7 @@ pub const SPAWN_CLASSNAMES: &[&str] = &[
 ];
 
 /// The five `spawns` classnames whose `SP_` function is nothing but
-/// `G_FreeEntity(self)`, so the block leaves no live entity behind. Three
+/// `G_FreeEntity(self)`, so the block leaves no live entity behind. Four
 /// distinct functions cover them: `SP_info_null` 0x531cc (`info_null` and
 /// `func_group`), `SP_light` 0x53204, `SP_misc_model` 0x53224 and
 /// `SP_corona` 0x53274, each a single unconditional call.
