@@ -22,8 +22,19 @@ pub const BUILTINS: &[&str] = &[
     "logprint",
 ];
 
+/// Every builtin family's `NAMES`, walked in the same order `builtin`
+/// dispatches them, so the pre-scan and dispatch cannot drift apart by
+/// construction.
 pub fn is_builtin(name: &str) -> bool {
-    builtins::entity::lookup(name).is_some() || BUILTINS.contains(&name)
+    builtins::entity::lookup(name).is_some()
+        || builtins::math::lookup(name).is_some()
+        || builtins::fx::lookup(name).is_some()
+        || builtins::sound::lookup(name).is_some()
+        || builtins::attach::lookup(name).is_some()
+        || builtins::combat::lookup(name).is_some()
+        || builtins::mover::lookup(name).is_some()
+        || builtins::cvar::lookup(name).is_some()
+        || BUILTINS.contains(&name)
 }
 
 pub struct GameHost {
@@ -36,6 +47,14 @@ pub struct GameHost {
     /// Runtime configstring slot allocators, one per engine indexer
     /// (`G_ModelIndex` and its siblings).
     pub allocators: Allocators,
+    /// `getCvar`'s table. Empty until something populates it; a lookup that
+    /// misses answers with the empty string, same as retail's
+    /// `Cvar_VariableString` on an unregistered cvar.
+    pub cvars: std::collections::HashMap<String, String>,
+    /// The map's collision, once one exists. `None` in every unit test and
+    /// on a fresh `GameHost`; `bulletTrace` traces against it when present
+    /// and reports a clean miss when it is not. Stage 10 is what sets it.
+    pub world: Option<std::rc::Rc<crate::world::World>>,
 }
 
 impl GameHost {
@@ -45,6 +64,8 @@ impl GameHost {
             ents: ObjectTable::new(),
             damage: Vec::new(),
             allocators: Allocators::new(),
+            cvars: std::collections::HashMap::new(),
+            world: None,
         }
     }
 }
@@ -63,6 +84,27 @@ impl Host for GameHost {
         // which a borrow still held from `resolve_folded` would block.
         let folded = cx.resolve_folded(name).to_string();
         if let Some(f) = builtins::entity::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        if let Some(f) = builtins::math::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        if let Some(f) = builtins::fx::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        if let Some(f) = builtins::sound::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        if let Some(f) = builtins::attach::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        if let Some(f) = builtins::combat::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        if let Some(f) = builtins::mover::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        if let Some(f) = builtins::cvar::lookup(&folded) {
             return f(self, cx, recv, args);
         }
         match folded.as_str() {
@@ -170,12 +212,25 @@ mod tests {
         assert_eq!(host.configstrings[3], "n\\ambient_mp_pavlov\\t\\0");
     }
 
-    /// `BUILTINS` drives the load-time pre-scan while the match below drives
-    /// dispatch; a name dropped from one and not the other would make the
+    /// `BUILTINS` plus every family's `NAMES` drives the load-time pre-scan
+    /// (`is_builtin`) while `builtin`'s dispatch chain answers the same
+    /// names; a name dropped from one and not the other would make the
     /// pre-scan lie. Argument errors are fine here, `MissingBuiltin` is not.
     #[test]
     fn every_listed_builtin_dispatches() {
-        for name in BUILTINS {
+        let names: Vec<&str> = BUILTINS
+            .iter()
+            .copied()
+            .chain(builtins::entity::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::math::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::fx::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::sound::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::attach::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::combat::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::mover::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::cvar::NAMES.iter().map(|(n, _)| *n))
+            .collect();
+        for name in names {
             let mut vm = vcod_gsc::Vm::new();
             let mut host = GameHost::new(vec![String::new(); 2048]);
             let src = format!("main() {{ {name}(); }}");
@@ -192,6 +247,56 @@ mod tests {
                 "{name} is listed but does not dispatch"
             );
         }
+    }
+
+    /// The 37 builtins `mp_pavlov`'s closure calls, from the server's own
+    /// load-time census. The stage gate is a clean pre-scan on the map
+    /// path, so a name dropped here is a regression the map load would hit
+    /// at runtime.
+    #[test]
+    fn every_builtin_mp_pavlovs_closure_calls_is_answered() {
+        const CENSUS: &[&str] = &[
+            "anglestoforward",
+            "attach",
+            "bullettrace",
+            "delete",
+            "detachall",
+            "distance",
+            "getattachmodelname",
+            "getattachsize",
+            "getattachtagname",
+            "getcvar",
+            "getent",
+            "getentarray",
+            "getorigin",
+            "getviewmodel",
+            "hide",
+            "isdefined",
+            "isplayer",
+            "istouching",
+            "length",
+            "loadfx",
+            "movegravity",
+            "notsolid",
+            "playfx",
+            "playfxontag",
+            "playloopsound",
+            "playsound",
+            "radiusdamage",
+            "randomfloat",
+            "rotatevelocity",
+            "setmodel",
+            "setviewmodel",
+            "show",
+            "solid",
+            "spawn",
+            "spawnstruct",
+            "vectornormalize",
+            "vectortoangles",
+        ];
+        assert_eq!(CENSUS.len(), 37);
+        let missing: Vec<_> = CENSUS.iter().filter(|n| !is_builtin(n)).collect();
+        assert!(missing.is_empty(), "not answered: {missing:?}");
     }
 
     /// An engine field round-trips through its typed slot; a script-defined

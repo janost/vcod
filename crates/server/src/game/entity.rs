@@ -21,7 +21,7 @@ pub const FIRST_MAP_ENTITY: u32 = 72;
 pub const FIRST_HUD_ELEM: u32 = MAX_GENTITIES;
 
 use crate::game::fields::engine_slot_count;
-use vcod_gsc::{Cx, EntId, ErrorKind, StructId, Value};
+use vcod_gsc::{Atom, Cx, EntId, ErrorKind, StructId, Value};
 
 /// One script-visible object. `engine` is indexed by the dense slot
 /// `fields::route_entity` returns, so two aliased names hit one cell.
@@ -36,6 +36,12 @@ pub struct GEntity {
     pub client: Option<usize>,
     pub solid: bool,
     pub hidden: bool,
+    /// `(model, tag)` pairs from `attach`, in call order; `getAttachSize`
+    /// and friends index into this.
+    pub attachments: Vec<(Atom, Atom)>,
+    /// Set by `moveGravity`/`rotateVelocity`; stage 5 integrates it into the
+    /// entity's motion once entities go on the wire.
+    pub velocity: [f32; 3],
 }
 
 pub struct ObjectTable {
@@ -80,6 +86,8 @@ impl ObjectTable {
             client: None,
             solid: true,
             hidden: false,
+            attachments: Vec::new(),
+            velocity: [0.0, 0.0, 0.0],
         });
         Ok(id)
     }

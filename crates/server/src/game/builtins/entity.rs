@@ -45,8 +45,10 @@ fn values_match(cx: &Cx, a: Value, b: Value) -> bool {
 }
 
 /// The receiver a call like `ent hide()` carries; anything else is a type
-/// error, the same shape a field access on a non-entity would raise.
-fn entity_receiver(recv: Option<Target>) -> Result<EntId, ErrorKind> {
+/// error, the same shape a field access on a non-entity would raise. Shared
+/// with the other families whose builtins are entity methods, so there is
+/// one definition of what a valid receiver is.
+pub(crate) fn entity_receiver(recv: Option<Target>) -> Result<EntId, ErrorKind> {
     match recv {
         Some(Target::Entity(id)) => Ok(id),
         _ => Err(ErrorKind::BadType("needs an entity receiver")),
