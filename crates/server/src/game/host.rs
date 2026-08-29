@@ -55,7 +55,16 @@ pub struct GameHost {
     /// on a fresh `GameHost`; `bulletTrace` traces against it when present
     /// and reports a clean miss when it is not. Stage 10 is what sets it.
     pub world: Option<std::rc::Rc<crate::world::World>>,
+    /// `randomFloat`'s generator state: xorshift64*, so a draw is a real
+    /// uniform value and reproducible from a seed. Retail seeds from the
+    /// level clock; nothing here needs to match its sequence, only to be a
+    /// real draw.
+    pub rng: u64,
 }
+
+/// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
+/// state is the one xorshift degenerates on.
+const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
 impl GameHost {
     pub fn new(configstrings: Vec<String>) -> GameHost {
@@ -66,7 +75,19 @@ impl GameHost {
             allocators: Allocators::new(),
             cvars: std::collections::HashMap::new(),
             world: None,
+            rng: RNG_SEED,
         }
+    }
+
+    /// A uniform draw in `[0, 1)`. xorshift64*, same shape as `Server`'s own
+    /// `rand()` (`server.rs`) minus its glibc `rand()`-compatible masking,
+    /// which `randomFloat` has no reason to match.
+    pub fn rand_unit(&mut self) -> f32 {
+        self.rng ^= self.rng >> 12;
+        self.rng ^= self.rng << 25;
+        self.rng ^= self.rng >> 27;
+        let draw = self.rng.wrapping_mul(0x2545_f491_4f6c_dd1d);
+        draw as f32 / u64::MAX as f32
     }
 }
 

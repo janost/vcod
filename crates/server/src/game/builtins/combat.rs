@@ -4,7 +4,7 @@
 use crate::game::damage::DamageEvent;
 use crate::game::host::GameHost;
 use glam::Vec3;
-use vcod_gsc::{Cx, ErrorKind, Target, Value};
+use vcod_gsc::{ArrayKey, Cx, ErrorKind, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
 
@@ -52,57 +52,75 @@ pub fn radius_damage(
     Ok(Value::Undefined)
 }
 
-/// `bulletTrace(start, end, ...)`: a real trace against `host.world`'s
-/// collision when the server has one. With no world (every unit test, and
-/// any server before stage 10 populates `GameHost::world`) it reports a
-/// clean miss: fraction 1, position the end point, rather than pretending a
-/// hit was computed.
+/// `bulletTrace(start, end, hitCharacters, ignoreEnt)`, the corpus's own
+/// arity (`bulletTrace(loc, (loc-(0,0,5000)), false, undefined)`,
+/// `bullettrace(nGunPos, nPlayerPos, 1, eMG42)`). `hitCharacters` and
+/// `ignoreEnt` are accepted for the right shape but not acted on:
+/// character hits need entity bounds (stage 5) and excluding `ignoreEnt`
+/// needs the trace to carry entity identity, neither of which exists yet.
+///
+/// The result is a `Value::Array`, not a struct: `LoadIndex`/`StoreIndex`
+/// (`vcod_gsc::interp`) are what the corpus indexes a bullet trace result
+/// with (`["position"]` 31 call sites, `["fraction"]` 13, `["entity"]` 8,
+/// `["surfacetype"]` 3 in the extracted corpus), and array keys intern
+/// exactly, not folded, matching how any other string index does.
 pub fn bullet_trace(
     host: &mut GameHost,
     cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let (Some(Value::Vector(from)), Some(Value::Vector(to))) = (args.first(), args.get(1)) else {
-        return Err(ErrorKind::BadType("bulletTrace takes a start and an end"));
+    let (
+        Some(Value::Vector(from)),
+        Some(Value::Vector(to)),
+        Some(_hit_characters),
+        Some(_ignore_ent),
+    ) = (args.first(), args.get(1), args.get(2), args.get(3))
+    else {
+        return Err(ErrorKind::BadType(
+            "bulletTrace takes a start, an end, hitCharacters and ignoreEnt",
+        ));
     };
     let (from, to) = (*from, *to);
 
-    let s = cx.new_struct();
-    let fraction = cx.intern_folded("fraction");
-    let position = cx.intern_folded("position");
-    let normal = cx.intern_folded("normal");
+    let arr = cx.new_array();
+    let position = ArrayKey::Str(cx.intern_exact("position"));
+    let fraction = ArrayKey::Str(cx.intern_exact("fraction"));
+    let entity = ArrayKey::Str(cx.intern_exact("entity"));
+    let surfacetype = ArrayKey::Str(cx.intern_exact("surfacetype"));
 
     match &host.world {
         Some(world) => {
             let start = Vec3::new(from[0], from[1], from[2]);
             let end = Vec3::new(to[0], to[1], to[2]);
             let t = world.collision.shot_trace(start, end);
-            cx.set_field(s, fraction, Value::Float(t.fraction));
-            cx.set_field(
-                s,
+            cx.set_index(arr, fraction, Value::Float(t.fraction));
+            cx.set_index(
+                arr,
                 position,
                 Value::Vector([t.endpos.x, t.endpos.y, t.endpos.z]),
             );
-            cx.set_field(
-                s,
-                normal,
-                Value::Vector([t.normal.x, t.normal.y, t.normal.z]),
-            );
         }
         None => {
-            cx.set_field(s, fraction, Value::Float(1.0));
-            cx.set_field(s, position, Value::Vector(to));
-            cx.set_field(s, normal, Value::Vector([0.0, 0.0, 0.0]));
+            cx.set_index(arr, fraction, Value::Float(1.0));
+            cx.set_index(arr, position, Value::Vector(to));
         }
     }
-    Ok(Value::Struct(s))
+    // `entity` needs entity bounds to resolve which gentity the trace
+    // stopped on (stage 5); `surfacetype` needs the surface-name table
+    // retail derives from `surface_flags`, which nothing here maps yet.
+    // Both stay undefined rather than guessing a value.
+    cx.set_index(arr, entity, Value::Undefined);
+    cx.set_index(arr, surfacetype, Value::Undefined);
+    Ok(Value::Array(arr))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
+    use crate::world::World;
+    use std::rc::Rc;
 
     /// A builtin must never reenter the VM, so `radiusDamage` queues an
     /// event the server drains after `run_frame` rather than calling
@@ -130,22 +148,47 @@ mod tests {
     /// `bulletTrace` runs a real trace against the collision world when the
     /// server has one, and reports a clean miss when it does not: there is
     /// no map in a unit test, so `fraction` is 1 and `position` is the end
-    /// point.
+    /// point. The result is indexed as an array, matching how the corpus
+    /// reads it back.
     #[test]
     fn bullettrace_with_no_world_reports_a_clean_miss() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
             let from = Value::Vector([0.0, 0.0, 0.0]);
             let to = Value::Vector([100.0, 0.0, 0.0]);
-            let Value::Struct(s) =
-                bullet_trace(&mut host, cx, None, &[from, to, Value::Int(0)]).unwrap()
-            else {
+            let args = [from, to, Value::Int(0), Value::Undefined];
+            let Value::Array(arr) = bullet_trace(&mut host, cx, None, &args).unwrap() else {
                 panic!()
             };
-            let f = cx.intern_folded("fraction");
-            assert_eq!(cx.get_field(s, f), Value::Float(1.0));
-            let p = cx.intern_folded("position");
-            assert_eq!(cx.get_field(s, p), Value::Vector([100.0, 0.0, 0.0]));
+            let f = ArrayKey::Str(cx.intern_exact("fraction"));
+            assert_eq!(cx.get_index(arr, f), Value::Float(1.0));
+            let p = ArrayKey::Str(cx.intern_exact("position"));
+            assert_eq!(cx.get_index(arr, p), Value::Vector([100.0, 0.0, 0.0]));
+        });
+    }
+
+    /// With a real collision world, a trace straight down through the test
+    /// floor (`vcod_common::collision::test_world`, top at z=0) stops short
+    /// of the end point: `fraction < 1`.
+    #[test]
+    fn bullettrace_with_a_world_hits_real_geometry() {
+        let (mut vm, mut host) = fixture();
+        host.world = Some(Rc::new(World {
+            collision: vcod_common::collision::test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        }));
+        vm.with_cx(|cx| {
+            let from = Value::Vector([0.0, 0.0, 100.0]);
+            let to = Value::Vector([0.0, 0.0, -100.0]);
+            let args = [from, to, Value::Int(0), Value::Undefined];
+            let Value::Array(arr) = bullet_trace(&mut host, cx, None, &args).unwrap() else {
+                panic!()
+            };
+            let f = ArrayKey::Str(cx.intern_exact("fraction"));
+            let Value::Float(fraction) = cx.get_index(arr, f) else {
+                panic!()
+            };
+            assert!(fraction < 1.0, "expected a hit, got fraction {fraction}");
         });
     }
 }

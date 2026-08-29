@@ -42,6 +42,10 @@ pub struct GEntity {
     /// Set by `moveGravity`/`rotateVelocity`; stage 5 integrates it into the
     /// entity's motion once entities go on the wire.
     pub velocity: [f32; 3],
+    /// The duration argument both mover verbs take alongside a velocity, in
+    /// milliseconds. Stored for the same reason `velocity` is: stage 5's
+    /// integrator needs it and nothing before then reads it back.
+    pub move_time: f32,
 }
 
 pub struct ObjectTable {
@@ -88,6 +92,7 @@ impl ObjectTable {
             hidden: false,
             attachments: Vec::new(),
             velocity: [0.0, 0.0, 0.0],
+            move_time: 0.0,
         });
         Ok(id)
     }

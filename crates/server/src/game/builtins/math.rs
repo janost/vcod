@@ -51,9 +51,10 @@ pub fn length(
     Ok(Value::Float(vec_len(*v)))
 }
 
-/// `vectorNormalize(v)`: a unit vector in the same direction. Retail's
-/// `VectorNormalize` returns `(0,0,0)` unchanged on a zero-length input
-/// rather than dividing by zero, so this does the same.
+/// `vectorNormalize(v)`: a unit vector in the same direction. A zero-length
+/// input returns `(0,0,0)` rather than dividing by zero, the Q3/RTCW
+/// lineage's `VectorNormalize` convention; not measured against retail, no
+/// probe covers a zero-length `vectorNormalize` call yet.
 pub fn vector_normalize(
     _host: &mut GameHost,
     _cx: &mut Cx,
@@ -70,10 +71,10 @@ pub fn vector_normalize(
     Ok(Value::Vector([v[0] / len, v[1] / len, v[2] / len]))
 }
 
-/// `vectorToAngles(v)`: `vectoangles` from the Q3 lineage
-/// (`bg_lib.c`/`math.c`), which every RTCW/Q3-descended engine including
-/// CoD 1.1 carries unchanged. Angles come back `[pitch, yaw, roll]` with
-/// roll always 0.
+/// `vectorToAngles(v)`: transcribed from the Q3/RTCW lineage's
+/// `vectoangles` (`bg_lib.c`/`math.c`); not measured against retail, no
+/// probe covers it yet. Angles come back `[pitch, yaw, roll]` with roll
+/// always 0, that lineage's convention.
 pub fn vector_to_angles(
     _host: &mut GameHost,
     _cx: &mut Cx,
@@ -125,13 +126,12 @@ pub fn angles_to_forward(
     Ok(Value::Vector([cp * cy, cp * sy, -sp]))
 }
 
-/// `randomFloat(range)`: a real draw in `[0, range)`, seeded from wall clock
-/// jitter rather than a stored generator; `GameHost` carries no rng field
-/// (Task 9's field budget is `cvars` and `world`), so there is nowhere to
-/// keep a seed between calls. Good enough for gameplay variance, not for
-/// anything that needs a reproducible sequence.
+/// `randomFloat(range)`: a real uniform draw in `[0, range)` from
+/// `GameHost::rng`. Retail seeds `randomFloat` from the level clock;
+/// nothing here needs to match its sequence, only to actually cover the
+/// range, which the fixed-seed xorshift64* draw does.
 pub fn random_float(
-    _host: &mut GameHost,
+    host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
@@ -141,12 +141,7 @@ pub fn random_float(
         Some(Value::Float(f)) => *f,
         _ => return Err(ErrorKind::BadType("randomFloat takes a number")),
     };
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let unit = nanos as f32 / u32::MAX as f32;
-    Ok(Value::Float(unit * range))
+    Ok(Value::Float(host.rand_unit() * range))
 }
 
 #[cfg(test)]
@@ -188,6 +183,31 @@ mod tests {
                 panic!()
             };
             assert!((f[0] - 1.0).abs() < 1e-5 && f[1].abs() < 1e-5 && f[2].abs() < 1e-5);
+        });
+    }
+
+    /// A real uniform draw, not a truncated one: several hundred calls to
+    /// `randomFloat(1)` must all land in `[0, 1)` and at least one must
+    /// exceed 0.5. A generator that saturates well below 1 (as dividing a
+    /// `subsec_nanos` draw by `u32::MAX` once did, capping every draw near
+    /// 0.23) would fail the second assertion.
+    #[test]
+    fn randomfloat_draws_a_real_uniform_value_in_range() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let mut saw_above_half = false;
+            for _ in 0..500 {
+                let Value::Float(f) = random_float(&mut host, cx, None, &[Value::Int(1)]).unwrap()
+                else {
+                    panic!()
+                };
+                assert!((0.0..1.0).contains(&f), "{f} out of [0, 1)");
+                saw_above_half |= f > 0.5;
+            }
+            assert!(
+                saw_above_half,
+                "500 draws of randomFloat(1) never exceeded 0.5"
+            );
         });
     }
 }
