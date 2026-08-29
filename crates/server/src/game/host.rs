@@ -4,6 +4,7 @@
 //! errors until stage 4 brings clients, everything else goes to the
 //! entity's own struct in the VM heap.
 
+use crate::configstrings::Allocators;
 use crate::game::builtins;
 use crate::game::damage::DamageEvent;
 use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
@@ -32,6 +33,9 @@ pub struct GameHost {
     /// A builtin must never reenter the VM, so a callback becomes a queued
     /// event (the design's "callbacks cannot run inline").
     pub damage: Vec<DamageEvent>,
+    /// Runtime configstring slot allocators, one per engine indexer
+    /// (`G_ModelIndex` and its siblings).
+    pub allocators: Allocators,
 }
 
 impl GameHost {
@@ -40,6 +44,7 @@ impl GameHost {
             configstrings,
             ents: ObjectTable::new(),
             damage: Vec::new(),
+            allocators: Allocators::new(),
         }
     }
 }

@@ -5,6 +5,7 @@
 use crate::server::ServerConfig;
 use vcod_common::net::connectionless::Info;
 use vcod_common::net::protocol::PROTOCOL_V1;
+use vcod_gsc::ErrorKind;
 
 /// `BG_SetupWeaponInfo`'s list, configstring 7, 1-based on the wire.
 pub const WEAPON_LIST: &str = "bar_mp bar_slow_mp bren_mp colt_mp enfield_mp fg42_mp fg42_semi_mp fraggrenade_mp kar98k_mp kar98k_sniper_mp luger_mp m1carbine_mp m1garand_mp mg42_bipod_duck_mp mg42_bipod_prone_mp mg42_bipod_stand_mp mk1britishfrag_mp mosin_nagant_mp mosin_nagant_sniper_mp mp40_mp mp44_mp mp44_semi_mp panzerfaust_mp ppsh_mp ppsh_semi_mp ptrs41_antitank_rifle_mp rgd-33russianfrag_mp springfield_mp sten_mp stielhandgranate_mp thompson_mp thompson_semi_mp";
@@ -176,4 +177,180 @@ pub fn static_configstrings(cfg: &ServerConfig, server_id: u8) -> Vec<String> {
     cs[243] = layout.clone();
     cs[1501] = layout;
     cs
+}
+
+/// A configstring block the game module allocates into at runtime, each
+/// mirroring one engine indexer. Ranges are from
+/// docs/research/clientstate-wire-format.md; the indexer each mirrors is in
+/// docs/design/2026-08-28-gsc-gameplay-design.md.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CsRange {
+    StatusIcon,
+    HeadIcon,
+    Tag,
+    Model,
+    SoundAlias,
+    Effect,
+    Menu,
+    HintString,
+    Localized,
+    Shader,
+}
+
+impl CsRange {
+    pub const ALL: [CsRange; 10] = [
+        CsRange::StatusIcon,
+        CsRange::HeadIcon,
+        CsRange::Tag,
+        CsRange::Model,
+        CsRange::SoundAlias,
+        CsRange::Effect,
+        CsRange::Menu,
+        CsRange::HintString,
+        CsRange::Localized,
+        CsRange::Shader,
+    ];
+
+    /// Inclusive.
+    pub fn bounds(self) -> (usize, usize) {
+        match self {
+            CsRange::StatusIcon => (22, 27),
+            CsRange::HeadIcon => (30, 42),
+            CsRange::Tag => (109, 139),
+            CsRange::Model => (269, 523),
+            CsRange::SoundAlias => (525, 779),
+            CsRange::Effect => (781, 843),
+            CsRange::Menu => (1181, 1210),
+            CsRange::HintString => (1212, 1213),
+            CsRange::Localized => (1245, 1499),
+            CsRange::Shader => (1501, 1627),
+        }
+    }
+}
+
+/// One next-free cursor per range, named rather than kept in a `CsRange::ALL`-
+/// order array: `next_mut`'s match is exhaustive, so a range added to the enum
+/// without a matching field here is a compile error instead of a silent
+/// misindex into the wrong allocator.
+#[derive(Default)]
+pub struct Allocators {
+    status_icon: usize,
+    head_icon: usize,
+    tag: usize,
+    model: usize,
+    sound_alias: usize,
+    effect: usize,
+    menu: usize,
+    hint_string: usize,
+    localized: usize,
+    shader: usize,
+}
+
+impl Allocators {
+    pub fn new() -> Self {
+        Allocators {
+            status_icon: CsRange::StatusIcon.bounds().0,
+            head_icon: CsRange::HeadIcon.bounds().0,
+            tag: CsRange::Tag.bounds().0,
+            model: CsRange::Model.bounds().0,
+            sound_alias: CsRange::SoundAlias.bounds().0,
+            effect: CsRange::Effect.bounds().0,
+            menu: CsRange::Menu.bounds().0,
+            hint_string: CsRange::HintString.bounds().0,
+            localized: CsRange::Localized.bounds().0,
+            shader: CsRange::Shader.bounds().0,
+        }
+    }
+
+    fn next_mut(&mut self, range: CsRange) -> &mut usize {
+        match range {
+            CsRange::StatusIcon => &mut self.status_icon,
+            CsRange::HeadIcon => &mut self.head_icon,
+            CsRange::Tag => &mut self.tag,
+            CsRange::Model => &mut self.model,
+            CsRange::SoundAlias => &mut self.sound_alias,
+            CsRange::Effect => &mut self.effect,
+            CsRange::Menu => &mut self.menu,
+            CsRange::HintString => &mut self.hint_string,
+            CsRange::Localized => &mut self.localized,
+            CsRange::Shader => &mut self.shader,
+        }
+    }
+
+    /// Intern-or-append: an existing name returns its slot, a new one takes
+    /// the next free slot, an exhausted range is an error.
+    pub fn index(
+        &mut self,
+        cs: &mut [String],
+        range: CsRange,
+        name: &str,
+    ) -> Result<usize, ErrorKind> {
+        let (lo, hi) = range.bounds();
+        let next = *self.next_mut(range);
+        if let Some(slot) = (lo..next).find(|s| cs[*s] == name) {
+            return Ok(slot);
+        }
+        if next > hi {
+            return Err(ErrorKind::BadType("configstring range exhausted"));
+        }
+        cs[next] = name.to_string();
+        *self.next_mut(range) = next + 1;
+        Ok(next)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Intern-or-append, mirroring `G_ModelIndex` and its siblings: the same
+    /// name twice is one slot, a new name takes the next
+    /// (docs/design/2026-08-28-gsc-gameplay-design.md, "Configstrings stop
+    /// being a static table").
+    #[test]
+    fn an_allocator_interns_and_appends() {
+        let mut cs = vec![String::new(); 2048];
+        let mut a = Allocators::new();
+        let first = a.index(&mut cs, CsRange::Model, "xmodel/fx").unwrap();
+        assert_eq!(first, 269);
+        assert_eq!(cs[269], "xmodel/fx");
+        assert_eq!(a.index(&mut cs, CsRange::Model, "xmodel/fx").unwrap(), 269);
+        assert_eq!(
+            a.index(&mut cs, CsRange::Model, "xmodel/other").unwrap(),
+            270
+        );
+    }
+
+    /// Ranges do not overlap and each starts where the research doc says.
+    #[test]
+    fn the_ranges_are_the_documented_ones() {
+        assert_eq!(CsRange::Model.bounds(), (269, 523));
+        assert_eq!(CsRange::SoundAlias.bounds(), (525, 779));
+        assert_eq!(CsRange::Effect.bounds(), (781, 843));
+        assert_eq!(CsRange::Tag.bounds(), (109, 139));
+        let mut seen: Vec<(usize, usize)> = Vec::new();
+        for r in CsRange::ALL {
+            let (lo, hi) = r.bounds();
+            assert!(lo <= hi);
+            assert!(
+                seen.iter().all(|(a, b)| hi < *a || lo > *b),
+                "{r:?} overlaps a range already declared"
+            );
+            seen.push((lo, hi));
+        }
+    }
+
+    /// Exhausting a range is a hard error, not a wrap or a silent overwrite:
+    /// a map that precaches 256 models is broken and should say so.
+    #[test]
+    fn an_exhausted_range_is_an_error() {
+        let mut cs = vec![String::new(); 2048];
+        let mut a = Allocators::new();
+        let (lo, hi) = CsRange::Effect.bounds();
+        for i in 0..=(hi - lo) {
+            a.index(&mut cs, CsRange::Effect, &format!("fx{i}"))
+                .unwrap();
+        }
+        assert!(a.index(&mut cs, CsRange::Effect, "one too many").is_err());
+    }
 }
