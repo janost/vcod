@@ -82,7 +82,7 @@ pub struct Cx<'a> {
     interner: &'a mut Interner,
     heap: &'a mut Heap,
     level: StructId,
-    game: StructId,
+    game: ArrayId,
     notifies: &'a mut Vec<(Target, Atom, Vec<Value>)>,
 }
 
@@ -149,8 +149,13 @@ impl Cx<'_> {
         Target::Struct(self.level)
     }
 
-    pub fn game(&self) -> Target {
-        Target::Struct(self.game)
+    /// `game`'s array id. Not a `Target`: `game` is array-typed on retail
+    /// (measured, tests/fixtures/semantics/retail-captures.txt `# probe_game`)
+    /// and, unlike `level`, never appears as a notify/waittill/thread/endon
+    /// receiver anywhere in the corpus, so it has no need for `Target`'s
+    /// entity-or-struct shape.
+    pub fn game(&self) -> ArrayId {
+        self.game
     }
 
     pub fn notify(&mut self, target: Target, event: Atom, args: Vec<Value>) {
@@ -198,7 +203,7 @@ pub struct Vm {
     heap: Heap,
     functions: HashMap<FuncRef, Rc<Function>>,
     level: StructId,
-    game: StructId,
+    game: ArrayId,
     /// `.size` on an array or string, interned once here rather than per
     /// `LoadField` — `_load.gsc` reads it inside three loops.
     size_atom: Atom,
@@ -242,7 +247,7 @@ impl Vm {
     pub fn new() -> Self {
         let mut heap = Heap::new();
         let level = heap.new_struct();
-        let game = heap.new_struct();
+        let game = heap.new_array();
         let mut interner = Interner::default();
         let size_atom = interner.intern_folded("size");
         Vm {
@@ -316,11 +321,6 @@ impl Vm {
         Target::Struct(self.level)
     }
 
-    /// `game`, the other heap struct every `Vm` preallocates.
-    pub fn game(&self) -> Target {
-        Target::Struct(self.game)
-    }
-
     /// `level`'s struct id. `level()` returns a `Target` for notify and call
     /// receivers; this is for the host's own heap reads.
     ///
@@ -332,9 +332,14 @@ impl Vm {
         self.level
     }
 
-    /// `game`'s struct id, the `Target::Struct` counterpart to `level_id`,
-    /// with the same caveat.
-    pub fn game_id(&self) -> StructId {
+    /// `game`'s array id, the other heap object every `Vm` preallocates.
+    /// `game` is array-typed on retail (measured,
+    /// tests/fixtures/semantics/retail-captures.txt `# probe_game`) and
+    /// never a notify/call receiver in the corpus, so there is no
+    /// `Target`-returning counterpart the way `level()`/`level_id()` split;
+    /// this is the only accessor. Same caveat as `level_id`: unused outside
+    /// this file's tests until a host needs it from inside a builtin.
+    pub fn game_id(&self) -> ArrayId {
         self.game
     }
 
@@ -548,6 +553,28 @@ pub(crate) mod tests {
     fn reading_an_unset_array_key_is_undefined() {
         let (v, _, _) = run(r#"main() { a = []; return a["nope"]; }"#);
         assert_eq!(v, Value::Undefined);
+    }
+
+    // --- `game` is array-typed on retail, not a struct like `level`
+    // (measured, tests/fixtures/semantics/retail-captures.txt `# probe_game`
+    // and `# probe_game_dotwrite`).
+
+    #[test]
+    fn game_is_bracket_accessed_like_an_array_and_its_size_grows() {
+        let (v, _, _) = run(r#"main() { game["allies"] = "russian"; return game.size; }"#);
+        assert_eq!(v, Value::Int(1));
+        let (v, _, mut vm) =
+            run(r#"main() { game["allies"] = "russian"; return game["allies"]; }"#);
+        let Value::String(a) = v else {
+            panic!("expected a string, got {v:?}")
+        };
+        assert_eq!(vm.interner_mut().resolve(a), "russian");
+    }
+
+    #[test]
+    fn game_dot_field_assignment_is_a_bad_type_error() {
+        let e = run_err("main() { game.foo = 1; }");
+        assert!(matches!(e, ErrorKind::BadType(_)));
     }
 
     // --- Auto-vivification: `x[i] = v` where `x` was `Undefined` becomes a
@@ -1038,8 +1065,8 @@ pub(crate) mod tests {
 
     /// A host builtin (`getentarray`, `spawnstruct`) needs to mint a
     /// struct/array and populate it from outside the instruction loop, and
-    /// to reach `level`/`game` to notify or read a field on them; all four
-    /// go through `Vm::heap`/`heap_mut`/`level`/`game`, not through
+    /// to reach `level`/`game` to notify or read a field/index on them; all
+    /// four go through `Vm::heap`/`heap_mut`/`level`/`game_id`, not through
     /// crate-internal knowledge of allocation order.
     #[test]
     fn a_host_can_allocate_and_populate_a_struct_and_array_and_reach_level_and_game() {
@@ -1063,11 +1090,21 @@ pub(crate) mod tests {
             Target::Entity(_) => unreachable!("level is always a struct"),
         };
         vm.heap_mut().set_field(level_id, mark, Value::Int(1));
-        assert_ne!(vm.level(), vm.game());
+
+        // `game` is array-typed, not a `Target`; reached through `game_id`.
+        let game_id = vm.game_id();
+        vm.heap_mut()
+            .set_index(game_id, crate::heap::ArrayKey::Int(0), Value::Int(2));
+        assert_eq!(
+            vm.heap().get_index(game_id, crate::heap::ArrayKey::Int(0)),
+            Value::Int(2)
+        );
     }
 
     /// A host reads and writes `level` constantly; without this it needs an
-    /// `unreachable!` arm on the `Target` match every time.
+    /// `unreachable!` arm on the `Target` match every time. `game` has no
+    /// `Target` shape to match on at all (array-typed, measured
+    /// `# probe_game`), so `game_id` is reachable directly too.
     #[test]
     fn level_and_game_ids_are_reachable_without_matching_on_target() {
         let mut vm = Vm::new();
@@ -1075,7 +1112,11 @@ pub(crate) mod tests {
         let id = vm.level_id();
         vm.heap_mut().set_field(id, f, Value::Int(1));
         assert_eq!(vm.heap().get_field(vm.level_id(), f), Value::Int(1));
-        assert_ne!(vm.level_id(), vm.game_id());
+
+        let k = crate::heap::ArrayKey::Int(0);
+        let game_id = vm.game_id();
+        vm.heap_mut().set_index(game_id, k, Value::Int(9));
+        assert_eq!(vm.heap().get_index(game_id, k), Value::Int(9));
     }
 
     /// The G1 blocker: a builtin needs to allocate and populate a heap array

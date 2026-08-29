@@ -413,8 +413,11 @@ inferred. The probes are `crates/gsc/tests/fixtures/semantics/probe_*.gsc`,
 run as gametype scripts by `tools/run_probe.sh`; retail's answers are
 committed beside them in `retail-captures.txt`, and
 `crates/gsc/tests/semantics_ab.rs` diffs vcod against them on every test run.
-It is green on all 19 runnable probes; `probe_ents` is captured but not run,
-since `getentarray` needs the object model that arrives with the entity work.
+It is green on all 21 runnable probes; `probe_ents` is captured but not run,
+since `getentarray` needs the object model that arrives with the entity work,
+and three more (`probe_game_dotwrite`, `probe_level_bracket`,
+`probe_level_size`) are captured but skipped for the reasons `§10` and
+`semantics_ab.rs`'s `KNOWN_GAPS_OUT_OF_SCOPE` give.
 
 Three facts about the retail side shaped how the measurement had to be taken,
 and each is worth knowing before writing another probe:
@@ -519,28 +522,40 @@ does the same, which is also what the two stock scripts that ship a literal
 past `i32::MAX` as an effectively-infinite sentinel
 (`maps/carride.gsc:1606`, `maps/redsquare.gsc:1547`) mean by it.
 
+**`game` is array-typed, not a struct, VERIFIED (`probe_game`).**
+`game["allies"] = "russian"` then reading `game["allies"]` back round-trips,
+`game.size` is 1 after one bracket write and 2 after two, and the value
+survives a `wait` (`game["allies"]` still reads `"russian"` afterward) —
+`game` is the cross-map persistent global retail keeps it as. `game.foo = 1`
+is not merely fatal at runtime the way an out-of-place index assignment is
+(§9's `probe_autoviv` case): it is a *compile*-time rejection, `not an
+object`, that voids the whole script before `main()` runs at all
+(`probe_game_dotwrite`). `level["k"] = "v"` gets the same compile-time
+treatment the other way, `not an array, string, or vector`
+(`probe_level_bracket`) — retail's compiler statically knows each global's
+access mode and rejects the wrong one before any code runs, not just the
+line that reaches it. This settles the "still unestablished" entry the
+previous task left here: `game` is genuinely array-typed, not a struct that
+also answers to brackets, and vcod now models it as one (`Vm::game`,
+`ArrayId`, `Op::LoadGame` pushes `Value::Array`). Section 10 covers why
+vcod does not reproduce the compile-time half.
+
+Also measured, though out of the scope that motivated the above:
+**`level.size` reads a constant `1`, not a field count (`probe_level_size`).**
+Set one dot-field on `level` or two, `level.size` reads `1` either way —
+unlike `game.size`/an array's `.size`, which do count keys. vcod's
+`LoadField` only special-cases `.size` for `Value::Array`/`Value::String`,
+so `level.size` in vcod reads `Undefined` and then fails to concatenate.
+Not fixed here; see the "Still unestablished" entry below.
+
 ### Still unestablished
 
-- **`game["key"]` bracket access on the `game` object.** Not probed; found
-  by running vcod-server against a live retail-derived map script after the
-  auto-vivification fix above, not by a `probe_*` measurement, so this is
-  corpus inference, not a retail capture. Every stock MP map's `main()` sets
-  team pairing this way within its first ~20 lines (`mp_pavlov.gsc:9`,
-  `game["allies"] = "russian";`), and the 18-file MP corpus has 840 more
-  `game["..."]`/`level["..."]` occurrences. `game` is never written with dot
-  notation anywhere in the MP corpus (0 hits for `game.`) and never appears
-  as a `notify`/`waittill`/`thread`/`endon` receiver, while `level` is never
-  bracket-indexed (0 hits for `level["`) and only ever dot-accessed (616
-  hits) — the two objects use disjoint syntax, which reads as `game` being a
-  genuinely array-typed object in retail rather than a struct that happens
-  to also accept string-keyed brackets. vcod currently models both `level`
-  and `game` as `StructId` (`Vm::level`, `Vm::game`), and `Op::LoadIndex`/
-  `Op::StoreIndex` only accept `Value::Array`, so `game["allies"] = ...`
-  raises `BadType("indexing needs an array")` and kills the map script's own
-  main thread before it finishes. This blocks every stock MP map at load and
-  needs its own task: representing `game` as an array (or otherwise letting
-  a struct answer to bracket access), with retail probe coverage before
-  vcod's answer is trusted.
+- **What `level.size` actually is.** `probe_level_size` (above) shows retail
+  answers `1` regardless of field count, but not why — whether it is a
+  generic non-array-non-string `.size` default, an engine-native property
+  unrelated to field count, or something else. `level.foo`-style field reads
+  are otherwise ordinary (§9's `field_read_*` cases), so this looks specific
+  to the name `size`. No probe has isolated the cause.
 - **`undefined == undefined`.** Not probed. Retail's error message for the
   mixed case names a "pair has unmatching types", which two `undefined`s are
   not, so equal is the reading that message supports — but that is inference,
@@ -566,7 +581,7 @@ past `i32::MAX` as an effectively-infinite sentinel
 
 ## 10. Divergences kept as documentation, not code
 
-Seven places where the implementation made a deliberate call the corpus
+Eight places where the implementation made a deliberate call the corpus
 cannot settle, recorded here rather than silently baked into behaviour that
 looks authoritative:
 
@@ -610,6 +625,24 @@ looks authoritative:
   killing itself via a nested spawn's notify, mid-step) no corpus script
   seems to rely on either way; deferred to the next project. Pinned by
   `sched::tests::a_thread_killed_by_its_own_endon_mid_step_still_runs_to_its_next_suspend`.
+- **`game.foo = 1` and `level["k"] = "v"` compile in vcod; retail rejects
+  each at compile time.** Measured (`probe_game_dotwrite`,
+  `probe_level_bracket`): retail's compiler statically knows `game` is
+  array-typed and `level` is a struct, so the wrong access mode on either
+  bare identifier is a `script compile error` that voids the whole script
+  before `main()` runs, not a fault at the line that reaches it. vcod's
+  compiler (`crates/gsc/src/compile.rs`) does no such static typing of
+  `level`/`game`; both constructs compile and only fail once the
+  instruction loop reaches them (`Op::StoreField`/`Op::StoreIndex`
+  rejecting an array/struct operand), by which point any `logPrint` before
+  the failing line has already run — a real, observable divergence from
+  retail's all-or-nothing compile failure, not just message-text. Adding
+  static typing for these two identifiers to the compiler would fix it;
+  out of scope for the task that made `game` array-typed, since neither
+  construct appears anywhere in the corpus (`game.` and `level["` are both
+  zero-hit). `crates/gsc/tests/semantics_ab.rs`'s
+  `KNOWN_GAPS_OUT_OF_SCOPE` skips both probes rather than asserting a false
+  pass.
 - **A runtime error aborts the thread, where retail kills the server.**
   Every fatal in §9 — a non-numeric condition, `"str" + undefined`,
   `undefined == 0`, `"a" < "b"`, `1 / 0` — raises the equivalent

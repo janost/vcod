@@ -94,10 +94,30 @@ PROBE field_read_same_case 7
 PROBE at field_read_other_case
 PROBE field_read_other_case 7
 
+# probe_game
+PROBE at game_bracket_write
+PROBE game_bracket_read russian
+PROBE game_size_after_one 1
+PROBE game_size_after_two 2
+PROBE at game_persist
+PROBE game_persist_after_wait russian
+
+# probe_game_dotwrite
+
 # probe_lexer
 PROBE mod_tight 1
 PROBE int_min_cast -2147483647
 PROBE int_min_direct -2147483647
+
+# probe_level
+PROBE at level_dot_write
+PROBE level_dot_read 1
+
+# probe_level_bracket
+
+# probe_level_size
+PROBE level_size_after_one_field 1
+PROBE level_size_after_two_fields 1
 
 # probe_notify
 PROBE notify_order first

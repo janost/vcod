@@ -558,7 +558,9 @@ impl Vm {
                     push!(v);
                 }
                 Op::LoadLevel => push!(Value::Struct(self.level)),
-                Op::LoadGame => push!(Value::Struct(self.game)),
+                // `game` is array-typed on retail, measured
+                // tests/fixtures/semantics/retail-captures.txt `# probe_game`.
+                Op::LoadGame => push!(Value::Array(self.game)),
                 // No stock MP script reads a bare `anim` back (every use is
                 // inside a `/# #/` developer block, which the lexer drops
                 // whole); `level`/`game` are the only preallocated structs.

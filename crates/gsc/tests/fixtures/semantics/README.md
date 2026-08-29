@@ -11,7 +11,7 @@ Re-capture with:
 COD_DIR=... tools/capture_probes.sh > crates/gsc/tests/fixtures/semantics/retail-captures.txt
 ```
 
-Three things about the retail side shape these files, all learned the hard
+Four things about the retail side shape these files, all learned the hard
 way:
 
 - **`logPrint` is the only output channel.** A dedicated server with no
@@ -25,6 +25,21 @@ way:
   `PROBE_FATAL <message>`.
 - **A gametype needs a one-line `.txt` description file** beside the `.gsc`
   or the engine refuses to load the map. `run_probe.sh` writes one.
+- **A script *compile* error is not a script *runtime* error, and it is
+  worse: nothing before it in the same file runs either.** `game.foo = 1`
+  and `level["k"] = "v"` both die with a `******* script compile error
+  *******` block, not the runtime-error block above, because retail's
+  compiler statically knows `level`/`game`'s access mode and rejects the
+  wrong one before `main()` starts. `run_probe.sh` only greps the console
+  for `script runtime error`, so a compile error shows up as an empty
+  capture section with no `PROBE_FATAL` line -- indistinguishable, without
+  reading the raw console, from a probe that simply logged nothing. Keep a
+  construct that might be a *compile*-time rejection alone in its own file,
+  same as a fatal runtime one, or it costs every measurement in the file,
+  not just the ones after it (`probe_game_dotwrite.gsc`,
+  `probe_level_bracket.gsc`, both skipped in `semantics_ab.rs`'s
+  `COMPILE_TIME_ON_RETAIL_ONLY` since vcod's compiler has no equivalent
+  static check to reproduce the empty-capture result).
 
 Probes emit `PROBE at <name>` before an expression that might be fatal, so a
 run that dies names what killed it.
