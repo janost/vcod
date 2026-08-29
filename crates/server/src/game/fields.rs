@@ -354,32 +354,29 @@ pub fn engine_slot_count() -> usize {
         .len()
 }
 
-// `Q_stricmp`, not `==`: retail's own field walk (`G_ParseField`) is
-// case-insensitive, and callers are not guaranteed to have folded first.
 pub fn route_entity(folded: &str) -> Route {
-    if let Some(i) = ENTITY_FIELDS
-        .iter()
-        .position(|f| f.name.eq_ignore_ascii_case(folded))
-    {
+    debug_assert!(
+        !folded.chars().any(|c| c.is_ascii_uppercase()),
+        "field names arrive folded; caller should use Cx::resolve_folded"
+    );
+    if let Some(i) = ENTITY_FIELDS.iter().position(|f| f.name == folded) {
         return Route::Engine {
             slot: slot_of(ENTITY_FIELDS, i),
             ty: ENTITY_FIELDS[i].ty,
         };
     }
-    if let Some(i) = CLIENT_FIELDS
-        .iter()
-        .position(|f| f.name.eq_ignore_ascii_case(folded))
-    {
+    if let Some(i) = CLIENT_FIELDS.iter().position(|f| f.name == folded) {
         return Route::Client(i);
     }
     Route::Script
 }
 
 pub fn route_hud(folded: &str) -> Route {
-    match HUD_FIELDS
-        .iter()
-        .position(|f| f.name.eq_ignore_ascii_case(folded))
-    {
+    debug_assert!(
+        !folded.chars().any(|c| c.is_ascii_uppercase()),
+        "field names arrive folded; caller should use Cx::resolve_folded"
+    );
+    match HUD_FIELDS.iter().position(|f| f.name == folded) {
         Some(i) => Route::Engine {
             slot: slot_of(HUD_FIELDS, i),
             ty: HUD_FIELDS[i].ty,
@@ -547,13 +544,15 @@ mod tests {
         assert_eq!(engine_slot_count(), 30);
     }
 
-    /// Field lookup folds case, matching `G_ParseField`'s `Q_stricmp` walk
-    /// and the engine's own script-side lookup.
+    /// Field names arrive already folded: `Cx::resolve_folded` lowercases,
+    /// and so does the map load's key walk, so the table compares exactly.
+    /// The engine-level folding this rests on is covered where it happens,
+    /// in `host.rs`'s `field_access_folds_case`.
     #[test]
-    fn field_lookup_folds_case() {
+    fn the_table_matches_folded_names_exactly() {
         assert!(matches!(route_entity("targetname"), Route::Engine { .. }));
-        assert!(matches!(route_entity("TargetName"), Route::Engine { .. }));
         assert!(matches!(route_entity("classname"), Route::Engine { .. }));
+        assert!(matches!(route_hud("fontscale"), Route::Engine { .. }));
     }
 
     /// The three-way split. `sessionteam` is a client field, so it routes to
