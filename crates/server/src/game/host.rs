@@ -60,6 +60,10 @@ pub struct GameHost {
     /// level clock; nothing here needs to match its sequence, only to be a
     /// real draw.
     pub rng: u64,
+    /// Every `logPrint` line, in order. Retail's `logPrint` writes to the
+    /// server's `games_mp.log`; this is where that will come from, and it is
+    /// what lets a test replay a retail capture.
+    pub script_log: Vec<String>,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -76,6 +80,7 @@ impl GameHost {
             cvars: std::collections::HashMap::new(),
             world: None,
             rng: RNG_SEED,
+            script_log: Vec::new(),
         }
     }
 
@@ -131,7 +136,7 @@ impl Host for GameHost {
         match folded.as_str() {
             "setcullfog" => builtins::env::set_cull_fog(&mut self.configstrings, cx, args),
             "ambientplay" => builtins::env::ambient_play(&mut self.configstrings, cx, args),
-            "println" | "iprintln" | "logprint" => builtins::io::print_line(cx, args),
+            "println" | "iprintln" | "logprint" => builtins::io::print_line(self, cx, args),
             _ => Err(ErrorKind::MissingBuiltin(name)),
         }
     }

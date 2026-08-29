@@ -163,10 +163,11 @@ fn captures() -> BTreeMap<String, (Vec<String>, Option<String>)> {
     out
 }
 
-/// `probe_ents` measures getentarray's return order and needs real map
-/// entities, which need an object model this VM does not have yet. Its
-/// recorded order is what that implementation has to reproduce.
-const NOT_YET_RUNNABLE: &[&str] = &["probe_ents"];
+/// Probes that run in another crate because they need state `vcod-gsc` alone
+/// does not have. `probe_ents` needs an object model and a real map, both of
+/// which live in `crates/server`; it runs there, in
+/// `crates/server/tests/semantics_ents.rs`, against this same capture file.
+const RUN_IN_SERVER_CRATE: &[&str] = &["probe_ents"];
 
 /// `game.foo = 1` and `level["k"] = "v"` are, on retail, *compile*-time
 /// rejections ("not an object" / "not an array, string, or vector") that
@@ -199,7 +200,7 @@ const KNOWN_GAPS_OUT_OF_SCOPE: &[&str] = &[
 fn vcod_matches_retail_on_every_probe() {
     let mut failures = Vec::new();
     for (name, (retail_lines, retail_fatal)) in captures() {
-        if NOT_YET_RUNNABLE.contains(&name.as_str())
+        if RUN_IN_SERVER_CRATE.contains(&name.as_str())
             || KNOWN_GAPS_OUT_OF_SCOPE.contains(&name.as_str())
         {
             continue;
@@ -244,10 +245,25 @@ fn vcod_matches_retail_on_every_probe() {
 #[test]
 fn every_skipped_probe_names_a_real_capture_section() {
     let names: Vec<String> = captures().keys().cloned().collect();
-    for n in NOT_YET_RUNNABLE.iter().chain(KNOWN_GAPS_OUT_OF_SCOPE) {
+    for n in RUN_IN_SERVER_CRATE.iter().chain(KNOWN_GAPS_OUT_OF_SCOPE) {
         assert!(
             names.iter().any(|c| c == n),
             "{n} is skipped but is not a capture section"
         );
     }
+}
+
+/// Every capture section is claimed by exactly one runner. Without this a
+/// probe could be dropped from `captures()` and from the server test at
+/// once and nothing would notice.
+#[test]
+fn every_capture_section_has_a_runner() {
+    let names: Vec<String> = captures().keys().cloned().collect();
+    for n in RUN_IN_SERVER_CRATE {
+        assert!(
+            names.iter().any(|c| c == n),
+            "{n} is claimed by the server crate but is not a capture section"
+        );
+    }
+    assert!(!names.is_empty());
 }
