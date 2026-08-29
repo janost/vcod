@@ -88,6 +88,14 @@ PROBE entarray_order 3 auto6
 PROBE entarray_order 4 probe_a
 PROBE entarray_order 5 probe_b
 PROBE entarray_order 6 probe_c
+PROBE at ents_numbers
+PROBE entarray_number 0 73
+PROBE entarray_number 1 74
+PROBE entarray_number 2 75
+PROBE entarray_number 3 298
+PROBE entarray_number 4 299
+PROBE entarray_number 5 300
+PROBE entarray_number 6 301
 
 # probe_field_case
 PROBE field_read_same_case 7

@@ -44,13 +44,21 @@ way:
 Probes emit `PROBE at <name>` before an expression that might be fatal, so a
 run that dies names what killed it.
 
-`probe_ents` measures `getentarray`'s return order and needs real map
-entities, so it does not run here. It runs in `crates/server`, against the
-object model and a real `mp_pavlov` load, and diffs this same file.
-`every_capture_section_has_a_runner` keeps the split honest: a capture
-section belongs to exactly one of the two runners.
+`probe_ents` measures `getentarray`'s return order and the entity numbers
+behind it, and needs real map entities, so it does not run here. It runs in
+`crates/server`, against the object model and a real `mp_pavlov` load, and
+diffs this same file. `every_probe_file_and_capture_section_are_paired`
+keeps the split honest: a probe file and a capture section exist for each
+other, and the section skipped into `crates/server` is named by that
+crate's test.
 
 Its order is settled: ascending entity number, which is BSP entity lump
 order. `mp_pavlov`'s four `script_origin` blocks sit at lump indices 2, 3, 4
 and 344 as auto5, auto4, auto3, auto6, exactly what retail returned
 (`docs/research/cod11-gsc-object-model.md` section 10).
+
+The numbers are not settled, and `probe_ents_matches_retail` fails on them
+today. Retail numbers those four 73, 74, 75, 298; vcod numbers them 73, 74,
+75, 415, because vcod allocates an entity for every block with a classname
+and retail's `SP_misc_model` and `SP_light` allocate none. Section 13 of
+`docs/research/cod11-gsc-object-model.md` has the measurement.

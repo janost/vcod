@@ -30,6 +30,13 @@ Callback_StartGameType()
 	logPrint("PROBE entarray_count " + ents.size + "\n");
 	for (i = 0; i < ents.size; i++)
 		logPrint("PROBE entarray_order " + i + " " + ents[i].targetname + "\n");
+
+	logPrint("PROBE at ents_numbers\n");
+	for (i = 0; i < ents.size; i++)
+	{
+		n = ents[i] getEntityNumber();
+		logPrint("PROBE entarray_number " + i + " " + n + "\n");
+	}
 }
 
 Callback_PlayerConnect() {}

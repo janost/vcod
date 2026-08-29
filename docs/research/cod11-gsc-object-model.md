@@ -411,6 +411,32 @@ and only then loops `G_ParseSpawnVars` plus `G_CallSpawn` over the rest. The
 world is therefore not allocated through `G_Spawn` and does not consume a
 number in the 72-and-up range.
 
+## 13. An `SP_` function can consume the block without an entity, VERIFIED
+
+Section 12's handoff bullet said the lump produces a `gentity_t` for every
+block with a classname whether or not the classname is in `spawns`. That is
+wrong, measured on the retail 1.1d server against `mp_pavlov` (2026-08-29).
+
+`getEntArray("misc_model", "classname")` and `getEntArray("light",
+"classname")` both return 0 there, while the entity lump holds 96
+`misc_model` blocks and 21 `light` blocks. Both classnames are in the
+`spawns` table (section 8), mapped to `SP_misc_model` and `SP_light`, and
+both are baked into the compiled BSP by the map compiler, so the spawn
+function has nothing left to keep. 96 + 21 = 117, and 117 is exactly the
+numbering gap: the fourth `script_origin`, at lump index 344, is entity 298
+on retail, where one-entity-per-block would put it at 415.
+
+Retail entity numbers from `probe_ents`, for the four map `script_origin`s
+and three entities the probe spawns afterwards: 73, 74, 75, 298, 299, 300,
+301. Classnames whose blocks do allocate, first entity number in each:
+`mp_retrieval_spawn_axis` 76, `script_model` 77, `trigger_multiple` 78,
+`mp_teamdeathmatch_spawn` 81, `mp_deathmatch_spawn` 107,
+`mpweapon_panzerfaust` 258.
+
+`func_group` maps to `SP_info_null` (section 8), which frees in Q3's
+lineage, so `info_null` and `func_group` blocks are likely to behave the
+same way. `mp_pavlov` has neither, so neither has been measured.
+
 ## 12. What stage 2 takes from this
 
 - The object handle table needs four kinds, and the field id is the
@@ -420,9 +446,9 @@ number in the 72-and-up range.
   Radiant keys during the map load. Field ids are dense small integers and can
   be a `u16` in the host.
 - `getentarray` sees case-four entities, in ascending entity number, which is
-  BSP entity lump order. The lump must produce a `gentity_t` for every block
-  with a classname, whether or not the classname is in `spawns`, numbered
-  from 72 up.
+  BSP entity lump order. Numbering runs from 72 up. It is *not* one entity per
+  block with a classname: see section 13, measured after this handoff was
+  written.
 - A Radiant key that is neither an engine field nor in `radiant/keys.txt` is
   dropped at load. Stage 2 should drop it too, not stash it, or scripts will
   see fields retail does not have.

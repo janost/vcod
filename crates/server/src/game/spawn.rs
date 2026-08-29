@@ -7,8 +7,14 @@ use vcod_gsc::{Cx, EntId, ErrorKind, Host, Value};
 
 /// The `spawns` table at 0x7eb30, dumped by `tools/re/dump_builtins.py`.
 /// A classname here gets an engine spawn function in retail; one that is not
-/// still becomes a live, script-visible entity, which is the case that keeps
-/// the gametype spawn markers alive.
+/// takes `G_CallSpawn`'s fourth case and becomes a live, script-visible
+/// entity, which is what keeps the gametype spawn markers alive.
+///
+/// Nothing consults this yet: `spawn_entities_from_string` takes the fourth
+/// case for every classname. That is a measured divergence, not a harmless
+/// one, because an `SP_` function may free the entity it was handed and the
+/// numbering then shifts. See docs/research/cod11-gsc-object-model.md
+/// section 13.
 pub const SPAWN_CLASSNAMES: &[&str] = &[
     "info_null",
     "info_notnull",
@@ -39,6 +45,13 @@ pub const SPAWN_CLASSNAMES: &[&str] = &[
     "script_origin",
 ];
 
+/// One object per entity block with a classname, in lump order. Retail
+/// additionally runs the block's `SP_` function when its classname is in
+/// `SPAWN_CLASSNAMES`, and two of those functions (`SP_misc_model`,
+/// `SP_light`) free the entity again, so retail ends up with fewer entities
+/// and different numbers than this does. Measured on mp_pavlov;
+/// docs/research/cod11-gsc-object-model.md section 13 has the numbers, and
+/// `crates/server/tests/semantics_ents.rs` fails on them today.
 pub fn spawn_entities_from_string(
     host: &mut GameHost,
     cx: &mut Cx,

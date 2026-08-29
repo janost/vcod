@@ -52,9 +52,18 @@ fn retail_probe_ents_lines() -> Vec<String> {
 
 /// Retail ran this on mp_pavlov with sv_maxclients 8. It spawns three
 /// `script_origin` entities from `Callback_StartGameType`, names them, and
-/// prints `getEntArray("script_origin", "classname")` in order. The map's
-/// own four come first because their entity numbers are lower
-/// (docs/research/cod11-gsc-object-model.md section 10).
+/// prints `getEntArray("script_origin", "classname")` in order and then each
+/// entity's `getEntityNumber()`. The map's own four come first because their
+/// entity numbers are lower (docs/research/cod11-gsc-object-model.md section
+/// 10).
+///
+/// The order matches retail; the numbers do not, and this test fails on
+/// them. vcod allocates an entity for every block with a classname, where
+/// retail's `SP_misc_model` and `SP_light` free theirs, which on mp_pavlov
+/// is 117 entities and puts the fourth `script_origin` at 415 here against
+/// 298 on retail. The expectation is retail's capture and stays that way:
+/// section 13 of the object-model doc has the measurement, and running the
+/// `spawns` table is what closes it.
 #[test]
 fn probe_ents_matches_retail() {
     let Some(fs) = vcod_common::testing::game_fs() else {
