@@ -23,7 +23,7 @@ pub const BUILTINS: &[&str] = &[
 ];
 
 pub fn is_builtin(name: &str) -> bool {
-    BUILTINS.contains(&name)
+    builtins::entity::lookup(name).is_some() || BUILTINS.contains(&name)
 }
 
 pub struct GameHost {
@@ -54,13 +54,18 @@ impl Host for GameHost {
         &mut self,
         cx: &mut Cx,
         name: Atom,
-        _recv: Option<Target>,
+        recv: Option<Target>,
         args: &[Value],
     ) -> Result<Value, ErrorKind> {
         // `resolve_folded`, not `resolve`: the atom carries the spelling the
-        // script used (`setCullFog`), and dispatch matches the folded form
-        // without allocating.
-        match cx.resolve_folded(name) {
+        // script used (`setCullFog`), and dispatch matches the folded form.
+        // Owned rather than borrowed: the entity family needs `cx` mutably,
+        // which a borrow still held from `resolve_folded` would block.
+        let folded = cx.resolve_folded(name).to_string();
+        if let Some(f) = builtins::entity::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        match folded.as_str() {
             "setcullfog" => builtins::env::set_cull_fog(&mut self.configstrings, cx, args),
             "ambientplay" => builtins::env::ambient_play(&mut self.configstrings, cx, args),
             "println" | "iprintln" | "logprint" => builtins::io::print_line(cx, args),

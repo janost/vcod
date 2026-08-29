@@ -1,0 +1,511 @@
+//! Entity builtins the map-load path reaches: lookup, spawn, delete,
+//! visibility/solidity, and setModel. Per-family dispatch: `NAMES`/`lookup`
+//! is matched against `Cx::resolve_folded`, same shape `host.rs` uses for
+//! the env/io names, and Task 9 adds more families beside this one.
+
+use crate::configstrings::CsRange;
+use crate::game::entity::FIRST_HUD_ELEM;
+use crate::game::host::GameHost;
+use crate::server::MAX_CLIENTS;
+use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
+
+pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
+
+pub const NAMES: &[(&str, Builtin)] = &[
+    ("getent", get_ent),
+    ("getentarray", get_ent_array),
+    ("spawn", spawn),
+    ("spawnstruct", spawn_struct),
+    ("delete", delete),
+    ("show", show),
+    ("hide", hide),
+    ("solid", solid),
+    ("notsolid", not_solid),
+    ("setmodel", set_model),
+    ("getorigin", get_origin),
+    ("getentitynumber", get_entity_number),
+    ("isplayer", is_player),
+    ("isdefined", is_defined),
+    ("istouching", is_touching),
+];
+
+pub fn lookup(folded: &str) -> Option<Builtin> {
+    NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
+}
+
+/// `getEntArray`'s equality. String atoms are interned exactly
+/// (`Cx::intern_exact`), so two spellings of one text are two different
+/// atoms; comparing resolved text rather than the atom itself is what makes
+/// two equal-looking strings match.
+fn values_match(cx: &Cx, a: Value, b: Value) -> bool {
+    match (a, b) {
+        (Value::String(x), Value::String(y)) => cx.resolve(x) == cx.resolve(y),
+        _ => a == b,
+    }
+}
+
+/// The receiver a call like `ent hide()` carries; anything else is a type
+/// error, the same shape a field access on a non-entity would raise.
+fn entity_receiver(recv: Option<Target>) -> Result<EntId, ErrorKind> {
+    match recv {
+        Some(Target::Entity(id)) => Ok(id),
+        _ => Err(ErrorKind::BadType("needs an entity receiver")),
+    }
+}
+
+/// `getEntArray(value, key)`. `Scr_GetEntArray` (0x61980) walks slots
+/// 0..level.num_entities, skips a slot whose `inuse` is clear, and appends
+/// matches, so the result is ascending entity number
+/// (docs/research/cod11-gsc-object-model.md section 10). The key names a
+/// field and is resolved exactly as `.name` is: engine table, then client
+/// table, then the entity's script struct. The corpus passes six distinct
+/// keys and two of them are radiant keys, so a special case for the engine
+/// table would be wrong.
+pub fn get_ent_array(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let [want, Value::String(key)] = args else {
+        return Err(ErrorKind::BadType("getEntArray takes a value and a key"));
+    };
+    let (want, key) = (*want, *key);
+    // `cx.resolve(key)` inside `cx.intern_folded(...)`'s argument would
+    // double-borrow cx; lowercase into an owned local first.
+    let lowered = cx.resolve(key).to_ascii_lowercase();
+    let field = cx.intern_folded(&lowered);
+
+    let ids: Vec<EntId> = host.ents.iter_inuse().map(|(id, _)| id).collect();
+    let arr = cx.new_array();
+    let mut n = 0;
+    for id in ids {
+        let got = host.get_field(cx, id, field);
+        if values_match(cx, got, want) {
+            cx.set_index(arr, ArrayKey::Int(n), Value::Entity(id));
+            n += 1;
+        }
+    }
+    Ok(Value::Array(arr))
+}
+
+/// The single-result form of `getEntArray`: `undefined` on a miss, which is
+/// what every `isDefined(getEnt(...))` in the corpus tests.
+pub fn get_ent(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let Value::Array(arr) = get_ent_array(host, cx, recv, args)? else {
+        unreachable!("get_ent_array always returns an array");
+    };
+    if cx.array_len(arr) == 0 {
+        Ok(Value::Undefined)
+    } else {
+        Ok(cx.get_index(arr, ArrayKey::Int(0)))
+    }
+}
+
+/// `spawn(classname, origin)`: a live entity with both fields set, numbered
+/// after everything already in the table.
+pub fn spawn(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let [Value::String(cls), Value::Vector(at)] = args else {
+        return Err(ErrorKind::BadType("spawn takes a classname and an origin"));
+    };
+    let (cls, at) = (*cls, *at);
+    let id = host.ents.spawn(cx)?;
+    let cn = cx.intern_folded("classname");
+    host.set_field(cx, id, cn, Value::String(cls))?;
+    let og = cx.intern_folded("origin");
+    host.set_field(cx, id, og, Value::Vector(at))?;
+    Ok(Value::Entity(id))
+}
+
+/// `spawnStruct()`: a bare struct, unrelated to the entity table.
+pub fn spawn_struct(
+    _host: &mut GameHost,
+    cx: &mut Cx,
+    _recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    Ok(Value::Struct(cx.new_struct()))
+}
+
+/// `delete()` takes the entity out of iteration, so a later `getEntArray`
+/// does not see it. `_load.gsc`'s exploder threads end with one.
+pub fn delete(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = entity_receiver(recv)?;
+    host.ents.free(id);
+    Ok(Value::Undefined)
+}
+
+fn set_hidden(host: &mut GameHost, recv: Option<Target>, hidden: bool) -> Result<Value, ErrorKind> {
+    let id = entity_receiver(recv)?;
+    let e = host
+        .ents
+        .get_mut(id)
+        .ok_or(ErrorKind::BadType("no such entity"))?;
+    e.hidden = hidden;
+    Ok(Value::Undefined)
+}
+
+fn set_solid(host: &mut GameHost, recv: Option<Target>, solid: bool) -> Result<Value, ErrorKind> {
+    let id = entity_receiver(recv)?;
+    let e = host
+        .ents
+        .get_mut(id)
+        .ok_or(ErrorKind::BadType("no such entity"))?;
+    e.solid = solid;
+    Ok(Value::Undefined)
+}
+
+/// `hide()`/`show()` and `solid()`/`notSolid()` flip real flags on the
+/// entity, not script-struct keys: `_load.gsc` hides every exploder model
+/// at load and stage 5 reads these when it builds entity states.
+pub fn hide(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    set_hidden(host, recv, true)
+}
+
+pub fn show(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    set_hidden(host, recv, false)
+}
+
+pub fn solid(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    set_solid(host, recv, true)
+}
+
+pub fn not_solid(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    set_solid(host, recv, false)
+}
+
+/// `setModel(name)` allocates a model configstring slot and stores the name,
+/// so `.model` reads back what was set.
+pub fn set_model(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = entity_receiver(recv)?;
+    let Some(Value::String(name)) = args.first() else {
+        return Err(ErrorKind::BadType("setModel takes a model name"));
+    };
+    let name = *name;
+    let text = cx.resolve(name).to_string();
+    host.allocators
+        .index(&mut host.configstrings, CsRange::Model, &text)?;
+    let field = cx.intern_folded("model");
+    host.set_field(cx, id, field, Value::String(name))?;
+    Ok(Value::Undefined)
+}
+
+/// `getOrigin()`, the receiver's origin slot, read the way a `.origin`
+/// script access is.
+pub fn get_origin(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = entity_receiver(recv)?;
+    let origin = cx.intern_folded("origin");
+    Ok(host.get_field(cx, id, origin))
+}
+
+/// `getEntityNumber()`. A HUD element is not a gentity, it has its own field
+/// table, so asking for its entity number is a type error
+/// (docs/research/cod11-gsc-object-model.md section 3).
+pub fn get_entity_number(
+    _host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = entity_receiver(recv)?;
+    if id.0 >= FIRST_HUD_ELEM {
+        return Err(ErrorKind::BadType(
+            "getEntityNumber on a HUD element, not a gentity",
+        ));
+    }
+    Ok(Value::Int(id.0 as i32))
+}
+
+/// `isPlayer(ent)` reads the entity number against `MAX_CLIENTS`, which is
+/// what makes it answerable before stage 4 gives clients any state. Retail's
+/// `isPlayer` reads `ent->client`; stage 4 replaces this with the real check.
+pub fn is_player(
+    _host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let Some(Value::Entity(id)) = args.first() else {
+        return Err(ErrorKind::BadType("isPlayer takes an entity"));
+    };
+    Ok(Value::Int((id.0 < MAX_CLIENTS as u32) as i32))
+}
+
+/// `isDefined(x)`: false only for a missing argument or `undefined` itself.
+pub fn is_defined(
+    _host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    Ok(Value::Int(
+        !matches!(args.first(), None | Some(Value::Undefined)) as i32,
+    ))
+}
+
+/// `isTouching(other)`. Entities gain real bounds in stage 5; until then
+/// this compares origins within a small box rather than pretending to be a
+/// real intersection test.
+pub fn is_touching(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let a = entity_receiver(recv)?;
+    let Some(Value::Entity(b)) = args.first() else {
+        return Err(ErrorKind::BadType("isTouching takes an entity"));
+    };
+    let b = *b;
+    let origin = cx.intern_folded("origin");
+    let oa = host.get_field(cx, a, origin);
+    let ob = host.get_field(cx, b, origin);
+    let (Value::Vector(oa), Value::Vector(ob)) = (oa, ob) else {
+        return Ok(Value::Int(0));
+    };
+    const BOX: f32 = 32.0;
+    let touching = (0..3).all(|i| (oa[i] - ob[i]).abs() <= BOX);
+    Ok(Value::Int(touching as i32))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::testing::fixture;
+
+    /// `getEntArray(value, key)` walks slots in ascending entity number and
+    /// keeps the ones whose field equals the value: `Scr_GetEntArray`
+    /// 0x61980, which loops 0..level.num_entities filtering on `inuse`.
+    #[test]
+    fn get_ent_array_returns_ascending_entity_number() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            for name in ["b", "a", "c"] {
+                let id = host.ents.spawn(cx).unwrap();
+                let f = cx.intern_folded("classname");
+                let v = cx.intern_exact("script_origin");
+                host.set_field(cx, id, f, Value::String(v)).unwrap();
+                let t = cx.intern_folded("targetname");
+                let n = cx.intern_exact(name);
+                host.set_field(cx, id, t, Value::String(n)).unwrap();
+            }
+            let cls = Value::String(cx.intern_exact("script_origin"));
+            let key = Value::String(cx.intern_exact("classname"));
+            let Value::Array(arr) = get_ent_array(&mut host, cx, None, &[cls, key]).unwrap() else {
+                panic!("not an array");
+            };
+            assert_eq!(cx.array_len(arr), 3);
+            let t = cx.intern_folded("targetname");
+            let mut got = Vec::new();
+            for i in 0..3 {
+                let Value::Entity(e) = cx.get_index(arr, ArrayKey::Int(i)) else {
+                    panic!()
+                };
+                let field = host.get_field(cx, e, t);
+                let name = match field {
+                    Value::String(a) => cx.resolve(a).to_string(),
+                    v => panic!("{v:?}"),
+                };
+                got.push(name);
+            }
+            // Spawn order, not alphabetical: entity number decides.
+            assert_eq!(got, ["b", "a", "c"]);
+        });
+    }
+
+    /// The key is resolved the same way a plain `.name` read is, so a radiant
+    /// key works as a key. The corpus passes six: targetname, classname,
+    /// script_noteworthy, target, export and team.
+    #[test]
+    fn get_ent_array_keys_on_script_defined_fields_too() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let a = host.ents.spawn(cx).unwrap();
+            let b = host.ents.spawn(cx).unwrap();
+            let k = cx.intern_folded("script_noteworthy");
+            let v = cx.intern_exact("loud");
+            host.set_field(cx, a, k, Value::String(v)).unwrap();
+            let _ = b;
+            let want = Value::String(cx.intern_exact("loud"));
+            let key = Value::String(cx.intern_exact("script_noteworthy"));
+            let Value::Array(arr) = get_ent_array(&mut host, cx, None, &[want, key]).unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(cx.array_len(arr), 1);
+        });
+    }
+
+    /// The key argument is a string value, so it is matched exactly, not
+    /// folded; the field name it names is then folded like any field name.
+    #[test]
+    fn get_ent_array_returns_an_empty_array_when_nothing_matches() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let want = Value::String(cx.intern_exact("nothing"));
+            let key = Value::String(cx.intern_exact("classname"));
+            let Value::Array(arr) = get_ent_array(&mut host, cx, None, &[want, key]).unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(cx.array_len(arr), 0);
+        });
+    }
+
+    /// `getEnt` is the single-result form and yields `undefined` on a miss,
+    /// which is what every `isDefined(getEnt(...))` in the corpus tests.
+    #[test]
+    fn get_ent_yields_undefined_on_a_miss() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let want = Value::String(cx.intern_exact("nope"));
+            let key = Value::String(cx.intern_exact("targetname"));
+            assert_eq!(
+                get_ent(&mut host, cx, None, &[want, key]).unwrap(),
+                Value::Undefined
+            );
+        });
+    }
+
+    /// `spawn(classname, origin)` makes a live entity with both fields set,
+    /// numbered after everything already in the table.
+    #[test]
+    fn spawn_sets_classname_and_origin() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let cls = Value::String(cx.intern_exact("script_origin"));
+            let at = Value::Vector([64.0, 0.0, 0.0]);
+            let Value::Entity(e) = spawn(&mut host, cx, None, &[cls, at]).unwrap() else {
+                panic!()
+            };
+            assert_eq!(e, EntId(72));
+            let o = cx.intern_folded("origin");
+            assert_eq!(host.get_field(cx, e, o), Value::Vector([64.0, 0.0, 0.0]));
+        });
+    }
+
+    /// `delete()` takes the entity out of iteration, so a later `getEntArray`
+    /// does not see it. `_load.gsc`'s exploder threads end with one.
+    #[test]
+    fn delete_removes_the_entity_from_iteration() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            delete(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            assert_eq!(host.ents.iter_inuse().count(), 0);
+        });
+    }
+
+    /// `hide`/`show` and `solid`/`notSolid` flip real flags on the entity, not
+    /// script-struct keys: `_load.gsc` hides every exploder model at load and
+    /// stage 5 reads these when it builds entity states.
+    #[test]
+    fn hide_and_notsolid_flip_entity_flags() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let t = Some(Target::Entity(e));
+            assert!(!host.ents.get(e).unwrap().hidden);
+            hide(&mut host, cx, t, &[]).unwrap();
+            assert!(host.ents.get(e).unwrap().hidden);
+            show(&mut host, cx, t, &[]).unwrap();
+            assert!(!host.ents.get(e).unwrap().hidden);
+            not_solid(&mut host, cx, t, &[]).unwrap();
+            assert!(!host.ents.get(e).unwrap().solid);
+        });
+    }
+
+    /// `isPlayer` reads the entity number against `MAX_CLIENTS`, which is
+    /// what makes it answerable before stage 4 gives clients any state.
+    #[test]
+    fn is_player_reads_the_entity_number() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let map_ent = Value::Entity(host.ents.spawn(cx).unwrap());
+            assert_eq!(
+                is_player(&mut host, cx, None, &[map_ent]).unwrap(),
+                Value::Int(0)
+            );
+            let client = Value::Entity(EntId(3));
+            assert_eq!(
+                is_player(&mut host, cx, None, &[client]).unwrap(),
+                Value::Int(1)
+            );
+        });
+    }
+
+    /// `getEntityNumber` on a HUD element is a type error: HUD elements have
+    /// their own field table and are not gentities
+    /// (docs/research/cod11-gsc-object-model.md section 3).
+    #[test]
+    fn get_entity_number_refuses_a_hud_element() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let hud = Some(Target::Entity(EntId(FIRST_HUD_ELEM)));
+            assert!(get_entity_number(&mut host, cx, hud, &[]).is_err());
+        });
+    }
+
+    /// `setModel` allocates a model configstring slot and stores the name,
+    /// so `.model` reads back what was set.
+    #[test]
+    fn set_model_allocates_a_configstring_and_stores_the_name() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let name = Value::String(cx.intern_exact("xmodel/fx"));
+            set_model(&mut host, cx, Some(Target::Entity(e)), &[name]).unwrap();
+            assert_eq!(host.configstrings[269], "xmodel/fx");
+            let m = cx.intern_folded("model");
+            match host.get_field(cx, e, m) {
+                Value::String(a) => assert_eq!(cx.resolve(a), "xmodel/fx"),
+                v => panic!("{v:?}"),
+            }
+        });
+    }
+}

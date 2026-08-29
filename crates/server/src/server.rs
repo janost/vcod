@@ -58,7 +58,7 @@ const FRAME_MS: i32 = 50;
 /// Retail's `MAX_CLIENTS`. Client slots index a 6-bit wire field
 /// (clientState entries; `ps.clientNum` gets 8), so more than 64 would
 /// collide silently.
-const MAX_CLIENTS: usize = 64;
+pub(crate) const MAX_CLIENTS: usize = 64;
 
 pub struct ServerConfig {
     pub map: String,
