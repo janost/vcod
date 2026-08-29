@@ -581,7 +581,7 @@ Not fixed here; see the "Still unestablished" entry below.
 
 ## 10. Divergences kept as documentation, not code
 
-Eight places where the implementation made a deliberate call the corpus
+Ten places where the implementation made a deliberate call the corpus
 cannot settle, recorded here rather than silently baked into behaviour that
 looks authoritative:
 
@@ -682,3 +682,24 @@ looks authoritative:
   on one event is killed rather than woken, regardless of which it
   registered first. The wake order *within* each pass is measured (start
   order, `# probe_notify`); the ordering *between* the two passes is not.
+- **Damage from `radiusDamage` is queued and drained after `run_frame`, not
+  dispatched inline.** Retail runs `CodeCallback_PlayerDamage` synchronously
+  from inside `radiusDamage`, a builtin calling back into script mid-call.
+  `Cx` deliberately keeps no route back into the VM, the same reason
+  `notify` is queued rather than resolved inline (the first entry above), so
+  `radiusDamage` pushes a `DamageEvent` onto `GameHost.damage`
+  (`crates/server/src/game/damage.rs`) instead of calling script directly;
+  the server drains the queue after `run_frame` returns, which stage 6
+  wires up. Observable: a script that calls `radiusDamage` and then reads
+  `self.health` in the same expression sees the value from before the
+  callback runs, not after. This is architectural, following directly from
+  `Cx`'s no-reentrancy rule, not something a probe measured retail
+  disagreeing on.
+- **A full entity table errors instead of reusing a freed slot.** Retail's
+  `G_Spawn` only starts scanning for a freed slot once `level.num_entities`
+  reaches `ENTITYNUM_WORLD` (1022); `ObjectTable::spawn`
+  (`crates/server/src/game/entity.rs`) raises
+  `ErrorKind::BadType("entity table full")` at that same threshold instead
+  of scanning, on the reasoning that a map allocating close to 950 entities
+  is a bug worth seeing, not a slot to recycle. Pinned by
+  `entity::tests::the_table_stops_at_entitynum_world`.
