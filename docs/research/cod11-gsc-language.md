@@ -51,7 +51,7 @@ VERIFIED by the compile census (`crates/gsc/tests/corpus.rs`,
 `every_stock_script_compiles`): all 799 files parse and compile, to 4834
 functions total; `the_corpus_builtin_surface_is_stable` counts 339 distinct
 names this per-file, no-cross-file-resolution compile classifies as a
-builtin call (larger than the engine's own 144-entry table, §7, because an
+builtin call (larger than the engine's own 216 builtins, §7, because an
 unresolved call to another script's function looks identical to a call to a
 real builtin until the loader follows the reference). Every function that
 came out of every file also passed `bytecode::stack_depth`, the
@@ -317,61 +317,38 @@ which wakes this `waittill`.
 
 ## 7. The engine's script-function name table
 
-**Location, VERIFIED.** `nm -D` shows a data symbol `functions` at `0x7e508`
-in `.data`, immediately followed (no other symbol between) by a second
-symbol `spawns` at `0x7eb30`; `spawns` turns out to be a *different* table —
-valid entity classnames for the `spawn()`/map-load path (`func_door`,
-`trigger_multiple`, `misc_model`, `info_null`, ... — spot-checked, these are
-plainly classnames, not callables), not more builtin functions. So the
-builtin-name table lives in the closed range `[0x7e508, 0x7eb30)`, 1576
-bytes. `getcvar` sits inside it (`.rodata` offset `0x7870c`, part of a
-cluster with `getcvarfloat`/`getcvarint`/`isalive`/`isdefined` right next to
-it), matching the design's "near the `getcvar` string."
+Superseded by `cod11-gsc-object-model.md` section 9, which dumps every builtin
+table with `tools/re/dump_builtins.py`. The summary, and what it corrects:
 
-**Recipe (reproducible in seconds):** walk every 4-byte-aligned dword `v` in
-`[0x7e508, 0x7eb30)`. Read the dword at `v`'s value as a candidate pointer;
-if it falls inside `.rodata`'s address range (`0x6e260..0x7a394`, read off
-`objdump -h`) and the bytes there decode as a printable, NUL-terminated,
-identifier-shaped ASCII string, record it. `.data`'s file offset is `vaddr -
-0x1000` for this binary (non-PIE, confirmed from `objdump -h`'s VMA/file-offset
-columns); `.rodata` and `.text` file offsets equal their VAs.
+**Count: 216, VERIFIED.** Builtins are five tables, not one. `functions`
+(0x7e508, 106 entries) holds the free functions; `Scr_GetMethod` searches
+player (0x733dc, 46), scriptent (0x78d40, 12) and hudelem (0x749b4, 14)
+methods in that order and falls back to the generic entity methods (0x7ea00,
+38). Every walk is a linear `strcmp` over a hardcoded count.
 
-**Count: 144, VERIFIED — not "roughly 200."** The design doc's "roughly 200"
-does not hold up against a direct table walk; my own count, from the
-`functions` symbol to where the entries stop looking like callables and
-start looking like entity classnames (`info_null`, exactly at the `spawns`
-symbol boundary), is 144. Individual records look like `{name_ptr, func_ptr,
-flags}` for most entries (e.g. `getcvar` -> `0x5cff4`, flag `0`; `print` ->
-flag `1`) but the record stride is not a uniform 12 bytes for the whole
-table — a handful of entries (`getent`, `getentarray` among them) carry a
-null function pointer in the second field, which is why a strict fixed-stride
-walk undercounts; the pointer-scan recipe above sidesteps that by not
-assuming a struct shape. I did not fully resolve the struct, which is a gap
-worth closing before G2 needs a hard "does the host implement every name"
-check — `tools/re/` gains a proper dumper for it there, per the design's own
-note.
+**The record struct, VERIFIED.** `functions` records are 12 bytes
+`{char *name; void (*fn)(); int developer;}`; method records are 8 bytes
+`{char *name; void (*fn)();}`. `developer` is 1 on `print`, `println` and
+`assert` and 0 everywhere else, corroborated by CoDExtended's
+`SCRIPTFUNCTION { name, function, developer }` in `src/script.c`.
 
-Representative sample relevant to a deathmatch server (of the 144, not all
-listed): `getcvar`, `getcvarint`, `getcvarfloat`, `setcvar`,
-`spawn`, `spawnstruct`, `getent`, `getentarray`, `getentbynum`, `isdefined`,
-`isalive`, `bullettrace`, `radiusdamage`, `ambientplay`, `setcullfog`,
-`setexpfog`, `precachemodel`, `precacheitem`, `precacheshader`,
-`precachestring`, `precacheshellshock`, `precachemenu`, `precachestatusicon`,
-`precacheheadicon`, `attach`, `detach`, `linkto`, `getorigin`, `playsound`,
-`playloopsound`, `delete`, `setmodel`, `print`, `println`, `iprintln`,
-`iprintlnbold`, `distance`, `vectordot`, `vectornormalize`,
-`vectortoangles`, `anglestoforward`, `randomint`, `randomfloat`,
-`obituary`, `logprint`, `map_restart`, `exitlevel`.
+**Three earlier claims here were wrong**, all from the same cause: a pointer
+stored in `.data` reads as 0 in the file, because the module is a shared
+object and `.rel.data` supplies the address. Read the raw dwords and every
+function pointer looks null. So:
 
-**Open question, not settled here:** the design also names `move*`/`rotate*`
-mover builtins (`moveto`, `movex`, `movey`, `movez` exist as `.rodata`
-strings, VERIFIED). Pointers to them do **not** sit in the `[0x7e508,
-0x7eb30)` table; they sit in a different, smaller table embedded directly in
-`.rodata` (not `.data`) with a constant zero second field per entry, which
-reads like a diagnostic/whitelist list (plausibly "methods valid only on an
-`ET_MOVER` entity," used for an error message) rather than a call-dispatch
-table. Where the movers are actually dispatched from is unresolved; flagged
-for whoever picks up the mover-entity builtins in a later sub-project.
+- No record carries a null function pointer. `getent` is `Scr_GetEnt` and
+  `getentarray` is `Scr_GetEntArray`.
+- The old count of 144 was 106 plus 38 under a uniform 8-byte stride, which
+  garbles `functions`. The stride is not uniform across the region.
+- The `move*`/`rotate*` builtins are not a `.rodata` whitelist with a constant
+  zero second field. They are the scriptent method table in `.data`, with real
+  code pointers: `ScriptEntCmd_MoveTo`, `ScriptEntCmd_GravityMove`,
+  `ScriptEntCmd_RotateVelocity` and the rest.
+
+`Scr_GetFunction` writes the table's own spelling back through its `char **`
+first argument (0x5c199), so the engine canonicalises a builtin name on
+lookup, which is consistent with the case folding in section 8.
 
 ## 8. Atom identity and case folding
 

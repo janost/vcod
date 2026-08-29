@@ -174,6 +174,13 @@ engineering setup works.
 - `tools/re/net-notes.md` is the disassembly log for the Linux server binary
   (`objdump -d`, addresses virtual); `tools/re/dump_field_table.py` prints a
   netfield table from a VA. Known table addresses are in its docstring.
+  `tools/re/dump_script_fields.py` and `tools/re/dump_builtins.py` dump the
+  gsc script field tables, the `spawns` classnames and the five builtin
+  tables out of `game.mp.i386.so`; the findings and record layouts are in
+  `docs/research/cod11-gsc-object-model.md`. Both resolve `.rel.data`,
+  which is mandatory: a pointer stored in `.data` reads as 0 in the file
+  because the relocation supplies it, and reading the raw dwords makes every
+  function pointer in every one of these tables look null.
 
 ## Reverse engineering the client
 
