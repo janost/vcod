@@ -246,9 +246,15 @@ fn eval_neg(v: Value) -> Result<Value, ErrorKind> {
 /// tests/fixtures/semantics/retail-captures.txt). `!"a"` is not measured;
 /// treated here as fatal on the same footing as `""`, since nothing on the
 /// bootstrap path negates a cvar that isn't `"0"` or `"1"`.
+///
+/// `Localized` (a `&"KEY"` literal) folds into the same arm as `String`,
+/// as it does everywhere else in this crate (`Value::as_bool`'s own error
+/// arm, `format_number`): not measured against retail either way (no probe
+/// or stock script negates one), but excluding it would be a gap against
+/// the rest of the file's own convention, not a considered divergence.
 fn not_of(v: Value, interner: &Interner) -> Result<bool, ErrorKind> {
     match v {
-        Value::String(s) => {
+        Value::String(s) | Value::Localized(s) => {
             let text = interner.resolve(s);
             let n: f64 = text
                 .parse()
