@@ -265,7 +265,8 @@ mod tests {
             let d = k(cx, "probe_third");
             assert_eq!(
                 get_cvar_float(&mut host, cx, None, &[d]).unwrap(),
-                Value::Float(0.3333333333_f32)
+                // The probe set "0.3333333333"; this is that rounded to f32.
+                Value::Float(0.333_333_34_f32)
             );
         });
     }
