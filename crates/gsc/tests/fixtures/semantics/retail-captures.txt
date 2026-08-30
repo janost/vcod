@@ -171,13 +171,17 @@ PROBE mod_tight 1
 PROBE int_min_cast -2147483647
 PROBE int_min_direct -2147483647
 
+# probe_not_empty_string
+PROBE at not_string_empty
+PROBE_FATAL cannot cast "" to bool
+
 # probe_not_string
 PROBE at not_string_one
 PROBE not_string_one 0
 PROBE at not_string_zero
 PROBE not_string_zero 1
-PROBE at not_string_empty
-PROBE_FATAL cannot cast "" to bool
+PROBE at not_getcvar_allow
+PROBE not_getcvar_allow_fg42 1
 
 # probe_notify
 PROBE notify_order first

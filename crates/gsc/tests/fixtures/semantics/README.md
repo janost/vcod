@@ -40,6 +40,25 @@ way:
   `probe_level_bracket.gsc`, both skipped in `semantics_ab.rs`'s
   `KNOWN_GAPS_OUT_OF_SCOPE` since vcod's compiler has no equivalent
   static check to reproduce the empty-capture result).
+- **The engine caps loose gametype scripts at 31 and fails over to `dm`
+  without a word.** Past that count the console prints `Too many game type
+  scripts found! Only loading the first 31` once, and any gametype outside
+  the kept set loads as `g_gametype is not a valid gametype, defaulting to
+  dm` -- no `PROBE_FATAL`, no probe output at all, since `dm`'s own
+  bootstrap never calls the missing script's `logPrint`s. `run_probe.sh`
+  and `capture_probes.sh` never clean the homepath's
+  `main/maps/mp/gametypes/` between runs, so loose files from every probe
+  ever captured pile up there; this corpus now holds more than 31 probe
+  files, so a capture can silently produce the *compile-error* signature
+  above for a reason that has nothing to do with the script. This is what
+  happened to `probe_truthy_num`/`probe_truthy_undef`/`probe_truthy_vec` in
+  a prior regeneration: their sections came back empty, but re-running each
+  alone against a homepath with the stale `probe_*.gsc`/`.txt` files
+  cleared out reproduced their real, non-empty measurements exactly. Clear
+  the homepath's loose probe files before trusting any capture, and treat
+  an unexpectedly empty section as suspect until the raw console (not just
+  `run_probe.sh`'s filtered output) has been checked for
+  "is not a valid gametype".
 
 Probes emit `PROBE at <name>` before an expression that might be fatal, so a
 run that dies names what killed it.
@@ -82,16 +101,22 @@ Four more probes measure what the configstring capture in
   `getCvarFloat` coercion of unset and non-numeric cvars, cvar name case
   (insensitive), `getTime`'s sign and `randomInt`'s upper bound (`randomInt(1)`
   never returns 1).
-- `probe_not_string`, alone in its own file because it might still be the
-  fatal one: unary `!` on `"1"` and `"0"` both succeed (`0` and `1`), but
-  `!""` is a runtime error (`cannot cast "" to bool`) that kills the script
-  before it reaches `!getCvar("scr_allow_fg42")` -- so this file's capture
-  has no answer for the fg42 question, only for where retail's `!` stops
-  tolerating a string.
+- `probe_not_string` measures unary `!` on `"1"` and `"0"` (both succeed:
+  `0` and `1`) and on `!getCvar("scr_allow_fg42")`, which comes back `1` --
+  stock `scr_allow_fg42` is falsy, so `_teams::restrictPlacedWeapons`
+  deletes the map's placed fg42 weapons on a stock server. `!""` is a
+  separate, fatal case (`cannot cast "" to bool`, same family as
+  `probe_truthy`'s `if ("a")`) and lives alone in `probe_not_empty_string`,
+  since the original single-file version put `!""` ahead of the `getCvar`
+  case and retail's death there erased the fg42 answer entirely -- the
+  order within `probe_not_string.gsc` (`!"1"`, `!"0"`, then `!getCvar`) is
+  load-bearing, not incidental.
 - `probe_delete` measures the deferred-free window: `delete()` does not drop
   the entity from `getEntArray` or its count immediately, a spawn right
   after `delete()` gets a fresh entity number rather than reusing the
   just-deleted one, and after a 150 ms wait the count reflects the free
   having landed and a later spawn reuses the earlier freed number ahead of
-  a more recently freed one -- retail's free list is lowest-number-first,
-  not most-recently-freed-first.
+  a more recently freed one. That is consistent with either a
+  lowest-number-first free list or a plain FIFO (oldest-freed-first) one --
+  the probe's two deletions happened in number order, so it cannot tell
+  the two policies apart.

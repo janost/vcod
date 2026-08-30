@@ -1,8 +1,10 @@
-//	Unary ! applied to a string. probe_truthy records if ("a") as fatal
-//	(cannot cast "a" to bool), but _teams::restrictPlacedWeapons runs
-//	if(!getCvar("scr_allow_m1carbine")) on every stock dm server and the
-//	bootstrap completes, so ! and if differ. Alone in its own file because
-//	this may still be the fatal one.
+//	Unary ! applied to a non-empty string and to a cvar read. probe_truthy
+//	records if ("a") as fatal (cannot cast "a" to bool), but
+//	_teams::restrictPlacedWeapons runs if(!getCvar("scr_allow_m1carbine"))
+//	on every stock dm server and the bootstrap completes, so ! and if
+//	differ. The empty-string case is the fatal one and lives alone in
+//	probe_not_empty_string.gsc so it does not cost the getCvar measurement
+//	here, which decides whether stock placed fg42 weapons get deleted.
 //	Run by tools/run_probe.sh; every logPrint line is one measurement.
 
 main()
@@ -26,12 +28,6 @@ main()
 		logPrint("PROBE not_string_zero 1\n");
 	else
 		logPrint("PROBE not_string_zero 0\n");
-
-	logPrint("PROBE at not_string_empty\n");
-	if (!"")
-		logPrint("PROBE not_string_empty 1\n");
-	else
-		logPrint("PROBE not_string_empty 0\n");
 
 	logPrint("PROBE at not_getcvar_allow\n");
 	if (!getCvar("scr_allow_fg42"))
