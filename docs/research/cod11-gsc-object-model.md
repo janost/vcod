@@ -387,6 +387,16 @@ looks arbitrary until you read the BSP. `mp_pavlov.bsp`'s entity lump holds
 344, with exactly those targetnames in exactly that order. Entity lump order
 gives entity number, entity number gives `getEntArray` order.
 
+`getEntArray()` with **no** arguments is a second form of the same builtin.
+`Scr_GetEntArray` opens with a parameter-count call at 0x61989 and branches
+on the result: zero parameters take the path at 0x61997, which is the same
+slot walk with the field compare dropped, so it returns every entity in use
+in the same ascending order. `maps/mp/gametypes/_gameobjects.gsc::main` is
+the stock caller, and it is reached from every gametype's
+`Callback_StartGameType`, so a host that only implements the keyed form kills
+that thread on the first line. This one is read from the disassembly, not
+measured by a probe.
+
 The corpus passes six distinct keys: `targetname` (1183 call sites across both
 builtins), `classname` (131), `script_noteworthy` (31), `target` (5), `export`
 (2) and `team` (1). Two of those are `radiant/keys.txt` entries and one

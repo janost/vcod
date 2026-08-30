@@ -63,12 +63,25 @@ pub(crate) fn entity_receiver(recv: Option<Target>) -> Result<EntId, ErrorKind> 
 /// table, then the entity's script struct. The corpus passes six distinct
 /// keys and two of them are radiant keys, so a special case for the engine
 /// table would be wrong.
+///
+/// `getEntArray()` with no arguments is the second form: every entity in
+/// use, no filter. `Scr_GetEntArray` branches on the parameter count at
+/// 0x61989 and runs the same slot walk with the field compare dropped;
+/// `_gameobjects::main` is the caller in the stock corpus.
 pub fn get_ent_array(
     host: &mut GameHost,
     cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    if args.is_empty() {
+        let ids: Vec<EntId> = host.ents.iter_inuse().map(|(id, _)| id).collect();
+        let arr = cx.new_array();
+        for (n, id) in ids.into_iter().enumerate() {
+            cx.set_index(arr, ArrayKey::Int(n as i32), Value::Entity(id));
+        }
+        return Ok(Value::Array(arr));
+    }
     let [want, Value::String(key)] = args else {
         return Err(ErrorKind::BadType("getEntArray takes a value and a key"));
     };
@@ -92,13 +105,18 @@ pub fn get_ent_array(
 }
 
 /// The single-result form of `getEntArray`: `undefined` on a miss, which is
-/// what every `isDefined(getEnt(...))` in the corpus tests.
+/// what every `isDefined(getEnt(...))` in the corpus tests. `Scr_GetEnt` is
+/// its own function on retail and takes no unfiltered form, so the argument
+/// check is here rather than shared with `get_ent_array`.
 pub fn get_ent(
     host: &mut GameHost,
     cx: &mut Cx,
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    if args.len() != 2 {
+        return Err(ErrorKind::BadType("getEnt takes a value and a key"));
+    }
     let Value::Array(arr) = get_ent_array(host, cx, recv, args)? else {
         unreachable!("get_ent_array always returns an array");
     };
@@ -359,6 +377,25 @@ mod tests {
             }
             // Spawn order, not alphabetical: entity number decides.
             assert_eq!(got, ["b", "a", "c"]);
+        });
+    }
+
+    /// `getEntArray()` with no arguments is every entity in use, in the same
+    /// ascending order, no filter: `_gameobjects::main` opens with it.
+    #[test]
+    fn get_ent_array_with_no_arguments_is_every_entity() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let want: Vec<EntId> = (0..3).map(|_| host.ents.spawn(cx).unwrap()).collect();
+            let Value::Array(arr) = get_ent_array(&mut host, cx, None, &[]).unwrap() else {
+                panic!("not an array");
+            };
+            assert_eq!(cx.array_len(arr), want.len());
+            let got: Vec<Value> = (0..want.len() as i32)
+                .map(|i| cx.get_index(arr, ArrayKey::Int(i)))
+                .collect();
+            let want: Vec<Value> = want.into_iter().map(Value::Entity).collect();
+            assert_eq!(got, want);
         });
     }
 
