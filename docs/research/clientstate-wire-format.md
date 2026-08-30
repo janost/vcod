@@ -64,20 +64,25 @@ All bases confirmed from `game.mp.i386.so` write sites. Each helper does `lea BA
 | 3 | ambient track `n\<alias>\t\<fadems>` | `GScr_AmbientPlay 0x5ae96` |
 | 7 | delimited list of all weapon names | `BG_SetupWeaponInfo 0x368ca` |
 | 8 | registered-items bitstring | `SaveRegisteredItems 0x4efa0` |
-| 22..27 | status icons | `GScr_GetStatusIconIndex` |
-| 30..42 | head icons | `GScr_GetHeadIconIndex` |
+| 21..28 | status icons | `GScr_GetStatusIconIndex 0x5c7c8`, `xor %ebx,%ebx`, `lea 0x15(%ebx)`, `cmp $0x7,%ebx` |
+| 29..43 | head icons | `GScr_GetHeadIconIndex 0x5c840`, `xor %ebx,%ebx`, `lea 0x1d(%ebx)`, `cmp $0xe,%ebx` |
 | 44+ | locations (NOT players) | `target_location_linkup 0x646e4/0x6472e` |
 | 109..139 | tag names -> `attachTagIndex` | `G_TagIndex 0x66fda`, `lea 0x6c`, `cmp $0x20` |
 | 269..523 | models -> `modelindex`, `attachModelIndex` | `G_ModelIndex 0x66f09`, `lea 0x10c`, `cmp $0xff` |
 | 525..779 | sound aliases | `G_SoundAliasIndex` |
 | 781..843 | effects | `G_EffectIndex` |
 | 1101..1115 | shellshock | `G_ShellShockIndex` |
-| 1181..1210 | script menus | `GScr_GetScriptMenuIndex` |
+| 1180..1211 | script menus | `GScr_GetScriptMenuIndex 0x5c73c`, `xor %ebx,%ebx`, `lea 0x49c(%ebx)`, `cmp $0x1f,%ebx` |
 | 1212+ | hint strings | `G_GetHintStringIndex` |
-| 1245..1499 | localized strings | `G_LocalizedStringIndex` |
-| 1501..1627 | shaders | `G_ShaderIndex` |
+| 1245..1499 | localized strings | `G_LocalizedStringIndex 0x65e30`, `mov $0x1,%ebx`, `lea 0x4dc(%ebx)`, `cmp $0x100,%ebx` |
+| 1501..1627 | shaders | `G_ShaderIndex 0x65ee8`, `mov $0x1,%ebx`, `lea 0x5dc(%ebx)`, `cmp $0x80,%ebx` |
 
 `MAX_CONFIGSTRINGS = 2048`. `CS_MODELS = 268` independently corroborated by CoDExtended `src/script.c:955` (`SV_SetConfigstring(i + 268, name)`).
+
+The status-icon, head-icon and script-menu indexers start their scan loop at
+`i = 0` (`xor %ebx,%ebx`); the localized-string and shader indexers start at
+`i = 1` (`mov $0x1,%ebx`). Applying one convention to all five previously
+put the first three ranges one slot too high.
 
 Configstring 44 is the locations base. Nothing in the table is a per-player block.
 

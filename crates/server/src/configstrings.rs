@@ -10,116 +10,22 @@ use vcod_gsc::ErrorKind;
 /// `BG_SetupWeaponInfo`'s list, configstring 7, 1-based on the wire.
 pub const WEAPON_LIST: &str = "bar_mp bar_slow_mp bren_mp colt_mp enfield_mp fg42_mp fg42_semi_mp fraggrenade_mp kar98k_mp kar98k_sniper_mp luger_mp m1carbine_mp m1garand_mp mg42_bipod_duck_mp mg42_bipod_prone_mp mg42_bipod_stand_mp mk1britishfrag_mp mosin_nagant_mp mosin_nagant_sniper_mp mp40_mp mp44_mp mp44_semi_mp panzerfaust_mp ppsh_mp ppsh_semi_mp ptrs41_antitank_rifle_mp rgd-33russianfrag_mp springfield_mp sten_mp stielhandgranate_mp thompson_mp thompson_semi_mp";
 
-/// Map-independent game-module configstrings. 140..178 are cvar names and
-/// 204..242 their values (`Cvar_Set(cs[140+i], cs[204+i])` on the client);
-/// each pair sits adjacent so the halves cannot drift apart.
+/// Map-independent configstrings the engine itself sets. Everything else
+/// this table used to carry is script output and is earned back at load:
+/// 21/22 from `precacheStatusIcon`, 29 from `precacheHeadIcon`,
+/// 140..180 / 204..244 from the cvar mirror, 1180..1187 from
+/// `precacheMenu`, 1245/1246 from `precacheString` and 1501..1505 from
+/// `precacheShader`.
+///
+/// 1212/1213 stay: no stock script precaches them, so they come from the
+/// engine's own `G_GetHintStringIndex` at weapon load.
 pub const STATIC: &[(usize, &str)] = &[
     (2, "cod"),
     (7, WEAPON_LIST),
     (13, "0"), // level.startTime
     (20, "\\winner\\0"),
-    (21, "gfx/hud/hud@status_dead.tga"),
-    (22, "gfx/hud/hud@status_connecting.tga"),
-    (29, "gfx/hud/headicon@quickmessage"),
-    (140, "bg_duck2prone_time"),
-    (204, "400"),
-    (141, "bg_foliagesnd_fastinterval"),
-    (205, "500"),
-    (142, "bg_foliagesnd_maxspeed"),
-    (206, "180"),
-    (143, "bg_foliagesnd_minspeed"),
-    (207, "40"),
-    (144, "bg_foliagesnd_resetinterval"),
-    (208, "500"),
-    (145, "bg_foliagesnd_slowinterval"),
-    (209, "1500"),
-    (146, "bg_ladder_yawcap"),
-    (210, "100"),
-    (147, "bg_prone2duck_time"),
-    (211, "400"),
-    (148, "bg_prone_softyawedge"),
-    (212, "1"),
-    (149, "bg_prone_yawcap"),
-    (213, "85"),
-    (150, "bg_viewheight_crouched"),
-    (214, "40"),
-    (151, "bg_viewheight_prone"),
-    (215, "11"),
-    (152, "bg_viewheight_standing"),
-    (216, "60"),
-    (153, "g_ScoresBanner_Allies"),
-    (217, "gfx/hud/hud@mpflag_american.tga"),
-    (154, "g_ScoresBanner_Axis"),
-    (218, "gfx/hud/hud@mpflag_german.tga"),
-    (155, "g_ScoresBanner_None"),
-    (219, "gfx/hud/hud@mpflag_none.tga"),
-    (156, "g_ScoresBanner_Spectators"),
-    (220, "gfx/hud/hud@mpflag_spectator.tga"),
-    (157, "g_TeamColor_Allies"),
-    (221, "0.5 0.5 1"),
-    (158, "g_TeamColor_Axis"),
-    (222, "1 0.5 0.5"),
-    (159, "g_TeamName_Allies"),
-    (223, "GAME_ALLIES"),
-    (160, "g_TeamName_Axis"),
-    (224, "GAME_AXIS"),
-    (161, "scr_allow_bar"),
-    (225, "1"),
-    (162, "scr_allow_bren"),
-    (226, "1"),
-    (163, "scr_allow_enfield"),
-    (227, "1"),
-    (164, "scr_allow_fg42"),
-    (228, "0"),
-    (165, "scr_allow_kar98k"),
-    (229, "1"),
-    (166, "scr_allow_kar98ksniper"),
-    (230, "1"),
-    (167, "scr_allow_m1carbine"),
-    (231, "1"),
-    (168, "scr_allow_m1garand"),
-    (232, "1"),
-    (169, "scr_allow_mp40"),
-    (233, "1"),
-    (170, "scr_allow_mp44"),
-    (234, "1"),
-    (171, "scr_allow_nagant"),
-    (235, "1"),
-    (172, "scr_allow_nagantsniper"),
-    (236, "1"),
-    (173, "scr_allow_panzerfaust"),
-    (237, "1"),
-    (174, "scr_allow_ppsh"),
-    (238, "1"),
-    (175, "scr_allow_springfield"),
-    (239, "1"),
-    (176, "scr_allow_sten"),
-    (240, "1"),
-    (177, "scr_allow_thompson"),
-    (241, "1"),
-    (178, "scr_allow_vote"),
-    (242, "1"),
-    // 180 `scr_motd` stays unset. Retail sets it empty, and an empty value
-    // ends the client's 140/204 loop.
-    // 1180/1181 pick the American/German team menus. The map's nationality is
-    // script data the server does not have, so a Russian map gets the wrong
-    // menu until game logic exists.
-    (1180, "team_americangerman"),
-    (1181, "weapon_american"),
-    (1182, "weapon_german"),
-    (1183, "viewmap"),
-    (1184, "callvote"),
-    (1185, "quickcommands"),
-    (1186, "quickstatements"),
-    (1187, "quickresponses"),
     (1212, "CGAME_USEMG42"),
     (1213, "CGAME_USEPTRS41"),
-    (1245, "MPSCRIPT_PRESS_ACTIVATE_TO_RESPAWN"),
-    (1246, "MPSCRIPT_KILLCAM"),
-    (1502, "black"),
-    (1503, "hudScoreboard_mp"),
-    (1504, "gfx/hud/hud@mpflag_none.tga"),
-    (1505, "gfx/hud/hud@mpflag_spectator.tga"),
 ];
 
 /// `Cvar_InfoString(CVAR_SERVERINFO)`, capture cs 0. Alphabetical, as the
@@ -164,56 +70,57 @@ pub fn systeminfo(server_id: u8) -> Info {
 pub fn static_configstrings(cfg: &ServerConfig, server_id: u8) -> Vec<String> {
     let mut cs = vec![String::new(); PROTOCOL_V1.max_configstrings];
     // Names an out-of-range literal instead of a bare index panic.
-    debug_assert!(STATIC.iter().all(|&(i, _)| i < cs.len()) && 1501 < cs.len());
+    debug_assert!(STATIC.iter().all(|&(i, _)| i < cs.len()));
     cs[0] = serverinfo(cfg).to_string();
     cs[1] = systeminfo(server_id).to_string();
     for &(i, s) in STATIC {
         cs[i] = s.to_string();
     }
-    // 179/243 is the layout-image cvar pair, 1501 the same path in the
-    // material block.
-    let layout = format!("levelshots/layouts/hud@layout_{}", cfg.map);
-    cs[179] = "scr_layoutimage".to_string();
-    cs[243] = layout.clone();
-    cs[1501] = layout;
     cs
 }
 
 /// A configstring block the game module allocates into at runtime, each
-/// mirroring one engine indexer. Ranges are from
-/// docs/research/clientstate-wire-format.md; the indexer each mirrors is in
-/// docs/design/2026-08-28-gsc-gameplay-design.md.
-///
-/// Only the four blocks a builtin actually allocates into. The other engine
-/// indexers (status icons, head icons, menus, hint strings, localized
-/// strings, shaders) get a variant when a builtin needs one and its start
-/// has been checked against `STATIC`, not before: several of those blocks
-/// begin on a slot `STATIC` already fills, so a speculative range would
-/// have overwritten a configstring the client needs on its first
-/// allocation.
+/// mirroring one engine indexer in `game.mp.i386.so`. The bounds are the
+/// ones those indexers walk; the addresses are in
+/// docs/research/clientstate-wire-format.md.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum CsRange {
+    StatusIcon,
+    HeadIcon,
     Tag,
     Model,
     SoundAlias,
     Effect,
+    Menu,
+    Localized,
+    Shader,
 }
 
 impl CsRange {
-    pub const ALL: [CsRange; 4] = [
+    pub const ALL: [CsRange; 9] = [
+        CsRange::StatusIcon,
+        CsRange::HeadIcon,
         CsRange::Tag,
         CsRange::Model,
         CsRange::SoundAlias,
         CsRange::Effect,
+        CsRange::Menu,
+        CsRange::Localized,
+        CsRange::Shader,
     ];
 
     /// Inclusive.
     pub fn bounds(self) -> (usize, usize) {
         match self {
+            CsRange::StatusIcon => (21, 28),
+            CsRange::HeadIcon => (29, 43),
             CsRange::Tag => (109, 139),
             CsRange::Model => (269, 523),
             CsRange::SoundAlias => (525, 779),
             CsRange::Effect => (781, 843),
+            CsRange::Menu => (1180, 1211),
+            CsRange::Localized => (1245, 1499),
+            CsRange::Shader => (1501, 1627),
         }
     }
 }
@@ -227,10 +134,15 @@ impl CsRange {
 /// all-zero cursors and the first allocation would land in configstring 0,
 /// the serverinfo slot.
 pub struct Allocators {
+    status_icon: usize,
+    head_icon: usize,
     tag: usize,
     model: usize,
     sound_alias: usize,
     effect: usize,
+    menu: usize,
+    localized: usize,
+    shader: usize,
 }
 
 impl Default for Allocators {
@@ -242,19 +154,29 @@ impl Default for Allocators {
 impl Allocators {
     pub fn new() -> Self {
         Allocators {
+            status_icon: CsRange::StatusIcon.bounds().0,
+            head_icon: CsRange::HeadIcon.bounds().0,
             tag: CsRange::Tag.bounds().0,
             model: CsRange::Model.bounds().0,
             sound_alias: CsRange::SoundAlias.bounds().0,
             effect: CsRange::Effect.bounds().0,
+            menu: CsRange::Menu.bounds().0,
+            localized: CsRange::Localized.bounds().0,
+            shader: CsRange::Shader.bounds().0,
         }
     }
 
     fn next_mut(&mut self, range: CsRange) -> &mut usize {
         match range {
+            CsRange::StatusIcon => &mut self.status_icon,
+            CsRange::HeadIcon => &mut self.head_icon,
             CsRange::Tag => &mut self.tag,
             CsRange::Model => &mut self.model,
             CsRange::SoundAlias => &mut self.sound_alias,
             CsRange::Effect => &mut self.effect,
+            CsRange::Menu => &mut self.menu,
+            CsRange::Localized => &mut self.localized,
+            CsRange::Shader => &mut self.shader,
         }
     }
 
@@ -321,15 +243,36 @@ mod tests {
                 "{r:?} overlaps a range already declared"
             );
             seen.push((lo, hi));
-            // 0, 1, 179, 243 and 1501 are set by `static_configstrings`
-            // outside the `STATIC` list.
-            for i in STATIC.iter().map(|&(i, _)| i).chain([0, 1, 179, 243, 1501]) {
+            // 0 and 1 are set by `static_configstrings` outside the
+            // `STATIC` list (serverinfo, systeminfo). 179/243/1501 used to
+            // be as well, but the layout-image write is gone now that
+            // `Shader` genuinely starts at 1501.
+            for i in STATIC.iter().map(|&(i, _)| i).chain([0, 1]) {
                 assert!(
                     i < lo || i > hi,
                     "{r:?} covers configstring {i}, which the static table sets"
                 );
             }
         }
+    }
+
+    /// Ranges are the ones the indexers in `game.mp.i386.so` walk, not the
+    /// ones the design table guessed: the icon and menu indexers start their
+    /// scan at `i = 0`, the localized-string and shader ones at `i = 1`, and
+    /// applying one convention to all five is how three of them ended up a
+    /// slot too high.
+    #[test]
+    fn the_ranges_are_the_ones_the_indexers_walk() {
+        assert_eq!(CsRange::Tag.bounds(), (109, 139));
+        assert_eq!(CsRange::StatusIcon.bounds(), (21, 28));
+        assert_eq!(CsRange::HeadIcon.bounds(), (29, 43));
+        assert_eq!(CsRange::Model.bounds(), (269, 523));
+        assert_eq!(CsRange::SoundAlias.bounds(), (525, 779));
+        assert_eq!(CsRange::Effect.bounds(), (781, 843));
+        assert_eq!(CsRange::Menu.bounds(), (1180, 1211));
+        assert_eq!(CsRange::Localized.bounds(), (1245, 1499));
+        assert_eq!(CsRange::Shader.bounds(), (1501, 1627));
+        assert_eq!(CsRange::ALL.len(), 9);
     }
 
     /// Exhausting a range is a hard error, not a wrap or a silent overwrite:

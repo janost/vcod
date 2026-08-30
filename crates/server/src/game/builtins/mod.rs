@@ -11,4 +11,5 @@ pub mod fx;
 pub mod io;
 pub mod math;
 pub mod mover;
+pub mod precache;
 pub mod sound;

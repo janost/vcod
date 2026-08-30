@@ -36,6 +36,7 @@ pub fn is_builtin(name: &str) -> bool {
         || builtins::combat::lookup(name).is_some()
         || builtins::mover::lookup(name).is_some()
         || builtins::cvar::lookup(name).is_some()
+        || builtins::precache::lookup(name).is_some()
         || BUILTINS.contains(&name)
 }
 
@@ -133,6 +134,9 @@ impl Host for GameHost {
             return f(self, cx, recv, args);
         }
         if let Some(f) = builtins::cvar::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        if let Some(f) = builtins::precache::lookup(&folded) {
             return f(self, cx, recv, args);
         }
         match folded.as_str() {
@@ -257,6 +261,7 @@ mod tests {
             .chain(builtins::combat::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::mover::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::cvar::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::precache::NAMES.iter().map(|(n, _)| *n))
             .collect();
         for name in names {
             let mut vm = vcod_gsc::Vm::new();
