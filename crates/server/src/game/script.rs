@@ -64,6 +64,7 @@ impl ScriptRuntime {
         let mut host = GameHost::new(configstrings);
         host.cvars = cvars;
         host.world = world;
+        host.level_time_ms = now_ms;
 
         // `_load.gsc::main`, in mp_pavlov's own closure, calls `getEntArray`
         // in its first statements, so the object table must hold every map
@@ -123,6 +124,7 @@ impl ScriptRuntime {
 
     /// One server frame of script.
     pub fn run_frame(&mut self, now_ms: i32) {
+        self.host.level_time_ms = now_ms;
         for e in self.vm.run_frame(&mut self.host, now_ms) {
             log::warn!("script error: {e:?}");
         }
@@ -135,6 +137,12 @@ impl ScriptRuntime {
                 self.host.damage.len()
             );
             self.host.damage.clear();
+        }
+        // Stage 6 ends the map on this; until then, log once and clear it
+        // so a script that called exitLevel does not spam every frame after.
+        if self.host.exit_level {
+            log::debug!("gsc: exitLevel() called, ending the map is not wired yet");
+            self.host.exit_level = false;
         }
     }
 }

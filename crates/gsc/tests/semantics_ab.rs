@@ -168,8 +168,18 @@ fn captures() -> BTreeMap<String, (Vec<String>, Option<String>)> {
 /// which live in `crates/server`; it runs there, in
 /// `crates/server/tests/semantics_ents.rs`, against this same capture file.
 /// `probe_delete` needs the same two things to measure the deferred-free
-/// window on real spawned entities, so it is claimed there too.
-const RUN_IN_SERVER_CRATE: &[&str] = &["probe_delete", "probe_ents"];
+/// window on real spawned entities, so it is claimed there too. `probe_cvar`
+/// and `probe_not_string` call `getCvar`/`setCvar`/`getCvarInt`/
+/// `getCvarFloat`/`getTime`/`randomInt`, which this file's `ProbeHost`
+/// cannot answer without a fake cvar table -- the real one is
+/// `crates/server`'s `Cvars`, which `vcod-gsc` may not depend on -- so they
+/// run there too, against a real `GameHost`.
+const RUN_IN_SERVER_CRATE: &[&str] = &[
+    "probe_cvar",
+    "probe_delete",
+    "probe_ents",
+    "probe_not_string",
+];
 
 /// `game.foo = 1` and `level["k"] = "v"` are, on retail, *compile*-time
 /// rejections ("not an object" / "not an array, string, or vector") that

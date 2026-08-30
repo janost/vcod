@@ -68,6 +68,18 @@ pub struct GameHost {
     /// server's `games_mp.log`; this is where that will come from, and it is
     /// what lets a test replay a retail capture.
     pub script_log: Vec<String>,
+    /// The level clock in milliseconds: `getTime()` reads it, and it is set
+    /// by `ScriptRuntime::load` at map load and by `run_frame` every frame
+    /// after. `getTime`'s real units are unmeasured (`probe_cvar` only
+    /// established non-negative); this is the reading chosen. A later task's
+    /// deferred entity free also needs the level clock rather than a
+    /// per-call timestamp, which is why this lives on the host instead of
+    /// being threaded through `get_time`'s own call.
+    pub level_time_ms: i32,
+    /// Set by `exitLevel()`, drained and logged once per frame by
+    /// `run_frame`. No stage in this sub-project acts on it; stage 6 ("the
+    /// score limit ends the map") is where it does.
+    pub exit_level: bool,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -85,6 +97,8 @@ impl GameHost {
             world: None,
             rng: RNG_SEED,
             script_log: Vec::new(),
+            level_time_ms: 0,
+            exit_level: false,
         }
     }
 

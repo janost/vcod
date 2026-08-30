@@ -11,10 +11,19 @@
 //! `semantics_ab.rs`'s `every_probe_file_and_capture_section_are_paired`
 //! guard in the meantime, which checks this file's text for the name.
 //!
-//! Needs `COD_DIR`; without the paks it returns early, like every other
-//! game-data test in the workspace.
+//! `probe_cvar` and `probe_not_string` are claimed here for a different
+//! reason: they call `getCvar`/`setCvar`/`getCvarInt`/`getCvarFloat`/
+//! `getTime`/`randomInt`, which need the real `Cvars` table this crate
+//! owns; `crates/gsc`'s `ProbeHost` answers only `logPrint`/`isDefined` and
+//! must not grow a fake cvar table just to run these two. Unlike
+//! `probe_ents`/`probe_delete`, they need no map data, so they run against
+//! a bare `GameHost::new`.
+//!
+//! `probe_ents` and `probe_delete` need `COD_DIR`; without the paks they
+//! return early, like every other game-data test in the workspace.
+//! `probe_cvar` and `probe_not_string` need no game data and always run.
 
-use vcod_gsc::{Loader, ScriptSource, Value, Vm};
+use vcod_gsc::{FuncRef, Loader, ScriptSource, Value, Vm};
 use vcod_server::game::host::GameHost;
 use vcod_server::game::spawn::spawn_entities_from_string;
 
@@ -38,23 +47,41 @@ impl ScriptSource for ProbeSource {
     }
 }
 
-/// The `# probe_ents` section of `retail-captures.txt`, parsed with the same
+/// The `# <name>` section of `retail-captures.txt`, parsed with the same
 /// semantics `semantics_ab.rs::captures()` uses (`# name` starts a section,
-/// `PROBE ` lines collect). `probe_ents` never dies on retail, so there is
-/// no `PROBE_FATAL` case to reproduce here.
-fn retail_probe_ents_lines() -> Vec<String> {
+/// `PROBE ` lines collect). None of the three probes claimed here die on
+/// retail, so there is no `PROBE_FATAL` case to reproduce.
+fn retail_probe_lines(name: &str) -> Vec<String> {
     let text = std::fs::read_to_string("../gsc/tests/fixtures/semantics/retail-captures.txt")
         .expect("read retail-captures.txt");
     let mut in_section = false;
     let mut lines = Vec::new();
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("# ") {
-            in_section = rest.trim() == "probe_ents";
+            in_section = rest.trim() == name;
         } else if in_section && line.starts_with("PROBE ") {
             lines.push(line.to_string());
         }
     }
     lines
+}
+
+/// Loads `name`'s probe fresh, mirroring `semantics_ab.rs::install`; a
+/// test in `crates/gsc` cannot be imported from `crates/server`.
+fn install(name: &str) -> (Vm, FuncRef) {
+    let path = format!("maps/mp/gametypes/{name}");
+    let text = std::fs::read_to_string(format!("../gsc/tests/fixtures/semantics/{name}.gsc"))
+        .unwrap_or_else(|e| panic!("read {name}.gsc: {e}"));
+    let mut vm = Vm::new();
+    let mut loader = Loader::new(Box::new(ProbeSource {
+        path: path.clone(),
+        text,
+    }));
+    loader
+        .load(&mut vm, &path)
+        .unwrap_or_else(|e| panic!("{name} does not load: {e:?}"));
+    let main = vm.func_ref(&path, "main");
+    (vm, main)
 }
 
 /// Retail ran this on mp_pavlov with sv_maxclients 8. It spawns three
@@ -113,5 +140,35 @@ fn probe_ents_matches_retail() {
     vm.call_now(&mut host, 0, callback, None, Vec::new())
         .unwrap_or_else(|e| panic!("Callback_StartGameType errored: {e:?}"));
 
-    assert_eq!(host.script_log, retail_probe_ents_lines());
+    assert_eq!(host.script_log, retail_probe_lines("probe_ents"));
+}
+
+/// `probe_cvar` measures `getCvar`/`setCvar`/`getCvarInt`/`getCvarFloat`/
+/// `getTime`/`randomInt` against retail. It spawns no entities and reads no
+/// map data -- every cvar it touches it also registers itself -- so a bare
+/// `GameHost` reproduces it.
+#[test]
+fn probe_cvar_matches_retail() {
+    let (mut vm, main) = install("probe_cvar");
+    let mut host = GameHost::new(vec![String::new(); 2048]);
+    vm.call_now(&mut host, 0, main, None, Vec::new())
+        .unwrap_or_else(|e| panic!("probe_cvar main errored: {e:?}"));
+
+    assert_eq!(host.script_log, retail_probe_lines("probe_cvar"));
+}
+
+/// `probe_not_string` measures unary `!` on a `getCvar` read.
+/// `not_getcvar_allow_fg42` came back `1` on retail because `scr_allow_fg42`
+/// reads `"0"` there, not unset -- the stock value `_teams::initGlobalCvars`
+/// registers (`crates/server/src/cvars.rs`'s `STOCK_SCRIPT_CVARS`), which
+/// this isolated probe never runs itself, so the test seeds it directly.
+#[test]
+fn probe_not_string_matches_retail() {
+    let (mut vm, main) = install("probe_not_string");
+    let mut host = GameHost::new(vec![String::new(); 2048]);
+    host.cvars.set("scr_allow_fg42", "0");
+    vm.call_now(&mut host, 0, main, None, Vec::new())
+        .unwrap_or_else(|e| panic!("probe_not_string main errored: {e:?}"));
+
+    assert_eq!(host.script_log, retail_probe_lines("probe_not_string"));
 }

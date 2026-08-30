@@ -120,13 +120,16 @@ impl Cvars {
     /// order from case-insensitive order, so this is the choice, not a
     /// measurement.
     pub fn write_mirror(&self, cs: &mut [String]) -> Result<(), ErrorKind> {
-        for i in MIRROR_NAMES.chain(MIRROR_VALUES) {
-            cs[i] = String::new();
-        }
         let mut flagged: Vec<&Cvar> = self.vars.values().filter(|c| c.mirrored).collect();
         flagged.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
         if flagged.len() > MIRROR_NAMES.count() {
+            // Checked before the clear loop below: `Server::tick` passes its
+            // live configstring table in, and an overflow here must leave
+            // the previous frame's mirror stale rather than wipe it.
             return Err(ErrorKind::BadType("cvar mirror range exhausted"));
+        }
+        for i in MIRROR_NAMES.chain(MIRROR_VALUES) {
+            cs[i] = String::new();
         }
         for (n, c) in flagged.iter().enumerate() {
             cs[MIRROR_NAMES.start() + n] = c.name.clone();
