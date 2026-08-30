@@ -85,9 +85,18 @@ and their blocks consume no entity number. Sections 13 and 14 of
 `probe_delete` needs the same real-entity setup as `probe_ents` and is
 skipped into `crates/server` alongside it, for the same reason.
 
-Four more probes measure what the configstring capture in
+`probe_bootstrap` is skipped there too, for a third reason: the key it reads
+is set by the real `mp_pavlov.gsc`, so its `ScriptSource` has to be the
+pak-backed one with the probe overlaid on the gametype path, which this
+file's stub-everything-else `ProbeSource` cannot be.
+
+Five more probes measure what the configstring capture in
 `crates/server/tests/configstrings_ab.rs` cannot answer:
 
+- `probe_bool` asks whether `true` and `false` are literals. They are the
+  ints 1 and 0, and unlike every keyword they are case-sensitive: `TRUE`
+  reads back `undefined`, so the probe ends on the fatal concatenation of
+  one and the case measurement goes last on purpose.
 - `probe_bootstrap` orders the map's and the gametype's `main()` and checks
   whether a bare `thread f()` runs its target to the first `wait` before the
   caller continues. On mp_pavlov, `bootstrap_game_allies` comes back

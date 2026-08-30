@@ -37,6 +37,20 @@ PROBE viv_field_value y
 PROBE at viv_non_array
 PROBE_FATAL int is not an array
 
+# probe_bool
+PROBE at bool_true_value
+PROBE bool_true_value 1
+PROBE at bool_false_value
+PROBE bool_false_value 0
+PROBE at bool_truthiness
+PROBE bool_true_is_truthy yes
+PROBE bool_false_is_truthy no
+PROBE at bool_compares_to_int
+PROBE bool_true_eq_1 yes
+PROBE bool_false_eq_0 yes
+PROBE at bool_case
+PROBE_FATAL pair has unmatching types 'string' and 'undefined'
+
 # probe_bootstrap
 PROBE at bootstrap_map_main_first
 PROBE bootstrap_game_allies undefined

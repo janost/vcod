@@ -413,11 +413,14 @@ inferred. The probes are `crates/gsc/tests/fixtures/semantics/probe_*.gsc`,
 run as gametype scripts by `tools/run_probe.sh`; retail's answers are
 committed beside them in `retail-captures.txt`, and
 `crates/gsc/tests/semantics_ab.rs` diffs vcod against them on every test run.
-It is green on all 21 runnable probes; `probe_ents` is captured but not run,
-since `getentarray` needs the object model that arrives with the entity work,
-and three more (`probe_game_dotwrite`, `probe_level_bracket`,
-`probe_level_size`) are captured but skipped for the reasons `§10` and
-`semantics_ab.rs`'s `KNOWN_GAPS_OUT_OF_SCOPE` give.
+It is green on the 23 probes it runs. Five more (`probe_bootstrap`,
+`probe_cvar`, `probe_delete`, `probe_ents`, `probe_not_string`) need the
+object model, the cvar table or a real map, all of which live in
+`crates/server`, so they are measured there by
+`crates/server/tests/semantics_ents.rs` against the same capture file. Three
+(`probe_game_dotwrite`, `probe_level_bracket`, `probe_level_size`) are
+captured but skipped for the reasons `§10` and `semantics_ab.rs`'s
+`KNOWN_GAPS_OUT_OF_SCOPE` give.
 
 Three facts about the retail side shaped how the measurement had to be taken,
 and each is worth knowing before writing another probe:
@@ -441,6 +444,19 @@ and kill the server. So the design's old question "is an empty string
 truthy?" was the wrong question: no string has a boolean reading at all,
 empty or not. That is why the corpus spells every such test as `isDefined(x)`
 or `x != ""` rather than `if (x)`.
+
+**`true` and `false` are ints, and case-sensitive, VERIFIED.** `true` reads
+back as `1` and `false` as `0` (`probe_bool`, concatenated onto a string, so
+the rendering is the int one). `true == 1` and `false == 0` both hold, and
+`if (true)`/`if (false)` take the branches those values imply. `TRUE` is
+**not** the literal: reading it back gives `undefined`, which is what an
+unassigned local reads as, and concatenating it is the usual fatal `pair has
+unmatching types 'string' and 'undefined'`. So these two are the one place
+gsc's otherwise case-insensitive identifier and keyword matching does not
+apply. The stock corpus depends on this everywhere -- `_gameobjects::main`
+sets `dodelete = true` and later branches on `if(dodelete)` -- so a lexer
+that treats `true` as a bare identifier voids those scripts at their first
+`if`.
 
 **Arithmetic: VERIFIED, and every earlier inference was right.** `1 / 2` is
 `0` (integer division truncates), `4 / 2` is `2`, `3 / 2.0` is `1.5`,
