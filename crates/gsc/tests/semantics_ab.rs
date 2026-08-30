@@ -174,7 +174,13 @@ fn captures() -> BTreeMap<String, (Vec<String>, Option<String>)> {
 /// cannot answer without a fake cvar table -- the real one is
 /// `crates/server`'s `Cvars`, which `vcod-gsc` may not depend on -- so they
 /// run there too, against a real `GameHost`.
+///
+/// `probe_bootstrap` measures the order of the two `main()`s against the
+/// real `mp_pavlov.gsc`, so `ProbeSource`'s stub-everything-else answer
+/// cannot serve it: it needs the pak-backed source the server crate has,
+/// with the probe overlaid on the gametype path.
 const RUN_IN_SERVER_CRATE: &[&str] = &[
+    "probe_bootstrap",
     "probe_cvar",
     "probe_delete",
     "probe_ents",

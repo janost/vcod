@@ -830,34 +830,48 @@ impl Server {
     /// plus `g_gametype`, `sv_hostname` and `sv_maxclients` mirroring this
     /// run's `ServerConfig`, and `debug` at retail's default off, which is
     /// what `_utility.gsc`'s exploder logic (`getCvar("debug") != "1"`)
-    /// expects when nobody has set it. None of these four are flagged into
-    /// the 140/204 mirror; only `makeCvarServerInfo` does that.
+    /// expects when nobody has set it, and `scr_allow_fg42` at `"0"`.
+    /// None of these five are flagged into the 140/204 mirror; only
+    /// `makeCvarServerInfo` does that.
+    ///
+    /// `scr_allow_fg42` is seeded because retail's capture has it at slot
+    /// 164/228 as `"0"` while every other `scr_allow_*` is `"1"`, and
+    /// `_teams::initGlobalCvars()` passes `"1"` as its default too. Since
+    /// `makeCvarServerInfo` never overwrites an existing value, something on
+    /// retail registers it as `"0"` before any script runs; the mechanism is
+    /// unidentified. It is not cosmetic: `!getCvar("scr_allow_fg42")` is what
+    /// makes `_teams::restrictPlacedWeapons` `delete()` the map's placed
+    /// fg42s, so the value moves entity numbering as well as the mirror.
     fn cvars(&self) -> crate::cvars::Cvars {
         let mut cvars = crate::cvars::Cvars::new();
         cvars.set("g_gametype", &self.cfg.gametype);
         cvars.set("sv_hostname", &self.cfg.hostname);
         cvars.set("sv_maxclients", &self.cfg.max_clients.to_string());
         cvars.set("debug", "0");
+        cvars.set("scr_allow_fg42", "0");
         cvars
     }
 
-    /// Loads and runs the map script. Called once at map load, before any
-    /// client connects. The script keeps allocating configstrings after that
-    /// (any `setModel`, `loadFX`, `playSound` or `ambientPlay` from a thread
-    /// that has passed a `wait`), so the table is not final at gamestate
-    /// time; `tick` copies the script's table back every frame. A client
-    /// already connected does not see a post-gamestate allocation, because
-    /// the server does not send the `d` configstring-update command yet.
+    /// Loads and runs the gametype and map scripts. Called once at map load,
+    /// before any client connects. The script keeps allocating configstrings
+    /// after that (any `setModel`, `loadFX`, `playSound` or `ambientPlay`
+    /// from a thread that has passed a `wait`), so the table is not final at
+    /// gamestate time; `tick` copies the script's table back every frame. A
+    /// client already connected does not see a post-gamestate allocation,
+    /// because the server does not send the `d` configstring-update command
+    /// yet.
     ///
     /// The table is cloned in, not moved: `ScriptRuntime::load` fails on a
     /// missing `.gsc`, an unresolvable map, a bad BSP or a failed entity
-    /// spawn, and `main.rs` keeps serving after such a failure, so a failed
-    /// load has to leave `self.configstrings` exactly as it was.
+    /// spawn, and the error path has to leave `self.configstrings` exactly as
+    /// it was, so the error the caller reports is about the script rather
+    /// than about a half-cleared table. `main.rs` exits on it.
     pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
         let cvars = self.cvars();
         let rt = crate::game::script::ScriptRuntime::load(
             fs,
             &self.cfg.map,
+            &self.cfg.gametype,
             self.configstrings.clone(),
             cvars,
             self.world.clone(),
@@ -1213,11 +1227,11 @@ mod tests {
         assert!(sv.configstring(7).contains("kar98k_mp"));
     }
 
-    /// A script load that fails part way must not cost the server its
-    /// configstrings: `main.rs` logs the error and keeps serving, so every
-    /// later gamestate would ship an empty table.
+    /// A failed load reports the error and leaves the table untouched; the
+    /// caller (`main.rs`) exits on it. Stage 2 kept serving here, which is no
+    /// longer the right answer: the table is mostly script output now.
     #[test]
-    fn a_failed_script_load_leaves_the_configstrings_alone() {
+    fn a_failed_script_load_reports_and_changes_nothing() {
         let mut sv = Server::new(cfg(), Instant::now());
         let before: Vec<String> = sv.configstrings.clone();
         // No paks, so the map script does not resolve and `load` fails at its

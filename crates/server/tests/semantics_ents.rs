@@ -19,10 +19,20 @@
 //! `probe_ents`/`probe_delete`, they need no map data, so they run against
 //! a bare `GameHost::new`.
 //!
-//! `probe_ents` and `probe_delete` need `COD_DIR`; without the paks they
-//! return early, like every other game-data test in the workspace.
-//! `probe_cvar` and `probe_not_string` need no game data and always run.
+//! `probe_bootstrap` is claimed here for a third reason: it orders the two
+//! `main()`s by reading `game["allies"]`, which only the real
+//! `mp_pavlov.gsc` sets, so its `ScriptSource` has to be the pak-backed one
+//! with the probe overlaid on the gametype path. `crates/gsc`'s
+//! `ProbeSource` stubs every other file out and cannot supply that.
+//!
+//! `probe_ents`, `probe_delete` and `probe_bootstrap` need `COD_DIR`;
+//! without the paks they return early, like every other game-data test in
+//! the workspace. `probe_cvar` and `probe_not_string` need no game data and
+//! always run.
 
+use std::rc::Rc;
+
+use vcod_common::pk3::Pk3Fs;
 use vcod_gsc::{FuncRef, Loader, ScriptSource, Value, Vm};
 use vcod_server::game::host::GameHost;
 use vcod_server::game::spawn::spawn_entities_from_string;
@@ -177,4 +187,79 @@ fn probe_not_string_matches_retail() {
         .unwrap_or_else(|e| panic!("probe_not_string main errored: {e:?}"));
 
     assert_eq!(host.script_log, retail_probe_lines("probe_not_string"));
+}
+
+/// The pak-backed source with one probe overlaid on its gametype path, so
+/// the probe's own `main` runs beside the real `mp_pavlov.gsc` closure
+/// rather than beside stubs. `PakScripts` in `crates/server/src/game/
+/// script.rs` is the half this borrows; a private type there cannot be
+/// imported into an integration test.
+struct PakWithProbe {
+    fs: Rc<Pk3Fs>,
+    path: String,
+    text: String,
+}
+
+impl ScriptSource for PakWithProbe {
+    fn read(&self, canonical: &str) -> Option<String> {
+        if canonical == self.path {
+            return Some(self.text.clone());
+        }
+        let bytes = self.fs.read(&format!("{canonical}.gsc"))?;
+        Some(String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
+/// Retail ran this on mp_pavlov as the gametype script. It reads
+/// `game["allies"]` from its own `main` and again from
+/// `Callback_StartGameType`; only `mp_pavlov.gsc`'s `main` sets that key,
+/// so the pair orders the two `main()`s, and `bootstrap_thread_ran_inline`
+/// says a bare `thread f()` runs its target to the first suspend before the
+/// caller's next statement. `ScriptRuntime::start_bootstrap` is the code
+/// this pins; the sequence below is the same one, spelled out because the
+/// runtime resolves its gametype out of the paks and this one does not.
+#[test]
+fn probe_bootstrap_matches_retail() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let fs = Rc::new(fs);
+
+    let path = "maps/mp/gametypes/probe_bootstrap".to_string();
+    let map = "maps/mp/mp_pavlov";
+    let text = std::fs::read_to_string("../gsc/tests/fixtures/semantics/probe_bootstrap.gsc")
+        .expect("read probe_bootstrap.gsc");
+    let mut vm = Vm::new();
+    let mut loader = Loader::new(Box::new(PakWithProbe {
+        fs: fs.clone(),
+        path: path.clone(),
+        text,
+    }));
+    loader
+        .load(&mut vm, &path)
+        .unwrap_or_else(|e| panic!("probe_bootstrap does not load: {e:?}"));
+    loader
+        .load(&mut vm, map)
+        .unwrap_or_else(|e| panic!("mp_pavlov does not load: {e:?}"));
+
+    let mut host = GameHost::new(vec![String::new(); 2048]);
+    let bsp_path = fs
+        .resolve_map("mp_pavlov")
+        .expect("mp_pavlov.bsp in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read mp_pavlov.bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse mp_pavlov.bsp");
+    vm.with_cx(|cx| spawn_entities_from_string(&mut host, cx, &bsp.entities))
+        .expect("spawn mp_pavlov's entities");
+
+    let gametype_main = vm.func_ref(&path, "main");
+    vm.start_thread(&mut host, 0, gametype_main, None, Vec::new());
+    let map_main = vm.func_ref(map, "main");
+    vm.start_thread(&mut host, 0, map_main, None, Vec::new());
+    let start = vm.func_ref(
+        "maps/mp/gametypes/_callbacksetup",
+        "CodeCallback_StartGameType",
+    );
+    vm.start_thread(&mut host, 0, start, None, Vec::new());
+
+    assert_eq!(host.script_log, retail_probe_lines("probe_bootstrap"));
 }

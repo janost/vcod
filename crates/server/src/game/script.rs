@@ -8,6 +8,10 @@ use crate::game::spawn::spawn_entities_from_string;
 use vcod_common::pk3::Pk3Fs;
 use vcod_gsc::{Loader, ScriptSource, Vm};
 
+/// Every gametype script includes this file, and it is where the engine's
+/// entry points into script live, `CodeCallback_StartGameType` among them.
+const CALLBACK_SETUP: &str = "maps/mp/gametypes/_callbacksetup";
+
 /// Reads `.gsc` out of the mounted paks. `Loader` hands `read` a canonical
 /// path (lowercase, forward slashes, no extension; see `vcod_gsc::canonical`);
 /// the pak stores e.g. `maps/MP/_load.gsc`, and `Pk3Fs::read` already
@@ -39,24 +43,34 @@ pub struct ScriptRuntime {
     vm: Vm,
     host: GameHost,
     entry: String,
+    gametype_entry: String,
 }
 
 impl ScriptRuntime {
-    /// Loads the map script's closure, spawns the map's entities and starts
-    /// `main`. `map` is a bare name, e.g. "mp_pavlov". `configstrings` and
-    /// `cvars` seed the host; `world`, once the caller has one, lets
-    /// `bulletTrace` trace against the real map geometry.
+    /// Loads the gametype and map script closures, spawns the map's entities
+    /// and runs the bootstrap. `map` and `gametype` are bare names, e.g.
+    /// "mp_pavlov" and "dm". `configstrings` and `cvars` seed the host;
+    /// `world`, once the caller has one, lets `bulletTrace` trace against the
+    /// real map geometry.
     pub fn load(
         fs: Rc<Pk3Fs>,
         map: &str,
+        gametype: &str,
         configstrings: Vec<String>,
         cvars: crate::cvars::Cvars,
         world: Option<Rc<crate::world::World>>,
         now_ms: i32,
     ) -> anyhow::Result<ScriptRuntime> {
         let entry = format!("maps/mp/{map}");
+        let gametype_entry = format!("maps/mp/gametypes/{gametype}");
         let mut vm = Vm::new();
+        // One `Loader`, not two: its `loaded` set dedupes the files both
+        // closures share, and `Vm::install` rejects a duplicate `FuncRef`, so
+        // a second `Loader` would fail on the first shared file.
         let mut loader = Loader::new(Box::new(PakScripts(fs.clone())));
+        loader
+            .load(&mut vm, &gametype_entry)
+            .map_err(|e| anyhow::anyhow!("loading {gametype_entry}: {e:?}"))?;
         loader
             .load(&mut vm, &entry)
             .map_err(|e| anyhow::anyhow!("loading {entry}: {e:?}"))?;
@@ -88,24 +102,53 @@ impl ScriptRuntime {
         let missing = loader.missing_builtins(&vm, &|n| crate::game::host::is_builtin(n));
         if !missing.is_empty() {
             log::info!(
-                "gsc: {entry} calls {} builtins the host does not implement: {}",
+                "gsc: {entry} and {gametype_entry} call {} builtins the host does not implement: {}",
                 missing.len(),
                 missing.join(" ")
             );
         }
 
-        let mut rt = ScriptRuntime { vm, host, entry };
-        rt.start_map_main(now_ms);
+        let mut rt = ScriptRuntime {
+            vm,
+            host,
+            entry,
+            gametype_entry,
+        };
+        rt.start_bootstrap(now_ms);
         Ok(rt)
     }
 
-    /// Starts `maps/mp/<map>::main` as a thread. Internal: called once by
-    /// `load` (and by `for_test`'s own compile-and-start), after the object
-    /// table exists.
-    fn start_map_main(&mut self, now_ms: i32) {
-        let main = self.vm.func_ref(&self.entry, "main");
+    /// The gametype's `main`, then the map's, then
+    /// `CodeCallback_StartGameType`, whose own header in `_callbacksetup.gsc`
+    /// reads "Called by code after the level's main script function has run".
+    ///
+    /// The order of the two `main`s is `probe_bootstrap`'s measurement, not an
+    /// inference: `mp_pavlov.gsc` sets `game["allies"] = "russian"`, and the
+    /// probe reads that key back as undefined from the gametype's `main` and
+    /// as "russian" from `Callback_StartGameType`.
+    ///
+    /// `start_thread`, not `call_now`: retail runs these as script threads,
+    /// and `call_now` turns any `wait` into `SuspendedInImmediateCall`.
+    /// `start_thread` steps the new thread to its first suspend before
+    /// returning, which the same probe measured, so the tables are complete
+    /// when `load` returns.
+    fn start_bootstrap(&mut self, now_ms: i32) {
+        let gt_main = self.vm.func_ref(&self.gametype_entry, "main");
         self.vm
-            .start_thread(&mut self.host, now_ms, main, None, vec![]);
+            .start_thread(&mut self.host, now_ms, gt_main, None, vec![]);
+
+        let map_main = self.vm.func_ref(&self.entry, "main");
+        self.vm
+            .start_thread(&mut self.host, now_ms, map_main, None, vec![]);
+
+        // `CodeCallback_StartGameType` is defined in `_callbacksetup`, not in
+        // the gametype script; it guards on `level.gametypestarted` and then
+        // calls `level.callbackStartGameType`.
+        let start = self
+            .vm
+            .func_ref(CALLBACK_SETUP, "CodeCallback_StartGameType");
+        self.vm
+            .start_thread(&mut self.host, now_ms, start, None, vec![]);
     }
 
     /// The configstrings the script wrote (e.g. `setCullFog`, `ambientPlay`)
@@ -163,8 +206,10 @@ impl ScriptRuntime {
             vm,
             host,
             entry: "maps/mp/test".to_string(),
+            gametype_entry: String::new(),
         };
-        rt.start_map_main(0);
+        let main = rt.vm.func_ref(&rt.entry, "main");
+        rt.vm.start_thread(&mut rt.host, 0, main, None, vec![]);
         rt
     }
 
@@ -182,24 +227,53 @@ impl ScriptRuntime {
 mod tests {
     use super::*;
 
-    /// The map script's closure resolves out of the stock paks and `main`
-    /// starts. Its body calls builtins the host does not implement yet, so
-    /// this asserts only that loading and starting work, not that the
-    /// thread survives.
+    /// Both closures load into one `Vm` through one `Loader`, which is what
+    /// keeps `Vm::install`'s duplicate rejection from firing on the first
+    /// file the two share (`_utility`, `_teams` and the rest).
     #[test]
-    fn the_map_script_closure_loads_from_the_paks() {
+    fn the_map_and_gametype_closures_both_load() {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
         let rt = ScriptRuntime::load(
             Rc::new(fs),
             "mp_pavlov",
+            "dm",
             vec![String::new(); 2048],
             crate::cvars::Cvars::new(),
             None,
             0,
         );
         assert!(rt.is_ok(), "{:?}", rt.err());
+    }
+
+    /// `mp_pavlov.gsc` sets `game["allies"] = "russian"`, and dm's
+    /// `Callback_StartGameType` turns that into `team_russiangerman`. Seeing
+    /// that menu name proves the gametype's main ran, the map script's main
+    /// ran and the code callback ran, in an order that produced retail's
+    /// answer.
+    #[test]
+    fn the_bootstrap_precaches_the_russian_team_menu_on_mp_pavlov() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let rt = ScriptRuntime::load(
+            Rc::new(fs),
+            "mp_pavlov",
+            "dm",
+            vec![String::new(); 2048],
+            crate::cvars::Cvars::new(),
+            None,
+            0,
+        )
+        .expect("load mp_pavlov on dm");
+        assert_eq!(rt.configstrings()[1180], "team_russiangerman");
+        assert_eq!(rt.configstrings()[1181], "weapon_russian");
+        assert_eq!(rt.configstrings()[21], "gfx/hud/hud@status_dead.tga");
+        assert_eq!(
+            rt.configstrings()[1501],
+            "levelshots/layouts/hud@layout_mp_pavlov"
+        );
     }
 
     /// The object table has to survive past map load, so the runtime owns the
