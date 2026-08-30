@@ -238,6 +238,27 @@ fn eval_neg(v: Value) -> Result<Value, ErrorKind> {
     }
 }
 
+/// Retail's unary `!` coerces a string numerically; it does not reject one
+/// outright the way an `if` condition's cast (`Value::as_bool`) does.
+/// `!"1"` is false and `!"0"` is true, but `!""` is the same fatal
+/// `cannot cast ... to bool` error an `if` gives every string
+/// (`# probe_not_string`, `# probe_not_empty_string`,
+/// tests/fixtures/semantics/retail-captures.txt). `!"a"` is not measured;
+/// treated here as fatal on the same footing as `""`, since nothing on the
+/// bootstrap path negates a cvar that isn't `"0"` or `"1"`.
+fn not_of(v: Value, interner: &Interner) -> Result<bool, ErrorKind> {
+    match v {
+        Value::String(s) => {
+            let text = interner.resolve(s);
+            let n: f64 = text
+                .parse()
+                .map_err(|_| ErrorKind::Custom(format!("cannot cast \"{text}\" to bool")))?;
+            Ok(n == 0.0)
+        }
+        other => other.as_bool().map(|b| !b),
+    }
+}
+
 /// A call's receiver reads as a `Target` when it is an entity or a heap
 /// struct (`level` is one, and a common receiver in the corpus); `game` is
 /// array-typed, not a struct, so it falls through to `None` here like any
@@ -733,7 +754,7 @@ impl Vm {
                 }
                 Op::Not => {
                     let v = pop!();
-                    push!(Value::Int(!v.as_bool().map_err(err)? as i32));
+                    push!(Value::Int(not_of(v, &self.interner).map_err(err)? as i32));
                 }
                 Op::CastInt => {
                     let v = pop!();
@@ -913,5 +934,49 @@ impl Vm {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vm::tests::TestHost;
+
+    /// Compiles and runs one `main`, returning what it `return`s or the
+    /// `ScriptError::kind` it dies with.
+    fn run_result(src: &str) -> Result<Value, ErrorKind> {
+        let ast = crate::parse::parse_file(src).unwrap();
+        let mut vm = Vm::new();
+        let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+        vm.install(fns).unwrap();
+        let mut host = TestHost::default();
+        let main = vm.func_ref("test/script", "main");
+        vm.call_now(&mut host, 0, main, None, vec![])
+            .map_err(|e| e.kind)
+    }
+
+    /// Round-trips `expr` through a `level` field write/read (exercising
+    /// the same struct-field path a script does) and reads the result back
+    /// through `Value::as_bool`'s strict cast, so a passing assertion here
+    /// never smuggles in a wider notion of "bool" than `if` itself accepts.
+    fn eval_bool(expr: &str) -> Result<bool, ErrorKind> {
+        run_result(&format!("main() {{ level.r = ({expr}); return level.r; }}"))
+            .and_then(|v| v.as_bool())
+    }
+
+    /// Retail's unary `!` accepts a string where an `if` condition does
+    /// not: `probe_truthy` records `if ("a")` as fatal, but
+    /// `_teams::restrictPlacedWeapons` runs
+    /// `if(!getCvar("scr_allow_m1carbine"))` on every stock dm server and
+    /// the bootstrap completes. The answers are `probe_not_string`'s and
+    /// `probe_not_empty_string`'s (retail-captures.txt).
+    #[test]
+    fn not_accepts_a_string_where_if_does_not() {
+        assert_eq!(eval_bool(r#"!"1""#), Ok(false));
+        assert_eq!(eval_bool(r#"!"0""#), Ok(true));
+        assert!(eval_bool(r#"!"""#).is_err());
+        // `if` stays strict: this is the divergence, not a relaxation of
+        // both paths.
+        assert!(run_result(r#"main() { if ("a") { } }"#).is_err());
     }
 }
