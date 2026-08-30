@@ -149,6 +149,14 @@ mod tests {
     /// earlier in `Callback_StartGameType`. Names and values are the
     /// retail capture's 161..180 / 225..244 block
     /// (crates/server/tests/fixtures/configstrings/mp_pavlov-dm.txt).
+    ///
+    /// `scr_allow_fg42` is `"0"` here (slot 164/228 in that capture) while
+    /// every other `scr_allow_*` is `"1"`. Activision's own
+    /// `_teams::initGlobalCvars()` passes `"1"` as fg42's default too, and
+    /// `makeCvarServerInfo` never overwrites a cvar that already has a
+    /// value, so that call cannot be what produced the `"0"` seen here.
+    /// Something registers `scr_allow_fg42` as `"0"` before the script
+    /// runs; the mechanism is unidentified.
     const STOCK_SCRIPT_CVARS: &[(&str, &str)] = &[
         ("scr_allow_bar", "1"),
         ("scr_allow_bren", "1"),
