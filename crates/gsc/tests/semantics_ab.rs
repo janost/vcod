@@ -167,7 +167,9 @@ fn captures() -> BTreeMap<String, (Vec<String>, Option<String>)> {
 /// does not have. `probe_ents` needs an object model and a real map, both of
 /// which live in `crates/server`; it runs there, in
 /// `crates/server/tests/semantics_ents.rs`, against this same capture file.
-const RUN_IN_SERVER_CRATE: &[&str] = &["probe_ents"];
+/// `probe_delete` needs the same two things to measure the deferred-free
+/// window on real spawned entities, so it is claimed there too.
+const RUN_IN_SERVER_CRATE: &[&str] = &["probe_delete", "probe_ents"];
 
 /// `game.foo = 1` and `level["k"] = "v"` are, on retail, *compile*-time
 /// rejections ("not an object" / "not an array, string, or vector") that

@@ -62,3 +62,36 @@ and vcod matches. The 298 is the point: five `spawns` classnames free the
 entity their `SP_` function was handed, `G_Spawn` reuses the slot at once,
 and their blocks consume no entity number. Sections 13 and 14 of
 `docs/research/cod11-gsc-object-model.md` have the measurement.
+
+`probe_delete` needs the same real-entity setup as `probe_ents` and is
+skipped into `crates/server` alongside it, for the same reason.
+
+Four more probes measure what the configstring capture in
+`crates/server/tests/configstrings_ab.rs` cannot answer:
+
+- `probe_bootstrap` orders the map's and the gametype's `main()` and checks
+  whether a bare `thread f()` runs its target to the first `wait` before the
+  caller continues. On mp_pavlov, `bootstrap_game_allies` comes back
+  `undefined` at the gametype's own `main()` -- the map's `main()`, which
+  sets `game["allies"] = "russian"`, has not run yet -- but
+  `bootstrap_startgametype_allies` is `russian` by the time
+  `Callback_StartGameType` fires, so the map's `main()` runs between the
+  two. `bootstrap_thread_ran_inline` comes back `after`: the thread ran to
+  completion before the caller's next line.
+- `probe_cvar` measures `setCvar`/`getCvar` round-tripping, `getCvarInt`/
+  `getCvarFloat` coercion of unset and non-numeric cvars, cvar name case
+  (insensitive), `getTime`'s sign and `randomInt`'s upper bound (`randomInt(1)`
+  never returns 1).
+- `probe_not_string`, alone in its own file because it might still be the
+  fatal one: unary `!` on `"1"` and `"0"` both succeed (`0` and `1`), but
+  `!""` is a runtime error (`cannot cast "" to bool`) that kills the script
+  before it reaches `!getCvar("scr_allow_fg42")` -- so this file's capture
+  has no answer for the fg42 question, only for where retail's `!` stops
+  tolerating a string.
+- `probe_delete` measures the deferred-free window: `delete()` does not drop
+  the entity from `getEntArray` or its count immediately, a spawn right
+  after `delete()` gets a fresh entity number rather than reusing the
+  just-deleted one, and after a 150 ms wait the count reflects the free
+  having landed and a later spawn reuses the earlier freed number ahead of
+  a more recently freed one -- retail's free list is lowest-number-first,
+  not most-recently-freed-first.

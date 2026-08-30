@@ -37,6 +37,14 @@ PROBE viv_field_value y
 PROBE at viv_non_array
 PROBE_FATAL int is not an array
 
+# probe_bootstrap
+PROBE at bootstrap_map_main_first
+PROBE bootstrap_game_allies undefined
+PROBE at bootstrap_thread_runs_now
+PROBE bootstrap_thread_ran_inline after
+PROBE at bootstrap_startgametype
+PROBE bootstrap_startgametype_allies russian
+
 # probe_cmp
 PROBE at eq_int_float
 PROBE eq_int_float 1
@@ -78,6 +86,42 @@ PROBE_FATAL pair has unmatching types 'string' and 'undefined'
 PROBE at concat_vector
 PROBE concat_vector (1.00, 2.00, 3.00)
 
+# probe_cvar
+PROBE at cvar_roundtrip
+PROBE cvar_roundtrip hello
+PROBE at cvar_unset
+PROBE cvar_unset []
+PROBE at cvar_case
+PROBE cvar_case_same [7]
+PROBE cvar_case_lower [7]
+PROBE at cvar_int_of_empty
+PROBE cvar_int_of_empty 0
+PROBE at cvar_int_of_text
+PROBE cvar_int_of_text 0
+PROBE cvar_float_of_text 0
+PROBE at cvar_int_of_trailing
+PROBE cvar_int_of_trailing 12
+PROBE at cvar_float_precision
+PROBE cvar_float_precision 0.333333
+PROBE at cvar_gettime
+PROBE cvar_gettime_positive 1
+PROBE at cvar_randomint
+PROBE cvar_randomint_of_one 0
+
+# probe_delete
+PROBE at delete_setup
+PROBE at delete_before
+PROBE delete_count_before 6
+PROBE delete_number_b 300
+PROBE at delete_immediate
+PROBE delete_count_immediate 6
+PROBE at delete_reuse_immediate
+PROBE delete_number_reuse_immediate 301
+PROBE at delete_after_wait
+PROBE delete_count_after_wait 6
+PROBE at delete_reuse_after_wait
+PROBE delete_number_reuse_after_wait 299
+
 # probe_ents
 PROBE at ents_deferred
 PROBE entarray_count 7
@@ -112,11 +156,6 @@ PROBE game_persist_after_wait russian
 
 # probe_game_dotwrite
 
-# probe_lexer
-PROBE mod_tight 1
-PROBE int_min_cast -2147483647
-PROBE int_min_direct -2147483647
-
 # probe_level
 PROBE at level_dot_write
 PROBE level_dot_read 1
@@ -126,6 +165,19 @@ PROBE level_dot_read 1
 # probe_level_size
 PROBE level_size_after_one_field 1
 PROBE level_size_after_two_fields 1
+
+# probe_lexer
+PROBE mod_tight 1
+PROBE int_min_cast -2147483647
+PROBE int_min_direct -2147483647
+
+# probe_not_string
+PROBE at not_string_one
+PROBE not_string_one 0
+PROBE at not_string_zero
+PROBE not_string_zero 1
+PROBE at not_string_empty
+PROBE_FATAL cannot cast "" to bool
 
 # probe_notify
 PROBE notify_order first
@@ -165,4 +217,3 @@ PROBE_FATAL cannot cast undefined to bool
 # probe_truthy_vec
 PROBE at truthy_zero_vector
 PROBE_FATAL cannot cast vector to bool
-
