@@ -826,20 +826,19 @@ impl Server {
         self.world = Some(Rc::new(world));
     }
 
-    /// The cvars a gametype script reads. `g_gametype`, `sv_hostname` and
-    /// `sv_maxclients` mirror this run's `ServerConfig`; `debug` is retail's
-    /// default off, which is what `_utility.gsc`'s exploder logic
-    /// (`getCvar("debug") != "1"`) expects when nobody has set it.
-    fn cvars(&self) -> HashMap<String, String> {
-        HashMap::from([
-            ("g_gametype".to_string(), self.cfg.gametype.clone()),
-            ("sv_hostname".to_string(), self.cfg.hostname.clone()),
-            (
-                "sv_maxclients".to_string(),
-                self.cfg.max_clients.to_string(),
-            ),
-            ("debug".to_string(), "0".to_string()),
-        ])
+    /// The cvar table a gametype script starts with: the engine defaults
+    /// plus `g_gametype`, `sv_hostname` and `sv_maxclients` mirroring this
+    /// run's `ServerConfig`, and `debug` at retail's default off, which is
+    /// what `_utility.gsc`'s exploder logic (`getCvar("debug") != "1"`)
+    /// expects when nobody has set it. None of these four are flagged into
+    /// the 140/204 mirror; only `makeCvarServerInfo` does that.
+    fn cvars(&self) -> crate::cvars::Cvars {
+        let mut cvars = crate::cvars::Cvars::new();
+        cvars.set("g_gametype", &self.cfg.gametype);
+        cvars.set("sv_hostname", &self.cfg.hostname);
+        cvars.set("sv_maxclients", &self.cfg.max_clients.to_string());
+        cvars.set("debug", "0");
+        cvars
     }
 
     /// Loads and runs the map script. Called once at map load, before any
@@ -864,7 +863,11 @@ impl Server {
             self.world.clone(),
             self.sv_time_ms,
         )?;
-        self.configstrings = rt.configstrings().to_vec();
+        let mut configstrings = rt.configstrings().to_vec();
+        rt.cvars()
+            .write_mirror(&mut configstrings)
+            .map_err(|e| anyhow::anyhow!("writing the cvar mirror: {e:?}"))?;
+        self.configstrings = configstrings;
         self.script = Some(rt);
         Ok(())
     }
@@ -900,8 +903,13 @@ impl Server {
             // from any thread, so the server re-reads it rather than trusting
             // the copy `load_scripts` took. A whole-table copy per frame is
             // cheap next to a snapshot, and there is no single write choke
-            // point on the host's table to hang a dirty flag off.
+            // point on the host's table to hang a dirty flag off. The cvar
+            // mirror gets the same treatment: a thread past a `wait` can
+            // still call `setCvar`.
             self.configstrings = rt.configstrings().to_vec();
+            if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
+                log::warn!("rebuilding the cvar mirror: {e:?}");
+            }
         }
     }
 

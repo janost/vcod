@@ -1,7 +1,6 @@
 //! The server's script runtime: owns the VM, resolves scripts out of the
 //! paks, and steps threads once per server frame.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::game::host::GameHost;
@@ -51,7 +50,7 @@ impl ScriptRuntime {
         fs: Rc<Pk3Fs>,
         map: &str,
         configstrings: Vec<String>,
-        cvars: HashMap<String, String>,
+        cvars: crate::cvars::Cvars,
         world: Option<Rc<crate::world::World>>,
         now_ms: i32,
     ) -> anyhow::Result<ScriptRuntime> {
@@ -113,6 +112,13 @@ impl ScriptRuntime {
     /// its own table once, before the first gamestate goes out.
     pub fn configstrings(&self) -> &[String] {
         &self.host.configstrings
+    }
+
+    /// The cvar table as the script left it. `Server::tick` reads it back
+    /// every frame for the same reason it re-reads the configstrings: a
+    /// thread past a `wait` can still call `setCvar`.
+    pub fn cvars(&self) -> &crate::cvars::Cvars {
+        &self.host.cvars
     }
 
     /// One server frame of script.
@@ -181,7 +187,7 @@ mod tests {
             Rc::new(fs),
             "mp_pavlov",
             vec![String::new(); 2048],
-            std::collections::HashMap::new(),
+            crate::cvars::Cvars::new(),
             None,
             0,
         );

@@ -24,7 +24,7 @@ pub fn get_cvar(
     };
     let name = *name;
     let text = cx.resolve(name).to_string();
-    let value = host.cvars.get(&text).cloned().unwrap_or_default();
+    let value = host.cvars.get(&text).to_string();
     Ok(Value::String(cx.intern_exact(&value)))
 }
 
@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn getcvar_answers_from_the_server_and_empty_for_unknown() {
         let (mut vm, mut host) = fixture();
-        host.cvars.insert("scr_dm_scorelimit".into(), "50".into());
+        host.cvars.set("scr_dm_scorelimit", "50");
         vm.with_cx(|cx| {
             let k = Value::String(cx.intern_exact("scr_dm_scorelimit"));
             match get_cvar(&mut host, cx, None, &[k]).unwrap() {

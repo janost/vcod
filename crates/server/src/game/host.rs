@@ -50,10 +50,11 @@ pub struct GameHost {
     /// Runtime configstring slot allocators, one per engine indexer
     /// (`G_ModelIndex` and its siblings).
     pub allocators: Allocators,
-    /// `getCvar`'s table. Empty until something populates it; a lookup that
-    /// misses answers with the empty string, same as retail's
-    /// `Cvar_VariableString` on an unregistered cvar.
-    pub cvars: std::collections::HashMap<String, String>,
+    /// The cvar table. `getCvar` and friends read it, `setCvar` and
+    /// `makeCvarServerInfo` write it, and the 140/204 configstring mirror is
+    /// rebuilt from it. `Server` seeds it at load and reads it back every
+    /// frame, the same single-owner arrangement the configstring table has.
+    pub cvars: crate::cvars::Cvars,
     /// The map's collision, once one exists. `None` in every unit test and
     /// on a fresh `GameHost`; `bulletTrace` traces against it when present
     /// and reports a clean miss when it is not. Stage 10 is what sets it.
@@ -80,7 +81,7 @@ impl GameHost {
             ents: ObjectTable::new(),
             damage: Vec::new(),
             allocators: Allocators::new(),
-            cvars: std::collections::HashMap::new(),
+            cvars: crate::cvars::Cvars::new(),
             world: None,
             rng: RNG_SEED,
             script_log: Vec::new(),
