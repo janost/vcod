@@ -61,13 +61,40 @@ impl ScriptRuntime {
         world: Option<Rc<crate::world::World>>,
         now_ms: i32,
     ) -> anyhow::Result<ScriptRuntime> {
+        Self::load_from(
+            Box::new(PakScripts(fs.clone())),
+            fs,
+            map,
+            gametype,
+            configstrings,
+            cvars,
+            world,
+            now_ms,
+        )
+    }
+
+    /// `load` with the script source supplied. `fs` still resolves the map's
+    /// BSP, so `source` only decides where `.gsc` text comes from: a test
+    /// overlays one file on the paks and gets the real bootstrap rather than
+    /// a hand-written copy of it that a change here would not reach.
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_from(
+        source: Box<dyn ScriptSource>,
+        fs: Rc<Pk3Fs>,
+        map: &str,
+        gametype: &str,
+        configstrings: Vec<String>,
+        cvars: crate::cvars::Cvars,
+        world: Option<Rc<crate::world::World>>,
+        now_ms: i32,
+    ) -> anyhow::Result<ScriptRuntime> {
         let entry = format!("maps/mp/{map}");
         let gametype_entry = format!("maps/mp/gametypes/{gametype}");
         let mut vm = Vm::new();
         // One `Loader`, not two: its `loaded` set dedupes the files both
         // closures share, and `Vm::install` rejects a duplicate `FuncRef`, so
         // a second `Loader` would fail on the first shared file.
-        let mut loader = Loader::new(Box::new(PakScripts(fs.clone())));
+        let mut loader = Loader::new(source);
         loader
             .load(&mut vm, &gametype_entry)
             .map_err(|e| anyhow::anyhow!("loading {gametype_entry}: {e:?}"))?;
@@ -114,7 +141,7 @@ impl ScriptRuntime {
             entry,
             gametype_entry,
         };
-        rt.start_bootstrap(now_ms);
+        rt.start_bootstrap(now_ms)?;
         Ok(rt)
     }
 
@@ -132,23 +159,32 @@ impl ScriptRuntime {
     /// `start_thread` steps the new thread to its first suspend before
     /// returning, which the same probe measured, so the tables are complete
     /// when `load` returns.
-    fn start_bootstrap(&mut self, now_ms: i32) {
-        let gt_main = self.vm.func_ref(&self.gametype_entry, "main");
-        self.vm
-            .start_thread(&mut self.host, now_ms, gt_main, None, vec![]);
+    fn start_bootstrap(&mut self, now_ms: i32) -> anyhow::Result<()> {
+        let gametype_entry = self.gametype_entry.clone();
+        self.start(&gametype_entry, "main", now_ms)?;
 
-        let map_main = self.vm.func_ref(&self.entry, "main");
-        self.vm
-            .start_thread(&mut self.host, now_ms, map_main, None, vec![]);
+        let entry = self.entry.clone();
+        self.start(&entry, "main", now_ms)?;
 
         // `CodeCallback_StartGameType` is defined in `_callbacksetup`, not in
         // the gametype script; it guards on `level.gametypestarted` and then
         // calls `level.callbackStartGameType`.
-        let start = self
-            .vm
-            .func_ref(CALLBACK_SETUP, "CodeCallback_StartGameType");
+        self.start(CALLBACK_SETUP, "CodeCallback_StartGameType", now_ms)
+    }
+
+    /// Starts one entry point as a thread, checking it is installed first.
+    /// `Vm::start_thread` panics on a `FuncRef` that is not, and `--gametype`
+    /// is user input, so a gametype script that loads but defines no `main`
+    /// (or never pulls in `_callbacksetup`) has to fail the way a missing
+    /// file does: an error `main.rs` exits on, not a panic.
+    fn start(&mut self, path: &str, name: &str, now_ms: i32) -> anyhow::Result<()> {
+        let f = self.vm.func_ref(path, name);
+        if !self.vm.has_function(f) {
+            anyhow::bail!("{path}.gsc defines no {name}()");
+        }
         self.vm
-            .start_thread(&mut self.host, now_ms, start, None, vec![]);
+            .start_thread(&mut self.host, now_ms, f, None, vec![]);
+        Ok(())
     }
 
     /// The configstrings the script wrote (e.g. `setCullFog`, `ambientPlay`)
@@ -163,6 +199,13 @@ impl ScriptRuntime {
     /// thread past a `wait` can still call `setCvar`.
     pub fn cvars(&self) -> &crate::cvars::Cvars {
         &self.host.cvars
+    }
+
+    /// Every line the script has passed to `logPrint`, in order. Retail
+    /// writes these to `games_mp.log`, which is where the probe captures in
+    /// `crates/gsc/tests/fixtures/semantics/` came from.
+    pub fn script_log(&self) -> &[String] {
+        &self.host.script_log
     }
 
     /// One server frame of script.
@@ -248,10 +291,15 @@ mod tests {
     }
 
     /// `mp_pavlov.gsc` sets `game["allies"] = "russian"`, and dm's
-    /// `Callback_StartGameType` turns that into `team_russiangerman`. Seeing
-    /// that menu name proves the gametype's main ran, the map script's main
-    /// ran and the code callback ran, in an order that produced retail's
-    /// answer.
+    /// `Callback_StartGameType` turns that into `team_russiangerman`, so
+    /// this pins that the map's `main` ran before the code callback and that
+    /// all three precache families reached the table. It does **not** pin
+    /// the order of the two `main`s: `dm.gsc`'s own `main` never reads
+    /// `game["allies"]` and its `Callback_StartGameType` defaults the key
+    /// when unset, so 1180 reads the same either way. That order is pinned
+    /// by `probe_bootstrap_matches_retail` in
+    /// `crates/server/tests/semantics_ents.rs`, which drives this same
+    /// bootstrap with the probe as its gametype.
     #[test]
     fn the_bootstrap_precaches_the_russian_team_menu_on_mp_pavlov() {
         let Some(fs) = vcod_common::testing::game_fs() else {
@@ -273,6 +321,46 @@ mod tests {
         assert_eq!(
             rt.configstrings()[1501],
             "levelshots/layouts/hud@layout_mp_pavlov"
+        );
+    }
+
+    /// A gametype script that resolves but defines no `main` reached
+    /// `Vm::start_thread`'s "target must be installed" panic. `--gametype` is
+    /// user input, so it has to come back as an error `main.rs` exits on,
+    /// same as a gametype whose file does not exist at all.
+    #[test]
+    fn a_gametype_without_a_main_is_an_error_not_a_panic() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        /// The paks with one gametype path answered by a script that has
+        /// every part of a gametype except the entry point.
+        struct NoMain(Rc<Pk3Fs>);
+        impl ScriptSource for NoMain {
+            fn read(&self, canonical: &str) -> Option<String> {
+                if canonical == "maps/mp/gametypes/nomain" {
+                    return Some("notMain() {}\n".to_string());
+                }
+                PakScripts(self.0.clone()).read(canonical)
+            }
+        }
+        let fs = Rc::new(fs);
+        let err = ScriptRuntime::load_from(
+            Box::new(NoMain(fs.clone())),
+            fs,
+            "mp_pavlov",
+            "nomain",
+            vec![String::new(); 2048],
+            crate::cvars::Cvars::new(),
+            None,
+            0,
+        );
+        let Err(err) = err else {
+            panic!("a gametype with no main must not load");
+        };
+        assert!(
+            err.to_string().contains("defines no main()"),
+            "unexpected error: {err:#}"
         );
     }
 

@@ -352,6 +352,13 @@ impl Vm {
         self.functions.values().map(Rc::as_ref)
     }
 
+    /// Whether `f` is installed. `start_thread` panics on a miss, so a
+    /// caller holding a `FuncRef` built from a name it did not choose (a
+    /// command-line gametype, say) asks here first.
+    pub fn has_function(&self, f: FuncRef) -> bool {
+        self.functions.contains_key(&f)
+    }
+
     /// Rejects a function that fails `bytecode::stack_depth`'s abstract
     /// stack walk instead of installing it. That check is the only thing
     /// standing between a compiler bug and a panic in `step_frames` (which
