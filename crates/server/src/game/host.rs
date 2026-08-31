@@ -35,6 +35,7 @@ pub fn is_builtin(name: &str) -> bool {
         || builtins::hud::lookup(name).is_some()
         || builtins::sound::lookup(name).is_some()
         || builtins::attach::lookup(name).is_some()
+        || builtins::client::lookup(name).is_some()
         || builtins::combat::lookup(name).is_some()
         || builtins::mover::lookup(name).is_some()
         || builtins::cvar::lookup(name).is_some()
@@ -47,9 +48,12 @@ pub fn is_builtin(name: &str) -> bool {
 /// `waittill("begin")` as its second statement, so the thread has to be
 /// running and parked on that wait before the notify goes out.
 pub enum ClientEvent {
-    /// The client was admitted a slot; allocates its entity and runs
-    /// `CodeCallback_PlayerConnect` on it.
-    Connect(usize),
+    /// The client was admitted a slot; allocates its entity, fills `.name`
+    /// in from the userinfo the netcode already sanitized, and runs
+    /// `CodeCallback_PlayerConnect` on it. The name travels with the event
+    /// because the callback reads it (`dm.gsc`'s `logPrint("J;" + ... +
+    /// self.name)`), and the object table has nowhere else to get it.
+    Connect { slot: usize, name: String },
     /// The client's `begin` command; notifies the parked callback.
     Begin(usize),
     /// The client is gone; runs `CodeCallback_PlayerDisconnect` and frees
@@ -64,6 +68,10 @@ pub struct GameHost {
     /// before the think pass. Queued rather than called inline for the same
     /// reason `damage` is: a builtin must never reenter the VM.
     pub client_events: Vec<ClientEvent>,
+    /// Per-client server commands the script asked for, by client slot,
+    /// drained by `Server` after `run_frame`. A builtin cannot reach the
+    /// netchan, so it queues, the same reason `damage` does.
+    pub client_commands: Vec<(usize, String)>,
     /// Damage the script asked for, drained after `run_frame` by stage 6.
     /// A builtin must never reenter the VM, so a callback becomes a queued
     /// event (the design's "callbacks cannot run inline").
@@ -125,6 +133,7 @@ impl GameHost {
             configstrings,
             ents: ObjectTable::new(),
             client_events: Vec::new(),
+            client_commands: Vec::new(),
             damage: Vec::new(),
             allocators: Allocators::new(),
             cvars: crate::cvars::Cvars::new(),
@@ -204,6 +213,9 @@ impl Host for GameHost {
             return f(self, cx, recv, args);
         }
         if let Some(f) = builtins::attach::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        if let Some(f) = builtins::client::lookup(&folded) {
             return f(self, cx, recv, args);
         }
         if let Some(f) = builtins::combat::lookup(&folded) {
@@ -386,6 +398,7 @@ mod tests {
             .chain(builtins::hud::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::sound::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::attach::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::client::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::combat::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::mover::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::cvar::NAMES.iter().map(|(n, _)| *n))

@@ -102,15 +102,43 @@ follow that wait in the stock dm script account for four of them.
 `t`'s argument is an index into the script-menu configstring range, whose slot 0
 is cs 1180: cs 1180 is `team_russiangerman` and cs 1181 `weapon_russian`, and
 answering the team menu produces `v g_scriptMainMenu "weapon_russian"` then
-`t 1`. INFERRED that `t` is the wire form of the script's `openMenu`: the script
-calls `openMenu(game["menu_team"])` at exactly that point and no other command
-in the stream is unaccounted for.
+`t 1`.
+
+VERIFIED that `t` is the wire form of the script's `openMenu` and `v` of its
+`setClientCvar`, from the two builtins in `game.mp.i386.so`. `openMenu`
+(`0x453f4`) sends `va("t %i", GScr_GetScriptMenuIndex(name))`, format string at
+`0x731f8`; the menu's name never reaches the wire. `setClientCvar` (`0x446e0`)
+sends `va("v %s \"%s\"", name, value)`, format string at `0x73300`, which is
+why the name is bare and the value quoted. VERIFIED that it rewrites a `"`
+inside the value as `'` first (`0x447b2`), so the value cannot close its own
+quoted argument.
+
+VERIFIED that `GScr_GetScriptMenuIndex` (`0x5c73c`) reads configstrings
+`0x49c + i` for `i` in `0..=31` and returns the first `i` whose text matches the
+name, and that a name in none of them raises the script error
+`Menu '%s' was not precached` (`0x771f2`). `0x49c` is 1180.
 
 The client answers with the `mr <serverId> <menu index> <response>` client
 command, quoting back the index `t` named. Answering `t 0` with `allies` and the
 `t 1` that follows with a weapon `maps\mp\gametypes\_teams::restrict` allows for
 that menu's nationality spawns the player; `--save-playerstate` does exactly
 that.
+
+`Cmd_MenuResponse_f` (`0x486d8`) turns that command into a two-argument
+`notify(player, "menuresponse", menu, response)`. VERIFIED that the first
+argument is the menu's *name*, not the index the client sent: the handler reads
+configstring `0x49c + index` back into a buffer (`0x48790`) and passes that
+string. That is what lets a gametype compare it against `game["menu_team"]` and
+hand it straight back to `openMenu`, which `dm.gsc` does at lines 245 and 340.
+The rest of the handler is INFERRED, read off the disassembly rather than run
+live:
+
+- an argument count other than 4 sends the notify with an empty menu name and
+  the response `"bad"`, without reading the serverId at all (`0x486ed`);
+- argv[1] is compared against the `sv_serverId` cvar and the handler returns
+  without notifying when they differ (`0x4874a`);
+- an index outside `0..=31` skips the configstring read, leaving argv[2]'s own
+  digits as the menu argument (`0x4877c`).
 
 ---
 

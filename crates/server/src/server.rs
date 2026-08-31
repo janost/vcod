@@ -194,6 +194,36 @@ fn oob_arg(rest: &[u8]) -> String {
         .to_string()
 }
 
+/// The last script menu `Cmd_MenuResponse_f` (0x486d8) will look up, and the
+/// last `GScr_GetScriptMenuIndex` (0x5c73c) will hand out: both walk
+/// `CsRange::Menu`'s 32 slots.
+const MAX_MENUS: i32 = 31;
+
+/// `mr <serverId> <menuIndex> <response>`, exactly four arguments, the
+/// index a slot in `CsRange::Menu`.
+///
+/// Retail is looser than this in two places, and neither reaches a stock
+/// gametype: `Cmd_MenuResponse_f` (0x486d8) answers a wrong argument count
+/// with a `("", "bad")` notify without even reading the serverId, and an
+/// index past 31 with argv[2]'s own digits in place of the menu name. Both
+/// are INFERRED, read off the disassembly rather than run live, and both
+/// produce a menu name no gametype's `menuresponse` loop compares equal to,
+/// so dropping them costs nothing a script can see. The stale-serverId drop
+/// is retail's own.
+fn parse_menu_response(cmd: &str, server_id: i32) -> Option<(i32, String)> {
+    let mut it = cmd.split_whitespace();
+    if it.next()? != "mr" {
+        return None;
+    }
+    let sid: i32 = it.next()?.parse().ok()?;
+    let index: i32 = it.next()?.parse().ok()?;
+    let response = it.next()?.to_string();
+    if it.next().is_some() || sid != server_id || !(0..=MAX_MENUS).contains(&index) {
+        return None;
+    }
+    Some((index, response))
+}
+
 /// `Cmd_Argv(1)`. The token goes back out inside an info string, so the info
 /// separators come off it and the length is capped.
 fn challenge_arg(arg: &str) -> String {
@@ -468,9 +498,10 @@ impl Server {
         };
         let client = Client::new(from, qport, challenge, userinfo, now);
         log::info!("client {slot} {:?} connected from {from}", client.name);
+        let name = client.name.clone();
         self.clients[slot] = Some(client);
         if let Some(rt) = self.script.as_mut() {
-            rt.push_client_event(ClientEvent::Connect(slot));
+            rt.push_client_event(ClientEvent::Connect { slot, name });
         }
         self.send_oob(from, "connectResponse");
     }
@@ -693,6 +724,19 @@ impl Server {
                     }
                 }
                 self.send_server_command(slot, &text);
+            }
+            // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
+            // opened. Unlike `begin` this fires straight through to a
+            // notify: nothing is armed by it, and a notify no thread is
+            // parked on is simply lost, which is what retail does too.
+            "mr" => {
+                if let Some((index, response)) =
+                    parse_menu_response(trimmed, i32::from(self.server_id))
+                {
+                    if let Some(rt) = self.script.as_mut() {
+                        rt.menu_response(slot, index, &response);
+                    }
+                }
             }
             // `ClientBegin`: the notify that releases the connect callback's
             // `waittill("begin")`. The event queues rather than fires here,
@@ -943,8 +987,10 @@ impl Server {
     pub fn tick(&mut self, now: Instant) {
         self.check_timeouts(now);
         self.send_snapshots(now);
+        let mut client_commands = Vec::new();
         if let Some(rt) = self.script.as_mut() {
             rt.run_frame(self.sv_time_ms);
+            client_commands = rt.take_client_commands();
             // The script owns the table while it runs and allocates into it
             // from any thread, so the server re-reads it rather than trusting
             // the copy `load_scripts` took. A whole-table copy per frame is
@@ -963,6 +1009,11 @@ impl Server {
                     c.ent = rt.client_entity(slot);
                 }
             }
+        }
+        // Outside the borrow: `setClientCvar` and `openMenu` queue rather
+        // than send, and this is where the queue reaches the netchan.
+        for (slot, cmd) in client_commands {
+            self.send_server_command(slot, &cmd);
         }
     }
 
@@ -1253,6 +1304,28 @@ mod tests {
         let (_, _, c) = reply(&mut sv);
         assert_ne!(a, c);
         assert!(String::from_utf8_lossy(&a).trim().parse::<i32>().is_ok());
+    }
+
+    /// `mr <serverId> <menuIndex> <response>`, exactly four arguments.
+    /// Retail's stale-serverId drop is the one this reproduces exactly; the
+    /// other three shapes it drops, retail turns into a notify no stock
+    /// gametype tests (see `parse_menu_response`).
+    #[test]
+    fn mr_needs_four_args_a_live_serverid_and_a_bounded_index() {
+        assert!(parse_menu_response("mr 7 3 allies", 7).is_some());
+        assert!(
+            parse_menu_response("mr 6 3 allies", 7).is_none(),
+            "stale serverId"
+        );
+        assert!(
+            parse_menu_response("mr 7 32 allies", 7).is_none(),
+            "index out of range"
+        );
+        assert!(parse_menu_response("mr 7 3", 7).is_none(), "three args");
+        assert!(
+            parse_menu_response("mr 7 3 allies extra", 7).is_none(),
+            "five args"
+        );
     }
 
     #[test]

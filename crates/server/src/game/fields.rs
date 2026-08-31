@@ -374,6 +374,17 @@ pub fn engine_slot_count() -> usize {
     slot_count(ENTITY_FIELDS)
 }
 
+/// `Route::Client`'s index for `.pers`, the one client field the engine
+/// fills in itself rather than leaving for script. Panics if the name ever
+/// leaves the table, which is the right answer: `spawn_client` cannot make
+/// a usable client entity without it.
+pub fn pers_index() -> usize {
+    CLIENT_FIELDS
+        .iter()
+        .position(|f| f.name == "pers")
+        .expect("CLIENT_FIELDS carries pers")
+}
+
 /// The same count over the HUD table, which is one shorter than the table:
 /// `color` and `alpha` share an offset and so share a slot.
 pub fn hud_slot_count() -> usize {

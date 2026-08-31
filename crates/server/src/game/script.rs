@@ -6,7 +6,7 @@ use std::rc::Rc;
 use crate::game::host::{ClientEvent, GameHost};
 use crate::game::spawn::spawn_entities_from_string;
 use vcod_common::pk3::Pk3Fs;
-use vcod_gsc::{EntId, Loader, ScriptSource, Target, Vm};
+use vcod_gsc::{EntId, Loader, ScriptSource, Target, Value, Vm};
 
 /// Every gametype script includes this file, and it is where the engine's
 /// entry points into script live, `CodeCallback_StartGameType` among them.
@@ -16,6 +16,11 @@ const CALLBACK_SETUP: &str = "maps/mp/gametypes/_callbacksetup";
 /// into the world. A misspelt notify does not error, it hangs the thread,
 /// so the literal lives here with a test on it.
 const BEGIN_NOTIFY: &str = "begin";
+
+/// The event every gametype's team-join loop parks on, once the connect
+/// callback has opened the first menu. Same silent failure as
+/// `BEGIN_NOTIFY`, same test.
+const MENURESPONSE_NOTIFY: &str = "menuresponse";
 
 /// Reads `.gsc` out of the mounted paks. `Loader` hands `read` a canonical
 /// path (lowercase, forward slashes, no extension; see `vcod_gsc::canonical`);
@@ -199,6 +204,38 @@ impl ScriptRuntime {
         Ok(())
     }
 
+    /// `Cmd_MenuResponse_f` (0x486d8): notify the client's entity with the
+    /// menu's **name** and the response. The name, not the index the client
+    /// sent -- retail reads configstring `CsRange::Menu.start + index` back
+    /// and passes that string, which is why `dm.gsc` can both compare it
+    /// against `game["menu_team"]` and hand it straight back to `openMenu`.
+    ///
+    /// The event name folds, the response does not: one is an event name,
+    /// the other a string value the script compares against `"allies"` and
+    /// weapon names.
+    pub fn menu_response(&mut self, slot: usize, index: i32, response: &str) {
+        let Some(id) = self.client_entity(slot) else {
+            return;
+        };
+        let menu = crate::configstrings::script_menu_name(&self.host.configstrings, index as usize)
+            .to_string();
+        let (event, menu, response) = self.vm.with_cx(|cx| {
+            (
+                cx.intern_folded(MENURESPONSE_NOTIFY),
+                cx.intern_exact(&menu),
+                cx.intern_exact(response),
+            )
+        });
+        self.vm
+            .notify(id, event, &[Value::String(menu), Value::String(response)]);
+    }
+
+    /// The per-client server commands the script queued this frame, in call
+    /// order. `Server` sends them; nothing here can reach a netchan.
+    pub fn take_client_commands(&mut self) -> Vec<(usize, String)> {
+        std::mem::take(&mut self.host.client_commands)
+    }
+
     /// Queues one client lifecycle event for the next `run_frame`. The
     /// netcode's only way into script: a callback that ran inline from
     /// `SV_ClientCommand` would reenter the VM mid-frame.
@@ -223,7 +260,7 @@ impl ScriptRuntime {
     /// the same reading `load`'s missing-builtin pre-scan takes.
     fn dispatch_client_event(&mut self, ev: ClientEvent, now_ms: i32) {
         match ev {
-            ClientEvent::Connect(slot) => {
+            ClientEvent::Connect { slot, name } => {
                 let id = match self.vm.with_cx(|cx| self.host.ents.spawn_client(cx, slot)) {
                     Ok(id) => id,
                     Err(e) => {
@@ -231,6 +268,18 @@ impl ScriptRuntime {
                         return;
                     }
                 };
+                // `.name` is `CLIENT_FIELDS[0]`; retail fills it in
+                // `ClientUserinfoChanged`, before the callback runs.
+                use vcod_gsc::Host;
+                let host = &mut self.host;
+                let set = self.vm.with_cx(|cx| {
+                    let field = cx.intern_folded("name");
+                    let value = Value::String(cx.intern_exact(&name));
+                    host.set_field(cx, id, field, value)
+                });
+                if let Err(e) = set {
+                    log::error!("client {slot}: name not set: {e:?}");
+                }
                 self.start_callback("CodeCallback_PlayerConnect", id, now_ms);
             }
             ClientEvent::Begin(slot) => {
@@ -500,6 +549,14 @@ mod tests {
         assert_eq!(BEGIN_NOTIFY, "begin");
     }
 
+    /// The whole team-join state machine wakes on this one notify, and a
+    /// misspelling hangs the loop with nothing logged, so the spelling is
+    /// pinned the same way `begin` is.
+    #[test]
+    fn the_menu_notify_is_spelled_menuresponse() {
+        assert_eq!(MENURESPONSE_NOTIFY, "menuresponse");
+    }
+
     /// Connect arms the callback's `waittill("begin")` and Begin releases it.
     /// Order matters and the failure is silent: `Callback_PlayerConnect`
     /// blocks on that notify as its second statement, so a Begin drained
@@ -514,7 +571,10 @@ mod tests {
              c() { self.statusicon = \"connecting\"; self waittill(\"begin\"); \
                    self.statusicon = \"begun\"; }\n",
         );
-        rt.push_client_event(ClientEvent::Connect(0));
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "vcod".into(),
+        });
         rt.run_frame(50);
         let ent = rt.client_entity(0).expect("connect allocated no entity");
         assert_eq!(rt.field_str(ent, "statusicon"), "connecting");
@@ -522,6 +582,63 @@ mod tests {
         rt.push_client_event(ClientEvent::Begin(0));
         rt.run_frame(100);
         assert_eq!(rt.field_str(ent, "statusicon"), "begun");
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+    }
+
+    /// The two things a client entity carries before any script touches it:
+    /// `.name` from the userinfo, and a `.pers` the gametype can index. Both
+    /// are measured on the retail 1.1d server -- a probe gametype logged
+    /// `pers` defined and `self.name` correct inside
+    /// `Callback_PlayerConnect`, before its `waittill("begin")`. Without
+    /// either, `dm.gsc`'s connect callback dies before it opens a menu.
+    #[test]
+    fn a_fresh_client_entity_carries_its_name_and_an_indexable_pers() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerConnect = ::c; }\n\
+             CodeCallback_PlayerConnect() { [[level.callbackPlayerConnect]](); }\n\
+             c() { if(!isdefined(self.pers[\"team\"])) self.pers[\"team\"] = \"spectator\"; \
+                   self.statusicon = self.name + \":\" + self.pers[\"team\"]; }\n",
+        );
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "janost".into(),
+        });
+        rt.run_frame(50);
+        let ent = rt.client_entity(0).expect("connect allocated no entity");
+        assert_eq!(rt.field_str(ent, "statusicon"), "janost:spectator");
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+    }
+
+    /// The `menuresponse` notify carries the menu's *name*, read back out of
+    /// its configstring slot, not the index the client sent. Every
+    /// gametype's join loop compares that first argument against
+    /// `game["menu_team"]` and hands it back to `openMenu`, so an index
+    /// would match nothing and the loop would spin forever.
+    #[test]
+    fn a_menu_response_notifies_the_menu_name_and_the_response() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerConnect = ::c; }\n\
+             CodeCallback_PlayerConnect() { [[level.callbackPlayerConnect]](); }\n\
+             c() { self waittill(\"menuresponse\", menu, response); \
+                   self.statusicon = menu + \":\" + response; }\n",
+        );
+        let (lo, _) = crate::configstrings::CsRange::Menu.bounds();
+        rt.host.configstrings[lo + 1] = "weapon_russian".to_string();
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "vcod".into(),
+        });
+        rt.run_frame(50);
+        let ent = rt.client_entity(0).expect("connect allocated no entity");
+
+        rt.menu_response(0, 1, "mosin_nagant_mp");
+        rt.run_frame(100);
+        assert_eq!(
+            rt.field_str(ent, "statusicon"),
+            "weapon_russian:mosin_nagant_mp"
+        );
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
     }
 
@@ -537,7 +654,10 @@ mod tests {
              CodeCallback_PlayerDisconnect() { [[level.callbackPlayerDisconnect]](); }\n\
              d() { level.gone = self getEntityNumber(); }\n",
         );
-        rt.push_client_event(ClientEvent::Connect(3));
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 3,
+            name: "vcod".into(),
+        });
         rt.run_frame(50);
         assert!(rt.client_entity(3).is_some());
 

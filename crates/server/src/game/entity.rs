@@ -26,7 +26,9 @@ pub const FIRST_HUD_ELEM: u32 = MAX_GENTITIES;
 /// 4`.
 pub const MAX_HUDELEMS: u32 = 1024;
 
-use crate::game::fields::{engine_slot_count, hud_slot_count, route_hud, Route, CLIENT_FIELDS};
+use crate::game::fields::{
+    engine_slot_count, hud_slot_count, pers_index, route_hud, Route, CLIENT_FIELDS,
+};
 use crate::server::MAX_CLIENTS;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, StructId, Value};
 
@@ -149,9 +151,16 @@ impl ObjectTable {
             return Err(ErrorKind::BadType("client slot out of range"));
         }
         let script = cx.new_struct();
+        let mut client = vec![Value::Undefined; CLIENT_FIELDS.len()];
+        // `.pers` is an array from the moment the client connects: the
+        // engine writes the handle in `ClientConnect` (0x4250f), and every
+        // gametype's first act is to read `self.pers["team"]` off it without
+        // creating it. Measured live on the retail 1.1d server: defined
+        // before `begin`, with `pers["team"]` undefined inside it.
+        client[pers_index()] = Value::Array(cx.new_array());
         self.ents[slot] = Some(GEntity {
             engine: vec![Value::Undefined; engine_slot_count()],
-            client: Some(vec![Value::Undefined; CLIENT_FIELDS.len()]),
+            client: Some(client),
             script,
             solid: true,
             hidden: false,

@@ -202,6 +202,26 @@ impl Allocators {
     }
 }
 
+/// `GScr_GetScriptMenuIndex` (0x5c73c): the offset within `CsRange::Menu` of
+/// the slot holding `name`, scanning the whole range for an exact match.
+/// That offset, not the configstring number, is what `openMenu` puts on the
+/// wire. `None` is retail's `Menu '%s' was not precached` error.
+pub fn script_menu_index(cs: &[String], name: &str) -> Option<usize> {
+    let (lo, hi) = CsRange::Menu.bounds();
+    (lo..=hi).find(|s| cs[*s] == name).map(|s| s - lo)
+}
+
+/// The inverse: what `Cmd_MenuResponse_f` (0x486d8) reads back out of
+/// configstring `CsRange::Menu.start + index` to name the menu in its
+/// `menuresponse` notify. Empty when nothing precached that slot, which is
+/// the empty string retail passes on too.
+pub fn script_menu_name(cs: &[String], index: usize) -> &str {
+    let (lo, hi) = CsRange::Menu.bounds();
+    cs.get(lo + index)
+        .filter(|_| lo + index <= hi)
+        .map_or("", |s| s.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
