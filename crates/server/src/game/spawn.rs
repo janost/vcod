@@ -122,6 +122,13 @@ fn worldspawn_northyaw(world: &std::collections::HashMap<String, String>) -> Str
 /// gate maps place exactly one `trigger_hurt` with no `sound` key -- VERIFIED,
 /// read straight from the shipped BSPs -- so the default is what lands in
 /// configstring 525 on both.
+///
+/// Unlike `worldspawn_northyaw`, this only falls back when the key is
+/// absent, not when it is present-but-empty: nothing in `SP_trigger_hurt`'s
+/// disassembly showed the post-`G_SpawnString` empty check `SP_worldspawn`
+/// has, and neither gate map's `trigger_hurt` carries an empty `sound`
+/// value, so that branch is deliberate but unmeasured, not proven either
+/// way.
 fn trigger_hurt_sound(block: &std::collections::HashMap<String, String>) -> String {
     block
         .get("sound")

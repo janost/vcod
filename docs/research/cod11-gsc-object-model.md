@@ -999,13 +999,16 @@ no `misc_mg42` at all.
 **`weap_mg42_loop` / `weap_mg42_cooldown`, configstrings 526/527.**
 `misc_mg42` and `misc_turret` share `SP_turret` (0x533b0, section 8), which
 calls `G_SpawnTurret` (0x52c84) — the link section 17 left untraced.
-VERIFIED, read straight from the binary: right after
-`RegisterItem(weaponinfo)` (`0x52d74`, section 17's mechanism), it reads two
-fields off the pointer `BG_GetInfoForWeapon` returns for that same weapon
-(`edi+0xa0`, `edi+0xa4`) and, for each one that is a non-null, non-empty
-string, calls `G_SoundAliasIndex` on it (`0x52dad`, `0x52dd8`) — reading
-control flow, so INFERRED FROM DECOMPILATION for the mechanism, not run
-live. The two fields are not compiled-in strings or an entity key: VERIFIED
+VERIFIED, read straight from the binary: `G_SpawnTurret`'s body contains
+`RegisterItem(weaponinfo)` (`0x52d74`, section 17's mechanism) followed by
+two reads off the pointer `BG_GetInfoForWeapon` returns (`edi+0xa0`,
+`edi+0xa4`) and two more calls to `G_SoundAliasIndex` (`0x52dad`, `0x52dd8`),
+each gated on that field being a non-null, non-empty string. INFERRED FROM
+DECOMPILATION, the narrative that connects those addresses — that the two
+`G_SoundAliasIndex` calls register sound aliases for the same weapon
+`RegisterItem` just registered as an item — since this is read off control
+flow, not run live. The two fields are not compiled-in strings or an entity
+key: VERIFIED
 from the shipped `weapons/mp/mg42_bipod_stand_mp` (`pak0.pk3`), the weapon
 file both gate maps' mounted mg42s name in their own `weaponinfo` key, its
 `loopFireSound` and `stopFireSound` keys are `weap_mg42_loop` and
