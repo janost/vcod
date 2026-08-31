@@ -202,6 +202,19 @@ PROBE notify_order first
 PROBE notify_order second
 PROBE notify_done 1
 
+# probe_self
+PROBE at self_receiver
+PROBE self_receiver_defined 1
+PROBE at self_plain_call
+PROBE self_plain_defined 1
+PROBE self_plain_mark marked
+PROBE at self_ptr_call
+PROBE self_ptr_defined 1
+PROBE self_ptr_mark marked
+PROBE at self_threaded_call
+PROBE self_threaded_defined 1
+PROBE self_threaded_mark marked
+
 # probe_size
 PROBE size_array 3
 PROBE size_empty_array 0

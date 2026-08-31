@@ -1,15 +1,12 @@
-//! Model attachment builtins. Five operate on `GEntity::attachments`, a
-//! per-entity list of `(model, tag)` pairs: `attach`, `detachAll`,
-//! `getAttachModelName`, `getAttachSize`, `getAttachTagName`. The other two,
-//! `getViewModel`/`setViewModel`, are a single model name on the entity's
-//! own field store; retail's real viewmodel plumbing hangs off a client,
-//! which stage 4 gives entities, so until then this is a plain field round
-//! trip rather than anything a client would render.
+//! Model attachment builtins, all five operating on `GEntity::attachments`,
+//! a per-entity list of `(model, tag)` pairs. `setViewModel` used to live
+//! here too; it hangs off a `gclient_t` in retail and now lives beside the
+//! other player methods in `client.rs`.
 
 use crate::configstrings::CsRange;
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::GameHost;
-use vcod_gsc::{Cx, ErrorKind, Host, Target, Value};
+use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
 
@@ -19,8 +16,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("getattachmodelname", get_attach_model_name),
     ("getattachsize", get_attach_size),
     ("getattachtagname", get_attach_tag_name),
-    ("getviewmodel", get_view_model),
-    ("setviewmodel", set_view_model),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -137,36 +132,6 @@ pub fn get_attach_tag_name(
         .map_or(Value::Undefined, |(_, tag)| Value::String(*tag)))
 }
 
-/// `self setViewModel(name)`: stored under a script field the way
-/// `setModel` stores `.model`.
-pub fn set_view_model(
-    host: &mut GameHost,
-    cx: &mut Cx,
-    recv: Option<Target>,
-    args: &[Value],
-) -> Result<Value, ErrorKind> {
-    let id = entity_receiver(recv)?;
-    let Some(Value::String(name)) = args.first() else {
-        return Err(ErrorKind::BadType("setViewModel takes a model name"));
-    };
-    let name = *name;
-    let field = cx.intern_folded("viewmodel");
-    host.set_field(cx, id, field, Value::String(name))?;
-    Ok(Value::Undefined)
-}
-
-/// `self getViewModel()`, the read side of `setViewModel`.
-pub fn get_view_model(
-    host: &mut GameHost,
-    cx: &mut Cx,
-    recv: Option<Target>,
-    _args: &[Value],
-) -> Result<Value, ErrorKind> {
-    let id = entity_receiver(recv)?;
-    let field = cx.intern_folded("viewmodel");
-    Ok(host.get_field(cx, id, field))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,23 +171,6 @@ mod tests {
                 get_attach_size(&mut host, cx, t, &[]).unwrap(),
                 Value::Int(0)
             );
-        });
-    }
-
-    /// `setViewModel`/`getViewModel` round-trip through the entity's own
-    /// field store.
-    #[test]
-    fn view_model_round_trips() {
-        let (mut vm, mut host) = fixture();
-        vm.with_cx(|cx| {
-            let e = host.ents.spawn(cx).unwrap();
-            let t = Some(Target::Entity(e));
-            let name = Value::String(cx.intern_exact("viewmodel/kar98k"));
-            set_view_model(&mut host, cx, t, &[name]).unwrap();
-            match get_view_model(&mut host, cx, t, &[]).unwrap() {
-                Value::String(a) => assert_eq!(cx.resolve(a), "viewmodel/kar98k"),
-                v => panic!("{v:?}"),
-            }
         });
     }
 }

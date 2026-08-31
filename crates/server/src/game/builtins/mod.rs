@@ -3,6 +3,7 @@
 //! (docs/research/cod11-gsc-language.md, atom identity).
 
 pub mod attach;
+pub mod client;
 pub mod combat;
 pub mod cvar;
 pub mod entity;

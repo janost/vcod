@@ -1,6 +1,6 @@
 //! One connected client's server-side state (`client_t`).
 
-use crate::spectate::SpectatorSim;
+use crate::spectate::ClientSim;
 use std::net::SocketAddr;
 use std::time::Instant;
 use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
@@ -49,7 +49,7 @@ pub struct Client {
     /// decode against it, so it commits only after a whole message parses.
     pub last_cmd: UserCmd,
     /// Set once the client enters the world.
-    pub sim: Option<SpectatorSim>,
+    pub sim: Option<ClientSim>,
     /// Frames sent to this client, indexed message_num % SV_PACKET_BACKUP;
     /// the delta base for a later frame is picked from here by message_ack.
     pub frames: Vec<Option<Snapshot>>,

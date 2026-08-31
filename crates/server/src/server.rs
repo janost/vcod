@@ -7,7 +7,8 @@
 
 use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
-use crate::spectate::SpectatorSim;
+use crate::game::host::ClientEvent;
+use crate::spectate::ClientSim;
 use crate::world::{TestEntities, World};
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
@@ -191,6 +192,41 @@ fn oob_arg(rest: &[u8]) -> String {
     String::from_utf8_lossy(rest)
         .trim_end_matches(['\n', '\0'])
         .to_string()
+}
+
+/// The last script menu `Cmd_MenuResponse_f` (0x486d8) will look up, and the
+/// last `GScr_GetScriptMenuIndex` (0x5c73c) will hand out: both walk
+/// `CsRange::Menu`'s 32 slots.
+const MAX_MENUS: i32 = 31;
+
+/// `mr <serverId> <menuIndex> <response>`, exactly four arguments, the
+/// index a slot in `CsRange::Menu`. The response passes through unparsed: it
+/// is a string the gametype compares, not something the server reads.
+///
+/// Retail is looser than this in three places, none of which a stock
+/// gametype reaches. Two are in `Cmd_MenuResponse_f` (0x486d8), INFERRED
+/// from the disassembly rather than run live: a wrong argument count gets a
+/// `("", "bad")` notify without the serverId even being read, and an index
+/// past 31 gets argv[2]'s own digits in place of the menu name. Both produce
+/// a menu name no `menuresponse` loop compares equal to, so dropping them
+/// costs nothing a script can see. The third is the tokenizer: retail's
+/// `Cmd_Argv` strips quotes, so `mr 7 3 "allies"` is a valid response there
+/// and is rejected here. Nothing in the stock corpus quotes a menu response,
+/// and unquoting without a measurement of what else that tokenizer does to
+/// an argument would be inventing a format. The stale-serverId drop is the
+/// one retail shares.
+fn parse_menu_response(cmd: &str, server_id: i32) -> Option<(i32, String)> {
+    let mut it = cmd.split_whitespace();
+    if it.next()? != "mr" {
+        return None;
+    }
+    let sid: i32 = it.next()?.parse().ok()?;
+    let index: i32 = it.next()?.parse().ok()?;
+    let response = it.next()?.to_string();
+    if it.next().is_some() || sid != server_id || !(0..=MAX_MENUS).contains(&index) {
+        return None;
+    }
+    Some((index, response))
 }
 
 /// `Cmd_Argv(1)`. The token goes back out inside an info string, so the info
@@ -455,6 +491,13 @@ impl Server {
                     return;
                 }
                 log::info!("{from}: reconnect");
+                // Whoever held the slot is gone, so its script state has to
+                // be torn down here: `check_timeouts` never reaches it once
+                // the new `Client` overwrites the slot with a fresh
+                // `last_packet`.
+                if let Some(rt) = self.script.as_mut() {
+                    rt.push_client_event(ClientEvent::Disconnect(i));
+                }
                 i
             }
             None => match self.clients.iter().position(Option::is_none) {
@@ -467,7 +510,11 @@ impl Server {
         };
         let client = Client::new(from, qport, challenge, userinfo, now);
         log::info!("client {slot} {:?} connected from {from}", client.name);
+        let name = client.name.clone();
         self.clients[slot] = Some(client);
+        if let Some(rt) = self.script.as_mut() {
+            rt.push_client_event(ClientEvent::Connect { slot, name });
+        }
         self.send_oob(from, "connectResponse");
     }
 
@@ -558,19 +605,9 @@ impl Server {
         // The new delta base commits before any op runs; a message that fails
         // to decode left it alone above.
         self.clients[slot].as_mut().unwrap().last_cmd = last_cmd;
-        // Acking the gamestate message is the enter-world trigger. Equal, not
-        // strictly past: a message's fragments share one sequence, so the
-        // client's first ack lands exactly on gamestate_message_num, and no
-        // later server message exists yet to push it past.
-        let entering = {
-            let c = self.clients[slot].as_mut().unwrap();
-            c.accept(&m, now);
-            c.addr = from; // NAT may move the port; the qport is the identity
-            c.state == ClientState::Primed && i64::from(m.message_ack) >= c.gamestate_message_num
-        };
-        if entering {
-            self.enter_world(slot);
-        }
+        let c = self.clients[slot].as_mut().unwrap();
+        c.accept(&m, now);
+        c.addr = from; // NAT may move the port; the qport is the identity
         for op in ops {
             match op {
                 ClientOp::Command { seq, text } => {
@@ -678,6 +715,9 @@ impl Server {
                 self.drop_client(slot, "EXE_DISCONNECTED");
                 return false;
             }
+            // The entity's `.name` is not updated with it: script sees the
+            // connect-time name and a rename goes stale there, which stage
+            // 6's obituaries and scoreboard are the first to notice.
             "userinfo" => {
                 let ui = args.trim().trim_matches('"').to_string();
                 if let Some(c) = self.clients[slot].as_mut() {
@@ -699,6 +739,35 @@ impl Server {
                     }
                 }
                 self.send_server_command(slot, &text);
+            }
+            // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
+            // opened. Unlike `begin` this fires straight through to a
+            // notify: nothing is armed by it, and a notify no thread is
+            // parked on is simply lost, which is what retail does too.
+            "mr" => {
+                if let Some((index, response)) =
+                    parse_menu_response(trimmed, i32::from(self.server_id))
+                {
+                    if let Some(rt) = self.script.as_mut() {
+                        rt.menu_response(slot, index, &response);
+                    }
+                }
+            }
+            // `ClientBegin`: the notify that releases the connect callback's
+            // `waittill("begin")`. The event queues rather than fires here,
+            // so it is drained after the `Connect` that armed the wait.
+            // Entry runs once. A repeat from a client already in the world
+            // would park its sim back at the spawn and re-arm a wait nothing
+            // is blocked on.
+            "begin"
+                if self.clients[slot]
+                    .as_ref()
+                    .is_some_and(|c| c.state == ClientState::Primed) =>
+            {
+                if let Some(rt) = self.script.as_mut() {
+                    rt.push_client_event(ClientEvent::Begin(slot));
+                }
+                self.enter_world(slot);
             }
             other => log::debug!("client {slot}: command {other:?} ignored"),
         }
@@ -794,6 +863,9 @@ impl Server {
         let Some(c) = self.clients[slot].take() else {
             return;
         };
+        if let Some(rt) = self.script.as_mut() {
+            rt.push_client_event(ClientEvent::Disconnect(slot));
+        }
         // Match on ip, not `ch.addr == c.addr`; NAT may have moved the port
         // since the challenge was issued and the slot would stay `connected`.
         for ch in &mut self.challenges {
@@ -905,6 +977,20 @@ impl Server {
         self.script.as_ref().map_or_else(Vec::new, |rt| rt.aborts())
     }
 
+    /// One field off a client's script entity, rendered as text. `None` when
+    /// no script is loaded or the slot holds no client entity. This is the
+    /// only way into a joined client's script state from outside the crate,
+    /// and the tests that assert what the stock scripts left there are its
+    /// only callers.
+    pub fn client_field(&mut self, slot: usize, name: &str) -> Option<String> {
+        self.script.as_mut()?.client_field(slot, name)
+    }
+
+    /// One key out of a client's `.pers`, rendered the same way.
+    pub fn client_pers(&mut self, slot: usize, key: &str) -> Option<String> {
+        self.script.as_mut()?.client_pers(slot, key)
+    }
+
     const FALLBACK_SPAWN: ([f32; 3], f32) = ([0.0, 0.0, 64.0], 0.0);
 
     /// `SV_ClientEnterWorld` for a spectator: park the sim at the spawn, start
@@ -920,7 +1006,7 @@ impl Server {
         c.state = ClientState::Active;
         // Fresh start, matching the client's own outCmd reset on map entry.
         c.last_cmd = NULL_USERCMD;
-        c.sim = Some(SpectatorSim::new(spawn.0, spawn.1));
+        c.sim = Some(ClientSim::spectator(spawn.0, spawn.1));
         // One frame back, so the first cmd's dt is a sane 50 ms rather than
         // the whole age of the client's clock.
         c.last_processed_st = self.sv_time_ms.wrapping_sub(FRAME_MS);
@@ -930,8 +1016,10 @@ impl Server {
     pub fn tick(&mut self, now: Instant) {
         self.check_timeouts(now);
         self.send_snapshots(now);
+        let mut client_commands = Vec::new();
         if let Some(rt) = self.script.as_mut() {
             rt.run_frame(self.sv_time_ms);
+            client_commands = rt.take_client_commands();
             // The script owns the table while it runs and allocates into it
             // from any thread, so the server re-reads it rather than trusting
             // the copy `load_scripts` took. A whole-table copy per frame is
@@ -943,6 +1031,39 @@ impl Server {
             if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
                 log::warn!("rebuilding the cvar mirror: {e:?}");
             }
+            // The weapons come across the same way the configstrings do:
+            // re-read every frame, because any thread can have changed them.
+            for (slot, c) in self.clients.iter_mut().enumerate() {
+                if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
+                    sim.weapons = rt.client_weapons(slot);
+                    sim.viewmodel_index = rt.client_viewmodel(slot);
+                }
+            }
+            // `self spawn(origin, angles)` moves the sim, which no builtin
+            // can reach; this is where the queue lands.
+            for s in rt.take_client_spawns() {
+                let Some(c) = self.clients.get_mut(s.slot).and_then(Option::as_mut) else {
+                    continue;
+                };
+                // The client's own angles at this moment, not zero: a
+                // spectator that looked around before answering the weapon
+                // menu carries them, and `spawn_delta_angles` subtracts them
+                // so the spawn preserves the view instead of force-turning it.
+                let cmd_angles = c.last_cmd.angles;
+                let Some(sim) = c.sim.as_mut() else {
+                    continue;
+                };
+                if s.player {
+                    sim.become_player(s.origin, s.yaw_deg, cmd_angles);
+                } else {
+                    sim.become_spectator(s.origin, s.yaw_deg, cmd_angles);
+                }
+            }
+        }
+        // Outside the borrow: `setClientCvar` and `openMenu` queue rather
+        // than send, and this is where the queue reaches the netchan.
+        for (slot, cmd) in client_commands {
+            self.send_server_command(slot, &cmd);
         }
     }
 
@@ -977,6 +1098,7 @@ impl Server {
             .test_entities
             .as_ref()
             .map_or_else(BTreeMap::new, |te| te.at(self.proto, self.sv_time_ms));
+        let collision = self.world.as_ref().map(|w| &w.collision);
 
         for slot in 0..self.clients.len() {
             let Some(c) = self.clients[slot].as_mut() else {
@@ -1007,7 +1129,7 @@ impl Server {
                     continue;
                 }
                 let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
-                sim.step(&cmd, dt);
+                sim.step(&cmd, dt, collision);
                 c.last_processed_st = cmd.server_time;
                 first_cmd_st.get_or_insert(cmd.server_time);
                 last_cmd_st = Some(cmd.server_time);
@@ -1234,6 +1356,39 @@ mod tests {
         assert!(String::from_utf8_lossy(&a).trim().parse::<i32>().is_ok());
     }
 
+    /// `mr <serverId> <menuIndex> <response>`, exactly four arguments.
+    /// Retail's stale-serverId drop is the one this reproduces exactly; the
+    /// other three shapes it drops, retail turns into a notify no stock
+    /// gametype tests (see `parse_menu_response`). The response comes back
+    /// verbatim: the gametype compares it against `"allies"` and weapon
+    /// names, so anything done to it here would be done behind the script's
+    /// back.
+    #[test]
+    fn mr_needs_four_args_a_live_serverid_and_a_bounded_index() {
+        assert_eq!(
+            parse_menu_response("mr 7 3 allies", 7),
+            Some((3, "allies".to_string()))
+        );
+        assert_eq!(
+            parse_menu_response("mr 7 0 mosin_nagant_mp", 7),
+            Some((0, "mosin_nagant_mp".to_string())),
+            "a weapon response is a string, not a token the server knows"
+        );
+        assert!(
+            parse_menu_response("mr 6 3 allies", 7).is_none(),
+            "stale serverId"
+        );
+        assert!(
+            parse_menu_response("mr 7 32 allies", 7).is_none(),
+            "index out of range"
+        );
+        assert!(parse_menu_response("mr 7 3", 7).is_none(), "three args");
+        assert!(
+            parse_menu_response("mr 7 3 allies extra", 7).is_none(),
+            "five args"
+        );
+    }
+
     #[test]
     fn serverinfo_is_configstring_zero() {
         let sv = Server::new(cfg(), Instant::now());
@@ -1294,6 +1449,40 @@ mod tests {
         let (to, cmd, _) = reply(&mut sv);
         assert_eq!(to, addr(5));
         assert_eq!(cmd, "connectResponse");
+        assert_eq!(sv.client_count(), 1);
+    }
+
+    /// A reconnect overwrites a slot the server may still believe is live --
+    /// `TIMEOUT` is 240 s, `RECONNECT_LIMIT` 3 -- and the new `Client` carries
+    /// a fresh `last_packet`, so `check_timeouts` will never reach the old
+    /// one. Without the queued `Disconnect` nothing tears its script state
+    /// down and it leaks for the life of the map.
+    #[test]
+    fn a_reconnect_disconnects_the_client_it_replaces() {
+        use crate::game::script::{ScriptRuntime, CALLBACK_SETUP};
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.script = Some(ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.gone = 0; level.callbackPlayerDisconnect = ::d; }\n\
+             CodeCallback_PlayerDisconnect() { [[level.callbackPlayerDisconnect]](); }\n\
+             d() { level.gone = level.gone + 1; }\n",
+        ));
+        let nc = connected(&mut sv, addr(5), now);
+        sv.tick(now);
+        let gone = |sv: &mut Server| sv.script.as_mut().unwrap().level_field("gone");
+        assert_eq!(gone(&mut sv), vcod_gsc::Value::Int(0));
+
+        // Past sv_reconnectlimit, the same peer's connect takes the slot back.
+        let t = now + RECONNECT_LIMIT + Duration::from_millis(100);
+        sv.handle_packet(
+            addr(5),
+            &connect_pkt(nc.challenge, QPORT, PROTOCOL_V1.version),
+            t,
+        );
+        assert_eq!(reply_text(&mut sv).0, "connectResponse");
+        sv.tick(t);
+        assert_eq!(gone(&mut sv), vcod_gsc::Value::Int(1));
         assert_eq!(sv.client_count(), 1);
     }
 
@@ -1813,25 +2002,34 @@ mod tests {
     /// clc_move carrying one cmd whose pitch and yaw ride change bit 0
     /// (omitted, unchanged from the server's stored cmd), what a retail client
     /// sends when the mouse did not move this packet. Forward/right stay
-    /// announced; the serverTime is absolute so the test isolates the angle
-    /// base from the serverTime base.
-    fn move_ops_omit_angles(checksum_feed: i32, message_ack: i32, st: i32) -> Vec<u8> {
+    /// announced; each serverTime is absolute so the test isolates the angle
+    /// base from the serverTime base. `n` cmds, 20 ms apart from `st`: one is
+    /// enough to prove the field decodes, but a probe of *which* base it
+    /// decoded against needs the resulting velocity to actually get there --
+    /// `pmove::spectator_move`'s `accelerate` blends toward the wishdir
+    /// rather than snapping to it, so a single cmd's movement is still mostly
+    /// the previous leg's residual velocity. A burst gives the (correct or
+    /// wrongly-reset) wishdir enough simulated time to dominate.
+    fn move_ops_omit_angles(checksum_feed: i32, message_ack: i32, st: i32, n: i32) -> Vec<u8> {
         let huff = Huffman::new();
         let key = checksum_feed ^ message_ack ^ com_hash_key("", 32);
         let mut w = MsgWriter::new(&huff);
         w.write_bits(CLC_MOVE, 2);
-        w.write_byte(1);
-        w.write_bits(0, 1); // serverTime: 32-bit absolute
-        w.write_long(st);
-        // Not the whole-cmd shortcut, and the branch bit picks the compact one.
-        w.write_bits((key & 1) ^ 1, 1);
-        w.write_bits(key & 1, 1);
-        let key = key ^ st;
-        w.write_bits(key & 1, 1); // buttons bit 0, announced as 0
-        w.write_bits(0, 1); // pitch omitted
-        w.write_bits(0, 1); // yaw omitted
-        w.write_bits(1, 1); // forward/right announced
-        w.write_bits(1 ^ (key & 0xf), 4); // forward 127: bucket 1
+        w.write_byte(n as u8);
+        for i in 0..n {
+            let cmd_st = st + i * 20;
+            w.write_bits(0, 1); // serverTime: 32-bit absolute
+            w.write_long(cmd_st);
+            // Not the whole-cmd shortcut, and the branch bit picks the compact one.
+            w.write_bits((key & 1) ^ 1, 1);
+            w.write_bits(key & 1, 1);
+            let ckey = key ^ cmd_st;
+            w.write_bits(ckey & 1, 1); // buttons bit 0, announced as 0
+            w.write_bits(0, 1); // pitch omitted
+            w.write_bits(0, 1); // yaw omitted
+            w.write_bits(1, 1); // forward/right announced
+            w.write_bits(1 ^ (ckey & 0xf), 4); // forward 127: bucket 1
+        }
         w.write_bits(CLC_EOF, 2);
         w.into_ops()
     }
@@ -1857,8 +2055,8 @@ mod tests {
     }
 
     /// Connect, ask for the gamestate (a fresh client sends serverId 0),
-    /// drain it, ack past it. Returns the live client netchan; the server now
-    /// considers slot 0 Active.
+    /// drain it, ack past it. Returns the live client netchan; slot 0 is
+    /// Primed, and stays there until it sends `begin`.
     fn active(sv: &mut Server, now: Instant) -> Netchan {
         let huff = Huffman::new();
         let mut nc = connected(sv, addr(5), now);
@@ -1873,6 +2071,32 @@ mod tests {
             &nc.build_out(0x10, ack, 0, &ack_ops(), &huff).unwrap(),
             now,
         );
+        nc
+    }
+
+    /// `active` plus the `begin` command that entry into the world is gated
+    /// on, so slot 0 has a sim and is sent snapshots.
+    fn begun(sv: &mut Server, now: Instant) -> Netchan {
+        let huff = Huffman::new();
+        let mut nc = active(sv, now);
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_CLIENT_COMMAND, 2);
+        w.write_long(1);
+        w.write_string("begin");
+        w.write_bits(CLC_EOF, 2);
+        // Every later reply is scrambled with the last command string the
+        // server stored, so the client's own ring has to hold it too.
+        nc.reliable[1] = "begin".to_string();
+        let pkt = nc
+            .build_out(
+                i32::from(sv.server_id),
+                nc.incoming_sequence as i32,
+                0,
+                &w.into_ops(),
+                &huff,
+            )
+            .unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
         nc
     }
 
@@ -1915,7 +2139,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let p = &PROTOCOL_V1;
 
@@ -1957,7 +2181,7 @@ mod tests {
     }
 
     #[test]
-    fn an_acked_client_receives_snapshots_and_flies_forward() {
+    fn a_client_in_the_world_receives_snapshots_and_flies_forward() {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
         // A flat floor to fly over; without a world the sim freezes.
@@ -1965,7 +2189,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
 
         let mut ring = SnapshotRing::new();
         let s = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
@@ -2001,6 +2225,76 @@ mod tests {
         assert!(moved > 1.0, "should have flown +X, dx {moved}");
     }
 
+    /// `begin` is the only way into the world now that the gamestate-ack
+    /// trigger is gone, so a client that sends it twice must not be parked
+    /// back at its spawn point mid-flight.
+    #[test]
+    fn a_second_begin_leaves_a_flying_client_where_it_is() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = begun(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        let p = &PROTOCOL_V1;
+        latest_snapshot(&mut sv, &mut nc, &mut ring, now);
+
+        let later = now + std::time::Duration::from_millis(50);
+        let huff = Huffman::new();
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops(
+                    sv.checksum_feed,
+                    ack,
+                    UserCmd {
+                        forward: 127,
+                        ..Default::default()
+                    },
+                ),
+                &huff,
+            )
+            .unwrap(),
+            now,
+        );
+        let flying = latest_snapshot(&mut sv, &mut nc, &mut ring, later);
+        assert!(
+            flying.ps.origin(p)[0] > 1.0,
+            "the client never left the spawn"
+        );
+
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_CLIENT_COMMAND, 2);
+        w.write_long(2);
+        w.write_string("begin");
+        w.write_bits(CLC_EOF, 2);
+        nc.reliable[2] = "begin".to_string();
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(0x10, ack, 0, &w.into_ops(), &huff).unwrap(),
+            later,
+        );
+        let after = latest_snapshot(
+            &mut sv,
+            &mut nc,
+            &mut ring,
+            later + std::time::Duration::from_millis(50),
+        );
+        assert!(
+            after.ps.origin(p)[0] >= flying.ps.origin(p)[0],
+            "a second begin teleported the client back: {} -> {}",
+            flying.ps.origin(p)[0],
+            after.ps.origin(p)[0]
+        );
+    }
+
     /// A block whose mouse turns mid-flight: per-cmd replay must cover both
     /// headings. The old last-cmd-only step integrated once at yaw 90 and
     /// never moved along +X.
@@ -2012,7 +2306,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let t0 = now;
         let t1 = now + std::time::Duration::from_millis(50);
@@ -2071,7 +2365,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let mut chain = MoveChain::new(sv.checksum_feed);
         let mut tick_at = now + std::time::Duration::from_millis(50);
@@ -2143,7 +2437,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let mut chain = MoveChain::new(sv.checksum_feed);
         let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
@@ -2186,8 +2480,23 @@ mod tests {
     }
 
     /// A retail client omits unchanged angle fields (change bit 0) instead of
-    /// announcing them, so the server must decode them against the cmd it last
-    /// stored for this client. Against a null base the view flashes to 0.
+    /// announcing them, so the server must decode them against the cmd it
+    /// last stored for this client, not `NULL_USERCMD` -- decoding against
+    /// the null base resets the move basis to yaw 0 for a frame (the
+    /// "spectator flash" bug, AGENTS.md's gotchas). `ps.yaw` steers
+    /// `pmove::spectator_move`'s wishdir directly, so a burst of `forward`
+    /// cmds sent right after the omission is a direct probe of which base
+    /// the server used: yaw -45 accelerates the spectator diagonally
+    /// (velocity settles near `vx == -vy`), yaw 0 (the bug) only along +x
+    /// (`vy` stays small). A single cmd is not enough to tell them apart --
+    /// `accelerate` blends toward the wishdir rather than snapping to it, so
+    /// one frame is still mostly the previous leg's momentum; a 20-cmd burst
+    /// gives the (correct or wrongly-reset) wishdir time to dominate, which
+    /// I confirmed empirically (`vy` -283 with the real base, -20 with the
+    /// bug forced, at this burst length). `viewangles` no longer carries
+    /// this -- it stays unwritten, docs/protocol-1.1.md "Spectator view
+    /// angles" -- so this checks the property the field used to stand in
+    /// for directly.
     #[test]
     fn omitted_angles_decode_against_the_stored_last_cmd() {
         let now = Instant::now();
@@ -2196,7 +2505,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
 
@@ -2226,10 +2535,14 @@ mod tests {
         );
         let t1 = now + std::time::Duration::from_millis(50);
         let s1 = latest_snapshot(&mut sv, &mut nc, &mut ring, t1);
-        assert!((s1.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01);
+        let o1 = s1.ps.origin(&PROTOCOL_V1);
+        assert!(
+            o1[0] > 0.1 && o1[1] < -0.1,
+            "cmd 1's announced yaw -45 must steer the spectator diagonally from spawn, origin {o1:?}"
+        );
 
-        // Next packet: the mouse did not move, so pitch and yaw ride change
-        // bit 0 off the cmd the server just stored.
+        // Next packet: the mouse did not move for 20 frames, so pitch and yaw
+        // ride change bit 0 off the cmd the server just stored, every frame.
         let ack = nc.incoming_sequence as i32;
         sv.handle_packet(
             addr(5),
@@ -2237,7 +2550,7 @@ mod tests {
                 0x10,
                 ack,
                 0,
-                &move_ops_omit_angles(sv.checksum_feed, ack, 520),
+                &move_ops_omit_angles(sv.checksum_feed, ack, 520, 20),
                 &Huffman::new(),
             )
             .unwrap(),
@@ -2249,15 +2562,16 @@ mod tests {
             &mut ring,
             t1 + std::time::Duration::from_millis(50),
         );
+        // Anti-vacuous: the burst must actually have been applied.
+        let dx = s2.ps.origin(&PROTOCOL_V1)[0] - o1[0];
+        assert!(dx > 1.0, "the omitted-angle burst was not applied, dx {dx}");
+        // The discriminator: only a base of yaw -45 leaves a large negative
+        // vy once the burst settles; a base reset to yaw 0 does not.
+        let vy = s2.ps.field_f32(&PROTOCOL_V1, "velocity[1]");
         assert!(
-            (s2.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01,
-            "omitted angles must keep the stored yaw, got {}",
-            s2.ps.viewangles(&PROTOCOL_V1)[1]
+            vy < -50.0,
+            "omitted angles must keep the stored yaw -45, not reset to 0: vy {vy}"
         );
-        // Guard against a vacuous pass: the second cmd carries forward 127,
-        // so the sim must have moved between the snapshots.
-        let d = s2.ps.origin(&PROTOCOL_V1)[0] - s1.ps.origin(&PROTOCOL_V1)[0];
-        assert!(d > 0.5, "the omitted-angle cmd was not applied, dx {d}");
     }
 
     /// Press then release, end to end: the release must decode up=0 against
@@ -2270,7 +2584,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let mut chain = MoveChain::new(sv.checksum_feed);
         let p = &PROTOCOL_V1;
@@ -2333,7 +2647,10 @@ mod tests {
     }
 
     /// A move message that fails to decode is discarded whole: the next good
-    /// one still chains from the last successfully decoded cmd.
+    /// one still chains from the last successfully decoded cmd, not
+    /// `NULL_USERCMD` -- same base-decode property and the same burst probe
+    /// as `omitted_angles_decode_against_the_stored_last_cmd`, with a
+    /// garbled packet spliced in first.
     #[test]
     fn a_garbled_message_does_not_poison_the_base() {
         let now = Instant::now();
@@ -2342,7 +2659,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
 
@@ -2371,7 +2688,11 @@ mod tests {
         );
         let t1 = now + std::time::Duration::from_millis(50);
         let s1 = latest_snapshot(&mut sv, &mut nc, &mut ring, t1);
-        assert!((s1.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01);
+        let o1 = s1.ps.origin(&PROTOCOL_V1);
+        assert!(
+            o1[0] > 0.1 && o1[1] < -0.1,
+            "cmd 1's announced yaw -45 must steer the spectator diagonally from spawn, origin {o1:?}"
+        );
 
         // Garbage that cannot parse, then a good packet whose angles are
         // omitted: they must come off the pre-failure base.
@@ -2389,7 +2710,7 @@ mod tests {
                 0x10,
                 ack,
                 0,
-                &move_ops_omit_angles(sv.checksum_feed, ack, 520),
+                &move_ops_omit_angles(sv.checksum_feed, ack, 520, 20),
                 &Huffman::new(),
             )
             .unwrap(),
@@ -2402,10 +2723,15 @@ mod tests {
             t1 + std::time::Duration::from_millis(50),
         );
         assert!(s2.valid, "snapshots must continue");
+        // Anti-vacuous: the burst must actually have been applied.
+        let dx = s2.ps.origin(&PROTOCOL_V1)[0] - o1[0];
+        assert!(dx > 1.0, "the omitted-angle burst was not applied, dx {dx}");
+        // The discriminator: only a base of yaw -45 leaves a large negative
+        // vy once the burst settles; a base reset to yaw 0 does not.
+        let vy = s2.ps.field_f32(&PROTOCOL_V1, "velocity[1]");
         assert!(
-            (s2.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01,
-            "the garbled packet must not reset the base, got {}",
-            s2.ps.viewangles(&PROTOCOL_V1)[1]
+            vy < -50.0,
+            "the garbled packet must not reset the base to yaw 0: vy {vy}"
         );
     }
 

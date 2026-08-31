@@ -1,14 +1,16 @@
 //! The CoD side of `vcod_gsc::Host`: builtin dispatch and entity field
 //! routing. A field read or write is routed through the retail field
 //! tables: engine-backed goes to the entity's typed slot, client-tagged
-//! errors until stage 4 brings clients, everything else goes to the
-//! entity's own struct in the VM heap.
+//! goes to the entity's own `client` store when it has one and errors
+//! otherwise, everything else goes to the entity's own struct in the VM
+//! heap.
 
 use crate::configstrings::{Allocators, CsRange};
 use crate::game::builtins;
 use crate::game::damage::DamageEvent;
 use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
 use crate::game::fields::{self, FieldType, Route};
+use crate::server::MAX_CLIENTS;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 
 /// The builtins `GameHost::builtin` answers from its own match, folded: the
@@ -34,6 +36,7 @@ pub fn is_builtin(name: &str) -> bool {
         || builtins::hud::lookup(name).is_some()
         || builtins::sound::lookup(name).is_some()
         || builtins::attach::lookup(name).is_some()
+        || builtins::client::lookup(name).is_some()
         || builtins::combat::lookup(name).is_some()
         || builtins::mover::lookup(name).is_some()
         || builtins::cvar::lookup(name).is_some()
@@ -41,9 +44,59 @@ pub fn is_builtin(name: &str) -> bool {
         || BUILTINS.contains(&name)
 }
 
+/// One client lifecycle step the netcode raised, by client slot. `Connect`
+/// and `Begin` are two events on purpose: `Callback_PlayerConnect` blocks on
+/// `waittill("begin")` as its second statement, so the thread has to be
+/// running and parked on that wait before the notify goes out.
+pub enum ClientEvent {
+    /// The client was admitted a slot; allocates its entity, fills `.name`
+    /// in from the userinfo the netcode already sanitized, and runs
+    /// `CodeCallback_PlayerConnect` on it. The name travels with the event
+    /// because the callback reads it (`dm.gsc`'s `logPrint("J;" + ... +
+    /// self.name)`), and the object table has nowhere else to get it.
+    Connect { slot: usize, name: String },
+    /// The client's `begin` command; notifies the parked callback.
+    Begin(usize),
+    /// The client is gone; runs `CodeCallback_PlayerDisconnect` and frees
+    /// the entity.
+    Disconnect(usize),
+}
+
+/// One `self spawn(origin, angles)` the script performed, by client slot.
+/// The other direction from `ClientEvent`, and queued for the same reason:
+/// the client's sim lives in `Server`, which a builtin cannot reach.
+pub struct SpawnRequest {
+    pub slot: usize,
+    pub origin: [f32; 3],
+    pub yaw_deg: f32,
+    /// `sessionstate == "playing"`, which is what decides the sim's mode.
+    pub player: bool,
+}
+
 pub struct GameHost {
     pub configstrings: Vec<String>,
     pub ents: ObjectTable,
+    /// Client lifecycle events the netcode raised, drained by `run_frame`
+    /// before the think pass. Queued rather than called inline for the same
+    /// reason `damage` is: a builtin must never reenter the VM.
+    pub client_events: Vec<ClientEvent>,
+    /// Per-client server commands the script asked for, by client slot,
+    /// drained by `Server` after `run_frame`. A builtin cannot reach the
+    /// netchan, so it queues, the same reason `damage` does.
+    pub client_commands: Vec<(usize, String)>,
+    /// Spawns the script performed this frame, drained by `Server` after
+    /// `run_frame` the way `client_commands` is.
+    pub client_spawns: Vec<SpawnRequest>,
+    /// Each client's weapons, by slot. `giveWeapon` and `setSpawnWeapon`
+    /// write it, `spawn` clears it, and `Server` copies it into the client's
+    /// sim every frame — the same re-read-it-each-frame arrangement the
+    /// configstring table has, because a thread past a `wait` can still
+    /// change it.
+    pub client_weapons: Vec<crate::weapons::PlayerWeapons>,
+    /// Each client's viewmodel, as the model configstring index retail's
+    /// `setViewmodel` stores on the `gclient_t` (object model doc, section
+    /// 20). Mirrored into the sim every frame the way `client_weapons` is.
+    pub client_viewmodel: Vec<i32>,
     /// Damage the script asked for, drained after `run_frame` by stage 6.
     /// A builtin must never reenter the VM, so a callback becomes a queued
     /// event (the design's "callbacks cannot run inline").
@@ -104,6 +157,11 @@ impl GameHost {
         GameHost {
             configstrings,
             ents: ObjectTable::new(),
+            client_events: Vec::new(),
+            client_commands: Vec::new(),
+            client_spawns: Vec::new(),
+            client_weapons: vec![crate::weapons::PlayerWeapons::default(); MAX_CLIENTS],
+            client_viewmodel: vec![0; MAX_CLIENTS],
             damage: Vec::new(),
             allocators: Allocators::new(),
             cvars: crate::cvars::Cvars::new(),
@@ -185,6 +243,9 @@ impl Host for GameHost {
         if let Some(f) = builtins::attach::lookup(&folded) {
             return f(self, cx, recv, args);
         }
+        if let Some(f) = builtins::client::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
         if let Some(f) = builtins::combat::lookup(&folded) {
             return f(self, cx, recv, args);
         }
@@ -226,10 +287,15 @@ impl Host for GameHost {
                 other => other,
             },
             Route::Engine { slot, .. } => e.engine[slot],
-            // Retail errors here; a read has no error channel, so an entity
-            // with no client reads undefined and the write path carries the
-            // error.
-            Route::Client(_) => Value::Undefined,
+            // `e.client` is `Some` only for an entity `spawn_client` made:
+            // that is the real test, not a number range that would merely
+            // coincide with it. Retail errors on a null `ent->client`; a
+            // read has no error channel, so a client-less entity reads
+            // undefined and the write path carries the error.
+            Route::Client(i) => match &e.client {
+                Some(c) => c[i],
+                None => Value::Undefined,
+            },
             Route::Script => cx.get_field(e.script, field),
         }
     }
@@ -264,9 +330,19 @@ impl Host for GameHost {
                 e.engine[slot] = value;
                 Ok(())
             }
-            Route::Client(_) => Err(ErrorKind::BadType(
-                "that field lives on the client, which arrives in stage 4",
-            )),
+            // Retail's null `ent->client` check: an entity `spawn_client`
+            // never touched has no `client` store to write into.
+            Route::Client(i) => {
+                let Some(c) = e.client.as_mut() else {
+                    return Err(ErrorKind::BadType("that entity has no client"));
+                };
+                let ty = fields::CLIENT_FIELDS[i].ty;
+                if !type_accepts(ty, value) {
+                    return Err(ErrorKind::BadType("wrong type for a client field"));
+                }
+                c[i] = value;
+                Ok(())
+            }
             Route::Script => {
                 let s = e.script;
                 cx.set_field(s, field, value);
@@ -350,6 +426,7 @@ mod tests {
             .chain(builtins::hud::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::sound::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::attach::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::client::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::combat::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::mover::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::cvar::NAMES.iter().map(|(n, _)| *n))
@@ -536,6 +613,59 @@ mod tests {
             let f = cx.intern_folded("sessionteam");
             let v = cx.intern_exact("allies");
             assert!(host.set_field(cx, e, f, Value::String(v)).is_err());
+        });
+    }
+
+    /// A client field reads back what was written, and the same field on a
+    /// map entity is still an error, because retail has no `gclient_t` there.
+    /// The map-entity refusal is pinned to its exact message, not just
+    /// `is_err()`: `set_field` has two distinct refusals now (a nonexistent
+    /// entity's "no such entity" and a client-less entity's "that entity has
+    /// no client"), and this test exists to exercise the second, not either.
+    #[test]
+    fn a_client_field_round_trips_and_a_map_entity_still_refuses_one() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let f = cx.intern_folded("sessionteam");
+            let v = Value::String(cx.intern_exact("allies"));
+            host.set_field(cx, c, f, v).unwrap();
+            assert_eq!(host.get_field(cx, c, f), v);
+
+            let m = host.ents.spawn(cx).unwrap();
+            assert_eq!(
+                host.set_field(cx, m, f, v).unwrap_err(),
+                ErrorKind::BadType("that entity has no client")
+            );
+        });
+    }
+
+    /// `Route::Client(i)` and `Route::Engine{slot}` (from `ENTITY_FIELDS`)
+    /// used to share one `GEntity.engine` array on a client entity, with two
+    /// unrelated index spaces landing in the same cells: client index 1
+    /// (`sessionteam`) and engine slot 1 (`origin`) collided. `client` is
+    /// now a separate store, so setting both on one client entity must not
+    /// let either overwrite the other, in either write order.
+    #[test]
+    fn a_client_field_and_an_entity_field_do_not_alias_on_a_client_entity() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let sessionteam = cx.intern_folded("sessionteam");
+            let origin = cx.intern_folded("origin");
+            let team = Value::String(cx.intern_exact("allies"));
+            let pos = Value::Vector([1.0, 2.0, 3.0]);
+
+            let a = host.ents.spawn_client(cx, 0).unwrap();
+            host.set_field(cx, a, sessionteam, team).unwrap();
+            host.set_field(cx, a, origin, pos).unwrap();
+            assert_eq!(host.get_field(cx, a, sessionteam), team);
+            assert_eq!(host.get_field(cx, a, origin), pos);
+
+            let b = host.ents.spawn_client(cx, 1).unwrap();
+            host.set_field(cx, b, origin, pos).unwrap();
+            host.set_field(cx, b, sessionteam, team).unwrap();
+            assert_eq!(host.get_field(cx, b, origin), pos);
+            assert_eq!(host.get_field(cx, b, sessionteam), team);
         });
     }
 

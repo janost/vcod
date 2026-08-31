@@ -204,6 +204,15 @@ pub const ENTITY_FIELDS: &[EngineField] = &[
     },
 ];
 
+/// `Route::Client(i)` indexes this table by raw position, not through
+/// `slot_of`'s offset dedup the way `route_entity` does. That is
+/// deliberate: five of these entries (`sessionteam`, `sessionstate`,
+/// `statusicon`, `headicon`, `headiconteam`) carry `offset: 0` because
+/// retail's dump marks them "fully custom get and set"
+/// (docs/research/cod11-gsc-object-model.md, "Client fields, 0x72ed4") —
+/// they have no struct offset to alias on, not a shared one. Deduping by
+/// offset the way `ENTITY_FIELDS` does would silently merge those five
+/// distinct fields into one storage cell.
 pub const CLIENT_FIELDS: &[EngineField] = &[
     EngineField {
         name: "name",
@@ -363,6 +372,17 @@ fn slot_of(table: &[EngineField], i: usize) -> usize {
 
 pub fn engine_slot_count() -> usize {
     slot_count(ENTITY_FIELDS)
+}
+
+/// `Route::Client`'s index for `.pers`, the one client field the engine
+/// fills in itself rather than leaving for script. Panics if the name ever
+/// leaves the table, which is the right answer: `spawn_client` cannot make
+/// a usable client entity without it.
+pub fn pers_index() -> usize {
+    CLIENT_FIELDS
+        .iter()
+        .position(|f| f.name == "pers")
+        .expect("CLIENT_FIELDS carries pers")
 }
 
 /// The same count over the HUD table, which is one shorter than the table:

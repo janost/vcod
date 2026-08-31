@@ -59,7 +59,7 @@ grepping a capture for `scores` or `cs` finds nothing.
 | `o`, `p`, `q` | | traps `0xc0`/`0xd4`, `0xd5`, `0x30031fc0` |
 | `r` | `0x3002df30` | `CG_ReverbCmd` |
 | `s` | `0x3002e040` | `CG_LocalSound` |
-| `t` | `0x3002dae0` | |
+| `t` | `0x3002dae0` | open script menu: `t <script menu index>` (section 0.1) |
 | `u` | `0x3002de60` | close script menus |
 | `v` | `0x30030550` | set client cvar: `v <name> "<value>"` |
 
@@ -78,6 +78,84 @@ serverCommand 29: i "^1Revive:^7 Join our Discord server Cod1.net/^6Discord"
 `d` carries the new configstring text as argv[1]; the cgame handler ignores it
 and re-reads the applied table via `trap_GetGameState` (`0x4f`), exactly as Q3's
 `CG_ConfigStringModified` does.
+
+### 0.1 The script menu handshake
+
+Measured on 2026-08-31 against the retail 1.1d dedicated server, dm on
+mp_pavlov, with `--net-probe --save-playerstate`; the whole stream is in
+`crates/server/tests/fixtures/playerstate/mp_pavlov-dm.txt`. A client that sends
+`begin` gets these five commands back, in this order (`^U` is a literal 0x15
+byte):
+
+```
+f "MPSCRIPT_CONNECTED^Uvcod^7"
+v g_scriptMainMenu "team_russiangerman"
+v scr_showweapontab "0"
+t 0
+v cg_objectiveText "DM_KILL_OTHER_PLAYERS^U"
+```
+
+INFERRED that the five come from `Callback_PlayerConnect`: `begin` is the notify
+its `waittill` blocks on, and the `setClientCvar` and `openMenu` calls that
+follow that wait in the stock dm script account for four of them.
+
+`t`'s argument is an index into the script-menu configstring range, whose slot 0
+is cs 1180: cs 1180 is `team_russiangerman` and cs 1181 `weapon_russian`, and
+answering the team menu produces `v g_scriptMainMenu "weapon_russian"` then
+`t 1`.
+
+VERIFIED that `game.mp.i386.so` holds both format strings, `t %i` at
+`0x731f8` and `v %s "%s"` at `0x73300`, which is why the name is bare and the
+value quoted, and VERIFIED that the capture above matches those two shapes: a
+bare integer after `t`, a bare name and a quoted value after `v`. INFERRED
+that `t` is therefore the wire form of the script's `openMenu` (`0x453f4`)
+and `v` of its `setClientCvar` (`0x446e0`), that those are the strings the
+two pass to `trap_SendServerCommand`, and that `openMenu`'s `%i` is
+`GScr_GetScriptMenuIndex(name)`'s return value, so the menu's name never
+reaches the wire through `t`. Each is which value reaches which argument,
+read off the instruction stream.
+
+INFERRED that `setClientCvar` rewrites a `"` inside the value as `'` before
+formatting it (`0x447b2`), so the value cannot close its own quoted argument:
+that is a branch and its position in the instruction stream, and no capture
+holds a value with a quote in it.
+
+VERIFIED that `GScr_GetScriptMenuIndex` (`0x5c73c`) reads its candidates out
+of configstrings `0x49c + i`, and that `0x49c` is 1180. VERIFIED that the
+not-found path formats the script error `Menu '%s' was not precached`
+(`0x771f2`). INFERRED, from the loop's compare-and-branch, that `i` runs
+`0..=31` and that the returned index is the first slot whose text matches the
+name.
+
+The client answers with the `mr <serverId> <menu index> <response>` client
+command, quoting back the index `t` named. Answering `t 0` with `allies` and the
+`t 1` that follows with a weapon `maps\mp\gametypes\_teams::restrict` allows for
+that menu's nationality spawns the player; `--save-playerstate` does exactly
+that.
+
+`Cmd_MenuResponse_f` (`0x486d8`) turns that command into a two-argument
+`notify(player, "menuresponse", menu, response)`.
+
+VERIFIED that the first argument is the menu's *name*, not the index the
+client sent. The evidence is the cross-check, not the disassembly: the capture
+above shows retail answering `mr <sid> 0 allies` with the weapon menu, and
+`dm.gsc` (`pak5.pk3`) can only get there by comparing that first argument
+against `game["menu_team"]` at `:245`, which `:142` builds as the name string
+`"team_" + game["allies"] + game["axis"]`; `:340` hands the same argument back
+to `openMenu`, and `:1102` has the script raise the notify itself with a menu
+name in that position. An index would match nothing and the loop would spin.
+INFERRED that the mechanism is a read of configstring `0x49c + index` back
+into the buffer the notify argument is taken from (`0x48790`).
+
+The rest of the handler is INFERRED too, read off the disassembly rather than
+run live:
+
+- an argument count other than 4 sends the notify with an empty menu name and
+  the response `"bad"`, without reading the serverId at all (`0x486ed`);
+- argv[1] is compared against the `sv_serverId` cvar and the handler returns
+  without notifying when they differ (`0x4874a`);
+- an index outside `0..=31` skips the configstring read, leaving argv[2]'s own
+  digits as the menu argument (`0x4877c`).
 
 ---
 

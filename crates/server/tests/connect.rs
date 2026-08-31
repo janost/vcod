@@ -1,38 +1,17 @@
-//! vcod's own NetClient against the server, in process, over two queues.
-//! `now` is advanced by hand.
+//! The connect handshake, the client roster and the snapshot stream, driven
+//! through the in-process client harness in `common`.
 
+mod common;
+
+use common::{connect, step, step_dropping_reply, ClientEnd, Queues};
 use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::connectionless::info_value_for_key;
 use vcod_common::net::msg::{EntityState, NULL_USERCMD};
 use vcod_common::net::protocol::PROTOCOL_V1;
-use vcod_common::net::{NetClient, NetEvent, NetState, Transport};
+use vcod_common::net::{NetClient, NetEvent, NetState};
 use vcod_server::{Server, ServerConfig};
-
-const ADDR: SocketAddr =
-    SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 31337);
-
-#[derive(Default)]
-struct Queues {
-    to_server: VecDeque<Vec<u8>>,
-    to_client: VecDeque<Vec<u8>>,
-}
-
-struct ClientEnd(Rc<RefCell<Queues>>);
-
-impl Transport for ClientEnd {
-    fn try_recv(&mut self, buf: &mut [u8]) -> Option<usize> {
-        let p = self.0.borrow_mut().to_client.pop_front()?;
-        buf[..p.len()].copy_from_slice(&p);
-        Some(p.len())
-    }
-    fn send(&mut self, data: &[u8]) {
-        self.0.borrow_mut().to_server.push_back(data.to_vec());
-    }
-}
 
 fn server() -> Server {
     server_with_entities(0)
@@ -50,65 +29,6 @@ fn server_with_entities(test_entities: usize) -> Server {
         },
         Instant::now(),
     )
-}
-
-/// One exchange each way, then one client pump.
-fn step(
-    sv: &mut Server,
-    q: &Rc<RefCell<Queues>>,
-    cl: &mut NetClient<ClientEnd>,
-    now: Instant,
-) -> Vec<NetEvent> {
-    let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
-    for p in pending {
-        sv.handle_packet(ADDR, &p, now);
-    }
-    sv.tick(now);
-    for (to, p) in sv.take_outgoing() {
-        assert_eq!(to, ADDR);
-        q.borrow_mut().to_client.push_back(p);
-    }
-    cl.pump_at(now)
-}
-
-/// Like `step`, but the server's reply never reaches the client — a lost
-/// snapshot packet, not a lost ack. The client's next real ack then names a
-/// frame it received without having received the one right before it, the
-/// only case where a server-side message_num that has drifted from the
-/// packet's actual netchan sequence is observable on the wire (see
-/// `frames_delta_against_the_acked_base_and_fall_back_when_acks_stop`).
-fn step_dropping_reply(
-    sv: &mut Server,
-    q: &Rc<RefCell<Queues>>,
-    cl: &mut NetClient<ClientEnd>,
-    now: Instant,
-) -> Vec<NetEvent> {
-    let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
-    for p in pending {
-        sv.handle_packet(ADDR, &p, now);
-    }
-    sv.tick(now);
-    sv.take_outgoing();
-    cl.pump_at(now)
-}
-
-fn connect(sv: &mut Server, q: &Rc<RefCell<Queues>>, now: &mut Instant) -> NetClient<ClientEnd> {
-    let mut cl = NetClient::start(ClientEnd(q.clone()), *now);
-    for _ in 0..40 {
-        *now += Duration::from_millis(250);
-        let events = step(sv, q, &mut cl, *now);
-        if events.contains(&NetEvent::GamestateReady) {
-            return cl;
-        }
-        assert!(
-            !events.iter().any(|e| matches!(e, NetEvent::Dropped(_))),
-            "{events:?}"
-        );
-    }
-    panic!(
-        "no gamestate within 10 s of simulated time; state {:?}",
-        cl.state()
-    );
 }
 
 #[test]
@@ -228,6 +148,9 @@ fn frames_delta_against_the_acked_base_and_fall_back_when_acks_stop() {
     let mut sv = server();
     let mut now = Instant::now();
     let mut cl = connect(&mut sv, &q, &mut now);
+    // Entry into the world is gated on `begin`, and only a client in the
+    // world is sent snapshots.
+    cl.send_reliable("begin");
 
     let mut seen_delta = false;
     let mut seen_uncompressed_during_silence = false;
@@ -300,6 +223,9 @@ fn scripted_entities_move_cycle_out_and_return() {
     let mut sv = server_with_entities(2);
     let mut now = Instant::now();
     let mut cl = connect(&mut sv, &q, &mut now);
+    // Entry into the world is gated on `begin`, and only a client in the
+    // world is sent snapshots.
+    cl.send_reliable("begin");
 
     let p = &PROTOCOL_V1;
     let time_idx = EntityState::field_index(p, "pos.trTime").unwrap();
@@ -377,6 +303,9 @@ fn a_renamed_client_deltas_against_its_roster_base() {
     let mut sv = server();
     let mut now = Instant::now();
     let mut cl = connect(&mut sv, &q, &mut now);
+    // Entry into the world is gated on `begin`, and only a client in the
+    // world is sent snapshots.
+    cl.send_reliable("begin");
 
     let p = &PROTOCOL_V1;
     let mut saw_original_name = false;

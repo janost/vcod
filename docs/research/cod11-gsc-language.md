@@ -413,7 +413,7 @@ inferred. The probes are `crates/gsc/tests/fixtures/semantics/probe_*.gsc`,
 run as gametype scripts by `tools/run_probe.sh`; retail's answers are
 committed beside them in `retail-captures.txt`, and
 `crates/gsc/tests/semantics_ab.rs` diffs vcod against them on every test run.
-It is green on the 23 probes it runs. Five more (`probe_bootstrap`,
+It is green on the 24 probes it runs. Five more (`probe_bootstrap`,
 `probe_cvar`, `probe_delete`, `probe_ents`, `probe_not_string`) need the
 object model, the cvar table or a real map, all of which live in
 `crates/server`, so they are measured there by
@@ -537,6 +537,17 @@ check) with a different message text, which the harness does not compare.
 
 **Notify wake order: start order, VERIFIED.** Two threads waiting on one
 event on `level` wake in the order they were started.
+
+**A receiver-less call keeps the caller's `self`, VERIFIED (`probe_self`).**
+A plain `f()`, a `[[ptr]]()` and a `thread f()` all inherit the calling
+frame's `self`, and the callee reads the caller's fields off it. This is what
+makes §5's five callbacks work at all — `_callbacksetup.gsc` reaches each one
+as `[[level.callbackPlayerConnect]]()` with no receiver, and `dm.gsc:185`
+opens on `self.statusicon`. The probe never calls *with* a receiver, so what
+an explicit one does to the frames around it is not measured: vcod binds it to
+the callee's frame alone, so `a f()` rebinds for `f` only and the caller's
+`self` is back on return. Whether a *builtin* called without a receiver
+inherits it too is not measured either; vcod inherits for script calls only.
 
 **`getentarray` order: map entities first, then spawn order, VERIFIED.** The
 map's own four `script_origin` entities come back before three the probe

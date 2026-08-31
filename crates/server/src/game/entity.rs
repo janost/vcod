@@ -26,7 +26,10 @@ pub const FIRST_HUD_ELEM: u32 = MAX_GENTITIES;
 /// 4`.
 pub const MAX_HUDELEMS: u32 = 1024;
 
-use crate::game::fields::{engine_slot_count, hud_slot_count, route_hud, Route};
+use crate::game::fields::{
+    engine_slot_count, hud_slot_count, pers_index, route_hud, Route, CLIENT_FIELDS,
+};
+use crate::server::MAX_CLIENTS;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, StructId, Value};
 
 /// One script-visible object. `engine` is indexed by the dense slot
@@ -36,6 +39,15 @@ use vcod_gsc::{Atom, Cx, EntId, ErrorKind, StructId, Value};
 /// one fact, and they disagree the moment anything is freed.
 pub struct GEntity {
     pub engine: Vec<Value>,
+    /// A client entity's `gclient_t` fields, indexed by raw `CLIENT_FIELDS`
+    /// position (`Route::Client`), a separate store from `engine` because
+    /// retail's `gclient_s *client` is a separate struct from `gentity_t` —
+    /// sharing one array between the two field tables' index spaces would
+    /// alias unrelated fields together. `Some` only for an entity
+    /// `spawn_client` made; `None` for every map entity and HUD element,
+    /// which is what makes a client-routed field on one of those a real
+    /// error rather than a coincidence of a number comparison.
+    pub client: Option<Vec<Value>>,
     /// Script-defined fields, including every radiant key. There is exactly
     /// one key-value store per object and it is the VM's.
     pub script: StructId,
@@ -116,6 +128,7 @@ impl ObjectTable {
         let script = cx.new_struct();
         self.ents[id.0 as usize] = Some(GEntity {
             engine: vec![Value::Undefined; engine_slot_count()],
+            client: None,
             script,
             solid: true,
             hidden: false,
@@ -124,6 +137,60 @@ impl ObjectTable {
             nextthink: 0,
         });
         Ok(id)
+    }
+
+    /// A client's entity, at entity number == its client slot. Retail's
+    /// `G_InitGame` sets `level.num_entities` to 72 whatever
+    /// `sv_maxclients` is and `MAX_CLIENTS` is 64, so 0..63 belong to
+    /// clients and never reach the allocator
+    /// (docs/research/cod11-gsc-object-model.md section 2). A second call on
+    /// a slot that already holds a client entity replaces it outright, the
+    /// same full reset a reconnect wants.
+    pub fn spawn_client(&mut self, cx: &mut Cx, slot: usize) -> Result<EntId, ErrorKind> {
+        if slot >= MAX_CLIENTS {
+            return Err(ErrorKind::BadType("client slot out of range"));
+        }
+        let script = cx.new_struct();
+        let mut client = vec![Value::Undefined; CLIENT_FIELDS.len()];
+        // `.pers` is an array from the moment the client connects: the
+        // engine writes the handle in `ClientConnect` (0x4250f), and every
+        // gametype's first act is to read `self.pers["team"]` off it without
+        // creating it. Measured live on the retail 1.1d server: defined
+        // before `begin`, with `pers["team"]` undefined inside it
+        // (docs/research/cod11-gsc-object-model.md, "Client fields").
+        //
+        // A fresh array every call, where retail's handle is what survives
+        // the `gclient_t` reset -- that is the whole point of `pers`, whose
+        // contents outlive a round. Not measured, and equivalent today only
+        // because nothing yet re-runs `spawn_client` on a live client: a map
+        // change or a round restart, neither of which exists, is where the
+        // two readings part.
+        client[pers_index()] = Value::Array(cx.new_array());
+        self.ents[slot] = Some(GEntity {
+            engine: vec![Value::Undefined; engine_slot_count()],
+            client: Some(client),
+            script,
+            solid: true,
+            hidden: false,
+            attachments: Vec::new(),
+            think: None,
+            nextthink: 0,
+        });
+        Ok(EntId(slot as u32))
+    }
+
+    /// The client's slot goes back to being empty. It is deliberately not
+    /// pushed onto the free list: that list feeds `spawn`, and a map entity
+    /// must never be handed a client's number.
+    ///
+    /// `GameHost::client_weapons` and `client_viewmodel` are left alone; the
+    /// Connect path resets them, so the slot is clean before anything can
+    /// read it and a reset here would only be the second half of the same
+    /// guarantee.
+    pub fn free_client(&mut self, slot: usize) {
+        if slot < MAX_CLIENTS {
+            self.ents[slot] = None;
+        }
     }
 
     /// `GScr_NewHudElem` (0x4b184): hand out the first free `g_hudelems`
@@ -148,6 +215,7 @@ impl ObjectTable {
         }
         self.huds[i] = Some(GEntity {
             engine,
+            client: None,
             script,
             solid: true,
             hidden: false,
@@ -366,6 +434,38 @@ mod tests {
             ents.get(reused).is_some(),
             "the think fired twice and freed the reuse"
         );
+    }
+
+    /// A client's entity number is its slot, and taking one neither advances
+    /// `num_entities` nor touches the free list, so map entities still start
+    /// at `FIRST_MAP_ENTITY` whatever clients have connected.
+    #[test]
+    fn a_client_entity_takes_its_slot_number_and_leaves_map_numbering_alone() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut ents = ObjectTable::new();
+        let before = ents.num_entities();
+        let id = vm.with_cx(|cx| ents.spawn_client(cx, 3).unwrap());
+        assert_eq!(id, vcod_gsc::EntId(3));
+        assert_eq!(
+            ents.num_entities(),
+            before,
+            "a client moved the map counter"
+        );
+        let first_map = vm.with_cx(|cx| ents.spawn(cx).unwrap());
+        assert_eq!(first_map, vcod_gsc::EntId(FIRST_MAP_ENTITY));
+    }
+
+    /// Freeing a client returns its slot to nothing: the number is the slot's,
+    /// not the allocator's, so it must not land on the free list where a map
+    /// entity could take it.
+    #[test]
+    fn freeing_a_client_does_not_hand_its_number_to_the_map() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut ents = ObjectTable::new();
+        vm.with_cx(|cx| ents.spawn_client(cx, 2).unwrap());
+        ents.free_client(2);
+        let first_map = vm.with_cx(|cx| ents.spawn(cx).unwrap());
+        assert_eq!(first_map, vcod_gsc::EntId(FIRST_MAP_ENTITY));
     }
 
     /// The table refuses to hand out `ENTITYNUM_WORLD` or anything above it.

@@ -786,6 +786,20 @@ mod tests {
                             max_clients = max_clients.max(s.clients.len());
                             let o = s.ps.origin(p);
                             assert!(o.iter().all(|c| c.abs() < 65536.0), "origin {o:?}");
+                            // A spectator carries none of these, which is what
+                            // the server's own spectator wire rests on
+                            // (`ClientSim::to_wire`, crates/server).
+                            for f in [
+                                "viewHeightCurrent",
+                                "viewHeightTarget",
+                                "groundEntityNum",
+                                "gravity",
+                                "pm_flags",
+                                "legsAnim",
+                                "serverCursorHintString",
+                            ] {
+                                assert_eq!(s.ps.field_i32(p, f), 0, "{f} in {message_num}");
+                            }
                             valid_count += 1;
                             times.push(s.server_time);
                         }

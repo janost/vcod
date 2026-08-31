@@ -194,6 +194,26 @@ are the same function, which is the "read-only after spawn" guard.
 `pers` is type 7, an object handle, which is how `self.pers["team"]` works
 without the engine knowing anything about the key.
 
+The engine, not script, puts that handle there. VERIFIED live on the retail
+1.1d server with `crates/gsc/tests/fixtures/semantics/client-probes/probe_pers.gsc`,
+run 2026-08-31 on mp_pavlov with one connected client (that directory's README
+carries the recipe and the full log): inside `Callback_PlayerConnect` and
+*before* its `waittill("begin")`, `isdefined(self.pers)` is true while
+`isdefined(self.pers["team"])` is false, and `self.name` already holds the
+connecting client's userinfo name. VERIFIED on the same run that reading an
+index off a genuinely undefined field is fatal — `undefined is not an array,
+string, or vector`, which took the server down.
+
+INFERRED as the mechanism, read off control flow rather than run: `ClientConnect`
+(`0x4246c`) saves its second argument across the `bzero` that clears
+`gclient_t` and stores it back into `+0x20e8` (`0x4250f`), which is `pers`'s
+own offset in the table above.
+
+That the engine has to supply it matters because no stock gametype ever creates
+`pers`: `dm.gsc:202` reads `self.pers["team"]` as its first use. So a client
+entity is unusable by script unless it is handed both a `name` and an indexable
+`pers` at connect.
+
 ### HUD element fields, 0x744e0
 
 ```
@@ -1081,6 +1101,261 @@ order. So the alias names are weapon-file data, reached through the entity's
 `mp_carentan` places two `misc_mg42` blocks naming the same weapon file
 (section 8's live counts), and `CsRange::SoundAlias`'s intern-or-append
 allocator is what keeps the second block from taking two more slots.
+
+## 20. The spawn path: `ClientSpawn`, the weapon builtins, `positionWouldTelefrag`
+
+What the stock `spawnPlayer()` reaches once a client has answered both menus,
+measured for stage 4 of the gsc gameplay program. Five builtins and one name
+table.
+
+### `spawn` is two builtins under one name
+
+Section 9 lists `spawn` as one of the three names that appear both in
+`functions` and in the player methods. The two entries are `functions[8]` at
+0x5d268, which is `spawn(classname, origin)` and allocates a map entity, and
+player method 40 at 0x455cc, which is `self spawn(origin, angles)`. VERIFIED,
+both read out of the tables `dump_builtins.py` walks.
+
+0x455cc is only the wrapper. It bound-checks the entity number against 0x3ff,
+indexes `g_entities` by 0x314, reads two vectors with `Scr_GetVector`, and
+tail calls `ClientSpawn` (0x4268c). VERIFIED: the `R_386_PC32` relocation at
+0x45652 names `ClientSpawn`, and `nm -D` puts that symbol at 0x4268c. Calling
+0x455cc itself "ClientSpawn" is wrong; it is the builtin around it.
+
+That it raises `entity %i is not a player` (0x73140) when `ent->client` is
+null is INFERRED: the string is in the binary, but which branch reaches it is
+control flow.
+
+`spawnSpectator()` and `spawnIntermission()` in every stock gametype call the
+same `self spawn(origin, angles)` that `spawnPlayer()` does; the mode comes
+from the `sessionstate` client field they set immediately before it, not from
+a different builtin. VERIFIED from the shipped `maps/mp/gametypes/*.gsc`.
+
+Whether `ClientSpawn` clears `ps.weapons` is UNVERIFIED: I did not read
+0x4268c. The stock scripts require it to, which is INFERRED from their
+ordering: `spawnPlayer()` calls `spawn` first and `_teams::loadout()` after,
+and `giveWeapon` raises a script error on an occupied slot (below), so a
+player who changed side would fail to respawn if the previous life's pistol
+still occupied the pistol slot.
+
+### `positionWouldTelefrag(origin)`, `functions[96]` 0x5a834
+
+Takes one vector, no receiver, and returns 0 or 1 through `Scr_AddInt`. It
+adds two rodata vectors to the argument to build a box, hands the pair to
+`trap_EntitiesInBox` (0x63a78) with a 1024-entry result buffer and mask
+0x2000000, and walks the result. VERIFIED: the relocations at 0x5a84b, 0x5a8d8
+and 0x5a904/0x5a91b name `Scr_GetVector`, `trap_EntitiesInBox` and
+`Scr_AddInt`.
+
+Per entity in that result the answer is 1 when `ent->client` (gentity +0x158)
+is non-null and `client->ps.pm_type` (+0x4) is not above 5, and 0 when the
+walk runs out. INFERRED: that is the branch structure at 0x5a8f4-0x5a8fc, not
+a live test. Playerstate +0x4 is the `pm_type` offset `cod11-sound-system.md`
+and `cod11-hud-protocol.md` already read it at.
+
+Two of those filters have no analogue in a server that does not link entities
+into a world model and keeps `pm_type` outside the script object table; both
+omissions make the answer 1 where retail's is 0, never the reverse.
+
+### `weaponSlot`: the name table at `.data` 0x7c940
+
+Six pointers, in this order: `none` (0x70f6b), `primary` (0x70f8d),
+`primaryb` (0x70f84), `pistol` (0x70f7d), `grenade` (0x70f38),
+`smokegrenade` (0x70f70). VERIFIED, read through `.rel.data`. The six
+entries carry `R_386_RELATIVE` relocations, so the raw dwords are the addends
+and do resolve, unlike the `.data` function pointers section 1 warns about. A
+weapon's own slot is therefore 1..=5, index 0 being the empty one.
+
+The five non-empty names are exactly the ones retail's
+`Unknown weaponslot name %s. Valid weaponslots are "primary", "primaryb",
+"pistol", "grenade", and "smokegrenade"` (0x73220) lists. VERIFIED.
+
+Note the file offset: `.data` sits at vaddr 0x7b3a0 and file offset 0x7a3a0,
+so a table read at raw offset 0x7b940 is vaddr 0x7c940. Reading the file
+offset as an address lands on the `EV_*` event-name table instead, which
+begins `EV_MELEE_HIT`, `EV_MELEE_MISS`, `EV_FIRE_WEAPON_MG42`.
+
+### `ps.weapons` and `ps.weaponslots`
+
+`ps.weapons` (playerstate +780, two 32-bit netfields `weapons[0]` and
+`weapons[1]`) is a bitset indexed by the weapon's 1-based configstring 7
+position. `ps.weaponslots` (+788, netfields `weaponslots[0]` and
+`weaponslots[4]`) is eight bytes, one weapon index per slot from the table
+above, 0 for empty. VERIFIED against both committed captures in
+`crates/server/tests/fixtures/playerstate/`: on `mp_carentan` an americans
+join holds `colt_mp` (4), `fraggrenade_mp` (8) and `m1carbine_mp` (12) and
+`weapons[0]` is 4368 = bits 4, 8 and 12; `weaponslots[0]` is 0x04000C00,
+little-endian bytes `00 0C 00 04`, putting the carbine in `primary` and the
+colt in `pistol`, and `weaponslots[4]` is 8, the grenade. On `mp_pavlov` the
+russian loadout gives 134481920 (bits 11, 18, 27), 0x0B001200 and 27, which
+decodes the same way for `luger_mp`, `mosin_nagant_mp` and
+`rgd-33russianfrag_mp`.
+
+The three weapon files back the slot half independently: `m1carbine_mp` names
+`weaponSlot primary`, `colt_mp` `pistol`, `fraggrenade_mp` `grenade`.
+VERIFIED, read out of `weapons/mp/*` in `pak0.pk3`.
+
+### `giveWeapon`, player method 0, 0x43020
+
+Calls, in the order the relocations name them: `Scr_GetString` (0x6bd40),
+`BG_GetWeaponIndexForName` (0x3adc0), `Com_BitCheck` (0x6b164) on
+`client+0x30c`, which is `ps.weapons`, the same +780, then
+`BG_GetEmptySlotForWeapon` (0x3aaac) and `BG_GivePlayerWeapon` (0x36a38),
+and finally `Add_Ammo` for the difference between the weapon definition's
+start ammo (+0x198) and the current `ps.ammo` entry (`client+0x10c`, indexed
+by the definition's ammo type at +0x1a0). VERIFIED: every one of those is a
+named `R_386_PC32` relocation.
+
+A zero from `BG_GetEmptySlotForWeapon` raises
+`Can not give player weapon without having an empty weapon slot` (0x73180).
+INFERRED: that is the branch at 0x430c1, and whether re-giving a weapon the
+player already holds counts as an occupied slot is not measured. The
+`Com_BitCheck` result is carried in a register to the `Add_Ammo` call rather
+than used as a guard here.
+
+`BG_GetWeaponIndexForName`'s result is narrowed with `movzbl %al` at 0x43091
+and reaches `Com_BitCheck` with no test against zero. INFERRED, from that
+instruction sequence: a name no weapon file backs would set bit 0 and carry
+on rather than raising. `ps.ammo` itself has no netfield in the 1.1
+playerstate, so nothing this builtin writes there can reach a client.
+
+### `giveMaxAmmo`, player method 7, 0x43134
+
+`Scr_GetString`, `BG_GetWeaponIndexForName`, `Com_BitCheck`, then
+`BG_GetInfoForWeapon` (0x3ac68), `BG_GetAmmoTypeMax` (0x3aca0) and `Add_Ammo`
+(0x4ca10). VERIFIED from the relocations. It returns without doing anything
+when the `Com_BitCheck` fails. INFERRED, the branch at 0x431c3. Since
+`ps.ammo` is not a netfield, this builtin cannot move the wire at all.
+
+### `setSpawnWeapon`, player method 23, 0x452a4
+
+`Scr_GetString`, `BG_GetWeaponIndexForName`, `Com_BitCheck` on
+`client+0x30c`, then `ps.weapon` (+0xb0, netfield offset 176) takes the index
+and `ps.weaponstate` (+0xb4, offset 180) takes 0. VERIFIED for the two stores
+at 0x45339 and 0x45345 and for the netfield offsets in
+`crates/common/src/net/fields_v1.rs`. That the stores are skipped for a
+weapon the player does not hold is INFERRED, the branch at 0x4532f.
+
+### `setViewmodel` reaches `ps.viewmodelIndex`
+
+`setViewmodel` (player method 17, 0x4512c) resolves its argument through
+`G_ModelIndex` (0x66ed8) and stores the result at `client+0x2170`. VERIFIED:
+the relocation at 0x4519b names `G_ModelIndex` and the store is at 0x451a7.
+That word is copied into `ps.viewmodelIndex` (+0xbc, netfield offset 188) at
+0x40faa/0x40fb4. INFERRED, read off those two instructions rather than
+measured.
+
+The value is therefore a model configstring index, 1-based on base 268 as
+`clientstate-wire-format.md`'s configstring map has it. VERIFIED against the
+committed fixtures: the retail playerstate captures carry `viewmodelIndex` 52
+on `mp_pavlov` and 82 on `mp_carentan`, and configstrings 320 and 350 in the
+matching `crates/server/tests/fixtures/configstrings/` files are
+`xmodel/viewmodel_hands_russian` and `xmodel/viewmodel_hands_us`. The name
+comes from the character script the team model chain runs, e.g.
+`character/mp_russian_conscript01.gsc`'s
+`self setViewmodel("xmodel/viewmodel_hands_russian")`. VERIFIED, read out of
+`pak5.pk3`. So the field follows the player's nationality, not the weapon:
+`m1carbine_mp`'s own `handModel` is `viewmodel_hands_new`, which is not what
+the capture carries.
+
+### What `ClientEndFrame` writes for a live client's own view
+
+`ClientEndFrame` (0x40e98) branches on the `sessionstate` word at
+`client+0x20d0`: 3 takes the intermission arm, 2 tail calls
+`SpectatorClientEndFrame` (0x40760), anything else falls through to the live
+arm, which then compares `ps.clientNum` (+0xac, netfield offset 172) against
+the entity's own number. INFERRED, read off the compares at 0x40ed1, 0x40f24
+and 0x40f45.
+
+The equal case, at 0x40f90, is a client looking out of its own body, and it
+writes two things a stage-4 playerstate carries. `pm_flags` (+0xc, netfield
+offset 12) gets bit 18 set: `orb $0x4,0xe(%edi)` at 0x40fb0, byte 2 of the
+dword, so 0x40000. And `ps.viewmodelIndex` takes the word `setViewmodel` left
+at `client+0x2170`. VERIFIED, both are single stores at named offsets.
+
+The other two arms clear that bit. The intermission arm does it at 0x40f11
+(`andb $0xfb,0xe(%edx)`) alongside zeroing `ps.viewmodelIndex`, and
+`SpectatorClientEndFrame` does the same pair at 0x407b7/0x407ad before it does
+anything else. VERIFIED, both stores.
+
+Bit 18 is therefore the third member of the view-source group whose other two
+`cod11-events-and-fx.md` already records: 0x10000 free spectator and 0x20000
+following a client. `SpectatorClientEndFrame` stores both, at 0x408ea and
+0x40903, and copies the followed client's playerstate over its own with a
+0x834-dword `rep movsl` at 0x408ba. VERIFIED, the stores and the copy width.
+
+Which of the two it sets depends on the sign of `client+0x20d4`. INFERRED,
+the compare at 0x408f4. Both stores sit past the branch that leaves the
+function when no client was found. INFERRED, the jump at 0x40890.
+
+That grouping is why the committed lone-spectator capture in
+`crates/common/tests/fixtures/net/snapshots.bin` reads `pm_flags` 0: with
+nobody to follow the function never reaches those stores.
+
+### `serverCursorHintString` 255 is a no-hint sentinel
+
+`G_CheckForCursorHints` (0x4f59c) stores -1 into `ps.serverCursorHintString`
+(+0x38c, netfield offset 908) at 0x4f603, having zeroed `serverCursorHint`
+(+0x384) and `serverCursorHintVal` (+0x388) just above it. VERIFIED, three
+stores at named offsets. The netfield is 8 bits wide
+(`crates/common/src/net/fields_v1.rs`), so -1 reaches a client as 255, which
+is what the committed player captures carry. VERIFIED against those fixtures.
+
+The store is reached only when the entity's `health` (+0x230, the entity field
+table's offset 560) is above zero and the byte at `ent+0x172` is zero.
+INFERRED, the two branches at 0x4f5d7 and 0x4f5e4. `ClientEndFrame` is one of
+its two callers, from the live arm above (the `R_386_PC32` relocation at
+0x4111a); the other is at 0x484c6. VERIFIED from the relocations.
+
+### `legsAnim` needs the animscript state machine
+
+`BG_PlayAnim` (0x2c338) is what writes `ps.legsAnim` (+0x70, netfield offset
+112): it masks the old value down to 0x200, flips that bit, ORs the new
+animation index in, and stores the result at 0x2c3bb, with `ps.legsTimer`
+(+0x6c) beside it and the `torsoAnim`/`torsoTimer` pair (+0x78/+0x74) getting
+the same treatment. VERIFIED, read out of the instruction operands. 0x200 is
+`ANIM_TOGGLEBIT` as `player-model-anim-system.md` records it, which is why the
+captures' 634 is index 122 with the bit set rather than an index of its own.
+
+Which index is chosen comes from the parsed animscript, through
+`BG_AnimScriptAnimation` (0x29db0), `BG_PlayerAnimation` (0x2c1f4) and
+`BG_AnimUpdatePlayerStateConditions` (0x2a2ec), off the trees
+`BG_AnimParseAnimScript` (0x28b88) builds. VERIFIED that those symbols exist
+and are exported; nothing here traces the path between them. Reproducing a
+spawned player's `legsAnim` means porting that state machine, which is why
+`playerstate_ab.rs` carries the field as its one gap rather than writing the
+number.
+
+## 21. The client entity as vcod builds it
+
+Not a reading of retail: this is what stage 4 built, recorded here because the
+next stage inherits it. The retail facts it rests on are in sections 2 and 3.
+
+A connecting client allocates a `GEntity` at entity number = its client slot
+(`ObjectTable::spawn_client`). Section 2's `G_InitGame` reading is what makes
+that safe without a check: `level.num_entities` starts at 72 whatever
+`sv_maxclients` is and `MAX_CLIENTS` is 64, so clients own 0..63, map entities
+start at 72, and the allocator never hands out a number below 72. Freeing a
+client clears its slot and deliberately does not push the number onto the free
+list, which feeds map-entity allocation.
+
+Client-tagged fields live in a second store on the entity, `client:
+Option<Vec<Value>>`, `None` for every map entity and HUD element. That is what
+makes retail's null `ent->client` check a type-level fact here: a read of a
+client field on a map entity finds no store rather than an unset cell.
+
+The store is indexed by raw `CLIENT_FIELDS` position, not by the
+first-appearance-of-each-offset dedup `ENTITY_FIELDS` uses. Five rows —
+`sessionteam`, `sessionstate`, `statusicon`, `headicon`, `headiconteam` —
+carry `offset: 0` because retail's own dump marks them fully custom get and
+set (section 3's client field table). Those zeros are placeholders for an
+accessor, not a shared struct offset, so deduping on them would merge five
+distinct fields into one cell.
+
+`.pers` is the one client field the engine fills in rather than leaving to
+script: `spawn_client` puts a fresh array handle there, because
+`ClientConnect` (0x4250f) writes one and every gametype reads
+`self.pers["team"]` off it without creating it. Section 3 has the measurement.
 
 ## Open, and worth a probe
 

@@ -10,6 +10,16 @@ use vcod_gsc::ErrorKind;
 /// `BG_SetupWeaponInfo`'s list, configstring 7, 1-based on the wire.
 pub const WEAPON_LIST: &str = "bar_mp bar_slow_mp bren_mp colt_mp enfield_mp fg42_mp fg42_semi_mp fraggrenade_mp kar98k_mp kar98k_sniper_mp luger_mp m1carbine_mp m1garand_mp mg42_bipod_duck_mp mg42_bipod_prone_mp mg42_bipod_stand_mp mk1britishfrag_mp mosin_nagant_mp mosin_nagant_sniper_mp mp40_mp mp44_mp mp44_semi_mp panzerfaust_mp ppsh_mp ppsh_semi_mp ptrs41_antitank_rifle_mp rgd-33russianfrag_mp springfield_mp sten_mp stielhandgranate_mp thompson_mp thompson_semi_mp";
 
+/// A weapon's 1-based position in [`WEAPON_LIST`], which is what every
+/// weapon-shaped index on the wire and in the item table means. The lookup is
+/// case-sensitive, matching retail's `strcmp` (`BG_FindItem` 0x2e214).
+pub fn weapon_index(name: &str) -> Option<usize> {
+    WEAPON_LIST
+        .split(' ')
+        .position(|w| w == name)
+        .map(|i| i + 1)
+}
+
 /// Map-independent configstrings the engine itself sets. Everything else
 /// this table used to carry is script output and is earned back at load:
 /// 21/22 from `precacheStatusIcon`, 29 from `precacheHeadIcon`,
@@ -200,6 +210,26 @@ impl Allocators {
         *self.next_mut(range) = next + 1;
         Ok(next)
     }
+}
+
+/// `GScr_GetScriptMenuIndex` (0x5c73c): the offset within `CsRange::Menu` of
+/// the slot holding `name`, scanning the whole range for an exact match.
+/// That offset, not the configstring number, is what `openMenu` puts on the
+/// wire. `None` is retail's `Menu '%s' was not precached` error.
+pub fn script_menu_index(cs: &[String], name: &str) -> Option<usize> {
+    let (lo, hi) = CsRange::Menu.bounds();
+    (lo..=hi).find(|s| cs[*s] == name).map(|s| s - lo)
+}
+
+/// The inverse: what `Cmd_MenuResponse_f` (0x486d8) reads back out of
+/// configstring `CsRange::Menu.start + index` to name the menu in its
+/// `menuresponse` notify. Empty when nothing precached that slot, which is
+/// the empty string retail passes on too.
+pub fn script_menu_name(cs: &[String], index: usize) -> &str {
+    let (lo, hi) = CsRange::Menu.bounds();
+    cs.get(lo + index)
+        .filter(|_| lo + index <= hi)
+        .map_or("", |s| s.as_str())
 }
 
 #[cfg(test)]
