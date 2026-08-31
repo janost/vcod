@@ -335,7 +335,10 @@ The spawn-var applier is the unnamed function at 0x61400, which I will call
      `G_CallSpawn` applies every spawn var before it calls the record's
      `SP_` function, so the index is taken before the free. This is the
      opposite of the entity *number* rule the same five classnames obey.
-   - **`G_ModelIndex` interns.** VERIFIED from the captures:
+   - **`G_ModelIndex` interns.** INFERRED for the mechanism: the call at
+     0x61505 is the only writer into the block while the lump is parsed
+     (the relocation read above), so a repeated name can only be interning
+     onto its first slot. VERIFIED for the outcome, from the captures:
      `mp_carentan`'s 672 non-brush `model` keys are 57 distinct names, and
      its capture holds each of the 57 exactly once, in first-appearance
      order, across slots 269-326 (the one slot among them that is not a
@@ -736,8 +739,20 @@ for the seven weapons that ship no `projectileModel`. The German list and
 `mp_pavlov`'s two lists resolve the same way with no leftovers.
 
 `crates/server/src/items.rs`'s `item_models` reproduces this, and
-`GameHost::register_item` is `RegisterItem` whole: the bit, the alt-fire
-link, both models per registered item, and configstring 8.
+`GameHost::register_item` puts it with the rest of `RegisterItem`: the bit,
+the alt-fire link, both models per registered item, and configstring 8.
+
+INFERRED, that the alt-fire link's model precache is the same pair. M2
+above reads retail as precaching offsets 0x188 and 0x31c of the *weapon
+definition* for a chained alt mode, which is a different struct from the
+`bg_itemlist` +0x8/+0xc pair read here; that the two name the same two
+model strings is a reading I have not confirmed, and `register_item` uses
+the +0x8/+0xc pair for base and alt alike. VERIFIED that the choice is
+inert on stock content: all five alt-fire files
+(`bar_slow_mp`, `fg42_semi_mp`, `mp44_semi_mp`, `ppsh_semi_mp`,
+`thompson_semi_mp`) carry their base weapon's exact `worldModel` and an
+empty `projectileModel`, so an alt registration interns onto a slot the
+base already took and adds none either way.
 
 ## 16. The builtins the stock `dm` bootstrap reaches
 
@@ -875,12 +890,16 @@ both registers and frees still does both.
 
 ## 18. What fills the model configstring block
 
-Three things write into 269-523, and they interleave strictly in call
-order, so getting any one of them wrong offsets everything after it rather
-than leaving a hole. VERIFIED throughout this section from the two
-committed captures in `crates/server/tests/fixtures/configstrings/`, the
-shipped BSPs, weapon files and scripts, and the reads out of
-`game.mp.i386.so` named per claim.
+Three things write into 269-523. VERIFIED from the two committed captures
+in `crates/server/tests/fixtures/configstrings/`, that the three interleave
+rather than occupying separate runs: on both maps an item registration's
+model sits between two of the entity lump's, and the script's own precaches
+start only after the last of either. INFERRED, that the interleave is
+strictly call order and that getting one contributor wrong therefore
+offsets everything after it rather than leaving a hole — that is a
+mechanism generalisation from two maps' outcomes, not something a capture
+establishes; what supports it is that the same single indexer
+(`G_ModelIndex`, section 7) is the only writer on all three paths.
 
 1. Every non-brush `model` key in the entity lump, during
    `G_SpawnEntitiesFromString` (section 7).
@@ -910,18 +929,34 @@ is already the placing block's own `model` key and interns onto it, and the
 the player models.
 
 **`g_useGear` decides 49 slots on `mp_carentan` and 41 on `mp_pavlov`.**
+VERIFIED, those two counts measured directly: seeding the cvar is what took
+`crates/server/tests/configstrings_ab.rs` from 53 differing slots to 4 on
+`mp_carentan` and from 43 to 2 on `mp_pavlov`, with no other change.
 Every `character/mp_*.gsc` gates its gear model precaches on
 `character\_utility::useOptionalModels()`, which is
 `getcvarint("g_useGear")` (VERIFIED, read from the shipped `pak5.pk3`), and
 the gear models sit in the middle of the block, so an unset cvar loses them
 and offsets every player and weapon model after. The cvar is index 67 of the
 game module's own cvar table (its record at `.data` 0x7e470), VERIFIED read
-out of the binary: the table is `.data` 0x7de28, 71 records of 24 bytes `{vmCvar_t *, name, default, flags,
-trackChange, teamShader}` terminated by a null name, `g_useGear` default
-`"1"` with flags 0x21. The 21 rows flagged 0x800 in that table are exactly
-`crates/server/src/cvars.rs`'s `ENGINE_MIRRORED`, which is why `g_useGear`
-never appears in the 140/204 mirror and cannot be recovered from the
-capture — only from the table.
+out of the binary with `python3 tools/re/dump_cvars.py game.mp.i386.so
+usegear`: the table is `.data` 0x7de28, 71 records of 24 bytes
+`{vmCvar_t *, name, default, flags, trackChange, teamShader}` terminated by
+a null name, and `g_useGear` is its index 67, default `"1"`, flags 0x21.
+The 21 rows flagged 0x800 are exactly `crates/server/src/cvars.rs`'s
+`ENGINE_MIRRORED`, which is why `g_useGear` never appears in the 140/204
+mirror and cannot be recovered from the capture — only from the table.
+
+**The other 70 rows are not transcribed here, and nothing warns when one is
+missing.** A script reading an unregistered cvar gets `""`, which
+`getcvarint` reads as 0, silently — which is exactly how `g_useGear` cost a
+measurement round. `crates/server/src/cvars.rs` carries only the rows whose
+absence has been measured, so the next such miss should be a lookup rather
+than a re-derivation: run the dumper above with the cvar's name as its
+second argument and take the row's default. Two the stock MP scripts
+already read and we do not carry are `g_allowVote` (index 26, default
+`"1"`) and `g_debugDamage` (index 22, default `"0"`); neither changes a
+measured outcome today, `g_debugDamage` because 0 is what an absent cvar
+already reads as.
 
 ## Open, and worth a probe
 

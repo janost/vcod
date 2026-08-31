@@ -49,6 +49,11 @@ const ENGINE_MIRRORED: &[(&str, &str)] = &[
 /// gates every character script's gear model precaches on `g_useGear`, so
 /// without it the model configstring block loses every gear model
 /// (docs/research/cod11-gsc-object-model.md section 18).
+///
+/// The other 70 rows are deliberately not transcribed, and a script that
+/// reads one of them gets `""` with no warning. `tools/re/dump_cvars.py`
+/// prints the table, so adding a row is a lookup: pass the cvar's name and
+/// take its default.
 const ENGINE_DEFAULTS: &[(&str, &str)] = &[("g_useGear", "1")];
 
 struct Cvar {
@@ -84,7 +89,7 @@ impl Cvars {
             cv.make_server_info(name, value);
         }
         for &(name, value) in ENGINE_DEFAULTS {
-            cv.set(name, value);
+            cv.register(name, value);
         }
         cv
     }
@@ -109,20 +114,28 @@ impl Cvars {
         entry.value = value.to_string();
     }
 
-    /// `makeCvarServerInfo(name, default)`: registers with the mirror flag
-    /// and the default when the cvar does not exist, and only sets the flag
-    /// when it does. A cvar already set on the command line keeps its
-    /// value.
-    pub fn make_server_info(&mut self, name: &str, default: &str) {
-        let entry = self
-            .vars
+    /// `Cvar_Get(name, default)`: takes the default only when the cvar does
+    /// not exist, so a cvar already set on the command line keeps its
+    /// value. This is how a cvar table's row is seeded, and the opposite of
+    /// `set` above -- seeding with `set` would silently overwrite whatever
+    /// the operator passed.
+    pub fn register(&mut self, name: &str, default: &str) {
+        self.vars
             .entry(name.to_ascii_lowercase())
             .or_insert_with(|| Cvar {
                 name: name.to_string(),
                 value: default.to_string(),
                 mirrored: false,
             });
-        entry.mirrored = true;
+    }
+
+    /// `makeCvarServerInfo(name, default)`: `register` plus the mirror
+    /// flag, which it sets whether or not the cvar already existed.
+    pub fn make_server_info(&mut self, name: &str, default: &str) {
+        self.register(name, default);
+        if let Some(c) = self.vars.get_mut(&name.to_ascii_lowercase()) {
+            c.mirrored = true;
+        }
     }
 
     /// Rebuilds the 140/204 block from the flagged set. Sorted by
@@ -166,6 +179,18 @@ mod tests {
         let mut cs = vec![String::new(); 2048];
         cv.write_mirror(&mut cs).unwrap();
         assert!(!cs[MIRROR_NAMES].iter().any(|n| n == "g_useGear"));
+    }
+
+    /// Seeding a cvar table row keeps a value that is already there, so an
+    /// operator's command-line `+set g_useGear 0` survives the seed. Both
+    /// `ENGINE_MIRRORED` and `ENGINE_DEFAULTS` go through this primitive;
+    /// `set` is the other direction and would overwrite.
+    #[test]
+    fn registering_a_default_never_overwrites_an_existing_value() {
+        let mut cv = Cvars::new();
+        cv.set("g_useGear", "0");
+        cv.register("g_useGear", "1");
+        assert_eq!(cv.get("g_useGear"), "0");
     }
 
     /// The 20 stock script cvars beyond the engine's 21: the 18

@@ -118,11 +118,16 @@ impl GameHost {
         }
     }
 
-    /// `RegisterItem` (0x4e504) whole: the registration bit, the alt-fire
-    /// link, the item's own two model fields and configstring 8. Every
-    /// caller goes through here rather than `Items::register`, so an item
-    /// takes its model slots wherever it is registered -- at spawn for a
-    /// placed weapon, in `precacheItem` for the script's own list.
+    /// `RegisterItem` (0x4e504): the registration bit, the alt-fire link,
+    /// the item's own two model fields and configstring 8. Every caller
+    /// goes through here rather than `Items::register`, so an item takes
+    /// its model slots wherever it is registered -- at spawn for a placed
+    /// weapon, in `precacheItem` for the script's own list.
+    ///
+    /// A chained alt mode gets the same model pair as the item itself,
+    /// which retail may not: it reads a different struct there (object
+    /// model doc, section 15, M3). No stock alt-fire file carries a model
+    /// the base does not, so the two readings cannot be told apart.
     pub fn register_item(&mut self, name: &str) {
         for item in self.items.register(name) {
             for model in crate::items::item_models(self.fs.as_deref(), item) {
