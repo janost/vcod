@@ -49,15 +49,20 @@ pub fn new_hud_elem(
 /// `<hudelem> setTimer(seconds)` (0x4b8e4, hudelem method 2): a countdown
 /// clock. Retail takes exactly one parameter, converts it to milliseconds
 /// with the x87 rounding mode set to round-up (0x4b942, so 0.0005 s is 1 ms),
-/// rejects anything not greater than zero, clears the element's text and
-/// value fields, and writes two engine-only fields: the element type (4,
-/// countdown) at record+0x0 and the absolute end time `level.time + ms` at
-/// record+0x5c.
+/// and rejects anything not greater than zero. What it stores makes the
+/// record a tagged union: it zeroes the block at +0x30..+0x48 plus +0x60,
+/// +0x64 and +0x68, writes the element type 4 at +0x0 and the absolute end
+/// time `level.time + ms` at +0x5c. `setText` (0x4c590) and `setValue`
+/// (0x4c684) share that prologue exactly, each clearing the same block
+/// (including the +0x5c a timer uses) before writing type 1 with its string
+/// at +0x68, or type 2 with its float at +0x64.
 ///
-/// The call shape and both errors are faithful. Nothing is recorded: neither
-/// field is in `HUD_FIELDS`, so script cannot read either back, and the only
-/// consumer is `G_UpdateHudElemsToClients` (0x5121c), which needs the HUD
-/// wire path and the clients a later stage brings.
+/// The call shape and both errors are faithful. Nothing is recorded, and
+/// nothing needs clearing: not one of those offsets is in `HUD_FIELDS`, so
+/// script can read none of them back. `label`, the one script-readable field
+/// nearby, is at +0x2c and retail does not touch it here. The only consumer
+/// of what this writes is `G_UpdateHudElemsToClients` (0x5121c), which needs
+/// the HUD wire path and the clients a later stage brings.
 pub fn set_timer(
     host: &mut GameHost,
     _cx: &mut Cx,

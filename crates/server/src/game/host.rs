@@ -416,37 +416,54 @@ mod tests {
         });
     }
 
-    /// A HUD element's `alignx` stores an index and reads back the name, the
+    /// A HUD enum field stores retail's index and reads back the name, the
     /// set/get hook pair retail hangs on the field record. The stock
     /// `startGame` writes `level.clock.alignX = "center"`, so a string has
-    /// to be what the field takes.
+    /// to be what the field takes -- but `"center"` alone proves nothing
+    /// about the order, since it is index 1 of three either way, so every
+    /// name in all three tables is checked against its index here. Nothing
+    /// else in the tree reads the stored index yet.
     #[test]
-    fn a_hud_enum_field_stores_an_index_and_reads_back_its_name() {
+    fn the_hud_enum_fields_store_retails_indices_and_read_back_names() {
+        const TABLES: &[(&str, [&str; 3])] = &[
+            ("font", ["default", "bigfixed", "smallfixed"]),
+            ("alignx", ["left", "center", "right"]),
+            ("aligny", ["top", "middle", "bottom"]),
+        ];
         let (mut vm, mut host) = fixture();
         let h = vm.with_cx(|cx| host.ents.spawn_hud_elem(cx).unwrap());
         vm.with_cx(|cx| {
-            let alignx = cx.intern_folded("alignx");
-            let center = cx.intern_exact("center");
-            host.set_field(cx, h, alignx, Value::String(center))
-                .unwrap();
-            assert_eq!(
-                host.ents.get(h).unwrap().engine[align_slot()],
-                Value::Int(1)
-            );
-            let Value::String(back) = host.get_field(cx, h, alignx) else {
-                panic!("alignx reads back as a name");
-            };
-            assert_eq!(cx.resolve(back), "center");
-            let nope = cx.intern_exact("middle");
-            assert!(host.set_field(cx, h, alignx, Value::String(nope)).is_err());
+            for (field, names) in TABLES {
+                let f = cx.intern_folded(field);
+                for (i, name) in names.iter().enumerate() {
+                    let v = cx.intern_exact(name);
+                    host.set_field(cx, h, f, Value::String(v)).unwrap();
+                    assert_eq!(
+                        host.ents.get(h).unwrap().engine[hud_slot(field)],
+                        Value::Int(i as i32),
+                        "{field} = {name:?} is retail's index {i}"
+                    );
+                    let Value::String(back) = host.get_field(cx, h, f) else {
+                        panic!("{field} reads back as a name");
+                    };
+                    assert_eq!(cx.resolve(back), *name);
+                }
+                // A name from another one of the three tables is still not
+                // one of this field's, which is retail's error too.
+                let wrong = cx.intern_exact("middle");
+                assert!(
+                    *field == "aligny" || host.set_field(cx, h, f, Value::String(wrong)).is_err(),
+                    "{field} took a name that is not in its table"
+                );
+            }
         });
     }
 
-    /// `alignx`'s dense slot, for the assertion above.
-    fn align_slot() -> usize {
-        match fields::route_hud("alignx") {
+    /// One HUD field's dense slot, for the assertion above.
+    fn hud_slot(name: &str) -> usize {
+        match fields::route_hud(name) {
             Route::Engine { slot, .. } => slot,
-            _ => panic!("alignx is an engine field"),
+            _ => panic!("{name} is an engine field"),
         }
     }
 

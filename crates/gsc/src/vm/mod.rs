@@ -245,6 +245,9 @@ pub struct Vm {
     /// reached nothing but `log::warn!`, which a test harness with no
     /// logger installed cannot see. Read it back with `aborts`.
     aborts: Vec<ScriptError>,
+    /// How many threads have died in total, including the ones `aborts`
+    /// stopped recording, so a truncated list cannot pass for a whole one.
+    aborts_seen: u32,
 }
 
 impl Default for Vm {
@@ -273,6 +276,7 @@ impl Vm {
             now_ms: 0,
             spawn_depth: 0,
             aborts: Vec::new(),
+            aborts_seen: 0,
         }
     }
 
@@ -284,14 +288,17 @@ impl Vm {
         self.threads.len()
     }
 
-    /// How many aborts `aborts` keeps. Every one of them is logged whatever
-    /// the cap; the cap only bounds what a server that runs for hours with
-    /// a thread dying every frame accumulates.
+    /// How many aborts `aborts` keeps. Invented, not measured: retail has no
+    /// abort log at all. Any number large enough to hold a broken map load
+    /// works; the cap only bounds what a server running for hours with a
+    /// thread dying every frame accumulates. Every abort is logged whatever
+    /// the cap, and `abort_count` counts past it.
     const MAX_RECORDED_ABORTS: usize = 256;
 
-    /// Logs a dead thread and keeps it in `aborts`.
+    /// Logs a dead thread, counts it, and keeps it in `aborts` up to the cap.
     fn record_abort(&mut self, e: &ScriptError) {
         log::warn!("gsc: thread aborted in {}", self.describe(e));
+        self.aborts_seen = self.aborts_seen.saturating_add(1);
         if self.aborts.len() < Self::MAX_RECORDED_ABORTS {
             self.aborts.push(e.clone());
         }
@@ -300,9 +307,16 @@ impl Vm {
     /// The threads that have died of an error since this `Vm` was built, in
     /// the order they died, up to `MAX_RECORDED_ABORTS` of them. A host that
     /// starts its level-load threads with `start_thread` reads them back
-    /// here; `describe` renders one.
+    /// here; `describe` renders one. Compare the length against
+    /// `abort_count` to see whether the list is the whole story.
     pub fn aborts(&self) -> &[ScriptError] {
         &self.aborts
+    }
+
+    /// How many threads have died of an error in total, `aborts` truncated
+    /// or not.
+    pub fn abort_count(&self) -> u32 {
+        self.aborts_seen
     }
 
     /// One error as `file::func:line: Kind`.

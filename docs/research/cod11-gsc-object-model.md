@@ -215,12 +215,16 @@ without the engine knowing anything about the key.
 unpack the byte lanes of one packed RGBA word.
 
 `font`, `alignx` and `aligny` are stored as ints but script reads and writes
-them as names, VERIFIED. Each one's setter is a four-line wrapper around a
-shared helper at 0x4af80 taking `(elem, record, names, count)`: the helper
-`strcmp`s the script's string against the name table and stores the matching
-index, or raises a script error listing the whole table. Each getter indexes
-the same table back to a string. So the type column is the storage, not what
+them as names, so for these three the type column is the storage, not what
 script sees.
+
+VERIFIED that the field takes a name, from the shipped assets: `startGame` in
+`maps/MP/gametypes/dm.gsc` (pak5) writes `level.clock.alignX = "center"` on a
+HUD element, and `dm` is a stock gametype on the stock maps, so a field that
+took nothing but an int would break the round clock on every retail MP map.
+VERIFIED, as a data read, that each of the three carries a set and a get hook
+and which name table it points at; both tables below come straight out of the
+module.
 
 | field | setter | getter | name table | names, in index order |
 |---|---|---|---|---|
@@ -228,8 +232,17 @@ script sees.
 | `alignx` | 0x4c350 | 0x4c378 | 0x7de10 | `left`, `center`, `right` |
 | `aligny` | 0x4c3a8 | 0x4c3d0 | 0x7de1c | `top`, `middle`, `bottom` |
 
-`label`'s hook (0x4c400) is a setter only and takes a localized string, not a
-name from a table.
+INFERRED FROM DECOMPILATION, the mechanism: each setter is a four-line wrapper
+around a shared helper at 0x4af80 taking `(elem, record, names, count)`, and
+the helper `strcmp`s the script's string against the name table, stores the
+matching index, and otherwise builds a message from the whole table and calls
+`Scr_Error`. Each getter indexes the same table back to a string through
+`Scr_AddString`. The name-to-index direction is not measured live; a probe
+that sets each name and reads it back would settle it.
+
+`label`'s hook (0x4c400) is a setter only. INFERRED that it takes a localized
+string rather than a name from a table: it has no name-table argument and no
+call into the 0x4af80 helper.
 
 ## 6. Radiant fields come from a file, not a table
 
@@ -292,12 +305,16 @@ The spawn-var applier is the unnamed function at 0x61400, which I will call
    instead.
 
    A type-8 `model` value that is not a brush model goes through
-   `G_ModelIndex` (called at 0x61505, the byte it returns stored at
-   `ent+0x175`), VERIFIED. So **the entity lump fills the model configstring
-   block before any script runs**, in lump order, and the script's own
-   `precacheModel`/`setModel` calls continue from wherever that left off.
-   That is why our model block is offset against a retail capture on both
-   gate maps: we store the name without indexing it.
+   `G_ModelIndex`, VERIFIED: the call at 0x61505 relocates against that
+   symbol and the byte it returns is stored at `ent+0x175`. So **the entity
+   lump fills the model configstring block before any script runs**, in lump
+   order, and the script's own `precacheModel`/`setModel` calls continue from
+   wherever that left off. That conclusion is VERIFIED independently by the
+   committed retail captures: `mp_carentan-dm.txt` opens the model block with
+   map props (`xmodel/static_vehicle_german_truck` and the rest of the lump)
+   and reaches the team player models only after them. That is why our model
+   block is offset against both captures: we store the name without indexing
+   it.
 2. On a miss, call `Scr_FindField(key, &type)`. A nonzero result means the key
    is a registered script field. Convert the value by that type (1 gives
    `Scr_AddString`, 4 gives `strtod` then `Scr_AddFloat`, 5 gives `strtol`
@@ -677,18 +694,35 @@ weapon's own offset-0x8/0xc/0x188/0x31c model strings are runtime data from
 the weapon file this crate does not parse yet, so closing this needs that
 parser.
 
-## 16. The builtins the stock `dm` bootstrap reaches, VERIFIED
+## 16. The builtins the stock `dm` bootstrap reaches
 
 Running the shipped `dm.gsc` to completion at map load needs four builtins
 past the precache and cvar families. Each row is what retail's function does;
 the last column is what the server does today.
 
+VERIFIED throughout: every address, table and index below, the string
+literals, the numeric constants, and the pool geometry (1024 records of 124
+bytes, from the `index <= 0x3ff` loop bound and the 0x7c stride). Each
+"retail" cell says what the code at that address *does*, which is
+disassembly reasoning, so those are marked INFERRED; nothing in this section
+was measured against a running retail server.
+
 | builtin | table | address | retail | ours |
 |---|---|---|---|---|
-| `placeSpawnpoint` | entity methods 37 | 0x5bedc | point-traces from the origin up 128 (0x5bf45), then down 262144 (0x5bf91) with contents mask 0x2810011, moves the entity to the endpoint, stores the second trace's result word at results+0x28 into `gentity_t+0x7c` (INFERRED: the ground entity), prints `WARNING: Spawn point entity %i is in solid at (%i, %i, %i)` when a third trace at the new origin starts solid | both traces and the move, against our own solid+playerclip mask; nothing stored for `gentity_t+0x7c`, since our trace carries no entity identity |
-| `setClientNameMode` | functions 89 | 0x5f208 | matches the argument against `auto_change` and `manual_change` (`scr_const+0xfc`/`+0xfe`, named by `GScr_LoadConsts` 0x58550), stores 0 or 1 in `level+0x210`, `Scr_Error("Unknown mode")` otherwise. Read by `ClientUserinfoChanged` (0x421eb) and the name-change path at 0x5ba99 | recorded on the host, both errors faithful; nothing reads it until clients exist |
-| `newHudElem` | functions 77 | 0x4b184 | first free `g_hudelems` record of 1024 (stride 124), zeroed but for `fontscale` 1.0 (0x4b19b) and a packed white `color` (0x4b1d9), owner `0x3ff`; `Scr_Error("out of hudelems")` when full | the allocation, the pool size and the failure; `fontscale` seeded, `color` not, since `HUD_FIELDS` has no unpacked representation for it |
-| `<hudelem> setTimer` | hudelem methods 2 | 0x4b8e4 | exactly one parameter, seconds to milliseconds with the x87 rounding mode set to round-up (0x4b942), rejects a result not above zero, clears the text and value fields, sets the element type to 4 and the absolute end time `level.time + ms` at record+0x5c | the call shape and both errors; nothing recorded, because neither field is in `HUD_FIELDS` and the only consumer is `G_UpdateHudElemsToClients` (0x5121c) |
+| `placeSpawnpoint` | entity methods 37 | 0x5bedc | INFERRED: point-traces from the origin up 128 (0x5bf45), then down 262144 (0x5bf91) with contents mask 0x2810011, moves the entity to the endpoint, stores the second trace's result word at results+0x28 into `gentity_t+0x7c` (which field that is, is a further inference: the ground entity), prints `WARNING: Spawn point entity %i is in solid at (%i, %i, %i)` when a third trace at the placed position starts solid | both traces, the solid test and the move, against our own solid+playerclip mask; nothing stored for `gentity_t+0x7c`, since our trace carries no entity identity |
+| `setClientNameMode` | functions 89 | 0x5f208 | INFERRED: matches the argument against `auto_change` and `manual_change` (`scr_const+0xfc`/`+0xfe`, named by `GScr_LoadConsts` 0x58550, both VERIFIED data reads), stores 0 or 1 in `level+0x210`, `Scr_Error("Unknown mode")` otherwise. The only two readers of `level+0x210` in the module are `ClientUserinfoChanged` (0x421eb) and the name-change path at 0x5ba99, which *is* a VERIFIED data read: the relocation table has exactly four `level+0x210` sites, these two and this function's own pair | recorded on the host, both errors faithful; nothing reads it until clients exist |
+| `newHudElem` | functions 77 | 0x4b184 | INFERRED: first free `g_hudelems` record, zeroed but for `fontscale` 1.0 (0x4b19b) and a packed white `color` (0x4b1d9), owner `0x3ff`; `Scr_Error("out of hudelems")` when full | the allocation, the pool size and the failure; `fontscale` seeded, `color` not, since `HUD_FIELDS` has no unpacked representation for it |
+| `<hudelem> setTimer` | hudelem methods 2 | 0x4b8e4 | INFERRED: exactly one parameter, seconds to milliseconds with the x87 rounding mode set to round-up (0x4b942), rejects a result not above zero, zeroes +0x30..+0x48 and +0x60/+0x64/+0x68, then writes the element type 4 at +0x0 and the absolute end time `level.time + ms` at +0x5c | the call shape and both errors; nothing recorded and nothing to clear, see below |
+
+The record is a tagged union keyed by the type word at +0x0. `setText`
+(0x4c590), `setValue` (0x4c684) and `setTimer` share one prologue that zeroes
+the same block, then each writes its own type and payload: 1 with the interned
+string at +0x68, 2 with the float at +0x64, 4 with the end time at +0x5c. Not
+one of the offsets in that block is in `HUD_FIELDS`, so script can read none
+of them back, and `label` — the script-readable field nearby, at +0x2c — is
+not in it either. That is why our `setTimer` clears nothing: a script that
+sets `.label` and then calls `setTimer` reads the same value back here as on
+retail.
 
 `newClientHudElem` (0x4b298) and `newTeamHudElem` (0x4b3d0) allocate from the
 same pool with an owner; both need clients, so neither is implemented.
@@ -700,6 +734,10 @@ in the stock bootstrap reaches `addTestClient`.
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.
 - Whether `Scr_AddFields` really reads `radiant/keys.txt`. Section 6.
+- The name-to-index direction of the three HUD enum tables (section 3). The
+  tables themselves are a data read; that index 0 is `left` rather than
+  `right` rests on reading the helper at 0x4af80. A probe that writes each
+  name and reads it back would settle all three in one run.
 - Type 6, the `(0, f, 0)` angle form, is unused by all three server tables. It
   may exist for the client's own field tables; I have not looked at
   `cgame_mp_x86.dll` for this.

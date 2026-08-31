@@ -206,12 +206,22 @@ impl ScriptRuntime {
     /// `Vm::start_thread`, whose signature has no error channel, so this is
     /// the only way a caller sees an aborted bootstrap thread; `run_frame`
     /// logs the errors from its own pass and they land here too.
+    ///
+    /// The VM stops recording past its own cap, so a run that blew through
+    /// it gets a final line saying how many are missing rather than a list
+    /// that quietly claims to be complete.
     pub fn aborts(&self) -> Vec<String> {
-        self.vm
+        let mut out: Vec<String> = self
+            .vm
             .aborts()
             .iter()
             .map(|e| self.vm.describe(e))
-            .collect()
+            .collect();
+        let dropped = self.vm.abort_count() as usize - out.len();
+        if dropped > 0 {
+            out.push(format!("... and {dropped} more, past the record cap"));
+        }
+        out
     }
 
     /// Every line the script has passed to `logPrint`, in order. Retail

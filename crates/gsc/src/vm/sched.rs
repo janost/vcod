@@ -497,6 +497,21 @@ mod tests {
         );
     }
 
+    /// The record is capped, so a run that blows through it must not hand
+    /// back a list that passes for complete: the count keeps going.
+    #[test]
+    fn the_abort_record_is_capped_but_the_count_is_not() {
+        let mut vm = vm_with(r#"main() { double("not an int"); }"#);
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        let n = Vm::MAX_RECORDED_ABORTS + 44;
+        for _ in 0..n {
+            vm.start_thread(&mut host, 0, f, None, vec![]);
+        }
+        assert_eq!(vm.aborts().len(), Vm::MAX_RECORDED_ABORTS);
+        assert_eq!(vm.abort_count() as usize, n);
+    }
+
     #[test]
     fn wait_resumes_only_after_its_deadline() {
         let mut vm = vm_with(r#"main() { wait 0.1; done(); }"#);
