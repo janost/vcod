@@ -7,6 +7,7 @@
 
 use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
+use crate::game::host::ClientEvent;
 use crate::spectate::SpectatorSim;
 use crate::world::{TestEntities, World};
 use std::collections::{BTreeMap, HashMap};
@@ -468,6 +469,9 @@ impl Server {
         let client = Client::new(from, qport, challenge, userinfo, now);
         log::info!("client {slot} {:?} connected from {from}", client.name);
         self.clients[slot] = Some(client);
+        if let Some(rt) = self.script.as_mut() {
+            rt.push_client_event(ClientEvent::Connect(slot));
+        }
         self.send_oob(from, "connectResponse");
     }
 
@@ -700,6 +704,15 @@ impl Server {
                 }
                 self.send_server_command(slot, &text);
             }
+            // `ClientBegin`: the notify that releases the connect callback's
+            // `waittill("begin")`. The event queues rather than fires here,
+            // so it is drained after the `Connect` that armed the wait.
+            "begin" => {
+                if let Some(rt) = self.script.as_mut() {
+                    rt.push_client_event(ClientEvent::Begin(slot));
+                }
+                self.enter_world(slot);
+            }
             other => log::debug!("client {slot}: command {other:?} ignored"),
         }
         let Some(c) = self.clients[slot].as_mut() else {
@@ -794,6 +807,9 @@ impl Server {
         let Some(c) = self.clients[slot].take() else {
             return;
         };
+        if let Some(rt) = self.script.as_mut() {
+            rt.push_client_event(ClientEvent::Disconnect(slot));
+        }
         // Match on ip, not `ch.addr == c.addr`; NAT may have moved the port
         // since the challenge was issued and the slot would stay `connected`.
         for ch in &mut self.challenges {
@@ -942,6 +958,13 @@ impl Server {
             self.configstrings = rt.configstrings().to_vec();
             if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
                 log::warn!("rebuilding the cvar mirror: {e:?}");
+            }
+            // Queued `Connect`s were drained above, so this is where a
+            // client's entity first exists.
+            for (slot, c) in self.clients.iter_mut().enumerate() {
+                if let Some(c) = c {
+                    c.ent = rt.client_entity(slot);
+                }
             }
         }
     }

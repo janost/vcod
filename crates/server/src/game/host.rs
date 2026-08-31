@@ -42,9 +42,28 @@ pub fn is_builtin(name: &str) -> bool {
         || BUILTINS.contains(&name)
 }
 
+/// One client lifecycle step the netcode raised, by client slot. `Connect`
+/// and `Begin` are two events on purpose: `Callback_PlayerConnect` blocks on
+/// `waittill("begin")` as its second statement, so the thread has to be
+/// running and parked on that wait before the notify goes out.
+pub enum ClientEvent {
+    /// The client was admitted a slot; allocates its entity and runs
+    /// `CodeCallback_PlayerConnect` on it.
+    Connect(usize),
+    /// The client's `begin` command; notifies the parked callback.
+    Begin(usize),
+    /// The client is gone; runs `CodeCallback_PlayerDisconnect` and frees
+    /// the entity.
+    Disconnect(usize),
+}
+
 pub struct GameHost {
     pub configstrings: Vec<String>,
     pub ents: ObjectTable,
+    /// Client lifecycle events the netcode raised, drained by `run_frame`
+    /// before the think pass. Queued rather than called inline for the same
+    /// reason `damage` is: a builtin must never reenter the VM.
+    pub client_events: Vec<ClientEvent>,
     /// Damage the script asked for, drained after `run_frame` by stage 6.
     /// A builtin must never reenter the VM, so a callback becomes a queued
     /// event (the design's "callbacks cannot run inline").
@@ -105,6 +124,7 @@ impl GameHost {
         GameHost {
             configstrings,
             ents: ObjectTable::new(),
+            client_events: Vec::new(),
             damage: Vec::new(),
             allocators: Allocators::new(),
             cvars: crate::cvars::Cvars::new(),

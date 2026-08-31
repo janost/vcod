@@ -6,6 +6,7 @@ use std::time::Instant;
 use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
 use vcod_common::net::netchan::{ClientMessage, ServerNetchan};
 use vcod_common::net::snapshot::Snapshot;
+use vcod_gsc::EntId;
 
 /// `MAX_NAME_LENGTH`, a byte cap since the value is remote input.
 const MAX_NAME: usize = 32;
@@ -48,6 +49,10 @@ pub struct Client {
     /// delta base for the next clc_move (`cl->lastUsercmd`). Omitted fields
     /// decode against it, so it commits only after a whole message parses.
     pub last_cmd: UserCmd,
+    /// The client's gsc entity, allocated when `ClientEvent::Connect` is
+    /// drained. `None` until then, and again after `Disconnect`; the object
+    /// table stays the owner, this only caches what it answered.
+    pub ent: Option<EntId>,
     /// Set once the client enters the world.
     pub sim: Option<SpectatorSim>,
     /// Frames sent to this client, indexed message_num % SV_PACKET_BACKUP;
@@ -81,6 +86,7 @@ impl Client {
             last_processed_st: 0,
             pending: Vec::new(),
             last_cmd: NULL_USERCMD,
+            ent: None,
             sim: None,
             frames: vec![None; SV_PACKET_BACKUP],
         }

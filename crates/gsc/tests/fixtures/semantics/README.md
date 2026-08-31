@@ -131,3 +131,12 @@ Five more probes measure what the configstring capture in
   the two policies apart. It runs in `crates/server` for `probe_ents`'
   reason: the entity numbers it prints and the counts it compares only mean
   anything against a real `mp_pavlov` load.
+
+`probe_self` asks whether a call written without a receiver keeps the
+caller's `self`. It does, through a plain call, a `[[f]]()` call and a
+`thread` call alike. That is what makes the client callbacks work at all:
+`_callbacksetup.gsc` reaches every gametype callback as
+`[[level.callbackPlayerConnect]]()`, with no receiver, and `dm.gsc`'s
+`Callback_PlayerConnect` opens on `self.statusicon`. The receiver is `level`
+rather than a spawned entity so the probe needs no object table and runs in
+this crate.

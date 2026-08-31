@@ -620,7 +620,15 @@ impl Vm {
                         args.push(pop!());
                     }
                     args.reverse();
-                    let recv = if has_recv { as_target(pop!()) } else { None };
+                    // A receiver-less call inherits the caller's `self`, which
+                    // is what carries the client entity from
+                    // `CodeCallback_PlayerConnect` into the gametype's own
+                    // callback (probe_self).
+                    let recv = if has_recv {
+                        as_target(pop!())
+                    } else {
+                        frames[top].recv
+                    };
                     let callee = self.functions.get(&target).cloned().ok_or_else(|| {
                         err(ErrorKind::Custom(format!(
                             "no such function {}::{}",
@@ -672,7 +680,13 @@ impl Vm {
                         args.push(pop!());
                     }
                     args.reverse();
-                    let recv = if has_recv { as_target(pop!()) } else { None };
+                    // Same inheritance as `Op::Call`; `[[f]]()` is how
+                    // `_callbacksetup` reaches every gametype callback.
+                    let recv = if has_recv {
+                        as_target(pop!())
+                    } else {
+                        frames[top].recv
+                    };
                     let callee = self.functions.get(&target).cloned().ok_or_else(|| {
                         err(ErrorKind::Custom(format!(
                             "no such function {}::{}",

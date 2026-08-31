@@ -3,14 +3,19 @@
 
 use std::rc::Rc;
 
-use crate::game::host::GameHost;
+use crate::game::host::{ClientEvent, GameHost};
 use crate::game::spawn::spawn_entities_from_string;
 use vcod_common::pk3::Pk3Fs;
-use vcod_gsc::{Loader, ScriptSource, Vm};
+use vcod_gsc::{EntId, Loader, ScriptSource, Target, Vm};
 
 /// Every gametype script includes this file, and it is where the engine's
 /// entry points into script live, `CodeCallback_StartGameType` among them.
 const CALLBACK_SETUP: &str = "maps/mp/gametypes/_callbacksetup";
+
+/// The event `Callback_PlayerConnect` parks on before it lets the client
+/// into the world. A misspelt notify does not error, it hangs the thread,
+/// so the literal lives here with a test on it.
+const BEGIN_NOTIFY: &str = "begin";
 
 /// Reads `.gsc` out of the mounted paks. `Loader` hands `read` a canonical
 /// path (lowercase, forward slashes, no extension; see `vcod_gsc::canonical`);
@@ -162,30 +167,96 @@ impl ScriptRuntime {
     /// when `load` returns.
     fn start_bootstrap(&mut self, now_ms: i32) -> anyhow::Result<()> {
         let gametype_entry = self.gametype_entry.clone();
-        self.start(&gametype_entry, "main", now_ms)?;
+        self.start(&gametype_entry, "main", None, now_ms)?;
 
         let entry = self.entry.clone();
-        self.start(&entry, "main", now_ms)?;
+        self.start(&entry, "main", None, now_ms)?;
 
         // `CodeCallback_StartGameType` is defined in `_callbacksetup`, not in
         // the gametype script; it guards on `level.gametypestarted` and then
         // calls `level.callbackStartGameType`.
-        self.start(CALLBACK_SETUP, "CodeCallback_StartGameType", now_ms)
+        self.start(CALLBACK_SETUP, "CodeCallback_StartGameType", None, now_ms)
     }
 
-    /// Starts one entry point as a thread, checking it is installed first.
-    /// `Vm::start_thread` panics on a `FuncRef` that is not, and `--gametype`
-    /// is user input, so a gametype script that loads but defines no `main`
-    /// (or never pulls in `_callbacksetup`) has to fail the way a missing
-    /// file does: an error `main.rs` exits on, not a panic.
-    fn start(&mut self, path: &str, name: &str, now_ms: i32) -> anyhow::Result<()> {
+    /// Starts one entry point as a thread with `recv` as its `self`, checking
+    /// it is installed first. `Vm::start_thread` panics on a `FuncRef` that is
+    /// not, and `--gametype` is user input, so a gametype script that loads
+    /// but defines no `main` (or never pulls in `_callbacksetup`) has to fail
+    /// the way a missing file does: an error `main.rs` exits on, not a panic.
+    fn start(
+        &mut self,
+        path: &str,
+        name: &str,
+        recv: Option<Target>,
+        now_ms: i32,
+    ) -> anyhow::Result<()> {
         let f = self.vm.func_ref(path, name);
         if !self.vm.has_function(f) {
             anyhow::bail!("{path}.gsc defines no {name}()");
         }
         self.vm
-            .start_thread(&mut self.host, now_ms, f, None, vec![]);
+            .start_thread(&mut self.host, now_ms, f, recv, vec![]);
         Ok(())
+    }
+
+    /// Queues one client lifecycle event for the next `run_frame`. The
+    /// netcode's only way into script: a callback that ran inline from
+    /// `SV_ClientCommand` would reenter the VM mid-frame.
+    pub fn push_client_event(&mut self, ev: ClientEvent) {
+        self.host.client_events.push(ev);
+    }
+
+    /// The client's entity, once `Connect` has been drained. The object
+    /// table is the single owner of that fact: an entity at the slot's own
+    /// number with a `client` store is one `spawn_client` made.
+    pub fn client_entity(&self, slot: usize) -> Option<EntId> {
+        let id = EntId(u32::try_from(slot).ok()?);
+        self.host
+            .ents
+            .get(id)
+            .filter(|e| e.client.is_some())
+            .map(|_| id)
+    }
+
+    /// One queued client event. A callback the closure does not define is
+    /// logged and skipped: a gametype without one is still a serving map,
+    /// the same reading `load`'s missing-builtin pre-scan takes.
+    fn dispatch_client_event(&mut self, ev: ClientEvent, now_ms: i32) {
+        match ev {
+            ClientEvent::Connect(slot) => {
+                let id = match self.vm.with_cx(|cx| self.host.ents.spawn_client(cx, slot)) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        log::error!("client {slot}: no entity: {e:?}");
+                        return;
+                    }
+                };
+                self.start_callback("CodeCallback_PlayerConnect", id, now_ms);
+            }
+            ClientEvent::Begin(slot) => {
+                let Some(id) = self.client_entity(slot) else {
+                    log::warn!("client {slot}: begin with no entity, connect never ran");
+                    return;
+                };
+                let event = self.vm.with_cx(|cx| cx.intern_folded(BEGIN_NOTIFY));
+                self.vm.notify(id, event, &[]);
+            }
+            ClientEvent::Disconnect(slot) => {
+                // The callback runs first: it reads `self`, and freeing the
+                // slot ahead of it would hand it a dead entity.
+                if let Some(id) = self.client_entity(slot) {
+                    self.start_callback("CodeCallback_PlayerDisconnect", id, now_ms);
+                }
+                self.host.ents.free_client(slot);
+            }
+        }
+    }
+
+    /// One `_callbacksetup` entry point on a client's entity.
+    fn start_callback(&mut self, name: &str, id: EntId, now_ms: i32) {
+        if let Err(e) = self.start(CALLBACK_SETUP, name, Some(Target::Entity(id)), now_ms) {
+            log::error!("gsc: {e:#}");
+        }
     }
 
     /// The configstrings the script wrote (e.g. `setCullFog`, `ambientPlay`)
@@ -235,6 +306,12 @@ impl ScriptRuntime {
     /// One server frame of script.
     pub fn run_frame(&mut self, now_ms: i32) {
         self.host.level_time_ms = now_ms;
+        // Client events before everything else, in the order the netcode
+        // raised them: a `Begin` drained ahead of its own `Connect` finds no
+        // thread parked on the notify and strands the client silently.
+        for ev in std::mem::take(&mut self.host.client_events) {
+            self.dispatch_client_event(ev, now_ms);
+        }
         // Thinks before threads: `G_RunFrame` runs the entity pass first, so
         // a script reading `getEntArray` in the same frame sees the freed
         // entity already gone. Whether retail really orders it this way is
@@ -268,21 +345,43 @@ impl ScriptRuntime {
     /// table (no paks, no bsp, no missing-builtin pre-scan), and starts
     /// `main`. For this module's own tests.
     pub fn for_test(src: &str) -> ScriptRuntime {
+        Self::for_test_at("maps/mp/test", src)
+    }
+
+    /// `for_test` with the file path spelled out, for a test whose script has
+    /// to answer to a path the runtime dispatches into by name --
+    /// `CALLBACK_SETUP` and its `CodeCallback_*` entry points.
+    pub fn for_test_at(path: &str, src: &str) -> ScriptRuntime {
         let mut vm = Vm::new();
         let ast = vcod_gsc::parse::parse_file(src).expect("test script parses");
-        let fns = vcod_gsc::compile::compile_file(&ast, "maps/mp/test", vm.interner_mut())
+        let fns = vcod_gsc::compile::compile_file(&ast, path, vm.interner_mut())
             .expect("test script compiles");
         vm.install(fns).expect("test script installs");
         let host = GameHost::new(vec![String::new(); 2048]);
         let mut rt = ScriptRuntime {
             vm,
             host,
-            entry: "maps/mp/test".to_string(),
+            entry: path.to_string(),
             gametype_entry: String::new(),
         };
         let main = rt.vm.func_ref(&rt.entry, "main");
         rt.vm.start_thread(&mut rt.host, 0, main, None, vec![]);
         rt
+    }
+
+    /// Reads a field off an entity through the same routing script uses, as
+    /// its string value. Anything else comes back debug-rendered, so a failed
+    /// assertion says what the field actually held.
+    pub fn field_str(&mut self, ent: EntId, name: &str) -> String {
+        use vcod_gsc::Host;
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let atom = cx.intern_folded(name);
+            match host.get_field(cx, ent, atom) {
+                vcod_gsc::Value::String(s) => cx.resolve(s).to_string(),
+                other => format!("{other:?}"),
+            }
+        })
     }
 
     /// Reads a folded field off `level`.
@@ -391,6 +490,62 @@ mod tests {
             err.to_string().contains("defines no main()"),
             "unexpected error: {err:#}"
         );
+    }
+
+    /// The engine's side of the connect handshake is one notify and its exact
+    /// spelling. A miss does not error, it hangs the thread, so this test
+    /// exists to fail loudly if the constant is ever edited.
+    #[test]
+    fn the_begin_notify_is_spelled_begin() {
+        assert_eq!(BEGIN_NOTIFY, "begin");
+    }
+
+    /// Connect arms the callback's `waittill("begin")` and Begin releases it.
+    /// Order matters and the failure is silent: `Callback_PlayerConnect`
+    /// blocks on that notify as its second statement, so a Begin drained
+    /// before its Connect leaves the thread parked forever with nothing
+    /// logged.
+    #[test]
+    fn connect_arms_the_wait_and_begin_releases_it() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerConnect = ::c; }\n\
+             CodeCallback_PlayerConnect() { [[level.callbackPlayerConnect]](); }\n\
+             c() { self.statusicon = \"connecting\"; self waittill(\"begin\"); \
+                   self.statusicon = \"begun\"; }\n",
+        );
+        rt.push_client_event(ClientEvent::Connect(0));
+        rt.run_frame(50);
+        let ent = rt.client_entity(0).expect("connect allocated no entity");
+        assert_eq!(rt.field_str(ent, "statusicon"), "connecting");
+
+        rt.push_client_event(ClientEvent::Begin(0));
+        rt.run_frame(100);
+        assert_eq!(rt.field_str(ent, "statusicon"), "begun");
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+    }
+
+    /// Disconnect runs its callback on the entity and only then frees the
+    /// slot, so the callback still has a `self` to read and the next frame
+    /// finds the slot empty.
+    #[test]
+    fn disconnect_runs_the_callback_before_it_frees_the_slot() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerDisconnect = ::d; }\n\
+             CodeCallback_PlayerConnect() {}\n\
+             CodeCallback_PlayerDisconnect() { [[level.callbackPlayerDisconnect]](); }\n\
+             d() { level.gone = self getEntityNumber(); }\n",
+        );
+        rt.push_client_event(ClientEvent::Connect(3));
+        rt.run_frame(50);
+        assert!(rt.client_entity(3).is_some());
+
+        rt.push_client_event(ClientEvent::Disconnect(3));
+        rt.run_frame(100);
+        assert_eq!(rt.level_field("gone"), vcod_gsc::Value::Int(3));
+        assert!(rt.client_entity(3).is_none());
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
     }
 
     /// The object table has to survive past map load, so the runtime owns the
