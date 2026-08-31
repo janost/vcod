@@ -2,9 +2,10 @@
 //! engine indexer walks, so a name precached twice takes one slot and the
 //! slots come out in call order, which is what the retail capture pins.
 //!
-//! `precacheItem` is not here: it registers a `bg_itemlist` entry and
-//! writes configstring 8 rather than allocating a range, so it lives with
-//! the item registry.
+//! `precacheItem` (below) is the exception: it registers a `bg_itemlist`
+//! entry (`crate::items::Items`) and writes the whole configstring 8
+//! bitstring rather than allocating the next slot of a range, so it is not
+//! a range allocator like its neighbours here.
 
 use crate::configstrings::CsRange;
 use crate::game::host::GameHost;
@@ -19,6 +20,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("precachemenu", precache_menu),
     ("precacheheadicon", precache_head_icon),
     ("precachestatusicon", precache_status_icon),
+    ("precacheitem", precache_item),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -163,6 +165,21 @@ fn icon_index(
         .allocators
         .index(&mut host.configstrings, range, &text)?;
     Ok(Value::Int((slot - range.bounds().0 + 1) as i32))
+}
+
+/// `precacheItem(name)`, mirroring `RegisterItem` (0x4e504): registers
+/// `name` in the item table and rewrites the whole configstring 8
+/// bitstring (`SaveRegisteredItems`, 0x4ef08) from it.
+pub fn precache_item(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let name = name_arg(cx, args, "precacheItem takes an item name")?;
+    host.items.register(&name);
+    host.configstrings[8] = host.items.bitstring();
+    Ok(Value::Undefined)
 }
 
 #[cfg(test)]

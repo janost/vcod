@@ -559,6 +559,99 @@ high-water mark. Two facts fall out of that:
   entity think. During the map load the `SP_` functions call `G_FreeEntity`
   directly, so there is no such delay there.
 
+## 15. The item registry (`bg_itemlist`), configstring 8, VERIFIED
+
+`bg_itemlist` (`.data` 0x7b9d8, stride 0x30, `bg_numItems` = 70 at `.rodata`
+0x70804, `python3 tools/re/dump_itemlist.py`) carries a compiled-in
+classname for only five of its 70 rows: `item_ammo_stielhandgranate_open`
+(65), `item_ammo_stielhandgranate_closed` (66), `item_health_small` (67),
+`item_health` (68), `item_health_large` (69). Index 0 is blank. Indices
+1-64 hold placeholder classnames `emptyitem_"w01"` .. `emptyitem_"w64"`; a
+grep of the binary finds no `mp40_mp`-shaped string anywhere in it, so a
+real weapon classname reaches its slot only at runtime, from the mounted
+paks' weapon files, in an order the static dump cannot recover.
+
+**R1 (VERIFIED against two live captures):** a weapon's item index is its
+1-based index into configstring 7's weapon list
+(`crate::configstrings::WEAPON_LIST`). Decoding
+`crates/server/tests/fixtures/configstrings/mp_{pavlov,carentan}-dm.txt`
+line 13 (configstring 8) by `SaveRegisteredItems`' packing (below) and
+naming each set bit through `WEAPON_LIST` accounts for every bit with no
+leftovers and no cross-theatre contamination:
+
+```
+mp_pavlov   1ce0cfb40000000001  (17 bits)
+  0 <null>  6 fg42_mp  7 fg42_semi_mp  9 kar98k_mp  10 kar98k_sniper_mp
+  11 luger_mp  18 mosin_nagant_mp  19 mosin_nagant_sniper_mp  20 mp40_mp
+  21 mp44_mp  22 mp44_semi_mp  23 panzerfaust_mp  24 ppsh_mp
+  25 ppsh_semi_mp  27 rgd-33russianfrag_mp  30 stielhandgranate_mp
+  68 item_health
+
+mp_carentan 7df31f0d1000000001  (22 bits)
+  0 <null>  1 bar_mp  2 bar_slow_mp  4 colt_mp  6 fg42_mp  7 fg42_semi_mp
+  8 fraggrenade_mp  9 kar98k_mp  10 kar98k_sniper_mp  11 luger_mp
+  12 m1carbine_mp  13 m1garand_mp  16 mg42_bipod_stand_mp  20 mp40_mp
+  21 mp44_mp  22 mp44_semi_mp  23 panzerfaust_mp  28 springfield_mp
+  30 stielhandgranate_mp  31 thompson_mp  32 thompson_semi_mp  68 item_health
+```
+
+Pavlov (Russian v German) sets Russian and German weapons only; Carentan
+(American v German) sets American and German only. A wrong ordering would
+scatter names across theatres.
+
+**The packing (VERIFIED against both captures):** `SaveRegisteredItems`
+(`.text` 0x4ef08) walks `0..bg_numItems`, accumulates `1 << (i & 3)` into a
+nibble, and every fourth item emits one lowercase hex character (`+0x30`
+under 10, `+0x57` at or above), flushing the trailing partial nibble the
+same way. `bg_numItems` = 70 makes an 18-character string.
+
+**M1, is index 0 unconditional?** `ClearRegisteredItems` (`.text` 0x4eecc)
+resolves, via its relocations, to `__bzero(itemRegistered, 0x400)` — a
+whole-array zero with no special case for index 0. Index 0's classname is
+blank, so no `precacheItem` call can ever name it either. `RegisterItem`
+(`.text` 0x4e504, mirrored here as `Items::register`) is the only function
+that writes `itemRegistered` (`.bss` 0x18e0e0); its four call sites all
+pass a computed argument, never a literal 0, but two are inside
+`BG_GivePlayerWeapon` (`.text` 0x36a38, call sites at +0x4f and +0xe1),
+which runs for every weapon a player is given, including the default "no
+weapon" slot at index 0. INFERRED FROM DECOMPILATION that this is the
+actual trigger (not single-stepped); VERIFIED that both retail captures set
+bit 0 with no per-map factor in common besides the `dm` gametype.
+`Items::new` reproduces this by seeding index 0 registered unconditionally.
+
+**M2, does registering a weapon also register its alt-fire mode?** Yes,
+and it is engine/weapon-definition behaviour, not a placed-entity
+artifact — Task 8 owns these bits. In `RegisterItem`, after the item's own
+bit is set, it checks `bg_itemlist[index]`'s `giType` field (offset 0x20)
+against `1` (`IT_WEAPON`); on a match it calls `BG_GetInfoForWeapon`
+(`.text` 0x3ac68, resolved via `readelf -r`) for the weapon's definition,
+reads a "next" index at offset 0x2fc of that definition, registers it
+directly (bypassing the "already registered" short-circuit), precaches two
+of its model fields (offsets 0x188 and 0x31c) through `G_ModelIndex`
+(`.text` 0x66ed8), and repeats until the next index is 0 or loops back to
+where the chain started. `BG_GivePlayerWeapon` (0x36a38, `.text` 0x36b0a)
+reads the same offset-0x2fc field and explicitly registers it too when a
+player is given a weapon, which is why this is weapon-definition data and
+not something a map entity supplies. INFERRED FROM DECOMPILATION that
+offset 0x2fc specifically carries the alt-fire link (not single-stepped);
+VERIFIED that every `*_semi_mp`/`*_slow_mp` bit in both captures above sits
+at the `WEAPON_LIST` index immediately after its base weapon's bit
+(`bar_mp`/`bar_slow_mp`, `fg42_mp`/`fg42_semi_mp`, `mp44_mp`/
+`mp44_semi_mp`, `ppsh_mp`/`ppsh_semi_mp`, `thompson_mp`/
+`thompson_semi_mp`), which is the adjacency rule `Items::register`'s
+`alt_weapon_index` derives from `WEAPON_LIST` rather than a second
+hardcoded pairing table.
+
+**A gap this task does not close:** the same `RegisterItem` also precaches
+two further model fields for *every* item, at offsets 0x8 and 0xc of its
+`bg_itemlist` record — `item_health`'s offset-0x8 field is the compiled-in
+string `xmodel/health_medium`, matching the model retail's capture has
+queued at the corresponding model configstring slot. `Items::register`
+only reproduces the registration bit and the alt-fire link, as scoped; a
+weapon's own offset-0x8/0xc/0x188/0x31c model strings are runtime data from
+the weapon file this crate does not parse yet, so closing this needs that
+parser.
+
 ## Open, and worth a probe
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.

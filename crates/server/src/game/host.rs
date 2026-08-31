@@ -80,6 +80,10 @@ pub struct GameHost {
     /// `run_frame`. No stage in this sub-project acts on it; stage 6 ("the
     /// score limit ends the map") is where it does.
     pub exit_level: bool,
+    /// The registered-item bitset. `precacheItem` writes it and mirrors it
+    /// into configstring 8 (`crate::items`); nothing else reads or writes
+    /// it directly.
+    pub items: crate::items::Items,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -99,6 +103,7 @@ impl GameHost {
             script_log: Vec::new(),
             level_time_ms: 0,
             exit_level: false,
+            items: crate::items::Items::new(),
         }
     }
 
