@@ -14,14 +14,15 @@
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
+mod common;
+
+use common::{connect, step, ClientEnd, Queues};
 use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::msg::{PlayerState, NULL_USERCMD};
 use vcod_common::net::protocol::{Protocol, PROTOCOL_V1};
-use vcod_common::net::{NetClient, NetEvent, Transport};
+use vcod_common::net::{NetClient, NetEvent};
 
 /// Fields stage 4 knowingly does not reproduce, each with the reason. Empty
 /// is the goal. A gap that starts matching fails the guard below, so this
@@ -84,13 +85,18 @@ struct Capture {
     ps: Vec<i32>,
 }
 
-/// Reads `# key value` out of the header block's comma-separated clauses.
-fn header_value<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+/// Every `# key value` clause in the header block with this key. The caller
+/// insists on exactly one: the header is prose as well as data, so a second
+/// clause opening with the same word would otherwise decide the join
+/// silently, by being first.
+fn header_values<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
     text.lines()
         .take_while(|l| l.starts_with('#'))
         .flat_map(|l| l.trim_start_matches('#').split(','))
         .map(str::trim)
-        .find_map(|clause| clause.strip_prefix(key)?.strip_prefix(' '))
+        .filter_map(|clause| clause.strip_prefix(key)?.strip_prefix(' '))
+        .map(|v| v.trim_end_matches('.'))
+        .collect()
 }
 
 /// The committed retail capture. The fixture name carries the gametype, so
@@ -100,7 +106,14 @@ fn retail(map: &str) -> Capture {
     let path = format!("tests/fixtures/playerstate/{map}-{}.txt", cfg(map).gametype);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     let head = |k: &str| {
-        header_value(&text, k).unwrap_or_else(|| panic!("{path}: no {k:?} in the header"))
+        let found = header_values(&text, k);
+        assert_eq!(
+            found.len(),
+            1,
+            "{path}: the header has {} clauses opening with {k:?}, expected 1: {found:?}",
+            found.len()
+        );
+        found[0]
     };
     assert_eq!(head("map"), map, "{path}: header names another map");
     assert_eq!(
@@ -156,79 +169,53 @@ fn retail(map: &str) -> Capture {
         "{path}: the capture is not in Protocol::player_fields order"
     );
 
-    Capture {
+    let capture = Capture {
         team: head("joined").to_string(),
         weapon: head("weapon").to_string(),
         ps: ps.into_iter().map(|(_, v)| v).collect(),
-    }
-}
+    };
 
-// ------------------------------------------------------------- the in-process
-// client. `crates/server/tests/connect.rs` drives one the same way; this gate
-// keeps its own copy so the two stay independent.
-
-const ADDR: SocketAddr =
-    SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 31337);
-
-#[derive(Default)]
-struct Queues {
-    to_server: VecDeque<Vec<u8>>,
-    to_client: VecDeque<Vec<u8>>,
-}
-
-struct ClientEnd(Rc<RefCell<Queues>>);
-
-impl Transport for ClientEnd {
-    fn try_recv(&mut self, buf: &mut [u8]) -> Option<usize> {
-        let p = self.0.borrow_mut().to_client.pop_front()?;
-        buf[..p.len()].copy_from_slice(&p);
-        Some(p.len())
-    }
-    fn send(&mut self, data: &[u8]) {
-        self.0.borrow_mut().to_server.push_back(data.to_vec());
-    }
-}
-
-/// One exchange each way, then one client pump.
-fn step(
-    sv: &mut vcod_server::Server,
-    q: &Rc<RefCell<Queues>>,
-    cl: &mut NetClient<ClientEnd>,
-    now: Instant,
-) -> Vec<NetEvent> {
-    let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
-    for p in pending {
-        sv.handle_packet(ADDR, &p, now);
-    }
-    sv.tick(now);
-    for (to, p) in sv.take_outgoing() {
-        assert_eq!(to, ADDR);
-        q.borrow_mut().to_client.push_back(p);
-    }
-    cl.pump_at(now)
-}
-
-fn connect(
-    sv: &mut vcod_server::Server,
-    q: &Rc<RefCell<Queues>>,
-    now: &mut Instant,
-) -> NetClient<ClientEnd> {
-    let mut cl = NetClient::start(ClientEnd(q.clone()), *now);
-    for _ in 0..40 {
-        *now += Duration::from_millis(250);
-        let events = step(sv, q, &mut cl, *now);
-        if events.contains(&NetEvent::GamestateReady) {
-            return cl;
-        }
-        assert!(
-            !events.iter().any(|e| matches!(e, NetEvent::Dropped(_))),
-            "{events:?}"
-        );
-    }
-    panic!(
-        "no gamestate within 10 s of simulated time; state {:?}",
-        cl.state()
+    // The two clauses that steer the join are the two nothing else pins, so
+    // they are cross-checked against the capture itself: `_teams::restrict`
+    // spawns nobody for any other team, and `weapon` is a 1-based index into
+    // configstring 7, resolved through retail's own list because it is
+    // retail's index.
+    assert!(
+        capture.team == "allies" || capture.team == "axis",
+        "{path}: header joined {:?}, which never spawns a player",
+        capture.team
     );
+    let cs7 = retail_weapon_list(map);
+    let want = capture.ps[field_index(p, "weapon")];
+    assert!(
+        want >= 1,
+        "{path}: the capture carries weapon {want}, so it holds none"
+    );
+    let named = cs7
+        .split_whitespace()
+        .nth(want as usize - 1)
+        .unwrap_or_else(|| panic!("{path}: weapon {want} is past retail's configstring 7"));
+    assert_eq!(
+        named, capture.weapon,
+        "{path}: header says weapon {:?} but the capture spawned with {named:?}",
+        capture.weapon
+    );
+
+    capture
+}
+
+/// Configstring 7 out of the retail capture the stage 3 gate diffs, which is
+/// the list `playerState.weapon` indexes.
+fn retail_weapon_list(map: &str) -> String {
+    let path = format!(
+        "tests/fixtures/configstrings/{map}-{}.txt",
+        cfg(map).gametype
+    );
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    text.lines()
+        .find_map(|l| l.strip_prefix("7 "))
+        .unwrap_or_else(|| panic!("{path}: no configstring 7"))
+        .to_string()
 }
 
 /// Answers the stock team and weapon menus with what the capture was taken
@@ -239,6 +226,7 @@ struct Join<'a> {
     capture: &'a Capture,
     main_menu: String,
     answered: Vec<i32>,
+    answered_team: bool,
     answered_weapon_at: Option<Instant>,
     log: Vec<String>,
 }
@@ -249,6 +237,7 @@ impl<'a> Join<'a> {
             capture,
             main_menu: String::new(),
             answered: Vec::new(),
+            answered_team: false,
             answered_weapon_at: None,
             log: Vec::new(),
         }
@@ -286,6 +275,8 @@ impl<'a> Join<'a> {
                     .push(format!("answered menu {idx} ({menu}) with {reply}"));
                 if menu.starts_with("weapon_") {
                     self.answered_weapon_at = Some(now);
+                } else {
+                    self.answered_team = true;
                 }
             }
             _ => {}
@@ -297,27 +288,39 @@ impl<'a> Join<'a> {
             .is_some_and(|t| now.duration_since(t) >= SPAWN_SETTLE)
     }
 
+    /// What the join did, for the failure message.
     fn summary(&self) -> String {
-        let progress = match self.answered_weapon_at {
-            Some(_) => "the weapon menu was answered",
-            None => "our client never spawned: no weapon menu ever opened",
-        };
         let log = match self.log.is_empty() {
             true => "the server opened no script menu at all".to_string(),
             false => self.log.join("; "),
         };
-        format!("join: begin sent, {progress} ({log})")
+        format!("join: begin sent, {log}")
+    }
+
+    /// The path, not the state it ended in: a player that reached the
+    /// playerstate without being asked which team and which weapon did not
+    /// join through the stock menus, whatever its 103 fields say. Nothing
+    /// else in the gate constrains how the spawn happened.
+    fn findings(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.answered_team {
+            out.push("no team menu opened, so the client never answered one".to_string());
+        }
+        if self.answered_weapon_at.is_none() {
+            out.push("no weapon menu opened, so the client never spawned".to_string());
+        }
+        out
     }
 }
 
 /// Our playerstate at the same moment retail's was read: `begin`, both menu
 /// answers, then `SPAWN_SETTLE` of simulated time.
-fn ours(
+fn ours<'a>(
     map: &str,
-    capture: &Capture,
+    capture: &'a Capture,
     fs: vcod_common::pk3::Pk3Fs,
     bsp: &vcod_common::bsp::Bsp,
-) -> (PlayerState, String) {
+) -> (PlayerState, Join<'a>) {
     let fs = std::rc::Rc::new(fs);
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(map), now);
@@ -353,7 +356,7 @@ fn ours(
         .newest()
         .map(|s| s.ps.clone())
         .expect("the server sent no snapshot at all");
-    (ps, join.summary())
+    (ps, join)
 }
 
 // ------------------------------------------------------------------- the diff
@@ -368,33 +371,55 @@ fn ours(
 /// reads zero on every axis.
 fn check_spawn_shape(entities: &str, ps: &PlayerState, who: &str, out: &mut Vec<String>) {
     let p = &PROTOCOL_V1;
-    let yaw_of = |b: &std::collections::HashMap<String, String>| -> f32 {
-        b.get("angles")
-            .and_then(|a| a.split_whitespace().nth(1))
-            .and_then(|t| t.parse().ok())
-            .unwrap_or(0.0)
-    };
     let blocks = vcod_common::bsp::entity_blocks(entities);
-    let of_class = |class: &str| -> Vec<(Option<[f32; 3]>, f32)> {
+    // A missing or unreadable key is a fact about the map, not about the
+    // playerstate, and a default would quietly make every expectation below
+    // wrong. Both classes carry `origin` and an `angles` triple on the stock
+    // maps; anything else stops the run.
+    let of_class = |class: &str| -> Vec<([f32; 3], f32)> {
         blocks
             .iter()
             .filter(|b| b.get("classname").map(String::as_str) == Some(class))
             .map(|b| {
-                (
-                    b.get("origin")
-                        .and_then(|o| vcod_common::bsp::parse_vec3(o)),
-                    yaw_of(b),
-                )
+                let origin = b
+                    .get("origin")
+                    .and_then(|o| vcod_common::bsp::parse_vec3(o))
+                    .unwrap_or_else(|| panic!("{class} with no readable origin: {b:?}"));
+                let yaw = b
+                    .get("angles")
+                    .and_then(|a| a.split_whitespace().nth(1))
+                    .and_then(|t| t.parse::<f32>().ok())
+                    .unwrap_or_else(|| panic!("{class} with no readable angles yaw: {b:?}"));
+                (origin, yaw)
             })
             .collect()
     };
+
+    // Spawn-independent, so they are checked whether or not the origin lands
+    // on a spawn point: nothing else covers them, `SPAWN_SHAPE` having taken
+    // them out of the literal diff.
+    for f in ["delta_angles[0]", "delta_angles[2]"] {
+        let v = ps.field_i32(p, f);
+        if v != 0 {
+            out.push(format!(
+                "{f} {who} {v}, expected 0: only the yaw is set at spawn"
+            ));
+        }
+    }
+    for (i, v) in ps.viewangles(p).iter().enumerate() {
+        if *v != 0.0 {
+            out.push(format!(
+                "viewangles[{i}] {who} {v}, expected 0: the client subtracts delta_angles"
+            ));
+        }
+    }
 
     let origin = ps.origin(p);
     let spawns = of_class("mp_deathmatch_spawn");
     let Some((spawn_origin, spawn_yaw)) = spawns
         .iter()
-        .find(|(o, _)| o.is_some_and(|o| o[0] == origin[0] && o[1] == origin[1]))
-        .map(|(o, y)| (o.unwrap(), *y))
+        .find(|(o, _)| o[0] == origin[0] && o[1] == origin[1])
+        .copied()
     else {
         out.push(format!(
             "origin {who} {origin:?} is at none of the {} mp_deathmatch_spawn points",
@@ -404,9 +429,12 @@ fn check_spawn_shape(entities: &str, ps: &PlayerState, who: &str, out: &mut Vec<
     };
 
     // The player settles onto the floor under the spawn point during the
-    // three seconds before the capture; it never rises above it.
+    // three seconds before the capture and never rises above it. The band is
+    // picked, not measured: the two captures drop 8.875 and 7.875 units, and
+    // 64 is room for a spawn point set further above its floor.
     const MAX_DROP: f32 = 64.0;
-    if origin[2] > spawn_origin[2] + 1.0 || origin[2] < spawn_origin[2] - MAX_DROP {
+    const MAX_RISE: f32 = 1.0;
+    if origin[2] > spawn_origin[2] + MAX_RISE || origin[2] < spawn_origin[2] - MAX_DROP {
         out.push(format!(
             "origin[2] {who} {} is not within {MAX_DROP} below the spawn point's {}",
             origin[2], spawn_origin[2]
@@ -425,21 +453,6 @@ fn check_spawn_shape(entities: &str, ps: &PlayerState, who: &str, out: &mut Vec<
             "delta_angles[1] {who} {got} is not the yaw of the spawn point at {spawn_origin:?} \
              ({spawn_yaw} deg) from any intermission; expected one of {wanted:?}"
         ));
-    }
-    for f in ["delta_angles[0]", "delta_angles[2]"] {
-        let v = ps.field_i32(p, f);
-        if v != 0 {
-            out.push(format!(
-                "{f} {who} {v}, expected 0: only the yaw is set at spawn"
-            ));
-        }
-    }
-    for (i, v) in ps.viewangles(p).iter().enumerate() {
-        if *v != 0.0 {
-            out.push(format!(
-                "viewangles[{i}] {who} {v}, expected 0: the client subtracts delta_angles"
-            ));
-        }
     }
 }
 
@@ -463,6 +476,7 @@ fn check(map: &str) {
         fields: capture.ps.clone(),
         arrays: Vec::new(),
     };
+    let path = join.findings();
     let mut shape = Vec::new();
     check_spawn_shape(&bsp.entities, &retail_ps, "retail", &mut shape);
     check_spawn_shape(&bsp.entities, &ours, "ours", &mut shape);
@@ -481,6 +495,10 @@ fn check(map: &str) {
             || GAPS.iter().any(|(g, _)| *g == name)
     };
     let mut diffs = Vec::new();
+    // `legsAnim` carries `ANIM_TOGGLEBIT` (512) above the index, so retail's
+    // 634 is index 122 with the bit set; a mismatch here can be the parity
+    // rather than the wrong animation
+    // (docs/research/player-model-anim-system.md, "Animation indices").
     for (i, f) in p.player_fields.iter().enumerate() {
         if skip(f.name) {
             continue;
@@ -492,15 +510,19 @@ fn check(map: &str) {
     }
 
     // The field count is the number every later task moves, so it counts
-    // fields only; the spawn-shape findings are listed separately.
+    // fields only; the join-path and spawn-shape findings are listed
+    // separately, because neither is a field.
     assert!(
-        diffs.is_empty() && shape.is_empty(),
-        "{map}: {} playerstate field(s) differ from retail, {} spawn-shape finding(s)\n{join}\n{}",
+        diffs.is_empty() && shape.is_empty() && path.is_empty(),
+        "{map}: {} playerstate field(s) differ from retail, {} join-path and {} spawn-shape \
+         finding(s)\n{}\n{}",
         diffs.len(),
+        path.len(),
         shape.len(),
-        shape
-            .iter()
-            .map(|s| format!("[shape] {s}"))
+        join.summary(),
+        path.iter()
+            .map(|s| format!("[join] {s}"))
+            .chain(shape.iter().map(|s| format!("[shape] {s}")))
             .chain(diffs.iter().cloned())
             .collect::<Vec<_>>()
             .join("\n")
