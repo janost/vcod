@@ -141,11 +141,11 @@ pub fn get_ent(
 
 /// Two retail builtins share the name `spawn`, in two different tables:
 /// `spawn(classname, origin)` is free function 8 (0x5d268) and
-/// `self spawn(origin, angles)` is entity method 40 (0x455cc), which is
-/// `ClientSpawn`. Retail picks by call form; one name reaches dispatch here,
-/// so the receiver is what tells them apart. `Op::CallBuiltin` only supplies
-/// a receiver for an actual method call, so a free `spawn(...)` inside a
-/// client's own thread still lands on the free form.
+/// `self spawn(origin, angles)` is player method 40 (0x455cc). Retail picks
+/// by call form; one name reaches dispatch here, so the receiver is what
+/// tells them apart. `Op::CallBuiltin` only supplies a receiver for an actual
+/// method call, so a free `spawn(...)` inside a client's own thread still
+/// lands on the free form. Object model doc, section 20.
 pub fn spawn(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -158,18 +158,14 @@ pub fn spawn(
     }
 }
 
-/// `self spawn(origin, angles)` on a client entity (`ClientSpawn`, entity
-/// method 40, 0x455cc, which errors with `entity %i is not a player` when
-/// `ent->client` is null): move the client to the spawn point and restart
-/// its movement in whatever mode the script's `sessionstate` put it in.
+/// `self spawn(origin, angles)` on a client: the wrapper at 0x455cc, which
+/// rejects a receiver with no `ent->client` and then calls `ClientSpawn`
+/// (0x4268c). Moves the client to the spawn point and restarts its movement
+/// in whatever mode the script's `sessionstate` put it in. Object model doc,
+/// section 20.
 ///
-/// The weapon set is cleared here rather than by any script call. That is
-/// inferred, not read out of retail: the stock `spawnPlayer` gives the
-/// loadout *after* the spawn, and `giveWeapon` raises
-/// `Can not give player weapon without having an empty weapon slot` when a
-/// slot is taken, so a player who switched sides would fail to respawn if
-/// the previous life's pistol were still in the pistol slot.
-///
+/// Clearing the weapon set here is inferred from the stock scripts' ordering,
+/// not read out of `ClientSpawn`; the doc section says why it has to happen.
 /// The sim itself lives in `Server`, out of a builtin's reach, so the move
 /// leaves as a queued `SpawnRequest`.
 fn client_spawn(

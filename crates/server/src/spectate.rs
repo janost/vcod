@@ -161,10 +161,8 @@ impl ClientSim {
             };
             set("groundEntityNum", ground as i32);
         }
-        // What the client holds. `ps.weapons` is a bitset indexed by the
-        // 1-based configstring 7 position (retail reads it with
-        // `COM_BitCheck(ps+780, index)`, `PlayerCmd_giveWeapon` 0x43020) and
-        // `ps.weaponslots` is eight bytes packed into two words.
+        // What the client holds; both layouts are in the object model doc,
+        // section 20.
         set("weapons[0]", self.weapons.held as u32 as i32);
         set("weapons[1]", (self.weapons.held >> 32) as u32 as i32);
         let [lo, hi] = self.weapons.slot_words();

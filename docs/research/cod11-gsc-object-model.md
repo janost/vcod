@@ -1102,6 +1102,159 @@ order. So the alias names are weapon-file data, reached through the entity's
 (section 8's live counts), and `CsRange::SoundAlias`'s intern-or-append
 allocator is what keeps the second block from taking two more slots.
 
+## 20. The spawn path: `ClientSpawn`, the weapon builtins, `positionWouldTelefrag`
+
+What the stock `spawnPlayer()` reaches once a client has answered both menus,
+measured for stage 4 of the gsc gameplay program. Five builtins and one name
+table.
+
+### `spawn` is two builtins under one name
+
+Section 9 lists `spawn` as one of the three names that appear both in
+`functions` and in the player methods. The two entries are `functions[8]` at
+0x5d268, which is `spawn(classname, origin)` and allocates a map entity, and
+player method 40 at 0x455cc, which is `self spawn(origin, angles)`. VERIFIED,
+both read out of the tables `dump_builtins.py` walks.
+
+0x455cc is only the wrapper. It bound-checks the entity number against 0x3ff,
+indexes `g_entities` by 0x314, raises `entity %i is not a player` (0x73140)
+when `ent->client` is null, reads two vectors with `Scr_GetVector`, and tail
+calls `ClientSpawn` (0x4268c). VERIFIED: the `R_386_PC32` relocation at
+0x45652 names `ClientSpawn`, and `nm -D` puts that symbol at 0x4268c. Calling
+0x455cc itself "ClientSpawn" is wrong; it is the builtin around it.
+
+`spawnSpectator()` and `spawnIntermission()` in every stock gametype call the
+same `self spawn(origin, angles)` that `spawnPlayer()` does; the mode comes
+from the `sessionstate` client field they set immediately before it, not from
+a different builtin. VERIFIED from the shipped `maps/mp/gametypes/*.gsc`.
+
+Whether `ClientSpawn` clears `ps.weapons` is UNVERIFIED: I did not read
+0x4268c. The stock scripts require it to, which is INFERRED from their
+ordering: `spawnPlayer()` calls `spawn` first and `_teams::loadout()` after,
+and `giveWeapon` raises a script error on an occupied slot (below), so a
+player who changed side would fail to respawn if the previous life's pistol
+still occupied the pistol slot.
+
+### `positionWouldTelefrag(origin)`, `functions[96]` 0x5a834
+
+Takes one vector, no receiver, and returns 0 or 1 through `Scr_AddInt`. It
+adds two rodata vectors to the argument to build a box, hands the pair to
+`trap_EntitiesInBox` (0x63a78) with a 1024-entry result buffer and mask
+0x2000000, and walks the result. VERIFIED: the relocations at 0x5a84b, 0x5a8d8
+and 0x5a904/0x5a91b name `Scr_GetVector`, `trap_EntitiesInBox` and
+`Scr_AddInt`.
+
+Per entity in that result the answer is 1 when `ent->client` (gentity +0x158)
+is non-null and `client->ps.pm_type` (+0x4) is not above 5, and 0 when the
+walk runs out. INFERRED: that is the branch structure at 0x5a8f4-0x5a8fc, not
+a live test. Playerstate +0x4 is the `pm_type` offset `cod11-sound-system.md`
+and `cod11-hud-protocol.md` already read it at.
+
+Two of those filters have no analogue in a server that does not link entities
+into a world model and keeps `pm_type` outside the script object table; both
+omissions make the answer 1 where retail's is 0, never the reverse.
+
+### `weaponSlot`: the name table at `.data` 0x7c940
+
+Six pointers, in this order: `none` (0x70f6b), `primary` (0x70f8d),
+`primaryb` (0x70f84), `pistol` (0x70f7d), `grenade` (0x70f38),
+`smokegrenade` (0x70f70). VERIFIED, read through `.rel.data`. The six
+entries carry `R_386_RELATIVE` relocations, so the raw dwords are the addends
+and do resolve, unlike the `.data` function pointers section 1 warns about. A
+weapon's own slot is therefore 1..=5, index 0 being the empty one.
+
+The five non-empty names are exactly the ones retail's
+`Unknown weaponslot name %s. Valid weaponslots are "primary", "primaryb",
+"pistol", "grenade", and "smokegrenade"` (0x73220) lists. VERIFIED.
+
+Note the file offset: `.data` sits at vaddr 0x7b3a0 and file offset 0x7a3a0,
+so a table read at raw offset 0x7b940 is vaddr 0x7c940. Reading the file
+offset as an address lands on the `EV_*` event-name table instead, which
+begins `EV_MELEE_HIT`, `EV_MELEE_MISS`, `EV_FIRE_WEAPON_MG42`.
+
+### `ps.weapons` and `ps.weaponslots`
+
+`ps.weapons` (playerstate +780, two 32-bit netfields `weapons[0]` and
+`weapons[1]`) is a bitset indexed by the weapon's 1-based configstring 7
+position. `ps.weaponslots` (+788, netfields `weaponslots[0]` and
+`weaponslots[4]`) is eight bytes, one weapon index per slot from the table
+above, 0 for empty. VERIFIED against both committed captures in
+`crates/server/tests/fixtures/playerstate/`: on `mp_carentan` an americans
+join holds `colt_mp` (4), `fraggrenade_mp` (8) and `m1carbine_mp` (12) and
+`weapons[0]` is 4368 = bits 4, 8 and 12; `weaponslots[0]` is 0x04000C00,
+little-endian bytes `00 0C 00 04`, putting the carbine in `primary` and the
+colt in `pistol`, and `weaponslots[4]` is 8, the grenade. On `mp_pavlov` the
+russian loadout gives 134481920 (bits 11, 18, 27), 0x0B001200 and 27, which
+decodes the same way for `luger_mp`, `mosin_nagant_mp` and
+`rgd-33russianfrag_mp`.
+
+The three weapon files back the slot half independently: `m1carbine_mp` names
+`weaponSlot primary`, `colt_mp` `pistol`, `fraggrenade_mp` `grenade`.
+VERIFIED, read out of `weapons/mp/*` in `pak0.pk3`.
+
+### `giveWeapon`, player method 0, 0x43020
+
+Calls, in the order the relocations name them: `Scr_GetString` (0x6bd40),
+`BG_GetWeaponIndexForName` (0x3adc0), `Com_BitCheck` (0x6b164) on
+`client+0x30c`, which is `ps.weapons`, the same +780, then
+`BG_GetEmptySlotForWeapon` (0x3aaac) and `BG_GivePlayerWeapon` (0x36a38),
+and finally `Add_Ammo` for the difference between the weapon definition's
+start ammo (+0x198) and the current `ps.ammo` entry (`client+0x10c`, indexed
+by the definition's ammo type at +0x1a0). VERIFIED: every one of those is a
+named `R_386_PC32` relocation.
+
+A zero from `BG_GetEmptySlotForWeapon` raises
+`Can not give player weapon without having an empty weapon slot` (0x73180).
+INFERRED: that is the branch at 0x430c1, and whether re-giving a weapon the
+player already holds counts as an occupied slot is not measured. The
+`Com_BitCheck` result is carried in a register to the `Add_Ammo` call rather
+than used as a guard here.
+
+`BG_GetWeaponIndexForName`'s result is narrowed with `movzbl %al` at 0x43091
+and reaches `Com_BitCheck` with no test against zero. INFERRED, from that
+instruction sequence: a name no weapon file backs would set bit 0 and carry
+on rather than raising. `ps.ammo` itself has no netfield in the 1.1
+playerstate, so nothing this builtin writes there can reach a client.
+
+### `giveMaxAmmo`, player method 7, 0x43134
+
+`Scr_GetString`, `BG_GetWeaponIndexForName`, `Com_BitCheck`, then
+`BG_GetInfoForWeapon` (0x3ac68), `BG_GetAmmoTypeMax` (0x3aca0) and `Add_Ammo`
+(0x4ca10). VERIFIED from the relocations. It returns without doing anything
+when the `Com_BitCheck` fails. INFERRED, the branch at 0x431c3. Since
+`ps.ammo` is not a netfield, this builtin cannot move the wire at all.
+
+### `setSpawnWeapon`, player method 23, 0x452a4
+
+`Scr_GetString`, `BG_GetWeaponIndexForName`, `Com_BitCheck` on
+`client+0x30c`, then `ps.weapon` (+0xb0, netfield offset 176) takes the index
+and `ps.weaponstate` (+0xb4, offset 180) takes 0. VERIFIED for the two stores
+at 0x45339 and 0x45345 and for the netfield offsets in
+`crates/common/src/net/fields_v1.rs`. That the stores are skipped for a
+weapon the player does not hold is INFERRED, the branch at 0x4532f.
+
+### `setViewmodel` reaches `ps.viewmodelIndex`
+
+`setViewmodel` (player method 17, 0x4512c) resolves its argument through
+`G_ModelIndex` (0x66ed8) and stores the result at `client+0x2170`. VERIFIED:
+the relocation at 0x4519b names `G_ModelIndex` and the store is at 0x451a7.
+That word is copied into `ps.viewmodelIndex` (+0xbc, netfield offset 188) at
+0x40faa/0x40fb4. INFERRED, read off those two instructions rather than
+measured.
+
+The value is therefore a model configstring index, 1-based on base 268 as
+`clientstate-wire-format.md`'s configstring map has it. VERIFIED against the
+committed fixtures: the retail playerstate captures carry `viewmodelIndex` 52
+on `mp_pavlov` and 82 on `mp_carentan`, and configstrings 320 and 350 in the
+matching `crates/server/tests/fixtures/configstrings/` files are
+`xmodel/viewmodel_hands_russian` and `xmodel/viewmodel_hands_us`. The name
+comes from the character script the team model chain runs, e.g.
+`character/mp_russian_conscript01.gsc`'s
+`self setViewmodel("xmodel/viewmodel_hands_russian")`. VERIFIED, read out of
+`pak5.pk3`. So the field follows the player's nationality, not the weapon:
+`m1carbine_mp`'s own `handModel` is `viewmodel_hands_new`, which is not what
+the capture carries.
+
 ## Open, and worth a probe
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.

@@ -1033,9 +1033,10 @@ impl Server {
                 let Some(sim) = c.sim.as_mut() else {
                     continue;
                 };
-                match s.player {
-                    true => sim.become_player(s.origin, s.yaw_deg, cmd_angles),
-                    false => sim.become_spectator(s.origin, s.yaw_deg, cmd_angles),
+                if s.player {
+                    sim.become_player(s.origin, s.yaw_deg, cmd_angles);
+                } else {
+                    sim.become_spectator(s.origin, s.yaw_deg, cmd_angles);
                 }
             }
         }

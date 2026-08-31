@@ -107,9 +107,14 @@ pub fn open_menu(
 }
 
 /// The weapon name argument every weapon builtin takes, resolved to its
-/// 1-based configstring 7 index. Retail's lookup is `BG_FindWeaponIndex`
-/// off a `Scr_GetString`; a name no weapon file backs comes back 0 there and
-/// as an error here.
+/// 1-based configstring 7 index.
+///
+/// Divergence, deliberate: retail narrows `BG_GetWeaponIndexForName`'s result
+/// with `movzbl` and uses it with no zero check, so a name no weapon file
+/// backs looks like it sets bit 0 and carries on (object model doc, section
+/// 20). That reading is control flow, not a measurement, so this raises
+/// instead of reproducing an inferred behaviour. The cost is that a typo kills
+/// the calling thread where retail may keep it alive.
 fn weapon_argument(cx: &Cx, args: &[Value]) -> Result<(String, usize), ErrorKind> {
     let Some(Value::String(name)) = args.first() else {
         return Err(ErrorKind::BadType("that builtin takes a weapon name"));
@@ -119,18 +124,15 @@ fn weapon_argument(cx: &Cx, args: &[Value]) -> Result<(String, usize), ErrorKind
     Ok((name, index))
 }
 
-/// `self giveWeapon(name)` (`PlayerCmd_giveWeapon` 0x43020): set the
-/// weapon's bit in `ps.weapons` (`COM_BitCheck` on `client+0x30c`, which is
-/// `ps+780`), put it in the slot its weapon file's `weaponSlot` names, and
-/// top the weapon's ammo up to the file's start ammo.
+/// `self giveWeapon(name)` (`PlayerCmd_giveWeapon` 0x43020): hold the weapon
+/// and fill the slot its weapon file's `weaponSlot` names. Object model doc,
+/// section 20.
 ///
-/// The ammo is where this stops: `ps.ammo` is at `ps+268` and has no
-/// netfield in the 1.1 playerstate, so nothing it holds can reach a client.
-/// The one behaviour deliberately not reproduced is retail's
-/// `Can not give player weapon without having an empty weapon slot` script
-/// error (0x73180), which fires when `BG_GivePlayerWeapon` finds the slot
-/// taken: whether giving a weapon the player already holds counts as taken
-/// is unmeasured, and a wrong guess kills the spawning thread outright.
+/// Two of retail's effects are left out. Its ammo top-up cannot reach a
+/// client, `ps.ammo` having no netfield in 1.1. And its
+/// `Can not give player weapon without having an empty weapon slot` error is
+/// not reproduced because whether re-giving a held weapon counts as an
+/// occupied slot is unmeasured, and a wrong guess kills the spawning thread.
 pub fn give_weapon(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -144,10 +146,9 @@ pub fn give_weapon(
     Ok(Value::Undefined)
 }
 
-/// `self giveMaxAmmo(name)` (`PlayerCmd_giveMaxAmmo` 0x43134): tops up
-/// `ps.ammo` for a weapon the player already holds and touches nothing else.
-/// `ps.ammo` has no netfield, so this cannot move the wire; the name is
-/// still resolved, so a typo errors here as it does on retail.
+/// `self giveMaxAmmo(name)` (`PlayerCmd_giveMaxAmmo` 0x43134): retail tops up
+/// `ps.ammo` and touches nothing else, and `ps.ammo` has no netfield, so
+/// there is nothing here for the wire to carry. Object model doc, section 20.
 pub fn give_max_ammo(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -159,10 +160,9 @@ pub fn give_max_ammo(
     Ok(Value::Undefined)
 }
 
-/// `self setSpawnWeapon(name)` (0x452a4): `ps.weapon = index` and
-/// `ps.weaponstate = 0`, but only for a weapon the player already holds —
-/// retail's `COM_BitCheck(ps.weapons, index)` guard, which is why the stock
-/// `spawnPlayer` gives the weapon first.
+/// `self setSpawnWeapon(name)` (0x452a4): `ps.weapon = index`, for a weapon
+/// the player already holds. `ps.weaponstate` is retail's other store and is
+/// already 0 in a null playerstate. Object model doc, section 20.
 pub fn set_spawn_weapon(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -180,16 +180,18 @@ pub fn set_spawn_weapon(
 
 /// `positionWouldTelefrag(origin)` (free function 96, 0x5a834): the player
 /// bounding box at `origin` against every player already standing there.
-/// Retail builds `origin + mins`/`origin + maxs` from one pair of rodata
-/// vectors, hands them to the area query, and answers 1 for the first entity
-/// in the result with a non-null `ent->client` and `ps.pm_type <= 5`.
+/// Object model doc, section 20.
 ///
-/// Two of retail's filters have nothing to test here. Its area query returns
-/// only entities linked into the world, and nothing links a client entity
-/// yet; and `pm_type` lives in the sim, not in the object table, so a dead
-/// or spectating player is not told apart from a live one. Both make this
-/// answer 1 where retail answers 0, never the reverse, so a spawn point is
-/// refused a little too eagerly rather than handed out on top of somebody.
+/// Three of retail's inputs are missing here, and all three err the same way.
+/// Its area query returns only entities linked into the world, and nothing
+/// links a client entity yet. Its `pm_type <= 5` filter has nothing to read,
+/// `pm_type` living in the sim rather than the object table, so a dead or
+/// spectating player is not told apart from a live one. And a client entity's
+/// `origin` field is only written by `spawn`, never synced from the sim, so
+/// this tests where each client last spawned rather than where it now is.
+/// Each makes the answer 1 where retail's is 0, never the reverse, so a spawn
+/// point is refused a little too eagerly rather than handed out on top of
+/// somebody.
 pub fn position_would_telefrag(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -238,6 +240,20 @@ mod tests {
     /// A spawn origin overlapping a live player is refused; one clear of every
     /// player is allowed. The stage gate has a single client and can never tell
     /// these apart, which is why this test exists rather than relying on it.
+    ///
+    /// The receiver `b` deliberately stands 512 units away from every origin
+    /// asked about, and the player that occupies them is `a`. An
+    /// implementation that consulted only the receiver would answer 0 to all
+    /// four questions and fail here; one that walks every client answers the
+    /// first two 1 and the last two 0. Putting both players on the same spot
+    /// would let receiver-only pass, which is the whole failure mode this test
+    /// exists to catch.
+    ///
+    /// The two near cases pin the box rather than just its existence: the
+    /// player box is 30 units across and 70 tall (`pmove::HALF_WIDTH`,
+    /// `Stance::height`), so two boxes 24 apart on one axis overlap and two 40
+    /// apart do not. A width used where a height belongs, or the reverse,
+    /// moves one of these.
     #[test]
     fn a_spawn_point_inside_another_player_would_telefrag() {
         let (mut vm, mut host) = fixture();
@@ -245,18 +261,16 @@ mod tests {
             let a = host.ents.spawn_client(cx, 0).unwrap();
             set_origin(&mut host, cx, a, [0.0, 0.0, 0.0]);
             let b = host.ents.spawn_client(cx, 1).unwrap();
-            set_origin(&mut host, cx, b, [0.0, 0.0, 0.0]);
+            set_origin(&mut host, cx, b, [512.0, 0.0, 0.0]);
+            let recv = Some(Target::Entity(b));
+            let ask = |host: &mut GameHost, cx: &mut Cx, at: [f32; 3]| {
+                position_would_telefrag(host, cx, recv, &[Value::Vector(at)]).unwrap()
+            };
 
-            let here = Value::Vector([0.0, 0.0, 0.0]);
-            assert_eq!(
-                position_would_telefrag(&mut host, cx, Some(Target::Entity(b)), &[here]).unwrap(),
-                Value::Int(1)
-            );
-            let far = Value::Vector([512.0, 0.0, 0.0]);
-            assert_eq!(
-                position_would_telefrag(&mut host, cx, Some(Target::Entity(b)), &[far]).unwrap(),
-                Value::Int(0)
-            );
+            assert_eq!(ask(&mut host, cx, [0.0, 0.0, 0.0]), Value::Int(1));
+            assert_eq!(ask(&mut host, cx, [24.0, 0.0, 0.0]), Value::Int(1));
+            assert_eq!(ask(&mut host, cx, [40.0, 0.0, 0.0]), Value::Int(0));
+            assert_eq!(ask(&mut host, cx, [512.0, 512.0, 0.0]), Value::Int(0));
         });
     }
 

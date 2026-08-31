@@ -6,10 +6,8 @@
 
 use vcod_common::pk3::Pk3Fs;
 
-/// `weaponSlot` names, in the order of the retail name table at
-/// `game.mp.i386.so` `.data` 0x7b940, whose first entry is `"none"` — which
-/// is why a weapon's own slot is 1..=5. The five names are the ones retail's
-/// `Unknown weaponslot name %s` message lists (0x73220).
+/// The retail `weaponSlot` name table, `.data` 0x7c940. Index 0 is `"none"`,
+/// so a weapon's own slot is 1..=5. Object model doc, section 20.
 pub const SLOT_NAMES: [&str; 6] = [
     "none",
     "primary",
@@ -19,9 +17,8 @@ pub const SLOT_NAMES: [&str; 6] = [
     "smokegrenade",
 ];
 
-/// `ps.weaponslots` is eight bytes: two 32-bit netfields at `ps+788` and
-/// `ps+792` (`crates/common/src/net/fields_v1.rs`, `weaponslots[0]` and
-/// `weaponslots[4]`), indexed by the slot enum above.
+/// `ps.weaponslots` is eight bytes carried by the two 32-bit netfields
+/// `weaponslots[0]` and `weaponslots[4]`.
 pub const NUM_SLOTS: usize = 8;
 
 /// One player's weapons, in the wire's own terms.
@@ -29,6 +26,7 @@ pub const NUM_SLOTS: usize = 8;
 pub struct PlayerWeapons {
     /// `ps.weapons`: bit N set for weapon index N, the 1-based configstring 7
     /// position. Two 32-bit netfields, so bit 63 is the highest that travels.
+    /// Decoded against the retail captures in the object model doc, section 20.
     pub held: u64,
     /// `ps.weaponslots`: the weapon index occupying each slot, 0 for empty.
     pub slots: [u8; NUM_SLOTS],
@@ -64,8 +62,7 @@ impl PlayerWeapons {
 
 /// The `weaponSlot` a weapon file names, as its index in [`SLOT_NAMES`].
 /// `None` when there are no paks to read, when the file has no `weaponSlot`
-/// key, or when it names a slot the table does not have, which is retail's
-/// `Unknown weapon slot "%s" in "%s"` (0x71e81).
+/// key, or when it names a slot the table does not have.
 pub fn weapon_slot(fs: Option<&Pk3Fs>, name: &str) -> Option<usize> {
     let bytes = fs?.read(&format!("weapons/mp/{name}"))?;
     let map = vcod_common::xmodel::parse_weapon(&String::from_utf8_lossy(&bytes));
