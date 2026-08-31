@@ -145,6 +145,26 @@ mod tests {
         });
     }
 
+    /// The value is the only quoted argument on the line, so a `"` inside it
+    /// would close the argument where it stands and leave the rest of the
+    /// value as trailing tokens. Retail rewrites each one to `'` (0x447b2);
+    /// this is the one behaviour of `setClientCvar` no capture shows, since
+    /// no stock call passes a quote.
+    #[test]
+    fn a_quote_in_a_cvar_value_cannot_close_its_own_argument() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn_client(cx, 0).unwrap();
+            let name = Value::String(cx.intern_exact("cg_objectiveText"));
+            let value = Value::String(cx.intern_exact("say \"hi\" now"));
+            set_client_cvar(&mut host, cx, Some(Target::Entity(e)), &[name, value]).unwrap();
+            assert_eq!(
+                host.client_commands,
+                vec![(0, "v cg_objectiveText \"say 'hi' now\"".to_string())]
+            );
+        });
+    }
+
     /// A menu nobody precached has no slot to send, which is retail's
     /// `Menu '%s' was not precached` script error (0x5c78b), and a
     /// non-client entity is not addressable at all.

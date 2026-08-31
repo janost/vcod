@@ -105,18 +105,24 @@ answering the team menu produces `v g_scriptMainMenu "weapon_russian"` then
 `t 1`.
 
 VERIFIED that `t` is the wire form of the script's `openMenu` and `v` of its
-`setClientCvar`, from the two builtins in `game.mp.i386.so`. `openMenu`
-(`0x453f4`) sends `va("t %i", GScr_GetScriptMenuIndex(name))`, format string at
-`0x731f8`; the menu's name never reaches the wire. `setClientCvar` (`0x446e0`)
-sends `va("v %s \"%s\"", name, value)`, format string at `0x73300`, which is
-why the name is bare and the value quoted. VERIFIED that it rewrites a `"`
-inside the value as `'` first (`0x447b2`), so the value cannot close its own
-quoted argument.
+`setClientCvar`, from the format strings the two builtins in
+`game.mp.i386.so` pass to `trap_SendServerCommand`: `openMenu` (`0x453f4`)
+uses `t %i` at `0x731f8`, `setClientCvar` (`0x446e0`) uses `v %s "%s"` at
+`0x73300`, which is why the name is bare and the value quoted. VERIFIED that
+`openMenu`'s `%i` is `GScr_GetScriptMenuIndex(name)`'s return value, so the
+menu's name never reaches the wire.
 
-VERIFIED that `GScr_GetScriptMenuIndex` (`0x5c73c`) reads configstrings
-`0x49c + i` for `i` in `0..=31` and returns the first `i` whose text matches the
-name, and that a name in none of them raises the script error
-`Menu '%s' was not precached` (`0x771f2`). `0x49c` is 1180.
+INFERRED that `setClientCvar` rewrites a `"` inside the value as `'` before
+formatting it (`0x447b2`), so the value cannot close its own quoted argument:
+that is a branch and its position in the instruction stream, and no capture
+holds a value with a quote in it.
+
+VERIFIED that `GScr_GetScriptMenuIndex` (`0x5c73c`) reads its candidates out
+of configstrings `0x49c + i`, and that `0x49c` is 1180. VERIFIED that the
+not-found path formats the script error `Menu '%s' was not precached`
+(`0x771f2`). INFERRED, from the loop's compare-and-branch, that `i` runs
+`0..=31` and that the returned index is the first slot whose text matches the
+name.
 
 The client answers with the `mr <serverId> <menu index> <response>` client
 command, quoting back the index `t` named. Answering `t 0` with `allies` and the
@@ -125,13 +131,21 @@ that menu's nationality spawns the player; `--save-playerstate` does exactly
 that.
 
 `Cmd_MenuResponse_f` (`0x486d8`) turns that command into a two-argument
-`notify(player, "menuresponse", menu, response)`. VERIFIED that the first
-argument is the menu's *name*, not the index the client sent: the handler reads
-configstring `0x49c + index` back into a buffer (`0x48790`) and passes that
-string. That is what lets a gametype compare it against `game["menu_team"]` and
-hand it straight back to `openMenu`, which `dm.gsc` does at lines 245 and 340.
-The rest of the handler is INFERRED, read off the disassembly rather than run
-live:
+`notify(player, "menuresponse", menu, response)`.
+
+VERIFIED that the first argument is the menu's *name*, not the index the
+client sent. The evidence is the cross-check, not the disassembly: the capture
+above shows retail answering `mr <sid> 0 allies` with the weapon menu, and
+`dm.gsc` (`pak5.pk3`) can only get there by comparing that first argument
+against `game["menu_team"]` at `:245`, which `:142` builds as the name string
+`"team_" + game["allies"] + game["axis"]`; `:340` hands the same argument back
+to `openMenu`, and `:1102` has the script raise the notify itself with a menu
+name in that position. An index would match nothing and the loop would spin.
+INFERRED that the mechanism is a read of configstring `0x49c + index` back
+into the buffer the notify argument is taken from (`0x48790`).
+
+The rest of the handler is INFERRED too, read off the disassembly rather than
+run live:
 
 - an argument count other than 4 sends the notify with an empty menu name and
   the response `"bad"`, without reading the serverId at all (`0x486ed`);

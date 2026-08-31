@@ -140,3 +140,8 @@ caller's `self`. It does, through a plain call, a `[[f]]()` call and a
 `Callback_PlayerConnect` opens on `self.statusicon`. The receiver is `level`
 rather than a spawned entity so the probe needs no object table and runs in
 this crate.
+
+`client-probes/` holds probes that measure from `Callback_PlayerConnect` and
+so need a client to connect before they log anything. `capture_probes.sh`
+cannot drive one and `semantics_ab.rs` does not pair them; that directory's
+own README carries the two-shell run recipe and each probe's measurement.

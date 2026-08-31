@@ -194,18 +194,25 @@ are the same function, which is the "read-only after spawn" guard.
 `pers` is type 7, an object handle, which is how `self.pers["team"]` works
 without the engine knowing anything about the key.
 
-The engine, not script, puts that handle there: `ClientConnect` (`0x4246c`)
-saves its second argument across the `bzero` that clears `gclient_t` and stores
-it back into `+0x20e8`, which is `pers`'s own offset (`0x4250f`). VERIFIED live
-on the retail 1.1d server with a probe gametype: inside `Callback_PlayerConnect`
-and *before* its `waittill("begin")`, `isdefined(self.pers)` is true while
+The engine, not script, puts that handle there. VERIFIED live on the retail
+1.1d server with `crates/gsc/tests/fixtures/semantics/client-probes/probe_pers.gsc`,
+run 2026-08-31 on mp_pavlov with one connected client (that directory's README
+carries the recipe and the full log): inside `Callback_PlayerConnect` and
+*before* its `waittill("begin")`, `isdefined(self.pers)` is true while
 `isdefined(self.pers["team"])` is false, and `self.name` already holds the
-connecting client's userinfo name. That matters because no stock gametype ever
-creates `pers`: `dm.gsc:202` reads `self.pers["team"]` as its first use, and on
-that same run reading an index off a genuinely undefined field is fatal —
-`undefined is not an array, string, or vector`, which took the server down.
-So a client entity is unusable by script unless it is handed both a `name` and
-an indexable `pers` at connect.
+connecting client's userinfo name. VERIFIED on the same run that reading an
+index off a genuinely undefined field is fatal — `undefined is not an array,
+string, or vector`, which took the server down.
+
+INFERRED as the mechanism, read off control flow rather than run: `ClientConnect`
+(`0x4246c`) saves its second argument across the `bzero` that clears
+`gclient_t` and stores it back into `+0x20e8` (`0x4250f`), which is `pers`'s
+own offset in the table above.
+
+That the engine has to supply it matters because no stock gametype ever creates
+`pers`: `dm.gsc:202` reads `self.pers["team"]` as its first use. So a client
+entity is unusable by script unless it is handed both a `name` and an indexable
+`pers` at connect.
 
 ### HUD element fields, 0x744e0
 

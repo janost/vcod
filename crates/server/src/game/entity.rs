@@ -156,7 +156,15 @@ impl ObjectTable {
         // engine writes the handle in `ClientConnect` (0x4250f), and every
         // gametype's first act is to read `self.pers["team"]` off it without
         // creating it. Measured live on the retail 1.1d server: defined
-        // before `begin`, with `pers["team"]` undefined inside it.
+        // before `begin`, with `pers["team"]` undefined inside it
+        // (docs/research/cod11-gsc-object-model.md, "Client fields").
+        //
+        // A fresh array every call, where retail's handle is what survives
+        // the `gclient_t` reset -- that is the whole point of `pers`, whose
+        // contents outlive a round. Not measured, and equivalent today only
+        // because nothing yet re-runs `spawn_client` on a live client: a map
+        // change or a round restart, neither of which exists, is where the
+        // two readings part.
         client[pers_index()] = Value::Array(cx.new_array());
         self.ents[slot] = Some(GEntity {
             engine: vec![Value::Undefined; engine_slot_count()],

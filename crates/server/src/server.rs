@@ -200,16 +200,21 @@ fn oob_arg(rest: &[u8]) -> String {
 const MAX_MENUS: i32 = 31;
 
 /// `mr <serverId> <menuIndex> <response>`, exactly four arguments, the
-/// index a slot in `CsRange::Menu`.
+/// index a slot in `CsRange::Menu`. The response passes through unparsed: it
+/// is a string the gametype compares, not something the server reads.
 ///
-/// Retail is looser than this in two places, and neither reaches a stock
-/// gametype: `Cmd_MenuResponse_f` (0x486d8) answers a wrong argument count
-/// with a `("", "bad")` notify without even reading the serverId, and an
-/// index past 31 with argv[2]'s own digits in place of the menu name. Both
-/// are INFERRED, read off the disassembly rather than run live, and both
-/// produce a menu name no gametype's `menuresponse` loop compares equal to,
-/// so dropping them costs nothing a script can see. The stale-serverId drop
-/// is retail's own.
+/// Retail is looser than this in three places, none of which a stock
+/// gametype reaches. Two are in `Cmd_MenuResponse_f` (0x486d8), INFERRED
+/// from the disassembly rather than run live: a wrong argument count gets a
+/// `("", "bad")` notify without the serverId even being read, and an index
+/// past 31 gets argv[2]'s own digits in place of the menu name. Both produce
+/// a menu name no `menuresponse` loop compares equal to, so dropping them
+/// costs nothing a script can see. The third is the tokenizer: retail's
+/// `Cmd_Argv` strips quotes, so `mr 7 3 "allies"` is a valid response there
+/// and is rejected here. Nothing in the stock corpus quotes a menu response,
+/// and unquoting without a measurement of what else that tokenizer does to
+/// an argument would be inventing a format. The stale-serverId drop is the
+/// one retail shares.
 fn parse_menu_response(cmd: &str, server_id: i32) -> Option<(i32, String)> {
     let mut it = cmd.split_whitespace();
     if it.next()? != "mr" {
@@ -1309,10 +1314,21 @@ mod tests {
     /// `mr <serverId> <menuIndex> <response>`, exactly four arguments.
     /// Retail's stale-serverId drop is the one this reproduces exactly; the
     /// other three shapes it drops, retail turns into a notify no stock
-    /// gametype tests (see `parse_menu_response`).
+    /// gametype tests (see `parse_menu_response`). The response comes back
+    /// verbatim: the gametype compares it against `"allies"` and weapon
+    /// names, so anything done to it here would be done behind the script's
+    /// back.
     #[test]
     fn mr_needs_four_args_a_live_serverid_and_a_bounded_index() {
-        assert!(parse_menu_response("mr 7 3 allies", 7).is_some());
+        assert_eq!(
+            parse_menu_response("mr 7 3 allies", 7),
+            Some((3, "allies".to_string()))
+        );
+        assert_eq!(
+            parse_menu_response("mr 7 0 mosin_nagant_mp", 7),
+            Some((0, "mosin_nagant_mp".to_string())),
+            "a weapon response is a string, not a token the server knows"
+        );
         assert!(
             parse_menu_response("mr 6 3 allies", 7).is_none(),
             "stale serverId"
