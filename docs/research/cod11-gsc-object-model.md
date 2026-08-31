@@ -730,6 +730,73 @@ same pool with an owner; both need clients, so neither is implemented.
 `thread addBotClients()` is commented out in the shipped `dm.gsc`, so nothing
 in the stock bootstrap reaches `addTestClient`.
 
+## 17. Placed weapons register their item at spawn, before any script runs
+
+A map's placed weapon never reaches `spawns` at all. `G_CallSpawn`'s second
+case (section 7), which runs before the `spawns` table is even consulted,
+matches the classname against `bg_itemlist` with `strcmp`; a hit calls
+`G_SpawnItem` (0x4e634) with the entity and the matched record. VERIFIED
+from the binary: `G_SpawnItem` computes the item's index from the record's
+own offset into the array (`sub bg_itemlist,%eax` at 0x4e676, an `R_386_32`
+relocation onto `bg_itemlist`, giving the byte offset; `imul $0xaaaaaaab;
+sar $0x4` at 0x4e67b/0x4e689, the reciprocal for dividing that offset by
+the 0x30 stride) and calls `RegisterItem` (0x4e504) with it at 0x4e68d — an
+intra-module call the linker already resolved, so objdump names the target
+directly with no relocation to chase. Neither `G_SpawnItem` nor
+`RegisterItem` frees the entity, unlike the five classnames in section 13,
+so the placed weapon stays live for script to find later.
+
+`bg_itemlist`'s classname field for a weapon slot is not the
+`WEAPON_LIST`/configstring-7 name (`fg42_mp`) but `mpweapon_fg42` — one
+`mpweapon_` prefix short of it:
+
+- VERIFIED from the shipped weapon files: `weapons/mp/fg42_mp`,
+  `weapons/mp/kar98k_mp` and `weapons/mp/panzerfaust_mp` (pak0) each carry a
+  `radiantName` field reading `mpweapon_fg42`, `mpweapon_kar98k` and
+  `mpweapon_panzerfaust` respectively — the classname a mapper places, not
+  the classname the item registers under.
+- VERIFIED from both gate maps' entity lumps: `maps/MP/mp_pavlov.bsp`
+  (pak5) places two `mpweapon_fg42`, eight `mpweapon_panzerfaust` and two
+  `mpweapon_mp44` blocks; `maps/MP/mp_carentan.bsp` (pak4) places two
+  `mpweapon_fg42` and eight `mpweapon_panzerfaust`.
+- VERIFIED from the shipped `maps/MP/gametypes/_teams.gsc` (pak5):
+  `restrictPlacedWeapons` calls `deletePlacedEntity("mpweapon_fg42")` and
+  `deletePlacedEntity("mpweapon_panzerfaust")` when the matching
+  `scr_allow_*` cvar is unset, and `deletePlacedEntity` is
+  `getentarray(classname, "classname")` followed by `.delete()` on each
+  hit. This is why retail's configstring 8 keeps the `fg42_mp`/
+  `panzerfaust_mp` bits even though the map's placed copies are gone by the
+  time a round starts: registration already happened at spawn, and
+  `delete()` only frees the entity a tenth of a second later (section 14),
+  not the item.
+
+INFERRED FROM DECOMPILATION, the one link not closed: I have not traced the
+function that copies a weapon's `radiantName` into its `bg_itemlist` row at
+weapon-file-load time — a raw-pointer scan found `radiantName` as a field
+name inside a weapon-definition table sitting in `.data` near
+`bg_itemlist`, which is not a proof of the copy itself. The two VERIFIED
+facts above — the assets carry `mpweapon_<name>` as `radiantName`, and the
+BSPs place entities with exactly that classname, reached by nothing except
+`bg_itemlist`'s match in `G_CallSpawn` — leave no other candidate, but I
+have not single-stepped it.
+
+`misc_mg42` and `misc_turret` (section 8) reach `RegisterItem` by a second,
+unrelated path: both are `spawns`-table entries whose `SP_` function is
+`SP_turret` (0x533b0). VERIFIED from the binary: `SP_turret` reads the
+entity's own `weaponinfo` key through `G_SpawnString`, erroring `"no
+weaponinfo specified for turret"` (`Com_Error`, code 1) when the key is
+absent, then calls `G_SpawnTurret` (0x52c84, not traced further) with the
+string. Here the item name is the key's value directly, no prefix to
+strip: VERIFIED from `mp_carentan.bsp`, whose two `misc_mg42` blocks both
+carry `"weaponinfo" "mg42_bipod_stand_mp"` — retail's bit 16, the map's only
+extra bit beyond `fg42_mp`/`fg42_semi_mp`/`panzerfaust_mp`.
+
+`spawn_item_name` (`crates/server/src/game/spawn.rs`) reproduces both
+rules — an `mpweapon_` prefix strip plus `_mp` suffix, and a direct
+`weaponinfo` key read for `misc_mg42`/`misc_turret` — run for every spawned
+entity alongside `SPAWN_FREES` and independent of it, so a classname that
+both registers and frees still does both.
+
 ## Open, and worth a probe
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.

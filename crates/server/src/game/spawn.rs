@@ -81,11 +81,45 @@ pub fn spawn_entities_from_string(
         for (k, v) in &block {
             parse_field(host, cx, id, k, v);
         }
+        if let Some(item) = spawn_item_name(host, cx, id, &classname) {
+            host.items.register(&item);
+        }
         if SPAWN_FREES.contains(&classname.as_str()) {
             host.ents.free(id);
         }
     }
     Ok(())
+}
+
+/// The item a spawned entity registers, if any -- `G_CallSpawn`'s second
+/// case, before `spawns` (section 17 of the object model doc): a classname
+/// matched against `bg_itemlist` calls `G_SpawnItem` -> `RegisterItem`
+/// straight after the entity is built, before any script runs, and neither
+/// function frees the entity, so a later script `delete()` still finds it.
+///
+/// A placed weapon's `bg_itemlist` classname is `mpweapon_<name>`, its
+/// weapon file's `radiantName` -- one prefix short of the `<name>_mp` item
+/// name `Items::register` expects (VERIFIED: every stock `weapons/mp/*_mp`
+/// file's `radiantName` follows this pattern, and both gate maps place
+/// `mpweapon_fg42`/`mpweapon_panzerfaust` entities that `_teams.gsc`'s
+/// `restrictPlacedWeapons` later deletes by that same classname).
+///
+/// `misc_mg42`/`misc_turret` reach `RegisterItem` too, through their own
+/// `SP_turret` (0x533b0, section 8) rather than `bg_itemlist`: the item
+/// name is their `weaponinfo` key's value directly, no prefix to strip
+/// (VERIFIED: mp_carentan's two mounted mg42s carry
+/// `"weaponinfo" "mg42_bipod_stand_mp"` in the shipped BSP).
+fn spawn_item_name(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Option<String> {
+    if let Some(name) = classname.strip_prefix("mpweapon_") {
+        return Some(format!("{name}_mp"));
+    }
+    if classname == "misc_mg42" || classname == "misc_turret" {
+        let weaponinfo = cx.intern_folded("weaponinfo");
+        if let Value::String(s) = host.get_field(cx, id, weaponinfo) {
+            return Some(cx.resolve(s).to_string());
+        }
+    }
+    None
 }
 
 /// `G_ParseField`: the entity field table first, case-insensitively, then
@@ -137,6 +171,7 @@ fn convert(cx: &mut Cx, ty: FieldType, raw: &str) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use crate::game::testing::fixture;
+    use crate::items::Items;
     use vcod_gsc::{EntId, Host, Value};
 
     /// `G_CallSpawn`'s fourth case: a classname in neither the item list nor
@@ -249,6 +284,50 @@ mod tests {
             )
             .is_err());
         });
+    }
+
+    /// A placed weapon registers its item at spawn, which is why retail's cs 8
+    /// differs between two maps whose scripts precache the same list. The
+    /// registration happens before the script runs, and it survives the
+    /// entity's deletion by `_teams::restrictPlacedWeapons`.
+    #[test]
+    fn a_placed_weapon_registers_its_item() {
+        let (mut vm, mut host) = fixture();
+        let lump = "{\n\"classname\" \"worldspawn\"\n}\n\
+                    {\n\"classname\" \"mpweapon_fg42\"\n\"origin\" \"0 0 0\"\n}\n";
+        vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, lump))
+            .unwrap();
+        assert_ne!(host.items.bitstring(), Items::new().bitstring());
+    }
+
+    /// Pins the exact bit: `fg42_mp` is configstring 7 index 6, and
+    /// `RegisterItem`'s alt-fire link sets `fg42_semi_mp` (index 7) along
+    /// with it, so nibble 1 (bits 4-7) comes out `0b1100` = `c`. A wrong
+    /// item index would still flip `assert_ne`'s inequality but land on the
+    /// wrong character here.
+    #[test]
+    fn a_placed_fg42_sets_its_own_bit_and_its_alt_fires() {
+        let (mut vm, mut host) = fixture();
+        let lump = "{\n\"classname\" \"worldspawn\"\n}\n\
+                    {\n\"classname\" \"mpweapon_fg42\"\n\"origin\" \"0 0 0\"\n}\n";
+        vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, lump))
+            .unwrap();
+        assert_eq!(host.items.bitstring().chars().nth(1), Some('c'));
+    }
+
+    /// `misc_mg42`/`misc_turret` reach `RegisterItem` through `SP_turret`
+    /// instead of `bg_itemlist`: the item comes from the `weaponinfo` key,
+    /// not the classname, matching mp_carentan's mounted mg42s.
+    #[test]
+    fn a_mounted_mg42_registers_the_item_named_by_its_weaponinfo_key() {
+        let (mut vm, mut host) = fixture();
+        let lump = "{\n\"classname\" \"worldspawn\"\n}\n\
+                    {\n\"classname\" \"misc_mg42\"\n\"weaponinfo\" \"mg42_bipod_stand_mp\"\n}\n";
+        vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, lump))
+            .unwrap();
+        // mg42_bipod_stand_mp is configstring 7 index 16, nibble 4 (bits
+        // 16-19), bit 16 alone: 0b0001 = 1.
+        assert_eq!(host.items.bitstring().chars().nth(4), Some('1'));
     }
 
     /// The dumped classname table, so a transcription slip is caught.
