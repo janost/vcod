@@ -35,6 +35,14 @@ impl ScriptSource for PakScripts {
     }
 }
 
+/// A script value as text, through the same `%g` rendering string
+/// concatenation uses. A value with no rendering (`undefined`, an array, an
+/// entity) comes back debug-rendered, so a failed assertion says what the
+/// field actually held rather than an empty string.
+fn render(cx: &vcod_gsc::Cx, v: Value) -> String {
+    cx.format_number(v).unwrap_or_else(|| format!("{v:?}"))
+}
+
 /// Owns one map's loaded script closure, the `Vm` it lives in, and the
 /// `GameHost` the object table and configstrings live in. The host has to
 /// outlive map load: a thread can spawn an entity in one frame and read it
@@ -252,6 +260,48 @@ impl ScriptRuntime {
             .unwrap_or_default()
     }
 
+    /// One client's viewmodel index, read every frame for the same reason
+    /// `client_weapons` is.
+    pub fn client_viewmodel(&self, slot: usize) -> i32 {
+        self.host.client_viewmodel.get(slot).copied().unwrap_or(0)
+    }
+
+    /// Reads a field off an entity through the same routing script uses,
+    /// rendered as text by `render`.
+    pub fn field_str(&mut self, ent: EntId, name: &str) -> String {
+        use vcod_gsc::Host;
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let atom = cx.intern_folded(name);
+            let v = host.get_field(cx, ent, atom);
+            render(cx, v)
+        })
+    }
+
+    /// One field off a client's entity, rendered the way `field_str` renders
+    /// one. `None` when the slot holds no client entity.
+    pub fn client_field(&mut self, slot: usize, name: &str) -> Option<String> {
+        let ent = self.client_entity(slot)?;
+        Some(self.field_str(ent, name))
+    }
+
+    /// One key out of a client's `.pers`, rendered the same way. Array keys
+    /// are exact-cased, unlike the field name (`docs/research/
+    /// cod11-gsc-language.md`), so the key is interned as written.
+    pub fn client_pers(&mut self, slot: usize, key: &str) -> Option<String> {
+        use vcod_gsc::Host;
+        let ent = self.client_entity(slot)?;
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let atom = cx.intern_folded("pers");
+            let Value::Array(a) = host.get_field(cx, ent, atom) else {
+                return None;
+            };
+            let k = vcod_gsc::ArrayKey::Str(cx.intern_exact(key));
+            Some(render(cx, cx.get_index(a, k)))
+        })
+    }
+
     /// Queues one client lifecycle event for the next `run_frame`. The
     /// netcode's only way into script: a callback that ran inline from
     /// `SV_ClientCommand` would reenter the VM mid-frame.
@@ -282,6 +332,9 @@ impl ScriptRuntime {
                 // frames before its first `spawn`.
                 if let Some(w) = self.host.client_weapons.get_mut(slot) {
                     *w = crate::weapons::PlayerWeapons::default();
+                }
+                if let Some(v) = self.host.client_viewmodel.get_mut(slot) {
+                    *v = 0;
                 }
                 let id = match self.vm.with_cx(|cx| self.host.ents.spawn_client(cx, slot)) {
                     Ok(id) => id,
@@ -438,21 +491,6 @@ impl ScriptRuntime {
         let main = rt.vm.func_ref(&rt.entry, "main");
         rt.vm.start_thread(&mut rt.host, 0, main, None, vec![]);
         rt
-    }
-
-    /// Reads a field off an entity through the same routing script uses, as
-    /// its string value. Anything else comes back debug-rendered, so a failed
-    /// assertion says what the field actually held.
-    pub fn field_str(&mut self, ent: EntId, name: &str) -> String {
-        use vcod_gsc::Host;
-        let host = &mut self.host;
-        self.vm.with_cx(|cx| {
-            let atom = cx.intern_folded(name);
-            match host.get_field(cx, ent, atom) {
-                vcod_gsc::Value::String(s) => cx.resolve(s).to_string(),
-                other => format!("{other:?}"),
-            }
-        })
     }
 
     /// Reads a folded field off `level`.

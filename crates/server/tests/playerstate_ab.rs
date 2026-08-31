@@ -16,18 +16,25 @@
 
 mod common;
 
-use common::{connect, step, ClientEnd, Queues};
+use common::{header_value, Join, Queues};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
-use vcod_common::net::msg::{PlayerState, NULL_USERCMD};
+use std::time::Instant;
+use vcod_common::net::msg::PlayerState;
 use vcod_common::net::protocol::{Protocol, PROTOCOL_V1};
-use vcod_common::net::{NetClient, NetEvent};
 
 /// Fields stage 4 knowingly does not reproduce, each with the reason. Empty
 /// is the goal. A gap that starts matching fails the guard below, so this
 /// list cannot rot into a lie.
-const GAPS: &[(&str, &str)] = &[];
+const GAPS: &[(&str, &str)] = &[(
+    "legsAnim",
+    "an animation the server has no system to choose. `BG_PlayAnim` (0x2c338) \
+     writes the field, keeping the old ANIM_TOGGLEBIT and flipping it, and the \
+     index below the bit comes from the parsed animscript through \
+     `BG_AnimScriptAnimation` and `BG_PlayerAnimation`. Reproducing 634 means \
+     porting that state machine and loading the animscript assets; writing the \
+     number instead would pin one frame of an animation nothing here plays",
+)];
 
 /// Fields no capture can pin: they advance with the frame the capture was
 /// taken on, so retail's value and ours are both correct and different.
@@ -52,9 +59,6 @@ const SPAWN_SHAPE: &[&str] = &[
     "viewangles[1]",
     "viewangles[2]",
 ];
-
-/// The fixture header's "3 s after the weapon menu was answered".
-const SPAWN_SETTLE: Duration = Duration::from_secs(3);
 
 /// `ANGLE2SHORT` (q_shared.h), as the 16-bit wire word `delta_angles` is.
 fn angle2short(deg: f32) -> i32 {
@@ -85,36 +89,13 @@ struct Capture {
     ps: Vec<i32>,
 }
 
-/// Every `# key value` clause in the header block with this key. The caller
-/// insists on exactly one: the header is prose as well as data, so a second
-/// clause opening with the same word would otherwise decide the join
-/// silently, by being first.
-fn header_values<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
-    text.lines()
-        .take_while(|l| l.starts_with('#'))
-        .flat_map(|l| l.trim_start_matches('#').split(','))
-        .map(str::trim)
-        .filter_map(|clause| clause.strip_prefix(key)?.strip_prefix(' '))
-        .map(|v| v.trim_end_matches('.'))
-        .collect()
-}
-
 /// The committed retail capture. The fixture name carries the gametype, so
 /// it comes from `cfg` rather than from a literal: a changed `cfg().gametype`
 /// has to move the fixture too, not silently keep reading the `dm` capture.
 fn retail(map: &str) -> Capture {
     let path = format!("tests/fixtures/playerstate/{map}-{}.txt", cfg(map).gametype);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    let head = |k: &str| {
-        let found = header_values(&text, k);
-        assert_eq!(
-            found.len(),
-            1,
-            "{path}: the header has {} clauses opening with {k:?}, expected 1: {found:?}",
-            found.len()
-        );
-        found[0]
-    };
+    let head = |k: &str| header_value(&text, k, &path);
     assert_eq!(head("map"), map, "{path}: header names another map");
     assert_eq!(
         head("g_gametype"),
@@ -218,109 +199,14 @@ fn retail_weapon_list(map: &str) -> String {
         .to_string()
 }
 
-/// Answers the stock team and weapon menus with what the capture was taken
-/// with. `v g_scriptMainMenu <menu>` names the menu, `t <index>` opens it and
-/// `mr <serverId> <index> <response>` answers it
-/// (docs/research/cod11-hud-protocol.md, section 0.1).
-struct Join<'a> {
-    capture: &'a Capture,
-    main_menu: String,
-    answered: Vec<i32>,
-    answered_team: bool,
-    answered_weapon_at: Option<Instant>,
-    log: Vec<String>,
-}
-
-impl<'a> Join<'a> {
-    fn new(capture: &'a Capture) -> Self {
-        Join {
-            capture,
-            main_menu: String::new(),
-            answered: Vec::new(),
-            answered_team: false,
-            answered_weapon_at: None,
-            log: Vec::new(),
-        }
-    }
-
-    fn on_server_command(
-        &mut self,
-        tokens: &[String],
-        cl: &mut NetClient<ClientEnd>,
-        now: Instant,
-    ) {
-        match tokens.first().map(String::as_str) {
-            Some("v") if tokens.get(1).map(String::as_str) == Some("g_scriptMainMenu") => {
-                self.main_menu = tokens.get(2).cloned().unwrap_or_default();
-            }
-            Some("t") => {
-                let Some(idx) = tokens.get(1).and_then(|t| t.parse::<i32>().ok()) else {
-                    return;
-                };
-                if self.answered.contains(&idx) {
-                    return;
-                }
-                let menu = self.main_menu.clone();
-                let reply = if menu.starts_with("team_") {
-                    self.capture.team.clone()
-                } else if menu.starts_with("weapon_") {
-                    self.capture.weapon.clone()
-                } else {
-                    self.log.push(format!("menu {idx} ({menu:?}) has no reply"));
-                    return;
-                };
-                cl.send_reliable(&format!("mr {} {idx} {reply}", cl.server_id()));
-                self.answered.push(idx);
-                self.log
-                    .push(format!("answered menu {idx} ({menu}) with {reply}"));
-                if menu.starts_with("weapon_") {
-                    self.answered_weapon_at = Some(now);
-                } else {
-                    self.answered_team = true;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn settled(&self, now: Instant) -> bool {
-        self.answered_weapon_at
-            .is_some_and(|t| now.duration_since(t) >= SPAWN_SETTLE)
-    }
-
-    /// What the join did, for the failure message.
-    fn summary(&self) -> String {
-        let log = match self.log.is_empty() {
-            true => "the server opened no script menu at all".to_string(),
-            false => self.log.join("; "),
-        };
-        format!("join: begin sent, {log}")
-    }
-
-    /// The path, not the state it ended in: a player that reached the
-    /// playerstate without being asked which team and which weapon did not
-    /// join through the stock menus, whatever its 103 fields say. Nothing
-    /// else in the gate constrains how the spawn happened.
-    fn findings(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        if !self.answered_team {
-            out.push("no team menu opened, so the client never answered one".to_string());
-        }
-        if self.answered_weapon_at.is_none() {
-            out.push("no weapon menu opened, so the client never spawned".to_string());
-        }
-        out
-    }
-}
-
 /// Our playerstate at the same moment retail's was read: `begin`, both menu
 /// answers, then `SPAWN_SETTLE` of simulated time.
-fn ours<'a>(
+fn ours(
     map: &str,
-    capture: &'a Capture,
+    capture: &Capture,
     fs: vcod_common::pk3::Pk3Fs,
     bsp: &vcod_common::bsp::Bsp,
-) -> (PlayerState, Join<'a>) {
+) -> (PlayerState, Join) {
     let fs = std::rc::Rc::new(fs);
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(map), now);
@@ -328,28 +214,7 @@ fn ours<'a>(
     sv.load_scripts(fs).expect("load the scripts");
 
     let q = Rc::new(RefCell::new(Queues::default()));
-    let mut cl = connect(&mut sv, &q, &mut now);
-    // `begin` is what releases `Callback_PlayerConnect`'s `waittill`; the join
-    // menus follow from it.
-    cl.send_reliable("begin");
-
-    let mut join = Join::new(capture);
-    // 20 s of simulated time at sv_fps 20, well past the settle a completed
-    // join needs; a join that never happens burns the lot.
-    for _ in 0..400 {
-        now += Duration::from_millis(50);
-        cl.send_frame(&NULL_USERCMD);
-        for e in step(&mut sv, &q, &mut cl, now) {
-            match e {
-                NetEvent::ServerCommand(tokens) => join.on_server_command(&tokens, &mut cl, now),
-                NetEvent::Dropped(r) => panic!("dropped mid-join: {r}"),
-                _ => {}
-            }
-        }
-        if join.settled(now) {
-            break;
-        }
-    }
+    let (cl, join) = common::join(&mut sv, &q, &mut now, &capture.team, &capture.weapon);
 
     let ps = cl
         .snapshots()

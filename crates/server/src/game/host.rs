@@ -93,6 +93,10 @@ pub struct GameHost {
     /// configstring table has, because a thread past a `wait` can still
     /// change it.
     pub client_weapons: Vec<crate::weapons::PlayerWeapons>,
+    /// Each client's viewmodel, as the model configstring index retail's
+    /// `setViewmodel` stores on the `gclient_t` (object model doc, section
+    /// 20). Mirrored into the sim every frame the way `client_weapons` is.
+    pub client_viewmodel: Vec<i32>,
     /// Damage the script asked for, drained after `run_frame` by stage 6.
     /// A builtin must never reenter the VM, so a callback becomes a queued
     /// event (the design's "callbacks cannot run inline").
@@ -157,6 +161,7 @@ impl GameHost {
             client_commands: Vec::new(),
             client_spawns: Vec::new(),
             client_weapons: vec![crate::weapons::PlayerWeapons::default(); MAX_CLIENTS],
+            client_viewmodel: vec![0; MAX_CLIENTS],
             damage: Vec::new(),
             allocators: Allocators::new(),
             cvars: crate::cvars::Cvars::new(),

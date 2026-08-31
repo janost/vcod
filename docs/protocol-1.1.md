@@ -290,7 +290,19 @@ The angles live in the `cmd.angles` / `delta_angles` pair instead. `delta_angles
 
 vcod's server implements the RTCW scheme: `ClientSim::spectator`/`become_player` set `delta_angles` at spawn from `ANGLE2SHORT(spawn_angle) - cmd.angles`, `ClientSim::step` reads `SHORT2ANGLE(cmd.angles + delta_angles)` rather than the raw cmd angle, and `to_wire` no longer writes `viewangles`. All three landed in one commit deliberately: getting one or two without the third rotates the move basis, since the client always subtracts `delta_angles` when it builds a cmd (`crates/common/src/net/mod.rs`) -- a server that sets the delta but keeps reading the raw cmd angle, for instance, has the client compensating for an offset the server never applies, so the client walks at an angle to where it looks.
 
-Four more fields a retail spectator's playerstate carries that vcod's does not, meaning unestablished: `bobCycle` 12, `eventSequence` 1, and the pair `events[0]` 143 / `eventParms[0]` 136. `crates/common/examples/snapshot_timing.rs` prints all of them from the captures.
+Four more fields a retail spectator's playerstate carries that vcod's does not: `bobCycle` 12, `eventSequence` 1, and the pair `events[0]` 143 / `eventParms[0]` 136. `crates/common/examples/snapshot_timing.rs` prints all of them from the captures. They belong to the spectator path and not to a player: all four read 0 in the retail *player* captures stage 4 took (`crates/server/tests/fixtures/playerstate/*.txt`), so vcod's zeros are right for a spawned player and the four spectator values stay unestablished.
+
+### A spawned player's playerstate: what stage 4 settled
+
+Three fields a walking player carries that a spectator does not, all measured off `crates/server/tests/fixtures/playerstate/mp_pavlov-dm.txt` and its `mp_carentan` twin and reproduced by `ClientSim::to_wire`:
+
+- `pm_flags` 262144. Bit 18, the third member of the view-source group whose other two (0x10000 free spectator, 0x20000 following) `cod11-events-and-fx.md` already lists. `ClientEndFrame` sets it for a client looking out of its own body and both other arms clear it, which is why the spectator captures read 0.
+- `serverCursorHintString` 255. The field is signed 8 bits and retail stores -1, a no-hint sentinel, from `G_CheckForCursorHints`.
+- `viewmodelIndex` 52 on `mp_pavlov` and 82 on `mp_carentan`: the model configstring index of the hands viewmodel the nationality's character script asked for, 1-based on base 268. It is derived here, not pinned — `setViewmodel` allocates through the same model indexer the configstring gate diffs, so the number falls out of the table.
+
+The addresses and the labels for all three are in `docs/research/cod11-gsc-object-model.md`, section 20.
+
+One field remains unestablished: `legsAnim` 634, which is animation index 122 with `ANIM_TOGGLEBIT` set. The server picks it through the animscript state machine, which vcod has no equivalent of, so `playerstate_ab.rs` carries it as the gate's one recorded gap.
 
 ### `ps.commandTime` and client prediction
 

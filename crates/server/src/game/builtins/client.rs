@@ -11,7 +11,7 @@
 //! `docs/research/cod11-hud-protocol.md` section 0.1 carries the live
 //! capture of a stock dm join that produced them.
 
-use crate::configstrings::{script_menu_index, weapon_index};
+use crate::configstrings::{script_menu_index, weapon_index, CsRange};
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::GameHost;
 use crate::weapons::weapon_slot;
@@ -27,10 +27,19 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("givemaxammo", give_max_ammo),
     ("setspawnweapon", set_spawn_weapon),
     ("positionwouldtelefrag", position_would_telefrag),
+    ("setviewmodel", set_view_model),
+    ("getviewmodel", get_view_model),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
     NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
+}
+
+/// The model configstring slot `ps.viewmodelIndex` counts from. `G_ModelIndex`
+/// (0x66ed8) hands out 1-based offsets from it, so index 1 is the first slot
+/// of `CsRange::Model`.
+fn model_index_base() -> usize {
+    CsRange::Model.bounds().0 - 1
 }
 
 /// The receiver every builtin here but `positionWouldTelefrag` needs: an
@@ -226,6 +235,47 @@ pub fn position_would_telefrag(
     Ok(Value::Int(0))
 }
 
+/// `self setViewmodel(name)` (player method 17, 0x4512c): the name becomes a
+/// model configstring index through `G_ModelIndex` and is kept on the
+/// `gclient_t`, from where `ClientEndFrame` copies it into
+/// `ps.viewmodelIndex`. Object model doc, section 20.
+pub fn set_view_model(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let Some(Value::String(name)) = args.first() else {
+        return Err(ErrorKind::BadType("setViewmodel takes a model name"));
+    };
+    let name = cx.resolve(*name).to_string();
+    let cs = host
+        .allocators
+        .index(&mut host.configstrings, CsRange::Model, &name)?;
+    host.client_viewmodel[slot] = (cs - model_index_base()) as i32;
+    Ok(Value::Undefined)
+}
+
+/// `self getViewmodel()` (player method 18, 0x451b4): the stored index back
+/// through `G_ModelName`, so what comes out is the configstring's text, not
+/// whatever string was passed in. A client with no viewmodel yet reads as the
+/// empty string; retail's `G_ModelName(0)` is unmeasured.
+pub fn get_view_model(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let name = match host.client_viewmodel[slot] {
+        0 => "",
+        i => host.configstrings[model_index_base() + i as usize].as_str(),
+    };
+    let atom = cx.intern_exact(name);
+    Ok(Value::String(atom))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +285,44 @@ mod tests {
     fn set_origin(host: &mut GameHost, cx: &mut Cx, id: EntId, at: [f32; 3]) {
         let field = cx.intern_folded("origin");
         host.set_field(cx, id, field, Value::Vector(at)).unwrap();
+    }
+
+    /// `setViewmodel` stores a model configstring index, not the name: the
+    /// first allocation lands in `CsRange::Model`'s first slot, which is
+    /// index 1, and `getViewmodel` reads the configstring's text back rather
+    /// than echoing what was passed in. `ps.viewmodelIndex` is that index
+    /// (object model doc, section 20).
+    #[test]
+    fn set_viewmodel_stores_a_model_index_and_reads_the_name_back() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let recv = Some(Target::Entity(c));
+            let name = Value::String(cx.intern_exact("xmodel/viewmodel_hands_us"));
+            set_view_model(&mut host, cx, recv, &[name]).unwrap();
+
+            assert_eq!(host.client_viewmodel[0], 1);
+            let (first, _) = CsRange::Model.bounds();
+            assert_eq!(host.configstrings[first], "xmodel/viewmodel_hands_us");
+            match get_view_model(&mut host, cx, recv, &[]).unwrap() {
+                Value::String(a) => assert_eq!(cx.resolve(a), "xmodel/viewmodel_hands_us"),
+                v => panic!("{v:?}"),
+            }
+        });
+    }
+
+    /// Retail keeps both under the player method table, so an entity with no
+    /// `gclient_t` raises rather than growing a viewmodel of its own.
+    #[test]
+    fn set_viewmodel_refuses_a_non_client() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let recv = Some(Target::Entity(e));
+            let name = Value::String(cx.intern_exact("xmodel/viewmodel_hands_us"));
+            assert!(set_view_model(&mut host, cx, recv, &[name]).is_err());
+            assert!(get_view_model(&mut host, cx, recv, &[]).is_err());
+        });
     }
 
     /// A spawn origin overlapping a live player is refused; one clear of every

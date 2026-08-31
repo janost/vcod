@@ -967,6 +967,20 @@ impl Server {
         self.script.as_ref().map_or_else(Vec::new, |rt| rt.aborts())
     }
 
+    /// One field off a client's script entity, rendered as text. `None` when
+    /// no script is loaded or the slot holds no client entity. This is the
+    /// only way into a joined client's script state from outside the crate,
+    /// and the tests that assert what the stock scripts left there are its
+    /// only callers.
+    pub fn client_field(&mut self, slot: usize, name: &str) -> Option<String> {
+        self.script.as_mut()?.client_field(slot, name)
+    }
+
+    /// One key out of a client's `.pers`, rendered the same way.
+    pub fn client_pers(&mut self, slot: usize, key: &str) -> Option<String> {
+        self.script.as_mut()?.client_pers(slot, key)
+    }
+
     const FALLBACK_SPAWN: ([f32; 3], f32) = ([0.0, 0.0, 64.0], 0.0);
 
     /// `SV_ClientEnterWorld` for a spectator: park the sim at the spawn, start
@@ -1016,6 +1030,7 @@ impl Server {
                     c.ent = rt.client_entity(slot);
                     if let Some(sim) = c.sim.as_mut() {
                         sim.weapons = rt.client_weapons(slot);
+                        sim.viewmodel_index = rt.client_viewmodel(slot);
                     }
                 }
             }

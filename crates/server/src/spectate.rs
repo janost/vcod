@@ -7,6 +7,15 @@ use vcod_common::net::msg::{self, UserCmd, NULL_USERCMD};
 use vcod_common::net::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::pmove::{self, PmInput};
 
+/// `pm_flags`' own-body bit, third of the view-source group: a live client
+/// looking out of its own body carries it and neither spectator view does
+/// (docs/research/cod11-gsc-object-model.md, section 20).
+const PMF_OWN_VIEW: i32 = 0x40000;
+
+/// `serverCursorHintString`'s no-hint sentinel, which is retail's -1 in an
+/// 8-bit netfield. Object model doc, section 20.
+const NO_CURSOR_HINT: i32 = 0xff;
+
 /// ANGLE2SHORT units per degree (codextended shared.h).
 const ANGLE2SHORT: f32 = 65536.0 / 360.0;
 
@@ -50,6 +59,9 @@ pub struct ClientSim {
     /// What the client holds, mirrored from the script host every frame.
     /// `spawn` clears it and `giveWeapon`/`setSpawnWeapon` fill it in.
     pub weapons: PlayerWeapons,
+    /// The model configstring index `setViewmodel` left on the client,
+    /// mirrored from the script host every frame beside `weapons`.
+    pub viewmodel_index: i32,
     /// The client's per-axis view offset, added back onto each cmd's angle
     /// by both `step` and the connected client itself.
     /// docs/protocol-1.1.md, "Spectator view angles".
@@ -64,6 +76,7 @@ impl ClientSim {
             ps: pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg),
             pm_type: PmType::Spectator,
             weapons: PlayerWeapons::default(),
+            viewmodel_index: 0,
             // A fresh connect has no prior cmd; `Server::enter_world` sets
             // `c.last_cmd = NULL_USERCMD` immediately before building this.
             delta_angles: spawn_delta_angles(yaw_deg, NULL_USERCMD.angles),
@@ -160,6 +173,14 @@ impl ClientSim {
                 false => ENTITYNUM_NONE,
             };
             set("groundEntityNum", ground as i32);
+            // All three come out of one `ClientEndFrame` block a spectator
+            // never reaches. Its guards are `sessionstate` playing,
+            // `ps.clientNum == self` and, for the hint, `health > 0`;
+            // nothing follows another client and nothing dies yet, so
+            // `Normal` is the whole of that condition today.
+            set("pm_flags", PMF_OWN_VIEW);
+            set("serverCursorHintString", NO_CURSOR_HINT);
+            set("viewmodelIndex", self.viewmodel_index);
         }
         // What the client holds; both layouts are in the object model doc,
         // section 20.

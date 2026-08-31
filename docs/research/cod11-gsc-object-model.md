@@ -1117,11 +1117,14 @@ player method 40 at 0x455cc, which is `self spawn(origin, angles)`. VERIFIED,
 both read out of the tables `dump_builtins.py` walks.
 
 0x455cc is only the wrapper. It bound-checks the entity number against 0x3ff,
-indexes `g_entities` by 0x314, raises `entity %i is not a player` (0x73140)
-when `ent->client` is null, reads two vectors with `Scr_GetVector`, and tail
-calls `ClientSpawn` (0x4268c). VERIFIED: the `R_386_PC32` relocation at
+indexes `g_entities` by 0x314, reads two vectors with `Scr_GetVector`, and
+tail calls `ClientSpawn` (0x4268c). VERIFIED: the `R_386_PC32` relocation at
 0x45652 names `ClientSpawn`, and `nm -D` puts that symbol at 0x4268c. Calling
 0x455cc itself "ClientSpawn" is wrong; it is the builtin around it.
+
+That it raises `entity %i is not a player` (0x73140) when `ent->client` is
+null is INFERRED: the string is in the binary, but which branch reaches it is
+control flow.
 
 `spawnSpectator()` and `spawnIntermission()` in every stock gametype call the
 same `self spawn(origin, angles)` that `spawnPlayer()` does; the mode comes
@@ -1254,6 +1257,105 @@ comes from the character script the team model chain runs, e.g.
 `pak5.pk3`. So the field follows the player's nationality, not the weapon:
 `m1carbine_mp`'s own `handModel` is `viewmodel_hands_new`, which is not what
 the capture carries.
+
+### What `ClientEndFrame` writes for a live client's own view
+
+`ClientEndFrame` (0x40e98) branches on the `sessionstate` word at
+`client+0x20d0`: 3 takes the intermission arm, 2 tail calls
+`SpectatorClientEndFrame` (0x40760), anything else falls through to the live
+arm, which then compares `ps.clientNum` (+0xac, netfield offset 172) against
+the entity's own number. INFERRED, read off the compares at 0x40ed1, 0x40f24
+and 0x40f45.
+
+The equal case, at 0x40f90, is a client looking out of its own body, and it
+writes two things a stage-4 playerstate carries. `pm_flags` (+0xc, netfield
+offset 12) gets bit 18 set: `orb $0x4,0xe(%edi)` at 0x40fb0, byte 2 of the
+dword, so 0x40000. And `ps.viewmodelIndex` takes the word `setViewmodel` left
+at `client+0x2170`. VERIFIED, both are single stores at named offsets.
+
+The other two arms clear that bit. The intermission arm does it at 0x40f11
+(`andb $0xfb,0xe(%edx)`) alongside zeroing `ps.viewmodelIndex`, and
+`SpectatorClientEndFrame` does the same pair at 0x407b7/0x407ad before it does
+anything else. VERIFIED, both stores.
+
+Bit 18 is therefore the third member of the view-source group whose other two
+`cod11-events-and-fx.md` already records: 0x10000 free spectator and 0x20000
+following a client. `SpectatorClientEndFrame` stores both, at 0x408ea and
+0x40903, and copies the followed client's playerstate over its own with a
+0x834-dword `rep movsl` at 0x408ba. VERIFIED, the stores and the copy width.
+
+Which of the two it sets depends on the sign of `client+0x20d4`. INFERRED,
+the compare at 0x408f4. Both stores sit past the branch that leaves the
+function when no client was found. INFERRED, the jump at 0x40890.
+
+That grouping is why the committed lone-spectator capture in
+`crates/common/tests/fixtures/net/snapshots.bin` reads `pm_flags` 0: with
+nobody to follow the function never reaches those stores.
+
+### `serverCursorHintString` 255 is a no-hint sentinel
+
+`G_CheckForCursorHints` (0x4f59c) stores -1 into `ps.serverCursorHintString`
+(+0x38c, netfield offset 908) at 0x4f603, having zeroed `serverCursorHint`
+(+0x384) and `serverCursorHintVal` (+0x388) just above it. VERIFIED, three
+stores at named offsets. The netfield is 8 bits wide
+(`crates/common/src/net/fields_v1.rs`), so -1 reaches a client as 255, which
+is what the committed player captures carry. VERIFIED against those fixtures.
+
+The store is reached only when the entity's `health` (+0x230, the entity field
+table's offset 560) is above zero and the byte at `ent+0x172` is zero.
+INFERRED, the two branches at 0x4f5d7 and 0x4f5e4. `ClientEndFrame` is one of
+its two callers, from the live arm above (the `R_386_PC32` relocation at
+0x4111a); the other is at 0x484c6. VERIFIED from the relocations.
+
+### `legsAnim` needs the animscript state machine
+
+`BG_PlayAnim` (0x2c338) is what writes `ps.legsAnim` (+0x70, netfield offset
+112): it masks the old value down to 0x200, flips that bit, ORs the new
+animation index in, and stores the result at 0x2c3bb, with `ps.legsTimer`
+(+0x6c) beside it and the `torsoAnim`/`torsoTimer` pair (+0x78/+0x74) getting
+the same treatment. VERIFIED, read out of the instruction operands. 0x200 is
+`ANIM_TOGGLEBIT` as `player-model-anim-system.md` records it, which is why the
+captures' 634 is index 122 with the bit set rather than an index of its own.
+
+Which index is chosen comes from the parsed animscript, through
+`BG_AnimScriptAnimation` (0x29db0), `BG_PlayerAnimation` (0x2c1f4) and
+`BG_AnimUpdatePlayerStateConditions` (0x2a2ec), off the trees
+`BG_AnimParseAnimScript` (0x28b88) builds. VERIFIED that those symbols exist
+and are exported; nothing here traces the path between them. Reproducing a
+spawned player's `legsAnim` means porting that state machine, which is why
+`playerstate_ab.rs` carries the field as its one gap rather than writing the
+number.
+
+## 21. The client entity as vcod builds it
+
+Not a reading of retail: this is what stage 4 built, recorded here because the
+next stage inherits it. The retail facts it rests on are in sections 2 and 3.
+
+A connecting client allocates a `GEntity` at entity number = its client slot
+(`ObjectTable::spawn_client`). Section 2's `G_InitGame` reading is what makes
+that safe without a check: `level.num_entities` starts at 72 whatever
+`sv_maxclients` is and `MAX_CLIENTS` is 64, so clients own 0..63, map entities
+start at 72, and the allocator never hands out a number below 72. Freeing a
+client clears its slot and deliberately does not push the number onto the free
+list, which feeds map-entity allocation.
+
+Client-tagged fields live in a second store on the entity, `client:
+Option<Vec<Value>>`, `None` for every map entity and HUD element. That is what
+makes retail's null `ent->client` check a type-level fact here: a read of a
+client field on a map entity finds no store rather than an unset cell.
+
+The store is indexed by raw `CLIENT_FIELDS` position, not by the
+first-appearance-of-each-offset dedup `ENTITY_FIELDS` uses. Five rows —
+`sessionteam`, `sessionstate`, `statusicon`, `headicon`, `headiconteam` —
+carry `offset: 0` because retail's own dump marks them fully custom get and
+set (section 3's client field table). Those zeros are placeholders for an
+accessor, not a shared struct offset, so deduping on them would merge five
+distinct fields into one cell.
+
+`.pers` is the one client field the engine fills in rather than leaving to
+script: `spawn_client` puts a fresh array handle there, because
+`ClientConnect` (0x4250f) writes one and every gametype reads
+`self.pers["team"]` off it without creating it. Section 3 has the measurement.
 
 ## Open, and worth a probe
 
