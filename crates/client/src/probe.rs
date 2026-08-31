@@ -23,11 +23,17 @@ const SNAP_CAPTURE_TARGET: usize = 24;
 /// nudges forward now and then to prove the server applies moves. With `fs`
 /// it resolves drained events into sound cues; weapon-file cues (fire,
 /// reload) are not resolved, the probe loads no weapon files.
+///
+/// `save_playerstate` turns it into the stage 4 capture instead: it sends
+/// `begin`, answers the stock team and weapon menus, writes the fixture once
+/// the spawn has settled and exits. It sends no nudge, which would walk the
+/// capture off the spawn point.
 pub fn probe(
     addr: &str,
     save_fixture: bool,
     save_snapshots: bool,
     save_configstrings: bool,
+    save_playerstate: bool,
     secs: u64,
     fs: Option<&vcod_common::pk3::Pk3Fs>,
 ) -> anyhow::Result<()> {
@@ -42,6 +48,8 @@ pub fn probe(
     let mut reached_active: Option<Instant> = None;
     let mut baseline_origin: Option<[f32; 3]> = None;
     let mut watch = ProbeWatch::default();
+    let mut join = JoinProbe::default();
+    let mut wrote_playerstate = false;
     // The full table; the map's loadspec filters it at gamestate.
     let aliases_all = fs.map(crate::audio::alias::AliasTable::load);
 
@@ -102,7 +110,13 @@ pub fn probe(
                             all.len()
                         );
                     }
-                    client.send_reliable("say hello from vcod");
+                    if save_playerstate {
+                        // `begin` is what releases `Callback_PlayerConnect`'s
+                        // `waittill`; the join menus follow from it.
+                        client.send_reliable("begin");
+                    } else {
+                        client.send_reliable("say hello from vcod");
+                    }
                 }
                 NetEvent::Chat { text, .. } => println!("chat: {}", net::strip_colors(&text)),
                 NetEvent::Print(t) => print!("print: {t}"),
@@ -130,6 +144,9 @@ pub fn probe(
                         continue;
                     }
                     println!("serverCommand: {tokens:?}");
+                    if save_playerstate {
+                        join.on_server_command(&tokens, &mut client, now);
+                    }
                     // `s <idx>` is playLocalSound (sound doc, section 9).
                     if tokens.first().map(String::as_str) == Some("s") {
                         match tokens.get(1).and_then(|t| t.parse::<i32>().ok()) {
@@ -169,10 +186,17 @@ pub fn probe(
             }
         }
 
+        if save_playerstate {
+            for cmd in client.take_server_commands() {
+                println!("JOIN cmd: {cmd}");
+                join.commands.push(cmd);
+            }
+        }
+
         // 5 s after going active push forward for 2 s, again every 30 s, so a
         // long run shows whether moves still apply after a map_restart.
         let mut cmd = net::msg::UserCmd::default();
-        if client.state() == NetState::Active {
+        if client.state() == NetState::Active && !save_playerstate {
             let active_at = *reached_active.get_or_insert(now);
             let dt = now.duration_since(active_at).as_secs() % 30;
             if (5..7).contains(&dt) {
@@ -224,6 +248,13 @@ pub fn probe(
             }
         }
 
+        if join.settled(now) {
+            if let Some(s) = client.snapshots().newest() {
+                write_playerstate_fixture(s, client.configstrings(), &join)?;
+                wrote_playerstate = true;
+                break;
+            }
+        }
         if let Some(count) = client.capture_count() {
             if count >= SNAP_CAPTURE_TARGET {
                 break;
@@ -235,6 +266,12 @@ pub fn probe(
         std::thread::sleep(Duration::from_millis(16));
     }
 
+    if save_playerstate && !wrote_playerstate {
+        println!(
+            "no playerstate fixture: the join never completed (menus answered: {:?})",
+            join.answered
+        );
+    }
     finish_probe(client, save_fixture, save_snapshots)
 }
 
@@ -554,5 +591,171 @@ fn write_configstrings_fixture(configstrings: &[String]) -> anyhow::Result<()> {
     let path = format!("{CONFIGSTRINGS_FIXTURE_DIR}/{map}-{gametype}.txt");
     std::fs::write(&path, out)?;
     println!("configstrings: {written} non-empty slots -> {path}");
+    Ok(())
+}
+
+/// Directory `crates/server/tests/playerstate_ab.rs` reads its fixtures from.
+const PLAYERSTATE_FIXTURE_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../server/tests/fixtures/playerstate"
+);
+
+/// The team `--save-playerstate` joins; the stage gate is a client joining
+/// allies through the real menu.
+const JOIN_TEAM: &str = "allies";
+
+/// How long after the weapon answer the capture is taken, so the spawn has
+/// landed and the drop to the floor has finished.
+const SPAWN_SETTLE: Duration = Duration::from_secs(3);
+
+/// Drives the stock team/weapon menu handshake under `--save-playerstate` and
+/// keeps what the fixture header needs.
+#[derive(Default)]
+struct JoinProbe {
+    /// The menu retail last named in `v g_scriptMainMenu`; the `t` that follows
+    /// opens it.
+    main_menu: String,
+    /// Menu indices already answered, so a reopened menu is not answered twice.
+    answered: Vec<i32>,
+    weapon: String,
+    /// When the weapon answer went out.
+    answered_weapon: Option<Instant>,
+    /// Every serverCommand since the gamestate, verbatim and in order.
+    commands: Vec<String>,
+}
+
+impl JoinProbe {
+    /// `v g_scriptMainMenu <menu>` names the menu, `t <index>` opens it, and
+    /// `mr <serverId> <index> <response>` answers the index `t` named
+    /// (docs/research/cod11-hud-protocol.md, section 0.1).
+    fn on_server_command(
+        &mut self,
+        tokens: &[String],
+        client: &mut NetClient<UdpTransport>,
+        now: Instant,
+    ) {
+        match tokens.first().map(String::as_str) {
+            Some("v") if tokens.get(1).map(String::as_str) == Some("g_scriptMainMenu") => {
+                self.main_menu = tokens.get(2).cloned().unwrap_or_default();
+            }
+            Some("t") => {
+                let Some(idx) = tokens.get(1).and_then(|t| t.parse::<i32>().ok()) else {
+                    return;
+                };
+                if self.answered.contains(&idx) {
+                    return;
+                }
+                let Some(reply) = menu_reply(&self.main_menu) else {
+                    println!(
+                        "JOIN: menu {idx} ({:?}) has no scripted reply",
+                        self.main_menu
+                    );
+                    return;
+                };
+                println!(
+                    "JOIN: answering menu {idx} ({}) with {reply}",
+                    self.main_menu
+                );
+                client.send_reliable(&format!("mr {} {idx} {reply}", client.server_id()));
+                self.answered.push(idx);
+                if self.main_menu.starts_with("weapon_") {
+                    self.weapon = reply.to_string();
+                    self.answered_weapon = Some(now);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn settled(&self, now: Instant) -> bool {
+        self.answered_weapon
+            .is_some_and(|t| now.duration_since(t) >= SPAWN_SETTLE)
+    }
+}
+
+/// The team menu takes a team; the weapon menu takes a weapon `_teams::restrict`
+/// allows for that menu's nationality, which is why one weapon literal cannot
+/// serve both gate maps. All four are on under the stock `scr_allow_*` defaults.
+fn menu_reply(menu: &str) -> Option<&'static str> {
+    if menu.starts_with("team_") {
+        return Some(JOIN_TEAM);
+    }
+    match menu.strip_prefix("weapon_")? {
+        "american" => Some("m1carbine_mp"),
+        "british" => Some("enfield_mp"),
+        "russian" => Some("mosin_nagant_mp"),
+        "german" => Some("kar98k_mp"),
+        _ => None,
+    }
+}
+
+/// Writes the spawned player's wire state to `<map>-<gametype>.txt`. The map
+/// and gametype come out of cs 0 (serverinfo), so nothing here is hand-typed.
+fn write_playerstate_fixture(
+    snap: &net::snapshot::Snapshot,
+    configstrings: &[String],
+    join: &JoinProbe,
+) -> anyhow::Result<()> {
+    let p = &net::protocol::PROTOCOL_V1;
+    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
+    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let map = key("mapname");
+    let gametype = key("g_gametype");
+
+    let mut out = String::new();
+    out.push_str("# Retail CoD 1.1d dedicated server state after a stock menu join.\n");
+    out.push_str(&format!(
+        "# map {map}, g_gametype {gametype}, joined {JOIN_TEAM}, weapon {}, dedicated 1,\n",
+        join.weapon
+    ));
+    out.push_str("# sv_maxclients 8, sv_pure 0, stock scr_* defaults, one client on the server.\n");
+    out.push_str("# Captured with tools/run_server.sh and --net-probe --save-playerstate,\n");
+    out.push_str(&format!(
+        "# {} s after the weapon menu was answered; snapshot #{}, serverTime {}.\n",
+        SPAWN_SETTLE.as_secs(),
+        snap.message_num,
+        snap.server_time
+    ));
+    out.push_str("# Values are the raw i32 wire words, floats as their bit patterns: the gate\n");
+    out.push_str("# compares bits and a rendered float loses them.\n");
+    out.push_str("# [playerstate] is Protocol::player_fields order, [entity] the probe's own\n");
+    out.push_str("# client entity in Protocol::entity_fields order, [servercommands] every\n");
+    out.push_str("# serverCommand retail sent after the gamestate, verbatim and in order.\n");
+
+    out.push_str("[playerstate]\n");
+    for (f, v) in p.player_fields.iter().zip(&snap.ps.fields) {
+        out.push_str(&format!("{} {v}\n", f.name));
+    }
+
+    out.push_str("[entity]\n");
+    let self_num = snap.ps.field_i32(p, "clientNum") as u32;
+    let self_ent = snap.entities.get(&self_num);
+    match self_ent {
+        Some(ent) => {
+            for (f, v) in p.entity_fields.iter().zip(&ent.fields) {
+                out.push_str(&format!("{} {v}\n", f.name));
+            }
+        }
+        None => out.push_str("# retail sent no self-entity\n"),
+    }
+
+    out.push_str("[servercommands]\n");
+    for cmd in &join.commands {
+        out.push_str(cmd);
+        out.push('\n');
+    }
+
+    let path = format!("{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}.txt");
+    std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
+    std::fs::write(&path, out)?;
+    println!(
+        "playerstate: {} fields, {}, {} serverCommands -> {path}",
+        snap.ps.fields.len(),
+        match self_ent {
+            Some(_) => "self-entity present",
+            None => "no self-entity",
+        },
+        join.commands.len(),
+    );
     Ok(())
 }

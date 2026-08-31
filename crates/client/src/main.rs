@@ -70,6 +70,11 @@ struct Args {
     /// captures and this one pins the game module's table.
     #[arg(long)]
     save_configstrings: bool,
+    /// Join a team through the stock menu and write the retail playerstate to
+    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>.txt, the
+    /// fixture crates/server/tests/playerstate_ab.rs diffs against.
+    #[arg(long)]
+    save_playerstate: bool,
     /// Seconds --net-probe stays connected; an SD round boundary needs a few minutes
     #[arg(long, default_value_t = 65)]
     probe_secs: u64,
@@ -393,6 +398,7 @@ fn main() -> Result<()> {
             args.save_fixture,
             args.save_snapshots,
             args.save_configstrings,
+            args.save_playerstate,
             args.probe_secs,
             fs.as_ref(),
         );

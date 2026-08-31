@@ -1,0 +1,126 @@
+# Retail CoD 1.1d dedicated server state after a stock menu join.
+# map mp_pavlov, g_gametype dm, joined allies, weapon mosin_nagant_mp, dedicated 1,
+# sv_maxclients 8, sv_pure 0, stock scr_* defaults, one client on the server.
+# Captured with tools/run_server.sh and --net-probe --save-playerstate,
+# 3 s after the weapon menu was answered; snapshot #63, serverTime 342250.
+# Values are the raw i32 wire words, floats as their bit patterns: the gate
+# compares bits and a rendered float loses them.
+# [playerstate] is Protocol::player_fields order, [entity] the probe's own
+# client entity in Protocol::entity_fields order, [servercommands] every
+# serverCommand retail sent after the gamestate, verbatim and in order.
+[playerstate]
+commandTime 342232
+origin[1] 1176391680
+origin[0] -971460608
+origin[2] 1133776896
+viewangles[1] 0
+viewangles[0] 0
+iCompassFriendInfo 0
+eFlags 16
+bobCycle 0
+viewHeightCurrent 1114636288
+eventSequence 0
+legsAnim 634
+pm_flags 262144
+delta_angles[1] 24576
+velocity[1] 0
+velocity[0] 0
+speed 190
+mins[0] -1049624576
+mins[1] -1049624576
+maxs[0] 1097859072
+maxs[1] 1097859072
+maxs[2] 1116471296
+proneViewHeight 11
+crouchViewHeight 40
+standViewHeight 60
+deadViewHeight 8
+walkSpeedScale 1053609165
+runSpeedScale 1065353216
+proneSpeedScale 1041865114
+crouchSpeedScale 1059481190
+strafeSpeedScale 1061997773
+backSpeedScale 1060320051
+leanSpeedScale 1053609165
+friction 1065353216
+groundEntityNum 1022
+viewHeightTarget 60
+events[0] 0
+weapons[0] 134481920
+weaponslots[0] 184553984
+gravity 800
+serverCursorHintString 255
+viewmodelIndex 52
+events[1] 0
+events[2] 0
+events[3] 0
+delta_angles[0] 0
+weapon 18
+movementDir 0
+viewHeightLerpTarget 0
+weaponslots[4] 27
+proneDirection 0
+aimSpreadScale 0
+weapAnim 0
+jumpTime 0
+velocity[2] 0
+weaponTime 0
+proneTorsoPitch 0
+proneDirectionPitch 0
+fTorsoPitch 0
+fWaistPitch 0
+fTorsoHeight 0
+weaponstate 0
+torsoTimer 0
+torsoAnim 0
+eventParms[0] 0
+vLadderVec[0] 0
+eventParms[3] 0
+viewHeightLerpDown 0
+weaponDelay 0
+eventParms[1] 0
+viewHeightLerpTime 0
+eventParms[2] 0
+vLadderVec[1] 0
+fWeaponPosFrac 0
+pm_type 0
+legsTimer 0
+fJumpPeak 0
+leanf 0
+damageEvent 0
+damageYaw 0
+damagePitch 0
+damageCount 0
+weaponrechamber[0] 0
+grenadeTimeLeft 0
+pm_time 0
+iFoliageSoundTime 0
+deltaTime 0
+serverCursorHint 0
+serverCursorHintVal 0
+shellshockIndex 0
+shellshockTime 0
+shellshockDuration 0
+delta_angles[2] 0
+vLadderVec[2] 0
+clientNum 0
+weapons[1] 0
+weaponrechamber[1] 0
+viewangles[2] 0
+viewHeightLerpPosAdj 0
+mins[2] 0
+viewlocked 0
+viewlocked_entNum 0
+gunfx 0
+[entity]
+# retail sent no self-entity
+[servercommands]
+f "MPSCRIPT_CONNECTEDvcod^7"
+v g_scriptMainMenu "team_russiangerman"
+v scr_showweapontab "0"
+t 0
+v cg_objectiveText "DM_KILL_OTHER_PLAYERS"
+v scr_showweapontab "1"
+v g_scriptMainMenu "weapon_russian"
+t 1
+v cg_objectiveText "DM_KILL_OTHER_PLAYERS"

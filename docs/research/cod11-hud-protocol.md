@@ -59,7 +59,7 @@ grepping a capture for `scores` or `cs` finds nothing.
 | `o`, `p`, `q` | | traps `0xc0`/`0xd4`, `0xd5`, `0x30031fc0` |
 | `r` | `0x3002df30` | `CG_ReverbCmd` |
 | `s` | `0x3002e040` | `CG_LocalSound` |
-| `t` | `0x3002dae0` | |
+| `t` | `0x3002dae0` | open script menu: `t <script menu index>` (section 0.1) |
 | `u` | `0x3002de60` | close script menus |
 | `v` | `0x30030550` | set client cvar: `v <name> "<value>"` |
 
@@ -78,6 +78,35 @@ serverCommand 29: i "^1Revive:^7 Join our Discord server Cod1.net/^6Discord"
 `d` carries the new configstring text as argv[1]; the cgame handler ignores it
 and re-reads the applied table via `trap_GetGameState` (`0x4f`), exactly as Q3's
 `CG_ConfigStringModified` does.
+
+### 0.1 The script menu handshake
+
+Measured on 2026-08-31 against the retail 1.1d dedicated server, dm on
+mp_pavlov, with `--net-probe --save-playerstate`; the whole stream is in
+`crates/server/tests/fixtures/playerstate/mp_pavlov-dm.txt`. A client's `begin`
+releases `Callback_PlayerConnect`, which puts these five commands on the wire in
+this order (`^U` is a literal 0x15 byte):
+
+```
+f "MPSCRIPT_CONNECTED^Uvcod^7"
+v g_scriptMainMenu "team_russiangerman"
+v scr_showweapontab "0"
+t 0
+v cg_objectiveText "DM_KILL_OTHER_PLAYERS^U"
+```
+
+`t`'s argument is an index into the script-menu configstring range, whose slot 0
+is cs 1180: cs 1180 is `team_russiangerman` and cs 1181 `weapon_russian`, and
+answering the team menu produces `v g_scriptMainMenu "weapon_russian"` then
+`t 1`. INFERRED that `t` is the wire form of the script's `openMenu`: the script
+calls `openMenu(game["menu_team"])` at exactly that point and no other command
+in the stream is unaccounted for.
+
+The client answers with the `mr <serverId> <menu index> <response>` client
+command, quoting back the index `t` named. Answering `t 0` with `allies` and the
+`t 1` that follows with a weapon `maps\mp\gametypes\_teams::restrict` allows for
+that menu's nationality spawns the player; `--save-playerstate` does exactly
+that.
 
 ---
 

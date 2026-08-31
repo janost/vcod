@@ -126,6 +126,9 @@ pub struct NetClient<T: Transport> {
     client_num: i32,
     /// Highest serverCommand sequence executed; the `reliableAcknowledge` we send.
     command_sequence: i32,
+    /// Cursor for [`NetClient::take_server_commands`]; `None` until its first
+    /// call, which starts it wherever the sequence has already reached.
+    commands_taken: Option<i32>,
 
     /// Server clock estimate and the pump time it was taken.
     server_time: i32,
@@ -192,6 +195,7 @@ impl<T: Transport> NetClient<T> {
             checksum_feed: 0,
             client_num: 0,
             command_sequence: 0,
+            commands_taken: None,
             server_time: 0,
             server_time_at: now,
             last_sent_cmd: NULL_USERCMD,
@@ -239,6 +243,22 @@ impl<T: Transport> NetClient<T> {
 
     pub fn server_id(&self) -> i32 {
         self.server_id
+    }
+
+    /// Verbatim text of every serverCommand executed since the last call, in
+    /// order. It reads the reliable ring `handle_server_command` already keeps
+    /// verbatim for the scramble key rather than buffering a second copy, so
+    /// commands older than the ring are gone; the first call starts the cursor
+    /// where the sequence stands and reports nothing before it.
+    pub fn take_server_commands(&mut self) -> Vec<String> {
+        let cap = self.netchan.server_commands.len();
+        let from = *self.commands_taken.get_or_insert(self.command_sequence);
+        let first = (self.command_sequence - cap as i32 + 1).max(from + 1);
+        let out = (first..=self.command_sequence)
+            .map(|seq| self.netchan.server_commands[seq as usize & (cap - 1)].clone())
+            .collect();
+        self.commands_taken = Some(self.command_sequence);
+        out
     }
 
     pub fn capture_count(&self) -> Option<usize> {
@@ -1534,6 +1554,25 @@ mod tests {
     fn tokenize_handles_quotes() {
         assert_eq!(tokenize("cs 5 \"\\a\\b\""), vec!["cs", "5", "\\a\\b"]);
         assert_eq!(tokenize("disconnect"), vec!["disconnect"]);
+    }
+
+    #[test]
+    fn take_server_commands_drains_verbatim_and_only_once() {
+        let t0 = Instant::now();
+        let mut c = NetClient::start(FakeTransport::default(), t0);
+
+        // The first call sets the cursor, so what arrived before it is not
+        // replayed; consumed commands come back like any other.
+        c.handle_server_command(1, "v g_scriptMainMenu \"team_americangerman\"".to_string());
+        assert_eq!(c.take_server_commands(), Vec::<String>::new());
+
+        c.handle_server_command(2, "t 0".to_string());
+        c.handle_server_command(3, "d 3 n\\ambient\\t\\0".to_string());
+        assert_eq!(
+            c.take_server_commands(),
+            vec!["t 0".to_string(), "d 3 n\\ambient\\t\\0".to_string()]
+        );
+        assert!(c.take_server_commands().is_empty());
     }
 
     #[test]
