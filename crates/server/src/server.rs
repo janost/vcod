@@ -8,7 +8,7 @@
 use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
 use crate::game::host::ClientEvent;
-use crate::spectate::SpectatorSim;
+use crate::spectate::ClientSim;
 use crate::world::{TestEntities, World};
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
@@ -562,19 +562,9 @@ impl Server {
         // The new delta base commits before any op runs; a message that fails
         // to decode left it alone above.
         self.clients[slot].as_mut().unwrap().last_cmd = last_cmd;
-        // Acking the gamestate message is the enter-world trigger. Equal, not
-        // strictly past: a message's fragments share one sequence, so the
-        // client's first ack lands exactly on gamestate_message_num, and no
-        // later server message exists yet to push it past.
-        let entering = {
-            let c = self.clients[slot].as_mut().unwrap();
-            c.accept(&m, now);
-            c.addr = from; // NAT may move the port; the qport is the identity
-            c.state == ClientState::Primed && i64::from(m.message_ack) >= c.gamestate_message_num
-        };
-        if entering {
-            self.enter_world(slot);
-        }
+        let c = self.clients[slot].as_mut().unwrap();
+        c.accept(&m, now);
+        c.addr = from; // NAT may move the port; the qport is the identity
         for op in ops {
             match op {
                 ClientOp::Command { seq, text } => {
@@ -936,7 +926,7 @@ impl Server {
         c.state = ClientState::Active;
         // Fresh start, matching the client's own outCmd reset on map entry.
         c.last_cmd = NULL_USERCMD;
-        c.sim = Some(SpectatorSim::new(spawn.0, spawn.1));
+        c.sim = Some(ClientSim::spectator(spawn.0, spawn.1));
         // One frame back, so the first cmd's dt is a sane 50 ms rather than
         // the whole age of the client's clock.
         c.last_processed_st = self.sv_time_ms.wrapping_sub(FRAME_MS);
@@ -1000,6 +990,7 @@ impl Server {
             .test_entities
             .as_ref()
             .map_or_else(BTreeMap::new, |te| te.at(self.proto, self.sv_time_ms));
+        let collision = self.world.as_ref().map(|w| &w.collision);
 
         for slot in 0..self.clients.len() {
             let Some(c) = self.clients[slot].as_mut() else {
@@ -1030,7 +1021,7 @@ impl Server {
                     continue;
                 }
                 let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
-                sim.step(&cmd, dt);
+                sim.step(&cmd, dt, collision);
                 c.last_processed_st = cmd.server_time;
                 first_cmd_st.get_or_insert(cmd.server_time);
                 last_cmd_st = Some(cmd.server_time);
@@ -1880,8 +1871,8 @@ mod tests {
     }
 
     /// Connect, ask for the gamestate (a fresh client sends serverId 0),
-    /// drain it, ack past it. Returns the live client netchan; the server now
-    /// considers slot 0 Active.
+    /// drain it, ack past it. Returns the live client netchan; slot 0 is
+    /// Primed, and stays there until it sends `begin`.
     fn active(sv: &mut Server, now: Instant) -> Netchan {
         let huff = Huffman::new();
         let mut nc = connected(sv, addr(5), now);
@@ -1896,6 +1887,32 @@ mod tests {
             &nc.build_out(0x10, ack, 0, &ack_ops(), &huff).unwrap(),
             now,
         );
+        nc
+    }
+
+    /// `active` plus the `begin` command that entry into the world is gated
+    /// on, so slot 0 has a sim and is sent snapshots.
+    fn begun(sv: &mut Server, now: Instant) -> Netchan {
+        let huff = Huffman::new();
+        let mut nc = active(sv, now);
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_CLIENT_COMMAND, 2);
+        w.write_long(1);
+        w.write_string("begin");
+        w.write_bits(CLC_EOF, 2);
+        // Every later reply is scrambled with the last command string the
+        // server stored, so the client's own ring has to hold it too.
+        nc.reliable[1] = "begin".to_string();
+        let pkt = nc
+            .build_out(
+                i32::from(sv.server_id),
+                nc.incoming_sequence as i32,
+                0,
+                &w.into_ops(),
+                &huff,
+            )
+            .unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
         nc
     }
 
@@ -1938,7 +1955,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let p = &PROTOCOL_V1;
 
@@ -1988,7 +2005,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
 
         let mut ring = SnapshotRing::new();
         let s = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
@@ -2035,7 +2052,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let t0 = now;
         let t1 = now + std::time::Duration::from_millis(50);
@@ -2094,7 +2111,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let mut chain = MoveChain::new(sv.checksum_feed);
         let mut tick_at = now + std::time::Duration::from_millis(50);
@@ -2166,7 +2183,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let mut chain = MoveChain::new(sv.checksum_feed);
         let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
@@ -2219,7 +2236,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
 
@@ -2293,7 +2310,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let mut chain = MoveChain::new(sv.checksum_feed);
         let p = &PROTOCOL_V1;
@@ -2365,7 +2382,7 @@ mod tests {
             collision: test_world(&[]),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
-        let mut nc = active(&mut sv, now);
+        let mut nc = begun(&mut sv, now);
         let mut ring = SnapshotRing::new();
         let _ = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
 

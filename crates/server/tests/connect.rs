@@ -148,6 +148,9 @@ fn frames_delta_against_the_acked_base_and_fall_back_when_acks_stop() {
     let mut sv = server();
     let mut now = Instant::now();
     let mut cl = connect(&mut sv, &q, &mut now);
+    // Entry into the world is gated on `begin`, and only a client in the
+    // world is sent snapshots.
+    cl.send_reliable("begin");
 
     let mut seen_delta = false;
     let mut seen_uncompressed_during_silence = false;
@@ -220,6 +223,9 @@ fn scripted_entities_move_cycle_out_and_return() {
     let mut sv = server_with_entities(2);
     let mut now = Instant::now();
     let mut cl = connect(&mut sv, &q, &mut now);
+    // Entry into the world is gated on `begin`, and only a client in the
+    // world is sent snapshots.
+    cl.send_reliable("begin");
 
     let p = &PROTOCOL_V1;
     let time_idx = EntityState::field_index(p, "pos.trTime").unwrap();
@@ -297,6 +303,9 @@ fn a_renamed_client_deltas_against_its_roster_base() {
     let mut sv = server();
     let mut now = Instant::now();
     let mut cl = connect(&mut sv, &q, &mut now);
+    // Entry into the world is gated on `begin`, and only a client in the
+    // world is sent snapshots.
+    cl.send_reliable("begin");
 
     let p = &PROTOCOL_V1;
     let mut saw_original_name = false;
