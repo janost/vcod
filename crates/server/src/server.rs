@@ -826,29 +826,40 @@ impl Server {
         self.world = Some(Rc::new(world));
     }
 
-    /// The cvar table a gametype script starts with: the engine defaults
-    /// plus `g_gametype`, `sv_hostname` and `sv_maxclients` mirroring this
-    /// run's `ServerConfig`, and `debug` at retail's default off, which is
-    /// what `_utility.gsc`'s exploder logic (`getCvar("debug") != "1"`)
-    /// expects when nobody has set it, and `scr_allow_fg42` at `"0"`.
-    /// None of these five are flagged into the 140/204 mirror; only
-    /// `makeCvarServerInfo` does that.
+    /// The cvar table a gametype script starts with: the engine defaults,
+    /// then `default_mp.cfg`, then `g_gametype`, `sv_hostname` and
+    /// `sv_maxclients` mirroring this run's `ServerConfig`, and `debug` at
+    /// retail's default off, which is what `_utility.gsc`'s exploder logic
+    /// (`getCvar("debug") != "1"`) expects when nobody has set it. None of
+    /// them are flagged into the 140/204 mirror; only `makeCvarServerInfo`
+    /// does that.
     ///
-    /// `scr_allow_fg42` is seeded because retail's capture has it at slot
-    /// 164/228 as `"0"` while every other `scr_allow_*` is `"1"`, and
-    /// `_teams::initGlobalCvars()` passes `"1"` as its default too. Since
-    /// `makeCvarServerInfo` never overwrites an existing value, something on
-    /// retail registers it as `"0"` before any script runs; the mechanism is
-    /// unidentified. It is not cosmetic: `!getCvar("scr_allow_fg42")` is what
-    /// makes `_teams::restrictPlacedWeapons` `delete()` the map's placed
-    /// fg42s, so the value moves entity numbering as well as the mirror.
-    fn cvars(&self) -> crate::cvars::Cvars {
+    /// `default_mp.cfg` is where the stock `scr_*` values come from: the
+    /// engine execs it at startup, it ships in `localized_english_pak0.pk3`,
+    /// and it sets 45 cvars, 38 of them the `scr_*` the stock gametype
+    /// scripts read. All but one are invisible in a configstring capture,
+    /// because the file's value and the script's own
+    /// `makeCvarServerInfo` default agree; `scr_allow_fg42` is the one that
+    /// does not, `0` in the file against the script's `"1"`, and
+    /// `makeCvarServerInfo` keeps the value already there. It is not
+    /// cosmetic: `!getCvar("scr_allow_fg42")` is what makes
+    /// `_teams::restrictPlacedWeapons` `delete()` the map's placed fg42s, so
+    /// the value moves entity numbering as well as the mirror.
+    fn cvars(&self, fs: &vcod_common::pk3::Pk3Fs) -> crate::cvars::Cvars {
         let mut cvars = crate::cvars::Cvars::new();
+        match fs.read("default_mp.cfg") {
+            Some(bytes) => {
+                let n = cvars.exec_cfg(&String::from_utf8_lossy(&bytes));
+                log::debug!("default_mp.cfg: {n} cvars set");
+            }
+            // A mount set without the localized pak loses every stock
+            // `scr_*` value, so say so rather than run on script defaults.
+            None => log::warn!("default_mp.cfg not in the mounted paks; stock scr_* defaults lost"),
+        }
         cvars.set("g_gametype", &self.cfg.gametype);
         cvars.set("sv_hostname", &self.cfg.hostname);
         cvars.set("sv_maxclients", &self.cfg.max_clients.to_string());
         cvars.set("debug", "0");
-        cvars.set("scr_allow_fg42", "0");
         cvars
     }
 
@@ -867,7 +878,7 @@ impl Server {
     /// it was, so the error the caller reports is about the script rather
     /// than about a half-cleared table. `main.rs` exits on it.
     pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
-        let cvars = self.cvars();
+        let cvars = self.cvars(&fs);
         let rt = crate::game::script::ScriptRuntime::load(
             fs,
             &self.cfg.map,

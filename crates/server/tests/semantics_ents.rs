@@ -246,11 +246,12 @@ fn probe_cvar_matches_retail() {
 /// it at slot 164/228 as `"0"` while every other `scr_allow_*` is `"1"`
 /// (`crates/server/src/cvars.rs`'s `STOCK_SCRIPT_CVARS`), and Activision's
 /// own `_teams::initGlobalCvars()` passes `"1"` as fg42's default too, so
-/// that call is not what produced the `"0"` — `makeCvarServerInfo` never
-/// overwrites an existing value. Something registers it as `"0"` before
-/// the script runs; the mechanism is unidentified. This isolated probe
-/// runs no bootstrap at all, so the test seeds the measured value
-/// directly to reproduce retail's state.
+/// that call is not what produced the `"0"`: `makeCvarServerInfo` never
+/// overwrites an existing value. What did is `default_mp.cfg`, which the
+/// engine execs at startup and whose line 95 is `set scr_allow_fg42 0`
+/// (docs/research/cod11-gsc-object-model.md section 18). This isolated
+/// probe runs no bootstrap and mounts no paks, so the test seeds the
+/// measured value directly to reproduce retail's state.
 #[test]
 fn probe_not_string_matches_retail() {
     let (mut vm, main) = install("probe_not_string");

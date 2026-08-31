@@ -981,6 +981,32 @@ already read and we do not carry are `g_allowVote` (index 26, default
 measured outcome today, `g_debugDamage` because 0 is what an absent cvar
 already reads as.
 
+**That table is the wrong place to look for a `scr_*` cvar, though: those
+come from `default_mp.cfg`.** VERIFIED, read out of the binaries and the
+shipped paks: `cod_lnxded` carries the literal command
+`exec default_mp.cfg\n` (`.rodata` 0x080cf6de), the file ships inside
+`localized_english_pak0.pk3`, and its 140 lines set 45 cvars, of which line
+95 is `set scr_allow_fg42 0`. That value is in neither binary: no `scr_*`
+name appears in the game module's cvar table at all. 38 of the 45 are
+`scr_*` and the stock gametype scripts read them: seventeen `scr_allow_*`
+(`scr_allow_vote` is the eighteenth and comes from the script alone), the
+`scr_dm_*`, `scr_sd_*`, `scr_re_*` and `scr_bel_*` limits,
+`scr_friendlyfire`, `scr_drawfriend` and `scr_forcerespawn`. The other seven
+are the client's mouse settings and `ui_allow_sniperrifles`. All 38 are
+invisible in a capture except one, because the file's value and the script's
+own `makeCvarServerInfo` default agree. `scr_allow_fg42` is the row where
+they do not: the file says `0`, `_teams::initGlobalCvars()` passes `"1"`,
+and `makeCvarServerInfo` keeps the value already there, which is why it is
+the only `scr_allow_*` the gate ever surfaced (slot 164/228). Seeding one
+literal would reproduce the two gate maps and generalise to nothing, so
+`Server::cvars` reads the file out of the mounted paks and applies its `set`
+lines. Plain `set` is right: nothing the file names is in the module's cvar
+table, so there is no registration order to respect, and `set` never flags a
+cvar into the 140/204 mirror. A value from the file reaches the mirror only
+when a script later flags that name, so seeding all 45 leaves the mirror
+byte-identical; the gate confirms it, both maps still matching slot for
+slot.
+
 ## 19. The last two configstring mechanisms: `northyaw` and two `SP_` sound aliases
 
 Closing `crates/server/tests/configstrings_ab.rs`'s last four slots on

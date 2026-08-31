@@ -129,6 +129,29 @@ impl Cvars {
             });
     }
 
+    /// Applies a config file's `set` lines, as `Cvar_Set` each, and returns
+    /// how many it applied. `bind`, `unbindall` and everything else in the
+    /// file is dropped: nothing else in `default_mp.cfg` reaches a
+    /// dedicated server's cvar table.
+    ///
+    /// `set` and not `register` is the right primitive here. Nothing the
+    /// stock file names is in the game module's own cvar table, so there is
+    /// no registration to lose, and `set` never flags a cvar into the
+    /// 140/204 mirror -- a `scr_*` value from the file reaches the mirror
+    /// only if a script later calls `makeCvarServerInfo` on that name,
+    /// which keeps the existing value.
+    pub fn exec_cfg(&mut self, text: &str) -> usize {
+        let mut applied = 0;
+        for line in text.lines() {
+            let tokens = cfg_tokens(line);
+            if tokens.len() >= 2 && tokens[0].eq_ignore_ascii_case("set") {
+                self.set(&tokens[1], tokens.get(2).map_or("", |s| s.as_str()));
+                applied += 1;
+            }
+        }
+        applied
+    }
+
     /// `makeCvarServerInfo(name, default)`: `register` plus the mirror
     /// flag, which it sets whether or not the cvar already existed.
     pub fn make_server_info(&mut self, name: &str, default: &str) {
@@ -160,6 +183,41 @@ impl Cvars {
         }
         Ok(())
     }
+}
+
+/// `Cmd_TokenizeString` cut down to what a cfg line needs: `//` starts a
+/// comment, a double-quoted run is one token, everything else splits on
+/// whitespace.
+fn cfg_tokens(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut chars = line.chars().peekable();
+    let mut quoted = false;
+    while let Some(c) = chars.next() {
+        if quoted {
+            if c == '"' {
+                tokens.push(std::mem::take(&mut cur));
+                quoted = false;
+            } else {
+                cur.push(c);
+            }
+            continue;
+        }
+        match c {
+            '"' => quoted = true,
+            '/' if chars.peek() == Some(&'/') => break,
+            c if c.is_whitespace() => {
+                if !cur.is_empty() {
+                    tokens.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
 }
 
 #[cfg(test)]
@@ -204,9 +262,12 @@ mod tests {
     /// every other `scr_allow_*` is `"1"`. Activision's own
     /// `_teams::initGlobalCvars()` passes `"1"` as fg42's default too, and
     /// `makeCvarServerInfo` never overwrites a cvar that already has a
-    /// value, so that call cannot be what produced the `"0"` seen here.
-    /// Something registers `scr_allow_fg42` as `"0"` before the script
-    /// runs; the mechanism is unidentified.
+    /// value, so that call is not what produced the `"0"`. What did is
+    /// `default_mp.cfg`, which the engine execs at startup and whose line
+    /// 95 is `set scr_allow_fg42 0` -- the file's only `scr_allow_*` row
+    /// set to `0` (docs/research/cod11-gsc-object-model.md section 18).
+    /// `Server::cvars` runs the file, so this table is a transcription of
+    /// the capture, not a source of values.
     const STOCK_SCRIPT_CVARS: &[(&str, &str)] = &[
         ("scr_allow_bar", "1"),
         ("scr_allow_bren", "1"),
@@ -270,6 +331,52 @@ mod tests {
         assert_eq!(cs[223], "GAME_ALLIES");
         assert_eq!(cs[160], "g_TeamName_Axis");
         assert_eq!(cs[224], "GAME_AXIS");
+    }
+
+    /// `exec_cfg` takes the `set` lines and nothing else, dequotes a
+    /// quoted value, stops at a `//` comment, and overwrites a value that
+    /// is already there the way `Cvar_Set` does. The shapes here are all
+    /// from `default_mp.cfg` itself: tab-separated binds, a `set` whose
+    /// value is quoted, and a commented-out line.
+    #[test]
+    fn exec_cfg_applies_set_lines_only() {
+        let mut cv = Cvars::new();
+        cv.set("scr_allow_fg42", "1");
+        let applied = cv.exec_cfg(concat!(
+            "// Hello Dave, Would you like to play a game?\r\n",
+            "unbindall\r\n",
+            "bind\tPAUSE\t\t\"toggle cl_paused\"\r\n",
+            "//set scr_allow_mp40 0\r\n",
+            "set scr_allow_fg42 0\r\n",
+            "set m_pitch \"0.022\"\r\n",
+        ));
+        assert_eq!(applied, 2);
+        assert_eq!(cv.get("scr_allow_fg42"), "0");
+        assert_eq!(cv.get("m_pitch"), "0.022");
+        assert_eq!(cv.get("scr_allow_mp40"), "");
+        assert_eq!(cv.get("toggle cl_paused"), "");
+    }
+
+    /// A cfg value never reaches the 140/204 mirror by itself: `set` does
+    /// not flag, so a `scr_*` row only appears there once a script's
+    /// `makeCvarServerInfo` flags that name, and then with the cfg's value
+    /// rather than the script's default. That pair is exactly how retail's
+    /// slot 228 reads `0` while `_teams::initGlobalCvars()` passes `"1"`.
+    #[test]
+    fn a_cfg_value_enters_the_mirror_only_when_a_script_flags_it() {
+        let mut cv = Cvars::new();
+        cv.exec_cfg("set scr_allow_fg42 0\nset scr_dm_scorelimit 50\n");
+        let mut cs = vec![String::new(); 2048];
+        cv.write_mirror(&mut cs).unwrap();
+        assert!(!cs[MIRROR_NAMES].iter().any(|n| n == "scr_allow_fg42"));
+        cv.make_server_info("scr_allow_fg42", "1");
+        cv.write_mirror(&mut cs).unwrap();
+        let at = cs[MIRROR_NAMES]
+            .iter()
+            .position(|n| n == "scr_allow_fg42")
+            .expect("flagged now");
+        assert_eq!(cs[MIRROR_VALUES.start() + at], "0");
+        assert!(!cs[MIRROR_NAMES].iter().any(|n| n == "scr_dm_scorelimit"));
     }
 
     /// An unset cvar reads empty, which is what `Cvar_VariableString`
