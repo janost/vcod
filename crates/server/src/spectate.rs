@@ -2,7 +2,7 @@
 
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
-use vcod_common::net::msg::{self, UserCmd};
+use vcod_common::net::msg::{self, UserCmd, NULL_USERCMD};
 use vcod_common::net::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::pmove::{self, PmInput};
 
@@ -15,10 +15,18 @@ fn short_deg(v: i32) -> f32 {
 }
 
 /// `ANGLE2SHORT(spawn_angle) - cmd.angles`, RTCW's `SetClientViewAngle`
-/// (docs/protocol-1.1.md, "Spectator view angles"). `cmd.angles` is zero at
-/// every spawn point this runs from, so the subtracted term drops out.
-fn spawn_delta_angles(yaw_deg: f32) -> [i32; 3] {
-    [0, (yaw_deg * ANGLE2SHORT) as i32, 0]
+/// (docs/protocol-1.1.md, "Spectator view angles"). `cmd_angles` is the
+/// client's last-known angles at the moment of this spawn: every current
+/// call site passes zero (a fresh connect's `NULL_USERCMD`, or a spectator
+/// that never turned), so the subtraction looks dead until a caller with a
+/// real one arrives -- keep it anyway, or that caller silently force-turns
+/// the client instead of preserving its view.
+fn spawn_delta_angles(yaw_deg: f32, cmd_angles: [i32; 3]) -> [i32; 3] {
+    [
+        -cmd_angles[0],
+        (yaw_deg * ANGLE2SHORT) as i32 - cmd_angles[1],
+        -cmd_angles[2],
+    ]
 }
 
 /// The movement path a client is on, and with it the half of the wire
@@ -51,16 +59,21 @@ impl ClientSim {
         ClientSim {
             ps: pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg),
             pm_type: PmType::Spectator,
-            delta_angles: spawn_delta_angles(yaw_deg),
+            // A fresh connect has no prior cmd; `Server::enter_world` sets
+            // `c.last_cmd = NULL_USERCMD` immediately before building this.
+            delta_angles: spawn_delta_angles(yaw_deg, NULL_USERCMD.angles),
         }
     }
 
     /// The mode change `spawnPlayer()` makes: the same sim, restarted at the
-    /// spawn point the script chose.
-    pub fn become_player(&mut self, origin: [f32; 3], yaw_deg: f32) {
+    /// spawn point the script chose. `cmd_angles` is the client's last-known
+    /// cmd angles going into the spawn -- a spectator can have turned freely
+    /// before answering the weapon menu, unlike a fresh connect, so the
+    /// caller must supply the real value rather than assume zero.
+    pub fn become_player(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
         self.ps = pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg);
         self.pm_type = PmType::Normal;
-        self.delta_angles = spawn_delta_angles(yaw_deg);
+        self.delta_angles = spawn_delta_angles(yaw_deg, cmd_angles);
     }
 
     /// Advance one frame. The axes arrive quantized to ±127/0 and dt comes off
@@ -214,7 +227,7 @@ mod tests {
     fn a_standing_player_carries_the_captured_values() {
         let p = &PROTOCOL_V1;
         let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0);
-        sim.become_player([0.0, 0.0, 64.0], 0.0);
+        sim.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         // The capture is of a player standing still on the floor.
         sim.ps.on_ground = true;
         let w = sim.to_wire(p, 0, 0);
@@ -280,7 +293,7 @@ mod tests {
         assert_eq!(ps.field_i32(p, "pm_type"), 4);
 
         let mut player = ClientSim::spectator([0.0, 0.0, 64.0], 0.0);
-        player.become_player([0.0, 0.0, 64.0], 0.0);
+        player.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         let ps = player.to_wire(p, 0, 0);
         assert_eq!(ps.field_i32(p, "pm_type"), 0);
         assert_ne!(
@@ -296,7 +309,7 @@ mod tests {
     #[test]
     fn a_player_without_a_world_still_steps() {
         let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0);
-        sim.become_player([0.0, 0.0, 64.0], 0.0);
+        sim.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         let cmd = UserCmd {
             forward: 127,
             ..UserCmd::default()
@@ -313,13 +326,19 @@ mod tests {
     /// spawn angle there instead of leaving it unwritten, and reverting
     /// `step` alone snaps the simulated yaw back to the cmd's raw 0 rather
     /// than 90. `16_384` is `ANGLE2SHORT(90)`, the same value the committed
-    /// capture fixture carries (`crates/common/src/net/msg.rs:1826`).
+    /// capture fixture carries (`crates/common/src/net/msg.rs:1826`). Pitch
+    /// (`[0]`) is asserted on both fields too, a strict superset of the
+    /// deleted `delta_angles_stay_zero`: only the yaw is spawn-dependent, so
+    /// a `spawn_delta_angles` that put the yaw in the wrong slot, or a
+    /// `viewangles[0]` write left behind, must fail here as well.
     #[test]
     fn delta_angles_carry_the_spawn_yaw_and_viewangles_stay_unwritten() {
         let p = &PROTOCOL_V1;
         let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 90.0);
         let ps = sim.to_wire(p, 0, 0);
+        assert_eq!(ps.field_i32(p, "delta_angles[0]"), 0);
         assert_eq!(ps.field_i32(p, "delta_angles[1]"), 16_384);
+        assert_eq!(ps.field_i32(p, "viewangles[0]"), 0);
         assert_eq!(ps.field_i32(p, "viewangles[1]"), 0);
 
         // The probe that took the capture sends cmd.angles = [0,0,0] and
