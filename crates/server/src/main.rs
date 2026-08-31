@@ -29,6 +29,9 @@ struct Args {
     /// sv_maxclients
     #[arg(long, default_value_t = 8)]
     max_clients: usize,
+    /// g_gametype: the script under maps/mp/gametypes to run
+    #[arg(long, default_value = "dm")]
+    gametype: String,
     /// Scripted entities that exercise the packet-entity wire path. 0 is off.
     #[arg(long, default_value_t = 0)]
     test_entities: usize,
@@ -77,15 +80,20 @@ fn main() -> Result<()> {
             map: args.map,
             hostname: args.hostname,
             max_clients: args.max_clients,
-            gametype: "dm".into(),
+            gametype: args.gametype,
             test_entities: args.test_entities,
             trace: args.trace,
         },
         Instant::now(),
     );
     server.load_world(vcod_server::world::World::from_bsp(&bsp));
+    // A failed script load is fatal, not a warning. The configstring table is
+    // mostly script output now, so a server that kept serving would hand
+    // clients a gamestate with no team menu, no status icons and no shaders,
+    // which reads as a protocol bug rather than a script failure.
     if let Err(e) = server.load_scripts(fs.clone()) {
-        log::error!("loading map script: {e:#}");
+        log::error!("loading the map and gametype scripts: {e:#}");
+        std::process::exit(1);
     }
     let mut buf = vec![0u8; 65536];
     loop {

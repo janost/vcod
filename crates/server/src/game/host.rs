@@ -4,7 +4,7 @@
 //! errors until stage 4 brings clients, everything else goes to the
 //! entity's own struct in the VM heap.
 
-use crate::configstrings::Allocators;
+use crate::configstrings::{Allocators, CsRange};
 use crate::game::builtins;
 use crate::game::damage::DamageEvent;
 use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
@@ -31,11 +31,13 @@ pub fn is_builtin(name: &str) -> bool {
     builtins::entity::lookup(name).is_some()
         || builtins::math::lookup(name).is_some()
         || builtins::fx::lookup(name).is_some()
+        || builtins::hud::lookup(name).is_some()
         || builtins::sound::lookup(name).is_some()
         || builtins::attach::lookup(name).is_some()
         || builtins::combat::lookup(name).is_some()
         || builtins::mover::lookup(name).is_some()
         || builtins::cvar::lookup(name).is_some()
+        || builtins::precache::lookup(name).is_some()
         || BUILTINS.contains(&name)
 }
 
@@ -49,10 +51,11 @@ pub struct GameHost {
     /// Runtime configstring slot allocators, one per engine indexer
     /// (`G_ModelIndex` and its siblings).
     pub allocators: Allocators,
-    /// `getCvar`'s table. Empty until something populates it; a lookup that
-    /// misses answers with the empty string, same as retail's
-    /// `Cvar_VariableString` on an unregistered cvar.
-    pub cvars: std::collections::HashMap<String, String>,
+    /// The cvar table. `getCvar` and friends read it, `setCvar` and
+    /// `makeCvarServerInfo` write it, and the 140/204 configstring mirror is
+    /// rebuilt from it. `Server` seeds it at load and reads it back every
+    /// frame, the same single-owner arrangement the configstring table has.
+    pub cvars: crate::cvars::Cvars,
     /// The map's collision, once one exists. `None` in every unit test and
     /// on a fresh `GameHost`; `bulletTrace` traces against it when present
     /// and reports a clean miss when it is not. Stage 10 is what sets it.
@@ -66,6 +69,30 @@ pub struct GameHost {
     /// server's `games_mp.log`; this is where that will come from, and it is
     /// what lets a test replay a retail capture.
     pub script_log: Vec<String>,
+    /// The level clock in milliseconds: `getTime()` reads it, and it is set
+    /// by `ScriptRuntime::load` at map load and by `run_frame` every frame
+    /// after. `getTime`'s real units are unmeasured (`probe_cvar` only
+    /// established non-negative); this is the reading chosen. A later task's
+    /// deferred entity free also needs the level clock rather than a
+    /// per-call timestamp, which is why this lives on the host instead of
+    /// being threaded through `get_time`'s own call.
+    pub level_time_ms: i32,
+    /// Set by `exitLevel()`, drained and logged once per frame by
+    /// `run_frame`. No stage in this sub-project acts on it; stage 6 ("the
+    /// score limit ends the map") is where it does.
+    pub exit_level: bool,
+    /// Who owns a client's name, from `setClientNameMode`. Nothing reads it
+    /// until clients exist: both of retail's readers are client code.
+    pub client_name_mode: builtins::cvar::ClientNameMode,
+    /// The registered-item bitset. `precacheItem` writes it and mirrors it
+    /// into configstring 8 (`crate::items`); nothing else reads or writes
+    /// it directly.
+    pub items: crate::items::Items,
+    /// The mounted paks, once there are any. `register_item` reads a
+    /// weapon's models out of its weapon file through this; `None` on a
+    /// fresh host, so a unit test that mounts nothing registers the bit and
+    /// precaches no weapon model.
+    pub fs: Option<std::rc::Rc<vcod_common::pk3::Pk3Fs>>,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -79,11 +106,40 @@ impl GameHost {
             ents: ObjectTable::new(),
             damage: Vec::new(),
             allocators: Allocators::new(),
-            cvars: std::collections::HashMap::new(),
+            cvars: crate::cvars::Cvars::new(),
             world: None,
             rng: RNG_SEED,
             script_log: Vec::new(),
+            level_time_ms: 0,
+            exit_level: false,
+            items: crate::items::Items::new(),
+            client_name_mode: builtins::cvar::ClientNameMode::default(),
+            fs: None,
         }
+    }
+
+    /// `RegisterItem` (0x4e504): the registration bit, the alt-fire link,
+    /// the item's own two model fields and configstring 8. Every caller
+    /// goes through here rather than `Items::register`, so an item takes
+    /// its model slots wherever it is registered -- at spawn for a placed
+    /// weapon, in `precacheItem` for the script's own list.
+    ///
+    /// A chained alt mode gets the same model pair as the item itself,
+    /// which retail may not: it reads a different struct there (object
+    /// model doc, section 15, M3). No stock alt-fire file carries a model
+    /// the base does not, so the two readings cannot be told apart.
+    pub fn register_item(&mut self, name: &str) {
+        for item in self.items.register(name) {
+            for model in crate::items::item_models(self.fs.as_deref(), item) {
+                if let Err(e) =
+                    self.allocators
+                        .index(&mut self.configstrings, CsRange::Model, &model)
+                {
+                    log::warn!("gsc: item model {model:?} not indexed: {e:?}");
+                }
+            }
+        }
+        self.configstrings[8] = self.items.bitstring();
     }
 
     /// A uniform draw in `[0, 1)`. xorshift64*, same shape as `Server`'s own
@@ -120,6 +176,9 @@ impl Host for GameHost {
         if let Some(f) = builtins::fx::lookup(&folded) {
             return f(self, cx, recv, args);
         }
+        if let Some(f) = builtins::hud::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
         if let Some(f) = builtins::sound::lookup(&folded) {
             return f(self, cx, recv, args);
         }
@@ -133,6 +192,9 @@ impl Host for GameHost {
             return f(self, cx, recv, args);
         }
         if let Some(f) = builtins::cvar::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        if let Some(f) = builtins::precache::lookup(&folded) {
             return f(self, cx, recv, args);
         }
         match folded.as_str() {
@@ -153,6 +215,16 @@ impl Host for GameHost {
             fields::route_entity(cx.resolve_folded(field))
         };
         match route {
+            Route::Engine {
+                slot,
+                ty: FieldType::Enum(names),
+            } => match e.engine[slot] {
+                Value::Int(i) => match names.get(i as usize) {
+                    Some(n) => Value::String(cx.intern_exact(n)),
+                    None => Value::Undefined,
+                },
+                other => other,
+            },
             Route::Engine { slot, .. } => e.engine[slot],
             // Retail errors here; a read has no error channel, so an entity
             // with no client reads undefined and the write path carries the
@@ -178,6 +250,13 @@ impl Host for GameHost {
             return Err(ErrorKind::BadType("no such entity"));
         };
         match route {
+            Route::Engine {
+                slot,
+                ty: FieldType::Enum(names),
+            } => {
+                e.engine[slot] = enum_index(cx, names, value)?;
+                Ok(())
+            }
             Route::Engine { slot, ty } => {
                 if !type_accepts(ty, value) {
                     return Err(ErrorKind::BadType("wrong type for an engine field"));
@@ -197,13 +276,29 @@ impl Host for GameHost {
     }
 }
 
+/// The index a `FieldType::Enum` field stores for the string script wrote.
+/// Retail's shared setter (0x4af80) raises a script error listing the whole
+/// table when the name is not in it, and takes nothing but a string.
+fn enum_index(cx: &Cx, names: &[&str], value: Value) -> Result<Value, ErrorKind> {
+    let Value::String(s) = value else {
+        return Err(ErrorKind::BadType(
+            "that field takes one of a fixed set of names",
+        ));
+    };
+    match names.iter().position(|n| *n == cx.resolve(s)) {
+        Some(i) => Ok(Value::Int(i as i32)),
+        None => Err(ErrorKind::BadType("not one of that field's names")),
+    }
+}
+
 /// Which `Value` shapes each field type accepts. Retail converts in
 /// `Scr_SetGenericField`; we refuse a mismatch instead, so a script bug
 /// surfaces where retail would silently store a zero.
 fn type_accepts(ty: FieldType, v: Value) -> bool {
     use FieldType::*;
     match ty {
-        Int => matches!(v, Value::Int(_) | Value::Undefined),
+        // `Enum` never reaches here; `set_field` converts it first.
+        Int | Enum(_) => matches!(v, Value::Int(_) | Value::Undefined),
         Float => matches!(v, Value::Int(_) | Value::Float(_) | Value::Undefined),
         CString | IString | ModelIndex => {
             matches!(v, Value::String(_) | Value::Localized(_) | Value::Undefined)
@@ -252,11 +347,13 @@ mod tests {
             .chain(builtins::entity::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::math::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::fx::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::hud::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::sound::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::attach::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::combat::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::mover::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::cvar::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::precache::NAMES.iter().map(|(n, _)| *n))
             .collect();
         for name in names {
             let mut vm = vcod_gsc::Vm::new();
@@ -347,6 +444,57 @@ mod tests {
             assert_eq!(cx.get_field(s, sx), Value::Int(3));
             assert_eq!(cx.get_field(s, tn), Value::Undefined);
         });
+    }
+
+    /// A HUD enum field stores retail's index and reads back the name, the
+    /// set/get hook pair retail hangs on the field record. The stock
+    /// `startGame` writes `level.clock.alignX = "center"`, so a string has
+    /// to be what the field takes -- but `"center"` alone proves nothing
+    /// about the order, since it is index 1 of three either way, so every
+    /// name in all three tables is checked against its index here. Nothing
+    /// else in the tree reads the stored index yet.
+    #[test]
+    fn the_hud_enum_fields_store_retails_indices_and_read_back_names() {
+        const TABLES: &[(&str, [&str; 3])] = &[
+            ("font", ["default", "bigfixed", "smallfixed"]),
+            ("alignx", ["left", "center", "right"]),
+            ("aligny", ["top", "middle", "bottom"]),
+        ];
+        let (mut vm, mut host) = fixture();
+        let h = vm.with_cx(|cx| host.ents.spawn_hud_elem(cx).unwrap());
+        vm.with_cx(|cx| {
+            for (field, names) in TABLES {
+                let f = cx.intern_folded(field);
+                for (i, name) in names.iter().enumerate() {
+                    let v = cx.intern_exact(name);
+                    host.set_field(cx, h, f, Value::String(v)).unwrap();
+                    assert_eq!(
+                        host.ents.get(h).unwrap().engine[hud_slot(field)],
+                        Value::Int(i as i32),
+                        "{field} = {name:?} is retail's index {i}"
+                    );
+                    let Value::String(back) = host.get_field(cx, h, f) else {
+                        panic!("{field} reads back as a name");
+                    };
+                    assert_eq!(cx.resolve(back), *name);
+                }
+                // A name from another one of the three tables is still not
+                // one of this field's, which is retail's error too.
+                let wrong = cx.intern_exact("middle");
+                assert!(
+                    *field == "aligny" || host.set_field(cx, h, f, Value::String(wrong)).is_err(),
+                    "{field} took a name that is not in its table"
+                );
+            }
+        });
+    }
+
+    /// One HUD field's dense slot, for the assertion above.
+    fn hud_slot(name: &str) -> usize {
+        match fields::route_hud(name) {
+            Route::Engine { slot, .. } => slot,
+            _ => panic!("{name} is an engine field"),
+        }
     }
 
     /// Reading a field nothing has written is `undefined`, which is what makes

@@ -234,6 +234,17 @@ The pairing (`Cvar_Set(cs[140+i], cs[204+i])`, offset 64) is already recorded in
 and pins the stock values. Only 179/243 is map-dependent. `scr_motd` (180) has
 an empty value, which is also the loop's stop condition on the client.
 
+The table below is the seed for `ENGINE_MIRRORED` in
+`crates/server/src/cvars.rs`, the 21 engine cvars the game module registers
+with the mirror flag, not a description of a constant in `configstrings.rs`.
+The mirror is one name-sorted list of every flagged cvar and nothing writes
+an absolute slot; these 21 engine names all sort ahead of the 20 `scr_*` the
+stock scripts register, which is the only reason the engine set fills
+140..160 and the script set 161..180. The rest of the game module's cvar
+table is not mirrored and cannot be recovered from a capture at all, only
+from the module: section 18 of `docs/research/cod11-gsc-object-model.md`
+has the dumper.
+
 | cs name | name | cs value | mp_pavlov | mp_carentan |
 |---|---|---|---|---|
 | 140 | `bg_duck2prone_time` | 204 | `400` | `400` |
@@ -397,8 +408,26 @@ Where each failure points:
 
 ## Raw captures
 
-I kept the captures locally; they are not in the repo. Regenerate them with
-the commands above. What I captured on 2026-08-25, per map: the three
+Two of them are in the repo now:
+`crates/server/tests/fixtures/configstrings/mp_{pavlov,carentan}-dm.txt` are
+the whole non-empty table off a retail `dm` server, one `<index> <value>` per
+line, and `crates/server/tests/configstrings_ab.rs` diffs our table against
+them slot by slot on both maps. Retake them with `tools/run_server.sh <map>`
+in one shell and `cargo run -p vcod -- --net-probe 127.0.0.1:28960
+--save-configstrings` in another; the fixture header records the settings the
+capture depends on (`g_gametype dm`, `sv_maxclients 8`, `sv_pure 0`, stock
+`scr_*` defaults) and changing any of them moves slots.
+
+**Configstrings 0 and 1 are provenance, not measurement.** 0 carries the
+hostname and `sv_maxclients` the capture ran with, 1 the pak name and
+checksum lists, which vary with `sv_pure` and with whatever pk3s the
+capturing homepath holds. Both are in `configstrings_ab.rs`'s
+`STRUCTURAL_SKIP` for that reason and `crates/server/tests/connect.rs` covers
+what the server writes there instead. A re-capture that changes those two
+lines is not a regression.
+
+The rest I kept locally; they are not in the repo. Regenerate them with the
+commands above. What I captured on 2026-08-25, per map: the three
 connectionless replies, the full `RUST_LOG=debug` probe log, the `cs[i] = ...`
 lines on their own, and the raw gamestate message from `--save-snapshots`,
 which leaves the committed fixture alone.

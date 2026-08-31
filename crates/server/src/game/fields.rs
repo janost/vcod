@@ -8,6 +8,14 @@
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum FieldType {
     Int,
+    /// Stored as an int, seen by script as one of a fixed set of strings.
+    /// Retail spells this as a set/get hook pair on the field record rather
+    /// than a storage type: the setter (0x4af80, shared by every such field)
+    /// walks the name table, stores the matching index, and raises a script
+    /// error naming the whole table when nothing matches; the getter maps
+    /// the index back to its name. The slice is that name table, in index
+    /// order.
+    Enum(&'static [&'static str]),
     Float,
     CString,
     IString,
@@ -283,17 +291,17 @@ pub const HUD_FIELDS: &[EngineField] = &[
     EngineField {
         name: "font",
         offset: 16,
-        ty: Int,
+        ty: Enum(FONTS),
     },
     EngineField {
         name: "alignx",
         offset: 20,
-        ty: Int,
+        ty: Enum(ALIGN_X),
     },
     EngineField {
         name: "aligny",
         offset: 24,
-        ty: Int,
+        ty: Enum(ALIGN_Y),
     },
     EngineField {
         name: "color",
@@ -322,6 +330,13 @@ pub const HUD_FIELDS: &[EngineField] = &[
     },
 ];
 
+/// The three HUD enum tables, each read in index order from the pointer
+/// table its field's setter passes to the shared name-to-index helper:
+/// `font` 0x7de04, `alignx` 0x7de10, `aligny` 0x7de1c, three names each.
+const FONTS: &[&str] = &["default", "bigfixed", "smallfixed"];
+const ALIGN_X: &[&str] = &["left", "center", "right"];
+const ALIGN_Y: &[&str] = &["top", "middle", "bottom"];
+
 pub enum Route {
     /// An engine-backed field. `slot` is a dense index over the table's
     /// distinct offsets, so two names sharing a retail offset share a slot.
@@ -347,7 +362,17 @@ fn slot_of(table: &[EngineField], i: usize) -> usize {
 }
 
 pub fn engine_slot_count() -> usize {
-    ENTITY_FIELDS
+    slot_count(ENTITY_FIELDS)
+}
+
+/// The same count over the HUD table, which is one shorter than the table:
+/// `color` and `alpha` share an offset and so share a slot.
+pub fn hud_slot_count() -> usize {
+    slot_count(HUD_FIELDS)
+}
+
+fn slot_count(table: &[EngineField]) -> usize {
+    table
         .iter()
         .map(|f| f.offset)
         .collect::<std::collections::BTreeSet<_>>()

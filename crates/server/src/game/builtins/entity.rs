@@ -4,10 +4,20 @@
 //! the env/io names, and Task 9 adds more families beside this one.
 
 use crate::configstrings::CsRange;
-use crate::game::entity::FIRST_HUD_ELEM;
+use crate::game::entity::{ThinkFn, FIRST_HUD_ELEM};
 use crate::game::host::GameHost;
 use crate::server::MAX_CLIENTS;
+use glam::Vec3;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
+
+/// `delete()`'s deferred-free window: the `delete` entity method (0x5da14,
+/// unnamed in either of `game.mp.i386.so`'s symbol tables) sets `think =
+/// G_FreeEntity` with `nextthink = level.time + 100` rather than freeing on
+/// the spot (docs/research/cod11-gsc-object-model.md section 14, from
+/// disassembly). `probe_delete`'s capture is consistent with a defer
+/// somewhere in (0, 150] ms but does not pin 100 specifically; see the note
+/// on `probe_delete_matches_retail` in `crates/server/tests/semantics_ents.rs`.
+const DELETE_DEFER_MS: i32 = 100;
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
 
@@ -27,6 +37,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("isplayer", is_player),
     ("isdefined", is_defined),
     ("istouching", is_touching),
+    ("placespawnpoint", place_spawnpoint),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -63,12 +74,25 @@ pub(crate) fn entity_receiver(recv: Option<Target>) -> Result<EntId, ErrorKind> 
 /// table, then the entity's script struct. The corpus passes six distinct
 /// keys and two of them are radiant keys, so a special case for the engine
 /// table would be wrong.
+///
+/// `getEntArray()` with no arguments is the second form: every entity in
+/// use, no filter. `Scr_GetEntArray` branches on the parameter count at
+/// 0x61989 and runs the same slot walk with the field compare dropped;
+/// `_gameobjects::main` is the caller in the stock corpus.
 pub fn get_ent_array(
     host: &mut GameHost,
     cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    if args.is_empty() {
+        let ids: Vec<EntId> = host.ents.iter_inuse().map(|(id, _)| id).collect();
+        let arr = cx.new_array();
+        for (n, id) in ids.into_iter().enumerate() {
+            cx.set_index(arr, ArrayKey::Int(n as i32), Value::Entity(id));
+        }
+        return Ok(Value::Array(arr));
+    }
     let [want, Value::String(key)] = args else {
         return Err(ErrorKind::BadType("getEntArray takes a value and a key"));
     };
@@ -92,13 +116,18 @@ pub fn get_ent_array(
 }
 
 /// The single-result form of `getEntArray`: `undefined` on a miss, which is
-/// what every `isDefined(getEnt(...))` in the corpus tests.
+/// what every `isDefined(getEnt(...))` in the corpus tests. `Scr_GetEnt` is
+/// its own function on retail and takes no unfiltered form, so the argument
+/// check is here rather than shared with `get_ent_array`.
 pub fn get_ent(
     host: &mut GameHost,
     cx: &mut Cx,
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    if args.len() != 2 {
+        return Err(ErrorKind::BadType("getEnt takes a value and a key"));
+    }
     let Value::Array(arr) = get_ent_array(host, cx, recv, args)? else {
         unreachable!("get_ent_array always returns an array");
     };
@@ -139,8 +168,10 @@ pub fn spawn_struct(
     Ok(Value::Struct(cx.new_struct()))
 }
 
-/// `delete()` takes the entity out of iteration, so a later `getEntArray`
-/// does not see it. `_load.gsc`'s exploder threads end with one.
+/// `delete()` defers the free rather than performing it now: it arms the
+/// entity's think for `DELETE_DEFER_MS` out, so a later `getEntArray` still
+/// sees it until that think comes due (`ScriptRuntime::run_frame`'s think
+/// pass). `_load.gsc`'s exploder threads end with one.
 pub fn delete(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -148,7 +179,8 @@ pub fn delete(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
-    host.ents.free(id);
+    host.ents
+        .schedule(id, ThinkFn::Free, host.level_time_ms + DELETE_DEFER_MS);
     Ok(Value::Undefined)
 }
 
@@ -263,6 +295,75 @@ pub fn get_entity_number(
     Ok(Value::Int(id.0 as i32))
 }
 
+/// `self placeSpawnpoint()` (entity method 37, `game.mp.i386.so` 0x5bedc):
+/// drops a spawnpoint onto the floor at map load. Retail point-traces from
+/// the entity origin up 128 units, then from there straight down 262144,
+/// moves the entity to the endpoint, keeps one word of the second trace's
+/// result in `gentity_t+0x7c`, and prints "Spawn point entity %i is in
+/// solid" when a third trace at the new origin starts solid.
+///
+/// Both traces and the move are faithful; two things are not. Retail traces
+/// with contents mask 0x2810011, ours takes solid and playerclip
+/// (`CollisionWorld::box_trace`), so the two disagree over any brush whose
+/// contents are in one mask and not the other. And our trace carries no
+/// entity identity, so the `+0x7c` word goes unrecorded. Neither is
+/// observable until players spawn, which is a later stage.
+pub fn place_spawnpoint(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = entity_receiver(recv)?;
+    let origin_field = cx.intern_folded("origin");
+    let Value::Vector(origin) = host.get_field(cx, id, origin_field) else {
+        return Err(ErrorKind::BadType("a spawnpoint needs an origin"));
+    };
+    // No collision loaded (every unit test, and any host built without a
+    // map): the entity stays where the entity lump put it.
+    let Some(world) = host.world.clone() else {
+        return Ok(Value::Undefined);
+    };
+    let start = Vec3::from(origin);
+    let up = world.collision.box_trace(
+        start,
+        start + Vec3::new(0.0, 0.0, CEILING_CHECK),
+        Vec3::ZERO,
+        Vec3::ZERO,
+    );
+    let down = world.collision.box_trace(
+        up.endpos,
+        up.endpos - Vec3::new(0.0, 0.0, DROP_DISTANCE),
+        Vec3::ZERO,
+        Vec3::ZERO,
+    );
+    // Retail's third trace is a point test at the placed position, not a
+    // reading off the drop: `placeSpawnpoint` warns about where the
+    // spawnpoint ended up.
+    let placed_in_solid = world
+        .collision
+        .box_trace(down.endpos, down.endpos, Vec3::ZERO, Vec3::ZERO)
+        .startsolid;
+    if placed_in_solid {
+        log::warn!(
+            "gsc: spawn point entity {} is in solid at ({}, {}, {})",
+            id.0,
+            down.endpos.x as i32,
+            down.endpos.y as i32,
+            down.endpos.z as i32
+        );
+    }
+    let placed = Value::Vector(down.endpos.into());
+    host.set_field(cx, id, origin_field, placed)?;
+    Ok(Value::Undefined)
+}
+
+/// How far above its origin `placeSpawnpoint` looks for a ceiling, and how
+/// far below the result it looks for the floor. Both measured off the
+/// literals at 0x5bf45 and 0x5bf91.
+const CEILING_CHECK: f32 = 128.0;
+const DROP_DISTANCE: f32 = 262144.0;
+
 /// `isPlayer(ent)` reads the entity number against `MAX_CLIENTS`, which is
 /// what makes it answerable before stage 4 gives clients any state. Retail's
 /// `isPlayer` reads `ent->client`; stage 4 replaces this with the real check.
@@ -321,6 +422,49 @@ pub fn is_touching(
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
+    use crate::world::World;
+    use std::rc::Rc;
+
+    /// `placeSpawnpoint` drops the entity onto the floor: the test world's
+    /// floor is at z = 0, so a spawnpoint hovering at 100 lands there.
+    #[test]
+    fn placespawnpoint_drops_the_spawnpoint_onto_the_floor() {
+        let (mut vm, mut host) = fixture();
+        host.world = Some(Rc::new(World {
+            collision: vcod_common::collision::test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        }));
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let origin = cx.intern_folded("origin");
+            host.set_field(cx, e, origin, Value::Vector([0.0, 0.0, 100.0]))
+                .unwrap();
+            place_spawnpoint(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            let Value::Vector(placed) = host.get_field(cx, e, origin) else {
+                panic!("a spawnpoint keeps a vector origin");
+            };
+            assert!(
+                placed[2].abs() < 1.0,
+                "expected the floor at z = 0, got {placed:?}"
+            );
+        });
+    }
+
+    /// No collision loaded is every unit test and any host built without a
+    /// map, and it must leave the entity where the entity lump put it rather
+    /// than dropping it 262144 units into nothing.
+    #[test]
+    fn placespawnpoint_without_a_world_leaves_the_origin_alone() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let origin = cx.intern_folded("origin");
+            let at = Value::Vector([1.0, 2.0, 3.0]);
+            host.set_field(cx, e, origin, at).unwrap();
+            place_spawnpoint(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            assert_eq!(host.get_field(cx, e, origin), at);
+        });
+    }
 
     /// `getEntArray(value, key)` walks slots in ascending entity number and
     /// keeps the ones whose field equals the value: `Scr_GetEntArray`
@@ -359,6 +503,25 @@ mod tests {
             }
             // Spawn order, not alphabetical: entity number decides.
             assert_eq!(got, ["b", "a", "c"]);
+        });
+    }
+
+    /// `getEntArray()` with no arguments is every entity in use, in the same
+    /// ascending order, no filter: `_gameobjects::main` opens with it.
+    #[test]
+    fn get_ent_array_with_no_arguments_is_every_entity() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let want: Vec<EntId> = (0..3).map(|_| host.ents.spawn(cx).unwrap()).collect();
+            let Value::Array(arr) = get_ent_array(&mut host, cx, None, &[]).unwrap() else {
+                panic!("not an array");
+            };
+            assert_eq!(cx.array_len(arr), want.len());
+            let got: Vec<Value> = (0..want.len() as i32)
+                .map(|i| cx.get_index(arr, ArrayKey::Int(i)))
+                .collect();
+            let want: Vec<Value> = want.into_iter().map(Value::Entity).collect();
+            assert_eq!(got, want);
         });
     }
 
@@ -433,14 +596,22 @@ mod tests {
         });
     }
 
-    /// `delete()` takes the entity out of iteration, so a later `getEntArray`
-    /// does not see it. `_load.gsc`'s exploder threads end with one.
+    /// `delete()` defers the free: the entity stays in iteration until its
+    /// think comes due, `DELETE_DEFER_MS` past the call, and only then does
+    /// a later `getEntArray` stop seeing it. `_load.gsc`'s exploder threads
+    /// end with one.
     #[test]
-    fn delete_removes_the_entity_from_iteration() {
+    fn delete_defers_the_free_until_its_think_is_due() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
             let e = host.ents.spawn(cx).unwrap();
             delete(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            assert_eq!(
+                host.ents.iter_inuse().count(),
+                1,
+                "delete() must not free immediately"
+            );
+            host.ents.run_thinks(host.level_time_ms + DELETE_DEFER_MS);
             assert_eq!(host.ents.iter_inuse().count(), 0);
         });
     }

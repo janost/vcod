@@ -109,6 +109,17 @@ fn ends_an_expression(prev: Option<&Tok>) -> bool {
     )
 }
 
+/// `true` and `false` are the integers 1 and 0, and unlike every keyword
+/// they are case-sensitive: `probe_bool` measured `TRUE` reading back as an
+/// undefined local on retail while `true` read back as 1.
+fn bool_literal(text: &str) -> Option<Tok> {
+    match text {
+        "true" => Some(Tok::Int(1)),
+        "false" => Some(Tok::Int(0)),
+        _ => None,
+    }
+}
+
 // Case-insensitive: the engine matches keywords and identifiers alike
 // without regard to case.
 fn keyword(text: &str) -> Option<Tok> {
@@ -425,7 +436,10 @@ impl<'a> Lexer<'a> {
                 self.read_number()
             } else if is_ident_start(c) {
                 let text = self.read_ident();
-                keyword(&text).unwrap_or(Tok::Ident(text))
+                match bool_literal(&text) {
+                    Some(t) => t,
+                    None => keyword(&text).unwrap_or(Tok::Ident(text)),
+                }
             } else if let Some(t) = self.two_char_op() {
                 t
             } else if let Some(t) = self.one_char_op() {
@@ -461,6 +475,22 @@ mod tests {
                 Tok::Float(1.5),
                 Tok::Str("hi".into()),
                 Tok::Semi,
+                Tok::Eof,
+            ]
+        );
+    }
+
+    /// `true` and `false` are the integers 1 and 0, and only in lowercase:
+    /// `probe_bool` measured `TRUE` reading back undefined on retail, which
+    /// is what an unassigned local reads as.
+    #[test]
+    fn bool_literals_are_ints_and_case_sensitive() {
+        assert_eq!(toks("true false"), vec![Tok::Int(1), Tok::Int(0), Tok::Eof]);
+        assert_eq!(
+            toks("TRUE False"),
+            vec![
+                Tok::Ident("TRUE".to_string()),
+                Tok::Ident("False".to_string()),
                 Tok::Eof,
             ]
         );

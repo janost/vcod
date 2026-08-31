@@ -16,10 +16,11 @@ engineering setup works.
   fx, audio, `probe.rs`. `crates/server` (`vcod-server`): the dedicated server.
   `crates/gsc` (`vcod-gsc`): a virtual machine for CoD's script language
   (`.gsc`) — lexer, parser, bytecode compiler, instruction loop, thread
-  scheduler and cross-file loader. The dedicated server loads and runs the
-  map script at map load; the rest of Activision's shipped gameplay scripts
-  wait on the entity object model and the builtins they call.
-  `vcod-gsc` must not depend on
+  scheduler and cross-file loader. At map load the dedicated server loads the
+  gametype and map scripts and runs Activision's stock bootstrap to
+  completion, which is what fills the configstring table; the rest of the
+  shipped gameplay scripts wait on clients existing and on the builtins those
+  paths call. `vcod-gsc` must not depend on
   `vcod-common` either, same rule as `common` itself: `cargo tree -p vcod-gsc
   -e normal` shows only `anyhow` and `log`. Nothing in `common` may import
   wgpu, winit or kira; `cargo tree -p vcod-common -i wgpu` proves it. `cargo
@@ -149,7 +150,11 @@ engineering setup works.
   goes in a research doc with the bytes. It answers the handshake, the
   gamestate, and sends snapshots to a lone spectator too, with no need to
   join a team (`crates/common/tests/fixtures/net/snapshots-delta.bin` is
-  exactly that capture). `cargo run -p vcod-server -- <map>` runs **ours**:
+  exactly that capture). It is also what retakes the configstring gate's
+  fixtures: `tools/run_server.sh <map>` in one shell, `--net-probe
+  127.0.0.1:28960 --save-configstrings` in another, which writes
+  `crates/server/tests/fixtures/configstrings/<map>-<gametype>.txt` for
+  `crates/server/tests/configstrings_ab.rs`. `cargo run -p vcod-server -- <map>` runs **ours**:
   the handshake, the gamestate, client commands and moves, and snapshots
   delta-compressed against the client's acked frame, with pmove-driven
   spectator flight and `--test-entities` for scripted packet entities (no
@@ -218,11 +223,24 @@ Ghidra does the decompiling; keep projects and exports under `private/ghidra/`:
   grepping the decompilation.
 
 Evidence discipline: every claim in a research doc names the module, the virtual
-address, and the string or table it rests on, and states which behaviour was
-VERIFIED live versus inferred from decompilation. An unverified inference is
-labelled as such so the next reader can test it. Research docs carry facts
-derived from the binaries (offsets, tables, enum orders), never pasted
-decompiler output or disassembly listings.
+address, and the string or table it rests on, and carries its own label.
+VERIFIED is what was read out of a binary, an asset or a live capture. INFERRED
+is anything read off control flow, and **instruction sequencing and branch
+conditions are control flow**: "followed by", "then", "when that field is
+non-null" all belong under INFERRED however plainly the instructions read. A
+label covers one claim, never a section, because a section is a mix and the
+blanket then covers claims it should not. One exception, and only one: a
+document may open with a document-level default ("everything here is VERIFIED
+unless labelled otherwise") when its provenance really is uniform and every
+exception in it carries its own label; the four format and handshake docs
+that do are accurate. A blanket over a section, including one
+appended to its heading, stays forbidden whether or not the document carries
+such a default.
+`crates/common/tests/evidence_labels.rs`
+catches the two mechanical shapes of this and its doc comment says what it
+cannot catch, which is most of it; a reader is still the enforcement. Research
+docs carry facts derived from the binaries (offsets, tables, enum orders),
+never pasted decompiler output or disassembly listings.
 
 ## Gotchas already paid for
 
@@ -284,6 +302,16 @@ decompiler output or disassembly listings.
   and the two deliberate divergences are in docs/research/cod11-mantle.md and
   bsp-ibsp59-format.md ("Movement constants"). Mantling does not exist in
   retail 1.1 MP; cod11-mantle.md is the negative result.
+- A configstring range's first slot comes from its indexer, never from a
+  doc's summary. The status icon, head icon and script menu indexers scan
+  from `i = 0`; the localized-string and shader ones scan from `i = 1`.
+  Reading one convention onto all five puts three ranges a slot high, which
+  is what the table in `docs/research/clientstate-wire-format.md` used to do.
+- Unary `!` takes a string where an `if` condition refuses every string:
+  `!"0"` is `1` and `!"1"` is `0`, while `if ("a")` is a fatal
+  `cannot cast "a" to bool`. That asymmetry is measured, and it is what lets
+  `_teams::restrictPlacedWeapons` run on a stock server rather than killing
+  it at map load (`docs/research/cod11-gsc-language.md` §9).
 - A BSP entity key reaches script only if it is in the entity field table or
   in `radiant/keys.txt`; anything else is dropped at load, silently, exactly
   as retail drops it. So a script reading a Radiant key nobody registered

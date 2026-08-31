@@ -238,6 +238,16 @@ pub struct Vm {
     /// `spawn` -> ...), which overflows long before any instruction
     /// budget would. See `spawn`'s `MAX_SPAWN_DEPTH` check.
     spawn_depth: u32,
+    /// The threads that have died of an error, in the order they died, up
+    /// to `MAX_RECORDED_ABORTS`. `run_frame` returns its own pass's errors
+    /// and `call_now` returns its own, but `start_thread` has none: its
+    /// signature is `-> ThreadId`, so an abort in a thread it started
+    /// reached nothing but `log::warn!`, which a test harness with no
+    /// logger installed cannot see. Read it back with `aborts`.
+    aborts: Vec<ScriptError>,
+    /// How many threads have died in total, including the ones `aborts`
+    /// stopped recording, so a truncated list cannot pass for a whole one.
+    aborts_seen: u32,
 }
 
 impl Default for Vm {
@@ -265,6 +275,8 @@ impl Vm {
             budget: 1_000_000,
             now_ms: 0,
             spawn_depth: 0,
+            aborts: Vec::new(),
+            aborts_seen: 0,
         }
     }
 
@@ -276,24 +288,57 @@ impl Vm {
         self.threads.len()
     }
 
+    /// How many aborts `aborts` keeps. Invented, not measured: retail has no
+    /// abort log at all. Any number large enough to hold a broken map load
+    /// works; the cap only bounds what a server running for hours with a
+    /// thread dying every frame accumulates. Every abort is logged whatever
+    /// the cap, and `abort_count` counts past it.
+    const MAX_RECORDED_ABORTS: usize = 256;
+
+    /// Logs a dead thread, counts it, and keeps it in `aborts` up to the cap.
+    fn record_abort(&mut self, e: &ScriptError) {
+        log::warn!("gsc: thread aborted in {}", self.describe(e));
+        self.aborts_seen = self.aborts_seen.saturating_add(1);
+        if self.aborts.len() < Self::MAX_RECORDED_ABORTS {
+            self.aborts.push(e.clone());
+        }
+    }
+
+    /// The threads that have died of an error since this `Vm` was built, in
+    /// the order they died, up to `MAX_RECORDED_ABORTS` of them. A host that
+    /// starts its level-load threads with `start_thread` reads them back
+    /// here; `describe` renders one. Compare the length against
+    /// `abort_count` to see whether the list is the whole story.
+    pub fn aborts(&self) -> &[ScriptError] {
+        &self.aborts
+    }
+
+    /// How many threads have died of an error in total, `aborts` truncated
+    /// or not.
+    pub fn abort_count(&self) -> u32 {
+        self.aborts_seen
+    }
+
+    /// One error as `file::func:line: Kind`.
+    ///
     /// `ErrorKind`'s own `Debug` prints `MissingBuiltin`'s `Atom` as a bare
     /// index (`MissingBuiltin(Atom(43))`) -- useless as the work list this
-    /// log line exists to be, since nothing else here names the builtin.
-    /// `ErrorKind` keeps the `Atom` for its callers, which match on it; only
-    /// the logged text resolves it.
-    fn log_script_error(&self, e: &ScriptError) {
+    /// exists to be, since nothing else here names the builtin. `ErrorKind`
+    /// keeps the `Atom` for its callers, which match on it; only the
+    /// rendered text resolves it.
+    pub fn describe(&self, e: &ScriptError) -> String {
         let kind = match &e.kind {
             ErrorKind::MissingBuiltin(name) => {
                 format!("MissingBuiltin({:?})", self.interner.resolve(*name))
             }
             other => format!("{other:?}"),
         };
-        log::warn!(
-            "gsc: thread aborted in {}::{}:{}: {kind}",
+        format!(
+            "{}::{}:{}: {kind}",
             self.interner.resolve(e.file),
             self.interner.resolve(e.func),
             e.line,
-        );
+        )
     }
 
     pub fn interner_mut(&mut self) -> &mut Interner {
@@ -350,6 +395,13 @@ impl Vm {
     /// builtin pre-scan.
     pub fn functions(&self) -> impl Iterator<Item = &Function> {
         self.functions.values().map(Rc::as_ref)
+    }
+
+    /// Whether `f` is installed. `start_thread` panics on a miss, so a
+    /// caller holding a `FuncRef` built from a name it did not choose (a
+    /// command-line gametype, say) asks here first.
+    pub fn has_function(&self, f: FuncRef) -> bool {
+        self.functions.contains_key(&f)
     }
 
     /// Rejects a function that fails `bytecode::stack_depth`'s abstract

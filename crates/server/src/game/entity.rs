@@ -20,7 +20,13 @@ pub const FIRST_MAP_ENTITY: u32 = 72;
 /// so `getEntityNumber` on one is an error rather than a number.
 pub const FIRST_HUD_ELEM: u32 = MAX_GENTITIES;
 
-use crate::game::fields::engine_slot_count;
+/// `g_hudelems` is 1024 records of 124 bytes: `GScr_NewHudElem` (0x4b184)
+/// and `HudElem_Alloc` (0x4c470) both scan it with the bound `index <=
+/// 0x3ff`, and `Scr_GetHudElemField` (0x4c003) indexes it as `(n * 32 - n) *
+/// 4`.
+pub const MAX_HUDELEMS: u32 = 1024;
+
+use crate::game::fields::{engine_slot_count, hud_slot_count, route_hud, Route};
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, StructId, Value};
 
 /// One script-visible object. `engine` is indexed by the dense slot
@@ -38,10 +44,33 @@ pub struct GEntity {
     /// `(model, tag)` pairs from `attach`, in call order; `getAttachSize`
     /// and friends index into this.
     pub attachments: Vec<(Atom, Atom)>,
+    /// What runs when `nextthink` comes due, or `None` for no think armed.
+    pub think: Option<ThinkFn>,
+    /// The think deadline on `GameHost::level_time_ms`'s clock. Retail's 0
+    /// means "no think" rather than "due immediately"
+    /// (docs/research/cod11-gsc-object-model.md section 14), which is why
+    /// `run_thinks` treats 0 as idle too.
+    pub nextthink: i32,
+}
+
+/// What an entity's `think` runs when `nextthink` comes due. A Rust enum
+/// rather than a script reference: retail's `think` is a C function pointer
+/// (`G_FreeEntity` for a deleted entity) and script-side timing goes through
+/// `thread`/`wait`. Stage 4's movers and doors add variants.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ThinkFn {
+    Free,
 }
 
 pub struct ObjectTable {
     ents: Vec<Option<GEntity>>,
+    /// The HUD element range, `EntId(FIRST_HUD_ELEM..)`. A separate vector
+    /// rather than a longer `ents`, so `iter_inuse` — and through it
+    /// `getEntArray` — cannot see a HUD element. A HUD element reuses
+    /// `GEntity` for the two stores it does need (engine slots, keyed by
+    /// `fields::route_hud`, and its own script struct); the gentity-only
+    /// `solid`, `hidden` and `attachments` go unused.
+    huds: Vec<Option<GEntity>>,
     num_entities: u32,
     /// `level.firstFreeEnt`/`level.lastFreeEnt` (level+0x10, level+0x14): a
     /// FIFO of freed slots that `G_Spawn` drains before it bumps the counter.
@@ -58,6 +87,7 @@ impl ObjectTable {
     pub fn new() -> Self {
         ObjectTable {
             ents: (0..MAX_GENTITIES).map(|_| None).collect(),
+            huds: (0..MAX_HUDELEMS).map(|_| None).collect(),
             num_entities: FIRST_MAP_ENTITY,
             free_list: std::collections::VecDeque::new(),
         }
@@ -90,14 +120,55 @@ impl ObjectTable {
             solid: true,
             hidden: false,
             attachments: Vec::new(),
+            think: None,
+            nextthink: 0,
         });
         Ok(id)
     }
 
+    /// `GScr_NewHudElem` (0x4b184): hand out the first free `g_hudelems`
+    /// slot, or fail the way retail's `Scr_Error("out of hudelems")` does
+    /// once all 1024 are taken. There is no free list, because retail has
+    /// none here either: the allocator is a linear scan for a clear record.
+    ///
+    /// Retail zeroes the record and then sets two non-zero defaults,
+    /// `fontscale` 1.0 (0x4b19b) and a packed white `color` (0x4b1d9). Only
+    /// `fontscale` is seeded here: an unwritten engine field reads
+    /// `undefined` rather than retail's zero, the same convention a
+    /// gentity's fields follow, and `color` has no unpacked representation
+    /// in `HUD_FIELDS` yet.
+    pub fn spawn_hud_elem(&mut self, cx: &mut Cx) -> Result<EntId, ErrorKind> {
+        let Some(i) = self.huds.iter().position(|h| h.is_none()) else {
+            return Err(ErrorKind::BadType("out of hudelems"));
+        };
+        let script = cx.new_struct();
+        let mut engine = vec![Value::Undefined; hud_slot_count()];
+        if let Route::Engine { slot, .. } = route_hud("fontscale") {
+            engine[slot] = Value::Float(1.0);
+        }
+        self.huds[i] = Some(GEntity {
+            engine,
+            script,
+            solid: true,
+            hidden: false,
+            attachments: Vec::new(),
+            think: None,
+            nextthink: 0,
+        });
+        Ok(EntId(FIRST_HUD_ELEM + i as u32))
+    }
+
     /// `G_FreeEntity` (0x66948): clear the slot and put it on the tail of
     /// the free list, but only for numbers above the reserved range (the
-    /// `index <= 71` skip at 0x66bb1).
+    /// `index <= 71` skip at 0x66bb1). A HUD element takes the other path,
+    /// `HudElem_Free` (0x4c570), which only clears the record.
     pub fn free(&mut self, id: EntId) {
+        if id.0 >= FIRST_HUD_ELEM {
+            if let Some(slot) = self.huds.get_mut((id.0 - FIRST_HUD_ELEM) as usize) {
+                *slot = None;
+            }
+            return;
+        }
         let Some(slot) = self.ents.get_mut(id.0 as usize) else {
             return;
         };
@@ -106,12 +177,53 @@ impl ObjectTable {
         }
     }
 
+    /// Arms `id`'s think. `at_ms` is on the same clock `run_thinks` reads
+    /// (`GameHost::level_time_ms`).
+    pub fn schedule(&mut self, id: EntId, think: ThinkFn, at_ms: i32) {
+        if let Some(e) = self.get_mut(id) {
+            e.think = Some(think);
+            e.nextthink = at_ms;
+        }
+    }
+
+    /// `G_RunFrame`'s think pass: fire every entity whose `nextthink` has
+    /// come due. Collect first, then act: a think that frees its entity
+    /// would otherwise invalidate the walk.
+    pub fn run_thinks(&mut self, now_ms: i32) {
+        let due: Vec<(EntId, ThinkFn)> = self
+            .ents
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                let e = e.as_ref()?;
+                let think = e.think?;
+                // Retail's `nextthink` of 0 is "no think", not "due now".
+                (e.nextthink != 0 && e.nextthink <= now_ms).then_some((EntId(i as u32), think))
+            })
+            .collect();
+        for (id, think) in due {
+            if let Some(e) = self.get_mut(id) {
+                e.think = None;
+                e.nextthink = 0;
+            }
+            match think {
+                ThinkFn::Free => self.free(id),
+            }
+        }
+    }
+
     pub fn get(&self, id: EntId) -> Option<&GEntity> {
-        self.ents.get(id.0 as usize)?.as_ref()
+        match id.0.checked_sub(FIRST_HUD_ELEM) {
+            Some(i) => self.huds.get(i as usize)?.as_ref(),
+            None => self.ents.get(id.0 as usize)?.as_ref(),
+        }
     }
 
     pub fn get_mut(&mut self, id: EntId) -> Option<&mut GEntity> {
-        self.ents.get_mut(id.0 as usize)?.as_mut()
+        match id.0.checked_sub(FIRST_HUD_ELEM) {
+            Some(i) => self.huds.get_mut(i as usize)?.as_mut(),
+            None => self.ents.get_mut(id.0 as usize)?.as_mut(),
+        }
     }
 
     /// Ascending entity number, live slots only: `Scr_GetEntArray`'s walk.
@@ -210,6 +322,50 @@ mod tests {
             let ids: Vec<_> = (0..5).map(|_| t.spawn(cx).unwrap()).collect();
             assert_eq!(t.iter_inuse().map(|(id, _)| id).collect::<Vec<_>>(), ids);
         });
+    }
+
+    /// `delete()` defers the free: the entity keeps its number and its
+    /// place in `iter_inuse` until the think comes due, which is what
+    /// `probe_delete` measures on retail. Freeing immediately made the
+    /// number available a frame early and dropped the entity out of
+    /// `getEntArray` sooner than retail.
+    #[test]
+    fn a_scheduled_free_keeps_the_entity_until_the_think_is_due() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut ents = ObjectTable::new();
+        let id = vm.with_cx(|cx| ents.spawn(cx).unwrap());
+        ents.schedule(id, ThinkFn::Free, 100);
+
+        ents.run_thinks(50);
+        assert!(ents.get(id).is_some(), "freed before the think was due");
+        assert_eq!(ents.iter_inuse().count(), 1);
+
+        ents.run_thinks(100);
+        assert!(ents.get(id).is_none(), "still live past the think");
+        assert_eq!(ents.iter_inuse().count(), 0);
+
+        // The number is back on the free list, so the next spawn reuses it.
+        let next = vm.with_cx(|cx| ents.spawn(cx).unwrap());
+        assert_eq!(next, id);
+    }
+
+    /// A think fires once. Retail clears `nextthink` when it runs, so a
+    /// scheduled free cannot double-free a slot something else has since
+    /// taken.
+    #[test]
+    fn a_think_fires_once() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut ents = ObjectTable::new();
+        let id = vm.with_cx(|cx| ents.spawn(cx).unwrap());
+        ents.schedule(id, ThinkFn::Free, 100);
+        ents.run_thinks(100);
+        let reused = vm.with_cx(|cx| ents.spawn(cx).unwrap());
+        assert_eq!(reused, id);
+        ents.run_thinks(200);
+        assert!(
+            ents.get(reused).is_some(),
+            "the think fired twice and freed the reuse"
+        );
     }
 
     /// The table refuses to hand out `ENTITYNUM_WORLD` or anything above it.

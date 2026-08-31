@@ -826,47 +826,83 @@ impl Server {
         self.world = Some(Rc::new(world));
     }
 
-    /// The cvars a gametype script reads. `g_gametype`, `sv_hostname` and
-    /// `sv_maxclients` mirror this run's `ServerConfig`; `debug` is retail's
-    /// default off, which is what `_utility.gsc`'s exploder logic
-    /// (`getCvar("debug") != "1"`) expects when nobody has set it.
-    fn cvars(&self) -> HashMap<String, String> {
-        HashMap::from([
-            ("g_gametype".to_string(), self.cfg.gametype.clone()),
-            ("sv_hostname".to_string(), self.cfg.hostname.clone()),
-            (
-                "sv_maxclients".to_string(),
-                self.cfg.max_clients.to_string(),
-            ),
-            ("debug".to_string(), "0".to_string()),
-        ])
+    /// The cvar table a gametype script starts with: the engine defaults,
+    /// then `default_mp.cfg`, then `g_gametype`, `sv_hostname` and
+    /// `sv_maxclients` mirroring this run's `ServerConfig`, and `debug` at
+    /// retail's default off, which is what `_utility.gsc`'s exploder logic
+    /// (`getCvar("debug") != "1"`) expects when nobody has set it. None of
+    /// them are flagged into the 140/204 mirror; only `makeCvarServerInfo`
+    /// does that.
+    ///
+    /// `default_mp.cfg` is where the stock `scr_*` values come from: the
+    /// engine execs it at startup, it ships in `localized_english_pak0.pk3`,
+    /// and it sets 45 cvars, 38 of them the `scr_*` the stock gametype
+    /// scripts read. All but one are invisible in a configstring capture,
+    /// because the file's value and the script's own
+    /// `makeCvarServerInfo` default agree; `scr_allow_fg42` is the one that
+    /// does not, `0` in the file against the script's `"1"`, and
+    /// `makeCvarServerInfo` keeps the value already there. It is not
+    /// cosmetic: `!getCvar("scr_allow_fg42")` is what makes
+    /// `_teams::restrictPlacedWeapons` `delete()` the map's placed fg42s, so
+    /// the value moves entity numbering as well as the mirror.
+    fn cvars(&self, fs: &vcod_common::pk3::Pk3Fs) -> crate::cvars::Cvars {
+        let mut cvars = crate::cvars::Cvars::new();
+        match fs.read("default_mp.cfg") {
+            Some(bytes) => {
+                let n = cvars.exec_cfg(&String::from_utf8_lossy(&bytes));
+                log::debug!("default_mp.cfg: {n} cvars set");
+            }
+            // A mount set without the localized pak loses every stock
+            // `scr_*` value, so say so rather than run on script defaults.
+            None => log::warn!("default_mp.cfg not in the mounted paks; stock scr_* defaults lost"),
+        }
+        cvars.set("g_gametype", &self.cfg.gametype);
+        cvars.set("sv_hostname", &self.cfg.hostname);
+        cvars.set("sv_maxclients", &self.cfg.max_clients.to_string());
+        cvars.set("debug", "0");
+        cvars
     }
 
-    /// Loads and runs the map script. Called once at map load, before any
-    /// client connects. The script keeps allocating configstrings after that
-    /// (any `setModel`, `loadFX`, `playSound` or `ambientPlay` from a thread
-    /// that has passed a `wait`), so the table is not final at gamestate
-    /// time; `tick` copies the script's table back every frame. A client
-    /// already connected does not see a post-gamestate allocation, because
-    /// the server does not send the `d` configstring-update command yet.
+    /// Loads and runs the gametype and map scripts. Called once at map load,
+    /// before any client connects. The script keeps allocating configstrings
+    /// after that (any `setModel`, `loadFX`, `playSound` or `ambientPlay`
+    /// from a thread that has passed a `wait`), so the table is not final at
+    /// gamestate time; `tick` copies the script's table back every frame. A
+    /// client already connected does not see a post-gamestate allocation,
+    /// because the server does not send the `d` configstring-update command
+    /// yet.
     ///
     /// The table is cloned in, not moved: `ScriptRuntime::load` fails on a
     /// missing `.gsc`, an unresolvable map, a bad BSP or a failed entity
-    /// spawn, and `main.rs` keeps serving after such a failure, so a failed
-    /// load has to leave `self.configstrings` exactly as it was.
+    /// spawn, and the error path has to leave `self.configstrings` exactly as
+    /// it was, so the error the caller reports is about the script rather
+    /// than about a half-cleared table. `main.rs` exits on it.
     pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
-        let cvars = self.cvars();
+        let cvars = self.cvars(&fs);
         let rt = crate::game::script::ScriptRuntime::load(
             fs,
             &self.cfg.map,
+            &self.cfg.gametype,
             self.configstrings.clone(),
             cvars,
             self.world.clone(),
             self.sv_time_ms,
         )?;
-        self.configstrings = rt.configstrings().to_vec();
+        let mut configstrings = rt.configstrings().to_vec();
+        rt.cvars()
+            .write_mirror(&mut configstrings)
+            .map_err(|e| anyhow::anyhow!("writing the cvar mirror: {e:?}"))?;
+        self.configstrings = configstrings;
         self.script = Some(rt);
         Ok(())
+    }
+
+    /// Every script thread that has died of an error, rendered
+    /// `file::func:line: Kind`. Empty is the healthy reading: a thread that
+    /// aborts stops running, silently as far as the wire is concerned, so
+    /// this is what a test checks a clean bootstrap against.
+    pub fn script_aborts(&self) -> Vec<String> {
+        self.script.as_ref().map_or_else(Vec::new, |rt| rt.aborts())
     }
 
     const FALLBACK_SPAWN: ([f32; 3], f32) = ([0.0, 0.0, 64.0], 0.0);
@@ -900,8 +936,13 @@ impl Server {
             // from any thread, so the server re-reads it rather than trusting
             // the copy `load_scripts` took. A whole-table copy per frame is
             // cheap next to a snapshot, and there is no single write choke
-            // point on the host's table to hang a dirty flag off.
+            // point on the host's table to hang a dirty flag off. The cvar
+            // mirror gets the same treatment: a thread past a `wait` can
+            // still call `setCvar`.
             self.configstrings = rt.configstrings().to_vec();
+            if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
+                log::warn!("rebuilding the cvar mirror: {e:?}");
+            }
         }
     }
 
@@ -1205,11 +1246,11 @@ mod tests {
         assert!(sv.configstring(7).contains("kar98k_mp"));
     }
 
-    /// A script load that fails part way must not cost the server its
-    /// configstrings: `main.rs` logs the error and keeps serving, so every
-    /// later gamestate would ship an empty table.
+    /// A failed load reports the error and leaves the table untouched; the
+    /// caller (`main.rs`) exits on it. Stage 2 kept serving here, which is no
+    /// longer the right answer: the table is mostly script output now.
     #[test]
-    fn a_failed_script_load_leaves_the_configstrings_alone() {
+    fn a_failed_script_load_reports_and_changes_nothing() {
         let mut sv = Server::new(cfg(), Instant::now());
         let before: Vec<String> = sv.configstrings.clone();
         // No paks, so the map script does not resolve and `load` fails at its

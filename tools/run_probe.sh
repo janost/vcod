@@ -44,6 +44,11 @@ HOMEPATH="$(cd "$HOMEPATH" && pwd)"
 # about and then refuses to load the map without.
 GT="$HOMEPATH/main/maps/mp/gametypes"
 mkdir -p "$GT"
+# The engine keeps only the first 31 loose gametype scripts and falls back to
+# dm for anything past that without saying so on the probe's own channel, so
+# probes left behind by earlier runs eventually crowd out the one being
+# installed. Only probe_* files are ours to remove.
+rm -f "$GT"/probe_*.gsc "$GT"/probe_*.txt
 cp "$SRC" "$GT/$PROBE.gsc"
 printf '"%s"\r\n' "$(echo "$PROBE" | tr '[:lower:]' '[:upper:]')" > "$GT/$PROBE.txt"
 
