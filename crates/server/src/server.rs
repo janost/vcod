@@ -1008,10 +1008,34 @@ impl Server {
                 log::warn!("rebuilding the cvar mirror: {e:?}");
             }
             // Queued `Connect`s were drained above, so this is where a
-            // client's entity first exists.
+            // client's entity first exists. The weapons come across the same
+            // way the configstrings do: re-read every frame, because any
+            // thread can have changed them.
             for (slot, c) in self.clients.iter_mut().enumerate() {
                 if let Some(c) = c {
                     c.ent = rt.client_entity(slot);
+                    if let Some(sim) = c.sim.as_mut() {
+                        sim.weapons = rt.client_weapons(slot);
+                    }
+                }
+            }
+            // `self spawn(origin, angles)` moves the sim, which no builtin
+            // can reach; this is where the queue lands.
+            for s in rt.take_client_spawns() {
+                let Some(c) = self.clients.get_mut(s.slot).and_then(Option::as_mut) else {
+                    continue;
+                };
+                // The client's own angles at this moment, not zero: a
+                // spectator that looked around before answering the weapon
+                // menu carries them, and `spawn_delta_angles` subtracts them
+                // so the spawn preserves the view instead of force-turning it.
+                let cmd_angles = c.last_cmd.angles;
+                let Some(sim) = c.sim.as_mut() else {
+                    continue;
+                };
+                match s.player {
+                    true => sim.become_player(s.origin, s.yaw_deg, cmd_angles),
+                    false => sim.become_spectator(s.origin, s.yaw_deg, cmd_angles),
                 }
             }
         }

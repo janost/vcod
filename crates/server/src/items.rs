@@ -38,8 +38,8 @@ const STATIC_ITEMS: &[(usize, &str, &str)] = &[
 /// `BG_FindItem` (0x2e214) is a `strcmp`, so the lookup is case-sensitive;
 /// an unmatched name returns `None`, same as retail's miss.
 fn item_index(name: &str) -> Option<usize> {
-    if let Some(i) = WEAPON_LIST.split(' ').position(|w| w == name) {
-        return Some(i + 1);
+    if let Some(i) = crate::configstrings::weapon_index(name) {
+        return Some(i);
     }
     STATIC_ITEMS
         .iter()

@@ -10,6 +10,7 @@ use crate::game::builtins;
 use crate::game::damage::DamageEvent;
 use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
 use crate::game::fields::{self, FieldType, Route};
+use crate::server::MAX_CLIENTS;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 
 /// The builtins `GameHost::builtin` answers from its own match, folded: the
@@ -61,6 +62,17 @@ pub enum ClientEvent {
     Disconnect(usize),
 }
 
+/// One `self spawn(origin, angles)` the script performed, by client slot.
+/// The other direction from `ClientEvent`, and queued for the same reason:
+/// the client's sim lives in `Server`, which a builtin cannot reach.
+pub struct SpawnRequest {
+    pub slot: usize,
+    pub origin: [f32; 3],
+    pub yaw_deg: f32,
+    /// `sessionstate == "playing"`, which is what decides the sim's mode.
+    pub player: bool,
+}
+
 pub struct GameHost {
     pub configstrings: Vec<String>,
     pub ents: ObjectTable,
@@ -72,6 +84,15 @@ pub struct GameHost {
     /// drained by `Server` after `run_frame`. A builtin cannot reach the
     /// netchan, so it queues, the same reason `damage` does.
     pub client_commands: Vec<(usize, String)>,
+    /// Spawns the script performed this frame, drained by `Server` after
+    /// `run_frame` the way `client_commands` is.
+    pub client_spawns: Vec<SpawnRequest>,
+    /// Each client's weapons, by slot. `giveWeapon` and `setSpawnWeapon`
+    /// write it, `spawn` clears it, and `Server` copies it into the client's
+    /// sim every frame — the same re-read-it-each-frame arrangement the
+    /// configstring table has, because a thread past a `wait` can still
+    /// change it.
+    pub client_weapons: Vec<crate::weapons::PlayerWeapons>,
     /// Damage the script asked for, drained after `run_frame` by stage 6.
     /// A builtin must never reenter the VM, so a callback becomes a queued
     /// event (the design's "callbacks cannot run inline").
@@ -134,6 +155,8 @@ impl GameHost {
             ents: ObjectTable::new(),
             client_events: Vec::new(),
             client_commands: Vec::new(),
+            client_spawns: Vec::new(),
+            client_weapons: vec![crate::weapons::PlayerWeapons::default(); MAX_CLIENTS],
             damage: Vec::new(),
             allocators: Allocators::new(),
             cvars: crate::cvars::Cvars::new(),

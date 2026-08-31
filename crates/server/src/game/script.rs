@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use crate::game::host::{ClientEvent, GameHost};
+use crate::game::host::{ClientEvent, GameHost, SpawnRequest};
 use crate::game::spawn::spawn_entities_from_string;
 use vcod_common::pk3::Pk3Fs;
 use vcod_gsc::{EntId, Loader, ScriptSource, Target, Value, Vm};
@@ -236,6 +236,22 @@ impl ScriptRuntime {
         std::mem::take(&mut self.host.client_commands)
     }
 
+    /// The spawns the script performed this frame, in call order. `Server`
+    /// applies them to the client sims; nothing here can reach one.
+    pub fn take_client_spawns(&mut self) -> Vec<SpawnRequest> {
+        std::mem::take(&mut self.host.client_spawns)
+    }
+
+    /// One client's weapons as the script left them. Read every frame for the
+    /// same reason the configstrings are: any thread can have changed them.
+    pub fn client_weapons(&self, slot: usize) -> crate::weapons::PlayerWeapons {
+        self.host
+            .client_weapons
+            .get(slot)
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// Queues one client lifecycle event for the next `run_frame`. The
     /// netcode's only way into script: a callback that ran inline from
     /// `SV_ClientCommand` would reenter the VM mid-frame.
@@ -261,6 +277,12 @@ impl ScriptRuntime {
     fn dispatch_client_event(&mut self, ev: ClientEvent, now_ms: i32) {
         match ev {
             ClientEvent::Connect { slot, name } => {
+                // The slot's `gclient_t` starts clean, so a reconnect into a
+                // slot cannot inherit the previous occupant's weapons in the
+                // frames before its first `spawn`.
+                if let Some(w) = self.host.client_weapons.get_mut(slot) {
+                    *w = crate::weapons::PlayerWeapons::default();
+                }
                 let id = match self.vm.with_cx(|cx| self.host.ents.spawn_client(cx, slot)) {
                     Ok(id) => id,
                     Err(e) => {

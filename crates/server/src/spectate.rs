@@ -1,5 +1,6 @@
 //! Server-side client state: usercmds in, wire playerstate out.
 
+use crate::weapons::PlayerWeapons;
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::msg::{self, UserCmd, NULL_USERCMD};
@@ -16,11 +17,11 @@ fn short_deg(v: i32) -> f32 {
 
 /// `ANGLE2SHORT(spawn_angle) - cmd.angles`, RTCW's `SetClientViewAngle`
 /// (docs/protocol-1.1.md, "Spectator view angles"). `cmd_angles` is the
-/// client's last-known angles at the moment of this spawn: every current
-/// call site passes zero (a fresh connect's `NULL_USERCMD`, or a spectator
-/// that never turned), so the subtraction looks dead until a caller with a
-/// real one arrives -- keep it anyway, or that caller silently force-turns
-/// the client instead of preserving its view.
+/// client's last-known angles at the moment of this spawn. Only a fresh
+/// connect's are zero; a client spawned by the script has been sending cmds
+/// since it entered the world, and without the subtraction its spawn would
+/// force-turn the view to the spawn yaw plus whatever it was already
+/// looking at.
 fn spawn_delta_angles(yaw_deg: f32, cmd_angles: [i32; 3]) -> [i32; 3] {
     [
         -cmd_angles[0],
@@ -46,6 +47,9 @@ pub enum PmType {
 pub struct ClientSim {
     pub ps: pmove::PlayerState,
     pub pm_type: PmType,
+    /// What the client holds, mirrored from the script host every frame.
+    /// `spawn` clears it and `giveWeapon`/`setSpawnWeapon` fill it in.
+    pub weapons: PlayerWeapons,
     /// The client's per-axis view offset, added back onto each cmd's angle
     /// by both `step` and the connected client itself.
     /// docs/protocol-1.1.md, "Spectator view angles".
@@ -59,6 +63,7 @@ impl ClientSim {
         ClientSim {
             ps: pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg),
             pm_type: PmType::Spectator,
+            weapons: PlayerWeapons::default(),
             // A fresh connect has no prior cmd; `Server::enter_world` sets
             // `c.last_cmd = NULL_USERCMD` immediately before building this.
             delta_angles: spawn_delta_angles(yaw_deg, NULL_USERCMD.angles),
@@ -71,8 +76,19 @@ impl ClientSim {
     /// before answering the weapon menu, unlike a fresh connect, so the
     /// caller must supply the real value rather than assume zero.
     pub fn become_player(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
+        self.respawn(PmType::Normal, origin, yaw_deg, cmd_angles);
+    }
+
+    /// The other half of the same builtin: `spawnSpectator()` parks a client
+    /// at an intermission point through the very same `self spawn(origin,
+    /// angles)`, so a spectator moves for exactly the reasons a player does.
+    pub fn become_spectator(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
+        self.respawn(PmType::Spectator, origin, yaw_deg, cmd_angles);
+    }
+
+    fn respawn(&mut self, mode: PmType, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
         self.ps = pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg);
-        self.pm_type = PmType::Normal;
+        self.pm_type = mode;
         self.delta_angles = spawn_delta_angles(yaw_deg, cmd_angles);
     }
 
@@ -145,6 +161,16 @@ impl ClientSim {
             };
             set("groundEntityNum", ground as i32);
         }
+        // What the client holds. `ps.weapons` is a bitset indexed by the
+        // 1-based configstring 7 position (retail reads it with
+        // `COM_BitCheck(ps+780, index)`, `PlayerCmd_giveWeapon` 0x43020) and
+        // `ps.weaponslots` is eight bytes packed into two words.
+        set("weapons[0]", self.weapons.held as u32 as i32);
+        set("weapons[1]", (self.weapons.held >> 32) as u32 as i32);
+        let [lo, hi] = self.weapons.slot_words();
+        set("weaponslots[0]", lo);
+        set("weaponslots[4]", hi);
+        set("weapon", i32::from(self.weapons.current));
         // Mode-independent: both captures agree on all of these.
         let (mins, maxs) = (self.ps.mins(), self.ps.maxs());
         for (i, (lo, hi)) in ["mins[0]", "mins[1]", "mins[2]"]

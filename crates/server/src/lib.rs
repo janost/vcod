@@ -8,6 +8,7 @@ pub mod game;
 pub mod items;
 pub mod server;
 pub mod spectate;
+pub mod weapons;
 pub mod world;
 
 pub use server::{Server, ServerConfig};

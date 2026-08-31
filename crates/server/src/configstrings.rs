@@ -10,6 +10,16 @@ use vcod_gsc::ErrorKind;
 /// `BG_SetupWeaponInfo`'s list, configstring 7, 1-based on the wire.
 pub const WEAPON_LIST: &str = "bar_mp bar_slow_mp bren_mp colt_mp enfield_mp fg42_mp fg42_semi_mp fraggrenade_mp kar98k_mp kar98k_sniper_mp luger_mp m1carbine_mp m1garand_mp mg42_bipod_duck_mp mg42_bipod_prone_mp mg42_bipod_stand_mp mk1britishfrag_mp mosin_nagant_mp mosin_nagant_sniper_mp mp40_mp mp44_mp mp44_semi_mp panzerfaust_mp ppsh_mp ppsh_semi_mp ptrs41_antitank_rifle_mp rgd-33russianfrag_mp springfield_mp sten_mp stielhandgranate_mp thompson_mp thompson_semi_mp";
 
+/// A weapon's 1-based position in [`WEAPON_LIST`], which is what every
+/// weapon-shaped index on the wire and in the item table means. The lookup is
+/// case-sensitive, matching retail's `strcmp` (`BG_FindItem` 0x2e214).
+pub fn weapon_index(name: &str) -> Option<usize> {
+    WEAPON_LIST
+        .split(' ')
+        .position(|w| w == name)
+        .map(|i| i + 1)
+}
+
 /// Map-independent configstrings the engine itself sets. Everything else
 /// this table used to carry is script output and is earned back at load:
 /// 21/22 from `precacheStatusIcon`, 29 from `precacheHeadIcon`,

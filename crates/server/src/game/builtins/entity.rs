@@ -1,11 +1,12 @@
-//! Entity builtins the map-load path reaches: lookup, spawn, delete,
-//! visibility/solidity, and setModel. Per-family dispatch: `NAMES`/`lookup`
-//! is matched against `Cx::resolve_folded`, same shape `host.rs` uses for
-//! the env/io names, and Task 9 adds more families beside this one.
+//! Entity builtins the map-load and spawn paths reach: lookup, spawn (both
+//! the map-entity form and `ClientSpawn`), delete, visibility/solidity and
+//! setModel. Per-family dispatch: `NAMES`/`lookup` is matched against
+//! `Cx::resolve_folded`, same shape `host.rs` uses for the env/io names, and
+//! Task 9 adds more families beside this one.
 
 use crate::configstrings::CsRange;
 use crate::game::entity::{ThinkFn, FIRST_HUD_ELEM};
-use crate::game::host::GameHost;
+use crate::game::host::{GameHost, SpawnRequest};
 use crate::server::MAX_CLIENTS;
 use glam::Vec3;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
@@ -138,14 +139,80 @@ pub fn get_ent(
     }
 }
 
-/// `spawn(classname, origin)`: a live entity with both fields set, numbered
-/// after everything already in the table.
+/// Two retail builtins share the name `spawn`, in two different tables:
+/// `spawn(classname, origin)` is free function 8 (0x5d268) and
+/// `self spawn(origin, angles)` is entity method 40 (0x455cc), which is
+/// `ClientSpawn`. Retail picks by call form; one name reaches dispatch here,
+/// so the receiver is what tells them apart. `Op::CallBuiltin` only supplies
+/// a receiver for an actual method call, so a free `spawn(...)` inside a
+/// client's own thread still lands on the free form.
 pub fn spawn(
     host: &mut GameHost,
     cx: &mut Cx,
-    _recv: Option<Target>,
+    recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    match recv {
+        Some(Target::Entity(id)) => client_spawn(host, cx, id, args),
+        _ => spawn_entity(host, cx, args),
+    }
+}
+
+/// `self spawn(origin, angles)` on a client entity (`ClientSpawn`, entity
+/// method 40, 0x455cc, which errors with `entity %i is not a player` when
+/// `ent->client` is null): move the client to the spawn point and restart
+/// its movement in whatever mode the script's `sessionstate` put it in.
+///
+/// The weapon set is cleared here rather than by any script call. That is
+/// inferred, not read out of retail: the stock `spawnPlayer` gives the
+/// loadout *after* the spawn, and `giveWeapon` raises
+/// `Can not give player weapon without having an empty weapon slot` when a
+/// slot is taken, so a player who switched sides would fail to respawn if
+/// the previous life's pistol were still in the pistol slot.
+///
+/// The sim itself lives in `Server`, out of a builtin's reach, so the move
+/// leaves as a queued `SpawnRequest`.
+fn client_spawn(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = match host.ents.get(id) {
+        Some(e) if e.client.is_some() => id.0 as usize,
+        _ => return Err(ErrorKind::BadType("that entity is not a player")),
+    };
+    let [Value::Vector(origin), Value::Vector(angles)] = args else {
+        return Err(ErrorKind::BadType("spawn takes an origin and angles"));
+    };
+    let (origin, angles) = (*origin, *angles);
+
+    let state = cx.intern_folded("sessionstate");
+    let player = match host.get_field(cx, id, state) {
+        Value::String(s) => cx.resolve(s) == "playing",
+        // `spawnIntermission` and a dead player have their own retail
+        // pm_types; neither is simulated, so both fly as spectators.
+        _ => false,
+    };
+
+    let origin_field = cx.intern_folded("origin");
+    host.set_field(cx, id, origin_field, Value::Vector(origin))?;
+    let angles_field = cx.intern_folded("angles");
+    host.set_field(cx, id, angles_field, Value::Vector(angles))?;
+
+    host.client_weapons[slot] = crate::weapons::PlayerWeapons::default();
+    host.client_spawns.push(SpawnRequest {
+        slot,
+        origin,
+        yaw_deg: angles[1],
+        player,
+    });
+    Ok(Value::Undefined)
+}
+
+/// `spawn(classname, origin)`: a live entity with both fields set, numbered
+/// after everything already in the table.
+fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Value, ErrorKind> {
     let [Value::String(cls), Value::Vector(at)] = args else {
         return Err(ErrorKind::BadType("spawn takes a classname and an origin"));
     };
@@ -424,6 +491,67 @@ mod tests {
     use crate::game::testing::fixture;
     use crate::world::World;
     use std::rc::Rc;
+
+    /// The two `spawn`s the one name dispatches. A receiver picks the
+    /// `ClientSpawn` form: it moves the client, queues the sim's move with
+    /// the mode `sessionstate` names, and clears the weapon set the loadout
+    /// is about to refill. No receiver still allocates a map entity.
+    #[test]
+    fn a_receiver_picks_client_spawn_and_no_receiver_the_map_entity() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn_client(cx, 2).unwrap();
+            let t = Some(Target::Entity(e));
+            let state = cx.intern_folded("sessionstate");
+            let playing = Value::String(cx.intern_exact("playing"));
+            host.set_field(cx, e, state, playing).unwrap();
+            host.client_weapons[2].give(4, 3);
+
+            let at = Value::Vector([10.0, 20.0, 30.0]);
+            let angles = Value::Vector([0.0, 90.0, 0.0]);
+            spawn(&mut host, cx, t, &[at, angles]).unwrap();
+
+            assert_eq!(host.client_spawns.len(), 1);
+            let s = &host.client_spawns[0];
+            assert_eq!(
+                (s.slot, s.origin, s.yaw_deg, s.player),
+                (2, [10.0, 20.0, 30.0], 90.0, true)
+            );
+            assert_eq!(
+                host.client_weapons[2],
+                crate::weapons::PlayerWeapons::default()
+            );
+            let origin = cx.intern_folded("origin");
+            assert_eq!(host.get_field(cx, e, origin), at);
+
+            // A spectator's spawn goes through the same builtin.
+            let spectator = Value::String(cx.intern_exact("spectator"));
+            host.set_field(cx, e, state, spectator).unwrap();
+            spawn(&mut host, cx, t, &[at, angles]).unwrap();
+            assert!(!host.client_spawns[1].player);
+
+            // No receiver is still the free function.
+            let cls = Value::String(cx.intern_exact("script_model"));
+            let Value::Entity(made) = spawn(&mut host, cx, None, &[cls, at]).unwrap() else {
+                panic!("the free form returns the entity it made");
+            };
+            assert_eq!(made, EntId(crate::game::entity::FIRST_MAP_ENTITY));
+            assert_eq!(host.client_spawns.len(), 2);
+        });
+    }
+
+    /// `spawn` on an entity that is not a player is retail's
+    /// `entity %i is not a player`, not a silently ignored move.
+    #[test]
+    fn client_spawn_refuses_a_non_client_receiver() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let prop = host.ents.spawn(cx).unwrap();
+            let at = Value::Vector([0.0; 3]);
+            assert!(spawn(&mut host, cx, Some(Target::Entity(prop)), &[at, at]).is_err());
+            assert!(host.client_spawns.is_empty());
+        });
+    }
 
     /// `placeSpawnpoint` drops the entity onto the floor: the test world's
     /// floor is at z = 0, so a spawnpoint hovering at 100 lands there.
