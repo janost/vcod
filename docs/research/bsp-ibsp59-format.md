@@ -276,7 +276,7 @@ The same census run per soup material (the `flag_census` example, names printed 
 | `0x8000000` | 14 | autosprite2 masked wire fences |
 | `0x20000020`/`0x20` | 21 | sfx water planes |
 
-vcod's rule (VERIFIED as data, the retail behaviour INFERRED from the bit names): a soup collides when its material carries `0x1` or `0x10000`, or is bare `0x4` (brushless terrain normalized to solid); everything else drops out of the collision build. So bushes and decals are walk-through, while masked wire/iron fences keep stopping players. Bullets sweep solids only (`shot_trace`), so they pass playerclip-only geometry like Q3/RTCW's MASK_SHOT; not yet checked against `Bullet_Fire_Extended` in the retail binary.
+vcod's rule: a soup collides when its material carries `0x1` or `0x10000`, or is bare `0x4` (brushless terrain normalized to solid); everything else drops out of the collision build. The content words and their soup counts above are VERIFIED, read out of the shipped maps. That retail's own collision test reads those bits this way is INFERRED from the bit names. So bushes and decals are walk-through, while masked wire/iron fences keep stopping players. Bullets sweep solids only (`shot_trace`), so they pass playerclip-only geometry like Q3/RTCW's MASK_SHOT; not yet checked against `Bullet_Fire_Extended` in the retail binary.
 
 ## Terrain has no brushes
 

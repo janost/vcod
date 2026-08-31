@@ -760,17 +760,18 @@ Running the shipped `dm.gsc` to completion at map load needs four builtins
 past the precache and cvar families. Each row is what retail's function does;
 the last column is what the server does today.
 
-VERIFIED throughout: every address, table and index below, the string
-literals, the numeric constants, and the pool geometry (1024 records of 124
-bytes, from the `index <= 0x3ff` loop bound and the 0x7c stride). Each
-"retail" cell says what the code at that address *does*, which is
-disassembly reasoning, so those are marked INFERRED; nothing in this section
-was measured against a running retail server.
+Every address, table index, string literal and numeric constant below is
+VERIFIED, read out of the module, and so is the pool geometry (1024 records
+of 124 bytes, from the `index <= 0x3ff` loop bound and the 0x7c stride).
+What each "retail" cell then says the code at that address *does* is
+INFERRED: that is instruction sequencing and branch conditions read off the
+disassembly, and nothing in this section was measured against a running
+retail server.
 
 | builtin | table | address | retail | ours |
 |---|---|---|---|---|
 | `placeSpawnpoint` | entity methods 37 | 0x5bedc | INFERRED: point-traces from the origin up 128 (0x5bf45), then down 262144 (0x5bf91) with contents mask 0x2810011, moves the entity to the endpoint, stores the second trace's result word at results+0x28 into `gentity_t+0x7c` (which field that is, is a further inference: the ground entity), prints `WARNING: Spawn point entity %i is in solid at (%i, %i, %i)` when a third trace at the placed position starts solid | both traces, the solid test and the move, against our own solid+playerclip mask; nothing stored for `gentity_t+0x7c`, since our trace carries no entity identity |
-| `setClientNameMode` | functions 89 | 0x5f208 | INFERRED: matches the argument against `auto_change` and `manual_change` (`scr_const+0xfc`/`+0xfe`, named by `GScr_LoadConsts` 0x58550, both VERIFIED data reads), stores 0 or 1 in `level+0x210`, `Scr_Error("Unknown mode")` otherwise. The only two readers of `level+0x210` in the module are `ClientUserinfoChanged` (0x421eb) and the name-change path at 0x5ba99, which *is* a VERIFIED data read: the relocation table has exactly four `level+0x210` sites, these two and this function's own pair | recorded on the host, both errors faithful; nothing reads it until clients exist |
+| `setClientNameMode` | functions 89 | 0x5f208 | INFERRED: matches the argument against `auto_change` and `manual_change`, stores 0 or 1 in `level+0x210`, `Scr_Error("Unknown mode")` otherwise. The two constants are `scr_const+0xfc`/`+0xfe`, named by `GScr_LoadConsts` 0x58550, both VERIFIED data reads. So is the claim that the only two readers of `level+0x210` in the module are `ClientUserinfoChanged` (0x421eb) and the name-change path at 0x5ba99: the relocation table has exactly four `level+0x210` sites, these two and this function's own pair | recorded on the host, both errors faithful; nothing reads it until clients exist |
 | `newHudElem` | functions 77 | 0x4b184 | INFERRED: first free `g_hudelems` record, zeroed but for `fontscale` 1.0 (0x4b19b) and a packed white `color` (0x4b1d9), owner `0x3ff`; `Scr_Error("out of hudelems")` when full | the allocation, the pool size and the failure; `fontscale` seeded, `color` not, since `HUD_FIELDS` has no unpacked representation for it |
 | `<hudelem> setTimer` | hudelem methods 2 | 0x4b8e4 | INFERRED: exactly one parameter, seconds to milliseconds with the x87 rounding mode set to round-up (0x4b942), rejects a result not above zero, zeroes +0x30..+0x48 and +0x60/+0x64/+0x68, then writes the element type 4 at +0x0 and the absolute end time `level.time + ms` at +0x5c | the call shape and both errors; nothing recorded and nothing to clear, see below |
 
@@ -806,8 +807,8 @@ target outright.
 
 INFERRED FROM DECOMPILATION, the narrative those instructions add up to
 (reading what a sequence of instructions does is control-flow reading, not
-a data read, so it does not inherit the VERIFIED label above just because
-each instruction in it does): `G_SpawnItem` derives the item's index from
+a data read, so it does not inherit the label above just because each
+instruction in it does): `G_SpawnItem` derives the item's index from
 the matched record's own offset into `bg_itemlist` and passes it to
 `RegisterItem`, and neither function frees the entity the way the five
 classnames in section 13 do. I have not single-stepped this; what backs it
@@ -867,15 +868,17 @@ but I have not single-stepped it.
 `misc_mg42` and `misc_turret` (section 8) reach `RegisterItem` by a second,
 unrelated path: both are `spawns`-table entries whose `SP_` function is
 `SP_turret` (0x533b0). VERIFIED, addresses and relocations read straight
-from the binary: `SP_turret` calls `G_SpawnString` (0x533c8 relocation)
-with the key name `weaponinfo`, calls `Com_Error` (0x533de relocation)
-with code 1 and the message `"no weaponinfo specified for turret"` when
-that string is not found, and otherwise calls `G_SpawnTurret` (0x52c84,
-its own body not traced) with it.
+from the binary: `SP_turret`'s body carries a call to `G_SpawnString`
+(0x533c8 relocation) with the key name `weaponinfo`, a call to `Com_Error`
+(0x533de relocation) with code 1 and the message `"no weaponinfo specified
+for turret"`, and a call to `G_SpawnTurret` (0x52c84, its own body not
+traced).
 
-INFERRED FROM DECOMPILATION, the narrative: that sequence means the item
-name for a mounted mg42 is its `weaponinfo` key's value directly, no
-lookup or transform. This is independently VERIFIED at the functional
+INFERRED FROM DECOMPILATION, the branch conditions and the narrative they
+add up to: the `Com_Error` is the arm taken when the key is absent and
+`G_SpawnTurret` the arm taken when it is present, which makes the item name
+for a mounted mg42 its `weaponinfo` key's value directly, no lookup or
+transform. This is independently VERIFIED at the functional
 level, not just read off the disassembly: `mp_carentan.bsp`'s two
 `misc_mg42` blocks both carry `"weaponinfo" "mg42_bipod_stand_mp"`, and
 retail's configstring 8 sets exactly bit 16 (`mg42_bipod_stand_mp`) on that
@@ -966,12 +969,16 @@ neither of them a new shape: a raw text copy and two more calls into
 `G_SoundAliasIndex` alongside the `RegisterItem` one section 17 already
 covers.
 
-**`northyaw`, configstring 11.** `SP_worldspawn` (0x61cec) is a straight
-disassembly read, VERIFIED against both captures for its outcome:
-`G_SpawnString("northyaw", "", &out)` (`0x61e18`-`0x61e1d`), then a check on
-`*out` — if non-empty, `trap_SetConfigstring(11, out)`; if empty, the
-compiled-in literal `"0"` (`0x7964b`) goes in its place instead
-(`0x61e28`-`0x61e3d`). This is a raw copy of the entity's own key text, never
+**`northyaw`, configstring 11.** `SP_worldspawn` (0x61cec) calls
+`G_SpawnString("northyaw", "", &out)` (`0x61e18`-`0x61e1d`) and branches on
+`*out`: non-empty writes `trap_SetConfigstring(11, out)`, empty writes the
+compiled-in literal `"0"` (`0x7964b`) in its place (`0x61e28`-`0x61e3d`).
+The calls, the addresses and the literal are VERIFIED data reads. The branch
+is read off the disassembly, but its outcome is VERIFIED too rather than
+inferred, and this is the one place in this section where that holds: the two
+committed captures exercise one arm each, `mp_pavlov` the present key and
+`mp_carentan` the absent one, as the paragraph below shows. This is a raw
+copy of the entity's own key text, never
 a number the engine formats — no `G_SpawnFloat`, no `strtol`, no `strtod`
 anywhere in this sequence — which is why vcod's side does not route it
 through `Cx::format_number`: there is no `Value` to render, only a `String`
@@ -997,8 +1004,12 @@ what every stock map registers here, `mp_pavlov` included even though it has
 no `misc_mg42` at all.
 
 **`weap_mg42_loop` / `weap_mg42_cooldown`, configstrings 526/527.**
-`misc_mg42` and `misc_turret` share `SP_turret` (0x533b0, section 8), which
-calls `G_SpawnTurret` (0x52c84) — the link section 17 left untraced.
+`misc_mg42` and `misc_turret` both name `SP_turret` (0x533b0) in the
+`spawns` table (section 8), and `SP_turret`'s body carries a call to
+`G_SpawnTurret` (0x52c84): VERIFIED, the table row and the call target read
+out of the module. Which of `SP_turret`'s arms reaches that call is control
+flow and belongs to the INFERRED reading in section 17; it is the link that
+section left untraced.
 `G_SpawnTurret` calls `RegisterItem(weaponinfo)` (`0x52d74`, section 17's
 mechanism), reads two fields off the pointer `BG_GetInfoForWeapon` returns
 (`edi+0xa0`, `edi+0xa4`), and calls `G_SoundAliasIndex` on each one that is a

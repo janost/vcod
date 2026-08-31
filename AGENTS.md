@@ -218,11 +218,17 @@ Ghidra does the decompiling; keep projects and exports under `private/ghidra/`:
   grepping the decompilation.
 
 Evidence discipline: every claim in a research doc names the module, the virtual
-address, and the string or table it rests on, and states which behaviour was
-VERIFIED live versus inferred from decompilation. An unverified inference is
-labelled as such so the next reader can test it. Research docs carry facts
-derived from the binaries (offsets, tables, enum orders), never pasted
-decompiler output or disassembly listings.
+address, and the string or table it rests on, and carries its own label.
+VERIFIED is what was read out of a binary, an asset or a live capture. INFERRED
+is anything read off control flow, and **instruction sequencing and branch
+conditions are control flow**: "followed by", "then", "when that field is
+non-null" all belong under INFERRED however plainly the instructions read. A
+label covers one claim, never a section, because a section is a mix and the
+blanket then covers claims it should not. `crates/common/tests/evidence_labels.rs`
+catches the two mechanical shapes of this and its doc comment says what it
+cannot catch, which is most of it; a reader is still the enforcement. Research
+docs carry facts derived from the binaries (offsets, tables, enum orders),
+never pasted decompiler output or disassembly listings.
 
 ## Gotchas already paid for
 
