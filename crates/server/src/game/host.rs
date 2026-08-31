@@ -4,7 +4,7 @@
 //! errors until stage 4 brings clients, everything else goes to the
 //! entity's own struct in the VM heap.
 
-use crate::configstrings::Allocators;
+use crate::configstrings::{Allocators, CsRange};
 use crate::game::builtins;
 use crate::game::damage::DamageEvent;
 use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
@@ -88,6 +88,11 @@ pub struct GameHost {
     /// into configstring 8 (`crate::items`); nothing else reads or writes
     /// it directly.
     pub items: crate::items::Items,
+    /// The mounted paks, once there are any. `register_item` reads a
+    /// weapon's models out of its weapon file through this; `None` on a
+    /// fresh host, so a unit test that mounts nothing registers the bit and
+    /// precaches no weapon model.
+    pub fs: Option<std::rc::Rc<vcod_common::pk3::Pk3Fs>>,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -109,7 +114,27 @@ impl GameHost {
             exit_level: false,
             items: crate::items::Items::new(),
             client_name_mode: builtins::cvar::ClientNameMode::default(),
+            fs: None,
         }
+    }
+
+    /// `RegisterItem` (0x4e504) whole: the registration bit, the alt-fire
+    /// link, the item's own two model fields and configstring 8. Every
+    /// caller goes through here rather than `Items::register`, so an item
+    /// takes its model slots wherever it is registered -- at spawn for a
+    /// placed weapon, in `precacheItem` for the script's own list.
+    pub fn register_item(&mut self, name: &str) {
+        for item in self.items.register(name) {
+            for model in crate::items::item_models(self.fs.as_deref(), item) {
+                if let Err(e) =
+                    self.allocators
+                        .index(&mut self.configstrings, CsRange::Model, &model)
+                {
+                    log::warn!("gsc: item model {model:?} not indexed: {e:?}");
+                }
+            }
+        }
+        self.configstrings[8] = self.items.bitstring();
     }
 
     /// A uniform draw in `[0, 1)`. xorshift64*, same shape as `Server`'s own

@@ -167,9 +167,8 @@ fn icon_index(
     Ok(Value::Int((slot - range.bounds().0 + 1) as i32))
 }
 
-/// `precacheItem(name)`, mirroring `RegisterItem` (0x4e504): registers
-/// `name` in the item table and rewrites the whole configstring 8
-/// bitstring (`SaveRegisteredItems`, 0x4ef08) from it.
+/// `precacheItem(name)`, the script's way into `RegisterItem`
+/// (`GameHost::register_item`).
 pub fn precache_item(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -177,8 +176,7 @@ pub fn precache_item(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let name = name_arg(cx, args, "precacheItem takes an item name")?;
-    host.items.register(&name);
-    host.configstrings[8] = host.items.bitstring();
+    host.register_item(&name);
     Ok(Value::Undefined)
 }
 
@@ -226,6 +224,21 @@ mod tests {
             precache_model(&mut host, cx, None, &[m]).unwrap();
             assert_eq!(host.configstrings[269], "xmodel/crate_misc2a");
         });
+    }
+
+    /// `RegisterItem` precaches the item's own two model fields
+    /// (`bg_itemlist` +0x8 and +0xc) as well as setting its bit, which is
+    /// why retail's model block carries `xmodel/health_medium` between the
+    /// map's props and the team player models.
+    #[test]
+    fn precache_item_takes_a_model_slot_for_the_items_world_model() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let item = Value::String(cx.intern_exact("item_health"));
+            precache_item(&mut host, cx, None, &[item]).unwrap();
+        });
+        assert_eq!(host.configstrings[269], "xmodel/health_medium");
+        assert_eq!(host.configstrings[270], "");
     }
 
     /// `precacheString` takes a localized literal (`&"KEY"`), which is

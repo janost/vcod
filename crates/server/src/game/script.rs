@@ -105,6 +105,7 @@ impl ScriptRuntime {
         let mut host = GameHost::new(configstrings);
         host.cvars = cvars;
         host.world = world;
+        host.fs = Some(fs.clone());
         host.level_time_ms = now_ms;
 
         // `_load.gsc::main`, in mp_pavlov's own closure, calls `getEntArray`

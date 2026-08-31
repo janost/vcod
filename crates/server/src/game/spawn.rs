@@ -83,7 +83,7 @@ pub fn spawn_entities_from_string(
             parse_field(host, cx, id, k, v);
         }
         if let Some(item) = spawn_item_name(host, cx, id, &classname) {
-            host.items.register(&item);
+            host.register_item(&item);
         }
         if SPAWN_FREES.contains(&classname.as_str()) {
             host.ents.free(id);
@@ -473,6 +473,29 @@ mod tests {
             .unwrap();
         });
         assert_eq!(host.configstrings[269], "xmodel/barrels");
+    }
+
+    /// `RegisterItem` precaches the item's two model fields as well as
+    /// setting its bit; for a weapon those are the weapon file's
+    /// `worldModel` and `projectileModel`. The panzerfaust's world model is
+    /// already the placed block's own `model` key, so the rocket is the
+    /// slot the registration adds -- retail's mp_carentan capture has the
+    /// two adjacent.
+    #[test]
+    fn a_placed_weapon_precaches_its_world_and_projectile_models() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let (mut vm, mut host) = fixture();
+        host.fs = Some(std::rc::Rc::new(fs));
+        let lump = "{\n\"classname\" \"worldspawn\"\n}\n\
+                    {\n\"classname\" \"mpweapon_panzerfaust\"\n\
+                     \"model\" \"xmodel/weapon_panzerfaust_ammo\"\n}\n";
+        vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, lump))
+            .unwrap();
+        assert_eq!(host.configstrings[269], "xmodel/weapon_panzerfaust_ammo");
+        assert_eq!(host.configstrings[270], "xmodel/weapon_panzerfaust_rocket");
+        assert_eq!(host.configstrings[271], "");
     }
 
     /// A block whose `SP_` function frees consumes no entity number: the

@@ -314,7 +314,8 @@ The spawn-var applier is the unnamed function at 0x61400, which I will call
    map props (`xmodel/static_vehicle_german_truck` and the rest of the lump)
    and reaches the team player models only after them.
 
-   Four facts decide which keys take which slot.
+   Four facts decide which keys take which slot; section 18 has the
+   arithmetic on both gate maps.
 
    - **`model` is the only type-8 record in any of the three field tables.**
      VERIFIED, `python3 tools/re/dump_script_fields.py game.mp.i386.so`: one
@@ -338,7 +339,7 @@ The spawn-var applier is the unnamed function at 0x61400, which I will call
      `mp_carentan`'s 672 non-brush `model` keys are 57 distinct names, and
      its capture holds each of the 57 exactly once, in first-appearance
      order, across slots 269-326 (the one slot among them that is not a
-     lump model comes from an item registration, section 15).
+     lump model is an item registration's, section 18).
 
    The index is stored in a byte, so a model index above 255 cannot be
    represented on an entity even though the configstring range runs to 523.
@@ -713,15 +714,30 @@ at the `WEAPON_LIST` index immediately after its base weapon's bit
 `alt_weapon_index` derives from `WEAPON_LIST` rather than a second
 hardcoded pairing table.
 
-**A gap this task does not close:** the same `RegisterItem` also precaches
-two further model fields for *every* item, at offsets 0x8 and 0xc of its
-`bg_itemlist` record — `item_health`'s offset-0x8 field is the compiled-in
-string `xmodel/health_medium`, matching the model retail's capture has
-queued at the corresponding model configstring slot. `Items::register`
-only reproduces the registration bit and the alt-fire link, as scoped; a
-weapon's own offset-0x8/0xc/0x188/0x31c model strings are runtime data from
-the weapon file this crate does not parse yet, so closing this needs that
-parser.
+**M3, the item's own models.** The same `RegisterItem` precaches two
+further model fields for *every* item, at offsets 0x8 and 0xc of its
+`bg_itemlist` record. VERIFIED, read out of the binary with
+`dump_itemlist.py`'s `Elf` helper: all five compiled-in rows carry a
+non-empty +0x8 and a null +0xc — `xmodel/ammo_stielhandgranate1` (65),
+`xmodel/ammo_stielhandgranate2` (66), `xmodel/health_small` (67),
+`xmodel/health_medium` (68), `xmodel/health_large` (69) — while rows 1-64
+carry the empty string in both, matching the runtime fill their classnames
+already show.
+
+VERIFIED from the captures and the shipped weapon files, that a weapon's
+pair is its file's `worldModel` and `projectileModel`, in that order and
+verbatim: `_teams::precache()`'s American list on `mp_carentan` is
+`fraggrenade_mp colt_mp m1carbine_mp m1garand_mp thompson_mp bar_mp
+springfield_mp`, and slots 385-392 of the capture are
+`weapon_MK2FragGrenade`, `projectile_USGrenade`, `weapon_colt45`,
+`weapon_M1Carbine`, `weapon_M1Garand`, `weapon_thompson`, `weapon_bar`,
+`weapon_springfield` — the grenade's two fields adjacent, one field each
+for the seven weapons that ship no `projectileModel`. The German list and
+`mp_pavlov`'s two lists resolve the same way with no leftovers.
+
+`crates/server/src/items.rs`'s `item_models` reproduces this, and
+`GameHost::register_item` is `RegisterItem` whole: the bit, the alt-fire
+link, both models per registered item, and configstring 8.
 
 ## 16. The builtins the stock `dm` bootstrap reaches
 
@@ -856,6 +872,42 @@ rules — a `RADIANT_NAMES` table lookup for `mpweapon_*`, and a direct
 `weaponinfo` key read for `misc_mg42`/`misc_turret` — run for every spawned
 entity alongside `SPAWN_FREES` and independent of it, so a classname that
 both registers and frees still does both.
+
+## 18. What fills the model configstring block
+
+Three things write into 269-523, and they interleave strictly in call
+order, so getting any one of them wrong offsets everything after it rather
+than leaving a hole. VERIFIED throughout this section from the two
+committed captures in `crates/server/tests/fixtures/configstrings/`, the
+shipped BSPs, weapon files and scripts, and the reads out of
+`game.mp.i386.so` named per claim.
+
+1. Every non-brush `model` key in the entity lump, during
+   `G_SpawnEntitiesFromString` (section 7).
+2. Each registered item's `worldModel` and `projectileModel`, wherever the
+   item is registered — at spawn for a placed weapon or a mounted mg42
+   (section 17), inside `precacheItem` for the script's own list (section
+   15, M3).
+3. The script's own `precacheModel` and `setModel` calls, continuing from
+   whatever the first two left.
+
+The arithmetic, VERIFIED slot by slot against both captures:
+
+| | `mp_pavlov` | `mp_carentan` |
+|---|---|---|
+| entity-lump `model` keys, distinct and non-brush | 27 | 57 |
+| item models registered at spawn | 1 | 1 |
+| item models from `precacheItem("item_health")` | 1 | 1 |
+| **first slot the script's own precaches reach** | **298** | **328** |
+| block ends at | 361 (93 models) | 399 (131 models) |
+
+The one spawn-time item model on each map is
+`xmodel/weapon_panzerfaust_rocket`, the `projectileModel` of the
+`panzerfaust_mp` both maps place; every other placed weapon's `worldModel`
+is already the placing block's own `model` key and interns onto it, and the
+`mg42_bipod_*` files carry no `worldModel` at all. The script-side one is `xmodel/health_medium`, `dm.gsc`'s
+`precacheItem("item_health")` two lines before `_teams::precache()` starts
+the player models.
 
 ## Open, and worth a probe
 

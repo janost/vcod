@@ -3,25 +3,36 @@
 //! `SaveRegisteredItems` (`.text` 0x4ef08) packs from the registration
 //! bitset. `docs/research/cod11-gsc-object-model.md` has the full item-table
 //! story (the placeholder weapon slots, the runtime fill, both decoded
-//! captures); this module only reproduces `Items::register` and
-//! `Items::bitstring`.
+//! captures); this module only reproduces `Items::register`,
+//! `Items::bitstring` and the item models `RegisterItem` precaches.
 
 use crate::configstrings::WEAPON_LIST;
+use vcod_common::pk3::Pk3Fs;
 
 /// `bg_numItems` (`.rodata` 0x70804).
 pub const NUM_ITEMS: usize = 70;
 
 /// The only classnames `bg_itemlist` carries compiled into the binary,
-/// indices 65-69. Indices 1-64 are `emptyitem_"wNN"` placeholders there;
-/// a weapon's real classname reaches its slot at runtime from the mounted
-/// paks' weapon files, so `item_index` derives a weapon's index from
-/// `WEAPON_LIST` (R1) instead of a second table.
-const STATIC_ITEMS: &[(usize, &str)] = &[
-    (65, "item_ammo_stielhandgranate_open"),
-    (66, "item_ammo_stielhandgranate_closed"),
-    (67, "item_health_small"),
-    (68, "item_health"),
-    (69, "item_health_large"),
+/// indices 65-69, each with the world model at its record's +0x8. Indices
+/// 1-64 are `emptyitem_"wNN"` placeholders whose model fields are the empty
+/// string; a weapon's real classname and models reach its slot at runtime
+/// from the mounted paks' weapon files, so `item_index` derives a weapon's
+/// index from `WEAPON_LIST` (R1) and `item_models` reads its models from
+/// the weapon file. All five rows carry a null +0xc.
+const STATIC_ITEMS: &[(usize, &str, &str)] = &[
+    (
+        65,
+        "item_ammo_stielhandgranate_open",
+        "xmodel/ammo_stielhandgranate1",
+    ),
+    (
+        66,
+        "item_ammo_stielhandgranate_closed",
+        "xmodel/ammo_stielhandgranate2",
+    ),
+    (67, "item_health_small", "xmodel/health_small"),
+    (68, "item_health", "xmodel/health_medium"),
+    (69, "item_health_large", "xmodel/health_large"),
 ];
 
 /// `BG_FindItem` (0x2e214) is a `strcmp`, so the lookup is case-sensitive;
@@ -32,8 +43,48 @@ fn item_index(name: &str) -> Option<usize> {
     }
     STATIC_ITEMS
         .iter()
-        .find(|(_, n)| *n == name)
-        .map(|(i, _)| *i)
+        .find(|(_, n, _)| *n == name)
+        .map(|(i, ..)| *i)
+}
+
+/// The item name at `index`, the inverse of `item_index`.
+fn item_name(index: usize) -> Option<&'static str> {
+    if let Some(name) = index
+        .checked_sub(1)
+        .and_then(|i| WEAPON_LIST.split(' ').nth(i))
+    {
+        return Some(name);
+    }
+    STATIC_ITEMS
+        .iter()
+        .find(|(i, ..)| *i == index)
+        .map(|(_, n, _)| *n)
+}
+
+/// The two models `RegisterItem` precaches for an item, `bg_itemlist`'s
+/// +0x8 and +0xc. For the five compiled-in rows they are in the binary; a
+/// weapon's pair is filled at runtime, so it comes from the weapon file's
+/// `worldModel` and `projectileModel`, kept verbatim because the model
+/// configstring holds the spelling the file uses. Without a filesystem
+/// (every unit test that does not mount the paks) a weapon contributes
+/// nothing.
+pub fn item_models(fs: Option<&Pk3Fs>, name: &str) -> Vec<String> {
+    if let Some((.., model)) = STATIC_ITEMS.iter().find(|(_, n, _)| *n == name) {
+        return vec![model.to_string()];
+    }
+    let Some(fs) = fs else {
+        return Vec::new();
+    };
+    let Some(bytes) = fs.read(&format!("weapons/mp/{name}")) else {
+        return Vec::new();
+    };
+    let map = vcod_common::xmodel::parse_weapon(&String::from_utf8_lossy(&bytes));
+    ["worldModel", "projectileModel"]
+        .iter()
+        .filter_map(|k| map.get(*k))
+        .filter(|v| !v.is_empty())
+        .cloned()
+        .collect()
 }
 
 /// A weapon and its alt-fire mode sit at adjacent `WEAPON_LIST` indices —
@@ -120,15 +171,19 @@ impl Items {
     /// `RegisterItem` (0x4e504): marks `name` registered and, for a weapon
     /// item, its alt-fire mode too (see `alt_weapon_index`). An unknown
     /// name is a `BG_FindItem` miss and registers nothing, as retail
-    /// ignores it.
-    pub fn register(&mut self, name: &str) {
+    /// ignores it. Returns the items registered, the named one first, which
+    /// is what `GameHost::register_item` walks to precache their models.
+    pub fn register(&mut self, name: &str) -> Vec<&'static str> {
         let Some(index) = item_index(name) else {
-            return;
+            return Vec::new();
         };
         self.registered[index] = true;
+        let mut done: Vec<&'static str> = item_name(index).into_iter().collect();
         if let Some(alt) = alt_weapon_index(index) {
             self.registered[alt] = true;
+            done.extend(item_name(alt));
         }
+        done
     }
 
     /// `SaveRegisteredItems` (0x4ef08): four items per lowercase hex
