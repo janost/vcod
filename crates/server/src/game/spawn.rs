@@ -87,9 +87,9 @@ pub fn spawn_entities_from_string(
             register_sound_alias(host, trigger_hurt_sound(&block));
         }
         if let Some(item) = spawn_item_name(host, cx, id, &classname) {
-            host.register_item(&item);
-            if classname == "misc_mg42" || classname == "misc_turret" {
-                for alias in turret_sound_aliases(host.fs.as_deref(), &item) {
+            host.register_item(&item.name);
+            if item.turret {
+                for alias in turret_sound_aliases(host.fs.as_deref(), &item.name) {
                     register_sound_alias(host, alias);
                 }
             }
@@ -238,20 +238,48 @@ const RADIANT_NAMES: &[(&str, &str)] = &[
 /// name is their `weaponinfo` key's value directly, no lookup needed
 /// (VERIFIED: mp_carentan's two mounted mg42s carry
 /// `"weaponinfo" "mg42_bipod_stand_mp"` in the shipped BSP).
-fn spawn_item_name(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Option<String> {
+///
+/// One divergence, on section 17's reading of `SP_turret`'s branches: a
+/// `misc_mg42`/`misc_turret` with no `weaponinfo` key takes retail's
+/// `Com_Error` ("no weaponinfo specified for turret") and fails the map
+/// load, where we return `None` and spawn the entity without an item. No
+/// stock map has one, so the two differ only on a broken BSP, which ours
+/// loads and retail does not.
+fn spawn_item_name(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+    classname: &str,
+) -> Option<SpawnItem> {
     if classname.starts_with("mpweapon_") {
         return RADIANT_NAMES
             .iter()
             .find(|(radiant, _)| *radiant == classname)
-            .map(|(_, weapon)| weapon.to_string());
+            .map(|(_, weapon)| SpawnItem {
+                name: weapon.to_string(),
+                turret: false,
+            });
     }
     if classname == "misc_mg42" || classname == "misc_turret" {
         let weaponinfo = cx.intern_folded("weaponinfo");
         if let Value::String(s) = host.get_field(cx, id, weaponinfo) {
-            return Some(cx.resolve(s).to_string());
+            return Some(SpawnItem {
+                name: cx.resolve(s).to_string(),
+                turret: true,
+            });
         }
     }
     None
+}
+
+/// What a spawned entity registers. `turret` carries which of the two
+/// paths above matched, because only the `SP_turret` one also registers
+/// sound aliases: deciding that at the call site would mean repeating the
+/// classname test, and a third turret classname added to one copy and not
+/// the other would silently lose the aliases.
+struct SpawnItem {
+    name: String,
+    turret: bool,
 }
 
 /// `G_ParseField`: the entity field table first, case-insensitively, then
