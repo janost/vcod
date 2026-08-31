@@ -159,7 +159,7 @@ fn probe_ents_matches_retail() {
 /// `getEntArray`/`getEntityNumber` right away, then again after a `wait
 /// 0.15`; a second delete-then-wait pair follows. Two `wait`s means the
 /// callback suspends, so it needs `start_thread` plus stepped frames rather
-/// than `probe_ents`' single `call_now` -- the same fallback
+/// than `probe_ents`' single `call_now` — the same fallback
 /// `crates/gsc/tests/semantics_ab.rs::run_probe` uses for a probe built
 /// around `wait`. Each stepped frame runs the entity think pass before the
 /// VM step, the order `ScriptRuntime::run_frame` uses, so a deferred
@@ -228,7 +228,7 @@ fn probe_delete_matches_retail() {
 
 /// `probe_cvar` measures `getCvar`/`setCvar`/`getCvarInt`/`getCvarFloat`/
 /// `getTime`/`randomInt` against retail. It spawns no entities and reads no
-/// map data -- every cvar it touches it also registers itself -- so a bare
+/// map data — every cvar it touches it also registers itself — so a bare
 /// `GameHost` reproduces it.
 #[test]
 fn probe_cvar_matches_retail() {
@@ -246,7 +246,7 @@ fn probe_cvar_matches_retail() {
 /// it at slot 164/228 as `"0"` while every other `scr_allow_*` is `"1"`
 /// (`crates/server/src/cvars.rs`'s `STOCK_SCRIPT_CVARS`), and Activision's
 /// own `_teams::initGlobalCvars()` passes `"1"` as fg42's default too, so
-/// that call is not what produced the `"0"` -- `makeCvarServerInfo` never
+/// that call is not what produced the `"0"` — `makeCvarServerInfo` never
 /// overwrites an existing value. Something registers it as `"0"` before
 /// the script runs; the mechanism is unidentified. This isolated probe
 /// runs no bootstrap at all, so the test seeds the measured value
@@ -293,7 +293,7 @@ impl ScriptSource for PakWithProbe {
 /// This runs the production bootstrap rather than a copy of it: the probe is
 /// the gametype `ScriptRuntime::load_from` loads, so swapping the two
 /// `start_thread` calls in `start_bootstrap` fails here. Nothing else pins
-/// the order -- `dm.gsc`'s `main` never reads `game["allies"]` and its
+/// the order — `dm.gsc`'s `main` never reads `game["allies"]` and its
 /// `Callback_StartGameType` defaults the key when unset, so the configstring
 /// assertions in `script.rs` come out the same either way.
 #[test]

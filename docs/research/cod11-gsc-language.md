@@ -422,7 +422,7 @@ object model, the cvar table or a real map, all of which live in
 captured but skipped for the reasons `§10` and `semantics_ab.rs`'s
 `KNOWN_GAPS_OUT_OF_SCOPE` give.
 
-Three facts about the retail side shaped how the measurement had to be taken,
+Four facts about the retail side shaped how the measurement had to be taken,
 and each is worth knowing before writing another probe:
 
 - **`logPrint` is the only output channel** a dedicated server with no
@@ -436,6 +436,15 @@ and each is worth knowing before writing another probe:
   group is a separate file.
 - **A gametype needs a one-line `.txt` description file** beside its `.gsc`,
   or the engine warns and refuses to load the map.
+- **The engine loads only the first 31 loose gametype scripts** it finds and
+  runs `dm` instead of any gametype past that (`Too many game type scripts
+  found! Only loading the first 31`, then `g_gametype is not a valid
+  gametype, defaulting to dm`). Neither line reaches the probe's own
+  channel, so the section comes back empty with no `PROBE_FATAL`, which is
+  also what a compile error looks like. The probe corpus is at 31 files and
+  `tools/run_probe.sh` installs each one into the server's homepath, so it
+  now deletes the loose `probe_*` files there before installing its own.
+  Two full regenerations were lost to this before the cause was found.
 
 **Boolean reading: numbers only, VERIFIED.** `if (x)` accepts `Int` and
 `Float` and nothing else. `0` and `0.0` are false; `1` and `0.5` are true.
@@ -453,8 +462,8 @@ the rendering is the int one). `true == 1` and `false == 0` both hold, and
 unassigned local reads as, and concatenating it is the usual fatal `pair has
 unmatching types 'string' and 'undefined'`. So these two are the one place
 gsc's otherwise case-insensitive identifier and keyword matching does not
-apply. The stock corpus depends on this everywhere -- `_gameobjects::main`
-sets `dodelete = true` and later branches on `if(dodelete)` -- so a lexer
+apply. The stock corpus depends on this everywhere — `_gameobjects::main`
+sets `dodelete = true` and later branches on `if(dodelete)` — so a lexer
 that treats `true` as a bare identifier voids those scripts at their first
 `if`.
 
@@ -501,7 +510,7 @@ too: `"abcd".size` is 4.
 **Assigning to an index of `undefined` auto-vivifies an array, VERIFIED
 (`probe_autoviv`).** `a[0] = "x"` on a local that was never set turns it
 into a one-element array; a non-zero first index (`b[3] = "x"`) and a string
-key (`c["k"] = "v"`) behave the same way, each yielding a `.size` of 1 --
+key (`c["k"] = "v"`) behave the same way, each yielding a `.size` of 1 —
 retail's arrays are sparse, so a non-zero first write does not backfill the
 lower indices. The same holds through a struct field
 (`level.myArray[0] = "y"`), which is exactly what `_load.gsc`'s
