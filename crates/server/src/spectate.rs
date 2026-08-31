@@ -58,8 +58,10 @@ impl ClientSim {
         self.ps.pitch = -short_deg(cmd.angles[0]).to_radians();
         match (self.pm_type, world) {
             // A spectator noclips, so it needs no world. `(Normal, None)` is
-            // the fallback for unit tests that mount no map; `Server` always
-            // has a world by the time a client spawns.
+            // the two cases where a player has none either: a unit test that
+            // mounts no map, and a server whose world failed to load, which
+            // `Server::FALLBACK_SPAWN` keeps running. Both fly rather than
+            // collide, so a player on a failed load noclips.
             (PmType::Spectator, _) | (PmType::Normal, None) => pmove::spectator_move(
                 &mut self.ps,
                 f32::from(cmd.forward) / 127.0,
@@ -80,7 +82,8 @@ impl ClientSim {
 
     /// The wire playerstate. Fields the two modes disagree about are measured
     /// on both sides: the spectator's from the retail capture in
-    /// `crates/common/tests/fixtures/net/snapshots.bin`, the player's from
+    /// `crates/common/tests/fixtures/net/snapshots.bin`, whose zeros
+    /// `parses_captured_snapshot_run` pins, the player's from
     /// `crates/server/tests/fixtures/playerstate/*.txt`, which the
     /// `playerstate_ab` gate diffs against. `commandTime` mirrors the last
     /// processed cmd's server time.
@@ -94,6 +97,8 @@ impl ClientSim {
         set("commandTime", command_time);
         // Mode-dependent.
         set("pm_type", if player { 0 } else { 4 });
+        // The 0x8 the spectator carries on top of the player's 0x10 is
+        // unaccounted for; both values are the captures', not a mechanism.
         set("eFlags", if player { 16 } else { 24 });
         set(
             "speed",
@@ -177,11 +182,14 @@ mod tests {
     /// of them is enough here.
     fn retail_player(field: &str) -> i32 {
         let text = include_str!("../tests/fixtures/playerstate/mp_pavlov-dm.txt");
-        text.lines()
+        let (_, value) = text
+            .lines()
             .filter_map(|l| l.split_once(' '))
             .find(|(name, _)| *name == field)
-            .and_then(|(_, v)| v.parse().ok())
-            .unwrap_or_else(|| panic!("no {field} in the capture"))
+            .unwrap_or_else(|| panic!("no {field} in the capture"));
+        value
+            .parse()
+            .unwrap_or_else(|e| panic!("{field} is {value:?}, not an i32: {e}"))
     }
 
     /// The player half of `to_wire`, against that capture. The gate cannot

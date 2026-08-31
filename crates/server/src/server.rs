@@ -697,7 +697,14 @@ impl Server {
             // `ClientBegin`: the notify that releases the connect callback's
             // `waittill("begin")`. The event queues rather than fires here,
             // so it is drained after the `Connect` that armed the wait.
-            "begin" => {
+            // Entry runs once. A repeat from a client already in the world
+            // would park its sim back at the spawn and re-arm a wait nothing
+            // is blocked on.
+            "begin"
+                if self.clients[slot]
+                    .as_ref()
+                    .is_some_and(|c| c.state == ClientState::Primed) =>
+            {
                 if let Some(rt) = self.script.as_mut() {
                     rt.push_client_event(ClientEvent::Begin(slot));
                 }
@@ -1997,7 +2004,7 @@ mod tests {
     }
 
     #[test]
-    fn an_acked_client_receives_snapshots_and_flies_forward() {
+    fn a_client_in_the_world_receives_snapshots_and_flies_forward() {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
         // A flat floor to fly over; without a world the sim freezes.
@@ -2039,6 +2046,76 @@ mod tests {
         let s2 = latest_snapshot(&mut sv, &mut nc, &mut ring, later);
         let moved = s2.ps.origin(p)[0] - s.ps.origin(p)[0];
         assert!(moved > 1.0, "should have flown +X, dx {moved}");
+    }
+
+    /// `begin` is the only way into the world now that the gamestate-ack
+    /// trigger is gone, so a client that sends it twice must not be parked
+    /// back at its spawn point mid-flight.
+    #[test]
+    fn a_second_begin_leaves_a_flying_client_where_it_is() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        let mut nc = begun(&mut sv, now);
+        let mut ring = SnapshotRing::new();
+        let p = &PROTOCOL_V1;
+        latest_snapshot(&mut sv, &mut nc, &mut ring, now);
+
+        let later = now + std::time::Duration::from_millis(50);
+        let huff = Huffman::new();
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops(
+                    sv.checksum_feed,
+                    ack,
+                    UserCmd {
+                        forward: 127,
+                        ..Default::default()
+                    },
+                ),
+                &huff,
+            )
+            .unwrap(),
+            now,
+        );
+        let flying = latest_snapshot(&mut sv, &mut nc, &mut ring, later);
+        assert!(
+            flying.ps.origin(p)[0] > 1.0,
+            "the client never left the spawn"
+        );
+
+        let mut w = MsgWriter::new(&huff);
+        w.write_bits(CLC_CLIENT_COMMAND, 2);
+        w.write_long(2);
+        w.write_string("begin");
+        w.write_bits(CLC_EOF, 2);
+        nc.reliable[2] = "begin".to_string();
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(0x10, ack, 0, &w.into_ops(), &huff).unwrap(),
+            later,
+        );
+        let after = latest_snapshot(
+            &mut sv,
+            &mut nc,
+            &mut ring,
+            later + std::time::Duration::from_millis(50),
+        );
+        assert!(
+            after.ps.origin(p)[0] >= flying.ps.origin(p)[0],
+            "a second begin teleported the client back: {} -> {}",
+            flying.ps.origin(p)[0],
+            after.ps.origin(p)[0]
+        );
     }
 
     /// A block whose mouse turns mid-flight: per-cmd replay must cover both
