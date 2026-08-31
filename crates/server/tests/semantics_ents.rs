@@ -164,6 +164,13 @@ fn probe_ents_matches_retail() {
 /// around `wait`. Each stepped frame runs the entity think pass before the
 /// VM step, the order `ScriptRuntime::run_frame` uses, so a deferred
 /// `delete()` frees on the same schedule production code would.
+///
+/// This only bounds `DELETE_DEFER_MS`, it does not pin it: the 50 ms frame
+/// step and the 150 ms `wait`s mean any defer in (0, 150] ms frees each
+/// deleted entity in time to match retail's post-wait counts, so this test
+/// would pass unchanged at 1, 50 or 150 too. The exact 100 ms figure rests
+/// on the disassembly citation in `DELETE_DEFER_MS`'s own comment, not on
+/// this test.
 #[test]
 fn probe_delete_matches_retail() {
     let Some(fs) = vcod_common::testing::game_fs() else {

@@ -10,11 +10,13 @@ use crate::server::MAX_CLIENTS;
 use glam::Vec3;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 
-/// `delete()`'s deferred-free window (`Scr_deleteEntity`/`Scr_delete`
-/// 0x5da14): it sets `think = G_FreeEntity` with `nextthink = level.time +
-/// 100` rather than freeing on the spot. `probe_delete`'s capture confirms
-/// the free has happened by 150 ms and not by 0 ms
-/// (docs/research/cod11-gsc-object-model.md section 14).
+/// `delete()`'s deferred-free window: the `delete` entity method (0x5da14,
+/// unnamed in either of `game.mp.i386.so`'s symbol tables) sets `think =
+/// G_FreeEntity` with `nextthink = level.time + 100` rather than freeing on
+/// the spot (docs/research/cod11-gsc-object-model.md section 14, from
+/// disassembly). `probe_delete`'s capture is consistent with a defer
+/// somewhere in (0, 150] ms but does not pin 100 specifically; see the note
+/// on `probe_delete_matches_retail` in `crates/server/tests/semantics_ents.rs`.
 const DELETE_DEFER_MS: i32 = 100;
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
