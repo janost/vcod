@@ -1,6 +1,7 @@
 //! The map load: BSP entity lump to object table, following `G_CallSpawn`
 //! and `G_ParseField` (docs/research/cod11-gsc-object-model.md section 7).
 
+use crate::configstrings::CsRange;
 use crate::game::fields::{self, FieldType, Route};
 use crate::game::host::GameHost;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Value};
@@ -186,6 +187,17 @@ fn parse_field(host: &mut GameHost, cx: &mut Cx, id: EntId, key: &str, raw: &str
             None => return,
         },
     };
+    if ty == FieldType::ModelIndex && !raw.starts_with('*') {
+        // `G_ParseField`'s type-8 branch (call at 0x61505) indexes the name
+        // and stores the byte at `gentity_t+0x175`; we keep the name as the
+        // storage, so only the slot allocation is reproduced here.
+        if let Err(e) = host
+            .allocators
+            .index(&mut host.configstrings, CsRange::Model, raw)
+        {
+            log::warn!("gsc: model {raw:?} not indexed: {e:?}");
+        }
+    }
     let Some(value) = convert(cx, ty, raw) else {
         return;
     };
@@ -417,6 +429,52 @@ mod tests {
         assert!(!super::SPAWN_CLASSNAMES.contains(&"worldspawn"));
     }
 
+    /// The entity lump fills the model configstring block before any script
+    /// runs, in lump order and deduped, and a block whose `SP_` function
+    /// frees still takes its slot: the index happens while the fields are
+    /// parsed, which is before the classname is dispatched
+    /// (docs/research/cod11-gsc-object-model.md section 7). Only one live
+    /// entity survives this lump, yet the freed `misc_model` owns slot 269.
+    #[test]
+    fn entity_model_keys_take_model_slots_in_lump_order() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            super::spawn_entities_from_string(
+                &mut host,
+                cx,
+                "{\n\"classname\" \"worldspawn\"\n}\n\
+                 {\n\"classname\" \"misc_model\"\n\"model\" \"xmodel/barrels\"\n}\n\
+                 {\n\"classname\" \"script_model\"\n\"model\" \"xmodel/crate_misc1\"\n}\n\
+                 {\n\"classname\" \"misc_model\"\n\"model\" \"xmodel/barrels\"\n}\n",
+            )
+            .unwrap();
+        });
+        assert_eq!(host.ents.iter_inuse().count(), 1);
+        assert_eq!(host.configstrings[269], "xmodel/barrels");
+        assert_eq!(host.configstrings[270], "xmodel/crate_misc1");
+        assert_eq!(host.configstrings[271], "");
+    }
+
+    /// A `model` value starting with `*` is a brush model: its number goes
+    /// straight into the entity and `G_ModelIndex` is never called, so it
+    /// takes no configstring slot. Both gate maps' lumps carry them, so
+    /// indexing them would offset the whole block.
+    #[test]
+    fn a_brush_model_takes_no_model_slot() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            super::spawn_entities_from_string(
+                &mut host,
+                cx,
+                "{\n\"classname\" \"worldspawn\"\n}\n\
+                 {\n\"classname\" \"trigger_hurt\"\n\"model\" \"*1\"\n}\n\
+                 {\n\"classname\" \"misc_model\"\n\"model\" \"xmodel/barrels\"\n}\n",
+            )
+            .unwrap();
+        });
+        assert_eq!(host.configstrings[269], "xmodel/barrels");
+    }
+
     /// A block whose `SP_` function frees consumes no entity number: the
     /// slot goes back on the free list and the next block takes it. Measured
     /// on the retail server, where `light` and `misc_model` report zero live
@@ -456,6 +514,33 @@ mod tests {
         // `info_notnull` keeps its entity: both measured live.
         assert!(!super::SPAWN_FREES.contains(&"misc_teleporter_dest"));
         assert!(!super::SPAWN_FREES.contains(&"info_notnull"));
+    }
+
+    /// The map's own lump opens the model block, before a line of script
+    /// runs: slot 269 is mp_pavlov's first `model` key, pinned against the
+    /// committed retail capture. Before this, 269 held whatever the
+    /// gametype script precached first and the whole block was offset.
+    #[test]
+    fn mp_pavlov_opens_the_model_block_with_its_lumps_first_model() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let capture = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/configstrings/mp_pavlov-dm.txt"
+        ))
+        .expect("the committed retail capture");
+        let retail_269 = capture
+            .lines()
+            .find_map(|l| l.strip_prefix("269 "))
+            .expect("slot 269 in the capture");
+
+        let bytes = fs.read("maps/mp/mp_pavlov.bsp").expect("mp_pavlov.bsp");
+        let bsp = vcod_common::bsp::parse(&bytes).unwrap();
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, &bsp.entities))
+            .unwrap();
+        assert_eq!(host.configstrings[269], retail_269);
     }
 
     /// mp_pavlov's lump has 345 blocks, four of them `script_origin` at lump

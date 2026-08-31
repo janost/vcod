@@ -312,9 +312,38 @@ The spawn-var applier is the unnamed function at 0x61400, which I will call
    wherever that left off. That conclusion is VERIFIED independently by the
    committed retail captures: `mp_carentan-dm.txt` opens the model block with
    map props (`xmodel/static_vehicle_german_truck` and the rest of the lump)
-   and reaches the team player models only after them. That is why our model
-   block is offset against both captures: we store the name without indexing
-   it.
+   and reaches the team player models only after them.
+
+   Four facts decide which keys take which slot.
+
+   - **`model` is the only type-8 record in any of the three field tables.**
+     VERIFIED, `python3 tools/re/dump_script_fields.py game.mp.i386.so`: one
+     type-8 row across all 58, `model` at offset 373 (0x175, the byte the
+     index is stored in). `radiant/keys.txt` declares only `float`, `int`
+     and `string` (section 6), so the second stage cannot produce one
+     either.
+   - **A brush model takes no slot.** INFERRED for the mechanism, from the
+     `*`-prefix branch above that stores the number at `ent+0x8c` without
+     reaching 0x61505. VERIFIED for the outcome: no `*N` value appears
+     anywhere in either capture's model block, though the two lumps carry
+     10 (`mp_carentan`) and 34 (`mp_pavlov`) brush `model` keys.
+   - **A block whose `SP_` function frees still takes its slot.** VERIFIED
+     from the captures: `misc_model` is one of the five freeing classnames
+     (section 13) and 592 of `mp_carentan`'s 855 blocks are `misc_model`,
+     yet slot 269 of its capture is the first of them. INFERRED for why:
+     `G_CallSpawn` applies every spawn var before it calls the record's
+     `SP_` function, so the index is taken before the free. This is the
+     opposite of the entity *number* rule the same five classnames obey.
+   - **`G_ModelIndex` interns.** VERIFIED from the captures:
+     `mp_carentan`'s 672 non-brush `model` keys are 57 distinct names, and
+     its capture holds each of the 57 exactly once, in first-appearance
+     order, across slots 269-326 (the one slot among them that is not a
+     lump model comes from an item registration, section 15).
+
+   The index is stored in a byte, so a model index above 255 cannot be
+   represented on an entity even though the configstring range runs to 523.
+   Nothing measured here reaches it: `mp_carentan`, the larger gate map,
+   ends its model block at 399. Recorded as an observation, untested.
 2. On a miss, call `Scr_FindField(key, &type)`. A nonzero result means the key
    is a registered script field. Convert the value by that type (1 gives
    `Scr_AddString`, 4 gives `strtod` then `Scr_AddFloat`, 5 gives `strtol`
