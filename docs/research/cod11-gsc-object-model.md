@@ -604,35 +604,39 @@ script-spawned entities are 299, 300 and 301 behind the map's four
 `probe_spawnfree`'s `spawn1` line. No stock MP map's lump has a block
 without a classname, so the block count is the whole story.
 
-## 14. `G_Spawn` drains a free list before it bumps the counter, VERIFIED
+## 14. `G_Spawn` drains a free list before it bumps the counter
 
-`level` carries a singly linked FIFO of freed entities: head at `level+0x10`,
-tail at `level+0x14`, next pointer at `gentity+0x304`.
+VERIFIED, read from the binary: `G_Spawn` is 0x667e0 and `G_FreeEntity`
+0x66948; the two words `G_Spawn` loads at 0x667e9 and `G_FreeEntity` stores
+through at 0x66bb3 are `level+0x10` and `level+0x14`; the per-entity words
+they chain and bump are `gentity+0x304` and `gentity+0x300`; the guard at
+0x66bb1 compares the entity index against 71; the counter path is 0x6688b
+and its `G_Error` limit 0x3fe.
 
-`G_Spawn` (0x667e0) reads the head at 0x667e9 and, when it is not null,
-takes that entity (0x668c8), pops it, and clears the tail too if the list
-is now empty. Only an empty list reaches the counter path at 0x6688b, and
-only that path can hit the 0x3fe `G_Error`.
+INFERRED FROM DECOMPILATION, the narrative those instructions add up to:
+the two `level` words are the head and tail of a singly linked FIFO of freed
+entities. `G_Spawn` reads the head, and when it is not null takes that
+entity (0x668c8), pops it, and clears the tail too if the list is now empty;
+only an empty list reaches the counter path, and only that path can hit the
+`G_Error`. `G_FreeEntity` appends at the tail, and its guard is what keeps
+the 0..71 reserved range out of the list. `gentity+0x300` is a generation
+counter, which is what stale script handles are checked against.
 
-`G_FreeEntity` (0x66948) appends at the tail (0x66bb3), after a guard at
-0x66bb1 that skips entities whose index is 71 or below, so the 0..71
-reserved range never enters the list. It also bumps a per-entity generation
-counter at `gentity+0x300`, which is what stale script handles are checked
-against.
-
-Measured on mp_chateau (2026-08-29): after the map load the first spawn was
+VERIFIED live, measured on mp_chateau (2026-08-29): after the map load the first spawn was
 217 and the second 218. Deleting the first and spawning again gave 219, not
 217; a fourth spawn gave 220. After `wait 0.5` the next spawn was 217, the
 deleted entity's number, and the one after it 221, continuing from the
 high-water mark. Two facts fall out of that:
 
 - A freed slot **is** handed back out, ahead of the counter, in FIFO order.
-- `delete()` does not free the entity when it is called. The `delete` entity
-  method (0x5da14) notifies, unlinks, clears the touch and use handlers, and
-  sets `think = G_FreeEntity` with `nextthink = level.time + 100`
-  (0x5da9a, 0x5daa4). The free happens a tenth of a second later, off the
-  entity think. During the map load the `SP_` functions call `G_FreeEntity`
-  directly, so there is no such delay there.
+- `delete()` does not free the entity when it is called: the free happens a
+  tenth of a second later, off the entity think. INFERRED FROM
+  DECOMPILATION, what the `delete` entity method (0x5da14) does to get
+  there — it notifies, unlinks, clears the touch and use handlers, and sets
+  `think = G_FreeEntity` with `nextthink = level.time + 100`; the two
+  constants are VERIFIED at 0x5da9a and 0x5daa4. During the map load the
+  `SP_` functions call `G_FreeEntity` directly, so there is no such delay
+  there (INFERRED from the same reading).
 
 `ObjectTable::schedule`/`run_thinks` (`crates/server/src/game/entity.rs`)
 reproduce the think pass this implies. A think is an absolute `nextthink` in

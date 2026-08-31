@@ -229,7 +229,14 @@ is anything read off control flow, and **instruction sequencing and branch
 conditions are control flow**: "followed by", "then", "when that field is
 non-null" all belong under INFERRED however plainly the instructions read. A
 label covers one claim, never a section, because a section is a mix and the
-blanket then covers claims it should not. `crates/common/tests/evidence_labels.rs`
+blanket then covers claims it should not. One exception, and only one: a
+document may open with a document-level default ("everything here is VERIFIED
+unless labelled otherwise") when its provenance really is uniform and every
+exception in it carries its own label; the four format and handshake docs
+that do are accurate. A blanket over a section, including one
+appended to its heading, stays forbidden whether or not the document carries
+such a default.
+`crates/common/tests/evidence_labels.rs`
 catches the two mechanical shapes of this and its doc comment says what it
 cannot catch, which is most of it; a reader is still the enforcement. Research
 docs carry facts derived from the binaries (offsets, tables, enum orders),

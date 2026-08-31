@@ -23,8 +23,14 @@
 //!   branch condition ("gated on that field being non-null"). That was the
 //!   last occurrence of this defect in the repo and no grep finds it;
 //! - a claim carrying no label at all;
-//! - a blanket in a section heading (`## 16. ..., VERIFIED`), a shape several
-//!   pure-data-read sections carry legitimately;
+//! - a blanket in a section heading (`## 16. ..., VERIFIED`). `AGENTS.md`
+//!   forbids it the same as any other per-section blanket, and nine section
+//!   headings in `cod11-gsc-object-model.md` still carry one;
+//! - a document-level default ("everything here is VERIFIED unless labelled
+//!   otherwise"), the most common blanket left in the corpus. `AGENTS.md`
+//!   sanctions it where the document's provenance is uniform and every
+//!   exception is labelled, which is a judgement no grep makes, so this
+//!   check neither flags it nor vouches for it;
 //! - whether a VERIFIED claim is actually true.
 //!
 //! Passing this proves the docs are free of two mistakes, not that their
