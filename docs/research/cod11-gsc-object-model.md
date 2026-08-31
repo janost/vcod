@@ -958,6 +958,66 @@ already read and we do not carry are `g_allowVote` (index 26, default
 measured outcome today, `g_debugDamage` because 0 is what an absent cvar
 already reads as.
 
+## 19. The last two configstring mechanisms: `northyaw` and two `SP_` sound aliases
+
+Closing `crates/server/tests/configstrings_ab.rs`'s last four slots on
+`mp_carentan` and two on `mp_pavlov` took two more `SP_`-function readings,
+neither of them a new shape: a raw text copy and two more calls into
+`G_SoundAliasIndex` alongside the `RegisterItem` one section 17 already
+covers.
+
+**`northyaw`, configstring 11.** `SP_worldspawn` (0x61cec) is a straight
+disassembly read, VERIFIED against both captures for its outcome:
+`G_SpawnString("northyaw", "", &out)` (`0x61e18`-`0x61e1d`), then a check on
+`*out` — if non-empty, `trap_SetConfigstring(11, out)`; if empty, the
+compiled-in literal `"0"` (`0x7964b`) goes in its place instead
+(`0x61e28`-`0x61e3d`). This is a raw copy of the entity's own key text, never
+a number the engine formats — no `G_SpawnFloat`, no `strtol`, no `strtod`
+anywhere in this sequence — which is why vcod's side does not route it
+through `Cx::format_number`: there is no `Value` to render, only a `String`
+already in its final form, or a fallback string when there is none.
+
+The genuinely-absent-vs-zero question `northyaw` raises settles from the
+maps' own worldspawn blocks, not from either capture (both are read
+straight, VERIFIED, from the shipped BSPs): `mp_pavlov`'s worldspawn key is
+present, `"90"`; `mp_carentan`'s worldspawn block carries no `northyaw` key
+at all, so its capture's `"0"` is `SP_worldspawn`'s literal fallback, not a
+rendered zero. `worldspawn_northyaw` (`crates/server/src/game/spawn.rs`)
+reproduces exactly this: the key's value if present and non-empty, else the
+literal `"0"`.
+
+**`world_hurt_me`, configstring 525.** `SP_trigger_hurt` (0x64ef8) calls
+`G_SpawnString("sound", "world_hurt_me", &out)` (`0x64f8e`-`0x64f98`)
+unconditionally, before any of the entity's other fields, then
+`G_SoundAliasIndex(out)` (`0x64fa4`). INFERRED FROM DECOMPILATION for that
+sequence; VERIFIED that it explains both captures: both gate maps place
+exactly one `trigger_hurt` block with no `sound` key (read straight from the
+shipped BSPs), so the compiled-in default `"world_hurt_me"` (`0x7998c`) is
+what every stock map registers here, `mp_pavlov` included even though it has
+no `misc_mg42` at all.
+
+**`weap_mg42_loop` / `weap_mg42_cooldown`, configstrings 526/527.**
+`misc_mg42` and `misc_turret` share `SP_turret` (0x533b0, section 8), which
+calls `G_SpawnTurret` (0x52c84) — the link section 17 left untraced.
+VERIFIED, read straight from the binary: right after
+`RegisterItem(weaponinfo)` (`0x52d74`, section 17's mechanism), it reads two
+fields off the pointer `BG_GetInfoForWeapon` returns for that same weapon
+(`edi+0xa0`, `edi+0xa4`) and, for each one that is a non-null, non-empty
+string, calls `G_SoundAliasIndex` on it (`0x52dad`, `0x52dd8`) — reading
+control flow, so INFERRED FROM DECOMPILATION for the mechanism, not run
+live. The two fields are not compiled-in strings or an entity key: VERIFIED
+from the shipped `weapons/mp/mg42_bipod_stand_mp` (`pak0.pk3`), the weapon
+file both gate maps' mounted mg42s name in their own `weaponinfo` key, its
+`loopFireSound` and `stopFireSound` keys are `weap_mg42_loop` and
+`weap_mg42_cooldown` — exactly `mp_carentan`'s captured 526/527, in that
+order. So the alias names are weapon-file data, reached through the entity's
+`weaponinfo` value the same way `RegisterItem`'s item name already is;
+`turret_sound_aliases` (`crates/server/src/game/spawn.rs`) reuses
+`spawn_item_name`'s resolved string rather than re-reading `weaponinfo`.
+`mp_carentan` places two `misc_mg42` blocks naming the same weapon file
+(section 8's live counts), and `CsRange::SoundAlias`'s intern-or-append
+allocator is what keeps the second block from taking two more slots.
+
 ## Open, and worth a probe
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.

@@ -72,6 +72,7 @@ pub fn spawn_entities_from_string(
     if world.get("classname").map(String::as_str) != Some("worldspawn") {
         return Err(ErrorKind::BadType("first entity block is not worldspawn"));
     }
+    host.configstrings[11] = worldspawn_northyaw(&world);
     for block in blocks {
         let Some(classname) = block.get("classname").cloned() else {
             // `G_CallSpawn` warns and creates nothing.
@@ -82,14 +83,86 @@ pub fn spawn_entities_from_string(
         for (k, v) in &block {
             parse_field(host, cx, id, k, v);
         }
+        if classname == "trigger_hurt" {
+            register_sound_alias(host, trigger_hurt_sound(&block));
+        }
         if let Some(item) = spawn_item_name(host, cx, id, &classname) {
             host.register_item(&item);
+            if classname == "misc_mg42" || classname == "misc_turret" {
+                for alias in turret_sound_aliases(host.fs.as_deref(), &item) {
+                    register_sound_alias(host, alias);
+                }
+            }
         }
         if SPAWN_FREES.contains(&classname.as_str()) {
             host.ents.free(id);
         }
     }
     Ok(())
+}
+
+/// `SP_worldspawn` (0x61cec): `G_SpawnString("northyaw", "", &out)` then, if
+/// the result is empty, the literal `"0"` in its place -- a raw copy of the
+/// BSP text, never a rendered number, which is why this does not go through
+/// `Cx::format_number`. `mp_carentan`'s own worldspawn block carries no
+/// `northyaw` key at all (checked against the shipped BSP), so its capture's
+/// `"0"` is that literal, not a formatted zero; `mp_pavlov`'s `"90"` is the
+/// key's value verbatim. INFERRED FROM DECOMPILATION for the mechanism,
+/// cross-checked against both captures for the outcome.
+fn worldspawn_northyaw(world: &std::collections::HashMap<String, String>) -> String {
+    match world.get("northyaw") {
+        Some(v) if !v.is_empty() => v.clone(),
+        _ => "0".to_string(),
+    }
+}
+
+/// `SP_trigger_hurt` (0x64ef8): `G_SpawnString("sound", "world_hurt_me",
+/// &out)`, unconditionally, before any of the entity's other fields are
+/// touched (INFERRED FROM DECOMPILATION, reading control flow only). Both
+/// gate maps place exactly one `trigger_hurt` with no `sound` key -- VERIFIED,
+/// read straight from the shipped BSPs -- so the default is what lands in
+/// configstring 525 on both.
+fn trigger_hurt_sound(block: &std::collections::HashMap<String, String>) -> String {
+    block
+        .get("sound")
+        .cloned()
+        .unwrap_or_else(|| "world_hurt_me".to_string())
+}
+
+/// `G_SpawnTurret` (0x52c84), reached from `SP_turret` for `misc_mg42` and
+/// `misc_turret`: right after `RegisterItem(weaponinfo)`, it reads two
+/// string fields off the weapon info struct `BG_GetInfoForWeapon` returns
+/// for that same weapon and calls `G_SoundAliasIndex` on each (INFERRED FROM
+/// DECOMPILATION, reading control flow only). VERIFIED which two fields,
+/// from the shipped `weapons/mp/mg42_bipod_stand_mp`: its `loopFireSound`
+/// and `stopFireSound` keys are `weap_mg42_loop` and `weap_mg42_cooldown`,
+/// exactly `mp_carentan`'s captured 526/527. So the alias names come from
+/// the weapon file, keyed by the entity's own `weaponinfo` value -- the same
+/// string `spawn_item_name` already resolved for `RegisterItem`, reused here
+/// rather than re-read.
+fn turret_sound_aliases(fs: Option<&vcod_common::pk3::Pk3Fs>, weaponinfo: &str) -> Vec<String> {
+    let Some(fs) = fs else {
+        return Vec::new();
+    };
+    let Some(bytes) = fs.read(&format!("weapons/mp/{weaponinfo}")) else {
+        return Vec::new();
+    };
+    let map = vcod_common::xmodel::parse_weapon(&String::from_utf8_lossy(&bytes));
+    ["loopFireSound", "stopFireSound"]
+        .iter()
+        .filter_map(|k| map.get(*k))
+        .filter(|v| !v.is_empty())
+        .cloned()
+        .collect()
+}
+
+fn register_sound_alias(host: &mut GameHost, name: String) {
+    if let Err(e) = host
+        .allocators
+        .index(&mut host.configstrings, CsRange::SoundAlias, &name)
+    {
+        log::warn!("gsc: sound alias {name:?} not indexed: {e:?}");
+    }
 }
 
 /// A placed weapon's `bg_itemlist` classname is its weapon file's
@@ -597,5 +670,135 @@ mod tests {
             }
             assert_eq!(names, ["auto5", "auto4", "auto3", "auto6"]);
         });
+    }
+
+    /// `SP_worldspawn` (0x61cec) copies `northyaw` verbatim into configstring
+    /// 11: a `G_SpawnString` read with an empty default, and if the result is
+    /// the empty string it substitutes the literal `"0"` -- no numeric parse
+    /// at any point, so a present key reproduces retail byte for byte
+    /// whatever text it holds.
+    #[test]
+    fn worldspawns_northyaw_is_copied_verbatim_into_cs_11() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            super::spawn_entities_from_string(
+                &mut host,
+                cx,
+                "{\n\"classname\" \"worldspawn\"\n\"northyaw\" \"90\"\n}\n",
+            )
+        })
+        .unwrap();
+        assert_eq!(host.configstrings[11], "90");
+    }
+
+    /// A worldspawn block with no `northyaw` key at all is `mp_carentan`'s
+    /// own case (checked against its shipped BSP): retail's capture reads
+    /// `"0"` there, which the disassembly shows is a literal substituted
+    /// for the empty `G_SpawnString` result, not a rendered zero.
+    #[test]
+    fn a_missing_northyaw_key_writes_the_literal_zero() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            super::spawn_entities_from_string(&mut host, cx, "{\n\"classname\" \"worldspawn\"\n}\n")
+        })
+        .unwrap();
+        assert_eq!(host.configstrings[11], "0");
+    }
+
+    /// `SP_trigger_hurt` (0x64ef8) always registers a sound alias, its own
+    /// `sound` key or the compiled-in default `"world_hurt_me"` when the key
+    /// is absent -- both gate maps place exactly one `trigger_hurt` with no
+    /// `sound` key, which is why `world_hurt_me` takes slot 525 on both, one
+    /// with no `misc_mg42` at all.
+    #[test]
+    fn a_trigger_hurt_with_no_sound_key_registers_the_default_alias() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            super::spawn_entities_from_string(
+                &mut host,
+                cx,
+                "{\n\"classname\" \"worldspawn\"\n}\n\
+                 {\n\"classname\" \"trigger_hurt\"\n}\n",
+            )
+        })
+        .unwrap();
+        assert_eq!(host.configstrings[525], "world_hurt_me");
+    }
+
+    /// A `trigger_hurt` with its own `sound` key registers that alias
+    /// instead of the default, matching `G_SpawnString`'s key-found branch.
+    #[test]
+    fn a_trigger_hurts_own_sound_key_overrides_the_default() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            super::spawn_entities_from_string(
+                &mut host,
+                cx,
+                "{\n\"classname\" \"worldspawn\"\n}\n\
+                 {\n\"classname\" \"trigger_hurt\"\n\"sound\" \"custom_hurt\"\n}\n",
+            )
+        })
+        .unwrap();
+        assert_eq!(host.configstrings[525], "custom_hurt");
+        assert_eq!(host.configstrings[526], "");
+    }
+
+    /// `G_SpawnTurret` (0x52c84), reached from `SP_turret` for both
+    /// `misc_mg42` and `misc_turret`, reads its weapon file's
+    /// `loopFireSound`/`stopFireSound` keys and registers each as a sound
+    /// alias right after `RegisterItem`. Two `misc_mg42` blocks naming the
+    /// same weapon file intern onto the same pair of slots, matching
+    /// `mp_carentan`'s two mounted mg42s landing on exactly 526 and 527.
+    #[test]
+    fn a_mounted_mg42_registers_its_weapon_files_loop_and_cooldown_aliases() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let (mut vm, mut host) = fixture();
+        host.fs = Some(std::rc::Rc::new(fs));
+        let lump = "{\n\"classname\" \"worldspawn\"\n}\n\
+                    {\n\"classname\" \"trigger_hurt\"\n}\n\
+                    {\n\"classname\" \"misc_mg42\"\n\"weaponinfo\" \"mg42_bipod_stand_mp\"\n}\n\
+                    {\n\"classname\" \"misc_mg42\"\n\"weaponinfo\" \"mg42_bipod_stand_mp\"\n}\n";
+        vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, lump))
+            .unwrap();
+        assert_eq!(host.configstrings[525], "world_hurt_me");
+        assert_eq!(host.configstrings[526], "weap_mg42_loop");
+        assert_eq!(host.configstrings[527], "weap_mg42_cooldown");
+        assert_eq!(host.configstrings[528], "");
+    }
+
+    /// The full pipeline against both gate maps' own BSPs, pinned to the
+    /// exact retail values in the committed captures -- the residual four
+    /// slots `configstrings_ab` measures.
+    #[test]
+    fn both_gate_maps_reproduce_the_residual_configstrings() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let fs = std::rc::Rc::new(fs);
+        let cases: &[(&str, &[(usize, &str)])] = &[
+            ("mp_pavlov", &[(11, "90"), (525, "world_hurt_me")]),
+            (
+                "mp_carentan",
+                &[
+                    (11, "0"),
+                    (525, "world_hurt_me"),
+                    (526, "weap_mg42_loop"),
+                    (527, "weap_mg42_cooldown"),
+                ],
+            ),
+        ];
+        for (map, expected) in cases {
+            let (mut vm, mut host) = fixture();
+            host.fs = Some(fs.clone());
+            let bytes = fs.read(&format!("maps/mp/{map}.bsp")).unwrap();
+            let bsp = vcod_common::bsp::parse(&bytes).unwrap();
+            vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, &bsp.entities))
+                .unwrap();
+            for (slot, value) in *expected {
+                assert_eq!(host.configstrings[*slot], *value, "{map} cs[{slot}]");
+            }
+        }
     }
 }
