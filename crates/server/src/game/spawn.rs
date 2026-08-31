@@ -91,27 +91,78 @@ pub fn spawn_entities_from_string(
     Ok(())
 }
 
+/// A placed weapon's `bg_itemlist` classname is its weapon file's
+/// `radiantName`, not its own file name -- and not always that name with an
+/// `mpweapon_` prefix stripped, either. VERIFIED: read straight from every
+/// `weapons/mp/*_mp` file in the shipped paks. 23 of `WEAPON_LIST`'s 32
+/// weapons carry a non-empty `radiantName`; this table is all 23, so a
+/// classname not in it is not a placeable weapon, not a transcription gap.
+///
+/// Three names are a compound losing its underscore
+/// (`mosin_nagant_mp`/`mpweapon_mosinnagant`,
+/// `mosin_nagant_sniper_mp`/`mpweapon_mosinnagantsniper`,
+/// `kar98k_sniper_mp`/`mpweapon_kar98k_scoped`), and a fourth is not a
+/// transform of the file's own name at all
+/// (`rgd-33russianfrag_mp`/`mpweapon_russiangrenade`), which is why this is
+/// a table and not a prefix-and-suffix rule.
+///
+/// The other nine `WEAPON_LIST` weapons carry no usable `radiantName` and
+/// are deliberately absent: five alt-fire files (`bar_slow_mp`,
+/// `fg42_semi_mp`, `mp44_semi_mp`, `ppsh_semi_mp`, `thompson_semi_mp`) carry
+/// an empty `radiantName`, since they are never placed directly and reach
+/// `Items::register` only through the alt-fire link (`alt_weapon_index`);
+/// the three `mg42_bipod_*` files carry no `radiantName` key at all, since
+/// a mounted mg42 is placed as `misc_mg42` with its item named by the
+/// `weaponinfo` key instead (see `spawn_item_name`); `ptrs41_antitank_rifle_mp`
+/// has no weapon file under that name in the stock paks.
+const RADIANT_NAMES: &[(&str, &str)] = &[
+    ("mpweapon_bar", "bar_mp"),
+    ("mpweapon_bren", "bren_mp"),
+    ("mpweapon_colt", "colt_mp"),
+    ("mpweapon_enfield", "enfield_mp"),
+    ("mpweapon_fg42", "fg42_mp"),
+    ("mpweapon_fraggrenade", "fraggrenade_mp"),
+    ("mpweapon_kar98k", "kar98k_mp"),
+    ("mpweapon_kar98k_scoped", "kar98k_sniper_mp"),
+    ("mpweapon_luger", "luger_mp"),
+    ("mpweapon_m1carbine", "m1carbine_mp"),
+    ("mpweapon_m1garand", "m1garand_mp"),
+    ("mpweapon_mk1britishfrag", "mk1britishfrag_mp"),
+    ("mpweapon_mosinnagant", "mosin_nagant_mp"),
+    ("mpweapon_mosinnagantsniper", "mosin_nagant_sniper_mp"),
+    ("mpweapon_mp40", "mp40_mp"),
+    ("mpweapon_mp44", "mp44_mp"),
+    ("mpweapon_panzerfaust", "panzerfaust_mp"),
+    ("mpweapon_ppsh", "ppsh_mp"),
+    ("mpweapon_russiangrenade", "rgd-33russianfrag_mp"),
+    ("mpweapon_springfield", "springfield_mp"),
+    ("mpweapon_sten", "sten_mp"),
+    ("mpweapon_stielhandgranate", "stielhandgranate_mp"),
+    ("mpweapon_thompson", "thompson_mp"),
+];
+
 /// The item a spawned entity registers, if any -- `G_CallSpawn`'s second
 /// case, before `spawns` (section 17 of the object model doc): a classname
 /// matched against `bg_itemlist` calls `G_SpawnItem` -> `RegisterItem`
 /// straight after the entity is built, before any script runs, and neither
 /// function frees the entity, so a later script `delete()` still finds it.
 ///
-/// A placed weapon's `bg_itemlist` classname is `mpweapon_<name>`, its
-/// weapon file's `radiantName` -- one prefix short of the `<name>_mp` item
-/// name `Items::register` expects (VERIFIED: every stock `weapons/mp/*_mp`
-/// file's `radiantName` follows this pattern, and both gate maps place
-/// `mpweapon_fg42`/`mpweapon_panzerfaust` entities that `_teams.gsc`'s
-/// `restrictPlacedWeapons` later deletes by that same classname).
+/// A placed weapon's classname is looked up in `RADIANT_NAMES`; both gate
+/// maps place `mpweapon_fg42`/`mpweapon_panzerfaust` entities that
+/// `_teams.gsc`'s `restrictPlacedWeapons` later deletes by that same
+/// classname (VERIFIED, read from the shipped BSPs and script).
 ///
 /// `misc_mg42`/`misc_turret` reach `RegisterItem` too, through their own
 /// `SP_turret` (0x533b0, section 8) rather than `bg_itemlist`: the item
-/// name is their `weaponinfo` key's value directly, no prefix to strip
+/// name is their `weaponinfo` key's value directly, no lookup needed
 /// (VERIFIED: mp_carentan's two mounted mg42s carry
 /// `"weaponinfo" "mg42_bipod_stand_mp"` in the shipped BSP).
 fn spawn_item_name(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Option<String> {
-    if let Some(name) = classname.strip_prefix("mpweapon_") {
-        return Some(format!("{name}_mp"));
+    if classname.starts_with("mpweapon_") {
+        return RADIANT_NAMES
+            .iter()
+            .find(|(radiant, _)| *radiant == classname)
+            .map(|(_, weapon)| weapon.to_string());
     }
     if classname == "misc_mg42" || classname == "misc_turret" {
         let weaponinfo = cx.intern_folded("weaponinfo");
@@ -328,6 +379,32 @@ mod tests {
         // mg42_bipod_stand_mp is configstring 7 index 16, nibble 4 (bits
         // 16-19), bit 16 alone: 0b0001 = 1.
         assert_eq!(host.items.bitstring().chars().nth(4), Some('1'));
+    }
+
+    /// Four placed weapons whose `radiantName` a prefix-and-suffix rule
+    /// cannot recover: three drop an underscore from their own file name,
+    /// and `rgd-33russianfrag_mp`'s `radiantName` is not any spelling of it
+    /// at all. This pins `RADIANT_NAMES` against the four names that
+    /// disproved the transform this table replaced -- a regression back to
+    /// deriving the name from the classname would silently stop registering
+    /// all four.
+    #[test]
+    fn placed_weapons_whose_radiant_name_is_not_a_simple_transform_still_register() {
+        let (mut vm, mut host) = fixture();
+        let lump = "{\n\"classname\" \"worldspawn\"\n}\n\
+                    {\n\"classname\" \"mpweapon_mosinnagant\"\n}\n\
+                    {\n\"classname\" \"mpweapon_mosinnagantsniper\"\n}\n\
+                    {\n\"classname\" \"mpweapon_kar98k_scoped\"\n}\n\
+                    {\n\"classname\" \"mpweapon_russiangrenade\"\n}\n";
+        vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, lump))
+            .unwrap();
+
+        let mut expected = Items::new();
+        expected.register("mosin_nagant_mp");
+        expected.register("mosin_nagant_sniper_mp");
+        expected.register("kar98k_sniper_mp");
+        expected.register("rgd-33russianfrag_mp");
+        assert_eq!(host.items.bitstring(), expected.bitstring());
     }
 
     /// The dumped classname table, so a transcription slip is caught.
