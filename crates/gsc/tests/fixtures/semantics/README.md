@@ -47,14 +47,14 @@ way:
   dm` — no `PROBE_FATAL`, no probe output at all, since `dm`'s own
   bootstrap never calls the missing script's `logPrint`s. That is the
   *compile-error* signature above, produced for a reason that has nothing to
-  do with the script. The homepath is what accumulates them: `run_probe.sh` copies
-  each probe into `main/maps/mp/gametypes/` and used to leave it there, so
-  every probe ever captured piled up against a corpus that is itself at 31
-  files. This is what happened to
-  `probe_truthy_num`/`probe_truthy_undef`/`probe_truthy_vec` in a prior
-  regeneration: their sections came back empty, but re-running each alone
-  against a homepath with the stale `probe_*.gsc`/`.txt` files cleared out
-  reproduced their real, non-empty measurements exactly. `run_probe.sh` now
+  do with the script. The homepath is what accumulates them: `run_probe.sh`
+  copies each probe into `main/maps/mp/gametypes/` and used to leave it
+  there, so every probe ever captured piled up against a corpus that is
+  itself at 31 files. This is what happened to `probe_truthy_num`,
+  `probe_truthy_undef` and `probe_truthy_vec` in a prior regeneration: their
+  sections came back empty, but re-running each alone against a homepath with
+  the stale `probe_*.gsc`/`.txt` files cleared out reproduced their real,
+  non-empty measurements exactly. `run_probe.sh` now
   deletes the loose `probe_*` files before installing its own, so a run
   never sees more than one; a capture taken by anything else still wants
   the homepath cleared first, and an unexpectedly empty section stays

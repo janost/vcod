@@ -634,6 +634,22 @@ high-water mark. Two facts fall out of that:
   entity think. During the map load the `SP_` functions call `G_FreeEntity`
   directly, so there is no such delay there.
 
+`ObjectTable::schedule`/`run_thinks` (`crates/server/src/game/entity.rs`)
+reproduce the think pass this implies. A think is an absolute `nextthink` in
+`level.time` milliseconds; `run_thinks` fires every entity whose time has
+come and clears `nextthink` before the call, so a think fires once and has to
+re-arm itself to repeat. A `nextthink` of 0 is no think armed rather than one
+due now: INFERRED, and from lineage rather than from this module — Q3's
+`G_RunThink` (`g_main.c`, `if (thinktime <= 0) return;`) is where the
+convention comes from, and nothing in CoD 1.1 distinguishes the two readings,
+since every arming site read so far writes a positive absolute time.
+
+The 100 ms is the constant at 0x5da9a/0x5daa4 above. What the live
+measurement pins is only a bound: `probe_delete`'s frames step 50 ms at a
+time, so any defer in (0, 150] would have freed the entity before the
+assertion that follows it, and `probe_delete_matches_retail` inherits that
+limit.
+
 ## 15. The item registry (`bg_itemlist`), configstring 8, VERIFIED
 
 `bg_itemlist` (`.data` 0x7b9d8, stride 0x30, `bg_numItems` = 70 at `.rodata`
@@ -955,7 +971,7 @@ missing.** A script reading an unregistered cvar gets `""`, which
 measurement round. `crates/server/src/cvars.rs` carries only the rows whose
 absence has been measured, so the next such miss should be a lookup rather
 than a re-derivation: run the dumper above with the cvar's name as its
-second argument and take the row's default. Two the stock MP scripts
+second argument and take the row's default. Two that the stock MP scripts
 already read and we do not carry are `g_allowVote` (index 26, default
 `"1"`) and `g_debugDamage` (index 22, default `"0"`); neither changes a
 measured outcome today, `g_debugDamage` because 0 is what an absent cvar
@@ -975,9 +991,9 @@ covers.
 compiled-in literal `"0"` (`0x7964b`) in its place (`0x61e28`-`0x61e3d`).
 The calls, the addresses and the literal are VERIFIED data reads. The branch
 is read off the disassembly, but its outcome is VERIFIED too rather than
-inferred, and this is the one place in this section where that holds: the two
-committed captures exercise one arm each, `mp_pavlov` the present key and
-`mp_carentan` the absent one, as the paragraph below shows. This is a raw
+inferred, and it is the only branch in this section where **both** arms are
+exercised: the two committed captures take one each, `mp_pavlov` the present
+key and `mp_carentan` the absent one, as the paragraph below shows. This is a raw
 copy of the entity's own key text, never
 a number the engine formats — no `G_SpawnFloat`, no `strtol`, no `strtod`
 anywhere in this sequence — which is why vcod's side does not route it

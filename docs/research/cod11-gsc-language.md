@@ -454,6 +454,20 @@ truthy?" was the wrong question: no string has a boolean reading at all,
 empty or not. That is why the corpus spells every such test as `isDefined(x)`
 or `x != ""` rather than `if (x)`.
 
+**Unary `!` is not that cast, VERIFIED (`probe_not_string`,
+`probe_not_empty_string`).** It reads a string numerically instead of
+refusing it: `!"1"` is `0` and `!"0"` is `1`, where the `if` cast takes no
+string at all (`probe_truthy`'s `if ("a")` line is
+`cannot cast "a" to bool`). The empty string is still fatal under `!`, with
+that same message: `!""` dies on `cannot cast "" to bool`. Whether any other
+unparseable string is fatal was not measured; see below. This is not a
+curiosity. `_teams::restrictPlacedWeapons` guards on
+`!getCvar("scr_allow_fg42")`, stock `scr_allow_fg42` is `"0"`, so the guard
+is true on a stock server and the map's placed fg42 weapons are deleted;
+under the `if` cast that line would have taken the server down at map load.
+`Op::Not`'s `not_of` (`crates/gsc/src/vm/interp.rs`) implements the numeric
+reading for `Value::String` and `Value::Localized` alike.
+
 **`true` and `false` are ints, and case-sensitive, VERIFIED.** `true` reads
 back as `1` and `false` as `0` (`probe_bool`, concatenated onto a string, so
 the rendering is the int one). `true == 1` and `false == 0` both hold, and
@@ -573,8 +587,44 @@ unlike `game.size`/an array's `.size`, which do count keys. vcod's
 so `level.size` in vcod reads `Undefined` and then fails to concatenate.
 Not fixed here; see the "Still unestablished" entry below.
 
+Three of the five that run in `crates/server` were measured for the gametype
+bootstrap, and each is there because it needs the cvar table or a real map
+load:
+
+**Bootstrap order, VERIFIED (`probe_bootstrap`).** The gametype script's
+`main()` runs first, then the map script's, then the gametype's
+`Callback_StartGameType`. `game["allies"]` reads `undefined` inside the
+gametype's own `main()` and `russian` by `Callback_StartGameType` on
+`mp_pavlov`, whose map script is what sets it, which places the map's
+`main()` between the two. The plan for this stage had the first two the
+other way round. Measured in the same run: a bare `thread f()` runs `f` to
+its first suspend before the caller's next line, so a thread that never
+waits has finished by the time the call returns.
+
+**Cvar coercion, VERIFIED (`probe_cvar`).** `getCvarInt` and `getCvarFloat`
+read an unset or non-numeric cvar as `0`, and take a numeric prefix where
+there is one: `getCvarInt("12abc")` is `12`, which Rust's own `parse`
+rejects. Cvar names are case-insensitive, `probe_MixedCase` and
+`probe_mixedcase` reading back one value. `randomInt(1)` never returns `1`,
+so the bound is exclusive. `getTime` is non-negative and its units are
+**not** measured, only its sign.
+
+**`delete()` defers the free, VERIFIED (`probe_delete`).** The entity stays
+in `getEntArray` and in its count immediately after `delete()`, a spawn
+right after takes a fresh number rather than the deleted one, and after a
+150 ms wait the number is back in circulation. The mechanism and the 100 ms
+the engine actually arms are section 14 of
+`docs/research/cod11-gsc-object-model.md`; what the probe pins is the bound,
+not the constant, because its frames step 50 ms at a time.
+
 ### Still unestablished
 
+- **Unary `!` on a string that will not parse.** `!""` is fatal and `!"1"`
+  and `!"0"` are numeric (§9), but `!"a"` was never put to a retail server.
+  `not_of` (`crates/gsc/src/vm/interp.rs`) treats any unparseable string as
+  the same fatal cast `!""` measured, which is the reading that follows from
+  the empty case, and nothing on the bootstrap path reaches it: every
+  `scr_allow_*` value is `"0"` or `"1"`.
 - **What `level.size` actually is.** `probe_level_size` (above) shows retail
   answers `1` regardless of field count, but not why — whether it is a
   generic non-array-non-string `.size` default, an engine-native property
@@ -606,9 +656,12 @@ Not fixed here; see the "Still unestablished" entry below.
 
 ## 10. Divergences kept as documentation, not code
 
-Twelve places where the implementation made a deliberate call the corpus
+Eleven places where the implementation made a deliberate call the corpus
 cannot settle, recorded here rather than silently baked into behaviour that
-looks authoritative:
+looks authoritative. A twelfth is gone: `delete()` used to free the entity
+on the spot where retail defers it, and the entity think scheduler stage 3
+added closes that (section 14 of
+`docs/research/cod11-gsc-object-model.md`, and `probe_delete` in §9).
 
 - **Two `notify`s of the same event on the same target queued within one
   scheduling step coalesce; the second is lost.** `Op::Notify` queues rather
@@ -720,27 +773,20 @@ looks authoritative:
   callback runs, not after. This is architectural, following directly from
   `Cx`'s no-reentrancy rule, not something a probe measured retail
   disagreeing on.
-- **Only the freeing half of the `SP_` layer runs.**
+- **Of the `SP_` layer, only what the wire can see runs.**
   `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces
   `G_CallSpawn`'s third case for the five classnames whose `SP_` function is
   an unconditional `G_FreeEntity(self)`, because that half decides entity
-  numbering (section 13 of docs/research/cod11-gsc-object-model.md). The
-  other 22 spawn functions do not run: no brush model is bound, no trigger
-  is linked, no turret is built. Those entities are live and script-visible
+  numbering (section 13 of docs/research/cod11-gsc-object-model.md), and the
+  spawn-time writes that take a configstring slot: `SP_worldspawn`'s
+  `northyaw`, `SP_trigger_hurt`'s sound alias, and the item and two aliases a
+  mounted mg42 registers through `SP_turret` (sections 17 and 19 there).
+  Everything else those 22 spawn functions do is still absent: no brush model
+  is bound, no trigger is linked, no turret entity is built. Those entities
+  are live and script-visible
   with every Radiant key applied, which is what the corpus reads them for,
   but their engine-side setup is absent. Nothing measured so far depends on
   it; a script that asks a `func_door` to move is the case that would.
-- **`delete()` frees the entity at once; retail frees it 100 ms later.**
-  The `delete` entity method (0x5da14) notifies the entity, unlinks it,
-  clears its touch and use handlers and then sets `think = G_FreeEntity` and
-  `nextthink = level.time + 100`; the slot stays live until that think runs.
-  VERIFIED on the retail 1.1d server (2026-08-29): a spawn immediately after
-  a `delete()` got a fresh number, and only a spawn after `wait 0.5` got the
-  deleted entity's number back (section 14 of
-  docs/research/cod11-gsc-object-model.md). `builtins/entity.rs::delete`
-  frees on the spot, so vcod recycles the number a tenth of a second early
-  and drops the entity out of `getEntArray` a tenth of a second early.
-  Closing it needs the entity think scheduler, which stage 2 does not have.
 - **A script entity handle carries no generation, so a stale one silently
   aliases whatever spawns into the freed slot next.** Retail bumps a
   per-entity generation counter at `gentity+0x300` on every free and checks
