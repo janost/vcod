@@ -201,6 +201,19 @@ impl ScriptRuntime {
         &self.host.cvars
     }
 
+    /// Every thread that has died of an error since map load, rendered
+    /// `file::func:line: Kind`. The bootstrap starts its threads with
+    /// `Vm::start_thread`, whose signature has no error channel, so this is
+    /// the only way a caller sees an aborted bootstrap thread; `run_frame`
+    /// logs the errors from its own pass and they land here too.
+    pub fn aborts(&self) -> Vec<String> {
+        self.vm
+            .aborts()
+            .iter()
+            .map(|e| self.vm.describe(e))
+            .collect()
+    }
+
     /// Every line the script has passed to `logPrint`, in order. Retail
     /// writes these to `games_mp.log`, which is where the probe captures in
     /// `crates/gsc/tests/fixtures/semantics/` came from.

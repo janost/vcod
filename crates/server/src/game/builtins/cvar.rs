@@ -19,6 +19,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("resettimeout", reset_timeout),
     ("setarchive", set_archive),
     ("exitlevel", exit_level),
+    ("setclientnamemode", set_client_name_mode),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -199,6 +200,49 @@ pub fn set_archive(
     Ok(Value::Undefined)
 }
 
+/// Who owns a client's name: `level+0x210` on retail, written only by
+/// `setClientNameMode`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ClientNameMode {
+    /// `"auto_change"`, level+0x210 = 0: `ClientUserinfoChanged` (0x421eb)
+    /// takes the name straight from the userinfo. The engine default.
+    #[default]
+    Auto,
+    /// `"manual_change"`, level+0x210 = 1: the same branch is skipped and
+    /// the name stays whatever script last set.
+    Manual,
+}
+
+/// `setClientNameMode(mode)` (`game.mp.i386.so` 0x5f208). Retail resolves
+/// the argument as a const string, matches it against `auto_change` and
+/// `manual_change` (`scr_const+0xfc` and `+0xfe`, named by `GScr_LoadConsts`
+/// 0x58550), stores 0 or 1 in `level+0x210`, and raises `Scr_Error("Unknown
+/// mode")` on anything else.
+///
+/// The store and the error are faithful; the two readers are not reachable
+/// yet. `ClientUserinfoChanged` (0x421eb) and the name-change path at
+/// 0x5ba99 are both client code, which arrives in a later stage, so
+/// `GameHost::client_name_mode` is recorded and nothing reads it.
+pub fn set_client_name_mode(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let Some(Value::String(mode)) = args.first() else {
+        return Err(ErrorKind::BadType("setClientNameMode takes a mode string"));
+    };
+    // String values intern exactly, so this compares the spelling the script
+    // wrote against retail's two const strings, which is the comparison
+    // retail makes.
+    host.client_name_mode = match cx.resolve(*mode) {
+        "auto_change" => ClientNameMode::Auto,
+        "manual_change" => ClientNameMode::Manual,
+        _ => return Err(ErrorKind::BadType("setClientNameMode: unknown mode")),
+    };
+    Ok(Value::Undefined)
+}
+
 /// `exitLevel()`: sets a flag `ScriptRuntime::run_frame` reads and drains
 /// each frame. No stage in this sub-project acts on it; stage 6 ("the
 /// score limit ends the map") is where it does.
@@ -216,6 +260,24 @@ pub fn exit_level(
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
+
+    /// `setClientNameMode` records retail's two modes and raises on anything
+    /// else, the way `Scr_Error("Unknown mode")` does.
+    #[test]
+    fn setclientnamemode_records_the_mode_and_refuses_any_other() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let manual = Value::String(cx.intern_exact("manual_change"));
+            set_client_name_mode(&mut host, cx, None, &[manual]).unwrap();
+            assert_eq!(host.client_name_mode, ClientNameMode::Manual);
+            let auto = Value::String(cx.intern_exact("auto_change"));
+            set_client_name_mode(&mut host, cx, None, &[auto]).unwrap();
+            assert_eq!(host.client_name_mode, ClientNameMode::Auto);
+            let other = Value::String(cx.intern_exact("whenever"));
+            assert!(set_client_name_mode(&mut host, cx, None, &[other]).is_err());
+            assert_eq!(host.client_name_mode, ClientNameMode::Auto);
+        });
+    }
 
     /// `getCvar` answers from the server's cvar table and returns an empty
     /// string for one that is not set, which is what retail does.

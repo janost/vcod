@@ -31,6 +31,7 @@ pub fn is_builtin(name: &str) -> bool {
     builtins::entity::lookup(name).is_some()
         || builtins::math::lookup(name).is_some()
         || builtins::fx::lookup(name).is_some()
+        || builtins::hud::lookup(name).is_some()
         || builtins::sound::lookup(name).is_some()
         || builtins::attach::lookup(name).is_some()
         || builtins::combat::lookup(name).is_some()
@@ -80,6 +81,9 @@ pub struct GameHost {
     /// `run_frame`. No stage in this sub-project acts on it; stage 6 ("the
     /// score limit ends the map") is where it does.
     pub exit_level: bool,
+    /// Who owns a client's name, from `setClientNameMode`. Nothing reads it
+    /// until clients exist: both of retail's readers are client code.
+    pub client_name_mode: builtins::cvar::ClientNameMode,
     /// The registered-item bitset. `precacheItem` writes it and mirrors it
     /// into configstring 8 (`crate::items`); nothing else reads or writes
     /// it directly.
@@ -104,6 +108,7 @@ impl GameHost {
             level_time_ms: 0,
             exit_level: false,
             items: crate::items::Items::new(),
+            client_name_mode: builtins::cvar::ClientNameMode::default(),
         }
     }
 
@@ -139,6 +144,9 @@ impl Host for GameHost {
             return f(self, cx, recv, args);
         }
         if let Some(f) = builtins::fx::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        if let Some(f) = builtins::hud::lookup(&folded) {
             return f(self, cx, recv, args);
         }
         if let Some(f) = builtins::sound::lookup(&folded) {
@@ -177,6 +185,16 @@ impl Host for GameHost {
             fields::route_entity(cx.resolve_folded(field))
         };
         match route {
+            Route::Engine {
+                slot,
+                ty: FieldType::Enum(names),
+            } => match e.engine[slot] {
+                Value::Int(i) => match names.get(i as usize) {
+                    Some(n) => Value::String(cx.intern_exact(n)),
+                    None => Value::Undefined,
+                },
+                other => other,
+            },
             Route::Engine { slot, .. } => e.engine[slot],
             // Retail errors here; a read has no error channel, so an entity
             // with no client reads undefined and the write path carries the
@@ -202,6 +220,13 @@ impl Host for GameHost {
             return Err(ErrorKind::BadType("no such entity"));
         };
         match route {
+            Route::Engine {
+                slot,
+                ty: FieldType::Enum(names),
+            } => {
+                e.engine[slot] = enum_index(cx, names, value)?;
+                Ok(())
+            }
             Route::Engine { slot, ty } => {
                 if !type_accepts(ty, value) {
                     return Err(ErrorKind::BadType("wrong type for an engine field"));
@@ -221,13 +246,29 @@ impl Host for GameHost {
     }
 }
 
+/// The index a `FieldType::Enum` field stores for the string script wrote.
+/// Retail's shared setter (0x4af80) raises a script error listing the whole
+/// table when the name is not in it, and takes nothing but a string.
+fn enum_index(cx: &Cx, names: &[&str], value: Value) -> Result<Value, ErrorKind> {
+    let Value::String(s) = value else {
+        return Err(ErrorKind::BadType(
+            "that field takes one of a fixed set of names",
+        ));
+    };
+    match names.iter().position(|n| *n == cx.resolve(s)) {
+        Some(i) => Ok(Value::Int(i as i32)),
+        None => Err(ErrorKind::BadType("not one of that field's names")),
+    }
+}
+
 /// Which `Value` shapes each field type accepts. Retail converts in
 /// `Scr_SetGenericField`; we refuse a mismatch instead, so a script bug
 /// surfaces where retail would silently store a zero.
 fn type_accepts(ty: FieldType, v: Value) -> bool {
     use FieldType::*;
     match ty {
-        Int => matches!(v, Value::Int(_) | Value::Undefined),
+        // `Enum` never reaches here; `set_field` converts it first.
+        Int | Enum(_) => matches!(v, Value::Int(_) | Value::Undefined),
         Float => matches!(v, Value::Int(_) | Value::Float(_) | Value::Undefined),
         CString | IString | ModelIndex => {
             matches!(v, Value::String(_) | Value::Localized(_) | Value::Undefined)
@@ -276,6 +317,7 @@ mod tests {
             .chain(builtins::entity::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::math::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::fx::NAMES.iter().map(|(n, _)| *n))
+            .chain(builtins::hud::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::sound::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::attach::NAMES.iter().map(|(n, _)| *n))
             .chain(builtins::combat::NAMES.iter().map(|(n, _)| *n))
@@ -372,6 +414,40 @@ mod tests {
             assert_eq!(cx.get_field(s, sx), Value::Int(3));
             assert_eq!(cx.get_field(s, tn), Value::Undefined);
         });
+    }
+
+    /// A HUD element's `alignx` stores an index and reads back the name, the
+    /// set/get hook pair retail hangs on the field record. The stock
+    /// `startGame` writes `level.clock.alignX = "center"`, so a string has
+    /// to be what the field takes.
+    #[test]
+    fn a_hud_enum_field_stores_an_index_and_reads_back_its_name() {
+        let (mut vm, mut host) = fixture();
+        let h = vm.with_cx(|cx| host.ents.spawn_hud_elem(cx).unwrap());
+        vm.with_cx(|cx| {
+            let alignx = cx.intern_folded("alignx");
+            let center = cx.intern_exact("center");
+            host.set_field(cx, h, alignx, Value::String(center))
+                .unwrap();
+            assert_eq!(
+                host.ents.get(h).unwrap().engine[align_slot()],
+                Value::Int(1)
+            );
+            let Value::String(back) = host.get_field(cx, h, alignx) else {
+                panic!("alignx reads back as a name");
+            };
+            assert_eq!(cx.resolve(back), "center");
+            let nope = cx.intern_exact("middle");
+            assert!(host.set_field(cx, h, alignx, Value::String(nope)).is_err());
+        });
+    }
+
+    /// `alignx`'s dense slot, for the assertion above.
+    fn align_slot() -> usize {
+        match fields::route_hud("alignx") {
+            Route::Engine { slot, .. } => slot,
+            _ => panic!("alignx is an engine field"),
+        }
     }
 
     /// Reading a field nothing has written is `undefined`, which is what makes

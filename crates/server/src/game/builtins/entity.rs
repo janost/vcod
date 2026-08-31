@@ -7,6 +7,7 @@ use crate::configstrings::CsRange;
 use crate::game::entity::FIRST_HUD_ELEM;
 use crate::game::host::GameHost;
 use crate::server::MAX_CLIENTS;
+use glam::Vec3;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
@@ -27,6 +28,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("isplayer", is_player),
     ("isdefined", is_defined),
     ("istouching", is_touching),
+    ("placespawnpoint", place_spawnpoint),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -281,6 +283,75 @@ pub fn get_entity_number(
     Ok(Value::Int(id.0 as i32))
 }
 
+/// `self placeSpawnpoint()` (entity method 37, `game.mp.i386.so` 0x5bedc):
+/// drops a spawnpoint onto the floor at map load. Retail point-traces from
+/// the entity origin up 128 units, then from there straight down 262144,
+/// moves the entity to the endpoint, keeps one word of the second trace's
+/// result in `gentity_t+0x7c`, and prints "Spawn point entity %i is in
+/// solid" when a third trace at the new origin starts solid.
+///
+/// Both traces and the move are faithful; two things are not. Retail traces
+/// with contents mask 0x2810011, ours takes solid and playerclip
+/// (`CollisionWorld::box_trace`), so the two disagree over any brush whose
+/// contents are in one mask and not the other. And our trace carries no
+/// entity identity, so the `+0x7c` word goes unrecorded. Neither is
+/// observable until players spawn, which is a later stage.
+pub fn place_spawnpoint(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = entity_receiver(recv)?;
+    let origin_field = cx.intern_folded("origin");
+    let Value::Vector(origin) = host.get_field(cx, id, origin_field) else {
+        return Err(ErrorKind::BadType("a spawnpoint needs an origin"));
+    };
+    // No collision loaded (every unit test, and any host built without a
+    // map): the entity stays where the entity lump put it.
+    let Some(world) = host.world.clone() else {
+        return Ok(Value::Undefined);
+    };
+    let start = Vec3::from(origin);
+    let up = world.collision.box_trace(
+        start,
+        start + Vec3::new(0.0, 0.0, CEILING_CHECK),
+        Vec3::ZERO,
+        Vec3::ZERO,
+    );
+    let down = world.collision.box_trace(
+        up.endpos,
+        up.endpos - Vec3::new(0.0, 0.0, DROP_DISTANCE),
+        Vec3::ZERO,
+        Vec3::ZERO,
+    );
+    // Retail's third trace is a point test at the placed position, not a
+    // reading off the drop: `placeSpawnpoint` warns about where the
+    // spawnpoint ended up.
+    let placed_in_solid = world
+        .collision
+        .box_trace(down.endpos, down.endpos, Vec3::ZERO, Vec3::ZERO)
+        .startsolid;
+    if placed_in_solid {
+        log::warn!(
+            "gsc: spawn point entity {} is in solid at ({}, {}, {})",
+            id.0,
+            down.endpos.x as i32,
+            down.endpos.y as i32,
+            down.endpos.z as i32
+        );
+    }
+    let placed = Value::Vector(down.endpos.into());
+    host.set_field(cx, id, origin_field, placed)?;
+    Ok(Value::Undefined)
+}
+
+/// How far above its origin `placeSpawnpoint` looks for a ceiling, and how
+/// far below the result it looks for the floor. Both measured off the
+/// literals at 0x5bf45 and 0x5bf91.
+const CEILING_CHECK: f32 = 128.0;
+const DROP_DISTANCE: f32 = 262144.0;
+
 /// `isPlayer(ent)` reads the entity number against `MAX_CLIENTS`, which is
 /// what makes it answerable before stage 4 gives clients any state. Retail's
 /// `isPlayer` reads `ent->client`; stage 4 replaces this with the real check.
@@ -339,6 +410,49 @@ pub fn is_touching(
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
+    use crate::world::World;
+    use std::rc::Rc;
+
+    /// `placeSpawnpoint` drops the entity onto the floor: the test world's
+    /// floor is at z = 0, so a spawnpoint hovering at 100 lands there.
+    #[test]
+    fn placespawnpoint_drops_the_spawnpoint_onto_the_floor() {
+        let (mut vm, mut host) = fixture();
+        host.world = Some(Rc::new(World {
+            collision: vcod_common::collision::test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        }));
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let origin = cx.intern_folded("origin");
+            host.set_field(cx, e, origin, Value::Vector([0.0, 0.0, 100.0]))
+                .unwrap();
+            place_spawnpoint(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            let Value::Vector(placed) = host.get_field(cx, e, origin) else {
+                panic!("a spawnpoint keeps a vector origin");
+            };
+            assert!(
+                placed[2].abs() < 1.0,
+                "expected the floor at z = 0, got {placed:?}"
+            );
+        });
+    }
+
+    /// No collision loaded is every unit test and any host built without a
+    /// map, and it must leave the entity where the entity lump put it rather
+    /// than dropping it 262144 units into nothing.
+    #[test]
+    fn placespawnpoint_without_a_world_leaves_the_origin_alone() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let origin = cx.intern_folded("origin");
+            let at = Value::Vector([1.0, 2.0, 3.0]);
+            host.set_field(cx, e, origin, at).unwrap();
+            place_spawnpoint(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            assert_eq!(host.get_field(cx, e, origin), at);
+        });
+    }
 
     /// `getEntArray(value, key)` walks slots in ascending entity number and
     /// keeps the ones whose field equals the value: `Scr_GetEntArray`

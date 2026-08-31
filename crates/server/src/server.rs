@@ -886,6 +886,14 @@ impl Server {
         Ok(())
     }
 
+    /// Every script thread that has died of an error, rendered
+    /// `file::func:line: Kind`. Empty is the healthy reading: a thread that
+    /// aborts stops running, silently as far as the wire is concerned, so
+    /// this is what a test checks a clean bootstrap against.
+    pub fn script_aborts(&self) -> Vec<String> {
+        self.script.as_ref().map_or_else(Vec::new, |rt| rt.aborts())
+    }
+
     const FALLBACK_SPAWN: ([f32; 3], f32) = ([0.0, 0.0, 64.0], 0.0);
 
     /// `SV_ClientEnterWorld` for a spectator: park the sim at the spawn, start

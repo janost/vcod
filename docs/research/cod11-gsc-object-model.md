@@ -201,18 +201,35 @@ without the engine knowing anything about the key.
 0x00 x             4  0
 0x01 y             8  0
 0x02 fontscale    12  1
-0x03 font         16  0
-0x04 alignx       20  0
-0x05 aligny       24  0
+0x03 font         16  0   custom get and set
+0x04 alignx       20  0   custom get and set
+0x05 aligny       24  0   custom get and set
 0x06 color        28  0   custom get and set
 0x07 alpha        28  0   custom get and set
-0x08 label        44  0
+0x08 label        44  0   custom set
 0x09 sort        108  1
-0x0a archived    120  0
+0x0a archived    120  0   custom set
 ```
 
 `color` and `alpha` share offset 28 and both carry hooks, which pack and
 unpack the byte lanes of one packed RGBA word.
+
+`font`, `alignx` and `aligny` are stored as ints but script reads and writes
+them as names, VERIFIED. Each one's setter is a four-line wrapper around a
+shared helper at 0x4af80 taking `(elem, record, names, count)`: the helper
+`strcmp`s the script's string against the name table and stores the matching
+index, or raises a script error listing the whole table. Each getter indexes
+the same table back to a string. So the type column is the storage, not what
+script sees.
+
+| field | setter | getter | name table | names, in index order |
+|---|---|---|---|---|
+| `font` | 0x4c2f8 | 0x4c320 | 0x7de04 | `default`, `bigfixed`, `smallfixed` |
+| `alignx` | 0x4c350 | 0x4c378 | 0x7de10 | `left`, `center`, `right` |
+| `aligny` | 0x4c3a8 | 0x4c3d0 | 0x7de1c | `top`, `middle`, `bottom` |
+
+`label`'s hook (0x4c400) is a setter only and takes a localized string, not a
+name from a table.
 
 ## 6. Radiant fields come from a file, not a table
 
@@ -273,6 +290,14 @@ The spawn-var applier is the unnamed function at 0x61400, which I will call
    a float, `G_NewString` plus an interned id for a string. A `model` value
    starting with `*` is a brush model, and its number goes to `ent+0x8c`
    instead.
+
+   A type-8 `model` value that is not a brush model goes through
+   `G_ModelIndex` (called at 0x61505, the byte it returns stored at
+   `ent+0x175`), VERIFIED. So **the entity lump fills the model configstring
+   block before any script runs**, in lump order, and the script's own
+   `precacheModel`/`setModel` calls continue from wherever that left off.
+   That is why our model block is offset against a retail capture on both
+   gate maps: we store the name without indexing it.
 2. On a miss, call `Scr_FindField(key, &type)`. A nonzero result means the key
    is a registered script field. Convert the value by that type (1 gives
    `Scr_AddString`, 4 gives `strtod` then `Scr_AddFloat`, 5 gives `strtol`
@@ -651,6 +676,25 @@ only reproduces the registration bit and the alt-fire link, as scoped; a
 weapon's own offset-0x8/0xc/0x188/0x31c model strings are runtime data from
 the weapon file this crate does not parse yet, so closing this needs that
 parser.
+
+## 16. The builtins the stock `dm` bootstrap reaches, VERIFIED
+
+Running the shipped `dm.gsc` to completion at map load needs four builtins
+past the precache and cvar families. Each row is what retail's function does;
+the last column is what the server does today.
+
+| builtin | table | address | retail | ours |
+|---|---|---|---|---|
+| `placeSpawnpoint` | entity methods 37 | 0x5bedc | point-traces from the origin up 128 (0x5bf45), then down 262144 (0x5bf91) with contents mask 0x2810011, moves the entity to the endpoint, stores the second trace's result word at results+0x28 into `gentity_t+0x7c` (INFERRED: the ground entity), prints `WARNING: Spawn point entity %i is in solid at (%i, %i, %i)` when a third trace at the new origin starts solid | both traces and the move, against our own solid+playerclip mask; nothing stored for `gentity_t+0x7c`, since our trace carries no entity identity |
+| `setClientNameMode` | functions 89 | 0x5f208 | matches the argument against `auto_change` and `manual_change` (`scr_const+0xfc`/`+0xfe`, named by `GScr_LoadConsts` 0x58550), stores 0 or 1 in `level+0x210`, `Scr_Error("Unknown mode")` otherwise. Read by `ClientUserinfoChanged` (0x421eb) and the name-change path at 0x5ba99 | recorded on the host, both errors faithful; nothing reads it until clients exist |
+| `newHudElem` | functions 77 | 0x4b184 | first free `g_hudelems` record of 1024 (stride 124), zeroed but for `fontscale` 1.0 (0x4b19b) and a packed white `color` (0x4b1d9), owner `0x3ff`; `Scr_Error("out of hudelems")` when full | the allocation, the pool size and the failure; `fontscale` seeded, `color` not, since `HUD_FIELDS` has no unpacked representation for it |
+| `<hudelem> setTimer` | hudelem methods 2 | 0x4b8e4 | exactly one parameter, seconds to milliseconds with the x87 rounding mode set to round-up (0x4b942), rejects a result not above zero, clears the text and value fields, sets the element type to 4 and the absolute end time `level.time + ms` at record+0x5c | the call shape and both errors; nothing recorded, because neither field is in `HUD_FIELDS` and the only consumer is `G_UpdateHudElemsToClients` (0x5121c) |
+
+`newClientHudElem` (0x4b298) and `newTeamHudElem` (0x4b3d0) allocate from the
+same pool with an owner; both need clients, so neither is implemented.
+
+`thread addBotClients()` is commented out in the shipped `dm.gsc`, so nothing
+in the stock bootstrap reaches `addTestClient`.
 
 ## Open, and worth a probe
 

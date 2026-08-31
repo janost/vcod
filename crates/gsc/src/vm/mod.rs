@@ -238,6 +238,13 @@ pub struct Vm {
     /// `spawn` -> ...), which overflows long before any instruction
     /// budget would. See `spawn`'s `MAX_SPAWN_DEPTH` check.
     spawn_depth: u32,
+    /// The threads that have died of an error, in the order they died, up
+    /// to `MAX_RECORDED_ABORTS`. `run_frame` returns its own pass's errors
+    /// and `call_now` returns its own, but `start_thread` has none: its
+    /// signature is `-> ThreadId`, so an abort in a thread it started
+    /// reached nothing but `log::warn!`, which a test harness with no
+    /// logger installed cannot see. Read it back with `aborts`.
+    aborts: Vec<ScriptError>,
 }
 
 impl Default for Vm {
@@ -265,6 +272,7 @@ impl Vm {
             budget: 1_000_000,
             now_ms: 0,
             spawn_depth: 0,
+            aborts: Vec::new(),
         }
     }
 
@@ -276,24 +284,47 @@ impl Vm {
         self.threads.len()
     }
 
+    /// How many aborts `aborts` keeps. Every one of them is logged whatever
+    /// the cap; the cap only bounds what a server that runs for hours with
+    /// a thread dying every frame accumulates.
+    const MAX_RECORDED_ABORTS: usize = 256;
+
+    /// Logs a dead thread and keeps it in `aborts`.
+    fn record_abort(&mut self, e: &ScriptError) {
+        log::warn!("gsc: thread aborted in {}", self.describe(e));
+        if self.aborts.len() < Self::MAX_RECORDED_ABORTS {
+            self.aborts.push(e.clone());
+        }
+    }
+
+    /// The threads that have died of an error since this `Vm` was built, in
+    /// the order they died, up to `MAX_RECORDED_ABORTS` of them. A host that
+    /// starts its level-load threads with `start_thread` reads them back
+    /// here; `describe` renders one.
+    pub fn aborts(&self) -> &[ScriptError] {
+        &self.aborts
+    }
+
+    /// One error as `file::func:line: Kind`.
+    ///
     /// `ErrorKind`'s own `Debug` prints `MissingBuiltin`'s `Atom` as a bare
     /// index (`MissingBuiltin(Atom(43))`) -- useless as the work list this
-    /// log line exists to be, since nothing else here names the builtin.
-    /// `ErrorKind` keeps the `Atom` for its callers, which match on it; only
-    /// the logged text resolves it.
-    fn log_script_error(&self, e: &ScriptError) {
+    /// exists to be, since nothing else here names the builtin. `ErrorKind`
+    /// keeps the `Atom` for its callers, which match on it; only the
+    /// rendered text resolves it.
+    pub fn describe(&self, e: &ScriptError) -> String {
         let kind = match &e.kind {
             ErrorKind::MissingBuiltin(name) => {
                 format!("MissingBuiltin({:?})", self.interner.resolve(*name))
             }
             other => format!("{other:?}"),
         };
-        log::warn!(
-            "gsc: thread aborted in {}::{}:{}: {kind}",
+        format!(
+            "{}::{}:{}: {kind}",
             self.interner.resolve(e.file),
             self.interner.resolve(e.func),
             e.line,
-        );
+        )
     }
 
     pub fn interner_mut(&mut self) -> &mut Interner {

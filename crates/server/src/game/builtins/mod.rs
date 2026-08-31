@@ -8,6 +8,7 @@ pub mod cvar;
 pub mod entity;
 pub mod env;
 pub mod fx;
+pub mod hud;
 pub mod io;
 pub mod math;
 pub mod mover;

@@ -128,7 +128,9 @@ fn convert(cx: &mut Cx, ty: FieldType, raw: &str) -> Option<Value> {
         FieldType::CString | FieldType::IString | FieldType::ModelIndex => {
             Value::String(cx.intern_exact(raw))
         }
-        FieldType::Entity | FieldType::Object => return None,
+        // No entity field is an enum -- the three that are all live on HUD
+        // elements, which no BSP entity block builds.
+        FieldType::Entity | FieldType::Object | FieldType::Enum(_) => return None,
     })
 }
 

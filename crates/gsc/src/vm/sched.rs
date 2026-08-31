@@ -278,14 +278,14 @@ impl Vm {
                     line,
                     kind: ErrorKind::Budget,
                 };
-                self.log_script_error(&e);
+                self.record_abort(&e);
                 errors.push(e);
                 if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
                     self.threads.remove(idx);
                 }
             }
             Err(e) => {
-                self.log_script_error(&e);
+                self.record_abort(&e);
                 errors.push(e);
                 if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
                     self.threads.remove(idx);
@@ -468,7 +468,7 @@ impl Vm {
 mod tests {
     use crate::value::{EntId, Value};
     use crate::vm::tests::TestHost;
-    use crate::vm::{Target, Vm};
+    use crate::vm::{ErrorKind, Target, Vm};
 
     fn vm_with(src: &str) -> Vm {
         let ast = crate::parse::parse_file(src).unwrap();
@@ -476,6 +476,25 @@ mod tests {
         let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
         vm.install(fns).unwrap();
         vm
+    }
+
+    /// `start_thread` hands back a `ThreadId` and has no error channel, so
+    /// a thread that dies during a host's map-load bootstrap reached nothing
+    /// but `log::warn!`, invisible to a test harness with no logger.
+    /// `Vm::aborts` is that missing surface.
+    #[test]
+    fn a_thread_that_dies_inside_start_thread_is_recorded() {
+        let mut vm = vm_with(r#"main() { double("not an int"); }"#);
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 0, f, None, vec![]);
+        assert_eq!(vm.aborts().len(), 1, "the dead thread is recorded");
+        let e = &vm.aborts()[0];
+        assert_eq!(e.kind, ErrorKind::BadType("double wants an int"));
+        assert_eq!(
+            vm.describe(e),
+            "test/script::main:1: BadType(\"double wants an int\")"
+        );
     }
 
     #[test]
