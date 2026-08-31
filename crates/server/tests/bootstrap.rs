@@ -60,7 +60,7 @@ fn check(map: &str) {
     );
 }
 
-/// The same assertion over the client path: connect, `begin`, both stock menu
+/// The same assertion over the client path: connect, entry, both stock menu
 /// answers and the spawn they end in. The join asks for the team and weapon
 /// the retail capture was taken with, so this and the playerstate gate drive
 /// the same one.

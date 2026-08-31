@@ -83,9 +83,10 @@ and re-reads the applied table via `trap_GetGameState` (`0x4f`), exactly as Q3's
 
 Measured on 2026-08-31 against the retail 1.1d dedicated server, dm on
 mp_pavlov, with `--net-probe --save-playerstate`; the whole stream is in
-`crates/server/tests/fixtures/playerstate/mp_pavlov-dm.txt`. A client that sends
-`begin` gets these five commands back, in this order (`^U` is a literal 0x15
-byte):
+`crates/server/tests/fixtures/playerstate/mp_pavlov-dm.txt`. A client that has
+entered the world -- which is the first usercmd after the gamestate, not any
+command it sends (`docs/protocol-1.1.md`, "Entering the world") -- gets these
+five commands back, in this order (`^U` is a literal 0x15 byte):
 
 ```
 f "MPSCRIPT_CONNECTED^Uvcod^7"
@@ -96,7 +97,8 @@ v cg_objectiveText "DM_KILL_OTHER_PLAYERS^U"
 ```
 
 INFERRED that the five come from `Callback_PlayerConnect`: `begin` is the notify
-its `waittill` blocks on, and the `setClientCvar` and `openMenu` calls that
+its `waittill` blocks on -- the engine raises it from `ClientBegin`, inside
+`SV_ClientEnterWorld` -- and the `setClientCvar` and `openMenu` calls that
 follow that wait in the stock dm script account for four of them.
 
 `t`'s argument is an index into the script-menu configstring range, whose slot 0

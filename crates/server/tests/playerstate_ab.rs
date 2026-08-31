@@ -202,7 +202,7 @@ fn retail_weapon_list(map: &str) -> String {
         .to_string()
 }
 
-/// Our playerstate at the same moment retail's was read: `begin`, both menu
+/// Our playerstate at the same moment retail's was read: entry, both menu
 /// answers, then `SPAWN_SETTLE` of simulated time.
 fn ours(
     map: &str,
@@ -266,6 +266,12 @@ fn check_spawn_shape(entities: &str, ps: &PlayerState, who: &str, out: &mut Vec<
     // Spawn-independent, so they are checked whether or not the origin lands
     // on a spawn point: nothing else covers them, `SPAWN_SHAPE` having taken
     // them out of the literal diff.
+    //
+    // Zero here only because the join enters with `NULL_USERCMD`. Retail sets
+    // `delta_angles[0] = -cmd.angles[0]` like every other axis, so a harness
+    // that ever enters with a nonzero pitch trips this check, and it is the
+    // check that is wrong then, not the server (`server.rs`,
+    // `entry_takes_delta_angles_from_the_entering_cmd`).
     for f in ["delta_angles[0]", "delta_angles[2]"] {
         let v = ps.field_i32(p, f);
         if v != 0 {

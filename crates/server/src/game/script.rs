@@ -645,8 +645,8 @@ mod tests {
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
     }
 
-    /// Both events in one frame, which is what a client that sends `begin`
-    /// before the next `run_frame` produces. It holds because `start_thread`
+    /// Both events in one frame, which is what a client whose first usercmd
+    /// lands before the next `run_frame` produces. It holds because `start_thread`
     /// steps a new thread to its first suspend before returning, so the
     /// `waittill` is armed by the time the Begin behind it in the queue is
     /// drained; nothing else pins that.

@@ -3,7 +3,7 @@
 use crate::weapons::PlayerWeapons;
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
-use vcod_common::net::msg::{self, UserCmd, NULL_USERCMD};
+use vcod_common::net::msg::{self, UserCmd};
 use vcod_common::net::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::pmove::{self, PmInput};
 
@@ -71,15 +71,16 @@ pub struct ClientSim {
 impl ClientSim {
     /// A client entering the world: Q3 spectator fly
     /// ([`pmove::spectator_move`]), angles straight off the latest cmd.
-    pub fn spectator(origin: [f32; 3], yaw_deg: f32) -> Self {
+    /// `cmd_angles` are the angles of the usercmd that brought the client in
+    /// -- `SV_ClientEnterWorld`'s `cmds[0]`, zero when there is none -- so
+    /// the view it already had survives entry instead of snapping.
+    pub fn spectator(origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) -> Self {
         ClientSim {
             ps: pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg),
             pm_type: PmType::Spectator,
             weapons: PlayerWeapons::default(),
             viewmodel_index: 0,
-            // A fresh connect has no prior cmd; `Server::enter_world` sets
-            // `c.last_cmd = NULL_USERCMD` immediately before building this.
-            delta_angles: spawn_delta_angles(yaw_deg, NULL_USERCMD.angles),
+            delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
         }
     }
 
@@ -246,6 +247,7 @@ impl ClientSim {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::msg::NULL_USERCMD;
     use vcod_common::net::protocol::PROTOCOL_V1;
 
     fn cmd(forward: i8, pitch_short: i32, yaw_short: i32) -> UserCmd {
@@ -277,7 +279,7 @@ mod tests {
     #[test]
     fn a_standing_player_carries_the_captured_values() {
         let p = &PROTOCOL_V1;
-        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0);
+        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         // The capture is of a player standing still on the floor.
         sim.ps.on_ground = true;
@@ -298,7 +300,7 @@ mod tests {
     #[test]
     fn wire_carries_the_pinned_constants_and_dynamic_fields() {
         let p = &PROTOCOL_V1;
-        let sim = ClientSim::spectator([10.0, 20.0, 30.0], 90.0);
+        let sim = ClientSim::spectator([10.0, 20.0, 30.0], 90.0, NULL_USERCMD.angles);
         let w = sim.to_wire(p, 3, 114_800);
         assert_eq!(w.field_i32(p, "pm_type"), 4);
         assert_eq!(w.field_i32(p, "speed"), 400);
@@ -324,7 +326,7 @@ mod tests {
     /// `delta_angles` at zero so the cmd angle passes straight through.
     #[test]
     fn step_applies_the_camera_pitch_convention() {
-        let mut sim = ClientSim::spectator([0.0; 3], 0.0);
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, NULL_USERCMD.angles);
         // 45 deg down on the wire, 90 deg yaw.
         let c = cmd(0, (45.0 * ANGLE2SHORT) as i32, (90.0 * ANGLE2SHORT) as i32);
         sim.step(&c, 0.05, None);
@@ -339,11 +341,11 @@ mod tests {
     #[test]
     fn the_wire_constants_follow_the_mode() {
         let p = &PROTOCOL_V1;
-        let spec = ClientSim::spectator([0.0, 0.0, 64.0], 0.0);
+        let spec = ClientSim::spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         let ps = spec.to_wire(p, 0, 0);
         assert_eq!(ps.field_i32(p, "pm_type"), 4);
 
-        let mut player = ClientSim::spectator([0.0, 0.0, 64.0], 0.0);
+        let mut player = ClientSim::spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         player.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         let ps = player.to_wire(p, 0, 0);
         assert_eq!(ps.field_i32(p, "pm_type"), 0);
@@ -359,7 +361,7 @@ mod tests {
     /// map.
     #[test]
     fn a_player_without_a_world_still_steps() {
-        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0);
+        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         let cmd = UserCmd {
             forward: 127,
@@ -385,7 +387,7 @@ mod tests {
     #[test]
     fn delta_angles_carry_the_spawn_yaw_and_viewangles_stay_unwritten() {
         let p = &PROTOCOL_V1;
-        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 90.0);
+        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 90.0, NULL_USERCMD.angles);
         let ps = sim.to_wire(p, 0, 0);
         assert_eq!(ps.field_i32(p, "delta_angles[0]"), 0);
         assert_eq!(ps.field_i32(p, "delta_angles[1]"), 16_384);
@@ -403,7 +405,7 @@ mod tests {
     /// whose map failed to load still flies its spectators.
     #[test]
     fn step_flies_without_a_collision_world() {
-        let mut sim = ClientSim::spectator([1.0, 2.0, 3.0], 0.0);
+        let mut sim = ClientSim::spectator([1.0, 2.0, 3.0], 0.0, NULL_USERCMD.angles);
         let c = cmd(127, 0, 0);
         for _ in 0..125 {
             sim.step(&c, 1.0 / 125.0, None);

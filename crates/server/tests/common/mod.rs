@@ -218,7 +218,7 @@ impl Join {
             true => "the server opened no script menu at all".to_string(),
             false => self.log.join("; "),
         };
-        format!("join: begin sent, {log}")
+        format!("join: entered the world, {log}")
     }
 
     /// The path, not the state it ended in: a player that reached the
@@ -236,10 +236,11 @@ impl Join {
     }
 }
 
-/// Connects a client, sends `begin`, answers both stock menus with `team` and
-/// `weapon`, and runs on until the spawn has settled. 20 s of simulated time
-/// at sv_fps 20, well past the settle a completed join needs; a join that
-/// never happens burns the lot.
+/// Connects a client, answers both stock menus with `team` and `weapon`, and
+/// runs on until the spawn has settled. 20 s of simulated time at sv_fps 20,
+/// well past the settle a completed join needs; a join that never happens
+/// burns the lot. The loop's first usercmd is what enters the world and
+/// releases `Callback_PlayerConnect`'s `waittill`; the menus follow from it.
 pub fn join(
     sv: &mut Server,
     q: &Rc<RefCell<Queues>>,
@@ -248,9 +249,6 @@ pub fn join(
     weapon: &str,
 ) -> (NetClient<ClientEnd>, Join) {
     let mut cl = connect(sv, q, now);
-    // `begin` is what releases `Callback_PlayerConnect`'s `waittill`; the join
-    // menus follow from it.
-    cl.send_reliable("begin");
     let mut j = Join::new(team, weapon);
     for _ in 0..400 {
         *now += Duration::from_millis(50);
