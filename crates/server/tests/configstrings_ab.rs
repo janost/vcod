@@ -36,9 +36,15 @@ fn cfg(map: &str) -> vcod_server::ServerConfig {
     }
 }
 
-/// The committed retail capture, indexed by slot.
+/// The committed retail capture, indexed by slot. The fixture name carries
+/// the gametype, so it comes from `cfg` rather than from a literal: a
+/// changed `cfg().gametype` has to move the fixture too, not silently keep
+/// reading the `dm` capture.
 fn retail(map: &str) -> BTreeMap<usize, String> {
-    let path = format!("tests/fixtures/configstrings/{map}-dm.txt");
+    let path = format!(
+        "tests/fixtures/configstrings/{map}-{}.txt",
+        cfg(map).gametype
+    );
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     text.lines()
         .filter(|l| !l.starts_with('#'))

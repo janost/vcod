@@ -543,14 +543,16 @@ fn write_configstrings_fixture(configstrings: &[String]) -> anyhow::Result<()> {
     out.push_str(
         "# from the diff: they carry pak checksums and server config, not script output.\n",
     );
+    let mut written = 0;
     for (i, cs) in configstrings.iter().enumerate() {
         if !cs.is_empty() {
             out.push_str(&format!("{i} {cs}\n"));
+            written += 1;
         }
     }
 
     let path = format!("{CONFIGSTRINGS_FIXTURE_DIR}/{map}-{gametype}.txt");
     std::fs::write(&path, out)?;
-    println!("configstrings: {} bytes -> {path}", configstrings.len());
+    println!("configstrings: {written} non-empty slots -> {path}");
     Ok(())
 }
