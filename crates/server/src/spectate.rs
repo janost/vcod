@@ -14,6 +14,13 @@ fn short_deg(v: i32) -> f32 {
     (deg + 180.0).rem_euclid(360.0) - 180.0
 }
 
+/// `ANGLE2SHORT(spawn_angle) - cmd.angles`, RTCW's `SetClientViewAngle`
+/// (docs/protocol-1.1.md, "Spectator view angles"). `cmd.angles` is zero at
+/// every spawn point this runs from, so the subtracted term drops out.
+fn spawn_delta_angles(yaw_deg: f32) -> [i32; 3] {
+    [0, (yaw_deg * ANGLE2SHORT) as i32, 0]
+}
+
 /// The movement path a client is on, and with it the half of the wire
 /// playerstate that a spectator and a player disagree about.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -31,6 +38,10 @@ pub enum PmType {
 pub struct ClientSim {
     pub ps: pmove::PlayerState,
     pub pm_type: PmType,
+    /// The client's per-axis view offset, added back onto each cmd's angle
+    /// by both `step` and the connected client itself.
+    /// docs/protocol-1.1.md, "Spectator view angles".
+    delta_angles: [i32; 3],
 }
 
 impl ClientSim {
@@ -40,6 +51,7 @@ impl ClientSim {
         ClientSim {
             ps: pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg),
             pm_type: PmType::Spectator,
+            delta_angles: spawn_delta_angles(yaw_deg),
         }
     }
 
@@ -48,14 +60,15 @@ impl ClientSim {
     pub fn become_player(&mut self, origin: [f32; 3], yaw_deg: f32) {
         self.ps = pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg);
         self.pm_type = PmType::Normal;
+        self.delta_angles = spawn_delta_angles(yaw_deg);
     }
 
     /// Advance one frame. The axes arrive quantized to ±127/0 and dt comes off
     /// the cmd clocks.
     pub fn step(&mut self, cmd: &UserCmd, dt: f32, world: Option<&CollisionWorld>) {
-        self.ps.yaw = short_deg(cmd.angles[1]).to_radians();
+        self.ps.yaw = short_deg(cmd.angles[1] + self.delta_angles[1]).to_radians();
         // Wire pitch is positive down; the sim stores the camera's convention.
-        self.ps.pitch = -short_deg(cmd.angles[0]).to_radians();
+        self.ps.pitch = -short_deg(cmd.angles[0] + self.delta_angles[0]).to_radians();
         match (self.pm_type, world) {
             // A spectator noclips, so it needs no world. `(Normal, None)` is
             // the two cases where a player has none either: a unit test that
@@ -153,13 +166,15 @@ impl ClientSim {
         {
             set(axis, self.ps.velocity[i].to_bits() as i32);
         }
-        let pitch = -self.ps.pitch.to_degrees(); // wire convention
-        let yaw = self.ps.yaw.to_degrees();
-        set("viewangles[0]", pitch.to_bits() as i32);
-        set("viewangles[1]", yaw.to_bits() as i32);
-        // delta_angles stay zero: we never force-turn a client, so there is
-        // no teleport correction; the client's cmd angles are already the
-        // absolute view `step` simulates from.
+        // viewangles stays unwritten; the view lives in delta_angles instead
+        // and the client rebuilds it. docs/protocol-1.1.md, "Spectator view
+        // angles".
+        for (i, axis) in ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"]
+            .iter()
+            .enumerate()
+        {
+            set(axis, self.delta_angles[i]);
+        }
         w
     }
 }
@@ -240,17 +255,17 @@ mod tests {
         assert_eq!(w.field_i32(p, "bobCycle"), 0);
     }
 
+    /// `step` reads cmd angles in the wire's positive-down convention and
+    /// stores the sim's positive-up one; a spawn yaw of 0 keeps
+    /// `delta_angles` at zero so the cmd angle passes straight through.
     #[test]
-    fn viewangles_follow_the_client_camera_convention() {
-        let p = &PROTOCOL_V1;
+    fn step_applies_the_camera_pitch_convention() {
         let mut sim = ClientSim::spectator([0.0; 3], 0.0);
-        sim.ps.yaw = 90f32.to_radians();
-        // Sim pitch is camera convention (up positive); the wire is down
-        // positive, so a sim looking 45 deg up writes viewangles[0] = -45.
-        sim.ps.pitch = 45f32.to_radians();
-        let w = sim.to_wire(p, 0, 0);
-        assert_eq!(w.viewangles(p)[1], 90.0);
-        assert_eq!(w.viewangles(p)[0], -45.0);
+        // 45 deg down on the wire, 90 deg yaw.
+        let c = cmd(0, (45.0 * ANGLE2SHORT) as i32, (90.0 * ANGLE2SHORT) as i32);
+        sim.step(&c, 0.05, None);
+        assert_eq!(sim.ps.yaw.to_degrees(), 90.0);
+        assert_eq!(sim.ps.pitch.to_degrees(), -45.0);
     }
 
     /// A spectator carries the captured spectator constants; a player does
@@ -289,17 +304,29 @@ mod tests {
         sim.step(&cmd, 0.05, None);
     }
 
+    /// The three-part edit, pinned as one behaviour: a sim spawned facing 90
+    /// degrees reports that yaw to a client whose cmd angles are zero,
+    /// because the offset lives in `delta_angles` and the client adds it
+    /// back; `step` must add it back the same way to keep simulating at the
+    /// spawn yaw once a real cmd arrives. A partial edit fails this: dropping
+    /// the delta write reports 0, keeping the `viewangles` write reports the
+    /// spawn angle there instead of leaving it unwritten, and reverting
+    /// `step` alone snaps the simulated yaw back to the cmd's raw 0 rather
+    /// than 90. `16_384` is `ANGLE2SHORT(90)`, the same value the committed
+    /// capture fixture carries (`crates/common/src/net/msg.rs:1826`).
     #[test]
-    fn delta_angles_stay_zero() {
+    fn delta_angles_carry_the_spawn_yaw_and_viewangles_stay_unwritten() {
         let p = &PROTOCOL_V1;
-        let mut sim = ClientSim::spectator([0.0; 3], 0.0);
-        sim.ps.yaw = 90f32.to_radians();
-        let w = sim.to_wire(p, 0, 0);
-        // No force-turn means no correction term; the client's compensation
-        // must be identity.
-        assert_eq!(w.field_i32(p, "delta_angles[0]"), 0);
-        assert_eq!(w.field_i32(p, "delta_angles[1]"), 0);
-        assert_eq!(w.viewangles(p)[1], 90.0);
+        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 90.0);
+        let ps = sim.to_wire(p, 0, 0);
+        assert_eq!(ps.field_i32(p, "delta_angles[1]"), 16_384);
+        assert_eq!(ps.field_i32(p, "viewangles[1]"), 0);
+
+        // The probe that took the capture sends cmd.angles = [0,0,0] and
+        // never moves its view; step must add delta_angles back or the sim
+        // faces 0 instead of the spawn's 90.
+        sim.step(&cmd(0, 0, 0), 0.05, None);
+        assert_eq!(sim.ps.yaw.to_degrees(), 90.0);
     }
 
     /// A spectator noclips, so flight needs no collision world and a server

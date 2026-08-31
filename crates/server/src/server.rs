@@ -1834,25 +1834,34 @@ mod tests {
     /// clc_move carrying one cmd whose pitch and yaw ride change bit 0
     /// (omitted, unchanged from the server's stored cmd), what a retail client
     /// sends when the mouse did not move this packet. Forward/right stay
-    /// announced; the serverTime is absolute so the test isolates the angle
-    /// base from the serverTime base.
-    fn move_ops_omit_angles(checksum_feed: i32, message_ack: i32, st: i32) -> Vec<u8> {
+    /// announced; each serverTime is absolute so the test isolates the angle
+    /// base from the serverTime base. `n` cmds, 20 ms apart from `st`: one is
+    /// enough to prove the field decodes, but a probe of *which* base it
+    /// decoded against needs the resulting velocity to actually get there --
+    /// `pmove::spectator_move`'s `accelerate` blends toward the wishdir
+    /// rather than snapping to it, so a single cmd's movement is still mostly
+    /// the previous leg's residual velocity. A burst gives the (correct or
+    /// wrongly-reset) wishdir enough simulated time to dominate.
+    fn move_ops_omit_angles(checksum_feed: i32, message_ack: i32, st: i32, n: i32) -> Vec<u8> {
         let huff = Huffman::new();
         let key = checksum_feed ^ message_ack ^ com_hash_key("", 32);
         let mut w = MsgWriter::new(&huff);
         w.write_bits(CLC_MOVE, 2);
-        w.write_byte(1);
-        w.write_bits(0, 1); // serverTime: 32-bit absolute
-        w.write_long(st);
-        // Not the whole-cmd shortcut, and the branch bit picks the compact one.
-        w.write_bits((key & 1) ^ 1, 1);
-        w.write_bits(key & 1, 1);
-        let key = key ^ st;
-        w.write_bits(key & 1, 1); // buttons bit 0, announced as 0
-        w.write_bits(0, 1); // pitch omitted
-        w.write_bits(0, 1); // yaw omitted
-        w.write_bits(1, 1); // forward/right announced
-        w.write_bits(1 ^ (key & 0xf), 4); // forward 127: bucket 1
+        w.write_byte(n as u8);
+        for i in 0..n {
+            let cmd_st = st + i * 20;
+            w.write_bits(0, 1); // serverTime: 32-bit absolute
+            w.write_long(cmd_st);
+            // Not the whole-cmd shortcut, and the branch bit picks the compact one.
+            w.write_bits((key & 1) ^ 1, 1);
+            w.write_bits(key & 1, 1);
+            let ckey = key ^ cmd_st;
+            w.write_bits(ckey & 1, 1); // buttons bit 0, announced as 0
+            w.write_bits(0, 1); // pitch omitted
+            w.write_bits(0, 1); // yaw omitted
+            w.write_bits(1, 1); // forward/right announced
+            w.write_bits(1 ^ (ckey & 0xf), 4); // forward 127: bucket 1
+        }
         w.write_bits(CLC_EOF, 2);
         w.into_ops()
     }
@@ -2303,8 +2312,23 @@ mod tests {
     }
 
     /// A retail client omits unchanged angle fields (change bit 0) instead of
-    /// announcing them, so the server must decode them against the cmd it last
-    /// stored for this client. Against a null base the view flashes to 0.
+    /// announcing them, so the server must decode them against the cmd it
+    /// last stored for this client, not `NULL_USERCMD` -- decoding against
+    /// the null base resets the move basis to yaw 0 for a frame (the
+    /// "spectator flash" bug, AGENTS.md's gotchas). `ps.yaw` steers
+    /// `pmove::spectator_move`'s wishdir directly, so a burst of `forward`
+    /// cmds sent right after the omission is a direct probe of which base
+    /// the server used: yaw -45 accelerates the spectator diagonally
+    /// (velocity settles near `vx == -vy`), yaw 0 (the bug) only along +x
+    /// (`vy` stays small). A single cmd is not enough to tell them apart --
+    /// `accelerate` blends toward the wishdir rather than snapping to it, so
+    /// one frame is still mostly the previous leg's momentum; a 20-cmd burst
+    /// gives the (correct or wrongly-reset) wishdir time to dominate, which
+    /// I confirmed empirically (`vy` -283 with the real base, -20 with the
+    /// bug forced, at this burst length). `viewangles` no longer carries
+    /// this -- it stays unwritten, docs/protocol-1.1.md "Spectator view
+    /// angles" -- so this checks the property the field used to stand in
+    /// for directly.
     #[test]
     fn omitted_angles_decode_against_the_stored_last_cmd() {
         let now = Instant::now();
@@ -2343,10 +2367,14 @@ mod tests {
         );
         let t1 = now + std::time::Duration::from_millis(50);
         let s1 = latest_snapshot(&mut sv, &mut nc, &mut ring, t1);
-        assert!((s1.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01);
+        let o1 = s1.ps.origin(&PROTOCOL_V1);
+        assert!(
+            o1[0] > 0.1 && o1[1] < -0.1,
+            "cmd 1's announced yaw -45 must steer the spectator diagonally from spawn, origin {o1:?}"
+        );
 
-        // Next packet: the mouse did not move, so pitch and yaw ride change
-        // bit 0 off the cmd the server just stored.
+        // Next packet: the mouse did not move for 20 frames, so pitch and yaw
+        // ride change bit 0 off the cmd the server just stored, every frame.
         let ack = nc.incoming_sequence as i32;
         sv.handle_packet(
             addr(5),
@@ -2354,7 +2382,7 @@ mod tests {
                 0x10,
                 ack,
                 0,
-                &move_ops_omit_angles(sv.checksum_feed, ack, 520),
+                &move_ops_omit_angles(sv.checksum_feed, ack, 520, 20),
                 &Huffman::new(),
             )
             .unwrap(),
@@ -2366,15 +2394,16 @@ mod tests {
             &mut ring,
             t1 + std::time::Duration::from_millis(50),
         );
+        // Anti-vacuous: the burst must actually have been applied.
+        let dx = s2.ps.origin(&PROTOCOL_V1)[0] - o1[0];
+        assert!(dx > 1.0, "the omitted-angle burst was not applied, dx {dx}");
+        // The discriminator: only a base of yaw -45 leaves a large negative
+        // vy once the burst settles; a base reset to yaw 0 does not.
+        let vy = s2.ps.field_f32(&PROTOCOL_V1, "velocity[1]");
         assert!(
-            (s2.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01,
-            "omitted angles must keep the stored yaw, got {}",
-            s2.ps.viewangles(&PROTOCOL_V1)[1]
+            vy < -50.0,
+            "omitted angles must keep the stored yaw -45, not reset to 0: vy {vy}"
         );
-        // Guard against a vacuous pass: the second cmd carries forward 127,
-        // so the sim must have moved between the snapshots.
-        let d = s2.ps.origin(&PROTOCOL_V1)[0] - s1.ps.origin(&PROTOCOL_V1)[0];
-        assert!(d > 0.5, "the omitted-angle cmd was not applied, dx {d}");
     }
 
     /// Press then release, end to end: the release must decode up=0 against
@@ -2450,7 +2479,10 @@ mod tests {
     }
 
     /// A move message that fails to decode is discarded whole: the next good
-    /// one still chains from the last successfully decoded cmd.
+    /// one still chains from the last successfully decoded cmd, not
+    /// `NULL_USERCMD` -- same base-decode property and the same burst probe
+    /// as `omitted_angles_decode_against_the_stored_last_cmd`, with a
+    /// garbled packet spliced in first.
     #[test]
     fn a_garbled_message_does_not_poison_the_base() {
         let now = Instant::now();
@@ -2488,7 +2520,11 @@ mod tests {
         );
         let t1 = now + std::time::Duration::from_millis(50);
         let s1 = latest_snapshot(&mut sv, &mut nc, &mut ring, t1);
-        assert!((s1.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01);
+        let o1 = s1.ps.origin(&PROTOCOL_V1);
+        assert!(
+            o1[0] > 0.1 && o1[1] < -0.1,
+            "cmd 1's announced yaw -45 must steer the spectator diagonally from spawn, origin {o1:?}"
+        );
 
         // Garbage that cannot parse, then a good packet whose angles are
         // omitted: they must come off the pre-failure base.
@@ -2506,7 +2542,7 @@ mod tests {
                 0x10,
                 ack,
                 0,
-                &move_ops_omit_angles(sv.checksum_feed, ack, 520),
+                &move_ops_omit_angles(sv.checksum_feed, ack, 520, 20),
                 &Huffman::new(),
             )
             .unwrap(),
@@ -2519,10 +2555,15 @@ mod tests {
             t1 + std::time::Duration::from_millis(50),
         );
         assert!(s2.valid, "snapshots must continue");
+        // Anti-vacuous: the burst must actually have been applied.
+        let dx = s2.ps.origin(&PROTOCOL_V1)[0] - o1[0];
+        assert!(dx > 1.0, "the omitted-angle burst was not applied, dx {dx}");
+        // The discriminator: only a base of yaw -45 leaves a large negative
+        // vy once the burst settles; a base reset to yaw 0 does not.
+        let vy = s2.ps.field_f32(&PROTOCOL_V1, "velocity[1]");
         assert!(
-            (s2.ps.viewangles(&PROTOCOL_V1)[1] + 45.0).abs() < 0.01,
-            "the garbled packet must not reset the base, got {}",
-            s2.ps.viewangles(&PROTOCOL_V1)[1]
+            vy < -50.0,
+            "the garbled packet must not reset the base to yaw 0: vy {vy}"
         );
     }
 
