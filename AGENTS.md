@@ -19,9 +19,8 @@ engineering setup works.
   scheduler and cross-file loader. At map load the dedicated server loads the
   gametype and map scripts and runs Activision's stock bootstrap to
   completion, which is what fills the configstring table; the rest of the
-  shipped gameplay scripts wait on clients existing and on the builtins that
-  needs.
-  `vcod-gsc` must not depend on
+  shipped gameplay scripts wait on clients existing and on the builtins those
+  paths call. `vcod-gsc` must not depend on
   `vcod-common` either, same rule as `common` itself: `cargo tree -p vcod-gsc
   -e normal` shows only `anyhow` and `log`. Nothing in `common` may import
   wgpu, winit or kira; `cargo tree -p vcod-common -i wgpu` proves it. `cargo

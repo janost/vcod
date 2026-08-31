@@ -11,7 +11,10 @@
 //!   forbids outright: a section is a mix of claims and a blanket covers the
 //!   ones it should not;
 //! - one clause carrying both labels, which is how a single claim ends up
-//!   opening VERIFIED and closing INFERRED and is really neither.
+//!   opening VERIFIED and closing INFERRED and is really neither. `UNVERIFIED`
+//!   is a third label the docs use and does not count as VERIFIED here: it
+//!   pairs with INFERRED without contradiction, so a clause carrying those two
+//!   is legitimate and is left alone.
 //!
 //! **What it cannot catch**, and a reader still has to:
 //!
@@ -93,8 +96,20 @@ fn excerpt(s: &str, n: usize) -> String {
     }
 }
 
+/// True when `s` carries the VERIFIED label. `UNVERIFIED` is a third label
+/// this repo uses, in five research docs, and it is not this one: an
+/// occurrence preceded by `UN` does not count. "Not established" and "read
+/// off control flow" are compatible readings, so a clause carrying UNVERIFIED
+/// and INFERRED is legitimate prose and must not be reported.
+fn has_verified(s: &str) -> bool {
+    s.match_indices("VERIFIED")
+        .any(|(i, _)| !s[..i].ends_with("UN"))
+}
+
 /// A section is a mix of claims, so no label may cover a whole one. Every
-/// claim carries its own.
+/// claim carries its own. The phrase match is deliberately left as a
+/// substring, so `UNVERIFIED throughout` is caught too: it is the same
+/// per-section blanket.
 #[test]
 fn no_research_doc_blankets_a_section_as_verified() {
     let mut hits = Vec::new();
@@ -122,7 +137,7 @@ fn no_claim_carries_both_evidence_labels() {
     let mut hits = Vec::new();
     for (name, text) in research_docs() {
         for (offset, clause) in clauses(&text) {
-            if clause.contains("VERIFIED") && clause.contains("INFERRED") {
+            if has_verified(clause) && clause.contains("INFERRED") {
                 hits.push(format!(
                     "{name}:{}: {}",
                     line_of(&text, offset),
@@ -152,7 +167,7 @@ fn the_check_fires_on_the_shapes_it_claims_to_catch() {
     assert_eq!(
         clauses(both)
             .iter()
-            .filter(|(_, c)| c.contains("VERIFIED") && c.contains("INFERRED"))
+            .filter(|(_, c)| has_verified(c) && c.contains("INFERRED"))
             .count(),
         1
     );
@@ -163,9 +178,16 @@ fn the_check_fires_on_the_shapes_it_claims_to_catch() {
                  both captures sits beside its base weapon's.";
     assert!(clauses(split)
         .iter()
-        .all(|(_, c)| !(c.contains("VERIFIED") && c.contains("INFERRED"))));
+        .all(|(_, c)| !(has_verified(c) && c.contains("INFERRED"))));
 
     // A file name's dot is not a clause boundary, or the split above would
     // hide a real double label rather than pass it through.
     assert_eq!(clauses("a `spawn.rs` b. c").len(), 2);
+
+    // UNVERIFIED is a different label, and pairing it with INFERRED says two
+    // compatible things rather than one claim labelled twice.
+    assert!(!has_verified(
+        "UNVERIFIED, and INFERRED FROM DECOMPILATION."
+    ));
+    assert!(has_verified("UNVERIFIED there, VERIFIED here."));
 }
