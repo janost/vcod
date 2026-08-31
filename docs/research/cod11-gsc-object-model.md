@@ -999,16 +999,20 @@ no `misc_mg42` at all.
 **`weap_mg42_loop` / `weap_mg42_cooldown`, configstrings 526/527.**
 `misc_mg42` and `misc_turret` share `SP_turret` (0x533b0, section 8), which
 calls `G_SpawnTurret` (0x52c84) — the link section 17 left untraced.
-VERIFIED, read straight from the binary: `G_SpawnTurret`'s body contains
-`RegisterItem(weaponinfo)` (`0x52d74`, section 17's mechanism) followed by
-two reads off the pointer `BG_GetInfoForWeapon` returns (`edi+0xa0`,
-`edi+0xa4`) and two more calls to `G_SoundAliasIndex` (`0x52dad`, `0x52dd8`),
-each gated on that field being a non-null, non-empty string. INFERRED FROM
-DECOMPILATION, the narrative that connects those addresses — that the two
+`G_SpawnTurret` calls `RegisterItem(weaponinfo)` (`0x52d74`, section 17's
+mechanism), reads two fields off the pointer `BG_GetInfoForWeapon` returns
+(`edi+0xa0`, `edi+0xa4`), and calls `G_SoundAliasIndex` on each one that is a
+non-null, non-empty string (`0x52dad`, `0x52dd8`). INFERRED FROM
+DECOMPILATION for all of that — the order these run in, the gating on each
+field being non-null and non-empty, and the narrative that the two
 `G_SoundAliasIndex` calls register sound aliases for the same weapon
-`RegisterItem` just registered as an item — since this is read off control
-flow, not run live. The two fields are not compiled-in strings or an entity
-key: VERIFIED
+`RegisterItem` just registered as an item. VERIFIED, and only this much:
+`SP_turret` and `G_SpawnTurret` sit at 0x533b0/0x52c84, both present in the
+dynamic symbol table; the calls at `0x52d74` target `RegisterItem`, the ones
+at `0x52dad`/`0x52dd8` target `G_SoundAliasIndex`, and `BG_GetInfoForWeapon`
+is called; and `edi+0xa0`/`edi+0xa4` appear as read offsets in that code. None
+of that by itself is the sequencing or the meaning above — only that these
+calls and these offsets exist in this function. VERIFIED separately,
 from the shipped `weapons/mp/mg42_bipod_stand_mp` (`pak0.pk3`), the weapon
 file both gate maps' mounted mg42s name in their own `weaponinfo` key, its
 `loopFireSound` and `stopFireSound` keys are `weap_mg42_loop` and
