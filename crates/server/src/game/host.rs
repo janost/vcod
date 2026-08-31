@@ -55,7 +55,8 @@ pub enum ClientEvent {
     /// because the callback reads it (`dm.gsc`'s `logPrint("J;" + ... +
     /// self.name)`), and the object table has nowhere else to get it.
     Connect { slot: usize, name: String },
-    /// The client's `begin` command; notifies the parked callback.
+    /// `ClientBegin`, raised when the client enters the world; notifies
+    /// the parked callback.
     Begin(usize),
     /// The client is gone; runs `CodeCallback_PlayerDisconnect` and frees
     /// the entity.

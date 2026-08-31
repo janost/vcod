@@ -24,10 +24,10 @@ const SNAP_CAPTURE_TARGET: usize = 24;
 /// it resolves drained events into sound cues; weapon-file cues (fire,
 /// reload) are not resolved, the probe loads no weapon files.
 ///
-/// `save_playerstate` turns it into the stage 4 capture instead: it sends
-/// `begin`, answers the stock team and weapon menus, writes the fixture once
-/// the spawn has settled and exits. It sends no nudge, which would walk the
-/// capture off the spawn point.
+/// `save_playerstate` turns it into the stage 4 capture instead: it answers
+/// the stock team and weapon menus, writes the fixture once the spawn has
+/// settled and exits. It sends no nudge, which would walk the capture off the
+/// spawn point.
 pub fn probe(
     addr: &str,
     save_fixture: bool,
@@ -110,11 +110,10 @@ pub fn probe(
                             all.len()
                         );
                     }
-                    if save_playerstate {
-                        // `begin` is what releases `Callback_PlayerConnect`'s
-                        // `waittill`; the join menus follow from it.
-                        client.send_reliable("begin");
-                    } else {
+                    // The join is entered by the first usercmd of the loop
+                    // below, the way a retail client enters; nothing is sent
+                    // here to start it.
+                    if !save_playerstate {
                         client.send_reliable("say hello from vcod");
                     }
                 }

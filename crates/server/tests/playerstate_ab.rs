@@ -202,7 +202,7 @@ fn retail_weapon_list(map: &str) -> String {
         .to_string()
 }
 
-/// Our playerstate at the same moment retail's was read: `begin`, both menu
+/// Our playerstate at the same moment retail's was read: entry, both menu
 /// answers, then `SPAWN_SETTLE` of simulated time.
 fn ours(
     map: &str,

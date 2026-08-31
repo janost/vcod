@@ -272,11 +272,21 @@ Full-field branch (`0x807bba0`). The serverTime is mixed into the key only after
 
 `flags` (offset 7) is never transmitted by either branch. `to.buttons` is rebuilt, not patched: bit 0 comes from the first field, and `0x807be45` clears bits 1-7 again before the 6-bit field is ORed back in shifted left by one (`add %al,%al`). The movement axes are never analog on the wire: each is a 2-bit code with a +/-10 deadzone (`> 10` sets bit 0, `< -10` sets bit 1) that decodes to 127, -127 or 0 (`0x807bb52` for forward/right, `0x807c013` for up), and the same derivation runs on the base cmd to produce the default, so a base `forward = 100` reads back as 127. Forward and right share one nibble (forward in bits 0/1, right in bits 2/3).
 
-The angle change bits are not vestigial: VERIFIED live 2026-08-26, a retail 1.1 client sent roughly 624 moves in a 3-minute session with a cleared change bit on pitch or yaw, keeping the previous sent cmd's angle instead of announcing it. Each one flashes the view to zero for a frame unless the server decodes it the same way retail does, against its persistent last received cmd for that client (`cl->lastUsercmd`, reset when the client enters the world like the client's own outCmd ring).
+The angle change bits are not vestigial: VERIFIED live 2026-08-26, a retail 1.1 client sent roughly 624 moves in a 3-minute session with a cleared change bit on pitch or yaw, keeping the previous sent cmd's angle instead of announcing it. Each one flashes the view to zero for a frame unless the server decodes it the same way retail does, against its persistent last received cmd for that client (`cl->lastUsercmd`). The chain restarts with each gamestate, because the client clears its own cmd ring when it loads a map; vcod's server clears its stored base in `SV_SendClientGameState` for that reason.
 
 Transcribed from disassembly. Widths and order VERIFIED live 2026-08-25: a retail 1.1 client's moves parsed against vcod's server for a whole session with no truncation error (`docs/research/cod11-server-handshake.md`, "Retail client check"). Field values are still unchecked, since the server parses and discards them.
 
+### Entering the world
+
 A client is only sent snapshots once it's CS_ACTIVE, and that requires the server to accept a `clc_move`. Header-only keepalives keep the connection alive but won't promote you. This is the gate between "connected" and "receiving game state," and it's where I was stuck longest.
+
+**`begin` is not a client command.** The engine's client command table has nine entries and none of them is `begin`: `userinfo`, `disconnect`, `cp`, `vdr`, `download`, `nextdl`, `stopdl`, `donedl`, `retransdl` (the `ucmds` table in CoDExtended's `src/sv_client.c`, whose entries are the retail server's own function addresses; Quake III Arena's table in `code/server/sv_client.c` is the same nine minus `retransdl`). `begin` was a Quake 2 command that Q3 dropped and CoD inherited the drop. A retail client never sends one, so a server that waits for it waits forever: the client loads the map to 100%, starts the ambient, and sits on the loading screen with no snapshot ever arriving.
+
+The trigger is **the first usercmd after the gamestate**. `SV_UserMove` promotes a CS_PRIMED client before the block's cmds are applied, passing the *first* cmd of the block: `SV_ClientEnterWorld( cl, &cmds[0] )` (Quake III Arena, `code/server/sv_client.c`; CoD's own `SV_ClientEnterWorld` is at cod_lnxded `0x80877d8`). Entry copies that cmd into `cl->lastUsercmd`, and the execute loop skips every cmd at or before `lastUsercmd`, so the entering cmd is not itself simulated. INFERRED from that ordering: the spawn's `delta_angles` are taken against the entering cmd's angles, since `SetClientViewAngle` reads the client's stored cmd and entry has just written this one there.
+
+Entry is also where the game module is called: `SV_ClientEnterWorld` ends in `ClientBegin` (the `GAME("ClientBegin")` call in CoDExtended's `src/sv_client.c`). That is the notify `Callback_PlayerConnect`'s `waittill("begin")` blocks on, and it is an engine-to-game call, not a command any client sends. The gsc side of it is section 0.1 of `docs/research/cod11-hud-protocol.md`.
+
+The one other promotion path is the restart, above: a CS_PRIMED client whose serverId differs only in the low nibble goes to CS_ACTIVE with no entering cmd. ioq3 passes a null cmd on its equivalent path and zeroes `lastUsercmd` (`code/server/sv_ccmds.c`, `SV_MapRestart_f`); vcod does the same.
 
 ## Spectator
 

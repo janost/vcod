@@ -148,9 +148,8 @@ fn frames_delta_against_the_acked_base_and_fall_back_when_acks_stop() {
     let mut sv = server();
     let mut now = Instant::now();
     let mut cl = connect(&mut sv, &q, &mut now);
-    // Entry into the world is gated on `begin`, and only a client in the
-    // world is sent snapshots.
-    cl.send_reliable("begin");
+    // The loop's first usercmd puts the client in the world; only a client in
+    // the world is sent snapshots.
 
     let mut seen_delta = false;
     let mut seen_uncompressed_during_silence = false;
@@ -223,9 +222,8 @@ fn scripted_entities_move_cycle_out_and_return() {
     let mut sv = server_with_entities(2);
     let mut now = Instant::now();
     let mut cl = connect(&mut sv, &q, &mut now);
-    // Entry into the world is gated on `begin`, and only a client in the
-    // world is sent snapshots.
-    cl.send_reliable("begin");
+    // The loop's first usercmd puts the client in the world; only a client in
+    // the world is sent snapshots.
 
     let p = &PROTOCOL_V1;
     let time_idx = EntityState::field_index(p, "pos.trTime").unwrap();
@@ -303,9 +301,8 @@ fn a_renamed_client_deltas_against_its_roster_base() {
     let mut sv = server();
     let mut now = Instant::now();
     let mut cl = connect(&mut sv, &q, &mut now);
-    // Entry into the world is gated on `begin`, and only a client in the
-    // world is sent snapshots.
-    cl.send_reliable("begin");
+    // The loop's first usercmd puts the client in the world; only a client in
+    // the world is sent snapshots.
 
     let p = &PROTOCOL_V1;
     let mut saw_original_name = false;
@@ -345,5 +342,32 @@ fn a_renamed_client_deltas_against_its_roster_base() {
     assert!(
         cl.snapshots().last_invalid().is_none(),
         "client failed to resolve a delta base"
+    );
+}
+
+/// The retail client never sends `begin`. It is not in the engine's client
+/// command table (CoDExtended, `src/sv_client.c`, `ucmds`), and Quake III
+/// Arena's table -- which CoD inherited -- does not have it either. Entry
+/// into the world is the first usercmd after the gamestate (Quake III Arena,
+/// `code/server/sv_client.c`, `SV_UserMove`), so a client that only acks and
+/// moves must be promoted and start receiving snapshots. Without that
+/// trigger the retail client loads to 100% and hangs on the loading screen
+/// forever.
+#[test]
+fn a_client_that_never_sends_begin_enters_the_world_on_its_first_usercmd() {
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let mut sv = server();
+    let mut now = Instant::now();
+    let mut cl = connect(&mut sv, &q, &mut now);
+
+    for _ in 0..8 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&NULL_USERCMD);
+        step(&mut sv, &q, &mut cl, now);
+    }
+
+    assert!(
+        cl.snapshots().newest().is_some(),
+        "no snapshot: the client never left CS_PRIMED without sending `begin`"
     );
 }
