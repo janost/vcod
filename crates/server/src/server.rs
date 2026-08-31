@@ -1008,8 +1008,11 @@ impl Server {
         c.sim = Some(ClientSim::spectator(spawn.0, spawn.1, cmd_angles));
         // The entering cmd is not simulated: retail's execute loop skips
         // every cmd at or before `lastUsercmd`, which entry has just set to
-        // it. With no entering cmd, one frame back, so the first cmd's dt is
-        // a sane 50 ms rather than the whole age of the client's clock.
+        // it. The clock is therefore the client's own, as retail's is: a
+        // first cmd stamped far in the future freezes that client's sim until
+        // its clock catches up, and only that client's. With no entering cmd,
+        // one frame back, so the first cmd's dt is a sane 50 ms rather than
+        // the whole age of the client's clock.
         c.last_processed_st =
             entering.map_or(self.sv_time_ms.wrapping_sub(FRAME_MS), |c| c.server_time);
         log::info!("client {slot} {:?} begin (spectator)", c.name);
@@ -2223,6 +2226,56 @@ mod tests {
         assert!(moved > 1.0, "should have flown +X, dx {moved}");
     }
 
+    /// Entry takes its `delta_angles` from the cmd that entered the world,
+    /// not from zero. `SV_ClientEnterWorld` stores `cmds[0]` in
+    /// `lastUsercmd`, and `ClientSpawn` reads it back through
+    /// `trap_GetUsercmd` into `pers.cmd` on the line before
+    /// `SetClientViewAngle` subtracts it (RTCW-MP `g_client.c`, `sv_game.c`).
+    /// A client that was already looking somewhere when it entered keeps that
+    /// view; zeroing the pair snaps it, and the move basis rotates with it.
+    /// Every other entry in the suite enters with zero angles, so this is the
+    /// only thing holding the argument in place.
+    #[test]
+    fn entry_takes_delta_angles_from_the_entering_cmd() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            spawn: ([0.0, 0.0, 64.0], 90.0),
+        });
+        let mut nc = active(&mut sv, now);
+
+        // Pitch 22.5 degrees, yaw 45: a client that looked around on the
+        // loading screen before its first cmd went out.
+        let entering = UserCmd {
+            server_time: 50,
+            angles: [4096, 8192, 0],
+            ..Default::default()
+        };
+        let ack = nc.incoming_sequence as i32;
+        sv.handle_packet(
+            addr(5),
+            &nc.build_out(
+                0x10,
+                ack,
+                0,
+                &move_ops(sv.checksum_feed, ack, entering),
+                &Huffman::new(),
+            )
+            .unwrap(),
+            now,
+        );
+
+        let mut ring = SnapshotRing::new();
+        let s = latest_snapshot(&mut sv, &mut nc, &mut ring, now);
+        let p = &PROTOCOL_V1;
+        // `ANGLE2SHORT(90) - cmd.angles[1]` on the yaw, `-cmd.angles[i]` on
+        // the other two, all as the 16-bit wire words the field carries.
+        assert_eq!(s.ps.field_i32(p, "delta_angles[0]"), -4096 & 0xffff);
+        assert_eq!(s.ps.field_i32(p, "delta_angles[1]"), 16_384 - 8192);
+        assert_eq!(s.ps.field_i32(p, "delta_angles[2]"), 0);
+    }
+
     /// Entry is the first usercmd after the gamestate, so every later usercmd
     /// runs past a client that is already in the world; re-entering one would
     /// park its sim back at the spawn mid-flight. The `Primed` guard is all
@@ -2240,27 +2293,24 @@ mod tests {
         let p = &PROTOCOL_V1;
         latest_snapshot(&mut sv, &mut nc, &mut ring, now);
 
+        // Two messages, so the base has to chain across them the way the
+        // client's does; `begun` entered on a null cmd, which is where a
+        // fresh chain starts.
+        let mut chain = MoveChain::new(sv.checksum_feed);
         let later = now + std::time::Duration::from_millis(50);
         let huff = Huffman::new();
         let ack = nc.incoming_sequence as i32;
+        let ops = chain.ops(
+            ack,
+            &[UserCmd {
+                server_time: 50,
+                forward: 127,
+                ..Default::default()
+            }],
+        );
         sv.handle_packet(
             addr(5),
-            &nc.build_out(
-                0x10,
-                ack,
-                0,
-                &move_ops(
-                    sv.checksum_feed,
-                    ack,
-                    UserCmd {
-                        server_time: 50,
-                        forward: 127,
-                        ..Default::default()
-                    },
-                ),
-                &huff,
-            )
-            .unwrap(),
+            &nc.build_out(0x10, ack, 0, &ops, &huff).unwrap(),
             now,
         );
         let flying = latest_snapshot(&mut sv, &mut nc, &mut ring, later);
@@ -2270,24 +2320,17 @@ mod tests {
         );
 
         let ack = nc.incoming_sequence as i32;
+        let ops = chain.ops(
+            ack,
+            &[UserCmd {
+                server_time: 100,
+                forward: 127,
+                ..Default::default()
+            }],
+        );
         sv.handle_packet(
             addr(5),
-            &nc.build_out(
-                0x10,
-                ack,
-                0,
-                &move_ops(
-                    sv.checksum_feed,
-                    ack,
-                    UserCmd {
-                        server_time: 100,
-                        forward: 127,
-                        ..Default::default()
-                    },
-                ),
-                &huff,
-            )
-            .unwrap(),
+            &nc.build_out(0x10, ack, 0, &ops, &huff).unwrap(),
             later,
         );
         let after = latest_snapshot(
