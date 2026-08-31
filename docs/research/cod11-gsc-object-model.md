@@ -909,6 +909,20 @@ is already the placing block's own `model` key and interns onto it, and the
 `precacheItem("item_health")` two lines before `_teams::precache()` starts
 the player models.
 
+**`g_useGear` decides 49 slots on `mp_carentan` and 41 on `mp_pavlov`.**
+Every `character/mp_*.gsc` gates its gear model precaches on
+`character\_utility::useOptionalModels()`, which is
+`getcvarint("g_useGear")` (VERIFIED, read from the shipped `pak5.pk3`), and
+the gear models sit in the middle of the block, so an unset cvar loses them
+and offsets every player and weapon model after. The cvar is index 67 of the
+game module's own cvar table (its record at `.data` 0x7e470), VERIFIED read
+out of the binary: the table is `.data` 0x7de28, 71 records of 24 bytes `{vmCvar_t *, name, default, flags,
+trackChange, teamShader}` terminated by a null name, `g_useGear` default
+`"1"` with flags 0x21. The 21 rows flagged 0x800 in that table are exactly
+`crates/server/src/cvars.rs`'s `ENGINE_MIRRORED`, which is why `g_useGear`
+never appears in the 140/204 mirror and cannot be recovered from the
+capture — only from the table.
+
 ## Open, and worth a probe
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.

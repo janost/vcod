@@ -15,8 +15,8 @@ pub const MIRROR_NAMES: std::ops::RangeInclusive<usize> = 140..=203;
 pub const MIRROR_VALUES: std::ops::RangeInclusive<usize> = 204..=267;
 
 /// The 21 cvars the game module registers into the mirror at init, before
-/// any script runs. Values are the retail capture's, recorded in
-/// docs/research/cod11-server-handshake.md.
+/// any script runs: its cvar table's 0x800-flagged rows. Values are the
+/// retail capture's, recorded in docs/research/cod11-server-handshake.md.
 const ENGINE_MIRRORED: &[(&str, &str)] = &[
     ("bg_duck2prone_time", "400"),
     ("bg_foliagesnd_fastinterval", "500"),
@@ -43,6 +43,13 @@ const ENGINE_MIRRORED: &[(&str, &str)] = &[
     ("g_TeamName_Allies", "GAME_ALLIES"),
     ("g_TeamName_Axis", "GAME_AXIS"),
 ];
+
+/// Rows of the same table that are not mirrored but that a stock script's
+/// outcome depends on. One so far: `character\_utility::useOptionalModels`
+/// gates every character script's gear model precaches on `g_useGear`, so
+/// without it the model configstring block loses every gear model
+/// (docs/research/cod11-gsc-object-model.md section 18).
+const ENGINE_DEFAULTS: &[(&str, &str)] = &[("g_useGear", "1")];
 
 struct Cvar {
     /// The registration spelling. Lookup folds, the mirror does not: the
@@ -75,6 +82,9 @@ impl Cvars {
         };
         for &(name, value) in ENGINE_MIRRORED {
             cv.make_server_info(name, value);
+        }
+        for &(name, value) in ENGINE_DEFAULTS {
+            cv.set(name, value);
         }
         cv
     }
@@ -142,6 +152,21 @@ impl Cvars {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `g_useGear` is in the game module's own cvar table with default
+    /// `"1"` and flags 0x21, not the 0x800 the mirrored set carries, so it
+    /// never reaches the 140/204 block -- but every character script gates
+    /// its gear model precaches on it through
+    /// `character\_utility::useOptionalModels`, so a missing default costs
+    /// the model configstring block every gear model on the map.
+    #[test]
+    fn g_use_gear_defaults_to_one_and_stays_out_of_the_mirror() {
+        let cv = Cvars::new();
+        assert_eq!(cv.get("g_useGear"), "1");
+        let mut cs = vec![String::new(); 2048];
+        cv.write_mirror(&mut cs).unwrap();
+        assert!(!cs[MIRROR_NAMES].iter().any(|n| n == "g_useGear"));
+    }
 
     /// The 20 stock script cvars beyond the engine's 21: the 18
     /// `scr_allow_*` names and `scr_motd` that `_teams::initGlobalCvars()`
