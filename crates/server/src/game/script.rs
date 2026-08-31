@@ -235,6 +235,11 @@ impl ScriptRuntime {
     /// One server frame of script.
     pub fn run_frame(&mut self, now_ms: i32) {
         self.host.level_time_ms = now_ms;
+        // Thinks before threads: `G_RunFrame` runs the entity pass first, so
+        // a script reading `getEntArray` in the same frame sees the freed
+        // entity already gone. Whether retail really orders it this way is
+        // what `probe_delete`'s post-wait count measures.
+        self.host.ents.run_thinks(now_ms);
         for e in self.vm.run_frame(&mut self.host, now_ms) {
             log::warn!("script error: {e:?}");
         }

@@ -6,10 +6,9 @@
 //!
 //! `probe_delete` is claimed here too, for the same reason: it measures the
 //! deferred-free window with `delete()` and `getEntArray()` on real spawned
-//! entities, which needs this crate's object model. Its test body is a
-//! later task's work; this comment is what satisfies
-//! `semantics_ab.rs`'s `every_probe_file_and_capture_section_are_paired`
-//! guard in the meantime, which checks this file's text for the name.
+//! entities, which needs this crate's object model. Naming it here also
+//! satisfies `semantics_ab.rs`'s `every_probe_file_and_capture_section_are_paired`
+//! guard, which checks this file's text for the name.
 //!
 //! `probe_cvar` and `probe_not_string` are claimed here for a different
 //! reason: they call `getCvar`/`setCvar`/`getCvarInt`/`getCvarFloat`/
@@ -153,6 +152,71 @@ fn probe_ents_matches_retail() {
         .unwrap_or_else(|e| panic!("Callback_StartGameType errored: {e:?}"));
 
     assert_eq!(host.script_log, retail_probe_lines("probe_ents"));
+}
+
+/// Retail ran this on mp_pavlov with sv_maxclients 8. `Callback_StartGameType`
+/// spawns two `script_origin`s, deletes one immediately and checks
+/// `getEntArray`/`getEntityNumber` right away, then again after a `wait
+/// 0.15`; a second delete-then-wait pair follows. Two `wait`s means the
+/// callback suspends, so it needs `start_thread` plus stepped frames rather
+/// than `probe_ents`' single `call_now` -- the same fallback
+/// `crates/gsc/tests/semantics_ab.rs::run_probe` uses for a probe built
+/// around `wait`. Each stepped frame runs the entity think pass before the
+/// VM step, the order `ScriptRuntime::run_frame` uses, so a deferred
+/// `delete()` frees on the same schedule production code would.
+#[test]
+fn probe_delete_matches_retail() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+
+    let path = "maps/mp/gametypes/probe_delete".to_string();
+    let text = std::fs::read_to_string("../gsc/tests/fixtures/semantics/probe_delete.gsc")
+        .expect("read probe_delete.gsc");
+    let mut vm = Vm::new();
+    let mut loader = Loader::new(Box::new(ProbeSource {
+        path: path.clone(),
+        text,
+    }));
+    loader
+        .load(&mut vm, &path)
+        .unwrap_or_else(|e| panic!("probe_delete does not load: {e:?}"));
+
+    let mut host = GameHost::new(vec![String::new(); 2048]);
+    let bsp_path = fs
+        .resolve_map("mp_pavlov")
+        .expect("mp_pavlov.bsp in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read mp_pavlov.bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse mp_pavlov.bsp");
+    vm.with_cx(|cx| spawn_entities_from_string(&mut host, cx, &bsp.entities))
+        .expect("spawn mp_pavlov's entities");
+
+    // `main` only stores the callbacks; the engine calls
+    // `level.callbackStartGameType` itself, so the test does too.
+    let main = vm.func_ref(&path, "main");
+    vm.call_now(&mut host, 0, main, None, Vec::new())
+        .unwrap_or_else(|e| panic!("probe_delete main errored: {e:?}"));
+
+    let level = vm.level_id();
+    let callback = vm.with_cx(|cx| {
+        let field = cx.intern_folded("callbackstartgametype");
+        cx.get_field(level, field)
+    });
+    let Value::Function(callback) = callback else {
+        panic!("level.callbackStartGameType is {callback:?}, not a function");
+    };
+
+    vm.start_thread(&mut host, 0, callback, None, Vec::new());
+    for frame in 1..=12 {
+        let now_ms = frame * 50;
+        host.level_time_ms = now_ms;
+        host.ents.run_thinks(now_ms);
+        if let Some(e) = vm.run_frame(&mut host, now_ms).into_iter().next() {
+            panic!("probe_delete Callback_StartGameType errored: {e:?}");
+        }
+    }
+
+    assert_eq!(host.script_log, retail_probe_lines("probe_delete"));
 }
 
 /// `probe_cvar` measures `getCvar`/`setCvar`/`getCvarInt`/`getCvarFloat`/

@@ -4,11 +4,18 @@
 //! the env/io names, and Task 9 adds more families beside this one.
 
 use crate::configstrings::CsRange;
-use crate::game::entity::FIRST_HUD_ELEM;
+use crate::game::entity::{ThinkFn, FIRST_HUD_ELEM};
 use crate::game::host::GameHost;
 use crate::server::MAX_CLIENTS;
 use glam::Vec3;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
+
+/// `delete()`'s deferred-free window (`Scr_deleteEntity`/`Scr_delete`
+/// 0x5da14): it sets `think = G_FreeEntity` with `nextthink = level.time +
+/// 100` rather than freeing on the spot. `probe_delete`'s capture confirms
+/// the free has happened by 150 ms and not by 0 ms
+/// (docs/research/cod11-gsc-object-model.md section 14).
+const DELETE_DEFER_MS: i32 = 100;
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
 
@@ -159,8 +166,10 @@ pub fn spawn_struct(
     Ok(Value::Struct(cx.new_struct()))
 }
 
-/// `delete()` takes the entity out of iteration, so a later `getEntArray`
-/// does not see it. `_load.gsc`'s exploder threads end with one.
+/// `delete()` defers the free rather than performing it now: it arms the
+/// entity's think for `DELETE_DEFER_MS` out, so a later `getEntArray` still
+/// sees it until that think comes due (`ScriptRuntime::run_frame`'s think
+/// pass). `_load.gsc`'s exploder threads end with one.
 pub fn delete(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -168,7 +177,8 @@ pub fn delete(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
-    host.ents.free(id);
+    host.ents
+        .schedule(id, ThinkFn::Free, host.level_time_ms + DELETE_DEFER_MS);
     Ok(Value::Undefined)
 }
 
@@ -584,14 +594,22 @@ mod tests {
         });
     }
 
-    /// `delete()` takes the entity out of iteration, so a later `getEntArray`
-    /// does not see it. `_load.gsc`'s exploder threads end with one.
+    /// `delete()` defers the free: the entity stays in iteration until its
+    /// think comes due, `DELETE_DEFER_MS` past the call, and only then does
+    /// a later `getEntArray` stop seeing it. `_load.gsc`'s exploder threads
+    /// end with one.
     #[test]
-    fn delete_removes_the_entity_from_iteration() {
+    fn delete_defers_the_free_until_its_think_is_due() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
             let e = host.ents.spawn(cx).unwrap();
             delete(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            assert_eq!(
+                host.ents.iter_inuse().count(),
+                1,
+                "delete() must not free immediately"
+            );
+            host.ents.run_thinks(host.level_time_ms + DELETE_DEFER_MS);
             assert_eq!(host.ents.iter_inuse().count(), 0);
         });
     }

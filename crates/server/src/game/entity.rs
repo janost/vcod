@@ -44,6 +44,22 @@ pub struct GEntity {
     /// `(model, tag)` pairs from `attach`, in call order; `getAttachSize`
     /// and friends index into this.
     pub attachments: Vec<(Atom, Atom)>,
+    /// What runs when `nextthink` comes due, or `None` for no think armed.
+    pub think: Option<ThinkFn>,
+    /// The think deadline on `GameHost::level_time_ms`'s clock. Retail's 0
+    /// means "no think" rather than "due immediately"
+    /// (docs/research/cod11-gsc-object-model.md section 14), which is why
+    /// `run_thinks` treats 0 as idle too.
+    pub nextthink: i32,
+}
+
+/// What an entity's `think` runs when `nextthink` comes due. A Rust enum
+/// rather than a script reference: retail's `think` is a C function pointer
+/// (`G_FreeEntity` for a deleted entity) and script-side timing goes through
+/// `thread`/`wait`. Stage 4's movers and doors add variants.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ThinkFn {
+    Free,
 }
 
 pub struct ObjectTable {
@@ -104,6 +120,8 @@ impl ObjectTable {
             solid: true,
             hidden: false,
             attachments: Vec::new(),
+            think: None,
+            nextthink: 0,
         });
         Ok(id)
     }
@@ -134,6 +152,8 @@ impl ObjectTable {
             solid: true,
             hidden: false,
             attachments: Vec::new(),
+            think: None,
+            nextthink: 0,
         });
         Ok(EntId(FIRST_HUD_ELEM + i as u32))
     }
@@ -154,6 +174,41 @@ impl ObjectTable {
         };
         if slot.take().is_some() && id.0 >= FIRST_MAP_ENTITY {
             self.free_list.push_back(id.0);
+        }
+    }
+
+    /// Arms `id`'s think. `at_ms` is on the same clock `run_thinks` reads
+    /// (`GameHost::level_time_ms`).
+    pub fn schedule(&mut self, id: EntId, think: ThinkFn, at_ms: i32) {
+        if let Some(e) = self.get_mut(id) {
+            e.think = Some(think);
+            e.nextthink = at_ms;
+        }
+    }
+
+    /// `G_RunFrame`'s think pass: fire every entity whose `nextthink` has
+    /// come due. Collect first, then act: a think that frees its entity
+    /// would otherwise invalidate the walk.
+    pub fn run_thinks(&mut self, now_ms: i32) {
+        let due: Vec<(EntId, ThinkFn)> = self
+            .ents
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                let e = e.as_ref()?;
+                let think = e.think?;
+                // Retail's `nextthink` of 0 is "no think", not "due now".
+                (e.nextthink != 0 && e.nextthink <= now_ms).then_some((EntId(i as u32), think))
+            })
+            .collect();
+        for (id, think) in due {
+            if let Some(e) = self.get_mut(id) {
+                e.think = None;
+                e.nextthink = 0;
+            }
+            match think {
+                ThinkFn::Free => self.free(id),
+            }
         }
     }
 
@@ -267,6 +322,50 @@ mod tests {
             let ids: Vec<_> = (0..5).map(|_| t.spawn(cx).unwrap()).collect();
             assert_eq!(t.iter_inuse().map(|(id, _)| id).collect::<Vec<_>>(), ids);
         });
+    }
+
+    /// `delete()` defers the free: the entity keeps its number and its
+    /// place in `iter_inuse` until the think comes due, which is what
+    /// `probe_delete` measures on retail. Freeing immediately made the
+    /// number available a frame early and dropped the entity out of
+    /// `getEntArray` sooner than retail.
+    #[test]
+    fn a_scheduled_free_keeps_the_entity_until_the_think_is_due() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut ents = ObjectTable::new();
+        let id = vm.with_cx(|cx| ents.spawn(cx).unwrap());
+        ents.schedule(id, ThinkFn::Free, 100);
+
+        ents.run_thinks(50);
+        assert!(ents.get(id).is_some(), "freed before the think was due");
+        assert_eq!(ents.iter_inuse().count(), 1);
+
+        ents.run_thinks(100);
+        assert!(ents.get(id).is_none(), "still live past the think");
+        assert_eq!(ents.iter_inuse().count(), 0);
+
+        // The number is back on the free list, so the next spawn reuses it.
+        let next = vm.with_cx(|cx| ents.spawn(cx).unwrap());
+        assert_eq!(next, id);
+    }
+
+    /// A think fires once. Retail clears `nextthink` when it runs, so a
+    /// scheduled free cannot double-free a slot something else has since
+    /// taken.
+    #[test]
+    fn a_think_fires_once() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut ents = ObjectTable::new();
+        let id = vm.with_cx(|cx| ents.spawn(cx).unwrap());
+        ents.schedule(id, ThinkFn::Free, 100);
+        ents.run_thinks(100);
+        let reused = vm.with_cx(|cx| ents.spawn(cx).unwrap());
+        assert_eq!(reused, id);
+        ents.run_thinks(200);
+        assert!(
+            ents.get(reused).is_some(),
+            "the think fired twice and freed the reuse"
+        );
     }
 
     /// The table refuses to hand out `ENTITYNUM_WORLD` or anything above it.
