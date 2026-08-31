@@ -125,6 +125,11 @@ impl ClientSim {
                 dt,
             ),
             (PmType::Normal, Some(w)) => {
+                // Only the two move axes are wired. `jump`, `crouch`,
+                // `prone`, `walk_slow`, `lean_left` and `lean_right` keep
+                // their defaults, so a player can do none of it: those six
+                // come off `cmd.up`, `cmd.buttons` and `cmd.wbuttons`, and
+                // which bit means which is not established anywhere here.
                 let input = PmInput {
                     forward: f32::from(cmd.forward) / 127.0,
                     right: f32::from(cmd.right) / 127.0,
@@ -177,7 +182,8 @@ impl ClientSim {
             // never reaches. Its guards are `sessionstate` playing,
             // `ps.clientNum == self` and, for the hint, `health > 0`;
             // nothing follows another client and nothing dies yet, so
-            // `Normal` is the whole of that condition today.
+            // `Normal` is the whole of that condition today. The hint is the
+            // one that peels off first, at `health` 0.
             set("pm_flags", PMF_OWN_VIEW);
             set("serverCursorHintString", NO_CURSOR_HINT);
             set("viewmodelIndex", self.viewmodel_index);

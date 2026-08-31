@@ -31,9 +31,12 @@ const GAPS: &[(&str, &str)] = &[(
     "an animation the server has no system to choose. `BG_PlayAnim` (0x2c338) \
      writes the field, keeping the old ANIM_TOGGLEBIT and flipping it, and the \
      index below the bit comes from the parsed animscript through \
-     `BG_AnimScriptAnimation` and `BG_PlayerAnimation`. Reproducing 634 means \
-     porting that state machine and loading the animscript assets; writing the \
-     number instead would pin one frame of an animation nothing here plays",
+     `BG_AnimScriptAnimation` and `BG_PlayerAnimation`, so retail's 634 is \
+     index 122 with the 512 bit set \
+     (docs/research/player-model-anim-system.md, \"Animation indices\"). \
+     Reproducing it means porting that state machine and loading the \
+     animscript assets; writing the number instead would pin one frame of an \
+     animation nothing here plays",
 )];
 
 /// Fields no capture can pin: they advance with the frame the capture was
@@ -360,10 +363,6 @@ fn check(map: &str) {
             || GAPS.iter().any(|(g, _)| *g == name)
     };
     let mut diffs = Vec::new();
-    // `legsAnim` carries `ANIM_TOGGLEBIT` (512) above the index, so retail's
-    // 634 is index 122 with the bit set; a mismatch here can be the parity
-    // rather than the wrong animation
-    // (docs/research/player-model-anim-system.md, "Animation indices").
     for (i, f) in p.player_fields.iter().enumerate() {
         if skip(f.name) {
             continue;

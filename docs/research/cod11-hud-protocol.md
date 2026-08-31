@@ -104,13 +104,16 @@ is cs 1180: cs 1180 is `team_russiangerman` and cs 1181 `weapon_russian`, and
 answering the team menu produces `v g_scriptMainMenu "weapon_russian"` then
 `t 1`.
 
-VERIFIED that `t` is the wire form of the script's `openMenu` and `v` of its
-`setClientCvar`, from the format strings the two builtins in
-`game.mp.i386.so` pass to `trap_SendServerCommand`: `openMenu` (`0x453f4`)
-uses `t %i` at `0x731f8`, `setClientCvar` (`0x446e0`) uses `v %s "%s"` at
-`0x73300`, which is why the name is bare and the value quoted. VERIFIED that
-`openMenu`'s `%i` is `GScr_GetScriptMenuIndex(name)`'s return value, so the
-menu's name never reaches the wire.
+VERIFIED that `game.mp.i386.so` holds both format strings, `t %i` at
+`0x731f8` and `v %s "%s"` at `0x73300`, which is why the name is bare and the
+value quoted, and VERIFIED that the capture above matches those two shapes: a
+bare integer after `t`, a bare name and a quoted value after `v`. INFERRED
+that `t` is therefore the wire form of the script's `openMenu` (`0x453f4`)
+and `v` of its `setClientCvar` (`0x446e0`), that those are the strings the
+two pass to `trap_SendServerCommand`, and that `openMenu`'s `%i` is
+`GScr_GetScriptMenuIndex(name)`'s return value, so the menu's name never
+reaches the wire through `t`. Each is which value reaches which argument,
+read off the instruction stream.
 
 INFERRED that `setClientCvar` rewrites a `"` inside the value as `'` before
 formatting it (`0x447b2`), so the value cannot close its own quoted argument:

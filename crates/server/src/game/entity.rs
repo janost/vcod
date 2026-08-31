@@ -182,6 +182,11 @@ impl ObjectTable {
     /// The client's slot goes back to being empty. It is deliberately not
     /// pushed onto the free list: that list feeds `spawn`, and a map entity
     /// must never be handed a client's number.
+    ///
+    /// `GameHost::client_weapons` and `client_viewmodel` are left alone; the
+    /// Connect path resets them, so the slot is clean before anything can
+    /// read it and a reset here would only be the second half of the same
+    /// guarantee.
     pub fn free_client(&mut self, slot: usize) {
         if slot < MAX_CLIENTS {
             self.ents[slot] = None;

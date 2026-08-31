@@ -491,6 +491,13 @@ impl Server {
                     return;
                 }
                 log::info!("{from}: reconnect");
+                // Whoever held the slot is gone, so its script state has to
+                // be torn down here: `check_timeouts` never reaches it once
+                // the new `Client` overwrites the slot with a fresh
+                // `last_packet`.
+                if let Some(rt) = self.script.as_mut() {
+                    rt.push_client_event(ClientEvent::Disconnect(i));
+                }
                 i
             }
             None => match self.clients.iter().position(Option::is_none) {
@@ -708,6 +715,9 @@ impl Server {
                 self.drop_client(slot, "EXE_DISCONNECTED");
                 return false;
             }
+            // The entity's `.name` is not updated with it: script sees the
+            // connect-time name and a rename goes stale there, which stage
+            // 6's obituaries and scoreboard are the first to notice.
             "userinfo" => {
                 let ui = args.trim().trim_matches('"').to_string();
                 if let Some(c) = self.clients[slot].as_mut() {
@@ -1021,17 +1031,12 @@ impl Server {
             if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
                 log::warn!("rebuilding the cvar mirror: {e:?}");
             }
-            // Queued `Connect`s were drained above, so this is where a
-            // client's entity first exists. The weapons come across the same
-            // way the configstrings do: re-read every frame, because any
-            // thread can have changed them.
+            // The weapons come across the same way the configstrings do:
+            // re-read every frame, because any thread can have changed them.
             for (slot, c) in self.clients.iter_mut().enumerate() {
-                if let Some(c) = c {
-                    c.ent = rt.client_entity(slot);
-                    if let Some(sim) = c.sim.as_mut() {
-                        sim.weapons = rt.client_weapons(slot);
-                        sim.viewmodel_index = rt.client_viewmodel(slot);
-                    }
+                if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
+                    sim.weapons = rt.client_weapons(slot);
+                    sim.viewmodel_index = rt.client_viewmodel(slot);
                 }
             }
             // `self spawn(origin, angles)` moves the sim, which no builtin
@@ -1444,6 +1449,40 @@ mod tests {
         let (to, cmd, _) = reply(&mut sv);
         assert_eq!(to, addr(5));
         assert_eq!(cmd, "connectResponse");
+        assert_eq!(sv.client_count(), 1);
+    }
+
+    /// A reconnect overwrites a slot the server may still believe is live --
+    /// `TIMEOUT` is 240 s, `RECONNECT_LIMIT` 3 -- and the new `Client` carries
+    /// a fresh `last_packet`, so `check_timeouts` will never reach the old
+    /// one. Without the queued `Disconnect` nothing tears its script state
+    /// down and it leaks for the life of the map.
+    #[test]
+    fn a_reconnect_disconnects_the_client_it_replaces() {
+        use crate::game::script::{ScriptRuntime, CALLBACK_SETUP};
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.script = Some(ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.gone = 0; level.callbackPlayerDisconnect = ::d; }\n\
+             CodeCallback_PlayerDisconnect() { [[level.callbackPlayerDisconnect]](); }\n\
+             d() { level.gone = level.gone + 1; }\n",
+        ));
+        let nc = connected(&mut sv, addr(5), now);
+        sv.tick(now);
+        let gone = |sv: &mut Server| sv.script.as_mut().unwrap().level_field("gone");
+        assert_eq!(gone(&mut sv), vcod_gsc::Value::Int(0));
+
+        // Past sv_reconnectlimit, the same peer's connect takes the slot back.
+        let t = now + RECONNECT_LIMIT + Duration::from_millis(100);
+        sv.handle_packet(
+            addr(5),
+            &connect_pkt(nc.challenge, QPORT, PROTOCOL_V1.version),
+            t,
+        );
+        assert_eq!(reply_text(&mut sv).0, "connectResponse");
+        sv.tick(t);
+        assert_eq!(gone(&mut sv), vcod_gsc::Value::Int(1));
         assert_eq!(sv.client_count(), 1);
     }
 

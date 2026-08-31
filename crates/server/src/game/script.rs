@@ -10,7 +10,7 @@ use vcod_gsc::{EntId, Loader, ScriptSource, Target, Value, Vm};
 
 /// Every gametype script includes this file, and it is where the engine's
 /// entry points into script live, `CodeCallback_StartGameType` among them.
-const CALLBACK_SETUP: &str = "maps/mp/gametypes/_callbacksetup";
+pub(crate) const CALLBACK_SETUP: &str = "maps/mp/gametypes/_callbacksetup";
 
 /// The event `Callback_PlayerConnect` parks on before it lets the client
 /// into the world. A misspelt notify does not error, it hangs the thread,
@@ -641,6 +641,31 @@ mod tests {
 
         rt.push_client_event(ClientEvent::Begin(0));
         rt.run_frame(100);
+        assert_eq!(rt.field_str(ent, "statusicon"), "begun");
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+    }
+
+    /// Both events in one frame, which is what a client that sends `begin`
+    /// before the next `run_frame` produces. It holds because `start_thread`
+    /// steps a new thread to its first suspend before returning, so the
+    /// `waittill` is armed by the time the Begin behind it in the queue is
+    /// drained; nothing else pins that.
+    #[test]
+    fn a_connect_and_a_begin_in_one_frame_still_release_the_wait() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() { level.callbackPlayerConnect = ::c; }\n\
+             CodeCallback_PlayerConnect() { [[level.callbackPlayerConnect]](); }\n\
+             c() { self.statusicon = \"connecting\"; self waittill(\"begin\"); \
+                   self.statusicon = \"begun\"; }\n",
+        );
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "vcod".into(),
+        });
+        rt.push_client_event(ClientEvent::Begin(0));
+        rt.run_frame(50);
+        let ent = rt.client_entity(0).expect("connect allocated no entity");
         assert_eq!(rt.field_str(ent, "statusicon"), "begun");
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
     }
