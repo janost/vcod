@@ -2,17 +2,18 @@
 # map mp_carentan, g_gametype dm, joined allies, weapon m1carbine_mp, dedicated 1,
 # sv_maxclients 8, sv_pure 0, stock scr_* defaults, one client on the server.
 # Captured with tools/run_server.sh and --net-probe --save-playerstate,
-# 3 s after the weapon menu was answered; snapshot #63, serverTime 14650.
+# 3 s after the weapon menu was answered; snapshot #63, serverTime 14750.
 # Values are the raw i32 wire words, floats as their bit patterns: the gate
 # compares bits and a rendered float loses them.
-# [playerstate] is Protocol::player_fields order, [entity] the probe's own
-# client entity in Protocol::entity_fields order, [servercommands] every
-# serverCommand retail sent after the gamestate, verbatim and in order.
+# [playerstate] is Protocol::player_fields order; [entity] is the probe's
+# own client entity in Protocol::entity_fields order, or a comment saying so
+# when retail sent none; [servercommands] is every serverCommand retail sent
+# after the gamestate, verbatim and in order.
 [playerstate]
-commandTime 14633
-origin[1] 1157791744
-origin[0] -998506496
-origin[2] 1125130240
+commandTime 14749
+origin[1] 1158520832
+origin[0] 1154818048
+origin[2] -1044447239
 viewangles[1] 0
 viewangles[0] 0
 iCompassFriendInfo 0
@@ -22,7 +23,7 @@ viewHeightCurrent 1114636288
 eventSequence 0
 legsAnim 634
 pm_flags 262144
-delta_angles[1] 16384
+delta_angles[1] 24576
 velocity[1] 0
 velocity[0] 0
 speed 190

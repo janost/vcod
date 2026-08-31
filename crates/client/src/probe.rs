@@ -248,11 +248,16 @@ pub fn probe(
             }
         }
 
+        // A refused weapon reopens the same menu, which the probe answers
+        // once and then ignores, so a sent answer is not an accepted one; the
+        // playerstate is what tells a spawn from a still-spectating client.
         if join.settled(now) {
             if let Some(s) = client.snapshots().newest() {
-                write_playerstate_fixture(s, client.configstrings(), &join)?;
-                wrote_playerstate = true;
-                break;
+                if s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL {
+                    write_playerstate_fixture(s, client.configstrings(), &join)?;
+                    wrote_playerstate = true;
+                    break;
+                }
             }
         }
         if let Some(count) = client.capture_count() {
@@ -267,8 +272,13 @@ pub fn probe(
     }
 
     if save_playerstate && !wrote_playerstate {
+        let pm_type = client
+            .snapshots()
+            .newest()
+            .map(|s| s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type"));
         println!(
-            "no playerstate fixture: the join never completed (menus answered: {:?})",
+            "no playerstate fixture: the join never completed (menus answered: {:?}, pm_type {pm_type:?}); \
+             a spectator pm_type means the weapon answer was refused",
             join.answered
         );
     }
@@ -608,6 +618,10 @@ const JOIN_TEAM: &str = "allies";
 /// landed and the drop to the floor has finished.
 const SPAWN_SETTLE: Duration = Duration::from_secs(3);
 
+/// `pmove_t`'s first entry, the state a spawned player is in; a client still
+/// on the menus sits at 4, the spectator's.
+const PM_NORMAL: i32 = 0;
+
 /// Drives the stock team/weapon menu handshake under `--save-playerstate` and
 /// keeps what the fixture header needs.
 #[derive(Default)]
@@ -718,9 +732,10 @@ fn write_playerstate_fixture(
     ));
     out.push_str("# Values are the raw i32 wire words, floats as their bit patterns: the gate\n");
     out.push_str("# compares bits and a rendered float loses them.\n");
-    out.push_str("# [playerstate] is Protocol::player_fields order, [entity] the probe's own\n");
-    out.push_str("# client entity in Protocol::entity_fields order, [servercommands] every\n");
-    out.push_str("# serverCommand retail sent after the gamestate, verbatim and in order.\n");
+    out.push_str("# [playerstate] is Protocol::player_fields order; [entity] is the probe's\n");
+    out.push_str("# own client entity in Protocol::entity_fields order, or a comment saying so\n");
+    out.push_str("# when retail sent none; [servercommands] is every serverCommand retail sent\n");
+    out.push_str("# after the gamestate, verbatim and in order.\n");
 
     out.push_str("[playerstate]\n");
     for (f, v) in p.player_fields.iter().zip(&snap.ps.fields) {

@@ -83,9 +83,9 @@ and re-reads the applied table via `trap_GetGameState` (`0x4f`), exactly as Q3's
 
 Measured on 2026-08-31 against the retail 1.1d dedicated server, dm on
 mp_pavlov, with `--net-probe --save-playerstate`; the whole stream is in
-`crates/server/tests/fixtures/playerstate/mp_pavlov-dm.txt`. A client's `begin`
-releases `Callback_PlayerConnect`, which puts these five commands on the wire in
-this order (`^U` is a literal 0x15 byte):
+`crates/server/tests/fixtures/playerstate/mp_pavlov-dm.txt`. A client that sends
+`begin` gets these five commands back, in this order (`^U` is a literal 0x15
+byte):
 
 ```
 f "MPSCRIPT_CONNECTED^Uvcod^7"
@@ -94,6 +94,10 @@ v scr_showweapontab "0"
 t 0
 v cg_objectiveText "DM_KILL_OTHER_PLAYERS^U"
 ```
+
+INFERRED that the five come from `Callback_PlayerConnect`: `begin` is the notify
+its `waittill` blocks on, and the `setClientCvar` and `openMenu` calls that
+follow that wait in the stock dm script account for four of them.
 
 `t`'s argument is an index into the script-menu configstring range, whose slot 0
 is cs 1180: cs 1180 is `team_russiangerman` and cs 1181 `weapon_russian`, and

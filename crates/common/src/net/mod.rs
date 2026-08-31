@@ -248,8 +248,9 @@ impl<T: Transport> NetClient<T> {
     /// Verbatim text of every serverCommand executed since the last call, in
     /// order. It reads the reliable ring `handle_server_command` already keeps
     /// verbatim for the scramble key rather than buffering a second copy, so
-    /// commands older than the ring are gone; the first call starts the cursor
-    /// where the sequence stands and reports nothing before it.
+    /// commands older than the ring are gone. The first call after a connect or
+    /// a gamestate starts the cursor where the sequence stands and reports
+    /// nothing before it, since those slots hold no text this client parsed.
     pub fn take_server_commands(&mut self) -> Vec<String> {
         let cap = self.netchan.server_commands.len();
         let from = *self.commands_taken.get_or_insert(self.command_sequence);
@@ -692,6 +693,9 @@ impl<T: Transport> NetClient<T> {
         self.checksum_feed = gs.checksum_feed;
         self.client_num = gs.client_num;
         self.command_sequence = gs.server_command_sequence;
+        // The sequence jumps to the server's, past ring slots this client never
+        // wrote; replanting the cursor keeps those out of the drain.
+        self.commands_taken = None;
         self.gamestate = Some(gs);
         // A map change re-sends the gamestate on the live netchan; the cmd
         // stream starts over, so the delta base does too.
@@ -1573,6 +1577,29 @@ mod tests {
             vec!["t 0".to_string(), "d 3 n\\ambient\\t\\0".to_string()]
         );
         assert!(c.take_server_commands().is_empty());
+    }
+
+    #[test]
+    fn take_server_commands_replants_the_cursor_at_the_gamestate() {
+        let t0 = Instant::now();
+        let mut c = NetClient::start(FakeTransport::default(), t0);
+        // The probe drains every loop iteration, so the cursor is planted at 0
+        // before the gamestate jumps the sequence to the server's.
+        assert!(c.take_server_commands().is_empty());
+
+        c.on_gamestate(Gamestate {
+            configstrings: vec![String::new(); PROTOCOL_V1.max_configstrings],
+            baselines: Default::default(),
+            client_num: 0,
+            checksum_feed: 0,
+            server_command_sequence: 7,
+        });
+        // Without the replant these are ring slots this client never wrote,
+        // and they come back as seven empty strings.
+        assert!(c.take_server_commands().is_empty());
+
+        c.handle_server_command(8, "t 0".to_string());
+        assert_eq!(c.take_server_commands(), vec!["t 0".to_string()]);
     }
 
     #[test]
