@@ -26,7 +26,7 @@ pub const FIRST_HUD_ELEM: u32 = MAX_GENTITIES;
 /// 4`.
 pub const MAX_HUDELEMS: u32 = 1024;
 
-use crate::game::fields::{engine_slot_count, hud_slot_count, route_hud, Route};
+use crate::game::fields::{engine_slot_count, hud_slot_count, route_hud, Route, CLIENT_FIELDS};
 use crate::server::MAX_CLIENTS;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, StructId, Value};
 
@@ -37,6 +37,15 @@ use vcod_gsc::{Atom, Cx, EntId, ErrorKind, StructId, Value};
 /// one fact, and they disagree the moment anything is freed.
 pub struct GEntity {
     pub engine: Vec<Value>,
+    /// A client entity's `gclient_t` fields, indexed by raw `CLIENT_FIELDS`
+    /// position (`Route::Client`), a separate store from `engine` because
+    /// retail's `gclient_s *client` is a separate struct from `gentity_t` —
+    /// sharing one array between the two field tables' index spaces would
+    /// alias unrelated fields together. `Some` only for an entity
+    /// `spawn_client` made; `None` for every map entity and HUD element,
+    /// which is what makes a client-routed field on one of those a real
+    /// error rather than a coincidence of a number comparison.
+    pub client: Option<Vec<Value>>,
     /// Script-defined fields, including every radiant key. There is exactly
     /// one key-value store per object and it is the VM's.
     pub script: StructId,
@@ -117,6 +126,7 @@ impl ObjectTable {
         let script = cx.new_struct();
         self.ents[id.0 as usize] = Some(GEntity {
             engine: vec![Value::Undefined; engine_slot_count()],
+            client: None,
             script,
             solid: true,
             hidden: false,
@@ -131,7 +141,9 @@ impl ObjectTable {
     /// `G_InitGame` sets `level.num_entities` to 72 whatever
     /// `sv_maxclients` is and `MAX_CLIENTS` is 64, so 0..63 belong to
     /// clients and never reach the allocator
-    /// (docs/research/cod11-gsc-object-model.md section 2).
+    /// (docs/research/cod11-gsc-object-model.md section 2). A second call on
+    /// a slot that already holds a client entity replaces it outright, the
+    /// same full reset a reconnect wants.
     pub fn spawn_client(&mut self, cx: &mut Cx, slot: usize) -> Result<EntId, ErrorKind> {
         if slot >= MAX_CLIENTS {
             return Err(ErrorKind::BadType("client slot out of range"));
@@ -139,6 +151,7 @@ impl ObjectTable {
         let script = cx.new_struct();
         self.ents[slot] = Some(GEntity {
             engine: vec![Value::Undefined; engine_slot_count()],
+            client: Some(vec![Value::Undefined; CLIENT_FIELDS.len()]),
             script,
             solid: true,
             hidden: false,
@@ -180,6 +193,7 @@ impl ObjectTable {
         }
         self.huds[i] = Some(GEntity {
             engine,
+            client: None,
             script,
             solid: true,
             hidden: false,

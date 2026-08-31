@@ -1,16 +1,15 @@
 //! The CoD side of `vcod_gsc::Host`: builtin dispatch and entity field
 //! routing. A field read or write is routed through the retail field
 //! tables: engine-backed goes to the entity's typed slot, client-tagged
-//! goes to the client entity's own engine slot when the entity has one and
-//! errors otherwise, everything else goes to the entity's own struct in the
-//! VM heap.
+//! goes to the entity's own `client` store when it has one and errors
+//! otherwise, everything else goes to the entity's own struct in the VM
+//! heap.
 
 use crate::configstrings::{Allocators, CsRange};
 use crate::game::builtins;
 use crate::game::damage::DamageEvent;
 use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
 use crate::game::fields::{self, FieldType, Route};
-use crate::server::MAX_CLIENTS;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 
 /// The builtins `GameHost::builtin` answers from its own match, folded: the
@@ -228,13 +227,15 @@ impl Host for GameHost {
                 other => other,
             },
             Route::Engine { slot, .. } => e.engine[slot],
-            // A client field on a client entity is a plain engine-slot read,
-            // keyed by the CLIENT_FIELDS index rather than a deduped slot
-            // (`fields::route_entity`). Retail errors on a null `ent->client`;
-            // a read has no error channel, so a map entity reads undefined
-            // and the write path carries the error.
-            Route::Client(i) if (ent.0 as usize) < MAX_CLIENTS => e.engine[i],
-            Route::Client(_) => Value::Undefined,
+            // `e.client` is `Some` only for an entity `spawn_client` made:
+            // that is the real test, not a number range that would merely
+            // coincide with it. Retail errors on a null `ent->client`; a
+            // read has no error channel, so a client-less entity reads
+            // undefined and the write path carries the error.
+            Route::Client(i) => match &e.client {
+                Some(c) => c[i],
+                None => Value::Undefined,
+            },
             Route::Script => cx.get_field(e.script, field),
         }
     }
@@ -269,17 +270,19 @@ impl Host for GameHost {
                 e.engine[slot] = value;
                 Ok(())
             }
-            Route::Client(i) if (ent.0 as usize) < MAX_CLIENTS => {
+            // Retail's null `ent->client` check: an entity `spawn_client`
+            // never touched has no `client` store to write into.
+            Route::Client(i) => {
+                let Some(c) = e.client.as_mut() else {
+                    return Err(ErrorKind::BadType("that entity has no client"));
+                };
                 let ty = fields::CLIENT_FIELDS[i].ty;
                 if !type_accepts(ty, value) {
                     return Err(ErrorKind::BadType("wrong type for a client field"));
                 }
-                e.engine[i] = value;
+                c[i] = value;
                 Ok(())
             }
-            // Retail's null `ent->client` check: a map entity has no client
-            // struct to write into.
-            Route::Client(_) => Err(ErrorKind::BadType("that entity has no client")),
             Route::Script => {
                 let s = e.script;
                 cx.set_field(s, field, value);
@@ -554,6 +557,10 @@ mod tests {
 
     /// A client field reads back what was written, and the same field on a
     /// map entity is still an error, because retail has no `gclient_t` there.
+    /// The map-entity refusal is pinned to its exact message, not just
+    /// `is_err()`: `set_field` has two distinct refusals now (a nonexistent
+    /// entity's "no such entity" and a client-less entity's "that entity has
+    /// no client"), and this test exists to exercise the second, not either.
     #[test]
     fn a_client_field_round_trips_and_a_map_entity_still_refuses_one() {
         let (mut vm, mut host) = fixture();
@@ -565,7 +572,39 @@ mod tests {
             assert_eq!(host.get_field(cx, c, f), v);
 
             let m = host.ents.spawn(cx).unwrap();
-            assert!(host.set_field(cx, m, f, v).is_err());
+            assert_eq!(
+                host.set_field(cx, m, f, v).unwrap_err(),
+                ErrorKind::BadType("that entity has no client")
+            );
+        });
+    }
+
+    /// `Route::Client(i)` and `Route::Engine{slot}` (from `ENTITY_FIELDS`)
+    /// used to share one `GEntity.engine` array on a client entity, with two
+    /// unrelated index spaces landing in the same cells: client index 1
+    /// (`sessionteam`) and engine slot 1 (`origin`) collided. `client` is
+    /// now a separate store, so setting both on one client entity must not
+    /// let either overwrite the other, in either write order.
+    #[test]
+    fn a_client_field_and_an_entity_field_do_not_alias_on_a_client_entity() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let sessionteam = cx.intern_folded("sessionteam");
+            let origin = cx.intern_folded("origin");
+            let team = Value::String(cx.intern_exact("allies"));
+            let pos = Value::Vector([1.0, 2.0, 3.0]);
+
+            let a = host.ents.spawn_client(cx, 0).unwrap();
+            host.set_field(cx, a, sessionteam, team).unwrap();
+            host.set_field(cx, a, origin, pos).unwrap();
+            assert_eq!(host.get_field(cx, a, sessionteam), team);
+            assert_eq!(host.get_field(cx, a, origin), pos);
+
+            let b = host.ents.spawn_client(cx, 1).unwrap();
+            host.set_field(cx, b, origin, pos).unwrap();
+            host.set_field(cx, b, sessionteam, team).unwrap();
+            assert_eq!(host.get_field(cx, b, origin), pos);
+            assert_eq!(host.get_field(cx, b, sessionteam), team);
         });
     }
 

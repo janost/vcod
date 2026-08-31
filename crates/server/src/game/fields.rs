@@ -204,6 +204,15 @@ pub const ENTITY_FIELDS: &[EngineField] = &[
     },
 ];
 
+/// `Route::Client(i)` indexes this table by raw position, not through
+/// `slot_of`'s offset dedup the way `route_entity` does. That is
+/// deliberate: five of these entries (`sessionteam`, `sessionstate`,
+/// `statusicon`, `headicon`, `headiconteam`) carry `offset: 0` because
+/// retail's dump marks them "fully custom get and set"
+/// (docs/research/cod11-gsc-object-model.md, "Client fields, 0x72ed4") —
+/// they have no struct offset to alias on, not a shared one. Deduping by
+/// offset the way `ENTITY_FIELDS` does would silently merge those five
+/// distinct fields into one storage cell.
 pub const CLIENT_FIELDS: &[EngineField] = &[
     EngineField {
         name: "name",
