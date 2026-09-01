@@ -158,17 +158,24 @@ not write the torso half of the continuous selection, so vcod clears
 
 ### How retail picks the movetype
 
-VERIFIED, read out of the unnamed static that follows `PM_ShouldMakeFootsteps`
-at `game.mp.i386.so` 0x322c8, with the movetype and condition enum orders taken
-from the reversed rodata name blocks at 0x6e260 and 0x6e424. This replaces two
-readings of the 44 poses that earlier rounds of this document carried and that
-the binary contradicts; the poses still confirm the result, and the anim gate in
+VERIFIED, read out of `PM_Footsteps` at `game.mp.i386.so` 0x322c8 -- the static
+after `PM_ShouldMakeFootsteps`, the same function `crates/common/src/pmove.rs`
+and `cod11-sound-system.md` already call by that name -- with the movetype and
+condition enum orders taken from the rodata name blocks at 0x6e260 and 0x6e424.
+VERIFIED: both blocks are stored in reverse, `** UNUSED **` first, so the
+movetype order is `idle` 1, `idlecr` 2, `idleprone` 3, `walk` 4, `walkbk` 5,
+`walkcr` 6, `walkcrbk` 7, `walkprone` 8, `walkpronebk` 9, `run` 10, `runbk` 11,
+`runcr` 12, `runcrbk` 13. This replaces two readings of the 44 poses that
+earlier rounds of this document carried and that the binary contradicts; the
+poses still confirm the result, and the anim gate in
 `crates/server/tests/playerstate_motion_ab.rs` holds it.
 
-**The idle threshold.** VERIFIED: the function compares `xyspeed` against the
-float literal at 0x70c1c, which is 10.0, and the usercmd is not read on that
-branch; under it the movetype is the stance's idle. VERIFIED: the capture agrees
-on both sides of the number -- carentan `run_forward` pushes `forward=127` into
+**The idle threshold.** VERIFIED: at 0x3249f the function compares `xyspeed`
+against the float at 0x70c1c, which holds 10.0, and neither arm of that compare
+reads the usercmd. INFERRED: the arm taken below it selects the stance's idle
+and the arm at or above it is the movetype dispatch below. VERIFIED: the
+capture agrees on both sides of the number -- carentan `run_forward` pushes
+`forward=127` into
 geometry at 8.0 u/s and reads 122, the standing idle, while both maps'
 `prone_crawl_150` crawls at 13.0 u/s and reads 50, `pb_prone_crawl`. VERIFIED:
 carentan `strafe_left` at 8.0 u/s and `strafe_right` at 3.2 u/s read 122 as
@@ -176,32 +183,51 @@ well, and pavlov `crouch_run` at 0 u/s reads 111. `ANIM_IDLE_SPEED`
 (`crates/server/src/spectate.rs`) is that literal.
 
 **The direction.** VERIFIED: above the threshold the movetype is the stance
-crossed with `pm_flags` 0x40, backwards, and `pm_flags` 0x80, walk, at
-0x326c4-0x327d1; the usercmd is not read there either. VERIFIED: 0x40 is
-latched from the cmd alone before the move, RTCW's `PmoveSingle` block
-(`private/reference/RTCW-MP/src/game/bg_pmove.c:3915`): `forwardmove < 0` sets
-it, `forwardmove > 0` or a zero `forwardmove` with a non-zero `rightmove`
-clears it, and a cmd asking for neither leaves it alone. VERIFIED: both captures
-carry 0x40 at `run_back` and at none of the other 42 poses. INFERRED: 0x80 is
-the walk bit and nothing in a CoD 1.1 usercmd can set it (see "Walk against
-run"), so the `walk*` blocks are unreachable and prone moves through
-`walkprone` only because the prone family has no run block.
+crossed with `pm_flags` 0x40, backwards, and `pm_flags` 0x80, walk. The walk bit
+is masked out of `pm_flags` once at 0x32499 and the stance dispatches at
+0x326c4, 0x32710 and 0x32766; each arm tests 0x40 and passes a movetype index to
+the selection call at 0x327d3. VERIFIED: those indices are 8 and 9 prone, 6, 7,
+12 and 13 crouched, 4, 5, 10 and 11 standing, which against the name block above
+are the `walkprone`, `walkcr`/`runcr` and `walk`/`run` families. VERIFIED: the
+prone arm at 0x326f1 tests 0x40 alone and never the walk bit, so prone has
+exactly two movetypes and reaches `walkprone` whatever that bit says. VERIFIED:
+no arm between 0x326c4 and 0x327d1 reads the usercmd.
 
-**The strafe condition.** VERIFIED: condition 8 is updated at 0x32504-0x325b5,
-which tests `cmd.forwardmove` first: every path with a non-zero `forwardmove`
-pushes NOT, diagonals included; `left` and `right` are pushed only when
-`forwardmove` is zero; and when both axes are zero the update is not called at
-all. INFERRED: the condition therefore keeps its previous value across a cmd
-that asks for nothing, which makes it state carried between frames rather than
-a reading of the current cmd, and `ClientSim` holds it that way. VERIFIED: the
-file's legend at line 91 says strafing "will never be left or right while
-moving backwards".
+VERIFIED: 0x40 is latched in `PmoveSingle` before the move, in the block that
+loads the cmd's `forwardmove` (usercmd +0x18) at 0x3413e, sets 0x40 in
+`pm_flags` (playerState +0xc) at 0x34147, clears it at 0x3415e, and reads
+`rightmove` (+0x19) at 0x34156. INFERRED: the set arm is the one taken when
+`forwardmove < 0` and the clear arm when `forwardmove > 0` or `forwardmove` is
+zero with a non-zero `rightmove`; there is no third arm, so a cmd asking for
+neither axis leaves the bit as it was. VERIFIED: RTCW carries the same three
+arms in `PmoveSingle`
+(`private/reference/RTCW-MP/src/game/bg_pmove.c:3915`), which is the lineage
+`crates/common/src/pmove.rs` ports. VERIFIED: both captures carry 0x40 at
+`run_back` and at none of the other 42 poses. INFERRED: 0x80 is the walk bit and
+nothing in a CoD 1.1 usercmd can set it (see "Walk against run"), so the `walk*`
+blocks are unreachable.
 
-**Nothing is selected in the air.** VERIFIED: the in-air branch at
-0x323a2/0x323b3 returns without selecting unless the ladder flag is set, so a
-jump keeps the takeoff anim until the landing. VERIFIED: retail's restart toggle
-flips exactly once between the `jump_takeoff` and `land` samples on both maps,
-which is what one selection between the two looks like. INFERRED: the two
+**The strafe condition.** VERIFIED: condition 8 is written between 0x32504 and
+0x325b5. The block loads `forwardmove` at 0x32504 and `rightmove` at 0x32568,
+and reaches the update call at 0x325b0 from three places, pushing condition 8
+with value 0 at 0x3255d, value 1 at 0x325a2 and value 2 at 0x3258d; the path
+leaving 0x3256d lands past the call. INFERRED: value 0 is `NOT` and every arm a
+non-zero `forwardmove` takes reaches it, diagonals included; 1 and 2 are the two
+sides and are reached only with `forwardmove` zero and `rightmove` non-zero; and
+the path that skips the call is the one a cmd asking for neither axis takes, so
+the condition keeps its previous value. INFERRED: it is therefore state carried
+between frames rather than a reading of the current cmd, and `ClientSim` holds
+it that way. VERIFIED: the file's legend at line 91 says strafing "will never be
+left or right while moving backwards".
+
+**Nothing is selected in the air.** VERIFIED: 0x323a2 compares
+`groundEntityNum` (playerState +0x54) against 1023 and 0x323af tests `pm_flags`
+0x10, the ladder flag; the arm leaving 0x323b3 lands on the function's tail at
+0x328c1, past every selection call. INFERRED: that is the arm an airborne player
+without the ladder flag takes, so a jump keeps the takeoff anim until the
+landing. VERIFIED: retail's restart toggle flips exactly once between the
+`jump_takeoff` and `land` samples on both maps, which is what one selection
+between the two looks like. INFERRED: the two
 ground-edge events have to be raised before the continuous selection, or the
 landing frame selects an idle first and flips the toggle twice. VERIFIED: the
 `land` default clause carries `duration 100`, and the fixture's `land` pose is
@@ -217,11 +243,15 @@ and wrong: an earlier round read that as "the direction comes from the usercmd",
 which agrees with every pose in the capture and still differs from retail on a
 diagonal, where the latch rule leaves the strafe condition cleared and reading
 the cmd sets it. INFERRED, and wrong: the same round read a coasting player as
-keeping its anim, citing a `PM_Footsteps` shape that RTCW's own source
-(`bg_pmove.c:1607-1622`) does not have; retail re-selects every frame above the
-threshold, so a tap and release slides in the run loop rather than the idle, and
-a backwards crouched coast is `walkcrbk` rather than a standing back-run.
-Neither reading is in the code.
+keeping its anim. VERIFIED: RTCW does hold one --
+`private/reference/RTCW-MP/src/game/bg_pmove.c:1607-1622` returns without
+selecting when neither axis is asked for and `xyspeed > 120`, commented
+"continue what they were doing last frame, until we stop" -- and VERIFIED: retail
+dropped it, since the only float compare in `PM_Footsteps` is the one against
+10.0 at 0x3249f and the function holds no 120 at all. INFERRED: retail therefore
+re-selects every frame above the threshold, so a tap and release slides in the
+run loop rather than the idle, and a backwards crouched coast is `runcrbk`
+rather than a standing back-run. Neither reading is in the code.
 
 ### Walk against run
 
