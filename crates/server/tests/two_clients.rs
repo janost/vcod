@@ -9,6 +9,7 @@ mod common;
 
 use common::{Queues, ADDR, ADDR_B};
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::msg::EntityState;
@@ -174,4 +175,152 @@ fn the_scripts_can_find_both_players_by_classname() {
             "client {slot} is at the origin, so nothing is syncing it"
         );
     }
+}
+
+/// A field's family: `pos.trDelta[2]` and `pos.trDelta[0]` are one thing, and
+/// which axes are nonzero is the player's velocity, not our coverage. The
+/// comparison below is about whether we carry the field at all.
+fn family(name: &str) -> &str {
+    name.split_once('[').map(|(f, _)| f).unwrap_or(name)
+}
+
+/// Fields retail sets on a player entity that we do not, each with the reason.
+/// Empty is the goal; the guard below fails on one that starts matching.
+const PLAYER_GAPS: &[(&str, &str)] = &[
+    (
+        "legsAnim",
+        "the animation a player is playing, which needs the animscript state \
+         machine stage 4's playerstate gate already records as missing",
+    ),
+    (
+        "eventSequence",
+        "the entity event ring, which nothing raises until stage 6",
+    ),
+    ("events", "same ring"),
+    ("eventParms", "the parms of that ring"),
+    (
+        "angles2",
+        "a second yaw the capture carries on every player and nothing here has \
+         identified; not the view yaw, which is apos.trBase[1]",
+    ),
+];
+
+/// Every field retail sets on a moving player, against ours. The capture is
+/// one probe watching another on the retail server
+/// (`--save-entities --capture-tag players`), so it is the only evidence of
+/// what a player entity carries: a single client's capture cannot hold one,
+/// since retail sends a client no entity for itself.
+///
+/// Field presence, not value: the captured player was walking somewhere else
+/// entirely, so only which fields are set is comparable.
+#[test]
+fn a_player_entity_carries_the_fields_retail_sets() {
+    let path = "tests/fixtures/entities/mp_carentan-dm-players.txt";
+    let Ok(text) = std::fs::read_to_string(path) else {
+        panic!("read {path}");
+    };
+    let p = &PROTOCOL_V1;
+    // The union over the capture's player entities: a field set in any
+    // sample. Whole blocks, because `eType` sits in the middle of one and the
+    // fields above it -- the whole trajectory -- belong to the same entity.
+    let mut retail_sets: BTreeSet<&str> = BTreeSet::new();
+    for block in text.split("[ent ").skip(1) {
+        let body = block.split_once(']').map(|(_, b)| b).unwrap_or(block);
+        let body = body.split("[sample ").next().unwrap_or(body);
+        if !body.lines().any(|l| l == "eType 1") {
+            continue;
+        }
+        for line in body.lines() {
+            if let Some((name, _)) = line.split_once(' ') {
+                if EntityState::field_index(p, name).is_some() {
+                    retail_sets.insert(name);
+                }
+            }
+        }
+    }
+    assert!(
+        retail_sets.contains("eType") && retail_sets.len() > 8,
+        "{path}: no player entity in the capture ({} fields)",
+        retail_sets.len()
+    );
+
+    let Some(ours) = a_moving_player() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    // Which families we carry: any axis set covers the family.
+    let ours_has: BTreeSet<&str> = p
+        .entity_fields
+        .iter()
+        .zip(&ours.fields)
+        .filter(|(_, v)| **v != 0)
+        .map(|(f, _)| family(f.name))
+        .collect();
+    let mut missing: Vec<&str> = Vec::new();
+    let mut gaps_hit: BTreeSet<&str> = BTreeSet::new();
+    for name in retail_sets
+        .iter()
+        .map(|n| family(n))
+        .collect::<BTreeSet<_>>()
+    {
+        if ours_has.contains(name) {
+            continue;
+        }
+        match PLAYER_GAPS.iter().find(|(g, _)| *g == name) {
+            Some((g, _)) => {
+                gaps_hit.insert(g);
+            }
+            None => missing.push(name),
+        }
+    }
+    for (g, why) in PLAYER_GAPS {
+        assert!(
+            gaps_hit.contains(g),
+            "PLAYER_GAPS lists {g:?} ({why}) but we set it now; drop it"
+        );
+    }
+    assert!(
+        missing.is_empty(),
+        "retail sets these on a player entity and we leave them zero: {missing:?}"
+    );
+}
+
+/// One client, joined, walking, and the entity another client would be sent
+/// about it. Walking matters: a standing player's velocity and trajectory
+/// fields are legitimately zero and would read as missing.
+fn a_moving_player() -> Option<EntityState> {
+    let fs = vcod_common::testing::game_fs()?;
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(&mut sv, &qa, &qb, &mut now, "allies", "m1carbine_mp");
+
+    let p = &PROTOCOL_V1;
+    let spot = ca.snapshots().newest()?.ps.origin(p);
+    let nb = cb.snapshots().newest()?.ps.field_i32(p, "clientNum") as usize;
+    let na = ca.snapshots().newest()?.ps.field_i32(p, "clientNum") as usize;
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+
+    // Looking somewhere as well as moving: the entity carries the body yaw,
+    // and a client that never turns leaves it at the spawn's.
+    let walking = vcod_common::net::msg::UserCmd {
+        forward: 127,
+        angles: [0, 90 * 65536 / 360, 0],
+        ..vcod_common::net::msg::NULL_USERCMD
+    };
+    for _ in 0..40 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&walking);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+    ca.snapshots().newest()?.entities.get(&(nb as u32)).cloned()
 }
