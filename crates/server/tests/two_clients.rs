@@ -381,6 +381,20 @@ fn a_joined_client_carries_a_body_model_in_the_roster() {
     );
 }
 
+/// A client renders another player from its entityState, not from that
+/// player's playerstate, so the anim has to travel twice. `a_moving_player`
+/// walks, so its `legsAnim` index must be non-zero.
+#[test]
+fn a_player_entity_carries_the_animation_it_is_playing() {
+    let Some(e) = a_moving_player() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let p = &PROTOCOL_V1;
+    let legs = e.field_i32(p, "legsAnim");
+    assert_ne!(legs & 511, 0, "a moving player is sent the bind pose");
+}
+
 /// A spectator is not a thing in the world. Retail links no entity for one,
 /// and a player's crosshair naming a spectator flying overhead is what the
 /// missing check looked like.
