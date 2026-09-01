@@ -142,6 +142,34 @@ bit 0   client terminator
 
 Each entry's delta body is the same generic per-field codec packet entities use (a removed bit, a delta-follows bit, a raw `lc` byte, then delta fields), just against the 22-field `clientState` table (team, body `modelindex`, six `attachModelIndex`/`attachTagIndex` pairs, and the 32-byte `name`) instead of the entity table. A removed delta means that client disconnected; a client the section doesn't mention at all carries forward unchanged from the base frame, exactly like an unmentioned packet entity. See `docs/research/clientstate-wire-format.md` for the full field table and struct layout.
 
+### Which entities a client is sent
+
+A client is not sent every entity: the list depends on where it stands.
+Measured on 2026-09-01 with `tools/run_server.sh mp_carentan` (dm, stock
+defaults) and `--net-probe --probe-pvs`, joining through the stock menus.
+
+- A lone probe standing at its spawn was sent 6 of the map's entities, and 12
+  after walking ~700 units; the six new ones were a second `mg42_bipod` and the
+  `bookshelvewide`/`ammo_panzerfaust_box3` group around it at [810, 2274].
+  VERIFIED live.
+- That group crossed in and out of a second probe's list four times in 20 s as
+  it walked back and forth over ~70 units near [1000, 700], its distance to the
+  group holding at ~1600 units throughout, so the gate is a boundary in the map
+  rather than a radius. VERIFIED live.
+- Whether a client entity is culled the same way is UNVERIFIED: two probes
+  ~2400 units apart were sent each other's entity (`eType` 1, `clientNum` 0 and
+  1) continuously while both were connected, and the one removal seen was the
+  other probe disconnecting.
+- The 1.1d dedicated binary holds the strings `SV_BuildClientSnapshot: bad
+  gEnt` and `CMod_LoadLeafs: cluster exceeded`, so it has Q3's snapshot builder
+  and loads leaf clusters (VERIFIED). That a cluster PVS is what gates the list
+  is INFERRED from those two names alone; nothing here rules out a cell/portal
+  walk instead.
+
+The consequence for a capture: an entity-list fixture is a fixture *of a
+position*. Two captures taken at different spawns on one map disagree for
+reasons that have nothing to do with which entities exist.
+
 ### svc_serverCommand (5)
 
 `long sequence`, then `bigstring text`. Dedupe by sequence, and store in the 64-slot ring, because the scramble key needs it. Then dispatch on the leading token. CoD 1.1 server commands are single letters (`CG_ServerCommand` switches on `argv0[0]`; the full table is section 0 of `docs/research/cod11-hud-protocol.md`). The ones the engine side of a client has to act on:
