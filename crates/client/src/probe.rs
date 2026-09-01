@@ -37,8 +37,9 @@ const SNAP_CAPTURE_TARGET: usize = 24;
 ///
 /// `pvs` joins the same way again, walks the route in [`pvs_route`] and prints
 /// the snapshot entity list at each station plus every add and removal along
-/// the way. It writes no fixture: it exists to answer whether the server culls
-/// the entity list by where the client stands.
+/// the way, answering what the server sends from where. `save.entities` walks
+/// the same route and writes the trace as the stage 5 fixture; `pvs` alone
+/// writes nothing.
 /// Which captures a probe run overwrites. Each is a separate flag because
 /// each pins a different thing; the flag docs in `main.rs` say why.
 #[derive(Clone, Copy, Default)]
@@ -48,6 +49,7 @@ pub struct Save {
     pub configstrings: bool,
     pub playerstate: bool,
     pub motion: bool,
+    pub entities: bool,
 }
 
 pub fn probe(
@@ -63,7 +65,10 @@ pub fn probe(
         configstrings: save_configstrings,
         playerstate: save_playerstate,
         motion: save_motion,
+        entities: save_entities,
     } = save;
+    // The fixture is the route's output, so the capture drives the same walk.
+    let pvs = pvs || save_entities;
     // Three modes need the same stock-menu join before they can do anything.
     let joining = save_playerstate || save_motion || pvs;
     let mut client = NetClient::connect(addr)?;
@@ -300,6 +305,9 @@ pub fn probe(
                     } else if pvs {
                         if pvs_probe.step(now, s) {
                             pvs_probe.report();
+                            if save_entities {
+                                write_entities_fixture(&pvs_probe, client.configstrings(), &join)?;
+                            }
                             break;
                         }
                     } else {
@@ -1171,37 +1179,33 @@ const PVS_STAND: Duration = Duration::from_millis(1500);
 const PVS_STUCK_UNITS: f32 = 60.0;
 const PVS_STUCK_WINDOW: Duration = Duration::from_millis(1500);
 
-/// Out, across, back and across again, so the last station lands near the
-/// first. That shape separates the two explanations for a list that changes:
-/// position culling comes back to the spawn's set at the end, entities
-/// spawning over time do not.
+/// A wander: twelve stations, each leg a heading the walk keeps unless geometry
+/// turns it. Legs repeat and reverse headings on purpose, so the route crosses
+/// its own ground and a set that changes with position is told apart from one
+/// that only grows with time.
 fn pvs_route() -> Vec<PvsLeg> {
+    let leg = |label, yaw_deg| PvsLeg {
+        label,
+        yaw_deg,
+        walk_ms: 5000,
+    };
     vec![
         PvsLeg {
             label: "spawn",
             yaw_deg: 0,
             walk_ms: 0,
         },
-        PvsLeg {
-            label: "out",
-            yaw_deg: 0,
-            walk_ms: 8000,
-        },
-        PvsLeg {
-            label: "across",
-            yaw_deg: 90,
-            walk_ms: 8000,
-        },
-        PvsLeg {
-            label: "back",
-            yaw_deg: 180,
-            walk_ms: 8000,
-        },
-        PvsLeg {
-            label: "return",
-            yaw_deg: 270,
-            walk_ms: 8000,
-        },
+        leg("out", 0),
+        leg("across", 90),
+        leg("on", 0),
+        leg("back", 180),
+        leg("over", 270),
+        leg("far", 180),
+        leg("side", 90),
+        leg("return", 0),
+        leg("wide", 90),
+        leg("long", 180),
+        leg("last", 270),
     ]
 }
 
@@ -1229,11 +1233,168 @@ impl EntInfo {
     }
 }
 
-/// One recorded stop on the route.
+/// One recorded stop on the route: where the probe stood, and every entity
+/// the server had sent it as of that frame.
 struct PvsStation {
     label: &'static str,
     origin: [f32; 3],
-    ents: BTreeMap<u32, EntInfo>,
+    server_time: i32,
+    ents: BTreeMap<u32, net::msg::EntityState>,
+}
+
+/// Directory `crates/server/tests/entities_ab.rs` reads its fixtures from.
+const ENTITIES_FIXTURE_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../server/tests/fixtures/entities"
+);
+
+/// Writes the walked route as `<map>-<gametype>.txt`: one `[sample]` per
+/// station, carrying where the probe stood and every entity the server had
+/// sent it there.
+///
+/// The origin is the point of the file. A capture cannot be told to stand
+/// anywhere -- `setviewpos` is refused on a dedicated server -- so the gate
+/// does not replay the route, it replays each recorded origin
+/// (docs/protocol-1.1.md, "Which entities a client is sent").
+fn write_entities_fixture(
+    probe: &PvsProbe,
+    configstrings: &[String],
+    join: &JoinProbe,
+) -> anyhow::Result<()> {
+    let p = &net::protocol::PROTOCOL_V1;
+    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
+    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let (map, gametype) = (key("mapname"), key("g_gametype"));
+
+    let mut head = String::new();
+    head.push_str("# Retail CoD 1.1d dedicated server entity trace along walked routes.\n");
+    head.push_str(&format!(
+        "# map {map}, g_gametype {gametype}, joined {JOIN_TEAM}, weapon {}, dedicated 1,\n",
+        join.weapon
+    ));
+    head.push_str(&format!(
+        "# sv_maxclients {}, sv_pure {}, stock scr_* defaults, one client on the server.\n",
+        key("sv_maxclients"),
+        key("sv_pure"),
+    ));
+    head.push_str("# Captured with tools/run_server.sh and --net-probe --save-entities, one run\n");
+    head.push_str("# per random spawn: a walk cannot be steered across the map, so coverage is\n");
+    head.push_str("# several runs' stations sharing a file. Each run appends and rewrites,\n");
+    head.push_str(&format!(
+        "# keeping at most {MAX_SAMPLES_PER_SET} samples of any one entity set, since a fourth \
+sample of a set\n"
+    ));
+    head.push_str("# already seen adds a position and no new visibility case.\n");
+    head.push_str(
+        "# One [sample] per station, carrying the probe's origin there and every entity\n",
+    );
+    head.push_str(
+        "# the server had sent it as of that frame. The origin is what the gate replays:\n",
+    );
+    head.push_str("# the route itself is not reproducible and does not need to be.\n");
+    head.push_str(
+        "# Values are the raw i32 wire words, floats as their bit patterns. Names come\n",
+    );
+    head.push_str("# from Protocol::entity_fields; a field a block does not list is zero.\n");
+
+    let path = format!("{ENTITIES_FIXTURE_DIR}/{map}-{gametype}.txt");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut samples = parse_fixture_samples(&existing);
+    let taken = samples.len();
+    for st in &probe.stations {
+        let mut body = format!("serverTime {}\n", st.server_time);
+        for (axis, v) in st.origin.iter().enumerate() {
+            body.push_str(&format!("origin[{axis}] {}\n", v.to_bits() as i32));
+        }
+        for (num, e) in &st.ents {
+            body.push_str(&format!("[ent {num}]\n"));
+            for (f, v) in p.entity_fields.iter().zip(&e.fields) {
+                if *v != 0 {
+                    body.push_str(&format!("{} {v}\n", f.name));
+                }
+            }
+        }
+        samples.push(FixtureSample {
+            label: st.label.to_string(),
+            ents: st.ents.keys().copied().collect(),
+            body,
+        });
+    }
+
+    let mut out = head;
+    let mut per_set: std::collections::HashMap<Vec<u32>, usize> = std::collections::HashMap::new();
+    let mut kept = 0;
+    for s in &samples {
+        let n = per_set.entry(s.ents.clone()).or_insert(0);
+        if *n >= MAX_SAMPLES_PER_SET {
+            continue;
+        }
+        *n += 1;
+        out.push_str(&format!("[sample {kept}] {}\n", s.label));
+        out.push_str(&s.body);
+        kept += 1;
+    }
+
+    std::fs::create_dir_all(ENTITIES_FIXTURE_DIR)?;
+    std::fs::write(&path, out)?;
+    println!(
+        "entities: {} stations this run, {} samples in the file ({} read, {} dropped as \
+         repeats), {} distinct entity sets -> {path}",
+        probe.stations.len(),
+        kept,
+        taken,
+        samples.len() - kept,
+        per_set.len(),
+    );
+    Ok(())
+}
+
+/// At most this many samples of one entity set survive in a fixture. A fourth
+/// sample of a set already seen adds a position and no new visibility case,
+/// and 96 stations of a 12-entity map ran to 230 KB before this cap existed.
+const MAX_SAMPLES_PER_SET: usize = 3;
+
+/// A sample as it sits in the fixture. The body is kept verbatim so a reread
+/// and rewrite never has to understand the fields it carries.
+struct FixtureSample {
+    label: String,
+    ents: Vec<u32>,
+    body: String,
+}
+
+/// Splits a fixture into its samples, dropping the header. Tolerant by
+/// design: an unreadable file reads as no samples and the run starts the map
+/// over rather than failing after the capture is already spent.
+fn parse_fixture_samples(text: &str) -> Vec<FixtureSample> {
+    let mut out: Vec<FixtureSample> = Vec::new();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("[sample ") {
+            let label = rest
+                .split_once("] ")
+                .map(|(_, l)| l)
+                .unwrap_or("")
+                .to_string();
+            out.push(FixtureSample {
+                label,
+                ents: Vec::new(),
+                body: String::new(),
+            });
+            continue;
+        }
+        let Some(s) = out.last_mut() else {
+            continue;
+        };
+        if let Some(num) = line
+            .strip_prefix("[ent ")
+            .and_then(|r| r.strip_suffix(']'))
+            .and_then(|n| n.parse::<u32>().ok())
+        {
+            s.ents.push(num);
+        }
+        s.body.push_str(line);
+        s.body.push('\n');
+    }
+    out
 }
 
 /// Walks [`pvs_route`] and keeps the snapshot entity list at each station,
@@ -1360,7 +1521,10 @@ impl PvsProbe {
         self.stations.push(PvsStation {
             label,
             origin: me,
-            ents: self.live.clone(),
+            server_time: snap.server_time,
+            // The frame's own list, not the diff state: what the server sent
+            // is what the fixture has to carry.
+            ents: snap.entities.clone(),
         });
         self.idx += 1;
         self.started = None;

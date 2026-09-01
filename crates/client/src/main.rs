@@ -82,6 +82,14 @@ struct Args {
     /// player, which leaves every field the client predicts at zero.
     #[arg(long)]
     save_motion: bool,
+    /// Join a team, walk the --probe-pvs route and write the entity trace to
+    /// crates/server/tests/fixtures/entities/<map>-<gametype>.txt, the fixture
+    /// crates/server/tests/entities_ab.rs diffs against. Separate from
+    /// --probe-pvs because that one only prints: this one overwrites committed
+    /// evidence. Each run appends its stations to the map's fixture, since one
+    /// walk gets one random spawn; delete the file to start that map over.
+    #[arg(long)]
+    save_entities: bool,
     /// Join a team, then walk a route and print the snapshot entity list at
     /// each station: which entities the server sent, and every add and removal
     /// along the way with the position it happened at. Answers whether the
@@ -416,6 +424,7 @@ fn main() -> Result<()> {
                 configstrings: args.save_configstrings,
                 playerstate: args.save_playerstate,
                 motion: args.save_motion,
+                entities: args.save_entities,
             },
             args.probe_pvs,
             args.probe_secs,
