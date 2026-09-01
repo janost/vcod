@@ -812,6 +812,9 @@ enum Until {
     /// At the first snapshot off the ground, which is what puts the jump's
     /// takeoff velocity in the capture. The duration bounds the wait.
     Airborne(Duration),
+    /// At the first snapshot back on the ground, which is where the landing
+    /// anim is. An event anim expires, so a settled sample cannot hold one.
+    Grounded(Duration),
 }
 
 /// The poses, in an order where each starts from the one before: lean from
@@ -915,6 +918,70 @@ fn motion_script() -> Vec<MotionStep> {
             },
             2000,
         ),
+        held(
+            "run_back",
+            net::msg::UserCmd {
+                forward: -127,
+                ..NULL_USERCMD
+            },
+            2000,
+        ),
+        held(
+            "strafe_left",
+            net::msg::UserCmd {
+                right: -127,
+                ..NULL_USERCMD
+            },
+            2000,
+        ),
+        held(
+            "strafe_right",
+            net::msg::UserCmd {
+                right: 127,
+                ..NULL_USERCMD
+            },
+            2000,
+        ),
+        // Ads standing: the `weapon_position ads` clauses are the only ones a
+        // rifleman can otherwise never reach.
+        held(
+            "ads_stand",
+            net::msg::UserCmd {
+                buttons: 0x10,
+                ..NULL_USERCMD
+            },
+            2000,
+        ),
+        held(
+            "crouch_run",
+            net::msg::UserCmd {
+                wbuttons: WBUTTON_CROUCH,
+                up: -127,
+                forward: 127,
+                ..NULL_USERCMD
+            },
+            2500,
+        ),
+        held("stand_after_crouch", NULL_USERCMD, 1500),
+        // Turning on the spot. Nothing derives the turn movetypes yet, so
+        // this is evidence rather than a gate: it records whether retail
+        // leaves the idle anim alone while the view sweeps.
+        held(
+            "turn_left",
+            net::msg::UserCmd {
+                angles: [0, -60 * 65536 / 360, 0],
+                ..NULL_USERCMD
+            },
+            1500,
+        ),
+        held(
+            "turn_right",
+            net::msg::UserCmd {
+                angles: [0, 60 * 65536 / 360, 0],
+                ..NULL_USERCMD
+            },
+            1500,
+        ),
         MotionStep {
             label: "jump_takeoff",
             cmd: net::msg::UserCmd {
@@ -922,6 +989,11 @@ fn motion_script() -> Vec<MotionStep> {
                 ..NULL_USERCMD
             },
             until: Until::Airborne(Duration::from_millis(1500)),
+        },
+        MotionStep {
+            label: "land",
+            cmd: NULL_USERCMD,
+            until: Until::Grounded(Duration::from_millis(1500)),
         },
     ]
 }
@@ -982,7 +1054,7 @@ impl MotionProbe {
         if self.traced != Some(snap.message_num) {
             self.traced = Some(snap.message_num);
             println!(
-                "  trace {} +{:>4}ms st={} vh={:>5.1} proneDir={:>8.2} dirPitch={:>7.2} torso={:>7.2} origin=[{:>8.1},{:>8.1}] deltaYaw={} eFlags={} pm=0x{:x}",
+                "  trace {} +{:>4}ms st={} vh={:>5.1} proneDir={:>8.2} dirPitch={:>7.2} torso={:>7.2} origin=[{:>8.1},{:>8.1}] deltaYaw={} eFlags={} pm=0x{:x} legsAnim={} torsoAnim={} weapAnim={}",
                 self.steps[self.idx].label,
                 elapsed.as_millis(),
                 snap.server_time,
@@ -995,6 +1067,9 @@ impl MotionProbe {
                 snap.ps.field_i32(p, "delta_angles[1]"),
                 snap.ps.field_i32(p, "eFlags"),
                 snap.ps.field_i32(p, "pm_flags"),
+                snap.ps.field_i32(p, "legsAnim"),
+                snap.ps.field_i32(p, "torsoAnim"),
+                snap.ps.field_i32(p, "weapAnim"),
             );
         }
         let take = match step.until {
@@ -1004,13 +1079,19 @@ impl MotionProbe {
                     != net::protocol::ENTITYNUM_WORLD as i32;
                 (airborne && elapsed >= Duration::from_millis(50)) || elapsed >= limit
             }
+            Until::Grounded(limit) => {
+                let grounded = snap.ps.field_i32(p, "groundEntityNum")
+                    == net::protocol::ENTITYNUM_WORLD as i32;
+                (grounded && elapsed >= Duration::from_millis(50)) || elapsed >= limit
+            }
         };
         if !take {
             return false;
         }
         println!(
             "MOTION {}: leanf={} viewHeightCurrent={} viewHeightTarget={} viewHeightLerp[target={} time={} down={} posAdj={}] \
-bobCycle={} groundEntityNum={} pm_flags=0x{:x} pm_time={} jumpTime={} velocity_z={} eventSequence={} events=[{},{},{},{}]",
+bobCycle={} groundEntityNum={} pm_flags=0x{:x} pm_time={} jumpTime={} velocity_z={} eventSequence={} events=[{},{},{},{}] \
+legsAnim={} torsoAnim={} weapAnim={}",
             step.label,
             f32::from_bits(snap.ps.field_i32(p, "leanf") as u32),
             f32::from_bits(snap.ps.field_i32(p, "viewHeightCurrent") as u32),
@@ -1030,6 +1111,9 @@ bobCycle={} groundEntityNum={} pm_flags=0x{:x} pm_time={} jumpTime={} velocity_z
             snap.ps.field_i32(p, "events[1]"),
             snap.ps.field_i32(p, "events[2]"),
             snap.ps.field_i32(p, "events[3]"),
+            snap.ps.field_i32(p, "legsAnim"),
+            snap.ps.field_i32(p, "torsoAnim"),
+            snap.ps.field_i32(p, "weapAnim"),
         );
         self.captured.push((step.label, snap.ps.fields.clone()));
         self.idx += 1;
@@ -1084,6 +1168,7 @@ fn write_motion_fixture(
             .map(|s| match s.until {
                 Until::Held(_) => "settled",
                 Until::Airborne(_) => "airborne",
+                Until::Grounded(_) => "grounded",
             })
             .unwrap_or("settled");
         out.push_str(&format!(
