@@ -95,6 +95,7 @@ pub fn spawn_entities_from_string(
                 for alias in turret_sound_aliases(host.fs.as_deref(), &item.name) {
                     register_sound_alias(host, alias);
                 }
+                settle_turret_pitch(host, cx, id);
             }
         }
         if SPAWN_FREES.contains(&classname.as_str()) {
@@ -295,6 +296,103 @@ fn drop_item_to_floor(host: &mut GameHost, cx: &mut Cx, id: EntId) {
     };
     let aligned = align_to_surface(radiant, tr.normal.into());
     let _ = host.set_field(cx, id, angles, Value::Vector(aligned));
+}
+
+/// The barrel pitch an unmanned turret comes to rest at, recorded for
+/// `wire.rs` to send as `angles2[0]`. Retail's `turret_think_init` (0x5268c)
+/// finds it by swinging the stock down in -3 degree steps until the segment
+/// from `tag_aim` to it hits the world; the evidence is in
+/// `docs/protocol-1.1.md`, "A turret's `angles2[0]` is where its barrel came
+/// to rest".
+///
+/// Two divergences, both bounded: the 10-degrees-a-frame walk retail takes
+/// toward the pitch is not modelled, so a turret here is settled from map
+/// load, and the ray stops on SOLID where retail's mask is 0x11. Neither
+/// moves either carentan turret off retail's value.
+fn settle_turret_pitch(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+    let (Some(world), Some(fs)) = (host.world.clone(), host.fs.clone()) else {
+        return;
+    };
+    let (origin_at, angles_at, model_at) = (
+        cx.intern_folded("origin"),
+        cx.intern_folded("angles"),
+        cx.intern_folded("model"),
+    );
+    let Value::Vector(origin) = host.get_field(cx, id, origin_at) else {
+        return;
+    };
+    let Value::Vector(angles) = host.get_field(cx, id, angles_at) else {
+        return;
+    };
+    let Value::String(model) = host.get_field(cx, id, model_at) else {
+        return;
+    };
+    // The `model` key is the pak path; `xmodel::load_bones` wants the name.
+    let model = cx.resolve(model).trim_start_matches("xmodel/").to_string();
+
+    host.turret_pitch.insert(id, DEFAULT_TURRET_PITCH);
+    let bones = match vcod_common::xmodel::load_bones(&fs, &model) {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("turret model {model}: {e}");
+            return;
+        }
+    };
+    let tag = |n: &str| bones.iter().find(|b| b.name == n).map(|b| b.pos);
+    // A model missing either tag keeps the seed: `turret_think_init` returns
+    // before the sweep when either lookup fails.
+    let (Some(aim), Some(butt)) = (tag("tag_aim"), tag("tag_butt")) else {
+        return;
+    };
+    let pitch = sweep_rest_pitch(&world.collision, origin, angles, aim, butt);
+    host.turret_pitch.insert(id, pitch);
+}
+
+/// `G_SpawnTurret`'s seed (rodata `0x75a10`), which a sweep that hits nothing
+/// leaves in place.
+const DEFAULT_TURRET_PITCH: f32 = -90.0;
+
+/// The sweep itself, geometry only: the first of 31 steps of -3 degrees whose
+/// segment from `tag_aim` to the swung `tag_butt`, both taken into the
+/// turret's frame, meets the world.
+fn sweep_rest_pitch(
+    collision: &vcod_common::collision::CollisionWorld,
+    origin: [f32; 3],
+    angles: [f32; 3],
+    aim: glam::Vec3,
+    butt: glam::Vec3,
+) -> f32 {
+    const STEP: f32 = -3.0;
+    const STEPS: i32 = 30;
+
+    let ent = angles_to_axis(angles);
+    let to_world = |v: glam::Vec3| glam::Vec3::from(origin) + transform(v, &ent);
+    let start = to_world(aim);
+    for i in 0..=STEPS {
+        let pitch = i as f32 * STEP;
+        let swung = aim + transform(butt - aim, &angles_to_axis([pitch, 0.0, 0.0]));
+        if collision.shot_trace(start, to_world(swung)).fraction < 1.0 {
+            return pitch;
+        }
+    }
+    DEFAULT_TURRET_PITCH
+}
+
+/// `AnglesToAxis` (0x3ef3c): forward, *negated* right, up.
+fn angles_to_axis(a: [f32; 3]) -> [glam::Vec3; 3] {
+    let (sp, cp) = a[0].to_radians().sin_cos();
+    let (sy, cy) = a[1].to_radians().sin_cos();
+    let (sr, cr) = a[2].to_radians().sin_cos();
+    [
+        glam::Vec3::new(cp * cy, cp * sy, -sp),
+        glam::Vec3::new(sr * sp * cy - cr * sy, sr * sp * sy + cr * cy, sr * cp),
+        glam::Vec3::new(cr * sp * cy + sr * sy, cr * sp * sy - sr * cy, cr * cp),
+    ]
+}
+
+/// `MatrixTransformVector` (0x3e220): the vector's components scale the axes.
+fn transform(v: glam::Vec3, axis: &[glam::Vec3; 3]) -> glam::Vec3 {
+    axis[0] * v.x + axis[1] * v.y + axis[2] * v.z
 }
 
 /// The item's angles once it has landed: retail lies it on the surface it
@@ -528,6 +626,38 @@ mod tests {
     use crate::game::testing::fixture;
     use crate::items::Items;
     use vcod_gsc::{EntId, Host, Value};
+
+    /// The sweep stops at the first -3 degree step whose barrel-to-stock
+    /// segment reaches the floor. A stock 40 units behind the aim tag and 16
+    /// units up clears a floor at z = 0 until sin(pitch) <= -0.4, which is
+    /// -23.6 degrees, so the first step that hits is -24. Runs without the
+    /// paks, unlike the carentan values the entity gate checks.
+    #[test]
+    fn the_rest_pitch_is_the_first_step_whose_stock_reaches_the_floor() {
+        let world = vcod_common::collision::test_world(&[]);
+        let aim = glam::Vec3::new(0.0, 0.0, 16.0);
+        let butt = glam::Vec3::new(-40.0, 0.0, 16.0);
+        for yaw in [0.0, 90.0, 229.0] {
+            assert_eq!(
+                super::sweep_rest_pitch(&world, [0.0, 0.0, 0.0], [0.0, yaw, 0.0], aim, butt),
+                -24.0,
+                "yaw {yaw} turns the turret, it does not change how far the stock has to fall"
+            );
+        }
+    }
+
+    /// Nothing under the gun: the sweep runs out and leaves `G_SpawnTurret`'s
+    /// seed.
+    #[test]
+    fn a_sweep_that_hits_nothing_keeps_the_spawn_seed() {
+        let world = vcod_common::collision::test_world(&[]);
+        let aim = glam::Vec3::new(0.0, 0.0, 16.0);
+        let butt = glam::Vec3::new(-40.0, 0.0, 16.0);
+        assert_eq!(
+            super::sweep_rest_pitch(&world, [0.0, 0.0, 4096.0], [0.0, 0.0, 0.0], aim, butt),
+            super::DEFAULT_TURRET_PITCH,
+        );
+    }
 
     /// `G_CallSpawn`'s fourth case: a classname in neither the item list nor
     /// `spawns` still produces a live entity with its keys applied. That is why

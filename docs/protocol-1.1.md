@@ -187,6 +187,57 @@ them and 0 on the scriptmover and the turret, and `solid` 0 on all of them.
 load and 1023 (`ENTITYNUM_NONE`) from then on, which is why a trace has to be
 taken from a settled server.
 
+#### A turret's `angles2[0]` is where its barrel came to rest
+
+Both of carentan's mounted MGs carry a non-zero `angles2[0]` in every sample of
+every run: -63 on the one at [-500, 1896, 175] and -72 on the one at
+[1712, 1830, 8]. It is the barrel's pitch, and the turret measures it against
+the map at spawn.
+
+VERIFIED, all of the following read out of `game.mp.i386.so`:
+
+- `G_SpawnTurret` (0x52c84) writes zero to the three `angles2` floats at
+  `+0x68`, `+0x6c` and `+0x70` (0x52fd2) and -90 (rodata `0x75a10`) to `+0x1c`
+  of the turret record it allocates, then stores `turret_think_init` as the
+  entity's think and `level.time + 100` as its nextthink.
+- `turret_think_init` (0x5268c) calls `G_DObjGetLocalTagMatrix` (0x673e0) for
+  `tag_aim` (rodata `0x75882`) and `tag_butt` (`0x75910`), `AnglesToAxis`
+  (0x3ef3c), `MatrixTransformVector` (0x3e220), `MatrixTransformVector43`
+  (0x3e2e8), and `trap_LocationalTrace` (0x63948) with mask 0x11. Its loop
+  counter is compared against 30, its per-step angle is that counter times -3.0
+  (rodata `0x7591c`), and the one store to `+0x1c` in the function writes that
+  angle.
+- `turret_think` (0x5328c) is a 50 ms think that calls the helper at 0x524cc
+  with a two-float vector holding `+0x1c` and 0.
+- That helper reads `angles2[0]` and `angles2[1]`, calls `AngleSubtract` on
+  each against the vector it was passed, scales its per-step limit by 0.05
+  (rodata `0x7590c`), takes that limit from 200.0 (rodata `0x75904`) when its
+  third argument is zero, which is what `turret_think` passes, and leaves the
+  step it could not take in `angles2[2]`.
+- `turret_controller` (0x53348) hands (`angles2[0]`, `angles2[1]`, 0) to
+  `G_DObjSetControlTagAngles` for `tag_aim` and `tag_aim_animated`, and
+  (`angles2[2]`, 0, 0) for `tag_flash`.
+
+INFERRED, control flow: the sweep runs 31 steps from 0 to -90 degrees and stops
+at the first whose trace does not reach its end, so `+0x1c` holds the pitch at
+which the segment from `tag_aim` to the swung `tag_butt` first meets the world,
+and the -90 survives a sweep that hits nothing or a model missing either tag.
+
+INFERRED, from what the swept segment is: `tag_butt` is the stock, so the rest
+pitch is where the butt hits whatever is behind and below the gun -- an unmanned
+MG42 tips its barrel up until its stock is in the dirt.
+
+INFERRED, control flow: `turret_think` then walks `angles2[0]` toward that
+pitch by at most 10 degrees a frame, so a -72 turret settles eight frames after
+its first think and holds there, which is why every trace reads the same value.
+
+VERIFIED by reproduction: replaying that sweep against `xmodel/mg42_bipod`'s
+`tag_aim` (-2.9806, 0.0611, 12.8727) and `tag_butt` (-49.6281, 0.0000, 10.9540)
+and mp_carentan's collision gives exactly -63 and -72 for the two turrets, with
+a ray that stops on `CONTENTS_SOLID` alone. A ray that also stops on playerclip
+gives -60 for the second turret, so retail's 0x11 does not cover playerclip,
+which is 0x10000 in this engine.
+
 #### What a player entity looks like
 
 A client is sent no entity for itself, so a single client's capture never holds
