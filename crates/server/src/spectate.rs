@@ -122,7 +122,28 @@ pub struct ClientSim {
     /// why the motion gate cannot pin it (docs/protocol-1.1.md, "The
     /// view-height lerp").
     view_lerp_start: Option<i32>,
+    /// The animation channels, driven by `update_anims` after each frame's
+    /// moves and read straight into the wire playerstate.
+    anim: vcod_common::animscript::AnimState,
+    /// Whether the sim was off the ground last frame, so `update_anims` can
+    /// raise `jump` and `land` on the edges rather than every frame.
+    was_airborne: bool,
 }
+
+/// Everything the animscript needs that the sim does not own: the script
+/// itself, the name-to-index lookup, and the weapon the client holds.
+pub struct AnimInputs<'a> {
+    pub anims: &'a vcod_common::animtree::PlayerAnims,
+    pub weapon: &'a str,
+    pub weapon_class: &'a str,
+}
+
+/// Horizontal speed below which the animscript sees an idle player, whatever
+/// the input. A player pressed into geometry keeps a few units a second and
+/// retail's capture animates it standing; the value sits between that
+/// capture's 8 u/s blocked run and its 13 u/s prone crawl
+/// (`crates/server/tests/playerstate_motion_ab.rs`).
+pub const ANIM_IDLE_SPEED: f32 = 10.0;
 
 impl ClientSim {
     /// A client entering the world: Q3 spectator fly
@@ -138,6 +159,8 @@ impl ClientSim {
             viewmodel_index: 0,
             delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
             view_lerp_start: None,
+            anim: Default::default(),
+            was_airborne: false,
         }
     }
 
@@ -161,6 +184,9 @@ impl ClientSim {
         self.ps = pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg);
         self.pm_type = mode;
         self.delta_angles = spawn_delta_angles(yaw_deg, cmd_angles);
+        // A respawned player does not resume the anim it died in.
+        self.anim = Default::default();
+        self.was_airborne = false;
     }
 
     /// Advance one frame. The axes arrive quantized to ±127/0 and dt comes off
@@ -203,6 +229,93 @@ impl ClientSim {
         }
     }
 
+    /// Picks this frame's animation, from the state the moves just produced
+    /// and the cmd that produced it. Called once per frame after the moves;
+    /// `strafing` is input, not state.
+    ///
+    /// Whether the player moves at all comes from the velocity and which way
+    /// it moves comes from the cmd, both measured against the retail capture:
+    /// a player held by geometry animates idle however hard it pushes, and one
+    /// sliding along a wall animates the direction it asked for rather than
+    /// the one it got. A player coasting with no input keeps the anim it had
+    /// until it stops, which is Q3's own `PM_Footsteps` rule.
+    ///
+    /// A spectator animates nothing; it is sent to nobody and its own
+    /// playerstate carries zeros in the capture.
+    pub fn update_anims(&mut self, inputs: &AnimInputs, cmd: &UserCmd, now_ms: i32) {
+        use vcod_common::animscript::{Conditions, Movetype, Side};
+        if self.pm_type != PmType::Normal {
+            return;
+        }
+        let moving = self.ps.velocity.truncate().length() > ANIM_IDLE_SPEED;
+        let asked = cmd.forward != 0 || cmd.right != 0;
+        let travelling = moving && asked;
+        let back = travelling && cmd.forward < 0;
+        // The script's own legend: strafing is never left or right while
+        // moving backwards.
+        let strafing = match cmd.right {
+            _ if !travelling || back => None,
+            r if r < 0 => Some(Side::Left),
+            r if r > 0 => Some(Side::Right),
+            _ => None,
+        };
+        // A movetype is the stance crossed with the direction. CoD 1 has one
+        // move speed and no walk bit (docs/protocol-1.1.md, "Usercmd input
+        // bits"), so a moving player runs; the `walk*` blocks are what ads
+        // would select, and ads is unreachable from a usercmd.
+        let movetype = match (self.ps.stance, travelling, back) {
+            (pmove::Stance::Prone, false, _) => Movetype::IdleProne,
+            (pmove::Stance::Prone, true, true) => Movetype::WalkProneBk,
+            (pmove::Stance::Prone, true, false) => Movetype::WalkProne,
+            (pmove::Stance::Crouch, false, _) => Movetype::IdleCr,
+            (pmove::Stance::Crouch, true, true) => Movetype::RunCrBk,
+            (pmove::Stance::Crouch, true, false) => Movetype::RunCr,
+            (pmove::Stance::Stand, false, _) => Movetype::Idle,
+            (pmove::Stance::Stand, true, true) => Movetype::RunBk,
+            (pmove::Stance::Stand, true, false) => Movetype::Run,
+        };
+        let conditions = Conditions {
+            movetype,
+            weapon: inputs.weapon.to_ascii_lowercase(),
+            weapon_class: inputs.weapon_class.to_ascii_lowercase(),
+            // Holding the ads bit for two seconds selected no ads clause in
+            // either retail capture, so nothing here can reach one.
+            ads: false,
+            strafing,
+            mounted: None,
+            firing: false,
+        };
+        let resolve = |name: &str| inputs.anims.wire_of(name);
+        // The two ground edges, before the continuous state: an event anim
+        // holds the channel, so raising it first is what keeps the restart
+        // toggle flipping once per landing rather than twice.
+        let script = &inputs.anims.script;
+        match (self.ps.on_ground, self.was_airborne) {
+            (true, true) => {
+                let sel = script.select_event("land", &conditions);
+                self.anim.event(&sel, now_ms, resolve);
+            }
+            (false, false) => {
+                let event = if back { "jumpbk" } else { "jump" };
+                let sel = script.select_event(event, &conditions);
+                self.anim.event(&sel, now_ms, resolve);
+            }
+            _ => {}
+        }
+        // A jump owns the legs until the landing: retail's capture flips the
+        // restart toggle exactly once between its takeoff and its land
+        // sample, so no continuous anim runs in between. A player still
+        // carrying speed it stopped asking for keeps its anim too.
+        if self.ps.on_ground && (asked || !moving) {
+            let mut sel = script.select("combat", &conditions);
+            // Retail leaves `torsoAnim` 0 in every settled pose of both
+            // captures, although the clauses reached here are `both`.
+            sel.torso = None;
+            self.anim.set(&sel, now_ms, resolve);
+        }
+        self.was_airborne = !self.ps.on_ground;
+    }
+
     /// The wire playerstate. Fields the two modes disagree about are measured
     /// on both sides: the spectator's from the retail capture in
     /// `crates/common/tests/fixtures/net/snapshots.bin`, whose zeros
@@ -236,8 +349,8 @@ impl ClientSim {
     /// 3 with a delta and a 50 ms duration, so the receiving client carries
     /// the motion between snapshots instead of stepping to each one.
     ///
-    /// What that capture carries and this does not is stage 6's: `legsAnim`
-    /// and the event ring.
+    /// What that capture carries and this does not is stage 6's: the event
+    /// ring.
     pub fn to_entity(&self, p: &Protocol, slot: usize, command_time: i32) -> msg::EntityState {
         let mut e = msg::EntityState::null(p);
         e.number = slot as u32;
@@ -250,6 +363,9 @@ impl ClientSim {
         set("clientNum", slot as i32);
         set("eFlags", PLAYER_EFLAGS);
         set("solid", PLAYER_SOLID);
+        // The entity has no torso channel; only the legs travel to another
+        // client.
+        set("legsAnim", self.anim.legs());
         set("weapon", i32::from(self.weapons.current));
         set(
             "groundEntityNum",
@@ -365,6 +481,8 @@ impl ClientSim {
             set("leanf", (self.ps.lean / pmove::LEAN_MAX).to_bits() as i32);
             set("serverCursorHintString", NO_CURSOR_HINT);
             set("viewmodelIndex", self.viewmodel_index);
+            set("legsAnim", self.anim.legs());
+            set("torsoAnim", self.anim.torso());
         }
         // What the client holds; both layouts are in the object model doc,
         // section 20.

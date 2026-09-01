@@ -48,7 +48,7 @@ fn item_index(name: &str) -> Option<usize> {
 }
 
 /// The item name at `index`, the inverse of `item_index`.
-fn item_name(index: usize) -> Option<&'static str> {
+pub(crate) fn item_name(index: usize) -> Option<&'static str> {
     if let Some(name) = index
         .checked_sub(1)
         .and_then(|i| WEAPON_LIST.split(' ').nth(i))

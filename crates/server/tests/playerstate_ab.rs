@@ -23,21 +23,11 @@ use std::time::Instant;
 use vcod_common::net::msg::PlayerState;
 use vcod_common::net::protocol::{Protocol, PROTOCOL_V1};
 
-/// Fields stage 4 knowingly does not reproduce, each with the reason. Empty
-/// is the goal. A gap that starts matching fails the guard below, so this
-/// list cannot rot into a lie.
-const GAPS: &[(&str, &str)] = &[(
-    "legsAnim",
-    "an animation the server has no system to choose. `BG_PlayAnim` (0x2c338) \
-     writes the field, keeping the old ANIM_TOGGLEBIT and flipping it, and the \
-     index below the bit comes from the parsed animscript through \
-     `BG_AnimScriptAnimation` and `BG_PlayerAnimation`, so retail's 634 is \
-     index 122 with the 512 bit set \
-     (docs/research/player-model-anim-system.md, \"Animation indices\"). \
-     Reproducing it means porting that state machine and loading the \
-     animscript assets; writing the number instead would pin one frame of an \
-     animation nothing here plays",
-)];
+/// Fields the server knowingly does not reproduce, each with the reason.
+/// Empty is the goal and it is empty: `legsAnim` was the last entry and the
+/// animscript machine earned it back. A gap that starts matching fails the
+/// guard below, so this list cannot rot into a lie.
+const GAPS: &[(&str, &str)] = &[];
 
 /// Fields no capture can pin: they advance with the frame the capture was
 /// taken on, so retail's value and ours are both correct and different.

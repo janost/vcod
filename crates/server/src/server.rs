@@ -186,6 +186,13 @@ pub struct Server {
     /// The map script; `None` until `load_scripts` succeeds. `tick` steps it
     /// once per frame.
     script: Option<crate::game::script::ScriptRuntime>,
+    /// The player animtree, its wire index and the animscript. `None` on a
+    /// host with no paks, where every client keeps index 0.
+    anims: Option<vcod_common::animtree::PlayerAnims>,
+    /// `weaponClass` per weapon index, resolved once at load: the animscript
+    /// tests it every frame and the frame loop must not read a pk3. Indexed
+    /// the way the wire is, so slot 0 is the empty "no weapon".
+    weapon_classes: Vec<String>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -288,6 +295,8 @@ impl Server {
             test_entities: None,
             last_tick: None,
             script: None,
+            anims: None,
+            weapon_classes: Vec::new(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -1004,6 +1013,20 @@ impl Server {
     /// than about a half-cleared table. `main.rs` exits on it.
     pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
         let cvars = self.cvars(&fs);
+        self.anims = match vcod_common::animtree::PlayerAnims::load(&fs) {
+            Ok(a) => Some(a),
+            Err(e) => {
+                log::warn!("player anims: {e:#}, players will not animate");
+                None
+            }
+        };
+        self.weapon_classes = std::iter::once(String::new())
+            .chain(
+                crate::configstrings::WEAPON_LIST
+                    .split(' ')
+                    .map(|w| crate::weapons::weapon_class(Some(&fs), w).unwrap_or_default()),
+            )
+            .collect();
         let rt = crate::game::script::ScriptRuntime::load(
             fs,
             &self.cfg.map,
@@ -1247,6 +1270,7 @@ impl Server {
             // cap resyncs to the newest cmd and keeps only the tail.
             let mut processed = 0usize;
             let (mut first_cmd_st, mut last_cmd_st) = (None::<i32>, None::<i32>);
+            let mut last_cmd = None::<UserCmd>;
             while !c.pending.is_empty() {
                 let cmd = c.pending[0];
                 if processed >= MAX_CMDS_PER_TICK {
@@ -1265,10 +1289,31 @@ impl Server {
                 }
                 let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
                 sim.step(&cmd, dt, collision);
+                last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;
                 first_cmd_st.get_or_insert(cmd.server_time);
                 last_cmd_st = Some(cmd.server_time);
                 processed += 1;
+            }
+            // The animation the client should be playing, from the state the
+            // moves just produced and the input that produced it.
+            if let (Some(anims), Some(cmd)) = (self.anims.as_ref(), last_cmd) {
+                let index = sim.weapons.current as usize;
+                let weapon = crate::items::item_name(index).unwrap_or_default();
+                let class = self
+                    .weapon_classes
+                    .get(index)
+                    .map(String::as_str)
+                    .unwrap_or_default();
+                sim.update_anims(
+                    &crate::spectate::AnimInputs {
+                        anims,
+                        weapon,
+                        weapon_class: class,
+                    },
+                    &cmd,
+                    self.sv_time_ms,
+                );
             }
             // Exactly the serverTime of the last cmd the sim consumed, and
             // nothing else: the client replays everything past it, so a

@@ -202,11 +202,6 @@ fn family(name: &str) -> &str {
 /// Empty is the goal; the guard below fails on one that starts matching.
 const PLAYER_GAPS: &[(&str, &str)] = &[
     (
-        "legsAnim",
-        "the animation a player is playing, which needs the animscript state \
-         machine stage 4's playerstate gate already records as missing",
-    ),
-    (
         "eventSequence",
         "the entity event ring, which nothing raises until stage 6",
     ),
