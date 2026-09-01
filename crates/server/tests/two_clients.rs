@@ -202,11 +202,6 @@ fn family(name: &str) -> &str {
 /// Empty is the goal; the guard below fails on one that starts matching.
 const PLAYER_GAPS: &[(&str, &str)] = &[
     (
-        "legsAnim",
-        "the animation a player is playing, which needs the animscript state \
-         machine stage 4's playerstate gate already records as missing",
-    ),
-    (
         "eventSequence",
         "the entity event ring, which nothing raises until stage 6",
     ),
@@ -384,6 +379,20 @@ fn a_joined_client_carries_a_body_model_in_the_roster() {
         model > 0,
         "client {nb} has no body model, so another client can name it and not draw it"
     );
+}
+
+/// A client renders another player from its entityState, not from that
+/// player's playerstate, so the anim has to travel twice. `a_moving_player`
+/// walks, so its `legsAnim` index must be non-zero.
+#[test]
+fn a_player_entity_carries_the_animation_it_is_playing() {
+    let Some(e) = a_moving_player() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let p = &PROTOCOL_V1;
+    let legs = e.field_i32(p, "legsAnim");
+    assert_ne!(legs & 511, 0, "a moving player is sent the bind pose");
 }
 
 /// A spectator is not a thing in the world. Retail links no entity for one,

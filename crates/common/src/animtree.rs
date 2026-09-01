@@ -34,7 +34,7 @@ enum Tok<'a> {
 }
 
 /// Keeps newlines so a line-oriented scan of the result still lines up.
-fn strip_comments(text: &str) -> String {
+pub(crate) fn strip_comments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find("/*") {
@@ -172,31 +172,12 @@ impl AnimTree {
     }
 }
 
-/// Names after `both|legs|torso|turret` on uncommented lines, lowercased
-/// because the engine folds anim names.
-pub fn anim_script_names(text: &str) -> HashSet<String> {
-    let mut out = HashSet::new();
-    for line in strip_comments(text).lines() {
-        let mut w = line.split_whitespace();
-        let Some(part) = w.next() else { continue };
-        if !matches!(part, "both" | "legs" | "torso" | "turret") {
-            continue;
-        }
-        if let Some(name) = w.next() {
-            if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                out.insert(name.to_ascii_lowercase());
-            }
-        }
-    }
-    out
-}
-
 impl AnimIndex {
     /// Flattens `tree` into the engine's animation array. Leaves that
-    /// `referenced` (from [`anim_script_names`]) does not name are dropped,
-    /// as the engine drops anims whose names were never interned. Verified
-    /// against a live 1.1d server's `animations[]` (research doc, "Animation
-    /// indices: the animtree").
+    /// `referenced` (from [`crate::animscript::AnimScript::referenced_names`])
+    /// does not name are dropped, as the engine drops anims whose names were
+    /// never interned. Verified against a live 1.1d server's `animations[]`
+    /// (research doc, "Animation indices: the animtree").
     pub fn build(tree: &AnimTree, referenced: &HashSet<String>) -> AnimIndex {
         let mut entries = vec![0usize];
         expand(tree, 0, false, referenced, &mut entries);
@@ -214,6 +195,17 @@ impl AnimIndex {
 
     pub fn name<'a>(&self, tree: &'a AnimTree, wire: i32) -> Option<&'a str> {
         self.node(tree, wire).map(|n| n.name.as_str())
+    }
+
+    /// The wire value that plays `name`, folded because the engine folds anim
+    /// names. The first index that carries the name wins; the flattening
+    /// gives a node exactly one slot.
+    pub fn wire_of(&self, tree: &AnimTree, name: &str) -> Option<i32> {
+        let name = name.to_ascii_lowercase();
+        self.entries
+            .iter()
+            .position(|&id| tree.nodes[id].name.to_ascii_lowercase() == name)
+            .map(|i| i as i32)
     }
 
     /// Slot 0 is always the root, so there is no empty index and no `is_empty`.
@@ -246,24 +238,37 @@ fn expand(
     }
 }
 
+/// The three things a player's animation needs: the tree, the wire index into
+/// it, and the script that picks a name.
 pub struct PlayerAnims {
     pub tree: AnimTree,
     pub index: AnimIndex,
+    pub script: crate::animscript::AnimScript,
 }
 
 impl PlayerAnims {
     pub fn load(fs: &Pk3Fs) -> Result<PlayerAnims> {
         let tree = AnimTree::load(fs, "multiplayer")?;
-        let script = fs
+        let text = fs
             .read("mp/playeranim.script")
             .ok_or_else(|| anyhow!("mp/playeranim.script not found in pk3s"))?;
-        let referenced = anim_script_names(&String::from_utf8_lossy(&script));
-        let index = AnimIndex::build(&tree, &referenced);
-        Ok(PlayerAnims { tree, index })
+        let script = crate::animscript::AnimScript::parse(&String::from_utf8_lossy(&text))?;
+        let index = AnimIndex::build(&tree, &script.referenced_names());
+        Ok(PlayerAnims {
+            tree,
+            index,
+            script,
+        })
     }
 
     pub fn name(&self, wire: i32) -> Option<&str> {
         self.index.name(&self.tree, wire)
+    }
+
+    /// The wire value for an anim name, or `None` when the tree has no such
+    /// node.
+    pub fn wire_of(&self, name: &str) -> Option<i32> {
+        self.index.wire_of(&self.tree, name)
     }
 }
 
@@ -399,5 +404,48 @@ turning
             assert_eq!(anims.name(wire), Some(name), "wire index {wire}");
         }
         assert_eq!(anims.name(122 | 512), Some("pb_stand_alert"));
+    }
+
+    /// The reverse of `node_id`: the wire value that plays a named anim.
+    /// Case-folded, because the engine folds anim names.
+    #[test]
+    fn a_name_resolves_back_to_its_wire_index() {
+        let tree = AnimTree::parse(SAMPLE).unwrap();
+        // The same referenced set `index_order_is_reversed_and_skips_
+        // unreferenced_leaves` uses, so both tests read one tree.
+        let referenced: HashSet<String> = ["pt_b", "grp", "pl_t"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let index = AnimIndex::build(&tree, &referenced);
+        let wire = index.wire_of(&tree, "pt_b").expect("pt_b is indexed");
+        assert_eq!(index.name(&tree, wire), Some("pt_b"));
+        assert_eq!(index.wire_of(&tree, "PT_B"), Some(wire));
+        // `pb_walk` is a leaf nothing references, so it is not in the array.
+        assert_eq!(index.wire_of(&tree, "pb_walk"), None);
+        assert_eq!(index.wire_of(&tree, "not_in_the_tree"), None);
+    }
+
+    /// Every anim the real script names must exist in the real tree. A name
+    /// that does not resolve is either a parser bug or a fact about the
+    /// engine we have not recorded, and either way the machine cannot play
+    /// it. Needs the paks.
+    #[test]
+    fn every_scripted_anim_resolves_in_the_multiplayer_tree() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let anims = PlayerAnims::load(&fs).expect("load the player anims");
+        let mut missing: Vec<String> = anims
+            .script
+            .referenced_names()
+            .into_iter()
+            .filter(|n| anims.index.wire_of(&anims.tree, n).is_none())
+            .collect();
+        missing.sort();
+        assert!(
+            missing.is_empty(),
+            "the script names anims the animtree does not index: {missing:?}"
+        );
     }
 }

@@ -1,5 +1,6 @@
 //! Shared by the vcod client and server. No windowing, GPU or audio types in here.
 
+pub mod animscript;
 pub mod animtree;
 pub mod assets;
 pub mod bsp;
