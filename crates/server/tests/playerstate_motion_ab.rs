@@ -63,46 +63,34 @@ const MODELLED: &[&str] = &[
 /// from no clause the selection reaches.
 const ANIM_FIELDS: &[&str] = &["legsAnim"];
 
-/// Poses whose anim nothing derives yet, with the reason. Everything else is
-/// compared. Emptying this is a later stage's job, not a silent widening of
-/// this one.
-const ANIM_GAPS: &[(&str, &str)] = &[
-    (
-        "turn_left",
-        "the turn movetypes need a body yaw that lags the view, which no code models",
-    ),
-    ("turn_right", "same body yaw"),
-];
+/// Poses whose anim nothing derives yet, with the reason. Empty is the goal
+/// and it is empty: `turn_left` and `turn_right` were the entries, and both
+/// read the standing idle on retail and on us, so neither was a gap. The guard
+/// below fails on an entry that starts matching, so this cannot rot into a lie.
+const ANIM_GAPS: &[(&str, &str)] = &[];
 
-/// `pm_flags` bits retail sets that the mover has no source for, each with the
-/// pose that shows it. Excepted bit by bit and pose by pose: every other bit
-/// of `pm_flags` is still compared at these poses, and the whole word
-/// everywhere else.
-const PM_FLAG_GAPS: &[(&str, i32, &str)] = &[
-    (
-        "run_back",
-        0x40,
-        "retail sets this while backpedalling -- both captures carry it at this \
-         pose and at no other -- and pmove has nothing that writes it. The \
-         mover's gap, not the animscript's",
-    ),
-    (
-        "jump_takeoff",
-        0x8,
-        "the held-jump latch on the first airborne frame. Retail's PM_Jump \
-         (@0x2ec34) sets it and our port reaches that code from a ladder only, \
-         so no ground jump of ours carries it; retail's own mp_carentan \
-         capture reads 0 here where mp_pavlov reads the bit, so what clears it \
-         is unrecorded and the exception stays pinned to this bit and pose",
-    ),
-];
+/// `pm_flags` bits retail sets that the mover has no source for: the map, the
+/// pose that shows it, the bit, and why. Excepted bit by bit and pose by pose,
+/// so every other bit of `pm_flags` is still compared at that pose and the
+/// whole word everywhere else. The guard below fails on an entry that starts
+/// matching.
+const PM_FLAG_GAPS: &[(&str, &str, i32, &str)] = &[(
+    "mp_pavlov",
+    "jump_takeoff",
+    0x8,
+    "the held-jump latch on the first airborne frame. Retail's PM_Jump \
+     (@0x2ec34) sets it and our port reaches that code from a ladder only, so \
+     no ground jump of ours carries it; retail's own mp_carentan capture reads \
+     0 at this pose, so what clears it is unrecorded and the exception stays \
+     pinned to one bit of one pose of one map",
+)];
 
-/// The bits of `name` not compared at `label`, from [`PM_FLAG_GAPS`].
-fn gap_mask(label: &str, name: &str) -> i32 {
+/// The bits of `name` not compared at `label` on `map`, from [`PM_FLAG_GAPS`].
+fn gap_mask(map: &str, label: &str, name: &str) -> i32 {
     PM_FLAG_GAPS
         .iter()
-        .filter(|(pose, ..)| *pose == label && name == "pm_flags")
-        .fold(0, |mask, (_, bit, _)| mask | bit)
+        .filter(|(m, pose, ..)| *m == map && *pose == label && name == "pm_flags")
+        .fold(0, |mask, (.., bit, _)| mask | bit)
 }
 
 /// `eFlags` bit for prone, so a pose can be told to have taken.
@@ -147,6 +135,27 @@ fn horizontal_speed(x: i32, y: i32) -> f32 {
     f32::from_bits(x as u32).hypot(f32::from_bits(y as u32))
 }
 
+/// Whether the capture was moving at this pose, by the same threshold the
+/// animation machine uses.
+fn capture_moving(pose: &Pose) -> bool {
+    let field = |name: &str| {
+        *pose
+            .fields
+            .get(name)
+            .unwrap_or_else(|| panic!("{name} is not in the capture"))
+    };
+    horizontal_speed(field("velocity[0]"), field("velocity[1]"))
+        > vcod_server::spectate::ANIM_IDLE_SPEED
+}
+
+/// Our own horizontal speed at a sampled frame.
+fn our_speed(ps: &PlayerState) -> f32 {
+    horizontal_speed(
+        ps.field_i32(&PROTOCOL_V1, "velocity[0]"),
+        ps.field_i32(&PROTOCOL_V1, "velocity[1]"),
+    )
+}
+
 /// A pose one side moved through and the other stood still in. The spawn is
 /// weighted-random, so the two runs stand in different places and one can be
 /// pressed into geometry where the other is not -- `prone_disagrees` skips
@@ -154,19 +163,35 @@ fn horizontal_speed(x: i32, y: i32) -> f32 {
 /// the two are then animating different things and the pose is not
 /// comparable.
 fn movement_disagrees(pose: &Pose, ours: &PlayerState) -> bool {
-    let eps = vcod_server::spectate::ANIM_IDLE_SPEED;
-    let field = |name: &str| {
-        *pose
-            .fields
-            .get(name)
-            .unwrap_or_else(|| panic!("{name} is not in the capture"))
-    };
-    let retail = horizontal_speed(field("velocity[0]"), field("velocity[1]"));
-    let mine = horizontal_speed(
-        ours.field_i32(&PROTOCOL_V1, "velocity[0]"),
-        ours.field_i32(&PROTOCOL_V1, "velocity[1]"),
-    );
-    (retail > eps) != (mine > eps)
+    capture_moving(pose) != (our_speed(ours) > vcod_server::spectate::ANIM_IDLE_SPEED)
+}
+
+/// How many of a capture's poses must be compared with the player actually
+/// moving. Below this the gate is pinning a standing player: both captures
+/// carry three or more (the blocked ones read as idle on retail too), so a run
+/// that skipped them is a run to look at rather than one to trust.
+const MOVING_POSES_MIN: usize = 3;
+
+/// A `PM_FLAG_GAPS` entry whose bit stopped differing is an entry to delete,
+/// the same guard `playerstate_ab::GAPS` and `two_clients::PLAYER_GAPS` carry.
+fn check_pm_flag_gaps(map: &str, path: &str, poses: &[Pose], mine: &[PlayerState]) {
+    for (gap_map, label, bit, why) in PM_FLAG_GAPS {
+        if *gap_map != map {
+            continue;
+        }
+        let (pose, ps) = poses
+            .iter()
+            .zip(mine)
+            .find(|(pose, _)| pose.label == *label)
+            .unwrap_or_else(|| panic!("{path}: no pose {label} for the pm_flags gap"));
+        let retail = pose.fields["pm_flags"];
+        assert_ne!(
+            retail & bit,
+            ps.field_i32(&PROTOCOL_V1, "pm_flags") & bit,
+            "pm_flags {bit:#x} at {label} now matches retail; drop it from \
+             PM_FLAG_GAPS ({why})"
+        );
+    }
 }
 
 /// How long each pose is held, in server frames of 50 ms. The capture holds
@@ -287,6 +312,7 @@ fn ours(map: &str, poses: &[Pose], join: (&str, &str), fs: vcod_common::pk3::Pk3
     let mut out = Replay::default();
     for pose in poses {
         let mut sampled = None;
+        let mut last_moving = None;
         for _ in 0..HOLD_FRAMES {
             now += Duration::from_millis(50);
             cl.send_frame(&pose.input);
@@ -304,13 +330,24 @@ fn ours(map: &str, poses: &[Pose], join: (&str, &str), fs: vcod_common::pk3::Pk3
                 Sample::Airborne => !grounded,
                 Sample::Grounded => grounded,
             };
+            if our_speed(&ps) > vcod_server::spectate::ANIM_IDLE_SPEED {
+                last_moving = Some(out.frames.len());
+            }
             out.frames.push(ps.clone());
             sampled = Some(ps);
             if over {
                 break;
             }
         }
-        out.poses.push(sampled.expect("no snapshot after a pose"));
+        // Where the capture was moving, the comparable frame is one where we
+        // are moving too. The replay holds every pose for 3 s where the probe
+        // settled at 1.5, so an unobstructed run has met a wall by the last
+        // frame and comparing there compares a stop against a run.
+        let sampled = match (capture_moving(pose), last_moving) {
+            (true, Some(i)) => out.frames[i].clone(),
+            _ => sampled.expect("no snapshot after a pose"),
+        };
+        out.poses.push(sampled);
     }
     out
 }
@@ -334,19 +371,19 @@ fn check(map: &str, gametype: &str) {
     let mine = ours(map, &poses, (&team, &weapon), fs).poses;
     let p = &PROTOCOL_V1;
     let mut diffs = Vec::new();
-    let mut skipped = Vec::new();
+    let mut moving = 0usize;
     for (pose, ps) in poses.iter().zip(&mine) {
         if prone_disagrees(pose, ps) || ground_disagrees(pose, ps) {
-            skipped.push(pose.label.as_str());
             continue;
         }
+        moving += usize::from(capture_moving(pose));
         for name in MODELLED {
             let retail = *pose
                 .fields
                 .get(*name)
                 .unwrap_or_else(|| panic!("{name} is not in the capture"));
             let ours = ps.field_i32(p, name);
-            let compared = !gap_mask(&pose.label, name);
+            let compared = !gap_mask(map, &pose.label, name);
             if retail & compared != ours & compared {
                 diffs.push(format!(
                     "{}: {name} retail {retail} ({}), ours {ours} ({})",
@@ -357,12 +394,14 @@ fn check(map: &str, gametype: &str) {
             }
         }
     }
-    // A capture where retail refused every prone it was asked for would pass
-    // this gate while pinning nothing about prone at all.
+    // A run that skipped every pose the capture moved through would pass this
+    // gate while pinning a standing player and nothing else.
     assert!(
-        skipped.len() < poses.len(),
-        "{path}: every pose was skipped; the capture pins nothing"
+        moving >= MOVING_POSES_MIN,
+        "{path}: only {moving} moving poses compared; the capture pins a \
+         standing player and little else"
     );
+    check_pm_flag_gaps(map, &path, &poses, &mine);
     assert!(
         diffs.is_empty(),
         "{} of {} pose/field pairs differ from retail on {map}:\n  {}",
@@ -399,16 +438,16 @@ fn check_anims(map: &str, gametype: &str) {
     let mine = ours(map, &poses, (&team, &weapon), fs).poses;
     let p = &PROTOCOL_V1;
     let mut diffs = Vec::new();
-    let mut skipped = Vec::new();
+    let mut moving = 0usize;
     for (pose, ps) in poses.iter().zip(&mine) {
         if prone_disagrees(pose, ps)
             || movement_disagrees(pose, ps)
             || ground_disagrees(pose, ps)
             || ANIM_GAPS.iter().any(|(g, _)| *g == pose.label)
         {
-            skipped.push(pose.label.as_str());
             continue;
         }
+        moving += usize::from(capture_moving(pose));
         for name in ANIM_FIELDS {
             let retail = *pose
                 .fields
@@ -425,12 +464,27 @@ fn check_anims(map: &str, gametype: &str) {
             }
         }
     }
-    // A capture the replay disagreed with everywhere would pass this gate
-    // while pinning nothing about the animation at all.
+    // A run that compared only stationary poses would pass this gate on the
+    // stance idles alone and pin no movetype at all.
     assert!(
-        skipped.len() < poses.len(),
-        "{path}: every pose was skipped; the capture pins nothing"
+        moving >= MOVING_POSES_MIN,
+        "{path}: only {moving} moving poses compared; the gate pins the idles \
+         and nothing that moves"
     );
+    // A gap that started matching is a gap that should have been deleted.
+    for (label, why) in ANIM_GAPS {
+        let (pose, ps) = poses
+            .iter()
+            .zip(&mine)
+            .find(|(pose, _)| pose.label == *label)
+            .unwrap_or_else(|| panic!("{path}: no pose {label} for the anim gap"));
+        let retail = pose.fields["legsAnim"] & 511;
+        assert_ne!(
+            retail,
+            ps.field_i32(p, "legsAnim") & 511,
+            "the anim at {label} now matches retail; drop it from ANIM_GAPS ({why})"
+        );
+    }
     assert!(
         diffs.is_empty(),
         "{} anim indices differ from retail on {map}:\n  {}",
