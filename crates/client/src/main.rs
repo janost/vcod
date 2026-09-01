@@ -82,6 +82,14 @@ struct Args {
     /// player, which leaves every field the client predicts at zero.
     #[arg(long)]
     save_motion: bool,
+    /// Join a team, walk the --probe-pvs route and write the entity trace to
+    /// crates/server/tests/fixtures/entities/<map>-<gametype>.txt, the fixture
+    /// crates/server/tests/entities_ab.rs diffs against. Separate from
+    /// --probe-pvs because that one only prints: this one overwrites committed
+    /// evidence. Each run appends its stations to the map's fixture, since one
+    /// walk gets one random spawn; delete the file to start that map over.
+    #[arg(long)]
+    save_entities: bool,
     /// Join a team, then walk a route and print the snapshot entity list at
     /// each station: which entities the server sent, and every add and removal
     /// along the way with the position it happened at. Answers whether the
@@ -90,6 +98,11 @@ struct Args {
     /// positions in one run, not reproducible places.
     #[arg(long)]
     probe_pvs: bool,
+    /// Suffix for the --save-entities fixture name, so a capture taken under
+    /// different conditions lands beside the plain one rather than on top of
+    /// it: --capture-tag players writes <map>-<gametype>-players.txt.
+    #[arg(long)]
+    capture_tag: Option<String>,
     /// Seconds --net-probe stays connected; an SD round boundary needs a few minutes
     #[arg(long, default_value_t = 65)]
     probe_secs: u64,
@@ -416,7 +429,9 @@ fn main() -> Result<()> {
                 configstrings: args.save_configstrings,
                 playerstate: args.save_playerstate,
                 motion: args.save_motion,
+                entities: args.save_entities,
             },
+            args.capture_tag.clone(),
             args.probe_pvs,
             args.probe_secs,
             fs.as_ref(),

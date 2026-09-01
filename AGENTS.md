@@ -164,12 +164,11 @@ engineering setup works.
   the handshake, the gamestate, client commands and moves, and snapshots
   delta-compressed against the client's acked frame, with pmove-driven
   spectator flight and `--test-entities` for scripted packet entities (no
-  restarts yet). A snapshot's entity list comes only from `--test-entities`;
-  the script object table the map's entity lump spawns into is not wired to
-  it, so **no map entity reaches a client yet** — no turret, no placed
-  weapon, no door. A connected client sees BSP geometry it loaded itself and
-  nothing else, which makes "is that prop there?" unanswerable by eye and
-  every entity-side fact a job for the test suite until stage 4/5.
+  restarts yet). A snapshot's entity list is the map's own: placed weapons,
+  script models and mounted MGs, culled per client against the BSP's PVS the
+  way retail culls, so what a client is sent depends on where it stands. What
+  a client still gets nothing of is other clients — no player entity is built
+  yet — and movers, missiles and corpses, which no code spawns.
 - `tools/run_probe.sh <probe> [map]` drives the same retail binary as the
   gsc oracle: it drops one `crates/gsc/tests/fixtures/semantics/probe_*.gsc`
   in as a gametype script, boots the server, and prints the `PROBE` lines

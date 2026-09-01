@@ -5,11 +5,26 @@ use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::msg::{self, UserCmd};
 use vcod_common::net::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD};
+use vcod_common::net::trajectory;
 use vcod_common::pmove::{self, PmInput};
 
 /// `pm_flags`' own-body bit, third of the view-source group: a live client
 /// looking out of its own body carries it and neither spectator view does
 /// (docs/research/cod11-gsc-object-model.md, section 20).
+/// `ET_PLAYER`, what another client sees a player as
+/// (`crates/client/src/entities.rs` carries the table).
+const ET_PLAYER: i32 = 1;
+
+/// A player entity's `eFlags`, `solid` and `pos.trDuration`, transcribed from
+/// the retail two-probe capture rather than derived. `solid` decodes as
+/// `(maxs[2] + 32) << 16 | -mins[2] << 8 | half width`, which for 6684943 is
+/// a 70-unit standing box one unit deep and 15 wide -- the pmove box, and the
+/// same for every player, so a constant is faithful until something makes it
+/// vary. INFERRED, from that one value against the known box.
+const PLAYER_EFLAGS: i32 = 16;
+const PLAYER_SOLID: i32 = 6684943;
+const PLAYER_TR_DURATION: i32 = 50;
+
 const PMF_OWN_VIEW: i32 = 0x40000;
 
 /// Stance bits in `eFlags` and `pm_flags`, measured off the retail server
@@ -195,6 +210,86 @@ impl ClientSim {
     /// `crates/server/tests/fixtures/playerstate/*.txt`, which the
     /// `playerstate_ab` gate diffs against. `commandTime` mirrors the last
     /// processed cmd's server time.
+    /// Where the player is: the sim owns it, the script mirrors it.
+    pub fn origin(&self) -> [f32; 3] {
+        self.ps.origin.into()
+    }
+
+    /// The point a snapshot is built from: the origin lifted by the current
+    /// view height. `SV_BuildClientSnapshot` (0x808f288) adds the playerstate's
+    /// view height to `origin[2]` before it looks the leaf up, so a client
+    /// standing on a floor is tested from its eyes and not from its feet.
+    pub fn eye_origin(&self) -> [f32; 3] {
+        let o = self.ps.origin;
+        [o[0], o[1], o[2] + self.ps.view_height()]
+    }
+
+    /// What other clients are sent about this one. Retail sends a client no
+    /// entity for itself -- the playerstate carries it -- so this is only ever
+    /// built for somebody else (`docs/protocol-1.1.md`, "Which entities a
+    /// client is sent"). The body model is not here either: it rides the
+    /// `clientState` roster's `modelindex`, which stage 4 already sends.
+    ///
+    /// Measured against a retail capture of one probe watching another
+    /// (`crates/server/tests/fixtures/entities/mp_carentan-dm-players.txt`).
+    /// A moving player travels as a trajectory, not as a point: `pos.trType`
+    /// 3 with a delta and a 50 ms duration, so the receiving client carries
+    /// the motion between snapshots instead of stepping to each one.
+    ///
+    /// What that capture carries and this does not is stage 6's: `legsAnim`,
+    /// the event ring, and `angles2[1]`.
+    pub fn to_entity(&self, p: &Protocol, slot: usize, command_time: i32) -> msg::EntityState {
+        let mut e = msg::EntityState::null(p);
+        e.number = slot as u32;
+        let mut set = |name: &str, v: i32| {
+            if let Some(i) = msg::EntityState::field_index(p, name) {
+                e.fields[i] = v;
+            }
+        };
+        set("eType", ET_PLAYER);
+        set("clientNum", slot as i32);
+        set("eFlags", PLAYER_EFLAGS);
+        set("solid", PLAYER_SOLID);
+        set("weapon", i32::from(self.weapons.current));
+        set(
+            "groundEntityNum",
+            match self.ps.on_ground {
+                true => ENTITYNUM_WORLD as i32,
+                false => ENTITYNUM_NONE as i32,
+            },
+        );
+        // The lean the other client draws, the same -1..1 the playerstate
+        // carries. Without it a leaning player stands straight to everyone
+        // else.
+        set(
+            "leanf",
+            (self.ps.lean / vcod_common::pmove::LEAN_MAX).to_bits() as i32,
+        );
+        set("pos.trType", trajectory::TR_LINEAR_STOP);
+        // The time the position was simulated at, not the frame's: retail's
+        // capture has trTime 2 to 18 ms behind the snapshot's serverTime,
+        // which is the last usercmd's clock. Sending the frame time makes the
+        // receiving client extrapolate from a base in its own future, and a
+        // player standing still on a slope shivers.
+        set("pos.trTime", command_time);
+        set("pos.trDuration", PLAYER_TR_DURATION);
+        set("apos.trType", trajectory::TR_INTERPOLATE);
+        for axis in 0..3 {
+            set(
+                &format!("pos.trBase[{axis}]"),
+                self.ps.origin[axis].to_bits() as i32,
+            );
+            set(
+                &format!("pos.trDelta[{axis}]"),
+                self.ps.velocity[axis].to_bits() as i32,
+            );
+        }
+        // The body yaw only: a player entity carries no pitch, which is what
+        // the waist and head fields are for.
+        set("apos.trBase[1]", self.ps.yaw.to_degrees().to_bits() as i32);
+        e
+    }
+
     pub fn to_wire(&self, p: &Protocol, client_num: i32, command_time: i32) -> msg::PlayerState {
         let player = self.pm_type == PmType::Normal;
         let mut w = msg::PlayerState::null(p);

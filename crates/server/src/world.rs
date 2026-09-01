@@ -8,8 +8,42 @@ use vcod_common::{bsp, collision::CollisionWorld};
 
 pub struct World {
     pub collision: CollisionWorld,
+    /// The BSP tree and PVS table, for culling each client's entity list.
+    pub vis: bsp::Visibility,
     /// Feet origin and yaw degrees, from the ents lump's spawn classes.
     pub spawn: ([f32; 3], f32),
+}
+
+/// Which of `entities` a client standing at `eye` is sent. Retail's rule is
+/// the entity's clusters against the client's PVS row
+/// (`docs/protocol-1.1.md`, "Which entities a client is sent"), collected from
+/// the box its spawn function links it with, and this does the same. A point
+/// lookup is not enough: a turret's origin sits inside the geometry it stands
+/// on and reads as a solid leaf, so it would be visible from everywhere.
+///
+/// Retail also checks that the two areas connect. Every stock map's leafs
+/// carry area -1 or 0 (`docs/research/bsp-ibsp59-format.md`), so there is
+/// nothing to disconnect and no area test here.
+pub fn visible_entities(
+    vis: &bsp::Visibility,
+    eye: [f32; 3],
+    entities: &BTreeMap<u32, EntityState>,
+    p: &Protocol,
+) -> BTreeMap<u32, EntityState> {
+    let from = vis.cluster_at(eye);
+    entities
+        .iter()
+        .filter(|(_, e)| {
+            let o = e.origin(p);
+            let (mins, maxs) = crate::game::wire::link_box(e.field_i32(p, "eType"));
+            let at = |b: [f32; 3]| [o[0] + b[0], o[1] + b[1], o[2] + b[2]];
+            let clusters = vis.clusters_in_box(at(mins), at(maxs));
+            // An entity whose box touches no cluster at all is skipped, the
+            // way the module's loop skips one with `numClusters == 0`.
+            clusters.iter().any(|&c| vis.visible(from, c))
+        })
+        .map(|(n, e)| (*n, e.clone()))
+        .collect()
 }
 
 impl World {
@@ -18,7 +52,11 @@ impl World {
         let spawn = bsp::find_spawn(&b.entities)
             // No spawn class in the ents: hover above the origin.
             .unwrap_or(([0.0, 0.0, 64.0], 0.0));
-        World { collision, spawn }
+        World {
+            collision,
+            vis: b.visibility(),
+            spawn,
+        }
     }
 }
 

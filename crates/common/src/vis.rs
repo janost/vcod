@@ -833,6 +833,7 @@ pub fn two_cell_world() -> Bsp {
                 cell: 1,
             },
         ],
+        pvs: None,
     }
 }
 
@@ -1282,6 +1283,7 @@ mod tests {
                     cell: 2,
                 },
             ],
+            pvs: None,
         }
     }
 

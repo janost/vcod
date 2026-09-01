@@ -175,6 +175,7 @@ mod tests {
         let (mut vm, mut host) = fixture();
         host.world = Some(Rc::new(World {
             collision: vcod_common::collision::test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         }));
         vm.with_cx(|cx| {

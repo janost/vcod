@@ -28,6 +28,7 @@ const LUMP_CELLS: usize = 17;
 const LUMP_PORTALS: usize = 18;
 const LUMP_NODES: usize = 20;
 const LUMP_LEAFS: usize = 21;
+const LUMP_PVS: usize = 28;
 
 #[derive(Debug)]
 pub struct Material {
@@ -58,7 +59,7 @@ pub struct DrawVert {
     pub color: [u8; 4],
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Plane {
     pub normal: [f32; 3],
     pub dist: f32,
@@ -165,6 +166,40 @@ pub struct Leaf {
     pub cell: i32,
 }
 
+/// Lump 28: one bit row per cluster, saying which clusters that one can see.
+/// A map can ship without it (mp_neuville does), and then nothing is hidden.
+#[derive(Debug)]
+pub struct Pvs {
+    pub cluster_count: usize,
+    pub row_bytes: usize,
+    rows: Vec<u8>,
+}
+
+impl Pvs {
+    /// The rows again, for a `Visibility` that outlives the parsed map.
+    fn clone_rows(&self) -> Pvs {
+        Pvs {
+            cluster_count: self.cluster_count,
+            row_bytes: self.row_bytes,
+            rows: self.rows.clone(),
+        }
+    }
+
+    /// Whether a viewer in `from` can be shown something in `to`. A cluster
+    /// outside the table -- which is what a solid leaf's -1 is -- is visible,
+    /// matching the engine: its own test only ever runs on real clusters.
+    pub fn visible(&self, from: i32, to: i32) -> bool {
+        let (Ok(f), Ok(t)) = (usize::try_from(from), usize::try_from(to)) else {
+            return true;
+        };
+        if f >= self.cluster_count || t >= self.cluster_count {
+            return true;
+        }
+        let byte = self.rows[f * self.row_bytes + (t >> 3)];
+        byte & (1 << (t & 7)) != 0
+    }
+}
+
 #[derive(Debug)]
 pub struct Bsp {
     pub materials: Vec<Material>,
@@ -189,6 +224,165 @@ pub struct Bsp {
     pub portals: Vec<Portal>,
     pub nodes: Vec<Node>,
     pub leafs: Vec<Leaf>,
+    /// `None` when the map ships no lump 28.
+    pub pvs: Option<Pvs>,
+}
+
+impl Bsp {
+    /// The tree and table a server needs to decide who can see what, without
+    /// keeping the whole map: the lightmaps alone are megabytes.
+    pub fn visibility(&self) -> Visibility {
+        Visibility {
+            planes: self.planes.clone(),
+            nodes: self.nodes.clone(),
+            leafs: self.leafs.clone(),
+            pvs: self.pvs.as_ref().map(Pvs::clone_rows),
+        }
+    }
+}
+
+/// Point-to-cluster lookup plus the PVS row test: what a server culls a
+/// client's entity list with (`docs/protocol-1.1.md`, "Which entities a client
+/// is sent").
+#[derive(Debug)]
+pub struct Visibility {
+    planes: Vec<Plane>,
+    nodes: Vec<Node>,
+    leafs: Vec<Leaf>,
+    pvs: Option<Pvs>,
+}
+
+impl Visibility {
+    /// An empty tree: every point reads as a solid leaf and nothing is
+    /// hidden. For a server with no map loaded, and for tests that only need
+    /// collision.
+    pub fn none() -> Self {
+        Visibility {
+            planes: Vec::new(),
+            nodes: Vec::new(),
+            leafs: Vec::new(),
+            pvs: None,
+        }
+    }
+
+    /// The leaf a point falls in, by walking the tree from node 0. The engine
+    /// descends the same way for its camera cell (`0x4e2be0`): a point on the
+    /// plane takes the back child.
+    pub fn leaf_at(&self, p: [f32; 3]) -> Option<&Leaf> {
+        if self.nodes.is_empty() {
+            return self.leafs.first();
+        }
+        let mut i: i32 = 0;
+        // A malformed tree must not spin; no stock map comes close to this.
+        for _ in 0..self.nodes.len() + 1 {
+            if i < 0 {
+                return self.leafs.get((-(i + 1)) as usize);
+            }
+            let n = self.nodes.get(i as usize)?;
+            let pl = self.planes.get(n.plane as usize)?;
+            let d = p[0] * pl.normal[0] + p[1] * pl.normal[1] + p[2] * pl.normal[2] - pl.dist;
+            i = if d > 0.0 {
+                n.children[0]
+            } else {
+                n.children[1]
+            };
+        }
+        None
+    }
+
+    /// The cluster a point falls in, or -1 for a solid leaf or no tree.
+    pub fn cluster_at(&self, p: [f32; 3]) -> i32 {
+        self.leaf_at(p).map_or(-1, |l| l.cluster)
+    }
+
+    /// Whether a viewer in `from` is shown something in `to`. A map with no
+    /// lump 28 hides nothing.
+    pub fn visible(&self, from: i32, to: i32) -> bool {
+        self.pvs.as_ref().is_none_or(|p| p.visible(from, to))
+    }
+
+    /// Every cluster a box touches, which is what the engine links an entity
+    /// by. A point lookup is not enough: a turret's or a prop's origin often
+    /// sits inside the geometry it stands on and reads as a solid leaf.
+    pub fn clusters_in_box(&self, mins: [f32; 3], maxs: [f32; 3]) -> Vec<i32> {
+        let mut out = Vec::new();
+        self.collect(0, mins, maxs, &mut out, 0);
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    fn collect(&self, i: i32, mins: [f32; 3], maxs: [f32; 3], out: &mut Vec<i32>, depth: u32) {
+        // The tree is a few dozen deep on stock maps; the cap is for a
+        // malformed one, not for them.
+        if depth > 128 {
+            return;
+        }
+        if i < 0 {
+            if let Some(l) = self.leafs.get((-(i + 1)) as usize) {
+                if l.cluster >= 0 {
+                    out.push(l.cluster);
+                }
+            }
+            return;
+        }
+        let Some(n) = self.nodes.get(i as usize) else {
+            return;
+        };
+        let Some(pl) = self.planes.get(n.plane as usize) else {
+            return;
+        };
+        // The box's extents along the plane normal: it can be in front,
+        // behind, or straddling.
+        let (mut near, mut far) = (0.0, 0.0);
+        for axis in 0..3 {
+            let c = pl.normal[axis];
+            if c >= 0.0 {
+                near += c * mins[axis];
+                far += c * maxs[axis];
+            } else {
+                near += c * maxs[axis];
+                far += c * mins[axis];
+            }
+        }
+        if far > pl.dist {
+            self.collect(n.children[0], mins, maxs, out, depth + 1);
+        }
+        if near <= pl.dist {
+            self.collect(n.children[1], mins, maxs, out, depth + 1);
+        }
+    }
+}
+
+/// Lump 28: `i32 cluster_count, row_bytes` then one row per cluster. An empty
+/// lump is a map with no PVS, which the format doc records for mp_neuville.
+fn parse_pvs(b: &[u8]) -> Result<Option<Pvs>> {
+    if b.is_empty() {
+        return Ok(None);
+    }
+    ensure!(b.len() >= 8, "pvs lump too short for its header");
+    let cluster_count = le_i32(b, 0);
+    let row_bytes = le_i32(b, 4);
+    ensure!(
+        cluster_count >= 0 && row_bytes >= 0,
+        "pvs header is negative: {cluster_count} clusters, {row_bytes} bytes a row"
+    );
+    let (cluster_count, row_bytes) = (cluster_count as usize, row_bytes as usize);
+    let need = cluster_count * row_bytes;
+    ensure!(
+        b.len() >= 8 + need,
+        "pvs lump holds {} bytes, {need} needed for {cluster_count} rows of {row_bytes}",
+        b.len() - 8
+    );
+    ensure!(
+        row_bytes * 8 >= cluster_count,
+        "a {row_bytes}-byte row cannot address {cluster_count} clusters"
+    );
+    Ok(Some(Pvs {
+        cluster_count,
+        row_bytes,
+        rows: b[8..8 + need].to_vec(),
+    }))
 }
 
 fn lump<'a>(data: &'a [u8], dir: &[(u32, u32)], i: usize) -> Result<&'a [u8]> {
@@ -571,6 +765,7 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
         cluster: le_i32(b, 0),
         cell: le_i32(b, 24),
     })?;
+    let pvs = parse_pvs(lump(data, &dir, LUMP_PVS)?)?;
 
     let soup_count = soups.len() as u64;
     let in_soups = |first: u32, count: u32| first as u64 + count as u64 <= soup_count;
@@ -711,6 +906,7 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
         portals,
         nodes,
         leafs,
+        pvs,
     })
 }
 
@@ -1202,5 +1398,76 @@ mod tests {
         data[off + 8..off + 12].copy_from_slice(&u32::MAX.to_le_bytes());
         let err = parse(&data).unwrap_err().to_string();
         assert!(err.contains("portal"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod pvs_tests {
+    use super::*;
+
+    fn lump(cluster_count: i32, row_bytes: i32, rows: &[u8]) -> Vec<u8> {
+        let mut b = cluster_count.to_le_bytes().to_vec();
+        b.extend(row_bytes.to_le_bytes());
+        b.extend(rows);
+        b
+    }
+
+    #[test]
+    fn a_row_is_read_bit_by_bit() {
+        // Cluster 0 sees 0 and 9; cluster 1 sees only itself.
+        let p = parse_pvs(&lump(2, 2, &[0b0000_0001, 0b0000_0010, 0b0000_0010, 0]))
+            .expect("parse")
+            .expect("a table");
+        assert!(p.visible(0, 0));
+        assert!(!p.visible(0, 1));
+        assert!(p.visible(0, 9));
+        assert!(p.visible(1, 1));
+        assert!(!p.visible(1, 0));
+    }
+
+    /// A solid leaf's -1 and anything past the table are visible: the engine's
+    /// own test only ever runs on real clusters, and `clusters_in_box` is what
+    /// keeps a solid origin from meaning "everywhere".
+    #[test]
+    fn a_cluster_outside_the_table_is_visible() {
+        let p = parse_pvs(&lump(1, 1, &[0]))
+            .expect("parse")
+            .expect("a table");
+        assert!(p.visible(-1, 0));
+        assert!(p.visible(0, -1));
+        assert!(p.visible(0, 7));
+    }
+
+    #[test]
+    fn an_empty_lump_is_a_map_without_a_pvs() {
+        assert!(parse_pvs(&[]).expect("parse").is_none());
+    }
+
+    #[test]
+    fn a_short_lump_is_an_error_rather_than_a_panic() {
+        assert!(parse_pvs(&lump(4, 8, &[0; 8])).is_err());
+        assert!(parse_pvs(&[0, 0, 0]).is_err());
+    }
+
+    /// Against a real map: every leaf's cluster has a row, which is what
+    /// `visible` indexes with. The format doc records 666 clusters on
+    /// mp_pavlov.
+    #[test]
+    fn every_leaf_cluster_of_a_stock_map_has_a_row() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let Some(bytes) = fs.read("maps/mp/mp_pavlov.bsp") else {
+            return;
+        };
+        let b = parse(&bytes).expect("parse the bsp");
+        let pvs = b.pvs.as_ref().expect("mp_pavlov ships a pvs");
+        let highest = b.leafs.iter().map(|l| l.cluster).max().unwrap_or(-1);
+        assert!(
+            highest < pvs.cluster_count as i32,
+            "leaf cluster {highest} is past the {} rows",
+            pvs.cluster_count
+        );
+        assert!(pvs.row_bytes * 8 >= pvs.cluster_count);
     }
 }

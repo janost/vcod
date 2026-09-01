@@ -836,6 +836,60 @@ impl Server {
     /// The unconditional tail of [`Self::send_server_command`]. The drop
     /// notice goes out through here, so freeing the slot cannot recurse and
     /// the notice is never guarded away.
+    /// Every entity the map puts on the wire, before any client's cull. The
+    /// gates read it: `entities_ab` diffs it against the trace's union, and
+    /// `entity_vis_ab` culls it at each sample's origin. A snapshot's own list
+    /// is already culled, so reading one back would test the cull twice and
+    /// the object table not at all.
+    pub fn all_entities(&mut self) -> BTreeMap<u32, msg::EntityState> {
+        let proto = self.proto;
+        self.script
+            .as_mut()
+            .map_or_else(BTreeMap::new, |rt| rt.packet_entities(proto))
+    }
+
+    /// Puts a client where the caller says, the way the `spawn` builtin does.
+    /// Test-facing: a gate about what two clients see of each other needs them
+    /// somewhere known, and both spawn weighted-random.
+    pub fn place_client(&mut self, slot: usize, origin: [f32; 3], yaw_deg: f32) {
+        let Some(c) = self.clients.get_mut(slot).and_then(Option::as_mut) else {
+            return;
+        };
+        if let Some(sim) = c.sim.as_mut() {
+            sim.become_player(origin, yaw_deg, [0; 3]);
+        }
+    }
+
+    /// Puts a client back to spectating, where every client starts and where
+    /// a dead one waits. Test-facing, like `place_client`.
+    pub fn spectate_client(&mut self, slot: usize, origin: [f32; 3]) {
+        let Some(c) = self.clients.get_mut(slot).and_then(Option::as_mut) else {
+            return;
+        };
+        if let Some(sim) = c.sim.as_mut() {
+            sim.become_spectator(origin, 0.0, [0; 3]);
+        }
+    }
+
+    /// Every entity the scripts see as `classname` "player", with the origin
+    /// the script side reads, for the gate that pins both. Test-facing: the
+    /// server itself never asks.
+    pub fn script_players(&mut self) -> Vec<(usize, [f32; 3])> {
+        let Some(rt) = self.script.as_mut() else {
+            return Vec::new();
+        };
+        let live: Vec<usize> = (0..self.clients.len())
+            .filter(|slot| self.clients[*slot].is_some())
+            .collect();
+        let mut out = Vec::new();
+        for slot in live {
+            if rt.client_field(slot, "classname").as_deref() == Some("player") {
+                out.push((slot, rt.client_origin(slot)));
+            }
+        }
+        out
+    }
+
     fn write_server_command(&mut self, slot: usize, cmd: &str) {
         let Some(c) = self.clients[slot].as_mut() else {
             return;
@@ -1048,6 +1102,9 @@ impl Server {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
                     sim.weapons = rt.client_weapons(slot);
                     sim.viewmodel_index = rt.client_viewmodel(slot);
+                    // And back the other way: the sim owns where a player is,
+                    // so the script's copy is written from it every frame.
+                    rt.set_client_origin(slot, sim.origin());
                 }
             }
             // `self spawn(origin, angles)` moves the sim, which no builtin
@@ -1096,20 +1153,76 @@ impl Server {
         // One clientState entry per online client, rebuilt each frame; slot ==
         // index. `snapshot::write` deltas this against each client's own
         // base roster, or sends it full when that client has none.
+        // The body model rides here, not on the entity: without it another
+        // client is sent a player it can name but cannot draw
+        // (`docs/research/clientstate-wire-format.md`).
+        type Body = (i32, Vec<(i32, i32)>);
+        let bodies: Vec<Body> = match self.script.as_mut() {
+            Some(rt) => (0..self.clients.len())
+                .map(|slot| (rt.client_model_index(slot), rt.client_attachments(slot)))
+                .collect(),
+            None => vec![(0, Vec::new()); self.clients.len()],
+        };
         let roster: BTreeMap<u32, msg::ClientState> = self
             .clients
             .iter()
             .enumerate()
             .filter_map(|(i, c)| {
-                c.as_ref()
-                    .map(|c| (i as u32, msg::ClientState::named(self.proto, 0, 3, &c.name)))
+                let c = c.as_ref()?;
+                let mut cs = msg::ClientState::named(self.proto, 0, 3, &c.name);
+                let (model, attachments) = &bodies[i];
+                if let Some(idx) = msg::ClientState::field_index(self.proto, "modelindex") {
+                    cs.fields[idx] = *model;
+                }
+                for (n, (am, at)) in attachments.iter().enumerate() {
+                    for (name, v) in [
+                        (format!("attachModelIndex[{n}]"), am),
+                        (format!("attachTagIndex[{n}]"), at),
+                    ] {
+                        if let Some(idx) = msg::ClientState::field_index(self.proto, &name) {
+                            cs.fields[idx] = *v;
+                        }
+                    }
+                }
+                Some((i as u32, cs))
             })
             .collect();
-        let entities: BTreeMap<u32, msg::EntityState> = self
-            .test_entities
-            .as_ref()
-            .map_or_else(BTreeMap::new, |te| te.at(self.proto, self.sv_time_ms));
+        // The map's own entities, plus whatever --test-entities adds: the
+        // scripted ones exist to drive the wire path and have no gameplay
+        // meaning, so they sit beside the object table's rather than
+        // replacing it.
+        let mut entities: BTreeMap<u32, msg::EntityState> = self
+            .script
+            .as_mut()
+            .map_or_else(BTreeMap::new, |rt| rt.packet_entities(self.proto));
+        if let Some(te) = self.test_entities.as_ref() {
+            entities.extend(te.at(self.proto, self.sv_time_ms));
+        }
         let collision = self.world.as_ref().map(|w| &w.collision);
+        let collision_vis = self.world.as_ref().map(|w| &w.vis);
+
+        // One entity per client with a sim, so a client can be told what the
+        // others are doing. The receiver's own is dropped below: retail sends
+        // a client no entity for itself.
+        let client_entities: BTreeMap<u32, msg::EntityState> = self
+            .clients
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                let sim = c.as_ref()?.sim.as_ref()?;
+                // A spectator is not a thing in the world: retail never links
+                // one, so nobody is sent an entity for it. Without this a
+                // player's crosshair names a spectator flying overhead.
+                if sim.pm_type != crate::spectate::PmType::Spectator {
+                    Some((
+                        i as u32,
+                        sim.to_entity(self.proto, i, c.as_ref()?.last_processed_st),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         for slot in 0..self.clients.len() {
             let Some(c) = self.clients[slot].as_mut() else {
@@ -1153,13 +1266,30 @@ impl Server {
             let command_time = c.last_processed_st;
             let message_num = c.netchan.outgoing_sequence;
 
+            // Retail sends a client only what its own position can see, so
+            // the list is per client rather than one list cloned into every
+            // frame (docs/protocol-1.1.md, "Which entities a client is sent").
+            let mut sendable = entities.clone();
+            sendable.extend(
+                client_entities
+                    .iter()
+                    .filter(|(n, _)| **n != slot as u32)
+                    .map(|(n, e)| (*n, e.clone())),
+            );
+            let visible = match collision_vis {
+                Some(vis) => {
+                    crate::world::visible_entities(vis, sim.eye_origin(), &sendable, self.proto)
+                }
+                None => sendable,
+            };
+
             let frame = snapshot::Snapshot {
                 server_time: self.sv_time_ms,
                 message_num,
                 delta_num: -1,
                 snap_flags: 0,
                 ps: sim.to_wire(self.proto, slot as i32, command_time),
-                entities: entities.clone(),
+                entities: visible,
                 clients: roster.clone(),
                 valid: true,
             };
@@ -2137,6 +2267,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2187,6 +2318,7 @@ mod tests {
         // A flat floor to fly over; without a world the sim freezes.
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2241,6 +2373,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 90.0),
         });
         let mut nc = active(&mut sv, now);
@@ -2286,6 +2419,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2356,6 +2490,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2415,6 +2550,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2487,6 +2623,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2555,6 +2692,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2634,6 +2772,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2709,6 +2848,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);

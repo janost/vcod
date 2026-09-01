@@ -14,6 +14,10 @@ use vcod_server::Server;
 pub const ADDR: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 31337);
 
+/// A second client's address, for the tests that need two on one server.
+pub const ADDR_B: SocketAddr =
+    SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 31338);
+
 #[derive(Default)]
 pub struct Queues {
     pub to_server: VecDeque<Vec<u8>>,
@@ -71,6 +75,66 @@ pub fn step_dropping_reply(
     sv.tick(now);
     sv.take_outgoing();
     cl.pump_at(now)
+}
+
+/// Steps the server with two clients attached, routing each packet by the
+/// address it came from and each reply by the address it is for. `step`
+/// cannot: it asserts every reply is for the one client it knows.
+pub fn step_pair(
+    sv: &mut Server,
+    a: (&Rc<RefCell<Queues>>, &mut NetClient<ClientEnd>),
+    b: (&Rc<RefCell<Queues>>, &mut NetClient<ClientEnd>),
+    now: Instant,
+) -> (Vec<NetEvent>, Vec<NetEvent>) {
+    for (addr, q) in [(ADDR, a.0), (ADDR_B, b.0)] {
+        let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
+        for p in pending {
+            sv.handle_packet(addr, &p, now);
+        }
+    }
+    sv.tick(now);
+    for (to, p) in sv.take_outgoing() {
+        let q = if to == ADDR { a.0 } else { b.0 };
+        q.borrow_mut().to_client.push_back(p);
+    }
+    (a.1.pump_at(now), b.1.pump_at(now))
+}
+
+/// Two clients through the stock menus onto one server, stepped together so
+/// each is live while the other joins.
+pub fn join_pair(
+    sv: &mut Server,
+    qa: &Rc<RefCell<Queues>>,
+    qb: &Rc<RefCell<Queues>>,
+    now: &mut Instant,
+    team: &str,
+    weapon: &str,
+) -> (NetClient<ClientEnd>, NetClient<ClientEnd>) {
+    // Distinct qports: the server keys a peer by ip and qport, so two clients
+    // sharing one read as a single client reconnecting and the second is
+    // refused. A real client is one per process and gets this for free.
+    let mut ca = NetClient::start_with_qport(ClientEnd(qa.clone()), *now, 0x2001);
+    let mut cb = NetClient::start_with_qport(ClientEnd(qb.clone()), *now, 0x2002);
+    let (mut ja, mut jb) = (Join::new(team, weapon), Join::new(team, weapon));
+    for _ in 0..600 {
+        *now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        let (ea, eb) = step_pair(sv, (qa, &mut ca), (qb, &mut cb), *now);
+        for (events, join, cl) in [(ea, &mut ja, &mut ca), (eb, &mut jb, &mut cb)] {
+            for e in events {
+                match e {
+                    NetEvent::ServerCommand(tokens) => join.on_server_command(&tokens, cl, *now),
+                    NetEvent::Dropped(r) => panic!("dropped mid-join: {r}"),
+                    _ => {}
+                }
+            }
+        }
+        if ja.settled(*now) && jb.settled(*now) {
+            break;
+        }
+    }
+    (ca, cb)
 }
 
 pub fn connect(

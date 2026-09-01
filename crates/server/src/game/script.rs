@@ -57,6 +57,10 @@ fn render(cx: &vcod_gsc::Cx, v: Value) -> String {
 /// would hit this on the first shared file. A map change therefore builds
 /// a new `ScriptRuntime` and drops the old one; the heap goes with it,
 /// which is also what the VM's no-garbage-collection design assumes.
+/// `clientState` carries six attachment pairs
+/// (`docs/research/clientstate-wire-format.md`).
+pub const ATTACH_SLOTS: usize = 6;
+
 pub struct ScriptRuntime {
     vm: Vm,
     host: GameHost,
@@ -312,6 +316,102 @@ impl ScriptRuntime {
     /// The client's entity, once `Connect` has been drained. The object
     /// table is the single owner of that fact: an entity at the slot's own
     /// number with a `client` store is one `spawn_client` made.
+    /// Writes a client's simulated origin onto its script entity. The sim
+    /// owns a player's position and the script reads it: `spawn` used to be
+    /// the only writer, so `positionWouldTelefrag` tested where each client
+    /// last spawned rather than where it now stands.
+    pub fn set_client_origin(&mut self, slot: usize, origin: [f32; 3]) {
+        use vcod_gsc::Host;
+        let Some(ent) = self.client_entity(slot) else {
+            return;
+        };
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let field = cx.intern_folded("origin");
+            let _ = host.set_field(cx, ent, field, Value::Vector(origin));
+        });
+    }
+
+    /// A client's body model as the roster's `modelindex`: the model number
+    /// `configstring 268 + modelindex` resolves
+    /// (`docs/research/clientstate-wire-format.md`). 0 when the client has no
+    /// model yet, which is what a client still on the menus has.
+    ///
+    /// The model itself comes from the stock character scripts --
+    /// `character/mp_american_airborne01.gsc` does
+    /// `self setModel("xmodel/playerbody_american_airborne")` -- through
+    /// `_teams::model()` on spawn.
+    pub fn client_model_index(&mut self, slot: usize) -> i32 {
+        let Some(name) = self.client_field(slot, "model") else {
+            return 0;
+        };
+        let (first, last) = crate::configstrings::CsRange::Model.bounds();
+        self.host.configstrings[first..=last]
+            .iter()
+            .position(|cs| *cs == name)
+            .map_or(0, |i| (i + 1) as i32)
+    }
+
+    /// A client's attachments as the roster carries them: up to six
+    /// `(attachModelIndex, attachTagIndex)` pairs, the model resolving through
+    /// `configstring 268 + index` and the tag through `108 + index`
+    /// (`docs/research/clientstate-wire-format.md`). A head and a helmet are
+    /// attachments, not part of the body: the stock character script does
+    /// `attachFromArray(xmodelalias\head_allied::main())` and
+    /// `self attach(self.hatModel)`, so a client sent none is headless.
+    pub fn client_attachments(&mut self, slot: usize) -> Vec<(i32, i32)> {
+        let Some(ent) = self.client_entity(slot) else {
+            return Vec::new();
+        };
+        let Some(e) = self.host.ents.get(ent) else {
+            return Vec::new();
+        };
+        let pairs: Vec<(String, String)> = {
+            self.vm.with_cx(|cx| {
+                e.attachments
+                    .iter()
+                    .map(|(m, t)| (cx.resolve(*m).to_string(), cx.resolve(*t).to_string()))
+                    .collect()
+            })
+        };
+        let index_in = |range: crate::configstrings::CsRange, name: &str, base: usize| {
+            if name.is_empty() {
+                return 0;
+            }
+            let (first, last) = range.bounds();
+            self.host.configstrings[first..=last]
+                .iter()
+                .position(|cs| cs == name)
+                .map_or(0, |i| (first + i - base) as i32)
+        };
+        pairs
+            .iter()
+            .take(ATTACH_SLOTS)
+            .map(|(m, t)| {
+                (
+                    index_in(crate::configstrings::CsRange::Model, m, 268),
+                    index_in(crate::configstrings::CsRange::Tag, t, 108),
+                )
+            })
+            .collect()
+    }
+
+    /// A client entity's `.origin` as the scripts read it.
+    pub fn client_origin(&mut self, slot: usize) -> [f32; 3] {
+        use vcod_gsc::Host;
+        let Some(ent) = self.client_entity(slot) else {
+            return [0.0; 3];
+        };
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let field = cx.intern_folded("origin");
+            match host.get_field(cx, ent, field) {
+                Value::Vector(v) => v,
+                _ => [0.0; 3],
+            }
+        })
+    }
+
     pub fn client_entity(&self, slot: usize) -> Option<EntId> {
         let id = EntId(u32::try_from(slot).ok()?);
         self.host
@@ -386,6 +486,17 @@ impl ScriptRuntime {
     /// The configstrings the script wrote (e.g. `setCullFog`, `ambientPlay`)
     /// by the end of `load`. `Server::load_scripts` copies these back into
     /// its own table once, before the first gamestate goes out.
+    /// The object table as packet entities: what a snapshot carries before
+    /// any per-client culling (`crates/server/src/game/wire.rs`).
+    pub fn packet_entities(
+        &mut self,
+        p: &vcod_common::net::protocol::Protocol,
+    ) -> std::collections::BTreeMap<u32, vcod_common::net::msg::EntityState> {
+        let host = &mut self.host;
+        self.vm
+            .with_cx(|cx| crate::game::wire::packet_entities(host, cx, p))
+    }
+
     pub fn configstrings(&self) -> &[String] {
         &self.host.configstrings
     }

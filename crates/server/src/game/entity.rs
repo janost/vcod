@@ -166,8 +166,19 @@ impl ObjectTable {
         // change or a round restart, neither of which exists, is where the
         // two readings part.
         client[pers_index()] = Value::Array(cx.new_array());
+        let mut engine = vec![Value::Undefined; engine_slot_count()];
+        // A client is `classname` "player" from the moment it exists, because
+        // that is how every stock script reaches the players:
+        // `getentarray("player", "classname")` in `bel.gsc` and the spawn
+        // logic. Without it `_spawnlogic::getSpawnpoint_DM` finds nobody to
+        // score against and quietly degrades to `getSpawnpoint_Random`.
+        if let crate::game::fields::Route::Engine { slot: cs, .. } =
+            crate::game::fields::route_entity("classname")
+        {
+            engine[cs] = Value::String(cx.intern_exact("player"));
+        }
         self.ents[slot] = Some(GEntity {
-            engine: vec![Value::Undefined; engine_slot_count()],
+            engine,
             client: Some(client),
             script,
             solid: true,
