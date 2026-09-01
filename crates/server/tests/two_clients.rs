@@ -212,11 +212,6 @@ const PLAYER_GAPS: &[(&str, &str)] = &[
     ),
     ("events", "same ring"),
     ("eventParms", "the parms of that ring"),
-    (
-        "angles2",
-        "a second yaw the capture carries on every player and nothing here has \
-         identified; not the view yaw, which is apos.trBase[1]",
-    ),
 ];
 
 /// Every field retail sets on a moving player, against ours. The capture is
@@ -331,19 +326,43 @@ fn a_moving_player() -> Option<EntityState> {
     sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
 
     // Looking somewhere as well as moving: the entity carries the body yaw,
-    // and a client that never turns leaves it at the spawn's.
-    let walking = vcod_common::net::msg::UserCmd {
-        forward: 127,
-        angles: [0, 90 * 65536 / 360, 0],
-        ..vcod_common::net::msg::NULL_USERCMD
-    };
-    for _ in 0..40 {
-        now += Duration::from_millis(50);
-        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
-        cb.send_frame(&walking);
-        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    // and a client that never turns leaves it at the spawn's. The strafe is
+    // what makes `angles2[1]` nonzero: a player running straight ahead has
+    // its legs on the view yaw, and retail sends 0 there too.
+    //
+    // The spawn is random and `place_client` does not check the box fits, so
+    // a client can end up pinned and stand still whatever it presses. Turn
+    // an eighth at a time until the sim actually carries it somewhere.
+    let mut latest = None;
+    for turn in 0..8 {
+        let walking = vcod_common::net::msg::UserCmd {
+            forward: 127,
+            right: 127,
+            // Odd multiples of 22.5 degrees, so no turn leaves the body
+            // yaw at zero and reads as a field we never set.
+            angles: [0, (turn * 2 + 1) * (65536 / 16), 0],
+            ..vcod_common::net::msg::NULL_USERCMD
+        };
+        for _ in 0..20 {
+            now += Duration::from_millis(50);
+            ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+            cb.send_frame(&walking);
+            common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        }
+        let Some(e) = ca.snapshots().newest()?.entities.get(&(nb as u32)).cloned() else {
+            continue;
+        };
+        let speed = (0..2)
+            .map(|axis| f32::from_bits(e.field_i32(p, &format!("pos.trDelta[{axis}]")) as u32))
+            .map(|v| v * v)
+            .sum::<f32>()
+            .sqrt();
+        latest = Some(e);
+        if speed > 10.0 {
+            break;
+        }
     }
-    ca.snapshots().newest()?.entities.get(&(nb as u32)).cloned()
+    latest
 }
 
 /// The body a client is drawn with rides the roster, not the entity: without

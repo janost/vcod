@@ -236,8 +236,8 @@ impl ClientSim {
     /// 3 with a delta and a 50 ms duration, so the receiving client carries
     /// the motion between snapshots instead of stepping to each one.
     ///
-    /// What that capture carries and this does not is stage 6's: `legsAnim`,
-    /// the event ring, and `angles2[1]`.
+    /// What that capture carries and this does not is stage 6's: `legsAnim`
+    /// and the event ring.
     pub fn to_entity(&self, p: &Protocol, slot: usize, command_time: i32) -> msg::EntityState {
         let mut e = msg::EntityState::null(p);
         e.number = slot as u32;
@@ -287,6 +287,10 @@ impl ClientSim {
         // The body yaw only: a player entity carries no pitch, which is what
         // the waist and head fields are for.
         set("apos.trBase[1]", self.ps.yaw.to_degrees().to_bits() as i32);
+        // The legs' heading off the view, retail's `ps.movementDir` verbatim
+        // (`BG_PlayerStateToEntityStateExtrapolate` @0x2d06d). Without it a
+        // strafing player runs sideways with its legs pointing forward.
+        set("angles2[1]", (self.ps.movement_dir as f32).to_bits() as i32);
         e
     }
 
@@ -352,6 +356,10 @@ impl ClientSim {
             // The body's own yaw while prone; the client centres its view cone
             // on it, so a zero here aims the cone at world north.
             set("proneDirection", self.ps.prone_direction.to_bits() as i32);
+            // 8 bits on the wire, so a leftward angle travels as its
+            // unsigned byte; `angles2[1]` on the entity carries the signed
+            // value as a float.
+            set("movementDir", self.ps.movement_dir & 0xff);
             set("viewHeightLerpDown", i32::from(self.ps.view_lerp_down));
             // -1..1, left negative, the same convention retail sends.
             set("leanf", (self.ps.lean / pmove::LEAN_MAX).to_bits() as i32);

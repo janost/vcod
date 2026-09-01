@@ -137,6 +137,11 @@ const LADDER_STEP_K_RUN: f32 = 0.45;
 const LADDER_STEP_PROBE: f32 = 31.0;
 const DEFAULT_MATERIAL: i32 = 13;
 
+/// How far the legs may turn off the view. The ground path caps at 90
+/// (@0x2e9d2), `PM_LadderMove` at 75 (@0x33dd1).
+const MOVEMENT_DIR_CAP: i32 = 90;
+const LADDER_MOVEMENT_DIR_CAP: i32 = 75;
+
 /// One movement event a frame produced, in wire `EV_*` numbering so the
 /// client's cue resolver handles it unchanged.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -245,8 +250,16 @@ pub struct PlayerState {
     /// Footstep phase counter, retail `ps->bobCycle` (ps+0x8). Steps fire on
     /// 128-tick crossings.
     pub bob_cycle: u8,
+    /// Retail `ps.movementDir` (ps+0x7c in `PLAYER_FIELDS`): the yaw the legs
+    /// are moving along, relative to the view, in whole degrees. The player
+    /// entity carries it as `angles2[1]`, which is how another client turns
+    /// a strafing player's legs while the torso keeps facing the view.
+    pub movement_dir: i32,
     /// Lump-0 `surface_flags` of the ground we stand on; 0 while airborne.
     pub ground_surface_flags: u32,
+    /// Origin at the top of this move, retail's `pml.previous_origin`. The
+    /// legs' heading is measured off the displacement it gives.
+    move_start: Vec3,
     /// Fastest downward speed sampled while airborne; feeds the landing
     /// sound thresholds (PM_CrashLand's kinematic impact, approximated).
     air_speed_peak: f32,
@@ -288,6 +301,8 @@ impl PlayerState {
             since_jump_ms: f32::INFINITY,
             jump_latched: false,
             bob_cycle: 0,
+            movement_dir: 0,
+            move_start: origin,
             ground_surface_flags: 0,
             air_speed_peak: 0.0,
             view_height_cur: Stance::Stand.view_height(),
@@ -363,6 +378,8 @@ pub fn pmove(
     }
     let mut events = Vec::new();
     let was_on_ground = ps.on_ground;
+    // retail's `pml.previous_origin`, taken at the top of PmoveSingle
+    ps.move_start = ps.origin;
     if ps.on_ground {
         ps.air_speed_peak = 0.0;
     }
@@ -871,6 +888,59 @@ fn accelerate(ps: &mut PlayerState, wishdir: Vec3, wishspeed: f32, accel: f32, d
     ps.velocity += wishdir * accel_speed;
 }
 
+/// `vectoyaw`: the yaw of a direction, in degrees.
+fn yaw_of(v: Vec3) -> f32 {
+    v.y.atan2(v.x).to_degrees()
+}
+
+/// `AngleDelta`: `a - b` folded to -180..180.
+fn angle_delta(a: f32, b: f32) -> f32 {
+    normalize180(a - b)
+}
+
+fn clamp_movement_dir(deg: i32, cap: i32) -> i32 {
+    if deg > cap {
+        cap
+    } else if deg < -cap {
+        -cap
+    } else {
+        deg
+    }
+}
+
+/// `PM_SetMovementDir` @0x2e970, which retail runs at the tail of both
+/// `PM_WalkMove` and `PM_AirMove`. The angle comes off the frame's
+/// displacement rather than off the velocity, so a player scraping along a
+/// wall turns its legs with the slide. Every intermediate is truncated to a
+/// whole degree, as retail's `(int)` casts are.
+fn set_movement_dir(ps: &mut PlayerState, input: &PmInput, dt: f32) {
+    // Prone lays the legs along the body instead (@0x2e98d). Retail skips
+    // this branch while the view is locked to another entity (eFlags
+    // 0xc000, the mounted-gun case); nothing here mounts anything.
+    if ps.stance == Stance::Prone {
+        ps.movement_dir = clamp_movement_dir(
+            angle_delta(ps.prone_direction, ps.yaw.to_degrees()) as i32,
+            MOVEMENT_DIR_CAP,
+        );
+        return;
+    }
+    // Retail has a ladder branch here too (@0x2e9f6), for the frames its
+    // pm_flags ladder bit outlives its ladder mover; ours cannot, since
+    // `on_ladder` is set by the same test that picks `ladder_move`.
+    let moved = ps.origin - ps.move_start;
+    // Airborne, no move key, or barely moved: the legs face the view. The
+    // threshold is 5 units per second of frametime (@0x2ea4b-@0x2eaa7).
+    if (input.forward == 0.0 && input.right == 0.0) || !ps.on_ground || moved.length() <= dt * 5.0 {
+        ps.movement_dir = 0;
+        return;
+    }
+    let mut deg = angle_delta(yaw_of(moved), ps.yaw.to_degrees()) as i32;
+    if input.forward < 0.0 {
+        deg = normalize180(deg as f32 + 180.0) as i32;
+    }
+    ps.movement_dir = clamp_movement_dir(deg, MOVEMENT_DIR_CAP);
+}
+
 /// Q3 `bg_pmove.c` `PM_ClipVelocity`.
 fn clip_velocity(vel: Vec3, normal: Vec3) -> Vec3 {
     let backoff = vel.dot(normal)
@@ -901,10 +971,13 @@ fn walk_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
     let dir = clip_velocity(dir, ps.ground_normal).normalize_or_zero();
     accelerate(ps, dir, wishspeed, accel, dt);
     ps.velocity = clip_velocity(ps.velocity, ps.ground_normal);
-    if ps.velocity.x == 0.0 && ps.velocity.y == 0.0 {
-        return;
+    // Standing still skips the move but not the legs: retail jumps straight
+    // to PM_SetMovementDir (@0x2f6db), which is what keeps a prone player's
+    // legs following its body while it turns on the spot.
+    if ps.velocity.x != 0.0 || ps.velocity.y != 0.0 {
+        step_slide_move(ps, world, dt, false);
     }
-    step_slide_move(ps, world, dt, false);
+    set_movement_dir(ps, input, dt);
 }
 
 /// Look direction including pitch; pitch is up-positive.
@@ -1205,6 +1278,12 @@ fn ladder_move(
     }
     // no gravity while going up a ladder
     step_slide_move(ps, world, dt, false);
+    // PM_LadderMove @0x33d71: the legs face into the wall, and the cap here
+    // is 75 degrees, not the 90 the ground path uses.
+    ps.movement_dir = clamp_movement_dir(
+        angle_delta(yaw_of(normal) + 180.0, ps.yaw.to_degrees()) as i32,
+        LADDER_MOVEMENT_DIR_CAP,
+    );
 }
 
 /// Q3 `bg_pmove.c` `PM_AirMove`.
@@ -1213,6 +1292,7 @@ fn air_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f
     let (dir, wishspeed) = wish(ps, input);
     accelerate(ps, dir, wishspeed, PM_AIRACCELERATE, dt);
     step_slide_move(ps, world, dt, true);
+    set_movement_dir(ps, input, dt);
 }
 
 /// Q3 `bg_slidemove.c` `PM_SlideMove`. Returns true if anything was hit.
@@ -1449,6 +1529,75 @@ mod tests {
         assert!(mid > VIEW_PRONE + 2.0 && mid < VIEW_CROUCH, "{mid}");
         tick(&mut ps, &prone, &w, 26); // ~400 ms total
         assert_eq!(ps.view_height(), VIEW_PRONE);
+    }
+
+    /// `movementDir` is the legs' heading off the view, which the player
+    /// entity carries as `angles2[1]`. Straight ahead is 0, a pure strafe is
+    /// the 90-degree cap, and a backpedal folds by 180.
+    #[test]
+    fn movement_dir_is_the_legs_yaw_off_the_view() {
+        let w = flat();
+        // From a standstill each time: velocity left over from the previous
+        // input keeps the displacement off the key being held.
+        let held = |input: &PmInput| {
+            let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+            tick(&mut ps, &PmInput::default(), &w, 50);
+            tick(&mut ps, input, &w, 50);
+            ps.movement_dir
+        };
+        assert_eq!(held(&PmInput::default()), 0, "standing still");
+        assert_eq!(
+            held(&PmInput {
+                forward: 1.0,
+                ..PmInput::default()
+            }),
+            0,
+            "running along the view"
+        );
+        // Right is -y at yaw 0, so a right strafe reads negative.
+        assert_eq!(
+            held(&PmInput {
+                right: 1.0,
+                ..PmInput::default()
+            }),
+            -90,
+            "strafing right"
+        );
+        let diagonal = held(&PmInput {
+            forward: 1.0,
+            right: 1.0,
+            ..PmInput::default()
+        });
+        assert!(
+            (diagonal + 45).abs() <= 1,
+            "running forward-right: {diagonal}"
+        );
+        // Backpedalling points the legs the way the body faces, not the way
+        // it travels: retail folds the angle by 180 when forwardmove < 0.
+        assert_eq!(
+            held(&PmInput {
+                forward: -1.0,
+                ..PmInput::default()
+            }),
+            0,
+            "backpedalling"
+        );
+
+        // Prone reads the body's own yaw instead of the move, so turning the
+        // view inside the prone cone turns the legs away from it. Retail
+        // settles at -59 for a 60-degree turn, the truncation of the same
+        // angle.
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 50);
+        let prone = PmInput {
+            prone: true,
+            ..PmInput::default()
+        };
+        tick(&mut ps, &prone, &w, 60);
+        assert_eq!(ps.stance, Stance::Prone);
+        ps.yaw = (-60f32).to_radians();
+        tick(&mut ps, &prone, &w, 20);
+        assert_eq!(ps.movement_dir, 60, "prone, view turned 60 degrees");
     }
 
     #[test]

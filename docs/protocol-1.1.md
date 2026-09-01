@@ -330,9 +330,52 @@ half width`, which is 0x66 = 102 = 70 + 32, 0x01 and 0x0f = 15 -- the pmove box
 standing, one unit deep and 15 wide. One value against one known box, so the
 packing is a reading and not a measurement.
 
-The capture also carries `legsAnim`, an event ring with its `eventParms`, and
-`angles2[1]`, a second yaw on every player that is not the view yaw. None of
-those is identified here.
+`angles2[1]` is the player's `movementDir`. VERIFIED, out of the 1.1d game
+module `game.mp.i386.so`: `BG_PlayerStateToEntityStateExtrapolate` loads
+`ps+0x7c` and stores it as a float into `es+0x6c` at `0x2d06d`, and
+`BG_PlayerStateToEntityState`, the non-extrapolating twin, does the same at
+`0x2cd4c` with an unsigned-byte fixup, subtracting 256.0 from a value above
+128. VERIFIED out of `cod_lnxded`: the playerstate netfield table at
+`0x080d229c` names `ps+0x7c` `movementDir`, 8 bits, and the entity table at
+`0x080d1760` names `es+0x6c` `angles2[1]`.
+
+What the field is for: it is the yaw the legs move along, measured off the
+view yaw, in whole degrees, so a client can turn a strafing player's legs
+while the torso keeps facing the view. `PM_SetMovementDir` at `0x2e970` in
+`game.mp.i386.so` computes it, and RTCW-MP's `bg_pmove.c` function of the
+same name is the same code with a different cap. INFERRED, all of it read off
+that function's control flow, addresses in the same module: 0 unless a move key is held, `groundEntityNum` is not 1023 and
+the frame's displacement exceeds `pml.frametime * 5`; otherwise
+`AngleDelta(vectoyaw(origin - pml.previous_origin), viewangles[YAW])`,
+truncated to an int, folded by 180 when `forwardmove < 0`, and capped at
++-90 (`0x2e9d2`). Prone takes `AngleDelta(ps.proneDirection,
+viewangles[YAW])` instead (`0x2e98d`), and being on a ladder takes
+`vectoyaw(ps.vLadderVec) + 180` (`0x2e9f6`); `PM_LadderMove` writes the same
+ladder value itself at `0x33df0` with a 75-degree cap.
+
+VERIFIED against the retail server with held inputs, a `--net-probe
+--save-motion` run on `mp_carentan` carrying poses the committed motion
+fixture does not have (nothing in that fixture moves the field off zero):
+running forward into a wall and scraping along it gave `movementDir` 42 with
+the view yaw at -42.85 and the velocity along +x, which is the displacement
+angle truncated and not the direction the key asked for; backpedalling gave
+254 against a 178.50-degree displacement, which is `trunc(178.50) + 180`
+folded to -2 and read back as an unsigned byte; and three prone poses gave 0,
+197 and 83 against a `proneDirection - viewangles[YAW]` of 0.00, -60.00 and
+83.13. `movementDir` is an 8-bit playerstate field, so a negative one arrives
+there as its unsigned byte, which is what the 256.0 subtraction in
+`BG_PlayerStateToEntityState` undoes; `angles2[1]` carries the signed value.
+
+The two-probe capture does not line up with any of that. Of its four player
+samples one agrees (`angles2[1]` 2 against a 2.4-degree gap between
+`pos.trDelta` and `apos.trBase[1]`), one is airborne and reads 0, which the
+formula predicts, and two disagree outright (3 against 64, 27 against 34).
+The route is not reproducible and what the walked client was pressing at each
+station is not recoverable, so that capture is not evidence either way; the
+held-input run is.
+
+The capture also carries `legsAnim` and an event ring with its `eventParms`.
+Neither is identified here.
 
 #### The rule, out of the binary
 
