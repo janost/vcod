@@ -129,6 +129,11 @@ engineering setup works.
   is position-dependent (`docs/protocol-1.1.md`, "Which entities a client is
   sent"). Two probes on one server see each other's entities, so a
   two-client entity question does not need two retail clients.
+  `--probe-team <allies|axis>` picks which team the stock menu is answered
+  with, and on its own makes the probe join and then report the roster
+  (`num:team=N "name"`) once a second, writing no fixture; two probes with
+  it on opposite teams is how `clientState.team`'s four values were measured
+  (`docs/research/clientstate-wire-format.md`).
   `--probe-secs N` extends the default 65 s; a few minutes spans an SD round
   restart. Add `--save-fixture` or `--save-snapshots` only when the capture is
   meant to replace the committed evidence; the flag docs in

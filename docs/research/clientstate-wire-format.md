@@ -45,6 +45,61 @@ typedef struct clientState_s {   // 92 bytes
 
 `tools/re/dump_field_table.py` extracts the table from the binary; `crates/common/src/net/fields_v1.rs` was generated the same way.
 
+## `team`, and where a clientState comes from
+
+The game module owns the whole struct. `vmMain` case 17
+(`game.mp.i386.so 0x50f18`) returns `&level.clients[num] + 0x2178`, with
+`gclient_t` at stride `0x22c4`. The engine's snapshot ring is at
+`cod_lnxded ds:0x83b67c4`, stride `0x5c`, and `SV_WriteSnapshotToClient`
+reads its entries at `0x808e1bc` and `0x808e1e6`; the fill at `0x808f404`
+pushes export index `0x11` and `rep movs` `0x17` dwords from what comes
+back (`0x808f41c`). INFERRED (control flow): that is the engine asking the
+game module for a client's `clientState_t`, which places the struct at
+`gclient + 0x2178`. `ClientUserinfoChanged` (`0x420f4`) writing the
+sanitized name into `gclient + 0x21b4` with a 32-byte `Q_strncpyz` matches
+`name[32]` at `0x3C` of that struct and pins the base independently.
+
+`team` sits at `gclient + 0x217c`. Two places write it. The client script
+field `sessionteam` (client field table `0x72ed4`, id `0xc001`, marked
+"fully custom get and set") has a setter at `0x41838` that compares the
+assigned constant string against four `scr_const` slots and stores an
+integer; the getter at `0x418fc` maps the same four back. `scr_const`'s
+slot names come from `GScr_LoadConsts` (`0x58550`), which fills the 128
+`u16` string ids in order.
+
+| `.sessionteam` | `scr_const` offset | store site | `clientState.team` |
+|---|---|---|---|
+| `none` | `0xf8` | `0x4189e` | 0 |
+| `axis` | `0x08` | `0x41858` | 1 |
+| `allies` | `0x04` | `0x4186d` | 2 |
+| `spectator` | `0x7c` | `0x41889` | 3 |
+
+INFERRED (control flow, `0x418b0`-`0x418ce`): any other string falls through
+to `Scr_Error`, so those four are the only assignable values and script
+cannot put a fifth number on the wire.
+
+The other writer is `ClientConnect` (`0x4246c`), which bzeroes the
+`gclient_t` and then stores 3 at `0x42516`. INFERRED (control flow): a
+client therefore reads as `spectator` from the moment it connects until
+script assigns `.sessionteam`. A scan of the module for `+0x217c` finds no
+third store.
+
+VERIFIED live (local retail 1.1d dedicated, mp_carentan, 2026-09-01, two
+`--net-probe --probe-team` clients with separate qports reading each other's
+roster):
+
+- a client that never answers the team menu: `team` 3;
+- tdm, one client answering `allies` and one `axis`: 2 and 1, and both
+  clients' snapshots agree on the pair;
+- dm, a client that answered `allies`: `team` 0, because `dm.gsc`'s
+  `spawnPlayer` sets `.sessionteam` back to `"none"` on every spawn. dm puts
+  every player on team 0 whatever the menu answered.
+
+The client uses this for name colour and friend/foe: `killfeed::team_color`
+already colours 1 axis and 2 allies, and the scoreboard groups on it.
+`ScriptRuntime::client_team` is vcod's mapping and the roster build in
+`crates/server/src/server.rs` sends it.
+
 ## entityState vs clientState
 
 - `entityState_t` carries `clientNum` (8 bits, offset 144) and `index` (9 bits, offset 140; CoDExtended calls it `modelindex`).

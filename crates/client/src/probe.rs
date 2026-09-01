@@ -57,6 +57,7 @@ pub fn probe(
     save: Save,
     tag: Option<String>,
     pvs: bool,
+    team: Option<&str>,
     secs: u64,
     fs: Option<&vcod_common::pk3::Pk3Fs>,
 ) -> anyhow::Result<()> {
@@ -70,8 +71,9 @@ pub fn probe(
     } = save;
     // The fixture is the route's output, so the capture drives the same walk.
     let pvs = pvs || save_entities;
-    // Three modes need the same stock-menu join before they can do anything.
-    let joining = save_playerstate || save_motion || pvs;
+    // Every mode that needs a spawned player drives the same stock-menu join;
+    // `--probe-team` alone joins and then just watches the roster.
+    let joining = save_playerstate || save_motion || pvs || team.is_some();
     let mut client = NetClient::connect(addr)?;
     if save_fixture || save_snapshots {
         client.enable_capture();
@@ -83,7 +85,7 @@ pub fn probe(
     let mut reached_active: Option<Instant> = None;
     let mut baseline_origin: Option<[f32; 3]> = None;
     let mut watch = ProbeWatch::default();
-    let mut join = JoinProbe::default();
+    let mut join = JoinProbe::new(team);
     let mut wrote_playerstate = false;
     let mut motion = MotionProbe::default();
     let mut pvs_probe = PvsProbe::default();
@@ -281,6 +283,17 @@ pub fn probe(
                     moved,
                     s.entities.len(),
                 );
+                if !s.clients.is_empty() {
+                    let p = &net::protocol::PROTOCOL_V1;
+                    let roster: Vec<String> = s
+                        .clients
+                        .iter()
+                        .map(|(num, c)| {
+                            format!("{num}:team={} {:?}", c.field_i32(p, "team"), c.name(p))
+                        })
+                        .collect();
+                    println!("  roster: {}", roster.join("  "));
+                }
                 watch.check(s, client.configstrings());
             } else {
                 println!(
@@ -316,11 +329,14 @@ pub fn probe(
                             }
                             break;
                         }
-                    } else {
+                    } else if save_playerstate {
                         write_playerstate_fixture(s, client.configstrings(), &join)?;
                         wrote_playerstate = true;
                         break;
                     }
+                    // `--probe-team` on its own writes nothing: it stays on
+                    // and reports the roster, which is what a second probe on
+                    // the other team needs to be seen by.
                 }
             }
         }
@@ -674,9 +690,9 @@ const PLAYERSTATE_FIXTURE_DIR: &str = concat!(
     "/../server/tests/fixtures/playerstate"
 );
 
-/// The team `--save-playerstate` joins; the stage gate is a client joining
-/// allies through the real menu.
-const JOIN_TEAM: &str = "allies";
+/// The team a capture joins when `--probe-team` names none; the stage gates
+/// were all taken with a client joining allies through the real menu.
+const DEFAULT_JOIN_TEAM: &str = "allies";
 
 /// How long after the weapon answer the capture is taken, so the spawn has
 /// landed and the drop to the floor has finished.
@@ -688,8 +704,10 @@ const PM_NORMAL: i32 = 0;
 
 /// Drives the stock team/weapon menu handshake under `--save-playerstate` and
 /// keeps what the fixture header needs.
-#[derive(Default)]
 struct JoinProbe {
+    /// What the team menu is answered with: `allies`, `axis`, `autoassign`
+    /// or `spectator`, the four the stock gametypes accept.
+    team: String,
     /// The menu retail last named in `v g_scriptMainMenu`; the `t` that follows
     /// opens it.
     main_menu: String,
@@ -703,6 +721,17 @@ struct JoinProbe {
 }
 
 impl JoinProbe {
+    fn new(team: Option<&str>) -> Self {
+        Self {
+            team: team.unwrap_or(DEFAULT_JOIN_TEAM).to_string(),
+            main_menu: String::new(),
+            answered: Vec::new(),
+            weapon: String::new(),
+            answered_weapon: None,
+            commands: Vec::new(),
+        }
+    }
+
     /// `v g_scriptMainMenu <menu>` names the menu, `t <index>` opens it, and
     /// `mr <serverId> <index> <response>` answers the index `t` named
     /// (docs/research/cod11-hud-protocol.md, section 0.1).
@@ -723,7 +752,7 @@ impl JoinProbe {
                 if self.answered.contains(&idx) {
                     return;
                 }
-                let Some(reply) = menu_reply(&self.main_menu) else {
+                let Some(reply) = menu_reply(&self.main_menu, &self.team) else {
                     println!(
                         "JOIN: menu {idx} ({:?}) has no scripted reply",
                         self.main_menu
@@ -754,9 +783,9 @@ impl JoinProbe {
 /// The team menu takes a team; the weapon menu takes a weapon `_teams::restrict`
 /// allows for that menu's nationality, which is why one weapon literal cannot
 /// serve both gate maps. All four are on under the stock `scr_allow_*` defaults.
-fn menu_reply(menu: &str) -> Option<&'static str> {
+fn menu_reply<'a>(menu: &str, team: &'a str) -> Option<&'a str> {
     if menu.starts_with("team_") {
-        return Some(JOIN_TEAM);
+        return Some(team);
     }
     match menu.strip_prefix("weapon_")? {
         "american" => Some("m1carbine_mp"),
@@ -1031,8 +1060,8 @@ fn write_motion_fixture(
     let mut out = String::new();
     out.push_str("# Retail CoD 1.1d dedicated server playerstate under each movement input.\n");
     out.push_str(&format!(
-        "# map {map}, g_gametype {gametype}, joined {JOIN_TEAM}, weapon {}, dedicated 1,\n",
-        join.weapon
+        "# map {map}, g_gametype {gametype}, joined {}, weapon {}, dedicated 1,\n",
+        join.team, join.weapon
     ));
     out.push_str("# sv_maxclients 8, sv_pure 0, stock scr_* defaults, one client on the server.\n");
     out.push_str("# Captured with tools/run_server.sh and --net-probe --save-motion. Each pose\n");
@@ -1091,8 +1120,8 @@ fn write_playerstate_fixture(
     let mut out = String::new();
     out.push_str("# Retail CoD 1.1d dedicated server state after a stock menu join.\n");
     out.push_str(&format!(
-        "# map {map}, g_gametype {gametype}, joined {JOIN_TEAM}, weapon {}, dedicated 1,\n",
-        join.weapon
+        "# map {map}, g_gametype {gametype}, joined {}, weapon {}, dedicated 1,\n",
+        join.team, join.weapon
     ));
     out.push_str("# sv_maxclients 8, sv_pure 0, stock scr_* defaults, one client on the server.\n");
     out.push_str("# Captured with tools/run_server.sh and --net-probe --save-playerstate,\n");
@@ -1276,8 +1305,8 @@ fn write_entities_fixture(
     let mut head = String::new();
     head.push_str("# Retail CoD 1.1d dedicated server entity trace along walked routes.\n");
     head.push_str(&format!(
-        "# map {map}, g_gametype {gametype}, joined {JOIN_TEAM}, weapon {}, dedicated 1,\n",
-        join.weapon
+        "# map {map}, g_gametype {gametype}, joined {}, weapon {}, dedicated 1,\n",
+        join.team, join.weapon
     ));
     head.push_str(&format!(
         "# sv_maxclients {}, sv_pure {}, stock scr_* defaults, one client on the server.\n",

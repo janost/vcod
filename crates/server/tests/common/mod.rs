@@ -101,21 +101,23 @@ pub fn step_pair(
 }
 
 /// Two clients through the stock menus onto one server, stepped together so
-/// each is live while the other joins.
+/// each is live while the other joins. Each takes its own `(team, weapon)`:
+/// the weapon menu is per nationality, so two clients on opposite teams
+/// cannot answer it with the same weapon.
 pub fn join_pair(
     sv: &mut Server,
     qa: &Rc<RefCell<Queues>>,
     qb: &Rc<RefCell<Queues>>,
     now: &mut Instant,
-    team: &str,
-    weapon: &str,
+    a: (&str, &str),
+    b: (&str, &str),
 ) -> (NetClient<ClientEnd>, NetClient<ClientEnd>) {
     // Distinct qports: the server keys a peer by ip and qport, so two clients
     // sharing one read as a single client reconnecting and the second is
     // refused. A real client is one per process and gets this for free.
     let mut ca = NetClient::start_with_qport(ClientEnd(qa.clone()), *now, 0x2001);
     let mut cb = NetClient::start_with_qport(ClientEnd(qb.clone()), *now, 0x2002);
-    let (mut ja, mut jb) = (Join::new(team, weapon), Join::new(team, weapon));
+    let (mut ja, mut jb) = (Join::new(a.0, a.1), Join::new(b.0, b.1));
     for _ in 0..600 {
         *now += Duration::from_millis(50);
         ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
