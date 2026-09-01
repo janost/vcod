@@ -124,6 +124,12 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
             // captures carries 3 here and nothing in the module has been read
             // that says why.
             seti(&mut e, "apos.trType", TURRET_APOS_TRTYPE);
+            // The barrel's settled pitch, from the sweep
+            // `game::spawn::settle_turret_pitch` runs at map load. A host with
+            // no collision world ran no sweep and sends zero.
+            if let Some(pitch) = host.turret_pitch.get(&id).copied() {
+                setf(&mut e, "angles2[0]", pitch);
+            }
         }
     }
     Some(e)

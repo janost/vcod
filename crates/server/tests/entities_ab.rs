@@ -37,18 +37,7 @@ const GAPS: &[(&str, &str)] = &[];
 /// fails the guard, so this cannot rot either. Scoped to a map because a gap
 /// only exists where the entity that carries it does -- pavlov places no
 /// turret, so a turret's field matches there by having nothing to differ on.
-const FIELD_GAPS: &[(&str, &str, &str)] = &[(
-    "mp_carentan",
-    "angles2[0]",
-    "a turret's, -63 on one carentan turret and -72 on the other. It is not \
-     spawn state: the helper after `turret_think_client` (0x524cc) does \
-     `angles2[0] += angles2[2]` every think, so it accumulates. What sets the \
-     value it accumulates from is not found -- not the Radiant yaw (295 and \
-     229), not the weapon file's arcs (45/45/40/40), not any constant in \
-     `G_SpawnTurret` (-90, -32, 32, 56). It reads the same in every sample of \
-     four independent server runs at different uptimes, so whatever writes it \
-     settles",
-)];
+const FIELD_GAPS: &[(&str, &str, &str)] = &[];
 
 /// How far a float field may sit from the capture's. Every entity field with
 /// `bits == 0` is a float, and two of ours differ from retail's by a bounded

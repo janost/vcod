@@ -503,6 +503,22 @@ pub fn load(fs: &Pk3Fs, name: &str) -> Result<XModel> {
     parse_model(&lod0, &desc, &parts, &surfs)
 }
 
+/// The model's bones alone: the descriptor and `xmodelparts`, without the
+/// `xmodelsurfs` geometry. The dedicated server wants tag positions and has no
+/// use for vertices.
+pub fn load_bones(fs: &Pk3Fs, name: &str) -> Result<Vec<Bone>> {
+    let read = |path: String| -> Result<Vec<u8>> {
+        fs.read(&path)
+            .ok_or_else(|| anyhow!("{path} not found in pk3s"))
+    };
+    let lod0 = parse_descriptor(&read(format!("xmodel/{name}"))?)?.lod0;
+    let model_type = *lod0
+        .as_bytes()
+        .last()
+        .ok_or_else(|| anyhow!("empty model name"))?;
+    parse_parts(&read(format!("xmodelparts/{lod0}"))?, model_type)
+}
+
 /// The hands ship with all four surfaces on `viewhands@default.jpg`, a white
 /// placeholder the engine re-skins at runtime. Substitutes the hand atlas and
 /// the Wehrmacht sleeve, only when the materials are exactly the four

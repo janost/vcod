@@ -147,6 +147,10 @@ pub struct GameHost {
     /// fresh host, so a unit test that mounts nothing registers the bit and
     /// precaches no weapon model.
     pub fs: Option<std::rc::Rc<vcod_common::pk3::Pk3Fs>>,
+    /// Each turret's settled barrel pitch, by entity, from the sweep
+    /// `crate::game::spawn::settle_turret_pitch` runs at map load. `wire.rs`
+    /// puts it on the wire as `angles2[0]`.
+    pub turret_pitch: std::collections::HashMap<EntId, f32>,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -174,6 +178,7 @@ impl GameHost {
             items: crate::items::Items::new(),
             client_name_mode: builtins::cvar::ClientNameMode::default(),
             fs: None,
+            turret_pitch: std::collections::HashMap::new(),
         }
     }
 
