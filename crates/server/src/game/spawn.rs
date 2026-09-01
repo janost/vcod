@@ -88,6 +88,9 @@ pub fn spawn_entities_from_string(
         }
         if let Some(item) = spawn_item_name(host, cx, id, &classname) {
             host.register_item(&item.name);
+            if !item.turret {
+                drop_item_to_floor(host, cx, id);
+            }
             if item.turret {
                 for alias in turret_sound_aliases(host.fs.as_deref(), &item.name) {
                     register_sound_alias(host, alias);
@@ -245,6 +248,52 @@ const RADIANT_NAMES: &[(&str, &str)] = &[
 /// load, where we return `None` and spawn the entity without an item. No
 /// stock map has one, so the two differ only on a broken BSP, which ours
 /// loads and retail does not.
+/// `FinishSpawningItem` (0x4e284) traces the item straight down from where
+/// Radiant put it and sets its origin to where that trace ends, so a placed
+/// weapon rests on the floor rather than at the mapper's z. VERIFIED from the
+/// module: the trace box is (-1, -1, -1) to (1, 1, 1) (rodata `0x74dac`), the
+/// drop is 4096 units (`0x74db4`), and the endpoint is passed to `G_SetOrigin`
+/// with nothing added, so the item rests one unit clear of the floor because
+/// its box does. A `spawnflags & 1` item is suspended and keeps its origin;
+/// neither gate map has one.
+///
+/// Skipped for a turret, which goes through `G_SpawnTurret` instead.
+fn drop_item_to_floor(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+    const DROP: f32 = 4096.0;
+    const R: f32 = 1.0;
+    let Some(world) = host.world.clone() else {
+        return;
+    };
+    let origin = cx.intern_folded("origin");
+    let Value::Vector(from) = host.get_field(cx, id, origin) else {
+        return;
+    };
+    let to = [from[0], from[1], from[2] - DROP];
+    let tr = world.collision.box_trace(
+        from.into(),
+        to.into(),
+        [-R, -R, -R].into(),
+        [R, R, R].into(),
+    );
+    // A trace that starts inside geometry lands nowhere useful; retail
+    // retries once and then complains. An item ours cannot place keeps the
+    // origin the mapper gave it rather than moving to a meaningless endpoint.
+    if tr.startsolid || tr.allsolid {
+        return;
+    }
+    let end: [f32; 3] = tr.endpos.into();
+    let _ = host.set_field(cx, id, origin, Value::Vector(end));
+}
+
+/// The weapon a `mpweapon_*` Radiant classname places, for callers outside
+/// the spawn path.
+pub fn radiant_weapon(classname: &str) -> Option<&'static str> {
+    RADIANT_NAMES
+        .iter()
+        .find(|(radiant, _)| *radiant == classname)
+        .map(|(_, weapon)| *weapon)
+}
+
 fn spawn_item_name(
     host: &mut GameHost,
     cx: &mut Cx,

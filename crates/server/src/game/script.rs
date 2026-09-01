@@ -386,6 +386,17 @@ impl ScriptRuntime {
     /// The configstrings the script wrote (e.g. `setCullFog`, `ambientPlay`)
     /// by the end of `load`. `Server::load_scripts` copies these back into
     /// its own table once, before the first gamestate goes out.
+    /// The object table as packet entities: what a snapshot carries before
+    /// any per-client culling (`crates/server/src/game/wire.rs`).
+    pub fn packet_entities(
+        &mut self,
+        p: &vcod_common::net::protocol::Protocol,
+    ) -> std::collections::BTreeMap<u32, vcod_common::net::msg::EntityState> {
+        let host = &mut self.host;
+        self.vm
+            .with_cx(|cx| crate::game::wire::packet_entities(host, cx, p))
+    }
+
     pub fn configstrings(&self) -> &[String] {
         &self.host.configstrings
     }

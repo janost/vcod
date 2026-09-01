@@ -8,6 +8,7 @@ pub mod fields;
 pub mod host;
 pub mod script;
 pub mod spawn;
+pub mod wire;
 
 #[cfg(test)]
 pub mod testing {

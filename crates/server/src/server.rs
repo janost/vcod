@@ -1105,10 +1105,17 @@ impl Server {
                     .map(|c| (i as u32, msg::ClientState::named(self.proto, 0, 3, &c.name)))
             })
             .collect();
-        let entities: BTreeMap<u32, msg::EntityState> = self
-            .test_entities
-            .as_ref()
-            .map_or_else(BTreeMap::new, |te| te.at(self.proto, self.sv_time_ms));
+        // The map's own entities, plus whatever --test-entities adds: the
+        // scripted ones exist to drive the wire path and have no gameplay
+        // meaning, so they sit beside the object table's rather than
+        // replacing it.
+        let mut entities: BTreeMap<u32, msg::EntityState> = self
+            .script
+            .as_mut()
+            .map_or_else(BTreeMap::new, |rt| rt.packet_entities(self.proto));
+        if let Some(te) = self.test_entities.as_ref() {
+            entities.extend(te.at(self.proto, self.sv_time_ms));
+        }
         let collision = self.world.as_ref().map(|w| &w.collision);
 
         for slot in 0..self.clients.len() {
