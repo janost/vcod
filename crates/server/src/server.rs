@@ -8,6 +8,7 @@
 use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
 use crate::game::host::ClientEvent;
+use crate::game::script;
 use crate::spectate::ClientSim;
 use crate::world::{TestEntities, World};
 use std::collections::{BTreeMap, HashMap};
@@ -1156,12 +1157,22 @@ impl Server {
         // The body model rides here, not on the entity: without it another
         // client is sent a player it can name but cannot draw
         // (`docs/research/clientstate-wire-format.md`).
-        type Body = (i32, Vec<(i32, i32)>);
-        let bodies: Vec<Body> = match self.script.as_mut() {
+        // The team rides here too: it is what the receiving client colours
+        // names and tells friend from foe with, and script owns it through
+        // `.sessionteam`. Without a script there is nothing to ask, so the
+        // slot keeps the value retail's `ClientConnect` leaves in the field.
+        type Roster = (i32, Vec<(i32, i32)>, i32);
+        let per_slot: Vec<Roster> = match self.script.as_mut() {
             Some(rt) => (0..self.clients.len())
-                .map(|slot| (rt.client_model_index(slot), rt.client_attachments(slot)))
+                .map(|slot| {
+                    (
+                        rt.client_model_index(slot),
+                        rt.client_attachments(slot),
+                        rt.client_team(slot),
+                    )
+                })
                 .collect(),
-            None => vec![(0, Vec::new()); self.clients.len()],
+            None => vec![(0, Vec::new(), script::TEAM_SPECTATOR); self.clients.len()],
         };
         let roster: BTreeMap<u32, msg::ClientState> = self
             .clients
@@ -1169,8 +1180,8 @@ impl Server {
             .enumerate()
             .filter_map(|(i, c)| {
                 let c = c.as_ref()?;
-                let mut cs = msg::ClientState::named(self.proto, 0, 3, &c.name);
-                let (model, attachments) = &bodies[i];
+                let (model, attachments, team) = &per_slot[i];
+                let mut cs = msg::ClientState::named(self.proto, 0, *team, &c.name);
                 if let Some(idx) = msg::ClientState::field_index(self.proto, "modelindex") {
                     cs.fields[idx] = *model;
                 }

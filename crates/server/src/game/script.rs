@@ -61,6 +61,14 @@ fn render(cx: &vcod_gsc::Cx, v: Value) -> String {
 /// (`docs/research/clientstate-wire-format.md`).
 pub const ATTACH_SLOTS: usize = 6;
 
+/// `clientState.team`, the roster's 2-bit team field. The four values are
+/// what retail's `sessionteam` setter writes for the four names script may
+/// assign it (`docs/research/clientstate-wire-format.md`).
+pub const TEAM_NONE: i32 = 0;
+pub const TEAM_AXIS: i32 = 1;
+pub const TEAM_ALLIES: i32 = 2;
+pub const TEAM_SPECTATOR: i32 = 3;
+
 pub struct ScriptRuntime {
     vm: Vm,
     host: GameHost,
@@ -350,6 +358,25 @@ impl ScriptRuntime {
             .iter()
             .position(|cs| *cs == name)
             .map_or(0, |i| (i + 1) as i32)
+    }
+
+    /// A client's team as the roster carries it: `clientState.team`, the
+    /// 2-bit field the client colours names and picks friend from foe with.
+    /// Script owns it through `.sessionteam`, which `_teams.gsc` sets on a
+    /// menu join and `dm.gsc` clears back to `"none"` on every spawn; the
+    /// four names and the values they map to are in
+    /// `docs/research/clientstate-wire-format.md`.
+    ///
+    /// A client whose `.sessionteam` is unset reads `TEAM_SPECTATOR`, which
+    /// is what retail leaves in the field between `ClientConnect` and the
+    /// first script write.
+    pub fn client_team(&mut self, slot: usize) -> i32 {
+        match self.client_field(slot, "sessionteam").as_deref() {
+            Some("none") => TEAM_NONE,
+            Some("axis") => TEAM_AXIS,
+            Some("allies") => TEAM_ALLIES,
+            _ => TEAM_SPECTATOR,
+        }
     }
 
     /// A client's attachments as the roster carries them: up to six

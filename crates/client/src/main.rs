@@ -103,6 +103,12 @@ struct Args {
     /// it: --capture-tag players writes <map>-<gametype>-players.txt.
     #[arg(long)]
     capture_tag: Option<String>,
+    /// Which team --net-probe answers the stock team menu with: allies, axis,
+    /// autoassign or spectator. On its own it makes the probe join and then
+    /// report the roster once a second, which is how two probes on opposite
+    /// teams measured what clientState.team carries.
+    #[arg(long)]
+    probe_team: Option<String>,
     /// Seconds --net-probe stays connected; an SD round boundary needs a few minutes
     #[arg(long, default_value_t = 65)]
     probe_secs: u64,
@@ -433,6 +439,7 @@ fn main() -> Result<()> {
             },
             args.capture_tag.clone(),
             args.probe_pvs,
+            args.probe_team.as_deref(),
             args.probe_secs,
             fs.as_ref(),
         );
