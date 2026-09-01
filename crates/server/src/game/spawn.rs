@@ -283,6 +283,141 @@ fn drop_item_to_floor(host: &mut GameHost, cx: &mut Cx, id: EntId) {
     }
     let end: [f32; 3] = tr.endpos.into();
     let _ = host.set_field(cx, id, origin, Value::Vector(end));
+
+    // The alignment runs only when the drop hit something: a trace that
+    // reached its end has no surface to lie on.
+    if tr.fraction >= 1.0 {
+        return;
+    }
+    let angles = cx.intern_folded("angles");
+    let Value::Vector(radiant) = host.get_field(cx, id, angles) else {
+        return;
+    };
+    let aligned = align_to_surface(radiant, tr.normal.into());
+    let _ = host.set_field(cx, id, angles, Value::Vector(aligned));
+}
+
+/// The item's angles once it has landed: retail lies it on the surface it
+/// dropped onto rather than keeping the mapper's.
+///
+/// Read out of `FinishSpawningItem` (0x4e284): the surface normal is the new
+/// up, `AngleVectors` of the Radiant angles gives a reference forward (so the
+/// mapper's yaw survives and the mapper's roll does not), two cross products
+/// orthogonalise that forward against the normal, and `AxisToAngles` turns the
+/// axis into angles. Then 90 degrees of roll (rodata `0x74dbc`) for an item
+/// whose `bg_itemlist` type is 1, which every placeable weapon is, and every
+/// placed item on both gate maps is a weapon.
+fn align_to_surface(radiant: [f32; 3], normal: [f32; 3]) -> [f32; 3] {
+    const WEAPON_ROLL: f32 = 90.0;
+    let up = normal;
+    let right = cross(up, angle_forward(radiant));
+    let forward = cross(right, up);
+    let mut out = axis_to_angles([forward, right, up]);
+    out[2] += WEAPON_ROLL;
+    out
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// `AngleVectors`' forward, the only one of the three the item path asks for.
+fn angle_forward(angles: [f32; 3]) -> [f32; 3] {
+    let (sp, cp) = angles[0].to_radians().sin_cos();
+    let (sy, cy) = angles[1].to_radians().sin_cos();
+    [cp * cy, cp * sy, -sp]
+}
+
+/// `AxisToAngles` (0x3c808). Yaw and pitch come off the forward axis, roll off
+/// the right axis once it has been rotated back through both. The constants
+/// are the module's: 180 over pi, 360 for the wrap, and 90/270 for an axis
+/// pointing straight up (rodata `0x7293c`, `0x72940`, `0x72958`).
+fn axis_to_angles(axis: [[f32; 3]; 3]) -> [f32; 3] {
+    let [fwd, right, _up] = axis;
+    let (pitch, yaw);
+    if fwd[1] == 0.0 && fwd[0] == 0.0 {
+        yaw = 0.0;
+        // As read: the comparison is against 90 itself, so a normalised axis
+        // always takes the 90 arm.
+        pitch = if fwd[2] > 90.0 { 270.0 } else { 90.0 };
+        return [pitch, yaw, 0.0];
+    }
+    let mut y = fwd[1].atan2(fwd[0]).to_degrees();
+    if y < 0.0 {
+        y += 360.0;
+    }
+    let len = (fwd[0] * fwd[0] + fwd[1] * fwd[1]).sqrt();
+    let mut p = -fwd[2].atan2(len).to_degrees();
+    if p < 0.0 {
+        p += 360.0;
+    }
+    yaw = y;
+    pitch = p;
+
+    // Roll: rotate `right` back through yaw and pitch, then read the pitch of
+    // what is left. Unlike yaw and pitch it is not wrapped into [0, 360): the
+    // module picks a sign from the rotated y and from the raw angle
+    // (rodata `0x7296c`, `0x72970`), which is what leaves a negative roll
+    // negative and keeps `+90` for a weapon inside one turn.
+    let (sy, cy) = (-yaw).to_radians().sin_cos();
+    let (x, ry) = (right[0] * cy - right[1] * sy, right[0] * sy + right[1] * cy);
+    let (sp, cp) = (-pitch).to_radians().sin_cos();
+    let (rx, rz) = (x * cp - right[2] * sp, x * sp + right[2] * cp);
+    if ry == 0.0 && rz == 0.0 {
+        return [pitch, yaw, -90.0];
+    }
+    let len = (rx * rx + ry * ry).sqrt();
+    let raw = -rz.atan2(len).to_degrees();
+    let roll = if ry >= 0.0 {
+        -raw
+    } else if raw >= 0.0 {
+        raw - 180.0
+    } else {
+        raw + 180.0
+    };
+    [pitch, yaw, roll]
+}
+
+#[cfg(test)]
+mod align_tests {
+    use super::align_to_surface;
+
+    /// A flat floor keeps the mapper's yaw, flattens the pitch, and leaves the
+    /// weapon's 90 degrees of roll. The mapper's own roll (180 here) is
+    /// dropped, because only `AngleVectors`' forward feeds the alignment and
+    /// forward does not depend on roll.
+    #[test]
+    fn a_flat_floor_keeps_the_yaw_and_adds_the_weapon_roll() {
+        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, 0.0, 1.0]);
+        assert!(out[0].abs() < 1e-3, "pitch {}", out[0]);
+        assert!((out[1] - 90.0).abs() < 1e-3, "yaw {}", out[1]);
+        assert!((out[2] - 90.0).abs() < 1e-3, "roll {}", out[2]);
+    }
+
+    /// A floor tilted about x tips the item into it. The retail capture this
+    /// was measured against carries pitch 359.09 and roll 89.65 for a
+    /// panzerfaust on carentan's sloped floor, so a roll that wrapped to 449
+    /// would be wrong by a whole turn: the roll is signed, unlike yaw and
+    /// pitch.
+    #[test]
+    fn a_tilted_floor_tips_the_item_and_leaves_the_roll_inside_one_turn() {
+        let tilt = 2f32.to_radians();
+        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, -tilt.sin(), tilt.cos()]);
+        assert!(
+            out[2] > 0.0 && out[2] < 180.0,
+            "roll {} left its turn",
+            out[2]
+        );
+        assert!(
+            (out[0] - 358.0).abs() < 1.0,
+            "pitch {} is not the tilt",
+            out[0]
+        );
+    }
 }
 
 /// The weapon a `mpweapon_*` Radiant classname places, for callers outside

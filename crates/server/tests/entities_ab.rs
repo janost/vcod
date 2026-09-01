@@ -32,6 +32,37 @@ use vcod_common::net::protocol::{Protocol, PROTOCOL_V1};
 /// so the list cannot rot into a lie.
 const GAPS: &[(&str, &str)] = &[];
 
+/// Fields stage 5 knowingly does not reproduce, as `(map, field, reason)`.
+/// Same rule as `GAPS`: a listed field that stops differing on its own map
+/// fails the guard, so this cannot rot either. Scoped to a map because a gap
+/// only exists where the entity that carries it does -- pavlov places no
+/// turret, so a turret's field matches there by having nothing to differ on.
+const FIELD_GAPS: &[(&str, &str, &str)] = &[(
+    "mp_carentan",
+    "angles2[0]",
+    "a turret's, -63 on one carentan turret and -72 on the other. It is not \
+     spawn state: the helper after `turret_think_client` (0x524cc) does \
+     `angles2[0] += angles2[2]` every think, so it accumulates. What sets the \
+     value it accumulates from is not found -- not the Radiant yaw (295 and \
+     229), not the weapon file's arcs (45/45/40/40), not any constant in \
+     `G_SpawnTurret` (-90, -32, 32, 56). It reads the same in every sample of \
+     four independent server runs at different uptimes, so whatever writes it \
+     settles",
+)];
+
+/// How far a float field may sit from the capture's. Every entity field with
+/// `bits == 0` is a float, and two of ours differ from retail's by a bounded
+/// amount with one cause: retail drops an item with `trap_TraceCapsule` where
+/// we box-trace, so its resting z and the surface normal it aligns to are a
+/// little different. Measured maxima across both maps are 0.024 units of z and
+/// 0.035 degrees of angle; this bound is twice that, and it is far under the
+/// errors the gate exists to catch -- an item floating at the mapper's z is
+/// five units out and an unwrapped roll is 360 degrees out.
+///
+/// It also covers `+0.0` against `-0.0`, which is what a flat floor's pitch
+/// comes to on either side.
+const FLOAT_EPS: f32 = 0.05;
+
 /// Entities we send that no sample in the trace shows retail sending. Empty,
 /// and a new one is a question to answer, not a line to add: either our server
 /// is sending something retail does not, or the trace never walked the corner
@@ -259,6 +290,7 @@ fn compare(map: &str, retail: &BTreeMap<u32, EntityState>, ours: &BTreeMap<u32, 
     let mut findings: Vec<String> = Vec::new();
     let mut matched: BTreeSet<u32> = BTreeSet::new();
     let mut gaps_hit: BTreeSet<&str> = BTreeSet::new();
+    let mut field_gaps_hit: BTreeSet<&str> = BTreeSet::new();
 
     for (num, want) in retail {
         let found = ours.iter().find(|(_, got)| key(p, got) == key(p, want));
@@ -280,15 +312,33 @@ fn compare(map: &str, retail: &BTreeMap<u32, EntityState>, ours: &BTreeMap<u32, 
             ));
         }
         for (i, f) in p.entity_fields.iter().enumerate() {
-            if got.fields[i] != want.fields[i] {
+            let (a, b) = (got.fields[i], want.fields[i]);
+            if a == b {
+                continue;
+            }
+            if FIELD_GAPS.iter().any(|(m, g, _)| *m == map && *g == f.name) {
+                field_gaps_hit.insert(f.name);
+                continue;
+            }
+            // `bits == 0` is this codec's float (docs/protocol-1.1.md, "Delta
+            // field encoding"), and a float gets the bounded tolerance above.
+            if f.bits == 0 {
+                let (x, y) = (f32::from_bits(a as u32), f32::from_bits(b as u32));
+                if (x - y).abs() <= FLOAT_EPS {
+                    continue;
+                }
                 findings.push(format!(
-                    "field: {} {} is {} here, {} in the capture",
+                    "field: {} {} is {x} here, {y} in the capture",
                     describe(p, *num, want),
                     f.name,
-                    got.fields[i],
-                    want.fields[i],
                 ));
+                continue;
             }
+            findings.push(format!(
+                "field: {} {} is {a} here, {b} in the capture",
+                describe(p, *num, want),
+                f.name,
+            ));
         }
     }
 
@@ -308,6 +358,15 @@ fn compare(map: &str, retail: &BTreeMap<u32, EntityState>, ours: &BTreeMap<u32, 
         assert!(
             gaps_hit.contains(g),
             "{map}: GAPS lists {g:?} ({why}) but it is not missing any more; drop it"
+        );
+    }
+    for (m, g, why) in FIELD_GAPS {
+        if *m != map {
+            continue;
+        }
+        assert!(
+            field_gaps_hit.contains(g),
+            "{map}: FIELD_GAPS lists {g:?} ({why}) but it matches everywhere now; drop it"
         );
     }
 
