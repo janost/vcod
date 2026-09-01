@@ -276,6 +276,32 @@ The angle change bits are not vestigial: VERIFIED live 2026-08-26, a retail 1.1 
 
 Transcribed from disassembly. Widths and order VERIFIED live 2026-08-25: a retail 1.1 client's moves parsed against vcod's server for a whole session with no truncation error (`docs/research/cod11-server-handshake.md`, "Retail client check"). Field values are still unchecked, since the server parses and discards them.
 
+### Usercmd input bits
+
+Which bit means which key. Measured 2026-09-01 by logging `buttons`, `wbuttons` and `upmove` off a retail 1.1 client connected to vcod's server while each key was pressed in turn, and cross-checked against CoDExtended's bot input path (`src/gsc_bots.c`, which sets one mask per verb) and its `KEY_MASK_*` defines (`src/shared.h`). The two agree everywhere they overlap.
+
+| Verb | Field | Value |
+|---|---|---|
+| move forward/back, right/left | `forwardmove`, `rightmove` | +/-127 |
+| jump | `upmove` | +127 |
+| crouch | `wbuttons` | `0x80` |
+| prone | `wbuttons` | `0x40` |
+| lean left | `wbuttons` | `0x10` |
+| lean right | `wbuttons` | `0x20` |
+| reload | `wbuttons` | `0x08` |
+| fire | `buttons` | `0x01` |
+| ads | `buttons` | `0x10` |
+| melee | `buttons` | `0x20` |
+| use | `buttons` | `0x40` |
+
+Three things a Q3 reading gets wrong:
+
+- **`upmove` is not a jump axis.** A crouched or prone client holds `upmove` at -127 for as long as it stays down, so only a positive `upmove` is a jump. Q3 reads -127 as crouch; CoD has a `wbuttons` bit for that and sends both.
+- **The stance bits are level states, not key edges,** and they are mutually exclusive. The client owns the toggle -- crouch is a tap in the retail binds, not a hold -- and what reaches the wire is the resulting stance, held. One capture holds `0x80` for 18 seconds across a crouch, with `0x40` replacing it for the 6 seconds spent prone.
+- **`buttons` `0x10` is ads, where Q3's `BUTTON_WALKING` is `0x10`.** There is no walk bit at all: CoD 1 has a single move speed, so nothing in a capture varies with it, and no `KEY_MASK` in the reference names one. `pm_walkSpeedScale` still exists engine-side (the stage 4 playerstate capture pins it at 0.4), but no client input reaches it.
+
+`buttons` `0x02` was seen live, briefly, twice at spawn and once well after; nothing pressed in the capture accounts for it and it is left unidentified. `usercmd_t`'s own comment lists "console, chat" among the `buttons` meanings (CoDExtended `src/shared.h`), which is the likeliest home for it. INFERRED.
+
 ### Entering the world
 
 A client is only sent snapshots once it's CS_ACTIVE, and that requires the server to accept a `clc_move`. Header-only keepalives keep the connection alive but won't promote you. This is the gate between "connected" and "receiving game state," and it's where I was stuck longest.

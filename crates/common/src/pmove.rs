@@ -294,7 +294,7 @@ pub struct ViewParams {
     pub roll: f32,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
 pub struct PmInput {
     pub forward: f32, // -1..1
     pub right: f32,   // -1..1

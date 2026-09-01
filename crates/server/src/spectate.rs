@@ -24,6 +24,25 @@ fn short_deg(v: i32) -> f32 {
     (deg + 180.0).rem_euclid(360.0) - 180.0
 }
 
+/// A usercmd's input words as pmove's per-frame input. The stance bits are
+/// level, and a crouched or prone client holds `up` at -127 for as long as it
+/// is down, so only a positive `up` is a jump. `walk_slow` has no wire source:
+/// CoD 1 has one move speed and no walk key, and pmove's walk scale is
+/// reachable only from the client's own fly mode. Bit table and evidence:
+/// docs/protocol-1.1.md, "Usercmd input bits".
+fn pm_input(cmd: &UserCmd) -> PmInput {
+    PmInput {
+        forward: f32::from(cmd.forward) / 127.0,
+        right: f32::from(cmd.right) / 127.0,
+        jump: cmd.up > 0,
+        crouch: cmd.wbuttons & msg::WBUTTON_CROUCH != 0,
+        prone: cmd.wbuttons & msg::WBUTTON_PRONE != 0,
+        walk_slow: false,
+        lean_left: cmd.wbuttons & msg::WBUTTON_LEAN_LEFT != 0,
+        lean_right: cmd.wbuttons & msg::WBUTTON_LEAN_RIGHT != 0,
+    }
+}
+
 /// `ANGLE2SHORT(spawn_angle) - cmd.angles`, RTCW's `SetClientViewAngle`
 /// (docs/protocol-1.1.md, "Spectator view angles"). `cmd_angles` is the
 /// client's last-known angles at the moment of this spawn. Only a fresh
@@ -126,17 +145,7 @@ impl ClientSim {
                 dt,
             ),
             (PmType::Normal, Some(w)) => {
-                // Only the two move axes are wired. `jump`, `crouch`,
-                // `prone`, `walk_slow`, `lean_left` and `lean_right` keep
-                // their defaults, so a player can do none of it: those six
-                // come off `cmd.up`, `cmd.buttons` and `cmd.wbuttons`, and
-                // which bit means which is not established anywhere here.
-                let input = PmInput {
-                    forward: f32::from(cmd.forward) / 127.0,
-                    right: f32::from(cmd.right) / 127.0,
-                    ..PmInput::default()
-                };
-                pmove::pmove(&mut self.ps, &input, w, dt);
+                pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt);
             }
         }
     }
@@ -256,6 +265,44 @@ mod tests {
             angles: [pitch_short, yaw_short, 0],
             ..Default::default()
         }
+    }
+
+    /// The bit table measured off a retail 1.1 client on 2026-09-01, one case
+    /// per movement verb. Evidence and the full table:
+    /// docs/protocol-1.1.md, "Usercmd input bits".
+    #[test]
+    fn wire_bits_map_to_movement_verbs() {
+        let of = |buttons: u8, wbuttons: u8, up: i8| {
+            pm_input(&UserCmd {
+                buttons,
+                wbuttons,
+                up,
+                ..Default::default()
+            })
+        };
+        assert!(of(0, 0, 127).jump);
+        let crouch = of(0, msg::WBUTTON_CROUCH, -127);
+        assert!(crouch.crouch && !crouch.prone);
+        let prone = of(0, msg::WBUTTON_PRONE, -127);
+        assert!(prone.prone && !prone.crouch);
+        assert!(of(0, msg::WBUTTON_LEAN_LEFT, 0).lean_left);
+        assert!(of(0, msg::WBUTTON_LEAN_RIGHT, 0).lean_right);
+        // A crouched or prone client holds `up` at -127 for as long as it
+        // stays down, so only a positive `up` is a jump.
+        assert!(!crouch.jump && !prone.jump);
+    }
+
+    /// The weapon bits share `buttons` with nothing this module reads, and
+    /// CoD 1 has a single move speed with no walk key, so no input reaches
+    /// pmove's walk scale.
+    #[test]
+    fn weapon_bits_and_walk_scale_are_untouched() {
+        let all_weapon_bits = pm_input(&UserCmd {
+            buttons: 0xff,
+            wbuttons: msg::WBUTTON_RELOAD,
+            ..Default::default()
+        });
+        assert_eq!(all_weapon_bits, PmInput::default());
     }
 
     /// One field of the retail player capture the `playerstate_ab` gate diffs

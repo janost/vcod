@@ -844,6 +844,17 @@ pub struct UserCmd {
     pub up: i8,
 }
 
+/// Input bits in [`UserCmd::wbuttons`]. The two stances are level states the
+/// client holds for as long as it is down, not key edges, and they are
+/// mutually exclusive; `reload` is here because it is the one `wbuttons` bit
+/// that moves nothing. Bit table, evidence and the `buttons` half:
+/// docs/protocol-1.1.md, "Usercmd input bits".
+pub const WBUTTON_RELOAD: u8 = 0x08;
+pub const WBUTTON_LEAN_LEFT: u8 = 0x10;
+pub const WBUTTON_LEAN_RIGHT: u8 = 0x20;
+pub const WBUTTON_PRONE: u8 = 0x40;
+pub const WBUTTON_CROUCH: u8 = 0x80;
+
 /// The base (all-zero) usercmd a `clc_moveNoDelta` deltas from.
 pub const NULL_USERCMD: UserCmd = UserCmd {
     server_time: 0,
