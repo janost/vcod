@@ -136,6 +136,10 @@ pub struct ClientSim {
     /// for movement and leaves it alone when both axes are zero
     /// (`game.mp.i386.so` 0x32504).
     strafing: Option<vcod_common::animscript::Side>,
+    /// A jump impulse taken since the last `update_anims`, so a tick that ran
+    /// several moves still raises the event. Leaving the ground is not enough:
+    /// a ledge and a ladder do that without a jump.
+    jumped: bool,
 }
 
 /// Everything the animscript needs that the sim does not own: the script
@@ -170,6 +174,7 @@ impl ClientSim {
             anim: Default::default(),
             was_airborne: false,
             strafing: None,
+            jumped: false,
         }
     }
 
@@ -197,6 +202,7 @@ impl ClientSim {
         self.anim = Default::default();
         self.was_airborne = false;
         self.strafing = None;
+        self.jumped = false;
     }
 
     /// Advance one frame. The axes arrive quantized to ±127/0 and dt comes off
@@ -220,6 +226,7 @@ impl ClientSim {
             ),
             (PmType::Normal, Some(w)) => {
                 pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt);
+                self.jumped |= self.ps.jumped;
                 // Retail holds a prone view inside the cone around the body by
                 // pushing `delta_angles`, so the client's own prediction lands
                 // in the same place (docs/research/cod11-mantle.md, "Prone").
@@ -270,13 +277,19 @@ impl ClientSim {
                 Side::Right
             });
         }
-        let moving = self.ps.velocity.truncate().length() > ANIM_IDLE_SPEED;
+        // Retail's compare is `xyspeed < 10.0`, so the constant itself is
+        // moving.
+        let moving = self.ps.velocity.truncate().length() >= ANIM_IDLE_SPEED;
         let back = self.ps.backwards_run;
         // The stance crossed with the backpedal latch, every frame. CoD 1 has
         // no walk key, so retail's walk bit is never set and the `walk*`
-        // blocks are unreachable; prone moves through `walkprone` because the
-        // file gives the prone family no run block.
+        // blocks are unreachable; the prone arm never reads that bit at all
+        // (@0x326f1), which is why prone moves through `walkprone`.
         let movetype = match (self.ps.stance, moving, back) {
+            // A climber is off the ground and still selects: retail's ladder
+            // flag bypasses the airborne early-out (@0x323af).
+            _ if self.ps.on_ladder && self.ps.velocity.z >= 0.0 => Movetype::ClimbUp,
+            _ if self.ps.on_ladder => Movetype::ClimbDown,
             (pmove::Stance::Prone, false, _) => Movetype::IdleProne,
             (pmove::Stance::Prone, true, true) => Movetype::WalkProneBk,
             (pmove::Stance::Prone, true, false) => Movetype::WalkProne,
@@ -302,13 +315,19 @@ impl ClientSim {
         // The two ground edges, before the continuous state: an event anim
         // holds the channel, so raising it first is what keeps the restart
         // toggle flipping once per landing rather than twice.
+        //
+        // The takeoff is raised by the jump impulse and not by becoming
+        // airborne: retail's own mp_pavlov capture backs off a ledge at
+        // `run_back` and reads the run loop while airborne, so a fall and a
+        // mounted ladder animate whatever they were doing.
+        let jumped = std::mem::take(&mut self.jumped);
         let script = &inputs.anims.script;
         match (self.ps.on_ground, self.was_airborne) {
             (true, true) => {
                 let sel = script.select_event("land", &conditions);
                 self.anim.event(&sel, now_ms, resolve);
             }
-            (false, false) => {
+            (false, false) if jumped && !self.ps.on_ladder => {
                 let event = if back { "jumpbk" } else { "jump" };
                 let sel = script.select_event(event, &conditions);
                 self.anim.event(&sel, now_ms, resolve);
@@ -316,9 +335,10 @@ impl ClientSim {
             _ => {}
         }
         // Nothing is selected while off the ground -- retail returns before
-        // the selection unless the ladder flag is set (@0x323a2) -- so a jump
-        // owns the legs until the landing.
-        if self.ps.on_ground {
+        // the selection unless the ladder flag is set (@0x323a2), which is
+        // what gives a climber its `climbup`/`climbdown` -- so a jump owns
+        // the legs until the landing.
+        if self.ps.on_ground || self.ps.on_ladder {
             let mut sel = script.select("combat", &conditions);
             // Retail leaves `torsoAnim` 0 in every settled pose of both
             // captures, although the clauses reached here are `both`.
@@ -594,14 +614,25 @@ mod tests {
             return;
         };
         let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
-        use pmove::Stance::{Crouch, Stand};
-        // label, weapon, class, stance, forward, right, the clause's anim
-        let cases: &[(&str, &str, &str, pmove::Stance, i8, i8, &str)] = &[
+        use pmove::Stance::{Crouch, Prone, Stand};
+        // label, weapon, class, stance, backpedalling, forward, right, anim
+        type Case = (
+            &'static str,
+            &'static str,
+            &'static str,
+            pmove::Stance,
+            bool,
+            i8,
+            i8,
+            &'static str,
+        );
+        let cases: &[Case] = &[
             (
                 "a pistol runs its own loop",
                 "colt_mp",
                 "pistol",
                 Stand,
+                false,
                 127,
                 0,
                 "pb_sprint",
@@ -611,6 +642,7 @@ mod tests {
                 "m1carbine_mp",
                 "rifle",
                 Stand,
+                false,
                 127,
                 127,
                 "pb_combatrun_forward_loop",
@@ -620,6 +652,7 @@ mod tests {
                 "m1carbine_mp",
                 "rifle",
                 Crouch,
+                false,
                 0,
                 -127,
                 "pb_crouch_run_left",
@@ -629,16 +662,38 @@ mod tests {
                 "colt_mp",
                 "pistol",
                 Stand,
+                false,
                 0,
                 -127,
                 "pb_combatrun_left_loop_pistol",
             ),
+            (
+                "a crouched backpedal is its own movetype",
+                "m1carbine_mp",
+                "rifle",
+                Crouch,
+                true,
+                -127,
+                0,
+                "pb_crouch_run_back",
+            ),
+            (
+                "so is a backwards crawl",
+                "m1carbine_mp",
+                "rifle",
+                Prone,
+                true,
+                -127,
+                0,
+                "pb_prone_crawl_back",
+            ),
         ];
-        for (label, weapon, class, stance, forward, right, want) in cases {
+        for (label, weapon, class, stance, back, forward, right, want) in cases {
             let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
             sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
             sim.ps.stance = *stance;
             sim.ps.on_ground = true;
+            sim.ps.backwards_run = *back;
             sim.ps.velocity = Vec3::new(120.0, 0.0, 0.0);
             let cmd = UserCmd {
                 forward: *forward,
@@ -675,7 +730,9 @@ mod tests {
         sim.update_anims(&inputs, &NULL_USERCMD, 1000);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_stand_alert"));
 
+        // The impulse pmove reports, not merely leaving the ground.
         sim.ps.on_ground = false;
+        sim.jumped = true;
         sim.update_anims(&inputs, &NULL_USERCMD, 1050);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_takeoff"));
         // Well past the takeoff clause's `duration 5`.
@@ -690,6 +747,117 @@ mod tests {
         sim.ps.on_ground = true;
         sim.update_anims(&inputs, &NULL_USERCMD, 1300);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_land"));
+    }
+
+    /// Leaving the ground is not jumping. Retail's own mp_pavlov capture backs
+    /// off a ledge at `run_back` and reads the run loop (index 93) while
+    /// airborne, so a fall keeps whatever the legs were doing; raising the
+    /// takeoff on the edge would freeze the standing jump for the whole fall.
+    #[test]
+    fn running_off_a_ledge_keeps_the_run_loop() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let inputs = AnimInputs {
+            anims: &anims,
+            weapon: "m1carbine_mp",
+            weapon_class: "rifle",
+        };
+        let running = UserCmd {
+            forward: 127,
+            ..NULL_USERCMD
+        };
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.on_ground = true;
+        sim.ps.velocity = Vec3::new(190.0, 0.0, 0.0);
+        sim.update_anims(&inputs, &running, 1000);
+        assert_eq!(
+            anims.name(sim.anim.legs()),
+            Some("pb_combatrun_forward_loop")
+        );
+
+        // Off the edge: airborne, no impulse.
+        sim.ps.on_ground = false;
+        for t in [1050, 1100, 1150, 1200] {
+            sim.ps.velocity.z -= 40.0;
+            sim.update_anims(&inputs, &running, t);
+            assert_eq!(
+                anims.name(sim.anim.legs()),
+                Some("pb_combatrun_forward_loop"),
+                "the fall changed the anim at {t}"
+            );
+        }
+    }
+
+    /// A climber is off the ground and still animates: retail's ladder flag
+    /// bypasses the airborne early-out, and the two climb blocks are the only
+    /// thing that reads the climb direction. Mounting is not a jump either.
+    #[test]
+    fn a_ladder_climbs_rather_than_freezing() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let inputs = AnimInputs {
+            anims: &anims,
+            weapon: "m1carbine_mp",
+            weapon_class: "rifle",
+        };
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.on_ground = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1000);
+
+        // Mounted: off the ground without an impulse, climbing.
+        sim.ps.on_ground = false;
+        sim.ps.on_ladder = true;
+        sim.ps.velocity = Vec3::new(0.0, 0.0, 60.0);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050);
+        assert_eq!(anims.name(sim.anim.legs()), Some("pb_climbup"));
+
+        sim.ps.velocity.z = -60.0;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1100);
+        assert_eq!(anims.name(sim.anim.legs()), Some("pb_climbdown"));
+    }
+
+    /// The backpedal latch picks the event as well as the movetype: retail's
+    /// `jumpbk` block gates its first clause on the crouched and prone
+    /// movetypes, which is the only place the two events differ for a
+    /// rifleman.
+    #[test]
+    fn a_backwards_crouched_jump_raises_jumpbk() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let inputs = AnimInputs {
+            anims: &anims,
+            weapon: "m1carbine_mp",
+            weapon_class: "rifle",
+        };
+        let back = UserCmd {
+            forward: -127,
+            ..NULL_USERCMD
+        };
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.stance = pmove::Stance::Crouch;
+        sim.ps.backwards_run = true;
+        sim.ps.on_ground = true;
+        sim.ps.velocity = Vec3::new(120.0, 0.0, 0.0);
+        sim.update_anims(&inputs, &back, 1000);
+        assert_eq!(anims.name(sim.anim.legs()), Some("pb_crouch_run_back"));
+
+        sim.ps.on_ground = false;
+        sim.jumped = true;
+        sim.update_anims(&inputs, &back, 1050);
+        assert_eq!(
+            anims.name(sim.anim.legs()),
+            Some("pb_chicken_dance_crouch"),
+            "`jump` would have given the standing takeoff"
+        );
     }
 
     /// Retail updates the strafe condition only from a cmd that asks for

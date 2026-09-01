@@ -285,6 +285,12 @@ pub struct PlayerState {
     /// (`game.mp.i386.so` 0x326f1/0x32739/0x32768), so it is the only thing
     /// that puts a player in the `runbk` family.
     pub backwards_run: bool,
+    /// Whether this move took a jump impulse, ground or ladder push-off.
+    /// Cleared at the top of every move. Leaving the ground is not the same
+    /// thing: a player who runs off a ledge or mounts a ladder is airborne
+    /// without having jumped, and the animation machine has to tell those
+    /// apart (docs/research/player-model-anim-system.md).
+    pub jumped: bool,
 }
 
 impl PlayerState {
@@ -318,6 +324,7 @@ impl PlayerState {
             view_lerp_target: 0.0,
             view_lerp_down: false,
             backwards_run: false,
+            jumped: false,
         }
     }
 
@@ -391,6 +398,7 @@ pub fn pmove(
         ps.backwards_run = false;
     }
     let mut events = Vec::new();
+    ps.jumped = false;
     let was_on_ground = ps.on_ground;
     // retail's `pml.previous_origin`, taken at the top of PmoveSingle
     ps.move_start = ps.origin;
@@ -433,6 +441,7 @@ pub fn pmove(
             };
             ps.velocity.z = (2.0 * height * GRAVITY).sqrt();
             ps.on_ground = false;
+            ps.jumped = true;
         }
         if ps.on_ground {
             friction(ps, ps.on_ladder, dt);
@@ -1189,6 +1198,7 @@ fn ladder_push_off(ps: &mut PlayerState, input: &PmInput, normal: Vec3) -> bool 
     ps.velocity.z = (GRAVITY * 78.0).sqrt() * 0.75;
     ps.on_ladder = false;
     ps.jump_latched = true;
+    ps.jumped = true;
     true
 }
 
