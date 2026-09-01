@@ -123,6 +123,12 @@ engineering setup works.
   reload) are not resolved headlessly, since the probe loads no weapon files.
   At debug level it also dumps every non-empty configstring as `cs[i] = …`,
   which is how the retail configstring tables in the research docs were taken.
+  `--probe-pvs` joins the same way and walks a route, printing the entity list
+  at each station and every entity that appeared or vanished in between with
+  the position it happened at; that is what established that the entity list
+  is position-dependent (`docs/protocol-1.1.md`, "Which entities a client is
+  sent"). Two probes on one server see each other's entities, so a
+  two-client entity question does not need two retail clients.
   `--probe-secs N` extends the default 65 s; a few minutes spans an SD round
   restart. Add `--save-fixture` or `--save-snapshots` only when the capture is
   meant to replace the committed evidence; the flag docs in

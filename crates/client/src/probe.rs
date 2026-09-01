@@ -1,6 +1,7 @@
 //! `--net-probe`, the headless spectate client. Lives in the client crate
 //! because cue resolution needs the audio alias tables.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use vcod_common::net::{self, NetClient, NetEvent, NetState, SnapshotCapture, UdpTransport};
 
@@ -33,6 +34,11 @@ const SNAP_CAPTURE_TARGET: usize = 24;
 /// and captures the playerstate settled under each, which is what a standing
 /// capture cannot show: every field the client predicts reads zero while the
 /// player stands still.
+///
+/// `pvs` joins the same way again, walks the route in [`pvs_route`] and prints
+/// the snapshot entity list at each station plus every add and removal along
+/// the way. It writes no fixture: it exists to answer whether the server culls
+/// the entity list by where the client stands.
 /// Which captures a probe run overwrites. Each is a separate flag because
 /// each pins a different thing; the flag docs in `main.rs` say why.
 #[derive(Clone, Copy, Default)]
@@ -47,6 +53,7 @@ pub struct Save {
 pub fn probe(
     addr: &str,
     save: Save,
+    pvs: bool,
     secs: u64,
     fs: Option<&vcod_common::pk3::Pk3Fs>,
 ) -> anyhow::Result<()> {
@@ -57,6 +64,8 @@ pub fn probe(
         playerstate: save_playerstate,
         motion: save_motion,
     } = save;
+    // Three modes need the same stock-menu join before they can do anything.
+    let joining = save_playerstate || save_motion || pvs;
     let mut client = NetClient::connect(addr)?;
     if save_fixture || save_snapshots {
         client.enable_capture();
@@ -71,6 +80,7 @@ pub fn probe(
     let mut join = JoinProbe::default();
     let mut wrote_playerstate = false;
     let mut motion = MotionProbe::default();
+    let mut pvs_probe = PvsProbe::default();
     // The full table; the map's loadspec filters it at gamestate.
     let aliases_all = fs.map(crate::audio::alias::AliasTable::load);
 
@@ -134,7 +144,7 @@ pub fn probe(
                     // The join is entered by the first usercmd of the loop
                     // below, the way a retail client enters; nothing is sent
                     // here to start it.
-                    if !save_playerstate && !save_motion {
+                    if !joining {
                         client.send_reliable("say hello from vcod");
                     }
                 }
@@ -164,7 +174,7 @@ pub fn probe(
                         continue;
                     }
                     println!("serverCommand: {tokens:?}");
-                    if save_playerstate || save_motion {
+                    if joining {
                         join.on_server_command(&tokens, &mut client, now);
                     }
                     // `s <idx>` is playLocalSound (sound doc, section 9).
@@ -206,7 +216,7 @@ pub fn probe(
             }
         }
 
-        if save_playerstate || save_motion {
+        if joining {
             for cmd in client.take_server_commands() {
                 println!("JOIN cmd: {cmd}");
                 join.commands.push(cmd);
@@ -216,7 +226,7 @@ pub fn probe(
         // 5 s after going active push forward for 2 s, again every 30 s, so a
         // long run shows whether moves still apply after a map_restart.
         let mut cmd = net::msg::UserCmd::default();
-        if client.state() == NetState::Active && !save_playerstate && !save_motion {
+        if client.state() == NetState::Active && !joining {
             let active_at = *reached_active.get_or_insert(now);
             let dt = now.duration_since(active_at).as_secs() % 30;
             if (5..7).contains(&dt) {
@@ -225,17 +235,10 @@ pub fn probe(
         }
         if save_motion && motion.running() {
             cmd = motion.cmd();
-            // A pose's yaw is a view direction, not a raw cmd word: the view
-            // is `cmd.angles + delta_angles`, and the server pushes
-            // `delta_angles` to hold a prone view inside its cone. A probe
-            // that sent the raw word would fight that correction instead of
-            // holding still under it, the way a retail client does.
-            if let Some(s) = client.snapshots().newest() {
-                let delta =
-                    s.ps.field_i32(&net::protocol::PROTOCOL_V1, "delta_angles[1]");
-                let spawn = *motion.spawn_delta_yaw.get_or_insert(delta);
-                cmd.angles[1] = (spawn + cmd.angles[1] - delta) & 0xffff;
-            }
+            hold_view_yaw(&mut cmd, &client, &mut motion.spawn_delta_yaw);
+        } else if pvs && pvs_probe.running() {
+            cmd = pvs_probe.cmd();
+            hold_view_yaw(&mut cmd, &client, &mut pvs_probe.spawn_delta_yaw);
         }
         client.send_frame(&cmd);
 
@@ -292,6 +295,11 @@ pub fn probe(
                         if motion.step(now, s) {
                             write_motion_fixture(s, client.configstrings(), &join, &motion)?;
                             wrote_playerstate = true;
+                            break;
+                        }
+                    } else if pvs {
+                        if pvs_probe.step(now, s) {
+                            pvs_probe.report();
                             break;
                         }
                     } else {
@@ -1123,4 +1131,347 @@ fn write_playerstate_fixture(
         join.commands.len(),
     );
     Ok(())
+}
+
+/// A scripted yaw is a view direction, not a raw cmd word: the view is
+/// `cmd.angles + delta_angles`, and the server pushes `delta_angles` to hold a
+/// prone view inside its cone and to face a fresh spawn. A probe that sent the
+/// raw word would fight that correction instead of holding a heading under it,
+/// the way a retail client does. `spawn` latches the first correction seen, so
+/// every scripted yaw is an offset from where the spawn faced.
+fn hold_view_yaw(
+    cmd: &mut net::msg::UserCmd,
+    client: &NetClient<UdpTransport>,
+    spawn: &mut Option<i32>,
+) {
+    let Some(s) = client.snapshots().newest() else {
+        return;
+    };
+    let delta =
+        s.ps.field_i32(&net::protocol::PROTOCOL_V1, "delta_angles[1]");
+    let spawn = *spawn.get_or_insert(delta);
+    cmd.angles[1] = (spawn + cmd.angles[1] - delta) & 0xffff;
+}
+
+/// One leg of the `--probe-pvs` route: a heading relative to where the spawn
+/// faced, walked for `walk_ms`, then stood still until the station is taken.
+struct PvsLeg {
+    label: &'static str,
+    yaw_deg: i32,
+    walk_ms: u64,
+}
+
+/// How long a leg stands still before its station is recorded, so a moving
+/// entity settles and its motion is not read as the list changing.
+const PVS_STAND: Duration = Duration::from_millis(1500);
+
+/// Ground covered below this inside [`PVS_STUCK_WINDOW`] means the walk is
+/// against geometry; the leg turns 45 degrees rather than spending itself on a
+/// wall. Retail's run speed is ~190 u/s, so a clear leg covers ~280u per window.
+const PVS_STUCK_UNITS: f32 = 60.0;
+const PVS_STUCK_WINDOW: Duration = Duration::from_millis(1500);
+
+/// Out, across, back and across again, so the last station lands near the
+/// first. That shape separates the two explanations for a list that changes:
+/// position culling comes back to the spawn's set at the end, entities
+/// spawning over time do not.
+fn pvs_route() -> Vec<PvsLeg> {
+    vec![
+        PvsLeg {
+            label: "spawn",
+            yaw_deg: 0,
+            walk_ms: 0,
+        },
+        PvsLeg {
+            label: "out",
+            yaw_deg: 0,
+            walk_ms: 8000,
+        },
+        PvsLeg {
+            label: "across",
+            yaw_deg: 90,
+            walk_ms: 8000,
+        },
+        PvsLeg {
+            label: "back",
+            yaw_deg: 180,
+            walk_ms: 8000,
+        },
+        PvsLeg {
+            label: "return",
+            yaw_deg: 270,
+            walk_ms: 8000,
+        },
+    ]
+}
+
+/// What identifies an entity across snapshots. The slot number alone cannot: a
+/// freed slot is reused, so a reappearing number with a different `index` is a
+/// different entity, not a visibility change.
+#[derive(Clone, Copy, PartialEq)]
+struct EntInfo {
+    etype: i32,
+    index: i32,
+    solid: i32,
+    client_num: i32,
+    origin: [f32; 3],
+}
+
+impl EntInfo {
+    fn of(p: &net::protocol::Protocol, e: &net::msg::EntityState) -> Self {
+        EntInfo {
+            etype: e.field_i32(p, "eType"),
+            index: e.field_i32(p, "index"),
+            solid: e.field_i32(p, "solid"),
+            client_num: e.field_i32(p, "clientNum"),
+            origin: e.origin(p),
+        }
+    }
+}
+
+/// One recorded stop on the route.
+struct PvsStation {
+    label: &'static str,
+    origin: [f32; 3],
+    ents: BTreeMap<u32, EntInfo>,
+}
+
+/// Walks [`pvs_route`] and keeps the snapshot entity list at each station,
+/// printing every appearance and removal in between with the position it
+/// happened at. The question it answers: does the server decide the entity
+/// list from where the client stands?
+struct PvsProbe {
+    legs: Vec<PvsLeg>,
+    idx: usize,
+    started: Option<Instant>,
+    /// Added to every remaining leg's heading once a walk stalls against
+    /// geometry. It carries across legs on purpose: a leg that reset it would
+    /// walk straight back into the wall the last one escaped.
+    detour_deg: i32,
+    /// Time and position the current stuck window opened at.
+    last_progress: Option<(Instant, [f32; 3])>,
+    spawn_delta_yaw: Option<i32>,
+    /// The previous snapshot's entities, which the next one is diffed against.
+    live: BTreeMap<u32, EntInfo>,
+    /// Newest snapshot already diffed, so the diff runs per snapshot rather
+    /// than per loop iteration.
+    traced: Option<u32>,
+    stations: Vec<PvsStation>,
+    done: bool,
+}
+
+impl Default for PvsProbe {
+    fn default() -> Self {
+        Self {
+            legs: pvs_route(),
+            idx: 0,
+            started: None,
+            detour_deg: 0,
+            last_progress: None,
+            spawn_delta_yaw: None,
+            live: BTreeMap::new(),
+            traced: None,
+            stations: Vec::new(),
+            done: false,
+        }
+    }
+}
+
+impl PvsProbe {
+    fn running(&self) -> bool {
+        !self.done
+    }
+
+    fn cmd(&self) -> net::msg::UserCmd {
+        let Some(leg) = self.legs.get(self.idx) else {
+            return net::msg::NULL_USERCMD;
+        };
+        let walking = self
+            .started
+            .is_some_and(|t| t.elapsed() < Duration::from_millis(leg.walk_ms));
+        net::msg::UserCmd {
+            angles: [
+                0,
+                (leg.yaw_deg + self.detour_deg).rem_euclid(360) * 65536 / 360,
+                0,
+            ],
+            forward: if walking { 127 } else { 0 },
+            ..net::msg::NULL_USERCMD
+        }
+    }
+
+    /// Feeds the newest snapshot in. Returns true once the last station is
+    /// recorded.
+    fn step(&mut self, now: Instant, snap: &net::snapshot::Snapshot) -> bool {
+        if self.done {
+            return true;
+        }
+        let Some(leg) = self.legs.get(self.idx) else {
+            self.done = true;
+            return true;
+        };
+        let (label, walk) = (leg.label, Duration::from_millis(leg.walk_ms));
+        let started = *self.started.get_or_insert(now);
+        let elapsed = now.duration_since(started);
+        let me = snap.ps.origin(&net::protocol::PROTOCOL_V1);
+        if self.traced != Some(snap.message_num) {
+            self.traced = Some(snap.message_num);
+            self.diff(snap, label, elapsed, me);
+        }
+        if elapsed < walk {
+            let (t0, o0) = *self.last_progress.get_or_insert((now, me));
+            if now.duration_since(t0) >= PVS_STUCK_WINDOW {
+                if dist(o0, me) < PVS_STUCK_UNITS {
+                    self.detour_deg += 45;
+                    let heading = self.legs[self.idx].yaw_deg + self.detour_deg;
+                    println!(
+                        "PVS {label}: only {:.0}u in {}ms, turning to {heading} deg",
+                        dist(o0, me),
+                        PVS_STUCK_WINDOW.as_millis(),
+                    );
+                }
+                self.last_progress = Some((now, me));
+            }
+            return false;
+        }
+        if elapsed < walk + PVS_STAND {
+            return false;
+        }
+        println!(
+            "PVS station {label}: origin=[{:.0},{:.0},{:.0}], {} entities",
+            me[0],
+            me[1],
+            me[2],
+            self.live.len(),
+        );
+        for (num, e) in &self.live {
+            println!(
+                "  ent {num:>3} eType={:<3} index={:<4} solid={:<8} clientNum={:<3} @[{:>7.0},{:>7.0},{:>7.0}] d={:.0}",
+                e.etype,
+                e.index,
+                e.solid,
+                e.client_num,
+                e.origin[0],
+                e.origin[1],
+                e.origin[2],
+                dist(e.origin, me),
+            );
+        }
+        self.stations.push(PvsStation {
+            label,
+            origin: me,
+            ents: self.live.clone(),
+        });
+        self.idx += 1;
+        self.started = None;
+        self.last_progress = None;
+        if self.idx >= self.legs.len() {
+            self.done = true;
+            return true;
+        }
+        false
+    }
+
+    /// Prints what appeared and what vanished since the previous snapshot. An
+    /// entity that only moved is not a visibility change and is not printed.
+    fn diff(
+        &mut self,
+        snap: &net::snapshot::Snapshot,
+        label: &str,
+        elapsed: Duration,
+        me: [f32; 3],
+    ) {
+        let p = &net::protocol::PROTOCOL_V1;
+        let now: BTreeMap<u32, EntInfo> = snap
+            .entities
+            .iter()
+            .map(|(n, e)| (*n, EntInfo::of(p, e)))
+            .collect();
+        let at = |e: &EntInfo| {
+            format!(
+                "eType={} index={} clientNum={} @[{:.0},{:.0},{:.0}] d={:.0} (me [{:.0},{:.0},{:.0}], {label} +{}ms)",
+                e.etype,
+                e.index,
+                e.client_num,
+                e.origin[0],
+                e.origin[1],
+                e.origin[2],
+                dist(e.origin, me),
+                me[0],
+                me[1],
+                me[2],
+                elapsed.as_millis(),
+            )
+        };
+        for (num, e) in &now {
+            let fresh = match self.live.get(num) {
+                None => true,
+                // A reused slot: same number, different entity.
+                Some(old) => old.index != e.index || old.etype != e.etype,
+            };
+            if fresh {
+                println!("PVS +ent {num}: {}", at(e));
+            }
+        }
+        for (num, e) in &self.live {
+            if !now.contains_key(num) {
+                println!("PVS -ent {num}: {}", at(e));
+            }
+        }
+        self.live = now;
+    }
+
+    /// The table the run exists for: one row per entity slot seen anywhere,
+    /// one column per station.
+    fn report(&self) {
+        let all: std::collections::BTreeSet<u32> = self
+            .stations
+            .iter()
+            .flat_map(|st| st.ents.keys().copied())
+            .collect();
+        println!("\nPVS report: {} stations", self.stations.len());
+        for st in &self.stations {
+            println!(
+                "  {:<8} origin=[{:>7.0},{:>7.0},{:>7.0}] {} entities",
+                st.label,
+                st.origin[0],
+                st.origin[1],
+                st.origin[2],
+                st.ents.len(),
+            );
+        }
+        let head: Vec<&str> = self.stations.iter().map(|st| st.label).collect();
+        println!("  ent  {}", head.join(" "));
+        for num in &all {
+            let row: Vec<String> = self
+                .stations
+                .iter()
+                .zip(&head)
+                .map(|(st, h)| {
+                    let mark = if st.ents.contains_key(num) { "x" } else { "." };
+                    format!("{mark:^width$}", width = h.len())
+                })
+                .collect();
+            println!("  {num:>3}  {}", row.join(" "));
+        }
+        // The verdict, on the sets alone: same slots everywhere means the
+        // route saw no culling, which is not the same as proving there is none.
+        let first = self
+            .stations
+            .first()
+            .map(|st| st.ents.keys().copied().collect::<Vec<_>>());
+        let same = self
+            .stations
+            .iter()
+            .all(|st| Some(st.ents.keys().copied().collect::<Vec<_>>()) == first);
+        if same {
+            println!("PVS verdict: every station saw the same entity slots; this route found no position culling");
+        } else {
+            println!("PVS verdict: the entity list differs between stations; it depends on where the client stands");
+        }
+    }
+}
+
+fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }

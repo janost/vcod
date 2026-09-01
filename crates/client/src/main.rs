@@ -82,6 +82,14 @@ struct Args {
     /// player, which leaves every field the client predicts at zero.
     #[arg(long)]
     save_motion: bool,
+    /// Join a team, then walk a route and print the snapshot entity list at
+    /// each station: which entities the server sent, and every add and removal
+    /// along the way with the position it happened at. Answers whether the
+    /// server culls the entity list by where the client stands. Writes no
+    /// fixture; the route is relative to the spawn, so its stations are
+    /// positions in one run, not reproducible places.
+    #[arg(long)]
+    probe_pvs: bool,
     /// Seconds --net-probe stays connected; an SD round boundary needs a few minutes
     #[arg(long, default_value_t = 65)]
     probe_secs: u64,
@@ -409,6 +417,7 @@ fn main() -> Result<()> {
                 playerstate: args.save_playerstate,
                 motion: args.save_motion,
             },
+            args.probe_pvs,
             args.probe_secs,
             fs.as_ref(),
         );
