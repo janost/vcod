@@ -428,6 +428,104 @@ fn pick(block: &Block, c: &Conditions) -> Selection {
     Selection::default()
 }
 
+/// The restart toggle, `ANIM_TOGGLEBIT`. Index is the low 9 bits;
+/// docs/research/player-model-anim-system.md, "Animation indices".
+const ANIM_TOGGLEBIT: i32 = 512;
+
+/// One channel's live anim: the index, the toggle, and when an event anim
+/// that owns the channel gives it back.
+#[derive(Clone, Copy, Default)]
+struct Channel {
+    index: i32,
+    toggle: bool,
+    /// serverTime an event anim releases the channel at; `None` when the
+    /// continuous state owns it.
+    held_until_ms: Option<i32>,
+}
+
+impl Channel {
+    fn wire(self) -> i32 {
+        self.index | if self.toggle { ANIM_TOGGLEBIT } else { 0 }
+    }
+
+    /// Returns whether the channel took the anim.
+    fn start(&mut self, index: i32, held_until_ms: Option<i32>) -> bool {
+        if self.index == index && self.held_until_ms.is_none() && held_until_ms.is_none() {
+            return false;
+        }
+        self.index = index;
+        self.toggle = !self.toggle;
+        self.held_until_ms = held_until_ms;
+        true
+    }
+
+    fn released(&mut self, now_ms: i32) -> bool {
+        match self.held_until_ms {
+            Some(t) if now_ms.wrapping_sub(t) >= 0 => {
+                self.held_until_ms = None;
+                true
+            }
+            Some(_) => false,
+            None => true,
+        }
+    }
+}
+
+/// One client's animation channels. The server owns one per client and reads
+/// `legs()` / `torso()` into the playerstate every frame.
+#[derive(Clone, Copy, Default)]
+pub struct AnimState {
+    legs: Channel,
+    torso: Channel,
+}
+
+impl AnimState {
+    /// The continuous state's choice. A channel an event anim still holds
+    /// keeps it until the duration runs out.
+    pub fn set(&mut self, sel: &Selection, now_ms: i32, resolve: impl Fn(&str) -> Option<i32>) {
+        apply(&mut self.legs, sel.legs.as_ref(), now_ms, false, &resolve);
+        apply(&mut self.torso, sel.torso.as_ref(), now_ms, false, &resolve);
+    }
+
+    /// An event's choice, which takes the channel for the clause's own
+    /// `duration`. A clause with no duration behaves like the continuous
+    /// state.
+    pub fn event(&mut self, sel: &Selection, now_ms: i32, resolve: impl Fn(&str) -> Option<i32>) {
+        apply(&mut self.legs, sel.legs.as_ref(), now_ms, true, &resolve);
+        apply(&mut self.torso, sel.torso.as_ref(), now_ms, true, &resolve);
+    }
+
+    pub fn legs(&self) -> i32 {
+        self.legs.wire()
+    }
+
+    pub fn torso(&self) -> i32 {
+        self.torso.wire()
+    }
+}
+
+fn apply(
+    ch: &mut Channel,
+    anim: Option<&AnimRef>,
+    now_ms: i32,
+    is_event: bool,
+    resolve: &impl Fn(&str) -> Option<i32>,
+) {
+    if !ch.released(now_ms) && !is_event {
+        return;
+    }
+    let Some(anim) = anim else { return };
+    let Some(index) = resolve(&anim.name) else {
+        return;
+    };
+    let held = if is_event {
+        anim.duration_ms.map(|d| now_ms.wrapping_add(d as i32))
+    } else {
+        None
+    };
+    ch.start(index, held);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -718,5 +816,101 @@ land
             .expect("a crouched idle anim");
         assert_eq!(crouch.name, "pb_crouch_alert");
         assert_eq!(anims.wire_of(&crouch.name), Some(111));
+    }
+
+    fn anim(name: &str, duration_ms: Option<u32>) -> AnimRef {
+        AnimRef {
+            name: name.into(),
+            duration_ms,
+            blend_ms: None,
+        }
+    }
+
+    /// Two names, so a test can resolve without an animtree.
+    fn resolve(name: &str) -> Option<i32> {
+        match name {
+            "pb_stand_alert" => Some(122),
+            "pb_combatrun_forward_loop" => Some(94),
+            "pb_standjump_land" => Some(200),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_changed_anim_flips_the_toggle_and_the_same_one_does_not() {
+        let mut st = AnimState::default();
+        let stand = Selection {
+            legs: Some(anim("pb_stand_alert", None)),
+            torso: Some(anim("pb_stand_alert", None)),
+        };
+        st.set(&stand, 0, resolve);
+        let first = st.legs();
+        assert_eq!(first & 511, 122);
+
+        // Held: the same index, the same toggle, so the client keeps phase.
+        st.set(&stand, 50, resolve);
+        assert_eq!(st.legs(), first);
+
+        let run = Selection {
+            legs: Some(anim("pb_combatrun_forward_loop", None)),
+            torso: Some(anim("pb_stand_alert", None)),
+        };
+        st.set(&run, 100, resolve);
+        assert_eq!(st.legs() & 511, 94);
+        assert_ne!(st.legs() & 512, first & 512, "a change flips the toggle");
+        assert_eq!(st.torso(), first, "the torso did not change");
+    }
+
+    /// An event anim holds for its own duration and then lets the continuous
+    /// state take the channel back.
+    #[test]
+    fn an_event_anim_expires() {
+        let mut st = AnimState::default();
+        let stand = Selection {
+            legs: Some(anim("pb_stand_alert", None)),
+            torso: None,
+        };
+        st.set(&stand, 0, resolve);
+        st.event(
+            &Selection {
+                legs: Some(anim("pb_standjump_land", Some(100))),
+                torso: None,
+            },
+            0,
+            resolve,
+        );
+        assert_eq!(st.legs() & 511, 200);
+
+        // Still inside the duration: the continuous state cannot take it.
+        st.set(&stand, 50, resolve);
+        assert_eq!(st.legs() & 511, 200);
+
+        st.set(&stand, 100, resolve);
+        assert_eq!(st.legs() & 511, 122, "the event expired");
+    }
+
+    /// A name the tree does not index leaves the channel where it was, rather
+    /// than sending an index that plays the wrong clip.
+    #[test]
+    fn an_unresolvable_name_changes_nothing() {
+        let mut st = AnimState::default();
+        st.set(
+            &Selection {
+                legs: Some(anim("pb_stand_alert", None)),
+                torso: None,
+            },
+            0,
+            resolve,
+        );
+        let before = st.legs();
+        st.set(
+            &Selection {
+                legs: Some(anim("pb_not_in_the_tree", None)),
+                torso: None,
+            },
+            50,
+            resolve,
+        );
+        assert_eq!(st.legs(), before);
     }
 }
