@@ -237,17 +237,19 @@ ground-edge events have to be raised before the continuous selection, or the
 landing frame selects an idle first and flips the toggle twice. VERIFIED: the
 `land` default clause carries `duration 100`, and the fixture's `land` pose is
 sampled on the first frame back on the ground (`sample=grounded`) for that
-reason. VERIFIED: leaving the ground is not what raises the takeoff -- the
-mp_pavlov capture's `run_back` pose reads `groundEntityNum` 1023 and `legsAnim`
-605, index 93, the `runbk` loop, so retail's probe backed off a ledge and kept
-the loop it was already playing. INFERRED: the takeoff comes from the jump
+reason. VERIFIED: the mp_pavlov capture's `run_back` pose reads
+`groundEntityNum` 1023 and `legsAnim` 605, index 93, the `runbk` loop.
+INFERRED: retail's probe backed off a ledge and kept the loop it was already
+playing, so leaving the ground is not what raises the takeoff; that step rests
+on the airborne early-out, which is itself a branch condition. INFERRED: the takeoff comes from the jump
 impulse itself, so vcod raises `jump`, or `jumpbk` while the backwards latch is
 set, only on the frame pmove takes one. UNVERIFIED: whether a fall that nobody
 jumped into raises `land` on touchdown; no pose in either capture lands from
 one, and vcod raises it.
 
-VERIFIED: the ladder flag is `pm_flags` 0x10, tested at 0x323af, and a set flag
-skips the airborne early-out, so a climber reaches the selection. VERIFIED: the
+VERIFIED: the ladder flag is `pm_flags` 0x10 and 0x323af tests it.
+INFERRED: a set flag skips the airborne early-out, so a climber reaches the
+selection. VERIFIED: the
 shipped script carries `climbup` and `climbdown` blocks, each a single default
 clause selecting `pb_climbup` and `pb_climbdown`. INFERRED: those two are the
 movetypes a climber selects, and the climb direction is the sign of the vertical
