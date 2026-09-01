@@ -279,6 +279,12 @@ pub struct PlayerState {
     /// stance change (measured, docs/research/cod11-player-movement.md).
     pub view_lerp_target: f32,
     pub view_lerp_down: bool,
+    /// Retail's `pm_flags` 0x40, the backpedal latch: a backwards cmd sets it,
+    /// a forwards one or a pure strafe clears it, and no input at all leaves it
+    /// alone. The animation selection reads this bit and never the usercmd
+    /// (`game.mp.i386.so` 0x326f1/0x32739/0x32768), so it is the only thing
+    /// that puts a player in the `runbk` family.
+    pub backwards_run: bool,
 }
 
 impl PlayerState {
@@ -311,6 +317,7 @@ impl PlayerState {
             // Retail leaves the target at 0 until the first stance change.
             view_lerp_target: 0.0,
             view_lerp_down: false,
+            backwards_run: false,
         }
     }
 
@@ -375,6 +382,13 @@ pub fn pmove(
     // retail clears the held-jump latch post-move when upmove drops (@0x34135)
     if !input.jump {
         ps.jump_latched = false;
+    }
+    // The backpedal latch, decided before the move from the cmd alone, RTCW's
+    // `PmoveSingle` block verbatim (`bg_pmove.c:3915`).
+    if input.forward < 0.0 {
+        ps.backwards_run = true;
+    } else if input.forward > 0.0 || input.right != 0.0 {
+        ps.backwards_run = false;
     }
     let mut events = Vec::new();
     let was_on_ground = ps.on_ground;

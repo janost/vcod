@@ -41,6 +41,9 @@ const PMF_PRONE: i32 = 0x1;
 /// Held jump, retail's 0x8 (set @0x2ec34, cleared @0x34135); the capture reads
 /// `pm_flags` 0x40008 on the first airborne frame.
 const PMF_JUMP_HELD: i32 = 0x8;
+/// Backpedalling, retail's 0x40. The anim selection reads this bit rather than
+/// the usercmd, and both captures carry it at `run_back` and nowhere else.
+const PMF_BACKWARDS_RUN: i32 = 0x40;
 
 /// `serverCursorHintString`'s no-hint sentinel, which is retail's -1 in an
 /// 8-bit netfield. Object model doc, section 20.
@@ -128,6 +131,11 @@ pub struct ClientSim {
     /// Whether the sim was off the ground last frame, so `update_anims` can
     /// raise `jump` and `land` on the edges rather than every frame.
     was_airborne: bool,
+    /// The animscript's `strafing` condition, which is state rather than a
+    /// reading of this frame's cmd: retail updates it only when the cmd asks
+    /// for movement and leaves it alone when both axes are zero
+    /// (`game.mp.i386.so` 0x32504).
+    strafing: Option<vcod_common::animscript::Side>,
 }
 
 /// Everything the animscript needs that the sim does not own: the script
@@ -161,6 +169,7 @@ impl ClientSim {
             view_lerp_start: None,
             anim: Default::default(),
             was_airborne: false,
+            strafing: None,
         }
     }
 
@@ -187,6 +196,7 @@ impl ClientSim {
         // A respawned player does not resume the anim it died in.
         self.anim = Default::default();
         self.was_airborne = false;
+        self.strafing = None;
     }
 
     /// Advance one frame. The axes arrive quantized to ±127/0 and dt comes off
@@ -229,16 +239,17 @@ impl ClientSim {
         }
     }
 
-    /// Picks this frame's animation, from the state the moves just produced
-    /// and the cmd that produced it. Called once per frame after the moves;
-    /// `strafing` is input, not state.
+    /// Picks this frame's animation from the state the moves just produced.
+    /// Called once per frame after the moves.
     ///
-    /// Whether the player moves at all comes from the velocity and which way
-    /// it moves comes from the cmd, both measured against the retail capture:
-    /// a player held by geometry animates idle however hard it pushes, and one
-    /// sliding along a wall animates the direction it asked for rather than
-    /// the one it got. A player coasting with no input keeps the anim it had
-    /// until it stops, which is Q3's own `PM_Footsteps` rule.
+    /// Retail's shape, read out of the selection function at `game.mp.i386.so`
+    /// 0x322c8: below 10 units/s of horizontal speed the player is idle
+    /// whatever it asked for, above it the movetype is the stance crossed with
+    /// the backpedal latch, and off the ground nothing is selected at all. The
+    /// usercmd reaches the selection only through two latches, `pm_flags` 0x40
+    /// in pmove and the `strafing` condition here; the selection itself never
+    /// reads it (docs/research/player-model-anim-system.md, "How retail picks
+    /// the movetype").
     ///
     /// A spectator animates nothing; it is sent to nobody and its own
     /// playerstate carries zeros in the capture.
@@ -247,23 +258,25 @@ impl ClientSim {
         if self.pm_type != PmType::Normal {
             return;
         }
+        // Retail's condition 8 (@0x32504): any forward component clears the
+        // strafe, diagonals included; a cmd that is sideways only sets the
+        // side; a cmd asking for neither leaves the condition as it was.
+        if cmd.forward != 0 {
+            self.strafing = None;
+        } else if cmd.right != 0 {
+            self.strafing = Some(if cmd.right < 0 {
+                Side::Left
+            } else {
+                Side::Right
+            });
+        }
         let moving = self.ps.velocity.truncate().length() > ANIM_IDLE_SPEED;
-        let asked = cmd.forward != 0 || cmd.right != 0;
-        let travelling = moving && asked;
-        let back = travelling && cmd.forward < 0;
-        // The script's own legend: strafing is never left or right while
-        // moving backwards.
-        let strafing = match cmd.right {
-            _ if !travelling || back => None,
-            r if r < 0 => Some(Side::Left),
-            r if r > 0 => Some(Side::Right),
-            _ => None,
-        };
-        // A movetype is the stance crossed with the direction. CoD 1 has one
-        // move speed and no walk bit (docs/protocol-1.1.md, "Usercmd input
-        // bits"), so a moving player runs; the `walk*` blocks are what ads
-        // would select, and ads is unreachable from a usercmd.
-        let movetype = match (self.ps.stance, travelling, back) {
+        let back = self.ps.backwards_run;
+        // The stance crossed with the backpedal latch, every frame. CoD 1 has
+        // no walk key, so retail's walk bit is never set and the `walk*`
+        // blocks are unreachable; prone moves through `walkprone` because the
+        // file gives the prone family no run block.
+        let movetype = match (self.ps.stance, moving, back) {
             (pmove::Stance::Prone, false, _) => Movetype::IdleProne,
             (pmove::Stance::Prone, true, true) => Movetype::WalkProneBk,
             (pmove::Stance::Prone, true, false) => Movetype::WalkProne,
@@ -281,7 +294,7 @@ impl ClientSim {
             // Holding the ads bit for two seconds selected no ads clause in
             // either retail capture, so nothing here can reach one.
             ads: false,
-            strafing,
+            strafing: self.strafing,
             mounted: None,
             firing: false,
         };
@@ -302,11 +315,10 @@ impl ClientSim {
             }
             _ => {}
         }
-        // A jump owns the legs until the landing: retail's capture flips the
-        // restart toggle exactly once between its takeoff and its land
-        // sample, so no continuous anim runs in between. A player still
-        // carrying speed it stopped asking for keeps its anim too.
-        if self.ps.on_ground && (asked || !moving) {
+        // Nothing is selected while off the ground -- retail returns before
+        // the selection unless the ladder flag is set (@0x323a2) -- so a jump
+        // owns the legs until the landing.
+        if self.ps.on_ground {
             let mut sel = script.select("combat", &conditions);
             // Retail leaves `torsoAnim` 0 in every settled pose of both
             // captures, although the clauses reached here are `both`.
@@ -463,7 +475,15 @@ impl ClientSim {
             } else {
                 0
             };
-            set("pm_flags", PMF_OWN_VIEW | stance_pmflags | jump_held);
+            let backwards = if self.ps.backwards_run {
+                PMF_BACKWARDS_RUN
+            } else {
+                0
+            };
+            set(
+                "pm_flags",
+                PMF_OWN_VIEW | stance_pmflags | jump_held | backwards,
+            );
             // The client predicts its own eye lerp; without these it restarts
             // from our value every snapshot and the view shakes for as long
             // as the lerp lasts.
@@ -562,6 +582,117 @@ mod tests {
             angles: [pitch_short, yaw_short, 0],
             ..Default::default()
         }
+    }
+
+    /// One frame of the anim machine with the state set by hand, for the
+    /// clauses the retail capture cannot reach: it was taken with one rifle,
+    /// never held two axes at once and never strafed crouched. Names rather
+    /// than indices -- `animtree.rs` is what pins the index order.
+    #[test]
+    fn the_conditions_pick_the_clause_the_script_names() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        use pmove::Stance::{Crouch, Stand};
+        // label, weapon, class, stance, forward, right, the clause's anim
+        let cases: &[(&str, &str, &str, pmove::Stance, i8, i8, &str)] = &[
+            (
+                "a pistol runs its own loop",
+                "colt_mp",
+                "pistol",
+                Stand,
+                127,
+                0,
+                "pb_sprint",
+            ),
+            (
+                "a diagonal is a forward run, not a strafe",
+                "m1carbine_mp",
+                "rifle",
+                Stand,
+                127,
+                127,
+                "pb_combatrun_forward_loop",
+            ),
+            (
+                "a crouched strafe has its own clause",
+                "m1carbine_mp",
+                "rifle",
+                Crouch,
+                0,
+                -127,
+                "pb_crouch_run_left",
+            ),
+            (
+                "and the weapon still picks inside it",
+                "colt_mp",
+                "pistol",
+                Stand,
+                0,
+                -127,
+                "pb_combatrun_left_loop_pistol",
+            ),
+        ];
+        for (label, weapon, class, stance, forward, right, want) in cases {
+            let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+            sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+            sim.ps.stance = *stance;
+            sim.ps.on_ground = true;
+            sim.ps.velocity = Vec3::new(120.0, 0.0, 0.0);
+            let cmd = UserCmd {
+                forward: *forward,
+                right: *right,
+                ..NULL_USERCMD
+            };
+            let inputs = AnimInputs {
+                anims: &anims,
+                weapon,
+                weapon_class: class,
+            };
+            sim.update_anims(&inputs, &cmd, 1000);
+            assert_eq!(anims.name(sim.anim.legs()), Some(*want), "{label}");
+        }
+    }
+
+    /// Retail updates the strafe condition only from a cmd that asks for
+    /// movement: a cmd asking for neither axis leaves it alone, so a player
+    /// coasting out of a strafe keeps strafing (@0x32504).
+    #[test]
+    fn a_cmd_asking_for_nothing_leaves_the_strafe_condition_alone() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let inputs = AnimInputs {
+            anims: &anims,
+            weapon: "m1carbine_mp",
+            weapon_class: "rifle",
+        };
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.on_ground = true;
+        sim.ps.velocity = Vec3::new(120.0, 0.0, 0.0);
+        let strafe = UserCmd {
+            right: 127,
+            ..NULL_USERCMD
+        };
+        sim.update_anims(&inputs, &strafe, 1000);
+        assert_eq!(anims.name(sim.anim.legs()), Some("pb_combatrun_right_loop"));
+        // Still sliding, no longer asking: retail does not touch the condition.
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050);
+        assert_eq!(anims.name(sim.anim.legs()), Some("pb_combatrun_right_loop"));
+        // A forward cmd clears it, even though nothing about the velocity
+        // changed.
+        let forward = UserCmd {
+            forward: 127,
+            ..NULL_USERCMD
+        };
+        sim.update_anims(&inputs, &forward, 1100);
+        assert_eq!(
+            anims.name(sim.anim.legs()),
+            Some("pb_combatrun_forward_loop")
+        );
     }
 
     /// A prone view past the 85-degree cone is pushed back by `delta_angles`,
