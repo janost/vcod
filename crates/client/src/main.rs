@@ -75,6 +75,13 @@ struct Args {
     /// fixture crates/server/tests/playerstate_ab.rs diffs against.
     #[arg(long)]
     save_playerstate: bool,
+    /// Join a team, then hold each movement input in turn and write the
+    /// retail playerstate settled under each to
+    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-motion.txt.
+    /// Separate from --save-playerstate because that one pins a standing
+    /// player, which leaves every field the client predicts at zero.
+    #[arg(long)]
+    save_motion: bool,
     /// Seconds --net-probe stays connected; an SD round boundary needs a few minutes
     #[arg(long, default_value_t = 65)]
     probe_secs: u64,
@@ -395,10 +402,13 @@ fn main() -> Result<()> {
         };
         return probe::probe(
             addr,
-            args.save_fixture,
-            args.save_snapshots,
-            args.save_configstrings,
-            args.save_playerstate,
+            probe::Save {
+                fixture: args.save_fixture,
+                snapshots: args.save_snapshots,
+                configstrings: args.save_configstrings,
+                playerstate: args.save_playerstate,
+                motion: args.save_motion,
+            },
             args.probe_secs,
             fs.as_ref(),
         );

@@ -107,7 +107,13 @@ from `BG_GetSpeed` scaled by `ps.speed`-related scales, accelerate
 
 **Ground jump**, inside fn 0x316F4 at 0x31CC0:
 
-- Gated on: `pm_flags & 0x20` clear and `cmd.forwardmove != 0`. Bit 0x20 is
+- Gated on: `pm_flags & 0x20` clear. A second gate read off this block as
+  `cmd.forwardmove != 0` was a misread, and the code that ported it kept a
+  player standing still from ever jumping. VERIFIED live 2026-09-01: a probe
+  holding `upmove` 127 with `forwardmove` 0 against the retail server leaves
+  the ground (`groundEntityNum` 1023, `velocity[2]` 197 one frame later,
+  `aimSpreadScale` 255 as below), so whatever that comparison reads, it is not
+  forwardmove. Bit 0x20 is
   the ADS (aim-down-sight) flag, not a timer: `PM_UpdateAimDownSightFlag`
   (@0x37230) sets it while the ADS button is held - unconditionally when not
   prone, behind idle checks when prone - and clears it otherwise, with a second
@@ -152,6 +158,29 @@ Note vcod implements the stance-dependent ground jump described above
 (heights 34/24, `sqrt(2*height*gravity)`, forwardmove gate); its old flat
 `JUMP_VELOCITY = 250.0` constant is gone. The ladder push-off path is
 ported too - port note 4 lists exactly what landed.
+
+## Prone: retail runs a fit check, vcod does not
+
+VERIFIED live 2026-09-01: the retail server refuses a prone it is asked for,
+depending on where the player stands and which way it faces. A probe holding
+`wbuttons` 0x40 with `upmove` -127 for three seconds went prone at one spawn
+(`eFlags` 80, `viewHeightCurrent` 11) and stayed standing at another
+(`eFlags` 16, `viewHeightCurrent` 60) with the same input held for the same
+time, on the same map. The prone body is long where the standing box is not,
+so it needs clear space along the facing that a standing player does not.
+
+The check itself is not read out yet. The debug visualiser for it is gated on
+`g_debugProneCheck` (code at 0x32FA1), which is the entry point to start from.
+INFERRED, from the cvar name and its position in the same function as the
+stance-change headroom probes (fn 0x316F4).
+
+vcod's mover has no such check: it goes prone wherever it is asked, and it
+never rotates a player to make the body fit. Against a vcod server a retail
+client's own prediction disagrees with the server every frame a prone is
+refused or rotated client-side, which shows up as the view being yanked when
+going prone and as prone movement blocked in some directions. The A/B gate
+`crates/server/tests/playerstate_motion_ab.rs` skips a pose retail refused
+rather than pinning it, for the same reason.
 
 ## Ladders
 

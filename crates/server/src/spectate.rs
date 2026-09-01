@@ -12,6 +12,21 @@ use vcod_common::pmove::{self, PmInput};
 /// (docs/research/cod11-gsc-object-model.md, section 20).
 const PMF_OWN_VIEW: i32 = 0x40000;
 
+/// Stance bits in `eFlags` and `pm_flags`, measured off the retail server
+/// under each input (`crates/server/tests/fixtures/playerstate/*-motion.txt`):
+/// standing reads `eFlags` 16 / `pm_flags` 0x40000 and crouched 48 / 0x40002.
+/// The two `eFlags` bits are exclusive. `pm_flags` 0x1 marks prone and 0x2 is
+/// a crouch latch rather than a stance bit: prone entered from a crouch reads
+/// 0x40003 and prone entered from standing 0x40001, which is why
+/// `PlayerState::ducked` carries it.
+const EF_CROUCH: i32 = 0x20;
+const EF_PRONE: i32 = 0x40;
+const PMF_DUCKED: i32 = 0x2;
+const PMF_PRONE: i32 = 0x1;
+/// Held jump, retail's 0x8 (set @0x2ec34, cleared @0x34135); the capture reads
+/// `pm_flags` 0x40008 on the first airborne frame.
+const PMF_JUMP_HELD: i32 = 0x8;
+
 /// `serverCursorHintString`'s no-hint sentinel, which is retail's -1 in an
 /// 8-bit netfield. Object model doc, section 20.
 const NO_CURSOR_HINT: i32 = 0xff;
@@ -22,6 +37,25 @@ const ANGLE2SHORT: f32 = 65536.0 / 360.0;
 fn short_deg(v: i32) -> f32 {
     let deg = v as f32 / ANGLE2SHORT;
     (deg + 180.0).rem_euclid(360.0) - 180.0
+}
+
+/// A usercmd's input words as pmove's per-frame input. The stance bits are
+/// level, and a crouched or prone client holds `up` at -127 for as long as it
+/// is down, so only a positive `up` is a jump. `walk_slow` has no wire source:
+/// CoD 1 has one move speed and no walk key, and pmove's walk scale is
+/// reachable only from the client's own fly mode. Bit table and evidence:
+/// docs/protocol-1.1.md, "Usercmd input bits".
+fn pm_input(cmd: &UserCmd) -> PmInput {
+    PmInput {
+        forward: f32::from(cmd.forward) / 127.0,
+        right: f32::from(cmd.right) / 127.0,
+        jump: cmd.up > 0,
+        crouch: cmd.wbuttons & msg::WBUTTON_CROUCH != 0,
+        prone: cmd.wbuttons & msg::WBUTTON_PRONE != 0,
+        walk_slow: false,
+        lean_left: cmd.wbuttons & msg::WBUTTON_LEAN_LEFT != 0,
+        lean_right: cmd.wbuttons & msg::WBUTTON_LEAN_RIGHT != 0,
+    }
 }
 
 /// `ANGLE2SHORT(spawn_angle) - cmd.angles`, RTCW's `SetClientViewAngle`
@@ -66,6 +100,13 @@ pub struct ClientSim {
     /// by both `step` and the connected client itself.
     /// docs/protocol-1.1.md, "Spectator view angles".
     delta_angles: [i32; 3],
+    /// `serverTime` the running eye-height lerp started at, cleared when it
+    /// settles. Retail stamps it and the client runs the lerp from it, so a
+    /// zero here makes the client's prediction snap to the target and then be
+    /// dragged back once a snapshot. Invisible to a settled capture, which is
+    /// why the motion gate cannot pin it (docs/protocol-1.1.md, "The
+    /// view-height lerp").
+    view_lerp_start: Option<i32>,
 }
 
 impl ClientSim {
@@ -81,6 +122,7 @@ impl ClientSim {
             weapons: PlayerWeapons::default(),
             viewmodel_index: 0,
             delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
+            view_lerp_start: None,
         }
     }
 
@@ -126,17 +168,14 @@ impl ClientSim {
                 dt,
             ),
             (PmType::Normal, Some(w)) => {
-                // Only the two move axes are wired. `jump`, `crouch`,
-                // `prone`, `walk_slow`, `lean_left` and `lean_right` keep
-                // their defaults, so a player can do none of it: those six
-                // come off `cmd.up`, `cmd.buttons` and `cmd.wbuttons`, and
-                // which bit means which is not established anywhere here.
-                let input = PmInput {
-                    forward: f32::from(cmd.forward) / 127.0,
-                    right: f32::from(cmd.right) / 127.0,
-                    ..PmInput::default()
+                pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt);
+                // The stamp is the serverTime the lerp began, so it is taken
+                // on the frame the eye first trails its target.
+                self.view_lerp_start = if self.ps.view_height_settled() {
+                    None
+                } else {
+                    self.view_lerp_start.or(Some(cmd.server_time))
                 };
-                pmove::pmove(&mut self.ps, &input, w, dt);
             }
         }
     }
@@ -160,7 +199,12 @@ impl ClientSim {
         set("pm_type", if player { 0 } else { 4 });
         // The 0x8 the spectator carries on top of the player's 0x10 is
         // unaccounted for; both values are the captures', not a mechanism.
-        set("eFlags", if player { 16 } else { 24 });
+        let stance_eflags = match self.ps.stance {
+            pmove::Stance::Stand => 0,
+            pmove::Stance::Crouch => EF_CROUCH,
+            pmove::Stance::Prone => EF_PRONE,
+        };
+        set("eFlags", if player { 16 | stance_eflags } else { 24 });
         set(
             "speed",
             if player {
@@ -185,7 +229,26 @@ impl ClientSim {
             // nothing follows another client and nothing dies yet, so
             // `Normal` is the whole of that condition today. The hint is the
             // one that peels off first, at `health` 0.
-            set("pm_flags", PMF_OWN_VIEW);
+            let stance_pmflags = if self.ps.ducked { PMF_DUCKED } else { 0 }
+                | if self.ps.stance == pmove::Stance::Prone {
+                    PMF_PRONE
+                } else {
+                    0
+                };
+            let jump_held = if self.ps.jump_latched {
+                PMF_JUMP_HELD
+            } else {
+                0
+            };
+            set("pm_flags", PMF_OWN_VIEW | stance_pmflags | jump_held);
+            // The client predicts its own eye lerp; without these it restarts
+            // from our value every snapshot and the view shakes for as long
+            // as the lerp lasts.
+            set("viewHeightLerpTarget", self.ps.view_lerp_target as i32);
+            set("viewHeightLerpTime", self.view_lerp_start.unwrap_or(0));
+            set("viewHeightLerpDown", i32::from(self.ps.view_lerp_down));
+            // -1..1, left negative, the same convention retail sends.
+            set("leanf", (self.ps.lean / pmove::LEAN_MAX).to_bits() as i32);
             set("serverCursorHintString", NO_CURSOR_HINT);
             set("viewmodelIndex", self.viewmodel_index);
         }
@@ -197,8 +260,19 @@ impl ClientSim {
         set("weaponslots[0]", lo);
         set("weaponslots[4]", hi);
         set("weapon", i32::from(self.weapons.current));
-        // Mode-independent: both captures agree on all of these.
-        let (mins, maxs) = (self.ps.mins(), self.ps.maxs());
+        // Mode-independent: both captures agree on all of these. The box is
+        // the standing one whatever the stance: retail transmits `maxs[2]`
+        // 70 while crouched and prone too, and the mover derives its own
+        // collision box from the stance rather than from these
+        // (`crates/server/tests/playerstate_motion_ab.rs`).
+        let (mins, maxs) = (
+            self.ps.mins(),
+            Vec3::new(
+                self.ps.maxs().x,
+                self.ps.maxs().y,
+                pmove::Stance::Stand.height(),
+            ),
+        );
         for (i, (lo, hi)) in ["mins[0]", "mins[1]", "mins[2]"]
             .iter()
             .zip(["maxs[0]", "maxs[1]", "maxs[2]"])
@@ -256,6 +330,108 @@ mod tests {
             angles: [pitch_short, yaw_short, 0],
             ..Default::default()
         }
+    }
+
+    /// The eye-height lerp is stamped with the serverTime it started at and
+    /// cleared when it settles, which is retail's own bookkeeping: a settled
+    /// capture reads 0 either way, so only a trace through the transition
+    /// shows it (docs/protocol-1.1.md, "The view-height lerp").
+    #[test]
+    fn the_view_height_lerp_carries_the_time_it_started() {
+        let p = &PROTOCOL_V1;
+        let w = vcod_common::collision::test_world(&[]);
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        let lerp_time = |sim: &ClientSim| sim.to_wire(p, 0, 0).field_i32(p, "viewHeightLerpTime");
+        let crouch = |t: i32| UserCmd {
+            server_time: t,
+            wbuttons: msg::WBUTTON_CROUCH,
+            up: -127,
+            ..NULL_USERCMD
+        };
+
+        let mut t = 1000;
+        // Settle on the floor first, so the only thing moving is the eye.
+        for _ in 0..20 {
+            t += 50;
+            sim.step(&NULL_USERCMD, 0.05, Some(&w));
+        }
+        assert_eq!(lerp_time(&sim), 0, "a settled eye carries no stamp");
+
+        t += 50;
+        sim.step(&crouch(t), 0.05, Some(&w));
+        assert_eq!(lerp_time(&sim), t, "the stamp is the cmd that started it");
+        let started = t;
+        t += 50;
+        sim.step(&crouch(t), 0.05, Some(&w));
+        assert_eq!(
+            lerp_time(&sim),
+            started,
+            "and it does not move while lerping"
+        );
+
+        for _ in 0..20 {
+            t += 50;
+            sim.step(&crouch(t), 0.05, Some(&w));
+        }
+        assert!(sim.ps.view_height_settled());
+        assert_eq!(lerp_time(&sim), 0, "the stamp clears when the eye settles");
+    }
+
+    /// `leanf` is a fraction of `LEAN_MAX`, left negative, the convention the
+    /// retail server sends. The value itself is spawn-dependent (the lean is
+    /// clamped against nearby geometry), so `playerstate_motion_ab` cannot
+    /// diff it and this pins the mapping instead.
+    #[test]
+    fn leanf_goes_out_as_a_signed_fraction_of_lean_max() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
+        let leanf =
+            |sim: &ClientSim| f32::from_bits(sim.to_wire(p, 0, 0).field_i32(p, "leanf") as u32);
+        assert_eq!(leanf(&sim), 0.0);
+        sim.ps.lean = -pmove::LEAN_MAX;
+        assert_eq!(leanf(&sim), -1.0, "a full left lean is -1");
+        sim.ps.lean = pmove::LEAN_MAX / 2.0;
+        assert_eq!(leanf(&sim), 0.5, "a half right lean is +0.5");
+    }
+
+    /// The bit table measured off a retail 1.1 client on 2026-09-01, one case
+    /// per movement verb. Evidence and the full table:
+    /// docs/protocol-1.1.md, "Usercmd input bits".
+    #[test]
+    fn wire_bits_map_to_movement_verbs() {
+        let of = |buttons: u8, wbuttons: u8, up: i8| {
+            pm_input(&UserCmd {
+                buttons,
+                wbuttons,
+                up,
+                ..Default::default()
+            })
+        };
+        assert!(of(0, 0, 127).jump);
+        let crouch = of(0, msg::WBUTTON_CROUCH, -127);
+        assert!(crouch.crouch && !crouch.prone);
+        let prone = of(0, msg::WBUTTON_PRONE, -127);
+        assert!(prone.prone && !prone.crouch);
+        assert!(of(0, msg::WBUTTON_LEAN_LEFT, 0).lean_left);
+        assert!(of(0, msg::WBUTTON_LEAN_RIGHT, 0).lean_right);
+        // A crouched or prone client holds `up` at -127 for as long as it
+        // stays down, so only a positive `up` is a jump.
+        assert!(!crouch.jump && !prone.jump);
+    }
+
+    /// The weapon bits share `buttons` with nothing this module reads, and
+    /// CoD 1 has a single move speed with no walk key, so no input reaches
+    /// pmove's walk scale.
+    #[test]
+    fn weapon_bits_and_walk_scale_are_untouched() {
+        let all_weapon_bits = pm_input(&UserCmd {
+            buttons: 0xff,
+            wbuttons: msg::WBUTTON_RELOAD,
+            ..Default::default()
+        });
+        assert_eq!(all_weapon_bits, PmInput::default());
     }
 
     /// One field of the retail player capture the `playerstate_ab` gate diffs

@@ -28,15 +28,35 @@ const SNAP_CAPTURE_TARGET: usize = 24;
 /// the stock team and weapon menus, writes the fixture once the spawn has
 /// settled and exits. It sends no nudge, which would walk the capture off the
 /// spawn point.
+///
+/// `save_motion` joins the same way, then holds each movement input in turn
+/// and captures the playerstate settled under each, which is what a standing
+/// capture cannot show: every field the client predicts reads zero while the
+/// player stands still.
+/// Which captures a probe run overwrites. Each is a separate flag because
+/// each pins a different thing; the flag docs in `main.rs` say why.
+#[derive(Clone, Copy, Default)]
+pub struct Save {
+    pub fixture: bool,
+    pub snapshots: bool,
+    pub configstrings: bool,
+    pub playerstate: bool,
+    pub motion: bool,
+}
+
 pub fn probe(
     addr: &str,
-    save_fixture: bool,
-    save_snapshots: bool,
-    save_configstrings: bool,
-    save_playerstate: bool,
+    save: Save,
     secs: u64,
     fs: Option<&vcod_common::pk3::Pk3Fs>,
 ) -> anyhow::Result<()> {
+    let Save {
+        fixture: save_fixture,
+        snapshots: save_snapshots,
+        configstrings: save_configstrings,
+        playerstate: save_playerstate,
+        motion: save_motion,
+    } = save;
     let mut client = NetClient::connect(addr)?;
     if save_fixture || save_snapshots {
         client.enable_capture();
@@ -50,6 +70,7 @@ pub fn probe(
     let mut watch = ProbeWatch::default();
     let mut join = JoinProbe::default();
     let mut wrote_playerstate = false;
+    let mut motion = MotionProbe::default();
     // The full table; the map's loadspec filters it at gamestate.
     let aliases_all = fs.map(crate::audio::alias::AliasTable::load);
 
@@ -113,7 +134,7 @@ pub fn probe(
                     // The join is entered by the first usercmd of the loop
                     // below, the way a retail client enters; nothing is sent
                     // here to start it.
-                    if !save_playerstate {
+                    if !save_playerstate && !save_motion {
                         client.send_reliable("say hello from vcod");
                     }
                 }
@@ -143,7 +164,7 @@ pub fn probe(
                         continue;
                     }
                     println!("serverCommand: {tokens:?}");
-                    if save_playerstate {
+                    if save_playerstate || save_motion {
                         join.on_server_command(&tokens, &mut client, now);
                     }
                     // `s <idx>` is playLocalSound (sound doc, section 9).
@@ -185,7 +206,7 @@ pub fn probe(
             }
         }
 
-        if save_playerstate {
+        if save_playerstate || save_motion {
             for cmd in client.take_server_commands() {
                 println!("JOIN cmd: {cmd}");
                 join.commands.push(cmd);
@@ -195,12 +216,15 @@ pub fn probe(
         // 5 s after going active push forward for 2 s, again every 30 s, so a
         // long run shows whether moves still apply after a map_restart.
         let mut cmd = net::msg::UserCmd::default();
-        if client.state() == NetState::Active && !save_playerstate {
+        if client.state() == NetState::Active && !save_playerstate && !save_motion {
             let active_at = *reached_active.get_or_insert(now);
             let dt = now.duration_since(active_at).as_secs() % 30;
             if (5..7).contains(&dt) {
                 cmd.forward = 127;
             }
+        }
+        if save_motion && motion.running() {
+            cmd = motion.cmd();
         }
         client.send_frame(&cmd);
 
@@ -253,9 +277,17 @@ pub fn probe(
         if join.settled(now) {
             if let Some(s) = client.snapshots().newest() {
                 if s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL {
-                    write_playerstate_fixture(s, client.configstrings(), &join)?;
-                    wrote_playerstate = true;
-                    break;
+                    if save_motion {
+                        if motion.step(now, s) {
+                            write_motion_fixture(s, client.configstrings(), &join, &motion)?;
+                            wrote_playerstate = true;
+                            break;
+                        }
+                    } else {
+                        write_playerstate_fixture(s, client.configstrings(), &join)?;
+                        wrote_playerstate = true;
+                        break;
+                    }
                 }
             }
         }
@@ -700,6 +732,274 @@ fn menu_reply(menu: &str) -> Option<&'static str> {
         "german" => Some("kar98k_mp"),
         _ => None,
     }
+}
+
+/// One held input and the label the playerstate settled under it is captured
+/// under.
+struct MotionStep {
+    label: &'static str,
+    cmd: net::msg::UserCmd,
+    until: Until,
+}
+
+/// When a step's capture is taken.
+enum Until {
+    /// After the input has been held this long, so the pose has settled and
+    /// the value is a steady state rather than a point on a lerp.
+    Held(Duration),
+    /// At the first snapshot off the ground, which is what puts the jump's
+    /// takeoff velocity in the capture. The duration bounds the wait.
+    Airborne(Duration),
+}
+
+/// The poses, in an order where each starts from the one before: lean from
+/// standing, prone from crouched, run from standing again. Bit names:
+/// docs/protocol-1.1.md, "Usercmd input bits".
+fn motion_script() -> Vec<MotionStep> {
+    use net::msg::{
+        NULL_USERCMD, WBUTTON_CROUCH, WBUTTON_LEAN_LEFT, WBUTTON_LEAN_RIGHT, WBUTTON_PRONE,
+    };
+    let held = |label, cmd, ms| MotionStep {
+        label,
+        cmd,
+        until: Until::Held(Duration::from_millis(ms)),
+    };
+    vec![
+        held("stand", NULL_USERCMD, 1500),
+        held(
+            "lean_left",
+            net::msg::UserCmd {
+                wbuttons: WBUTTON_LEAN_LEFT,
+                ..NULL_USERCMD
+            },
+            2000,
+        ),
+        // Between the leans, so the capture shows whether a released lean
+        // returns to centre server-side.
+        held("center", NULL_USERCMD, 1500),
+        held(
+            "lean_right",
+            net::msg::UserCmd {
+                wbuttons: WBUTTON_LEAN_RIGHT,
+                ..NULL_USERCMD
+            },
+            2000,
+        ),
+        // A crouched or prone client holds `up` at -127 for as long as it is
+        // down, so the capture holds it too.
+        held(
+            "crouch",
+            net::msg::UserCmd {
+                wbuttons: WBUTTON_CROUCH,
+                up: -127,
+                ..NULL_USERCMD
+            },
+            2500,
+        ),
+        // Standing between the two lowered stances: a prone held straight out
+        // of a crouch was refused in one capture and taken in another.
+        held("stand_between", NULL_USERCMD, 1500),
+        held(
+            "prone",
+            net::msg::UserCmd {
+                wbuttons: WBUTTON_PRONE,
+                up: -127,
+                ..NULL_USERCMD
+            },
+            3000,
+        ),
+        held("stand_up", NULL_USERCMD, 2500),
+        held(
+            "run_forward",
+            net::msg::UserCmd {
+                forward: 127,
+                ..NULL_USERCMD
+            },
+            2000,
+        ),
+        MotionStep {
+            label: "jump_takeoff",
+            cmd: net::msg::UserCmd {
+                up: 127,
+                ..NULL_USERCMD
+            },
+            until: Until::Airborne(Duration::from_millis(1500)),
+        },
+    ]
+}
+
+/// Walks [`motion_script`], holding each input and keeping the playerstate it
+/// settles at.
+struct MotionProbe {
+    steps: Vec<MotionStep>,
+    idx: usize,
+    started: Option<Instant>,
+    captured: Vec<(&'static str, Vec<i32>)>,
+    done: bool,
+    /// Newest snapshot already traced, so the trace prints per snapshot
+    /// rather than per loop iteration.
+    traced: Option<u32>,
+}
+
+impl Default for MotionProbe {
+    fn default() -> Self {
+        Self {
+            steps: motion_script(),
+            idx: 0,
+            started: None,
+            captured: Vec::new(),
+            done: false,
+            traced: None,
+        }
+    }
+}
+
+impl MotionProbe {
+    fn running(&self) -> bool {
+        !self.done
+    }
+
+    fn cmd(&self) -> net::msg::UserCmd {
+        self.steps
+            .get(self.idx)
+            .map(|s| s.cmd)
+            .unwrap_or(net::msg::NULL_USERCMD)
+    }
+
+    /// Feeds the newest snapshot in. Returns true once the last pose is
+    /// captured and the fixture is ready to write.
+    fn step(&mut self, now: Instant, snap: &net::snapshot::Snapshot) -> bool {
+        let Some(step) = self.steps.get(self.idx) else {
+            self.done = true;
+            return true;
+        };
+        let started = *self.started.get_or_insert(now);
+        let elapsed = now.duration_since(started);
+        let p = &net::protocol::PROTOCOL_V1;
+        // A settled sample cannot tell a ramp from a constant; the trace can.
+        if self.traced != Some(snap.message_num) {
+            self.traced = Some(snap.message_num);
+            println!(
+                "  trace {} +{:>4}ms st={} vh={:>6.2} lerp[t={} target={} down={} posAdj={:.3}] originZ={:.2} bob={} eFlags={} pm=0x{:x}",
+                self.steps[self.idx].label,
+                elapsed.as_millis(),
+                snap.server_time,
+                f32::from_bits(snap.ps.field_i32(p, "viewHeightCurrent") as u32),
+                snap.ps.field_i32(p, "viewHeightLerpTime"),
+                snap.ps.field_i32(p, "viewHeightLerpTarget"),
+                snap.ps.field_i32(p, "viewHeightLerpDown"),
+                f32::from_bits(snap.ps.field_i32(p, "viewHeightLerpPosAdj") as u32),
+                f32::from_bits(snap.ps.field_i32(p, "origin[2]") as u32),
+                snap.ps.field_i32(p, "bobCycle"),
+                snap.ps.field_i32(p, "eFlags"),
+                snap.ps.field_i32(p, "pm_flags"),
+            );
+        }
+        let take = match step.until {
+            Until::Held(d) => elapsed >= d,
+            Until::Airborne(limit) => {
+                let airborne = snap.ps.field_i32(p, "groundEntityNum")
+                    != net::protocol::ENTITYNUM_WORLD as i32;
+                (airborne && elapsed >= Duration::from_millis(50)) || elapsed >= limit
+            }
+        };
+        if !take {
+            return false;
+        }
+        println!(
+            "MOTION {}: leanf={} viewHeightCurrent={} viewHeightTarget={} viewHeightLerp[target={} time={} down={} posAdj={}] \
+bobCycle={} groundEntityNum={} pm_flags=0x{:x} pm_time={} jumpTime={} velocity_z={} eventSequence={} events=[{},{},{},{}]",
+            step.label,
+            f32::from_bits(snap.ps.field_i32(p, "leanf") as u32),
+            f32::from_bits(snap.ps.field_i32(p, "viewHeightCurrent") as u32),
+            snap.ps.field_i32(p, "viewHeightTarget"),
+            snap.ps.field_i32(p, "viewHeightLerpTarget"),
+            snap.ps.field_i32(p, "viewHeightLerpTime"),
+            snap.ps.field_i32(p, "viewHeightLerpDown"),
+            f32::from_bits(snap.ps.field_i32(p, "viewHeightLerpPosAdj") as u32),
+            snap.ps.field_i32(p, "bobCycle"),
+            snap.ps.field_i32(p, "groundEntityNum"),
+            snap.ps.field_i32(p, "pm_flags"),
+            snap.ps.field_i32(p, "pm_time"),
+            snap.ps.field_i32(p, "jumpTime"),
+            f32::from_bits(snap.ps.field_i32(p, "velocity[2]") as u32),
+            snap.ps.field_i32(p, "eventSequence"),
+            snap.ps.field_i32(p, "events[0]"),
+            snap.ps.field_i32(p, "events[1]"),
+            snap.ps.field_i32(p, "events[2]"),
+            snap.ps.field_i32(p, "events[3]"),
+        );
+        self.captured.push((step.label, snap.ps.fields.clone()));
+        self.idx += 1;
+        self.started = None;
+        if self.idx >= self.steps.len() {
+            self.done = true;
+            return true;
+        }
+        false
+    }
+}
+
+/// Writes one section per pose to `<map>-<gametype>-motion.txt`. Each carries
+/// the input that produced it on a `!input` line, so the gate replays the
+/// capture's own script rather than a copy of it.
+fn write_motion_fixture(
+    snap: &net::snapshot::Snapshot,
+    configstrings: &[String],
+    join: &JoinProbe,
+    motion: &MotionProbe,
+) -> anyhow::Result<()> {
+    let p = &net::protocol::PROTOCOL_V1;
+    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
+    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let map = key("mapname");
+    let gametype = key("g_gametype");
+
+    let mut out = String::new();
+    out.push_str("# Retail CoD 1.1d dedicated server playerstate under each movement input.\n");
+    out.push_str(&format!(
+        "# map {map}, g_gametype {gametype}, joined {JOIN_TEAM}, weapon {}, dedicated 1,\n",
+        join.weapon
+    ));
+    out.push_str("# sv_maxclients 8, sv_pure 0, stock scr_* defaults, one client on the server.\n");
+    out.push_str("# Captured with tools/run_server.sh and --net-probe --save-motion. Each pose\n");
+    out.push_str("# holds one usercmd until the state settles, so the values are steady states\n");
+    out.push_str("# rather than points on a lerp; jump_takeoff is the first snapshot off the\n");
+    out.push_str("# ground instead, which is where the takeoff velocity is.\n");
+    out.push_str("# Values are the raw i32 wire words, floats as their bit patterns.\n");
+    for (label, fields) in &motion.captured {
+        let cmd = motion
+            .steps
+            .iter()
+            .find(|s| s.label == *label)
+            .map(|s| s.cmd)
+            .unwrap_or(net::msg::NULL_USERCMD);
+        out.push_str(&format!("[pose {label}]\n"));
+        let sample = motion
+            .steps
+            .iter()
+            .find(|s| s.label == *label)
+            .map(|s| match s.until {
+                Until::Held(_) => "settled",
+                Until::Airborne(_) => "airborne",
+            })
+            .unwrap_or("settled");
+        out.push_str(&format!(
+            "!input buttons={} wbuttons={} up={} forward={} right={} yaw={} sample={sample}\n",
+            cmd.buttons, cmd.wbuttons, cmd.up, cmd.forward, cmd.right, cmd.angles[1]
+        ));
+        for (f, v) in p.player_fields.iter().zip(fields) {
+            out.push_str(&format!("{} {v}\n", f.name));
+        }
+    }
+    let path = format!("{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-motion.txt");
+    std::fs::write(&path, out)?;
+    println!(
+        "motion: {} poses ({} fields each) -> {path}",
+        motion.captured.len(),
+        snap.ps.fields.len()
+    );
+    Ok(())
 }
 
 /// Writes the spawned player's wire state to `<map>-<gametype>.txt`. The map

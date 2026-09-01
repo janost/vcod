@@ -35,11 +35,15 @@ combat effects.
   the map's own.
 - `vcod-server` answers server browsers, accepts connections and hands out the
   gamestate, so a retail 1.1 client loads the map, then keeps it alive with
-  delta-compressed snapshots against the client's last acked frame and flies
-  it around as a spectator on the shared pmove. `--test-entities` adds
-  entities that move on the wire to exercise the packet-entity path; they
-  carry no `eType` or model, so a retail client draws nothing for them, and
-  the server simulates no real gameplay yet.
+  delta-compressed snapshots against the client's last acked frame. It runs
+  the game's own gametype and map scripts on its gsc VM, so a client picks a
+  team through Activision's stock menus, spawns where `_spawnlogic.gsc` puts
+  it with the weapon it chose, and moves on the shared pmove: running,
+  jumping, crouching, prone and leaning. No entity reaches a client yet, so
+  players cannot see each other or anything the map places.
+  `--test-entities` adds entities that move on the wire to exercise the
+  packet-entity path; they carry no `eType` or model, so a retail client
+  draws nothing for them.
 
 The whole thing runs on wgpu and winit, so in principle it is cross-platform.
 I have only run it on Linux.
@@ -267,8 +271,16 @@ These work in every mode:
 - Audio fidelity is matched to the retail engine on paper (falloff, panning,
   channel replacement, ducking) but not yet confirmed by ear against the real
   game.
-- The server deltas snapshots against the client's last acked frame and moves
-  spectators itself; it simulates no real gameplay. `--test-entities` adds
+- The server runs the stock scripts, spawns players and moves them, but sends
+  a client no entities, so nobody sees another player, a mounted MG42 or a
+  door. There is no shooting, no damage and no score.
+- A player on it runs, jumps, crouches, goes prone and leans, but two
+  movement details are still off. Retail refuses or rotates a prone where the
+  body does not fit and the mover models neither, so going prone can yank the
+  view and prone movement is blocked in some directions
+  ([docs/research/cod11-mantle.md](docs/research/cod11-mantle.md), "Prone").
+  And footsteps are silent: they are not playerstate events, so they travel
+  by the entity path that does not exist yet. `--test-entities` adds
   entities that move on the wire so the packet-entity path (baselines,
   moving deltas, removal and re-add) has something to exercise; they carry
   no `eType` or model, so a retail client renders nothing for them, and
