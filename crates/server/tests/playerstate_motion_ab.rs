@@ -54,18 +54,22 @@ const MODELLED: &[&str] = &[
 /// `eFlags` bit for prone, so a pose can be told to have taken.
 const EF_PRONE: i32 = 0x40;
 
-/// A prone the capture asked for and retail refused. Retail runs a fit check
-/// on the prone body -- it is long, and needs clear space along the facing --
-/// and refuses where it does not fit, which is spawn-dependent and so varies
-/// between captures on one map. vcod's mover has no such check: it goes prone
-/// wherever it is asked, so it cannot reproduce a refusal, and a pose retail
-/// refused is skipped here rather than pinned. That gap is the reason a prone
-/// player's view fights the client's prediction
-/// (docs/research/cod11-mantle.md, "Prone").
-fn retail_refused_prone(pose: &Pose) -> bool {
+/// A prone one side took and the other refused. Both movers now run the fit
+/// check -- the body needs 54 units of clear space behind the facing -- so the
+/// outcome depends on the geometry around the player, and the capture's spawn
+/// is not the replay's: `_spawnlogic` picks weighted-random from the top third
+/// of its candidates, which is why `playerstate_ab` excludes `origin` from
+/// equality too. A pose the two disagree about is therefore not comparable and
+/// is skipped; the fit check itself is unit-tested against known geometry in
+/// `pmove.rs` (docs/research/cod11-mantle.md, "Prone").
+fn prone_disagrees(pose: &Pose, ours: &PlayerState) -> bool {
     let asked = pose.input.wbuttons & vcod_common::net::msg::WBUTTON_PRONE != 0;
-    let took = pose.fields.get("eFlags").is_some_and(|f| f & EF_PRONE != 0);
-    asked && !took
+    if !asked {
+        return false;
+    }
+    let retail = pose.fields.get("eFlags").is_some_and(|f| f & EF_PRONE != 0);
+    let mine = ours.field_i32(&PROTOCOL_V1, "eFlags") & EF_PRONE != 0;
+    retail != mine
 }
 
 /// How long each pose is held, in server frames of 50 ms. The capture holds
@@ -208,7 +212,7 @@ fn check(map: &str, gametype: &str) {
     let mut diffs = Vec::new();
     let mut skipped = Vec::new();
     for (pose, ps) in poses.iter().zip(&mine) {
-        if retail_refused_prone(pose) {
+        if prone_disagrees(pose, ps) {
             skipped.push(pose.label.as_str());
             continue;
         }
@@ -232,7 +236,7 @@ fn check(map: &str, gametype: &str) {
     // this gate while pinning nothing about prone at all.
     assert!(
         skipped.len() < poses.len(),
-        "{path}: retail refused every prone pose; retake the capture"
+        "{path}: every pose was skipped; the capture pins nothing"
     );
     assert!(
         diffs.is_empty(),

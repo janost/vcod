@@ -225,6 +225,17 @@ pub fn probe(
         }
         if save_motion && motion.running() {
             cmd = motion.cmd();
+            // A pose's yaw is a view direction, not a raw cmd word: the view
+            // is `cmd.angles + delta_angles`, and the server pushes
+            // `delta_angles` to hold a prone view inside its cone. A probe
+            // that sent the raw word would fight that correction instead of
+            // holding still under it, the way a retail client does.
+            if let Some(s) = client.snapshots().newest() {
+                let delta =
+                    s.ps.field_i32(&net::protocol::PROTOCOL_V1, "delta_angles[1]");
+                let spawn = *motion.spawn_delta_yaw.get_or_insert(delta);
+                cmd.angles[1] = (spawn + cmd.angles[1] - delta) & 0xffff;
+            }
         }
         client.send_frame(&cmd);
 
@@ -808,6 +819,42 @@ fn motion_script() -> Vec<MotionStep> {
             },
             3000,
         ),
+        // Turning the view while already prone: this is what separates a
+        // `proneDirection` the server writes from one it leaves at zero, and
+        // it is where `bg_prone_yawcap` (85 degrees) bites.
+        held(
+            "prone_yaw_60",
+            net::msg::UserCmd {
+                angles: [0, 60 * 65536 / 360, 0],
+                wbuttons: WBUTTON_PRONE,
+                up: -127,
+                forward: 0,
+                ..NULL_USERCMD
+            },
+            2000,
+        ),
+        held(
+            "prone_yaw_150",
+            net::msg::UserCmd {
+                angles: [0, 150 * 65536 / 360, 0],
+                wbuttons: WBUTTON_PRONE,
+                up: -127,
+                forward: 0,
+                ..NULL_USERCMD
+            },
+            2000,
+        ),
+        held(
+            "prone_crawl_150",
+            net::msg::UserCmd {
+                angles: [0, 150 * 65536 / 360, 0],
+                wbuttons: WBUTTON_PRONE,
+                up: -127,
+                forward: 127,
+                ..NULL_USERCMD
+            },
+            2000,
+        ),
         held("stand_up", NULL_USERCMD, 2500),
         held(
             "run_forward",
@@ -839,6 +886,9 @@ struct MotionProbe {
     /// Newest snapshot already traced, so the trace prints per snapshot
     /// rather than per loop iteration.
     traced: Option<u32>,
+    /// `delta_angles[1]` at the first pose, which is the spawn yaw every
+    /// pose's own yaw is an offset from.
+    spawn_delta_yaw: Option<i32>,
 }
 
 impl Default for MotionProbe {
@@ -850,6 +900,7 @@ impl Default for MotionProbe {
             captured: Vec::new(),
             done: false,
             traced: None,
+            spawn_delta_yaw: None,
         }
     }
 }
@@ -880,17 +931,17 @@ impl MotionProbe {
         if self.traced != Some(snap.message_num) {
             self.traced = Some(snap.message_num);
             println!(
-                "  trace {} +{:>4}ms st={} vh={:>6.2} lerp[t={} target={} down={} posAdj={:.3}] originZ={:.2} bob={} eFlags={} pm=0x{:x}",
+                "  trace {} +{:>4}ms st={} vh={:>5.1} proneDir={:>8.2} dirPitch={:>7.2} torso={:>7.2} origin=[{:>8.1},{:>8.1}] deltaYaw={} eFlags={} pm=0x{:x}",
                 self.steps[self.idx].label,
                 elapsed.as_millis(),
                 snap.server_time,
                 f32::from_bits(snap.ps.field_i32(p, "viewHeightCurrent") as u32),
-                snap.ps.field_i32(p, "viewHeightLerpTime"),
-                snap.ps.field_i32(p, "viewHeightLerpTarget"),
-                snap.ps.field_i32(p, "viewHeightLerpDown"),
-                f32::from_bits(snap.ps.field_i32(p, "viewHeightLerpPosAdj") as u32),
-                f32::from_bits(snap.ps.field_i32(p, "origin[2]") as u32),
-                snap.ps.field_i32(p, "bobCycle"),
+                f32::from_bits(snap.ps.field_i32(p, "proneDirection") as u32),
+                f32::from_bits(snap.ps.field_i32(p, "proneDirectionPitch") as u32),
+                f32::from_bits(snap.ps.field_i32(p, "proneTorsoPitch") as u32),
+                f32::from_bits(snap.ps.field_i32(p, "origin[0]") as u32),
+                f32::from_bits(snap.ps.field_i32(p, "origin[1]") as u32),
+                snap.ps.field_i32(p, "delta_angles[1]"),
                 snap.ps.field_i32(p, "eFlags"),
                 snap.ps.field_i32(p, "pm_flags"),
             );

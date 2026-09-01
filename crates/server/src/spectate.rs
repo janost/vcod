@@ -169,6 +169,14 @@ impl ClientSim {
             ),
             (PmType::Normal, Some(w)) => {
                 pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt);
+                // Retail holds a prone view inside the cone around the body by
+                // pushing `delta_angles`, so the client's own prediction lands
+                // in the same place (docs/research/cod11-mantle.md, "Prone").
+                if self.ps.view_yaw_correction != 0.0 {
+                    self.delta_angles[1] = (self.delta_angles[1]
+                        + (self.ps.view_yaw_correction * ANGLE2SHORT) as i32)
+                        & 0xffff;
+                }
                 // The stamp is the serverTime the lerp began, so it is taken
                 // on the frame the eye first trails its target.
                 self.view_lerp_start = if self.ps.view_height_settled() {
@@ -246,6 +254,9 @@ impl ClientSim {
             // as the lerp lasts.
             set("viewHeightLerpTarget", self.ps.view_lerp_target as i32);
             set("viewHeightLerpTime", self.view_lerp_start.unwrap_or(0));
+            // The body's own yaw while prone; the client centres its view cone
+            // on it, so a zero here aims the cone at world north.
+            set("proneDirection", self.ps.prone_direction.to_bits() as i32);
             set("viewHeightLerpDown", i32::from(self.ps.view_lerp_down));
             // -1..1, left negative, the same convention retail sends.
             set("leanf", (self.ps.lean / pmove::LEAN_MAX).to_bits() as i32);
@@ -330,6 +341,44 @@ mod tests {
             angles: [pitch_short, yaw_short, 0],
             ..Default::default()
         }
+    }
+
+    /// A prone view past the 85-degree cone is pushed back by `delta_angles`,
+    /// which is how retail enforces it (`PM_UpdateViewAngles` 0x331c8), and
+    /// the body's own yaw goes out in `proneDirection`.
+    #[test]
+    fn a_prone_view_past_the_cap_pushes_delta_angles() {
+        let p = &PROTOCOL_V1;
+        let w = vcod_common::collision::test_world(&[]);
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        let prone = |t: i32, yaw_deg: f32| UserCmd {
+            server_time: t,
+            wbuttons: msg::WBUTTON_PRONE,
+            up: -127,
+            angles: [0, (yaw_deg * ANGLE2SHORT) as i32 & 0xffff, 0],
+            ..NULL_USERCMD
+        };
+
+        let mut t = 1000;
+        for _ in 0..20 {
+            t += 50;
+            sim.step(&prone(t, 0.0), 0.05, Some(&w));
+        }
+        assert_eq!(sim.ps.stance, pmove::Stance::Prone);
+        let before = sim.delta_angles[1];
+        assert_eq!(
+            sim.to_wire(p, 0, 0).field_i32(p, "proneDirection"),
+            sim.ps.prone_direction.to_bits() as i32
+        );
+
+        // Well past the cone: the body cannot swing the whole way in one
+        // frame, so the rest comes off the view.
+        sim.step(&prone(t + 50, 150.0), 0.05, Some(&w));
+        assert_ne!(
+            sim.delta_angles[1], before,
+            "a view past the cap must be pushed back"
+        );
     }
 
     /// The eye-height lerp is stamped with the serverTime it started at and

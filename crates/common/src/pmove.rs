@@ -57,6 +57,18 @@ pub const LEAN_TIME_FROM_MS: f32 = 350.0;
 pub const VIEW_LERP_MS: f32 = 200.0;
 pub const VIEW_LERP_PRONE_MS: f32 = 400.0;
 
+/// Prone tunables, from the retail server: `bg_prone_yawcap` 85 and
+/// `bg_prone_softyawedge` 1 are cvars, the 55 deg/s swing rate and the
+/// 54-unit body clearance are rodata. The clearance is traced with a
+/// +/-6 box straight behind the facing, which is the space a body needs to
+/// lie down in (docs/research/cod11-mantle.md, "Prone").
+pub const PRONE_YAWCAP: f32 = 85.0;
+/// The body only starts turning once the view is this far off it.
+pub const PRONE_SOFT_EDGE: f32 = PRONE_YAWCAP - 5.0;
+pub const PRONE_SWING_DEG_PER_SEC: f32 = 55.0;
+pub const PRONE_BODY_LENGTH: f32 = 54.0;
+const PRONE_BODY_HALF_BOX: f32 = 6.0;
+
 // Water: RTCW-MP bg_pmove.c multipliers against CoD's absolute speeds.
 // Swim cap is SCALE_SWIM * SPEED_RUN; no lava/slime exists in CoD maps.
 pub const SCALE_SWIM: f32 = 0.5;
@@ -206,6 +218,13 @@ pub struct PlayerState {
     pub on_ground: bool,
     pub ground_normal: Vec3,
     pub lean: f32, // -LEAN_MAX..LEAN_MAX
+    /// World yaw of the prone body in degrees, retail's `ps.proneDirection`.
+    /// Meaningless unless the stance is prone.
+    pub prone_direction: f32,
+    /// Degrees the view must move this frame to stay inside the prone cone.
+    /// Retail applies it to `delta_angles`; the caller owns that, so pmove
+    /// reports it rather than writing it.
+    pub view_yaw_correction: f32,
     /// 0 dry, 1 feet, 2 waist, 3 eyes under (RTCW waterlevel).
     pub water_level: u32,
     /// Remaining control lock while flying out of water; 0 when free.
@@ -260,6 +279,8 @@ impl PlayerState {
             on_ground: false,
             ground_normal: Vec3::Z,
             lean: 0.0,
+            prone_direction: 0.0,
+            view_yaw_correction: 0.0,
             water_level: 0,
             waterjump_ms: 0.0,
             on_ladder: false,
@@ -346,6 +367,7 @@ pub fn pmove(
         ps.air_speed_peak = 0.0;
     }
     update_stance(ps, input, world, dt);
+    update_prone_yaw(ps, world, dt);
     update_lean(ps, input, world, dt);
     set_water_level(ps, world);
     ground_trace(ps, world);
@@ -607,13 +629,22 @@ pub fn spectator_move(ps: &mut PlayerState, forward: f32, right: f32, up: f32, d
 /// Standing back up needs headroom for the taller bbox.
 fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
     let before = ps.stance;
-    let desired = if input.prone {
+    let mut desired = if input.prone {
         Stance::Prone
     } else if input.crouch {
         Stance::Crouch
     } else {
         Stance::Stand
     };
+    // Retail refuses a prone the body does not fit in, which is why a player
+    // facing a wall stays standing.
+    if desired == Stance::Prone && before != Stance::Prone {
+        if prone_fits(world, ps.origin, ps.yaw.to_degrees()) {
+            ps.prone_direction = normalize180(ps.yaw.to_degrees());
+        } else {
+            desired = before;
+        }
+    }
     if desired.height() <= ps.stance.height() {
         ps.stance = desired;
     } else {
@@ -649,6 +680,63 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, 
 
 /// RTCW `bg_pmove.c` `PM_UpdateLean`. Differences: leans while moving (no
 /// `!cmd->forwardmove` gate), and prone blocks leaning.
+/// Whether a body may lie down at `origin` facing `yaw_deg`: retail sweeps a
+/// 12-unit cube 54 units straight *backwards* from the facing, which is where
+/// the body goes (`BG_CheckProneValid` 0x2d428, first trace at 0x2d57a).
+/// Sloped-ground pitch, the rest of that function, is an animation output and
+/// is not modelled.
+pub fn prone_fits(world: &CollisionWorld, origin: Vec3, yaw_deg: f32) -> bool {
+    let back = (yaw_deg + 180.0).to_radians();
+    let dir = Vec3::new(back.cos(), back.sin(), 0.0);
+    // Retail traces from the player's origin, which sits at the feet.
+    let start = origin + Vec3::Z * VIEW_PRONE;
+    let end = start + dir * PRONE_BODY_LENGTH;
+    let half = Vec3::splat(PRONE_BODY_HALF_BOX);
+    let t = world.box_trace(start, end, -half, half);
+    !t.startsolid && t.fraction >= 1.0
+}
+
+/// Degrees folded to -180..180, the `AngleNormalize180` the prone code runs
+/// its yaw difference through.
+fn normalize180(deg: f32) -> f32 {
+    (deg + 180.0).rem_euclid(360.0) - 180.0
+}
+
+/// The prone body swinging to follow the view, and the view capped to the cone
+/// around the body. Retail runs both in `PM_UpdateViewAngles` (0x32d7c); the
+/// cap is enforced by pushing `delta_angles`, so the correction is reported
+/// here and the caller applies it to whatever owns the view
+/// (docs/research/cod11-mantle.md, "Prone").
+fn update_prone_yaw(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
+    ps.view_yaw_correction = 0.0;
+    if ps.stance != Stance::Prone {
+        return;
+    }
+    let view = ps.yaw.to_degrees();
+    let delta = normalize180(ps.prone_direction - view);
+    // The body only starts to turn past the soft edge, and only into a
+    // direction it still fits in.
+    if delta.abs() > PRONE_SOFT_EDGE {
+        let step = PRONE_SWING_DEG_PER_SEC * dt;
+        let candidate = if step >= delta.abs() {
+            view
+        } else if delta > 0.0 {
+            ps.prone_direction - step
+        } else {
+            ps.prone_direction + step
+        };
+        if prone_fits(world, ps.origin, candidate) {
+            ps.prone_direction = normalize180(candidate);
+        }
+    }
+    let delta = normalize180(ps.prone_direction - view);
+    if delta.abs() > PRONE_YAWCAP {
+        let excess = delta - PRONE_YAWCAP.copysign(delta);
+        ps.view_yaw_correction = excess;
+        ps.yaw = (view + excess).to_radians();
+    }
+}
+
 fn update_lean(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
     let msec = dt * 1000.0;
     let mut dir = 0.0f32;
@@ -1733,6 +1821,95 @@ mod tests {
             (apex - JUMP_HEIGHT_LOW).abs() < 2.0,
             "crouch apex {apex}, expected ~{}",
             JUMP_HEIGHT_LOW
+        );
+    }
+
+    /// Retail sweeps a 12-unit box 54 units behind the facing before it lets a
+    /// body lie down (docs/research/cod11-mantle.md, "Prone").
+    #[test]
+    fn prone_is_refused_when_the_body_has_no_room_behind_it() {
+        // A wall 20 units behind the origin, well inside the 54 the body needs.
+        let w = crate::collision::test_world(&[(
+            Vec3::new(-40.0, -30.0, -8.0),
+            Vec3::new(-20.0, 30.0, 72.0),
+        )]);
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 20);
+        let prone = PmInput {
+            prone: true,
+            ..Default::default()
+        };
+        // Facing +x puts the body in the wall behind; facing -x puts it in the
+        // open, and the same input is then taken.
+        ps.yaw = 0f32.to_radians();
+        tick(&mut ps, &prone, &w, 20);
+        assert_eq!(
+            ps.stance,
+            Stance::Stand,
+            "prone into a wall must be refused"
+        );
+
+        ps.yaw = 180f32.to_radians();
+        tick(&mut ps, &prone, &w, 20);
+        assert_eq!(
+            ps.stance,
+            Stance::Prone,
+            "prone with room behind must be taken"
+        );
+        assert!(
+            normalize180(ps.prone_direction - 180.0).abs() < 0.01,
+            "the body faces the view, at {}",
+            ps.prone_direction
+        );
+    }
+
+    /// Past the soft edge the body turns toward the view at 55 deg/s, and the
+    /// view is held inside 85 degrees of the body by a correction the caller
+    /// applies to `delta_angles`.
+    #[test]
+    fn a_prone_view_swings_the_body_and_is_capped() {
+        let w = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 20);
+        let prone = PmInput {
+            prone: true,
+            ..Default::default()
+        };
+        tick(&mut ps, &prone, &w, 20);
+        assert_eq!(ps.stance, Stance::Prone);
+        assert!((ps.prone_direction).abs() < 0.01);
+
+        // Inside the soft edge the body does not move and nothing is clamped.
+        ps.yaw = 60f32.to_radians();
+        pmove(&mut ps, &prone, &w, 0.05);
+        assert!(
+            ps.prone_direction.abs() < 0.01,
+            "the body holds under 80 degrees"
+        );
+        assert_eq!(ps.view_yaw_correction, 0.0, "60 degrees is inside the cap");
+
+        // Past it, the body swings at the measured rate.
+        ps.yaw = 150f32.to_radians();
+        // A frame inside `MAX_FRAME_MS`, which pmove clamps dt to.
+        pmove(&mut ps, &prone, &w, 0.05);
+        // The body turns toward the view, which is at +150.
+        let swung = PRONE_SWING_DEG_PER_SEC * 0.05;
+        assert!(
+            (ps.prone_direction - swung).abs() < 0.01,
+            "body at {}, expected {swung}",
+            ps.prone_direction
+        );
+        // 150 degrees off a body at -5.5 is past the 85 cap, so the view is
+        // pushed back to exactly the cap.
+        let delta = ps.prone_direction - 150.0;
+        assert!(
+            (ps.view_yaw_correction - (delta + PRONE_YAWCAP)).abs() < 0.01,
+            "correction {}",
+            ps.view_yaw_correction
+        );
+        assert!(
+            ((ps.yaw.to_degrees() - ps.prone_direction).abs() - PRONE_YAWCAP).abs() < 0.01,
+            "the view ends exactly on the cap"
         );
     }
 
