@@ -274,13 +274,13 @@ These work in every mode:
 - The server runs the stock scripts, spawns players and moves them, but sends
   a client no entities, so nobody sees another player, a mounted MG42 or a
   door. There is no shooting, no damage and no score.
-- A player on it runs, jumps, crouches, goes prone and leans, but two
-  movement details are still off. Retail refuses or rotates a prone where the
-  body does not fit and the mover models neither, so going prone can yank the
-  view and prone movement is blocked in some directions
-  ([docs/research/cod11-mantle.md](docs/research/cod11-mantle.md), "Prone").
-  And footsteps are silent: they are not playerstate events, so they travel
-  by the entity path that does not exist yet. `--test-entities` adds
+- Footsteps are silent. They are not playerstate events, so they travel by
+  the entity path that does not exist yet.
+- A prone body's pitch on sloped ground (`proneDirectionPitch`,
+  `proneTorsoPitch`) is not modelled. Both are animation inputs, so they
+  change how a prone body is drawn rather than how it moves, and no client
+  can see another player's body yet
+  ([docs/research/cod11-mantle.md](docs/research/cod11-mantle.md), "Prone"). `--test-entities` adds
   entities that move on the wire so the packet-entity path (baselines,
   moving deltas, removal and re-add) has something to exercise; they carry
   no `eType` or model, so a retail client renders nothing for them, and

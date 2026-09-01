@@ -159,28 +159,95 @@ Note vcod implements the stance-dependent ground jump described above
 `JUMP_VELOCITY = 250.0` constant is gone. The ladder push-off path is
 ported too - port note 4 lists exactly what landed.
 
-## Prone: retail runs a fit check, vcod does not
+## Prone: the fit check, the body swing and the yaw cap
 
-VERIFIED live 2026-09-01: the retail server refuses a prone it is asked for,
-depending on where the player stands and which way it faces. A probe holding
-`wbuttons` 0x40 with `upmove` -127 for three seconds went prone at one spawn
-(`eFlags` 80, `viewHeightCurrent` 11) and stayed standing at another
-(`eFlags` 16, `viewHeightCurrent` 60) with the same input held for the same
-time, on the same map. The prone body is long where the standing box is not,
-so it needs clear space along the facing that a standing player does not.
+Read out of `game.mp.i386.so` on 2026-09-01 with
+`tools/re/annotate_func.py`, which resolves the PIC relocations; without
+them every call in this code disassembles as a placeholder and every
+tunable as `ds:0xc`. Cvar defaults are the retail server's own console
+output (`bg_prone_yawcap` and friends, dedicated server, stock config).
 
-The check itself is not read out yet. The debug visualiser for it is gated on
-`g_debugProneCheck` (code at 0x32FA1), which is the entry point to start from.
-INFERRED, from the cvar name and its position in the same function as the
-stance-change headroom probes (fn 0x316F4).
+Three mechanisms, and vcod had none of them.
 
-vcod's mover has no such check: it goes prone wherever it is asked, and it
-never rotates a player to make the body fit. Against a vcod server a retail
-client's own prediction disagrees with the server every frame a prone is
-refused or rotated client-side, which shows up as the view being yanked when
-going prone and as prone movement blocked in some directions. The A/B gate
-`crates/server/tests/playerstate_motion_ab.rs` skips a pose retail refused
-rather than pinning it, for the same reason.
+### The fit check, `BG_CheckProneValid` (0x2d428)
+
+`BG_CheckProne` (0x2e358) is a 98-byte forwarder to it, and the engine
+calls the pair to ask "can a body lie here facing this yaw". Signature, from
+the forwarder and the call site at 0x33174:
+
+    BG_CheckProneValid(ignoreEnt, origin, halfWidth, 30.0, yaw,
+                       &outDir, &outPitchA, &outPitchB, ..., trace, mask...)
+
+The trace function arrives as an argument (`call [ebp+0x34]`, 0x2d664) with
+the Q3 argument order `trace(results, start, mins, maxs, end, ignoreEnt,
+mask)`. The content mask is `0x820011`, or `0x810011` when the caller's last
+flag is clear (0x2d4c2, 0x2d4d2).
+
+The first and decisive trace (0x2d57a-0x2d664): a box of mins `(-6,-6,-6)` to
+maxs `(6,6,6)` swept from the origin **54 units along yaw - 180 degrees**,
+that is, straight backwards from the facing (constants at rodata 0x70174,
+0x70178, 0x7017c, 0x70180). That is the space the body needs behind you when
+you lie down, and it is why standing with your back to a wall refuses the
+prone. Seven further traces follow, using 22, 2.5, 54, 1.5 and 5, and feed the
+two `vectopitch` calls and the `AngleSubtract` at 0x2dd63-0x2ddbc, which
+produce `proneDirectionPitch` (ps+0x36c) and `proneTorsoPitch` (ps+0x370) --
+the pitch the body takes on sloped ground. INFERRED, from the call sequence:
+those seven are ground sampling along the body rather than further clearance
+tests. They are not read out field by field here, because both outputs are
+animation inputs: they change how a prone body is drawn, not whether it may
+lie down or where it may look.
+
+VERIFIED live 2026-09-01, independently of the disassembly: the same input
+held for the same three seconds went prone at one spawn and was refused at
+another on the same map.
+
+### The body swing and the yaw cap, `PM_UpdateViewAngles` (0x32d7c)
+
+The prone branch runs at 0x3301f-0x33235. Tunables are cvars, read from the
+retail server's console: `bg_prone_yawcap` 85, `bg_prone_softyawedge` 1,
+`bg_duck2prone_time` 400, `bg_prone2duck_time` 400, `bg_viewheight_prone` 11.
+
+    delta = AngleNormalize180(AngleDelta(viewangles[1], ps->proneDirection))
+
+- **Soft edge** (0x33092): with `bg_prone_softyawedge` set, the body only
+  starts to turn once `|delta|` passes `bg_prone_yawcap - 5`, that is 80
+  degrees.
+- **The swing** (0x330dd-0x3311e): the body turns toward the view at
+  `pml.frametime * 55.0` per frame (rate at rodata 0x70c88), snapping the rest
+  of the way when one frame would cover it. VERIFIED live: `ps.proneDirection`
+  ramped 0 -> 10.12 -> 21.12 -> 30.36 over ~195 ms snapshots, which is 54
+  degrees per second against the 55 in rodata.
+- **The candidate is validated** (0x33181): the new direction goes through
+  `BG_CheckProne` before it is taken. Valid, and `ps->proneDirection` is
+  written (0x33193); invalid, and past `yawcap + 0.1` (rodata 0x70c90) it sets
+  `pm_flags` bit 0x8000 instead (0x331c4). So the body only swings where it
+  fits, and a blocked swing is announced rather than forced.
+- **The hard cap** (0x331c8-0x33235): whatever the swing did, a `|delta|`
+  past 85 degrees is pushed back into the cone by adding the excess to
+  `ps->delta_angles[1]`, in ANGLE2SHORT units (rodata 0x70c7c = 182.0444):
+
+      ps->delta_angles[1] += ANGLE2SHORT(delta - copysign(yawcap, delta))
+
+  VERIFIED live: a probe holding a yaw 150 degrees off its prone direction had
+  `delta_angles[1]` rewritten by the server every frame, while one holding 60
+  degrees off did not.
+
+`ps->proneDirection` is ps+0x368 internally, wire offset 872. The only two
+writers in the module are this function and the static prone-entry routine
+around 0x31c60, which also writes both pitch fields through
+`PitchForYawOnNormal` and `AngleDelta`.
+
+### Why it matters to a server
+
+All three are `bg_`/`PM_` code, so a retail client predicts them. A server
+that does none of them disagrees with its own clients every frame a player is
+prone: the client swings the body and clamps the view locally, the server's
+snapshot says otherwise, and the view is yanked on going prone and blocked
+when crawling. That is the shape of the bug this section was written for.
+
+Because the refusal depends on where a player spawns, the A/B gate
+`crates/server/tests/playerstate_motion_ab.rs` skips a prone pose retail
+refused rather than pinning it, and fails if a capture refuses every one.
 
 ## Ladders
 
