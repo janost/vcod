@@ -166,6 +166,82 @@ defaults) and `--net-probe --probe-pvs`, joining through the stock menus.
   is INFERRED from those two names alone; nothing here rules out a cell/portal
   walk instead.
 
+#### What a map entity looks like
+
+VERIFIED from the traces, and self-consistent with the shipped item list: a
+placed weapon is `eType` 3 (`ET_ITEM`) with `index` a **1-based index into
+configstring 7**, not a model index. Carentan's group at [388, -792] is four
+entities with `index` 23, which is `panzerfaust_mp`, standing beside one
+`eType` 8 (`ET_SCRIPTMOVER`) whose `index` 56 is the model
+`xmodel/ammo_panzerfaust_box3`. Four panzerfausts and their ammo box. The
+mounted MG is `eType` 11 with `index` 58, the model `xmodel/mg42_bipod`.
+
+So `index` means one thing per `eType`, and reading a model index onto an item
+gives a bookshelf where a panzerfaust stands. `ET_ITEM` reusing configstring 7
+is the same 1-based weapon index `entityState.weapon` carries.
+
+The static fields the traces show alongside those: `eFlags` 16 and
+`groundEntityNum` 1022 (`ENTITYNUM_WORLD`) on the items, `clientNum` 254 on
+them and 0 on the scriptmover and the turret, and `solid` 0 on all of them.
+`groundEntityNum` on the scriptmover reads 0 for about a minute after a map
+load and 1023 (`ENTITYNUM_NONE`) from then on, which is why a trace has to be
+taken from a settled server.
+
+#### The rule, out of the binary
+
+`SV_BuildClientSnapshot` is at `0x808f130` (it pushes the
+`SV_BuildClientSnapshot: bad gEnt` string at `0x80d63e0` from `0x808f270`), and
+the entity selection it calls at `0x808e298` is Q3's
+`SV_AddEntitiesVisibleFromPoint` in shape. VERIFIED, all of the following read
+out of the 1.1d dedicated binary: the loop bounds `sv.num_entities` at
+`0x83b6684`; the gentity accessor at `0x8089258` and the parallel server-side
+record at `0x8089288`; the collision helpers at `0x8053d34` (point to leaf),
+`0x804bca4` (leaf area), `0x804bc8c` (leaf cluster), `0x8053cfc` (cluster PVS
+row) and `0x8053f44` (areas connected); the gentity offsets `+0xf0`, `+0xf4`
+and `+0xf8`; the server-record offsets `+0x118`, `+0x11c`, `+0x15c`, `+0x160`
+and `+0x164`; and the immediates `0x01`, `0x18`, `0x0800`, `0x2000` and
+`0x400`.
+
+INFERRED, since every clause below is a branch condition, the per-entity rule
+is: skip an entity whose `+0xf0` is zero; skip one whose `+0xf4` has `0x01`
+set; with `0x0800` set send it only to the client in `+0xf8`, and with `0x2000`
+set send it to every client except that one; never send a client its own
+entity, which is the entity whose number equals `ps.clientNum`; send
+unconditionally if `+0xf4` has either bit of `0x18`; otherwise require the
+entity's area to connect to the client's and at least one of its `+0x118`
+clusters to be set in the client's PVS row, with a scan up to `+0x15c` when the
+cluster list did not settle it. The list stops at `0x400` entries.
+
+#### What links an entity, out of the game module
+
+`game.mp.i386.so` keeps its symbols, so the callers are countable rather than
+guessable. VERIFIED: `trap_LinkEntity` (`0x63a40`, engine syscall `0x32`) has 65
+call sites in 51 named functions. The static ones, the ones a map has before
+anybody plays it, are `SP_script_model`, `SP_script_brushmodel`,
+`SP_script_origin`, `SP_func_rotating`, `SP_func_leaky`, `SP_misc_spawner`,
+`use_corona`, the five `SP_trigger_*`, `InitMover`, `InitMoverRotate`,
+`G_SpawnItem` with `FinishSpawningItem`, and `G_SpawnTurret`. The rest link at
+runtime: items being touched or respawned, movers reaching a point, missiles,
+temp entities, and clients through `G_RunClient` and `ClientThink_real`.
+
+VERIFIED, from the same module: every `SP_trigger_*` and `InitTrigger` writes
+`1` to the entity's `+0xf4`, which is the bit the selection loop skips on;
+`InitMover`, `InitMoverRotate`, `InitScriptMover` and `G_SpawnTurret` write
+`0x80`; `ClientConnect` writes `0x200`; `fire_grenade` and `fire_rocket` write
+`0x88`.
+
+INFERRED, from those two together: a trigger is linked and never sent, and what
+a map puts on the wire before anyone plays is its script models, its brush
+models, its script origins, its movers, its items and its turrets. That matches
+what the traces caught -- `eType` 3 script models, `eType` 8 items, `eType` 11
+turrets, and nothing else on either map.
+
+Two consequences worth stating plainly. The client's own entity being skipped
+is the same fact stage 4's playerstate fixture records from the other side, and
+it is why an entity-list diff cannot see anything about a client's own entity.
+And an entity reaches nobody until something links it: `+0xf0` gates every
+other test.
+
 The consequence for a capture: an entity-list fixture is a fixture *of a
 position*. Two captures taken at different spawns on one map disagree for
 reasons that have nothing to do with which entities exist.
