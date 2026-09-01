@@ -74,6 +74,37 @@ const ANIM_GAPS: &[(&str, &str)] = &[
     ("turn_right", "same body yaw"),
 ];
 
+/// `pm_flags` bits retail sets that the mover has no source for, each with the
+/// pose that shows it. Excepted bit by bit and pose by pose: every other bit
+/// of `pm_flags` is still compared at these poses, and the whole word
+/// everywhere else.
+const PM_FLAG_GAPS: &[(&str, i32, &str)] = &[
+    (
+        "run_back",
+        0x40,
+        "retail sets this while backpedalling -- both captures carry it at this \
+         pose and at no other -- and pmove has nothing that writes it. The \
+         mover's gap, not the animscript's",
+    ),
+    (
+        "jump_takeoff",
+        0x8,
+        "the held-jump latch on the first airborne frame. Retail's PM_Jump \
+         (@0x2ec34) sets it and our port reaches that code from a ladder only, \
+         so no ground jump of ours carries it; retail's own mp_carentan \
+         capture reads 0 here where mp_pavlov reads the bit, so what clears it \
+         is unrecorded and the exception stays pinned to this bit and pose",
+    ),
+];
+
+/// The bits of `name` not compared at `label`, from [`PM_FLAG_GAPS`].
+fn gap_mask(label: &str, name: &str) -> i32 {
+    PM_FLAG_GAPS
+        .iter()
+        .filter(|(pose, ..)| *pose == label && name == "pm_flags")
+        .fold(0, |mask, (_, bit, _)| mask | bit)
+}
+
 /// `eFlags` bit for prone, so a pose can be told to have taken.
 const EF_PRONE: i32 = 0x40;
 
@@ -93,6 +124,21 @@ fn prone_disagrees(pose: &Pose, ours: &PlayerState) -> bool {
     let retail = pose.fields.get("eFlags").is_some_and(|f| f & EF_PRONE != 0);
     let mine = ours.field_i32(&PROTOCOL_V1, "eFlags") & EF_PRONE != 0;
     retail != mine
+}
+
+/// A pose one side took off the ground and the other stood through. Retail's
+/// mp_pavlov probe backed off a ledge at `run_back` and was still falling at
+/// its sample; ours, spawned elsewhere, was not. Same class as
+/// `prone_disagrees`: the spawn is weighted-random, so what the player is
+/// standing on is not the same run to run, and a pose the two disagree about
+/// is not comparable.
+fn ground_disagrees(pose: &Pose, ours: &PlayerState) -> bool {
+    let grounded = |v: i32| v == ENTITYNUM_WORLD as i32;
+    let retail = *pose
+        .fields
+        .get("groundEntityNum")
+        .expect("groundEntityNum is not in the capture");
+    grounded(retail) != grounded(ours.field_i32(&PROTOCOL_V1, "groundEntityNum"))
 }
 
 /// The horizontal speed a pose settled at, from the two wire words both sides
@@ -290,7 +336,7 @@ fn check(map: &str, gametype: &str) {
     let mut diffs = Vec::new();
     let mut skipped = Vec::new();
     for (pose, ps) in poses.iter().zip(&mine) {
-        if prone_disagrees(pose, ps) {
+        if prone_disagrees(pose, ps) || ground_disagrees(pose, ps) {
             skipped.push(pose.label.as_str());
             continue;
         }
@@ -300,7 +346,8 @@ fn check(map: &str, gametype: &str) {
                 .get(*name)
                 .unwrap_or_else(|| panic!("{name} is not in the capture"));
             let ours = ps.field_i32(p, name);
-            if retail != ours {
+            let compared = !gap_mask(&pose.label, name);
+            if retail & compared != ours & compared {
                 diffs.push(format!(
                     "{}: {name} retail {retail} ({}), ours {ours} ({})",
                     pose.label,
@@ -356,6 +403,7 @@ fn check_anims(map: &str, gametype: &str) {
     for (pose, ps) in poses.iter().zip(&mine) {
         if prone_disagrees(pose, ps)
             || movement_disagrees(pose, ps)
+            || ground_disagrees(pose, ps)
             || ANIM_GAPS.iter().any(|(g, _)| *g == pose.label)
         {
             skipped.push(pose.label.as_str());
