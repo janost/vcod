@@ -55,6 +55,7 @@ pub struct Save {
 pub fn probe(
     addr: &str,
     save: Save,
+    tag: Option<String>,
     pvs: bool,
     secs: u64,
     fs: Option<&vcod_common::pk3::Pk3Fs>,
@@ -306,7 +307,12 @@ pub fn probe(
                         if pvs_probe.step(now, s) {
                             pvs_probe.report();
                             if save_entities {
-                                write_entities_fixture(&pvs_probe, client.configstrings(), &join)?;
+                                write_entities_fixture(
+                                    &pvs_probe,
+                                    client.configstrings(),
+                                    &join,
+                                    tag.as_deref(),
+                                )?;
                             }
                             break;
                         }
@@ -1260,6 +1266,7 @@ fn write_entities_fixture(
     probe: &PvsProbe,
     configstrings: &[String],
     join: &JoinProbe,
+    tag: Option<&str>,
 ) -> anyhow::Result<()> {
     let p = &net::protocol::PROTOCOL_V1;
     let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
@@ -1302,7 +1309,8 @@ sample of a set\n"
     );
     head.push_str("# from Protocol::entity_fields; a field a block does not list is zero.\n");
 
-    let path = format!("{ENTITIES_FIXTURE_DIR}/{map}-{gametype}.txt");
+    let suffix = tag.map(|t| format!("-{t}")).unwrap_or_default();
+    let path = format!("{ENTITIES_FIXTURE_DIR}/{map}-{gametype}{suffix}.txt");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let mut samples = parse_fixture_samples(&existing);
     let taken = samples.len();

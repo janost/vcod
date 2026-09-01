@@ -848,6 +848,37 @@ impl Server {
             .map_or_else(BTreeMap::new, |rt| rt.packet_entities(proto))
     }
 
+    /// Puts a client where the caller says, the way the `spawn` builtin does.
+    /// Test-facing: a gate about what two clients see of each other needs them
+    /// somewhere known, and both spawn weighted-random.
+    pub fn place_client(&mut self, slot: usize, origin: [f32; 3], yaw_deg: f32) {
+        let Some(c) = self.clients.get_mut(slot).and_then(Option::as_mut) else {
+            return;
+        };
+        if let Some(sim) = c.sim.as_mut() {
+            sim.become_player(origin, yaw_deg, [0; 3]);
+        }
+    }
+
+    /// Every entity the scripts see as `classname` "player", with the origin
+    /// the script side reads, for the gate that pins both. Test-facing: the
+    /// server itself never asks.
+    pub fn script_players(&mut self) -> Vec<(usize, [f32; 3])> {
+        let Some(rt) = self.script.as_mut() else {
+            return Vec::new();
+        };
+        let live: Vec<usize> = (0..self.clients.len())
+            .filter(|slot| self.clients[*slot].is_some())
+            .collect();
+        let mut out = Vec::new();
+        for slot in live {
+            if rt.client_field(slot, "classname").as_deref() == Some("player") {
+                out.push((slot, rt.client_origin(slot)));
+            }
+        }
+        out
+    }
+
     fn write_server_command(&mut self, slot: usize, cmd: &str) {
         let Some(c) = self.clients[slot].as_mut() else {
             return;
@@ -1060,6 +1091,9 @@ impl Server {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
                     sim.weapons = rt.client_weapons(slot);
                     sim.viewmodel_index = rt.client_viewmodel(slot);
+                    // And back the other way: the sim owns where a player is,
+                    // so the script's copy is written from it every frame.
+                    rt.set_client_origin(slot, sim.origin());
                 }
             }
             // `self spawn(origin, angles)` moves the sim, which no builtin
@@ -1131,6 +1165,19 @@ impl Server {
         let collision = self.world.as_ref().map(|w| &w.collision);
         let collision_vis = self.world.as_ref().map(|w| &w.vis);
 
+        // One entity per client with a sim, so a client can be told what the
+        // others are doing. The receiver's own is dropped below: retail sends
+        // a client no entity for itself.
+        let client_entities: BTreeMap<u32, msg::EntityState> = self
+            .clients
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                let sim = c.as_ref()?.sim.as_ref()?;
+                Some((i as u32, sim.to_entity(self.proto, i, self.sv_time_ms)))
+            })
+            .collect();
+
         for slot in 0..self.clients.len() {
             let Some(c) = self.clients[slot].as_mut() else {
                 continue;
@@ -1176,11 +1223,18 @@ impl Server {
             // Retail sends a client only what its own position can see, so
             // the list is per client rather than one list cloned into every
             // frame (docs/protocol-1.1.md, "Which entities a client is sent").
+            let mut sendable = entities.clone();
+            sendable.extend(
+                client_entities
+                    .iter()
+                    .filter(|(n, _)| **n != slot as u32)
+                    .map(|(n, e)| (*n, e.clone())),
+            );
             let visible = match collision_vis {
                 Some(vis) => {
-                    crate::world::visible_entities(vis, sim.eye_origin(), &entities, self.proto)
+                    crate::world::visible_entities(vis, sim.eye_origin(), &sendable, self.proto)
                 }
-                None => entities.clone(),
+                None => sendable,
             };
 
             let frame = snapshot::Snapshot {

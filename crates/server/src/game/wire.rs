@@ -18,6 +18,8 @@ use vcod_gsc::{Cx, Host, Value};
 const ET_ITEM: i32 = 3;
 /// `ET_SCRIPTMOVER`: a script model, `index` a model configstring index.
 const ET_SCRIPTMOVER: i32 = 8;
+/// `ET_PLAYER`: another client.
+const ET_PLAYER: i32 = 1;
 /// A mounted MG. Not in CoDExtended's `entityType_t`, read off the traces:
 /// carentan's and pavlov's `misc_mg42`s arrive as 11 with the `mg42_bipod`
 /// model index.
@@ -39,6 +41,20 @@ const TURRET_APOS_TRTYPE: i32 = 3;
 pub fn link_box(etype: i32) -> ([f32; 3], [f32; 3]) {
     match etype {
         ET_TURRET => ([-32.0, -32.0, 0.0], [32.0, 32.0, 56.0]),
+        // A player links with its own movement box, the one pmove collides
+        // with (`vcod_common::pmove`).
+        ET_PLAYER => (
+            [
+                -vcod_common::pmove::HALF_WIDTH,
+                -vcod_common::pmove::HALF_WIDTH,
+                0.0,
+            ],
+            [
+                vcod_common::pmove::HALF_WIDTH,
+                vcod_common::pmove::HALF_WIDTH,
+                vcod_common::pmove::HEIGHT_STAND,
+            ],
+        ),
         _ => ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]),
     }
 }

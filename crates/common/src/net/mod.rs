@@ -178,7 +178,18 @@ impl NetClient<UdpTransport> {
 
 impl<T: Transport> NetClient<T> {
     pub fn start(transport: T, now: Instant) -> Self {
-        let qport: u16 = 0x2000 | (std::process::id() as u16 & 0x0fff);
+        // One client per process, so the process id is a fine qport. A test
+        // harness running two on one process is not, and says so with
+        // `start_with_qport`: a server keys a peer by ip and qport, and two
+        // clients sharing one look to it like a single client reconnecting.
+        Self::start_with_qport(
+            transport,
+            now,
+            0x2000 | (std::process::id() as u16 & 0x0fff),
+        )
+    }
+
+    pub fn start_with_qport(transport: T, now: Instant, qport: u16) -> Self {
         let mut c = NetClient {
             transport,
             huff: Huffman::new(),

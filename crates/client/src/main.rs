@@ -98,6 +98,11 @@ struct Args {
     /// positions in one run, not reproducible places.
     #[arg(long)]
     probe_pvs: bool,
+    /// Suffix for the --save-entities fixture name, so a capture taken under
+    /// different conditions lands beside the plain one rather than on top of
+    /// it: --capture-tag players writes <map>-<gametype>-players.txt.
+    #[arg(long)]
+    capture_tag: Option<String>,
     /// Seconds --net-probe stays connected; an SD round boundary needs a few minutes
     #[arg(long, default_value_t = 65)]
     probe_secs: u64,
@@ -426,6 +431,7 @@ fn main() -> Result<()> {
                 motion: args.save_motion,
                 entities: args.save_entities,
             },
+            args.capture_tag.clone(),
             args.probe_pvs,
             args.probe_secs,
             fs.as_ref(),

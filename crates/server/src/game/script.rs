@@ -312,6 +312,38 @@ impl ScriptRuntime {
     /// The client's entity, once `Connect` has been drained. The object
     /// table is the single owner of that fact: an entity at the slot's own
     /// number with a `client` store is one `spawn_client` made.
+    /// Writes a client's simulated origin onto its script entity. The sim
+    /// owns a player's position and the script reads it: `spawn` used to be
+    /// the only writer, so `positionWouldTelefrag` tested where each client
+    /// last spawned rather than where it now stands.
+    pub fn set_client_origin(&mut self, slot: usize, origin: [f32; 3]) {
+        use vcod_gsc::Host;
+        let Some(ent) = self.client_entity(slot) else {
+            return;
+        };
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let field = cx.intern_folded("origin");
+            let _ = host.set_field(cx, ent, field, Value::Vector(origin));
+        });
+    }
+
+    /// A client entity's `.origin` as the scripts read it.
+    pub fn client_origin(&mut self, slot: usize) -> [f32; 3] {
+        use vcod_gsc::Host;
+        let Some(ent) = self.client_entity(slot) else {
+            return [0.0; 3];
+        };
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let field = cx.intern_folded("origin");
+            match host.get_field(cx, ent, field) {
+                Value::Vector(v) => v,
+                _ => [0.0; 3],
+            }
+        })
+    }
+
     pub fn client_entity(&self, slot: usize) -> Option<EntId> {
         let id = EntId(u32::try_from(slot).ok()?);
         self.host
