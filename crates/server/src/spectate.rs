@@ -655,6 +655,43 @@ mod tests {
         }
     }
 
+    /// Retail selects nothing while off the ground (@0x323a2), so the takeoff
+    /// anim stays until the landing rather than falling back to the standing
+    /// idle when the jump event's 5 ms duration runs out.
+    #[test]
+    fn a_jump_owns_the_legs_until_the_landing() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let inputs = AnimInputs {
+            anims: &anims,
+            weapon: "m1carbine_mp",
+            weapon_class: "rifle",
+        };
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.on_ground = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1000);
+        assert_eq!(anims.name(sim.anim.legs()), Some("pb_stand_alert"));
+
+        sim.ps.on_ground = false;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050);
+        assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_takeoff"));
+        // Well past the takeoff clause's `duration 5`.
+        for t in [1100, 1150, 1200, 1250] {
+            sim.update_anims(&inputs, &NULL_USERCMD, t);
+            assert_eq!(
+                anims.name(sim.anim.legs()),
+                Some("pb_standjump_takeoff"),
+                "the flight kept selecting at {t}"
+            );
+        }
+        sim.ps.on_ground = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1300);
+        assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_land"));
+    }
+
     /// Retail updates the strafe condition only from a cmd that asks for
     /// movement: a cmd asking for neither axis leaves it alone, so a player
     /// coasting out of a strafe keeps strafing (@0x32504).
