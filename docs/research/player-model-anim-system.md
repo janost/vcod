@@ -268,7 +268,7 @@ block carries the comment "Always ADS when walking". INFERRED: `walk`, `walkbk`,
 `walkcr` and `walkcrbk` are the ADS locomotion set and are unreachable from a
 usercmd alone, so vcod parses them, holds `ads` false, and never enters them.
 
-### The turn movetypes, and a body yaw that lags the view
+### The turn movetypes, and what selects them
 
 VERIFIED: `turn_left` and `turn_right` turn the view 60 degrees with no movement
 input and retail sent 122, the standing idle, on both maps. VERIFIED: the
@@ -279,20 +279,37 @@ top-level `turning` group, commented "temp turning animations", and they are the
 only `pl_*` names in the tree; they resolve to indices 4 and 3, neither of which
 appears in either capture.
 
-INFERRED: the turn movetypes are entered from a body yaw that lags the view
-rather than from the view yaw itself, so a 60-degree snap between two settled
-samples never enters them; the `pl_*` prefix (legs only) and the placement in
-`turning` rather than under `main` fit a legs-only overlay that turns the body
-towards the view while the torso already faces it. VERIFIED: a player entity
-carries an `angles2` at entityState offsets 104/108/112 that the protocol doc
-leaves unidentified (`docs/protocol-1.1.md`, "What a player entity looks like").
-INFERRED: `angles2[1]` is a candidate for that body yaw. What would settle it is
-a capture that samples every frame through a
-sustained turn rather than at settled poses, reading `angles2[1]` against
-`viewangles[1]` and `legsAnim` together. If `angles2[1]` trails the view during
-the turn and `legsAnim` reads 3 or 4 while it trails, the hypothesis holds; if
-`legsAnim` stays 122 through the whole turn, the turn blocks are dead in
-multiplayer and the clip names say why.
+VERIFIED, by cross-reference: `angles2[1]` is `ps.movementDir`, not the body
+yaw this section used to guess at (`docs/protocol-1.1.md`, "What a player
+entity looks like", carries the addresses and the held-input measurements).
+That closes what the field is; it does not close what enters `turnright` or
+`turnleft`.
+
+INFERRED: `movementDir` cannot be what selects those blocks. `set_movement_dir`
+(`crates/common/src/pmove.rs`) zeroes it whenever neither move key is held, and
+`turn_left`/`turn_right` hold no movement input, so `movementDir` reads 0
+through the whole turn regardless of whether the legs should follow.
+
+The open question is narrower than it was: not what the field is, but what, if
+anything, ever drives a player into `turnright`/`turnleft`. INFERRED, off the
+retail control flow ported into `walk_move`
+(`crates/common/src/pmove.rs`, from `0x2f6db`): `PM_WalkMove` skips the
+position step when velocity is zero but still calls `PM_SetMovementDir`
+afterward, and prone's branch of that function reads `proneDirection` against
+the view yaw rather than displacement, which is why a stationary prone
+player's legs keep turning with its body. INFERRED: that mechanism is specific
+to prone; nothing in `PM_SetMovementDir` has an equivalent stand/crouch branch,
+so if `turnright`/`turnleft` are reachable at all, whatever selects them is
+neither `movementDir` nor this skip-the-move path.
+
+What would settle it is a capture that samples every frame through a sustained
+stationary turn rather than only settled poses, reading `legsAnim` on its own.
+If it ever reads 3 or 4, something drives the turn blocks and is worth chasing;
+if it reads 122 for the whole turn, the blocks are dead in multiplayer.
+INFERRED, and worth stating as the live possibility rather than a settled one:
+the `turning` group's own "temp" comment, and index 3 and 4 appearing in
+neither the held-input captures nor the two-probe entity list, are both
+consistent with that.
 
 ### The restart toggle
 
