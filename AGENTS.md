@@ -171,9 +171,15 @@ engineering setup works.
   spectator flight and `--test-entities` for scripted packet entities (no
   restarts yet). A snapshot's entity list is the map's own: placed weapons,
   script models and mounted MGs, culled per client against the BSP's PVS the
-  way retail culls, so what a client is sent depends on where it stands. What
-  a client still gets nothing of is other clients — no player entity is built
-  yet — and movers, missiles and corpses, which no code spawns.
+  way retail culls, so what a client is sent depends on where it stands. Other
+  clients are in it too, each animated by the animscript machine
+  (`crates/common/src/animscript.rs`, and
+  `docs/research/player-model-anim-system.md` for what the retail captures
+  measured): stance, direction, strafing, the jump and the landing all pick an
+  index out of `mp/playeranim.script`. What the machine does not cover yet is
+  the combat events (fire, reload, melee, pain, death), the two turn movetypes
+  and the mounted-MG anims. What a client still gets nothing of is movers,
+  missiles and corpses, which no code spawns.
 - `tools/run_probe.sh <probe> [map]` drives the same retail binary as the
   gsc oracle: it drops one `crates/gsc/tests/fixtures/semantics/probe_*.gsc`
   in as a gametype script, boots the server, and prints the `PROBE` lines
