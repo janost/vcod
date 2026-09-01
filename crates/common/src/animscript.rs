@@ -286,6 +286,148 @@ fn apply_anim_line(line: &str, clause: &mut Clause) {
     }
 }
 
+/// The movetypes the machine derives, each named exactly as the script's
+/// block keys spell it. `turnright` and `turnleft` are in the file and not
+/// here: entering them needs a model of the body yaw lagging the view, which
+/// this stage does not build.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Movetype {
+    #[default]
+    Idle,
+    IdleCr,
+    IdleProne,
+    Walk,
+    WalkBk,
+    WalkCr,
+    WalkCrBk,
+    WalkProne,
+    WalkProneBk,
+    Run,
+    RunBk,
+    RunCr,
+    RunCrBk,
+    ClimbUp,
+    ClimbDown,
+}
+
+impl Movetype {
+    pub fn name(self) -> &'static str {
+        match self {
+            Movetype::Idle => "idle",
+            Movetype::IdleCr => "idlecr",
+            Movetype::IdleProne => "idleprone",
+            Movetype::Walk => "walk",
+            Movetype::WalkBk => "walkbk",
+            Movetype::WalkCr => "walkcr",
+            Movetype::WalkCrBk => "walkcrbk",
+            Movetype::WalkProne => "walkprone",
+            Movetype::WalkProneBk => "walkpronebk",
+            Movetype::Run => "run",
+            Movetype::RunBk => "runbk",
+            Movetype::RunCr => "runcr",
+            Movetype::RunCrBk => "runcrbk",
+            Movetype::ClimbUp => "climbup",
+            Movetype::ClimbDown => "climbdown",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Side {
+    Left,
+    Right,
+}
+
+impl Side {
+    fn name(self) -> &'static str {
+        match self {
+            Side::Left => "left",
+            Side::Right => "right",
+        }
+    }
+}
+
+/// What the player is doing, in the script's own vocabulary. `weapon` and
+/// `weapon_class` are lowercased; the file's names are.
+#[derive(Clone, Debug, Default)]
+pub struct Conditions {
+    pub movetype: Movetype,
+    pub weapon: String,
+    pub weapon_class: String,
+    /// `weapon_position ads`.
+    pub ads: bool,
+    pub strafing: Option<Side>,
+    /// `mounted mg42`. Nothing mounts a turret yet, so this is always `None`.
+    pub mounted: Option<String>,
+    /// Stage 6 raises this.
+    pub firing: bool,
+}
+
+impl Conditions {
+    fn holds(&self, c: &Condition) -> bool {
+        let any = |v: &Vec<String>, x: &str| v.iter().any(|s| s == x);
+        match c.kind {
+            // `weapons none` is how the file spells an unarmed player, which
+            // is a weapon name no weapon has.
+            CondKind::Weapons => any(&c.values, &self.weapon),
+            CondKind::WeaponClass => any(&c.values, &self.weapon_class),
+            CondKind::WeaponPosition => self.ads && any(&c.values, "ads"),
+            CondKind::Strafing => self.strafing.is_some_and(|s| any(&c.values, s.name())),
+            CondKind::Movetype => any(&c.values, self.movetype.name()),
+            CondKind::Mounted => self.mounted.as_deref().is_some_and(|m| any(&c.values, m)),
+            CondKind::Firing => self.firing,
+        }
+    }
+}
+
+/// What a clause selected. Either half may be unset: `legs pb_standjump_land`
+/// leaves the torso on whatever the continuous state chose.
+#[derive(Clone, Debug, Default)]
+pub struct Selection {
+    pub legs: Option<AnimRef>,
+    pub torso: Option<AnimRef>,
+}
+
+impl AnimScript {
+    /// The clause a state's movetype block selects. First match wins, which
+    /// is the file's own stated rule. Nothing selected is the honest answer
+    /// for a state or movetype the file does not cover.
+    pub fn select(&self, state: &str, c: &Conditions) -> Selection {
+        let Some(blocks) = self.state(state) else {
+            return Selection::default();
+        };
+        let want = c.movetype.name();
+        let Some(block) = blocks.iter().find(|b| b.name == want) else {
+            return Selection::default();
+        };
+        pick(block, c)
+    }
+
+    /// The same, for one of the `EVENTS` blocks.
+    pub fn select_event(&self, event: &str, c: &Conditions) -> Selection {
+        let Some(block) = self.event(event) else {
+            return Selection::default();
+        };
+        pick(block, c)
+    }
+}
+
+/// A clause may list several anim lines per channel (retail's death and
+/// melee blocks randomise among them, `commands[rand() % numCommands]` in
+/// bg_animation.c); every clause this stage reaches lists exactly one, so
+/// taking the first is deterministic without being wrong yet.
+fn pick(block: &Block, c: &Conditions) -> Selection {
+    for clause in &block.clauses {
+        if clause.conditions.iter().all(|cond| c.holds(cond)) {
+            return Selection {
+                legs: clause.legs.first().cloned(),
+                torso: clause.torso.first().cloned(),
+            };
+        }
+    }
+    Selection::default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,5 +604,119 @@ land
     #[test]
     fn a_block_that_never_closes_is_an_error() {
         assert!(AnimScript::parse("ANIMATIONS\nSTATE COMBAT\n{\n idle\n {\n").is_err());
+    }
+
+    fn rifleman(movetype: Movetype) -> Conditions {
+        Conditions {
+            movetype,
+            weapon: "m1carbine_mp".into(),
+            weapon_class: "rifle".into(),
+            ..Conditions::default()
+        }
+    }
+
+    #[test]
+    fn selection_takes_the_first_matching_clause() {
+        let s = AnimScript::parse(SAMPLE).unwrap();
+        let sel = s.select("combat", &rifleman(Movetype::Idle));
+        assert_eq!(
+            sel.legs.map(|a| a.name),
+            Some("pb_stand_alert".to_string()),
+            "a rifleman falls through to the default clause"
+        );
+
+        let mut ads_pistol = rifleman(Movetype::Idle);
+        ads_pistol.weapon_class = "pistol".into();
+        ads_pistol.ads = true;
+        assert_eq!(
+            s.select("combat", &ads_pistol).legs.map(|a| a.name),
+            Some("pb_stand_ads_pistol".to_string())
+        );
+
+        // The same pistol, hip-fired: the ads clause no longer holds, so the
+        // default does.
+        let mut hip_pistol = ads_pistol.clone();
+        hip_pistol.ads = false;
+        assert_eq!(
+            s.select("combat", &hip_pistol).legs.map(|a| a.name),
+            Some("pb_stand_alert".to_string())
+        );
+    }
+
+    #[test]
+    fn strafing_picks_the_side_clause() {
+        let s = AnimScript::parse(SAMPLE).unwrap();
+        let mut c = rifleman(Movetype::Run);
+        assert_eq!(
+            s.select("combat", &c).legs.map(|a| a.name),
+            Some("pb_combatrun_forward_loop".to_string())
+        );
+        c.strafing = Some(Side::Left);
+        assert_eq!(
+            s.select("combat", &c).legs.map(|a| a.name),
+            Some("pb_combatrun_left_loop".to_string())
+        );
+    }
+
+    #[test]
+    fn an_event_selects_from_its_own_block() {
+        let s = AnimScript::parse(SAMPLE).unwrap();
+        let sel = s.select_event("land", &rifleman(Movetype::Run));
+        let legs = sel.legs.expect("land sets legs");
+        assert_eq!(legs.name, "pb_runjump_land");
+        assert_eq!(legs.duration_ms, Some(100));
+        assert!(sel.torso.is_none());
+    }
+
+    #[test]
+    fn a_block_or_state_that_does_not_exist_selects_nothing() {
+        let s = AnimScript::parse(SAMPLE).unwrap();
+        assert!(s
+            .select("relaxed", &rifleman(Movetype::Idle))
+            .legs
+            .is_none());
+        assert!(s
+            .select("combat", &rifleman(Movetype::ClimbUp))
+            .legs
+            .is_none());
+        assert!(s
+            .select_event("fireweapon", &rifleman(Movetype::Idle))
+            .legs
+            .is_none());
+    }
+
+    /// The two values the retail capture pins, read out of the shipped file.
+    /// `mp_carentan-dm-motion.txt` has `legsAnim` 634 standing (index 122,
+    /// `pb_stand_alert`, toggle set) and 94 running
+    /// (`pb_combatrun_forward_loop`). Needs the paks.
+    #[test]
+    fn the_real_script_picks_what_retail_played() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let anims = crate::animtree::PlayerAnims::load(&fs).unwrap();
+        let idle = anims
+            .script
+            .select("combat", &rifleman(Movetype::Idle))
+            .legs
+            .expect("an idle anim");
+        assert_eq!(idle.name, "pb_stand_alert");
+        assert_eq!(anims.wire_of(&idle.name), Some(122));
+
+        let run = anims
+            .script
+            .select("combat", &rifleman(Movetype::Run))
+            .legs
+            .expect("a run anim");
+        assert_eq!(run.name, "pb_combatrun_forward_loop");
+        assert_eq!(anims.wire_of(&run.name), Some(94));
+
+        let crouch = anims
+            .script
+            .select("combat", &rifleman(Movetype::IdleCr))
+            .legs
+            .expect("a crouched idle anim");
+        assert_eq!(crouch.name, "pb_crouch_alert");
+        assert_eq!(anims.wire_of(&crouch.name), Some(111));
     }
 }
