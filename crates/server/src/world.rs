@@ -14,6 +14,13 @@ pub struct World {
     pub spawn: ([f32; 3], f32),
 }
 
+/// The unit the engine grows a linked entity's box by on each axis before
+/// taking its clusters. VERIFIED from `SV_LinkEntity` (cod_lnxded 0x8090bbe):
+/// after `absmin`/`absmax` are the origin plus `r.mins`/`r.maxs`, each low
+/// component has 1 subtracted and each high component 1 added. It is what
+/// gives a script model, whose own box is a point, any clusters at all.
+const LINK_EPSILON: f32 = 1.0;
+
 /// Which of `entities` a client standing at `eye` is sent. Retail's rule is
 /// the entity's clusters against the client's PVS row
 /// (`docs/protocol-1.1.md`, "Which entities a client is sent"), collected from
@@ -36,8 +43,9 @@ pub fn visible_entities(
         .filter(|(_, e)| {
             let o = e.origin(p);
             let (mins, maxs) = crate::game::wire::link_box(e.field_i32(p, "eType"));
-            let at = |b: [f32; 3]| [o[0] + b[0], o[1] + b[1], o[2] + b[2]];
-            let clusters = vis.clusters_in_box(at(mins), at(maxs));
+            let at =
+                |b: [f32; 3], pad: f32| [o[0] + b[0] + pad, o[1] + b[1] + pad, o[2] + b[2] + pad];
+            let clusters = vis.clusters_in_box(at(mins, -LINK_EPSILON), at(maxs, LINK_EPSILON));
             // An entity whose box touches no cluster at all is skipped, the
             // way the module's loop skips one with `numClusters == 0`.
             clusters.iter().any(|&c| vis.visible(from, c))

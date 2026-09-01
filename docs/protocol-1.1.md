@@ -166,6 +166,74 @@ defaults) and `--net-probe --probe-pvs`, joining through the stock menus.
   is INFERRED from those two names alone; nothing here rules out a cell/portal
   walk instead.
 
+#### The box an entity links with
+
+An entity's clusters come from the box it is linked with, never from its origin
+alone: a turret's or a prop's origin usually sits inside the geometry it stands
+on and reads as a solid leaf.
+
+`SV_LinkEntity` (cod_lnxded 0x8090ad3) holds two blocks that write the abs box.
+The first (0x8090b60-0x8090bb8) stores `origin[i] + r.mins[i]` into `absmin`
+(+0x11c) and `origin[i] + r.maxs[i]` into `absmax` (+0x128), a component at a
+time. VERIFIED. The second (0x8090bbe-0x8090c13) loads 1.0, stores each
+`absmin` component back a unit lower and each `absmax` component back a unit
+higher. VERIFIED. That the two compose, leaving a linked entity's box at
+`origin + r.mins - 1` to `origin + r.maxs + 1`, is INFERRED: it rests on the
+blocks' order and on nothing between them touching those fields. An entity
+whose own box is a point therefore still links with `origin +/- 1`.
+
+A third block (0x8090b0f-0x8090b5c) replaces the box with `RadiusFromBounds` of
+it, cubed about the origin. That it applies only to a rotated bmodel is
+INFERRED, from the `r.bmodel` test (+0xfc, 0x8090ac6) and the three
+`r.currentAngles` comparisons (+0x140) guarding it. None of the entity types
+below is a bmodel, and for a point box the two branches agree regardless.
+
+What the game module leaves in `r.mins`/`r.maxs`. Offsets from here to the end
+of this subsection are into `main/game.mp.i386.so`, the 1.1d dedicated server's
+game module, not into `cod_lnxded`:
+
+| entity | `r.mins` | `r.maxs` | written by | |
+|---|---|---|---|---|
+| `ET_ITEM` | (-1, -1, -1) | (1, 1, 1) | `G_SpawnItem` 0x4e6ed | VERIFIED |
+| `ET_TURRET` | (-32, -32, 0) | (32, 32, 56) | `G_SpawnTurret` 0x52f75 | VERIFIED |
+| `ET_SCRIPTMOVER` (`script_model`) | (0, 0, 0) | (0, 0, 0) | nothing does | INFERRED |
+
+That last row is the one to justify, and the model a script model draws has
+nothing to do with it.
+
+No instruction in `SP_script_model` (0x60ff4), `InitScriptMover` (0x60214) or
+the `setmodel` entity setter (0x5dabc) writes `r.mins` (+0x100) or `r.maxs`
+(+0x10c). VERIFIED. `G_SetModel` (0x67020) does not either: it resolves the
+model's `CS_MODELS` slot and writes the `modelindex` byte at +0x175, nothing
+more. VERIFIED. Its `+0x10c` is the `CS_MODELS` configstring base, which
+collides numerically with the `r.maxs` offset and means something else
+entirely. VERIFIED.
+
+The module has no trap that returns an xmodel's bounds: `trap_XModelGet` hands
+back a handle, and the only other xmodel entry points are `trap_XModelExists`,
+`trap_XModelNumBones`, `trap_XModelGetBoneNames` and `trap_XModelDebugBoxes`.
+VERIFIED. Scripts cannot resize a mover either: there is no `setsize` builtin,
+and `solid`/`notsolid` write only `r.contents`. VERIFIED. `G_FreeEntity`
+bzeroes the 0x314-byte slot before it is reused (0x66b97), so the fields read
+zero on a recycled entity as much as a fresh one. VERIFIED.
+
+A census of every store to +0x100 or +0x10c in the module finds them paired as
+vector writes in `ClientThink_real`, `ClientSpawn`, `LaunchItem`, `G_SpawnItem`,
+`G_RunFrame`, `G_SpawnTurret`, `Blocked_DoorRotate` and one static in the
+player-command block. VERIFIED. That none of those is reachable from a script
+mover is INFERRED, from the call graph out of `SP_script_model`. Two further
+stores, in `TeamplayInfoMessage` (0x6493b, 0x64acd), go through a base loaded
+from +0x158. VERIFIED. That +0x158 is the `client` pointer, making them
+`gclient_t` fields rather than an entity's box, is INFERRED.
+
+`script_brushmodel` shares `ET_SCRIPTMOVER` but is not this case:
+`SP_script_brushmodel` (0x60fb8) calls `trap_SetBrushModel` ahead of
+`InitScriptMover`. VERIFIED. That this is what gives it real bounds, leaving
+its box the brush's rather than a point, is INFERRED. Every `eType` 8 entity in
+the traces we hold carries a model configstring index (56 on carentan, 26 on
+pavlov), so all of them are `script_model`s. VERIFIED. Nothing we have captured
+pins the brushmodel case.
+
 #### What a map entity looks like
 
 VERIFIED from the traces, and self-consistent with the shipped item list: a

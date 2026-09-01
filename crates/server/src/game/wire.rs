@@ -33,14 +33,22 @@ const ITEM_CLIENTNUM: i32 = 254;
 /// A turret's `apos.trType` in both maps' traces.
 const TURRET_APOS_TRTYPE: i32 = 3;
 
-/// The box the engine links an entity by, which is what its clusters come
-/// from. VERIFIED from the module: `G_SpawnItem` (0x4e6ed) writes
-/// (-1, -1, -1) to (1, 1, 1), and `G_SpawnTurret` (0x52f75) writes
-/// (-32, -32, 0) to (32, 32, 56). A script model's comes from its xmodel
-/// through `G_SetModel`, which is not read yet, so it borrows the item's.
+/// The `r.mins`/`r.maxs` an entity's spawn function leaves on it. The clusters
+/// it links with come from this grown by the engine's link epsilon, which is
+/// the caller's business (`crate::world::visible_entities`).
+///
+/// VERIFIED from the module: `G_SpawnItem` (0x4e6ed) writes (-1, -1, -1) to
+/// (1, 1, 1), and `G_SpawnTurret` (0x52f75) writes (-32, -32, 0) to
+/// (32, 32, 56).
 pub fn link_box(etype: i32) -> ([f32; 3], [f32; 3]) {
     match etype {
         ET_TURRET => ([-32.0, -32.0, 0.0], [32.0, 32.0, 56.0]),
+        // A script model is spawned with a zero box and nothing on the
+        // `SP_script_model` path ever writes one, so its clusters come from
+        // the engine's link epsilon alone. A `script_brushmodel` shares this
+        // `eType` but takes real bounds from `trap_SetBrushModel`; no trace
+        // we hold carries one (docs/protocol-1.1.md).
+        ET_SCRIPTMOVER => ([0.0; 3], [0.0; 3]),
         // A player links with its own movement box, the one pmove collides
         // with (`vcod_common::pmove`).
         ET_PLAYER => (
