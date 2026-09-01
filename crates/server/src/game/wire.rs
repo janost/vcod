@@ -28,6 +28,8 @@ const ET_TURRET: i32 = 11;
 /// are transcribed with the capture as their evidence.
 const ITEM_EFLAGS: i32 = 16;
 const ITEM_CLIENTNUM: i32 = 254;
+/// A turret's `apos.trType` in both maps' traces.
+const TURRET_APOS_TRTYPE: i32 = 3;
 
 /// Builds one `EntityState` per linked object, keyed by entity number.
 pub fn packet_entities(
@@ -84,9 +86,16 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
             seti(&mut e, "eType", ET_SCRIPTMOVER);
             seti(&mut e, "index", model);
         }
-        Kind::Turret(model) => {
+        Kind::Turret(model, weapon) => {
             seti(&mut e, "eType", ET_TURRET);
             seti(&mut e, "index", model);
+            // The turret's own weapon, from its `weaponinfo` key: both gate
+            // maps place `mg42_bipod_stand_mp`, configstring 7's 16.
+            seti(&mut e, "weapon", weapon);
+            // Transcribed from the traces, not derived: every turret in both
+            // captures carries 3 here and nothing in the module has been read
+            // that says why.
+            seti(&mut e, "apos.trType", TURRET_APOS_TRTYPE);
         }
     }
     Some(e)
@@ -98,13 +107,16 @@ enum Kind {
     Item(i32),
     /// A script model, by its model configstring index.
     ScriptMover(i32),
-    /// A mounted MG, by its model configstring index.
-    Turret(i32),
+    /// A mounted MG: its model configstring index and its weapon index.
+    Turret(i32, i32),
 }
 
 fn kind_of(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Option<Kind> {
     if classname == "misc_mg42" || classname == "misc_turret" {
-        return Some(Kind::Turret(model_index(host, cx, id)?));
+        let weapon = field_string(host, cx, id, "weaponinfo")
+            .and_then(|w| crate::configstrings::weapon_index(&w))
+            .unwrap_or(0) as i32;
+        return Some(Kind::Turret(model_index(host, cx, id)?, weapon));
     }
     if classname.starts_with("mpweapon_") {
         let weapon = field_string(host, cx, id, "weaponinfo")
