@@ -34,7 +34,7 @@ enum Tok<'a> {
 }
 
 /// Keeps newlines so a line-oriented scan of the result still lines up.
-fn strip_comments(text: &str) -> String {
+pub(crate) fn strip_comments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find("/*") {
