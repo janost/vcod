@@ -860,6 +860,17 @@ impl Server {
         }
     }
 
+    /// Puts a client back to spectating, where every client starts and where
+    /// a dead one waits. Test-facing, like `place_client`.
+    pub fn spectate_client(&mut self, slot: usize, origin: [f32; 3]) {
+        let Some(c) = self.clients.get_mut(slot).and_then(Option::as_mut) else {
+            return;
+        };
+        if let Some(sim) = c.sim.as_mut() {
+            sim.become_spectator(origin, 0.0, [0; 3]);
+        }
+    }
+
     /// Every entity the scripts see as `classname` "player", with the origin
     /// the script side reads, for the gate that pins both. Test-facing: the
     /// server itself never asks.
@@ -1142,13 +1153,26 @@ impl Server {
         // One clientState entry per online client, rebuilt each frame; slot ==
         // index. `snapshot::write` deltas this against each client's own
         // base roster, or sends it full when that client has none.
+        // The body model rides here, not on the entity: without it another
+        // client is sent a player it can name but cannot draw
+        // (`docs/research/clientstate-wire-format.md`).
+        let models: Vec<i32> = match self.script.as_mut() {
+            Some(rt) => (0..self.clients.len())
+                .map(|slot| rt.client_model_index(slot))
+                .collect(),
+            None => vec![0; self.clients.len()],
+        };
         let roster: BTreeMap<u32, msg::ClientState> = self
             .clients
             .iter()
             .enumerate()
             .filter_map(|(i, c)| {
-                c.as_ref()
-                    .map(|c| (i as u32, msg::ClientState::named(self.proto, 0, 3, &c.name)))
+                let c = c.as_ref()?;
+                let mut cs = msg::ClientState::named(self.proto, 0, 3, &c.name);
+                if let Some(idx) = msg::ClientState::field_index(self.proto, "modelindex") {
+                    cs.fields[idx] = models[i];
+                }
+                Some((i as u32, cs))
             })
             .collect();
         // The map's own entities, plus whatever --test-entities adds: the
@@ -1174,7 +1198,14 @@ impl Server {
             .enumerate()
             .filter_map(|(i, c)| {
                 let sim = c.as_ref()?.sim.as_ref()?;
-                Some((i as u32, sim.to_entity(self.proto, i, self.sv_time_ms)))
+                // A spectator is not a thing in the world: retail never links
+                // one, so nobody is sent an entity for it. Without this a
+                // player's crosshair names a spectator flying overhead.
+                if sim.pm_type != crate::spectate::PmType::Spectator {
+                    Some((i as u32, sim.to_entity(self.proto, i, self.sv_time_ms)))
+                } else {
+                    None
+                }
             })
             .collect();
 

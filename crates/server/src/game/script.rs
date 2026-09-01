@@ -328,6 +328,26 @@ impl ScriptRuntime {
         });
     }
 
+    /// A client's body model as the roster's `modelindex`: the model number
+    /// `configstring 268 + modelindex` resolves
+    /// (`docs/research/clientstate-wire-format.md`). 0 when the client has no
+    /// model yet, which is what a client still on the menus has.
+    ///
+    /// The model itself comes from the stock character scripts --
+    /// `character/mp_american_airborne01.gsc` does
+    /// `self setModel("xmodel/playerbody_american_airborne")` -- through
+    /// `_teams::model()` on spawn.
+    pub fn client_model_index(&mut self, slot: usize) -> i32 {
+        let Some(name) = self.client_field(slot, "model") else {
+            return 0;
+        };
+        let (first, last) = crate::configstrings::CsRange::Model.bounds();
+        self.host.configstrings[first..=last]
+            .iter()
+            .position(|cs| *cs == name)
+            .map_or(0, |i| (i + 1) as i32)
+    }
+
     /// A client entity's `.origin` as the scripts read it.
     pub fn client_origin(&mut self, slot: usize) -> [f32; 3] {
         use vcod_gsc::Host;

@@ -324,3 +324,116 @@ fn a_moving_player() -> Option<EntityState> {
     }
     ca.snapshots().newest()?.entities.get(&(nb as u32)).cloned()
 }
+
+/// The body a client is drawn with rides the roster, not the entity: without
+/// it another client is sent a player it can name but cannot see, which is
+/// exactly what a retail client showed before this landed.
+#[test]
+fn a_joined_client_carries_a_body_model_in_the_roster() {
+    let Some((sa, nb)) = a_roster_view() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let p = &PROTOCOL_V1;
+    let cs = sa
+        .clients
+        .get(&nb)
+        .unwrap_or_else(|| panic!("no roster entry for client {nb}"));
+    let model = cs.field_i32(p, "modelindex");
+    assert!(
+        model > 0,
+        "client {nb} has no body model, so another client can name it and not draw it"
+    );
+}
+
+/// A spectator is not a thing in the world. Retail links no entity for one,
+/// and a player's crosshair naming a spectator flying overhead is what the
+/// missing check looked like.
+#[test]
+fn a_spectator_is_sent_to_nobody() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(&mut sv, &qa, &qb, &mut now, "allies", "m1carbine_mp");
+
+    let p = &PROTOCOL_V1;
+    let na = ca
+        .snapshots()
+        .newest()
+        .expect("A")
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let nb = cb
+        .snapshots()
+        .newest()
+        .expect("B")
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let spot = ca.snapshots().newest().expect("A").ps.origin(p);
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+    for _ in 0..20 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+    assert!(
+        ca.snapshots()
+            .newest()
+            .expect("A")
+            .entities
+            .contains_key(&(nb as u32)),
+        "the players cannot see each other, so this proves nothing about spectators"
+    );
+
+    // B goes back to spectating, where every client starts and where a dead
+    // one waits.
+    sv.spectate_client(nb, [spot[0] + 40.0, spot[1], spot[2] + 200.0]);
+    for _ in 0..20 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+    let sa = ca.snapshots().newest().expect("A has no snapshot");
+    assert!(
+        !sa.entities.contains_key(&(nb as u32)),
+        "client A is still sent an entity for spectator {nb}"
+    );
+}
+
+/// One client's snapshot and the other's slot, both joined and spawned.
+fn a_roster_view() -> Option<(vcod_common::net::snapshot::Snapshot, u32)> {
+    let fs = vcod_common::testing::game_fs()?;
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(&mut sv, &qa, &qb, &mut now, "allies", "m1carbine_mp");
+    for _ in 0..20 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+    let p = &PROTOCOL_V1;
+    let nb = cb.snapshots().newest()?.ps.field_i32(p, "clientNum") as u32;
+    Some((ca.snapshots().newest()?.clone(), nb))
+}
