@@ -156,51 +156,72 @@ clause reached in the table is written `both`. INFERRED: retail therefore does
 not write the torso half of the continuous selection, so vcod clears
 `Selection::torso` before applying it and leaves the torso to events.
 
-### Three derivation rules
+### How retail picks the movetype
 
-The 44 pose values above are the measurement. Each rule generalises over them,
-and each is a reading rather than something read out of the engine. The anim
-gate in `crates/server/tests/playerstate_motion_ab.rs` is what holds them.
+VERIFIED, read out of the unnamed static that follows `PM_ShouldMakeFootsteps`
+at `game.mp.i386.so` 0x322c8, with the movetype and condition enum orders taken
+from the reversed rodata name blocks at 0x6e260 and 0x6e424. This replaces two
+readings of the 44 poses that earlier rounds of this document carried and that
+the binary contradicts; the poses still confirm the result, and the anim gate in
+`crates/server/tests/playerstate_motion_ab.rs` holds it.
 
-**Rule 1, the velocity/input split.** INFERRED: whether the player moves comes
-from the horizontal velocity, and which way it moves comes from the usercmd,
-with `ANIM_IDLE_SPEED` (`crates/server/src/spectate.rs`) at 10 u/s. VERIFIED, the
-poses it rests on: carentan `run_forward` 8.0 u/s reads 122, carentan
-`strafe_left` 8.0 u/s and `strafe_right` 3.2 u/s read 122, pavlov `crouch_run`
-0 u/s reads 111, against carentan `crouch_run` 58.8 u/s reading 84 and pavlov
-`run_forward` 148 u/s reading 94. INFERRED: a player held by geometry animates
-its stance's idle however hard it pushes. VERIFIED: the capture bounds the
-threshold on both sides, 8.0 u/s blocked and idle below it, 13.0 u/s prone
-crawl and animating above it.
+**The idle threshold.** VERIFIED: the function compares `xyspeed` against the
+float literal at 0x70c1c, which is 10.0, and the usercmd is not read on that
+branch; under it the movetype is the stance's idle. VERIFIED: the capture agrees
+on both sides of the number -- carentan `run_forward` pushes `forward=127` into
+geometry at 8.0 u/s and reads 122, the standing idle, while both maps'
+`prone_crawl_150` crawls at 13.0 u/s and reads 50, `pb_prone_crawl`. VERIFIED:
+carentan `strafe_left` at 8.0 u/s and `strafe_right` at 3.2 u/s read 122 as
+well, and pavlov `crouch_run` at 0 u/s reads 111. `ANIM_IDLE_SPEED`
+(`crates/server/src/spectate.rs`) is that literal.
 
-VERIFIED: pavlov `run_forward` carries velocity `(0, -148)` at `viewangles[1]`
--31.94, 58 degrees off the facing, and pavlov `strafe_right` carries
-`(-143, 0)`. INFERRED: projecting either onto the facing picks the wrong clause
-(91 where retail sent 94, and 93 where retail sent 91), so the direction cannot
-come from the velocity; the usercmd explains both and all 44 poses. INFERRED
-corollary: `strafing` is a condition rather than a movetype and comes from
-`cmd.right`. VERIFIED: the file's legend at line 91 says strafing "will never be
-left or right while moving backwards".
+**The direction.** VERIFIED: above the threshold the movetype is the stance
+crossed with `pm_flags` 0x40, backwards, and `pm_flags` 0x80, walk, at
+0x326c4-0x327d1; the usercmd is not read there either. VERIFIED: 0x40 is
+latched from the cmd alone before the move, RTCW's `PmoveSingle` block
+(`private/reference/RTCW-MP/src/game/bg_pmove.c:3915`): `forwardmove < 0` sets
+it, `forwardmove > 0` or a zero `forwardmove` with a non-zero `rightmove`
+clears it, and a cmd asking for neither leaves it alone. VERIFIED: both captures
+carry 0x40 at `run_back` and at none of the other 42 poses. INFERRED: 0x80 is
+the walk bit and nothing in a CoD 1.1 usercmd can set it (see "Walk against
+run"), so the `walk*` blocks are unreachable and prone moves through
+`walkprone` only because the prone family has no run block.
 
-**Rule 2, coasting holds the anim.** INFERRED: with no `forward`/`right` input
-but speed still above the threshold, the continuous selection is skipped and the
-channel keeps what it had; below the threshold it goes to the stance's idle.
-INFERRED: this is Q3's `PM_Footsteps` shape (`if (!forwardmove && !rightmove) {
-if (xyspeed < 5) idle; return; }`). The rule is pinned by transitions rather
-than by a pose value: without it, releasing a strafe reads `cmd.right == 0` as
-forward and animates a forward run for the four frames the friction takes, so
-`strafe_right` -> `ads_stand` walks 91 -> 94 -> 122 instead of 91 -> 122.
+**The strafe condition.** VERIFIED: condition 8 is updated at 0x32504-0x325b5,
+which tests `cmd.forwardmove` first: every path with a non-zero `forwardmove`
+pushes NOT, diagonals included; `left` and `right` are pushed only when
+`forwardmove` is zero; and when both axes are zero the update is not called at
+all. INFERRED: the condition therefore keeps its previous value across a cmd
+that asks for nothing, which makes it state carried between frames rather than
+a reading of the current cmd, and `ClientSim` holds it that way. VERIFIED: the
+file's legend at line 91 says strafing "will never be left or right while
+moving backwards".
 
-**Rule 3, a jump owns the legs until the landing.** INFERRED: no continuous
-selection runs while off the ground, and the two ground-edge events are raised
-before the continuous selection so the landing event holds the channel the same
-frame. INFERRED: leaving the ground raises `jump`, or `jumpbk` while
-backpedalling, and touching it raises `land`. VERIFIED: retail's restart toggle
-flips exactly once between the `jump_takeoff` and `land` samples on both maps.
-INFERRED: anything that runs the continuous state in between inserts the
-standing idle and flips the toggle twice. VERIFIED: the `land` default clause
-carries `duration 100`, and the fixture's `land` pose is sampled on the first
-frame back on the ground (`sample=grounded`) for that reason.
+**Nothing is selected in the air.** VERIFIED: the in-air branch at
+0x323a2/0x323b3 returns without selecting unless the ladder flag is set, so a
+jump keeps the takeoff anim until the landing. VERIFIED: retail's restart toggle
+flips exactly once between the `jump_takeoff` and `land` samples on both maps,
+which is what one selection between the two looks like. INFERRED: the two
+ground-edge events have to be raised before the continuous selection, or the
+landing frame selects an idle first and flips the toggle twice. VERIFIED: the
+`land` default clause carries `duration 100`, and the fixture's `land` pose is
+sampled on the first frame back on the ground (`sample=grounded`) for that
+reason. INFERRED: leaving the ground raises `jump`, or `jumpbk` while the
+backwards latch is set, and touching it raises `land`.
+
+**What this overturned.** VERIFIED: pavlov `run_forward` carries velocity
+`(0, -148)` at `viewangles[1]` -31.94, 58 degrees off the facing, and pavlov
+`strafe_right` carries `(-143, 0)`; projecting either onto the facing selects
+the wrong clause, 91 where retail sent 94 and 93 where retail sent 91. INFERRED,
+and wrong: an earlier round read that as "the direction comes from the usercmd",
+which agrees with every pose in the capture and still differs from retail on a
+diagonal, where the latch rule leaves the strafe condition cleared and reading
+the cmd sets it. INFERRED, and wrong: the same round read a coasting player as
+keeping its anim, citing a `PM_Footsteps` shape that RTCW's own source
+(`bg_pmove.c:1607-1622`) does not have; retail re-selects every frame above the
+threshold, so a tap and release slides in the run loop rather than the idle, and
+a backwards crouched coast is `walkcrbk` rather than a standing back-run.
+Neither reading is in the code.
 
 ### Walk against run
 
@@ -249,16 +270,14 @@ VERIFIED: the toggle's absolute value is not a function of the pose. `stand_up`
 is index 122 in both captures and `legsAnim` reads 634 (toggle set) on
 mp_carentan against 122 (toggle clear) on mp_pavlov; `run_back` is index 93 in
 both and reads 93 against 605. INFERRED: only the change carries meaning, so a
-gate compares the index and the parity of the changes, never the bit's value.
+gate compares the index, and checks frame by frame that the bit flips exactly
+when the index does, never the bit's value.
 
 ### Open questions
 
 - VERIFIED: retail sends `torsoAnim` 720 (index 208, `pt_stand_pullout_pose`) at
   `jump_takeoff` on both maps. INFERRED: no clause the jump path reaches
   produces it, and nothing in vcod writes it. It stays unexplained.
-- VERIFIED: `pm_flags` bit 0x40 is set by retail at `run_back` on both maps and
-  at none of the other 42 poses. INFERRED: it tracks backpedalling and is this
-  animation system's `PMF_BACKWARDS_RUN`; vcod's pmove has no source for it.
 - VERIFIED: `pm_flags` bit 0x8 reads set at `jump_takeoff` on mp_pavlov and
   clear at the same pose on mp_carentan, while both samples are the first
   airborne frame and both carry a `velocity[2]` within ten units of the standing
