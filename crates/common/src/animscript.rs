@@ -9,9 +9,15 @@ use crate::animtree::strip_comments;
 use anyhow::{bail, Result};
 use std::collections::{HashMap, HashSet};
 
-/// Which condition a clause tests. `leaning` and `position` exist in the
-/// format and appear nowhere in the multiplayer script, so they are not here.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// Which condition a clause tests. `leaning`, `position`, `underwater` and
+/// `underhand` are in the format's legend and in no clause the shipped
+/// multiplayer script carries, so they have no variant; anything else the file
+/// names becomes `Unknown`, which never holds, so a clause the machine cannot
+/// evaluate never matches instead of matching unconditionally. The shipped
+/// script reaches that path nowhere -- its `enemy_weapon` and `impact_point`
+/// clauses are all commented out -- so `Unknown` is what a downloaded pak or a
+/// later revision lands in.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum CondKind {
     Weapons,
     WeaponClass,
@@ -20,6 +26,7 @@ pub enum CondKind {
     Movetype,
     Mounted,
     Firing,
+    Unknown(String),
 }
 
 impl CondKind {
@@ -34,6 +41,11 @@ impl CondKind {
             "firing" => CondKind::Firing,
             _ => return None,
         })
+    }
+
+    /// The kind, or `Unknown` carrying the spelling the file used.
+    fn of(word: &str) -> CondKind {
+        CondKind::parse(word).unwrap_or_else(|| CondKind::Unknown(word.to_string()))
     }
 }
 
@@ -238,10 +250,10 @@ fn parse_conditions(line: &str, defines: &Defines) -> Vec<Condition> {
         return Vec::new();
     }
     line.split(',')
-        .filter_map(|part| {
+        .map(|part| {
             let part = part.trim();
             let (head, rest) = part.split_once(char::is_whitespace).unwrap_or((part, ""));
-            let kind = CondKind::parse(&fold(head))?;
+            let kind = CondKind::of(&fold(head));
             let mut values = Vec::new();
             for v in split_and(rest) {
                 match defines.get(&v) {
@@ -249,7 +261,7 @@ fn parse_conditions(line: &str, defines: &Defines) -> Vec<Condition> {
                     None => values.push(v),
                 }
             }
-            Some(Condition { kind, values })
+            Condition { kind, values }
         })
         .collect()
 }
@@ -376,6 +388,9 @@ impl Conditions {
             CondKind::Movetype => any(&c.values, self.movetype.name()),
             CondKind::Mounted => self.mounted.as_deref().is_some_and(|m| any(&c.values, m)),
             CondKind::Firing => self.firing,
+            // A condition nothing evaluates cannot be satisfied. Dropping it
+            // instead would widen the clause to everything it does not gate.
+            CondKind::Unknown(_) => false,
         }
     }
 }
@@ -412,10 +427,10 @@ impl AnimScript {
     }
 }
 
-/// A clause may list several anim lines per channel (retail's death and
-/// melee blocks randomise among them, `commands[rand() % numCommands]` in
-/// bg_animation.c); every clause this stage reaches lists exactly one, so
-/// taking the first is deterministic without being wrong yet.
+/// A clause may list several anim lines per channel (retail's `DEATH`, `pain`
+/// and `meleeattack` blocks randomise among them, `commands[rand() %
+/// numCommands]` in bg_animation.c); every clause this stage reaches lists
+/// exactly one, so taking the first is deterministic without being wrong yet.
 fn pick(block: &Block, c: &Conditions) -> Selection {
     for clause in &block.clauses {
         if clause.conditions.iter().all(|cond| c.holds(cond)) {
@@ -912,5 +927,78 @@ land
             resolve,
         );
         assert_eq!(st.legs(), before);
+    }
+
+    /// A condition the machine has no kind for makes its clause unselectable.
+    /// Dropping the condition instead would make the clause match everything
+    /// it was written to gate: the shipped `DEATH` and `pain` blocks test
+    /// `enemy_weapon` and `impact_point`, and reading those as unconditional
+    /// would hand every death the first listed clause.
+    #[test]
+    fn a_clause_with_an_unknown_condition_never_matches() {
+        let script = r#"
+ANIMATIONS
+
+STATE COMBAT
+{
+	idle
+	{
+		enemy_weapon kar98k_mp
+		{
+			both pb_never
+		}
+		default
+		{
+			both pb_stand_alert
+		}
+	}
+}
+"#;
+        let s = AnimScript::parse(script).unwrap();
+        let idle = &s.state("combat").unwrap()[0];
+        assert_eq!(
+            idle.clauses[0].conditions[0].kind,
+            CondKind::Unknown("enemy_weapon".into()),
+            "the kind is kept, with the spelling the file used"
+        );
+        assert_eq!(
+            s.select("combat", &rifleman(Movetype::Idle))
+                .legs
+                .map(|a| a.name),
+            Some("pb_stand_alert".to_string()),
+            "the unknown clause is skipped, not taken"
+        );
+    }
+
+    /// The shipped script names no condition this parser has no kind for, so
+    /// nothing in it is silently unselectable. `enemy_weapon` and
+    /// `impact_point` are the two the legend lists and the `DEATH` and `pain`
+    /// blocks would use, and every clause carrying them is commented out
+    /// (script lines 1032-1094 and 1116-1167). A name appearing here later is
+    /// a clause some stage will never reach. Needs the paks.
+    #[test]
+    fn the_shipped_script_names_no_condition_we_cannot_evaluate() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let text = fs
+            .read("mp/playeranim.script")
+            .expect("mp/playeranim.script in the paks");
+        let s = AnimScript::parse(&String::from_utf8_lossy(&text)).unwrap();
+        let mut unknown: Vec<String> = s
+            .states
+            .values()
+            .flatten()
+            .chain(s.events.values())
+            .flat_map(|b| &b.clauses)
+            .flat_map(|c| &c.conditions)
+            .filter_map(|c| match &c.kind {
+                CondKind::Unknown(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        unknown.sort();
+        unknown.dedup();
+        assert!(unknown.is_empty(), "unmodelled conditions: {unknown:?}");
     }
 }
