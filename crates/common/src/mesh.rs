@@ -251,6 +251,7 @@ mod tests {
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            pvs: None,
         }
     }
 

@@ -661,6 +661,7 @@ pub fn synthetic_world(
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            pvs: None,
         },
         &[],
     )
@@ -765,6 +766,7 @@ mod tests {
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            pvs: None,
         }
     }
 
@@ -899,6 +901,7 @@ mod tests {
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            pvs: None,
         }
     }
 
@@ -1228,6 +1231,7 @@ mod tests {
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            pvs: None,
         }
     }
 
@@ -1338,6 +1342,7 @@ mod tests {
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            pvs: None,
         }
     }
 
@@ -1413,6 +1418,7 @@ mod tests {
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            pvs: None,
         }
     }
 
@@ -1606,6 +1612,7 @@ mod tests {
                 portals: vec![],
                 nodes: vec![],
                 leafs: vec![],
+                pvs: None,
             },
             &[],
         )

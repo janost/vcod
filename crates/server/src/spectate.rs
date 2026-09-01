@@ -195,6 +195,15 @@ impl ClientSim {
     /// `crates/server/tests/fixtures/playerstate/*.txt`, which the
     /// `playerstate_ab` gate diffs against. `commandTime` mirrors the last
     /// processed cmd's server time.
+    /// The point a snapshot is built from: the origin lifted by the current
+    /// view height. `SV_BuildClientSnapshot` (0x808f288) adds the playerstate's
+    /// view height to `origin[2]` before it looks the leaf up, so a client
+    /// standing on a floor is tested from its eyes and not from its feet.
+    pub fn eye_origin(&self) -> [f32; 3] {
+        let o = self.ps.origin;
+        [o[0], o[1], o[2] + self.ps.view_height()]
+    }
+
     pub fn to_wire(&self, p: &Protocol, client_num: i32, command_time: i32) -> msg::PlayerState {
         let player = self.pm_type == PmType::Normal;
         let mut w = msg::PlayerState::null(p);

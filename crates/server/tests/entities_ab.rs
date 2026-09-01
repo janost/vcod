@@ -247,10 +247,13 @@ fn ours(
 
     let q = Rc::new(RefCell::new(Queues::default()));
     let (cl, _join) = common::join(&mut sv, &q, &mut now, &trace.team, &trace.weapon);
-    cl.snapshots()
-        .newest()
-        .map(|s| s.entities.clone())
-        .expect("the server sent no snapshot at all")
+    assert!(
+        cl.snapshots().newest().is_some(),
+        "the server sent no snapshot at all"
+    );
+    // Not the snapshot's list: that one is already culled to where this client
+    // happens to stand.
+    sv.all_entities()
 }
 
 // ------------------------------------------------------------------- the diff

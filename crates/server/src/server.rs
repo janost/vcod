@@ -836,6 +836,18 @@ impl Server {
     /// The unconditional tail of [`Self::send_server_command`]. The drop
     /// notice goes out through here, so freeing the slot cannot recurse and
     /// the notice is never guarded away.
+    /// Every entity the map puts on the wire, before any client's cull. The
+    /// gates read it: `entities_ab` diffs it against the trace's union, and
+    /// `entity_vis_ab` culls it at each sample's origin. A snapshot's own list
+    /// is already culled, so reading one back would test the cull twice and
+    /// the object table not at all.
+    pub fn all_entities(&mut self) -> BTreeMap<u32, msg::EntityState> {
+        let proto = self.proto;
+        self.script
+            .as_mut()
+            .map_or_else(BTreeMap::new, |rt| rt.packet_entities(proto))
+    }
+
     fn write_server_command(&mut self, slot: usize, cmd: &str) {
         let Some(c) = self.clients[slot].as_mut() else {
             return;
@@ -1117,6 +1129,7 @@ impl Server {
             entities.extend(te.at(self.proto, self.sv_time_ms));
         }
         let collision = self.world.as_ref().map(|w| &w.collision);
+        let collision_vis = self.world.as_ref().map(|w| &w.vis);
 
         for slot in 0..self.clients.len() {
             let Some(c) = self.clients[slot].as_mut() else {
@@ -1160,13 +1173,23 @@ impl Server {
             let command_time = c.last_processed_st;
             let message_num = c.netchan.outgoing_sequence;
 
+            // Retail sends a client only what its own position can see, so
+            // the list is per client rather than one list cloned into every
+            // frame (docs/protocol-1.1.md, "Which entities a client is sent").
+            let visible = match collision_vis {
+                Some(vis) => {
+                    crate::world::visible_entities(vis, sim.eye_origin(), &entities, self.proto)
+                }
+                None => entities.clone(),
+            };
+
             let frame = snapshot::Snapshot {
                 server_time: self.sv_time_ms,
                 message_num,
                 delta_num: -1,
                 snap_flags: 0,
                 ps: sim.to_wire(self.proto, slot as i32, command_time),
-                entities: entities.clone(),
+                entities: visible,
                 clients: roster.clone(),
                 valid: true,
             };
@@ -2144,6 +2167,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2194,6 +2218,7 @@ mod tests {
         // A flat floor to fly over; without a world the sim freezes.
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2248,6 +2273,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 90.0),
         });
         let mut nc = active(&mut sv, now);
@@ -2293,6 +2319,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2363,6 +2390,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2422,6 +2450,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2494,6 +2523,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2562,6 +2592,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2641,6 +2672,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
@@ -2716,6 +2748,7 @@ mod tests {
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
             collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
             spawn: ([0.0, 0.0, 64.0], 0.0),
         });
         let mut nc = begun(&mut sv, now);
