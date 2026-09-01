@@ -187,6 +187,34 @@ them and 0 on the scriptmover and the turret, and `solid` 0 on all of them.
 load and 1023 (`ENTITYNUM_NONE`) from then on, which is why a trace has to be
 taken from a settled server.
 
+#### What a player entity looks like
+
+A client is sent no entity for itself, so a single client's capture never holds
+one; this comes from two probes on one retail server, the second capturing what
+it was told about the first (`--net-probe --save-entities --capture-tag
+players`, committed as
+`crates/server/tests/fixtures/entities/mp_carentan-dm-players.txt`).
+
+VERIFIED from that capture: `eType` 1, `index` 0, `clientNum` the slot,
+`eFlags` 16, `solid` 6684943, `weapon` the 1-based configstring 7 index, and
+`groundEntityNum` 1022 or 1023. The body model is not on the entity: it rides
+the `clientState` roster's `modelindex`.
+
+**A player travels as a trajectory, not a point.** `pos.trType` 3 with
+`pos.trTime`, `pos.trDuration` 50 and a `pos.trDelta`, so the receiving client
+carries the motion between snapshots instead of stepping to each one.
+`apos.trType` is 1 and `apos.trBase[1]` is the body yaw; a player entity
+carries no pitch.
+
+INFERRED: `solid` 6684943 decodes as `(maxs[2] + 32) << 16 | -mins[2] << 8 |
+half width`, which is 0x66 = 102 = 70 + 32, 0x01 and 0x0f = 15 -- the pmove box
+standing, one unit deep and 15 wide. One value against one known box, so the
+packing is a reading and not a measurement.
+
+The capture also carries `legsAnim`, an event ring with its `eventParms`, and
+`angles2[1]`, a second yaw on every player that is not the view yaw. None of
+those is identified here.
+
 #### The rule, out of the binary
 
 `SV_BuildClientSnapshot` is at `0x808f130` (it pushes the
