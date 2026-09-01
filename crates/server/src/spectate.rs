@@ -238,7 +238,7 @@ impl ClientSim {
     ///
     /// What that capture carries and this does not is stage 6's: `legsAnim`,
     /// the event ring, and `angles2[1]`.
-    pub fn to_entity(&self, p: &Protocol, slot: usize, server_time: i32) -> msg::EntityState {
+    pub fn to_entity(&self, p: &Protocol, slot: usize, command_time: i32) -> msg::EntityState {
         let mut e = msg::EntityState::null(p);
         e.number = slot as u32;
         let mut set = |name: &str, v: i32| {
@@ -258,8 +258,20 @@ impl ClientSim {
                 false => ENTITYNUM_NONE as i32,
             },
         );
+        // The lean the other client draws, the same -1..1 the playerstate
+        // carries. Without it a leaning player stands straight to everyone
+        // else.
+        set(
+            "leanf",
+            (self.ps.lean / vcod_common::pmove::LEAN_MAX).to_bits() as i32,
+        );
         set("pos.trType", trajectory::TR_LINEAR_STOP);
-        set("pos.trTime", server_time);
+        // The time the position was simulated at, not the frame's: retail's
+        // capture has trTime 2 to 18 ms behind the snapshot's serverTime,
+        // which is the last usercmd's clock. Sending the frame time makes the
+        // receiving client extrapolate from a base in its own future, and a
+        // player standing still on a slope shivers.
+        set("pos.trTime", command_time);
         set("pos.trDuration", PLAYER_TR_DURATION);
         set("apos.trType", trajectory::TR_INTERPOLATE);
         for axis in 0..3 {

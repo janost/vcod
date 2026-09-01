@@ -1156,11 +1156,12 @@ impl Server {
         // The body model rides here, not on the entity: without it another
         // client is sent a player it can name but cannot draw
         // (`docs/research/clientstate-wire-format.md`).
-        let models: Vec<i32> = match self.script.as_mut() {
+        type Body = (i32, Vec<(i32, i32)>);
+        let bodies: Vec<Body> = match self.script.as_mut() {
             Some(rt) => (0..self.clients.len())
-                .map(|slot| rt.client_model_index(slot))
+                .map(|slot| (rt.client_model_index(slot), rt.client_attachments(slot)))
                 .collect(),
-            None => vec![0; self.clients.len()],
+            None => vec![(0, Vec::new()); self.clients.len()],
         };
         let roster: BTreeMap<u32, msg::ClientState> = self
             .clients
@@ -1169,8 +1170,19 @@ impl Server {
             .filter_map(|(i, c)| {
                 let c = c.as_ref()?;
                 let mut cs = msg::ClientState::named(self.proto, 0, 3, &c.name);
+                let (model, attachments) = &bodies[i];
                 if let Some(idx) = msg::ClientState::field_index(self.proto, "modelindex") {
-                    cs.fields[idx] = models[i];
+                    cs.fields[idx] = *model;
+                }
+                for (n, (am, at)) in attachments.iter().enumerate() {
+                    for (name, v) in [
+                        (format!("attachModelIndex[{n}]"), am),
+                        (format!("attachTagIndex[{n}]"), at),
+                    ] {
+                        if let Some(idx) = msg::ClientState::field_index(self.proto, &name) {
+                            cs.fields[idx] = *v;
+                        }
+                    }
                 }
                 Some((i as u32, cs))
             })
@@ -1202,7 +1214,10 @@ impl Server {
                 // one, so nobody is sent an entity for it. Without this a
                 // player's crosshair names a spectator flying overhead.
                 if sim.pm_type != crate::spectate::PmType::Spectator {
-                    Some((i as u32, sim.to_entity(self.proto, i, self.sv_time_ms)))
+                    Some((
+                        i as u32,
+                        sim.to_entity(self.proto, i, c.as_ref()?.last_processed_st),
+                    ))
                 } else {
                     None
                 }

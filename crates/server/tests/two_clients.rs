@@ -437,3 +437,26 @@ fn a_roster_view() -> Option<(vcod_common::net::snapshot::Snapshot, u32)> {
     let nb = cb.snapshots().newest()?.ps.field_i32(p, "clientNum") as u32;
     Some((ca.snapshots().newest()?.clone(), nb))
 }
+
+/// A head and a helmet are attachments, not part of the body model: the stock
+/// character script attaches them. A client sent none renders headless, which
+/// is what a retail client showed.
+#[test]
+fn a_joined_client_carries_its_head_and_helmet_as_attachments() {
+    let Some((sa, nb)) = a_roster_view() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let p = &PROTOCOL_V1;
+    let cs = sa.clients.get(&nb).expect("no roster entry");
+    let attached: Vec<i32> = (0..6)
+        .map(|i| cs.field_i32(p, &format!("attachModelIndex[{i}]")))
+        .filter(|v| *v != 0)
+        .collect();
+    assert!(
+        attached.len() >= 2,
+        "client {nb} carries {} attachments; the stock character script attaches \
+         a head and a helmet at least",
+        attached.len()
+    );
+}

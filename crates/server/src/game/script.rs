@@ -57,6 +57,10 @@ fn render(cx: &vcod_gsc::Cx, v: Value) -> String {
 /// would hit this on the first shared file. A map change therefore builds
 /// a new `ScriptRuntime` and drops the old one; the heap goes with it,
 /// which is also what the VM's no-garbage-collection design assumes.
+/// `clientState` carries six attachment pairs
+/// (`docs/research/clientstate-wire-format.md`).
+pub const ATTACH_SLOTS: usize = 6;
+
 pub struct ScriptRuntime {
     vm: Vm,
     host: GameHost,
@@ -346,6 +350,50 @@ impl ScriptRuntime {
             .iter()
             .position(|cs| *cs == name)
             .map_or(0, |i| (i + 1) as i32)
+    }
+
+    /// A client's attachments as the roster carries them: up to six
+    /// `(attachModelIndex, attachTagIndex)` pairs, the model resolving through
+    /// `configstring 268 + index` and the tag through `108 + index`
+    /// (`docs/research/clientstate-wire-format.md`). A head and a helmet are
+    /// attachments, not part of the body: the stock character script does
+    /// `attachFromArray(xmodelalias\head_allied::main())` and
+    /// `self attach(self.hatModel)`, so a client sent none is headless.
+    pub fn client_attachments(&mut self, slot: usize) -> Vec<(i32, i32)> {
+        let Some(ent) = self.client_entity(slot) else {
+            return Vec::new();
+        };
+        let Some(e) = self.host.ents.get(ent) else {
+            return Vec::new();
+        };
+        let pairs: Vec<(String, String)> = {
+            self.vm.with_cx(|cx| {
+                e.attachments
+                    .iter()
+                    .map(|(m, t)| (cx.resolve(*m).to_string(), cx.resolve(*t).to_string()))
+                    .collect()
+            })
+        };
+        let index_in = |range: crate::configstrings::CsRange, name: &str, base: usize| {
+            if name.is_empty() {
+                return 0;
+            }
+            let (first, last) = range.bounds();
+            self.host.configstrings[first..=last]
+                .iter()
+                .position(|cs| cs == name)
+                .map_or(0, |i| (first + i - base) as i32)
+        };
+        pairs
+            .iter()
+            .take(ATTACH_SLOTS)
+            .map(|(m, t)| {
+                (
+                    index_in(crate::configstrings::CsRange::Model, m, 268),
+                    index_in(crate::configstrings::CsRange::Tag, t, 108),
+                )
+            })
+            .collect()
     }
 
     /// A client entity's `.origin` as the scripts read it.
