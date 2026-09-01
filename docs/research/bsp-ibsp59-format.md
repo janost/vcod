@@ -293,7 +293,7 @@ Ground-level spawns on mp_pavlov sit 200 or more units above the first brush bel
 | `SCALE_WALK` | 0.4 | CoD slow-walk modifier |
 | `SCALE_CROUCH` | 0.65 | CoD |
 | `SCALE_PRONE` | 0.15 | CoD |
-| `JUMP_HEIGHT_STAND / LOW` | 34 / 24 | retail rodata 0x70BE8/0x70BEC; vz = sqrt(2 * height * gravity), gate forwardmove != 0 (`cod11-mantle.md`, "Jumps") |
+| `JUMP_HEIGHT_STAND / LOW` | 34 / 24 | retail rodata 0x70BE8/0x70BEC; vz = sqrt(2 * height * gravity). The forwardmove gate this row used to name was a misread, corrected 2026-09-01 against a live capture (`cod11-mantle.md`, "Jumps") |
 | `PM_ACCELERATE` | 9 | retail rodata 0x70844; Q3's is 10, RTCW-MP's 10 too - the community-documented "Q3 exact copy" was wrong |
 | `PM_DUCKED_ACCELERATE / PM_PRONE_ACCELERATE` | 12 / 19 | retail rodata; selected in the steep-slope mover @0x2f4b0-0x2f4ca, walk-path application INFERRED (`cod11-mantle.md`) |
 | `PM_AIRACCELERATE` | 1 | retail rodata 0x70848, same as Q3 |
@@ -310,7 +310,8 @@ Ground-level spawns on mp_pavlov sit 200 or more units above the first brush bel
 | `HEIGHT_STAND / CROUCH / PRONE` | 70 / 50 / 30 | CoD |
 | `VIEW_STAND / CROUCH / PRONE` | 60 / 40 / 11 | CoD viewheights; `standViewHeight = 60` is corroborated in `player-model-anim-system.md` |
 | `LEAN_MAX` | 28 | RTCW-MP `bg_pmove.c` `LEAN_MAX 28.0f` (eye offset in units; roll is lean / 2 degrees) |
-| `LEAN_TIME_TO_MS / FROM_MS` | 280 / 350 | attributed in `pmove.rs` to RTCW-SP `bg_pmove.c`; UNVERIFIED, RTCW-MP has 200 / 300 |
+| `LEAN_TIME_TO_MS` | 340 | VERIFIED live 2026-09-01: the retail server's `ps.leanf` ramps 0 to -1 at 0.1429 per snapshot, every snapshot, over two captures, which is full lean in 339-345 ms (`--net-probe --save-motion`). Was 280, attributed to RTCW-SP `bg_pmove.c`; RTCW-MP has 200 |
+| `LEAN_TIME_FROM_MS` | 350 | UNVERIFIED, and not measurable the same way: the retail server's `leanf` never returns to centre when the lean bit clears, so the return is the client's own prediction. RTCW-MP has 300 |
 
 The friction/accelerate/jump rows were re-sourced from the retail binaries
 during the water/ladder work: the dedicated server's rodata table

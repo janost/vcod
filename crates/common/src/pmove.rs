@@ -48,7 +48,7 @@ pub const VIEW_CROUCH: f32 = 40.0;
 pub const VIEW_PRONE: f32 = 11.0;
 pub const MAX_FRAME_MS: f32 = 66.0;
 pub const LEAN_MAX: f32 = 28.0; // eye offset in units; roll is lean/2 degrees
-pub const LEAN_TIME_TO_MS: f32 = 280.0;
+pub const LEAN_TIME_TO_MS: f32 = 340.0;
 pub const LEAN_TIME_FROM_MS: f32 = 350.0;
 
 /// Viewheight lerp times: PM_GetViewHeightLerpTime @0x345B8 (200 ms for the
@@ -236,6 +236,17 @@ pub struct PlayerState {
     view_height_cur: f32,
     /// Lerp pace in units/s, fixed per transition when the stance flips.
     view_height_speed: f32,
+    /// Retail's `pm_flags` 0x2: set on entering a crouch, cleared on standing,
+    /// and left alone by prone, so a prone entered from a crouch carries it
+    /// and one entered from standing does not (both measured,
+    /// `crates/server/tests/playerstate_motion_ab.rs`).
+    pub ducked: bool,
+    /// Eye height the last stance change aimed at, and whether it went down.
+    /// Both are wire state: retail carries them in `viewHeightLerpTarget` and
+    /// `viewHeightLerpDown`, and leaves the target at 0 until the first
+    /// stance change (measured, docs/research/cod11-player-movement.md).
+    pub view_lerp_target: f32,
+    pub view_lerp_down: bool,
 }
 
 impl PlayerState {
@@ -260,6 +271,10 @@ impl PlayerState {
             air_speed_peak: 0.0,
             view_height_cur: Stance::Stand.view_height(),
             view_height_speed: 0.0,
+            ducked: false,
+            // Retail leaves the target at 0 until the first stance change.
+            view_lerp_target: 0.0,
+            view_lerp_down: false,
         }
     }
 
@@ -345,13 +360,15 @@ pub fn pmove(
     } else if ps.water_level > 1 {
         water_move(ps, input, world, dt);
     } else {
-        // retail ground jump (fn 0x316F4 @0x31CC0): gated on forward input,
-        // stance-dependent height, horizontal velocity kept. Its bit-0x20
-        // check (@0x31ccb) reads the ADS-active flag PM_UpdateAimDownSightFlag
-        // maintains (@0x37247+: set only while the ADS button is held); vcod
-        // has no ADS input, so nothing of that gate ports. No cooldown timer
-        // exists on this path either (ps.jumpTime is never written here).
-        if input.jump && ps.on_ground && input.forward != 0.0 {
+        // retail ground jump (fn 0x316F4 @0x31CC0): stance-dependent height,
+        // horizontal velocity kept. Its bit-0x20 check (@0x31ccb) reads the
+        // ADS-active flag PM_UpdateAimDownSightFlag maintains (@0x37247+: set
+        // only while the ADS button is held); vcod has no ADS input, so
+        // nothing of that gate ports. No cooldown timer exists on this path
+        // either (ps.jumpTime is never written here). The forwardmove gate
+        // this used to carry was a misread: retail jumps standing still
+        // (docs/research/cod11-mantle.md, "Jumps").
+        if input.jump && ps.on_ground {
             let height = match ps.stance {
                 Stance::Stand => JUMP_HEIGHT_STAND,
                 _ => JUMP_HEIGHT_LOW,
@@ -606,6 +623,13 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, 
     // 200 ms stand/crouch family, the 400 ms bg_duck2prone_time/
     // bg_prone2duck_time defaults into and out of prone.
     if ps.stance != before {
+        match ps.stance {
+            Stance::Crouch => ps.ducked = true,
+            Stance::Stand => ps.ducked = false,
+            Stance::Prone => {}
+        }
+        ps.view_lerp_target = ps.stance.view_height();
+        ps.view_lerp_down = ps.stance.view_height() < before.view_height();
         let ms = if ps.stance == Stance::Prone || before == Stance::Prone {
             VIEW_LERP_PRONE_MS
         } else {
@@ -1708,22 +1732,30 @@ mod tests {
     }
 
     #[test]
-    fn ground_jump_needs_forward_input() {
-        // retail gate fn 0x316F4 @0x31CC0: cmd.forwardmove != 0
+    fn a_standing_jump_needs_no_forward_input() {
+        // The forwardmove gate once read off fn 0x316F4 @0x31CC0 is not there:
+        // a retail server jumps a probe holding upmove alone
+        // (docs/research/cod11-mantle.md, "Jumps").
         let w = flat();
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50); // settle
-        tick(
-            &mut ps,
-            &PmInput {
-                jump: true,
-                ..Default::default()
-            },
-            &w,
-            10,
+        let mut apex = ps.origin.z;
+        for _ in 0..200 {
+            pmove(
+                &mut ps,
+                &PmInput {
+                    jump: true,
+                    ..Default::default()
+                },
+                &w,
+                1.0 / 125.0,
+            );
+            apex = apex.max(ps.origin.z);
+        }
+        assert!(
+            (apex - JUMP_HEIGHT_STAND).abs() < 2.0,
+            "standing apex {apex}, expected ~{JUMP_HEIGHT_STAND}"
         );
-        assert!(ps.on_ground, "must not jump without forward input");
-        assert!(ps.origin.z < 0.5);
     }
 
     #[test]

@@ -12,6 +12,21 @@ use vcod_common::pmove::{self, PmInput};
 /// (docs/research/cod11-gsc-object-model.md, section 20).
 const PMF_OWN_VIEW: i32 = 0x40000;
 
+/// Stance bits in `eFlags` and `pm_flags`, measured off the retail server
+/// under each input (`crates/server/tests/fixtures/playerstate/*-motion.txt`):
+/// standing reads `eFlags` 16 / `pm_flags` 0x40000 and crouched 48 / 0x40002.
+/// The two `eFlags` bits are exclusive. `pm_flags` 0x1 marks prone and 0x2 is
+/// a crouch latch rather than a stance bit: prone entered from a crouch reads
+/// 0x40003 and prone entered from standing 0x40001, which is why
+/// `PlayerState::ducked` carries it.
+const EF_CROUCH: i32 = 0x20;
+const EF_PRONE: i32 = 0x40;
+const PMF_DUCKED: i32 = 0x2;
+const PMF_PRONE: i32 = 0x1;
+/// Held jump, retail's 0x8 (set @0x2ec34, cleared @0x34135); the capture reads
+/// `pm_flags` 0x40008 on the first airborne frame.
+const PMF_JUMP_HELD: i32 = 0x8;
+
 /// `serverCursorHintString`'s no-hint sentinel, which is retail's -1 in an
 /// 8-bit netfield. Object model doc, section 20.
 const NO_CURSOR_HINT: i32 = 0xff;
@@ -169,7 +184,12 @@ impl ClientSim {
         set("pm_type", if player { 0 } else { 4 });
         // The 0x8 the spectator carries on top of the player's 0x10 is
         // unaccounted for; both values are the captures', not a mechanism.
-        set("eFlags", if player { 16 } else { 24 });
+        let stance_eflags = match self.ps.stance {
+            pmove::Stance::Stand => 0,
+            pmove::Stance::Crouch => EF_CROUCH,
+            pmove::Stance::Prone => EF_PRONE,
+        };
+        set("eFlags", if player { 16 | stance_eflags } else { 24 });
         set(
             "speed",
             if player {
@@ -194,7 +214,25 @@ impl ClientSim {
             // nothing follows another client and nothing dies yet, so
             // `Normal` is the whole of that condition today. The hint is the
             // one that peels off first, at `health` 0.
-            set("pm_flags", PMF_OWN_VIEW);
+            let stance_pmflags = if self.ps.ducked { PMF_DUCKED } else { 0 }
+                | if self.ps.stance == pmove::Stance::Prone {
+                    PMF_PRONE
+                } else {
+                    0
+                };
+            let jump_held = if self.ps.jump_latched {
+                PMF_JUMP_HELD
+            } else {
+                0
+            };
+            set("pm_flags", PMF_OWN_VIEW | stance_pmflags | jump_held);
+            // The client predicts its own eye lerp; without these it restarts
+            // from our value every snapshot and the view shakes for as long
+            // as the lerp lasts.
+            set("viewHeightLerpTarget", self.ps.view_lerp_target as i32);
+            set("viewHeightLerpDown", i32::from(self.ps.view_lerp_down));
+            // -1..1, left negative, the same convention retail sends.
+            set("leanf", (self.ps.lean / pmove::LEAN_MAX).to_bits() as i32);
             set("serverCursorHintString", NO_CURSOR_HINT);
             set("viewmodelIndex", self.viewmodel_index);
         }
@@ -206,8 +244,19 @@ impl ClientSim {
         set("weaponslots[0]", lo);
         set("weaponslots[4]", hi);
         set("weapon", i32::from(self.weapons.current));
-        // Mode-independent: both captures agree on all of these.
-        let (mins, maxs) = (self.ps.mins(), self.ps.maxs());
+        // Mode-independent: both captures agree on all of these. The box is
+        // the standing one whatever the stance: retail transmits `maxs[2]`
+        // 70 while crouched and prone too, and the mover derives its own
+        // collision box from the stance rather than from these
+        // (`crates/server/tests/playerstate_motion_ab.rs`).
+        let (mins, maxs) = (
+            self.ps.mins(),
+            Vec3::new(
+                self.ps.maxs().x,
+                self.ps.maxs().y,
+                pmove::Stance::Stand.height(),
+            ),
+        );
         for (i, (lo, hi)) in ["mins[0]", "mins[1]", "mins[2]"]
             .iter()
             .zip(["maxs[0]", "maxs[1]", "maxs[2]"])
@@ -265,6 +314,24 @@ mod tests {
             angles: [pitch_short, yaw_short, 0],
             ..Default::default()
         }
+    }
+
+    /// `leanf` is a fraction of `LEAN_MAX`, left negative, the convention the
+    /// retail server sends. The value itself is spawn-dependent (the lean is
+    /// clamped against nearby geometry), so `playerstate_motion_ab` cannot
+    /// diff it and this pins the mapping instead.
+    #[test]
+    fn leanf_goes_out_as_a_signed_fraction_of_lean_max() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
+        let leanf =
+            |sim: &ClientSim| f32::from_bits(sim.to_wire(p, 0, 0).field_i32(p, "leanf") as u32);
+        assert_eq!(leanf(&sim), 0.0);
+        sim.ps.lean = -pmove::LEAN_MAX;
+        assert_eq!(leanf(&sim), -1.0, "a full left lean is -1");
+        sim.ps.lean = pmove::LEAN_MAX / 2.0;
+        assert_eq!(leanf(&sim), 0.5, "a half right lean is +0.5");
     }
 
     /// The bit table measured off a retail 1.1 client on 2026-09-01, one case
