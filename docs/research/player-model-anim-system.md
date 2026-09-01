@@ -118,8 +118,13 @@ ships, listing `straferight`/`strafeleft` (no such block exists) and omitting
 `climbup`/`climbdown` (both do).
 
 VERIFIED: the condition keywords the file uses in live clauses are `weapons`,
-`weaponclass`, `weapon_position`, `strafing`, `movetype`, `mounted`, `firing`,
-`enemy_weapon` and `impact_point`, the last two only inside `DEATH` and `pain`.
+`weaponclass`, `weapon_position`, `strafing`, `movetype`, `mounted` and
+`firing`. VERIFIED: `enemy_weapon` and `impact_point` appear inside `DEATH` and
+`pain` only in commented-out clauses (script lines 1032-1094 and 1116-1167), so
+no live clause tests either. INFERRED: a condition the parser has no kind for
+therefore cannot be reached in the shipped file; it parses to a kind that never
+holds, so an unmodelled condition makes its clause unselectable rather than
+unconditional (`crates/common/src/animscript.rs`).
 VERIFIED: `leaning`, `position`, `underwater` and `underhand` occur only in the
 commented condition legend at lines 78-91 and in no clause. INFERRED: a lean
 therefore changes no index, and the parser carries no kind for those four.
@@ -232,8 +237,23 @@ ground-edge events have to be raised before the continuous selection, or the
 landing frame selects an idle first and flips the toggle twice. VERIFIED: the
 `land` default clause carries `duration 100`, and the fixture's `land` pose is
 sampled on the first frame back on the ground (`sample=grounded`) for that
-reason. INFERRED: leaving the ground raises `jump`, or `jumpbk` while the
-backwards latch is set, and touching it raises `land`.
+reason. VERIFIED: leaving the ground is not what raises the takeoff -- the
+mp_pavlov capture's `run_back` pose reads `groundEntityNum` 1023 and `legsAnim`
+605, index 93, the `runbk` loop, so retail's probe backed off a ledge and kept
+the loop it was already playing. INFERRED: the takeoff comes from the jump
+impulse itself, so vcod raises `jump`, or `jumpbk` while the backwards latch is
+set, only on the frame pmove takes one. UNVERIFIED: whether a fall that nobody
+jumped into raises `land` on touchdown; no pose in either capture lands from
+one, and vcod raises it.
+
+VERIFIED: the ladder flag is `pm_flags` 0x10, tested at 0x323af, and a set flag
+skips the airborne early-out, so a climber reaches the selection. VERIFIED: the
+shipped script carries `climbup` and `climbdown` blocks, each a single default
+clause selecting `pb_climbup` and `pb_climbdown`. INFERRED: those two are the
+movetypes a climber selects, and the climb direction is the sign of the vertical
+velocity; vcod derives them that way and raises no takeoff on the mount, since
+mounting takes no impulse. Neither capture climbs a ladder, so nothing here is
+measured against retail beyond the flag and the blocks.
 
 **What this overturned.** VERIFIED: pavlov `run_forward` carries velocity
 `(0, -148)` at `viewangles[1]` -31.94, 58 degrees off the facing, and pavlov
