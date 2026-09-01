@@ -344,6 +344,14 @@ The addresses and the labels for all three are in `docs/research/cod11-gsc-objec
 
 One field remains unestablished: `legsAnim` 634, which is animation index 122 with `ANIM_TOGGLEBIT` set. The server picks it through the animscript state machine, which vcod has no equivalent of, so `playerstate_ab.rs` carries it as the gate's one recorded gap.
 
+### The view-height lerp, and fields a settled capture cannot see
+
+The eye eases between stances while the collision box snaps, and the client predicts the ease itself. Four playerstate fields carry it: `viewHeightCurrent` (float, the eye now), `viewHeightTarget` (signed byte, the stance's height), `viewHeightLerpDown` (1 bit, set when the eye is on its way down) and **`viewHeightLerpTime`**, which is the `serverTime` the lerp started at and reads 0 once it settles.
+
+That last one is the trap. VERIFIED live 2026-09-01 by tracing the retail server per snapshot through a crouch: `viewHeightLerpTime` read 86666 while `serverTime` ran 86700, 86750, 86800 with the eye at 57.92, 52.64, 44.72, and dropped to 0 at 86850 with the eye settled at 40. Every value it takes outside a transition is 0, so a capture of a settled pose -- which is what both playerstate gates take -- pins it at 0 and proves nothing. A server that always sends 0 tells the client the lerp began at time zero; the client's prediction snaps its eye straight to the target and the next snapshot drags it back, once per snapshot, for as long as the transition lasts. It reads as the camera shaking for about half a second on every stance change.
+
+The general shape is worth naming, because two vcod bugs came out of it: **a field that only holds a value mid-transition is invisible to a settled capture.** `leanf` and this one are both of that kind. Trace per snapshot through the transition, not after it.
+
 ### `ps.commandTime` and client prediction
 
 `ps.commandTime` must carry the `serverTime` of the last usercmd the server actually simulated for that client, and nothing else. A client replays every usercmd newer than it on top of the snapshot's playerstate, so a `commandTime` naming a moment the server never simulated silently drops that slice of the client's own input from its prediction, every frame.

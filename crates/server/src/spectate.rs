@@ -100,6 +100,13 @@ pub struct ClientSim {
     /// by both `step` and the connected client itself.
     /// docs/protocol-1.1.md, "Spectator view angles".
     delta_angles: [i32; 3],
+    /// `serverTime` the running eye-height lerp started at, cleared when it
+    /// settles. Retail stamps it and the client runs the lerp from it, so a
+    /// zero here makes the client's prediction snap to the target and then be
+    /// dragged back once a snapshot. Invisible to a settled capture, which is
+    /// why the motion gate cannot pin it (docs/protocol-1.1.md, "The
+    /// view-height lerp").
+    view_lerp_start: Option<i32>,
 }
 
 impl ClientSim {
@@ -115,6 +122,7 @@ impl ClientSim {
             weapons: PlayerWeapons::default(),
             viewmodel_index: 0,
             delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
+            view_lerp_start: None,
         }
     }
 
@@ -161,6 +169,13 @@ impl ClientSim {
             ),
             (PmType::Normal, Some(w)) => {
                 pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt);
+                // The stamp is the serverTime the lerp began, so it is taken
+                // on the frame the eye first trails its target.
+                self.view_lerp_start = if self.ps.view_height_settled() {
+                    None
+                } else {
+                    self.view_lerp_start.or(Some(cmd.server_time))
+                };
             }
         }
     }
@@ -230,6 +245,7 @@ impl ClientSim {
             // from our value every snapshot and the view shakes for as long
             // as the lerp lasts.
             set("viewHeightLerpTarget", self.ps.view_lerp_target as i32);
+            set("viewHeightLerpTime", self.view_lerp_start.unwrap_or(0));
             set("viewHeightLerpDown", i32::from(self.ps.view_lerp_down));
             // -1..1, left negative, the same convention retail sends.
             set("leanf", (self.ps.lean / pmove::LEAN_MAX).to_bits() as i32);
@@ -314,6 +330,52 @@ mod tests {
             angles: [pitch_short, yaw_short, 0],
             ..Default::default()
         }
+    }
+
+    /// The eye-height lerp is stamped with the serverTime it started at and
+    /// cleared when it settles, which is retail's own bookkeeping: a settled
+    /// capture reads 0 either way, so only a trace through the transition
+    /// shows it (docs/protocol-1.1.md, "The view-height lerp").
+    #[test]
+    fn the_view_height_lerp_carries_the_time_it_started() {
+        let p = &PROTOCOL_V1;
+        let w = vcod_common::collision::test_world(&[]);
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        let lerp_time = |sim: &ClientSim| sim.to_wire(p, 0, 0).field_i32(p, "viewHeightLerpTime");
+        let crouch = |t: i32| UserCmd {
+            server_time: t,
+            wbuttons: msg::WBUTTON_CROUCH,
+            up: -127,
+            ..NULL_USERCMD
+        };
+
+        let mut t = 1000;
+        // Settle on the floor first, so the only thing moving is the eye.
+        for _ in 0..20 {
+            t += 50;
+            sim.step(&NULL_USERCMD, 0.05, Some(&w));
+        }
+        assert_eq!(lerp_time(&sim), 0, "a settled eye carries no stamp");
+
+        t += 50;
+        sim.step(&crouch(t), 0.05, Some(&w));
+        assert_eq!(lerp_time(&sim), t, "the stamp is the cmd that started it");
+        let started = t;
+        t += 50;
+        sim.step(&crouch(t), 0.05, Some(&w));
+        assert_eq!(
+            lerp_time(&sim),
+            started,
+            "and it does not move while lerping"
+        );
+
+        for _ in 0..20 {
+            t += 50;
+            sim.step(&crouch(t), 0.05, Some(&w));
+        }
+        assert!(sim.ps.view_height_settled());
+        assert_eq!(lerp_time(&sim), 0, "the stamp clears when the eye settles");
     }
 
     /// `leanf` is a fraction of `LEAN_MAX`, left negative, the convention the

@@ -880,14 +880,19 @@ impl MotionProbe {
         if self.traced != Some(snap.message_num) {
             self.traced = Some(snap.message_num);
             println!(
-                "  trace {} +{:>4}ms leanf={:>9.4} viewHeight={:>6.2} eFlags={} pm_flags=0x{:x} velZ={:.0}",
+                "  trace {} +{:>4}ms st={} vh={:>6.2} lerp[t={} target={} down={} posAdj={:.3}] originZ={:.2} bob={} eFlags={} pm=0x{:x}",
                 self.steps[self.idx].label,
                 elapsed.as_millis(),
-                f32::from_bits(snap.ps.field_i32(p, "leanf") as u32),
+                snap.server_time,
                 f32::from_bits(snap.ps.field_i32(p, "viewHeightCurrent") as u32),
+                snap.ps.field_i32(p, "viewHeightLerpTime"),
+                snap.ps.field_i32(p, "viewHeightLerpTarget"),
+                snap.ps.field_i32(p, "viewHeightLerpDown"),
+                f32::from_bits(snap.ps.field_i32(p, "viewHeightLerpPosAdj") as u32),
+                f32::from_bits(snap.ps.field_i32(p, "origin[2]") as u32),
+                snap.ps.field_i32(p, "bobCycle"),
                 snap.ps.field_i32(p, "eFlags"),
                 snap.ps.field_i32(p, "pm_flags"),
-                f32::from_bits(snap.ps.field_i32(p, "velocity[2]") as u32),
             );
         }
         let take = match step.until {

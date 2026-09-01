@@ -290,6 +290,11 @@ impl PlayerState {
         self.view_height_cur
     }
 
+    /// Whether the eye has caught up with the stance it is easing towards.
+    pub fn view_height_settled(&self) -> bool {
+        (self.view_height_cur - self.stance.view_height()).abs() < 0.01
+    }
+
     /// Eye and angles with the lean offset; roll = lean/2 degrees (RTCW).
     pub fn view(&self) -> ViewParams {
         let right = Vec3::new(self.yaw.sin(), -self.yaw.cos(), 0.0);
