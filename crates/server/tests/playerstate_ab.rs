@@ -363,7 +363,15 @@ fn check(map: &str) {
         if skip(f.name) {
             continue;
         }
-        let (r, o) = (capture.ps[i], ours.fields[i]);
+        // The anim channels compare by index: bit 512 is the restart toggle,
+        // and its absolute value is not a fact about the pose -- retail's
+        // standing `stand_up` reads 634 on mp_carentan and 122 on mp_pavlov
+        // (docs/research/player-model-anim-system.md, "The restart toggle").
+        let mask = match f.name {
+            "legsAnim" | "torsoAnim" => 511,
+            _ => !0,
+        };
+        let (r, o) = (capture.ps[i] & mask, ours.fields[i] & mask);
         if r != o {
             diffs.push(format!("{} retail {r} ours {o}", f.name));
         }

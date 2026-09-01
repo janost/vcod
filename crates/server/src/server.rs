@@ -1598,6 +1598,40 @@ mod tests {
         assert!(sv.configstring(7).contains("kar98k_mp"));
     }
 
+    /// The `weaponClass` table the animation machine reads every frame, and
+    /// the seam it is built across: `WEAPON_LIST` is 1-based on the wire, so
+    /// the fill prepends an empty slot 0 and `items::item_name` subtracts one.
+    /// Misaligned by one, every pistol player animates as a rifleman and
+    /// nothing says so. Needs the paks -- the classes come from the weapon
+    /// files.
+    #[test]
+    fn the_weapon_class_table_lines_up_with_the_wire_index() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let mut sv = Server::new(cfg(), Instant::now());
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        for (weapon, class) in [
+            ("colt_mp", "pistol"),
+            ("thompson_mp", "smg"),
+            ("m1carbine_mp", "rifle"),
+        ] {
+            let index = crate::configstrings::weapon_index(weapon).expect("in WEAPON_LIST");
+            assert_eq!(
+                sv.weapon_classes.get(index).map(String::as_str),
+                Some(class),
+                "{weapon} at wire index {index}"
+            );
+            // The same index the frame loop hands the animscript.
+            assert_eq!(crate::items::item_name(index), Some(weapon));
+        }
+        assert_eq!(
+            sv.weapon_classes.first().map(String::as_str),
+            Some(""),
+            "slot 0 is the wire's no-weapon"
+        );
+    }
+
     /// A failed load reports the error and leaves the table untouched; the
     /// caller (`main.rs`) exits on it. Stage 2 kept serving here, which is no
     /// longer the right answer: the table is mostly script output now.

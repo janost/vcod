@@ -553,3 +553,8 @@ fn the_anim_indices_match_retail_on_mp_pavlov() {
 fn the_restart_toggle_tracks_the_index_on_mp_carentan() {
     check_anim_restarts("mp_carentan", "dm");
 }
+
+#[test]
+fn the_restart_toggle_tracks_the_index_on_mp_pavlov() {
+    check_anim_restarts("mp_pavlov", "dm");
+}
