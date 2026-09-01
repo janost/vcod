@@ -55,12 +55,14 @@ pub struct AnimRef {
 }
 
 /// A condition list and what it selects. An empty `conditions` is the file's
-/// `default`, which always matches.
+/// `default`, which always matches. A channel can list more than one anim
+/// (death and melee blocks do); which one plays is a later task's `select`,
+/// not this parser's — both vectors keep file order and nothing else.
 #[derive(Clone, Debug, Default)]
 pub struct Clause {
     pub conditions: Vec<Condition>,
-    pub legs: Option<AnimRef>,
-    pub torso: Option<AnimRef>,
+    pub legs: Vec<AnimRef>,
+    pub torso: Vec<AnimRef>,
 }
 
 /// A movetype block inside a state, or one event block. Clauses are in file
@@ -98,15 +100,9 @@ impl AnimScript {
     /// decides the index order (`AnimIndex::build`).
     pub fn referenced_names(&self) -> HashSet<String> {
         let mut out = HashSet::new();
-        let mut add = |a: &Option<AnimRef>| {
-            if let Some(a) = a {
-                out.insert(a.name.clone());
-            }
-        };
         for block in self.states.values().flatten().chain(self.events.values()) {
             for c in &block.clauses {
-                add(&c.legs);
-                add(&c.torso);
+                out.extend(c.legs.iter().chain(&c.torso).map(|a| a.name.clone()));
             }
         }
         out
@@ -260,7 +256,8 @@ fn parse_conditions(line: &str, defines: &Defines) -> Vec<Condition> {
 
 /// `both|legs|torso <name> [duration <n>] [blendtime <n>] [turretanim]`.
 /// Anything else on the line is ignored, which is what makes the trailing
-/// `turretanim` modifier harmless.
+/// `turretanim` modifier harmless. A clause may list more than one line per
+/// channel (death and melee do), so this pushes rather than overwrites.
 fn apply_anim_line(line: &str, clause: &mut Clause) {
     let mut w = line.split_whitespace();
     let Some(part) = w.next() else { return };
@@ -282,10 +279,10 @@ fn apply_anim_line(line: &str, clause: &mut Clause) {
         }
     }
     if part != "torso" {
-        clause.legs = Some(anim.clone());
+        clause.legs.push(anim.clone());
     }
     if part != "legs" {
-        clause.torso = Some(anim);
+        clause.torso.push(anim);
     }
 }
 
@@ -364,12 +361,20 @@ land
             "default has no conditions"
         );
         assert_eq!(
-            idle.clauses[1].legs.as_ref().map(|a| a.name.as_str()),
-            Some("pb_stand_alert")
+            idle.clauses[1]
+                .legs
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>(),
+            ["pb_stand_alert"]
         );
         assert_eq!(
-            idle.clauses[1].torso.as_ref().map(|a| a.name.as_str()),
-            Some("pb_stand_alert"),
+            idle.clauses[1]
+                .torso
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>(),
+            ["pb_stand_alert"],
             "`both` sets legs and torso"
         );
     }
@@ -399,11 +404,48 @@ land
     fn an_event_clause_keeps_its_duration_and_blendtime() {
         let s = AnimScript::parse(SAMPLE).unwrap();
         let land = s.event("land").expect("land");
-        let legs = land.clauses[0].legs.as_ref().unwrap();
-        assert_eq!(legs.name, "pb_runjump_land");
+        assert_eq!(
+            land.clauses[0]
+                .legs
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>(),
+            ["pb_runjump_land"]
+        );
+        let legs = &land.clauses[0].legs[0];
         assert_eq!(legs.duration_ms, Some(100));
         assert_eq!(legs.blend_ms, Some(50));
-        assert!(land.clauses[0].torso.is_none(), "`legs` leaves torso alone");
+        assert!(
+            land.clauses[0].torso.is_empty(),
+            "`legs` leaves torso alone"
+        );
+    }
+
+    /// A clause may list more than one anim line per channel (death and melee
+    /// blocks do); the parser keeps every one rather than only the last.
+    #[test]
+    fn a_clause_keeps_every_anim_line_in_a_channel() {
+        let text = SAMPLE.replace(
+            "\t\t\tboth pb_stand_alert\n",
+            "\t\t\tboth pb_stand_alert\n\t\t\tboth pb_stand_alert2\n",
+        );
+        let s = AnimScript::parse(&text).unwrap();
+        let idle = &s.state("combat").unwrap()[0];
+        let names: Vec<_> = idle.clauses[1]
+            .legs
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, ["pb_stand_alert", "pb_stand_alert2"]);
+        let torso_names: Vec<_> = idle.clauses[1]
+            .torso
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(torso_names, ["pb_stand_alert", "pb_stand_alert2"]);
+        let referenced = s.referenced_names();
+        assert!(referenced.contains("pb_stand_alert"));
+        assert!(referenced.contains("pb_stand_alert2"));
     }
 
     /// Every anim name the script names, which is what decides the animtree
