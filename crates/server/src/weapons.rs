@@ -73,6 +73,15 @@ pub fn weapon_slot(fs: Option<&Pk3Fs>, name: &str) -> Option<usize> {
         .filter(|i| *i > 0)
 }
 
+/// The `weaponClass` a weapon file names, lowercased. This is the value the
+/// `weaponclass` condition in `mp/playeranim.script` tests against. `None`
+/// when there are no paks to read, or when the file has no `weaponClass` key.
+pub fn weapon_class(fs: Option<&Pk3Fs>, name: &str) -> Option<String> {
+    let bytes = fs?.read(&format!("weapons/mp/{name}"))?;
+    let map = vcod_common::xmodel::parse_weapon(&String::from_utf8_lossy(&bytes));
+    map.get("weaponClass").map(|c| c.to_ascii_lowercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +140,34 @@ mod tests {
         assert_eq!(weapon_slot(fs, "colt_mp"), Some(3));
         assert_eq!(weapon_slot(fs, "fraggrenade_mp"), Some(4));
         assert_eq!(weapon_slot(fs, "no_such_weapon_mp"), None);
+    }
+
+    /// The `weaponclass` condition in `mp/playeranim.script` is this field.
+    /// Values read straight out of the shipped weapon files.
+    #[test]
+    fn a_weapon_file_names_its_class() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let fs = Some(&fs);
+        assert_eq!(weapon_class(fs, "m1carbine_mp").as_deref(), Some("rifle"));
+        assert_eq!(weapon_class(fs, "colt_mp").as_deref(), Some("pistol"));
+        assert_eq!(weapon_class(fs, "thompson_mp").as_deref(), Some("smg"));
+        assert_eq!(
+            weapon_class(fs, "fraggrenade_mp").as_deref(),
+            Some("grenade")
+        );
+        assert_eq!(
+            weapon_class(fs, "panzerfaust_mp").as_deref(),
+            Some("rocketlauncher")
+        );
+        assert_eq!(weapon_class(fs, "no_such_weapon_mp"), None);
+    }
+
+    /// A host with no paks mounted still runs; every condition that reads the
+    /// class simply fails to match.
+    #[test]
+    fn a_weapon_class_needs_no_paks_to_be_asked_for() {
+        assert_eq!(weapon_class(None, "m1carbine_mp"), None);
     }
 }
