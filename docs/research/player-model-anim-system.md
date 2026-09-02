@@ -159,7 +159,9 @@ VERIFIED: `torsoAnim` is 0 in all 20 settled poses of both captures and 720
 (index 208, `pt_stand_pullout_pose`) at `jump_takeoff` on both. VERIFIED: every
 clause reached in the table is written `both`. INFERRED: retail therefore does
 not write the torso half of the continuous selection, so vcod clears
-`Selection::torso` before applying it and leaves the torso to events.
+`Selection::torso` before applying it and leaves the torso to events. The 720
+is the weapon's, not the animscript's; "The weapon channel" below has the
+measurement.
 
 ### How retail picks the movetype
 
@@ -345,8 +347,10 @@ when the index does, never the bit's value.
 ### Open questions
 
 - VERIFIED: retail sends `torsoAnim` 720 (index 208, `pt_stand_pullout_pose`) at
-  `jump_takeoff` on both maps. INFERRED: no clause the jump path reaches
-  produces it, and nothing in vcod writes it. It stays unexplained.
+  `jump_takeoff` on both maps, and `weaponstate` 2 in the same sample.
+  INFERRED: no animscript clause produces it and none needs to -- it is the
+  weapon's putaway pose, closed by the combat captures ("The weapon channel:
+  what writes `torsoAnim`").
 - VERIFIED: `pm_flags` bit 0x8 reads set at `jump_takeoff` on mp_pavlov and
   clear at the same pose on mp_carentan, while both samples are the first
   airborne frame and both carry a `velocity[2]` within ten units of the standing
@@ -357,3 +361,158 @@ when the index does, never the bit's value.
   while vcod sets `jump_latched` only in `ladder_push_off`
   (`crates/common/src/pmove.rs`). Why retail's carentan sample reads it clear
   does not resolve.
+
+## The weapon channel: what writes `torsoAnim`
+
+VERIFIED: `crates/server/tests/fixtures/playerstate/mp_carentan-dm-combat.txt`
+and `mp_pavlov-dm-combat.txt`, nine steps each, taken with `--net-probe
+--save-combat` against the retail 1.1d dedicated server, one client, `dm`. Each
+step holds one input and taps the attack bit; the fixture carries one `!trace`
+line per snapshot rather than a settled sample, because the event ring holds
+four slots and a shot is shorter than a step. VERIFIED: snapshots arrive 50 ms
+apart, so a run of N consecutive samples in one state bounds that state's
+length to `((N-1)*50, (N+1)*50)` ms and no measurement below is tighter than
+that.
+
+VERIFIED: carentan's join gave `m1carbine_mp` and pavlov's `mosin_nagant_mp`,
+read from `weapons/mp/*` in `pak0.pk3`:
+
+| weapon | `fireTime` | `rechamberTime` | `reloadTime` | `dropTime` | `clipSize` |
+|---|---|---|---|---|---|
+| `m1carbine_mp` | 0.135 | 0.1 | 2.65 | 0.67 | 15 |
+| `mosin_nagant_mp` | 0.33 | 1.0 | 2.4 | 0.4 | 5 |
+
+Two weapons with different numbers is the point: it is what lets a state be
+matched to a weapon-file field rather than to one rifle's timing.
+
+### Firing
+
+VERIFIED: a shot reads `weaponstate` 3 and `weapAnim` 514, and bumps
+`eventSequence` by one carrying event 159, `EV_FIRE_WEAPON`
+(`cod11-events-and-fx.md`). VERIFIED: the event is written to
+`events[eventSequence & 3]` and the counter incremented after -- every bump in
+both captures moves exactly that slot. VERIFIED: `weapAnim` carries the same
+512 toggle the anim channels do, since pavlov's traces hold 2 and 514, and 4
+and 516, the same index with and without the bit.
+
+VERIFIED: `weaponstate` 3 runs 3 samples on carentan, 100-200 ms, and 7 on
+pavlov, 300-400 ms. INFERRED: that is the weapon's `fireTime`, the only
+weapon-file time inside both windows at 0.135 s and 0.33 s.
+
+VERIFIED: the torso index a shot writes is stance-specific. Every standing fire
+step on both maps reads index 253, `pt_stand_shoot`; the crouched step reads
+249, `pt_crouch_shoot`. INFERRED: the torso channel is the weapon's, not the
+animscript's. Those two are `pt_*` leaves no clause the continuous selection
+reaches produces, retail sent `torsoAnim` 0 in all 20 settled poses of the
+movement captures, and the index here moves with `weaponstate` and the stance
+rather than with the movetype.
+
+VERIFIED, resolved out of the animtree (`crates/common/src/animtree.rs`,
+`PlayerAnims`): the shoot family is 245 `pt_stand_shoot_pistol`, 246
+`pt_crouch_shoot_auto_ads`, 247 `pt_crouch_shoot_ads`, 248
+`pt_crouch_shoot_auto`, 249 `pt_crouch_shoot`, 250 `pt_stand_shoot_auto_ads`,
+251 `pt_stand_shoot_ads`, 252 `pt_stand_shoot_auto`, 253 `pt_stand_shoot`, and
+prone adds 222 `pt_prone_shoot_auto`, 223 `pt_prone_shoot_pistol` and 224
+`pt_prone_shoot`. UNVERIFIED: every member of it but 249 and 253. The probe
+never held the ads bit through a shot, neither rifle is automatic, and the
+prone never happened (below).
+
+### The restart toggle, doing its job
+
+VERIFIED, carentan `sustained_fire`: six shots read 765, 253, 765, 253, 765,
+253 -- index 253 throughout, with bit 512 flipping on every `eventSequence`
+bump. VERIFIED, carentan `crouch_fire`: 249, 761, 249 across three shots.
+INFERRED: a repeated shot is signalled by the toggle alone, so a client that
+watches only the index plays the first shot's clip and nothing after it. This
+is the first thing measured in this project that needs the toggle for what it
+is for; "The restart toggle" above only ever saw it as noise.
+
+VERIFIED: when a shot ends the torso reads 512, index 0 with the toggle set, so
+the channel clears to no anim and flips the bit doing it.
+
+### `weaponstate`, and what each value carried
+
+| `weaponstate` | seen on | event at the bump | torso index | run | weapon-file match |
+|---|---|---|---|---|---|
+| 0 | both | -- | -- | -- | ready |
+| 2 | both | 156 `EV_PUTAWAY_WEAPON` | 208 standing, 209 crouched | 600-750 ms, 350-500 ms | `dropTime` 0.67, 0.4 |
+| 3 | both | 159 `EV_FIRE_WEAPON` | 253 standing, 249 crouched | 100-200 ms, 300-400 ms | `fireTime` 0.135, 0.33 |
+| 4 | pavlov | 162 `EV_RECHAMBER_WEAPON` | unchanged | 950-1050 ms | `rechamberTime` 1.0 |
+| 5 | pavlov | 152 `EV_RELOAD_FROM_EMPTY` | 231 `pt_reload_stand_rifle` | 2350-2450 ms | `reloadTime` 2.4 |
+
+Paired columns are carentan then pavlov. VERIFIED: the event ids, the torso
+indices and the run lengths, all read off the traces. INFERRED: the right-hand
+column, because a duration falling inside a bound is a match and not a proof,
+and INFERRED: the state numbers themselves, which are read off behaviour rather
+than out of an enum.
+
+VERIFIED: 4 and 5 appear on pavlov only. INFERRED: that is the bolt action --
+the carbine's `rechamberTime` is 0.1 s, under two snapshot intervals, and its
+15-round clip never emptied.
+
+VERIFIED: pavlov's last round of a clip raised 161 `EV_FIRE_WEAPON_LASTSHOT`
+rather than 159, and wrote the same torso index 253.
+
+VERIFIED: the pullout pose is stance-matched the way the shoot anim is, 208
+`pt_stand_pullout_pose` standing and 209 `pt_crouch_pullout_pose` crouched, and
+both maps' `stand_between` step reads 209 while `legsAnim` already reads the
+standing idle. INFERRED: the index is latched when the state opens, since that
+step's state opened while the player was still crouched. VERIFIED: the torso
+index clears before the state does -- carentan's reload step holds 208 for
+about 500 ms of a `weaponstate` 2 that runs 600-700 ms -- which is why the
+movement capture's settled `land` pose reads `weaponstate` 2 with `torsoAnim`
+0.
+
+**The reload key did not reload.** VERIFIED: the step that taps `wbuttons` 0x08
+reads `weaponstate` 2 with event 156 and the pullout pose on both maps, with
+rounds still in the clip, and no state in that step runs anywhere near
+`reloadTime`. VERIFIED: the only run that does is pavlov's `weaponstate` 5,
+which came after 161 and 152 once the mosin's five rounds were gone. INFERRED:
+231 `pt_reload_stand_rifle` is the reload proper, and 208/209 are the weapon
+going down, which a stance change and a jump also do. UNVERIFIED: what the
+reload key does to a partly-full clip, and whether a phase of that reload ran
+under `weaponstate` 0 where the capture would not see it.
+
+### Where the `jump_takeoff` torso index came from
+
+VERIFIED: both movement captures read `weaponstate` 2 at the `jump_takeoff`
+pose, alongside the `torsoAnim` 720 this document carried as unexplained.
+INFERRED: that is the same putaway the combat captures measure, so the index is
+the weapon's and no animscript clause was ever missing.
+
+### Prone fire is unmeasured
+
+VERIFIED: the `prone_fire` step reads `legsAnim` 634 (index 122, the standing
+idle) throughout and `viewHeightTarget` 60 at its tail on both maps, and the
+two events raised between `stand_between` and its first shot are 140
+`EV_STANCE_FORCE_STAND` and 156 `EV_PUTAWAY_WEAPON`, in that order on both.
+INFERRED: the server refused the prone and forced the player back upright, so
+the step recorded a standing shot under a prone label and the 253 it carries is
+not prone evidence.
+
+VERIFIED: the crouch was taken at the same spot one step earlier (`legsAnim`
+111, `viewHeightTarget` 40), and both movement captures took prone at their
+spawn, which is not where the combat capture stands -- its `advance` step walks
+first, steered by the stall response. UNVERIFIED: why retail forced the stance.
+Retaking it means dropping the walk so the prone is attempted at the spawn, and
+having the step check that `legsAnim & 511` reached 45 before it taps, retrying
+the way it already retries on a busy weapon. VERIFIED: neither 224 nor 230
+appears in either capture. INFERRED: 224 `pt_prone_shoot` is what a prone shot
+should read and 230 `pt_reload_prone_rifle` a prone reload.
+
+### Neither counter in `!observed` counts shots
+
+VERIFIED: carentan's `sustained_fire` reads `shots_seen` 4 against six taps and
+six 159 events, and pavlov's `single_shot` reads `seq_delta` 3 against one tap.
+INFERRED for the first: `shots_seen` counts `weaponstate` 0 -> 3 edges, and at
+carentan's 183 ms tap period against a 135 ms `fireTime` the weapon is ready
+for under one snapshot interval between shots, so two of the six edges fall
+between samples. VERIFIED for the second: one mosin shot raises three events,
+159, then 162 `EV_RECHAMBER_WEAPON`, then 163 `EV_EJECT_BRASS`, so `seq_delta`
+is three per shot on pavlov and one per shot on carentan, whose carbine raises
+only 159.
+
+INFERRED: a gate therefore counts `events[]` entries equal to 159, or 161 for
+the last round of a clip, across the per-snapshot traces, and never
+`seq_delta` or `shots_seen`. VERIFIED: the ring holds four slots, so nothing
+but a per-snapshot trace can count a burst longer than four.

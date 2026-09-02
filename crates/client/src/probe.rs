@@ -35,6 +35,13 @@ const SNAP_CAPTURE_TARGET: usize = 24;
 /// capture cannot show: every field the client predicts reads zero while the
 /// player stands still.
 ///
+/// `save_combat` joins the same way and runs the weapon script in
+/// [`combat_script`], recording every snapshot rather than a settled sample:
+/// a shot moves `weaponstate`, `weapAnim` and the four-slot event ring, and
+/// the ring overwrites, so a settled sample cannot hold one. It is also the
+/// one mode with the stall response on, so a walking step gets past the first
+/// wall it meets.
+///
 /// `pvs` joins the same way again, walks the route in [`pvs_route`] and prints
 /// the snapshot entity list at each station plus every add and removal along
 /// the way, answering what the server sends from where. `save.entities` walks
@@ -49,6 +56,7 @@ pub struct Save {
     pub configstrings: bool,
     pub playerstate: bool,
     pub motion: bool,
+    pub combat: bool,
     pub entities: bool,
 }
 
@@ -67,13 +75,14 @@ pub fn probe(
         configstrings: save_configstrings,
         playerstate: save_playerstate,
         motion: save_motion,
+        combat: save_combat,
         entities: save_entities,
     } = save;
     // The fixture is the route's output, so the capture drives the same walk.
     let pvs = pvs || save_entities;
     // Every mode that needs a spawned player drives the same stock-menu join;
     // `--probe-team` alone joins and then just watches the roster.
-    let joining = save_playerstate || save_motion || pvs || team.is_some();
+    let joining = save_playerstate || save_motion || save_combat || pvs || team.is_some();
     let mut client = NetClient::connect(addr)?;
     if save_fixture || save_snapshots {
         client.enable_capture();
@@ -88,6 +97,7 @@ pub fn probe(
     let mut join = JoinProbe::new(team);
     let mut wrote_playerstate = false;
     let mut motion = MotionProbe::default();
+    let mut combat = CombatProbe::default();
     let mut pvs_probe = PvsProbe::default();
     // The full table; the map's loadspec filters it at gamestate.
     let aliases_all = fs.map(crate::audio::alias::AliasTable::load);
@@ -244,6 +254,16 @@ pub fn probe(
         if save_motion && motion.running() {
             cmd = motion.cmd();
             hold_view_yaw(&mut cmd, &client, &mut motion.spawn_delta_yaw);
+        } else if save_combat && combat.running() {
+            cmd = combat.cmd();
+            if let Some(o) = client
+                .snapshots()
+                .newest()
+                .map(|s| s.ps.origin(&net::protocol::PROTOCOL_V1))
+            {
+                combat.stall.apply(&mut cmd, now, o);
+            }
+            hold_view_yaw(&mut cmd, &client, &mut combat.spawn_delta_yaw);
         } else if pvs && pvs_probe.running() {
             cmd = pvs_probe.cmd();
             hold_view_yaw(&mut cmd, &client, &mut pvs_probe.spawn_delta_yaw);
@@ -316,6 +336,15 @@ pub fn probe(
                             wrote_playerstate = true;
                             break;
                         }
+                    } else if save_combat {
+                        // The join names the weapon; the reload step is sized
+                        // off its `reloadTime` rather than one rifle's number.
+                        combat.use_weapon(fs, &join.weapon);
+                        if combat.step(now, s) {
+                            write_combat_fixture(client.configstrings(), &join, &combat)?;
+                            wrote_playerstate = true;
+                            break;
+                        }
                     } else if pvs {
                         if pvs_probe.step(now, s) {
                             pvs_probe.report();
@@ -351,6 +380,13 @@ pub fn probe(
         std::thread::sleep(Duration::from_millis(16));
     }
 
+    if save_combat && !wrote_playerstate {
+        println!(
+            "no combat fixture: the run ended on step {} of {} after {secs}s; raise --probe-secs",
+            combat.idx + 1,
+            combat.steps.len()
+        );
+    }
     if save_playerstate && !wrote_playerstate {
         let pm_type = client
             .snapshots()
@@ -1189,6 +1225,689 @@ fn write_motion_fixture(
     Ok(())
 }
 
+/// `buttons` bit 0, fire (docs/protocol-1.1.md, "Usercmd input bits").
+const BUTTON_ATTACK: u8 = 0x01;
+
+/// `weaponstate` the capture keys off: the weapon is ready to take an input,
+/// and it is firing. 2 is the reload, seen but not waited on.
+const WEAPONSTATE_READY: i32 = 0;
+const WEAPONSTATE_FIRING: i32 = 3;
+
+/// A key a step taps rather than holds. The stock rifle is semi-automatic, so
+/// a held fire bit fires once and then nothing: every shot needs its own
+/// release edge, and reload is a press for the same reason.
+#[derive(Clone, Copy, Default)]
+struct Pulse {
+    buttons: u8,
+    wbuttons: u8,
+    /// Taps the step sends; after the last one it holds its base input alone.
+    count: u32,
+}
+
+/// How long a tap is held down, and the floor on how often one starts: two
+/// frames down, six up at the probe's 60 Hz send rate, which is what fires
+/// cleanly on retail. The gap is raised to clear the weapon file's `fireTime`
+/// when that is longer, so a tap edge never races the shot before it;
+/// m1carbine_mp's is 0.135 s, past the floor.
+const PULSE_HOLD: Duration = Duration::from_millis(32);
+const PULSE_PERIOD: Duration = Duration::from_millis(128);
+const PULSE_MARGIN: Duration = Duration::from_millis(48);
+
+/// One labelled step of the combat script: `base` held for `dur`, with
+/// `pulse`'s bits tapped on top of it.
+struct CombatStep {
+    label: &'static str,
+    base: net::msg::UserCmd,
+    pulse: Pulse,
+    dur: Duration,
+    /// Whether the step walks. A walking step is steered by [`StallTurn`], so
+    /// where it ends up is not reproducible and a gate cannot replay it.
+    walks: bool,
+    /// Whether the step's clock waits for `weaponstate` to read ready. A step
+    /// that taps has to: the weapon it inherits may still be busy, and a
+    /// reload that outlives its step recorded a reload under a fire label.
+    wait_ready: bool,
+    /// Set to the weapon file's `reloadTime` plus a margin once the join names
+    /// the weapon, so the hold is not a guess about one rifle's timings.
+    from_reload_time: bool,
+    /// How often a tap starts; [`PULSE_PERIOD`] until the weapon file raises it.
+    period: Duration,
+}
+
+impl CombatStep {
+    /// What the step sends `elapsed` into itself: its held input, with the
+    /// pulsed bits down for the first [`PULSE_HOLD`] of each `period` until
+    /// `count` taps have gone out.
+    fn cmd_at(&self, elapsed: Duration) -> net::msg::UserCmd {
+        let mut cmd = self.base;
+        let ms = elapsed.as_millis();
+        if ms / self.period.as_millis() < self.pulse.count as u128
+            && ms % self.period.as_millis() < PULSE_HOLD.as_millis()
+        {
+            cmd.buttons |= self.pulse.buttons;
+            cmd.wbuttons |= self.pulse.wbuttons;
+        }
+        cmd
+    }
+}
+
+/// The steps, each starting from the one before. The two idles bracket the
+/// shooting so the capture shows what the channels return to, and the stances
+/// are separate steps because the animscript's fire clauses are per stance.
+fn combat_script() -> Vec<CombatStep> {
+    use net::msg::{NULL_USERCMD, WBUTTON_CROUCH, WBUTTON_PRONE, WBUTTON_RELOAD};
+    let hold = |label, base, ms| CombatStep {
+        label,
+        base,
+        pulse: Pulse::default(),
+        dur: Duration::from_millis(ms),
+        walks: false,
+        wait_ready: false,
+        from_reload_time: false,
+        period: PULSE_PERIOD,
+    };
+    let fire = |label, base, shots, ms| CombatStep {
+        label,
+        base,
+        pulse: Pulse {
+            buttons: BUTTON_ATTACK,
+            wbuttons: 0,
+            count: shots,
+        },
+        dur: Duration::from_millis(ms),
+        walks: false,
+        wait_ready: true,
+        from_reload_time: false,
+        period: PULSE_PERIOD,
+    };
+    vec![
+        // First, so two probes spawned across a map close some of the distance
+        // between them before anyone shoots. Not a gate case: the stall
+        // response steers it.
+        CombatStep {
+            label: "advance",
+            base: net::msg::UserCmd {
+                forward: 127,
+                ..NULL_USERCMD
+            },
+            pulse: Pulse::default(),
+            dur: Duration::from_millis(6000),
+            walks: true,
+            wait_ready: false,
+            from_reload_time: false,
+            period: PULSE_PERIOD,
+        },
+        hold("idle", NULL_USERCMD, 1500),
+        fire("single_shot", NULL_USERCMD, 1, 1500),
+        // More shots than the ring has slots, which is what shows how it wraps
+        // and what `eventSequence` does across the wrap.
+        fire("sustained_fire", NULL_USERCMD, 6, 2500),
+        CombatStep {
+            label: "reload",
+            base: NULL_USERCMD,
+            pulse: Pulse {
+                buttons: 0,
+                wbuttons: WBUTTON_RELOAD,
+                count: 1,
+            },
+            dur: RELOAD_HOLD_FALLBACK,
+            walks: false,
+            wait_ready: true,
+            from_reload_time: true,
+            period: PULSE_PERIOD,
+        },
+        fire(
+            "crouch_fire",
+            net::msg::UserCmd {
+                wbuttons: WBUTTON_CROUCH,
+                up: -127,
+                ..NULL_USERCMD
+            },
+            3,
+            2500,
+        ),
+        // Standing between the two lowered stances: a prone taken straight out
+        // of a crouch was refused in one motion capture and taken in another.
+        hold("stand_between", NULL_USERCMD, 1500),
+        fire(
+            "prone_fire",
+            net::msg::UserCmd {
+                wbuttons: WBUTTON_PRONE,
+                up: -127,
+                ..NULL_USERCMD
+            },
+            3,
+            3000,
+        ),
+        hold("idle_after", NULL_USERCMD, 3000),
+    ]
+}
+
+/// One snapshot's worth of the channels a shot moves.
+struct CombatSample {
+    label: &'static str,
+    elapsed_ms: u128,
+    server_time: i32,
+    /// The input in flight when the snapshot arrived, so a trace line can be
+    /// lined up with the tap that produced it.
+    buttons: u8,
+    wbuttons: u8,
+    weaponstate: i32,
+    weap_anim: i32,
+    legs_anim: i32,
+    torso_anim: i32,
+    event_sequence: i32,
+    events: [i32; 4],
+}
+
+/// What a step turned out to be: kept beside the playerstate it ended at, so
+/// the fixture can say on its face whether a step labelled fire ever fired.
+struct StepResult {
+    label: &'static str,
+    /// The step ever observed `weaponstate` firing. False on a fire step is a
+    /// broken capture, not a fact about retail.
+    fired: bool,
+    /// Snapshots where `weaponstate` rose into firing. A shot shorter than the
+    /// gap between snapshots can slip through, which is what `seq_delta` is
+    /// the check on.
+    shots_seen: u32,
+    /// `eventSequence` gained over the step. 8 bits on the wire, so it wraps.
+    seq_delta: i32,
+    /// How long the step waited for the weapon to read ready before its clock
+    /// started.
+    waited_ms: u128,
+    /// The step was restarted because the weapon went busy under it.
+    retried: bool,
+    /// The playerstate the step ended at, for the fields a trace line omits.
+    fields: Vec<i32>,
+}
+
+/// Walks [`combat_script`] and keeps every snapshot along the way. A settled
+/// sample cannot hold a shot -- the event ring has four slots and overwrites
+/// as it goes -- so this mode records the trace itself and the settled
+/// playerstate only as the step's tail.
+struct CombatProbe {
+    steps: Vec<CombatStep>,
+    idx: usize,
+    /// Set when the current step's clock starts, which a `wait_ready` step
+    /// defers until the weapon reads ready.
+    started: Option<Instant>,
+    /// When the current step began waiting for that, and since when the weapon
+    /// has read ready without interruption.
+    waiting_since: Option<Instant>,
+    ready_since: Option<Instant>,
+    /// Steps already restarted once, so a weapon that goes busy every time
+    /// costs one retry and not the run.
+    retried: Vec<&'static str>,
+    trace: Vec<CombatSample>,
+    results: Vec<StepResult>,
+    done: bool,
+    /// Newest snapshot already recorded, so the trace runs per snapshot rather
+    /// than per loop iteration.
+    traced: Option<u32>,
+    /// The weapon file has been read once; a second look would reread it every
+    /// frame.
+    weapon_read: bool,
+    spawn_delta_yaw: Option<i32>,
+    stall: StallTurn,
+}
+
+impl Default for CombatProbe {
+    fn default() -> Self {
+        Self {
+            steps: combat_script(),
+            idx: 0,
+            started: None,
+            waiting_since: None,
+            ready_since: None,
+            retried: Vec::new(),
+            trace: Vec::new(),
+            results: Vec::new(),
+            done: false,
+            traced: None,
+            weapon_read: false,
+            spawn_delta_yaw: None,
+            stall: StallTurn::default(),
+        }
+    }
+}
+
+impl CombatProbe {
+    fn running(&self) -> bool {
+        !self.done
+    }
+
+    /// Holds the step's base input, and taps only once its clock runs: a step
+    /// waiting for the weapon to read ready must not be tapping while it waits.
+    fn cmd(&self) -> net::msg::UserCmd {
+        match (self.steps.get(self.idx), self.started) {
+            (Some(step), Some(t)) => step.cmd_at(t.elapsed()),
+            (Some(step), None) => step.base,
+            (None, _) => net::msg::NULL_USERCMD,
+        }
+    }
+
+    /// Sizes the reload step off the weapon the join was given, once. A hold
+    /// shorter than `reloadTime` leaves the reload running into the steps after
+    /// it, which recorded a reload under two fire labels before this existed.
+    fn use_weapon(&mut self, fs: Option<&vcod_common::pk3::Pk3Fs>, name: &str) {
+        if self.weapon_read || name.is_empty() {
+            return;
+        }
+        self.weapon_read = true;
+        let Some(fs) = fs else {
+            println!("COMBAT: no game data, reload holds the {RELOAD_HOLD_FALLBACK:?} fallback");
+            return;
+        };
+        let def = match vcod_common::weapon::load(fs, name) {
+            Ok(def) => def,
+            Err(e) => {
+                println!("COMBAT: cannot read weapon {name} ({e:#}); reload holds the fallback");
+                return;
+            }
+        };
+        let dur = Duration::from_secs_f32(def.reload_time) + RELOAD_MARGIN;
+        let period = (Duration::from_secs_f32(def.fire_time) + PULSE_MARGIN).max(PULSE_PERIOD);
+        for step in &mut self.steps {
+            if step.from_reload_time {
+                step.dur = dur;
+            }
+            step.period = period;
+        }
+        println!(
+            "COMBAT: {name} reloadTime {:.2}s fireTime {:.3}s, reload step holds {dur:?}, taps every {period:?}",
+            def.reload_time, def.fire_time
+        );
+    }
+
+    /// Feeds the newest snapshot in. Returns true once the last step is done
+    /// and the fixture is ready to write.
+    fn step(&mut self, now: Instant, snap: &net::snapshot::Snapshot) -> bool {
+        let Some(step) = self.steps.get(self.idx) else {
+            self.done = true;
+            return true;
+        };
+        let (label, dur, wait_ready, fires) =
+            (step.label, step.dur, step.wait_ready, step_fires(step));
+        let p = &net::protocol::PROTOCOL_V1;
+        let weaponstate = snap.ps.field_i32(p, "weaponstate");
+        // A step that taps starts from a weapon that can take the input. The
+        // wait is on the observed state, not a duration, so a weapon with other
+        // timings than the stock rifle's does not silently break the capture.
+        if wait_ready && self.started.is_none() {
+            let since = *self.waiting_since.get_or_insert(now);
+            let waited = now.duration_since(since);
+            let steady = if weaponstate == WEAPONSTATE_READY {
+                now.duration_since(*self.ready_since.get_or_insert(now))
+            } else {
+                self.ready_since = None;
+                Duration::ZERO
+            };
+            if steady < READY_STABLE && waited < READY_TIMEOUT {
+                return false;
+            }
+            if steady < READY_STABLE {
+                println!(
+                    "COMBAT {label}: weaponstate still {weaponstate} after {READY_TIMEOUT:?}, starting anyway"
+                );
+            } else if waited > READY_STABLE {
+                println!(
+                    "COMBAT {label}: weapon ready after {}ms",
+                    waited.as_millis()
+                );
+            }
+        }
+        let started = *self.started.get_or_insert(now);
+        let elapsed = now.duration_since(started);
+        let cmd = self.cmd();
+        if self.traced != Some(snap.message_num) {
+            self.traced = Some(snap.message_num);
+            let s = CombatSample {
+                label,
+                elapsed_ms: elapsed.as_millis(),
+                server_time: snap.server_time,
+                buttons: cmd.buttons,
+                wbuttons: cmd.wbuttons,
+                weaponstate,
+                weap_anim: snap.ps.field_i32(p, "weapAnim"),
+                legs_anim: snap.ps.field_i32(p, "legsAnim"),
+                torso_anim: snap.ps.field_i32(p, "torsoAnim"),
+                event_sequence: snap.ps.field_i32(p, "eventSequence"),
+                events: [
+                    snap.ps.field_i32(p, "events[0]"),
+                    snap.ps.field_i32(p, "events[1]"),
+                    snap.ps.field_i32(p, "events[2]"),
+                    snap.ps.field_i32(p, "events[3]"),
+                ],
+            };
+            println!(
+                "  trace {label} +{:>5}ms st={} in={:02x}/{:02x} weaponstate={} weapAnim={} legsAnim={} torsoAnim={} evSeq={} events=[{},{},{},{}]",
+                s.elapsed_ms,
+                s.server_time,
+                s.buttons,
+                s.wbuttons,
+                s.weaponstate,
+                s.weap_anim,
+                s.legs_anim,
+                s.torso_anim,
+                s.event_sequence,
+                s.events[0],
+                s.events[1],
+                s.events[2],
+                s.events[3],
+            );
+            self.trace.push(s);
+        }
+        // The weapon went busy under a fire step before it fired: the taps
+        // spent so far bought nothing, so the step starts over rather than
+        // recording a reload under a firing label.
+        if fires
+            && weaponstate == WEAPONSTATE_RELOADING
+            && !self.retried.contains(&label)
+            && !self
+                .trace
+                .iter()
+                .any(|s| s.label == label && s.weaponstate == WEAPONSTATE_FIRING)
+        {
+            println!(
+                "COMBAT {label}: weaponstate {weaponstate} +{}ms into a fire step, restarting it once",
+                elapsed.as_millis()
+            );
+            self.retried.push(label);
+            self.trace.retain(|s| s.label != label);
+            self.started = None;
+            self.waiting_since = None;
+            self.ready_since = None;
+            return false;
+        }
+        if elapsed < dur {
+            return false;
+        }
+        let waited_ms = self
+            .waiting_since
+            .map_or(0, |t| started.duration_since(t).as_millis());
+        let mine: Vec<&CombatSample> = self.trace.iter().filter(|s| s.label == label).collect();
+        let set = |f: fn(&CombatSample) -> i32| {
+            mine.iter()
+                .map(|s| f(s))
+                .collect::<std::collections::BTreeSet<i32>>()
+        };
+        let mut shots_seen = 0;
+        let mut was_firing = false;
+        for s in &mine {
+            let firing = s.weaponstate == WEAPONSTATE_FIRING;
+            shots_seen += u32::from(firing && !was_firing);
+            was_firing = firing;
+        }
+        // `eventSequence` is 8 bits on the wire, so a run spanning the wrap
+        // reads as a negative difference without this.
+        let seq_delta = match (mine.first(), mine.last()) {
+            (Some(a), Some(b)) => (b.event_sequence - a.event_sequence).rem_euclid(256),
+            _ => 0,
+        };
+        println!(
+            "COMBAT {label}: {} snapshots, {shots_seen} shot(s) seen, eventSequence +{seq_delta}, weaponstate {:?}, weapAnim {:?}, legsAnim {:?}, torsoAnim {:?}",
+            mine.len(),
+            set(|s| s.weaponstate),
+            set(|s| s.weap_anim),
+            set(|s| s.legs_anim),
+            set(|s| s.torso_anim),
+        );
+        let fired = mine.iter().any(|s| s.weaponstate == WEAPONSTATE_FIRING);
+        if fires && !fired {
+            println!(
+                "COMBAT WARNING {label}: a fire step that never saw weaponstate {WEAPONSTATE_FIRING}. \
+                 The capture is broken, not the server: something left the weapon busy."
+            );
+        }
+        self.results.push(StepResult {
+            label,
+            fired,
+            shots_seen,
+            seq_delta,
+            waited_ms,
+            retried: self.retried.contains(&label),
+            fields: snap.ps.fields.clone(),
+        });
+        self.idx += 1;
+        self.started = None;
+        self.waiting_since = None;
+        self.ready_since = None;
+        if self.idx >= self.steps.len() {
+            self.done = true;
+            return true;
+        }
+        false
+    }
+}
+
+/// Whether the step taps the trigger, which is what makes a step that never
+/// observed a shot a defect rather than a fact.
+fn step_fires(step: &CombatStep) -> bool {
+    step.pulse.buttons & BUTTON_ATTACK != 0 && step.pulse.count > 0
+}
+
+/// Added to the weapon file's `reloadTime` so the reload has finished before
+/// the next step starts, and used whole when no weapon file can be read.
+/// m1carbine_mp's `reloadTime` is 2.65 s; a step shorter than that ran the
+/// reload on into the two stance steps and recorded it under their labels.
+const RELOAD_MARGIN: Duration = Duration::from_millis(1200);
+const RELOAD_HOLD_FALLBACK: Duration = Duration::from_millis(6000);
+
+/// How long `weaponstate` has to read ready before a step's clock starts. One
+/// ready snapshot is not enough: in the capture that motivated this, a second
+/// reload began 50 ms into `crouch_fire`, and `crouch_fire` had started on a
+/// weapon that read ready.
+const READY_STABLE: Duration = Duration::from_millis(500);
+
+/// How long a step waits for that before it gives up and starts anyway, so a
+/// weapon that never settles costs one step's worth of capture rather than the
+/// whole run.
+const READY_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// `weaponstate` while reloading. A fire step that meets it before it has seen
+/// a shot restarts once: the weapon went busy under it, and the taps it has
+/// already spent bought nothing.
+const WEAPONSTATE_RELOADING: i32 = 2;
+
+/// Ground covered below this inside [`STALL_WINDOW`] while walking forward
+/// means the probe is standing against geometry. Retail's run speed is
+/// ~190 u/s, so a clear walk covers ~280u per window.
+const STALL_UNITS: f32 = 60.0;
+const STALL_WINDOW: Duration = Duration::from_millis(1500);
+const STALL_TURN_DEG: i32 = 45;
+
+/// A wall follower, near enough: a probe walking into geometry stops there and
+/// stays, ~135u from a spawn, so a stalled walk turns and keeps going. Opt-in,
+/// because every capture that holds an exact input depends on not wandering.
+#[derive(Default)]
+struct StallTurn {
+    /// Added to the walk's heading; it accumulates until the walk moves again.
+    detour_deg: i32,
+    /// Time and position the current stall window opened at.
+    last_progress: Option<(Instant, [f32; 3])>,
+}
+
+impl StallTurn {
+    /// Turns `cmd` by the accumulated detour, and turns further when a forward
+    /// walk has covered no ground. Only the horizontal distance counts: a
+    /// probe sliding down a slope is not making progress.
+    fn apply(&mut self, cmd: &mut net::msg::UserCmd, now: Instant, origin: [f32; 3]) {
+        if cmd.forward <= 0 {
+            self.last_progress = None;
+            return;
+        }
+        let (t0, o0) = *self.last_progress.get_or_insert((now, origin));
+        if now.duration_since(t0) >= STALL_WINDOW {
+            let moved = ((origin[0] - o0[0]).powi(2) + (origin[1] - o0[1]).powi(2)).sqrt();
+            if moved < STALL_UNITS {
+                self.detour_deg = (self.detour_deg + STALL_TURN_DEG).rem_euclid(360);
+                println!(
+                    "STALL: only {moved:.0}u in {}ms, turning to detour {} deg",
+                    STALL_WINDOW.as_millis(),
+                    self.detour_deg,
+                );
+            }
+            self.last_progress = Some((now, origin));
+        }
+        cmd.angles[1] += self.detour_deg * 65536 / 360;
+    }
+}
+
+/// Writes one section per step to `<map>-<gametype>-combat.txt`. Each carries
+/// the input that produced it on an `!input` line, so the gate replays the
+/// capture's own script rather than a copy of it, one `!trace` line per
+/// snapshot, and the playerstate the step ended at.
+fn write_combat_fixture(
+    configstrings: &[String],
+    join: &JoinProbe,
+    combat: &CombatProbe,
+) -> anyhow::Result<()> {
+    let p = &net::protocol::PROTOCOL_V1;
+    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
+    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let map = key("mapname");
+    let gametype = key("g_gametype");
+
+    let mut out = String::new();
+    out.push_str("# Retail CoD 1.1d dedicated server playerstate under weapon input.\n");
+    out.push_str(&format!(
+        "# map {map}, g_gametype {gametype}, joined {}, weapon {}, dedicated 1,\n",
+        join.team, join.weapon
+    ));
+    out.push_str("# sv_maxclients 8, sv_pure 0, stock scr_* defaults, one client on the server.\n");
+    out.push_str("# Captured with tools/run_server.sh and --net-probe --save-combat.\n");
+    out.push_str("# The fire bit is tapped, not held: the stock rifle is semi-automatic and a\n");
+    out.push_str("# held bit fires one shot and then nothing. !input carries the held input,\n");
+    out.push_str("# the tapped bits, how many taps and the tap timing, all in ms.\n");
+    out.push_str("# One !trace line per snapshot, because the event ring holds four slots and\n");
+    out.push_str("# overwrites: a shot is a transient no settled sample can hold. The field\n");
+    out.push_str("# lines after a step's traces are the playerstate it ended at.\n");
+    out.push_str("# !observed carries what the step turned out to be: whether a fire step ever\n");
+    out.push_str("# saw weaponstate 3, how many shots and how much eventSequence it gained, and\n");
+    out.push_str("# the distinct values each channel took. A fire step with fired=0 is a broken\n");
+    out.push_str("# capture and is flagged above its section as well.\n");
+    out.push_str("# Values are the raw i32 wire words, floats as their bit patterns.\n");
+    let broken: Vec<&str> = combat
+        .results
+        .iter()
+        .filter(|r| {
+            !r.fired
+                && combat
+                    .steps
+                    .iter()
+                    .any(|s| s.label == r.label && step_fires(s))
+        })
+        .map(|r| r.label)
+        .collect();
+    if !broken.is_empty() {
+        out.push_str(&format!(
+            "# BROKEN: fire step(s) {} never observed weaponstate {WEAPONSTATE_FIRING}; \
+recapture before gating anything on this file.\n",
+            broken.join(", ")
+        ));
+    }
+    for r in &combat.results {
+        let Some(step) = combat.steps.iter().find(|s| s.label == r.label) else {
+            continue;
+        };
+        let mine: Vec<&CombatSample> = combat.trace.iter().filter(|s| s.label == r.label).collect();
+        let set = |f: fn(&CombatSample) -> i32| {
+            mine.iter()
+                .map(|s| f(s))
+                .map(|v| v.to_string())
+                .collect::<std::collections::BTreeSet<String>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        if step_fires(step) && !r.fired {
+            out.push_str(&format!(
+                "# BROKEN: {} never observed weaponstate {WEAPONSTATE_FIRING}; it captured no shot.\n",
+                r.label
+            ));
+        }
+        out.push_str(&format!("[step {}]\n", r.label));
+        out.push_str(&format!(
+            "!input buttons={} wbuttons={} up={} forward={} right={} yaw={} \
+pulse_buttons={} pulse_wbuttons={} pulses={} pulse_hold_ms={} pulse_period_ms={} \
+hold_ms={} walks={} wait_ready={}\n",
+            step.base.buttons,
+            step.base.wbuttons,
+            step.base.up,
+            step.base.forward,
+            step.base.right,
+            step.base.angles[1],
+            step.pulse.buttons,
+            step.pulse.wbuttons,
+            step.pulse.count,
+            PULSE_HOLD.as_millis(),
+            step.period.as_millis(),
+            step.dur.as_millis(),
+            step.walks as i32,
+            step.wait_ready as i32,
+        ));
+        out.push_str(&format!(
+            "!observed fire_step={} expected_shots={} fired={} shots_seen={} seq_delta={} \
+waited_ready_ms={} retried={} snapshots={} weaponstate={} legsAnim={} torsoAnim={} weapAnim={}\n",
+            step_fires(step) as i32,
+            if step_fires(step) {
+                step.pulse.count
+            } else {
+                0
+            },
+            r.fired as i32,
+            r.shots_seen,
+            r.seq_delta,
+            r.waited_ms,
+            r.retried as i32,
+            mine.len(),
+            set(|s| s.weaponstate),
+            set(|s| s.legs_anim),
+            set(|s| s.torso_anim),
+            set(|s| s.weap_anim),
+        ));
+        for s in &mine {
+            out.push_str(&format!(
+                "!trace ms={} serverTime={} buttons={} wbuttons={} weaponstate={} weapAnim={} \
+legsAnim={} torsoAnim={} eventSequence={} events[0]={} events[1]={} events[2]={} events[3]={}\n",
+                s.elapsed_ms,
+                s.server_time,
+                s.buttons,
+                s.wbuttons,
+                s.weaponstate,
+                s.weap_anim,
+                s.legs_anim,
+                s.torso_anim,
+                s.event_sequence,
+                s.events[0],
+                s.events[1],
+                s.events[2],
+                s.events[3],
+            ));
+        }
+        for (f, v) in p.player_fields.iter().zip(&r.fields) {
+            out.push_str(&format!("{} {v}\n", f.name));
+        }
+    }
+
+    let path = format!("{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-combat.txt");
+    std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
+    std::fs::write(&path, out)?;
+    println!(
+        "combat: {} steps, {} traced snapshots -> {path}",
+        combat.results.len(),
+        combat.trace.len(),
+    );
+    if !broken.is_empty() {
+        println!(
+            "combat: BROKEN fire step(s) {}: no shot captured",
+            broken.join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// Writes the spawned player's wire state to `<map>-<gametype>.txt`. The map
 /// and gametype come out of cs 0 (serverinfo), so nothing here is hand-typed.
 fn write_playerstate_fixture(
@@ -1765,4 +2484,59 @@ impl PvsProbe {
 
 fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stock rifle is semi-automatic: a held fire bit is one shot and then
+    /// nothing, so every shot needs its own release edge. Counted at the
+    /// probe's send rate rather than read off the pattern by eye.
+    #[test]
+    fn a_fire_step_taps_the_attack_bit_once_per_shot() {
+        let script = combat_script();
+        let step = script
+            .iter()
+            .find(|s| s.label == "sustained_fire")
+            .expect("the script fires a burst");
+        let (mut edges, mut frames_down, mut was_down) = (0, 0, false);
+        for frame in 0..step.dur.as_millis() / 16 {
+            let down = step
+                .cmd_at(Duration::from_millis(frame as u64 * 16))
+                .buttons
+                & BUTTON_ATTACK
+                != 0;
+            edges += u32::from(down && !was_down);
+            frames_down += u32::from(down);
+            was_down = down;
+        }
+        assert_eq!(edges, step.pulse.count);
+        assert!(
+            frames_down <= 3 * step.pulse.count,
+            "{frames_down} frames down for {} taps: the bit is being held",
+            step.pulse.count
+        );
+    }
+
+    /// A step that taps has to start from a weapon that can take the input.
+    /// A reload that outlived its step ran on into both stance steps and was
+    /// recorded under their labels, with no shot in either.
+    #[test]
+    fn a_tapping_step_starts_from_a_ready_weapon() {
+        for step in combat_script().iter().filter(|s| s.pulse.count > 0) {
+            assert!(
+                step.wait_ready,
+                "{} taps without waiting for the weapon",
+                step.label
+            );
+        }
+        let reload = combat_script()
+            .into_iter()
+            .find(|s| s.from_reload_time)
+            .expect("the script reloads");
+        // m1carbine_mp's `reloadTime`, the shortest hold the fallback has to
+        // outlast when no weapon file can be read.
+        assert!(reload.dur > Duration::from_millis(2650));
+    }
 }
