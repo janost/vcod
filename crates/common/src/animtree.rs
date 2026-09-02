@@ -6,7 +6,7 @@
 
 use crate::pk3::Pk3Fs;
 use anyhow::{anyhow, bail, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub struct Node {
     pub name: String,
@@ -244,6 +244,11 @@ pub struct PlayerAnims {
     pub tree: AnimTree,
     pub index: AnimIndex,
     pub script: crate::animscript::AnimScript,
+    /// Each `EVENTS` anim's own length in ms, from the xanim header. An event
+    /// clause without a `duration` holds its channel for this
+    /// (`animscript::AnimState::event`); a name the paks carry no clip for is
+    /// not in here and holds nothing.
+    lengths: HashMap<String, u32>,
 }
 
 impl PlayerAnims {
@@ -254,11 +259,26 @@ impl PlayerAnims {
             .ok_or_else(|| anyhow!("mp/playeranim.script not found in pk3s"))?;
         let script = crate::animscript::AnimScript::parse(&String::from_utf8_lossy(&text))?;
         let index = AnimIndex::build(&tree, &script.referenced_names());
+        let lengths = script
+            .event_referenced_names()
+            .iter()
+            .filter_map(|name| {
+                let data = fs.read(&format!("xanim/{name}"))?;
+                Some((name.clone(), crate::xanim::duration_ms(name, &data).ok()?))
+            })
+            .collect();
         Ok(PlayerAnims {
             tree,
             index,
             script,
+            lengths,
         })
+    }
+
+    /// An event anim's own length in ms, or `None` for a name the paks carry
+    /// no clip for.
+    pub fn length_ms(&self, name: &str) -> Option<u32> {
+        self.lengths.get(name).copied()
     }
 
     pub fn name(&self, wire: i32) -> Option<&str> {

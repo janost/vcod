@@ -1310,6 +1310,9 @@ impl Server {
             // Stale cmds (dt <= 0) are skipped whole; a flood past the per-tick
             // cap resyncs to the newest cmd and keeps only the tail.
             let mut last_cmd = None::<UserCmd>;
+            // Every event the tick's moves raised, for the animation events:
+            // a tick that ran several moves still raises each one.
+            let mut events = Vec::new();
             while !c.pending.is_empty() {
                 let cmd = c.pending[0];
                 if m.processed >= MAX_CMDS_PER_TICK {
@@ -1327,7 +1330,8 @@ impl Server {
                     continue;
                 }
                 let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
-                for e in sim.step(&cmd, dt, collision, weapons.defs()) {
+                let raised = sim.step(&cmd, dt, collision, weapons.defs());
+                for e in &raised {
                     if e.event == EV_FIRE_WEAPON || e.event == EV_FIRE_WEAPON_LASTSHOT {
                         self.pending_shots.push(Shot {
                             slot,
@@ -1336,6 +1340,7 @@ impl Server {
                         });
                     }
                 }
+                events.extend(raised);
                 last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;
                 m.first_cmd_st.get_or_insert(cmd.server_time);
@@ -1359,6 +1364,7 @@ impl Server {
                     },
                     &cmd,
                     self.sv_time_ms,
+                    &events,
                 );
             }
         }

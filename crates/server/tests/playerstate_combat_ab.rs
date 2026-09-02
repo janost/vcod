@@ -75,9 +75,14 @@ struct Step {
     hold_ms: i64,
     walks: bool,
     wait_ready: bool,
-    /// Retail's per-snapshot trace: (weaponstate, weapAnim, eventSequence,
-    /// events). `torsoAnim` is in the fixture and not compared here; the
-    /// torso channel is the next task's.
+    /// The weapon byte the probe sent through the step, `cmd.weapon`: retail
+    /// reads a byte that differs from `ps.weapon` as a request to holster
+    /// (`cod11-combat.md` section 1.8), so the replay has to send the same
+    /// one. Defaults to the joined weapon's CS 7 index for a capture taken
+    /// before the key existed.
+    weapon: u8,
+    /// Retail's per-snapshot trace: (weaponstate, weapAnim, torsoAnim,
+    /// eventSequence, events).
     trace: Vec<Trace>,
 }
 
@@ -85,11 +90,12 @@ struct Step {
 struct Trace {
     weaponstate: i32,
     weap_anim: i32,
+    torso_anim: i32,
     event_sequence: i32,
     events: [i32; 4],
 }
 
-fn parse_fixture(text: &str) -> Vec<Step> {
+fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
     let mut steps: Vec<Step> = Vec::new();
     for line in text.lines() {
         let line = line.trim_end();
@@ -110,6 +116,7 @@ fn parse_fixture(text: &str) -> Vec<Step> {
                 hold_ms: 0,
                 walks: false,
                 wait_ready: false,
+                weapon: default_weapon,
                 trace: Vec::new(),
             });
             continue;
@@ -137,12 +144,16 @@ fn parse_fixture(text: &str) -> Vec<Step> {
             step.hold_ms = i("hold_ms");
             step.walks = i("walks") != 0;
             step.wait_ready = i("wait_ready") != 0;
+            if let Some(w) = m.get("weapon") {
+                step.weapon = w.parse::<u8>().unwrap();
+            }
         } else if let Some(rest) = line.strip_prefix("!trace ") {
             let m = kv(rest);
             let i = |k: &str| m[k].parse::<i32>().unwrap();
             step.trace.push(Trace {
                 weaponstate: i("weaponstate"),
                 weap_anim: i("weapAnim"),
+                torso_anim: i("torsoAnim"),
                 event_sequence: i("eventSequence"),
                 events: [
                     i("events[0]"),
@@ -212,12 +223,32 @@ fn anims(trace: &[Trace]) -> BTreeSet<i32> {
     trace.iter().map(|t| t.weap_anim & 511).collect()
 }
 
+/// The `torsoAnim` indices a trace took, toggle masked off. The weapon channel
+/// writes these off the animscript's `EVENTS` blocks
+/// (player-model-anim-system.md, "The weapon channel").
+fn torsos(trace: &[Trace]) -> BTreeSet<i32> {
+    trace.iter().map(|t| t.torso_anim & 511).collect()
+}
+
+/// How often the torso's 512 restart toggle flipped between consecutive
+/// samples. A shot restarts the same index and is visible only here, and the
+/// channel clearing at the end of the anim flips it once more, so a fire step
+/// reads one flip per shot plus one: carentan's `sustained_fire` reads 765,
+/// 253, 765, 253, 765, 253, 512.
+fn torso_flips(trace: &[Trace]) -> usize {
+    trace
+        .windows(2)
+        .filter(|w| (w[0].torso_anim ^ w[1].torso_anim) & 512 != 0)
+        .count()
+}
+
 fn trace_of(ps: &vcod_common::net::msg::PlayerState) -> Trace {
     let p = &PROTOCOL_V1;
     let ev = |i: usize| ps.field_i32(p, &format!("events[{i}]"));
     Trace {
         weaponstate: ps.field_i32(p, "weaponstate"),
         weap_anim: ps.field_i32(p, "weapAnim"),
+        torso_anim: ps.field_i32(p, "torsoAnim"),
         event_sequence: ps.field_i32(p, "eventSequence"),
         events: [ev(0), ev(1), ev(2), ev(3)],
     }
@@ -255,10 +286,15 @@ fn ours(
     let mut out = Vec::new();
     for step in steps {
         let mut trace = Vec::new();
+        // The held input, carrying the weapon byte the probe sent: a byte that
+        // differs from `ps.weapon` is a holster request, so a replay that left
+        // it 0 would not be running the capture's input.
+        let mut base = step.base;
+        base.weapon = step.weapon;
         if step.wait_ready {
             for i in 0..100 {
                 now += Duration::from_millis(FRAME_MS as u64);
-                cl.send_frame(&step.base);
+                cl.send_frame(&base);
                 common::step(&mut sv, &q, &mut cl, now);
                 let ready = cl
                     .snapshots()
@@ -281,7 +317,7 @@ fn ours(
         for i in 0..frames {
             for half in 0..2 {
                 let t = i * FRAME_MS + half * CMD_MS;
-                let mut cmd = step.base;
+                let mut cmd = base;
                 if taps.contains(&t) {
                     cmd.buttons |= step.pulse_buttons;
                     cmd.wbuttons |= step.pulse_wbuttons;
@@ -310,9 +346,11 @@ fn check(map: &str) {
         cfg(map).gametype
     );
     let text = std::fs::read_to_string(&path).unwrap();
-    let steps = parse_fixture(&text);
     let team = common::header_value(&text, "joined", &path).to_string();
     let weapon = common::header_value(&text, "weapon", &path).to_string();
+    let held =
+        vcod_server::configstrings::weapon_index(&weapon).expect("the joined weapon in CS 7");
+    let steps = parse_fixture(&text, held as u8);
     let mine = ours(map, &steps, (&team, &weapon), fs);
     let mut bad = Vec::new();
     for (step, ours) in steps.iter().zip(&mine) {
@@ -366,6 +404,22 @@ fn check(map: &str) {
                 anims(ours)
             )),
             None => {}
+        }
+        if torsos(&step.trace) != torsos(ours) {
+            bad.push(format!(
+                "{}: torsoAnim indices retail {:?} ours {:?}",
+                step.label,
+                torsos(&step.trace),
+                torsos(ours)
+            ));
+        }
+        let (r_flips, o_flips) = (torso_flips(&step.trace), torso_flips(ours));
+        if r_flips != o_flips {
+            bad.push(format!(
+                "{}: the torso toggle flipped {r_flips} times on retail, {o_flips} on ours \
+                 ({rs} shots)",
+                step.label
+            ));
         }
     }
     assert!(

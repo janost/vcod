@@ -1497,6 +1497,11 @@ struct CombatSample {
     torso_anim: i32,
     event_sequence: i32,
     events: [i32; 4],
+    /// `ps.weapon`, which is what the probe echoes into every `cmd.weapon`.
+    /// Retail reads a byte that differs from it as a request to holster
+    /// (docs/research/cod11-combat.md, section 1.8), so a replay of this
+    /// capture has to send the same one.
+    weapon: i32,
 }
 
 /// What a step turned out to be: kept beside the playerstate it ended at, so
@@ -1678,6 +1683,7 @@ impl CombatProbe {
                     snap.ps.field_i32(p, "events[2]"),
                     snap.ps.field_i32(p, "events[3]"),
                 ],
+                weapon: snap.ps.field_i32(p, "weapon"),
             };
             println!(
                 "  trace {label} +{:>5}ms st={} in={:02x}/{:02x} weaponstate={} weapAnim={} legsAnim={} torsoAnim={} evSeq={} events=[{},{},{},{}]",
@@ -1878,7 +1884,8 @@ fn write_combat_fixture(
     out.push_str("# Captured with tools/run_server.sh and --net-probe --save-combat.\n");
     out.push_str("# The fire bit is tapped, not held: the stock rifle is semi-automatic and a\n");
     out.push_str("# held bit fires one shot and then nothing. !input carries the held input,\n");
-    out.push_str("# the tapped bits, how many taps and the tap timing, all in ms.\n");
+    out.push_str("# the tapped bits, how many taps and the tap timing, all in ms, and the\n");
+    out.push_str("# weapon byte every cmd of the step carried.\n");
     out.push_str("# One !trace line per snapshot, because the event ring holds four slots and\n");
     out.push_str("# overwrites: a shot is a transient no settled sample can hold. The field\n");
     out.push_str("# lines after a step's traces are the playerstate it ended at.\n");
@@ -1930,7 +1937,7 @@ recapture before gating anything on this file.\n",
         out.push_str(&format!(
             "!input buttons={} wbuttons={} up={} forward={} right={} yaw={} \
 pulse_buttons={} pulse_wbuttons={} pulses={} pulse_hold_ms={} pulse_period_ms={} \
-hold_ms={} walks={} wait_ready={}\n",
+hold_ms={} walks={} wait_ready={} weapon={}\n",
             step.base.buttons,
             step.base.wbuttons,
             step.base.up,
@@ -1945,6 +1952,8 @@ hold_ms={} walks={} wait_ready={}\n",
             step.dur.as_millis(),
             step.walks as i32,
             step.wait_ready as i32,
+            // The weapon byte the step ran with, so a replay sends it too.
+            mine.first().map_or(0, |s| s.weapon),
         ));
         out.push_str(&format!(
             "!observed fire_step={} expected_shots={} fired={} shots_seen={} seq_delta={} \

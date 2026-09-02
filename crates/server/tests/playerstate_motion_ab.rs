@@ -65,17 +65,18 @@ const ANIM_FIELDS: &[&str] = &["legsAnim"];
 
 /// Poses whose anim nothing derives yet, with the reason. The guard below
 /// fails on an entry that starts matching, so this cannot rot into a lie.
-const ANIM_GAPS: &[(&str, &str)] = &[("ads_stand", ADS_GAP)];
+/// Empty is the goal and it is empty: `ads_stand` was the entry, and it
+/// earned itself back when the animscript's `ads` condition started reading
+/// the cmd's bit instead of a hardcoded false.
+const ANIM_GAPS: &[(&str, &str)] = &[];
 
 /// The one reason both ads entries share.
 const ADS_GAP: &str = "the ads pose. Retail holds the ads bit here with a \
-     weapon in hand and takes `pm_flags` 0x20 and 0x80 and an ads legs idle \
-     with it; vcod models no ads at all -- pmove carries no weapon-position \
-     fraction and the animscript's `ads` condition is hardcoded false. Older \
-     captures could not show this: they were taken with `cmd.weapon` 0, which \
-     retail read as a holster, so the ads bit reached no weapon. Retail keeps \
-     both for every pose that follows, which is why the probe's script holds \
-     this one last";
+     weapon in hand and takes `pm_flags` 0x20 and 0x80 with it; pmove carries \
+     no weapon-position fraction and sets neither bit. Older captures could \
+     not show this: they were taken with `cmd.weapon` 0, which retail read as \
+     a holster, so the ads bit reached no weapon. Retail keeps both for every \
+     pose that follows, which is why the probe's script holds this one last";
 
 /// `pm_flags` bits retail sets that the mover has no source for: the map, the
 /// pose that shows it, the bit, and why. Excepted bit by bit and pose by pose,

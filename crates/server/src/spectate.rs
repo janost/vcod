@@ -161,6 +161,24 @@ pub struct AnimInputs<'a> {
     pub weapon_class: &'a str,
 }
 
+/// The `EVENTS` block a weapon event raises, or `None` for one the script has
+/// nothing for. Retail's `PM_Weapon` raises `BG_AnimScriptEvent` where it
+/// enters the state (docs/research/cod11-combat.md, sections 1.5, 1.7 and
+/// 1.8); the block's clauses are what pick the anim.
+fn weapon_anim_event(event: i32) -> Option<&'static str> {
+    use vcod_common::pmove::weapon::{
+        EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT, EV_PUTAWAY_WEAPON, EV_RAISE_WEAPON, EV_RELOAD,
+        EV_RELOAD_FROM_EMPTY, EV_RELOAD_START,
+    };
+    Some(match event {
+        EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT => "fireweapon",
+        EV_RELOAD | EV_RELOAD_FROM_EMPTY | EV_RELOAD_START => "reload",
+        EV_PUTAWAY_WEAPON => "dropweapon",
+        EV_RAISE_WEAPON => "raiseweapon",
+        _ => return None,
+    })
+}
+
 /// Horizontal speed below which the animscript sees an idle player, whatever
 /// the input. A player pressed into geometry keeps a few units a second and
 /// retail's capture animates it standing; the value sits between that
@@ -295,7 +313,13 @@ impl ClientSim {
     ///
     /// A spectator animates nothing; it is sent to nobody and its own
     /// playerstate carries zeros in the capture.
-    pub fn update_anims(&mut self, inputs: &AnimInputs, cmd: &UserCmd, now_ms: i32) {
+    pub fn update_anims(
+        &mut self,
+        inputs: &AnimInputs,
+        cmd: &UserCmd,
+        now_ms: i32,
+        events: &[PmEvent],
+    ) {
         use vcod_common::animscript::{Conditions, Movetype, Side};
         if self.pm_type != PmType::Normal {
             return;
@@ -339,14 +363,13 @@ impl ClientSim {
             movetype,
             weapon: inputs.weapon.to_ascii_lowercase(),
             weapon_class: inputs.weapon_class.to_ascii_lowercase(),
-            // Holding the ads bit for two seconds selected no ads clause in
-            // either retail capture, so nothing here can reach one.
-            ads: false,
+            ads: pm_input(cmd).ads,
             strafing: self.strafing,
             mounted: None,
-            firing: false,
+            firing: self.ps.weaponstate == vcod_common::pmove::weapon::WEAPON_FIRING,
         };
         let resolve = |name: &str| inputs.anims.wire_of(name);
+        let length = |name: &str| inputs.anims.length_ms(name);
         // The two ground edges, before the continuous state: an event anim
         // holds the channel, so raising it first is what keeps the restart
         // toggle flipping once per landing rather than twice.
@@ -360,14 +383,25 @@ impl ClientSim {
         match (self.ps.on_ground, self.was_airborne) {
             (true, true) => {
                 let sel = script.select_event("land", &conditions);
-                self.anim.event(&sel, now_ms, resolve);
+                self.anim.event(&sel, now_ms, resolve, length);
             }
             (false, false) if jumped && !self.ps.on_ladder => {
                 let event = if back { "jumpbk" } else { "jump" };
                 let sel = script.select_event(event, &conditions);
-                self.anim.event(&sel, now_ms, resolve);
+                self.anim.event(&sel, now_ms, resolve, length);
             }
             _ => {}
+        }
+        // The weapon channel: retail's `PM_Weapon` raises a script event on
+        // entering a state, and the `EVENTS` block's own clauses pick the
+        // torso index by stance, weapon and class
+        // (docs/research/player-model-anim-system.md, "The weapon channel").
+        for e in events {
+            let Some(name) = weapon_anim_event(e.event) else {
+                continue;
+            };
+            let sel = script.select_event(name, &conditions);
+            self.anim.event(&sel, now_ms, resolve, length);
         }
         // Nothing is selected while off the ground -- retail returns before
         // the selection unless the ladder flag is set (@0x323a2), which is
@@ -376,9 +410,12 @@ impl ClientSim {
         if self.ps.on_ground || self.ps.on_ladder {
             let mut sel = script.select("combat", &conditions);
             // Retail leaves `torsoAnim` 0 in every settled pose of both
-            // captures, although the clauses reached here are `both`.
+            // captures, although the clauses reached here are `both`. That 0
+            // is a write: it is what a weapon event's anim gives the channel
+            // back to when it runs out.
             sel.torso = None;
             self.anim.set(&sel, now_ms, resolve);
+            self.anim.clear_torso(now_ms);
         }
         self.was_airborne = !self.ps.on_ground;
     }
@@ -772,7 +809,7 @@ mod tests {
                 weapon,
                 weapon_class: class,
             };
-            sim.update_anims(&inputs, &cmd, 1000);
+            sim.update_anims(&inputs, &cmd, 1000, &[]);
             assert_eq!(anims.name(sim.anim.legs()), Some(*want), "{label}");
         }
     }
@@ -794,17 +831,17 @@ mod tests {
         let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.ps.on_ground = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, 1000);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1000, &[]);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_stand_alert"));
 
         // The impulse pmove reports, not merely leaving the ground.
         sim.ps.on_ground = false;
         sim.jumped = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, 1050);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[]);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_takeoff"));
         // Well past the takeoff clause's `duration 5`.
         for t in [1100, 1150, 1200, 1250] {
-            sim.update_anims(&inputs, &NULL_USERCMD, t);
+            sim.update_anims(&inputs, &NULL_USERCMD, t, &[]);
             assert_eq!(
                 anims.name(sim.anim.legs()),
                 Some("pb_standjump_takeoff"),
@@ -812,7 +849,7 @@ mod tests {
             );
         }
         sim.ps.on_ground = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, 1300);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1300, &[]);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_land"));
     }
 
@@ -839,7 +876,7 @@ mod tests {
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.ps.on_ground = true;
         sim.ps.velocity = Vec3::new(190.0, 0.0, 0.0);
-        sim.update_anims(&inputs, &running, 1000);
+        sim.update_anims(&inputs, &running, 1000, &[]);
         assert_eq!(
             anims.name(sim.anim.legs()),
             Some("pb_combatrun_forward_loop")
@@ -849,7 +886,7 @@ mod tests {
         sim.ps.on_ground = false;
         for t in [1050, 1100, 1150, 1200] {
             sim.ps.velocity.z -= 40.0;
-            sim.update_anims(&inputs, &running, t);
+            sim.update_anims(&inputs, &running, t, &[]);
             assert_eq!(
                 anims.name(sim.anim.legs()),
                 Some("pb_combatrun_forward_loop"),
@@ -875,17 +912,17 @@ mod tests {
         let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.ps.on_ground = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, 1000);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1000, &[]);
 
         // Mounted: off the ground without an impulse, climbing.
         sim.ps.on_ground = false;
         sim.ps.on_ladder = true;
         sim.ps.velocity = Vec3::new(0.0, 0.0, 60.0);
-        sim.update_anims(&inputs, &NULL_USERCMD, 1050);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[]);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_climbup"));
 
         sim.ps.velocity.z = -60.0;
-        sim.update_anims(&inputs, &NULL_USERCMD, 1100);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1100, &[]);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_climbdown"));
     }
 
@@ -914,12 +951,12 @@ mod tests {
         sim.ps.backwards_run = true;
         sim.ps.on_ground = true;
         sim.ps.velocity = Vec3::new(120.0, 0.0, 0.0);
-        sim.update_anims(&inputs, &back, 1000);
+        sim.update_anims(&inputs, &back, 1000, &[]);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_crouch_run_back"));
 
         sim.ps.on_ground = false;
         sim.jumped = true;
-        sim.update_anims(&inputs, &back, 1050);
+        sim.update_anims(&inputs, &back, 1050, &[]);
         assert_eq!(
             anims.name(sim.anim.legs()),
             Some("pb_chicken_dance_crouch"),
@@ -949,10 +986,10 @@ mod tests {
             right: 127,
             ..NULL_USERCMD
         };
-        sim.update_anims(&inputs, &strafe, 1000);
+        sim.update_anims(&inputs, &strafe, 1000, &[]);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_combatrun_right_loop"));
         // Still sliding, no longer asking: retail does not touch the condition.
-        sim.update_anims(&inputs, &NULL_USERCMD, 1050);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[]);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_combatrun_right_loop"));
         // A forward cmd clears it, even though nothing about the velocity
         // changed.
@@ -960,7 +997,7 @@ mod tests {
             forward: 127,
             ..NULL_USERCMD
         };
-        sim.update_anims(&inputs, &forward, 1100);
+        sim.update_anims(&inputs, &forward, 1100, &[]);
         assert_eq!(
             anims.name(sim.anim.legs()),
             Some("pb_combatrun_forward_loop")

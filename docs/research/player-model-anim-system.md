@@ -149,18 +149,19 @@ stripped; the horizontal speed is the pose's own `velocity`.
 | `run_back` | `forward=-127` | 93 at 62.8 u/s | 93 at 158.5 u/s | `runbk` default, `pb_combatrun_back_loop` |
 | `strafe_left` | `right=-127` | 122 at 8.0 u/s | 92 at 175 u/s | `idle` default / `run` `strafing left`, `pb_combatrun_left_loop` |
 | `strafe_right` | `right=127` | 122 at 3.2 u/s | 91 at 143 u/s | `idle` default / `run` `strafing right`, `pb_combatrun_right_loop` |
-| `ads_stand` | `buttons=16` held 2 s | 122 | 122 | `idle` default, not the `weapon_position ads` clause |
+| `ads_stand` | `buttons=16` held 2 s | 121 | 121 | `idle`, `weapon_position ads`, `pb_stand_ads` |
 | `crouch_run` | crouch + `forward=127` | 84 at 58.8 u/s | 111 at 0 u/s | `runcr` default, `pb_crouch_run_forward` / `idlecr` default |
 | `turn_left`, `turn_right` | yaw only | 122 | 122 | `idle` default, not `turnleft`/`turnright` |
 | `jump_takeoff` | `up=127`, first airborne frame | 100 | 100 | `jump` default, `legs pb_standjump_takeoff duration 5 blendtime 100` |
 | `land` | first frame back on the ground | 99 | 99 | `land` default, `legs pb_standjump_land duration 100 blendtime 50` |
 
-VERIFIED: `torsoAnim` is 0 in all 20 settled poses of both captures and 720
-(index 208, `pt_stand_pullout_pose`) at `jump_takeoff` on both. VERIFIED: every
-clause reached in the table is written `both`. INFERRED: retail therefore does
-not write the torso half of the continuous selection, so vcod clears
-`Selection::torso` before applying it and leaves the torso to events. The 720
-is the weapon's, not the animscript's; "The weapon channel" below has the
+VERIFIED: `torsoAnim` is 0 in every pose of both captures, `jump_takeoff`
+included. VERIFIED: every clause reached in the table is written `both`.
+INFERRED: retail therefore does not write the torso half of the continuous
+selection, so vcod clears `Selection::torso` before applying it and leaves the
+torso to events. The captures taken before 2026-09-02 read 720 (index 208,
+`pt_stand_pullout_pose`) at `jump_takeoff`, which was a holstered weapon and
+not a clause; "The `jump_takeoff` torso index is gone" below has the
 measurement.
 
 ### How retail picks the movetype
@@ -285,12 +286,17 @@ between the `walk*` and `run*` blocks. VERIFIED: retail chose the `run` family
 in every moving standing or crouched pose of both captures (94, 93, 92, 91, 84),
 and the only walk-family block it ever selected was `walkprone` (50), which
 prone reaches because there is no `runprone`. VERIFIED: holding the ads bit for
-two seconds selected no ads clause on either map, `ads_stand` reading the plain
-standing idle 122. VERIFIED: the file's own NOTES at line 94 read "The player
+two seconds selected the standing ads clause on both maps, `ads_stand` reading
+121 `pb_stand_ads`. The captures taken before 2026-09-02 read the plain
+standing idle 122 there, and the only difference is the usercmd's `weapon`
+byte: a probe sending 0 was holstered, so its ads bit reached no weapon.
+VERIFIED: the file's own NOTES at line 94 read "The player
 walks when they are ADS, so they can not ADS while running", and the `walkbk`
 block carries the comment "Always ADS when walking". INFERRED: `walk`, `walkbk`,
 `walkcr` and `walkcrbk` are the ADS locomotion set and are unreachable from a
-usercmd alone, so vcod parses them, holds `ads` false, and never enters them.
+usercmd alone, so vcod parses them and never enters them: `ads` is the cmd's
+own bit since the weapon channel landed, and no clause outside the `idle`
+blocks and `EVENTS` tests it.
 
 ### The turn movetypes, and what selects them
 
@@ -556,3 +562,51 @@ INFERRED: a gate therefore counts `events[]` entries equal to 159, or 161 for
 the last round of a clip, across the per-snapshot traces, and never
 `seq_delta` or `shots_seen`. VERIFIED: the ring holds four slots, so nothing
 but a per-snapshot trace can count a burst longer than four.
+
+### As implemented
+
+The torso channel is not a table of its own: the weapon machine raises an
+animscript event and `mp/playeranim.script`'s own `EVENTS` clauses pick the
+index. `ClientSim::update_anims` (`crates/server/src/spectate.rs`) maps each
+`PmEvent` the frame's moves raised onto a block -- 159/161 `fireweapon`,
+151/152/153 `reload`, 156 `dropweapon`, 155 `raiseweapon` -- and runs it
+through `AnimScript::select_event`.
+
+VERIFIED: the shipped script's clauses reproduce every index the two captures
+read, with no engine table involved. The `fireweapon` block gates on the
+`movetype` categories the file's own `DEFINES` build (`set movetype crouching =
+idlecr AND runcr AND ...`), so `pt_stand_shoot` 253, `pt_crouch_shoot` 249 and
+`pt_prone_shoot` 224 fall out of the stance; `reload` gates on the weapon name
+first, which is why the carbine takes `pt_reload_stand_auto` 229 (it is in the
+block's `bar_mp AND ... AND m1carbine_mp` list) and the mosin falls through to
+the `default` clause's `pt_reload_stand_rifle` 231. That is
+`the_event_blocks_pick_the_indices_the_combat_captures_read` in
+`crates/common/src/animscript.rs`.
+
+INFERRED: a clause with no `duration` holds its channel for the clip's own
+length plus 50 ms, RTCW's `duration + 50 // account for lerping between anims`
+(`bg_animation.c`, `BG_PlayAnim`); the length comes from the xanim header
+(`PlayerAnims::length_ms`). The hold is not the weapon state's length: VERIFIED,
+carentan's reload holds the torso for 950-1050 ms of a `weaponstate` 5 that
+runs 2650, and pavlov's for 2050-2150 ms of one that runs 2400, which are the
+31-frame `pt_reload_stand_auto` and the 64-frame `pt_reload_stand_rifle` at 30
+fps. UNVERIFIED: the exact rounding. The four measured clears bracket the
+clip's own length to (900, 1050], (2000, 2150], (450, 550] and (450, 600] ms
+against clip lengths of 1000, 2100, 400 and 500, so a 50 ms sample grid cannot
+tell `duration` from `duration + 50` and the two shot clears lean one way while
+the two reload clears lean the other. UNVERIFIED, and unexplained by either:
+the superseded pair's 1-frame `pt_stand_pullout_pose` held for about 500 ms.
+
+The channel clears the way the capture reads it: when the hold runs out and the
+continuous selection has nothing for the torso -- which is always, since retail
+sends index 0 in every settled pose -- `AnimState::clear_torso` writes index 0
+and flips the toggle, giving the 253 -> 512 the captures end a shot with. A
+repeated shot restarts the same index, so the toggle is the only thing that
+moves.
+
+`crates/server/tests/playerstate_combat_ab.rs` compares, per fire and reload
+step, the set of `torsoAnim & 511` values and the number of toggle flips.
+Matching on both maps: carentan reads {0, 253} over 2 flips for one shot, {0,
+253} over 7 for six, {0, 229} over 2 for the reload and {0, 249} over 4 for
+three crouched shots; pavlov reads {0, 253} over 2 and over 4, {0, 231} over 2
+and {0, 249} over 2.
