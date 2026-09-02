@@ -82,6 +82,15 @@ struct Args {
     /// player, which leaves every field the client predicts at zero.
     #[arg(long)]
     save_motion: bool,
+    /// Join a team, then run a scripted weapon sequence -- single shot,
+    /// sustained fire, reload, fire crouched and prone -- and write the retail
+    /// playerstate to
+    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-combat.txt.
+    /// Separate from --save-motion because that one samples a settled state
+    /// and a shot is a transient: this fixture carries every snapshot, since
+    /// the playerstate event ring holds four slots and overwrites as it fires.
+    #[arg(long)]
+    save_combat: bool,
     /// Join a team, walk the --probe-pvs route and write the entity trace to
     /// crates/server/tests/fixtures/entities/<map>-<gametype>.txt, the fixture
     /// crates/server/tests/entities_ab.rs diffs against. Separate from
@@ -435,6 +444,7 @@ fn main() -> Result<()> {
                 configstrings: args.save_configstrings,
                 playerstate: args.save_playerstate,
                 motion: args.save_motion,
+                combat: args.save_combat,
                 entities: args.save_entities,
             },
             args.capture_tag.clone(),

@@ -35,6 +35,13 @@ const SNAP_CAPTURE_TARGET: usize = 24;
 /// capture cannot show: every field the client predicts reads zero while the
 /// player stands still.
 ///
+/// `save_combat` joins the same way and runs the weapon script in
+/// [`combat_script`], recording every snapshot rather than a settled sample:
+/// a shot moves `weaponstate`, `weapAnim` and the four-slot event ring, and
+/// the ring overwrites, so a settled sample cannot hold one. It is also the
+/// one mode with the stall response on, so a walking step gets past the first
+/// wall it meets.
+///
 /// `pvs` joins the same way again, walks the route in [`pvs_route`] and prints
 /// the snapshot entity list at each station plus every add and removal along
 /// the way, answering what the server sends from where. `save.entities` walks
@@ -49,6 +56,7 @@ pub struct Save {
     pub configstrings: bool,
     pub playerstate: bool,
     pub motion: bool,
+    pub combat: bool,
     pub entities: bool,
 }
 
@@ -67,13 +75,14 @@ pub fn probe(
         configstrings: save_configstrings,
         playerstate: save_playerstate,
         motion: save_motion,
+        combat: save_combat,
         entities: save_entities,
     } = save;
     // The fixture is the route's output, so the capture drives the same walk.
     let pvs = pvs || save_entities;
     // Every mode that needs a spawned player drives the same stock-menu join;
     // `--probe-team` alone joins and then just watches the roster.
-    let joining = save_playerstate || save_motion || pvs || team.is_some();
+    let joining = save_playerstate || save_motion || save_combat || pvs || team.is_some();
     let mut client = NetClient::connect(addr)?;
     if save_fixture || save_snapshots {
         client.enable_capture();
@@ -88,6 +97,7 @@ pub fn probe(
     let mut join = JoinProbe::new(team);
     let mut wrote_playerstate = false;
     let mut motion = MotionProbe::default();
+    let mut combat = CombatProbe::default();
     let mut pvs_probe = PvsProbe::default();
     // The full table; the map's loadspec filters it at gamestate.
     let aliases_all = fs.map(crate::audio::alias::AliasTable::load);
@@ -244,6 +254,16 @@ pub fn probe(
         if save_motion && motion.running() {
             cmd = motion.cmd();
             hold_view_yaw(&mut cmd, &client, &mut motion.spawn_delta_yaw);
+        } else if save_combat && combat.running() {
+            cmd = combat.cmd();
+            if let Some(o) = client
+                .snapshots()
+                .newest()
+                .map(|s| s.ps.origin(&net::protocol::PROTOCOL_V1))
+            {
+                combat.stall.apply(&mut cmd, now, o);
+            }
+            hold_view_yaw(&mut cmd, &client, &mut combat.spawn_delta_yaw);
         } else if pvs && pvs_probe.running() {
             cmd = pvs_probe.cmd();
             hold_view_yaw(&mut cmd, &client, &mut pvs_probe.spawn_delta_yaw);
@@ -313,6 +333,12 @@ pub fn probe(
                     if save_motion {
                         if motion.step(now, s) {
                             write_motion_fixture(s, client.configstrings(), &join, &motion)?;
+                            wrote_playerstate = true;
+                            break;
+                        }
+                    } else if save_combat {
+                        if combat.step(now, s) {
+                            write_combat_fixture(client.configstrings(), &join, &combat)?;
                             wrote_playerstate = true;
                             break;
                         }
@@ -1189,6 +1215,410 @@ fn write_motion_fixture(
     Ok(())
 }
 
+/// `buttons` bit 0, fire (docs/protocol-1.1.md, "Usercmd input bits").
+const BUTTON_ATTACK: u8 = 0x01;
+
+/// A key a step taps rather than holds. The stock rifle is semi-automatic, so
+/// a held fire bit fires once and then nothing: every shot needs its own
+/// release edge, and reload is a press for the same reason.
+#[derive(Clone, Copy, Default)]
+struct Pulse {
+    buttons: u8,
+    wbuttons: u8,
+    /// Taps the step sends; after the last one it holds its base input alone.
+    count: u32,
+}
+
+/// How long a tap is held down and how often one starts: two frames down, six
+/// up at the probe's 60 Hz send rate, which is what fires cleanly on retail.
+const PULSE_HOLD: Duration = Duration::from_millis(32);
+const PULSE_PERIOD: Duration = Duration::from_millis(128);
+
+/// One labelled step of the combat script: `base` held for `dur`, with
+/// `pulse`'s bits tapped on top of it.
+struct CombatStep {
+    label: &'static str,
+    base: net::msg::UserCmd,
+    pulse: Pulse,
+    dur: Duration,
+    /// Whether the step walks. A walking step is steered by [`StallTurn`], so
+    /// where it ends up is not reproducible and a gate cannot replay it.
+    walks: bool,
+}
+
+impl CombatStep {
+    /// What the step sends `elapsed` into itself: its held input, with the
+    /// pulsed bits down for the first [`PULSE_HOLD`] of each [`PULSE_PERIOD`]
+    /// until `count` taps have gone out.
+    fn cmd_at(&self, elapsed: Duration) -> net::msg::UserCmd {
+        let mut cmd = self.base;
+        let ms = elapsed.as_millis();
+        if ms / PULSE_PERIOD.as_millis() < self.pulse.count as u128
+            && ms % PULSE_PERIOD.as_millis() < PULSE_HOLD.as_millis()
+        {
+            cmd.buttons |= self.pulse.buttons;
+            cmd.wbuttons |= self.pulse.wbuttons;
+        }
+        cmd
+    }
+}
+
+/// The steps, each starting from the one before. The two idles bracket the
+/// shooting so the capture shows what the channels return to, and the stances
+/// are separate steps because the animscript's fire clauses are per stance.
+fn combat_script() -> Vec<CombatStep> {
+    use net::msg::{NULL_USERCMD, WBUTTON_CROUCH, WBUTTON_PRONE, WBUTTON_RELOAD};
+    let hold = |label, base, ms| CombatStep {
+        label,
+        base,
+        pulse: Pulse::default(),
+        dur: Duration::from_millis(ms),
+        walks: false,
+    };
+    let fire = |label, base, shots, ms| CombatStep {
+        label,
+        base,
+        pulse: Pulse {
+            buttons: BUTTON_ATTACK,
+            wbuttons: 0,
+            count: shots,
+        },
+        dur: Duration::from_millis(ms),
+        walks: false,
+    };
+    vec![
+        // First, so two probes spawned across a map close some of the distance
+        // between them before anyone shoots. Not a gate case: the stall
+        // response steers it.
+        CombatStep {
+            label: "advance",
+            base: net::msg::UserCmd {
+                forward: 127,
+                ..NULL_USERCMD
+            },
+            pulse: Pulse::default(),
+            dur: Duration::from_millis(6000),
+            walks: true,
+        },
+        hold("idle", NULL_USERCMD, 1500),
+        fire("single_shot", NULL_USERCMD, 1, 1500),
+        // More shots than the ring has slots, which is what shows how it wraps
+        // and what `eventSequence` does across the wrap.
+        fire("sustained_fire", NULL_USERCMD, 6, 2500),
+        CombatStep {
+            label: "reload",
+            base: NULL_USERCMD,
+            pulse: Pulse {
+                buttons: 0,
+                wbuttons: WBUTTON_RELOAD,
+                count: 1,
+            },
+            dur: Duration::from_millis(3500),
+            walks: false,
+        },
+        fire(
+            "crouch_fire",
+            net::msg::UserCmd {
+                wbuttons: WBUTTON_CROUCH,
+                up: -127,
+                ..NULL_USERCMD
+            },
+            3,
+            2500,
+        ),
+        // Standing between the two lowered stances: a prone taken straight out
+        // of a crouch was refused in one motion capture and taken in another.
+        hold("stand_between", NULL_USERCMD, 1500),
+        fire(
+            "prone_fire",
+            net::msg::UserCmd {
+                wbuttons: WBUTTON_PRONE,
+                up: -127,
+                ..NULL_USERCMD
+            },
+            3,
+            3000,
+        ),
+        hold("idle_after", NULL_USERCMD, 3000),
+    ]
+}
+
+/// One snapshot's worth of the channels a shot moves.
+struct CombatSample {
+    label: &'static str,
+    elapsed_ms: u128,
+    server_time: i32,
+    /// The input in flight when the snapshot arrived, so a trace line can be
+    /// lined up with the tap that produced it.
+    buttons: u8,
+    wbuttons: u8,
+    weaponstate: i32,
+    weap_anim: i32,
+    legs_anim: i32,
+    torso_anim: i32,
+    event_sequence: i32,
+    events: [i32; 4],
+}
+
+/// Walks [`combat_script`] and keeps every snapshot along the way. A settled
+/// sample cannot hold a shot -- the event ring has four slots and overwrites
+/// as it goes -- so this mode records the trace itself and the settled
+/// playerstate only as the step's tail.
+struct CombatProbe {
+    steps: Vec<CombatStep>,
+    idx: usize,
+    started: Option<Instant>,
+    trace: Vec<CombatSample>,
+    /// The playerstate each step ended at, for the fields a trace line omits.
+    settled: Vec<(&'static str, Vec<i32>)>,
+    done: bool,
+    /// Newest snapshot already recorded, so the trace runs per snapshot rather
+    /// than per loop iteration.
+    traced: Option<u32>,
+    spawn_delta_yaw: Option<i32>,
+    stall: StallTurn,
+}
+
+impl Default for CombatProbe {
+    fn default() -> Self {
+        Self {
+            steps: combat_script(),
+            idx: 0,
+            started: None,
+            trace: Vec::new(),
+            settled: Vec::new(),
+            done: false,
+            traced: None,
+            spawn_delta_yaw: None,
+            stall: StallTurn::default(),
+        }
+    }
+}
+
+impl CombatProbe {
+    fn running(&self) -> bool {
+        !self.done
+    }
+
+    fn cmd(&self) -> net::msg::UserCmd {
+        match self.steps.get(self.idx) {
+            Some(step) => step.cmd_at(self.started.map_or(Duration::ZERO, |t| t.elapsed())),
+            None => net::msg::NULL_USERCMD,
+        }
+    }
+
+    /// Feeds the newest snapshot in. Returns true once the last step is done
+    /// and the fixture is ready to write.
+    fn step(&mut self, now: Instant, snap: &net::snapshot::Snapshot) -> bool {
+        let Some(step) = self.steps.get(self.idx) else {
+            self.done = true;
+            return true;
+        };
+        let (label, dur) = (step.label, step.dur);
+        let started = *self.started.get_or_insert(now);
+        let elapsed = now.duration_since(started);
+        let cmd = self.cmd();
+        let p = &net::protocol::PROTOCOL_V1;
+        if self.traced != Some(snap.message_num) {
+            self.traced = Some(snap.message_num);
+            let s = CombatSample {
+                label,
+                elapsed_ms: elapsed.as_millis(),
+                server_time: snap.server_time,
+                buttons: cmd.buttons,
+                wbuttons: cmd.wbuttons,
+                weaponstate: snap.ps.field_i32(p, "weaponstate"),
+                weap_anim: snap.ps.field_i32(p, "weapAnim"),
+                legs_anim: snap.ps.field_i32(p, "legsAnim"),
+                torso_anim: snap.ps.field_i32(p, "torsoAnim"),
+                event_sequence: snap.ps.field_i32(p, "eventSequence"),
+                events: [
+                    snap.ps.field_i32(p, "events[0]"),
+                    snap.ps.field_i32(p, "events[1]"),
+                    snap.ps.field_i32(p, "events[2]"),
+                    snap.ps.field_i32(p, "events[3]"),
+                ],
+            };
+            println!(
+                "  trace {label} +{:>5}ms st={} in={:02x}/{:02x} weaponstate={} weapAnim={} legsAnim={} torsoAnim={} evSeq={} events=[{},{},{},{}]",
+                s.elapsed_ms,
+                s.server_time,
+                s.buttons,
+                s.wbuttons,
+                s.weaponstate,
+                s.weap_anim,
+                s.legs_anim,
+                s.torso_anim,
+                s.event_sequence,
+                s.events[0],
+                s.events[1],
+                s.events[2],
+                s.events[3],
+            );
+            self.trace.push(s);
+        }
+        if elapsed < dur {
+            return false;
+        }
+        let mine: Vec<&CombatSample> = self.trace.iter().filter(|s| s.label == label).collect();
+        let set = |f: fn(&CombatSample) -> i32| {
+            mine.iter()
+                .map(|s| f(s))
+                .collect::<std::collections::BTreeSet<i32>>()
+        };
+        println!(
+            "COMBAT {label}: {} snapshots, eventSequence {} -> {}, weaponstate {:?}, weapAnim {:?}, legsAnim {:?}, torsoAnim {:?}",
+            mine.len(),
+            mine.first().map_or(-1, |s| s.event_sequence),
+            mine.last().map_or(-1, |s| s.event_sequence),
+            set(|s| s.weaponstate),
+            set(|s| s.weap_anim),
+            set(|s| s.legs_anim),
+            set(|s| s.torso_anim),
+        );
+        self.settled.push((label, snap.ps.fields.clone()));
+        self.idx += 1;
+        self.started = None;
+        if self.idx >= self.steps.len() {
+            self.done = true;
+            return true;
+        }
+        false
+    }
+}
+
+/// Ground covered below this inside [`STALL_WINDOW`] while walking forward
+/// means the probe is standing against geometry. Retail's run speed is
+/// ~190 u/s, so a clear walk covers ~280u per window.
+const STALL_UNITS: f32 = 60.0;
+const STALL_WINDOW: Duration = Duration::from_millis(1500);
+const STALL_TURN_DEG: i32 = 45;
+
+/// A wall follower, near enough: a probe walking into geometry stops there and
+/// stays, ~135u from a spawn, so a stalled walk turns and keeps going. Opt-in,
+/// because every capture that holds an exact input depends on not wandering.
+#[derive(Default)]
+struct StallTurn {
+    /// Added to the walk's heading; it accumulates until the walk moves again.
+    detour_deg: i32,
+    /// Time and position the current stall window opened at.
+    last_progress: Option<(Instant, [f32; 3])>,
+}
+
+impl StallTurn {
+    /// Turns `cmd` by the accumulated detour, and turns further when a forward
+    /// walk has covered no ground. Only the horizontal distance counts: a
+    /// probe sliding down a slope is not making progress.
+    fn apply(&mut self, cmd: &mut net::msg::UserCmd, now: Instant, origin: [f32; 3]) {
+        if cmd.forward <= 0 {
+            self.last_progress = None;
+            return;
+        }
+        let (t0, o0) = *self.last_progress.get_or_insert((now, origin));
+        if now.duration_since(t0) >= STALL_WINDOW {
+            let moved = ((origin[0] - o0[0]).powi(2) + (origin[1] - o0[1]).powi(2)).sqrt();
+            if moved < STALL_UNITS {
+                self.detour_deg = (self.detour_deg + STALL_TURN_DEG).rem_euclid(360);
+                println!(
+                    "STALL: only {moved:.0}u in {}ms, turning to detour {} deg",
+                    STALL_WINDOW.as_millis(),
+                    self.detour_deg,
+                );
+            }
+            self.last_progress = Some((now, origin));
+        }
+        cmd.angles[1] += self.detour_deg * 65536 / 360;
+    }
+}
+
+/// Writes one section per step to `<map>-<gametype>-combat.txt`. Each carries
+/// the input that produced it on an `!input` line, so the gate replays the
+/// capture's own script rather than a copy of it, one `!trace` line per
+/// snapshot, and the playerstate the step ended at.
+fn write_combat_fixture(
+    configstrings: &[String],
+    join: &JoinProbe,
+    combat: &CombatProbe,
+) -> anyhow::Result<()> {
+    let p = &net::protocol::PROTOCOL_V1;
+    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
+    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let map = key("mapname");
+    let gametype = key("g_gametype");
+
+    let mut out = String::new();
+    out.push_str("# Retail CoD 1.1d dedicated server playerstate under weapon input.\n");
+    out.push_str(&format!(
+        "# map {map}, g_gametype {gametype}, joined {}, weapon {}, dedicated 1,\n",
+        join.team, join.weapon
+    ));
+    out.push_str("# sv_maxclients 8, sv_pure 0, stock scr_* defaults, one client on the server.\n");
+    out.push_str("# Captured with tools/run_server.sh and --net-probe --save-combat.\n");
+    out.push_str("# The fire bit is tapped, not held: the stock rifle is semi-automatic and a\n");
+    out.push_str("# held bit fires one shot and then nothing. !input carries the held input,\n");
+    out.push_str("# the tapped bits, how many taps and the tap timing, all in ms.\n");
+    out.push_str("# One !trace line per snapshot, because the event ring holds four slots and\n");
+    out.push_str("# overwrites: a shot is a transient no settled sample can hold. The field\n");
+    out.push_str("# lines after a step's traces are the playerstate it ended at.\n");
+    out.push_str("# Values are the raw i32 wire words, floats as their bit patterns.\n");
+    for (label, fields) in &combat.settled {
+        let Some(step) = combat.steps.iter().find(|s| s.label == *label) else {
+            continue;
+        };
+        out.push_str(&format!("[step {label}]\n"));
+        out.push_str(&format!(
+            "!input buttons={} wbuttons={} up={} forward={} right={} yaw={} \
+pulse_buttons={} pulse_wbuttons={} pulses={} pulse_hold_ms={} pulse_period_ms={} \
+hold_ms={} walks={}\n",
+            step.base.buttons,
+            step.base.wbuttons,
+            step.base.up,
+            step.base.forward,
+            step.base.right,
+            step.base.angles[1],
+            step.pulse.buttons,
+            step.pulse.wbuttons,
+            step.pulse.count,
+            PULSE_HOLD.as_millis(),
+            PULSE_PERIOD.as_millis(),
+            step.dur.as_millis(),
+            step.walks as i32,
+        ));
+        for s in combat.trace.iter().filter(|s| s.label == *label) {
+            out.push_str(&format!(
+                "!trace ms={} serverTime={} buttons={} wbuttons={} weaponstate={} weapAnim={} \
+legsAnim={} torsoAnim={} eventSequence={} events[0]={} events[1]={} events[2]={} events[3]={}\n",
+                s.elapsed_ms,
+                s.server_time,
+                s.buttons,
+                s.wbuttons,
+                s.weaponstate,
+                s.weap_anim,
+                s.legs_anim,
+                s.torso_anim,
+                s.event_sequence,
+                s.events[0],
+                s.events[1],
+                s.events[2],
+                s.events[3],
+            ));
+        }
+        for (f, v) in p.player_fields.iter().zip(fields) {
+            out.push_str(&format!("{} {v}\n", f.name));
+        }
+    }
+
+    let path = format!("{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-combat.txt");
+    std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
+    std::fs::write(&path, out)?;
+    println!(
+        "combat: {} steps, {} traced snapshots -> {path}",
+        combat.settled.len(),
+        combat.trace.len(),
+    );
+    Ok(())
+}
+
 /// Writes the spawned player's wire state to `<map>-<gametype>.txt`. The map
 /// and gametype come out of cs 0 (serverinfo), so nothing here is hand-typed.
 fn write_playerstate_fixture(
@@ -1765,4 +2195,38 @@ impl PvsProbe {
 
 fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stock rifle is semi-automatic: a held fire bit is one shot and then
+    /// nothing, so every shot needs its own release edge. Counted at the
+    /// probe's send rate rather than read off the pattern by eye.
+    #[test]
+    fn a_fire_step_taps_the_attack_bit_once_per_shot() {
+        let script = combat_script();
+        let step = script
+            .iter()
+            .find(|s| s.label == "sustained_fire")
+            .expect("the script fires a burst");
+        let (mut edges, mut frames_down, mut was_down) = (0, 0, false);
+        for frame in 0..step.dur.as_millis() / 16 {
+            let down = step
+                .cmd_at(Duration::from_millis(frame as u64 * 16))
+                .buttons
+                & BUTTON_ATTACK
+                != 0;
+            edges += u32::from(down && !was_down);
+            frames_down += u32::from(down);
+            was_down = down;
+        }
+        assert_eq!(edges, step.pulse.count);
+        assert!(
+            frames_down <= 3 * step.pulse.count,
+            "{frames_down} frames down for {} taps: the bit is being held",
+            step.pulse.count
+        );
+    }
 }

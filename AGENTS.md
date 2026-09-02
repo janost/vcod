@@ -129,6 +129,16 @@ engineering setup works.
   is position-dependent (`docs/protocol-1.1.md`, "Which entities a client is
   sent"). Two probes on one server see each other's entities, so a
   two-client entity question does not need two retail clients.
+  `--save-combat` joins the same way and runs a scripted weapon sequence
+  (single shot, sustained fire, reload, fire crouched, fire prone), writing
+  `crates/server/tests/fixtures/playerstate/<map>-<gametype>-combat.txt`. The
+  fire bit is tapped, not held: the stock `m1carbine_mp` is semi-automatic and
+  a held bit fires one shot and then nothing. A shot is a transient the event
+  ring overwrites within four slots, so that fixture carries a `!trace` line
+  per snapshot instead of a settled sample. It is also the one mode with the
+  stall response on -- a walk that stops against geometry turns 45 degrees and
+  tries again -- since every other scripted mode holds an exact input and must
+  not wander.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
