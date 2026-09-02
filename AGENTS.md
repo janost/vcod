@@ -144,19 +144,27 @@ engineering setup works.
   bolt-action mosin on mp_pavlov is what exposed the rechamber and
   empty-reload states the carbine never reaches.
   `--probe-target` and `--save-hit` are the two halves of the hit capture, one
-  probe each on opposite teams, writing
+  probe each, writing
   `crates/server/tests/fixtures/playerstate/<map>-<gametype>-hit-target.txt`
   and `-hit-shooter.txt`. The target stands still, sends the `kill` client
   command every 45 s and presses use 3 s after each death, which is what puts a
   death, a corpse, an obituary and a respawn in the capture without needing the
   shooter to land a shot; the shooter walks toward it and fires once it has a
-  clear eye-to-eye trace through the map's collision. It does not get one on
-  mp_carentan: retail's deathmatch spawn picker puts a respawning client at the
-  point farthest from the other one, and the walk does not cross a town in the
-  150 s it is given, so the committed shooter fixture opens with
-  `# BROKEN no line of sight after 150 s` and its shots hit the map. Start the
-  target first and give it a longer `--probe-secs` than the shooter. What the
-  captures measured is in `docs/research/cod11-combat.md`, section 8.
+  clear eye-to-eye trace through the map's collision. Start the target first
+  and give it a longer `--probe-secs` than the shooter. Under `dm` the shooter
+  never gets a shot at a player: the deathmatch spawn picker puts a respawning
+  client at the point farthest from the other one, and the walk does not cross
+  a town in the 150 s it is given, so the committed `dm` shooter fixture opens
+  with `# BROKEN no line of sight after 150 s` and holds the death half only.
+  The hits come from `tdm` with friendly fire on
+  (`tools/run_server.sh mp_carentan +set g_gametype tdm +set scr_friendlyfire 1`,
+  both probes `--probe-team allies`): team deathmatch spawns a player next to
+  its team, so the two start a few hundred units apart, and `scr_friendlyfire 1`
+  is what lets a teammate's bullet do full damage. Anything after the map name
+  is passed to the engine verbatim, which takes its `+set` arguments in any
+  order. Each fixture is named for the gametype it was taken under, and both
+  pairs are committed. What they measured is in
+  `docs/research/cod11-combat.md`, section 8.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with

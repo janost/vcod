@@ -1250,22 +1250,28 @@ callers fill in by hand.
 ## 8. What the hit capture measured
 
 Two probes on one retail server, `--net-probe --probe-target` and
-`--net-probe --save-hit`, on `mp_carentan` under `dm` with the stock defaults.
-The target stands still, sends the `kill` client command every 45 s, presses
-use 3 s after each death and traces its own playerstate; the shooter walks
-toward it and shoots. Both fixtures are in
-`crates/server/tests/fixtures/playerstate/`, `mp_carentan-dm-hit-target.txt`
-and `-hit-shooter.txt`. Everything below is VERIFIED unless labelled
-otherwise: it is read off those two captures.
+`--net-probe --save-hit`, on `mp_carentan`. The target stands still, sends the
+`kill` client command every 45 s, presses use 3 s after each death and traces
+its own playerstate; the shooter walks toward it and shoots. The fixtures are
+in `crates/server/tests/fixtures/playerstate/`. Everything below is VERIFIED
+unless labelled otherwise: it is read off those captures.
 
-**The shot half of the capture is missing.** The shooter never found a line of
-sight in 150 s of walking, so its fixture carries `# BROKEN no line of sight`
-and its shots hit the map. Retail's deathmatch spawn picker puts a respawning
-client at the point farthest from the other one, which on `mp_carentan` is
-2000 to 4500 units of town, and the probe's walk does not cross that. So
-`damageEvent`, `damageCount`, `damageYaw`, `damagePitch`, `EV_PAIN` and the
-knockback velocity are still unmeasured; sections 4 and 6 are what they rest
-on for now.
+It takes two runs, because one gametype cannot give both halves:
+
+- `mp_carentan-dm-hit-target.txt` and `-hit-shooter.txt` hold the **death
+  half**. Deathmatch's spawn picker puts a respawning client at the point
+  farthest from the other one, 2000 to 4500 units of town on this map, and the
+  shooter's walk does not cross that: its fixture carries
+  `# BROKEN no line of sight` and the target's `damageEvent` never moves. That
+  pair was also taken before the probe's aim was corrected, so its shooter
+  `viewangles` column does not point at the target; nothing in the death half
+  depends on it.
+- `mp_carentan-tdm-hit-target.txt` and `-hit-shooter.txt` hold the **hit
+  half**, captured with `+set g_gametype tdm +set scr_friendlyfire 1` and both
+  probes on `allies`. Team deathmatch spawns a player next to its team, so the
+  two start a few hundred units apart, and `scr_friendlyfire 1` is what makes
+  a teammate's bullet do full damage (`tdm.gsc`'s damage callback returns
+  early when the cvar is `<= 0` and only reflects when it is `2`).
 
 ### 8.1 The death
 
@@ -1333,11 +1339,18 @@ elsewhere in between. Nothing in either capture shows a corpse being freed.
 
 ### 8.3 The obituary and the respawn
 
-Each death broadcasts one `EV_OBITUARY` (201) in the same snapshot, with
-`otherEntityNum` 0 (the victim), `attackerEntityNum` 0 and `eventParm` **150**.
-150 is `0x96`, `MOD_SUICIDE`, which is the `kill` path in
-`cod11-hud-protocol.md` section 2's table. The shooter, 2000 to 4500 units
-away with no line of sight, receives every one: the event is `SVF_BROADCAST`.
+Each death broadcasts one `EV_OBITUARY` (201) in the same snapshot. A `kill`
+gives `otherEntityNum` 0 (the victim), `attackerEntityNum` 0 and `eventParm`
+**150**, `0x96`, `MOD_SUICIDE`; the tdm capture's two bullet deaths give the
+victim 0, the attacker 1 and `eventParm` **136**, `0x88`, `MOD_HEAD_SHOT`.
+Both are rows of `cod11-hud-protocol.md` section 2's table. The shooter, 2000
+to 4500 units away with no line of sight, receives every one: the event is
+`SVF_BROADCAST`.
+
+INFERRED, an instrument caveat rather than a fact about retail: a run can
+report more obituaries than deaths. `EventTracker` fires an event entity again
+when its slot leaves the snapshot and comes back with the same contents, which
+is what a temp entity crossing the PVS boundary does.
 
 The respawn needs the use press and takes it after a delay of its own. The
 target presses use 3 s after death and again once a second; it goes live about
@@ -1351,6 +1364,68 @@ On the frame the player is alive again: `stats[0]` 100, `pm_type` 0,
 `viewHeightCurrent` 60, and `eFlags` **24** where it read 16 before. 24 is 16
 with bit `0x8` set, the anim-restart toggle 5.2 names on the clone, so a
 respawn flips it the same way.
+
+---
+
+### 8.4 What a bullet does
+
+From the tdm capture: `m1carbine_mp` (`damage` 45 in `weapons/mp/m1carbine_mp`)
+fired from 586 units at a standing teammate's eye, twice, killing it the second
+time. The obituary's `eventParm` is 136, `0x88`, `MOD_HEAD_SHOT`, so both were
+head hits.
+
+**The hit frame**, against the settled frame before it:
+
+| field | before | on the hit |
+|---|---|---|
+| `stats[0]` (health) | 100 | 33 |
+| `damageEvent` | 0 | 1 |
+| `damageCount` | 0 | 67 |
+| `damageYaw` | 0 | 64 |
+| `damagePitch` | 0 | 255 |
+| `eventSequence` | 0 | 1 |
+| `events[0]`, `eventParms[0]` | 0, 0 | **187** (`EV_PAIN`), **33** |
+| `velocity` | 0, 0, 0 | -1.4, 80.0, 0 |
+
+**67 damage from a 45-damage weapon on a head hit.** 45 * 1.5 is 67.5, and the
+applied damage is 67. INFERRED: the shipped `mp_lochit_dmgtable` gives the head
+1.5 and the product is truncated, since 6.4's `damage * multiplier` is the only
+scaling on this path and nothing else in the capture is a factor of 1.489.
+
+`damageCount` 67 is 6's `damage * 100 / maxHealth` with `maxHealth` 100, so
+this capture cannot separate the two; a server with another max health would.
+
+**`damageYaw` and `damagePitch` are the world angles of the direction the
+damage came along, from the attacker toward the victim.** The shooter stood at
+`(1810.0, 2109.5)` and the target at `(1800.0, 2696.0)`, a bearing of 91.0
+degrees; `(int)(91.0 / 360 * 256)` is 64, which is what `damageYaw` reads.
+Both eyes sat at the same height, and `damagePitch` reads 255, one short of
+the 256 a level shot wraps to. That is 6's step 8 measured from the wire.
+
+**The knockback is one frame of velocity along that direction.** The target
+stood still, and the hit frame reads `-1.4, 80.0, 0`: 80 u/s along the bearing
+the bullet travelled, decaying to 64, 46, 28 and 0 over the next four
+snapshots. INFERRED: the decay is ordinary ground friction, not a knockback
+timer, since the target held no movement input.
+
+`EV_PAIN`'s parm is 33, the victim's health as a percentage of max after the
+damage, which is 6's step 9.
+
+**The fatal hit leaves `damageEvent` alone.** The second bullet took health 33
+to 0 and `damageEvent` stayed 1 while `damageCount`, `damageYaw` and
+`damagePitch` kept the first hit's values. That is 6's step 1, the
+`pm_type > 5` return, seen from outside: the feedback for the killing hit never
+runs. A death by a bullet also carries the same `pm_type` **6** as the suicide,
+`legsAnim` 17, `torsoAnim` 512 and events `[187, 189, 155]` in one frame.
+
+`stats[1]` finally reads something: **270** on the bullet death, where the
+suicides read 0. 5.1 item 11 stores `vectoyaw(attacker->origin -
+self->origin)`, and the shooter was at bearing 271.0 degrees from the target,
+truncated to 270. It is the opposite of `damageYaw`'s direction, which the two
+numbers agree on: 64 is 90 degrees, 270 is 90 + 180.
+
+The four damage fields read 0 again after the respawn: `damageEvent` does not
+carry across a life, whatever `P_DamageFeedback` does inside one.
 
 ---
 

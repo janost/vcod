@@ -298,8 +298,10 @@ pub fn probe(
             }
             hold_view_yaw(&mut cmd, &client, &mut combat.spawn_delta_yaw);
         } else if save_hit && hit.running() {
+            // No `hold_view_yaw`: the aim is absolute, and the shooter's own
+            // `viewangles` measured against the bearing say the server takes
+            // the usercmd word as the view.
             cmd = hit.cmd(now);
-            hold_view_yaw(&mut cmd, &client, &mut hit.spawn_delta_yaw);
         } else if save_target && target_probe.running() {
             cmd = target_probe.cmd();
         } else if pvs && pvs_probe.running() {
@@ -2737,13 +2739,13 @@ struct HitProbe {
     live_corpses: BTreeMap<u32, i32>,
     tracker: vcod_common::net::events::EventTracker,
     traced: Option<u32>,
-    spawn_delta_yaw: Option<i32>,
     steer: Steer,
     /// The map's collision, for the eye-to-eye trace. `None` without game data
     /// or when the map did not resolve; the approach then runs to its limit.
     world: Option<Box<vcod_common::collision::CollisionWorld>>,
-    /// What `cmd` puts in the usercmd: yaw as an offset from the spawn heading
-    /// (the way [`hold_view_yaw`] wants it) and pitch as a wire word.
+    /// The two wire words `cmd` puts in the usercmd. Absolute, not relative to
+    /// the spawn heading: what the retail server's `viewangles` reads back is
+    /// what the usercmd carried, measured against the bearing to the target.
     aim: Option<(i32, i32)>,
     period: Duration,
     weapon_read: bool,
@@ -2779,7 +2781,6 @@ impl Default for HitProbe {
             live_corpses: BTreeMap::new(),
             tracker: vcod_common::net::events::EventTracker::new(),
             traced: None,
-            spawn_delta_yaw: None,
             steer: Steer::default(),
             world: None,
             aim: None,
@@ -2861,7 +2862,7 @@ impl HitProbe {
         let mut cmd = self.phase.base();
         if let Some((yaw, pitch)) = self.aim {
             cmd.angles[1] = yaw;
-            cmd.angles[0] = pitch & 0xffff;
+            cmd.angles[0] = pitch;
         }
         let Some(t) = self.phase_started else {
             return cmd;
@@ -2882,10 +2883,6 @@ impl HitProbe {
         let phase_started = *self.phase_started.get_or_insert(now);
         let ms = now.duration_since(started).as_millis();
         let in_phase = now.duration_since(phase_started);
-        // Latched here rather than in `hold_view_yaw`, so an aim built this
-        // frame is already an offset from the spawn heading.
-        let delta_yaw = snap.ps.field_i32(p, "delta_angles[1]");
-        let spawn = *self.spawn_delta_yaw.get_or_insert(delta_yaw);
 
         let me = snap.ps.field_i32(p, "clientNum") as u32;
         self.me = me as i32;
@@ -2942,7 +2939,7 @@ impl HitProbe {
             } else {
                 yaw
             };
-            self.aim = Some((yaw - spawn, pitch - snap.ps.field_i32(p, "delta_angles[0]")));
+            self.aim = Some((yaw & 0xffff, pitch & 0xffff));
             self.los = match &self.world {
                 Some(w) => LOS_HEIGHTS.iter().any(|h| {
                     let at = glam::Vec3::new(o[0], o[1], o[2] + h);
@@ -3022,6 +3019,10 @@ impl HitProbe {
                         "  obituary +{ms}ms victim {} attacker {} parm {}",
                         ev.other_entity_num, ev.attacker_entity_num, ev.parm
                     );
+                    // A kill of the other player is what says the shots
+                    // landed: the shooter cannot see the target's health.
+                    self.killed |=
+                        ev.attacker_entity_num == self.me && ev.other_entity_num != self.me as u32;
                     self.obituaries.push((
                         ms,
                         ev.other_entity_num,
