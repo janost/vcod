@@ -149,6 +149,33 @@ pub struct WeaponDef {
     /// Double-width `kill_icon` (hud-protocol doc, section 2).
     pub wide_kill_icon: bool,
     pub sounds: WeaponSounds,
+    pub damage: i32,
+    pub melee_damage: i32,
+    pub max_ammo: u32,
+    pub reload_ammo_add: u32,
+    pub drop_time: f32,
+    /// The name `BG_SetupAmmoIndexes` looks up (lowercased) to assign
+    /// [`WeaponDef::ammo_index`]; see docs/protocol-1.1.md, "How `ammo[]` and
+    /// `ammoclip[]` are indexed".
+    pub ammo_name: String,
+    /// Same rule as `ammo_name`, but its own namespace and its own index
+    /// (`ammo_index`/`clip_index` never share one table).
+    pub clip_name: String,
+    pub weapon_class: String,
+    pub hip_spread_stand_min: f32,
+    pub hip_spread_ducked_min: f32,
+    pub hip_spread_prone_min: f32,
+    pub hip_spread_max: f32,
+    pub hip_spread_fire_add: f32,
+    pub hip_spread_decay_rate: f32,
+    pub ads_spread: f32,
+    /// Index into `ps.ammo`, assigned by `WeaponTable::load` per the rule in
+    /// docs/protocol-1.1.md, "How `ammo[]` and `ammoclip[]` are indexed"; 0
+    /// until the table assigns it.
+    pub ammo_index: usize,
+    /// Index into `ps.ammoclip`, same rule, separate namespace from
+    /// `ammo_index`.
+    pub clip_index: usize,
 }
 
 fn parse_f32(map: &HashMap<String, String>, key: &str, default: f32) -> f32 {
@@ -165,6 +192,19 @@ fn parse_f32(map: &HashMap<String, String>, key: &str, default: f32) -> f32 {
 }
 
 fn parse_u32(map: &HashMap<String, String>, key: &str, default: u32) -> u32 {
+    match map.get(key) {
+        Some(v) => v.trim().parse().unwrap_or_else(|_| {
+            log::warn!("weapon: invalid {key} value {v:?}, using default {default}");
+            default
+        }),
+        None => {
+            log::warn!("weapon: missing {key}, using default {default}");
+            default
+        }
+    }
+}
+
+fn parse_i32(map: &HashMap<String, String>, key: &str, default: i32) -> i32 {
     match map.get(key) {
         Some(v) => v.trim().parse().unwrap_or_else(|_| {
             log::warn!("weapon: invalid {key} value {v:?}, using default {default}");
@@ -225,6 +265,26 @@ impl WeaponDef {
             kill_icon: opt_str(map, "killIcon"),
             wide_kill_icon: parse_bool(map, "wideKillIcon", false),
             sounds: WeaponSounds::from_map(map),
+            damage: parse_i32(map, "damage", 0),
+            melee_damage: parse_i32(map, "meleeDamage", 0),
+            max_ammo: parse_u32(map, "maxAmmo", 0),
+            reload_ammo_add: parse_u32(map, "reloadAmmoAdd", 0),
+            drop_time: parse_f32(map, "dropTime", 0.0),
+            ammo_name: map.get("ammoName").cloned().unwrap_or_default(),
+            clip_name: map.get("clipName").cloned().unwrap_or_default(),
+            weapon_class: map
+                .get("weaponClass")
+                .map(|c| c.to_ascii_lowercase())
+                .unwrap_or_default(),
+            hip_spread_stand_min: parse_f32(map, "hipSpreadStandMin", 0.0),
+            hip_spread_ducked_min: parse_f32(map, "hipSpreadDuckedMin", 0.0),
+            hip_spread_prone_min: parse_f32(map, "hipSpreadProneMin", 0.0),
+            hip_spread_max: parse_f32(map, "hipSpreadMax", 0.0),
+            hip_spread_fire_add: parse_f32(map, "hipSpreadFireAdd", 0.0),
+            hip_spread_decay_rate: parse_f32(map, "hipSpreadDecayRate", 0.0),
+            ads_spread: parse_f32(map, "adsSpread", 0.0),
+            ammo_index: 0,
+            clip_index: 0,
         }
     }
 }
@@ -543,6 +603,24 @@ mod tests {
         assert_eq!(thompson.ads_bob_factor, 0.0);
     }
 
+    #[test]
+    fn the_carbine_file_carries_its_damage_and_ammo() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let w = load(&fs, "m1carbine_mp").unwrap();
+        assert_eq!(w.damage, 45);
+        assert_eq!(w.melee_damage, 50);
+        assert_eq!(w.max_ammo, 400);
+        assert_eq!(w.start_ammo, 300);
+        assert_eq!(w.clip_size, 15);
+        assert_eq!(w.weapon_class, "rifle");
+        assert!((w.hip_spread_stand_min - 1.5).abs() < 1e-6);
+        assert!((w.ads_spread - 0.4).abs() < 1e-6);
+        assert!(w.drop_time > 0.0);
+        assert!(!w.ammo_name.is_empty());
+    }
+
     fn def() -> WeaponDef {
         WeaponDef {
             clip_size: 5,
@@ -563,6 +641,23 @@ mod tests {
             kill_icon: None,
             wide_kill_icon: false,
             sounds: WeaponSounds::default(),
+            damage: 0,
+            melee_damage: 0,
+            max_ammo: 0,
+            reload_ammo_add: 0,
+            drop_time: 0.0,
+            ammo_name: String::new(),
+            clip_name: String::new(),
+            weapon_class: String::new(),
+            hip_spread_stand_min: 0.0,
+            hip_spread_ducked_min: 0.0,
+            hip_spread_prone_min: 0.0,
+            hip_spread_max: 0.0,
+            hip_spread_fire_add: 0.0,
+            hip_spread_decay_rate: 0.0,
+            ads_spread: 0.0,
+            ammo_index: 0,
+            clip_index: 0,
         }
     }
 

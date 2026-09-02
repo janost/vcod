@@ -197,10 +197,10 @@ pub struct Server {
     /// The player animtree, its wire index and the animscript. `None` on a
     /// host with no paks, where every client keeps index 0.
     anims: Option<vcod_common::animtree::PlayerAnims>,
-    /// `weaponClass` per weapon index, resolved once at load: the animscript
-    /// tests it every frame and the frame loop must not read a pk3. Indexed
-    /// the way the wire is, so slot 0 is the empty "no weapon".
-    weapon_classes: Vec<String>,
+    /// Every weapon file, parsed once at load: the animscript tests
+    /// `weaponClass` every frame and the frame loop must not read a pk3.
+    /// `Rc` so a snapshot/move closure can hold it without borrowing `self`.
+    weapon_table: Rc<crate::weapons::WeaponTable>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -304,7 +304,7 @@ impl Server {
             last_tick: None,
             script: None,
             anims: None,
-            weapon_classes: Vec::new(),
+            weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -1028,13 +1028,7 @@ impl Server {
                 None
             }
         };
-        self.weapon_classes = std::iter::once(String::new())
-            .chain(
-                crate::configstrings::WEAPON_LIST
-                    .split(' ')
-                    .map(|w| crate::weapons::weapon_class(Some(&fs), w).unwrap_or_default()),
-            )
-            .collect();
+        self.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
         let rt = crate::game::script::ScriptRuntime::load(
             fs,
             &self.cfg.map,
@@ -1228,11 +1222,7 @@ impl Server {
             if let (Some(anims), Some(cmd)) = (self.anims.as_ref(), last_cmd) {
                 let index = sim.weapons.current as usize;
                 let weapon = crate::items::item_name(index).unwrap_or_default();
-                let class = self
-                    .weapon_classes
-                    .get(index)
-                    .map(String::as_str)
-                    .unwrap_or_default();
+                let class = self.weapon_table.class(index);
                 sim.update_anims(
                     &crate::spectate::AnimInputs {
                         anims,
@@ -1630,10 +1620,9 @@ mod tests {
 
     /// The `weaponClass` table the animation machine reads every frame, and
     /// the seam it is built across: `WEAPON_LIST` is 1-based on the wire, so
-    /// the fill prepends an empty slot 0 and `items::item_name` subtracts one.
-    /// Misaligned by one, every pistol player animates as a rifleman and
-    /// nothing says so. Needs the paks -- the classes come from the weapon
-    /// files.
+    /// `items::item_name` subtracts one to name it. Misaligned by one, every
+    /// pistol player animates as a rifleman and nothing says so. Needs the
+    /// paks -- the classes come from the weapon files.
     #[test]
     fn the_weapon_class_table_lines_up_with_the_wire_index() {
         let Some(fs) = vcod_common::testing::game_fs() else {
@@ -1648,16 +1637,16 @@ mod tests {
         ] {
             let index = crate::configstrings::weapon_index(weapon).expect("in WEAPON_LIST");
             assert_eq!(
-                sv.weapon_classes.get(index).map(String::as_str),
-                Some(class),
+                sv.weapon_table.class(index),
+                class,
                 "{weapon} at wire index {index}"
             );
             // The same index the frame loop hands the animscript.
             assert_eq!(crate::items::item_name(index), Some(weapon));
         }
         assert_eq!(
-            sv.weapon_classes.first().map(String::as_str),
-            Some(""),
+            sv.weapon_table.class(0),
+            "",
             "slot 0 is the wire's no-weapon"
         );
     }

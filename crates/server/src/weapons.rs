@@ -5,6 +5,7 @@
 //! `ps.weapon`.
 
 use vcod_common::pk3::Pk3Fs;
+use vcod_common::weapon::WeaponDef;
 
 /// The retail `weaponSlot` name table, `.data` 0x7c940. Index 0 is `"none"`,
 /// so a weapon's own slot is 1..=5. Object model doc, section 20.
@@ -73,13 +74,72 @@ pub fn weapon_slot(fs: Option<&Pk3Fs>, name: &str) -> Option<usize> {
         .filter(|i| *i > 0)
 }
 
-/// The `weaponClass` a weapon file names, lowercased. This is the value the
-/// `weaponclass` condition in `mp/playeranim.script` tests against. `None`
-/// when there are no paks to read, or when the file has no `weaponClass` key.
-pub fn weapon_class(fs: Option<&Pk3Fs>, name: &str) -> Option<String> {
-    let bytes = fs?.read(&format!("weapons/mp/{name}"))?;
-    let map = vcod_common::xmodel::parse_weapon(&String::from_utf8_lossy(&bytes));
-    map.get("weaponClass").map(|c| c.to_ascii_lowercase())
+/// Every weapon file in [`crate::configstrings::WEAPON_LIST`], parsed once at
+/// map load and indexed the way the wire is (`crate::items::NUM_ITEMS`
+/// entries, 0 unused, 1.. the CS 7 order). The animscript reads
+/// [`WeaponTable::class`] every frame, so parsing happens once here rather
+/// than per-frame.
+pub struct WeaponTable {
+    defs: Vec<Option<WeaponDef>>,
+}
+
+/// The name-table walk `docs/protocol-1.1.md` ("How `ammo[]` and
+/// `ammoclip[]` are indexed") describes: lowercase, look up, append on a
+/// miss. Ammo and clip names each get their own table, so the two indexes
+/// never share a namespace.
+fn name_index(table: &mut Vec<String>, name: &str) -> usize {
+    let lower = name.to_ascii_lowercase();
+    match table.iter().position(|n| *n == lower) {
+        Some(i) => i,
+        None => {
+            table.push(lower);
+            table.len() - 1
+        }
+    }
+}
+
+impl WeaponTable {
+    /// `crate::items::NUM_ITEMS` `None`s: every index resolves, none carry a
+    /// weapon. For tests and hosts with no paks mounted.
+    pub fn empty() -> WeaponTable {
+        WeaponTable {
+            defs: vec![None; crate::items::NUM_ITEMS],
+        }
+    }
+
+    /// Walks [`crate::configstrings::WEAPON_LIST`] in wire order, parsing
+    /// each weapon file and assigning its ammo/clip indexes. A missing file
+    /// logs and leaves that slot `None` rather than failing the map load.
+    pub fn load(fs: &Pk3Fs) -> WeaponTable {
+        let mut ammo_names: Vec<String> = Vec::new();
+        let mut clip_names: Vec<String> = Vec::new();
+        let mut defs: Vec<Option<WeaponDef>> = vec![None; crate::items::NUM_ITEMS];
+        for (i, name) in crate::configstrings::WEAPON_LIST.split(' ').enumerate() {
+            match vcod_common::weapon::load(fs, name) {
+                Ok(mut def) => {
+                    def.ammo_index = name_index(&mut ammo_names, &def.ammo_name);
+                    def.clip_index = name_index(&mut clip_names, &def.clip_name);
+                    defs[i + 1] = Some(def);
+                }
+                Err(e) => log::warn!("weapon table: {name}: {e:#}"),
+            }
+        }
+        WeaponTable { defs }
+    }
+
+    pub fn get(&self, index: usize) -> Option<&WeaponDef> {
+        self.defs.get(index).and_then(|d| d.as_ref())
+    }
+
+    pub fn defs(&self) -> &[Option<WeaponDef>] {
+        &self.defs
+    }
+
+    /// The `weaponclass` condition in `mp/playeranim.script` tests against
+    /// this. `""` for the empty slot 0 and for any index with no weapon.
+    pub fn class(&self, index: usize) -> &str {
+        self.get(index).map_or("", |d| d.weapon_class.as_str())
+    }
 }
 
 #[cfg(test)]
@@ -143,31 +203,76 @@ mod tests {
     }
 
     /// The `weaponclass` condition in `mp/playeranim.script` is this field.
-    /// Values read straight out of the shipped weapon files.
+    /// Values read straight out of the shipped weapon files, through the
+    /// table rather than the standalone lookup `PlayerWeapons` used to use.
     #[test]
     fn a_weapon_file_names_its_class() {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
-        let fs = Some(&fs);
-        assert_eq!(weapon_class(fs, "m1carbine_mp").as_deref(), Some("rifle"));
-        assert_eq!(weapon_class(fs, "colt_mp").as_deref(), Some("pistol"));
-        assert_eq!(weapon_class(fs, "thompson_mp").as_deref(), Some("smg"));
+        let t = WeaponTable::load(&fs);
+        assert_eq!(t.class(weapon_index("m1carbine_mp").unwrap()), "rifle");
+        assert_eq!(t.class(weapon_index("colt_mp").unwrap()), "pistol");
+        assert_eq!(t.class(weapon_index("thompson_mp").unwrap()), "smg");
+        assert_eq!(t.class(weapon_index("fraggrenade_mp").unwrap()), "grenade");
         assert_eq!(
-            weapon_class(fs, "fraggrenade_mp").as_deref(),
-            Some("grenade")
+            t.class(weapon_index("panzerfaust_mp").unwrap()),
+            "rocketlauncher"
         );
-        assert_eq!(
-            weapon_class(fs, "panzerfaust_mp").as_deref(),
-            Some("rocketlauncher")
-        );
-        assert_eq!(weapon_class(fs, "no_such_weapon_mp"), None);
     }
 
     /// A host with no paks mounted still runs; every condition that reads the
     /// class simply fails to match.
     #[test]
     fn a_weapon_class_needs_no_paks_to_be_asked_for() {
-        assert_eq!(weapon_class(None, "m1carbine_mp"), None);
+        let t = WeaponTable::empty();
+        assert_eq!(t.class(weapon_index("m1carbine_mp").unwrap()), "");
+    }
+
+    /// The ammo/clip index rule (docs/protocol-1.1.md, "How `ammo[]` and
+    /// `ammoclip[]` are indexed"): walk `WEAPON_LIST` in order, lowercase
+    /// each def's ammo/clip name, and hand out the next free slot on a miss.
+    #[test]
+    fn the_table_indexes_by_configstring_7() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let t = WeaponTable::load(&fs);
+        let carbine = weapon_index("m1carbine_mp").unwrap();
+        assert_eq!(t.get(carbine).unwrap().damage, 45);
+        assert_eq!(t.class(carbine), "rifle");
+        assert_eq!(t.class(0), "");
+
+        // Different weapons with unrelated ammo names never share either index.
+        let colt = weapon_index("colt_mp").unwrap();
+        assert_ne!(
+            t.get(carbine).unwrap().ammo_index,
+            t.get(colt).unwrap().ammo_index
+        );
+        assert_ne!(
+            t.get(carbine).unwrap().clip_index,
+            t.get(colt).unwrap().clip_index
+        );
+
+        // bar_mp and bar_slow_mp share `ammoName BAR` (case differs from the
+        // lowercased table key) in the shipped weapon files, so they share
+        // an ammo index; every other weapon-def field still parses per file.
+        let bar = t.get(weapon_index("bar_mp").unwrap()).unwrap();
+        let bar_slow = t.get(weapon_index("bar_slow_mp").unwrap()).unwrap();
+        assert_eq!(bar.ammo_index, bar_slow.ammo_index);
+
+        // The index namespaces are per-name, not per-weapon: the distinct
+        // count never exceeds the distinct lowercased name count.
+        let names: std::collections::HashSet<_> = crate::configstrings::WEAPON_LIST
+            .split(' ')
+            .filter_map(|w| t.get(weapon_index(w).unwrap()))
+            .map(|d| d.ammo_name.to_ascii_lowercase())
+            .collect();
+        let indexes: std::collections::HashSet<_> = crate::configstrings::WEAPON_LIST
+            .split(' ')
+            .filter_map(|w| t.get(weapon_index(w).unwrap()))
+            .map(|d| d.ammo_index)
+            .collect();
+        assert_eq!(names.len(), indexes.len());
     }
 }
