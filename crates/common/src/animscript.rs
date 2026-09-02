@@ -384,7 +384,9 @@ pub struct Conditions {
     pub strafing: Option<Side>,
     /// `mounted mg42`. Nothing mounts a turret yet, so this is always `None`.
     pub mounted: Option<String>,
-    /// Stage 6 raises this.
+    /// `ps.weaponstate` reads firing. The shipped file's only `firing` clauses
+    /// are `mounted mg42, firing`, so nothing decides on it until a turret
+    /// does.
     pub firing: bool,
 }
 
@@ -467,6 +469,16 @@ const ANIM_TOGGLEBIT: i32 = 512;
 /// channel").
 const LERP_MS: u32 = 50;
 
+/// The floor under a derived hold. A clause with no `duration` over a clip
+/// shorter than this holds for this instead, which is what the only putaway
+/// measurement there is says: `pt_stand_pullout_pose` is a single frame, 0 ms
+/// long, and the torso held it for about 500 ms
+/// (player-model-anim-system.md, "The weapon channel"). It is a floor and not
+/// `max(clip, state length)`: the carbine's reload clip is 1000 ms inside a
+/// 2650 ms state and the capture clears at the clip, so the state's length
+/// cannot be what holds a channel. A clause's own `duration` never takes it.
+const MIN_EVENT_HOLD_MS: u32 = 500;
+
 /// One channel's live anim: the index, the toggle, and when an event anim
 /// that owns the channel gives it back.
 #[derive(Clone, Copy, Default)]
@@ -535,7 +547,7 @@ impl AnimState {
     ) {
         let hold = |a: &AnimRef| {
             a.duration_ms
-                .or_else(|| length(&a.name).map(|d| d + LERP_MS))
+                .or_else(|| length(&a.name).map(|d| (d + LERP_MS).max(MIN_EVENT_HOLD_MS)))
         };
         apply_event(&mut self.legs, sel.legs.as_ref(), now_ms, &resolve, &hold);
         apply_event(&mut self.torso, sel.torso.as_ref(), now_ms, &resolve, &hold);
@@ -998,15 +1010,20 @@ land
             "pb_combatrun_forward_loop" => Some(94),
             "pb_standjump_land" => Some(200),
             "pt_stand_shoot" => Some(253),
+            "pt_reload_stand_auto" => Some(229),
             _ => None,
         }
     }
 
     /// The clip lengths those names would have, so a test can hold an event
-    /// anim without an animtree. Only the shoot anim has one, since it is the
-    /// only clause here that carries no `duration`.
+    /// anim without an animtree. The two the combat captures measured: 13 and
+    /// 31 frames at 30 fps.
     fn length(name: &str) -> Option<u32> {
-        (name == "pt_stand_shoot").then_some(400)
+        match name {
+            "pt_stand_shoot" => Some(400),
+            "pt_reload_stand_auto" => Some(1000),
+            _ => None,
+        }
     }
 
     #[test]
@@ -1094,18 +1111,34 @@ land
     }
 
     /// A clause with no `duration` holds for the clip's own length plus the
-    /// lerp allowance, and nothing takes the channel before that.
+    /// lerp allowance, floored at [`MIN_EVENT_HOLD_MS`], and nothing takes the
+    /// channel before that.
     #[test]
     fn an_event_clause_without_a_duration_holds_for_the_clip_length() {
+        // 400 + 50 is under the floor, so the shot takes the floor.
         let mut st = AnimState::default();
         let shot = Selection {
             legs: None,
             torso: Some(anim("pt_stand_shoot", None)),
         };
         st.event(&shot, 0, resolve, length);
-        st.clear_torso(449);
-        assert_eq!(st.torso() & 511, 253, "still inside 400 + LERP_MS");
-        st.clear_torso(450);
+        st.clear_torso(499);
+        assert_eq!(st.torso() & 511, 253, "still inside the floor");
+        st.clear_torso(500);
+        assert_eq!(st.torso() & 511, 0);
+
+        // 1000 + 50 is over it, so the reload holds for its own clip: the
+        // floor must not shorten a long anim, and the 2650 ms state it runs
+        // inside must not lengthen it.
+        let mut st = AnimState::default();
+        let reload = Selection {
+            legs: None,
+            torso: Some(anim("pt_reload_stand_auto", None)),
+        };
+        st.event(&reload, 0, resolve, length);
+        st.clear_torso(1049);
+        assert_eq!(st.torso() & 511, 229);
+        st.clear_torso(1050);
         assert_eq!(st.torso() & 511, 0);
     }
 

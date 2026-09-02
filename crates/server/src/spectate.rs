@@ -415,8 +415,10 @@ impl ClientSim {
             // back to when it runs out.
             sel.torso = None;
             self.anim.set(&sel, now_ms, resolve);
-            self.anim.clear_torso(now_ms);
         }
+        // Outside the airborne early-out: a shot fired in the air would
+        // otherwise hold its torso until the landing.
+        self.anim.clear_torso(now_ms);
         self.was_airborne = !self.ps.on_ground;
     }
 

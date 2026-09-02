@@ -57,11 +57,14 @@ const MODELLED: &[&str] = &[
 /// idle), so only the low 9 bits are a fact about the pose. The toggle is
 /// checked separately, frame by frame, where it does mean something.
 ///
-/// `torsoAnim` is not here: retail leaves it 0 in every settled pose of both
-/// captures, so comparing it would assert nothing about this stage and would
-/// fail at `jump_takeoff`, the one pose where retail's value (index 208) comes
-/// from no clause the selection reaches.
-const ANIM_FIELDS: &[&str] = &["legsAnim"];
+/// `torsoAnim` is here too, and it is 0 in all 22 poses of both retaken
+/// captures, `jump_takeoff` included. Nothing in a movement pose raises a
+/// weapon event, so the weapon channel never takes the torso and ours has to
+/// read 0 throughout: a torso that leaks into a settled pose is a defect
+/// (docs/research/player-model-anim-system.md, "The weapon channel"). The 720
+/// the pre-2026-09-02 pair read at `jump_takeoff` was a holstered weapon, not
+/// a clause.
+const ANIM_FIELDS: &[&str] = &["legsAnim", "torsoAnim"];
 
 /// Poses whose anim nothing derives yet, with the reason. The guard below
 /// fails on an entry that starts matching, so this cannot rot into a lie.

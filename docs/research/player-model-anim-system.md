@@ -156,7 +156,9 @@ stripped; the horizontal speed is the pose's own `velocity`.
 | `land` | first frame back on the ground | 99 | 99 | `land` default, `legs pb_standjump_land duration 100 blendtime 50` |
 
 VERIFIED: `torsoAnim` is 0 in every pose of both captures, `jump_takeoff`
-included. VERIFIED: every clause reached in the table is written `both`.
+included, and `playerstate_motion_ab` compares it: no movement pose raises a
+weapon event, so a torso index in one is a defect. VERIFIED: every clause
+reached in the table is written `both`.
 INFERRED: retail therefore does not write the torso half of the continuous
 selection, so vcod clears `Selection::torso` before applying it and leaves the
 torso to events. The captures taken before 2026-09-02 read 720 (index 208,
@@ -591,11 +593,24 @@ carentan's reload holds the torso for 950-1050 ms of a `weaponstate` 5 that
 runs 2650, and pavlov's for 2050-2150 ms of one that runs 2400, which are the
 31-frame `pt_reload_stand_auto` and the 64-frame `pt_reload_stand_rifle` at 30
 fps. UNVERIFIED: the exact rounding. The four measured clears bracket the
-clip's own length to (900, 1050], (2000, 2150], (450, 550] and (450, 600] ms
+clip's own length to (900, 1050], (2000, 2150], (400, 550] and (450, 600] ms
 against clip lengths of 1000, 2100, 400 and 500, so a 50 ms sample grid cannot
 tell `duration` from `duration + 50` and the two shot clears lean one way while
-the two reload clears lean the other. UNVERIFIED, and unexplained by either:
-the superseded pair's 1-frame `pt_stand_pullout_pose` held for about 500 ms.
+the two reload clears lean the other.
+
+INFERRED: the derived hold has a floor of 500 ms
+(`animscript::MIN_EVENT_HOLD_MS`), which is the fifth measurement: the
+superseded pair's `dropweapon` held 208 `pt_stand_pullout_pose` for about 500
+ms, and that clip is a single frame, 0 ms long. A floor is what fits, and
+`max(clip, the weapon state's own length)` is not: the carbine's reload clip is
+1000 ms inside a `weaponstate` 5 that runs 2650, and the capture clears at the
+clip. 500 leaves all four fire and reload holds where they were measured (the
+two reload clips and `pt_crouch_shoot` are longer than it, and `pt_stand_shoot`
+at 400 + 50 lands inside both maps' brackets either way). UNVERIFIED: nothing
+in the current pair puts a weapon away, so the floor is carried by the
+superseded measurement alone and no committed capture exercises it. A clause's
+own `duration` never takes the floor, so the `duration 150` autofire shots keep
+their 150.
 
 The channel clears the way the capture reads it: when the hold runs out and the
 continuous selection has nothing for the torso -- which is always, since retail
