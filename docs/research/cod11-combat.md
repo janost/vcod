@@ -17,8 +17,10 @@ are mixed and each claim says which one it rests on:
   target; `python3 tools/re/annotate_func.py <elf> <symbol>` resolves them.
   Pointers stored in `.data` read as 0 in the file unless `.rel.data` is
   resolved, and `.data`'s virtual address runs `0x1000` above its file offset
-  in this module, which is the second way a raw read of a table comes back
-  wrong.
+  in this module (`readelf -S` gives it `Addr 0x7b3a0 / Off 0x7a3a0`), which is
+  the second way a raw read of a table comes back wrong. **Every address in
+  this document is a virtual address**, including every `.data` table, so
+  dumping one out of the file means subtracting `0x1000` first.
 - `cgame_mp_x86.dll` 1.1, the MP client game, decompiled with Ghidra. Pmove is
   shared code, so the whole `PM_Weapon` family is in it, compiled from the
   same sources. Its image base is `0x30000000`. Where a claim was read there
@@ -27,11 +29,12 @@ are mixed and each claim says which one it rests on:
   headers. Only three things below rest on it, each labelled, and each is
   cross-checked against an offset the binary uses.
 
-Five ordered lists below describe a run of instructions. Each is introduced by
-a pair of labelled sentences rather than by a label per item, because each such
-list carries exactly two kinds of claim and they need opposite labels: the
-operands are read out of the instructions and the ordering and the conditions
-are read off the branches.
+Most of what follows describes a run of instructions, and each such passage is
+written as a list introduced by a pair of labelled sentences rather than by a
+label per item. That is because each carries exactly two kinds of claim and
+they need opposite labels: the operands, offsets, immediates and call targets
+are read out of the instructions, and the ordering and the conditions are read
+off the branches.
 
 The measured side of the weapon machine, taken off two retail captures rather
 than out of a binary, is in `docs/research/player-model-anim-system.md`, "The
@@ -48,12 +51,17 @@ document's `EV_BULLET_HIT_*` section. Playerstate offsets and the `ammo[]` /
 ## 0. The weapon-def struct, and where its fields are
 
 Every timer and flag the weapon machine reads is a field of the parsed weapon
-file. VERIFIED: the field table is at `0x7b9a0` in `game.mp.i386.so`, records
-of 12 bytes `{ char *name; int offset; int type; }`, terminating on a record
-whose name pointer is null at `0x7c534`, which makes 247 records. VERIFIED:
-the offsets are byte offsets into the weapon def, and the type codes seen in
-it are 0 string, 4 int, 5 bool, 6 float, 7 time-in-milliseconds, 8/9/0xa/0xb/
-0xc/0xd enum.
+file. VERIFIED: the field table is at VA `0x7C9A0` in `game.mp.i386.so` (file
+offset `0x7B9A0`), records of 12 bytes `{ char *name; int offset; int type; }`,
+and the record at VA `0x7D534` holds `0xFFFFFFFF`, `0xFFFFFFFF`, `0`, which
+makes 247 records ahead of it. INFERRED: that record is the terminator, since
+its name word is not a `.rodata` offset and every record before it is.
+VERIFIED: the offsets are byte offsets into the weapon def, and the type codes
+seen in it are 0 string, 4 int, 5 bool, 6 float, 7 time, 8/9/0xa/0xb/0xc/0xd
+enum. VERIFIED: a type-7 field is stored in milliseconds, since
+`weaponstate` runs of a known length match the weapon file's seconds times
+1000 (`player-model-anim-system.md`) and `weaponTime` is decremented by
+`pml.msec`.
 
 VERIFIED: `weaponDefs`, the array the game indexes by weapon number, is the
 pointer at `0x7c91c`; `BG_SetupWeaponInfo` (`0x36674`) allocates it 64 entries
@@ -334,181 +342,236 @@ the same value.
 
 ### 1.6 Releasing the trigger
 
-VERIFIED, dll `0x300113d0`, inlined in the `.so` at `0x392f0`: when the attack
-bit is clear and `weaponDelay` did not expire this frame, `weaponstate` 3 goes
-through the index-preserving `weapAnim` setter, `weaponstate` is set to 0, and
-the fire function is not called. VERIFIED: when either the attack bit is set
-or the delay expired, the fire function runs.
+The check is dll `0x300113d0`, inlined in the `.so` at `0x392f0`.
+VERIFIED: the offsets, immediates, weapon-def fields, event numbers and
+call targets named in the list below. INFERRED: the ordering, and every
+"when", "unless", "otherwise" and "skipped" in it, which are branch
+conditions.
+
+- When the attack bit is clear and `weaponDelay` did not expire this frame,
+  `weaponstate` 3 goes through the index-preserving `weapAnim` setter,
+  `weaponstate` is set to 0, and the fire function is not called.
+- When either the attack bit is set or the delay expired, the fire function
+  runs.
 
 ### 1.7 Reloading
 
-VERIFIED, dll `0x30010a80`, the "can this weapon reload" test:
-`ps->ammo[ammoIndex]` must be non-zero and `ps->ammoclip[clipIndex]` must be
-below the clip size. VERIFIED: when `weaponDef->noPartialReload` (`0x2E8`) is
-set, a further test runs against `weaponDef->reloadAmmoAdd` (`0x2F0`): with
-`reloadAmmoAdd` 0 or not below the clip size the reload is refused unless the
-clip is empty, and otherwise it is refused unless at least `reloadAmmoAdd`
-rounds are missing.
+VERIFIED: the offsets, immediates, weapon-def fields, event numbers and
+call targets named in the list below. INFERRED: the ordering, and every
+"when", "unless", "otherwise" and "skipped" in it, which are branch
+conditions.
 
-VERIFIED, dll `0x30010eb0`, the caller: the whole reload check is skipped for
-`weaponstate` 1, 2, 5, 6, 7, 8, 9, 10 and 11, so it runs only in 0, 3 and 4.
-VERIFIED: a reload begins when `pm->cmd.wbuttons & 8` and the test above
-passes. VERIFIED: it also begins with no key at all when `ammoclip` is 0,
-`ammo` is non-zero, `weaponstate != 3`, and either `pm_flags & 1` is clear or
-both `cmd.forwardmove` and `cmd.rightmove` are 0. INFERRED: that second clause
-is the automatic reload on a dry clip, and it refuses to run for a prone
-player who is moving.
+- dll `0x30010a80`, the "can this weapon reload" test: `ps->ammo[ammoIndex]`
+  must be non-zero and `ps->ammoclip[clipIndex]` must be below the clip size.
+  When `weaponDef->noPartialReload` (`0x2E8`) is set, a further test runs
+  against `weaponDef->reloadAmmoAdd` (`0x2F0`): with `reloadAmmoAdd` 0 or not
+  below the clip size the reload is refused unless the clip is empty, and
+  otherwise it is refused unless at least `reloadAmmoAdd` rounds are missing.
+- dll `0x30010eb0`, the caller: the whole reload check is skipped for
+  `weaponstate` 1, 2, 5, 6, 7, 8, 9, 10 and 11.
+- Same function: a reload begins when `pm->cmd.wbuttons & 8` and the test
+  above passes.
+- Same function: a reload also begins with no key at all when `ammoclip` is 0,
+  `ammo` is non-zero, `weaponstate != 3`, and either `pm_flags & 1` is clear
+  or both `cmd.forwardmove` and `cmd.rightmove` are 0.
+- Same function: when `weaponDef->segmentedReload` (`0x2EC`) is set, the
+  attack bit turns `weaponstate` 7 into 8 and 5 into 6.
+- dll `0x30010440`, beginning a reload: with `segmentedReload` set and
+  `reloadStartTime` non-zero it writes `WEAP_RELOAD_START`, `weaponTime` from
+  `reloadStartTime`, `weaponstate` 7, and event `0x99` (`EV_RELOAD_START`,
+  153).
+- dll `0x30010330`, otherwise: with `ammoclip` 0 and `weaponType` 0 it writes
+  `WEAP_RELOAD_EMPTY`, `weaponTime` from `reloadEmptyTime` and event `0x98`
+  (`EV_RELOAD_FROM_EMPTY`, 152); otherwise `WEAP_RELOAD`, `weaponTime` from
+  `reloadTime` and event `0x97` (`EV_RELOAD`, 151). `weaponstate` becomes 6
+  when it was 8 and 5 otherwise.
+- dll `0x30010b00`, on the frame the reload's `weaponDelay` expires: with
+  `weaponDef->boltAction` set and the weapon's `ps->weaponrechamber` bit set
+  it clears that bit and raises event `0xA3` (`EV_EJECT_BRASS`, 163), then
+  re-arms `weaponDelay` for the next segment from the same add-time
+  arithmetic.
+- dll `0x30010c50`, ending one: from state 5 or 6 the weapon's
+  `ps->weaponrechamber` bit is cleared, and with `segmentedReload` clear the
+  state goes to 0 with `WEAP_IDLE`. With `segmentedReload` set and the state
+  not 6 and the reload test still passing, another segment starts; otherwise,
+  with `reloadEndTime` non-zero, the state goes to 9 with `WEAP_RELOAD_END`,
+  `weaponTime` from `reloadEndTime` and event `0x9A` (`EV_RELOAD_END`, 154).
+  State 9 goes to 0 with `WEAP_IDLE`.
 
-VERIFIED, same function: when `weaponDef->segmentedReload` (`0x2EC`) is set,
-the attack bit turns `weaponstate` 7 into 8 and 5 into 6.
+INFERRED: the keyless clause is the automatic reload on a dry clip, and it
+refuses to run for a prone player who is moving. INFERRED: the run of states
+the check is skipped for leaves 0, 3 and 4 as the only ones it acts in.
+INFERRED: the `EV_EJECT_BRASS` in the middle of a reload is where a
+bolt-action's spent case leaves the gun when the player reloads instead of
+working the bolt.
 
-VERIFIED, dll `0x30010440`, beginning a reload: with `segmentedReload` set and
-`reloadStartTime` non-zero it writes `WEAP_RELOAD_START`, `weaponTime` from
-`reloadStartTime`, `weaponstate` 7, and event `0x99` (`EV_RELOAD_START`, 153).
-VERIFIED, dll `0x30010330`, otherwise: with `ammoclip` 0 and `weaponType` 0 it
-writes `WEAP_RELOAD_EMPTY`, `weaponTime` from `reloadEmptyTime` and event
-`0x98` (`EV_RELOAD_FROM_EMPTY`, 152); otherwise `WEAP_RELOAD`, `weaponTime`
-from `reloadTime` and event `0x97` (`EV_RELOAD`, 151). VERIFIED, same
-function: `weaponstate` becomes 6 when it was 8 and 5 otherwise.
-
-VERIFIED, dll `0x30010b00`, which runs on the frame the reload's
-`weaponDelay` expires: with `weaponDef->boltAction` set and the weapon's
-`ps->weaponrechamber` bit set it clears that bit and raises event `0xA3`
-(`EV_EJECT_BRASS`, 163), then re-arms `weaponDelay` for the next segment from
-the same add-time arithmetic. INFERRED: that is where a bolt-action's spent
-case leaves the gun when the player reloads instead of working the bolt.
-
-VERIFIED, dll `0x30010c50`, ending one: from state 5 or 6 the weapon's
-`ps->weaponrechamber` bit is cleared, and with `segmentedReload` clear the
-state goes to 0 with `WEAP_IDLE`. VERIFIED: with `segmentedReload` set and the
-state not 6 and the reload test still passing, another segment starts;
-otherwise, with `reloadEndTime` non-zero, the state goes to 9 with
-`WEAP_RELOAD_END`, `weaponTime` from `reloadEndTime` and event `0x9A`
-(`EV_RELOAD_END`, 154). VERIFIED: state 9 goes to 0 with `WEAP_IDLE`.
-
-**What the reload key does to a partial clip.** VERIFIED: with
-`noPartialReload` 0 -- which is what both fixture weapons ship -- the test
-passes on any non-full clip with reserve left, so the key starts an ordinary
-reload with event `EV_RELOAD` (151). UNVERIFIED: why the captured reload step
-in `player-model-anim-system.md` produced `weaponstate` 2 and event 156
-instead. INFERRED: nothing in this path can produce a putaway, so the cause is
-outside it, most likely the probe's own `cmd.weapon` differing from
-`ps->weapon` for that step, which is the one input the weapon-change check
-acts on.
+**What the reload key does to a partial clip.** VERIFIED: both fixture weapons
+ship `noPartialReload` 0. INFERRED: with that field clear the test passes on
+any non-full clip with reserve left, so the key starts an ordinary reload with
+event `EV_RELOAD` (151). UNVERIFIED: why the captured reload step in
+`player-model-anim-system.md` produced `weaponstate` 2 and event 156 instead.
+VERIFIED: no instruction in the reload path writes 2 into `weaponstate`, and
+1.8 lists the only two that do. INFERRED: so the cause is outside this path,
+most likely the probe's own `cmd.weapon` differing from `ps->weapon` for that
+step, which is the one input the weapon-change check acts on.
 
 ### 1.8 The weapon-switch path from the usercmd `weapon` byte
 
-VERIFIED, dll `0x300112e0`: the check is skipped while `weaponTime != 0`
-unless `weaponstate` is one of 4, 5, 6, 7, 8, 9; and it returns outright for
-`weaponstate` 3, 10 or 11, or when `weaponDelay != 0`. INFERRED: so a reload
-or a rechamber can be interrupted by a weapon switch and a shot or a melee
-cannot.
+VERIFIED: the offsets, immediates, weapon-def fields, event numbers and
+call targets named in the list below. INFERRED: the ordering, and every
+"when", "unless", "otherwise" and "skipped" in it, which are branch
+conditions.
 
-VERIFIED, same function: with `pm_flags & 0x10` set and `ps->weapon` non-zero
-it begins a change to weapon 0. VERIFIED: otherwise, when `pm->cmd.weapon`
-differs from `ps->weapon`, it begins a change to `cmd.weapon` provided
-`cmd.weapon` is 0 or the matching bit is set in `ps->weapons` (`ps+0x30C`),
-and it skips that when `pm_flags & 0x4000` is set with a non-zero current
-weapon. VERIFIED: it also begins a change to 0 when the player no longer owns
-`ps->weapon`.
+- dll `0x300112e0`, the check: it is skipped while `weaponTime != 0` unless
+  `weaponstate` is one of 4, 5, 6, 7, 8, 9; and it returns outright for
+  `weaponstate` 3, 10 or 11, or when `weaponDelay != 0`.
+- Same function: with `pm_flags & 0x10` set and `ps->weapon` non-zero it
+  begins a change to weapon 0.
+- Same function: otherwise, when `pm->cmd.weapon` differs from `ps->weapon`,
+  it begins a change to `cmd.weapon` provided `cmd.weapon` is 0 or the
+  matching bit is set in `ps->weapons` (`ps+0x30C`), and it skips that when
+  `pm_flags & 0x4000` is set with a non-zero current weapon.
+- Same function: it also begins a change to 0 when the player no longer owns
+  `ps->weapon`.
+- dll `0x30010570`, `.so` `0x37a9c`, the putaway: the target must be in
+  `0..numWeapons` and owned, and `weaponstate` must not already be 2.
+- Same function: it clears `weaponDelay`, and when the current weapon is 0 or
+  unowned or `ps->grenadeTimeLeft > 0` it clears `weaponTime`, sets
+  `weaponstate` 2, clears `grenadeTimeLeft` and ORs `0x400` into `pm_flags`
+  when `pm_flags & 1`.
+- Same function, the ordinary path: it raises event `0x9D` (`EV_WEAPON_ALT`,
+  157) with `WEAP_ALTSWITCHFROM` when the target is the current weapon's
+  `altWeapon`, and otherwise event `0x9C` (`EV_PUTAWAY_WEAPON`, 156) with
+  `WEAP_DROP`, and then sets `weaponstate` 2 and `weaponTime` from `dropTime`
+  (or `altDropTime` on the alt path). The `EV_PUTAWAY_WEAPON` is suppressed
+  when `weaponDef->clipOnly` is set and the clip is empty.
+- dll `0x300107c0`, the pickup half, which runs only in state 2: the new
+  weapon is `cmd.weapon`, forced to 0 when `pm_flags & 0x10` is set, when the
+  player does not own it, or when it exceeds the weapon count.
+- Same function: it writes `ps->weapon`, refreshes the cached weapon def, and
+  when old and new are equal sets `weaponstate` 0 with `WEAP_IDLE`.
+- Same function: otherwise it sets `weaponstate` 1, raises event `0x9B`
+  (`EV_RAISE_WEAPON`, 155) unless the new weapon is the old one's alt, sets
+  `weaponTime` from `raiseTime` (or `altRaiseTime`), sets `weapAnim` to
+  `WEAP_RAISE` (or `WEAP_ALTSWITCHTO`), and sets `aimSpreadScale` to 255.0.
+- dll `0x30010a30`, inlined in the `.so` at `0x392b4`: `weaponstate` 1 is
+  cleared to 0 and `weapAnim` set to `WEAP_IDLE` with the toggle flipped,
+  unconditionally, on the frame after.
 
-VERIFIED, dll `0x30010570`, the putaway: the target must be in `0..numWeapons`
-and owned, and `weaponstate` must not already be 2. VERIFIED: it clears
-`weaponDelay`, and when the current weapon is 0 or unowned or
-`ps->grenadeTimeLeft > 0` it clears `weaponTime`, sets `weaponstate` 2, clears
-`grenadeTimeLeft` and ORs `0x400` into `pm_flags` when `pm_flags & 1`.
-VERIFIED, the ordinary path: it raises event `0x9D` (`EV_WEAPON_ALT`, 157)
-with `WEAP_ALTSWITCHFROM` when the target is the current weapon's
-`altWeapon`, and otherwise event `0x9C` (`EV_PUTAWAY_WEAPON`, 156) with
-`WEAP_DROP`, and then sets `weaponstate` 2 and `weaponTime` from `dropTime`
-(or `altDropTime` on the alt path). VERIFIED: the `EV_PUTAWAY_WEAPON` is
-suppressed when `weaponDef->clipOnly` is set and the clip is empty.
+INFERRED: a reload or a rechamber can therefore be interrupted by a weapon
+switch and a shot or a melee cannot. INFERRED: the raise does not wait for
+`weaponTime`; `raiseTime` only holds off the *next* action, since every other
+check is gated on `weaponTime` being 0.
 
-VERIFIED, dll `0x300107c0`, the pickup half, which runs only in state 2: the
-new weapon is `cmd.weapon`, forced to 0 when `pm_flags & 0x10` is set, when
-the player does not own it, or when it exceeds the weapon count. VERIFIED: it
-writes `ps->weapon`, refreshes the cached weapon def, and when old and new are
-equal sets `weaponstate` 0 with `WEAP_IDLE`. VERIFIED: otherwise it sets
-`weaponstate` 1, raises event `0x9B` (`EV_RAISE_WEAPON`, 155) unless the new
-weapon is the old one's alt, sets `weaponTime` from `raiseTime` (or
-`altRaiseTime`), sets `weapAnim` to `WEAP_RAISE` (or `WEAP_ALTSWITCHTO`), and
-sets `aimSpreadScale` to 255.0.
+#### Where `weaponstate` 2 comes from, and where it does not
 
-VERIFIED, dll `0x30010a30`, inlined in the `.so` at `0x392b4`: `weaponstate` 1
-is cleared to 0 and `weapAnim` set to `WEAP_IDLE` with the toggle flipped,
-unconditionally, on the frame after. INFERRED: the raise therefore does not
-wait for `weaponTime`; `raiseTime` only holds off the *next* action, since
-every other check is gated on `weaponTime` being 0.
+VERIFIED: every write to `ps->weaponstate` in `game.mp.i386.so` stores an
+immediate, 27 of them and no register form, and exactly two store 2, at
+`0x37b3e` and `0x37c45`. VERIFIED: both sit inside the putaway function
+`0x37a9c`, and the module contains exactly two calls to that function, at
+`0x389ec` and `0x38a38`, both inside the weapon-change check `0x38918`.
+
+INFERRED: the list above is therefore the complete set of putaway sources
+inside this module. No jump path, stance-change path or prone path writes
+`weaponstate` 2, and the only inputs the two call sites act on are
+`pm->cmd.weapon` against `ps->weapon`, `ps->weapons` and `pm_flags & 0x10`.
+
+UNVERIFIED: what then produced the `weaponstate` 2 and event 156 that
+`player-model-anim-system.md` records at a jump and at a stance change. On the
+evidence above the cause is outside `PM_Weapon`, and it is carried as open in
+section 8; a reader implementing this must not assume a jump or a stance change
+raises `EV_PUTAWAY_WEAPON` on its own.
 
 ### 1.9 Rechamber, and the bolt-action bitfield
 
-VERIFIED, dll `0x300100a0`: the whole check needs `weaponDef->boltAction`
-(`0x2C8`) non-zero and the weapon's bit set in `ps->weaponrechamber`
-(`ps+0x31C`, two dwords, indexed `weapon >> 5` and `1 << (weapon & 31)`).
-VERIFIED: from `weaponstate` 4 with the delay expired it clears the bit and
-raises event `0xA3` (`EV_EJECT_BRASS`, 163). VERIFIED: from `weaponstate` 0 it
-sets `weapAnim` to `WEAP_RECHAMBER` or `WEAP_ADS_RECHAMBER` on the same
-`fWeaponPosFrac > 0.75` test, sets `weaponstate` 4, `weaponTime` from
-`rechamberTime`, `weaponDelay` from `rechamberBoltTime`, and raises event
-`0xA2` (`EV_RECHAMBER_WEAPON`, 162).
+The check is dll `0x300100a0`.
+VERIFIED: the offsets, immediates, weapon-def fields, event numbers and
+call targets named in the list below. INFERRED: the ordering, and every
+"when", "unless", "otherwise" and "skipped" in it, which are branch
+conditions.
 
-VERIFIED: the bit is set by the fire path (1.5, step 1) and cleared by both
-the rechamber and the reload. INFERRED: that is the whole "this weapon has a
-spent case in it" state, and it is per weapon rather than per player, so a
-bolt-action put away mid-cycle still needs its bolt worked when it comes back.
+- The whole check needs `weaponDef->boltAction` (`0x2C8`) non-zero and the
+  weapon's bit set in `ps->weaponrechamber` (`ps+0x31C`, two dwords, indexed
+  `weapon >> 5` and `1 << (weapon & 31)`).
+- From `weaponstate` 4 with the delay expired it clears the bit and raises
+  event `0xA3` (`EV_EJECT_BRASS`, 163).
+- From `weaponstate` 0 it sets `weapAnim` to `WEAP_RECHAMBER` or
+  `WEAP_ADS_RECHAMBER` on the same `fWeaponPosFrac > 0.75` test, sets
+  `weaponstate` 4, `weaponTime` from `rechamberTime`, `weaponDelay` from
+  `rechamberBoltTime`, and raises event `0xA2` (`EV_RECHAMBER_WEAPON`, 162).
 
-VERIFIED: this accounts for the mosin's three events per shot in
+VERIFIED: the fire path sets the bit (1.5, step 1) and both the rechamber and
+the reload clear it. INFERRED: that is the whole "this weapon has a spent case
+in it" state, and it is per weapon rather than per player, so a bolt-action put
+away mid-cycle still needs its bolt worked when it comes back. INFERRED: it
+also accounts for the mosin's three events per shot in
 `player-model-anim-system.md`, 159 then 162 then 163, and for the carbine's
-one: with `boltAction` 0 the bit is never set.
+one, since with `boltAction` 0 the bit is never set.
 
 ### 1.10 Melee
 
-VERIFIED, dll `0x30011930`: the check needs `weaponDef->meleeDamage` (`0x1C4`)
-non-zero and the delay-expired flag clear, and it needs `weaponDelay` to be 0
-or `weaponstate` to be one of 5, 6, 7, 8, 9. VERIFIED: when
-`pm->cmd.buttons & 0x20` is clear it clears `pm_flags & 0x1000`, and when the
-bit is set and `pm_flags & 0x1000` is clear it sets that flag and proceeds.
-INFERRED: `pm_flags 0x1000` is therefore the melee button's edge latch, and it
-is the only edge latch in the weapon machine.
+VERIFIED: the offsets, immediates, weapon-def fields, event numbers and
+call targets named in the list below. INFERRED: the ordering, and every
+"when", "unless", "otherwise" and "skipped" in it, which are branch
+conditions.
 
-VERIFIED: proceeding skips `weaponstate` 1, 2, 10 and 11; otherwise it sets
-`weapAnim` to `WEAP_MELEE_ATTACK`, raises event `0xA4` (`EV_MELEE_SWIPE`, 164),
-and with `meleeDelay` non-zero sets `weaponTime` from `meleeTime`,
-`weaponDelay` from `meleeDelay` and `weaponstate` 10. VERIFIED, dll
-`0x30011850`: the finish raises `weaponTime` to at least
-`meleeTime - meleeDelay`, raises event `0xA5` (`EV_FIRE_MELEE`, 165), and sets
-`weaponstate` 11. VERIFIED, dll `0x300118d0`: state 11 clears to 0 with
-`WEAP_IDLE`.
+- dll `0x30011930`, the check: it needs `weaponDef->meleeDamage` (`0x1C4`)
+  non-zero and the delay-expired flag clear, and it needs `weaponDelay` to be
+  0 or `weaponstate` to be one of 5, 6, 7, 8, 9.
+- Same function: when `pm->cmd.buttons & 0x20` is clear it clears
+  `pm_flags & 0x1000`, and when the bit is set and `pm_flags & 0x1000` is
+  clear it sets that flag and proceeds.
+- Same function: proceeding skips `weaponstate` 1, 2, 10 and 11; otherwise it
+  sets `weapAnim` to `WEAP_MELEE_ATTACK`, raises event `0xA4`
+  (`EV_MELEE_SWIPE`, 164), and with `meleeDelay` non-zero sets `weaponTime`
+  from `meleeTime`, `weaponDelay` from `meleeDelay` and `weaponstate` 10.
+- dll `0x30011850`, the finish: it raises `weaponTime` to at least
+  `meleeTime - meleeDelay`, raises event `0xA5` (`EV_FIRE_MELEE`, 165), and
+  sets `weaponstate` 11.
+- dll `0x300118d0`: state 11 clears to 0 with `WEAP_IDLE`.
+
+INFERRED: `pm_flags 0x1000` is the melee button's edge latch, and it is the
+only edge latch in the weapon machine.
 
 ### 1.11 Grenades in the same machine
 
-VERIFIED, `.so` `0x39158`: with `weaponDef->weaponType == 1` and
-`ps->grenadeTimeLeft` (`ps+0x34`) positive, `PM_Weapon` decrements it by
-`pml.msec`, and when it falls to 50 or below it pins it at 50, raises event
-`0x9F` (`EV_FIRE_WEAPON`, 159) and sets `weaponTime` to 1600, then returns.
-VERIFIED, dll `0x30011410`: the grenade's own fire path sets `grenadeTimeLeft`
-from `weaponDef->fuseTime` (`0x210`), sets `weapAnim` to 17, raises event
-`0x9E` (`EV_PULLBACK_WEAPON`, 158), sets `weaponDelay` from
-`weaponDef->holdFireTime` (`0x1E0`) and clears `weaponTime`.
+VERIFIED: the offsets, immediates, weapon-def fields, event numbers and
+call targets named in the list below. INFERRED: the ordering, and every
+"when", "unless", "otherwise" and "skipped" in it, which are branch
+conditions.
+
+- `.so` `0x39158`: with `weaponDef->weaponType == 1` and `ps->grenadeTimeLeft`
+  (`ps+0x34`) positive, `PM_Weapon` decrements it by `pml.msec`, and when it
+  falls to 50 or below it pins it at 50, raises event `0x9F`
+  (`EV_FIRE_WEAPON`, 159) and sets `weaponTime` to 1600, then returns.
+- dll `0x30011410`, the grenade's own fire path: it sets `grenadeTimeLeft`
+  from `weaponDef->fuseTime` (`0x210`), sets `weapAnim` to 17, raises event
+  `0x9E` (`EV_PULLBACK_WEAPON`, 158), sets `weaponDelay` from
+  `weaponDef->holdFireTime` (`0x1E0`) and clears `weaponTime`.
 
 ### 1.12 What stops `PM_Weapon` outright
 
-VERIFIED, in the order `.so` `0x390e0` tests them:
+VERIFIED: the three tests and the store in the list below, all in `.so`
+`0x390e0`. INFERRED: the order they are tested in.
 
 - `ps->pm_flags & 0x800` set: return with nothing done.
-- `ps->pm_type > 5`: `ps->weapon = 0`, return. VERIFIED: 6 and 7 are the two
-  dead `pm_type`s, per `shared.h`, whose `PM_DEAD = 6` and `PM_DEAD_LINKED = 7`
-  match this compare and the identical `> 5` guard at the head of `player_die`.
-- `ps->eFlags & 0xC000` set: return with nothing done. INFERRED: that pair of
-  bits marks a player on a mounted MG, since `FireWeapon` tests the same mask
-  before taking its turret branch and the fire path skips the clip decrement
-  when it is set.
+- `ps->pm_type > 5`: `ps->weapon = 0`, return.
+- `ps->eFlags & 0xC000` set: return with nothing done.
+
+VERIFIED: the second test is `cmp DWORD PTR [ebx+0x4],0x5` with a `jg`, here
+and at the head of `player_die`, and the binary carries no name for the values
+above 5. INFERRED: 6 and 7 are the two dead `pm_type`s, from CoDExtended's
+`shared.h` naming them `PM_DEAD` and `PM_DEAD_LINKED`.
+
+INFERRED: `eFlags 0xC000` marks a player on a mounted MG, since `FireWeapon`
+tests the same mask before taking its turret branch and the fire path skips the
+clip decrement when it is set.
 
 UNVERIFIED: what sets `pm_flags 0x800`, and what `pm_flags 0x400` and `0x4000`
-mean. VERIFIED: `pm_flags 0x1` is prone and `0x2` is crouch, from
-`BG_GetMinSpreadForWeapon` picking the prone and ducked spread minimums off
-those two bits, and `0x10` is the ladder, from the weapon-change check forcing
-weapon 0 on it.
+mean. VERIFIED: `BG_GetMinSpreadForWeapon` selects the prone spread minimum on
+`pm_flags & 1` and the ducked one on `pm_flags & 2`, and the weapon-change
+check forces weapon 0 on `pm_flags & 0x10`. INFERRED: so `0x1` is prone, `0x2`
+is crouch and `0x10` is the ladder.
 
 ---
 
@@ -562,6 +625,10 @@ VERIFIED, `FireWeapon` `0x68f1e` and `Bullet_Fire` `0x690dc`: the endpoint is
 INFERRED: `spread` is therefore the cone's half-angle in degrees and the trace
 runs 8192 units.
 
+VERIFIED, `FireWeapon` `0x68f2c`: the `damage` argument the shot carries into
+`Bullet_Fire_Extended` is `weaponDef->damage` (`0x1C0`), loaded straight from
+the weapon def with no scaling.
+
 ### 2.3 The trace
 
 VERIFIED, `Bullet_Fire_Extended` `0x68890`, signature read off its call sites
@@ -592,18 +659,27 @@ VERIFIED: `bulletPriorityMap` is 19 bytes at `0x7DD6C` and `riflePriorityMap`
 19 bytes at `0x7DD7F`, one byte per hit location in the index order of
 section 3:
 
-| hit location | bullet | rifle | hit location | bullet | rifle |
-|---|---|---|---|---|---|
-| `none` | 1 | 1 | `left_hand` | 3 | 5 |
-| `helmet` | 3 | 9 | `right_leg_upper` | 3 | 4 |
-| `head` | 3 | 9 | `left_leg_upper` | 3 | 4 |
-| `neck` | 3 | 9 | `right_leg_lower` | 3 | 4 |
-| `torso_upper` | 3 | 8 | `left_leg_lower` | 3 | 4 |
-| `torso_lower` | 3 | 7 | `right_foot` | 3 | 3 |
-| `right_arm_upper` | 3 | 6 | `left_foot` | 3 | 3 |
-| `left_arm_upper` | 3 | 6 | `gun` | 0 | 0 |
-| `right_arm_lower` | 3 | 6 | | | |
-| `left_arm_lower` | 3 | 6 | | | |
+| i | hit location | bullet | rifle |
+|---|---|---|---|
+| 0 | `none` | 1 | 1 |
+| 1 | `helmet` | 3 | 9 |
+| 2 | `head` | 3 | 9 |
+| 3 | `neck` | 3 | 9 |
+| 4 | `torso_upper` | 3 | 8 |
+| 5 | `torso_lower` | 3 | 7 |
+| 6 | `right_arm_upper` | 3 | 6 |
+| 7 | `left_arm_upper` | 3 | 6 |
+| 8 | `right_arm_lower` | 3 | 6 |
+| 9 | `left_arm_lower` | 3 | 6 |
+| 10 | `right_hand` | 3 | 5 |
+| 11 | `left_hand` | 3 | 5 |
+| 12 | `right_leg_upper` | 3 | 4 |
+| 13 | `left_leg_upper` | 3 | 4 |
+| 14 | `right_leg_lower` | 3 | 4 |
+| 15 | `left_leg_lower` | 3 | 4 |
+| 16 | `right_foot` | 3 | 3 |
+| 17 | `left_foot` | 3 | 3 |
+| 18 | `gun` | 0 | 0 |
 
 INFERRED: the map is a per-location weight the engine trace resolves ties
 with, so a rifle bullet grazing both a leg and the head is scored as the head,
@@ -622,8 +698,9 @@ numbering, and every "when", "unless" and "otherwise" in it.
    (`EV_BULLET_HIT_SMALL`, 173), or `0xAE` (`EV_BULLET_HIT_LARGE`, 174) when
    `rifleBullet` is set. Its `eventParm` (`entityState+160`) is
    `DirToByte(trace.normal)`, `entityState+216` is `DirToByte` of the incoming
-   direction mirrored in the plane, `surfType` (`entityState+136`) is the
-   surface-type nibble, and `otherEntityNum` (`entityState+116`) is the
+   direction mirrored in the plane, `surfType` (`entityState+136`) is bits 20
+   to 24 of the trace's surface flags, and `otherEntityNum` (`entityState+116`)
+   is the
    shooter's entity number. The client side of that temp entity is
    `docs/research/cod11-events-and-fx.md`, `EV_BULLET_HIT_*`.
 3. With bit `0x10` of the trace's `+32` word set, the bullet continues:
@@ -969,25 +1046,30 @@ the `clonePlayer` method.
 
 ### 5.2 `G_SpawnPlayerClone` and the body queue
 
-VERIFIED, `G_SpawnPlayerClone` `0x67888`:
+`G_SpawnPlayerClone` is `0x67888`. VERIFIED: the offsets, immediates,
+arithmetic and call targets named in the list below. INFERRED: the ordering,
+and every "when" and "before" in it.
 
 - The slot is `&g_entities[64 + level->bodyQueIndex]`, computed as
   `level->gentities + index * 0x314 + 0xC500`, and `0xC500` is `64 * 0x314`.
-  INFERRED: the queue therefore starts at entity 64, immediately past the 64
-  client slots.
 - `level->bodyQueIndex` (`level+0x1DE8`) is advanced as `(index + 1) & 7`,
   written as `(index+1) - ((index+1) & ~7)` with the sign correction for a
-  negative operand. VERIFIED: **the body queue holds 8 entries.**
+  negative operand.
 - The slot's `s.eFlags & 8` is read and inverted before anything else, and
-  written back at the end. INFERRED: the toggle guarantees the eFlags word
-  differs from whatever the previous occupant of this slot sent, which is the
-  same restart trick the anim channels use.
-- When the slot is in use, `G_FreeEntity` runs on it. VERIFIED: that is the
-  only place a clone is freed.
+  written back at the end.
+- When the slot is in use, `G_FreeEntity` runs on it.
 - The slot is marked in use, given a classname through `Scr_SetString`, given
   its own entity number, `+0x14C = 0x3FF`, and `+0x180` and `+0x184` cleared.
 
-VERIFIED, the `cloneplayer` script method `0x4450C`, which is what fills it:
+VERIFIED: **the body queue holds 8 entries**, from the `& 7` on the index.
+INFERRED: the queue starts at entity 64, immediately past the 64 client slots.
+INFERRED: the eFlags toggle guarantees the word differs from whatever the
+previous occupant of this slot sent, which is the same restart trick the anim
+channels use. VERIFIED: the `G_FreeEntity` above is the only call that frees a
+clone, since it is the only one reachable from an entity in this range.
+
+The `cloneplayer` script method `0x4450C` is what fills it. VERIFIED: every
+field and source in the table below, read off the store that writes it.
 
 | clone field | source |
 |---|---|
@@ -1007,9 +1089,10 @@ VERIFIED, the `cloneplayer` script method `0x4450C`, which is what fills it:
 | `+0x161` | the literal 1 |
 | `+0x190` | the literal `0x10001` |
 
-VERIFIED: `+0x118`, the word between the two copied runs, is deliberately not
-copied. VERIFIED: the clone is then linked, given `nextthink = level.time +
-250` (`+0x1FC`) and a think function at `0x456DC`, and returned to script.
+VERIFIED: `+0x118`, the word between the two copied runs, has no store.
+VERIFIED: `trap_LinkEntity`, `nextthink = level.time + 250` (`+0x1FC`), a
+think function at `0x456DC` and `GScr_AddEntity` follow. INFERRED: skipping
+`+0x118` is deliberate, since every float around it is copied one by one.
 
 VERIFIED, the think at `0x456DC`: its entire body is
 `ent->s.eFlags &= ~0x800`. INFERRED: the `0x800` bit set at spawn is the "this
@@ -1106,5 +1189,13 @@ return value.
   for `gun` are read out of the binary here.
 - UNVERIFIED: why the captured reload step produced a putaway rather than a
   reload (1.7).
+- UNVERIFIED: what puts a jumping or stance-changing player into `weaponstate`
+  2 with event 156, which `player-model-anim-system.md` measured on retail.
+  VERIFIED: only two instructions in `game.mp.i386.so` write `weaponstate` 2,
+  both inside the putaway function `0x37a9c`, whose only two callers are in
+  the weapon-change check and act only on `cmd.weapon`, `ps->weapons` and
+  `pm_flags & 0x10` (1.8). INFERRED: the cause is therefore outside
+  `PM_Weapon`, and 1.8's list is the complete set of putaway sources in this
+  module.
 - UNVERIFIED: the exact meaning of `client+0x220C` and `client+0x2210`, the
   two floats `FireWeapon` substitutes for the view pitch and yaw.
