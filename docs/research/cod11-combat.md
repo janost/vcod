@@ -1213,6 +1213,46 @@ INFERRED: nothing frees a clone on a timer. It lives until the eighth
 subsequent death reuses its slot, which is the eight-body behaviour the
 project already observed live (`AGENTS.md`, "Netcode debugging").
 
+**As implemented** (`crates/server/src/game/bodies.rs` and the `cloneplayer`
+builtin in `crates/server/src/game/builtins/client.rs`). The clone is written
+onto an empty entity state rather than a copy of the player's, and it carries
+the table's `eType`, `clientNum`, `legsAnim`, `torsoAnim`, `eFlags` with the
+slot's toggled bit 8, `groundEntityNum`, `pos.trType`, `pos.trTime`,
+`pos.trBase`, `pos.trDelta` and `apos.trBase`. The `0x800` marker and its
+250 ms think are left out: no capture we hold carries a corpse's `eFlags`, so
+there is nothing to check the pair against.
+
+Where the state comes from is a two-step arrangement retail does not need.
+A builtin cannot reach a client's sim, so `Server::replay_moves` mirrors each
+player's entity state onto `GameHost::client_entity_states` before the script
+frame, and `cloneplayer` copies the slot's entry. That copy is one step stale
+by construction: the gametype clones the player before the death animation is
+raised. So the queue records which client each body was born from, and
+`Server::send_snapshots` re-reads a body born this frame from that client's
+sim once, at the snapshot build, after the frame's sim ops have been applied.
+A body born on an earlier frame is never re-read.
+
+**As implemented**, `dropItem` (same file). VERIFIED that retail's
+`PlayerCmd_dropItem` (`.so` 0x43684) resolves the name through
+`BG_GetWeaponIndexForName` and calls `Drop_Weapon` (0x4dd40), which takes the
+weapon off the player with `BG_TakePlayerWeapon` and hands the entity to
+`LaunchItem` (0x4db98). VERIFIED that `LaunchItem` stores `+0x4 = 3`
+(`ET_ITEM`), `+0x17c = 0x10` (the `eFlags` 16 the placed-weapon traces
+carry), `pos.trType` 5, `pos.trTime = level.time`, and the entity's think as
+`DroppedItemClearOwner` at `level.time + 1000`; VERIFIED that
+`DroppedItemClearOwner` (0x4efb4) does nothing but write `0x3fe` into the
+owner field, and that neither function arms a free. VERIFIED that the two
+`0x7530` (30000) immediates in the module's `.text` are in `Cmd_CallVote_f`
+and `fire_rocket`, so no dropped item is freed on a timer anywhere in it: a
+retail drop lives until somebody picks it up.
+
+vcod diverges on two of those, both deliberately. It does not take the weapon
+off the player, because the stock death path re-gives the loadout on respawn
+and nothing else calls the builtin yet. And it arms `ThinkFn::Free` 30 000 ms
+out (`DROPPED_ITEM_MS`), because pickup on touch does not exist: with retail's
+lifetime every death would leave an item that never goes away. The timer is a
+placeholder for the touch path, not a claim about retail.
+
 ---
 
 ## 6. `P_DamageFeedback`

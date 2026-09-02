@@ -306,6 +306,18 @@ impl ScriptRuntime {
         }
     }
 
+    /// A client's entity state as the tick's moves left it, for
+    /// `cloneplayer`. `None` for a slot with no sim.
+    pub fn set_client_entity_state(
+        &mut self,
+        slot: usize,
+        state: Option<vcod_common::net::msg::EntityState>,
+    ) {
+        if let Some(s) = self.host.client_entity_states.get_mut(slot) {
+            *s = state;
+        }
+    }
+
     /// `Cmd_MenuResponse_f` (0x486d8): notify the client's entity with the
     /// menu's **name** and the response. The name, not the index the client
     /// sent -- retail reads configstring `CsRange::Menu.start + index` back

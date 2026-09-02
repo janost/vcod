@@ -13,6 +13,7 @@
 
 use crate::configstrings::{script_menu_index, weapon_index, CsRange};
 use crate::game::builtins::entity::entity_receiver;
+use crate::game::entity::ThinkFn;
 use crate::game::host::{GameHost, WeaponOp};
 use crate::weapons::weapon_slot;
 use vcod_common::pmove;
@@ -30,7 +31,24 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("setviewmodel", set_view_model),
     ("getviewmodel", get_view_model),
     ("usebuttonpressed", use_button_pressed),
+    ("getcurrentweapon", get_current_weapon),
+    ("cloneplayer", clone_player),
+    ("dropitem", drop_item),
+    ("closemenu", close_menu),
 ];
+
+/// How long a dropped weapon lives before the server frees it.
+///
+/// A deliberate divergence, and the only one in this file that retail
+/// contradicts outright: retail's `Drop_Weapon` (`.so` 0x4dd40) hands the
+/// entity to `LaunchItem` (0x4db98), whose only think is
+/// `DroppedItemClearOwner` a second out, so a dropped weapon lives until
+/// somebody picks it up. Nothing in the module frees one on a timer (the two
+/// `0x7530` immediates in `.text` are in `Cmd_CallVote_f` and `fire_rocket`).
+/// Pickup on touch is not this stage, so an item with retail's lifetime would
+/// never leave; the timer bounds the entity table until the touch path exists
+/// to replace it.
+const DROPPED_ITEM_MS: i32 = 30_000;
 
 /// `self useButtonPressed()`: whether the client's last usercmd held the
 /// use button, which every stock `respawn()` loop polls. `Server` mirrors
@@ -44,6 +62,118 @@ pub fn use_button_pressed(
     let slot = client_receiver(host, recv)?;
     let held = host.client_buttons[slot] & vcod_common::net::msg::BUTTON_USE != 0;
     Ok(Value::Int(i32::from(held)))
+}
+
+/// `self getCurrentWeapon()` (`PlayerCmd_getCurrentWeapon`): the name of the
+/// weapon in `ps.weapon`, or `"none"` when the slot holds nothing. Every
+/// stock death path reads it to name the weapon the corpse drops.
+///
+/// A player on a ladder reports `"none"`: the holster writes 0 into
+/// `ps.weapon`, and 0 is what retail reads back here too.
+pub fn get_current_weapon(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let index = host.client_weapons[slot].current as usize;
+    let name = crate::items::item_name(index).unwrap_or("none");
+    Ok(Value::String(cx.intern_exact(name)))
+}
+
+/// `self cloneplayer()` (`.so` 0x4450c): the corpse the gametype leaves
+/// behind, into the next body-queue slot
+/// (`docs/research/cod11-combat.md` section 5.2). The state copied is the
+/// mirror `Server::replay_moves` wrote for this client before the script
+/// frame, and the queue re-reads it from the sim once more at the snapshot
+/// build, so a death animation raised after this call still reaches the wire.
+///
+/// Returns `Value::Undefined` rather than the body entity: the body queue is
+/// not in the object table, so there is no `EntId` to hand out, and every
+/// stock gametype assigns the result without ever reading it back.
+pub fn clone_player(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let Some(state) = host.client_entity_states[slot].clone() else {
+        // A client with no sim: connected, never entered the world.
+        return Ok(Value::Undefined);
+    };
+    let now = host.level_time_ms;
+    host.bodies.push(
+        state,
+        Some(slot),
+        now,
+        &vcod_common::net::protocol::PROTOCOL_V1,
+    );
+    Ok(Value::Undefined)
+}
+
+/// `self dropItem(name)` (`.so` 0x43684): the named weapon on the ground
+/// where the player stands. Retail resolves the name to a weapon index and
+/// calls `Drop_Weapon`, which spawns a `bg_itemlist` entity through
+/// `LaunchItem`; here the entity is spawned the way
+/// `spawn_entities_from_string` spawns a map's `mpweapon_*`, so it reaches the
+/// wire as the same `ET_ITEM` (`crate::game::wire`). `weaponinfo` carries the
+/// weapon, which is what `kind_of` reads; the classname only has to open with
+/// `mpweapon_` for it to look there.
+///
+/// Two of retail's steps are left out. It takes the weapon off the player
+/// (`BG_TakePlayerWeapon`), which the stock death path does not need -- the
+/// respawn re-gives the loadout -- and would disarm a player the gametype
+/// meant to keep armed. And pickup on touch does not exist yet, which is what
+/// `DROPPED_ITEM_MS` stands in for.
+///
+/// A name no weapon file backs raises, the same reading `weapon_argument`
+/// takes for every other weapon builtin.
+pub fn drop_item(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let (name, _) = weapon_argument(cx, args)?;
+    let origin = {
+        let field = cx.intern_folded("origin");
+        match host.get_field(cx, EntId(slot as u32), field) {
+            Value::Vector(v) => v,
+            _ => [0.0; 3],
+        }
+    };
+    let id = host.ents.spawn(cx)?;
+    let classname = crate::game::spawn::radiant_name(&name).unwrap_or("mpweapon_dropped");
+    for (field, value) in [
+        ("classname", Value::String(cx.intern_exact(classname))),
+        ("weaponinfo", Value::String(cx.intern_exact(&name))),
+        ("origin", Value::Vector(origin)),
+    ] {
+        let atom = cx.intern_folded(field);
+        host.set_field(cx, id, atom, value)?;
+    }
+    host.register_item(&name);
+    host.ents
+        .schedule(id, ThinkFn::Free, host.level_time_ms + DROPPED_ITEM_MS);
+    Ok(Value::Undefined)
+}
+
+/// `self closeMenu()` (`.so` 0x45574): the reliable command `u`, with no
+/// argument -- the whole format string at 0x73204 is the one letter. The
+/// client's handler is `0x3002de60`, "close script menus"
+/// (`docs/research/cod11-hud-protocol.md` section 0).
+pub fn close_menu(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    host.client_commands.push((slot, "u".to_string()));
+    Ok(Value::Undefined)
 }
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -539,6 +669,128 @@ mod tests {
                 .unwrap();
             assert!(open_menu(&mut host, cx, Some(Target::Entity(prop)), &[menu]).is_err());
             assert!(host.client_commands.is_empty());
+        });
+    }
+
+    /// The weapon name comes out of the host's own `client_weapons`, and a
+    /// slot holding nothing reads `"none"` -- which is what a player on a
+    /// ladder reports, the holster having written 0 into `ps.weapon`.
+    #[test]
+    fn getcurrentweapon_names_what_the_client_holds() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let recv = Some(Target::Entity(c));
+            let name =
+                |host: &mut GameHost, cx: &mut Cx| match get_current_weapon(host, cx, recv, &[])
+                    .unwrap()
+                {
+                    Value::String(a) => cx.resolve(a).to_string(),
+                    v => panic!("{v:?}"),
+                };
+            assert_eq!(name(&mut host, cx), "none");
+            host.client_weapons[0].current = weapon_index("m1carbine_mp").unwrap() as u8;
+            assert_eq!(name(&mut host, cx), "m1carbine_mp");
+        });
+    }
+
+    /// `closeMenu` queues the bare `u` the retail builtin sends (`.so`
+    /// 0x45574, format string 0x73204), and refuses a receiver with no
+    /// `gclient_t` the way every other player method here does.
+    #[test]
+    fn closemenu_queues_the_bare_u_command() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 3).unwrap();
+            close_menu(&mut host, cx, Some(Target::Entity(c)), &[]).unwrap();
+            assert_eq!(host.client_commands, vec![(3, "u".to_string())]);
+            let prop = host.ents.spawn(cx).unwrap();
+            assert!(close_menu(&mut host, cx, Some(Target::Entity(prop)), &[]).is_err());
+        });
+    }
+
+    /// A dropped weapon is spawned as the placed weapon it is: a
+    /// `mpweapon_*` classname with the weapon in `weaponinfo`, at the
+    /// player's own origin, with the free think armed. `wire::kind_of` reads
+    /// exactly those two fields, so this is what puts it on the wire as an
+    /// `ET_ITEM`.
+    #[test]
+    fn dropitem_spawns_a_placed_weapon_where_the_player_stands() {
+        let (mut vm, mut host) = fixture();
+        host.level_time_ms = 5_000;
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            set_origin(&mut host, cx, c, [16.0, -32.0, 8.0]);
+            let name = Value::String(cx.intern_exact("m1carbine_mp"));
+            drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap();
+
+            let (id, _) = host.ents.iter_inuse().find(|(id, _)| *id != c).unwrap();
+            let read = |host: &mut GameHost, cx: &mut Cx, f: &str| {
+                let atom = cx.intern_folded(f);
+                host.get_field(cx, id, atom)
+            };
+            match read(&mut host, cx, "classname") {
+                Value::String(a) => assert_eq!(cx.resolve(a), "mpweapon_m1carbine"),
+                v => panic!("{v:?}"),
+            }
+            match read(&mut host, cx, "weaponinfo") {
+                Value::String(a) => assert_eq!(cx.resolve(a), "m1carbine_mp"),
+                v => panic!("{v:?}"),
+            }
+            assert_eq!(
+                read(&mut host, cx, "origin"),
+                Value::Vector([16.0, -32.0, 8.0])
+            );
+            let e = host.ents.get(id).unwrap();
+            assert_eq!(e.think, Some(ThinkFn::Free));
+            assert_eq!(e.nextthink, 5_000 + DROPPED_ITEM_MS);
+        });
+    }
+
+    /// A name no weapon file backs raises rather than spawning an item with
+    /// no weapon on it, the same reading every other weapon builtin takes.
+    #[test]
+    fn dropitem_refuses_a_weapon_nothing_backs() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let name = Value::String(cx.intern_exact("blunderbuss_mp"));
+            assert!(drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).is_err());
+            assert_eq!(host.ents.iter_inuse().count(), 1, "no item was spawned");
+        });
+    }
+
+    /// `cloneplayer` copies the mirror `Server::replay_moves` wrote into the
+    /// body queue's next slot. A client with no mirror -- connected but never
+    /// in the world -- clones nothing.
+    #[test]
+    fn cloneplayer_pushes_the_mirrored_state_into_the_body_queue() {
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 2).unwrap();
+            let recv = Some(Target::Entity(c));
+            assert_eq!(
+                clone_player(&mut host, cx, recv, &[]).unwrap(),
+                Value::Undefined
+            );
+            assert_eq!(host.bodies.entities().count(), 0, "no mirror, no corpse");
+
+            let mut state = vcod_common::net::msg::EntityState::null(p);
+            state.number = 2;
+            let set = |s: &mut vcod_common::net::msg::EntityState, n: &str, v: i32| {
+                s.fields[vcod_common::net::msg::EntityState::field_index(p, n).unwrap()] = v;
+            };
+            set(&mut state, "clientNum", 2);
+            set(&mut state, "legsAnim", 700);
+            host.client_entity_states[2] = Some(state);
+            clone_player(&mut host, cx, recv, &[]).unwrap();
+
+            let (number, body) = host.bodies.entities().next().unwrap();
+            assert_eq!(number, crate::game::bodies::BODY_FIRST);
+            assert_eq!(body.field_i32(p, "eType"), crate::game::bodies::ET_CORPSE);
+            assert_eq!(body.field_i32(p, "clientNum"), 2);
+            assert_eq!(body.field_i32(p, "legsAnim"), 700);
         });
     }
 }

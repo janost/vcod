@@ -18,6 +18,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("finishplayerdamage", finish_player_damage),
     ("obituary", obituary),
     ("radiusdamage", radius_damage),
+    ("suicide", suicide),
 ];
 
 /// `EV_OBITUARY`, the killfeed event
@@ -173,6 +174,58 @@ pub fn obituary(
         origin,
         scope: Scope::Broadcast,
     });
+    Ok(Value::Undefined)
+}
+
+/// `self suicide()` (`.so` 0x45358): the kill a player asks for. Retail
+/// routes it through the same `player_die` every other death takes; here the
+/// health comes off the vitals directly and the death callback is spawned
+/// with `MOD_SUICIDE`, the same shape `finish_player_damage` uses for a
+/// killing hit.
+///
+/// The damage is zero and the knockback off, so the sim raises `EV_DEATH`
+/// and nothing else: the dead yaw stays 0, which is what the retail hit
+/// capture's own suicides read (`docs/research/cod11-combat.md` section 8.4,
+/// `stats[1]` 0).
+pub fn suicide(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let v = &mut host.client_vitals[slot];
+    if v.dead {
+        return Ok(Value::Undefined);
+    }
+    v.health = 0;
+    v.dead = true;
+    host.client_sim_ops.push((
+        slot,
+        SimOp::Damaged {
+            damage: 0,
+            point: [0.0; 3],
+            dir: [0.0; 3],
+            knockback: false,
+            attacker: Some(slot),
+            attacker_origin: None,
+            fatal: true,
+        },
+    ));
+    let me = Value::Entity(vcod_gsc::EntId(slot as u32));
+    let weapon = host.client_weapons[slot].current as usize;
+    let weapon = crate::items::item_name(weapon).unwrap_or("none");
+    let args = vec![
+        me,
+        me,
+        Value::Int(0),
+        Value::String(cx.intern_exact("MOD_SUICIDE")),
+        Value::String(cx.intern_exact(weapon)),
+        Value::Vector([0.0; 3]),
+        Value::String(cx.intern_exact("none")),
+    ];
+    let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
+    cx.spawn(killed, recv, args);
     Ok(Value::Undefined)
 }
 
@@ -535,5 +588,60 @@ mod tests {
             assert_eq!(te.attacker, 1022);
             assert_eq!(te.parm, 0x95);
         });
+    }
+
+    /// `suicide` is a death with no attacker but the player itself: the
+    /// vitals go to zero, the sim gets a fatal `Damaged` with no damage and
+    /// no knockback, and `CodeCallback_PlayerKilled` runs before the calling
+    /// thread continues -- the same ordering a fatal `finishPlayerDamage`
+    /// gets. `MOD_SUICIDE` and the held weapon are what reach the callback.
+    #[test]
+    fn suicide_kills_the_player_and_runs_the_killed_callback() {
+        const SCRIPT: &str = r#"
+            main() {}
+            CodeCallback_PlayerConnect() {
+                self giveWeapon("m1carbine_mp");
+                self setSpawnWeapon("m1carbine_mp");
+                self suicide();
+                self.after = self.sessionstate;
+            }
+            CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {
+                self.sessionstate = "dead";
+                self.mod = sMeansOfDeath;
+                self.weap = sWeapon;
+                self.killer = eAttacker getEntityNumber();
+            }
+        "#;
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+        rt.host.client_vitals[0] = Vitals {
+            health: 100,
+            max_health: 100,
+            dead: false,
+        };
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "victim".into(),
+        });
+        rt.run_frame(0);
+
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.client_field(0, "after").as_deref(), Some("dead"));
+        assert_eq!(rt.client_field(0, "mod").as_deref(), Some("MOD_SUICIDE"));
+        assert_eq!(rt.client_field(0, "weap").as_deref(), Some("m1carbine_mp"));
+        assert_eq!(rt.client_field(0, "killer").as_deref(), Some("0"));
+        assert_eq!(rt.client_vitals(0).health, 0);
+        assert!(rt.client_vitals(0).dead);
+        let ops = rt.take_sim_ops();
+        assert_eq!(ops.len(), 1);
+        let (
+            slot,
+            SimOp::Damaged {
+                damage,
+                knockback,
+                fatal,
+                ..
+            },
+        ) = ops[0];
+        assert_eq!((slot, damage, knockback, fatal), (0, 0, false, true));
     }
 }

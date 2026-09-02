@@ -180,6 +180,10 @@ pub struct GameHost {
     /// Each client's last usercmd buttons, mirrored in by `Server` before
     /// the frame, for `useButtonPressed`.
     pub client_buttons: Vec<u8>,
+    /// Each client's entity state as the tick's moves left it, mirrored in by
+    /// `Server::replay_moves` before the script frame. `cloneplayer` copies
+    /// the slot's entry into the body queue; nothing else reads it.
+    pub client_entity_states: Vec<Option<vcod_common::net::msg::EntityState>>,
     /// What `finishPlayerDamage` did to a client this frame, drained by
     /// `Server` after `run_frame` and applied to the sim once each.
     pub client_sim_ops: Vec<(usize, SimOp)>,
@@ -265,6 +269,7 @@ impl GameHost {
             client_weapon_ops: Vec::new(),
             client_vitals: vec![Vitals::default(); MAX_CLIENTS],
             client_buttons: vec![0; MAX_CLIENTS],
+            client_entity_states: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
             weapons: std::rc::Rc::new(crate::weapons::WeaponTable::empty()),
             damage: Vec::new(),
@@ -483,7 +488,17 @@ impl Host for GameHost {
                 if !type_accepts(ty, value) {
                     return Err(ErrorKind::BadType("wrong type for a client field"));
                 }
-                c[i] = value;
+                // `archivetime` is how long a client's frames are kept for a
+                // killcam to replay, which vcod does not have and will not
+                // (`docs/design/2026-09-02-stage6-combat-design.md`). Retail's
+                // own code trims the value down to what it can actually serve;
+                // storing zero is that trim taken to its end, and it is what
+                // makes every stock gametype's `if(self.archivetime <= delay)`
+                // fall through to `respawn()` instead of into the killcam.
+                c[i] = match fields::CLIENT_FIELDS[i].name {
+                    "archivetime" => Value::Int(0),
+                    _ => value,
+                };
                 Ok(())
             }
             Route::Script => {
@@ -834,6 +849,50 @@ mod tests {
             assert!(host
                 .set_field(cx, e, origin, Value::Vector([1.0, 2.0, 3.0]))
                 .is_ok());
+        });
+    }
+
+    /// A numeric client field reads 0 before anything writes it, which is
+    /// what retail's getter finds on the `gclient_t` `ClientConnect` zeroed.
+    /// It is what lets `self.deaths++` and `attacker.score++` run on a
+    /// client that has neither yet; `.pers` is still the array
+    /// `spawn_client` seeded, and a string field is still undefined.
+    #[test]
+    fn a_numeric_client_field_starts_at_zero() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let read = |host: &mut GameHost, cx: &mut Cx, f: &str| {
+                let atom = cx.intern_folded(f);
+                host.get_field(cx, c, atom)
+            };
+            assert_eq!(read(&mut host, cx, "score"), Value::Int(0));
+            assert_eq!(read(&mut host, cx, "deaths"), Value::Int(0));
+            assert_eq!(read(&mut host, cx, "spectatorclient"), Value::Int(0));
+            assert_eq!(read(&mut host, cx, "archivetime"), Value::Float(0.0));
+            assert_eq!(read(&mut host, cx, "statusicon"), Value::Undefined);
+            assert!(matches!(read(&mut host, cx, "pers"), Value::Array(_)));
+        });
+    }
+
+    /// `archivetime` stores 0 whatever the script wrote: nothing archives
+    /// frames for a killcam, so a gametype's `if(self.archivetime <= delay)`
+    /// has to fall through to `respawn()` rather than stall waiting for a
+    /// replay that never comes.
+    #[test]
+    fn archivetime_reads_back_zero_whatever_was_written() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let atom = cx.intern_folded("archivetime");
+            host.set_field(cx, c, atom, Value::Int(9)).unwrap();
+            assert_eq!(host.get_field(cx, c, atom), Value::Int(0));
+            host.set_field(cx, c, atom, Value::Float(2.5)).unwrap();
+            assert_eq!(host.get_field(cx, c, atom), Value::Int(0));
+            // The neighbouring numeric fields still store what they are given.
+            let other = cx.intern_folded("spectatorclient");
+            host.set_field(cx, c, other, Value::Int(3)).unwrap();
+            assert_eq!(host.get_field(cx, c, other), Value::Int(3));
         });
     }
 }

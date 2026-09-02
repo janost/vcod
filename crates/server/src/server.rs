@@ -826,16 +826,11 @@ impl Server {
                 }
             }
             // DeathmatchScoreboardMessage (.so 0x459c0); grammar in
-            // docs/research/cod11-hud-protocol.md section 3. Nothing is
-            // measured, so team totals use the "no score" sentinel and rows
-            // zero out.
+            // docs/research/cod11-hud-protocol.md section 3. The team totals
+            // stay at the "no score" sentinel, which is what dm leaves them
+            // at: nothing in it calls `setTeamScore`.
             "score" => {
-                let mut text = format!("b {} -9999 -9999", self.client_count());
-                for (cs_slot, c) in self.clients.iter().enumerate() {
-                    if c.is_some() {
-                        text.push_str(&format!(" {cs_slot} 0 0 0 0"));
-                    }
-                }
+                let text = self.scoreboard();
                 self.send_server_command(slot, &text);
             }
             // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
@@ -961,6 +956,79 @@ impl Server {
             sim.ps.ammo = ammo;
             sim.ps.ammoclip = clip;
         }
+    }
+
+    /// `DeathmatchScoreboardMessage` (`.so` 0x459c0): `b <numRows> <axis>
+    /// <allies>{ <client> <score> <ping> <time> <icon>}*`, one row per online
+    /// client (`docs/research/cod11-hud-protocol.md` section 3).
+    ///
+    /// The score and the status icon come from the script's own client
+    /// fields, which is where every gametype writes them. `ping` is 0: the
+    /// netchan keeps no round-trip estimate, and 0 renders as a number where
+    /// retail's `-1` renders as "-" for a client still connecting. `time` is
+    /// minutes since the client connected -- retail sends `pers.enterTime`
+    /// raw and its unit is unmeasured (section 3, UNVERIFIED), so this is the
+    /// Q3 reading of the same slot rather than a claim about retail's.
+    fn scoreboard(&mut self) -> String {
+        let online: Vec<(usize, i64)> = self
+            .clients
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, c)| {
+                let c = c.as_ref()?;
+                let minutes = c
+                    .last_packet
+                    .saturating_duration_since(c.last_connect)
+                    .as_secs()
+                    / 60;
+                Some((slot, minutes as i64))
+            })
+            .collect();
+        let mut text = format!("b {} -9999 -9999", online.len());
+        for (slot, minutes) in online {
+            let score = self
+                .client_field(slot, "score")
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0);
+            let icon = self.status_icon_index(slot);
+            text.push_str(&format!(" {slot} {score} 0 {minutes} {icon}"));
+        }
+        text
+    }
+
+    /// A client's `.statusicon` as the 1-based index into `CsRange::StatusIcon`
+    /// the scoreboard row carries, or 0 when the field is empty or names an
+    /// icon nothing precached. The client resolves `20 + n` for an `n` in
+    /// `1..8` (hud protocol doc, section 3).
+    fn status_icon_index(&mut self, slot: usize) -> usize {
+        let Some(name) = self
+            .client_field(slot, "statusicon")
+            .filter(|n| !n.is_empty())
+        else {
+            return 0;
+        };
+        let (first, last) = crate::configstrings::CsRange::StatusIcon.bounds();
+        self.configstrings[first..=last]
+            .iter()
+            .position(|cs| *cs == name)
+            .map_or(0, |i| i + 1)
+    }
+
+    /// Whether a shot fired from eye height at `origin` along `yaw_deg`
+    /// reaches `dist` without hitting anything. Test-facing, like
+    /// `place_client`: a gate that puts one client in front of another has to
+    /// say the sightline between them is real, or a spawn point that moved
+    /// into a wall reads as "the damage path is broken". A server with no
+    /// collision world answers yes.
+    pub fn test_clear_line(&self, origin: [f32; 3], yaw_deg: f32, dist: f32) -> bool {
+        let Some(world) = self.world.as_ref() else {
+            return true;
+        };
+        let stand = vcod_common::pmove::Stance::Stand.view_height();
+        let eye = glam::Vec3::from(origin) + glam::Vec3::Z * stand;
+        let (s, c) = yaw_deg.to_radians().sin_cos();
+        let end = eye + glam::Vec3::new(c, s, 0.0) * dist;
+        world.collision.shot_trace(eye, end).fraction >= 1.0
     }
 
     /// Clones a client into the body queue and returns the corpse's entity
@@ -1473,6 +1541,21 @@ impl Server {
                     self.sv_time_ms,
                     &events,
                 );
+            }
+        }
+        // The state each player ended the tick in, mirrored onto the host for
+        // `cloneplayer`: a builtin cannot reach a sim, and the corpse is the
+        // dying player's entity state (`crate::game::bodies`). Written here,
+        // before the script frame, because that is the frame the script clones
+        // in; `send_snapshots` re-reads a newborn body afterwards so the death
+        // animation the script raised after the clone still lands on it.
+        let proto = self.proto;
+        if let Some(rt) = self.script.as_mut() {
+            for (slot, c) in self.clients.iter().enumerate() {
+                let state = c.as_ref().and_then(|c| {
+                    Some(c.sim.as_ref()?.to_entity(proto, slot, c.last_processed_st))
+                });
+                rt.set_client_entity_state(slot, state);
             }
         }
         moved

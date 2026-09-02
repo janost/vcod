@@ -15,7 +15,13 @@ use vcod_gsc::{Cx, EntId, ErrorKind, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
 
-pub const NAMES: &[(&str, Builtin)] = &[("newhudelem", new_hud_elem), ("settimer", set_timer)];
+pub const NAMES: &[(&str, Builtin)] = &[
+    ("newhudelem", new_hud_elem),
+    ("newclienthudelem", new_client_hud_elem),
+    ("settimer", set_timer),
+    ("settext", set_text),
+    ("destroy", destroy),
+];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
     NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
@@ -44,6 +50,65 @@ pub fn new_hud_elem(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     Ok(Value::Entity(host.ents.spawn_hud_elem(cx)?))
+}
+
+/// `newClientHudElem(player)` (`GScr_NewClientHudElem` 0x4b298): the same
+/// record `newHudElem` takes, except that the owner field at +0x70 gets the
+/// player's entity number instead of `0x3ff`, so the element is drawn for
+/// that client alone. Retail's `not a client` param error (0x746f1) is the
+/// receiver check here.
+///
+/// The owner is not stored: nothing reads it until the HUD wire path exists
+/// (`G_UpdateHudElemsToClients` 0x5121c), and the field is not in
+/// `HUD_FIELDS`, so no script can ask. `respawn()`'s "press activate" text is
+/// what reaches this today, and the thread it runs on is the one that polls
+/// the use button.
+pub fn new_client_hud_elem(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let Some(Value::Entity(id)) = args.first() else {
+        return Err(ErrorKind::BadType("newClientHudElem takes a player"));
+    };
+    if !host.ents.get(*id).is_some_and(|e| e.client.is_some()) {
+        return Err(ErrorKind::BadType("not a client"));
+    }
+    Ok(Value::Entity(host.ents.spawn_hud_elem(cx)?))
+}
+
+/// `<hudelem> setText(text)` (0x4c590, hudelem method 0): the string an
+/// element draws. It shares `setTimer`'s prologue -- the same block cleared,
+/// then element type 1 and the string at +0x68 -- and, like `setTimer`,
+/// writes nothing script can read back, so the call shape is all there is to
+/// be faithful to. A localized literal is accepted the way `precacheString`
+/// accepts one: `respawn()` passes `&"MPSCRIPT_PRESS_ACTIVATE_TO_RESPAWN"`.
+pub fn set_text(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    hud_receiver(host, recv)?;
+    match args {
+        [Value::String(_)] | [Value::Localized(_)] => Ok(Value::Undefined),
+        _ => Err(ErrorKind::BadType("setText takes one string")),
+    }
+}
+
+/// `<hudelem> destroy()` (0x4c9d0, hudelem method 13): frees the record.
+/// `ObjectTable::free` takes the HUD path for a number in that range, which
+/// is retail's `HudElem_Free` rather than `G_FreeEntity`.
+pub fn destroy(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = hud_receiver(host, recv)?;
+    host.ents.free(id);
+    Ok(Value::Undefined)
 }
 
 /// `<hudelem> setTimer(seconds)` (0x4b8e4, hudelem method 2): a countdown
@@ -139,6 +204,40 @@ mod tests {
             assert!(set_timer(&mut host, cx, Some(Target::Entity(e)), &arg).is_err());
             assert!(set_timer(&mut host, cx, Some(Target::Entity(hud)), &arg).is_ok());
             assert!(set_timer(&mut host, cx, Some(Target::Entity(hud)), &[Value::Int(0)]).is_err());
+        });
+    }
+
+    /// `newClientHudElem` takes a player and nothing else: retail's own
+    /// `not a client` param error is the check. What it hands back is a HUD
+    /// element like `newHudElem`'s, and `destroy` gives the record back.
+    #[test]
+    fn a_client_hud_elem_needs_a_player_and_destroy_frees_it() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let prop = host.ents.spawn(cx).unwrap();
+            assert!(new_client_hud_elem(&mut host, cx, None, &[Value::Entity(prop)]).is_err());
+            assert!(new_client_hud_elem(&mut host, cx, None, &[]).is_err());
+
+            let Value::Entity(id) =
+                new_client_hud_elem(&mut host, cx, None, &[Value::Entity(c)]).unwrap()
+            else {
+                panic!("newClientHudElem returns an object");
+            };
+            assert_eq!(id, EntId(FIRST_HUD_ELEM));
+            let text = Value::Localized(cx.intern_exact("MPSCRIPT_PRESS_ACTIVATE_TO_RESPAWN"));
+            let recv = Some(Target::Entity(id));
+            set_text(&mut host, cx, recv, &[text]).unwrap();
+            assert!(set_text(&mut host, cx, recv, &[Value::Int(1)]).is_err());
+            assert!(set_text(&mut host, cx, Some(Target::Entity(prop)), &[text]).is_err());
+
+            destroy(&mut host, cx, recv, &[]).unwrap();
+            assert!(host.ents.get(id).is_none());
+            // The freed record is the next one handed out.
+            assert_eq!(
+                new_client_hud_elem(&mut host, cx, None, &[Value::Entity(c)]).unwrap(),
+                Value::Entity(EntId(FIRST_HUD_ELEM))
+            );
         });
     }
 }
