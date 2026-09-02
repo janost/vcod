@@ -504,7 +504,7 @@ Two functions carry the whole layout, and every address in this subsection is in
 
 Three of the blocks name themselves. With `cl_shownet` at 4 (the cvar cached at `0x8355214`, registered at `0x80813e0`) the reader prints `PS_STATS` (`0x80d2e35`) before block 1, `PS_AMMO` (`0x80d2e42`) before block 2 and `PS_AMMOCLIP` (`0x80d2e4a`) before block 3. VERIFIED. Blocks 4 and 5 print nothing, so their names below are read off what writes the offsets, not off the engine.
 
-**Block 1 — `stats[6]` at `0xF4`.** One gate bit; if set, six raw bits low to high select which elements follow, and the present ones are read in element order. VERIFIED (reader `0x807e7eb`..`0x807ea0a`, writer `0x807d893`..`0x807da44`). The widths are per element, not uniform:
+**Block 1, `stats[6]` at `0xF4`.** One gate bit; if set, six raw bits low to high select which elements follow, and the present ones are read in element order. VERIFIED (reader `0x807e7eb`..`0x807ea0a`, writer `0x807d893`..`0x807da44`). The widths are per element, not uniform:
 
 | element | offset | wire | meaning | label for the meaning |
 |---|---|---|---|---|
@@ -517,25 +517,25 @@ Three of the blocks name themselves. With `cl_shownet` at 4 (the cvar cached at 
 
 The evidence for each meaning, all in `game.mp.i386.so`:
 
-- `stats[0]`: `Scr_SetHealth` (`0x5c68c`) writes `ps+0xF4`, and so does `Pickup_Health` (`0x4d569`). VERIFIED.
+- `stats[0]`: `Scr_SetHealth` (`0x5c68c`) writes `ps+0xF4` at `0x5c6b0`, and `Pickup_Health` (`0x4d400`) writes it at `0x4d569`. VERIFIED.
 - `stats[1]`: `PM_UpdateViewAngles` (`0x32d7c`) compares `ps+0xF8` against the immediate 999 and, on a match, stores `SHORT2ANGLE(cmd->angles[1] + ps->delta_angles[1])` there; `LookAtKiller` (`0x4a938`) stores an angle in the same slot. VERIFIED. Reading that as RTCW's `stats[STAT_DEAD_YAW]`, whose `bg_pmove.c:3385` is the same 999 sentinel in the same function, is INFERRED.
-- `stats[2]`: the `maxhealth` script-field setter (`0x41a78`) stores `sess.maxHealth` (`gclient+0x2150`) into `ps+0xFC`, and `ClientSpawn` (`0x4268c`) re-stores it at `0x4284f` after the respawn memset. VERIFIED. The same setter clamps `ps+0xF4` down to `sess.maxHealth` and copies the result into `gentity->health` (`gentity+0x230`), which is a control-flow reading: INFERRED.
-- `stats[3]` and `stats[4]`: `TeamplayInfoMessage` (`0x64910`) traces from the player's eye, rejects a hit entity number above 63 (`0x64a83`), and stores either the entity number and that entity's `gentity->health` into `ps+0x100` / `ps+0x104` (`0x64acd`, `0x64ad9`) or `-1` and `0` (`0x6493b`, `0x6494b`). VERIFIED.
-- `stats[5]`: `ClientSpawn` reads `ps+0x108` before it memsets the client (`0x427f8`), increments it, and writes it back after (`0x42837`). VERIFIED.
+- `stats[2]`: the `maxhealth` script-field setter (`0x41a78`) stores `sess.maxHealth` (`gclient+0x2150`) into `ps+0xFC` at `0x41add`, and `ClientSpawn` (`0x4268c`) stores it there again at `0x4284f`. VERIFIED. That the second store lands after the respawn memset (`0x42804`), and that the setter clamps `ps+0xF4` down to `sess.maxHealth` and copies the result into `gentity->health` (`gentity+0x230`), are both readings off sequencing and branches: INFERRED.
+- `stats[3]` and `stats[4]`: `TeamplayInfoMessage` (`0x64910`) has two pairs of stores to `+0x100` and `+0x104`, both off a base loaded from `gentity+0x158`. One pair carries a traced entity number and that entity's `gentity->health` (`0x64acd`, `0x64ad9`), the other the immediates `-1` and `0` (`0x6493b`, `0x6494b`). It also compares a traced entity number against 63 (`0x64a83`). VERIFIED. That the `+0x158` base is the `gclient_t`, and that `ps` sits at `gclient+0` so those stores are `stats[3]` and `stats[4]`, is INFERRED, on the same footing as "The box an entity links with" above; what puts `ps` at offset 0 is `sess.maxHealth` at `gclient+0x2150`, past `sizeof(playerState_t)` (`0x20D0`). Which of the two pairs runs, and hence the reading "the teammate the HUD is naming, and their health", is INFERRED from the compare and the branches.
+- `stats[5]`: `ClientSpawn` loads `ps+0x108` at `0x427f8`, memsets the client at `0x42804`, and stores an incremented copy back at `0x42837`. VERIFIED for the three instructions. Reading that as a spawn counter carried across the memset on purpose is INFERRED, from the ordering.
 
 Two consequences of the widths. A `stats[3]` of `-1` goes out as six set bits and arrives as 63, so the wire cannot tell "nobody" from client 63; INFERRED. `stats[5]` is a byte, so the spawn counter wraps at 256; INFERRED.
 
-**Block 2 — `ammo[64]` at `0x10C`. Block 3 — `ammoclip[64]` at `0x20C`.** Both are four consecutive sub-blocks of 16 elements. Element `i` of sub-block `s` lands at `0x10C + (s*64) + i*4` for block 2 (`0x807eaf1`) and `0x20C + (s*64) + i*4` for block 3 (`0x807ec03`). VERIFIED. A sub-block is one gate bit; if set, a byte-aligned 16-bit changed mask, then one byte-aligned 16-bit element per set mask bit, low to high, sign-extended into the `int` slot. VERIFIED (`0x807ea85`..`0x807eb3d`).
+**Block 2, `ammo[64]` at `0x10C`. Block 3, `ammoclip[64]` at `0x20C`.** Both are four consecutive sub-blocks of 16 elements. Element `i` of sub-block `s` lands at `0x10C + (s*64) + i*4` for block 2 (`0x807eaf1`) and `0x20C + (s*64) + i*4` for block 3 (`0x807ec03`). VERIFIED. A sub-block is one gate bit; if set, a byte-aligned 16-bit changed mask, then one byte-aligned 16-bit element per set mask bit, low to high, sign-extended into the `int` slot. VERIFIED (`0x807ea85`..`0x807eb3d`), read off the reader and the writer alone: every one of these gates is 0 in both committed captures (the decoded frame below), so no round trip exercises the non-empty path.
 
 Block 2 carries a group gate ahead of its four sub-gates; block 3 does not, and the group gate's `jae` (`0x807ea45`) lands on block 3's first sub-gate, so block 3's four gate bits are always on the wire. VERIFIED for the branch target; reading it as "block 3 is ungated" is INFERRED. An element is 16 bits, so a count above 32767 does not survive the round trip; INFERRED.
 
-**Block 4 — `objective[16]` at `0x3E8`, stride 28.** One gate bit for the whole block; then, per objective, three raw bits low to high stored unconditionally at the objective's offset `+0` (`0x807ed72`, index arithmetic `i*28` at `0x807ed6b`), then one gate bit, and if that is set six generic delta fields read through the shared field reader `0x807c904` off entries 0..5 of the 34-entry field table at `0x80de384` (`0x807edc9`). VERIFIED. When the per-objective gate is clear the six fields are copied from the base (`0x807ee00`). VERIFIED.
+**Block 4, `objective[16]` at `0x3E8`, stride 28.** One gate bit for the whole block; then, per objective, three raw bits low to high stored unconditionally at the objective's offset `+0` (`0x807ed72`, index arithmetic `i*28` at `0x807ed6b`), then one gate bit, and if that is set six generic delta fields read through the shared field reader `0x807c904` off entries 0..5 of the 34-entry field table at `0x80de384` (`0x807edc9`). VERIFIED. When the per-objective gate is clear the six fields are copied from the base (`0x807ee00`). VERIFIED.
 
 Those six entries carry their own names and offsets in `.data`, which `python3 tools/re/dump_field_table.py cod_lnxded 0x80de384 34` prints:
 
 | table entry | member | offset in `objective_t` | wire |
 |---|---|---|---|
-| — | `state` | `+0` | 3 raw bits, always present |
+| none | `state` | `+0` | 3 raw bits, always present |
 | 0 | `origin[0]` | `+4` | float |
 | 1 | `origin[1]` | `+8` | float |
 | 2 | `origin[2]` | `+12` | float |
@@ -545,7 +545,7 @@ Those six entries carry their own names and offsets in `.data`, which `python3 t
 
 VERIFIED. Note the wire order is the table's, not the struct's: `icon` precedes `entNum` and `teamNum`.
 
-**Block 5 — two 31-entry `hudelem_t` arrays, stride 112.** One gate bit for the whole block; then the array at `ps+0x1338` and then the one at `ps+0x5A8`, each with the element cap 31 passed in (`0x807ee76`, `0x807ee90`). VERIFIED. CoDExtended calls `ps+0x5A8` `hud.current[31]` and `ps+0x1338` `hud.archival[31]`; those names are the community's and UNVERIFIED, only the offsets and the wire order are read out of the binary.
+**Block 5, two 31-entry `hudelem_t` arrays, stride 112.** One gate bit for the whole block; then the array at `ps+0x1338` and then the one at `ps+0x5A8`, each with the element cap 31 passed in (`0x807ee76`, `0x807ee90`). VERIFIED. CoDExtended calls `ps+0x5A8` `hud.current[31]` and `ps+0x1338` `hud.archival[31]`; those names are the community's and UNVERIFIED, only the offsets and the wire order are read out of the binary.
 
 One array (`0x807cf5c`) is a 5-bit count `n`, then for element `i` in `0..n` a 5-bit last-changed field index `j` and `j+1` delta fields off table entries `6+k` for `k` in `0..=j`. VERIFIED. Fields `j+1..28` are copied from the base (`0x807d073`), which is what fixes the per-element field count at 28 and the table's total at 34. VERIFIED. There is no element index on the wire: element `i` is the `i`-th of the array (`i*112`, `0x807d03e`). VERIFIED.
 
@@ -583,17 +583,17 @@ That accounts for all 42 primitives and is what a server has to reproduce bit fo
 
 ##### How `ammo[]` and `ammoclip[]` are indexed
 
-Neither array is indexed by weapon. Both are indexed by a per-weapon-def integer, and the two indexes are separate namespaces. `BG_WeaponAmmo(ps, weapon)` (`game.mp.i386.so` `0x3ab9c`) returns `ps->ammoclip[weapDef->clipIndex] + ps->ammo[weapDef->ammoIndex]`, reading `weapDef+0x1A8` against base `0x20C` and `weapDef+0x1A0` against base `0x10C`. VERIFIED. `PM_WeaponAmmoAvailable` (`0x3abe8`), `PM_WeaponClipEmpty` (`0x3aee0`) and `PM_WeaponUseAmmo` (`0x3aeac`) all use `weapDef+0x1A8` against `0x20C`, so firing spends the clip. VERIFIED.
+Neither array is indexed by weapon. Both are indexed by a per-weapon-def integer, and the two indexes are separate namespaces. `BG_WeaponAmmo(ps, weapon)` (`game.mp.i386.so` `0x3ab9c`) returns `ps->ammoclip[weapDef->clipIndex] + ps->ammo[weapDef->ammoIndex]`, reading `weapDef+0x1A8` against base `0x20C` and `weapDef+0x1A0` against base `0x10C`. VERIFIED. `PM_WeaponAmmoAvailable` (`0x3abe8`), `PM_WeaponClipEmpty` (`0x3aee0`) and `PM_WeaponUseAmmo` (`0x3aeac`) all use `weapDef+0x1A8` against `0x20C`. VERIFIED. That firing therefore spends the clip and not the reserve, making `ammoclip[]` the loaded magazine and `ammo[]` the reserve behind it, is INFERRED.
 
 The indexes are assigned once at weapon registration, by name, deduplicated:
 
-- `BG_SetupAmmoIndexes` (`0x3600c`) walks weapon indices from 1 up to the loop bound at `0x7c918`, indexing the weapon-def pointer array at `0x7c91c` that `BG_SetupWeaponInfo` fills with a 0x100-byte (64-pointer) allocation at `0x366b1`. VERIFIED. It lowercases the def's ammo name (`weapDef+0x19C`), looks it up case-insensitively in a name table at `0xa96e0` and, on a miss, appends it and bumps the count at `0xa98e0`. The matched or appended slot goes into `weapDef+0x1A0`. VERIFIED.
+- `BG_SetupAmmoIndexes` (`0x3600c`) indexes the weapon-def pointer array at `0x7c91c`, which `BG_SetupWeaponInfo` fills with a `0x100`-byte (64-pointer) allocation at `0x366b1`, against the bound at `0x7c918`. It passes the def's ammo name (`weapDef+0x19C`) to `Q_strlwr`, `Q_stricmp`s it against a name table at `0xa96e0`, has a store that appends to that table and bumps the count at `0xa98e0` (`0x3616c`, `0x36188`), and stores a slot number into `weapDef+0x1A0` (`0x36098`, `0x36181`). VERIFIED. That the walk runs weapon indices from 1 up, and that the append is on the miss path so each distinct name takes one slot, is INFERRED, from the loop and the branch.
 - `BG_SetupClipIndexes` (`0x36370`) does the same with the clip name (`weapDef+0x1A4`), the name table at `0xa9b20`, the count at `0xa9d20` and the result in `weapDef+0x1A8`. VERIFIED.
 - `BG_SetupSharedAmmoIndexes` (`0x361ac`) does the same for the shared-ammo-cap name (`weapDef+0x1B4`, table `0xa9900`, count `0xa9b00`, result `weapDef+0x1B8`, default `-1`). VERIFIED. That index addresses no playerstate array.
 
-Each pass also stores a parallel integer alongside the name (max ammo at `weapDef+0x1AC`, clip size at `weapDef+0x1B0`) and calls `Com_Error` when two weapon files give the same name different values — the strings are `Max ammo mismatch for "%s" ammo: …` (`0x720e0`) and `Clip Size mismatch for "%s" clip: …` (`0x721c0`). VERIFIED.
+Each pass also stores a parallel integer alongside the name (max ammo at `weapDef+0x1AC`, clip size at `weapDef+0x1B0`) and carries a `Com_Error` call whose format strings are `Max ammo mismatch for "%s" ammo: …` (`0x720e0`) and `Clip Size mismatch for "%s" clip: …` (`0x721c0`). VERIFIED. That the call fires when two weapon files give one name different values is INFERRED, from the compare that guards it.
 
-`BG_SetupWeaponInfo` (`0x36674`) runs all three passes back to back (`0x369b2`, `0x369b7`, `0x369bc`) after it has read the weapon-file list, sorted it with `compare_weaponfile_names` and published it as configstring 7. VERIFIED. So the index a name gets is decided by the first weapon, in configstring-7 order, that names it — the same order `entityState.weapon` is a 1-based index into. INFERRED, since it follows from the call order rather than from a measured table.
+`BG_SetupWeaponInfo` (`0x36674`) runs all three passes back to back (`0x369b2`, `0x369b7`, `0x369bc`) after it has read the weapon-file list, sorted it with `compare_weaponfile_names` and published it as configstring 7. VERIFIED. So the index a name gets is decided by the first weapon, in configstring-7 order, that names it, which is the same order `entityState.weapon` is a 1-based index into. INFERRED, since it follows from the call order rather than from a measured table.
 
 Both arrays are 64 long, which caps the distinct ammo names and the distinct clip names at 64 each, independently. VERIFIED.
 
