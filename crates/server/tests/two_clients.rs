@@ -200,14 +200,13 @@ fn family(name: &str) -> &str {
 
 /// Fields retail sets on a player entity that we do not, each with the reason.
 /// Empty is the goal; the guard below fails on one that starts matching.
-const PLAYER_GAPS: &[(&str, &str)] = &[
-    (
-        "eventSequence",
-        "the entity event ring, which nothing raises until stage 6",
-    ),
-    ("events", "same ring"),
-    ("eventParms", "the parms of that ring"),
-];
+const PLAYER_GAPS: &[(&str, &str)] = &[(
+    "eventParms",
+    "the parms of the event ring. The ring itself travels now, but every \
+     event a walking player raises is a footstep, and a movement event's \
+     parm is 0 (`pmove::PmEvent`); the putaway a stance change starts is the \
+     first with a parm, and this capture's player never changes stance",
+)];
 
 /// Every field retail sets on a moving player, against ours. The capture is
 /// one probe watching another on the retail server

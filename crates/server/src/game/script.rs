@@ -81,7 +81,8 @@ impl ScriptRuntime {
     /// and runs the bootstrap. `map` and `gametype` are bare names, e.g.
     /// "mp_pavlov" and "dm". `configstrings` and `cvars` seed the host;
     /// `world`, once the caller has one, lets `bulletTrace` trace against the
-    /// real map geometry.
+    /// real map geometry, and `weapons` is what the weapon builtins read.
+    #[allow(clippy::too_many_arguments)]
     pub fn load(
         fs: Rc<Pk3Fs>,
         map: &str,
@@ -89,6 +90,7 @@ impl ScriptRuntime {
         configstrings: Vec<String>,
         cvars: crate::cvars::Cvars,
         world: Option<Rc<crate::world::World>>,
+        weapons: Rc<crate::weapons::WeaponTable>,
         now_ms: i32,
     ) -> anyhow::Result<ScriptRuntime> {
         Self::load_from(
@@ -99,6 +101,7 @@ impl ScriptRuntime {
             configstrings,
             cvars,
             world,
+            weapons,
             now_ms,
         )
     }
@@ -116,6 +119,7 @@ impl ScriptRuntime {
         configstrings: Vec<String>,
         cvars: crate::cvars::Cvars,
         world: Option<Rc<crate::world::World>>,
+        weapons: Rc<crate::weapons::WeaponTable>,
         now_ms: i32,
     ) -> anyhow::Result<ScriptRuntime> {
         let entry = format!("maps/mp/{map}");
@@ -135,6 +139,7 @@ impl ScriptRuntime {
         let mut host = GameHost::new(configstrings);
         host.cvars = cvars;
         host.world = world;
+        host.weapons = weapons;
         host.fs = Some(fs.clone());
         host.level_time_ms = now_ms;
 
@@ -270,6 +275,13 @@ impl ScriptRuntime {
             .get(slot)
             .copied()
             .unwrap_or_default()
+    }
+
+    /// The ammo and current-weapon edges the weapon builtins made this frame,
+    /// in call order. Drained rather than read, unlike `client_weapons`: they
+    /// are edges, and applying one twice would refill a spent clip.
+    pub fn take_weapon_ops(&mut self) -> Vec<(usize, crate::game::host::WeaponOp)> {
+        std::mem::take(&mut self.host.client_weapon_ops)
     }
 
     /// One client's viewmodel index, read every frame for the same reason
@@ -660,6 +672,7 @@ mod tests {
             vec![String::new(); 2048],
             crate::cvars::Cvars::new(),
             None,
+            Rc::new(crate::weapons::WeaponTable::empty()),
             0,
         );
         assert!(rt.is_ok(), "{:?}", rt.err());
@@ -687,6 +700,7 @@ mod tests {
             vec![String::new(); 2048],
             crate::cvars::Cvars::new(),
             None,
+            Rc::new(crate::weapons::WeaponTable::empty()),
             0,
         )
         .expect("load mp_pavlov on dm");
@@ -728,6 +742,7 @@ mod tests {
             vec![String::new(); 2048],
             crate::cvars::Cvars::new(),
             None,
+            Rc::new(crate::weapons::WeaponTable::empty()),
             0,
         );
         let Err(err) = err else {

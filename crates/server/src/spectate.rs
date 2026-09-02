@@ -1,12 +1,12 @@
 //! Server-side client state: usercmds in, wire playerstate out.
 
-use crate::weapons::PlayerWeapons;
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::msg::{self, UserCmd};
 use vcod_common::net::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::net::trajectory;
-use vcod_common::pmove::{self, PmInput};
+use vcod_common::pmove::{self, PmEvent, PmInput};
+use vcod_common::weapon::WeaponDef;
 
 /// `pm_flags`' own-body bit, third of the view-source group: a live client
 /// looking out of its own body carries it and neither spectator view does
@@ -113,11 +113,17 @@ pub enum PmType {
 pub struct ClientSim {
     pub ps: pmove::PlayerState,
     pub pm_type: PmType,
-    /// What the client holds, mirrored from the script host every frame.
-    /// `spawn` clears it and `giveWeapon`/`setSpawnWeapon` fill it in.
-    pub weapons: PlayerWeapons,
+    /// `ps.eventSequence`, the count of events ever raised. Eight bits on the
+    /// wire; kept wide here and masked at the wire.
+    pub event_sequence: i32,
+    /// `ps.events` and `ps.eventParms`, the four-slot ring the counter
+    /// indexes. Not cleared at a respawn: retail's `ClientSpawn` carries the
+    /// sequence across one, and clearing it would replay the ring on the
+    /// client.
+    pub events: [i32; 4],
+    pub event_parms: [i32; 4],
     /// The model configstring index `setViewmodel` left on the client,
-    /// mirrored from the script host every frame beside `weapons`.
+    /// mirrored from the script host every frame the way the weapons are.
     pub viewmodel_index: i32,
     /// The client's per-axis view offset, added back onto each cmd's angle
     /// by both `step` and the connected client itself.
@@ -172,7 +178,9 @@ impl ClientSim {
         ClientSim {
             ps: pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg),
             pm_type: PmType::Spectator,
-            weapons: PlayerWeapons::default(),
+            event_sequence: 0,
+            events: [0; 4],
+            event_parms: [0; 4],
             viewmodel_index: 0,
             delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
             view_lerp_start: None,
@@ -210,9 +218,25 @@ impl ClientSim {
         self.jumped = false;
     }
 
-    /// Advance one frame. The axes arrive quantized to ±127/0 and dt comes off
-    /// the cmd clocks.
-    pub fn step(&mut self, cmd: &UserCmd, dt: f32, world: Option<&CollisionWorld>) {
+    /// Writes `events[seq & 3]` and then bumps the counter, the order both
+    /// retail captures measured (`docs/research/cod11-combat.md` section 7).
+    pub fn add_event(&mut self, event: i32, parm: i32) {
+        let slot = (self.event_sequence & 3) as usize;
+        self.events[slot] = event;
+        self.event_parms[slot] = parm;
+        self.event_sequence = self.event_sequence.wrapping_add(1);
+    }
+
+    /// Advance one frame, returning the events the move raised, already in the
+    /// ring. The axes arrive quantized to ±127/0 and dt comes off the cmd
+    /// clocks. `weapons` is the map's weapon table, which only a player reads.
+    pub fn step(
+        &mut self,
+        cmd: &UserCmd,
+        dt: f32,
+        world: Option<&CollisionWorld>,
+        weapons: &[Option<WeaponDef>],
+    ) -> Vec<PmEvent> {
         self.ps.yaw = short_deg(cmd.angles[1] + self.delta_angles[1]).to_radians();
         // Wire pitch is positive down; the sim stores the camera's convention.
         self.ps.pitch = -short_deg(cmd.angles[0] + self.delta_angles[0]).to_radians();
@@ -230,8 +254,7 @@ impl ClientSim {
                 dt,
             ),
             (PmType::Normal, Some(w)) => {
-                // Task 8 threads the map's weapon table in here.
-                pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt, &[]);
+                let events = pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt, weapons);
                 self.jumped |= self.ps.jumped;
                 // Retail holds a prone view inside the cone around the body by
                 // pushing `delta_angles`, so the client's own prediction lands
@@ -248,8 +271,14 @@ impl ClientSim {
                 } else {
                     self.view_lerp_start.or(Some(cmd.server_time))
                 };
+                for e in &events {
+                    self.add_event(e.event, e.parm);
+                }
+                return events;
             }
         }
+        // A spectator raises none: it has no weapon and no footsteps.
+        Vec::new()
     }
 
     /// Picks this frame's animation from the state the moves just produced.
@@ -387,8 +416,8 @@ impl ClientSim {
     /// 3 with a delta and a 50 ms duration, so the receiving client carries
     /// the motion between snapshots instead of stepping to each one.
     ///
-    /// What that capture carries and this does not is stage 6's: the event
-    /// ring.
+    /// The event ring rides here as well as on the playerstate: it is how
+    /// another client hears this one's shots and footsteps.
     pub fn to_entity(&self, p: &Protocol, slot: usize, command_time: i32) -> msg::EntityState {
         let mut e = msg::EntityState::null(p);
         e.number = slot as u32;
@@ -401,10 +430,16 @@ impl ClientSim {
         set("clientNum", slot as i32);
         set("eFlags", PLAYER_EFLAGS);
         set("solid", PLAYER_SOLID);
-        // The entity has no torso channel; only the legs travel to another
-        // client.
         set("legsAnim", self.anim.legs());
-        set("weapon", i32::from(self.weapons.current));
+        // The torso does travel: the shoot, reload and putaway poses are the
+        // weapon's, and the next task is what gives it a value.
+        set("torsoAnim", self.anim.torso());
+        set("weapon", i32::from(self.ps.weapon));
+        set("eventSequence", self.event_sequence & 0xff);
+        for (i, (ev, parm)) in self.events.iter().zip(&self.event_parms).enumerate() {
+            set(&format!("events[{i}]"), *ev);
+            set(&format!("eventParms[{i}]"), *parm);
+        }
         set(
             "groundEntityNum",
             match self.ps.on_ground {
@@ -531,13 +566,31 @@ impl ClientSim {
             set("torsoAnim", self.anim.torso());
         }
         // What the client holds; both layouts are in the object model doc,
-        // section 20.
-        set("weapons[0]", self.weapons.held as u32 as i32);
-        set("weapons[1]", (self.weapons.held >> 32) as u32 as i32);
-        let [lo, hi] = self.weapons.slot_words();
+        // section 20. The sim owns all of it: the script host's copy is
+        // mirrored into `ps` every frame, and the weapon machine writes
+        // `ps.weapon` itself through a switch.
+        set("weapons[0]", self.ps.weapons_held as u32 as i32);
+        set("weapons[1]", (self.ps.weapons_held >> 32) as u32 as i32);
+        let [lo, hi] = pmove::weapon::slot_words(&self.ps);
         set("weaponslots[0]", lo);
         set("weaponslots[4]", hi);
-        set("weapon", i32::from(self.weapons.current));
+        set("weapon", i32::from(self.ps.weapon));
+        // The weapon machine's own state (combat doc, section 1), and the
+        // event ring both this and the entity carry.
+        set("weaponstate", i32::from(self.ps.weaponstate));
+        set("weapAnim", self.ps.weap_anim);
+        set("weaponTime", self.ps.weapon_time_ms);
+        set("weaponDelay", self.ps.weapon_delay_ms);
+        set("weaponrechamber[0]", self.ps.weapon_rechamber as u32 as i32);
+        set(
+            "weaponrechamber[1]",
+            (self.ps.weapon_rechamber >> 32) as u32 as i32,
+        );
+        set("eventSequence", self.event_sequence & 0xff);
+        for (i, (ev, parm)) in self.events.iter().zip(&self.event_parms).enumerate() {
+            set(&format!("events[{i}]"), *ev);
+            set(&format!("eventParms[{i}]"), *parm);
+        }
         // Mode-independent: both captures agree on all of these. The box is
         // the standing one whatever the stance: retail transmits `maxs[2]`
         // 70 while crouched and prone too, and the mover derives its own
@@ -591,6 +644,14 @@ impl ClientSim {
             .enumerate()
         {
             set(axis, self.delta_angles[i]);
+        }
+        // The two ammo arrays are not netfields: they travel in the
+        // playerstate's array blocks (docs/protocol-1.1.md, "How `ammo[]` and
+        // `ammoclip[]` are indexed"), so they are written last, once the
+        // field setter's borrow is over.
+        for (i, (ammo, clip)) in self.ps.ammo.iter().zip(&self.ps.ammoclip).enumerate() {
+            w.set_ammo(i, *ammo);
+            w.set_clip(i, *clip);
         }
         w
     }
@@ -926,7 +987,7 @@ mod tests {
         let mut t = 1000;
         for _ in 0..20 {
             t += 50;
-            sim.step(&prone(t, 0.0), 0.05, Some(&w));
+            sim.step(&prone(t, 0.0), 0.05, Some(&w), &[]);
         }
         assert_eq!(sim.ps.stance, pmove::Stance::Prone);
         let before = sim.delta_angles[1];
@@ -937,7 +998,7 @@ mod tests {
 
         // Well past the cone: the body cannot swing the whole way in one
         // frame, so the rest comes off the view.
-        sim.step(&prone(t + 50, 150.0), 0.05, Some(&w));
+        sim.step(&prone(t + 50, 150.0), 0.05, Some(&w), &[]);
         assert_ne!(
             sim.delta_angles[1], before,
             "a view past the cap must be pushed back"
@@ -966,16 +1027,16 @@ mod tests {
         // Settle on the floor first, so the only thing moving is the eye.
         for _ in 0..20 {
             t += 50;
-            sim.step(&NULL_USERCMD, 0.05, Some(&w));
+            sim.step(&NULL_USERCMD, 0.05, Some(&w), &[]);
         }
         assert_eq!(lerp_time(&sim), 0, "a settled eye carries no stamp");
 
         t += 50;
-        sim.step(&crouch(t), 0.05, Some(&w));
+        sim.step(&crouch(t), 0.05, Some(&w), &[]);
         assert_eq!(lerp_time(&sim), t, "the stamp is the cmd that started it");
         let started = t;
         t += 50;
-        sim.step(&crouch(t), 0.05, Some(&w));
+        sim.step(&crouch(t), 0.05, Some(&w), &[]);
         assert_eq!(
             lerp_time(&sim),
             started,
@@ -984,7 +1045,7 @@ mod tests {
 
         for _ in 0..20 {
             t += 50;
-            sim.step(&crouch(t), 0.05, Some(&w));
+            sim.step(&crouch(t), 0.05, Some(&w), &[]);
         }
         assert!(sim.ps.view_height_settled());
         assert_eq!(lerp_time(&sim), 0, "the stamp clears when the eye settles");
@@ -1131,7 +1192,7 @@ mod tests {
         let mut sim = ClientSim::spectator([0.0; 3], 0.0, NULL_USERCMD.angles);
         // 45 deg down on the wire, 90 deg yaw.
         let c = cmd(0, (45.0 * ANGLE2SHORT) as i32, (90.0 * ANGLE2SHORT) as i32);
-        sim.step(&c, 0.05, None);
+        sim.step(&c, 0.05, None, &[]);
         assert_eq!(sim.ps.yaw.to_degrees(), 90.0);
         assert_eq!(sim.ps.pitch.to_degrees(), -45.0);
     }
@@ -1169,7 +1230,7 @@ mod tests {
             forward: 127,
             ..UserCmd::default()
         };
-        sim.step(&cmd, 0.05, None);
+        sim.step(&cmd, 0.05, None, &[]);
     }
 
     /// The three-part edit, pinned as one behaviour: a sim spawned facing 90
@@ -1199,7 +1260,7 @@ mod tests {
         // The probe that took the capture sends cmd.angles = [0,0,0] and
         // never moves its view; step must add delta_angles back or the sim
         // faces 0 instead of the spawn's 90.
-        sim.step(&cmd(0, 0, 0), 0.05, None);
+        sim.step(&cmd(0, 0, 0), 0.05, None, &[]);
         assert_eq!(sim.ps.yaw.to_degrees(), 90.0);
     }
 
@@ -1210,7 +1271,7 @@ mod tests {
         let mut sim = ClientSim::spectator([1.0, 2.0, 3.0], 0.0, NULL_USERCMD.angles);
         let c = cmd(127, 0, 0);
         for _ in 0..125 {
-            sim.step(&c, 1.0 / 125.0, None);
+            sim.step(&c, 1.0 / 125.0, None, &[]);
         }
         assert!(
             sim.ps.origin.x > 1.0,

@@ -234,12 +234,25 @@ fn advance_timers(
     });
     ps.weapon_time_ms = i32::from(latched);
     // The anim leaves the shot on this frame even when the state does not.
+    // A rechamber ending writes no anim at all: pavlov's capture drops from
+    // `weaponstate` 4 to 0 with `weapAnim` still reading the rechamber index,
+    // and its sustained fire never shows the idle index between two shots.
+    //
+    // A shot ends its state here too, and not in the trigger-release check
+    // below: pavlov's mosin goes from `weaponstate` 3 straight to 4 with one
+    // server frame between the samples, which it cannot do if the rechamber
+    // has to wait for a later frame to see the state ready. The ordering
+    // section 1.6 gives is INFERRED; this is measured. A latched trigger is
+    // the exception, and is what keeps a held semi-automatic in state 3 with
+    // the idle pose (section 1.4).
     match ps.weaponstate {
-        WEAPON_RECHAMBERING => {
-            ps.weaponstate = WEAPON_READY;
-            set_anim(ps, WEAP_IDLE);
+        WEAPON_RECHAMBERING => ps.weaponstate = WEAPON_READY,
+        WEAPON_FIRING => {
+            hold_anim(ps, WEAP_IDLE);
+            if !latched {
+                ps.weaponstate = WEAPON_READY;
+            }
         }
-        WEAPON_FIRING => hold_anim(ps, WEAP_IDLE),
         _ => {}
     }
     delay_expired
@@ -287,6 +300,18 @@ fn begin_change(
     false
 }
 
+/// The putaway a caller outside the machine starts: `switchToWeapon` asks for
+/// the same change a usercmd's weapon byte does, and goes through the drop
+/// and the raise rather than swapping the weapon in place (section 1.8).
+pub fn begin_switch(
+    ps: &mut PlayerState,
+    def: &WeaponDef,
+    target: u8,
+    events: &mut Vec<PmEvent>,
+) -> bool {
+    putaway(ps, def, target, events)
+}
+
 fn putaway(ps: &mut PlayerState, def: &WeaponDef, target: u8, events: &mut Vec<PmEvent>) -> bool {
     if ps.weaponstate == WEAPON_DROPPING {
         return false;
@@ -295,8 +320,15 @@ fn putaway(ps: &mut PlayerState, def: &WeaponDef, target: u8, events: &mut Vec<P
     ps.pending_weapon = target;
     ps.weaponstate = WEAPON_DROPPING;
     ps.weapon_time_ms = ms(def.drop_time);
-    set_anim(ps, WEAP_DROP);
-    push(events, EV_PUTAWAY_WEAPON);
+    // `WEAP_DROP` is the event's parm, not a `weapAnim` write: both combat
+    // captures hold `weapAnim` at whatever it was through the whole of a
+    // `weaponstate` 2 (player-model-anim-system.md, "The weapon channel"),
+    // and the putaway is the one path section 1.8 describes as raising its
+    // event *with* an anim index rather than storing one.
+    events.push(PmEvent {
+        event: EV_PUTAWAY_WEAPON,
+        parm: WEAP_DROP,
+    });
     true
 }
 

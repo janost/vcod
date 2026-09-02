@@ -155,6 +155,66 @@ enum ClientOp {
     Move(Vec<UserCmd>),
 }
 
+/// One shot a client's weapon step took this tick. The bullet itself is the
+/// next task's: this is the queue between the move that pulled the trigger
+/// and the trace that answers for it, so nothing reads the fields yet.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Shot {
+    pub slot: usize,
+    /// `ps.weapon` at the shot, which the delayed trace must use rather than
+    /// whatever the client is holding by the time it runs.
+    pub weapon: u8,
+    /// The round emptied the clip: `EV_FIRE_WEAPON_LASTSHOT` rather than
+    /// `EV_FIRE_WEAPON`.
+    pub last_shot: bool,
+}
+
+/// One `WeaponOp` against a client's playerstate. The op is an edge the
+/// script made, so it is applied once, where `client_weapons` is mirrored
+/// every frame.
+fn apply_weapon_op(
+    sim: &mut crate::spectate::ClientSim,
+    op: crate::game::host::WeaponOp,
+    weapons: &crate::weapons::WeaponTable,
+) {
+    use crate::game::host::WeaponOp;
+    let ps = &mut sim.ps;
+    match op {
+        WeaponOp::SetClip { clip_index, rounds } => {
+            if let Some(slot) = ps.ammoclip.get_mut(clip_index) {
+                *slot = rounds;
+            }
+        }
+        WeaponOp::SetAmmo { ammo_index, rounds } => {
+            if let Some(slot) = ps.ammo.get_mut(ammo_index) {
+                *slot = rounds;
+            }
+        }
+        WeaponOp::TakeAll => {
+            ps.ammo = [0; vcod_common::pmove::weapon::NUM_AMMO];
+            ps.ammoclip = [0; vcod_common::pmove::weapon::NUM_AMMO];
+        }
+        WeaponOp::SetCurrent(index) => {
+            ps.weapon = index;
+            ps.weaponstate = vcod_common::pmove::weapon::WEAPON_READY;
+            ps.weapon_time_ms = 0;
+        }
+        // Through the putaway, so the drop and the raise both run: the
+        // machine picks the target up when the drop ends.
+        WeaponOp::SwitchTo(index) => {
+            let Some(def) = weapons.get(ps.weapon as usize) else {
+                return;
+            };
+            let mut events = Vec::new();
+            vcod_common::pmove::weapon::begin_switch(ps, def, index, &mut events);
+            for e in events {
+                sim.add_event(e.event, e.parm);
+            }
+        }
+    }
+}
+
 /// What one client's usercmd replay did this tick, for the trace line.
 #[derive(Default, Clone, Copy)]
 struct MoveSummary {
@@ -201,6 +261,10 @@ pub struct Server {
     /// `weaponClass` every frame and the frame loop must not read a pk3.
     /// `Rc` so a snapshot/move closure can hold it without borrowing `self`.
     weapon_table: Rc<crate::weapons::WeaponTable>,
+    /// Shots this tick's moves took, in the order they were fired. Filled by
+    /// `replay_moves`; the bullet trace that answers for them is the next
+    /// task's, and until it exists the queue is cleared each tick.
+    pending_shots: Vec<Shot>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -305,6 +369,7 @@ impl Server {
             script: None,
             anims: None,
             weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
+            pending_shots: Vec::new(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -1036,6 +1101,7 @@ impl Server {
             self.configstrings.clone(),
             cvars,
             self.world.clone(),
+            self.weapon_table.clone(),
             self.sv_time_ms,
         )?;
         let mut configstrings = rt.configstrings().to_vec();
@@ -1118,6 +1184,7 @@ impl Server {
         // Every client's pending moves first, so the world is at this frame
         // before script or anyone's snapshot reads it.
         let moved = self.replay_moves();
+        let weapons = self.weapon_table.clone();
 
         let mut client_commands = Vec::new();
         if let Some(rt) = self.script.as_mut() {
@@ -1134,19 +1201,10 @@ impl Server {
             if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
                 log::warn!("rebuilding the cvar mirror: {e:?}");
             }
-            // The weapons come across the same way the configstrings do:
-            // re-read every frame, because any thread can have changed them.
-            for (slot, c) in self.clients.iter_mut().enumerate() {
-                if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-                    sim.weapons = rt.client_weapons(slot);
-                    sim.viewmodel_index = rt.client_viewmodel(slot);
-                    // And back the other way: the sim owns where a player is,
-                    // so the script's copy is written from it every frame.
-                    rt.set_client_origin(slot, sim.origin());
-                }
-            }
             // `self spawn(origin, angles)` moves the sim, which no builtin
-            // can reach; this is where the queue lands.
+            // can reach; this is where the queue lands. Before the weapons,
+            // because a spawn resets the whole playerstate and would wipe the
+            // clip the same frame's `giveWeapon` just handed out.
             for s in rt.take_client_spawns() {
                 let Some(c) = self.clients.get_mut(s.slot).and_then(Option::as_mut) else {
                     continue;
@@ -1165,6 +1223,44 @@ impl Server {
                     sim.become_spectator(s.origin, s.yaw_deg, cmd_angles);
                 }
             }
+            // What the client holds comes across the same way the
+            // configstrings do: re-read every frame, because any thread can
+            // have changed them. The held bits have to be among them --
+            // `PM_Weapon` disarms a player who no longer owns `ps.weapon`
+            // (combat doc, section 1.8) -- and `ps.weapon` follows too,
+            // except while the machine has a change in flight: a putaway
+            // latches its target in `pending_weapon` and a ladder holsters
+            // the weapon into `stowed_weapon`, and writing over either would
+            // undo the change the frame after it landed. A switch to another
+            // weapon has to move the host's copy with it for the same reason.
+            for (slot, c) in self.clients.iter_mut().enumerate() {
+                if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
+                    let w = rt.client_weapons(slot);
+                    sim.ps.weapons_held = w.held;
+                    sim.ps.weapon_slots = w.slots;
+                    if sim.ps.pending_weapon == 0 && sim.ps.stowed_weapon == 0 {
+                        sim.ps.weapon = w.current;
+                    }
+                    sim.viewmodel_index = rt.client_viewmodel(slot);
+                    // And back the other way: the sim owns where a player is,
+                    // so the script's copy is written from it every frame.
+                    rt.set_client_origin(slot, sim.origin());
+                }
+            }
+            // The ammo and the current weapon, which are edges rather than
+            // state: applying a full clip every frame would make the weapon
+            // bottomless.
+            for (slot, op) in rt.take_weapon_ops() {
+                let Some(sim) = self
+                    .clients
+                    .get_mut(slot)
+                    .and_then(Option::as_mut)
+                    .and_then(|c| c.sim.as_mut())
+                else {
+                    continue;
+                };
+                apply_weapon_op(sim, op, &weapons);
+            }
         }
         // Outside the borrow: `setClientCvar` and `openMenu` queue rather
         // than send, and this is where the queue reaches the netchan.
@@ -1174,14 +1270,21 @@ impl Server {
 
         // Every entity built once, then culled and written per client.
         self.send_snapshots(&moved, wall_ms);
+        // Nothing answers for a shot yet, so the queue is emptied here rather
+        // than growing across ticks; the bullet trace that drains it is the
+        // next task's.
+        self.pending_shots.clear();
     }
 
     /// SV_UserMove for every client: one pmove step per queued usercmd, dt off
     /// the cmd clocks, matching the client's own prediction, then the anims the
     /// resulting state implies. Returns what each slot replayed, for the trace
-    /// line `send_snapshots` writes.
+    /// line `send_snapshots` writes. The shots the weapon step took land in
+    /// `pending_shots`, which the bullet path drains.
     fn replay_moves(&mut self) -> Vec<MoveSummary> {
+        use vcod_common::pmove::weapon::{EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
         let collision = self.world.as_ref().map(|w| &w.collision);
+        let weapons = self.weapon_table.clone();
         let mut moved = vec![MoveSummary::default(); self.clients.len()];
         for (slot, m) in moved.iter_mut().enumerate() {
             let Some(c) = self.clients[slot].as_mut() else {
@@ -1210,7 +1313,15 @@ impl Server {
                     continue;
                 }
                 let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
-                sim.step(&cmd, dt, collision);
+                for e in sim.step(&cmd, dt, collision, weapons.defs()) {
+                    if e.event == EV_FIRE_WEAPON || e.event == EV_FIRE_WEAPON_LASTSHOT {
+                        self.pending_shots.push(Shot {
+                            slot,
+                            weapon: sim.ps.weapon,
+                            last_shot: e.event == EV_FIRE_WEAPON_LASTSHOT,
+                        });
+                    }
+                }
                 last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;
                 m.first_cmd_st.get_or_insert(cmd.server_time);
@@ -1220,7 +1331,7 @@ impl Server {
             // The animation the client should be playing, from the state the
             // moves just produced and the input that produced it.
             if let (Some(anims), Some(cmd)) = (self.anims.as_ref(), last_cmd) {
-                let index = sim.weapons.current as usize;
+                let index = sim.ps.weapon as usize;
                 let weapon = crate::items::item_name(index).unwrap_or_default();
                 let class = self.weapon_table.class(index);
                 sim.update_anims(

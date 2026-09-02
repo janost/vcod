@@ -83,14 +83,17 @@ pub struct WeaponTable {
 /// The name-table walk `docs/protocol-1.1.md` ("How `ammo[]` and
 /// `ammoclip[]` are indexed") describes: lowercase, look up, append on a
 /// miss. Ammo and clip names each get their own table, so the two indexes
-/// never share a namespace.
+/// never share a namespace. The first name handed out is 1, not 0: the retail
+/// hit capture's spawn line reads the colt's clip at 3 and the carbine's at
+/// 10, one above where a 0-based walk puts them, which
+/// `the_first_index_handed_out_is_one` pins against that line.
 fn name_index(table: &mut Vec<String>, name: &str) -> usize {
     let lower = name.to_ascii_lowercase();
     match table.iter().position(|n| *n == lower) {
-        Some(i) => i,
+        Some(i) => i + 1,
         None => {
             table.push(lower);
-            table.len() - 1
+            table.len()
         }
     }
 }
@@ -224,6 +227,59 @@ mod tests {
     fn a_weapon_class_needs_no_paks_to_be_asked_for() {
         let t = WeaponTable::empty();
         assert_eq!(t.class(weapon_index("m1carbine_mp").unwrap()), "");
+    }
+
+    /// The index the first distinct name gets is 1, and slot 0 goes unused:
+    /// the retail hit capture's spawn line puts the stock allies loadout at
+    /// `clip=3:7,6:3,10:15 ammo=3:56,10:400`, one above where a 0-based walk
+    /// lands them. The line is read out of the fixture rather than copied, so
+    /// a retaken capture moves the expectation with it.
+    #[test]
+    fn the_first_index_handed_out_is_one() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/playerstate/mp_carentan-tdm-hit-target.txt"
+        );
+        let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let spawn = text
+            .lines()
+            .find(|l| l.starts_with("!trace "))
+            .unwrap_or_else(|| panic!("{path}: no !trace line"));
+        // `clip=3:7,6:3,10:15`, the non-zero entries as index:value.
+        let array = |key: &str| -> Vec<(usize, i32)> {
+            spawn
+                .split_whitespace()
+                .find_map(|t| t.strip_prefix(key))
+                .unwrap_or_else(|| panic!("{path}: the spawn line has no {key}"))
+                .split(',')
+                .map(|e| {
+                    let (i, v) = e.split_once(':').expect("index:value");
+                    (i.parse().unwrap(), v.parse().unwrap())
+                })
+                .collect()
+        };
+        let clip = array("clip=");
+        let ammo = array("ammo=");
+
+        let t = WeaponTable::load(&fs);
+        let def = |name: &str| t.get(weapon_index(name).unwrap()).unwrap();
+        assert_eq!(def("colt_mp").clip_index, 3);
+        assert_eq!(def("fraggrenade_mp").clip_index, 6);
+        assert_eq!(def("m1carbine_mp").clip_index, 10);
+        assert_eq!(def("colt_mp").ammo_index, 3);
+        assert_eq!(def("m1carbine_mp").ammo_index, 10);
+
+        // The rounds at those indexes are the spawn loadout `giveMaxAmmo`
+        // hands out: a full clip and `maxAmmo` in reserve.
+        let at = |a: &[(usize, i32)], i: usize| a.iter().find(|(k, _)| *k == i).map(|(_, v)| *v);
+        assert_eq!(at(&clip, 3), Some(def("colt_mp").clip_size as i32));
+        assert_eq!(at(&clip, 6), Some(def("fraggrenade_mp").clip_size as i32));
+        assert_eq!(at(&clip, 10), Some(def("m1carbine_mp").clip_size as i32));
+        assert_eq!(at(&ammo, 3), Some(def("colt_mp").max_ammo as i32));
+        assert_eq!(at(&ammo, 10), Some(def("m1carbine_mp").max_ammo as i32));
     }
 
     /// The ammo/clip index rule (docs/protocol-1.1.md, "How `ammo[]` and

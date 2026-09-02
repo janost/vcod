@@ -473,6 +473,26 @@ going down, which a stance change and a jump also do. UNVERIFIED: what the
 reload key does to a partly-full clip, and whether a phase of that reload ran
 under `weaponstate` 0 where the capture would not see it.
 
+### What `weapAnim` is not written by
+
+VERIFIED: no `weaponstate` 2 in either capture writes `weapAnim`. Carentan's
+reload step holds index 0 for all 13 samples of the state and takes 512 --
+index 0 with the toggle flipped -- on the sample the state ends; pavlov's
+`stand_between` holds the rechamber index 4 for all 8 and lands on 512 the
+same way. INFERRED: the putaway stores no anim and the `WEAP_DROP` of section
+1.8 in `cod11-combat.md` is the event's parm, while the write at the end is
+the pickup's `WEAP_IDLE`.
+
+VERIFIED: a rechamber ending writes no `weapAnim` either. Pavlov's
+`single_shot` reads 516 across the sample where `weaponstate` goes 4 to 0, and
+its `sustained_fire` never shows index 0 at all between two shots.
+
+VERIFIED: pavlov's `weaponstate` goes 3 to 4 with one snapshot between the
+samples, 328 ms to 378 ms, and its `weapAnim` 2 to 4 across the same pair.
+INFERRED: the shot's state ends and the rechamber opens on one server frame,
+so nothing in between can be observed and the state 3 exit cannot be waiting
+on a later frame.
+
 ### Where the `jump_takeoff` torso index came from
 
 VERIFIED: both movement captures read `weaponstate` 2 at the `jump_takeoff`

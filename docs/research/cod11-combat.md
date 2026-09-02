@@ -305,6 +305,13 @@ index-preserving `weapAnim` setter on another. INFERRED: 4 takes the first and
 that is what keeps a held semi-automatic showing its idle pose rather than a
 stuck attack anim.
 
+VERIFIED: the "return to idle" arm writes `weaponstate` and not `weapAnim`;
+pavlov's rechamber ends with `weapAnim` unchanged, and its shot's state 3 ends
+on the same frame the rechamber opens (`player-model-anim-system.md`, "What
+`weapAnim` is not written by"). INFERRED: so the state 3 exit is on this frame
+too and not in the trigger-release check of 1.6, which is what lets the
+rechamber open without waiting a frame for a ready weapon.
+
 ### 1.5 Firing
 
 The fire path is `.so` `0x38d28` (dll `0x30011770`). VERIFIED: the offsets,
@@ -471,6 +478,10 @@ conditions.
 - dll `0x30010a30`, inlined in the `.so` at `0x392b4`: `weaponstate` 1 is
   cleared to 0 and `weapAnim` set to `WEAP_IDLE` with the toggle flipped,
   unconditionally, on the frame after.
+
+VERIFIED: the putaway writes no `weapAnim` at all, so the `WEAP_DROP` above is
+the event's parm and not a store; `player-model-anim-system.md`, "What
+`weapAnim` is not written by", carries the traces.
 
 INFERRED: a reload or a rechamber can therefore be interrupted by a weapon
 switch and a shot or a melee cannot. INFERRED: the raise does not wait for

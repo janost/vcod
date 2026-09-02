@@ -13,7 +13,7 @@
 
 use crate::configstrings::{script_menu_index, weapon_index, CsRange};
 use crate::game::builtins::entity::entity_receiver;
-use crate::game::host::GameHost;
+use crate::game::host::{GameHost, WeaponOp};
 use crate::weapons::weapon_slot;
 use vcod_common::pmove;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
@@ -133,14 +133,15 @@ fn weapon_argument(cx: &Cx, args: &[Value]) -> Result<(String, usize), ErrorKind
     Ok((name, index))
 }
 
-/// `self giveWeapon(name)` (`PlayerCmd_giveWeapon` 0x43020): hold the weapon
-/// and fill the slot its weapon file's `weaponSlot` names. Object model doc,
-/// section 20.
+/// `self giveWeapon(name)` (`PlayerCmd_giveWeapon` 0x43020): hold the weapon,
+/// fill the slot its weapon file's `weaponSlot` names, and load it with a
+/// full clip and its `startAmmo` in reserve. Object model doc, section 20;
+/// the ammo pair is RTCW's `Add_Ammo` shape, and every stock loadout calls
+/// `giveMaxAmmo` right after, which is where the reserve the spawn capture
+/// carries comes from.
 ///
-/// Two of retail's effects are left out. Its ammo top-up cannot reach a
-/// client, `ps.ammo` having no netfield in 1.1. And its
-/// `Can not give player weapon without having an empty weapon slot` error is
-/// not reproduced because whether re-giving a held weapon counts as an
+/// Retail's `Can not give player weapon without having an empty weapon slot`
+/// error is not reproduced: whether re-giving a held weapon counts as an
 /// occupied slot is unmeasured, and a wrong guess kills the spawning thread.
 pub fn give_weapon(
     host: &mut GameHost,
@@ -152,26 +153,56 @@ pub fn give_weapon(
     let (name, index) = weapon_argument(cx, args)?;
     let weapon_slot = weapon_slot(host.fs.as_deref(), &name).unwrap_or(0);
     host.client_weapons[slot].give(index, weapon_slot);
+    if let Some(def) = host.weapons.get(index) {
+        let (clip, ammo) = (
+            WeaponOp::SetClip {
+                clip_index: def.clip_index,
+                rounds: def.clip_size as i16,
+            },
+            WeaponOp::SetAmmo {
+                ammo_index: def.ammo_index,
+                rounds: def.start_ammo as i16,
+            },
+        );
+        host.client_weapon_ops.push((slot, clip));
+        host.client_weapon_ops.push((slot, ammo));
+    }
     Ok(Value::Undefined)
 }
 
-/// `self giveMaxAmmo(name)` (`PlayerCmd_giveMaxAmmo` 0x43134): retail tops up
-/// `ps.ammo` and touches nothing else, and `ps.ammo` has no netfield, so
-/// there is nothing here for the wire to carry. Object model doc, section 20.
+/// `self giveMaxAmmo(name)` (`PlayerCmd_giveMaxAmmo` 0x43134): the weapon's
+/// `maxAmmo` in reserve and a full clip. Object model doc, section 20; the
+/// numbers are the retail spawn capture's, `clip=3:7,6:3,10:15
+/// ammo=3:56,10:400` for the stock allies loadout
+/// (`crates/server/src/weapons.rs`, `the_first_index_handed_out_is_one`).
 pub fn give_max_ammo(
     host: &mut GameHost,
     cx: &mut Cx,
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    client_receiver(host, recv)?;
-    weapon_argument(cx, args)?;
+    let slot = client_receiver(host, recv)?;
+    let (_, index) = weapon_argument(cx, args)?;
+    if let Some(def) = host.weapons.get(index) {
+        let (ammo, clip) = (
+            WeaponOp::SetAmmo {
+                ammo_index: def.ammo_index,
+                rounds: def.max_ammo as i16,
+            },
+            WeaponOp::SetClip {
+                clip_index: def.clip_index,
+                rounds: def.clip_size as i16,
+            },
+        );
+        host.client_weapon_ops.push((slot, ammo));
+        host.client_weapon_ops.push((slot, clip));
+    }
     Ok(Value::Undefined)
 }
 
 /// `self setSpawnWeapon(name)` (0x452a4): `ps.weapon = index`, for a weapon
-/// the player already holds. `ps.weaponstate` is retail's other store and is
-/// already 0 in a null playerstate. Object model doc, section 20.
+/// the player already holds, with `ps.weaponstate` -- retail's other store --
+/// back to ready. Object model doc, section 20.
 pub fn set_spawn_weapon(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -183,6 +214,8 @@ pub fn set_spawn_weapon(
     let w = &mut host.client_weapons[slot];
     if w.holds(index) {
         w.current = index as u8;
+        host.client_weapon_ops
+            .push((slot, WeaponOp::SetCurrent(index as u8)));
     }
     Ok(Value::Undefined)
 }
