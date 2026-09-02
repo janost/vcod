@@ -786,6 +786,13 @@ mod tests {
                             max_clients = max_clients.max(s.clients.len());
                             let o = s.ps.origin(p);
                             assert!(o.iter().all(|c| c.abs() < 65536.0), "origin {o:?}");
+                            // The doc's worked example: block 1 carries
+                            // stats[3] = 63 ("no teammate") and stats[5] = 1,
+                            // and this spectator has no ammo at all
+                            // (docs/protocol-1.1.md, "A decoded frame").
+                            assert_eq!(s.ps.arrays.stats, [0, 0, 0, 63, 0, 1]);
+                            assert!(s.ps.arrays.ammo.iter().all(|&v| v == 0));
+                            assert!(s.ps.arrays.ammoclip.iter().all(|&v| v == 0));
                             // A spectator carries none of these, which is what
                             // the server's own spectator wire rests on
                             // (`ClientSim::to_wire`, crates/server).

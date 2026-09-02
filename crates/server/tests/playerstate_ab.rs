@@ -338,7 +338,7 @@ fn check(map: &str) {
     let p = &PROTOCOL_V1;
     let retail_ps = PlayerState {
         fields: capture.ps.clone(),
-        arrays: Vec::new(),
+        arrays: Default::default(),
     };
     let path = join.findings();
     let mut shape = Vec::new();
