@@ -178,6 +178,11 @@ impl Cx<'_> {
     /// before the line after the builtin reads it. Queued threads start in
     /// call order. A `func` no installed function answers is an abort
     /// recorded against the calling thread, which itself carries on.
+    ///
+    /// Only a `Cx` from a builtin honours this. `get_field`/`set_field` and
+    /// `Vm::with_cx` have no point at which running a thread would be
+    /// defined, so a spawn queued through one of those is dropped (and
+    /// `debug_assert`ed against).
     pub fn spawn(&mut self, func: FuncRef, recv: Option<Target>, args: Vec<Value>) {
         self.spawns.push((func, recv, args));
     }
@@ -496,7 +501,10 @@ impl Vm {
         };
         let out = f(&mut cx);
         debug_assert!(notifies.is_empty(), "load-time code must not notify");
-        debug_assert!(spawns.is_empty(), "load-time code must not spawn");
+        debug_assert!(
+            spawns.is_empty(),
+            "Cx::spawn is only honoured from a builtin"
+        );
         out
     }
 }
