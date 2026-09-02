@@ -132,6 +132,13 @@ pub struct EventTracker {
 /// New events between `prev` and `cur`. `eventSequence` is 8 bits on the wire
 /// and wraps; a plain `cur > prev` would stop replaying after the first wrap.
 /// The ring size divides 256, so `seq & 3` stays aligned across a wrap.
+///
+/// The counter is incremented *after* the write (`G_AddEvent`,
+/// docs/research/cod11-combat.md section 7), so the events new in this frame
+/// sit at sequences `prev ..= cur - 1`, not `prev + 1 ..= cur`. Reading the
+/// latter is one slot high and drops the oldest of them: a death frame
+/// arriving as `eventSequence` 2 with `events` `[189, 155]` read as 155 and an
+/// empty slot, and `EV_DEATH` never reached a consumer.
 fn seq_diff(cur: i32, prev: i32) -> i32 {
     (cur - prev) & 0xff
 }
@@ -170,7 +177,7 @@ impl EventTracker {
                 None => {} // first sight: record, don't replay the ring
                 Some(prev) => {
                     let diff = seq_diff(cur, prev).min(EVENT_RING);
-                    for i in (cur - diff + 1)..=cur {
+                    for i in (cur - diff)..cur {
                         let slot = (i & 3) as usize;
                         let ev = es.field_i32(p, &format!("events[{slot}]"));
                         let parm = es.field_i32(p, &format!("eventParms[{slot}]"));
@@ -189,7 +196,7 @@ impl EventTracker {
             None => {}
             Some(prev) => {
                 let diff = seq_diff(cur, prev).min(EVENT_RING);
-                for i in (cur - diff + 1)..=cur {
+                for i in (cur - diff)..cur {
                     let slot = (i & 3) as usize;
                     out.push(GameEvent {
                         event: snap.ps.field_i32(p, &format!("events[{slot}]")),
@@ -281,7 +288,7 @@ mod tests {
             )],
         );
         assert!(t.drain(&s1, p).is_empty());
-        // seq 2 -> 3: exactly events[3 & 3] fires.
+        // seq 2 -> 3: the write went to slot 2 & 3 and the counter followed it.
         let s2 = snap(
             p,
             2,
@@ -291,8 +298,8 @@ mod tests {
                 5,
                 &[
                     ("eventSequence", 3),
-                    ("events[3]", 7),
-                    ("eventParms[3]", 4),
+                    ("events[2]", 7),
+                    ("eventParms[2]", 4),
                     ("weapon", 2),
                 ],
             )],
@@ -313,7 +320,8 @@ mod tests {
         let mut t = EventTracker::new();
         let s1 = snap(p, 1, 1000, vec![ent(p, 5, &[("eventSequence", 0)])]);
         t.drain(&s1, p);
-        // seq jumps 0 -> 6: only the last 4 (ring size) can be recovered.
+        // seq jumps 0 -> 6: only the last 4 (ring size) can be recovered, the
+        // writes at sequences 2, 3, 4 and 5, so slots 2, 3, 0 and 1.
         let s2 = snap(
             p,
             4,
@@ -323,10 +331,10 @@ mod tests {
                 5,
                 &[
                     ("eventSequence", 6),
-                    ("events[3]", 11),
-                    ("events[0]", 12),
-                    ("events[1]", 13),
-                    ("events[2]", 14),
+                    ("events[2]", 11),
+                    ("events[3]", 12),
+                    ("events[0]", 13),
+                    ("events[1]", 14),
                 ],
             )],
         );
@@ -425,14 +433,54 @@ mod tests {
         assert!(t.drain(&s1, p).is_empty());
         let mut s2 = snap(p, 2, 1050, vec![]);
         s2.ps.fields[fi("eventSequence")] = 3;
-        s2.ps.fields[fi("events[3]")] = 5;
-        s2.ps.fields[fi("eventParms[3]")] = 1;
+        s2.ps.fields[fi("events[2]")] = 5;
+        s2.ps.fields[fi("eventParms[2]")] = 1;
         let evs = t.drain(&s2, p);
         assert_eq!(evs.len(), 1);
         assert_eq!(
             (evs[0].event, evs[0].parm, evs[0].entity_num),
             (5, 1, u32::MAX)
         );
+    }
+
+    /// The retail death frame, verbatim off the committed hit fixture:
+    /// `eventSequence` 2 with `events` `[189, 155, 0, 0]` after a frame that
+    /// read 0. Both are new, in that order. Reading the ring one slot high
+    /// dropped `EV_DEATH` and handed the consumer an empty slot instead.
+    #[test]
+    fn playerstate_death_frame_drains_both_events_in_order() {
+        let p = &PROTOCOL_V1;
+        let mut t = EventTracker::new();
+        let fi = |n| PlayerState::field_index(p, n).unwrap();
+        let s1 = snap(p, 1, 1000, vec![]);
+        assert!(t.drain(&s1, p).is_empty()); // seq 0, first sight
+        let mut s2 = snap(p, 2, 1050, vec![]);
+        s2.ps.fields[fi("eventSequence")] = 2;
+        s2.ps.fields[fi("events[0]")] = 189; // EV_DEATH
+        s2.ps.fields[fi("events[1]")] = 155; // EV_RAISE_WEAPON
+        let evs = t.drain(&s2, p);
+        assert_eq!(evs.iter().map(|e| e.event).collect::<Vec<_>>(), [189, 155]);
+    }
+
+    /// The same shape on an entity ring, which shares the walk.
+    #[test]
+    fn entity_death_frame_drains_both_events_in_order() {
+        let p = &PROTOCOL_V1;
+        let mut t = EventTracker::new();
+        let s1 = snap(p, 1, 1000, vec![ent(p, 5, &[("eventSequence", 0)])]);
+        assert!(t.drain(&s1, p).is_empty());
+        let s2 = snap(
+            p,
+            2,
+            1050,
+            vec![ent(
+                p,
+                5,
+                &[("eventSequence", 2), ("events[0]", 189), ("events[1]", 155)],
+            )],
+        );
+        let evs = t.drain(&s2, p);
+        assert_eq!(evs.iter().map(|e| e.event).collect::<Vec<_>>(), [189, 155]);
     }
 
     #[test]
@@ -471,7 +519,8 @@ mod tests {
         let mut t = EventTracker::new();
         let s1 = snap(p, 1, 1000, vec![ent(p, 5, &[("eventSequence", 254)])]);
         t.drain(&s1, p);
-        // 254 -> 1 (wrapped through 255/0): three new events, seq 255, 0, 1.
+        // 254 -> 1 (wrapped through 255/0): three new events, written at
+        // sequences 254, 255 and 0, so slots 2, 3 and 0.
         let s2 = snap(
             p,
             2,
@@ -481,9 +530,9 @@ mod tests {
                 5,
                 &[
                     ("eventSequence", 1),
-                    ("events[3]", 21),
-                    ("events[0]", 22),
-                    ("events[1]", 23),
+                    ("events[2]", 21),
+                    ("events[3]", 22),
+                    ("events[0]", 23),
                 ],
             )],
         );

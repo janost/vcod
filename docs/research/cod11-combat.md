@@ -1253,32 +1253,42 @@ Two probes on one retail server, `--net-probe --probe-target` and
 `--net-probe --save-hit`, on `mp_carentan`. The target stands still, sends the
 `kill` client command every 45 s, presses use 3 s after each death and traces
 its own playerstate; the shooter walks toward it and shoots. The fixtures are
-in `crates/server/tests/fixtures/playerstate/`. Everything below is VERIFIED
-unless labelled otherwise: it is read off those captures.
+in `crates/server/tests/fixtures/playerstate/`.
 
 It takes two runs, because one gametype cannot give both halves:
 
 - `mp_carentan-dm-hit-target.txt` and `-hit-shooter.txt` hold the **death
-  half**. Deathmatch's spawn picker puts a respawning client at the point
-  farthest from the other one, 2000 to 4500 units of town on this map, and the
-  shooter's walk does not cross that: its fixture carries
-  `# BROKEN no line of sight` and the target's `damageEvent` never moves. That
-  pair was also taken before the probe's aim was corrected, so its shooter
-  `viewangles` column does not point at the target; nothing in the death half
-  depends on it.
+  half**. VERIFIED: in every deathmatch run the two probes stood 2000 to 4500
+  units apart, the shooter's walk never closed it inside its 150 s limit, its
+  fixture carries `# BROKEN no line of sight`, and the target's `damageEvent`
+  never moves. INFERRED: the distance is deathmatch's spawn picker placing a
+  respawning client away from the other one. VERIFIED: that pair was taken
+  before the probe's aim was corrected, so its shooter `viewangles` column does
+  not point at the target; nothing in the death half reads that column.
 - `mp_carentan-tdm-hit-target.txt` and `-hit-shooter.txt` hold the **hit
   half**, captured with `+set g_gametype tdm +set scr_friendlyfire 1` and both
-  probes on `allies`. Team deathmatch spawns a player next to its team, so the
-  two start a few hundred units apart, and `scr_friendlyfire 1` is what makes
-  a teammate's bullet do full damage (`tdm.gsc`'s damage callback returns
-  early when the cvar is `<= 0` and only reflects when it is `2`).
+  probes on `allies`. VERIFIED: in team deathmatch the two spawned 143 to 563
+  units apart across five runs. VERIFIED, read out of `tdm.gsc` in `pak5`: the
+  damage callback returns without applying anything when
+  `getCvarInt("scr_friendlyfire")` is `<= 0` and reflects the damage when it is
+  `2`, so `1` is the value that lets a teammate's bullet through.
+
+VERIFIED: the `!event` lines in all four committed fixtures carry only the
+event entities (`event=201`). The playerstate and entity rings were read one
+slot high when these were taken (`crates/common/src/net/events.rs`, fixed
+since), so no `EV_DEATH` or `EV_PAIN` reached the `!event` list. The `events=`
+columns on the `!trace` lines are the source for both, and are what everything
+below quotes. VERIFIED, from a run taken after the fix and not committed as a
+fixture: the same death now drains as `ev 189 parm 0` on the playerstate ring.
 
 ### 8.1 The death
 
-The `kill` command lands in one snapshot, ~50 ms after it goes out. Not every
-one lands: the committed run sent five and three took, at 10 s, 100 s and
-190 s, with the two in between doing nothing at all. UNVERIFIED: what refuses
-them. In the frame one lands:
+VERIFIED: the `kill` command lands in one snapshot, ~50 ms after it goes out,
+and not every one lands. The dm run sent five and three took, at 10 s, 100 s
+and 190 s, with the two in between doing nothing at all. UNVERIFIED: what
+refuses them.
+
+VERIFIED, the frame one lands in:
 
 | field | before | at the death |
 |---|---|---|
@@ -1293,88 +1303,101 @@ them. In the frame one lands:
 | `eFlags` | 16 | 16 |
 | `velocity` | 0, 0, 0 | 0, 0, 0 |
 
-`EV_DEATH` with parm 0 is what 5.1 reads out of `player_die`, and this is the
-wire confirming it. INFERRED: the `EV_RAISE_WEAPON` beside it is the same
-frame's weapon work rather than part of the death, since nothing in
-`player_die` writes the weapon channel.
+VERIFIED: `EV_DEATH` arrives with parm 0, which is the literal 5.1 reads out of
+`player_die`. INFERRED: the `EV_RAISE_WEAPON` beside it is the same frame's
+weapon work rather than part of the death, since nothing in `player_die`
+writes the weapon channel.
 
-`pm_type` 6 is the dead value the gametype script sets. 5.1 shows `player_die`
-writes no `pm_type` at all, so 6 is `sessionstate` reaching pmove through the
-script, and it is the value a server has to reproduce.
+VERIFIED: the dead `pm_type` is 6. INFERRED: it is the gametype script's, since
+5.1 shows `player_die` writes no `pm_type` at all; either way it is the value a
+server has to reproduce.
 
-**`deadViewHeight` never moves.** It reads 8 before the death, through it and
-after the respawn, which is 5.1's "no store to `ps->deadViewHeight`" seen from
-outside. What moves is `viewHeightCurrent`: 60 at the death frame, then 51, 42,
-33, 24, 15, 8 over the next six snapshots, reaching `deadViewHeight` ~300 ms
-later. INFERRED: that is the ordinary view-height lerp running to the dead
-height, not a death-specific path, since the step per 50 ms snapshot is the
-same ~9 units the stance lerp uses.
+**`deadViewHeight` never moves.** VERIFIED: it reads 8 before the death,
+through it and after the respawn, which is 5.1's "no store to
+`ps->deadViewHeight`" seen from outside. VERIFIED: what moves is
+`viewHeightCurrent`, 60 at the death frame, then 51, 42, 33, 24, 15, 8 over the
+next six snapshots, reaching `deadViewHeight` ~300 ms later. INFERRED: that is
+the ordinary view-height lerp running to the dead height rather than a
+death-specific path, since the step per 50 ms snapshot is the same ~9 units the
+stance lerp uses.
 
-`stats[1]` reads 0 on every one of these deaths. 5.1 item 11 stores
-`vectoyaw(attacker->origin - self->origin)` there, and for a suicide that
-vector is zero, so 0 is the expected value and this capture does not exercise
-the interesting case.
+VERIFIED: `stats[1]` reads 0 on every death by `kill`. INFERRED: that is 5.1
+item 11's `vectoyaw(attacker->origin - self->origin)` on a zero vector, since
+the attacker is the victim; 8.4 has the case where it is not.
 
-The four damage fields stay 0 across every death: a `kill` reaches
-`player_die` without `P_DamageFeedback` writing anything.
+VERIFIED: the four damage fields stay 0 across every death by `kill`.
 
-The magazine goes with the death. `ammoclip` reads `3:7, 6:3, 10:15` alive and
-`3:7, 6:3` dead, and `ammo` reads `3:56, 10:400` alive and `3:56` dead; index
-10 comes back at the respawn. UNVERIFIED: which weapon index 10 is.
+VERIFIED: the magazine goes with the death. `ammoclip` reads `3:7, 6:3, 10:15`
+alive and `3:7, 6:3` dead, `ammo` reads `3:56, 10:400` alive and `3:56` dead,
+and index 10 comes back at the respawn. UNVERIFIED: which weapon index 10 is.
 
 ### 8.2 The corpse
 
-Every death puts a corpse in the body queue in the same snapshot as
-`EV_DEATH`, and the queue is used in order from entity **64**: the four deaths
-of the committed run land in 64, 65, 66 and 67, which is what makes 64..71 the range a
-client has to read corpses out of. 5.2 could only infer that first slot from
-the `& 7` on the index; the capture measures it.
+VERIFIED: every death puts a corpse in the body queue in the same snapshot as
+`EV_DEATH`, and the queue is used in order from entity **64**. The dm run's
+three deaths land in 64, 65 and 66; the tdm run's five deaths show four
+distinct slots, 64 through 67, with one death leaving no edge in the trace at
+all. INFERRED: the missing edge is the instrument rather than the server, since
+the same run's `EventTracker` re-fired an obituary for that death (8.3) and the
+corpse's slot was still marked live from a PVS re-entry a moment before.
 
-Corpses do not expire on a timer here: the first is still in the body queue at
-the end of the run, 190 s after it died. An earlier
-run of the same script, on a server where the queue already held bodies, shows
-one vanishing and coming back with the same entity number and clientNum.
-INFERRED: those edges are PVS, not lifetime, since the target had respawned
-elsewhere in between. Nothing in either capture shows a corpse being freed.
+VERIFIED: 64..71 is the range a client has to read corpses out of, which is
+what 5.2 could only infer from the `& 7` on the index.
+
+VERIFIED: corpses do not expire on a timer here. The dm run's first corpse is
+still in the body queue at the end of the run, 190 s after it died. VERIFIED:
+in the tdm run one body vanishes and comes back with the same entity number and
+clientNum, 65 at 30885 ms and 37535 ms. INFERRED: those two edges are PVS,
+since the target had respawned elsewhere in between. UNVERIFIED: what frees a
+clone, since neither capture shows one being freed.
 
 ### 8.3 The obituary and the respawn
 
-Each death broadcasts one `EV_OBITUARY` (201) in the same snapshot. A `kill`
-gives `otherEntityNum` 0 (the victim), `attackerEntityNum` 0 and `eventParm`
-**150**, `0x96`, `MOD_SUICIDE`; the tdm capture's two bullet deaths give the
-victim 0, the attacker 1 and `eventParm` **136**, `0x88`, `MOD_HEAD_SHOT`.
-Both are rows of `cod11-hud-protocol.md` section 2's table. The shooter, 2000
-to 4500 units away with no line of sight, receives every one: the event is
-`SVF_BROADCAST`.
+VERIFIED: each death broadcasts one `EV_OBITUARY` (201) in the same snapshot.
+A `kill` gives `otherEntityNum` 0 (the victim), `attackerEntityNum` 0 and
+`eventParm` **150**, `0x96`, `MOD_SUICIDE`. VERIFIED: the tdm capture's first
+bullet death gives the victim 0, the attacker 1 and `eventParm` **136**,
+`0x88`, `MOD_HEAD_SHOT`. Both are rows of `cod11-hud-protocol.md` section 2's
+table.
 
-INFERRED, an instrument caveat rather than a fact about retail: a run can
-report more obituaries than deaths. `EventTracker` fires an event entity again
-when its slot leaves the snapshot and comes back with the same contents, which
-is what a temp entity crossing the PVS boundary does.
+VERIFIED: the tdm fixture carries two `136` obituaries, at 28891 ms and
+37535 ms, both from event entity 182, while the two bullet deaths are at
+28891 ms and 39527 ms. INFERRED: the second obituary is that temp entity
+re-firing rather than a second kill, since `EventTracker` fires an event entity
+again when its slot leaves the snapshot and comes back with the same contents,
+and the corpse edges show entity 65 doing exactly that at 37535 ms. INFERRED:
+the obituary for the 39527 ms death was then swallowed, since the tracker had
+just recorded that entity and key as fired. So the capture holds two bullet
+deaths and one measured obituary, and its `!observed obituaries=5` is one
+duplicate plus one miss.
 
-The respawn needs the use press and takes it after a delay of its own. The
-target presses use 3 s after death and again once a second; it goes live about
-1 s after the first press, 4.0 s dead in all, and one run needed three presses
-on one death and stayed dead 5.1 s. INFERRED: the presses before that are
-refused, so the script holds the body for a few seconds before it will take
-one.
+VERIFIED: the dm shooter, 2000 to 4500 units away with no line of sight,
+receives every obituary. That is the `SVF_BROADCAST` `cod11-hud-protocol.md`
+section 1 reads out of the builtin.
 
-On the frame the player is alive again: `stats[0]` 100, `pm_type` 0,
+**The respawn.** The probe presses use 3 s after each death and again once a
+second. VERIFIED, dm, three deaths: 4.04 s, 3.05 s and 3.04 s dead. VERIFIED,
+tdm, five deaths: 3.06 s, **1.99 s**, 4.05 s, 4.05 s and 3.06 s dead. VERIFIED:
+the 1.99 s one is shorter than the 3 s the probe waits before its first press,
+so nothing the probe sent respawned it. INFERRED: a press that is taken is
+taken within ~50 ms, so the ~3 s cases are the body being held for about that
+long, and the two 4 s cases are a first press that did nothing followed by a
+second one a second later that did. UNVERIFIED: what respawns a body with no
+press, and what refuses the first one.
+
+VERIFIED, the frame the player is alive again: `stats[0]` 100, `pm_type` 0,
 `eventSequence` 0 with a cleared ring, `legsAnim` 634, `torsoAnim` 0,
-`viewHeightCurrent` 60, and `eFlags` **24** where it read 16 before. 24 is 16
-with bit `0x8` set, the anim-restart toggle 5.2 names on the clone, so a
-respawn flips it the same way.
-
----
+`viewHeightCurrent` 60, and `eFlags` **24** where it read 16 before. INFERRED:
+24 is 16 with bit `0x8` set, the anim-restart toggle 5.2 names on the clone, so
+a respawn flips it the same way.
 
 ### 8.4 What a bullet does
 
 From the tdm capture: `m1carbine_mp` (`damage` 45 in `weapons/mp/m1carbine_mp`)
 fired from 586 units at a standing teammate's eye, twice, killing it the second
-time. The obituary's `eventParm` is 136, `0x88`, `MOD_HEAD_SHOT`, so both were
-head hits.
+time. VERIFIED: the obituary's `eventParm` is 136, `0x88`, `MOD_HEAD_SHOT`.
 
-**The hit frame**, against the settled frame before it:
+VERIFIED, **the hit frame** against the settled frame before it:
 
 | field | before | on the hit |
 |---|---|---|
@@ -1385,47 +1408,50 @@ head hits.
 | `damagePitch` | 0 | 255 |
 | `eventSequence` | 0 | 1 |
 | `events[0]`, `eventParms[0]` | 0, 0 | **187** (`EV_PAIN`), **33** |
-| `velocity` | 0, 0, 0 | -1.4, 80.0, 0 |
+| `velocity` | 0, 0, 0 | -1.4, 80.0, 0.1 |
 
-**67 damage from a 45-damage weapon on a head hit.** 45 * 1.5 is 67.5, and the
-applied damage is 67. INFERRED: the shipped `mp_lochit_dmgtable` gives the head
-1.5 and the product is truncated, since 6.4's `damage * multiplier` is the only
-scaling on this path and nothing else in the capture is a factor of 1.489.
+**67 damage from a 45-damage weapon on a head hit.** INFERRED: the shipped
+`mp_lochit_dmgtable` gives the head 1.5 and the product is truncated, since
+45 * 1.5 is 67.5, 6.4's `damage * multiplier` is the only scaling on this path,
+and nothing else in the capture is a factor of 1.489.
 
-`damageCount` 67 is 6's `damage * 100 / maxHealth` with `maxHealth` 100, so
-this capture cannot separate the two; a server with another max health would.
+VERIFIED: `damageCount` reads 67, the same number as the damage. INFERRED: this
+capture cannot separate it from 6's `damage * 100 / maxHealth`, since
+`maxHealth` is 100 here; a server with another max health would.
 
 **`damageYaw` and `damagePitch` are the world angles of the direction the
-damage came along, from the attacker toward the victim.** The shooter stood at
-`(1810.0, 2109.5)` and the target at `(1800.0, 2696.0)`, a bearing of 91.0
-degrees; `(int)(91.0 / 360 * 256)` is 64, which is what `damageYaw` reads.
-Both eyes sat at the same height, and `damagePitch` reads 255, one short of
-the 256 a level shot wraps to. That is 6's step 8 measured from the wire.
+damage came along, from the attacker toward the victim.** VERIFIED: the shooter
+stood at `(1810.0, 2109.5)` and the target at `(1800.0, 2696.0)`, a bearing of
+91.0 degrees, and `(int)(91.0 / 360 * 256)` is 64, which is what `damageYaw`
+reads. VERIFIED: both eyes sat at the same height and `damagePitch` reads 255,
+one short of the 256 a level shot wraps to. INFERRED: that is 6's step 8, since
+the numbers match its `angles / 360.0 * 256.0` on that bearing.
 
-**The knockback is one frame of velocity along that direction.** The target
-stood still, and the hit frame reads `-1.4, 80.0, 0`: 80 u/s along the bearing
-the bullet travelled, decaying to 64, 46, 28 and 0 over the next four
-snapshots. INFERRED: the decay is ordinary ground friction, not a knockback
-timer, since the target held no movement input.
+**The knockback is one frame of velocity along that direction.** VERIFIED: the
+target stood still, and the hit frame reads `-1.4, 80.0, 0.1`, 80 u/s along the
+bearing the bullet travelled, decaying to 64, 46, 28 and 0 over the next four
+snapshots. INFERRED: the decay is ordinary ground friction rather than a
+knockback timer, since the target held no movement input.
 
-`EV_PAIN`'s parm is 33, the victim's health as a percentage of max after the
-damage, which is 6's step 9.
+VERIFIED: `EV_PAIN`'s parm is 33, the victim's health as a percentage of max
+after the damage, which is the number 6's step 9 computes.
 
-**The fatal hit leaves `damageEvent` alone.** The second bullet took health 33
-to 0 and `damageEvent` stayed 1 while `damageCount`, `damageYaw` and
-`damagePitch` kept the first hit's values. That is 6's step 1, the
-`pm_type > 5` return, seen from outside: the feedback for the killing hit never
-runs. A death by a bullet also carries the same `pm_type` **6** as the suicide,
-`legsAnim` 17, `torsoAnim` 512 and events `[187, 189, 155]` in one frame.
+**The fatal hit leaves `damageEvent` alone.** VERIFIED: the second bullet took
+health 33 to 0 and `damageEvent` stayed 1, with `damageCount`, `damageYaw` and
+`damagePitch` keeping the first hit's values. INFERRED: that is 6's step 1, the
+`pm_type > 5` return, so the feedback for the killing hit never runs.
 
-`stats[1]` finally reads something: **270** on the bullet death, where the
-suicides read 0. 5.1 item 11 stores `vectoyaw(attacker->origin -
-self->origin)`, and the shooter was at bearing 271.0 degrees from the target,
-truncated to 270. It is the opposite of `damageYaw`'s direction, which the two
-numbers agree on: 64 is 90 degrees, 270 is 90 + 180.
+VERIFIED: a death by a bullet carries the same `pm_type` **6** as a death by
+`kill`, with `legsAnim` 17, `torsoAnim` 512 and events `[187, 189, 155]` in one
+frame.
 
-The four damage fields read 0 again after the respawn: `damageEvent` does not
-carry across a life, whatever `P_DamageFeedback` does inside one.
+VERIFIED: `stats[1]` reads **270** on the bullet death, where every death by
+`kill` reads 0, and the shooter sat at bearing 270.98 degrees from the target.
+INFERRED: it is 5.1 item 11's `vectoyaw` truncated toward zero, and it is the
+opposite of `damageYaw`'s direction, which the two numbers agree on: 64 is 90
+degrees and 270 is 90 + 180.
+
+VERIFIED: the four damage fields read 0 again after the respawn.
 
 ---
 

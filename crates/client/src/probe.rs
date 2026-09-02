@@ -2534,7 +2534,7 @@ impl Steer {
 /// The shooter's phases, in order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum HitPhase {
-    /// Walk toward the other player, steered by [`StallTurn`], until the
+    /// Walk toward the other player, steered by [`Steer`], until the
     /// eye-to-eye trace is clear or [`APPROACH_LIMIT`] passes.
     Approach,
     /// One tap, aimed at the target's eye.
