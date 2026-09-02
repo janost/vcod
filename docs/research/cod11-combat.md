@@ -215,9 +215,11 @@ part of the index, which is the same restart toggle the anim channels carry
 (`player-model-anim-system.md`, "The restart toggle").
 
 VERIFIED, `0x3000ffe0` in the dll: the setter is
-`weapAnim = (~weapAnim & 0x200) | anim`, guarded on `ps->pm_type < 6` and
-`pm->cmd.weapon != 0`. INFERRED: because the write always inverts bit `0x200`,
-every call flips the toggle whether or not the index changed. VERIFIED,
+`weapAnim = (~weapAnim & 0x200) | anim`, and the function compares
+`ps->pm_type` against 6 and `pm->cmd.weapon` against 0. INFERRED: the write
+is on the arm where `pm_type < 6` and `cmd.weapon != 0` both hold. INFERRED:
+because the write always inverts bit `0x200`, every call flips the toggle
+whether or not the index changed. VERIFIED,
 `0x30010010`: a second setter takes the same argument, compares
 `weapAnim & 0xFFFFFDFF` against it, and has a return path that writes nothing.
 INFERRED: that path is the one an equal comparison takes. INFERRED: that
@@ -585,10 +587,12 @@ tests the same mask before taking its turret branch and the fire path skips the
 clip decrement when it is set.
 
 UNVERIFIED: what sets `pm_flags 0x800`, and what `pm_flags 0x400` and `0x4000`
-mean. VERIFIED: `BG_GetMinSpreadForWeapon` selects the prone spread minimum on
-`pm_flags & 1` and the ducked one on `pm_flags & 2`, and the weapon-change
-check forces weapon 0 on `pm_flags & 0x10`. INFERRED: so `0x1` is prone, `0x2`
-is crouch and `0x10` is the ladder.
+mean. VERIFIED: `BG_GetMinSpreadForWeapon` tests `pm_flags & 1` and
+`pm_flags & 2` and loads the prone and the ducked spread minimum off those
+tests, and the weapon-change check tests `pm_flags & 0x10` and holds a store
+of weapon 0. INFERRED: the prone minimum is the `& 1` arm, the ducked one the
+`& 2` arm, and the weapon-0 store is the `& 0x10` arm. INFERRED: so `0x1` is
+prone, `0x2` is crouch and `0x10` is the ladder.
 
 ---
 
@@ -605,7 +609,8 @@ triple. VERIFIED: the muzzle is the entity's origin with
 `fldcw`. INFERRED: the lean is applied before the rounding.
 
 VERIFIED, `ClientEndFrame` `0x410f1`: `client+0x2240` is
-`ps->aimSpreadScale / 255.0`, computed once a frame. VERIFIED, `FireWeapon`
+`ps->aimSpreadScale / 255.0`. INFERRED: it is computed once a frame, since
+that is when `ClientEndFrame` runs. VERIFIED, `FireWeapon`
 `0x68eb9`: it compares `ps->fWeaponPosFrac` against 1.0 and has two arms, one
 computing `adsSpread + (hipSpreadMax - adsSpread) * client->0x2240` and the
 other `min + (hipSpreadMax - min) * client->0x2240` where `min` is
@@ -662,8 +667,9 @@ recursions: `(passEnt, attacker, start, end, damage, depth, params, shooter)`.
 VERIFIED: `params` is the caller's stack frame holding `axis[3][3]` at `+0`,
 the origin at `+0x24` and the weapon def pointer at `+0x3C`.
 
-VERIFIED: with `depth > 12` it prints
-`"Bullet_Fire_Extended: Too many resursions, bullet aborted\n"` and returns.
+VERIFIED: it compares `depth` against 12 and holds the string
+`"Bullet_Fire_Extended: Too many resursions, bullet aborted\n"`. INFERRED: the
+print and the return are on the arm where `depth > 12`.
 
 VERIFIED: the trace is `trap_LocationalTrace(&trace, start, end,
 passEnt->s.number, 0x02802031, priorityMap)`. VERIFIED: the two candidates
@@ -1229,11 +1235,11 @@ VERIFIED, `G_AddEvent` `0x67ca4`: it tests `gentity+0x158` and has two arms.
 One writes `ps->events[ps->eventSequence & 3] = event` and
 `ps->eventParms[ps->eventSequence & 3] = parm` and increments
 `ps->eventSequence`; the other does the same against `entityState+168`,
-`entityState+184` and `entityState+164`. VERIFIED: both arms reach two stores
-of `level.time`, into `ent+0x180` and `ent+0x150`. INFERRED: the playerstate
-arm is the one a client entity takes. INFERRED: this is the ring
-`player-model-anim-system.md` measured from the outside, four slots, masked,
-with the counter incremented after the write.
+`entityState+184` and `entityState+164`. VERIFIED: it holds two stores of
+`level.time`, into `ent+0x180` and `ent+0x150`. INFERRED: both arms reach
+them. INFERRED: the playerstate arm is the one a client entity takes.
+INFERRED: this is the ring `player-model-anim-system.md` measured from the
+outside, four slots, masked, with the counter incremented after the write.
 
 VERIFIED: `G_TempEntity` is `0x67938`, and every call site above writes
 `entityState` fields into its return value. INFERRED: it returns an entity the
