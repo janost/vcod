@@ -73,6 +73,11 @@ fn pm_input(cmd: &UserCmd) -> PmInput {
         walk_slow: false,
         lean_left: cmd.wbuttons & msg::WBUTTON_LEAN_LEFT != 0,
         lean_right: cmd.wbuttons & msg::WBUTTON_LEAN_RIGHT != 0,
+        attack: cmd.buttons & msg::BUTTON_ATTACK != 0,
+        reload: cmd.wbuttons & msg::WBUTTON_RELOAD != 0,
+        ads: cmd.buttons & msg::BUTTON_ADS != 0,
+        use_button: cmd.buttons & msg::BUTTON_USE != 0,
+        weapon: cmd.weapon,
     }
 }
 
@@ -225,7 +230,8 @@ impl ClientSim {
                 dt,
             ),
             (PmType::Normal, Some(w)) => {
-                pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt);
+                // Task 8 threads the map's weapon table in here.
+                pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt, &[]);
                 self.jumped |= self.ps.jumped;
                 // Retail holds a prone view inside the cone around the body by
                 // pushing `delta_angles`, so the client's own prediction lands
@@ -1027,17 +1033,31 @@ mod tests {
         assert!(!crouch.jump && !prone.jump);
     }
 
-    /// The weapon bits share `buttons` with nothing this module reads, and
-    /// CoD 1 has a single move speed with no walk key, so no input reaches
-    /// pmove's walk scale.
+    /// The weapon bits reach the weapon half of pmove, and nothing else: CoD 1
+    /// has a single move speed with no walk key, so no input reaches pmove's
+    /// walk scale.
     #[test]
-    fn weapon_bits_and_walk_scale_are_untouched() {
-        let all_weapon_bits = pm_input(&UserCmd {
+    fn weapon_bits_reach_the_weapon_input_only() {
+        let all = pm_input(&UserCmd {
             buttons: 0xff,
             wbuttons: msg::WBUTTON_RELOAD,
+            weapon: 7,
             ..Default::default()
         });
-        assert_eq!(all_weapon_bits, PmInput::default());
+        assert!(all.attack && all.reload && all.ads && all.use_button);
+        assert_eq!(all.weapon, 7);
+        assert!(!all.walk_slow);
+        assert_eq!(
+            PmInput {
+                attack: false,
+                reload: false,
+                ads: false,
+                use_button: false,
+                weapon: 0,
+                ..all
+            },
+            PmInput::default()
+        );
     }
 
     /// One field of the retail player capture the `playerstate_ab` gate diffs

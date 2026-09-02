@@ -206,7 +206,8 @@ enum Mode {
     Walk {
         /// Boxed to keep the variants a similar size.
         world: Box<collision::CollisionWorld>,
-        ps: pmove::PlayerState,
+        /// Boxed to keep the variants a similar size.
+        ps: Box<pmove::PlayerState>,
         input: pmove::PmInput,
         keys: WalkKeys,
         motion: viewmodel::ViewmodelMotion,
@@ -869,7 +870,7 @@ fn walk_mode(
 
     Ok(Mode::Walk {
         world: Box::new(world),
-        ps,
+        ps: Box::new(ps),
         input: pmove::PmInput::default(),
         keys: WalkKeys::default(),
         motion: viewmodel::ViewmodelMotion::new(),
@@ -1748,7 +1749,7 @@ impl ApplicationHandler for App {
                         }
 
                         (input.forward, input.right) = keys.axes();
-                        for ev in pmove::pmove(ps, input, world, dt) {
+                        for ev in pmove::pmove(ps, input, world, dt, &[]) {
                             self.audio.on_game_event(
                                 &self.fs,
                                 &net::events::GameEvent {

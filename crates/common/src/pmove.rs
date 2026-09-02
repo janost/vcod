@@ -6,7 +6,10 @@
 //! constants and their provenance".
 
 use crate::collision::CollisionWorld;
+use crate::weapon::WeaponDef;
 use glam::Vec3;
+
+pub mod weapon;
 
 pub const GRAVITY: f32 = 800.0;
 pub const SPEED_RUN: f32 = 190.0;
@@ -147,6 +150,9 @@ const LADDER_MOVEMENT_DIR_CAP: i32 = 75;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PmEvent {
     pub event: i32,
+    /// The wire's `eventParm`. Every movement event carries 0; the weapon
+    /// step is what will fill it.
+    pub parm: i32,
 }
 
 /// Ticks per millisecond for each gait; with MP-default speed scales the
@@ -291,6 +297,35 @@ pub struct PlayerState {
     /// without having jumped, and the animation machine has to tell those
     /// apart (docs/research/player-model-anim-system.md).
     pub jumped: bool,
+    /// Whether `update_stance` moved the stance this frame. Both combat
+    /// captures read a putaway at a stance change
+    /// (docs/research/player-model-anim-system.md, "The weapon channel").
+    pub stance_changed: bool,
+    /// `ps.weapon`, a 1-based index into configstring 7; 0 is no weapon.
+    pub weapon: u8,
+    /// `ps.weapons`, bit N for weapon N.
+    pub weapons_held: u64,
+    /// `ps.weaponslots`, the weapon index in each slot (0 empty).
+    pub weapon_slots: [u8; weapon::NUM_SLOTS],
+    /// `ps.weaponstate`, one of `weapon::WEAPON_*`.
+    pub weaponstate: u8,
+    /// `ps.weaponTime`: while non-zero the machine is busy. 1 is the
+    /// semi-automatic latch (combat doc, section 1.4).
+    pub weapon_time_ms: i32,
+    /// `ps.weaponDelay`: the sub-step inside a state (the shot inside
+    /// `fireTime`, the rounds inside a reload).
+    pub weapon_delay_ms: i32,
+    /// `ps.weapAnim`, a `weapon::WEAP_*` index plus the 512 restart toggle.
+    pub weap_anim: i32,
+    /// `ps.ammo`, the reserve, by `WeaponDef::ammo_index`.
+    pub ammo: [i16; weapon::NUM_AMMO],
+    /// `ps.ammoclip`, the loaded magazine, by `WeaponDef::clip_index`.
+    pub ammoclip: [i16; weapon::NUM_AMMO],
+    /// `ps.weaponrechamber`, bit N set while weapon N holds a spent case
+    /// (combat doc, section 1.9).
+    pub weapon_rechamber: u64,
+    /// The weapon a putaway in flight will raise; 0 means none is.
+    pub pending_weapon: u8,
 }
 
 impl PlayerState {
@@ -325,6 +360,18 @@ impl PlayerState {
             view_lerp_down: false,
             backwards_run: false,
             jumped: false,
+            stance_changed: false,
+            weapon: 0,
+            weapons_held: 0,
+            weapon_slots: [0; weapon::NUM_SLOTS],
+            weaponstate: weapon::WEAPON_READY,
+            weapon_time_ms: 0,
+            weapon_delay_ms: 0,
+            weap_anim: 0,
+            ammo: [0; weapon::NUM_AMMO],
+            ammoclip: [0; weapon::NUM_AMMO],
+            weapon_rechamber: 0,
+            pending_weapon: 0,
         }
     }
 
@@ -374,6 +421,12 @@ pub struct PmInput {
     pub walk_slow: bool,
     pub lean_left: bool,
     pub lean_right: bool,
+    pub attack: bool,
+    pub reload: bool,
+    pub ads: bool,
+    pub use_button: bool,
+    /// The usercmd's weapon byte; 0 means the cmd asks for no change.
+    pub weapon: u8,
 }
 
 /// `dt` in seconds, clamped to `MAX_FRAME_MS`. Returns the frame's movement
@@ -383,6 +436,7 @@ pub fn pmove(
     input: &PmInput,
     world: &CollisionWorld,
     dt: f32,
+    weapons: &[Option<WeaponDef>],
 ) -> Vec<PmEvent> {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
     ps.since_jump_ms += dt * 1000.0;
@@ -458,6 +512,13 @@ pub fn pmove(
     if !was_on_ground && ps.on_ground {
         crash_land(ps, &mut events);
     }
+    weapon::pm_weapon(
+        ps,
+        input,
+        weapons,
+        (dt * 1000.0).round() as i32,
+        &mut events,
+    );
     events
 }
 
@@ -528,7 +589,7 @@ fn ground_step_event(
                 _ if walking => EV_FOOTSTEP_WALK_WATER,
                 _ => EV_FOOTSTEP_RUN_WATER,
             };
-            events.push(PmEvent { event: id });
+            events.push(PmEvent { event: id, parm: 0 });
             return;
         }
         3 => return,
@@ -568,7 +629,10 @@ fn push_surface_step(
         _ if walking => walk_base,
         _ => run_base,
     };
-    events.push(PmEvent { event: base + mat });
+    events.push(PmEvent {
+        event: base + mat,
+        parm: 0,
+    });
 }
 
 /// `PM_FootstepEvent`'s airborne branch: probe into the ladder face and use
@@ -601,6 +665,7 @@ fn ladder_step_event(
     }
     events.push(PmEvent {
         event: EV_FOOTSTEP_RUN_BASE + mat,
+        parm: 0,
     });
 }
 
@@ -634,7 +699,7 @@ fn landing_event(impact: f32, ps: &PlayerState) -> Option<PmEvent> {
     } else {
         return None;
     };
-    Some(PmEvent { event: id })
+    Some(PmEvent { event: id, parm: 0 })
 }
 
 /// A CoD 1.1 spectator: fly accelerate, friction always, and no collision at
@@ -669,6 +734,7 @@ pub fn spectator_move(ps: &mut PlayerState, forward: f32, right: f32, up: f32, d
 /// Standing back up needs headroom for the taller bbox.
 fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
     let before = ps.stance;
+    ps.stance_changed = false;
     let mut desired = if input.prone {
         Stance::Prone
     } else if input.crouch {
@@ -699,6 +765,7 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, 
     // 200 ms stand/crouch family, the 400 ms bg_duck2prone_time/
     // bg_prone2duck_time defaults into and out of prone.
     if ps.stance != before {
+        ps.stance_changed = true;
         match ps.stance {
             Stance::Crouch => ps.ducked = true,
             Stance::Stand => ps.ducked = false,
@@ -1224,6 +1291,7 @@ fn ladder_move(
         if mat != 0 && sf & SURF_NO_SOUND == 0 {
             events.push(PmEvent {
                 event: EV_JUMP_BASE + mat,
+                parm: 0,
             });
         }
         air_move(ps, input, world, dt);
@@ -1519,7 +1587,7 @@ mod tests {
 
     fn tick(ps: &mut PlayerState, input: &PmInput, w: &CollisionWorld, n: usize) {
         for _ in 0..n {
-            pmove(ps, input, w, 1.0 / 125.0);
+            pmove(ps, input, w, 1.0 / 125.0, &[]);
         }
     }
 
@@ -1645,13 +1713,13 @@ mod tests {
             ..Default::default()
         };
         for _ in 0..125 {
-            pmove(&mut ps, &run, &w, 1.0 / 125.0);
+            pmove(&mut ps, &run, &w, 1.0 / 125.0, &[]);
         }
         assert!(ps.velocity.truncate().length() > 180.0);
         let mut steps = Vec::new();
         for _ in 0..375 {
             steps.extend(
-                pmove(&mut ps, &run, &w, 8.0 / 1000.0)
+                pmove(&mut ps, &run, &w, 8.0 / 1000.0, &[])
                     .into_iter()
                     .map(|e| e.event),
             );
@@ -1703,12 +1771,12 @@ mod tests {
         ] {
             let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
             for _ in 0..125 {
-                pmove(&mut ps, &input, &w, 1.0 / 125.0);
+                pmove(&mut ps, &input, &w, 1.0 / 125.0, &[]);
             }
             let speed = ps.velocity.truncate().length();
             assert!(speed > 10.0, "{name} must still move, at {speed}");
             let events: Vec<_> = (0..250)
-                .flat_map(|_| pmove(&mut ps, &input, &w, 8.0 / 1000.0))
+                .flat_map(|_| pmove(&mut ps, &input, &w, 8.0 / 1000.0, &[]))
                 .collect();
             assert!(events.is_empty(), "{name} played {events:?}");
         }
@@ -1724,12 +1792,12 @@ mod tests {
             ..Default::default()
         };
         for _ in 0..125 {
-            pmove(&mut ps, &run, &w, 1.0 / 125.0);
+            pmove(&mut ps, &run, &w, 1.0 / 125.0, &[]);
         }
         let idle = PmInput::default();
         let mut events = Vec::new();
         while ps.velocity.truncate().length() > 10.0 {
-            events.extend(pmove(&mut ps, &idle, &w, 8.0 / 1000.0));
+            events.extend(pmove(&mut ps, &idle, &w, 8.0 / 1000.0, &[]));
         }
         assert!(events.is_empty(), "{events:?}");
     }
@@ -1741,7 +1809,7 @@ mod tests {
         let idle = PmInput::default();
         let mut events = Vec::new();
         for _ in 0..500 {
-            events.extend(pmove(&mut ps, &idle, &w, 8.0 / 1000.0));
+            events.extend(pmove(&mut ps, &idle, &w, 8.0 / 1000.0, &[]));
         }
         assert!(ps.on_ground);
         let ids: Vec<i32> = events.into_iter().map(|e| e.event).collect();
@@ -1770,13 +1838,13 @@ mod tests {
             ..Default::default()
         };
         for _ in 0..125 {
-            pmove(&mut ps, &run, &w, 1.0 / 125.0);
+            pmove(&mut ps, &run, &w, 1.0 / 125.0, &[]);
         }
         assert_eq!(ps.water_level, 1);
         let mut ids = Vec::new();
         for _ in 0..250 {
             ids.extend(
-                pmove(&mut ps, &run, &w, 8.0 / 1000.0)
+                pmove(&mut ps, &run, &w, 8.0 / 1000.0, &[])
                     .into_iter()
                     .map(|e| e.event),
             );
@@ -1858,14 +1926,15 @@ mod tests {
         );
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.0), 0.0);
         ps.since_jump_ms = 10_000.0;
-        pmove(&mut ps, &PmInput::default(), &wall, 1.0 / 125.0);
+        pmove(&mut ps, &PmInput::default(), &wall, 1.0 / 125.0, &[]);
         assert_eq!(ps.ground_surface_flags, 21 << 20);
         let mut events = Vec::new();
         ladder_move(&mut ps, &jump, n, false, &wall, 1.0 / 125.0, &mut events);
         assert_eq!(
             events,
             vec![PmEvent {
-                event: EV_JUMP_BASE + 21
+                event: EV_JUMP_BASE + 21,
+                parm: 0
             }]
         );
 
@@ -1962,9 +2031,9 @@ mod tests {
             jump: true,
             ..Default::default()
         };
-        pmove(&mut ps, &launch, &w, 1.0 / 125.0);
+        pmove(&mut ps, &launch, &w, 1.0 / 125.0, &[]);
         for _ in 0..200 {
-            pmove(&mut ps, &run, &w, 1.0 / 125.0);
+            pmove(&mut ps, &run, &w, 1.0 / 125.0, &[]);
             apex = apex.max(ps.origin.z);
         }
         assert!(
@@ -1985,9 +2054,9 @@ mod tests {
         ps.stance = Stance::Crouch;
         tick(&mut ps, &launch, &w, 50); // settle crouched
         let mut apex = 0.0f32;
-        pmove(&mut ps, &launch, &w, 1.0 / 125.0);
+        pmove(&mut ps, &launch, &w, 1.0 / 125.0, &[]);
         for _ in 0..200 {
-            pmove(&mut ps, &launch, &w, 1.0 / 125.0);
+            pmove(&mut ps, &launch, &w, 1.0 / 125.0, &[]);
             apex = apex.max(ps.origin.z);
         }
         assert!(
@@ -2054,7 +2123,7 @@ mod tests {
 
         // Inside the soft edge the body does not move and nothing is clamped.
         ps.yaw = 60f32.to_radians();
-        pmove(&mut ps, &prone, &w, 0.05);
+        pmove(&mut ps, &prone, &w, 0.05, &[]);
         assert!(
             ps.prone_direction.abs() < 0.01,
             "the body holds under 80 degrees"
@@ -2064,7 +2133,7 @@ mod tests {
         // Past it, the body swings at the measured rate.
         ps.yaw = 150f32.to_radians();
         // A frame inside `MAX_FRAME_MS`, which pmove clamps dt to.
-        pmove(&mut ps, &prone, &w, 0.05);
+        pmove(&mut ps, &prone, &w, 0.05, &[]);
         // The body turns toward the view, which is at +150.
         let swung = PRONE_SWING_DEG_PER_SEC * 0.05;
         assert!(
@@ -2104,6 +2173,7 @@ mod tests {
                 },
                 &w,
                 1.0 / 125.0,
+                &[],
             );
             apex = apex.max(ps.origin.z);
         }
@@ -2129,7 +2199,7 @@ mod tests {
         let mut launches = 0;
         let mut prev_vz = ps.velocity.z;
         for _ in 0..300 {
-            pmove(&mut ps, &hop, &w, 1.0 / 125.0);
+            pmove(&mut ps, &hop, &w, 1.0 / 125.0, &[]);
             if prev_vz < 100.0 && ps.velocity.z > 200.0 {
                 launches += 1;
             }
@@ -2154,7 +2224,7 @@ mod tests {
         tick(&mut ps, &hop, &w, 50); // settle prone
         let mut apex = 0.0f32;
         for _ in 0..60 {
-            pmove(&mut ps, &hop, &w, 1.0 / 125.0);
+            pmove(&mut ps, &hop, &w, 1.0 / 125.0, &[]);
             apex = apex.max(ps.origin.z);
         }
         assert!(
@@ -2491,7 +2561,7 @@ mod tests {
         // builds over ~half a second, so watch the whole descent
         let mut worst_fall = 0.0f32;
         for _ in 0..150 {
-            pmove(&mut ps, &input, &w, 1.0 / 125.0);
+            pmove(&mut ps, &input, &w, 1.0 / 125.0, &[]);
             worst_fall = worst_fall.max(-ps.velocity.z);
         }
         assert!(
@@ -2706,12 +2776,12 @@ mod tests {
             ..Default::default()
         };
         let mut ps = PlayerState::spawn(Vec3::new(8.0, 0.0, 40.0), 0.0);
-        pmove(&mut ps, &input, &w, 1.0 / 125.0);
+        pmove(&mut ps, &input, &w, 1.0 / 125.0, &[]);
         assert!(!ps.on_ladder, "full-box probe would grab from here");
 
         // just past the shrunken reach it still grabs
         let mut ps = PlayerState::spawn(Vec3::new(13.0, 0.0, 40.0), 0.0);
-        pmove(&mut ps, &input, &w, 1.0 / 125.0);
+        pmove(&mut ps, &input, &w, 1.0 / 125.0, &[]);
         assert!(ps.on_ladder, "should grab within shrunk reach");
     }
 
@@ -2724,7 +2794,7 @@ mod tests {
         };
         let mut ps = PlayerState::spawn(Vec3::new(20.0, 0.0, 0.2), 0.0);
         for _ in 0..200 {
-            pmove(&mut ps, &run, &w, 1.0 / 125.0);
+            pmove(&mut ps, &run, &w, 1.0 / 125.0, &[]);
             if ps.on_ladder && ps.origin.z > 25.0 {
                 break;
             }
@@ -2763,7 +2833,7 @@ mod tests {
         };
         let mut grabbed = false;
         for _ in 0..150 {
-            pmove(&mut ps, &input, &w, 1.0 / 125.0);
+            pmove(&mut ps, &input, &w, 1.0 / 125.0, &[]);
             grabbed |= ps.on_ladder;
         }
         assert!(grabbed, "should catch the ladder, at {}", ps.origin);
@@ -2839,7 +2909,7 @@ mod tests {
         };
         let mut ps = PlayerState::spawn(Vec3::new(20.0, 0.0, 0.2), 0.0);
         for _ in 0..200 {
-            pmove(&mut ps, &climb, &w, 1.0 / 125.0);
+            pmove(&mut ps, &climb, &w, 1.0 / 125.0, &[]);
             if ps.on_ladder && ps.origin.z > 25.0 {
                 break;
             }
@@ -2857,6 +2927,7 @@ mod tests {
             },
             &w,
             1.0 / 125.0,
+            &[],
         );
         assert!(!ps.on_ladder, "push-off must clear the ladder");
         // impulse values pinned in the gate-matrix unit test; here the normal
@@ -3179,7 +3250,7 @@ mod tests {
             jump: true,
             ..Default::default()
         };
-        pmove(&mut ps, &input, &w, 1.0 / 125.0);
+        pmove(&mut ps, &input, &w, 1.0 / 125.0, &[]);
         assert!(
             ps.waterjump_ms > 0.0,
             "waterjump should trigger from the shelf"

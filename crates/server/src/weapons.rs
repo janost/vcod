@@ -5,6 +5,7 @@
 //! `ps.weapon`.
 
 use vcod_common::pk3::Pk3Fs;
+use vcod_common::pmove::weapon;
 use vcod_common::weapon::WeaponDef;
 
 /// The retail `weaponSlot` name table, `.data` 0x7c940. Index 0 is `"none"`,
@@ -20,7 +21,7 @@ pub const SLOT_NAMES: [&str; 6] = [
 
 /// `ps.weaponslots` is eight bytes carried by the two 32-bit netfields
 /// `weaponslots[0]` and `weaponslots[4]`.
-pub const NUM_SLOTS: usize = 8;
+pub const NUM_SLOTS: usize = weapon::NUM_SLOTS;
 
 /// One player's weapons, in the wire's own terms.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -41,23 +42,19 @@ impl PlayerWeapons {
     /// with no paks mounted — is still held; only the slot byte goes unset.
     pub fn give(&mut self, index: usize, slot: usize) {
         if index < u64::BITS as usize {
-            self.held |= 1u64 << index;
-        }
-        if slot > 0 && slot < NUM_SLOTS {
-            self.slots[slot] = index as u8;
+            weapon::give_slot(&mut self.held, &mut self.slots, index as u8, slot);
         }
     }
 
     /// Whether the player holds that weapon: retail's
     /// `COM_BitCheck(ps.weapons, index)`.
     pub fn holds(&self, index: usize) -> bool {
-        index < u64::BITS as usize && self.held & (1u64 << index) != 0
+        index < u64::BITS as usize && weapon::bit_set(self.held, index as u8)
     }
 
     /// The two 32-bit words `weaponslots[0]` and `weaponslots[4]` carry.
     pub fn slot_words(&self) -> [i32; 2] {
-        let word = |b: &[u8]| i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
-        [word(&self.slots[0..4]), word(&self.slots[4..8])]
+        weapon::pack_slots(&self.slots)
     }
 }
 

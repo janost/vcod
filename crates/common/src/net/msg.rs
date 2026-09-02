@@ -967,11 +967,15 @@ pub struct UserCmd {
     pub up: i8,
 }
 
-/// Input bits in [`UserCmd::wbuttons`]. The two stances are level states the
-/// client holds for as long as it is down, not key edges, and they are
-/// mutually exclusive; `reload` is here because it is the one `wbuttons` bit
-/// that moves nothing. Bit table, evidence and the `buttons` half:
-/// docs/protocol-1.1.md, "Usercmd input bits".
+/// Input bits in [`UserCmd::buttons`] and [`UserCmd::wbuttons`]. The two
+/// stances are level states the client holds for as long as it is down, not
+/// key edges, and they are mutually exclusive; `reload` is in `wbuttons`
+/// because it is the one bit there that moves nothing. Bit table and
+/// evidence: docs/protocol-1.1.md, "Usercmd input bits".
+pub const BUTTON_ATTACK: u8 = 0x01;
+pub const BUTTON_ADS: u8 = 0x10;
+pub const BUTTON_MELEE: u8 = 0x20;
+pub const BUTTON_USE: u8 = 0x40;
 pub const WBUTTON_RELOAD: u8 = 0x08;
 pub const WBUTTON_LEAN_LEFT: u8 = 0x10;
 pub const WBUTTON_LEAN_RIGHT: u8 = 0x20;

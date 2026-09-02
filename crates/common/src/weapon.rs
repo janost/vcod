@@ -120,8 +120,26 @@ impl WeaponSounds {
 pub struct WeaponDef {
     pub clip_size: u32, // >= 1
     pub fire_time: f32,
+    /// Holds the next shot off inside `fireTime`; 0 on every stock bullet
+    /// weapon (docs/research/cod11-combat.md, section 1.3).
+    pub fire_delay: f32,
     pub rechamber_time: f32,
+    /// When the bolt's spent case leaves the gun inside `rechamberTime`.
+    pub rechamber_bolt_time: f32,
     pub reload_time: f32,
+    /// The reload a dry clip runs instead of `reload_time`.
+    pub reload_empty_time: f32,
+    /// When inside the reload the rounds land (combat doc, section 1.7).
+    pub reload_add_time: f32,
+    pub reload_start_time: f32,
+    pub reload_start_add_time: f32,
+    pub reload_end_time: f32,
+    /// A reload of one round at a time, with its own start and end states
+    /// (enfield, kar98k_sniper and springfield are the stock three).
+    pub segmented_reload: bool,
+    /// Refuses a reload that would not add a full `reload_ammo_add`
+    /// (combat doc, section 1.7).
+    pub no_partial_reload: bool,
     pub raise_time: f32,
     pub ads_trans_in: f32,
     pub ads_trans_out: f32,
@@ -209,6 +227,13 @@ fn parse_bool(map: &HashMap<String, String>, key: &str, default: bool) -> bool {
     }
 }
 
+/// Every field's own default, which is what `from_map` gives an empty file.
+impl Default for WeaponDef {
+    fn default() -> WeaponDef {
+        WeaponDef::from_map(&HashMap::new())
+    }
+}
+
 /// `name` is the CS 7 name (`kar98k_mp`), without the `weapons/mp/` prefix.
 pub fn load(fs: &Pk3Fs, name: &str) -> Result<WeaponDef> {
     let path = format!("weapons/mp/{name}");
@@ -225,8 +250,17 @@ impl WeaponDef {
         WeaponDef {
             clip_size: parse_num(map, "clipSize", 1).max(1),
             fire_time: parse_num(map, "fireTime", 0.0),
+            fire_delay: parse_num(map, "fireDelay", 0.0),
             rechamber_time: parse_num(map, "rechamberTime", 0.0),
+            rechamber_bolt_time: parse_num(map, "rechamberBoltTime", 0.0),
             reload_time: parse_num(map, "reloadTime", 0.0),
+            reload_empty_time: parse_num(map, "reloadEmptyTime", 0.0),
+            reload_add_time: parse_num(map, "reloadAddTime", 0.0),
+            reload_start_time: parse_num(map, "reloadStartTime", 0.0),
+            reload_start_add_time: parse_num(map, "reloadStartAddTime", 0.0),
+            reload_end_time: parse_num(map, "reloadEndTime", 0.0),
+            segmented_reload: parse_bool(map, "segmentedReload", false),
+            no_partial_reload: parse_bool(map, "noPartialReload", false),
             raise_time: parse_num(map, "raiseTime", 0.0),
             ads_trans_in: parse_num(map, "adsTransInTime", 0.0),
             ads_trans_out: parse_num(map, "adsTransOutTime", 0.0),
@@ -610,32 +644,9 @@ mod tests {
             ads_trans_out: 0.4,
             ads_zoom_fov: 50.0,
             ads_view_bob_mult: 0.2,
-            ads_bob_factor: 1.0,
-            semi_auto: true,
             start_ammo: 60,
             bolt_action: true,
-            world_model: None,
-            world_flash_effect: None,
-            kill_icon: None,
-            wide_kill_icon: false,
-            sounds: WeaponSounds::default(),
-            damage: 0,
-            melee_damage: 0,
-            max_ammo: 0,
-            reload_ammo_add: 0,
-            drop_time: 0.0,
-            ammo_name: String::new(),
-            clip_name: String::new(),
-            weapon_class: String::new(),
-            hip_spread_stand_min: 0.0,
-            hip_spread_ducked_min: 0.0,
-            hip_spread_prone_min: 0.0,
-            hip_spread_max: 0.0,
-            hip_spread_fire_add: 0.0,
-            hip_spread_decay_rate: 0.0,
-            ads_spread: 0.0,
-            ammo_index: 0,
-            clip_index: 0,
+            ..WeaponDef::default()
         }
     }
 
