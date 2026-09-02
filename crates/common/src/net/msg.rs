@@ -673,8 +673,9 @@ fn write_ps_arrays(w: &mut MsgWriter, ops: &[PsArrayOp]) {
     }
 }
 
-/// Widths of the 34-entry HUD field table (cod_lnxded 0x80de384). 0..6 back
-/// the per-weapon block, 6..34 the two HUD arrays.
+/// Widths of the 34-entry field table at cod_lnxded 0x80de384. 0..6 back the
+/// objective block, 6..34 the two HUD-element arrays.
+/// docs/protocol-1.1.md, "The five array blocks".
 #[rustfmt::skip]
 const HUD_FIELD_BITS: [i32; 34] = [
     0, 0, 0, 12, 10, 4,   // origin[0..2], icon, entNum, teamNum
@@ -771,7 +772,7 @@ fn read_ps_arrays(r: &mut MsgReader) -> Vec<PsArrayOp> {
     }
     // Block 3: the same, with no group gate.
     read_short_array_group(&mut a);
-    // Block 4: 16 weapons, each a 3-bit value then six delta fields.
+    // Block 4: ps.objective[16], each a 3-bit state then six delta fields.
     if a.bits(1) == 1 {
         for _ in 0..16 {
             a.bits(3);
