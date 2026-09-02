@@ -592,3 +592,82 @@ fn opposite_teams_carry_different_roster_team_values() {
         );
     }
 }
+
+/// What A is told about B is where B is *this* frame, not last frame. B
+/// walks forward for one tick; the entity A receives in that tick's snapshot
+/// carries B's post-move origin, which is also what B's own playerstate in
+/// the same tick says.
+#[test]
+fn a_client_is_told_where_the_other_is_this_frame() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+    let p = &PROTOCOL_V1;
+    let na = ca
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let nb = cb
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let spot = ca.snapshots().newest().unwrap().ps.origin(p);
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 0.0);
+    for _ in 0..20 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+    // B runs for ten ticks; on each, A's copy of B must match B's own ps
+    // from the same server frame.
+    let run = vcod_common::net::msg::UserCmd {
+        forward: 127,
+        ..vcod_common::net::msg::NULL_USERCMD
+    };
+    let mut checked = 0;
+    for _ in 0..10 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&run);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        let sa = ca.snapshots().newest().unwrap();
+        let sb = cb.snapshots().newest().unwrap();
+        if sa.server_time != sb.server_time {
+            continue;
+        }
+        let told = sa.entities[&(nb as u32)].origin(p);
+        let actual = sb.ps.origin(p);
+        for axis in 0..3 {
+            assert!(
+                (told[axis] - actual[axis]).abs() < 0.01,
+                "frame {}: A told B is at {told:?}, B is at {actual:?}",
+                sa.server_time
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked >= 5, "only {checked} comparable frames");
+}
