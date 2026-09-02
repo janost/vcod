@@ -178,42 +178,20 @@ pub struct WeaponDef {
     pub clip_index: usize,
 }
 
-fn parse_f32(map: &HashMap<String, String>, key: &str, default: f32) -> f32 {
+/// Absence is normal (a spread key on a turret file, an ammo key on a
+/// melee-only weapon: whole sections the file's kind does not carry) and
+/// stays silent; garbage warns. Same convention as `parse_bool`.
+fn parse_num<T: std::str::FromStr + std::fmt::Display + Copy>(
+    map: &HashMap<String, String>,
+    key: &str,
+    default: T,
+) -> T {
     match map.get(key) {
         Some(v) => v.trim().parse().unwrap_or_else(|_| {
             log::warn!("weapon: invalid {key} value {v:?}, using default {default}");
             default
         }),
-        None => {
-            log::warn!("weapon: missing {key}, using default {default}");
-            default
-        }
-    }
-}
-
-fn parse_u32(map: &HashMap<String, String>, key: &str, default: u32) -> u32 {
-    match map.get(key) {
-        Some(v) => v.trim().parse().unwrap_or_else(|_| {
-            log::warn!("weapon: invalid {key} value {v:?}, using default {default}");
-            default
-        }),
-        None => {
-            log::warn!("weapon: missing {key}, using default {default}");
-            default
-        }
-    }
-}
-
-fn parse_i32(map: &HashMap<String, String>, key: &str, default: i32) -> i32 {
-    match map.get(key) {
-        Some(v) => v.trim().parse().unwrap_or_else(|_| {
-            log::warn!("weapon: invalid {key} value {v:?}, using default {default}");
-            default
-        }),
-        None => {
-            log::warn!("weapon: missing {key}, using default {default}");
-            default
-        }
+        None => default,
     }
 }
 
@@ -245,18 +223,18 @@ impl WeaponDef {
     /// Times default to 0, so a missing time completes its state instantly.
     pub fn from_map(map: &HashMap<String, String>) -> WeaponDef {
         WeaponDef {
-            clip_size: parse_u32(map, "clipSize", 1).max(1),
-            fire_time: parse_f32(map, "fireTime", 0.0),
-            rechamber_time: parse_f32(map, "rechamberTime", 0.0),
-            reload_time: parse_f32(map, "reloadTime", 0.0),
-            raise_time: parse_f32(map, "raiseTime", 0.0),
-            ads_trans_in: parse_f32(map, "adsTransInTime", 0.0),
-            ads_trans_out: parse_f32(map, "adsTransOutTime", 0.0),
-            ads_zoom_fov: parse_f32(map, "adsZoomFov", DEFAULT_FOV),
-            ads_view_bob_mult: parse_f32(map, "adsViewBobMult", 1.0),
-            ads_bob_factor: parse_f32(map, "adsBobFactor", 1.0),
+            clip_size: parse_num(map, "clipSize", 1).max(1),
+            fire_time: parse_num(map, "fireTime", 0.0),
+            rechamber_time: parse_num(map, "rechamberTime", 0.0),
+            reload_time: parse_num(map, "reloadTime", 0.0),
+            raise_time: parse_num(map, "raiseTime", 0.0),
+            ads_trans_in: parse_num(map, "adsTransInTime", 0.0),
+            ads_trans_out: parse_num(map, "adsTransOutTime", 0.0),
+            ads_zoom_fov: parse_num(map, "adsZoomFov", DEFAULT_FOV),
+            ads_view_bob_mult: parse_num(map, "adsViewBobMult", 1.0),
+            ads_bob_factor: parse_num(map, "adsBobFactor", 1.0),
             semi_auto: parse_bool(map, "semiAuto", true),
-            start_ammo: parse_u32(map, "startAmmo", 0),
+            start_ammo: parse_num(map, "startAmmo", 0),
             bolt_action: parse_bool(map, "boltAction", false),
             world_model: map
                 .get("worldModel")
@@ -265,24 +243,24 @@ impl WeaponDef {
             kill_icon: opt_str(map, "killIcon"),
             wide_kill_icon: parse_bool(map, "wideKillIcon", false),
             sounds: WeaponSounds::from_map(map),
-            damage: parse_i32(map, "damage", 0),
-            melee_damage: parse_i32(map, "meleeDamage", 0),
-            max_ammo: parse_u32(map, "maxAmmo", 0),
-            reload_ammo_add: parse_u32(map, "reloadAmmoAdd", 0),
-            drop_time: parse_f32(map, "dropTime", 0.0),
+            damage: parse_num(map, "damage", 0),
+            melee_damage: parse_num(map, "meleeDamage", 0),
+            max_ammo: parse_num(map, "maxAmmo", 0),
+            reload_ammo_add: parse_num(map, "reloadAmmoAdd", 0),
+            drop_time: parse_num(map, "dropTime", 0.0),
             ammo_name: map.get("ammoName").cloned().unwrap_or_default(),
             clip_name: map.get("clipName").cloned().unwrap_or_default(),
             weapon_class: map
                 .get("weaponClass")
                 .map(|c| c.to_ascii_lowercase())
                 .unwrap_or_default(),
-            hip_spread_stand_min: parse_f32(map, "hipSpreadStandMin", 0.0),
-            hip_spread_ducked_min: parse_f32(map, "hipSpreadDuckedMin", 0.0),
-            hip_spread_prone_min: parse_f32(map, "hipSpreadProneMin", 0.0),
-            hip_spread_max: parse_f32(map, "hipSpreadMax", 0.0),
-            hip_spread_fire_add: parse_f32(map, "hipSpreadFireAdd", 0.0),
-            hip_spread_decay_rate: parse_f32(map, "hipSpreadDecayRate", 0.0),
-            ads_spread: parse_f32(map, "adsSpread", 0.0),
+            hip_spread_stand_min: parse_num(map, "hipSpreadStandMin", 0.0),
+            hip_spread_ducked_min: parse_num(map, "hipSpreadDuckedMin", 0.0),
+            hip_spread_prone_min: parse_num(map, "hipSpreadProneMin", 0.0),
+            hip_spread_max: parse_num(map, "hipSpreadMax", 0.0),
+            hip_spread_fire_add: parse_num(map, "hipSpreadFireAdd", 0.0),
+            hip_spread_decay_rate: parse_num(map, "hipSpreadDecayRate", 0.0),
+            ads_spread: parse_num(map, "adsSpread", 0.0),
             ammo_index: 0,
             clip_index: 0,
         }
