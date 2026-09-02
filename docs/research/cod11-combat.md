@@ -1336,13 +1336,14 @@ and index 10 comes back at the respawn. UNVERIFIED: which weapon index 10 is.
 VERIFIED: every death puts a corpse in the body queue in the same snapshot as
 `EV_DEATH`, and the queue is used in order from entity **64**. The dm run's
 three deaths land in 64, 65 and 66; the tdm run's five deaths show four
-distinct slots, 64 through 67, with one death leaving no edge in the trace at
-all. INFERRED: the missing edge is the instrument rather than the server, since
-the same run's `EventTracker` re-fired an obituary for that death (8.3) and the
-corpse's slot was still marked live from a PVS re-entry a moment before.
+distinct slots, 64 through 67, in that order. UNVERIFIED: why the fifth death
+leaves no corpse edge at all. It is the 39527 ms one, whose whole playerstate
+frame reads blank (8.3), so the capture shows neither what killed it nor what
+became of its body.
 
-VERIFIED: 64..71 is the range a client has to read corpses out of, which is
-what 5.2 could only infer from the `& 7` on the index.
+VERIFIED: the first slot is 64, measured. INFERRED: the range is the eight
+entities 64..71, which is 5.2's `& 7` on the index rather than anything this
+capture reached; only 64 through 67 were ever occupied here.
 
 VERIFIED: corpses do not expire on a timer here. The dm run's first corpse is
 still in the body queue at the end of the run, 190 s after it died. VERIFIED:
@@ -1355,21 +1356,27 @@ clone, since neither capture shows one being freed.
 
 VERIFIED: each death broadcasts one `EV_OBITUARY` (201) in the same snapshot.
 A `kill` gives `otherEntityNum` 0 (the victim), `attackerEntityNum` 0 and
-`eventParm` **150**, `0x96`, `MOD_SUICIDE`. VERIFIED: the tdm capture's first
-bullet death gives the victim 0, the attacker 1 and `eventParm` **136**,
-`0x88`, `MOD_HEAD_SHOT`. Both are rows of `cod11-hud-protocol.md` section 2's
+`eventParm` **150**, `0x96`, `MOD_SUICIDE`. VERIFIED: the tdm capture's one
+measured bullet death gives the victim 0, the attacker 1 and `eventParm`
+**136**, `0x88`, `MOD_HEAD_SHOT`. Both are rows of `cod11-hud-protocol.md` section 2's
 table.
 
-VERIFIED: the tdm fixture carries two `136` obituaries, at 28891 ms and
-37535 ms, both from event entity 182, while the two bullet deaths are at
-28891 ms and 39527 ms. INFERRED: the second obituary is that temp entity
-re-firing rather than a second kill, since `EventTracker` fires an event entity
-again when its slot leaves the snapshot and comes back with the same contents,
-and the corpse edges show entity 65 doing exactly that at 37535 ms. INFERRED:
-the obituary for the 39527 ms death was then swallowed, since the tracker had
-just recorded that entity and key as fired. So the capture holds two bullet
-deaths and one measured obituary, and its `!observed obituaries=5` is one
-duplicate plus one miss.
+VERIFIED: the tdm run holds five deaths. Three are at the `kill` times with
+`MOD_SUICIDE`, one is the measured bullet death at 28891 ms with
+`MOD_HEAD_SHOT`, and one is at 39527 ms. UNVERIFIED: what killed that one. No
+`kill` went out between 10004 ms and 55012 ms, and its frame reads
+`damageEvent` 0, `damageCount` 0, `damageYaw` 0, `damagePitch` 0, `stats[1]` 0,
+zero velocity, a cleared event ring, `legsAnim` and `torsoAnim` 0 and both ammo
+arrays empty, so it carries neither the damage signature 8.4 measures nor a
+`kill`'s.
+
+VERIFIED: the fixture carries two `136` obituaries, at 28891 ms and 37535 ms,
+both from event entity 182, and no death sits beside the second. INFERRED: it
+is that temp entity re-firing rather than a second kill, since `EventTracker`
+fires an event entity again when its slot leaves the snapshot and comes back
+with the same contents. VERIFIED: the 39527 ms death has no obituary of its own
+in the trace, so `!observed obituaries=5` is four deaths with one each, one
+duplicate, and one death with none.
 
 VERIFIED: the dm shooter, 2000 to 4500 units away with no line of sight,
 receives every obituary. That is the `SVF_BROADCAST` `cod11-hud-protocol.md`
@@ -1394,8 +1401,9 @@ a respawn flips it the same way.
 ### 8.4 What a bullet does
 
 From the tdm capture: `m1carbine_mp` (`damage` 45 in `weapons/mp/m1carbine_mp`)
-fired from 586 units at a standing teammate's eye, twice, killing it the second
-time. VERIFIED: the obituary's `eventParm` is 136, `0x88`, `MOD_HEAD_SHOT`.
+aimed at a standing teammate's eye from 586 units. VERIFIED: the shooter spent
+14 rounds and two of them landed, the second killing, and the obituary's
+`eventParm` is 136, `0x88`, `MOD_HEAD_SHOT`.
 
 VERIFIED, **the hit frame** against the settled frame before it:
 
@@ -1445,8 +1453,9 @@ VERIFIED: a death by a bullet carries the same `pm_type` **6** as a death by
 `kill`, with `legsAnim` 17, `torsoAnim` 512 and events `[187, 189, 155]` in one
 frame.
 
-VERIFIED: `stats[1]` reads **270** on the bullet death, where every death by
-`kill` reads 0, and the shooter sat at bearing 270.98 degrees from the target.
+VERIFIED: `stats[1]` reads **270** on the bullet death, where every other death
+in the two captures reads 0, and the shooter sat at bearing 270.98 degrees from
+the target.
 INFERRED: it is 5.1 item 11's `vectoyaw` truncated toward zero, and it is the
 opposite of `damageYaw`'s direction, which the two numbers agree on: 64 is 90
 degrees and 270 is 90 + 180.
