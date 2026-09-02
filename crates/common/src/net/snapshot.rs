@@ -1376,10 +1376,13 @@ mod tests {
     /// Those arms are covered by round trip against scripted moving entities,
     /// not here.
     ///
-    /// The playerState array blocks are pinned only as far as their bit
-    /// widths reach. `PlayerState::arrays` is a tape of primitives, so the
-    /// replay reproduces the bytes without deriving a single gate bit, mask
-    /// or count; a wrong width would misalign everything after it, a wrong
+    /// The playerState array blocks are pinned unevenly. Blocks 1 to 3 are
+    /// re-derived: the writer computes block 1's gate and 6-bit mask, block
+    /// 2's group gate and block 3's four sub-gates from what differs against
+    /// the base, so this gate checks that predicate against the masks retail
+    /// actually sent. Blocks 4 and 5 are still replayed as a tape of
+    /// primitives, so there they are pinned only as far as their bit widths
+    /// reach: a wrong width would misalign everything after it, a wrong
     /// reading of a mask would not.
     #[test]
     fn writer_reproduces_the_captured_snapshots_byte_for_byte() {
