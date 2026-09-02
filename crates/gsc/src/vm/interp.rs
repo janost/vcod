@@ -346,8 +346,17 @@ impl Vm {
         notifies: &mut Vec<(Target, Atom, Vec<Value>)>,
         errors: &mut Vec<ScriptError>,
     ) -> Result<Step, ScriptError> {
+        // What a builtin queued through `Cx::spawn`, drained by
+        // `Op::CallBuiltin` the moment the builtin returns.
+        let mut pending_spawns = Vec::new();
+        // A field hook's own queue, which stays empty: `Op::CallBuiltin` is
+        // the only drain point, so a spawn from `get_field`/`set_field`
+        // would have no defined moment to run at. Asserted below rather
+        // than routed anywhere.
+        let mut field_spawns = Vec::new();
         let mut remaining = budget;
         loop {
+            debug_assert!(field_spawns.is_empty(), "a field hook cannot spawn");
             if remaining == 0 {
                 return Ok(Step::Running);
             }
@@ -431,6 +440,7 @@ impl Vm {
                                 level: self.level,
                                 game: self.game,
                                 notifies,
+                                spawns: &mut field_spawns,
                             };
                             host.get_field(&mut cx, id, name)
                         }
@@ -461,6 +471,7 @@ impl Vm {
                                 level: self.level,
                                 game: self.game,
                                 notifies,
+                                spawns: &mut field_spawns,
                             };
                             host.set_field(&mut cx, id, name, v).map_err(err)?
                         }
@@ -530,6 +541,7 @@ impl Vm {
                                 level: self.level,
                                 game: self.game,
                                 notifies,
+                                spawns: &mut field_spawns,
                             };
                             match host.get_field(&mut cx, eid, name) {
                                 Value::Array(id) => id,
@@ -541,6 +553,7 @@ impl Vm {
                                         level: self.level,
                                         game: self.game,
                                         notifies,
+                                        spawns: &mut field_spawns,
                                     };
                                     host.set_field(&mut cx, eid, name, Value::Array(id))
                                         .map_err(err)?;
@@ -660,8 +673,29 @@ impl Vm {
                         level: self.level,
                         game: self.game,
                         notifies,
+                        spawns: &mut pending_spawns,
                     };
                     let v = host.builtin(&mut cx, name, recv, &args).map_err(err)?;
+                    // Retail's `Scr_ExecEntThread` from inside a builtin:
+                    // each queued thread runs to its first suspend here,
+                    // before the calling thread's next instruction (see
+                    // `Cx::spawn`).
+                    for (target, recv, args) in std::mem::take(&mut pending_spawns) {
+                        match self.functions.get(&target).cloned() {
+                            Some(f) => {
+                                self.spawn(host, target, f, recv, args, errors);
+                            }
+                            None => {
+                                let e = err(ErrorKind::Custom(format!(
+                                    "spawn of unknown function {}::{}",
+                                    self.interner.resolve(target.file),
+                                    self.interner.resolve(target.name)
+                                )));
+                                self.record_abort(&e);
+                                errors.push(e);
+                            }
+                        }
+                    }
                     push!(v);
                 }
                 Op::CallPtr {
