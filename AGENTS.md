@@ -141,8 +141,16 @@ engineering setup works.
   not wander. What the two committed captures measured is in
   `docs/research/player-model-anim-system.md`, "The weapon channel: what writes
   `torsoAnim`"; run it on two maps, because the map picks the weapon and the
-  bolt-action mosin on mp_pavlov is what exposed the rechamber and
-  empty-reload states the carbine never reaches.
+  bolt-action mosin on mp_pavlov is what exposed the rechamber the carbine
+  never reaches.
+  Every capture cmd carries the weapon the playerstate says the client holds.
+  A cmd with `weapon` 0 is not neutral: retail reads a `cmd.weapon` differing
+  from `ps.weapon` as a request to holster, and the byte travels only in the
+  full usercmd branch, which a `wbuttons`, `upmove` or `weapon` change forces.
+  Captures taken before 2026-09-02 therefore carry a putaway at the reload
+  key, at a stance change and at a jump that no input asked for, and their
+  reload key never reloaded, which two research docs wrote up as retail
+  behaviour. A new probe mode must set the byte.
   `--probe-target` and `--save-hit` are the two halves of the hit capture, one
   probe each, writing
   `crates/server/tests/fixtures/playerstate/<map>-<gametype>-hit-target.txt`

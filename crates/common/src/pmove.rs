@@ -297,8 +297,9 @@ pub struct PlayerState {
     /// without having jumped, and the animation machine has to tell those
     /// apart (docs/research/player-model-anim-system.md).
     pub jumped: bool,
-    /// Whether `update_stance` moved the stance this frame. Both combat
-    /// captures read a putaway at a stance change
+    /// Whether `update_stance` moved the stance this frame. Nothing reads it
+    /// today: the putaway both combat captures used to show here was the
+    /// probe's `cmd.weapon` 0 and not the stance
     /// (docs/research/player-model-anim-system.md, "The weapon channel").
     pub stance_changed: bool,
     /// `ps.weapon`, a 1-based index into configstring 7; 0 is no weapon.

@@ -38,53 +38,32 @@ const FRAME_MS: i64 = 50;
 const CMD_MS: i64 = 25;
 
 /// How long a `wait_ready` step holds its input before it starts looking for
-/// a ready weapon. The capture's own floor: every step of both fixtures that
-/// had nothing to wait for still reports `waited_ready_ms` around 510, and
-/// the steps that changed stance report that plus the weapon's `dropTime`.
-/// Without it the wait ends on the snapshot that arrived before the step's
-/// first cmd was even simulated, and the putaway a stance change starts lands
-/// inside the traced window instead of ahead of it.
+/// a ready weapon. The capture's own floor: every `wait_ready` step of both
+/// fixtures reports `waited_ready_ms` around 505, even the ones that had
+/// nothing to wait for. Without it the wait ends on the snapshot that arrived
+/// before the step's first cmd was even simulated, and a step opens with the
+/// weapon still busy from the one before it.
 const WAIT_FLOOR_MS: i64 = 500;
 
 /// Steps the gate does not compare, with the reason. `walks` is the capture's
 /// own exclusion -- the stall response steers it, so where it ends up is not
 /// reproducible.
-const SKIPPED: &[(&str, &str)] = &[
-    (
-        "prone_fire",
-        "retail refused the prone and forced the player upright, so the step \
-         recorded a standing shot under a prone label \
-         (player-model-anim-system.md, \"Prone fire is unmeasured\")",
-    ),
-    (
-        "reload",
-        "the retail capture's reload key did not reload: it read weaponstate 2 \
-         with event 156 and no reload state at all, on both maps and with \
-         rounds in the clip. Every write of weaponstate 2 in the module sits \
-         in the weapon-change putaway, whose only input is the usercmd weapon \
-         byte the probe never sets, so what the key reached is unverified \
-         (cod11-combat.md 1.7 \"What the reload key does to a partial clip\" \
-         and 1.8, player-model-anim-system.md \"The reload key did not \
-         reload\"). Our machine runs the reload the doc's reading of the \
-         instructions describes: retail's run reads weaponstate 2 for 13 \
-         samples with weapAnim indices {0}, ours weaponstate 5 for the \
-         carbine's 2.65 s reloadTime with indices {0, 11}",
-    ),
-];
+const SKIPPED: &[(&str, &str)] = &[(
+    "prone_fire",
+    "the prone is taken on one map and refused on the other -- pavlov's \
+     capture reads the standing idle and `viewHeightTarget` 60 throughout it \
+     -- and the replay spawns somewhere else again, so what the step recorded \
+     is not what the replay does (player-model-anim-system.md, \"Prone fire \
+     is unmeasured\")",
+)];
 
 /// Steps whose `weapAnim` indices are not compared, by map, with the reason.
-/// The states and the shot count still are. The guard below fails on an entry
-/// that starts matching, so the list cannot rot into a lie.
-const ANIM_GAPS: &[(&str, &str, &str)] = &[(
-    "mp_pavlov",
-    "idle_after",
-    "the step writes one index and inherits the other, and what it inherits \
-     comes through the skipped `reload` step: retail's reload key did not \
-     reload, so its mosin ran dry during `prone_fire` and the empty-clip \
-     reload left the idle index in the channel, where ours reloaded on the \
-     key and comes in still holding the rechamber index. Both then write the \
-     idle the putaway's pickup ends on",
-)];
+/// The states and the shot count still are. Empty is the goal and it is
+/// empty: pavlov's `idle_after` was the entry, and it earned itself back when
+/// the captures were retaken with the usercmd carrying the held weapon. The
+/// guard below fails on an entry that starts matching, so the list cannot rot
+/// into a lie.
+const ANIM_GAPS: &[(&str, &str, &str)] = &[];
 
 struct Step {
     label: String,

@@ -429,12 +429,13 @@ working the bolt.
 **What the reload key does to a partial clip.** VERIFIED: both fixture weapons
 ship `noPartialReload` 0. INFERRED: with that field clear the test passes on
 any non-full clip with reserve left, so the key starts an ordinary reload with
-event `EV_RELOAD` (151). UNVERIFIED: why the captured reload step in
-`player-model-anim-system.md` produced `weaponstate` 2 and event 156 instead.
-VERIFIED: no instruction in the reload path writes 2 into `weaponstate`, and
-1.8 lists the only two that do. INFERRED: so the cause is outside this path,
-most likely the probe's own `cmd.weapon` differing from `ps->weapon` for that
-step, which is the one input the weapon-change check acts on.
+event `EV_RELOAD` (151). VERIFIED: that is what the retaken combat captures
+read, `weaponstate` 5 with event 151 for `reloadTime` on both maps
+(`player-model-anim-system.md`, "The reload key reloads a partly-full clip").
+VERIFIED: the earlier pair read `weaponstate` 2 and event 156 at that step
+instead, and the one thing that changed between the runs is the probe's
+`cmd.weapon`, 0 before and the held weapon after. That is the cause this
+section's own reading named as likeliest, now measured.
 
 ### 1.8 The weapon-switch path from the usercmd `weapon` byte
 
@@ -479,9 +480,10 @@ conditions.
   cleared to 0 and `weapAnim` set to `WEAP_IDLE` with the toggle flipped,
   unconditionally, on the frame after.
 
-VERIFIED: the putaway writes no `weapAnim` at all, so the `WEAP_DROP` above is
-the event's parm and not a store; `player-model-anim-system.md`, "What
-`weapAnim` is not written by", carries the traces.
+VERIFIED, off the superseded combat captures, which are the only ones that
+ever held a putaway: it writes no `weapAnim` at all, so the `WEAP_DROP` above
+is the event's parm and not a store (`player-model-anim-system.md`, "What
+`weapAnim` is not written by").
 
 INFERRED: a reload or a rechamber can therefore be interrupted by a weapon
 switch and a shot or a melee cannot. INFERRED: the raise does not wait for
@@ -501,11 +503,16 @@ inside this module. No jump path, stance-change path or prone path writes
 `weaponstate` 2, and the only inputs the two call sites act on are
 `pm->cmd.weapon` against `ps->weapon`, `ps->weapons` and `pm_flags & 0x10`.
 
-UNVERIFIED: what then produced the `weaponstate` 2 and event 156 that
-`player-model-anim-system.md` records at a jump and at a stance change. On the
-evidence above the cause is outside `PM_Weapon`, and it is carried as open in
-section 8; a reader implementing this must not assume a jump or a stance change
-raises `EV_PUTAWAY_WEAPON` on its own.
+VERIFIED: what produced the `weaponstate` 2 and event 156 that
+`player-model-anim-system.md` used to record at a jump and at a stance change
+was the capture itself. The probe sent `cmd.weapon` 0 in every usercmd, and
+the byte reaches the server only in the full usercmd branch, which a
+`wbuttons`, `upmove` or `weapon` change forces; retaken with the probe sending
+the weapon it holds, neither a jump nor a stance change raises anything.
+INFERRED: so the first clause of the list above is what fired, a change begun
+to weapon 0 because the cmd asked for it. Neither a jump nor a stance change
+puts a weapon away on its own, and `crates/common/src/pmove/weapon.rs` no
+longer pretends they do.
 
 ### 1.9 Rechamber, and the bolt-action bitfield
 
@@ -1492,15 +1499,15 @@ VERIFIED: the four damage fields read 0 again after the respawn.
 - UNVERIFIED: the contents of the shipped `info/mp_lochit_dmgtable`, and hence
   the real per-location multipliers. Only the all-ones default and the zero
   for `gun` are read out of the binary here.
-- UNVERIFIED: why the captured reload step produced a putaway rather than a
-  reload (1.7).
-- UNVERIFIED: what puts a jumping or stance-changing player into `weaponstate`
-  2 with event 156, which `player-model-anim-system.md` measured on retail.
-  VERIFIED: only two instructions in `game.mp.i386.so` write `weaponstate` 2,
-  both inside the putaway function `0x37a9c`, and the module holds exactly two
-  calls to that function, both inside the weapon-change check (1.8).
-  INFERRED: those two call sites act only on `cmd.weapon`, `ps->weapons` and
-  `pm_flags & 0x10`, so the cause is outside `PM_Weapon` and 1.8's list is the
-  complete set of putaway sources in this module.
+- Closed, both of them, and by the same measurement. VERIFIED: the captures
+  that read a putaway at the reload key, at a stance change and at a jump were
+  taken by a probe that sent `cmd.weapon` 0 in every usercmd; retaken with the
+  probe sending the weapon it holds, none of the three raises anything and the
+  reload key reloads with event 151 (`player-model-anim-system.md`, "The
+  weapon channel"). INFERRED: the weapon-change check of 1.8 read the zero as
+  a request to holster, which is exactly the source 1.8 lists and no other,
+  and the byte only reaches the server in the full usercmd branch, which a
+  `wbuttons`, `upmove` or `weapon` change forces -- the three inputs those
+  three steps used.
 - UNVERIFIED: the exact meaning of `client+0x220C` and `client+0x2210`, the
   two floats `FireWeapon` substitutes for the view pitch and yaw.

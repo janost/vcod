@@ -258,10 +258,9 @@ fn advance_timers(
     delay_expired
 }
 
-/// The weapon-change check of section 1.8, plus the putaway both movement
-/// captures read at a jump and at a stance change. Section 1.8 finds no write
-/// of `weaponstate` 2 inside `PM_Weapon` for either, and carries the source as
-/// open (combat doc, section 9).
+/// The weapon-change check of section 1.8. A jump and a stance change do
+/// nothing here: the captures that read `weaponstate` 2 at both were taken
+/// with `cmd.weapon` 0, which this check reads as a request to holster.
 fn begin_change(
     ps: &mut PlayerState,
     input: &PmInput,
@@ -293,9 +292,6 @@ fn begin_change(
     let wanted = requested_weapon(ps, input);
     if wanted != ps.weapon && holds(ps, wanted) {
         return putaway(ps, def, wanted, events);
-    }
-    if ps.jumped || ps.stance_changed {
-        return putaway(ps, def, ps.weapon, events);
     }
     false
 }
@@ -839,32 +835,21 @@ mod tests {
         assert_eq!(run(&mut ps, &w, true, 1), vec![EV_FIRE_WEAPON]);
     }
 
-    /// A jump puts the weapon away for `dropTime` (both movement captures
-    /// read `weaponstate` 2 with event 156 at `jump_takeoff`).
+    /// Neither does anything to the weapon. The captures that read
+    /// `weaponstate` 2 at a jump and at a stance change were taken by a probe
+    /// that sent `cmd.weapon` 0, which retail's weapon-change check reads as
+    /// a request to holster; retaken with the byte set, the same steps read
+    /// `weaponstate` 0 throughout (player-model-anim-system.md, "The weapon
+    /// channel").
     #[test]
-    fn a_jump_puts_the_weapon_away() {
-        let (mut ps, w) = armed(&carbine());
-        ps.jumped = true;
-        let e = run(&mut ps, &w, false, 1);
-        assert_eq!(e, vec![EV_PUTAWAY_WEAPON]);
-        assert_eq!(ps.weaponstate, WEAPON_DROPPING);
-        ps.jumped = false;
-        run(&mut ps, &w, false, 13);
-        assert_eq!(ps.weaponstate, WEAPON_DROPPING, "0.67 s is 14 frames");
-        run(&mut ps, &w, false, 1);
-        // Same weapon back: retail's pickup half raises nothing when the new
-        // weapon is the old one.
-        assert_eq!(ps.weaponstate, WEAPON_READY);
-        assert_eq!(ps.weapon, 1);
-    }
-
-    /// A stance change puts it away the same way.
-    #[test]
-    fn a_stance_change_puts_the_weapon_away() {
-        let (mut ps, w) = armed(&carbine());
-        ps.stance_changed = true;
-        assert_eq!(run(&mut ps, &w, false, 1), vec![EV_PUTAWAY_WEAPON]);
-        assert_eq!(ps.weaponstate, WEAPON_DROPPING);
+    fn neither_a_jump_nor_a_stance_change_puts_the_weapon_away() {
+        for (jumped, stance) in [(true, false), (false, true)] {
+            let (mut ps, w) = armed(&carbine());
+            ps.jumped = jumped;
+            ps.stance_changed = stance;
+            assert_eq!(run(&mut ps, &w, false, 1), vec![]);
+            assert_eq!(ps.weaponstate, WEAPON_READY);
+        }
     }
 
     /// Every `weapAnim` write flips the toggle, `WEAP_IDLE` included, so each

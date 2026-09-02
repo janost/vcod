@@ -346,21 +346,21 @@ when the index does, never the bit's value.
 
 ### Open questions
 
-- VERIFIED: retail sends `torsoAnim` 720 (index 208, `pt_stand_pullout_pose`) at
-  `jump_takeoff` on both maps, and `weaponstate` 2 in the same sample.
-  INFERRED: no animscript clause produces it and none needs to -- it is the
-  weapon's putaway pose, closed by the combat captures ("The weapon channel:
-  what writes `torsoAnim`").
-- VERIFIED: `pm_flags` bit 0x8 reads set at `jump_takeoff` on mp_pavlov and
-  clear at the same pose on mp_carentan, while both samples are the first
-  airborne frame and both carry a `velocity[2]` within ten units of the standing
-  jump impulse (237 and 222 against `sqrt(2 * 34 * 800)` = 233 u/s). INFERRED:
-  the bit is not a function of the pose, so something neither capture records
-  decides it. INFERRED: half of it resolves, since retail sets the bit inside
-  `PM_Jump` (`game.mp.i386.so 0x2ec34`) and runs that for a ground jump too,
-  while vcod sets `jump_latched` only in `ladder_push_off`
-  (`crates/common/src/pmove.rs`). Why retail's carentan sample reads it clear
-  does not resolve.
+- Closed. The `torsoAnim` 720 and `weaponstate` 2 both captures used to read at
+  `jump_takeoff` were a holstered weapon: they came from a `cmd.weapon` of 0
+  and the retaken captures read 0 and 0 ("The `jump_takeoff` torso index is
+  gone").
+- Closed. `pm_flags` bit 0x8 read set at `jump_takeoff` on mp_pavlov and clear
+  on mp_carentan in the superseded captures; VERIFIED: the retaken pair reads
+  it clear on both, which is what vcod does, so nothing is left to explain and
+  `playerstate_motion_ab` no longer excepts it.
+- VERIFIED, in a run not committed: the ads pose latches. A capture that
+  pressed the ads bit in the middle of the script kept `pm_flags` 0x20 and 0x80
+  and `legsAnim` index 121 `pb_stand_ads` for every pose after it, through a
+  crouch run, a stand and two turns, with the bit long released; the same run
+  read them clear at the jump that followed. UNVERIFIED: what clears them, and
+  whether the jump is what did. The probe's motion script holds `ads_stand`
+  last because of this, so the committed captures cannot show it.
 
 ## The weapon channel: what writes `torsoAnim`
 
@@ -369,7 +369,16 @@ and `mp_pavlov-dm-combat.txt`, nine steps each, taken with `--net-probe
 --save-combat` against the retail 1.1d dedicated server, one client, `dm`. Each
 step holds one input and taps the attack bit; the fixture carries one `!trace`
 line per snapshot rather than a settled sample, because the event ring holds
-four slots and a shot is shorter than a step. VERIFIED: snapshots arrive 50 ms
+four slots and a shot is shorter than a step.
+
+The captures committed before 2026-09-02 were taken with `cmd.weapon` 0 in
+every usercmd, which retail's weapon-change check reads as a request to
+holster (`cod11-combat.md` section 1.8): they carry a `weaponstate` 2 and an
+`EV_PUTAWAY_WEAPON` at the reload key, at both stance changes and at the jump
+that the input never asked for, and their reload key never reloaded. Both
+were retaken with the probe sending the weapon it holds, and every one of
+those putaways is gone. Where a claim below rests on the superseded pair it
+says so; they are in git at commit `0243e35`. VERIFIED: snapshots arrive 50 ms
 apart, so a run of N consecutive samples in one state bounds that state's
 length to `((N-1)*50, (N+1)*50)` ms and no measurement below is tighter than
 that.
@@ -435,10 +444,14 @@ the channel clears to no anim and flips the bit doing it.
 | `weaponstate` | seen on | event at the bump | torso index | run | weapon-file match |
 |---|---|---|---|---|---|
 | 0 | both | -- | -- | -- | ready |
-| 2 | both | 156 `EV_PUTAWAY_WEAPON` | 208 standing, 209 crouched | 600-750 ms, 350-500 ms | `dropTime` 0.67, 0.4 |
-| 3 | both | 159 `EV_FIRE_WEAPON` | 253 standing, 249 crouched | 100-200 ms, 300-400 ms | `fireTime` 0.135, 0.33 |
-| 4 | pavlov | 162 `EV_RECHAMBER_WEAPON` | unchanged | 950-1050 ms | `rechamberTime` 1.0 |
-| 5 | pavlov | 152 `EV_RELOAD_FROM_EMPTY` | 231 `pt_reload_stand_rifle` | 2350-2450 ms | `reloadTime` 2.4 |
+| 3 | both | 159 `EV_FIRE_WEAPON` | 253 standing, 249 crouched, 224 prone | 100-200 ms, 300-400 ms | `fireTime` 0.135, 0.33 |
+| 4 | pavlov | 162 `EV_RECHAMBER_WEAPON` | unchanged | 950-1100 ms | `rechamberTime` 1.0 |
+| 5 | both | 151 `EV_RELOAD` | 229 `pt_reload_stand_auto`, 231 `pt_reload_stand_rifle` | 2600-2700 ms, 2350-2450 ms | `reloadTime` 2.65, 2.4 |
+
+VERIFIED: `weaponstate` 2 appears nowhere in either capture, and neither does
+event 156. It is in the superseded pair at the reload key, at both stance
+changes and at the jump, and every one of those went away when the probe
+started sending the weapon it holds.
 
 Paired columns are carentan then pavlov. VERIFIED: the event ids, the torso
 indices and the run lengths, all read off the traces. INFERRED: the right-hand
@@ -453,35 +466,42 @@ the carbine's `rechamberTime` is 0.1 s, under two snapshot intervals, and its
 VERIFIED: pavlov's last round of a clip raised 161 `EV_FIRE_WEAPON_LASTSHOT`
 rather than 159, and wrote the same torso index 253.
 
-VERIFIED: the pullout pose is stance-matched the way the shoot anim is, 208
-`pt_stand_pullout_pose` standing and 209 `pt_crouch_pullout_pose` crouched, and
-both maps' `stand_between` step reads 209 while `legsAnim` already reads the
-standing idle. INFERRED: the index is latched when the state opens, since that
-step's state opened while the player was still crouched. VERIFIED: the torso
-index clears before the state does -- carentan's reload step holds 208 for
-about 500 ms of a `weaponstate` 2 that runs 600-700 ms -- which is why the
-movement capture's settled `land` pose reads `weaponstate` 2 with `torsoAnim`
-0.
+The paragraph that follows rests on the superseded pair, whose putaways came
+from a `cmd.weapon` of 0 rather than from the input. What put the weapon away
+there is not what these steps do, but the putaway it measured is a real one and
+nothing since has measured another.
 
-**The reload key did not reload.** VERIFIED: the step that taps `wbuttons` 0x08
-reads `weaponstate` 2 with event 156 and the pullout pose on both maps, with
-rounds still in the clip, and no state in that step runs anywhere near
-`reloadTime`. VERIFIED: the only run that does is pavlov's `weaponstate` 5,
-which came after 161 and 152 once the mosin's five rounds were gone. INFERRED:
-231 `pt_reload_stand_rifle` is the reload proper, and 208/209 are the weapon
-going down, which a stance change and a jump also do. UNVERIFIED: what the
-reload key does to a partly-full clip, and whether a phase of that reload ran
-under `weaponstate` 0 where the capture would not see it.
+VERIFIED, superseded pair: the pullout pose is stance-matched the way the shoot
+anim is, 208 `pt_stand_pullout_pose` standing and 209 `pt_crouch_pullout_pose`
+crouched, and both maps' `stand_between` step reads 209 while `legsAnim`
+already reads the standing idle. INFERRED: the index is latched when the state
+opens, since that step's state opened while the player was still crouched.
+VERIFIED, same pair: the torso index clears before the state does -- carentan's
+reload step holds 208 for about 500 ms of a `weaponstate` 2 that runs 600-700
+ms.
+
+**The reload key reloads a partly-full clip.** VERIFIED: the step that taps
+`wbuttons` 0x08 reads `weaponstate` 5 with event 151 `EV_RELOAD` on both maps,
+for 53 samples on carentan and 48 on pavlov, which are `reloadTime` 2.65 and
+2.4. VERIFIED: the torso index is the weapon's, 229 `pt_reload_stand_auto` for
+the carbine and 231 `pt_reload_stand_rifle` for the mosin, and `weapAnim`
+takes index 11 `WEAP_RELOAD`. That settles what `cod11-combat.md` 1.7 read off
+the instructions and could not see happen.
+
+VERIFIED: the superseded pair read `weaponstate` 2 with event 156 here instead,
+with rounds still in the clip and no state anywhere near `reloadTime`. VERIFIED:
+the only difference between the two runs is the usercmd's `weapon` byte.
 
 ### What `weapAnim` is not written by
 
-VERIFIED: no `weaponstate` 2 in either capture writes `weapAnim`. Carentan's
-reload step holds index 0 for all 13 samples of the state and takes 512 --
-index 0 with the toggle flipped -- on the sample the state ends; pavlov's
-`stand_between` holds the rechamber index 4 for all 8 and lands on 512 the
-same way. INFERRED: the putaway stores no anim and the `WEAP_DROP` of section
-1.8 in `cod11-combat.md` is the event's parm, while the write at the end is
-the pickup's `WEAP_IDLE`.
+VERIFIED, superseded pair: no `weaponstate` 2 in either of those captures
+writes `weapAnim`. Carentan's reload step holds index 0 for all 13 samples of
+the state and takes 512 -- index 0 with the toggle flipped -- on the sample the
+state ends; pavlov's `stand_between` holds the rechamber index 4 for all 8 and
+lands on 512 the same way. INFERRED: the putaway stores no anim and the
+`WEAP_DROP` of section 1.8 in `cod11-combat.md` is the event's parm, while the
+write at the end is the pickup's `WEAP_IDLE`. Nothing in the current pair puts
+a weapon away, so this is the only measurement of it there is.
 
 VERIFIED: a rechamber ending writes no `weapAnim` either. Pavlov's
 `single_shot` reads 516 across the sample where `weaponstate` goes 4 to 0, and
@@ -493,32 +513,32 @@ INFERRED: the shot's state ends and the rechamber opens on one server frame,
 so nothing in between can be observed and the state 3 exit cannot be waiting
 on a later frame.
 
-### Where the `jump_takeoff` torso index came from
+### The `jump_takeoff` torso index is gone
 
-VERIFIED: both movement captures read `weaponstate` 2 at the `jump_takeoff`
-pose, alongside the `torsoAnim` 720 this document carried as unexplained.
-INFERRED: that is the same putaway the combat captures measure, so the index is
-the weapon's and no animscript clause was ever missing.
+VERIFIED: the movement captures committed before 2026-09-02 read `weaponstate`
+2 and `torsoAnim` 720 at the `jump_takeoff` pose, and the retaken pair reads 0
+and 0. VERIFIED: the only difference is the usercmd's `weapon` byte, which the
+jump's own `upmove` change is what puts on the wire (the compact usercmd
+branch carries no weapon byte at all, so a probe sending 0 only reaches the
+weapon-change check when `upmove`, `wbuttons` or the byte itself moves;
+`docs/protocol-1.1.md`, "Usercmd delta"). So the 720 was a holstered weapon and
+not an animscript clause, and there is nothing left here to explain.
 
-### Prone fire is unmeasured
+### Prone fire, measured on one map of two
 
-VERIFIED: the `prone_fire` step reads `legsAnim` 634 (index 122, the standing
-idle) throughout and `viewHeightTarget` 60 at its tail on both maps, and the
-two events raised between `stand_between` and its first shot are 140
-`EV_STANCE_FORCE_STAND` and 156 `EV_PUTAWAY_WEAPON`, in that order on both.
-INFERRED: the server refused the prone and forced the player back upright, so
-the step recorded a standing shot under a prone label and the 253 it carries is
-not prone evidence.
+VERIFIED: carentan's `prone_fire` step reads `legsAnim` 557 (index 45,
+`pb_prone_aim`) and `torsoAnim` 224 `pt_prone_shoot` across its three shots.
+That is the prone shoot pose this document previously carried as unreachable.
 
-VERIFIED: the crouch was taken at the same spot one step earlier (`legsAnim`
-111, `viewHeightTarget` 40), and both movement captures took prone at their
-spawn, which is not where the combat capture stands -- its `advance` step walks
-first, steered by the stall response. UNVERIFIED: why retail forced the stance.
-Retaking it means dropping the walk so the prone is attempted at the spawn, and
-having the step check that `legsAnim & 511` reached 45 before it taps, retrying
-the way it already retries on a busy weapon. VERIFIED: neither 224 nor 230
-appears in either capture. INFERRED: 224 `pt_prone_shoot` is what a prone shot
-should read and 230 `pt_reload_prone_rifle` a prone reload.
+VERIFIED: pavlov's same step reads `legsAnim` 634 (index 122, the standing
+idle) and the standing shoot pose 253 throughout. INFERRED: the prone was
+refused there and the step recorded a standing shot under a prone label, so its
+253 is not prone evidence. VERIFIED: the crouch was taken at that same spot one
+step earlier (`legsAnim` 111). UNVERIFIED: why the prone is refused on one map
+and taken on the other; the `advance` step walks first, steered by the stall
+response, so neither run stands where its spawn was. VERIFIED: 230
+`pt_reload_prone_rifle` appears in neither capture, since neither reload ran
+prone.
 
 ### Neither counter in `!observed` counts shots
 

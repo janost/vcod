@@ -308,6 +308,16 @@ pub fn probe(
             cmd = pvs_probe.cmd();
             hold_view_yaw(&mut cmd, &client, &mut pvs_probe.spawn_delta_yaw);
         }
+        // A retail client sends the weapon it is holding on every cmd. The
+        // probe used to send 0, and retail's weapon-change check reads a
+        // `cmd.weapon` that differs from `ps.weapon` as a request to holster
+        // (docs/research/cod11-combat.md, section 1.8), so a capture taken
+        // with the zero can carry putaways the input never asked for. The
+        // byte only travels in the full usercmd branch, which a `wbuttons`,
+        // `upmove` or `weapon` change forces (docs/protocol-1.1.md).
+        if let Some(s) = client.snapshots().newest() {
+            cmd.weapon = s.ps.field_i32(&net::protocol::PROTOCOL_V1, "weapon") as u8;
+        }
         client.send_frame(&cmd);
 
         // Every iteration, not once a second; the event rings hold four slots
@@ -1064,16 +1074,6 @@ fn motion_script() -> Vec<MotionStep> {
             },
             2000,
         ),
-        // Ads standing: the `weapon_position ads` clauses are the only ones a
-        // rifleman can otherwise never reach.
-        held(
-            "ads_stand",
-            net::msg::UserCmd {
-                buttons: 0x10,
-                ..NULL_USERCMD
-            },
-            2000,
-        ),
         held(
             "crouch_run",
             net::msg::UserCmd {
@@ -1117,6 +1117,19 @@ fn motion_script() -> Vec<MotionStep> {
             cmd: NULL_USERCMD,
             until: Until::Grounded(Duration::from_millis(1500)),
         },
+        // Ads standing last, and not in the middle: the `weapon_position ads`
+        // clauses are the only ones a rifleman can otherwise never reach, and
+        // retail keeps the ads flag and the ads legs pose for every pose that
+        // follows the one that pressed the bit, so anywhere else in the
+        // script this step takes the rest of the capture with it.
+        held(
+            "ads_stand",
+            net::msg::UserCmd {
+                buttons: 0x10,
+                ..NULL_USERCMD
+            },
+            2000,
+        ),
     ]
 }
 
