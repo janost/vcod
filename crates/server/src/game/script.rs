@@ -277,6 +277,18 @@ impl ScriptRuntime {
             .unwrap_or_default()
     }
 
+    /// Writes back the weapon the sim's own machine switched to. The script
+    /// host's copy is what `Server` mirrors into `ps.weapon` every frame, so
+    /// a switch the usercmd's weapon byte asked for has to move it: without
+    /// this the mirror puts the old weapon back the next frame and
+    /// `PM_Weapon` starts the identical putaway again, once every
+    /// `dropTime`, for as long as the client keeps asking.
+    pub fn set_client_weapon(&mut self, slot: usize, weapon: u8) {
+        if let Some(w) = self.host.client_weapons.get_mut(slot) {
+            w.current = weapon;
+        }
+    }
+
     /// The ammo and current-weapon edges the weapon builtins made this frame,
     /// in call order. Drained rather than read, unlike `client_weapons`: they
     /// are edges, and applying one twice would refill a spent clip.

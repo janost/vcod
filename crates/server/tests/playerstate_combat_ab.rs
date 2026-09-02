@@ -205,8 +205,8 @@ fn shots(trace: &[Trace]) -> usize {
 /// How many samples a trace spent in `state`, and how many separate runs
 /// they fell into.
 ///
-/// The total is what the comparison uses, with one sample of slack per run.
-/// A run bounds the state's length to `((N-1)*50, (N+1)*50)` ms and no
+/// Both are compared: the total with one sample of slack per run, the run
+/// count to one run. A run bounds the state's length to `((N-1)*50, (N+1)*50)` ms and no
 /// tighter (player-model-anim-system.md, "The weapon channel"), so a single
 /// run's length is the state's duration plus where its edges happened to
 /// fall in the sample grid. Retail's snapshots arrive 33 to 66 ms apart and
@@ -352,8 +352,16 @@ fn check(map: &str) {
             if r == 0 && o == 0 {
                 continue;
             }
+            // How often the state was entered is a fact about the machine
+            // and not about the sampling, so it is compared on its own, to
+            // one run: a state ours flickers into once per shot where retail
+            // enters it once would otherwise buy itself a sample of slack per
+            // flicker and pass. Retail's carentan `crouch_fire` enters
+            // `weaponstate` 3 three times where ours enters it twice, two
+            // shots having shared a sample, which is where the one comes
+            // from.
             let slack = r_runs.max(o_runs).max(1);
-            if r.abs_diff(o) > slack {
+            if r.abs_diff(o) > slack || r_runs.abs_diff(o_runs) > 1 {
                 bad.push(format!(
                     "{}: weaponstate {state} holds {r} samples over {r_runs} runs on \
                      retail, {o} over {o_runs} on ours",

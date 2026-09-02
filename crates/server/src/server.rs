@@ -265,6 +265,12 @@ pub struct Server {
     /// `replay_moves`; the bullet trace that answers for them is the next
     /// task's, and until it exists the queue is cleared each tick.
     pending_shots: Vec<Shot>,
+    /// Weapons the moves themselves switched to, by slot: only a change the
+    /// machine made, so a playerstate reset from outside a move is not one.
+    /// `tick` writes each back onto the script host before the mirror reads
+    /// it, which is what keeps a switch from being undone the frame after it
+    /// lands.
+    weapon_changes: Vec<(usize, u8)>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -370,6 +376,7 @@ impl Server {
             anims: None,
             weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
             pending_shots: Vec::new(),
+            weapon_changes: Vec::new(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -1223,24 +1230,26 @@ impl Server {
                     sim.become_spectator(s.origin, s.yaw_deg, cmd_angles);
                 }
             }
+            // The machine's own switches first: `pickup` writes `ps.weapon`
+            // when a drop ends, and the mirror below would put the old
+            // weapon back and start the identical putaway again.
+            for (slot, weapon) in self.weapon_changes.drain(..) {
+                rt.set_client_weapon(slot, weapon);
+            }
             // What the client holds comes across the same way the
             // configstrings do: re-read every frame, because any thread can
             // have changed them. The held bits have to be among them --
             // `PM_Weapon` disarms a player who no longer owns `ps.weapon`
-            // (combat doc, section 1.8) -- and `ps.weapon` follows too,
-            // except while the machine has a change in flight: a putaway
-            // latches its target in `pending_weapon` and a ladder holsters
-            // the weapon into `stowed_weapon`, and writing over either would
-            // undo the change the frame after it landed. A switch to another
-            // weapon has to move the host's copy with it for the same reason.
+            // (combat doc, section 1.8) -- and `ps.weapon` with them, so a
+            // sim reset outside a move comes back armed. The write-back
+            // above is what makes that safe: the host's copy already carries
+            // whatever the machine switched to this tick.
             for (slot, c) in self.clients.iter_mut().enumerate() {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
                     let w = rt.client_weapons(slot);
                     sim.ps.weapons_held = w.held;
                     sim.ps.weapon_slots = w.slots;
-                    if sim.ps.pending_weapon == 0 && sim.ps.stowed_weapon == 0 {
-                        sim.ps.weapon = w.current;
-                    }
+                    sim.ps.weapon = w.current;
                     sim.viewmodel_index = rt.client_viewmodel(slot);
                     // And back the other way: the sim owns where a player is,
                     // so the script's copy is written from it every frame.
@@ -1272,8 +1281,10 @@ impl Server {
         self.send_snapshots(&moved, wall_ms);
         // Nothing answers for a shot yet, so the queue is emptied here rather
         // than growing across ticks; the bullet trace that drains it is the
-        // next task's.
+        // next task's. The weapon changes are already drained when a script
+        // is loaded, and a server without one has nothing to write them to.
         self.pending_shots.clear();
+        self.weapon_changes.clear();
     }
 
     /// SV_UserMove for every client: one pmove step per queued usercmd, dt off
@@ -1293,6 +1304,9 @@ impl Server {
             let Some(sim) = c.sim.as_mut() else {
                 continue;
             };
+            // What the client held going in, so a switch the machine made is
+            // told apart from a playerstate reset between ticks.
+            let held = sim.ps.weapon;
             // Stale cmds (dt <= 0) are skipped whole; a flood past the per-tick
             // cap resyncs to the newest cmd and keeps only the tail.
             let mut last_cmd = None::<UserCmd>;
@@ -1327,6 +1341,9 @@ impl Server {
                 m.first_cmd_st.get_or_insert(cmd.server_time);
                 m.last_cmd_st = Some(cmd.server_time);
                 m.processed += 1;
+            }
+            if sim.ps.weapon != held {
+                self.weapon_changes.push((slot, sim.ps.weapon));
             }
             // The animation the client should be playing, from the state the
             // moves just produced and the input that produced it.

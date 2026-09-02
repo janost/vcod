@@ -670,3 +670,101 @@ fn a_client_is_told_where_the_other_is_this_frame() {
     }
     assert!(checked >= 5, "only {checked} comparable frames");
 }
+
+/// A weapon switch off the usercmd's weapon byte, which is what a retail
+/// client sends every frame: one putaway, one raise, and then the weapon
+/// stays switched.
+///
+/// The regression is the mirror. `Server` re-reads the script host's copy of
+/// what a client holds every frame, so a switch the weapon machine made had
+/// to be written back to the host: without that the mirror puts the old
+/// weapon back the frame after `pickup` set the new one, `PM_Weapon` sees a
+/// `cmd.weapon` that differs again and starts the identical putaway, and the
+/// client's weapon dips once every `dropTime` for as long as it asks.
+#[test]
+fn a_weapon_switch_off_the_usercmd_byte_happens_once() {
+    const EV_RAISE_WEAPON: i32 = 155;
+    const EV_PUTAWAY_WEAPON: i32 = 156;
+
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp =
+        vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse the bsp");
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
+
+    let p = &PROTOCOL_V1;
+    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as i32;
+    let colt = vcod_server::configstrings::weapon_index("colt_mp").unwrap() as u8;
+    assert_eq!(
+        cl.snapshots().newest().unwrap().ps.field_i32(p, "weapon"),
+        carbine,
+        "the join did not spawn with the weapon it asked for"
+    );
+
+    // The pistol the stock loadout also gave, asked for the way a retail
+    // client asks: the byte on every cmd, not a one-frame pulse.
+    let cmd = vcod_common::net::msg::UserCmd {
+        weapon: colt,
+        ..vcod_common::net::msg::NULL_USERCMD
+    };
+    let mut events: Vec<i32> = Vec::new();
+    // Seeded from the snapshot before the first cmd: the putaway starts on
+    // the frame the byte first arrives, so a baseline taken inside the loop
+    // would swallow it.
+    let mut seq = Some(
+        cl.snapshots()
+            .newest()
+            .unwrap()
+            .ps
+            .field_i32(p, "eventSequence"),
+    );
+    let mut weapons: Vec<i32> = Vec::new();
+    for _ in 0..60 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&cmd);
+        common::step(&mut sv, &q, &mut cl, now);
+        let Some(s) = cl.snapshots().newest() else {
+            continue;
+        };
+        // The ring, read at the slots the events were written to: the
+        // counter is bumped after the write.
+        let cur = s.ps.field_i32(p, "eventSequence");
+        if let Some(prev) = seq.replace(cur) {
+            let diff = ((cur - prev) & 0xff).min(4);
+            for i in 0..diff {
+                let slot = (prev + i) & 3;
+                events.push(s.ps.field_i32(p, &format!("events[{slot}]")));
+            }
+        }
+        weapons.push(s.ps.field_i32(p, "weapon"));
+    }
+
+    let putaways = events.iter().filter(|e| **e == EV_PUTAWAY_WEAPON).count();
+    let raises = events.iter().filter(|e| **e == EV_RAISE_WEAPON).count();
+    assert_eq!(
+        (putaways, raises),
+        (1, 1),
+        "a switch is one putaway and one raise; the ring carried {events:?}"
+    );
+    assert_eq!(
+        *weapons.last().unwrap(),
+        i32::from(colt),
+        "the client did not end up holding what it asked for"
+    );
+    // And it stayed there: once the raise is over nothing switches back.
+    let after_raise = weapons.iter().rposition(|w| *w == carbine).unwrap_or(0);
+    assert!(
+        weapons[after_raise + 1..]
+            .iter()
+            .all(|w| *w == i32::from(colt)),
+        "the weapon went back and forth: {weapons:?}"
+    );
+}
