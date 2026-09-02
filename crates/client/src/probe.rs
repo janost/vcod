@@ -42,6 +42,12 @@ const SNAP_CAPTURE_TARGET: usize = 24;
 /// one mode with the stall response on, so a walking step gets past the first
 /// wall it meets.
 ///
+/// `target` and `hit` are the two halves of the hit capture, one probe each:
+/// the target stands still, kills itself at 10 s and records what the server
+/// does to it, and the shooter walks up to it and shoots it. Both write their
+/// own fixture, and the target's `kill` is what makes the death half
+/// independent of whether the shooter ever finds a line of sight.
+///
 /// `pvs` joins the same way again, walks the route in [`pvs_route`] and prints
 /// the snapshot entity list at each station plus every add and removal along
 /// the way, answering what the server sends from where. `save.entities` walks
@@ -58,6 +64,8 @@ pub struct Save {
     pub motion: bool,
     pub combat: bool,
     pub entities: bool,
+    pub hit: bool,
+    pub target: bool,
 }
 
 pub fn probe(
@@ -77,12 +85,20 @@ pub fn probe(
         motion: save_motion,
         combat: save_combat,
         entities: save_entities,
+        hit: save_hit,
+        target: save_target,
     } = save;
     // The fixture is the route's output, so the capture drives the same walk.
     let pvs = pvs || save_entities;
     // Every mode that needs a spawned player drives the same stock-menu join;
     // `--probe-team` alone joins and then just watches the roster.
-    let joining = save_playerstate || save_motion || save_combat || pvs || team.is_some();
+    let joining = save_playerstate
+        || save_motion
+        || save_combat
+        || save_hit
+        || save_target
+        || pvs
+        || team.is_some();
     let mut client = NetClient::connect(addr)?;
     if save_fixture || save_snapshots {
         client.enable_capture();
@@ -98,6 +114,11 @@ pub fn probe(
     let mut wrote_playerstate = false;
     let mut motion = MotionProbe::default();
     let mut combat = CombatProbe::default();
+    let mut hit = HitProbe::default();
+    let mut target_probe = TargetProbe::default();
+    let mut wrote_hit = false;
+    // The hit capture waits for the first spawn before its script starts.
+    let mut spawned = false;
     let mut pvs_probe = PvsProbe::default();
     // The full table; the map's loadspec filters it at gamestate.
     let aliases_all = fs.map(crate::audio::alias::AliasTable::load);
@@ -159,6 +180,14 @@ pub fn probe(
                             all.len()
                         );
                     }
+                    if save_hit {
+                        // The shooter's line-of-sight test needs the map's
+                        // collision, and the gamestate is where the map is named.
+                        let map = net::info_value_for_key(&gs.configstrings[0], "mapname")
+                            .unwrap_or_default()
+                            .to_string();
+                        hit.load_map(fs, &map);
+                    }
                     // The join is entered by the first usercmd of the loop
                     // below, the way a retail client enters; nothing is sent
                     // here to start it.
@@ -189,6 +218,10 @@ pub fn probe(
                 NetEvent::ServerCommand(tokens) => {
                     // `b` is the scoreboard, one long line per second at round end.
                     if tokens.first().map(String::as_str) == Some("b") {
+                        if save_target {
+                            let ms = target_probe.elapsed_ms(now);
+                            target_probe.scoreboards.push((ms, tokens.join(" ")));
+                        }
                         continue;
                     }
                     println!("serverCommand: {tokens:?}");
@@ -264,6 +297,11 @@ pub fn probe(
                 combat.stall.apply(&mut cmd, now, o);
             }
             hold_view_yaw(&mut cmd, &client, &mut combat.spawn_delta_yaw);
+        } else if save_hit && hit.running() {
+            cmd = hit.cmd(now);
+            hold_view_yaw(&mut cmd, &client, &mut hit.spawn_delta_yaw);
+        } else if save_target && target_probe.running() {
+            cmd = target_probe.cmd();
         } else if pvs && pvs_probe.running() {
             cmd = pvs_probe.cmd();
             hold_view_yaw(&mut cmd, &client, &mut pvs_probe.spawn_delta_yaw);
@@ -324,6 +362,41 @@ pub fn probe(
             }
         }
 
+        // The hit capture is the one mode that runs across a death, so it is
+        // not gated on `pm_type` the way the settled captures below are: what
+        // the server does to a dead player is what it is here to record. It
+        // still waits for the first spawn, so the script does not start while
+        // the join is still on the menus.
+        if (save_hit || save_target) && join.settled(now) && !wrote_hit {
+            let done = match client.snapshots().newest() {
+                Some(s) => {
+                    spawned |= s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL;
+                    if !spawned {
+                        false
+                    } else if save_target {
+                        target_probe.step(now, s)
+                    } else {
+                        hit.use_weapon(fs, &join.weapon);
+                        hit.step(now, s)
+                    }
+                }
+                None => false,
+            };
+            let pending = std::mem::take(&mut target_probe.pending);
+            for c in pending {
+                client.send_reliable(&c);
+            }
+            if done {
+                if save_target {
+                    write_target_fixture(client.configstrings(), &join, &target_probe, now)?;
+                } else {
+                    write_shooter_fixture(client.configstrings(), &join, &hit, now)?;
+                }
+                wrote_hit = true;
+                break;
+            }
+        }
+
         // A refused weapon reopens the same menu, which the probe answers
         // once and then ignores, so a sent answer is not an accepted one; the
         // playerstate is what tells a spawn from a still-spectating client.
@@ -380,6 +453,17 @@ pub fn probe(
         std::thread::sleep(Duration::from_millis(16));
     }
 
+    // The run's clock can end before the script does; what it has by then is
+    // still the capture, and the header says how long it ran.
+    if (save_hit || save_target) && !wrote_hit {
+        let now = Instant::now();
+        println!("hit: the run ended before the script did, writing what it has");
+        if save_target {
+            write_target_fixture(client.configstrings(), &join, &target_probe, now)?;
+        } else {
+            write_shooter_fixture(client.configstrings(), &join, &hit, now)?;
+        }
+    }
     if save_combat && !wrote_playerstate {
         println!(
             "no combat fixture: the run ended on step {} of {} after {secs}s; raise --probe-secs",
@@ -1908,6 +1992,1258 @@ legsAnim={} torsoAnim={} eventSequence={} events[0]={} events[1]={} events[2]={}
     Ok(())
 }
 
+/// `buttons` bit 6, use (docs/protocol-1.1.md, "Usercmd input bits"): the
+/// press the stock gametypes take as "respawn me".
+const BUTTON_USE: u8 = 0x40;
+
+/// The target's script. It kills itself rather than waiting to be shot, so the
+/// death half of the capture stands whether or not the shooter ever finds a
+/// line of sight.
+const TARGET_KILL_AT: Duration = Duration::from_secs(10);
+/// And again every so often: each death is another death in the capture, and
+/// another roll of where the two stand, since retail's deathmatch spawn picker
+/// puts a respawning player at the point farthest from the other client. Long
+/// enough that the shooter's walk across the map is not chasing a target that
+/// has already moved again.
+const TARGET_KILL_PERIOD: Duration = Duration::from_secs(45);
+const TARGET_USE_AFTER_DEATH: Duration = Duration::from_secs(3);
+const TARGET_USE_RETRY: Duration = Duration::from_secs(1);
+const TARGET_SCORE_PERIOD: Duration = Duration::from_secs(2);
+/// The cap on the whole run: past the shooter's approach limit and its firing
+/// phases, so the target is still tracing when the shots land.
+const TARGET_RUN_LIMIT: Duration = Duration::from_secs(200);
+
+/// Retail's body queue: the corpse clone lands in one of the eight entities
+/// straight past the 64 client slots (docs/research/cod11-combat.md, 5.2).
+const BODY_QUEUE: std::ops::Range<u32> = 64..72;
+
+/// The eye a shot is aimed at, and traced from, when the playerstate carries
+/// no view height: retail's standing value.
+const EYE_HEIGHT: f32 = 60.0;
+
+/// One snapshot of everything a hit or a death moves on the victim's side.
+struct HitSample {
+    elapsed_ms: u128,
+    server_time: i32,
+    health: i32,
+    damage_event: i32,
+    damage_count: i32,
+    damage_yaw: i32,
+    damage_pitch: i32,
+    pm_type: i32,
+    e_flags: i32,
+    dead_view_height: i32,
+    /// A float on the wire, unlike `deadViewHeight` next to it.
+    view_height_current: f32,
+    event_sequence: i32,
+    events: [i32; 4],
+    event_parms: [i32; 4],
+    legs_anim: i32,
+    torso_anim: i32,
+    weaponstate: i32,
+    /// `ps.stats[1]`, the yaw `player_die` writes toward the killer.
+    stats1: i32,
+    /// Non-zero entries only; both arrays are 64 wide and nearly all zero.
+    ammo: Vec<(usize, i16)>,
+    clip: Vec<(usize, i16)>,
+    velocity: [f32; 3],
+    origin: [f32; 3],
+}
+
+/// The non-zero entries of a playerstate ammo array, as `index:value` pairs.
+fn nonzero_pairs(a: &[i16]) -> Vec<(usize, i16)> {
+    a.iter()
+        .enumerate()
+        .filter(|(_, &v)| v != 0)
+        .map(|(i, &v)| (i, v))
+        .collect()
+}
+
+fn pairs_str(pairs: &[(usize, i16)]) -> String {
+    if pairs.is_empty() {
+        return "-".to_string();
+    }
+    pairs
+        .iter()
+        .map(|(i, v)| format!("{i}:{v}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn vec_str(v: [f32; 3]) -> String {
+    format!("{:.1},{:.1},{:.1}", v[0], v[1], v[2])
+}
+
+impl HitSample {
+    fn take(elapsed_ms: u128, snap: &net::snapshot::Snapshot) -> HitSample {
+        let p = &net::protocol::PROTOCOL_V1;
+        let f = |n: &str| snap.ps.field_i32(p, n);
+        HitSample {
+            elapsed_ms,
+            server_time: snap.server_time,
+            health: snap.ps.health(),
+            damage_event: f("damageEvent"),
+            damage_count: f("damageCount"),
+            damage_yaw: f("damageYaw"),
+            damage_pitch: f("damagePitch"),
+            pm_type: f("pm_type"),
+            e_flags: f("eFlags"),
+            dead_view_height: f("deadViewHeight"),
+            view_height_current: snap.ps.field_f32(p, "viewHeightCurrent"),
+            event_sequence: f("eventSequence"),
+            events: [
+                f("events[0]"),
+                f("events[1]"),
+                f("events[2]"),
+                f("events[3]"),
+            ],
+            event_parms: [
+                f("eventParms[0]"),
+                f("eventParms[1]"),
+                f("eventParms[2]"),
+                f("eventParms[3]"),
+            ],
+            legs_anim: f("legsAnim"),
+            torso_anim: f("torsoAnim"),
+            weaponstate: f("weaponstate"),
+            stats1: snap.ps.arrays.stats[1],
+            ammo: nonzero_pairs(&snap.ps.arrays.ammo),
+            clip: nonzero_pairs(&snap.ps.arrays.ammoclip),
+            velocity: [
+                snap.ps.field_f32(p, "velocity[0]"),
+                snap.ps.field_f32(p, "velocity[1]"),
+                snap.ps.field_f32(p, "velocity[2]"),
+            ],
+            origin: snap.ps.origin(p),
+        }
+    }
+
+    /// Everything but the two clocks and the origin. A run is 20 snapshots a
+    /// second for minutes and a standing player moves none of these, so the
+    /// trace keeps a sample when this changes and one a second otherwise.
+    fn watched(&self) -> Vec<i32> {
+        let mut v = vec![
+            self.health,
+            self.damage_event,
+            self.damage_count,
+            self.damage_yaw,
+            self.damage_pitch,
+            self.pm_type,
+            self.e_flags,
+            self.dead_view_height,
+            self.view_height_current.to_bits() as i32,
+            self.event_sequence,
+            self.legs_anim,
+            self.torso_anim,
+            self.weaponstate,
+            self.stats1,
+        ];
+        v.extend(self.events);
+        v.extend(self.event_parms);
+        v.extend(self.velocity.iter().map(|f| f.to_bits() as i32));
+        v.extend(
+            self.ammo
+                .iter()
+                .flat_map(|&(i, x)| [i as i32, i32::from(x)]),
+        );
+        v.extend(
+            self.clip
+                .iter()
+                .flat_map(|&(i, x)| [i as i32, i32::from(x)]),
+        );
+        v
+    }
+
+    fn line(&self) -> String {
+        format!(
+            "!trace ms={} serverTime={} health={} damageEvent={} damageCount={} damageYaw={} \
+damagePitch={} pm_type={} eFlags={} deadViewHeight={} viewHeightCurrent={:.1} eventSequence={} \
+events={},{},{},{} eventParms={},{},{},{} legsAnim={} torsoAnim={} weaponstate={} stats1={} \
+clip={} ammo={} velocity={} origin={}\n",
+            self.elapsed_ms,
+            self.server_time,
+            self.health,
+            self.damage_event,
+            self.damage_count,
+            self.damage_yaw,
+            self.damage_pitch,
+            self.pm_type,
+            self.e_flags,
+            self.dead_view_height,
+            self.view_height_current,
+            self.event_sequence,
+            self.events[0],
+            self.events[1],
+            self.events[2],
+            self.events[3],
+            self.event_parms[0],
+            self.event_parms[1],
+            self.event_parms[2],
+            self.event_parms[3],
+            self.legs_anim,
+            self.torso_anim,
+            self.weaponstate,
+            self.stats1,
+            pairs_str(&self.clip),
+            pairs_str(&self.ammo),
+            vec_str(self.velocity),
+            vec_str(self.origin),
+        )
+    }
+}
+
+/// How long a settled stretch goes without a trace line.
+const TRACE_HEARTBEAT: u128 = 1000;
+
+/// Keeps a trace down to its transitions: a sample survives when its watched
+/// fields differ from the last kept one, or when the heartbeat is due.
+fn keep_sample(last: &mut Option<(Vec<i32>, u128)>, key: Vec<i32>, ms: u128) -> bool {
+    match last {
+        Some((k, t)) if *k == key && ms.saturating_sub(*t) < TRACE_HEARTBEAT => false,
+        _ => {
+            *last = Some((key, ms));
+            true
+        }
+    }
+}
+
+/// Corpse edges in the retail body queue, as `(ms, entity, clientNum, appeared)`.
+fn corpse_edges(
+    snap: &net::snapshot::Snapshot,
+    live: &mut BTreeMap<u32, i32>,
+    elapsed_ms: u128,
+    out: &mut Vec<(u128, u32, i32, bool)>,
+) {
+    let p = &net::protocol::PROTOCOL_V1;
+    let now: BTreeMap<u32, i32> = BODY_QUEUE
+        .filter_map(|n| {
+            let e = snap.entities.get(&n)?;
+            (e.field_i32(p, "eType") == crate::entities::ET_CORPSE)
+                .then_some((n, e.field_i32(p, "clientNum")))
+        })
+        .collect();
+    for (&n, &cn) in &now {
+        if !live.contains_key(&n) {
+            println!("  corpse {n} appeared (clientNum {cn}) at +{elapsed_ms}ms");
+            out.push((elapsed_ms, n, cn, true));
+        }
+    }
+    for (&n, &cn) in live.iter() {
+        if !now.contains_key(&n) {
+            println!("  corpse {n} vanished (clientNum {cn}) at +{elapsed_ms}ms");
+            out.push((elapsed_ms, n, cn, false));
+        }
+    }
+    *live = now;
+}
+
+/// Stands still and records what the server does to it: `kill` at 10 s, the
+/// respawn press 3 s after each death, `score` every 2 s.
+#[derive(Default)]
+struct TargetProbe {
+    trace: Vec<HitSample>,
+    last_kept: Option<(Vec<i32>, u128)>,
+    /// `(ms, event, parm, entity)` for every death, pain and obituary drained.
+    events: Vec<(u128, i32, i32, u32)>,
+    /// `(ms, victim, attacker, parm)` for every EV_OBITUARY drained.
+    obituaries: Vec<(u128, u32, i32, i32)>,
+    /// `(ms, entity, clientNum, appeared)` per corpse edge.
+    corpses: Vec<(u128, u32, i32, bool)>,
+    live_corpses: BTreeMap<u32, i32>,
+    /// Every `b` scoreboard line, with its time.
+    scoreboards: Vec<(u128, String)>,
+    /// Reliable commands the loop sends once its snapshot borrow is done.
+    pending: Vec<String>,
+    started: Option<Instant>,
+    killed_at: Option<Instant>,
+    died_at: Option<Instant>,
+    used_at: Option<Instant>,
+    last_score_at: Option<Instant>,
+    tracker: vcod_common::net::events::EventTracker,
+    traced: Option<u32>,
+    /// Held for the one frame the respawn press falls on.
+    press_use: bool,
+    deaths: u32,
+    done: bool,
+}
+
+impl TargetProbe {
+    fn running(&self) -> bool {
+        !self.done
+    }
+
+    /// Standing still, with the use bit down on the frame the press falls on.
+    fn cmd(&self) -> net::msg::UserCmd {
+        net::msg::UserCmd {
+            buttons: if self.press_use { BUTTON_USE } else { 0 },
+            ..net::msg::NULL_USERCMD
+        }
+    }
+
+    fn elapsed_ms(&self, now: Instant) -> u128 {
+        self.started
+            .map_or(0, |t| now.duration_since(t).as_millis())
+    }
+
+    /// Feeds the newest snapshot in. Returns true once the run is over and the
+    /// fixture is ready to write.
+    fn step(&mut self, now: Instant, snap: &net::snapshot::Snapshot) -> bool {
+        use crate::fx::registry::{EV_CROUCH_PAIN, EV_DEATH, EV_OBITUARY, EV_PAIN};
+        let p = &net::protocol::PROTOCOL_V1;
+        let started = *self.started.get_or_insert(now);
+        let elapsed = now.duration_since(started);
+        let ms = elapsed.as_millis();
+        let pm_type = snap.ps.field_i32(p, "pm_type");
+
+        if self.traced != Some(snap.message_num) {
+            self.traced = Some(snap.message_num);
+            let s = HitSample::take(ms, snap);
+            if keep_sample(&mut self.last_kept, s.watched(), ms) {
+                println!("  {}", s.line().trim_end());
+                self.trace.push(s);
+            }
+            for ev in self.tracker.drain(snap, p) {
+                if ev.event == EV_OBITUARY {
+                    println!(
+                        "  obituary +{ms}ms victim {} attacker {} parm {}",
+                        ev.other_entity_num, ev.attacker_entity_num, ev.parm
+                    );
+                    self.obituaries.push((
+                        ms,
+                        ev.other_entity_num,
+                        ev.attacker_entity_num,
+                        ev.parm,
+                    ));
+                }
+                if matches!(ev.event, EV_DEATH | EV_PAIN | EV_CROUCH_PAIN | EV_OBITUARY) {
+                    println!(
+                        "  event +{ms}ms ev {} parm {} entity {}",
+                        ev.event, ev.parm, ev.entity_num
+                    );
+                    self.events.push((ms, ev.event, ev.parm, ev.entity_num));
+                }
+            }
+            corpse_edges(snap, &mut self.live_corpses, ms, &mut self.corpses);
+        }
+
+        // The suicide: it is what makes the death half of the capture
+        // independent of whether the shooter ever finds a line of sight.
+        let kill_due = match self.killed_at {
+            None => elapsed >= TARGET_KILL_AT,
+            Some(t) => self.died_at.is_none() && now.duration_since(t) >= TARGET_KILL_PERIOD,
+        };
+        if kill_due {
+            println!("TARGET: sending kill at +{ms}ms");
+            self.pending.push("kill".to_string());
+            self.killed_at = Some(now);
+        }
+        if pm_type != PM_NORMAL {
+            if self.died_at.is_none() {
+                self.deaths += 1;
+                println!(
+                    "TARGET: pm_type {pm_type} at +{ms}ms, death {}",
+                    self.deaths
+                );
+                self.died_at = Some(now);
+                self.used_at = None;
+            }
+        } else if let Some(t) = self.died_at.take() {
+            println!(
+                "TARGET: alive again at +{ms}ms, {} ms dead, health {}",
+                now.duration_since(t).as_millis(),
+                snap.ps.health()
+            );
+            self.used_at = None;
+        }
+
+        // The press, retried once a second: a press the script does not take
+        // leaves the target dead, and a dead target measures nothing.
+        self.press_use = false;
+        if let Some(dead) = self.died_at {
+            let due = now.duration_since(dead) >= TARGET_USE_AFTER_DEATH;
+            let again = self
+                .used_at
+                .is_none_or(|t| now.duration_since(t) >= TARGET_USE_RETRY);
+            if due && again {
+                println!("TARGET: use press at +{ms}ms");
+                self.used_at = Some(now);
+                self.press_use = true;
+            }
+        }
+
+        if self
+            .last_score_at
+            .is_none_or(|t| now.duration_since(t) >= TARGET_SCORE_PERIOD)
+        {
+            self.last_score_at = Some(now);
+            self.pending.push("score".to_string());
+        }
+
+        self.done = elapsed >= TARGET_RUN_LIMIT;
+        self.done
+    }
+}
+
+/// How long the shooter walks toward the target before it gives up and shoots
+/// from where it stands.
+const APPROACH_LIMIT: Duration = Duration::from_secs(150);
+const SINGLE_SHOT_HOLD: Duration = Duration::from_millis(2000);
+const BURST_HOLD: Duration = Duration::from_millis(3000);
+/// The caps on `Finish`: taps, and the wall clock behind them.
+const FINISH_TAPS: u32 = 30;
+const FINISH_LIMIT: Duration = Duration::from_secs(15);
+const WATCH_HOLD: Duration = Duration::from_secs(25);
+/// A trace that gets this far is clear enough to shoot along.
+const LOS_FRACTION: f32 = 0.99;
+/// How close the approach walks before it shoots. A clear trace across a whole
+/// map is still a shot the spread throws off a player-sized target: one
+/// capture spent its taps that way from 3200 units out and another from 1950,
+/// and neither moved the target's `damageEvent`. The approach limit is what
+/// gets the trigger pulled when the walk cannot close this.
+const ENGAGE_RANGE: f32 = 700.0;
+/// Heights up the target's body the line-of-sight trace tries. Only the eye is
+/// aimed at, but a target behind a low wall is one a shot can still reach.
+const LOS_HEIGHTS: [f32; 3] = [16.0, 40.0, EYE_HEIGHT];
+
+/// How far ahead the approach looks for a walk it can actually take, and the
+/// headings it tries either side of the bearing to the target.
+const STEER_AHEAD: f32 = 200.0;
+const STEER_OFFSETS: [f32; 11] = [
+    0.0, 25.0, -25.0, 50.0, -50.0, 80.0, -80.0, 115.0, -115.0, 150.0, -150.0,
+];
+/// How long a chosen heading is held. Re-picking every frame made the walk
+/// oscillate between two headings and stand still between them.
+const STEER_HOLD: Duration = Duration::from_millis(1200);
+/// Ground the walk has to cover inside [`STEER_HOLD`] to count as moving.
+const STEER_PROGRESS: f32 = 40.0;
+
+/// A local navigator for the approach: the heading nearest the bearing to the
+/// next waypoint that a player-sized box can sweep along, held for a while so
+/// the walk commits to it, and swapped for a random one when the walk wedges.
+/// Steering only on the bearing, and turning only once already stuck,
+/// wandered mp_carentan for the whole approach limit without closing.
+#[derive(Default)]
+struct Steer {
+    heading: Option<f32>,
+    chosen_at: Option<Instant>,
+    /// Where the current heading was chosen, so a wedged walk is detectable.
+    from: [f32; 3],
+    /// xorshift state for the unwedging turn; a fixed 45 degrees walked the
+    /// same loop over and over.
+    rng: u32,
+}
+
+impl Steer {
+    /// Whether a player-sized box can sweep from `a` to `b`, both given as
+    /// floor positions. The sweep starts a step up, so a curb is not a wall.
+    fn sweep(w: &vcod_common::collision::CollisionWorld, a: [f32; 3], b: [f32; 3]) -> bool {
+        Self::sweep_box(w, a, b, vcod_common::pmove::HEIGHT_STAND)
+    }
+
+    /// The same with the box height given, so a climb can be tested with the
+    /// clearance a stairwell has rather than a standing player's.
+    fn sweep_box(
+        w: &vcod_common::collision::CollisionWorld,
+        a: [f32; 3],
+        b: [f32; 3],
+        height: f32,
+    ) -> bool {
+        use vcod_common::pmove::{HALF_WIDTH, STEPSIZE};
+        let mins = glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0);
+        let maxs = glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, height);
+        let from = glam::Vec3::new(a[0], a[1], a[2] + STEPSIZE);
+        let to = glam::Vec3::new(b[0], b[1], b[2] + STEPSIZE);
+        w.box_trace(from, to, mins, maxs).fraction >= 1.0
+    }
+
+    /// Whether that sweep is clear for `reach` units along `deg`.
+    fn walkable(
+        w: &vcod_common::collision::CollisionWorld,
+        origin: [f32; 3],
+        deg: f32,
+        reach: f32,
+    ) -> bool {
+        let a = deg.to_radians();
+        let to = [
+            origin[0] + a.cos() * reach,
+            origin[1] + a.sin() * reach,
+            origin[2],
+        ];
+        Self::sweep(w, origin, to)
+    }
+
+    fn next_random(&mut self) -> f32 {
+        self.rng = self.rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (self.rng >> 16) as f32 * 360.0 / 65536.0
+    }
+
+    /// The heading to walk this frame.
+    fn heading(
+        &mut self,
+        now: Instant,
+        world: Option<&vcod_common::collision::CollisionWorld>,
+        origin: [f32; 3],
+        bearing_deg: f32,
+        reach: f32,
+    ) -> f32 {
+        let Some(w) = world else {
+            return bearing_deg;
+        };
+        let moved = dist(
+            [origin[0], origin[1], 0.0],
+            [self.from[0], self.from[1], 0.0],
+        );
+        if let Some(h) = self.heading {
+            // The hold runs whether or not the heading still looks walkable:
+            // re-picking inside it resets the progress window every frame, and
+            // then a wedged walk never reads as wedged.
+            if self
+                .chosen_at
+                .is_some_and(|t| now.duration_since(t) < STEER_HOLD)
+            {
+                return h;
+            }
+            if moved >= STEER_PROGRESS && Self::walkable(w, origin, h, reach) {
+                self.chosen_at = Some(now);
+                self.from = origin;
+                return h;
+            }
+        }
+        // A walk that covered no ground took a heading the sweep called clear,
+        // so the sweep is not what will get it off this spot: turn at random.
+        let pick = if self.heading.is_some() && moved < STEER_PROGRESS {
+            let h = self.next_random();
+            println!("HIT: wedged after {moved:.0}u, turning to {h:.0} deg");
+            h
+        } else {
+            STEER_OFFSETS
+                .iter()
+                .map(|off| bearing_deg + off)
+                .find(|&deg| Self::walkable(w, origin, deg, reach))
+                .unwrap_or_else(|| self.next_random())
+        };
+        self.heading = Some(pick);
+        self.chosen_at = Some(now);
+        self.from = origin;
+        pick
+    }
+}
+
+/// The shooter's phases, in order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum HitPhase {
+    /// Walk toward the other player, steered by [`StallTurn`], until the
+    /// eye-to-eye trace is clear or [`APPROACH_LIMIT`] passes.
+    Approach,
+    /// One tap, aimed at the target's eye.
+    SingleShot,
+    /// Five taps at the weapon's period.
+    Burst,
+    /// Tap until the target's entity stops being a player, or a cap hits.
+    Finish,
+    /// Idle, watching the corpse and the respawn.
+    Watch,
+    Done,
+}
+
+impl HitPhase {
+    fn label(self) -> &'static str {
+        match self {
+            HitPhase::Approach => "approach",
+            HitPhase::SingleShot => "single_shot",
+            HitPhase::Burst => "burst",
+            HitPhase::Finish => "finish",
+            HitPhase::Watch => "watch",
+            HitPhase::Done => "done",
+        }
+    }
+
+    /// Taps the phase spends.
+    fn taps(self) -> u32 {
+        match self {
+            HitPhase::SingleShot => 1,
+            HitPhase::Burst => 5,
+            HitPhase::Finish => FINISH_TAPS,
+            _ => 0,
+        }
+    }
+
+    /// The held input the phase runs on.
+    fn base(self) -> net::msg::UserCmd {
+        match self {
+            HitPhase::Approach => net::msg::UserCmd {
+                forward: 127,
+                ..net::msg::NULL_USERCMD
+            },
+            _ => net::msg::NULL_USERCMD,
+        }
+    }
+
+    /// What the phase is after `in_phase` spent in it. `los` is the eye-to-eye
+    /// trace, `target_etype` the aimed-at entity's eType (`None` when the
+    /// server sent none, which is not a reason to stop shooting) and `taps` the
+    /// taps spent so far.
+    fn advance(
+        self,
+        in_phase: Duration,
+        los: bool,
+        target_etype: Option<i32>,
+        taps: u32,
+    ) -> HitPhase {
+        use crate::entities::ET_PLAYER;
+        match self {
+            HitPhase::Approach if los || in_phase >= APPROACH_LIMIT => HitPhase::SingleShot,
+            HitPhase::SingleShot if in_phase >= SINGLE_SHOT_HOLD => HitPhase::Burst,
+            HitPhase::Burst if in_phase >= BURST_HOLD => HitPhase::Finish,
+            HitPhase::Finish
+                if matches!(target_etype, Some(t) if t != ET_PLAYER)
+                    || taps >= FINISH_TAPS
+                    || in_phase >= FINISH_LIMIT =>
+            {
+                HitPhase::Watch
+            }
+            HitPhase::Watch if in_phase >= WATCH_HOLD => HitPhase::Done,
+            p => p,
+        }
+    }
+}
+
+/// ANGLE2SHORT: the wire's 16 bits over a full turn.
+fn deg_to_short(deg: f32) -> i32 {
+    (deg * 65536.0 / 360.0).round() as i32
+}
+
+/// The view angles that point from `eye` at `target`, as signed wire words.
+/// Pitch is positive-down on the wire, which is why the sign flips.
+fn aim_at(eye: [f32; 3], target: [f32; 3]) -> (i32, i32) {
+    let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+    let horiz = (d[0] * d[0] + d[1] * d[1]).sqrt();
+    (
+        deg_to_short(d[1].atan2(d[0]).to_degrees()),
+        deg_to_short(-d[2].atan2(horiz).to_degrees()),
+    )
+}
+
+/// One snapshot's worth of the shooter's side, with what it could see of the
+/// target at the time.
+struct ShooterSample {
+    phase: &'static str,
+    elapsed_ms: u128,
+    server_time: i32,
+    buttons: u8,
+    wbuttons: u8,
+    weaponstate: i32,
+    weap_anim: i32,
+    legs_anim: i32,
+    torso_anim: i32,
+    event_sequence: i32,
+    events: [i32; 4],
+    event_parms: [i32; 4],
+    clip: Vec<(usize, i16)>,
+    ammo: Vec<(usize, i16)>,
+    los: bool,
+    range: f32,
+    /// The target was in this snapshot; when it was not, the three target
+    /// columns are the last place it was seen.
+    target_seen: bool,
+    /// The server's own view angles, degrees: what the shot was aimed along.
+    viewangles: [f32; 3],
+    target_num: i32,
+    target_etype: i32,
+    target_origin: [f32; 3],
+    origin: [f32; 3],
+}
+
+impl ShooterSample {
+    fn watched(&self) -> Vec<i32> {
+        let mut v = vec![
+            i32::from(self.buttons),
+            i32::from(self.wbuttons),
+            self.weaponstate,
+            self.weap_anim,
+            self.legs_anim,
+            self.torso_anim,
+            self.event_sequence,
+            self.los as i32,
+            self.target_seen as i32,
+            self.target_num,
+            self.target_etype,
+        ];
+        v.extend(self.events);
+        v.extend(self.event_parms);
+        v.extend(
+            self.clip
+                .iter()
+                .flat_map(|&(i, x)| [i as i32, i32::from(x)]),
+        );
+        v.extend(
+            self.ammo
+                .iter()
+                .flat_map(|&(i, x)| [i as i32, i32::from(x)]),
+        );
+        v
+    }
+
+    fn line(&self) -> String {
+        format!(
+            "!trace phase={} ms={} serverTime={} buttons={} wbuttons={} weaponstate={} weapAnim={} \
+legsAnim={} torsoAnim={} eventSequence={} events={},{},{},{} eventParms={},{},{},{} clip={} \
+ammo={} los={} range={:.0} seen={} viewangles={} target={} target_etype={} target_origin={} \
+origin={}\n",
+            self.phase,
+            self.elapsed_ms,
+            self.server_time,
+            self.buttons,
+            self.wbuttons,
+            self.weaponstate,
+            self.weap_anim,
+            self.legs_anim,
+            self.torso_anim,
+            self.event_sequence,
+            self.events[0],
+            self.events[1],
+            self.events[2],
+            self.events[3],
+            self.event_parms[0],
+            self.event_parms[1],
+            self.event_parms[2],
+            self.event_parms[3],
+            pairs_str(&self.clip),
+            pairs_str(&self.ammo),
+            self.los as i32,
+            self.range,
+            self.target_seen as i32,
+            vec_str(self.viewangles),
+            self.target_num,
+            self.target_etype,
+            vec_str(self.target_origin),
+            vec_str(self.origin),
+        )
+    }
+}
+
+/// Walks up to the other player, shoots it and watches what comes back. The
+/// death half of the capture is the target's own `kill`, so a run that never
+/// finds a line of sight costs the hits and nothing else.
+struct HitProbe {
+    phase: HitPhase,
+    started: Option<Instant>,
+    /// When the current phase started, so its taps and its clock are its own.
+    phase_started: Option<Instant>,
+    trace: Vec<ShooterSample>,
+    last_kept: Option<(Vec<i32>, u128)>,
+    obituaries: Vec<(u128, u32, i32, i32)>,
+    corpses: Vec<(u128, u32, i32, bool)>,
+    live_corpses: BTreeMap<u32, i32>,
+    tracker: vcod_common::net::events::EventTracker,
+    traced: Option<u32>,
+    spawn_delta_yaw: Option<i32>,
+    steer: Steer,
+    /// The map's collision, for the eye-to-eye trace. `None` without game data
+    /// or when the map did not resolve; the approach then runs to its limit.
+    world: Option<Box<vcod_common::collision::CollisionWorld>>,
+    /// What `cmd` puts in the usercmd: yaw as an offset from the spawn heading
+    /// (the way [`hold_view_yaw`] wants it) and pitch as a wire word.
+    aim: Option<(i32, i32)>,
+    period: Duration,
+    weapon_read: bool,
+    los: bool,
+    los_ever: bool,
+    /// Distance to the target, and whether it is inside [`ENGAGE_RANGE`].
+    range: f32,
+    in_range: bool,
+    /// The target was in this snapshot, rather than remembered from an older one.
+    target_seen: bool,
+    /// The last target seen: `(entity, eType, origin)`.
+    target: Option<(u32, i32, [f32; 3])>,
+    /// This probe's own clientNum, for reading its kills out of the obituaries.
+    me: i32,
+    /// The range the first shot went out at, and whether the trace to the
+    /// target was clear then: the approach limit fires the trigger either way.
+    engaged_at: Option<f32>,
+    engaged_los: bool,
+    /// An obituary named this probe as the attacker.
+    killed: bool,
+}
+
+impl Default for HitProbe {
+    fn default() -> Self {
+        HitProbe {
+            phase: HitPhase::Approach,
+            started: None,
+            phase_started: None,
+            trace: Vec::new(),
+            last_kept: None,
+            obituaries: Vec::new(),
+            corpses: Vec::new(),
+            live_corpses: BTreeMap::new(),
+            tracker: vcod_common::net::events::EventTracker::new(),
+            traced: None,
+            spawn_delta_yaw: None,
+            steer: Steer::default(),
+            world: None,
+            aim: None,
+            period: PULSE_PERIOD,
+            weapon_read: false,
+            los: false,
+            los_ever: false,
+            range: f32::INFINITY,
+            in_range: false,
+            target_seen: false,
+            target: None,
+            me: -1,
+            engaged_at: None,
+            engaged_los: false,
+            killed: false,
+        }
+    }
+}
+
+impl HitProbe {
+    fn running(&self) -> bool {
+        self.phase != HitPhase::Done
+    }
+
+    fn elapsed_ms(&self, now: Instant) -> u128 {
+        self.started
+            .map_or(0, |t| now.duration_since(t).as_millis())
+    }
+
+    /// Loads the map's collision once the gamestate names the map; without it
+    /// there is no line-of-sight test and the approach runs to its limit.
+    fn load_map(&mut self, fs: Option<&vcod_common::pk3::Pk3Fs>, map: &str) {
+        let Some(fs) = fs else {
+            println!("HIT: no game data, the approach cannot test line of sight");
+            return;
+        };
+        let Some(path) = fs.resolve_map(map) else {
+            println!("HIT: map {map:?} did not resolve, the approach runs blind");
+            return;
+        };
+        let Some(data) = fs.read(&path) else {
+            println!("HIT: cannot read {path}, the approach runs blind");
+            return;
+        };
+        match vcod_common::bsp::parse(&data) {
+            Ok(bsp) => {
+                let tris = vcod_common::props::collision_tris(fs, &bsp.entities);
+                let world = vcod_common::collision::CollisionWorld::build(&bsp, &tris);
+                println!(
+                    "HIT: {path} loaded, {} brushes and {} tris for the line-of-sight trace",
+                    world.brushes.len(),
+                    world.tris.len(),
+                );
+                self.world = Some(Box::new(world));
+            }
+            Err(e) => println!("HIT: cannot parse {path} ({e:#}), the approach runs blind"),
+        }
+    }
+
+    /// Taps at the weapon file's `fireTime`, the way the combat capture does.
+    fn use_weapon(&mut self, fs: Option<&vcod_common::pk3::Pk3Fs>, name: &str) {
+        if self.weapon_read || name.is_empty() {
+            return;
+        }
+        self.weapon_read = true;
+        let Some(def) = fs.and_then(|fs| vcod_common::weapon::load(fs, name).ok()) else {
+            return;
+        };
+        self.period = (Duration::from_secs_f32(def.fire_time) + PULSE_MARGIN).max(PULSE_PERIOD);
+        println!(
+            "HIT: {name} fireTime {:.3}s, taps every {:?}",
+            def.fire_time, self.period
+        );
+    }
+
+    /// The phase's held input with the aim on it, and the trigger tapped for
+    /// [`PULSE_HOLD`] out of every period until the phase's taps are spent.
+    fn cmd(&self, now: Instant) -> net::msg::UserCmd {
+        let mut cmd = self.phase.base();
+        if let Some((yaw, pitch)) = self.aim {
+            cmd.angles[1] = yaw;
+            cmd.angles[0] = pitch & 0xffff;
+        }
+        let Some(t) = self.phase_started else {
+            return cmd;
+        };
+        let ms = now.duration_since(t).as_millis();
+        let period = self.period.as_millis();
+        if ms / period < u128::from(self.phase.taps()) && ms % period < PULSE_HOLD.as_millis() {
+            cmd.buttons |= BUTTON_ATTACK;
+        }
+        cmd
+    }
+
+    /// Feeds the newest snapshot in. Returns true once the last phase is done.
+    fn step(&mut self, now: Instant, snap: &net::snapshot::Snapshot) -> bool {
+        use crate::fx::registry::EV_OBITUARY;
+        let p = &net::protocol::PROTOCOL_V1;
+        let started = *self.started.get_or_insert(now);
+        let phase_started = *self.phase_started.get_or_insert(now);
+        let ms = now.duration_since(started).as_millis();
+        let in_phase = now.duration_since(phase_started);
+        // Latched here rather than in `hold_view_yaw`, so an aim built this
+        // frame is already an offset from the spawn heading.
+        let delta_yaw = snap.ps.field_i32(p, "delta_angles[1]");
+        let spawn = *self.spawn_delta_yaw.get_or_insert(delta_yaw);
+
+        let me = snap.ps.field_i32(p, "clientNum") as u32;
+        self.me = me as i32;
+        let eye = {
+            let o = snap.ps.origin(p);
+            // A float field: read as an i32 it is the bit pattern, and an eye
+            // 1.1e9 units up aims every shot at the floor.
+            let h = snap.ps.field_f32(p, "viewHeightCurrent");
+            [o[0], o[1], o[2] + if h > 0.0 { h } else { EYE_HEIGHT }]
+        };
+        // The nearest other player; when it stops being one, the same entity
+        // slot, so the phase machine can see what it turned into.
+        let prev = self.target;
+        let seen = snap
+            .entities
+            .iter()
+            .filter(|(&n, e)| n != me && e.field_i32(p, "eType") == crate::entities::ET_PLAYER)
+            .map(|(&n, e)| (n, e.field_i32(p, "eType"), e.origin(p)))
+            .min_by(|a, b| {
+                dist(a.2, eye)
+                    .partial_cmp(&dist(b.2, eye))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .or_else(|| {
+                let (n, _, last) = prev?;
+                let e = snap.entities.get(&n)?;
+                let o = e.origin(p);
+                // A slot that stopped being a player can arrive with a zeroed
+                // origin; the aim then keeps where it last saw one.
+                Some((
+                    n,
+                    e.field_i32(p, "eType"),
+                    if o == [0.0; 3] { last } else { o },
+                ))
+            });
+        // A target out of the PVS is one the walk still heads for and the
+        // trigger does not: the last place it stood is a heading, not a shot.
+        self.target_seen = seen.is_some();
+        self.target = seen.or(prev);
+
+        if let Some((_, _, o)) = self.target {
+            let target_eye = [o[0], o[1], o[2] + EYE_HEIGHT];
+            let (yaw, pitch) = aim_at(eye, target_eye);
+            // The approach walks where it looks, so its heading is the steered
+            // one; the firing phases look straight at the target.
+            let yaw = if self.phase == HitPhase::Approach {
+                let me_origin = snap.ps.origin(p);
+                let bearing = yaw as f32 * 360.0 / 65536.0;
+                let world = self.world.as_deref();
+                deg_to_short(
+                    self.steer
+                        .heading(now, world, me_origin, bearing, STEER_AHEAD),
+                )
+            } else {
+                yaw
+            };
+            self.aim = Some((yaw - spawn, pitch - snap.ps.field_i32(p, "delta_angles[0]")));
+            self.los = match &self.world {
+                Some(w) => LOS_HEIGHTS.iter().any(|h| {
+                    let at = glam::Vec3::new(o[0], o[1], o[2] + h);
+                    w.shot_trace(eye.into(), at).fraction >= LOS_FRACTION
+                }),
+                None => false,
+            };
+            self.los_ever |= self.los;
+            self.range = dist(eye, target_eye);
+            self.in_range = self.range <= ENGAGE_RANGE;
+        } else {
+            self.aim = None;
+            self.los = false;
+            self.range = f32::INFINITY;
+            self.in_range = false;
+        }
+
+        if self.traced != Some(snap.message_num) {
+            self.traced = Some(snap.message_num);
+            let cmd = self.cmd(now);
+            let f = |n: &str| snap.ps.field_i32(p, n);
+            let (target_num, target_etype, target_origin) = match self.target {
+                Some((n, t, o)) => (n as i32, t, o),
+                None => (-1, -1, [0.0; 3]),
+            };
+            let s = ShooterSample {
+                phase: self.phase.label(),
+                elapsed_ms: ms,
+                server_time: snap.server_time,
+                buttons: cmd.buttons,
+                wbuttons: cmd.wbuttons,
+                weaponstate: f("weaponstate"),
+                weap_anim: f("weapAnim"),
+                legs_anim: f("legsAnim"),
+                torso_anim: f("torsoAnim"),
+                event_sequence: f("eventSequence"),
+                events: [
+                    f("events[0]"),
+                    f("events[1]"),
+                    f("events[2]"),
+                    f("events[3]"),
+                ],
+                event_parms: [
+                    f("eventParms[0]"),
+                    f("eventParms[1]"),
+                    f("eventParms[2]"),
+                    f("eventParms[3]"),
+                ],
+                clip: nonzero_pairs(&snap.ps.arrays.ammoclip),
+                ammo: nonzero_pairs(&snap.ps.arrays.ammo),
+                los: self.los,
+                range: self.range,
+                target_seen: self.target_seen,
+                viewangles: [
+                    snap.ps.field_f32(p, "viewangles[0]"),
+                    snap.ps.field_f32(p, "viewangles[1]"),
+                    snap.ps.field_f32(p, "viewangles[2]"),
+                ],
+                target_num,
+                target_etype,
+                target_origin,
+                origin: snap.ps.origin(p),
+            };
+            // Every snapshot while shooting; the walk and the watch collapse to
+            // their transitions and a heartbeat.
+            let firing = matches!(
+                self.phase,
+                HitPhase::SingleShot | HitPhase::Burst | HitPhase::Finish
+            );
+            if firing || keep_sample(&mut self.last_kept, s.watched(), ms) {
+                println!("  {}", s.line().trim_end());
+                self.trace.push(s);
+            }
+            for ev in self.tracker.drain(snap, p) {
+                if ev.event == EV_OBITUARY {
+                    println!(
+                        "  obituary +{ms}ms victim {} attacker {} parm {}",
+                        ev.other_entity_num, ev.attacker_entity_num, ev.parm
+                    );
+                    self.obituaries.push((
+                        ms,
+                        ev.other_entity_num,
+                        ev.attacker_entity_num,
+                        ev.parm,
+                    ));
+                }
+            }
+            corpse_edges(snap, &mut self.live_corpses, ms, &mut self.corpses);
+        }
+
+        let taps = (in_phase.as_millis() / self.period.as_millis()) as u32;
+        // A shot needs all three: the target in the PVS, a trace nothing
+        // blocks, and a range the spread does not throw it off at.
+        let shootable = self.los && self.in_range && self.target_seen;
+        let next = self.phase.advance(
+            in_phase,
+            shootable,
+            self.target.filter(|_| self.target_seen).map(|t| t.1),
+            taps,
+        );
+        if next != self.phase {
+            println!(
+                "HIT: {} -> {} at +{ms}ms (los {}, range {:.0}, target {:?})",
+                self.phase.label(),
+                next.label(),
+                self.los as i32,
+                self.range,
+                self.target.map(|t| (t.0, t.1)),
+            );
+            if self.phase == HitPhase::Approach {
+                self.engaged_at = Some(self.range);
+                self.engaged_los = self.los;
+            }
+            self.phase = next;
+            self.phase_started = Some(now);
+        }
+        self.phase == HitPhase::Done
+    }
+}
+
+/// Writes one role's half of the hit capture to
+/// `<map>-<gametype>-hit-<role>.txt`. Both halves carry the same header keys,
+/// so a gate reads either the same way; `body` is the role's own section.
+fn write_hit_fixture(
+    role: &str,
+    configstrings: &[String],
+    join: &JoinProbe,
+    taken: &str,
+    notes: &[String],
+    body: &str,
+) -> anyhow::Result<()> {
+    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
+    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let map = key("mapname");
+    let gametype = key("g_gametype");
+
+    let mut out = String::new();
+    out.push_str("# Retail CoD 1.1d dedicated server: what a shot and a death do to a player.\n");
+    out.push_str(&format!(
+        "# map {map}, gametype {gametype}, joined {}, weapon {}, role {role}, taken {taken}\n",
+        join.team, join.weapon
+    ));
+    out.push_str(
+        "# dedicated 1, sv_maxclients 8, sv_pure 0, stock scr_* defaults. Two probes on\n",
+    );
+    out.push_str("# the server: a target that stands still and a shooter that walks up to it.\n");
+    out.push_str(&format!(
+        "# The target kills itself with the `kill` client command {} s in and every {} s\n",
+        TARGET_KILL_AT.as_secs(),
+        TARGET_KILL_PERIOD.as_secs()
+    ));
+    out.push_str("# after, so the death, the corpse, the obituary and the respawn are captured\n");
+    out.push_str("# whether or not the shooter ever finds a line of sight. It presses use 3 s\n");
+    out.push_str("# after each death, and again once a second until the script takes one.\n");
+    out.push_str(
+        "# Captured with tools/run_server.sh and --net-probe --probe-target / --save-hit.\n",
+    );
+    out.push_str(
+        "# One !trace line per snapshot whose watched fields moved, plus one a second so\n",
+    );
+    out.push_str("# a settled stretch still carries a timeline: a run is 20 snapshots a second\n");
+    out.push_str(
+        "# for minutes and a standing player moves none of them. The shooter keeps every\n",
+    );
+    out.push_str("# snapshot of its three firing phases whether or not anything moved.\n");
+    out.push_str(
+        "# ms is since the role's script started; serverTime is the server's own clock.\n",
+    );
+    out.push_str("# clip and ammo are the non-zero entries of the two arrays, as index:value.\n");
+    for n in notes {
+        out.push_str(n);
+        out.push('\n');
+    }
+    out.push_str(body);
+
+    let path = format!("{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-hit-{role}.txt");
+    std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
+    std::fs::write(&path, out)?;
+    println!("hit: {role} -> {path}");
+    Ok(())
+}
+
+/// The target's half: the trace, the events, the corpse edges and the
+/// scoreboards.
+fn write_target_fixture(
+    configstrings: &[String],
+    join: &JoinProbe,
+    target: &TargetProbe,
+    now: Instant,
+) -> anyhow::Result<()> {
+    let mut notes = Vec::new();
+    if target.trace.iter().all(|s| s.damage_event == 0) {
+        notes.push(
+            "# BROKEN no hit landed: damageEvent never moved, so this file measures deaths only \
+and carries nothing about what a shot does to a player."
+                .to_string(),
+        );
+    }
+    if target.deaths == 0 {
+        notes.push("# BROKEN the target never died: the `kill` command did nothing.".to_string());
+    }
+    if target.corpses.is_empty() {
+        notes.push("# BROKEN no corpse ever appeared in the body queue.".to_string());
+    }
+    let mut body = String::from("[section target]\n");
+    body.push_str(&format!(
+        "!observed deaths={} traced={} obituaries={} corpse_edges={} scoreboards={}\n",
+        target.deaths,
+        target.trace.len(),
+        target.obituaries.len(),
+        target.corpses.len(),
+        target.scoreboards.len(),
+    ));
+    for s in &target.trace {
+        body.push_str(&s.line());
+    }
+    for (ms, ev, parm, ent) in &target.events {
+        body.push_str(&format!(
+            "!event ms={ms} event={ev} parm={parm} entity={ent}\n"
+        ));
+    }
+    for (ms, victim, attacker, parm) in &target.obituaries {
+        body.push_str(&format!(
+            "!obituary ms={ms} victim={victim} attacker={attacker} parm={parm}\n"
+        ));
+    }
+    for (ms, ent, cn, appeared) in &target.corpses {
+        body.push_str(&format!(
+            "!corpse ms={ms} entity={ent} clientNum={cn} appeared={}\n",
+            *appeared as i32
+        ));
+    }
+    for (ms, line) in &target.scoreboards {
+        body.push_str(&format!("!scoreboard ms={ms} {line}\n"));
+    }
+    let taken = format!(
+        "{} traced snapshots over {} s",
+        target.trace.len(),
+        target.elapsed_ms(now) / 1000
+    );
+    write_hit_fixture("target", configstrings, join, &taken, &notes, &body)
+}
+
+/// The shooter's half: the trace with what it could see of the target, the
+/// obituaries and the corpse edges.
+fn write_shooter_fixture(
+    configstrings: &[String],
+    join: &JoinProbe,
+    hit: &HitProbe,
+    now: Instant,
+) -> anyhow::Result<()> {
+    let mut notes = Vec::new();
+    if !hit.los_ever {
+        notes.push(format!(
+            "# BROKEN no line of sight after {} s: the shots in this file hit the map, not a player.",
+            APPROACH_LIMIT.as_secs()
+        ));
+    } else if !hit.killed {
+        notes.push(format!(
+            "# BROKEN no kill: the shots went out at {:.0} units with los {} and the target never \
+died. Whether any of them landed is not visible from this side; the target fixture's damageEvent \
+is what says so.",
+            hit.engaged_at.unwrap_or(hit.range),
+            hit.engaged_los as i32,
+        ));
+    }
+    let mut body = String::from("[section shooter]\n");
+    body.push_str(&format!(
+        "!observed reached={} los_found={} engaged_los={} killed={} engaged_at={:.0} traced={} \
+obituaries={} corpse_edges={}\n",
+        hit.phase.label(),
+        hit.los_ever as i32,
+        hit.engaged_los as i32,
+        hit.killed as i32,
+        hit.engaged_at.unwrap_or(hit.range),
+        hit.trace.len(),
+        hit.obituaries.len(),
+        hit.corpses.len(),
+    ));
+    for s in &hit.trace {
+        body.push_str(&s.line());
+    }
+    for (ms, victim, attacker, parm) in &hit.obituaries {
+        body.push_str(&format!(
+            "!obituary ms={ms} victim={victim} attacker={attacker} parm={parm}\n"
+        ));
+    }
+    for (ms, ent, cn, appeared) in &hit.corpses {
+        body.push_str(&format!(
+            "!corpse ms={ms} entity={ent} clientNum={cn} appeared={}\n",
+            *appeared as i32
+        ));
+    }
+    let taken = format!(
+        "{} traced snapshots over {} s",
+        hit.trace.len(),
+        hit.elapsed_ms(now) / 1000
+    );
+    write_hit_fixture("shooter", configstrings, join, &taken, &notes, &body)
+}
+
 /// Writes the spawned player's wire state to `<map>-<gametype>.txt`. The map
 /// and gametype come out of cs 0 (serverinfo), so nothing here is hand-typed.
 fn write_playerstate_fixture(
@@ -2538,5 +3874,74 @@ mod tests {
         // m1carbine_mp's `reloadTime`, the shortest hold the fallback has to
         // outlast when no weapon file can be read.
         assert!(reload.dur > Duration::from_millis(2650));
+    }
+
+    /// The aim is what decides whether the shooter's shots reach the target at
+    /// all, and its two sign conventions (yaw counter-clockwise from +x, pitch
+    /// positive-down) are the two things easiest to get backwards.
+    #[test]
+    fn hit_aim_points_at_the_target() {
+        let eye = [0.0, 0.0, 60.0];
+        assert_eq!(aim_at(eye, [100.0, 0.0, 60.0]), (0, 0));
+        assert_eq!(aim_at(eye, [0.0, 100.0, 60.0]).0, 16384);
+        assert_eq!(aim_at(eye, [-100.0, 0.0, 60.0]).0.abs(), 32768);
+        let (_, up) = aim_at(eye, [100.0, 0.0, 160.0]);
+        assert!(
+            up < 0,
+            "a target above the eye needs a negative pitch, got {up}"
+        );
+        let (_, down) = aim_at(eye, [100.0, 0.0, 0.0]);
+        assert!(
+            down > 0,
+            "a target below the eye needs a positive pitch, got {down}"
+        );
+    }
+
+    /// The two transitions the capture depends on: the approach ends on a
+    /// clear trace, and it ends anyway at the limit so a run behind a wall
+    /// still records its shots.
+    #[test]
+    fn hit_approach_ends_on_a_clear_trace_or_at_the_limit() {
+        let blocked = HitPhase::Approach.advance(Duration::from_secs(30), false, Some(1), 0);
+        assert_eq!(blocked, HitPhase::Approach);
+        let clear = HitPhase::Approach.advance(Duration::from_secs(30), true, Some(1), 0);
+        assert_eq!(clear, HitPhase::SingleShot);
+        let out_of_time = HitPhase::Approach.advance(APPROACH_LIMIT, false, None, 0);
+        assert_eq!(out_of_time, HitPhase::SingleShot);
+    }
+
+    /// A target that stopped being a player is a target that died, which is
+    /// what `Finish` is waiting for; a target the server stopped sending is
+    /// not, or the shooter would stop firing every time PVS blinked.
+    #[test]
+    fn hit_finish_ends_when_the_target_stops_being_a_player() {
+        let firing = HitPhase::Finish.advance(Duration::from_secs(1), true, Some(1), 3);
+        assert_eq!(firing, HitPhase::Finish);
+        let unseen = HitPhase::Finish.advance(Duration::from_secs(1), false, None, 3);
+        assert_eq!(unseen, HitPhase::Finish);
+        let corpse = HitPhase::Finish.advance(
+            Duration::from_secs(1),
+            true,
+            Some(crate::entities::ET_CORPSE),
+            3,
+        );
+        assert_eq!(corpse, HitPhase::Watch);
+        let spent = HitPhase::Finish.advance(Duration::from_secs(1), true, Some(1), FINISH_TAPS);
+        assert_eq!(spent, HitPhase::Watch);
+    }
+
+    /// A trace 20 samples a second for minutes is unreadable and huge, and a
+    /// collapse that drops a transition is worse than either.
+    #[test]
+    fn hit_trace_keeps_every_transition_and_one_sample_a_second() {
+        let mut last = None;
+        assert!(keep_sample(&mut last, vec![100], 0));
+        assert!(!keep_sample(&mut last, vec![100], 500));
+        assert!(keep_sample(&mut last, vec![55], 550), "a change is kept");
+        assert!(!keep_sample(&mut last, vec![55], 900));
+        assert!(
+            keep_sample(&mut last, vec![55], 1550),
+            "the heartbeat is due"
+        );
     }
 }

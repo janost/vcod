@@ -95,6 +95,26 @@ struct Args {
     /// sequence takes about 40 s, inside the default --probe-secs.
     #[arg(long)]
     save_combat: bool,
+    /// The shooter half of the hit capture: join a team, walk toward the other
+    /// player until the eye-to-eye trace through the map's collision is clear,
+    /// then fire a single shot, a burst and until the target dies, and watch
+    /// the corpse and the respawn. Writes
+    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-hit-shooter.txt.
+    /// Run it against a server that already has a --probe-target on it, on the
+    /// other team. A run that never finds a line of sight says so in the
+    /// fixture header and still records the shots, which then hit the map.
+    #[arg(long)]
+    save_hit: bool,
+    /// The target half of the hit capture: join a team, stand still, kill
+    /// itself 10 s in, press use 3 s after each death and record every
+    /// snapshot that moves a damage or death field, plus the obituaries, the
+    /// corpses and the scoreboards. Writes
+    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-hit-target.txt.
+    /// Separate from --save-hit because the two roles are two probes: this one
+    /// is the victim, and its `kill` is what makes the death, the corpse and
+    /// the respawn land whether or not the shooter ever gets a shot off.
+    #[arg(long)]
+    probe_target: bool,
     /// Join a team, walk the --probe-pvs route and write the entity trace to
     /// crates/server/tests/fixtures/entities/<map>-<gametype>.txt, the fixture
     /// crates/server/tests/entities_ab.rs diffs against. Separate from
@@ -450,6 +470,8 @@ fn main() -> Result<()> {
                 motion: args.save_motion,
                 combat: args.save_combat,
                 entities: args.save_entities,
+                hit: args.save_hit,
+                target: args.probe_target,
             },
             args.capture_tag.clone(),
             args.probe_pvs,

@@ -1247,7 +1247,114 @@ callers fill in by hand.
 
 ---
 
-## 8. Open cells
+## 8. What the hit capture measured
+
+Two probes on one retail server, `--net-probe --probe-target` and
+`--net-probe --save-hit`, on `mp_carentan` under `dm` with the stock defaults.
+The target stands still, sends the `kill` client command every 45 s, presses
+use 3 s after each death and traces its own playerstate; the shooter walks
+toward it and shoots. Both fixtures are in
+`crates/server/tests/fixtures/playerstate/`, `mp_carentan-dm-hit-target.txt`
+and `-hit-shooter.txt`. Everything below is VERIFIED unless labelled
+otherwise: it is read off those two captures.
+
+**The shot half of the capture is missing.** The shooter never found a line of
+sight in 150 s of walking, so its fixture carries `# BROKEN no line of sight`
+and its shots hit the map. Retail's deathmatch spawn picker puts a respawning
+client at the point farthest from the other one, which on `mp_carentan` is
+2000 to 4500 units of town, and the probe's walk does not cross that. So
+`damageEvent`, `damageCount`, `damageYaw`, `damagePitch`, `EV_PAIN` and the
+knockback velocity are still unmeasured; sections 4 and 6 are what they rest
+on for now.
+
+### 8.1 The death
+
+The `kill` command lands in one snapshot, ~50 ms after it goes out. Not every
+one lands: the committed run sent five and three took, at 10 s, 100 s and
+190 s, with the two in between doing nothing at all. UNVERIFIED: what refuses
+them. In the frame one lands:
+
+| field | before | at the death |
+|---|---|---|
+| `stats[0]` (health) | 100 | 0 |
+| `pm_type` | 0 | **6** |
+| `eventSequence` | 0 | 2 |
+| `events[0]`, `events[1]` | 0, 0 | **189** (`EV_DEATH`), **155** (`EV_RAISE_WEAPON`) |
+| `eventParms[0]`, `eventParms[1]` | 0, 0 | 0, 0 |
+| `legsAnim` | 634 | one of 18, 19, 22 in this capture, 16, 17, 20, 21 in others |
+| `torsoAnim` | 0 | 512 |
+| `weaponstate` | 0 | 0 or 1 |
+| `eFlags` | 16 | 16 |
+| `velocity` | 0, 0, 0 | 0, 0, 0 |
+
+`EV_DEATH` with parm 0 is what 5.1 reads out of `player_die`, and this is the
+wire confirming it. INFERRED: the `EV_RAISE_WEAPON` beside it is the same
+frame's weapon work rather than part of the death, since nothing in
+`player_die` writes the weapon channel.
+
+`pm_type` 6 is the dead value the gametype script sets. 5.1 shows `player_die`
+writes no `pm_type` at all, so 6 is `sessionstate` reaching pmove through the
+script, and it is the value a server has to reproduce.
+
+**`deadViewHeight` never moves.** It reads 8 before the death, through it and
+after the respawn, which is 5.1's "no store to `ps->deadViewHeight`" seen from
+outside. What moves is `viewHeightCurrent`: 60 at the death frame, then 51, 42,
+33, 24, 15, 8 over the next six snapshots, reaching `deadViewHeight` ~300 ms
+later. INFERRED: that is the ordinary view-height lerp running to the dead
+height, not a death-specific path, since the step per 50 ms snapshot is the
+same ~9 units the stance lerp uses.
+
+`stats[1]` reads 0 on every one of these deaths. 5.1 item 11 stores
+`vectoyaw(attacker->origin - self->origin)` there, and for a suicide that
+vector is zero, so 0 is the expected value and this capture does not exercise
+the interesting case.
+
+The four damage fields stay 0 across every death: a `kill` reaches
+`player_die` without `P_DamageFeedback` writing anything.
+
+The magazine goes with the death. `ammoclip` reads `3:7, 6:3, 10:15` alive and
+`3:7, 6:3` dead, and `ammo` reads `3:56, 10:400` alive and `3:56` dead; index
+10 comes back at the respawn. UNVERIFIED: which weapon index 10 is.
+
+### 8.2 The corpse
+
+Every death puts a corpse in the body queue in the same snapshot as
+`EV_DEATH`, and the queue is used in order from entity **64**: the four deaths
+of the committed run land in 64, 65, 66 and 67, which is what makes 64..71 the range a
+client has to read corpses out of. 5.2 could only infer that first slot from
+the `& 7` on the index; the capture measures it.
+
+Corpses do not expire on a timer here: the first is still in the body queue at
+the end of the run, 190 s after it died. An earlier
+run of the same script, on a server where the queue already held bodies, shows
+one vanishing and coming back with the same entity number and clientNum.
+INFERRED: those edges are PVS, not lifetime, since the target had respawned
+elsewhere in between. Nothing in either capture shows a corpse being freed.
+
+### 8.3 The obituary and the respawn
+
+Each death broadcasts one `EV_OBITUARY` (201) in the same snapshot, with
+`otherEntityNum` 0 (the victim), `attackerEntityNum` 0 and `eventParm` **150**.
+150 is `0x96`, `MOD_SUICIDE`, which is the `kill` path in
+`cod11-hud-protocol.md` section 2's table. The shooter, 2000 to 4500 units
+away with no line of sight, receives every one: the event is `SVF_BROADCAST`.
+
+The respawn needs the use press and takes it after a delay of its own. The
+target presses use 3 s after death and again once a second; it goes live about
+1 s after the first press, 4.0 s dead in all, and one run needed three presses
+on one death and stayed dead 5.1 s. INFERRED: the presses before that are
+refused, so the script holds the body for a few seconds before it will take
+one.
+
+On the frame the player is alive again: `stats[0]` 100, `pm_type` 0,
+`eventSequence` 0 with a cleared ring, `legsAnim` 634, `torsoAnim` 0,
+`viewHeightCurrent` 60, and `eFlags` **24** where it read 16 before. 24 is 16
+with bit `0x8` set, the anim-restart toggle 5.2 names on the clone, so a
+respawn flips it the same way.
+
+---
+
+## 9. Open cells
 
 - UNVERIFIED: what sets `pm_flags 0x800`, which stops `PM_Weapon` outright,
   and what `pm_flags 0x400` and `0x4000` mean. INFERRED for `0x400`: it is set

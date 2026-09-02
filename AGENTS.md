@@ -143,6 +143,20 @@ engineering setup works.
   `torsoAnim`"; run it on two maps, because the map picks the weapon and the
   bolt-action mosin on mp_pavlov is what exposed the rechamber and
   empty-reload states the carbine never reaches.
+  `--probe-target` and `--save-hit` are the two halves of the hit capture, one
+  probe each on opposite teams, writing
+  `crates/server/tests/fixtures/playerstate/<map>-<gametype>-hit-target.txt`
+  and `-hit-shooter.txt`. The target stands still, sends the `kill` client
+  command every 45 s and presses use 3 s after each death, which is what puts a
+  death, a corpse, an obituary and a respawn in the capture without needing the
+  shooter to land a shot; the shooter walks toward it and fires once it has a
+  clear eye-to-eye trace through the map's collision. It does not get one on
+  mp_carentan: retail's deathmatch spawn picker puts a respawning client at the
+  point farthest from the other one, and the walk does not cross a town in the
+  150 s it is given, so the committed shooter fixture opens with
+  `# BROKEN no line of sight after 150 s` and its shots hit the map. Start the
+  target first and give it a longer `--probe-secs` than the shooter. What the
+  captures measured is in `docs/research/cod11-combat.md`, section 8.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
