@@ -58,10 +58,10 @@ makes 247 records ahead of it. INFERRED: that record is the terminator, since
 its name word is not a `.rodata` offset and every record before it is.
 VERIFIED: the offsets are byte offsets into the weapon def, and the type codes
 seen in it are 0 string, 4 int, 5 bool, 6 float, 7 time, 8/9/0xa/0xb/0xc/0xd
-enum. VERIFIED: a type-7 field is stored in milliseconds, since
-`weaponstate` runs of a known length match the weapon file's seconds times
-1000 (`player-model-anim-system.md`) and `weaponTime` is decremented by
-`pml.msec`.
+enum. VERIFIED: `weaponTime` and `weaponDelay` are decremented by `pml.msec`,
+and the captured `weaponstate` runs match the weapon file's seconds times 1000
+(`player-model-anim-system.md`). INFERRED: a type-7 field therefore holds
+milliseconds, converted from the seconds the weapon file spells.
 
 VERIFIED: `weaponDefs`, the array the game indexes by weapon number, is the
 pointer at `0x7c91c`; `BG_SetupWeaponInfo` (`0x36674`) allocates it 64 entries
@@ -218,11 +218,12 @@ VERIFIED, `0x3000ffe0` in the dll: the setter is
 `weapAnim = (~weapAnim & 0x200) | anim`, guarded on `ps->pm_type < 6` and
 `pm->cmd.weapon != 0`. INFERRED: because the write always inverts bit `0x200`,
 every call flips the toggle whether or not the index changed. VERIFIED,
-`0x30010010`: a second setter takes the same argument but returns without
-writing when `(weapAnim & 0xFFFFFDFF) == anim`. INFERRED: that second form is
-what holds an index steady across frames without restarting the clip, and the
-first form is what a repeated shot goes through, which is why the captured
-sustained fire reads 253, 765, 253, 765.
+`0x30010010`: a second setter takes the same argument, compares
+`weapAnim & 0xFFFFFDFF` against it, and has a return path that writes nothing.
+INFERRED: that path is the one an equal comparison takes. INFERRED: that
+second form is what holds an index steady across frames without restarting the
+clip, and the first form is what a repeated shot goes through, which is why the
+captured sustained fire reads 253, 765, 253, 765.
 
 VERIFIED, `.so` `0x38c80` (dll `0x300116a0`): the fire anim is chosen against
 the float at `.rodata 0x7254c`, which is `0.75`, compared with
@@ -236,13 +237,16 @@ below it 2 or 3, and the lower of each pair is taken when
 
 VERIFIED: `ps->weaponTime` is `ps+0x2C` and `ps->weaponDelay` is `ps+0x30`,
 the offsets `docs/protocol-1.1.md` already carries. VERIFIED, `.so` `0x387c0`
-(dll `0x30011210`): both are decremented by `pml.msec` each frame when
-non-zero, and each is clamped to 0 when the subtraction takes it below 1.
-VERIFIED: the function returns 1 when `weaponDelay` reached 0 on this frame and
-0 otherwise. INFERRED: that return value is the single boolean `PM_Weapon`
-threads into the melee check, the rechamber check, the reload machine, the
-trigger-release check and the fire function, so "the delay expired this frame"
-is the one edge the whole machine is written around.
+(dll `0x30011210`): each is compared against 0, decremented by `pml.msec`,
+compared against 1, and has a store of the immediate 0. INFERRED: so a
+non-zero timer loses `pml.msec` a frame and is clamped to 0 once the
+subtraction takes it below 1.
+VERIFIED: its two return paths load the immediates 1 and 0. INFERRED: it
+returns 1 when `weaponDelay` reached 0 on this frame and 0 otherwise, read off
+the compare that selects them. INFERRED: that return value is the single
+boolean `PM_Weapon` threads into the melee check, the rechamber check, the
+reload machine, the trigger-release check and the fire function, so "the delay
+expired this frame" is the one edge the whole machine is written around.
 
 Which weapon-file time each state runs on, all VERIFIED off the store that
 sets `weaponTime` or `weaponDelay` in the dll:
@@ -259,24 +263,28 @@ sets `weaponTime` or `weaponDelay` in the dll:
 | `WEAPON_RELOAD_END` | `reloadEndTime` `0x1FC` | -- | `0x30010c50` |
 | `WEAPON_MELEE_WINDUP` | `meleeTime` `0x1E4` | `meleeDelay` `0x1D0` | `0x30011930` |
 
-VERIFIED: the rechamber's `weaponDelay` takes `rechamberBoltTime`, and takes
-the literal 1 instead when that field is 0 or is not less than
-`rechamberTime`. VERIFIED, dll `0x30010250`: the reload's `weaponDelay` is not
-the add-time on its own but the smaller of the add-time and the state's own
-`weaponTime`, dropped to the literal 1 when the weapon is bolt-action with its
-rechamber bit set and `rechamberBoltTime` is 0 or not smaller, and left at 0
-when the add-time is 0. VERIFIED: `player-model-anim-system.md` matched the mosin's
-`weaponstate` 5 run to `reloadTime` 2.4; both `reloadTime` and
-`reloadEmptyTime` are 2.4 on that weapon, and the branch that ran was the
+VERIFIED: the rechamber's `weaponDelay` has two sources, `rechamberBoltTime`
+and the literal 1, and `rechamberBoltTime` is tested against 0 and against
+`rechamberTime`. INFERRED: the literal is taken when that field is 0 or is not
+less than `rechamberTime`. VERIFIED, dll `0x30010250`: the reload's
+`weaponDelay` is the smaller of the add-time and the state's own `weaponTime`,
+and the function also has a store of the literal 1 and a path that leaves the
+field at 0. INFERRED: the 1 is taken when the weapon is bolt-action with its
+rechamber bit set and `rechamberBoltTime` is 0 or not smaller, and the field is
+left at 0 when the add-time is 0. VERIFIED: `player-model-anim-system.md`
+matched the mosin's `weaponstate` 5 run to `reloadTime` 2.4; both `reloadTime`
+and `reloadEmptyTime` are 2.4 on that weapon, and the branch that ran was the
 empty one, since the state opened after event 161 and event 152.
 
 ### 1.4 The semi-automatic latch is `weaponTime`, not a flag
 
-VERIFIED, `.so` `0x387c0` (dll `0x30011210`): when `weaponTime` would reach 0
-this frame, the code first tests four things -- `weaponDef->semiAuto`
-(`0x2C4`) non-zero, `pm->cmd.buttons & 1`, `ps->weapon == pm->cmd.weapon`, and
-`ps->ammoclip[weaponDef->clipIndex]` non-zero -- and stores the literal 1 into
-`weaponTime` when all four hold, and 0 otherwise.
+VERIFIED, `.so` `0x387c0` (dll `0x30011210`): on the path taken once
+`weaponTime` has been decremented below 1, the code tests four things --
+`weaponDef->semiAuto` (`0x2C4`) non-zero, `pm->cmd.buttons & 1`,
+`ps->weapon == pm->cmd.weapon`, and `ps->ammoclip[weaponDef->clipIndex]`
+non-zero -- and the block has two stores into `weaponTime`, of the immediates
+1 and 0. INFERRED: the 1 is stored when all four tests hold and the 0
+otherwise, read off the four branches.
 
 INFERRED: that is the whole semi-automatic edge. Nothing latches the button in
 `pm_flags` or in a playerstate field; the weapon simply never reaches
@@ -342,7 +350,7 @@ the same value.
 
 ### 1.6 Releasing the trigger
 
-The check is dll `0x300113d0`, inlined in the `.so` at `0x392f0`.
+VERIFIED: the check is dll `0x300113d0`, inlined in the `.so` at `0x392f0`.
 VERIFIED: the offsets, immediates, weapon-def fields, event numbers and
 call targets named in the list below. INFERRED: the ordering, and every
 "when", "unless", "otherwise" and "skipped" in it, which are branch
@@ -484,11 +492,10 @@ raises `EV_PUTAWAY_WEAPON` on its own.
 
 ### 1.9 Rechamber, and the bolt-action bitfield
 
-The check is dll `0x300100a0`.
-VERIFIED: the offsets, immediates, weapon-def fields, event numbers and
-call targets named in the list below. INFERRED: the ordering, and every
-"when", "unless", "otherwise" and "skipped" in it, which are branch
-conditions.
+VERIFIED: the check is dll `0x300100a0`. VERIFIED: the offsets, immediates,
+weapon-def fields, event numbers and call targets named in the list below.
+INFERRED: the ordering, and every "when", "unless", "otherwise" and "skipped"
+in it, which are branch conditions.
 
 - The whole check needs `weaponDef->boltAction` (`0x2C8`) non-zero and the
   weapon's bit set in `ps->weaponrechamber` (`ps+0x31C`, two dwords, indexed
@@ -558,10 +565,15 @@ VERIFIED: the three tests and the store in the list below, all in `.so`
 - `ps->pm_type > 5`: `ps->weapon = 0`, return.
 - `ps->eFlags & 0xC000` set: return with nothing done.
 
-VERIFIED: the second test is `cmp DWORD PTR [ebx+0x4],0x5` with a `jg`, here
-and at the head of `player_die`, and the binary carries no name for the values
-above 5. INFERRED: 6 and 7 are the two dead `pm_type`s, from CoDExtended's
-`shared.h` naming them `PM_DEAD` and `PM_DEAD_LINKED`.
+VERIFIED: the second test is `0x390f8: cmp DWORD PTR [eax+0x4],0x5` followed
+by a `jle`, so the `> 5` case is the fallthrough at `0x390fe` that stores 0
+into `ps->weapon`. VERIFIED: the head of `player_die` is
+`0x49a5d: cmp DWORD PTR [eax+0x4],0x5` with a `jg` to its epilogue, and
+`P_DamageFeedback` is `0x3f512: cmp DWORD PTR [ebx+0x4],0x5` with a `jg`,
+which is the module's only `ebx` form of that compare. VERIFIED: the binary
+carries no name for the `pm_type` values above 5. INFERRED: 6 and 7 are the
+two dead ones, from CoDExtended's `shared.h` naming them `PM_DEAD` and
+`PM_DEAD_LINKED`.
 
 INFERRED: `eFlags 0xC000` marks a player on a mounted MG, since `FireWeapon`
 tests the same mask before taking its turret branch and the fire path skips the
@@ -583,31 +595,38 @@ VERIFIED, `FireWeapon` `0x68d68`: the shot's view angles are
 `ps->viewangles` with components 0 and 1 replaced from `client+0x220C` and
 `client+0x2210`, and `AngleVectors` turns them into a forward/right/up axis
 triple. VERIFIED: the muzzle is the entity's origin with
-`ps->viewHeightCurrent` (`ps+0xD0`) added to z, passed through `G_AddLean`,
-then snapped to integers component by component.
+`ps->viewHeightCurrent` (`ps+0xD0`) added to z, and the function calls
+`G_AddLean` on it and rounds each component to an integer with an explicit
+`fldcw`. INFERRED: the lean is applied before the rounding.
 
 VERIFIED, `ClientEndFrame` `0x410f1`: `client+0x2240` is
 `ps->aimSpreadScale / 255.0`, computed once a frame. VERIFIED, `FireWeapon`
-`0x68eb9`: when `ps->fWeaponPosFrac == 1.0` the spread is
-`adsSpread + (hipSpreadMax - adsSpread) * client->0x2240`, and otherwise it is
-`min + (hipSpreadMax - min) * client->0x2240` where `min` is
-`BG_GetMinSpreadForWeapon(ps, weapon, level.time)`.
+`0x68eb9`: it compares `ps->fWeaponPosFrac` against 1.0 and has two arms, one
+computing `adsSpread + (hipSpreadMax - adsSpread) * client->0x2240` and the
+other `min + (hipSpreadMax - min) * client->0x2240` where `min` is
+`BG_GetMinSpreadForWeapon(ps, weapon, level.time)`. INFERRED: the `adsSpread`
+arm is the one an equal comparison takes.
 
-VERIFIED, `BG_GetMinSpreadForWeapon` `0x37114`: when
-`ps->viewHeightCurrent == ps->viewHeightTarget` or `ps->viewHeightLerpTime`
-is 0, the minimum is `hipSpreadProneMin` for `pm_flags & 1`,
-`hipSpreadDuckedMin` for `pm_flags & 2`, and `hipSpreadStandMin` otherwise.
-VERIFIED: while the view height is lerping it blends two of those three by the
-lerp fraction, clamped to 0..1.
+VERIFIED, `BG_GetMinSpreadForWeapon` `0x37114`: it compares
+`ps->viewHeightCurrent` against `ps->viewHeightTarget` and
+`ps->viewHeightLerpTime` against 0, tests `pm_flags & 1` and `pm_flags & 2`,
+and loads `hipSpreadProneMin`, `hipSpreadDuckedMin` and `hipSpreadStandMin`
+off those tests. VERIFIED: a second path blends two of the three by a fraction
+clamped to 0..1. INFERRED: the settled stance picks one of the three outright
+and the blend is what a stance still lerping takes.
 
-VERIFIED, `PM_AdjustAimSpreadScale` `0x385e8` (dll `0x30011050`), which is what
-moves `aimSpreadScale` between shots: it subtracts `hipSpreadDecayRate`
-(`0x24C`) scaled by the frame time, multiplied by `hipSpreadDuckedDecay`
-(`0x25C`) when `eFlags & 0x20` is set and by `hipSpreadProneDecay` (`0x260`)
-when `eFlags & 0x40` is set; it adds `hipSpreadTurnAdd` (`0x254`) per view-angle
-delta and `hipSpreadMoveAdd` (`0x258`) when either movement axis is non-zero;
-it skips all of the additions when `ps->fWeaponPosFrac == 1.0`; and it clamps
-the result to 0..255.
+`PM_AdjustAimSpreadScale` `0x385e8` (dll `0x30011050`) is what moves
+`aimSpreadScale` between shots. VERIFIED: the offsets, immediates, weapon-def
+fields and call targets named in the list below. INFERRED: the ordering, and
+every "when", "otherwise" and "skipped" in it, which are branch conditions.
+
+- It subtracts `hipSpreadDecayRate` (`0x24C`) scaled by the frame time,
+  multiplied by `hipSpreadDuckedDecay` (`0x25C`) when `eFlags & 0x20` is set
+  and by `hipSpreadProneDecay` (`0x260`) when `eFlags & 0x40` is set.
+- It adds `hipSpreadTurnAdd` (`0x254`) per view-angle delta and
+  `hipSpreadMoveAdd` (`0x258`) when either movement axis is non-zero.
+- It skips all of the additions when `ps->fWeaponPosFrac == 1.0`.
+- It clamps the result to 0..255.
 
 ### 2.2 The cone
 
@@ -641,12 +660,13 @@ VERIFIED: with `depth > 12` it prints
 `"Bullet_Fire_Extended: Too many resursions, bullet aborted\n"` and returns.
 
 VERIFIED: the trace is `trap_LocationalTrace(&trace, start, end,
-passEnt->s.number, 0x02802031, priorityMap)`. VERIFIED: `priorityMap` is
-`riflePriorityMap` when `weaponDef->rifleBullet` (`0x2C0`) is set and
-`bulletPriorityMap` otherwise. INFERRED: the trace is per-bone rather than
-against the link box, because it returns a hit-location index (2.4) and takes
-a per-hit-location priority table as an argument; the link box has no such
-partition.
+passEnt->s.number, 0x02802031, priorityMap)`. VERIFIED: the two candidates
+for `priorityMap` are `riflePriorityMap` and `bulletPriorityMap`, selected off
+a test of `weaponDef->rifleBullet` (`0x2C0`) at `0x688ef`. INFERRED:
+`riflePriorityMap` is the one a `rifleBullet` weapon takes. INFERRED: the
+trace is per-bone rather than against the link box, because it returns a
+hit-location index (2.4) and takes a per-hit-location priority table as an
+argument; the link box has no such partition.
 
 VERIFIED: the trace result at `[ebp-0x30]` is read at these offsets --
 `+0` fraction, `+4` endpos, `+16` normal, `+28` surface flags, `+32` a second
@@ -719,9 +739,11 @@ numbering, and every "when", "unless" and "otherwise" in it.
    `damage` halved by C integer division, and `depth + 1`, and it skips the
    recursion when the halved damage is not positive.
 
-VERIFIED: `dflags` is `0x20` and `mod` is 2 when `weaponDef->rifleBullet` is
-set, and `dflags` is 0 and `mod` is 1 otherwise. Those are `MOD_RIFLE_BULLET`
-and `MOD_PISTOL_BULLET` (section 4.1). INFERRED: since `dflags` is non-zero
+VERIFIED: the function tests `weaponDef->rifleBullet` at `0x688c6` and the
+two arms load the immediate pairs (`dflags` `0x20`, `mod` 2) and (`dflags` 0,
+`mod` 1). INFERRED: the first pair is the one a `rifleBullet` weapon takes.
+VERIFIED: 2 and 1 are `MOD_RIFLE_BULLET` and `MOD_PISTOL_BULLET`
+(section 4.1). INFERRED: since `dflags` is non-zero
 only for a rifle bullet, step 5 means a rifle round passes through the player
 it hits and carries half its damage to whatever is behind, and a pistol round
 stops on the first player.
@@ -737,14 +759,16 @@ field that scales it is `g_fHitLocDamageMult[hitLoc]`, applied inside
 
 VERIFIED, `Weapon_Melee` `0x68720`: it traces from the frame's origin to
 `origin + forward * 64.0` (`.rodata 0x79c00`) with the same mask `0x02802031`
-and always with `bulletPriorityMap`. VERIFIED: it spawns a temp entity with
-event `0xA6` (`EV_MELEE_HIT`, 166) when the hit entity has a client and `0xA7`
-(`EV_MELEE_MISS`, 167) otherwise, filling `otherEntityNum` with the traced
-entity number, `eventParm` with `DirToByte(trace.normal)` and
-`entityState+200` with the attacker's weapon. VERIFIED: when the traced entity
-is not 1022 and its `takedamage` is set it calls `G_Damage` with `dflags` 0,
-`mod` 7 (`MOD_MELEE`) and a damage of `weaponDef->meleeDamage` plus
-`rand() % 5`.
+and always with `bulletPriorityMap`. VERIFIED: it spawns a temp entity whose
+event is either `0xA6` (`EV_MELEE_HIT`, 166) or `0xA7` (`EV_MELEE_MISS`, 167),
+filling `otherEntityNum` with the traced entity number, `eventParm` with
+`DirToByte(trace.normal)` and `entityState+200` with the attacker's weapon.
+INFERRED: the first event is the arm taken when the hit entity has a client,
+read off the test of `gentity+0x158`. VERIFIED: it tests the traced entity
+number against 1022 and the entity's `takedamage`, and calls `G_Damage` with
+`dflags` 0, `mod` 7 (`MOD_MELEE`) and a damage of `weaponDef->meleeDamage`
+plus `rand() % 5`. INFERRED: the call is on the arm where the number differs
+from 1022 and `takedamage` is set.
 
 ### 2.6 `Bullet_Endpos`
 
@@ -772,11 +796,12 @@ at `0x7DD20`, in this index order.
 | 9 | `left_arm_lower` | | |
 
 VERIFIED: `G_GetHitLocationString(i)` (`0x4a8b0`) returns the 16-bit word at
-`0xAA140 + i*2`, and `G_GetHitLocationIndexFromString(s)` (`0x4a8c4`) walks
-the same 19-entry table for a match and returns 0 when it finds none.
-VERIFIED: `G_ParseHitLocDmgTable` fills that table with
-`Scr_AllocString(name, 1)` per index, so it holds interned script strings, not
-configstring numbers.
+`0xAA140 + i*2`. VERIFIED: `G_GetHitLocationIndexFromString(s)` (`0x4a8c4`)
+compares the argument against each of the same 19 words up to index 0x12 and
+has two return paths, the loop counter and a zeroed `eax`. INFERRED: the zero
+is what a walk with no match returns. VERIFIED: `G_ParseHitLocDmgTable` fills
+that table with `Scr_AllocString(name, 1)` per index. INFERRED: the table
+therefore holds interned script strings, not configstring numbers.
 
 **No box partition, no angle test.** VERIFIED: the index does not come from
 any code in `game.mp.i386.so`; it arrives as the 16-bit field at offset 44 of
@@ -787,22 +812,24 @@ is steered from the game module only by the priority map of section 2.3.
 
 ### 3.1 The multiplier table and what a missing file does
 
-VERIFIED, `G_ParseHitLocDmgTable` `0x498b0`: it first writes `1.0f` into all
-19 entries of `g_fHitLocDamageMult` (`0x16F080`, 0x4c bytes, one float per hit
-location) and then writes `0.0f` into entry 18. INFERRED: so with no table
-loaded every location does full damage except `gun`, which does none.
+VERIFIED, `G_ParseHitLocDmgTable` `0x498b0`: a loop over indices 0 to 0x12
+writes `1.0f` into `g_fHitLocDamageMult` (`0x16F080`, 0x4c bytes, one float
+per hit location), and `0x49909` writes `0.0f` into the entry at `+0x48`.
+INFERRED: the second store runs after the loop, so with no table loaded every
+location does full damage except `gun` at index 18, which does none.
 
-VERIFIED: it then opens `"info/mp_lochit_dmgtable"`, and on a failure to open
-calls `Com_Error(1, "Could not load hitloc damage table %s")`. VERIFIED: it
-checks the file begins with `"LOCDMGTABLE"` and errors with
-`"\"%s\" does not appear to be a hitloc damage table"` otherwise; it errors
-with `"\"%s\" Is too long of a hitloc damage table to parse"` above 0x1FFF
-bytes; it errors with `"\"%s\" is not a valid hitloc damage table"` when
-`Info_Validate` refuses it; and it calls `G_Error` with
-`"Error parsing hitloc damage table %s"` when the 19-field parse fails.
-INFERRED: none of those is a soft fallback, so a server whose paks lack the
-file does not start, and the all-ones default is only ever the state the
-parser overwrites.
+VERIFIED: it contains a `trap_FS_FOpenFile` on
+`"info/mp_lochit_dmgtable"`, a `strncmp` against `"LOCDMGTABLE"`, a compare of
+the length against `0x1FFF`, and a call to `Info_Validate`. VERIFIED: it holds
+four error strings, `"Could not load hitloc damage table %s"`,
+`"\"%s\" does not appear to be a hitloc damage table"`,
+`"\"%s\" Is too long of a hitloc damage table to parse"` and
+`"\"%s\" is not a valid hitloc damage table"`, all four passed to
+`Com_Error` with the literal 1, plus `"Error parsing hitloc damage table %s"`
+passed to `G_Error`. INFERRED: each string is on the failing arm of the check
+it names, so a bad or missing file reaches `Com_Error` and none of the four is
+a soft fallback. INFERRED: a server whose paks lack the file therefore does not
+start, and the all-ones default is only ever the state the parser overwrites.
 
 VERIFIED: the parse spec it builds is 19 records of
 `{ name, offset = i*4, type = 6 }` against `g_fHitLocDamageMult`, and type 6
@@ -815,9 +842,10 @@ is `float` in the same type vocabulary the weapon-def table uses.
 ### 4.1 Means of death
 
 VERIFIED: the name table is the 25 pointers at `0x7DDA0`, and
-`Scr_PlayerDamage` (`0x5ca90`) indexes it with the `mod` argument after
-comparing against 0x18 and substituting the literal `"badMOD"` (`.rodata
-0x78a80`) above that.
+`Scr_PlayerDamage` (`0x5ca90`) compares the `mod` argument against 0x18,
+indexes the table with it, and holds the literal `"badMOD"` (`.rodata
+0x78a80`) as a second string. INFERRED: `"badMOD"` is what a `mod` above 0x18
+selects.
 
 | index | name | index | name |
 |---|---|---|---|
@@ -873,20 +901,24 @@ function; it jumps straight to the epilogue after the callback. INFERRED:
 health, knockback, pain and death for players are all the script's, through
 `finishPlayerDamage` (4.4).
 
-**When `targ` has no client**, VERIFIED: a null inflictor or attacker is
-replaced by a fixed entity; `s.eType == 5` takes a separate branch that
-notifies script and calls `targ+0x210` with `(targ, inflictor, attacker)`;
-otherwise the direction is normalised, `targ->flags & 1` returns,
-a non-positive damage is raised to 1, `g_debugDamage` prints
-`"target:%i health:%i damage:%i\n"`, `targ->health` (`gentity+0x230`, the same
-offset `cod11-gsc-object-model.md` gives the `health` script field) is
-decremented, and script is notified with two arguments. VERIFIED: with health
-still positive it calls `targ+0x214` as
-`pain(targ, attacker, damage, point, mod, dir, hitLoc)` after copying the
-direction into `targ+0x280..0x288` and the point into `targ+0x1BC..0x1C4`;
-with health at or below zero it clamps health to -999, notifies script, stores
-the attacker in `targ+0x258` and calls `targ+0x218` as
-`die(targ, inflictor, attacker, damage, mod, weapon, dir, hitLoc)`.
+**When `targ` has no client.** VERIFIED: the offsets, immediates, strings and
+call targets named in the list below. INFERRED: the ordering, and every "when"
+and "otherwise" in it.
+
+- A null inflictor or attacker is replaced by a fixed entity.
+- `s.eType == 5` takes a separate branch that notifies script and calls
+  `targ+0x210` with `(targ, inflictor, attacker)`.
+- Otherwise the direction is normalised, `targ->flags & 1` returns, a
+  non-positive damage is raised to 1, `g_debugDamage` prints
+  `"target:%i health:%i damage:%i\n"`, `targ->health` (`gentity+0x230`, the
+  same offset `cod11-gsc-object-model.md` gives the `health` script field) is
+  decremented, and script is notified with two arguments.
+- With health still positive it copies the direction into
+  `targ+0x280..0x288` and the point into `targ+0x1BC..0x1C4` and calls
+  `targ+0x214` as `pain(targ, attacker, damage, point, mod, dir, hitLoc)`.
+- With health at or below zero it clamps health to -999, notifies script,
+  stores the attacker in `targ+0x258` and calls `targ+0x218` as
+  `die(targ, inflictor, attacker, damage, mod, weapon, dir, hitLoc)`.
 
 ### 4.3 `G_DamageClient`
 
@@ -920,18 +952,23 @@ player method table (`python3 tools/re/dump_builtins.py game.mp.i386.so all`).
 VERIFIED: it takes the same nine arguments, resolving the means of death with
 `G_IndexForMeansOfDeath`, the weapon with `BG_GetWeaponIndexForName` truncated
 to a byte, and the hit location with `G_GetHitLocationIndexFromString`.
-VERIFIED: it returns immediately when `iDamage <= 0`.
+VERIFIED: it compares `iDamage` against 0 and jumps to its epilogue.
+INFERRED: it returns without doing anything when `iDamage <= 0`.
 
-**Knockback.** VERIFIED, `0x43945` onward: it is skipped when
-`self->flags & 8` (`gentity+0x17C`) or when `iDFlags & 4`. VERIFIED: the
-stance scale is `0.02` for `pm_flags & 1`, `0.15` for `pm_flags & 2` and
-`0.3` otherwise (`.rodata 0x731ec`, `0x731f0`, `0x731e8`). VERIFIED:
-`knockback = (int)(iDamage * scale)` truncated toward zero, clamped down to
-60, and the rest is skipped when it is 0. VERIFIED: the velocity added is
-`normalize(vDir) * (knockback * g_knockback / 250.0)`, with 250.0 at
-`.rodata 0x731f4` and `g_knockback` defaulting to `"1000"`. VERIFIED: when
-`ps->pm_time` (`ps+0x10`) is 0 it is set to `knockback * 2` clamped to
-`[50, 200]` and `pm_flags` gets `0x200` ORed in.
+**Knockback**, `0x43945` onward. VERIFIED: the offsets, immediates, constants
+and cvar named in the list below. INFERRED: the ordering, and every "when",
+"otherwise" and "skipped" in it.
+
+- It is skipped when `self->flags & 8` (`gentity+0x17C`) or when
+  `iDFlags & 4`.
+- The stance scale is `0.02` for `pm_flags & 1`, `0.15` for `pm_flags & 2` and
+  `0.3` otherwise (`.rodata 0x731ec`, `0x731f0`, `0x731e8`).
+- `knockback = (int)(iDamage * scale)` truncated toward zero, clamped down to
+  60, and the rest is skipped when it is 0.
+- The velocity added is `normalize(vDir) * (knockback * g_knockback / 250.0)`,
+  with 250.0 at `.rodata 0x731f4` and `g_knockback` defaulting to `"1000"`.
+- When `ps->pm_time` (`ps+0x10`) is 0 it is set to `knockback * 2` clamped to
+  `[50, 200]` and `pm_flags` gets `0x200` ORed in.
 
 INFERRED: with the stock `g_knockback` the push is four units per second per
 point of `knockback`, so a 45-damage carbine hit on a standing player adds
@@ -1046,9 +1083,9 @@ the `clonePlayer` method.
 
 ### 5.2 `G_SpawnPlayerClone` and the body queue
 
-`G_SpawnPlayerClone` is `0x67888`. VERIFIED: the offsets, immediates,
-arithmetic and call targets named in the list below. INFERRED: the ordering,
-and every "when" and "before" in it.
+VERIFIED: `G_SpawnPlayerClone` is `0x67888`. VERIFIED: the offsets,
+immediates, arithmetic and call targets named in the list below. INFERRED:
+the ordering, and every "when" and "before" in it.
 
 - The slot is `&g_entities[64 + level->bodyQueIndex]`, computed as
   `level->gentities + index * 0x314 + 0xC500`, and `0xC500` is `64 * 0x314`.
@@ -1065,8 +1102,9 @@ VERIFIED: **the body queue holds 8 entries**, from the `& 7` on the index.
 INFERRED: the queue starts at entity 64, immediately past the 64 client slots.
 INFERRED: the eFlags toggle guarantees the word differs from whatever the
 previous occupant of this slot sent, which is the same restart trick the anim
-channels use. VERIFIED: the `G_FreeEntity` above is the only call that frees a
-clone, since it is the only one reachable from an entity in this range.
+channels use. INFERRED: the `G_FreeEntity` above is the only call that frees a
+clone, since it is the only one on a path that reaches an entity in this
+range.
 
 The `cloneplayer` script method `0x4450C` is what fills it. VERIFIED: every
 field and source in the table below, read off the store that writes it.
@@ -1090,8 +1128,9 @@ field and source in the table below, read off the store that writes it.
 | `+0x190` | the literal `0x10001` |
 
 VERIFIED: `+0x118`, the word between the two copied runs, has no store.
-VERIFIED: `trap_LinkEntity`, `nextthink = level.time + 250` (`+0x1FC`), a
-think function at `0x456DC` and `GScr_AddEntity` follow. INFERRED: skipping
+VERIFIED: the function also calls `trap_LinkEntity` and `GScr_AddEntity` and
+stores `level.time + 250` into `+0x1FC` and the address `0x456DC` into
+`+0x200`. INFERRED: those four come after the table's stores, and skipping
 `+0x118` is deliberate, since every float around it is copied one by one.
 
 VERIFIED, the think at `0x456DC`: its entire body is
@@ -1140,33 +1179,38 @@ condition in it.
 INFERRED: `client+0x2270` and `client+0x2274` are the view kick the server
 applies itself, since nothing on the wire carries them.
 
-**When the four fields clear: they do not.** VERIFIED: `damageEvent`,
-`damageCount`, `damageYaw` and `damagePitch` are written only by this
-function, and only the accumulator `client+0x2214` is reset. INFERRED: the
+**When the four fields clear: they do not.** VERIFIED: the only value this
+function stores that resets anything is the 0 into `client+0x2214`;
+`damageEvent` takes an increment, `damageCount` takes `count`, and
+`damageYaw` and `damagePitch` take either a scaled angle or the literal 255.
+INFERRED: the
 client detects a new hit by `damageEvent` changing, so the fields keep their
 last values between hits and a reader that waits for them to return to zero
 waits forever.
 
-VERIFIED: the 255/255 pair in step 7 is the sentinel for "no direction", set
-when the damage carried no `vDir` and `finishPlayerDamage` stored the victim's
-own origin in `client+0x2218` instead.
+VERIFIED: step 7's arm is the one that stores the literal 255 into both
+fields, and it is guarded on `client+0x2224`, which `finishPlayerDamage` sets
+to 1 on the path that stores the victim's own origin in `client+0x2218`.
+INFERRED: the 255/255 pair is therefore the sentinel for "the damage carried no
+direction".
 
 ---
 
 ## 7. `G_AddEvent` and `G_TempEntity`
 
-VERIFIED, `G_AddEvent` `0x67ca4`: with a client it writes
-`ps->events[ps->eventSequence & 3] = event` and
+VERIFIED, `G_AddEvent` `0x67ca4`: it tests `gentity+0x158` and has two arms.
+One writes `ps->events[ps->eventSequence & 3] = event` and
 `ps->eventParms[ps->eventSequence & 3] = parm` and increments
-`ps->eventSequence`; without one it does the same against
-`entityState+168`, `entityState+184` and `entityState+164`. VERIFIED: it then
-sets `ent+0x180` and `ent+0x150` to `level.time`. This is the ring
-`player-model-anim-system.md` measured from the outside: four slots, masked,
-counter incremented after the write.
+`ps->eventSequence`; the other does the same against `entityState+168`,
+`entityState+184` and `entityState+164`. VERIFIED: both arms reach two stores
+of `level.time`, into `ent+0x180` and `ent+0x150`. INFERRED: the playerstate
+arm is the one a client entity takes. INFERRED: this is the ring
+`player-model-anim-system.md` measured from the outside, four slots, masked,
+with the counter incremented after the write.
 
-VERIFIED: `G_TempEntity` is `0x67938` and returns an entity the callers fill
-in by hand, since every call site above writes `entityState` fields into its
-return value.
+VERIFIED: `G_TempEntity` is `0x67938`, and every call site above writes
+`entityState` fields into its return value. INFERRED: it returns an entity the
+callers fill in by hand.
 
 ---
 
@@ -1192,10 +1236,10 @@ return value.
 - UNVERIFIED: what puts a jumping or stance-changing player into `weaponstate`
   2 with event 156, which `player-model-anim-system.md` measured on retail.
   VERIFIED: only two instructions in `game.mp.i386.so` write `weaponstate` 2,
-  both inside the putaway function `0x37a9c`, whose only two callers are in
-  the weapon-change check and act only on `cmd.weapon`, `ps->weapons` and
-  `pm_flags & 0x10` (1.8). INFERRED: the cause is therefore outside
-  `PM_Weapon`, and 1.8's list is the complete set of putaway sources in this
-  module.
+  both inside the putaway function `0x37a9c`, and the module holds exactly two
+  calls to that function, both inside the weapon-change check (1.8).
+  INFERRED: those two call sites act only on `cmd.weapon`, `ps->weapons` and
+  `pm_flags & 0x10`, so the cause is outside `PM_Weapon` and 1.8's list is the
+  complete set of putaway sources in this module.
 - UNVERIFIED: the exact meaning of `client+0x220C` and `client+0x2210`, the
   two floats `FireWeapon` substitutes for the view pitch and yaw.
