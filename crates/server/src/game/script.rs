@@ -552,6 +552,28 @@ impl ScriptRuntime {
         &self.host.configstrings
     }
 
+    /// The events raised this frame, still queued.
+    pub fn temp_entities(&self) -> &[crate::game::temp_entity::TempEntity] {
+        &self.host.temp_entities
+    }
+
+    /// The same list, drained. A temp entity lives for one frame, so the
+    /// snapshot build takes them rather than reading them
+    /// (`crate::game::temp_entity`).
+    pub fn take_temp_entities(&mut self) -> Vec<crate::game::temp_entity::TempEntity> {
+        std::mem::take(&mut self.host.temp_entities)
+    }
+
+    /// The corpse queue, whose entities every client's snapshot carries
+    /// until their slots are reused (`crate::game::bodies`).
+    pub fn bodies(&self) -> &crate::game::bodies::BodyQueue {
+        &self.host.bodies
+    }
+
+    pub fn bodies_mut(&mut self) -> &mut crate::game::bodies::BodyQueue {
+        &mut self.host.bodies
+    }
+
     /// The cvar table as the script left it. `Server::tick` reads it back
     /// every frame for the same reason it re-reads the configstrings: a
     /// thread past a `wait` can still call `setCvar`.

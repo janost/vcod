@@ -9,6 +9,7 @@ use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
 use crate::game::host::ClientEvent;
 use crate::game::script;
+use crate::game::temp_entity;
 use crate::spectate::ClientSim;
 use crate::world::{TestEntities, World};
 use std::collections::{BTreeMap, HashMap};
@@ -950,6 +951,21 @@ impl Server {
         }
     }
 
+    /// Clones a client into the body queue and returns the corpse's entity
+    /// number. Test-facing, like `place_client`: `cloneplayer` is the script
+    /// path that will call this, and it does not exist yet.
+    pub fn test_push_body(&mut self, slot: usize) -> Option<u32> {
+        let c = self.clients.get(slot)?.as_ref()?;
+        let state = c
+            .sim
+            .as_ref()?
+            .to_entity(self.proto, slot, c.last_processed_st);
+        let (now, proto) = (self.sv_time_ms, self.proto);
+        self.script
+            .as_mut()
+            .map(|rt| rt.bodies_mut().push(state, None, now, proto))
+    }
+
     /// Puts a client back to spectating, where every client starts and where
     /// a dead one waits. Test-facing, like `place_client`.
     pub fn spectate_client(&mut self, slot: usize, origin: [f32; 3]) {
@@ -1460,6 +1476,38 @@ impl Server {
             })
             .collect();
 
+        // A body born this frame is re-read from its source client's sim
+        // once, here: the script clones the player before it raises the
+        // death animation, so the state the clone copied is a frame stale
+        // (`crate::game::bodies`). Then the queue's corpses join the map's
+        // entities; they are culled per client like anything else.
+        let (now, proto) = (self.sv_time_ms, self.proto);
+        if let Some(rt) = self.script.as_mut() {
+            rt.bodies_mut().refresh_newborn(
+                now,
+                |slot| client_entities.get(&(slot as u32)).cloned(),
+                proto,
+            );
+            entities.extend(rt.bodies().entities(proto));
+        }
+
+        // Every event the script raised this frame, as one-frame entities
+        // out of the reserved block. Draining them here is what frees them,
+        // the way retail frees a `G_TempEntity` the frame after it is sent.
+        let temps = self
+            .script
+            .as_mut()
+            .map_or_else(Vec::new, |rt| rt.take_temp_entities());
+        let temp_states: Vec<(u32, msg::EntityState)> = temps
+            .iter()
+            .take(temp_entity::TEMP_COUNT as usize)
+            .enumerate()
+            .map(|(i, te)| {
+                let n = temp_entity::TEMP_FIRST + i as u32;
+                (n, temp_entity::build(te, n, self.proto))
+            })
+            .collect();
+
         for slot in 0..self.clients.len() {
             let Some(c) = self.clients[slot].as_mut() else {
                 continue;
@@ -1484,12 +1532,26 @@ impl Server {
                     .filter(|(n, _)| **n != slot as u32)
                     .map(|(n, e)| (*n, e.clone())),
             );
-            let visible = match collision_vis {
+            // A scoped temp entity is culled like any other entity; a
+            // broadcast one skips the cull, which is what retail's
+            // `SVF_BROADCAST` does (docs/protocol-1.1.md, "Which entities a
+            // client is sent").
+            for (te, (n, e)) in temps.iter().zip(&temp_states) {
+                if temp_entity::visible_to(te, slot) && te.scope != temp_entity::Scope::Broadcast {
+                    sendable.insert(*n, e.clone());
+                }
+            }
+            let mut visible = match collision_vis {
                 Some(vis) => {
                     crate::world::visible_entities(vis, sim.eye_origin(), &sendable, self.proto)
                 }
                 None => sendable,
             };
+            for (te, (n, e)) in temps.iter().zip(&temp_states) {
+                if te.scope == temp_entity::Scope::Broadcast {
+                    visible.insert(*n, e.clone());
+                }
+            }
 
             let frame = snapshot::Snapshot {
                 server_time: self.sv_time_ms,

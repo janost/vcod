@@ -768,3 +768,81 @@ fn a_weapon_switch_off_the_usercmd_byte_happens_once() {
         "the weapon went back and forth: {weapons:?}"
     );
 }
+
+/// A corpse is not the dead client's own entity: both the client it was
+/// cloned from and everyone else are sent it. The body queue's first slot is
+/// entity 64, retail's own number
+/// (`docs/research/cod11-combat.md` section 5.2).
+#[test]
+fn a_body_reaches_both_the_dead_client_and_the_other_one() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+
+    let p = &PROTOCOL_V1;
+    let na = ca
+        .snapshots()
+        .newest()
+        .expect("A")
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let nb = cb
+        .snapshots()
+        .newest()
+        .expect("B")
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    // Both in one spot, so whether the corpse arrives is the queue's answer
+    // and not the PVS's.
+    let spot = ca.snapshots().newest().expect("A").ps.origin(p);
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+    for _ in 0..20 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+
+    let body = sv.test_push_body(nb).expect("the server has no script");
+    assert_eq!(body, 64, "the body queue starts at retail's entity 64");
+    for _ in 0..4 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+
+    for (who, client) in [("A", &ca), ("B", &cb)] {
+        let snap = client.snapshots().newest().expect("no snapshot");
+        let e = snap
+            .entities
+            .get(&body)
+            .unwrap_or_else(|| panic!("client {who} was sent no body entity ({body})"));
+        assert_eq!(e.field_i32(p, "eType"), 2, "client {who}: not an ET_CORPSE");
+        assert_eq!(
+            e.field_i32(p, "clientNum"),
+            nb as i32,
+            "client {who}: the body names the wrong client"
+        );
+    }
+}

@@ -188,6 +188,13 @@ pub struct GameHost {
     /// `crate::game::spawn::settle_turret_pitch` runs at map load. `wire.rs`
     /// puts it on the wire as `angles2[0]`.
     pub turret_pitch: std::collections::HashMap<EntId, f32>,
+    /// The events raised this frame, put on the wire as temp entities and
+    /// dropped by the snapshot build: retail frees a `G_TempEntity` the
+    /// frame after it is sent.
+    pub temp_entities: Vec<crate::game::temp_entity::TempEntity>,
+    /// The eight corpse entities `cloneplayer` fills
+    /// (`crate::game::bodies`).
+    pub bodies: crate::game::bodies::BodyQueue,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -218,6 +225,8 @@ impl GameHost {
             client_name_mode: builtins::cvar::ClientNameMode::default(),
             fs: None,
             turret_pitch: std::collections::HashMap::new(),
+            temp_entities: Vec::new(),
+            bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
         }
     }
 

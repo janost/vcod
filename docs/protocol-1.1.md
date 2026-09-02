@@ -436,6 +436,32 @@ The consequence for a capture: an entity-list fixture is a fixture *of a
 position*. Two captures taken at different spawns on one map disagree for
 reasons that have nothing to do with which entities exist.
 
+#### Corpses, temp entities and the numbers vcod gives them
+
+Beside the map's own entities a snapshot carries two things the object table
+does not hold: the body queue's corpses and the events raised that frame.
+
+A corpse is culled like any other entity, with the player's link box. A temp
+entity carries one event and lives for a single frame; retail's `obituary`
+sets `r.svFlags` to 8, `SVF_BROADCAST` (`.so 0x5a7ec`,
+`docs/research/cod11-hud-protocol.md` section 1), which sends it to every
+client regardless of PVS. VERIFIED: the dm hit capture's shooter, 2000 to
+4500 units from the victim with no line of sight, received every obituary
+(`docs/research/cod11-combat.md` section 8.3). vcod reproduces the three
+cases the flag word spells: a broadcast temp entity skips the cull, one
+withheld from a single client is dropped for that client and culled for the
+rest, and one addressed to a single client reaches only it, culled.
+
+The entity numbers, VERIFIED as vcod's own choice except where noted:
+clients take 0..63; the body queue takes 64..71, which is retail's own range
+(`G_SpawnPlayerClone` indexes `&g_entities[64 + bodyQueIndex]` with the
+index advanced `& 7`, `cod11-combat.md` section 5.2); map and script
+entities run from 72 up; temp entities take 958..1021, the 64 numbers below
+`ENTITYNUM_WORLD`, reused every frame. Retail instead gives a temp entity
+whatever free slot `G_TempEntity` finds, and nothing on either side compares
+one frame's temp-entity number against the next's, so the reserved block is
+free to differ.
+
 ### svc_serverCommand (5)
 
 `long sequence`, then `bigstring text`. Dedupe by sequence, and store in the 64-slot ring, because the scramble key needs it. Then dispatch on the leading token. CoD 1.1 server commands are single letters (`CG_ServerCommand` switches on `argv0[0]`; the full table is section 0 of `docs/research/cod11-hud-protocol.md`). The ones the engine side of a client has to act on:

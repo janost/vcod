@@ -5,6 +5,23 @@
 //! turrets (`docs/protocol-1.1.md`, "Which entities a client is sent"). This
 //! module builds that set; the culling that decides which of them one client
 //! is sent is the caller's business.
+//!
+//! # How the entity numbers are split
+//!
+//! - `0..63`: client slots (`crate::game::entity::ObjectTable::spawn_client`).
+//! - `64..71`: the body queue, retail's own numbers
+//!   (`crate::game::bodies`, `docs/research/cod11-combat.md` section 5.2).
+//! - `72..`: map and script entities, from `entity::FIRST_MAP_ENTITY` up.
+//! - `958..1021`: temp entities, reused every frame
+//!   (`crate::game::temp_entity`). Retail's `G_TempEntity` takes whatever
+//!   free slot it finds instead; vcod reserves a block at the top so a
+//!   one-frame event can never take a number the object table is about to
+//!   hand out. A map whose script spawns past 958 would collide, which no
+//!   stock map comes near.
+//! - `1022`: `ENTITYNUM_WORLD`, `1023`: `ENTITYNUM_NONE`.
+//!
+//! Bodies and temp entities are appended by `crate::server`, not here: the
+//! A/B gates read `packet_entities` for the map's own static set.
 
 use super::host::GameHost;
 use crate::configstrings::CsRange;
@@ -50,8 +67,12 @@ pub fn link_box(etype: i32) -> ([f32; 3], [f32; 3]) {
         // we hold carries one (docs/protocol-1.1.md).
         ET_SCRIPTMOVER => ([0.0; 3], [0.0; 3]),
         // A player links with its own movement box, the one pmove collides
-        // with (`vcod_common::pmove`).
-        ET_PLAYER => (
+        // with (`vcod_common::pmove`). A corpse keeps the player's box: the
+        // clone copies the dying entity's bounds, which `player_die` has
+        // already flattened to 30 units tall (cod11-combat.md 5.2). The
+        // extra height only widens the cluster set, so the taller box is
+        // the conservative one to cull with.
+        ET_PLAYER | crate::game::bodies::ET_CORPSE => (
             [
                 -vcod_common::pmove::HALF_WIDTH,
                 -vcod_common::pmove::HALF_WIDTH,
