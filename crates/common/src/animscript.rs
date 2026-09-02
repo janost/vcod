@@ -563,6 +563,17 @@ impl AnimState {
         }
     }
 
+    /// The torso restarted on no anim at all, toggle flipped whatever it
+    /// held: what a death leaves the channel reading (512 beside the death
+    /// `legsAnim` in both retail deaths, cod11-combat.md section 8).
+    pub fn restart_torso_empty(&mut self) {
+        self.torso = Channel {
+            index: 0,
+            toggle: !self.torso.toggle,
+            held_until_ms: None,
+        };
+    }
+
     pub fn legs(&self) -> i32 {
         self.legs.wire()
     }

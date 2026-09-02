@@ -49,6 +49,12 @@ pub const HEIGHT_PRONE: f32 = 30.0;
 pub const VIEW_STAND: f32 = 60.0;
 pub const VIEW_CROUCH: f32 = 40.0;
 pub const VIEW_PRONE: f32 = 11.0;
+/// `deadViewHeight`, which retail leaves at 8 through a death and a respawn
+/// (docs/research/cod11-combat.md, section 8.1).
+pub const VIEW_DEAD: f32 = 8.0;
+/// The dead eye drops 9 units per 50 ms snapshot, 60 to 8 over six frames in
+/// the same capture; a rate, not one of the stance lerp times.
+pub const DEAD_VIEW_LERP_SPEED: f32 = 180.0;
 pub const MAX_FRAME_MS: f32 = 66.0;
 pub const LEAN_MAX: f32 = 28.0; // eye offset in units; roll is lean/2 degrees
 pub const LEAN_TIME_TO_MS: f32 = 340.0;
@@ -525,6 +531,29 @@ pub fn pmove(
         &mut events,
     );
     events
+}
+
+/// A dead player's frame: gravity and ground friction with no input, no
+/// stance, lean or weapon step, and the eye easing to `VIEW_DEAD`. Q3's
+/// `PM_DEAD` arm of `PmoveSingle` with the movement input zeroed; the eye
+/// rate is the retail capture's (`DEAD_VIEW_LERP_SPEED`).
+pub fn dead_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
+    let dt = dt.min(MAX_FRAME_MS / 1000.0);
+    let idle = PmInput::default();
+    ps.jumped = false;
+    ps.move_start = ps.origin;
+    ground_trace(ps, world);
+    if ps.on_ground {
+        friction(ps, false, dt);
+        walk_move(ps, &idle, world, dt);
+    } else {
+        air_move(ps, &idle, world, dt);
+    }
+    ground_trace(ps, world);
+    ps.view_height_speed = DEAD_VIEW_LERP_SPEED;
+    let step = ps.view_height_speed * dt;
+    let gap = VIEW_DEAD - ps.view_height_cur;
+    ps.view_height_cur += gap.clamp(-step, step);
 }
 
 /// Retail footstep cadence (`PM_Footsteps` @0x322c8). The bob cycle ticks by

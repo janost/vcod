@@ -102,6 +102,47 @@ pub enum WeaponOp {
     SwitchTo(u8),
 }
 
+/// A client's health as the script sees it: `self.health`, `self.maxhealth`
+/// and whether `finishPlayerDamage` has killed it since its last spawn. The
+/// host is the owner; `Server` mirrors it into the sim every frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Vitals {
+    pub health: i32,
+    pub max_health: i32,
+    pub dead: bool,
+}
+
+impl Default for Vitals {
+    /// A connecting client: retail's `gclient_t` is zeroed, and the lone
+    /// spectator capture reads `stats[2]` 0 until the gametype's spawn
+    /// writes `self.maxhealth` (docs/protocol-1.1.md, "Block 1").
+    fn default() -> Self {
+        Vitals {
+            health: 0,
+            max_health: 0,
+            dead: false,
+        }
+    }
+}
+
+/// One thing `finishPlayerDamage` did to a client that its sim has to act
+/// on, queued for the same reason `WeaponOp` is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SimOp {
+    Damaged {
+        damage: i32,
+        point: [f32; 3],
+        /// The damage direction, normalised; all zero when the callback was
+        /// handed none.
+        dir: [f32; 3],
+        knockback: bool,
+        attacker: Option<usize>,
+        /// Where the attacker's entity stood, for the dead yaw.
+        attacker_origin: Option<[f32; 3]>,
+        fatal: bool,
+    },
+}
+
 pub struct GameHost {
     pub configstrings: Vec<String>,
     pub ents: ObjectTable,
@@ -132,6 +173,16 @@ pub struct GameHost {
     /// clip every frame would make the weapon bottomless -- so `Server`
     /// drains them after `run_frame` and applies each once.
     pub client_weapon_ops: Vec<(usize, WeaponOp)>,
+    /// Each client's health, authoritative here: the `health` and
+    /// `maxhealth` accessors on a client entity read and write it, and
+    /// `Server` mirrors it into the sim every frame.
+    pub client_vitals: Vec<Vitals>,
+    /// Each client's last usercmd buttons, mirrored in by `Server` before
+    /// the frame, for `useButtonPressed`.
+    pub client_buttons: Vec<u8>,
+    /// What `finishPlayerDamage` did to a client this frame, drained by
+    /// `Server` after `run_frame` and applied to the sim once each.
+    pub client_sim_ops: Vec<(usize, SimOp)>,
     /// The map's weapon table, for the fields the builtins need: the ammo and
     /// clip indexes an op addresses, and the rounds it hands out.
     pub weapons: std::rc::Rc<crate::weapons::WeaponTable>,
@@ -212,6 +263,9 @@ impl GameHost {
             client_weapons: vec![crate::weapons::PlayerWeapons::default(); MAX_CLIENTS],
             client_viewmodel: vec![0; MAX_CLIENTS],
             client_weapon_ops: Vec::new(),
+            client_vitals: vec![Vitals::default(); MAX_CLIENTS],
+            client_buttons: vec![0; MAX_CLIENTS],
+            client_sim_ops: Vec::new(),
             weapons: std::rc::Rc::new(crate::weapons::WeaponTable::empty()),
             damage: Vec::new(),
             allocators: Allocators::new(),
@@ -254,16 +308,22 @@ impl GameHost {
         self.configstrings[8] = self.items.bitstring();
     }
 
-    /// A uniform draw in `[0, 1)`. xorshift64*, same shape as `Server`'s own
-    /// `rand()` (`server.rs`) minus its glibc `rand()`-compatible masking,
-    /// which `randomFloat` has no reason to match.
+    /// A uniform draw in `[0, 1)` off the host's own state.
     pub fn rand_unit(&mut self) -> f32 {
-        self.rng ^= self.rng >> 12;
-        self.rng ^= self.rng << 25;
-        self.rng ^= self.rng >> 27;
-        let draw = self.rng.wrapping_mul(0x2545_f491_4f6c_dd1d);
-        draw as f32 / u64::MAX as f32
+        rand_unit(&mut self.rng)
     }
+}
+
+/// A uniform draw in `[0, 1)`. xorshift64*, same shape as `Server`'s own
+/// `rand()` (`server.rs`) minus its glibc `rand()`-compatible masking, which
+/// `randomFloat` has no reason to match. A free function so the bullet
+/// spread (`crate::game::combat`) draws from `Server`'s state the same way.
+pub fn rand_unit(state: &mut u64) -> f32 {
+    *state ^= *state >> 12;
+    *state ^= *state << 25;
+    *state ^= *state >> 27;
+    let draw = state.wrapping_mul(0x2545_f491_4f6c_dd1d);
+    draw as f32 / u64::MAX as f32
 }
 
 impl Host for GameHost {
@@ -324,6 +384,18 @@ impl Host for GameHost {
         let Some(e) = self.ents.get(ent) else {
             return Value::Undefined;
         };
+        // A player's health lives on the host, not in the entity's engine
+        // slot: retail's `health` setter (`Scr_SetHealth`) writes
+        // `ps.stats[0]` and `maxhealth`'s writes `sess.maxHealth`, which is
+        // what the wire and the damage path read (docs/protocol-1.1.md,
+        // "Block 1"). A map entity's `health` is still its own slot.
+        if e.client.is_some() {
+            match cx.resolve_folded(field) {
+                "health" => return Value::Int(self.client_vitals[ent.0 as usize].health),
+                "maxhealth" => return Value::Int(self.client_vitals[ent.0 as usize].max_health),
+                _ => {}
+            }
+        }
         let route = if ent.0 >= FIRST_HUD_ELEM {
             fields::route_hud(cx.resolve_folded(field))
         } else {
@@ -369,6 +441,23 @@ impl Host for GameHost {
         let Some(e) = self.ents.get_mut(ent) else {
             return Err(ErrorKind::BadType("no such entity"));
         };
+        if e.client.is_some() {
+            let v = &mut self.client_vitals[ent.0 as usize];
+            match cx.resolve_folded(field) {
+                "health" => {
+                    v.health = as_health(value)?;
+                    return Ok(());
+                }
+                // The setter clamps the health down to the new maximum
+                // (docs/protocol-1.1.md, "Block 1", INFERRED there).
+                "maxhealth" => {
+                    v.max_health = as_health(value)?;
+                    v.health = v.health.min(v.max_health);
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
         match route {
             Route::Engine {
                 slot,
@@ -403,6 +492,15 @@ impl Host for GameHost {
                 Ok(())
             }
         }
+    }
+}
+
+/// The integer a health field takes; retail's int setter truncates a float.
+fn as_health(value: Value) -> Result<i32, ErrorKind> {
+    match value {
+        Value::Int(i) => Ok(i),
+        Value::Float(f) => Ok(f as i32),
+        _ => Err(ErrorKind::BadType("health takes a number")),
     }
 }
 

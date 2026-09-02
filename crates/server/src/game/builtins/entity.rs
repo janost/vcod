@@ -197,6 +197,12 @@ fn client_spawn(
     host.set_field(cx, id, angles_field, Value::Vector(angles))?;
 
     host.client_weapons[slot] = crate::weapons::PlayerWeapons::default();
+    // `ClientSpawn` re-stores `sess.maxHealth` into the fresh playerstate
+    // (docs/protocol-1.1.md, "Block 1"); the gametype writes both fields
+    // again right after, so this is what a spawn without that script does.
+    let v = &mut host.client_vitals[slot];
+    v.health = v.max_health;
+    v.dead = false;
     host.client_spawns.push(SpawnRequest {
         slot,
         origin,

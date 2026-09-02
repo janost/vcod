@@ -1,9 +1,11 @@
-//! Combat builtins: real damage queuing and a real collision trace, both
-//! global calls (no receiver).
+//! Combat builtins: the damage path's script half, real damage queuing and
+//! a real collision trace.
 
-use crate::game::combat::{mod_index, MOD_FLAGGED};
+use crate::game::builtins::client::client_receiver;
+use crate::game::combat::{mod_index, DFLAG_NO_KNOCKBACK, MOD_FLAGGED};
 use crate::game::damage::DamageEvent;
-use crate::game::host::GameHost;
+use crate::game::host::{GameHost, SimOp};
+use crate::game::script::CALLBACK_SETUP;
 use crate::game::temp_entity::{Scope, TempEntity};
 use glam::Vec3;
 use vcod_common::net::protocol::ENTITYNUM_WORLD;
@@ -13,6 +15,7 @@ pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Resul
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("bullettrace", bullet_trace),
+    ("finishplayerdamage", finish_player_damage),
     ("obituary", obituary),
     ("radiusdamage", radius_damage),
 ];
@@ -20,6 +23,110 @@ pub const NAMES: &[(&str, Builtin)] = &[
 /// `EV_OBITUARY`, the killfeed event
 /// (`docs/research/cod11-events-and-fx.md` section 1).
 const EV_OBITUARY: i32 = 201;
+
+/// `self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags,
+/// sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)` (`.so` 0x4376c), where a
+/// player's damage lands (combat doc, section 4.5): the health comes off the
+/// host's vitals here, and everything the sim does with it -- knockback,
+/// the feedback fields, `EV_PAIN` or `EV_DEATH` -- goes out as one `SimOp`.
+/// A killing hit runs `player_die` (5.1): the callback into
+/// `CodeCallback_PlayerKilled` is spawned so it runs before this builtin's
+/// caller continues, which is what lets the stock damage callback read
+/// `self.sessionstate` on its next line and find it `"dead"`.
+///
+/// Retail also raises the flesh impact events here; `bullet_fire` raises
+/// them with the shot instead, so a hit the script refuses (friendly fire
+/// off) still shows an impact. The 250 clamp and `pm_time` of 4.5's
+/// knockback are the sim's.
+pub fn finish_player_damage(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let [inflictor, attacker, damage, dflags, mod_, weapon, point, dir, hitloc] = args else {
+        return Err(ErrorKind::BadType(
+            "finishPlayerDamage takes nine arguments",
+        ));
+    };
+    let damage = as_i32(damage)?;
+    let dflags = as_i32(dflags)?;
+    // `iDamage <= 0` returns without doing anything (4.5).
+    if damage <= 0 {
+        return Ok(Value::Undefined);
+    }
+    let attacker_slot = match attacker {
+        Value::Entity(a) if host.ents.get(*a).is_some_and(|e| e.client.is_some()) => {
+            Some(a.0 as usize)
+        }
+        _ => None,
+    };
+    let attacker_origin = match attacker {
+        Value::Entity(a) => {
+            let origin = cx.intern_folded("origin");
+            match host.get_field(cx, *a, origin) {
+                Value::Vector(v) => Some(v),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let v = &mut host.client_vitals[slot];
+    if v.dead {
+        return Ok(Value::Undefined);
+    }
+    v.health -= damage;
+    let fatal = v.health <= 0;
+    if fatal {
+        v.health = 0;
+        v.dead = true;
+    }
+    let dir = match dir {
+        Value::Vector(d) => Vec3::from(*d).normalize_or_zero().into(),
+        _ => [0.0; 3],
+    };
+    host.client_sim_ops.push((
+        slot,
+        SimOp::Damaged {
+            damage,
+            point: match point {
+                Value::Vector(p) => *p,
+                _ => [0.0; 3],
+            },
+            dir,
+            knockback: dflags & DFLAG_NO_KNOCKBACK == 0,
+            attacker: attacker_slot,
+            attacker_origin,
+            fatal,
+        },
+    ));
+    if fatal {
+        let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
+        cx.spawn(
+            killed,
+            recv,
+            vec![
+                *inflictor,
+                *attacker,
+                Value::Int(damage),
+                *mod_,
+                *weapon,
+                Value::Vector(dir),
+                *hitloc,
+            ],
+        );
+    }
+    Ok(Value::Undefined)
+}
+
+fn as_i32(v: &Value) -> Result<i32, ErrorKind> {
+    match v {
+        Value::Int(i) => Ok(*i),
+        Value::Float(f) => Ok(*f as i32),
+        _ => Err(ErrorKind::BadType("expected a number")),
+    }
+}
 
 /// `obituary(victim, attacker, weapon, meansOfDeath)` (`.so` 0x5a750): one
 /// broadcast temp entity, encoded as `docs/research/cod11-hud-protocol.md`
@@ -174,9 +281,131 @@ pub fn bullet_trace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::combat::Hit;
+    use crate::game::host::{ClientEvent, Vitals};
+    use crate::game::script::ScriptRuntime;
     use crate::game::testing::fixture;
     use crate::world::World;
     use std::rc::Rc;
+
+    const CALLBACKS: &str = r#"
+        main() {}
+        CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+            self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+            self.seen = self.sessionstate;
+            self.left = self.health;
+        }
+        CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {
+            self.sessionstate = "dead";
+            self.mod = sMeansOfDeath;
+            self.killer = eAttacker getEntityNumber();
+            wait 2;
+            self.sessionstate = "buried";
+        }
+    "#;
+
+    fn hit(damage: i32) -> Hit {
+        Hit {
+            victim: 0,
+            attacker: 1,
+            damage,
+            dflags: 0,
+            mod_: "MOD_RIFLE_BULLET",
+            weapon: "m1carbine_mp".into(),
+            point: [0.0; 3],
+            dir: [1.0, 0.0, 0.0],
+            hitloc: "torso_upper",
+        }
+    }
+
+    fn two_clients() -> ScriptRuntime {
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, CALLBACKS);
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "victim".into(),
+        });
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 1,
+            name: "killer".into(),
+        });
+        rt.run_frame(0);
+        rt
+    }
+
+    /// A killing `finishPlayerDamage` starts `CodeCallback_PlayerKilled`
+    /// before it returns, so a script reading `self.sessionstate` on the
+    /// next line sees what the callback wrote. Whole path through the VM:
+    /// the test script defines the two callbacks, the host delivers one hit.
+    #[test]
+    fn a_fatal_finishplayerdamage_runs_the_killed_callback_first() {
+        let mut rt = two_clients();
+        rt.host.client_vitals[0] = Vitals {
+            health: 10,
+            max_health: 100,
+            dead: false,
+        };
+        rt.deliver_hits(vec![hit(45)], 50);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.client_field(0, "seen").as_deref(), Some("dead"));
+        assert_eq!(
+            rt.client_field(0, "mod").as_deref(),
+            Some("MOD_RIFLE_BULLET")
+        );
+        assert_eq!(rt.client_field(0, "killer").as_deref(), Some("1"));
+        assert_eq!(rt.client_field(0, "left").as_deref(), Some("0"));
+        assert_eq!(rt.client_vitals(0).health, 0);
+        assert!(rt.client_vitals(0).dead);
+        let ops = rt.take_sim_ops();
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(
+            ops[0],
+            (
+                0,
+                SimOp::Damaged {
+                    fatal: true,
+                    damage: 45,
+                    attacker: Some(1),
+                    knockback: true,
+                    ..
+                }
+            )
+        ));
+        // Drained: nothing is applied twice.
+        assert!(rt.take_sim_ops().is_empty());
+    }
+
+    /// A surviving hit takes the health off, queues its op and starts no
+    /// killed callback; a second hit on a dead player does nothing at all.
+    #[test]
+    fn a_surviving_hit_takes_health_and_a_dead_player_takes_nothing() {
+        let mut rt = two_clients();
+        rt.host.client_vitals[0] = Vitals {
+            health: 100,
+            max_health: 100,
+            dead: false,
+        };
+        rt.deliver_hits(vec![hit(67)], 50);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.client_vitals(0).health, 33);
+        assert!(!rt.client_vitals(0).dead);
+        assert_eq!(rt.client_field(0, "left").as_deref(), Some("33"));
+        assert_eq!(
+            rt.client_field(0, "mod").as_deref(),
+            Some("Undefined"),
+            "no killed callback ran"
+        );
+        let ops = rt.take_sim_ops();
+        assert!(matches!(ops[0].1, SimOp::Damaged { fatal: false, .. }));
+
+        rt.deliver_hits(vec![hit(67)], 100);
+        assert!(rt.client_vitals(0).dead);
+        rt.deliver_hits(vec![hit(67)], 150);
+        assert_eq!(
+            rt.take_sim_ops().len(),
+            1,
+            "the dead player took no second op"
+        );
+    }
 
     /// A builtin must never reenter the VM, so `radiusDamage` queues an
     /// event the server drains after `run_frame` rather than calling

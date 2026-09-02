@@ -71,7 +71,7 @@ pub const TEAM_SPECTATOR: i32 = 3;
 
 pub struct ScriptRuntime {
     vm: Vm,
-    host: GameHost,
+    pub(crate) host: GameHost,
     entry: String,
     gametype_entry: String,
 }
@@ -220,13 +220,90 @@ impl ScriptRuntime {
         recv: Option<Target>,
         now_ms: i32,
     ) -> anyhow::Result<()> {
+        self.start_with_args(path, name, recv, vec![], now_ms)
+    }
+
+    /// `start` with the arguments the entry point takes.
+    fn start_with_args(
+        &mut self,
+        path: &str,
+        name: &str,
+        recv: Option<Target>,
+        args: Vec<Value>,
+        now_ms: i32,
+    ) -> anyhow::Result<()> {
         let f = self.vm.func_ref(path, name);
         if !self.vm.has_function(f) {
             anyhow::bail!("{path}.gsc defines no {name}()");
         }
-        self.vm
-            .start_thread(&mut self.host, now_ms, f, recv, vec![]);
+        self.vm.start_thread(&mut self.host, now_ms, f, recv, args);
         Ok(())
+    }
+
+    /// `Scr_PlayerDamage` (combat doc, section 4.4) for every hit the
+    /// bullets made this frame: `CodeCallback_PlayerDamage` on the victim's
+    /// entity with the nine arguments, the attacker standing as its own
+    /// inflictor. A hit on a slot with no entity, or from one, is dropped:
+    /// there is nobody to call and nobody to name.
+    pub fn deliver_hits(&mut self, hits: Vec<crate::game::combat::Hit>, now_ms: i32) {
+        for hit in hits {
+            let (Some(victim), Some(attacker)) = (
+                self.client_entity(hit.victim),
+                self.client_entity(hit.attacker),
+            ) else {
+                continue;
+            };
+            let (mod_, weapon, hitloc) = self.vm.with_cx(|cx| {
+                (
+                    cx.intern_exact(hit.mod_),
+                    cx.intern_exact(&hit.weapon),
+                    cx.intern_exact(hit.hitloc),
+                )
+            });
+            let args = vec![
+                Value::Entity(attacker),
+                Value::Entity(attacker),
+                Value::Int(hit.damage),
+                Value::Int(hit.dflags),
+                Value::String(mod_),
+                Value::String(weapon),
+                Value::Vector(hit.point),
+                Value::Vector(hit.dir),
+                Value::String(hitloc),
+            ];
+            if let Err(e) = self.start_with_args(
+                CALLBACK_SETUP,
+                "CodeCallback_PlayerDamage",
+                Some(Target::Entity(victim)),
+                args,
+                now_ms,
+            ) {
+                log::error!("gsc: {e:#}");
+            }
+        }
+    }
+
+    /// What `finishPlayerDamage` did to the sims this frame, drained: each
+    /// op is applied once.
+    pub fn take_sim_ops(&mut self) -> Vec<(usize, crate::game::host::SimOp)> {
+        std::mem::take(&mut self.host.client_sim_ops)
+    }
+
+    /// One client's health as the script left it, read every frame the way
+    /// `client_weapons` is.
+    pub fn client_vitals(&self, slot: usize) -> crate::game::host::Vitals {
+        self.host
+            .client_vitals
+            .get(slot)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// The buttons of a client's last usercmd, for `useButtonPressed`.
+    pub fn set_client_buttons(&mut self, slot: usize, buttons: u8) {
+        if let Some(b) = self.host.client_buttons.get_mut(slot) {
+            *b = buttons;
+        }
     }
 
     /// `Cmd_MenuResponse_f` (0x486d8): notify the client's entity with the

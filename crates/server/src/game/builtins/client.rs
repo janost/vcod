@@ -29,7 +29,22 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("positionwouldtelefrag", position_would_telefrag),
     ("setviewmodel", set_view_model),
     ("getviewmodel", get_view_model),
+    ("usebuttonpressed", use_button_pressed),
 ];
+
+/// `self useButtonPressed()`: whether the client's last usercmd held the
+/// use button, which every stock `respawn()` loop polls. `Server` mirrors
+/// the buttons onto the host before the frame.
+pub fn use_button_pressed(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let held = host.client_buttons[slot] & vcod_common::net::msg::BUTTON_USE != 0;
+    Ok(Value::Int(i32::from(held)))
+}
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
     NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
@@ -46,7 +61,7 @@ fn model_index_base() -> usize {
 /// entity with a `gclient_t`, which is retail's own `entity %i is not a
 /// player` check (0x44703, 0x45413). The client's slot is its entity number,
 /// and that is what a reliable command is addressed to.
-fn client_receiver(host: &GameHost, recv: Option<Target>) -> Result<usize, ErrorKind> {
+pub(crate) fn client_receiver(host: &GameHost, recv: Option<Target>) -> Result<usize, ErrorKind> {
     let id = entity_receiver(recv)?;
     match host.ents.get(id) {
         Some(e) if e.client.is_some() => Ok(id.0 as usize),

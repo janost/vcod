@@ -1,5 +1,6 @@
 //! Server-side client state: usercmds in, wire playerstate out.
 
+use crate::game::host::SimOp;
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::msg::{self, UserCmd};
@@ -44,6 +45,43 @@ const PMF_JUMP_HELD: i32 = 0x8;
 /// Backpedalling, retail's 0x40. The anim selection reads this bit rather than
 /// the usercmd, and both captures carry it at `run_back` and nowhere else.
 const PMF_BACKWARDS_RUN: i32 = 0x40;
+
+/// The dead `pm_type`, read off both retail deaths (combat doc, section 8).
+pub const PM_DEAD: i32 = 6;
+/// `EV_PAIN` and `EV_DEATH` (`docs/research/cod11-events-and-fx.md`).
+const EV_PAIN: i32 = 187;
+const EV_DEATH: i32 = 189;
+/// One `EV_PAIN` per 700 ms (combat doc, section 6, step 9).
+const PAIN_DEBOUNCE_MS: i32 = 700;
+/// `finishPlayerDamage`'s knockback (combat doc, 4.5): the stance scales,
+/// the cap, and `g_knockback / 250` at the cvar's stock 1000.
+const KNOCKBACK_STAND: f32 = 0.3;
+const KNOCKBACK_DUCKED: f32 = 0.15;
+const KNOCKBACK_PRONE: f32 = 0.02;
+const KNOCKBACK_MAX: i32 = 60;
+const KNOCKBACK_UNITS: f32 = 1000.0 / 250.0;
+
+/// `finishPlayerDamage`'s per-frame accumulator (combat doc, 4.5): what the
+/// frame's hits added up to and where the last one came from, which
+/// `P_DamageFeedback` turns into the four wire fields at end-frame.
+#[derive(Clone, Copy, Default)]
+struct DamageAccum {
+    taken: i32,
+    /// The normalised damage direction, or `None` for a hit that carried
+    /// no direction, which the feedback marks with 255/255.
+    from: Option<Vec3>,
+}
+
+/// `ps.damageEvent`, `damageCount`, `damageYaw`, `damagePitch`. They keep
+/// their last values between hits: the client detects a hit by
+/// `damageEvent` changing (combat doc, section 6).
+#[derive(Clone, Copy, Default)]
+struct DamageFeedback {
+    event: i32,
+    count: i32,
+    yaw: i32,
+    pitch: i32,
+}
 
 /// `serverCursorHintString`'s no-hint sentinel, which is retail's -1 in an
 /// 8-bit netfield. Object model doc, section 20.
@@ -151,6 +189,23 @@ pub struct ClientSim {
     /// several moves still raises the event. Leaving the ground is not enough:
     /// a ledge and a ladder do that without a jump.
     jumped: bool,
+    /// `ps.stats[0]` and `stats[2]`, mirrored from the host's vitals every
+    /// frame; the host is where the script's `self.health` lands.
+    pub health: i32,
+    pub max_health: i32,
+    /// Killed and not yet respawned: `PM_DEAD` on the wire, the dead move,
+    /// no weapon step, no feedback.
+    pub dead: bool,
+    /// `ps.aimSpreadScale`, 0..255: what a shot and a hit add and the
+    /// weapon's decay rate takes away (combat doc, 2.1 and 6.5). Not a
+    /// netfield on 1.1; only the spread reads it.
+    pub aim_spread_scale: f32,
+    damage: DamageAccum,
+    feedback: DamageFeedback,
+    /// `ps.stats[1]`, the yaw toward the killer (combat doc, 5.1, item 11).
+    dead_yaw: i32,
+    /// When the next `EV_PAIN` may fire.
+    pain_after_ms: i32,
 }
 
 /// Everything the animscript needs that the sim does not own: the script
@@ -206,6 +261,14 @@ impl ClientSim {
             was_airborne: false,
             strafing: None,
             jumped: false,
+            health: 0,
+            max_health: 0,
+            dead: false,
+            aim_spread_scale: 0.0,
+            damage: DamageAccum::default(),
+            feedback: DamageFeedback::default(),
+            dead_yaw: 0,
+            pain_after_ms: 0,
         }
     }
 
@@ -234,6 +297,14 @@ impl ClientSim {
         self.was_airborne = false;
         self.strafing = None;
         self.jumped = false;
+        // `ClientSpawn`'s memset: the damage fields read 0 again after a
+        // respawn (combat doc, 8.4), and so does the dead yaw.
+        self.dead = false;
+        self.aim_spread_scale = 0.0;
+        self.damage = DamageAccum::default();
+        self.feedback = DamageFeedback::default();
+        self.dead_yaw = 0;
+        self.pain_after_ms = 0;
     }
 
     /// Writes `events[seq & 3]` and then bumps the counter, the order both
@@ -255,6 +326,15 @@ impl ClientSim {
         world: Option<&CollisionWorld>,
         weapons: &[Option<WeaponDef>],
     ) -> Vec<PmEvent> {
+        // A dead player's view is frozen and its body falls and slides;
+        // nothing it presses reaches the mover or the weapon (combat doc,
+        // 1.12 and 6, the `pm_type > 5` returns).
+        if self.dead {
+            if let Some(w) = world {
+                pmove::dead_move(&mut self.ps, w, dt);
+            }
+            return Vec::new();
+        }
         self.ps.yaw = short_deg(cmd.angles[1] + self.delta_angles[1]).to_radians();
         // Wire pitch is positive down; the sim stores the camera's convention.
         self.ps.pitch = -short_deg(cmd.angles[0] + self.delta_angles[0]).to_radians();
@@ -289,6 +369,23 @@ impl ClientSim {
                 } else {
                     self.view_lerp_start.or(Some(cmd.server_time))
                 };
+                // `PM_AdjustAimSpreadScale` (combat doc, 2.1), reduced to
+                // the fire add and the decay: the turn and move terms and
+                // the stance decay multipliers are not carried.
+                if let Some(def) = weapons
+                    .get(self.ps.weapon as usize)
+                    .and_then(|d| d.as_ref())
+                {
+                    use vcod_common::pmove::weapon::{EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
+                    let shots = events
+                        .iter()
+                        .filter(|e| e.event == EV_FIRE_WEAPON || e.event == EV_FIRE_WEAPON_LASTSHOT)
+                        .count();
+                    self.aim_spread_scale = (self.aim_spread_scale
+                        - def.hip_spread_decay_rate * dt
+                        + def.hip_spread_fire_add * shots as f32)
+                        .clamp(0.0, 255.0);
+                }
                 for e in &events {
                     self.add_event(e.event, e.parm);
                 }
@@ -321,7 +418,10 @@ impl ClientSim {
         events: &[PmEvent],
     ) {
         use vcod_common::animscript::{Conditions, Movetype, Side};
-        if self.pm_type != PmType::Normal {
+        // A dead body keeps the death anim `take_damage` chose: retail's
+        // selection returns on `pm_type > 5`, and only the corpse clone reads
+        // the channels after that.
+        if self.pm_type != PmType::Normal || self.dead {
             return;
         }
         // Retail's condition 8 (@0x32504): any forward component clears the
@@ -420,6 +520,129 @@ impl ClientSim {
         // otherwise hold its torso until the landing.
         self.anim.clear_torso(now_ms);
         self.was_airborne = !self.ps.on_ground;
+    }
+
+    /// The anim conditions of the moment, for an event raised outside the
+    /// frame's own selection: the stance, and the weapon the inputs name.
+    fn event_conditions(&self, inputs: &AnimInputs) -> vcod_common::animscript::Conditions {
+        use vcod_common::animscript::{Conditions, Movetype};
+        let moving = self.ps.velocity.truncate().length() >= ANIM_IDLE_SPEED;
+        let movetype = match (self.ps.stance, moving, self.ps.backwards_run) {
+            (pmove::Stance::Prone, _, _) => Movetype::IdleProne,
+            (pmove::Stance::Crouch, false, _) => Movetype::IdleCr,
+            (pmove::Stance::Crouch, true, _) => Movetype::RunCr,
+            (pmove::Stance::Stand, false, _) => Movetype::Idle,
+            (pmove::Stance::Stand, true, true) => Movetype::RunBk,
+            (pmove::Stance::Stand, true, false) => Movetype::Run,
+        };
+        Conditions {
+            movetype,
+            weapon: inputs.weapon.to_ascii_lowercase(),
+            weapon_class: inputs.weapon_class.to_ascii_lowercase(),
+            ads: false,
+            strafing: self.strafing,
+            mounted: None,
+            firing: false,
+        }
+    }
+
+    /// The sim's half of `finishPlayerDamage` (combat doc, 4.5): the
+    /// knockback, the frame's damage accumulated for `end_frame`, and on a
+    /// killing hit what `player_die` does to the playerstate (5.1):
+    /// `EV_DEATH` with parm 0, the dead yaw into `stats[1]`, the death anim.
+    /// The health itself is the host's and arrives through the mirror.
+    pub fn take_damage(&mut self, op: &SimOp, anims: Option<&AnimInputs>, now_ms: i32) {
+        let SimOp::Damaged {
+            damage,
+            dir,
+            knockback,
+            attacker_origin,
+            fatal,
+            ..
+        } = *op;
+        let dir = Vec3::from(dir);
+        let has_dir = dir.length_squared() > 0.0;
+        if knockback {
+            let scale = if self.ps.stance == pmove::Stance::Prone {
+                KNOCKBACK_PRONE
+            } else if self.ps.ducked {
+                KNOCKBACK_DUCKED
+            } else {
+                KNOCKBACK_STAND
+            };
+            let kb = ((damage as f32 * scale) as i32).min(KNOCKBACK_MAX);
+            if kb > 0 && has_dir {
+                self.ps.velocity += dir * (kb as f32 * KNOCKBACK_UNITS);
+            }
+        }
+        self.damage.taken += damage;
+        self.damage.from = has_dir.then_some(dir);
+        if !fatal {
+            // The stock script's `pain` clauses are all `both`; the retail
+            // hit frame keeps `torsoAnim` 0 through one, so only the legs
+            // take it (combat doc, 8.4).
+            if let Some(inputs) = anims {
+                let c = self.event_conditions(inputs);
+                let mut sel = inputs.anims.script.select_event("pain", &c);
+                sel.torso = None;
+                let resolve = |name: &str| inputs.anims.wire_of(name);
+                let length = |name: &str| inputs.anims.length_ms(name);
+                self.anim.event(&sel, now_ms, resolve, length);
+            }
+            return;
+        }
+        self.dead = true;
+        self.add_event(EV_DEATH, 0);
+        // `vectoyaw(attacker->origin - self->origin)` truncated, the body's
+        // own yaw when there is no attacker (5.1, item 11).
+        self.dead_yaw = match attacker_origin {
+            Some(a) => vec_to_yaw(Vec3::from(a) - self.ps.origin) as i32,
+            None => self.ps.yaw.to_degrees() as i32,
+        };
+        // The death anim on the legs, and the torso restarted on 0: both
+        // retail deaths read `torsoAnim` 512 beside the death `legsAnim`
+        // (combat doc, 8.1 and 8.4).
+        if let Some(inputs) = anims {
+            let c = self.event_conditions(inputs);
+            let mut sel = inputs.anims.script.select_event("death", &c);
+            sel.torso = None;
+            let resolve = |name: &str| inputs.anims.wire_of(name);
+            let length = |name: &str| inputs.anims.length_ms(name);
+            self.anim.event(&sel, now_ms, resolve, length);
+        }
+        self.anim.restart_torso_empty();
+    }
+
+    /// `P_DamageFeedback` (combat doc, section 6), once per frame after the
+    /// ops: the frame's damage becomes `damageCount`, its direction the two
+    /// angle bytes, `damageEvent` counts up, `EV_PAIN` carries the health
+    /// left. A dead player's feedback never runs, so the killing hit leaves
+    /// all four fields as the last surviving hit left them (8.4).
+    pub fn end_frame(&mut self, now_ms: i32) {
+        if self.dead || self.damage.taken <= 0 || self.max_health <= 0 {
+            return;
+        }
+        let count = (self.damage.taken * 100 / self.max_health).min(127);
+        self.aim_spread_scale = (self.aim_spread_scale + count as f32).min(255.0);
+        match self.damage.from {
+            None => {
+                self.feedback.yaw = 255;
+                self.feedback.pitch = 255;
+            }
+            Some(d) => {
+                let (pitch, yaw) = vec_to_angles(d);
+                self.feedback.pitch = (pitch / 360.0 * 256.0) as i32;
+                self.feedback.yaw = (yaw / 360.0 * 256.0) as i32;
+            }
+        }
+        if now_ms.wrapping_sub(self.pain_after_ms) > 0 {
+            let percent = (self.health as f32 * 100.0 / self.max_health as f32) as i32;
+            self.add_event(EV_PAIN, percent.clamp(0, 100));
+            self.pain_after_ms = now_ms.wrapping_add(PAIN_DEBOUNCE_MS);
+        }
+        self.feedback.event = self.feedback.event.wrapping_add(1);
+        self.feedback.count = count;
+        self.damage.taken = 0;
     }
 
     /// The wire playerstate. Fields the two modes disagree about are measured
@@ -531,7 +754,14 @@ impl ClientSim {
         set("clientNum", client_num);
         set("commandTime", command_time);
         // Mode-dependent.
-        set("pm_type", if player { 0 } else { 4 });
+        set(
+            "pm_type",
+            match (player, self.dead) {
+                (true, true) => PM_DEAD,
+                (true, false) => 0,
+                (false, _) => 4,
+            },
+        );
         // The 0x8 the spectator carries on top of the player's 0x10 is
         // unaccounted for; both values are the captures', not a mechanism.
         let stance_eflags = match self.ps.stance {
@@ -588,7 +818,20 @@ impl ClientSim {
             // from our value every snapshot and the view shakes for as long
             // as the lerp lasts.
             set("viewHeightLerpTarget", self.ps.view_lerp_target as i32);
-            set("viewHeightLerpTime", self.view_lerp_start.unwrap_or(0));
+            // The stance lerp's stamp; the dead eye's drop is not one.
+            set(
+                "viewHeightLerpTime",
+                if self.dead {
+                    0
+                } else {
+                    self.view_lerp_start.unwrap_or(0)
+                },
+            );
+            // The four feedback fields hold their last values (section 6).
+            set("damageEvent", self.feedback.event & 0xff);
+            set("damageCount", self.feedback.count);
+            set("damageYaw", self.feedback.yaw & 0xff);
+            set("damagePitch", self.feedback.pitch & 0xff);
             // The body's own yaw while prone; the client centres its view cone
             // on it, so a zero here aims the cone at world north.
             set("proneDirection", self.ps.prone_direction.to_bits() as i32);
@@ -654,8 +897,7 @@ impl ClientSim {
         set("proneViewHeight", pmove::VIEW_PRONE as i32);
         set("crouchViewHeight", pmove::VIEW_CROUCH as i32);
         set("standViewHeight", pmove::VIEW_STAND as i32);
-        // No pmove constant: nothing simulates a dead player's eye yet.
-        set("deadViewHeight", 8);
+        set("deadViewHeight", pmove::VIEW_DEAD as i32);
         set("walkSpeedScale", pmove::SCALE_WALK.to_bits() as i32);
         set("runSpeedScale", 1f32.to_bits() as i32);
         set("proneSpeedScale", pmove::SCALE_PRONE.to_bits() as i32);
@@ -692,8 +934,47 @@ impl ClientSim {
             w.set_ammo(i, *ammo);
             w.set_clip(i, *clip);
         }
+        // `stats[0]`, `stats[2]` and the dead yaw in `stats[1]`
+        // (docs/protocol-1.1.md, "Block 1").
+        w.set_health(self.health);
+        w.set_max_health(self.max_health);
+        w.arrays.stats[1] = self.dead_yaw;
         w
     }
+}
+
+/// Q3's `vectoyaw` in degrees, 0..360, and 0 for a vector with no
+/// horizontal part.
+fn vec_to_yaw(v: Vec3) -> f32 {
+    if v.x == 0.0 && v.y == 0.0 {
+        return 0.0;
+    }
+    let yaw = v.y.atan2(v.x).to_degrees();
+    if yaw < 0.0 {
+        yaw + 360.0
+    } else {
+        yaw
+    }
+}
+
+/// `vectoangles` as `(pitch, yaw)`, both 0..360, the reading the gsc
+/// `vectorToAngles` builtin is measured to (`crate::game::builtins::math`):
+/// a slightly downward direction is a pitch just under 360.
+fn vec_to_angles(v: Vec3) -> (f32, f32) {
+    let yaw = vec_to_yaw(v);
+    let mut pitch = if v.x == 0.0 && v.y == 0.0 {
+        if v.z > 0.0 {
+            90.0
+        } else {
+            270.0
+        }
+    } else {
+        v.z.atan2(v.truncate().length()).to_degrees()
+    };
+    if pitch < 0.0 {
+        pitch += 360.0;
+    }
+    (pitch, yaw)
 }
 
 #[cfg(test)]
@@ -1301,6 +1582,204 @@ mod tests {
         // faces 0 instead of the spawn's 90.
         sim.step(&cmd(0, 0, 0), 0.05, None, &[]);
         assert_eq!(sim.ps.yaw.to_degrees(), 90.0);
+    }
+
+    /// The retail hit (combat doc, 8.4): the shooter at (1810, 2109.5), the
+    /// target at (1800, 2696), a level carbine round to the head.
+    fn hit_op(damage: i32, fatal: bool) -> SimOp {
+        // A hair downward: the capture's `damagePitch` 255 is a pitch just
+        // short of 360, which a perfectly level shot would read as 0.
+        let dir = Vec3::new(-10.0, 586.5, -0.5).normalize();
+        SimOp::Damaged {
+            damage,
+            point: [1800.0, 2681.0, 36.1],
+            dir: dir.into(),
+            knockback: true,
+            attacker: Some(1),
+            attacker_origin: Some([1810.0, 2109.5, -23.9]),
+            fatal,
+        }
+    }
+
+    fn target() -> ClientSim {
+        let mut sim = ClientSim::spectator([1800.0, 2696.0, -23.9], 0.0, NULL_USERCMD.angles);
+        sim.become_player([1800.0, 2696.0, -23.9], 0.0, NULL_USERCMD.angles);
+        sim.ps.on_ground = true;
+        sim.health = 100;
+        sim.max_health = 100;
+        sim
+    }
+
+    /// One surviving hit writes the four feedback fields, the pain event
+    /// and the knockback the capture measured; a second within 700 ms
+    /// counts but raises no second `EV_PAIN`; one after does.
+    #[test]
+    fn a_hit_writes_the_feedback_the_capture_measured() {
+        let p = &PROTOCOL_V1;
+        let mut sim = target();
+        sim.take_damage(&hit_op(67, false), None, 1000);
+        sim.health = 33; // the host's mirror
+        sim.end_frame(1000);
+        let w = sim.to_wire(p, 0, 0);
+        assert_eq!(w.field_i32(p, "damageEvent"), 1);
+        assert_eq!(w.field_i32(p, "damageCount"), 67);
+        assert_eq!(w.field_i32(p, "damageYaw"), 64);
+        assert_eq!(w.field_i32(p, "damagePitch"), 255);
+        assert_eq!(w.field_i32(p, "eventSequence"), 1);
+        assert_eq!(w.field_i32(p, "events[0]"), EV_PAIN);
+        assert_eq!(w.field_i32(p, "eventParms[0]"), 33);
+        assert_eq!(w.field_i32(p, "pm_type"), 0);
+        assert_eq!(w.health(), 33);
+        assert!(
+            (sim.ps.velocity.y - 80.0).abs() < 0.5 && sim.ps.velocity.x.abs() < 2.0,
+            "80 u/s along the bearing, got {:?}",
+            sim.ps.velocity
+        );
+
+        sim.take_damage(&hit_op(10, false), None, 1300);
+        sim.health = 23;
+        sim.end_frame(1300);
+        let w = sim.to_wire(p, 0, 0);
+        assert_eq!(w.field_i32(p, "damageEvent"), 2);
+        assert_eq!(w.field_i32(p, "damageCount"), 10);
+        assert_eq!(
+            w.field_i32(p, "eventSequence"),
+            1,
+            "no second EV_PAIN inside 700 ms"
+        );
+
+        sim.take_damage(&hit_op(10, false), None, 1800);
+        sim.health = 13;
+        sim.end_frame(1800);
+        let w = sim.to_wire(p, 0, 0);
+        assert_eq!(w.field_i32(p, "eventSequence"), 2);
+        assert_eq!(w.field_i32(p, "events[1]"), EV_PAIN);
+        assert_eq!(w.field_i32(p, "eventParms[1]"), 13);
+
+        // A frame with no damage changes none of the four.
+        sim.end_frame(1850);
+        let w = sim.to_wire(p, 0, 0);
+        assert_eq!(w.field_i32(p, "damageEvent"), 3);
+        assert_eq!(w.field_i32(p, "damageYaw"), 64);
+    }
+
+    /// The killing hit: `EV_DEATH` with parm 0, `pm_type` 6, the dead yaw
+    /// toward the attacker in `stats[1]`, and the feedback left as the last
+    /// surviving hit wrote it (combat doc, 8.4). Then the body: no input
+    /// moves it, and the eye drops 9 units a frame to `deadViewHeight`.
+    #[test]
+    fn a_fatal_hit_kills_freezes_the_feedback_and_drops_the_eye() {
+        let p = &PROTOCOL_V1;
+        let w_test = vcod_common::collision::test_world(&[]);
+        // On the test floor, with the attacker at the capture's bearing.
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.health = 100;
+        sim.max_health = 100;
+        let op = |fatal: bool| {
+            let mut op = hit_op(67, fatal);
+            let SimOp::Damaged {
+                attacker_origin, ..
+            } = &mut op;
+            *attacker_origin = Some([10.0, -586.5, 8.0]);
+            op
+        };
+        for _ in 0..20 {
+            sim.step(&NULL_USERCMD, 0.05, Some(&w_test), &[]);
+        }
+        sim.take_damage(&op(false), None, 1000);
+        sim.health = 33;
+        sim.end_frame(1000);
+        for _ in 0..10 {
+            sim.step(&NULL_USERCMD, 0.05, Some(&w_test), &[]);
+        }
+        assert_eq!(sim.ps.velocity.length(), 0.0, "the knockback has decayed");
+
+        sim.take_damage(&op(true), None, 2000);
+        sim.health = 0;
+        sim.end_frame(2000);
+        assert!(sim.dead);
+        let w = sim.to_wire(p, 0, 0);
+        assert_eq!(w.field_i32(p, "pm_type"), PM_DEAD);
+        assert_eq!(w.health(), 0);
+        assert_eq!(
+            w.arrays.stats[1], 270,
+            "the attacker sits at bearing 270.98"
+        );
+        assert_eq!(w.field_i32(p, "eventSequence"), 2);
+        assert_eq!(w.field_i32(p, "events[1]"), EV_DEATH);
+        assert_eq!(w.field_i32(p, "eventParms[1]"), 0);
+        assert_eq!(
+            w.field_i32(p, "damageEvent"),
+            1,
+            "the killing hit runs no feedback"
+        );
+        assert_eq!(w.field_i32(p, "damageCount"), 67);
+        assert_eq!(w.field_i32(p, "deadViewHeight"), 8);
+        assert_eq!(w.field_f32(p, "viewHeightCurrent"), 60.0);
+        assert_eq!(
+            w.field_i32(p, "torsoAnim"),
+            512,
+            "the torso restarts on nothing"
+        );
+
+        let run = UserCmd {
+            forward: 127,
+            buttons: msg::BUTTON_ATTACK,
+            ..NULL_USERCMD
+        };
+        for expect in [51.0, 42.0, 33.0, 24.0, 15.0, 8.0, 8.0] {
+            let events = sim.step(&run, 0.05, Some(&w_test), &[]);
+            assert!(events.is_empty(), "a dead player fires nothing");
+            assert_eq!(
+                sim.to_wire(p, 0, 0).field_f32(p, "viewHeightCurrent"),
+                expect
+            );
+        }
+        // The body slid on the killing hit's knockback and friction has
+        // stopped it; from here only input could move it, and none does.
+        assert_eq!(sim.ps.velocity.truncate(), glam::Vec2::ZERO);
+        let before = sim.ps.origin;
+        for _ in 0..5 {
+            sim.step(&run, 0.05, Some(&w_test), &[]);
+        }
+        assert_eq!(sim.ps.origin, before, "input does not move a body");
+
+        // A respawn clears all of it.
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        let w = sim.to_wire(p, 0, 0);
+        assert!(!sim.dead);
+        assert_eq!(w.field_i32(p, "pm_type"), 0);
+        assert_eq!(w.field_i32(p, "damageEvent"), 0);
+        assert_eq!(w.arrays.stats[1], 0);
+        assert_eq!(
+            w.field_i32(p, "eventSequence"),
+            2,
+            "the ring survives a respawn"
+        );
+    }
+
+    /// No direction is the 255/255 sentinel, and no knockback moves nothing.
+    #[test]
+    fn a_hit_with_no_direction_marks_both_angles_255() {
+        let p = &PROTOCOL_V1;
+        let mut sim = target();
+        let op = SimOp::Damaged {
+            damage: 20,
+            point: [0.0; 3],
+            dir: [0.0; 3],
+            knockback: false,
+            attacker: None,
+            attacker_origin: None,
+            fatal: false,
+        };
+        sim.take_damage(&op, None, 500);
+        sim.end_frame(500);
+        let w = sim.to_wire(p, 0, 0);
+        assert_eq!(w.field_i32(p, "damageYaw"), 255);
+        assert_eq!(w.field_i32(p, "damagePitch"), 255);
+        assert_eq!(w.field_i32(p, "damageCount"), 20);
+        assert_eq!(sim.ps.velocity, Vec3::ZERO);
     }
 
     /// A spectator noclips, so flight needs no collision world and a server

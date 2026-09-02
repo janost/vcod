@@ -396,6 +396,16 @@ fn check(map: &str) {
             .join("\n")
     );
 
+    // The array blocks are not in the field table. `stats[0]` and
+    // `stats[2]` read 100 on every spawned retail player (the `health=100`
+    // trace lines of `mp_carentan-tdm-hit-target.txt`), through the
+    // gametype's `self.maxhealth = 100; self.health = self.maxhealth`.
+    assert_eq!(
+        (ours.health(), ours.max_health()),
+        (100, 100),
+        "{map}: a spawned player's health and max health"
+    );
+
     // A gap that starts matching is a gap that should have been deleted.
     for (name, why) in GAPS {
         let i = field_index(p, name);

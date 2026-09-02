@@ -841,6 +841,21 @@ the `trap_LocationalTrace` result and goes straight into
 lives in the engine binary, is per-bone rather than per-height-fraction, and
 is steered from the game module only by the priority map of section 2.3.
 
+**As implemented.** vcod has no per-bone trace, so
+`crates/server/src/game/combat.rs::hitloc` partitions the victim's link box
+by the hit point's height fraction and lateral offset, in the body's own
+yaw frame. INFERRED, all of it: helmet at and above 0.94 of the box height,
+head 0.85 to 0.94, neck 0.80 to 0.85, torso_upper 0.55 to 0.80, torso_lower
+0.40 to 0.55, and below that the legs, upper to 0.20, lower to 0.05, foot
+under; at torso heights a point more than 0.6 of the half width off the
+centre line is an arm, upper at and above 0.65, lower to 0.55, hand below;
+left and right by the sign of the lateral offset. The one measurement it is
+fitted to is 8.4's: a level shot from eye height, 60 of the 70-unit standing
+box (0.857), read `head` on retail, since the obituary carried
+`MOD_HEAD_SHOT` and `tdm.gsc` sets that only on `sHitLoc == "head"`; the
+head band starts at 0.85 so that shot reads `head` here too. Nothing pins
+any other boundary.
+
 ### 3.1 The multiplier table and what a missing file does
 
 VERIFIED, `G_ParseHitLocDmgTable` `0x498b0`: a loop over indices 0 to 0x12
@@ -861,6 +876,16 @@ passed to `G_Error`. INFERRED: each string is on the failing arm of the check
 it names, so a bad or missing file reaches `Com_Error` and none of the four is
 a soft fallback. INFERRED: a server whose paks lack the file therefore does not
 start, and the all-ones default is only ever the state the parser overwrites.
+
+VERIFIED, the shipped `info/mp_lochit_dmgtable` in `pak5.pk3`: `none 1,
+helmet 1.5, head 1.5, neck 1.5, torso_upper 0.9, torso_lower 0.8,
+right_arm_upper 0.6, right_arm_lower 0.5, right_hand 0.4, left_arm_upper 0.6,
+left_arm_lower 0.5, left_hand 0.4, right_leg_upper 0.6, right_leg_lower 0.5,
+right_foot 0.4, left_leg_upper 0.6, left_leg_lower 0.5, left_foot 0.4,
+gun 0`, behind the `LOCDMGTABLE` header, as an Info string. `45 * 1.5`
+truncated is the 67 of 8.4. As implemented: `HitLocTable::load` reads it at
+map load and keeps the all-ones default on a missing or malformed file,
+where retail stops.
 
 VERIFIED: the parse spec it builds is 19 records of
 `{ name, offset = i*4, type = 6 }` against `g_fHitLocDamageMult`, and type 6
@@ -1245,6 +1270,16 @@ also stores 1 and 0 into alongside `client+0x2218`. INFERRED: the 1 goes with
 the victim's own origin and the 0 with a real direction, so the 255/255 pair is
 the sentinel for "the damage carried no direction".
 
+**As implemented** (`ClientSim::take_damage` and `end_frame`,
+`crates/server/src/spectate.rs`): steps 2 to 5 and 7 to 13 as listed, with
+step 1 read as the sim's `dead` flag, which the killing hit sets before the
+end-frame runs. Step 6's view kick is not carried; nothing on the wire reads
+it. `EV_PAIN` is raised whatever the stance: nothing above names
+`EV_CROUCH_PAIN` (188), so no crouch rule is modelled. `aimSpreadScale`
+(step 5) is a sim-side float only, since 1.1 has no netfield for it; it
+takes the weapon's `hipSpreadFireAdd` per shot and `hipSpreadDecayRate` per
+second and none of 2.1's turn, move or stance-decay terms.
+
 ---
 
 ## 7. `G_AddEvent` and `G_TempEntity`
@@ -1496,9 +1531,6 @@ VERIFIED: the four damage fields read 0 again after the respawn.
   `trap_LocationalTrace`, which lives in the engine binary and not in the game
   module, so nothing above pins how a point on a player maps to one of the 19
   names.
-- UNVERIFIED: the contents of the shipped `info/mp_lochit_dmgtable`, and hence
-  the real per-location multipliers. Only the all-ones default and the zero
-  for `gun` are read out of the binary here.
 - Closed, both of them, and by the same measurement. VERIFIED: the captures
   that read a putaway at the reload key, at a stance change and at a jump were
   taken by a probe that sent `cmd.weapon` 0 in every usercmd; retaken with the

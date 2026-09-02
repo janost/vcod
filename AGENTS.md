@@ -221,9 +221,13 @@ engineering setup works.
   `docs/research/player-model-anim-system.md` for what the retail captures
   measured): stance, direction, strafing, the jump and the landing all pick an
   index out of `mp/playeranim.script`. What the machine does not cover yet is
-  the combat events (fire, reload, melee, pain, death), the two turn movetypes
-  and the mounted-MG anims. What a client still gets nothing of is movers,
-  missiles and corpses, which no code spawns.
+  melee, the two turn movetypes and the mounted-MG anims. A shot is a trace
+  against the world and every live player's box, a hit runs the stock
+  `CodeCallback_PlayerDamage`, and `finishPlayerDamage` is where health,
+  knockback, the pain and death events and `CodeCallback_PlayerKilled`
+  happen (`crates/server/src/game/combat.rs`, `docs/research/cod11-combat.md`).
+  What a client still gets nothing of is movers, missiles and corpses, which
+  no code spawns.
 - `tools/run_probe.sh <probe> [map]` drives the same retail binary as the
   gsc oracle: it drops one `crates/gsc/tests/fixtures/semantics/probe_*.gsc`
   in as a gametype script, boots the server, and prints the `PROBE` lines

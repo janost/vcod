@@ -156,19 +156,17 @@ enum ClientOp {
     Move(Vec<UserCmd>),
 }
 
-/// One shot a client's weapon step took this tick. The bullet itself is the
-/// next task's: this is the queue between the move that pulled the trigger
-/// and the trace that answers for it, so nothing reads the fields yet.
-#[allow(dead_code)]
+/// One shot a client's weapon step took this tick: the queue between the
+/// move that pulled the trigger and the trace `tick` answers it with.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Shot {
     pub slot: usize,
     /// `ps.weapon` at the shot, which the delayed trace must use rather than
     /// whatever the client is holding by the time it runs.
     pub weapon: u8,
-    /// The round emptied the clip: `EV_FIRE_WEAPON_LASTSHOT` rather than
-    /// `EV_FIRE_WEAPON`.
-    pub last_shot: bool,
+    /// The trigger cmd's sight bit, which picks `adsSpread` over the hip
+    /// spread.
+    pub ads: bool,
 }
 
 /// One `WeaponOp` against a client's playerstate. The op is an edge the
@@ -267,9 +265,11 @@ pub struct Server {
     /// `Rc` so a snapshot/move closure can hold it without borrowing `self`.
     weapon_table: Rc<crate::weapons::WeaponTable>,
     /// Shots this tick's moves took, in the order they were fired. Filled by
-    /// `replay_moves`; the bullet trace that answers for them is the next
-    /// task's, and until it exists the queue is cleared each tick.
+    /// `replay_moves`, drained by `tick` into traces before the script runs.
     pending_shots: Vec<Shot>,
+    /// The hit-location damage multipliers out of the paks
+    /// (`crate::game::combat::HitLocTable`); the default until `load_scripts`.
+    hitlocs: crate::game::combat::HitLocTable,
     /// Weapons the moves themselves switched to, by slot: only a change the
     /// machine made, so a playerstate reset from outside a move is not one.
     /// `tick` writes each back onto the script host before the mirror reads
@@ -382,6 +382,7 @@ impl Server {
             anims: None,
             weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
             pending_shots: Vec::new(),
+            hitlocs: crate::game::combat::HitLocTable::default(),
             weapon_changes: Vec::new(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
@@ -952,7 +953,13 @@ impl Server {
             return;
         };
         if let Some(sim) = c.sim.as_mut() {
+            // The spawn builtin's reset is followed by the script's ammo
+            // ops in the same frame; nothing follows this one, so the ammo
+            // rides across.
+            let (ammo, clip) = (sim.ps.ammo, sim.ps.ammoclip);
             sim.become_player(origin, yaw_deg, [0; 3]);
+            sim.ps.ammo = ammo;
+            sim.ps.ammoclip = clip;
         }
     }
 
@@ -1130,6 +1137,7 @@ impl Server {
             }
         };
         self.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
+        self.hitlocs = crate::game::combat::HitLocTable::load(&fs);
         let rt = crate::game::script::ScriptRuntime::load(
             fs,
             &self.cfg.map,
@@ -1222,8 +1230,51 @@ impl Server {
         let moved = self.replay_moves();
         let weapons = self.weapon_table.clone();
 
+        // Then the frame's shots, against the world the moves left: each is
+        // a trace, an impact for the snapshot and, on a player, a hit the
+        // damage callback is handed before the script frame runs
+        // (`crate::game::combat`).
+        let mut hits = Vec::new();
+        let mut impacts = Vec::new();
+        {
+            let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
+                .clients
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
+                .collect();
+            let collision = self.world.as_ref().map(|w| &w.collision);
+            for shot in self.pending_shots.drain(..) {
+                let Some(def) = weapons.get(shot.weapon as usize) else {
+                    continue;
+                };
+                let name = crate::items::item_name(shot.weapon as usize).unwrap_or_default();
+                let r = crate::game::combat::bullet_fire(
+                    shot.slot,
+                    def,
+                    name,
+                    shot.ads,
+                    &sims,
+                    collision,
+                    &self.hitlocs,
+                    &mut self.rng,
+                );
+                impacts.extend(r.impact);
+                hits.extend(r.hit);
+            }
+        }
+
         let mut client_commands = Vec::new();
         if let Some(rt) = self.script.as_mut() {
+            for (slot, c) in self.clients.iter().enumerate() {
+                if let Some(c) = c {
+                    rt.set_client_buttons(slot, c.last_cmd.buttons);
+                }
+            }
+            for te in impacts {
+                rt.push_temp_entity(te);
+            }
+            rt.deliver_hits(hits, self.sv_time_ms);
             rt.run_frame(self.sv_time_ms);
             client_commands = rt.take_client_commands();
             // The script owns the table while it runs and allocates into it
@@ -1299,6 +1350,36 @@ impl Server {
                 };
                 apply_weapon_op(sim, op, &weapons);
             }
+            // What `finishPlayerDamage` did to each sim, applied once, then
+            // the health mirror and the frame's damage feedback, in that
+            // order: `P_DamageFeedback` reads the health the hit left.
+            let anims = self.anims.as_ref();
+            for (slot, op) in rt.take_sim_ops() {
+                let Some(sim) = self
+                    .clients
+                    .get_mut(slot)
+                    .and_then(Option::as_mut)
+                    .and_then(|c| c.sim.as_mut())
+                else {
+                    continue;
+                };
+                let index = sim.ps.weapon as usize;
+                let inputs = anims.map(|anims| crate::spectate::AnimInputs {
+                    anims,
+                    weapon: crate::items::item_name(index).unwrap_or_default(),
+                    weapon_class: weapons.class(index),
+                });
+                sim.take_damage(&op, inputs.as_ref(), self.sv_time_ms);
+            }
+            for (slot, c) in self.clients.iter_mut().enumerate() {
+                if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
+                    let v = rt.client_vitals(slot);
+                    sim.health = v.health;
+                    sim.max_health = v.max_health;
+                    sim.dead = v.dead;
+                    sim.end_frame(self.sv_time_ms);
+                }
+            }
         }
         // Outside the borrow: `setClientCvar` and `openMenu` queue rather
         // than send, and this is where the queue reaches the netchan.
@@ -1308,11 +1389,8 @@ impl Server {
 
         // Every entity built once, then culled and written per client.
         self.send_snapshots(&moved, wall_ms);
-        // Nothing answers for a shot yet, so the queue is emptied here rather
-        // than growing across ticks; the bullet trace that drains it is the
-        // next task's. The weapon changes are already drained when a script
-        // is loaded, and a server without one has nothing to write them to.
-        self.pending_shots.clear();
+        // The weapon changes are already drained when a script is loaded,
+        // and a server without one has nothing to write them to.
         self.weapon_changes.clear();
     }
 
@@ -1365,7 +1443,7 @@ impl Server {
                         self.pending_shots.push(Shot {
                             slot,
                             weapon: sim.ps.weapon,
-                            last_shot: e.event == EV_FIRE_WEAPON_LASTSHOT,
+                            ads: cmd.buttons & msg::BUTTON_ADS != 0,
                         });
                     }
                 }
