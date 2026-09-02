@@ -138,7 +138,11 @@ engineering setup works.
   per snapshot instead of a settled sample. It is also the one mode with the
   stall response on -- a walk that stops against geometry turns 45 degrees and
   tries again -- since every other scripted mode holds an exact input and must
-  not wander.
+  not wander. What the two committed captures measured is in
+  `docs/research/player-model-anim-system.md`, "The weapon channel: what writes
+  `torsoAnim`"; run it on two maps, because the map picks the weapon and the
+  bolt-action mosin on mp_pavlov is what exposed the rechamber and
+  empty-reload states the carbine never reaches.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
