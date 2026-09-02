@@ -12,7 +12,7 @@
 //! - `64..71`: the body queue, retail's own numbers
 //!   (`crate::game::bodies`, `docs/research/cod11-combat.md` section 5.2).
 //! - `72..`: map and script entities, from `entity::FIRST_MAP_ENTITY` up.
-//! - `958..1021`: temp entities, reused every frame
+//! - `958..1021`: temp entities, walked by a rolling cursor
 //!   (`crate::game::temp_entity`). Retail's `G_TempEntity` takes whatever
 //!   free slot it finds instead; vcod reserves a block at the top so a
 //!   one-frame event can never take a number the object table is about to

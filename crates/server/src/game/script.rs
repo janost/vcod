@@ -557,6 +557,11 @@ impl ScriptRuntime {
         &self.host.temp_entities
     }
 
+    /// Queues one event for the next snapshot build.
+    pub fn push_temp_entity(&mut self, te: crate::game::temp_entity::TempEntity) {
+        self.host.temp_entities.push(te);
+    }
+
     /// The same list, drained. A temp entity lives for one frame, so the
     /// snapshot build takes them rather than reading them
     /// (`crate::game::temp_entity`).

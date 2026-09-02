@@ -96,11 +96,9 @@ impl BodyQueue {
         }
     }
 
-    /// The live bodies, by entity number. `p` is unused -- a body's fields
-    /// are resolved once, at the push -- and kept so a caller reads the same
-    /// shape here as everywhere else on the wire path.
-    pub fn entities(&self, p: &Protocol) -> impl Iterator<Item = (u32, EntityState)> + '_ {
-        let _ = p;
+    /// The live bodies, by entity number. No `Protocol`: a body's fields are
+    /// resolved once, at the push.
+    pub fn entities(&self) -> impl Iterator<Item = (u32, EntityState)> + '_ {
         self.slots
             .iter()
             .flatten()
@@ -176,7 +174,7 @@ mod tests {
         let p = &PROTOCOL_V1;
         let mut q = BodyQueue::new(2);
         let n = q.push(dying(p, 4), None, 1000, p);
-        let (num, body) = q.entities(p).next().unwrap();
+        let (num, body) = q.entities().next().unwrap();
         assert_eq!(num, n);
         assert_eq!(body.number, n);
         assert_eq!(body.field_i32(p, "eType"), ET_CORPSE);
@@ -194,9 +192,9 @@ mod tests {
         let p = &PROTOCOL_V1;
         let mut q = BodyQueue::new(2);
         q.push(dying(p, 4), None, 1000, p);
-        assert_eq!(q.entities(p).count(), 1);
+        assert_eq!(q.entities().count(), 1);
         q.push(dying(p, 5), None, 1000 + 300_000, p);
-        assert_eq!(q.entities(p).count(), 2, "a body has no lifetime");
+        assert_eq!(q.entities().count(), 2, "a body has no lifetime");
     }
 
     #[test]
@@ -207,8 +205,8 @@ mod tests {
         q.push(dying(p, 2), None, 100, p);
         let third = q.push(dying(p, 3), None, 200, p);
         assert_eq!(third, first, "the third push reuses the first slot");
-        assert_eq!(q.entities(p).count(), 2);
-        let states: Vec<_> = q.entities(p).collect();
+        assert_eq!(q.entities().count(), 2);
+        let states: Vec<_> = q.entities().collect();
         let reused = states.iter().find(|(n, _)| *n == first).unwrap();
         assert_eq!(reused.1.field_i32(p, "clientNum"), 3);
     }
@@ -220,9 +218,9 @@ mod tests {
         let p = &PROTOCOL_V1;
         let mut q = BodyQueue::new(1);
         q.push(dying(p, 1), None, 0, p);
-        let first = q.entities(p).next().unwrap().1.field_i32(p, "eFlags");
+        let first = q.entities().next().unwrap().1.field_i32(p, "eFlags");
         q.push(dying(p, 2), None, 100, p);
-        let second = q.entities(p).next().unwrap().1.field_i32(p, "eFlags");
+        let second = q.entities().next().unwrap().1.field_i32(p, "eFlags");
         assert_ne!(first & EFLAGS_ANIM_TOGGLE, second & EFLAGS_ANIM_TOGGLE);
         // Everything but that bit is the player's own eFlags.
         assert_eq!(first & !EFLAGS_ANIM_TOGGLE, 16);
@@ -239,10 +237,10 @@ mod tests {
         q.push(dying(p, 4), Some(4), 1000, p);
         let mut fresh = dying(p, 4);
         fresh.fields[EntityState::field_index(p, "legsAnim").unwrap()] = 18;
-        let number = q.entities(p).next().unwrap().0;
+        let number = q.entities().next().unwrap().0;
 
         q.refresh_newborn(1000, |slot| (slot == 4).then(|| fresh.clone()), p);
-        let (n, body) = q.entities(p).next().unwrap();
+        let (n, body) = q.entities().next().unwrap();
         assert_eq!(n, number, "the refresh keeps the body's own number");
         assert_eq!(body.number, number);
         assert_eq!(body.field_i32(p, "legsAnim"), 18);
@@ -251,7 +249,7 @@ mod tests {
         // The source is spent: a later frame does not re-read it.
         fresh.fields[EntityState::field_index(p, "legsAnim").unwrap()] = 999;
         q.refresh_newborn(1000, |_| Some(fresh.clone()), p);
-        assert_eq!(q.entities(p).next().unwrap().1.field_i32(p, "legsAnim"), 18);
+        assert_eq!(q.entities().next().unwrap().1.field_i32(p, "legsAnim"), 18);
     }
 
     /// The queue is retail's own eight slots at 64..71, the numbers the
@@ -272,7 +270,7 @@ mod tests {
         let p = &PROTOCOL_V1;
         let mut q = BodyQueue::new(1);
         q.push(dying(p, 0), None, 5000, p);
-        let body = q.entities(p).next().unwrap().1;
+        let body = q.entities().next().unwrap().1;
         assert_eq!(body.field_i32(p, "groundEntityNum"), ENTITYNUM_NONE as i32);
         assert_eq!(body.field_i32(p, "pos.trType"), CORPSE_TRTYPE);
         assert_eq!(body.field_i32(p, "pos.trTime"), 5000);

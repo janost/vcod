@@ -250,6 +250,10 @@ pub struct Server {
     /// Scripted entities driving the packet-entity path; `None` when
     /// `cfg.test_entities` is 0.
     test_entities: Option<TestEntities>,
+    /// Where in the temp-entity block the next frame's events start. It
+    /// rolls rather than resetting, so an event repeated in adjacent frames
+    /// never lands on one number twice (`crate::game::temp_entity`).
+    temp_cursor: u32,
     /// Wall clock of the previous tick, for the trace's send-interval column.
     last_tick: Option<Instant>,
     /// The map script; `None` until `load_scripts` succeeds. `tick` steps it
@@ -372,6 +376,7 @@ impl Server {
             sv_time_ms: 0,
             baselines: HashMap::new(),
             test_entities: None,
+            temp_cursor: 0,
             last_tick: None,
             script: None,
             anims: None,
@@ -966,6 +971,14 @@ impl Server {
             .map(|rt| rt.bodies_mut().push(state, None, now, proto))
     }
 
+    /// Raises one event for the next snapshot build. Test-facing, like
+    /// `test_push_body`: the script builtins are what raise these in earnest.
+    pub fn test_push_temp_entity(&mut self, te: temp_entity::TempEntity) {
+        if let Some(rt) = self.script.as_mut() {
+            rt.push_temp_entity(te);
+        }
+    }
+
     /// Puts a client back to spectating, where every client starts and where
     /// a dead one waits. Test-facing, like `place_client`.
     pub fn spectate_client(&mut self, slot: usize, origin: [f32; 3]) {
@@ -1488,7 +1501,7 @@ impl Server {
                 |slot| client_entities.get(&(slot as u32)).cloned(),
                 proto,
             );
-            entities.extend(rt.bodies().entities(proto));
+            entities.extend(rt.bodies().entities());
         }
 
         // Every event the script raised this frame, as one-frame entities
@@ -1498,15 +1511,17 @@ impl Server {
             .script
             .as_mut()
             .map_or_else(Vec::new, |rt| rt.take_temp_entities());
+        let cursor = self.temp_cursor;
         let temp_states: Vec<(u32, msg::EntityState)> = temps
             .iter()
             .take(temp_entity::TEMP_COUNT as usize)
             .enumerate()
             .map(|(i, te)| {
-                let n = temp_entity::TEMP_FIRST + i as u32;
+                let n = temp_entity::number_at(cursor, i);
                 (n, temp_entity::build(te, n, self.proto))
             })
             .collect();
+        self.temp_cursor = temp_entity::advance(cursor, temp_states.len());
 
         for slot in 0..self.clients.len() {
             let Some(c) = self.clients[slot].as_mut() else {

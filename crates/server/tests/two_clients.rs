@@ -846,3 +846,113 @@ fn a_body_reaches_both_the_dead_client_and_the_other_one() {
         );
     }
 }
+
+/// The two halves of the scope filter, on a live pair. A broadcast temp
+/// entity reaches a client whose PVS its origin is nowhere near, which is
+/// what retail's `SVF_BROADCAST` does; a scoped one at the same origin
+/// reaches nobody, which is what proves that origin really is culled; and an
+/// all-but-one at a visible origin reaches everyone except the client it
+/// names.
+#[test]
+fn a_broadcast_temp_entity_skips_the_cull_and_a_scoped_one_does_not() {
+    use vcod_server::game::temp_entity::{Scope, TempEntity};
+
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+
+    let p = &PROTOCOL_V1;
+    let na = ca
+        .snapshots()
+        .newest()
+        .expect("A")
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let nb = cb
+        .snapshots()
+        .newest()
+        .expect("B")
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let spot = ca.snapshots().newest().expect("A").ps.origin(p);
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+    for _ in 0..20 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+
+    // Far outside the map, so the PVS cull drops anything standing there.
+    let outside = [30_000.0, 30_000.0, 30_000.0];
+    let te = |parm: i32, origin: [f32; 3], scope: Scope| TempEntity {
+        event: 201,
+        parm,
+        surf_type: 0,
+        other: nb as u32,
+        attacker: na as i32,
+        origin,
+        scope,
+    };
+    sv.test_push_temp_entity(te(1, outside, Scope::Broadcast));
+    sv.test_push_temp_entity(te(2, outside, Scope::Only(na)));
+    sv.test_push_temp_entity(te(3, spot, Scope::AllBut(na)));
+
+    // Two frames: the queue is drained by the first snapshot build, whichever
+    // of the two ticks makes it.
+    let mut seen_a = BTreeSet::new();
+    let mut seen_b = BTreeSet::new();
+    for _ in 0..2 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        for (seen, client) in [(&mut seen_a, &ca), (&mut seen_b, &cb)] {
+            let Some(snap) = client.snapshots().newest() else {
+                continue;
+            };
+            for e in snap.entities.values() {
+                if e.field_i32(p, "eType") >= 12 {
+                    seen.insert(e.field_i32(p, "eventParm"));
+                }
+            }
+        }
+    }
+
+    assert!(
+        seen_a.contains(&1) && seen_b.contains(&1),
+        "a broadcast temp entity did not skip the cull: A {seen_a:?}, B {seen_b:?}"
+    );
+    assert!(
+        !seen_a.contains(&2) && !seen_b.contains(&2),
+        "a scoped temp entity outside every PVS was still sent: A {seen_a:?}, B {seen_b:?}"
+    );
+    assert!(
+        seen_b.contains(&3),
+        "an all-but-A temp entity did not reach B: {seen_b:?}"
+    );
+    assert!(
+        !seen_a.contains(&3),
+        "an all-but-A temp entity still reached A: {seen_a:?}"
+    );
+}

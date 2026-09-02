@@ -13,7 +13,7 @@ pub const ENTITYNUM_WORLD: u32 = 1022;
 
 /// `G_InitGame` sets `level.num_entities` to 72, so the first entity the map
 /// load creates is number 72 whatever `sv_maxclients` is. `MAX_CLIENTS` is 64
-/// and slots 64..71 are reserved by something not yet identified.
+/// and slots 64..71 are the body queue (`crate::game::bodies`).
 pub const FIRST_MAP_ENTITY: u32 = 72;
 
 /// `EntId(FIRST_HUD_ELEM..)` is a HUD element, which has its own field table,

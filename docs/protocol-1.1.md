@@ -452,15 +452,26 @@ cases the flag word spells: a broadcast temp entity skips the cull, one
 withheld from a single client is dropped for that client and culled for the
 rest, and one addressed to a single client reaches only it, culled.
 
-The entity numbers, VERIFIED as vcod's own choice except where noted:
-clients take 0..63; the body queue takes 64..71, which is retail's own range
-(`G_SpawnPlayerClone` indexes `&g_entities[64 + bodyQueIndex]` with the
-index advanced `& 7`, `cod11-combat.md` section 5.2); map and script
-entities run from 72 up; temp entities take 958..1021, the 64 numbers below
-`ENTITYNUM_WORLD`, reused every frame. Retail instead gives a temp entity
-whatever free slot `G_TempEntity` finds, and nothing on either side compares
-one frame's temp-entity number against the next's, so the reserved block is
-free to differ.
+The entity numbers vcod hands out, one label each:
+
+- Clients take 0..63. VERIFIED, `MAX_CLIENTS` is 64.
+- The body queue takes 64..71. VERIFIED as retail's own range:
+  `G_SpawnPlayerClone` indexes `&g_entities[64 + bodyQueIndex]` with the
+  index advanced `& 7` (`docs/research/cod11-combat.md` section 5.2).
+- Map and script entities run from 72 up. VERIFIED: `G_InitGame` sets
+  `level.num_entities` to 72 whatever `sv_maxclients` is.
+- Temp entities take 958..1021, the 64 numbers below `ENTITYNUM_WORLD`.
+  VERIFIED as vcod's own choice; retail instead gives a temp entity whatever
+  free slot `G_TempEntity` finds.
+- The block is walked by a rolling cursor, so an event repeated in adjacent
+  frames never lands on one number twice. VERIFIED as vcod's own choice, and
+  it is forced by the receiving side: a client keys a fired event entity on
+  `(eType, eventParm)` per number and forgets a number only once it leaves
+  the snapshot, so the second of two identical events on one number reads as
+  already fired.
+
+That a temp-entity number may differ from retail's is INFERRED: nothing on
+either side of the wire compares one frame's against the next's.
 
 ### svc_serverCommand (5)
 
