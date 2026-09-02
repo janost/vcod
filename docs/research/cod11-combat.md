@@ -225,11 +225,12 @@ second form is what holds an index steady across frames without restarting the
 clip, and the first form is what a repeated shot goes through, which is why the
 captured sustained fire reads 253, 765, 253, 765.
 
-VERIFIED, `.so` `0x38c80` (dll `0x300116a0`): the fire anim is chosen against
-the float at `.rodata 0x7254c`, which is `0.75`, compared with
-`ps->fWeaponPosFrac` (`ps+0xB8`); above it the code loads 5 or 6 and at or
-below it 2 or 3, and the lower of each pair is taken when
-`ps->ammoclip[clipIndex]` is non-zero. INFERRED: so a hip shot writes
+VERIFIED, `.so` `0x38c80` (dll `0x300116a0`): the function compares
+`ps->fWeaponPosFrac` (`ps+0xB8`) against the float at `.rodata 0x7254c`, which
+is `0.75`, compares `ps->ammoclip[clipIndex]` against 0, and loads the
+immediates 2, 3, 5 and 6 into `ebx` on four separate arms. INFERRED: the 5/6
+pair is above the threshold and the 2/3 pair at or below it, and the lower of
+each pair is the arm a non-zero `ammoclip` takes. INFERRED: so a hip shot writes
 `WEAP_ATTACK`, a hip shot that empties the clip writes
 `WEAP_ATTACK_LASTSHOT`, and the aimed forms are the same two shifted by three.
 
@@ -273,18 +274,19 @@ field at 0. INFERRED: the 1 is taken when the weapon is bolt-action with its
 rechamber bit set and `rechamberBoltTime` is 0 or not smaller, and the field is
 left at 0 when the add-time is 0. VERIFIED: `player-model-anim-system.md`
 matched the mosin's `weaponstate` 5 run to `reloadTime` 2.4; both `reloadTime`
-and `reloadEmptyTime` are 2.4 on that weapon, and the branch that ran was the
-empty one, since the state opened after event 161 and event 152.
+and `reloadEmptyTime` are 2.4 on that weapon. INFERRED: the branch that ran
+was the empty one, since the state opened after event 161 and event 152.
 
 ### 1.4 The semi-automatic latch is `weaponTime`, not a flag
 
-VERIFIED, `.so` `0x387c0` (dll `0x30011210`): on the path taken once
-`weaponTime` has been decremented below 1, the code tests four things --
-`weaponDef->semiAuto` (`0x2C4`) non-zero, `pm->cmd.buttons & 1`,
-`ps->weapon == pm->cmd.weapon`, and `ps->ammoclip[weaponDef->clipIndex]`
-non-zero -- and the block has two stores into `weaponTime`, of the immediates
-1 and 0. INFERRED: the 1 is stored when all four tests hold and the 0
-otherwise, read off the four branches.
+VERIFIED, `.so` `0x387c0` (dll `0x30011210`): the function compares
+`weaponTime` against 1, tests four more things -- `weaponDef->semiAuto`
+(`0x2C4`) against 0, `pm->cmd.buttons & 1`, `ps->weapon` against
+`pm->cmd.weapon`, and `ps->ammoclip[weaponDef->clipIndex]` against 0 -- and
+holds two stores into `weaponTime`, of the immediates 1 and 0. INFERRED: the
+four extra tests are reached once `weaponTime` has been decremented below 1,
+and the 1 is stored when all four hold and the 0 otherwise, read off the
+branches.
 
 INFERRED: that is the whole semi-automatic edge. Nothing latches the button in
 `pm_flags` or in a playerstate field; the weapon simply never reaches
@@ -294,10 +296,12 @@ frame take the `else` and store 0, after which the weapon can fire again. This
 is what `--save-combat` had to work around by tapping the bit rather than
 holding it (`AGENTS.md`, "Netcode debugging").
 
-VERIFIED, same block: on the pinned frame, `weaponstate == 4` calls the
-"return to idle" helper (dll `0x30010050`), and `weaponstate` 3, 10 or 11 goes
-through the index-preserving `weapAnim` setter. INFERRED: that is what keeps a
-held semi-automatic showing its idle pose rather than a stuck attack anim.
+VERIFIED, same block: it compares `weaponstate` against 4, 3, 10 and 11, and
+calls the "return to idle" helper (dll `0x30010050`) on one arm and the
+index-preserving `weapAnim` setter on another. INFERRED: 4 takes the first and
+3, 10 and 11 the second, on the frame `weaponTime` is pinned at 1. INFERRED:
+that is what keeps a held semi-automatic showing its idle pose rather than a
+stuck attack anim.
 
 ### 1.5 Firing
 
@@ -344,9 +348,9 @@ VERIFIED: `EV_EMPTYCLIP` (150) is never pushed as an event argument anywhere in
 above, and the module's only `push 0x96` (`0x46e51`) is a buffer size inside
 `G_Say`.
 
-VERIFIED: `aimSpreadScale` is a 0..255 float, since `0x300107c0` stores
-`0x437F0000` (255.0) into it on a raise and `P_DamageFeedback` clamps it to
-the same value.
+VERIFIED: `0x300107c0` stores `0x437F0000` (255.0) into `aimSpreadScale` and
+`P_DamageFeedback` clamps it to the same value. INFERRED: it is a 0..255
+float.
 
 ### 1.6 Releasing the trigger
 
@@ -565,10 +569,11 @@ VERIFIED: the three tests and the store in the list below, all in `.so`
 - `ps->pm_type > 5`: `ps->weapon = 0`, return.
 - `ps->eFlags & 0xC000` set: return with nothing done.
 
-VERIFIED: the second test is `0x390f8: cmp DWORD PTR [eax+0x4],0x5` followed
-by a `jle`, so the `> 5` case is the fallthrough at `0x390fe` that stores 0
-into `ps->weapon`. VERIFIED: the head of `player_die` is
-`0x49a5d: cmp DWORD PTR [eax+0x4],0x5` with a `jg` to its epilogue, and
+VERIFIED: the second test is `0x390f8: cmp DWORD PTR [eax+0x4],0x5`, the next
+instruction is `0x390fc: jle 39110`, and `0x390fe` stores 0 into `ps->weapon`.
+INFERRED: the `> 5` case is therefore the fallthrough. VERIFIED: the head of
+`player_die` is `0x49a5d: cmp DWORD PTR [eax+0x4],0x5` with a `jg` to its
+epilogue, and
 `P_DamageFeedback` is `0x3f512: cmp DWORD PTR [ebx+0x4],0x5` with a `jg`,
 which is the module's only `ebx` form of that compare. VERIFIED: the binary
 carries no name for the `pm_type` values above 5. INFERRED: 6 and 7 are the
@@ -630,10 +635,11 @@ every "when", "otherwise" and "skipped" in it, which are branch conditions.
 
 ### 2.2 The cone
 
-VERIFIED, `gunrandom` `0x3d4ac`: two `rand()` calls; the first is scaled by
-`-1/2^31` (`.rodata 0x72a44`) and by 360.0 and converted to radians, the
-second by `-1/2^31` alone; the outputs are that second value times the cosine
-and the sine of the angle. INFERRED: the pair is a point in the unit disc with
+VERIFIED, `gunrandom` `0x3d4ac`: it calls `rand()` at `0x3d4bb` and at
+`0x3d4d5`; the `0x3d4bb` result is scaled by `-1/2^31` (`.rodata 0x72a44`) and
+by 360.0 and converted to radians, the `0x3d4d5` result by `-1/2^31` alone;
+the two outputs are the `0x3d4d5` value times the cosine and the sine of the
+angle. INFERRED: the pair is a point in the unit disc with
 the radius drawn uniformly rather than by area, so the distribution is denser
 at the centre.
 
@@ -779,8 +785,9 @@ combat path above calls it. UNVERIFIED: what does, and what it is for.
 
 ## 3. Hit locations
 
-VERIFIED, `G_ParseHitLocDmgTable` `0x4981c`: the name array is the 19 pointers
-at `0x7DD20`, in this index order.
+VERIFIED, `G_ParseHitLocDmgTable` (`0x4981c`, and `0x498b0` below is
+`Base+0x94`, the head of its initialising loop): the name array is the 19
+pointers at `0x7DD20`, in this index order.
 
 | index | name | index | name |
 |---|---|---|---|
@@ -897,7 +904,8 @@ numbering and every condition in it.
 
 **So for a player the engine does nothing else.** VERIFIED: the client branch
 contains no store to health, no store to velocity and no call to a pain or die
-function; it jumps straight to the epilogue after the callback. INFERRED:
+function, and `0x49e67` is a `jmp` to the function's epilogue at `0x4a08b`.
+INFERRED:
 health, knockback, pain and death for players are all the script's, through
 `finishPlayerDamage` (4.4).
 
@@ -932,13 +940,13 @@ changes nothing.
 
 ### 4.4 `Scr_PlayerDamage` and the callback signature
 
-VERIFIED, `Scr_PlayerDamage` `0x5ca18`: it pushes, in this order,
-`G_GetHitLocationString(hitLoc)` as a const string, `dir` as a vector or
+VERIFIED, `Scr_PlayerDamage` `0x5ca18`: its nine pushes run in the instruction
+order `G_GetHitLocationString(hitLoc)` as a const string, `dir` as a vector or
 undefined, `point` as a vector or undefined,
 `BG_GetInfoForWeapon(weapon)->name` as a string, the means-of-death name as a
 string, `dflags` as an int, `damage` as an int, `attacker` as an entity or
-undefined, and `inflictor` as an entity or undefined; then
-`Scr_ExecEntThread(self, g_scr_data+0x18, 9)`.
+undefined, and `inflictor` as an entity or undefined. VERIFIED: `0x5cb15`
+calls `Scr_ExecEntThread(self, g_scr_data+0x18, 9)`.
 
 INFERRED: gsc reads pushed arguments in reverse, so the callback is
 `CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags,
@@ -975,35 +983,49 @@ point of `knockback`, so a 45-damage carbine hit on a standing player adds
 `(int)(45 * 0.3) = 13`, that is 52 units per second along the shot direction,
 and a prone player takes `(int)(45 * 0.02) = 0` and is not moved at all.
 
-**Impact feedback.** VERIFIED, `0x43a5b` onward: with `self->flags & 1` set
-the function returns. VERIFIED: with a non-zero weapon whose
-`weaponDef->weaponType` is 0 it spawns two temp entities at `vPoint`. The
-first carries event `0xAD` or `0xAE` (`EV_BULLET_HIT_SMALL` /
-`EV_BULLET_HIT_LARGE`) chosen on `rifleBullet`, with `eventParm` and
-`entityState+216` both `DirToByte(normalize(vDir))`, `surfType` set to the
-literal 7, `otherEntityNum` set to the attacker's entity number,
-`gentity+0xF5` ORed with `0x20` and `gentity+0xF8` set to the victim's
-`ps->clientNum`. The second carries `0xAF` or `0xB0`
-(`EV_BULLET_HIT_CLIENT_SMALL` / `EV_BULLET_HIT_CLIENT_LARGE`), with the same
-`surfType` 7 and `otherEntityNum`, `entityState+144` set to the victim's
-`ps->clientNum`, and `gentity+0xF4` set to `0x800`. INFERRED: the two
-`gentity+0xF4` writes are the entity-shared visibility flags and the pair
-sends the plain impact to everybody but the victim and the client-flavoured
-one to the victim alone.
+**Impact feedback**, `0x43a5b` onward. VERIFIED: the offsets, immediates,
+event numbers and call targets named in the list below. INFERRED: the
+ordering, and every "with", "when" and "otherwise" in it, which are branch
+conditions.
 
-**Health, and the order.** VERIFIED, `0x43b7e` onward, in this order:
-`client+0x2214 += iDamage`; `client+0x2218..0x2220` takes `normalize(vDir)`
-with `client+0x2224` set to 0 when `vDir` was given, and takes
-`self->r.currentOrigin` with `client+0x2224` set to 1 when it was not;
-`self->health (gentity+0x230) -= iDamage`; script is notified with the
-attacker and the damage.
+- With `self->flags & 1` set the function returns.
+- With a non-zero weapon whose `weaponDef->weaponType` is 0 it spawns two temp
+  entities at `vPoint`.
+- The first carries event `0xAD` or `0xAE` (`EV_BULLET_HIT_SMALL` /
+  `EV_BULLET_HIT_LARGE`), chosen on a test of `rifleBullet`, with `eventParm`
+  and `entityState+216` both `DirToByte(normalize(vDir))`, `surfType` set to
+  the literal 7, `otherEntityNum` set to the attacker's entity number,
+  `gentity+0xF5` ORed with `0x20` and `gentity+0xF8` set to the victim's
+  `ps->clientNum`.
+- The second carries `0xAF` or `0xB0` (`EV_BULLET_HIT_CLIENT_SMALL` /
+  `EV_BULLET_HIT_CLIENT_LARGE`), with the same `surfType` 7 and
+  `otherEntityNum`, `entityState+144` set to the victim's `ps->clientNum`, and
+  `gentity+0xF4` set to `0x800`.
 
-VERIFIED: with health still positive it calls `self+0x214` as
-`pain(self, attacker, iDamage, vPoint, mod, dirNorm, hitLoc)`. VERIFIED: with
-health at or below zero it clamps to -999, stores the attacker in
-`self+0x258`, and calls `self+0x218` as `die(self, inflictor, attacker,
-iDamage, mod, weapon, dirNorm, hitLoc)`. VERIFIED: last, it copies
-`self->health` into `ps->stats[0]` (`ps+0xF4`).
+INFERRED: the two `gentity+0xF4` writes are the entity-shared visibility flags
+and the pair sends the plain impact to everybody but the victim and the
+client-flavoured one to the victim alone.
+
+**Health, and the order**, `0x43b7e` onward. VERIFIED: the offsets,
+immediates, event numbers and call targets named in the list below.
+INFERRED: the ordering, and every "with", "when" and "otherwise" in it, which
+are branch conditions.
+
+- `client+0x2214 += iDamage`.
+- `client+0x2218..0x2220` takes `normalize(vDir)` with `client+0x2224` set to
+  0, and takes `self->r.currentOrigin` with `client+0x2224` set to 1 on the
+  other arm of the test of the `vDir` argument.
+- `self->health (gentity+0x230) -= iDamage`.
+- Script is notified with the attacker and the damage.
+- With health still positive it calls `self+0x214` as
+  `pain(self, attacker, iDamage, vPoint, mod, dirNorm, hitLoc)`.
+- With health at or below zero it clamps to -999, stores the attacker in
+  `self+0x258`, and calls `self+0x218` as
+  `die(self, inflictor, attacker, iDamage, mod, weapon, dirNorm, hitLoc)`.
+- It copies `self->health` into `ps->stats[0]` (`ps+0xF4`).
+
+INFERRED: the `ps->stats[0]` copy is the last of these, and the two arms of the
+`vDir` test are as listed.
 
 INFERRED: so the answer to "does the engine subtract health or does
 `finishPlayerDamage`" is that `G_Damage` hands the whole decision to script
@@ -1179,20 +1201,25 @@ condition in it.
 INFERRED: `client+0x2270` and `client+0x2274` are the view kick the server
 applies itself, since nothing on the wire carries them.
 
-**When the four fields clear: they do not.** VERIFIED: the only value this
-function stores that resets anything is the 0 into `client+0x2214`;
-`damageEvent` takes an increment, `damageCount` takes `count`, and
-`damageYaw` and `damagePitch` take either a scaled angle or the literal 255.
-INFERRED: the
+**What `P_DamageFeedback` itself resets, and what it leaves standing.**
+VERIFIED: the only value this function stores that resets anything is the 0
+into `client+0x2214`; `damageEvent` takes an increment, `damageCount` takes
+`count`, and `damageYaw` and `damagePitch` take either a scaled angle or the
+literal 255. UNVERIFIED: whether anything else in the module writes the four
+fields. VERIFIED: `objdump` finds three unresolved writes to `ps+0xE8` at
+`0x31778`, `0x31826` and `0x31fc6` whose base register I did not identify, and
+the writes to `+0xE4`, `+0xE8` and `+0xEC` in `BG_PlayerStateToEntityState`
+(`0x2ceb0`) and `BG_PlayerStateToEntityStateExtrapolate` (`0x2d400`) are
+`entityState` offsets rather than playerstate ones. INFERRED: the
 client detects a new hit by `damageEvent` changing, so the fields keep their
 last values between hits and a reader that waits for them to return to zero
 waits forever.
 
 VERIFIED: step 7's arm is the one that stores the literal 255 into both
-fields, and it is guarded on `client+0x2224`, which `finishPlayerDamage` sets
-to 1 on the path that stores the victim's own origin in `client+0x2218`.
-INFERRED: the 255/255 pair is therefore the sentinel for "the damage carried no
-direction".
+fields, and its test is of `client+0x2224`, the field `finishPlayerDamage`
+also stores 1 and 0 into alongside `client+0x2218`. INFERRED: the 1 goes with
+the victim's own origin and the 0 with a real direction, so the 255/255 pair is
+the sentinel for "the damage carried no direction".
 
 ---
 
