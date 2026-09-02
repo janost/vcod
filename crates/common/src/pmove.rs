@@ -326,6 +326,9 @@ pub struct PlayerState {
     pub weapon_rechamber: u64,
     /// The weapon a putaway in flight will raise; 0 means none is.
     pub pending_weapon: u8,
+    /// The weapon the ladder holstered, to be given back at the top. Retail
+    /// re-reads `cmd.weapon` there instead (`pmove::weapon::leave_ladder`).
+    pub stowed_weapon: u8,
 }
 
 impl PlayerState {
@@ -372,6 +375,7 @@ impl PlayerState {
             ammoclip: [0; weapon::NUM_AMMO],
             weapon_rechamber: 0,
             pending_weapon: 0,
+            stowed_weapon: 0,
         }
     }
 

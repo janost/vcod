@@ -107,17 +107,21 @@ fn weapon_def(weapons: &[Option<WeaponDef>], index: u8) -> Option<&WeaponDef> {
     weapons.get(index as usize).and_then(Option::as_ref)
 }
 
-/// A new anim flips the toggle, so a repeated shot restarts its clip
-/// (section 1.2).
+/// Every write flips the toggle, `WEAP_IDLE` included, so a repeated shot
+/// restarts its clip and a clear is visible as a change (section 1.2; the
+/// sustained fire of player-model-anim-system.md ends at 253 and the channel
+/// then reads 512).
 fn set_anim(ps: &mut PlayerState, index: i32) {
     ps.weap_anim = index | ((ps.weap_anim ^ ANIM_TOGGLEBIT) & ANIM_TOGGLEBIT);
 }
 
-/// Back to `WEAP_IDLE` through the index-preserving setter: the toggle keeps
-/// whatever the last new anim left it at (section 1.2, and the torso capture's
-/// 765 -> 512 -> 253).
-fn clear_anim(ps: &mut PlayerState) {
-    ps.weap_anim &= ANIM_TOGGLEBIT;
+/// The index-preserving setter (section 1.2): it writes nothing when the index
+/// is already the one asked for, which is how a state holds its anim across
+/// frames without restarting the clip.
+fn hold_anim(ps: &mut PlayerState, index: i32) {
+    if ps.weap_anim & !ANIM_TOGGLEBIT != index {
+        set_anim(ps, index);
+    }
 }
 
 fn push(events: &mut Vec<PmEvent>, event: i32) {
@@ -154,17 +158,22 @@ pub fn pm_weapon(
     dt_ms: i32,
     events: &mut Vec<PmEvent>,
 ) {
-    let Some(def) = weapon_def(weapons, ps.weapon) else {
-        return;
-    };
-    let delay_expired = advance_timers(ps, def, input, dt_ms);
+    // The timers run whether or not the current weapon resolves: an index with
+    // no def, weapon 0 on a ladder among them, must not freeze them.
+    let delay_expired = advance_timers(ps, weapon_def(weapons, ps.weapon), input, dt_ms);
 
     // "finish a raise": state 1 lasts the one frame, `raiseTime` only holds
     // off the next action (section 1.8).
     if ps.weaponstate == WEAPON_RAISING {
         ps.weaponstate = WEAPON_READY;
-        clear_anim(ps);
+        set_anim(ps, WEAP_IDLE);
     }
+    if leave_ladder(ps, input, weapons, events) {
+        return;
+    }
+    let Some(def) = weapon_def(weapons, ps.weapon) else {
+        return;
+    };
     if begin_change(ps, input, def, events) {
         return;
     }
@@ -191,7 +200,7 @@ pub fn pm_weapon(
     if !input.attack && !delay_expired {
         if ps.weaponstate == WEAPON_FIRING {
             ps.weaponstate = WEAPON_READY;
-            clear_anim(ps);
+            hold_anim(ps, WEAP_IDLE);
         }
         return;
     }
@@ -200,7 +209,12 @@ pub fn pm_weapon(
 
 /// Sections 1.3 and 1.4. Returns whether `weaponDelay` reached 0 on this
 /// frame, the single edge the rest of the machine is written around.
-fn advance_timers(ps: &mut PlayerState, def: &WeaponDef, input: &PmInput, dt_ms: i32) -> bool {
+fn advance_timers(
+    ps: &mut PlayerState,
+    def: Option<&WeaponDef>,
+    input: &PmInput,
+    dt_ms: i32,
+) -> bool {
     let delay_expired = ps.weapon_delay_ms > 0 && ps.weapon_delay_ms - dt_ms < 1;
     ps.weapon_delay_ms = (ps.weapon_delay_ms - dt_ms).max(0);
     if ps.weapon_time_ms == 0 {
@@ -212,18 +226,20 @@ fn advance_timers(ps: &mut PlayerState, def: &WeaponDef, input: &PmInput, dt_ms:
     }
     // The semi-automatic latch: a held trigger pins `weaponTime` at 1, so the
     // weapon never reaches the 0 the fire path is gated on (section 1.4).
-    let latched = def.semi_auto
-        && input.attack
-        && requested_weapon(ps, input) == ps.weapon
-        && ps.ammoclip[def.clip_index] != 0;
+    let latched = def.is_some_and(|def| {
+        def.semi_auto
+            && input.attack
+            && requested_weapon(ps, input) == ps.weapon
+            && ps.ammoclip[def.clip_index] != 0
+    });
     ps.weapon_time_ms = i32::from(latched);
     // The anim leaves the shot on this frame even when the state does not.
     match ps.weaponstate {
         WEAPON_RECHAMBERING => {
             ps.weaponstate = WEAPON_READY;
-            clear_anim(ps);
+            set_anim(ps, WEAP_IDLE);
         }
-        WEAPON_FIRING => clear_anim(ps),
+        WEAPON_FIRING => hold_anim(ps, WEAP_IDLE),
         _ => {}
     }
     delay_expired
@@ -251,6 +267,12 @@ fn begin_change(
     if ps.weapon_time_ms != 0 && !matches!(ps.weaponstate, WEAPON_RECHAMBERING..=WEAPON_RELOAD_END)
     {
         return false;
+    }
+    // The ladder forces weapon 0 (section 1.8's `pm_flags & 0x10`; 1.12 reads
+    // that bit as the ladder).
+    if ps.on_ladder && ps.weapon != 0 {
+        ps.stowed_weapon = ps.weapon;
+        return putaway(ps, def, 0, events);
     }
     if ps.weapon != 0 && !holds(ps, ps.weapon) {
         return putaway(ps, def, 0, events);
@@ -287,7 +309,7 @@ fn pickup(ps: &mut PlayerState, weapons: &[Option<WeaponDef>], events: &mut Vec<
     let old = ps.weapon;
     ps.weapon = if holds(ps, target) { target } else { 0 };
     ps.weaponstate = WEAPON_READY;
-    clear_anim(ps);
+    set_anim(ps, WEAP_IDLE);
     if ps.weapon == old {
         return;
     }
@@ -298,6 +320,34 @@ fn pickup(ps: &mut PlayerState, weapons: &[Option<WeaponDef>], events: &mut Vec<
     ps.weapon_time_ms = ms(def.raise_time);
     set_anim(ps, WEAP_RAISE);
     push(events, EV_RAISE_WEAPON);
+}
+
+/// The other half of the ladder rule. Retail's pickup takes `cmd.weapon`, so a
+/// client that keeps sending the byte re-arms itself off the ladder; a vcod
+/// caller that sends no byte would stay disarmed, so the weapon the ladder
+/// holstered comes back instead.
+fn leave_ladder(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    weapons: &[Option<WeaponDef>],
+    events: &mut Vec<PmEvent>,
+) -> bool {
+    if ps.on_ladder
+        || ps.weapon != 0
+        || ps.stowed_weapon == 0
+        || ps.weaponstate != WEAPON_READY
+        || ps.weapon_time_ms != 0
+    {
+        return false;
+    }
+    ps.pending_weapon = if input.weapon != 0 {
+        input.weapon
+    } else {
+        ps.stowed_weapon
+    };
+    ps.stowed_weapon = 0;
+    pickup(ps, weapons, events);
+    true
 }
 
 /// "Can this weapon reload" (section 1.7).
@@ -440,12 +490,12 @@ fn reload_machine(
                 push(events, EV_RELOAD_END);
             } else {
                 ps.weaponstate = WEAPON_READY;
-                clear_anim(ps);
+                set_anim(ps, WEAP_IDLE);
             }
         }
         _ => {
             ps.weaponstate = WEAPON_READY;
-            clear_anim(ps);
+            set_anim(ps, WEAP_IDLE);
         }
     }
     true
@@ -521,7 +571,7 @@ fn fire(ps: &mut PlayerState, input: &PmInput, def: &WeaponDef, events: &mut Vec
             begin_reload(ps, def, events);
         } else {
             push(events, EV_NOAMMO);
-            clear_anim(ps);
+            set_anim(ps, WEAP_IDLE);
             ps.weapon_time_ms += 500;
         }
         return;
@@ -785,18 +835,51 @@ mod tests {
         assert_eq!(ps.weaponstate, WEAPON_DROPPING);
     }
 
-    /// The weapon anim's toggle flips on every shot, index unchanged.
+    /// Every `weapAnim` write flips the toggle, `WEAP_IDLE` included, so each
+    /// transition is a different word from the one before it. At 50 ms frames
+    /// the shot's anim is always cleared before the next tap can fire, so
+    /// there is no pair of consecutive shot writes here to compare; the
+    /// capture's sustained fire, which has them, sees the same flip.
     #[test]
-    fn the_weapon_anim_toggle_flips_per_shot() {
+    fn every_weapon_anim_write_changes_the_word() {
         let (mut ps, w) = armed(&carbine());
         run(&mut ps, &w, true, 1);
-        let a = ps.weap_anim;
-        run(&mut ps, &w, false, 6);
+        assert_eq!(ps.weap_anim, WEAP_ATTACK | ANIM_TOGGLEBIT);
+        run(&mut ps, &w, false, 3);
+        assert_eq!(ps.weap_anim, WEAP_IDLE, "clearing to idle flips it back");
+        run(&mut ps, &w, false, 3);
         run(&mut ps, &w, true, 1);
-        let b = ps.weap_anim;
-        assert_eq!(a & !ANIM_TOGGLEBIT, WEAP_ATTACK);
-        assert_eq!(a & !ANIM_TOGGLEBIT, b & !ANIM_TOGGLEBIT);
-        assert_ne!(a & ANIM_TOGGLEBIT, b & ANIM_TOGGLEBIT);
+        assert_eq!(ps.weap_anim, WEAP_ATTACK | ANIM_TOGGLEBIT);
+    }
+
+    /// A ladder forces weapon 0 through the putaway, and the weapon comes back
+    /// through a raise at the top (section 1.8).
+    #[test]
+    fn the_ladder_holsters_the_weapon_and_gives_it_back() {
+        let (mut ps, w) = armed(&carbine());
+        ps.on_ladder = true;
+        assert_eq!(run(&mut ps, &w, false, 1), vec![EV_PUTAWAY_WEAPON]);
+        assert_eq!(ps.weaponstate, WEAPON_DROPPING);
+        run(&mut ps, &w, false, 14);
+        assert_eq!(ps.weapon, 0, "0.67 s of dropTime and the hands are empty");
+        assert_eq!(ps.weaponstate, WEAPON_READY);
+        // Nothing happens for as long as the climb lasts.
+        assert!(run(&mut ps, &w, false, 20).is_empty());
+        ps.on_ladder = false;
+        assert_eq!(run(&mut ps, &w, false, 1), vec![EV_RAISE_WEAPON]);
+        assert_eq!(ps.weapon, 1);
+        assert_eq!(ps.weaponstate, WEAPON_RAISING);
+    }
+
+    /// A weapon index the table has no def for must not freeze the timers.
+    #[test]
+    fn the_timers_run_for_a_weapon_with_no_def() {
+        let (mut ps, w) = armed(&carbine());
+        ps.weapon = 3;
+        ps.weapon_time_ms = 200;
+        ps.weapon_delay_ms = 120;
+        run(&mut ps, &w, false, 1);
+        assert_eq!((ps.weapon_time_ms, ps.weapon_delay_ms), (150, 70));
     }
 
     /// The usercmd weapon byte switches: putaway, raise, then ready on the new
