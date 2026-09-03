@@ -410,8 +410,12 @@ line was kept, so token 4's unit (below) is still open.
 row per online client. The score comes from the client's own `.score` script
 field and the icon from `.statusicon`, resolved to its 1-based slot within
 `CsRange::StatusIcon`; both are where every stock gametype writes them. The
-team totals stay at `-9999`, which is what dm leaves them at: nothing in it
-calls `setTeamScore`. `ping` is 0 rather than retail's clamp, the netchan
+team totals stay at `-9999`, on the reading that nothing in dm calls
+`setTeamScore` and the sentinel is what an unwritten total holds. VERIFIED
+that this diverges: retail's own dm `b` line reads `0` in both slots
+(`crates/server/tests/fixtures/playerstate/mp_carentan-dm-hit-target.txt`, and
+`cod11-combat.md` section 9.2), so a retail dm scoreboard shows two zeroes
+where vcod shows two dashes. `ping` is 0 rather than retail's clamp, the netchan
 keeping no round-trip estimate. Token 4 is minutes since the client
 connected, the Q3 reading of the same slot -- see the UNVERIFIED note below,
 which is why that is a choice and not a claim.

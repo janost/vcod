@@ -639,6 +639,15 @@ the hit's knockback is applied, since retail's are the ones the last pmove
 left (`BG_UpdateConditionValue`) rather than the impulse of the frame; without
 that a standing player shot off his feet dies a running death.
 
+VERIFIED: a probe run against vcod's own server on 2026-09-03 read `legsAnim`
+22 with `torsoAnim` 512 on a bullet death, where the two retail deaths read 17
+and 18; all three are indices of the standing `death` clause, which is the
+first observation of the draw landing somewhere retail's captures did not
+(`cod11-combat.md` section 9.1). VERIFIED from the same run: vcod's death
+frame raises event 189 alone and reads `eventSequence` 1, where retail raises
+189 then 155 and reads 2, so the weapon channel's `raiseweapon` event does not
+fire on a death yet (section 9.2).
+
 The events `select_event` still serves -- `fireweapon`, `reload`,
 `dropweapon`, `raiseweapon`, `jump`, `jumpbk`, `land` -- list one anim per
 channel per clause in the shipped file, so first-match is their whole answer

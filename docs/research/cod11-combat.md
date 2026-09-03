@@ -1557,7 +1557,141 @@ VERIFIED: the four damage fields read 0 again after the respawn.
 
 ---
 
-## 9. Open cells
+## 9. What vcod's own server does, measured the same way
+
+The retail-client hand check that this stage's plan called for -- two 1.1
+clients joining `vcod-server` through the menus and shooting each other -- is
+**PENDING**. It needs a person at the keyboard and could not be run. What
+follows is the headless substitute: the same two probes that took section 8's
+retail captures, pointed at `cargo run -p vcod-server` instead. Every claim
+below is evidence about vcod, not about retail; the retail column is section
+8's committed fixtures.
+
+Two runs, 2026-09-03. `mp_carentan` `dm`, 200 s, is the settled-state and
+weapon-channel half. `mp_ship` `dm`, 155 s, is the kill half: carentan is too
+large for the shooter's walk to cross, exactly as it was for the retail `dm`
+capture, and mp_ship is small enough that the approach closed to 572 units and
+found a line of sight. Neither capture is committed; both fixture pairs were
+moved out of the tree after the run, because the fixture names are the retail
+evidence's.
+
+### 9.1 What matches
+
+VERIFIED, `mp_carentan` `dm`, the settled standing pose, field for field
+against section 8's `mp_carentan-dm-hit-target.txt`: `health` 100, `pm_type` 0,
+`eFlags` 16, `deadViewHeight` 8, `viewHeightCurrent` 60.0, `legsAnim` 634,
+`torsoAnim` 0, `weaponstate` 0, `stats[1]` 0, `damageEvent`/`damageCount`/
+`damageYaw`/`damagePitch` all 0, `eventSequence` 0 with an empty ring, and the
+spawn clip block `3:7,6:3,10:15`.
+
+VERIFIED, the shooter's single shot on the same map: `weaponstate` 3,
+`weapAnim` 514, one `EV_FIRE_WEAPON` (159) in the ring, and the clip index 10
+counting 15 down to 14 -- the same four the retail shooter capture reads.
+`torsoAnim` reads 765 where the retail `dm` shooter fixture reads 0; that
+fixture predates the `cmd.weapon` fix and its torso channel is the holstered
+artifact (`player-model-anim-system.md`, "The `jump_takeoff` torso index is
+gone"), so 765 = 512 | 253 is the number the retaken `combat` fixtures measure
+and the 0 is not evidence.
+
+VERIFIED, `mp_ship` `dm`, the kill: `health` 0, `pm_type` 6, `torsoAnim` 512,
+and the dead view height lerping 60 -> 50.8 -> 42 -> 32.8 -> 24 -> 12.1 -> 8
+against retail's 60 -> 51 -> 42 -> 33 -> 24 -> 15 -> 8. VERIFIED: `legsAnim`
+reads 22 where the two retail deaths read 17 and 18, and all three are indices
+of the standing `death` clause, whose several anims
+`player-model-anim-system.md` reads as a random draw. VERIFIED: `stats[1]`
+reads 294 and the shooter stood at bearing 294.42 degrees from the target when
+it fired, which is 5.1 item 11's `vectoyaw` truncated toward zero.
+VERIFIED: `damageEvent` stays 0 through the fatal hit. INFERRED: that is 6's
+step 1, the `pm_type > 5` return.
+
+VERIFIED: the corpse appears at entity **64** on the death frame with
+`trType` 5, and is still on the wire 28 s later when the capture ends, with no
+timer -- section 5.2's rule and the retail capture's behaviour both.
+
+VERIFIED: the obituary reaches both probes, victim 0, attacker 1, parm 5.
+INFERRED: 5 is the killer's configstring 7 weapon index rather than
+`0x80 | mod`, which is section 4.1's rule for a `MOD_RIFLE_BULLET`, one of the
+means of death the `0x80` flag does not cover; retail's two flagged deaths in
+section 8 read 136 (`MOD_HEAD_SHOT`) and 150 (`MOD_SUICIDE`).
+
+VERIFIED: the victim respawns on the use key with `health` 100, `pm_type` 0
+and the full spawn loadout, and the killer's scoreboard row goes from score 0
+to score 1 on the frame after the kill.
+
+### 9.2 What differs
+
+VERIFIED: **the spawn reserve carries an entry for the grenade that retail's
+does not.** Same map, same gametype, same loadout: retail writes
+`ammo=3:56,10:400` and vcod writes `ammo=3:56,6:3,10:400`. VERIFIED: the clip
+block reads `3:7,6:3,10:15` in both, so the extra reserve entry holds the same
+3 the frag's clip does. INFERRED: retail's `giveMaxAmmo` leaves `ammo[6]` at 0
+for the grenade where vcod's writes the weapon file's `maxAmmo`.
+
+VERIFIED: **the death frame is missing `EV_RAISE_WEAPON`.** Retail's death
+raises two events, 189 then 155, and reads `eventSequence` 2; vcod raises 189
+alone and reads 1. The gap was already known from the gate work and is now
+measured on the wire.
+
+VERIFIED: **the dead player keeps its weapon's clip and reserve entries.**
+Retail's death frame drops the held weapon's index from both arrays
+(`clip=3:7,6:3` and `ammo=3:56`, the carbine's index 10 gone from each) and
+puts them back on the respawn; vcod's death frame leaves all three entries
+standing.
+
+VERIFIED: **`eFlags` bit `0x8` never toggles.** Retail alternates 16 and 24
+across a player's lives, 115 samples against 101 in the `dm` capture and 122
+against 129 in the `tdm` one; vcod reads 16 for every live sample of both runs
+(`crates/server/src/spectate.rs` sets `16 | stance`). INFERRED: it is the
+per-life toggle a client watches to break interpolation across a respawn, so
+a retail client is likely to smear the victim from its corpse to its new spawn
+-- one of the defects the pending hand check would settle.
+
+VERIFIED: **the event ring is not cleared on respawn.** Retail's first frame
+of a new life reads `eventSequence` 0 with an empty ring; vcod's keeps the
+death's `eventSequence` 1 and its `events[0] = 189`.
+
+VERIFIED: **the `kill` client command is not implemented.** The target probe
+sends it at 10 s and every 45 s after, which is how section 8's death half was
+captured without the shooter landing anything; `vcod-server` logs it as an
+ignored command and the target stood at full health for the whole carentan
+run. So no vcod capture can hold a suicide, a `MOD_SUICIDE` obituary or a
+scripted respawn cycle until `Cmd_Kill_f` exists.
+
+VERIFIED: **the scoreboard's two team totals differ.** Retail's `dm` `b` line
+carries `0 0` in tokens 2 and 3; vcod carries `-9999 -9999`. The
+"As implemented" note in `cod11-hud-protocol.md` asserted retail's `dm` leaves
+them at the `-9999` sentinel, and the committed `dm` capture contradicts it.
+
+### 9.3 What this run could not reach
+
+The one-shot kill on mp_ship means **no non-fatal hit was observed live**, so
+`damageEvent`'s increment, `damageCount`, `damageYaw`/`damagePitch` against a
+bearing, the `EV_PAIN` parm, the knockback velocity and the hit-location
+multiplier are unmeasured against a running server. All of them are pinned
+in-process instead by `crates/server/tests/combat.rs`, which reproduces
+section 8.4's 33 health, 67 `damageCount`, `EV_PAIN` parm 33 and the
+`MOD_HEAD_SHOT` obituary from two clients on one server.
+
+Everything a person has to look at is still open: whether the shooter sees its
+own muzzle flash and hears its fire sound, whether the ammo counter drops,
+whether the damage direction indicator points the right way, whether the death
+anim and the corpse look right, whether the reload key and the number keys do
+what they should, and whether anything the retail client predicts shows as a
+visible snap. PENDING.
+
+### 9.4 What is not modelled at all
+
+Named here so a reader of sections 1 to 7 does not assume the code follows
+them: rifle rounds passing through a player at half damage (2.3); the
+`pm_time` stun (4.5); the view kick of 6's step 6; events 175 and 176; the
+turn, move and stance-decay terms of the spread (2.1); `EV_CROUCH_PAIN` (188);
+`CanDamage`'s line-of-sight check (4.6); `setPlayerIgnoreRadiusDamage`; item
+pickup; melee (1.10, 2.5); and grenades (1.11). The radius-damage falloff is
+RTCW's curve rather than a read of the 1.1 binary.
+
+---
+
+## 10. Open cells
 
 - UNVERIFIED: what sets `pm_flags 0x800`, which stops `PM_Weapon` outright,
   and what `pm_flags 0x400` and `0x4000` mean. INFERRED for `0x400`: it is set
