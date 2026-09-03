@@ -399,10 +399,7 @@ impl Server {
     /// `(rand() << 16) ^ rand()` wraps into the sign bit and challenges come
     /// out signed like retail's.
     fn rand(&mut self) -> i32 {
-        self.rng ^= self.rng >> 12;
-        self.rng ^= self.rng << 25;
-        self.rng ^= self.rng >> 27;
-        (self.rng.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 33) as i32 & 0x7fff_ffff
+        (vcod_common::rng::xorshift(&mut self.rng) >> 33) as i32 & 0x7fff_ffff
     }
 
     pub fn configstring(&self, i: usize) -> &str {
@@ -1437,7 +1434,7 @@ impl Server {
                     weapon: crate::items::item_name(index).unwrap_or_default(),
                     weapon_class: weapons.class(index),
                 });
-                sim.take_damage(&op, inputs.as_ref(), self.sv_time_ms);
+                sim.take_damage(&op, inputs.as_ref(), &mut self.rng, self.sv_time_ms);
             }
             for (slot, c) in self.clients.iter_mut().enumerate() {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {

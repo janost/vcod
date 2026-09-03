@@ -319,16 +319,13 @@ impl GameHost {
     }
 }
 
-/// A uniform draw in `[0, 1)`. xorshift64*, same shape as `Server`'s own
-/// `rand()` (`server.rs`) minus its glibc `rand()`-compatible masking, which
-/// `randomFloat` has no reason to match. A free function so the bullet
-/// spread (`crate::game::combat`) draws from `Server`'s state the same way.
+/// A uniform draw in `[0, 1)` off [`vcod_common::rng::xorshift`], the step
+/// every draw on the server shares, minus the glibc `rand()`-compatible
+/// masking `Server::rand` puts on top of it and `randomFloat` has no reason
+/// to match. A free function so the bullet spread (`crate::game::combat`)
+/// draws from `Server`'s state the same way.
 pub fn rand_unit(state: &mut u64) -> f32 {
-    *state ^= *state >> 12;
-    *state ^= *state << 25;
-    *state ^= *state >> 27;
-    let draw = state.wrapping_mul(0x2545_f491_4f6c_dd1d);
-    draw as f32 / u64::MAX as f32
+    vcod_common::rng::xorshift(state) as f32 / u64::MAX as f32
 }
 
 impl Host for GameHost {

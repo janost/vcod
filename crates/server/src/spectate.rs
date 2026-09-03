@@ -551,7 +551,15 @@ impl ClientSim {
     /// killing hit what `player_die` does to the playerstate (5.1):
     /// `EV_DEATH` with parm 0, the dead yaw into `stats[1]`, the death anim.
     /// The health itself is the host's and arrives through the mirror.
-    pub fn take_damage(&mut self, op: &SimOp, anims: Option<&AnimInputs>, now_ms: i32) {
+    /// `rng` is the server's own draw state: the two anims here are the ones
+    /// the script lists several of, and retail picks among them at random.
+    pub fn take_damage(
+        &mut self,
+        op: &SimOp,
+        anims: Option<&AnimInputs>,
+        rng: &mut u64,
+        now_ms: i32,
+    ) {
         let SimOp::Damaged {
             damage,
             dir,
@@ -562,6 +570,11 @@ impl ClientSim {
         } = *op;
         let dir = Vec3::from(dir);
         let has_dir = dir.length_squared() > 0.0;
+        // Read before the knockback, which is this frame's impulse and not
+        // movement: retail's conditions are the ones the last pmove left
+        // (`BG_UpdateConditionValue`), so a standing player shot off his feet
+        // still dies a standing death.
+        let conditions = anims.map(|inputs| self.event_conditions(inputs));
         if knockback {
             let scale = if self.ps.stance == pmove::Stance::Prone {
                 KNOCKBACK_PRONE
@@ -581,9 +594,8 @@ impl ClientSim {
             // The stock script's `pain` clauses are all `both`; the retail
             // hit frame keeps `torsoAnim` 0 through one, so only the legs
             // take it (combat doc, 8.4).
-            if let Some(inputs) = anims {
-                let c = self.event_conditions(inputs);
-                let mut sel = inputs.anims.script.select_event("pain", &c);
+            if let (Some(inputs), Some(c)) = (anims, &conditions) {
+                let mut sel = inputs.anims.script.select_event_random("pain", c, rng);
                 sel.torso = None;
                 let resolve = |name: &str| inputs.anims.wire_of(name);
                 let length = |name: &str| inputs.anims.length_ms(name);
@@ -601,10 +613,11 @@ impl ClientSim {
         };
         // The death anim on the legs, and the torso restarted on 0: both
         // retail deaths read `torsoAnim` 512 beside the death `legsAnim`
-        // (combat doc, 8.1 and 8.4).
-        if let Some(inputs) = anims {
-            let c = self.event_conditions(inputs);
-            let mut sel = inputs.anims.script.select_event("death", &c);
+        // (combat doc, 8.1 and 8.4). Nothing selects for this sim again --
+        // `update_anims` returns on a dead one -- so the drawn index is what
+        // the corpse clone carries.
+        if let (Some(inputs), Some(c)) = (anims, &conditions) {
+            let mut sel = inputs.anims.script.select_event_random("death", c, rng);
             sel.torso = None;
             let resolve = |name: &str| inputs.anims.wire_of(name);
             let length = |name: &str| inputs.anims.length_ms(name);
@@ -1617,7 +1630,7 @@ mod tests {
     fn a_hit_writes_the_feedback_the_capture_measured() {
         let p = &PROTOCOL_V1;
         let mut sim = target();
-        sim.take_damage(&hit_op(67, false), None, 1000);
+        sim.take_damage(&hit_op(67, false), None, &mut 1, 1000);
         sim.health = 33; // the host's mirror
         sim.end_frame(1000);
         let w = sim.to_wire(p, 0, 0);
@@ -1636,7 +1649,7 @@ mod tests {
             sim.ps.velocity
         );
 
-        sim.take_damage(&hit_op(10, false), None, 1300);
+        sim.take_damage(&hit_op(10, false), None, &mut 1, 1300);
         sim.health = 23;
         sim.end_frame(1300);
         let w = sim.to_wire(p, 0, 0);
@@ -1648,7 +1661,7 @@ mod tests {
             "no second EV_PAIN inside 700 ms"
         );
 
-        sim.take_damage(&hit_op(10, false), None, 1800);
+        sim.take_damage(&hit_op(10, false), None, &mut 1, 1800);
         sim.health = 13;
         sim.end_frame(1800);
         let w = sim.to_wire(p, 0, 0);
@@ -1687,7 +1700,7 @@ mod tests {
         for _ in 0..20 {
             sim.step(&NULL_USERCMD, 0.05, Some(&w_test), &[]);
         }
-        sim.take_damage(&op(false), None, 1000);
+        sim.take_damage(&op(false), None, &mut 1, 1000);
         sim.health = 33;
         sim.end_frame(1000);
         for _ in 0..10 {
@@ -1695,7 +1708,7 @@ mod tests {
         }
         assert_eq!(sim.ps.velocity.length(), 0.0, "the knockback has decayed");
 
-        sim.take_damage(&op(true), None, 2000);
+        sim.take_damage(&op(true), None, &mut 1, 2000);
         sim.health = 0;
         sim.end_frame(2000);
         assert!(sim.dead);
@@ -1773,7 +1786,7 @@ mod tests {
             attacker_origin: None,
             fatal: false,
         };
-        sim.take_damage(&op, None, 500);
+        sim.take_damage(&op, None, &mut 1, 500);
         sim.end_frame(500);
         let w = sim.to_wire(p, 0, 0);
         assert_eq!(w.field_i32(p, "damageYaw"), 255);

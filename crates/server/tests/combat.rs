@@ -136,6 +136,8 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     };
     assert!(flesh(sa), "A is sent the flesh impact");
     assert!(!flesh(sb), "the victim is not");
+    // The clause a standing player's pain reaches lists one anim, so the
+    // random draw has one answer here; only the prone clause lists two.
     let legs = sa.entities[&(nb as u32)].field_i32(p, "legsAnim") & 511;
     assert_eq!(
         anims.name(legs),
@@ -180,6 +182,15 @@ fn a_shot_takes_health_and_a_second_one_kills() {
         "the killing hit leaves the feedback alone"
     );
     assert_eq!(sb.ps.field_i32(p, "torsoAnim"), 512);
+    // The `DEATH` clause a standing player reaches lists eight anims and the
+    // draw takes one of them; which one is the server's own rng, so the gate
+    // pins the block rather than the anim.
+    let death_legs = sb.ps.field_i32(p, "legsAnim") & 511;
+    let death_name = anims.name(death_legs).expect("B's legs play a death anim");
+    assert!(
+        death_name.starts_with("pb_stand_death_"),
+        "B's legs play {death_name}, not a standing death"
+    );
     let obituary = |snap: &vcod_common::net::snapshot::Snapshot| {
         snap.entities
             .values()
@@ -233,6 +244,13 @@ fn a_shot_takes_health_and_a_second_one_kills() {
             "{who}'s corpse is ET_CORPSE"
         );
         assert_eq!(corpse.field_i32(p, "clientNum"), nb as i32);
+        // The body keeps the anim the death drew: the clone is re-read after
+        // the script frame exactly so the corpse lies the way B fell.
+        assert_eq!(
+            corpse.field_i32(p, "legsAnim") & 511,
+            death_legs,
+            "{who}'s corpse plays {death_name}"
+        );
     }
 
     // `dropItem` put B's carbine on the ground where it fell. The map's own

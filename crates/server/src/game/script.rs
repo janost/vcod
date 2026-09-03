@@ -236,6 +236,11 @@ impl ScriptRuntime {
         if !self.vm.has_function(f) {
             anyhow::bail!("{path}.gsc defines no {name}()");
         }
+        // The thread runs here, before the caller continues, so the level
+        // clock has to be this frame's already: the damage callbacks start
+        // ahead of `run_frame`, and a `cloneplayer` or a think they schedule
+        // on the previous frame's clock lands a frame in the past.
+        self.host.level_time_ms = now_ms;
         self.vm.start_thread(&mut self.host, now_ms, f, recv, args);
         Ok(())
     }

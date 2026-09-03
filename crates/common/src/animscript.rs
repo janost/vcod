@@ -68,8 +68,9 @@ pub struct AnimRef {
 
 /// A condition list and what it selects. An empty `conditions` is the file's
 /// `default`, which always matches. A channel can list more than one anim
-/// (death and melee blocks do); which one plays is a later task's `select`,
-/// not this parser's — both vectors keep file order and nothing else.
+/// (death, pain and melee blocks do); which one plays is the selection's
+/// business ([`AnimScript::select_event_random`]), not this parser's — both
+/// vectors keep file order and nothing else.
 #[derive(Clone, Debug, Default)]
 pub struct Clause {
     pub conditions: Vec<Condition>,
@@ -433,29 +434,59 @@ impl AnimScript {
         pick(block, c)
     }
 
-    /// The same, for one of the `EVENTS` blocks.
+    /// The same, for one of the `EVENTS` blocks. The events that reach it --
+    /// `fireweapon`, `reload`, `dropweapon`, `raiseweapon`, `jump`, `jumpbk`,
+    /// `land` -- list one anim per channel per clause in the shipped file, so
+    /// the first line is the whole answer.
     pub fn select_event(&self, event: &str, c: &Conditions) -> Selection {
         let Some(block) = self.event(event) else {
             return Selection::default();
         };
         pick(block, c)
     }
-}
 
-/// A clause may list several anim lines per channel (retail's `DEATH`, `pain`
-/// and `meleeattack` blocks randomise among them, `commands[rand() %
-/// numCommands]` in bg_animation.c); every clause this stage reaches lists
-/// exactly one, so taking the first is deterministic without being wrong yet.
-fn pick(block: &Block, c: &Conditions) -> Selection {
-    for clause in &block.clauses {
-        if clause.conditions.iter().all(|cond| c.holds(cond)) {
-            return Selection {
-                legs: clause.legs.first().cloned(),
-                torso: clause.torso.first().cloned(),
-            };
+    /// The same, drawing among the clause's lines instead of taking the
+    /// first: `death`, `pain` and `meleeattack` list several. One draw per
+    /// clause, not one per channel, so a clause of `both` lines keeps its two
+    /// channels on the same line.
+    pub fn select_event_random(&self, event: &str, c: &Conditions, rng: &mut u64) -> Selection {
+        let Some(clause) = self.event(event).and_then(|b| matching_clause(b, c)) else {
+            return Selection::default();
+        };
+        let draw = crate::rng::xorshift(rng) as usize;
+        let nth = |v: &[AnimRef]| v.get(draw % v.len().max(1)).cloned();
+        Selection {
+            legs: nth(&clause.legs),
+            torso: nth(&clause.torso),
         }
     }
-    Selection::default()
+
+    /// The legs anims of the clause an event selects, in file order: what
+    /// [`AnimScript::select_event_random`] draws from. For tests and tools.
+    pub fn event_clause_anims(&self, event: &str, c: &Conditions) -> Vec<String> {
+        self.event(event)
+            .and_then(|b| matching_clause(b, c))
+            .map(|clause| clause.legs.iter().map(|a| a.name.clone()).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// First match wins, which is the file's own stated rule.
+fn matching_clause<'a>(block: &'a Block, c: &Conditions) -> Option<&'a Clause> {
+    block
+        .clauses
+        .iter()
+        .find(|clause| clause.conditions.iter().all(|cond| c.holds(cond)))
+}
+
+/// The first line of the matching clause. A clause listing several
+/// (retail's `DEATH`, `pain` and `meleeattack`) is drawn from by
+/// [`AnimScript::select_event_random`] instead.
+fn pick(block: &Block, c: &Conditions) -> Selection {
+    matching_clause(block, c).map_or_else(Selection::default, |clause| Selection {
+        legs: clause.legs.first().cloned(),
+        torso: clause.torso.first().cloned(),
+    })
 }
 
 /// The restart toggle, `ANIM_TOGGLEBIT`. Index is the low 9 bits;
@@ -1004,6 +1035,106 @@ land
             .select_event("fireweapon", &rifleman(Movetype::Run))
             .torso
             .is_none());
+    }
+
+    /// The shipped `death` clauses list several anims each; retail draws one
+    /// of them (`commands[rand() % numCommands]`, RTCW's `bg_animation.c`).
+    /// Over many draws every listed anim comes up and nothing else does, and
+    /// a `both` line keeps the two channels on the same anim. Needs the paks.
+    #[test]
+    fn a_multi_line_death_clause_is_drawn_at_random() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let anims = crate::animtree::PlayerAnims::load(&fs).unwrap();
+        let c = rifleman(Movetype::Idle);
+        let listed = anims.script.event_clause_anims("death", &c);
+        assert!(
+            listed.len() > 1,
+            "the shipped death clause lists {} anims",
+            listed.len()
+        );
+        let mut rng = 7u64;
+        let mut seen = BTreeSet::new();
+        for _ in 0..200 {
+            let sel = anims.script.select_event_random("death", &c, &mut rng);
+            let legs = sel.legs.expect("death selects a legs anim").name;
+            assert_eq!(
+                sel.torso.map(|a| a.name).as_deref(),
+                Some(legs.as_str()),
+                "a `both` line takes both channels"
+            );
+            assert!(listed.contains(&legs), "{legs} is not in the clause");
+            seen.insert(legs);
+        }
+        assert_eq!(seen.len(), listed.len(), "every listed anim was drawn");
+    }
+
+    /// `pain`'s prone clause is the only other multi-line one; the clauses a
+    /// standing or crouched player reaches list one anim, so those draws are
+    /// the same anim every time. Needs the paks.
+    #[test]
+    fn a_prone_pain_draws_from_two_anims_and_a_standing_one_from_one() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let anims = crate::animtree::PlayerAnims::load(&fs).unwrap();
+        let prone = rifleman(Movetype::IdleProne);
+        assert_eq!(
+            anims.script.event_clause_anims("pain", &prone),
+            ["pb_prone_paina_holdchest", "pb_prone_painb_holdhead"]
+        );
+        let mut rng = 11u64;
+        let mut seen = BTreeSet::new();
+        for _ in 0..100 {
+            let sel = anims.script.select_event_random("pain", &prone, &mut rng);
+            seen.insert(sel.legs.expect("pain selects a legs anim").name);
+        }
+        assert_eq!(seen.len(), 2, "both prone pain anims were drawn");
+
+        let stand = rifleman(Movetype::Idle);
+        assert_eq!(
+            anims.script.event_clause_anims("pain", &stand),
+            ["pb_crouch_pain_holdstomach"]
+        );
+        let drawn = anims
+            .script
+            .select_event_random("pain", &stand, &mut rng)
+            .legs
+            .expect("pain selects a legs anim")
+            .name;
+        assert_eq!(drawn, "pb_crouch_pain_holdstomach");
+    }
+
+    /// What lets `select_event` take the first line and still be the whole
+    /// answer: every clause of the events it serves lists one anim per
+    /// channel. `death`, `pain` and `meleeattack` are the three blocks that
+    /// list more, and they go through `select_event_random`. Needs the paks.
+    #[test]
+    fn only_the_random_events_list_more_than_one_anim_per_clause() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let anims = crate::animtree::PlayerAnims::load(&fs).unwrap();
+        for event in [
+            "fireweapon",
+            "reload",
+            "dropweapon",
+            "raiseweapon",
+            "jump",
+            "jumpbk",
+            "land",
+        ] {
+            let block = anims.script.event(event).expect("a shipped event block");
+            for clause in &block.clauses {
+                assert!(
+                    clause.legs.len() <= 1 && clause.torso.len() <= 1,
+                    "{event} has a clause of {} legs and {} torso anims",
+                    clause.legs.len(),
+                    clause.torso.len()
+                );
+            }
+        }
     }
 
     fn anim(name: &str, duration_ms: Option<u32>) -> AnimRef {

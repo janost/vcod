@@ -625,3 +625,23 @@ Matching on both maps: carentan reads {0, 253} over 2 flips for one shot, {0,
 253} over 7 for six, {0, 229} over 2 for the reload and {0, 249} over 4 for
 three crouched shots; pavlov reads {0, 253} over 2 and over 4, {0, 231} over 2
 and {0, 249} over 2.
+
+The `death` and `pain` blocks are the two the damage path raises
+(`ClientSim::take_damage`), and they are the ones whose clauses list several
+anims: the standing `death` clause lists eight, the crouched one five, the
+prone `pain` clause two. INFERRED: one of them is drawn at random,
+`commands[rand() % numCommands]` in RTCW's `bg_animation.c`, which is what
+`AnimScript::select_event_random` does off the server's own generator
+(`vcod_common::rng::xorshift`); no capture we hold measures the draw, only
+that a death plays one of the clause's anims. One draw per clause, so a
+`both` line lands on both channels. INFERRED: the conditions are read before
+the hit's knockback is applied, since retail's are the ones the last pmove
+left (`BG_UpdateConditionValue`) rather than the impulse of the frame; without
+that a standing player shot off his feet dies a running death.
+
+The events `select_event` still serves -- `fireweapon`, `reload`,
+`dropweapon`, `raiseweapon`, `jump`, `jumpbk`, `land` -- list one anim per
+channel per clause in the shipped file, so first-match is their whole answer
+(`only_the_random_events_list_more_than_one_anim_per_clause`,
+`crates/common/src/animscript.rs`). `meleeattack` is the third multi-line
+block and nothing raises it yet.
