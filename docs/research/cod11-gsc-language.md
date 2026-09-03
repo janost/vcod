@@ -780,7 +780,8 @@ added closes that (section 14 of
   what the callback left, the way retail's synchronous call does. What each
   victim takes is the open half: the damage falls off linearly from
   `maxDamage` at the blast to `minDamage` at the radius, which is RTCW's
-  `G_RadiusDamage`. INFERRED — the curve at `.so` 0x5eef4 was not read.
+  `G_RadiusDamage`. UNVERIFIED: the curve at `.so` 0x5eef4 was not read, and
+  nothing read stands behind the falloff vcod uses.
 - **Of the `SP_` layer, only what the wire can see runs.**
   `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces
   `G_CallSpawn`'s third case for the five classnames whose `SP_` function is

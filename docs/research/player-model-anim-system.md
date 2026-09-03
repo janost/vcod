@@ -529,8 +529,9 @@ and 0. VERIFIED: the only difference is the usercmd's `weapon` byte, which the
 jump's own `upmove` change is what puts on the wire (the compact usercmd
 branch carries no weapon byte at all, so a probe sending 0 only reaches the
 weapon-change check when `upmove`, `wbuttons` or the byte itself moves;
-`docs/protocol-1.1.md`, "Usercmd delta"). So the 720 was a holstered weapon and
-not an animscript clause, and there is nothing left here to explain.
+`docs/protocol-1.1.md`, "Usercmd delta"). INFERRED: so the 720 was a holstered
+weapon and not an animscript clause, and there is nothing left here to
+explain.
 
 ### Prone fire, measured on one map of two
 

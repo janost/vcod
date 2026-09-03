@@ -69,7 +69,7 @@ pub struct AnimRef {
 /// A condition list and what it selects. An empty `conditions` is the file's
 /// `default`, which always matches. A channel can list more than one anim
 /// (death, pain and melee blocks do); which one plays is the selection's
-/// business ([`AnimScript::select_event_random`]), not this parser's — both
+/// business ([`AnimScript::select_event_random`]), not this parser's. Both
 /// vectors keep file order and nothing else.
 #[derive(Clone, Debug, Default)]
 pub struct Clause {

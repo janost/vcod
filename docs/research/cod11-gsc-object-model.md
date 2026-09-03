@@ -1247,14 +1247,14 @@ accessors are methods 32 to 37 in this order: `getWeaponSlotWeapon` 0x43cf4,
 table `dump_builtins.py` walks; the two named ones carry symbols, the six
 resolve to addresses.
 
-What each does inside was not read. vcod's readings — a slot name resolved
-through the `weaponSlot` table above, `setWeaponSlotWeapon` giving the weapon
-and placing it in the slot the caller names with a full clip and its
-`startAmmo`, ammo and clip addressed by the slot's weapon's own ammo and clip
-index, `switchToWeapon` going through the putaway rather than swapping the
-weapon in place — are the design's, and the last of them follows the weapon
-machine of `docs/research/cod11-combat.md` section 1.8 rather than anything
-read at 0x452a4's neighbours. Of the six, `setWeaponSlotWeapon`,
+What each does inside was not read. vcod's readings are the design's: a slot
+name resolved through the `weaponSlot` table above, `setWeaponSlotWeapon`
+giving the weapon and placing it in the slot the caller names with a full clip
+and its `startAmmo`, ammo and clip addressed by the slot's weapon's own ammo
+and clip index, `switchToWeapon` going through the putaway rather than
+swapping the weapon in place. The last of them follows the weapon machine of
+`docs/research/cod11-combat.md` section 1.8 rather than anything read at
+0x452a4's neighbours. Of the six, `setWeaponSlotWeapon`,
 `setWeaponSlotAmmo`, `setWeaponSlotClipAmmo` and `getWeaponSlotWeapon` are
 implemented; the two remaining getters are not.
 

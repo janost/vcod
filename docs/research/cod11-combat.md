@@ -505,12 +505,14 @@ inside this module. No jump path, stance-change path or prone path writes
 
 VERIFIED: what produced the `weaponstate` 2 and event 156 that
 `player-model-anim-system.md` used to record at a jump and at a stance change
-was the capture itself. The probe sent `cmd.weapon` 0 in every usercmd, and
-the byte reaches the server only in the full usercmd branch, which a
-`wbuttons`, `upmove` or `weapon` change forces; retaken with the probe sending
-the weapon it holds, neither a jump nor a stance change raises anything.
-INFERRED: so the first clause of the list above is what fired, a change begun
-to weapon 0 because the cmd asked for it. Neither a jump nor a stance change
+was the capture itself: the probe sent `cmd.weapon` 0 in every usercmd, and
+retaken with the probe sending the weapon it holds, neither a jump nor a
+stance change raises anything. INFERRED: the byte reaches the server only in
+the full usercmd branch, which a `wbuttons`, `upmove` or `weapon` change
+forces (`docs/protocol-1.1.md`, "Usercmd delta"), so those two steps are
+exactly the ones that put a 0 on the wire. INFERRED: so the first clause of
+the list above is what fired, a change begun to weapon 0 because the cmd asked
+for it. Neither a jump nor a stance change
 puts a weapon away on its own, and `crates/common/src/pmove/weapon.rs` no
 longer pretends they do.
 
@@ -606,11 +608,12 @@ clip decrement when it is set.
 
 UNVERIFIED: what sets `pm_flags 0x800`, and what `pm_flags 0x400` and `0x4000`
 mean. VERIFIED: `BG_GetMinSpreadForWeapon` tests `pm_flags & 1` and
-`pm_flags & 2` and loads the prone and the ducked spread minimum off those
-tests, and the weapon-change check tests `pm_flags & 0x10` and holds a store
-of weapon 0. INFERRED: the prone minimum is the `& 1` arm, the ducked one the
-`& 2` arm, and the weapon-0 store is the `& 0x10` arm. INFERRED: so `0x1` is
-prone, `0x2` is crouch and `0x10` is the ladder.
+`pm_flags & 2` and loads `hipSpreadProneMin`, `hipSpreadDuckedMin` and
+`hipSpreadStandMin` off those tests, and the weapon-change check tests
+`pm_flags & 0x10` and holds a store of weapon 0. INFERRED: the prone minimum
+is the `& 1` arm, the ducked one the `& 2` arm, and the weapon-0 store is the
+`& 0x10` arm. INFERRED: so `0x1` is prone, `0x2` is crouch and `0x10` is the
+ladder.
 
 ---
 
@@ -1136,8 +1139,10 @@ list below. INFERRED: the numbering and every condition in it.
 11. `client->ps.stats[1]` (`ps+0xF8`) takes `(int)vectoyaw(attacker->origin -
     self->origin)`, or `(int)vectoyaw(inflictor->origin - self->origin)` when
     there is no usable attacker, or `(int)self->angles[1]` when there is
-    neither. This store is the direct evidence for the dead-yaw meaning
-    `docs/protocol-1.1.md` gives `stats[1]`: VERIFIED.
+    neither. VERIFIED: the three stores. INFERRED: which arm runs, and
+    reading `stats[1]` as the dead yaw, which is the label
+    `docs/protocol-1.1.md` carries for it; the store is the strongest
+    evidence there is for that reading and is still a reading.
 12. `client->ps.viewangles` takes `self->angles`.
 13. `self->s.loopSound = 0`, `trap_UnlinkEntity`, `self+0x114 = 30.0`
     (`.rodata 0x743f0`), `trap_LinkEntity`. INFERRED: `self+0x114` is the
@@ -1495,8 +1500,9 @@ a respawn flips it the same way.
 
 From the tdm capture: `m1carbine_mp` (`damage` 45 in `weapons/mp/m1carbine_mp`)
 aimed at a standing teammate's eye from 586 units. VERIFIED: the shooter spent
-14 rounds and two of them landed, the second killing, and the obituary's
-`eventParm` is 136, `0x88`, `MOD_HEAD_SHOT`.
+16 rounds across two magazines, its clip index 10 running 15 down to 1, back
+to 15 and on to 13. VERIFIED: the 2nd and the 5th landed, the 5th killing, and
+the obituary's `eventParm` is 136, `0x88`, `MOD_HEAD_SHOT`.
 
 VERIFIED, **the hit frame** against the settled frame before it:
 
@@ -1511,10 +1517,11 @@ VERIFIED, **the hit frame** against the settled frame before it:
 | `events[0]`, `eventParms[0]` | 0, 0 | **187** (`EV_PAIN`), **33** |
 | `velocity` | 0, 0, 0 | -1.4, 80.0, 0.1 |
 
-**67 damage from a 45-damage weapon on a head hit.** INFERRED: the shipped
-`mp_lochit_dmgtable` gives the head 1.5 and the product is truncated, since
-45 * 1.5 is 67.5, 6.4's `damage * multiplier` is the only scaling on this path,
-and nothing else in the capture is a factor of 1.489.
+**67 damage from a 45-damage weapon on a head hit.** VERIFIED: the shipped
+`info/mp_lochit_dmgtable` in `pak5.pk3` gives the head 1.5 (3.1). INFERRED:
+the product is truncated, since 45 * 1.5 is 67.5, 6.4's `damage * multiplier`
+is the only scaling on this path, and nothing else in the capture is a factor
+of 1.489.
 
 VERIFIED: `damageCount` reads 67, the same number as the damage. INFERRED: this
 capture cannot separate it from 6's `damage * 100 / maxHealth`, since
@@ -1693,7 +1700,7 @@ RTCW's curve rather than a read of the 1.1 binary.
 fraction is a linear ramp to 1.0 over the weapon file's `adsTransInTime` while
 the sight button is held and back to 0.0 over `adsTransOutTime` when it is
 released (`crates/common/src/pmove/weapon.rs`, `advance_ads`). UNVERIFIED:
-what retail advances it by; no site that writes `ps+0xB8` was read. It is
+what retail advances it by, since no site that writes `ps+0xB8` was read. It is
 sent because the client replays its own prediction from each snapshot's
 playerstate, so a constant 0 would restart its ADS lerp once a snapshot.
 
