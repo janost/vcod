@@ -139,7 +139,12 @@ pub fn clone_player(
 /// does not exist yet either, which is what `DROPPED_ITEM_MS` stands in for.
 ///
 /// A name no weapon file backs raises, the same reading `weapon_argument`
-/// takes for every other weapon builtin.
+/// takes for every other weapon builtin. `"none"` is the exception and is a
+/// no-op: `getCurrentWeapon` reports it for `ps.weapon` 0, and stock
+/// `dm.gsc:531` is `self dropItem(self getcurrentweapon());` with no guard,
+/// so raising there would kill the killed callback before its `respawn()`
+/// and leave the player dead for the rest of the map. UNVERIFIED: what
+/// retail's `Drop_Weapon` does for index 0; 0x4dd40 was not read.
 pub fn drop_item(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -147,6 +152,11 @@ pub fn drop_item(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
+    if let Some(Value::String(name)) = args.first() {
+        if cx.resolve(*name) == "none" {
+            return Ok(Value::Undefined);
+        }
+    }
     let (name, index) = weapon_argument(cx, args)?;
     let origin = {
         let field = cx.intern_folded("origin");
@@ -972,6 +982,76 @@ mod tests {
             assert!(drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).is_err());
             assert_eq!(host.ents.iter_inuse().count(), 1, "no item was spawned");
         });
+    }
+
+    /// `"none"` is what `getCurrentWeapon` reports for a holstered player,
+    /// and it drops nothing at all: no entity, no ammo op, no error.
+    #[test]
+    fn dropitem_none_drops_nothing_and_does_not_raise() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let name = Value::String(cx.intern_exact("none"));
+            assert_eq!(
+                drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap(),
+                Value::Undefined
+            );
+            assert_eq!(host.ents.iter_inuse().count(), 1, "no item was spawned");
+            assert!(host.client_weapon_ops.is_empty(), "no ammo was cleared");
+        });
+    }
+
+    /// Why that no-op matters: stock `dm.gsc:531` is
+    /// `self dropItem(self getcurrentweapon());` with no guard, so a player
+    /// killed while holstered hands `"none"` in. Raising there killed the
+    /// callback thread before its `cloneplayer`, `wait` and `respawn()`, and
+    /// the player stayed dead for the rest of the map.
+    #[test]
+    fn a_killed_callback_that_drops_none_runs_past_it() {
+        use crate::game::combat::Hit;
+        use crate::game::host::{ClientEvent, Vitals};
+        use crate::game::script::{ScriptRuntime, CALLBACK_SETUP};
+
+        const CALLBACKS: &str = r#"
+            main() {}
+            CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+                self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+            }
+            CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {
+                self dropItem("none");
+                self.buried = "yes";
+            }
+        "#;
+
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, CALLBACKS);
+        for (slot, name) in [(0, "victim"), (1, "killer")] {
+            rt.push_client_event(ClientEvent::Connect {
+                slot,
+                name: name.into(),
+            });
+        }
+        rt.run_frame(0);
+        rt.host.client_vitals[0] = Vitals {
+            health: 10,
+            max_health: 100,
+            dead: false,
+        };
+        rt.deliver_hits(
+            vec![Hit {
+                victim: 0,
+                attacker: 1,
+                damage: 45,
+                dflags: 0,
+                mod_: "MOD_RIFLE_BULLET",
+                weapon: "m1carbine_mp".into(),
+                point: [0.0; 3],
+                dir: [1.0, 0.0, 0.0],
+                hitloc: "torso_upper",
+            }],
+            50,
+        );
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.client_field(0, "buried").as_deref(), Some("yes"));
     }
 
     /// `cloneplayer` copies the mirror `Server::replay_moves` wrote into the

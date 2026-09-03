@@ -95,6 +95,10 @@ struct DamageFeedback {
 /// 8-bit netfield. Object model doc, section 20.
 const NO_CURSOR_HINT: i32 = 0xff;
 
+/// `stats[3]`'s "no teammate": retail's -1 in six raw bits, so the wire
+/// cannot tell it from client 63 (docs/protocol-1.1.md, "Block 1").
+const NO_TEAMMATE: i32 = 63;
+
 /// ANGLE2SHORT units per degree (codextended shared.h).
 const ANGLE2SHORT: f32 = 65536.0 / 360.0;
 
@@ -163,9 +167,9 @@ pub struct ClientSim {
     /// wire; kept wide here and masked at the wire.
     pub event_sequence: i32,
     /// `ps.events` and `ps.eventParms`, the four-slot ring the counter
-    /// indexes. Not cleared at a respawn: retail's `ClientSpawn` carries the
-    /// sequence across one, and clearing it would replay the ring on the
-    /// client.
+    /// indexes. Cleared at a respawn along with the counter: retail's own
+    /// respawn frame reads an empty ring at sequence 0
+    /// (`docs/research/cod11-combat.md` 9.2).
     pub events: [i32; 4],
     pub event_parms: [i32; 4],
     /// The model configstring index `setViewmodel` left on the client,
@@ -205,8 +209,9 @@ pub struct ClientSim {
     /// no weapon step, no feedback.
     pub dead: bool,
     /// `ps.aimSpreadScale`, 0..255: what a shot and a hit add and the
-    /// weapon's decay rate takes away (combat doc, 2.1 and 6.5). Not a
-    /// netfield on 1.1; only the spread reads it.
+    /// weapon's decay rate takes away (combat doc, 2.1 and 6.5). A netfield
+    /// (`fields_v1.rs`), written as a float in `to_wire`; the spread reads
+    /// it too.
     pub aim_spread_scale: f32,
     damage: DamageAccum,
     feedback: DamageFeedback,
@@ -216,6 +221,11 @@ pub struct ClientSim {
     pain_after_ms: i32,
     /// `EF_TELEPORT_BIT`'s current state, flipped by every player spawn.
     teleport_bit: bool,
+    /// `ps.stats[5]`, the spawn counter retail's `ClientSpawn` carries across
+    /// its own memset (docs/protocol-1.1.md, "Block 1"). A byte on the wire,
+    /// so it wraps; every spawn of either mode bumps it, which puts the lone
+    /// spectator's capture at 1.
+    spawn_count: u8,
 }
 
 /// Everything the animscript needs that the sim does not own: the script
@@ -282,6 +292,9 @@ impl ClientSim {
             // Set, so the first player spawn's flip clears it: retail's first
             // life reads `eFlags` 16 and each later one alternates.
             teleport_bit: true,
+            // The constructor is the connect, before any spawn: the script's
+            // own `spawnSpectator` is what takes it to the capture's 1.
+            spawn_count: 0,
         }
     }
 
@@ -318,6 +331,7 @@ impl ClientSim {
         self.feedback = DamageFeedback::default();
         self.dead_yaw = 0;
         self.pain_after_ms = 0;
+        self.spawn_count = self.spawn_count.wrapping_add(1);
         // Retail's respawn frame reads an empty ring at sequence 0
         // (combat doc, 9.2).
         self.event_sequence = 0;
@@ -901,6 +915,12 @@ impl ClientSim {
             set("viewmodelIndex", self.viewmodel_index);
             set("legsAnim", self.anim.legs());
             set("torsoAnim", self.anim.torso());
+            // Both are netfields the client predicts from, so a constant
+            // here fights its own prediction once a snapshot: the ADS lerp
+            // restarts and the spread reads a stale scale. The fraction is
+            // INFERRED (combat doc, 9.4); the scale is the sim's own.
+            set("fWeaponPosFrac", self.ps.weapon_pos_frac.to_bits() as i32);
+            set("aimSpreadScale", self.aim_spread_scale.to_bits() as i32);
         }
         // What the client holds; both layouts are in the object model doc,
         // section 20. The sim owns all of it: the script host's copy is
@@ -994,6 +1014,10 @@ impl ClientSim {
         w.set_health(self.health);
         w.set_max_health(self.max_health);
         w.arrays.stats[1] = self.dead_yaw;
+        // `stats[3]` is six raw bits, so "nobody" travels as 63; the compass
+        // has no teammate to name until `TeamplayInfoMessage` exists.
+        w.arrays.stats[3] = NO_TEAMMATE;
+        w.arrays.stats[5] = i32::from(self.spawn_count);
         w
     }
 }

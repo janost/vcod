@@ -303,11 +303,6 @@ pub struct PlayerState {
     /// without having jumped, and the animation machine has to tell those
     /// apart (docs/research/player-model-anim-system.md).
     pub jumped: bool,
-    /// Whether `update_stance` moved the stance this frame. Nothing reads it
-    /// today: the putaway both combat captures used to show here was the
-    /// probe's `cmd.weapon` 0 and not the stance
-    /// (docs/research/player-model-anim-system.md, "The weapon channel").
-    pub stance_changed: bool,
     /// `ps.weapon`, a 1-based index into configstring 7; 0 is no weapon.
     pub weapon: u8,
     /// `ps.weapons`, bit N for weapon N.
@@ -336,6 +331,10 @@ pub struct PlayerState {
     /// The weapon the ladder holstered, to be given back at the top. Retail
     /// re-reads `cmd.weapon` there instead (`pmove::weapon::leave_ladder`).
     pub stowed_weapon: u8,
+    /// `ps.fWeaponPosFrac`, 0 at the hip and 1 at the sight. A netfield the
+    /// client predicts from, so a constant here restarts its ADS lerp every
+    /// snapshot (`pmove::weapon::advance_ads`).
+    pub weapon_pos_frac: f32,
 }
 
 impl PlayerState {
@@ -370,7 +369,6 @@ impl PlayerState {
             view_lerp_down: false,
             backwards_run: false,
             jumped: false,
-            stance_changed: false,
             weapon: 0,
             weapons_held: 0,
             weapon_slots: [0; weapon::NUM_SLOTS],
@@ -383,6 +381,7 @@ impl PlayerState {
             weapon_rechamber: 0,
             pending_weapon: 0,
             stowed_weapon: 0,
+            weapon_pos_frac: 0.0,
         }
     }
 
@@ -768,7 +767,6 @@ pub fn spectator_move(ps: &mut PlayerState, forward: f32, right: f32, up: f32, d
 /// Standing back up needs headroom for the taller bbox.
 fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
     let before = ps.stance;
-    ps.stance_changed = false;
     let mut desired = if input.prone {
         Stance::Prone
     } else if input.crouch {
@@ -799,7 +797,6 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, 
     // 200 ms stand/crouch family, the 400 ms bg_duck2prone_time/
     // bg_prone2duck_time defaults into and out of prone.
     if ps.stance != before {
-        ps.stance_changed = true;
         match ps.stance {
             Stance::Crouch => ps.ducked = true,
             Stance::Stand => ps.ducked = false,

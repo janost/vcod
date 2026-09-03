@@ -8,6 +8,13 @@
 //! alt-weapon and `clipOnly` clauses of the switch path, the shot's
 //! `aimSpreadScale` growth (1.5 step 8), and the three stops of 1.12, whose
 //! `pm_flags`/`pm_type`/`eFlags` this `PlayerState` does not carry.
+//!
+//! Two deliberate divergences from a VERIFIED retail reading. Retail's
+//! weapon-change check treats a `cmd.weapon` of 0 as a request to holster
+//! (1.8); [`requested_weapon`] reads it as "the cmd asks for nothing" and
+//! keeps the current weapon, so a caller that does not thread the byte yet
+//! is not disarmed every frame. And [`advance_ads`] is vcod's own lerp: the
+//! retail rule for `fWeaponPosFrac` was not read.
 
 use super::{PlayerState, PmEvent, PmInput, Stance};
 use crate::weapon::WeaponDef;
@@ -150,6 +157,34 @@ fn clear_rechamber(ps: &mut PlayerState) {
     }
 }
 
+/// The ADS fraction, `ps.fWeaponPosFrac`: a linear ramp to 1.0 while the
+/// sight button is held, over the weapon file's `adsTransInTime`, and back
+/// to 0.0 over `adsTransOutTime` when it is released. INFERRED, and INFERRED
+/// only: nothing in the binary was read for it (combat doc, 9.4). It is on
+/// the wire because the client replays its own prediction from the
+/// snapshot's playerstate, so a constant 0 restarts its ADS lerp every
+/// snapshot.
+///
+/// A zero transition time is a jump to the endpoint rather than a division.
+fn advance_ads(ps: &mut PlayerState, input: &PmInput, def: &WeaponDef, dt_ms: i32) {
+    let dt = dt_ms as f32 / 1000.0;
+    let (target, time) = if input.ads {
+        (1.0, def.ads_trans_in)
+    } else {
+        (0.0, def.ads_trans_out)
+    };
+    if time <= 0.0 {
+        ps.weapon_pos_frac = target;
+        return;
+    }
+    let step = dt / time;
+    ps.weapon_pos_frac = if target > ps.weapon_pos_frac {
+        (ps.weapon_pos_frac + step).min(target)
+    } else {
+        (ps.weapon_pos_frac - step).max(target)
+    };
+}
+
 /// One frame of the weapon machine. `dt_ms` is retail's `pml.msec`.
 pub fn pm_weapon(
     ps: &mut PlayerState,
@@ -161,6 +196,11 @@ pub fn pm_weapon(
     // The timers run whether or not the current weapon resolves: an index with
     // no def, weapon 0 on a ladder among them, must not freeze them.
     let delay_expired = advance_timers(ps, weapon_def(weapons, ps.weapon), input, dt_ms);
+    // The fraction rides on the held weapon's own transition times, so it
+    // stands still while the weapon has no def to read them from.
+    if let Some(def) = weapon_def(weapons, ps.weapon) {
+        advance_ads(ps, input, def, dt_ms);
+    }
 
     // "finish a raise": state 1 lasts the one frame, `raiseTime` only holds
     // off the next action (section 1.8).
@@ -587,8 +627,9 @@ fn rechamber_check(
     true
 }
 
-/// Section 1.5. The `ads` proxy for `fWeaponPosFrac > 0.75` is vcod's: pmove
-/// carries no ADS fraction yet.
+/// Section 1.5. The `ads` proxy for `fWeaponPosFrac > 0.75` is vcod's, and
+/// stays one now that [`advance_ads`] carries the fraction: the ramp that
+/// fills it is INFERRED, and the shot must not be gated on a guess.
 fn fire(ps: &mut PlayerState, input: &PmInput, def: &WeaponDef, events: &mut Vec<PmEvent>) {
     if ps.weapon_delay_ms != 0 {
         return;
@@ -835,21 +876,44 @@ mod tests {
         assert_eq!(run(&mut ps, &w, true, 1), vec![EV_FIRE_WEAPON]);
     }
 
-    /// Neither does anything to the weapon. The captures that read
-    /// `weaponstate` 2 at a jump and at a stance change were taken by a probe
-    /// that sent `cmd.weapon` 0, which retail's weapon-change check reads as
-    /// a request to holster; retaken with the byte set, the same steps read
-    /// `weaponstate` 0 throughout (player-model-anim-system.md, "The weapon
-    /// channel").
+    /// The ADS fraction ramps to 1 over `adsTransInTime` while the sight
+    /// button is held and back to 0 over `adsTransOutTime` when it is let go,
+    /// and clamps at both ends rather than overshooting.
     #[test]
-    fn neither_a_jump_nor_a_stance_change_puts_the_weapon_away() {
-        for (jumped, stance) in [(true, false), (false, true)] {
-            let (mut ps, w) = armed(&carbine());
-            ps.jumped = jumped;
-            ps.stance_changed = stance;
-            assert_eq!(run(&mut ps, &w, false, 1), vec![]);
-            assert_eq!(ps.weaponstate, WEAPON_READY);
-        }
+    fn the_ads_fraction_ramps_in_and_back_out() {
+        let mut d = carbine();
+        d.ads_trans_in = 0.2;
+        d.ads_trans_out = 0.4;
+        let (mut ps, w) = armed(&d);
+        let hold = |ps: &mut PlayerState, w: &[Option<WeaponDef>], ads: bool, frames: usize| {
+            let input = PmInput {
+                ads,
+                ..Default::default()
+            };
+            step(ps, w, &input, frames);
+        };
+        // 200 ms in at 50 ms a frame: four frames to the sight.
+        hold(&mut ps, &w, true, 3);
+        assert!(
+            (ps.weapon_pos_frac - 0.75).abs() < 1e-5,
+            "{}",
+            ps.weapon_pos_frac
+        );
+        hold(&mut ps, &w, true, 1);
+        assert_eq!(ps.weapon_pos_frac, 1.0);
+        hold(&mut ps, &w, true, 4);
+        assert_eq!(ps.weapon_pos_frac, 1.0, "held at the sight, not past it");
+        // 400 ms out: eight frames back to the hip.
+        hold(&mut ps, &w, false, 4);
+        assert!(
+            (ps.weapon_pos_frac - 0.5).abs() < 1e-5,
+            "{}",
+            ps.weapon_pos_frac
+        );
+        hold(&mut ps, &w, false, 4);
+        assert_eq!(ps.weapon_pos_frac, 0.0);
+        hold(&mut ps, &w, false, 2);
+        assert_eq!(ps.weapon_pos_frac, 0.0, "held at the hip, not below it");
     }
 
     /// Every `weapAnim` write flips the toggle, `WEAP_IDLE` included, so each

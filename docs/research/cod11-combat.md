@@ -1689,6 +1689,21 @@ the `EV_RAISE_WEAPON` (155) retail raises on the death frame beside `EV_DEATH`;
 pickup; melee (1.10, 2.5); and grenades (1.11). The radius-damage falloff is
 RTCW's curve rather than a read of the 1.1 binary.
 
+`ps.fWeaponPosFrac` is on the wire but its rule is vcod's own. INFERRED: the
+fraction is a linear ramp to 1.0 over the weapon file's `adsTransInTime` while
+the sight button is held and back to 0.0 over `adsTransOutTime` when it is
+released (`crates/common/src/pmove/weapon.rs`, `advance_ads`). UNVERIFIED:
+what retail advances it by; no site that writes `ps+0xB8` was read. It is
+sent because the client replays its own prediction from each snapshot's
+playerstate, so a constant 0 would restart its ADS lerp once a snapshot.
+
+Divergence, and the reason the fraction changes nothing else: 2.1's arms key
+on `fWeaponPosFrac`, and both places vcod would read it read the usercmd's
+sight bit instead -- the cone's `adsSpread`/hip choice
+(`crates/server/src/game/combat.rs`, `spread_deg`) and 1.5's
+`fWeaponPosFrac > 0.75` test (`pmove/weapon.rs`, `fire`). Neither is gated on
+an inferred ramp on purpose.
+
 ---
 
 ## 10. Open cells
