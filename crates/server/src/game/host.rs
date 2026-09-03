@@ -87,9 +87,9 @@ pub enum WeaponOp {
         ammo_index: usize,
         rounds: i16,
     },
-    /// `takeAllWeapons`, whose host half (clearing `client_weapons`) is the
-    /// mirror's; this is the playerstate half, both arrays emptied. No
-    /// builtin pushes it yet.
+    /// `takeAllWeapons`, whose host half (clearing `client_weapons`) reaches
+    /// the sim through the frame mirror; this is the playerstate half, the
+    /// ammo and clip arrays emptied.
     TakeAll,
     /// `setSpawnWeapon`: `ps.weapon` set outright, with the machine reset to
     /// ready, which is what a spawn hands a player (object model doc,

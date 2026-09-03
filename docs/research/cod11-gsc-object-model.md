@@ -1248,11 +1248,20 @@ table `dump_builtins.py` walks; the two named ones carry symbols, the six
 resolve to addresses.
 
 What each does inside was not read. vcod's readings — a slot name resolved
-through the `weaponSlot` table above, ammo and clip addressed by the slot's
-weapon's own ammo and clip index, `switchToWeapon` going through the putaway
-rather than swapping the weapon in place — are the design's, and the last of
-them follows the weapon machine of `docs/research/cod11-combat.md` section
-1.8 rather than anything read at 0x452a4's neighbours.
+through the `weaponSlot` table above, `setWeaponSlotWeapon` giving the weapon
+and placing it in the slot the caller names with a full clip and its
+`startAmmo`, ammo and clip addressed by the slot's weapon's own ammo and clip
+index, `switchToWeapon` going through the putaway rather than swapping the
+weapon in place — are the design's, and the last of them follows the weapon
+machine of `docs/research/cod11-combat.md` section 1.8 rather than anything
+read at 0x452a4's neighbours. Of the six, `setWeaponSlotWeapon`,
+`setWeaponSlotAmmo`, `setWeaponSlotClipAmmo` and `getWeaponSlotWeapon` are
+implemented; the two remaining getters are not.
+
+Whether retail's `setWeaponSlotAmmo` clamps its argument to the weapon's
+`maxAmmo` is UNVERIFIED: 0x44130 was not read. It matters because stock
+script passes 999 to every loadout weapon (`sd.gsc` 541-542), which vcod
+stores verbatim.
 
 ### `setViewmodel` reaches `ps.viewmodelIndex`
 

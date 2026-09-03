@@ -30,6 +30,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("switchtoweapon", switch_to_weapon),
     ("takeallweapons", take_all_weapons),
     ("getweaponslotweapon", get_weapon_slot_weapon),
+    ("setweaponslotweapon", set_weapon_slot_weapon),
     ("setweaponslotammo", set_weapon_slot_ammo),
     ("setweaponslotclipammo", set_weapon_slot_clip_ammo),
     ("positionwouldtelefrag", position_would_telefrag),
@@ -426,6 +427,39 @@ pub fn get_weapon_slot_weapon(
     let index = host.client_weapons[client].slots[slot] as usize;
     let name = crate::items::item_name(index).unwrap_or("none");
     Ok(Value::String(cx.intern_exact(name)))
+}
+
+/// `self setWeaponSlotWeapon(slot, name)` (player method 33, 0x43df4): the
+/// weapon given and put in the slot the caller names rather than the one its
+/// own file names, with a full clip and its `startAmmo` in reserve. Stock
+/// script runs it ahead of both setters and a `switchToWeapon` on the weapon
+/// it just placed (`sd.gsc` 540-543), so a weapon set into a slot has to
+/// come out usable.
+pub fn set_weapon_slot_weapon(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let client = client_receiver(host, recv)?;
+    let slot = slot_argument(cx, args)?;
+    let (_, index) = weapon_argument(cx, args.get(1..).unwrap_or_default())?;
+    host.client_weapons[client].give(index, slot);
+    if let Some(def) = host.weapons.get(index) {
+        let (clip, ammo) = (
+            WeaponOp::SetClip {
+                clip_index: def.clip_index,
+                rounds: def.clip_size as i16,
+            },
+            WeaponOp::SetAmmo {
+                ammo_index: def.ammo_index,
+                rounds: def.start_ammo as i16,
+            },
+        );
+        host.client_weapon_ops.push((client, clip));
+        host.client_weapon_ops.push((client, ammo));
+    }
+    Ok(Value::Undefined)
 }
 
 /// `self setWeaponSlotAmmo(slot, rounds)` (player method 35, 0x44130): the
@@ -1031,6 +1065,64 @@ mod tests {
             assert!(set_weapon_slot_ammo(&mut host, cx, t, &args).is_err());
             assert!(set_weapon_slot_clip_ammo(&mut host, cx, t, &args).is_err());
         });
+    }
+
+    /// `setWeaponSlotWeapon` is what precedes both setters in stock script
+    /// (`sd.gsc` 540-543): it gives the weapon and puts it in the named slot,
+    /// loaded, so the `switchToWeapon` on the line after it has something to
+    /// switch to. Without it that whole sequence dies on the first line.
+    #[test]
+    fn setweaponslotweapon_gives_the_weapon_and_fills_the_slot() {
+        let Some((mut vm, mut host)) = armed_fixture() else {
+            return;
+        };
+        let thompson = weapon_index("thompson_mp").unwrap();
+        let (clip_size, start_ammo) = {
+            let def = host.weapons.get(thompson).expect("the thompson");
+            (def.clip_size as i16, def.start_ammo as i16)
+        };
+        vm.with_cx(|cx| {
+            let e = loadout(&mut host, cx);
+            let t = Some(Target::Entity(e));
+            // Never given, so there is nothing to switch to yet.
+            let name = Value::String(cx.intern_exact("thompson_mp"));
+            assert!(switch_to_weapon(&mut host, cx, t, &[name]).is_err());
+
+            let primary = Value::String(cx.intern_exact("primary"));
+            set_weapon_slot_weapon(&mut host, cx, t, &[primary, name]).unwrap();
+            match get_weapon_slot_weapon(&mut host, cx, t, &[primary]).unwrap() {
+                Value::String(a) => assert_eq!(cx.resolve(a), "thompson_mp"),
+                v => panic!("{v:?}"),
+            }
+            assert!(host.client_weapons[0].holds(thompson));
+            switch_to_weapon(&mut host, cx, t, &[name]).unwrap();
+
+            // A bad slot name and a weapon no file backs are both errors.
+            let bogus = Value::String(cx.intern_exact("holster"));
+            assert!(set_weapon_slot_weapon(&mut host, cx, t, &[bogus, name]).is_err());
+            let nothing = Value::String(cx.intern_exact("not_a_weapon_mp"));
+            assert!(set_weapon_slot_weapon(&mut host, cx, t, &[primary, nothing]).is_err());
+        });
+        assert_eq!(
+            host.client_weapon_ops,
+            vec![
+                (
+                    0,
+                    WeaponOp::SetClip {
+                        clip_index: host.weapons.get(thompson).unwrap().clip_index,
+                        rounds: clip_size
+                    }
+                ),
+                (
+                    0,
+                    WeaponOp::SetAmmo {
+                        ammo_index: host.weapons.get(thompson).unwrap().ammo_index,
+                        rounds: start_ammo
+                    }
+                ),
+                (0, WeaponOp::SwitchTo(thompson as u8)),
+            ]
+        );
     }
 
     /// `takeAllWeapons` empties the host's copy, which is what the mirror
