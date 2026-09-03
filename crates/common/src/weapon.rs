@@ -170,6 +170,12 @@ pub struct WeaponDef {
     pub damage: i32,
     pub melee_damage: i32,
     pub max_ammo: u32,
+    /// `clipOnly`: the weapon has no reserve at all, so a give writes only
+    /// `ammoclip[clip_index]`. VERIFIED from the retail spawn capture: the
+    /// frag's file reads `clipOnly 1` with `maxAmmo 3`, and the spawn line
+    /// carries `clip=6:3` with no `ammo` entry for index 6
+    /// (docs/research/cod11-combat.md, section 9.2).
+    pub clip_only: bool,
     pub reload_ammo_add: u32,
     pub drop_time: f32,
     /// The name `BG_SetupAmmoIndexes` looks up (lowercased) to assign
@@ -280,6 +286,7 @@ impl WeaponDef {
             damage: parse_num(map, "damage", 0),
             melee_damage: parse_num(map, "meleeDamage", 0),
             max_ammo: parse_num(map, "maxAmmo", 0),
+            clip_only: parse_bool(map, "clipOnly", false),
             reload_ammo_add: parse_num(map, "reloadAmmoAdd", 0),
             drop_time: parse_num(map, "dropTime", 0.0),
             ammo_name: map.get("ammoName").cloned().unwrap_or_default(),

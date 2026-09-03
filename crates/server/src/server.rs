@@ -830,6 +830,15 @@ impl Server {
                 let text = self.scoreboard();
                 self.send_server_command(slot, &text);
             }
+            // `Cmd_Kill_f`: the same death `self suicide()` gives, asked for
+            // by the client. The retail hit capture's death half is this
+            // command (combat doc, section 8).
+            "kill" => {
+                let now = self.sv_time_ms;
+                if let Some(rt) = self.script.as_mut() {
+                    rt.kill_client(slot, now);
+                }
+            }
             // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
             // opened. Unlike the entry notify this fires straight through:
             // nothing is armed by it, and a notify no thread is parked on is
@@ -981,7 +990,11 @@ impl Server {
                 Some((slot, minutes as i64))
             })
             .collect();
-        let mut text = format!("b {} -9999 -9999", online.len());
+        // Tokens 2 and 3 are `level.teamScores[1]` and `[2]`. Both read 0 in
+        // the retail dm capture: the array starts zeroed and dm never calls
+        // `setTeamScore`, so the `-9999` sentinel is something a gametype has
+        // to write (hud protocol doc, section 3).
+        let mut text = format!("b {} 0 0", online.len());
         for (slot, minutes) in online {
             let score = self
                 .client_field(slot, "score")
@@ -2343,11 +2356,7 @@ mod tests {
         assert_eq!(out[0].0, addr(5));
         let cmds = server_commands(&mut nc, &out[0].1, &huff);
         assert_eq!(cmds.len(), 1);
-        assert!(
-            cmds[0].starts_with("b 1 -9999 -9999 0 0 0 0 0"),
-            "{:?}",
-            cmds[0]
-        );
+        assert!(cmds[0].starts_with("b 1 0 0 0 0 0 0 0"), "{:?}", cmds[0]);
     }
 
     fn count_replies(sv: &mut Server, to: SocketAddr) -> usize {

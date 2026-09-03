@@ -177,9 +177,10 @@ engineering setup works.
   committed fixture names, so a run against `vcod-server` overwrites the
   retail evidence: move the two files out to `tmp/` afterwards and
   `git checkout` the directory. What such a run measured about vcod is in
-  `cod11-combat.md` section 9, along with the two things it cannot measure --
-  the `kill` client command, which vcod does not implement, and a `dm`
-  approach across a large map, which finds no line of sight there either.
+  `cod11-combat.md` section 9. The death half needs only `--probe-target`,
+  since the target's own `kill` command does the killing; the hit half needs a
+  map small enough for the walk to cross, which mp_carentan is not in `dm`,
+  for ours and for retail alike.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
@@ -237,9 +238,10 @@ engineering setup works.
   the obituary on both wires, scores it, drops the dead player's weapon as an
   item, and the victim respawns on the use key. Not modelled: melee, grenades,
   item pickup, intermission, map change and the killcam. What a client still
-  gets nothing of is movers and missiles, which no code spawns. What a probe
-  run against it measured, and every place it still diverges from retail, is
-  `docs/research/cod11-combat.md` section 9.
+  gets nothing of is movers and missiles, which no code spawns. A probe run
+  against it reproduces the retail death capture field for field except for
+  the `EV_RAISE_WEAPON` the death frame does not raise
+  (`docs/research/cod11-combat.md` section 9).
 - The tick, in order: expired clients, then each client's queued usercmds
   (`replay_moves`, one pmove step per cmd, which is where the weapon machine
   queues a frame's shots), then the shots themselves (a trace each, an impact
@@ -445,6 +447,15 @@ never pasted decompiler output or disassembly listings.
 - The body queue is eight entities at 64..71 and has no lifetime timer. A
   corpse lives until its slot is reused, which the retail capture shows
   directly: the first corpse is still on the wire 190 s later.
+- `eFlags` bit `0x8` is the per-life teleport bit: retail alternates 16 and 24
+  across a player's lives and a client breaks interpolation on the changed
+  word. Leave it pinned and a retail client smears a respawning player from
+  its corpse to its new spawn. The respawn clears the event ring with it
+  (retail's first frame of a new life reads `eventSequence` 0).
+- A `clipOnly` weapon has no reserve at all. The frag's file reads
+  `clipOnly 1` with `maxAmmo 3`, and retail's spawn line carries `clip=6:3`
+  with no `ammo` entry for that index; writing the reserve anyway puts a
+  count on the wire retail never sends.
 - The four damage-feedback fields (`damageEvent`, `damageCount`, `damageYaw`,
   `damagePitch`) never clear. `damageEvent` increments and the other three
   hold the last hit's values until the next one, so a client cannot tell "no

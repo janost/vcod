@@ -143,7 +143,7 @@ pub fn drop_item(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    let (name, _) = weapon_argument(cx, args)?;
+    let (name, index) = weapon_argument(cx, args)?;
     let origin = {
         let field = cx.intern_folded("origin");
         match host.get_field(cx, EntId(slot as u32), field) {
@@ -162,6 +162,26 @@ pub fn drop_item(
         host.set_field(cx, id, atom, value)?;
     }
     host.register_item(&name);
+    // The rounds go with the item. VERIFIED: retail's death frame carries
+    // `clip=3:7,6:3 ammo=3:56`, the held carbine's index 10 gone from both
+    // arrays, where the spawn line had it in each (combat doc, 9.2).
+    if let Some(def) = host.weapons.get(index) {
+        let (clip_index, ammo_index) = (def.clip_index, def.ammo_index);
+        host.client_weapon_ops.push((
+            slot,
+            WeaponOp::SetClip {
+                clip_index,
+                rounds: 0,
+            },
+        ));
+        host.client_weapon_ops.push((
+            slot,
+            WeaponOp::SetAmmo {
+                ammo_index,
+                rounds: 0,
+            },
+        ));
+    }
     host.ents
         .schedule(id, ThinkFn::Free, host.level_time_ms + DROPPED_ITEM_MS);
     Ok(Value::Undefined)
@@ -305,18 +325,22 @@ pub fn give_weapon(
     let weapon_slot = weapon_slot(host.fs.as_deref(), &name).unwrap_or(0);
     host.client_weapons[slot].give(index, weapon_slot);
     if let Some(def) = host.weapons.get(index) {
-        let (clip, ammo) = (
+        host.client_weapon_ops.push((
+            slot,
             WeaponOp::SetClip {
                 clip_index: def.clip_index,
                 rounds: def.clip_size as i16,
             },
-            WeaponOp::SetAmmo {
-                ammo_index: def.ammo_index,
-                rounds: def.start_ammo as i16,
-            },
-        );
-        host.client_weapon_ops.push((slot, clip));
-        host.client_weapon_ops.push((slot, ammo));
+        ));
+        if !def.clip_only {
+            host.client_weapon_ops.push((
+                slot,
+                WeaponOp::SetAmmo {
+                    ammo_index: def.ammo_index,
+                    rounds: def.start_ammo as i16,
+                },
+            ));
+        }
     }
     Ok(Value::Undefined)
 }
@@ -335,18 +359,25 @@ pub fn give_max_ammo(
     let slot = client_receiver(host, recv)?;
     let (_, index) = weapon_argument(cx, args)?;
     if let Some(def) = host.weapons.get(index) {
-        let (ammo, clip) = (
-            WeaponOp::SetAmmo {
-                ammo_index: def.ammo_index,
-                rounds: def.max_ammo as i16,
-            },
+        // A `clipOnly` weapon has no reserve: the frag's file reads
+        // `clipOnly 1` with `maxAmmo 3`, and retail's spawn line carries
+        // `clip=6:3` with no `ammo` entry for index 6 (combat doc, 9.2).
+        if !def.clip_only {
+            host.client_weapon_ops.push((
+                slot,
+                WeaponOp::SetAmmo {
+                    ammo_index: def.ammo_index,
+                    rounds: def.max_ammo as i16,
+                },
+            ));
+        }
+        host.client_weapon_ops.push((
+            slot,
             WeaponOp::SetClip {
                 clip_index: def.clip_index,
                 rounds: def.clip_size as i16,
             },
-        );
-        host.client_weapon_ops.push((slot, ammo));
-        host.client_weapon_ops.push((slot, clip));
+        ));
     }
     Ok(Value::Undefined)
 }
@@ -446,18 +477,22 @@ pub fn set_weapon_slot_weapon(
     let (_, index) = weapon_argument(cx, args.get(1..).unwrap_or_default())?;
     host.client_weapons[client].give(index, slot);
     if let Some(def) = host.weapons.get(index) {
-        let (clip, ammo) = (
+        host.client_weapon_ops.push((
+            client,
             WeaponOp::SetClip {
                 clip_index: def.clip_index,
                 rounds: def.clip_size as i16,
             },
-            WeaponOp::SetAmmo {
-                ammo_index: def.ammo_index,
-                rounds: def.start_ammo as i16,
-            },
-        );
-        host.client_weapon_ops.push((client, clip));
-        host.client_weapon_ops.push((client, ammo));
+        ));
+        if !def.clip_only {
+            host.client_weapon_ops.push((
+                client,
+                WeaponOp::SetAmmo {
+                    ammo_index: def.ammo_index,
+                    rounds: def.start_ammo as i16,
+                },
+            ));
+        }
     }
     Ok(Value::Undefined)
 }

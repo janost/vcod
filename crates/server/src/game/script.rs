@@ -288,6 +288,66 @@ impl ScriptRuntime {
         }
     }
 
+    /// `Cmd_Kill_f`: the `kill` client command, which is the `suicide` builtin
+    /// reached from outside the VM. Same three effects -- the vitals, the
+    /// `Damaged` op the sim reads, and `CodeCallback_PlayerKilled` with
+    /// `MOD_SUICIDE` -- but started as a thread rather than spawned, since
+    /// nothing is waiting on it. A dead or spectating client is ignored, the
+    /// way the builtin ignores a dead one. Returns whether the kill ran.
+    pub fn kill_client(&mut self, slot: usize, now_ms: i32) -> bool {
+        let Some(id) = self.client_entity(slot) else {
+            return false;
+        };
+        let Some(v) = self.host.client_vitals.get_mut(slot) else {
+            return false;
+        };
+        if v.dead || v.max_health <= 0 {
+            return false;
+        }
+        v.health = 0;
+        v.dead = true;
+        self.host.client_sim_ops.push((
+            slot,
+            crate::game::host::SimOp::Damaged {
+                damage: 0,
+                point: [0.0; 3],
+                dir: [0.0; 3],
+                knockback: false,
+                attacker: Some(slot),
+                attacker_origin: None,
+                fatal: true,
+            },
+        ));
+        let weapon = self.host.client_weapons[slot].current as usize;
+        let weapon = crate::items::item_name(weapon)
+            .unwrap_or("none")
+            .to_string();
+        let (mod_, weapon) = self
+            .vm
+            .with_cx(|cx| (cx.intern_exact("MOD_SUICIDE"), cx.intern_exact(&weapon)));
+        let none = self.vm.with_cx(|cx| cx.intern_exact("none"));
+        let me = Value::Entity(id);
+        let args = vec![
+            me,
+            me,
+            Value::Int(0),
+            Value::String(mod_),
+            Value::String(weapon),
+            Value::Vector([0.0; 3]),
+            Value::String(none),
+        ];
+        if let Err(e) = self.start_with_args(
+            CALLBACK_SETUP,
+            "CodeCallback_PlayerKilled",
+            Some(Target::Entity(id)),
+            args,
+            now_ms,
+        ) {
+            log::error!("gsc: {e:#}");
+        }
+        true
+    }
+
     /// What `finishPlayerDamage` did to the sims this frame, drained: each
     /// op is applied once.
     pub fn take_sim_ops(&mut self) -> Vec<(usize, crate::game::host::SimOp)> {

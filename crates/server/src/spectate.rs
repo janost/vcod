@@ -37,6 +37,11 @@ const PMF_OWN_VIEW: i32 = 0x40000;
 /// `PlayerState::ducked` carries it.
 const EF_CROUCH: i32 = 0x20;
 const EF_PRONE: i32 = 0x40;
+/// The per-life toggle. VERIFIED: retail alternates `eFlags` 16 and 24
+/// across a player's lives (`mp_carentan-dm-hit-target.txt` reads 115 samples
+/// at 16 against 101 at 24). INFERRED: a client breaks interpolation on the
+/// changed word, so without it a respawn smears from the corpse to the spawn.
+const EF_TELEPORT_BIT: i32 = 0x8;
 const PMF_DUCKED: i32 = 0x2;
 const PMF_PRONE: i32 = 0x1;
 /// Held jump, retail's 0x8 (set @0x2ec34, cleared @0x34135); the capture reads
@@ -206,6 +211,8 @@ pub struct ClientSim {
     dead_yaw: i32,
     /// When the next `EV_PAIN` may fire.
     pain_after_ms: i32,
+    /// `EF_TELEPORT_BIT`'s current state, flipped by every player spawn.
+    teleport_bit: bool,
 }
 
 /// Everything the animscript needs that the sim does not own: the script
@@ -269,6 +276,9 @@ impl ClientSim {
             feedback: DamageFeedback::default(),
             dead_yaw: 0,
             pain_after_ms: 0,
+            // Set, so the first player spawn's flip clears it: retail's first
+            // life reads `eFlags` 16 and each later one alternates.
+            teleport_bit: true,
         }
     }
 
@@ -305,6 +315,28 @@ impl ClientSim {
         self.feedback = DamageFeedback::default();
         self.dead_yaw = 0;
         self.pain_after_ms = 0;
+        // Retail's respawn frame reads an empty ring at sequence 0
+        // (combat doc, 9.2).
+        self.event_sequence = 0;
+        self.events = [0; 4];
+        self.event_parms = [0; 4];
+        // A spectator's `eFlags` is a constant on the wire, so only a player
+        // spawn consumes a flip.
+        if mode == PmType::Normal {
+            self.teleport_bit = !self.teleport_bit;
+        }
+    }
+
+    /// A live player's `eFlags`: the base word, the per-life teleport bit and
+    /// nothing else. The stance bits ride on the playerstate copy only, which
+    /// is where the motion capture measured them.
+    fn eflags(&self) -> i32 {
+        PLAYER_EFLAGS
+            | if self.teleport_bit {
+                EF_TELEPORT_BIT
+            } else {
+                0
+            }
     }
 
     /// Writes `events[seq & 3]` and then bumps the counter, the order both
@@ -703,7 +735,7 @@ impl ClientSim {
         };
         set("eType", ET_PLAYER);
         set("clientNum", slot as i32);
-        set("eFlags", PLAYER_EFLAGS);
+        set("eFlags", self.eflags());
         set("solid", PLAYER_SOLID);
         set("legsAnim", self.anim.legs());
         // The torso does travel: the shoot, reload and putaway poses are the
@@ -775,14 +807,21 @@ impl ClientSim {
                 (false, _) => 4,
             },
         );
-        // The 0x8 the spectator carries on top of the player's 0x10 is
-        // unaccounted for; both values are the captures', not a mechanism.
+        // The 0x8 a spectator carries is the same bit `EF_TELEPORT_BIT` names;
+        // a spectator's value is the capture's constant, not a mechanism.
         let stance_eflags = match self.ps.stance {
             pmove::Stance::Stand => 0,
             pmove::Stance::Crouch => EF_CROUCH,
             pmove::Stance::Prone => EF_PRONE,
         };
-        set("eFlags", if player { 16 | stance_eflags } else { 24 });
+        set(
+            "eFlags",
+            if player {
+                self.eflags() | stance_eflags
+            } else {
+                24
+            },
+        );
         set(
             "speed",
             if player {
@@ -1765,11 +1804,14 @@ mod tests {
         assert_eq!(w.field_i32(p, "pm_type"), 0);
         assert_eq!(w.field_i32(p, "damageEvent"), 0);
         assert_eq!(w.arrays.stats[1], 0);
+        // Retail's first frame of a new life reads an empty ring at sequence
+        // 0 (combat doc, 9.2).
         assert_eq!(
             w.field_i32(p, "eventSequence"),
-            2,
-            "the ring survives a respawn"
+            0,
+            "the respawn did not clear the ring"
         );
+        assert_eq!(w.field_i32(p, "events[0]"), 0);
     }
 
     /// No direction is the 255/255 sentinel, and no knockback moves nothing.

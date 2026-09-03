@@ -105,6 +105,14 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     assert_eq!(sb.ps.field_i32(p, "pm_type"), 0);
     // What the stock loadout left B holding, to compare the respawn against.
     let spawn_clip = sb.ps.arrays.ammoclip;
+    // The frag's file reads `clipOnly 1`, so it has three in the clip and no
+    // reserve at all: retail's spawn line is `clip=3:7,6:3,10:15
+    // ammo=3:56,10:400`, with no `ammo` entry for index 6.
+    assert_eq!(sb.ps.clip(6), 3, "three frags in the clip");
+    assert_eq!(sb.ps.ammo(6), 0, "a clipOnly weapon carries no reserve");
+    assert_eq!(sb.ps.ammo(10), 400, "the carbine's reserve is written");
+    // The per-life teleport bit, to compare the respawn against.
+    let life_eflags = sb.ps.field_i32(p, "eFlags");
 
     // One tap down the sight: the carbine is semi-automatic.
     let ads = UserCmd {
@@ -297,8 +305,10 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     let row = row.expect("no scoreboard reply");
     // b <numRows> <axis> <allies>{ <client> <score> <ping> <time> <icon>}*
     assert_eq!(row[1], "2", "two clients online");
-    assert_eq!(row[2], "-9999", "dm sets no team scores");
-    assert_eq!(row[3], "-9999");
+    // Retail's dm capture reads 0 in both slots: dm never calls
+    // `setTeamScore` and `level.teamScores[]` starts zeroed.
+    assert_eq!(row[2], "0", "dm sets no team scores");
+    assert_eq!(row[3], "0");
     let cells: Vec<i64> = row[4..].iter().map(|s| s.parse().unwrap()).collect();
     let of = |slot: usize| {
         cells
@@ -334,6 +344,18 @@ fn a_shot_takes_health_and_a_second_one_kills() {
         "the respawn re-gave the loadout"
     );
     assert_eq!(sb.ps.clip(10), 15, "the carbine's clip is full again");
+    // Retail alternates `eFlags` 16 and 24 across lives; a client breaks
+    // interpolation on the changed word (combat doc, 9.2).
+    assert_ne!(
+        sb.ps.field_i32(p, "eFlags") & 0x8,
+        life_eflags & 0x8,
+        "the respawn did not flip the teleport bit"
+    );
+    assert_eq!(
+        sb.ps.field_i32(p, "eventSequence"),
+        0,
+        "the respawn cleared the event ring"
+    );
     assert_ne!(
         sb.ps.origin(p),
         death_spot,
@@ -371,4 +393,117 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     );
     assert_eq!(sb.ps.clip(10), 14, "one round out of the fresh clip");
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
+}
+
+/// `Cmd_Kill_f`: the `kill` client command, the death half of the retail hit
+/// capture. B asks to die; B's next snapshot reads `pm_type` 6 and both
+/// clients are sent the obituary with victim == attacker and the
+/// `MOD_SUICIDE` parm 0x96 the capture measured (`cod11-combat.md` 8.3).
+#[test]
+fn the_kill_command_suicides_a_player() {
+    use vcod_common::net::msg::NULL_USERCMD;
+
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+    let p = &PROTOCOL_V1;
+    let na = ca
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let nb = cb
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let mut step = |sv: &mut vcod_server::Server, ca: &mut _, cb: &mut _| {
+        now += Duration::from_millis(50);
+        common::step_pair(sv, (&qa, ca), (&qb, cb), now)
+    };
+    // The two spawn wherever dm put them; nothing here needs a sightline.
+    for _ in 0..40 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&NULL_USERCMD);
+        step(&mut sv, &mut ca, &mut cb);
+    }
+    assert_eq!(cb.snapshots().newest().unwrap().ps.health(), 100);
+
+    let obituary = |snap: &vcod_common::net::snapshot::Snapshot| {
+        snap.entities
+            .values()
+            .find(|e| e.field_i32(p, "eType") == 12 + 201)
+            .map(|e| {
+                (
+                    e.field_i32(p, "otherEntityNum"),
+                    e.field_i32(p, "attackerEntityNum"),
+                    e.field_i32(p, "eventParm"),
+                )
+            })
+    };
+    // The obituary is a temp entity: it rides one frame and is gone, so it is
+    // caught as it passes rather than read off the last snapshot.
+    let (mut seen_a, mut seen_b) = (None, None);
+    cb.send_reliable("kill");
+    for _ in 0..10 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&NULL_USERCMD);
+        step(&mut sv, &mut ca, &mut cb);
+        seen_a = seen_a.or_else(|| obituary(ca.snapshots().newest().unwrap()));
+        seen_b = seen_b.or_else(|| obituary(cb.snapshots().newest().unwrap()));
+    }
+    let sb = cb.snapshots().newest().unwrap();
+    assert_eq!(sb.ps.health(), 0, "the kill command took B's health");
+    assert_eq!(sb.ps.field_i32(p, "pm_type"), 6, "B is dead");
+    assert_eq!(sv.client_field(nb, "sessionstate").as_deref(), Some("dead"));
+    // `EV_DEATH` with the literal 0 parm (combat doc, 5.1 item 7).
+    assert!(
+        (0..4).any(|i| sb.ps.field_i32(p, &format!("events[{i}]")) == 189),
+        "B raised no EV_DEATH"
+    );
+    // `MOD_SUICIDE` is index 22 and one of the seven the `0x80` flag covers.
+    let expect = Some((nb as i32, nb as i32, 0x96));
+    assert_eq!(seen_a, expect, "A's obituary");
+    assert_eq!(seen_b, expect, "B's obituary");
+    // A's own kill count is untouched: a suicide is not a frag.
+    assert_ne!(na, nb);
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+
+    // A corpse landed in the queue's first slot, the same as a shot death.
+    assert!(
+        sb.entities.contains_key(&FIRST_BODY),
+        "the suicide spawned no corpse"
+    );
+
+    // A second `kill` while dead does nothing.
+    cb.send_reliable("kill");
+    for _ in 0..5 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&NULL_USERCMD);
+        step(&mut sv, &mut ca, &mut cb);
+    }
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+    assert_eq!(
+        cb.snapshots().newest().unwrap().ps.field_i32(p, "pm_type"),
+        6
+    );
 }
