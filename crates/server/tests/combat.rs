@@ -280,6 +280,14 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     // `m1carbine_mp` is configstring 7's twelfth entry, and a placed weapon's
     // `index` is that 1-based number.
     assert_eq!(dropped.field_i32(p, "index"), 12, "B dropped its carbine");
+    // The rounds went with it. Retail's death frame reads `clip=3:7,6:3
+    // ammo=3:56`: the carbine's index 10 is gone from both arrays, while the
+    // pistol's and the frag's entries stand (combat doc, 9.1).
+    let dead = cb.snapshots().newest().unwrap();
+    assert_eq!(dead.ps.clip(10), 0, "the dropped carbine's clip");
+    assert_eq!(dead.ps.ammo(10), 0, "the dropped carbine's reserve");
+    assert_eq!(dead.ps.clip(3), 7, "the pistol's clip stands");
+    assert_eq!(dead.ps.ammo(3), 56, "the pistol's reserve stands");
 
     // The killed callback ran all the way to `respawn()`: no thread died on a
     // builtin we do not have.
@@ -484,8 +492,6 @@ fn the_kill_command_suicides_a_player() {
     let expect = Some((nb as i32, nb as i32, 0x96));
     assert_eq!(seen_a, expect, "A's obituary");
     assert_eq!(seen_b, expect, "B's obituary");
-    // A's own kill count is untouched: a suicide is not a frag.
-    assert_ne!(na, nb);
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 
     // A corpse landed in the queue's first slot, the same as a shot death.
@@ -493,6 +499,31 @@ fn the_kill_command_suicides_a_player() {
         sb.entities.contains_key(&FIRST_BODY),
         "the suicide spawned no corpse"
     );
+
+    // A scored nothing: a suicide is not a frag.
+    ca.send_reliable("score");
+    let mut row = None;
+    for _ in 0..10 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&NULL_USERCMD);
+        let (ea, _) = step(&mut sv, &mut ca, &mut cb);
+        for e in ea {
+            if let NetEvent::ServerCommand(t) = e {
+                if t.first().map(String::as_str) == Some("b") {
+                    row = Some(t);
+                }
+            }
+        }
+    }
+    let row = row.expect("no scoreboard reply");
+    let cells: Vec<i64> = row[4..].iter().map(|s| s.parse().unwrap()).collect();
+    let score = |slot: usize| {
+        cells
+            .chunks(5)
+            .find(|c| c[0] == slot as i64)
+            .unwrap_or_else(|| panic!("no row for client {slot}"))[1]
+    };
+    assert_eq!(score(na), 0, "A scored nothing off B's suicide");
 
     // A second `kill` while dead does nothing.
     cb.send_reliable("kill");

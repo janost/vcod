@@ -823,9 +823,7 @@ impl Server {
                 }
             }
             // DeathmatchScoreboardMessage (.so 0x459c0); grammar in
-            // docs/research/cod11-hud-protocol.md section 3. The team totals
-            // stay at the "no score" sentinel, which is what dm leaves them
-            // at: nothing in it calls `setTeamScore`.
+            // docs/research/cod11-hud-protocol.md section 3.
             "score" => {
                 let text = self.scoreboard();
                 self.send_server_command(slot, &text);
@@ -990,10 +988,11 @@ impl Server {
                 Some((slot, minutes as i64))
             })
             .collect();
-        // Tokens 2 and 3 are `level.teamScores[1]` and `[2]`. Both read 0 in
-        // the retail dm capture: the array starts zeroed and dm never calls
-        // `setTeamScore`, so the `-9999` sentinel is something a gametype has
-        // to write (hud protocol doc, section 3).
+        // Tokens 2 and 3 are `level.teamScores[1]` and `[2]`. Both retail
+        // captures read 0 in each: the array starts zeroed and the `-9999`
+        // sentinel is something a gametype writes for itself (hud protocol
+        // doc, section 3). Hardcoded until a `setTeamScore` builtin gives
+        // them somewhere to live.
         let mut text = format!("b {} 0 0", online.len());
         for (slot, minutes) in online {
             let score = self

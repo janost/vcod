@@ -18,7 +18,8 @@ pub const BODY_QUEUE_SIZE: usize = 8;
 
 /// The `eFlags` bit `G_SpawnPlayerClone` inverts on every push so the word
 /// differs from whatever the slot's previous occupant sent, which is what
-/// makes the client restart the animation.
+/// makes the client restart the animation. The same bit a player's respawn
+/// flips (`spectate::EF_TELEPORT_BIT`).
 const EFLAGS_ANIM_TOGGLE: i32 = 8;
 
 /// `s.pos.trType`, the literal 5 the clone is given. With `trDuration` 0 the

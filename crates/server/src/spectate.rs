@@ -41,6 +41,9 @@ const EF_PRONE: i32 = 0x40;
 /// across a player's lives (`mp_carentan-dm-hit-target.txt` reads 115 samples
 /// at 16 against 101 at 24). INFERRED: a client breaks interpolation on the
 /// changed word, so without it a respawn smears from the corpse to the spawn.
+/// The same bit `bodies::EFLAGS_ANIM_TOGGLE` inverts per body-queue push, for
+/// the same reason: a changed `eFlags` is what makes a client stop carrying
+/// the previous occupant of that entity number forward.
 const EF_TELEPORT_BIT: i32 = 0x8;
 const PMF_DUCKED: i32 = 0x2;
 const PMF_PRONE: i32 = 0x1;

@@ -240,7 +240,8 @@ engineering setup works.
   item pickup, intermission, map change and the killcam. What a client still
   gets nothing of is movers and missiles, which no code spawns. A probe run
   against it reproduces the retail death capture field for field except for
-  the `EV_RAISE_WEAPON` the death frame does not raise
+  two: the `EV_RAISE_WEAPON` the death frame does not raise, and the
+  `legsAnim` the respawn frame carries a frame late
   (`docs/research/cod11-combat.md` section 9).
 - The tick, in order: expired clients, then each client's queued usercmds
   (`replay_moves`, one pmove step per cmd, which is where the weapon machine

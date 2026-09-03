@@ -128,11 +128,15 @@ pub fn clone_player(
 /// weapon, which is what `kind_of` reads; the classname only has to open with
 /// `mpweapon_` for it to look there.
 ///
-/// Two of retail's steps are left out. It takes the weapon off the player
-/// (`BG_TakePlayerWeapon`), which the stock death path does not need -- the
-/// respawn re-gives the loadout -- and would disarm a player the gametype
-/// meant to keep armed. And pickup on touch does not exist yet, which is what
-/// `DROPPED_ITEM_MS` stands in for.
+/// The rounds go with the item: the retail death frame reads
+/// `clip=3:7,6:3 ammo=3:56`, the held carbine's index gone from both arrays
+/// where the spawn line had it in each (combat doc, 9.1), and `player_die`
+/// itself stores no ammo (5.1), so the clear belongs here. What is left out
+/// is the rest of `BG_TakePlayerWeapon`: the weapon stays in the player's
+/// held set, which costs nothing on the death path the stock scripts use --
+/// the respawn re-gives the loadout -- and keeps a gametype that drops a
+/// weapon it means to keep from being disarmed outright. Pickup on touch
+/// does not exist yet either, which is what `DROPPED_ITEM_MS` stands in for.
 ///
 /// A name no weapon file backs raises, the same reading `weapon_argument`
 /// takes for every other weapon builtin.

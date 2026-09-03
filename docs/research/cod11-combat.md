@@ -1595,9 +1595,8 @@ gone from both arrays -- and zero velocity. The one field that differs is
 
 VERIFIED, the respawn frame against retail's, field for field: `health` 100,
 `pm_type` 0, `eFlags` **24**, `eventSequence` 0 with an empty ring, and
-`clip=3:7,6:3,10:15 ammo=3:56,10:400`. `legsAnim` reads 0 on that one frame
-where retail reads 634, and 634 from the next frame on: the animscript picks
-nothing until a move runs.
+`clip=3:7,6:3,10:15 ammo=3:56,10:400`. The one field of that frame that
+differs is `legsAnim`, in 9.2.
 
 VERIFIED: over a 130 s run of three deaths and three respawns, `eFlags`
 alternates 16 and 24 the way retail's captures do (38 samples against 51 here,
@@ -1647,6 +1646,11 @@ VERIFIED: **the death frame is missing `EV_RAISE_WEAPON`.** Retail's death
 raises two events, 189 then 155, and reads `eventSequence` 2; vcod raises 189
 alone and reads 1. It is the one field of the death frame that still differs,
 and it is in 9.4's list.
+
+VERIFIED: **the respawn frame carries `legsAnim` 0 where retail carries 634.**
+It is one frame: the next one reads 634 and every frame after it. INFERRED:
+the animscript picks nothing until a move has run, so the spawn frame goes out
+before the standing idle is chosen, where retail's already carries it.
 
 Everything else section 9 found on 2026-09-03 has since been closed, each
 against the fixture line that decided it: the frag's reserve entry (its file

@@ -176,26 +176,21 @@ pub fn obituary(
     Ok(Value::Undefined)
 }
 
-/// `self suicide()` (`.so` 0x45358): the kill a player asks for. Retail
-/// routes it through the same `player_die` every other death takes; here the
-/// health comes off the vitals directly and the death callback is spawned
-/// with `MOD_SUICIDE`, the same shape `finish_player_damage` uses for a
-/// killing hit.
+/// The three effects a suicide has, for the two callers that need them: the
+/// `suicide` builtin and `Cmd_Kill_f`. Writes the vitals, queues the sim's
+/// `Damaged` op and returns the `CodeCallback_PlayerKilled` argument vector,
+/// leaving only the invocation to the caller -- a builtin spawns the thread
+/// so it runs before its own next instruction, while the client command has
+/// nothing waiting on it and starts one.
 ///
-/// The damage is zero and the knockback off, so the sim raises `EV_DEATH`
-/// and nothing else: the dead yaw stays 0, which is what the retail hit
-/// capture's own suicides read (`docs/research/cod11-combat.md` section 8.4,
-/// `stats[1]` 0).
-pub fn suicide(
-    host: &mut GameHost,
-    cx: &mut Cx,
-    recv: Option<Target>,
-    _args: &[Value],
-) -> Result<Value, ErrorKind> {
-    let slot = client_receiver(host, recv)?;
-    let v = &mut host.client_vitals[slot];
+/// `None` for a client that is already dead. The damage is zero and the
+/// knockback off, so the sim raises `EV_DEATH` and nothing else: the dead yaw
+/// stays 0, which is what the retail hit capture's own suicides read
+/// (`docs/research/cod11-combat.md` section 8.4, `stats[1]` 0).
+pub fn suicide_effects(host: &mut GameHost, cx: &mut Cx, slot: usize) -> Option<Vec<Value>> {
+    let v = host.client_vitals.get_mut(slot)?;
     if v.dead {
-        return Ok(Value::Undefined);
+        return None;
     }
     v.health = 0;
     v.dead = true;
@@ -214,7 +209,7 @@ pub fn suicide(
     let me = Value::Entity(vcod_gsc::EntId(slot as u32));
     let weapon = host.client_weapons[slot].current as usize;
     let weapon = crate::items::item_name(weapon).unwrap_or("none");
-    let args = vec![
+    Some(vec![
         me,
         me,
         Value::Int(0),
@@ -222,7 +217,24 @@ pub fn suicide(
         Value::String(cx.intern_exact(weapon)),
         Value::Vector([0.0; 3]),
         Value::String(cx.intern_exact("none")),
-    ];
+    ])
+}
+
+/// `self suicide()` (`.so` 0x45358): the kill a player asks for. Retail
+/// routes it through the same `player_die` every other death takes; here the
+/// health comes off the vitals directly and the death callback is spawned
+/// with `MOD_SUICIDE`, the same shape `finish_player_damage` uses for a
+/// killing hit.
+pub fn suicide(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let Some(args) = suicide_effects(host, cx, slot) else {
+        return Ok(Value::Undefined);
+    };
     let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
     cx.spawn(killed, recv, args);
     Ok(Value::Undefined)
