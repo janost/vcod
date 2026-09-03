@@ -497,33 +497,97 @@ fn write_float_field(w: &mut MsgWriter, raw: i32) {
     }
 }
 
-/// One primitive read from the playerState's trailing array blocks, in the
-/// order the parse took it.
+/// One primitive read from array blocks 4 and 5, in the order the parse took
+/// it. Blocks 1 to 3 decode into [`PsArrays`]' named arrays instead. Those two
+/// blocks reach the wire only through the shared field reader, which has no
+/// byte or short form, so three variants cover them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PsArrayOp {
     Bits(i32, i32),
     Packed(i32, i32),
-    Byte(u8),
-    Short(i16),
     Long(i32),
 }
 
+/// The playerState's five trailing array blocks (docs/protocol-1.1.md, "The
+/// five array blocks"). Each block is gated against the base frame, so all
+/// five are empty once a client is deltaing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PsArrays {
+    /// Block 1, `ps.stats[6]`; index 0 health, 2 max health. The widths are
+    /// per element: `stats[3]` is 6 unsigned bits and `stats[5]` a byte, so a
+    /// retail `-1` in `stats[3]` arrives as 63.
+    pub stats: [i32; 6],
+    /// Block 2, `ps.ammo[64]`, the reserve, indexed by the weapon def's ammo
+    /// index and not by weapon.
+    pub ammo: [i16; 64],
+    /// Block 3, `ps.ammoclip[64]`, the loaded magazine, by clip index.
+    pub ammoclip: [i16; 64],
+    /// Blocks 4 and 5 (objectives, and the two HUD-element arrays) as the
+    /// primitives the parse consumed, replayed verbatim: nothing in vcod
+    /// writes either. Empty means both gates are clear.
+    pub tail: Vec<PsArrayOp>,
+}
+
+impl Default for PsArrays {
+    fn default() -> Self {
+        PsArrays {
+            stats: [0; 6],
+            ammo: [0; 64],
+            ammoclip: [0; 64],
+            tail: Vec::new(),
+        }
+    }
+}
+
 /// Raw wire values in `Protocol::player_fields` order, floats as bit patterns.
-/// The trailing stat/HUD arrays are not decoded into fields; `arrays` keeps
-/// the primitives the parse consumed so a captured state writes back out bit
-/// for bit.
+/// The trailing array blocks are not in that table; `arrays` carries them.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct PlayerState {
     pub fields: Vec<i32>,
-    pub arrays: Vec<PsArrayOp>,
+    pub arrays: PsArrays,
 }
 
 impl PlayerState {
     pub fn null(p: &Protocol) -> Self {
         PlayerState {
             fields: vec![0; p.player_fields.len()],
-            arrays: Vec::new(),
+            arrays: PsArrays::default(),
         }
+    }
+
+    pub fn health(&self) -> i32 {
+        self.arrays.stats[0]
+    }
+
+    pub fn set_health(&mut self, v: i32) {
+        self.arrays.stats[0] = v;
+    }
+
+    pub fn max_health(&self) -> i32 {
+        self.arrays.stats[2]
+    }
+
+    pub fn set_max_health(&mut self, v: i32) {
+        self.arrays.stats[2] = v;
+    }
+
+    /// The reserve behind the magazine, by the weapon def's ammo index.
+    pub fn ammo(&self, index: usize) -> i16 {
+        self.arrays.ammo[index]
+    }
+
+    pub fn set_ammo(&mut self, index: usize, v: i16) {
+        self.arrays.ammo[index] = v;
+    }
+
+    /// The loaded magazine, by the weapon def's clip index. Firing spends
+    /// this, not the reserve.
+    pub fn clip(&self, index: usize) -> i16 {
+        self.arrays.ammoclip[index]
+    }
+
+    pub fn set_clip(&mut self, index: usize, v: i16) {
+        self.arrays.ammoclip[index] = v;
     }
 
     pub fn field_index(p: &Protocol, name: &str) -> Option<usize> {
@@ -562,7 +626,7 @@ impl PlayerState {
 pub fn read_delta_playerstate(r: &mut MsgReader, p: &Protocol, from: &PlayerState) -> PlayerState {
     let mut to = PlayerState {
         fields: from.fields.clone(),
-        arrays: Vec::new(),
+        arrays: PsArrays::default(),
     };
     let lc = (r.read_byte() as usize).min(p.player_fields.len());
     for (i, field) in p.player_fields.iter().take(lc).enumerate() {
@@ -587,7 +651,7 @@ pub fn read_delta_playerstate(r: &mut MsgReader, p: &Protocol, from: &PlayerStat
             r.read_packed_bits(field.bits)
         };
     }
-    to.arrays = read_ps_arrays(r);
+    to.arrays = read_ps_arrays(r, &from.arrays);
     to
 }
 
@@ -616,11 +680,10 @@ fn write_ps_float(w: &mut MsgWriter, raw: i32) {
     }
 }
 
-/// Mirror of [`read_delta_playerstate`]. The trailing array blocks are
-/// replayed from `to.arrays`, empty for a server-built state: vcod carries no
-/// stats, ammo or HUD state of its own. Unlike the entity codec there is no
-/// zero-flag bit here, so a `-0.0` float goes out as `+0.0`; the reader keeps
-/// the sign so the field still counts as changed.
+/// Mirror of [`read_delta_playerstate`]. The trailing array blocks are gated
+/// against `from` the same way the scalar fields are. Unlike the entity codec
+/// there is no zero-flag bit here, so a `-0.0` float goes out as `+0.0`; the
+/// reader keeps the sign so the field still counts as changed.
 pub fn write_delta_playerstate(
     w: &mut MsgWriter,
     p: &Protocol,
@@ -649,32 +712,94 @@ pub fn write_delta_playerstate(
             w.write_packed_bits(to.fields[i], p.player_fields[i].bits);
         }
     }
-    write_ps_arrays(w, &to.arrays);
+    write_ps_arrays(w, &from.arrays, &to.arrays);
 }
 
-/// Replays what [`read_ps_arrays`] recorded. A state that never came off the
-/// wire has none, and goes out as the five empty blocks: gates for blocks 1
-/// and 2, block 3's four ungated sub-arrays, then blocks 4 and 5.
-fn write_ps_arrays(w: &mut MsgWriter, ops: &[PsArrayOp]) {
-    if ops.is_empty() {
-        for _ in 0..8 {
-            w.write_bits(0, 1);
+/// Mirror of [`read_ps_arrays`]. Blocks 1 to 3 carry only what differs from
+/// the base; blocks 4 and 5 replay `to.tail`, which is empty for a
+/// server-built state and goes out as their two clear gates.
+fn write_ps_arrays(w: &mut MsgWriter, from: &PsArrays, to: &PsArrays) {
+    // Block 1: the gate, then six raw bits selecting the changed scalars.
+    let mut mask = 0i32;
+    for i in 0..6 {
+        if from.stats[i] != to.stats[i] {
+            mask |= 1 << i;
         }
+    }
+    if mask == 0 {
+        w.write_bits(0, 1);
+    } else {
+        w.write_bits(1, 1);
+        w.write_bits(mask, 6);
+        if mask & 0x01 != 0 {
+            w.write_short(to.stats[0] as i16);
+        }
+        if mask & 0x02 != 0 {
+            w.write_short(to.stats[1] as i16);
+        }
+        if mask & 0x04 != 0 {
+            w.write_short(to.stats[2] as i16);
+        }
+        if mask & 0x08 != 0 {
+            w.write_bits(to.stats[3], 6);
+        }
+        if mask & 0x10 != 0 {
+            w.write_short(to.stats[4] as i16);
+        }
+        if mask & 0x20 != 0 {
+            w.write_byte(to.stats[5] as u8);
+        }
+    }
+    // Block 2 behind its group gate, block 3 without one.
+    if from.ammo == to.ammo {
+        w.write_bits(0, 1);
+    } else {
+        w.write_bits(1, 1);
+        write_short_array_group(w, &from.ammo, &to.ammo);
+    }
+    write_short_array_group(w, &from.ammoclip, &to.ammoclip);
+    if to.tail.is_empty() {
+        w.write_bits(0, 1);
+        w.write_bits(0, 1);
         return;
     }
-    for &op in ops {
+    for &op in &to.tail {
         match op {
             PsArrayOp::Bits(bits, v) => w.write_bits(v, bits),
             PsArrayOp::Packed(bits, v) => w.write_packed_bits(v, bits),
-            PsArrayOp::Byte(v) => w.write_byte(v),
-            PsArrayOp::Short(v) => w.write_short(v),
             PsArrayOp::Long(v) => w.write_long(v),
         }
     }
 }
 
-/// Widths of the 34-entry HUD field table (cod_lnxded 0x80de384). 0..6 back
-/// the per-weapon block, 6..34 the two HUD arrays.
+/// Mirror of [`read_short_array_group`]: four sub-blocks of 16, each a gate,
+/// a byte-aligned 16-bit changed mask and the changed elements.
+fn write_short_array_group(w: &mut MsgWriter, from: &[i16; 64], to: &[i16; 64]) {
+    for s in 0..4 {
+        let base = s * 16;
+        let mut mask = 0u16;
+        for i in 0..16 {
+            if from[base + i] != to[base + i] {
+                mask |= 1 << i;
+            }
+        }
+        if mask == 0 {
+            w.write_bits(0, 1);
+            continue;
+        }
+        w.write_bits(1, 1);
+        w.write_short(mask as i16);
+        for i in 0..16 {
+            if mask & (1 << i) != 0 {
+                w.write_short(to[base + i]);
+            }
+        }
+    }
+}
+
+/// Widths of the 34-entry field table at cod_lnxded 0x80de384. 0..6 back the
+/// objective block, 6..34 the two HUD-element arrays.
+/// docs/protocol-1.1.md, "The five array blocks".
 #[rustfmt::skip]
 const HUD_FIELD_BITS: [i32; 34] = [
     0, 0, 0, 12, 10, 4,   // origin[0..2], icon, entNum, teamNum
@@ -682,8 +807,8 @@ const HUD_FIELD_BITS: [i32; 34] = [
     2, 32, 4, 8, 8, 10, 10, 0, 32, 32, 16, 32, 16, 10, 0, 8, 10, 32, 16, 10, 10, 32,
 ];
 
-/// Records every primitive it reads, so [`write_ps_arrays`] can put the
-/// blocks back on the wire unchanged.
+/// Records every primitive it reads, so [`write_ps_arrays`] can put blocks 4
+/// and 5 back on the wire unchanged.
 struct ArrayReader<'a> {
     r: &'a mut MsgReader,
     ops: Vec<PsArrayOp>,
@@ -699,17 +824,6 @@ impl ArrayReader<'_> {
     fn packed(&mut self, bits: i32) {
         let v = self.r.read_packed_bits(bits);
         self.ops.push(PsArrayOp::Packed(bits, v));
-    }
-
-    fn byte(&mut self) {
-        let v = self.r.read_byte();
-        self.ops.push(PsArrayOp::Byte(v));
-    }
-
-    fn short(&mut self) -> i16 {
-        let v = self.r.read_short();
-        self.ops.push(PsArrayOp::Short(v));
-        v
     }
 
     fn long(&mut self) {
@@ -739,39 +853,46 @@ impl ArrayReader<'_> {
     }
 }
 
-/// The trailing array blocks (cod_lnxded 0x807e7b3..0x807eeb6). The values
-/// are not decoded; the primitives are kept for the writer.
-fn read_ps_arrays(r: &mut MsgReader) -> Vec<PsArrayOp> {
-    let mut a = ArrayReader { r, ops: Vec::new() };
-    // Block 1: a 6-bit mask selecting up to six scalars.
-    if a.bits(1) == 1 {
-        let m = a.bits(6);
+/// The trailing array blocks (cod_lnxded 0x807e7b3..0x807eeb6). Everything a
+/// block does not carry keeps the base frame's value.
+fn read_ps_arrays(r: &mut MsgReader, from: &PsArrays) -> PsArrays {
+    let mut out = PsArrays {
+        stats: from.stats,
+        ammo: from.ammo,
+        ammoclip: from.ammoclip,
+        tail: Vec::new(),
+    };
+    // Block 1: a 6-bit mask selecting up to six scalars, each its own width.
+    if r.read_bits(1) == 1 {
+        let m = r.read_bits(6);
         if m & 0x01 != 0 {
-            a.short();
+            out.stats[0] = i32::from(r.read_short());
         }
         if m & 0x02 != 0 {
-            a.short();
+            out.stats[1] = i32::from(r.read_short());
         }
         if m & 0x04 != 0 {
-            a.short();
+            out.stats[2] = i32::from(r.read_short());
         }
         if m & 0x08 != 0 {
-            a.bits(6);
+            out.stats[3] = r.read_bits(6);
         }
         if m & 0x10 != 0 {
-            a.short();
+            out.stats[4] = i32::from(r.read_short());
         }
         if m & 0x20 != 0 {
-            a.byte();
+            out.stats[5] = i32::from(r.read_byte());
         }
     }
-    // Block 2: gated group of four 16-entry short arrays.
-    if a.bits(1) == 1 {
-        read_short_array_group(&mut a);
+    // Block 2: ps.ammo[64] behind a group gate.
+    if r.read_bits(1) == 1 {
+        read_short_array_group(r, &mut out.ammo);
     }
-    // Block 3: the same, with no group gate.
-    read_short_array_group(&mut a);
-    // Block 4: 16 weapons, each a 3-bit value then six delta fields.
+    // Block 3: ps.ammoclip[64], the same four sub-blocks with no group gate.
+    read_short_array_group(r, &mut out.ammoclip);
+
+    let mut a = ArrayReader { r, ops: Vec::new() };
+    // Block 4: ps.objective[16], each a 3-bit state then six delta fields.
     if a.bits(1) == 1 {
         for _ in 0..16 {
             a.bits(3);
@@ -787,23 +908,25 @@ fn read_ps_arrays(r: &mut MsgReader) -> Vec<PsArrayOp> {
         read_hud_array(&mut a);
         read_hud_array(&mut a);
     }
-    // Five empty blocks and an empty record mean the same eight zero bits, and
+    // Two clear gates and an empty record mean the same two zero bits, and
     // dropping them lets a parsed state compare equal to a built one.
-    if a.ops.iter().all(|&op| op == PsArrayOp::Bits(1, 0)) {
-        return Vec::new();
+    if !a.ops.iter().all(|&op| op == PsArrayOp::Bits(1, 0)) {
+        out.tail = a.ops;
     }
-    a.ops
+    out
 }
 
-/// Four gated 16-entry short arrays (cod_lnxded 0x807ea4b / 0x807eb49).
-fn read_short_array_group(a: &mut ArrayReader) {
-    for _ in 0..4 {
-        if a.bits(1) == 1 {
-            let mask = a.short() as u16 as u32;
-            for i in 0..16 {
-                if mask & (1u32 << i) != 0 {
-                    a.short();
-                }
+/// Four gated 16-entry sub-blocks (cod_lnxded 0x807ea4b / 0x807eb49): a gate,
+/// a byte-aligned 16-bit changed mask, then the changed elements low to high.
+fn read_short_array_group(r: &mut MsgReader, out: &mut [i16; 64]) {
+    for s in 0..4 {
+        if r.read_bits(1) == 0 {
+            continue;
+        }
+        let mask = r.read_short() as u16;
+        for i in 0..16 {
+            if mask & (1 << i) != 0 {
+                out[s * 16 + i] = r.read_short();
             }
         }
     }
@@ -844,11 +967,15 @@ pub struct UserCmd {
     pub up: i8,
 }
 
-/// Input bits in [`UserCmd::wbuttons`]. The two stances are level states the
-/// client holds for as long as it is down, not key edges, and they are
-/// mutually exclusive; `reload` is here because it is the one `wbuttons` bit
-/// that moves nothing. Bit table, evidence and the `buttons` half:
-/// docs/protocol-1.1.md, "Usercmd input bits".
+/// Input bits in [`UserCmd::buttons`] and [`UserCmd::wbuttons`]. The two
+/// stances are level states the client holds for as long as it is down, not
+/// key edges, and they are mutually exclusive; `reload` is in `wbuttons`
+/// because it is the one bit there that moves nothing. Bit table and
+/// evidence: docs/protocol-1.1.md, "Usercmd input bits".
+pub const BUTTON_ATTACK: u8 = 0x01;
+pub const BUTTON_ADS: u8 = 0x10;
+pub const BUTTON_MELEE: u8 = 0x20;
+pub const BUTTON_USE: u8 = 0x40;
 pub const WBUTTON_RELOAD: u8 = 0x08;
 pub const WBUTTON_LEAN_LEFT: u8 = 0x10;
 pub const WBUTTON_LEAN_RIGHT: u8 = 0x20;
@@ -1788,11 +1915,11 @@ mod tests {
         w.write_bits(0, 1);
         w.write_bits(0, 1);
 
-        // Block 4: only weapon 0 carries its six fields.
+        // Block 4: only objective 0 carries its six fields.
         w.write_bits(1, 1);
-        for wpn in 0..16 {
+        for obj in 0..16 {
             w.write_bits(3, 3); // 3-bit value
-            if wpn == 0 {
+            if obj == 0 {
                 w.write_bits(1, 1); // fields present
                 for &bits in &[0i32, 0, 0, 12, 10, 4] {
                     field(&mut w, bits, if bits == 0 { 1000i32 } else { 3 });
@@ -1817,6 +1944,10 @@ mod tests {
         let mut r = MsgReader::new(&data, &h);
         let ps = read_delta_playerstate(&mut r, p, &from);
         assert_eq!(ps.fields, from.fields);
+        assert_eq!(ps.arrays.stats, [11, 22, 33, 4, 44, 55]);
+        assert_eq!((ps.ammo(0), ps.ammo(2)), (1, 2));
+        assert_eq!(ps.clip(0), 9);
+        assert_eq!((ps.ammo(1), ps.clip(1)), (0, 0), "unmasked elements stay 0");
         assert_eq!(r.read_bits(10), 0x155);
         assert!(!r.is_overflowed());
     }
@@ -1907,6 +2038,82 @@ mod tests {
         assert_eq!(read_delta_playerstate(&mut r, p, &ps), ps);
         // lc byte plus eight zero array-gate bits.
         assert_eq!(bits, 8 + 8);
+    }
+
+    /// Health, a clip and a reserve set by name go out against a null base and
+    /// come back the same numbers.
+    #[test]
+    fn array_blocks_round_trip_named_fields() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let from = PlayerState::null(p);
+        let mut to = PlayerState::null(p);
+        to.set_health(100);
+        to.set_max_health(100);
+        to.set_clip(3, 15);
+        to.set_ammo(1, 300);
+
+        let mut w = MsgWriter::new(&h);
+        write_delta_playerstate(&mut w, p, &from, &to);
+        let bits = w.bits_written();
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        let back = read_delta_playerstate(&mut r, p, &from);
+        assert_eq!(back.health(), 100);
+        assert_eq!(back.max_health(), 100);
+        assert_eq!(back.clip(3), 15);
+        assert_eq!(back.ammo(1), 300);
+        assert_eq!(back, to);
+        assert_eq!(
+            r.bits_read(),
+            bits,
+            "writer and reader must agree bit for bit"
+        );
+    }
+
+    /// The changed-mask path: a base that already carries ammo and a clip, and
+    /// a frame where one clip element moves. No committed capture sets a block
+    /// 2 or 3 gate, so this is the only cover it has.
+    #[test]
+    fn one_changed_clip_element_deltas_against_a_loaded_base() {
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let mut base = PlayerState::null(p);
+        base.set_health(100);
+        base.set_ammo(1, 300);
+        base.set_clip(3, 15);
+        // Second sub-block, so an untouched sub-block has to stay gated off.
+        base.set_clip(20, 8);
+        let mut to = base.clone();
+        to.set_clip(3, 14);
+
+        let mut w = MsgWriter::new(&h);
+        write_delta_playerstate(&mut w, p, &base, &to);
+        let bits = w.bits_written();
+        let ops = w.into_ops().len();
+        let mut w2 = MsgWriter::new(&h);
+        write_delta_playerstate(&mut w2, p, &base, &base);
+        let quiet = w2.into_ops().len();
+        // The whole cost of the change is the sub-block's 16-bit mask and the
+        // one 16-bit element; every gate bit fits the byte the quiet frame
+        // already spends.
+        assert_eq!(ops, quiet + 4);
+
+        let mut w = MsgWriter::new(&h);
+        write_delta_playerstate(&mut w, p, &base, &to);
+        let d = w.finish();
+        let mut r = MsgReader::new(&d, &h);
+        let back = read_delta_playerstate(&mut r, p, &base);
+        assert_eq!(back.clip(3), 14);
+        assert_eq!(back.clip(20), 8, "an unchanged sub-block keeps the base");
+        assert_eq!(back.health(), 100);
+        assert_eq!(back.ammo(1), 300);
+        assert_eq!(back, to);
+        assert_eq!(
+            r.bits_read(),
+            bits,
+            "writer and reader must agree bit for bit"
+        );
     }
 
     /// The count byte after a 2-bit clc op lands at the byte cursor, alone and

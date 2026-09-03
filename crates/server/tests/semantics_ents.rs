@@ -319,6 +319,7 @@ fn probe_bootstrap_matches_retail() {
         vec![String::new(); 2048],
         Cvars::new(),
         None,
+        Rc::new(vcod_server::weapons::WeaponTable::empty()),
         0,
     )
     .expect("load mp_pavlov on probe_bootstrap");

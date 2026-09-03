@@ -13,7 +13,10 @@
 #   COD_LNXDED_HOME  homepath holding main/game.mp.i386.so (default private/server)
 #   PORT             UDP port (default 28960)
 #
-#   tools/run_server.sh [map]    map defaults to mp_carentan
+#   tools/run_server.sh [map] [+set cvar value ...]
+#     map defaults to mp_carentan; anything after it is passed to the engine
+#     verbatim, which takes its +set arguments in any order. The tdm hit
+#     capture uses `+set g_gametype tdm +set scr_friendlyfire 1`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if [ -z "${COD_DIR:-}" ]; then
@@ -40,4 +43,5 @@ exec "$BIN" \
     +set sv_maxclients 8 \
     +set sv_pure 0 \
     +set sv_allowDownload 1 \
-    +map "$MAP"
+    +map "$MAP" \
+    "${@:2}"

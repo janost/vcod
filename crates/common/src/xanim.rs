@@ -34,8 +34,18 @@ fn dequant(x: i16, y: i16, z: i16) -> Quat {
     Quat::from_xyzw(qx, qy, qz, qw)
 }
 
-pub fn parse(name: &str, data: &[u8]) -> Result<XAnim> {
-    let mut r = Reader::new(data);
+/// What the fixed-size header carries. `frame_count` already counts a looping
+/// clip's loop-closing repeat of frame 0.
+struct Header {
+    frame_count: u32,
+    bone_count: usize,
+    looping: bool,
+    /// Flag 0x2: the clip carries a nameless root-motion track.
+    root_motion: bool,
+    framerate: f32,
+}
+
+fn read_header(name: &str, r: &mut Reader) -> Result<Header> {
     let version = r.u16()?;
     ensure!(
         version == 14,
@@ -47,9 +57,34 @@ pub fn parse(name: &str, data: &[u8]) -> Result<XAnim> {
     let flags = r.u8()?;
     ensure!(flags <= 3, "{name}: unsupported xanim flags {flags:#x}");
     let looping = flags & 1 != 0;
-    let frame_count = header_frames + looping as u32;
     let framerate = r.u16()? as f32;
     ensure!(framerate > 0.0, "{name}: zero framerate");
+    Ok(Header {
+        frame_count: header_frames + looping as u32,
+        bone_count,
+        looping,
+        root_motion: flags & 2 != 0,
+        framerate,
+    })
+}
+
+/// The clip's own length in ms, read from the header alone: a caller that only
+/// needs the timing does not pay for the tracks. Rounded, since the animation
+/// channels count in whole ms.
+pub fn duration_ms(name: &str, data: &[u8]) -> Result<u32> {
+    let h = read_header(name, &mut Reader::new(data))?;
+    Ok(((h.frame_count - 1) as f32 / h.framerate * 1000.0).round() as u32)
+}
+
+pub fn parse(name: &str, data: &[u8]) -> Result<XAnim> {
+    let mut r = Reader::new(data);
+    let Header {
+        frame_count,
+        bone_count,
+        looping,
+        root_motion,
+        framerate,
+    } = read_header(name, &mut r)?;
     // Sparse index list only when 1 < count < frame_count; u8 unless the
     // highest index overflows a byte.
     let index_u16 = frame_count > 256;
@@ -74,9 +109,9 @@ pub fn parse(name: &str, data: &[u8]) -> Result<XAnim> {
             Ok((0..count.min(frame_count) as u16).collect())
         }
     };
-    // Flag 0x2: nameless root-motion track with yaw-only rotations. The
-    // server owns entity movement, so it is read and dropped.
-    if flags & 2 != 0 {
+    // The root-motion track has yaw-only rotations. The server owns entity
+    // movement, so it is read and dropped.
+    if root_motion {
         let rc = r.u16()? as u32;
         ensure!(rc <= frame_count, "{name}: delta rot {rc} > {frame_count}");
         let n = frames_of(&mut r, rc)?.len();

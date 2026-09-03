@@ -120,8 +120,26 @@ impl WeaponSounds {
 pub struct WeaponDef {
     pub clip_size: u32, // >= 1
     pub fire_time: f32,
+    /// Holds the next shot off inside `fireTime`; 0 on every stock bullet
+    /// weapon (docs/research/cod11-combat.md, section 1.3).
+    pub fire_delay: f32,
     pub rechamber_time: f32,
+    /// When the bolt's spent case leaves the gun inside `rechamberTime`.
+    pub rechamber_bolt_time: f32,
     pub reload_time: f32,
+    /// The reload a dry clip runs instead of `reload_time`.
+    pub reload_empty_time: f32,
+    /// When inside the reload the rounds land (combat doc, section 1.7).
+    pub reload_add_time: f32,
+    pub reload_start_time: f32,
+    pub reload_start_add_time: f32,
+    pub reload_end_time: f32,
+    /// A reload of one round at a time, with its own start and end states
+    /// (enfield, kar98k_sniper and springfield are the stock three).
+    pub segmented_reload: bool,
+    /// Refuses a reload that would not add a full `reload_ammo_add`
+    /// (combat doc, section 1.7).
+    pub no_partial_reload: bool,
     pub raise_time: f32,
     pub ads_trans_in: f32,
     pub ads_trans_out: f32,
@@ -149,31 +167,55 @@ pub struct WeaponDef {
     /// Double-width `kill_icon` (hud-protocol doc, section 2).
     pub wide_kill_icon: bool,
     pub sounds: WeaponSounds,
+    pub damage: i32,
+    pub melee_damage: i32,
+    pub max_ammo: u32,
+    /// `clipOnly`: the weapon has no reserve at all, so a give writes only
+    /// `ammoclip[clip_index]`. VERIFIED from the retail spawn capture: the
+    /// frag's file reads `clipOnly 1` with `maxAmmo 3`, and the spawn line
+    /// carries `clip=6:3` with no `ammo` entry for index 6
+    /// (docs/research/cod11-combat.md, section 9.2).
+    pub clip_only: bool,
+    pub reload_ammo_add: u32,
+    pub drop_time: f32,
+    /// The name `BG_SetupAmmoIndexes` looks up (lowercased) to assign
+    /// [`WeaponDef::ammo_index`]; see docs/protocol-1.1.md, "How `ammo[]` and
+    /// `ammoclip[]` are indexed".
+    pub ammo_name: String,
+    /// Same rule as `ammo_name`, but its own namespace and its own index
+    /// (`ammo_index`/`clip_index` never share one table).
+    pub clip_name: String,
+    pub weapon_class: String,
+    pub hip_spread_stand_min: f32,
+    pub hip_spread_ducked_min: f32,
+    pub hip_spread_prone_min: f32,
+    pub hip_spread_max: f32,
+    pub hip_spread_fire_add: f32,
+    pub hip_spread_decay_rate: f32,
+    pub ads_spread: f32,
+    /// Index into `ps.ammo`, assigned by `WeaponTable::load` per the rule in
+    /// docs/protocol-1.1.md, "How `ammo[]` and `ammoclip[]` are indexed"; 0
+    /// until the table assigns it.
+    pub ammo_index: usize,
+    /// Index into `ps.ammoclip`, same rule, separate namespace from
+    /// `ammo_index`.
+    pub clip_index: usize,
 }
 
-fn parse_f32(map: &HashMap<String, String>, key: &str, default: f32) -> f32 {
+/// Absence is normal (a spread key on a turret file, an ammo key on a
+/// melee-only weapon: whole sections the file's kind does not carry) and
+/// stays silent; garbage warns. Same convention as `parse_bool`.
+fn parse_num<T: std::str::FromStr + std::fmt::Display + Copy>(
+    map: &HashMap<String, String>,
+    key: &str,
+    default: T,
+) -> T {
     match map.get(key) {
         Some(v) => v.trim().parse().unwrap_or_else(|_| {
             log::warn!("weapon: invalid {key} value {v:?}, using default {default}");
             default
         }),
-        None => {
-            log::warn!("weapon: missing {key}, using default {default}");
-            default
-        }
-    }
-}
-
-fn parse_u32(map: &HashMap<String, String>, key: &str, default: u32) -> u32 {
-    match map.get(key) {
-        Some(v) => v.trim().parse().unwrap_or_else(|_| {
-            log::warn!("weapon: invalid {key} value {v:?}, using default {default}");
-            default
-        }),
-        None => {
-            log::warn!("weapon: missing {key}, using default {default}");
-            default
-        }
+        None => default,
     }
 }
 
@@ -191,6 +233,13 @@ fn parse_bool(map: &HashMap<String, String>, key: &str, default: bool) -> bool {
     }
 }
 
+/// Every field's own default, which is what `from_map` gives an empty file.
+impl Default for WeaponDef {
+    fn default() -> WeaponDef {
+        WeaponDef::from_map(&HashMap::new())
+    }
+}
+
 /// `name` is the CS 7 name (`kar98k_mp`), without the `weapons/mp/` prefix.
 pub fn load(fs: &Pk3Fs, name: &str) -> Result<WeaponDef> {
     let path = format!("weapons/mp/{name}");
@@ -205,18 +254,27 @@ impl WeaponDef {
     /// Times default to 0, so a missing time completes its state instantly.
     pub fn from_map(map: &HashMap<String, String>) -> WeaponDef {
         WeaponDef {
-            clip_size: parse_u32(map, "clipSize", 1).max(1),
-            fire_time: parse_f32(map, "fireTime", 0.0),
-            rechamber_time: parse_f32(map, "rechamberTime", 0.0),
-            reload_time: parse_f32(map, "reloadTime", 0.0),
-            raise_time: parse_f32(map, "raiseTime", 0.0),
-            ads_trans_in: parse_f32(map, "adsTransInTime", 0.0),
-            ads_trans_out: parse_f32(map, "adsTransOutTime", 0.0),
-            ads_zoom_fov: parse_f32(map, "adsZoomFov", DEFAULT_FOV),
-            ads_view_bob_mult: parse_f32(map, "adsViewBobMult", 1.0),
-            ads_bob_factor: parse_f32(map, "adsBobFactor", 1.0),
+            clip_size: parse_num(map, "clipSize", 1).max(1),
+            fire_time: parse_num(map, "fireTime", 0.0),
+            fire_delay: parse_num(map, "fireDelay", 0.0),
+            rechamber_time: parse_num(map, "rechamberTime", 0.0),
+            rechamber_bolt_time: parse_num(map, "rechamberBoltTime", 0.0),
+            reload_time: parse_num(map, "reloadTime", 0.0),
+            reload_empty_time: parse_num(map, "reloadEmptyTime", 0.0),
+            reload_add_time: parse_num(map, "reloadAddTime", 0.0),
+            reload_start_time: parse_num(map, "reloadStartTime", 0.0),
+            reload_start_add_time: parse_num(map, "reloadStartAddTime", 0.0),
+            reload_end_time: parse_num(map, "reloadEndTime", 0.0),
+            segmented_reload: parse_bool(map, "segmentedReload", false),
+            no_partial_reload: parse_bool(map, "noPartialReload", false),
+            raise_time: parse_num(map, "raiseTime", 0.0),
+            ads_trans_in: parse_num(map, "adsTransInTime", 0.0),
+            ads_trans_out: parse_num(map, "adsTransOutTime", 0.0),
+            ads_zoom_fov: parse_num(map, "adsZoomFov", DEFAULT_FOV),
+            ads_view_bob_mult: parse_num(map, "adsViewBobMult", 1.0),
+            ads_bob_factor: parse_num(map, "adsBobFactor", 1.0),
             semi_auto: parse_bool(map, "semiAuto", true),
-            start_ammo: parse_u32(map, "startAmmo", 0),
+            start_ammo: parse_num(map, "startAmmo", 0),
             bolt_action: parse_bool(map, "boltAction", false),
             world_model: map
                 .get("worldModel")
@@ -225,6 +283,27 @@ impl WeaponDef {
             kill_icon: opt_str(map, "killIcon"),
             wide_kill_icon: parse_bool(map, "wideKillIcon", false),
             sounds: WeaponSounds::from_map(map),
+            damage: parse_num(map, "damage", 0),
+            melee_damage: parse_num(map, "meleeDamage", 0),
+            max_ammo: parse_num(map, "maxAmmo", 0),
+            clip_only: parse_bool(map, "clipOnly", false),
+            reload_ammo_add: parse_num(map, "reloadAmmoAdd", 0),
+            drop_time: parse_num(map, "dropTime", 0.0),
+            ammo_name: map.get("ammoName").cloned().unwrap_or_default(),
+            clip_name: map.get("clipName").cloned().unwrap_or_default(),
+            weapon_class: map
+                .get("weaponClass")
+                .map(|c| c.to_ascii_lowercase())
+                .unwrap_or_default(),
+            hip_spread_stand_min: parse_num(map, "hipSpreadStandMin", 0.0),
+            hip_spread_ducked_min: parse_num(map, "hipSpreadDuckedMin", 0.0),
+            hip_spread_prone_min: parse_num(map, "hipSpreadProneMin", 0.0),
+            hip_spread_max: parse_num(map, "hipSpreadMax", 0.0),
+            hip_spread_fire_add: parse_num(map, "hipSpreadFireAdd", 0.0),
+            hip_spread_decay_rate: parse_num(map, "hipSpreadDecayRate", 0.0),
+            ads_spread: parse_num(map, "adsSpread", 0.0),
+            ammo_index: 0,
+            clip_index: 0,
         }
     }
 }
@@ -543,6 +622,24 @@ mod tests {
         assert_eq!(thompson.ads_bob_factor, 0.0);
     }
 
+    #[test]
+    fn the_carbine_file_carries_its_damage_and_ammo() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let w = load(&fs, "m1carbine_mp").unwrap();
+        assert_eq!(w.damage, 45);
+        assert_eq!(w.melee_damage, 50);
+        assert_eq!(w.max_ammo, 400);
+        assert_eq!(w.start_ammo, 300);
+        assert_eq!(w.clip_size, 15);
+        assert_eq!(w.weapon_class, "rifle");
+        assert!((w.hip_spread_stand_min - 1.5).abs() < 1e-6);
+        assert!((w.ads_spread - 0.4).abs() < 1e-6);
+        assert!(w.drop_time > 0.0);
+        assert!(!w.ammo_name.is_empty());
+    }
+
     fn def() -> WeaponDef {
         WeaponDef {
             clip_size: 5,
@@ -554,15 +651,9 @@ mod tests {
             ads_trans_out: 0.4,
             ads_zoom_fov: 50.0,
             ads_view_bob_mult: 0.2,
-            ads_bob_factor: 1.0,
-            semi_auto: true,
             start_ammo: 60,
             bolt_action: true,
-            world_model: None,
-            world_flash_effect: None,
-            kill_icon: None,
-            wide_kill_icon: false,
-            sounds: WeaponSounds::default(),
+            ..WeaponDef::default()
         }
     }
 

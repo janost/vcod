@@ -68,8 +68,9 @@ pub struct AnimRef {
 
 /// A condition list and what it selects. An empty `conditions` is the file's
 /// `default`, which always matches. A channel can list more than one anim
-/// (death and melee blocks do); which one plays is a later task's `select`,
-/// not this parser's — both vectors keep file order and nothing else.
+/// (death, pain and melee blocks do); which one plays is the selection's
+/// business ([`AnimScript::select_event_random`]), not this parser's. Both
+/// vectors keep file order and nothing else.
 #[derive(Clone, Debug, Default)]
 pub struct Clause {
     pub conditions: Vec<Condition>,
@@ -113,6 +114,19 @@ impl AnimScript {
     pub fn referenced_names(&self) -> HashSet<String> {
         let mut out = HashSet::new();
         for block in self.states.values().flatten().chain(self.events.values()) {
+            for c in &block.clauses {
+                out.extend(c.legs.iter().chain(&c.torso).map(|a| a.name.clone()));
+            }
+        }
+        out
+    }
+
+    /// Every anim name an `EVENTS` block names. These are the ones whose own
+    /// length matters: an event clause without a `duration` holds its channel
+    /// for the clip's length ([`AnimState::event`]).
+    pub fn event_referenced_names(&self) -> HashSet<String> {
+        let mut out = HashSet::new();
+        for block in self.events.values() {
             for c in &block.clauses {
                 out.extend(c.legs.iter().chain(&c.torso).map(|a| a.name.clone()));
             }
@@ -371,7 +385,9 @@ pub struct Conditions {
     pub strafing: Option<Side>,
     /// `mounted mg42`. Nothing mounts a turret yet, so this is always `None`.
     pub mounted: Option<String>,
-    /// Stage 6 raises this.
+    /// `ps.weaponstate` reads firing. The shipped file's only `firing` clauses
+    /// are `mounted mg42, firing`, so nothing decides on it until a turret
+    /// does.
     pub firing: bool,
 }
 
@@ -418,34 +434,81 @@ impl AnimScript {
         pick(block, c)
     }
 
-    /// The same, for one of the `EVENTS` blocks.
+    /// The same, for one of the `EVENTS` blocks. The events that reach it --
+    /// `fireweapon`, `reload`, `dropweapon`, `raiseweapon`, `jump`, `jumpbk`,
+    /// `land` -- list one anim per channel per clause in the shipped file, so
+    /// the first line is the whole answer.
     pub fn select_event(&self, event: &str, c: &Conditions) -> Selection {
         let Some(block) = self.event(event) else {
             return Selection::default();
         };
         pick(block, c)
     }
-}
 
-/// A clause may list several anim lines per channel (retail's `DEATH`, `pain`
-/// and `meleeattack` blocks randomise among them, `commands[rand() %
-/// numCommands]` in bg_animation.c); every clause this stage reaches lists
-/// exactly one, so taking the first is deterministic without being wrong yet.
-fn pick(block: &Block, c: &Conditions) -> Selection {
-    for clause in &block.clauses {
-        if clause.conditions.iter().all(|cond| c.holds(cond)) {
-            return Selection {
-                legs: clause.legs.first().cloned(),
-                torso: clause.torso.first().cloned(),
-            };
+    /// The same, drawing among the clause's lines instead of taking the
+    /// first: `death`, `pain` and `meleeattack` list several. One draw per
+    /// clause, not one per channel, so a clause of `both` lines keeps its two
+    /// channels on the same line.
+    pub fn select_event_random(&self, event: &str, c: &Conditions, rng: &mut u64) -> Selection {
+        let Some(clause) = self.event(event).and_then(|b| matching_clause(b, c)) else {
+            return Selection::default();
+        };
+        let draw = crate::rng::xorshift(rng) as usize;
+        let nth = |v: &[AnimRef]| v.get(draw % v.len().max(1)).cloned();
+        Selection {
+            legs: nth(&clause.legs),
+            torso: nth(&clause.torso),
         }
     }
-    Selection::default()
+
+    /// The legs anims of the clause an event selects, in file order: what
+    /// [`AnimScript::select_event_random`] draws from. For tests and tools.
+    pub fn event_clause_anims(&self, event: &str, c: &Conditions) -> Vec<String> {
+        self.event(event)
+            .and_then(|b| matching_clause(b, c))
+            .map(|clause| clause.legs.iter().map(|a| a.name.clone()).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// First match wins, which is the file's own stated rule.
+fn matching_clause<'a>(block: &'a Block, c: &Conditions) -> Option<&'a Clause> {
+    block
+        .clauses
+        .iter()
+        .find(|clause| clause.conditions.iter().all(|cond| c.holds(cond)))
+}
+
+/// The first line of the matching clause. A clause listing several
+/// (retail's `DEATH`, `pain` and `meleeattack`) is drawn from by
+/// [`AnimScript::select_event_random`] instead.
+fn pick(block: &Block, c: &Conditions) -> Selection {
+    matching_clause(block, c).map_or_else(Selection::default, |clause| Selection {
+        legs: clause.legs.first().cloned(),
+        torso: clause.torso.first().cloned(),
+    })
 }
 
 /// The restart toggle, `ANIM_TOGGLEBIT`. Index is the low 9 bits;
 /// docs/research/player-model-anim-system.md, "Animation indices".
 const ANIM_TOGGLEBIT: i32 = 512;
+
+/// What an event anim's hold gets on top of the clip's own length, RTCW's
+/// `duration + 50 // account for lerping between anims` (`bg_animation.c`,
+/// `BG_PlayAnim`). The four measured clears in the combat captures land
+/// within one snapshot of it (player-model-anim-system.md, "The weapon
+/// channel").
+const LERP_MS: u32 = 50;
+
+/// The floor under a derived hold. A clause with no `duration` over a clip
+/// shorter than this holds for this instead, which is what the only putaway
+/// measurement there is says: `pt_stand_pullout_pose` is a single frame, 0 ms
+/// long, and the torso held it for about 500 ms
+/// (player-model-anim-system.md, "The weapon channel"). It is a floor and not
+/// `max(clip, state length)`: the carbine's reload clip is 1000 ms inside a
+/// 2650 ms state and the capture clears at the clip, so the state's length
+/// cannot be what holds a channel. A clause's own `duration` never takes it.
+const MIN_EVENT_HOLD_MS: u32 = 500;
 
 /// One channel's live anim: the index, the toggle, and when an event anim
 /// that owns the channel gives it back.
@@ -498,16 +561,48 @@ impl AnimState {
     /// The continuous state's choice. A channel an event anim still holds
     /// keeps it until the duration runs out.
     pub fn set(&mut self, sel: &Selection, now_ms: i32, resolve: impl Fn(&str) -> Option<i32>) {
-        apply(&mut self.legs, sel.legs.as_ref(), now_ms, false, &resolve);
-        apply(&mut self.torso, sel.torso.as_ref(), now_ms, false, &resolve);
+        apply(&mut self.legs, sel.legs.as_ref(), now_ms, &resolve);
+        apply(&mut self.torso, sel.torso.as_ref(), now_ms, &resolve);
     }
 
     /// An event's choice, which takes the channel for the clause's own
-    /// `duration`. A clause with no duration behaves like the continuous
-    /// state.
-    pub fn event(&mut self, sel: &Selection, now_ms: i32, resolve: impl Fn(&str) -> Option<i32>) {
-        apply(&mut self.legs, sel.legs.as_ref(), now_ms, true, &resolve);
-        apply(&mut self.torso, sel.torso.as_ref(), now_ms, true, &resolve);
+    /// `duration`, or for the clip's own length plus [`LERP_MS`] when the
+    /// clause carries none. `length` is that clip length in ms, which only the
+    /// animtree knows.
+    pub fn event(
+        &mut self,
+        sel: &Selection,
+        now_ms: i32,
+        resolve: impl Fn(&str) -> Option<i32>,
+        length: impl Fn(&str) -> Option<u32>,
+    ) {
+        let hold = |a: &AnimRef| {
+            a.duration_ms
+                .or_else(|| length(&a.name).map(|d| (d + LERP_MS).max(MIN_EVENT_HOLD_MS)))
+        };
+        apply_event(&mut self.legs, sel.legs.as_ref(), now_ms, &resolve, &hold);
+        apply_event(&mut self.torso, sel.torso.as_ref(), now_ms, &resolve, &hold);
+    }
+
+    /// The continuous torso choice, which every settled retail pose reads as
+    /// index 0 (docs/research/player-model-anim-system.md, "The weapon
+    /// channel"): an event anim that ran out gives the channel back to no
+    /// anim at all, flipping the toggle doing it.
+    pub fn clear_torso(&mut self, now_ms: i32) {
+        if self.torso.released(now_ms) && self.torso.index != 0 {
+            self.torso.start(0, None);
+        }
+    }
+
+    /// The torso restarted on no anim at all, toggle flipped whatever it
+    /// held: what a death leaves the channel reading (512 beside the death
+    /// `legsAnim` in both retail deaths, cod11-combat.md section 8).
+    pub fn restart_torso_empty(&mut self) {
+        self.torso = Channel {
+            index: 0,
+            toggle: !self.torso.toggle,
+            held_until_ms: None,
+        };
     }
 
     pub fn legs(&self) -> i32 {
@@ -523,27 +618,40 @@ fn apply(
     ch: &mut Channel,
     anim: Option<&AnimRef>,
     now_ms: i32,
-    is_event: bool,
     resolve: &impl Fn(&str) -> Option<i32>,
 ) {
-    if !ch.released(now_ms) && !is_event {
+    if !ch.released(now_ms) {
         return;
     }
     let Some(anim) = anim else { return };
     let Some(index) = resolve(&anim.name) else {
         return;
     };
-    let held = if is_event {
-        anim.duration_ms.map(|d| now_ms.wrapping_add(d as i32))
-    } else {
-        None
+    ch.start(index, None);
+}
+
+/// An event anim takes the channel whatever is on it, and holds it for `hold`.
+/// A hold is what makes a repeated shot flip the restart toggle: the index is
+/// unchanged, so nothing else would tell the client to play it again.
+fn apply_event(
+    ch: &mut Channel,
+    anim: Option<&AnimRef>,
+    now_ms: i32,
+    resolve: &impl Fn(&str) -> Option<i32>,
+    hold: &impl Fn(&AnimRef) -> Option<u32>,
+) {
+    let Some(anim) = anim else { return };
+    let Some(index) = resolve(&anim.name) else {
+        return;
     };
+    let held = hold(anim).map(|d| now_ms.wrapping_add(d as i32));
     ch.start(index, held);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     const SAMPLE: &str = r#"
 DEFINES
@@ -781,6 +889,29 @@ land
         assert!(sel.torso.is_none());
     }
 
+    /// The `EVENTS` clauses gate on movetype *categories* -- `crouching`,
+    /// `prone`, `moving` -- which the file itself defines as `set movetype`
+    /// aliases over the movetype names the machine produces. So a category
+    /// needs no separate condition kind: the alias expands where it is used.
+    #[test]
+    fn a_movetype_category_holds_for_every_movetype_it_names() {
+        let text = SAMPLE.replace("movetype run\n", "movetype moving\n");
+        let s = AnimScript::parse(&text).unwrap();
+        for (movetype, want) in [
+            (Movetype::Run, "pb_runjump_land"),
+            (Movetype::Walk, "pb_runjump_land"),
+            (Movetype::Idle, "pb_standjump_land"),
+        ] {
+            assert_eq!(
+                s.select_event("land", &rifleman(movetype))
+                    .legs
+                    .map(|a| a.name),
+                Some(want.to_string()),
+                "{movetype:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_block_or_state_that_does_not_exist_selects_nothing() {
         let s = AnimScript::parse(SAMPLE).unwrap();
@@ -833,6 +964,179 @@ land
         assert_eq!(anims.wire_of(&crouch.name), Some(111));
     }
 
+    /// Every torso index the two retail combat captures read, back out of the
+    /// shipped script's own `EVENTS` clauses. This is what says the weapon
+    /// channel needs no table of its own
+    /// (docs/research/player-model-anim-system.md, "The weapon channel").
+    /// Needs the paks.
+    #[test]
+    fn the_event_blocks_pick_the_indices_the_combat_captures_read() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let anims = crate::animtree::PlayerAnims::load(&fs).unwrap();
+        let mosin = |movetype| Conditions {
+            weapon: "mosin_nagant_mp".into(),
+            ..rifleman(movetype)
+        };
+        let cases = [
+            (
+                "fireweapon",
+                rifleman(Movetype::Idle),
+                "pt_stand_shoot",
+                253,
+            ),
+            (
+                "fireweapon",
+                rifleman(Movetype::IdleCr),
+                "pt_crouch_shoot",
+                249,
+            ),
+            (
+                "fireweapon",
+                rifleman(Movetype::IdleProne),
+                "pt_prone_shoot",
+                224,
+            ),
+            ("fireweapon", mosin(Movetype::Idle), "pt_stand_shoot", 253),
+            (
+                "reload",
+                rifleman(Movetype::Idle),
+                "pt_reload_stand_auto",
+                229,
+            ),
+            (
+                "reload",
+                mosin(Movetype::Idle),
+                "pt_reload_stand_rifle",
+                231,
+            ),
+        ];
+        for (event, c, name, wire) in cases {
+            let torso = anims
+                .script
+                .select_event(event, &c)
+                .torso
+                .unwrap_or_else(|| panic!("{event} selects a torso anim for {:?}", c.movetype));
+            assert_eq!(torso.name, name, "{event} {:?} {}", c.movetype, c.weapon);
+            assert_eq!(anims.wire_of(&torso.name), Some(wire));
+            assert!(
+                torso.duration_ms.is_none(),
+                "{name} carries no clause duration, so its hold is the clip's"
+            );
+            assert!(
+                anims.length_ms(&torso.name).is_some(),
+                "{name} has an xanim to take that length from"
+            );
+        }
+        // The file answers a moving shot with an empty clause: nothing plays.
+        assert!(anims
+            .script
+            .select_event("fireweapon", &rifleman(Movetype::Run))
+            .torso
+            .is_none());
+    }
+
+    /// The shipped `death` clauses list several anims each; retail draws one
+    /// of them (`commands[rand() % numCommands]`, RTCW's `bg_animation.c`).
+    /// Over many draws every listed anim comes up and nothing else does, and
+    /// a `both` line keeps the two channels on the same anim. Needs the paks.
+    #[test]
+    fn a_multi_line_death_clause_is_drawn_at_random() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let anims = crate::animtree::PlayerAnims::load(&fs).unwrap();
+        let c = rifleman(Movetype::Idle);
+        let listed = anims.script.event_clause_anims("death", &c);
+        assert!(
+            listed.len() > 1,
+            "the shipped death clause lists {} anims",
+            listed.len()
+        );
+        let mut rng = 7u64;
+        let mut seen = BTreeSet::new();
+        for _ in 0..200 {
+            let sel = anims.script.select_event_random("death", &c, &mut rng);
+            let legs = sel.legs.expect("death selects a legs anim").name;
+            assert_eq!(
+                sel.torso.map(|a| a.name).as_deref(),
+                Some(legs.as_str()),
+                "a `both` line takes both channels"
+            );
+            assert!(listed.contains(&legs), "{legs} is not in the clause");
+            seen.insert(legs);
+        }
+        assert_eq!(seen.len(), listed.len(), "every listed anim was drawn");
+    }
+
+    /// `pain`'s prone clause is the only other multi-line one; the clauses a
+    /// standing or crouched player reaches list one anim, so those draws are
+    /// the same anim every time. Needs the paks.
+    #[test]
+    fn a_prone_pain_draws_from_two_anims_and_a_standing_one_from_one() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let anims = crate::animtree::PlayerAnims::load(&fs).unwrap();
+        let prone = rifleman(Movetype::IdleProne);
+        assert_eq!(
+            anims.script.event_clause_anims("pain", &prone),
+            ["pb_prone_paina_holdchest", "pb_prone_painb_holdhead"]
+        );
+        let mut rng = 11u64;
+        let mut seen = BTreeSet::new();
+        for _ in 0..100 {
+            let sel = anims.script.select_event_random("pain", &prone, &mut rng);
+            seen.insert(sel.legs.expect("pain selects a legs anim").name);
+        }
+        assert_eq!(seen.len(), 2, "both prone pain anims were drawn");
+
+        let stand = rifleman(Movetype::Idle);
+        assert_eq!(
+            anims.script.event_clause_anims("pain", &stand),
+            ["pb_crouch_pain_holdstomach"]
+        );
+        let drawn = anims
+            .script
+            .select_event_random("pain", &stand, &mut rng)
+            .legs
+            .expect("pain selects a legs anim")
+            .name;
+        assert_eq!(drawn, "pb_crouch_pain_holdstomach");
+    }
+
+    /// What lets `select_event` take the first line and still be the whole
+    /// answer: every clause of the events it serves lists one anim per
+    /// channel. `death`, `pain` and `meleeattack` are the three blocks that
+    /// list more, and they go through `select_event_random`. Needs the paks.
+    #[test]
+    fn only_the_random_events_list_more_than_one_anim_per_clause() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let anims = crate::animtree::PlayerAnims::load(&fs).unwrap();
+        for event in [
+            "fireweapon",
+            "reload",
+            "dropweapon",
+            "raiseweapon",
+            "jump",
+            "jumpbk",
+            "land",
+        ] {
+            let block = anims.script.event(event).expect("a shipped event block");
+            for clause in &block.clauses {
+                assert!(
+                    clause.legs.len() <= 1 && clause.torso.len() <= 1,
+                    "{event} has a clause of {} legs and {} torso anims",
+                    clause.legs.len(),
+                    clause.torso.len()
+                );
+            }
+        }
+    }
+
     fn anim(name: &str, duration_ms: Option<u32>) -> AnimRef {
         AnimRef {
             name: name.into(),
@@ -847,6 +1151,19 @@ land
             "pb_stand_alert" => Some(122),
             "pb_combatrun_forward_loop" => Some(94),
             "pb_standjump_land" => Some(200),
+            "pt_stand_shoot" => Some(253),
+            "pt_reload_stand_auto" => Some(229),
+            _ => None,
+        }
+    }
+
+    /// The clip lengths those names would have, so a test can hold an event
+    /// anim without an animtree. The two the combat captures measured: 13 and
+    /// 31 frames at 30 fps.
+    fn length(name: &str) -> Option<u32> {
+        match name {
+            "pt_stand_shoot" => Some(400),
+            "pt_reload_stand_auto" => Some(1000),
             _ => None,
         }
     }
@@ -893,6 +1210,7 @@ land
             },
             0,
             resolve,
+            length,
         );
         assert_eq!(st.legs() & 511, 200);
 
@@ -902,6 +1220,68 @@ land
 
         st.set(&stand, 100, resolve);
         assert_eq!(st.legs() & 511, 122, "the event expired");
+    }
+
+    /// What carentan's `sustained_fire` step reads: six shots, one index, the
+    /// toggle flipping on every one of them, and the channel clearing to index
+    /// 0 with one more flip when the last one's clip runs out.
+    #[test]
+    fn a_repeated_event_anim_restarts_and_then_clears_the_torso() {
+        let mut st = AnimState::default();
+        let shot = Selection {
+            legs: None,
+            torso: Some(anim("pt_stand_shoot", None)),
+        };
+        // The sample the step opens on, before the first shot: the capture
+        // carries one and the flip into the first shot is only visible
+        // against it.
+        let mut wire = vec![st.torso()];
+        // Six shots 200 ms apart, near the capture's own 183 ms tap period,
+        // sampled every 50 ms the way its snapshots sampled it.
+        for ms in (0..2500).step_by(50) {
+            if ms < 1200 && ms % 200 == 0 {
+                st.event(&shot, ms, resolve, length);
+            }
+            st.clear_torso(ms);
+            wire.push(st.torso());
+        }
+        let indices: BTreeSet<i32> = wire.iter().map(|v| v & 511).collect();
+        assert_eq!(indices, BTreeSet::from([0, 253]));
+        let flips = wire.windows(2).filter(|w| (w[0] ^ w[1]) & 512 != 0).count();
+        assert_eq!(flips, 7, "one flip per shot, plus the clear");
+        assert_eq!(*wire.last().unwrap() & 511, 0, "the channel ends cleared");
+    }
+
+    /// A clause with no `duration` holds for the clip's own length plus the
+    /// lerp allowance, floored at [`MIN_EVENT_HOLD_MS`], and nothing takes the
+    /// channel before that.
+    #[test]
+    fn an_event_clause_without_a_duration_holds_for_the_clip_length() {
+        // 400 + 50 is under the floor, so the shot takes the floor.
+        let mut st = AnimState::default();
+        let shot = Selection {
+            legs: None,
+            torso: Some(anim("pt_stand_shoot", None)),
+        };
+        st.event(&shot, 0, resolve, length);
+        st.clear_torso(499);
+        assert_eq!(st.torso() & 511, 253, "still inside the floor");
+        st.clear_torso(500);
+        assert_eq!(st.torso() & 511, 0);
+
+        // 1000 + 50 is over it, so the reload holds for its own clip: the
+        // floor must not shorten a long anim, and the 2650 ms state it runs
+        // inside must not lengthen it.
+        let mut st = AnimState::default();
+        let reload = Selection {
+            legs: None,
+            torso: Some(anim("pt_reload_stand_auto", None)),
+        };
+        st.event(&reload, 0, resolve, length);
+        st.clear_torso(1049);
+        assert_eq!(st.torso() & 511, 229);
+        st.clear_torso(1050);
+        assert_eq!(st.torso() & 511, 0);
     }
 
     /// A name the tree does not index leaves the channel where it was, rather

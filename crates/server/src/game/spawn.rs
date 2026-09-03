@@ -518,6 +518,18 @@ mod align_tests {
     }
 }
 
+/// The Radiant classname that places a weapon, the reverse of
+/// [`radiant_weapon`]. `dropItem` spawns a dropped weapon under it so the
+/// entity reaches the wire as the same `ET_ITEM` a placed one does. `None`
+/// for the weapons no map can place, which is most of the pistols and every
+/// mounted MG.
+pub fn radiant_name(weapon: &str) -> Option<&'static str> {
+    RADIANT_NAMES
+        .iter()
+        .find(|(_, w)| *w == weapon)
+        .map(|(radiant, _)| *radiant)
+}
+
 /// The weapon a `mpweapon_*` Radiant classname places, for callers outside
 /// the spawn path.
 pub fn radiant_weapon(classname: &str) -> Option<&'static str> {

@@ -786,6 +786,13 @@ mod tests {
                             max_clients = max_clients.max(s.clients.len());
                             let o = s.ps.origin(p);
                             assert!(o.iter().all(|c| c.abs() < 65536.0), "origin {o:?}");
+                            // The doc's worked example: block 1 carries
+                            // stats[3] = 63 ("no teammate") and stats[5] = 1,
+                            // and this spectator has no ammo at all
+                            // (docs/protocol-1.1.md, "A decoded frame").
+                            assert_eq!(s.ps.arrays.stats, [0, 0, 0, 63, 0, 1]);
+                            assert!(s.ps.arrays.ammo.iter().all(|&v| v == 0));
+                            assert!(s.ps.arrays.ammoclip.iter().all(|&v| v == 0));
                             // A spectator carries none of these, which is what
                             // the server's own spectator wire rests on
                             // (`ClientSim::to_wire`, crates/server).
@@ -1369,10 +1376,13 @@ mod tests {
     /// Those arms are covered by round trip against scripted moving entities,
     /// not here.
     ///
-    /// The playerState array blocks are pinned only as far as their bit
-    /// widths reach. `PlayerState::arrays` is a tape of primitives, so the
-    /// replay reproduces the bytes without deriving a single gate bit, mask
-    /// or count; a wrong width would misalign everything after it, a wrong
+    /// The playerState array blocks are pinned unevenly. Blocks 1 to 3 are
+    /// re-derived: the writer computes block 1's gate and 6-bit mask, block
+    /// 2's group gate and block 3's four sub-gates from what differs against
+    /// the base, so this gate checks that predicate against the masks retail
+    /// actually sent. Blocks 4 and 5 are still replayed as a tape of
+    /// primitives, so there they are pinned only as far as their bit widths
+    /// reach: a wrong width would misalign everything after it, a wrong
     /// reading of a mask would not.
     #[test]
     fn writer_reproduces_the_captured_snapshots_byte_for_byte() {

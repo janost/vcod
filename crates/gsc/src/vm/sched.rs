@@ -466,9 +466,10 @@ impl Vm {
 
 #[cfg(test)]
 mod tests {
+    use crate::atom::Atom;
     use crate::value::{EntId, Value};
     use crate::vm::tests::TestHost;
-    use crate::vm::{ErrorKind, Target, Vm};
+    use crate::vm::{Cx, ErrorKind, Host, Target, Vm};
 
     fn vm_with(src: &str) -> Vm {
         let ast = crate::parse::parse_file(src).unwrap();
@@ -1140,5 +1141,120 @@ mod tests {
         );
         vm.run_frame(&mut host, 6_000);
         assert!(host.calls.iter().any(|(n, _)| n == "done"), "due now");
+    }
+
+    /// A host whose builtins start threads: `spawnkiller` runs `killed` on
+    /// its own receiver, `again` re-enters itself through `bomb`, and
+    /// `spawnmissing` names a function nothing installed.
+    #[derive(Default)]
+    struct SpawnHost(TestHost);
+
+    impl Host for SpawnHost {
+        fn builtin(
+            &mut self,
+            cx: &mut Cx,
+            name: Atom,
+            recv: Option<Target>,
+            _args: &[Value],
+        ) -> Result<Value, ErrorKind> {
+            match cx.resolve_folded(name) {
+                "spawnkiller" => {
+                    let f = cx.func_ref("test/script", "killed");
+                    cx.spawn(f, recv, vec![]);
+                    Ok(Value::Undefined)
+                }
+                "again" => {
+                    let f = cx.func_ref("test/script", "bomb");
+                    cx.spawn(f, recv, vec![]);
+                    Ok(Value::Undefined)
+                }
+                "spawnmissing" => {
+                    let f = cx.func_ref("test/script", "nosuchthing");
+                    cx.spawn(f, recv, vec![]);
+                    Ok(Value::Undefined)
+                }
+                _ => Err(ErrorKind::MissingBuiltin(name)),
+            }
+        }
+
+        fn get_field(&mut self, cx: &mut Cx, ent: EntId, field: Atom) -> Value {
+            self.0.get_field(cx, ent, field)
+        }
+
+        fn set_field(
+            &mut self,
+            cx: &mut Cx,
+            ent: EntId,
+            field: Atom,
+            value: Value,
+        ) -> Result<(), ErrorKind> {
+            self.0.set_field(cx, ent, field, value)
+        }
+    }
+
+    /// Reads `level.<name>` back as a string.
+    fn level_string(vm: &mut Vm, name: &str) -> String {
+        let level = vm.level_id();
+        vm.with_cx(|cx| {
+            let f = cx.intern_folded(name);
+            match cx.get_field(level, f) {
+                Value::String(a) => cx.resolve(a).to_string(),
+                other => format!("{other:?}"),
+            }
+        })
+    }
+
+    /// A builtin that spawns a thread sees that thread run before its own
+    /// caller continues: `killed` sets `level.state = "dead"` and waits, and
+    /// `main`'s very next read of `level.state` is "dead". That is what
+    /// retail's `finishPlayerDamage` (which runs `CodeCallback_PlayerKilled`
+    /// through `Scr_ExecEntThread`) followed by `Callback_PlayerDamage`'s own
+    /// `self.sessionstate` read relies on.
+    #[test]
+    fn a_thread_a_builtin_spawns_runs_before_the_builtin_returns_to_its_caller() {
+        let mut vm = vm_with(
+            r#"main() { level spawnkiller(); level.seen = level.state; }
+               killed() { self.state = "dead"; wait 1; self.state = "buried"; }"#,
+        );
+        let mut host = SpawnHost::default();
+        let main = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 0, main, None, vec![]);
+        assert_eq!(level_string(&mut vm, "seen"), "dead");
+        assert_eq!(level_string(&mut vm, "state"), "dead");
+        vm.run_frame(&mut host, 1000);
+        assert_eq!(level_string(&mut vm, "state"), "buried");
+    }
+
+    /// A builtin that spawns a thread whose first act is the same builtin is
+    /// a spawn bomb reached through `Cx::spawn` rather than a `thread`
+    /// statement; `MAX_SPAWN_DEPTH` has to bound that path too, leaving a
+    /// warning and a runnable thread instead of overflowing the native
+    /// stack.
+    #[test]
+    fn a_builtin_spawn_bomb_hits_the_depth_guard() {
+        let mut vm = vm_with("main() { level again(); } bomb() { level again(); }");
+        let mut host = SpawnHost::default();
+        let main = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 0, main, None, vec![]);
+        assert!(
+            vm.thread_count() > 0,
+            "the capped spawn is left runnable for the next pass"
+        );
+        assert_eq!(vm.abort_count(), 0, "nothing errored on the way down");
+    }
+
+    /// A `FuncRef` no installed function answers is a recorded abort naming
+    /// the function, not a panic, and the thread whose builtin asked for it
+    /// carries on.
+    #[test]
+    fn a_builtin_spawn_of_an_uninstalled_function_is_recorded_not_a_panic() {
+        let mut vm = vm_with(r#"main() { level spawnmissing(); level.seen = "ran on"; }"#);
+        let mut host = SpawnHost::default();
+        let main = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 0, main, None, vec![]);
+        assert_eq!(vm.aborts().len(), 1);
+        let described = vm.describe(&vm.aborts()[0]);
+        assert!(described.contains("nosuchthing"), "{described}");
+        assert_eq!(level_string(&mut vm, "seen"), "ran on");
     }
 }

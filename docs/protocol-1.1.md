@@ -436,6 +436,43 @@ The consequence for a capture: an entity-list fixture is a fixture *of a
 position*. Two captures taken at different spawns on one map disagree for
 reasons that have nothing to do with which entities exist.
 
+#### Corpses, temp entities and the numbers vcod gives them
+
+Beside the map's own entities a snapshot carries two things the object table
+does not hold: the body queue's corpses and the events raised that frame.
+
+A corpse is culled like any other entity, with the player's link box. A temp
+entity carries one event and lives for a single frame; retail's `obituary`
+sets `r.svFlags` to 8, `SVF_BROADCAST` (`.so 0x5a7ec`,
+`docs/research/cod11-hud-protocol.md` section 1), which sends it to every
+client regardless of PVS. VERIFIED: the dm hit capture's shooter, 2000 to
+4500 units from the victim with no line of sight, received every obituary
+(`docs/research/cod11-combat.md` section 8.3). vcod reproduces the three
+cases the flag word spells: a broadcast temp entity skips the cull, one
+withheld from a single client is dropped for that client and culled for the
+rest, and one addressed to a single client reaches only it, culled.
+
+The entity numbers vcod hands out, one label each:
+
+- Clients take 0..63. VERIFIED, `MAX_CLIENTS` is 64.
+- The body queue takes 64..71. VERIFIED as retail's own range:
+  `G_SpawnPlayerClone` indexes `&g_entities[64 + bodyQueIndex]` with the
+  index advanced `& 7` (`docs/research/cod11-combat.md` section 5.2).
+- Map and script entities run from 72 up. VERIFIED: `G_InitGame` sets
+  `level.num_entities` to 72 whatever `sv_maxclients` is.
+- Temp entities take 958..1021, the 64 numbers below `ENTITYNUM_WORLD`.
+  VERIFIED as vcod's own choice; retail instead gives a temp entity whatever
+  free slot `G_TempEntity` finds.
+- The block is walked by a rolling cursor, so an event repeated in adjacent
+  frames never lands on one number twice. VERIFIED as vcod's own choice, and
+  it is forced by the receiving side: a client keys a fired event entity on
+  `(eType, eventParm)` per number and forgets a number only once it leaves
+  the snapshot, so the second of two identical events on one number reads as
+  already fired.
+
+That a temp-entity number may differ from retail's is INFERRED: nothing on
+either side of the wire compares one frame's against the next's.
+
 ### svc_serverCommand (5)
 
 `long sequence`, then `bigstring text`. Dedupe by sequence, and store in the 64-slot ring, because the scramble key needs it. Then dispatch on the leading token. CoD 1.1 server commands are single letters (`CG_ServerCommand` switches on `argv0[0]`; the full table is section 0 of `docs/research/cod11-hud-protocol.md`). The ones the engine side of a client has to act on:
@@ -490,11 +527,114 @@ The zero flag is where a writer has to be careful. "Changed, and the value is ze
 
 ### PlayerState delta
 
-Like the entity delta but with no entity number, and (divergence) no zero-flag in the main loop. The entity delta has one; the playerstate delta does not. After the scalar fields come five array blocks (stats, ammo, HUD), each gated by a changed-array bitmask. Block 1 is a gate plus a 6-bit mask. Block 2 is a group-gate with `MSG_ReadShort` (byte-aligned) masks and short elements. Block 3 is ungated. Block 4 is 16 weapons, each a 3-bit value plus a gate plus 6 generic delta fields. Block 5 is a 5-bit outer count plus a 5-bit inner field count. There's a 34-entry HUD field table at `0x80de384` in `.data` for one of these blocks.
+Like the entity delta but with no entity number, and (divergence) no zero-flag in the main loop. The entity delta has one; the playerstate delta does not. After the scalar fields come five trailing array blocks, which the 103-entry field table does not cover; they are laid out under "The five array blocks" below.
 
 Missing zero flag, same `-0.0` trap. The change bit still means the C saw two different `int`s, but a changed float goes out through the integral path as a truncated 13-bit value, so `-0.0` reads back `+0.0` and the difference is gone. A reader that keeps the decoded `+0.0` re-encodes the field as unchanged and shortens `lc` with it. VERIFIED against the retail 1.1d dedicated server on mp_carentan: as a spectator's move ends, `velocity[2]` rides three frames as changed-but-zero, and retail's `lc` runs out to field 54 to carry it while the last field with a real change is 15 (frames 134 to 136 of `crates/common/tests/fixtures/net/snapshots-delta.bin`; storing `+0.0` gives `lc == 16` and a frame six bytes short). Recovering `-0.0` when the decoded value equals the base is the same move `read_float_field` makes for entities.
 
-The array blocks are themselves gated against the base frame, so they are full on an uncompressed frame and empty once the client is deltaing. VERIFIED across the two committed captures: all 25 uncompressed frames carry them (42 primitives each) and none of the 399 delta frames does, a spectator's stats and HUD never changing (`crates/common/tests/fixtures/net/snapshots.bin` and `snapshots-delta.bin`). Skipping them keeps the parse aligned but loses the frame, so vcod records the primitives it consumed (`PlayerState::arrays`) and replays them verbatim; nothing decodes them into fields, and nothing pins their meaning beyond the widths that keep the stream aligned.
+The array blocks are themselves gated against the base frame, so they are full on an uncompressed frame and empty once the client is deltaing. VERIFIED across the two committed captures: all 25 uncompressed frames carry them (42 primitives each) and none of the 399 delta frames does, a spectator's stats and HUD never changing (`crates/common/tests/fixtures/net/snapshots.bin` and `snapshots-delta.bin`). Skipping them keeps the parse aligned but loses the frame, so vcod carries them all in `PlayerState::arrays`: blocks 1 to 3 decode into `stats`, `ammo` and `ammoclip` and re-encode gated against the base, blocks 4 and 5 are recorded as the primitives they consumed and replayed verbatim.
+
+#### The five array blocks
+
+Two functions carry the whole layout, and every address in this subsection is in the stripped `cod_lnxded` 1.1d ELF unless it names `game.mp.i386.so`, which is the 1.1d MP game module with its full dynamic symbol table and module-relative addresses (image base 0), the same module `docs/research/cod11-gsc-object-model.md` reads. The reader is the tail of `MSG_ReadDeltaPlayerstate` (`0x807e2f0`), `0x807e7b3..0x807eeb6`. The writer is the tail of `MSG_WriteDeltaPlayerstate` (`0x807d0f8`), `0x807d893..0x807e2ef`. VERIFIED: the two agree element for element, which is what lets a captured frame round-trip.
+
+`playerState_t` is `0x20D0` bytes for delta purposes: the writer `bzero`s exactly that many for a null base (`0x807d116`). VERIFIED. Offsets below are into that struct, and member names are CoDExtended's `playerState_t` (`shared.h`), whose `weapons[0]` at 780, `weaponslots[0]` at 788, `viewangles[0]` at 192, `weapon` at 176 and `weaponstate` at 180 are the same offsets the netfield table pins. VERIFIED.
+
+Three of the blocks name themselves. With `cl_shownet` at 4 (the cvar cached at `0x8355214`, registered at `0x80813e0`) the reader prints `PS_STATS` (`0x80d2e35`) before block 1, `PS_AMMO` (`0x80d2e42`) before block 2 and `PS_AMMOCLIP` (`0x80d2e4a`) before block 3. VERIFIED. Blocks 4 and 5 print nothing, so their names below are read off what writes the offsets, not off the engine.
+
+**Block 1, `stats[6]` at `0xF4`.** One gate bit; if set, six raw bits low to high select which elements follow, and the present ones are read in element order. VERIFIED (reader `0x807e7eb`..`0x807ea0a`, writer `0x807d893`..`0x807da44`). The widths are per element, not uniform:
+
+| element | offset | wire | meaning | label for the meaning |
+|---|---|---|---|---|
+| `stats[0]` | `0xF4` | 16-bit, byte-aligned, sign-extended | health | VERIFIED |
+| `stats[1]` | `0xF8` | 16-bit, byte-aligned, sign-extended | dead yaw (the angle a corpse's camera settles on) | INFERRED |
+| `stats[2]` | `0xFC` | 16-bit, byte-aligned, sign-extended | max health | VERIFIED |
+| `stats[3]` | `0x100` | 6 raw bits, low to high, unsigned | entity number of the teammate the compass/HUD is naming, `-1` for none | VERIFIED |
+| `stats[4]` | `0x104` | 16-bit, byte-aligned, sign-extended | that teammate's health | VERIFIED |
+| `stats[5]` | `0x108` | 8-bit, byte-aligned, unsigned | spawn counter | VERIFIED |
+
+The evidence for each meaning, all in `game.mp.i386.so`:
+
+- `stats[0]`: `Scr_SetHealth` (`0x5c68c`) writes `ps+0xF4` at `0x5c6b0`, and `Pickup_Health` (`0x4d400`) writes it at `0x4d569`. VERIFIED.
+- `stats[1]`: `PM_UpdateViewAngles` (`0x32d7c`) compares `ps+0xF8` against the immediate 999 and, on a match, stores `SHORT2ANGLE(cmd->angles[1] + ps->delta_angles[1])` there; `LookAtKiller` (`0x4a938`) stores an angle in the same slot. VERIFIED. Reading that as RTCW's `stats[STAT_DEAD_YAW]`, whose `bg_pmove.c:3385` is the same 999 sentinel in the same function, is INFERRED.
+- `stats[2]`: the `maxhealth` script-field setter (`0x41a78`) stores `sess.maxHealth` (`gclient+0x2150`) into `ps+0xFC` at `0x41add`, and `ClientSpawn` (`0x4268c`) stores it there again at `0x4284f`. VERIFIED. That the second store lands after the respawn memset (`0x42804`), and that the setter clamps `ps+0xF4` down to `sess.maxHealth` and copies the result into `gentity->health` (`gentity+0x230`), are both readings off sequencing and branches: INFERRED.
+- `stats[3]` and `stats[4]`: `TeamplayInfoMessage` (`0x64910`) has two pairs of stores to `+0x100` and `+0x104`, both off a base loaded from `gentity+0x158`. One pair carries a traced entity number and that entity's `gentity->health` (`0x64acd`, `0x64ad9`), the other the immediates `-1` and `0` (`0x6493b`, `0x6494b`). It also compares a traced entity number against 63 (`0x64a83`). VERIFIED. That the `+0x158` base is the `gclient_t`, and that `ps` sits at `gclient+0` so those stores are `stats[3]` and `stats[4]`, is INFERRED, on the same footing as "The box an entity links with" above; what puts `ps` at offset 0 is `sess.maxHealth` at `gclient+0x2150`, past `sizeof(playerState_t)` (`0x20D0`). Which of the two pairs runs, and hence the reading "the teammate the HUD is naming, and their health", is INFERRED from the compare and the branches.
+- `stats[5]`: `ClientSpawn` loads `ps+0x108` at `0x427f8`, memsets the client at `0x42804`, and stores an incremented copy back at `0x42837`. VERIFIED for the three instructions. Reading that as a spawn counter carried across the memset on purpose is INFERRED, from the ordering.
+
+Two consequences of the widths. A `stats[3]` of `-1` goes out as six set bits and arrives as 63, so the wire cannot tell "nobody" from client 63; INFERRED. `stats[5]` is a byte, so the spawn counter wraps at 256; INFERRED.
+
+**Block 2, `ammo[64]` at `0x10C`. Block 3, `ammoclip[64]` at `0x20C`.** Both are four consecutive sub-blocks of 16 elements. Element `i` of sub-block `s` lands at `0x10C + (s*64) + i*4` for block 2 (`0x807eaf1`) and `0x20C + (s*64) + i*4` for block 3 (`0x807ec03`). VERIFIED. A sub-block is one gate bit; if set, a byte-aligned 16-bit changed mask, then one byte-aligned 16-bit element per set mask bit, low to high, sign-extended into the `int` slot. VERIFIED (`0x807ea85`..`0x807eb3d`), read off the reader and the writer alone: every one of these gates is 0 in both committed captures (the decoded frame below), so no round trip exercises the non-empty path.
+
+Block 2 carries a group gate ahead of its four sub-gates; block 3 does not, and the group gate's `jae` (`0x807ea45`) lands on block 3's first sub-gate, so block 3's four gate bits are always on the wire. VERIFIED for the branch target; reading it as "block 3 is ungated" is INFERRED. An element is 16 bits, so a count above 32767 does not survive the round trip; INFERRED.
+
+**Block 4, `objective[16]` at `0x3E8`, stride 28.** One gate bit for the whole block; then, per objective, three raw bits low to high stored unconditionally at the objective's offset `+0` (`0x807ed72`, index arithmetic `i*28` at `0x807ed6b`), then one gate bit, and if that is set six generic delta fields read through the shared field reader `0x807c904` off entries 0..5 of the 34-entry field table at `0x80de384` (`0x807edc9`). VERIFIED. When the per-objective gate is clear the six fields are copied from the base (`0x807ee00`). VERIFIED.
+
+Those six entries carry their own names and offsets in `.data`, which `python3 tools/re/dump_field_table.py cod_lnxded 0x80de384 34` prints:
+
+| table entry | member | offset in `objective_t` | wire |
+|---|---|---|---|
+| none | `state` | `+0` | 3 raw bits, always present |
+| 0 | `origin[0]` | `+4` | float |
+| 1 | `origin[1]` | `+8` | float |
+| 2 | `origin[2]` | `+12` | float |
+| 3 | `icon` | `+24` | 12 bits |
+| 4 | `entNum` | `+16` | 10 bits |
+| 5 | `teamNum` | `+20` | 4 bits |
+
+VERIFIED. Note the wire order is the table's, not the struct's: `icon` precedes `entNum` and `teamNum`.
+
+**Block 5, two 31-entry `hudelem_t` arrays, stride 112.** One gate bit for the whole block; then the array at `ps+0x1338` and then the one at `ps+0x5A8`, each with the element cap 31 passed in (`0x807ee76`, `0x807ee90`). VERIFIED. CoDExtended calls `ps+0x5A8` `hud.current[31]` and `ps+0x1338` `hud.archival[31]`; those names are the community's and UNVERIFIED, only the offsets and the wire order are read out of the binary.
+
+One array (`0x807cf5c`) is a 5-bit count `n`, then for element `i` in `0..n` a 5-bit last-changed field index `j` and `j+1` delta fields off table entries `6+k` for `k` in `0..=j`. VERIFIED. Fields `j+1..28` are copied from the base (`0x807d073`), which is what fixes the per-element field count at 28 and the table's total at 34. VERIFIED. There is no element index on the wire: element `i` is the `i`-th of the array (`i*112`, `0x807d03e`). VERIFIED.
+
+Entries 6..33 of the same table are the `hudelem_t` fields, in wire order:
+
+| entry | member | offset | wire | entry | member | offset | wire |
+|---|---|---|---|---|---|---|---|
+| 6 | `color.rgba` | 28 | 32 bits | 20 | `fromColor.rgba` | 32 | 32 bits |
+| 7 | `type` | 0 | 4 bits | 21 | `fadeStartTime` | 36 | 32 bits |
+| 8 | `fontScale` | 12 | float | 22 | `fadeTime` | 40 | 16 bits |
+| 9 | `y` | 8 | 10 bits | 23 | `scaleStartTime` | 68 | 32 bits |
+| 10 | `x` | 4 | 10 bits | 24 | `scaleTime` | 72 | 16 bits |
+| 11 | `alignY` | 24 | 2 bits | 25 | `fromHeight` | 64 | 10 bits |
+| 12 | `alignX` | 20 | 2 bits | 26 | `value` | 100 | float |
+| 13 | `time` | 92 | 32 bits | 27 | `label` | 44 | 8 bits |
+| 14 | `font` | 16 | 4 bits | 28 | `fromWidth` | 60 | 10 bits |
+| 15 | `text` | 104 | 8 bits | 29 | `moveStartTime` | 84 | 32 bits |
+| 16 | `shaderIndex` | 56 | 8 bits | 30 | `moveTime` | 88 | 16 bits |
+| 17 | `width` | 48 | 10 bits | 31 | `fromX` | 76 | 10 bits |
+| 18 | `height` | 52 | 10 bits | 32 | `fromY` | 80 | 10 bits |
+| 19 | `sort` | 108 | float | 33 | `duration` | 96 | 32 bits |
+
+VERIFIED. `text` and `label` are 8 bits wide, so whatever they hold is an index and not a string; what they index is UNVERIFIED.
+
+##### A decoded frame
+
+Message 4 of `crates/common/tests/fixtures/net/snapshots.bin` (uncompressed, `mp_carentan`, a lone spectator who never joined a team) carries 42 primitives, and every uncompressed frame in both committed captures carries the same 42. VERIFIED. In order:
+
+1. Block 1 gate `1`, mask `0b101000`, so only `stats[3]` and `stats[5]` are present: `stats[3] = 63` (the 6-bit form of "no teammate") and `stats[5] = 1` (first spawn). The four absent elements are all zero on a spectator who has never had health. VERIFIED.
+2. Block 2's group gate `0`, then block 3's four sub-gates `0 0 0 0`: no ammo and no clip anywhere. VERIFIED.
+3. Block 4's gate `0`: no objectives on this map and gametype. VERIFIED.
+4. Block 5's gate `1`. The array at `ps+0x1338` has count 1, and its element 0 announces `j = 8`, so table entries 6..14 follow: `color.rgba = 0xFFFFFFFF`, `type = 4`, `fontScale = 1.0` (integral float, biased 13-bit `4097`), `y = 460`, `x = 320`, `alignY = 1`, `alignX = 1`, `time = 1800000`, `font = 1`. The array at `ps+0x5A8` has count 0. VERIFIED.
+
+That accounts for all 42 primitives and is what a server has to reproduce bit for bit to keep a retail client's parse aligned.
+
+##### How `ammo[]` and `ammoclip[]` are indexed
+
+Neither array is indexed by weapon. Both are indexed by a per-weapon-def integer, and the two indexes are separate namespaces. `BG_WeaponAmmo(ps, weapon)` (`game.mp.i386.so` `0x3ab9c`) returns `ps->ammoclip[weapDef->clipIndex] + ps->ammo[weapDef->ammoIndex]`, reading `weapDef+0x1A8` against base `0x20C` and `weapDef+0x1A0` against base `0x10C`. VERIFIED. `PM_WeaponAmmoAvailable` (`0x3abe8`), `PM_WeaponClipEmpty` (`0x3aee0`) and `PM_WeaponUseAmmo` (`0x3aeac`) all use `weapDef+0x1A8` against `0x20C`. VERIFIED. That firing therefore spends the clip and not the reserve, making `ammoclip[]` the loaded magazine and `ammo[]` the reserve behind it, is INFERRED.
+
+The indexes are assigned once at weapon registration, by name, deduplicated:
+
+- `BG_SetupAmmoIndexes` (`0x3600c`) indexes the weapon-def pointer array at `0x7c91c`, which `BG_SetupWeaponInfo` fills with a `0x100`-byte (64-pointer) allocation at `0x366b1`, against the bound at `0x7c918`. It passes the def's ammo name (`weapDef+0x19C`) to `Q_strlwr`, `Q_stricmp`s it against a name table at `0xa96e0`, has a store that appends to that table and bumps the count at `0xa98e0` (`0x3616c`, `0x36188`), and stores a slot number into `weapDef+0x1A0` (`0x36098`, `0x36181`). VERIFIED. That the walk runs weapon indices from 1 up, and that the append is on the miss path so each distinct name takes one slot, is INFERRED, from the loop and the branch.
+- `BG_SetupClipIndexes` (`0x36370`) does the same with the clip name (`weapDef+0x1A4`), the name table at `0xa9b20`, the count at `0xa9d20` and the result in `weapDef+0x1A8`. VERIFIED.
+- `BG_SetupSharedAmmoIndexes` (`0x361ac`) does the same for the shared-ammo-cap name (`weapDef+0x1B4`, table `0xa9900`, count `0xa9b00`, result `weapDef+0x1B8`, default `-1`). VERIFIED. That index addresses no playerstate array.
+
+The first index handed out is 1, and slot 0 of both arrays goes unused. VERIFIED, off the spawn line of `crates/server/tests/fixtures/playerstate/mp_carentan-tdm-hit-target.txt`, a retail capture of a stock allies join: `clip=3:7,6:3,10:15 ammo=3:56,10:400`, which is `colt_mp`, `fraggrenade_mp` and `m1carbine_mp` one slot above where a 0-based walk over configstring 7 puts them. `crates/server/src/weapons.rs` reads that line back in `the_first_index_handed_out_is_one`.
+
+Each pass also stores a parallel integer alongside the name (max ammo at `weapDef+0x1AC`, clip size at `weapDef+0x1B0`) and carries a `Com_Error` call whose format strings are `Max ammo mismatch for "%s" ammo: …` (`0x720e0`) and `Clip Size mismatch for "%s" clip: …` (`0x721c0`). VERIFIED. That the call fires when two weapon files give one name different values is INFERRED, from the compare that guards it.
+
+`BG_SetupWeaponInfo` (`0x36674`) runs all three passes back to back (`0x369b2`, `0x369b7`, `0x369bc`) after it has read the weapon-file list, sorted it with `compare_weaponfile_names` and published it as configstring 7. VERIFIED. So the index a name gets is decided by the first weapon, in configstring-7 order, that names it, which is the same order `entityState.weapon` is a 1-based index into. INFERRED, since it follows from the call order rather than from a measured table.
+
+Both arrays are 64 long, which caps the distinct ammo names and the distinct clip names at 64 each, independently. VERIFIED.
 
 ### Trajectories (`trType`/`pos`/`apos`)
 

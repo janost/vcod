@@ -13,7 +13,8 @@
 
 use crate::configstrings::{script_menu_index, weapon_index, CsRange};
 use crate::game::builtins::entity::entity_receiver;
-use crate::game::host::GameHost;
+use crate::game::entity::ThinkFn;
+use crate::game::host::{GameHost, WeaponOp};
 use crate::weapons::weapon_slot;
 use vcod_common::pmove;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
@@ -26,10 +27,194 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("giveweapon", give_weapon),
     ("givemaxammo", give_max_ammo),
     ("setspawnweapon", set_spawn_weapon),
+    ("switchtoweapon", switch_to_weapon),
+    ("takeallweapons", take_all_weapons),
+    ("getweaponslotweapon", get_weapon_slot_weapon),
+    ("setweaponslotweapon", set_weapon_slot_weapon),
+    ("setweaponslotammo", set_weapon_slot_ammo),
+    ("setweaponslotclipammo", set_weapon_slot_clip_ammo),
     ("positionwouldtelefrag", position_would_telefrag),
     ("setviewmodel", set_view_model),
     ("getviewmodel", get_view_model),
+    ("usebuttonpressed", use_button_pressed),
+    ("getcurrentweapon", get_current_weapon),
+    ("cloneplayer", clone_player),
+    ("dropitem", drop_item),
+    ("closemenu", close_menu),
 ];
+
+/// How long a dropped weapon lives before the server frees it.
+///
+/// A deliberate divergence, and the only one in this file that retail
+/// contradicts outright: retail's `Drop_Weapon` (`.so` 0x4dd40) hands the
+/// entity to `LaunchItem` (0x4db98), whose only think is
+/// `DroppedItemClearOwner` a second out, so a dropped weapon lives until
+/// somebody picks it up. Nothing in the module frees one on a timer (the two
+/// `0x7530` immediates in `.text` are in `Cmd_CallVote_f` and `fire_rocket`).
+/// Pickup on touch is not this stage, so an item with retail's lifetime would
+/// never leave; the timer bounds the entity table until the touch path exists
+/// to replace it.
+const DROPPED_ITEM_MS: i32 = 30_000;
+
+/// `self useButtonPressed()`: whether the client's last usercmd held the
+/// use button, which every stock `respawn()` loop polls. `Server` mirrors
+/// the buttons onto the host before the frame.
+pub fn use_button_pressed(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let held = host.client_buttons[slot] & vcod_common::net::msg::BUTTON_USE != 0;
+    Ok(Value::Int(i32::from(held)))
+}
+
+/// `self getCurrentWeapon()` (`PlayerCmd_getCurrentWeapon`): the name of the
+/// weapon in `ps.weapon`, or `"none"` when the slot holds nothing. Every
+/// stock death path reads it to name the weapon the corpse drops.
+///
+/// A player on a ladder reports `"none"`: the holster writes 0 into
+/// `ps.weapon`, and 0 is what retail reads back here too.
+pub fn get_current_weapon(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let index = host.client_weapons[slot].current as usize;
+    let name = crate::items::item_name(index).unwrap_or("none");
+    Ok(Value::String(cx.intern_exact(name)))
+}
+
+/// `self cloneplayer()` (`.so` 0x4450c): the corpse the gametype leaves
+/// behind, into the next body-queue slot
+/// (`docs/research/cod11-combat.md` section 5.2). The state copied is the
+/// mirror `Server::replay_moves` wrote for this client before the script
+/// frame, and the queue re-reads it from the sim once more at the snapshot
+/// build, so a death animation raised after this call still reaches the wire.
+///
+/// Returns `Value::Undefined` rather than the body entity: the body queue is
+/// not in the object table, so there is no `EntId` to hand out, and every
+/// stock gametype assigns the result without ever reading it back.
+pub fn clone_player(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let Some(state) = host.client_entity_states[slot].clone() else {
+        // A client with no sim: connected, never entered the world.
+        return Ok(Value::Undefined);
+    };
+    let now = host.level_time_ms;
+    host.bodies.push(
+        state,
+        Some(slot),
+        now,
+        &vcod_common::net::protocol::PROTOCOL_V1,
+    );
+    Ok(Value::Undefined)
+}
+
+/// `self dropItem(name)` (`.so` 0x43684): the named weapon on the ground
+/// where the player stands. Retail resolves the name to a weapon index and
+/// calls `Drop_Weapon`, which spawns a `bg_itemlist` entity through
+/// `LaunchItem`; here the entity is spawned the way
+/// `spawn_entities_from_string` spawns a map's `mpweapon_*`, so it reaches the
+/// wire as the same `ET_ITEM` (`crate::game::wire`). `weaponinfo` carries the
+/// weapon, which is what `kind_of` reads; the classname only has to open with
+/// `mpweapon_` for it to look there.
+///
+/// The rounds go with the item: the retail death frame reads
+/// `clip=3:7,6:3 ammo=3:56`, the held carbine's index gone from both arrays
+/// where the spawn line had it in each (combat doc, 9.1), and `player_die`
+/// itself stores no ammo (5.1), so the clear belongs here. What is left out
+/// is the rest of `BG_TakePlayerWeapon`: the weapon stays in the player's
+/// held set, which costs nothing on the death path the stock scripts use --
+/// the respawn re-gives the loadout -- and keeps a gametype that drops a
+/// weapon it means to keep from being disarmed outright. Pickup on touch
+/// does not exist yet either, which is what `DROPPED_ITEM_MS` stands in for.
+///
+/// A name no weapon file backs raises, the same reading `weapon_argument`
+/// takes for every other weapon builtin. `"none"` is the exception and is a
+/// no-op: `getCurrentWeapon` reports it for `ps.weapon` 0, and stock
+/// `dm.gsc:531` is `self dropItem(self getcurrentweapon());` with no guard,
+/// so raising there would kill the killed callback before its `respawn()`
+/// and leave the player dead for the rest of the map. UNVERIFIED: what
+/// retail's `Drop_Weapon` does for index 0; 0x4dd40 was not read.
+pub fn drop_item(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    if let Some(Value::String(name)) = args.first() {
+        if cx.resolve(*name) == "none" {
+            return Ok(Value::Undefined);
+        }
+    }
+    let (name, index) = weapon_argument(cx, args)?;
+    let origin = {
+        let field = cx.intern_folded("origin");
+        match host.get_field(cx, EntId(slot as u32), field) {
+            Value::Vector(v) => v,
+            _ => [0.0; 3],
+        }
+    };
+    let id = host.ents.spawn(cx)?;
+    let classname = crate::game::spawn::radiant_name(&name).unwrap_or("mpweapon_dropped");
+    for (field, value) in [
+        ("classname", Value::String(cx.intern_exact(classname))),
+        ("weaponinfo", Value::String(cx.intern_exact(&name))),
+        ("origin", Value::Vector(origin)),
+    ] {
+        let atom = cx.intern_folded(field);
+        host.set_field(cx, id, atom, value)?;
+    }
+    host.register_item(&name);
+    // The rounds go with the item. VERIFIED: retail's death frame carries
+    // `clip=3:7,6:3 ammo=3:56`, the held carbine's index 10 gone from both
+    // arrays, where the spawn line had it in each (combat doc, 9.2).
+    if let Some(def) = host.weapons.get(index) {
+        let (clip_index, ammo_index) = (def.clip_index, def.ammo_index);
+        host.client_weapon_ops.push((
+            slot,
+            WeaponOp::SetClip {
+                clip_index,
+                rounds: 0,
+            },
+        ));
+        host.client_weapon_ops.push((
+            slot,
+            WeaponOp::SetAmmo {
+                ammo_index,
+                rounds: 0,
+            },
+        ));
+    }
+    host.ents
+        .schedule(id, ThinkFn::Free, host.level_time_ms + DROPPED_ITEM_MS);
+    Ok(Value::Undefined)
+}
+
+/// `self closeMenu()` (`.so` 0x45574): the reliable command `u`, with no
+/// argument -- the whole format string at 0x73204 is the one letter. The
+/// client's handler is `0x3002de60`, "close script menus"
+/// (`docs/research/cod11-hud-protocol.md` section 0).
+pub fn close_menu(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    host.client_commands.push((slot, "u".to_string()));
+    Ok(Value::Undefined)
+}
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
     NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
@@ -46,7 +231,7 @@ fn model_index_base() -> usize {
 /// entity with a `gclient_t`, which is retail's own `entity %i is not a
 /// player` check (0x44703, 0x45413). The client's slot is its entity number,
 /// and that is what a reliable command is addressed to.
-fn client_receiver(host: &GameHost, recv: Option<Target>) -> Result<usize, ErrorKind> {
+pub(crate) fn client_receiver(host: &GameHost, recv: Option<Target>) -> Result<usize, ErrorKind> {
     let id = entity_receiver(recv)?;
     match host.ents.get(id) {
         Some(e) if e.client.is_some() => Ok(id.0 as usize),
@@ -133,14 +318,15 @@ fn weapon_argument(cx: &Cx, args: &[Value]) -> Result<(String, usize), ErrorKind
     Ok((name, index))
 }
 
-/// `self giveWeapon(name)` (`PlayerCmd_giveWeapon` 0x43020): hold the weapon
-/// and fill the slot its weapon file's `weaponSlot` names. Object model doc,
-/// section 20.
+/// `self giveWeapon(name)` (`PlayerCmd_giveWeapon` 0x43020): hold the weapon,
+/// fill the slot its weapon file's `weaponSlot` names, and load it with a
+/// full clip and its `startAmmo` in reserve. Object model doc, section 20;
+/// the ammo pair is RTCW's `Add_Ammo` shape, and every stock loadout calls
+/// `giveMaxAmmo` right after, which is where the reserve the spawn capture
+/// carries comes from.
 ///
-/// Two of retail's effects are left out. Its ammo top-up cannot reach a
-/// client, `ps.ammo` having no netfield in 1.1. And its
-/// `Can not give player weapon without having an empty weapon slot` error is
-/// not reproduced because whether re-giving a held weapon counts as an
+/// Retail's `Can not give player weapon without having an empty weapon slot`
+/// error is not reproduced: whether re-giving a held weapon counts as an
 /// occupied slot is unmeasured, and a wrong guess kills the spawning thread.
 pub fn give_weapon(
     host: &mut GameHost,
@@ -152,26 +338,67 @@ pub fn give_weapon(
     let (name, index) = weapon_argument(cx, args)?;
     let weapon_slot = weapon_slot(host.fs.as_deref(), &name).unwrap_or(0);
     host.client_weapons[slot].give(index, weapon_slot);
+    if let Some(def) = host.weapons.get(index) {
+        host.client_weapon_ops.push((
+            slot,
+            WeaponOp::SetClip {
+                clip_index: def.clip_index,
+                rounds: def.clip_size as i16,
+            },
+        ));
+        if !def.clip_only {
+            host.client_weapon_ops.push((
+                slot,
+                WeaponOp::SetAmmo {
+                    ammo_index: def.ammo_index,
+                    rounds: def.start_ammo as i16,
+                },
+            ));
+        }
+    }
     Ok(Value::Undefined)
 }
 
-/// `self giveMaxAmmo(name)` (`PlayerCmd_giveMaxAmmo` 0x43134): retail tops up
-/// `ps.ammo` and touches nothing else, and `ps.ammo` has no netfield, so
-/// there is nothing here for the wire to carry. Object model doc, section 20.
+/// `self giveMaxAmmo(name)` (`PlayerCmd_giveMaxAmmo` 0x43134): the weapon's
+/// `maxAmmo` in reserve and a full clip. Object model doc, section 20; the
+/// numbers are the retail spawn capture's, `clip=3:7,6:3,10:15
+/// ammo=3:56,10:400` for the stock allies loadout
+/// (`crates/server/src/weapons.rs`, `the_first_index_handed_out_is_one`).
 pub fn give_max_ammo(
     host: &mut GameHost,
     cx: &mut Cx,
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    client_receiver(host, recv)?;
-    weapon_argument(cx, args)?;
+    let slot = client_receiver(host, recv)?;
+    let (_, index) = weapon_argument(cx, args)?;
+    if let Some(def) = host.weapons.get(index) {
+        // A `clipOnly` weapon has no reserve: the frag's file reads
+        // `clipOnly 1` with `maxAmmo 3`, and retail's spawn line carries
+        // `clip=6:3` with no `ammo` entry for index 6 (combat doc, 9.2).
+        if !def.clip_only {
+            host.client_weapon_ops.push((
+                slot,
+                WeaponOp::SetAmmo {
+                    ammo_index: def.ammo_index,
+                    rounds: def.max_ammo as i16,
+                },
+            ));
+        }
+        host.client_weapon_ops.push((
+            slot,
+            WeaponOp::SetClip {
+                clip_index: def.clip_index,
+                rounds: def.clip_size as i16,
+            },
+        ));
+    }
     Ok(Value::Undefined)
 }
 
 /// `self setSpawnWeapon(name)` (0x452a4): `ps.weapon = index`, for a weapon
-/// the player already holds. `ps.weaponstate` is retail's other store and is
-/// already 0 in a null playerstate. Object model doc, section 20.
+/// the player already holds, with `ps.weaponstate` -- retail's other store --
+/// back to ready. Object model doc, section 20.
 pub fn set_spawn_weapon(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -183,8 +410,183 @@ pub fn set_spawn_weapon(
     let w = &mut host.client_weapons[slot];
     if w.holds(index) {
         w.current = index as u8;
+        host.client_weapon_ops
+            .push((slot, WeaponOp::SetCurrent(index as u8)));
     }
     Ok(Value::Undefined)
+}
+
+/// `self switchToWeapon(name)` (`PlayerCmd_switchToWeapon`, player method 5):
+/// the same change a usercmd's weapon byte asks for, so it goes through the
+/// putaway and the raise rather than swapping the weapon in place (combat
+/// doc, section 1.8). The host's own `current` is deliberately left alone:
+/// the frame mirror copies it into `ps.weapon`, so writing the target here
+/// would put the weapon in the player's hands ahead of its own drop.
+///
+/// A weapon the player does not hold raises. Retail's `PM_Weapon` would
+/// disarm the player on the next frame instead (`COM_BitCheck` on
+/// `ps.weapons`), which loses the name of the mistake.
+pub fn switch_to_weapon(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let (_, index) = weapon_argument(cx, args)?;
+    if !host.client_weapons[slot].holds(index) {
+        return Err(ErrorKind::BadType("that player does not hold that weapon"));
+    }
+    host.client_weapon_ops
+        .push((slot, WeaponOp::SwitchTo(index as u8)));
+    Ok(Value::Undefined)
+}
+
+/// `self takeAllWeapons()` (`PlayerCmd_takeAllWeapons`, player method 2):
+/// the held bits and every slot cleared here, and the ammo and clip arrays
+/// cleared in the sim by the op, since those are the playerstate's alone.
+pub fn take_all_weapons(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    host.client_weapons[slot] = crate::weapons::PlayerWeapons::default();
+    host.client_weapon_ops.push((slot, WeaponOp::TakeAll));
+    Ok(Value::Undefined)
+}
+
+/// `self getWeaponSlotWeapon(slot)` (player method 32, 0x43cf4): the name of
+/// the weapon standing in that slot, `"none"` for an empty one. The inverse
+/// of the `weaponSlot` key a weapon file carries (object model doc, section
+/// 20).
+pub fn get_weapon_slot_weapon(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let client = client_receiver(host, recv)?;
+    let slot = slot_argument(cx, args)?;
+    let index = host.client_weapons[client].slots[slot] as usize;
+    let name = crate::items::item_name(index).unwrap_or("none");
+    Ok(Value::String(cx.intern_exact(name)))
+}
+
+/// `self setWeaponSlotWeapon(slot, name)` (player method 33, 0x43df4): the
+/// weapon given and put in the slot the caller names rather than the one its
+/// own file names, with a full clip and its `startAmmo` in reserve. Stock
+/// script runs it ahead of both setters and a `switchToWeapon` on the weapon
+/// it just placed (`sd.gsc` 540-543), so a weapon set into a slot has to
+/// come out usable.
+pub fn set_weapon_slot_weapon(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let client = client_receiver(host, recv)?;
+    let slot = slot_argument(cx, args)?;
+    let (_, index) = weapon_argument(cx, args.get(1..).unwrap_or_default())?;
+    host.client_weapons[client].give(index, slot);
+    if let Some(def) = host.weapons.get(index) {
+        host.client_weapon_ops.push((
+            client,
+            WeaponOp::SetClip {
+                clip_index: def.clip_index,
+                rounds: def.clip_size as i16,
+            },
+        ));
+        if !def.clip_only {
+            host.client_weapon_ops.push((
+                client,
+                WeaponOp::SetAmmo {
+                    ammo_index: def.ammo_index,
+                    rounds: def.start_ammo as i16,
+                },
+            ));
+        }
+    }
+    Ok(Value::Undefined)
+}
+
+/// `self setWeaponSlotAmmo(slot, rounds)` (player method 35, 0x44130): the
+/// reserve of whatever weapon occupies the slot. Ammo is indexed by the
+/// weapon's ammo *name*, not by the weapon, so two weapons sharing a name
+/// share the reserve (docs/protocol-1.1.md, "How `ammo[]` and `ammoclip[]`
+/// are indexed"). An empty slot names no weapon and so writes nothing.
+pub fn set_weapon_slot_ammo(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let (client, slot, rounds) = slot_and_rounds(host, cx, recv, args)?;
+    let index = host.client_weapons[client].slots[slot] as usize;
+    if let Some(def) = host.weapons.get(index) {
+        let op = WeaponOp::SetAmmo {
+            ammo_index: def.ammo_index,
+            rounds,
+        };
+        host.client_weapon_ops.push((client, op));
+    }
+    Ok(Value::Undefined)
+}
+
+/// `self setWeaponSlotClipAmmo(slot, rounds)` (player method 37, 0x443e4):
+/// the same for the clip, which has its own name table and its own index
+/// space.
+pub fn set_weapon_slot_clip_ammo(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let (client, slot, rounds) = slot_and_rounds(host, cx, recv, args)?;
+    let index = host.client_weapons[client].slots[slot] as usize;
+    if let Some(def) = host.weapons.get(index) {
+        let op = WeaponOp::SetClip {
+            clip_index: def.clip_index,
+            rounds,
+        };
+        host.client_weapon_ops.push((client, op));
+    }
+    Ok(Value::Undefined)
+}
+
+/// The receiver, slot and round count the two setters share.
+fn slot_and_rounds(
+    host: &GameHost,
+    cx: &Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<(usize, usize, i16), ErrorKind> {
+    let client = client_receiver(host, recv)?;
+    let slot = slot_argument(cx, args)?;
+    let rounds = match args.get(1) {
+        Some(Value::Int(n)) => *n as i16,
+        Some(Value::Float(f)) => *f as i16,
+        _ => return Err(ErrorKind::BadType("that builtin takes a round count")),
+    };
+    Ok((client, slot, rounds))
+}
+
+/// The slot-name argument the three slot builtins take, as its index in
+/// [`crate::weapons::SLOT_NAMES`]. `"none"` is index 0 and names no slot a
+/// weapon can stand in, so it is refused with every other unknown name, the
+/// way retail's `Unknown weaponslot name %s` is (object model doc, section
+/// 20).
+fn slot_argument(cx: &Cx, args: &[Value]) -> Result<usize, ErrorKind> {
+    let Some(Value::String(name)) = args.first() else {
+        return Err(ErrorKind::BadType("that builtin takes a weapon slot name"));
+    };
+    let name = cx.resolve(*name);
+    crate::weapons::SLOT_NAMES
+        .iter()
+        .position(|s| *s == name)
+        .filter(|i| *i > 0)
+        .ok_or(ErrorKind::BadType("no such weapon slot"))
 }
 
 /// `positionWouldTelefrag(origin)` (free function 96, 0x5a834): the player
@@ -492,5 +894,439 @@ mod tests {
             assert!(open_menu(&mut host, cx, Some(Target::Entity(prop)), &[menu]).is_err());
             assert!(host.client_commands.is_empty());
         });
+    }
+
+    /// The weapon name comes out of the host's own `client_weapons`, and a
+    /// slot holding nothing reads `"none"` -- which is what a player on a
+    /// ladder reports, the holster having written 0 into `ps.weapon`.
+    #[test]
+    fn getcurrentweapon_names_what_the_client_holds() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let recv = Some(Target::Entity(c));
+            let name =
+                |host: &mut GameHost, cx: &mut Cx| match get_current_weapon(host, cx, recv, &[])
+                    .unwrap()
+                {
+                    Value::String(a) => cx.resolve(a).to_string(),
+                    v => panic!("{v:?}"),
+                };
+            assert_eq!(name(&mut host, cx), "none");
+            host.client_weapons[0].current = weapon_index("m1carbine_mp").unwrap() as u8;
+            assert_eq!(name(&mut host, cx), "m1carbine_mp");
+        });
+    }
+
+    /// `closeMenu` queues the bare `u` the retail builtin sends (`.so`
+    /// 0x45574, format string 0x73204), and refuses a receiver with no
+    /// `gclient_t` the way every other player method here does.
+    #[test]
+    fn closemenu_queues_the_bare_u_command() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 3).unwrap();
+            close_menu(&mut host, cx, Some(Target::Entity(c)), &[]).unwrap();
+            assert_eq!(host.client_commands, vec![(3, "u".to_string())]);
+            let prop = host.ents.spawn(cx).unwrap();
+            assert!(close_menu(&mut host, cx, Some(Target::Entity(prop)), &[]).is_err());
+        });
+    }
+
+    /// A dropped weapon is spawned as the placed weapon it is: a
+    /// `mpweapon_*` classname with the weapon in `weaponinfo`, at the
+    /// player's own origin, with the free think armed. `wire::kind_of` reads
+    /// exactly those two fields, so this is what puts it on the wire as an
+    /// `ET_ITEM`.
+    #[test]
+    fn dropitem_spawns_a_placed_weapon_where_the_player_stands() {
+        let (mut vm, mut host) = fixture();
+        host.level_time_ms = 5_000;
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            set_origin(&mut host, cx, c, [16.0, -32.0, 8.0]);
+            let name = Value::String(cx.intern_exact("m1carbine_mp"));
+            drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap();
+
+            let (id, _) = host.ents.iter_inuse().find(|(id, _)| *id != c).unwrap();
+            let read = |host: &mut GameHost, cx: &mut Cx, f: &str| {
+                let atom = cx.intern_folded(f);
+                host.get_field(cx, id, atom)
+            };
+            match read(&mut host, cx, "classname") {
+                Value::String(a) => assert_eq!(cx.resolve(a), "mpweapon_m1carbine"),
+                v => panic!("{v:?}"),
+            }
+            match read(&mut host, cx, "weaponinfo") {
+                Value::String(a) => assert_eq!(cx.resolve(a), "m1carbine_mp"),
+                v => panic!("{v:?}"),
+            }
+            assert_eq!(
+                read(&mut host, cx, "origin"),
+                Value::Vector([16.0, -32.0, 8.0])
+            );
+            let e = host.ents.get(id).unwrap();
+            assert_eq!(e.think, Some(ThinkFn::Free));
+            assert_eq!(e.nextthink, 5_000 + DROPPED_ITEM_MS);
+        });
+    }
+
+    /// A name no weapon file backs raises rather than spawning an item with
+    /// no weapon on it, the same reading every other weapon builtin takes.
+    #[test]
+    fn dropitem_refuses_a_weapon_nothing_backs() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let name = Value::String(cx.intern_exact("blunderbuss_mp"));
+            assert!(drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).is_err());
+            assert_eq!(host.ents.iter_inuse().count(), 1, "no item was spawned");
+        });
+    }
+
+    /// `"none"` is what `getCurrentWeapon` reports for a holstered player,
+    /// and it drops nothing at all: no entity, no ammo op, no error.
+    #[test]
+    fn dropitem_none_drops_nothing_and_does_not_raise() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let name = Value::String(cx.intern_exact("none"));
+            assert_eq!(
+                drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap(),
+                Value::Undefined
+            );
+            assert_eq!(host.ents.iter_inuse().count(), 1, "no item was spawned");
+            assert!(host.client_weapon_ops.is_empty(), "no ammo was cleared");
+        });
+    }
+
+    /// Why that no-op matters: stock `dm.gsc:531` is
+    /// `self dropItem(self getcurrentweapon());` with no guard, so a player
+    /// killed while holstered hands `"none"` in. Raising there killed the
+    /// callback thread before its `cloneplayer`, `wait` and `respawn()`, and
+    /// the player stayed dead for the rest of the map.
+    #[test]
+    fn a_killed_callback_that_drops_none_runs_past_it() {
+        use crate::game::combat::Hit;
+        use crate::game::host::{ClientEvent, Vitals};
+        use crate::game::script::{ScriptRuntime, CALLBACK_SETUP};
+
+        const CALLBACKS: &str = r#"
+            main() {}
+            CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+                self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+            }
+            CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {
+                self dropItem("none");
+                self.buried = "yes";
+            }
+        "#;
+
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, CALLBACKS);
+        for (slot, name) in [(0, "victim"), (1, "killer")] {
+            rt.push_client_event(ClientEvent::Connect {
+                slot,
+                name: name.into(),
+            });
+        }
+        rt.run_frame(0);
+        rt.host.client_vitals[0] = Vitals {
+            health: 10,
+            max_health: 100,
+            dead: false,
+        };
+        rt.deliver_hits(
+            vec![Hit {
+                victim: 0,
+                attacker: 1,
+                damage: 45,
+                dflags: 0,
+                mod_: "MOD_RIFLE_BULLET",
+                weapon: "m1carbine_mp".into(),
+                point: [0.0; 3],
+                dir: [1.0, 0.0, 0.0],
+                hitloc: "torso_upper",
+            }],
+            50,
+        );
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.client_field(0, "buried").as_deref(), Some("yes"));
+    }
+
+    /// `cloneplayer` copies the mirror `Server::replay_moves` wrote into the
+    /// body queue's next slot. A client with no mirror -- connected but never
+    /// in the world -- clones nothing.
+    #[test]
+    fn cloneplayer_pushes_the_mirrored_state_into_the_body_queue() {
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 2).unwrap();
+            let recv = Some(Target::Entity(c));
+            assert_eq!(
+                clone_player(&mut host, cx, recv, &[]).unwrap(),
+                Value::Undefined
+            );
+            assert_eq!(host.bodies.entities().count(), 0, "no mirror, no corpse");
+
+            let mut state = vcod_common::net::msg::EntityState::null(p);
+            state.number = 2;
+            let set = |s: &mut vcod_common::net::msg::EntityState, n: &str, v: i32| {
+                s.fields[vcod_common::net::msg::EntityState::field_index(p, n).unwrap()] = v;
+            };
+            set(&mut state, "clientNum", 2);
+            set(&mut state, "legsAnim", 700);
+            host.client_entity_states[2] = Some(state);
+            clone_player(&mut host, cx, recv, &[]).unwrap();
+
+            let (number, body) = host.bodies.entities().next().unwrap();
+            assert_eq!(number, crate::game::bodies::BODY_FIRST);
+            assert_eq!(body.field_i32(p, "eType"), crate::game::bodies::ET_CORPSE);
+            assert_eq!(body.field_i32(p, "clientNum"), 2);
+            assert_eq!(body.field_i32(p, "legsAnim"), 700);
+        });
+    }
+
+    /// A host with the shipped weapon files mounted: the slot builtins
+    /// resolve a slot to the weapon standing in it, and the ops they push
+    /// carry the ammo and clip indexes the table hands out. `None` without
+    /// the paks, where no weapon file fills a slot at all.
+    fn armed_fixture() -> Option<(vcod_gsc::Vm, GameHost)> {
+        let fs = std::rc::Rc::new(vcod_common::testing::game_fs()?);
+        let (vm, mut host) = fixture();
+        host.weapons = std::rc::Rc::new(crate::weapons::WeaponTable::load(&fs));
+        host.fs = Some(fs);
+        Some((vm, host))
+    }
+
+    /// The stock allies loadout on client 0, with the ops it pushed dropped:
+    /// what the three tests below start from.
+    fn loadout(host: &mut GameHost, cx: &mut Cx) -> EntId {
+        let e = host.ents.spawn_client(cx, 0).unwrap();
+        let t = Some(Target::Entity(e));
+        for w in ["colt_mp", "fraggrenade_mp", "m1carbine_mp"] {
+            let arg = Value::String(cx.intern_exact(w));
+            give_weapon(host, cx, t, &[arg]).unwrap();
+        }
+        let carbine = Value::String(cx.intern_exact("m1carbine_mp"));
+        set_spawn_weapon(host, cx, t, &[carbine]).unwrap();
+        host.client_weapon_ops.clear();
+        e
+    }
+
+    /// A player standing on the test floor, for the tests that run the
+    /// weapon machine: only `(Normal, Some(world))` steps it.
+    fn player_sim() -> crate::spectate::ClientSim {
+        let angles = vcod_common::net::msg::NULL_USERCMD.angles;
+        let mut sim = crate::spectate::ClientSim::spectator([0.0, 0.0, 8.0], 0.0, angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, angles);
+        sim
+    }
+
+    /// The four slot builtins against the stock loadout: a slot names the
+    /// weapon whose file put it there, an empty one names `"none"`, and the
+    /// two setters address that weapon's own ammo and clip index rather than
+    /// its weapon number. A name the slot table does not have is an error,
+    /// the way retail's `Unknown weaponslot name %s` is.
+    #[test]
+    fn the_slot_builtins_read_and_load_the_weapon_in_a_slot() {
+        let Some((mut vm, mut host)) = armed_fixture() else {
+            return;
+        };
+        let carbine = weapon_index("m1carbine_mp").unwrap();
+        let (ammo_index, clip_index) = {
+            let def = host.weapons.get(carbine).expect("the carbine");
+            (def.ammo_index, def.clip_index)
+        };
+        vm.with_cx(|cx| {
+            let e = loadout(&mut host, cx);
+            let t = Some(Target::Entity(e));
+            let name = |host: &mut GameHost, cx: &mut Cx, slot: &str| {
+                let arg = Value::String(cx.intern_exact(slot));
+                match get_weapon_slot_weapon(host, cx, t, &[arg]).unwrap() {
+                    Value::String(a) => cx.resolve(a).to_string(),
+                    v => panic!("{v:?}"),
+                }
+            };
+            assert_eq!(name(&mut host, cx, "primary"), "m1carbine_mp");
+            assert_eq!(name(&mut host, cx, "pistol"), "colt_mp");
+            assert_eq!(name(&mut host, cx, "grenade"), "fraggrenade_mp");
+            assert_eq!(name(&mut host, cx, "primaryb"), "none");
+
+            let primary = Value::String(cx.intern_exact("primary"));
+            let args = [primary, Value::Int(999)];
+            set_weapon_slot_ammo(&mut host, cx, t, &args).unwrap();
+            set_weapon_slot_clip_ammo(&mut host, cx, t, &args).unwrap();
+            assert_eq!(
+                host.client_weapon_ops,
+                vec![
+                    (
+                        0,
+                        WeaponOp::SetAmmo {
+                            ammo_index,
+                            rounds: 999
+                        }
+                    ),
+                    (
+                        0,
+                        WeaponOp::SetClip {
+                            clip_index,
+                            rounds: 999
+                        }
+                    ),
+                ]
+            );
+
+            let bogus = Value::String(cx.intern_exact("holster"));
+            assert!(get_weapon_slot_weapon(&mut host, cx, t, &[bogus]).is_err());
+            let args = [bogus, Value::Int(1)];
+            assert!(set_weapon_slot_ammo(&mut host, cx, t, &args).is_err());
+            assert!(set_weapon_slot_clip_ammo(&mut host, cx, t, &args).is_err());
+        });
+    }
+
+    /// `setWeaponSlotWeapon` is what precedes both setters in stock script
+    /// (`sd.gsc` 540-543): it gives the weapon and puts it in the named slot,
+    /// loaded, so the `switchToWeapon` on the line after it has something to
+    /// switch to. Without it that whole sequence dies on the first line.
+    #[test]
+    fn setweaponslotweapon_gives_the_weapon_and_fills_the_slot() {
+        let Some((mut vm, mut host)) = armed_fixture() else {
+            return;
+        };
+        let thompson = weapon_index("thompson_mp").unwrap();
+        let (clip_size, start_ammo) = {
+            let def = host.weapons.get(thompson).expect("the thompson");
+            (def.clip_size as i16, def.start_ammo as i16)
+        };
+        vm.with_cx(|cx| {
+            let e = loadout(&mut host, cx);
+            let t = Some(Target::Entity(e));
+            // Never given, so there is nothing to switch to yet.
+            let name = Value::String(cx.intern_exact("thompson_mp"));
+            assert!(switch_to_weapon(&mut host, cx, t, &[name]).is_err());
+
+            let primary = Value::String(cx.intern_exact("primary"));
+            set_weapon_slot_weapon(&mut host, cx, t, &[primary, name]).unwrap();
+            match get_weapon_slot_weapon(&mut host, cx, t, &[primary]).unwrap() {
+                Value::String(a) => assert_eq!(cx.resolve(a), "thompson_mp"),
+                v => panic!("{v:?}"),
+            }
+            assert!(host.client_weapons[0].holds(thompson));
+            switch_to_weapon(&mut host, cx, t, &[name]).unwrap();
+
+            // A bad slot name and a weapon no file backs are both errors.
+            let bogus = Value::String(cx.intern_exact("holster"));
+            assert!(set_weapon_slot_weapon(&mut host, cx, t, &[bogus, name]).is_err());
+            let nothing = Value::String(cx.intern_exact("not_a_weapon_mp"));
+            assert!(set_weapon_slot_weapon(&mut host, cx, t, &[primary, nothing]).is_err());
+        });
+        assert_eq!(
+            host.client_weapon_ops,
+            vec![
+                (
+                    0,
+                    WeaponOp::SetClip {
+                        clip_index: host.weapons.get(thompson).unwrap().clip_index,
+                        rounds: clip_size
+                    }
+                ),
+                (
+                    0,
+                    WeaponOp::SetAmmo {
+                        ammo_index: host.weapons.get(thompson).unwrap().ammo_index,
+                        rounds: start_ammo
+                    }
+                ),
+                (0, WeaponOp::SwitchTo(thompson as u8)),
+            ]
+        );
+    }
+
+    /// `takeAllWeapons` empties the host's copy, which is what the mirror
+    /// puts in `ps.weapons` and `ps.weaponslots` the next frame, and pushes
+    /// the op that empties the sim's ammo and clip arrays.
+    #[test]
+    fn takeallweapons_empties_the_host_copy_and_the_sims_arrays() {
+        let Some((mut vm, mut host)) = armed_fixture() else {
+            return;
+        };
+        vm.with_cx(|cx| {
+            let e = loadout(&mut host, cx);
+            take_all_weapons(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+        });
+        assert_eq!(
+            host.client_weapons[0],
+            crate::weapons::PlayerWeapons::default()
+        );
+        assert_eq!(host.client_weapon_ops, vec![(0, WeaponOp::TakeAll)]);
+
+        let mut sim = player_sim();
+        sim.ps.ammo[3] = 56;
+        sim.ps.ammoclip[10] = 15;
+        // The mirror `Server` runs before the ops, then the op itself.
+        sim.ps.weapons_held = host.client_weapons[0].held;
+        sim.ps.weapon_slots = host.client_weapons[0].slots;
+        crate::server::apply_weapon_op(&mut sim, host.client_weapon_ops[0].1, &host.weapons);
+        assert_eq!(sim.ps.weapons_held, 0);
+        assert_eq!(sim.ps.weapon_slots, [0; crate::weapons::NUM_SLOTS]);
+        assert_eq!(sim.ps.ammo, [0; vcod_common::pmove::weapon::NUM_AMMO]);
+        assert_eq!(sim.ps.ammoclip, [0; vcod_common::pmove::weapon::NUM_AMMO]);
+    }
+
+    /// `switchToWeapon` asks for the same change a usercmd's weapon byte
+    /// does, so the weapon goes away and comes back rather than teleporting
+    /// into the player's hands: the op raises `EV_PUTAWAY_WEAPON` and the
+    /// machine raises `EV_RAISE_WEAPON` when the drop ends, `ps.weapon`
+    /// reading the colt only from there on. The host's own copy is left
+    /// alone -- the mirror would otherwise force the target weapon in ahead
+    /// of the putaway.
+    #[test]
+    fn switchtoweapon_goes_through_the_putaway_and_the_raise() {
+        use vcod_common::pmove::weapon::{EV_PUTAWAY_WEAPON, EV_RAISE_WEAPON};
+        let Some((mut vm, mut host)) = armed_fixture() else {
+            return;
+        };
+        let (carbine, colt) = (
+            weapon_index("m1carbine_mp").unwrap(),
+            weapon_index("colt_mp").unwrap(),
+        );
+        vm.with_cx(|cx| {
+            let e = loadout(&mut host, cx);
+            let t = Some(Target::Entity(e));
+            let arg = Value::String(cx.intern_exact("colt_mp"));
+            switch_to_weapon(&mut host, cx, t, &[arg]).unwrap();
+            // Never given, so there is nothing to switch to.
+            let sten = Value::String(cx.intern_exact("sten_mp"));
+            assert!(switch_to_weapon(&mut host, cx, t, &[sten]).is_err());
+        });
+        assert_eq!(
+            host.client_weapon_ops,
+            vec![(0, WeaponOp::SwitchTo(colt as u8))]
+        );
+        assert_eq!(
+            host.client_weapons[0].current, carbine as u8,
+            "the machine picks the weapon up, not the builtin"
+        );
+
+        let world = vcod_common::collision::test_world(&[]);
+        let cmd = vcod_common::net::msg::NULL_USERCMD;
+        let mut sim = player_sim();
+        sim.ps.weapons_held = host.client_weapons[0].held;
+        sim.ps.weapon_slots = host.client_weapons[0].slots;
+        sim.ps.weapon = host.client_weapons[0].current;
+        crate::server::apply_weapon_op(&mut sim, host.client_weapon_ops[0].1, &host.weapons);
+        assert_eq!(sim.events[0], EV_PUTAWAY_WEAPON);
+        assert_eq!(sim.ps.weapon, carbine as u8, "still the carbine, mid-drop");
+
+        let mut raised = Vec::new();
+        for _ in 0..40 {
+            let events = sim.step(&cmd, 0.05, Some(&world), host.weapons.defs());
+            raised.extend(events.into_iter().map(|e| e.event));
+        }
+        assert!(raised.contains(&EV_RAISE_WEAPON), "raised: {raised:?}");
+        assert!(!raised.contains(&EV_PUTAWAY_WEAPON), "one putaway, not two");
+        assert_eq!(sim.ps.weapon, colt as u8);
     }
 }

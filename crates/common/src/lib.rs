@@ -11,6 +11,7 @@ pub mod net;
 pub mod pk3;
 pub mod pmove;
 pub mod props;
+pub mod rng;
 pub mod shader;
 pub mod skeleton;
 pub mod testing;

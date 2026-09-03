@@ -71,7 +71,7 @@ pub const TEAM_SPECTATOR: i32 = 3;
 
 pub struct ScriptRuntime {
     vm: Vm,
-    host: GameHost,
+    pub(crate) host: GameHost,
     entry: String,
     gametype_entry: String,
 }
@@ -81,7 +81,8 @@ impl ScriptRuntime {
     /// and runs the bootstrap. `map` and `gametype` are bare names, e.g.
     /// "mp_pavlov" and "dm". `configstrings` and `cvars` seed the host;
     /// `world`, once the caller has one, lets `bulletTrace` trace against the
-    /// real map geometry.
+    /// real map geometry, and `weapons` is what the weapon builtins read.
+    #[allow(clippy::too_many_arguments)]
     pub fn load(
         fs: Rc<Pk3Fs>,
         map: &str,
@@ -89,6 +90,7 @@ impl ScriptRuntime {
         configstrings: Vec<String>,
         cvars: crate::cvars::Cvars,
         world: Option<Rc<crate::world::World>>,
+        weapons: Rc<crate::weapons::WeaponTable>,
         now_ms: i32,
     ) -> anyhow::Result<ScriptRuntime> {
         Self::load_from(
@@ -99,6 +101,7 @@ impl ScriptRuntime {
             configstrings,
             cvars,
             world,
+            weapons,
             now_ms,
         )
     }
@@ -116,6 +119,7 @@ impl ScriptRuntime {
         configstrings: Vec<String>,
         cvars: crate::cvars::Cvars,
         world: Option<Rc<crate::world::World>>,
+        weapons: Rc<crate::weapons::WeaponTable>,
         now_ms: i32,
     ) -> anyhow::Result<ScriptRuntime> {
         let entry = format!("maps/mp/{map}");
@@ -135,6 +139,7 @@ impl ScriptRuntime {
         let mut host = GameHost::new(configstrings);
         host.cvars = cvars;
         host.world = world;
+        host.weapons = weapons;
         host.fs = Some(fs.clone());
         host.level_time_ms = now_ms;
 
@@ -215,13 +220,145 @@ impl ScriptRuntime {
         recv: Option<Target>,
         now_ms: i32,
     ) -> anyhow::Result<()> {
+        self.start_with_args(path, name, recv, vec![], now_ms)
+    }
+
+    /// `start` with the arguments the entry point takes.
+    fn start_with_args(
+        &mut self,
+        path: &str,
+        name: &str,
+        recv: Option<Target>,
+        args: Vec<Value>,
+        now_ms: i32,
+    ) -> anyhow::Result<()> {
         let f = self.vm.func_ref(path, name);
         if !self.vm.has_function(f) {
             anyhow::bail!("{path}.gsc defines no {name}()");
         }
-        self.vm
-            .start_thread(&mut self.host, now_ms, f, recv, vec![]);
+        // The thread runs here, before the caller continues, so the level
+        // clock has to be this frame's already: the damage callbacks start
+        // ahead of `run_frame`, and a `cloneplayer` or a think they schedule
+        // on the previous frame's clock lands a frame in the past.
+        self.host.level_time_ms = now_ms;
+        self.vm.start_thread(&mut self.host, now_ms, f, recv, args);
         Ok(())
+    }
+
+    /// `Scr_PlayerDamage` (combat doc, section 4.4) for every hit the
+    /// bullets made this frame: `CodeCallback_PlayerDamage` on the victim's
+    /// entity with the nine arguments, the attacker standing as its own
+    /// inflictor. A hit on a slot with no entity, or from one, is dropped:
+    /// there is nobody to call and nobody to name.
+    pub fn deliver_hits(&mut self, hits: Vec<crate::game::combat::Hit>, now_ms: i32) {
+        for hit in hits {
+            let (Some(victim), Some(attacker)) = (
+                self.client_entity(hit.victim),
+                self.client_entity(hit.attacker),
+            ) else {
+                continue;
+            };
+            let (mod_, weapon, hitloc) = self.vm.with_cx(|cx| {
+                (
+                    cx.intern_exact(hit.mod_),
+                    cx.intern_exact(&hit.weapon),
+                    cx.intern_exact(hit.hitloc),
+                )
+            });
+            let args = vec![
+                Value::Entity(attacker),
+                Value::Entity(attacker),
+                Value::Int(hit.damage),
+                Value::Int(hit.dflags),
+                Value::String(mod_),
+                Value::String(weapon),
+                Value::Vector(hit.point),
+                Value::Vector(hit.dir),
+                Value::String(hitloc),
+            ];
+            if let Err(e) = self.start_with_args(
+                CALLBACK_SETUP,
+                "CodeCallback_PlayerDamage",
+                Some(Target::Entity(victim)),
+                args,
+                now_ms,
+            ) {
+                log::error!("gsc: {e:#}");
+            }
+        }
+    }
+
+    /// `Cmd_Kill_f`: the `kill` client command, which is the `suicide` builtin
+    /// reached from outside the VM. Same three effects -- the vitals, the
+    /// `Damaged` op the sim reads, and `CodeCallback_PlayerKilled` with
+    /// `MOD_SUICIDE` -- but started as a thread rather than spawned, since
+    /// nothing is waiting on it. A dead or spectating client is ignored, the
+    /// way the builtin ignores a dead one. Returns whether the kill ran.
+    pub fn kill_client(&mut self, slot: usize, now_ms: i32) -> bool {
+        let Some(id) = self.client_entity(slot) else {
+            return false;
+        };
+        // A client that never spawned has no health to take.
+        if self
+            .host
+            .client_vitals
+            .get(slot)
+            .is_none_or(|v| v.max_health <= 0)
+        {
+            return false;
+        }
+        let host = &mut self.host;
+        let Some(args) = self
+            .vm
+            .with_cx(|cx| crate::game::builtins::combat::suicide_effects(host, cx, slot))
+        else {
+            return false;
+        };
+        if let Err(e) = self.start_with_args(
+            CALLBACK_SETUP,
+            "CodeCallback_PlayerKilled",
+            Some(Target::Entity(id)),
+            args,
+            now_ms,
+        ) {
+            log::error!("gsc: {e:#}");
+        }
+        true
+    }
+
+    /// What `finishPlayerDamage` did to the sims this frame, drained: each
+    /// op is applied once.
+    pub fn take_sim_ops(&mut self) -> Vec<(usize, crate::game::host::SimOp)> {
+        std::mem::take(&mut self.host.client_sim_ops)
+    }
+
+    /// One client's health as the script left it, read every frame the way
+    /// `client_weapons` is.
+    pub fn client_vitals(&self, slot: usize) -> crate::game::host::Vitals {
+        self.host
+            .client_vitals
+            .get(slot)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// The buttons of a client's last usercmd, for `useButtonPressed`.
+    pub fn set_client_buttons(&mut self, slot: usize, buttons: u8) {
+        if let Some(b) = self.host.client_buttons.get_mut(slot) {
+            *b = buttons;
+        }
+    }
+
+    /// A client's entity state as the tick's moves left it, for
+    /// `cloneplayer`. `None` for a slot with no sim.
+    pub fn set_client_entity_state(
+        &mut self,
+        slot: usize,
+        state: Option<vcod_common::net::msg::EntityState>,
+    ) {
+        if let Some(s) = self.host.client_entity_states.get_mut(slot) {
+            *s = state;
+        }
     }
 
     /// `Cmd_MenuResponse_f` (0x486d8): notify the client's entity with the
@@ -270,6 +407,25 @@ impl ScriptRuntime {
             .get(slot)
             .copied()
             .unwrap_or_default()
+    }
+
+    /// Writes back the weapon the sim's own machine switched to. The script
+    /// host's copy is what `Server` mirrors into `ps.weapon` every frame, so
+    /// a switch the usercmd's weapon byte asked for has to move it: without
+    /// this the mirror puts the old weapon back the next frame and
+    /// `PM_Weapon` starts the identical putaway again, once every
+    /// `dropTime`, for as long as the client keeps asking.
+    pub fn set_client_weapon(&mut self, slot: usize, weapon: u8) {
+        if let Some(w) = self.host.client_weapons.get_mut(slot) {
+            w.current = weapon;
+        }
+    }
+
+    /// The ammo and current-weapon edges the weapon builtins made this frame,
+    /// in call order. Drained rather than read, unlike `client_weapons`: they
+    /// are edges, and applying one twice would refill a spent clip.
+    pub fn take_weapon_ops(&mut self) -> Vec<(usize, crate::game::host::WeaponOp)> {
+        std::mem::take(&mut self.host.client_weapon_ops)
     }
 
     /// One client's viewmodel index, read every frame for the same reason
@@ -528,6 +684,33 @@ impl ScriptRuntime {
         &self.host.configstrings
     }
 
+    /// The events raised this frame, still queued.
+    pub fn temp_entities(&self) -> &[crate::game::temp_entity::TempEntity] {
+        &self.host.temp_entities
+    }
+
+    /// Queues one event for the next snapshot build.
+    pub fn push_temp_entity(&mut self, te: crate::game::temp_entity::TempEntity) {
+        self.host.temp_entities.push(te);
+    }
+
+    /// The same list, drained. A temp entity lives for one frame, so the
+    /// snapshot build takes them rather than reading them
+    /// (`crate::game::temp_entity`).
+    pub fn take_temp_entities(&mut self) -> Vec<crate::game::temp_entity::TempEntity> {
+        std::mem::take(&mut self.host.temp_entities)
+    }
+
+    /// The corpse queue, whose entities every client's snapshot carries
+    /// until their slots are reused (`crate::game::bodies`).
+    pub fn bodies(&self) -> &crate::game::bodies::BodyQueue {
+        &self.host.bodies
+    }
+
+    pub fn bodies_mut(&mut self) -> &mut crate::game::bodies::BodyQueue {
+        &mut self.host.bodies
+    }
+
     /// The cvar table as the script left it. `Server::tick` reads it back
     /// every frame for the same reason it re-reads the configstrings: a
     /// thread past a `wait` can still call `setCvar`.
@@ -581,16 +764,6 @@ impl ScriptRuntime {
         self.host.ents.run_thinks(now_ms);
         for e in self.vm.run_frame(&mut self.host, now_ms) {
             log::warn!("script error: {e:?}");
-        }
-        // Stage 6 drains `damage` into the damage callback; until then, drop
-        // it here each frame so a long-running map's radiusDamage calls
-        // don't grow the queue without bound.
-        if !self.host.damage.is_empty() {
-            log::debug!(
-                "gsc: dropping {} queued damage event(s), the damage callback is not wired yet",
-                self.host.damage.len()
-            );
-            self.host.damage.clear();
         }
         // Stage 6 ends the map on this; until then, log once and clear it
         // so a script that called exitLevel does not spam every frame after.
@@ -660,6 +833,7 @@ mod tests {
             vec![String::new(); 2048],
             crate::cvars::Cvars::new(),
             None,
+            Rc::new(crate::weapons::WeaponTable::empty()),
             0,
         );
         assert!(rt.is_ok(), "{:?}", rt.err());
@@ -687,6 +861,7 @@ mod tests {
             vec![String::new(); 2048],
             crate::cvars::Cvars::new(),
             None,
+            Rc::new(crate::weapons::WeaponTable::empty()),
             0,
         )
         .expect("load mp_pavlov on dm");
@@ -728,6 +903,7 @@ mod tests {
             vec![String::new(); 2048],
             crate::cvars::Cvars::new(),
             None,
+            Rc::new(crate::weapons::WeaponTable::empty()),
             0,
         );
         let Err(err) = err else {

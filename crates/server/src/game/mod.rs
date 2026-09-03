@@ -1,13 +1,15 @@
 //! The game module: the script runtime and the CoD-specific host the VM
 //! calls into. `server.rs` keeps the engine side.
 
+pub mod bodies;
 pub mod builtins;
-pub mod damage;
+pub mod combat;
 pub mod entity;
 pub mod fields;
 pub mod host;
 pub mod script;
 pub mod spawn;
+pub mod temp_entity;
 pub mod wire;
 
 #[cfg(test)]

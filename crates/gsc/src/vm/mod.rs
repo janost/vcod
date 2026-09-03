@@ -79,14 +79,19 @@ impl std::fmt::Display for InstallError {
 /// fields of `Vm`, which is what makes a builtin able to allocate: a single
 /// `&mut Vm` cannot be handed out while `run_frame` holds one.
 ///
-/// `notify` queues rather than resolving: a builtin can no more reenter the
-/// VM than `Op::Notify` can (see `step_thread`).
+/// `notify` and `spawn` both queue rather than acting: no script runs under
+/// a builtin, so a builtin can no more reenter the VM than `Op::Notify` can
+/// (see `step_thread`). The two queues differ in when they are applied: a
+/// notify waits for the whole thread step to finish (`step_thread`), while a
+/// spawn runs the moment the builtin returns, before the calling thread's
+/// next instruction.
 pub struct Cx<'a> {
     interner: &'a mut Interner,
     heap: &'a mut Heap,
     level: StructId,
     game: ArrayId,
     notifies: &'a mut Vec<(Target, Atom, Vec<Value>)>,
+    spawns: &'a mut Vec<(FuncRef, Option<Target>, Vec<Value>)>,
 }
 
 impl Cx<'_> {
@@ -163,6 +168,31 @@ impl Cx<'_> {
 
     pub fn notify(&mut self, target: Target, event: Atom, args: Vec<Value>) {
         self.notifies.push((target, event, args));
+    }
+
+    /// Queues a thread the interpreter starts, and runs to its first
+    /// suspend, as soon as this builtin returns and before the calling
+    /// thread's next instruction: retail's `Scr_ExecEntThread` from inside a
+    /// builtin, which is how `finishPlayerDamage`'s killing hit gets
+    /// `CodeCallback_PlayerKilled` to have written `self.sessionstate`
+    /// before the line after the builtin reads it. Queued threads start in
+    /// call order. A `func` no installed function answers is an abort
+    /// recorded against the calling thread, which itself carries on.
+    ///
+    /// Only a `Cx` from a builtin honours this. `get_field`/`set_field` and
+    /// `Vm::with_cx` have no point at which running a thread would be
+    /// defined, so a spawn queued through one of those is dropped (and
+    /// `debug_assert`ed against).
+    pub fn spawn(&mut self, func: FuncRef, recv: Option<Target>, args: Vec<Value>) {
+        self.spawns.push((func, recv, args));
+    }
+
+    /// `Vm::func_ref`, for a builtin naming a script function to `spawn`.
+    pub fn func_ref(&mut self, path: &str, name: &str) -> FuncRef {
+        FuncRef {
+            file: self.interner.intern_folded(path),
+            name: self.interner.intern_folded(name),
+        }
     }
 }
 
@@ -455,19 +485,26 @@ impl Vm {
 
     /// Runs `f` with a `Cx` over this `Vm`'s interner and heap, for a host that
     /// needs them before any thread exists (building an object table at map
-    /// load). A `Cx::notify` here has no scheduler step to drain it, so the
-    /// queue is discarded on return; load-time code must not notify.
+    /// load). A `Cx::notify` here has no scheduler step to drain it, and a
+    /// `Cx::spawn` has no `Host` to run the new thread against, so both
+    /// queues are discarded on return; load-time code must do neither.
     pub fn with_cx<R>(&mut self, f: impl FnOnce(&mut Cx) -> R) -> R {
         let mut notifies = Vec::new();
+        let mut spawns = Vec::new();
         let mut cx = Cx {
             interner: &mut self.interner,
             heap: &mut self.heap,
             level: self.level,
             game: self.game,
             notifies: &mut notifies,
+            spawns: &mut spawns,
         };
         let out = f(&mut cx);
         debug_assert!(notifies.is_empty(), "load-time code must not notify");
+        debug_assert!(
+            spawns.is_empty(),
+            "Cx::spawn is only honoured from a builtin"
+        );
         out
     }
 }

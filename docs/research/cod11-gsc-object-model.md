@@ -1236,6 +1236,33 @@ at 0x45339 and 0x45345 and for the netfield offsets in
 `crates/common/src/net/fields_v1.rs`. That the stores are skipped for a
 weapon the player does not hold is INFERRED, the branch at 0x4532f.
 
+### The slot and switch methods: table positions only
+
+`switchToWeapon` is player method 5 (`PlayerCmd_switchToWeapon`) and
+`takeAllWeapons` method 2 (`PlayerCmd_takeAllWeapons`); the six slot
+accessors are methods 32 to 37 in this order: `getWeaponSlotWeapon` 0x43cf4,
+`setWeaponSlotWeapon` 0x43df4, `getWeaponSlotAmmo` 0x43ff4,
+`setWeaponSlotAmmo` 0x44130, `getWeaponSlotClipAmmo` 0x442c8,
+`setWeaponSlotClipAmmo` 0x443e4. VERIFIED, read out of the player method
+table `dump_builtins.py` walks; the two named ones carry symbols, the six
+resolve to addresses.
+
+What each does inside was not read. vcod's readings are the design's: a slot
+name resolved through the `weaponSlot` table above, `setWeaponSlotWeapon`
+giving the weapon and placing it in the slot the caller names with a full clip
+and its `startAmmo`, ammo and clip addressed by the slot's weapon's own ammo
+and clip index, `switchToWeapon` going through the putaway rather than
+swapping the weapon in place. The last of them follows the weapon machine of
+`docs/research/cod11-combat.md` section 1.8 rather than anything read at
+0x452a4's neighbours. Of the six, `setWeaponSlotWeapon`,
+`setWeaponSlotAmmo`, `setWeaponSlotClipAmmo` and `getWeaponSlotWeapon` are
+implemented; the two remaining getters are not.
+
+Whether retail's `setWeaponSlotAmmo` clamps its argument to the weapon's
+`maxAmmo` is UNVERIFIED: 0x44130 was not read. It matters because stock
+script passes 999 to every loadout weapon (`sd.gsc` 541-542), which vcod
+stores verbatim.
+
 ### `setViewmodel` reaches `ps.viewmodelIndex`
 
 `setViewmodel` (player method 17, 0x4512c) resolves its argument through

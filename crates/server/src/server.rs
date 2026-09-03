@@ -9,6 +9,7 @@ use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
 use crate::game::host::ClientEvent;
 use crate::game::script;
+use crate::game::temp_entity;
 use crate::spectate::ClientSim;
 use crate::world::{TestEntities, World};
 use std::collections::{BTreeMap, HashMap};
@@ -155,6 +156,72 @@ enum ClientOp {
     Move(Vec<UserCmd>),
 }
 
+/// One shot a client's weapon step took this tick: the queue between the
+/// move that pulled the trigger and the trace `tick` answers it with.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Shot {
+    pub slot: usize,
+    /// `ps.weapon` at the shot, which the delayed trace must use rather than
+    /// whatever the client is holding by the time it runs.
+    pub weapon: u8,
+    /// The trigger cmd's sight bit, which picks `adsSpread` over the hip
+    /// spread.
+    pub ads: bool,
+}
+
+/// One `WeaponOp` against a client's playerstate. The op is an edge the
+/// script made, so it is applied once, where `client_weapons` is mirrored
+/// every frame.
+pub(crate) fn apply_weapon_op(
+    sim: &mut crate::spectate::ClientSim,
+    op: crate::game::host::WeaponOp,
+    weapons: &crate::weapons::WeaponTable,
+) {
+    use crate::game::host::WeaponOp;
+    let ps = &mut sim.ps;
+    match op {
+        WeaponOp::SetClip { clip_index, rounds } => {
+            if let Some(slot) = ps.ammoclip.get_mut(clip_index) {
+                *slot = rounds;
+            }
+        }
+        WeaponOp::SetAmmo { ammo_index, rounds } => {
+            if let Some(slot) = ps.ammo.get_mut(ammo_index) {
+                *slot = rounds;
+            }
+        }
+        WeaponOp::TakeAll => {
+            ps.ammo = [0; vcod_common::pmove::weapon::NUM_AMMO];
+            ps.ammoclip = [0; vcod_common::pmove::weapon::NUM_AMMO];
+        }
+        WeaponOp::SetCurrent(index) => {
+            ps.weapon = index;
+            ps.weaponstate = vcod_common::pmove::weapon::WEAPON_READY;
+            ps.weapon_time_ms = 0;
+        }
+        // Through the putaway, so the drop and the raise both run: the
+        // machine picks the target up when the drop ends.
+        WeaponOp::SwitchTo(index) => {
+            let Some(def) = weapons.get(ps.weapon as usize) else {
+                return;
+            };
+            let mut events = Vec::new();
+            vcod_common::pmove::weapon::begin_switch(ps, def, index, &mut events);
+            for e in events {
+                sim.add_event(e.event, e.parm);
+            }
+        }
+    }
+}
+
+/// What one client's usercmd replay did this tick, for the trace line.
+#[derive(Default, Clone, Copy)]
+struct MoveSummary {
+    processed: usize,
+    first_cmd_st: Option<i32>,
+    last_cmd_st: Option<i32>,
+}
+
 pub struct Server {
     cfg: ServerConfig,
     huff: Huffman,
@@ -181,6 +248,10 @@ pub struct Server {
     /// Scripted entities driving the packet-entity path; `None` when
     /// `cfg.test_entities` is 0.
     test_entities: Option<TestEntities>,
+    /// Where in the temp-entity block the next frame's events start. It
+    /// rolls rather than resetting, so an event repeated in adjacent frames
+    /// never lands on one number twice (`crate::game::temp_entity`).
+    temp_cursor: u32,
     /// Wall clock of the previous tick, for the trace's send-interval column.
     last_tick: Option<Instant>,
     /// The map script; `None` until `load_scripts` succeeds. `tick` steps it
@@ -189,10 +260,22 @@ pub struct Server {
     /// The player animtree, its wire index and the animscript. `None` on a
     /// host with no paks, where every client keeps index 0.
     anims: Option<vcod_common::animtree::PlayerAnims>,
-    /// `weaponClass` per weapon index, resolved once at load: the animscript
-    /// tests it every frame and the frame loop must not read a pk3. Indexed
-    /// the way the wire is, so slot 0 is the empty "no weapon".
-    weapon_classes: Vec<String>,
+    /// Every weapon file, parsed once at load: the animscript tests
+    /// `weaponClass` every frame and the frame loop must not read a pk3.
+    /// `Rc` so a snapshot/move closure can hold it without borrowing `self`.
+    weapon_table: Rc<crate::weapons::WeaponTable>,
+    /// Shots this tick's moves took, in the order they were fired. Filled by
+    /// `replay_moves`, drained by `tick` into traces before the script runs.
+    pending_shots: Vec<Shot>,
+    /// The hit-location damage multipliers out of the paks
+    /// (`crate::game::combat::HitLocTable`); the default until `load_scripts`.
+    hitlocs: crate::game::combat::HitLocTable,
+    /// Weapons the moves themselves switched to, by slot: only a change the
+    /// machine made, so a playerstate reset from outside a move is not one.
+    /// `tick` writes each back onto the script host before the mirror reads
+    /// it, which is what keeps a switch from being undone the frame after it
+    /// lands.
+    weapon_changes: Vec<(usize, u8)>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -293,10 +376,14 @@ impl Server {
             sv_time_ms: 0,
             baselines: HashMap::new(),
             test_entities: None,
+            temp_cursor: 0,
             last_tick: None,
             script: None,
             anims: None,
-            weapon_classes: Vec::new(),
+            weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
+            pending_shots: Vec::new(),
+            hitlocs: crate::game::combat::HitLocTable::default(),
+            weapon_changes: Vec::new(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -312,10 +399,7 @@ impl Server {
     /// `(rand() << 16) ^ rand()` wraps into the sign bit and challenges come
     /// out signed like retail's.
     fn rand(&mut self) -> i32 {
-        self.rng ^= self.rng >> 12;
-        self.rng ^= self.rng << 25;
-        self.rng ^= self.rng >> 27;
-        (self.rng.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 33) as i32 & 0x7fff_ffff
+        (vcod_common::rng::xorshift(&mut self.rng) >> 33) as i32 & 0x7fff_ffff
     }
 
     pub fn configstring(&self, i: usize) -> &str {
@@ -739,17 +823,19 @@ impl Server {
                 }
             }
             // DeathmatchScoreboardMessage (.so 0x459c0); grammar in
-            // docs/research/cod11-hud-protocol.md section 3. Nothing is
-            // measured, so team totals use the "no score" sentinel and rows
-            // zero out.
+            // docs/research/cod11-hud-protocol.md section 3.
             "score" => {
-                let mut text = format!("b {} -9999 -9999", self.client_count());
-                for (cs_slot, c) in self.clients.iter().enumerate() {
-                    if c.is_some() {
-                        text.push_str(&format!(" {cs_slot} 0 0 0 0"));
-                    }
-                }
+                let text = self.scoreboard();
                 self.send_server_command(slot, &text);
+            }
+            // `Cmd_Kill_f`: the same death `self suicide()` gives, asked for
+            // by the client. The retail hit capture's death half is this
+            // command (combat doc, section 8).
+            "kill" => {
+                let now = self.sv_time_ms;
+                if let Some(rt) = self.script.as_mut() {
+                    rt.kill_client(slot, now);
+                }
             }
             // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
             // opened. Unlike the entry notify this fires straight through:
@@ -866,7 +952,114 @@ impl Server {
             return;
         };
         if let Some(sim) = c.sim.as_mut() {
+            // The spawn builtin's reset is followed by the script's ammo
+            // ops in the same frame; nothing follows this one, so the ammo
+            // rides across.
+            let (ammo, clip) = (sim.ps.ammo, sim.ps.ammoclip);
             sim.become_player(origin, yaw_deg, [0; 3]);
+            sim.ps.ammo = ammo;
+            sim.ps.ammoclip = clip;
+        }
+    }
+
+    /// `DeathmatchScoreboardMessage` (`.so` 0x459c0): `b <numRows> <axis>
+    /// <allies>{ <client> <score> <ping> <time> <icon>}*`, one row per online
+    /// client (`docs/research/cod11-hud-protocol.md` section 3).
+    ///
+    /// The score and the status icon come from the script's own client
+    /// fields, which is where every gametype writes them. `ping` is 0: the
+    /// netchan keeps no round-trip estimate, and 0 renders as a number where
+    /// retail's `-1` renders as "-" for a client still connecting. `time` is
+    /// minutes since the client connected -- retail sends `pers.enterTime`
+    /// raw and its unit is unmeasured (section 3, UNVERIFIED), so this is the
+    /// Q3 reading of the same slot rather than a claim about retail's.
+    fn scoreboard(&mut self) -> String {
+        let online: Vec<(usize, i64)> = self
+            .clients
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, c)| {
+                let c = c.as_ref()?;
+                let minutes = c
+                    .last_packet
+                    .saturating_duration_since(c.last_connect)
+                    .as_secs()
+                    / 60;
+                Some((slot, minutes as i64))
+            })
+            .collect();
+        // Tokens 2 and 3 are `level.teamScores[1]` and `[2]`. Both retail
+        // captures read 0 in each: the array starts zeroed and the `-9999`
+        // sentinel is something a gametype writes for itself (hud protocol
+        // doc, section 3). Hardcoded until a `setTeamScore` builtin gives
+        // them somewhere to live.
+        let mut text = format!("b {} 0 0", online.len());
+        for (slot, minutes) in online {
+            let score = self
+                .client_field(slot, "score")
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0);
+            let icon = self.status_icon_index(slot);
+            text.push_str(&format!(" {slot} {score} 0 {minutes} {icon}"));
+        }
+        text
+    }
+
+    /// A client's `.statusicon` as the 1-based index into `CsRange::StatusIcon`
+    /// the scoreboard row carries, or 0 when the field is empty or names an
+    /// icon nothing precached. The client resolves `20 + n` for an `n` in
+    /// `1..8` (hud protocol doc, section 3).
+    fn status_icon_index(&mut self, slot: usize) -> usize {
+        let Some(name) = self
+            .client_field(slot, "statusicon")
+            .filter(|n| !n.is_empty())
+        else {
+            return 0;
+        };
+        let (first, last) = crate::configstrings::CsRange::StatusIcon.bounds();
+        self.configstrings[first..=last]
+            .iter()
+            .position(|cs| *cs == name)
+            .map_or(0, |i| i + 1)
+    }
+
+    /// Whether a shot fired from eye height at `origin` along `yaw_deg`
+    /// reaches `dist` without hitting anything. Test-facing, like
+    /// `place_client`: a gate that puts one client in front of another has to
+    /// say the sightline between them is real, or a spawn point that moved
+    /// into a wall reads as "the damage path is broken". A server with no
+    /// collision world answers yes.
+    pub fn test_clear_line(&self, origin: [f32; 3], yaw_deg: f32, dist: f32) -> bool {
+        let Some(world) = self.world.as_ref() else {
+            return true;
+        };
+        let stand = vcod_common::pmove::Stance::Stand.view_height();
+        let eye = glam::Vec3::from(origin) + glam::Vec3::Z * stand;
+        let (s, c) = yaw_deg.to_radians().sin_cos();
+        let end = eye + glam::Vec3::new(c, s, 0.0) * dist;
+        world.collision.shot_trace(eye, end).fraction >= 1.0
+    }
+
+    /// Clones a client into the body queue and returns the corpse's entity
+    /// number. Test-facing, like `place_client`: `cloneplayer` is the script
+    /// path that will call this, and it does not exist yet.
+    pub fn test_push_body(&mut self, slot: usize) -> Option<u32> {
+        let c = self.clients.get(slot)?.as_ref()?;
+        let state = c
+            .sim
+            .as_ref()?
+            .to_entity(self.proto, slot, c.last_processed_st);
+        let (now, proto) = (self.sv_time_ms, self.proto);
+        self.script
+            .as_mut()
+            .map(|rt| rt.bodies_mut().push(state, None, now, proto))
+    }
+
+    /// Raises one event for the next snapshot build. Test-facing, like
+    /// `test_push_body`: the script builtins are what raise these in earnest.
+    pub fn test_push_temp_entity(&mut self, te: temp_entity::TempEntity) {
+        if let Some(rt) = self.script.as_mut() {
+            rt.push_temp_entity(te);
         }
     }
 
@@ -1020,13 +1213,8 @@ impl Server {
                 None
             }
         };
-        self.weapon_classes = std::iter::once(String::new())
-            .chain(
-                crate::configstrings::WEAPON_LIST
-                    .split(' ')
-                    .map(|w| crate::weapons::weapon_class(Some(&fs), w).unwrap_or_default()),
-            )
-            .collect();
+        self.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
+        self.hitlocs = crate::game::combat::HitLocTable::load(&fs);
         let rt = crate::game::script::ScriptRuntime::load(
             fs,
             &self.cfg.map,
@@ -1034,6 +1222,7 @@ impl Server {
             self.configstrings.clone(),
             cvars,
             self.world.clone(),
+            self.weapon_table.clone(),
             self.sv_time_ms,
         )?;
         let mut configstrings = rt.configstrings().to_vec();
@@ -1104,9 +1293,65 @@ impl Server {
 
     pub fn tick(&mut self, now: Instant) {
         self.check_timeouts(now);
-        self.send_snapshots(now);
+        self.sv_time_ms = self.sv_time_ms.wrapping_add(FRAME_MS);
+        // Wall gap between ticks: sv_time always advances exactly FRAME_MS, so
+        // a gap far off it means the frames the client interpolates between
+        // are not arriving at the rate their timestamps claim.
+        let wall_ms = self
+            .last_tick
+            .map(|t| now.saturating_duration_since(t).as_secs_f32() * 1000.0);
+        self.last_tick = Some(now);
+
+        // Every client's pending moves first, so the world is at this frame
+        // before script or anyone's snapshot reads it.
+        let moved = self.replay_moves();
+        let weapons = self.weapon_table.clone();
+
+        // Then the frame's shots, against the world the moves left: each is
+        // a trace, an impact for the snapshot and, on a player, a hit the
+        // damage callback is handed before the script frame runs
+        // (`crate::game::combat`).
+        let mut hits = Vec::new();
+        let mut impacts = Vec::new();
+        {
+            let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
+                .clients
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
+                .collect();
+            let collision = self.world.as_ref().map(|w| &w.collision);
+            for shot in self.pending_shots.drain(..) {
+                let Some(def) = weapons.get(shot.weapon as usize) else {
+                    continue;
+                };
+                let name = crate::items::item_name(shot.weapon as usize).unwrap_or_default();
+                let r = crate::game::combat::bullet_fire(
+                    shot.slot,
+                    def,
+                    name,
+                    shot.ads,
+                    &sims,
+                    collision,
+                    &self.hitlocs,
+                    &mut self.rng,
+                );
+                impacts.extend(r.impact);
+                hits.extend(r.hit);
+            }
+        }
+
         let mut client_commands = Vec::new();
         if let Some(rt) = self.script.as_mut() {
+            for (slot, c) in self.clients.iter().enumerate() {
+                if let Some(c) = c {
+                    rt.set_client_buttons(slot, c.last_cmd.buttons);
+                }
+            }
+            for te in impacts {
+                rt.push_temp_entity(te);
+            }
+            rt.deliver_hits(hits, self.sv_time_ms);
             rt.run_frame(self.sv_time_ms);
             client_commands = rt.take_client_commands();
             // The script owns the table while it runs and allocates into it
@@ -1120,19 +1365,10 @@ impl Server {
             if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
                 log::warn!("rebuilding the cvar mirror: {e:?}");
             }
-            // The weapons come across the same way the configstrings do:
-            // re-read every frame, because any thread can have changed them.
-            for (slot, c) in self.clients.iter_mut().enumerate() {
-                if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-                    sim.weapons = rt.client_weapons(slot);
-                    sim.viewmodel_index = rt.client_viewmodel(slot);
-                    // And back the other way: the sim owns where a player is,
-                    // so the script's copy is written from it every frame.
-                    rt.set_client_origin(slot, sim.origin());
-                }
-            }
             // `self spawn(origin, angles)` moves the sim, which no builtin
-            // can reach; this is where the queue lands.
+            // can reach; this is where the queue lands. Before the weapons,
+            // because a spawn resets the whole playerstate and would wipe the
+            // clip the same frame's `giveWeapon` just handed out.
             for s in rt.take_client_spawns() {
                 let Some(c) = self.clients.get_mut(s.slot).and_then(Option::as_mut) else {
                     continue;
@@ -1151,29 +1387,195 @@ impl Server {
                     sim.become_spectator(s.origin, s.yaw_deg, cmd_angles);
                 }
             }
+            // The machine's own switches first: `pickup` writes `ps.weapon`
+            // when a drop ends, and the mirror below would put the old
+            // weapon back and start the identical putaway again.
+            for (slot, weapon) in self.weapon_changes.drain(..) {
+                rt.set_client_weapon(slot, weapon);
+            }
+            // What the client holds comes across the same way the
+            // configstrings do: re-read every frame, because any thread can
+            // have changed them. The held bits have to be among them --
+            // `PM_Weapon` disarms a player who no longer owns `ps.weapon`
+            // (combat doc, section 1.8) -- and `ps.weapon` with them, so a
+            // sim reset outside a move comes back armed. The write-back
+            // above is what makes that safe: the host's copy already carries
+            // whatever the machine switched to this tick.
+            for (slot, c) in self.clients.iter_mut().enumerate() {
+                if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
+                    let w = rt.client_weapons(slot);
+                    sim.ps.weapons_held = w.held;
+                    sim.ps.weapon_slots = w.slots;
+                    sim.ps.weapon = w.current;
+                    sim.viewmodel_index = rt.client_viewmodel(slot);
+                    // And back the other way: the sim owns where a player is,
+                    // so the script's copy is written from it every frame.
+                    rt.set_client_origin(slot, sim.origin());
+                }
+            }
+            // The ammo and the current weapon, which are edges rather than
+            // state: applying a full clip every frame would make the weapon
+            // bottomless.
+            for (slot, op) in rt.take_weapon_ops() {
+                let Some(sim) = self
+                    .clients
+                    .get_mut(slot)
+                    .and_then(Option::as_mut)
+                    .and_then(|c| c.sim.as_mut())
+                else {
+                    continue;
+                };
+                apply_weapon_op(sim, op, &weapons);
+            }
+            // What `finishPlayerDamage` did to each sim, applied once, then
+            // the health mirror and the frame's damage feedback, in that
+            // order: `P_DamageFeedback` reads the health the hit left.
+            let anims = self.anims.as_ref();
+            for (slot, op) in rt.take_sim_ops() {
+                let Some(sim) = self
+                    .clients
+                    .get_mut(slot)
+                    .and_then(Option::as_mut)
+                    .and_then(|c| c.sim.as_mut())
+                else {
+                    continue;
+                };
+                let index = sim.ps.weapon as usize;
+                let inputs = anims.map(|anims| crate::spectate::AnimInputs {
+                    anims,
+                    weapon: crate::items::item_name(index).unwrap_or_default(),
+                    weapon_class: weapons.class(index),
+                });
+                sim.take_damage(&op, inputs.as_ref(), &mut self.rng, self.sv_time_ms);
+            }
+            for (slot, c) in self.clients.iter_mut().enumerate() {
+                if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
+                    let v = rt.client_vitals(slot);
+                    sim.health = v.health;
+                    sim.max_health = v.max_health;
+                    sim.dead = v.dead;
+                    sim.end_frame(self.sv_time_ms);
+                }
+            }
         }
         // Outside the borrow: `setClientCvar` and `openMenu` queue rather
         // than send, and this is where the queue reaches the netchan.
         for (slot, cmd) in client_commands {
             self.send_server_command(slot, &cmd);
         }
+
+        // Every entity built once, then culled and written per client.
+        self.send_snapshots(&moved, wall_ms);
+        // The weapon changes are already drained when a script is loaded,
+        // and a server without one has nothing to write them to.
+        self.weapon_changes.clear();
+    }
+
+    /// SV_UserMove for every client: one pmove step per queued usercmd, dt off
+    /// the cmd clocks, matching the client's own prediction, then the anims the
+    /// resulting state implies. Returns what each slot replayed, for the trace
+    /// line `send_snapshots` writes. The shots the weapon step took land in
+    /// `pending_shots`, which the bullet path drains.
+    fn replay_moves(&mut self) -> Vec<MoveSummary> {
+        use vcod_common::pmove::weapon::{EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
+        let collision = self.world.as_ref().map(|w| &w.collision);
+        let weapons = self.weapon_table.clone();
+        let mut moved = vec![MoveSummary::default(); self.clients.len()];
+        for (slot, m) in moved.iter_mut().enumerate() {
+            let Some(c) = self.clients[slot].as_mut() else {
+                continue;
+            };
+            let Some(sim) = c.sim.as_mut() else {
+                continue;
+            };
+            // What the client held going in, so a switch the machine made is
+            // told apart from a playerstate reset between ticks.
+            let held = sim.ps.weapon;
+            // Stale cmds (dt <= 0) are skipped whole; a flood past the per-tick
+            // cap resyncs to the newest cmd and keeps only the tail.
+            let mut last_cmd = None::<UserCmd>;
+            // Every event the tick's moves raised, for the animation events:
+            // a tick that ran several moves still raises each one.
+            let mut events = Vec::new();
+            while !c.pending.is_empty() {
+                let cmd = c.pending[0];
+                if m.processed >= MAX_CMDS_PER_TICK {
+                    // The resync keeps the newest two cmds and sets the base
+                    // as if only the last replays, so the penultimate may
+                    // double-count one frame; harmless for flight.
+                    c.last_processed_st =
+                        c.pending.last().unwrap().server_time.wrapping_sub(FRAME_MS);
+                    c.pending.drain(..c.pending.len().saturating_sub(2));
+                    break;
+                }
+                c.pending.remove(0);
+                let dt_ms = cmd.server_time.wrapping_sub(c.last_processed_st);
+                if dt_ms <= 0 {
+                    continue;
+                }
+                let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
+                let raised = sim.step(&cmd, dt, collision, weapons.defs());
+                for e in &raised {
+                    if e.event == EV_FIRE_WEAPON || e.event == EV_FIRE_WEAPON_LASTSHOT {
+                        self.pending_shots.push(Shot {
+                            slot,
+                            weapon: sim.ps.weapon,
+                            ads: cmd.buttons & msg::BUTTON_ADS != 0,
+                        });
+                    }
+                }
+                events.extend(raised);
+                last_cmd = Some(cmd);
+                c.last_processed_st = cmd.server_time;
+                m.first_cmd_st.get_or_insert(cmd.server_time);
+                m.last_cmd_st = Some(cmd.server_time);
+                m.processed += 1;
+            }
+            if sim.ps.weapon != held {
+                self.weapon_changes.push((slot, sim.ps.weapon));
+            }
+            // The animation the client should be playing, from the state the
+            // moves just produced and the input that produced it.
+            if let (Some(anims), Some(cmd)) = (self.anims.as_ref(), last_cmd) {
+                let index = sim.ps.weapon as usize;
+                let weapon = crate::items::item_name(index).unwrap_or_default();
+                let class = self.weapon_table.class(index);
+                sim.update_anims(
+                    &crate::spectate::AnimInputs {
+                        anims,
+                        weapon,
+                        weapon_class: class,
+                    },
+                    &cmd,
+                    self.sv_time_ms,
+                    &events,
+                );
+            }
+        }
+        // The state each player ended the tick in, mirrored onto the host for
+        // `cloneplayer`: a builtin cannot reach a sim, and the corpse is the
+        // dying player's entity state (`crate::game::bodies`). Written here,
+        // before the script frame, because that is the frame the script clones
+        // in; `send_snapshots` re-reads a newborn body afterwards so the death
+        // animation the script raised after the clone still lands on it.
+        let proto = self.proto;
+        if let Some(rt) = self.script.as_mut() {
+            for (slot, c) in self.clients.iter().enumerate() {
+                let state = c.as_ref().and_then(|c| {
+                    Some(c.sim.as_ref()?.to_entity(proto, slot, c.last_processed_st))
+                });
+                rt.set_client_entity_state(slot, state);
+            }
+        }
+        moved
     }
 
     /// One snapshot per active client per tick, the main loop pacing calls at
     /// sv_fps: a delta against the frame the client last acked when one is
-    /// still in its ring, uncompressed otherwise. The sim replays every
-    /// queued usercmd first, dt off the cmd clocks, matching the client's own
-    /// prediction.
-    fn send_snapshots(&mut self, now: Instant) {
-        self.sv_time_ms = self.sv_time_ms.wrapping_add(FRAME_MS);
-        // Wall gap between ticks: sv_time always advances exactly FRAME_MS, so
-        // a gap far off it means the frames the client interpolates between
-        // are not arriving at the rate their timestamps claim.
-        let wall_ms = self
-            .last_tick
-            .map(|t| now.saturating_duration_since(t).as_secs_f32() * 1000.0);
-        self.last_tick = Some(now);
-
+    /// still in its ring, uncompressed otherwise. Every entity state is built
+    /// once from the world the moves and the script frame left, then culled
+    /// and written per client.
+    fn send_snapshots(&mut self, moved: &[MoveSummary], wall_ms: Option<f32>) {
         // One clientState entry per online client, rebuilt each frame; slot ==
         // index. `snapshot::write` deltas this against each client's own
         // base roster, or sends it full when that client has none.
@@ -1232,7 +1634,6 @@ impl Server {
         if let Some(te) = self.test_entities.as_ref() {
             entities.extend(te.at(self.proto, self.sv_time_ms));
         }
-        let collision = self.world.as_ref().map(|w| &w.collision);
         let collision_vis = self.world.as_ref().map(|w| &w.vis);
 
         // One entity per client with a sim, so a client can be told what the
@@ -1258,63 +1659,47 @@ impl Server {
             })
             .collect();
 
+        // A body born this frame is re-read from its source client's sim
+        // once, here: the script clones the player before it raises the
+        // death animation, so the state the clone copied is a frame stale
+        // (`crate::game::bodies`). Then the queue's corpses join the map's
+        // entities; they are culled per client like anything else.
+        let (now, proto) = (self.sv_time_ms, self.proto);
+        if let Some(rt) = self.script.as_mut() {
+            rt.bodies_mut().refresh_newborn(
+                now,
+                |slot| client_entities.get(&(slot as u32)).cloned(),
+                proto,
+            );
+            entities.extend(rt.bodies().entities());
+        }
+
+        // Every event the script raised this frame, as one-frame entities
+        // out of the reserved block. Draining them here is what frees them,
+        // the way retail frees a `G_TempEntity` the frame after it is sent.
+        let temps = self
+            .script
+            .as_mut()
+            .map_or_else(Vec::new, |rt| rt.take_temp_entities());
+        let cursor = self.temp_cursor;
+        let temp_states: Vec<(u32, msg::EntityState)> = temps
+            .iter()
+            .take(temp_entity::TEMP_COUNT as usize)
+            .enumerate()
+            .map(|(i, te)| {
+                let n = temp_entity::number_at(cursor, i);
+                (n, temp_entity::build(te, n, self.proto))
+            })
+            .collect();
+        self.temp_cursor = temp_entity::advance(cursor, temp_states.len());
+
         for slot in 0..self.clients.len() {
             let Some(c) = self.clients[slot].as_mut() else {
                 continue;
             };
-            let Some(sim) = c.sim.as_mut() else {
+            let Some(sim) = c.sim.as_ref() else {
                 continue;
             };
-            // SV_UserMove: one pmove step per usercmd, dt off the cmd clocks.
-            // Stale cmds (dt <= 0) are skipped whole; a flood past the per-tick
-            // cap resyncs to the newest cmd and keeps only the tail.
-            let mut processed = 0usize;
-            let (mut first_cmd_st, mut last_cmd_st) = (None::<i32>, None::<i32>);
-            let mut last_cmd = None::<UserCmd>;
-            while !c.pending.is_empty() {
-                let cmd = c.pending[0];
-                if processed >= MAX_CMDS_PER_TICK {
-                    // The resync keeps the newest two cmds and sets the base
-                    // as if only the last replays, so the penultimate may
-                    // double-count one frame; harmless for flight.
-                    c.last_processed_st =
-                        c.pending.last().unwrap().server_time.wrapping_sub(FRAME_MS);
-                    c.pending.drain(..c.pending.len().saturating_sub(2));
-                    break;
-                }
-                c.pending.remove(0);
-                let dt_ms = cmd.server_time.wrapping_sub(c.last_processed_st);
-                if dt_ms <= 0 {
-                    continue;
-                }
-                let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
-                sim.step(&cmd, dt, collision);
-                last_cmd = Some(cmd);
-                c.last_processed_st = cmd.server_time;
-                first_cmd_st.get_or_insert(cmd.server_time);
-                last_cmd_st = Some(cmd.server_time);
-                processed += 1;
-            }
-            // The animation the client should be playing, from the state the
-            // moves just produced and the input that produced it.
-            if let (Some(anims), Some(cmd)) = (self.anims.as_ref(), last_cmd) {
-                let index = sim.weapons.current as usize;
-                let weapon = crate::items::item_name(index).unwrap_or_default();
-                let class = self
-                    .weapon_classes
-                    .get(index)
-                    .map(String::as_str)
-                    .unwrap_or_default();
-                sim.update_anims(
-                    &crate::spectate::AnimInputs {
-                        anims,
-                        weapon,
-                        weapon_class: class,
-                    },
-                    &cmd,
-                    self.sv_time_ms,
-                );
-            }
             // Exactly the serverTime of the last cmd the sim consumed, and
             // nothing else: the client replays everything past it, so a
             // commandTime we never simulated drops that slice of its input
@@ -1332,12 +1717,26 @@ impl Server {
                     .filter(|(n, _)| **n != slot as u32)
                     .map(|(n, e)| (*n, e.clone())),
             );
-            let visible = match collision_vis {
+            // A scoped temp entity is culled like any other entity; a
+            // broadcast one skips the cull, which is what retail's
+            // `SVF_BROADCAST` does (docs/protocol-1.1.md, "Which entities a
+            // client is sent").
+            for (te, (n, e)) in temps.iter().zip(&temp_states) {
+                if temp_entity::visible_to(te, slot) && te.scope != temp_entity::Scope::Broadcast {
+                    sendable.insert(*n, e.clone());
+                }
+            }
+            let mut visible = match collision_vis {
                 Some(vis) => {
                     crate::world::visible_entities(vis, sim.eye_origin(), &sendable, self.proto)
                 }
                 None => sendable,
             };
+            for (te, (n, e)) in temps.iter().zip(&temp_states) {
+                if te.scope == temp_entity::Scope::Broadcast {
+                    visible.insert(*n, e.clone());
+                }
+            }
 
             let frame = snapshot::Snapshot {
                 server_time: self.sv_time_ms,
@@ -1380,7 +1779,9 @@ impl Server {
                 // lead of 0..34 ms, never negative (examples/snapshot_timing).
                 let lead = self.sv_time_ms - command_time;
                 let queued = c.pending.len();
-                let span = match (first_cmd_st, last_cmd_st) {
+                let m = moved.get(slot).copied().unwrap_or_default();
+                let processed = m.processed;
+                let span = match (m.first_cmd_st, m.last_cmd_st) {
                     (Some(a), Some(b)) => format!("{a}..{b}"),
                     _ => "-".into(),
                 };
@@ -1600,10 +2001,9 @@ mod tests {
 
     /// The `weaponClass` table the animation machine reads every frame, and
     /// the seam it is built across: `WEAPON_LIST` is 1-based on the wire, so
-    /// the fill prepends an empty slot 0 and `items::item_name` subtracts one.
-    /// Misaligned by one, every pistol player animates as a rifleman and
-    /// nothing says so. Needs the paks -- the classes come from the weapon
-    /// files.
+    /// `items::item_name` subtracts one to name it. Misaligned by one, every
+    /// pistol player animates as a rifleman and nothing says so. Needs the
+    /// paks -- the classes come from the weapon files.
     #[test]
     fn the_weapon_class_table_lines_up_with_the_wire_index() {
         let Some(fs) = vcod_common::testing::game_fs() else {
@@ -1618,16 +2018,16 @@ mod tests {
         ] {
             let index = crate::configstrings::weapon_index(weapon).expect("in WEAPON_LIST");
             assert_eq!(
-                sv.weapon_classes.get(index).map(String::as_str),
-                Some(class),
+                sv.weapon_table.class(index),
+                class,
                 "{weapon} at wire index {index}"
             );
             // The same index the frame loop hands the animscript.
             assert_eq!(crate::items::item_name(index), Some(weapon));
         }
         assert_eq!(
-            sv.weapon_classes.first().map(String::as_str),
-            Some(""),
+            sv.weapon_table.class(0),
+            "",
             "slot 0 is the wire's no-weapon"
         );
     }
@@ -1955,11 +2355,7 @@ mod tests {
         assert_eq!(out[0].0, addr(5));
         let cmds = server_commands(&mut nc, &out[0].1, &huff);
         assert_eq!(cmds.len(), 1);
-        assert!(
-            cmds[0].starts_with("b 1 -9999 -9999 0 0 0 0 0"),
-            "{:?}",
-            cmds[0]
-        );
+        assert!(cmds[0].starts_with("b 1 0 0 0 0 0 0 0"), "{:?}", cmds[0]);
     }
 
     fn count_replies(sv: &mut Server, to: SocketAddr) -> usize {

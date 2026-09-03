@@ -141,8 +141,46 @@ engineering setup works.
   not wander. What the two committed captures measured is in
   `docs/research/player-model-anim-system.md`, "The weapon channel: what writes
   `torsoAnim`"; run it on two maps, because the map picks the weapon and the
-  bolt-action mosin on mp_pavlov is what exposed the rechamber and
-  empty-reload states the carbine never reaches.
+  bolt-action mosin on mp_pavlov is what exposed the rechamber the carbine
+  never reaches.
+  Every capture cmd carries the weapon the playerstate says the client holds.
+  A cmd with `weapon` 0 is not neutral: retail reads a `cmd.weapon` differing
+  from `ps.weapon` as a request to holster, and the byte travels only in the
+  full usercmd branch, which a `wbuttons`, `upmove` or `weapon` change forces.
+  Captures taken before 2026-09-02 therefore carry a putaway at the reload
+  key, at a stance change and at a jump that no input asked for, and their
+  reload key never reloaded, which two research docs wrote up as retail
+  behaviour. A new probe mode must set the byte.
+  `--probe-target` and `--save-hit` are the two halves of the hit capture, one
+  probe each, writing
+  `crates/server/tests/fixtures/playerstate/<map>-<gametype>-hit-target.txt`
+  and `-hit-shooter.txt`. The target stands still, sends the `kill` client
+  command every 45 s and presses use 3 s after each death, which is what puts a
+  death, a corpse, an obituary and a respawn in the capture without needing the
+  shooter to land a shot; the shooter walks toward it and fires once it has a
+  clear eye-to-eye trace through the map's collision. Start the target first
+  and give it a longer `--probe-secs` than the shooter. Under `dm` the shooter
+  never gets a shot at a player: the deathmatch spawn picker puts a respawning
+  client at the point farthest from the other one, and the walk does not cross
+  a town in the 150 s it is given, so the committed `dm` shooter fixture opens
+  with `# BROKEN no line of sight after 150 s` and holds the death half only.
+  The hits come from `tdm` with friendly fire on
+  (`tools/run_server.sh mp_carentan +set g_gametype tdm +set scr_friendlyfire 1`,
+  both probes `--probe-team allies`): team deathmatch spawns a player next to
+  its team, so the two start a few hundred units apart, and `scr_friendlyfire 1`
+  is what lets a teammate's bullet do full damage. Anything after the map name
+  is passed to the engine verbatim, which takes its `+set` arguments in any
+  order. Each fixture is named for the gametype it was taken under, and both
+  pairs are committed. What they measured is in
+  `docs/research/cod11-combat.md`, section 8.
+  Both modes point at any server, ours included, and both write into the same
+  committed fixture names, so a run against `vcod-server` overwrites the
+  retail evidence: move the two files out to `tmp/` afterwards and
+  `git checkout` the directory. What such a run measured about vcod is in
+  `cod11-combat.md` section 9. The death half needs only `--probe-target`,
+  since the target's own `kill` command does the killing; the hit half needs a
+  map small enough for the walk to cross, which mp_carentan is not in `dm`,
+  for ours and for retail alike.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
@@ -191,9 +229,39 @@ engineering setup works.
   `docs/research/player-model-anim-system.md` for what the retail captures
   measured): stance, direction, strafing, the jump and the landing all pick an
   index out of `mp/playeranim.script`. What the machine does not cover yet is
-  the combat events (fire, reload, melee, pain, death), the two turn movetypes
-  and the mounted-MG anims. What a client still gets nothing of is movers,
-  missiles and corpses, which no code spawns.
+  melee, the two turn movetypes and the mounted-MG anims. A shot is a trace
+  against the world and every live player's box, a hit runs the stock
+  `CodeCallback_PlayerDamage`, and `finishPlayerDamage` is where health,
+  knockback, the pain and death events and `CodeCallback_PlayerKilled`
+  happen (`crates/server/src/game/combat.rs`, `docs/research/cod11-combat.md`).
+  A kill puts a corpse in the eight-slot body queue at entities 64..71, sends
+  the obituary on both wires, scores it, drops the dead player's weapon as an
+  item, and the victim respawns on the use key. Not modelled: melee, grenades,
+  item pickup, intermission, map change and the killcam. What a client still
+  gets nothing of is movers and missiles, which no code spawns. A probe run
+  against it reproduces the retail death capture field for field except for
+  two: the `EV_RAISE_WEAPON` the death frame does not raise, and the
+  `legsAnim` the respawn frame carries a frame late
+  (`docs/research/cod11-combat.md` section 9).
+- The tick, in order: expired clients, then each client's queued usercmds
+  (`replay_moves`, one pmove step per cmd, which is where the weapon machine
+  queues a frame's shots), then the shots themselves (a trace each, an impact
+  temp entity and a hit per player struck), then `deliver_hits` so the damage
+  callback has run before script, then the script frame, then the sim ops the
+  script left (spawns, weapon gives and switches, the damage the callback
+  did), then the host-to-sim mirrors (weapons held, origin, health, the damage
+  feedback `P_DamageFeedback` computes from the health the hit left), then the
+  entities are built once and culled and written per client. Move anything
+  across that order and a snapshot reads a frame-old field.
+- `Cx::spawn` is for a builtin that needs script to run before its caller's
+  next instruction: the queued thread starts the moment the builtin returns,
+  which is how `finishPlayerDamage`'s killing hit gets
+  `CodeCallback_PlayerKilled` to have written `self.sessionstate` before the
+  line after it reads the field. Only the `Cx` a builtin is handed honours it.
+  A `Cx` from `get_field`, `set_field` or `Vm::with_cx` has no defined point
+  at which a thread could run, so a spawn queued through one of those is
+  dropped and `debug_assert`ed against; test such a builtin through
+  `ScriptRuntime`, never through `with_cx`.
 - `tools/run_probe.sh <probe> [map]` drives the same retail binary as the
   gsc oracle: it drops one `crates/gsc/tests/fixtures/semantics/probe_*.gsc`
   in as a gametype script, boots the server, and prints the `PROBE` lines
@@ -352,3 +420,45 @@ never pasted decompiler output or disassembly listings.
   as retail drops it. So a script reading a Radiant key nobody registered
   gets `undefined` and no warning. The three-way split and both tables are
   in `docs/research/cod11-gsc-object-model.md`.
+- The attack bit is pulsed, not held. Every stock rifle and pistol is
+  semi-automatic, and a held bit fires one round and then nothing: the
+  semi-auto latch pins `weaponTime` at 1 until the trigger is released
+  (`cod11-combat.md` 1.4). Anything scripted that means to fire twice taps
+  twice, with the tap at least `fireTime` apart.
+- A capture cmd must carry the weapon the playerstate says the client holds.
+  A `weapon` byte of 0 is not neutral: retail reads a `cmd.weapon` that
+  differs from `ps.weapon` as a request to holster, so a probe sending 0 fakes
+  a putaway at every input that forces the full usercmd branch (the reload
+  key, a jump, a stance change). Three research paragraphs were written off
+  that artifact before it was found.
+- `eventSequence` is written *after* the event slot it counts, and the drain
+  is `(prev..cur)`, not `(prev+1..=cur)`: retail writes `events[seq & 3]` and
+  then increments, so the new slots are the ones below the sequence.
+  `crates/common/src/net/events.rs` had the off-by-one and the client read
+  every event one slot late.
+- `health`, `ammo[]` and `ammoclip[]` are in the playerstate's array blocks,
+  not among its scalar fields, and a retail client predicts its ammo counter
+  from the clip it is sent: get the clip wrong and the HUD counts wrong on the
+  client before any server frame disagrees. The block layout is in
+  `docs/protocol-1.1.md`.
+- The ammo and clip index tables start at **1**, not 0. The retail spawn
+  loadout reads `clip=3:7,6:3,10:15 ammo=3:56,10:400`, which is colt at clip
+  index 3, frag at 6 and carbine at 10; numbering from 0 puts every count one
+  slot low and the client shows another weapon's ammo.
+- The body queue is eight entities at 64..71 and has no lifetime timer. A
+  corpse lives until its slot is reused, which the retail capture shows
+  directly: the first corpse is still on the wire 190 s later.
+- `eFlags` bit `0x8` is the per-life teleport bit: retail alternates 16 and 24
+  across a player's lives and a client breaks interpolation on the changed
+  word. Leave it pinned and a retail client smears a respawning player from
+  its corpse to its new spawn. The respawn clears the event ring with it
+  (retail's first frame of a new life reads `eventSequence` 0).
+- A `clipOnly` weapon has no reserve at all. The frag's file reads
+  `clipOnly 1` with `maxAmmo 3`, and retail's spawn line carries `clip=6:3`
+  with no `ammo` entry for that index; writing the reserve anyway puts a
+  count on the wire retail never sends.
+- The four damage-feedback fields (`damageEvent`, `damageCount`, `damageYaw`,
+  `damagePitch`) never clear. `damageEvent` increments and the other three
+  hold the last hit's values until the next one, so a client cannot tell "no
+  damage this frame" from "the same damage as last frame" by reading them; the
+  increment is the edge.

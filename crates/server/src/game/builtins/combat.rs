@@ -1,17 +1,244 @@
-//! Combat builtins: real damage queuing and a real collision trace, both
-//! global calls (no receiver).
+//! Combat builtins: the damage path's script half, the blast radius and a
+//! real collision trace.
 
-use crate::game::damage::DamageEvent;
-use crate::game::host::GameHost;
+use crate::game::builtins::client::client_receiver;
+use crate::game::combat::{mod_index, DFLAG_NO_KNOCKBACK, DFLAG_RADIUS, MOD_FLAGGED};
+use crate::game::host::{GameHost, SimOp};
+use crate::game::script::CALLBACK_SETUP;
+use crate::game::temp_entity::{Scope, TempEntity};
 use glam::Vec3;
-use vcod_gsc::{ArrayKey, Cx, ErrorKind, Target, Value};
+use vcod_common::net::protocol::ENTITYNUM_WORLD;
+use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
 
 pub const NAMES: &[(&str, Builtin)] = &[
     ("bullettrace", bullet_trace),
+    ("finishplayerdamage", finish_player_damage),
+    ("obituary", obituary),
     ("radiusdamage", radius_damage),
+    ("suicide", suicide),
 ];
+
+/// `EV_OBITUARY`, the killfeed event
+/// (`docs/research/cod11-events-and-fx.md` section 1).
+const EV_OBITUARY: i32 = 201;
+
+/// `self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags,
+/// sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)` (`.so` 0x4376c), where a
+/// player's damage lands (combat doc, section 4.5): the health comes off the
+/// host's vitals here, and everything the sim does with it -- knockback,
+/// the feedback fields, `EV_PAIN` or `EV_DEATH` -- goes out as one `SimOp`.
+/// A killing hit runs `player_die` (5.1): the callback into
+/// `CodeCallback_PlayerKilled` is spawned so it runs before this builtin's
+/// caller continues, which is what lets the stock damage callback read
+/// `self.sessionstate` on its next line and find it `"dead"`.
+///
+/// Retail also raises the flesh impact events here; `bullet_fire` raises
+/// them with the shot instead, so a hit the script refuses (friendly fire
+/// off) still shows an impact. The 250 clamp and `pm_time` of 4.5's
+/// knockback are the sim's.
+pub fn finish_player_damage(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let [inflictor, attacker, damage, dflags, mod_, weapon, point, dir, hitloc] = args else {
+        return Err(ErrorKind::BadType(
+            "finishPlayerDamage takes nine arguments",
+        ));
+    };
+    let damage = as_i32(damage)?;
+    let dflags = as_i32(dflags)?;
+    // `iDamage <= 0` returns without doing anything (4.5).
+    if damage <= 0 {
+        return Ok(Value::Undefined);
+    }
+    let attacker_slot = match attacker {
+        Value::Entity(a) if host.ents.get(*a).is_some_and(|e| e.client.is_some()) => {
+            Some(a.0 as usize)
+        }
+        _ => None,
+    };
+    let attacker_origin = match attacker {
+        Value::Entity(a) => {
+            let origin = cx.intern_folded("origin");
+            match host.get_field(cx, *a, origin) {
+                Value::Vector(v) => Some(v),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let v = &mut host.client_vitals[slot];
+    if v.dead {
+        return Ok(Value::Undefined);
+    }
+    v.health -= damage;
+    let fatal = v.health <= 0;
+    if fatal {
+        v.health = 0;
+        v.dead = true;
+    }
+    let dir = match dir {
+        Value::Vector(d) => Vec3::from(*d).normalize_or_zero().into(),
+        _ => [0.0; 3],
+    };
+    host.client_sim_ops.push((
+        slot,
+        SimOp::Damaged {
+            damage,
+            point: match point {
+                Value::Vector(p) => *p,
+                _ => [0.0; 3],
+            },
+            dir,
+            knockback: dflags & DFLAG_NO_KNOCKBACK == 0,
+            attacker: attacker_slot,
+            attacker_origin,
+            fatal,
+        },
+    ));
+    if fatal {
+        let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
+        cx.spawn(
+            killed,
+            recv,
+            vec![
+                *inflictor,
+                *attacker,
+                Value::Int(damage),
+                *mod_,
+                *weapon,
+                Value::Vector(dir),
+                *hitloc,
+            ],
+        );
+    }
+    Ok(Value::Undefined)
+}
+
+fn as_i32(v: &Value) -> Result<i32, ErrorKind> {
+    match v {
+        Value::Int(i) => Ok(*i),
+        Value::Float(f) => Ok(*f as i32),
+        _ => Err(ErrorKind::BadType("expected a number")),
+    }
+}
+
+/// `obituary(victim, attacker, weapon, meansOfDeath)` (`.so` 0x5a750): one
+/// broadcast temp entity, encoded as `docs/research/cod11-hud-protocol.md`
+/// sections 1 and 2 read it off the builtin.
+pub fn obituary(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let (
+        Some(Value::Entity(victim)),
+        Some(attacker),
+        Some(Value::String(weapon)),
+        Some(Value::String(means)),
+    ) = (args.first(), args.get(1), args.get(2), args.get(3))
+    else {
+        return Err(ErrorKind::BadType(
+            "obituary takes a victim, an attacker, a weapon name and a means of death",
+        ));
+    };
+    let (victim, weapon, means) = (*victim, *weapon, *means);
+    // Only a player entity is named as the attacker; anything else is the
+    // world, which is the branch retail takes on the script type.
+    let attacker = match attacker {
+        Value::Entity(a) if host.ents.get(*a).is_some_and(|e| e.client.is_some()) => a.0 as i32,
+        _ => ENTITYNUM_WORLD as i32,
+    };
+    let parm = match mod_index(cx.resolve(means)) {
+        Some(m) if MOD_FLAGGED.contains(&m) => 0x80 | m,
+        _ => crate::configstrings::weapon_index(cx.resolve(weapon)).map_or(0, |i| i as i32),
+    };
+    let origin_atom = cx.intern_folded("origin");
+    let origin = match host.get_field(cx, victim, origin_atom) {
+        Value::Vector(v) => v,
+        _ => [0.0; 3],
+    };
+    host.temp_entities.push(TempEntity {
+        event: EV_OBITUARY,
+        parm,
+        surf_type: 0,
+        other: victim.0,
+        attacker,
+        origin,
+        scope: Scope::Broadcast,
+    });
+    Ok(Value::Undefined)
+}
+
+/// The three effects a suicide has, for the two callers that need them: the
+/// `suicide` builtin and `Cmd_Kill_f`. Writes the vitals, queues the sim's
+/// `Damaged` op and returns the `CodeCallback_PlayerKilled` argument vector,
+/// leaving only the invocation to the caller -- a builtin spawns the thread
+/// so it runs before its own next instruction, while the client command has
+/// nothing waiting on it and starts one.
+///
+/// `None` for a client that is already dead. The damage is zero and the
+/// knockback off, so the sim raises `EV_DEATH` and nothing else: the dead yaw
+/// stays 0, which is what the retail hit capture's own suicides read
+/// (`docs/research/cod11-combat.md` section 8.4, `stats[1]` 0).
+pub fn suicide_effects(host: &mut GameHost, cx: &mut Cx, slot: usize) -> Option<Vec<Value>> {
+    let v = host.client_vitals.get_mut(slot)?;
+    if v.dead {
+        return None;
+    }
+    v.health = 0;
+    v.dead = true;
+    host.client_sim_ops.push((
+        slot,
+        SimOp::Damaged {
+            damage: 0,
+            point: [0.0; 3],
+            dir: [0.0; 3],
+            knockback: false,
+            attacker: Some(slot),
+            attacker_origin: None,
+            fatal: true,
+        },
+    ));
+    let me = Value::Entity(vcod_gsc::EntId(slot as u32));
+    let weapon = host.client_weapons[slot].current as usize;
+    let weapon = crate::items::item_name(weapon).unwrap_or("none");
+    Some(vec![
+        me,
+        me,
+        Value::Int(0),
+        Value::String(cx.intern_exact("MOD_SUICIDE")),
+        Value::String(cx.intern_exact(weapon)),
+        Value::Vector([0.0; 3]),
+        Value::String(cx.intern_exact("none")),
+    ])
+}
+
+/// `self suicide()` (`.so` 0x45358): the kill a player asks for. Retail
+/// routes it through the same `player_die` every other death takes; here the
+/// health comes off the vitals directly and the death callback is spawned
+/// with `MOD_SUICIDE`, the same shape `finish_player_damage` uses for a
+/// killing hit.
+pub fn suicide(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let Some(args) = suicide_effects(host, cx, slot) else {
+        return Ok(Value::Undefined);
+    };
+    let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
+    cx.spawn(killed, recv, args);
+    Ok(Value::Undefined)
+}
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
     NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
@@ -25,30 +252,74 @@ fn as_f32(v: &Value) -> Result<f32, ErrorKind> {
     }
 }
 
-/// `radiusDamage(origin, radius, maxDamage, minDamage)`. A builtin must
-/// never reenter the VM, so this queues a `DamageEvent` rather than calling
-/// `CodeCallback_PlayerDamage` inline; stage 6 drains the queue.
+/// `radiusDamage(origin, radius, maxDamage, minDamage [, attacker])`
+/// (`functions[72]`, `.so` 0x5eef4): `CodeCallback_PlayerDamage` on every
+/// live player inside the radius, spawned so each runs before the calling
+/// thread's next line, the way `finishPlayerDamage` starts the killed
+/// callback.
+///
+/// The falloff is linear from `maxDamage` at the blast to `minDamage` at the
+/// radius, which is RTCW's `G_RadiusDamage` rather than a curve read out of
+/// 0x5eef4 (docs/research/cod11-gsc-language.md, section 10).
+///
+/// The optional fifth argument is both the inflictor and the attacker, so a
+/// script's grenade names its thrower in the killfeed; anything that is not
+/// an entity leaves both undefined, which is a world kill. The position each
+/// victim is measured at is its `origin` field, the copy `Server` mirrors
+/// from the sim every frame.
 pub fn radius_damage(
     host: &mut GameHost,
-    _cx: &mut Cx,
+    cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let [Value::Vector(origin), radius, max_damage, min_damage] = args else {
+    let [Value::Vector(origin), radius, max_damage, min_damage, rest @ ..] = args else {
         return Err(ErrorKind::BadType(
             "radiusDamage takes an origin, radius, max damage and min damage",
         ));
     };
+    let at = Vec3::from(*origin);
     let radius = as_f32(radius)?;
-    let max_damage = as_f32(max_damage)?;
-    let min_damage = as_f32(min_damage)?;
-    host.damage.push(DamageEvent {
-        origin: *origin,
-        radius,
-        max_damage,
-        min_damage,
-        attacker: None,
-    });
+    let (max_damage, min_damage) = (as_f32(max_damage)?, as_f32(min_damage)?);
+    let attacker = match rest.first() {
+        Some(e @ Value::Entity(_)) => *e,
+        _ => Value::Undefined,
+    };
+    let victims: Vec<EntId> = host
+        .ents
+        .iter_inuse()
+        .filter(|(id, e)| e.client.is_some() && !host.client_vitals[id.0 as usize].dead)
+        .map(|(id, _)| id)
+        .collect();
+    let origin_field = cx.intern_folded("origin");
+    let (mod_, none) = (cx.intern_exact("MOD_EXPLOSIVE"), cx.intern_exact("none"));
+    let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
+    for id in victims {
+        let Value::Vector(stands) = host.get_field(cx, id, origin_field) else {
+            continue;
+        };
+        let away = Vec3::from(stands) - at;
+        let dist = away.length();
+        if dist >= radius {
+            continue;
+        }
+        // Multiplied before it is divided: taking the ratio first loses a
+        // bit, which the truncation below turns into a whole point of damage.
+        let damage = max_damage - (max_damage - min_damage) * dist / radius;
+        let dir = away.normalize_or_zero();
+        let args = vec![
+            attacker,
+            attacker,
+            Value::Int(damage as i32),
+            Value::Int(DFLAG_RADIUS),
+            Value::String(mod_),
+            Value::String(none),
+            Value::Vector(*origin),
+            Value::Vector(dir.into()),
+            Value::String(none),
+        ];
+        cx.spawn(callback, Some(Target::Entity(id)), args);
+    }
     Ok(Value::Undefined)
 }
 
@@ -118,31 +389,206 @@ pub fn bullet_trace(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::combat::Hit;
+    use crate::game::host::{ClientEvent, Vitals};
+    use crate::game::script::ScriptRuntime;
     use crate::game::testing::fixture;
     use crate::world::World;
     use std::rc::Rc;
 
-    /// A builtin must never reenter the VM, so `radiusDamage` queues an
-    /// event the server drains after `run_frame` rather than calling
-    /// `CodeCallback_PlayerDamage` inline. That is a deliberate divergence
-    /// and it is observable: a script that damages and then reads
-    /// `self.health` sees the pre-callback value.
-    #[test]
-    fn radiusdamage_queues_rather_than_calling_back() {
-        let (mut vm, mut host) = fixture();
-        vm.with_cx(|cx| {
-            let at = Value::Vector([0.0, 0.0, 0.0]);
-            radius_damage(
-                &mut host,
-                cx,
-                None,
-                &[at, Value::Int(300), Value::Int(2000), Value::Int(50)],
-            )
-            .unwrap();
-            assert_eq!(host.damage.len(), 1);
-            assert_eq!(host.damage[0].radius, 300.0);
-            assert_eq!(host.damage[0].max_damage, 2000.0);
+    const CALLBACKS: &str = r#"
+        main() {}
+        CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+            self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+            self.seen = self.sessionstate;
+            self.left = self.health;
+        }
+        CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {
+            self.sessionstate = "dead";
+            self.mod = sMeansOfDeath;
+            self.killer = eAttacker getEntityNumber();
+            wait 2;
+            self.sessionstate = "buried";
+        }
+    "#;
+
+    fn hit(damage: i32) -> Hit {
+        Hit {
+            victim: 0,
+            attacker: 1,
+            damage,
+            dflags: 0,
+            mod_: "MOD_RIFLE_BULLET",
+            weapon: "m1carbine_mp".into(),
+            point: [0.0; 3],
+            dir: [1.0, 0.0, 0.0],
+            hitloc: "torso_upper",
+        }
+    }
+
+    fn two_clients() -> ScriptRuntime {
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, CALLBACKS);
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "victim".into(),
         });
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 1,
+            name: "killer".into(),
+        });
+        rt.run_frame(0);
+        rt
+    }
+
+    /// A killing `finishPlayerDamage` starts `CodeCallback_PlayerKilled`
+    /// before it returns, so a script reading `self.sessionstate` on the
+    /// next line sees what the callback wrote. Whole path through the VM:
+    /// the test script defines the two callbacks, the host delivers one hit.
+    #[test]
+    fn a_fatal_finishplayerdamage_runs_the_killed_callback_first() {
+        let mut rt = two_clients();
+        rt.host.client_vitals[0] = Vitals {
+            health: 10,
+            max_health: 100,
+            dead: false,
+        };
+        rt.deliver_hits(vec![hit(45)], 50);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.client_field(0, "seen").as_deref(), Some("dead"));
+        assert_eq!(
+            rt.client_field(0, "mod").as_deref(),
+            Some("MOD_RIFLE_BULLET")
+        );
+        assert_eq!(rt.client_field(0, "killer").as_deref(), Some("1"));
+        assert_eq!(rt.client_field(0, "left").as_deref(), Some("0"));
+        assert_eq!(rt.client_vitals(0).health, 0);
+        assert!(rt.client_vitals(0).dead);
+        let ops = rt.take_sim_ops();
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(
+            ops[0],
+            (
+                0,
+                SimOp::Damaged {
+                    fatal: true,
+                    damage: 45,
+                    attacker: Some(1),
+                    knockback: true,
+                    ..
+                }
+            )
+        ));
+        // Drained: nothing is applied twice.
+        assert!(rt.take_sim_ops().is_empty());
+    }
+
+    /// A surviving hit takes the health off, queues its op and starts no
+    /// killed callback; a second hit on a dead player does nothing at all.
+    #[test]
+    fn a_surviving_hit_takes_health_and_a_dead_player_takes_nothing() {
+        let mut rt = two_clients();
+        rt.host.client_vitals[0] = Vitals {
+            health: 100,
+            max_health: 100,
+            dead: false,
+        };
+        rt.deliver_hits(vec![hit(67)], 50);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.client_vitals(0).health, 33);
+        assert!(!rt.client_vitals(0).dead);
+        assert_eq!(rt.client_field(0, "left").as_deref(), Some("33"));
+        assert_eq!(
+            rt.client_field(0, "mod").as_deref(),
+            Some("Undefined"),
+            "no killed callback ran"
+        );
+        let ops = rt.take_sim_ops();
+        assert!(matches!(ops[0].1, SimOp::Damaged { fatal: false, .. }));
+
+        rt.deliver_hits(vec![hit(67)], 100);
+        assert!(rt.client_vitals(0).dead);
+        rt.deliver_hits(vec![hit(67)], 150);
+        assert_eq!(
+            rt.take_sim_ops().len(),
+            1,
+            "the dead player took no second op"
+        );
+    }
+
+    /// `radiusDamage` runs `CodeCallback_PlayerDamage` on every live client
+    /// inside the radius, inline, before the calling thread's next line:
+    /// the near client takes the falloff's damage and dies of it, the one
+    /// 1000 units out takes nothing, and the flags the script is handed
+    /// carry `DFLAG_RADIUS`. The attacker is the fifth argument, which is
+    /// the far client here, so a victim read where an attacker belongs
+    /// would name the wrong entity.
+    ///
+    /// The second blast is the dead check: a corpse is not damaged again,
+    /// so the near client's callback ran once.
+    #[test]
+    fn radiusdamage_damages_every_live_client_inside_the_radius() {
+        const SCRIPT: &str = r#"
+            main() {
+                wait 1;
+                radiusDamage((0, 0, 0), 300, 2000, 50, level.attacker);
+                wait 1;
+                radiusDamage((0, 0, 0), 300, 2000, 50, level.attacker);
+            }
+            CodeCallback_PlayerConnect() {
+                if (self.name == "killer")
+                    level.attacker = self;
+            }
+            CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+                if (!isdefined(self.hits))
+                    self.hits = 0;
+                self.hits = self.hits + 1;
+                self.took = iDamage;
+                self.flags = iDFlags;
+                self.mod = sMeansOfDeath;
+                self.killer = eAttacker getEntityNumber();
+                self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+            }
+            CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {}
+        "#;
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "victim".into(),
+        });
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 1,
+            name: "killer".into(),
+        });
+        rt.run_frame(50);
+        for slot in [0, 1] {
+            rt.host.client_vitals[slot] = Vitals {
+                health: 100,
+                max_health: 100,
+                dead: false,
+            };
+        }
+        rt.set_client_origin(0, [100.0, 0.0, 0.0]);
+        rt.set_client_origin(1, [1000.0, 0.0, 0.0]);
+        rt.run_frame(1100);
+        rt.run_frame(2200);
+
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        // 2000 - (2000 - 50) * 100/300, the linear falloff.
+        assert_eq!(rt.client_field(0, "took").as_deref(), Some("1350"));
+        assert_eq!(rt.client_field(0, "flags").as_deref(), Some("1"));
+        assert_eq!(rt.client_field(0, "mod").as_deref(), Some("MOD_EXPLOSIVE"));
+        assert_eq!(rt.client_field(0, "killer").as_deref(), Some("1"));
+        assert_eq!(rt.client_field(0, "hits").as_deref(), Some("1"));
+        assert_eq!(rt.client_vitals(0).health, 0);
+        assert!(rt.client_vitals(0).dead);
+
+        assert_eq!(
+            rt.client_field(1, "took").as_deref(),
+            Some("Undefined"),
+            "1000 units out, past the radius"
+        );
+        assert_eq!(rt.client_vitals(1).health, 100);
+        assert!(!rt.client_vitals(1).dead);
     }
 
     /// `bulletTrace` runs a real trace against the collision world when the
@@ -191,5 +637,119 @@ mod tests {
             };
             assert!(fraction < 1.0, "expected a hit, got fraction {fraction}");
         });
+    }
+
+    /// The killfeed's two namespaces: an ordinary means of death sends the
+    /// weapon's configstring 7 index, a flagged one sends `0x80 | mod`.
+    #[test]
+    fn obituary_encodes_a_weapon_index_or_a_flagged_mod() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let victim = host.ents.spawn_client(cx, 3).unwrap();
+            let attacker = host.ents.spawn_client(cx, 5).unwrap();
+            let origin = cx.intern_folded("origin");
+            host.set_field(cx, victim, origin, Value::Vector([10.0, 20.0, 30.0]))
+                .unwrap();
+            let weapon = Value::String(cx.intern_exact("m1carbine_mp"));
+            let args = |m: &str, cx: &mut Cx| {
+                [
+                    Value::Entity(victim),
+                    Value::Entity(attacker),
+                    weapon,
+                    Value::String(cx.intern_exact(m)),
+                ]
+            };
+
+            let a = args("MOD_RIFLE_BULLET", cx);
+            obituary(&mut host, cx, None, &a).unwrap();
+            let te = host.temp_entities.last().unwrap();
+            assert_eq!(te.event, EV_OBITUARY);
+            assert_eq!(te.parm, 12, "m1carbine_mp is configstring 7's index 12");
+            assert_eq!(te.other, 3);
+            assert_eq!(te.attacker, 5);
+            assert_eq!(te.origin, [10.0, 20.0, 30.0]);
+            assert_eq!(te.scope, Scope::Broadcast);
+
+            let a = args("MOD_HEAD_SHOT", cx);
+            obituary(&mut host, cx, None, &a).unwrap();
+            assert_eq!(host.temp_entities.last().unwrap().parm, 0x88);
+
+            let a = args("MOD_SUICIDE", cx);
+            obituary(&mut host, cx, None, &a).unwrap();
+            assert_eq!(host.temp_entities.last().unwrap().parm, 0x96);
+        });
+    }
+
+    /// An attacker that is not a player is `ENTITYNUM_WORLD`: the client
+    /// draws the victim alone. Retail takes the same branch for anything
+    /// whose script type is not a player entity.
+    #[test]
+    fn a_non_player_attacker_is_entitynum_world() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let victim = host.ents.spawn_client(cx, 1).unwrap();
+            let weapon = Value::String(cx.intern_exact("m1carbine_mp"));
+            let m = Value::String(cx.intern_exact("MOD_FALLING"));
+            let args = [Value::Entity(victim), Value::Undefined, weapon, m];
+            obituary(&mut host, cx, None, &args).unwrap();
+            let te = host.temp_entities.last().unwrap();
+            assert_eq!(te.attacker, 1022);
+            assert_eq!(te.parm, 0x95);
+        });
+    }
+
+    /// `suicide` is a death with no attacker but the player itself: the
+    /// vitals go to zero, the sim gets a fatal `Damaged` with no damage and
+    /// no knockback, and `CodeCallback_PlayerKilled` runs before the calling
+    /// thread continues -- the same ordering a fatal `finishPlayerDamage`
+    /// gets. `MOD_SUICIDE` and the held weapon are what reach the callback.
+    #[test]
+    fn suicide_kills_the_player_and_runs_the_killed_callback() {
+        const SCRIPT: &str = r#"
+            main() {}
+            CodeCallback_PlayerConnect() {
+                self giveWeapon("m1carbine_mp");
+                self setSpawnWeapon("m1carbine_mp");
+                self suicide();
+                self.after = self.sessionstate;
+            }
+            CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {
+                self.sessionstate = "dead";
+                self.mod = sMeansOfDeath;
+                self.weap = sWeapon;
+                self.killer = eAttacker getEntityNumber();
+            }
+        "#;
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+        rt.host.client_vitals[0] = Vitals {
+            health: 100,
+            max_health: 100,
+            dead: false,
+        };
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "victim".into(),
+        });
+        rt.run_frame(0);
+
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.client_field(0, "after").as_deref(), Some("dead"));
+        assert_eq!(rt.client_field(0, "mod").as_deref(), Some("MOD_SUICIDE"));
+        assert_eq!(rt.client_field(0, "weap").as_deref(), Some("m1carbine_mp"));
+        assert_eq!(rt.client_field(0, "killer").as_deref(), Some("0"));
+        assert_eq!(rt.client_vitals(0).health, 0);
+        assert!(rt.client_vitals(0).dead);
+        let ops = rt.take_sim_ops();
+        assert_eq!(ops.len(), 1);
+        let (
+            slot,
+            SimOp::Damaged {
+                damage,
+                knockback,
+                fatal,
+                ..
+            },
+        ) = ops[0];
+        assert_eq!((slot, damage, knockback, fatal), (0, 0, false, true));
     }
 }

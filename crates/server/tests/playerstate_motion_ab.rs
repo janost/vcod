@@ -57,33 +57,42 @@ const MODELLED: &[&str] = &[
 /// idle), so only the low 9 bits are a fact about the pose. The toggle is
 /// checked separately, frame by frame, where it does mean something.
 ///
-/// `torsoAnim` is not here: retail leaves it 0 in every settled pose of both
-/// captures, so comparing it would assert nothing about this stage and would
-/// fail at `jump_takeoff`, the one pose where retail's value (index 208) comes
-/// from no clause the selection reaches.
-const ANIM_FIELDS: &[&str] = &["legsAnim"];
+/// `torsoAnim` is here too, and it is 0 in all 22 poses of both retaken
+/// captures, `jump_takeoff` included. Nothing in a movement pose raises a
+/// weapon event, so the weapon channel never takes the torso and ours has to
+/// read 0 throughout: a torso that leaks into a settled pose is a defect
+/// (docs/research/player-model-anim-system.md, "The weapon channel"). The 720
+/// the pre-2026-09-02 pair read at `jump_takeoff` was a holstered weapon, not
+/// a clause.
+const ANIM_FIELDS: &[&str] = &["legsAnim", "torsoAnim"];
 
-/// Poses whose anim nothing derives yet, with the reason. Empty is the goal
-/// and it is empty: `turn_left` and `turn_right` were the entries, and both
-/// read the standing idle on retail and on us, so neither was a gap. The guard
-/// below fails on an entry that starts matching, so this cannot rot into a lie.
+/// Poses whose anim nothing derives yet, with the reason. The guard below
+/// fails on an entry that starts matching, so this cannot rot into a lie.
+/// Empty is the goal and it is empty: `ads_stand` was the entry, and it
+/// earned itself back when the animscript's `ads` condition started reading
+/// the cmd's bit instead of a hardcoded false.
 const ANIM_GAPS: &[(&str, &str)] = &[];
+
+/// The one reason both ads entries share.
+const ADS_GAP: &str = "the ads pose. Retail holds the ads bit here with a \
+     weapon in hand and takes `pm_flags` 0x20 and 0x80 with it; pmove carries \
+     no weapon-position fraction and sets neither bit. Older captures could \
+     not show this: they were taken with `cmd.weapon` 0, which retail read as \
+     a holster, so the ads bit reached no weapon. Retail keeps both for every \
+     pose that follows, which is why the probe's script holds this one last";
 
 /// `pm_flags` bits retail sets that the mover has no source for: the map, the
 /// pose that shows it, the bit, and why. Excepted bit by bit and pose by pose,
 /// so every other bit of `pm_flags` is still compared at that pose and the
 /// whole word everywhere else. The guard below fails on an entry that starts
 /// matching.
-const PM_FLAG_GAPS: &[(&str, &str, i32, &str)] = &[(
-    "mp_pavlov",
-    "jump_takeoff",
-    0x8,
-    "the held-jump latch on the first airborne frame. Retail's PM_Jump \
-     (@0x2ec34) sets it and our port reaches that code from a ladder only, so \
-     no ground jump of ours carries it; retail's own mp_carentan capture reads \
-     0 at this pose, so what clears it is unrecorded and the exception stays \
-     pinned to one bit of one pose of one map",
-)];
+/// The held-jump latch entry that used to sit here is gone: the retaken
+/// pavlov capture reads 0x8 clear at `jump_takeoff`, the same as ours and as
+/// carentan's, so there is nothing left to except.
+const PM_FLAG_GAPS: &[(&str, &str, i32, &str)] = &[
+    ("mp_carentan", "ads_stand", 0xa0, ADS_GAP),
+    ("mp_pavlov", "ads_stand", 0xa0, ADS_GAP),
+];
 
 /// The bits of `name` not compared at `label` on `map`, from [`PM_FLAG_GAPS`].
 fn gap_mask(map: &str, label: &str, name: &str) -> i32 {

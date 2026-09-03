@@ -13,7 +13,7 @@ pub const ENTITYNUM_WORLD: u32 = 1022;
 
 /// `G_InitGame` sets `level.num_entities` to 72, so the first entity the map
 /// load creates is number 72 whatever `sv_maxclients` is. `MAX_CLIENTS` is 64
-/// and slots 64..71 are reserved by something not yet identified.
+/// and slots 64..71 are the body queue (`crate::game::bodies`).
 pub const FIRST_MAP_ENTITY: u32 = 72;
 
 /// `EntId(FIRST_HUD_ELEM..)` is a HUD element, which has its own field table,
@@ -151,7 +151,21 @@ impl ObjectTable {
             return Err(ErrorKind::BadType("client slot out of range"));
         }
         let script = cx.new_struct();
-        let mut client = vec![Value::Undefined; CLIENT_FIELDS.len()];
+        // A numeric client field is a plain int or float on the `gclient_t`,
+        // which `ClientConnect` has already zeroed, so retail's getter can
+        // never hand script an undefined one. That is what lets every stock
+        // gametype write `self.deaths++` and `attacker.score++` on a client
+        // that has scored nothing yet. The string and object fields keep
+        // their undefined reading: those have custom getters, and what each
+        // returns before it is written is unmeasured.
+        let mut client: Vec<Value> = CLIENT_FIELDS
+            .iter()
+            .map(|f| match f.ty {
+                crate::game::fields::FieldType::Int => Value::Int(0),
+                crate::game::fields::FieldType::Float => Value::Float(0.0),
+                _ => Value::Undefined,
+            })
+            .collect();
         // `.pers` is an array from the moment the client connects: the
         // engine writes the handle in `ClientConnect` (0x4250f), and every
         // gametype's first act is to read `self.pers["team"]` off it without

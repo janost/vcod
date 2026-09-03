@@ -7,7 +7,6 @@
 
 use crate::configstrings::{Allocators, CsRange};
 use crate::game::builtins;
-use crate::game::damage::DamageEvent;
 use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
 use crate::game::fields::{self, FieldType, Route};
 use crate::server::MAX_CLIENTS;
@@ -74,16 +73,85 @@ pub struct SpawnRequest {
     pub player: bool,
 }
 
+/// One edge a weapon builtin made in a client's playerstate, queued for the
+/// same reason `SpawnRequest` is: the sim lives in `Server`, out of a
+/// builtin's reach. `ps.weapons`, `ps.weaponslots` and the viewmodel are not
+/// here; those are state the host owns and `Server` mirrors every frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WeaponOp {
+    SetClip {
+        clip_index: usize,
+        rounds: i16,
+    },
+    SetAmmo {
+        ammo_index: usize,
+        rounds: i16,
+    },
+    /// `takeAllWeapons`, whose host half (clearing `client_weapons`) reaches
+    /// the sim through the frame mirror; this is the playerstate half, the
+    /// ammo and clip arrays emptied.
+    TakeAll,
+    /// `setSpawnWeapon`: `ps.weapon` set outright, with the machine reset to
+    /// ready, which is what a spawn hands a player (object model doc,
+    /// section 20).
+    SetCurrent(u8),
+    /// `switchToWeapon`: the same change a usercmd's weapon byte asks for, so
+    /// it goes through the putaway and the raise rather than teleporting the
+    /// weapon into the player's hands (combat doc, section 1.8).
+    SwitchTo(u8),
+}
+
+/// A client's health as the script sees it: `self.health`, `self.maxhealth`
+/// and whether `finishPlayerDamage` has killed it since its last spawn. The
+/// host is the owner; `Server` mirrors it into the sim every frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Vitals {
+    pub health: i32,
+    pub max_health: i32,
+    pub dead: bool,
+}
+
+impl Default for Vitals {
+    /// A connecting client: retail's `gclient_t` is zeroed, and the lone
+    /// spectator capture reads `stats[2]` 0 until the gametype's spawn
+    /// writes `self.maxhealth` (docs/protocol-1.1.md, "Block 1").
+    fn default() -> Self {
+        Vitals {
+            health: 0,
+            max_health: 0,
+            dead: false,
+        }
+    }
+}
+
+/// One thing `finishPlayerDamage` did to a client that its sim has to act
+/// on, queued for the same reason `WeaponOp` is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SimOp {
+    Damaged {
+        damage: i32,
+        point: [f32; 3],
+        /// The damage direction, normalised; all zero when the callback was
+        /// handed none.
+        dir: [f32; 3],
+        knockback: bool,
+        attacker: Option<usize>,
+        /// Where the attacker's entity stood, for the dead yaw.
+        attacker_origin: Option<[f32; 3]>,
+        fatal: bool,
+    },
+}
+
 pub struct GameHost {
     pub configstrings: Vec<String>,
     pub ents: ObjectTable,
     /// Client lifecycle events the netcode raised, drained by `run_frame`
-    /// before the think pass. Queued rather than called inline for the same
-    /// reason `damage` is: a builtin must never reenter the VM.
+    /// before the think pass: a callback run inline from `SV_ClientCommand`
+    /// would reenter the VM mid-frame.
     pub client_events: Vec<ClientEvent>,
     /// Per-client server commands the script asked for, by client slot,
     /// drained by `Server` after `run_frame`. A builtin cannot reach the
-    /// netchan, so it queues, the same reason `damage` does.
+    /// netchan, so it queues, the same reason `client_events` does.
     pub client_commands: Vec<(usize, String)>,
     /// Spawns the script performed this frame, drained by `Server` after
     /// `run_frame` the way `client_commands` is.
@@ -98,10 +166,29 @@ pub struct GameHost {
     /// `setViewmodel` stores on the `gclient_t` (object model doc, section
     /// 20). Mirrored into the sim every frame the way `client_weapons` is.
     pub client_viewmodel: Vec<i32>,
-    /// Damage the script asked for, drained after `run_frame` by stage 6.
-    /// A builtin must never reenter the VM, so a callback becomes a queued
-    /// event (the design's "callbacks cannot run inline").
-    pub damage: Vec<DamageEvent>,
+    /// What the weapon builtins did to a client's ammo and current weapon,
+    /// by slot, in call order. Unlike `client_weapons` these are edges rather
+    /// than state -- `ps.ammoclip` is spent by firing, so re-applying a full
+    /// clip every frame would make the weapon bottomless -- so `Server`
+    /// drains them after `run_frame` and applies each once.
+    pub client_weapon_ops: Vec<(usize, WeaponOp)>,
+    /// Each client's health, authoritative here: the `health` and
+    /// `maxhealth` accessors on a client entity read and write it, and
+    /// `Server` mirrors it into the sim every frame.
+    pub client_vitals: Vec<Vitals>,
+    /// Each client's last usercmd buttons, mirrored in by `Server` before
+    /// the frame, for `useButtonPressed`.
+    pub client_buttons: Vec<u8>,
+    /// Each client's entity state as the tick's moves left it, mirrored in by
+    /// `Server::replay_moves` before the script frame. `cloneplayer` copies
+    /// the slot's entry into the body queue; nothing else reads it.
+    pub client_entity_states: Vec<Option<vcod_common::net::msg::EntityState>>,
+    /// What `finishPlayerDamage` did to a client this frame, drained by
+    /// `Server` after `run_frame` and applied to the sim once each.
+    pub client_sim_ops: Vec<(usize, SimOp)>,
+    /// The map's weapon table, for the fields the builtins need: the ammo and
+    /// clip indexes an op addresses, and the rounds it hands out.
+    pub weapons: std::rc::Rc<crate::weapons::WeaponTable>,
     /// Runtime configstring slot allocators, one per engine indexer
     /// (`G_ModelIndex` and its siblings).
     pub allocators: Allocators,
@@ -151,6 +238,13 @@ pub struct GameHost {
     /// `crate::game::spawn::settle_turret_pitch` runs at map load. `wire.rs`
     /// puts it on the wire as `angles2[0]`.
     pub turret_pitch: std::collections::HashMap<EntId, f32>,
+    /// The events raised this frame, put on the wire as temp entities and
+    /// dropped by the snapshot build: retail frees a `G_TempEntity` the
+    /// frame after it is sent.
+    pub temp_entities: Vec<crate::game::temp_entity::TempEntity>,
+    /// The eight corpse entities `cloneplayer` fills
+    /// (`crate::game::bodies`).
+    pub bodies: crate::game::bodies::BodyQueue,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -167,7 +261,12 @@ impl GameHost {
             client_spawns: Vec::new(),
             client_weapons: vec![crate::weapons::PlayerWeapons::default(); MAX_CLIENTS],
             client_viewmodel: vec![0; MAX_CLIENTS],
-            damage: Vec::new(),
+            client_weapon_ops: Vec::new(),
+            client_vitals: vec![Vitals::default(); MAX_CLIENTS],
+            client_buttons: vec![0; MAX_CLIENTS],
+            client_entity_states: vec![None; MAX_CLIENTS],
+            client_sim_ops: Vec::new(),
+            weapons: std::rc::Rc::new(crate::weapons::WeaponTable::empty()),
             allocators: Allocators::new(),
             cvars: crate::cvars::Cvars::new(),
             world: None,
@@ -179,6 +278,8 @@ impl GameHost {
             client_name_mode: builtins::cvar::ClientNameMode::default(),
             fs: None,
             turret_pitch: std::collections::HashMap::new(),
+            temp_entities: Vec::new(),
+            bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
         }
     }
 
@@ -206,16 +307,19 @@ impl GameHost {
         self.configstrings[8] = self.items.bitstring();
     }
 
-    /// A uniform draw in `[0, 1)`. xorshift64*, same shape as `Server`'s own
-    /// `rand()` (`server.rs`) minus its glibc `rand()`-compatible masking,
-    /// which `randomFloat` has no reason to match.
+    /// A uniform draw in `[0, 1)` off the host's own state.
     pub fn rand_unit(&mut self) -> f32 {
-        self.rng ^= self.rng >> 12;
-        self.rng ^= self.rng << 25;
-        self.rng ^= self.rng >> 27;
-        let draw = self.rng.wrapping_mul(0x2545_f491_4f6c_dd1d);
-        draw as f32 / u64::MAX as f32
+        rand_unit(&mut self.rng)
     }
+}
+
+/// A uniform draw in `[0, 1)` off [`vcod_common::rng::xorshift`], the step
+/// every draw on the server shares, minus the glibc `rand()`-compatible
+/// masking `Server::rand` puts on top of it and `randomFloat` has no reason
+/// to match. A free function so the bullet spread (`crate::game::combat`)
+/// draws from `Server`'s state the same way.
+pub fn rand_unit(state: &mut u64) -> f32 {
+    vcod_common::rng::xorshift(state) as f32 / u64::MAX as f32
 }
 
 impl Host for GameHost {
@@ -276,6 +380,18 @@ impl Host for GameHost {
         let Some(e) = self.ents.get(ent) else {
             return Value::Undefined;
         };
+        // A player's health lives on the host, not in the entity's engine
+        // slot: retail's `health` setter (`Scr_SetHealth`) writes
+        // `ps.stats[0]` and `maxhealth`'s writes `sess.maxHealth`, which is
+        // what the wire and the damage path read (docs/protocol-1.1.md,
+        // "Block 1"). A map entity's `health` is still its own slot.
+        if e.client.is_some() {
+            match cx.resolve_folded(field) {
+                "health" => return Value::Int(self.client_vitals[ent.0 as usize].health),
+                "maxhealth" => return Value::Int(self.client_vitals[ent.0 as usize].max_health),
+                _ => {}
+            }
+        }
         let route = if ent.0 >= FIRST_HUD_ELEM {
             fields::route_hud(cx.resolve_folded(field))
         } else {
@@ -321,6 +437,23 @@ impl Host for GameHost {
         let Some(e) = self.ents.get_mut(ent) else {
             return Err(ErrorKind::BadType("no such entity"));
         };
+        if e.client.is_some() {
+            let v = &mut self.client_vitals[ent.0 as usize];
+            match cx.resolve_folded(field) {
+                "health" => {
+                    v.health = as_health(value)?;
+                    return Ok(());
+                }
+                // The setter clamps the health down to the new maximum
+                // (docs/protocol-1.1.md, "Block 1", INFERRED there).
+                "maxhealth" => {
+                    v.max_health = as_health(value)?;
+                    v.health = v.health.min(v.max_health);
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
         match route {
             Route::Engine {
                 slot,
@@ -346,7 +479,17 @@ impl Host for GameHost {
                 if !type_accepts(ty, value) {
                     return Err(ErrorKind::BadType("wrong type for a client field"));
                 }
-                c[i] = value;
+                // `archivetime` is how long a client's frames are kept for a
+                // killcam to replay, which vcod does not have and will not
+                // (`docs/design/2026-09-02-stage6-combat-design.md`). Retail's
+                // own code trims the value down to what it can actually serve;
+                // storing zero is that trim taken to its end, and it is what
+                // makes every stock gametype's `if(self.archivetime <= delay)`
+                // fall through to `respawn()` instead of into the killcam.
+                c[i] = match fields::CLIENT_FIELDS[i].name {
+                    "archivetime" => Value::Int(0),
+                    _ => value,
+                };
                 Ok(())
             }
             Route::Script => {
@@ -355,6 +498,15 @@ impl Host for GameHost {
                 Ok(())
             }
         }
+    }
+}
+
+/// The integer a health field takes; retail's int setter truncates a float.
+fn as_health(value: Value) -> Result<i32, ErrorKind> {
+    match value {
+        Value::Int(i) => Ok(i),
+        Value::Float(f) => Ok(f as i32),
+        _ => Err(ErrorKind::BadType("health takes a number")),
     }
 }
 
@@ -688,6 +840,50 @@ mod tests {
             assert!(host
                 .set_field(cx, e, origin, Value::Vector([1.0, 2.0, 3.0]))
                 .is_ok());
+        });
+    }
+
+    /// A numeric client field reads 0 before anything writes it, which is
+    /// what retail's getter finds on the `gclient_t` `ClientConnect` zeroed.
+    /// It is what lets `self.deaths++` and `attacker.score++` run on a
+    /// client that has neither yet; `.pers` is still the array
+    /// `spawn_client` seeded, and a string field is still undefined.
+    #[test]
+    fn a_numeric_client_field_starts_at_zero() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let read = |host: &mut GameHost, cx: &mut Cx, f: &str| {
+                let atom = cx.intern_folded(f);
+                host.get_field(cx, c, atom)
+            };
+            assert_eq!(read(&mut host, cx, "score"), Value::Int(0));
+            assert_eq!(read(&mut host, cx, "deaths"), Value::Int(0));
+            assert_eq!(read(&mut host, cx, "spectatorclient"), Value::Int(0));
+            assert_eq!(read(&mut host, cx, "archivetime"), Value::Float(0.0));
+            assert_eq!(read(&mut host, cx, "statusicon"), Value::Undefined);
+            assert!(matches!(read(&mut host, cx, "pers"), Value::Array(_)));
+        });
+    }
+
+    /// `archivetime` stores 0 whatever the script wrote: nothing archives
+    /// frames for a killcam, so a gametype's `if(self.archivetime <= delay)`
+    /// has to fall through to `respawn()` rather than stall waiting for a
+    /// replay that never comes.
+    #[test]
+    fn archivetime_reads_back_zero_whatever_was_written() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let atom = cx.intern_folded("archivetime");
+            host.set_field(cx, c, atom, Value::Int(9)).unwrap();
+            assert_eq!(host.get_field(cx, c, atom), Value::Int(0));
+            host.set_field(cx, c, atom, Value::Float(2.5)).unwrap();
+            assert_eq!(host.get_field(cx, c, atom), Value::Int(0));
+            // The neighbouring numeric fields still store what they are given.
+            let other = cx.intern_folded("spectatorclient");
+            host.set_field(cx, c, other, Value::Int(3)).unwrap();
+            assert_eq!(host.get_field(cx, c, other), Value::Int(3));
         });
     }
 }

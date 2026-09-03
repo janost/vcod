@@ -200,14 +200,13 @@ fn family(name: &str) -> &str {
 
 /// Fields retail sets on a player entity that we do not, each with the reason.
 /// Empty is the goal; the guard below fails on one that starts matching.
-const PLAYER_GAPS: &[(&str, &str)] = &[
-    (
-        "eventSequence",
-        "the entity event ring, which nothing raises until stage 6",
-    ),
-    ("events", "same ring"),
-    ("eventParms", "the parms of that ring"),
-];
+const PLAYER_GAPS: &[(&str, &str)] = &[(
+    "eventParms",
+    "the parms of the event ring. The ring itself travels now, but every \
+     event a walking player raises is a footstep, and a movement event's \
+     parm is 0 (`pmove::PmEvent`); the putaway a stance change starts is the \
+     first with a parm, and this capture's player never changes stance",
+)];
 
 /// Every field retail sets on a moving player, against ours. The capture is
 /// one probe watching another on the retail server
@@ -591,4 +590,369 @@ fn opposite_teams_carry_different_roster_team_values() {
             team(nb)
         );
     }
+}
+
+/// What A is told about B is where B is *this* frame, not last frame. B
+/// walks forward for one tick; the entity A receives in that tick's snapshot
+/// carries B's post-move origin, which is also what B's own playerstate in
+/// the same tick says.
+#[test]
+fn a_client_is_told_where_the_other_is_this_frame() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+    let p = &PROTOCOL_V1;
+    let na = ca
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let nb = cb
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let spot = ca.snapshots().newest().unwrap().ps.origin(p);
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 0.0);
+    for _ in 0..20 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+    // B runs for ten ticks; on each, A's copy of B must match B's own ps
+    // from the same server frame.
+    let run = vcod_common::net::msg::UserCmd {
+        forward: 127,
+        ..vcod_common::net::msg::NULL_USERCMD
+    };
+    let mut checked = 0;
+    for _ in 0..10 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&run);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        let sa = ca.snapshots().newest().unwrap();
+        let sb = cb.snapshots().newest().unwrap();
+        if sa.server_time != sb.server_time {
+            continue;
+        }
+        let told = sa.entities[&(nb as u32)].origin(p);
+        let actual = sb.ps.origin(p);
+        for axis in 0..3 {
+            assert!(
+                (told[axis] - actual[axis]).abs() < 0.01,
+                "frame {}: A told B is at {told:?}, B is at {actual:?}",
+                sa.server_time
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked >= 5, "only {checked} comparable frames");
+}
+
+/// A weapon switch off the usercmd's weapon byte, which is what a retail
+/// client sends every frame: one putaway, one raise, and then the weapon
+/// stays switched.
+///
+/// The regression is the mirror. `Server` re-reads the script host's copy of
+/// what a client holds every frame, so a switch the weapon machine made had
+/// to be written back to the host: without that the mirror puts the old
+/// weapon back the frame after `pickup` set the new one, `PM_Weapon` sees a
+/// `cmd.weapon` that differs again and starts the identical putaway, and the
+/// client's weapon dips once every `dropTime` for as long as it asks.
+#[test]
+fn a_weapon_switch_off_the_usercmd_byte_happens_once() {
+    const EV_RAISE_WEAPON: i32 = 155;
+    const EV_PUTAWAY_WEAPON: i32 = 156;
+
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp =
+        vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse the bsp");
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
+
+    let p = &PROTOCOL_V1;
+    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as i32;
+    let colt = vcod_server::configstrings::weapon_index("colt_mp").unwrap() as u8;
+    assert_eq!(
+        cl.snapshots().newest().unwrap().ps.field_i32(p, "weapon"),
+        carbine,
+        "the join did not spawn with the weapon it asked for"
+    );
+
+    // The pistol the stock loadout also gave, asked for the way a retail
+    // client asks: the byte on every cmd, not a one-frame pulse.
+    let cmd = vcod_common::net::msg::UserCmd {
+        weapon: colt,
+        ..vcod_common::net::msg::NULL_USERCMD
+    };
+    let mut events: Vec<i32> = Vec::new();
+    // Seeded from the snapshot before the first cmd: the putaway starts on
+    // the frame the byte first arrives, so a baseline taken inside the loop
+    // would swallow it.
+    let mut seq = Some(
+        cl.snapshots()
+            .newest()
+            .unwrap()
+            .ps
+            .field_i32(p, "eventSequence"),
+    );
+    let mut weapons: Vec<i32> = Vec::new();
+    for _ in 0..60 {
+        now += Duration::from_millis(50);
+        cl.send_frame(&cmd);
+        common::step(&mut sv, &q, &mut cl, now);
+        let Some(s) = cl.snapshots().newest() else {
+            continue;
+        };
+        // The ring, read at the slots the events were written to: the
+        // counter is bumped after the write.
+        let cur = s.ps.field_i32(p, "eventSequence");
+        if let Some(prev) = seq.replace(cur) {
+            let diff = ((cur - prev) & 0xff).min(4);
+            for i in 0..diff {
+                let slot = (prev + i) & 3;
+                events.push(s.ps.field_i32(p, &format!("events[{slot}]")));
+            }
+        }
+        weapons.push(s.ps.field_i32(p, "weapon"));
+    }
+
+    let putaways = events.iter().filter(|e| **e == EV_PUTAWAY_WEAPON).count();
+    let raises = events.iter().filter(|e| **e == EV_RAISE_WEAPON).count();
+    assert_eq!(
+        (putaways, raises),
+        (1, 1),
+        "a switch is one putaway and one raise; the ring carried {events:?}"
+    );
+    assert_eq!(
+        *weapons.last().unwrap(),
+        i32::from(colt),
+        "the client did not end up holding what it asked for"
+    );
+    // And it stayed there: once the raise is over nothing switches back.
+    let after_raise = weapons.iter().rposition(|w| *w == carbine).unwrap_or(0);
+    assert!(
+        weapons[after_raise + 1..]
+            .iter()
+            .all(|w| *w == i32::from(colt)),
+        "the weapon went back and forth: {weapons:?}"
+    );
+}
+
+/// A corpse is not the dead client's own entity: both the client it was
+/// cloned from and everyone else are sent it. The body queue's first slot is
+/// entity 64, retail's own number
+/// (`docs/research/cod11-combat.md` section 5.2).
+#[test]
+fn a_body_reaches_both_the_dead_client_and_the_other_one() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+
+    let p = &PROTOCOL_V1;
+    let na = ca
+        .snapshots()
+        .newest()
+        .expect("A")
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let nb = cb
+        .snapshots()
+        .newest()
+        .expect("B")
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    // Both in one spot, so whether the corpse arrives is the queue's answer
+    // and not the PVS's.
+    let spot = ca.snapshots().newest().expect("A").ps.origin(p);
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+    for _ in 0..20 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+
+    let body = sv.test_push_body(nb).expect("the server has no script");
+    assert_eq!(body, 64, "the body queue starts at retail's entity 64");
+    for _ in 0..4 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+
+    for (who, client) in [("A", &ca), ("B", &cb)] {
+        let snap = client.snapshots().newest().expect("no snapshot");
+        let e = snap
+            .entities
+            .get(&body)
+            .unwrap_or_else(|| panic!("client {who} was sent no body entity ({body})"));
+        assert_eq!(e.field_i32(p, "eType"), 2, "client {who}: not an ET_CORPSE");
+        assert_eq!(
+            e.field_i32(p, "clientNum"),
+            nb as i32,
+            "client {who}: the body names the wrong client"
+        );
+    }
+}
+
+/// The two halves of the scope filter, on a live pair. A broadcast temp
+/// entity reaches a client whose PVS its origin is nowhere near, which is
+/// what retail's `SVF_BROADCAST` does; a scoped one at the same origin
+/// reaches nobody, which is what proves that origin really is culled; and an
+/// all-but-one at a visible origin reaches everyone except the client it
+/// names.
+#[test]
+fn a_broadcast_temp_entity_skips_the_cull_and_a_scoped_one_does_not() {
+    use vcod_server::game::temp_entity::{Scope, TempEntity};
+
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+
+    let p = &PROTOCOL_V1;
+    let na = ca
+        .snapshots()
+        .newest()
+        .expect("A")
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let nb = cb
+        .snapshots()
+        .newest()
+        .expect("B")
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let spot = ca.snapshots().newest().expect("A").ps.origin(p);
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+    for _ in 0..20 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+
+    // Far outside the map, so the PVS cull drops anything standing there.
+    let outside = [30_000.0, 30_000.0, 30_000.0];
+    let te = |parm: i32, origin: [f32; 3], scope: Scope| TempEntity {
+        event: 201,
+        parm,
+        surf_type: 0,
+        other: nb as u32,
+        attacker: na as i32,
+        origin,
+        scope,
+    };
+    sv.test_push_temp_entity(te(1, outside, Scope::Broadcast));
+    sv.test_push_temp_entity(te(2, outside, Scope::Only(na)));
+    sv.test_push_temp_entity(te(3, spot, Scope::AllBut(na)));
+
+    // Two frames: the queue is drained by the first snapshot build, whichever
+    // of the two ticks makes it.
+    let mut seen_a = BTreeSet::new();
+    let mut seen_b = BTreeSet::new();
+    for _ in 0..2 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        for (seen, client) in [(&mut seen_a, &ca), (&mut seen_b, &cb)] {
+            let Some(snap) = client.snapshots().newest() else {
+                continue;
+            };
+            for e in snap.entities.values() {
+                if e.field_i32(p, "eType") >= 12 {
+                    seen.insert(e.field_i32(p, "eventParm"));
+                }
+            }
+        }
+    }
+
+    assert!(
+        seen_a.contains(&1) && seen_b.contains(&1),
+        "a broadcast temp entity did not skip the cull: A {seen_a:?}, B {seen_b:?}"
+    );
+    assert!(
+        !seen_a.contains(&2) && !seen_b.contains(&2),
+        "a scoped temp entity outside every PVS was still sent: A {seen_a:?}, B {seen_b:?}"
+    );
+    assert!(
+        seen_b.contains(&3),
+        "an all-but-A temp entity did not reach B: {seen_b:?}"
+    );
+    assert!(
+        !seen_a.contains(&3),
+        "an all-but-A temp entity still reached A: {seen_a:?}"
+    );
 }

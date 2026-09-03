@@ -60,7 +60,7 @@ grepping a capture for `scores` or `cs` finds nothing.
 | `r` | `0x3002df30` | `CG_ReverbCmd` |
 | `s` | `0x3002e040` | `CG_LocalSound` |
 | `t` | `0x3002dae0` | open script menu: `t <script menu index>` (section 0.1) |
-| `u` | `0x3002de60` | close script menus |
+| `u` | `0x3002de60` | close script menus: the bare letter, no argument |
 | `v` | `0x30030550` | set client cvar: `v <name> "<value>"` |
 
 Live confirmation from the capture (`serverCommand N:` lines):
@@ -106,9 +106,11 @@ is cs 1180: cs 1180 is `team_russiangerman` and cs 1181 `weapon_russian`, and
 answering the team menu produces `v g_scriptMainMenu "weapon_russian"` then
 `t 1`.
 
-VERIFIED that `game.mp.i386.so` holds both format strings, `t %i` at
-`0x731f8` and `v %s "%s"` at `0x73300`, which is why the name is bare and the
-value quoted, and VERIFIED that the capture above matches those two shapes: a
+VERIFIED that `game.mp.i386.so` holds all three format strings, `t %i` at
+`0x731f8`, `v %s "%s"` at `0x73300` and the lone `u` the `closeMenu` builtin
+(`0x45574`) passes to `trap_SendServerCommand`, at `0x73204`. That is why the
+name is bare and the value quoted, and why `u` never carries an argument.
+VERIFIED that the capture above matches the first two shapes: a
 bare integer after `t`, a bare name and a quoted value after `v`. INFERRED
 that `t` is therefore the wire form of the script's `openMenu` (`0x453f4`)
 and `v` of its `setClientCvar` (`0x446e0`), that those are the strings the
@@ -403,6 +405,22 @@ populated server and confirmed the grammar above end to end on screen:
 Axis/Allies sections with team icons and totals, score-sorted rows, a
 Spectators section, `hud unk 0` throughout. No wire-level dump of a raw `b`
 line was kept, so token 4's unit (below) is still open.
+
+**As implemented** (`Server::scoreboard`, `crates/server/src/server.rs`). One
+row per online client. The score comes from the client's own `.score` script
+field and the icon from `.statusicon`, resolved to its 1-based slot within
+`CsRange::StatusIcon`; both are where every stock gametype writes them. The
+team totals go out as `0 0`, hardcoded: no `setTeamScore` builtin exists yet,
+so there is nowhere for a gametype's own totals to live. VERIFIED: `0` is
+what retail's `b` line carries in both slots of both hit captures
+(`crates/server/tests/fixtures/playerstate/mp_carentan-dm-hit-target.txt` and
+the `tdm` pair, and `cod11-combat.md` section 9). INFERRED: `level.teamScores[]`
+therefore starts zeroed, and the `-9999` sentinel is a value a gametype has to
+write for itself rather than the default an unwritten total holds.
+`ping` is 0 rather than retail's clamp, the netchan
+keeping no round-trip estimate. Token 4 is minutes since the client
+connected, the Q3 reading of the same slot -- see the UNVERIFIED note below,
+which is why that is a choice and not a claim.
 
 UNVERIFIED: the meaning and unit of token 4. `cl[+0x20e4]` has no write site
 anywhere in the stock module's `.text` (`grep 0x20e4` finds three reads and no
