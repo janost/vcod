@@ -4,7 +4,6 @@
 pub mod bodies;
 pub mod builtins;
 pub mod combat;
-pub mod damage;
 pub mod entity;
 pub mod fields;
 pub mod host;

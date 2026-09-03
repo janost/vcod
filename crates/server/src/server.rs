@@ -172,7 +172,7 @@ pub(crate) struct Shot {
 /// One `WeaponOp` against a client's playerstate. The op is an edge the
 /// script made, so it is applied once, where `client_weapons` is mirrored
 /// every frame.
-fn apply_weapon_op(
+pub(crate) fn apply_weapon_op(
     sim: &mut crate::spectate::ClientSim,
     op: crate::game::host::WeaponOp,
     weapons: &crate::weapons::WeaponTable,

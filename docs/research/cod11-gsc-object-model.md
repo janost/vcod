@@ -1236,6 +1236,24 @@ at 0x45339 and 0x45345 and for the netfield offsets in
 `crates/common/src/net/fields_v1.rs`. That the stores are skipped for a
 weapon the player does not hold is INFERRED, the branch at 0x4532f.
 
+### The slot and switch methods: table positions only
+
+`switchToWeapon` is player method 5 (`PlayerCmd_switchToWeapon`) and
+`takeAllWeapons` method 2 (`PlayerCmd_takeAllWeapons`); the six slot
+accessors are methods 32 to 37 in this order: `getWeaponSlotWeapon` 0x43cf4,
+`setWeaponSlotWeapon` 0x43df4, `getWeaponSlotAmmo` 0x43ff4,
+`setWeaponSlotAmmo` 0x44130, `getWeaponSlotClipAmmo` 0x442c8,
+`setWeaponSlotClipAmmo` 0x443e4. VERIFIED, read out of the player method
+table `dump_builtins.py` walks; the two named ones carry symbols, the six
+resolve to addresses.
+
+What each does inside was not read. vcod's readings — a slot name resolved
+through the `weaponSlot` table above, ammo and clip addressed by the slot's
+weapon's own ammo and clip index, `switchToWeapon` going through the putaway
+rather than swapping the weapon in place — are the design's, and the last of
+them follows the weapon machine of `docs/research/cod11-combat.md` section
+1.8 rather than anything read at 0x452a4's neighbours.
+
 ### `setViewmodel` reaches `ps.viewmodelIndex`
 
 `setViewmodel` (player method 17, 0x4512c) resolves its argument through

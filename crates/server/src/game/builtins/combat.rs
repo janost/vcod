@@ -1,15 +1,14 @@
-//! Combat builtins: the damage path's script half, real damage queuing and
-//! a real collision trace.
+//! Combat builtins: the damage path's script half, the blast radius and a
+//! real collision trace.
 
 use crate::game::builtins::client::client_receiver;
-use crate::game::combat::{mod_index, DFLAG_NO_KNOCKBACK, MOD_FLAGGED};
-use crate::game::damage::DamageEvent;
+use crate::game::combat::{mod_index, DFLAG_NO_KNOCKBACK, DFLAG_RADIUS, MOD_FLAGGED};
 use crate::game::host::{GameHost, SimOp};
 use crate::game::script::CALLBACK_SETUP;
 use crate::game::temp_entity::{Scope, TempEntity};
 use glam::Vec3;
 use vcod_common::net::protocol::ENTITYNUM_WORLD;
-use vcod_gsc::{ArrayKey, Cx, ErrorKind, Host, Target, Value};
+use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
 
@@ -241,30 +240,74 @@ fn as_f32(v: &Value) -> Result<f32, ErrorKind> {
     }
 }
 
-/// `radiusDamage(origin, radius, maxDamage, minDamage)`. A builtin must
-/// never reenter the VM, so this queues a `DamageEvent` rather than calling
-/// `CodeCallback_PlayerDamage` inline; stage 6 drains the queue.
+/// `radiusDamage(origin, radius, maxDamage, minDamage [, attacker])`
+/// (`functions[72]`, `.so` 0x5eef4): `CodeCallback_PlayerDamage` on every
+/// live player inside the radius, spawned so each runs before the calling
+/// thread's next line, the way `finishPlayerDamage` starts the killed
+/// callback.
+///
+/// The falloff is linear from `maxDamage` at the blast to `minDamage` at the
+/// radius, which is RTCW's `G_RadiusDamage` rather than a curve read out of
+/// 0x5eef4 (docs/research/cod11-gsc-language.md, section 10).
+///
+/// The optional fifth argument is both the inflictor and the attacker, so a
+/// script's grenade names its thrower in the killfeed; anything that is not
+/// an entity leaves both undefined, which is a world kill. The position each
+/// victim is measured at is its `origin` field, the copy `Server` mirrors
+/// from the sim every frame.
 pub fn radius_damage(
     host: &mut GameHost,
-    _cx: &mut Cx,
+    cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let [Value::Vector(origin), radius, max_damage, min_damage] = args else {
+    let [Value::Vector(origin), radius, max_damage, min_damage, rest @ ..] = args else {
         return Err(ErrorKind::BadType(
             "radiusDamage takes an origin, radius, max damage and min damage",
         ));
     };
+    let at = Vec3::from(*origin);
     let radius = as_f32(radius)?;
-    let max_damage = as_f32(max_damage)?;
-    let min_damage = as_f32(min_damage)?;
-    host.damage.push(DamageEvent {
-        origin: *origin,
-        radius,
-        max_damage,
-        min_damage,
-        attacker: None,
-    });
+    let (max_damage, min_damage) = (as_f32(max_damage)?, as_f32(min_damage)?);
+    let attacker = match rest.first() {
+        Some(e @ Value::Entity(_)) => *e,
+        _ => Value::Undefined,
+    };
+    let victims: Vec<EntId> = host
+        .ents
+        .iter_inuse()
+        .filter(|(id, e)| e.client.is_some() && !host.client_vitals[id.0 as usize].dead)
+        .map(|(id, _)| id)
+        .collect();
+    let origin_field = cx.intern_folded("origin");
+    let (mod_, none) = (cx.intern_exact("MOD_EXPLOSIVE"), cx.intern_exact("none"));
+    let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
+    for id in victims {
+        let Value::Vector(stands) = host.get_field(cx, id, origin_field) else {
+            continue;
+        };
+        let away = Vec3::from(stands) - at;
+        let dist = away.length();
+        if dist >= radius {
+            continue;
+        }
+        // Multiplied before it is divided: taking the ratio first loses a
+        // bit, which the truncation below turns into a whole point of damage.
+        let damage = max_damage - (max_damage - min_damage) * dist / radius;
+        let dir = away.normalize_or_zero();
+        let args = vec![
+            attacker,
+            attacker,
+            Value::Int(damage as i32),
+            Value::Int(DFLAG_RADIUS),
+            Value::String(mod_),
+            Value::String(none),
+            Value::Vector(*origin),
+            Value::Vector(dir.into()),
+            Value::String(none),
+        ];
+        cx.spawn(callback, Some(Target::Entity(id)), args);
+    }
     Ok(Value::Undefined)
 }
 
@@ -460,27 +503,80 @@ mod tests {
         );
     }
 
-    /// A builtin must never reenter the VM, so `radiusDamage` queues an
-    /// event the server drains after `run_frame` rather than calling
-    /// `CodeCallback_PlayerDamage` inline. That is a deliberate divergence
-    /// and it is observable: a script that damages and then reads
-    /// `self.health` sees the pre-callback value.
+    /// `radiusDamage` runs `CodeCallback_PlayerDamage` on every live client
+    /// inside the radius, inline, before the calling thread's next line:
+    /// the near client takes the falloff's damage and dies of it, the one
+    /// 1000 units out takes nothing, and the flags the script is handed
+    /// carry `DFLAG_RADIUS`. The attacker is the fifth argument, which is
+    /// the far client here, so a victim read where an attacker belongs
+    /// would name the wrong entity.
+    ///
+    /// The second blast is the dead check: a corpse is not damaged again,
+    /// so the near client's callback ran once.
     #[test]
-    fn radiusdamage_queues_rather_than_calling_back() {
-        let (mut vm, mut host) = fixture();
-        vm.with_cx(|cx| {
-            let at = Value::Vector([0.0, 0.0, 0.0]);
-            radius_damage(
-                &mut host,
-                cx,
-                None,
-                &[at, Value::Int(300), Value::Int(2000), Value::Int(50)],
-            )
-            .unwrap();
-            assert_eq!(host.damage.len(), 1);
-            assert_eq!(host.damage[0].radius, 300.0);
-            assert_eq!(host.damage[0].max_damage, 2000.0);
+    fn radiusdamage_damages_every_live_client_inside_the_radius() {
+        const SCRIPT: &str = r#"
+            main() {
+                wait 1;
+                radiusDamage((0, 0, 0), 300, 2000, 50, level.attacker);
+                wait 1;
+                radiusDamage((0, 0, 0), 300, 2000, 50, level.attacker);
+            }
+            CodeCallback_PlayerConnect() {
+                if (self.name == "killer")
+                    level.attacker = self;
+            }
+            CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+                if (!isdefined(self.hits))
+                    self.hits = 0;
+                self.hits = self.hits + 1;
+                self.took = iDamage;
+                self.flags = iDFlags;
+                self.mod = sMeansOfDeath;
+                self.killer = eAttacker getEntityNumber();
+                self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+            }
+            CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {}
+        "#;
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "victim".into(),
         });
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 1,
+            name: "killer".into(),
+        });
+        rt.run_frame(50);
+        for slot in [0, 1] {
+            rt.host.client_vitals[slot] = Vitals {
+                health: 100,
+                max_health: 100,
+                dead: false,
+            };
+        }
+        rt.set_client_origin(0, [100.0, 0.0, 0.0]);
+        rt.set_client_origin(1, [1000.0, 0.0, 0.0]);
+        rt.run_frame(1100);
+        rt.run_frame(2200);
+
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        // 2000 - (2000 - 50) * 100/300, the linear falloff.
+        assert_eq!(rt.client_field(0, "took").as_deref(), Some("1350"));
+        assert_eq!(rt.client_field(0, "flags").as_deref(), Some("1"));
+        assert_eq!(rt.client_field(0, "mod").as_deref(), Some("MOD_EXPLOSIVE"));
+        assert_eq!(rt.client_field(0, "killer").as_deref(), Some("1"));
+        assert_eq!(rt.client_field(0, "hits").as_deref(), Some("1"));
+        assert_eq!(rt.client_vitals(0).health, 0);
+        assert!(rt.client_vitals(0).dead);
+
+        assert_eq!(
+            rt.client_field(1, "took").as_deref(),
+            Some("Undefined"),
+            "1000 units out, past the radius"
+        );
+        assert_eq!(rt.client_vitals(1).health, 100);
+        assert!(!rt.client_vitals(1).dead);
     }
 
     /// `bulletTrace` runs a real trace against the collision world when the

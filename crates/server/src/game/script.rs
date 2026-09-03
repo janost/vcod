@@ -727,16 +727,6 @@ impl ScriptRuntime {
         for e in self.vm.run_frame(&mut self.host, now_ms) {
             log::warn!("script error: {e:?}");
         }
-        // Stage 6 drains `damage` into the damage callback; until then, drop
-        // it here each frame so a long-running map's radiusDamage calls
-        // don't grow the queue without bound.
-        if !self.host.damage.is_empty() {
-            log::debug!(
-                "gsc: dropping {} queued damage event(s), the damage callback is not wired yet",
-                self.host.damage.len()
-            );
-            self.host.damage.clear();
-        }
         // Stage 6 ends the map on this; until then, log once and clear it
         // so a script that called exitLevel does not spam every frame after.
         if self.host.exit_level {

@@ -771,19 +771,16 @@ added closes that (section 14 of
   on one event is killed rather than woken, regardless of which it
   registered first. The wake order *within* each pass is measured (start
   order, `# probe_notify`); the ordering *between* the two passes is not.
-- **Damage from `radiusDamage` is queued and drained after `run_frame`, not
-  dispatched inline.** Retail runs `CodeCallback_PlayerDamage` synchronously
-  from inside `radiusDamage`, a builtin calling back into script mid-call.
-  `Cx` deliberately keeps no route back into the VM, the same reason
-  `notify` is queued rather than resolved inline (the first entry above), so
-  `radiusDamage` pushes a `DamageEvent` onto `GameHost.damage`
-  (`crates/server/src/game/damage.rs`) instead of calling script directly;
-  the server drains the queue after `run_frame` returns, which stage 6
-  wires up. Observable: a script that calls `radiusDamage` and then reads
-  `self.health` in the same expression sees the value from before the
-  callback runs, not after. This is architectural, following directly from
-  `Cx`'s no-reentrancy rule, not something a probe measured retail
-  disagreeing on.
+- **`radiusDamage`'s falloff curve is RTCW's, not retail's.** The callback
+  itself is no longer a divergence: `radius_damage`
+  (`crates/server/src/game/builtins/combat.rs`) hands
+  `CodeCallback_PlayerDamage` to `Cx::spawn`, which the interpreter starts as
+  soon as the builtin returns and before the calling thread's next
+  instruction, so a script that damages and then reads `self.health` sees
+  what the callback left, the way retail's synchronous call does. What each
+  victim takes is the open half: the damage falls off linearly from
+  `maxDamage` at the blast to `minDamage` at the radius, which is RTCW's
+  `G_RadiusDamage`. INFERRED — the curve at `.so` 0x5eef4 was not read.
 - **Of the `SP_` layer, only what the wire can see runs.**
   `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces
   `G_CallSpawn`'s third case for the five classnames whose `SP_` function is

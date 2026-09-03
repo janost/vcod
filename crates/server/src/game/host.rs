@@ -7,7 +7,6 @@
 
 use crate::configstrings::{Allocators, CsRange};
 use crate::game::builtins;
-use crate::game::damage::DamageEvent;
 use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
 use crate::game::fields::{self, FieldType, Route};
 use crate::server::MAX_CLIENTS;
@@ -147,12 +146,12 @@ pub struct GameHost {
     pub configstrings: Vec<String>,
     pub ents: ObjectTable,
     /// Client lifecycle events the netcode raised, drained by `run_frame`
-    /// before the think pass. Queued rather than called inline for the same
-    /// reason `damage` is: a builtin must never reenter the VM.
+    /// before the think pass: a callback run inline from `SV_ClientCommand`
+    /// would reenter the VM mid-frame.
     pub client_events: Vec<ClientEvent>,
     /// Per-client server commands the script asked for, by client slot,
     /// drained by `Server` after `run_frame`. A builtin cannot reach the
-    /// netchan, so it queues, the same reason `damage` does.
+    /// netchan, so it queues, the same reason `client_events` does.
     pub client_commands: Vec<(usize, String)>,
     /// Spawns the script performed this frame, drained by `Server` after
     /// `run_frame` the way `client_commands` is.
@@ -190,10 +189,6 @@ pub struct GameHost {
     /// The map's weapon table, for the fields the builtins need: the ammo and
     /// clip indexes an op addresses, and the rounds it hands out.
     pub weapons: std::rc::Rc<crate::weapons::WeaponTable>,
-    /// Damage the script asked for, drained after `run_frame` by stage 6.
-    /// A builtin must never reenter the VM, so a callback becomes a queued
-    /// event (the design's "callbacks cannot run inline").
-    pub damage: Vec<DamageEvent>,
     /// Runtime configstring slot allocators, one per engine indexer
     /// (`G_ModelIndex` and its siblings).
     pub allocators: Allocators,
@@ -272,7 +267,6 @@ impl GameHost {
             client_entity_states: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
             weapons: std::rc::Rc::new(crate::weapons::WeaponTable::empty()),
-            damage: Vec::new(),
             allocators: Allocators::new(),
             cvars: crate::cvars::Cvars::new(),
             world: None,
