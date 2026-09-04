@@ -1481,6 +1481,9 @@ main
             rot,
             local_pos,
             local_rot,
+            hit_mins: Vec3::ZERO,
+            hit_maxs: Vec3::ZERO,
+            hit_location: 0,
         }
     }
 

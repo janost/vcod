@@ -53,6 +53,13 @@ pub struct Bone {
     pub rot: Quat,
     pub local_pos: Vec3,
     pub local_rot: Quat,
+    /// The hit box in this bone's own frame; all-zero on a bone the artist
+    /// turned off. docs/research/xmodel-v14-format.md, "xmodelparts/<lod>".
+    pub hit_mins: Vec3,
+    pub hit_maxs: Vec3,
+    /// Index into the 19 hit-location names, 0 (`none`) when the bone
+    /// inherits its parent's. docs/research/cod11-combat.md section 3.
+    pub hit_location: u8,
 }
 
 /// Little-endian cursor; bounds-checked, never panics on a truncated file.
@@ -275,7 +282,8 @@ fn parse_parts(data: &[u8], model_type: u8) -> Result<Vec<Bone>> {
     let mut bones: Vec<Bone> = Vec::with_capacity(total);
     for &(parent, mut local_pos, local_rot) in &locals {
         let name = r.cstr()?;
-        r.skip(24)?;
+        let hit_mins = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+        let hit_maxs = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
         if is_viewhands && is_viewhands_posed(&name) {
             local_pos = Vec3::ZERO;
         }
@@ -294,9 +302,14 @@ fn parse_parts(data: &[u8], model_type: u8) -> Result<Vec<Bone>> {
             rot,
             local_pos,
             local_rot,
+            hit_mins,
+            hit_maxs,
+            hit_location: 0,
         });
     }
-    r.skip(total)?; // per-bone u8 table (part group)
+    for b in bones.iter_mut() {
+        b.hit_location = r.u8()?;
+    }
     Ok(bones)
 }
 
@@ -728,10 +741,12 @@ mod tests {
             parts.extend(0i16.to_le_bytes()); // identity quat
         }
         parts.extend(b"root\0");
-        parts.extend([0u8; 24]);
+        parts.extend([0u8; 24]); // hit box, all zero
         parts.extend(b"child\0");
-        parts.extend([0u8; 24]);
-        parts.extend([0u8; 2]); // per-bone u8 table
+        for v in [-1f32, -2.0, -3.0, 4.0, 5.0, 6.0] {
+            parts.extend(v.to_le_bytes()); // hit box
+        }
+        parts.extend([0u8, 2]); // per-bone hit-location table
 
         // surfs: 1 surface, 3 verts, 1 tri, unrigged on bone 1 (child)
         let mut surfs = Vec::new();
@@ -777,6 +792,73 @@ mod tests {
         assert_eq!(s.verts[0].bone_weights, [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(m.bones[1].local_pos, Vec3::new(0.0, 0.0, 2.0));
         assert_eq!(m.bones[1].local_rot, Quat::IDENTITY);
+        assert_eq!(m.bones[0].hit_maxs, Vec3::ZERO);
+        assert_eq!(m.bones[0].hit_location, 0);
+        assert_eq!(m.bones[1].hit_mins, Vec3::new(-1.0, -2.0, -3.0));
+        assert_eq!(m.bones[1].hit_maxs, Vec3::new(4.0, 5.0, 6.0));
+        assert_eq!(m.bones[1].hit_location, 2);
+    }
+
+    /// The two per-bone blocks: the 24 bytes after each bone name are a
+    /// bone-space hit box and the trailing byte per bone is the hit-location
+    /// index. `USAirborne3` is the LOD0 of every `playerbody_*`.
+    #[test]
+    fn player_rig_carries_hit_boxes_and_locations() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let body = load(&fs, "playerbody_american_airborne").unwrap();
+        let by_name = |m: &XModel, name: &str| {
+            let b = m.bones.iter().position(|b| b.name == name).unwrap();
+            (
+                m.bones[b].hit_mins,
+                m.bones[b].hit_maxs,
+                m.bones[b].hit_location,
+            )
+        };
+
+        // 18 is `gun`: the weapon tags are how the artist keeps a bullet from
+        // scoring the rifle in the hands.
+        assert_eq!(by_name(&body, "tag_weapon_right").2, 18);
+        // The thigh box runs down +X to the knee.
+        let (mins, maxs, hl) = by_name(&body, "bip01 l thigh");
+        assert!(
+            mins.abs_diff_eq(Vec3::new(-2.07, -6.69, -5.04), 0.01),
+            "{mins}"
+        );
+        assert!(
+            maxs.abs_diff_eq(Vec3::new(17.41, 7.49, 4.97), 0.01),
+            "{maxs}"
+        );
+        assert_eq!(hl, 13); // left_leg_upper
+                            // The body's own head and neck boxes are zero; the head model carries them.
+        assert_eq!(by_name(&body, "bip01 head").1, Vec3::ZERO);
+        assert_eq!(by_name(&body, "bip01 neck").1, Vec3::ZERO);
+
+        let head = load(&fs, "basehead2").unwrap(); // LOD0 xmodelparts/basehead21
+        let (mins, maxs, hl) = by_name(&head, "bip01 head");
+        assert!(
+            mins.abs_diff_eq(Vec3::new(-0.29, -4.90, -4.11), 0.01),
+            "{mins}"
+        );
+        assert!(
+            maxs.abs_diff_eq(Vec3::new(9.09, 5.63, 4.16), 0.01),
+            "{maxs}"
+        );
+        assert_eq!(hl, 2); // head
+        assert_eq!(by_name(&head, "bip01 neck").2, 3);
+
+        for m in [&body, &head] {
+            for b in &m.bones {
+                assert!(
+                    b.hit_location <= 18,
+                    "{}: {} {}",
+                    m.lod,
+                    b.name,
+                    b.hit_location
+                );
+            }
+        }
     }
 
     #[test]
