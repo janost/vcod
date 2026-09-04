@@ -261,10 +261,13 @@ const BULLET_RANGE: f32 = 8192.0;
 
 /// The cone's half-angle in degrees for this shot (combat doc, 2.1): the
 /// stance's hip minimum blended toward `hipSpreadMax` by `aimSpreadScale`,
-/// or the same blend from `adsSpread` when aiming down the sight.
+/// or the same blend from `adsSpread` off a settled sight. `ads` is
+/// `fWeaponPosFrac == 1.0`, the exact compare retail's two arms split on,
+/// and not the usercmd's sight bit: the sight is up for the whole of a
+/// transition and the cone is the hip one until it lands.
 fn spread_deg(def: &WeaponDef, sim: &ClientSim, ads: bool) -> f32 {
     use vcod_common::pmove::Stance;
-    let scale = sim.aim_spread_scale / 255.0;
+    let scale = sim.ps.aim_spread_scale / 255.0;
     let min = if ads {
         def.ads_spread
     } else {
@@ -317,7 +320,8 @@ fn ray_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3) -> Option<f32> {
 /// A player's shot: from the eye along the view with spread, against the
 /// world and every live player's box; the nearer wins (combat doc, section
 /// 2). `sims` is every client with a sim, the shooter among them; `ads` is
-/// the trigger cmd's sight bit; `weapon_name` is what the callback is told
+/// whether the shot left a settled sight; `weapon_name` is what the callback
+/// is told
 /// (`BG_GetInfoForWeapon(weapon)->name`). Damage is `weaponDef.damage`
 /// through the hit-location table with no distance term (2.4). A rifle
 /// round's pass through the first player at half damage (2.4, step 5) is

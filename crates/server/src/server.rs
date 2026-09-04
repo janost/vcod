@@ -164,8 +164,8 @@ pub(crate) struct Shot {
     /// `ps.weapon` at the shot, which the delayed trace must use rather than
     /// whatever the client is holding by the time it runs.
     pub weapon: u8,
-    /// The trigger cmd's sight bit, which picks `adsSpread` over the hip
-    /// spread.
+    /// Whether the shot left a settled sight (`fWeaponPosFrac == 1.0`),
+    /// which picks `adsSpread` over the hip spread (combat doc, 2.1).
     pub ads: bool,
 }
 
@@ -1520,7 +1520,7 @@ impl Server {
                         self.pending_shots.push(Shot {
                             slot,
                             weapon: sim.ps.weapon,
-                            ads: cmd.buttons & msg::BUTTON_ADS != 0,
+                            ads: sim.ps.weapon_pos_frac == 1.0,
                         });
                     }
                 }

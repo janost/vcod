@@ -5,16 +5,15 @@
 //! docs/research/player-model-anim-system.md, "The weapon channel".
 //!
 //! Not modelled yet: melee (1.10, states 10 and 11), grenades (1.11), the
-//! alt-weapon and `clipOnly` clauses of the switch path, the shot's
-//! `aimSpreadScale` growth (1.5 step 8), and the three stops of 1.12, whose
-//! `pm_flags`/`pm_type`/`eFlags` this `PlayerState` does not carry.
+//! alt-weapon and `clipOnly` clauses of the switch path, and the three stops
+//! of 1.12, whose `pm_flags`/`pm_type`/`eFlags` this `PlayerState` does not
+//! carry.
 //!
-//! Two deliberate divergences from a VERIFIED retail reading. Retail's
+//! One deliberate divergence from a VERIFIED retail reading: retail's
 //! weapon-change check treats a `cmd.weapon` of 0 as a request to holster
-//! (1.8); [`requested_weapon`] reads it as "the cmd asks for nothing" and
+//! (1.8), and [`requested_weapon`] reads it as "the cmd asks for nothing" and
 //! keeps the current weapon, so a caller that does not thread the byte yet
-//! is not disarmed every frame. And [`advance_ads`] is vcod's own lerp: the
-//! retail rule for `fWeaponPosFrac` was not read.
+//! is not disarmed every frame.
 
 use super::{PlayerState, PmEvent, PmInput, Stance};
 use crate::weapon::WeaponDef;
@@ -157,32 +156,171 @@ fn clear_rechamber(ps: &mut PlayerState) {
     }
 }
 
-/// The ADS fraction, `ps.fWeaponPosFrac`: a linear ramp to 1.0 while the
-/// sight button is held, over the weapon file's `adsTransInTime`, and back
-/// to 0.0 over `adsTransOutTime` when it is released. INFERRED, and INFERRED
-/// only: nothing in the binary was read for it (combat doc, 9.4). It is on
-/// the wire because the client replays its own prediction from the
-/// snapshot's playerstate, so a constant 0 restarts its ADS lerp every
-/// snapshot.
-///
-/// A zero transition time is a jump to the endpoint rather than a division.
-fn advance_ads(ps: &mut PlayerState, input: &PmInput, def: &WeaponDef, dt_ms: i32) {
-    let dt = dt_ms as f32 / 1000.0;
-    let (target, time) = if input.ads {
-        (1.0, def.ads_trans_in)
+/// `pm_flags` 0x20, the gated ADS flag. The usercmd's sight bit reaches
+/// nothing else: the fraction's ramp and the animscript's `ads` condition
+/// both read this instead (combat doc, 1.13).
+pub const PMF_ADS: i32 = 0x20;
+/// `pm_flags` 0x80, the ADS walk slow-down, which rides on 0x20.
+pub const PMF_ADS_WALK: i32 = 0x80;
+
+/// Retail's fallbacks for a weapon file that spells no transition time,
+/// derived at load into reciprocal milliseconds (combat doc, 1.13).
+const ADS_TRANS_IN_DEFAULT_MS: f32 = 300.0;
+const ADS_TRANS_OUT_DEFAULT_MS: f32 = 500.0;
+/// What an airborne frame adds to `aimSpreadScale` before the frame-time
+/// scaling: 1.28 twice, in two separate adds (combat doc, 2.1).
+const AIR_SPREAD_ADD: f32 = 1.28 + 1.28;
+
+/// A transition time in milliseconds, or retail's fallback when the file
+/// spells none.
+fn trans_ms(seconds: f32, fallback: f32) -> f32 {
+    let ms = ms(seconds) as f32;
+    if ms > 0.0 {
+        ms
     } else {
-        (0.0, def.ads_trans_out)
-    };
-    if time <= 0.0 {
-        ps.weapon_pos_frac = target;
+        fallback
+    }
+}
+
+/// `PM_UpdateAimDownSightFlag` (`game.mp.i386.so` 0x37230), combat doc 1.13.
+/// Every clause is a way to lose the sight: no `aimDownSight` on the weapon,
+/// a weapon being raised, holstered or swung, and being off the ground. The
+/// dead clear is `pmove::dead_move`'s, since no pmove step runs for a dead
+/// player at all.
+pub fn update_ads_flag(ps: &mut PlayerState, input: &PmInput, def: Option<&WeaponDef>) {
+    let keep = input.ads
+        && def.is_some_and(|d| d.aim_down_sight)
+        && !matches!(
+            ps.weaponstate,
+            WEAPON_RAISING | WEAPON_DROPPING | WEAPON_MELEE_WINDUP | WEAPON_MELEE_RELAX
+        )
+        && ps.on_ground;
+    if !keep {
+        ps.ads_active = false;
+    } else if ps.stance != Stance::Prone {
+        ps.ads_active = true;
+    } else if !(ps.last_cmd_ads && (input.forward != 0.0 || input.right != 0.0)) {
+        // A prone player crawling with the sight already held on the previous
+        // cmd keeps the flag as it is; every other prone frame sets it.
+        ps.ads_active = true;
+    }
+}
+
+/// The `pm_flags` bits the ADS path owns. 0x80 is
+/// `PM_UpdatePlayerWalkingFlag`'s (`0x33694`): it rides on 0x20 but drops for
+/// a prone player and for the whole of a reload, while 0x20 stays on.
+/// `pm_flags` 0x400, which the prone arm ORs in beside 0x20, is unnamed and
+/// unmodelled (combat doc, section 10).
+pub fn ads_pm_flags(ps: &PlayerState) -> i32 {
+    if !ps.ads_active {
+        return 0;
+    }
+    let walking = ps.stance != Stance::Prone
+        && !matches!(ps.weaponstate, WEAPON_RELOADING..=WEAPON_RELOAD_END);
+    PMF_ADS | if walking { PMF_ADS_WALK } else { 0 }
+}
+
+/// The ADS fraction, `ps.fWeaponPosFrac`: `PM_UpdateAimDownSightLerp`
+/// (`game.mp.i386.so` 0x372fc, `cgame_mp_x86.dll` 0x3000fc80), the first
+/// thing `PM_Weapon` does (combat doc, 1.13). A linear ramp by
+/// `msec / adsTransInTime` toward the sight while `pm_flags` 0x20 is held and
+/// by `msec / adsTransOutTime` back to the hip when it is not, pinned at 0
+/// for all of a reload but its last `adsReloadTransTime`.
+///
+/// The client predicts the same function off each snapshot's playerstate, so
+/// a fraction that is merely plausible here is re-based into its prediction
+/// twenty times a second and reads as the weapon twitching.
+fn advance_ads(ps: &mut PlayerState, def: &WeaponDef, dt_ms: i32) {
+    if !def.aim_down_sight {
+        ps.weapon_pos_frac = 0.0;
         return;
     }
-    let step = dt / time;
-    ps.weapon_pos_frac = if target > ps.weapon_pos_frac {
-        (ps.weapon_pos_frac + step).min(target)
+    // The sight may start coming back up once the reload has less than
+    // `adsReloadTransTime` left to run.
+    let tail = ps.weapon_time_ms - ms(def.ads_reload_trans_time) <= 0;
+    let reloading = if def.segmented_reload {
+        match ps.weaponstate {
+            WEAPON_RELOADING..=WEAPON_RELOAD_START_INTERUPT => true,
+            WEAPON_RELOAD_END => !tail,
+            _ => false,
+        }
     } else {
-        (ps.weapon_pos_frac - step).max(target)
+        ps.weaponstate == WEAPON_RELOADING && !tail
     };
+    // An `adsFire` weapon aims itself: the shot in flight forces the sight up
+    // whatever the button says.
+    let want = (ps.ads_active && !reloading)
+        || (def.ads_fire && ps.weapon_delay_ms != 0 && ps.weaponstate == WEAPON_FIRING);
+    let step = dt_ms as f32
+        / if want {
+            trans_ms(def.ads_trans_in, ADS_TRANS_IN_DEFAULT_MS)
+        } else {
+            -trans_ms(def.ads_trans_out, ADS_TRANS_OUT_DEFAULT_MS)
+        };
+    ps.weapon_pos_frac = (ps.weapon_pos_frac + step).clamp(0.0, 1.0);
+}
+
+/// `PM_AdjustAimSpreadScale` (`game.mp.i386.so` 0x385e8, dll 0x30011050),
+/// combat doc 2.1: the hip cone opens while the player moves, turns or falls
+/// and decays at the weapon's own rate whatever else happens. Both halves
+/// carry the same `* 255.0`, so a standing frame of the carbine's decay is 51
+/// of the field's 0..255 range rather than 0.2.
+///
+/// `def` is `None` for a weapon index with no file, which reads the same as
+/// `hipSpreadDecayRate 0`: a flat -255 a frame, so the cone shuts within one.
+pub fn adjust_aim_spread_scale(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    def: Option<&WeaponDef>,
+    dt: f32,
+) {
+    let (add, decay) = match def {
+        Some(def) if def.hip_spread_decay_rate != 0.0 => {
+            let mut decay = def.hip_spread_decay_rate;
+            // The three stance arms are exclusive and airborne wins.
+            if !ps.on_ground {
+                decay *= 0.5;
+            } else if ps.stance == Stance::Prone {
+                decay *= def.hip_spread_prone_decay;
+            } else if ps.stance == Stance::Crouch {
+                decay *= def.hip_spread_ducked_decay;
+            }
+            let (mut add, mut turn) = (0.0, 0.0);
+            // A settled sight takes none of the additions; the decay runs
+            // whatever the fraction is.
+            if ps.weapon_pos_frac != 1.0 {
+                if def.hip_spread_turn_add != 0.0 {
+                    for axis in 0..2 {
+                        let d = angle_delta_deg(input.angles[axis], ps.last_cmd_angles[axis]);
+                        // Retail divides this term by the frame time and
+                        // multiplies the whole add by it again, so turning
+                        // opens the cone by the angle alone at any frame
+                        // rate; written as the product the two reduce to.
+                        turn += d.abs() * 0.01 * def.hip_spread_turn_add;
+                    }
+                }
+                if def.hip_spread_move_add != 0.0 && (input.forward != 0.0 || input.right != 0.0) {
+                    add += def.hip_spread_move_add;
+                }
+                if !ps.on_ground {
+                    add += AIR_SPREAD_ADD;
+                }
+            }
+            (add * dt + turn, decay * dt)
+        }
+        // `hipSpreadDecayRate 0` short-circuits to a decay of 1.0 with no
+        // frame-time scaling at all, which empties the counter in one frame.
+        _ => (0.0, 1.0),
+    };
+    ps.aim_spread_scale = (ps.aim_spread_scale + (add - decay) * 255.0).clamp(0.0, 255.0);
+}
+
+/// `AngleSubtract(SHORT2ANGLE(a), SHORT2ANGLE(b))`: the shorter way round
+/// between two wire angles, in degrees.
+fn angle_delta_deg(a: i32, b: i32) -> f32 {
+    const SHORT2ANGLE: f32 = 360.0 / 65536.0;
+    let d = (a - b) as f32 * SHORT2ANGLE;
+    (d + 180.0).rem_euclid(360.0) - 180.0
 }
 
 /// One frame of the weapon machine. `dt_ms` is retail's `pml.msec`.
@@ -199,7 +337,7 @@ pub fn pm_weapon(
     // The fraction rides on the held weapon's own transition times, so it
     // stands still while the weapon has no def to read them from.
     if let Some(def) = weapon_def(weapons, ps.weapon) {
-        advance_ads(ps, input, def, dt_ms);
+        advance_ads(ps, def, dt_ms);
     }
 
     // "finish a raise": state 1 lasts the one frame, `raiseTime` only holds
@@ -244,7 +382,7 @@ pub fn pm_weapon(
         }
         return;
     }
-    fire(ps, input, def, events);
+    fire(ps, def, events);
 }
 
 /// Sections 1.3 and 1.4. Returns whether `weaponDelay` reached 0 on this
@@ -386,6 +524,8 @@ fn pickup(ps: &mut PlayerState, weapons: &[Option<WeaponDef>], events: &mut Vec<
     };
     ps.weaponstate = WEAPON_RAISING;
     ps.weapon_time_ms = ms(def.raise_time);
+    // A weapon coming up starts with the cone wide open (section 1.8).
+    ps.aim_spread_scale = 255.0;
     set_anim(ps, WEAP_RAISE);
     push(events, EV_RAISE_WEAPON);
 }
@@ -622,15 +762,23 @@ fn rechamber_check(
     } else {
         1
     };
-    set_anim(ps, WEAP_RECHAMBER);
+    // The rechamber picks its aimed form off the same threshold the shot
+    // does (section 1.9).
+    set_anim(
+        ps,
+        if ps.weapon_pos_frac > 0.75 {
+            WEAP_ADS_RECHAMBER
+        } else {
+            WEAP_RECHAMBER
+        },
+    );
     push(events, EV_RECHAMBER_WEAPON);
     true
 }
 
-/// Section 1.5. The `ads` proxy for `fWeaponPosFrac > 0.75` is vcod's, and
-/// stays one now that [`advance_ads`] carries the fraction: the ramp that
-/// fills it is INFERRED, and the shot must not be gated on a guess.
-fn fire(ps: &mut PlayerState, input: &PmInput, def: &WeaponDef, events: &mut Vec<PmEvent>) {
+/// Section 1.5, and the anim pick of 1.2, which reads the ADS fraction
+/// rather than the usercmd's sight bit.
+fn fire(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmEvent>) {
     if ps.weapon_delay_ms != 0 {
         return;
     }
@@ -652,10 +800,21 @@ fn fire(ps: &mut PlayerState, input: &PmInput, def: &WeaponDef, events: &mut Vec
     ps.weaponstate = WEAPON_FIRING;
     ps.weapon_time_ms = ms(def.fire_time);
     ps.weapon_delay_ms = ms(def.fire_delay);
+    // An `adsFire` weapon's shot waits out whatever is left of the raise
+    // (`.so` 0x38b23, section 1.5 step 1).
+    if def.ads_fire {
+        ps.weapon_delay_ms = ((1.0 - ps.weapon_pos_frac)
+            * trans_ms(def.ads_trans_in, ADS_TRANS_IN_DEFAULT_MS))
+            as i32;
+    }
+    // The shot's own spread add (step 8), skipped from a settled sight.
+    if ps.weapon_pos_frac != 1.0 {
+        ps.aim_spread_scale = (ps.aim_spread_scale + def.hip_spread_fire_add * 255.0).min(255.0);
+    }
     let last = ps.ammoclip[ci] == 0;
     set_anim(
         ps,
-        match (input.ads, last) {
+        match (ps.weapon_pos_frac > 0.75, last) {
             (false, false) => WEAP_ATTACK,
             (false, true) => WEAP_ATTACK_LASTSHOT,
             (true, false) => WEAP_ADS_ATTACK,
@@ -711,9 +870,15 @@ mod tests {
         ps.weapon = 1;
         ps.ammoclip[1] = d.clip_size as i16;
         ps.ammo[1] = 30;
+        // The ADS flag drops for an airborne player, and every test here but
+        // the airborne one is about a player standing on something.
+        ps.on_ground = true;
         (ps, vec![None, Some(d.clone())])
     }
 
+    /// One frame in the order `pmove` runs these in: the spread, then the ADS
+    /// flag, then the machine, then the cmd is remembered as the next frame's
+    /// `oldcmd`.
     fn step(
         ps: &mut PlayerState,
         weapons: &[Option<WeaponDef>],
@@ -723,10 +888,41 @@ mod tests {
         let mut out = Vec::new();
         for _ in 0..frames {
             let mut ev = Vec::new();
+            let def = weapon_def(weapons, ps.weapon).cloned();
+            adjust_aim_spread_scale(ps, input, def.as_ref(), 0.05);
+            update_ads_flag(ps, input, def.as_ref());
             pm_weapon(ps, input, weapons, 50, &mut ev);
+            ps.last_cmd_angles = input.angles;
+            ps.last_cmd_ads = input.ads;
             out.extend(ev.iter().map(|e| e.event));
         }
         out
+    }
+
+    /// The carbine's own ADS and spread numbers, off `weapons/mp/m1carbine_mp`
+    /// in `pak0.pk3` (combat doc, section 0).
+    fn carbine_ads() -> WeaponDef {
+        WeaponDef {
+            aim_down_sight: true,
+            ads_trans_in: 0.3,
+            ads_trans_out: 0.4,
+            ads_reload_trans_time: 0.6,
+            hip_spread_max: 5.0,
+            hip_spread_fire_add: 0.7,
+            hip_spread_decay_rate: 4.0,
+            hip_spread_turn_add: 0.0,
+            hip_spread_move_add: 8.0,
+            hip_spread_ducked_decay: 1.0,
+            hip_spread_prone_decay: 1.1,
+            ..carbine()
+        }
+    }
+
+    fn held(ads: bool) -> PmInput {
+        PmInput {
+            ads,
+            ..Default::default()
+        }
     }
 
     fn run(
@@ -876,44 +1072,332 @@ mod tests {
         assert_eq!(run(&mut ps, &w, true, 1), vec![EV_FIRE_WEAPON]);
     }
 
-    /// The ADS fraction ramps to 1 over `adsTransInTime` while the sight
-    /// button is held and back to 0 over `adsTransOutTime` when it is let go,
-    /// and clamps at both ends rather than overshooting.
+    /// The ramp rate is the file's: 300 ms up and 400 ms down on the carbine,
+    /// at `pml.msec / adsTransInTime` a frame, clamped at both ends rather
+    /// than overshooting (combat doc, 1.13).
     #[test]
-    fn the_ads_fraction_ramps_in_and_back_out() {
-        let mut d = carbine();
-        d.ads_trans_in = 0.2;
-        d.ads_trans_out = 0.4;
-        let (mut ps, w) = armed(&d);
-        let hold = |ps: &mut PlayerState, w: &[Option<WeaponDef>], ads: bool, frames: usize| {
-            let input = PmInput {
-                ads,
-                ..Default::default()
-            };
-            step(ps, w, &input, frames);
-        };
-        // 200 ms in at 50 ms a frame: four frames to the sight.
-        hold(&mut ps, &w, true, 3);
-        assert!(
-            (ps.weapon_pos_frac - 0.75).abs() < 1e-5,
-            "{}",
-            ps.weapon_pos_frac
-        );
-        hold(&mut ps, &w, true, 1);
-        assert_eq!(ps.weapon_pos_frac, 1.0);
-        hold(&mut ps, &w, true, 4);
-        assert_eq!(ps.weapon_pos_frac, 1.0, "held at the sight, not past it");
-        // 400 ms out: eight frames back to the hip.
-        hold(&mut ps, &w, false, 4);
+    fn the_ads_fraction_ramps_at_the_weapon_files_rate() {
+        let (mut ps, w) = armed(&carbine_ads());
+        // 300 ms in at 50 ms a frame: six frames to the sight.
+        step(&mut ps, &w, &held(true), 3);
         assert!(
             (ps.weapon_pos_frac - 0.5).abs() < 1e-5,
             "{}",
             ps.weapon_pos_frac
         );
-        hold(&mut ps, &w, false, 4);
+        step(&mut ps, &w, &held(true), 3);
+        assert_eq!(ps.weapon_pos_frac, 1.0);
+        step(&mut ps, &w, &held(true), 4);
+        assert_eq!(ps.weapon_pos_frac, 1.0, "held at the sight, not past it");
+        // 400 ms out: eight frames back to the hip.
+        step(&mut ps, &w, &held(false), 4);
+        assert!(
+            (ps.weapon_pos_frac - 0.5).abs() < 1e-5,
+            "{}",
+            ps.weapon_pos_frac
+        );
+        step(&mut ps, &w, &held(false), 4);
         assert_eq!(ps.weapon_pos_frac, 0.0);
-        hold(&mut ps, &w, false, 2);
+        step(&mut ps, &w, &held(false), 2);
         assert_eq!(ps.weapon_pos_frac, 0.0, "held at the hip, not below it");
+    }
+
+    /// A file with no transition times falls back to 300 ms in and 500 ms
+    /// out, the two reciprocals `BG_SetupWeaponInfo` derives at load.
+    #[test]
+    fn a_weapon_with_no_transition_times_takes_the_retail_defaults() {
+        let mut d = carbine_ads();
+        d.ads_trans_in = 0.0;
+        d.ads_trans_out = 0.0;
+        let (mut ps, w) = armed(&d);
+        step(&mut ps, &w, &held(true), 6);
+        assert_eq!(ps.weapon_pos_frac, 1.0, "300 ms up");
+        step(&mut ps, &w, &held(false), 9);
+        assert!(
+            (ps.weapon_pos_frac - 0.1).abs() < 1e-5,
+            "{}",
+            ps.weapon_pos_frac
+        );
+        step(&mut ps, &w, &held(false), 1);
+        assert_eq!(ps.weapon_pos_frac, 0.0, "500 ms down");
+    }
+
+    /// A weapon with `aimDownSight 0` -- the grenades and the mounted MGs --
+    /// holds the fraction at 0 whatever the button does.
+    #[test]
+    fn a_weapon_with_no_sight_never_leaves_the_hip() {
+        let mut d = carbine_ads();
+        d.aim_down_sight = false;
+        let (mut ps, w) = armed(&d);
+        step(&mut ps, &w, &held(true), 10);
+        assert_eq!(ps.weapon_pos_frac, 0.0);
+        assert!(!ps.ads_active, "and the flag never takes either");
+    }
+
+    /// The sight stays down for all of a reload but its last
+    /// `adsReloadTransTime`: 600 ms of the carbine's 2650, so the fraction
+    /// leaves 0 only once `weaponTime` is inside that window.
+    #[test]
+    fn the_reload_pins_the_sight_down_until_its_last_ads_reload_trans_time() {
+        let (mut ps, w) = armed(&carbine_ads());
+        ps.ammoclip[1] = 10;
+        let reload = PmInput {
+            reload: true,
+            ..Default::default()
+        };
+        assert_eq!(step(&mut ps, &w, &reload, 1), vec![EV_RELOAD]);
+        assert_eq!(ps.weapon_time_ms, 2650);
+        // Forty frames on, 650 ms left: still outside the window.
+        let ads = held(true);
+        step(&mut ps, &w, &ads, 40);
+        assert_eq!(ps.weapon_time_ms, 650);
+        assert_eq!(ps.weapon_pos_frac, 0.0);
+        assert!(ps.ads_active, "the flag is set for the whole reload");
+        // The next frame reaches 600 and the sight starts up.
+        step(&mut ps, &w, &ads, 1);
+        assert_eq!(ps.weapon_time_ms, 600);
+        assert!(ps.weapon_pos_frac > 0.0);
+    }
+
+    /// Off the ground the flag drops, so the fraction ramps back down for the
+    /// whole jump and starts again on landing.
+    #[test]
+    fn an_airborne_player_loses_the_sight() {
+        let (mut ps, w) = armed(&carbine_ads());
+        step(&mut ps, &w, &held(true), 6);
+        assert_eq!(ps.weapon_pos_frac, 1.0);
+        ps.on_ground = false;
+        step(&mut ps, &w, &held(true), 1);
+        assert!(!ps.ads_active);
+        assert!(
+            (ps.weapon_pos_frac - 0.875).abs() < 1e-5,
+            "{}",
+            ps.weapon_pos_frac
+        );
+        ps.on_ground = true;
+        step(&mut ps, &w, &held(true), 1);
+        assert!(ps.ads_active);
+        assert!(ps.weapon_pos_frac > 0.875);
+    }
+
+    /// A raise, a holster and a melee each drop the flag while they last.
+    #[test]
+    fn a_busy_weapon_refuses_the_sight() {
+        let (mut ps, w) = armed(&carbine_ads());
+        for state in [
+            WEAPON_RAISING,
+            WEAPON_DROPPING,
+            WEAPON_MELEE_WINDUP,
+            WEAPON_MELEE_RELAX,
+        ] {
+            ps.weaponstate = state;
+            ps.ads_active = true;
+            let def = weapon_def(&w, ps.weapon).cloned();
+            update_ads_flag(&mut ps, &held(true), def.as_ref());
+            assert!(!ps.ads_active, "weaponstate {state}");
+        }
+    }
+
+    /// The prone arm holds the flag where it is rather than setting it, for
+    /// as long as the sight was held on the previous cmd too and the body is
+    /// crawling. So a flag something else cleared does not come back until
+    /// the crawl stops.
+    #[test]
+    fn a_crawling_prone_player_does_not_take_the_flag_back() {
+        let (mut ps, w) = armed(&carbine_ads());
+        ps.stance = Stance::Prone;
+        let crawl = PmInput {
+            ads: true,
+            forward: 1.0,
+            ..Default::default()
+        };
+        // The frame the sight goes down on is a set: the previous cmd held
+        // no sight, so the hold does not apply to it.
+        step(&mut ps, &w, &crawl, 1);
+        assert!(ps.ads_active);
+        // A gap in the flag -- a jump, a weapon raise -- is not recovered
+        // while it crawls with the sight already held.
+        ps.ads_active = false;
+        step(&mut ps, &w, &crawl, 3);
+        assert!(!ps.ads_active);
+        // Stopping restores it.
+        step(&mut ps, &w, &held(true), 1);
+        assert!(ps.ads_active);
+    }
+
+    /// `pm_flags` 0x80 rides on 0x20 but drops for a prone player and for the
+    /// whole of a reload, which 0x20 sits through.
+    #[test]
+    fn the_ads_walk_bit_drops_where_retails_does() {
+        let (mut ps, w) = armed(&carbine_ads());
+        step(&mut ps, &w, &held(true), 6);
+        assert_eq!(ads_pm_flags(&ps), PMF_ADS | PMF_ADS_WALK);
+        ps.weaponstate = WEAPON_RELOADING;
+        assert_eq!(ads_pm_flags(&ps), PMF_ADS);
+        ps.weaponstate = WEAPON_READY;
+        ps.stance = Stance::Prone;
+        assert_eq!(ads_pm_flags(&ps), PMF_ADS);
+        ps.ads_active = false;
+        assert_eq!(ads_pm_flags(&ps), 0);
+    }
+
+    /// A held movement axis opens the cone faster than the carbine decays it
+    /// (8 against 4), so it saturates and stays there; standing still it
+    /// empties at `hipSpreadDecayRate * frametime * 255`, 51 a frame.
+    #[test]
+    fn the_move_term_saturates_the_spread_and_standing_still_empties_it() {
+        let (mut ps, w) = armed(&carbine_ads());
+        let walk = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        // (8 - 4) * 0.05 * 255 = 51 on the first frame.
+        step(&mut ps, &w, &walk, 1);
+        assert!(
+            (ps.aim_spread_scale - 51.0).abs() < 1e-3,
+            "{}",
+            ps.aim_spread_scale
+        );
+        step(&mut ps, &w, &walk, 20);
+        assert_eq!(ps.aim_spread_scale, 255.0);
+        step(&mut ps, &w, &PmInput::default(), 1);
+        assert!(
+            (ps.aim_spread_scale - 204.0).abs() < 1e-3,
+            "{}",
+            ps.aim_spread_scale
+        );
+        step(&mut ps, &w, &PmInput::default(), 4);
+        assert_eq!(ps.aim_spread_scale, 0.0);
+    }
+
+    /// The stance multipliers scale the decay: the carbine's prone 1.1
+    /// against its ducked 1.0. Airborne halves it and adds 2.56 on top, which
+    /// is the only way the counter climbs with no input at all.
+    #[test]
+    fn the_stance_and_airborne_terms_scale_the_decay() {
+        let (mut ps, w) = armed(&carbine_ads());
+        let idle = PmInput::default();
+        for (stance, rate) in [(Stance::Crouch, 4.0 * 1.0), (Stance::Prone, 4.0 * 1.1)] {
+            ps.stance = stance;
+            ps.aim_spread_scale = 255.0;
+            step(&mut ps, &w, &idle, 1);
+            let want = 255.0 - rate * 0.05 * 255.0;
+            assert!(
+                (ps.aim_spread_scale - want).abs() < 1e-3,
+                "{stance:?}: {}",
+                ps.aim_spread_scale
+            );
+        }
+        // Airborne: (2.56 - 4 * 0.5) * 0.05 * 255 = +7.14 a frame from empty.
+        ps.stance = Stance::Stand;
+        ps.on_ground = false;
+        ps.aim_spread_scale = 0.0;
+        step(&mut ps, &w, &idle, 1);
+        assert!(
+            (ps.aim_spread_scale - 7.14).abs() < 1e-3,
+            "{}",
+            ps.aim_spread_scale
+        );
+    }
+
+    /// The turn term is the usercmd angle delta, frame-rate independent. It
+    /// is the one term the two fixture weapons cannot show: both spell
+    /// `hipSpreadTurnAdd 0`, and the BAR is the only stock MP file that does
+    /// not.
+    #[test]
+    fn the_turn_term_reads_the_usercmd_angle_delta() {
+        let mut d = carbine_ads();
+        d.hip_spread_turn_add = 0.8;
+        let (mut ps, w) = armed(&d);
+        // 90 degrees of yaw in one frame: 90 * 0.01 * 0.8 * 255 = 183.6 in,
+        // against the frame's 51 of decay.
+        let turn = PmInput {
+            angles: [0, 16384],
+            ..Default::default()
+        };
+        step(&mut ps, &w, &turn, 1);
+        assert!(
+            (ps.aim_spread_scale - 132.6).abs() < 0.1,
+            "{}",
+            ps.aim_spread_scale
+        );
+        // The same angle held is no turn at all: the delta is against the
+        // previous cmd, not against zero.
+        step(&mut ps, &w, &turn, 1);
+        assert!(
+            (ps.aim_spread_scale - 81.6).abs() < 0.1,
+            "{}",
+            ps.aim_spread_scale
+        );
+    }
+
+    /// A settled sight takes none of the additions and all of the decay, so
+    /// walking with the sight up still closes the cone.
+    #[test]
+    fn a_settled_sight_skips_the_additions_but_not_the_decay() {
+        let (mut ps, w) = armed(&carbine_ads());
+        let walk_ads = PmInput {
+            forward: 1.0,
+            ads: true,
+            ..Default::default()
+        };
+        step(&mut ps, &w, &walk_ads, 6);
+        assert_eq!(ps.weapon_pos_frac, 1.0);
+        ps.aim_spread_scale = 255.0;
+        step(&mut ps, &w, &walk_ads, 1);
+        assert!(
+            (ps.aim_spread_scale - 204.0).abs() < 1e-3,
+            "{}",
+            ps.aim_spread_scale
+        );
+    }
+
+    /// A weapon with no decay rate at all -- and a weapon index with no file
+    /// behind it -- empties the counter in one frame, which is what retail's
+    /// `decay = 1.0` with no frame-time scaling does.
+    #[test]
+    fn a_weapon_with_no_decay_rate_slams_the_spread_shut() {
+        let mut d = carbine_ads();
+        d.hip_spread_decay_rate = 0.0;
+        let (mut ps, w) = armed(&d);
+        ps.aim_spread_scale = 255.0;
+        step(&mut ps, &w, &PmInput::default(), 1);
+        assert_eq!(ps.aim_spread_scale, 0.0);
+        ps.aim_spread_scale = 255.0;
+        adjust_aim_spread_scale(&mut ps, &PmInput::default(), None, 0.05);
+        assert_eq!(ps.aim_spread_scale, 0.0);
+    }
+
+    /// The shot's own add is `hipSpreadFireAdd * 255`, 178.5 on the carbine,
+    /// and it is skipped from a settled sight (section 1.5, step 8).
+    #[test]
+    fn a_shot_adds_its_fire_add_unless_the_sight_is_up() {
+        let (mut ps, w) = armed(&carbine_ads());
+        // The decay runs first and takes an empty counter nowhere, so the
+        // shot's frame reads the add alone; the next one is 51 lower.
+        run(&mut ps, &w, true, 1);
+        assert!(
+            (ps.aim_spread_scale - 178.5).abs() < 0.1,
+            "{}",
+            ps.aim_spread_scale
+        );
+        run(&mut ps, &w, false, 1);
+        assert!(
+            (ps.aim_spread_scale - 127.5).abs() < 0.1,
+            "{}",
+            ps.aim_spread_scale
+        );
+        let (mut ps, w) = armed(&carbine_ads());
+        step(&mut ps, &w, &held(true), 6);
+        assert_eq!(ps.weapon_pos_frac, 1.0);
+        let ads_fire = PmInput {
+            attack: true,
+            ads: true,
+            ..Default::default()
+        };
+        step(&mut ps, &w, &ads_fire, 1);
+        assert_eq!(ps.aim_spread_scale, 0.0, "no add from the sight");
+        assert_eq!(ps.weap_anim & !ANIM_TOGGLEBIT, WEAP_ADS_ATTACK);
     }
 
     /// Every `weapAnim` write flips the toggle, `WEAP_IDLE` included, so each

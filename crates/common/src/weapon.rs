@@ -141,8 +141,21 @@ pub struct WeaponDef {
     /// (combat doc, section 1.7).
     pub no_partial_reload: bool,
     pub raise_time: f32,
+    /// `aimDownSight`: whether the weapon has a sight at all. A weapon
+    /// without one holds `ps.fWeaponPosFrac` at 0 and never takes the ADS
+    /// flag (combat doc, section 1.13). Absent on the grenades and the
+    /// mounted MGs, which reads the same as 0.
+    pub aim_down_sight: bool,
     pub ads_trans_in: f32,
     pub ads_trans_out: f32,
+    /// `adsReloadTransTime`: how much of the tail of a reload the sight may
+    /// come back up over (combat doc, 1.13). 0.6 on most stock files.
+    pub ads_reload_trans_time: f32,
+    /// `adsFire`: the weapon fires from the sight only, so the fraction is
+    /// forced to 1 while a shot is in flight and the shot's own delay is
+    /// what is left of the raise. `panzerfaust_mp` is the one stock MP file
+    /// that sets it.
+    pub ads_fire: bool,
     pub ads_zoom_fov: f32, // DEFAULT_FOV means no zoom
     pub ads_view_bob_mult: f32,
     /// Second ADS bob multiplier the files carry separately; 1.0 changes
@@ -192,6 +205,14 @@ pub struct WeaponDef {
     pub hip_spread_max: f32,
     pub hip_spread_fire_add: f32,
     pub hip_spread_decay_rate: f32,
+    /// Per degree of view movement, and per frame with a movement axis held.
+    /// Both feed `PM_AdjustAimSpreadScale` (combat doc, 2.1). `bar_mp` and
+    /// `bar_slow_mp` are the only stock MP files with a non-zero turn add.
+    pub hip_spread_turn_add: f32,
+    pub hip_spread_move_add: f32,
+    /// Stance multipliers on the decay rate, same function.
+    pub hip_spread_ducked_decay: f32,
+    pub hip_spread_prone_decay: f32,
     pub ads_spread: f32,
     /// Index into `ps.ammo`, assigned by `WeaponTable::load` per the rule in
     /// docs/protocol-1.1.md, "How `ammo[]` and `ammoclip[]` are indexed"; 0
@@ -268,8 +289,11 @@ impl WeaponDef {
             segmented_reload: parse_bool(map, "segmentedReload", false),
             no_partial_reload: parse_bool(map, "noPartialReload", false),
             raise_time: parse_num(map, "raiseTime", 0.0),
+            aim_down_sight: parse_bool(map, "aimDownSight", false),
             ads_trans_in: parse_num(map, "adsTransInTime", 0.0),
             ads_trans_out: parse_num(map, "adsTransOutTime", 0.0),
+            ads_reload_trans_time: parse_num(map, "adsReloadTransTime", 0.0),
+            ads_fire: parse_bool(map, "adsFire", false),
             ads_zoom_fov: parse_num(map, "adsZoomFov", DEFAULT_FOV),
             ads_view_bob_mult: parse_num(map, "adsViewBobMult", 1.0),
             ads_bob_factor: parse_num(map, "adsBobFactor", 1.0),
@@ -301,6 +325,10 @@ impl WeaponDef {
             hip_spread_max: parse_num(map, "hipSpreadMax", 0.0),
             hip_spread_fire_add: parse_num(map, "hipSpreadFireAdd", 0.0),
             hip_spread_decay_rate: parse_num(map, "hipSpreadDecayRate", 0.0),
+            hip_spread_turn_add: parse_num(map, "hipSpreadTurnAdd", 0.0),
+            hip_spread_move_add: parse_num(map, "hipSpreadMoveAdd", 0.0),
+            hip_spread_ducked_decay: parse_num(map, "hipSpreadDuckedDecay", 0.0),
+            hip_spread_prone_decay: parse_num(map, "hipSpreadProneDecay", 0.0),
             ads_spread: parse_num(map, "adsSpread", 0.0),
             ammo_index: 0,
             clip_index: 0,
