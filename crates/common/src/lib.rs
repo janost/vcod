@@ -3,6 +3,7 @@
 pub mod animscript;
 pub mod animtree;
 pub mod assets;
+pub mod bonetrace;
 pub mod bsp;
 pub mod collision;
 pub mod game_dir;

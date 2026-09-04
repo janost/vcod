@@ -252,8 +252,9 @@ impl PoseBuffer {
         }
     }
 
-    /// Parents precede children by construction, so one pass composes.
-    fn worlds(&self, skel: &Skeleton) -> Vec<(Vec3, Quat)> {
+    /// Posed world transforms of every bone, before any inverse bind. Parents
+    /// precede children by construction, so one pass composes.
+    pub fn bone_worlds(&self, skel: &Skeleton) -> Vec<(Vec3, Quat)> {
         let mut worlds: Vec<(Vec3, Quat)> = Vec::with_capacity(self.locals.len());
         for (b, &(lp, lr)) in skel.bones.iter().zip(&self.locals) {
             worlds.push(if b.parent >= 0 {
@@ -268,12 +269,12 @@ impl PoseBuffer {
 
     /// Posed world transform of one bone, before any inverse bind.
     pub fn bone_world(&self, skel: &Skeleton, bone: usize) -> (Vec3, Quat) {
-        self.worlds(skel)[bone]
+        self.bone_worlds(skel)[bone]
     }
 
     /// `world(pose) * inverse_bind`, in the model's own bone order.
     pub fn skin_matrices(&self, skel: &Skeleton, model: usize) -> Vec<Mat4> {
-        let worlds = self.worlds(skel);
+        let worlds = self.bone_worlds(skel);
         skel.maps[model]
             .iter()
             .zip(&skel.inv_binds[model])
