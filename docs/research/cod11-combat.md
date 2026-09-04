@@ -717,10 +717,37 @@ slow-down, and it is off for the whole of a reload while `0x20` stays on.
 
 INFERRED, from the two rules together: the sight can be *asked for* during a
 reload -- the flag update excludes only `weaponstate` 1, 2, 10 and 11 -- but
-the fraction stays pinned at 0 until the reload has `adsReloadTransTime` left
+the fraction's target is 0 until the reload has `adsReloadTransTime` left
 to run, which for `m1carbine_mp` is the last 600 ms of 2650 and for
 `mosin_nagant_mp` the last 600 of 2400. So the sight comes up at the tail of a
 reload and not at the key.
+
+**What the `--save-ads` captures measured**, 2026-09-05, one per gate map
+(`crates/server/tests/fixtures/playerstate/<map>-dm-ads.txt`, `!trace` per
+snapshot with `fWeaponPosFrac` and `aimSpreadScale` as decimals), the probe
+standing still and holding each input in turn. VERIFIED, every number;
+INFERRED, that they are the file's fields, which is arithmetic.
+
+- The ramp is linear and the rates are the reciprocal times: up, the
+  carbine and the mosin both cross 0.0533 at 16 ms and 0.8867 at 258 ms and
+  read 1.0 at 323, which is `adsTransInTime` 0.3 s; down, the carbine steps
+  0.125 per 48 ms and reaches 0 at 403 ms (`adsTransOutTime` 0.4) and the
+  mosin 0.0833 per 48 ms, 0 at 612 (0.6).
+- Through a reload with the sight held: the fraction ramps *down* from the
+  reload's first frame at the out rate (carbine 1.0 to 0 over 467 ms, mosin
+  over 661), sits at 0, and ramps back up at the in rate from about 2080 ms
+  on the carbine (`reloadTime` 2650 less 600) and 1840 on the mosin (2400
+  less 600), reaching 1.0 some 300 ms before `weaponstate` leaves 5. A
+  reload asked for on a full clip does nothing at all, which the first
+  capture found by having nothing to show for its reload step.
+- The sight released mid-ramp turns straight round: carentan's
+  `ads_release_2` reads 0.92 at 32 ms off a fraction that had just reached
+  1.0, and `idle_after` the same.
+
+The trace fields in a snapshot are the state after the last of that
+frame's pmove steps, and the probe sends a cmd every 16 ms, so a 48 ms gap
+holds three steps. That is why the counter below can read a decay on the
+same snapshot the fraction first reads 1.0.
 
 **As implemented.** `crates/common/src/pmove/weapon.rs` carries all of the
 above: `update_ads_flag` the flag, `ads_pm_flags` the `0x20`/`0x80` pair for
@@ -817,6 +844,22 @@ in five 50 ms frames and holds it at 255 for as long as an axis is held, while
 both fixture weapons spell `hipSpreadTurnAdd 0`. Both retail motion captures
 agree -- 255.0 at every pose with a movement axis, standing, crouched or
 prone, and 0.0 at every pose without one.
+
+The `--save-ads` captures (1.13) put numbers on the rest. VERIFIED: a hip
+shot from the carbine reads 162.18 on the first snapshot after it, 16 ms
+into a decay from `hipSpreadFireAdd` 0.7 times 255, and then 111.18, 43.86,
+9.18, 0 at roughly 50 ms steps, which is the decay of 4 times 255 a second;
+the mosin's reads 255 and comes down 41.4 a step. A walk climbs 51 a step
+on the carbine (the add of 8 less the decay of 4, times 255, times the
+frame) to 255 in 274 ms, and stopping brings it down 51 a step to 0 in 258.
+A shot down the settled sight adds nothing, and a walk begun with the sight
+coming up adds until the snapshot the fraction reads 1.0 and decays from the
+next step on: `ads_walk` on carentan climbs to 255 at 276 ms with the
+fraction at 0.94 and reads 222.36 at 324 with it at 1.0. INFERRED, that the
+skip keys on the previous step's fraction, as 2.1's call order says: the
+step that reaches 1.0 still adds, and the one after it does not. The BAR
+is the one stock weapon with a turn term (`hipSpreadTurnAdd` 0.8) and it
+is not captured.
 
 **As implemented.** `pmove::weapon::adjust_aim_spread_scale`, called first of
 all in `pmove` so it keeps retail's position ahead of the view update and the
@@ -2406,11 +2449,12 @@ tests of 1.2 and 1.9 read the fraction rather than the usercmd's sight bit.
 What is still not modelled of the two: `pm_flags 0x400`, and the `pm_time`
 and `eFlags 0xC000` arms the fraction shares with the rest of `PM_Weapon`.
 
-Nothing in the committed captures pins the ramp *rate*, the reload window or
-the turn term: every sample in them is settled, the two motion fixtures hold
-one ADS pose each and no transition, and both fixture weapons spell
-`hipSpreadTurnAdd 0`. Those three need a capture that traces per snapshot
-through a transition, the way `--save-combat` does for the weapon states.
+The ramp rates, the reload window, the fire add and the decay are pinned by
+the `--save-ads` captures (1.13 and 2.1), and
+`crates/server/tests/playerstate_combat_ab.rs` replays both against ours to
+half a frame's tolerance and passes. The turn term is not: both fixture
+weapons spell `hipSpreadTurnAdd 0`, and the BAR, the one stock weapon with
+one, needs a probe that can answer the weapon menu with it.
 
 ---
 

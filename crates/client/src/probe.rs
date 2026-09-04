@@ -63,6 +63,7 @@ pub struct Save {
     pub playerstate: bool,
     pub motion: bool,
     pub combat: bool,
+    pub ads: bool,
     pub entities: bool,
     pub hit: bool,
     pub target: bool,
@@ -86,10 +87,13 @@ pub fn probe(
         playerstate: save_playerstate,
         motion: save_motion,
         combat: save_combat,
+        ads: save_ads,
         entities: save_entities,
         hit: save_hit,
         target: save_target,
     } = save;
+    // The ADS capture is the combat capture running the sight script.
+    let save_combat = save_combat || save_ads;
     // The fixture is the route's output, so the capture drives the same walk.
     let pvs = pvs || save_entities;
     // Every mode that needs a spawned player drives the same stock-menu join;
@@ -119,7 +123,11 @@ pub fn probe(
     let mut join = JoinProbe::new(team);
     let mut wrote_playerstate = false;
     let mut motion = MotionProbe::default();
-    let mut combat = CombatProbe::default();
+    let mut combat = if save_ads {
+        CombatProbe::ads()
+    } else {
+        CombatProbe::default()
+    };
     let mut hit = HitProbe::default();
     let mut target_probe = TargetProbe::default();
     let mut wrote_hit = false;
@@ -1501,6 +1509,89 @@ fn combat_script() -> Vec<CombatStep> {
     ]
 }
 
+/// The `--save-ads` steps: what the sight fraction and the spread counter do
+/// under each input, every one standing still so a gate can replay it. The
+/// sight is held, released, held through a reload, held through a shot and
+/// held while walking; the spread counter is kicked by a hip shot and by a
+/// walk and then left to decay. What the two captures measured is in
+/// docs/research/cod11-combat.md, 1.13 and 2.1.
+fn ads_script() -> Vec<CombatStep> {
+    use net::msg::{BUTTON_ADS, NULL_USERCMD, WBUTTON_RELOAD};
+    let hold = |label, base, ms| CombatStep {
+        label,
+        base,
+        pulse: Pulse::default(),
+        dur: Duration::from_millis(ms),
+        walks: false,
+        wait_ready: false,
+        from_reload_time: false,
+        period: PULSE_PERIOD,
+    };
+    let fire = |label, base, shots, ms| CombatStep {
+        label,
+        base,
+        pulse: Pulse {
+            buttons: BUTTON_ATTACK,
+            wbuttons: 0,
+            count: shots,
+        },
+        dur: Duration::from_millis(ms),
+        walks: false,
+        wait_ready: true,
+        from_reload_time: false,
+        period: PULSE_PERIOD,
+    };
+    let sight = net::msg::UserCmd {
+        buttons: BUTTON_ADS,
+        ..NULL_USERCMD
+    };
+    let walk = net::msg::UserCmd {
+        forward: 127,
+        ..NULL_USERCMD
+    };
+    let sight_walk = net::msg::UserCmd {
+        buttons: BUTTON_ADS,
+        forward: 127,
+        ..NULL_USERCMD
+    };
+    vec![
+        hold("idle", NULL_USERCMD, 1500),
+        // The ramp up over adsTransInTime, then the settled sight.
+        hold("ads_in", sight, 1500),
+        // The ramp down over adsTransOutTime.
+        hold("ads_out", NULL_USERCMD, 1500),
+        // One hip shot: hipSpreadFireAdd onto the counter, then the decay. It
+        // is also what empties a round, since a full clip refuses the reload.
+        fire("hip_shot", NULL_USERCMD, 1, 1500),
+        // The sight asked for through a whole reload: the fraction is refused
+        // until adsReloadTransTime is left of it (1.13).
+        CombatStep {
+            label: "ads_reload",
+            base: sight,
+            pulse: Pulse {
+                buttons: 0,
+                wbuttons: WBUTTON_RELOAD,
+                count: 1,
+            },
+            dur: RELOAD_HOLD_FALLBACK,
+            walks: false,
+            wait_ready: true,
+            from_reload_time: true,
+            period: PULSE_PERIOD,
+        },
+        hold("ads_release", NULL_USERCMD, 1000),
+        // One shot down the sight: the add is skipped at a fraction of 1.
+        fire("ads_shot", sight, 1, 1500),
+        hold("ads_release_2", NULL_USERCMD, 1000),
+        // A walk saturates the counter; standing still lets it decay.
+        hold("walk", walk, 1500),
+        hold("stop", NULL_USERCMD, 1500),
+        // Walking down the sight: the add is skipped, the 0x80 flag is on.
+        hold("ads_walk", sight_walk, 1500),
+        hold("idle_after", NULL_USERCMD, 1500),
+    ]
+}
+
 /// One snapshot's worth of the channels a shot moves.
 struct CombatSample {
     label: &'static str,
@@ -1521,6 +1612,9 @@ struct CombatSample {
     /// (docs/research/cod11-combat.md, section 1.8), so a replay of this
     /// capture has to send the same one.
     weapon: i32,
+    /// The sight fraction and the spread counter (combat doc, 1.13 and 2.1).
+    weapon_pos_frac: f32,
+    aim_spread_scale: f32,
 }
 
 /// What a step turned out to be: kept beside the playerstate it ended at, so
@@ -1551,6 +1645,9 @@ struct StepResult {
 /// playerstate only as the step's tail.
 struct CombatProbe {
     steps: Vec<CombatStep>,
+    /// Which script runs, which is also the fixture's suffix and the flag
+    /// the header names: `combat` or `ads`.
+    kind: &'static str,
     idx: usize,
     /// Set when the current step's clock starts, which a `wait_ready` step
     /// defers until the weapon reads ready.
@@ -1579,6 +1676,7 @@ impl Default for CombatProbe {
     fn default() -> Self {
         Self {
             steps: combat_script(),
+            kind: "combat",
             idx: 0,
             started: None,
             waiting_since: None,
@@ -1596,6 +1694,15 @@ impl Default for CombatProbe {
 }
 
 impl CombatProbe {
+    /// The `--save-ads` capture: the same machine running [`ads_script`].
+    fn ads() -> Self {
+        Self {
+            steps: ads_script(),
+            kind: "ads",
+            ..Self::default()
+        }
+    }
+
     fn running(&self) -> bool {
         !self.done
     }
@@ -1703,9 +1810,11 @@ impl CombatProbe {
                     snap.ps.field_i32(p, "events[3]"),
                 ],
                 weapon: snap.ps.field_i32(p, "weapon"),
+                weapon_pos_frac: snap.ps.field_f32(p, "fWeaponPosFrac"),
+                aim_spread_scale: snap.ps.field_f32(p, "aimSpreadScale"),
             };
             println!(
-                "  trace {label} +{:>5}ms st={} in={:02x}/{:02x} weaponstate={} weapAnim={} legsAnim={} torsoAnim={} evSeq={} events=[{},{},{},{}]",
+                "  trace {label} +{:>5}ms st={} in={:02x}/{:02x} weaponstate={} weapAnim={} legsAnim={} torsoAnim={} evSeq={} events=[{},{},{},{}] ads={:.3} spread={:.1}",
                 s.elapsed_ms,
                 s.server_time,
                 s.buttons,
@@ -1719,6 +1828,8 @@ impl CombatProbe {
                 s.events[1],
                 s.events[2],
                 s.events[3],
+                s.weapon_pos_frac,
+                s.aim_spread_scale,
             );
             self.trace.push(s);
         }
@@ -1900,11 +2011,14 @@ fn write_combat_fixture(
         join.team, join.weapon
     ));
     out.push_str("# sv_maxclients 8, sv_pure 0, stock scr_* defaults, one client on the server.\n");
-    out.push_str("# Captured with tools/run_server.sh and --net-probe --save-combat.\n");
+    out.push_str(&format!(
+        "# Captured with tools/run_server.sh and --net-probe --save-{}.\n",
+        combat.kind
+    ));
     out.push_str("# The fire bit is tapped, not held: the stock rifle is semi-automatic and a\n");
     out.push_str("# held bit fires one shot and then nothing. !input carries the held input,\n");
     out.push_str("# the tapped bits, how many taps and the tap timing, all in ms, and the\n");
-    out.push_str("# weapon byte every cmd of the step carried.\n");
+    out.push_str("# usercmd weapon byte every cmd of the step carried.\n");
     out.push_str("# One !trace line per snapshot, because the event ring holds four slots and\n");
     out.push_str("# overwrites: a shot is a transient no settled sample can hold. The field\n");
     out.push_str("# lines after a step's traces are the playerstate it ended at.\n");
@@ -1912,6 +2026,8 @@ fn write_combat_fixture(
     out.push_str("# saw weaponstate 3, how many shots and how much eventSequence it gained, and\n");
     out.push_str("# the distinct values each channel took. A fire step with fired=0 is a broken\n");
     out.push_str("# capture and is flagged above its section as well.\n");
+    out.push_str("# Each trace also carries fWeaponPosFrac and aimSpreadScale as decimals,\n");
+    out.push_str("# the sight fraction and the spread counter (combat doc, 1.13 and 2.1).\n");
     out.push_str("# Values are the raw i32 wire words, floats as their bit patterns.\n");
     let broken: Vec<&str> = combat
         .results
@@ -1997,7 +2113,8 @@ waited_ready_ms={} retried={} snapshots={} weaponstate={} legsAnim={} torsoAnim=
         for s in &mine {
             out.push_str(&format!(
                 "!trace ms={} serverTime={} buttons={} wbuttons={} weaponstate={} weapAnim={} \
-legsAnim={} torsoAnim={} eventSequence={} events[0]={} events[1]={} events[2]={} events[3]={}\n",
+legsAnim={} torsoAnim={} eventSequence={} events[0]={} events[1]={} events[2]={} events[3]={} \
+fWeaponPosFrac={:.4} aimSpreadScale={:.2}\n",
                 s.elapsed_ms,
                 s.server_time,
                 s.buttons,
@@ -2011,6 +2128,8 @@ legsAnim={} torsoAnim={} eventSequence={} events[0]={} events[1]={} events[2]={}
                 s.events[1],
                 s.events[2],
                 s.events[3],
+                s.weapon_pos_frac,
+                s.aim_spread_scale,
             ));
         }
         for (f, v) in p.player_fields.iter().zip(&r.fields) {
@@ -2018,11 +2137,15 @@ legsAnim={} torsoAnim={} eventSequence={} events[0]={} events[1]={} events[2]={}
         }
     }
 
-    let path = format!("{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-combat.txt");
+    let path = format!(
+        "{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-{}.txt",
+        combat.kind
+    );
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
     std::fs::write(&path, out)?;
     println!(
-        "combat: {} steps, {} traced snapshots -> {path}",
+        "{}: {} steps, {} traced snapshots -> {path}",
+        combat.kind,
         combat.results.len(),
         combat.trace.len(),
     );
