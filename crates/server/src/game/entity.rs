@@ -27,7 +27,7 @@ pub const FIRST_HUD_ELEM: u32 = MAX_GENTITIES;
 pub const MAX_HUDELEMS: u32 = 1024;
 
 use crate::game::fields::{
-    engine_slot_count, hud_slot_count, pers_index, route_hud, Route, CLIENT_FIELDS,
+    engine_slot_count, hud_slot_count, pers_index, route_hud, Route, CLIENT_FIELDS, HUD_WHITE,
 };
 use crate::server::MAX_CLIENTS;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, StructId, Value};
@@ -56,6 +56,10 @@ pub struct GEntity {
     /// `(model, tag)` pairs from `attach`, in call order; `getAttachSize`
     /// and friends index into this.
     pub attachments: Vec<(Atom, Atom)>,
+    /// The half of a `g_hudelems` record no script field reaches: what the
+    /// hudelem methods write, and who the element is drawn for. `Some` only
+    /// for a record `spawn_hud_elem` made, the same test `client` is.
+    pub hud: Option<HudState>,
     /// What runs when `nextthink` comes due, or `None` for no think armed.
     pub think: Option<ThinkFn>,
     /// The think deadline on `GameHost::level_time_ms`'s clock. Retail's 0
@@ -63,6 +67,70 @@ pub struct GEntity {
     /// (docs/research/cod11-gsc-object-model.md section 14), which is why
     /// `run_thinks` treats 0 as idle too.
     pub nextthink: i32,
+}
+
+/// `hudelem_t`'s owner field (`+0x70`) for an element every client is drawn:
+/// `ENTITYNUM_NONE`, which `GScr_NewHudElem` writes at 0x4b249.
+pub const HUD_OWNER_ALL: u32 = 0x3ff;
+
+/// The `hudelem_t` members the script field table does not cover. The
+/// script-visible half (x, y, colour, alignment, sort, `archived`) stays in
+/// the record's engine slots, so each fact has one home; these are what the
+/// hudelem methods write plus the two filters the wire build reads
+/// (docs/research/cod11-hud-protocol.md section 5).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HudState {
+    /// `+0x0`, the tagged union's tag: 1 text, 2 value, 3 shader, 4..7 the
+    /// four timers, 8/9 the two clocks. 0 is a free record, which is why a
+    /// fresh element is 1 and not 0 (`GScr_NewHudElem` 0x4b1b0).
+    pub elem_type: i32,
+    /// `+0x30`, `+0x34`, `+0x38`: `setShader`'s size and material index.
+    pub width: i32,
+    pub height: i32,
+    pub shader: i32,
+    /// `+0x5c`, the timers' absolute end time on the level clock.
+    pub time: i32,
+    /// `+0x64`, `setValue`'s number.
+    pub value: f32,
+    /// `+0x68`, `setText`'s localized-string index.
+    pub text: i32,
+    /// `+0x70`: the client this is drawn for, or [`HUD_OWNER_ALL`].
+    pub owner: u32,
+    /// `+0x74`: the `clientState.team` this is drawn for, 0 for every team.
+    pub team: i32,
+}
+
+impl Default for HudState {
+    /// `GScr_NewHudElem`'s non-zero defaults for the fields it covers
+    /// (0x4b184): a text element owned by nobody in particular.
+    fn default() -> Self {
+        HudState {
+            elem_type: 1,
+            width: 0,
+            height: 0,
+            shader: 0,
+            time: 0,
+            value: 0.0,
+            text: 0,
+            owner: HUD_OWNER_ALL,
+            team: 0,
+        }
+    }
+}
+
+impl HudState {
+    /// The block every value-setting method clears before it writes its own
+    /// (`setText` 0x4c5bc..0x4c61d and its four twins clear the same one),
+    /// so an element that was a timer and becomes text carries no stale
+    /// deadline.
+    pub fn clear_payload(&mut self) {
+        self.width = 0;
+        self.height = 0;
+        self.shader = 0;
+        self.time = 0;
+        self.value = 0.0;
+        self.text = 0;
+    }
 }
 
 /// What an entity's `think` runs when `nextthink` comes due. A Rust enum
@@ -133,6 +201,7 @@ impl ObjectTable {
             solid: true,
             hidden: false,
             attachments: Vec::new(),
+            hud: None,
             think: None,
             nextthink: 0,
         });
@@ -198,6 +267,7 @@ impl ObjectTable {
             solid: true,
             hidden: false,
             attachments: Vec::new(),
+            hud: None,
             think: None,
             nextthink: 0,
         });
@@ -223,20 +293,27 @@ impl ObjectTable {
     /// once all 1024 are taken. There is no free list, because retail has
     /// none here either: the allocator is a linear scan for a clear record.
     ///
-    /// Retail zeroes the record and then sets two non-zero defaults,
-    /// `fontscale` 1.0 (0x4b19b) and a packed white `color` (0x4b1d9). Only
-    /// `fontscale` is seeded here: an unwritten engine field reads
-    /// `undefined` rather than retail's zero, the same convention a
-    /// gentity's fields follow, and `color` has no unpacked representation
-    /// in `HUD_FIELDS` yet.
+    /// Retail zeroes the record and then sets four non-zero defaults:
+    /// `fontscale` 1.0 (0x4b19b), a packed white `color` (0x4b1d9),
+    /// `archived` 1 (0x4b1fc) and the owner `ENTITYNUM_NONE` (0x4b249).
+    /// The first three are engine slots, the last is [`HudState`]. Every
+    /// other slot is left `undefined` rather than retail's zero, the
+    /// convention a gentity's fields follow; the wire build reads an
+    /// undefined slot as the zero it stands for.
     pub fn spawn_hud_elem(&mut self, cx: &mut Cx) -> Result<EntId, ErrorKind> {
         let Some(i) = self.huds.iter().position(|h| h.is_none()) else {
             return Err(ErrorKind::BadType("out of hudelems"));
         };
         let script = cx.new_struct();
         let mut engine = vec![Value::Undefined; hud_slot_count()];
-        if let Route::Engine { slot, .. } = route_hud("fontscale") {
-            engine[slot] = Value::Float(1.0);
+        for (name, v) in [
+            ("fontscale", Value::Float(1.0)),
+            ("color", Value::Int(HUD_WHITE)),
+            ("archived", Value::Int(1)),
+        ] {
+            if let Route::Engine { slot, .. } = route_hud(name) {
+                engine[slot] = v;
+            }
         }
         self.huds[i] = Some(GEntity {
             engine,
@@ -245,6 +322,7 @@ impl ObjectTable {
             solid: true,
             hidden: false,
             attachments: Vec::new(),
+            hud: Some(HudState::default()),
             think: None,
             nextthink: 0,
         });
@@ -317,6 +395,16 @@ impl ObjectTable {
             Some(i) => self.huds.get_mut(i as usize)?.as_mut(),
             None => self.ents.get_mut(id.0 as usize)?.as_mut(),
         }
+    }
+
+    /// Ascending `g_hudelems` index, live records only. That is the order
+    /// retail copies them to a client in (`HudElem_UpdateClient` 0x4bf00
+    /// walks the pool from slot 0), and so the order they take on the wire.
+    pub fn iter_hud_elems(&self) -> impl Iterator<Item = (EntId, &GEntity)> {
+        self.huds
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| e.as_ref().map(|e| (EntId(FIRST_HUD_ELEM + i as u32), e)))
     }
 
     /// Ascending entity number, live slots only: `Scr_GetEntArray`'s walk.

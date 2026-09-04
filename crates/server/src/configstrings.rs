@@ -210,6 +210,24 @@ impl Allocators {
         *self.next_mut(range) = next + 1;
         Ok(next)
     }
+
+    /// What `G_LocalizedStringIndex` (0x65e30) answers: the 1-based index
+    /// within the localized range rather than the configstring slot, since
+    /// its scan starts at `i = 1` and it writes `0x4dc + i`. That index is
+    /// what a `hudelem_t`'s `text` and `label` carry, and a client resolves
+    /// it back through configstring `1244 + n`.
+    pub fn localized_index(&mut self, cs: &mut [String], name: &str) -> Result<i32, ErrorKind> {
+        let slot = self.index(cs, CsRange::Localized, name)?;
+        Ok((slot - CsRange::Localized.bounds().0) as i32 + 1)
+    }
+
+    /// The same for `G_ShaderIndex` (0x65ee8), whose scan starts at `i = 1`
+    /// too: `setShader`'s material index, resolved through configstring
+    /// `1500 + n`.
+    pub fn shader_index(&mut self, cs: &mut [String], name: &str) -> Result<i32, ErrorKind> {
+        let slot = self.index(cs, CsRange::Shader, name)?;
+        Ok((slot - CsRange::Shader.bounds().0) as i32 + 1)
+    }
 }
 
 /// `GScr_GetScriptMenuIndex` (0x5c73c): the offset within `CsRange::Menu` of

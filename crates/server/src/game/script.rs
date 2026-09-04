@@ -680,6 +680,20 @@ impl ScriptRuntime {
             .with_cx(|cx| crate::game::wire::packet_entities(host, cx, p))
     }
 
+    /// The HUD elements one client is sent, archived array first
+    /// (`crate::game::wire::hud_elems`). `team` is that client's
+    /// `clientState.team`, which is what a team element is filtered on.
+    pub fn hud_elems(
+        &self,
+        slot: usize,
+        team: i32,
+    ) -> (
+        Vec<vcod_common::net::msg::HudElem>,
+        Vec<vcod_common::net::msg::HudElem>,
+    ) {
+        crate::game::wire::hud_elems(&self.host, slot, team)
+    }
+
     pub fn configstrings(&self) -> &[String] {
         &self.host.configstrings
     }
