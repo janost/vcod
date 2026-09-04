@@ -20,6 +20,19 @@ pub struct SkelBone {
     pub parent: i32,
     pub local_pos: Vec3,
     pub local_rot: Quat,
+    /// The bone's hit box in its own frame, all-zero on a bone no shot can
+    /// score, and its effective hit location after the graft's inheritance.
+    /// docs/research/cod11-combat.md section 3.
+    pub hit_mins: Vec3,
+    pub hit_maxs: Vec3,
+    pub hit_location: u8,
+}
+
+impl SkelBone {
+    /// A zero-size box is how the artist turns a bone off; the trace skips it.
+    pub fn has_hit_box(&self) -> bool {
+        (self.hit_maxs - self.hit_mins).max_element() > 0.0
+    }
 }
 
 /// Model 0 is the base hierarchy; later models graft onto an existing bone
@@ -35,6 +48,36 @@ pub struct Skeleton {
 
 /// Track index -> skeleton bone index; `None` for bones the skeleton lacks.
 pub struct AnimBinding(pub(crate) Vec<Option<usize>>);
+
+/// A merged bone keeps whichever model gave it a box. The playerbody's own
+/// `bip01 head` and `bip01 neck` boxes are all-zero and the real ones ride in
+/// the attached head model, so the head is only hittable once the attachment
+/// hands its box to the body bone it merges onto.
+fn adopt_hit_box(slot: &mut SkelBone, from: &crate::xmodel::Bone) {
+    if slot.has_hit_box() || (from.hit_maxs - from.hit_mins).max_element() <= 0.0 {
+        return;
+    }
+    slot.hit_mins = from.hit_mins;
+    slot.hit_maxs = from.hit_maxs;
+    slot.hit_location = from.hit_location;
+}
+
+/// Code 0 (`none`) means "inherit", which retail resolves per bone against
+/// the parent within the part and against the graft point for a part's roots
+/// (docs/research/cod11-combat.md section 3). Both collapse to the parent in
+/// the grafted tree, where an attachment's root *is* the bone it hangs off.
+/// Parents precede children, so one pass resolves the chain.
+fn inherit_hit_locations(bones: &mut [SkelBone]) {
+    for i in 0..bones.len() {
+        if bones[i].hit_location != 0 {
+            continue;
+        }
+        let parent = bones[i].parent;
+        if parent >= 0 {
+            bones[i].hit_location = bones[parent as usize].hit_location;
+        }
+    }
+}
 
 impl Skeleton {
     /// `build_grafted` with no explicit tags.
@@ -60,6 +103,7 @@ impl Skeleton {
             for (bi, b) in model.bones.iter().enumerate() {
                 if mi > 0 && bi > 0 {
                     if let Some(si) = bones[..base_len].iter().position(|s| s.name == b.name) {
+                        adopt_hit_box(&mut bones[si], b);
                         map.push(si);
                         continue;
                     }
@@ -80,6 +124,7 @@ impl Skeleton {
                                 model.lod
                             );
                         }
+                        adopt_hit_box(&mut bones[si], b);
                         map.push(si);
                         continue;
                     }
@@ -105,6 +150,9 @@ impl Skeleton {
                     parent,
                     local_pos: b.local_pos,
                     local_rot: b.local_rot,
+                    hit_mins: b.hit_mins,
+                    hit_maxs: b.hit_maxs,
+                    hit_location: b.hit_location,
                 });
                 map.push(bones.len() - 1);
             }
@@ -117,6 +165,7 @@ impl Skeleton {
             );
             maps.push(map);
         }
+        inherit_hit_locations(&mut bones);
         Skeleton {
             bones,
             maps,
@@ -301,6 +350,66 @@ mod tests {
                 trans_keys: vec![(0, pos)],
             }],
         }
+    }
+
+    /// `bone` plus a hit box and a hit-location code.
+    fn hit_bone(
+        name: &str,
+        parent: i32,
+        local_pos: Vec3,
+        world: &[Bone],
+        box_half: f32,
+        hit_location: u8,
+    ) -> Bone {
+        let mut b = bone(name, parent, local_pos, Quat::IDENTITY, world);
+        b.hit_mins = Vec3::splat(-box_half);
+        b.hit_maxs = Vec3::splat(box_half);
+        b.hit_location = hit_location;
+        b
+    }
+
+    /// The player shape: the body's head/neck/helmet boxes are zero and the
+    /// real ones ride in the attachments, and a bone whose code is 0 inherits
+    /// the one above it.
+    #[test]
+    fn graft_carries_hit_boxes_and_inherits_zero_codes() {
+        let mut bb = vec![bone("tag_origin", -1, Vec3::ZERO, Quat::IDENTITY, &[])];
+        for (name, parent, half, code) in [
+            ("spine", 0i32, 5.0f32, 4u8),
+            ("neck", 1, 0.0, 0),
+            ("head", 2, 0.0, 0),
+            ("tag_helmet", 3, 0.0, 0),
+        ] {
+            let b = hit_bone(name, parent, Vec3::Z, &bb, half, code);
+            bb.push(b);
+        }
+        let base = model(bb);
+
+        // head attachment: its own neck/head copies carry the real boxes
+        let mut hb = vec![hit_bone("neck", -1, Vec3::ZERO, &[], 3.0, 3)];
+        for (name, parent, code) in [("head", 0i32, 2u8), ("jaw", 1, 0)] {
+            let b = hit_bone(name, parent, Vec3::Z, &hb, 3.0, code);
+            hb.push(b);
+        }
+        let head = model(hb);
+        let helmet = model(vec![hit_bone("lid", -1, Vec3::ZERO, &[], 4.0, 1)]);
+
+        let skel =
+            Skeleton::build_grafted(&[(&base, None), (&head, None), (&helmet, Some("tag_helmet"))]);
+        let of = |name: &str| {
+            let b = &skel.bones()[skel.bone_index(name).unwrap()];
+            (b.has_hit_box(), b.hit_location)
+        };
+        assert_eq!(of("tag_origin"), (false, 0));
+        assert_eq!(of("spine"), (true, 4));
+        // merged: the attachment's box and code land on the body's bone
+        assert_eq!(of("neck"), (true, 3));
+        assert_eq!(of("head"), (true, 2));
+        // grafted at a tag: the helmet's root box lands on tag_helmet
+        assert_eq!(of("tag_helmet"), (true, 1));
+        // a new bone with code 0 inherits its parent's
+        assert_eq!(of("jaw"), (true, 2));
+        assert!(skel.bone_index("lid").is_none());
     }
 
     #[test]
