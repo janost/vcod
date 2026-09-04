@@ -1234,16 +1234,121 @@ Three deliberate gaps, none of them measured against retail:
   which the shipped multiplier table reads as full damage. Retail has no such
   state.
 
-What is measured is one point: 8.4's level shot from eye height, 60 units up a
-70-unit standing box, read `head` on retail, and it reads `head` here through
-the bone trace when the victim faces the shooter. Nothing else is pinned, and
-head-versus-neck for the same shot into the back of a standing player is
-open -- vcod reads `neck` there. `--probe-sweep`
-(`crates/client/src/probe.rs`) is what settles the rest: it taps once per
-entry of a table of pitch offsets and echoes the offset on its `!trace` line,
-and the retail server logs `sHitLoc` per hit in its `games_mp.log` `D;`
-records with no configuration at all, so one run against retail and one
-against ours label every shot on both sides.
+#### What the sweep measured
+
+`--probe-sweep` (`crates/client/src/probe.rs`) taps once per entry of a
+table of pitch offsets around the aim at the target's eye and echoes the
+offset on its `!trace` line; the retail server logs `sHitLoc` per hit in its
+`games_mp.log`, a `D;` record for a wound and a `K;` record for the kill, and
+each hit the target's own trace registers pairs with the shooter's snapshot
+at or before it. Run 2026-09-05 against retail: mp_carentan tdm,
+`scr_friendlyfire 1`, both probes allies, `m1carbine_mp` from the hip,
+shooter and target standing on the same floor, 24 taps, 16 hits over six
+lives. The height each bullet crossed the target's origin plane at is
+`shooter eye - range * tan(pitch)`, the eye 60 up, taken from the
+playerstate's `viewangles`, which the server echoes a snapshot late at
+times, so a height is good to one table step (1 to 4 units at these ranges)
+plus the 1.5 degree hip cone. VERIFIED, the labels and the numbers;
+INFERRED, the pairing of each hit with a tap.
+
+The first hit of each life, the victim idle in `legsAnim` 634 and not yet
+knocked back:
+
+| range | pitch | units above the victim's origin | retail |
+|---|---|---|---|
+| 112 | -3.4 | 65.8 | `head` |
+| 36 | -2.4 | 60.6 | `head` |
+| 37 | 0.6 | 58.7 | `head` |
+| 36 | 1.6 | 58.1 | `torso_upper` |
+| 37 | 10.6 | 52.2 | `torso_upper` |
+| 37 | 22.6 | 43.7 | `torso_upper` |
+
+Five taps above that, 67.8 to 83.6 units at 111 range, all missed: the head
+box tops out between 65.8 and 67.8. The idle `head` to `torso_upper` line
+sits between 58.1 and 58.7, and **no tap in the run read `neck`**, at any
+height, so a standing idle victim yields no neck from this bearing. Which
+way the target faced is not in the capture: the target probe stands with
+its spawn yaw, which the shooter walks up to from wherever tdm put it.
+
+Every later hit in a life lands on a victim the first hit's knockback has
+set moving: the target's own trace reads `legsAnim` 94 with `torsoAnim` 0 and
+a velocity of 80 units a second on the frame after each hit, and 94 is
+`pb_combatrun_forward_loop`, the animscript reading the knockback as a run.
+No pain animation plays on either channel. The labels move down the body
+with the running pose:
+
+| range | pitch | units above the victim's origin | retail |
+|---|---|---|---|
+| 118 | -2.4 | 64.0 | `head` |
+| 43 | -0.2 | 59.3 | `head` |
+| 43 | 0.8 | 58.5 | `head` |
+| 42 | 4.7 | 55.6 | `head` |
+| 47 | 6.9 | 53.4 | `head` |
+| 42 | 13.7 | 48.9 | `head` |
+| 48 | 17.0 | 44.4 | `head` |
+| 41 | 26.7 | 38.5 | `torso_upper` |
+| 45 | 30.8 | 32.3 | `right_leg_upper` |
+| 47 | 34.9 | 26.3 | `torso_lower` |
+
+`head` at 44 units up, chest height on the idle model, and `torso_lower`
+below a `right_leg_upper`: the ray is against the posed skeleton, and the
+running pose carries the head lower and forward, where a descending ray
+clips it before the torso and the head's priority takes the hit (3.1).
+INFERRED from the two tables together; nothing here was read out of the
+binary. vcod's own grafted rig says the same thing in numbers: posed with
+`pb_stand_alert` the head box spans 55.8 to 70.3 units up and `back_up`
+(`torso_upper`) 41.9 to 62.9, and posed with `pb_combatrun_forward_loop` at
+200 ms the head box drops to 48.1 to 62.5. It is what a fixed table of
+heights cannot reproduce, and it means a sweep on vcod must be read life by
+life the same way.
+
+The same sweep against vcod, same map, gametype, weapon and probes, the
+shooter stopped at 111 units (the sweep walks to within 120 before it taps,
+`SWEEP_RANGE`), the victim idle at every first hit and `legsAnim` 634 again
+within two frames of each knockback:
+
+| offset | units above the victim's origin | vcod | retail at the nearest height |
+|---|---|---|---|
+| -6 and above | 71.7 and up | miss | miss |
+| -4 | 67.8 | `head` | miss at 67.8, `head` at 65.8 |
+| -2 | 64.0 | `head` | `head` |
+| -1 | 61.9 | `head` | `head` |
+| 0 | 60.0 | `head` | `head` |
+| 1 | 58.1 | `torso_upper` | `torso_upper` at 58.1, `head` at 58.7 |
+| 2 | 56.1 | `torso_upper` | |
+| 3 | 54.0 | `torso_upper` | |
+| 4 | 52.2 | `torso_upper` | `torso_upper` |
+| 6 | 48.2 | `torso_upper` | |
+| 8 | 43.9 | `torso_upper` | `torso_upper` |
+
+The idle `head` to `torso_upper` line lands in the same step on both (58.1
+to 60.0 here, 58.1 to 58.7 on retail), neither side reads `neck` anywhere,
+and the one difference is the top of the head: vcod's box reaches 67.8 and
+retail's does not. The rig's own numbers put that box at 55.8 to 70.3 units
+up in `pb_stand_alert`, so the top is 2 to 4 units higher than retail's, a
+step and the hip cone. Not a finding yet; a finer sweep at a fixed short
+range would make it one either way.
+
+Two earlier runs against vcod read nothing like this, and what they found
+is in 9.2: the server was playing the stock `pain` clause,
+`pb_crouch_pain_holdStomach`, on every surviving hit and holding it for the
+clip's 1.35 s, so every tap after the first met a doubled-over victim and
+missed. Retail plays no pain animation on the server: both captures keep
+`legsAnim` 634 through a surviving hit, bar the one frame the knockback
+reads as a run.
+
+What the retail run still holds that vcod does not reproduce: the `head`
+reads at 44 to 49 units up on a victim hit 200 to 400 ms earlier (second
+table above), where vcod reads `torso_upper` on an idle victim at 48.2 and
+52.2. The retail victim was back in 634 by then, so a posed idle box does not
+explain it; whether the server's pose cross-fades out of the knockback's run
+frame over those 200 ms, or the echoed `viewangles` lag by more than a step
+there, is open (section 10).
+
+Retail's first head hit in each life killed on the second (67 + 67), so the
+run holds two idle points per life at most; a target with more health
+(`scr_*_maxhealth` is not a 1.1 cvar; a gametype script that sets
+`self.maxhealth` would do) is what a finer idle table needs.
 
 ### 3.5 The multiplier table and what a missing file does
 
@@ -1784,6 +1889,52 @@ animation is snapped to its last frame and held. A body sent without the
 marker is therefore drawn at the last frame of its death animation from the
 first frame it exists.
 
+### 5.4 The dead player's own entity leaves the wire
+
+Live, 2026-09-05 (mp_carentan tdm, one probe shooting a teammate with
+`scr_friendlyfire 1`): the victim's `ET_PLAYER` entity is in the shooter's
+snapshot on every frame up to the one that carries the kill, absent from
+the one after it and from every frame of the dead wait, and back on the
+respawn frame, six lives in a row. VERIFIED.
+
+Where it goes, in `ClientEndFrame` (`game.mp.i386.so` 0x40e98; the
+`sessionstate` branch structure is in `cod11-gsc-object-model.md`, "What
+`ClientEndFrame` writes for a live client's own view"). VERIFIED: the stores
+and compares named below. INFERRED: which arm a dead player takes, read off
+the compares.
+
+- `cmp [client+0x20d0], 1` at 0x41057, on the live arm after the own-body
+  block. 1 is `STATE_DEAD` in CoDExtended's `sessionState_t`
+  (`src/shared.h`: playing 0, dead 1, spectator 2, intermission 3), and the
+  2 and 3 arms above it are the spectator and intermission ones the
+  object-model doc already names.
+- The equal arm, 0x41060..0x41093: `ps.pm_type` (`client+0x4`) takes 6, or 7
+  when `gentity+0x2e4` is non-zero; `gentity+0x171` (`takedamage`) takes 0;
+  and `r.svFlags` (`gentity+0xf4`) takes `| 0x1` then `& ~0x2`. `0x1` is
+  `SVF_NOCLIENT` (`CoDExtended/src/server.h:38`), the flag the snapshot
+  builder skips an entity on.
+- Just above it, 0x40ff0..0x41012: the same `sessionstate == 1` compare
+  writes `r.contents` (`gentity+0x118`) as 0, where a playing client takes
+  `0x2000000`. A dead player therefore stops a trace no more than a corpse
+  does (5.2), which is why 8.4's third round after the kill found nobody.
+- The intermission arm (0x40ef0) sets the same `SVF_NOCLIENT` and clears
+  contents; the own-body arm (0x40f9a) does the inverse, `| 0x2` and
+  `& ~0x1`. So the flag is rewritten every frame from the session state, and
+  a respawn clears it by setting the state back to playing, not by any store
+  of its own.
+
+`player_die` relinks the entity (5.1, step 13), so the death frame itself
+still carries it; it is the end-of-frame pass that hides it, which is why the
+capture reads one more frame with the entity, the kill's, and then none.
+
+As implemented: `Server::send_snapshots` builds no entity for a client whose
+sim is dead, the same filter that already drops spectators. The corpse's
+newborn re-read (5.2) takes its state straight off the sim, since the dead
+client has no entity in that list any more. Before this, a retail client was
+sent a dead player standing in its death pose under the corpse until the
+respawn, and `--probe-sweep`'s live-target gate saw a target to shoot for the
+whole dead wait.
+
 ---
 
 ## 6. `P_DamageFeedback`
@@ -2193,6 +2344,21 @@ It is one frame: the next one reads 634 and every frame after it. INFERRED:
 the animscript picks nothing until a move has run, so the spawn frame goes out
 before the standing idle is chosen, where retail's already carries it.
 
+Closed on 2026-09-05, off the `--probe-sweep` runs (3.4):
+
+- **A dead player's entity stayed on the wire.** Retail drops it on the
+  frame after the kill and brings it back on the respawn (5.4); vcod sent it
+  through the dead wait, standing in the death pose under its own corpse.
+  Fixed: `send_snapshots` builds no entity for a dead sim.
+- **A surviving hit played a pain animation.** vcod raised the animscript's
+  `pain` event, whose only live clause for a standing player is the default
+  `both pb_crouch_pain_holdStomach`, and held it 1.35 s; retail's server
+  raises no pain anim at all, and both captures keep `legsAnim` 634 through
+  a hit. The held clip doubled the victim over under the bone trace, which
+  is why the first two vcod sweeps missed seven and eight taps in a row at
+  head height. Fixed: no pain anim on the server; what a retail client draws
+  for another player's `EV_PAIN` is its own business.
+
 Everything else section 9 found on 2026-09-03 has since been closed, each
 against the fixture line that decided it: the frag's reserve entry (its file
 reads `clipOnly 1`, so a give writes the clip and no reserve), the held
@@ -2250,6 +2416,15 @@ through a transition, the way `--save-combat` does for the weapon states.
 
 ## 10. Open cells
 
+- UNRESOLVED: retail labels `head` at 44 to 49 units above the origin on a
+  victim hit 200 to 400 ms earlier, on a victim whose `legsAnim` is back at
+  634 (3.4, second table), where vcod reads `torso_upper` on an idle
+  victim. Candidates: a server-side cross-fade out of the knockback's
+  one-frame run (`G_DObjCalcPose` blending the way the client does), or the
+  echoed `viewangles` lagging the tap by more than one snapshot there. A
+  sweep against a target with more than two hits of health at a fixed short
+  range, with the pitch read off the cmd rather than the echo, would settle
+  it.
 - UNVERIFIED: what sets `pm_flags 0x800`, which stops `PM_Weapon` outright,
   and what `pm_flags 0x400` and `0x4000` mean. INFERRED for `0x400`: it is set
   whenever a fire, a melee finish or a weapon change happens while
