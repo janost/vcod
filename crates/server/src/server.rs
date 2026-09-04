@@ -293,6 +293,12 @@ pub struct Server {
     /// The hit-location damage multipliers out of the paks
     /// (`crate::game::combat::HitLocTable`); the default until `load_scripts`.
     hitlocs: crate::game::combat::HitLocTable,
+    /// The paks, kept past `load_scripts` because a shot loads the victim's
+    /// models to trace against. `None` on a host with none.
+    fs: Option<Rc<vcod_common::pk3::Pk3Fs>>,
+    /// The grafted player skeletons those shots trace against, built on first
+    /// use (`crate::game::hitrig`).
+    hit_rigs: crate::game::hitrig::HitRigs,
     /// Weapons the moves themselves switched to, by slot: only a change the
     /// machine made, so a playerstate reset from outside a move is not one.
     /// `tick` writes each back onto the script host before the mirror reads
@@ -408,6 +414,8 @@ impl Server {
             cvar_overrides: Vec::new(),
             pending_script_commands: Vec::new(),
             hitlocs: crate::game::combat::HitLocTable::default(),
+            fs: None,
+            hit_rigs: Default::default(),
             weapon_changes: Vec::new(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
@@ -1226,6 +1234,7 @@ impl Server {
     /// than about a half-cleared table. `main.rs` exits on it.
     pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
         let cvars = self.cvars(&fs);
+        self.fs = Some(fs.clone());
         self.anims = match vcod_common::animtree::PlayerAnims::load(&fs) {
             Ok(a) => Some(a),
             Err(e) => {
@@ -1347,6 +1356,17 @@ impl Server {
                 .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
                 .collect();
             let collision = self.world.as_ref().map(|w| &w.collision);
+            // The locational trace's context, absent on a host with no paks
+            // or no animtree; a shot then lands at hit location `none`.
+            let mut bones = match (self.fs.as_deref(), self.anims.as_ref()) {
+                (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
+                    fs,
+                    anims,
+                    rigs: &mut self.hit_rigs,
+                    now_ms: self.sv_time_ms,
+                }),
+                _ => None,
+            };
             for shot in self.pending_shots.drain(..) {
                 let Some(def) = weapons.get(shot.weapon as usize) else {
                     continue;
@@ -1360,6 +1380,7 @@ impl Server {
                     &sims,
                     collision,
                     &self.hitlocs,
+                    bones.as_mut(),
                     &mut self.rng,
                 );
                 impacts.extend(r.impact);
@@ -1454,6 +1475,13 @@ impl Server {
                     sim.ps.weapon_slots = w.slots;
                     sim.ps.weapon = w.current;
                     sim.viewmodel_index = rt.client_viewmodel(slot);
+                    // The body, head and helmet the character script dressed
+                    // the client in: what a shot at it is traced against.
+                    if let Some(a) = rt.client_assembly(slot) {
+                        if a != sim.assembly {
+                            sim.assembly = a;
+                        }
+                    }
                     // And back the other way: the sim owns where a player is,
                     // so the script's copy is written from it every frame.
                     rt.set_client_origin(slot, sim.origin());

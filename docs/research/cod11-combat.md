@@ -25,6 +25,11 @@ are mixed and each claim says which one it rests on:
   shared code, so the whole `PM_Weapon` family is in it, compiled from the
   same sources. Its image base is `0x30000000`. Where a claim was read there
   it says so, and where the `.so` confirms it the `.so` address is given too.
+- `cod_lnxded`, the 1.1d Linux dedicated server's **engine** executable. It
+  is stripped, so every engine function named below is my name for it and is
+  marked as such the first time it appears. Its first LOAD segment sits at
+  `0x08048000` with file offset 0, so a virtual address is the file offset
+  plus `0x8048000`.
 - `private/reference/CoDExtended/src/shared.h`, the community's struct
   headers. Only three things below rest on it, each labelled, and each is
   cross-checked against an offset the binary uses.
@@ -856,17 +861,17 @@ VERIFIED: the trace is `trap_LocationalTrace(&trace, start, end,
 passEnt->s.number, 0x02802031, priorityMap)`. VERIFIED: the two candidates
 for `priorityMap` are `riflePriorityMap` and `bulletPriorityMap`, selected off
 a test of `weaponDef->rifleBullet` (`0x2C0`) at `0x688ef`. INFERRED:
-`riflePriorityMap` is the one a `rifleBullet` weapon takes. INFERRED: the
-trace is per-bone rather than against the link box, because it returns a
-hit-location index (2.4) and takes a per-hit-location priority table as an
-argument; the link box has no such partition.
+`riflePriorityMap` is the one a `rifleBullet` weapon takes. VERIFIED: the
+trace is per-bone rather than against the link box; what walks the bones and
+what the priority map does there is section 3.
 
 VERIFIED: the trace result at `[ebp-0x30]` is read at these offsets --
-`+0` fraction, `+4` endpos, `+16` normal, `+28` surface flags, `+32` a second
-flag word, `+40` a 16-bit entity number, `+44` a 16-bit hit location.
-VERIFIED: bit `0x4` of `+28` suppresses the impact effect, and bits 20 to 24
-of the same word are shifted down into the temp entity's `surfType`
-(`entityState+136`).
+`+0` fraction, `+4` endpos, `+16` normal, `+28` surface flags, `+32` the hit
+entity's contents mask, `+40` a 16-bit entity number, `+44` a 16-bit hit
+location. The full 48-byte layout, including the two fields this caller does
+not read, is in section 3. VERIFIED: bit `0x4` of `+28` suppresses the impact
+effect, and bits 20 to 24 of the same word are shifted down into the temp
+entity's `surfType` (`entityState+136`).
 
 VERIFIED: `bulletPriorityMap` is 19 bytes at `0x7DD6C` and `riflePriorityMap`
 19 bytes at `0x7DD7F`, one byte per hit location in the index order of
@@ -894,10 +899,12 @@ section 3:
 | 17 | `left_foot` | 3 | 3 |
 | 18 | `gun` | 0 | 0 |
 
-INFERRED: the map is a per-location weight the engine trace resolves ties
-with, so a rifle bullet grazing both a leg and the head is scored as the head,
-a pistol bullet scores whichever of the two the geometry gives first, and
-`gun` at 0 is never preferred over anything.
+VERIFIED, out of the bone loop that reads the table (section 3): the map is a
+per-location weight the engine trace ranks candidates by, and it beats
+distance -- a rifle bullet crossing both a leg and the head is scored as the
+head however far behind the leg the head is, a pistol bullet, whose map is
+flat, scores whichever of the two it reaches first, and `gun` at 0 is never
+scored at all.
 
 ### 2.4 What the impact does
 
@@ -916,7 +923,8 @@ numbering, and every "when", "unless" and "otherwise" in it.
    is the
    shooter's entity number. The client side of that temp entity is
    `docs/research/cod11-events-and-fx.md`, `EV_BULLET_HIT_*`.
-3. With bit `0x10` of the trace's `+32` word set, the bullet continues:
+3. With bit `0x10` of the trace's contents mask (`+32`) set, the bullet
+   continues:
    `start` is moved to `trace.endpos` nudged along the ray by `0.25 / d` where
    `d` is minus the dot of the normal with the ray and the nudge is skipped
    when `d <= 0.125`, and the function recurses at the same damage with
@@ -1000,26 +1008,244 @@ therefore holds interned script strings, not configstring numbers.
 **No box partition, no angle test.** VERIFIED: the index does not come from
 any code in `game.mp.i386.so`; it arrives as the 16-bit field at offset 44 of
 the `trap_LocationalTrace` result and goes straight into
-`g_fHitLocDamageMult[]` and into script. INFERRED: the partition therefore
-lives in the engine binary, is per-bone rather than per-height-fraction, and
-is steered from the game module only by the priority map of section 2.3.
+`g_fHitLocDamageMult[]` and into script. VERIFIED: the partition lives in the
+engine binary, which is what the rest of this section reads.
 
-**As implemented.** vcod has no per-bone trace, so
-`crates/server/src/game/combat.rs::hitloc` partitions the victim's link box
-by the hit point's height fraction and lateral offset, in the body's own
-yaw frame. INFERRED, all of it: helmet at and above 0.94 of the box height,
-head 0.85 to 0.94, neck 0.80 to 0.85, torso_upper 0.55 to 0.80, torso_lower
-0.40 to 0.55, and below that the legs, upper to 0.20, lower to 0.05, foot
-under; at torso heights a point more than 0.6 of the half width off the
-centre line is an arm, upper at and above 0.65, lower to 0.55, hand below;
-left and right by the sign of the lateral offset. The one measurement it is
-fitted to is 8.4's: a level shot from eye height, 60 of the 70-unit standing
-box (0.857), read `head` on retail, since the obituary carried
-`MOD_HEAD_SHOT` and `tdm.gsc` sets that only on `sHitLoc == "head"`; the
-head band starts at 0.85 so that shot reads `head` here too. Nothing pins
-any other boundary.
+### 3.1 Where the index comes from: a ray against per-bone boxes
 
-### 3.1 The multiplier table and what a missing file does
+VERIFIED: the index is produced by a ray against per-bone oriented boxes on
+the entity's posed skeleton, with a per-bone bounding sphere as the broad
+phase and the `priorityMap` argument of 2.3 as the ranking. VERIFIED: both the
+box and the hit-location byte ship per bone in the `xmodelparts` file
+(`docs/research/xmodel-v14-format.md`), so nothing is hardcoded and nothing is
+keyed on a bone name.
+
+**The dispatch chain.** VERIFIED, `game.mp.i386.so`: `trap_LocationalTrace`
+is at `0x63948`, and its body pushes the immediate `0x2b` before the indirect
+call through the syscall pointer at `0x7ec10`, so the trap number is 43.
+(CoDExtended's `shared.h:1145` says 46; its enum carries three traps 1.1 does
+not have and is off by +3 across this range.) VERIFIED, `cod_lnxded`: the
+game syscall dispatcher, my name `SV_GameSystemCalls`, is at `0x8087dcc`; it
+reads `args[0]`, rejects anything above `0xd3` and jumps through the
+212-entry table at `0x80d4eac`, whose default arm at `0x8089100` prints
+`"Bad game system trap: %i"` (`0x80d4e8c`). VERIFIED: table entry 43 is
+`0x8088316`, and that case pushes eleven arguments and calls `0x80916f4`.
+INFERRED, mapping the pushes back to the trap's arguments: the call is
+`SV_Trace(results, start, mins=NULL, maxs=NULL, end, passEntityNum,
+contentmask, 0, locational=1, priorityMap, staticmodels=1)`. VERIFIED:
+`0x80916f4` is the same address CoDExtended calls directly
+(`private/reference/CoDExtended/src/sv_world.c:20`), and the prototype
+published there names the `locational` flag and the `char *priorityMap`,
+which confirms the tail of that signature independently.
+
+**Per entity: pose first, then the bone trace.** VERIFIED, the operands,
+offsets, immediates and call targets in this list are read out of the
+instructions of `SV_ClipMoveToEntity` (my name, `0x809105c`); INFERRED, its
+ordering and its conditions, read off the branches.
+
+- A null `mins`/`maxs` is replaced with `0x80cdfc8`, three zero floats, in the
+  caller; the world trace runs first and the entity pass is driven from a clip
+  struct handed to `0x805a708`, which recurses through the area-node tree at
+  `0x8059e94` and calls this function once per entity in a leaf.
+- The clip struct built at `0x80917de` holds `start` at `+0x00`, `end` at
+  `+0x0c`, the `trace_t` at `+0x18`, `passEntityNum` at `+0x48`, the pass
+  entity's owner at `+0x4c`, the contentmask at `+0x50`, the `locational` flag
+  at `+0x54` and `priorityMap` at `+0x58`.
+- `0x80910c5`: the per-bone path is taken only when `locational` is non-zero,
+  the entity resolves to a model record, and `gentity+0xf4 & 6` is non-zero.
+  Bit `0x4` selects a brush trace (`0x80c52c0`); bit `0x2` without `0x4` is the
+  animated-model arm, and it is the only one handed the `priorityMap`.
+- `0x8091236`: a ray/AABB reject against the entity's bounds runs before any of
+  the expensive work. The link box is therefore a broad phase and nothing more:
+  a ray can clip it and score no bone, and that is a miss.
+- `0x809124c` calls `vmMain` with export id 13. VERIFIED, `game.mp.i386.so`
+  `vmMain` `0x50dd4`, jump table at `.rodata 0x75728`, 21 entries: entry 13 is
+  `0x50ed0`, which computes `&g_entities[arg]` and calls `G_DObjCalcPose`
+  (`0x67314`). The engine asks the game module to pose exactly the entity it is
+  about to trace, immediately before tracing it.
+- `0x8066520` transforms the clip's `start` and `end` into the entity's local
+  frame, so the bone trace works entirely in entity space, and `0x80c4564` (my
+  name `SV_LocationalTraceModel`) is called with `(model, localStart, localEnd,
+  priorityMap, &localResult)`, its fraction seeded with the clip's current best.
+
+**What poses the entity.** VERIFIED, `G_DObjCalcPose` (`0x67314`), the whole
+function: it memsets a 16-byte bone mask to `0xff`, calls
+`trap_DObjCreateSkelForBones(ent, mask)` and returns early when that is
+non-zero, then `trap_DObjCalcAnim(ent, mask)`, then the per-entity hook at
+`ent+0x220` when it is non-null, then `trap_DObjCalcSkel(ent, mask)`.
+INFERRED: the skeletal math is the engine's and the game module owns only
+which animations are playing. VERIFIED: the only other caller of the pose
+path is `ClientEndFrame`, and there only when the `g_debugLocDamage` cvar is
+set, followed by `trap_XModelDebugBoxes`. INFERRED: on a normal frame the
+server updates the DObj's model list and animation weights but does not run
+the skeleton, and the matrices are computed lazily by the trace that needs
+them.
+
+VERIFIED, `BG_UpdatePlayerDObj` (`0x2bd80`): it frees and rebuilds the DObj
+when the model set changed, walking six attachment slots (`+0x7c`, stride
+`0x40`, each a model name resolved by `trap_XModelGet`) plus the base model,
+and hands the list to `trap_DObjCreate`. INFERRED: the head and the helmet are
+therefore DObj parts, and the skeleton the trace walks is the grafted
+body-plus-attachments one. VERIFIED, `BG_PlayerAnimation` (`0x2c1f4`): it
+calls the anim-condition updaters and then works through `Scr_GetAnimsIndex`
+and `trap_XAnimGetWeight` on the DObj's anim tree. INFERRED: the pose is the
+blended animtree state the animscript machine drives, so stance, lean and aim
+pitch are all in it, and `legsAnim`/`torsoAnim` are the wire projection of the
+same state rather than its source.
+
+**The bone loop.** VERIFIED, `0x80c4564`, the same two-label rule as above --
+operands and targets out of the instructions, ordering and conditions off the
+branches:
+
+- `dobj+0x16` (u8) is the part count and `dobj+0x18[]` the array of part
+  pointers; each part chain lands on a skeleton record whose `+0x0` points at
+  the bone-name array, `+0x4` (s16) is the root-bone count, `+0x8` the per-bone
+  box array with a stride of `0x28`, and `+0x14` the per-bone hit-location byte
+  array.
+- `0x80c4db0` is the bone-matrix accessor, `dobj->4 + dobj->0x50[part] * 64 +
+  0x30`: `dobj->0x50` is a per-part byte giving that part's first bone in the
+  combined skeleton, and each bone matrix is 64 bytes, three 16-byte rows plus
+  the translation at `+0x30`.
+- Per bone, `hl` is the hit-location byte and `prio` is `priorityMap[hl]`.
+  VERIFIED: `hl` indexes the 19-byte map directly, so it is the hit-location
+  index of the table above.
+- INFERRED, branches at `0x80c46e7` and `0x80c4716`: a bone whose `prio` is 1 --
+  which for both shipped maps means `hl == 0`, `none` -- inherits, from the
+  DObj's remap list when this bone is the next one it lists, otherwise from its
+  parent bone within the part, and for a part's root bones from `dobj->0x48[i]`
+  where `0xff` means `none`. The effective code is written into a local array so
+  later bones inherit through it. INFERRED: this is what gives an attached
+  model's roots the hit location of the body bone they hang off.
+- `0x80c479a`: the bone is skipped when its sphere radius (box record `+0x24`)
+  is zero, and when `bestPriority > prio`. `bestPriority` starts at 2, so `none`
+  (1) and `gun` (0) bones are never traced.
+- Broad phase: the bone's sphere centre (box record `+0x18`) is transformed to
+  entity space by the bone matrix and the segment's closest approach is compared
+  against the radius; when `prio` equals the current best, a second early-out
+  compares that approach against the fraction already found.
+- Narrow phase: `start` and `end` are transformed into the bone's own frame by
+  the bone matrix and a six-plane slab test runs against `boxRecord+0x00`
+  (mins) and `boxRecord+0x0c` (maxs).
+- On a hit at `0x80c4c21` onward: an equal `prio` is discarded unless it is
+  nearer than the fraction already stored, and a differing one -- necessarily
+  greater, by the skip above -- raises `bestPriority` and takes the hit
+  regardless of distance. The result gets the fraction, the bone's name id, the
+  effective hit-location code, and a normal that is a signed row of the bone
+  matrix.
+- A segment that starts inside a box sets the two flag bytes at `+0x18`/`+0x19`
+  of the local result, zeroes the fraction and returns at once.
+
+So the engine's box record is 40 bytes, `{ vec3 mins; vec3 maxs; vec3
+sphereCentre; float radius }`. The file supplies the first 24; INFERRED that
+the engine derives the sphere from them at load, since the file carries nothing
+else.
+
+### 3.2 The 48-byte trace result
+
+Pinned field by field from the writes in `SV_ClipMoveToEntity` and
+`SV_LocationalTraceModel`.
+
+| off | size | field | evidence |
+|---|---|---|---|
+| 0 | f32 | `fraction` | VERIFIED, seeded from the clip and compared throughout |
+| 4 | 3xf32 | `endpos` | VERIFIED, `start + fraction * (end - start)` at `0x8091352` |
+| 16 | 3xf32 | `normal` | VERIFIED, the local normal rotated to world at `0x809134a` |
+| 28 | i32 | `surfaceFlags` | VERIFIED; zero for a bone hit, the model trace zeroes it |
+| 32 | i32 | contents of the hit entity | VERIFIED, `gentity+0x118` copied at `0x8091472` |
+| 36 | ptr | texture name | VERIFIED, written 0 for an entity hit at `0x809146b` |
+| 40 | u16 | `entityNum` | VERIFIED, `*(u16*)gentity` at `0x8091464` |
+| 42 | u16 | bone name id | VERIFIED, the winning bone's name id |
+| 44 | u16 | `hitLoc` | VERIFIED, the winning bone's effective hit-location code |
+| 46 | u8 | all-solid | VERIFIED written and OR-merged; INFERRED name |
+| 47 | u8 | start-solid | VERIFIED written and OR-merged; INFERRED name |
+
+Two corrections this forces on what used to be here. `+32` is the hit entity's
+contents mask, not a second flag word, which is why a bit in it (`0x10`) is
+what makes a rifle bullet continue (2.4, step 3). And CoDExtended's
+`shared.h:371` labels offset 44 `surfaceFlags` with an in-source admission that
+it is a guess: it is the hit location, and the `allsolid` / `startsolid` its
+comment goes looking for are the two bytes at 46 and 47.
+
+VERIFIED: a world or brush hit leaves `hitLoc` 0 (`none`), because only the
+bone trace ever writes it.
+
+### 3.3 Where the boxes live
+
+VERIFIED, parsed out of the stock paks: every `xmodelparts` entry carries a
+bone-space AABB in the 24 bytes after each bone name and a hit-location byte
+per bone after the name block, and all 725 non-empty entries in `pak0-6` parse
+to exact EOF with the trailing byte only ever taking values 0..18. The layout
+is in `docs/research/xmodel-v14-format.md`.
+
+VERIFIED, `xmodelparts/USAirborne3`, the LOD0 of all 17 `playerbody_*` models:
+`tag_origin` is 0; the pelvis and lower spine chain to `torso_lower`; `bip01
+spine2`, `back_up` and the breast-pocket tags to `torso_upper`; `bip01 neck` to
+`neck`; `bip01 head` to `head`; `tag_helmet` and `tag_helmetside` to `helmet`;
+each clavicle and upperarm to the matching `arm_upper`, forearm to `arm_lower`,
+hand and its fifteen finger bones to `hand`; thigh to `leg_upper`, calf to
+`leg_lower`, foot and toe to `foot`; and `tag_weapon_left` /
+`tag_weapon_right` to 18, `gun`. VERIFIED: on the playerbody the head and neck
+boxes are all-zero, as is every `tag_*`; the head boxes live in the attached
+head model, where `xmodelparts/basehead21` gives `bip01 head` code 2 with a
+real box, `bip01 neck` code 3 and every facial bone code 2. INFERRED, from
+the radius skip above: an all-zero box is how the artist turns a bone off.
+
+VERIFIED: `xmodel/playerbody_american_airborne` parses to exact EOF with
+`collision_lod = -1` and no collision surfaces, so a player model carries no
+collision LOD at all and the per-bone box is the only hit geometry there is.
+
+VERIFIED: there is no `hitloc` csv, txt or shader anywhere in the paks. The
+only files naming the 19 locations are `info/mp_lochit_dmgtable`,
+`info/ai_lochit_dmgtable`, the gametype scripts, `animscripts/death.gsc`,
+`animscripts/pain.gsc` and the game module's string pool.
+
+INFERRED, worth keeping for verification later: `g_debugLocDamage 1` on the
+retail server is a per-frame `G_DObjCalcPose` plus `trap_XModelDebugBoxes`,
+the engine's own visualisation of exactly these boxes. It draws client-side,
+so a headless probe cannot see it.
+
+### 3.4 As implemented
+
+vcod runs the same trace. `vcod_common::bonetrace::bone_trace` walks the posed
+skeleton's per-bone boxes in each bone's own frame and ranks candidates by the
+weapon's priority map, with `bestPriority` starting at 2, ties going to the
+nearer hit and a start-solid returning at once;
+`crates/server/src/game/combat.rs` picks `riflePriorityMap` or
+`bulletPriorityMap` off `rifleBullet`, keeps the link box as the broad phase
+only, and takes the first candidate whose bones the segment actually scores.
+The height-fraction partition that used to stand here is gone.
+
+The victim is posed per shot, not per frame, out of the same grafted
+body-plus-head-plus-helmet skeleton the client draws
+(`crates/server/src/game/hitrig.rs`): the legs and torso clips the animscript
+picked, each at the phase its channel started at, then the spine aim layer.
+Three deliberate gaps, none of them measured against retail:
+
+- No cross-fade between an outgoing and an incoming clip. The client's draw
+  path blends over 200 ms; a shot poses one instant with the incoming clip at
+  full weight.
+- The aim layer is the client's `apply_aim`, whose per-bone weights are a
+  stand-in: `BG_Player_DoControllers`' own constants are not decoded
+  (`docs/research/player-model-anim-system.md`). It is fed the victim's view
+  pitch as the torso pitch and zero as the waist pitch, since this server
+  sends neither `fTorsoPitch` nor `fWaistPitch` and there is nothing better to
+  read.
+- A client whose models will not load has no rig, and its hits carry `none`,
+  which the shipped multiplier table reads as full damage. Retail has no such
+  state.
+
+What is measured is one point: 8.4's level shot from eye height, 60 units up a
+70-unit standing box, read `head` on retail, and it reads `head` here through
+the bone trace when the victim faces the shooter. Nothing else is pinned, and
+head-versus-neck for the same shot into the back of a standing player is
+open -- vcod reads `neck` there. `--probe-sweep`
+(`crates/client/src/probe.rs`) is what settles the rest: it taps once per
+entry of a table of pitch offsets and echoes the offset on its `!trace` line,
+and the retail server logs `sHitLoc` per hit in its `games_mp.log` `D;`
+records with no configuration at all, so one run against retail and one
+against ours label every shot on both sides.
+
+### 3.5 The multiplier table and what a missing file does
 
 VERIFIED, `G_ParseHitLocDmgTable` `0x498b0`: a loop over indices 0 to 0x12
 writes `1.0f` into `g_fHitLocDamageMult` (`0x16F080`, 0x4c bytes, one float
@@ -1817,7 +2043,7 @@ VERIFIED, **the hit frame** against the settled frame before it:
 | `velocity` | 0, 0, 0 | -1.4, 80.0, 0.1 |
 
 **67 damage from a 45-damage weapon on a head hit.** VERIFIED: the shipped
-`info/mp_lochit_dmgtable` in `pak5.pk3` gives the head 1.5 (3.1). INFERRED:
+`info/mp_lochit_dmgtable` in `pak5.pk3` gives the head 1.5 (3.5). INFERRED:
 the product is truncated, since 45 * 1.5 is 67.5, 6.4's `damage * multiplier`
 is the only scaling on this path, and nothing else in the capture is a factor
 of 1.489.

@@ -178,6 +178,10 @@ pub struct ClientSim {
     /// The model configstring index `setViewmodel` left on the client,
     /// mirrored from the script host every frame the way the weapons are.
     pub viewmodel_index: i32,
+    /// The body, head and helmet the character script dressed this client in,
+    /// mirrored the same way: the locational trace poses the grafted rig they
+    /// make (`crate::game::hitrig`).
+    pub assembly: crate::game::hitrig::Assembly,
     /// The client's per-axis view offset, added back onto each cmd's angle
     /// by both `step` and the connected client itself.
     /// docs/protocol-1.1.md, "Spectator view angles".
@@ -273,6 +277,7 @@ impl ClientSim {
             events: [0; 4],
             event_parms: [0; 4],
             viewmodel_index: 0,
+            assembly: Default::default(),
             delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
             view_lerp_start: None,
             anim: Default::default(),
@@ -654,7 +659,7 @@ impl ClientSim {
             let length = |name: &str| inputs.anims.length_ms(name);
             self.anim.event(&sel, now_ms, resolve, length);
         }
-        self.anim.restart_torso_empty();
+        self.anim.restart_torso_empty(now_ms);
     }
 
     /// `P_DamageFeedback` (combat doc, section 6), once per frame after the
@@ -699,6 +704,33 @@ impl ClientSim {
     /// Where the player is: the sim owns it, the script mirrors it.
     pub fn origin(&self) -> [f32; 3] {
         self.ps.origin.into()
+    }
+
+    /// What the locational trace poses this client's bones from: the two
+    /// live anim indices with the phase each is at, and the aim the spine
+    /// layer bends by.
+    ///
+    /// The waist pitch is 0 and the torso pitch is the client's own view
+    /// pitch. Retail splits the two across `fWaistPitch` and `fTorsoPitch`
+    /// with constants that are not decoded
+    /// (`docs/research/player-model-anim-system.md`), and this server sends
+    /// neither field, so there is nothing better to read.
+    pub fn pose_inputs<'a>(
+        &self,
+        anims: &'a vcod_common::animtree::PlayerAnims,
+        now_ms: i32,
+    ) -> vcod_common::playerpose::PoseInputs<'a> {
+        vcod_common::playerpose::PoseInputs {
+            anims,
+            legs: self.anim.legs(),
+            torso: self.anim.torso(),
+            legs_start_ms: self.anim.legs_start_ms(),
+            torso_start_ms: self.anim.torso_start_ms(),
+            now_ms,
+            torso_pitch: self.ps.pitch.to_degrees(),
+            waist_pitch: 0.0,
+            lean: self.ps.lean / vcod_common::pmove::LEAN_MAX,
+        }
     }
 
     /// The point a snapshot is built from: the origin lifted by the current

@@ -2,12 +2,16 @@
 //! box partition a hit point resolves to, and the shot itself
 //! (`docs/research/cod11-combat.md`, sections 2 to 4).
 
+use crate::game::hitrig::HitRigs;
 use crate::game::temp_entity::{Scope, TempEntity};
 use crate::spectate::{ClientSim, PmType};
-use glam::Vec3;
+use glam::{Quat, Vec3};
+use vcod_common::animtree::PlayerAnims;
+use vcod_common::bonetrace::{bone_trace, PriorityMap};
 use vcod_common::collision::{sound_material, CollisionWorld};
 use vcod_common::net::events::dir_to_byte;
 use vcod_common::pk3::Pk3Fs;
+use vcod_common::playerpose::pose_player;
 use vcod_common::weapon::WeaponDef;
 
 /// The 25 names, in the order of the pointer table at `.so` file offset
@@ -99,7 +103,7 @@ pub struct HitLocTable {
 
 impl Default for HitLocTable {
     /// The state the parser overwrites: every location at 1, `gun` at 0
-    /// (combat doc, section 3.1).
+    /// (combat doc, section 3.5).
     fn default() -> Self {
         let mut mult = [1.0; 19];
         mult[18] = 0.0;
@@ -161,67 +165,21 @@ impl HitLocTable {
     }
 }
 
-/// Where a point on a player's box lands, as one of `HITLOC_NAMES`.
-///
-/// Retail's partition lives inside `trap_LocationalTrace` in the engine
-/// binary, per bone, and nothing read pins it (combat doc, section 3). This
-/// is a partition of the link box by height fraction and side, INFERRED,
-/// with the one measurement there is: a level shot from eye height (60 of a
-/// 70-unit box) read `head` on retail (section 8.4's `MOD_HEAD_SHOT`). The
-/// fractions are the doc's "As implemented" note under section 3.
-pub fn hitloc(
-    point: [f32; 3],
-    victim_origin: [f32; 3],
-    victim_yaw_rad: f32,
-    mins: [f32; 3],
-    maxs: [f32; 3],
-) -> &'static str {
-    let height = maxs[2] - mins[2];
-    if height <= 0.0 {
-        return "none";
-    }
-    let frac = ((point[2] - victim_origin[2] - mins[2]) / height).clamp(0.0, 1.0);
-    // Lateral offset in the body's frame, positive to its right (the same
-    // `right` vector `PlayerState::view` uses).
-    let right = Vec3::new(victim_yaw_rad.sin(), -victim_yaw_rad.cos(), 0.0);
-    let lateral = (Vec3::from(point) - Vec3::from(victim_origin)).dot(right);
-    let half_width = (maxs[0] - mins[0]) * 0.5;
-    let side = if lateral < 0.0 { "left" } else { "right" };
-    let sided = |part: &str| -> &'static str {
-        let name = format!("{side}_{part}");
-        HITLOC_NAMES
-            .iter()
-            .copied()
-            .find(|n| *n == name)
-            .unwrap_or("none")
-    };
-    if frac >= 0.94 {
-        "helmet"
-    } else if frac >= 0.85 {
-        "head"
-    } else if frac >= 0.80 {
-        "neck"
-    } else if frac >= 0.40 {
-        if lateral.abs() > 0.6 * half_width {
-            if frac >= 0.65 {
-                sided("arm_upper")
-            } else if frac >= 0.55 {
-                sided("arm_lower")
-            } else {
-                sided("hand")
-            }
-        } else if frac >= 0.55 {
-            "torso_upper"
-        } else {
-            "torso_lower"
-        }
-    } else if frac >= 0.20 {
-        sided("leg_upper")
-    } else if frac >= 0.05 {
-        sided("leg_lower")
-    } else {
-        sided("foot")
-    }
+/// `bulletPriorityMap` and `riflePriorityMap`, the two 19-byte tables the
+/// engine ranks bone candidates with (combat doc, 2.3). A `rifleBullet`
+/// weapon takes the second, everything else the first.
+pub const BULLET_PRIORITY: PriorityMap = [1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0];
+pub const RIFLE_PRIORITY: PriorityMap = [1, 9, 9, 9, 8, 7, 6, 6, 6, 6, 5, 5, 4, 4, 4, 4, 3, 3, 0];
+
+/// What the locational trace needs beyond the shot itself: the paks to load a
+/// victim's models out of, the animtree its clip names come from, and the rig
+/// cache. Without one a hit still lands, at hit location `none`.
+pub struct BoneTraceCtx<'a> {
+    pub fs: &'a vcod_common::pk3::Pk3Fs,
+    pub anims: &'a PlayerAnims,
+    pub rigs: &'a mut HitRigs,
+    /// serverTime the shot is posed at.
+    pub now_ms: i32,
 }
 
 /// One player hit, ready for `CodeCallback_PlayerDamage`.
@@ -318,10 +276,10 @@ fn ray_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3) -> Option<f32> {
 }
 
 /// A player's shot: from the eye along the view with spread, against the
-/// world and every live player's box; the nearer wins (combat doc, section
-/// 2). `sims` is every client with a sim, the shooter among them; `ads` is
-/// whether the shot left a settled sight; `weapon_name` is what the callback
-/// is told
+/// world and every live player's box, and then against the bones of whoever
+/// the box test found (combat doc, sections 2 and 3). `sims` is every client
+/// with a sim, the shooter among them; `ads` is whether the shot left a
+/// settled sight; `weapon_name` is what the callback is told
 /// (`BG_GetInfoForWeapon(weapon)->name`). Damage is `weaponDef.damage`
 /// through the hit-location table with no distance term (2.4). A rifle
 /// round's pass through the first player at half damage (2.4, step 5) is
@@ -335,6 +293,7 @@ pub fn bullet_fire(
     sims: &[(usize, &ClientSim)],
     world: Option<&CollisionWorld>,
     hitlocs: &HitLocTable,
+    mut bones: Option<&mut BoneTraceCtx>,
     rng: &mut u64,
 ) -> ShotResult {
     let none = ShotResult {
@@ -359,20 +318,60 @@ pub fn bullet_fire(
     let end = muzzle + forward * BULLET_RANGE + right * (x * r) + up * (y * r);
 
     let trace = world.map(|w| w.shot_trace(muzzle, end));
-    let mut nearest = trace.as_ref().map_or(1.0, |t| t.fraction);
-    let mut victim: Option<(usize, &ClientSim, f32)> = None;
-    for (slot, sim) in sims {
-        if *slot == shooter || sim.pm_type != PmType::Normal || sim.dead {
+    let world_fraction = trace.as_ref().map_or(1.0, |t| t.fraction);
+    // The link box is the broad phase only: retail's locational trace then
+    // has to score a bone, and a ray can cross the column and meet none
+    // (combat doc, section 3). Candidates in the order the ray reaches them,
+    // and the first one whose bones it does score is the victim.
+    let mut candidates: Vec<(usize, &ClientSim, f32)> = sims
+        .iter()
+        .filter(|(slot, sim)| *slot != shooter && sim.pm_type == PmType::Normal && !sim.dead)
+        .filter_map(|(slot, sim)| {
+            let lo = sim.ps.origin + sim.ps.mins();
+            let hi = sim.ps.origin + sim.ps.maxs();
+            let t = ray_box(muzzle, end, lo, hi)?;
+            (t < world_fraction).then_some((*slot, *sim, t))
+        })
+        .collect();
+    candidates.sort_by(|a, b| a.2.total_cmp(&b.2));
+    let priority = if def.sounds.rifle_bullet {
+        &RIFLE_PRIORITY
+    } else {
+        &BULLET_PRIORITY
+    };
+    let mut victim: Option<(usize, &ClientSim, f32, &'static str)> = None;
+    for (slot, sim, box_t) in candidates {
+        // No paks, no rig: the shot still lands, at no location, which the
+        // shipped multiplier table reads as full damage.
+        let Some(ctx) = bones.as_mut() else {
+            victim = Some((slot, sim, box_t, "none"));
+            break;
+        };
+        let BoneTraceCtx {
+            fs,
+            anims,
+            rigs,
+            now_ms,
+        } = &mut **ctx;
+        let Some(skel) = rigs.rig(fs, &sim.assembly) else {
+            victim = Some((slot, sim, box_t, "none"));
+            break;
+        };
+        let inputs = sim.pose_inputs(anims, *now_ms);
+        let pose = pose_player(&skel, &inputs, |name| rigs.clip(fs, name));
+        // Into the victim's own frame: a player entity is yaw-only and its
+        // `tag_origin` sits at the feet.
+        let inv = Quat::from_rotation_z(-sim.ps.yaw);
+        let (ls, le) = (inv * (muzzle - sim.ps.origin), inv * (end - sim.ps.origin));
+        let Some(hit) = bone_trace(&skel, &pose, ls, le, priority) else {
             continue;
-        }
-        let lo = sim.ps.origin + sim.ps.mins();
-        let hi = sim.ps.origin + sim.ps.maxs();
-        if let Some(t) = ray_box(muzzle, end, lo, hi) {
-            if t < nearest {
-                nearest = t;
-                victim = Some((*slot, sim, t));
-            }
-        }
+        };
+        let loc = HITLOC_NAMES
+            .get(hit.hit_location as usize)
+            .copied()
+            .unwrap_or("none");
+        victim = Some((slot, sim, hit.fraction, loc));
+        break;
     }
     let event = if def.sounds.rifle_bullet {
         EV_BULLET_HIT_LARGE
@@ -384,15 +383,8 @@ pub fn bullet_fire(
     } else {
         ("MOD_PISTOL_BULLET", 0)
     };
-    if let Some((slot, sim, t)) = victim {
+    if let Some((slot, _sim, t, loc)) = victim {
         let point = muzzle + (end - muzzle) * t;
-        let loc = hitloc(
-            point.into(),
-            sim.ps.origin.into(),
-            sim.ps.yaw,
-            sim.ps.mins().into(),
-            sim.ps.maxs().into(),
-        );
         // Truncated toward zero, `G_Damage`'s explicit `fldcw` (4.2).
         let damage = (def.damage as f32 * hitlocs.multiplier(loc)) as i32;
         return ShotResult {
@@ -459,53 +451,6 @@ mod tests {
         assert!(!MOD_FLAGGED.contains(&mod_index("MOD_TRIGGER_HURT").unwrap()));
     }
 
-    /// The box partition, by height fraction and side. The one measured
-    /// point is eye height reading `head`; the rest is the doc's INFERRED
-    /// partition, pinned so a change to it is deliberate.
-    #[test]
-    fn hitloc_partitions_the_box_by_height_and_side() {
-        let (mins, maxs) = ([-15.0, -15.0, 0.0], [15.0, 15.0, 70.0]);
-        let o = [0.0, 0.0, 0.0];
-        assert_eq!(hitloc([0.0, 0.0, 68.0], o, 0.0, mins, maxs), "helmet");
-        assert_eq!(hitloc([0.0, 0.0, 64.0], o, 0.0, mins, maxs), "head");
-        assert_eq!(hitloc([0.0, 0.0, 60.0], o, 0.0, mins, maxs), "head");
-        assert_eq!(hitloc([0.0, 0.0, 57.0], o, 0.0, mins, maxs), "neck");
-        assert_eq!(hitloc([0.0, 0.0, 50.0], o, 0.0, mins, maxs), "torso_upper");
-        assert_eq!(hitloc([0.0, 0.0, 36.0], o, 0.0, mins, maxs), "torso_lower");
-        assert_eq!(
-            hitloc([0.0, 8.0, 10.0], o, 0.0, mins, maxs),
-            "left_leg_lower"
-        );
-        assert_eq!(
-            hitloc([0.0, -8.0, 10.0], o, 0.0, mins, maxs),
-            "right_leg_lower"
-        );
-        assert_eq!(
-            hitloc([0.0, 5.0, 20.0], o, 0.0, mins, maxs),
-            "left_leg_upper"
-        );
-        assert_eq!(hitloc([0.0, 0.0, 2.0], o, 0.0, mins, maxs), "right_foot");
-        // Wide of the torso is an arm, and the side follows the body's yaw:
-        // facing +x, the body's right is -y.
-        assert_eq!(
-            hitloc([0.0, 12.0, 50.0], o, 0.0, mins, maxs),
-            "left_arm_upper"
-        );
-        assert_eq!(
-            hitloc([0.0, -12.0, 40.0], o, 0.0, mins, maxs),
-            "right_arm_lower"
-        );
-        assert_eq!(hitloc([0.0, -12.0, 30.0], o, 0.0, mins, maxs), "right_hand");
-        let quarter = std::f32::consts::FRAC_PI_2;
-        assert_eq!(
-            hitloc([12.0, 0.0, 50.0], o, quarter, mins, maxs),
-            "right_arm_upper"
-        );
-        // The box travels with the body.
-        let far = [1000.0, 2000.0, -30.0];
-        assert_eq!(hitloc([1000.0, 2000.0, 34.0], far, 0.0, mins, maxs), "head");
-    }
-
     #[test]
     fn the_table_parses_the_shipped_format_and_refuses_a_stranger() {
         let t = HitLocTable::parse("LOCDMGTABLE\\head\\1.5\\left_foot\\0.4").unwrap();
@@ -557,6 +502,8 @@ mod tests {
         WeaponDef::from_map(&m)
     }
 
+    /// Fires with no trace context, which is the no-paks path: the box hit
+    /// stands and carries no location.
     fn fire(
         def: &WeaponDef,
         sims: &[(usize, &ClientSim)],
@@ -572,8 +519,68 @@ mod tests {
             sims,
             Some(world),
             &table,
+            None,
             rng,
         )
+    }
+
+    /// The stock American body, head and helmet, the assembly the character
+    /// script dresses a client in.
+    fn stock_assembly() -> crate::game::hitrig::Assembly {
+        crate::game::hitrig::Assembly {
+            body: "playerbody_american_airborne".into(),
+            attachments: vec![
+                ("basehead2".into(), None),
+                ("USAirborneHelmet".into(), Some("tag_helmet".into())),
+            ],
+        }
+    }
+
+    /// The one measured hit location there is (combat doc, 8.4): a level shot
+    /// from eye height at a standing player 100 units away read `head` on
+    /// retail, so the bone trace has to read it too.
+    #[test]
+    fn a_level_eye_height_shot_reads_head_through_the_bone_trace() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let world = vcod_common::collision::test_world(&[]);
+        let table = HitLocTable::load(&fs);
+        let a = new_for_test([0.0, 0.0, 0.0], 0.0);
+        let mut b = new_for_test([100.0, 0.0, 0.0], 180.0);
+        b.assembly = stock_assembly();
+        // The animscript selects nothing off the ground, and a sim no pmove
+        // has stepped is airborne; without this B stands in bind pose.
+        b.ps.on_ground = true;
+        let inputs = crate::spectate::AnimInputs {
+            anims: &anims,
+            weapon: "m1carbine_mp",
+            weapon_class: "rifle",
+        };
+        b.update_anims(&inputs, &vcod_common::net::msg::NULL_USERCMD, 0, &[]);
+        let mut rigs = HitRigs::default();
+        let mut ctx = BoneTraceCtx {
+            fs: &fs,
+            anims: &anims,
+            rigs: &mut rigs,
+            now_ms: 0,
+        };
+        let mut rng = 1u64;
+        let r = bullet_fire(
+            0,
+            &zero_spread_carbine(),
+            "m1carbine_mp",
+            false,
+            &[(0, &a), (1, &b)],
+            Some(&world),
+            &table,
+            Some(&mut ctx),
+            &mut rng,
+        );
+        let hit = r.hit.expect("the shot reached B");
+        assert_eq!(hit.hitloc, "head");
+        assert_eq!(hit.damage, 67, "45 through the head multiplier");
     }
 
     #[test]
@@ -590,8 +597,8 @@ mod tests {
         assert_eq!(hit.victim, 1);
         assert_eq!(hit.attacker, 0);
         assert_eq!(
-            hit.hitloc, "head",
-            "a level shot from the eye lands at eye height"
+            hit.hitloc, "none",
+            "with no rig to trace the hit carries no location"
         );
         assert_eq!(hit.damage, (45.0 * table.multiplier(hit.hitloc)) as i32);
         assert_eq!(hit.mod_, "MOD_RIFLE_BULLET");
