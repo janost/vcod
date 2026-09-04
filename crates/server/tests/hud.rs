@@ -132,13 +132,19 @@ fn only_the_killed_client_is_sent_the_respawn_text() {
     );
     sv.place_client(na, spot, 0.0);
     sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+    // B keeps asking to face A: a usercmd carries absolute view angles, and
+    // the shot is traced against B's posed bones (`tests/combat.rs`).
+    let facing_a = UserCmd {
+        angles: [0, 32768, 0], // ANGLE2SHORT(180)
+        ..NULL_USERCMD
+    };
     let mut step = |sv: &mut vcod_server::Server, ca: &mut _, cb: &mut _| {
         now += Duration::from_millis(50);
         common::step_pair(sv, (&qa, ca), (&qb, cb), now)
     };
     for _ in 0..40 {
         ca.send_frame(&NULL_USERCMD);
-        cb.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
         step(&mut sv, &mut ca, &mut cb);
     }
     // Neither client has a HUD element of its own before the kill.
@@ -165,14 +171,16 @@ fn only_the_killed_client_is_sent_the_respawn_text() {
         buttons: BUTTON_ADS | BUTTON_ATTACK,
         ..NULL_USERCMD
     };
+    // The wait between the taps outlasts B's pain animation, which doubles
+    // it over far enough that a level shot meets no bone.
     for shot in 0..2 {
         ca.send_frame(&fire);
-        cb.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
         step(&mut sv, &mut ca, &mut cb);
         if shot == 0 {
-            for _ in 0..10 {
+            for _ in 0..30 {
                 ca.send_frame(&ads);
-                cb.send_frame(&NULL_USERCMD);
+                cb.send_frame(&facing_a);
                 step(&mut sv, &mut ca, &mut cb);
             }
         }
