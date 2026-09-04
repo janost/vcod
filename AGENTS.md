@@ -189,7 +189,14 @@ engineering setup works.
   `games_mp.log` `D;` records carry and every vertical hit-location boundary
   falls out of the two; run it against retail and against ours and the
   answers are directly comparable. An offset is spent only on a tap that had
-  a live target to hit, so give both probes a long `--probe-secs`.
+  a live target to hit, so give both probes a long `--probe-secs`. The sweep
+  walks to within 120 units before its first tap (`SWEEP_RANGE`), because at
+  350 the hip cone blurs a tap over nine units and labels nothing; the
+  target probe still writes its own fixture, so `git checkout` the fixture
+  directory after a run against ours. `tools/pair_sweep.py` pairs the two
+  probe logs with the server's `D;`/`K;` lines and prints the height each
+  hit crossed the victim at; both runs and what they settled are in
+  `docs/research/cod11-combat.md`, section 3.4.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
