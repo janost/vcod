@@ -143,6 +143,12 @@ engineering setup works.
   `torsoAnim`"; run it on two maps, because the map picks the weapon and the
   bolt-action mosin on mp_pavlov is what exposed the rechamber the carbine
   never reaches.
+  `--save-ads` is the same machine on a sight script: sight held, released,
+  held through a reload (after a shot, since a full clip refuses one), held
+  through a shot and while walking, plus a hip shot and a walk for the
+  spread counter; it writes `<map>-<gametype>-ads.txt` with `fWeaponPosFrac`
+  and `aimSpreadScale` on every `!trace` line, and the same gate replays it.
+  It is the capture that found the usercmd delta base (Gotchas).
   Every capture cmd carries the weapon the playerstate says the client holds.
   A cmd with `weapon` 0 is not neutral: retail reads a `cmd.weapon` differing
   from `ps.weapon` as a request to holster, and the byte travels only in the
@@ -396,7 +402,21 @@ never pasted decompiler output or disassembly listings.
   agree. Both rings, and the scramble key that indexes them, are sized off it.
 - The server's per-client drop notice is the reliable command `w "<reason>"`
   (`SV_DropClient` 0x8085cf4). Bare `disconnect` only travels client to server.
-- The retail client omits unchanged usercmd fields (change-bit 0, angles included, relative to its previous sent cmd); the server must decode each message's delta chain against its stored last received cmd, not `NULL_USERCMD`, or every omission reads as zero — this was the retail client's "spectator flash" (one-frame view snaps, invisible until yaw first went nonzero).
+- The retail client omits unchanged usercmd fields (change-bit 0, angles
+  included), and a compact cmd carries no upper button, stance, `up` or
+  weapon bits at all. What "unchanged" is relative to is not the previous
+  cmd: `SV_UserMove` builds the base for each message's first cmd out of the
+  client's playerstate (`docs/protocol-1.1.md`, "The base cmd is built from
+  the playerstate"), whose sight bit is `fWeaponPosFrac != 0` and whose
+  stance bits come from `eFlags`. So a client that chains from its own last
+  sent cmd hands a released sight back to the server for as long as the
+  fraction is non-zero; vcod's writer sends the full branch every cmd for
+  that reason. vcod's server still decodes against its stored last received
+  cmd, which agrees with retail's base in every case measured so far (the
+  divergence list at the end of the protocol doc says where it would not),
+  and decoding against `NULL_USERCMD` instead was the retail client's
+  "spectator flash" (one-frame view snaps, invisible until yaw first went
+  nonzero).
 - A portal's plane faces out of its owning cell; the walk skips a portal when
   the eye is past it (`n·eye - dist > 1`). Two vcod additions to the walk:
   clipped portal polygons narrower than `SLIVER_EPS` are skipped (slivers at

@@ -95,6 +95,16 @@ struct Args {
     /// sequence takes about 40 s, inside the default --probe-secs.
     #[arg(long)]
     save_combat: bool,
+    /// Join a team, then run the sight script -- sight held, released, held
+    /// through a reload, through a shot and while walking, plus a hip shot
+    /// and a walk to kick the spread counter -- and write every snapshot's
+    /// fWeaponPosFrac and aimSpreadScale to
+    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-ads.txt.
+    /// The same machine as --save-combat with another script; the two are
+    /// separate fixtures because the ramp is a transient the combat steps
+    /// never hold still for.
+    #[arg(long)]
+    save_ads: bool,
     /// The shooter half of the hit capture: join a team, walk toward the other
     /// player until the eye-to-eye trace through the map's collision is clear,
     /// then fire a single shot, a burst and until the target dies, and watch
@@ -479,6 +489,7 @@ fn main() -> Result<()> {
                 playerstate: args.save_playerstate,
                 motion: args.save_motion,
                 combat: args.save_combat,
+                ads: args.save_ads,
                 entities: args.save_entities,
                 hit: args.save_hit,
                 target: args.probe_target,
