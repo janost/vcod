@@ -762,6 +762,11 @@ impl ScriptRuntime {
         // entity already gone. Whether retail really orders it this way is
         // what `probe_delete`'s post-wait count measures.
         self.host.ents.run_thinks(now_ms);
+        // The body queue is not in the object table, so its own think -- the
+        // 250 ms `eFlags` 0x800 clear -- runs beside the table's.
+        self.host
+            .bodies
+            .run_thinks(now_ms, &vcod_common::net::protocol::PROTOCOL_V1);
         for e in self.vm.run_frame(&mut self.host, now_ms) {
             log::warn!("script error: {e:?}");
         }

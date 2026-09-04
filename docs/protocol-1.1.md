@@ -638,7 +638,25 @@ Both arrays are 64 long, which caps the distinct ammo names and the distinct cli
 
 ### Trajectories (`trType`/`pos`/`apos`)
 
-Entity movement/rotation is a Q3-shaped `trajectory_t` (`trType`, `trTime`, `trDuration`, `trBase`, `trDelta`) carried in the `pos` and `apos` netfield groups, evaluated with RTCW's `BG_EvaluateTrajectory` maths (LINEAR, LINEAR_STOP, SINE, GRAVITY variants, ACCELERATE/DECCELERATE; STATIONARY/INTERPOLATE/GRAVITY_PAUSED just return `trBase`, matching snapshot-interpolated fields). **Divergence, observed not derived from source.** Real CoD 1.1 servers send `TR_SINE` with `trDuration == 0` on `ET_ITEM` pickups (thousands of samples across two populated servers). RTCW's reference divides `dt / trDuration` unconditionally in that branch, which is a guaranteed NaN here. Guard `trDuration == 0` in the `TR_SINE` branch by returning `trBase`, the same fallback as `STATIONARY`. Anything else makes every dropped/spawned item invisible.
+Entity movement/rotation is a Q3-shaped `trajectory_t` (`trType`, `trTime`, `trDuration`, `trBase`, `trDelta`) carried in the `pos` and `apos` netfield groups, evaluated with RTCW's `BG_EvaluateTrajectory` maths (LINEAR, LINEAR_STOP, SINE, GRAVITY variants, ACCELERATE/DECCELERATE; STATIONARY/INTERPOLATE/GRAVITY_PAUSED just return `trBase`, matching snapshot-interpolated fields). **Divergence, #8.** The arithmetic is RTCW's, the enumeration is not. `BG_EvaluateTrajectory` (`game.mp.i386.so` 0x2c600) and `BG_EvaluateTrajectoryDelta` (0x2c8e8) both open `cmp $0xa,<trType>; ja Com_Error` over eleven-entry jump tables at 0x700a8 and 0x7012c, with the error string `BG_EvaluateTrajectory: unknown trType: %i` at 0x70060. VERIFIED. So the valid range is 0..10 with no holes:
+
+| idx | name | evaluates |
+|---|---|---|
+| 0 | `TR_STATIONARY` | `trBase` |
+| 1 | `TR_INTERPOLATE` | `trBase` |
+| 2 | `TR_LINEAR` | `base + delta*dt` |
+| 3 | `TR_LINEAR_STOP` | linear, `dt` clamped to `trDuration` and to >= 0 |
+| 4 | `TR_SINE` | `base + delta * sin(2*pi*(t-trTime)/trDuration)` |
+| 5 | `TR_GRAVITY` | x,y linear; `z = base.z + delta.z*dt - 400*dt*dt` |
+| 6 | `TR_GRAVITY_LOW` | the same with 120 |
+| 7 | `TR_GRAVITY_FLOAT` | `z -= 80*dt`, a single `dt` |
+| 8 | `TR_GRAVITY_PAUSED` | `trBase`; the delta arm is `Com_Error` |
+| 9 | `TR_ACCELERATE` | accelerate along the normalised delta |
+| 10 | `TR_DECCELERATE` | the same negated |
+
+VERIFIED: the arithmetic per case and the `.rodata` constants (0x70098 = 400.0, 0x7009c = 120.0, 0x700a0 = 80.0, 0x70120 = 800.0, 0x70124 = 240.0, 0x70128 = 160.0), and the cgame's own `trType == 5` arm (`cgame_mp_x86.dll` 0x30005470, the 400.0 at 0x30069528). INFERRED: the names, from RTCW's enumeration with `TR_LINEAR_STOP_BACK`, `TR_SPLINE` and `TR_LINEAR_PATH` removed, which is what makes index 4 the `fsin` branch rather than RTCW's `Com_Error` hole and leaves index 8 as the one value handled in evaluate and fatal in delta.
+
+The earlier reading of this section had `TR_SINE = 5` off codextended `shared.h:461-476`, which is a byte-for-byte paste of the RTCW-MP header with no CoD1 verification; codextended itself never uses it numerically, resolving the game binary's `BG_EvaluateTrajectory` at runtime and writing raw literals (`src/script.c:1177`, `bolt->s.pos.trType = 5;`). The `TR_SINE` samples with `trDuration == 0` this section used to record as a second divergence are `TR_GRAVITY` samples read one index high: index 5 never touches `trDuration`, and 0 is what a launched item carries.
 
 ## Client to server message body (clc)
 
@@ -831,7 +849,7 @@ If you're porting a Q3/RTCW server, these are the things that will bite:
 5. The client-to-server header is 9 plain bytes with a 1-byte serverId, not a compressed 4-byte one.
 6. Snapshots have no areamask.
 7. PlayerState negative field widths are unsigned (width only, no sign extension), and the playerState delta has no zero-flag in its main loop, so a changed `-0.0` float decodes as `+0.0` and only `lc` betrays that the field was sent at all.
-8. Real servers send `TR_SINE` trajectories with `trDuration == 0` on item pickups, which divides by zero under the literal RTCW `BG_EvaluateTrajectory` port; guard it to return `trBase`.
+8. `trType_t` is not RTCW's. CoD 1.1 has no `TR_LINEAR_STOP_BACK`, `TR_SPLINE` or `TR_LINEAR_PATH`, so every value from 4 up sits one index lower: `TR_SINE` 4, `TR_GRAVITY` 5, up to `TR_DECCELERATE` 10, and 11 or above is a `Com_Error` (`.so` 0x2c600). An item or a corpse arrives under 5, so a port that keeps RTCW's numbering reads gravity as a sine, divides by the `trDuration` 0 those entities carry, and draws every one of them frozen where it was launched.
 9. Server commands are single letters: the configstring update is `d <index> <text>` with unquoted text to end of line, not `cs <index> "<text>"`, and `map_restart` arrives as `n`.
 10. `sv_serverid` is a byte (`0x10` per map load from a zero start, low nibble per `map_restart`) and a stale low nibble makes the server drop the whole client message, snapshots included, instead of Q3's "ignoring pre map_restart" path that keeps serving them.
 11. The client-to-server scramble covers the compressed op block from its byte 0, packet byte 15, with no `CL_ENCODE_START` offset into it; the 9 plain header bytes in front are never scrambled and the parity `c << (i & 1)` counts from the block's own start.

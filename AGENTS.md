@@ -246,7 +246,9 @@ engineering setup works.
 - The tick, in order: expired clients, then each client's queued usercmds
   (`replay_moves`, one pmove step per cmd, which is where the weapon machine
   queues a frame's shots), then the shots themselves (a trace each, an impact
-  temp entity and a hit per player struck), then `deliver_hits` so the damage
+  temp entity and a hit per player struck), then the client commands that
+  start a script thread (`kill`, `mr`), which the packet pass only queues
+  because it runs before the clock advances, then `deliver_hits` so the damage
   callback has run before script, then the script frame, then the sim ops the
   script left (spawns, weapon gives and switches, the damage the callback
   did), then the host-to-sim mirrors (weapons held, origin, health, the damage

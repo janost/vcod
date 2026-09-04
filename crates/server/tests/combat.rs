@@ -409,6 +409,12 @@ fn a_shot_takes_health_and_a_second_one_kills() {
 /// capture. B asks to die; B's next snapshot reads `pm_type` 6 and both
 /// clients are sent the obituary with victim == attacker and the
 /// `MOD_SUICIDE` parm 0x96 the capture measured (`cod11-combat.md` 8.3).
+///
+/// The corpse it leaves is the same one a bullet leaves: the death animation
+/// and a settled trajectory. A client command runs during the packet pass, a
+/// frame before `tick` advances the clock, so the body used to be stamped in
+/// the past and skipped by its one refresh forever, which left it wearing the
+/// pose the player had a frame before it died.
 #[test]
 fn the_kill_command_suicides_a_player() {
     use vcod_common::net::msg::NULL_USERCMD;
@@ -417,6 +423,7 @@ fn the_kill_command_suicides_a_player() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
+    let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
@@ -473,6 +480,10 @@ fn the_kill_command_suicides_a_player() {
     // The obituary is a temp entity: it rides one frame and is gone, so it is
     // caught as it passes rather than read off the last snapshot.
     let (mut seen_a, mut seen_b) = (None, None);
+    // Where B stood when it asked to die, and the `eFlags` its body carried
+    // on the frame it was born: the 0x800 marker rides for 250 ms.
+    let death_spot = cb.snapshots().newest().unwrap().ps.origin(p);
+    let mut newborn_flags = None;
     cb.send_reliable("kill");
     for _ in 0..10 {
         ca.send_frame(&NULL_USERCMD);
@@ -480,6 +491,15 @@ fn the_kill_command_suicides_a_player() {
         step(&mut sv, &mut ca, &mut cb);
         seen_a = seen_a.or_else(|| obituary(ca.snapshots().newest().unwrap()));
         seen_b = seen_b.or_else(|| obituary(cb.snapshots().newest().unwrap()));
+        if newborn_flags.is_none() {
+            newborn_flags = ca
+                .snapshots()
+                .newest()
+                .unwrap()
+                .entities
+                .get(&FIRST_BODY)
+                .map(|c| c.field_i32(p, "eFlags"));
+        }
     }
     let sb = cb.snapshots().newest().unwrap();
     assert_eq!(sb.ps.health(), 0, "the kill command took B's health");
@@ -497,9 +517,41 @@ fn the_kill_command_suicides_a_player() {
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 
     // A corpse landed in the queue's first slot, the same as a shot death.
+    let corpse = sb
+        .entities
+        .get(&FIRST_BODY)
+        .expect("the suicide spawned no corpse");
+    // The body wears the death the suicide drew, not the pose B held a frame
+    // earlier: the queue's one refresh only fires when the body was born on
+    // the frame the snapshot is being built for.
+    let legs = corpse.field_i32(p, "legsAnim") & 511;
+    let name = anims.name(legs).expect("the corpse plays an anim");
     assert!(
-        sb.entities.contains_key(&FIRST_BODY),
-        "the suicide spawned no corpse"
+        name.starts_with("pb_stand_death_"),
+        "the suicide corpse plays {name}, not a standing death"
+    );
+    // Settled where B fell: `G_BounceItem`'s first contact writes `trType` 0,
+    // no delta, `trTime` 0 and the world as the ground entity, and a retail
+    // client clips a body against nothing (`cod11-combat.md` 5.3).
+    assert_eq!(corpse.field_i32(p, "pos.trType"), 0);
+    assert_eq!(corpse.field_i32(p, "pos.trTime"), 0);
+    assert_eq!(corpse.field_i32(p, "groundEntityNum"), 1022);
+    for axis in 0..3 {
+        assert_eq!(corpse.field_f32(p, &format!("pos.trDelta[{axis}]")), 0.0);
+    }
+    let at = corpse.origin(p);
+    assert!(
+        (at[2] - death_spot[2]).abs() < 2.0,
+        "the corpse settled at {at:?}, B died at {death_spot:?}"
+    );
+    // The fresh-corpse marker rides the first frames and the 250 ms think
+    // takes it off; ten frames is 500 ms.
+    let newborn_flags = newborn_flags.expect("no corpse reached A");
+    assert_eq!(newborn_flags & 0x800, 0x800, "the corpse was born unmarked");
+    assert_eq!(
+        corpse.field_i32(p, "eFlags") & 0x800,
+        0,
+        "the 250 ms think never cleared the marker"
     );
 
     // A scored nothing: a suicide is not a frag.
