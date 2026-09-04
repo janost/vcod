@@ -678,6 +678,10 @@ impl ScriptRuntime {
                 // slot ahead of it would hand it a dead entity.
                 if let Some(id) = self.client_entity(slot) {
                     self.start_callback("CodeCallback_PlayerDisconnect", id, now_ms);
+                    // Whatever was still running on the player dies with
+                    // it: a dead player's `waitRespawnButton` polled a
+                    // freed entity otherwise (`Vm::kill_threads_of`).
+                    self.vm.kill_threads_of(Target::Entity(id));
                 }
                 self.host.ents.free_client(slot);
             }
@@ -1108,6 +1112,33 @@ mod tests {
         rt.run_frame(100);
         assert_eq!(rt.level_field("gone"), vcod_gsc::Value::Int(3));
         assert!(rt.client_entity(3).is_none());
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+    }
+
+    /// A thread still polling the player when it disconnects dies with the
+    /// entity instead of erroring on a freed `self`, which is what the
+    /// stock `waitRespawnButton` did to a dead player who left.
+    #[test]
+    fn a_disconnect_kills_the_threads_running_on_the_player() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() {}\n\
+             CodeCallback_PlayerConnect() { self thread poll(); }\n\
+             CodeCallback_PlayerDisconnect() {}\n\
+             poll() { for(;;) { level.polls = self useButtonPressed(); wait .05; } }\n",
+        );
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 3,
+            name: "vcod".into(),
+        });
+        rt.run_frame(50);
+        rt.run_frame(100);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+
+        rt.push_client_event(ClientEvent::Disconnect(3));
+        for f in 3..8 {
+            rt.run_frame(f * 50);
+        }
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
     }
 
