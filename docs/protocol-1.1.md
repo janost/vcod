@@ -160,6 +160,12 @@ defaults) and `--net-probe --probe-pvs`, joining through the stock menus.
   ~2400 units apart were sent each other's entity (`eType` 1, `clientNum` 0 and
   1) continuously while both were connected, and the one removal seen was the
   other probe disconnecting.
+- A dead client is sent to nobody: its entity leaves the other clients'
+  lists on the frame after the kill and returns on the respawn frame, the
+  corpse in the body queue standing in for it meanwhile. VERIFIED live,
+  2026-09-05, six lives. `ClientEndFrame` sets `SVF_NOCLIENT` on a client
+  whose `sessionstate` is dead every frame (`docs/research/cod11-combat.md`
+  5.4).
 - The 1.1d dedicated binary holds the strings `SV_BuildClientSnapshot: bad
   gEnt` and `CMod_LoadLeafs: cluster exceeded`, so it has Q3's snapshot builder
   and loads leaf clusters (VERIFIED). That a cluster PVS is what gates the list

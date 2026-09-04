@@ -627,16 +627,11 @@ impl ClientSim {
         self.damage.taken += damage;
         self.damage.from = has_dir.then_some(dir);
         if !fatal {
-            // The stock script's `pain` clauses are all `both`; the retail
-            // hit frame keeps `torsoAnim` 0 through one, so only the legs
-            // take it (combat doc, 8.4).
-            if let (Some(inputs), Some(c)) = (anims, &conditions) {
-                let mut sel = inputs.anims.script.select_event_random("pain", c, rng);
-                sel.torso = None;
-                let resolve = |name: &str| inputs.anims.wire_of(name);
-                let length = |name: &str| inputs.anims.length_ms(name);
-                self.anim.event(&sel, now_ms, resolve, length);
-            }
+            // No `pain` animscript event: retail's server raises none for a
+            // surviving hit, and the hit frame keeps `legsAnim` 634 and
+            // `torsoAnim` 0 in both captures (combat doc, 8.4 and 3.4). The
+            // stock clause would put `pb_crouch_pain_holdStomach` on a
+            // standing player for 1.35 s, doubling it under the next shot.
             return;
         }
         self.dead = true;
