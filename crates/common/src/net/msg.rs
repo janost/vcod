@@ -1157,30 +1157,17 @@ pub fn write_delta_usercmd(w: &mut MsgWriter, key: i32, from: &UserCmd, to: &Use
     w.write_bits(0, 1);
     w.write_long(to.server_time);
 
-    // Changed bit (!= key & 1), then the branch bit (== key & 1 picks compact).
-    let full = to.up != from.up
-        || to.weapon != from.weapon
-        || to.wbuttons != from.wbuttons
-        || (to.buttons & !1) != (from.buttons & !1);
+    // Changed bit (!= key & 1), then the branch bit: always the full branch.
+    // The compact branch leaves the upper button bits, the stance bits,
+    // `up` and `weapon` to the base cmd, and the server's base is not our
+    // last sent cmd: `SV_UserMove` builds it from the client's playerstate
+    // (docs/protocol-1.1.md, "The base cmd is built from the playerstate"),
+    // so a compact cmd after a sight release handed the sight back for as
+    // long as the fraction was non-zero. Every field announced, and the base
+    // decides nothing.
     w.write_bits((key & 1) ^ 1, 1);
-    w.write_bits(if full { (key & 1) ^ 1 } else { key & 1 }, 1);
-
-    if full {
-        write_full_usercmd(w, key, to.server_time, to);
-        return;
-    }
-
-    // The reader mixes the serverTime into the key from here (0x807b95d).
-    let key = key ^ to.server_time;
-
-    w.write_bits(((to.buttons as i32) & 1) ^ (key & 1), 1);
-
-    write_keyed_angle(w, key, to.angles[0]);
-    write_keyed_angle(w, key, to.angles[1]);
-
-    let flag = fr_bucket(to.forward, to.right);
-    w.write_bits(1, 1);
-    w.write_bits(flag ^ (key & 0xf), 4);
+    w.write_bits((key & 1) ^ 1, 1);
+    write_full_usercmd(w, key, to.server_time, to);
 }
 
 /// Writer mirror of [`read_full_usercmd`] (cod_lnxded 0x807bba0): every keyed
@@ -2607,23 +2594,44 @@ mod tests {
         assert_eq!(got_b, quiet_b);
     }
 
-    /// A cmd without upmove must encode exactly as before the full branch
-    /// existed, byte for byte.
+    /// The base decides nothing: a cmd that only differs from the base in
+    /// what the compact branch cannot carry still decodes to itself, because
+    /// the writer takes the full branch every time. The server's base is
+    /// built from the playerstate, not from our last sent cmd, so a compact
+    /// cmd after a sight release would have handed the sight back.
     #[test]
-    fn zero_upmove_writes_the_compact_bytes_unchanged() {
+    fn every_cmd_decodes_to_itself_whatever_the_base_says() {
         let h = Huffman::new();
+        let key = 0x1122_3344;
+        // The base a retail server builds for a crouched player with the
+        // sight up: stance and sight bits it would otherwise keep.
+        let base = UserCmd {
+            server_time: 1000,
+            buttons: 0x10,
+            wbuttons: 0x80,
+            up: -127,
+            weapon: 12,
+            ..NULL_USERCMD
+        };
         let to = UserCmd {
             server_time: 1100,
             buttons: 1,
+            wbuttons: 0,
+            up: 0,
+            weapon: 12,
             angles: [0x1234, 0xabcd, 0],
             forward: 127,
             right: -127,
             ..NULL_USERCMD
         };
         let mut w = MsgWriter::new(&h);
-        write_delta_usercmd(&mut w, 0x1122_3344, &NULL_USERCMD, &to);
-        let d = w.finish();
-        assert_eq!(d, [249, 118, 14, 213, 145, 242, 63, 126, 37, 1]);
+        write_delta_usercmd(&mut w, key, &base, &to);
+        let mut r = MsgReader::new(&w.finish(), &h);
+        let got = read_delta_usercmd(&mut r, key, &base).unwrap();
+        assert_eq!(
+            got, to,
+            "the base's sight and stance bits leaked into the cmd"
+        );
     }
 
     #[test]
