@@ -695,7 +695,7 @@ i8  upmove
 u8  (padding)
 ```
 
-Delta-encode against the previous usercmd (`MSG_WriteDeltaUsercmdKey`). The move message is keyed: `key = checksumFeed ^ messageAcknowledge ^ Com_HashKey(serverCommands[reliableAcknowledge & 63], 32)`. There's a compact-move fast path where `forwardmove = 127` and friends encode as flag bits. `Com_HashKey` is at `0x806810c`; the compact-move mask table (`1,3,7,15,31,63,127`) is in `.data` around `0x80de304`.
+Delta-encoded (`MSG_WriteDeltaUsercmdKey`); what against is under "The base cmd is built from the playerstate" below, and it is not the previous usercmd. The move message is keyed: `key = checksumFeed ^ messageAcknowledge ^ Com_HashKey(serverCommands[reliableAcknowledge & 63], 32)`. There's a compact-move fast path where `forwardmove = 127` and friends encode as flag bits. `Com_HashKey` is at `0x806810c`; the compact-move mask table (`1,3,7,15,31,63,127`) is in `.data` around `0x80de304`.
 
 The reader is `MSG_ReadDeltaUsercmdKey` (cod_lnxded `0x807b7f8`) and it has two branches. Both start with `to = *from` (so anything not transmitted keeps the base cmd's value), a serverTime preamble (1 bit; set = an 8-bit delta from the base, clear = a 32-bit absolute), a keyed "changed" bit that returns the base cmd unchanged when it equals `key & 1`, and a keyed branch bit: equal to `key & 1` picks the compact branch, otherwise the full-field one. The mask table at `0x80de300` is `mask[n] = (1 << n) - 1` (`0x80de304` = 1, `0x80de308` = 3, `0x80de310` = 0xf, `0x80de318` = 0x3f), and a keyed `n`-bit field is `read_bits(n) ^ (key & mask[n])`; a keyed angle is a raw short off the byte cursor XORed with the whole key and truncated to 16 bits; a keyed byte XORs with `key & 0xff`. Nothing is called out of line: `MSG_ReadBits`, `MSG_ReadByte`, `MSG_ReadShort` and `MSG_ReadLong` are all inlined, so both cursors show in the disassembly, loose bits off `msg->bit` (offset `0x14`) and whole bytes off `msg->readcount` (`0x10`).
 
@@ -736,9 +736,65 @@ Full-field branch (`0x807bba0`). The serverTime is mixed into the key only after
 
 `flags` (offset 7) is never transmitted by either branch. `to.buttons` is rebuilt, not patched: bit 0 comes from the first field, and `0x807be45` clears bits 1-7 again before the 6-bit field is ORed back in shifted left by one (`add %al,%al`). The movement axes are never analog on the wire: each is a 2-bit code with a +/-10 deadzone (`> 10` sets bit 0, `< -10` sets bit 1) that decodes to 127, -127 or 0 (`0x807bb52` for forward/right, `0x807c013` for up), and the same derivation runs on the base cmd to produce the default, so a base `forward = 100` reads back as 127. Forward and right share one nibble (forward in bits 0/1, right in bits 2/3).
 
-The angle change bits are not vestigial: VERIFIED live 2026-08-26, a retail 1.1 client sent roughly 624 moves in a 3-minute session with a cleared change bit on pitch or yaw, keeping the previous sent cmd's angle instead of announcing it. Each one flashes the view to zero for a frame unless the server decodes it the same way retail does, against its persistent last received cmd for that client (`cl->lastUsercmd`). The chain restarts with each gamestate, because the client wipes its own state -- the cmd ring with it -- as it parses one (`CL_ParseGamestate` calls `CL_ClearState`, Quake III Arena `code/client/cl_parse.c` and `code/client/cl_main.c`); vcod's server clears its stored base in `SV_SendClientGameState` for that reason.
+The angle change bits are not vestigial: VERIFIED live 2026-08-26, a retail 1.1 client sent roughly 624 moves in a 3-minute session with a cleared change bit on pitch or yaw, keeping the base cmd's angle instead of announcing it. Each one flashes the view to zero for a frame unless the server's base carries the angle too: retail builds it from the playerstate's view angles less `delta_angles` ("The base cmd is built from the playerstate"), and vcod's server uses its stored last received cmd for that client, which holds the same angle. The chain restarts with each gamestate, because the client wipes its own state -- the cmd ring with it -- as it parses one (`CL_ParseGamestate` calls `CL_ClearState`, Quake III Arena `code/client/cl_parse.c` and `code/client/cl_main.c`); vcod's server clears its stored base in `SV_SendClientGameState` for that reason.
 
 Transcribed from disassembly. Widths and order VERIFIED live 2026-08-25: a retail 1.1 client's moves parsed against vcod's server for a whole session with no truncation error (`docs/research/cod11-server-handshake.md`, "Retail client check"). Field values are still unchecked, since the server parses and discards them.
+
+### The base cmd is built from the playerstate
+
+The `from` cmd the first usercmd of a message is decoded against is not the
+last cmd the server received. `SV_UserMove` (cod_lnxded `0x8087040`) builds
+it fresh for every message: it fetches the client's game-side playerstate
+(`0x8089270`, the client number in), hands it with a 24-byte stack cmd to
+`0x807f5c0` (`0x80870a8`, the function's only caller), and passes that cmd
+as the base to the first `MSG_ReadDeltaUsercmdKey` (`0x80870e3`); each
+later cmd of the same message decodes against the one before it
+(`0x808710d`). VERIFIED, the calls and the argument flow. What the builder
+writes, VERIFIED store by store, INFERRED for the conditions, which are
+branch reads:
+
+| cmd field | value | from |
+|---|---|---|
+| everything | 0 | `bzero` of the 24 bytes (`0x807f5d5`) |
+| `weapon` (+6) | `ps.weapon` | `ps+0xb0` (`0x807f5e7`) |
+| `angles[0]`, `angles[1]` | `ANGLE2SHORT(ps.viewangles[i]) - ps.delta_angles[i]`, 16-bit | `ps+0xc0`, `ps+0x48` (`0x807f5f0`-`0x807f61d`), 65536/360 at `0x80d2e60` |
+| `wbuttons` `0x40` (prone) | when `ps.eFlags & 0x40` | `ps+0x80` (`0x807f635`), only under `pm_flags & 0x40000` (`0x807f629`) |
+| `wbuttons` `0x80` (crouch) | otherwise when `ps.eFlags & 0x20` | `0x807f640` |
+| `up` (+0x16) | -127 | with either stance bit (`0x807f648`) |
+| `wbuttons` `0x20` / `0x10` (lean right / left) | `ps.leanf > 0` / `< 0` | `ps+0x40` (`0x807f64e`-`0x807f670`) |
+| `buttons` `0x10` (ads) | when `ps.fWeaponPosFrac != 0` | `ps+0xb8` (`0x807f676`-`0x807f688`) |
+
+`angles[2]`, `forward`, `right`, the fire, melee and use bits and the reload
+bit are never in the base, so a compact cmd reads them as 0 and the base's
+stance, lean, sight and weapon as whatever the playerstate says. Which is
+the design: the client builds the same base from its predicted state, so
+the two agree without either storing the last cmd, and the change bits
+compare against what the server already knows rather than against what
+was last sent.
+
+What that costs a client that chains from its own last sent cmd instead,
+measured 2026-09-05 with `--net-probe --save-ads` against retail: the
+sight release went out once as a full-branch cmd and lowered the fraction
+for one step (`1.0` to `0.96`), and every compact cmd after it, carrying no
+upper button bits, took the base's `0x10` back off the still non-zero
+fraction and raised the sight again. With the full branch forced on every
+cmd the fraction ramped to 0 over the weapon's `adsTransOutTime` exactly.
+VERIFIED, both runs. vcod's writer therefore sends the full branch always
+(`write_delta_usercmd`, `crates/common/src/net/msg.rs`); the bytes it costs
+are nothing next to a sight that will not come down. vcod's server still
+decodes against the last cmd it received. That agrees with retail's base
+whenever the playerstate says what the last cmd asked for, which is every
+case measured: a retail client that holds or releases the sight, changes
+stance or leans sends the full branch until its predicted state has caught
+up, and by then the stored cmd and the state say the same thing. Where it
+would not agree is a state the server changed on its own -- a `delta_angles`
+rewrite outside a spawn, a stance the script forced -- and none of those
+exist yet.
+
+The same loop validates the weapon byte: after each decode it calls game
+export 14 with `cmd.weapon` (`0x80870f8`) and, when that returns 0,
+overwrites the byte with `ps.weapon` (`0x8087104`-`0x808710a`). VERIFIED,
+the call and the store; what export 14 tests is not read.
 
 ### Usercmd input bits
 
@@ -872,6 +928,14 @@ If you're porting a Q3/RTCW server, these are the things that will bite:
 14. `MSG_ReadString` AND `MSG_ReadBigString` both map `%` -> `.`, 0x92 -> `'`, and every other byte over 127 -> `.` (CoDMP.exe `0x444e00`/`0x444e60`; Q3/RTCW keep high bytes in the big reader). This is wire compatibility, not cosmetics: the usercmd delta key is `checksumFeed ^ messageAcknowledge ^ Com_HashKey(serverCommands[reliableAcknowledge & 63], 32)`, `Com_HashKey` (`0x806810c`) multiplies raw sign-extended bytes with no substitution of its own, and the server hashes the string it queued while the client hashes the string it read. Only the read-time mapping keeps the two byte streams identical. A client that keeps high bytes (worse, re-encoded as two-byte UTF-8) computes a wrong key whenever the acked server command carries one - a chat line with a high-byte name - and the server then misreads the keyed framing bits of every move, so usercmds are dropped or garbled until an ASCII-clean command rotates into the slot. Live symptom: `ps.commandTime` frozen for 20+ s stretches, spectator movement applying seconds late or not at all, on busy servers only.
 
 15. A spectator noclips. RTCW-MP sends `PM_SPECTATOR` to `PM_FlyMove`, which collides through `PM_StepSlideMove`; CoD 1.1 integrates the position straight off the velocity with no trace, like Q3's separate `PM_NOCLIP`. VERIFIED live 2026-08-28 by A/B with a retail client against a retail server: wires between lamp posts, decoration cars and the map's own walls and ground all pass straight through. vcod collided until it did not (`spectator_move`, `crates/common/src/pmove.rs`).
+
+- **The usercmd delta base is built from the playerstate, not stored.** Q3's
+  `SV_UserMove` decodes the first cmd of a message against a zeroed cmd and
+  its client writes against one; CoD 1.1's server synthesizes the base from
+  the client's playerstate (weapon, view angles less `delta_angles`, stance
+  and lean bits, the sight bit off `fWeaponPosFrac`), and each later cmd of
+  the message chains from the one before ("The base cmd is built from the
+  playerstate").
 
 Everything else holds: the huffman table, the svc/clc opcodes, netchan fragmentation, the XOR scramble structure, and the delta-encoding shape are all Q3 as documented in the RTCW/Q3 GPL sources.
 
