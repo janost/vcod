@@ -37,7 +37,31 @@ const MODELLED: &[&str] = &[
     // the mover uses is derived from the stance, not from these.
     "mins[2]",
     "maxs[2]",
+    // The two ADS fields. `aimSpreadScale` settles at 255.0 under any held
+    // movement axis and at 0.0 standing still, and `fWeaponPosFrac` reaches
+    // 1.0 at the one pose that holds the sight bit
+    // (docs/research/cod11-combat.md, 1.13 and 2.1).
+    "aimSpreadScale",
+    "fWeaponPosFrac",
 ];
+
+/// Pose/field pairs the capture samples mid-transition, which an equality
+/// gate cannot hold. Both jump samples are `aimSpreadScale` in flight: the
+/// airborne climb and the decay after the landing are rates, and the sample
+/// is one frame of each, so what they pin is the sign and nothing more
+/// (combat doc, 2.1). No guard on this list: an entry here can match by
+/// luck, unlike a gap, so a match is not evidence of anything.
+const TRANSIENT: &[(&str, &str)] = &[
+    ("jump_takeoff", "aimSpreadScale"),
+    ("land", "aimSpreadScale"),
+];
+
+/// Fields the usercmd drives rather than the speed it produces: both spread
+/// terms read `cmd.forwardmove`/`cmd.rightmove` and the sight bit, so a run
+/// the geometry blocked still carries them. They are compared at the frame
+/// the pose ends on, where the capture sampled retail, instead of at the
+/// last frame we were moving, which the fields reading velocity need.
+const CMD_DRIVEN: &[&str] = &["aimSpreadScale", "fWeaponPosFrac"];
 
 // `leanf` is transmitted but not diffed here, for two measured reasons.
 // The lean is clamped by a trace against nearby geometry, and the spawn is
@@ -70,16 +94,8 @@ const ANIM_FIELDS: &[&str] = &["legsAnim", "torsoAnim"];
 /// fails on an entry that starts matching, so this cannot rot into a lie.
 /// Empty is the goal and it is empty: `ads_stand` was the entry, and it
 /// earned itself back when the animscript's `ads` condition started reading
-/// the cmd's bit instead of a hardcoded false.
+/// the ADS flag instead of a hardcoded false.
 const ANIM_GAPS: &[(&str, &str)] = &[];
-
-/// The one reason both ads entries share.
-const ADS_GAP: &str = "the ads pose. Retail holds the ads bit here with a \
-     weapon in hand and takes `pm_flags` 0x20 and 0x80 with it; pmove carries \
-     no weapon-position fraction and sets neither bit. Older captures could \
-     not show this: they were taken with `cmd.weapon` 0, which retail read as \
-     a holster, so the ads bit reached no weapon. Retail keeps both for every \
-     pose that follows, which is why the probe's script holds this one last";
 
 /// `pm_flags` bits retail sets that the mover has no source for: the map, the
 /// pose that shows it, the bit, and why. Excepted bit by bit and pose by pose,
@@ -89,10 +105,10 @@ const ADS_GAP: &str = "the ads pose. Retail holds the ads bit here with a \
 /// The held-jump latch entry that used to sit here is gone: the retaken
 /// pavlov capture reads 0x8 clear at `jump_takeoff`, the same as ours and as
 /// carentan's, so there is nothing left to except.
-const PM_FLAG_GAPS: &[(&str, &str, i32, &str)] = &[
-    ("mp_carentan", "ads_stand", 0xa0, ADS_GAP),
-    ("mp_pavlov", "ads_stand", 0xa0, ADS_GAP),
-];
+/// Empty is the goal and it is empty: the two `ads_stand` entries for
+/// `pm_flags` 0x20 and 0x80 earned themselves back when pmove took retail's
+/// ADS flag (combat doc, 1.13).
+const PM_FLAG_GAPS: &[(&str, &str, i32, &str)] = &[];
 
 /// The bits of `name` not compared at `label` on `map`, from [`PM_FLAG_GAPS`].
 fn gap_mask(map: &str, label: &str, name: &str) -> i32 {
@@ -299,6 +315,9 @@ fn parse_fixture(text: &str) -> Vec<Pose> {
 #[derive(Default)]
 struct Replay {
     poses: Vec<PlayerState>,
+    /// The frame each pose actually ended on, before the moving-frame
+    /// substitution below. [`CMD_DRIVEN`] fields are compared here.
+    settled: Vec<PlayerState>,
     frames: Vec<PlayerState>,
 }
 
@@ -352,11 +371,12 @@ fn ours(map: &str, poses: &[Pose], join: (&str, &str), fs: vcod_common::pk3::Pk3
         // are moving too. The replay holds every pose for 3 s where the probe
         // settled at 1.5, so an unobstructed run has met a wall by the last
         // frame and comparing there compares a stop against a run.
-        let sampled = match (capture_moving(pose), last_moving) {
+        let sampled = sampled.expect("no snapshot after a pose");
+        out.poses.push(match (capture_moving(pose), last_moving) {
             (true, Some(i)) => out.frames[i].clone(),
-            _ => sampled.expect("no snapshot after a pose"),
-        };
-        out.poses.push(sampled);
+            _ => sampled.clone(),
+        });
+        out.settled.push(sampled);
     }
     out
 }
@@ -377,21 +397,29 @@ fn check(map: &str, gametype: &str) {
     // weapon retail was holding, not a literal that can drift from it.
     let team = common::header_value(&text, "joined", &path).to_string();
     let weapon = common::header_value(&text, "weapon", &path).to_string();
-    let mine = ours(map, &poses, (&team, &weapon), fs).poses;
+    let replay = ours(map, &poses, (&team, &weapon), fs);
+    let mine = replay.poses;
     let p = &PROTOCOL_V1;
     let mut diffs = Vec::new();
     let mut moving = 0usize;
-    for (pose, ps) in poses.iter().zip(&mine) {
+    for (i, (pose, ps)) in poses.iter().zip(&mine).enumerate() {
         if prone_disagrees(pose, ps) || ground_disagrees(pose, ps) {
             continue;
         }
         moving += usize::from(capture_moving(pose));
         for name in MODELLED {
+            if TRANSIENT.contains(&(pose.label.as_str(), name)) {
+                continue;
+            }
             let retail = *pose
                 .fields
                 .get(*name)
                 .unwrap_or_else(|| panic!("{name} is not in the capture"));
-            let ours = ps.field_i32(p, name);
+            let ours = if CMD_DRIVEN.contains(name) {
+                replay.settled[i].field_i32(p, name)
+            } else {
+                ps.field_i32(p, name)
+            };
             let compared = !gap_mask(map, &pose.label, name);
             if retail & compared != ours & compared {
                 diffs.push(format!(

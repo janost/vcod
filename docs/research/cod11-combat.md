@@ -94,6 +94,22 @@ The fields the combat path reads, all VERIFIED out of that table:
 | `0x1F4` | `reloadStartTime` | `0x2EC` | `segmentedReload` |
 | `0x1F8` | `reloadStartAddTime` | `0x2F0` | `reloadAmmoAdd` |
 | `0x38C` | `adsSpread` | `0x2F8` | `altWeapon` (name) |
+| `0x24C` | `hipSpreadDecayRate` | `0x268` | `adsTransInTime` |
+| `0x250` | `hipSpreadFireAdd` | `0x26C` | `adsTransOutTime` |
+| `0x254` | `hipSpreadTurnAdd` | `0x3D4` | `adsReloadTransTime` |
+| `0x258` | `hipSpreadMoveAdd` | `0x25C` | `hipSpreadDuckedDecay` |
+| `0x260` | `hipSpreadProneDecay` | | |
+
+VERIFIED, `BG_SetupWeaponInfo` `0x36950`-`0x369a1`: `weapDef+0x414` and
+`weapDef+0x418` are not in the field table but derived at load, as
+`adsTransInTime > 0 ? 1.0 / adsTransInTime : 0.0033333` (`.rodata 0x724cc`)
+and `adsTransOutTime > 0 ? 1.0 / adsTransOutTime : 0.002` (`.rodata 0x724d0`),
+with both times read as the type-7 integer milliseconds they parse into. So
+the two are **reciprocal milliseconds** and the fallbacks are 300 ms in and
+500 ms out. VERIFIED, `0x38b23`: the fire-timer setter computes
+`weaponDelay = (int)((1.0 - ps->fWeaponPosFrac) * (1.0 / weapDef[0x414]))`
+for an `adsFire` weapon, which is a millisecond count only if `0x414` is
+per-millisecond.
 
 VERIFIED: `ammoName` is at 412 and the index at 416 (`0x1A0`), `clipName` at
 420 and the index at 424 (`0x1A8`), `altWeapon` at 760 and the resolved alt
@@ -127,6 +143,23 @@ committed combat fixtures used:
 | `adsSpread` | 0.4 | 0.1 |
 | `hipSpreadFireAdd` | 0.7 | 1 |
 | `hipSpreadDecayRate` | 4 | 3.25 |
+| `hipSpreadTurnAdd` | 0 | 0 |
+| `hipSpreadMoveAdd` | 8 | 8 |
+| `hipSpreadDuckedDecay` | 1 | 1.5 |
+| `hipSpreadProneDecay` | 1.1 | 1.2 |
+| `aimDownSight` | 1 | 1 |
+| `adsTransInTime` | 0.3 | 0.3 |
+| `adsTransOutTime` | 0.4 | 0.6 |
+| `adsReloadTransTime` | 0.6 | 0.6 |
+| `adsFire` | absent | absent |
+
+VERIFIED, over the 80 weapon files in the stock paks: `hipSpreadTurnAdd` is 0
+in 48 of them, absent in 27 and 0.8 in five, of which `bar_mp` and
+`bar_slow_mp` are MP; `adsFire` is set only on the two panzerfaust files, one
+of them `panzerfaust_mp`; `aimDownSight` is 1 in 52, absent in the 27 with no
+spread block at all (grenades, mounted MGs) and 0 in one SP file. INFERRED: an
+absent key reads as 0, since the parsed struct is zeroed and the field table
+only writes keys the file spells.
 
 ---
 
@@ -615,6 +648,85 @@ is the `& 1` arm, the ducked one the `& 2` arm, and the weapon-0 store is the
 `& 0x10` arm. INFERRED: so `0x1` is prone, `0x2` is crouch and `0x10` is the
 ladder.
 
+### 1.13 `ps.fWeaponPosFrac`, and the flag between the button and it
+
+VERIFIED: `game.mp.i386.so` holds exactly four stores to `ps+0xB8`. Three are
+in `PM_UpdateAimDownSightLerp` (`0x372FC`), at `0x3731E` (the immediate 0),
+`0x37446` (the ramp) and `0x37477` (the clamp); the fourth is `0x46B6E`, a
+`movl $0x0` on the spawn path. VERIFIED: the lerp is called once, from
+`PM_Weapon` (`0x390E0`) at `0x39143`, early in the function. VERIFIED: the
+client carries the identical function at `cgame_mp_x86.dll` `0x3000FC80` --
+same weapon-def offsets `0x2CC`, `0x2EC`, `0x3D4`, `0x414`, `0x418`, same
+`weaponstate` values, same `pm_flags & 0x20`, same clamp -- so this is shared
+bg code and the client predicts it off every snapshot.
+
+VERIFIED for every offset, immediate, weapon-def field and compare below;
+INFERRED for the ordering and every "when" and "unless", which are branch
+conditions.
+
+- `weapDef->aimDownSight` (`0x2CC`) 0: the fraction is stored 0 and nothing
+  else runs (`0x3730e`).
+- With `segmentedReload` (`0x2EC`) clear, the sight is refused while
+  `weaponstate` is 5 and `weaponTime - weapDef->adsReloadTransTime (0x3D4)`
+  is above 0 (`0x37342`-`0x3735a`). With it set, `weaponstate` 5, 6, 7 and 8
+  refuse outright and 9 refuses on the same time test (`0x37368`-`0x3738a`).
+- Otherwise the target is `ps->pm_flags & 0x20` (`0x37392`).
+- `weapDef->adsFire` (`0x2DC`) with `ps->weaponDelay` non-zero and
+  `weaponstate` 3 forces the target up whatever the flag says
+  (`0x3739d`-`0x373b7`).
+- The step is `+pml.msec * weapDef[0x414]` toward the sight (`0x37415`) and
+  `-pml.msec * weapDef[0x418]` back (`0x3743a`), clamped to 0..1
+  (`0x3744c`-`0x37477`). Both factors are the reciprocal milliseconds of
+  section 0, so it is a linear ramp over `adsTransInTime` / `adsTransOutTime`.
+
+The ramp reads no usercmd. `PM_UpdateAimDownSightFlag` (`0x37230`) writes the
+`pm_flags` bit it does read. VERIFIED: `PmoveSingle` calls it at `0x341C8`,
+`0x341E6`, `0x34200`, `0x3423D`, `0x3429A` and `0x342D3`, one per `pm_type`
+arm, each immediately before `PM_UpdatePlayerWalkingFlag`. Same labels as
+above:
+
+- `ps->pm_type > 5` clears (`0x37242`), and so does `cmd.buttons & 0x10`
+  being clear (`0x37247`) or `aimDownSight` being 0 (`0x37252`).
+- `weaponstate` 1, 2, 10 or 11 -- raise, holster, melee windup, melee relax --
+  clears (`0x3725b`-`0x3726e`).
+- `pml[0x30] == 0 && ps->pm_type != 1` clears (`0x37275`). `pml+0x30` is
+  INFERRED to be `groundPlane` from the Q3 `pml_t` layout, with `frametime`
+  at `+0x24` and `msec` at `+0x28` pinned by their use in the ramp; the offset
+  and the compare are VERIFIED. INFERRED: an airborne player cannot hold the
+  sight, and the fraction ramps down for the whole jump.
+- Otherwise, for a prone player (`pm_flags & 1`, `0x37283`) the flag is left
+  as it is when the *previous* cmd held the sight bit and either movement axis
+  is non-zero (`0x3728a`-`0x37295`), and is otherwise set together with
+  `pm_flags 0x400` (`0x3729e`). A player who is not prone just takes the flag
+  (`0x372a4`).
+- `BG_UpdateConditionValue(ps->clientNum, 7, (pm_flags & 0x20) ? 1 : 0, 1)`
+  at `0x372d8` / `0x372ef` is fed the flag, not the raw button. INFERRED:
+  animscript condition 7 is `ads`, so the animscript sees the gated form.
+
+VERIFIED: `PM_ClearAimDownSightFlag` (`0x3ABD4`) is the same
+`and byte [ps+0xc], 0xdf`, and `PmoveSingle` calls it once, at `0x33EF9`, in
+the early dead arm. VERIFIED: `PM_UpdatePlayerWalkingFlag` (`0x33694`) sets
+`pm_flags 0x80` only when `0x20` is set, the player is not prone, and
+`weaponstate` is not one of 5, 6, 7, 8, 9. INFERRED: `0x80` is the ADS walk
+slow-down, and it is off for the whole of a reload while `0x20` stays on.
+
+INFERRED, from the two rules together: the sight can be *asked for* during a
+reload -- the flag update excludes only `weaponstate` 1, 2, 10 and 11 -- but
+the fraction stays pinned at 0 until the reload has `adsReloadTransTime` left
+to run, which for `m1carbine_mp` is the last 600 ms of 2650 and for
+`mosin_nagant_mp` the last 600 of 2400. So the sight comes up at the tail of a
+reload and not at the key.
+
+**As implemented.** `crates/common/src/pmove/weapon.rs` carries all of the
+above: `update_ads_flag` the flag, `ads_pm_flags` the `0x20`/`0x80` pair for
+the wire, `advance_ads` the ramp, and `fire` the `adsFire` `weaponDelay`
+override. Three divergences, each deliberate. `pm_flags 0x400` is not
+modelled, since it is unnamed (section 10). The dead clear lives in
+`pmove::dead_move` rather than in the flag update, because no pmove step runs
+for a dead player at all, which leaves the fraction frozen where the death
+found it rather than ramping it down. And `pml.groundPlane` is read as
+`ps.on_ground`, the nearest thing vcod's mover carries.
+
 ---
 
 ## 2. `Bullet_Fire_Extended`: spread, the trace, and what a bullet does
@@ -647,17 +759,65 @@ clamped to 0..1. INFERRED: the settled stance picks one of the three outright
 and the blend is what a stance still lerping takes.
 
 `PM_AdjustAimSpreadScale` `0x385e8` (dll `0x30011050`) is what moves
-`aimSpreadScale` between shots. VERIFIED: the offsets, immediates, weapon-def
-fields and call targets named in the list below. INFERRED: the ordering, and
-every "when", "otherwise" and "skipped" in it, which are branch conditions.
+`aimSpreadScale` between shots. VERIFIED: `PmoveSingle` calls it once, at
+`0x340E0`, right after `BG_GetInfoForWeapon` (`0x340D6`) and before
+`PM_UpdateViewAngles` (`0x340FC`), so it runs on the raw usercmd angles, and
+before `PM_UpdateAimDownSightFlag` and `PM_Weapon`, so it reads the previous
+frame's `fWeaponPosFrac`. VERIFIED, `.rodata`: `0x72538` = 0.01,
+`0x7253C` = 0.5, `0x72540` = 0.0054931640625 (`SHORT2ANGLE`, 360/65536),
+`0x72544` = 1.28, `0x72548` = 255.0. VERIFIED: the offsets, immediates,
+weapon-def fields, constants and the `AngleSubtract` call target named in the
+list below. INFERRED: the ordering, and every "when", "otherwise" and
+"skipped" in it, which are branch conditions.
 
-- It subtracts `hipSpreadDecayRate` (`0x24C`) scaled by the frame time,
-  multiplied by `hipSpreadDuckedDecay` (`0x25C`) when `eFlags & 0x20` is set
-  and by `hipSpreadProneDecay` (`0x260`) when `eFlags & 0x40` is set.
-- It adds `hipSpreadTurnAdd` (`0x254`) per view-angle delta and
-  `hipSpreadMoveAdd` (`0x258`) when either movement axis is non-zero.
-- It skips all of the additions when `ps->fWeaponPosFrac == 1.0`.
-- It clamps the result to 0..255.
+- The decay starts at `hipSpreadDecayRate` (`0x24C`, at `0x385f8`). A decay of
+  0.0 short-circuits the whole function to `add = 0, decay = 1.0` with no
+  frame-time scaling (`0x3860a` / `0x38754`), which is -255 a frame: a weapon
+  with no decay rate slams the counter shut and holds it there.
+- `airborne` is `ps->groundEntityNum == 1023 && ps->pm_type != 1`
+  (`0x38619`). Airborne halves the decay (`0x38628`); otherwise `eFlags & 0x40`
+  multiplies it by `hipSpreadProneDecay` (`0x260`, at `0x3863c`) and
+  `eFlags & 0x20` by `hipSpreadDuckedDecay` (`0x25C`, at `0x38648`). The three
+  arms are exclusive and airborne wins. The decay is then scaled by
+  `pml.frametime` (`0x3864e`).
+- The additions are skipped whole when `ps->fWeaponPosFrac == 1.0`
+  (`0x38657`), an exact float compare, and in cgame an exact integer one
+  against `0x3F800000`. The decay is not skipped, so a settled sight decays
+  to 0 whatever the player does.
+- With `hipSpreadTurnAdd` (`0x254`) non-zero (`0x38676`), axes 0 and 1 each
+  add `fabs(AngleSubtract(SHORT2ANGLE(cmd.angles[i]),
+  SHORT2ANGLE(oldcmd.angles[i]))) * 0.01 * hipSpreadTurnAdd / pml.frametime`
+  (`0x3868e`-`0x386ed`). The input is a usercmd angle delta across one pmove
+  step, not `ps->viewangles` and not a delta across a server frame.
+- `hipSpreadMoveAdd` (`0x258`) non-zero (`0x386fe`) with either of
+  `cmd.forwardmove` / `cmd.rightmove` non-zero (`0x38712`) adds it flat
+  (`0x38719`); airborne adds 1.28 twice (`0x3873c`-`0x3874a`). The whole add
+  is then scaled by `pml.frametime` (`0x38750`).
+- The result is `aimSpreadScale += (add - decay) * 255.0`
+  (`0x3876d`-`0x3877a`), clamped to 0..255 (`0x38780`-`0x387b5`).
+
+INFERRED: the turn term divides by the frame time inside the loop and the
+whole add multiplies by it again, so the turn term is frame-rate independent
+(`|dAng| * 0.01 * turnAdd * 255` per frame) while the move and airborne terms
+are not. The `fdiv` at `0x386d6` and the `fmul` at `0x38750` are both in the
+`.so`, so this is not a decompiler artifact.
+
+The shot's own add is `PM_Weapon`'s, not `FireWeapon`'s: section 1.5, step 8,
+`hipSpreadFireAdd * 255.0` with the same `fWeaponPosFrac == 1.0` skip. Both
+the per-frame delta and the per-shot add carry the same `* 255.0`.
+
+With the stock numbers of section 0 this makes the move term decisive and the
+turn term invisible: 8 against the carbine's decay of 4 saturates the counter
+in five 50 ms frames and holds it at 255 for as long as an axis is held, while
+both fixture weapons spell `hipSpreadTurnAdd 0`. Both retail motion captures
+agree -- 255.0 at every pose with a movement axis, standing, crouched or
+prone, and 0.0 at every pose without one.
+
+**As implemented.** `pmove::weapon::adjust_aim_spread_scale`, called first of
+all in `pmove` so it keeps retail's position ahead of the view update and the
+flags. The turn term is written as the product the divide and the multiply
+reduce to, which is the same number and does not divide by a zero-length
+frame. A weapon index with no file behind it takes the `decay == 0` arm.
 
 ### 2.2 The cone
 
@@ -1460,10 +1620,9 @@ the sentinel for "the damage carried no direction".
 step 1 read as the sim's `dead` flag, which the killing hit sets before the
 end-frame runs. Step 6's view kick is not carried; nothing on the wire reads
 it. `EV_PAIN` is raised whatever the stance: nothing above names
-`EV_CROUCH_PAIN` (188), so no crouch rule is modelled. `aimSpreadScale`
-(step 5) is a sim-side float only, since 1.1 has no netfield for it; it
-takes the weapon's `hipSpreadFireAdd` per shot and `hipSpreadDecayRate` per
-second and none of 2.1's turn, move or stance-decay terms.
+`EV_CROUCH_PAIN` (188), so no crouch rule is modelled. Step 5's
+`aimSpreadScale` add lands on the same playerstate field 2.1 moves and the
+wire carries.
 
 ---
 
@@ -1829,27 +1988,26 @@ visible snap. PENDING.
 
 Named here so a reader of sections 1 to 7 does not assume the code follows
 them: rifle rounds passing through a player at half damage (2.3); the
-`pm_time` stun (4.5); the view kick of 6's step 6; events 175 and 176; the
-turn, move and stance-decay terms of the spread (2.1); `EV_CROUCH_PAIN` (188);
+`pm_time` stun (4.5); the view kick of 6's step 6; events 175 and 176;
+`EV_CROUCH_PAIN` (188);
 the `EV_RAISE_WEAPON` (155) retail raises on the death frame beside `EV_DEATH`;
 `CanDamage`'s line-of-sight check (4.6); `setPlayerIgnoreRadiusDamage`; item
 pickup; melee (1.10, 2.5); and grenades (1.11). The radius-damage falloff is
 RTCW's curve rather than a read of the 1.1 binary.
 
-`ps.fWeaponPosFrac` is on the wire but its rule is vcod's own. INFERRED: the
-fraction is a linear ramp to 1.0 over the weapon file's `adsTransInTime` while
-the sight button is held and back to 0.0 over `adsTransOutTime` when it is
-released (`crates/common/src/pmove/weapon.rs`, `advance_ads`). UNVERIFIED:
-what retail advances it by, since no site that writes `ps+0xB8` was read. It is
-sent because the client replays its own prediction from each snapshot's
-playerstate, so a constant 0 would restart its ADS lerp once a snapshot.
+The ADS fraction and the spread scale used to be here. Both are retail's now:
+1.13 and 2.1 carry the rules with their addresses and each an "As
+implemented" note, and `spread_deg`
+(`crates/server/src/game/combat.rs`) and the `fWeaponPosFrac > 0.75` anim
+tests of 1.2 and 1.9 read the fraction rather than the usercmd's sight bit.
+What is still not modelled of the two: `pm_flags 0x400`, and the `pm_time`
+and `eFlags 0xC000` arms the fraction shares with the rest of `PM_Weapon`.
 
-Divergence, and the reason the fraction changes nothing else: 2.1's arms key
-on `fWeaponPosFrac`, and both places vcod would read it read the usercmd's
-sight bit instead -- the cone's `adsSpread`/hip choice
-(`crates/server/src/game/combat.rs`, `spread_deg`) and 1.5's
-`fWeaponPosFrac > 0.75` test (`pmove/weapon.rs`, `fire`). Neither is gated on
-an inferred ramp on purpose.
+Nothing in the committed captures pins the ramp *rate*, the reload window or
+the turn term: every sample in them is settled, the two motion fixtures hold
+one ADS pose each and no transition, and both fixture weapons spell
+`hipSpreadTurnAdd 0`. Those three need a capture that traces per snapshot
+through a transition, the way `--save-combat` does for the weapon states.
 
 ---
 
@@ -1858,7 +2016,17 @@ an inferred ramp on purpose.
 - UNVERIFIED: what sets `pm_flags 0x800`, which stops `PM_Weapon` outright,
   and what `pm_flags 0x400` and `0x4000` mean. INFERRED for `0x400`: it is set
   whenever a fire, a melee finish or a weapon change happens while
-  `pm_flags & 1`, so it is prone-specific.
+  `pm_flags & 1`, and the ADS flag update ORs it in on the same prone arm
+  (1.13), so it is prone-specific.
+- UNRESOLVED: `cod11-mantle.md`, "Jumps", reads the ground jump as writing
+  255 into `ps.aimSpreadScale` and the ladder push-off as adding 64. Neither
+  is modelled here, because the first does not square with the captures: both
+  motion fixtures sample the first airborne frame of a jump and read 66.28
+  (carentan) and 67.81 (pavlov), where a 255 written on the takeoff frame
+  would still read above 229 one 50 ms frame of halved decay later. 2.1's
+  airborne terms alone produce a small climb from 0, which is the shape the
+  two samples have. Settling it needs a per-snapshot trace through a jump,
+  not another read.
 - UNVERIFIED: the meaning of bit `0x10` of the trace word at offset 32, which
   is what makes a bullet continue through a surface at full damage.
 - UNVERIFIED: what `Bullet_Endpos` (`0x69624`) is for; nothing on this path

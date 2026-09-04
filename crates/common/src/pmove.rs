@@ -335,6 +335,20 @@ pub struct PlayerState {
     /// client predicts from, so a constant here restarts its ADS lerp every
     /// snapshot (`pmove::weapon::advance_ads`).
     pub weapon_pos_frac: f32,
+    /// Retail's `pm_flags` 0x20, the ADS flag: the gated form of the usercmd
+    /// sight bit, and the only thing the fraction's ramp reads
+    /// (`pmove::weapon::update_ads_flag`).
+    pub ads_active: bool,
+    /// `ps.aimSpreadScale`, 0..255: how far the hip cone has opened
+    /// (`pmove::weapon::adjust_aim_spread_scale`).
+    pub aim_spread_scale: f32,
+    /// The previous cmd's view angles in ANGLE2SHORT units, pitch and yaw.
+    /// Retail's `pm->oldcmd.angles`, which the spread's turn term subtracts
+    /// this cmd's from.
+    pub last_cmd_angles: [i32; 2],
+    /// The previous cmd's sight bit, retail's `pm->oldcmd.buttons & 0x10`.
+    /// Only the prone arm of the ADS flag reads it.
+    pub last_cmd_ads: bool,
 }
 
 impl PlayerState {
@@ -382,6 +396,10 @@ impl PlayerState {
             pending_weapon: 0,
             stowed_weapon: 0,
             weapon_pos_frac: 0.0,
+            ads_active: false,
+            aim_spread_scale: 0.0,
+            last_cmd_angles: [0; 2],
+            last_cmd_ads: false,
         }
     }
 
@@ -437,6 +455,10 @@ pub struct PmInput {
     pub use_button: bool,
     /// The usercmd's weapon byte; 0 means the cmd asks for no change.
     pub weapon: u8,
+    /// The cmd's view angles in ANGLE2SHORT units, pitch and yaw. Only the
+    /// spread's turn term reads them, and it reads the raw cmd rather than
+    /// `ps.viewangles` (combat doc, 2.1).
+    pub angles: [i32; 2],
 }
 
 /// `dt` in seconds, clamped to `MAX_FRAME_MS`. Returns the frame's movement
@@ -461,6 +483,15 @@ pub fn pmove(
     } else if input.forward > 0.0 || input.right != 0.0 {
         ps.backwards_run = false;
     }
+    // `PM_AdjustAimSpreadScale` runs first of all, ahead of the view-angle
+    // update and of every flag this frame writes, so it reads the previous
+    // frame's ground state and ADS fraction (combat doc, 2.1).
+    weapon::adjust_aim_spread_scale(
+        ps,
+        input,
+        weapons.get(ps.weapon as usize).and_then(Option::as_ref),
+        dt,
+    );
     let mut events = Vec::new();
     ps.jumped = false;
     let was_on_ground = ps.on_ground;
@@ -474,6 +505,14 @@ pub fn pmove(
     update_lean(ps, input, world, dt);
     set_water_level(ps, world);
     ground_trace(ps, world);
+    // Retail updates the ADS flag once per `pm_type` arm, after the ground
+    // trace and before the arm's move (`PM_UpdateAimDownSightFlag`, combat
+    // doc 1.13), so it reads the ground state the move starts from.
+    weapon::update_ads_flag(
+        ps,
+        input,
+        weapons.get(ps.weapon as usize).and_then(Option::as_ref),
+    );
     if ps.waterjump_ms > 0.0 {
         ps.waterjump_ms -= dt * 1000.0;
         if ps.waterjump_ms < 0.0 {
@@ -492,9 +531,10 @@ pub fn pmove(
     } else {
         // retail ground jump (fn 0x316F4 @0x31CC0): stance-dependent height,
         // horizontal velocity kept. Its bit-0x20 check (@0x31ccb) reads the
-        // ADS-active flag PM_UpdateAimDownSightFlag maintains (@0x37247+: set
-        // only while the ADS button is held); vcod has no ADS input, so
-        // nothing of that gate ports. No cooldown timer exists on this path
+        // ADS-active flag PM_UpdateAimDownSightFlag maintains, which
+        // `ps.ads_active` carries (combat doc, 1.13). What the check does
+        // with it was not read, so the gate is still not ported. No cooldown
+        // timer exists on this path
         // either (ps.jumpTime is never written here). The forwardmove gate
         // this used to carry was a misread: retail jumps standing still
         // (docs/research/cod11-mantle.md, "Jumps").
@@ -529,6 +569,9 @@ pub fn pmove(
         (dt * 1000.0).round() as i32,
         &mut events,
     );
+    // Retail's `pm->oldcmd`: what the next step subtracts this one from.
+    ps.last_cmd_angles = input.angles;
+    ps.last_cmd_ads = input.ads;
     events
 }
 
@@ -541,6 +584,11 @@ pub fn dead_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
     let idle = PmInput::default();
     ps.jumped = false;
     ps.move_start = ps.origin;
+    // `PM_ClearAimDownSightFlag` (`game.mp.i386.so` 0x3abd4), which
+    // `PmoveSingle` calls in the dead arm. The fraction is left where the
+    // death froze it: the weapon step that would ramp it down does not run
+    // for a dead player (combat doc, 1.12 and 1.13).
+    ps.ads_active = false;
     ground_trace(ps, world);
     if ps.on_ground {
         friction(ps, false, dt);
@@ -1566,6 +1614,21 @@ mod tests {
 
     fn flat() -> CollisionWorld {
         test_world(&[])
+    }
+
+    /// A death takes the sight down: `PmoveSingle`'s dead arm calls
+    /// `PM_ClearAimDownSightFlag` and nothing else about the weapon runs, so
+    /// the fraction stays where the death froze it
+    /// (docs/research/cod11-combat.md, 1.13).
+    #[test]
+    fn a_death_clears_the_ads_flag() {
+        let w = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.ads_active = true;
+        ps.weapon_pos_frac = 1.0;
+        dead_move(&mut ps, &w, 0.05);
+        assert!(!ps.ads_active);
+        assert_eq!(ps.weapon_pos_frac, 1.0);
     }
 
     /// Flat ground whose material carries the dirt sound surface (6).

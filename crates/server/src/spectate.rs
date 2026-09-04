@@ -128,6 +128,9 @@ fn pm_input(cmd: &UserCmd) -> PmInput {
         ads: cmd.buttons & msg::BUTTON_ADS != 0,
         use_button: cmd.buttons & msg::BUTTON_USE != 0,
         weapon: cmd.weapon,
+        // Raw, the way `PM_AdjustAimSpreadScale` reads them: the turn term is
+        // a delta between two cmds, so the view offset both carry cancels.
+        angles: [cmd.angles[0], cmd.angles[1]],
     }
 }
 
@@ -208,11 +211,6 @@ pub struct ClientSim {
     /// Killed and not yet respawned: `PM_DEAD` on the wire, the dead move,
     /// no weapon step, no feedback.
     pub dead: bool,
-    /// `ps.aimSpreadScale`, 0..255: what a shot and a hit add and the
-    /// weapon's decay rate takes away (combat doc, 2.1 and 6.5). A netfield
-    /// (`fields_v1.rs`), written as a float in `to_wire`; the spread reads
-    /// it too.
-    pub aim_spread_scale: f32,
     damage: DamageAccum,
     feedback: DamageFeedback,
     /// `ps.stats[1]`, the yaw toward the killer (combat doc, 5.1, item 11).
@@ -284,7 +282,6 @@ impl ClientSim {
             health: 0,
             max_health: 0,
             dead: false,
-            aim_spread_scale: 0.0,
             damage: DamageAccum::default(),
             feedback: DamageFeedback::default(),
             dead_yaw: 0,
@@ -326,7 +323,6 @@ impl ClientSim {
         // `ClientSpawn`'s memset: the damage fields read 0 again after a
         // respawn (combat doc, 8.4), and so does the dead yaw.
         self.dead = false;
-        self.aim_spread_scale = 0.0;
         self.damage = DamageAccum::default();
         self.feedback = DamageFeedback::default();
         self.dead_yaw = 0;
@@ -418,23 +414,6 @@ impl ClientSim {
                 } else {
                     self.view_lerp_start.or(Some(cmd.server_time))
                 };
-                // `PM_AdjustAimSpreadScale` (combat doc, 2.1), reduced to
-                // the fire add and the decay: the turn and move terms and
-                // the stance decay multipliers are not carried.
-                if let Some(def) = weapons
-                    .get(self.ps.weapon as usize)
-                    .and_then(|d| d.as_ref())
-                {
-                    use vcod_common::pmove::weapon::{EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
-                    let shots = events
-                        .iter()
-                        .filter(|e| e.event == EV_FIRE_WEAPON || e.event == EV_FIRE_WEAPON_LASTSHOT)
-                        .count();
-                    self.aim_spread_scale = (self.aim_spread_scale
-                        - def.hip_spread_decay_rate * dt
-                        + def.hip_spread_fire_add * shots as f32)
-                        .clamp(0.0, 255.0);
-                }
                 for e in &events {
                     self.add_event(e.event, e.parm);
                 }
@@ -512,7 +491,10 @@ impl ClientSim {
             movetype,
             weapon: inputs.weapon.to_ascii_lowercase(),
             weapon_class: inputs.weapon_class.to_ascii_lowercase(),
-            ads: pm_input(cmd).ads,
+            // The gated flag, not the raw bit: retail feeds
+            // `BG_UpdateConditionValue` slot 7 `pm_flags & 0x20`
+            // (combat doc, 1.13).
+            ads: self.ps.ads_active,
             strafing: self.strafing,
             mounted: None,
             firing: self.ps.weaponstate == vcod_common::pmove::weapon::WEAPON_FIRING,
@@ -685,7 +667,7 @@ impl ClientSim {
             return;
         }
         let count = (self.damage.taken * 100 / self.max_health).min(127);
-        self.aim_spread_scale = (self.aim_spread_scale + count as f32).min(255.0);
+        self.ps.aim_spread_scale = (self.ps.aim_spread_scale + count as f32).min(255.0);
         match self.damage.from {
             None => {
                 self.feedback.yaw = 255;
@@ -889,7 +871,11 @@ impl ClientSim {
             };
             set(
                 "pm_flags",
-                PMF_OWN_VIEW | stance_pmflags | jump_held | backwards,
+                PMF_OWN_VIEW
+                    | stance_pmflags
+                    | jump_held
+                    | backwards
+                    | pmove::weapon::ads_pm_flags(&self.ps),
             );
             // The client predicts its own eye lerp; without these it restarts
             // from our value every snapshot and the view shakes for as long
@@ -925,10 +911,11 @@ impl ClientSim {
             set("torsoAnim", self.anim.torso());
             // Both are netfields the client predicts from, so a constant
             // here fights its own prediction once a snapshot: the ADS lerp
-            // restarts and the spread reads a stale scale. The fraction is
-            // INFERRED (combat doc, 9.4); the scale is the sim's own.
+            // restarts and the spread reads a stale scale. Both come out of
+            // the shared pmove code the client predicts with (combat doc,
+            // 1.13 and 2.1).
             set("fWeaponPosFrac", self.ps.weapon_pos_frac.to_bits() as i32);
-            set("aimSpreadScale", self.aim_spread_scale.to_bits() as i32);
+            set("aimSpreadScale", self.ps.aim_spread_scale.to_bits() as i32);
         }
         // What the client holds; both layouts are in the object model doc,
         // section 20. The sim owns all of it: the script host's copy is
