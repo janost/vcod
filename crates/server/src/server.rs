@@ -156,6 +156,14 @@ enum ClientOp {
     Move(Vec<UserCmd>),
 }
 
+/// A client command whose whole effect is to start or release a script
+/// thread. `client_command` parses it out of the packet and `tick` runs it,
+/// so it lands on the frame the rest of the script frame runs on.
+enum ScriptCommand {
+    Kill,
+    MenuResponse(i32, String),
+}
+
 /// One shot a client's weapon step took this tick: the queue between the
 /// move that pulled the trigger and the trace `tick` answers it with.
 #[derive(Clone, Copy, Debug)]
@@ -267,6 +275,13 @@ pub struct Server {
     /// Shots this tick's moves took, in the order they were fired. Filled by
     /// `replay_moves`, drained by `tick` into traces before the script runs.
     pending_shots: Vec<Shot>,
+    /// The client commands that start a script thread, in arrival order.
+    /// `client_command` runs during `handle_packet`, a frame before `tick`
+    /// advances `sv_time_ms`, so a thread started there would run on the
+    /// previous frame's clock and every `cloneplayer` and `wait` in it would
+    /// land a frame in the past. These queue instead and are drained in the
+    /// tick's script slot.
+    pending_script_commands: Vec<(usize, ScriptCommand)>,
     /// The hit-location damage multipliers out of the paks
     /// (`crate::game::combat::HitLocTable`); the default until `load_scripts`.
     hitlocs: crate::game::combat::HitLocTable,
@@ -382,6 +397,7 @@ impl Server {
             anims: None,
             weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
             pending_shots: Vec::new(),
+            pending_script_commands: Vec::new(),
             hitlocs: crate::game::combat::HitLocTable::default(),
             weapon_changes: Vec::new(),
         };
@@ -830,24 +846,23 @@ impl Server {
             }
             // `Cmd_Kill_f`: the same death `self suicide()` gives, asked for
             // by the client. The retail hit capture's death half is this
-            // command (combat doc, section 8).
-            "kill" => {
-                let now = self.sv_time_ms;
-                if let Some(rt) = self.script.as_mut() {
-                    rt.kill_client(slot, now);
-                }
-            }
+            // command (combat doc, section 8). Queued rather than run: it
+            // starts `CodeCallback_PlayerKilled`, and script runs in the
+            // tick's script slot on the tick's clock.
+            "kill" => self
+                .pending_script_commands
+                .push((slot, ScriptCommand::Kill)),
             // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
             // opened. Unlike the entry notify this fires straight through:
             // nothing is armed by it, and a notify no thread is parked on is
-            // simply lost, which is what retail does too.
+            // simply lost, which is what retail does too. Queued with `kill`,
+            // since the notify releases threads.
             "mr" => {
                 if let Some((index, response)) =
                     parse_menu_response(trimmed, i32::from(self.server_id))
                 {
-                    if let Some(rt) = self.script.as_mut() {
-                        rt.menu_response(slot, index, &response);
-                    }
+                    self.pending_script_commands
+                        .push((slot, ScriptCommand::MenuResponse(index, response)));
                 }
             }
             other => log::debug!("client {slot}: command {other:?} ignored"),
@@ -1050,9 +1065,10 @@ impl Server {
             .as_ref()?
             .to_entity(self.proto, slot, c.last_processed_st);
         let (now, proto) = (self.sv_time_ms, self.proto);
+        let collision = self.world.as_ref().map(|w| &w.collision);
         self.script
             .as_mut()
-            .map(|rt| rt.bodies_mut().push(state, None, now, proto))
+            .map(|rt| rt.bodies_mut().push(state, None, now, collision, proto))
     }
 
     /// Raises one event for the next snapshot build. Test-facing, like
@@ -1342,6 +1358,12 @@ impl Server {
         }
 
         let mut client_commands = Vec::new();
+        // A client that dropped between the packet and here has nothing left
+        // to run its command against.
+        let queued: Vec<(usize, ScriptCommand)> = std::mem::take(&mut self.pending_script_commands)
+            .into_iter()
+            .filter(|(slot, _)| self.clients[*slot].is_some())
+            .collect();
         if let Some(rt) = self.script.as_mut() {
             for (slot, c) in self.clients.iter().enumerate() {
                 if let Some(c) = c {
@@ -1350,6 +1372,20 @@ impl Server {
             }
             for te in impacts {
                 rt.push_temp_entity(te);
+            }
+            // The client commands the packet pass queued, on this frame's
+            // clock: retail runs `Cmd_Kill_f` ahead of the damage callbacks
+            // too, and a thread started here sees `level.time` already
+            // advanced, which is what a `cloneplayer` in it needs.
+            for (slot, cmd) in queued {
+                match cmd {
+                    ScriptCommand::Kill => {
+                        rt.kill_client(slot, self.sv_time_ms);
+                    }
+                    ScriptCommand::MenuResponse(index, response) => {
+                        rt.menu_response(slot, index, &response)
+                    }
+                }
             }
             rt.deliver_hits(hits, self.sv_time_ms);
             rt.run_frame(self.sv_time_ms);
@@ -1665,10 +1701,12 @@ impl Server {
         // (`crate::game::bodies`). Then the queue's corpses join the map's
         // entities; they are culled per client like anything else.
         let (now, proto) = (self.sv_time_ms, self.proto);
+        let collision = self.world.as_ref().map(|w| &w.collision);
         if let Some(rt) = self.script.as_mut() {
             rt.bodies_mut().refresh_newborn(
                 now,
                 |slot| client_entities.get(&(slot as u32)).cloned(),
+                collision,
                 proto,
             );
             entities.extend(rt.bodies().entities());

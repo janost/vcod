@@ -1199,9 +1199,46 @@ field and source in the table below, read off the store that writes it.
 | `s.legsAnim` (`entityState+204`) | `client->ps.legsAnim` |
 | `s.torsoAnim` (`entityState+208`) | `client->ps.torsoAnim` |
 | bounds | `self+0x100..0x114` and `self+0x11C..0x130`, copied float by float |
-| `+0xF4` | the literal `0x200` |
-| `+0x161` | the literal 1 |
-| `+0x190` | the literal `0x10001` |
+| `r.svFlags` (`+0xF4`) | the literal `0x200`, `SVF_CAPSULE` |
+| `physicsObject` (`+0x161`) | the literal 1 |
+| `clipmask` (`+0x190`) | the literal `0x10001` |
+
+Everything in that table is a **spawn-time** value. `pos.trType` 5,
+`pos.trDelta` and `groundEntityNum` 1023 last one or two frames; what a client
+is sent for the rest of the body's life is the settled trajectory 5.3
+describes.
+
+The three named offsets, anchored on CoDExtended's `struct gentity_s`
+(`src/shared.h`) with `svFlags` at `+0xF4` putting `sizeof(entityState_t)` at
+`0xE4`, and confirmed at their use sites:
+
+- `+0xF4 = 0x200` is `r.svFlags` = `SVF_CAPSULE` (`CoDExtended/src/server.h:40`
+  defines `SVF_CAPSULE 0x00000200`). VERIFIED: `G_RunEntity` 0x5034C/0x50355
+  mirrors `s.eFlags & 0x10` into `+0xF5` bit `0x2` every frame, `G_RunItem`
+  0x4EB8A and `G_BounceItem` 0x4E956 branch on the same `s.eFlags & 0x10` to
+  pick `trap_TraceCapsule`, and a live client takes the identical
+  `+0xF4 = 0x200` at 0x4258F.
+- `+0x161 = 1` is `physicsObject` (`shared.h:942 char physicsObject;`, one
+  byte past `inuse` at `+0x160`). VERIFIED: it has exactly one writer in the
+  whole `.text`, this store, and three readers: `G_RunEntity` 0x503E8,
+  `G_TryPushingEntity` 0x553F3 and a script-command check at 0x5D621.
+- `+0x190 = 0x10001` is `clipmask`. VERIFIED: `G_RunItem` 0x4EB76 reads it as
+  the trace mask and falls back to `0x491` when it is 0. The other writers are
+  `0x2810011` (0x42732, client spawn), `0x81` (0x4DCA1) and `0x2802091`
+  (missiles).
+
+`+0x118`, the word between the two copied runs, is `r.contents`. VERIFIED:
+`G_FreeEntity` ends in `bzero(ent, 0x314)` (0x66B97) and nothing on the clone
+path writes the word, so a retail corpse has `r.contents == 0` and nothing
+traces against it; the `+0x118 = 0x4000000` `player_die` writes at 0x49C28
+goes on the dying player's own entity.
+
+VERIFIED: `G_SetOrigin` 0x67D38 writes `pos.trBase` and then zeroes `trDelta`,
+`trType`, `trTime` and `trDuration`, which is why the clone's own trajectory
+stores come after it, and do. VERIFIED: `player_die` 0x49A48 has no store to
+`client->ps.velocity` -- its only float stores through a client pointer are
+`ps.viewangles` at 0x49D30/0x49D42/0x49D54 -- so the velocity the clone copies
+at 0x445CA is the live one the dying player carried.
 
 VERIFIED: `+0x118`, the word between the two copied runs, has no store.
 VERIFIED: the function also calls `trap_LinkEntity` and `GScr_AddEntity` and
@@ -1222,10 +1259,13 @@ project already observed live (`AGENTS.md`, "Netcode debugging").
 builtin in `crates/server/src/game/builtins/client.rs`). The clone is written
 onto an empty entity state rather than a copy of the player's, and it carries
 the table's `eType`, `clientNum`, `legsAnim`, `torsoAnim`, `eFlags` with the
-slot's toggled bit 8, `groundEntityNum`, `pos.trType`, `pos.trTime`,
-`pos.trBase`, `pos.trDelta` and `apos.trBase`. The `0x800` marker and its
-250 ms think are left out: no capture we hold carries a corpse's `eFlags`, so
-there is nothing to check the pair against.
+slot's toggled bit 8 and the `0x800` marker, `groundEntityNum`, `pos.trType`,
+`pos.trTime`, `pos.trBase`, `pos.trDelta` and `apos.trBase`, and is then
+settled in place the way 5.3 describes, since there is no per-frame item
+physics to settle it a frame later. The 250 ms think that clears `0x800` runs
+in `ScriptRuntime::run_frame`, beside the object table's own thinks. What is
+left out of the settle is the ground-plane re-orientation and the NODROP
+free.
 
 Where the state comes from is a two-step arrangement retail does not need.
 A builtin cannot reach a client's sim, so `Server::replay_moves` mirrors each
@@ -1256,7 +1296,107 @@ off the player, because the stock death path re-gives the loadout on respawn
 and nothing else calls the builtin yet. And it arms `ThinkFn::Free` 30 000 ms
 out (`DROPPED_ITEM_MS`), because pickup on touch does not exist: with retail's
 lifetime every death would leave an item that never goes away. The timer is a
-placeholder for the touch path, not a claim about retail.
+placeholder for the touch path, not a claim about retail. The drop runs the
+same `drop_item_to_floor` a placed weapon does, which stands in for the
+`LaunchItem` launch and the `G_RunItem` settle behind it: the wire then reads
+`pos.trType` 0 with `groundEntityNum` 1022, which is what all 133 item samples
+in `crates/server/tests/fixtures/entities/` carry.
+
+### 5.3 The corpse runs item physics, and settles
+
+The clone is a `physicsObject` (`+0x161 = 1`), and that is what puts it
+through the item physics every frame it exists.
+
+VERIFIED, `G_RunFrame` 0x50478: the loop at 0x50930 walks
+`i < level.num_entities` and calls `G_RunEntity` (0x502BC) for every `inuse`
+entity (0x50955); 64..71 are inside `num_entities`. VERIFIED, `G_RunEntity`
+0x502BC dispatch order: the framenum guard (0x502CB); `s.eFlags & 0x10`
+mirrored into svFlags (0x5034C); `eType == 4` to `G_RunMissile` and `== 3` to
+the item path; then 0x503E8 `cmp BYTE PTR [ebx+0x161], 0` with non-zero going
+to `G_RunItem` (0x503F1); only then `eType` 5/8 to `G_RunMover`,
+`ent->client` to `G_RunClient`, and last the bare think. So a clone, `eType`
+2, reaches `G_RunItem` on its `physicsObject` byte alone.
+
+VERIFIED, `G_RunItem` 0x4EB18:
+
+- 0x4EB24: when `groundEntityNum == 0x3FF` and `pos.trType != 5`, `trType`
+  becomes 5 and `trTime` the level clock -- airborne implies gravity.
+- 0x4EB42: when `trType` is 0 or 8, run the think and return. A settled body
+  costs one think a frame and nothing else.
+- 0x4EB71: `BG_EvaluateTrajectory(&s.pos, level.time, newOrigin)`.
+- 0x4EB76: `mask = ent->clipmask ? : 0x491`, which is where the clone's
+  `0x10001` is used.
+- 0x4EB8A: `trap_TraceCapsule` (or `trap_Trace`) from `r.currentOrigin` to
+  `newOrigin` with the entity's own box, `passEntityNum = r.ownerNum`.
+- 0x4EBED: `r.currentOrigin = trace.endpos`; 0x4EC19/0x4EC22
+  `trap_LinkEntity` and `G_RunThink`.
+- 0x4EC33: on `trace.fraction != 1`, a non-zero `trap_PointContents` frees the
+  entity -- a body landing in a NODROP brush is deleted -- and otherwise
+  `G_BounceItem` 0x4E858 runs.
+
+VERIFIED, `G_BounceItem` 0x4E858, the settle:
+
+- the reflection `trDelta = v + n * (v.n * -2.0)` (`.rodata` 0x74E44), then
+  `trDelta *= ent->physicsBounce` (`+0x18C`) at 0x4E90B.
+- 0x4E916: on startsolid, zero `trDelta` and re-trace 128.0 units straight
+  down.
+- 0x4E9BB `trace.plane.normal[2] > 0` and 0x4E9D1 `40.0 > trDelta[2]`
+  (`.rodata` 0x74E4C) gate the settle itself:
+  - 0x4EA02: `trace.endpos[2] += rand() * -2^-31 * 0.5 + 0.5`, a random lift
+    in (0, 0.5].
+  - 0x4EA13: `G_SetOrigin(ent, trace.endpos)`, so `pos.trType = 0`,
+    `pos.trDelta = 0`, `pos.trTime = 0` and `pos.trBase` at the endpoint.
+  - 0x4EA1F: `s.groundEntityNum = (u16)trace.entityNum`.
+  - 0x4EA44-0x4EAA7: `AngleVectors`, two `CrossProduct` and `AxisToAngles`
+    against the plane normal, then `G_SetAngle` -- the body is re-oriented
+    flat to the ground.
+  - 0x4EAB3: `trap_LinkEntity`.
+- otherwise, still airborne (0x4EAC0): `r.currentOrigin += plane.normal`,
+  `pos.trBase = r.currentOrigin`, `pos.trTime = level.time`.
+
+INFERRED, from the multiply at 0x4E90B: a clone never bounces. It never writes
+`physicsBounce` and `G_FreeEntity` bzeroed the slot, so the reflected velocity
+is multiplied to zero and the first contact settles it. INFERRED, from the two
+`G_RunItem` guards: once `trType` is 0 and `groundEntityNum` is not 0x3FF the
+body never moves again.
+
+VERIFIED, corroborating that `groundEntityNum` is a live physics field rather
+than a static marker: `G_FreeEntity` 0x66B0E scans every entity and resets
+`+0x7C` to `0x3FF` wherever it pointed at the freed one.
+
+**The client does not settle anything.** VERIFIED, `cgame_mp_x86.dll`:
+`CG_CalcEntityLerpPositions` (0x3001d210) sends only `trType == 1`, and
+`trType == 3` with `number < 64`, to snapshot interpolation (0x3001d090);
+everything else, a corpse included, is `BG_EvaluateTrajectory` on `pos` and
+`apos` straight into `lerpOrigin` and `lerpAngles`. VERIFIED (negative): there
+is no trace and no collision syscall anywhere in the `eType` 2 add path
+(`CG_AddCEntity` 0x3001d5f0 case 2 is `FUN_30028400`; every call reachable one
+level from it was enumerated and they are the DObj fetch, the anim update, an
+`AnglesToAxis` and the refent submit). So a body left under `TR_GRAVITY` falls
+on the client's parabola without bound -- 4 units after 100 ms, 400 after a
+second -- and only the server's settle stops it.
+
+**The corpse's animation is its own `legsAnim` and `torsoAnim`.** VERIFIED:
+`FUN_30004e40` (0x30004e40), shared by the player and the corpse add, reads
+`entityState+0xcc` and `entityState+0xd0` and pushes each into the legs
+(record+0x37c) and torso (record+0x3ac) channels. There is no client-side
+death-anim pick. VERIFIED: `FUN_30003be0` (0x30003c3e) derives `CG_SetAnim`'s
+third argument as `entityState.eFlags >> 11 & 1`, and `CG_SetAnim`
+(0x300036b0), for an anim whose table flags carry 0x40 -- the death flag,
+OR'd in by the animscript parser at 0x30001f68 under the `DEATH` token --
+branches on it: with the argument 0 it sets the animation and then calls trap
+0x91 with 1.0, and with it non-zero it starts the animation over the entry's
+blend time. VERIFIED: trap 0x91 is `FUN_004891f0` in CoDMP.exe and writes the
+passed float into two dwords of the animation slot; INFERRED that the float is
+the normalized playback position, so 1.0 is the clip's last frame. VERIFIED:
+the same bit gates the DObj
+anim-slot clone (trap 0xb8) in `CG_TransitionEntity`'s `eType` 2 arm
+(0x3002f986), which copies the live player's animation slots onto the body.
+INFERRED, the two arms: with `0x800` set, a fresh kill inside the server's
+250 ms window, the death animation plays from the top; with it clear, the
+animation is snapped to its last frame and held. A body sent without the
+marker is therefore drawn at the last frame of its death animation from the
+first frame it exists.
 
 ---
 

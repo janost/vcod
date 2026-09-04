@@ -1,30 +1,36 @@
 //! Contains routines ported from the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company.
 //! See NOTICE.
 //!
-//! `trajectory_t` / `BG_EvaluateTrajectory` (RTCW-MP `bg_misc.c:3510ff`, kept
-//! verbatim by CoD1 per codextended `shared.h:460`).
+//! `trajectory_t` / `BG_EvaluateTrajectory`. The per-branch arithmetic is
+//! RTCW-MP's (`bg_misc.c:3510ff`); the enumeration is not. CoD 1.1 dispatches
+//! it through an eleven-entry jump table (`game.mp.i386.so` 0x2c600, cgame
+//! `cgame_mp_x86.dll` 0x30005470) and `Com_Error`s on anything above 10.
 
 use super::msg::EntityState;
 use super::protocol::Protocol;
 use glam::Vec3;
 
-/// `trType_t`, codextended shared.h:460.
+/// `trType_t`. CoD 1.1 has no `TR_LINEAR_STOP_BACK`, `TR_SPLINE` or
+/// `TR_LINEAR_PATH`, so every value from 4 up sits one index below the RTCW
+/// header codextended's `shared.h:460` pastes. VERIFIED off the eleven-entry
+/// jump tables at `.so` 0x700a8 (evaluate) and 0x7012c (delta), both entered
+/// through `cmp $0xa; ja Com_Error` (`docs/protocol-1.1.md`, divergence 8).
+/// A `trType` above 10 is fatal in retail; here it falls back to `trBase`.
 pub const TR_STATIONARY: i32 = 0;
 pub const TR_INTERPOLATE: i32 = 1;
 pub const TR_LINEAR: i32 = 2;
 pub const TR_LINEAR_STOP: i32 = 3;
-pub const TR_LINEAR_STOP_BACK: i32 = 4;
-pub const TR_SINE: i32 = 5;
-pub const TR_GRAVITY: i32 = 6;
-pub const TR_GRAVITY_LOW: i32 = 7;
-pub const TR_GRAVITY_FLOAT: i32 = 8;
-pub const TR_GRAVITY_PAUSED: i32 = 9;
-pub const TR_ACCELERATE: i32 = 10;
-pub const TR_DECCELERATE: i32 = 11;
-pub const TR_SPLINE: i32 = 12;
-pub const TR_LINEAR_PATH: i32 = 13;
+pub const TR_SINE: i32 = 4;
+pub const TR_GRAVITY: i32 = 5;
+pub const TR_GRAVITY_LOW: i32 = 6;
+pub const TR_GRAVITY_FLOAT: i32 = 7;
+pub const TR_GRAVITY_PAUSED: i32 = 8;
+pub const TR_ACCELERATE: i32 = 9;
+pub const TR_DECCELERATE: i32 = 10;
 
 /// `g_pmove.c` `DEFAULT_GRAVITY`. No per-entity gravity is on the wire.
+/// VERIFIED as the literal the `TR_GRAVITY` delta branch reads
+/// (`.so` .rodata 0x70120); evaluate carries the halved 400.0 at 0x70098.
 pub const DEFAULT_GRAVITY: f32 = 800.0;
 
 /// `pos`/`apos` as it comes off the wire. `tr_duration` is 0 for the
@@ -75,11 +81,6 @@ impl Trajectory {
                 self.base + self.delta * dt
             }
             TR_SINE => {
-                // Live servers send TR_SINE with trDuration 0 on ET_ITEM; the
-                // reference divides by it (docs/protocol-1.1.md, divergence 8).
-                if self.tr_duration == 0 {
-                    return self.base;
-                }
                 let dt = (at_ms - self.tr_time) as f32 / self.tr_duration as f32;
                 let phase = (dt * std::f32::consts::TAU).sin();
                 self.base + self.delta * phase
@@ -186,16 +187,28 @@ mod tests {
         assert_eq!(tr.evaluate(0).z, 0.0);
     }
 
+    /// The numbering retail's eleven-entry jump tables give, and the one
+    /// value a corpse and a launched item are sent under: 5 is gravity, and
+    /// it reads no `trDuration`. Retail's own `z` term is `-400*dt*dt`
+    /// (cgame 0x30005470, `.rodata` 0x30069528).
     #[test]
-    fn sine_with_zero_duration_falls_back_to_base_instead_of_nan() {
-        let tr = traj(
-            TR_SINE,
-            1000,
-            0,
-            Vec3::new(1.0, 2.0, 3.0),
-            Vec3::new(0.0, 0.0, 10.0),
+    fn five_is_gravity_and_reads_no_duration() {
+        assert_eq!(
+            (
+                TR_SINE,
+                TR_GRAVITY,
+                TR_GRAVITY_LOW,
+                TR_GRAVITY_FLOAT,
+                TR_GRAVITY_PAUSED,
+                TR_ACCELERATE,
+                TR_DECCELERATE
+            ),
+            (4, 5, 6, 7, 8, 9, 10)
         );
-        assert_eq!(tr.evaluate(1500), Vec3::new(1.0, 2.0, 3.0));
+        // trDuration 0 is what a launched item carries; a sine reading of 5
+        // would divide by it.
+        let tr = traj(5, 1000, 0, Vec3::new(1.0, 2.0, 3.0), Vec3::ZERO);
+        assert_eq!(tr.evaluate(2000), Vec3::new(1.0, 2.0, -397.0));
     }
 
     #[test]

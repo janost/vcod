@@ -258,8 +258,12 @@ const RADIANT_NAMES: &[(&str, &str)] = &[
 /// its box does. A `spawnflags & 1` item is suspended and keeps its origin;
 /// neither gate map has one.
 ///
-/// Skipped for a turret, which goes through `G_SpawnTurret` instead.
-fn drop_item_to_floor(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+/// Skipped for a turret, which goes through `G_SpawnTurret` instead. The
+/// `dropItem` builtin runs it too: retail hands its entity to `LaunchItem`,
+/// which launches it under `pos.trType` 5 and lets `G_RunItem` settle it to
+/// `trType` 0 with `groundEntityNum` = world, which is what all 133 item
+/// samples in `crates/server/tests/fixtures/entities/` carry.
+pub fn drop_item_to_floor(host: &mut GameHost, cx: &mut Cx, id: EntId) {
     const DROP: f32 = 4096.0;
     const R: f32 = 1.0;
     let Some(world) = host.world.clone() else {
