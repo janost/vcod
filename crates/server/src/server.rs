@@ -279,6 +279,10 @@ pub struct Server {
     /// Shots this tick's moves took, in the order they were fired. Filled by
     /// `replay_moves`, drained by `tick` into traces before the script runs.
     pending_shots: Vec<Shot>,
+    /// Retail's `+set name value`: applied last in `cvars`, over
+    /// `default_mp.cfg` and the config's own, so a run can turn a script
+    /// cvar such as `scr_friendlyfire` on without a code change.
+    cvar_overrides: Vec<(String, String)>,
     /// The client commands that start a script thread, in arrival order.
     /// `client_command` runs during `handle_packet`, a frame before `tick`
     /// advances `sv_time_ms`, so a thread started there would run on the
@@ -401,6 +405,7 @@ impl Server {
             anims: None,
             weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
             pending_shots: Vec::new(),
+            cvar_overrides: Vec::new(),
             pending_script_commands: Vec::new(),
             hitlocs: crate::game::combat::HitLocTable::default(),
             weapon_changes: Vec::new(),
@@ -1199,6 +1204,9 @@ impl Server {
         cvars.set("sv_hostname", &self.cfg.hostname);
         cvars.set("sv_maxclients", &self.cfg.max_clients.to_string());
         cvars.set("debug", "0");
+        for (name, value) in &self.cvar_overrides {
+            cvars.set(name, value);
+        }
         cvars
     }
 
@@ -1266,6 +1274,12 @@ impl Server {
     /// One key out of a client's `.pers`, rendered the same way.
     pub fn client_pers(&mut self, slot: usize, key: &str) -> Option<String> {
         self.script.as_mut()?.client_pers(slot, key)
+    }
+
+    /// A `+set` for the next `load_scripts`.
+    pub fn set_cvar(&mut self, name: &str, value: &str) {
+        self.cvar_overrides
+            .push((name.to_string(), value.to_string()));
     }
 
     const FALLBACK_SPAWN: ([f32; 3], f32) = ([0.0, 0.0, 64.0], 0.0);
