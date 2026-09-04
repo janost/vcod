@@ -414,7 +414,7 @@ pub fn probe(
             if done {
                 if save_target {
                     write_target_fixture(client.configstrings(), &join, &target_probe, now)?;
-                } else {
+                } else if !sweep {
                     write_shooter_fixture(client.configstrings(), &join, &hit, now)?;
                 }
                 wrote_hit = true;
@@ -2444,6 +2444,10 @@ const LOS_FRACTION: f32 = 0.99;
 /// and neither moved the target's `damageEvent`. The approach limit is what
 /// gets the trigger pulled when the walk cannot close this.
 const ENGAGE_RANGE: f32 = 700.0;
+/// How close a `--probe-sweep` walks first. Its taps are a height ruler on
+/// the target, and the hip cone at 350 units is a nine-unit blur that reads
+/// nothing; the retail sweep that pinned the head line stood at 36 to 118.
+const SWEEP_RANGE: f32 = 120.0;
 /// Heights up the target's body the line-of-sight trace tries. Only the eye is
 /// aimed at, but a target behind a low wall is one a shot can still reach.
 const LOS_HEIGHTS: [f32; 3] = [16.0, 40.0, EYE_HEIGHT];
@@ -3159,9 +3163,12 @@ impl HitProbe {
         } else {
             (in_phase.as_millis() / self.period.as_millis()) as u32
         };
+        // A sweep keeps walking until it is close; the stop overshoots by a
+        // stride or two, which is why the taps themselves are not gated on it.
+        let ready = shootable && (!self.sweep || self.range <= SWEEP_RANGE);
         let next = self.phase.advance(
             in_phase,
-            shootable,
+            ready,
             self.target.filter(|_| self.target_seen).map(|t| t.1),
             taps,
             self.sweep,
