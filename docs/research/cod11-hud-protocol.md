@@ -367,7 +367,7 @@ The client reads them back with `Argv(4 + 5*i + k)` into a six-int row
 | 1 | `row[0]` | clientNum; clamped to 0 if outside `0..63` |
 | 2 | `row[1]` | score; also copied into `clientinfo[client].score` (`0x3018bc3c`) |
 | 3 | `row[2]` | ping (`cl[+0x20c8]`); server sends `-1` when `cl[+0x20ec] == 1` (connecting), else clamps to `999` |
-| 4 | `row[3]` | "time", `cl[+0x20e4]`, the Q3 `pers.enterTime` position |
+| 4 | `row[3]` | deaths: `cl[+0x20e4]` is the client's `deaths` script field (offset 8420 in the client field table, `cod11-gsc-object-model.md`), which every stock gametype's `Callback_PlayerKilled` increments; token 2's `cl[+0x20e0]` is `score` (8416) the same way |
 | 5 | `row[5]` | status-icon index; if in `1..8` the client resolves configstring `20 + n` and replaces it with a material handle |
 
 `row[4]` is not on the wire. The client fills it with
@@ -418,16 +418,19 @@ the `tdm` pair, and `cod11-combat.md` section 9). INFERRED: `level.teamScores[]`
 therefore starts zeroed, and the `-9999` sentinel is a value a gametype has to
 write for itself rather than the default an unwritten total holds.
 `ping` is 0 rather than retail's clamp, the netchan
-keeping no round-trip estimate. Token 4 is minutes since the client
-connected, the Q3 reading of the same slot -- see the UNVERIFIED note below,
-which is why that is a choice and not a claim.
+keeping no round-trip estimate. Token 4 is the client's `deaths` script
+field, read the same way as `score`.
 
-UNVERIFIED: the meaning and unit of token 4. `cl[+0x20e4]` has no write site
-anywhere in the stock module's `.text` (`grep 0x20e4` finds three reads and no
-store), and unlike Q3 the server sends it raw rather than as
-`(level.time - enterTime)/60000`. `SortRanks` uses it as the ascending tiebreak
-after score, which is the `pers.enterTime` role. Check: print a real `b` line
-from a `score` request and compare token 4 against a known join time.
+VERIFIED: token 4 is `deaths`. `cl[+0x20e4]` has no write site in the stock
+module's `.text` (`grep 0x20e4` finds three reads and no store) because the
+script writes it: the client field table registers `deaths` at offset 8420 =
+`0x20e4` and `score` at 8416 = `0x20e0`, the token 2 source
+(`cod11-gsc-object-model.md`, the client field dump). INFERRED: `SortRanks`'s
+use of it as the ascending tiebreak after score is therefore "fewer deaths
+ranks higher", not the Q3 `pers.enterTime` tiebreak this section used to
+read into the slot. A retail client renders it in the scoreboard's deaths
+column, which is where a hand check on 2026-09-03 saw the minutes vcod used
+to send.
 
 ---
 

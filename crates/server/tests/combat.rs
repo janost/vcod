@@ -326,6 +326,8 @@ fn a_shot_takes_health_and_a_second_one_kills() {
             .to_vec()
     };
     assert_eq!(of(na)[1], 1, "A scored the kill");
+    assert_eq!(of(nb)[3], 1, "B's death is in the deaths column");
+    assert_eq!(of(na)[3], 0, "A has none");
     assert_eq!(of(nb)[4], 1, "B carries the dead status icon");
     assert_eq!(of(na)[4], 0, "a live player carries none");
 

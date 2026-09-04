@@ -966,27 +966,16 @@ impl Server {
     /// <allies>{ <client> <score> <ping> <time> <icon>}*`, one row per online
     /// client (`docs/research/cod11-hud-protocol.md` section 3).
     ///
-    /// The score and the status icon come from the script's own client
-    /// fields, which is where every gametype writes them. `ping` is 0: the
-    /// netchan keeps no round-trip estimate, and 0 renders as a number where
-    /// retail's `-1` renders as "-" for a client still connecting. `time` is
-    /// minutes since the client connected -- retail sends `pers.enterTime`
-    /// raw and its unit is unmeasured (section 3, UNVERIFIED), so this is the
-    /// Q3 reading of the same slot rather than a claim about retail's.
+    /// The score, the deaths and the status icon come from the script's own
+    /// client fields, which is where every gametype writes them. `ping` is 0:
+    /// the netchan keeps no round-trip estimate, and 0 renders as a number
+    /// where retail's `-1` renders as "-" for a client still connecting.
     fn scoreboard(&mut self) -> String {
-        let online: Vec<(usize, i64)> = self
+        let online: Vec<usize> = self
             .clients
             .iter()
             .enumerate()
-            .filter_map(|(slot, c)| {
-                let c = c.as_ref()?;
-                let minutes = c
-                    .last_packet
-                    .saturating_duration_since(c.last_connect)
-                    .as_secs()
-                    / 60;
-                Some((slot, minutes as i64))
-            })
+            .filter_map(|(slot, c)| c.as_ref().map(|_| slot))
             .collect();
         // Tokens 2 and 3 are `level.teamScores[1]` and `[2]`. Both retail
         // captures read 0 in each: the array starts zeroed and the `-9999`
@@ -994,13 +983,16 @@ impl Server {
         // doc, section 3). Hardcoded until a `setTeamScore` builtin gives
         // them somewhere to live.
         let mut text = format!("b {} 0 0", online.len());
-        for (slot, minutes) in online {
-            let score = self
-                .client_field(slot, "score")
-                .and_then(|s| s.parse::<i64>().ok())
-                .unwrap_or(0);
+        for slot in online {
+            let mut field = |name: &str| {
+                self.client_field(slot, name)
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(0)
+            };
+            let score = field("score");
+            let deaths = field("deaths");
             let icon = self.status_icon_index(slot);
-            text.push_str(&format!(" {slot} {score} 0 {minutes} {icon}"));
+            text.push_str(&format!(" {slot} {score} 0 {deaths} {icon}"));
         }
         text
     }
