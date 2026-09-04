@@ -181,6 +181,15 @@ engineering setup works.
   since the target's own `kill` command does the killing; the hit half needs a
   map small enough for the walk to cross, which mp_carentan is not in `dm`,
   for ours and for retail alike.
+  `--probe-sweep` turns `--save-hit` into a measurement instead of a capture:
+  the shooter taps once per entry of a static table of pitch offsets around
+  the aim at the target's eye, echoes the offset as `pitchOffset` on each
+  `!trace` line, and writes no fixture, so a sweep cannot clobber the
+  committed evidence. Pair those lines with the `sHitLoc` the server's own
+  `games_mp.log` `D;` records carry and every vertical hit-location boundary
+  falls out of the two; run it against retail and against ours and the
+  answers are directly comparable. An offset is spent only on a tap that had
+  a live target to hit, so give both probes a long `--probe-secs`.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
@@ -220,8 +229,9 @@ engineering setup works.
   `crates/server/tests/configstrings_ab.rs`. `cargo run -p vcod-server -- <map>` runs **ours**:
   the handshake, the gamestate, client commands and moves, and snapshots
   delta-compressed against the client's acked frame, with pmove-driven
-  spectator flight and `--test-entities` for scripted packet entities (no
-  restarts yet). A snapshot's entity list is the map's own: placed weapons,
+  spectator flight, `--test-entities` for scripted packet entities and
+  `--set NAME=VALUE` (retail's `+set`, e.g. `--set scr_friendlyfire=1` for
+  a teammate kill) (no restarts yet). A snapshot's entity list is the map's own: placed weapons,
   script models and mounted MGs, culled per client against the BSP's PVS the
   way retail culls, so what a client is sent depends on where it stands. Other
   clients are in it too, each animated by the animscript machine
@@ -246,7 +256,9 @@ engineering setup works.
 - The tick, in order: expired clients, then each client's queued usercmds
   (`replay_moves`, one pmove step per cmd, which is where the weapon machine
   queues a frame's shots), then the shots themselves (a trace each, an impact
-  temp entity and a hit per player struck), then `deliver_hits` so the damage
+  temp entity and a hit per player struck), then the client commands that
+  start a script thread (`kill`, `mr`), which the packet pass only queues
+  because it runs before the clock advances, then `deliver_hits` so the damage
   callback has run before script, then the script frame, then the sim ops the
   script left (spawns, weapon gives and switches, the damage the callback
   did), then the host-to-sim mirrors (weapons held, origin, health, the damage

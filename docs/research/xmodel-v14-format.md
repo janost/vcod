@@ -53,10 +53,12 @@ u16 version                 // 14
 u16 num_bones               // non-root
 u16 num_root_bones          // root bones have identity local transform and parent -1
 num_bones x { i8 parent; f32 pos[3]; i16 rot[3] }
-(num_root + num_bones) x { cstr name; skip 24 }   // root bones first
-skip (num_root + num_bones)                       // per-bone u8 table (part group)
+(num_root + num_bones) x { cstr name; f32 hit_mins[3]; f32 hit_maxs[3] }   // root bones first
+(num_root + num_bones) x u8 hit_location
 ```
 
+- The 24 bytes after each bone name are the bone's hit box in its own frame, and the trailing byte per bone is its hit-location index into the 19 names of `cod11-combat.md` section 3. The engine's locational trace slab-tests those boxes on the posed skeleton; an all-zero box is how the artist turns a bone off. Verified across the corpus: all 725 non-empty `xmodelparts` entries in `pak0-6` parse to exact EOF under this layout and the trailing byte takes only values 0..18.
+- `xmodelparts/USAirborne3`, the LOD0 of all 17 `playerbody_*` models: `bip01 l thigh`'s box is `[-2.07 -6.69 -5.04 .. 17.41 7.49 4.97]` at hit location 13 (`left_leg_upper`), and its child `bip01 l calf` sits at local `(17.51, 0, 0)`, so the box runs down `+X` to the next joint. The body's own `bip01 head` and `bip01 neck` boxes are all-zero, as is every `tag_*`; the head boxes live in the attached head model, where `xmodelparts/basehead21` gives `bip01 head` `[-0.29 -4.90 -4.11 .. 9.09 5.63 4.16]` at code 2. `tag_weapon_left` and `tag_weapon_right` carry code 18, `gun`.
 - Rotation: `q_xyz = rot / 32768.0`, `q_w = sqrt(max(0, 1 - x^2 - y^2 - z^2))`. The clamp is required: the largest observed `|xyz|^2` in the shipped data is 1.00003.
 - Parents always precede children, so world transforms compose in file order: `world_pos = parent.world_pos + parent.world_rot * local_pos`, `world_rot = parent.world_rot * local_rot`. The parser keeps both the local and the composed world transform per bone; `skeleton.rs` inverts the world bind (`Mat4::from_rotation_translation(rot, pos).inverse()`) to skin against.
 - kar98k gun: 6 bones, root `tag_weapon`, then `kar98`, `tag_brass`, `tag_flash`, `k98 clip` (with the space, which is also the anim track name), `kar98_bolt`. Hands: 55 bones, root `tag_view`, containing `tag_view > tag_torso > tag_weapon`.

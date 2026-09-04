@@ -311,6 +311,85 @@ impl GameHost {
     pub fn rand_unit(&mut self) -> f32 {
         rand_unit(&mut self.rng)
     }
+
+    /// The three HUD fields whose retail setter is not a plain store, and
+    /// `None` for every other name so the caller falls through to the
+    /// generic path. `color` (0x4b03c) and `alpha` (0x4c1fc) write byte
+    /// lanes of one packed word; `label` (0x4c400) takes a localized string
+    /// and stores what `G_LocalizedStringIndex` answers.
+    fn set_hud_field(
+        &mut self,
+        cx: &Cx,
+        ent: EntId,
+        field: Atom,
+        value: Value,
+    ) -> Option<Result<(), ErrorKind>> {
+        let lane = |v: Value| match v {
+            Value::Int(i) => Some(fields::hud_color_byte(i as f32)),
+            Value::Float(f) => Some(fields::hud_color_byte(f)),
+            _ => None,
+        };
+        let word = match cx.resolve_folded(field) {
+            "color" => {
+                let Value::Vector(v) = value else {
+                    return Some(Err(ErrorKind::BadType("color takes a vector")));
+                };
+                let old = self.ents.get(ent).map_or(0, hud_color_word);
+                (old & 0xff00_0000)
+                    | fields::hud_color_byte(v[0])
+                    | (fields::hud_color_byte(v[1]) << 8)
+                    | (fields::hud_color_byte(v[2]) << 16)
+            }
+            "alpha" => {
+                let Some(a) = lane(value) else {
+                    return Some(Err(ErrorKind::BadType("alpha takes a number")));
+                };
+                let old = self.ents.get(ent).map_or(0, hud_color_word);
+                (old & 0x00ff_ffff) | (a << 24)
+            }
+            "label" => {
+                let (Value::String(a) | Value::Localized(a)) = value else {
+                    return Some(Err(ErrorKind::BadType("label takes a string")));
+                };
+                let name = cx.resolve(a).to_string();
+                let index = match self
+                    .allocators
+                    .localized_index(&mut self.configstrings, &name)
+                {
+                    Ok(i) => i,
+                    Err(e) => return Some(Err(e)),
+                };
+                return Some(self.store_hud_slot(ent, "label", Value::Int(index)));
+            }
+            _ => return None,
+        };
+        Some(self.store_hud_slot(ent, "color", Value::Int(word as i32)))
+    }
+
+    /// One HUD engine slot by name, for the setters that compute their own
+    /// stored value.
+    fn store_hud_slot(&mut self, ent: EntId, name: &str, v: Value) -> Result<(), ErrorKind> {
+        let Route::Engine { slot, .. } = fields::route_hud(name) else {
+            return Err(ErrorKind::BadType("no such HUD field"));
+        };
+        let Some(e) = self.ents.get_mut(ent) else {
+            return Err(ErrorKind::BadType("no such entity"));
+        };
+        e.engine[slot] = v;
+        Ok(())
+    }
+}
+
+/// The packed RGBA word behind `color` and `alpha`, both of which share one
+/// engine slot because they share `hudelem_t+0x1c`.
+fn hud_color_word(e: &crate::game::entity::GEntity) -> u32 {
+    match fields::route_hud("color") {
+        Route::Engine { slot, .. } => match e.engine[slot] {
+            Value::Int(i) => i as u32,
+            _ => 0,
+        },
+        _ => 0,
+    }
 }
 
 /// A uniform draw in `[0, 1)` off [`vcod_common::rng::xorshift`], the step
@@ -392,6 +471,24 @@ impl Host for GameHost {
                 _ => {}
             }
         }
+        if ent.0 >= FIRST_HUD_ELEM {
+            // The two lanes of the packed colour word, each its own getter
+            // in retail (0x4c1ac, 0x4c27c).
+            match cx.resolve_folded(field) {
+                "color" => {
+                    let w = hud_color_word(e);
+                    return Value::Vector([
+                        fields::hud_color_float(w & 0xff),
+                        fields::hud_color_float((w >> 8) & 0xff),
+                        fields::hud_color_float((w >> 16) & 0xff),
+                    ]);
+                }
+                "alpha" => {
+                    return Value::Float(fields::hud_color_float(hud_color_word(e) >> 24));
+                }
+                _ => {}
+            }
+        }
         let route = if ent.0 >= FIRST_HUD_ELEM {
             fields::route_hud(cx.resolve_folded(field))
         } else {
@@ -429,6 +526,11 @@ impl Host for GameHost {
         field: Atom,
         value: Value,
     ) -> Result<(), ErrorKind> {
+        if ent.0 >= FIRST_HUD_ELEM {
+            if let Some(r) = self.set_hud_field(cx, ent, field, value) {
+                return r;
+            }
+        }
         let route = if ent.0 >= FIRST_HUD_ELEM {
             fields::route_hud(cx.resolve_folded(field))
         } else {
@@ -486,6 +588,13 @@ impl Host for GameHost {
                 // storing zero is that trim taken to its end, and it is what
                 // makes every stock gametype's `if(self.archivetime <= delay)`
                 // fall through to `respawn()` instead of into the killcam.
+                // What the skipped branch would have done on retail: copy the
+                // attacker's archived playerstate over the victim's every
+                // frame (`SpectatorClientEndFrame` 0x40760, pm_flags
+                // 0x10000|0x20000), then on the way back to "dead" an engine
+                // `ClientSpawn` from `ClientEndFrame`'s `ps.clientNum !=
+                // ent->s.number` check (0x40f45/0x40f82). None of it reaches
+                // the wire here; the one killcam frame sends nothing new.
                 c[i] = match fields::CLIENT_FIELDS[i].name {
                     "archivetime" => Value::Int(0),
                     _ => value,
@@ -681,13 +790,58 @@ mod tests {
         });
     }
 
+    /// `color` and `alpha` are byte lanes of one word, so each has to leave
+    /// the other's lane alone, and both read back as the 0..1 numbers script
+    /// wrote. The record starts opaque white, which is what the retail round
+    /// clock carries on the wire.
+    #[test]
+    fn color_and_alpha_share_one_packed_word() {
+        let (mut vm, mut host) = fixture();
+        let h = vm.with_cx(|cx| host.ents.spawn_hud_elem(cx).unwrap());
+        vm.with_cx(|cx| {
+            let color = cx.intern_folded("color");
+            let alpha = cx.intern_folded("alpha");
+            let word = |host: &GameHost| host.ents.get(h).unwrap().engine[hud_slot("color")];
+            assert_eq!(word(&host), Value::Int(-1), "opaque white");
+
+            // dm.gsc's killcam bars: half alpha, colour untouched.
+            host.set_field(cx, h, alpha, Value::Float(0.5)).unwrap();
+            assert_eq!(word(&host), Value::Int(0x80ff_ffffu32 as i32));
+            assert_eq!(host.get_field(cx, h, alpha), Value::Float(128.0 / 255.0));
+
+            host.set_field(cx, h, color, Value::Vector([1.0, 0.0, 0.0]))
+                .unwrap();
+            assert_eq!(word(&host), Value::Int(0x8000_00ffu32 as i32), "red lane 0");
+            assert_eq!(
+                host.get_field(cx, h, color),
+                Value::Vector([1.0, 0.0, 0.0]),
+                "the alpha lane stays out of the vector"
+            );
+            assert!(host.set_field(cx, h, color, Value::Int(1)).is_err());
+        });
+    }
+
+    /// `label` takes a localized string and stores the index the client
+    /// resolves through configstring `1244 + n`, not the string.
+    #[test]
+    fn a_hud_label_stores_a_localized_index() {
+        let (mut vm, mut host) = fixture();
+        let h = vm.with_cx(|cx| host.ents.spawn_hud_elem(cx).unwrap());
+        vm.with_cx(|cx| {
+            let label = cx.intern_folded("label");
+            let key = Value::Localized(cx.intern_exact("MPSCRIPT_KILLCAM"));
+            host.set_field(cx, h, label, key).unwrap();
+            assert_eq!(host.get_field(cx, h, label), Value::Int(1));
+            assert_eq!(host.configstrings[1245], "MPSCRIPT_KILLCAM");
+        });
+    }
+
     /// A HUD enum field stores retail's index and reads back the name, the
     /// set/get hook pair retail hangs on the field record. The stock
     /// `startGame` writes `level.clock.alignX = "center"`, so a string has
     /// to be what the field takes -- but `"center"` alone proves nothing
     /// about the order, since it is index 1 of three either way, so every
-    /// name in all three tables is checked against its index here. Nothing
-    /// else in the tree reads the stored index yet.
+    /// name in all three tables is checked against its index here.
     #[test]
     fn the_hud_enum_fields_store_retails_indices_and_read_back_names() {
         const TABLES: &[(&str, [&str; 3])] = &[

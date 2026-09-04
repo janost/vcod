@@ -25,6 +25,11 @@ are mixed and each claim says which one it rests on:
   shared code, so the whole `PM_Weapon` family is in it, compiled from the
   same sources. Its image base is `0x30000000`. Where a claim was read there
   it says so, and where the `.so` confirms it the `.so` address is given too.
+- `cod_lnxded`, the 1.1d Linux dedicated server's **engine** executable. It
+  is stripped, so every engine function named below is my name for it and is
+  marked as such the first time it appears. Its first LOAD segment sits at
+  `0x08048000` with file offset 0, so a virtual address is the file offset
+  plus `0x8048000`.
 - `private/reference/CoDExtended/src/shared.h`, the community's struct
   headers. Only three things below rest on it, each labelled, and each is
   cross-checked against an offset the binary uses.
@@ -94,6 +99,22 @@ The fields the combat path reads, all VERIFIED out of that table:
 | `0x1F4` | `reloadStartTime` | `0x2EC` | `segmentedReload` |
 | `0x1F8` | `reloadStartAddTime` | `0x2F0` | `reloadAmmoAdd` |
 | `0x38C` | `adsSpread` | `0x2F8` | `altWeapon` (name) |
+| `0x24C` | `hipSpreadDecayRate` | `0x268` | `adsTransInTime` |
+| `0x250` | `hipSpreadFireAdd` | `0x26C` | `adsTransOutTime` |
+| `0x254` | `hipSpreadTurnAdd` | `0x3D4` | `adsReloadTransTime` |
+| `0x258` | `hipSpreadMoveAdd` | `0x25C` | `hipSpreadDuckedDecay` |
+| `0x260` | `hipSpreadProneDecay` | | |
+
+VERIFIED, `BG_SetupWeaponInfo` `0x36950`-`0x369a1`: `weapDef+0x414` and
+`weapDef+0x418` are not in the field table but derived at load, as
+`adsTransInTime > 0 ? 1.0 / adsTransInTime : 0.0033333` (`.rodata 0x724cc`)
+and `adsTransOutTime > 0 ? 1.0 / adsTransOutTime : 0.002` (`.rodata 0x724d0`),
+with both times read as the type-7 integer milliseconds they parse into. So
+the two are **reciprocal milliseconds** and the fallbacks are 300 ms in and
+500 ms out. VERIFIED, `0x38b23`: the fire-timer setter computes
+`weaponDelay = (int)((1.0 - ps->fWeaponPosFrac) * (1.0 / weapDef[0x414]))`
+for an `adsFire` weapon, which is a millisecond count only if `0x414` is
+per-millisecond.
 
 VERIFIED: `ammoName` is at 412 and the index at 416 (`0x1A0`), `clipName` at
 420 and the index at 424 (`0x1A8`), `altWeapon` at 760 and the resolved alt
@@ -127,6 +148,23 @@ committed combat fixtures used:
 | `adsSpread` | 0.4 | 0.1 |
 | `hipSpreadFireAdd` | 0.7 | 1 |
 | `hipSpreadDecayRate` | 4 | 3.25 |
+| `hipSpreadTurnAdd` | 0 | 0 |
+| `hipSpreadMoveAdd` | 8 | 8 |
+| `hipSpreadDuckedDecay` | 1 | 1.5 |
+| `hipSpreadProneDecay` | 1.1 | 1.2 |
+| `aimDownSight` | 1 | 1 |
+| `adsTransInTime` | 0.3 | 0.3 |
+| `adsTransOutTime` | 0.4 | 0.6 |
+| `adsReloadTransTime` | 0.6 | 0.6 |
+| `adsFire` | absent | absent |
+
+VERIFIED, over the 80 weapon files in the stock paks: `hipSpreadTurnAdd` is 0
+in 48 of them, absent in 27 and 0.8 in five, of which `bar_mp` and
+`bar_slow_mp` are MP; `adsFire` is set only on the two panzerfaust files, one
+of them `panzerfaust_mp`; `aimDownSight` is 1 in 52, absent in the 27 with no
+spread block at all (grenades, mounted MGs) and 0 in one SP file. INFERRED: an
+absent key reads as 0, since the parsed struct is zeroed and the field table
+only writes keys the file spells.
 
 ---
 
@@ -615,6 +653,85 @@ is the `& 1` arm, the ducked one the `& 2` arm, and the weapon-0 store is the
 `& 0x10` arm. INFERRED: so `0x1` is prone, `0x2` is crouch and `0x10` is the
 ladder.
 
+### 1.13 `ps.fWeaponPosFrac`, and the flag between the button and it
+
+VERIFIED: `game.mp.i386.so` holds exactly four stores to `ps+0xB8`. Three are
+in `PM_UpdateAimDownSightLerp` (`0x372FC`), at `0x3731E` (the immediate 0),
+`0x37446` (the ramp) and `0x37477` (the clamp); the fourth is `0x46B6E`, a
+`movl $0x0` on the spawn path. VERIFIED: the lerp is called once, from
+`PM_Weapon` (`0x390E0`) at `0x39143`, early in the function. VERIFIED: the
+client carries the identical function at `cgame_mp_x86.dll` `0x3000FC80` --
+same weapon-def offsets `0x2CC`, `0x2EC`, `0x3D4`, `0x414`, `0x418`, same
+`weaponstate` values, same `pm_flags & 0x20`, same clamp -- so this is shared
+bg code and the client predicts it off every snapshot.
+
+VERIFIED for every offset, immediate, weapon-def field and compare below;
+INFERRED for the ordering and every "when" and "unless", which are branch
+conditions.
+
+- `weapDef->aimDownSight` (`0x2CC`) 0: the fraction is stored 0 and nothing
+  else runs (`0x3730e`).
+- With `segmentedReload` (`0x2EC`) clear, the sight is refused while
+  `weaponstate` is 5 and `weaponTime - weapDef->adsReloadTransTime (0x3D4)`
+  is above 0 (`0x37342`-`0x3735a`). With it set, `weaponstate` 5, 6, 7 and 8
+  refuse outright and 9 refuses on the same time test (`0x37368`-`0x3738a`).
+- Otherwise the target is `ps->pm_flags & 0x20` (`0x37392`).
+- `weapDef->adsFire` (`0x2DC`) with `ps->weaponDelay` non-zero and
+  `weaponstate` 3 forces the target up whatever the flag says
+  (`0x3739d`-`0x373b7`).
+- The step is `+pml.msec * weapDef[0x414]` toward the sight (`0x37415`) and
+  `-pml.msec * weapDef[0x418]` back (`0x3743a`), clamped to 0..1
+  (`0x3744c`-`0x37477`). Both factors are the reciprocal milliseconds of
+  section 0, so it is a linear ramp over `adsTransInTime` / `adsTransOutTime`.
+
+The ramp reads no usercmd. `PM_UpdateAimDownSightFlag` (`0x37230`) writes the
+`pm_flags` bit it does read. VERIFIED: `PmoveSingle` calls it at `0x341C8`,
+`0x341E6`, `0x34200`, `0x3423D`, `0x3429A` and `0x342D3`, one per `pm_type`
+arm, each immediately before `PM_UpdatePlayerWalkingFlag`. Same labels as
+above:
+
+- `ps->pm_type > 5` clears (`0x37242`), and so does `cmd.buttons & 0x10`
+  being clear (`0x37247`) or `aimDownSight` being 0 (`0x37252`).
+- `weaponstate` 1, 2, 10 or 11 -- raise, holster, melee windup, melee relax --
+  clears (`0x3725b`-`0x3726e`).
+- `pml[0x30] == 0 && ps->pm_type != 1` clears (`0x37275`). `pml+0x30` is
+  INFERRED to be `groundPlane` from the Q3 `pml_t` layout, with `frametime`
+  at `+0x24` and `msec` at `+0x28` pinned by their use in the ramp; the offset
+  and the compare are VERIFIED. INFERRED: an airborne player cannot hold the
+  sight, and the fraction ramps down for the whole jump.
+- Otherwise, for a prone player (`pm_flags & 1`, `0x37283`) the flag is left
+  as it is when the *previous* cmd held the sight bit and either movement axis
+  is non-zero (`0x3728a`-`0x37295`), and is otherwise set together with
+  `pm_flags 0x400` (`0x3729e`). A player who is not prone just takes the flag
+  (`0x372a4`).
+- `BG_UpdateConditionValue(ps->clientNum, 7, (pm_flags & 0x20) ? 1 : 0, 1)`
+  at `0x372d8` / `0x372ef` is fed the flag, not the raw button. INFERRED:
+  animscript condition 7 is `ads`, so the animscript sees the gated form.
+
+VERIFIED: `PM_ClearAimDownSightFlag` (`0x3ABD4`) is the same
+`and byte [ps+0xc], 0xdf`, and `PmoveSingle` calls it once, at `0x33EF9`, in
+the early dead arm. VERIFIED: `PM_UpdatePlayerWalkingFlag` (`0x33694`) sets
+`pm_flags 0x80` only when `0x20` is set, the player is not prone, and
+`weaponstate` is not one of 5, 6, 7, 8, 9. INFERRED: `0x80` is the ADS walk
+slow-down, and it is off for the whole of a reload while `0x20` stays on.
+
+INFERRED, from the two rules together: the sight can be *asked for* during a
+reload -- the flag update excludes only `weaponstate` 1, 2, 10 and 11 -- but
+the fraction stays pinned at 0 until the reload has `adsReloadTransTime` left
+to run, which for `m1carbine_mp` is the last 600 ms of 2650 and for
+`mosin_nagant_mp` the last 600 of 2400. So the sight comes up at the tail of a
+reload and not at the key.
+
+**As implemented.** `crates/common/src/pmove/weapon.rs` carries all of the
+above: `update_ads_flag` the flag, `ads_pm_flags` the `0x20`/`0x80` pair for
+the wire, `advance_ads` the ramp, and `fire` the `adsFire` `weaponDelay`
+override. Three divergences, each deliberate. `pm_flags 0x400` is not
+modelled, since it is unnamed (section 10). The dead clear lives in
+`pmove::dead_move` rather than in the flag update, because no pmove step runs
+for a dead player at all, which leaves the fraction frozen where the death
+found it rather than ramping it down. And `pml.groundPlane` is read as
+`ps.on_ground`, the nearest thing vcod's mover carries.
+
 ---
 
 ## 2. `Bullet_Fire_Extended`: spread, the trace, and what a bullet does
@@ -647,17 +764,65 @@ clamped to 0..1. INFERRED: the settled stance picks one of the three outright
 and the blend is what a stance still lerping takes.
 
 `PM_AdjustAimSpreadScale` `0x385e8` (dll `0x30011050`) is what moves
-`aimSpreadScale` between shots. VERIFIED: the offsets, immediates, weapon-def
-fields and call targets named in the list below. INFERRED: the ordering, and
-every "when", "otherwise" and "skipped" in it, which are branch conditions.
+`aimSpreadScale` between shots. VERIFIED: `PmoveSingle` calls it once, at
+`0x340E0`, right after `BG_GetInfoForWeapon` (`0x340D6`) and before
+`PM_UpdateViewAngles` (`0x340FC`), so it runs on the raw usercmd angles, and
+before `PM_UpdateAimDownSightFlag` and `PM_Weapon`, so it reads the previous
+frame's `fWeaponPosFrac`. VERIFIED, `.rodata`: `0x72538` = 0.01,
+`0x7253C` = 0.5, `0x72540` = 0.0054931640625 (`SHORT2ANGLE`, 360/65536),
+`0x72544` = 1.28, `0x72548` = 255.0. VERIFIED: the offsets, immediates,
+weapon-def fields, constants and the `AngleSubtract` call target named in the
+list below. INFERRED: the ordering, and every "when", "otherwise" and
+"skipped" in it, which are branch conditions.
 
-- It subtracts `hipSpreadDecayRate` (`0x24C`) scaled by the frame time,
-  multiplied by `hipSpreadDuckedDecay` (`0x25C`) when `eFlags & 0x20` is set
-  and by `hipSpreadProneDecay` (`0x260`) when `eFlags & 0x40` is set.
-- It adds `hipSpreadTurnAdd` (`0x254`) per view-angle delta and
-  `hipSpreadMoveAdd` (`0x258`) when either movement axis is non-zero.
-- It skips all of the additions when `ps->fWeaponPosFrac == 1.0`.
-- It clamps the result to 0..255.
+- The decay starts at `hipSpreadDecayRate` (`0x24C`, at `0x385f8`). A decay of
+  0.0 short-circuits the whole function to `add = 0, decay = 1.0` with no
+  frame-time scaling (`0x3860a` / `0x38754`), which is -255 a frame: a weapon
+  with no decay rate slams the counter shut and holds it there.
+- `airborne` is `ps->groundEntityNum == 1023 && ps->pm_type != 1`
+  (`0x38619`). Airborne halves the decay (`0x38628`); otherwise `eFlags & 0x40`
+  multiplies it by `hipSpreadProneDecay` (`0x260`, at `0x3863c`) and
+  `eFlags & 0x20` by `hipSpreadDuckedDecay` (`0x25C`, at `0x38648`). The three
+  arms are exclusive and airborne wins. The decay is then scaled by
+  `pml.frametime` (`0x3864e`).
+- The additions are skipped whole when `ps->fWeaponPosFrac == 1.0`
+  (`0x38657`), an exact float compare, and in cgame an exact integer one
+  against `0x3F800000`. The decay is not skipped, so a settled sight decays
+  to 0 whatever the player does.
+- With `hipSpreadTurnAdd` (`0x254`) non-zero (`0x38676`), axes 0 and 1 each
+  add `fabs(AngleSubtract(SHORT2ANGLE(cmd.angles[i]),
+  SHORT2ANGLE(oldcmd.angles[i]))) * 0.01 * hipSpreadTurnAdd / pml.frametime`
+  (`0x3868e`-`0x386ed`). The input is a usercmd angle delta across one pmove
+  step, not `ps->viewangles` and not a delta across a server frame.
+- `hipSpreadMoveAdd` (`0x258`) non-zero (`0x386fe`) with either of
+  `cmd.forwardmove` / `cmd.rightmove` non-zero (`0x38712`) adds it flat
+  (`0x38719`); airborne adds 1.28 twice (`0x3873c`-`0x3874a`). The whole add
+  is then scaled by `pml.frametime` (`0x38750`).
+- The result is `aimSpreadScale += (add - decay) * 255.0`
+  (`0x3876d`-`0x3877a`), clamped to 0..255 (`0x38780`-`0x387b5`).
+
+INFERRED: the turn term divides by the frame time inside the loop and the
+whole add multiplies by it again, so the turn term is frame-rate independent
+(`|dAng| * 0.01 * turnAdd * 255` per frame) while the move and airborne terms
+are not. The `fdiv` at `0x386d6` and the `fmul` at `0x38750` are both in the
+`.so`, so this is not a decompiler artifact.
+
+The shot's own add is `PM_Weapon`'s, not `FireWeapon`'s: section 1.5, step 8,
+`hipSpreadFireAdd * 255.0` with the same `fWeaponPosFrac == 1.0` skip. Both
+the per-frame delta and the per-shot add carry the same `* 255.0`.
+
+With the stock numbers of section 0 this makes the move term decisive and the
+turn term invisible: 8 against the carbine's decay of 4 saturates the counter
+in five 50 ms frames and holds it at 255 for as long as an axis is held, while
+both fixture weapons spell `hipSpreadTurnAdd 0`. Both retail motion captures
+agree -- 255.0 at every pose with a movement axis, standing, crouched or
+prone, and 0.0 at every pose without one.
+
+**As implemented.** `pmove::weapon::adjust_aim_spread_scale`, called first of
+all in `pmove` so it keeps retail's position ahead of the view update and the
+flags. The turn term is written as the product the divide and the multiply
+reduce to, which is the same number and does not divide by a zero-length
+frame. A weapon index with no file behind it takes the `decay == 0` arm.
 
 ### 2.2 The cone
 
@@ -696,17 +861,17 @@ VERIFIED: the trace is `trap_LocationalTrace(&trace, start, end,
 passEnt->s.number, 0x02802031, priorityMap)`. VERIFIED: the two candidates
 for `priorityMap` are `riflePriorityMap` and `bulletPriorityMap`, selected off
 a test of `weaponDef->rifleBullet` (`0x2C0`) at `0x688ef`. INFERRED:
-`riflePriorityMap` is the one a `rifleBullet` weapon takes. INFERRED: the
-trace is per-bone rather than against the link box, because it returns a
-hit-location index (2.4) and takes a per-hit-location priority table as an
-argument; the link box has no such partition.
+`riflePriorityMap` is the one a `rifleBullet` weapon takes. VERIFIED: the
+trace is per-bone rather than against the link box; what walks the bones and
+what the priority map does there is section 3.
 
 VERIFIED: the trace result at `[ebp-0x30]` is read at these offsets --
-`+0` fraction, `+4` endpos, `+16` normal, `+28` surface flags, `+32` a second
-flag word, `+40` a 16-bit entity number, `+44` a 16-bit hit location.
-VERIFIED: bit `0x4` of `+28` suppresses the impact effect, and bits 20 to 24
-of the same word are shifted down into the temp entity's `surfType`
-(`entityState+136`).
+`+0` fraction, `+4` endpos, `+16` normal, `+28` surface flags, `+32` the hit
+entity's contents mask, `+40` a 16-bit entity number, `+44` a 16-bit hit
+location. The full 48-byte layout, including the two fields this caller does
+not read, is in section 3. VERIFIED: bit `0x4` of `+28` suppresses the impact
+effect, and bits 20 to 24 of the same word are shifted down into the temp
+entity's `surfType` (`entityState+136`).
 
 VERIFIED: `bulletPriorityMap` is 19 bytes at `0x7DD6C` and `riflePriorityMap`
 19 bytes at `0x7DD7F`, one byte per hit location in the index order of
@@ -734,10 +899,12 @@ section 3:
 | 17 | `left_foot` | 3 | 3 |
 | 18 | `gun` | 0 | 0 |
 
-INFERRED: the map is a per-location weight the engine trace resolves ties
-with, so a rifle bullet grazing both a leg and the head is scored as the head,
-a pistol bullet scores whichever of the two the geometry gives first, and
-`gun` at 0 is never preferred over anything.
+VERIFIED, out of the bone loop that reads the table (section 3): the map is a
+per-location weight the engine trace ranks candidates by, and it beats
+distance -- a rifle bullet crossing both a leg and the head is scored as the
+head however far behind the leg the head is, a pistol bullet, whose map is
+flat, scores whichever of the two it reaches first, and `gun` at 0 is never
+scored at all.
 
 ### 2.4 What the impact does
 
@@ -756,7 +923,8 @@ numbering, and every "when", "unless" and "otherwise" in it.
    is the
    shooter's entity number. The client side of that temp entity is
    `docs/research/cod11-events-and-fx.md`, `EV_BULLET_HIT_*`.
-3. With bit `0x10` of the trace's `+32` word set, the bullet continues:
+3. With bit `0x10` of the trace's contents mask (`+32`) set, the bullet
+   continues:
    `start` is moved to `trace.endpos` nudged along the ray by `0.25 / d` where
    `d` is minus the dot of the normal with the ray and the nudge is skipped
    when `d <= 0.125`, and the function recurses at the same damage with
@@ -840,26 +1008,244 @@ therefore holds interned script strings, not configstring numbers.
 **No box partition, no angle test.** VERIFIED: the index does not come from
 any code in `game.mp.i386.so`; it arrives as the 16-bit field at offset 44 of
 the `trap_LocationalTrace` result and goes straight into
-`g_fHitLocDamageMult[]` and into script. INFERRED: the partition therefore
-lives in the engine binary, is per-bone rather than per-height-fraction, and
-is steered from the game module only by the priority map of section 2.3.
+`g_fHitLocDamageMult[]` and into script. VERIFIED: the partition lives in the
+engine binary, which is what the rest of this section reads.
 
-**As implemented.** vcod has no per-bone trace, so
-`crates/server/src/game/combat.rs::hitloc` partitions the victim's link box
-by the hit point's height fraction and lateral offset, in the body's own
-yaw frame. INFERRED, all of it: helmet at and above 0.94 of the box height,
-head 0.85 to 0.94, neck 0.80 to 0.85, torso_upper 0.55 to 0.80, torso_lower
-0.40 to 0.55, and below that the legs, upper to 0.20, lower to 0.05, foot
-under; at torso heights a point more than 0.6 of the half width off the
-centre line is an arm, upper at and above 0.65, lower to 0.55, hand below;
-left and right by the sign of the lateral offset. The one measurement it is
-fitted to is 8.4's: a level shot from eye height, 60 of the 70-unit standing
-box (0.857), read `head` on retail, since the obituary carried
-`MOD_HEAD_SHOT` and `tdm.gsc` sets that only on `sHitLoc == "head"`; the
-head band starts at 0.85 so that shot reads `head` here too. Nothing pins
-any other boundary.
+### 3.1 Where the index comes from: a ray against per-bone boxes
 
-### 3.1 The multiplier table and what a missing file does
+VERIFIED: the index is produced by a ray against per-bone oriented boxes on
+the entity's posed skeleton, with a per-bone bounding sphere as the broad
+phase and the `priorityMap` argument of 2.3 as the ranking. VERIFIED: both the
+box and the hit-location byte ship per bone in the `xmodelparts` file
+(`docs/research/xmodel-v14-format.md`), so nothing is hardcoded and nothing is
+keyed on a bone name.
+
+**The dispatch chain.** VERIFIED, `game.mp.i386.so`: `trap_LocationalTrace`
+is at `0x63948`, and its body pushes the immediate `0x2b` before the indirect
+call through the syscall pointer at `0x7ec10`, so the trap number is 43.
+(CoDExtended's `shared.h:1145` says 46; its enum carries three traps 1.1 does
+not have and is off by +3 across this range.) VERIFIED, `cod_lnxded`: the
+game syscall dispatcher, my name `SV_GameSystemCalls`, is at `0x8087dcc`; it
+reads `args[0]`, rejects anything above `0xd3` and jumps through the
+212-entry table at `0x80d4eac`, whose default arm at `0x8089100` prints
+`"Bad game system trap: %i"` (`0x80d4e8c`). VERIFIED: table entry 43 is
+`0x8088316`, and that case pushes eleven arguments and calls `0x80916f4`.
+INFERRED, mapping the pushes back to the trap's arguments: the call is
+`SV_Trace(results, start, mins=NULL, maxs=NULL, end, passEntityNum,
+contentmask, 0, locational=1, priorityMap, staticmodels=1)`. VERIFIED:
+`0x80916f4` is the same address CoDExtended calls directly
+(`private/reference/CoDExtended/src/sv_world.c:20`), and the prototype
+published there names the `locational` flag and the `char *priorityMap`,
+which confirms the tail of that signature independently.
+
+**Per entity: pose first, then the bone trace.** VERIFIED, the operands,
+offsets, immediates and call targets in this list are read out of the
+instructions of `SV_ClipMoveToEntity` (my name, `0x809105c`); INFERRED, its
+ordering and its conditions, read off the branches.
+
+- A null `mins`/`maxs` is replaced with `0x80cdfc8`, three zero floats, in the
+  caller; the world trace runs first and the entity pass is driven from a clip
+  struct handed to `0x805a708`, which recurses through the area-node tree at
+  `0x8059e94` and calls this function once per entity in a leaf.
+- The clip struct built at `0x80917de` holds `start` at `+0x00`, `end` at
+  `+0x0c`, the `trace_t` at `+0x18`, `passEntityNum` at `+0x48`, the pass
+  entity's owner at `+0x4c`, the contentmask at `+0x50`, the `locational` flag
+  at `+0x54` and `priorityMap` at `+0x58`.
+- `0x80910c5`: the per-bone path is taken only when `locational` is non-zero,
+  the entity resolves to a model record, and `gentity+0xf4 & 6` is non-zero.
+  Bit `0x4` selects a brush trace (`0x80c52c0`); bit `0x2` without `0x4` is the
+  animated-model arm, and it is the only one handed the `priorityMap`.
+- `0x8091236`: a ray/AABB reject against the entity's bounds runs before any of
+  the expensive work. The link box is therefore a broad phase and nothing more:
+  a ray can clip it and score no bone, and that is a miss.
+- `0x809124c` calls `vmMain` with export id 13. VERIFIED, `game.mp.i386.so`
+  `vmMain` `0x50dd4`, jump table at `.rodata 0x75728`, 21 entries: entry 13 is
+  `0x50ed0`, which computes `&g_entities[arg]` and calls `G_DObjCalcPose`
+  (`0x67314`). The engine asks the game module to pose exactly the entity it is
+  about to trace, immediately before tracing it.
+- `0x8066520` transforms the clip's `start` and `end` into the entity's local
+  frame, so the bone trace works entirely in entity space, and `0x80c4564` (my
+  name `SV_LocationalTraceModel`) is called with `(model, localStart, localEnd,
+  priorityMap, &localResult)`, its fraction seeded with the clip's current best.
+
+**What poses the entity.** VERIFIED, `G_DObjCalcPose` (`0x67314`), the whole
+function: it memsets a 16-byte bone mask to `0xff`, calls
+`trap_DObjCreateSkelForBones(ent, mask)` and returns early when that is
+non-zero, then `trap_DObjCalcAnim(ent, mask)`, then the per-entity hook at
+`ent+0x220` when it is non-null, then `trap_DObjCalcSkel(ent, mask)`.
+INFERRED: the skeletal math is the engine's and the game module owns only
+which animations are playing. VERIFIED: the only other caller of the pose
+path is `ClientEndFrame`, and there only when the `g_debugLocDamage` cvar is
+set, followed by `trap_XModelDebugBoxes`. INFERRED: on a normal frame the
+server updates the DObj's model list and animation weights but does not run
+the skeleton, and the matrices are computed lazily by the trace that needs
+them.
+
+VERIFIED, `BG_UpdatePlayerDObj` (`0x2bd80`): it frees and rebuilds the DObj
+when the model set changed, walking six attachment slots (`+0x7c`, stride
+`0x40`, each a model name resolved by `trap_XModelGet`) plus the base model,
+and hands the list to `trap_DObjCreate`. INFERRED: the head and the helmet are
+therefore DObj parts, and the skeleton the trace walks is the grafted
+body-plus-attachments one. VERIFIED, `BG_PlayerAnimation` (`0x2c1f4`): it
+calls the anim-condition updaters and then works through `Scr_GetAnimsIndex`
+and `trap_XAnimGetWeight` on the DObj's anim tree. INFERRED: the pose is the
+blended animtree state the animscript machine drives, so stance, lean and aim
+pitch are all in it, and `legsAnim`/`torsoAnim` are the wire projection of the
+same state rather than its source.
+
+**The bone loop.** VERIFIED, `0x80c4564`, the same two-label rule as above --
+operands and targets out of the instructions, ordering and conditions off the
+branches:
+
+- `dobj+0x16` (u8) is the part count and `dobj+0x18[]` the array of part
+  pointers; each part chain lands on a skeleton record whose `+0x0` points at
+  the bone-name array, `+0x4` (s16) is the root-bone count, `+0x8` the per-bone
+  box array with a stride of `0x28`, and `+0x14` the per-bone hit-location byte
+  array.
+- `0x80c4db0` is the bone-matrix accessor, `dobj->4 + dobj->0x50[part] * 64 +
+  0x30`: `dobj->0x50` is a per-part byte giving that part's first bone in the
+  combined skeleton, and each bone matrix is 64 bytes, three 16-byte rows plus
+  the translation at `+0x30`.
+- Per bone, `hl` is the hit-location byte and `prio` is `priorityMap[hl]`.
+  VERIFIED: `hl` indexes the 19-byte map directly, so it is the hit-location
+  index of the table above.
+- INFERRED, branches at `0x80c46e7` and `0x80c4716`: a bone whose `prio` is 1 --
+  which for both shipped maps means `hl == 0`, `none` -- inherits, from the
+  DObj's remap list when this bone is the next one it lists, otherwise from its
+  parent bone within the part, and for a part's root bones from `dobj->0x48[i]`
+  where `0xff` means `none`. The effective code is written into a local array so
+  later bones inherit through it. INFERRED: this is what gives an attached
+  model's roots the hit location of the body bone they hang off.
+- `0x80c479a`: the bone is skipped when its sphere radius (box record `+0x24`)
+  is zero, and when `bestPriority > prio`. `bestPriority` starts at 2, so `none`
+  (1) and `gun` (0) bones are never traced.
+- Broad phase: the bone's sphere centre (box record `+0x18`) is transformed to
+  entity space by the bone matrix and the segment's closest approach is compared
+  against the radius; when `prio` equals the current best, a second early-out
+  compares that approach against the fraction already found.
+- Narrow phase: `start` and `end` are transformed into the bone's own frame by
+  the bone matrix and a six-plane slab test runs against `boxRecord+0x00`
+  (mins) and `boxRecord+0x0c` (maxs).
+- On a hit at `0x80c4c21` onward: an equal `prio` is discarded unless it is
+  nearer than the fraction already stored, and a differing one -- necessarily
+  greater, by the skip above -- raises `bestPriority` and takes the hit
+  regardless of distance. The result gets the fraction, the bone's name id, the
+  effective hit-location code, and a normal that is a signed row of the bone
+  matrix.
+- A segment that starts inside a box sets the two flag bytes at `+0x18`/`+0x19`
+  of the local result, zeroes the fraction and returns at once.
+
+So the engine's box record is 40 bytes, `{ vec3 mins; vec3 maxs; vec3
+sphereCentre; float radius }`. The file supplies the first 24; INFERRED that
+the engine derives the sphere from them at load, since the file carries nothing
+else.
+
+### 3.2 The 48-byte trace result
+
+Pinned field by field from the writes in `SV_ClipMoveToEntity` and
+`SV_LocationalTraceModel`.
+
+| off | size | field | evidence |
+|---|---|---|---|
+| 0 | f32 | `fraction` | VERIFIED, seeded from the clip and compared throughout |
+| 4 | 3xf32 | `endpos` | VERIFIED, `start + fraction * (end - start)` at `0x8091352` |
+| 16 | 3xf32 | `normal` | VERIFIED, the local normal rotated to world at `0x809134a` |
+| 28 | i32 | `surfaceFlags` | VERIFIED; zero for a bone hit, the model trace zeroes it |
+| 32 | i32 | contents of the hit entity | VERIFIED, `gentity+0x118` copied at `0x8091472` |
+| 36 | ptr | texture name | VERIFIED, written 0 for an entity hit at `0x809146b` |
+| 40 | u16 | `entityNum` | VERIFIED, `*(u16*)gentity` at `0x8091464` |
+| 42 | u16 | bone name id | VERIFIED, the winning bone's name id |
+| 44 | u16 | `hitLoc` | VERIFIED, the winning bone's effective hit-location code |
+| 46 | u8 | all-solid | VERIFIED written and OR-merged; INFERRED name |
+| 47 | u8 | start-solid | VERIFIED written and OR-merged; INFERRED name |
+
+Two corrections this forces on what used to be here. `+32` is the hit entity's
+contents mask, not a second flag word, which is why a bit in it (`0x10`) is
+what makes a rifle bullet continue (2.4, step 3). And CoDExtended's
+`shared.h:371` labels offset 44 `surfaceFlags` with an in-source admission that
+it is a guess: it is the hit location, and the `allsolid` / `startsolid` its
+comment goes looking for are the two bytes at 46 and 47.
+
+VERIFIED: a world or brush hit leaves `hitLoc` 0 (`none`), because only the
+bone trace ever writes it.
+
+### 3.3 Where the boxes live
+
+VERIFIED, parsed out of the stock paks: every `xmodelparts` entry carries a
+bone-space AABB in the 24 bytes after each bone name and a hit-location byte
+per bone after the name block, and all 725 non-empty entries in `pak0-6` parse
+to exact EOF with the trailing byte only ever taking values 0..18. The layout
+is in `docs/research/xmodel-v14-format.md`.
+
+VERIFIED, `xmodelparts/USAirborne3`, the LOD0 of all 17 `playerbody_*` models:
+`tag_origin` is 0; the pelvis and lower spine chain to `torso_lower`; `bip01
+spine2`, `back_up` and the breast-pocket tags to `torso_upper`; `bip01 neck` to
+`neck`; `bip01 head` to `head`; `tag_helmet` and `tag_helmetside` to `helmet`;
+each clavicle and upperarm to the matching `arm_upper`, forearm to `arm_lower`,
+hand and its fifteen finger bones to `hand`; thigh to `leg_upper`, calf to
+`leg_lower`, foot and toe to `foot`; and `tag_weapon_left` /
+`tag_weapon_right` to 18, `gun`. VERIFIED: on the playerbody the head and neck
+boxes are all-zero, as is every `tag_*`; the head boxes live in the attached
+head model, where `xmodelparts/basehead21` gives `bip01 head` code 2 with a
+real box, `bip01 neck` code 3 and every facial bone code 2. INFERRED, from
+the radius skip above: an all-zero box is how the artist turns a bone off.
+
+VERIFIED: `xmodel/playerbody_american_airborne` parses to exact EOF with
+`collision_lod = -1` and no collision surfaces, so a player model carries no
+collision LOD at all and the per-bone box is the only hit geometry there is.
+
+VERIFIED: there is no `hitloc` csv, txt or shader anywhere in the paks. The
+only files naming the 19 locations are `info/mp_lochit_dmgtable`,
+`info/ai_lochit_dmgtable`, the gametype scripts, `animscripts/death.gsc`,
+`animscripts/pain.gsc` and the game module's string pool.
+
+INFERRED, worth keeping for verification later: `g_debugLocDamage 1` on the
+retail server is a per-frame `G_DObjCalcPose` plus `trap_XModelDebugBoxes`,
+the engine's own visualisation of exactly these boxes. It draws client-side,
+so a headless probe cannot see it.
+
+### 3.4 As implemented
+
+vcod runs the same trace. `vcod_common::bonetrace::bone_trace` walks the posed
+skeleton's per-bone boxes in each bone's own frame and ranks candidates by the
+weapon's priority map, with `bestPriority` starting at 2, ties going to the
+nearer hit and a start-solid returning at once;
+`crates/server/src/game/combat.rs` picks `riflePriorityMap` or
+`bulletPriorityMap` off `rifleBullet`, keeps the link box as the broad phase
+only, and takes the first candidate whose bones the segment actually scores.
+The height-fraction partition that used to stand here is gone.
+
+The victim is posed per shot, not per frame, out of the same grafted
+body-plus-head-plus-helmet skeleton the client draws
+(`crates/server/src/game/hitrig.rs`): the legs and torso clips the animscript
+picked, each at the phase its channel started at, then the spine aim layer.
+Three deliberate gaps, none of them measured against retail:
+
+- No cross-fade between an outgoing and an incoming clip. The client's draw
+  path blends over 200 ms; a shot poses one instant with the incoming clip at
+  full weight.
+- The aim layer is the client's `apply_aim`, whose per-bone weights are a
+  stand-in: `BG_Player_DoControllers`' own constants are not decoded
+  (`docs/research/player-model-anim-system.md`). It is fed the victim's view
+  pitch as the torso pitch and zero as the waist pitch, since this server
+  sends neither `fTorsoPitch` nor `fWaistPitch` and there is nothing better to
+  read.
+- A client whose models will not load has no rig, and its hits carry `none`,
+  which the shipped multiplier table reads as full damage. Retail has no such
+  state.
+
+What is measured is one point: 8.4's level shot from eye height, 60 units up a
+70-unit standing box, read `head` on retail, and it reads `head` here through
+the bone trace when the victim faces the shooter. Nothing else is pinned, and
+head-versus-neck for the same shot into the back of a standing player is
+open -- vcod reads `neck` there. `--probe-sweep`
+(`crates/client/src/probe.rs`) is what settles the rest: it taps once per
+entry of a table of pitch offsets and echoes the offset on its `!trace` line,
+and the retail server logs `sHitLoc` per hit in its `games_mp.log` `D;`
+records with no configuration at all, so one run against retail and one
+against ours label every shot on both sides.
+
+### 3.5 The multiplier table and what a missing file does
 
 VERIFIED, `G_ParseHitLocDmgTable` `0x498b0`: a loop over indices 0 to 0x12
 writes `1.0f` into `g_fHitLocDamageMult` (`0x16F080`, 0x4c bytes, one float
@@ -1199,9 +1585,46 @@ field and source in the table below, read off the store that writes it.
 | `s.legsAnim` (`entityState+204`) | `client->ps.legsAnim` |
 | `s.torsoAnim` (`entityState+208`) | `client->ps.torsoAnim` |
 | bounds | `self+0x100..0x114` and `self+0x11C..0x130`, copied float by float |
-| `+0xF4` | the literal `0x200` |
-| `+0x161` | the literal 1 |
-| `+0x190` | the literal `0x10001` |
+| `r.svFlags` (`+0xF4`) | the literal `0x200`, `SVF_CAPSULE` |
+| `physicsObject` (`+0x161`) | the literal 1 |
+| `clipmask` (`+0x190`) | the literal `0x10001` |
+
+Everything in that table is a **spawn-time** value. `pos.trType` 5,
+`pos.trDelta` and `groundEntityNum` 1023 last one or two frames; what a client
+is sent for the rest of the body's life is the settled trajectory 5.3
+describes.
+
+The three named offsets, anchored on CoDExtended's `struct gentity_s`
+(`src/shared.h`) with `svFlags` at `+0xF4` putting `sizeof(entityState_t)` at
+`0xE4`, and confirmed at their use sites:
+
+- `+0xF4 = 0x200` is `r.svFlags` = `SVF_CAPSULE` (`CoDExtended/src/server.h:40`
+  defines `SVF_CAPSULE 0x00000200`). VERIFIED: `G_RunEntity` 0x5034C/0x50355
+  mirrors `s.eFlags & 0x10` into `+0xF5` bit `0x2` every frame, `G_RunItem`
+  0x4EB8A and `G_BounceItem` 0x4E956 branch on the same `s.eFlags & 0x10` to
+  pick `trap_TraceCapsule`, and a live client takes the identical
+  `+0xF4 = 0x200` at 0x4258F.
+- `+0x161 = 1` is `physicsObject` (`shared.h:942 char physicsObject;`, one
+  byte past `inuse` at `+0x160`). VERIFIED: it has exactly one writer in the
+  whole `.text`, this store, and three readers: `G_RunEntity` 0x503E8,
+  `G_TryPushingEntity` 0x553F3 and a script-command check at 0x5D621.
+- `+0x190 = 0x10001` is `clipmask`. VERIFIED: `G_RunItem` 0x4EB76 reads it as
+  the trace mask and falls back to `0x491` when it is 0. The other writers are
+  `0x2810011` (0x42732, client spawn), `0x81` (0x4DCA1) and `0x2802091`
+  (missiles).
+
+`+0x118`, the word between the two copied runs, is `r.contents`. VERIFIED:
+`G_FreeEntity` ends in `bzero(ent, 0x314)` (0x66B97) and nothing on the clone
+path writes the word, so a retail corpse has `r.contents == 0` and nothing
+traces against it; the `+0x118 = 0x4000000` `player_die` writes at 0x49C28
+goes on the dying player's own entity.
+
+VERIFIED: `G_SetOrigin` 0x67D38 writes `pos.trBase` and then zeroes `trDelta`,
+`trType`, `trTime` and `trDuration`, which is why the clone's own trajectory
+stores come after it, and do. VERIFIED: `player_die` 0x49A48 has no store to
+`client->ps.velocity` -- its only float stores through a client pointer are
+`ps.viewangles` at 0x49D30/0x49D42/0x49D54 -- so the velocity the clone copies
+at 0x445CA is the live one the dying player carried.
 
 VERIFIED: `+0x118`, the word between the two copied runs, has no store.
 VERIFIED: the function also calls `trap_LinkEntity` and `GScr_AddEntity` and
@@ -1222,10 +1645,13 @@ project already observed live (`AGENTS.md`, "Netcode debugging").
 builtin in `crates/server/src/game/builtins/client.rs`). The clone is written
 onto an empty entity state rather than a copy of the player's, and it carries
 the table's `eType`, `clientNum`, `legsAnim`, `torsoAnim`, `eFlags` with the
-slot's toggled bit 8, `groundEntityNum`, `pos.trType`, `pos.trTime`,
-`pos.trBase`, `pos.trDelta` and `apos.trBase`. The `0x800` marker and its
-250 ms think are left out: no capture we hold carries a corpse's `eFlags`, so
-there is nothing to check the pair against.
+slot's toggled bit 8 and the `0x800` marker, `groundEntityNum`, `pos.trType`,
+`pos.trTime`, `pos.trBase`, `pos.trDelta` and `apos.trBase`, and is then
+settled in place the way 5.3 describes, since there is no per-frame item
+physics to settle it a frame later. The 250 ms think that clears `0x800` runs
+in `ScriptRuntime::run_frame`, beside the object table's own thinks. What is
+left out of the settle is the ground-plane re-orientation and the NODROP
+free.
 
 Where the state comes from is a two-step arrangement retail does not need.
 A builtin cannot reach a client's sim, so `Server::replay_moves` mirrors each
@@ -1256,7 +1682,107 @@ off the player, because the stock death path re-gives the loadout on respawn
 and nothing else calls the builtin yet. And it arms `ThinkFn::Free` 30 000 ms
 out (`DROPPED_ITEM_MS`), because pickup on touch does not exist: with retail's
 lifetime every death would leave an item that never goes away. The timer is a
-placeholder for the touch path, not a claim about retail.
+placeholder for the touch path, not a claim about retail. The drop runs the
+same `drop_item_to_floor` a placed weapon does, which stands in for the
+`LaunchItem` launch and the `G_RunItem` settle behind it: the wire then reads
+`pos.trType` 0 with `groundEntityNum` 1022, which is what all 133 item samples
+in `crates/server/tests/fixtures/entities/` carry.
+
+### 5.3 The corpse runs item physics, and settles
+
+The clone is a `physicsObject` (`+0x161 = 1`), and that is what puts it
+through the item physics every frame it exists.
+
+VERIFIED, `G_RunFrame` 0x50478: the loop at 0x50930 walks
+`i < level.num_entities` and calls `G_RunEntity` (0x502BC) for every `inuse`
+entity (0x50955); 64..71 are inside `num_entities`. VERIFIED, `G_RunEntity`
+0x502BC dispatch order: the framenum guard (0x502CB); `s.eFlags & 0x10`
+mirrored into svFlags (0x5034C); `eType == 4` to `G_RunMissile` and `== 3` to
+the item path; then 0x503E8 `cmp BYTE PTR [ebx+0x161], 0` with non-zero going
+to `G_RunItem` (0x503F1); only then `eType` 5/8 to `G_RunMover`,
+`ent->client` to `G_RunClient`, and last the bare think. So a clone, `eType`
+2, reaches `G_RunItem` on its `physicsObject` byte alone.
+
+VERIFIED, `G_RunItem` 0x4EB18:
+
+- 0x4EB24: when `groundEntityNum == 0x3FF` and `pos.trType != 5`, `trType`
+  becomes 5 and `trTime` the level clock -- airborne implies gravity.
+- 0x4EB42: when `trType` is 0 or 8, run the think and return. A settled body
+  costs one think a frame and nothing else.
+- 0x4EB71: `BG_EvaluateTrajectory(&s.pos, level.time, newOrigin)`.
+- 0x4EB76: `mask = ent->clipmask ? : 0x491`, which is where the clone's
+  `0x10001` is used.
+- 0x4EB8A: `trap_TraceCapsule` (or `trap_Trace`) from `r.currentOrigin` to
+  `newOrigin` with the entity's own box, `passEntityNum = r.ownerNum`.
+- 0x4EBED: `r.currentOrigin = trace.endpos`; 0x4EC19/0x4EC22
+  `trap_LinkEntity` and `G_RunThink`.
+- 0x4EC33: on `trace.fraction != 1`, a non-zero `trap_PointContents` frees the
+  entity -- a body landing in a NODROP brush is deleted -- and otherwise
+  `G_BounceItem` 0x4E858 runs.
+
+VERIFIED, `G_BounceItem` 0x4E858, the settle:
+
+- the reflection `trDelta = v + n * (v.n * -2.0)` (`.rodata` 0x74E44), then
+  `trDelta *= ent->physicsBounce` (`+0x18C`) at 0x4E90B.
+- 0x4E916: on startsolid, zero `trDelta` and re-trace 128.0 units straight
+  down.
+- 0x4E9BB `trace.plane.normal[2] > 0` and 0x4E9D1 `40.0 > trDelta[2]`
+  (`.rodata` 0x74E4C) gate the settle itself:
+  - 0x4EA02: `trace.endpos[2] += rand() * -2^-31 * 0.5 + 0.5`, a random lift
+    in (0, 0.5].
+  - 0x4EA13: `G_SetOrigin(ent, trace.endpos)`, so `pos.trType = 0`,
+    `pos.trDelta = 0`, `pos.trTime = 0` and `pos.trBase` at the endpoint.
+  - 0x4EA1F: `s.groundEntityNum = (u16)trace.entityNum`.
+  - 0x4EA44-0x4EAA7: `AngleVectors`, two `CrossProduct` and `AxisToAngles`
+    against the plane normal, then `G_SetAngle` -- the body is re-oriented
+    flat to the ground.
+  - 0x4EAB3: `trap_LinkEntity`.
+- otherwise, still airborne (0x4EAC0): `r.currentOrigin += plane.normal`,
+  `pos.trBase = r.currentOrigin`, `pos.trTime = level.time`.
+
+INFERRED, from the multiply at 0x4E90B: a clone never bounces. It never writes
+`physicsBounce` and `G_FreeEntity` bzeroed the slot, so the reflected velocity
+is multiplied to zero and the first contact settles it. INFERRED, from the two
+`G_RunItem` guards: once `trType` is 0 and `groundEntityNum` is not 0x3FF the
+body never moves again.
+
+VERIFIED, corroborating that `groundEntityNum` is a live physics field rather
+than a static marker: `G_FreeEntity` 0x66B0E scans every entity and resets
+`+0x7C` to `0x3FF` wherever it pointed at the freed one.
+
+**The client does not settle anything.** VERIFIED, `cgame_mp_x86.dll`:
+`CG_CalcEntityLerpPositions` (0x3001d210) sends only `trType == 1`, and
+`trType == 3` with `number < 64`, to snapshot interpolation (0x3001d090);
+everything else, a corpse included, is `BG_EvaluateTrajectory` on `pos` and
+`apos` straight into `lerpOrigin` and `lerpAngles`. VERIFIED (negative): there
+is no trace and no collision syscall anywhere in the `eType` 2 add path
+(`CG_AddCEntity` 0x3001d5f0 case 2 is `FUN_30028400`; every call reachable one
+level from it was enumerated and they are the DObj fetch, the anim update, an
+`AnglesToAxis` and the refent submit). So a body left under `TR_GRAVITY` falls
+on the client's parabola without bound -- 4 units after 100 ms, 400 after a
+second -- and only the server's settle stops it.
+
+**The corpse's animation is its own `legsAnim` and `torsoAnim`.** VERIFIED:
+`FUN_30004e40` (0x30004e40), shared by the player and the corpse add, reads
+`entityState+0xcc` and `entityState+0xd0` and pushes each into the legs
+(record+0x37c) and torso (record+0x3ac) channels. There is no client-side
+death-anim pick. VERIFIED: `FUN_30003be0` (0x30003c3e) derives `CG_SetAnim`'s
+third argument as `entityState.eFlags >> 11 & 1`, and `CG_SetAnim`
+(0x300036b0), for an anim whose table flags carry 0x40 -- the death flag,
+OR'd in by the animscript parser at 0x30001f68 under the `DEATH` token --
+branches on it: with the argument 0 it sets the animation and then calls trap
+0x91 with 1.0, and with it non-zero it starts the animation over the entry's
+blend time. VERIFIED: trap 0x91 is `FUN_004891f0` in CoDMP.exe and writes the
+passed float into two dwords of the animation slot; INFERRED that the float is
+the normalized playback position, so 1.0 is the clip's last frame. VERIFIED:
+the same bit gates the DObj
+anim-slot clone (trap 0xb8) in `CG_TransitionEntity`'s `eType` 2 arm
+(0x3002f986), which copies the live player's animation slots onto the body.
+INFERRED, the two arms: with `0x800` set, a fresh kill inside the server's
+250 ms window, the death animation plays from the top; with it clear, the
+animation is snapped to its last frame and held. A body sent without the
+marker is therefore drawn at the last frame of its death animation from the
+first frame it exists.
 
 ---
 
@@ -1320,10 +1846,9 @@ the sentinel for "the damage carried no direction".
 step 1 read as the sim's `dead` flag, which the killing hit sets before the
 end-frame runs. Step 6's view kick is not carried; nothing on the wire reads
 it. `EV_PAIN` is raised whatever the stance: nothing above names
-`EV_CROUCH_PAIN` (188), so no crouch rule is modelled. `aimSpreadScale`
-(step 5) is a sim-side float only, since 1.1 has no netfield for it; it
-takes the weapon's `hipSpreadFireAdd` per shot and `hipSpreadDecayRate` per
-second and none of 2.1's turn, move or stance-decay terms.
+`EV_CROUCH_PAIN` (188), so no crouch rule is modelled. Step 5's
+`aimSpreadScale` add lands on the same playerstate field 2.1 moves and the
+wire carries.
 
 ---
 
@@ -1518,7 +2043,7 @@ VERIFIED, **the hit frame** against the settled frame before it:
 | `velocity` | 0, 0, 0 | -1.4, 80.0, 0.1 |
 
 **67 damage from a 45-damage weapon on a head hit.** VERIFIED: the shipped
-`info/mp_lochit_dmgtable` in `pak5.pk3` gives the head 1.5 (3.1). INFERRED:
+`info/mp_lochit_dmgtable` in `pak5.pk3` gives the head 1.5 (3.5). INFERRED:
 the product is truncated, since 45 * 1.5 is 67.5, 6.4's `damage * multiplier`
 is the only scaling on this path, and nothing else in the capture is a factor
 of 1.489.
@@ -1566,13 +2091,22 @@ VERIFIED: the four damage fields read 0 again after the respawn.
 
 ## 9. What vcod's own server does, measured the same way
 
-The retail-client hand check that this stage's plan called for -- two 1.1
-clients joining `vcod-server` through the menus and shooting each other -- is
-**PENDING**. It needs a person at the keyboard and could not be run. What
-follows is the headless substitute: the same two probes that took section 8's
-retail captures, pointed at `cargo run -p vcod-server` instead. Every claim
-below is evidence about vcod, not about retail; the retail column is section
-8's committed fixtures.
+The retail-client hand check that this stage's plan called for -- a 1.1
+client joining `vcod-server` through the menus and shooting and being shot --
+ran twice. On 2026-09-03 it found six defects (deaths column, ADS during a
+reload, ADS and crosshair twitch, head shots reading as body hits, an inert
+grenade twitching, and a death cluster: no death animation, a sinking suicide
+corpse, no respawn text). On 2026-09-04, with the fixes in, a retail client
+under Wine against `vcod-server mp_carentan --gametype tdm --set
+scr_friendlyfire=1` and a `--save-hit` probe as the teammate: the suicide
+corpse played its death animation and lay on the ground, the respawn text
+appeared and the use key respawned, and the client's shot on the probe logged
+`D;...;head` and a `MOD_HEAD_SHOT` obituary; the person at the keyboard
+confirmed the ADS and reload behaviour by eye. What follows is the headless
+measurement: the same two probes that took section 8's retail captures,
+pointed at `cargo run -p vcod-server` instead. Every claim below is evidence
+about vcod, not about retail; the retail column is section 8's committed
+fixtures.
 
 Three runs, 2026-09-03. `mp_carentan` `dm` for 200 s took the settled state
 and the weapon channel. `mp_ship` `dm` for 155 s took the kill by a bullet:
@@ -1678,38 +2212,39 @@ in-process instead by `crates/server/tests/combat.rs`, which reproduces
 section 8.4's 33 health, 67 `damageCount`, `EV_PAIN` parm 33 and the
 `MOD_HEAD_SHOT` obituary from two clients on one server.
 
-Everything a person has to look at is still open: whether the shooter sees its
-own muzzle flash and hears its fire sound, whether the ammo counter drops,
-whether the damage direction indicator points the right way, whether the death
-anim and the corpse look right, whether the reload key and the number keys do
-what they should, and whether anything the retail client predicts shows as a
-visible snap. PENDING.
+Of what a person has to look at, the 2026-09-04 hand check (section 9's
+opening) covered the death anim, the corpse, the respawn text and key, the
+ammo counter, the reload key and the ADS and crosshair behaviour under
+prediction. Still open: whether the shooter sees its own muzzle flash and
+hears its fire sound, whether the damage direction indicator points the right
+way, and a kill by another player seen from the victim's side on a retail
+client (the check's teammate probe was shot before it could shoot; the
+in-process test and the headless run cover that path). PENDING.
 
 ### 9.4 What is not modelled at all
 
 Named here so a reader of sections 1 to 7 does not assume the code follows
 them: rifle rounds passing through a player at half damage (2.3); the
-`pm_time` stun (4.5); the view kick of 6's step 6; events 175 and 176; the
-turn, move and stance-decay terms of the spread (2.1); `EV_CROUCH_PAIN` (188);
+`pm_time` stun (4.5); the view kick of 6's step 6; events 175 and 176;
+`EV_CROUCH_PAIN` (188);
 the `EV_RAISE_WEAPON` (155) retail raises on the death frame beside `EV_DEATH`;
 `CanDamage`'s line-of-sight check (4.6); `setPlayerIgnoreRadiusDamage`; item
 pickup; melee (1.10, 2.5); and grenades (1.11). The radius-damage falloff is
 RTCW's curve rather than a read of the 1.1 binary.
 
-`ps.fWeaponPosFrac` is on the wire but its rule is vcod's own. INFERRED: the
-fraction is a linear ramp to 1.0 over the weapon file's `adsTransInTime` while
-the sight button is held and back to 0.0 over `adsTransOutTime` when it is
-released (`crates/common/src/pmove/weapon.rs`, `advance_ads`). UNVERIFIED:
-what retail advances it by, since no site that writes `ps+0xB8` was read. It is
-sent because the client replays its own prediction from each snapshot's
-playerstate, so a constant 0 would restart its ADS lerp once a snapshot.
+The ADS fraction and the spread scale used to be here. Both are retail's now:
+1.13 and 2.1 carry the rules with their addresses and each an "As
+implemented" note, and `spread_deg`
+(`crates/server/src/game/combat.rs`) and the `fWeaponPosFrac > 0.75` anim
+tests of 1.2 and 1.9 read the fraction rather than the usercmd's sight bit.
+What is still not modelled of the two: `pm_flags 0x400`, and the `pm_time`
+and `eFlags 0xC000` arms the fraction shares with the rest of `PM_Weapon`.
 
-Divergence, and the reason the fraction changes nothing else: 2.1's arms key
-on `fWeaponPosFrac`, and both places vcod would read it read the usercmd's
-sight bit instead -- the cone's `adsSpread`/hip choice
-(`crates/server/src/game/combat.rs`, `spread_deg`) and 1.5's
-`fWeaponPosFrac > 0.75` test (`pmove/weapon.rs`, `fire`). Neither is gated on
-an inferred ramp on purpose.
+Nothing in the committed captures pins the ramp *rate*, the reload window or
+the turn term: every sample in them is settled, the two motion fixtures hold
+one ADS pose each and no transition, and both fixture weapons spell
+`hipSpreadTurnAdd 0`. Those three need a capture that traces per snapshot
+through a transition, the way `--save-combat` does for the weapon states.
 
 ---
 
@@ -1718,7 +2253,17 @@ an inferred ramp on purpose.
 - UNVERIFIED: what sets `pm_flags 0x800`, which stops `PM_Weapon` outright,
   and what `pm_flags 0x400` and `0x4000` mean. INFERRED for `0x400`: it is set
   whenever a fire, a melee finish or a weapon change happens while
-  `pm_flags & 1`, so it is prone-specific.
+  `pm_flags & 1`, and the ADS flag update ORs it in on the same prone arm
+  (1.13), so it is prone-specific.
+- UNRESOLVED: `cod11-mantle.md`, "Jumps", reads the ground jump as writing
+  255 into `ps.aimSpreadScale` and the ladder push-off as adding 64. Neither
+  is modelled here, because the first does not square with the captures: both
+  motion fixtures sample the first airborne frame of a jump and read 66.28
+  (carentan) and 67.81 (pavlov), where a 255 written on the takeoff frame
+  would still read above 229 one 50 ms frame of halved decay later. 2.1's
+  airborne terms alone produce a small climb from 0, which is the shape the
+  two samples have. Settling it needs a per-snapshot trace through a jump,
+  not another read.
 - UNVERIFIED: the meaning of bit `0x10` of the trace word at offset 32, which
   is what makes a bullet continue through a surface at full damage.
 - UNVERIFIED: what `Bullet_Endpos` (`0x69624`) is for; nothing on this path

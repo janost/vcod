@@ -68,11 +68,13 @@ pub struct Save {
     pub target: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn probe(
     addr: &str,
     save: Save,
     tag: Option<String>,
     pvs: bool,
+    sweep: bool,
     team: Option<&str>,
     secs: u64,
     fs: Option<&vcod_common::pk3::Pk3Fs>,
@@ -99,6 +101,10 @@ pub fn probe(
         || save_target
         || pvs
         || team.is_some();
+    // A sweep is a measurement, not a fixture: it walks a table of pitch
+    // offsets instead of aiming at the eye, so the numbers it produces are not
+    // what the committed shooter fixture holds.
+    let sweep = sweep && save_hit;
     let mut client = NetClient::connect(addr)?;
     if save_fixture || save_snapshots {
         client.enable_capture();
@@ -187,6 +193,13 @@ pub fn probe(
                             .unwrap_or_default()
                             .to_string();
                         hit.load_map(fs, &map);
+                        hit.sweep = sweep;
+                        if sweep {
+                            println!(
+                                "HIT: sweeping {} pitch offsets, no fixture is written",
+                                SWEEP_PITCH_OFFSETS.len()
+                            );
+                        }
                     }
                     // The join is entered by the first usercmd of the loop
                     // below, the way a retail client enters; nothing is sent
@@ -467,7 +480,7 @@ pub fn probe(
 
     // The run's clock can end before the script does; what it has by then is
     // still the capture, and the header says how long it ran.
-    if (save_hit || save_target) && !wrote_hit {
+    if (save_hit || save_target) && !wrote_hit && !sweep {
         let now = Instant::now();
         println!("hit: the run ended before the script did, writing what it has");
         if save_target {
@@ -583,17 +596,23 @@ impl ProbeWatch {
                 });
                 // The trajectory decides whether a closed-form evaluation sinks
                 // the body: TR_GRAVITY with a frozen trTime drops z by
-                // 400*age^2 per second.
+                // 400*age^2 per second. `eFlags` bit 0x800 and
+                // `groundEntityNum` ride along because they are the other two
+                // halves of the settle: retail sets 0x800 for 250 ms and
+                // rewrites the ground entity to 1022 when the body lands
+                // (`docs/research/cod11-combat.md` 5.3).
                 let tr = net::trajectory::Trajectory::read(ent, p, "pos");
                 let eval = tr.evaluate(s.server_time);
                 println!(
-                    "corpse {num} trType {} trTime {} (age {} ms) base z {:.0} delta {:?} eval z {:.0}",
+                    "corpse {num} trType {} trTime {} (age {} ms) base z {:.0} delta {:?} eval z {:.0} eFlags {:#x} groundEntityNum {}",
                     tr.tr_type,
                     tr.tr_time,
                     s.server_time - tr.tr_time,
                     tr.base.z,
                     tr.delta,
-                    eval.z
+                    eval.z,
+                    ent.field_i32(p, "eFlags"),
+                    ent.field_i32(p, "groundEntityNum"),
                 );
             }
         }
@@ -2553,6 +2572,20 @@ impl Steer {
     }
 }
 
+/// The pitch offsets a `--probe-sweep` run walks, degrees, positive down, one
+/// tap each, applied to the aim at the target's eye. Fine around the eye where
+/// the head, neck and torso boundaries sit and coarse toward the feet. Pair
+/// each `!trace` line's `pitchOffset` and `range` with the `sHitLoc` the
+/// server's own `games_mp.log` `D;` record carries for that shot, and the
+/// height the bullet crossed the target at is trigonometry.
+const SWEEP_PITCH_OFFSETS: &[f32] = &[
+    -12.0, -10.0, -8.0, -6.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0,
+    12.0, 15.0, 18.0, 21.0, 24.0, 28.0, 32.0, 36.0,
+];
+
+/// A sweep that cannot spend its table in this long gives up and watches.
+const SWEEP_LIMIT: Duration = Duration::from_secs(240);
+
 /// The shooter's phases, in order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum HitPhase {
@@ -2561,6 +2594,9 @@ enum HitPhase {
     Approach,
     /// One tap, aimed at the target's eye.
     SingleShot,
+    /// `--probe-sweep` only: one tap per entry of [`SWEEP_PITCH_OFFSETS`],
+    /// each offset spent only on a tap that had a live target to hit.
+    Sweep,
     /// Five taps at the weapon's period.
     Burst,
     /// Tap until the target's entity stops being a player, or a cap hits.
@@ -2575,6 +2611,7 @@ impl HitPhase {
         match self {
             HitPhase::Approach => "approach",
             HitPhase::SingleShot => "single_shot",
+            HitPhase::Sweep => "sweep",
             HitPhase::Burst => "burst",
             HitPhase::Finish => "finish",
             HitPhase::Watch => "watch",
@@ -2586,6 +2623,7 @@ impl HitPhase {
     fn taps(self) -> u32 {
         match self {
             HitPhase::SingleShot => 1,
+            HitPhase::Sweep => SWEEP_PITCH_OFFSETS.len() as u32,
             HitPhase::Burst => 5,
             HitPhase::Finish => FINISH_TAPS,
             _ => 0,
@@ -2613,10 +2651,17 @@ impl HitPhase {
         los: bool,
         target_etype: Option<i32>,
         taps: u32,
+        sweep: bool,
     ) -> HitPhase {
         use crate::entities::ET_PLAYER;
         match self {
+            HitPhase::Approach if (los || in_phase >= APPROACH_LIMIT) && sweep => HitPhase::Sweep,
             HitPhase::Approach if los || in_phase >= APPROACH_LIMIT => HitPhase::SingleShot,
+            HitPhase::Sweep
+                if taps >= SWEEP_PITCH_OFFSETS.len() as u32 || in_phase >= SWEEP_LIMIT =>
+            {
+                HitPhase::Watch
+            }
             HitPhase::SingleShot if in_phase >= SINGLE_SHOT_HOLD => HitPhase::Burst,
             HitPhase::Burst if in_phase >= BURST_HOLD => HitPhase::Finish,
             HitPhase::Finish
@@ -2672,6 +2717,9 @@ struct ShooterSample {
     target_seen: bool,
     /// The server's own view angles, degrees: what the shot was aimed along.
     viewangles: [f32; 3],
+    /// The sweep's pitch offset on this cmd, degrees, positive down; 0 outside
+    /// a `--probe-sweep` run.
+    pitch_offset: f32,
     target_num: i32,
     target_etype: i32,
     target_origin: [f32; 3],
@@ -2712,8 +2760,8 @@ impl ShooterSample {
         format!(
             "!trace phase={} ms={} serverTime={} buttons={} wbuttons={} weaponstate={} weapAnim={} \
 legsAnim={} torsoAnim={} eventSequence={} events={},{},{},{} eventParms={},{},{},{} clip={} \
-ammo={} los={} range={:.0} seen={} viewangles={} target={} target_etype={} target_origin={} \
-origin={}\n",
+ammo={} los={} range={:.0} seen={} viewangles={} pitchOffset={:.1} target={} \
+target_etype={} target_origin={} origin={}\n",
             self.phase,
             self.elapsed_ms,
             self.server_time,
@@ -2738,6 +2786,7 @@ origin={}\n",
             self.range,
             self.target_seen as i32,
             vec_str(self.viewangles),
+            self.pitch_offset,
             self.target_num,
             self.target_etype,
             vec_str(self.target_origin),
@@ -2788,6 +2837,13 @@ struct HitProbe {
     engaged_los: bool,
     /// An obituary named this probe as the attacker.
     killed: bool,
+    /// `--probe-sweep`: walk [`SWEEP_PITCH_OFFSETS`] instead of firing the
+    /// three scripted phases at the eye.
+    sweep: bool,
+    /// How many offsets the sweep has spent, which is also the index of the
+    /// one it is firing, and the tap period the last one was spent in.
+    sweep_index: usize,
+    sweep_period: Option<u128>,
 }
 
 impl Default for HitProbe {
@@ -2818,6 +2874,9 @@ impl Default for HitProbe {
             engaged_at: None,
             engaged_los: false,
             killed: false,
+            sweep: false,
+            sweep_index: 0,
+            sweep_period: None,
         }
     }
 }
@@ -2878,20 +2937,43 @@ impl HitProbe {
         );
     }
 
+    /// The offset the sweep's current tap carries, degrees, positive down.
+    fn pitch_offset(&self) -> f32 {
+        if self.phase != HitPhase::Sweep {
+            return 0.0;
+        }
+        SWEEP_PITCH_OFFSETS
+            .get(self.sweep_index)
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// The target is in the PVS, the trace to it is clear and it is close
+    /// enough that the spread does not decide where the bullet lands.
+    fn shootable(&self) -> bool {
+        self.los && self.in_range && self.target_seen
+    }
+
     /// The phase's held input with the aim on it, and the trigger tapped for
     /// [`PULSE_HOLD`] out of every period until the phase's taps are spent.
+    /// A sweep taps only when it has something to hit, so an offset is not
+    /// spent on a dead or hidden target, and it ends on its table rather than
+    /// on the clock.
     fn cmd(&self, now: Instant) -> net::msg::UserCmd {
         let mut cmd = self.phase.base();
         if let Some((yaw, pitch)) = self.aim {
             cmd.angles[1] = yaw;
-            cmd.angles[0] = pitch;
+            cmd.angles[0] = (pitch + deg_to_short(self.pitch_offset())) & 0xffff;
         }
         let Some(t) = self.phase_started else {
             return cmd;
         };
         let ms = now.duration_since(t).as_millis();
         let period = self.period.as_millis();
-        if ms / period < u128::from(self.phase.taps()) && ms % period < PULSE_HOLD.as_millis() {
+        let sweeping = self.phase == HitPhase::Sweep;
+        let within = sweeping || ms / period < u128::from(self.phase.taps());
+        let allowed = !sweeping || self.shootable();
+        if within && allowed && ms % period < PULSE_HOLD.as_millis() {
             cmd.buttons |= BUTTON_ATTACK;
         }
         cmd
@@ -2979,6 +3061,18 @@ impl HitProbe {
             self.in_range = false;
         }
 
+        // One offset per tap the sweep actually took, so a period spent
+        // watching the target respawn costs nothing. Done before the trace
+        // line, so the line and the cmd sent this frame carry the same offset.
+        if self.phase == HitPhase::Sweep
+            && self.cmd(now).buttons & BUTTON_ATTACK != 0
+            && self
+                .sweep_period
+                .replace(in_phase.as_millis() / self.period.as_millis())
+                .is_some_and(|p| p != in_phase.as_millis() / self.period.as_millis())
+        {
+            self.sweep_index += 1;
+        }
         if self.traced != Some(snap.message_num) {
             self.traced = Some(snap.message_num);
             let cmd = self.cmd(now);
@@ -3020,6 +3114,7 @@ impl HitProbe {
                     snap.ps.field_f32(p, "viewangles[1]"),
                     snap.ps.field_f32(p, "viewangles[2]"),
                 ],
+                pitch_offset: self.pitch_offset(),
                 target_num,
                 target_etype,
                 target_origin,
@@ -3029,7 +3124,7 @@ impl HitProbe {
             // their transitions and a heartbeat.
             let firing = matches!(
                 self.phase,
-                HitPhase::SingleShot | HitPhase::Burst | HitPhase::Finish
+                HitPhase::SingleShot | HitPhase::Burst | HitPhase::Finish | HitPhase::Sweep
             );
             if firing || keep_sample(&mut self.last_kept, s.watched(), ms) {
                 println!("  {}", s.line().trim_end());
@@ -3056,15 +3151,20 @@ impl HitProbe {
             corpse_edges(snap, &mut self.live_corpses, ms, &mut self.corpses);
         }
 
-        let taps = (in_phase.as_millis() / self.period.as_millis()) as u32;
         // A shot needs all three: the target in the PVS, a trace nothing
         // blocks, and a range the spread does not throw it off at.
-        let shootable = self.los && self.in_range && self.target_seen;
+        let shootable = self.shootable();
+        let taps = if self.phase == HitPhase::Sweep {
+            self.sweep_index as u32
+        } else {
+            (in_phase.as_millis() / self.period.as_millis()) as u32
+        };
         let next = self.phase.advance(
             in_phase,
             shootable,
             self.target.filter(|_| self.target_seen).map(|t| t.1),
             taps,
+            self.sweep,
         );
         if next != self.phase {
             println!(
@@ -3925,11 +4025,11 @@ mod tests {
     /// still records its shots.
     #[test]
     fn hit_approach_ends_on_a_clear_trace_or_at_the_limit() {
-        let blocked = HitPhase::Approach.advance(Duration::from_secs(30), false, Some(1), 0);
+        let blocked = HitPhase::Approach.advance(Duration::from_secs(30), false, Some(1), 0, false);
         assert_eq!(blocked, HitPhase::Approach);
-        let clear = HitPhase::Approach.advance(Duration::from_secs(30), true, Some(1), 0);
+        let clear = HitPhase::Approach.advance(Duration::from_secs(30), true, Some(1), 0, false);
         assert_eq!(clear, HitPhase::SingleShot);
-        let out_of_time = HitPhase::Approach.advance(APPROACH_LIMIT, false, None, 0);
+        let out_of_time = HitPhase::Approach.advance(APPROACH_LIMIT, false, None, 0, false);
         assert_eq!(out_of_time, HitPhase::SingleShot);
     }
 
@@ -3938,18 +4038,40 @@ mod tests {
     /// not, or the shooter would stop firing every time PVS blinked.
     #[test]
     fn hit_finish_ends_when_the_target_stops_being_a_player() {
-        let firing = HitPhase::Finish.advance(Duration::from_secs(1), true, Some(1), 3);
+        let firing = HitPhase::Finish.advance(Duration::from_secs(1), true, Some(1), 3, false);
         assert_eq!(firing, HitPhase::Finish);
-        let unseen = HitPhase::Finish.advance(Duration::from_secs(1), false, None, 3);
+        let unseen = HitPhase::Finish.advance(Duration::from_secs(1), false, None, 3, false);
         assert_eq!(unseen, HitPhase::Finish);
         let corpse = HitPhase::Finish.advance(
             Duration::from_secs(1),
             true,
             Some(crate::entities::ET_CORPSE),
             3,
+            false,
         );
         assert_eq!(corpse, HitPhase::Watch);
-        let spent = HitPhase::Finish.advance(Duration::from_secs(1), true, Some(1), FINISH_TAPS);
+        let spent =
+            HitPhase::Finish.advance(Duration::from_secs(1), true, Some(1), FINISH_TAPS, false);
+        assert_eq!(spent, HitPhase::Watch);
+    }
+
+    /// The sweep replaces the three scripted firing phases and ends on its
+    /// table, not on the clock.
+    #[test]
+    fn hit_sweep_takes_the_approach_and_ends_on_its_table() {
+        let plain = HitPhase::Approach.advance(Duration::from_secs(30), true, Some(1), 0, false);
+        assert_eq!(plain, HitPhase::SingleShot);
+        let swept = HitPhase::Approach.advance(Duration::from_secs(30), true, Some(1), 0, true);
+        assert_eq!(swept, HitPhase::Sweep);
+        let mid = HitPhase::Sweep.advance(Duration::from_secs(30), true, Some(1), 3, true);
+        assert_eq!(mid, HitPhase::Sweep);
+        let spent = HitPhase::Sweep.advance(
+            Duration::from_secs(30),
+            true,
+            Some(1),
+            SWEEP_PITCH_OFFSETS.len() as u32,
+            true,
+        );
         assert_eq!(spent, HitPhase::Watch);
     }
 

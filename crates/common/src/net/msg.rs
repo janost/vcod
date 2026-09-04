@@ -497,15 +497,75 @@ fn write_float_field(w: &mut MsgWriter, raw: i32) {
     }
 }
 
-/// One primitive read from array blocks 4 and 5, in the order the parse took
-/// it. Blocks 1 to 3 decode into [`PsArrays`]' named arrays instead. Those two
-/// blocks reach the wire only through the shared field reader, which has no
-/// byte or short form, so three variants cover them.
+/// One primitive read from array block 4, in the order the parse took it.
+/// Blocks 1 to 3 and 5 decode into [`PsArrays`]' named fields instead. The
+/// block reaches the wire only through the shared field reader, which has no
+/// byte or short form, so three variants cover it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PsArrayOp {
     Bits(i32, i32),
     Packed(i32, i32),
     Long(i32),
+}
+
+/// Fields per `hudelem_t` on the wire: table entries 6..33.
+pub const HUD_ELEM_FIELDS: usize = 28;
+
+/// Elements per HUD array, both on the wire and in the playerstate.
+pub const MAX_HUD_ELEMS: usize = 31;
+
+/// Indices into [`HudElem::fields`], which is the field table's order and not
+/// the struct's (docs/protocol-1.1.md, "Block 5").
+pub mod hud_field {
+    pub const COLOR: usize = 0;
+    pub const TYPE: usize = 1;
+    pub const FONT_SCALE: usize = 2;
+    pub const Y: usize = 3;
+    pub const X: usize = 4;
+    pub const ALIGN_Y: usize = 5;
+    pub const ALIGN_X: usize = 6;
+    pub const TIME: usize = 7;
+    pub const FONT: usize = 8;
+    pub const TEXT: usize = 9;
+    pub const SHADER: usize = 10;
+    pub const WIDTH: usize = 11;
+    pub const HEIGHT: usize = 12;
+    pub const SORT: usize = 13;
+    pub const VALUE: usize = 20;
+    pub const LABEL: usize = 21;
+}
+
+/// One `hudelem_t` as block 5 carries it: table entries 6..33 in wire order,
+/// floats as bit patterns. Index it with [`hud_field`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HudElem {
+    pub fields: [i32; HUD_ELEM_FIELDS],
+}
+
+impl Default for HudElem {
+    fn default() -> Self {
+        HudElem {
+            fields: [0; HUD_ELEM_FIELDS],
+        }
+    }
+}
+
+impl HudElem {
+    pub fn get(&self, field: usize) -> i32 {
+        self.fields[field]
+    }
+
+    pub fn set(&mut self, field: usize, v: i32) {
+        self.fields[field] = v;
+    }
+
+    pub fn get_f32(&self, field: usize) -> f32 {
+        f32::from_bits(self.fields[field] as u32)
+    }
+
+    pub fn set_f32(&mut self, field: usize, v: f32) {
+        self.fields[field] = v.to_bits() as i32;
+    }
 }
 
 /// The playerState's five trailing array blocks (docs/protocol-1.1.md, "The
@@ -522,10 +582,17 @@ pub struct PsArrays {
     pub ammo: [i16; 64],
     /// Block 3, `ps.ammoclip[64]`, the loaded magazine, by clip index.
     pub ammoclip: [i16; 64],
-    /// Blocks 4 and 5 (objectives, and the two HUD-element arrays) as the
-    /// primitives the parse consumed, replayed verbatim: nothing in vcod
-    /// writes either. Empty means both gates are clear.
-    pub tail: Vec<PsArrayOp>,
+    /// Block 4, `ps.objective[16]`, as the primitives the parse consumed,
+    /// replayed verbatim: nothing in vcod writes an objective. Empty means
+    /// the block's gate is clear.
+    pub objectives: Vec<PsArrayOp>,
+    /// Block 5's first array (`ps+0x1338`), the elements whose `archived` is
+    /// set. It is the half a following spectator inherits with the
+    /// playerstate it copies, which is what the flag names.
+    pub hud_archived: Vec<HudElem>,
+    /// Block 5's second array (`ps+0x5A8`), the elements whose `archived` is
+    /// clear.
+    pub hud_current: Vec<HudElem>,
 }
 
 impl Default for PsArrays {
@@ -534,7 +601,9 @@ impl Default for PsArrays {
             stats: [0; 6],
             ammo: [0; 64],
             ammoclip: [0; 64],
-            tail: Vec::new(),
+            objectives: Vec::new(),
+            hud_archived: Vec::new(),
+            hud_current: Vec::new(),
         }
     }
 }
@@ -715,9 +784,9 @@ pub fn write_delta_playerstate(
     write_ps_arrays(w, &from.arrays, &to.arrays);
 }
 
-/// Mirror of [`read_ps_arrays`]. Blocks 1 to 3 carry only what differs from
-/// the base; blocks 4 and 5 replay `to.tail`, which is empty for a
-/// server-built state and goes out as their two clear gates.
+/// Mirror of [`read_ps_arrays`]. Every block carries only what differs from
+/// the base; block 4 replays `to.objectives`, which is empty for a
+/// server-built state and goes out as its clear gate.
 fn write_ps_arrays(w: &mut MsgWriter, from: &PsArrays, to: &PsArrays) {
     // Block 1: the gate, then six raw bits selecting the changed scalars.
     let mut mask = 0i32;
@@ -758,18 +827,26 @@ fn write_ps_arrays(w: &mut MsgWriter, from: &PsArrays, to: &PsArrays) {
         write_short_array_group(w, &from.ammo, &to.ammo);
     }
     write_short_array_group(w, &from.ammoclip, &to.ammoclip);
-    if to.tail.is_empty() {
+    // Block 4, replayed as it was parsed.
+    if to.objectives.is_empty() {
         w.write_bits(0, 1);
-        w.write_bits(0, 1);
-        return;
     }
-    for &op in &to.tail {
+    for &op in &to.objectives {
         match op {
             PsArrayOp::Bits(bits, v) => w.write_bits(v, bits),
             PsArrayOp::Packed(bits, v) => w.write_packed_bits(v, bits),
             PsArrayOp::Long(v) => w.write_long(v),
         }
     }
+    // Block 5's gate covers both arrays at once: retail compares the pair
+    // with one 0x1b20-byte memcmp (0x807e233), the two being contiguous.
+    if from.hud_archived == to.hud_archived && from.hud_current == to.hud_current {
+        w.write_bits(0, 1);
+        return;
+    }
+    w.write_bits(1, 1);
+    write_hud_array(w, &from.hud_archived, &to.hud_archived);
+    write_hud_array(w, &from.hud_current, &to.hud_current);
 }
 
 /// Mirror of [`read_short_array_group`]: four sub-blocks of 16, each a gate,
@@ -860,7 +937,7 @@ fn read_ps_arrays(r: &mut MsgReader, from: &PsArrays) -> PsArrays {
         stats: from.stats,
         ammo: from.ammo,
         ammoclip: from.ammoclip,
-        tail: Vec::new(),
+        ..PsArrays::default()
     };
     // Block 1: a 6-bit mask selecting up to six scalars, each its own width.
     if r.read_bits(1) == 1 {
@@ -891,27 +968,33 @@ fn read_ps_arrays(r: &mut MsgReader, from: &PsArrays) -> PsArrays {
     // Block 3: ps.ammoclip[64], the same four sub-blocks with no group gate.
     read_short_array_group(r, &mut out.ammoclip);
 
-    let mut a = ArrayReader { r, ops: Vec::new() };
-    // Block 4: ps.objective[16], each a 3-bit state then six delta fields.
-    if a.bits(1) == 1 {
-        for _ in 0..16 {
-            a.bits(3);
-            if a.bits(1) == 1 {
-                for &bits in &HUD_FIELD_BITS[0..6] {
-                    a.delta_field(bits);
+    {
+        let mut a = ArrayReader { r, ops: Vec::new() };
+        // Block 4: ps.objective[16], each a 3-bit state then six delta fields.
+        if a.bits(1) == 1 {
+            for _ in 0..16 {
+                a.bits(3);
+                if a.bits(1) == 1 {
+                    for &bits in &HUD_FIELD_BITS[0..6] {
+                        a.delta_field(bits);
+                    }
                 }
             }
         }
+        // A clear gate and an empty record mean the same zero bit, and
+        // dropping it lets a parsed state compare equal to a built one.
+        if !a.ops.iter().all(|&op| op == PsArrayOp::Bits(1, 0)) {
+            out.objectives = a.ops;
+        }
     }
-    // Block 5: two HUD-element arrays.
-    if a.bits(1) == 1 {
-        read_hud_array(&mut a);
-        read_hud_array(&mut a);
-    }
-    // Two clear gates and an empty record mean the same two zero bits, and
-    // dropping them lets a parsed state compare equal to a built one.
-    if !a.ops.iter().all(|&op| op == PsArrayOp::Bits(1, 0)) {
-        out.tail = a.ops;
+    // Block 5: one gate for the pair, then the archived array and the
+    // current one. A clear gate keeps both from the base.
+    if r.read_bits(1) == 1 {
+        out.hud_archived = read_hud_array(r, &from.hud_archived);
+        out.hud_current = read_hud_array(r, &from.hud_current);
+    } else {
+        out.hud_archived = from.hud_archived.clone();
+        out.hud_current = from.hud_current.clone();
     }
     out
 }
@@ -932,18 +1015,55 @@ fn read_short_array_group(r: &mut MsgReader, out: &mut [i16; 64]) {
     }
 }
 
-/// One HUD-element array (cod_lnxded 0x807cf5c).
-fn read_hud_array(a: &mut ArrayReader) {
-    let count = a.bits(5);
-    for _ in 0..count {
-        let j = a.bits(5);
-        for k in 0..=j {
-            let idx = (6 + k) as usize;
-            let bits = HUD_FIELD_BITS.get(idx).copied().unwrap_or(0);
-            a.delta_field(bits);
-            if a.r.is_overflowed() {
-                return;
+/// One HUD-element array (cod_lnxded 0x807cf5c): a 5-bit count, then per
+/// element a 5-bit last-changed field index and that many delta fields.
+/// Elements past the count are cleared rather than kept from the base (the
+/// reader's closing `bzero`, 0x807d0e9), which is how a destroyed element
+/// leaves a client's screen.
+fn read_hud_array(r: &mut MsgReader, from: &[HudElem]) -> Vec<HudElem> {
+    let count = (r.read_bits(5) as usize).min(MAX_HUD_ELEMS);
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let base = from.get(i).copied().unwrap_or_default();
+        let mut e = base;
+        let last = r.read_bits(5);
+        for k in 0..=last as usize {
+            // A `last` above 27 walks the field table past its end, as
+            // retail's own loop does; the value goes nowhere.
+            let bits = HUD_FIELD_BITS.get(6 + k).copied().unwrap_or(0);
+            let v = read_delta_field(r, base.fields.get(k).copied().unwrap_or(0), bits);
+            if k < HUD_ELEM_FIELDS {
+                e.fields[k] = v;
             }
+        }
+        out.push(e);
+        if r.is_overflowed() {
+            break;
+        }
+    }
+    out
+}
+
+/// Mirror of [`read_hud_array`]. The count is the array's length: the server
+/// side fills it from the top, so a live element is never behind a free one
+/// (`crate::net::msg::HudElem`, and retail's count loop 0x807cd8e, which
+/// stops at the first record with a zero `type`).
+fn write_hud_array(w: &mut MsgWriter, from: &[HudElem], to: &[HudElem]) {
+    let count = to.len().min(MAX_HUD_ELEMS);
+    w.write_bits(count as i32, 5);
+    for (i, e) in to.iter().take(count).enumerate() {
+        let base = from.get(i).copied().unwrap_or_default();
+        // Retail's index of the last differing field, 0 when none differs
+        // (0x807ce85), so an unchanged element still carries one clear bit.
+        let last = base
+            .fields
+            .iter()
+            .zip(&e.fields)
+            .rposition(|(a, b)| a != b)
+            .unwrap_or(0);
+        w.write_bits(last as i32, 5);
+        for k in 0..=last {
+            write_delta_field(w, base.fields[k], e.fields[k], HUD_FIELD_BITS[6 + k]);
         }
     }
 }
@@ -2069,6 +2189,74 @@ mod tests {
             bits,
             "writer and reader must agree bit for bit"
         );
+    }
+
+    /// Block 5 both ways: two elements out against a null base, one of them
+    /// changing against that frame, and then one destroyed, which is the
+    /// count dropping. The committed captures only ever carry the retail
+    /// round clock, so the shrink and the delta have no other cover.
+    #[test]
+    fn hud_elements_round_trip_and_a_destroyed_one_shrinks_the_count() {
+        use hud_field as f;
+        let p = &PROTOCOL_V1;
+        let h = Huffman::new();
+        let null = PlayerState::null(p);
+
+        // The retail round clock, and a text element in the other array.
+        let mut clock = HudElem::default();
+        clock.set(f::COLOR, -1);
+        clock.set(f::TYPE, 4);
+        clock.set_f32(f::FONT_SCALE, 1.0);
+        clock.set(f::Y, 460);
+        clock.set(f::X, 320);
+        clock.set(f::ALIGN_Y, 1);
+        clock.set(f::ALIGN_X, 1);
+        clock.set(f::TIME, 1_800_000);
+        clock.set(f::FONT, 1);
+        let mut text = HudElem::default();
+        text.set(f::TYPE, 1);
+        text.set(f::TEXT, 7);
+        text.set(f::X, 320);
+        text.set(f::Y, 70);
+        text.set_f32(f::SORT, 1.0);
+
+        let mut first = null.clone();
+        first.arrays.hud_archived = vec![clock];
+        first.arrays.hud_current = vec![text, text];
+
+        let round = |from: &PlayerState, to: &PlayerState| {
+            let mut w = MsgWriter::new(&h);
+            write_delta_playerstate(&mut w, p, from, to);
+            let bits = w.bits_written();
+            let d = w.finish();
+            let mut r = MsgReader::new(&d, &h);
+            let back = read_delta_playerstate(&mut r, p, from);
+            assert_eq!(
+                r.bits_read(),
+                bits,
+                "writer and reader must agree bit for bit"
+            );
+            back
+        };
+        assert_eq!(round(&null, &first), first);
+
+        // One field of one element moves; the rest of the frame is gated off.
+        let mut second = first.clone();
+        second.arrays.hud_archived[0].set(f::TIME, 1_799_000);
+        assert_eq!(round(&first, &second), second);
+
+        // `destroy` on the first of the two: the array is rebuilt from the
+        // top, so the survivor moves down a slot and the count drops.
+        let mut third = second.clone();
+        third.arrays.hud_current = vec![text];
+        let back = round(&second, &third);
+        assert_eq!(back, third);
+        assert_eq!(back.arrays.hud_current.len(), 1);
+
+        // And the whole block gated off again once nothing moves.
+        let mut w = MsgWriter::new(&h);
+        write_delta_playerstate(&mut w, p, &third, &third);
+        assert_eq!(w.bits_written(), 8 + 8, "the eight gates and the lc byte");
     }
 
     /// The changed-mask path: a base that already carries ammo and a clip, and

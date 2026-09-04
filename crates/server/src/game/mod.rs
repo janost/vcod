@@ -6,6 +6,7 @@ pub mod builtins;
 pub mod combat;
 pub mod entity;
 pub mod fields;
+pub mod hitrig;
 pub mod host;
 pub mod script;
 pub mod spawn;

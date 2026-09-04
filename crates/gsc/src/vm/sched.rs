@@ -146,6 +146,20 @@ impl Vm {
         id
     }
 
+    /// Kills every thread whose `self` is `target`, for a host freeing that
+    /// entity. INFERRED from the stock scripts: `waitRespawnButton` polls
+    /// `self useButtonPressed()` with no `endon("disconnect")`, and a retail
+    /// server survives a dead player leaving, so its entity free must end
+    /// the threads running on it rather than leave them to error on a
+    /// freed `self`. A thread's `self` is its first frame's receiver; a
+    /// frame above it may have called a method on another entity, which
+    /// changes nothing about whose thread it is.
+    pub fn kill_threads_of(&mut self, target: impl Into<Target>) {
+        let target = target.into();
+        self.threads
+            .retain(|t| t.frames.first().and_then(|f| f.recv) != Some(target));
+    }
+
     /// Kills every thread endon-registered against `(target, event)`, then
     /// wakes every thread waiting on it, binding `args` into the locals the
     /// `waittill` recorded (a missing argument writes `Undefined`). Both

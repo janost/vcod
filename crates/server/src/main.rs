@@ -35,6 +35,10 @@ struct Args {
     /// Scripted entities that exercise the packet-entity wire path. 0 is off.
     #[arg(long, default_value_t = 0)]
     test_entities: usize,
+    /// A cvar to set before the scripts load, retail's `+set name value`;
+    /// repeatable, e.g. `--set scr_friendlyfire=1`.
+    #[arg(long = "set", value_name = "NAME=VALUE")]
+    set: Vec<String>,
 
     /// Log one line per snapshot per client: send interval, the serverTime and
     /// commandTime a client predicts from, the usercmds consumed, and whether
@@ -87,6 +91,12 @@ fn main() -> Result<()> {
         Instant::now(),
     );
     server.load_world(vcod_server::world::World::from_bsp(&bsp));
+    for pair in &args.set {
+        let Some((name, value)) = pair.split_once('=') else {
+            bail!("--set takes NAME=VALUE, got {pair:?}");
+        };
+        server.set_cvar(name, value);
+    }
     // A failed script load is fatal, not a warning. The configstring table is
     // mostly script output now, so a server that kept serving would hand
     // clients a gamestate with no team menu, no status icons and no shaders,

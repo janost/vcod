@@ -110,10 +110,12 @@ pub fn clone_player(
         return Ok(Value::Undefined);
     };
     let now = host.level_time_ms;
+    let world = host.world.clone();
     host.bodies.push(
         state,
         Some(slot),
         now,
+        world.as_ref().map(|w| &w.collision),
         &vcod_common::net::protocol::PROTOCOL_V1,
     );
     Ok(Value::Undefined)
@@ -176,6 +178,10 @@ pub fn drop_item(
         host.set_field(cx, id, atom, value)?;
     }
     host.register_item(&name);
+    // The drop lands: retail's `LaunchItem` sends it out under gravity and
+    // `G_RunItem` settles it on the first contact, which is the same resting
+    // place a placed weapon's own drop trace finds.
+    crate::game::spawn::drop_item_to_floor(host, cx, id);
     // The rounds go with the item. VERIFIED: retail's death frame carries
     // `clip=3:7,6:3 ammo=3:56`, the held carbine's index 10 gone from both
     // arrays, where the spawn line had it in each (combat doc, 9.2).

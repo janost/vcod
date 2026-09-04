@@ -3,12 +3,14 @@
 pub mod animscript;
 pub mod animtree;
 pub mod assets;
+pub mod bonetrace;
 pub mod bsp;
 pub mod collision;
 pub mod game_dir;
 pub mod mesh;
 pub mod net;
 pub mod pk3;
+pub mod playerpose;
 pub mod pmove;
 pub mod props;
 pub mod rng;

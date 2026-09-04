@@ -605,7 +605,13 @@ Entries 6..33 of the same table are the `hudelem_t` fields, in wire order:
 | 18 | `height` | 52 | 10 bits | 32 | `fromY` | 80 | 10 bits |
 | 19 | `sort` | 108 | float | 33 | `duration` | 96 | 32 bits |
 
-VERIFIED. `text` and `label` are 8 bits wide, so whatever they hold is an index and not a string; what they index is UNVERIFIED.
+VERIFIED. `text` and `label` are 8 bits wide, so whatever they hold is an index and not a string: both are localized-string indices, resolved through configstring `1244 + n` (`game.mp.i386.so`'s `setText` 0x4c62e and the `label` field setter 0x4c422 both call `G_LocalizedStringIndex`, and `shaderIndex` is `G_ShaderIndex`'s answer at 0x4b5f9, configstring `1500 + n`). VERIFIED.
+
+Which array an element lands in, and which client is sent it, is decided once per client per frame by `HudElem_UpdateClient` (`game.mp.i386.so` 0x4be8c), which `G_RunFrame` calls for every in-use client with both arrays selected (0x50a80, argument 3). It clears the two arrays, walks `g_hudelems` from slot 0, and copies 112 bytes per surviving record into the next free slot of one of them: a record with a zero `type` is free and skipped, a record whose team field (`+0x74`) is non-zero and differs from the client's `clientState.team` is skipped, a record whose owner (`+0x70`) is neither `0x3ff` (`ENTITYNUM_NONE`) nor this client's entity number is skipped, and `archived` (`+0x78`) picks `ps+0x1338` when set and `ps+0x5A8` when clear. Both stop at 31. VERIFIED. `SpectatorClientEndFrame` makes the same call with only `ps+0x5A8` selected (0x408bc, argument 2), right after copying the followed player's whole playerstate, so a following spectator inherits the archived half and gets its own unarchived one; that this is what `archived` means is INFERRED, off those two call sites.
+
+The count is the leading run of records with a non-zero `type` in the array being written, capped at 31 (0x807cd8e), and the reader clears every element past the count (`bzero` at 0x807d0e9) rather than keeping it from the base. VERIFIED. So a destroyed element leaves a client's screen by the array being rebuilt from the top and the count dropping. Per element the writer picks the index of the last field that differs from the base, 0 when none does, so an unchanged element still costs its 5 bits and one clear change bit (0x807ce85). VERIFIED. The block's single gate is one `memcmp` over both arrays at once, the two being contiguous (0x1b20 bytes from `ps+0x5A8`, 0x807e233). VERIFIED.
+
+**As implemented.** `crates/common/src/net/msg.rs` decodes block 5 into `PsArrays::hud_archived` and `hud_current`, each a `Vec<HudElem>` of 28 raw field values in the wire order above, and re-encodes it with the same gate, count and last-changed rules. `crates/server/src/game/wire.rs`'s `hud_elems` is the filter `HudElem_UpdateClient` runs, and the record it reads is `crate::game::entity::HudState` plus the element's script fields. Not modelled: the `fadeOverTime`, `scaleOverTime` and `moveOverTime` animators, so entries 20..25 and 28..33 are only ever zero.
 
 ##### A decoded frame
 
@@ -638,7 +644,25 @@ Both arrays are 64 long, which caps the distinct ammo names and the distinct cli
 
 ### Trajectories (`trType`/`pos`/`apos`)
 
-Entity movement/rotation is a Q3-shaped `trajectory_t` (`trType`, `trTime`, `trDuration`, `trBase`, `trDelta`) carried in the `pos` and `apos` netfield groups, evaluated with RTCW's `BG_EvaluateTrajectory` maths (LINEAR, LINEAR_STOP, SINE, GRAVITY variants, ACCELERATE/DECCELERATE; STATIONARY/INTERPOLATE/GRAVITY_PAUSED just return `trBase`, matching snapshot-interpolated fields). **Divergence, observed not derived from source.** Real CoD 1.1 servers send `TR_SINE` with `trDuration == 0` on `ET_ITEM` pickups (thousands of samples across two populated servers). RTCW's reference divides `dt / trDuration` unconditionally in that branch, which is a guaranteed NaN here. Guard `trDuration == 0` in the `TR_SINE` branch by returning `trBase`, the same fallback as `STATIONARY`. Anything else makes every dropped/spawned item invisible.
+Entity movement/rotation is a Q3-shaped `trajectory_t` (`trType`, `trTime`, `trDuration`, `trBase`, `trDelta`) carried in the `pos` and `apos` netfield groups, evaluated with RTCW's `BG_EvaluateTrajectory` maths (LINEAR, LINEAR_STOP, SINE, GRAVITY variants, ACCELERATE/DECCELERATE; STATIONARY/INTERPOLATE/GRAVITY_PAUSED just return `trBase`, matching snapshot-interpolated fields). **Divergence, #8.** The arithmetic is RTCW's, the enumeration is not. `BG_EvaluateTrajectory` (`game.mp.i386.so` 0x2c600) and `BG_EvaluateTrajectoryDelta` (0x2c8e8) both open `cmp $0xa,<trType>; ja Com_Error` over eleven-entry jump tables at 0x700a8 and 0x7012c, with the error string `BG_EvaluateTrajectory: unknown trType: %i` at 0x70060. VERIFIED. So the valid range is 0..10 with no holes:
+
+| idx | name | evaluates |
+|---|---|---|
+| 0 | `TR_STATIONARY` | `trBase` |
+| 1 | `TR_INTERPOLATE` | `trBase` |
+| 2 | `TR_LINEAR` | `base + delta*dt` |
+| 3 | `TR_LINEAR_STOP` | linear, `dt` clamped to `trDuration` and to >= 0 |
+| 4 | `TR_SINE` | `base + delta * sin(2*pi*(t-trTime)/trDuration)` |
+| 5 | `TR_GRAVITY` | x,y linear; `z = base.z + delta.z*dt - 400*dt*dt` |
+| 6 | `TR_GRAVITY_LOW` | the same with 120 |
+| 7 | `TR_GRAVITY_FLOAT` | `z -= 80*dt`, a single `dt` |
+| 8 | `TR_GRAVITY_PAUSED` | `trBase`; the delta arm is `Com_Error` |
+| 9 | `TR_ACCELERATE` | accelerate along the normalised delta |
+| 10 | `TR_DECCELERATE` | the same negated |
+
+VERIFIED: the arithmetic per case and the `.rodata` constants (0x70098 = 400.0, 0x7009c = 120.0, 0x700a0 = 80.0, 0x70120 = 800.0, 0x70124 = 240.0, 0x70128 = 160.0), and the cgame's own `trType == 5` arm (`cgame_mp_x86.dll` 0x30005470, the 400.0 at 0x30069528). INFERRED: the names, from RTCW's enumeration with `TR_LINEAR_STOP_BACK`, `TR_SPLINE` and `TR_LINEAR_PATH` removed, which is what makes index 4 the `fsin` branch rather than RTCW's `Com_Error` hole and leaves index 8 as the one value handled in evaluate and fatal in delta.
+
+The earlier reading of this section had `TR_SINE = 5` off codextended `shared.h:461-476`, which is a byte-for-byte paste of the RTCW-MP header with no CoD1 verification; codextended itself never uses it numerically, resolving the game binary's `BG_EvaluateTrajectory` at runtime and writing raw literals (`src/script.c:1177`, `bolt->s.pos.trType = 5;`). The `TR_SINE` samples with `trDuration == 0` this section used to record as a second divergence are `TR_GRAVITY` samples read one index high: index 5 never touches `trDuration`, and 0 is what a launched item carries.
 
 ## Client to server message body (clc)
 
@@ -734,7 +758,7 @@ Three things a Q3 reading gets wrong:
 - **The stance bits are level states, not key edges,** and they are mutually exclusive. The client owns the toggle -- crouch is a tap in the retail binds, not a hold -- and what reaches the wire is the resulting stance, held. One capture holds `0x80` for 18 seconds across a crouch, with `0x40` replacing it for the 6 seconds spent prone.
 - **`buttons` `0x10` is ads, where Q3's `BUTTON_WALKING` is `0x10`.** There is no walk bit at all: CoD 1 has a single move speed, so nothing in a capture varies with it, and no `KEY_MASK` in the reference names one. `pm_walkSpeedScale` still exists engine-side (the stage 4 playerstate capture pins it at 0.4), but no client input reaches it.
 
-`buttons` `0x02` was seen live, briefly, twice at spawn and once well after; nothing pressed in the capture accounts for it and it is left unidentified. `usercmd_t`'s own comment lists "console, chat" among the `buttons` meanings (CoDExtended `src/shared.h`), which is the likeliest home for it. INFERRED.
+`buttons` `0x02` is Q3's `BUTTON_TALK`: `CL_FinishMove` (`CoDMP.exe` 0x40b65b-0x40b671) sets it whenever `cls.keyCatchers != 0` and `cl_bypassMouseInput` is 0, so it marks a client with the console, a menu or the chat line up. VERIFIED, the store and its two tests. It was seen live twice at spawn (the team menu) and once well after; a server can read it as "this client is not looking at the game", and while it is set `+activate` never reaches `CL_ButtonBits`.
 
 ### Entering the world
 
@@ -771,6 +795,8 @@ Four more fields a retail spectator's playerstate carries that vcod's does not: 
 Three fields a walking player carries that a spectator does not, all measured off `crates/server/tests/fixtures/playerstate/mp_pavlov-dm.txt` and its `mp_carentan` twin and reproduced by `ClientSim::to_wire`:
 
 - `pm_flags` 262144. Bit 18, the third member of the view-source group whose other two (0x10000 free spectator, 0x20000 following) `cod11-events-and-fx.md` already lists. `ClientEndFrame` sets it for a client looking out of its own body and both other arms clear it, which is why the spectator captures read 0.
+
+  The other bits a moving player carries, and where each is written, are in `docs/research/cod11-combat.md`: 0x1 prone, 0x2 the crouch latch, 0x8 held jump, 0x10 the ladder, 0x40 the backpedal latch, and the ADS pair 0x20 and 0x80 (section 1.13). The two ADS bits are the one place the wire word is not a reading of the usercmd: **the sight bit `buttons 0x10` reaches nothing directly.** `PM_UpdateAimDownSightFlag` gates it -- a dead, airborne, raising, holstering or swinging player, and a weapon with no `aimDownSight`, all clear 0x20 whatever the button does -- and `ps.fWeaponPosFrac` and the animscript's `ads` condition both read the gated flag. 0x80 rides on 0x20 but drops while prone and for the whole of a reload. Both retail motion captures read `pm_flags 0x400A0` at their one ADS pose and 0x40000 or 0x40002 everywhere else.
 - `serverCursorHintString` 255. The field is signed 8 bits and retail stores -1, a no-hint sentinel, from `G_CheckForCursorHints`.
 - `viewmodelIndex` 52 on `mp_pavlov` and 82 on `mp_carentan`: the model configstring index of the hands viewmodel the nationality's character script asked for, 1-based on base 268. It is derived here, not pinned — `setViewmodel` allocates through the same model indexer the configstring gate diffs, so the number falls out of the table.
 
@@ -831,7 +857,7 @@ If you're porting a Q3/RTCW server, these are the things that will bite:
 5. The client-to-server header is 9 plain bytes with a 1-byte serverId, not a compressed 4-byte one.
 6. Snapshots have no areamask.
 7. PlayerState negative field widths are unsigned (width only, no sign extension), and the playerState delta has no zero-flag in its main loop, so a changed `-0.0` float decodes as `+0.0` and only `lc` betrays that the field was sent at all.
-8. Real servers send `TR_SINE` trajectories with `trDuration == 0` on item pickups, which divides by zero under the literal RTCW `BG_EvaluateTrajectory` port; guard it to return `trBase`.
+8. `trType_t` is not RTCW's. CoD 1.1 has no `TR_LINEAR_STOP_BACK`, `TR_SPLINE` or `TR_LINEAR_PATH`, so every value from 4 up sits one index lower: `TR_SINE` 4, `TR_GRAVITY` 5, up to `TR_DECCELERATE` 10, and 11 or above is a `Com_Error` (`.so` 0x2c600). An item or a corpse arrives under 5, so a port that keeps RTCW's numbering reads gravity as a sine, divides by the `trDuration` 0 those entities carry, and draws every one of them frozen where it was launched.
 9. Server commands are single letters: the configstring update is `d <index> <text>` with unquoted text to end of line, not `cs <index> "<text>"`, and `map_restart` arrives as `n`.
 10. `sv_serverid` is a byte (`0x10` per map load from a zero start, low nibble per `map_restart`) and a stale low nibble makes the server drop the whole client message, snapshots included, instead of Q3's "ignoring pre map_restart" path that keeps serving them.
 11. The client-to-server scramble covers the compressed op block from its byte 0, packet byte 15, with no `CL_ENCODE_START` offset into it; the 9 plain header bytes in front are never scrambled and the parity `c << (i & 1)` counts from the block's own start.

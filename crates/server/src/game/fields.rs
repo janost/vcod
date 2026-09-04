@@ -339,6 +339,24 @@ pub const HUD_FIELDS: &[EngineField] = &[
     },
 ];
 
+/// The packed RGBA word `color` and `alpha` share (`hudelem_t+0x1c`): byte
+/// lanes r, g, b, a from the low byte up, which is the order the two getters
+/// read them back in (0x4c1b5 takes +0x1c..+0x1e, 0x4c285 takes +0x1f).
+/// White and opaque, `GScr_NewHudElem`'s seed (0x4b1d9).
+pub const HUD_WHITE: i32 = -1;
+
+/// One colour lane, script's 0..1 float as retail stores it: clamped, times
+/// 255, plus a half, truncated (0x4b090 with the x87 mode set to round to
+/// zero at 0x4b09a).
+pub fn hud_color_byte(v: f32) -> u32 {
+    ((v.clamp(0.0, 1.0) * 255.0) + 0.5) as u32
+}
+
+/// The inverse the two getters take: a lane back to 0..1.
+pub fn hud_color_float(byte: u32) -> f32 {
+    byte as f32 * (1.0 / 255.0)
+}
+
 /// The three HUD enum tables, each read in index order from the pointer
 /// table its field's setter passes to the shared name-to-index helper:
 /// `font` 0x7de04, `alignx` 0x7de10, `aligny` 0x7de1c, three names each.

@@ -128,6 +128,9 @@ fn pm_input(cmd: &UserCmd) -> PmInput {
         ads: cmd.buttons & msg::BUTTON_ADS != 0,
         use_button: cmd.buttons & msg::BUTTON_USE != 0,
         weapon: cmd.weapon,
+        // Raw, the way `PM_AdjustAimSpreadScale` reads them: the turn term is
+        // a delta between two cmds, so the view offset both carry cancels.
+        angles: [cmd.angles[0], cmd.angles[1]],
     }
 }
 
@@ -175,6 +178,10 @@ pub struct ClientSim {
     /// The model configstring index `setViewmodel` left on the client,
     /// mirrored from the script host every frame the way the weapons are.
     pub viewmodel_index: i32,
+    /// The body, head and helmet the character script dressed this client in,
+    /// mirrored the same way: the locational trace poses the grafted rig they
+    /// make (`crate::game::hitrig`).
+    pub assembly: crate::game::hitrig::Assembly,
     /// The client's per-axis view offset, added back onto each cmd's angle
     /// by both `step` and the connected client itself.
     /// docs/protocol-1.1.md, "Spectator view angles".
@@ -208,11 +215,6 @@ pub struct ClientSim {
     /// Killed and not yet respawned: `PM_DEAD` on the wire, the dead move,
     /// no weapon step, no feedback.
     pub dead: bool,
-    /// `ps.aimSpreadScale`, 0..255: what a shot and a hit add and the
-    /// weapon's decay rate takes away (combat doc, 2.1 and 6.5). A netfield
-    /// (`fields_v1.rs`), written as a float in `to_wire`; the spread reads
-    /// it too.
-    pub aim_spread_scale: f32,
     damage: DamageAccum,
     feedback: DamageFeedback,
     /// `ps.stats[1]`, the yaw toward the killer (combat doc, 5.1, item 11).
@@ -275,6 +277,7 @@ impl ClientSim {
             events: [0; 4],
             event_parms: [0; 4],
             viewmodel_index: 0,
+            assembly: Default::default(),
             delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
             view_lerp_start: None,
             anim: Default::default(),
@@ -284,7 +287,6 @@ impl ClientSim {
             health: 0,
             max_health: 0,
             dead: false,
-            aim_spread_scale: 0.0,
             damage: DamageAccum::default(),
             feedback: DamageFeedback::default(),
             dead_yaw: 0,
@@ -326,7 +328,6 @@ impl ClientSim {
         // `ClientSpawn`'s memset: the damage fields read 0 again after a
         // respawn (combat doc, 8.4), and so does the dead yaw.
         self.dead = false;
-        self.aim_spread_scale = 0.0;
         self.damage = DamageAccum::default();
         self.feedback = DamageFeedback::default();
         self.dead_yaw = 0;
@@ -418,23 +419,6 @@ impl ClientSim {
                 } else {
                     self.view_lerp_start.or(Some(cmd.server_time))
                 };
-                // `PM_AdjustAimSpreadScale` (combat doc, 2.1), reduced to
-                // the fire add and the decay: the turn and move terms and
-                // the stance decay multipliers are not carried.
-                if let Some(def) = weapons
-                    .get(self.ps.weapon as usize)
-                    .and_then(|d| d.as_ref())
-                {
-                    use vcod_common::pmove::weapon::{EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
-                    let shots = events
-                        .iter()
-                        .filter(|e| e.event == EV_FIRE_WEAPON || e.event == EV_FIRE_WEAPON_LASTSHOT)
-                        .count();
-                    self.aim_spread_scale = (self.aim_spread_scale
-                        - def.hip_spread_decay_rate * dt
-                        + def.hip_spread_fire_add * shots as f32)
-                        .clamp(0.0, 255.0);
-                }
                 for e in &events {
                     self.add_event(e.event, e.parm);
                 }
@@ -512,7 +496,10 @@ impl ClientSim {
             movetype,
             weapon: inputs.weapon.to_ascii_lowercase(),
             weapon_class: inputs.weapon_class.to_ascii_lowercase(),
-            ads: pm_input(cmd).ads,
+            // The gated flag, not the raw bit: retail feeds
+            // `BG_UpdateConditionValue` slot 7 `pm_flags & 0x20`
+            // (combat doc, 1.13).
+            ads: self.ps.ads_active,
             strafing: self.strafing,
             mounted: None,
             firing: self.ps.weaponstate == vcod_common::pmove::weapon::WEAPON_FIRING,
@@ -672,7 +659,7 @@ impl ClientSim {
             let length = |name: &str| inputs.anims.length_ms(name);
             self.anim.event(&sel, now_ms, resolve, length);
         }
-        self.anim.restart_torso_empty();
+        self.anim.restart_torso_empty(now_ms);
     }
 
     /// `P_DamageFeedback` (combat doc, section 6), once per frame after the
@@ -685,7 +672,7 @@ impl ClientSim {
             return;
         }
         let count = (self.damage.taken * 100 / self.max_health).min(127);
-        self.aim_spread_scale = (self.aim_spread_scale + count as f32).min(255.0);
+        self.ps.aim_spread_scale = (self.ps.aim_spread_scale + count as f32).min(255.0);
         match self.damage.from {
             None => {
                 self.feedback.yaw = 255;
@@ -717,6 +704,33 @@ impl ClientSim {
     /// Where the player is: the sim owns it, the script mirrors it.
     pub fn origin(&self) -> [f32; 3] {
         self.ps.origin.into()
+    }
+
+    /// What the locational trace poses this client's bones from: the two
+    /// live anim indices with the phase each is at, and the aim the spine
+    /// layer bends by.
+    ///
+    /// The waist pitch is 0 and the torso pitch is the client's own view
+    /// pitch. Retail splits the two across `fWaistPitch` and `fTorsoPitch`
+    /// with constants that are not decoded
+    /// (`docs/research/player-model-anim-system.md`), and this server sends
+    /// neither field, so there is nothing better to read.
+    pub fn pose_inputs<'a>(
+        &self,
+        anims: &'a vcod_common::animtree::PlayerAnims,
+        now_ms: i32,
+    ) -> vcod_common::playerpose::PoseInputs<'a> {
+        vcod_common::playerpose::PoseInputs {
+            anims,
+            legs: self.anim.legs(),
+            torso: self.anim.torso(),
+            legs_start_ms: self.anim.legs_start_ms(),
+            torso_start_ms: self.anim.torso_start_ms(),
+            now_ms,
+            torso_pitch: self.ps.pitch.to_degrees(),
+            waist_pitch: 0.0,
+            lean: self.ps.lean / vcod_common::pmove::LEAN_MAX,
+        }
     }
 
     /// The point a snapshot is built from: the origin lifted by the current
@@ -851,7 +865,15 @@ impl ClientSim {
         if player {
             // Retail leaves all three at zero for a spectator.
             set("viewHeightCurrent", self.ps.view_height().to_bits() as i32);
-            set("viewHeightTarget", self.ps.stance.view_height() as i32);
+            // `PM_CheckDuck` (cgame 0x30009de0) targets `deadViewHeight` for
+            // `pm_type >= 6`; the client re-derives it, so this only keeps the
+            // wire honest.
+            let target = if self.dead {
+                pmove::VIEW_DEAD
+            } else {
+                self.ps.stance.view_height()
+            };
+            set("viewHeightTarget", target as i32);
             let ground = match self.ps.on_ground {
                 true => ENTITYNUM_WORLD,
                 false => ENTITYNUM_NONE,
@@ -881,7 +903,11 @@ impl ClientSim {
             };
             set(
                 "pm_flags",
-                PMF_OWN_VIEW | stance_pmflags | jump_held | backwards,
+                PMF_OWN_VIEW
+                    | stance_pmflags
+                    | jump_held
+                    | backwards
+                    | pmove::weapon::ads_pm_flags(&self.ps),
             );
             // The client predicts its own eye lerp; without these it restarts
             // from our value every snapshot and the view shakes for as long
@@ -917,10 +943,11 @@ impl ClientSim {
             set("torsoAnim", self.anim.torso());
             // Both are netfields the client predicts from, so a constant
             // here fights its own prediction once a snapshot: the ADS lerp
-            // restarts and the spread reads a stale scale. The fraction is
-            // INFERRED (combat doc, 9.4); the scale is the sim's own.
+            // restarts and the spread reads a stale scale. Both come out of
+            // the shared pmove code the client predicts with (combat doc,
+            // 1.13 and 2.1).
             set("fWeaponPosFrac", self.ps.weapon_pos_frac.to_bits() as i32);
-            set("aimSpreadScale", self.aim_spread_scale.to_bits() as i32);
+            set("aimSpreadScale", self.ps.aim_spread_scale.to_bits() as i32);
         }
         // What the client holds; both layouts are in the object model doc,
         // section 20. The sim owns all of it: the script host's copy is

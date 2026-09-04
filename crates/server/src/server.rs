@@ -156,6 +156,14 @@ enum ClientOp {
     Move(Vec<UserCmd>),
 }
 
+/// A client command whose whole effect is to start or release a script
+/// thread. `client_command` parses it out of the packet and `tick` runs it,
+/// so it lands on the frame the rest of the script frame runs on.
+enum ScriptCommand {
+    Kill,
+    MenuResponse(i32, String),
+}
+
 /// One shot a client's weapon step took this tick: the queue between the
 /// move that pulled the trigger and the trace `tick` answers it with.
 #[derive(Clone, Copy, Debug)]
@@ -164,8 +172,8 @@ pub(crate) struct Shot {
     /// `ps.weapon` at the shot, which the delayed trace must use rather than
     /// whatever the client is holding by the time it runs.
     pub weapon: u8,
-    /// The trigger cmd's sight bit, which picks `adsSpread` over the hip
-    /// spread.
+    /// Whether the shot left a settled sight (`fWeaponPosFrac == 1.0`),
+    /// which picks `adsSpread` over the hip spread (combat doc, 2.1).
     pub ads: bool,
 }
 
@@ -220,6 +228,10 @@ struct MoveSummary {
     processed: usize,
     first_cmd_st: Option<i32>,
     last_cmd_st: Option<i32>,
+    /// The union of every replayed cmd's `buttons`, for the script's button
+    /// builtins: retail latches each cmd in `ClientThink` (0x41540), so a tap
+    /// inside a multi-cmd packet must not be lost to the packet's last cmd.
+    buttons: u8,
 }
 
 pub struct Server {
@@ -267,9 +279,26 @@ pub struct Server {
     /// Shots this tick's moves took, in the order they were fired. Filled by
     /// `replay_moves`, drained by `tick` into traces before the script runs.
     pending_shots: Vec<Shot>,
+    /// Retail's `+set name value`: applied last in `cvars`, over
+    /// `default_mp.cfg` and the config's own, so a run can turn a script
+    /// cvar such as `scr_friendlyfire` on without a code change.
+    cvar_overrides: Vec<(String, String)>,
+    /// The client commands that start a script thread, in arrival order.
+    /// `client_command` runs during `handle_packet`, a frame before `tick`
+    /// advances `sv_time_ms`, so a thread started there would run on the
+    /// previous frame's clock and every `cloneplayer` and `wait` in it would
+    /// land a frame in the past. These queue instead and are drained in the
+    /// tick's script slot.
+    pending_script_commands: Vec<(usize, ScriptCommand)>,
     /// The hit-location damage multipliers out of the paks
     /// (`crate::game::combat::HitLocTable`); the default until `load_scripts`.
     hitlocs: crate::game::combat::HitLocTable,
+    /// The paks, kept past `load_scripts` because a shot loads the victim's
+    /// models to trace against. `None` on a host with none.
+    fs: Option<Rc<vcod_common::pk3::Pk3Fs>>,
+    /// The grafted player skeletons those shots trace against, built on first
+    /// use (`crate::game::hitrig`).
+    hit_rigs: crate::game::hitrig::HitRigs,
     /// Weapons the moves themselves switched to, by slot: only a change the
     /// machine made, so a playerstate reset from outside a move is not one.
     /// `tick` writes each back onto the script host before the mirror reads
@@ -382,7 +411,11 @@ impl Server {
             anims: None,
             weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
             pending_shots: Vec::new(),
+            cvar_overrides: Vec::new(),
+            pending_script_commands: Vec::new(),
             hitlocs: crate::game::combat::HitLocTable::default(),
+            fs: None,
+            hit_rigs: Default::default(),
             weapon_changes: Vec::new(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
@@ -830,24 +863,23 @@ impl Server {
             }
             // `Cmd_Kill_f`: the same death `self suicide()` gives, asked for
             // by the client. The retail hit capture's death half is this
-            // command (combat doc, section 8).
-            "kill" => {
-                let now = self.sv_time_ms;
-                if let Some(rt) = self.script.as_mut() {
-                    rt.kill_client(slot, now);
-                }
-            }
+            // command (combat doc, section 8). Queued rather than run: it
+            // starts `CodeCallback_PlayerKilled`, and script runs in the
+            // tick's script slot on the tick's clock.
+            "kill" => self
+                .pending_script_commands
+                .push((slot, ScriptCommand::Kill)),
             // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
             // opened. Unlike the entry notify this fires straight through:
             // nothing is armed by it, and a notify no thread is parked on is
-            // simply lost, which is what retail does too.
+            // simply lost, which is what retail does too. Queued with `kill`,
+            // since the notify releases threads.
             "mr" => {
                 if let Some((index, response)) =
                     parse_menu_response(trimmed, i32::from(self.server_id))
                 {
-                    if let Some(rt) = self.script.as_mut() {
-                        rt.menu_response(slot, index, &response);
-                    }
+                    self.pending_script_commands
+                        .push((slot, ScriptCommand::MenuResponse(index, response)));
                 }
             }
             other => log::debug!("client {slot}: command {other:?} ignored"),
@@ -966,27 +998,16 @@ impl Server {
     /// <allies>{ <client> <score> <ping> <time> <icon>}*`, one row per online
     /// client (`docs/research/cod11-hud-protocol.md` section 3).
     ///
-    /// The score and the status icon come from the script's own client
-    /// fields, which is where every gametype writes them. `ping` is 0: the
-    /// netchan keeps no round-trip estimate, and 0 renders as a number where
-    /// retail's `-1` renders as "-" for a client still connecting. `time` is
-    /// minutes since the client connected -- retail sends `pers.enterTime`
-    /// raw and its unit is unmeasured (section 3, UNVERIFIED), so this is the
-    /// Q3 reading of the same slot rather than a claim about retail's.
+    /// The score, the deaths and the status icon come from the script's own
+    /// client fields, which is where every gametype writes them. `ping` is 0:
+    /// the netchan keeps no round-trip estimate, and 0 renders as a number
+    /// where retail's `-1` renders as "-" for a client still connecting.
     fn scoreboard(&mut self) -> String {
-        let online: Vec<(usize, i64)> = self
+        let online: Vec<usize> = self
             .clients
             .iter()
             .enumerate()
-            .filter_map(|(slot, c)| {
-                let c = c.as_ref()?;
-                let minutes = c
-                    .last_packet
-                    .saturating_duration_since(c.last_connect)
-                    .as_secs()
-                    / 60;
-                Some((slot, minutes as i64))
-            })
+            .filter_map(|(slot, c)| c.as_ref().map(|_| slot))
             .collect();
         // Tokens 2 and 3 are `level.teamScores[1]` and `[2]`. Both retail
         // captures read 0 in each: the array starts zeroed and the `-9999`
@@ -994,13 +1015,16 @@ impl Server {
         // doc, section 3). Hardcoded until a `setTeamScore` builtin gives
         // them somewhere to live.
         let mut text = format!("b {} 0 0", online.len());
-        for (slot, minutes) in online {
-            let score = self
-                .client_field(slot, "score")
-                .and_then(|s| s.parse::<i64>().ok())
-                .unwrap_or(0);
+        for slot in online {
+            let mut field = |name: &str| {
+                self.client_field(slot, name)
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(0)
+            };
+            let score = field("score");
+            let deaths = field("deaths");
             let icon = self.status_icon_index(slot);
-            text.push_str(&format!(" {slot} {score} 0 {minutes} {icon}"));
+            text.push_str(&format!(" {slot} {score} 0 {deaths} {icon}"));
         }
         text
     }
@@ -1050,9 +1074,10 @@ impl Server {
             .as_ref()?
             .to_entity(self.proto, slot, c.last_processed_st);
         let (now, proto) = (self.sv_time_ms, self.proto);
+        let collision = self.world.as_ref().map(|w| &w.collision);
         self.script
             .as_mut()
-            .map(|rt| rt.bodies_mut().push(state, None, now, proto))
+            .map(|rt| rt.bodies_mut().push(state, None, now, collision, proto))
     }
 
     /// Raises one event for the next snapshot build. Test-facing, like
@@ -1187,6 +1212,9 @@ impl Server {
         cvars.set("sv_hostname", &self.cfg.hostname);
         cvars.set("sv_maxclients", &self.cfg.max_clients.to_string());
         cvars.set("debug", "0");
+        for (name, value) in &self.cvar_overrides {
+            cvars.set(name, value);
+        }
         cvars
     }
 
@@ -1206,6 +1234,7 @@ impl Server {
     /// than about a half-cleared table. `main.rs` exits on it.
     pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
         let cvars = self.cvars(&fs);
+        self.fs = Some(fs.clone());
         self.anims = match vcod_common::animtree::PlayerAnims::load(&fs) {
             Ok(a) => Some(a),
             Err(e) => {
@@ -1254,6 +1283,12 @@ impl Server {
     /// One key out of a client's `.pers`, rendered the same way.
     pub fn client_pers(&mut self, slot: usize, key: &str) -> Option<String> {
         self.script.as_mut()?.client_pers(slot, key)
+    }
+
+    /// A `+set` for the next `load_scripts`.
+    pub fn set_cvar(&mut self, name: &str, value: &str) {
+        self.cvar_overrides
+            .push((name.to_string(), value.to_string()));
     }
 
     const FALLBACK_SPAWN: ([f32; 3], f32) = ([0.0, 0.0, 64.0], 0.0);
@@ -1321,6 +1356,17 @@ impl Server {
                 .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
                 .collect();
             let collision = self.world.as_ref().map(|w| &w.collision);
+            // The locational trace's context, absent on a host with no paks
+            // or no animtree; a shot then lands at hit location `none`.
+            let mut bones = match (self.fs.as_deref(), self.anims.as_ref()) {
+                (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
+                    fs,
+                    anims,
+                    rigs: &mut self.hit_rigs,
+                    now_ms: self.sv_time_ms,
+                }),
+                _ => None,
+            };
             for shot in self.pending_shots.drain(..) {
                 let Some(def) = weapons.get(shot.weapon as usize) else {
                     continue;
@@ -1334,6 +1380,7 @@ impl Server {
                     &sims,
                     collision,
                     &self.hitlocs,
+                    bones.as_mut(),
                     &mut self.rng,
                 );
                 impacts.extend(r.impact);
@@ -1342,14 +1389,34 @@ impl Server {
         }
 
         let mut client_commands = Vec::new();
+        // A client that dropped between the packet and here has nothing left
+        // to run its command against.
+        let queued: Vec<(usize, ScriptCommand)> = std::mem::take(&mut self.pending_script_commands)
+            .into_iter()
+            .filter(|(slot, _)| self.clients[*slot].is_some())
+            .collect();
         if let Some(rt) = self.script.as_mut() {
             for (slot, c) in self.clients.iter().enumerate() {
                 if let Some(c) = c {
-                    rt.set_client_buttons(slot, c.last_cmd.buttons);
+                    rt.set_client_buttons(slot, c.last_cmd.buttons | moved[slot].buttons);
                 }
             }
             for te in impacts {
                 rt.push_temp_entity(te);
+            }
+            // The client commands the packet pass queued, on this frame's
+            // clock: retail runs `Cmd_Kill_f` ahead of the damage callbacks
+            // too, and a thread started here sees `level.time` already
+            // advanced, which is what a `cloneplayer` in it needs.
+            for (slot, cmd) in queued {
+                match cmd {
+                    ScriptCommand::Kill => {
+                        rt.kill_client(slot, self.sv_time_ms);
+                    }
+                    ScriptCommand::MenuResponse(index, response) => {
+                        rt.menu_response(slot, index, &response)
+                    }
+                }
             }
             rt.deliver_hits(hits, self.sv_time_ms);
             rt.run_frame(self.sv_time_ms);
@@ -1408,6 +1475,13 @@ impl Server {
                     sim.ps.weapon_slots = w.slots;
                     sim.ps.weapon = w.current;
                     sim.viewmodel_index = rt.client_viewmodel(slot);
+                    // The body, head and helmet the character script dressed
+                    // the client in: what a shot at it is traced against.
+                    if let Some(a) = rt.client_assembly(slot) {
+                        if a != sim.assembly {
+                            sim.assembly = a;
+                        }
+                    }
                     // And back the other way: the sim owns where a player is,
                     // so the script's copy is written from it every frame.
                     rt.set_client_origin(slot, sim.origin());
@@ -1520,7 +1594,7 @@ impl Server {
                         self.pending_shots.push(Shot {
                             slot,
                             weapon: sim.ps.weapon,
-                            ads: cmd.buttons & msg::BUTTON_ADS != 0,
+                            ads: sim.ps.weapon_pos_frac == 1.0,
                         });
                     }
                 }
@@ -1529,6 +1603,7 @@ impl Server {
                 c.last_processed_st = cmd.server_time;
                 m.first_cmd_st.get_or_insert(cmd.server_time);
                 m.last_cmd_st = Some(cmd.server_time);
+                m.buttons |= cmd.buttons;
                 m.processed += 1;
             }
             if sim.ps.weapon != held {
@@ -1665,10 +1740,12 @@ impl Server {
         // (`crate::game::bodies`). Then the queue's corpses join the map's
         // entities; they are culled per client like anything else.
         let (now, proto) = (self.sv_time_ms, self.proto);
+        let collision = self.world.as_ref().map(|w| &w.collision);
         if let Some(rt) = self.script.as_mut() {
             rt.bodies_mut().refresh_newborn(
                 now,
                 |slot| client_entities.get(&(slot as u32)).cloned(),
+                collision,
                 proto,
             );
             entities.extend(rt.bodies().entities());
@@ -1738,12 +1815,23 @@ impl Server {
                 }
             }
 
+            let mut ps = sim.to_wire(self.proto, slot as i32, command_time);
+            // The script's HUD elements, filtered for this client the way
+            // `HudElem_UpdateClient` filters them; retail rebuilds both
+            // arrays into the playerstate once per client per frame, so
+            // they are read here rather than carried on the sim.
+            let team = per_slot.get(slot).map_or(script::TEAM_SPECTATOR, |p| p.2);
+            if let Some(rt) = self.script.as_ref() {
+                let (archived, current) = rt.hud_elems(slot, team);
+                ps.arrays.hud_archived = archived;
+                ps.arrays.hud_current = current;
+            }
             let frame = snapshot::Snapshot {
                 server_time: self.sv_time_ms,
                 message_num,
                 delta_num: -1,
                 snap_flags: 0,
-                ps: sim.to_wire(self.proto, slot as i32, command_time),
+                ps,
                 entities: visible,
                 clients: roster.clone(),
                 valid: true,

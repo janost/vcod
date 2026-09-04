@@ -579,6 +579,31 @@ impl ScriptRuntime {
             .collect()
     }
 
+    /// The models a client wears, by name rather than by configstring index:
+    /// what the locational trace poses. The body is `.model` and the head and
+    /// helmet are attachments, the same pair `client_model_index` and
+    /// `client_attachments` put on the roster.
+    pub fn client_assembly(&mut self, slot: usize) -> Option<crate::game::hitrig::Assembly> {
+        use crate::game::hitrig::{model_name, Assembly};
+        let body = model_name(&self.client_field(slot, "model")?);
+        if body.is_empty() {
+            return None;
+        }
+        let ent = self.client_entity(slot)?;
+        let e = self.host.ents.get(ent)?;
+        let attachments = self.vm.with_cx(|cx| {
+            e.attachments
+                .iter()
+                .take(ATTACH_SLOTS)
+                .map(|(m, t)| {
+                    let tag = cx.resolve(*t).to_string();
+                    (model_name(cx.resolve(*m)), (!tag.is_empty()).then_some(tag))
+                })
+                .collect()
+        });
+        Some(Assembly { body, attachments })
+    }
+
     /// A client entity's `.origin` as the scripts read it.
     pub fn client_origin(&mut self, slot: usize) -> [f32; 3] {
         use vcod_gsc::Host;
@@ -653,6 +678,10 @@ impl ScriptRuntime {
                 // slot ahead of it would hand it a dead entity.
                 if let Some(id) = self.client_entity(slot) {
                     self.start_callback("CodeCallback_PlayerDisconnect", id, now_ms);
+                    // Whatever was still running on the player dies with
+                    // it: a dead player's `waitRespawnButton` polled a
+                    // freed entity otherwise (`Vm::kill_threads_of`).
+                    self.vm.kill_threads_of(Target::Entity(id));
                 }
                 self.host.ents.free_client(slot);
             }
@@ -678,6 +707,20 @@ impl ScriptRuntime {
         let host = &mut self.host;
         self.vm
             .with_cx(|cx| crate::game::wire::packet_entities(host, cx, p))
+    }
+
+    /// The HUD elements one client is sent, archived array first
+    /// (`crate::game::wire::hud_elems`). `team` is that client's
+    /// `clientState.team`, which is what a team element is filtered on.
+    pub fn hud_elems(
+        &self,
+        slot: usize,
+        team: i32,
+    ) -> (
+        Vec<vcod_common::net::msg::HudElem>,
+        Vec<vcod_common::net::msg::HudElem>,
+    ) {
+        crate::game::wire::hud_elems(&self.host, slot, team)
     }
 
     pub fn configstrings(&self) -> &[String] {
@@ -762,6 +805,11 @@ impl ScriptRuntime {
         // entity already gone. Whether retail really orders it this way is
         // what `probe_delete`'s post-wait count measures.
         self.host.ents.run_thinks(now_ms);
+        // The body queue is not in the object table, so its own think -- the
+        // 250 ms `eFlags` 0x800 clear -- runs beside the table's.
+        self.host
+            .bodies
+            .run_thinks(now_ms, &vcod_common::net::protocol::PROTOCOL_V1);
         for e in self.vm.run_frame(&mut self.host, now_ms) {
             log::warn!("script error: {e:?}");
         }
@@ -1064,6 +1112,33 @@ mod tests {
         rt.run_frame(100);
         assert_eq!(rt.level_field("gone"), vcod_gsc::Value::Int(3));
         assert!(rt.client_entity(3).is_none());
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+    }
+
+    /// A thread still polling the player when it disconnects dies with the
+    /// entity instead of erroring on a freed `self`, which is what the
+    /// stock `waitRespawnButton` did to a dead player who left.
+    #[test]
+    fn a_disconnect_kills_the_threads_running_on_the_player() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() {}\n\
+             CodeCallback_PlayerConnect() { self thread poll(); }\n\
+             CodeCallback_PlayerDisconnect() {}\n\
+             poll() { for(;;) { level.polls = self useButtonPressed(); wait .05; } }\n",
+        );
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 3,
+            name: "vcod".into(),
+        });
+        rt.run_frame(50);
+        rt.run_frame(100);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+
+        rt.push_client_event(ClientEvent::Disconnect(3));
+        for f in 3..8 {
+            rt.run_frame(f * 50);
+        }
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
     }
 
