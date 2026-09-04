@@ -171,8 +171,8 @@ fn only_the_killed_client_is_sent_the_respawn_text() {
         buttons: BUTTON_ADS | BUTTON_ATTACK,
         ..NULL_USERCMD
     };
-    // The wait between the taps outlasts B's pain animation, which doubles
-    // it over far enough that a level shot meets no bone.
+    // The wait between the taps lets the knockback decay and the semi-auto
+    // latch release.
     for shot in 0..2 {
         ca.send_frame(&fire);
         cb.send_frame(&facing_a);

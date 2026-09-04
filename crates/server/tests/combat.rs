@@ -152,20 +152,17 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     };
     assert!(flesh(sa), "A is sent the flesh impact");
     assert!(!flesh(sb), "the victim is not");
-    // The clause a standing player's pain reaches lists one anim, so the
-    // random draw has one answer here; only the prone clause lists two.
+    // No pain animation: retail's hit frame keeps the standing idle, or the
+    // run the knockback selects for a frame (combat doc, 3.4).
     let legs = sa.entities[&(nb as u32)].field_i32(p, "legsAnim") & 511;
-    assert_eq!(
-        anims.name(legs),
-        Some("pb_crouch_pain_holdStomach"),
-        "B's legs play the stock pain clause"
+    let legs_name = anims.name(legs).expect("B's legs play an anim");
+    assert!(
+        !legs_name.contains("pain"),
+        "B's legs play {legs_name}; retail plays no pain anim on the server"
     );
     assert_eq!(sa.ps.health(), 100, "A is untouched");
 
-    // Release, wait out fireTime and the pain animation, then tap again. The
-    // wait has to outlast the pain: the shot is traced against B's posed
-    // bones, and the stock standing pain clause doubles B over far enough
-    // that a level shot from eye height meets no bone at all.
+    // Release, wait out fireTime and the knockback, then tap again.
     for _ in 0..30 {
         ca.send_frame(&ads);
         cb.send_frame(&facing_a);
@@ -249,9 +246,15 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     // `cloneplayer` filled the body queue's first slot, and both clients are
     // sent it: the dead client's number rides on the corpse, which is how the
     // receiving client picks the body model
-    // (`docs/research/clientstate-wire-format.md`).
+    // (`docs/research/clientstate-wire-format.md`). The dead player's own
+    // entity is gone from A's list, the way `SVF_NOCLIENT` takes it off
+    // retail's wire on the death frame (combat doc, 5.4).
     let sa = ca.snapshots().newest().unwrap();
     let sb = cb.snapshots().newest().unwrap();
+    assert!(
+        !sa.entities.contains_key(&(nb as u32)),
+        "A is still sent an entity for dead player {nb}"
+    );
     for (who, snap) in [("A", sa), ("B", sb)] {
         let corpse = snap
             .entities
@@ -381,6 +384,14 @@ fn a_shot_takes_health_and_a_second_one_kills() {
         sb.ps.origin(p),
         death_spot,
         "the respawn moved B off the corpse"
+    );
+    assert!(
+        ca.snapshots()
+            .newest()
+            .unwrap()
+            .entities
+            .contains_key(&(nb as u32)),
+        "A is not sent the respawned player {nb}"
     );
     assert_eq!(
         sv.client_field(nb, "sessionstate").as_deref(),
