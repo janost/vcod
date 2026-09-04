@@ -1722,8 +1722,12 @@ impl Server {
                 let sim = c.as_ref()?.sim.as_ref()?;
                 // A spectator is not a thing in the world: retail never links
                 // one, so nobody is sent an entity for it. Without this a
-                // player's crosshair names a spectator flying overhead.
-                if sim.pm_type != crate::spectate::PmType::Spectator {
+                // player's crosshair names a spectator flying overhead. A dead
+                // player is hidden the same way: `ClientEndFrame` sets
+                // `SVF_NOCLIENT` on it every frame until it respawns, and the
+                // corpse in the body queue is what the others see (combat
+                // doc, 5.4).
+                if sim.pm_type != crate::spectate::PmType::Spectator && !sim.dead {
                     Some((
                         i as u32,
                         sim.to_entity(self.proto, i, c.as_ref()?.last_processed_st),
@@ -1741,10 +1745,16 @@ impl Server {
         // entities; they are culled per client like anything else.
         let (now, proto) = (self.sv_time_ms, self.proto);
         let collision = self.world.as_ref().map(|w| &w.collision);
+        let clients = &self.clients;
         if let Some(rt) = self.script.as_mut() {
+            // Straight off the sim, not `client_entities`: the source is
+            // dead by now and has no entity there.
             rt.bodies_mut().refresh_newborn(
                 now,
-                |slot| client_entities.get(&(slot as u32)).cloned(),
+                |slot| {
+                    let c = clients.get(slot)?.as_ref()?;
+                    Some(c.sim.as_ref()?.to_entity(proto, slot, c.last_processed_st))
+                },
                 collision,
                 proto,
             );
