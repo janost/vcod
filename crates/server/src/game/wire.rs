@@ -25,8 +25,9 @@
 
 use super::host::GameHost;
 use crate::configstrings::CsRange;
+use crate::game::entity::{HudState, HUD_OWNER_ALL};
 use std::collections::BTreeMap;
-use vcod_common::net::msg::EntityState;
+use vcod_common::net::msg::{EntityState, HudElem, MAX_HUD_ELEMS};
 use vcod_common::net::protocol::{Protocol, ENTITYNUM_WORLD};
 use vcod_gsc::EntId;
 use vcod_gsc::{Cx, Host, Value};
@@ -86,6 +87,98 @@ pub fn link_box(etype: i32) -> ([f32; 3], [f32; 3]) {
         ),
         _ => ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]),
     }
+}
+
+/// What one client is sent of the HUD element pool: the archived array and
+/// the current one, in that order, which is the order block 5 writes them
+/// (docs/protocol-1.1.md, "Block 5").
+///
+/// This is `HudElem_UpdateClient` (`game.mp.i386.so` 0x4be8c), which
+/// `G_RunFrame` calls once per in-use client (0x50a80). It walks
+/// `g_hudelems` from slot 0, skips a record whose team is set and does not
+/// match this client's, skips one whose owner is neither `ENTITYNUM_NONE`
+/// nor this client, and appends the rest to the array its `archived` flag
+/// picks, 31 elements each.
+pub fn hud_elems(host: &GameHost, slot: usize, team: i32) -> (Vec<HudElem>, Vec<HudElem>) {
+    let mut archived = Vec::new();
+    let mut current = Vec::new();
+    let ids: Vec<EntId> = host.ents.iter_hud_elems().map(|(id, _)| id).collect();
+    for id in ids {
+        let Some(state) = host.ents.get(id).and_then(|e| e.hud) else {
+            continue;
+        };
+        if state.team != 0 && state.team != team {
+            continue;
+        }
+        if state.owner != HUD_OWNER_ALL && state.owner != slot as u32 {
+            continue;
+        }
+        let out = match hud_field_i32(host, id, "archived") {
+            0 => &mut current,
+            _ => &mut archived,
+        };
+        if out.len() < MAX_HUD_ELEMS {
+            out.push(build_hud_elem(host, id, &state));
+        }
+    }
+    (archived, current)
+}
+
+/// One record as block 5 carries it: the script-visible fields out of the
+/// element's engine slots, the rest out of its [`HudState`]. An unwritten
+/// slot reads `undefined`, which stands for the zero retail's `bzero` left.
+fn build_hud_elem(host: &GameHost, id: EntId, state: &HudState) -> HudElem {
+    use vcod_common::net::msg::hud_field as f;
+    let mut e = HudElem::default();
+    e.set(f::TYPE, state.elem_type);
+    e.set(f::TEXT, state.text);
+    e.set(f::TIME, state.time);
+    e.set(f::SHADER, state.shader);
+    e.set(f::WIDTH, state.width);
+    e.set(f::HEIGHT, state.height);
+    e.set_f32(f::VALUE, state.value);
+    for (field, name) in [
+        (f::X, "x"),
+        (f::Y, "y"),
+        (f::FONT, "font"),
+        (f::ALIGN_X, "alignx"),
+        (f::ALIGN_Y, "aligny"),
+        (f::COLOR, "color"),
+        (f::LABEL, "label"),
+    ] {
+        e.set(field, hud_field_i32(host, id, name));
+    }
+    for (field, name) in [(f::FONT_SCALE, "fontscale"), (f::SORT, "sort")] {
+        e.set_f32(field, hud_field_f32(host, id, name));
+    }
+    e
+}
+
+/// One HUD engine slot as the integer the wire wants. The enum fields
+/// (`font`, `alignx`, `aligny`) are stored as retail's index and read back
+/// as a name, so this takes the slot rather than going through `get_field`.
+fn hud_field_i32(host: &GameHost, id: EntId, name: &str) -> i32 {
+    match hud_slot_value(host, id, name) {
+        Some(Value::Int(i)) => i,
+        Some(Value::Float(f)) => f as i32,
+        _ => 0,
+    }
+}
+
+fn hud_field_f32(host: &GameHost, id: EntId, name: &str) -> f32 {
+    match hud_slot_value(host, id, name) {
+        Some(Value::Int(i)) => i as f32,
+        Some(Value::Float(f)) => f,
+        _ => 0.0,
+    }
+}
+
+fn hud_slot_value(host: &GameHost, id: EntId, name: &str) -> Option<Value> {
+    let crate::game::fields::Route::Engine { slot, .. } = crate::game::fields::route_hud(name)
+    else {
+        return None;
+    };
+    host.ents.get(id).map(|e| e.engine[slot])
 }
 
 /// Builds one `EntityState` per linked object, keyed by entity number.

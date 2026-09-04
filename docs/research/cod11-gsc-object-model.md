@@ -232,7 +232,14 @@ entity is unusable by script unless it is handed both a `name` and an indexable
 ```
 
 `color` and `alpha` share offset 28 and both carry hooks, which pack and
-unpack the byte lanes of one packed RGBA word.
+unpack the byte lanes of one packed RGBA word. VERIFIED which lane is which,
+off the two getters: `color`'s (0x4c1ac) reads the bytes at +0x1c, +0x1d and
++0x1e into a vector and `alpha`'s (0x4c27c) reads +0x1f, each scaled by
+1/255 (`0x74ac0`, `0x74acc`). Both setters clamp to 0..1, multiply by 255.0
+and add 0.5 with the x87 mode set to truncate (0x4b082 and 0x4c240), so a
+lane is `(int)(clamp(v) * 255 + 0.5)`. VERIFIED. `GScr_NewHudElem` seeds the
+whole word to `0xFFFFFFFF` (0x4b1d9), which is the opaque white the retail
+round clock carries on the wire.
 
 `font`, `alignx` and `aligny` are stored as ints but script reads and writes
 them as names, so for these three the type column is the storage, not what
@@ -260,9 +267,20 @@ matching index, and otherwise builds a message from the whole table and calls
 `Scr_AddString`. The name-to-index direction is not measured live; a probe
 that sets each name and reads it back would settle it.
 
-`label`'s hook (0x4c400) is a setter only. INFERRED that it takes a localized
-string rather than a name from a table: it has no name-table argument and no
-call into the 0x4af80 helper.
+`label`'s hook (0x4c400) is a setter only, and it takes a localized string:
+VERIFIED, it calls `Scr_GetIString` (0x4c419) and stores what
+`G_LocalizedStringIndex` (0x4c422) answers, so the field holds the 1-based
+index a client resolves through configstring `1244 + n`. `setText` (0x4c590)
+does the same into the record's +0x68.
+
+`archived` (0x4c43c, +0x78) is seeded to 1 by `GScr_NewHudElem` (0x4b1fc).
+VERIFIED. It picks which of the playerstate's two HUD arrays the record is
+copied into, which is docs/research/cod11-hud-protocol.md section 5.
+
+The rest of the record -- the type tag at +0x0, `setShader`'s size and
+material index, the timers' deadline, `setValue`'s number, `setText`'s
+string index, and the owner and team the wire build filters on -- has no
+script field at all; those are what the fourteen hudelem methods write.
 
 ## 6. Radiant fields come from a file, not a table
 
@@ -812,21 +830,23 @@ retail server.
 |---|---|---|---|---|
 | `placeSpawnpoint` | entity methods 37 | 0x5bedc | INFERRED: point-traces from the origin up 128 (0x5bf45), then down 262144 (0x5bf91) with contents mask 0x2810011, moves the entity to the endpoint, stores the second trace's result word at results+0x28 into `gentity_t+0x7c` (which field that is, is a further inference: the ground entity), prints `WARNING: Spawn point entity %i is in solid at (%i, %i, %i)` when a third trace at the placed position starts solid | both traces, the solid test and the move, against our own solid+playerclip mask; nothing stored for `gentity_t+0x7c`, since our trace carries no entity identity |
 | `setClientNameMode` | functions 89 | 0x5f208 | INFERRED: matches the argument against `auto_change` and `manual_change`, stores 0 or 1 in `level+0x210`, `Scr_Error("Unknown mode")` otherwise. The two constants are `scr_const+0xfc`/`+0xfe`, named by `GScr_LoadConsts` 0x58550, both VERIFIED data reads. So is the claim that the only two readers of `level+0x210` in the module are `ClientUserinfoChanged` (0x421eb) and the name-change path at 0x5ba99: the relocation table has exactly four `level+0x210` sites, these two and this function's own pair | recorded on the host, both errors faithful; nothing reads it until clients exist |
-| `newHudElem` | functions 77 | 0x4b184 | INFERRED: first free `g_hudelems` record, zeroed but for `fontscale` 1.0 (0x4b19b) and a packed white `color` (0x4b1d9), owner `0x3ff`; `Scr_Error("out of hudelems")` when full | the allocation, the pool size and the failure; `fontscale` seeded, `color` not, since `HUD_FIELDS` has no unpacked representation for it |
-| `<hudelem> setTimer` | hudelem methods 2 | 0x4b8e4 | INFERRED: exactly one parameter, seconds to milliseconds with the x87 rounding mode set to round-up (0x4b942), rejects a result not above zero, zeroes +0x30..+0x48 and +0x60/+0x64/+0x68, then writes the element type 4 at +0x0 and the absolute end time `level.time + ms` at +0x5c | the call shape and both errors; nothing recorded and nothing to clear, see below |
+| `newHudElem` | functions 77 | 0x4b184 | INFERRED: first free `g_hudelems` record, zeroed but for `fontscale` 1.0 (0x4b19b), a packed white `color` (0x4b1d9), `archived` 1 (0x4b1fc) and owner `0x3ff` (0x4b249); `Scr_Error("out of hudelems")` when full | the allocation, the pool size, the failure and all four defaults |
+| `<hudelem> setTimer` | hudelem methods 2 | 0x4b8e4 | INFERRED: exactly one parameter, seconds to milliseconds with the x87 rounding mode set to round-up (0x4b942), rejects a result not above zero, zeroes +0x30..+0x48 and +0x60/+0x64/+0x68, then writes the element type 4 at +0x0 and the absolute end time `level.time + ms` at +0x5c | faithful, the clear included |
 
-The record is a tagged union keyed by the type word at +0x0. `setText`
-(0x4c590), `setValue` (0x4c684) and `setTimer` share one prologue that zeroes
-the same block, then each writes its own type and payload: 1 with the interned
-string at +0x68, 2 with the float at +0x64, 4 with the end time at +0x5c. Not
-one of the offsets in that block is in `HUD_FIELDS`, so script can read none
-of them back, and `label` — the script-readable field nearby, at +0x2c — is
-not in it either. That is why our `setTimer` clears nothing: a script that
-sets `.label` and then calls `setTimer` reads the same value back here as on
-retail.
+The record is a tagged union keyed by the type word at +0x0, and 0 is a free
+record, which is why a fresh element is type 1. `setText` (0x4c590),
+`setValue` (0x4c684), `setShader` (0x4b5b0), the four timers and the two
+clocks share one prologue that zeroes the same block, then each writes its
+own type and payload: 1 with the localized-string index at +0x68, 2 with the
+float at +0x64, 3 with the material index at +0x38 and the size at
++0x30/+0x34, 4..7 with the deadline at +0x5c, 8 and 9 the two clocks. None of
+those offsets is in `HUD_FIELDS`, so script can read none of them back;
+`label`, at +0x2c, is script-readable and no method touches it.
 
 `newClientHudElem` (0x4b298) and `newTeamHudElem` (0x4b3d0) allocate from the
-same pool with an owner; both need clients, so neither is implemented.
+same pool and then write one filter field each, the owner at +0x70 and the
+team at +0x74. Which client each element reaches, and the wire it reaches it
+on, is docs/research/cod11-hud-protocol.md section 5.
 
 `thread addBotClients()` is commented out in the shipped `dm.gsc`, so nothing
 in the stock bootstrap reaches `addTestClient`.
