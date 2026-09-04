@@ -186,6 +186,10 @@ pub struct WeaponDef {
     /// (`ammo_index`/`clip_index` never share one table).
     pub clip_name: String,
     pub weapon_class: String,
+    /// `weaponType`, lowercased: `bullet` or `grenade` on every stock file.
+    /// Retail's `PM_Weapon` keys its grenade branches on this being type 1
+    /// (docs/research/cod11-combat.md, section 1.11).
+    pub weapon_type: String,
     pub hip_spread_stand_min: f32,
     pub hip_spread_ducked_min: f32,
     pub hip_spread_prone_min: f32,
@@ -293,6 +297,10 @@ impl WeaponDef {
             clip_name: map.get("clipName").cloned().unwrap_or_default(),
             weapon_class: map
                 .get("weaponClass")
+                .map(|c| c.to_ascii_lowercase())
+                .unwrap_or_default(),
+            weapon_type: map
+                .get("weaponType")
                 .map(|c| c.to_ascii_lowercase())
                 .unwrap_or_default(),
             hip_spread_stand_min: parse_num(map, "hipSpreadStandMin", 0.0),

@@ -634,6 +634,13 @@ fn fire(ps: &mut PlayerState, input: &PmInput, def: &WeaponDef, events: &mut Vec
     if ps.weapon_delay_ms != 0 {
         return;
     }
+    // A grenade has its own pullback/throw path (section 1.11) that is not
+    // modelled yet. Until it is, the trigger does nothing on one: running it
+    // through the bullet path raised a fire event and took a round with no
+    // missile behind either.
+    if def.weapon_type == "grenade" {
+        return;
+    }
     let (ci, ai) = (def.clip_index, def.ammo_index);
     if ps.ammoclip[ci] < 1 {
         if ps.ammo[ai] > 0 {
@@ -740,6 +747,21 @@ mod tests {
             ..Default::default()
         };
         step(ps, weapons, &input, frames)
+    }
+
+    /// A grenade's trigger is inert until its own path exists: no event, no
+    /// round taken, no anim (the bullet path used to twitch the throw anim).
+    #[test]
+    fn a_grenade_does_not_fire_through_the_bullet_path() {
+        let mut frag = carbine();
+        frag.weapon_type = "grenade".into();
+        let (mut ps, w) = armed(&frag);
+        let anim = ps.weap_anim;
+        let events = run(&mut ps, &w, true, 4);
+        assert_eq!(events, Vec::<i32>::new());
+        assert_eq!(ps.ammoclip[1], 15);
+        assert_eq!(ps.weaponstate, WEAPON_READY);
+        assert_eq!(ps.weap_anim, anim);
     }
 
     /// Held down, the carbine fires once: the latch pins `weaponTime` at 1 and
