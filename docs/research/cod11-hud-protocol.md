@@ -588,12 +588,41 @@ The live serverinfo confirms there is no `timelimit` key to fall back on:
 \g_gametype\tdm\gamename\Call of Duty\...\mapname\mp_carentan\...\sv_maxclients\64\...
 ```
 
-UNVERIFIED: how hudelems reach the client. `CG_Obituary`'s siblings read
-them from a resident array, and vcod's `PLAYER_FIELDS` table has no `hudElem*`
-entries, so the transport is unconfirmed. Check: decompile the cgame's hudelem
-refresh (the caller of `0x3001ec70`, around `0x3001f5b4`) and match the source
-buffer against the playerState netfield offsets in
-`crates/common/src/net/fields_v1.rs:85-189`.
+### How a hudelem reaches the client
+
+They travel in the playerstate, in the two 31-entry arrays of array block 5,
+which is why the `PLAYER_FIELDS` netfield table has no `hudElem*` entry: the
+block sits past the 103 scalar fields and is not in that table at all. The
+wire layout, the field order and the widths are in `docs/protocol-1.1.md`,
+"Block 5"; what follows is the server half.
+
+VERIFIED, from `game.mp.i386.so`: `HudElem_UpdateClient` (0x4be8c) takes a
+`gclient_t`, an entity number and a two-bit selector, clears the selected
+array or arrays (`bzero` of 0xd90 bytes at `ps+0x1338` and `ps+0x5A8`,
+0x4bea7 and 0x4bec8), then walks all 0x400 `g_hudelems` records and copies
+0x1c dwords of each survivor into the next free slot. A record is skipped
+when its `type` (`+0x0`) is zero, when its team (`+0x74`) is non-zero and
+differs from `gclient+0x217c` -- the same `clientState.team` `.sessionteam`
+writes -- or when its owner (`+0x70`) is neither `0x3ff` nor the entity
+number passed in. `archived` (`+0x78`) picks `ps+0x1338` when set,
+`ps+0x5A8` when clear, and each array stops at 31 elements.
+
+VERIFIED that `G_RunFrame` (0x50a80) makes that call once per in-use client
+per frame with both arrays selected, and that `SpectatorClientEndFrame`
+(0x408bc) makes it with only `ps+0x5A8` selected immediately after copying
+the followed player's playerstate wholesale. INFERRED from those two call
+sites: `archived` marks the elements that belong to the playerstate a
+follower inherits, which is where the community's `hud.archival` /
+`hud.current` names come from.
+
+VERIFIED that `G_UpdateHudElemsToClients` (0x5121c) is the same per-client
+loop and that nothing calls it: no relocation in the module names it, so the
+live path is `G_RunFrame`'s own copy of the loop.
+
+So the round clock above is a `hudelem_t` in `ps+0x1338`, and the connect-time
+frame decoded in `docs/protocol-1.1.md` is one on the wire: type 4, `x` 320,
+`y` 460, both alignments 1, `font` 1, `fontScale` 1.0, colour `0xFFFFFFFF`
+and `time` 1800000, which is `dm.gsc`'s `startGame` field for field.
 
 For the spectator HUD this is moot. `crates/client/src/hud/status.rs` shows
 elapsed time since level start (`server_time - cs[13]`) instead of the round
@@ -744,7 +773,7 @@ string before measuring its width.
 | 1 | `killIcon<Mod>` material names bind to `gfx/hud/death_<mod>.dds` (section 2). No stock pk3 entry carries the name; the mapping is by name correspondence only. | Run the stock 1.1 MP client, take a melee death, screenshot the killfeed. |
 | 2 | Scores token 4 is the Q3 `pers.enterTime` slot; unit unknown, and the field has no write site in the stock server module (section 3). | Log a real `b` line from a `score` request and compare token 4 against a known join time. |
 | 3 | Resolved: the `b` grammar. The 2026-08-24 live sweep held the Tab scoreboard against a populated server and confirmed it on screen (section 3). No raw wire dump was kept, so token 4's unit (item 2) is still open. | n/a |
-| 4 | Hudelem transport for the round clock (section 5). vcod's `PLAYER_FIELDS` has no `hudElem*` entries. Moot for vcod: the shipped header uses elapsed-since-level-start instead and was confirmed working live. | Decompile the caller of `0x3001ec70` (near `0x3001f5b4`) and match its source buffer against `crates/common/src/net/fields_v1.rs:85-189`, only if a real round countdown is wanted later. |
+| 4 | Resolved: the hudelem transport is the playerstate's array block 5, filled per client by `HudElem_UpdateClient` (section 5, "How a hudelem reaches the client"). What the cgame does with its copy is still only read as far as the clock formatter. | n/a |
 | 5 | The second font header float's id-internal field name (section 6). Its use is settled. | Nothing downstream depends on it. |
 | 6 | Whether the stock client's own status header shows the same CS-5/6-vs-`b` transient disagreement observed live (section 5). vcod's header prefers the `b` reply once one has arrived. | Compare the stock client's header text to its own Tab scoreboard in the same frame against a server showing a fresh score change; not yet done. |
 | 7 | Trap `4`'s official name (section 1). Its nine-argument signature is settled from the call site. | Decompile the engine's cgame syscall dispatcher and read case 4. |
