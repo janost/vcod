@@ -55,6 +55,11 @@ impl HitRigs {
     /// The grafted skeleton for an assembly. `None` when the body will not
     /// load, which leaves the caller with no hit location rather than no hit.
     pub fn rig(&mut self, fs: &Pk3Fs, assembly: &Assembly) -> Option<Rc<Skeleton>> {
+        // A client between its spawn and the frame that mirrors the character
+        // script's model has no body yet; that is not a load failure.
+        if assembly.body.is_empty() {
+            return None;
+        }
         let key = assembly.key();
         if let Some(hit) = self.rigs.get(&key) {
             return hit.clone();
