@@ -2091,13 +2091,22 @@ VERIFIED: the four damage fields read 0 again after the respawn.
 
 ## 9. What vcod's own server does, measured the same way
 
-The retail-client hand check that this stage's plan called for -- two 1.1
-clients joining `vcod-server` through the menus and shooting each other -- is
-**PENDING**. It needs a person at the keyboard and could not be run. What
-follows is the headless substitute: the same two probes that took section 8's
-retail captures, pointed at `cargo run -p vcod-server` instead. Every claim
-below is evidence about vcod, not about retail; the retail column is section
-8's committed fixtures.
+The retail-client hand check that this stage's plan called for -- a 1.1
+client joining `vcod-server` through the menus and shooting and being shot --
+ran twice. On 2026-09-03 it found six defects (deaths column, ADS during a
+reload, ADS and crosshair twitch, head shots reading as body hits, an inert
+grenade twitching, and a death cluster: no death animation, a sinking suicide
+corpse, no respawn text). On 2026-09-04, with the fixes in, a retail client
+under Wine against `vcod-server mp_carentan --gametype tdm --set
+scr_friendlyfire=1` and a `--save-hit` probe as the teammate: the suicide
+corpse played its death animation and lay on the ground, the respawn text
+appeared and the use key respawned, and the client's shot on the probe logged
+`D;...;head` and a `MOD_HEAD_SHOT` obituary; the person at the keyboard
+confirmed the ADS and reload behaviour by eye. What follows is the headless
+measurement: the same two probes that took section 8's retail captures,
+pointed at `cargo run -p vcod-server` instead. Every claim below is evidence
+about vcod, not about retail; the retail column is section 8's committed
+fixtures.
 
 Three runs, 2026-09-03. `mp_carentan` `dm` for 200 s took the settled state
 and the weapon channel. `mp_ship` `dm` for 155 s took the kill by a bullet:
@@ -2203,12 +2212,14 @@ in-process instead by `crates/server/tests/combat.rs`, which reproduces
 section 8.4's 33 health, 67 `damageCount`, `EV_PAIN` parm 33 and the
 `MOD_HEAD_SHOT` obituary from two clients on one server.
 
-Everything a person has to look at is still open: whether the shooter sees its
-own muzzle flash and hears its fire sound, whether the ammo counter drops,
-whether the damage direction indicator points the right way, whether the death
-anim and the corpse look right, whether the reload key and the number keys do
-what they should, and whether anything the retail client predicts shows as a
-visible snap. PENDING.
+Of what a person has to look at, the 2026-09-04 hand check (section 9's
+opening) covered the death anim, the corpse, the respawn text and key, the
+ammo counter, the reload key and the ADS and crosshair behaviour under
+prediction. Still open: whether the shooter sees its own muzzle flash and
+hears its fire sound, whether the damage direction indicator points the right
+way, and a kill by another player seen from the victim's side on a retail
+client (the check's teammate probe was shot before it could shoot; the
+in-process test and the headless run cover that path). PENDING.
 
 ### 9.4 What is not modelled at all
 

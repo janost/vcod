@@ -229,8 +229,9 @@ engineering setup works.
   `crates/server/tests/configstrings_ab.rs`. `cargo run -p vcod-server -- <map>` runs **ours**:
   the handshake, the gamestate, client commands and moves, and snapshots
   delta-compressed against the client's acked frame, with pmove-driven
-  spectator flight and `--test-entities` for scripted packet entities (no
-  restarts yet). A snapshot's entity list is the map's own: placed weapons,
+  spectator flight, `--test-entities` for scripted packet entities and
+  `--set NAME=VALUE` (retail's `+set`, e.g. `--set scr_friendlyfire=1` for
+  a teammate kill) (no restarts yet). A snapshot's entity list is the map's own: placed weapons,
   script models and mounted MGs, culled per client against the BSP's PVS the
   way retail culls, so what a client is sent depends on where it stands. Other
   clients are in it too, each animated by the animscript machine
