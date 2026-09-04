@@ -131,6 +131,15 @@ struct Args {
     /// positions in one run, not reproducible places.
     #[arg(long)]
     probe_pvs: bool,
+    /// Turns --save-hit into a measurement instead of a capture: the shooter
+    /// taps once per entry of a static table of pitch offsets around the aim
+    /// at the target's eye, echoing the offset on each !trace line, and writes
+    /// no fixture. Pair those lines with the sHitLoc the server's own
+    /// games_mp.log D; records carry and every vertical hit-location boundary
+    /// falls out of the two. Give both probes a long --probe-secs: the sweep
+    /// spends an offset only on a tap that had a live target to hit.
+    #[arg(long)]
+    probe_sweep: bool,
     /// Suffix for the --save-entities fixture name, so a capture taken under
     /// different conditions lands beside the plain one rather than on top of
     /// it: --capture-tag players writes <map>-<gametype>-players.txt.
@@ -476,6 +485,7 @@ fn main() -> Result<()> {
             },
             args.capture_tag.clone(),
             args.probe_pvs,
+            args.probe_sweep,
             args.probe_team.as_deref(),
             args.probe_secs,
             fs.as_ref(),

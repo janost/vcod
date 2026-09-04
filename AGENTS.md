@@ -181,6 +181,15 @@ engineering setup works.
   since the target's own `kill` command does the killing; the hit half needs a
   map small enough for the walk to cross, which mp_carentan is not in `dm`,
   for ours and for retail alike.
+  `--probe-sweep` turns `--save-hit` into a measurement instead of a capture:
+  the shooter taps once per entry of a static table of pitch offsets around
+  the aim at the target's eye, echoes the offset as `pitchOffset` on each
+  `!trace` line, and writes no fixture, so a sweep cannot clobber the
+  committed evidence. Pair those lines with the `sHitLoc` the server's own
+  `games_mp.log` `D;` records carry and every vertical hit-location boundary
+  falls out of the two; run it against retail and against ours and the
+  answers are directly comparable. An offset is spent only on a tap that had
+  a live target to hit, so give both probes a long `--probe-secs`.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
