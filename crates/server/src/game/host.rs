@@ -486,6 +486,13 @@ impl Host for GameHost {
                 // storing zero is that trim taken to its end, and it is what
                 // makes every stock gametype's `if(self.archivetime <= delay)`
                 // fall through to `respawn()` instead of into the killcam.
+                // What the skipped branch would have done on retail: copy the
+                // attacker's archived playerstate over the victim's every
+                // frame (`SpectatorClientEndFrame` 0x40760, pm_flags
+                // 0x10000|0x20000), then on the way back to "dead" an engine
+                // `ClientSpawn` from `ClientEndFrame`'s `ps.clientNum !=
+                // ent->s.number` check (0x40f45/0x40f82). None of it reaches
+                // the wire here; the one killcam frame sends nothing new.
                 c[i] = match fields::CLIENT_FIELDS[i].name {
                     "archivetime" => Value::Int(0),
                     _ => value,

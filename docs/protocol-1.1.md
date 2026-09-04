@@ -734,7 +734,7 @@ Three things a Q3 reading gets wrong:
 - **The stance bits are level states, not key edges,** and they are mutually exclusive. The client owns the toggle -- crouch is a tap in the retail binds, not a hold -- and what reaches the wire is the resulting stance, held. One capture holds `0x80` for 18 seconds across a crouch, with `0x40` replacing it for the 6 seconds spent prone.
 - **`buttons` `0x10` is ads, where Q3's `BUTTON_WALKING` is `0x10`.** There is no walk bit at all: CoD 1 has a single move speed, so nothing in a capture varies with it, and no `KEY_MASK` in the reference names one. `pm_walkSpeedScale` still exists engine-side (the stage 4 playerstate capture pins it at 0.4), but no client input reaches it.
 
-`buttons` `0x02` was seen live, briefly, twice at spawn and once well after; nothing pressed in the capture accounts for it and it is left unidentified. `usercmd_t`'s own comment lists "console, chat" among the `buttons` meanings (CoDExtended `src/shared.h`), which is the likeliest home for it. INFERRED.
+`buttons` `0x02` is Q3's `BUTTON_TALK`: `CL_FinishMove` (`CoDMP.exe` 0x40b65b-0x40b671) sets it whenever `cls.keyCatchers != 0` and `cl_bypassMouseInput` is 0, so it marks a client with the console, a menu or the chat line up. VERIFIED, the store and its two tests. It was seen live twice at spawn (the team menu) and once well after; a server can read it as "this client is not looking at the game", and while it is set `+activate` never reaches `CL_ButtonBits`.
 
 ### Entering the world
 

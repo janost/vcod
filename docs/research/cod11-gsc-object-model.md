@@ -1306,8 +1306,9 @@ The other two arms clear that bit. The intermission arm does it at 0x40f11
 anything else. VERIFIED, both stores.
 
 Bit 18 is therefore the third member of the view-source group whose other two
-`cod11-events-and-fx.md` already records: 0x10000 free spectator and 0x20000
-following a client. `SpectatorClientEndFrame` stores both, at 0x408ea and
+`cod11-events-and-fx.md` already records: 0x10000 following a client (set
+only on the follow-success path) and 0x20000 a forced follow, script
+`spectatorclient >= 0`, as against free cycling. `SpectatorClientEndFrame` stores both, at 0x408ea and
 0x40903, and copies the followed client's playerstate over its own with a
 0x834-dword `rep movsl` at 0x408ba. VERIFIED, the stores and the copy width.
 

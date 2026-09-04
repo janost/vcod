@@ -551,8 +551,8 @@ Flag summary, all from setters/testers in the server:
 
 | Bit | Meaning | Evidence |
 |---|---|---|
-| `0x010000` | spectator view | set unconditionally in `SpectatorClientEndFrame` `0x408ea`; tested by `StopFollowing` `0x46a51` |
-| `0x020000` | following a specific client (vs free-fly) | set/cleared on `spectatorClient >= 0`, `0x40903`/`0x408fd`; also preserved across the ps copy at `0x408c1` |
+| `0x010000` | following a client | set in `SpectatorClientEndFrame` at `0x408ea`, which is past the exit taken when no client to follow was found (`0x40890`), so it marks a follow that succeeded rather than any spectator; tested by `StopFollowing` `0x46a51` |
+| `0x020000` | a forced follow (script `spectatorclient >= 0`) as against free cycling | set/cleared on `spectatorClient >= 0`, `0x40903`/`0x408fd`. The preservation across the ps copy at `0x408c1` is an `eFlags` `0x20000`, not this bit |
 | `0x040000` | live in-game player | set in `ClientEndFrame` `0x40fb0`, cleared for spectators `0x407b7`; `GetFollowPlayerState` `0x415dc` refuses to copy a player who does not have it |
 
 The client's own recurring test,

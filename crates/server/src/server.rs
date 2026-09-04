@@ -220,6 +220,10 @@ struct MoveSummary {
     processed: usize,
     first_cmd_st: Option<i32>,
     last_cmd_st: Option<i32>,
+    /// The union of every replayed cmd's `buttons`, for the script's button
+    /// builtins: retail latches each cmd in `ClientThink` (0x41540), so a tap
+    /// inside a multi-cmd packet must not be lost to the packet's last cmd.
+    buttons: u8,
 }
 
 pub struct Server {
@@ -1337,7 +1341,7 @@ impl Server {
         if let Some(rt) = self.script.as_mut() {
             for (slot, c) in self.clients.iter().enumerate() {
                 if let Some(c) = c {
-                    rt.set_client_buttons(slot, c.last_cmd.buttons);
+                    rt.set_client_buttons(slot, c.last_cmd.buttons | moved[slot].buttons);
                 }
             }
             for te in impacts {
@@ -1521,6 +1525,7 @@ impl Server {
                 c.last_processed_st = cmd.server_time;
                 m.first_cmd_st.get_or_insert(cmd.server_time);
                 m.last_cmd_st = Some(cmd.server_time);
+                m.buttons |= cmd.buttons;
                 m.processed += 1;
             }
             if sim.ps.weapon != held {

@@ -851,7 +851,15 @@ impl ClientSim {
         if player {
             // Retail leaves all three at zero for a spectator.
             set("viewHeightCurrent", self.ps.view_height().to_bits() as i32);
-            set("viewHeightTarget", self.ps.stance.view_height() as i32);
+            // `PM_CheckDuck` (cgame 0x30009de0) targets `deadViewHeight` for
+            // `pm_type >= 6`; the client re-derives it, so this only keeps the
+            // wire honest.
+            let target = if self.dead {
+                pmove::VIEW_DEAD
+            } else {
+                self.ps.stance.view_height()
+            };
+            set("viewHeightTarget", target as i32);
             let ground = match self.ps.on_ground {
                 true => ENTITYNUM_WORLD,
                 false => ENTITYNUM_NONE,
