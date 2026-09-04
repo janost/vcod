@@ -103,7 +103,7 @@ pub struct HitLocTable {
 
 impl Default for HitLocTable {
     /// The state the parser overwrites: every location at 1, `gun` at 0
-    /// (combat doc, section 3.1).
+    /// (combat doc, section 3.5).
     fn default() -> Self {
         let mut mult = [1.0; 19];
         mult[18] = 0.0;
