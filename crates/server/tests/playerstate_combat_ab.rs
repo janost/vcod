@@ -3,6 +3,10 @@
 //! overwrites within four slots, so both sides carry a `!trace` line per
 //! snapshot and the comparison is over those, never over a settled sample.
 //!
+//! The `--save-ads` captures ride the same replay: the sight fraction and
+//! the spread counter are transients too, and every retail sample of them
+//! has to be met by one of ours within a snapshot's worth of time.
+//!
 //! Needs `COD_DIR`; without the paks it returns early.
 
 mod common;
@@ -88,11 +92,17 @@ struct Step {
 
 #[derive(Clone, Copy)]
 struct Trace {
+    /// ms into the step; retail's is the probe's clock, ours the frame grid.
+    ms: i64,
     weaponstate: i32,
     weap_anim: i32,
     torso_anim: i32,
     event_sequence: i32,
     events: [i32; 4],
+    /// `fWeaponPosFrac` and `aimSpreadScale`; `None` on a capture taken
+    /// before the trace carried them.
+    pos_frac: Option<f32>,
+    spread: Option<f32>,
 }
 
 fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
@@ -150,7 +160,9 @@ fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
         } else if let Some(rest) = line.strip_prefix("!trace ") {
             let m = kv(rest);
             let i = |k: &str| m[k].parse::<i32>().unwrap();
+            let f = |k: &str| m.get(k).map(|v| v.parse::<f32>().unwrap());
             step.trace.push(Trace {
+                ms: m["ms"].parse::<i64>().unwrap(),
                 weaponstate: i("weaponstate"),
                 weap_anim: i("weapAnim"),
                 torso_anim: i("torsoAnim"),
@@ -161,6 +173,8 @@ fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
                     i("events[2]"),
                     i("events[3]"),
                 ],
+                pos_frac: f("fWeaponPosFrac"),
+                spread: f("aimSpreadScale"),
             });
         }
         // `!observed` and the settled field lines are not compared here.
@@ -242,16 +256,76 @@ fn torso_flips(trace: &[Trace]) -> usize {
         .count()
 }
 
-fn trace_of(ps: &vcod_common::net::msg::PlayerState) -> Trace {
+fn trace_of(ps: &vcod_common::net::msg::PlayerState, ms: i64) -> Trace {
     let p = &PROTOCOL_V1;
     let ev = |i: usize| ps.field_i32(p, &format!("events[{i}]"));
     Trace {
+        ms,
         weaponstate: ps.field_i32(p, "weaponstate"),
         weap_anim: ps.field_i32(p, "weapAnim"),
         torso_anim: ps.field_i32(p, "torsoAnim"),
         event_sequence: ps.field_i32(p, "eventSequence"),
         events: [ev(0), ev(1), ev(2), ev(3)],
+        pos_frac: Some(ps.field_f32(p, "fWeaponPosFrac")),
+        spread: Some(ps.field_f32(p, "aimSpreadScale")),
     }
+}
+
+/// A snapshot's worth of slack when a retail sample is looked for among
+/// ours: retail's arrive 33 to 66 ms apart, ours every 50.
+const SAMPLE_SLACK_MS: i64 = 60;
+/// How far a matched sample may sit from retail's: half a frame of the
+/// fastest slope either transient has. The ramp covers a sixth of the way
+/// per frame at its fastest (300 ms up), the counter 51 of 255 (the
+/// carbine's decay), and the probe steps pmove every 16 ms where the replay
+/// steps it every 25, so the two grids sit up to half a frame apart on a
+/// slope. Carentan's `ads_walk` decay reads 25.5 off at every sample for
+/// exactly that reason.
+const FRAC_TOL: f32 = 0.09;
+const SPREAD_TOL: f32 = 26.0;
+
+/// Every retail sample of the sight fraction and the spread counter has one
+/// of ours within [`SAMPLE_SLACK_MS`] that reads the same to tolerance.
+/// Returns the misses, worst first.
+fn transient_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
+    let mut bad = Vec::new();
+    for r in retail {
+        let (Some(rf), Some(rs)) = (r.pos_frac, r.spread) else {
+            continue;
+        };
+        let near: Vec<&Trace> = ours
+            .iter()
+            .filter(|o| (o.ms - r.ms).abs() <= SAMPLE_SLACK_MS)
+            .collect();
+        if near.is_empty() {
+            continue;
+        }
+        let frac_ok = near
+            .iter()
+            .any(|o| o.pos_frac.is_some_and(|f| (f - rf).abs() <= FRAC_TOL));
+        let spread_ok = near
+            .iter()
+            .any(|o| o.spread.is_some_and(|s| (s - rs).abs() <= SPREAD_TOL));
+        if !frac_ok || !spread_ok {
+            let ours_at: Vec<String> = near
+                .iter()
+                .map(|o| {
+                    format!(
+                        "{}ms {:.3}/{:.1}",
+                        o.ms,
+                        o.pos_frac.unwrap_or(f32::NAN),
+                        o.spread.unwrap_or(f32::NAN)
+                    )
+                })
+                .collect();
+            bad.push(format!(
+                "at {}ms retail fWeaponPosFrac {rf:.3} aimSpreadScale {rs:.1}, ours {}",
+                r.ms,
+                ours_at.join(", ")
+            ));
+        }
+    }
+    bad
 }
 
 /// When each of a step's taps goes down, in ms from the step's start: one
@@ -310,7 +384,7 @@ fn ours(
         // so without it a shot on the first frame falls outside every
         // window `shots` looks at.
         if let Some(s) = cl.snapshots().newest() {
-            trace.push(trace_of(&s.ps));
+            trace.push(trace_of(&s.ps, 0));
         }
         let frames = (step.hold_ms / FRAME_MS).max(1);
         let taps = taps(step);
@@ -328,7 +402,7 @@ fn ours(
             }
             common::step(&mut sv, &q, &mut cl, now);
             if let Some(s) = cl.snapshots().newest() {
-                trace.push(trace_of(&s.ps));
+                trace.push(trace_of(&s.ps, (i + 1) * FRAME_MS));
             }
         }
         out.push(trace);
@@ -336,12 +410,12 @@ fn ours(
     out
 }
 
-fn check(map: &str) {
+fn check(map: &str, kind: &str) {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
     let path = format!(
-        "{}/tests/fixtures/playerstate/{map}-{}-combat.txt",
+        "{}/tests/fixtures/playerstate/{map}-{}-{kind}.txt",
         env!("CARGO_MANIFEST_DIR"),
         cfg(map).gametype
     );
@@ -421,20 +495,40 @@ fn check(map: &str) {
                 step.label
             ));
         }
+        let misses = transient_misses(&step.trace, ours);
+        if !misses.is_empty() {
+            bad.push(format!(
+                "{}: {} of {} samples off\n    {}",
+                step.label,
+                misses.len(),
+                step.trace.len(),
+                misses.join("\n    ")
+            ));
+        }
     }
     assert!(
         bad.is_empty(),
-        "the weapon channel differs from retail on {map}:\n  {}",
+        "the weapon channel differs from retail on {map} ({kind}):\n  {}",
         bad.join("\n  ")
     );
 }
 
 #[test]
 fn the_weapon_channel_matches_retail_on_mp_carentan() {
-    check("mp_carentan");
+    check("mp_carentan", "combat");
 }
 
 #[test]
 fn the_weapon_channel_matches_retail_on_mp_pavlov() {
-    check("mp_pavlov");
+    check("mp_pavlov", "combat");
+}
+
+#[test]
+fn the_sight_and_spread_match_retail_on_mp_carentan() {
+    check("mp_carentan", "ads");
+}
+
+#[test]
+fn the_sight_and_spread_match_retail_on_mp_pavlov() {
+    check("mp_pavlov", "ads");
 }
