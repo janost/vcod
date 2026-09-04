@@ -519,6 +519,10 @@ struct Channel {
     /// serverTime an event anim releases the channel at; `None` when the
     /// continuous state owns it.
     held_until_ms: Option<i32>,
+    /// serverTime the anim on the channel started, which is the phase a
+    /// server-side pose plays it from. The wire carries only the toggle, so
+    /// a client stamps its own.
+    start_ms: i32,
 }
 
 impl Channel {
@@ -527,13 +531,14 @@ impl Channel {
     }
 
     /// Returns whether the channel took the anim.
-    fn start(&mut self, index: i32, held_until_ms: Option<i32>) -> bool {
+    fn start(&mut self, index: i32, held_until_ms: Option<i32>, now_ms: i32) -> bool {
         if self.index == index && self.held_until_ms.is_none() && held_until_ms.is_none() {
             return false;
         }
         self.index = index;
         self.toggle = !self.toggle;
         self.held_until_ms = held_until_ms;
+        self.start_ms = now_ms;
         true
     }
 
@@ -590,18 +595,19 @@ impl AnimState {
     /// anim at all, flipping the toggle doing it.
     pub fn clear_torso(&mut self, now_ms: i32) {
         if self.torso.released(now_ms) && self.torso.index != 0 {
-            self.torso.start(0, None);
+            self.torso.start(0, None, now_ms);
         }
     }
 
     /// The torso restarted on no anim at all, toggle flipped whatever it
     /// held: what a death leaves the channel reading (512 beside the death
     /// `legsAnim` in both retail deaths, cod11-combat.md section 8).
-    pub fn restart_torso_empty(&mut self) {
+    pub fn restart_torso_empty(&mut self, now_ms: i32) {
         self.torso = Channel {
             index: 0,
             toggle: !self.torso.toggle,
             held_until_ms: None,
+            start_ms: now_ms,
         };
     }
 
@@ -611,6 +617,16 @@ impl AnimState {
 
     pub fn torso(&self) -> i32 {
         self.torso.wire()
+    }
+
+    /// serverTime each channel's current anim started, which is the phase to
+    /// pose it from.
+    pub fn legs_start_ms(&self) -> i32 {
+        self.legs.start_ms
+    }
+
+    pub fn torso_start_ms(&self) -> i32 {
+        self.torso.start_ms
     }
 }
 
@@ -627,7 +643,7 @@ fn apply(
     let Some(index) = resolve(&anim.name) else {
         return;
     };
-    ch.start(index, None);
+    ch.start(index, None, now_ms);
 }
 
 /// An event anim takes the channel whatever is on it, and holds it for `hold`.
@@ -645,7 +661,7 @@ fn apply_event(
         return;
     };
     let held = hold(anim).map(|d| now_ms.wrapping_add(d as i32));
-    ch.start(index, held);
+    ch.start(index, held, now_ms);
 }
 
 #[cfg(test)]

@@ -579,6 +579,31 @@ impl ScriptRuntime {
             .collect()
     }
 
+    /// The models a client wears, by name rather than by configstring index:
+    /// what the locational trace poses. The body is `.model` and the head and
+    /// helmet are attachments, the same pair `client_model_index` and
+    /// `client_attachments` put on the roster.
+    pub fn client_assembly(&mut self, slot: usize) -> Option<crate::game::hitrig::Assembly> {
+        use crate::game::hitrig::{model_name, Assembly};
+        let body = model_name(&self.client_field(slot, "model")?);
+        if body.is_empty() {
+            return None;
+        }
+        let ent = self.client_entity(slot)?;
+        let e = self.host.ents.get(ent)?;
+        let attachments = self.vm.with_cx(|cx| {
+            e.attachments
+                .iter()
+                .take(ATTACH_SLOTS)
+                .map(|(m, t)| {
+                    let tag = cx.resolve(*t).to_string();
+                    (model_name(cx.resolve(*m)), (!tag.is_empty()).then_some(tag))
+                })
+                .collect()
+        });
+        Some(Assembly { body, attachments })
+    }
+
     /// A client entity's `.origin` as the scripts read it.
     pub fn client_origin(&mut self, slot: usize) -> [f32; 3] {
         use vcod_gsc::Host;

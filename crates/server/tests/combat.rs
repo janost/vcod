@@ -90,13 +90,21 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     );
     sv.place_client(na, spot, 0.0);
     sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+    // A usercmd carries absolute view angles, so B has to keep asking to face
+    // A; the placement's yaw only survives until B's first cmd. Which way it
+    // faces decides where the bullet enters, and the bullet is traced against
+    // its posed bones.
+    let facing_a = UserCmd {
+        angles: [0, 32768, 0], // ANGLE2SHORT(180)
+        ..NULL_USERCMD
+    };
     let mut step = |sv: &mut vcod_server::Server, ca: &mut _, cb: &mut _| {
         now += Duration::from_millis(50);
         common::step_pair(sv, (&qa, ca), (&qb, cb), now)
     };
     for _ in 0..40 {
         ca.send_frame(&NULL_USERCMD);
-        cb.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
         step(&mut sv, &mut ca, &mut cb);
     }
     let sb = cb.snapshots().newest().unwrap();
@@ -124,7 +132,7 @@ fn a_shot_takes_health_and_a_second_one_kills() {
         ..NULL_USERCMD
     };
     ca.send_frame(&fire);
-    cb.send_frame(&NULL_USERCMD);
+    cb.send_frame(&facing_a);
     step(&mut sv, &mut ca, &mut cb);
     let sa = ca.snapshots().newest().unwrap();
     let sb = cb.snapshots().newest().unwrap();
@@ -154,10 +162,13 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     );
     assert_eq!(sa.ps.health(), 100, "A is untouched");
 
-    // Release, wait out fireTime, and tap again.
-    for _ in 0..10 {
+    // Release, wait out fireTime and the pain animation, then tap again. The
+    // wait has to outlast the pain: the shot is traced against B's posed
+    // bones, and the stock standing pain clause doubles B over far enough
+    // that a level shot from eye height meets no bone at all.
+    for _ in 0..30 {
         ca.send_frame(&ads);
-        cb.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
         step(&mut sv, &mut ca, &mut cb);
     }
     let sb = cb.snapshots().newest().unwrap();
@@ -174,7 +185,7 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     );
 
     ca.send_frame(&fire);
-    cb.send_frame(&NULL_USERCMD);
+    cb.send_frame(&facing_a);
     step(&mut sv, &mut ca, &mut cb);
     let sa = ca.snapshots().newest().unwrap();
     let sb = cb.snapshots().newest().unwrap();
@@ -219,14 +230,14 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     // Dead: the eye drops to 8, and a third round finds nobody.
     for _ in 0..10 {
         ca.send_frame(&ads);
-        cb.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
         step(&mut sv, &mut ca, &mut cb);
     }
     let sb = cb.snapshots().newest().unwrap();
     assert_eq!(sb.ps.field_f32(p, "viewHeightCurrent"), 8.0);
     assert_eq!(sb.ps.field_i32(p, "pm_type"), 6);
     ca.send_frame(&fire);
-    cb.send_frame(&NULL_USERCMD);
+    cb.send_frame(&facing_a);
     step(&mut sv, &mut ca, &mut cb);
     let sb = cb.snapshots().newest().unwrap();
     assert_eq!(
@@ -300,7 +311,7 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     let mut row = None;
     for _ in 0..10 {
         ca.send_frame(&NULL_USERCMD);
-        cb.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
         let (ea, _) = step(&mut sv, &mut ca, &mut cb);
         for e in ea {
             if let NetEvent::ServerCommand(t) = e {
@@ -332,7 +343,7 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     // B respawns on the use button, after dm's two-second wait.
     for _ in 0..50 {
         ca.send_frame(&NULL_USERCMD);
-        cb.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
         step(&mut sv, &mut ca, &mut cb);
     }
     let use_ = UserCmd {
