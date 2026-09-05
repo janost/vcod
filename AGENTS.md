@@ -157,9 +157,14 @@ engineering setup works.
   line after each trace that had a grenade on the wire. Two step shapes are
   new and both are on the `!input` line so a gate replays them: a held input
   rather than a tapped one (`press_buttons`, `press_ms`), since a grenade is
-  cooked by holding the trigger and thrown by the release, and a one-cmd
-  `cmd.weapon` (`switch_weapon`, `switch_ms`), which is the only way to ask
-  retail for a weapon change. The `!missile` line records every entity that
+  cooked by holding the trigger and thrown by the release, and a weapon
+  switch (`switch_weapon`, `switch_ms`). The switch is not one cmd: retail's
+  pickup half reads `cmd.weapon` again on the frame the putaway ends
+  (`docs/research/cod11-combat.md`, 1.8), so a byte reverted before then
+  leaves the old weapon in hand, and the probe holds the index on every cmd
+  until `ps.weapon` carries it. A first retail capture measured the one-cmd
+  version doing nothing: the frag never arrived and the cook fired the rifle.
+  The `!missile` line records every entity that
   reads `eType` 4 or read it earlier in the run and has not left the wire yet:
   the explode flips the missile's own `eType` to 0 and adds its event there,
   so an `eType`-4 filter drops the explode frame

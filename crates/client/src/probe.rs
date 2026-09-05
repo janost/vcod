@@ -261,7 +261,6 @@ pub fn probe(
                             .unwrap_or_default()
                             .to_string();
                         hit.load_map(fs, &map);
-                        hit.sweep = sweep;
                         hit.use_configstrings(client.configstrings());
                         if sweep {
                             println!(
@@ -1469,15 +1468,63 @@ const PULSE_HOLD: Duration = Duration::from_millis(32);
 const PULSE_PERIOD: Duration = Duration::from_millis(128);
 const PULSE_MARGIN: Duration = Duration::from_millis(48);
 
-/// The weapon a step's one-cmd switch asks for. Retail reads a `cmd.weapon`
-/// that differs from `ps.weapon` as the request, so the index travels once and
-/// the generic follow takes over (docs/research/cod11-combat.md, 1.8).
+/// The weapon a step's switch asks for. Retail reads a `cmd.weapon` that
+/// differs from `ps.weapon` as the request, and its pickup half reads the byte
+/// again on the frame the putaway ends (docs/research/cod11-combat.md, 1.8),
+/// so the index rides every cmd until `ps.weapon` carries it; see
+/// [`WeaponSwitch`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SwitchTo {
     /// The frag, by its configstring 7 index.
     Frag,
     /// Back to the rifle the join chose.
     Joined,
+}
+
+/// A weapon switch in flight, shared by both instruments. Retail's pickup half
+/// reads `cmd.weapon` again on the frame the putaway ends
+/// (docs/research/cod11-combat.md, 1.8), so the index has to ride every cmd
+/// until `ps.weapon` carries it: a byte reverted before then leaves the old
+/// weapon in hand, which is what a first retail capture measured.
+#[derive(Default)]
+struct WeaponSwitch {
+    /// The index every cmd carries until the playerstate agrees.
+    pending: Option<u8>,
+    /// The current step or phase has had its turn to ask.
+    asked: bool,
+}
+
+impl WeaponSwitch {
+    /// Asks for `idx`, at most once per step or phase. Index 0 means the
+    /// weapon is not in configstring 7 and is refused. Returns whether the
+    /// ask went out, for the caller's log line.
+    fn ask(&mut self, idx: u8) -> bool {
+        if self.asked {
+            return false;
+        }
+        self.asked = true;
+        self.pending = (idx != 0).then_some(idx);
+        self.pending.is_some()
+    }
+
+    /// Lets the next step ask. A hold already in flight survives, since a drop
+    /// and a raise together outlast the step that asked for them.
+    fn rearm(&mut self) {
+        self.asked = false;
+    }
+
+    /// Drops the hold as well, for a phase that starts its switch over.
+    fn reset(&mut self) {
+        *self = WeaponSwitch::default();
+    }
+
+    /// The byte this cmd carries, or `None` to follow `ps.weapon`.
+    fn byte(&mut self, ps_weapon: u8) -> Option<u8> {
+        if self.pending == Some(ps_weapon) {
+            self.pending = None;
+        }
+        self.pending
+    }
 }
 
 /// One eType-4 missile as a snapshot carries it. Retail's explode flips the
@@ -1592,7 +1639,8 @@ struct CombatStep {
     /// is cooked by holding the trigger, and the throw is the release.
     press: u8,
     press_for: Duration,
-    /// A one-cmd `cmd.weapon`, and how far into the step it goes out.
+    /// A `cmd.weapon` the step asks for, and how far into it the ask goes
+    /// out. The byte is then held by [`WeaponSwitch`], not sent once.
     switch: Option<(Duration, SwitchTo)>,
     dur: Duration,
     /// Whether the step walks. A walking step is steered by [`StallTurn`], so
@@ -1972,10 +2020,7 @@ struct CombatProbe {
     joined_index: u8,
     /// The frag's name, for the fixture header.
     frag_name: String,
-    /// The current step's switch has been asked for, and the index every cmd
-    /// carries until `ps.weapon` reads it.
-    switched: bool,
-    pending_switch: Option<u8>,
+    switch: WeaponSwitch,
     missiles: MissileWatch,
     /// The player's origin and view at the first step, which is the spot a
     /// replay of this capture has to throw from.
@@ -2002,8 +2047,7 @@ impl Default for CombatProbe {
             frag_index: 0,
             joined_index: 0,
             frag_name: String::new(),
-            switched: false,
-            pending_switch: None,
+            switch: WeaponSwitch::default(),
             missiles: MissileWatch::default(),
             spawn_pose: None,
         }
@@ -2030,38 +2074,25 @@ impl CombatProbe {
         }
     }
 
-    /// The `cmd.weapon` a step's switch asks for. Retail's pickup half reads
-    /// the byte off the cmd of the frame the putaway finishes on (combat doc,
-    /// 1.8), so it is held until `ps.weapon` reads it rather than sent once: a
-    /// byte reverted before the swap lands leaves the old weapon in hand. The
-    /// hold outlives the step that asked for it, a drop and a raise together
-    /// outlasting any of them.
+    /// The `cmd.weapon` this cmd carries, `None` to follow `ps.weapon`. See
+    /// [`WeaponSwitch`] for why the byte is held rather than sent once.
     fn weapon_override(&mut self, ps_weapon: u8) -> Option<u8> {
         let due = self.steps.get(self.idx).and_then(|step| {
             let (at, to) = step.switch?;
-            (!self.switched && self.started.is_some_and(|t| t.elapsed() >= at))
+            self.started
+                .is_some_and(|t| t.elapsed() >= at)
                 .then_some((step.label, to))
         });
         if let Some((label, to)) = due {
-            self.switched = true;
-            match match to {
+            let idx = match to {
                 SwitchTo::Frag => self.frag_index,
                 SwitchTo::Joined => self.joined_index,
-            } {
-                0 => println!("COMBAT {label}: no configstring 7 index"),
-                idx => {
-                    println!("COMBAT {label}: asking for weapon {idx}");
-                    self.pending_switch = Some(idx);
-                }
+            };
+            if self.switch.ask(idx) {
+                println!("COMBAT {label}: asking for weapon {idx}");
             }
         }
-        match self.pending_switch {
-            Some(w) if w == ps_weapon => {
-                self.pending_switch = None;
-                None
-            }
-            other => other,
-        }
+        self.switch.byte(ps_weapon)
     }
 
     fn running(&self) -> bool {
@@ -2247,7 +2278,7 @@ impl CombatProbe {
             self.started = None;
             self.waiting_since = None;
             self.ready_since = None;
-            self.switched = false;
+            self.switch.rearm();
             return false;
         }
         if elapsed < dur {
@@ -2303,7 +2334,7 @@ impl CombatProbe {
         self.started = None;
         self.waiting_since = None;
         self.ready_since = None;
-        self.switched = false;
+        self.switch.rearm();
         if self.idx >= self.steps.len() {
             self.done = true;
             return true;
@@ -2431,10 +2462,12 @@ fn write_combat_fixture(
             "# press_buttons is held down for the first press_ms of the step rather than\n",
         );
         out.push_str("# tapped: a grenade is cooked by holding the trigger and thrown by the\n");
-        out.push_str("# release. switch_weapon is a one-cmd cmd.weapon at switch_ms into the\n");
-        out.push_str("# step, and held on every cmd after it until ps.weapon reads it: the\n");
-        out.push_str("# pickup half takes the byte off the cmd of the frame the putaway ends\n");
-        out.push_str("# on, so a byte sent once is reverted before the swap lands (1.8).\n");
+        out.push_str("# release. switch_weapon is asked for at switch_ms into the step and then\n");
+        out.push_str("# held on every cmd until ps.weapon reads it: the pickup half takes the\n");
+        out.push_str("# byte off the cmd of the frame the putaway ends on, so a byte sent once\n");
+        out.push_str(
+            "# is reverted before the swap lands and the old weapon stays in hand (1.8).\n",
+        );
         out.push_str("# A !missile line follows each trace that had a missile on the wire. It\n");
         out.push_str("# records every entity that reads eType 4 or read it earlier in the run\n");
         out.push_str("# and has not left the wire, because the explode flips the missile's own\n");
@@ -3469,24 +3502,18 @@ struct HitProbe {
     engaged_los: bool,
     /// An obituary named this probe as the attacker.
     killed: bool,
-    /// `--probe-sweep`: walk [`SWEEP_PITCH_OFFSETS`] instead of firing the
-    /// three scripted phases at the eye.
-    sweep: bool,
-    /// How many offsets the sweep has spent, which is also the index of the
-    /// one it is firing, and the tap period the last one was spent in.
+    /// How many offsets a `--probe-sweep` run has spent, which is also the
+    /// index of the one it is firing, and the tap period it was spent in.
     sweep_index: usize,
     sweep_period: Option<u128>,
     /// Which phases the shooter runs and what its fixture is named.
     script: ShooterScript,
-    /// The frag's configstring 7 index, for the cook's one-cmd switch.
+    /// The frag's configstring 7 index, the byte the cook's switch asks for.
     frag_index: u8,
     /// Set once this Cook's `ps.weapon` first read the frag; the trigger goes
     /// down from then, so the cook is not spent on the switch animation.
     cook_armed: Option<Instant>,
-    /// The current Cook's switch has been asked for, and the index every cmd
-    /// carries until `ps.weapon` reads it (combat doc, 1.8).
-    switched: bool,
-    pending_switch: Option<u8>,
+    switch: WeaponSwitch,
     /// Throws released, which is what ends a grenade run.
     throws: u32,
     /// `--probe-grenade-death` has sent its `kill`.
@@ -3529,14 +3556,12 @@ impl Default for HitProbe {
             engaged_at: None,
             engaged_los: false,
             killed: false,
-            sweep: false,
             sweep_index: 0,
             sweep_period: None,
             script: ShooterScript::Hit,
             frag_index: 0,
             cook_armed: None,
-            switched: false,
-            pending_switch: None,
+            switch: WeaponSwitch::default(),
             throws: 0,
             killed_self: false,
             pending: Vec::new(),
@@ -3571,20 +3596,14 @@ impl HitProbe {
         }
     }
 
-    /// The one-cmd `cmd.weapon` the cook asks for, once per Cook phase.
+    /// The `cmd.weapon` this cmd carries, `None` to follow `ps.weapon`. The
+    /// cook is the one phase that switches; see [`WeaponSwitch`] for why the
+    /// byte is held rather than sent once.
     fn weapon_override(&mut self, ps_weapon: u8) -> Option<u8> {
-        if self.phase == HitPhase::Cook && !self.switched && self.frag_index != 0 {
-            self.switched = true;
+        if self.phase == HitPhase::Cook && self.switch.ask(self.frag_index) {
             println!("HIT: cook, asking for weapon {}", self.frag_index);
-            self.pending_switch = Some(self.frag_index);
         }
-        match self.pending_switch {
-            Some(w) if w == ps_weapon => {
-                self.pending_switch = None;
-                None
-            }
-            other => other,
-        }
+        self.switch.byte(ps_weapon)
     }
 
     /// How long this throw's cook holds the trigger; the second one is short,
@@ -3978,8 +3997,7 @@ impl HitProbe {
             }
             if next == HitPhase::Cook {
                 self.cook_armed = None;
-                self.switched = false;
-                self.pending_switch = None;
+                self.switch.reset();
             }
             self.phase = next;
             self.phase_started = Some(now);
@@ -4942,9 +4960,11 @@ mod tests {
     }
 
     /// The melee script is the bullet script with another bit: it takes the
-    /// same phases, so a swing that kills the target ends the run the same way.
+    /// same phases, and every tap of them swings instead of shooting. A tap
+    /// that still carried `BUTTON_ATTACK` would fire the rifle and the
+    /// capture would measure a bullet.
     #[test]
-    fn melee_run_takes_the_bullet_phases() {
+    fn melee_run_takes_the_bullet_phases_and_swings_on_every_tap() {
         let t = Duration::from_secs(30);
         let cx = ctx(true, ShooterScript::Melee);
         assert_eq!(HitPhase::Approach.advance(t, &cx), HitPhase::SingleShot);
@@ -4952,6 +4972,77 @@ mod tests {
             HitPhase::SingleShot.advance(SINGLE_SHOT_HOLD, &cx),
             HitPhase::Burst
         );
+        // The head of a tap period, where the bit is down.
+        let now = Instant::now();
+        for phase in [HitPhase::SingleShot, HitPhase::Burst, HitPhase::Finish] {
+            let mut melee = HitProbe::new(ShooterScript::Melee);
+            melee.phase = phase;
+            melee.phase_started = Some(now);
+            let bits = melee.cmd(now).buttons;
+            assert_eq!(bits & net::msg::BUTTON_MELEE, net::msg::BUTTON_MELEE);
+            assert_eq!(bits & BUTTON_ATTACK, 0, "{phase:?} fired the rifle");
+
+            let mut bullet = HitProbe::new(ShooterScript::Hit);
+            bullet.phase = phase;
+            bullet.phase_started = Some(now);
+            let bits = bullet.cmd(now).buttons;
+            assert_eq!(bits & BUTTON_ATTACK, BUTTON_ATTACK);
+            assert_eq!(bits & net::msg::BUTTON_MELEE, 0);
+        }
+    }
+
+    /// An entity is a missile from its first eType-4 snapshot until it leaves
+    /// the wire, not while it reads 4: the explode flips the missile's own
+    /// eType to 0 and adds event 178 there (combat doc, section 13), so an
+    /// eType-4 filter drops the one frame the capture exists for.
+    #[test]
+    fn missile_watch_keeps_an_entity_past_its_last_etype_4_frame() {
+        use crate::fx::registry::EV_GRENADE_EXPLODE;
+        use net::msg::{EntityState, PlayerState};
+        let p = &net::protocol::PROTOCOL_V1;
+        let ent = |num: u32, etype: i32, event: i32| {
+            let mut e = EntityState::null(p);
+            e.number = num;
+            e.fields[EntityState::field_index(p, "eType").unwrap()] = etype;
+            e.fields[EntityState::field_index(p, "events[0]").unwrap()] = event;
+            e
+        };
+        let snap = |ents: Vec<EntityState>| net::snapshot::Snapshot {
+            server_time: 1000,
+            message_num: 1,
+            delta_num: -1,
+            snap_flags: 0,
+            ps: PlayerState::null(p),
+            entities: ents.into_iter().map(|e| (e.number, e)).collect(),
+            clients: BTreeMap::new(),
+            valid: true,
+        };
+        let mut watch = MissileWatch::default();
+
+        // A flying grenade and a player: only the grenade is a missile.
+        let flying = watch.sample(&snap(vec![
+            ent(5, crate::entities::ET_MISSILE, 0),
+            ent(2, crate::entities::ET_PLAYER, 0),
+        ]));
+        assert_eq!(flying.iter().map(|m| m.num).collect::<Vec<_>>(), vec![5]);
+
+        // The explode frame: the same entity now reads eType 0 with 178 on it.
+        let exploding = watch.sample(&snap(vec![
+            ent(5, crate::entities::ET_GENERAL, EV_GRENADE_EXPLODE),
+            ent(2, crate::entities::ET_PLAYER, 0),
+        ]));
+        assert_eq!(exploding.len(), 1, "the explode frame was dropped");
+        assert_eq!(exploding[0].num, 5);
+        assert_eq!(exploding[0].e_type, crate::entities::ET_GENERAL);
+        assert_eq!(exploding[0].events[0], EV_GRENADE_EXPLODE);
+
+        // Freed: the slot is forgotten, so its reuse does not read as a missile.
+        assert!(watch
+            .sample(&snap(vec![ent(2, crate::entities::ET_PLAYER, 0)]))
+            .is_empty());
+        assert!(watch
+            .sample(&snap(vec![ent(5, crate::entities::ET_ITEM, 0)]))
+            .is_empty());
     }
 
     /// A trace 20 samples a second for minutes is unreadable and huge, and a
