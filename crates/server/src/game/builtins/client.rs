@@ -1046,6 +1046,7 @@ mod tests {
             vec![Hit {
                 victim: 0,
                 attacker: 1,
+                inflictor: None,
                 damage: 45,
                 dflags: 0,
                 mod_: "MOD_RIFLE_BULLET",

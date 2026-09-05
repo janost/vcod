@@ -14,6 +14,7 @@ use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::playerpose::pose_player;
 use vcod_common::weapon::WeaponDef;
+use vcod_gsc::EntId;
 
 /// The 25 names, in the order of the pointer table at `.so` file offset
 /// `0x7cda0` (`docs/research/cod11-hud-protocol.md` section 2). The index is
@@ -188,6 +189,10 @@ pub struct BoneTraceCtx<'a> {
 pub struct Hit {
     pub victim: usize,
     pub attacker: usize,
+    /// The entity the damage came out of, when it is not the attacker
+    /// himself: a blast names the missile that went off. `None` on a bullet
+    /// and a swing, where the two are the same.
+    pub inflictor: Option<EntId>,
     pub damage: i32,
     pub dflags: i32,
     pub mod_: &'static str,
@@ -359,6 +364,7 @@ pub fn bullet_fire(
                 hit: Some(Hit {
                     victim: slot,
                     attacker: shooter,
+                    inflictor: None,
                     damage,
                     dflags,
                     mod_,
@@ -543,6 +549,7 @@ pub fn melee_fire(
                 hit: Some(Hit {
                     victim: slot,
                     attacker,
+                    inflictor: None,
                     damage,
                     dflags: 0,
                     mod_: "MOD_MELEE",
@@ -582,6 +589,122 @@ pub fn melee_fire(
             hit: None,
         },
     }
+}
+
+/// The rise `G_RadiusDamage` adds to the direction it hands the callback
+/// (combat doc, 14.1).
+const RADIUS_DIR_RISE: f32 = 24.0;
+/// How close to the blast the second-chance arm reaches, as a share of the
+/// radius, and what share of the falloff it charges there (14.1).
+const SECOND_CHANCE_RANGE: f32 = 0.2;
+const SECOND_CHANCE_SHARE: f32 = 0.1;
+/// The half-width of `CanDamage`'s probe rectangle (14.3).
+const CAN_DAMAGE_HALF_WIDTH: f32 = 15.0;
+
+/// One candidate for a blast. Every one of them is a client here: nothing
+/// else on this server has `takedamage` set, so the brush-model arms of
+/// `G_RadiusDamage` and `CanDamage` have no caller.
+pub struct BlastVictim {
+    pub slot: usize,
+    /// `r.currentOrigin`, at the feet: what the distance is measured to.
+    pub origin: Vec3,
+    pub mins: Vec3,
+    pub maxs: Vec3,
+    /// The eye, lean included, that `CanDamage` builds its probes around.
+    pub eye: Vec3,
+}
+
+/// `CanDamage`'s client arm (combat doc, 14.3): five traces at the body
+/// centre and at the corners of a 30-unit-wide, body-tall rectangle held
+/// broadside to the blast. None clear is 0, four or five is 1, anything
+/// between is `count / 3`.
+pub fn can_damage(at: Vec3, v: &BlastVictim, world: &CollisionWorld) -> f32 {
+    let mid = (v.eye + v.origin) * 0.5;
+    let mut to_blast = at - v.origin;
+    to_blast.z = 0.0;
+    let d = to_blast.normalize_or_zero();
+    let across = Vec3::new(-d.y, d.x, 0.0) * CAN_DAMAGE_HALF_WIDTH;
+    let up = Vec3::Z * (v.eye.z - v.origin.z) * 0.5;
+    let probes = [
+        mid,
+        mid + across + up,
+        mid + across - up,
+        mid - across + up,
+        mid - across - up,
+    ];
+    let clear = probes
+        .iter()
+        .filter(|p| world.shot_trace(at, **p).fraction >= 1.0)
+        .count();
+    match clear {
+        0 => 0.0,
+        4 | 5 => 1.0,
+        n => n as f32 / 3.0,
+    }
+}
+
+/// `G_RadiusDamage` (combat doc, 14.1) over the clients a blast can reach:
+/// the falloff is linear from `inner` at the blast to `outer` at the radius,
+/// scaled by `CanDamage`'s fraction and truncated the way `G_Damage`
+/// truncates. A victim with no line of sight at all still takes the second
+/// chance's tenth when the trace to its box midpoint was blocked and that
+/// midpoint is inside `radius * 0.2`. Distance is origin to origin, which is
+/// what retail measures for anything that is not a brush model. `attacker`
+/// is `None` for a blast the world set off. Without a `world` nothing is
+/// traced and every candidate inside the radius takes the falloff whole,
+/// which is what a unit test wants and what a host with no map has.
+#[allow(clippy::too_many_arguments)]
+pub fn radius_damage(
+    at: Vec3,
+    radius: f32,
+    inner: f32,
+    outer: f32,
+    attacker: Option<usize>,
+    inflictor: Option<EntId>,
+    weapon: &str,
+    mod_: &'static str,
+    victims: &[BlastVictim],
+    world: Option<&CollisionWorld>,
+) -> Vec<Hit> {
+    let radius = radius.max(1.0);
+    let mut hits = Vec::new();
+    for v in victims {
+        let dist = (v.origin - at).length();
+        if dist >= radius {
+            continue;
+        }
+        // At double precision: retail keeps the whole expression on the x87
+        // stack, and an f32 round trip loses a point of damage at the round
+        // ratios a script picks.
+        let points =
+            outer as f64 + (1.0 - dist as f64 / radius as f64) * (inner as f64 - outer as f64);
+        let fraction = world.map_or(1.0, |w| can_damage(at, v, w));
+        let damage = if fraction > 0.0 {
+            (fraction as f64 * points) as i32
+        } else {
+            let mid = v.origin + (v.mins + v.maxs) * 0.5;
+            let blocked = world.is_some_and(|w| w.shot_trace(at, mid).fraction < 1.0);
+            if !blocked || (mid - at).length() >= radius * SECOND_CHANCE_RANGE {
+                continue;
+            }
+            (points * SECOND_CHANCE_SHARE as f64) as i32
+        };
+        hits.push(Hit {
+            victim: v.slot,
+            attacker: attacker.unwrap_or(ENTITYNUM_WORLD as usize),
+            inflictor,
+            damage,
+            dflags: DFLAG_RADIUS,
+            mod_,
+            weapon: weapon.to_string(),
+            point: at.into(),
+            // Unnormalized, and raised, exactly as retail hands it over: its
+            // length is what carries the distance.
+            dir: (v.origin - at + Vec3::Z * RADIUS_DIR_RISE).into(),
+            hitloc: "none",
+        });
+    }
+    hits
 }
 
 #[cfg(test)]
@@ -874,5 +997,113 @@ mod tests {
         let te = r.impact.expect("the miss event");
         assert_eq!(te.event, EV_MELEE_MISS);
         assert_eq!(te.other, ENTITYNUM_NONE);
+    }
+
+    /// A standing client as a blast candidate: the box and the eye
+    /// `CanDamage` builds its probes from.
+    fn blast_victim(slot: usize, x: f32) -> BlastVictim {
+        BlastVictim {
+            slot,
+            origin: Vec3::new(x, 0.0, 0.0),
+            mins: Vec3::new(-15.0, -15.0, 0.0),
+            maxs: Vec3::new(15.0, 15.0, 72.0),
+            eye: Vec3::new(x, 0.0, 60.0),
+        }
+    }
+
+    /// `G_RadiusDamage`'s falloff (combat doc, 14.1) on the frag's own
+    /// numbers, truncated the way retail truncates: 120 at the blast, 5 at
+    /// the radius, nothing past it. The 137-unit entry is the retail pair
+    /// capture, where a blast at (1329, 3297, -22) left a target standing at
+    /// (1192, 3296, -23.9) with health 26 and `damageCount` 74.
+    #[test]
+    fn radius_damage_falls_from_inner_to_outer() {
+        let v = [
+            blast_victim(1, 0.0),
+            blast_victim(2, 137.0),
+            blast_victim(3, 175.0),
+            blast_victim(4, 349.0),
+            blast_victim(5, 351.0),
+        ];
+        let hits = radius_damage(
+            Vec3::ZERO,
+            350.0,
+            120.0,
+            5.0,
+            Some(0),
+            None,
+            "fraggrenade_mp",
+            "MOD_GRENADE_SPLASH",
+            &v,
+            None,
+        );
+        let by: std::collections::BTreeMap<usize, i32> =
+            hits.iter().map(|h| (h.victim, h.damage)).collect();
+        assert_eq!(by[&1], 120);
+        assert_eq!(by[&2], 74, "74.98 truncated, the capture's own number");
+        assert_eq!(by[&3], 62, "62.5 truncated");
+        assert_eq!(by[&4], 5, "5.33 truncated");
+        assert!(!by.contains_key(&5), "past the radius");
+        assert!(hits
+            .iter()
+            .all(|h| h.dflags == DFLAG_RADIUS && h.mod_ == "MOD_GRENADE_SPLASH"));
+        assert!(hits.iter().all(|h| h.hitloc == "none" && h.attacker == 0));
+        // The direction is the blast to the victim with 24 added to z, and
+        // not a unit vector: its length is what carries the distance.
+        let at137 = hits.iter().find(|h| h.victim == 2).unwrap();
+        assert_eq!(at137.dir, [137.0, 0.0, 24.0]);
+        assert_eq!(at137.point, [0.0; 3]);
+    }
+
+    /// `CanDamage` (combat doc, 14.3) counts clear traces: five in the open,
+    /// two through a waist-high wall, none through a full one. The fraction
+    /// scales the falloff, and a victim with no line of sight at all takes
+    /// only the second chance's tenth, and only inside `radius * 0.2`.
+    #[test]
+    fn line_of_sight_scales_the_blast_and_the_second_chance_arm_is_a_tenth() {
+        let at = Vec3::new(0.0, 0.0, 8.0);
+        let near = blast_victim(1, 50.0);
+        let far = blast_victim(2, 100.0);
+        let open = vcod_common::collision::test_world(&[]);
+        assert_eq!(can_damage(at, &far, &open), 1.0);
+
+        // Close to the victim and waist-high: the body centre and the two
+        // low probes are behind it, the two shoulder ones clear it.
+        let waist = vcod_common::collision::test_world(&[(
+            Vec3::new(80.0, -64.0, 0.0),
+            Vec3::new(88.0, 64.0, 40.0),
+        )]);
+        assert!((can_damage(at, &far, &waist) - 2.0 / 3.0).abs() < 1e-6);
+
+        let wall = vcod_common::collision::test_world(&[(
+            Vec3::new(20.0, -64.0, 0.0),
+            Vec3::new(28.0, 64.0, 128.0),
+        )]);
+        assert_eq!(can_damage(at, &far, &wall), 0.0);
+        assert_eq!(can_damage(at, &near, &wall), 0.0);
+
+        let blast = |v: &BlastVictim, w: &vcod_common::collision::CollisionWorld| {
+            radius_damage(
+                at,
+                350.0,
+                120.0,
+                5.0,
+                Some(0),
+                None,
+                "fraggrenade_mp",
+                "MOD_GRENADE_SPLASH",
+                std::slice::from_ref(v),
+                Some(w),
+            )
+        };
+        // Two thirds of the falloff at 100 units: 87.14 * 2/3.
+        let partial = blast(&far, &waist);
+        assert_eq!(partial[0].damage, 58);
+        // Behind the wall and inside `radius * 0.2`: a tenth of the falloff.
+        let second = blast(&near, &wall);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].damage, 10);
+        // Behind the same wall but past `radius * 0.2`: nothing at all.
+        assert!(blast(&far, &wall).is_empty());
     }
 }

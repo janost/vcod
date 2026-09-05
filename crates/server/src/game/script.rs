@@ -245,11 +245,13 @@ impl ScriptRuntime {
         Ok(())
     }
 
-    /// `Scr_PlayerDamage` (combat doc, section 4.4) for every hit the
-    /// bullets made this frame: `CodeCallback_PlayerDamage` on the victim's
-    /// entity with the nine arguments, the attacker standing as its own
-    /// inflictor. A hit on a slot with no entity, or from one, is dropped:
-    /// there is nobody to call and nobody to name.
+    /// `Scr_PlayerDamage` (combat doc, section 4.4) for every hit this
+    /// frame's attacks made: `CodeCallback_PlayerDamage` on the victim's
+    /// entity with the nine arguments. The inflictor is the attacker himself
+    /// unless the hit names one, which a blast does: there the missile that
+    /// went off is handed over, still alive for as long as its explode event
+    /// rides the wire. A hit on a slot with no entity, or from one, is
+    /// dropped: there is nobody to call and nobody to name.
     pub fn deliver_hits(&mut self, hits: Vec<crate::game::combat::Hit>, now_ms: i32) {
         for hit in hits {
             let (Some(victim), Some(attacker)) = (
@@ -266,7 +268,7 @@ impl ScriptRuntime {
                 )
             });
             let args = vec![
-                Value::Entity(attacker),
+                Value::Entity(hit.inflictor.unwrap_or(attacker)),
                 Value::Entity(attacker),
                 Value::Int(hit.damage),
                 Value::Int(hit.dflags),

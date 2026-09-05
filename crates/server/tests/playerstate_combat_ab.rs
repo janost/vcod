@@ -18,7 +18,6 @@ use vcod_common::net::protocol::PROTOCOL_V1;
 const EV_FIRE_WEAPON: i32 = 159;
 const EV_FIRE_WEAPON_LASTSHOT: i32 = 161;
 const EV_MELEE_SWIPE: i32 = 164;
-const EV_PAIN: i32 = 187;
 
 /// Steps the gate does not compare, with the reason. `walks` is the capture's
 /// own exclusion -- the stall response steers it, so where it ends up is not
@@ -164,20 +163,6 @@ fn torso_flips(trace: &[Trace]) -> usize {
         .count()
 }
 
-/// ms into the step retail first took a hit at, if it did. From there on the
-/// cone is `P_DamageFeedback`'s and not the weapon machine's, and a vcod
-/// grenade hurts nobody yet: the missile flies but its blast charges no
-/// damage. Only the grenade capture's `throw_down` reaches it, where the
-/// third frag goes off at the thrower's own feet.
-fn hurt_at_ms(trace: &[Trace]) -> Option<i64> {
-    trace.windows(2).find_map(|w| {
-        let diff = ((w[1].event_sequence - w[0].event_sequence) & 0xff).min(4);
-        (0..diff)
-            .any(|i| w[1].events[((w[0].event_sequence + i) & 3) as usize] == EV_PAIN)
-            .then_some(w[1].ms)
-    })
-}
-
 fn trace_of(s: &Sample, ms: i64) -> Trace {
     let (p, ps) = (&PROTOCOL_V1, &s.ps);
     let ev = |i: usize| ps.field_i32(p, &format!("events[{i}]"));
@@ -213,20 +198,7 @@ const SPREAD_TOL: f32 = 26.0;
 /// Returns the misses, worst first.
 fn transient_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
     let mut bad = Vec::new();
-    let hurt = hurt_at_ms(retail).unwrap_or(i64::MAX);
-    // The same self-cleaning guard [`TORSO_GAPS`] carries: the skip is only
-    // honest for as long as nothing on our side hurts the player either. The
-    // missile pass spawns the grenade now; the moment its blast does radius
-    // damage, this fails and the skip has to go.
-    assert!(
-        hurt == i64::MAX || hurt_at_ms(ours).is_none(),
-        "ours raises EV_PAIN too now; drop the skip in transient_misses -- it \
-         exists only because a vcod grenade does no radius damage yet"
-    );
     for r in retail {
-        if r.ms >= hurt {
-            continue;
-        }
         let (Some(rf), Some(rs)) = (r.pos_frac, r.spread) else {
             continue;
         };
@@ -287,7 +259,11 @@ fn check(map: &str, gametype: &str, kind: &str) {
     let held =
         vcod_server::configstrings::weapon_index(&weapon).expect("the joined weapon in CS 7");
     let steps = parse_fixture(&text, held as u8);
-    let mine: Vec<Vec<Trace>> = replay(map, gametype, &steps, (&team, &weapon), fs, None)
+    // A grenade capture replays from the spot its own script threw from:
+    // where a blast lands, and so who it hurts, is the map's business and
+    // not the input's (`# grenade` header, AGENTS.md).
+    let place = common::captured_place(&text);
+    let mine: Vec<Vec<Trace>> = replay(map, gametype, &steps, (&team, &weapon), fs, place)
         .iter()
         .map(|step| step.iter().map(|s| trace_of(s, s.ms)).collect())
         .collect();

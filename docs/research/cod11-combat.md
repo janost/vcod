@@ -842,16 +842,26 @@ that differs from the sample before it by the toggle alone -- 512 on
 legs and restarts the torso on no anim at all, which is the same index 0 every
 settled retail pose reads (player-model-anim-system.md, "The weapon channel").
 
-INFERRED, and unmeasured: vcod applies that rule to every event clause, so it
-also reaches `fireweapon`'s pistol-ADS clause, `jump`'s two run clauses and
-`land`'s pistol and grenade clauses. No capture covers any of the four; they
-are inferred from the throw alone.
+**A `both` land clause is not.** VERIFIED: the sample after the one where
+`throw_down`'s frag knocks the thrower off his feet reads `legsAnim` 100,
+index 100 with the toggle clear, between two samples of 634, and `torsoAnim`
+512 across all three. VERIFIED: the script's landing clause for that stance
+and class is `both pb_standjump_land_pistol duration 5`. INFERRED: the land
+event puts its anim on the legs and leaves the torso alone, so the rule above
+is the throw's and not every `both` clause's; the single sample is the
+`duration 5`.
+
+INFERRED, and unmeasured: vcod applies the throw's rule to the rest of the
+event clauses, so it also reaches `fireweapon`'s pistol-ADS clause and
+`jump`'s two run clauses. No capture covers either.
 
 **As implemented.** `pmove::weapon`'s `pullback`, `grenade_hold`,
 `melee_check` and `melee_finish`, with the two-arm `pickup` and the short
-`putaway` branch beside them, and `spectate.rs::play_event` for the last
-paragraph. `crates/server/tests/playerstate_combat_ab.rs`'s `grenade` gate
-replays the whole capture.
+`putaway` branch beside them, and `spectate.rs::play_event` for the two
+paragraphs above it, whose landing branch clears the torso of the selection
+before it plays it. `crates/server/tests/playerstate_combat_ab.rs`'s `grenade`
+gate replays the whole capture, from the spot the capture's own header
+records: where a blast lands, and so who it hurts, is the map's business.
 
 ## 2. `Bullet_Fire_Extended`: spread, the trace, and what a bullet does
 
@@ -3121,8 +3131,10 @@ suppresses player damage only for the duration of a scripted `radiusDamage`
 call and has no effect at all on a grenade's own blast, whose two callers
 never touch `level+0x29F4`.
 
-This retires the `radiusDamage` divergence entry
-`cod11-gsc-language.md` used to carry.
+What is left of the `radiusDamage` divergence entry in
+`cod11-gsc-language.md` after this: the victim walk, the standing box the
+builtin measures a victim with, and the `undefined` the callback gets where
+retail hands over the world entity. The flag is not among them.
 
 ### 14.3 `CanDamage`
 
@@ -3159,3 +3171,18 @@ value as 0 for none, `1.0` for four or five, and `count / 3.0`
 takes a third or two thirds of the falloff damage, and three of five clear
 points is already full damage. INFERRED: nothing on the bullet path consults
 any of this, which 4.6 already said.
+
+**As implemented.** `crate::game::combat`'s `radius_damage` and `can_damage`,
+with `Server::tick` charging each of the frame's explosions before
+`deliver_hits` so a grenade damages on the frame it goes off, and the
+`radiusDamage` builtin (`builtins/combat.rs`) wrapping the same two functions
+for a script's own blast. The divergences left are listed in
+`cod11-gsc-language.md`'s `radiusDamage` entry. The falloff is computed at
+double precision: retail keeps the whole expression on the x87 stack, and an
+f32 round trip loses a point of damage at the round ratios a script picks.
+`crates/server/tests/combat.rs`'s two blast tests are the end-to-end gate, and
+the grenade capture's own `throw_down` pins the number a third time.
+VERIFIED: its pain frame reads `aimSpreadScale` 94.00 off a counter that was
+0. INFERRED: section 6's step 5 adds `damage * 100 / maxHealth` there, so
+retail charged 94, which is what the falloff gives at the 78 units the replay
+measures between the blast and the thrower.

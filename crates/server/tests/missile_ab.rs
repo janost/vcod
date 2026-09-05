@@ -67,34 +67,11 @@ impl MissileSample {
     }
 }
 
-/// Every `key=value` on the capture's `# grenade` header line. Not
-/// `common::header_value`: that splits a clause on commas, and this line's
-/// `origin=` carries two of them.
-fn grenade_header(text: &str) -> BTreeMap<String, String> {
-    let line = text
-        .lines()
-        .find(|l| l.starts_with("# grenade "))
-        .expect("the capture's `# grenade` header line");
-    line.trim_start_matches("# grenade ")
-        .split_whitespace()
-        .filter_map(|t| t.split_once('='))
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
-}
-
 /// The `!missile` line writes each ring as one comma-separated field.
 fn four(raw: &str) -> [i32; 4] {
     let mut out = [0; 4];
     for (i, v) in raw.split(',').enumerate().take(4) {
         out[i] = v.parse().expect("a number in an event ring");
-    }
-    out
-}
-
-fn header_vec3(header: &BTreeMap<String, String>, key: &str) -> [f32; 3] {
-    let mut out = [0.0; 3];
-    for (i, part) in header[key].split(',').enumerate().take(3) {
-        out[i] = part.parse().expect("a number in the header vector");
     }
     out
 }
@@ -261,15 +238,15 @@ fn a_thrown_grenade_flies_bounces_and_explodes_like_retail() {
         env!("CARGO_MANIFEST_DIR")
     );
     let text = std::fs::read_to_string(&path).unwrap();
-    let header = grenade_header(&text);
+    let header = common::grenade_header(&text).expect("the capture's `# grenade` header line");
     let weapon = common::header_value(&text, "weapon", &path).to_string();
     let team = common::header_value(&text, "joined", &path).to_string();
     let held =
         vcod_server::configstrings::weapon_index(&weapon).expect("the joined weapon in CS 7");
     let steps = parse_fixture(&text, held as u8);
 
-    let origin = header_vec3(&header, "origin");
-    let yaw = header_vec3(&header, "viewangles")[1];
+    let origin = common::header_vec3(&header, "origin");
+    let yaw = common::header_vec3(&header, "viewangles")[1];
     let mine = replay(
         map,
         gametype,

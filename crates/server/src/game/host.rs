@@ -247,6 +247,10 @@ pub struct GameHost {
     pub bodies: crate::game::bodies::BodyQueue,
     /// The grenades in the air (`crate::game::missile`).
     pub missiles: crate::game::missile::Missiles,
+    /// `setPlayerIgnoreRadiusDamage`'s flag, which sits on the level and not
+    /// on a client (combat doc, 14.2): the `radiusDamage` builtin is the one
+    /// reader, and a grenade's own blast never looks at it.
+    pub ignore_radius_damage: bool,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -283,6 +287,7 @@ impl GameHost {
             temp_entities: Vec::new(),
             bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
             missiles: crate::game::missile::Missiles::default(),
+            ignore_radius_damage: false,
         }
     }
 
