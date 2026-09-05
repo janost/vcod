@@ -249,7 +249,7 @@ fn gun_random(rng: &mut u64) -> (f32, f32) {
 
 /// Ray-vs-box: the entry fraction along `start..end`, if the segment crosses
 /// the box at all.
-fn ray_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3) -> Option<f32> {
+pub(crate) fn ray_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3) -> Option<f32> {
     let d = end - start;
     let (mut t0, mut t1) = (0.0f32, 1.0f32);
     for axis in 0..3 {

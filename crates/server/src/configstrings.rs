@@ -161,6 +161,19 @@ impl Default for Allocators {
     }
 }
 
+/// A model's 1-based index inside [`CsRange::Model`], the way the range's own
+/// indexer numbers it, or 0 for a name nothing has precached. What an entity
+/// state's `index` field carries for a model.
+pub fn model_index(cs: &[String], name: &str) -> i32 {
+    if name.is_empty() {
+        return 0;
+    }
+    let (first, last) = CsRange::Model.bounds();
+    cs.get(first..=last)
+        .and_then(|range| range.iter().position(|s| s == name))
+        .map_or(0, |slot| slot as i32 + 1)
+}
+
 impl Allocators {
     pub fn new() -> Self {
         Allocators {

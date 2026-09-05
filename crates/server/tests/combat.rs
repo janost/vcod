@@ -55,7 +55,7 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, None));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -450,7 +450,7 @@ fn the_kill_command_suicides_a_player() {
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, None));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -634,7 +634,7 @@ fn a_melee_swing_hits_and_the_kill_shows_the_melee_icon() {
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, None));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));

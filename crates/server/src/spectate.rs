@@ -164,18 +164,50 @@ pub enum PmType {
 /// One client's simulated state. `pm_type` selects the movement path, the way
 /// retail's own `playerState_t` does: a client is a spectator before the menu
 /// and a player after, within one connection.
+/// The four-slot event ring an entity or a playerstate carries:
+/// `events[seq & 3]` is written and the counter bumped after it, which is
+/// what makes the new slots of a frame the ones *below* the sequence
+/// (`docs/research/cod11-combat.md` section 7). A client, a corpse and a
+/// missile all raise events through one of these.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EventRing {
+    pub events: [i32; 4],
+    pub parms: [i32; 4],
+    /// Eight bits on the wire; kept wide here and masked at the write.
+    pub seq: i32,
+}
+
+impl EventRing {
+    /// `G_AddEvent`: the slot first, the counter after.
+    pub fn add(&mut self, event: i32, parm: i32) {
+        let slot = (self.seq & 3) as usize;
+        self.events[slot] = event;
+        self.parms[slot] = parm;
+        self.seq = self.seq.wrapping_add(1);
+    }
+
+    pub fn clear(&mut self) {
+        *self = EventRing::default();
+    }
+
+    /// `eventSequence` and the four slots, through whatever setter the
+    /// caller writes its entity or playerstate fields with.
+    pub fn write(&self, set: &mut impl FnMut(&str, i32)) {
+        set("eventSequence", self.seq & 0xff);
+        for (i, (ev, parm)) in self.events.iter().zip(&self.parms).enumerate() {
+            set(&format!("events[{i}]"), *ev);
+            set(&format!("eventParms[{i}]"), *parm);
+        }
+    }
+}
+
 pub struct ClientSim {
     pub ps: pmove::PlayerState,
     pub pm_type: PmType,
-    /// `ps.eventSequence`, the count of events ever raised. Eight bits on the
-    /// wire; kept wide here and masked at the wire.
-    pub event_sequence: i32,
-    /// `ps.events` and `ps.eventParms`, the four-slot ring the counter
-    /// indexes. Cleared at a respawn along with the counter: retail's own
-    /// respawn frame reads an empty ring at sequence 0
+    /// `ps.eventSequence`, `ps.events` and `ps.eventParms`. Cleared at a
+    /// respawn: retail's own respawn frame reads an empty ring at sequence 0
     /// (`docs/research/cod11-combat.md` 9.2).
-    pub events: [i32; 4],
-    pub event_parms: [i32; 4],
+    pub ring: EventRing,
     /// The model configstring index `setViewmodel` left on the client,
     /// mirrored from the script host every frame the way the weapons are.
     pub viewmodel_index: i32,
@@ -277,9 +309,7 @@ impl ClientSim {
         ClientSim {
             ps: pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg),
             pm_type: PmType::Spectator,
-            event_sequence: 0,
-            events: [0; 4],
-            event_parms: [0; 4],
+            ring: EventRing::default(),
             viewmodel_index: 0,
             assembly: Default::default(),
             delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
@@ -339,9 +369,7 @@ impl ClientSim {
         self.spawn_count = self.spawn_count.wrapping_add(1);
         // Retail's respawn frame reads an empty ring at sequence 0
         // (combat doc, 9.2).
-        self.event_sequence = 0;
-        self.events = [0; 4];
-        self.event_parms = [0; 4];
+        self.ring.clear();
         // A spectator's `eFlags` is a constant on the wire, so only a player
         // spawn consumes a flip.
         if mode == PmType::Normal {
@@ -361,13 +389,8 @@ impl ClientSim {
             }
     }
 
-    /// Writes `events[seq & 3]` and then bumps the counter, the order both
-    /// retail captures measured (`docs/research/cod11-combat.md` section 7).
     pub fn add_event(&mut self, event: i32, parm: i32) {
-        let slot = (self.event_sequence & 3) as usize;
-        self.events[slot] = event;
-        self.event_parms[slot] = parm;
-        self.event_sequence = self.event_sequence.wrapping_add(1);
+        self.ring.add(event, parm);
     }
 
     /// Advance one frame, returning the events the move raised, already in the
@@ -809,11 +832,7 @@ impl ClientSim {
         // weapon's, and the next task is what gives it a value.
         set("torsoAnim", self.anim.torso());
         set("weapon", i32::from(self.ps.weapon));
-        set("eventSequence", self.event_sequence & 0xff);
-        for (i, (ev, parm)) in self.events.iter().zip(&self.event_parms).enumerate() {
-            set(&format!("events[{i}]"), *ev);
-            set(&format!("eventParms[{i}]"), *parm);
-        }
+        self.ring.write(&mut set);
         set(
             "groundEntityNum",
             match self.ps.on_ground {
@@ -1007,11 +1026,7 @@ impl ClientSim {
             "weaponrechamber[1]",
             (self.ps.weapon_rechamber >> 32) as u32 as i32,
         );
-        set("eventSequence", self.event_sequence & 0xff);
-        for (i, (ev, parm)) in self.events.iter().zip(&self.event_parms).enumerate() {
-            set(&format!("events[{i}]"), *ev);
-            set(&format!("eventParms[{i}]"), *parm);
-        }
+        self.ring.write(&mut set);
         // Mode-independent: both captures agree on all of these. The box is
         // the standing one whatever the stance: retail transmits `maxs[2]`
         // 70 while crouched and prone too, and the mover derives its own

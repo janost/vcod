@@ -744,6 +744,56 @@ impl ScriptRuntime {
         std::mem::take(&mut self.host.temp_entities)
     }
 
+    /// `Attack::Throw`: the grenade a release put in the air. `now_ms` is
+    /// the `level.time` the throw ran at, which is a frame behind the one
+    /// this is called on (`crate::game::missile::Missiles::fire_grenade`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn fire_grenade(
+        &mut self,
+        owner: usize,
+        weapon: u8,
+        model: i32,
+        origin: glam::Vec3,
+        velocity: glam::Vec3,
+        fuse_left_ms: i32,
+        now_ms: i32,
+    ) {
+        let host = &mut self.host;
+        let spawned = self.vm.with_cx(|cx| {
+            host.missiles.fire_grenade(
+                &mut host.ents,
+                cx,
+                model,
+                owner,
+                weapon,
+                origin,
+                velocity,
+                fuse_left_ms,
+                now_ms,
+            )
+        });
+        if let Err(e) = spawned {
+            log::warn!("the grenade client {owner} threw was not spawned: {e:?}");
+        }
+    }
+
+    /// One frame of the missile pass (`docs/research/cod11-combat.md` 12).
+    pub fn run_missiles(
+        &mut self,
+        world: Option<&vcod_common::collision::CollisionWorld>,
+        sims: &[(usize, &crate::spectate::ClientSim)],
+        now_ms: i32,
+    ) -> crate::game::missile::MissileFrame {
+        let host = &mut self.host;
+        host.missiles.run(&mut host.ents, world, sims, now_ms)
+    }
+
+    /// The missiles on the wire this frame. They are `SVF_BROADCAST`, so the
+    /// caller adds them past its own PVS cull.
+    pub fn missiles(&self) -> &crate::game::missile::Missiles {
+        &self.host.missiles
+    }
+
     /// The corpse queue, whose entities every client's snapshot carries
     /// until their slots are reused (`crate::game::bodies`).
     pub fn bodies(&self) -> &crate::game::bodies::BodyQueue {
