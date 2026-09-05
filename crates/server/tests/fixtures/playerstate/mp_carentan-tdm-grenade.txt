@@ -19,10 +19,10 @@
 # Values are the raw i32 wire words, floats as their bit patterns.
 # press_buttons is held down for the first press_ms of the step rather than
 # tapped: a grenade is cooked by holding the trigger and thrown by the
-# release. switch_weapon is a one-cmd cmd.weapon at switch_ms into the
-# step, and held on every cmd after it until ps.weapon reads it: the
-# pickup half takes the byte off the cmd of the frame the putaway ends
-# on, so a byte sent once is reverted before the swap lands (1.8).
+# release. switch_weapon is asked for at switch_ms into the step and then
+# held on every cmd until ps.weapon reads it: the pickup half takes the
+# byte off the cmd of the frame the putaway ends on, so a byte sent once
+# is reverted before the swap lands and the old weapon stays in hand (1.8).
 # A !missile line follows each trace that had a missile on the wire. It
 # records every entity that reads eType 4 or read it earlier in the run
 # and has not left the wire, because the explode flips the missile's own
