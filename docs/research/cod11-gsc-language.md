@@ -771,17 +771,52 @@ added closes that (section 14 of
   on one event is killed rather than woken, regardless of which it
   registered first. The wake order *within* each pass is measured (start
   order, `# probe_notify`); the ordering *between* the two passes is not.
-- **`radiusDamage`'s falloff curve is RTCW's, not retail's.** The callback
-  itself is no longer a divergence: `radius_damage`
-  (`crates/server/src/game/builtins/combat.rs`) hands
-  `CodeCallback_PlayerDamage` to `Cx::spawn`, which the interpreter starts as
-  soon as the builtin returns and before the calling thread's next
-  instruction, so a script that damages and then reads `self.health` sees
-  what the callback left, the way retail's synchronous call does. What each
-  victim takes is the open half: the damage falls off linearly from
-  `maxDamage` at the blast to `minDamage` at the radius, which is RTCW's
-  `G_RadiusDamage`. UNVERIFIED: the curve at `.so` 0x5eef4 was not read, and
-  nothing read stands behind the falloff vcod uses.
+- **`radiusDamage` walks live clients and nothing else.** The falloff, the
+  line of sight, the direction and the callback timing are all settled and no
+  longer divergences. VERIFIED: the builtin at `.so` 0x5eef4 and
+  `G_RadiusDamage` (`.so` 0x4a3f4) have been read out, and both the linear
+  curve from `maxDamage` at the blast to `minDamage` at the range and
+  `CanDamage`'s five-trace fraction are what `crate::game::combat`'s
+  `radius_damage` and `can_damage` compute, second-chance arm included
+  (`docs/research/cod11-combat.md` section 14). The callback half was settled
+  earlier: `radius_damage` hands `CodeCallback_PlayerDamage` to `Cx::spawn`,
+  which the interpreter starts as soon as the builtin returns and before the
+  calling thread's next instruction, so a script that damages and then reads
+  `self.health` sees what the callback left, the way retail's synchronous call
+  does. Four things around it are still divergences, and every retail half
+  below is `docs/research/cod11-combat.md` section 14's, read out of the two
+  functions there:
+  - **A body between the blast and the victim does not shield it.** VERIFIED:
+    each of `CanDamage`'s five probes is a
+    `trap_LocationalTrace(&tr, origin, point, targ->s.number, ...)` (14.3),
+    which takes the victim's own entity number as the pass entity, and that
+    trap clips the ray against the other entities' models (3.1's dispatch
+    chain). INFERRED, from those two: on retail a player standing between the
+    blast and the victim blocks a probe and costs the victim a third of the
+    damage. VERIFIED: vcod's `can_damage` (`crate::game::combat`) traces the
+    collision world alone, so here only geometry ever takes a probe away.
+  - **The victim walk.** VERIFIED: retail walks `trap_EntitiesInBox` over a
+    `radius * sqrt(2)` box, and the loop body reads `takedamage` and the
+    entity's own bounds (14.1). INFERRED, since the skip is a branch: it takes
+    anything with `takedamage` set and measures a brush model to the nearest
+    point of those bounds. vcod walks live clients only and measures the
+    script `origin` field, so nothing else this server ever damages is
+    reachable by a blast.
+  - **The victim's box and eye are the standing ones.** VERIFIED: retail's
+    probe points come off the entity's own bounds and its `client+0xD0` eye
+    height (14.3). The host carries no stance, so a crouched or prone player
+    is measured as if he stood. That moves the five probe points, not the
+    distance, which is origin to origin either way.
+  - **The attacker reaches the callback as `undefined`.** VERIFIED: the
+    builtin passes `&g_entities[1022]`, the world entity (14.2), which no
+    script this VM runs can hold. INFERRED, since it is a branch condition:
+    the stock callback's own `isPlayer(eAttacker)` test takes the same branch
+    for both. vcod's fifth attacker argument is no
+    longer honoured, and no call in the shipped corpus passes one. VERIFIED:
+    retail reads its four arguments by index, `Scr_GetVector(0)` and
+    `Scr_GetFloat(1)` to `(3)` (14.2). INFERRED, from the absence of any arity
+    check in that body: a fifth argument is ignored rather than refused, which
+    is what vcod does with one.
 - **Of the `SP_` layer, only what the wire can see runs.**
   `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces
   `G_CallSpawn`'s third case for the five classnames whose `SP_` function is

@@ -42,7 +42,7 @@ fn booted(map: &str, fs: vcod_common::pk3::Pk3Fs, now: Instant) -> vcod_server::
     let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
     let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
     let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(fs).expect("load the scripts");
     sv
 }

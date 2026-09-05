@@ -39,11 +39,17 @@ combat effects.
   the game's own gametype and map scripts on its gsc VM, so a client picks a
   team through Activision's stock menus, spawns where `_spawnlogic.gsc` puts
   it with the weapon it chose, and moves on the shared pmove: running,
-  jumping, crouching, prone and leaning. No entity reaches a client yet, so
-  players cannot see each other or anything the map places.
-  `--test-entities` adds entities that move on the wire to exercise the
-  packet-entity path; they carry no `eType` or model, so a retail client
-  draws nothing for them.
+  jumping, crouching, prone and leaning. Clients see each other and the map's
+  own entities, culled per client against the BSP's PVS the way retail culls,
+  each other player animated off `mp/playeranim.script`. Combat works: a shot
+  traces against the world and every live player, a hit runs the stock
+  `CodeCallback_PlayerDamage` for its damage, knockback and obituary, a kill
+  leaves a corpse in the body queue and drops the dead player's weapon, and
+  the victim respawns on the use key. So do melee swings and grenades, the
+  latter as real missile entities that fly, bounce, rest and explode with
+  retail's radius falloff. Not there yet: item pickup, intermission, map
+  change, the killcam and movers. `--test-entities` adds entities that move on
+  the wire to exercise the packet-entity path.
 
 The whole thing runs on wgpu and winit, so in principle it is cross-platform.
 I have only run it on Linux.

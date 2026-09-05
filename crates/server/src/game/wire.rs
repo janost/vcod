@@ -24,7 +24,6 @@
 //! A/B gates read `packet_entities` for the map's own static set.
 
 use super::host::GameHost;
-use crate::configstrings::CsRange;
 use crate::game::entity::{HudState, HUD_OWNER_ALL};
 use std::collections::BTreeMap;
 use vcod_common::net::msg::{EntityState, HudElem, MAX_HUD_ELEMS};
@@ -295,11 +294,10 @@ fn kind_of(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Opti
 /// range's own indexer numbers it.
 fn model_index(host: &mut GameHost, cx: &mut Cx, id: EntId) -> Option<i32> {
     let name = field_string(host, cx, id, "model")?;
-    let (first, last) = CsRange::Model.bounds();
-    let slot = host.configstrings[first..=last]
-        .iter()
-        .position(|cs| *cs == name)?;
-    Some((slot + 1) as i32)
+    match crate::configstrings::model_index(&host.configstrings, &name) {
+        0 => None,
+        i => Some(i),
+    }
 }
 
 fn field_string(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> Option<String> {

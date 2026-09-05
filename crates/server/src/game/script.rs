@@ -245,11 +245,13 @@ impl ScriptRuntime {
         Ok(())
     }
 
-    /// `Scr_PlayerDamage` (combat doc, section 4.4) for every hit the
-    /// bullets made this frame: `CodeCallback_PlayerDamage` on the victim's
-    /// entity with the nine arguments, the attacker standing as its own
-    /// inflictor. A hit on a slot with no entity, or from one, is dropped:
-    /// there is nobody to call and nobody to name.
+    /// `Scr_PlayerDamage` (combat doc, section 4.4) for every hit this
+    /// frame's attacks made: `CodeCallback_PlayerDamage` on the victim's
+    /// entity with the nine arguments. The inflictor is the attacker himself
+    /// unless the hit names one, which a blast does: there the missile that
+    /// went off is handed over, still alive for as long as its explode event
+    /// rides the wire. A hit on a slot with no entity, or from one, is
+    /// dropped: there is nobody to call and nobody to name.
     pub fn deliver_hits(&mut self, hits: Vec<crate::game::combat::Hit>, now_ms: i32) {
         for hit in hits {
             let (Some(victim), Some(attacker)) = (
@@ -266,7 +268,7 @@ impl ScriptRuntime {
                 )
             });
             let args = vec![
-                Value::Entity(attacker),
+                Value::Entity(hit.inflictor.unwrap_or(attacker)),
                 Value::Entity(attacker),
                 Value::Int(hit.damage),
                 Value::Int(hit.dflags),
@@ -358,6 +360,15 @@ impl ScriptRuntime {
     ) {
         if let Some(s) = self.host.client_entity_states.get_mut(slot) {
             *s = state;
+        }
+    }
+
+    /// A client's `ps.grenadeTimeLeft` as the tick's moves left it, for the
+    /// death drop (`docs/research/cod11-combat.md` 5.1 step 5). 0 for a slot
+    /// with no sim.
+    pub fn set_client_grenade_ms(&mut self, slot: usize, ms: i32) {
+        if let Some(g) = self.host.client_grenade_ms.get_mut(slot) {
+            *g = ms;
         }
     }
 
@@ -742,6 +753,56 @@ impl ScriptRuntime {
     /// (`crate::game::temp_entity`).
     pub fn take_temp_entities(&mut self) -> Vec<crate::game::temp_entity::TempEntity> {
         std::mem::take(&mut self.host.temp_entities)
+    }
+
+    /// `Attack::Throw`: the grenade a release put in the air. `now_ms` is
+    /// the `level.time` the throw ran at, which is a frame behind the one
+    /// this is called on (`crate::game::missile::Missiles::fire_grenade`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn fire_grenade(
+        &mut self,
+        owner: usize,
+        weapon: u8,
+        model: i32,
+        origin: glam::Vec3,
+        velocity: glam::Vec3,
+        fuse_left_ms: i32,
+        now_ms: i32,
+    ) {
+        let host = &mut self.host;
+        let spawned = self.vm.with_cx(|cx| {
+            host.missiles.fire_grenade(
+                &mut host.ents,
+                cx,
+                model,
+                owner,
+                weapon,
+                origin,
+                velocity,
+                fuse_left_ms,
+                now_ms,
+            )
+        });
+        if let Err(e) = spawned {
+            log::warn!("the grenade client {owner} threw was not spawned: {e:?}");
+        }
+    }
+
+    /// One frame of the missile pass (`docs/research/cod11-combat.md` 12).
+    pub fn run_missiles(
+        &mut self,
+        world: Option<&vcod_common::collision::CollisionWorld>,
+        sims: &[(usize, &crate::spectate::ClientSim)],
+        now_ms: i32,
+    ) -> crate::game::missile::MissileFrame {
+        let host = &mut self.host;
+        host.missiles.run(&mut host.ents, world, sims, now_ms)
+    }
+
+    /// The missiles on the wire this frame. They are `SVF_BROADCAST`, so the
+    /// caller adds them past its own PVS cull.
+    pub fn missiles(&self) -> &crate::game::missile::Missiles {
+        &self.host.missiles
     }
 
     /// The corpse queue, whose entities every client's snapshot carries

@@ -130,6 +130,28 @@ impl Trajectory {
             _ => self.base,
         }
     }
+
+    /// The inverse of [`Trajectory::read`]: every word of the `prefix` trajectory.
+    pub fn write(&self, ent: &mut EntityState, p: &Protocol, prefix: &str) {
+        let mut seti = |name: &str, v: i32| {
+            if let Some(i) = EntityState::field_index(p, name) {
+                ent.fields[i] = v;
+            }
+        };
+        seti(&format!("{prefix}.trType"), self.tr_type);
+        seti(&format!("{prefix}.trTime"), self.tr_time);
+        seti(&format!("{prefix}.trDuration"), self.tr_duration);
+        for (k, (b, d)) in self
+            .base
+            .to_array()
+            .iter()
+            .zip(self.delta.to_array())
+            .enumerate()
+        {
+            seti(&format!("{prefix}.trBase[{k}]"), b.to_bits() as i32);
+            seti(&format!("{prefix}.trDelta[{k}]"), d.to_bits() as i32);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -217,5 +239,21 @@ mod tests {
             let tr = traj(t, 0, 0, Vec3::X, Vec3::new(999.0, 0.0, 0.0));
             assert_eq!(tr.evaluate(5000), Vec3::X);
         }
+    }
+
+    #[test]
+    fn write_then_read_round_trips_a_gravity_arc() {
+        let p = &crate::net::protocol::PROTOCOL_V1;
+        let t = Trajectory {
+            tr_type: TR_GRAVITY,
+            tr_time: 12_345,
+            tr_duration: 0,
+            base: Vec3::new(1.0, 2.0, 3.0),
+            delta: Vec3::new(400.0, 0.0, 300.0),
+        };
+        let mut e = EntityState::null(p);
+        t.write(&mut e, p, "pos");
+        assert_eq!(Trajectory::read(&e, p, "pos"), t);
+        assert_eq!(e.field_i32(p, "pos.trType"), TR_GRAVITY);
     }
 }

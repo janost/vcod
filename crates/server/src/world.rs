@@ -55,8 +55,17 @@ pub fn visible_entities(
 }
 
 impl World {
-    pub fn from_bsp(b: &bsp::Bsp) -> Self {
-        let collision = CollisionWorld::build(b, &[]);
+    /// `fs` is the mounted paks, for the static props: a map's carts, crates
+    /// and hay bales are xmodels rather than brushes, and retail collides
+    /// against them. Without them a grenade rolls through a cart and a
+    /// bullet passes through a barrel (`crates/server/tests/missile_ab.rs`,
+    /// where the capture's own grenade comes to rest on one). `None` is the
+    /// bare world every test that mounts no paks builds.
+    pub fn from_bsp(b: &bsp::Bsp, fs: Option<&vcod_common::pk3::Pk3Fs>) -> Self {
+        let props = fs.map_or_else(Vec::new, |fs| {
+            vcod_common::props::collision_tris(fs, &b.entities)
+        });
+        let collision = CollisionWorld::build(b, &props);
         let spawn = bsp::find_spawn(&b.entities)
             // No spawn class in the ents: hover above the origin.
             .unwrap_or(([0.0, 0.0, 64.0], 0.0));
@@ -151,7 +160,7 @@ mod tests {
             return;
         };
         let parsed = bsp::parse(&data).unwrap();
-        let w = World::from_bsp(&parsed);
+        let w = World::from_bsp(&parsed, None);
         // find_spawn picked a real spot, not bedrock.
         assert!(w.spawn.0[2] > -500.0, "spawn {:?}", w.spawn);
     }

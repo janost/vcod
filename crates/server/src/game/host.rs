@@ -179,6 +179,11 @@ pub struct GameHost {
     /// Each client's last usercmd buttons, mirrored in by `Server` before
     /// the frame, for `useButtonPressed`.
     pub client_buttons: Vec<u8>,
+    /// Each client's `ps.grenadeTimeLeft`, mirrored in by
+    /// `Server::replay_moves` with the entity states, which is the last read
+    /// of it before a kill this tick: what a death drops
+    /// (`docs/research/cod11-combat.md` 5.1 step 5).
+    pub client_grenade_ms: Vec<i32>,
     /// Each client's entity state as the tick's moves left it, mirrored in by
     /// `Server::replay_moves` before the script frame. `cloneplayer` copies
     /// the slot's entry into the body queue; nothing else reads it.
@@ -245,11 +250,17 @@ pub struct GameHost {
     /// The eight corpse entities `cloneplayer` fills
     /// (`crate::game::bodies`).
     pub bodies: crate::game::bodies::BodyQueue,
+    /// The grenades in the air (`crate::game::missile`).
+    pub missiles: crate::game::missile::Missiles,
+    /// `setPlayerIgnoreRadiusDamage`'s flag, which sits on the level and not
+    /// on a client (combat doc, 14.2): the `radiusDamage` builtin is the one
+    /// reader, and a grenade's own blast never looks at it.
+    pub ignore_radius_damage: bool,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
 /// state is the one xorshift degenerates on.
-const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
+pub(crate) const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
 impl GameHost {
     pub fn new(configstrings: Vec<String>) -> GameHost {
@@ -264,6 +275,7 @@ impl GameHost {
             client_weapon_ops: Vec::new(),
             client_vitals: vec![Vitals::default(); MAX_CLIENTS],
             client_buttons: vec![0; MAX_CLIENTS],
+            client_grenade_ms: vec![0; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
             weapons: std::rc::Rc::new(crate::weapons::WeaponTable::empty()),
@@ -280,6 +292,8 @@ impl GameHost {
             turret_pitch: std::collections::HashMap::new(),
             temp_entities: Vec::new(),
             bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
+            missiles: crate::game::missile::Missiles::default(),
+            ignore_radius_damage: false,
         }
     }
 

@@ -1046,6 +1046,7 @@ mod tests {
             vec![Hit {
                 victim: 0,
                 attacker: 1,
+                inflictor: None,
                 damage: 45,
                 dflags: 0,
                 mod_: "MOD_RIFLE_BULLET",
@@ -1323,7 +1324,7 @@ mod tests {
         sim.ps.weapon_slots = host.client_weapons[0].slots;
         sim.ps.weapon = host.client_weapons[0].current;
         crate::server::apply_weapon_op(&mut sim, host.client_weapon_ops[0].1, &host.weapons);
-        assert_eq!(sim.events[0], EV_PUTAWAY_WEAPON);
+        assert_eq!(sim.ring.events[0], EV_PUTAWAY_WEAPON);
         assert_eq!(sim.ps.weapon, carbine as u8, "still the carbine, mid-drop");
 
         let mut raised = Vec::new();
