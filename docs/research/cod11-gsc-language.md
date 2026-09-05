@@ -787,10 +787,12 @@ added closes that (section 14 of
   below is `docs/research/cod11-combat.md` section 14's, read out of the two
   functions there:
   - **The victim walk.** VERIFIED: retail walks `trap_EntitiesInBox` over a
-    `radius * sqrt(2)` box and takes anything with `takedamage` set, measuring
-    a brush model to the nearest point of its bounds (14.1). vcod walks live
-    clients only and measures the script `origin` field, so nothing else this
-    server ever damages is reachable by a blast.
+    `radius * sqrt(2)` box, and the loop body reads `takedamage` and the
+    entity's own bounds (14.1). INFERRED, since the skip is a branch: it takes
+    anything with `takedamage` set and measures a brush model to the nearest
+    point of those bounds. vcod walks live clients only and measures the
+    script `origin` field, so nothing else this server ever damages is
+    reachable by a blast.
   - **The victim's box and eye are the standing ones.** VERIFIED: retail's
     probe points come off the entity's own bounds and its `client+0xD0` eye
     height (14.3). The host carries no stance, so a crouched or prone player
@@ -798,8 +800,9 @@ added closes that (section 14 of
     distance, which is origin to origin either way.
   - **The attacker reaches the callback as `undefined`.** VERIFIED: the
     builtin passes `&g_entities[1022]`, the world entity (14.2), which no
-    script this VM runs can hold; the stock callback's own `isPlayer(eAttacker)`
-    test takes the same branch for both. vcod's fifth attacker argument is no
+    script this VM runs can hold. INFERRED, since it is a branch condition:
+    the stock callback's own `isPlayer(eAttacker)` test takes the same branch
+    for both. vcod's fifth attacker argument is no
     longer honoured, and no call in the shipped corpus passes one. VERIFIED:
     retail reads its four arguments by index, `Scr_GetVector(0)` and
     `Scr_GetFloat(1)` to `(3)` (14.2). INFERRED, from the absence of any arity

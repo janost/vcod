@@ -2551,11 +2551,16 @@ them: rifle rounds passing through a player at half damage (2.3); the
 `pm_time` stun (4.5); the view kick of 6's step 6; events 175 and 176;
 `EV_CROUCH_PAIN` (188);
 the `EV_RAISE_WEAPON` (155) retail raises on the death frame beside `EV_DEATH`;
-`CanDamage`'s line-of-sight check (4.6, 14.3);
-`setPlayerIgnoreRadiusDamage` (14.2); and item pickup. Melee (1.10, 2.5) and
-grenades (1.11, 11 to 14) are absent from the run this section measured and
-are what stage 6c builds; the radius-damage falloff vcod carried when that run
-was taken was RTCW's curve, and section 14.1 is retail's.
+the direct-hit `MOD_GRENADE` arm (13.1), which a stock frag cannot reach
+because its file spells `damage` 0; the pitch rate `G_MissileLandAngles`
+redraws at a bounce (11.2); the splash event 173 and the water mask of 12.1;
+and item pickup.
+
+Melee (1.10, 2.5) and grenades (1.11, 11 to 14) were absent from the run 9.1
+to 9.3 measured, and the radius-damage falloff vcod carried then was RTCW's
+curve. Both are modelled now, 14.1's falloff with them, and 9.5 is what the
+probes measured of the two. `CanDamage`'s line-of-sight check (4.6, 14.3) and
+`setPlayerIgnoreRadiusDamage` (14.2) moved off this list with them.
 
 The ADS fraction and the spread scale used to be here. Both are retail's now:
 1.13 and 2.1 carry the rules with their addresses and each an "As
@@ -2571,6 +2576,125 @@ the `--save-ads` captures (1.13 and 2.1), and
 half a frame's tolerance and passes. The turn term is not: both fixture
 weapons spell `hipSpreadTurnAdd 0`, and the BAR, the one stock weapon with
 one, needs a probe that can answer the weapon menu with it.
+
+### 9.5 Melee and grenades, measured the same way
+
+Four runs on 2026-09-05, `mp_carentan` `tdm` with `scr_friendlyfire 1`, against
+`cargo run -p vcod-server -- mp_carentan --gametype tdm --set
+scr_friendlyfire=1`: the lone `--save-grenade` script, and the target-plus-
+shooter pair under `--probe-melee`, `--probe-grenade` and
+`--probe-grenade-death`. The retail column is the seven committed fixtures of
+section 8's family. None of the vcod captures is committed; each pair was moved
+out of the tree after its run, because the fixture names are the retail
+evidence's.
+
+**What matches.**
+
+VERIFIED: the melee triple, event for event and entity for entity. Both
+engines raise `EV_MELEE_SWIPE` (164) on the attacker's own ring, then
+`EV_MELEE_HIT` (166) or `EV_MELEE_MISS` (167) on a broadcast temp entity, then
+`EV_FIRE_MELEE` (165) back on the attacker's ring, the last two on the same
+frame and about `meleeTime` after the swipe (retail 146 to 165 ms over ten
+swings, vcod 98 to 166 over ten, the spread being when the probe's snapshot
+arrived rather than when the server raised it). Eleven swings on each side:
+retail two hits and nine misses, vcod three and eight.
+
+VERIFIED: melee damage. Retail's target drops 100 to 44; vcod's drops 100 to
+53 to 5. Both sit in `meleeDamage + rand(0..5)` times a hit-location
+multiplier (3.5): 56 is the band at `torso_upper`'s 1.1, 47 and 48 at a leg's
+0.9. The two runs strike from different approaches, so the locations are not
+the same and the numbers are not directly comparable.
+
+VERIFIED: the grenade event chain and the explode frame's shape.
+`EV_PULLBACK_WEAPON` (158) on the thrower's ring, one `EV_GRENADE_BOUNCE`
+(177) per bounce on the missile's own ring, and `EV_GRENADE_EXPLODE` (178)
+with parm 5 on the same ring, on a frame that reads `eType` 0, `eFlags` 256,
+`pos` and `apos` both `TR_STATIONARY` with zero delta, and the origin
+truncated to whole units. Both engines write `events[eventSequence & 3]` and
+then increment, so the explode lands in the slot below the sequence.
+
+VERIFIED: `grenadeTimeLeft` takes 0 or 4000 and nothing between, on both
+sides. The two `-grenade-shooter.txt` captures alone carry 499 vcod traces and
+233 retail ones with no third value. There is no cook countdown in 1.1 MP
+(1.14).
+
+VERIFIED: the fuse. Pullback to explode is 4568 ms on vcod's one paired throw
+against retail's 4759 and 4549, on the same 1000 ms cook the script holds and
+the same `fuseTime` 4.
+
+VERIFIED: the weapon switch to the frag, frame for frame against the lone
+capture's `to_frag` step: putaway 14 frames against retail's 13, raise 5
+against 6, then ready. The cook holds `weaponstate` 3 for 41 frames against
+retail's 40.
+
+**What differs.**
+
+VERIFIED: **every vcod grenade launches with the same tumble.** Retail's
+`apos` `trDelta` is drawn per throw. Across the committed throws the roll rate
+holds one value for a throw's whole life and takes 316.3, 318.0, 344.8, 354.4,
+367.4 and 387.1 deg/s, all inside `360 +/- 45`; the launch pitch rate reads
+692.7, 704.1 and 726.9, all inside `720 +/- 45`, and is redrawn at each bounce
+(11.2's `G_MissileLandAngles`, unmodelled). Every vcod throw in the four runs
+reads exactly `675.0, 0.0, 315.0`, the low end of both bands.
+`Missiles` carries its own `flrand` state and `#[derive(Default)]` leaves it
+zero, which is `xorshift`'s fixed point, so the draw is always 0.0. vcod is
+wrong; retail is right. **Open**, one field, in
+`crates/server/src/game/missile.rs`.
+
+VERIFIED: **a held trigger latches a grenade's raise on vcod and not on
+retail.** `mp_carentan-tdm-grenade-death-shooter.txt` has retail raise the
+frag under `buttons=1` for five frames (ms 10734 to 10930, `raiseTime` 0.25),
+then `weaponstate` 3 with `EV_PULLBACK_WEAPON` and `grenadeTimeLeft` 4000 at
+ms 10995. vcod holds `weaponstate` 1 for the fourteen frames the capture got
+before the scripted `kill` cut it off, and never pulls back. INFERRED: the
+cause is the `semiAuto` default. The semi-automatic latch (1.4) pins
+`weaponTime` at 1 while the trigger is held, and vcod's weapon parser defaults
+an absent `semiAuto` to true; of the 32 stock `weapons/mp` files, the eight
+that omit the key are the four grenades, the three bipod mg42s and the
+PTRS41, and retail latches none of them. Retail's own carbine, which spells
+the key, does latch: the lone capture's `cancel` step reads `weaponstate` 1
+for 54 frames under a held bit, and vcod reproduces that. vcod is wrong;
+retail is right. **Open**, in `crates/common/src/weapon.rs`.
+
+VERIFIED: **the blast on a player is unmeasured against vcod.** The pair runs
+never closed the range: retail spawns two same-team clients 41 to 367 units
+apart (the four committed fixtures' first `origin` and `target_origin`),
+vcod's `tdm` picker put them 280 units apart in xy and on two floors, `z`
+-143.9 against -23.9, so the shooter's walk spent 150 s wedging through the
+map and threw from 296 units with no line of sight. Its target took no blast
+damage in any run. Retail's target drops 100 to 26 at 137 units, which 14.1's
+falloff reproduces to the unit; what is unconfirmed live is only that vcod
+puts that number on a real wire. The in-process pin is
+`crates/server/tests/combat.rs`. **Open**, and the spawn picker, not the
+blast, is what to change.
+
+VERIFIED: **the lone `--save-grenade` script cannot finish against vcod.** Its
+`throw_down` and `pin_out` steps blew up their own thrower on both attempts, at
+57 s and at 23 s, and the lone capture mode has no respawn, so the run stalls
+on the step it died in. Retail's thrower survived the same script from a spawn
+144 units up. INFERRED: the spawn geometry, not the damage, since the falloff
+at the ranges involved is 14.1's on both sides. The step-by-step comparison
+above is off the traces the log carries up to the death.
+
+Not a divergence, recorded so a reader of two captures does not read it as
+one: vcod numbers a temp entity out of a fixed 64-slot ring at 958 to 1021
+(`crates/server/src/game/temp_entity.rs`) where retail takes the next free
+entity, so the melee hit and miss entities read 960 to 971 against retail's
+245 to 307. A client keys a fired event on the entity number only to tell one
+event from the next, and both sides give every event a fresh one.
+
+The `EV_GRENADE_BOUNCE` parm is the surface type, and vcod's three bounces in
+the paired run all read 0 where retail's seven read 5, 6, 10, 17 and 21. That
+is 13.4's prop-material gap and nothing new: vcod's other runs read 2, 5, 10
+and 21 off world brush, and the gate already excludes a prop bounce's parm.
+
+**What the hand check still owes.** A 1.1 client on `vcod-server`, and eight
+things only a person can look at: the arc of a throw; a bounce off a wall and
+one off a floor; the explosion's decal and sound; the damage at three ranges
+against the server's own `D;` records; a kill by grenade and its killfeed
+line; a melee kill and its icon; a death while cooking and the grenade the
+body drops; and a wall between the eye and the blast. PENDING; none of it is
+claimed here.
 
 ---
 
@@ -2624,6 +2748,11 @@ one, needs a probe that can answer the weapon menu with it.
 
 ## 11. `fire_grenade`: what a throw spawns
 
+Sections 11 to 14 cite a call or a stored function pointer by the address of
+its **relocation slot**, which is the instruction's operand and one byte past
+the `call` or `mov` opcode. `readelf -r game.mp.i386.so` lists them at exactly
+those addresses; a disassembly listing shows the instruction one byte lower.
+
 Everything a thrown grenade is comes from one function. VERIFIED:
 `fire_grenade` is `0x543AC` in `game.mp.i386.so`, `0x268` bytes, and the
 module's relocation table holds exactly three calls to it, at `0x49B70`
@@ -2652,7 +2781,7 @@ ordering, and every "when" and "otherwise" in it, which are branch conditions.
 - `s.eType` (`+0x4`) takes 4. VERIFIED: 4 is `ET_MISSILE` in
   `private/reference/CoDExtended/src/shared.h:449`, and the entity runner that
   precedes `G_RunFrame` (`0x50478`) branches on `s.eType == 4` into
-  `G_RunMissile` at `0x50375`.
+  `G_RunMissile` at `0x50376`.
 - `s.eFlags` (`+0x8`) takes `0x03000000`. VERIFIED: this is the module's only
   write of either bit, and the only reads of them are the `& 3` byte tests on
   `entityState+0xB` in `G_RunMissile` (`0x54219`) and `G_MissileImpact`
@@ -2763,7 +2892,7 @@ step 5, which called it "a random direction ... and a speed of 160.0".
 ## 12. `G_RunMissile`: flight, bounce, rest
 
 VERIFIED: `G_RunMissile` is `0x53FCC`, `0x3DE` bytes, and the module's
-relocation table holds one call to it, at `0x50375`, inside the static entity
+relocation table holds one call to it, at `0x50376`, inside the static entity
 runner that ends just before `G_RunFrame` (`0x50478`) and reaches it on
 `s.eType == 4`.
 
@@ -3048,6 +3177,52 @@ VERIFIED: `G_MissileDie` is `0x5489C` and sets `takedamage` 0, `think`
 `G_ExplodeMissile` and `nextthink` `level.time + 10` when the inflictor is not
 the entity itself. VERIFIED: `fire_grenade` never writes `die` (`+0x218`) or
 `takedamage`, so nothing can shoot a thrown grenade down.
+
+### 13.4 As implemented
+
+`crates/server/src/game/missile.rs` carries sections 11 to 13: `fire_grenade`,
+the per-frame move with its bounce and rest, and the explode. Five decisions in
+it come off the captures rather than off the binary, and each is worth naming
+because a reader of 11 to 13 alone would guess otherwise.
+
+VERIFIED, off `mp_carentan-tdm-grenade.txt`: a throw's `trTime` is the
+*previous* frame's `level.time`, not the frame the release lands on. The
+death-drop capture pins it twice over, `trTime` 1405500 against a death frame
+at `serverTime` 1405550. vcod stamps both the thrown and the dropped grenade
+that way.
+
+VERIFIED, off the same capture's `!missile` lines: a bounce's `trTime` is a
+whole millisecond, so vcod truncates the impact time rather than carrying the
+trace fraction into it, and the fraction it snaps the origin back with is the
+1.5-unit trace's, not the move trace's. Reproducing the committed arcs to
+within 0.1 units needed both.
+
+VERIFIED, off the same lines: the exploded entity stays on the wire for about
+300 ms after the event frame, which is `EVENT_VALID_MS` in the file. Retail's
+`freeAfterEvent` frees it once the event has been sent to everyone who can
+see it; vcod holds it for a fixed window instead.
+
+VERIFIED: retail's server clip includes the map's static props. The lone
+capture's second throw comes to rest at `z` 179.3 while its thrower stands at
+144.1, 35 units up on a cart the bare BSP does not have. `World::from_bsp`
+therefore takes the paks and builds the propped collision world for the server
+too; the client's prediction world always had them. Two things a prop costs,
+because its triangles reach vcod's world without the material they came from:
+a bounce off one carries `eventParm` 0 where retail carries the surface type
+(21 on the two committed throws that land on that cart), and retail's explode
+packs the normal of a 16-unit downward trace whose mask misses a prop's
+contents, so a grenade resting on one explodes with parm 0 where vcod finds
+the prop and packs 5. `crates/server/tests/missile_ab.rs` excludes both.
+
+VERIFIED: a missile's `index` is 0 on the wire on both sides, and its
+`eFlags` `0x03000000` (11.1) sits above the 24-bit netfield, so nothing of it
+travels. The model still registers at map load, which `configstrings_ab` pins.
+
+INFERRED, and the reason there is no direct-hit arm: 13.1's `MOD_GRENADE`
+path is gated on `ent->damage`, and `fraggrenade_mp` spells `damage` 0, so a
+stock frag bounces off a live player at the soft damping instead of
+detonating on it. vcod traces against live player boxes and applies that
+damping; the arm itself is out.
 
 ---
 
