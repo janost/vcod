@@ -2583,7 +2583,10 @@ INFERRED: the ordering in it.
 
 - `s.pos.trType` (`+0xC`) takes 5, `s.pos.trTime` (`+0x10`) `level.time`, and
   `s.pos.trBase` (`+0x18`) the `origin` argument verbatim. VERIFIED: 5 is
-  `TR_GRAVITY` in `shared.h`'s `trType_t`.
+  `TR_GRAVITY` in CoD 1.1's own `trType_t`, read out of `BG_EvaluateTrajectory`
+  at `.so 0x2C600` and tabulated in `docs/protocol-1.1.md`, divergence 8.
+  CoDExtended's `shared.h` puts `TR_SINE` at 5 and is an unverified RTCW paste;
+  the protocol doc records reading it that way as a past error of this repo's.
 - `s.pos.trDelta` (`+0x24`) takes the `velocity` argument with each component
   separately truncated toward zero to a whole number and converted back, the
   x87 round-to-zero control word being set for each of the three.
@@ -2804,10 +2807,12 @@ ordering and every condition in it.
 
 ## 13. The explode: event and blast
 
-CoD 1.1 has two explode paths and neither spawns a temp entity: both convert
-the missile's own entity into the event carrier and let `freeAfterEvent` clear
-it. That is the shape a client sees, and it is what the missile's `eType`
-change is for.
+VERIFIED: CoD 1.1 has two explode paths, `G_MissileImpact` and
+`G_ExplodeMissile`, and neither calls `G_TempEntity`; both write the event onto
+the missile's own `entityState` through `G_AddEvent`, set its `s.eType` to 0
+and set `freeAfterEvent`. INFERRED: that is therefore the shape a client sees,
+and the `eType` change is what stops it still reading as a missile while the
+event frame goes out.
 
 ### 13.1 `G_MissileImpact`
 
@@ -2821,14 +2826,19 @@ list below. INFERRED: the ordering, and every "when" and "otherwise" in it.
 - `other = &g_entities[tr.entityNum]`, the stride being `0x314`.
 - **When `other->takedamage` (`+0x171`) is zero**: with `ent->s.eFlags &
   0x03000000` clear the function falls through to the explode block below.
-  With those bits set, `G_BounceMissile(ent, tr)` runs and the function
-  returns after it, adding one event on the way out and only when four things
-  hold: the bounce returned 1, the trace did not report start-solid, and
-  `classname` (`+0x176`) is neither `scr_const+0xF4` (`"WP"`) nor
-  `scr_const+0x30` (`"flamebarrel"`). The event is `0xB1` (177,
-  `EV_GRENADE_BOUNCE`) with `eventParm` `(tr.surfaceFlags >> 20) & 0x1F`. A
-  `"WP"` gets no event at all and a `"flamebarrel"` gets `0xC2` (194,
-  `EV_FLAMEBARREL_BOUNCE`) with parm 0.
+  With those bits set, `G_BounceMissile(ent, tr)` runs and the function returns
+  after it, having taken these five tests in this order and returned at the
+  first that fires:
+  1. the bounce returned 0 (`0x53AFC`): return, no event;
+  2. the trace reports start-solid (`tr+0x2F`, `0x53B04`): return, no event;
+  3. `classname` (`+0x176`) is `scr_const+0xF4`, `"WP"` (`0x53B0E`): return,
+     no event;
+  4. `classname` is `scr_const+0x30`, `"flamebarrel"` (`0x53B22`):
+     `G_AddEvent(ent, 0xC2, 0)`, that is 194, `EV_FLAMEBARREL_BOUNCE`, with a
+     literal parm of 0;
+  5. otherwise `G_AddEvent(ent, 0xB1, (tr.surfaceFlags >> 20) & 0x1F)`, that
+     is 177, `EV_GRENADE_BOUNCE`, with the surface type as its parm. A stock
+     grenade is always this arm, its classname being `"grenade"` (11.1).
 - **When `other->takedamage` is non-zero and `ent->damage` (`+0x238`) is
   zero**: `G_BounceMissile(ent, tr)` runs and the function returns with no
   event at all.
