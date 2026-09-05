@@ -75,11 +75,18 @@ const ANIM_GAPS: &[(&str, &str, &str)] = &[];
 /// suppresses the restart-toggle flip count with the indices, since a channel
 /// nobody writes cannot flip. Same self-cleaning guard as [`ANIM_GAPS`]: an
 /// entry that starts matching fails.
-const TORSO_GAPS: &[(&str, &str, &str)] = &[(
+const TORSO_GAPS: &[(&str, &str, &str)] = &[];
+
+/// Steps whose `torsoAnim` index is drawn rather than fixed, with the reason.
+/// The `meleeattack` clause lists several anims per channel and retail draws
+/// among them, so the index a capture happened to record is not something a
+/// replay can reproduce: only whether the channel was written, and how often
+/// the restart toggle flipped, are comparable. Both are still checked.
+const TORSO_DRAWN: &[(&str, &str, &str)] = &[(
     "mp_carentan",
     "melee_tap",
-    "the swing's torso anim is the animscript's `meleeattack` clause and \
-     `spectate.rs::weapon_anim_event` maps no event to it yet",
+    "the swing's torso anim is drawn among the `meleeattack` clause's five \
+     lines, on retail as on ours",
 )];
 
 struct Step {
@@ -654,7 +661,18 @@ fn check(map: &str, gametype: &str, kind: &str) {
             )),
             None => {}
         }
-        let same_torsos = torsos(&step.trace) == torsos(ours);
+        // A drawn index is not reproducible, so the comparison drops to
+        // whether the channel was written at all.
+        let drawn = TORSO_DRAWN
+            .iter()
+            .any(|(m, l, _)| *m == map && *l == step.label);
+        let written =
+            |t: &[Trace]| -> BTreeSet<bool> { torsos(t).iter().map(|i| *i != 0).collect() };
+        let same_torsos = if drawn {
+            written(&step.trace) == written(ours)
+        } else {
+            torsos(&step.trace) == torsos(ours)
+        };
         // Ours opens every step with the snapshot the step before it ended
         // on; retail's own first sample is whenever its next snapshot
         // happened to arrive. Where that is more than a cmd in, retail missed

@@ -911,6 +911,7 @@ fn a_broadcast_temp_entity_skips_the_cull_and_a_scoped_one_does_not() {
         surf_type: 0,
         other: nb as u32,
         attacker: na as i32,
+        weapon: 0,
         origin,
         scope,
     };

@@ -52,6 +52,10 @@ pub struct TempEntity {
     pub other: u32,
     /// `attackerEntityNum`, `ENTITYNUM_WORLD` when there is no player.
     pub attacker: i32,
+    /// `weapon`. `G_TempEntity` zeroes the state, so only the events whose
+    /// caller fills it in carry one: the melee hit and miss
+    /// (`docs/research/cod11-combat.md` 2.5).
+    pub weapon: i32,
     pub origin: [f32; 3],
     pub scope: Scope,
 }
@@ -70,6 +74,7 @@ pub fn build(te: &TempEntity, number: u32, p: &Protocol) -> EntityState {
     set("surfType", te.surf_type);
     set("otherEntityNum", te.other as i32);
     set("attackerEntityNum", te.attacker);
+    set("weapon", te.weapon);
     for (axis, v) in te.origin.iter().enumerate() {
         set(&format!("pos.trBase[{axis}]"), v.to_bits() as i32);
     }
@@ -116,6 +121,7 @@ mod tests {
             surf_type: 1,
             other: 0,
             attacker: 0,
+            weapon: 0,
             origin: [0.0; 3],
             scope: Scope::Broadcast,
         }
@@ -129,6 +135,7 @@ mod tests {
             surf_type: 0,
             other: 3,
             attacker: 5,
+            weapon: 0,
             origin: [1.0, 2.0, 3.0],
             scope: Scope::Broadcast,
         };

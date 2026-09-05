@@ -614,3 +614,123 @@ fn the_kill_command_suicides_a_player() {
         6
     );
 }
+
+/// `Weapon_Melee` (combat doc, 2.5): a swing at a player inside 64 units
+/// traces the same way a bullet does, spawns an `EV_MELEE_HIT` temp entity
+/// naming the victim, and hurts it for `meleeDamage + rand()%5` through the
+/// hit-location table. The retail melee capture is the numbers: two swings
+/// killed a 100-health player at `head` for 81 and 79, and the kill's
+/// obituary carried parm 135, `0x80 | MOD_MELEE`
+/// (`mp_carentan-tdm-melee-shooter.txt`).
+#[test]
+fn a_melee_swing_hits_and_the_kill_shows_the_melee_icon() {
+    use vcod_common::net::msg::{UserCmd, BUTTON_MELEE, NULL_USERCMD};
+
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+    let p = &PROTOCOL_V1;
+    let na = ca
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let nb = cb
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let spot = ca.snapshots().newest().unwrap().ps.origin(p);
+    assert!(
+        sv.test_clear_line(spot, 0.0, 30.0),
+        "no clear 30 units along +x from the spawn"
+    );
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 30.0, spot[1], spot[2]], 180.0);
+    let facing_a = UserCmd {
+        angles: [0, 32768, 0], // ANGLE2SHORT(180)
+        ..NULL_USERCMD
+    };
+    let mut step = |sv: &mut vcod_server::Server, ca: &mut _, cb: &mut _| {
+        now += Duration::from_millis(50);
+        common::step_pair(sv, (&qa, ca), (&qb, cb), now)
+    };
+    for _ in 0..40 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
+        step(&mut sv, &mut ca, &mut cb);
+    }
+    assert_eq!(cb.snapshots().newest().unwrap().ps.health(), 100);
+
+    // One frame of the melee bit every second: the bit is edge-latched, so it
+    // has to go back up between swings, and `meleeTime` is 0.65 s.
+    let swing = UserCmd {
+        buttons: BUTTON_MELEE,
+        ..NULL_USERCMD
+    };
+    let mut hits = 0;
+    let mut after_first = None;
+    for i in 0..80 {
+        ca.send_frame(if i % 20 == 0 { &swing } else { &NULL_USERCMD });
+        cb.send_frame(&facing_a);
+        step(&mut sv, &mut ca, &mut cb);
+        let sa = ca.snapshots().newest().unwrap();
+        let landed = sa.entities.values().any(|e| {
+            e.field_i32(p, "eType") == 12 + 166 && e.field_i32(p, "otherEntityNum") == nb as i32
+        });
+        if !landed {
+            continue;
+        }
+        hits += 1;
+        if hits == 1 {
+            after_first = Some(cb.snapshots().newest().unwrap().ps.health());
+        } else {
+            break;
+        }
+    }
+    assert_eq!(hits, 2, "two swings should have landed");
+    // 50..54 through the head multiplier, truncated: 75..81 off 100.
+    let h = after_first.expect("the first swing's health");
+    assert!((19..=25).contains(&h), "health after one swing: {h}");
+
+    let sb = cb.snapshots().newest().unwrap();
+    assert_eq!(sb.ps.health(), 0);
+    assert_eq!(sb.ps.field_i32(p, "pm_type"), 6, "B is dead");
+    let obituary = |snap: &vcod_common::net::snapshot::Snapshot| {
+        snap.entities
+            .values()
+            .find(|e| e.field_i32(p, "eType") == 12 + 201)
+            .map(|e| {
+                (
+                    e.field_i32(p, "otherEntityNum"),
+                    e.field_i32(p, "attackerEntityNum"),
+                    e.field_i32(p, "eventParm"),
+                )
+            })
+    };
+    assert_eq!(
+        obituary(ca.snapshots().newest().unwrap()),
+        Some((nb as i32, na as i32, 135)),
+        "the melee obituary the capture measured"
+    );
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+}

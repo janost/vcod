@@ -1106,6 +1106,16 @@ number against 1022 and the entity's `takedamage`, and calls `G_Damage` with
 plus `rand() % 5`. INFERRED: the call is on the arm where the number differs
 from 1022 and `takedamage` is set.
 
+**As implemented.** `melee_fire` (`crates/server/src/game/combat.rs`) shares
+`trace_attack` with `bullet_fire`, so the two cannot disagree about a
+player's box or its bones. Two divergences, both deliberate. The hit event's
+`eventParm` is `DirToByte(-forward)`: the bone trace answers no surface
+normal where retail's returns the bone's own, and 1.14's capture reads 115
+for a hit against a forward of +y, which is that swing reversed and tilted.
+And both events go to every client rather than to the PVS, since `TempEntity`
+carries no scope between the two and a 64-unit reach puts every witness in
+the PVS anyway.
+
 ### 2.6 `Bullet_Endpos`
 
 VERIFIED: `Bullet_Endpos` is `0x69624`, 0xcf bytes, and nothing in the
