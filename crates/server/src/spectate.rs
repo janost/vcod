@@ -703,6 +703,10 @@ impl ClientSim {
             return;
         }
         self.dead = true;
+        // The cook went with the drop: retail's `fire_grenade` clears
+        // `grenadeTimeLeft` on the thrower, and the retail death frame reads
+        // 0 (combat doc, 11.1 and 5.1 step 5).
+        self.ps.grenade_time_left_ms = 0;
         self.add_event(EV_DEATH, 0);
         // `vectoyaw(attacker->origin - self->origin)` truncated, the body's
         // own yaw when there is no attacker (5.1, item 11).
