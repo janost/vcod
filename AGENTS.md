@@ -317,10 +317,10 @@ engineering setup works.
 - The tick, in order: expired clients, then each client's queued usercmds
   (`replay_moves`, one pmove step per cmd, which is where the weapon machine
   queues a frame's shots, swings and throws), then those themselves (a trace
-  each, an impact temp entity and a hit per player struck), then the client
+  each, an impact temp entity and a hit per player struck), then the missiles
+  fly and any due fuse explodes, then the blasts become hits, then the client
   commands that start a script thread (`kill`, `mr`), which the packet pass
-  only queues because it runs before the clock advances, then the missiles
-  fly and any due fuse explodes, then the blasts become hits, then
+  only queues because it runs before the clock advances, then
   `deliver_hits` so the damage callback has run before script, then the
   script frame, then the sim ops the
   script left (spawns, weapon gives and switches, the damage the callback
@@ -560,9 +560,12 @@ never pasted decompiler output or disassembly listings.
 - A grenade's fuse rides the `EV_FIRE_WEAPON` / `EV_FIRE_WEAPON_LASTSHOT`
   parm, and only inside vcod: the pmove step clears `grenadeTimeLeft` on the
   same frame it raises the event, so the server would read 0 back if it went
-  looking. The parm never reaches the wire, because the client predicts the
-  throw itself. `Attack::Throw` therefore has to be taken off the raised
-  event during `replay_moves`, before the sim moves on.
+  looking. `Attack::Throw` therefore has to be taken off the raised event
+  during `replay_moves`, before the sim moves on. It must not travel:
+  `eventParms[i]` is an 8-bit netfield and a 4000 ms fuse arrives as 160,
+  where retail's throw frame reads `eventParms=0,0,0,0`, so `ClientSim::step`
+  writes 0 to the ring for those two events and keeps the fuse in the returned
+  `PmEvent`.
 - The explode rides the missile's own entity, not a temp entity. It flips its
   `eType` to 0, sets `eFlags` 256 and writes `EV_GRENADE_EXPLODE` on its own
   ring, so anything filtering entities on `eType == 4` drops exactly the frame

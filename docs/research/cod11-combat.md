@@ -528,9 +528,11 @@ artifact and not the path. 1.14 has the samples.
 
 INFERRED: a reload or a rechamber can therefore be interrupted by a weapon
 switch and a shot or a melee cannot. VERIFIED, off the grenade capture:
-`weaponstate` 1 lasts `raiseTime` and lasts longer than that under a held
-trigger. INFERRED: the state ends on `weaponTime` reaching 0 like every other
-one, and the semi-automatic latch of 1.4 is what holds it open; the earlier
+`weaponstate` 1 lasts `raiseTime`, and on a `semiAuto` weapon lasts longer
+than that under a held trigger -- the capture measured it on the carbine, and
+9.5 has retail's frag, which omits the key, raising in `raiseTime` under the
+same held bit. INFERRED: the state ends on `weaponTime` reaching 0 like every
+other one, and the semi-automatic latch of 1.4 is what holds it open; the earlier
 reading here, that the raise does not wait for `weaponTime`, was inferred from
 the check order alone and no capture then held a raise. 1.14 has the numbers.
 
@@ -2636,10 +2638,11 @@ holds one value for a throw's whole life and takes 316.3, 318.0, 344.8, 354.4,
 692.7, 704.1 and 726.9, all inside `720 +/- 45`, and is redrawn at each bounce
 (11.2's `G_MissileLandAngles`, unmodelled). Every vcod throw in the four runs
 reads exactly `675.0, 0.0, 315.0`, the low end of both bands.
-`Missiles` carries its own `flrand` state and `#[derive(Default)]` leaves it
-zero, which is `xorshift`'s fixed point, so the draw is always 0.0. vcod is
-wrong; retail is right. **Open**, one field, in
-`crates/server/src/game/missile.rs`.
+`Missiles` carries its own `flrand` state and `#[derive(Default)]` left it
+zero, which is `xorshift`'s fixed point, so the draw was always 0.0. vcod was
+wrong; retail is right. Fixed: the pool seeds its state off the host's
+`RNG_SEED` (`crates/server/src/game/missile.rs`), and two throws now draw
+different tumbles. Still unmodelled is the redraw at each bounce.
 
 VERIFIED: **a held trigger latches a grenade's raise on vcod and not on
 retail.** `mp_carentan-tdm-grenade-death-shooter.txt` has retail raise the
@@ -2648,13 +2651,13 @@ then `weaponstate` 3 with `EV_PULLBACK_WEAPON` and `grenadeTimeLeft` 4000 at
 ms 10995. vcod holds `weaponstate` 1 for the fourteen frames the capture got
 before the scripted `kill` cut it off, and never pulls back. INFERRED: the
 cause is the `semiAuto` default. The semi-automatic latch (1.4) pins
-`weaponTime` at 1 while the trigger is held, and vcod's weapon parser defaults
+`weaponTime` at 1 while the trigger is held, and vcod's weapon parser defaulted
 an absent `semiAuto` to true; of the 32 stock `weapons/mp` files, the eight
 that omit the key are the four grenades, the three bipod mg42s and the
 PTRS41, and retail latches none of them. Retail's own carbine, which spells
 the key, does latch: the lone capture's `cancel` step reads `weaponstate` 1
-for 54 frames under a held bit, and vcod reproduces that. vcod is wrong;
-retail is right. **Open**, in `crates/common/src/weapon.rs`.
+for 54 frames under a held bit, and vcod reproduces that. vcod was wrong;
+retail is right. Fixed: the default is off (`crates/common/src/weapon.rs`).
 
 VERIFIED: **the blast on a player is unmeasured against vcod.** The pair runs
 never closed the range: retail spawns two same-team clients 41 to 367 units
@@ -3202,11 +3205,12 @@ VERIFIED, off the same lines: the exploded entity stays on the wire for about
 `freeAfterEvent` frees it once the event has been sent to everyone who can
 see it; vcod holds it for a fixed window instead.
 
-VERIFIED: retail's server clip includes the map's static props. The lone
-capture's second throw comes to rest at `z` 179.3 while its thrower stands at
-144.1, 35 units up on a cart the bare BSP does not have. `World::from_bsp`
-therefore takes the paks and builds the propped collision world for the server
-too; the client's prediction world always had them. Two things a prop costs,
+VERIFIED: the lone capture's second throw comes to rest at `z` 179.3 while its
+thrower stands at 144.1, 35 units up on a cart the bare BSP has no surface at.
+INFERRED, from that rest height against the bare BSP: retail's server clip
+includes the map's static props. `World::from_bsp` therefore takes the paks and
+builds the propped collision world for the server too; the client's prediction
+world always had them. Two things a prop costs,
 because its triangles reach vcod's world without the material they came from:
 a bounce off one carries `eventParm` 0 where retail carries the surface type
 (21 on the two committed throws that land on that cart), and retail's explode

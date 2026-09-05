@@ -490,7 +490,8 @@ pub const MELEE_RANGE: f32 = 64.0;
 
 /// `Weapon_Melee` (combat doc, 2.5): a 64-unit trace along the view with the
 /// bullet mask and `bulletPriorityMap` whatever the weapon, a hit or miss
-/// temp entity carrying the trace normal and the swinger's weapon, and on a
+/// temp entity carrying the swinger's weapon -- the hit's parm is
+/// `DirToByte(-forward)`, the miss's the surface normal -- and on a
 /// player a `MOD_MELEE` hit for `meleeDamage + rand()%5`. The hit-location
 /// multiplier is `G_Damage`'s, the same one a bullet goes through (4.2):
 /// retail's melee capture read 81 and 79 off a 50-damage swing at `head`.

@@ -272,9 +272,12 @@ taken from a settled server.
 
 VERIFIED live (retail 1.1d dedicated, `mp_carentan` `tdm`, 2026-09-05, the
 `--save-grenade` and `--probe-grenade` captures in
-`crates/server/tests/fixtures/playerstate/`): a thrown `fraggrenade_mp` is the
-only `eType` 4 (`ET_MISSILE`) entity a stock MP server puts on the wire, and it
-carries this and nothing else.
+`crates/server/tests/fixtures/playerstate/`): a thrown `fraggrenade_mp` carries
+`eType` 4 (`ET_MISSILE`), and this field set and nothing else. It is the only
+`eType` 4 entity either capture saw, which is two captures of one weapon on one
+map: `weapon_grenadelauncher_fire` builds a missile the same way and nobody has
+found what calls it (`docs/research/cod11-combat.md` 11.3), so "the only one a
+stock MP server sends" is not measured.
 
 | field | in flight | at rest | on the explode frame |
 |---|---|---|---|

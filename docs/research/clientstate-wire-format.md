@@ -166,8 +166,11 @@ VERIFIED live (two populated servers, 2026-08-24): `eType == 2` is `ET_CORPSE` a
 VERIFIED live (retail 1.1d dedicated, `mp_carentan` `tdm`, 2026-09-05, the
 `--save-grenade` and `--probe-grenade` captures in
 `crates/server/tests/fixtures/playerstate/`): `eType == 4` is `ET_MISSILE`, and
-a thrown `fraggrenade_mp` is the only thing on that wire that carries it. The
-whole field set one of them puts on the wire, in flight and on the frame it
+a thrown `fraggrenade_mp` carries it. It is the only entity either capture saw
+with that `eType`, over two captures of one weapon on one map;
+`weapon_grenadelauncher_fire` builds a missile the same way and what calls it is
+unverified (`cod11-combat.md` 11.3), so nothing here rules out a second kind.
+The whole field set a frag puts on the wire, in flight and on the frame it
 detonates:
 
 - `pos` is `TR_GRAVITY` (5), `trTime` the throw's server time, `trBase` the
