@@ -38,7 +38,7 @@ fn two_joined() -> Option<(EntityState, EntityState, [f32; 3], [f32; 3])> {
 
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
 
     let qa = Rc::new(RefCell::new(Queues::default()));
@@ -155,7 +155,7 @@ fn the_scripts_can_find_both_players_by_classname() {
 
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -299,7 +299,7 @@ fn a_moving_player() -> Option<EntityState> {
 
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -409,7 +409,7 @@ fn a_spectator_is_sent_to_nobody() {
 
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -477,7 +477,7 @@ fn a_roster_view() -> Option<(vcod_common::net::snapshot::Snapshot, u32)> {
     let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -547,7 +547,7 @@ fn opposite_teams_carry_different_roster_team_values() {
     let mut cfg = cfg();
     cfg.gametype = "tdm".into();
     let mut sv = vcod_server::Server::new(cfg, now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
 
     let qa = Rc::new(RefCell::new(Queues::default()));
@@ -606,7 +606,7 @@ fn a_client_is_told_where_the_other_is_this_frame() {
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -695,7 +695,7 @@ fn a_weapon_switch_off_the_usercmd_byte_happens_once() {
         vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse the bsp");
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let q = Rc::new(RefCell::new(Queues::default()));
     let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
@@ -785,7 +785,7 @@ fn a_body_reaches_both_the_dead_client_and_the_other_one() {
 
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -867,7 +867,7 @@ fn a_broadcast_temp_entity_skips_the_cull_and_a_scoped_one_does_not() {
 
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(), now);
-    sv.load_world(vcod_server::world::World::from_bsp(&bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -911,6 +911,7 @@ fn a_broadcast_temp_entity_skips_the_cull_and_a_scoped_one_does_not() {
         surf_type: 0,
         other: nb as u32,
         attacker: na as i32,
+        weapon: 0,
         origin,
         scope,
     };

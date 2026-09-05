@@ -163,6 +163,9 @@ pub struct WeaponDef {
     /// Semantics INFERRED from the values; no decompilation evidence yet.
     pub ads_bob_factor: f32,
     /// `semiAuto 0` fires while the button is held at `fireTime` cadence.
+    /// The eight stock files that omit the key -- the four grenades, the
+    /// three bipod mg42s and the PTRS41 -- are not semi-automatic, so the
+    /// default is off.
     pub semi_auto: bool,
     /// Reserve rounds behind the clip (`startAmmo`).
     pub start_ammo: u32,
@@ -182,6 +185,21 @@ pub struct WeaponDef {
     pub sounds: WeaponSounds,
     pub damage: i32,
     pub melee_damage: i32,
+    pub melee_delay: f32,
+    pub melee_time: f32,
+    /// Grenades only: seconds from pullback to detonation, and how long the
+    /// pin stays held before the trigger may release (combat doc 1.11).
+    pub fuse_time: f32,
+    pub hold_fire_time: f32,
+    pub explosion_radius: f32,
+    pub explosion_inner_damage: i32,
+    pub explosion_outer_damage: i32,
+    /// Units per second along the view, and the extra lift added to z.
+    pub projectile_speed: f32,
+    pub projectile_speed_up: f32,
+    /// `xmodel/` stripped, as `world_model` is.
+    pub projectile_model: Option<String>,
+    pub proj_impact_explode: bool,
     pub max_ammo: u32,
     /// `clipOnly`: the weapon has no reserve at all, so a give writes only
     /// `ammoclip[clip_index]`. VERIFIED from the retail spawn capture: the
@@ -301,7 +319,7 @@ impl WeaponDef {
             ads_zoom_fov: parse_num(map, "adsZoomFov", DEFAULT_FOV),
             ads_view_bob_mult: parse_num(map, "adsViewBobMult", 1.0),
             ads_bob_factor: parse_num(map, "adsBobFactor", 1.0),
-            semi_auto: parse_bool(map, "semiAuto", true),
+            semi_auto: parse_bool(map, "semiAuto", false),
             start_ammo: parse_num(map, "startAmmo", 0),
             bolt_action: parse_bool(map, "boltAction", false),
             world_model: map
@@ -313,6 +331,18 @@ impl WeaponDef {
             sounds: WeaponSounds::from_map(map),
             damage: parse_num(map, "damage", 0),
             melee_damage: parse_num(map, "meleeDamage", 0),
+            melee_delay: parse_num(map, "meleeDelay", 0.0),
+            melee_time: parse_num(map, "meleeTime", 0.0),
+            fuse_time: parse_num(map, "fuseTime", 0.0),
+            hold_fire_time: parse_num(map, "holdFireTime", 0.0),
+            explosion_radius: parse_num(map, "explosionRadius", 0.0),
+            explosion_inner_damage: parse_num(map, "explosionInnerDamage", 0),
+            explosion_outer_damage: parse_num(map, "explosionOuterDamage", 0),
+            projectile_speed: parse_num(map, "projectileSpeed", 0.0),
+            projectile_speed_up: parse_num(map, "projectileSpeedUp", 0.0),
+            projectile_model: opt_str(map, "projectileModel")
+                .map(|m| m.strip_prefix("xmodel/").unwrap_or(&m).to_string()),
+            proj_impact_explode: parse_bool(map, "projImpactExplode", false),
             max_ammo: parse_num(map, "maxAmmo", 0),
             clip_only: parse_bool(map, "clipOnly", false),
             reload_ammo_add: parse_num(map, "reloadAmmoAdd", 0),
@@ -656,6 +686,10 @@ mod tests {
         assert!(!thompson.semi_auto, "thompson is full-auto");
         assert_eq!(thompson.start_ammo, 270);
         assert_eq!(thompson.ads_bob_factor, 0.0);
+        // The frag is one of the eight stock files that omit `semiAuto`, and
+        // the parse default is what decides those.
+        let frag = load(&fs, "fraggrenade_mp").unwrap();
+        assert!(!frag.semi_auto, "the frag omits semiAuto");
     }
 
     #[test]
@@ -689,6 +723,9 @@ mod tests {
             ads_view_bob_mult: 0.2,
             start_ammo: 60,
             bolt_action: true,
+            // The kar98k's shape: it spells `semiAuto 1`, where the parse
+            // default is off for the eight files that omit the key.
+            semi_auto: true,
             ..WeaponDef::default()
         }
     }
@@ -1043,6 +1080,40 @@ mod tests {
         assert_eq!(d.world_flash_effect, None);
         assert_eq!(d.kill_icon, None);
         assert!(!d.wide_kill_icon);
+    }
+
+    #[test]
+    fn the_frag_keys_parse() {
+        let map: HashMap<String, String> = [
+            ("weaponType", "grenade"),
+            ("fuseTime", "4"),
+            ("holdFireTime", "0.6"),
+            ("meleeDelay", "0.1"),
+            ("meleeTime", "0.66"),
+            ("explosionRadius", "350"),
+            ("explosionInnerDamage", "120"),
+            ("explosionOuterDamage", "5"),
+            ("projectileSpeed", "960"),
+            ("projectileSpeedUp", "120"),
+            ("projectileModel", "xmodel/projectile_USGrenade"),
+            ("projImpactExplode", "0"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let d = WeaponDef::from_map(&map);
+        assert_eq!(d.fuse_time, 4.0);
+        assert_eq!(d.hold_fire_time, 0.6);
+        assert_eq!(d.melee_delay, 0.1);
+        assert_eq!(d.melee_time, 0.66);
+        assert_eq!(d.explosion_radius, 350.0);
+        assert_eq!(
+            (d.explosion_inner_damage, d.explosion_outer_damage),
+            (120, 5)
+        );
+        assert_eq!((d.projectile_speed, d.projectile_speed_up), (960.0, 120.0));
+        assert_eq!(d.projectile_model.as_deref(), Some("projectile_USGrenade"));
+        assert!(!d.proj_impact_explode);
     }
 
     #[test]

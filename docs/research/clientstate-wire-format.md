@@ -163,6 +163,39 @@ VERIFIED live (two populated servers, 2026-08-24): `eType == 2` is `ET_CORPSE` a
 
 `crates/client/src/entities.rs` routes `ET_CORPSE = 2` and `ET_ITEM = 3` on this basis.
 
+VERIFIED live (retail 1.1d dedicated, `mp_carentan` `tdm`, 2026-09-05, the
+`--save-grenade` and `--probe-grenade` captures in
+`crates/server/tests/fixtures/playerstate/`): `eType == 4` is `ET_MISSILE`, and
+a thrown `fraggrenade_mp` carries it. It is the only entity either capture saw
+with that `eType`, over two captures of one weapon on one map;
+`weapon_grenadelauncher_fire` builds a missile the same way and what calls it is
+unverified (`cod11-combat.md` 11.3), so nothing here rules out a second kind.
+The whole field set a frag puts on the wire, in flight and on the frame it
+detonates:
+
+- `pos` is `TR_GRAVITY` (5), `trTime` the throw's server time, `trBase` the
+  release point and `trDelta` the launch velocity. Each bounce rewrites
+  `trTime`, `trBase` and `trDelta` in place; the rest reads
+  `TR_STATIONARY` (0) with a zero delta once the grenade comes to rest.
+- `apos` is `TR_LINEAR` (2), a tumble: `trDelta` is a per-throw draw of
+  roughly `(720, 0, 360)` degrees per second give or take 45, and it goes
+  `TR_STATIONARY` with a zero delta at rest, holding the yaw and roll the
+  tumble reached and a pitch of 0.
+- `weapon` is the thrower's configstring 7 index (8 for the frag on
+  `mp_carentan`), and `index` is 0. A missile is not an `ET_ITEM`: nothing
+  about its model travels, because `s.eFlags` `0x03000000` sits above the
+  24-bit netfield.
+- `eFlags` reads 0 for the whole flight and 256 on the frame it explodes.
+- `eType` itself flips to 0 on that same frame, so an `eType == 4` filter
+  drops the explode. The event rides the missile's own ring:
+  `EV_GRENADE_BOUNCE` (177) once per bounce and `EV_GRENADE_EXPLODE` (178)
+  with the downward trace's normal byte as its parm, each written to
+  `events[eventSequence & 3]` before the sequence is incremented. The entity
+  stays on the wire for a few frames after that and then vanishes.
+
+Nothing in the corpus reaches `eType` 5, 6, 7, 9, 10 or 12 on a stock MP
+server, so those stay CoDExtended's names and nothing more.
+
 A corpse resolves through `clientState[clientNum]` every frame, so its body lives only as long as the dead client's roster entry keeps a `modelindex`. VERIFIED live (S&D server 20.203.98.136:28960, 2026-08-26, probe corpse-lifecycle log, 1 Hz sampling): corpses stay in snapshots for up to ~20 s (observed 20150 ms three times, likely the body-queue/round wipe; shorter 1-13 s entries are PVS churn, the same entity number leaves and re-enters the spectator's snapshot), and a dead client's roster entry can drop entirely (`clientState` removed) while its corpse is still present. Rendering a corpse through the live roster therefore blanks it the moment the dead player hits limbo or disconnects, the "bodies vanish after a second" symptom. vcod caches the last roster-resolved visual per entity and lets a corpse fall back to it, and seeds a fresh corpse entity's anim channels from the dead player's entity (`entities.rs`) so the death clip keeps its phase instead of replaying.
 
 ## ET_MOVER and inline BSP submodels

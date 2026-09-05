@@ -342,6 +342,17 @@ pub struct PlayerState {
     /// `ps.aimSpreadScale`, 0..255: how far the hip cone has opened
     /// (`pmove::weapon::adjust_aim_spread_scale`).
     pub aim_spread_scale: f32,
+    /// `ps.grenadeTimeLeft`: the fuse a pulled grenade carries, in ms, and 0
+    /// whenever none is armed. Retail 1.1 MP never counts it down; it holds
+    /// `fuseTime` from the pullback to the throw (combat doc, section 1.11).
+    pub grenade_time_left_ms: i32,
+    /// `pm_flags` 0x1000: the melee bit was down last frame. The only edge
+    /// latch in the weapon machine (combat doc, section 1.10).
+    pub melee_latched: bool,
+    /// `pm_flags` 0x400: a weapon change threw away a cooking grenade. Not a
+    /// netfield, and nothing reads it yet; retail ORs the bit only for a
+    /// prone player (combat doc, section 1.8).
+    pub grenade_cancelled: bool,
     /// The previous cmd's view angles in ANGLE2SHORT units, pitch and yaw.
     /// Retail's `pm->oldcmd.angles`, which the spread's turn term subtracts
     /// this cmd's from.
@@ -398,6 +409,9 @@ impl PlayerState {
             weapon_pos_frac: 0.0,
             ads_active: false,
             aim_spread_scale: 0.0,
+            grenade_time_left_ms: 0,
+            melee_latched: false,
+            grenade_cancelled: false,
             last_cmd_angles: [0; 2],
             last_cmd_ads: false,
         }
@@ -450,6 +464,8 @@ pub struct PmInput {
     pub lean_left: bool,
     pub lean_right: bool,
     pub attack: bool,
+    /// The usercmd's melee bit (`BUTTON_MELEE`, 0x20).
+    pub melee: bool,
     pub reload: bool,
     pub ads: bool,
     pub use_button: bool,

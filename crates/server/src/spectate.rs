@@ -124,6 +124,7 @@ fn pm_input(cmd: &UserCmd) -> PmInput {
         lean_left: cmd.wbuttons & msg::WBUTTON_LEAN_LEFT != 0,
         lean_right: cmd.wbuttons & msg::WBUTTON_LEAN_RIGHT != 0,
         attack: cmd.buttons & msg::BUTTON_ATTACK != 0,
+        melee: cmd.buttons & msg::BUTTON_MELEE != 0,
         reload: cmd.wbuttons & msg::WBUTTON_RELOAD != 0,
         ads: cmd.buttons & msg::BUTTON_ADS != 0,
         use_button: cmd.buttons & msg::BUTTON_USE != 0,
@@ -160,21 +161,52 @@ pub enum PmType {
     Spectator,
 }
 
+/// The four-slot event ring a playerstate or an entity carries: written at
+/// `events[seq & 3]` with the counter bumped after it, so the new slots of a
+/// frame are the ones *below* the sequence
+/// (`docs/research/cod11-combat.md` section 7).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EventRing {
+    pub events: [i32; 4],
+    pub parms: [i32; 4],
+    /// Eight bits on the wire; kept wide here and masked at the write.
+    pub seq: i32,
+}
+
+impl EventRing {
+    /// `G_AddEvent`: the slot first, the counter after.
+    pub fn add(&mut self, event: i32, parm: i32) {
+        let slot = (self.seq & 3) as usize;
+        self.events[slot] = event;
+        self.parms[slot] = parm;
+        self.seq = self.seq.wrapping_add(1);
+    }
+
+    pub fn clear(&mut self) {
+        *self = EventRing::default();
+    }
+
+    /// `eventSequence` and the four slots, through whatever setter the
+    /// caller writes its entity or playerstate fields with.
+    pub fn write(&self, set: &mut impl FnMut(&str, i32)) {
+        set("eventSequence", self.seq & 0xff);
+        for (i, (ev, parm)) in self.events.iter().zip(&self.parms).enumerate() {
+            set(&format!("events[{i}]"), *ev);
+            set(&format!("eventParms[{i}]"), *parm);
+        }
+    }
+}
+
 /// One client's simulated state. `pm_type` selects the movement path, the way
 /// retail's own `playerState_t` does: a client is a spectator before the menu
 /// and a player after, within one connection.
 pub struct ClientSim {
     pub ps: pmove::PlayerState,
     pub pm_type: PmType,
-    /// `ps.eventSequence`, the count of events ever raised. Eight bits on the
-    /// wire; kept wide here and masked at the wire.
-    pub event_sequence: i32,
-    /// `ps.events` and `ps.eventParms`, the four-slot ring the counter
-    /// indexes. Cleared at a respawn along with the counter: retail's own
-    /// respawn frame reads an empty ring at sequence 0
+    /// `ps.eventSequence`, `ps.events` and `ps.eventParms`. Cleared at a
+    /// respawn: retail's own respawn frame reads an empty ring at sequence 0
     /// (`docs/research/cod11-combat.md` 9.2).
-    pub events: [i32; 4],
-    pub event_parms: [i32; 4],
+    pub ring: EventRing,
     /// The model configstring index `setViewmodel` left on the client,
     /// mirrored from the script host every frame the way the weapons are.
     pub viewmodel_index: i32,
@@ -240,18 +272,21 @@ pub struct AnimInputs<'a> {
 
 /// The `EVENTS` block a weapon event raises, or `None` for one the script has
 /// nothing for. Retail's `PM_Weapon` raises `BG_AnimScriptEvent` where it
-/// enters the state (docs/research/cod11-combat.md, sections 1.5, 1.7 and
-/// 1.8); the block's clauses are what pick the anim.
+/// enters the state (docs/research/cod11-combat.md, sections 1.5, 1.7, 1.8
+/// and 1.10); the block's clauses are what pick the anim.
 fn weapon_anim_event(event: i32) -> Option<&'static str> {
     use vcod_common::pmove::weapon::{
-        EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT, EV_PUTAWAY_WEAPON, EV_RAISE_WEAPON, EV_RELOAD,
-        EV_RELOAD_FROM_EMPTY, EV_RELOAD_START,
+        EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT, EV_MELEE_SWIPE, EV_PUTAWAY_WEAPON,
+        EV_RAISE_WEAPON, EV_RELOAD, EV_RELOAD_FROM_EMPTY, EV_RELOAD_START,
     };
     Some(match event {
         EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT => "fireweapon",
         EV_RELOAD | EV_RELOAD_FROM_EMPTY | EV_RELOAD_START => "reload",
         EV_PUTAWAY_WEAPON => "dropweapon",
         EV_RAISE_WEAPON => "raiseweapon",
+        // The swing carries the anim; `EV_FIRE_MELEE`, the damage frame
+        // 150 ms later, maps to nothing (combat doc, 1.10).
+        EV_MELEE_SWIPE => "meleeattack",
         _ => return None,
     })
 }
@@ -273,9 +308,7 @@ impl ClientSim {
         ClientSim {
             ps: pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg),
             pm_type: PmType::Spectator,
-            event_sequence: 0,
-            events: [0; 4],
-            event_parms: [0; 4],
+            ring: EventRing::default(),
             viewmodel_index: 0,
             assembly: Default::default(),
             delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
@@ -335,9 +368,7 @@ impl ClientSim {
         self.spawn_count = self.spawn_count.wrapping_add(1);
         // Retail's respawn frame reads an empty ring at sequence 0
         // (combat doc, 9.2).
-        self.event_sequence = 0;
-        self.events = [0; 4];
-        self.event_parms = [0; 4];
+        self.ring.clear();
         // A spectator's `eFlags` is a constant on the wire, so only a player
         // spawn consumes a flip.
         if mode == PmType::Normal {
@@ -357,13 +388,8 @@ impl ClientSim {
             }
     }
 
-    /// Writes `events[seq & 3]` and then bumps the counter, the order both
-    /// retail captures measured (`docs/research/cod11-combat.md` section 7).
     pub fn add_event(&mut self, event: i32, parm: i32) {
-        let slot = (self.event_sequence & 3) as usize;
-        self.events[slot] = event;
-        self.event_parms[slot] = parm;
-        self.event_sequence = self.event_sequence.wrapping_add(1);
+        self.ring.add(event, parm);
     }
 
     /// Advance one frame, returning the events the move raised, already in the
@@ -419,8 +445,15 @@ impl ClientSim {
                 } else {
                     self.view_lerp_start.or(Some(cmd.server_time))
                 };
+                // The fire event's parm is vcod's internal fuse channel, and
+                // `eventParms[i]` is 8 bits: a 4000 ms fuse would reach a
+                // client as 160 where retail writes 0.
                 for e in &events {
-                    self.add_event(e.event, e.parm);
+                    let parm = match e.event {
+                        pmove::weapon::EV_FIRE_WEAPON | pmove::weapon::EV_FIRE_WEAPON_LASTSHOT => 0,
+                        _ => e.parm,
+                    };
+                    self.add_event(e.event, parm);
                 }
                 return events;
             }
@@ -449,6 +482,7 @@ impl ClientSim {
         cmd: &UserCmd,
         now_ms: i32,
         events: &[PmEvent],
+        rng: &mut u64,
     ) {
         use vcod_common::animscript::{Conditions, Movetype, Side};
         // A dead body keeps the death anim `take_damage` chose: retail's
@@ -518,13 +552,16 @@ impl ClientSim {
         let script = &inputs.anims.script;
         match (self.ps.on_ground, self.was_airborne) {
             (true, true) => {
-                let sel = script.select_event("land", &conditions);
-                self.anim.event(&sel, now_ms, resolve, length);
+                // The landing writes the legs alone, `both` clause or not
+                // (combat doc, 1.14).
+                let mut sel = script.select_event("land", &conditions);
+                sel.torso = None;
+                Self::play_event(&mut self.anim, &sel, now_ms, resolve, length);
             }
             (false, false) if jumped && !self.ps.on_ladder => {
                 let event = if back { "jumpbk" } else { "jump" };
                 let sel = script.select_event(event, &conditions);
-                self.anim.event(&sel, now_ms, resolve, length);
+                Self::play_event(&mut self.anim, &sel, now_ms, resolve, length);
             }
             _ => {}
         }
@@ -536,8 +573,14 @@ impl ClientSim {
             let Some(name) = weapon_anim_event(e.event) else {
                 continue;
             };
-            let sel = script.select_event(name, &conditions);
-            self.anim.event(&sel, now_ms, resolve, length);
+            // `meleeattack` is the one weapon clause that lists several anims
+            // per channel, and retail draws among them (animscript.rs).
+            let sel = if name == "meleeattack" {
+                script.select_event_random(name, &conditions, rng)
+            } else {
+                script.select_event(name, &conditions)
+            };
+            Self::play_event(&mut self.anim, &sel, now_ms, resolve, length);
         }
         // Nothing is selected while off the ground -- retail returns before
         // the selection unless the ladder flag is set (@0x323a2), which is
@@ -556,6 +599,38 @@ impl ClientSim {
         // otherwise hold its torso until the landing.
         self.anim.clear_torso(now_ms);
         self.was_airborne = !self.ps.on_ground;
+    }
+
+    /// One event clause on the two channels. A `both` clause is the whole
+    /// body: retail puts the anim on the legs and restarts the torso on no
+    /// anim at all, which is the same 0 every settled pose reads. The
+    /// capture's grenade throws are the evidence -- `legsAnim` 575, index 63,
+    /// with a bare toggle flip on the torso.
+    ///
+    /// The rule is general and the measurement is not: it also reaches
+    /// `fireweapon`'s pistol-ADS clause and `jump`'s two run clauses, neither
+    /// of which any capture covers (combat doc 1.14). It is kept general
+    /// because it is the convention the continuous selection already follows.
+    /// The landing is the one clause measured to break it -- its `weaponclass
+    /// pistol AND grenade` arm is a `both` one and writes the legs alone --
+    /// and its caller clears the torso of the selection before it gets here.
+    fn play_event(
+        anim: &mut vcod_common::animscript::AnimState,
+        sel: &vcod_common::animscript::Selection,
+        now_ms: i32,
+        resolve: impl Fn(&str) -> Option<i32>,
+        length: impl Fn(&str) -> Option<u32>,
+    ) {
+        if sel.legs.is_some() && sel.torso.is_some() {
+            let legs_only = vcod_common::animscript::Selection {
+                legs: sel.legs.clone(),
+                torso: None,
+            };
+            anim.event(&legs_only, now_ms, resolve, length);
+            anim.restart_torso_empty(now_ms);
+            return;
+        }
+        anim.event(sel, now_ms, resolve, length);
     }
 
     /// The anim conditions of the moment, for an event raised outside the
@@ -635,6 +710,10 @@ impl ClientSim {
             return;
         }
         self.dead = true;
+        // The cook went with the drop: retail's `fire_grenade` clears
+        // `grenadeTimeLeft` on the thrower, and the retail death frame reads
+        // 0 (combat doc, 11.1 and 5.1 step 5).
+        self.ps.grenade_time_left_ms = 0;
         self.add_event(EV_DEATH, 0);
         // `vectoyaw(attacker->origin - self->origin)` truncated, the body's
         // own yaw when there is no attacker (5.1, item 11).
@@ -768,11 +847,7 @@ impl ClientSim {
         // weapon's, and the next task is what gives it a value.
         set("torsoAnim", self.anim.torso());
         set("weapon", i32::from(self.ps.weapon));
-        set("eventSequence", self.event_sequence & 0xff);
-        for (i, (ev, parm)) in self.events.iter().zip(&self.event_parms).enumerate() {
-            set(&format!("events[{i}]"), *ev);
-            set(&format!("eventParms[{i}]"), *parm);
-        }
+        self.ring.write(&mut set);
         set(
             "groundEntityNum",
             match self.ps.on_ground {
@@ -960,16 +1035,13 @@ impl ClientSim {
         set("weapAnim", self.ps.weap_anim);
         set("weaponTime", self.ps.weapon_time_ms);
         set("weaponDelay", self.ps.weapon_delay_ms);
+        set("grenadeTimeLeft", self.ps.grenade_time_left_ms);
         set("weaponrechamber[0]", self.ps.weapon_rechamber as u32 as i32);
         set(
             "weaponrechamber[1]",
             (self.ps.weapon_rechamber >> 32) as u32 as i32,
         );
-        set("eventSequence", self.event_sequence & 0xff);
-        for (i, (ev, parm)) in self.events.iter().zip(&self.event_parms).enumerate() {
-            set(&format!("events[{i}]"), *ev);
-            set(&format!("eventParms[{i}]"), *parm);
-        }
+        self.ring.write(&mut set);
         // Mode-independent: both captures agree on all of these. The box is
         // the standing one whatever the stance: retail transmits `maxs[2]`
         // 70 while crouched and prone too, and the mover derives its own
@@ -1193,7 +1265,7 @@ mod tests {
                 weapon,
                 weapon_class: class,
             };
-            sim.update_anims(&inputs, &cmd, 1000, &[]);
+            sim.update_anims(&inputs, &cmd, 1000, &[], &mut 1u64);
             assert_eq!(anims.name(sim.anim.legs()), Some(*want), "{label}");
         }
     }
@@ -1215,17 +1287,17 @@ mod tests {
         let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.ps.on_ground = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, 1000, &[]);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1000, &[], &mut 1u64);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_stand_alert"));
 
         // The impulse pmove reports, not merely leaving the ground.
         sim.ps.on_ground = false;
         sim.jumped = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[]);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[], &mut 1u64);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_takeoff"));
         // Well past the takeoff clause's `duration 5`.
         for t in [1100, 1150, 1200, 1250] {
-            sim.update_anims(&inputs, &NULL_USERCMD, t, &[]);
+            sim.update_anims(&inputs, &NULL_USERCMD, t, &[], &mut 1u64);
             assert_eq!(
                 anims.name(sim.anim.legs()),
                 Some("pb_standjump_takeoff"),
@@ -1233,7 +1305,7 @@ mod tests {
             );
         }
         sim.ps.on_ground = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, 1300, &[]);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1300, &[], &mut 1u64);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_land"));
     }
 
@@ -1260,7 +1332,7 @@ mod tests {
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.ps.on_ground = true;
         sim.ps.velocity = Vec3::new(190.0, 0.0, 0.0);
-        sim.update_anims(&inputs, &running, 1000, &[]);
+        sim.update_anims(&inputs, &running, 1000, &[], &mut 1u64);
         assert_eq!(
             anims.name(sim.anim.legs()),
             Some("pb_combatrun_forward_loop")
@@ -1270,7 +1342,7 @@ mod tests {
         sim.ps.on_ground = false;
         for t in [1050, 1100, 1150, 1200] {
             sim.ps.velocity.z -= 40.0;
-            sim.update_anims(&inputs, &running, t, &[]);
+            sim.update_anims(&inputs, &running, t, &[], &mut 1u64);
             assert_eq!(
                 anims.name(sim.anim.legs()),
                 Some("pb_combatrun_forward_loop"),
@@ -1296,17 +1368,17 @@ mod tests {
         let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.ps.on_ground = true;
-        sim.update_anims(&inputs, &NULL_USERCMD, 1000, &[]);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1000, &[], &mut 1u64);
 
         // Mounted: off the ground without an impulse, climbing.
         sim.ps.on_ground = false;
         sim.ps.on_ladder = true;
         sim.ps.velocity = Vec3::new(0.0, 0.0, 60.0);
-        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[]);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[], &mut 1u64);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_climbup"));
 
         sim.ps.velocity.z = -60.0;
-        sim.update_anims(&inputs, &NULL_USERCMD, 1100, &[]);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1100, &[], &mut 1u64);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_climbdown"));
     }
 
@@ -1335,12 +1407,12 @@ mod tests {
         sim.ps.backwards_run = true;
         sim.ps.on_ground = true;
         sim.ps.velocity = Vec3::new(120.0, 0.0, 0.0);
-        sim.update_anims(&inputs, &back, 1000, &[]);
+        sim.update_anims(&inputs, &back, 1000, &[], &mut 1u64);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_crouch_run_back"));
 
         sim.ps.on_ground = false;
         sim.jumped = true;
-        sim.update_anims(&inputs, &back, 1050, &[]);
+        sim.update_anims(&inputs, &back, 1050, &[], &mut 1u64);
         assert_eq!(
             anims.name(sim.anim.legs()),
             Some("pb_chicken_dance_crouch"),
@@ -1370,10 +1442,10 @@ mod tests {
             right: 127,
             ..NULL_USERCMD
         };
-        sim.update_anims(&inputs, &strafe, 1000, &[]);
+        sim.update_anims(&inputs, &strafe, 1000, &[], &mut 1u64);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_combatrun_right_loop"));
         // Still sliding, no longer asking: retail does not touch the condition.
-        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[]);
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[], &mut 1u64);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_combatrun_right_loop"));
         // A forward cmd clears it, even though nothing about the velocity
         // changed.
@@ -1381,7 +1453,7 @@ mod tests {
             forward: 127,
             ..NULL_USERCMD
         };
-        sim.update_anims(&inputs, &forward, 1100, &[]);
+        sim.update_anims(&inputs, &forward, 1100, &[], &mut 1u64);
         assert_eq!(
             anims.name(sim.anim.legs()),
             Some("pb_combatrun_forward_loop")
@@ -1526,12 +1598,13 @@ mod tests {
             weapon: 7,
             ..Default::default()
         });
-        assert!(all.attack && all.reload && all.ads && all.use_button);
+        assert!(all.attack && all.melee && all.reload && all.ads && all.use_button);
         assert_eq!(all.weapon, 7);
         assert!(!all.walk_slow);
         assert_eq!(
             PmInput {
                 attack: false,
+                melee: false,
                 reload: false,
                 ads: false,
                 use_button: false,

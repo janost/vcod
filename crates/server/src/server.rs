@@ -177,6 +177,26 @@ pub(crate) struct Shot {
     pub ads: bool,
 }
 
+/// One attack a client's weapon step took this tick. The weapon index each
+/// arm carries is `ps.weapon` at the event, not whatever is in hand by the
+/// time the trace runs.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Attack {
+    Shot(Shot),
+    /// `EV_FIRE_MELEE`, the swing's damage frame (combat doc, 2.5).
+    Swing {
+        slot: usize,
+        weapon: u8,
+    },
+    /// `EV_FIRE_WEAPON` from a grenade: the fuse left rides the event parm
+    /// (combat doc, 1.11).
+    Throw {
+        slot: usize,
+        weapon: u8,
+        fuse_left_ms: i32,
+    },
+}
+
 /// One `WeaponOp` against a client's playerstate. The op is an edge the
 /// script made, so it is applied once, where `client_weapons` is mirrored
 /// every frame.
@@ -276,9 +296,12 @@ pub struct Server {
     /// `weaponClass` every frame and the frame loop must not read a pk3.
     /// `Rc` so a snapshot/move closure can hold it without borrowing `self`.
     weapon_table: Rc<crate::weapons::WeaponTable>,
-    /// Shots this tick's moves took, in the order they were fired. Filled by
+    /// Attacks this tick's moves took, in the order they happened. Filled by
     /// `replay_moves`, drained by `tick` into traces before the script runs.
-    pending_shots: Vec<Shot>,
+    pending_attacks: Vec<Attack>,
+    /// The blasts this frame's missile pass set off, for the radius damage
+    /// pass to charge (`crate::game::missile::Explosion`).
+    pending_explosions: Vec<crate::game::missile::Explosion>,
     /// Retail's `+set name value`: applied last in `cvars`, over
     /// `default_mp.cfg` and the config's own, so a run can turn a script
     /// cvar such as `scr_friendlyfire` on without a code change.
@@ -410,7 +433,8 @@ impl Server {
             script: None,
             anims: None,
             weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
-            pending_shots: Vec::new(),
+            pending_attacks: Vec::new(),
+            pending_explosions: Vec::new(),
             cvar_overrides: Vec::new(),
             pending_script_commands: Vec::new(),
             hitlocs: crate::game::combat::HitLocTable::default(),
@@ -994,6 +1018,13 @@ impl Server {
         }
     }
 
+    /// The blasts the last tick's missile pass set off, after the same
+    /// tick's radius damage pass charged them. Test-facing: the replay in
+    /// `tests/common` counts them per frame.
+    pub fn pending_explosions(&self) -> &[crate::game::missile::Explosion] {
+        &self.pending_explosions
+    }
+
     /// `DeathmatchScoreboardMessage` (`.so` 0x459c0): `b <numRows> <axis>
     /// <allies>{ <client> <score> <ping> <time> <icon>}*`, one row per online
     /// client (`docs/research/cod11-hud-protocol.md` section 3).
@@ -1062,6 +1093,41 @@ impl Server {
         let (s, c) = yaw_deg.to_radians().sin_cos();
         let end = eye + glam::Vec3::new(c, s, 0.0) * dist;
         world.collision.shot_trace(eye, end).fraction >= 1.0
+    }
+
+    /// Test-facing, beside `test_clear_line`: `CanDamage`'s fraction for a
+    /// standing player whose feet are at `feet`, from a blast at `at`
+    /// (combat doc, 14.3). 0 is a player the blast cannot see at all.
+    pub fn test_can_damage(&self, at: [f32; 3], feet: [f32; 3]) -> f32 {
+        let Some(world) = self.world.as_ref() else {
+            return 1.0;
+        };
+        use vcod_common::pmove::{Stance, HALF_WIDTH};
+        let feet = glam::Vec3::from(feet);
+        let v = crate::game::combat::BlastVictim {
+            slot: 0,
+            origin: feet,
+            mins: glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
+            maxs: glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
+            eye: feet + glam::Vec3::Z * Stance::Stand.view_height(),
+        };
+        crate::game::combat::can_damage(glam::Vec3::from(at), &v, &world.collision)
+    }
+
+    /// Test-facing: where a standing player dropped at `p` comes to rest,
+    /// or `None` when it starts inside geometry or finds no floor within
+    /// 256 units. What a test needs to put a second client somewhere the map
+    /// actually holds one.
+    pub fn test_ground_under(&self, p: [f32; 3]) -> Option<[f32; 3]> {
+        let world = self.world.as_ref()?;
+        use vcod_common::pmove::{Stance, HALF_WIDTH};
+        let mins = glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0);
+        let maxs = glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height());
+        let start = glam::Vec3::from(p);
+        let t = world
+            .collision
+            .box_trace(start, start - glam::Vec3::Z * 256.0, mins, maxs);
+        (!t.startsolid && !t.allsolid && t.fraction < 1.0).then_some(t.endpos.into())
     }
 
     /// Clones a client into the body queue and returns the corpse's entity
@@ -1348,6 +1414,7 @@ impl Server {
         // (`crate::game::combat`).
         let mut hits = Vec::new();
         let mut impacts = Vec::new();
+        let mut throws: Vec<(usize, u8, i32, glam::Vec3, glam::Vec3, i32)> = Vec::new();
         {
             let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
                 .clients
@@ -1367,22 +1434,72 @@ impl Server {
                 }),
                 _ => None,
             };
-            for shot in self.pending_shots.drain(..) {
-                let Some(def) = weapons.get(shot.weapon as usize) else {
+            for attack in self.pending_attacks.drain(..) {
+                let (slot, weapon) = match attack {
+                    Attack::Shot(s) => (s.slot, s.weapon),
+                    Attack::Swing { slot, weapon } => (slot, weapon),
+                    Attack::Throw {
+                        slot,
+                        weapon,
+                        fuse_left_ms,
+                    } => {
+                        // The throw leaves the thrower's eye at the weapon
+                        // file's speed (combat doc, 11.3); the missile pass
+                        // below is what spawns it.
+                        if let (Some((_, me)), Some(def)) = (
+                            sims.iter().find(|(s, _)| *s == slot),
+                            weapons.get(weapon as usize),
+                        ) {
+                            let (origin, velocity) =
+                                crate::game::missile::throw_velocity(&me.ps, def);
+                            // The projectile's model, indexed when the item was
+                            // registered (`GameHost::register_item`). A miss
+                            // means the map load stopped registering it and
+                            // the client has no model to draw the grenade
+                            // with, which is silent on the wire.
+                            let name = def.projectile_model.as_deref().unwrap_or_default();
+                            let model =
+                                crate::configstrings::model_index(&self.configstrings, name);
+                            if model == 0 && !name.is_empty() {
+                                log::warn!(
+                                    "the grenade client {slot} threw carries {name:?}, \
+                                     which nothing precached"
+                                );
+                            }
+                            throws.push((slot, weapon, model, origin, velocity, fuse_left_ms));
+                        }
+                        continue;
+                    }
+                };
+                let Some(def) = weapons.get(weapon as usize) else {
                     continue;
                 };
-                let name = crate::items::item_name(shot.weapon as usize).unwrap_or_default();
-                let r = crate::game::combat::bullet_fire(
-                    shot.slot,
-                    def,
-                    name,
-                    shot.ads,
-                    &sims,
-                    collision,
-                    &self.hitlocs,
-                    bones.as_mut(),
-                    &mut self.rng,
-                );
+                let name = crate::items::item_name(weapon as usize).unwrap_or_default();
+                let r = match attack {
+                    Attack::Shot(shot) => crate::game::combat::bullet_fire(
+                        slot,
+                        def,
+                        name,
+                        shot.ads,
+                        &sims,
+                        collision,
+                        &self.hitlocs,
+                        bones.as_mut(),
+                        &mut self.rng,
+                    ),
+                    Attack::Swing { .. } => crate::game::combat::melee_fire(
+                        slot,
+                        def,
+                        name,
+                        weapon,
+                        &sims,
+                        collision,
+                        &self.hitlocs,
+                        bones.as_mut(),
+                        &mut self.rng,
+                    ),
+                    Attack::Throw { .. } => continue,
+                };
                 impacts.extend(r.impact);
                 hits.extend(r.hit);
             }
@@ -1403,6 +1520,70 @@ impl Server {
             }
             for te in impacts {
                 rt.push_temp_entity(te);
+            }
+            // The throws the weapon step queued, then one `G_RunMissile`
+            // each. Retail's missile pass runs ahead of the damage
+            // callbacks, and a usercmd is executed between frames, so a
+            // grenade thrown on this tick was armed on the last one and has
+            // already flown a frame by the time the snapshot goes out
+            // (`docs/research/cod11-combat.md` sections 11 and 12).
+            for (slot, weapon, model, origin, velocity, fuse_left_ms) in throws {
+                rt.fire_grenade(
+                    slot,
+                    weapon,
+                    model,
+                    origin,
+                    velocity,
+                    fuse_left_ms,
+                    self.sv_time_ms.wrapping_sub(FRAME_MS),
+                );
+            }
+            let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
+                .clients
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
+                .collect();
+            let frame = rt.run_missiles(
+                self.world.as_ref().map(|w| &w.collision),
+                &sims,
+                self.sv_time_ms,
+            );
+            for te in frame.temp {
+                rt.push_temp_entity(te);
+            }
+            // What the radius damage pass charges, on this same frame.
+            self.pending_explosions = frame.exploded;
+            // Each blast becomes hits before `deliver_hits` runs, so a
+            // grenade damages on the frame it goes off (combat doc, 14.1).
+            let collision = self.world.as_ref().map(|w| &w.collision);
+            for x in &self.pending_explosions {
+                let Some(def) = weapons.get(x.weapon as usize) else {
+                    continue;
+                };
+                let victims: Vec<crate::game::combat::BlastVictim> = sims
+                    .iter()
+                    .filter(|(_, s)| s.pm_type == crate::spectate::PmType::Normal && !s.dead)
+                    .map(|(slot, s)| crate::game::combat::BlastVictim {
+                        slot: *slot,
+                        origin: s.ps.origin,
+                        mins: s.ps.mins(),
+                        maxs: s.ps.maxs(),
+                        eye: s.ps.view().eye,
+                    })
+                    .collect();
+                hits.extend(crate::game::combat::radius_damage(
+                    x.at,
+                    def.explosion_radius,
+                    def.explosion_inner_damage as f32,
+                    def.explosion_outer_damage as f32,
+                    Some(x.owner),
+                    Some(x.inflictor),
+                    crate::items::item_name(x.weapon as usize).unwrap_or_default(),
+                    "MOD_GRENADE_SPLASH",
+                    &victims,
+                    collision,
+                ));
             }
             // The client commands the packet pass queued, on this frame's
             // clock: retail runs `Cmd_Kill_f` ahead of the damage callbacks
@@ -1548,10 +1729,10 @@ impl Server {
     /// SV_UserMove for every client: one pmove step per queued usercmd, dt off
     /// the cmd clocks, matching the client's own prediction, then the anims the
     /// resulting state implies. Returns what each slot replayed, for the trace
-    /// line `send_snapshots` writes. The shots the weapon step took land in
-    /// `pending_shots`, which the bullet path drains.
+    /// line `send_snapshots` writes. The shots, swings and throws the weapon
+    /// step took land in `pending_attacks`, which the combat path drains.
     fn replay_moves(&mut self) -> Vec<MoveSummary> {
-        use vcod_common::pmove::weapon::{EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
+        use vcod_common::pmove::weapon::{EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
         let collision = self.world.as_ref().map(|w| &w.collision);
         let weapons = self.weapon_table.clone();
         let mut moved = vec![MoveSummary::default(); self.clients.len()];
@@ -1590,12 +1771,29 @@ impl Server {
                 let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
                 let raised = sim.step(&cmd, dt, collision, weapons.defs());
                 for e in &raised {
-                    if e.event == EV_FIRE_WEAPON || e.event == EV_FIRE_WEAPON_LASTSHOT {
-                        self.pending_shots.push(Shot {
-                            slot,
-                            weapon: sim.ps.weapon,
-                            ads: sim.ps.weapon_pos_frac == 1.0,
-                        });
+                    let weapon = sim.ps.weapon;
+                    let grenade = weapons
+                        .get(weapon as usize)
+                        .is_some_and(|d| d.weapon_type == "grenade");
+                    match e.event {
+                        // A grenade's fire event is the throw, and the parm
+                        // is what is left of the fuse (combat doc, 1.11).
+                        EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT if grenade => {
+                            self.pending_attacks.push(Attack::Throw {
+                                slot,
+                                weapon,
+                                fuse_left_ms: e.parm,
+                            })
+                        }
+                        EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT => {
+                            self.pending_attacks.push(Attack::Shot(Shot {
+                                slot,
+                                weapon,
+                                ads: sim.ps.weapon_pos_frac == 1.0,
+                            }))
+                        }
+                        EV_FIRE_MELEE => self.pending_attacks.push(Attack::Swing { slot, weapon }),
+                        _ => {}
                     }
                 }
                 events.extend(raised);
@@ -1624,6 +1822,7 @@ impl Server {
                     &cmd,
                     self.sv_time_ms,
                     &events,
+                    &mut self.rng,
                 );
             }
         }
@@ -1636,10 +1835,14 @@ impl Server {
         let proto = self.proto;
         if let Some(rt) = self.script.as_mut() {
             for (slot, c) in self.clients.iter().enumerate() {
-                let state = c.as_ref().and_then(|c| {
-                    Some(c.sim.as_ref()?.to_entity(proto, slot, c.last_processed_st))
-                });
-                rt.set_client_entity_state(slot, state);
+                let sim = c
+                    .as_ref()
+                    .and_then(|c| Some((c.sim.as_ref()?, c.last_processed_st)));
+                rt.set_client_entity_state(slot, sim.map(|(s, st)| s.to_entity(proto, slot, st)));
+                // The cook a death drops, off the same state: both kill paths
+                // run later in this tick, so what they read is this frame's
+                // and not the last one's.
+                rt.set_client_grenade_ms(slot, sim.map_or(0, |(s, _)| s.ps.grenade_time_left_ms));
             }
         }
         moved
@@ -1823,6 +2026,11 @@ impl Server {
                 if te.scope == temp_entity::Scope::Broadcast {
                     visible.insert(*n, e.clone());
                 }
+            }
+            // A missile carries `SVF_BROADCAST` too (combat doc, 11.1), so
+            // it skips the cull the way a broadcast temp entity does.
+            if let Some(rt) = self.script.as_ref() {
+                visible.extend(rt.missiles().entities(self.proto));
             }
 
             let mut ps = sim.to_wire(self.proto, slot as i32, command_time);
