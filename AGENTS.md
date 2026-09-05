@@ -291,26 +291,28 @@ engineering setup works.
   (`crates/common/src/animscript.rs`, and
   `docs/research/player-model-anim-system.md` for what the retail captures
   measured): stance, direction, strafing, the jump and the landing all pick an
-  index out of `mp/playeranim.script`. What the machine does not cover yet is
-  melee, the two turn movetypes and the mounted-MG anims. A shot is a trace
-  against the world and every live player's box, a hit runs the stock
+  index out of `mp/playeranim.script`, and a swing draws among the
+  `meleeattack` clause's lines. What the machine does not cover yet is the two
+  turn movetypes and the mounted-MG anims. A shot is a trace against the world
+  and every live player's box, a hit runs the stock
   `CodeCallback_PlayerDamage`, and `finishPlayerDamage` is where health,
   knockback, the pain and death events and `CodeCallback_PlayerKilled`
   happen (`crates/server/src/game/combat.rs`, `docs/research/cod11-combat.md`).
   A kill puts a corpse in the eight-slot body queue at entities 64..71, sends
   the obituary on both wires, scores it, drops the dead player's weapon as an
-  item, and the victim respawns on the use key. Not modelled: melee, grenades,
-  item pickup, intermission, map change and the killcam. What a client still
-  gets nothing of is movers and missiles, which no code spawns. A probe run
-  against it reproduces the retail death capture field for field except for
-  two: the `EV_RAISE_WEAPON` the death frame does not raise, and the
-  `legsAnim` the respawn frame carries a frame late
+  item, and the victim respawns on the use key. A melee swing is the same
+  trace over 64 units, with `MOD_MELEE` damage and its own hit or miss event.
+  Not modelled: grenades, item pickup, intermission, map change and the
+  killcam. What a client still gets nothing of is movers and missiles, which
+  no code spawns. A probe run against it reproduces the retail death capture
+  field for field except for two: the `EV_RAISE_WEAPON` the death frame does
+  not raise, and the `legsAnim` the respawn frame carries a frame late
   (`docs/research/cod11-combat.md` section 9).
 - The tick, in order: expired clients, then each client's queued usercmds
   (`replay_moves`, one pmove step per cmd, which is where the weapon machine
-  queues a frame's shots), then the shots themselves (a trace each, an impact
-  temp entity and a hit per player struck), then the client commands that
-  start a script thread (`kill`, `mr`), which the packet pass only queues
+  queues a frame's shots and swings), then those themselves (a trace each, an
+  impact temp entity and a hit per player struck), then the client commands
+  that start a script thread (`kill`, `mr`), which the packet pass only queues
   because it runs before the clock advances, then `deliver_hits` so the damage
   callback has run before script, then the script frame, then the sim ops the
   script left (spawns, weapon gives and switches, the damage the callback

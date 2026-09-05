@@ -170,6 +170,7 @@ pub fn obituary(
         surf_type: 0,
         other: victim.0,
         attacker,
+        weapon: 0,
         origin,
         scope: Scope::Broadcast,
     });

@@ -177,6 +177,26 @@ pub(crate) struct Shot {
     pub ads: bool,
 }
 
+/// One attack a client's weapon step took this tick. The weapon index each
+/// arm carries is `ps.weapon` at the event, not whatever is in hand by the
+/// time the trace runs.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Attack {
+    Shot(Shot),
+    /// `EV_FIRE_MELEE`, the swing's damage frame (combat doc, 2.5).
+    Swing {
+        slot: usize,
+        weapon: u8,
+    },
+    /// `EV_FIRE_WEAPON` from a grenade: the fuse left rides the event parm
+    /// (combat doc, 1.11).
+    Throw {
+        slot: usize,
+        weapon: u8,
+        fuse_left_ms: i32,
+    },
+}
+
 /// One `WeaponOp` against a client's playerstate. The op is an edge the
 /// script made, so it is applied once, where `client_weapons` is mirrored
 /// every frame.
@@ -276,9 +296,9 @@ pub struct Server {
     /// `weaponClass` every frame and the frame loop must not read a pk3.
     /// `Rc` so a snapshot/move closure can hold it without borrowing `self`.
     weapon_table: Rc<crate::weapons::WeaponTable>,
-    /// Shots this tick's moves took, in the order they were fired. Filled by
+    /// Attacks this tick's moves took, in the order they happened. Filled by
     /// `replay_moves`, drained by `tick` into traces before the script runs.
-    pending_shots: Vec<Shot>,
+    pending_attacks: Vec<Attack>,
     /// Retail's `+set name value`: applied last in `cvars`, over
     /// `default_mp.cfg` and the config's own, so a run can turn a script
     /// cvar such as `scr_friendlyfire` on without a code change.
@@ -410,7 +430,7 @@ impl Server {
             script: None,
             anims: None,
             weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
-            pending_shots: Vec::new(),
+            pending_attacks: Vec::new(),
             cvar_overrides: Vec::new(),
             pending_script_commands: Vec::new(),
             hitlocs: crate::game::combat::HitLocTable::default(),
@@ -1348,6 +1368,7 @@ impl Server {
         // (`crate::game::combat`).
         let mut hits = Vec::new();
         let mut impacts = Vec::new();
+        let mut throws = Vec::new();
         {
             let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
                 .clients
@@ -1367,22 +1388,49 @@ impl Server {
                 }),
                 _ => None,
             };
-            for shot in self.pending_shots.drain(..) {
-                let Some(def) = weapons.get(shot.weapon as usize) else {
+            for attack in self.pending_attacks.drain(..) {
+                let (slot, weapon) = match attack {
+                    Attack::Shot(s) => (s.slot, s.weapon),
+                    Attack::Swing { slot, weapon } => (slot, weapon),
+                    Attack::Throw {
+                        slot,
+                        weapon,
+                        fuse_left_ms,
+                    } => {
+                        // Task 6 spawns the missile from these.
+                        throws.push((slot, weapon, fuse_left_ms));
+                        continue;
+                    }
+                };
+                let Some(def) = weapons.get(weapon as usize) else {
                     continue;
                 };
-                let name = crate::items::item_name(shot.weapon as usize).unwrap_or_default();
-                let r = crate::game::combat::bullet_fire(
-                    shot.slot,
-                    def,
-                    name,
-                    shot.ads,
-                    &sims,
-                    collision,
-                    &self.hitlocs,
-                    bones.as_mut(),
-                    &mut self.rng,
-                );
+                let name = crate::items::item_name(weapon as usize).unwrap_or_default();
+                let r = match attack {
+                    Attack::Shot(shot) => crate::game::combat::bullet_fire(
+                        slot,
+                        def,
+                        name,
+                        shot.ads,
+                        &sims,
+                        collision,
+                        &self.hitlocs,
+                        bones.as_mut(),
+                        &mut self.rng,
+                    ),
+                    Attack::Swing { .. } => crate::game::combat::melee_fire(
+                        slot,
+                        def,
+                        name,
+                        weapon,
+                        &sims,
+                        collision,
+                        &self.hitlocs,
+                        bones.as_mut(),
+                        &mut self.rng,
+                    ),
+                    Attack::Throw { .. } => continue,
+                };
                 impacts.extend(r.impact);
                 hits.extend(r.hit);
             }
@@ -1548,10 +1596,10 @@ impl Server {
     /// SV_UserMove for every client: one pmove step per queued usercmd, dt off
     /// the cmd clocks, matching the client's own prediction, then the anims the
     /// resulting state implies. Returns what each slot replayed, for the trace
-    /// line `send_snapshots` writes. The shots the weapon step took land in
-    /// `pending_shots`, which the bullet path drains.
+    /// line `send_snapshots` writes. The shots, swings and throws the weapon
+    /// step took land in `pending_attacks`, which the combat path drains.
     fn replay_moves(&mut self) -> Vec<MoveSummary> {
-        use vcod_common::pmove::weapon::{EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
+        use vcod_common::pmove::weapon::{EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
         let collision = self.world.as_ref().map(|w| &w.collision);
         let weapons = self.weapon_table.clone();
         let mut moved = vec![MoveSummary::default(); self.clients.len()];
@@ -1590,12 +1638,29 @@ impl Server {
                 let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
                 let raised = sim.step(&cmd, dt, collision, weapons.defs());
                 for e in &raised {
-                    if e.event == EV_FIRE_WEAPON || e.event == EV_FIRE_WEAPON_LASTSHOT {
-                        self.pending_shots.push(Shot {
-                            slot,
-                            weapon: sim.ps.weapon,
-                            ads: sim.ps.weapon_pos_frac == 1.0,
-                        });
+                    let weapon = sim.ps.weapon;
+                    let grenade = weapons
+                        .get(weapon as usize)
+                        .is_some_and(|d| d.weapon_type == "grenade");
+                    match e.event {
+                        // A grenade's fire event is the throw, and the parm
+                        // is what is left of the fuse (combat doc, 1.11).
+                        EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT if grenade => {
+                            self.pending_attacks.push(Attack::Throw {
+                                slot,
+                                weapon,
+                                fuse_left_ms: e.parm,
+                            })
+                        }
+                        EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT => {
+                            self.pending_attacks.push(Attack::Shot(Shot {
+                                slot,
+                                weapon,
+                                ads: sim.ps.weapon_pos_frac == 1.0,
+                            }))
+                        }
+                        EV_FIRE_MELEE => self.pending_attacks.push(Attack::Swing { slot, weapon }),
+                        _ => {}
                     }
                 }
                 events.extend(raised);
@@ -1624,6 +1689,7 @@ impl Server {
                     &cmd,
                     self.sv_time_ms,
                     &events,
+                    &mut self.rng,
                 );
             }
         }
