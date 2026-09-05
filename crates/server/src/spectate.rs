@@ -562,9 +562,14 @@ impl ClientSim {
     /// One event clause on the two channels. A `both` clause is the whole
     /// body: retail puts the anim on the legs and restarts the torso on no
     /// anim at all, which is the same 0 every settled pose reads. The
-    /// capture's grenade throws are the evidence -- `legsAnim` 575 with
-    /// `torsoAnim` 512, the same index 63 on one channel and a bare toggle
-    /// flip on the other.
+    /// capture's grenade throws are the evidence -- `legsAnim` 575, index 63,
+    /// with a bare toggle flip on the torso.
+    ///
+    /// The rule is general and the measurement is not: it also reaches
+    /// `fireweapon`'s pistol-ADS clause, `jump`'s two run clauses and
+    /// `land`'s pistol and grenade clauses, none of which any capture covers
+    /// (combat doc 1.14). It is kept general because it is the convention the
+    /// continuous selection already follows.
     fn play_event(
         anim: &mut vcod_common::animscript::AnimState,
         sel: &vcod_common::animscript::Selection,

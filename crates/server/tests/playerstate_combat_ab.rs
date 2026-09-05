@@ -71,8 +71,10 @@ const SKIPPED: &[(&str, &str)] = &[(
 /// into a lie.
 const ANIM_GAPS: &[(&str, &str, &str)] = &[];
 
-/// Steps whose `torsoAnim` is not compared, by map, with the reason. Same
-/// self-cleaning guard as [`ANIM_GAPS`]: an entry that starts matching fails.
+/// Steps whose `torsoAnim` is not compared, by map, with the reason. An entry
+/// suppresses the restart-toggle flip count with the indices, since a channel
+/// nobody writes cannot flip. Same self-cleaning guard as [`ANIM_GAPS`]: an
+/// entry that starts matching fails.
 const TORSO_GAPS: &[(&str, &str, &str)] = &[(
     "mp_carentan",
     "melee_tap",
@@ -391,6 +393,15 @@ const SPREAD_TOL: f32 = 26.0;
 fn transient_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
     let mut bad = Vec::new();
     let hurt = hurt_at_ms(retail).unwrap_or(i64::MAX);
+    // The same self-cleaning guard [`TORSO_GAPS`] carries: the skip is only
+    // honest for as long as nothing on our side hurts the player either. The
+    // moment the missile pass spawns a grenade and the blast does radius
+    // damage, this fails and the skip has to go.
+    assert!(
+        hurt == i64::MAX || hurt_at_ms(ours).is_none(),
+        "ours raises EV_PAIN too now; drop the skip in transient_misses -- it \
+         exists only because vcod spawns no missile and does no radius damage"
+    );
     for r in retail {
         if r.ms >= hurt {
             continue;
@@ -599,7 +610,7 @@ fn check(map: &str, gametype: &str, kind: &str) {
                 step.label
             ));
         }
-        for state in [2, 3, 4, 5, 10, 11] {
+        for state in [1, 2, 3, 4, 5, 10, 11] {
             let ((r, r_runs), (o, o_runs)) = (
                 state_samples(&step.trace, state),
                 state_samples(ours, state),

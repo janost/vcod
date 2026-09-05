@@ -483,15 +483,17 @@ fn melee_check(
     delay_expired: bool,
     events: &mut Vec<PmEvent>,
 ) -> bool {
+    // The clear is unconditional (section 1.10): a bit that came back up
+    // re-arms the latch whatever the rest of the check would have said.
+    if !input.melee {
+        ps.melee_latched = false;
+        return false;
+    }
     if def.melee_damage == 0 || delay_expired {
         return false;
     }
     // A reload is the one busy state a swing interrupts.
     if ps.weapon_delay_ms != 0 && !matches!(ps.weaponstate, WEAPON_RELOADING..=WEAPON_RELOAD_END) {
-        return false;
-    }
-    if !input.melee {
-        ps.melee_latched = false;
         return false;
     }
     if ps.melee_latched {
