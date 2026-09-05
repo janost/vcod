@@ -1653,9 +1653,10 @@ list below. INFERRED: the numbering and every condition in it.
    one.
 4. `self+0x258 = attacker`.
 5. When `client->ps.grenadeTimeLeft` is non-zero, `fire_grenade` from
-   `self->r.currentOrigin` with z raised by 40.0 (`.rodata 0x743ec`), a
-   random direction built from three `rand()` calls, and a speed of 160.0
-   (`.rodata 0x743e8`).
+   `self->r.currentOrigin` with z raised by 40.0 (`.rodata 0x743ec`), with a
+   velocity built from three `rand()` calls and 160.0 (`.rodata 0x743e8`).
+   Section 11.3 reads that arithmetic out in full; it is not the isotropic
+   direction this step used to call it.
 6. `BG_AnimScriptEvent(client, 1, 0, 1)`.
 7. `G_AddEvent(self, 0xBD, 0)`. VERIFIED: `0xBD` is 189, `EV_DEATH`, and its
    event parm is the literal 0.
@@ -2437,9 +2438,11 @@ them: rifle rounds passing through a player at half damage (2.3); the
 `pm_time` stun (4.5); the view kick of 6's step 6; events 175 and 176;
 `EV_CROUCH_PAIN` (188);
 the `EV_RAISE_WEAPON` (155) retail raises on the death frame beside `EV_DEATH`;
-`CanDamage`'s line-of-sight check (4.6); `setPlayerIgnoreRadiusDamage`; item
-pickup; melee (1.10, 2.5); and grenades (1.11). The radius-damage falloff is
-RTCW's curve rather than a read of the 1.1 binary.
+`CanDamage`'s line-of-sight check (4.6, 14.3);
+`setPlayerIgnoreRadiusDamage` (14.2); and item pickup. Melee (1.10, 2.5) and
+grenades (1.11, 11 to 14) are absent from the run this section measured and
+are what stage 6c builds; the radius-damage falloff vcod carried when that run
+was taken was RTCW's curve, and section 14.1 is retail's.
 
 The ADS fraction and the spread scale used to be here. Both are retail's now:
 1.13 and 2.1 carry the rules with their addresses and each an "As
@@ -2503,3 +2506,544 @@ one, needs a probe that can answer the weapon menu with it.
   three steps used.
 - UNVERIFIED: the exact meaning of `client+0x220C` and `client+0x2210`, the
   two floats `FireWeapon` substitutes for the view pitch and yaw.
+
+---
+
+## 11. `fire_grenade`: what a throw spawns
+
+Everything a thrown grenade is comes from one function. VERIFIED:
+`fire_grenade` is `0x543AC` in `game.mp.i386.so`, `0x268` bytes, and the
+module's relocation table holds exactly three calls to it, at `0x49B70`
+(inside `player_die`), `0x6904E` (inside `FireWeapon`) and `0x69396` (inside
+`weapon_grenadelauncher_fire`).
+
+VERIFIED: it reads stack slots `+8`, `+0xC`, `+0x10` and `+0x14`. INFERRED:
+those are `(self, origin, velocity, weapon)`, read off the three call sites,
+each of which hands a gentity, a vec3 it filled with a spawn point, a vec3 it
+filled with a velocity, and a weapon number.
+
+### 11.1 The entity it builds
+
+VERIFIED: the offsets, immediates, weapon-def fields and call targets named in
+the list below, each read out of the instruction it sits in. INFERRED: the
+ordering, and every "when" and "otherwise" in it, which are branch conditions.
+
+- `G_Spawn()` supplies the entity.
+- `nextthink` (`+0x1FC`) takes `level.time + client->ps.grenadeTimeLeft`
+  (`client+0x34`) when the thrower has a client and that field is non-zero,
+  and `level.time + 2500` otherwise. `think` (`+0x200`) takes
+  `G_ExplodeMissile` unconditionally.
+- `client->ps.grenadeTimeLeft` is cleared when the thrower has a client, so
+  the cook time transfers from the playerstate to the missile's fuse and
+  nothing keeps counting on the player.
+- `s.eType` (`+0x4`) takes 4. VERIFIED: 4 is `ET_MISSILE` in
+  `private/reference/CoDExtended/src/shared.h:449`, and the entity runner that
+  precedes `G_RunFrame` (`0x50478`) branches on `s.eType == 4` into
+  `G_RunMissile` at `0x50375`.
+- `s.eFlags` (`+0x8`) takes `0x03000000`. VERIFIED: this is the module's only
+  write of either bit, and the only reads of them are the `& 3` byte tests on
+  `entityState+0xB` in `G_RunMissile` (`0x54219`) and `G_MissileImpact`
+  (`0x53AE5`) and the two `test` immediates in `G_BounceMissile` (12.4).
+  INFERRED: they are the two bounce flags, since bouncing is all any of the
+  three does with them.
+- `r.svFlags` (`+0xF4`) takes `0x88`. VERIFIED: `0x8` is the bit `0x5A7EC`
+  sets as `SVF_BROADCAST`. UNVERIFIED: what `0x80` means.
+- `s.weapon` (`+0xC8`) takes the `weapon` argument, `r.ownerNum` (`+0x14C`)
+  the thrower's `s.number`, and `parent` (`+0x198`) the thrower itself.
+- `classname` (`+0x176`) takes `Scr_SetString` of `scr_const+0x3E`. VERIFIED:
+  `GScr_LoadConsts` (`0x58550`) fills that slot with
+  `Scr_AllocString("grenade")`.
+- `BG_GetInfoForWeapon(weapon)` supplies the weapon def, and four fields are
+  copied out of it into the entity: `damage` (`0x1C0`) into `+0x238`,
+  `explosionInnerDamage` (`0x30C`) into `+0x23C`, `explosionOuterDamage`
+  (`0x310`) into `+0x240` and `explosionRadius` (`0x308`) into `+0x244`.
+  `+0x248` takes the literal 3 and `+0x24C` the literal 4. VERIFIED: 3 is
+  `MOD_GRENADE` and 4 `MOD_GRENADE_SPLASH` in 4.1's table. INFERRED: the six
+  slots are `damage`, `splashDamage`, a second splash number, `splashRadius`,
+  `methodOfDeath` and `splashMethodOfDeath`, read off how `G_MissileImpact`
+  and `G_ExplodeMissile` hand them on (13).
+- `clipmask` (`+0x190`) takes `0x02802091`. VERIFIED: the bullet's mask (2.3)
+  is `0x02802031`, so the two differ in exactly two bits: the grenade drops
+  `0x20` and adds `0x80`. VERIFIED: `0x20` is `CONTENTS_WATER`
+  (`bsp-ibsp59-format.md`, "Content flags"), and `G_RunMissile` ORs it back in
+  conditionally (12.1). UNVERIFIED: what `0x80` is.
+- VERIFIED: `G_SetClientContents` (`0x41530`) writes `0x02000000` into a live
+  player's contents (`gentity+0x118`), and `0x02000000` is set in the grenade
+  clipmask. INFERRED: a live player therefore stops a grenade in flight, which
+  is what 12.3 and 13.1 do with the contact.
+- VERIFIED: `fire_grenade` writes nothing to `mins` (`+0x100`), `maxs`
+  (`+0x10C`), `contents` (`+0x118`), `takedamage` (`+0x171`) or `die`
+  (`+0x218`). INFERRED: the missile is a zero-sized point that nothing can
+  target, since `G_Spawn` hands back a zeroed record.
+
+### 11.2 The trajectory
+
+VERIFIED: the offsets, immediates and call targets named in the list below.
+INFERRED: the ordering in it.
+
+- `s.pos.trType` (`+0xC`) takes 5, `s.pos.trTime` (`+0x10`) `level.time`, and
+  `s.pos.trBase` (`+0x18`) the `origin` argument verbatim. VERIFIED: 5 is
+  `TR_GRAVITY` in `shared.h`'s `trType_t`.
+- `s.pos.trDelta` (`+0x24`) takes the `velocity` argument with each component
+  separately truncated toward zero to a whole number and converted back, the
+  x87 round-to-zero control word being set for each of the three.
+- `s.apos.trType` (`+0x30`) takes 2 (`TR_LINEAR`), `s.apos.trTime` (`+0x34`)
+  `level.time`.
+- `s.apos.trBase` (`+0x3C`) takes `vectoangles(velocity)`, after which
+  `trBase[0]` is replaced by `AngleNormalize360(trBase[0] - 120.0)`
+  (`.rodata 0x75B60`).
+- `s.apos.trDelta[0]` (`+0x48`) takes `flrand(-45.0, 45.0)
+  (.rodata 0x75B68, 0x75B64) + 720.0` (`.rodata 0x75B6C`),
+  `trDelta[1]` (`+0x4C`) the literal 0, and `trDelta[2]` (`+0x50`) a second
+  `flrand(-45.0, 45.0)` plus `360.0` (`.rodata 0x75B70`). INFERRED: those are
+  degrees per second, so a thrown grenade tumbles at 675 to 765 deg/s in pitch
+  and 315 to 405 deg/s in roll and never yaws.
+- `r.currentOrigin` (`+0x134`) takes the `origin` argument and
+  `r.currentAngles` (`+0x140`) the finished `apos.trBase`.
+
+### 11.3 Where the throw's origin and velocity come from
+
+VERIFIED, `FireWeapon` `0x68D68`: it takes the client's view angles from
+`client+0xC0`, then overwrites pitch with `client+0x220C` and yaw with
+`client+0x2210`, calls `AngleVectors` for a forward/right/up basis, sets the
+start point to `self->r.currentOrigin` with `client+0xD0` added to z, calls
+`G_AddLean` on it, and truncates each of its three components toward zero.
+INFERRED: `client+0xD0` is the view height, since `CanDamage` adds the same
+field to the same origin for the same purpose (14.3). INFERRED: that start
+point is the muzzle, since the same local is what `FireWeapon` hands
+`Bullet_Fire_Extended` as the trace start (2.3).
+
+VERIFIED, `FireWeapon` `0x69003`-`0x6909F`: on the `weaponType == 1` arm it
+builds `velocity = forward * (float)weapDef->projectileSpeed (0x314)` with
+`(float)weapDef->projectileSpeedUp (0x318)` added to z, calls `fire_grenade`
+with that start point and that velocity and `self->s.weapon`, then normalizes
+the velocity in place and adds `n * dot(client->ps.velocity, n)` to the
+returned missile's `s.pos.trDelta`, where `n` is the normalized velocity.
+INFERRED: the thrower's own motion along the throw direction is therefore
+added to the grenade after `fire_grenade` has truncated the delta, so the
+final `trDelta` is not whole-numbered.
+
+VERIFIED: `weapon_grenadelauncher_fire` (`0x69348`) is the same arithmetic
+against the `params` frame of 2.3, taking the forward axis from `params+0`,
+the origin from `params+0x24` and the weapon def from `params+0x3C`.
+UNVERIFIED: what calls it, since nothing on the paths read here does.
+
+VERIFIED, the `player_die` call at `0x49B70`, which is 5.1's step 5 read out
+in full: the origin is `self->r.currentOrigin` with `40.0`
+(`.rodata 0x743EC`) added to z, the weapon is `self->s.weapon` (`+0xC8`), and
+the velocity is built from three `rand()` calls and two constants, `160.0`
+(`.rodata 0x743E8`) and `-4.656612873e-10` (`.rodata 0x743E4`, the bit pattern
+`0xB0000000`, which is `-2^-31`). VERIFIED: components 0 and 1 are each
+`160.0 * (2 * (rand() * -2^-31) - 1.0)` and component 2 is
+`160.0 * (rand() * -2^-31)`, the subtraction order taken from the `DE E1`
+encoding with `2m` in `st(0)` and `1.0` in `st(1)`. INFERRED: with glibc's
+`rand()` in `[0, 2^31)` that puts x and y in `(-480, -160]` and z in
+`(-160, 0]`, so the death drop is not isotropic at all and the negative
+constant looks like a sign slip in the shipped code. This corrects 5.1's
+step 5, which called it "a random direction ... and a speed of 160.0".
+
+---
+
+## 12. `G_RunMissile`: flight, bounce, rest
+
+VERIFIED: `G_RunMissile` is `0x53FCC`, `0x3DE` bytes, and the module's
+relocation table holds one call to it, at `0x50375`, inside the static entity
+runner that ends just before `G_RunFrame` (`0x50478`) and reaches it on
+`s.eType == 4`.
+
+### 12.1 The move trace
+
+VERIFIED: the offsets, immediates and call targets named in the list below.
+INFERRED: the ordering, and every "when", "unless" and "otherwise" in it,
+which are branch conditions.
+
+- `BG_EvaluateTrajectory(&ent->s.pos, level.time, origin)` gives this frame's
+  wanted position, and the travel vector is `origin - ent->r.currentOrigin`.
+- When `VectorNormalize` of that vector returns less than `0.001`
+  (`.rodata 0x75B4C`), the function calls `G_RunThink` and returns without
+  tracing.
+- The trace mask starts as `ent->clipmask` and gets `0x20`
+  (`CONTENTS_WATER`) OR-ed in when `fabs(s.pos.trDelta[2])` exceeds `30.0`
+  (`.rodata 0x75B50`, a double) and `trap_PointContents(r.currentOrigin, -1,
+  0x20)` returns 0.
+- The trace is `trap_LocationalTrace(&tr, r.currentOrigin, origin,
+  r.ownerNum, mask, bulletPriorityMap)`. VERIFIED: there are no mins/maxs
+  arguments and the priority map is always `bulletPriorityMap`, never
+  `riflePriorityMap`. INFERRED: a missile is traced as a point against the
+  same per-bone player boxes a pistol bullet is (3.1).
+- When `(tr.surfaceFlags & 0x1F00000) == 0x1400000`, that is surface type
+  `0x14`: `VectorNormalize2(s.pos.trDelta, d)` and `d[2]` is forced
+  non-negative, a temp entity is spawned at `r.currentOrigin` carrying event
+  `0xAD` (173, `EV_BULLET_HIT_SMALL`) with `eventParm` `DirToByte(tr.normal)`,
+  `entityState+216` `DirToByte(d)`, `s.surfType` (`+0x88`) the same five bits
+  shifted down, and `otherEntityNum` (`+0x74`) the missile's own number, and
+  the trace is then re-run with the plain `ent->clipmask`. INFERRED: that is
+  the water-entry splash, since the only content the mask gained was water and
+  the re-trace is what drops it again.
+- When `ent->methodOfDeath (+0x248) == 3` and the hit entity's
+  `flags & 0x10000` (byte `gentity+0x17E`, bit 1) is set, the hit entity's
+  `contents` (`+0x118`) is zeroed, the trace is run a third time, and the
+  contents restored. VERIFIED: `GScr_DisableGrenadeBounce` (`0x5DF8C`) ORs
+  that exact bit in and `GScr_EnableGrenadeBounce` (`0x5DF50`) masks it out,
+  both against the entity number the script called them on. INFERRED: so
+  `disableGrenadeBounce` makes a grenade pass through that entity, and the
+  re-trace is how it does it.
+- `r.currentOrigin` then takes `tr.endpos`, and `tr.fraction` is forced to 0
+  when `tr` reports start-solid (`tr+0x2F`).
+
+### 12.2 The ground snap and the touch pass
+
+VERIFIED: the offsets, immediates and call targets named in the list below.
+INFERRED: the ordering and the conditions in it.
+
+- When `s.eFlags & 0x03000000` is non-zero and either `tr.fraction` is
+  exactly 1.0 or `tr.normal[2]` is above `0.7` (`.rodata 0x75B58`), a second
+  `trap_LocationalTrace` runs straight down from `r.currentOrigin` to
+  `r.currentOrigin` with `1.5` (`.rodata 0x75B5C`) subtracted from z, into the
+  same trace struct. When that one comes back below 1.0,
+  `r.currentOrigin[2]` becomes `tr.endpos[2] + 1.5` and `s.pos.trBase[2]`
+  moves by the same delta. INFERRED: that is a per-frame snap that keeps a
+  rolling grenade on the floor, since it runs on a frame that hit nothing at
+  all as well as on one that hit a floor.
+- INFERRED, and the trap an implementer walks into: the trace struct 12.3
+  reads is the downward one whenever that second trace ran, so a frame whose
+  move trace hit a wall but whose downward trace found no floor within 1.5
+  units reaches 12.3 with `fraction` 1.0 and takes the "hit nothing" arm.
+- `trap_LinkEntity(ent)` runs next.
+- When `ent->methodOfDeath == 3`,
+  `G_GrenadeTouchTriggerDamage(ent, oldOrigin, r.currentOrigin,
+  ent->+0x23C, 3)` runs, `oldOrigin` being the position saved at the top of
+  the frame. VERIFIED: `G_GrenadeTouchTriggerDamage` is `0x655A0`, walks
+  `trap_EntitiesInBox` over the bounds of the two positions with mask
+  `0x400000`, keeps entities whose `classname` is `scr_const+0x96`
+  (`"trigger_damage"`) and whose `flags & 0x8000` is set, requires
+  `trap_SightTraceToEntity` between the two positions to succeed, then
+  notifies the trigger with `scr_const+0x1A` (`"damage"`) and two arguments
+  and calls `Activate_trigger_damage` (`0x650C0`). VERIFIED:
+  `GScr_EnableGrenadeTouchDamage` (`0x5DE94`) ORs `0x80` into byte
+  `gentity+0x17D`, which is that bit, `GScr_DisableGrenadeTouchDamage`
+  (`0x5DEF0`) masks it out, and both refuse an entity whose `classname` is not
+  `scr_const+0x96`. INFERRED: so that pair is the per-trigger switch, and this
+  is how a grenade rolling through a `trigger_damage` brush sets it off
+  without touching anything else.
+
+### 12.3 What happens at the end of the move
+
+VERIFIED: the immediates and call targets named in the list below. INFERRED:
+the ordering and the conditions in it.
+
+- When `tr.fraction` is 1.0 the missile did not hit anything: the length of
+  `s.pos.trDelta` is taken, and if it is not exactly zero,
+  `s.groundEntityNum` (`+0x7C`) takes `0x3FF`. `G_RunThink(ent)` closes the
+  frame.
+- Otherwise, when `tr.surfaceFlags & 0x10` is set, `G_FreeEntity(ent)` runs
+  and the frame ends with no event, no explosion and no think.
+  UNVERIFIED: what that surface bit is called. INFERRED: it is the sky, since
+  freeing the missile silently is what a sky brush is for.
+- Otherwise `G_MissileImpact(ent, &tr, dir)` runs, and `G_RunThink(ent)`
+  follows only when `s.eType` is still 4. VERIFIED: `G_MissileImpact`'s
+  explode path sets `s.eType` to 0 (13.1), so the test is what stops a
+  detonated missile from thinking again in the same frame.
+
+### 12.4 `G_BounceMissile`
+
+VERIFIED: `G_BounceMissile` is `0x537C0`, `0x2F3` bytes, reads stack slots
+`+8` and `+0xC`, and returns 0 or 1 in `eax`. INFERRED: the two slots are
+`(ent, tr)`, read off the two `G_MissileImpact` call sites. VERIFIED: the
+offsets, immediates and constants named in the list below. INFERRED: the
+ordering and every condition in it.
+
+- `contents = trap_PointContents(ent->r.currentOrigin, -1, 0x20)` is taken
+  first.
+- The impact time is `level.previousTime (level+0x1EC) + (int)((level.time -
+  level.previousTime) * tr.fraction)`, and `BG_EvaluateTrajectoryDelta` at
+  that time gives the incoming velocity `v`.
+- `dot = v . tr.normal`, and `s.pos.trDelta` takes `v + (-2.0) * dot *
+  tr.normal` (`.rodata 0x75B18`). INFERRED: that is a mirror reflection with
+  no energy lost, and the damping is applied after it.
+- When `tr.normal[2]` is above `0.7` (`.rodata 0x75B20`, a double)
+  `s.groundEntityNum` (`+0x7C`) takes `tr.entityNum`.
+- With `s.eFlags & 0x02000000` clear, no damping is applied at all and no
+  rest test is reached.
+- With that bit set and either `contents` non-zero or the hit entity's
+  contents (`tr+0x20`) carrying `0x02000000`, `s.pos.trDelta` is scaled by
+  `0.125` (`.rodata 0x75B28`). VERIFIED: `0x02000000` is the contents
+  `G_SetClientContents` (`0x41530`) gives a live player. INFERRED: a grenade
+  that bounces off a player or lands in water keeps an eighth of its speed.
+- With `s.eFlags & 0x01000000` also set and neither of those two true, the
+  reflected delta is split: writing `t` for the reflected delta plus
+  `dot * tr.normal`, the new `s.pos.trDelta` is `0.75 * t`
+  (`.rodata 0x75B2C`) minus `0.3 * dot * tr.normal` (`.rodata 0x75B30`).
+  INFERRED: with the `-2.0` reflection above, `t` is the tangential component
+  of the incoming velocity, so `0.75` is sliding friction and `0.3` the
+  restitution normal to the surface. This is the branch a stock grenade takes,
+  since `fire_grenade` sets both bits (11.1).
+- With `0x02000000` set and `0x01000000` clear, `s.pos.trDelta` is scaled by
+  `0.5` (`.rodata 0x75B34`).
+- The rest test: when `tr.normal[2]` is above `0.7` and the length of the
+  damped `s.pos.trDelta` is below `20.0` (`.rodata 0x75B38`),
+  `G_SetOrigin(ent, ent->r.currentOrigin)`,
+  `G_MissileLandAngles(ent, tr, angles, 1)` and `G_SetAngle(ent, angles)`
+  run and the function returns 0. VERIFIED: `G_SetOrigin` (`0x67D38`) writes
+  `s.pos.trType` 0 (`TR_STATIONARY`), `trTime` 0, `trDuration` 0, `trBase`
+  and `r.currentOrigin`, and `G_SetAngle` (`0x67D9C`) does the same to
+  `s.apos`. INFERRED: that is where a grenade stops rolling.
+- Otherwise the missile is nudged: `d = 0.1 * tr.normal`
+  (`.rodata 0x75B3C`) with `d[2]` replaced by 0 when it is positive,
+  `r.currentOrigin` and `s.pos.trBase` both take `r.currentOrigin + d`,
+  `s.pos.trTime` takes `level.time`, and `s.apos.trBase` takes
+  `G_MissileLandAngles(ent, tr, angles, 0)` with `s.apos.trTime` `level.time`.
+  INFERRED: clamping `d[2]` means the nudge never lifts the grenade off a
+  floor, only off a wall or a ceiling.
+- The return value is 0 when `contents` is non-zero, 0 when the length of
+  `newDelta - v` is at or below `100.0` (`.rodata 0x75B40`), and 1 otherwise.
+  INFERRED: the caller reads that as "was this bounce loud enough to hear",
+  since the only thing it gates is the bounce event (13.2).
+
+---
+
+## 13. The explode: event and blast
+
+CoD 1.1 has two explode paths and neither spawns a temp entity: both convert
+the missile's own entity into the event carrier and let `freeAfterEvent` clear
+it. That is the shape a client sees, and it is what the missile's `eType`
+change is for.
+
+### 13.1 `G_MissileImpact`
+
+VERIFIED: `G_MissileImpact` is `0x53AB4`, `0x2B7` bytes, and reads stack slots
+`+8` and `+0xC`. INFERRED: those are `(ent, tr)`; the third argument
+`G_RunMissile` pushes is never read.
+
+VERIFIED: the offsets, immediates, event numbers and call targets named in the
+list below. INFERRED: the ordering, and every "when" and "otherwise" in it.
+
+- `other = &g_entities[tr.entityNum]`, the stride being `0x314`.
+- **When `other->takedamage` (`+0x171`) is zero**: with `ent->s.eFlags &
+  0x03000000` clear the function falls through to the explode block below.
+  With those bits set, `G_BounceMissile(ent, tr)` runs and the function
+  returns after it, adding one event on the way out and only when four things
+  hold: the bounce returned 1, the trace did not report start-solid, and
+  `classname` (`+0x176`) is neither `scr_const+0xF4` (`"WP"`) nor
+  `scr_const+0x30` (`"flamebarrel"`). The event is `0xB1` (177,
+  `EV_GRENADE_BOUNCE`) with `eventParm` `(tr.surfaceFlags >> 20) & 0x1F`. A
+  `"WP"` gets no event at all and a `"flamebarrel"` gets `0xC2` (194,
+  `EV_FLAMEBARREL_BOUNCE`) with parm 0.
+- **When `other->takedamage` is non-zero and `ent->damage` (`+0x238`) is
+  zero**: `G_BounceMissile(ent, tr)` runs and the function returns with no
+  event at all.
+- **When `other->takedamage` is non-zero and `ent->damage` is non-zero**:
+  `LogAccuracyHit(other, &g_entities[ent->r.ownerNum])`,
+  `BG_EvaluateTrajectoryDelta` for the missile's velocity with `velocity[2]`
+  forced to `1.0` if the length came out zero, then `G_Damage(other, ent,
+  attacker, velocity, &ent->r.currentOrigin, ent->damage, 0, ent->+0x248, 0)`,
+  the attacker being NULL when `r.ownerNum` is `0x3FF` and `&g_entities[
+  ownerNum]` otherwise. VERIFIED: `ent->+0x248` is the literal 3
+  (`MOD_GRENADE`) `fire_grenade` wrote. INFERRED: a direct hit on a player
+  therefore exists and does `weapDef->damage` at `MOD_GRENADE`, with `dflags`
+  0 and `hitLoc` 0, and it falls straight through into the explode block, so
+  the victim also takes the splash the block computes.
+
+The explode block, reached from all three arms:
+
+- With `ent->damage` non-zero, `G_CheckHitTriggerDamage(attacker,
+  &ent->r.currentOrigin, &tr.endpos, ent->damage, ent->+0x248)`, the attacker
+  being `&g_entities[1022]` when `r.ownerNum` is `0x3FF` and
+  `&g_entities[ownerNum]` otherwise. VERIFIED: that is the same call step 1 of
+  2.4 makes for a bullet, and the world entity substituted here is 1022, not
+  the 1023 the damage arm above substitutes NULL for.
+- `G_AddEvent(ent, 0xB4, DirToByte(tr.normal))` when `LogAccuracyHit`
+  returned non-zero or `tr+0x2A` (the bone name id) is non-zero, and
+  `G_AddEvent(ent, 0xB3, DirToByte(tr.normal))` otherwise. VERIFIED: `0xB3`
+  is 179 (`EV_ROCKET_EXPLODE`) and `0xB4` is 180
+  (`EV_ROCKET_EXPLODE_NOMARKS`). INFERRED: the "nomarks" arm is the one a hit
+  on a player takes, which is what stops a blast decal landing on a body.
+- `ent->s.surfType` (`+0x88`) takes `(tr.surfaceFlags >> 20) & 0x1F`,
+  `ent->freeAfterEvent` (`+0x184`) takes 1, and `ent->s.eType` (`+0x4`) takes
+  0 (`ET_GENERAL`).
+- `SnapVectorTowards(&tr.endpos, &ent->s.pos.trBase)` and
+  `G_SetOrigin(ent, &tr.endpos)` place it.
+- With `ent->+0x23C` non-zero, `G_RadiusDamage(&tr.endpos, ent, ent->parent,
+  (float)ent->+0x23C, (float)ent->+0x240, (float)ent->+0x244, other,
+  ent->+0x24C)`. VERIFIED: the ignored entity is `other`, the entity the
+  missile hit. INFERRED: the direct-hit victim is deliberately kept out of the
+  splash, having already been charged the direct damage.
+- `trap_LinkEntity(ent)` closes it.
+
+### 13.2 `G_ExplodeMissile`, the fuse
+
+VERIFIED: `G_ExplodeMissile` is `0x53D6C`, `0x260` bytes, takes one argument,
+and the module stores its address into a `think` slot at three places:
+`0x5440A` in `fire_grenade`, `0x54678` in `fire_rocket` and `0x548B4` in
+`G_MissileDie`.
+
+VERIFIED: the offsets, immediates, event numbers and call targets named in the
+list below. INFERRED: the ordering and the conditions in it.
+
+- `BG_EvaluateTrajectory(&ent->s.pos, level.time, org)`, each component of
+  `org` truncated toward zero, then `G_SetOrigin(ent, org)`.
+- `ent->s.eType` (`+0x4`) takes 0, `s.eFlags` gains `0x100`, `flags`
+  (`+0x17C`) gains `0x1000`, and `r.svFlags` (`+0xF4`) gains `0x8`
+  (`SVF_BROADCAST`). INFERRED: the broadcast bit is what makes the explosion
+  reach every client rather than only those the missile was in PVS of.
+- When `classname` (`+0x176`) is `scr_const+0x30` (`"flamebarrel"`),
+  `freeAfterEvent` takes 1, the entity is linked, and the function returns
+  with no event and no blast.
+- Otherwise `trap_Trace(&tr, &ent->r.currentOrigin, vec3_origin, vec3_origin,
+  down, ent->s.number, 0x11)` runs, `down` being `r.currentOrigin` with `16.0`
+  (`.rodata 0x75B44`) subtracted from z.
+- `G_AddEvent(ent, 0xB2, DirToByte(tr.normal))`. VERIFIED: `0xB2` is 178,
+  `EV_GRENADE_EXPLODE`, and its `eventParm` is the packed normal of that
+  downward trace. INFERRED: that normal is what orients the blast mark, which
+  is why the trace exists at all.
+- `ent->s.surfType` (`+0x88`) takes `0x14` when
+  `trap_PointContents(r.currentOrigin, -1, 0x20)` is non-zero, and
+  `(tr.surfaceFlags >> 20) & 0x1F` otherwise. INFERRED: `0x14` is the water
+  surface type, the same one 12.1's splash branch matches on.
+- `freeAfterEvent` (`+0x184`) takes 1.
+- With `ent->+0x23C` non-zero, `G_RadiusDamage(&ent->r.currentOrigin, ent,
+  ent->parent, (float)ent->+0x23C, (float)ent->+0x240, (float)ent->+0x244,
+  ent, ent->+0x24C)`. VERIFIED: the ignored entity here is the missile itself,
+  not a victim, which is the one argument that differs from 13.1's call.
+- `trap_LinkEntity(ent)`, then a second entity from `G_Spawn()` takes the
+  missile's `r.currentOrigin`, `think` `Concussive_think` (`0x54808`),
+  `nextthink` `level.time + 100` and `+0x274` `(float)level.time + 500.0`
+  (`.rodata 0x75B48`). VERIFIED: `Concussive_think` re-arms itself every 100
+  ms and swaps its own `think` for `G_FreeEntity` once `level.time` passes
+  `+0x274`. INFERRED: a concussion field lives 500 ms past the blast; nothing
+  read here says what reads it.
+
+### 13.3 What is not on this path
+
+VERIFIED: `weapDef->projImpactExplode` is `0x32C` in the field table of
+section 0, and the module contains no integer or boolean read of a weapon def
+at that offset. INFERRED: the key parses and is never consulted; whether a
+missile detonates on contact is decided entirely by `s.eFlags & 0x03000000`
+and by the hit entity's `takedamage` (13.1).
+
+VERIFIED: `G_MissileDie` is `0x5489C` and sets `takedamage` 0, `think`
+`G_ExplodeMissile` and `nextthink` `level.time + 10` when the inflictor is not
+the entity itself. VERIFIED: `fire_grenade` never writes `die` (`+0x218`) or
+`takedamage`, so nothing can shoot a thrown grenade down.
+
+---
+
+## 14. `G_RadiusDamage` and `CanDamage`
+
+### 14.1 The walk and the falloff
+
+VERIFIED: `G_RadiusDamage` is `0x4A3F4`, `0x4B9` bytes, and reads stack slots
+`+8`, `+0xC`, `+0x10`, `+0x14`, `+0x18`, `+0x1C`, `+0x20` and `+0x24`.
+INFERRED: those are `(origin, inflictor, attacker, inner, outer, radius,
+ignore, mod)`, read off the three call sites: the two in 13, which pass the
+three integers `fire_grenade` copied out of `explosionInnerDamage`,
+`explosionOuterDamage` and `explosionRadius` in that order, and the
+`radiusDamage` builtin of 14.2, whose script argument order pins the same
+reading a second time.
+
+VERIFIED: the offsets, immediates, constants and call targets named in the
+list below. INFERRED: the ordering and every condition in it.
+
+- The function returns 0 immediately when `attacker` is NULL.
+- `radius` is raised to `1.0` when it is below it.
+- The search box is `origin` plus and minus `radius * 1.4142135`
+  (`.rodata 0x74430`) on each axis, and `trap_EntitiesInBox(mins, maxs, list,
+  1024, -1)` fills the candidate list. INFERRED: the square root of two is
+  there so the box circumscribes the sphere rather than inscribing it.
+- A candidate is skipped when it is the `ignore` entity or when its
+  `takedamage` (`+0x171`) is zero.
+- The distance vector is `ent->r.currentOrigin - origin` when `gentity+0xFC`
+  is zero, and otherwise the per-axis gap to the entity's world-space box:
+  `absmin[i] - origin[i]` when `origin[i]` is below `absmin[i]`
+  (`gentity+0x11C`), `origin[i] - absmax[i]` when it is above `absmax[i]`
+  (`gentity+0x128`), and 0 in between. INFERRED: `gentity+0xFC` is
+  `r.bmodel`, being the one int between `singleClient` (`+0xF8`) and `mins`
+  (`+0x100`); this is Quake III Arena's `G_RadiusDamage` distance rule with a
+  brush-model gate added, so a player is measured origin to origin and a door
+  nearest-point to origin.
+- A candidate is skipped when that distance is at or above `radius`.
+- A candidate with a client (`+0x158`) is skipped when `level+0x29F4` is
+  non-zero (14.2).
+- The damage before line of sight is
+  `outer + (1 - distance / radius) * (inner - outer)`, which is `inner` at the
+  blast and `outer` at the radius, linear in between.
+- `CanDamage(ent, origin)` returns a float. With that float above zero:
+  `LogAccuracyHit(ent, attacker)`, then `G_Damage(ent, inflictor, attacker,
+  dir, origin, (int)(canDamage * points), 1, mod, 0)`, where `dir` is
+  `ent->r.currentOrigin - origin` with `24.0` (`.rodata 0x74434`) added to z.
+  VERIFIED: the `dflags` argument is the literal 1, which is the
+  `iDFLAGS_RADIUS` the gametype scripts spell.
+- With `CanDamage` at or below zero, a second chance runs: `trap_Trace(&tr,
+  origin, vec3_origin, vec3_origin, midpoint, 0x3FF, 0x11)` against the
+  midpoint of the entity's world box (`0.5`, `.rodata 0x74438`, a double),
+  and the candidate is kept only when that trace was blocked
+  (`tr.fraction < 1`) and the midpoint is nearer than `radius * 0.2`
+  (`.rodata 0x74440`). The damage on that arm is `(int)(points * 0.1)`
+  (`.rodata 0x74444`) with the same `dir` and the same `dflags` 1.
+  INFERRED: that is a token amount for a victim hugging the far side of the
+  wall the blast went off against.
+- The return value is 1 when any `LogAccuracyHit` returned non-zero and 0
+  otherwise.
+
+### 14.2 The player-ignore flag is on `level`, not on `gclient_t`
+
+VERIFIED: `0x5EF6C` is a script builtin of one boolean argument, and its whole
+body is `level+0x29F8 = Scr_GetBool(0)`. VERIFIED: `level+0x29F8` is written
+nowhere else in the module and read at exactly one place.
+
+VERIFIED: `0x5EEF4` is the `radiusDamage` builtin. VERIFIED: it takes
+`Scr_GetVector(0)` and `Scr_GetFloat(1)`, `(2)` and `(3)`, copies
+`level+0x29F8` into `level+0x29F4`, calls `G_RadiusDamage(origin, NULL,
+&g_entities[1022], arg2, arg3, arg1, NULL, 0x18)`, then writes 0 back into
+`level+0x29F4`. VERIFIED: `0x18` is 24, `MOD_EXPLOSIVE` in 4.1's table, and
+`&g_entities[1022]` is the offset `0xC49D8` at a stride of `0x314`.
+
+INFERRED: the script signature is therefore
+`radiusDamage(origin, range, maxDamage, minDamage)`, with `range` reaching
+`G_RadiusDamage`'s `radius`, `maxDamage` its `inner` and `minDamage` its
+`outer`, so 14.1's falloff is exactly "linear from `maxDamage` at the blast to
+`minDamage` at the range". VERIFIED: `level+0x29F4` is read at one place, the
+client test in `G_RadiusDamage` (`0x4A5D3`), and written at two, both inside
+the `radiusDamage` builtin. INFERRED: `setPlayerIgnoreRadiusDamage` therefore
+suppresses player damage only for the duration of a scripted `radiusDamage`
+call and has no effect at all on a grenade's own blast, whose two callers
+never touch `level+0x29F4`.
+
+This retires the `radiusDamage` divergence entry
+`cod11-gsc-language.md` used to carry.
+
+### 14.3 `CanDamage`
+
+VERIFIED: `CanDamage` is `0x4A098`, `0x35C` bytes, takes `(targ, origin)` and
+returns a float on the x87 stack rather than an integer. VERIFIED: both of its
+arms trace five times with `trap_LocationalTrace(&tr, origin, point,
+targ->s.number, 0x02802091, bulletPriorityMap)`, the same mask
+`fire_grenade` gives a missile (11.1). VERIFIED: the only call to it in the
+module is at `0x4A601`, inside `G_RadiusDamage`.
+
+**With no client** (`targ+0x158` zero). VERIFIED: the five points are built
+from the world box midpoint, `0.5 * (r.absmin + r.absmax)` (`.rodata
+0x74424`), with `15.0` (`.rodata 0x74420`) and `-15.0` (`.rodata 0x74428`)
+added to the x and y of four of them and z left alone on all five. VERIFIED:
+the loop returns `1.0` the moment one trace comes back with `fraction ==
+1.0`, and `0.0` when none does. INFERRED: that is Quake III Arena's
+`CanDamage` unchanged.
+
+**With a client**. VERIFIED: the eye point is `targ->r.currentOrigin` with
+`client+0xD0` added to z and `G_AddLean(targ, eye)` applied, the five points
+are built around `0.5 * (eye + r.currentOrigin)`, and the horizontal offset is
+`15.0` and `-15.0` times the vector `(-d[1], d[0], d[2])` where `d` is the
+normalized horizontal direction from the target's origin to the blast, `d[2]`
+being pinned to 0. VERIFIED: `0.5 * (eye[2] - r.currentOrigin[2])` is
+subtracted from and added to the z of the offset points. INFERRED: the set is
+the body centre plus four points at the corners of a 30-unit-wide, body-tall
+rectangle held broadside to the blast. UNVERIFIED: which of the four corners
+gets which sign pair, which the register shuffling did not make legible and
+which does not matter to a symmetric set.
+
+VERIFIED: the count of traces returning `fraction == 1.0` maps to the return
+value as 0 for none, `1.0` for four or five, and `count / 3.0`
+(`.rodata 0x7442C`) otherwise. INFERRED: so a client behind partial cover
+takes a third or two thirds of the falloff damage, and three of five clear
+points is already full damage. INFERRED: nothing on the bullet path consults
+any of this, which 4.6 already said.

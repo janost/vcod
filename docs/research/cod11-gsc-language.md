@@ -771,17 +771,17 @@ added closes that (section 14 of
   on one event is killed rather than woken, regardless of which it
   registered first. The wake order *within* each pass is measured (start
   order, `# probe_notify`); the ordering *between* the two passes is not.
-- **`radiusDamage`'s falloff curve is RTCW's, not retail's.** The callback
-  itself is no longer a divergence: `radius_damage`
+- **`radiusDamage` is no longer a divergence.** `radius_damage`
   (`crates/server/src/game/builtins/combat.rs`) hands
   `CodeCallback_PlayerDamage` to `Cx::spawn`, which the interpreter starts as
   soon as the builtin returns and before the calling thread's next
   instruction, so a script that damages and then reads `self.health` sees
-  what the callback left, the way retail's synchronous call does. What each
-  victim takes is the open half: the damage falls off linearly from
-  `maxDamage` at the blast to `minDamage` at the radius, which is RTCW's
-  `G_RadiusDamage`. UNVERIFIED: the curve at `.so` 0x5eef4 was not read, and
-  nothing read stands behind the falloff vcod uses.
+  what the callback left, the way retail's synchronous call does. VERIFIED:
+  the builtin at `.so` 0x5eef4 and `G_RadiusDamage` (`.so` 0x4a3f4) have both
+  been read out, and the falloff really is linear from `maxDamage` at the
+  blast to `minDamage` at the range; the argument mapping, the entity walk,
+  the `CanDamage` fraction retail multiplies by, and the second-chance arm
+  vcod has none of are in `docs/research/cod11-combat.md` section 14.
 - **Of the `SP_` layer, only what the wire can see runs.**
   `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces
   `G_CallSpawn`'s third case for the five classnames whose `SP_` function is
