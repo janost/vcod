@@ -771,17 +771,38 @@ added closes that (section 14 of
   on one event is killed rather than woken, regardless of which it
   registered first. The wake order *within* each pass is measured (start
   order, `# probe_notify`); the ordering *between* the two passes is not.
-- **`radiusDamage` is no longer a divergence.** `radius_damage`
-  (`crates/server/src/game/builtins/combat.rs`) hands
+- **`radiusDamage` loses damage to cover that vcod's takes at full.** The
+  falloff and the callback timing are both settled and no longer divergences.
+  VERIFIED: the builtin at `.so` 0x5eef4 and `G_RadiusDamage` (`.so` 0x4a3f4)
+  have been read out, and retail's curve is linear from `maxDamage` at the
+  blast to `minDamage` at the range, which is what `radius_damage`
+  (`crates/server/src/game/builtins/combat.rs`) already computes. The callback
+  half was settled earlier: `radius_damage` hands
   `CodeCallback_PlayerDamage` to `Cx::spawn`, which the interpreter starts as
   soon as the builtin returns and before the calling thread's next
-  instruction, so a script that damages and then reads `self.health` sees
-  what the callback left, the way retail's synchronous call does. VERIFIED:
-  the builtin at `.so` 0x5eef4 and `G_RadiusDamage` (`.so` 0x4a3f4) have both
-  been read out, and the falloff really is linear from `maxDamage` at the
-  blast to `minDamage` at the range; the argument mapping, the entity walk,
-  the `CanDamage` fraction retail multiplies by, and the second-chance arm
-  vcod has none of are in `docs/research/cod11-combat.md` section 14.
+  instruction, so a script that damages and then reads `self.health` sees what
+  the callback left, the way retail's synchronous call does. Four things
+  around that curve are still divergences, all of them measured and all of
+  them in `docs/research/cod11-combat.md` section 14:
+  - **No line-of-sight fraction.** Retail multiplies the falloff by
+    `CanDamage`'s return, which is 0, 1/3, 2/3 or 1 depending on how many of
+    five traces to the victim reach it (14.3). vcod applies the falloff whole,
+    so a victim behind a wall inside the radius takes full damage where retail
+    gives him nothing.
+  - **No second-chance arm.** When `CanDamage` returns 0, retail still charges
+    10% of the falloff if the trace to the victim's box midpoint was blocked
+    and that midpoint is within `radius * 0.2` (14.1). vcod has no such arm.
+  - **The direction handed to the callback.** Retail passes
+    `victim.r.currentOrigin - origin` with `24.0` added to z, unnormalized, so
+    its length carries the distance. vcod passes
+    `away.normalize_or_zero()`, a unit vector with no z offset.
+  - **The victim walk.** Retail walks `trap_EntitiesInBox` over a
+    `radius * sqrt(2)` box and takes anything with `takedamage` set, measuring
+    a brush model to the nearest point of its bounds. vcod walks live clients
+    only and measures the script `origin` field. Retail's builtin also reads
+    exactly four script arguments and always passes the world entity as the
+    attacker; vcod's optional fifth attacker argument is an extension retail
+    has no equivalent of.
 - **Of the `SP_` layer, only what the wire can see runs.**
   `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces
   `G_CallSpawn`'s third case for the five classnames whose `SP_` function is
