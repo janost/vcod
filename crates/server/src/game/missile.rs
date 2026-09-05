@@ -143,12 +143,22 @@ pub struct MissileFrame {
     pub temp: Vec<crate::game::temp_entity::TempEntity>,
 }
 
-#[derive(Default)]
 pub struct Missiles {
     live: Vec<Missile>,
     /// `flrand`'s state for the launch tumble. Its own, so a throw draws the
     /// same numbers whatever else the frame did.
     rng: u64,
+}
+
+impl Default for Missiles {
+    fn default() -> Missiles {
+        Missiles {
+            live: Vec::new(),
+            // xorshift degenerates on a zero state, so an unseeded pool
+            // would tumble every grenade identically.
+            rng: crate::game::host::RNG_SEED,
+        }
+    }
 }
 
 /// Section 11.3: where a throw starts and how fast it leaves, from the
@@ -620,6 +630,26 @@ mod tests {
             m.traj.base.z
         );
         assert_eq!(m.apos.tr_type, TR_STATIONARY, "the tumble stopped too");
+    }
+
+    /// The launch tumble is drawn, not fixed: `flrand` runs off the pool's
+    /// own seeded state, so two throws leave with different pitch and roll
+    /// rates (11.2). An unseeded state would hand every grenade the same
+    /// pair.
+    #[test]
+    fn two_throws_draw_different_tumbles() {
+        let (mut vm, mut host) = crate::game::testing::fixture();
+        let mut ms = Missiles::default();
+        for _ in 0..2 {
+            armed(&mut ms, &mut host, &mut vm, Vec3::ZERO, Vec3::X * 900.0, 0);
+        }
+        let (a, b) = (ms.missiles()[0].apos.delta, ms.missiles()[1].apos.delta);
+        assert_ne!(a.x, b.x, "both throws tumbled at pitch {}", a.x);
+        assert_ne!(a.z, b.z, "both throws tumbled at roll {}", a.z);
+        for t in [a, b] {
+            assert!((t.x - TUMBLE_PITCH).abs() <= TUMBLE_SPREAD, "pitch {}", t.x);
+            assert!((t.z - TUMBLE_ROLL).abs() <= TUMBLE_SPREAD, "roll {}", t.z);
+        }
     }
 
     /// The fuse is absolute: armed at `t` with `f` left, it explodes on the

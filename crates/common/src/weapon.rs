@@ -163,6 +163,9 @@ pub struct WeaponDef {
     /// Semantics INFERRED from the values; no decompilation evidence yet.
     pub ads_bob_factor: f32,
     /// `semiAuto 0` fires while the button is held at `fireTime` cadence.
+    /// The eight stock files that omit the key -- the four grenades, the
+    /// three bipod mg42s and the PTRS41 -- are not semi-automatic, so the
+    /// default is off.
     pub semi_auto: bool,
     /// Reserve rounds behind the clip (`startAmmo`).
     pub start_ammo: u32,
@@ -316,7 +319,7 @@ impl WeaponDef {
             ads_zoom_fov: parse_num(map, "adsZoomFov", DEFAULT_FOV),
             ads_view_bob_mult: parse_num(map, "adsViewBobMult", 1.0),
             ads_bob_factor: parse_num(map, "adsBobFactor", 1.0),
-            semi_auto: parse_bool(map, "semiAuto", true),
+            semi_auto: parse_bool(map, "semiAuto", false),
             start_ammo: parse_num(map, "startAmmo", 0),
             bolt_action: parse_bool(map, "boltAction", false),
             world_model: map
@@ -683,6 +686,10 @@ mod tests {
         assert!(!thompson.semi_auto, "thompson is full-auto");
         assert_eq!(thompson.start_ammo, 270);
         assert_eq!(thompson.ads_bob_factor, 0.0);
+        // The frag is one of the eight stock files that omit `semiAuto`, and
+        // the parse default is what decides those.
+        let frag = load(&fs, "fraggrenade_mp").unwrap();
+        assert!(!frag.semi_auto, "the frag omits semiAuto");
     }
 
     #[test]
@@ -716,6 +723,9 @@ mod tests {
             ads_view_bob_mult: 0.2,
             start_ammo: 60,
             bolt_action: true,
+            // The kar98k's shape: it spells `semiAuto 1`, where the parse
+            // default is off for the eight files that omit the key.
+            semi_auto: true,
             ..WeaponDef::default()
         }
     }

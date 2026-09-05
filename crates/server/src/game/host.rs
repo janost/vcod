@@ -260,7 +260,7 @@ pub struct GameHost {
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
 /// state is the one xorshift degenerates on.
-const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
+pub(crate) const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
 impl GameHost {
     pub fn new(configstrings: Vec<String>) -> GameHost {

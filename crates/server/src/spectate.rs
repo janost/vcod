@@ -445,8 +445,15 @@ impl ClientSim {
                 } else {
                     self.view_lerp_start.or(Some(cmd.server_time))
                 };
+                // The fire event's parm is vcod's internal fuse channel, and
+                // `eventParms[i]` is 8 bits: a 4000 ms fuse would reach a
+                // client as 160 where retail writes 0.
                 for e in &events {
-                    self.add_event(e.event, e.parm);
+                    let parm = match e.event {
+                        pmove::weapon::EV_FIRE_WEAPON | pmove::weapon::EV_FIRE_WEAPON_LASTSHOT => 0,
+                        _ => e.parm,
+                    };
+                    self.add_event(e.event, parm);
                 }
                 return events;
             }

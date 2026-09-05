@@ -783,9 +783,18 @@ added closes that (section 14 of
   which the interpreter starts as soon as the builtin returns and before the
   calling thread's next instruction, so a script that damages and then reads
   `self.health` sees what the callback left, the way retail's synchronous call
-  does. Three things around it are still divergences, and every retail half
+  does. Four things around it are still divergences, and every retail half
   below is `docs/research/cod11-combat.md` section 14's, read out of the two
   functions there:
+  - **A body between the blast and the victim does not shield it.** VERIFIED:
+    each of `CanDamage`'s five probes is a
+    `trap_LocationalTrace(&tr, origin, point, targ->s.number, ...)` (14.3),
+    which takes the victim's own entity number as the pass entity, and that
+    trap clips the ray against the other entities' models (3.1's dispatch
+    chain). INFERRED, from those two: on retail a player standing between the
+    blast and the victim blocks a probe and costs the victim a third of the
+    damage. VERIFIED: vcod's `can_damage` (`crate::game::combat`) traces the
+    collision world alone, so here only geometry ever takes a probe away.
   - **The victim walk.** VERIFIED: retail walks `trap_EntitiesInBox` over a
     `radius * sqrt(2)` box, and the loop body reads `takedamage` and the
     entity's own bounds (14.1). INFERRED, since the skip is a branch: it takes

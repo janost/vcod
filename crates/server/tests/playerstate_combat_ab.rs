@@ -91,6 +91,30 @@ fn ring_events(trace: &[Trace], want: impl Fn(i32) -> bool) -> usize {
         .sum()
 }
 
+/// The parms the fire events in a trace's ring carry. The grenade's fuse
+/// rides `PmEvent.parm` inside vcod only: `eventParms[i]` is an 8-bit
+/// netfield, so a 4000 ms fuse would reach a client as 160. Retail writes 0
+/// on every throw frame it recorded (`mp_carentan-tdm-grenade-shooter.txt`
+/// reads `eventParms=0,0,0,0` there, and so does every settled block of the
+/// capture this gate replays); those `!trace` lines carry no `eventParms`
+/// column of their own, so retail's side of the comparison is that constant.
+fn fire_parms(trace: &[Trace]) -> BTreeSet<i32> {
+    let mut out = BTreeSet::new();
+    for w in trace.windows(2) {
+        let Some(parms) = w[1].event_parms else {
+            continue;
+        };
+        let diff = ((w[1].event_sequence - w[0].event_sequence) & 0xff).min(4);
+        for i in 0..diff {
+            let slot = ((w[0].event_sequence + i) & 3) as usize;
+            if matches!(w[1].events[slot], EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT) {
+                out.insert(parms[slot]);
+            }
+        }
+    }
+    out
+}
+
 /// The `grenadeTimeLeft` values a trace took, bucketed to the frame: the fuse
 /// is armed and cleared inside a frame, so the exact ms a sample catches it at
 /// is the sampling grid's and not the machine's.
@@ -173,6 +197,12 @@ fn trace_of(s: &Sample, ms: i64) -> Trace {
         torso_anim: ps.field_i32(p, "torsoAnim"),
         event_sequence: ps.field_i32(p, "eventSequence"),
         events: [ev(0), ev(1), ev(2), ev(3)],
+        event_parms: Some([
+            ps.field_i32(p, "eventParms[0]"),
+            ps.field_i32(p, "eventParms[1]"),
+            ps.field_i32(p, "eventParms[2]"),
+            ps.field_i32(p, "eventParms[3]"),
+        ]),
         pos_frac: Some(ps.field_f32(p, "fWeaponPosFrac")),
         spread: Some(ps.field_f32(p, "aimSpreadScale")),
         grenade_time_left: Some(ps.field_i32(p, "grenadeTimeLeft")),
@@ -280,6 +310,15 @@ fn check(map: &str, gametype: &str, kind: &str) {
         if rw != ow {
             bad.push(format!(
                 "{}: retail {rw} melee swings, ours {ow}",
+                step.label
+            ));
+        }
+        // A fire event's parm: 0 on retail, and compared to retail's own
+        // column where a capture has one.
+        let (rp, op) = (fire_parms(&step.trace), fire_parms(ours));
+        if op.iter().any(|p| *p != 0) || (!rp.is_empty() && rp != op) {
+            bad.push(format!(
+                "{}: fire event parms retail {rp:?} ours {op:?}",
                 step.label
             ));
         }

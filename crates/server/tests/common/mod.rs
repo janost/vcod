@@ -233,6 +233,9 @@ pub struct Trace {
     pub torso_anim: i32,
     pub event_sequence: i32,
     pub events: [i32; 4],
+    /// `eventParms[i]`; `None` on a capture whose trace lines carry no such
+    /// column, which is every one taken so far.
+    pub event_parms: Option<[i32; 4]>,
     /// `fWeaponPosFrac` and `aimSpreadScale`; `None` on a capture taken
     /// before the trace carried them.
     pub pos_frac: Option<f32>,
@@ -336,6 +339,14 @@ pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
                     i("events[2]"),
                     i("events[3]"),
                 ],
+                event_parms: m.contains_key("eventParms[0]").then(|| {
+                    [
+                        i("eventParms[0]"),
+                        i("eventParms[1]"),
+                        i("eventParms[2]"),
+                        i("eventParms[3]"),
+                    ]
+                }),
                 pos_frac: f("fWeaponPosFrac"),
                 spread: f("aimSpreadScale"),
                 grenade_time_left: m.get("grenadeTimeLeft").map(|v| v.parse().unwrap()),

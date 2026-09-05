@@ -1161,7 +1161,8 @@ mod tests {
         assert_eq!(ps.weap_anim & 511, WEAP_GRENADE_PULLBACK);
         assert_eq!(ps.weapon_delay_ms, 600);
         assert_eq!(ps.weaponstate, WEAPON_FIRING);
-        // The fuse does not run down while the trigger is held (ruling R30).
+        // The fuse does not run down while the trigger is held (the
+        // `pin_out` step of `mp_carentan-tdm-grenade.txt`).
         let ev = step(&mut ps, &w, &held, 20);
         assert_eq!(ev, Vec::<i32>::new());
         assert_eq!(ps.grenade_time_left_ms, 4000);
@@ -1181,7 +1182,7 @@ mod tests {
         assert_eq!(ps.ammoclip[1], 2);
     }
 
-    /// Ruling R30, the `pin_out` step of the retail capture: retail 1.1 MP
+    /// The `pin_out` step of `mp_carentan-tdm-grenade.txt`: retail 1.1 MP
     /// never counts `grenadeTimeLeft` down, so a held trigger cooks forever
     /// and the grenade leaves only on the release.
     #[test]
@@ -1214,9 +1215,10 @@ mod tests {
         assert_eq!(ps.weaponstate, WEAPON_READY);
     }
 
-    /// Ruling R39, the `cancel` step: a weapon change during a pullback drops
-    /// the grenade with no putaway at all -- no `EV_PUTAWAY_WEAPON`, no drop
-    /// time, no round spent -- and the raise lands on the same frame.
+    /// The `cancel` step of `mp_carentan-tdm-grenade.txt`: a weapon change
+    /// during a pullback drops the grenade with no putaway at all -- no
+    /// `EV_PUTAWAY_WEAPON`, no drop time, no round spent -- and the raise
+    /// lands on the same frame.
     #[test]
     fn a_weapon_change_cancels_a_cooking_grenade() {
         let (mut ps, mut w) = armed(&frag());
