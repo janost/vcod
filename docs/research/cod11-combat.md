@@ -604,6 +604,8 @@ conditions.
 INFERRED: `pm_flags 0x1000` is the melee button's edge latch, and it is the
 only edge latch in the weapon machine.
 
+What the retail melee capture read off this path is in 1.14.
+
 ### 1.11 Grenades in the same machine
 
 VERIFIED: the offsets, immediates, weapon-def fields, event numbers and
@@ -619,6 +621,9 @@ conditions.
   from `weaponDef->fuseTime` (`0x210`), sets `weapAnim` to 17, raises event
   `0x9E` (`EV_PULLBACK_WEAPON`, 158), sets `weaponDelay` from
   `weaponDef->holdFireTime` (`0x1E0`) and clears `weaponTime`.
+
+The first of those two never runs on 1.1 MP; 1.14 has the capture that says
+so and the path a throw takes instead.
 
 ### 1.12 What stops `PM_Weapon` outright
 
@@ -760,6 +765,80 @@ found it rather than ramping it down. And `pml.groundPlane` is read as
 `ps.on_ground`, the nearest thing vcod's mover carries.
 
 ---
+
+### 1.14 What the grenade and melee capture measured
+
+`crates/server/tests/fixtures/playerstate/mp_carentan-tdm-grenade.txt`, a lone
+`--save-grenade` run against the retail 1.1d server: one melee swing, a switch
+to the frag, a cooked throw, a cook held past the fuse, a cook cancelled by
+switching back, and a throw at the ground. The step names below are the
+fixture's own.
+
+**The fuse does not run down.** VERIFIED: `grenadeTimeLeft` reads a flat 4000
+(`fuseTime` 4) from the pullback frame to the throw frame and 0 on every other
+sample, under a 200 ms, a 1000 ms and a 5000 ms hold alike. VERIFIED:
+`pin_out` holds the trigger 5000 ms and the throw's event 159 lands on the
+release, at +5032 ms, with the explode 3954 ms after that. INFERRED: 1.11's
+decrement is unreachable on this build, so there is no pin at 50, no
+auto-throw and no shortening of the fuse by cooking.
+
+**The pin, and what the release is.** VERIFIED: `weaponDelay` counts down from
+`holdFireTime` (600) while the bit is held and then reads 1 on every sample
+until the release. INFERRED: that pin is what stops the delay edge repeating,
+the same shape the semi-automatic latch of 1.4 gives `weaponTime`.
+UNVERIFIED: which store writes the 1.
+
+**The throw is the ordinary fire path.** VERIFIED: all three throw frames read
+`weaponDelay` 0, `weapAnim` `WEAP_ATTACK` (`WEAP_ATTACK_LASTSHOT` on the last
+frag), event 159 (161 on the last), and `weaponstate` 3 for exactly 1000 ms,
+which is the frag's `fireTime`. INFERRED: the throw runs 1.5 with its two
+`weaponType == 1` special cases, steps 1 and 5, which is why `fireDelay` never
+reaches `weaponDelay`. VERIFIED: `throw_down`'s 161 is followed by 149 in the
+same frame and the step after it holds `ps.weapon` 0. INFERRED: that is 1.5
+step 9, the `clipOnly` weapon being taken away.
+
+**A weapon change cancels the pullback without a putaway.** VERIFIED: `cancel`
+switches 300 ms into a hold and reads `weaponstate` 3 then 1 with event 155
+and `weapAnim` 522, no event 156, no `weaponstate` 2 sample at all, and the
+clip unspent -- three throws still empty the loadout at `idle_after`.
+INFERRED: the switch takes the short putaway branch of 1.8, the one that
+clears `weaponTime` and `grenadeTimeLeft` rather than raising the drop, and
+the pickup half runs later in the same `PM_Weapon` call.
+
+**The putaway does write `weapAnim`.** VERIFIED: `to_frag` reads `weapAnim`
+521 -- `WEAP_DROP` with the toggle -- through the whole of `weaponstate` 2,
+then 10 through the raise and 512 after it. INFERRED: the putaway stores the
+index and the pickup's two arms are exclusive, one write each; the superseded
+combat captures read no write at all because they sent `cmd.weapon` 0 every
+frame, which is the one input 1.2's setter refuses to write on.
+
+**The raise ends when `raiseTime` does.** VERIFIED: `weaponstate` 1 lasts
+295 ms on `to_frag` and 263 ms on `to_frag_2`, against the frag's `raiseTime`
+of 250, and 2.7 s on `cancel`, whose trigger is held through the raise.
+INFERRED: the state ends on `weaponTime` reaching 0 and the semi-automatic
+latch of 1.4 pins it at 1 for as long as the bit is down, so a held trigger
+keeps a weapon coming up.
+
+**The swing.** VERIFIED: `melee_tap` reads `weaponstate` 10 with event 164 and
+`weapAnim` 520, then 11 with event 165 once `meleeDelay` (0.15 on the carbine)
+runs out, then 0 with `weapAnim` 0 at `meleeTime` (0.65), and `torsoAnim` 732
+across both states. VERIFIED: `aimSpreadScale` reads 255.00 at every sample of
+states 10 and 11 and starts decaying on the first sample of state 0.
+UNVERIFIED: which store holds the counter there; 1.8's raise is the only 255.0
+store this document has located.
+
+**A `both` event clause is a legs anim.** VERIFIED: each throw frame reads
+`legsAnim` 575 and `torsoAnim` 512, index 63 on the legs and a bare toggle
+flip on the torso, and `mp/playeranim.script`'s standing grenade clause is
+`both pb_stand_grenade_throw`. INFERRED: a `both` clause puts the anim on the
+legs and restarts the torso on no anim at all, which is the same index 0 every
+settled retail pose reads (player-model-anim-system.md, "The weapon channel").
+
+**As implemented.** `pmove::weapon`'s `pullback`, `grenade_hold`,
+`melee_check` and `melee_finish`, with the two-arm `pickup` and the short
+`putaway` branch beside them, and `spectate.rs::play_event` for the last
+paragraph. `crates/server/tests/playerstate_combat_ab.rs`'s `grenade` gate
+replays the whole capture.
 
 ## 2. `Bullet_Fire_Extended`: spread, the trace, and what a bullet does
 
