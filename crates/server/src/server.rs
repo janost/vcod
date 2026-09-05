@@ -1018,8 +1018,9 @@ impl Server {
         }
     }
 
-    /// The blasts the last tick's missile pass set off. Test-facing until
-    /// the radius damage pass reads them.
+    /// The blasts the last tick's missile pass set off, after the same
+    /// tick's radius damage pass charged them. Test-facing: the replay in
+    /// `tests/common` counts them per frame.
     pub fn pending_explosions(&self) -> &[crate::game::missile::Explosion] {
         &self.pending_explosions
     }

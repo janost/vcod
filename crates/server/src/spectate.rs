@@ -545,12 +545,8 @@ impl ClientSim {
         let script = &inputs.anims.script;
         match (self.ps.on_ground, self.was_airborne) {
             (true, true) => {
-                // The landing writes the legs alone. Its grenade clause is a
-                // `both` one, but the capture's own landing -- the frame the
-                // thrower's third frag knocks him off his feet -- reads one
-                // sample of the land anim with `torsoAnim` unchanged through
-                // it, where [`play_event`]'s rule would have flipped the
-                // restart toggle.
+                // The landing writes the legs alone, `both` clause or not
+                // (combat doc, 1.14).
                 let mut sel = script.select_event("land", &conditions);
                 sel.torso = None;
                 Self::play_event(&mut self.anim, &sel, now_ms, resolve, length);
@@ -608,8 +604,9 @@ impl ClientSim {
     /// `fireweapon`'s pistol-ADS clause and `jump`'s two run clauses, neither
     /// of which any capture covers (combat doc 1.14). It is kept general
     /// because it is the convention the continuous selection already follows.
-    /// The landing is the one clause measured to break it, and its caller
-    /// clears the torso of the selection rather than coming through here.
+    /// The landing is the one clause measured to break it -- its `weaponclass
+    /// pistol AND grenade` arm is a `both` one and writes the legs alone --
+    /// and its caller clears the torso of the selection before it gets here.
     fn play_event(
         anim: &mut vcod_common::animscript::AnimState,
         sel: &vcod_common::animscript::Selection,
