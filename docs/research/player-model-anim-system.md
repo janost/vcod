@@ -506,10 +506,17 @@ VERIFIED, superseded pair: no `weaponstate` 2 in either of those captures
 writes `weapAnim`. Carentan's reload step holds index 0 for all 13 samples of
 the state and takes 512 -- index 0 with the toggle flipped -- on the sample the
 state ends; pavlov's `stand_between` holds the rechamber index 4 for all 8 and
-lands on 512 the same way. INFERRED: the putaway stores no anim and the
-`WEAP_DROP` of section 1.8 in `cod11-combat.md` is the event's parm, while the
-write at the end is the pickup's `WEAP_IDLE`. Nothing in the current pair puts
-a weapon away, so this is the only measurement of it there is.
+lands on 512 the same way.
+
+VERIFIED: the putaway does store `WEAP_DROP`. The grenade capture's `to_frag`
+step reads `weapAnim` 521 -- index 9 with the toggle -- for the whole of
+`weaponstate` 2, and 10 then 512 across the raise that follows, one write per
+transition (`cod11-combat.md`, 1.14). INFERRED: the two runs above sent
+`cmd.weapon` 0 in every usercmd and 1.2's setter refuses to write on that
+input, so their unchanged channel is the same artifact as their phantom
+putaways and not a fact about the path. The reading this paragraph used to
+carry, that the putaway stores no anim and the `WEAP_DROP` of section 1.8 is
+only the event's parm, is superseded.
 
 VERIFIED: a rechamber ending writes no `weapAnim` either. Pavlov's
 `single_shot` reads 516 across the sample where `weaponstate` goes 4 to 0, and

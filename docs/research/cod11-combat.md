@@ -518,15 +518,21 @@ conditions.
   cleared to 0 and `weapAnim` set to `WEAP_IDLE` with the toggle flipped,
   unconditionally, on the frame after.
 
-VERIFIED, off the superseded combat captures, which are the only ones that
-ever held a putaway: it writes no `weapAnim` at all, so the `WEAP_DROP` above
-is the event's parm and not a store (`player-model-anim-system.md`, "What
-`weapAnim` is not written by").
+VERIFIED, off the grenade capture, whose `to_frag` step is the first
+uncorrupted putaway anyone has measured: the putaway stores `WEAP_DROP` and
+the pickup's two arms write one `weapAnim` each. VERIFIED, off the superseded
+combat captures: no `weaponstate` 2 in either of them writes `weapAnim` at
+all. INFERRED: those two runs sent `cmd.weapon` 0 every frame, which is the
+one input 1.2's setter refuses to write on, so what they measured is the
+artifact and not the path. 1.14 has the samples.
 
 INFERRED: a reload or a rechamber can therefore be interrupted by a weapon
-switch and a shot or a melee cannot. INFERRED: the raise does not wait for
-`weaponTime`; `raiseTime` only holds off the *next* action, since every other
-check is gated on `weaponTime` being 0.
+switch and a shot or a melee cannot. VERIFIED, off the grenade capture:
+`weaponstate` 1 lasts `raiseTime` and lasts longer than that under a held
+trigger. INFERRED: the state ends on `weaponTime` reaching 0 like every other
+one, and the semi-automatic latch of 1.4 is what holds it open; the earlier
+reading here, that the raise does not wait for `weaponTime`, was inferred from
+the check order alone and no capture then held a raise. 1.14 has the numbers.
 
 #### Where `weaponstate` 2 comes from, and where it does not
 
@@ -827,12 +833,19 @@ states 10 and 11 and starts decaying on the first sample of state 0.
 UNVERIFIED: which store holds the counter there; 1.8's raise is the only 255.0
 store this document has located.
 
-**A `both` event clause is a legs anim.** VERIFIED: each throw frame reads
-`legsAnim` 575 and `torsoAnim` 512, index 63 on the legs and a bare toggle
-flip on the torso, and `mp/playeranim.script`'s standing grenade clause is
+**A `both` event clause is a legs anim.** VERIFIED: each of the three throw
+frames reads `legsAnim` 575, index 63 with the toggle set, and a `torsoAnim`
+that differs from the sample before it by the toggle alone -- 512 on
+`cook_release` and `throw_down`, 0 on `pin_out`, index 0 either way. VERIFIED:
+`mp/playeranim.script`'s standing grenade clause is
 `both pb_stand_grenade_throw`. INFERRED: a `both` clause puts the anim on the
 legs and restarts the torso on no anim at all, which is the same index 0 every
 settled retail pose reads (player-model-anim-system.md, "The weapon channel").
+
+INFERRED, and unmeasured: vcod applies that rule to every event clause, so it
+also reaches `fireweapon`'s pistol-ADS clause, `jump`'s two run clauses and
+`land`'s pistol and grenade clauses. No capture covers any of the four; they
+are inferred from the throw alone.
 
 **As implemented.** `pmove::weapon`'s `pullback`, `grenade_hold`,
 `melee_check` and `melee_finish`, with the two-arm `pickup` and the short
