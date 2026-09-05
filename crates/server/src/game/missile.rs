@@ -352,13 +352,16 @@ impl Missile {
             base: org,
             delta: Vec3::ZERO,
         };
+        // 13.2 writes the surface unconditionally, so a blast in mid-air
+        // takes 0 rather than whatever the last bounce left. A trace that
+        // hits nothing reports a zero normal, which is the `eventParm` 0
+        // retail packs for exactly that case.
         let mut normal = Vec3::ZERO;
+        self.surf_type = 0;
         if let Some(world) = world {
             let down = world.shot_trace(org, org - Vec3::Z * EXPLODE_TRACE_DOWN);
-            if down.fraction < 1.0 {
-                normal = down.normal;
-                self.surf_type = sound_material(down.surface_flags);
-            }
+            normal = down.normal;
+            self.surf_type = sound_material(down.surface_flags);
             if world.point_contents(org) & CONTENTS_WATER != 0 {
                 self.surf_type = WATER_SURF_TYPE;
             }

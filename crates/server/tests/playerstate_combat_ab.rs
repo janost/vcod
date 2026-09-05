@@ -165,10 +165,10 @@ fn torso_flips(trace: &[Trace]) -> usize {
 }
 
 /// ms into the step retail first took a hit at, if it did. From there on the
-/// cone is `P_DamageFeedback`'s and not the weapon machine's, and vcod hurts
-/// nobody with a grenade yet: no missile is spawned. Only the grenade
-/// capture's `throw_down` reaches it, where the third frag goes off at the
-/// thrower's own feet.
+/// cone is `P_DamageFeedback`'s and not the weapon machine's, and a vcod
+/// grenade hurts nobody yet: the missile flies but its blast charges no
+/// damage. Only the grenade capture's `throw_down` reaches it, where the
+/// third frag goes off at the thrower's own feet.
 fn hurt_at_ms(trace: &[Trace]) -> Option<i64> {
     trace.windows(2).find_map(|w| {
         let diff = ((w[1].event_sequence - w[0].event_sequence) & 0xff).min(4);
@@ -216,12 +216,12 @@ fn transient_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
     let hurt = hurt_at_ms(retail).unwrap_or(i64::MAX);
     // The same self-cleaning guard [`TORSO_GAPS`] carries: the skip is only
     // honest for as long as nothing on our side hurts the player either. The
-    // moment the missile pass spawns a grenade and the blast does radius
+    // missile pass spawns the grenade now; the moment its blast does radius
     // damage, this fails and the skip has to go.
     assert!(
         hurt == i64::MAX || hurt_at_ms(ours).is_none(),
         "ours raises EV_PAIN too now; drop the skip in transient_misses -- it \
-         exists only because vcod spawns no missile and does no radius damage"
+         exists only because a vcod grenade does no radius damage yet"
     );
     for r in retail {
         if r.ms >= hurt {

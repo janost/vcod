@@ -161,14 +161,10 @@ pub enum PmType {
     Spectator,
 }
 
-/// One client's simulated state. `pm_type` selects the movement path, the way
-/// retail's own `playerState_t` does: a client is a spectator before the menu
-/// and a player after, within one connection.
-/// The four-slot event ring an entity or a playerstate carries:
-/// `events[seq & 3]` is written and the counter bumped after it, which is
-/// what makes the new slots of a frame the ones *below* the sequence
-/// (`docs/research/cod11-combat.md` section 7). A client, a corpse and a
-/// missile all raise events through one of these.
+/// The four-slot event ring a playerstate or an entity carries: written at
+/// `events[seq & 3]` with the counter bumped after it, so the new slots of a
+/// frame are the ones *below* the sequence
+/// (`docs/research/cod11-combat.md` section 7).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EventRing {
     pub events: [i32; 4],
@@ -201,6 +197,9 @@ impl EventRing {
     }
 }
 
+/// One client's simulated state. `pm_type` selects the movement path, the way
+/// retail's own `playerState_t` does: a client is a spectator before the menu
+/// and a player after, within one connection.
 pub struct ClientSim {
     pub ps: pmove::PlayerState,
     pub pm_type: PmType,

@@ -1416,12 +1416,20 @@ impl Server {
                         ) {
                             let (origin, velocity) =
                                 crate::game::missile::throw_velocity(&me.ps, def);
-                            // The projectile's model, indexed when the item
-                            // was registered (`GameHost::register_item`).
-                            let model = crate::configstrings::model_index(
-                                &self.configstrings,
-                                def.projectile_model.as_deref().unwrap_or_default(),
-                            );
+                            // The projectile's model, indexed when the item was
+                            // registered (`GameHost::register_item`). A miss
+                            // means the map load stopped registering it and
+                            // the client has no model to draw the grenade
+                            // with, which is silent on the wire.
+                            let name = def.projectile_model.as_deref().unwrap_or_default();
+                            let model =
+                                crate::configstrings::model_index(&self.configstrings, name);
+                            if model == 0 && !name.is_empty() {
+                                log::warn!(
+                                    "the grenade client {slot} threw carries {name:?}, \
+                                     which nothing precached"
+                                );
+                            }
                             throws.push((slot, weapon, model, origin, velocity, fuse_left_ms));
                         }
                         continue;
