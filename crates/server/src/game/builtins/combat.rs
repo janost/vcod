@@ -7,7 +7,7 @@ use crate::game::host::{GameHost, SimOp};
 use crate::game::script::CALLBACK_SETUP;
 use crate::game::temp_entity::{Scope, TempEntity};
 use glam::Vec3;
-use vcod_common::net::protocol::ENTITYNUM_WORLD;
+use vcod_common::net::protocol::{ENTITYNUM_WORLD, PROTOCOL_V1};
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
@@ -33,7 +33,8 @@ const EV_OBITUARY: i32 = 201;
 /// player's damage lands (combat doc, section 4.5): the health comes off the
 /// host's vitals here, and everything the sim does with it -- knockback,
 /// the feedback fields, `EV_PAIN` or `EV_DEATH` -- goes out as one `SimOp`.
-/// A killing hit runs `player_die` (5.1): the callback into
+/// A killing hit runs `player_die` (5.1): a grenade still cooking is dropped
+/// live, and the callback into
 /// `CodeCallback_PlayerKilled` is spawned so it runs before this builtin's
 /// caller continues, which is what lets the stock damage callback read
 /// `self.sessionstate` on its next line and find it `"dead"`.
@@ -106,6 +107,7 @@ pub fn finish_player_damage(
         },
     ));
     if fatal {
+        drop_cooking_grenade(host, cx, slot);
         let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
         cx.spawn(
             killed,
@@ -122,6 +124,70 @@ pub fn finish_player_damage(
         );
     }
     Ok(Value::Undefined)
+}
+
+/// The z `player_die` raises the drop's origin by (combat doc, 5.1 step 5).
+const DEATH_DROP_LIFT: f32 = 40.0;
+/// The speed the three draws are scaled by (combat doc, 11.3).
+const DEATH_DROP_SPEED: f32 = 160.0;
+
+/// Combat doc, 5.1 step 5: a player killed with a grenade cooking drops it
+/// live from `r.currentOrigin` with z raised, on whatever fuse was left. The
+/// velocity is 11.3's arithmetic over three `rand()` draws, whose negative
+/// constant puts x and y in (-480, -160] and z in (-160, 0]; the skew is
+/// retail's and is not a random direction.
+///
+/// The origin is the state the tick's moves left, the same one the corpse is
+/// cloned from, and the fuse the mirror `Server::replay_moves` wrote with it.
+fn drop_cooking_grenade(host: &mut GameHost, cx: &mut Cx, slot: usize) {
+    let fuse = host.client_grenade_ms.get(slot).copied().unwrap_or(0);
+    if fuse == 0 {
+        return;
+    }
+    host.client_grenade_ms[slot] = 0;
+    let Some(state) = host.client_entity_states[slot].as_ref() else {
+        return;
+    };
+    let origin = Vec3::from(state.origin(&PROTOCOL_V1)) + Vec3::Z * DEATH_DROP_LIFT;
+    // `self->s.weapon`: the grenade still in hand, since the drop runs ahead
+    // of everything the death callback takes away.
+    let weapon = host.client_weapons[slot].current;
+    let weapons = host.weapons.clone();
+    let Some(def) = weapons.get(weapon as usize) else {
+        return;
+    };
+    // `rand() * -2^-31`, one draw per component in retail's order.
+    let (rx, ry, rz) = (-host.rand_unit(), -host.rand_unit(), -host.rand_unit());
+    // Truncated the way `fire_grenade` truncates a throw's delta (11.2);
+    // `missile::throw_velocity` is where the throw's own truncation sits.
+    let velocity = Vec3::new(
+        DEATH_DROP_SPEED * (2.0 * rx - 1.0),
+        DEATH_DROP_SPEED * (2.0 * ry - 1.0),
+        DEATH_DROP_SPEED * rz,
+    )
+    .trunc();
+    let name = def.projectile_model.clone().unwrap_or_default();
+    let model = crate::configstrings::model_index(&host.configstrings, &name);
+    if model == 0 && !name.is_empty() {
+        log::warn!(
+            "the grenade client {slot} died holding carries {name:?}, which nothing precached"
+        );
+    }
+    let now = host.level_time_ms;
+    let spawned = host.missiles.fire_grenade(
+        &mut host.ents,
+        cx,
+        model,
+        slot,
+        weapon,
+        origin,
+        velocity,
+        fuse,
+        now,
+    );
+    if let Err(e) = spawned {
+        log::warn!("the grenade client {slot} died holding was not dropped: {e:?}");
+    }
 }
 
 fn as_i32(v: &Value) -> Result<i32, ErrorKind> {
@@ -211,6 +277,7 @@ pub fn suicide_effects(host: &mut GameHost, cx: &mut Cx, slot: usize) -> Option<
             fatal: true,
         },
     ));
+    drop_cooking_grenade(host, cx, slot);
     let me = Value::Entity(vcod_gsc::EntId(slot as u32));
     let weapon = host.client_weapons[slot].current as usize;
     let weapon = crate::items::item_name(weapon).unwrap_or("none");

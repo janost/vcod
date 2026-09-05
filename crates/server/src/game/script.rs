@@ -363,6 +363,15 @@ impl ScriptRuntime {
         }
     }
 
+    /// A client's `ps.grenadeTimeLeft` as the tick's moves left it, for the
+    /// death drop (`docs/research/cod11-combat.md` 5.1 step 5). 0 for a slot
+    /// with no sim.
+    pub fn set_client_grenade_ms(&mut self, slot: usize, ms: i32) {
+        if let Some(g) = self.host.client_grenade_ms.get_mut(slot) {
+            *g = ms;
+        }
+    }
+
     /// `Cmd_MenuResponse_f` (0x486d8): notify the client's entity with the
     /// menu's **name** and the response. The name, not the index the client
     /// sent -- retail reads configstring `CsRange::Menu.start + index` back

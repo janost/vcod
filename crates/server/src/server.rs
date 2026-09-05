@@ -1835,10 +1835,14 @@ impl Server {
         let proto = self.proto;
         if let Some(rt) = self.script.as_mut() {
             for (slot, c) in self.clients.iter().enumerate() {
-                let state = c.as_ref().and_then(|c| {
-                    Some(c.sim.as_ref()?.to_entity(proto, slot, c.last_processed_st))
-                });
-                rt.set_client_entity_state(slot, state);
+                let sim = c
+                    .as_ref()
+                    .and_then(|c| Some((c.sim.as_ref()?, c.last_processed_st)));
+                rt.set_client_entity_state(slot, sim.map(|(s, st)| s.to_entity(proto, slot, st)));
+                // The cook a death drops, off the same state: both kill paths
+                // run later in this tick, so what they read is this frame's
+                // and not the last one's.
+                rt.set_client_grenade_ms(slot, sim.map_or(0, |(s, _)| s.ps.grenade_time_left_ms));
             }
         }
         moved

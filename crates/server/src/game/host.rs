@@ -179,6 +179,11 @@ pub struct GameHost {
     /// Each client's last usercmd buttons, mirrored in by `Server` before
     /// the frame, for `useButtonPressed`.
     pub client_buttons: Vec<u8>,
+    /// Each client's `ps.grenadeTimeLeft`, mirrored in by
+    /// `Server::replay_moves` with the entity states, which is the last read
+    /// of it before a kill this tick: what a death drops
+    /// (`docs/research/cod11-combat.md` 5.1 step 5).
+    pub client_grenade_ms: Vec<i32>,
     /// Each client's entity state as the tick's moves left it, mirrored in by
     /// `Server::replay_moves` before the script frame. `cloneplayer` copies
     /// the slot's entry into the body queue; nothing else reads it.
@@ -270,6 +275,7 @@ impl GameHost {
             client_weapon_ops: Vec::new(),
             client_vitals: vec![Vitals::default(); MAX_CLIENTS],
             client_buttons: vec![0; MAX_CLIENTS],
+            client_grenade_ms: vec![0; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
             weapons: std::rc::Rc::new(crate::weapons::WeaponTable::empty()),
