@@ -4,10 +4,11 @@
 #![allow(dead_code)]
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
 use vcod_common::net::{NetClient, NetEvent, Transport};
 use vcod_server::Server;
 
@@ -163,6 +164,341 @@ pub fn connect(
 }
 
 // --------------------------------------------------------------- the fixtures
+
+pub fn cfg(map: &str, gametype: &str) -> vcod_server::ServerConfig {
+    vcod_server::ServerConfig {
+        map: map.into(),
+        hostname: "vcod test".into(),
+        max_clients: 8,
+        gametype: gametype.into(),
+        test_entities: 0,
+        trace: false,
+    }
+}
+
+/// One server frame, and one usercmd, in ms. A client sends cmds faster than
+/// the server ticks; the replay sends two per frame because a tap one frame
+/// long can land on the very frame a semi-automatic weapon's `weaponTime`
+/// expires, where the latch swallows it (combat doc, section 1.4) and the
+/// capture's own tap, 32 ms out of every 183, does not.
+pub const FRAME_MS: i64 = 50;
+pub const CMD_MS: i64 = 25;
+
+/// How long a `wait_ready` step holds its input before it starts looking for
+/// a ready weapon. The capture's own floor: every `wait_ready` step of both
+/// fixtures reports `waited_ready_ms` around 505, even the ones that had
+/// nothing to wait for. Without it the wait ends on the snapshot that arrived
+/// before the step's first cmd was even simulated, and a step opens with the
+/// weapon still busy from the one before it.
+pub const WAIT_FLOOR_MS: i64 = 500;
+
+pub struct Step {
+    pub label: String,
+    pub base: UserCmd,
+    pub pulse_buttons: u8,
+    pub pulse_wbuttons: u8,
+    pub pulses: u32,
+    pub pulse_period_ms: i64,
+    pub hold_ms: i64,
+    pub walks: bool,
+    pub wait_ready: bool,
+    /// The weapon byte the probe sent through the step, `cmd.weapon`: retail
+    /// reads a byte that differs from `ps.weapon` as a request to holster
+    /// (`cod11-combat.md` section 1.8), so the replay has to send the same
+    /// one. Defaults to the joined weapon's CS 7 index for a capture taken
+    /// before the key existed.
+    pub weapon: u8,
+    /// Bits held down for the first `press_ms` of the step rather than
+    /// tapped: a grenade is cooked by holding the trigger and thrown by the
+    /// release, which the tap machinery above cannot express.
+    pub press_buttons: u8,
+    pub press_ms: i64,
+    /// A `cmd.weapon` the step asks for `switch_ms` into itself, held on
+    /// every cmd after that: retail's pickup half reads the byte again on the
+    /// frame the putaway ends, so a byte sent once leaves the old weapon in
+    /// hand (`cod11-combat.md` section 1.8).
+    pub switch_weapon: u8,
+    pub switch_ms: i64,
+    /// Retail's per-snapshot trace: (weaponstate, weapAnim, torsoAnim,
+    /// eventSequence, events).
+    pub trace: Vec<Trace>,
+}
+
+#[derive(Clone, Copy)]
+pub struct Trace {
+    /// ms into the step; retail's is the probe's clock, ours the frame grid.
+    pub ms: i64,
+    pub weaponstate: i32,
+    pub weap_anim: i32,
+    pub torso_anim: i32,
+    pub event_sequence: i32,
+    pub events: [i32; 4],
+    /// `fWeaponPosFrac` and `aimSpreadScale`; `None` on a capture taken
+    /// before the trace carried them.
+    pub pos_frac: Option<f32>,
+    pub spread: Option<f32>,
+    /// `grenadeTimeLeft` and `weaponDelay`; `None` on a capture taken before
+    /// the trace carried them.
+    pub grenade_time_left: Option<i32>,
+    pub weapon_delay: Option<i32>,
+}
+
+pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
+    let mut steps: Vec<Step> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        if let Some(label) = line
+            .strip_prefix("[step ")
+            .and_then(|l| l.strip_suffix(']'))
+        {
+            steps.push(Step {
+                label: label.into(),
+                base: NULL_USERCMD,
+                pulse_buttons: 0,
+                pulse_wbuttons: 0,
+                pulses: 0,
+                pulse_period_ms: 0,
+                hold_ms: 0,
+                walks: false,
+                wait_ready: false,
+                weapon: default_weapon,
+                press_buttons: 0,
+                press_ms: 0,
+                switch_weapon: 0,
+                switch_ms: 0,
+                trace: Vec::new(),
+            });
+            continue;
+        }
+        let step = steps.last_mut().expect("a line before any [step]");
+        let kv = |rest: &str| -> BTreeMap<String, String> {
+            rest.split_whitespace()
+                .filter_map(|t| t.split_once('='))
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect()
+        };
+        if let Some(rest) = line.strip_prefix("!input ") {
+            let m = kv(rest);
+            let i = |k: &str| m[k].parse::<i64>().unwrap();
+            step.base.buttons = i("buttons") as u8;
+            step.base.wbuttons = i("wbuttons") as u8;
+            step.base.up = i("up") as i8;
+            step.base.forward = i("forward") as i8;
+            step.base.right = i("right") as i8;
+            step.base.angles[1] = i("yaw") as i32;
+            // The `throw_down` step aims 45 degrees below the horizon; every
+            // capture taken before the column existed left it level.
+            if let Some(p) = m.get("pitch") {
+                step.base.angles[0] = p.parse::<i64>().unwrap() as i32;
+            }
+            for (key, into) in [
+                ("press_buttons", &mut step.press_buttons),
+                ("switch_weapon", &mut step.switch_weapon),
+            ] {
+                if let Some(v) = m.get(key) {
+                    *into = v.parse::<u8>().unwrap();
+                }
+            }
+            for (key, into) in [
+                ("press_ms", &mut step.press_ms),
+                ("switch_ms", &mut step.switch_ms),
+            ] {
+                if let Some(v) = m.get(key) {
+                    *into = v.parse::<i64>().unwrap();
+                }
+            }
+            step.pulse_buttons = i("pulse_buttons") as u8;
+            step.pulse_wbuttons = i("pulse_wbuttons") as u8;
+            step.pulses = i("pulses") as u32;
+            step.pulse_period_ms = i("pulse_period_ms");
+            step.hold_ms = i("hold_ms");
+            step.walks = i("walks") != 0;
+            step.wait_ready = i("wait_ready") != 0;
+            if let Some(w) = m.get("weapon") {
+                step.weapon = w.parse::<u8>().unwrap();
+            }
+        } else if let Some(rest) = line.strip_prefix("!trace ") {
+            let m = kv(rest);
+            let i = |k: &str| m[k].parse::<i32>().unwrap();
+            let f = |k: &str| m.get(k).map(|v| v.parse::<f32>().unwrap());
+            step.trace.push(Trace {
+                ms: m["ms"].parse::<i64>().unwrap(),
+                weaponstate: i("weaponstate"),
+                weap_anim: i("weapAnim"),
+                torso_anim: i("torsoAnim"),
+                event_sequence: i("eventSequence"),
+                events: [
+                    i("events[0]"),
+                    i("events[1]"),
+                    i("events[2]"),
+                    i("events[3]"),
+                ],
+                pos_frac: f("fWeaponPosFrac"),
+                spread: f("aimSpreadScale"),
+                grenade_time_left: m.get("grenadeTimeLeft").map(|v| v.parse().unwrap()),
+                weapon_delay: m.get("weaponDelay").map(|v| v.parse().unwrap()),
+            });
+        }
+        // `!observed` and the settled field lines are not compared here.
+    }
+    steps
+}
+
+/// When each of a step's taps goes down, in ms from the step's start: one
+/// usercmd long, at the first cmd at or after the capture's own tap time. The
+/// capture holds the bit 32 ms out of every `pulse_period_ms`, which no cmd
+/// grid divides evenly, so the tap is placed rather than sampled -- sampling
+/// it drops the taps that fall between two cmds.
+fn taps(step: &Step) -> Vec<i64> {
+    (0..i64::from(step.pulses))
+        .map(|k| (k * step.pulse_period_ms + CMD_MS - 1) / CMD_MS * CMD_MS)
+        .collect()
+}
+
+/// Replays the capture's taps against our server: one trace per snapshot
+/// per step, the way the probe traced retail's.
+/// The weapon byte a cmd carries: the step's switch once it has been asked
+/// for, the step's own byte otherwise, and our own `ps.weapon` where the
+/// capture recorded a 0. A 0 is not neutral -- retail reads a `cmd.weapon`
+/// differing from `ps.weapon` as a request to holster -- and the capture's 0
+/// means the probe was holding nothing, which is a fact about retail's
+/// playerstate and not an input to replay.
+fn weapon_byte(step: &Step, t: i64, ours_now: u8) -> u8 {
+    if step.switch_weapon != 0 && t >= step.switch_ms {
+        step.switch_weapon
+    } else if step.weapon != 0 {
+        step.weapon
+    } else {
+        ours_now
+    }
+}
+
+/// One snapshot of a replayed step: the playerstate the client decoded and
+/// the entities that came with it. A gate over the weapon channel reads the
+/// first, one over the missiles reads the second.
+pub struct Sample {
+    pub ms: i64,
+    pub server_time: i32,
+    pub ps: vcod_common::net::msg::PlayerState,
+    pub entities: std::collections::BTreeMap<u32, vcod_common::net::msg::EntityState>,
+    /// How many blasts the server left for the radius damage pass on the
+    /// tick this snapshot came from.
+    pub explosions: usize,
+}
+
+/// Replays a capture's steps against our server, one sample per snapshot per
+/// step, the way the probe traced retail's. `place` puts the client where the
+/// capture's header says it stood before the first step: a gate about where a
+/// grenade lands needs the same geometry in front of the thrower, and the
+/// gametype spawn is weighted-random.
+pub fn replay(
+    map: &str,
+    gametype: &str,
+    steps: &[Step],
+    join: (&str, &str),
+    fs: vcod_common::pk3::Pk3Fs,
+    place: Option<([f32; 3], f32)>,
+) -> Vec<Vec<Sample>> {
+    let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let fs = std::rc::Rc::new(fs);
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(map, gametype), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(fs).expect("load the scripts");
+    let q = std::rc::Rc::new(RefCell::new(Queues::default()));
+    let (mut cl, _join) = self::join(&mut sv, &q, &mut now, join.0, join.1);
+    // The client sends absolute view angles: `NetClient::send_frame`
+    // subtracts the playerstate's `delta_angles` off them, so the spawn yaw
+    // `place_client` leaves there is cancelled unless the capture's own yaw
+    // is offset by it. A capture's `!input yaw` is relative to the facing its
+    // header records.
+    let mut yaw_short = 0;
+    if let Some((origin, yaw)) = place {
+        sv.place_client(0, origin, yaw);
+        yaw_short = (yaw * 65536.0 / 360.0) as i32;
+    }
+    let p = &vcod_common::net::protocol::PROTOCOL_V1;
+    let mut out = Vec::new();
+    for step in steps {
+        let mut samples = Vec::new();
+        // The held input, carrying the weapon byte the probe sent: a byte that
+        // differs from `ps.weapon` is a holster request, so a replay that left
+        // it 0 would not be running the capture's input.
+        let mut base = step.base;
+        base.weapon = step.weapon;
+        base.angles[1] = base.angles[1].wrapping_add(yaw_short);
+        let held = |cl: &vcod_common::net::NetClient<ClientEnd>| -> u8 {
+            cl.snapshots()
+                .newest()
+                .map_or(0, |s| s.ps.field_i32(p, "weapon") as u8)
+        };
+        if step.weapon == 0 {
+            base.weapon = held(&cl);
+        }
+        if step.wait_ready {
+            for i in 0..100 {
+                now += Duration::from_millis(FRAME_MS as u64);
+                cl.send_frame(&base);
+                self::step(&mut sv, &q, &mut cl, now);
+                let ready = cl
+                    .snapshots()
+                    .newest()
+                    .is_some_and(|s| s.ps.field_i32(p, "weaponstate") == 0);
+                if i * FRAME_MS >= WAIT_FLOOR_MS && ready {
+                    break;
+                }
+            }
+        }
+        // The state the step opens in, before its first tap: retail's own
+        // first sample is the one that arrived with the tap still in flight,
+        // so without it a shot on the first frame falls outside every
+        // window a gate looks at.
+        if let Some(s) = cl.snapshots().newest() {
+            samples.push(sample_of(s, 0, sv.pending_explosions().len()));
+        }
+        let frames = (step.hold_ms / FRAME_MS).max(1);
+        let taps = taps(step);
+        for i in 0..frames {
+            let ours_now = held(&cl);
+            for half in 0..2 {
+                let t = i * FRAME_MS + half * CMD_MS;
+                let mut cmd = base;
+                cmd.weapon = weapon_byte(step, t, ours_now);
+                if t < step.press_ms {
+                    cmd.buttons |= step.press_buttons;
+                }
+                if taps.contains(&t) {
+                    cmd.buttons |= step.pulse_buttons;
+                    cmd.wbuttons |= step.pulse_wbuttons;
+                }
+                now += Duration::from_millis(CMD_MS as u64);
+                cl.pump_at(now);
+                cl.send_frame(&cmd);
+            }
+            self::step(&mut sv, &q, &mut cl, now);
+            let blasts = sv.pending_explosions().len();
+            if let Some(s) = cl.snapshots().newest() {
+                samples.push(sample_of(s, (i + 1) * FRAME_MS, blasts));
+            }
+        }
+        out.push(samples);
+    }
+    out
+}
+
+fn sample_of(s: &vcod_common::net::snapshot::Snapshot, ms: i64, explosions: usize) -> Sample {
+    Sample {
+        ms,
+        server_time: s.server_time,
+        ps: s.ps.clone(),
+        entities: s.entities.clone(),
+        explosions,
+    }
+}
 
 /// Every `# key value` clause in a fixture's header block with this key. The
 /// callers insist on exactly one: the header is prose as well as data, so a

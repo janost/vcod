@@ -299,6 +299,9 @@ pub struct Server {
     /// Attacks this tick's moves took, in the order they happened. Filled by
     /// `replay_moves`, drained by `tick` into traces before the script runs.
     pending_attacks: Vec<Attack>,
+    /// The blasts this frame's missile pass set off, for the radius damage
+    /// pass to charge (`crate::game::missile::Explosion`).
+    pending_explosions: Vec<crate::game::missile::Explosion>,
     /// Retail's `+set name value`: applied last in `cvars`, over
     /// `default_mp.cfg` and the config's own, so a run can turn a script
     /// cvar such as `scr_friendlyfire` on without a code change.
@@ -431,6 +434,7 @@ impl Server {
             anims: None,
             weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
             pending_attacks: Vec::new(),
+            pending_explosions: Vec::new(),
             cvar_overrides: Vec::new(),
             pending_script_commands: Vec::new(),
             hitlocs: crate::game::combat::HitLocTable::default(),
@@ -1014,6 +1018,12 @@ impl Server {
         }
     }
 
+    /// The blasts the last tick's missile pass set off. Test-facing until
+    /// the radius damage pass reads them.
+    pub fn pending_explosions(&self) -> &[crate::game::missile::Explosion] {
+        &self.pending_explosions
+    }
+
     /// `DeathmatchScoreboardMessage` (`.so` 0x459c0): `b <numRows> <axis>
     /// <allies>{ <client> <score> <ping> <time> <icon>}*`, one row per online
     /// client (`docs/research/cod11-hud-protocol.md` section 3).
@@ -1368,7 +1378,7 @@ impl Server {
         // (`crate::game::combat`).
         let mut hits = Vec::new();
         let mut impacts = Vec::new();
-        let mut throws = Vec::new();
+        let mut throws: Vec<(usize, u8, i32, glam::Vec3, glam::Vec3, i32)> = Vec::new();
         {
             let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
                 .clients
@@ -1397,8 +1407,23 @@ impl Server {
                         weapon,
                         fuse_left_ms,
                     } => {
-                        // Task 6 spawns the missile from these.
-                        throws.push((slot, weapon, fuse_left_ms));
+                        // The throw leaves the thrower's eye at the weapon
+                        // file's speed (combat doc, 11.3); the missile pass
+                        // below is what spawns it.
+                        if let (Some((_, me)), Some(def)) = (
+                            sims.iter().find(|(s, _)| *s == slot),
+                            weapons.get(weapon as usize),
+                        ) {
+                            let (origin, velocity) =
+                                crate::game::missile::throw_velocity(&me.ps, def);
+                            // The projectile's model, indexed when the item
+                            // was registered (`GameHost::register_item`).
+                            let model = crate::configstrings::model_index(
+                                &self.configstrings,
+                                def.projectile_model.as_deref().unwrap_or_default(),
+                            );
+                            throws.push((slot, weapon, model, origin, velocity, fuse_left_ms));
+                        }
                         continue;
                     }
                 };
@@ -1452,6 +1477,39 @@ impl Server {
             for te in impacts {
                 rt.push_temp_entity(te);
             }
+            // The throws the weapon step queued, then one `G_RunMissile`
+            // each. Retail's missile pass runs ahead of the damage
+            // callbacks, and a usercmd is executed between frames, so a
+            // grenade thrown on this tick was armed on the last one and has
+            // already flown a frame by the time the snapshot goes out
+            // (`docs/research/cod11-combat.md` sections 11 and 12).
+            for (slot, weapon, model, origin, velocity, fuse_left_ms) in throws {
+                rt.fire_grenade(
+                    slot,
+                    weapon,
+                    model,
+                    origin,
+                    velocity,
+                    fuse_left_ms,
+                    self.sv_time_ms.wrapping_sub(FRAME_MS),
+                );
+            }
+            let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
+                .clients
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
+                .collect();
+            let frame = rt.run_missiles(
+                self.world.as_ref().map(|w| &w.collision),
+                &sims,
+                self.sv_time_ms,
+            );
+            for te in frame.temp {
+                rt.push_temp_entity(te);
+            }
+            // What the radius damage pass charges, on this same frame.
+            self.pending_explosions = frame.exploded;
             // The client commands the packet pass queued, on this frame's
             // clock: retail runs `Cmd_Kill_f` ahead of the damage callbacks
             // too, and a thread started here sees `level.time` already
@@ -1889,6 +1947,11 @@ impl Server {
                 if te.scope == temp_entity::Scope::Broadcast {
                     visible.insert(*n, e.clone());
                 }
+            }
+            // A missile carries `SVF_BROADCAST` too (combat doc, 11.1), so
+            // it skips the cull the way a broadcast temp entity does.
+            if let Some(rt) = self.script.as_ref() {
+                visible.extend(rt.missiles().entities(self.proto));
             }
 
             let mut ps = sim.to_wire(self.proto, slot as i32, command_time);

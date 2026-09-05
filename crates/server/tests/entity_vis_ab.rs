@@ -114,7 +114,7 @@ fn ours(
     let fs = Rc::new(fs);
     let mut now = Instant::now();
     let mut sv = vcod_server::Server::new(cfg(map), now);
-    sv.load_world(vcod_server::world::World::from_bsp(bsp));
+    sv.load_world(vcod_server::world::World::from_bsp(bsp, None));
     sv.load_scripts(fs).expect("load the scripts");
     let q = Rc::new(RefCell::new(Queues::default()));
     let (cl, _join) = common::join(&mut sv, &q, &mut now, team, weapon);

@@ -245,6 +245,8 @@ pub struct GameHost {
     /// The eight corpse entities `cloneplayer` fills
     /// (`crate::game::bodies`).
     pub bodies: crate::game::bodies::BodyQueue,
+    /// The grenades in the air (`crate::game::missile`).
+    pub missiles: crate::game::missile::Missiles,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -280,6 +282,7 @@ impl GameHost {
             turret_pitch: std::collections::HashMap::new(),
             temp_entities: Vec::new(),
             bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
+            missiles: crate::game::missile::Missiles::default(),
         }
     }
 

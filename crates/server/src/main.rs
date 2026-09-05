@@ -90,7 +90,7 @@ fn main() -> Result<()> {
         },
         Instant::now(),
     );
-    server.load_world(vcod_server::world::World::from_bsp(&bsp));
+    server.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     for pair in &args.set {
         let Some((name, value)) = pair.split_once('=') else {
             bail!("--set takes NAME=VALUE, got {pair:?}");
