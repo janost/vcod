@@ -7,6 +7,7 @@
 
 use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
+use crate::console;
 use crate::game::host::ClientEvent;
 use crate::game::script;
 use crate::game::temp_entity;
@@ -328,6 +329,18 @@ pub struct Server {
     /// it, which is what keeps a switch from being undone the frame after it
     /// lands.
     weapon_changes: Vec<(usize, u8)>,
+    /// Commands waiting to run, drained by `drain_console` at the top of
+    /// `tick` (`Cbuf_Execute`, docs/research/cod11-map-cycle.md section 5.2).
+    console: console::Console,
+    /// `sv_mapRotationCurrent`, consumed one token per `map_rotate`.
+    rotation: console::Rotation,
+    /// `sv_mapRotation`, mirrored here by `set_cvar` (doc section 5).
+    sv_map_rotation: String,
+    /// `svs.snapFlagServerBit`, toggled by a map load or restart (doc
+    /// section 3 step 13, section 4 step 4). Read once `spawn_server` and
+    /// `map_restart` exist.
+    #[allow(dead_code)]
+    snap_flag_server_bit: u32,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -441,6 +454,10 @@ impl Server {
             fs: None,
             hit_rigs: Default::default(),
             weapon_changes: Vec::new(),
+            console: console::Console::new(),
+            rotation: console::Rotation::default(),
+            sv_map_rotation: String::new(),
+            snap_flag_server_bit: 0,
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -1351,10 +1368,58 @@ impl Server {
         self.script.as_mut()?.client_pers(slot, key)
     }
 
-    /// A `+set` for the next `load_scripts`.
+    /// A `+set` for the next `load_scripts`. `sv_mapRotation` and
+    /// `g_gametype` also mirror into their own fields, so `--set` and
+    /// `map_rotate`'s `gametype` token both work through one value
+    /// (docs/research/cod11-map-cycle.md section 5).
     pub fn set_cvar(&mut self, name: &str, value: &str) {
         self.cvar_overrides
             .push((name.to_string(), value.to_string()));
+        match name {
+            "sv_mapRotation" => self.sv_map_rotation = value.to_string(),
+            "g_gametype" => self.cfg.gametype = value.to_string(),
+            _ => {}
+        }
+    }
+
+    /// Queues a line for `drain_console` to run at the top of the next tick,
+    /// `Cbuf_AddText`'s `EXEC_APPEND`.
+    pub fn push_console(&mut self, line: &str) {
+        self.console.push_back(line.to_string());
+    }
+
+    /// `Cbuf_Execute` for the three commands the map cycle uses; anything
+    /// else logs and drops. A command pushed by a builtin during the script
+    /// pass runs here, at the top of the next tick, which is `EXEC_APPEND`.
+    fn drain_console(&mut self) {
+        while let Some(line) = self.console.pop_front() {
+            match console::Command::parse(&line) {
+                console::Command::Map(map) => log::info!("console: map {map} (not wired yet)"),
+                console::Command::MapRestart => {
+                    log::info!("console: map_restart (not wired yet)")
+                }
+                console::Command::MapRotate => {
+                    let full = self.sv_map_rotation.clone();
+                    let before = self.cfg.gametype.clone();
+                    let next = self.rotation.rotate(&full, &mut self.cfg.gametype);
+                    for w in self.rotation.warnings.drain(..) {
+                        log::warn!("{w}");
+                    }
+                    if self.cfg.gametype != before {
+                        // A gametype change discards what exitLevel(true)
+                        // asked to keep (doc section 5.2).
+                        if let Some(rt) = self.script.as_mut() {
+                            rt.host.save_persist = false;
+                        }
+                    }
+                    match next {
+                        console::Rotate::Map(m) => self.console.push_front(format!("map {m}")),
+                        console::Rotate::Restart => self.console.push_front("map_restart".into()),
+                    }
+                }
+                console::Command::Unknown(l) => log::warn!("console: unknown command {l:?}"),
+            }
+        }
     }
 
     const FALLBACK_SPAWN: ([f32; 3], f32) = ([0.0, 0.0, 64.0], 0.0);
@@ -1393,6 +1458,7 @@ impl Server {
     }
 
     pub fn tick(&mut self, now: Instant) {
+        self.drain_console();
         self.check_timeouts(now);
         self.sv_time_ms = self.sv_time_ms.wrapping_add(FRAME_MS);
         // Wall gap between ticks: sv_time always advances exactly FRAME_MS, so

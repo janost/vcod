@@ -256,6 +256,11 @@ pub struct GameHost {
     /// on a client (combat doc, 14.2): the `radiusDamage` builtin is the one
     /// reader, and a grenade's own blast never looks at it.
     pub ignore_radius_damage: bool,
+    /// The value retail's `vmMain` case 16 returns
+    /// (docs/research/cod11-map-cycle.md section 1): whether the outgoing
+    /// level asked to keep its script `pers` and `game` variable across the
+    /// boundary. Written by the `map_restart`/`exitLevel` builtins.
+    pub save_persist: bool,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -294,6 +299,7 @@ impl GameHost {
             bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
             missiles: crate::game::missile::Missiles::default(),
             ignore_radius_damage: false,
+            save_persist: false,
         }
     }
 
