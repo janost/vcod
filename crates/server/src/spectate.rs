@@ -124,6 +124,7 @@ fn pm_input(cmd: &UserCmd) -> PmInput {
         lean_left: cmd.wbuttons & msg::WBUTTON_LEAN_LEFT != 0,
         lean_right: cmd.wbuttons & msg::WBUTTON_LEAN_RIGHT != 0,
         attack: cmd.buttons & msg::BUTTON_ATTACK != 0,
+        melee: cmd.buttons & msg::BUTTON_MELEE != 0,
         reload: cmd.wbuttons & msg::WBUTTON_RELOAD != 0,
         ads: cmd.buttons & msg::BUTTON_ADS != 0,
         use_button: cmd.buttons & msg::BUTTON_USE != 0,
@@ -519,12 +520,12 @@ impl ClientSim {
         match (self.ps.on_ground, self.was_airborne) {
             (true, true) => {
                 let sel = script.select_event("land", &conditions);
-                self.anim.event(&sel, now_ms, resolve, length);
+                Self::play_event(&mut self.anim, &sel, now_ms, resolve, length);
             }
             (false, false) if jumped && !self.ps.on_ladder => {
                 let event = if back { "jumpbk" } else { "jump" };
                 let sel = script.select_event(event, &conditions);
-                self.anim.event(&sel, now_ms, resolve, length);
+                Self::play_event(&mut self.anim, &sel, now_ms, resolve, length);
             }
             _ => {}
         }
@@ -537,7 +538,7 @@ impl ClientSim {
                 continue;
             };
             let sel = script.select_event(name, &conditions);
-            self.anim.event(&sel, now_ms, resolve, length);
+            Self::play_event(&mut self.anim, &sel, now_ms, resolve, length);
         }
         // Nothing is selected while off the ground -- retail returns before
         // the selection unless the ladder flag is set (@0x323a2), which is
@@ -556,6 +557,31 @@ impl ClientSim {
         // otherwise hold its torso until the landing.
         self.anim.clear_torso(now_ms);
         self.was_airborne = !self.ps.on_ground;
+    }
+
+    /// One event clause on the two channels. A `both` clause is the whole
+    /// body: retail puts the anim on the legs and restarts the torso on no
+    /// anim at all, which is the same 0 every settled pose reads. The
+    /// capture's grenade throws are the evidence -- `legsAnim` 575 with
+    /// `torsoAnim` 512, the same index 63 on one channel and a bare toggle
+    /// flip on the other.
+    fn play_event(
+        anim: &mut vcod_common::animscript::AnimState,
+        sel: &vcod_common::animscript::Selection,
+        now_ms: i32,
+        resolve: impl Fn(&str) -> Option<i32>,
+        length: impl Fn(&str) -> Option<u32>,
+    ) {
+        if sel.legs.is_some() && sel.torso.is_some() {
+            let legs_only = vcod_common::animscript::Selection {
+                legs: sel.legs.clone(),
+                torso: None,
+            };
+            anim.event(&legs_only, now_ms, resolve, length);
+            anim.restart_torso_empty(now_ms);
+            return;
+        }
+        anim.event(sel, now_ms, resolve, length);
     }
 
     /// The anim conditions of the moment, for an event raised outside the
@@ -960,6 +986,7 @@ impl ClientSim {
         set("weapAnim", self.ps.weap_anim);
         set("weaponTime", self.ps.weapon_time_ms);
         set("weaponDelay", self.ps.weapon_delay_ms);
+        set("grenadeTimeLeft", self.ps.grenade_time_left_ms);
         set("weaponrechamber[0]", self.ps.weapon_rechamber as u32 as i32);
         set(
             "weaponrechamber[1]",
@@ -1526,12 +1553,13 @@ mod tests {
             weapon: 7,
             ..Default::default()
         });
-        assert!(all.attack && all.reload && all.ads && all.use_button);
+        assert!(all.attack && all.melee && all.reload && all.ads && all.use_button);
         assert_eq!(all.weapon, 7);
         assert!(!all.walk_slow);
         assert_eq!(
             PmInput {
                 attack: false,
+                melee: false,
                 reload: false,
                 ads: false,
                 use_button: false,

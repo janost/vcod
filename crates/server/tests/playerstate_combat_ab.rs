@@ -19,12 +19,12 @@ use std::time::{Duration, Instant};
 use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
 use vcod_common::net::protocol::PROTOCOL_V1;
 
-fn cfg(map: &str) -> vcod_server::ServerConfig {
+fn cfg(map: &str, gametype: &str) -> vcod_server::ServerConfig {
     vcod_server::ServerConfig {
         map: map.into(),
         hostname: "vcod test".into(),
         max_clients: 8,
-        gametype: "dm".into(),
+        gametype: gametype.into(),
         test_entities: 0,
         trace: false,
     }
@@ -32,6 +32,8 @@ fn cfg(map: &str) -> vcod_server::ServerConfig {
 
 const EV_FIRE_WEAPON: i32 = 159;
 const EV_FIRE_WEAPON_LASTSHOT: i32 = 161;
+const EV_MELEE_SWIPE: i32 = 164;
+const EV_PAIN: i32 = 187;
 
 /// One server frame, and one usercmd, in ms. A client sends cmds faster than
 /// the server ticks; the replay sends two per frame because a tap one frame
@@ -69,6 +71,15 @@ const SKIPPED: &[(&str, &str)] = &[(
 /// into a lie.
 const ANIM_GAPS: &[(&str, &str, &str)] = &[];
 
+/// Steps whose `torsoAnim` is not compared, by map, with the reason. Same
+/// self-cleaning guard as [`ANIM_GAPS`]: an entry that starts matching fails.
+const TORSO_GAPS: &[(&str, &str, &str)] = &[(
+    "mp_carentan",
+    "melee_tap",
+    "the swing's torso anim is the animscript's `meleeattack` clause and \
+     `spectate.rs::weapon_anim_event` maps no event to it yet",
+)];
+
 struct Step {
     label: String,
     base: UserCmd,
@@ -85,6 +96,17 @@ struct Step {
     /// one. Defaults to the joined weapon's CS 7 index for a capture taken
     /// before the key existed.
     weapon: u8,
+    /// Bits held down for the first `press_ms` of the step rather than
+    /// tapped: a grenade is cooked by holding the trigger and thrown by the
+    /// release, which the tap machinery above cannot express.
+    press_buttons: u8,
+    press_ms: i64,
+    /// A `cmd.weapon` the step asks for `switch_ms` into itself, held on
+    /// every cmd after that: retail's pickup half reads the byte again on the
+    /// frame the putaway ends, so a byte sent once leaves the old weapon in
+    /// hand (`cod11-combat.md` section 1.8).
+    switch_weapon: u8,
+    switch_ms: i64,
     /// Retail's per-snapshot trace: (weaponstate, weapAnim, torsoAnim,
     /// eventSequence, events).
     trace: Vec<Trace>,
@@ -103,6 +125,10 @@ struct Trace {
     /// before the trace carried them.
     pos_frac: Option<f32>,
     spread: Option<f32>,
+    /// `grenadeTimeLeft` and `weaponDelay`; `None` on a capture taken before
+    /// the trace carried them.
+    grenade_time_left: Option<i32>,
+    weapon_delay: Option<i32>,
 }
 
 fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
@@ -127,6 +153,10 @@ fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
                 walks: false,
                 wait_ready: false,
                 weapon: default_weapon,
+                press_buttons: 0,
+                press_ms: 0,
+                switch_weapon: 0,
+                switch_ms: 0,
                 trace: Vec::new(),
             });
             continue;
@@ -147,6 +177,27 @@ fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
             step.base.forward = i("forward") as i8;
             step.base.right = i("right") as i8;
             step.base.angles[1] = i("yaw") as i32;
+            // The `throw_down` step aims 45 degrees below the horizon; every
+            // capture taken before the column existed left it level.
+            if let Some(p) = m.get("pitch") {
+                step.base.angles[0] = p.parse::<i64>().unwrap() as i32;
+            }
+            for (key, into) in [
+                ("press_buttons", &mut step.press_buttons),
+                ("switch_weapon", &mut step.switch_weapon),
+            ] {
+                if let Some(v) = m.get(key) {
+                    *into = v.parse::<u8>().unwrap();
+                }
+            }
+            for (key, into) in [
+                ("press_ms", &mut step.press_ms),
+                ("switch_ms", &mut step.switch_ms),
+            ] {
+                if let Some(v) = m.get(key) {
+                    *into = v.parse::<i64>().unwrap();
+                }
+            }
             step.pulse_buttons = i("pulse_buttons") as u8;
             step.pulse_wbuttons = i("pulse_wbuttons") as u8;
             step.pulses = i("pulses") as u32;
@@ -175,6 +226,8 @@ fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
                 ],
                 pos_frac: f("fWeaponPosFrac"),
                 spread: f("aimSpreadScale"),
+                grenade_time_left: m.get("grenadeTimeLeft").map(|v| v.parse().unwrap()),
+                weapon_delay: m.get("weaponDelay").map(|v| v.parse().unwrap()),
             });
         }
         // `!observed` and the settled field lines are not compared here.
@@ -192,18 +245,50 @@ fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
 /// (`vcod_common::net::events::seq_diff`, cod11-combat.md section 7). On
 /// retail's own carentan `single_shot` the high reading counts no shot at all.
 fn shots(trace: &[Trace]) -> usize {
+    ring_events(trace, |ev| {
+        ev == EV_FIRE_WEAPON || ev == EV_FIRE_WEAPON_LASTSHOT
+    })
+}
+
+/// Melee swings a trace holds, the same ring walk over `EV_MELEE_SWIPE`. A
+/// swing is one event per press, so this compares exactly.
+fn swings(trace: &[Trace]) -> usize {
+    ring_events(trace, |ev| ev == EV_MELEE_SWIPE)
+}
+
+/// The new ring slots between consecutive samples that `want` accepts.
+fn ring_events(trace: &[Trace], want: impl Fn(i32) -> bool) -> usize {
     trace
         .windows(2)
         .map(|w| {
             let diff = ((w[1].event_sequence - w[0].event_sequence) & 0xff).min(4);
             (0..diff)
-                .filter(|i| {
-                    let ev = w[1].events[((w[0].event_sequence + i) & 3) as usize];
-                    ev == EV_FIRE_WEAPON || ev == EV_FIRE_WEAPON_LASTSHOT
-                })
+                .filter(|i| want(w[1].events[((w[0].event_sequence + i) & 3) as usize]))
                 .count()
         })
         .sum()
+}
+
+/// The `grenadeTimeLeft` values a trace took, bucketed to the frame: the fuse
+/// is armed and cleared inside a frame, so the exact ms a sample catches it at
+/// is the sampling grid's and not the machine's.
+fn fuses(trace: &[Trace]) -> BTreeSet<i32> {
+    trace
+        .iter()
+        .filter_map(|t| t.grenade_time_left)
+        .map(|v| (v + 25) / 50 * 50)
+        .collect()
+}
+
+/// The longest `weaponDelay` a trace sampled: `holdFireTime` on a pullback,
+/// `meleeDelay` on a swing, 0 anywhere else. Compared to one frame, since
+/// where the first sample after the write falls is the grid's.
+fn peak_delay(trace: &[Trace]) -> i32 {
+    trace
+        .iter()
+        .filter_map(|t| t.weapon_delay)
+        .max()
+        .unwrap_or(0)
 }
 
 /// How many samples a trace spent in `state`, and how many separate runs
@@ -256,6 +341,20 @@ fn torso_flips(trace: &[Trace]) -> usize {
         .count()
 }
 
+/// ms into the step retail first took a hit at, if it did. From there on the
+/// cone is `P_DamageFeedback`'s and not the weapon machine's, and vcod hurts
+/// nobody with a grenade yet: no missile is spawned. Only the grenade
+/// capture's `throw_down` reaches it, where the third frag goes off at the
+/// thrower's own feet.
+fn hurt_at_ms(trace: &[Trace]) -> Option<i64> {
+    trace.windows(2).find_map(|w| {
+        let diff = ((w[1].event_sequence - w[0].event_sequence) & 0xff).min(4);
+        (0..diff)
+            .any(|i| w[1].events[((w[0].event_sequence + i) & 3) as usize] == EV_PAIN)
+            .then_some(w[1].ms)
+    })
+}
+
 fn trace_of(ps: &vcod_common::net::msg::PlayerState, ms: i64) -> Trace {
     let p = &PROTOCOL_V1;
     let ev = |i: usize| ps.field_i32(p, &format!("events[{i}]"));
@@ -268,6 +367,8 @@ fn trace_of(ps: &vcod_common::net::msg::PlayerState, ms: i64) -> Trace {
         events: [ev(0), ev(1), ev(2), ev(3)],
         pos_frac: Some(ps.field_f32(p, "fWeaponPosFrac")),
         spread: Some(ps.field_f32(p, "aimSpreadScale")),
+        grenade_time_left: Some(ps.field_i32(p, "grenadeTimeLeft")),
+        weapon_delay: Some(ps.field_i32(p, "weaponDelay")),
     }
 }
 
@@ -289,7 +390,11 @@ const SPREAD_TOL: f32 = 26.0;
 /// Returns the misses, worst first.
 fn transient_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
     let mut bad = Vec::new();
+    let hurt = hurt_at_ms(retail).unwrap_or(i64::MAX);
     for r in retail {
+        if r.ms >= hurt {
+            continue;
+        }
         let (Some(rf), Some(rs)) = (r.pos_frac, r.spread) else {
             continue;
         };
@@ -341,8 +446,25 @@ fn taps(step: &Step) -> Vec<i64> {
 
 /// Replays the capture's taps against our server: one trace per snapshot
 /// per step, the way the probe traced retail's.
+/// The weapon byte a cmd carries: the step's switch once it has been asked
+/// for, the step's own byte otherwise, and our own `ps.weapon` where the
+/// capture recorded a 0. A 0 is not neutral -- retail reads a `cmd.weapon`
+/// differing from `ps.weapon` as a request to holster -- and the capture's 0
+/// means the probe was holding nothing, which is a fact about retail's
+/// playerstate and not an input to replay.
+fn weapon_byte(step: &Step, t: i64, ours_now: u8) -> u8 {
+    if step.switch_weapon != 0 && t >= step.switch_ms {
+        step.switch_weapon
+    } else if step.weapon != 0 {
+        step.weapon
+    } else {
+        ours_now
+    }
+}
+
 fn ours(
     map: &str,
+    gametype: &str,
     steps: &[Step],
     join: (&str, &str),
     fs: vcod_common::pk3::Pk3Fs,
@@ -351,7 +473,7 @@ fn ours(
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
     let fs = Rc::new(fs);
     let mut now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(map), now);
+    let mut sv = vcod_server::Server::new(cfg(map, gametype), now);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp));
     sv.load_scripts(fs).expect("load the scripts");
     let q = Rc::new(RefCell::new(Queues::default()));
@@ -365,6 +487,14 @@ fn ours(
         // it 0 would not be running the capture's input.
         let mut base = step.base;
         base.weapon = step.weapon;
+        let held = |cl: &vcod_common::net::NetClient<common::ClientEnd>| -> u8 {
+            cl.snapshots()
+                .newest()
+                .map_or(0, |s| s.ps.field_i32(p, "weapon") as u8)
+        };
+        if step.weapon == 0 {
+            base.weapon = held(&cl);
+        }
         if step.wait_ready {
             for i in 0..100 {
                 now += Duration::from_millis(FRAME_MS as u64);
@@ -389,9 +519,14 @@ fn ours(
         let frames = (step.hold_ms / FRAME_MS).max(1);
         let taps = taps(step);
         for i in 0..frames {
+            let ours_now = held(&cl);
             for half in 0..2 {
                 let t = i * FRAME_MS + half * CMD_MS;
                 let mut cmd = base;
+                cmd.weapon = weapon_byte(step, t, ours_now);
+                if t < step.press_ms {
+                    cmd.buttons |= step.press_buttons;
+                }
                 if taps.contains(&t) {
                     cmd.buttons |= step.pulse_buttons;
                     cmd.wbuttons |= step.pulse_wbuttons;
@@ -410,22 +545,29 @@ fn ours(
     out
 }
 
-fn check(map: &str, kind: &str) {
+fn check(map: &str, gametype: &str, kind: &str) {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
     let path = format!(
-        "{}/tests/fixtures/playerstate/{map}-{}-{kind}.txt",
-        env!("CARGO_MANIFEST_DIR"),
-        cfg(map).gametype
+        "{}/tests/fixtures/playerstate/{map}-{gametype}-{kind}.txt",
+        env!("CARGO_MANIFEST_DIR")
     );
     let text = std::fs::read_to_string(&path).unwrap();
+    // The gametype is the fixture's, not a default: the grenade capture was
+    // taken under `tdm` and the two the bullet ones under `dm`, and the
+    // gametype picks the loadout and the spawn.
+    assert_eq!(
+        common::header_value(&text, "g_gametype", &path),
+        gametype,
+        "{path}: the header's gametype is not the one the test asks for"
+    );
     let team = common::header_value(&text, "joined", &path).to_string();
     let weapon = common::header_value(&text, "weapon", &path).to_string();
     let held =
         vcod_server::configstrings::weapon_index(&weapon).expect("the joined weapon in CS 7");
     let steps = parse_fixture(&text, held as u8);
-    let mine = ours(map, &steps, (&team, &weapon), fs);
+    let mine = ours(map, gametype, &steps, (&team, &weapon), fs);
     let mut bad = Vec::new();
     for (step, ours) in steps.iter().zip(&mine) {
         if step.walks || SKIPPED.iter().any(|(l, _)| *l == step.label) {
@@ -435,7 +577,29 @@ fn check(map: &str, kind: &str) {
         if rs != os {
             bad.push(format!("{}: retail {rs} shots, ours {os}", step.label));
         }
-        for state in [2, 3, 4, 5] {
+        let (rw, ow) = (swings(&step.trace), swings(ours));
+        if rw != ow {
+            bad.push(format!(
+                "{}: retail {rw} melee swings, ours {ow}",
+                step.label
+            ));
+        }
+        let (rf, of) = (fuses(&step.trace), fuses(ours));
+        if !rf.is_empty() && rf != of {
+            bad.push(format!(
+                "{}: grenadeTimeLeft retail {rf:?} ours {of:?}",
+                step.label
+            ));
+        }
+        let (rd, od) = (peak_delay(&step.trace), peak_delay(ours));
+        if step.trace.iter().any(|t| t.weapon_delay.is_some()) && (rd - od).abs() > FRAME_MS as i32
+        {
+            bad.push(format!(
+                "{}: the longest weaponDelay is {rd} on retail, {od} on ours",
+                step.label
+            ));
+        }
+        for state in [2, 3, 4, 5, 10, 11] {
             let ((r, r_runs), (o, o_runs)) = (
                 state_samples(&step.trace, state),
                 state_samples(ours, state),
@@ -479,21 +643,44 @@ fn check(map: &str, kind: &str) {
             )),
             None => {}
         }
-        if torsos(&step.trace) != torsos(ours) {
-            bad.push(format!(
-                "{}: torsoAnim indices retail {:?} ours {:?}",
-                step.label,
-                torsos(&step.trace),
-                torsos(ours)
-            ));
-        }
-        let (r_flips, o_flips) = (torso_flips(&step.trace), torso_flips(ours));
-        if r_flips != o_flips {
-            bad.push(format!(
-                "{}: the torso toggle flipped {r_flips} times on retail, {o_flips} on ours \
-                 ({rs} shots)",
+        let same_torsos = torsos(&step.trace) == torsos(ours);
+        // Ours opens every step with the snapshot the step before it ended
+        // on; retail's own first sample is whenever its next snapshot
+        // happened to arrive. Where that is more than a cmd in, retail missed
+        // the write on the step boundary and ours has to drop the sample that
+        // holds it or it counts a flip retail could not have seen.
+        let aligned = usize::from(step.trace.first().is_some_and(|t| t.ms >= CMD_MS));
+        let (r_flips, o_flips) = (
+            torso_flips(&step.trace),
+            torso_flips(&ours[aligned.min(ours.len())..]),
+        );
+        match TORSO_GAPS
+            .iter()
+            .find(|(m, l, _)| *m == map && *l == step.label)
+        {
+            Some((.., why)) => assert!(
+                !same_torsos,
+                "{map} {}: the torsoAnim indices match now; drop the TORSO_GAPS \
+                 entry ({why})",
                 step.label
-            ));
+            ),
+            None => {
+                if !same_torsos {
+                    bad.push(format!(
+                        "{}: torsoAnim indices retail {:?} ours {:?}",
+                        step.label,
+                        torsos(&step.trace),
+                        torsos(ours)
+                    ));
+                }
+                if r_flips != o_flips {
+                    bad.push(format!(
+                        "{}: the torso toggle flipped {r_flips} times on retail, {o_flips} on \
+                         ours ({rs} shots)",
+                        step.label
+                    ));
+                }
+            }
         }
         let misses = transient_misses(&step.trace, ours);
         if !misses.is_empty() {
@@ -515,20 +702,25 @@ fn check(map: &str, kind: &str) {
 
 #[test]
 fn the_weapon_channel_matches_retail_on_mp_carentan() {
-    check("mp_carentan", "combat");
+    check("mp_carentan", "dm", "combat");
 }
 
 #[test]
 fn the_weapon_channel_matches_retail_on_mp_pavlov() {
-    check("mp_pavlov", "combat");
+    check("mp_pavlov", "dm", "combat");
 }
 
 #[test]
 fn the_sight_and_spread_match_retail_on_mp_carentan() {
-    check("mp_carentan", "ads");
+    check("mp_carentan", "dm", "ads");
 }
 
 #[test]
 fn the_sight_and_spread_match_retail_on_mp_pavlov() {
-    check("mp_pavlov", "ads");
+    check("mp_pavlov", "dm", "ads");
+}
+
+#[test]
+fn the_grenade_and_melee_channels_match_retail_on_mp_carentan() {
+    check("mp_carentan", "tdm", "grenade");
 }

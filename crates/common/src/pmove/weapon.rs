@@ -4,10 +4,10 @@
 //! document's; the behaviour the two combat captures measured is in
 //! docs/research/player-model-anim-system.md, "The weapon channel".
 //!
-//! Not modelled yet: melee (1.10, states 10 and 11), grenades (1.11), the
-//! alt-weapon and `clipOnly` clauses of the switch path, and the three stops
-//! of 1.12, whose `pm_flags`/`pm_type`/`eFlags` this `PlayerState` does not
-//! carry.
+//! Not modelled yet: the alt-weapon clause of the switch path, retail's
+//! `BG_TakePlayerWeapon` on a spent `clipOnly` weapon (the host owns the held
+//! bits, so pmove cannot clear one), and the three stops of 1.12, whose
+//! `pm_flags`/`pm_type`/`eFlags` this `PlayerState` does not carry.
 //!
 //! One deliberate divergence from a VERIFIED retail reading: retail's
 //! weapon-change check treats a `cmd.weapon` of 0 as a request to holster
@@ -18,8 +18,7 @@
 use super::{PlayerState, PmEvent, PmInput, Stance};
 use crate::weapon::WeaponDef;
 
-/// `ps.weaponstate`, the twelve values of section 1.1. Only 0 to 9 are
-/// reachable here; 10 and 11 are melee.
+/// `ps.weaponstate`, the twelve values of section 1.1.
 pub const WEAPON_READY: u8 = 0;
 pub const WEAPON_RAISING: u8 = 1;
 pub const WEAPON_DROPPING: u8 = 2;
@@ -42,10 +41,13 @@ pub const EV_RELOAD_START: i32 = 153;
 pub const EV_RELOAD_END: i32 = 154;
 pub const EV_RAISE_WEAPON: i32 = 155;
 pub const EV_PUTAWAY_WEAPON: i32 = 156;
+pub const EV_PULLBACK_WEAPON: i32 = 158;
 pub const EV_FIRE_WEAPON: i32 = 159;
 pub const EV_FIRE_WEAPON_LASTSHOT: i32 = 161;
 pub const EV_RECHAMBER_WEAPON: i32 = 162;
 pub const EV_EJECT_BRASS: i32 = 163;
+pub const EV_MELEE_SWIPE: i32 = 164;
+pub const EV_FIRE_MELEE: i32 = 165;
 
 /// `ps.weapAnim` indices, the `WEAP_*` order of section 1.2.
 pub const WEAP_IDLE: i32 = 0;
@@ -55,12 +57,16 @@ pub const WEAP_RECHAMBER: i32 = 4;
 pub const WEAP_ADS_ATTACK: i32 = 5;
 pub const WEAP_ADS_ATTACK_LASTSHOT: i32 = 6;
 pub const WEAP_ADS_RECHAMBER: i32 = 7;
+pub const WEAP_MELEE_ATTACK: i32 = 8;
 pub const WEAP_DROP: i32 = 9;
 pub const WEAP_RAISE: i32 = 10;
 pub const WEAP_RELOAD: i32 = 11;
 pub const WEAP_RELOAD_EMPTY: i32 = 12;
 pub const WEAP_RELOAD_START: i32 = 13;
 pub const WEAP_RELOAD_END: i32 = 14;
+/// The pullback has no name in the binary's printer: it is index 17, past the
+/// seventeen the switch there covers (section 1.11).
+pub const WEAP_GRENADE_PULLBACK: i32 = 17;
 /// Bit 512, the restart toggle, is not part of the index (section 1.2).
 const ANIM_TOGGLEBIT: i32 = 512;
 
@@ -274,6 +280,14 @@ pub fn adjust_aim_spread_scale(
     def: Option<&WeaponDef>,
     dt: f32,
 ) {
+    // A swing holds the cone wide open: every sample of `weaponstate` 10 and
+    // 11 in the capture's `melee_tap` reads 255.00 and the decay starts only
+    // once the swing is over. Measured from the capture; no store in the
+    // binary is located for it.
+    if matches!(ps.weaponstate, WEAPON_MELEE_WINDUP | WEAPON_MELEE_RELAX) {
+        ps.aim_spread_scale = 255.0;
+        return;
+    }
     let (add, decay) = match def {
         Some(def) if def.hip_spread_decay_rate != 0.0 => {
             let mut decay = def.hip_spread_decay_rate;
@@ -340,9 +354,12 @@ pub fn pm_weapon(
         advance_ads(ps, def, dt_ms);
     }
 
-    // "finish a raise": state 1 lasts the one frame, `raiseTime` only holds
-    // off the next action (section 1.8).
-    if ps.weaponstate == WEAPON_RAISING {
+    // "finish a raise": the state ends when `raiseTime` does. A held trigger
+    // keeps it going, the semi-automatic latch pinning `weaponTime` at 1
+    // (section 1.4): the capture's `cancel` step raises the carbine under a
+    // held bit and reads `weaponstate` 1 for 2.7 s, where `to_frag` leaves it
+    // after `raiseTime`.
+    if ps.weaponstate == WEAPON_RAISING && ps.weapon_time_ms == 0 {
         ps.weaponstate = WEAPON_READY;
         set_anim(ps, WEAP_IDLE);
     }
@@ -352,7 +369,18 @@ pub fn pm_weapon(
     let Some(def) = weapon_def(weapons, ps.weapon) else {
         return;
     };
+    melee_finish(ps, def, delay_expired, events);
+    if melee_check(ps, input, def, delay_expired, events) {
+        return;
+    }
     if begin_change(ps, input, def, events) {
+        // The pickup half runs later in the same `PM_Weapon` (section 1.8), so
+        // a putaway that left no drop time -- the cancelled pullback, a weapon
+        // gone from under the player -- raises on this frame and never shows
+        // `weaponstate` 2.
+        if ps.weaponstate == WEAPON_DROPPING && ps.weapon_time_ms == 0 {
+            pickup(ps, weapons, events);
+        }
         return;
     }
     if reload_check(ps, input, def, events) {
@@ -372,6 +400,9 @@ pub fn pm_weapon(
         return;
     }
     if ps.weapon_time_ms != 0 {
+        return;
+    }
+    if grenade_hold(ps, input, def, events) {
         return;
     }
     // Releasing the trigger (section 1.6).
@@ -425,6 +456,13 @@ fn advance_timers(
     // the idle pose (section 1.4).
     match ps.weaponstate {
         WEAPON_RECHAMBERING => ps.weaponstate = WEAPON_READY,
+        // The swing relaxing into the idle pose (section 1.10). Retail's
+        // `melee_tap` reads `weapAnim` 520 through the swing and a bare 0
+        // after, so the write flips the toggle like every other one.
+        WEAPON_MELEE_RELAX => {
+            ps.weaponstate = WEAPON_READY;
+            set_anim(ps, WEAP_IDLE);
+        }
         WEAPON_FIRING => {
             hold_anim(ps, WEAP_IDLE);
             if !latched {
@@ -436,6 +474,66 @@ fn advance_timers(
     delay_expired
 }
 
+/// Section 1.10, the swing. The one edge latch in the machine: a held bit
+/// swings once, and the latch clears only when the bit comes back up.
+fn melee_check(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    def: &WeaponDef,
+    delay_expired: bool,
+    events: &mut Vec<PmEvent>,
+) -> bool {
+    if def.melee_damage == 0 || delay_expired {
+        return false;
+    }
+    // A reload is the one busy state a swing interrupts.
+    if ps.weapon_delay_ms != 0 && !matches!(ps.weaponstate, WEAPON_RELOADING..=WEAPON_RELOAD_END) {
+        return false;
+    }
+    if !input.melee {
+        ps.melee_latched = false;
+        return false;
+    }
+    if ps.melee_latched {
+        return false;
+    }
+    ps.melee_latched = true;
+    if matches!(
+        ps.weaponstate,
+        WEAPON_RAISING | WEAPON_DROPPING | WEAPON_MELEE_WINDUP | WEAPON_MELEE_RELAX
+    ) {
+        return false;
+    }
+    set_anim(ps, WEAP_MELEE_ATTACK);
+    push(events, EV_MELEE_SWIPE);
+    // The timers and the state are the `meleeDelay` arm's; a weapon that
+    // spells none swings its anim and nothing else. No stock weapon does.
+    if ms(def.melee_delay) != 0 {
+        ps.weapon_time_ms = ms(def.melee_time);
+        ps.weapon_delay_ms = ms(def.melee_delay);
+        ps.weaponstate = WEAPON_MELEE_WINDUP;
+    }
+    true
+}
+
+/// Section 1.10, the frame the swing connects: the hit event, and the rest of
+/// `meleeTime` to relax in.
+fn melee_finish(
+    ps: &mut PlayerState,
+    def: &WeaponDef,
+    delay_expired: bool,
+    events: &mut Vec<PmEvent>,
+) {
+    if ps.weaponstate != WEAPON_MELEE_WINDUP || !delay_expired {
+        return;
+    }
+    ps.weapon_time_ms = ps
+        .weapon_time_ms
+        .max(ms(def.melee_time) - ms(def.melee_delay));
+    push(events, EV_FIRE_MELEE);
+    ps.weaponstate = WEAPON_MELEE_RELAX;
+}
+
 /// The weapon-change check of section 1.8. A jump and a stance change do
 /// nothing here: the captures that read `weaponstate` 2 at both were taken
 /// with `cmd.weapon` 0, which this check reads as a request to holster.
@@ -445,18 +543,25 @@ fn begin_change(
     def: &WeaponDef,
     events: &mut Vec<PmEvent>,
 ) -> bool {
-    if matches!(
-        ps.weaponstate,
-        WEAPON_FIRING | WEAPON_MELEE_WINDUP | WEAPON_MELEE_RELAX
-    ) || ps.weapon_delay_ms != 0
-    {
-        return false;
-    }
-    // Busy, unless the state is one a switch may interrupt: a reload or a
-    // rechamber can be cut short, a shot cannot.
-    if ps.weapon_time_ms != 0 && !matches!(ps.weaponstate, WEAPON_RECHAMBERING..=WEAPON_RELOAD_END)
-    {
-        return false;
+    // A pullback is the one `weaponstate` 3 a switch may interrupt, and it
+    // interrupts it whatever `weaponDelay` reads: the capture's `cancel` step
+    // switches 300 ms into a hold and the raise lands 60 ms later
+    // (section 1.14).
+    if ps.grenade_time_left_ms == 0 {
+        if matches!(
+            ps.weaponstate,
+            WEAPON_FIRING | WEAPON_MELEE_WINDUP | WEAPON_MELEE_RELAX
+        ) || ps.weapon_delay_ms != 0
+        {
+            return false;
+        }
+        // Busy, unless the state is one a switch may interrupt: a reload or a
+        // rechamber can be cut short, a shot cannot.
+        if ps.weapon_time_ms != 0
+            && !matches!(ps.weaponstate, WEAPON_RECHAMBERING..=WEAPON_RELOAD_END)
+        {
+            return false;
+        }
     }
     // The ladder forces weapon 0 (section 1.8's `pm_flags & 0x10`; 1.12 reads
     // that bit as the ladder).
@@ -493,12 +598,24 @@ fn putaway(ps: &mut PlayerState, def: &WeaponDef, target: u8, events: &mut Vec<P
     ps.weapon_delay_ms = 0;
     ps.pending_weapon = target;
     ps.weaponstate = WEAPON_DROPPING;
+    // The short branch of section 1.8: a weapon that is gone from under the
+    // player, and a grenade still on its pin, go without a drop time, an anim
+    // or an event. Retail ORs `pm_flags` 0x400 in only for a prone player;
+    // this flag is set on every cancel, since nothing reads it either way.
+    if ps.weapon == 0 || !holds(ps, ps.weapon) || ps.grenade_time_left_ms > 0 {
+        ps.weapon_time_ms = 0;
+        if ps.grenade_time_left_ms > 0 {
+            ps.grenade_time_left_ms = 0;
+            ps.grenade_cancelled = true;
+        }
+        return true;
+    }
     ps.weapon_time_ms = ms(def.drop_time);
-    // `WEAP_DROP` is the event's parm, not a `weapAnim` write: both combat
-    // captures hold `weapAnim` at whatever it was through the whole of a
-    // `weaponstate` 2 (player-model-anim-system.md, "The weapon channel"),
-    // and the putaway is the one path section 1.8 describes as raising its
-    // event *with* an anim index rather than storing one.
+    // The capture's `to_frag` reads `weapAnim` 521 through the whole putaway,
+    // `WEAP_DROP` with the toggle flipped. The superseded captures read the
+    // anim unchanged because they sent `cmd.weapon` 0 every frame, which is
+    // the one input the setter refuses to write on (section 1.2).
+    set_anim(ps, WEAP_DROP);
     events.push(PmEvent {
         event: EV_PUTAWAY_WEAPON,
         parm: WEAP_DROP,
@@ -514,20 +631,21 @@ fn pickup(ps: &mut PlayerState, weapons: &[Option<WeaponDef>], events: &mut Vec<
     ps.pending_weapon = 0;
     let old = ps.weapon;
     ps.weapon = if holds(ps, target) { target } else { 0 };
-    ps.weaponstate = WEAPON_READY;
-    set_anim(ps, WEAP_IDLE);
-    if ps.weapon == old {
+    // The two arms are exclusive and each writes `weapAnim` once: the same
+    // weapon back in hand goes idle, a different one raises. The capture's
+    // `to_frag` counts the toggle flips that prove it (section 1.14).
+    let raising = ps.weapon != old;
+    if let (true, Some(def)) = (raising, weapon_def(weapons, ps.weapon)) {
+        ps.weaponstate = WEAPON_RAISING;
+        ps.weapon_time_ms = ms(def.raise_time);
+        // A weapon coming up starts with the cone wide open (section 1.8).
+        ps.aim_spread_scale = 255.0;
+        set_anim(ps, WEAP_RAISE);
+        push(events, EV_RAISE_WEAPON);
         return;
     }
-    let Some(def) = weapon_def(weapons, ps.weapon) else {
-        return;
-    };
-    ps.weaponstate = WEAPON_RAISING;
-    ps.weapon_time_ms = ms(def.raise_time);
-    // A weapon coming up starts with the cone wide open (section 1.8).
-    ps.aim_spread_scale = 255.0;
-    set_anim(ps, WEAP_RAISE);
-    push(events, EV_RAISE_WEAPON);
+    ps.weaponstate = WEAPON_READY;
+    set_anim(ps, WEAP_IDLE);
 }
 
 /// The other half of the ladder rule. Retail's pickup takes `cmd.weapon`, so a
@@ -776,17 +894,62 @@ fn rechamber_check(
     true
 }
 
+/// `weaponType 1`, the one type with a pullback between the trigger and the
+/// shot (section 1.11).
+const WEAPON_TYPE_GRENADE: &str = "grenade";
+
+/// Section 1.11, the pullback: arm the fuse and hold the pin for
+/// `holdFireTime`.
+fn pullback(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmEvent>) {
+    ps.grenade_time_left_ms = ms(def.fuse_time);
+    ps.grenade_cancelled = false;
+    set_anim(ps, WEAP_GRENADE_PULLBACK);
+    push(events, EV_PULLBACK_WEAPON);
+    ps.weapon_delay_ms = ms(def.hold_fire_time);
+    ps.weapon_time_ms = 0;
+    ps.weaponstate = WEAPON_FIRING;
+}
+
+/// Sections 1.11 and 1.14, the frames an armed grenade owns. Nothing counts
+/// the fuse down: the throw is the trigger coming up once `holdFireTime` has
+/// run out, and while the bit is held the capture reads `weaponDelay` pinned
+/// at 1, the same shape the semi-automatic latch gives `weaponTime`
+/// (section 1.4). Returns whether the frame is spent.
+fn grenade_hold(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    def: &WeaponDef,
+    events: &mut Vec<PmEvent>,
+) -> bool {
+    if ps.grenade_time_left_ms == 0 {
+        return false;
+    }
+    if input.attack {
+        ps.weapon_delay_ms = ps.weapon_delay_ms.max(1);
+        return true;
+    }
+    // Released before the pin ran out: the throw waits for it.
+    if ps.weapon_delay_ms > 1 {
+        return true;
+    }
+    ps.weapon_delay_ms = 0;
+    fire(ps, def, events);
+    true
+}
+
 /// Section 1.5, and the anim pick of 1.2, which reads the ADS fraction
 /// rather than the usercmd's sight bit.
 fn fire(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmEvent>) {
     if ps.weapon_delay_ms != 0 {
         return;
     }
-    // A grenade has its own pullback/throw path (section 1.11) that is not
-    // modelled yet. Until it is, the trigger does nothing on one: running it
-    // through the bullet path raised a fire event and took a round with no
-    // missile behind either.
-    if def.weapon_type == "grenade" {
+    let grenade = def.weapon_type == WEAPON_TYPE_GRENADE;
+    // A grenade's first trigger pulls the pin; the throw is a later frame,
+    // through the rest of this function ([`grenade_hold`]).
+    if grenade && ps.grenade_time_left_ms == 0 {
+        if ps.ammoclip[def.clip_index] > 0 {
+            pullback(ps, def, events);
+        }
         return;
     }
     let (ci, ai) = (def.clip_index, def.ammo_index);
@@ -794,7 +957,10 @@ fn fire(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmEvent>) {
         if ps.ammo[ai] > 0 {
             begin_reload(ps, def, events);
         } else {
-            push(events, EV_NOAMMO);
+            // A grenade raises nothing here (section 1.5 step 2).
+            if !grenade {
+                push(events, EV_NOAMMO);
+            }
             set_anim(ps, WEAP_IDLE);
             ps.weapon_time_ms += 500;
         }
@@ -806,7 +972,11 @@ fn fire(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmEvent>) {
     }
     ps.weaponstate = WEAPON_FIRING;
     ps.weapon_time_ms = ms(def.fire_time);
-    ps.weapon_delay_ms = ms(def.fire_delay);
+    // A grenade keeps `weaponDelay` at the 0 the release left it (step 1),
+    // which is what the capture's three throw frames read.
+    if !grenade {
+        ps.weapon_delay_ms = ms(def.fire_delay);
+    }
     // An `adsFire` weapon's shot waits out whatever is left of the raise
     // (`.so` 0x38b23, section 1.5 step 1).
     if def.ads_fire {
@@ -828,14 +998,24 @@ fn fire(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmEvent>) {
             (true, true) => WEAP_ADS_ATTACK_LASTSHOT,
         },
     );
-    push(
-        events,
-        if last {
+    // A throw carries what is left of the fuse, so the server never has to
+    // read `grenadeTimeLeft` back off a step that already cleared it.
+    let parm = ps.grenade_time_left_ms;
+    ps.grenade_time_left_ms = 0;
+    events.push(PmEvent {
+        event: if last {
             EV_FIRE_WEAPON_LASTSHOT
         } else {
             EV_FIRE_WEAPON
         },
-    );
+        parm,
+    });
+    // Section 1.5 step 9: a `clipOnly` weapon with nothing left tells the
+    // client so. Retail also takes the weapon away here, which pmove cannot:
+    // the host owns `ps.weapons`.
+    if def.clip_only && last && ps.ammo[ai] == 0 {
+        push(events, EV_NOAMMO);
+    }
 }
 
 #[cfg(test)]
@@ -945,19 +1125,166 @@ mod tests {
         step(ps, weapons, &input, frames)
     }
 
-    /// A grenade's trigger is inert until its own path exists: no event, no
-    /// round taken, no anim (the bullet path used to twitch the throw anim).
+    /// The frag's own numbers, off `weapons/mp/fraggrenade_mp` in `pak0.pk3`.
+    fn frag() -> WeaponDef {
+        let mut d = def(1.0, 0.0, 2.0, 0.25, 3, false);
+        d.weapon_type = "grenade".into();
+        d.fuse_time = 4.0;
+        d.hold_fire_time = 0.6;
+        d.clip_only = true;
+        d
+    }
+
+    /// The frag's melee numbers; the carbine's own file spells 0.15 and 0.65.
+    fn with_melee(mut d: WeaponDef) -> WeaponDef {
+        d.melee_damage = 50;
+        d.melee_delay = 0.1;
+        d.melee_time = 0.66;
+        d
+    }
+
+    /// 1.11: the pullback arms the fuse for `fuseTime` and holds the pin for
+    /// `holdFireTime`; the release after that throws, taking one from the clip
+    /// and carrying what is left of the fuse as the event's parm.
     #[test]
-    fn a_grenade_does_not_fire_through_the_bullet_path() {
-        let mut frag = carbine();
-        frag.weapon_type = "grenade".into();
-        let (mut ps, w) = armed(&frag);
-        let anim = ps.weap_anim;
-        let events = run(&mut ps, &w, true, 4);
-        assert_eq!(events, Vec::<i32>::new());
-        assert_eq!(ps.ammoclip[1], 15);
+    fn a_grenade_pulls_back_and_throws_on_release() {
+        let (mut ps, w) = armed(&frag());
+        let held = PmInput {
+            attack: true,
+            ..Default::default()
+        };
+        let ev = step(&mut ps, &w, &held, 1);
+        assert_eq!(ev, vec![EV_PULLBACK_WEAPON]);
+        assert_eq!(ps.grenade_time_left_ms, 4000);
+        assert_eq!(ps.weap_anim & 511, WEAP_GRENADE_PULLBACK);
+        assert_eq!(ps.weapon_delay_ms, 600);
+        assert_eq!(ps.weaponstate, WEAPON_FIRING);
+        // The fuse does not run down while the trigger is held (ruling R30).
+        let ev = step(&mut ps, &w, &held, 20);
+        assert_eq!(ev, Vec::<i32>::new());
+        assert_eq!(ps.grenade_time_left_ms, 4000);
+        let mut throw = Vec::new();
+        pm_weapon(&mut ps, &PmInput::default(), &w, 50, &mut throw);
+        assert_eq!(
+            throw,
+            vec![PmEvent {
+                event: EV_FIRE_WEAPON,
+                parm: 4000,
+            }]
+        );
+        assert_eq!(ps.grenade_time_left_ms, 0);
+        assert_eq!(ps.weapon_time_ms, 1000);
+        assert_eq!(ps.weapon_delay_ms, 0);
+        assert_eq!(ps.weap_anim & 511, WEAP_ATTACK);
+        assert_eq!(ps.ammoclip[1], 2);
+    }
+
+    /// Ruling R30, the `pin_out` step of the retail capture: retail 1.1 MP
+    /// never counts `grenadeTimeLeft` down, so a held trigger cooks forever
+    /// and the grenade leaves only on the release.
+    #[test]
+    fn a_held_grenade_does_not_throw_itself() {
+        let (mut ps, w) = armed(&frag());
+        let held = PmInput {
+            attack: true,
+            ..Default::default()
+        };
+        let ev = step(&mut ps, &w, &held, 120);
+        assert_eq!(ev, vec![EV_PULLBACK_WEAPON]);
+        assert_eq!(ps.grenade_time_left_ms, 4000);
+        assert_eq!(ps.weaponstate, WEAPON_FIRING);
+        assert_eq!(ps.ammoclip[1], 3);
+    }
+
+    /// An empty clip has nothing to pull: no event, no fuse, no state change.
+    #[test]
+    fn a_grenade_with_an_empty_clip_does_nothing() {
+        let (mut ps, w) = armed(&frag());
+        ps.ammoclip[1] = 0;
+        ps.ammo[1] = 0;
+        let held = PmInput {
+            attack: true,
+            ..Default::default()
+        };
+        let ev = step(&mut ps, &w, &held, 4);
+        assert_eq!(ev, Vec::<i32>::new());
+        assert_eq!(ps.grenade_time_left_ms, 0);
         assert_eq!(ps.weaponstate, WEAPON_READY);
-        assert_eq!(ps.weap_anim, anim);
+    }
+
+    /// Ruling R39, the `cancel` step: a weapon change during a pullback drops
+    /// the grenade with no putaway at all -- no `EV_PUTAWAY_WEAPON`, no drop
+    /// time, no round spent -- and the raise lands on the same frame.
+    #[test]
+    fn a_weapon_change_cancels_a_cooking_grenade() {
+        let (mut ps, mut w) = armed(&frag());
+        w.push(Some(carbine()));
+        give(&mut ps, 2, 2);
+        let held = PmInput {
+            attack: true,
+            ..Default::default()
+        };
+        step(&mut ps, &w, &held, 5);
+        assert_eq!(ps.grenade_time_left_ms, 4000);
+        let ev = step(
+            &mut ps,
+            &w,
+            &PmInput {
+                attack: true,
+                weapon: 2,
+                ..Default::default()
+            },
+            1,
+        );
+        assert_eq!(ev, vec![EV_RAISE_WEAPON]);
+        assert_eq!(ps.grenade_time_left_ms, 0);
+        assert!(ps.grenade_cancelled);
+        assert_eq!(ps.weaponstate, WEAPON_RAISING);
+        assert_eq!(ps.weapon, 2);
+        assert_eq!(ps.ammoclip[1], 3);
+    }
+
+    /// 1.10: the melee bit swings once per press -- the swipe, the hit event
+    /// when `meleeDelay` runs out, and idle when `meleeTime` does.
+    #[test]
+    fn the_melee_bit_swings_once_per_press() {
+        let (mut ps, w) = armed(&with_melee(carbine()));
+        let held = PmInput {
+            melee: true,
+            ..Default::default()
+        };
+        let ev = step(&mut ps, &w, &held, 1);
+        assert_eq!(ev, vec![EV_MELEE_SWIPE]);
+        assert_eq!(ps.weaponstate, WEAPON_MELEE_WINDUP);
+        assert_eq!(ps.weap_anim & 511, WEAP_MELEE_ATTACK);
+        assert_eq!((ps.weapon_time_ms, ps.weapon_delay_ms), (660, 100));
+        let ev = step(&mut ps, &w, &held, 2);
+        assert_eq!(ev, vec![EV_FIRE_MELEE]);
+        assert_eq!(ps.weaponstate, WEAPON_MELEE_RELAX);
+        let ev = step(&mut ps, &w, &held, 12);
+        assert_eq!(ev, Vec::<i32>::new());
+        assert_eq!(ps.weaponstate, WEAPON_READY);
+        // The relax clears the index and the toggle with it: the capture's
+        // `melee_tap` reads `weapAnim` 520 through the swing and 0 after.
+        assert_eq!(ps.weap_anim, WEAP_IDLE);
+        assert_eq!(ps.ammoclip[1], 15);
+    }
+
+    /// A weapon with no `meleeDamage` ignores the bit.
+    #[test]
+    fn a_weapon_without_melee_damage_ignores_the_bit() {
+        let (mut ps, w) = armed(&carbine());
+        let ev = step(
+            &mut ps,
+            &w,
+            &PmInput {
+                melee: true,
+                ..Default::default()
+            },
+            3,
+        );
+        assert_eq!(ev, Vec::<i32>::new());
+        assert_eq!(ps.weaponstate, WEAPON_READY);
     }
 
     /// Held down, the carbine fires once: the latch pins `weaponTime` at 1 and
@@ -1490,6 +1817,10 @@ mod tests {
         assert_eq!(ps.weapon, 2);
         assert_eq!(ps.weaponstate, WEAPON_RAISING);
 
+        // The raise runs for `raiseTime` and not for a frame: the capture's
+        // `to_frag` holds `weaponstate` 1 for 295 ms of the frag's 250.
+        step(&mut ps, &w, &input, 9);
+        assert_eq!(ps.weaponstate, WEAPON_RAISING);
         step(&mut ps, &w, &input, 1);
         assert_eq!(ps.weaponstate, WEAPON_READY);
         assert_eq!(ps.weap_anim & !ANIM_TOGGLEBIT, WEAP_IDLE);
