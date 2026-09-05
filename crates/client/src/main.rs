@@ -105,6 +105,16 @@ struct Args {
     /// never hold still for.
     #[arg(long)]
     save_ads: bool,
+    /// Join a team, then run the grenade script -- one melee swing on the
+    /// rifle, a switch to the frag, a cooked throw, a cook held past the pin,
+    /// a cook cancelled by a weapon switch and a throw at the ground -- and
+    /// write every snapshot's grenadeTimeLeft and weaponDelay, plus a !missile
+    /// line per snapshot that had one on the wire, to
+    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-grenade.txt.
+    /// The same machine as --save-ads with another script; it stands still, so
+    /// a gate replays it from the origin the header carries.
+    #[arg(long)]
+    save_grenade: bool,
     /// The shooter half of the hit capture: join a team, walk toward the other
     /// player until the eye-to-eye trace through the map's collision is clear,
     /// then fire a single shot, a burst and until the target dies, and watch
@@ -148,8 +158,28 @@ struct Args {
     /// games_mp.log D; records carry and every vertical hit-location boundary
     /// falls out of the two. Give both probes a long --probe-secs: the sweep
     /// spends an offset only on a tap that had a live target to hit.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["probe_melee", "probe_grenade", "probe_grenade_death"])]
     probe_sweep: bool,
+    /// Runs the hit pair's melee script instead of its bullet one: the shooter
+    /// walks to within 40 units and taps the melee bit rather than the
+    /// trigger. Both halves write <map>-<gametype>-melee-shooter.txt and
+    /// -melee-target.txt, so pass it to the --probe-target half too or that
+    /// half overwrites the committed bullet fixture.
+    #[arg(long, conflicts_with_all = ["probe_sweep", "probe_grenade", "probe_grenade_death"])]
+    probe_melee: bool,
+    /// Runs the hit pair's grenade script: the shooter walks to within 300
+    /// units, switches to the frag, cooks for a second, releases at the
+    /// target's feet, watches the missile out and then throws a second one,
+    /// barely cooked, at the ground beside it. Writes
+    /// <map>-<gametype>-grenade-shooter.txt and -grenade-target.txt; pass it
+    /// to the --probe-target half as well.
+    #[arg(long, conflicts_with_all = ["probe_sweep", "probe_melee", "probe_grenade_death"])]
+    probe_grenade: bool,
+    /// The grenade script with a `kill` sent 500 ms into the cook, which is
+    /// what puts the grenade a death drops on the wire. Writes
+    /// <map>-<gametype>-grenade-death-shooter.txt and -grenade-death-target.txt.
+    #[arg(long, conflicts_with_all = ["probe_sweep", "probe_melee", "probe_grenade"])]
+    probe_grenade_death: bool,
     /// Suffix for the --save-entities fixture name, so a capture taken under
     /// different conditions lands beside the plain one rather than on top of
     /// it: --capture-tag players writes <map>-<gametype>-players.txt.
@@ -480,6 +510,14 @@ fn main() -> Result<()> {
                 None
             }
         };
+        use probe::ShooterScript;
+        let script = match () {
+            _ if args.probe_sweep => ShooterScript::Sweep,
+            _ if args.probe_melee => ShooterScript::Melee,
+            _ if args.probe_grenade => ShooterScript::Grenade,
+            _ if args.probe_grenade_death => ShooterScript::GrenadeDeath,
+            _ => ShooterScript::Hit,
+        };
         return probe::probe(
             addr,
             probe::Save {
@@ -490,13 +528,14 @@ fn main() -> Result<()> {
                 motion: args.save_motion,
                 combat: args.save_combat,
                 ads: args.save_ads,
+                grenade: args.save_grenade,
                 entities: args.save_entities,
                 hit: args.save_hit,
                 target: args.probe_target,
             },
             args.capture_tag.clone(),
             args.probe_pvs,
-            args.probe_sweep,
+            script,
             args.probe_team.as_deref(),
             args.probe_secs,
             fs.as_ref(),

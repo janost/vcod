@@ -64,10 +64,67 @@ pub struct Save {
     pub motion: bool,
     pub combat: bool,
     pub ads: bool,
+    pub grenade: bool,
     pub entities: bool,
     pub hit: bool,
     pub target: bool,
 }
+
+/// Which script the two halves of the hit capture run. The target's own
+/// behaviour is the same under all of them; the script picks the shooter's
+/// phases and names both fixtures, so a grenade run does not overwrite the
+/// committed bullet evidence.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ShooterScript {
+    /// The stock `--save-hit` shooter: approach, shot, burst, finish.
+    #[default]
+    Hit,
+    /// `--probe-sweep`: one tap per pitch offset, no fixture.
+    Sweep,
+    /// `--probe-melee`: approach to [`MELEE_RANGE`], tap the melee bit.
+    Melee,
+    /// `--probe-grenade`: approach to [`GRENADE_RANGE`], cook 1 s, release at
+    /// the target's feet, watch the missile, then throw one uncooked.
+    Grenade,
+    /// `--probe-grenade-death`: as `Grenade`, but `kill` 500 ms into the cook,
+    /// which is what puts the death drop's missile on the wire.
+    GrenadeDeath,
+}
+
+impl ShooterScript {
+    /// The fixture name both halves take: `<map>-<gametype>-<prefix>-<role>.txt`.
+    fn prefix(self) -> &'static str {
+        match self {
+            ShooterScript::Hit | ShooterScript::Sweep => "hit",
+            ShooterScript::Melee => "melee",
+            ShooterScript::Grenade => "grenade",
+            ShooterScript::GrenadeDeath => "grenade-death",
+        }
+    }
+
+    /// How close the approach walks before it stops closing. A bullet is
+    /// thrown off by the spread past [`ENGAGE_RANGE`]; a melee reaches 64
+    /// units and a thrown grenade wants to land at the target's feet.
+    fn engage_range(self) -> f32 {
+        match self {
+            ShooterScript::Hit => ENGAGE_RANGE,
+            ShooterScript::Sweep => SWEEP_RANGE,
+            ShooterScript::Melee => MELEE_RANGE,
+            ShooterScript::Grenade | ShooterScript::GrenadeDeath => GRENADE_RANGE,
+        }
+    }
+
+    fn throws_grenades(self) -> bool {
+        matches!(self, ShooterScript::Grenade | ShooterScript::GrenadeDeath)
+    }
+}
+
+/// Retail's melee trace reaches 64 units from the player's origin
+/// (docs/research/cod11-combat.md, 2.5), so the swing has to land inside this.
+pub const MELEE_RANGE: f32 = 40.0;
+/// Close enough that a thrown grenade lands on the target rather than short of
+/// it, and far enough that the thrower is not inside its own blast radius.
+pub const GRENADE_RANGE: f32 = 300.0;
 
 #[allow(clippy::too_many_arguments)]
 pub fn probe(
@@ -75,7 +132,7 @@ pub fn probe(
     save: Save,
     tag: Option<String>,
     pvs: bool,
-    sweep: bool,
+    script: ShooterScript,
     team: Option<&str>,
     secs: u64,
     fs: Option<&vcod_common::pk3::Pk3Fs>,
@@ -88,12 +145,13 @@ pub fn probe(
         motion: save_motion,
         combat: save_combat,
         ads: save_ads,
+        grenade: save_grenade,
         entities: save_entities,
         hit: save_hit,
         target: save_target,
     } = save;
-    // The ADS capture is the combat capture running the sight script.
-    let save_combat = save_combat || save_ads;
+    // The ADS and grenade captures are the combat capture running another script.
+    let save_combat = save_combat || save_ads || save_grenade;
     // The fixture is the route's output, so the capture drives the same walk.
     let pvs = pvs || save_entities;
     // Every mode that needs a spawned player drives the same stock-menu join;
@@ -108,7 +166,7 @@ pub fn probe(
     // A sweep is a measurement, not a fixture: it walks a table of pitch
     // offsets instead of aiming at the eye, so the numbers it produces are not
     // what the committed shooter fixture holds.
-    let sweep = sweep && save_hit;
+    let sweep = script == ShooterScript::Sweep && save_hit;
     let mut client = NetClient::connect(addr)?;
     if save_fixture || save_snapshots {
         client.enable_capture();
@@ -123,12 +181,14 @@ pub fn probe(
     let mut join = JoinProbe::new(team);
     let mut wrote_playerstate = false;
     let mut motion = MotionProbe::default();
-    let mut combat = if save_ads {
+    let mut combat = if save_grenade {
+        CombatProbe::grenade()
+    } else if save_ads {
         CombatProbe::ads()
     } else {
         CombatProbe::default()
     };
-    let mut hit = HitProbe::default();
+    let mut hit = HitProbe::new(script);
     let mut target_probe = TargetProbe::default();
     let mut wrote_hit = false;
     // The hit capture waits for the first spawn before its script starts.
@@ -202,6 +262,7 @@ pub fn probe(
                             .to_string();
                         hit.load_map(fs, &map);
                         hit.sweep = sweep;
+                        hit.use_configstrings(client.configstrings());
                         if sweep {
                             println!(
                                 "HIT: sweeping {} pitch offsets, no fixture is written",
@@ -298,6 +359,13 @@ pub fn probe(
         // 5 s after going active push forward for 2 s, again every 30 s, so a
         // long run shows whether moves still apply after a map_restart.
         let mut cmd = net::msg::UserCmd::default();
+        let ps_weapon = client.snapshots().newest().map_or(0, |s| {
+            s.ps.field_i32(&net::protocol::PROTOCOL_V1, "weapon") as u8
+        });
+        // A step or a phase asking for a weapon switch: an index that differs
+        // from `ps.weapon`, which is what retail reads as the request. It
+        // overrides the follow below until the switch lands.
+        let mut weapon_switch: Option<u8> = None;
         if client.state() == NetState::Active && !joining {
             let active_at = *reached_active.get_or_insert(now);
             let dt = now.duration_since(active_at).as_secs() % 30;
@@ -310,6 +378,7 @@ pub fn probe(
             hold_view_yaw(&mut cmd, &client, &mut motion.spawn_delta_yaw);
         } else if save_combat && combat.running() {
             cmd = combat.cmd();
+            weapon_switch = combat.weapon_override(ps_weapon);
             if let Some(o) = client
                 .snapshots()
                 .newest()
@@ -323,6 +392,7 @@ pub fn probe(
             // `viewangles` measured against the bearing say the server takes
             // the usercmd word as the view.
             cmd = hit.cmd(now);
+            weapon_switch = hit.weapon_override(ps_weapon);
         } else if save_target && target_probe.running() {
             cmd = target_probe.cmd();
         } else if pvs && pvs_probe.running() {
@@ -336,9 +406,7 @@ pub fn probe(
         // with the zero can carry putaways the input never asked for. The
         // byte only travels in the full usercmd branch, which a `wbuttons`,
         // `upmove` or `weapon` change forces (docs/protocol-1.1.md).
-        if let Some(s) = client.snapshots().newest() {
-            cmd.weapon = s.ps.field_i32(&net::protocol::PROTOCOL_V1, "weapon") as u8;
-        }
+        cmd.weapon = weapon_switch.unwrap_or(ps_weapon);
         client.send_frame(&cmd);
 
         // Every iteration, not once a second; the event rings hold four slots
@@ -415,13 +483,23 @@ pub fn probe(
                 }
                 None => false,
             };
-            let pending = std::mem::take(&mut target_probe.pending);
+            let pending: Vec<String> = target_probe
+                .pending
+                .drain(..)
+                .chain(hit.pending.drain(..))
+                .collect();
             for c in pending {
                 client.send_reliable(&c);
             }
             if done {
                 if save_target {
-                    write_target_fixture(client.configstrings(), &join, &target_probe, now)?;
+                    write_target_fixture(
+                        script,
+                        client.configstrings(),
+                        &join,
+                        &target_probe,
+                        now,
+                    )?;
                 } else if !sweep {
                     write_shooter_fixture(client.configstrings(), &join, &hit, now)?;
                 }
@@ -445,7 +523,7 @@ pub fn probe(
                     } else if save_combat {
                         // The join names the weapon; the reload step is sized
                         // off its `reloadTime` rather than one rifle's number.
-                        combat.use_weapon(fs, &join.weapon);
+                        combat.use_weapon(fs, &join.weapon, client.configstrings());
                         if combat.step(now, s) {
                             write_combat_fixture(client.configstrings(), &join, &combat)?;
                             wrote_playerstate = true;
@@ -492,7 +570,7 @@ pub fn probe(
         let now = Instant::now();
         println!("hit: the run ended before the script did, writing what it has");
         if save_target {
-            write_target_fixture(client.configstrings(), &join, &target_probe, now)?;
+            write_target_fixture(script, client.configstrings(), &join, &target_probe, now)?;
         } else {
             write_shooter_fixture(client.configstrings(), &join, &hit, now)?;
         }
@@ -1354,6 +1432,18 @@ fn write_motion_fixture(
 /// `buttons` bit 0, fire (docs/protocol-1.1.md, "Usercmd input bits").
 const BUTTON_ATTACK: u8 = 0x01;
 
+/// The stock frag, the only grenade in a spawn loadout.
+const FRAG_WEAPON: &str = "fraggrenade_mp";
+
+/// A weapon's `cmd.weapon` byte: its slot in configstring 7, which is 1-based
+/// (docs/protocol-1.1.md, "Configstring 7"), and the name that slot holds.
+/// `None` when the list has no such weapon.
+fn weapon_cs_index(configstrings: &[String], name: &str) -> Option<(u8, String)> {
+    let list = crate::entities::split_weapon_list(configstrings.get(7)?);
+    let i = list.iter().position(|w| w == name)?;
+    Some((i as u8 + 1, list[i].clone()))
+}
+
 /// `weaponstate` the capture keys off: the weapon is ready to take an input,
 /// and it is firing. 2 is the reload, seen but not waited on.
 const WEAPONSTATE_READY: i32 = 0;
@@ -1379,12 +1469,131 @@ const PULSE_HOLD: Duration = Duration::from_millis(32);
 const PULSE_PERIOD: Duration = Duration::from_millis(128);
 const PULSE_MARGIN: Duration = Duration::from_millis(48);
 
+/// The weapon a step's one-cmd switch asks for. Retail reads a `cmd.weapon`
+/// that differs from `ps.weapon` as the request, so the index travels once and
+/// the generic follow takes over (docs/research/cod11-combat.md, 1.8).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SwitchTo {
+    /// The frag, by its configstring 7 index.
+    Frag,
+    /// Back to the rifle the join chose.
+    Joined,
+}
+
+/// One eType-4 missile as a snapshot carries it. Retail's explode flips the
+/// missile's own `eType` to 0 and adds event 178 on its ring before freeing it
+/// (docs/research/cod11-combat.md, section 13), so an entity is recorded from
+/// its first missile snapshot until it leaves the wire, not while it reads 4.
+struct MissileSample {
+    num: u32,
+    e_type: i32,
+    e_flags: i32,
+    pos: vcod_common::net::trajectory::Trajectory,
+    apos: vcod_common::net::trajectory::Trajectory,
+    weapon: i32,
+    index: i32,
+    events: [i32; 4],
+    event_parms: [i32; 4],
+    event_sequence: i32,
+    /// `pos` evaluated at the snapshot's own `serverTime`.
+    origin: [f32; 3],
+}
+
+fn traj_str(t: &vcod_common::net::trajectory::Trajectory) -> String {
+    format!(
+        "{},{},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1}",
+        t.tr_type, t.tr_time, t.base.x, t.base.y, t.base.z, t.delta.x, t.delta.y, t.delta.z
+    )
+}
+
+impl MissileSample {
+    fn line(&self, ms: u128) -> String {
+        format!(
+            "!missile ms={ms} num={} eType={} eFlags={} pos={} apos={} weapon={} index={} \
+events={},{},{},{} eventParms={},{},{},{} eventSequence={} origin={}\n",
+            self.num,
+            self.e_type,
+            self.e_flags,
+            traj_str(&self.pos),
+            traj_str(&self.apos),
+            self.weapon,
+            self.index,
+            self.events[0],
+            self.events[1],
+            self.events[2],
+            self.events[3],
+            self.event_parms[0],
+            self.event_parms[1],
+            self.event_parms[2],
+            self.event_parms[3],
+            self.event_sequence,
+            vec_str(self.origin),
+        )
+    }
+}
+
+/// Which entities of a run are missiles: every one that reads eType 4 now, or
+/// read it in an earlier snapshot and has not left the wire since.
+#[derive(Default)]
+struct MissileWatch {
+    seen: std::collections::BTreeSet<u32>,
+}
+
+impl MissileWatch {
+    fn sample(&mut self, snap: &net::snapshot::Snapshot) -> Vec<MissileSample> {
+        let p = &net::protocol::PROTOCOL_V1;
+        self.seen.retain(|n| snap.entities.contains_key(n));
+        for (&n, e) in &snap.entities {
+            if e.field_i32(p, "eType") == crate::entities::ET_MISSILE {
+                self.seen.insert(n);
+            }
+        }
+        self.seen
+            .iter()
+            .filter_map(|&num| {
+                let e = snap.entities.get(&num)?;
+                let f = |n: &str| e.field_i32(p, n);
+                let pos = vcod_common::net::trajectory::Trajectory::read(e, p, "pos");
+                Some(MissileSample {
+                    num,
+                    e_type: f("eType"),
+                    e_flags: f("eFlags"),
+                    origin: pos.evaluate(snap.server_time).into(),
+                    pos,
+                    apos: vcod_common::net::trajectory::Trajectory::read(e, p, "apos"),
+                    weapon: f("weapon"),
+                    index: f("index"),
+                    events: [
+                        f("events[0]"),
+                        f("events[1]"),
+                        f("events[2]"),
+                        f("events[3]"),
+                    ],
+                    event_parms: [
+                        f("eventParms[0]"),
+                        f("eventParms[1]"),
+                        f("eventParms[2]"),
+                        f("eventParms[3]"),
+                    ],
+                    event_sequence: f("eventSequence"),
+                })
+            })
+            .collect()
+    }
+}
+
 /// One labelled step of the combat script: `base` held for `dur`, with
 /// `pulse`'s bits tapped on top of it.
 struct CombatStep {
     label: &'static str,
     base: net::msg::UserCmd,
     pulse: Pulse,
+    /// Bits held down for the first of the step rather than tapped: a grenade
+    /// is cooked by holding the trigger, and the throw is the release.
+    press: u8,
+    press_for: Duration,
+    /// A one-cmd `cmd.weapon`, and how far into the step it goes out.
+    switch: Option<(Duration, SwitchTo)>,
     dur: Duration,
     /// Whether the step walks. A walking step is steered by [`StallTurn`], so
     /// where it ends up is not reproducible and a gate cannot replay it.
@@ -1400,6 +1609,24 @@ struct CombatStep {
     period: Duration,
 }
 
+impl Default for CombatStep {
+    fn default() -> Self {
+        CombatStep {
+            label: "",
+            base: net::msg::NULL_USERCMD,
+            pulse: Pulse::default(),
+            press: 0,
+            press_for: Duration::ZERO,
+            switch: None,
+            dur: Duration::ZERO,
+            walks: false,
+            wait_ready: false,
+            from_reload_time: false,
+            period: PULSE_PERIOD,
+        }
+    }
+}
+
 impl CombatStep {
     /// What the step sends `elapsed` into itself: its held input, with the
     /// pulsed bits down for the first [`PULSE_HOLD`] of each `period` until
@@ -1413,6 +1640,9 @@ impl CombatStep {
             cmd.buttons |= self.pulse.buttons;
             cmd.wbuttons |= self.pulse.wbuttons;
         }
+        if elapsed < self.press_for {
+            cmd.buttons |= self.press;
+        }
         cmd
     }
 }
@@ -1425,12 +1655,8 @@ fn combat_script() -> Vec<CombatStep> {
     let hold = |label, base, ms| CombatStep {
         label,
         base,
-        pulse: Pulse::default(),
         dur: Duration::from_millis(ms),
-        walks: false,
-        wait_ready: false,
-        from_reload_time: false,
-        period: PULSE_PERIOD,
+        ..CombatStep::default()
     };
     let fire = |label, base, shots, ms| CombatStep {
         label,
@@ -1441,10 +1667,8 @@ fn combat_script() -> Vec<CombatStep> {
             count: shots,
         },
         dur: Duration::from_millis(ms),
-        walks: false,
         wait_ready: true,
-        from_reload_time: false,
-        period: PULSE_PERIOD,
+        ..CombatStep::default()
     };
     vec![
         // First, so two probes spawned across a map close some of the distance
@@ -1456,12 +1680,9 @@ fn combat_script() -> Vec<CombatStep> {
                 forward: 127,
                 ..NULL_USERCMD
             },
-            pulse: Pulse::default(),
             dur: Duration::from_millis(6000),
             walks: true,
-            wait_ready: false,
-            from_reload_time: false,
-            period: PULSE_PERIOD,
+            ..CombatStep::default()
         },
         hold("idle", NULL_USERCMD, 1500),
         fire("single_shot", NULL_USERCMD, 1, 1500),
@@ -1470,17 +1691,15 @@ fn combat_script() -> Vec<CombatStep> {
         fire("sustained_fire", NULL_USERCMD, 6, 2500),
         CombatStep {
             label: "reload",
-            base: NULL_USERCMD,
             pulse: Pulse {
                 buttons: 0,
                 wbuttons: WBUTTON_RELOAD,
                 count: 1,
             },
             dur: RELOAD_HOLD_FALLBACK,
-            walks: false,
             wait_ready: true,
             from_reload_time: true,
-            period: PULSE_PERIOD,
+            ..CombatStep::default()
         },
         fire(
             "crouch_fire",
@@ -1520,12 +1739,8 @@ fn ads_script() -> Vec<CombatStep> {
     let hold = |label, base, ms| CombatStep {
         label,
         base,
-        pulse: Pulse::default(),
         dur: Duration::from_millis(ms),
-        walks: false,
-        wait_ready: false,
-        from_reload_time: false,
-        period: PULSE_PERIOD,
+        ..CombatStep::default()
     };
     let fire = |label, base, shots, ms| CombatStep {
         label,
@@ -1536,10 +1751,8 @@ fn ads_script() -> Vec<CombatStep> {
             count: shots,
         },
         dur: Duration::from_millis(ms),
-        walks: false,
         wait_ready: true,
-        from_reload_time: false,
-        period: PULSE_PERIOD,
+        ..CombatStep::default()
     };
     let sight = net::msg::UserCmd {
         buttons: BUTTON_ADS,
@@ -1574,10 +1787,9 @@ fn ads_script() -> Vec<CombatStep> {
                 count: 1,
             },
             dur: RELOAD_HOLD_FALLBACK,
-            walks: false,
             wait_ready: true,
             from_reload_time: true,
-            period: PULSE_PERIOD,
+            ..CombatStep::default()
         },
         hold("ads_release", NULL_USERCMD, 1000),
         // One shot down the sight: the add is skipped at a fraction of 1.
@@ -1589,6 +1801,84 @@ fn ads_script() -> Vec<CombatStep> {
         // Walking down the sight: the add is skipped, the 0x80 flag is on.
         hold("ads_walk", sight_walk, 1500),
         hold("idle_after", NULL_USERCMD, 1500),
+    ]
+}
+
+/// The `--save-grenade` steps, every one standing still so a gate can replay
+/// it: one melee swing on the rifle, then the frag through a cook and a
+/// release, a cook held past the pin, a cook cancelled by a weapon switch and
+/// a throw aimed at the ground. What the capture measured is in
+/// docs/research/cod11-combat.md, sections 6 and 11 to 14.
+fn grenade_script() -> Vec<CombatStep> {
+    use net::msg::{BUTTON_MELEE, NULL_USERCMD};
+    let hold = |label, ms| CombatStep {
+        label,
+        dur: Duration::from_millis(ms),
+        ..CombatStep::default()
+    };
+    // The trigger held for `press_ms` and released; the release is the throw.
+    let cook = |label, press_ms, ms| CombatStep {
+        label,
+        press: BUTTON_ATTACK,
+        press_for: Duration::from_millis(press_ms),
+        dur: Duration::from_millis(ms),
+        ..CombatStep::default()
+    };
+    vec![
+        // The rifle's melee, before any switch: the swing, its anims and the
+        // temp entity it spawns.
+        CombatStep {
+            label: "melee_tap",
+            press: BUTTON_MELEE,
+            press_for: Duration::from_millis(100),
+            dur: Duration::from_millis(1500),
+            ..CombatStep::default()
+        },
+        // Long enough for the rifle's drop and the frag's raise: the byte is
+        // held until `ps.weapon` reads the frag, and the cook after this step
+        // has to start with it already in hand.
+        CombatStep {
+            label: "to_frag",
+            switch: Some((Duration::ZERO, SwitchTo::Frag)),
+            dur: Duration::from_millis(3000),
+            ..CombatStep::default()
+        },
+        // A one-second cook, then the release: the fuse the missile inherits
+        // is what is left of `grenadeTimeLeft`.
+        cook("cook_release", 1000, 6000),
+        // Held past the pin: retail pins `grenadeTimeLeft` at 50 and throws
+        // the grenade itself, with the trigger still down.
+        cook("pin_out", 5000, 7000),
+        // A switch away mid-cook, which is the one path that puts the pin back
+        // in: no missile should come out of this step.
+        CombatStep {
+            label: "cancel",
+            press: BUTTON_ATTACK,
+            press_for: Duration::from_millis(3000),
+            switch: Some((Duration::from_millis(300), SwitchTo::Joined)),
+            dur: Duration::from_millis(3000),
+            ..CombatStep::default()
+        },
+        CombatStep {
+            label: "to_frag_2",
+            switch: Some((Duration::ZERO, SwitchTo::Frag)),
+            dur: Duration::from_millis(3000),
+            ..CombatStep::default()
+        },
+        // Aimed down, so the missile hits the floor a few units out and its
+        // bounces and its explode are all inside the step.
+        CombatStep {
+            label: "throw_down",
+            base: net::msg::UserCmd {
+                angles: [deg_to_short(45.0) & 0xffff, 0, 0],
+                ..NULL_USERCMD
+            },
+            press: BUTTON_ATTACK,
+            press_for: Duration::from_millis(200),
+            dur: Duration::from_millis(8000),
+            ..CombatStep::default()
+        },
+        hold("idle_after", 1500),
     ]
 }
 
@@ -1615,6 +1905,12 @@ struct CombatSample {
     /// The sight fraction and the spread counter (combat doc, 1.13 and 2.1).
     weapon_pos_frac: f32,
     aim_spread_scale: f32,
+    /// What is left of the cook, ms, and the weapon machine's own delay
+    /// (combat doc, 6 and 1.3).
+    grenade_time_left: i32,
+    weapon_delay: i32,
+    /// Every missile on the wire in this snapshot.
+    missiles: Vec<MissileSample>,
 }
 
 /// What a step turned out to be: kept beside the playerstate it ended at, so
@@ -1670,6 +1966,20 @@ struct CombatProbe {
     weapon_read: bool,
     spawn_delta_yaw: Option<i32>,
     stall: StallTurn,
+    /// Configstring 7 indexes, 1-based, of the frag and of the weapon the join
+    /// chose; 0 until the list is read.
+    frag_index: u8,
+    joined_index: u8,
+    /// The frag's name, for the fixture header.
+    frag_name: String,
+    /// The current step's switch has been asked for, and the index every cmd
+    /// carries until `ps.weapon` reads it.
+    switched: bool,
+    pending_switch: Option<u8>,
+    missiles: MissileWatch,
+    /// The player's origin and view at the first step, which is the spot a
+    /// replay of this capture has to throw from.
+    spawn_pose: Option<([f32; 3], [f32; 3])>,
 }
 
 impl Default for CombatProbe {
@@ -1689,6 +1999,13 @@ impl Default for CombatProbe {
             weapon_read: false,
             spawn_delta_yaw: None,
             stall: StallTurn::default(),
+            frag_index: 0,
+            joined_index: 0,
+            frag_name: String::new(),
+            switched: false,
+            pending_switch: None,
+            missiles: MissileWatch::default(),
+            spawn_pose: None,
         }
     }
 }
@@ -1700,6 +2017,50 @@ impl CombatProbe {
             steps: ads_script(),
             kind: "ads",
             ..Self::default()
+        }
+    }
+
+    /// The `--save-grenade` capture: the same machine running
+    /// [`grenade_script`].
+    fn grenade() -> Self {
+        Self {
+            steps: grenade_script(),
+            kind: "grenade",
+            ..Self::default()
+        }
+    }
+
+    /// The `cmd.weapon` a step's switch asks for. Retail's pickup half reads
+    /// the byte off the cmd of the frame the putaway finishes on (combat doc,
+    /// 1.8), so it is held until `ps.weapon` reads it rather than sent once: a
+    /// byte reverted before the swap lands leaves the old weapon in hand. The
+    /// hold outlives the step that asked for it, a drop and a raise together
+    /// outlasting any of them.
+    fn weapon_override(&mut self, ps_weapon: u8) -> Option<u8> {
+        let due = self.steps.get(self.idx).and_then(|step| {
+            let (at, to) = step.switch?;
+            (!self.switched && self.started.is_some_and(|t| t.elapsed() >= at))
+                .then_some((step.label, to))
+        });
+        if let Some((label, to)) = due {
+            self.switched = true;
+            match match to {
+                SwitchTo::Frag => self.frag_index,
+                SwitchTo::Joined => self.joined_index,
+            } {
+                0 => println!("COMBAT {label}: no configstring 7 index"),
+                idx => {
+                    println!("COMBAT {label}: asking for weapon {idx}");
+                    self.pending_switch = Some(idx);
+                }
+            }
+        }
+        match self.pending_switch {
+            Some(w) if w == ps_weapon => {
+                self.pending_switch = None;
+                None
+            }
+            other => other,
         }
     }
 
@@ -1720,11 +2081,25 @@ impl CombatProbe {
     /// Sizes the reload step off the weapon the join was given, once. A hold
     /// shorter than `reloadTime` leaves the reload running into the steps after
     /// it, which recorded a reload under two fire labels before this existed.
-    fn use_weapon(&mut self, fs: Option<&vcod_common::pk3::Pk3Fs>, name: &str) {
+    fn use_weapon(
+        &mut self,
+        fs: Option<&vcod_common::pk3::Pk3Fs>,
+        name: &str,
+        configstrings: &[String],
+    ) {
         if self.weapon_read || name.is_empty() {
             return;
         }
         self.weapon_read = true;
+        if let Some((idx, frag)) = weapon_cs_index(configstrings, FRAG_WEAPON) {
+            self.frag_index = idx;
+            self.frag_name = frag;
+        }
+        self.joined_index = weapon_cs_index(configstrings, name).map_or(0, |(i, _)| i);
+        println!(
+            "COMBAT: configstring 7 index {} for {name}, {} for {FRAG_WEAPON}",
+            self.joined_index, self.frag_index
+        );
         let Some(fs) = fs else {
             println!("COMBAT: no game data, reload holds the {RELOAD_HOLD_FALLBACK:?} fallback");
             return;
@@ -1788,6 +2163,17 @@ impl CombatProbe {
             }
         }
         let started = *self.started.get_or_insert(now);
+        // Where the script began, which is the spot a replay throws from.
+        self.spawn_pose.get_or_insert_with(|| {
+            (
+                snap.ps.origin(p),
+                [
+                    snap.ps.field_f32(p, "viewangles[0]"),
+                    snap.ps.field_f32(p, "viewangles[1]"),
+                    snap.ps.field_f32(p, "viewangles[2]"),
+                ],
+            )
+        });
         let elapsed = now.duration_since(started);
         let cmd = self.cmd();
         if self.traced != Some(snap.message_num) {
@@ -1812,9 +2198,15 @@ impl CombatProbe {
                 weapon: snap.ps.field_i32(p, "weapon"),
                 weapon_pos_frac: snap.ps.field_f32(p, "fWeaponPosFrac"),
                 aim_spread_scale: snap.ps.field_f32(p, "aimSpreadScale"),
+                grenade_time_left: snap.ps.field_i32(p, "grenadeTimeLeft"),
+                weapon_delay: snap.ps.field_i32(p, "weaponDelay"),
+                missiles: self.missiles.sample(snap),
             };
+            for m in &s.missiles {
+                println!("  {}", m.line(s.elapsed_ms).trim_end());
+            }
             println!(
-                "  trace {label} +{:>5}ms st={} in={:02x}/{:02x} weaponstate={} weapAnim={} legsAnim={} torsoAnim={} evSeq={} events=[{},{},{},{}] ads={:.3} spread={:.1}",
+                "  trace {label} +{:>5}ms st={} in={:02x}/{:02x} weaponstate={} weapAnim={} legsAnim={} torsoAnim={} evSeq={} events=[{},{},{},{}] ads={:.3} spread={:.1} nade={} delay={}",
                 s.elapsed_ms,
                 s.server_time,
                 s.buttons,
@@ -1830,6 +2222,8 @@ impl CombatProbe {
                 s.events[3],
                 s.weapon_pos_frac,
                 s.aim_spread_scale,
+                s.grenade_time_left,
+                s.weapon_delay,
             );
             self.trace.push(s);
         }
@@ -1853,6 +2247,7 @@ impl CombatProbe {
             self.started = None;
             self.waiting_since = None;
             self.ready_since = None;
+            self.switched = false;
             return false;
         }
         if elapsed < dur {
@@ -1908,6 +2303,7 @@ impl CombatProbe {
         self.started = None;
         self.waiting_since = None;
         self.ready_since = None;
+        self.switched = false;
         if self.idx >= self.steps.len() {
             self.done = true;
             return true;
@@ -2027,8 +2423,37 @@ fn write_combat_fixture(
     out.push_str("# the distinct values each channel took. A fire step with fired=0 is a broken\n");
     out.push_str("# capture and is flagged above its section as well.\n");
     out.push_str("# Each trace also carries fWeaponPosFrac and aimSpreadScale as decimals,\n");
-    out.push_str("# the sight fraction and the spread counter (combat doc, 1.13 and 2.1).\n");
+    out.push_str("# the sight fraction and the spread counter (combat doc, 1.13 and 2.1),\n");
+    out.push_str("# grenadeTimeLeft and weaponDelay as ms.\n");
     out.push_str("# Values are the raw i32 wire words, floats as their bit patterns.\n");
+    if combat.kind == "grenade" {
+        out.push_str(
+            "# press_buttons is held down for the first press_ms of the step rather than\n",
+        );
+        out.push_str("# tapped: a grenade is cooked by holding the trigger and thrown by the\n");
+        out.push_str("# release. switch_weapon is a one-cmd cmd.weapon at switch_ms into the\n");
+        out.push_str("# step, and held on every cmd after it until ps.weapon reads it: the\n");
+        out.push_str("# pickup half takes the byte off the cmd of the frame the putaway ends\n");
+        out.push_str("# on, so a byte sent once is reverted before the swap lands (1.8).\n");
+        out.push_str("# A !missile line follows each trace that had a missile on the wire. It\n");
+        out.push_str("# records every entity that reads eType 4 or read it earlier in the run\n");
+        out.push_str("# and has not left the wire, because the explode flips the missile's own\n");
+        out.push_str("# eType to 0 and adds its event there (combat doc, section 13). Each\n");
+        out.push_str("# trajectory is trType,trTime,base xyz,delta xyz; origin is pos evaluated\n");
+        out.push_str("# at the snapshot's serverTime.\n");
+        let (origin, view) = combat.spawn_pose.unwrap_or_default();
+        out.push_str(&format!(
+            "# grenade map={map} gametype={gametype} joined={} weapon={} weapon_index={} \
+frag={} frag_index={} origin={} viewangles={}\n",
+            join.team,
+            join.weapon,
+            combat.joined_index,
+            combat.frag_name,
+            combat.frag_index,
+            vec_str(origin),
+            vec_str(view),
+        ));
+    }
     let broken: Vec<&str> = combat
         .results
         .iter()
@@ -2070,20 +2495,30 @@ recapture before gating anything on this file.\n",
         }
         out.push_str(&format!("[step {}]\n", r.label));
         out.push_str(&format!(
-            "!input buttons={} wbuttons={} up={} forward={} right={} yaw={} \
+            "!input buttons={} wbuttons={} up={} forward={} right={} pitch={} yaw={} \
 pulse_buttons={} pulse_wbuttons={} pulses={} pulse_hold_ms={} pulse_period_ms={} \
+press_buttons={} press_ms={} switch_weapon={} switch_ms={} \
 hold_ms={} walks={} wait_ready={} weapon={}\n",
             step.base.buttons,
             step.base.wbuttons,
             step.base.up,
             step.base.forward,
             step.base.right,
+            step.base.angles[0],
             step.base.angles[1],
             step.pulse.buttons,
             step.pulse.wbuttons,
             step.pulse.count,
             PULSE_HOLD.as_millis(),
             step.period.as_millis(),
+            step.press,
+            step.press_for.as_millis(),
+            match step.switch.map(|(_, to)| to) {
+                Some(SwitchTo::Frag) => combat.frag_index,
+                Some(SwitchTo::Joined) => combat.joined_index,
+                None => 0,
+            },
+            step.switch.map_or(0, |(at, _)| at.as_millis()),
             step.dur.as_millis(),
             step.walks as i32,
             step.wait_ready as i32,
@@ -2114,7 +2549,7 @@ waited_ready_ms={} retried={} snapshots={} weaponstate={} legsAnim={} torsoAnim=
             out.push_str(&format!(
                 "!trace ms={} serverTime={} buttons={} wbuttons={} weaponstate={} weapAnim={} \
 legsAnim={} torsoAnim={} eventSequence={} events[0]={} events[1]={} events[2]={} events[3]={} \
-fWeaponPosFrac={:.4} aimSpreadScale={:.2}\n",
+fWeaponPosFrac={:.4} aimSpreadScale={:.2} grenadeTimeLeft={} weaponDelay={}\n",
                 s.elapsed_ms,
                 s.server_time,
                 s.buttons,
@@ -2130,7 +2565,12 @@ fWeaponPosFrac={:.4} aimSpreadScale={:.2}\n",
                 s.events[3],
                 s.weapon_pos_frac,
                 s.aim_spread_scale,
+                s.grenade_time_left,
+                s.weapon_delay,
             ));
+            for m in &s.missiles {
+                out.push_str(&m.line(s.elapsed_ms));
+            }
         }
         for (f, v) in p.player_fields.iter().zip(&r.fields) {
             out.push_str(&format!("{} {v}\n", f.name));
@@ -2559,8 +2999,38 @@ const BURST_HOLD: Duration = Duration::from_millis(3000);
 const FINISH_TAPS: u32 = 30;
 const FINISH_LIMIT: Duration = Duration::from_secs(15);
 const WATCH_HOLD: Duration = Duration::from_secs(25);
+/// The trigger held before the first throw, and the shorter hold of the second
+/// one, which goes out barely cooked at the ground.
+const COOK_HOLDS: [Duration; 2] = [Duration::from_millis(1000), Duration::from_millis(150)];
+/// How long a cook waits for the switch to the frag before it throws anyway,
+/// so a refused switch costs the throw and not the run.
+const COOK_LIMIT: Duration = Duration::from_secs(8);
+/// Long enough for the release and the frames the missile spawns on.
+const THROW_HOLD: Duration = Duration::from_millis(600);
+/// A grenade's fuse is about 4 s from the pull, so the watch has to outlast
+/// the flight, the bounces and the explode.
+const GRENADE_WATCH_HOLD: Duration = Duration::from_secs(8);
+const GRENADE_THROWS: u32 = 2;
+/// How far into the cook `--probe-grenade-death` kills itself, which is what
+/// puts the death drop's missile on the wire.
+const GRENADE_DEATH_AT: Duration = Duration::from_millis(500);
 /// A trace that gets this far is clear enough to shoot along.
 const LOS_FRACTION: f32 = 0.99;
+/// The events the shooter records with their entity, which is what says
+/// whether retail put one on a temp entity or on the missile's own ring: the
+/// pullback, the melee swing and its hit or miss, the grenade's bounces and
+/// every explode (docs/research/cod11-combat.md, sections 2.5, 12 and 13).
+const TRACKED_EVENTS: [i32; 9] = [
+    crate::fx::registry::EV_PULLBACK_WEAPON,
+    crate::fx::registry::EV_MELEE_SWIPE,
+    crate::fx::registry::EV_FIRE_MELEE,
+    crate::fx::registry::EV_MELEE_HIT,
+    crate::fx::registry::EV_MELEE_MISS,
+    crate::fx::registry::EV_GRENADE_BOUNCE,
+    crate::fx::registry::EV_GRENADE_EXPLODE,
+    crate::fx::registry::EV_ROCKET_EXPLODE,
+    crate::fx::registry::EV_ROCKET_EXPLODE_NOMARKS,
+];
 /// How close the approach walks before it shoots. A clear trace across a whole
 /// map is still a shot the spread throws off a player-sized target: one
 /// capture spent its taps that way from 3200 units out and another from 1950,
@@ -2728,6 +3198,10 @@ enum HitPhase {
     Burst,
     /// Tap until the target's entity stops being a player, or a cap hits.
     Finish,
+    /// Grenade only: switch to the frag and hold the trigger down.
+    Cook,
+    /// Grenade only: the release, and the frames the missile spawns on.
+    Throw,
     /// Idle, watching the corpse and the respawn.
     Watch,
     Done,
@@ -2741,6 +3215,8 @@ impl HitPhase {
             HitPhase::Sweep => "sweep",
             HitPhase::Burst => "burst",
             HitPhase::Finish => "finish",
+            HitPhase::Cook => "cook",
+            HitPhase::Throw => "throw",
             HitPhase::Watch => "watch",
             HitPhase::Done => "done",
         }
@@ -2768,40 +3244,62 @@ impl HitPhase {
         }
     }
 
-    /// What the phase is after `in_phase` spent in it. `los` is the eye-to-eye
-    /// trace, `target_etype` the aimed-at entity's eType (`None` when the
-    /// server sent none, which is not a reason to stop shooting) and `taps` the
-    /// taps spent so far.
-    fn advance(
-        self,
-        in_phase: Duration,
-        los: bool,
-        target_etype: Option<i32>,
-        taps: u32,
-        sweep: bool,
-    ) -> HitPhase {
+    /// What the phase is after `in_phase` spent in it.
+    fn advance(self, in_phase: Duration, cx: &PhaseCtx) -> HitPhase {
         use crate::entities::ET_PLAYER;
+        let engaged = cx.ready || in_phase >= APPROACH_LIMIT;
         match self {
-            HitPhase::Approach if (los || in_phase >= APPROACH_LIMIT) && sweep => HitPhase::Sweep,
-            HitPhase::Approach if los || in_phase >= APPROACH_LIMIT => HitPhase::SingleShot,
+            HitPhase::Approach if engaged && cx.script == ShooterScript::Sweep => HitPhase::Sweep,
+            HitPhase::Approach if engaged && cx.script.throws_grenades() => HitPhase::Cook,
+            HitPhase::Approach if engaged => HitPhase::SingleShot,
             HitPhase::Sweep
-                if taps >= SWEEP_PITCH_OFFSETS.len() as u32 || in_phase >= SWEEP_LIMIT =>
+                if cx.taps >= SWEEP_PITCH_OFFSETS.len() as u32 || in_phase >= SWEEP_LIMIT =>
             {
                 HitPhase::Watch
             }
             HitPhase::SingleShot if in_phase >= SINGLE_SHOT_HOLD => HitPhase::Burst,
             HitPhase::Burst if in_phase >= BURST_HOLD => HitPhase::Finish,
             HitPhase::Finish
-                if matches!(target_etype, Some(t) if t != ET_PLAYER)
-                    || taps >= FINISH_TAPS
+                if matches!(cx.target_etype, Some(t) if t != ET_PLAYER)
+                    || cx.taps >= FINISH_TAPS
                     || in_phase >= FINISH_LIMIT =>
             {
                 HitPhase::Watch
             }
-            HitPhase::Watch if in_phase >= WATCH_HOLD => HitPhase::Done,
+            // The cook gives up rather than hanging when the switch is refused.
+            HitPhase::Cook if cx.cook_done || in_phase >= COOK_LIMIT => HitPhase::Throw,
+            HitPhase::Throw if in_phase >= THROW_HOLD => HitPhase::Watch,
+            // A grenade run watches its missile out and then throws a second,
+            // uncooked one at the ground; a bullet run just watches.
+            HitPhase::Watch if cx.script.throws_grenades() && in_phase >= GRENADE_WATCH_HOLD => {
+                if cx.throws >= GRENADE_THROWS {
+                    HitPhase::Done
+                } else {
+                    HitPhase::Cook
+                }
+            }
+            HitPhase::Watch if !cx.script.throws_grenades() && in_phase >= WATCH_HOLD => {
+                HitPhase::Done
+            }
             p => p,
         }
     }
+}
+
+/// What [`HitPhase::advance`] needs beyond the phase's own clock.
+struct PhaseCtx {
+    /// The target is in the PVS, the trace to it is clear and it is inside the
+    /// script's engagement range.
+    ready: bool,
+    /// The aimed-at entity's eType; `None` when the server sent none, which is
+    /// not a reason to stop shooting.
+    target_etype: Option<i32>,
+    taps: u32,
+    script: ShooterScript,
+    /// The trigger has been held down long enough for this throw.
+    cook_done: bool,
+    /// Throws released so far, which is what ends a grenade run.
+    throws: u32,
 }
 
 /// ANGLE2SHORT: the wire's 16 bits over a full turn.
@@ -2851,6 +3349,11 @@ struct ShooterSample {
     target_etype: i32,
     target_origin: [f32; 3],
     origin: [f32; 3],
+    /// What is left of the cook, ms, and the weapon machine's own delay.
+    grenade_time_left: i32,
+    weapon_delay: i32,
+    /// Every missile on the wire in this snapshot.
+    missiles: Vec<MissileSample>,
 }
 
 impl ShooterSample {
@@ -2888,7 +3391,7 @@ impl ShooterSample {
             "!trace phase={} ms={} serverTime={} buttons={} wbuttons={} weaponstate={} weapAnim={} \
 legsAnim={} torsoAnim={} eventSequence={} events={},{},{},{} eventParms={},{},{},{} clip={} \
 ammo={} los={} range={:.0} seen={} viewangles={} pitchOffset={:.1} target={} \
-target_etype={} target_origin={} origin={}\n",
+target_etype={} target_origin={} origin={} grenadeTimeLeft={} weaponDelay={}\n",
             self.phase,
             self.elapsed_ms,
             self.server_time,
@@ -2918,6 +3421,8 @@ target_etype={} target_origin={} origin={}\n",
             self.target_etype,
             vec_str(self.target_origin),
             vec_str(self.origin),
+            self.grenade_time_left,
+            self.weapon_delay,
         )
     }
 }
@@ -2971,6 +3476,29 @@ struct HitProbe {
     /// one it is firing, and the tap period the last one was spent in.
     sweep_index: usize,
     sweep_period: Option<u128>,
+    /// Which phases the shooter runs and what its fixture is named.
+    script: ShooterScript,
+    /// The frag's configstring 7 index, for the cook's one-cmd switch.
+    frag_index: u8,
+    /// Set once this Cook's `ps.weapon` first read the frag; the trigger goes
+    /// down from then, so the cook is not spent on the switch animation.
+    cook_armed: Option<Instant>,
+    /// The current Cook's switch has been asked for, and the index every cmd
+    /// carries until `ps.weapon` reads it (combat doc, 1.8).
+    switched: bool,
+    pending_switch: Option<u8>,
+    /// Throws released, which is what ends a grenade run.
+    throws: u32,
+    /// `--probe-grenade-death` has sent its `kill`.
+    killed_self: bool,
+    /// Reliable commands the loop sends once its snapshot borrow is done.
+    pending: Vec<String>,
+    /// Held for the one frame a respawn press falls on.
+    press_use: bool,
+    used_at: Option<Instant>,
+    /// `(ms, event, parm, entity)` for every melee, grenade and death event.
+    events: Vec<(u128, i32, i32, u32)>,
+    missiles: MissileWatch,
 }
 
 impl Default for HitProbe {
@@ -3004,13 +3532,65 @@ impl Default for HitProbe {
             sweep: false,
             sweep_index: 0,
             sweep_period: None,
+            script: ShooterScript::Hit,
+            frag_index: 0,
+            cook_armed: None,
+            switched: false,
+            pending_switch: None,
+            throws: 0,
+            killed_self: false,
+            pending: Vec::new(),
+            press_use: false,
+            used_at: None,
+            events: Vec::new(),
+            missiles: MissileWatch::default(),
         }
     }
 }
 
 impl HitProbe {
+    fn new(script: ShooterScript) -> Self {
+        HitProbe {
+            script,
+            ..Self::default()
+        }
+    }
+
     fn running(&self) -> bool {
         self.phase != HitPhase::Done
+    }
+
+    /// The frag's `cmd.weapon` byte, out of configstring 7 at gamestate.
+    fn use_configstrings(&mut self, configstrings: &[String]) {
+        self.frag_index = weapon_cs_index(configstrings, FRAG_WEAPON).map_or(0, |(i, _)| i);
+        if self.script.throws_grenades() {
+            println!(
+                "HIT: configstring 7 index {} for {FRAG_WEAPON}",
+                self.frag_index
+            );
+        }
+    }
+
+    /// The one-cmd `cmd.weapon` the cook asks for, once per Cook phase.
+    fn weapon_override(&mut self, ps_weapon: u8) -> Option<u8> {
+        if self.phase == HitPhase::Cook && !self.switched && self.frag_index != 0 {
+            self.switched = true;
+            println!("HIT: cook, asking for weapon {}", self.frag_index);
+            self.pending_switch = Some(self.frag_index);
+        }
+        match self.pending_switch {
+            Some(w) if w == ps_weapon => {
+                self.pending_switch = None;
+                None
+            }
+            other => other,
+        }
+    }
+
+    /// How long this throw's cook holds the trigger; the second one is short,
+    /// so it goes out with most of its fuse left.
+    fn cook_hold(&self) -> Duration {
+        COOK_HOLDS[(self.throws as usize).min(COOK_HOLDS.len() - 1)]
     }
 
     fn elapsed_ms(&self, now: Instant) -> u128 {
@@ -3087,10 +3667,24 @@ impl HitProbe {
     /// spent on a dead or hidden target, and it ends on its table rather than
     /// on the clock.
     fn cmd(&self, now: Instant) -> net::msg::UserCmd {
+        use net::msg::BUTTON_MELEE;
         let mut cmd = self.phase.base();
         if let Some((yaw, pitch)) = self.aim {
             cmd.angles[1] = yaw;
             cmd.angles[0] = (pitch + deg_to_short(self.pitch_offset())) & 0xffff;
+        }
+        // A dead shooter presses use to respawn: `--probe-grenade-death` kills
+        // itself, and its second throw needs a body to throw from.
+        if self.press_use {
+            cmd.buttons |= BUTTON_USE;
+        }
+        // The cook is a held trigger, not a tap, and it starts once the switch
+        // to the frag has actually landed.
+        if self.phase == HitPhase::Cook {
+            if self.cook_armed.is_some() {
+                cmd.buttons |= BUTTON_ATTACK;
+            }
+            return cmd;
         }
         let Some(t) = self.phase_started else {
             return cmd;
@@ -3101,7 +3695,11 @@ impl HitProbe {
         let within = sweeping || ms / period < u128::from(self.phase.taps());
         let allowed = !sweeping || self.shootable();
         if within && allowed && ms % period < PULSE_HOLD.as_millis() {
-            cmd.buttons |= BUTTON_ATTACK;
+            cmd.buttons |= if self.script == ShooterScript::Melee {
+                BUTTON_MELEE
+            } else {
+                BUTTON_ATTACK
+            };
         }
         cmd
     }
@@ -3156,7 +3754,18 @@ impl HitProbe {
 
         if let Some((_, _, o)) = self.target {
             let target_eye = [o[0], o[1], o[2] + EYE_HEIGHT];
-            let (yaw, pitch) = aim_at(eye, target_eye);
+            let throwing = matches!(self.phase, HitPhase::Cook | HitPhase::Throw);
+            // A grenade is thrown at the target's feet, not its eye; the
+            // second one goes at the ground off to the side instead, which is
+            // the wall-and-floor bounce the first throw does not show.
+            let (yaw, pitch) = if throwing && self.throws == 0 {
+                aim_at(eye, o)
+            } else if throwing {
+                let (yaw, _) = aim_at(eye, o);
+                (yaw + deg_to_short(90.0), deg_to_short(45.0))
+            } else {
+                aim_at(eye, target_eye)
+            };
             // The approach walks where it looks, so its heading is the steered
             // one; the firing phases look straight at the target.
             let yaw = if self.phase == HitPhase::Approach {
@@ -3186,6 +3795,38 @@ impl HitProbe {
             self.los = false;
             self.range = f32::INFINITY;
             self.in_range = false;
+        }
+
+        // The cook's clock starts when the switch has landed, not when the
+        // phase did: the frag's raise is dead time no fuse counts down in.
+        if self.phase == HitPhase::Cook
+            && self.cook_armed.is_none()
+            && snap.ps.field_i32(p, "weapon") == i32::from(self.frag_index)
+        {
+            println!("HIT: frag in hand at +{ms}ms, cooking");
+            self.cook_armed = Some(now);
+        }
+        // The suicide of `--probe-grenade-death`, into a cook that has started:
+        // what it captures is the grenade the death drops.
+        if self.script == ShooterScript::GrenadeDeath
+            && !self.killed_self
+            && self
+                .cook_armed
+                .is_some_and(|t| now.duration_since(t) >= GRENADE_DEATH_AT)
+        {
+            println!("HIT: sending kill at +{ms}ms, {GRENADE_DEATH_AT:?} into the cook");
+            self.pending.push("kill".to_string());
+            self.killed_self = true;
+        }
+        // The respawn press, retried once a second while dead.
+        self.press_use = false;
+        if snap.ps.field_i32(p, "pm_type") != PM_NORMAL
+            && self
+                .used_at
+                .is_none_or(|t| now.duration_since(t) >= TARGET_USE_RETRY)
+        {
+            self.used_at = Some(now);
+            self.press_use = true;
         }
 
         // One offset per tap the sweep actually took, so a period spent
@@ -3246,18 +3887,37 @@ impl HitProbe {
                 target_etype,
                 target_origin,
                 origin: snap.ps.origin(p),
+                grenade_time_left: f("grenadeTimeLeft"),
+                weapon_delay: f("weaponDelay"),
+                missiles: self.missiles.sample(snap),
             };
-            // Every snapshot while shooting; the walk and the watch collapse to
-            // their transitions and a heartbeat.
+            // Every snapshot while shooting or while a grenade is in the air;
+            // the walk and the watch collapse to their transitions and a
+            // heartbeat.
             let firing = matches!(
                 self.phase,
-                HitPhase::SingleShot | HitPhase::Burst | HitPhase::Finish | HitPhase::Sweep
-            );
+                HitPhase::SingleShot
+                    | HitPhase::Burst
+                    | HitPhase::Finish
+                    | HitPhase::Sweep
+                    | HitPhase::Cook
+                    | HitPhase::Throw
+            ) || !s.missiles.is_empty();
             if firing || keep_sample(&mut self.last_kept, s.watched(), ms) {
                 println!("  {}", s.line().trim_end());
+                for m in &s.missiles {
+                    println!("  {}", m.line(ms).trim_end());
+                }
                 self.trace.push(s);
             }
             for ev in self.tracker.drain(snap, p) {
+                if TRACKED_EVENTS.contains(&ev.event) {
+                    println!(
+                        "  event +{ms}ms ev {} parm {} entity {}",
+                        ev.event, ev.parm, ev.entity_num
+                    );
+                    self.events.push((ms, ev.event, ev.parm, ev.entity_num));
+                }
                 if ev.event == EV_OBITUARY {
                     println!(
                         "  obituary +{ms}ms victim {} attacker {} parm {}",
@@ -3286,16 +3946,20 @@ impl HitProbe {
         } else {
             (in_phase.as_millis() / self.period.as_millis()) as u32
         };
-        // A sweep keeps walking until it is close; the stop overshoots by a
-        // stride or two, which is why the taps themselves are not gated on it.
-        let ready = shootable && (!self.sweep || self.range <= SWEEP_RANGE);
-        let next = self.phase.advance(
-            in_phase,
+        // The approach keeps walking until it is close; the stop overshoots by
+        // a stride or two, which is why the taps themselves are not gated on it.
+        let ready = shootable && self.range <= self.script.engage_range();
+        let cx = PhaseCtx {
             ready,
-            self.target.filter(|_| self.target_seen).map(|t| t.1),
+            target_etype: self.target.filter(|_| self.target_seen).map(|t| t.1),
             taps,
-            self.sweep,
-        );
+            script: self.script,
+            cook_done: self
+                .cook_armed
+                .is_some_and(|t| now.duration_since(t) >= self.cook_hold()),
+            throws: self.throws,
+        };
+        let next = self.phase.advance(in_phase, &cx);
         if next != self.phase {
             println!(
                 "HIT: {} -> {} at +{ms}ms (los {}, range {:.0}, target {:?})",
@@ -3309,6 +3973,14 @@ impl HitProbe {
                 self.engaged_at = Some(self.range);
                 self.engaged_los = self.los;
             }
+            if self.phase == HitPhase::Throw {
+                self.throws += 1;
+            }
+            if next == HitPhase::Cook {
+                self.cook_armed = None;
+                self.switched = false;
+                self.pending_switch = None;
+            }
             self.phase = next;
             self.phase_started = Some(now);
         }
@@ -3316,9 +3988,10 @@ impl HitProbe {
     }
 }
 
-/// Writes one role's half of the hit capture to
-/// `<map>-<gametype>-hit-<role>.txt`. Both halves carry the same header keys,
-/// so a gate reads either the same way; `body` is the role's own section.
+/// Writes one role's half of the hit capture to `<map>-<gametype>-<role>.txt`,
+/// where `role` is the script's own prefix and the half: `hit-shooter`,
+/// `grenade-target` and so on. Both halves carry the same header keys, so a
+/// gate reads either the same way; `body` is the role's own section.
 fn write_hit_fixture(
     role: &str,
     configstrings: &[String],
@@ -3371,7 +4044,7 @@ fn write_hit_fixture(
     }
     out.push_str(body);
 
-    let path = format!("{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-hit-{role}.txt");
+    let path = format!("{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-{role}.txt");
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
     std::fs::write(&path, out)?;
     println!("hit: {role} -> {path}");
@@ -3381,6 +4054,7 @@ fn write_hit_fixture(
 /// The target's half: the trace, the events, the corpse edges and the
 /// scoreboards.
 fn write_target_fixture(
+    script: ShooterScript,
     configstrings: &[String],
     join: &JoinProbe,
     target: &TargetProbe,
@@ -3436,7 +4110,8 @@ and carries nothing about what a shot does to a player."
         target.trace.len(),
         target.elapsed_ms(now) / 1000
     );
-    write_hit_fixture("target", configstrings, join, &taken, &notes, &body)
+    let role = format!("{}-target", script.prefix());
+    write_hit_fixture(&role, configstrings, join, &taken, &notes, &body)
 }
 
 /// The shooter's half: the trace with what it could see of the target, the
@@ -3448,11 +4123,23 @@ fn write_shooter_fixture(
     now: Instant,
 ) -> anyhow::Result<()> {
     let mut notes = Vec::new();
+    let missiles: usize = hit.trace.iter().map(|s| s.missiles.len()).sum();
     if !hit.los_ever {
         notes.push(format!(
             "# BROKEN no line of sight after {} s: the shots in this file hit the map, not a player.",
             APPROACH_LIMIT.as_secs()
         ));
+    } else if hit.script.throws_grenades() {
+        // A grenade at the target's feet is not meant to kill it; what says
+        // the throw worked is a missile on the wire, and what says it landed
+        // is the target fixture's health.
+        if missiles == 0 {
+            notes.push(
+                "# BROKEN no missile ever reached the wire: the frag switch or the throw \
+failed, so this file measures nothing about a grenade."
+                    .to_string(),
+            );
+        }
     } else if !hit.killed {
         notes.push(format!(
             "# BROKEN no kill: the shots went out at {:.0} units with los {} and the target never \
@@ -3464,19 +4151,31 @@ is what says so.",
     }
     let mut body = String::from("[section shooter]\n");
     body.push_str(&format!(
-        "!observed reached={} los_found={} engaged_los={} killed={} engaged_at={:.0} traced={} \
-obituaries={} corpse_edges={}\n",
+        "!observed script={:?} reached={} los_found={} engaged_los={} killed={} engaged_at={:.0} \
+traced={} throws={} missile_samples={} events={} obituaries={} corpse_edges={}\n",
+        hit.script,
         hit.phase.label(),
         hit.los_ever as i32,
         hit.engaged_los as i32,
         hit.killed as i32,
         hit.engaged_at.unwrap_or(hit.range),
         hit.trace.len(),
+        hit.throws,
+        missiles,
+        hit.events.len(),
         hit.obituaries.len(),
         hit.corpses.len(),
     ));
     for s in &hit.trace {
         body.push_str(&s.line());
+        for m in &s.missiles {
+            body.push_str(&m.line(s.elapsed_ms));
+        }
+    }
+    for (ms, ev, parm, ent) in &hit.events {
+        body.push_str(&format!(
+            "!event ms={ms} event={ev} parm={parm} entity={ent}\n"
+        ));
     }
     for (ms, victim, attacker, parm) in &hit.obituaries {
         body.push_str(&format!(
@@ -3494,7 +4193,8 @@ obituaries={} corpse_edges={}\n",
         hit.trace.len(),
         hit.elapsed_ms(now) / 1000
     );
-    write_hit_fixture("shooter", configstrings, join, &taken, &notes, &body)
+    let role = format!("{}-shooter", hit.script.prefix());
+    write_hit_fixture(&role, configstrings, join, &taken, &notes, &body)
 }
 
 /// Writes the spawned player's wire state to `<map>-<gametype>.txt`. The map
@@ -4150,16 +4850,29 @@ mod tests {
         );
     }
 
+    /// The phase context a test varies one field of at a time.
+    fn ctx(ready: bool, script: ShooterScript) -> PhaseCtx {
+        PhaseCtx {
+            ready,
+            target_etype: Some(crate::entities::ET_PLAYER),
+            taps: 0,
+            script,
+            cook_done: false,
+            throws: 0,
+        }
+    }
+
     /// The two transitions the capture depends on: the approach ends on a
     /// clear trace, and it ends anyway at the limit so a run behind a wall
     /// still records its shots.
     #[test]
     fn hit_approach_ends_on_a_clear_trace_or_at_the_limit() {
-        let blocked = HitPhase::Approach.advance(Duration::from_secs(30), false, Some(1), 0, false);
+        let hit = ShooterScript::Hit;
+        let blocked = HitPhase::Approach.advance(Duration::from_secs(30), &ctx(false, hit));
         assert_eq!(blocked, HitPhase::Approach);
-        let clear = HitPhase::Approach.advance(Duration::from_secs(30), true, Some(1), 0, false);
+        let clear = HitPhase::Approach.advance(Duration::from_secs(30), &ctx(true, hit));
         assert_eq!(clear, HitPhase::SingleShot);
-        let out_of_time = HitPhase::Approach.advance(APPROACH_LIMIT, false, None, 0, false);
+        let out_of_time = HitPhase::Approach.advance(APPROACH_LIMIT, &ctx(false, hit));
         assert_eq!(out_of_time, HitPhase::SingleShot);
     }
 
@@ -4168,41 +4881,77 @@ mod tests {
     /// not, or the shooter would stop firing every time PVS blinked.
     #[test]
     fn hit_finish_ends_when_the_target_stops_being_a_player() {
-        let firing = HitPhase::Finish.advance(Duration::from_secs(1), true, Some(1), 3, false);
-        assert_eq!(firing, HitPhase::Finish);
-        let unseen = HitPhase::Finish.advance(Duration::from_secs(1), false, None, 3, false);
-        assert_eq!(unseen, HitPhase::Finish);
-        let corpse = HitPhase::Finish.advance(
-            Duration::from_secs(1),
-            true,
-            Some(crate::entities::ET_CORPSE),
-            3,
-            false,
-        );
-        assert_eq!(corpse, HitPhase::Watch);
-        let spent =
-            HitPhase::Finish.advance(Duration::from_secs(1), true, Some(1), FINISH_TAPS, false);
-        assert_eq!(spent, HitPhase::Watch);
+        let hit = ShooterScript::Hit;
+        let one = Duration::from_secs(1);
+        let mut cx = ctx(true, hit);
+        cx.taps = 3;
+        assert_eq!(HitPhase::Finish.advance(one, &cx), HitPhase::Finish);
+        cx.target_etype = None;
+        cx.ready = false;
+        assert_eq!(HitPhase::Finish.advance(one, &cx), HitPhase::Finish);
+        cx.target_etype = Some(crate::entities::ET_CORPSE);
+        assert_eq!(HitPhase::Finish.advance(one, &cx), HitPhase::Watch);
+        let mut spent = ctx(true, hit);
+        spent.taps = FINISH_TAPS;
+        assert_eq!(HitPhase::Finish.advance(one, &spent), HitPhase::Watch);
     }
 
     /// The sweep replaces the three scripted firing phases and ends on its
     /// table, not on the clock.
     #[test]
     fn hit_sweep_takes_the_approach_and_ends_on_its_table() {
-        let plain = HitPhase::Approach.advance(Duration::from_secs(30), true, Some(1), 0, false);
+        let t = Duration::from_secs(30);
+        let plain = HitPhase::Approach.advance(t, &ctx(true, ShooterScript::Hit));
         assert_eq!(plain, HitPhase::SingleShot);
-        let swept = HitPhase::Approach.advance(Duration::from_secs(30), true, Some(1), 0, true);
-        assert_eq!(swept, HitPhase::Sweep);
-        let mid = HitPhase::Sweep.advance(Duration::from_secs(30), true, Some(1), 3, true);
-        assert_eq!(mid, HitPhase::Sweep);
-        let spent = HitPhase::Sweep.advance(
-            Duration::from_secs(30),
-            true,
-            Some(1),
-            SWEEP_PITCH_OFFSETS.len() as u32,
-            true,
+        let mut cx = ctx(true, ShooterScript::Sweep);
+        assert_eq!(HitPhase::Approach.advance(t, &cx), HitPhase::Sweep);
+        cx.taps = 3;
+        assert_eq!(HitPhase::Sweep.advance(t, &cx), HitPhase::Sweep);
+        cx.taps = SWEEP_PITCH_OFFSETS.len() as u32;
+        assert_eq!(HitPhase::Sweep.advance(t, &cx), HitPhase::Watch);
+    }
+
+    /// A grenade run cooks instead of shooting, and ends after its second
+    /// throw rather than on the watch clock the bullet run ends on.
+    #[test]
+    fn grenade_run_cooks_throws_twice_and_stops() {
+        let t = Duration::from_secs(30);
+        let mut cx = ctx(true, ShooterScript::Grenade);
+        assert_eq!(HitPhase::Approach.advance(t, &cx), HitPhase::Cook);
+        // The cook holds the trigger until the hold is spent, not on a clock.
+        assert_eq!(
+            HitPhase::Cook.advance(Duration::from_secs(1), &cx),
+            HitPhase::Cook
         );
-        assert_eq!(spent, HitPhase::Watch);
+        cx.cook_done = true;
+        assert_eq!(
+            HitPhase::Cook.advance(Duration::from_secs(1), &cx),
+            HitPhase::Throw
+        );
+        assert_eq!(HitPhase::Throw.advance(THROW_HOLD, &cx), HitPhase::Watch);
+        cx.throws = 1;
+        assert_eq!(
+            HitPhase::Watch.advance(GRENADE_WATCH_HOLD, &cx),
+            HitPhase::Cook
+        );
+        cx.throws = GRENADE_THROWS;
+        assert_eq!(
+            HitPhase::Watch.advance(GRENADE_WATCH_HOLD, &cx),
+            HitPhase::Done
+        );
+    }
+
+    /// The melee script is the bullet script with another bit: it takes the
+    /// same phases, so a swing that kills the target ends the run the same way.
+    #[test]
+    fn melee_run_takes_the_bullet_phases() {
+        let t = Duration::from_secs(30);
+        let cx = ctx(true, ShooterScript::Melee);
+        assert_eq!(HitPhase::Approach.advance(t, &cx), HitPhase::SingleShot);
+        assert_eq!(
+            HitPhase::SingleShot.advance(SINGLE_SHOT_HOLD, &cx),
+            HitPhase::Burst
+        );
     }
 
     /// A trace 20 samples a second for minutes is unreadable and huge, and a

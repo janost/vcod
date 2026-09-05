@@ -149,6 +149,23 @@ engineering setup works.
   spread counter; it writes `<map>-<gametype>-ads.txt` with `fWeaponPosFrac`
   and `aimSpreadScale` on every `!trace` line, and the same gate replays it.
   It is the capture that found the usercmd delta base (Gotchas).
+  `--save-grenade` is the same machine on a grenade script: one melee swing
+  with the rifle the join chose, a switch to the frag, a cooked throw, a cook
+  held past the pin, a cook cancelled by switching back mid-hold, and a throw
+  aimed at the ground. It writes `<map>-<gametype>-grenade.txt` with
+  `grenadeTimeLeft` and `weaponDelay` on every `!trace` line and a `!missile`
+  line after each trace that had a grenade on the wire. Two step shapes are
+  new and both are on the `!input` line so a gate replays them: a held input
+  rather than a tapped one (`press_buttons`, `press_ms`), since a grenade is
+  cooked by holding the trigger and thrown by the release, and a one-cmd
+  `cmd.weapon` (`switch_weapon`, `switch_ms`), which is the only way to ask
+  retail for a weapon change. The `!missile` line records every entity that
+  reads `eType` 4 or read it earlier in the run and has not left the wire yet:
+  the explode flips the missile's own `eType` to 0 and adds its event there,
+  so an `eType`-4 filter drops the explode frame
+  (`docs/research/cod11-combat.md`, section 13). The header's `# grenade` line
+  carries the frag's configstring 7 index and the origin and view the script
+  started from, which is the spot a replay has to throw from.
   Every capture cmd carries the weapon the playerstate says the client holds.
   A cmd with `weapon` 0 is not neutral: retail reads a `cmd.weapon` differing
   from `ps.weapon` as a request to holster, and the byte travels only in the
@@ -203,6 +220,24 @@ engineering setup works.
   probe logs with the server's `D;`/`K;` lines and prints the height each
   hit crossed the victim at; both runs and what they settled are in
   `docs/research/cod11-combat.md`, section 3.4.
+  `--probe-melee`, `--probe-grenade` and `--probe-grenade-death` swap the hit
+  pair's bullet script for another one. Melee walks to within `MELEE_RANGE`
+  (40 units; retail's swing reaches 64) and taps the melee bit through the
+  same three firing phases. Grenade walks to within `GRENADE_RANGE` (300),
+  switches to the frag, holds the trigger a second, releases at the target's
+  feet, watches the missile out for 8 s and then throws a second one, barely
+  cooked, at the ground beside it. `--probe-grenade-death` is that with a
+  `kill` sent 500 ms into the cook, which is what puts the grenade a death
+  drops on the wire. Each names both halves after itself --
+  `<map>-<gametype>-melee-shooter.txt`, `-grenade-target.txt` and so on -- so
+  the flag goes to the `--probe-target` half too, or that half writes over the
+  committed bullet capture. The shooter's fixture gains `grenadeTimeLeft` and
+  `weaponDelay` on every trace, the same `!missile` lines the lone capture
+  carries, and an `!event` line per pullback, melee swipe, hit, miss, bounce
+  and explode with the entity that carried it, which is what says whether
+  retail put one on a temp entity or on the missile's own ring. All seven of
+  these fixtures are committed retail evidence and a run against ours
+  overwrites them: move them to `tmp/` and `git checkout` the directory after.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
