@@ -1094,6 +1094,41 @@ impl Server {
         world.collision.shot_trace(eye, end).fraction >= 1.0
     }
 
+    /// Test-facing, beside `test_clear_line`: `CanDamage`'s fraction for a
+    /// standing player whose feet are at `feet`, from a blast at `at`
+    /// (combat doc, 14.3). 0 is a player the blast cannot see at all.
+    pub fn test_can_damage(&self, at: [f32; 3], feet: [f32; 3]) -> f32 {
+        let Some(world) = self.world.as_ref() else {
+            return 1.0;
+        };
+        use vcod_common::pmove::{Stance, HALF_WIDTH};
+        let feet = glam::Vec3::from(feet);
+        let v = crate::game::combat::BlastVictim {
+            slot: 0,
+            origin: feet,
+            mins: glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
+            maxs: glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
+            eye: feet + glam::Vec3::Z * Stance::Stand.view_height(),
+        };
+        crate::game::combat::can_damage(glam::Vec3::from(at), &v, &world.collision)
+    }
+
+    /// Test-facing: where a standing player dropped at `p` comes to rest,
+    /// or `None` when it starts inside geometry or finds no floor within
+    /// 256 units. What a test needs to put a second client somewhere the map
+    /// actually holds one.
+    pub fn test_ground_under(&self, p: [f32; 3]) -> Option<[f32; 3]> {
+        let world = self.world.as_ref()?;
+        use vcod_common::pmove::{Stance, HALF_WIDTH};
+        let mins = glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0);
+        let maxs = glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height());
+        let start = glam::Vec3::from(p);
+        let t = world
+            .collision
+            .box_trace(start, start - glam::Vec3::Z * 256.0, mins, maxs);
+        (!t.startsolid && !t.allsolid && t.fraction < 1.0).then_some(t.endpos.into())
+    }
+
     /// Clones a client into the body queue and returns the corpse's entity
     /// number. Test-facing, like `place_client`: `cloneplayer` is the script
     /// path that will call this, and it does not exist yet.
@@ -1518,6 +1553,37 @@ impl Server {
             }
             // What the radius damage pass charges, on this same frame.
             self.pending_explosions = frame.exploded;
+            // Each blast becomes hits before `deliver_hits` runs, so a
+            // grenade damages on the frame it goes off (combat doc, 14.1).
+            let collision = self.world.as_ref().map(|w| &w.collision);
+            for x in &self.pending_explosions {
+                let Some(def) = weapons.get(x.weapon as usize) else {
+                    continue;
+                };
+                let victims: Vec<crate::game::combat::BlastVictim> = sims
+                    .iter()
+                    .filter(|(_, s)| s.pm_type == crate::spectate::PmType::Normal && !s.dead)
+                    .map(|(slot, s)| crate::game::combat::BlastVictim {
+                        slot: *slot,
+                        origin: s.ps.origin,
+                        mins: s.ps.mins(),
+                        maxs: s.ps.maxs(),
+                        eye: s.ps.view().eye,
+                    })
+                    .collect();
+                hits.extend(crate::game::combat::radius_damage(
+                    x.at,
+                    def.explosion_radius,
+                    def.explosion_inner_damage as f32,
+                    def.explosion_outer_damage as f32,
+                    Some(x.owner),
+                    Some(x.inflictor),
+                    crate::items::item_name(x.weapon as usize).unwrap_or_default(),
+                    "MOD_GRENADE_SPLASH",
+                    &victims,
+                    collision,
+                ));
+            }
             // The client commands the packet pass queued, on this frame's
             // clock: retail runs `Cmd_Kill_f` ahead of the damage callbacks
             // too, and a thread started here sees `level.time` already

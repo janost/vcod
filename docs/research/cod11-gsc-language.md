@@ -771,38 +771,35 @@ added closes that (section 14 of
   on one event is killed rather than woken, regardless of which it
   registered first. The wake order *within* each pass is measured (start
   order, `# probe_notify`); the ordering *between* the two passes is not.
-- **`radiusDamage` loses damage to cover that vcod's takes at full.** The
-  falloff and the callback timing are both settled and no longer divergences.
-  VERIFIED: the builtin at `.so` 0x5eef4 and `G_RadiusDamage` (`.so` 0x4a3f4)
-  have been read out, and retail's curve is linear from `maxDamage` at the
-  blast to `minDamage` at the range, which is what `radius_damage`
-  (`crates/server/src/game/builtins/combat.rs`) already computes. The callback
-  half was settled earlier: `radius_damage` hands
-  `CodeCallback_PlayerDamage` to `Cx::spawn`, which the interpreter starts as
-  soon as the builtin returns and before the calling thread's next
-  instruction, so a script that damages and then reads `self.health` sees what
-  the callback left, the way retail's synchronous call does. Four things
-  around that curve are still divergences, all of them measured and all of
-  them in `docs/research/cod11-combat.md` section 14:
-  - **No line-of-sight fraction.** Retail multiplies the falloff by
-    `CanDamage`'s return, which is 0, 1/3, 2/3 or 1 depending on how many of
-    five traces to the victim reach it (14.3). vcod applies the falloff whole,
-    so a victim behind a wall inside the radius takes full damage where retail
-    gives him nothing.
-  - **No second-chance arm.** When `CanDamage` returns 0, retail still charges
-    10% of the falloff if the trace to the victim's box midpoint was blocked
-    and that midpoint is within `radius * 0.2` (14.1). vcod has no such arm.
-  - **The direction handed to the callback.** Retail passes
-    `victim.r.currentOrigin - origin` with `24.0` added to z, unnormalized, so
-    its length carries the distance. vcod passes
-    `away.normalize_or_zero()`, a unit vector with no z offset.
+- **`radiusDamage` walks live clients and nothing else.** The falloff, the
+  line of sight, the direction and the callback timing are all settled and no
+  longer divergences. VERIFIED: the builtin at `.so` 0x5eef4 and
+  `G_RadiusDamage` (`.so` 0x4a3f4) have been read out, and both the linear
+  curve from `maxDamage` at the blast to `minDamage` at the range and
+  `CanDamage`'s five-trace fraction are what `crate::game::combat`'s
+  `radius_damage` and `can_damage` compute, second-chance arm included
+  (`docs/research/cod11-combat.md` section 14). The callback half was settled
+  earlier: `radius_damage` hands `CodeCallback_PlayerDamage` to `Cx::spawn`,
+  which the interpreter starts as soon as the builtin returns and before the
+  calling thread's next instruction, so a script that damages and then reads
+  `self.health` sees what the callback left, the way retail's synchronous call
+  does. Three things around it are still divergences:
   - **The victim walk.** Retail walks `trap_EntitiesInBox` over a
     `radius * sqrt(2)` box and takes anything with `takedamage` set, measuring
     a brush model to the nearest point of its bounds. vcod walks live clients
-    only and measures the script `origin` field. Retail's builtin also reads
-    exactly four script arguments and always passes the world entity as the
-    attacker; vcod's optional fifth attacker argument is an extension retail
-    has no equivalent of.
+    only and measures the script `origin` field, so nothing else this server
+    ever damages is reachable by a blast.
+  - **The victim's box and eye are the standing ones.** Retail reads them off
+    the entity, whose stance is the client's own; the host carries no stance,
+    so a crouched or prone player is measured as if he stood. That moves
+    `CanDamage`'s five probe points, not the distance, which is origin to
+    origin either way.
+  - **The attacker reaches the callback as `undefined`.** Retail hands over
+    `g_entities[1022]`, the world entity, which no script this VM runs can
+    hold. The stock callback's own `isPlayer(eAttacker)` test takes the same
+    branch for both. vcod's fifth attacker argument is no longer honoured,
+    and no call in the shipped corpus passes one; an extra argument is
+    ignored rather than refused, since retail reads its four by index.
 - **Of the `SP_` layer, only what the wire can see runs.**
   `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces
   `G_CallSpawn`'s third case for the five classnames whose `SP_` function is

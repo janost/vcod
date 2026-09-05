@@ -734,3 +734,332 @@ fn a_melee_swing_hits_and_the_kill_shows_the_melee_icon() {
     );
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }
+
+/// `ANGLE2SHORT`: the wire's 16-bit angle, positive pitch looking down.
+fn angle_short(deg: f32) -> i32 {
+    (deg * 65536.0 / 360.0) as i32
+}
+
+/// The falloff a frag charges a player standing at `feet` from a blast at
+/// `at`, with a clear line of sight (combat doc, 14.1). The tests assert
+/// against this rather than a constant: where a grenade comes to rest is the
+/// bounce's business, so the distance is only known once it has.
+fn frag_damage(at: [f32; 3], feet: [f32; 3]) -> i32 {
+    let d = dist(at, feet) as f64;
+    if d >= 350.0 {
+        return 0;
+    }
+    (5.0 + (1.0 - d / 350.0) * 115.0) as i32
+}
+
+fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
+type Client = vcod_common::net::NetClient<common::ClientEnd>;
+
+/// A thrown frag: `cmd.weapon` held at the frag's index until the playerstate
+/// carries it (combat doc, 1.8), then the trigger held for a second of cook
+/// and released along `aim`, which is a yaw and a downward pitch in degrees.
+/// Steps until the fuse goes off and returns where it did.
+fn cook_and_throw_down(
+    sv: &mut vcod_server::Server,
+    step: &mut impl FnMut(&mut vcod_server::Server, &mut Client, &mut Client),
+    a: &mut Client,
+    b: &mut Client,
+    b_cmd: &vcod_common::net::msg::UserCmd,
+    frag: u8,
+    aim: (f32, f32),
+) -> [f32; 3] {
+    use vcod_common::net::msg::{UserCmd, BUTTON_ATTACK, NULL_USERCMD};
+    let p = &PROTOCOL_V1;
+    let aimed = UserCmd {
+        angles: [angle_short(aim.1), angle_short(aim.0), 0],
+        weapon: frag,
+        ..NULL_USERCMD
+    };
+    let mut switched = false;
+    for _ in 0..80 {
+        a.send_frame(&aimed);
+        b.send_frame(b_cmd);
+        step(sv, a, b);
+        if a.snapshots()
+            .newest()
+            .is_some_and(|s| s.ps.field_i32(p, "weapon") == frag as i32)
+        {
+            switched = true;
+            break;
+        }
+    }
+    assert!(switched, "the frag never reached the thrower's hands");
+    // The raise has to finish before the trigger means anything: a bit held
+    // through it is swallowed and then latched (combat doc, 1.4).
+    let mut ready = false;
+    for _ in 0..60 {
+        a.send_frame(&aimed);
+        b.send_frame(b_cmd);
+        step(sv, a, b);
+        if a.snapshots()
+            .newest()
+            .is_some_and(|s| s.ps.field_i32(p, "weaponstate") == 0)
+        {
+            ready = true;
+            break;
+        }
+    }
+    assert!(ready, "the frag never came up");
+    let cook = UserCmd {
+        buttons: BUTTON_ATTACK,
+        ..aimed
+    };
+    for _ in 0..20 {
+        a.send_frame(&cook);
+        b.send_frame(b_cmd);
+        step(sv, a, b);
+    }
+    for _ in 0..200 {
+        a.send_frame(&aimed);
+        b.send_frame(b_cmd);
+        step(sv, a, b);
+        if let Some(x) = sv.pending_explosions().first() {
+            let at = x.at.into();
+            // One more frame so both clients have been sent the damage the
+            // blast did on the frame it went off.
+            a.send_frame(&aimed);
+            b.send_frame(b_cmd);
+            step(sv, a, b);
+            return at;
+        }
+    }
+    panic!("the grenade never went off");
+}
+
+/// Two clients joined on the map: A left where it spawned, B placed wherever
+/// the caller's `b_at` puts it. `None` without the paks.
+struct Pair {
+    sv: vcod_server::Server,
+    ca: Client,
+    cb: Client,
+    qa: Rc<RefCell<Queues>>,
+    qb: Rc<RefCell<Queues>>,
+    now: Instant,
+}
+
+fn two_placed(b_at: impl Fn(&vcod_server::Server, [f32; 3]) -> [f32; 3]) -> Option<Pair> {
+    let fs = vcod_common::testing::game_fs()?;
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (ca, cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+    let p = &PROTOCOL_V1;
+    let num = |c: &Client| c.snapshots().newest().unwrap().ps.field_i32(p, "clientNum") as usize;
+    let (na, nb) = (num(&ca), num(&cb));
+    let a_spot = ca.snapshots().newest().unwrap().ps.origin(p);
+    sv.place_client(na, a_spot, 0.0);
+    sv.place_client(nb, b_at(&sv, a_spot), 180.0);
+    Some(Pair {
+        sv,
+        ca,
+        cb,
+        qa,
+        qb,
+        now,
+    })
+}
+
+fn frag_index() -> u8 {
+    vcod_server::configstrings::weapon_index("fraggrenade_mp").expect("the frag in CS 7") as u8
+}
+
+/// `G_RadiusDamage` end to end (combat doc, 14.1): a frag thrown at the
+/// ground behind the thrower hurts him and the player standing in the open
+/// 150 units the other way, each by the falloff at his own distance from
+/// where it came to rest.
+/// Retail's own pair capture is the same arithmetic: a blast at
+/// (1329, 3297, -22) left the target at (1192, 3296, -23.9) on health 26, 74
+/// off a distance of 137, and the thrower 151 units out on 30.
+#[test]
+fn a_thrown_grenade_damages_a_player_in_its_blast() {
+    use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
+
+    let Some(pair) = two_placed(|sv, spot| {
+        assert!(
+            sv.test_clear_line(spot, 0.0, 150.0),
+            "no clear 150 units along +x from the spawn"
+        );
+        [spot[0] + 150.0, spot[1], spot[2]]
+    }) else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let Pair {
+        mut sv,
+        mut ca,
+        mut cb,
+        qa,
+        qb,
+        mut now,
+    } = pair;
+    let p = &PROTOCOL_V1;
+    let facing_a = UserCmd {
+        angles: [0, angle_short(180.0), 0],
+        ..NULL_USERCMD
+    };
+    let mut step = |sv: &mut vcod_server::Server, a: &mut Client, b: &mut Client| {
+        now += Duration::from_millis(50);
+        common::step_pair(sv, (&qa, a), (&qb, b), now);
+    };
+    for _ in 0..40 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
+        step(&mut sv, &mut ca, &mut cb);
+    }
+    assert_eq!(ca.snapshots().newest().unwrap().ps.health(), 100);
+    assert_eq!(cb.snapshots().newest().unwrap().ps.health(), 100);
+    let a_feet = ca.snapshots().newest().unwrap().ps.origin(p);
+    let b_feet = cb.snapshots().newest().unwrap().ps.origin(p);
+
+    let at = cook_and_throw_down(
+        &mut sv,
+        &mut step,
+        &mut ca,
+        &mut cb,
+        &facing_a,
+        frag_index(),
+        (180.0, 80.0),
+    );
+    for (who, feet, cl) in [("thrower", a_feet, &ca), ("target", b_feet, &cb)] {
+        assert_eq!(
+            sv.test_can_damage(at, feet),
+            1.0,
+            "{who} stands in the open, {:.0} units from the blast",
+            dist(at, feet)
+        );
+        let expected = frag_damage(at, feet);
+        assert!(expected > 0, "{who} is out of the blast entirely");
+        assert_eq!(
+            cl.snapshots().newest().unwrap().ps.health(),
+            100 - expected,
+            "{who} at {:.0} units took the falloff",
+            dist(at, feet)
+        );
+    }
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+}
+
+/// A spot the map holds a standing player at, within `100..330` units of
+/// `from` and with no line of sight at all from a blast at `from`'s feet:
+/// what the wall test needs, found by walking the geometry rather than
+/// hardcoded, since a map's furniture is not a fixture.
+fn shielded_spot(sv: &vcod_server::Server, from: [f32; 3]) -> Option<[f32; 3]> {
+    let blast = [from[0], from[1], from[2] + 8.0];
+    for step in 0..72 {
+        let (s, c) = (step as f32 * 5.0).to_radians().sin_cos();
+        for d in (110..=310).step_by(20) {
+            let d = d as f32;
+            let Some(feet) =
+                sv.test_ground_under([from[0] + c * d, from[1] + s * d, from[2] + 64.0])
+            else {
+                continue;
+            };
+            // On the same floor: a spot that fell to a lower level is
+            // shielded by the ceiling between them, which says nothing about
+            // a wall.
+            if (feet[2] - from[2]).abs() > 32.0 || !(100.0..330.0).contains(&dist(feet, from)) {
+                continue;
+            }
+            if sv.test_can_damage(blast, feet) == 0.0 {
+                return Some(feet);
+            }
+        }
+    }
+    None
+}
+
+/// `CanDamage`'s zero arm (combat doc, 14.3): the blast at the thrower's own
+/// feet kills him and does nothing at all to the player standing behind a
+/// wall, who is inside the radius and outside the second chance's reach.
+#[test]
+fn a_wall_shields_a_player_from_a_blast() {
+    use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
+
+    let Some(pair) = two_placed(|sv, spot| {
+        shielded_spot(sv, spot).expect("no shielded spot within 330 units of the spawn")
+    }) else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let Pair {
+        mut sv,
+        mut ca,
+        mut cb,
+        qa,
+        qb,
+        mut now,
+    } = pair;
+    let p = &PROTOCOL_V1;
+    let still = UserCmd {
+        angles: [0, angle_short(180.0), 0],
+        ..NULL_USERCMD
+    };
+    let mut step = |sv: &mut vcod_server::Server, a: &mut Client, b: &mut Client| {
+        now += Duration::from_millis(50);
+        common::step_pair(sv, (&qa, a), (&qb, b), now);
+    };
+    for _ in 0..40 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&still);
+        step(&mut sv, &mut ca, &mut cb);
+    }
+    let a_feet = ca.snapshots().newest().unwrap().ps.origin(p);
+    let b_feet = cb.snapshots().newest().unwrap().ps.origin(p);
+    assert_eq!(cb.snapshots().newest().unwrap().ps.health(), 100);
+
+    // Straight down, so the grenade stays where the thrower stands.
+    let at = cook_and_throw_down(
+        &mut sv,
+        &mut step,
+        &mut ca,
+        &mut cb,
+        &still,
+        frag_index(),
+        (0.0, 90.0),
+    );
+    let range = dist(at, b_feet);
+    assert!(
+        range < 350.0,
+        "the shielded player has to be inside the radius, not {range:.0} units out"
+    );
+    assert!(
+        range > 350.0 * 0.2,
+        "and outside the second chance's reach, not {range:.0} units in"
+    );
+    assert_eq!(
+        sv.test_can_damage(at, b_feet),
+        0.0,
+        "the wall has to block every probe"
+    );
+    assert_eq!(
+        cb.snapshots().newest().unwrap().ps.health(),
+        100,
+        "the shielded player took nothing"
+    );
+    assert!(
+        ca.snapshots().newest().unwrap().ps.health() < 100,
+        "the thrower stood on it, {:.0} units away",
+        dist(at, a_feet)
+    );
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+}

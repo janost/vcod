@@ -526,6 +526,39 @@ pub fn header_value<'a>(text: &'a str, key: &str, path: &str) -> &'a str {
     found[0]
 }
 
+/// Every `key=value` on a capture's `# grenade` header line, and `None` for
+/// a capture that has none. Not [`header_value`]: that splits a clause on
+/// commas, and this line's `origin=` carries two of them.
+pub fn grenade_header(text: &str) -> Option<BTreeMap<String, String>> {
+    let line = text.lines().find(|l| l.starts_with("# grenade "))?;
+    Some(
+        line.trim_start_matches("# grenade ")
+            .split_whitespace()
+            .filter_map(|t| t.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    )
+}
+
+pub fn header_vec3(header: &BTreeMap<String, String>, key: &str) -> [f32; 3] {
+    let mut out = [0.0; 3];
+    let raw = header
+        .get(key)
+        .unwrap_or_else(|| panic!("the `# grenade` header carries no {key}"));
+    for (i, v) in raw.split(',').enumerate().take(3) {
+        out[i] = v.parse().expect("a number in the grenade header");
+    }
+    out
+}
+
+/// Where a capture's own script stood and looked when it started, for a
+/// replay that has to throw from the same spot. `None` for a capture that
+/// records none, which is every one but the grenade's.
+pub fn captured_place(text: &str) -> Option<([f32; 3], f32)> {
+    let h = grenade_header(text)?;
+    Some((header_vec3(&h, "origin"), header_vec3(&h, "viewangles")[1]))
+}
+
 /// The team and weapon the retail playerstate capture was taken with, so a
 /// test that drives the stock menus asks for the same two things the gate
 /// does rather than carrying its own copy of them.

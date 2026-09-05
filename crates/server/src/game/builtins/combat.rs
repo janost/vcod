@@ -17,6 +17,10 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("finishplayerdamage", finish_player_damage),
     ("obituary", obituary),
     ("radiusdamage", radius_damage),
+    (
+        "setplayerignoreradiusdamage",
+        set_player_ignore_radius_damage,
+    ),
     ("suicide", suicide),
 ];
 
@@ -253,74 +257,123 @@ fn as_f32(v: &Value) -> Result<f32, ErrorKind> {
     }
 }
 
-/// `radiusDamage(origin, radius, maxDamage, minDamage [, attacker])`
-/// (`functions[72]`, `.so` 0x5eef4): `CodeCallback_PlayerDamage` on every
-/// live player inside the radius, spawned so each runs before the calling
-/// thread's next line, the way `finishPlayerDamage` starts the killed
-/// callback.
+/// `radiusDamage(origin, range, maxDamage, minDamage)` (`functions[72]`,
+/// `.so` 0x5eef4): the blast a script sets off, with the world as the
+/// attacker and `MOD_EXPLOSIVE` as the means of death.
+/// `CodeCallback_PlayerDamage` runs on every live player the falloff and the
+/// line of sight reach, spawned so each runs before the calling thread's
+/// next line, the way `finishPlayerDamage` starts the killed callback.
 ///
-/// The falloff is linear from `maxDamage` at the blast to `minDamage` at the
-/// radius, which is RTCW's `G_RadiusDamage` rather than a curve read out of
-/// 0x5eef4 (docs/research/cod11-gsc-language.md, section 10).
+/// The damage itself is `crate::game::combat::radius_damage`, the same
+/// `G_RadiusDamage` a grenade's blast goes through (combat doc, 14.1). What
+/// this call adds is `setPlayerIgnoreRadiusDamage`'s level flag (14.2),
+/// which skips every candidate with a client and so, here, every candidate
+/// there is.
 ///
-/// The optional fifth argument is both the inflictor and the attacker, so a
-/// script's grenade names its thrower in the killfeed; anything that is not
-/// an entity leaves both undefined, which is a world kill. The position each
-/// victim is measured at is its `origin` field, the copy `Server` mirrors
-/// from the sim every frame.
+/// The position each victim is measured at is its `origin` field, the copy
+/// `Server` mirrors from the sim every frame; its box and eye are the
+/// standing ones, since the host does not carry a stance.
 pub fn radius_damage(
     host: &mut GameHost,
     cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let [Value::Vector(origin), radius, max_damage, min_damage, rest @ ..] = args else {
+    // Retail reads its four arguments by index (`Scr_GetVector(0)` and
+    // `Scr_GetFloat(1)` to `(3)`), so anything past them is ignored rather
+    // than refused.
+    let [Value::Vector(origin), radius, max_damage, min_damage, ..] = args else {
         return Err(ErrorKind::BadType(
-            "radiusDamage takes an origin, radius, max damage and min damage",
+            "radiusDamage takes an origin, a range, a max damage and a min damage",
         ));
     };
     let at = Vec3::from(*origin);
     let radius = as_f32(radius)?;
     let (max_damage, min_damage) = (as_f32(max_damage)?, as_f32(min_damage)?);
-    let attacker = match rest.first() {
-        Some(e @ Value::Entity(_)) => *e,
-        _ => Value::Undefined,
-    };
-    let victims: Vec<EntId> = host
+    if host.ignore_radius_damage {
+        return Ok(Value::Undefined);
+    }
+    let candidates: Vec<EntId> = host
         .ents
         .iter_inuse()
         .filter(|(id, e)| e.client.is_some() && !host.client_vitals[id.0 as usize].dead)
         .map(|(id, _)| id)
         .collect();
     let origin_field = cx.intern_folded("origin");
-    let (mod_, none) = (cx.intern_exact("MOD_EXPLOSIVE"), cx.intern_exact("none"));
-    let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
-    for id in victims {
+    let mut victims = Vec::new();
+    for id in candidates {
         let Value::Vector(stands) = host.get_field(cx, id, origin_field) else {
             continue;
         };
-        let away = Vec3::from(stands) - at;
-        let dist = away.length();
-        if dist >= radius {
-            continue;
-        }
-        // Multiplied before it is divided: taking the ratio first loses a
-        // bit, which the truncation below turns into a whole point of damage.
-        let damage = max_damage - (max_damage - min_damage) * dist / radius;
-        let dir = away.normalize_or_zero();
+        victims.push(standing_victim(id.0 as usize, Vec3::from(stands)));
+    }
+    let world = host.world.clone();
+    let hits = crate::game::combat::radius_damage(
+        at,
+        radius,
+        max_damage,
+        min_damage,
+        None,
+        None,
+        "none",
+        "MOD_EXPLOSIVE",
+        &victims,
+        world.as_deref().map(|w| &w.collision),
+    );
+    let (mod_, none) = (cx.intern_exact("MOD_EXPLOSIVE"), cx.intern_exact("none"));
+    let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
+    for hit in hits {
         let args = vec![
-            attacker,
-            attacker,
-            Value::Int(damage as i32),
+            // The world is the attacker and its own inflictor: retail hands
+            // `g_entities[1022]` over, which no script here can hold.
+            Value::Undefined,
+            Value::Undefined,
+            Value::Int(hit.damage),
             Value::Int(DFLAG_RADIUS),
             Value::String(mod_),
             Value::String(none),
             Value::Vector(*origin),
-            Value::Vector(dir.into()),
+            Value::Vector(hit.dir),
             Value::String(none),
         ];
-        cx.spawn(callback, Some(Target::Entity(id)), args);
+        cx.spawn(
+            callback,
+            Some(Target::Entity(EntId(hit.victim as u32))),
+            args,
+        );
     }
+    Ok(Value::Undefined)
+}
+
+/// A client as a blast candidate, standing: the box and the eye height
+/// `CanDamage` needs (combat doc, 14.3), which is all a script-side victim
+/// has, its stance living on the sim rather than on the host.
+fn standing_victim(slot: usize, origin: Vec3) -> crate::game::combat::BlastVictim {
+    use vcod_common::pmove::{Stance, HALF_WIDTH};
+    crate::game::combat::BlastVictim {
+        slot,
+        origin,
+        mins: Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
+        maxs: Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
+        eye: origin + Vec3::Z * Stance::Stand.view_height(),
+    }
+}
+
+/// `setPlayerIgnoreRadiusDamage(bool)` (`functions[73]`, `.so` 0x5ef6c): one
+/// flag on the level, which the `radiusDamage` builtin above is the only
+/// reader of (combat doc, 14.2).
+pub fn set_player_ignore_radius_damage(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let Some(v) = args.first() else {
+        return Err(ErrorKind::BadType(
+            "setPlayerIgnoreRadiusDamage takes a boolean",
+        ));
+    };
+    host.ignore_radius_damage = v.as_bool()?;
     Ok(Value::Undefined)
 }
 
@@ -417,6 +470,7 @@ mod tests {
         Hit {
             victim: 0,
             attacker: 1,
+            inflictor: None,
             damage,
             dflags: 0,
             mod_: "MOD_RIFLE_BULLET",
@@ -520,9 +574,8 @@ mod tests {
     /// inside the radius, inline, before the calling thread's next line:
     /// the near client takes the falloff's damage and dies of it, the one
     /// 1000 units out takes nothing, and the flags the script is handed
-    /// carry `DFLAG_RADIUS`. The attacker is the fifth argument, which is
-    /// the far client here, so a victim read where an attacker belongs
-    /// would name the wrong entity.
+    /// carry `DFLAG_RADIUS`. The attacker is the world, which reaches the
+    /// callback as `undefined`.
     ///
     /// The second blast is the dead check: a corpse is not damaged again,
     /// so the near client's callback ran once.
@@ -531,14 +584,11 @@ mod tests {
         const SCRIPT: &str = r#"
             main() {
                 wait 1;
-                radiusDamage((0, 0, 0), 300, 2000, 50, level.attacker);
+                radiusDamage((0, 0, 0), 300, 2000, 50);
                 wait 1;
-                radiusDamage((0, 0, 0), 300, 2000, 50, level.attacker);
+                radiusDamage((0, 0, 0), 300, 2000, 50);
             }
-            CodeCallback_PlayerConnect() {
-                if (self.name == "killer")
-                    level.attacker = self;
-            }
+            CodeCallback_PlayerConnect() {}
             CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
                 if (!isdefined(self.hits))
                     self.hits = 0;
@@ -546,7 +596,7 @@ mod tests {
                 self.took = iDamage;
                 self.flags = iDFlags;
                 self.mod = sMeansOfDeath;
-                self.killer = eAttacker getEntityNumber();
+                self.killer = isdefined(eAttacker);
                 self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
             }
             CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {}
@@ -578,7 +628,11 @@ mod tests {
         assert_eq!(rt.client_field(0, "took").as_deref(), Some("1350"));
         assert_eq!(rt.client_field(0, "flags").as_deref(), Some("1"));
         assert_eq!(rt.client_field(0, "mod").as_deref(), Some("MOD_EXPLOSIVE"));
-        assert_eq!(rt.client_field(0, "killer").as_deref(), Some("1"));
+        assert_eq!(
+            rt.client_field(0, "killer").as_deref(),
+            Some("0"),
+            "the world set this blast off, so the callback's attacker is undefined"
+        );
         assert_eq!(rt.client_field(0, "hits").as_deref(), Some("1"));
         assert_eq!(rt.client_vitals(0).health, 0);
         assert!(rt.client_vitals(0).dead);
@@ -590,6 +644,55 @@ mod tests {
         );
         assert_eq!(rt.client_vitals(1).health, 100);
         assert!(!rt.client_vitals(1).dead);
+    }
+
+    /// `setPlayerIgnoreRadiusDamage` (combat doc, 14.2) is a level flag the
+    /// `radiusDamage` builtin alone reads: with it set the same blast that
+    /// killed the near client above damages nobody, and clearing it lets the
+    /// next one through.
+    #[test]
+    fn an_ignoring_level_takes_no_client_damage() {
+        const SCRIPT: &str = r#"
+            main() {
+                wait 1;
+                setPlayerIgnoreRadiusDamage(true);
+                radiusDamage((0, 0, 0), 300, 2000, 50);
+                wait 1;
+                setPlayerIgnoreRadiusDamage(false);
+                radiusDamage((0, 0, 0), 300, 2000, 50);
+            }
+            CodeCallback_PlayerConnect() {}
+            CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+                self.took = iDamage;
+                self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+            }
+            CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {}
+        "#;
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "victim".into(),
+        });
+        rt.run_frame(50);
+        rt.host.client_vitals[0] = Vitals {
+            health: 100,
+            max_health: 100,
+            dead: false,
+        };
+        rt.set_client_origin(0, [100.0, 0.0, 0.0]);
+
+        rt.run_frame(1100);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(
+            rt.client_field(0, "took").as_deref(),
+            Some("Undefined"),
+            "the flag skipped every candidate with a client"
+        );
+        assert_eq!(rt.client_vitals(0).health, 100);
+
+        rt.run_frame(2200);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.client_field(0, "took").as_deref(), Some("1350"));
     }
 
     /// `bulletTrace` runs a real trace against the collision world when the

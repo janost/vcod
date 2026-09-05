@@ -545,7 +545,14 @@ impl ClientSim {
         let script = &inputs.anims.script;
         match (self.ps.on_ground, self.was_airborne) {
             (true, true) => {
-                let sel = script.select_event("land", &conditions);
+                // The landing writes the legs alone. Its grenade clause is a
+                // `both` one, but the capture's own landing -- the frame the
+                // thrower's third frag knocks him off his feet -- reads one
+                // sample of the land anim with `torsoAnim` unchanged through
+                // it, where [`play_event`]'s rule would have flipped the
+                // restart toggle.
+                let mut sel = script.select_event("land", &conditions);
+                sel.torso = None;
                 Self::play_event(&mut self.anim, &sel, now_ms, resolve, length);
             }
             (false, false) if jumped && !self.ps.on_ladder => {
@@ -598,10 +605,11 @@ impl ClientSim {
     /// with a bare toggle flip on the torso.
     ///
     /// The rule is general and the measurement is not: it also reaches
-    /// `fireweapon`'s pistol-ADS clause, `jump`'s two run clauses and
-    /// `land`'s pistol and grenade clauses, none of which any capture covers
-    /// (combat doc 1.14). It is kept general because it is the convention the
-    /// continuous selection already follows.
+    /// `fireweapon`'s pistol-ADS clause and `jump`'s two run clauses, neither
+    /// of which any capture covers (combat doc 1.14). It is kept general
+    /// because it is the convention the continuous selection already follows.
+    /// The landing is the one clause measured to break it, and its caller
+    /// clears the torso of the selection rather than coming through here.
     fn play_event(
         anim: &mut vcod_common::animscript::AnimState,
         sel: &vcod_common::animscript::Selection,
