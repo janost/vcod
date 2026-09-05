@@ -302,19 +302,27 @@ engineering setup works.
   the obituary on both wires, scores it, drops the dead player's weapon as an
   item, and the victim respawns on the use key. A melee swing is the same
   trace over 64 units, with `MOD_MELEE` damage and its own hit or miss event.
-  Not modelled: grenades, item pickup, intermission, map change and the
-  killcam. What a client still gets nothing of is movers and missiles, which
-  no code spawns. A probe run against it reproduces the retail death capture
+  A grenade is a real missile entity (`crates/server/src/game/missile.rs`,
+  `docs/research/cod11-combat.md` 11 to 14): the pullback arms it, the release
+  spawns an `eType` 4 that flies on a gravity trajectory, bounces off world
+  and props, comes to rest, and explodes on its own ring at the end of its
+  fuse, with the blast walking live clients through retail's linear falloff
+  and `CanDamage`'s five-trace fraction. A player killed mid-cook drops the
+  live one. Not modelled: item pickup, intermission, map change and the
+  killcam. What a client still gets nothing of is movers, which no code
+  spawns. A probe run against it reproduces the retail death capture
   field for field except for two: the `EV_RAISE_WEAPON` the death frame does
   not raise, and the `legsAnim` the respawn frame carries a frame late
   (`docs/research/cod11-combat.md` section 9).
 - The tick, in order: expired clients, then each client's queued usercmds
   (`replay_moves`, one pmove step per cmd, which is where the weapon machine
-  queues a frame's shots and swings), then those themselves (a trace each, an
-  impact temp entity and a hit per player struck), then the client commands
-  that start a script thread (`kill`, `mr`), which the packet pass only queues
-  because it runs before the clock advances, then `deliver_hits` so the damage
-  callback has run before script, then the script frame, then the sim ops the
+  queues a frame's shots, swings and throws), then those themselves (a trace
+  each, an impact temp entity and a hit per player struck), then the client
+  commands that start a script thread (`kill`, `mr`), which the packet pass
+  only queues because it runs before the clock advances, then the missiles
+  fly and any due fuse explodes, then the blasts become hits, then
+  `deliver_hits` so the damage callback has run before script, then the
+  script frame, then the sim ops the
   script left (spawns, weapon gives and switches, the damage the callback
   did), then the host-to-sim mirrors (weapons held, origin, health, the damage
   feedback `P_DamageFeedback` computes from the health the hit left), then the
@@ -543,3 +551,37 @@ never pasted decompiler output or disassembly listings.
   hold the last hit's values until the next one, so a client cannot tell "no
   damage this frame" from "the same damage as last frame" by reading them; the
   increment is the edge.
+- There is no cook in 1.1 MP. `grenadeTimeLeft` takes the held weapon's
+  `fuseTime` at the pullback and 0 at the throw and nothing between: no
+  countdown, no pin, no auto-throw, and the fuse from release to explode is
+  the full `fuseTime` however long the trigger was held. The two committed
+  grenade captures show no third value in 700-odd traces. A design that reads
+  the field as a timer is reading RTCW's.
+- A grenade's fuse rides the `EV_FIRE_WEAPON` / `EV_FIRE_WEAPON_LASTSHOT`
+  parm, and only inside vcod: the pmove step clears `grenadeTimeLeft` on the
+  same frame it raises the event, so the server would read 0 back if it went
+  looking. The parm never reaches the wire, because the client predicts the
+  throw itself. `Attack::Throw` therefore has to be taken off the raised
+  event during `replay_moves`, before the sim moves on.
+- The explode rides the missile's own entity, not a temp entity. It flips its
+  `eType` to 0, sets `eFlags` 256 and writes `EV_GRENADE_EXPLODE` on its own
+  ring, so anything filtering entities on `eType == 4` drops exactly the frame
+  the explosion is on.
+- Static props are in the server's collision world, not only the client's
+  prediction world. Retail's grenade comes to rest 35 units up on a cart the
+  bare BSP does not have, so `World::from_bsp` takes the paks. A prop's
+  triangles arrive without their material, which is why a bounce off one
+  carries `eventParm` 0 where retail carries the surface type.
+- A stock frag bounces off a live player rather than detonating on it.
+  `fraggrenade_mp` spells `damage` 0, and retail's direct-hit `MOD_GRENADE`
+  arm is gated on that field, so the contact applies the soft damping and the
+  fuse keeps running.
+- `setPlayerIgnoreRadiusDamage` is a flag on `level`, not on a client. Only
+  the `radiusDamage` builtin reads it, and it then skips every client for that
+  one call; a grenade's own blast never consults it. One bool on the host is
+  the whole of it.
+- A weapon switch holds `cmd.weapon` at the new index until `ps.weapon` reads
+  it. Retail's pickup half takes the byte off the cmd of the frame the putaway
+  ends on, so a byte sent once is reverted before the swap lands and the old
+  weapon stays in hand. A first retail capture of the one-cmd version measured
+  the frag never arriving and the cook firing the rifle instead.

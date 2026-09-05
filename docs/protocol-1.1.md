@@ -203,6 +203,13 @@ game module, not into `cod_lnxded`:
 | `ET_ITEM` | (-1, -1, -1) | (1, 1, 1) | `G_SpawnItem` 0x4e6ed | VERIFIED |
 | `ET_TURRET` | (-32, -32, 0) | (32, 32, 56) | `G_SpawnTurret` 0x52f75 | VERIFIED |
 | `ET_SCRIPTMOVER` (`script_model`) | (0, 0, 0) | (0, 0, 0) | nothing does | INFERRED |
+| `ET_MISSILE` | (0, 0, 0) | (0, 0, 0) | nothing does | VERIFIED |
+
+`ET_MISSILE` has no box at all. VERIFIED: `fire_grenade` (`0x543AC`) writes
+neither `r.mins` (+0x100) nor `r.maxs` (+0x10c), and the trace `G_RunMissile`
+(`0x53FCC`) runs for the frame's move is `trap_LocationalTrace`, which takes
+no mins/maxs arguments. INFERRED: a grenade in flight is therefore traced as a
+point (`docs/research/cod11-combat.md` sections 11 and 12).
 
 That last row is the one to justify, and the model a script model draws has
 nothing to do with it.
@@ -260,6 +267,41 @@ them and 0 on the scriptmover and the turret, and `solid` 0 on all of them.
 `groundEntityNum` on the scriptmover reads 0 for about a minute after a map
 load and 1023 (`ENTITYNUM_NONE`) from then on, which is why a trace has to be
 taken from a settled server.
+
+#### What a missile looks like
+
+VERIFIED live (retail 1.1d dedicated, `mp_carentan` `tdm`, 2026-09-05, the
+`--save-grenade` and `--probe-grenade` captures in
+`crates/server/tests/fixtures/playerstate/`): a thrown `fraggrenade_mp` is the
+only `eType` 4 (`ET_MISSILE`) entity a stock MP server puts on the wire, and it
+carries this and nothing else.
+
+| field | in flight | at rest | on the explode frame |
+|---|---|---|---|
+| `eType` | 4 | 4 | **0** |
+| `eFlags` | 0 | 0 | **256** |
+| `pos.trType` | 5 (`TR_GRAVITY`) | 0 (`TR_STATIONARY`) | 0 |
+| `apos.trType` | 2 (`TR_LINEAR`) | 0 | 0 |
+| `weapon` | configstring 7 index | same | same |
+| `index` | 0 | 0 | 0 |
+| `events[]` | 177 per bounce | | 178, parm the trace normal |
+
+`pos.trTime`, `trBase` and `trDelta` are rewritten in place at each bounce, so
+a client cannot cache the first segment. `apos.trDelta` is the tumble, a
+per-throw draw of roughly `(720, 0, 360)` degrees per second give or take 45,
+and it goes stationary with the yaw and roll the tumble reached and a pitch of
+0. The `eType` flip on the explode frame is the trap for a reader filtering on
+4: the explode event rides the missile's own ring, on the frame its `eType` has
+already become 0. `entityState.index` is 0, unlike `ET_ITEM`'s, because a
+missile's model rides `s.eFlags 0x03000000`, which is above the 24-bit
+netfield and never travels.
+
+VERIFIED from the same captures: the playerstate field `grenadeTimeLeft` takes
+exactly two values on a stock 1.1 MP server, 0 and the held weapon's
+`fuseTime` in milliseconds (4000 for the frag). The pullback sets it, the
+throw clears it, and nothing decrements it in between: there is no cook
+countdown, no pin and no auto-throw. The `-grenade-shooter.txt` pair alone
+carries 233 retail traces and 499 vcod ones with no third value.
 
 #### A turret's `angles2[0]` is where its barrel came to rest
 
