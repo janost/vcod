@@ -845,8 +845,9 @@ settled retail pose reads (player-model-anim-system.md, "The weapon channel").
 **A `both` land clause is not.** VERIFIED: the sample after the one where
 `throw_down`'s frag knocks the thrower off his feet reads `legsAnim` 100,
 index 100 with the toggle clear, between two samples of 634, and `torsoAnim`
-512 across all three. VERIFIED: the script's landing clause for that stance
-and class is `both pb_standjump_land_pistol duration 5`. INFERRED: the land
+512 across all three. VERIFIED: the landing clause the stance and class
+select is `weaponclass pistol AND grenade`, whose body is
+`both pb_standjump_land_pistol duration 5`. INFERRED: the land
 event puts its anim on the legs and leaves the torso alone, so the rule above
 is the throw's and not every `both` clause's; the single sample is the
 `duration 5`.
@@ -3178,8 +3179,10 @@ with `Server::tick` charging each of the frame's explosions before
 `radiusDamage` builtin (`builtins/combat.rs`) wrapping the same two functions
 for a script's own blast. The divergences left are listed in
 `cod11-gsc-language.md`'s `radiusDamage` entry. The falloff is computed at
-double precision: retail keeps the whole expression on the x87 stack, and an
-f32 round trip loses a point of damage at the round ratios a script picks.
+double precision because f32 loses a point of damage at the round ratios a
+script picks -- `50 + (1 - 100/300) * 1950` truncates to 1349 in f32 and 1350
+in f64 -- and retail's own x87 arithmetic is not reproducible in either
+width.
 `crates/server/tests/combat.rs`'s two blast tests are the end-to-end gate, and
 the grenade capture's own `throw_down` pins the number a third time.
 VERIFIED: its pain frame reads `aimSpreadScale` 94.00 off a counter that was
