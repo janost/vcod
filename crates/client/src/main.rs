@@ -212,6 +212,12 @@ struct Args {
     /// teams measured what clientState.team carries.
     #[arg(long)]
     probe_team: Option<String>,
+    /// What --net-probe answers the stock weapon menu with, instead of the
+    /// nationality's default rifle: any weapon that menu allows, e.g.
+    /// kar98k_sniper_mp on axis. A weapon the menu refuses reopens it and the
+    /// probe never spawns.
+    #[arg(long)]
+    probe_weapon: Option<String>,
     /// Seconds --net-probe stays connected; an SD round boundary needs a few minutes
     #[arg(long, default_value_t = 65)]
     probe_secs: u64,
@@ -560,6 +566,7 @@ fn main() -> Result<()> {
             args.probe_pvs,
             script,
             args.probe_team.as_deref(),
+            args.probe_weapon.as_deref(),
             args.probe_secs,
             fs.as_ref(),
         );
