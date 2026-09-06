@@ -443,7 +443,11 @@ Status after the pmove work landed on this branch:
    ground-plane flag, both taken before the move, and vcod re-runs the
    ground trace's own kickoff test against the current velocity before it
    snaps, because a waterjump sets its launch velocity inside the move and
-   the snap would clip it away.
+   the snap would clip it away. The airborne arm's one exception
+   (`pm_flags & 0x10` with `velocity[2] > 0`, 0x350F5-0x35112) is not taken
+   either: vcod returns for every airborne player. That is a no-op today,
+   since the snap is 0 on a ladder anyway, and it would only matter if the
+   step-up half were ever wanted on a climb.
 6. Stands as the negative result: no mantle exists in retail 1.1. If
    ledge-climbing is wanted as a feature it would be a vcod extension with
    no retail counterpart - decide its constants, don't dig for them in the

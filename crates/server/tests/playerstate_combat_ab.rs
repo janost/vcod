@@ -45,7 +45,7 @@ const SKIPPED: &[(&str, &str)] = &[(
 /// the list is self-cleaning: [`check`] asserts that a gapped channel still
 /// differs, so an entry that starts matching fails the run rather than
 /// quietly outliving the defect it names. Empty is the goal. It was empty
-/// until the scoped-rifle capture landed; the four entries below are one
+/// until the scoped-rifle capture landed; the five entries below are one
 /// open defect, named in [`RECHAMBER_GAP`].
 const KNOWN_GAPS: &[Gap] = &[
     Gap {
