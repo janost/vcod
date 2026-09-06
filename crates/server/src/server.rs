@@ -2889,6 +2889,45 @@ mod tests {
         assert_eq!(sv.script_cvar("g_gametype").as_deref(), Some("tdm"));
     }
 
+    /// Doc section 4 step 11: `SV_ClientEnterWorld` runs only for a client
+    /// that reads `CS_ACTIVE`. A `CS_PRIMED` one keeps its state through
+    /// the restart and is promoted by its own next message instead (4.4),
+    /// which is the branch the second half exercises.
+    #[test]
+    fn a_primed_client_is_not_re_entered_by_a_restart() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let mut nc = active(&mut sv, now);
+        assert_eq!(sv.clients[0].as_ref().unwrap().state, ClientState::Primed);
+
+        sv.map_restart();
+        let c = sv.clients[0].as_ref().unwrap();
+        assert_eq!(
+            c.state,
+            ClientState::Primed,
+            "the restart entered a primed client"
+        );
+        assert!(
+            c.sim.is_none(),
+            "a primed client came out of the restart with a sim"
+        );
+
+        // Its next message still carries the old serverId: same high nibble,
+        // differing low one, which is the promotion branch.
+        let huff = Huffman::new();
+        let ack = nc.incoming_sequence as i32;
+        let pkt = nc.build_out(0x10, ack, 0, &ack_ops(), &huff).unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+        let c = sv.clients[0].as_ref().unwrap();
+        assert_eq!(c.state, ClientState::Active);
+        assert!(c.sim.is_some());
+    }
+
     /// Doc section 4 step 1: a second restart inside one frame is a no-op,
     /// and so is one straight after a spawn.
     #[test]
