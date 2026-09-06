@@ -2520,7 +2520,7 @@ so both fail the run the moment they are fixed:
   `vcod_common::pmove::weapon`.
 - **The ground trace drops a walking player for a frame where retail never
   does, and the sight ramp reverses with it.** VERIFIED: replaying the
-  capture from its own spawn, retail reads `groundEntityNum` 1022 on all 31
+  capture from its own spawn, retail reads `groundEntityNum` 1022 on all 30
   samples of `ads_walk` and vcod reads 1023 on one. VERIFIED: across the
   whole capture taken against vcod at *its* own spawn there is no such
   sample in 351, so the defect is position-dependent, not a constant.
