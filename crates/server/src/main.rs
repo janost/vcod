@@ -35,6 +35,12 @@ struct Args {
     /// Scripted entities that exercise the packet-entity wire path. 0 is off.
     #[arg(long, default_value_t = 0)]
     test_entities: usize,
+    /// Debug bots in play. Each takes a real client slot; 0 is off.
+    #[arg(long, default_value_t = 0)]
+    bots: usize,
+    /// Whether the bots fight. Without it they only wander.
+    #[arg(long)]
+    bots_shoot: bool,
     /// A cvar to set before the scripts load, retail's `+set name value`;
     /// repeatable, e.g. `--set scr_friendlyfire=1`.
     #[arg(long = "set", value_name = "NAME=VALUE")]
@@ -64,6 +70,13 @@ fn main() -> Result<()> {
             vcod_server::world::MAX_TEST_ENTITIES
         );
     }
+    if args.bots > args.max_clients {
+        bail!(
+            "--bots {} exceeds --max-clients {}; each bot takes a real slot",
+            args.bots,
+            args.max_clients
+        );
+    }
     let dir = args.game_dir.join(&args.mod_dir);
     let fs = std::rc::Rc::new(
         Pk3Fs::open(&dir).with_context(|| format!("opening game data in {}", dir.display()))?,
@@ -86,6 +99,8 @@ fn main() -> Result<()> {
             max_clients: args.max_clients,
             gametype: args.gametype,
             test_entities: args.test_entities,
+            bots: args.bots,
+            bots_shoot: args.bots_shoot,
             trace: args.trace,
         },
         Instant::now(),

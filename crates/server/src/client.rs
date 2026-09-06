@@ -50,6 +50,9 @@ pub struct Client {
     pub last_cmd: UserCmd,
     /// Set once the client enters the world.
     pub sim: Option<ClientSim>,
+    /// A server-side bot: no socket traffic, the driver in `server.rs` feeds
+    /// its commands and moves.
+    pub is_bot: bool,
     /// Frames sent to this client, indexed message_num % SV_PACKET_BACKUP;
     /// the delta base for a later frame is picked from here by message_ack.
     pub frames: Vec<Option<Snapshot>>,
@@ -82,6 +85,7 @@ impl Client {
             pending: Vec::new(),
             last_cmd: NULL_USERCMD,
             sim: None,
+            is_bot: false,
             frames: vec![None; SV_PACKET_BACKUP],
         }
     }

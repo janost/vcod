@@ -361,6 +361,8 @@ fn run_persist_probe(name: &str, rotation: Option<&str>) -> Vec<String> {
         gametype: name.into(),
         test_entities: 0,
         trace: false,
+        bots: 0,
+        bots_shoot: false,
     };
     let mut sv = vcod_server::Server::new(cfg, now);
     sv.overlay_script(&format!("maps/mp/gametypes/{name}"), &text);
