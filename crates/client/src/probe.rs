@@ -68,6 +68,8 @@ pub struct Save {
     pub entities: bool,
     pub hit: bool,
     pub target: bool,
+    pub mapchange: bool,
+    pub roundrestart: bool,
 }
 
 /// Which script the two halves of the hit capture run. The target's own
@@ -89,6 +91,9 @@ pub enum ShooterScript {
     /// `--probe-grenade-death`: as `Grenade`, but `kill` 500 ms into the cook,
     /// which is what puts the death drop's missile on the wire.
     GrenadeDeath,
+    /// `--save-roundrestart`'s shooter half: the same approach with no shot in
+    /// it, then stand and let [`MapChangeProbe`] record the round out.
+    RoundRestart,
 }
 
 impl ShooterScript {
@@ -99,6 +104,7 @@ impl ShooterScript {
             ShooterScript::Melee => "melee",
             ShooterScript::Grenade => "grenade",
             ShooterScript::GrenadeDeath => "grenade-death",
+            ShooterScript::RoundRestart => "roundrestart",
         }
     }
 
@@ -107,7 +113,7 @@ impl ShooterScript {
     /// units and a thrown grenade wants to land at the target's feet.
     fn engage_range(self) -> f32 {
         match self {
-            ShooterScript::Hit => ENGAGE_RANGE,
+            ShooterScript::Hit | ShooterScript::RoundRestart => ENGAGE_RANGE,
             ShooterScript::Sweep => SWEEP_RANGE,
             ShooterScript::Melee => MELEE_RANGE,
             ShooterScript::Grenade | ShooterScript::GrenadeDeath => GRENADE_RANGE,
@@ -149,7 +155,21 @@ pub fn probe(
         entities: save_entities,
         hit: save_hit,
         target: save_target,
+        mapchange: save_mapchange,
+        roundrestart: save_roundrestart,
     } = save;
+    // The two map-cycle captures record the same lines; the flag picks the
+    // role and, for the round restart, which half of the pair this probe is.
+    let netchan_capture = save_mapchange || save_roundrestart;
+    // The round restart's shooter half is the hit shooter's walk with the
+    // firing phases taken out; its target half is the same target that kills
+    // itself, which is what ends the round.
+    let shooter_walk = save_roundrestart && !save_target;
+    let script = if shooter_walk {
+        ShooterScript::RoundRestart
+    } else {
+        script
+    };
     // The ADS and grenade captures are the combat capture running another script.
     let save_combat = save_combat || save_ads || save_grenade;
     // The fixture is the route's output, so the capture drives the same walk.
@@ -161,6 +181,7 @@ pub fn probe(
         || save_combat
         || save_hit
         || save_target
+        || netchan_capture
         || pvs
         || team.is_some();
     // A sweep is a measurement, not a fixture: it walks a table of pitch
@@ -189,11 +210,21 @@ pub fn probe(
         CombatProbe::default()
     };
     let mut hit = HitProbe::new(script);
-    let mut target_probe = TargetProbe::default();
+    let mut target_probe = TargetProbe::new(if save_roundrestart {
+        ROUNDRESTART_KILL_AT
+    } else {
+        TARGET_KILL_AT
+    });
     let mut wrote_hit = false;
     // The hit capture waits for the first spawn before its script starts.
     let mut spawned = false;
     let mut pvs_probe = PvsProbe::default();
+    let mut netchan = MapChangeProbe::default();
+    // The fixture is named for the map the run started on, which is not the
+    // map cs 0 holds once the rotation has moved on.
+    let mut first_map = String::new();
+    let mut gamestates = 0u32;
+    let mut last_score: Option<Instant> = None;
     // The full table; the map's loadspec filters it at gamestate.
     let aliases_all = fs.map(crate::audio::alias::AliasTable::load);
 
@@ -202,6 +233,17 @@ pub fn probe(
         for e in client.pump_at(now) {
             match e {
                 NetEvent::GamestateReady => {
+                    gamestates += 1;
+                    // Retail reruns `ClientConnect` on the new map, which
+                    // offers the team menu again: a probe that does not
+                    // re-answer it never spawns past the first map.
+                    if gamestates > 1 {
+                        println!("JOIN: gamestate {gamestates}, re-arming the menu answers");
+                        join.rearm();
+                    }
+                    if netchan_capture {
+                        netchan.on_gamestate(now, &client);
+                    }
                     let gs = client.gamestate().unwrap();
                     println!("systeminfo: {}", gs.configstrings[1]);
                     println!(
@@ -254,7 +296,12 @@ pub fn probe(
                             all.len()
                         );
                     }
-                    if save_hit {
+                    if first_map.is_empty() {
+                        first_map = net::info_value_for_key(&gs.configstrings[0], "mapname")
+                            .unwrap_or("unknown")
+                            .to_string();
+                    }
+                    if save_hit || shooter_walk {
                         // The shooter's line-of-sight test needs the map's
                         // collision, and the gamestate is where the map is named.
                         let map = net::info_value_for_key(&gs.configstrings[0], "mapname")
@@ -296,6 +343,12 @@ pub fn probe(
                     }
                 }
                 NetEvent::DownloadComplete(n) => println!("downloaded {n}"),
+                NetEvent::OutOfBand(text) => {
+                    println!("oob: {text:?}");
+                    if netchan_capture {
+                        netchan.on_oob(now, &text);
+                    }
+                }
                 NetEvent::ServerCommand(tokens) => {
                     // `b` is the scoreboard, one long line per second at round end.
                     if tokens.first().map(String::as_str) == Some("b") {
@@ -307,6 +360,12 @@ pub fn probe(
                     }
                     println!("serverCommand: {tokens:?}");
                     if joining {
+                        // `n` is retail's map restart. It reruns
+                        // `ClientConnect` too, and the menu it may reopen
+                        // carries the indices the last one used.
+                        if tokens.first().map(String::as_str) == Some("n") {
+                            join.reopen_menus();
+                        }
                         join.on_server_command(&tokens, &mut client, now);
                     }
                     // `s <idx>` is playLocalSound (sound doc, section 9).
@@ -349,7 +408,12 @@ pub fn probe(
         }
 
         if joining {
-            for cmd in client.take_server_commands() {
+            let seq = client.command_sequence();
+            let cmds = client.take_server_commands();
+            if netchan_capture {
+                netchan.on_commands(now, seq, &cmds);
+            }
+            for cmd in cmds {
                 println!("JOIN cmd: {cmd}");
                 join.commands.push(cmd);
             }
@@ -386,7 +450,7 @@ pub fn probe(
                 combat.stall.apply(&mut cmd, now, o);
             }
             hold_view_yaw(&mut cmd, &client, &mut combat.spawn_delta_yaw);
-        } else if save_hit && hit.running() {
+        } else if (save_hit || shooter_walk) && hit.running() {
             // No `hold_view_yaw`: the aim is absolute, and the shooter's own
             // `viewangles` measured against the bearing say the server takes
             // the usercmd word as the view.
@@ -408,10 +472,22 @@ pub fn probe(
         cmd.weapon = weapon_switch.unwrap_or(ps_weapon);
         client.send_frame(&cmd);
 
+        // Retail sends the `b` scoreboard only in answer to `score`, so the
+        // one a map end produces is in the capture only if it is asked for.
+        // The round-restart pair's target half already asks on its own.
+        if save_mapchange && last_score.is_none_or(|t| now.duration_since(t) >= TARGET_SCORE_PERIOD)
+        {
+            last_score = Some(now);
+            client.send_reliable("score");
+        }
+
         // Every iteration, not once a second; the event rings hold four slots
         // and `loopSound` can come and go between summaries.
         if let Some(s) = client.snapshots().newest() {
             watch.check_sounds(s, client.configstrings());
+            if netchan_capture {
+                netchan.sample(now, s);
+            }
         }
 
         if now.duration_since(last_summary) >= Duration::from_secs(1) {
@@ -467,7 +543,7 @@ pub fn probe(
         // the server does to a dead player is what it is here to record. It
         // still waits for the first spawn, so the script does not start while
         // the join is still on the menus.
-        if (save_hit || save_target) && join.settled(now) && !wrote_hit {
+        if (save_hit || save_target || shooter_walk) && join.settled(now) && !wrote_hit {
             let done = match client.snapshots().newest() {
                 Some(s) => {
                     spawned |= s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL;
@@ -490,7 +566,9 @@ pub fn probe(
             for c in pending {
                 client.send_reliable(&c);
             }
-            if done {
+            // A map-cycle capture runs on the probe's own clock and writes
+            // its own fixture below; the script here only supplies its motion.
+            if done && !netchan_capture {
                 if save_target {
                     write_target_fixture(
                         script,
@@ -565,7 +643,7 @@ pub fn probe(
 
     // The run's clock can end before the script does; what it has by then is
     // still the capture, and the header says how long it ran.
-    if (save_hit || save_target) && !wrote_hit && !sweep {
+    if (save_hit || save_target) && !wrote_hit && !sweep && !netchan_capture {
         let now = Instant::now();
         println!("hit: the run ended before the script did, writing what it has");
         if save_target {
@@ -573,6 +651,16 @@ pub fn probe(
         } else {
             write_shooter_fixture(client.configstrings(), &join, &hit, now)?;
         }
+    }
+    if netchan_capture {
+        let role = if save_mapchange {
+            "mapchange"
+        } else if save_target {
+            "roundrestart-target"
+        } else {
+            "roundrestart-shooter"
+        };
+        write_mapchange_fixture(role, client.configstrings(), &join, &netchan, &first_map)?;
     }
     if save_combat && !wrote_playerstate {
         println!(
@@ -1008,6 +1096,25 @@ impl JoinProbe {
             }
             _ => {}
         }
+    }
+
+    /// A reopened menu carries the indices the last one used, so a probe that
+    /// keeps them never answers it and never spawns again. Clearing them is
+    /// all a map restart needs: the retail dm capture reoffers the team menu
+    /// under index 0 after one, while sd, whose `pers[]` survives, reoffers
+    /// no menu at all and this is inert.
+    fn reopen_menus(&mut self) {
+        self.main_menu.clear();
+        self.answered.clear();
+    }
+
+    /// A new gamestate reruns retail's `ClientConnect` as well, and also puts
+    /// the client back on the menus, so the weapon answer is no longer a
+    /// spawn this run has settled on.
+    fn rearm(&mut self) {
+        self.reopen_menus();
+        self.answered_weapon = None;
+        self.commands.clear();
     }
 
     fn settled(&self, now: Instant) -> bool {
@@ -2645,6 +2752,10 @@ const TARGET_KILL_AT: Duration = Duration::from_secs(10);
 /// enough that the shooter's walk across the map is not chasing a target that
 /// has already moved again.
 const TARGET_KILL_PERIOD: Duration = Duration::from_secs(45);
+/// The round-restart pair's first `kill`: a dead team ends an S&D round, and
+/// the capture wants the restart early enough that the round timer's own end
+/// still fits in the same run.
+const ROUNDRESTART_KILL_AT: Duration = Duration::from_secs(20);
 const TARGET_USE_AFTER_DEATH: Duration = Duration::from_secs(3);
 const TARGET_USE_RETRY: Duration = Duration::from_secs(1);
 const TARGET_SCORE_PERIOD: Duration = Duration::from_secs(2);
@@ -2904,9 +3015,21 @@ struct TargetProbe {
     press_use: bool,
     deaths: u32,
     done: bool,
+    /// How long after the spawn the first `kill` goes out.
+    kill_at: Duration,
 }
 
 impl TargetProbe {
+    /// The first `kill`'s delay is the parameter: the hit pair waits out the
+    /// shooter's approach, the round-restart pair ends the round sooner so two
+    /// rounds fit in one run.
+    fn new(kill_at: Duration) -> Self {
+        TargetProbe {
+            kill_at,
+            ..Default::default()
+        }
+    }
+
     fn running(&self) -> bool {
         !self.done
     }
@@ -2968,7 +3091,7 @@ impl TargetProbe {
         // The suicide: it is what makes the death half of the capture
         // independent of whether the shooter ever finds a line of sight.
         let kill_due = match self.killed_at {
-            None => elapsed >= TARGET_KILL_AT,
+            None => elapsed >= self.kill_at,
             Some(t) => self.died_at.is_none() && now.duration_since(t) >= TARGET_KILL_PERIOD,
         };
         if kill_due {
@@ -3282,6 +3405,11 @@ impl HitPhase {
         use crate::entities::ET_PLAYER;
         let engaged = cx.ready || in_phase >= APPROACH_LIMIT;
         match self {
+            // The round-restart shooter walks up and then only records: it
+            // fires nothing, and its run ends on the probe's clock.
+            HitPhase::Approach if engaged && cx.script == ShooterScript::RoundRestart => {
+                HitPhase::Watch
+            }
             HitPhase::Approach if engaged && cx.script == ShooterScript::Sweep => HitPhase::Sweep,
             HitPhase::Approach if engaged && cx.script.throws_grenades() => HitPhase::Cook,
             HitPhase::Approach if engaged => HitPhase::SingleShot,
@@ -3311,7 +3439,11 @@ impl HitPhase {
                     HitPhase::Cook
                 }
             }
-            HitPhase::Watch if !cx.script.throws_grenades() && in_phase >= WATCH_HOLD => {
+            HitPhase::Watch
+                if !cx.script.throws_grenades()
+                    && cx.script != ShooterScript::RoundRestart
+                    && in_phase >= WATCH_HOLD =>
+            {
                 HitPhase::Done
             }
             p => p,
@@ -4215,6 +4347,294 @@ traced={} throws={} missile_samples={} events={} obituaries={} corpse_edges={}\n
     write_hit_fixture(&role, configstrings, join, &taken, &notes, &body)
 }
 
+/// Directory the map-cycle captures land in. They pin what the wire does
+/// across a map change and a round restart, which no playerstate fixture holds.
+const NETCHAN_FIXTURE_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../server/tests/fixtures/netchan"
+);
+
+/// `pmove_t`'s intermission state, the one retail's `spawnIntermission` puts a
+/// client in at a map end.
+const PM_INTERMISSION: i32 = 5;
+
+/// One `!trace` line: the playerstate fields a map end and a round restart
+/// move, plus the weapon the `pers[]` carry is measured through.
+struct NetchanSample {
+    elapsed_ms: u128,
+    server_time: i32,
+    pm_type: i32,
+    e_flags: i32,
+    health: i32,
+    damage_event: i32,
+    weapon: i32,
+    clip: Vec<(usize, i16)>,
+    event_sequence: i32,
+    events: [i32; 4],
+    viewangles: [f32; 3],
+    origin: [f32; 3],
+}
+
+impl NetchanSample {
+    fn take(elapsed_ms: u128, snap: &net::snapshot::Snapshot) -> NetchanSample {
+        let p = &net::protocol::PROTOCOL_V1;
+        let f = |n: &str| snap.ps.field_i32(p, n);
+        NetchanSample {
+            elapsed_ms,
+            server_time: snap.server_time,
+            pm_type: f("pm_type"),
+            e_flags: f("eFlags"),
+            health: snap.ps.health(),
+            damage_event: f("damageEvent"),
+            weapon: f("weapon"),
+            clip: nonzero_pairs(&snap.ps.arrays.ammoclip),
+            event_sequence: f("eventSequence"),
+            events: [
+                f("events[0]"),
+                f("events[1]"),
+                f("events[2]"),
+                f("events[3]"),
+            ],
+            viewangles: [
+                snap.ps.field_f32(p, "viewangles[0]"),
+                snap.ps.field_f32(p, "viewangles[1]"),
+                snap.ps.field_f32(p, "viewangles[2]"),
+            ],
+            origin: snap.ps.origin(p),
+        }
+    }
+
+    /// Neither clock, and neither the view nor the origin: a walking approach
+    /// moves both every frame and the heartbeat in [`keep_sample`] is what
+    /// keeps that stretch down to a line a second.
+    fn watched(&self) -> Vec<i32> {
+        let mut v = vec![
+            self.pm_type,
+            self.e_flags,
+            self.health,
+            self.damage_event,
+            self.weapon,
+            self.event_sequence,
+        ];
+        v.extend_from_slice(&self.events);
+        v.extend(self.clip.iter().map(|&(i, c)| (i as i32) << 16 | c as i32));
+        v
+    }
+
+    fn line(&self) -> String {
+        format!(
+            "!trace ms={} serverTime={} pm_type={} eFlags={} health={} damageEvent={} weapon={} \
+ammoclip={} eventSequence={} events={},{},{},{} viewangles={} origin={}\n",
+            self.elapsed_ms,
+            self.server_time,
+            self.pm_type,
+            self.e_flags,
+            self.health,
+            self.damage_event,
+            self.weapon,
+            pairs_str(&self.clip),
+            self.event_sequence,
+            self.events[0],
+            self.events[1],
+            self.events[2],
+            self.events[3],
+            vec_str(self.viewangles),
+            vec_str(self.origin),
+        )
+    }
+}
+
+/// Records everything either side of a map change or a round restart: each
+/// gamestate, each serverCommand with its reliable sequence, each out-of-band
+/// packet and one trace line per snapshot whose watched fields moved. It
+/// drives no input of its own; the mode it runs under supplies the motion.
+#[derive(Default)]
+struct MapChangeProbe {
+    started: Option<Instant>,
+    trace: Vec<NetchanSample>,
+    last_kept: Option<(Vec<i32>, u128)>,
+    traced: Option<u32>,
+    /// `(ms, reliable sequence, verbatim text)` per serverCommand.
+    commands: Vec<(u128, i32, String)>,
+    /// `(ms, command word and the rest)` per out-of-band packet.
+    oob: Vec<(u128, String)>,
+    /// `(ms, serverId, netchan sequence, non-empty configstrings, mapname)`.
+    gamestates: Vec<(u128, i32, u32, usize, String)>,
+    /// When `pm_type` first read [`PM_INTERMISSION`].
+    intermission_at: Option<u128>,
+    /// The first snapshot after the newest gamestate, which is what says how
+    /// long the client sat with no world.
+    first_snapshot_after_gamestate: Option<u128>,
+    awaiting_snapshot: bool,
+}
+
+impl MapChangeProbe {
+    fn elapsed_ms(&mut self, now: Instant) -> u128 {
+        let started = *self.started.get_or_insert(now);
+        now.duration_since(started).as_millis()
+    }
+
+    fn on_gamestate(&mut self, now: Instant, client: &NetClient<UdpTransport>) {
+        let ms = self.elapsed_ms(now);
+        let map = net::info_value_for_key(client.configstring(0), "mapname")
+            .unwrap_or("?")
+            .to_string();
+        let set = client
+            .configstrings()
+            .iter()
+            .filter(|s| !s.is_empty())
+            .count();
+        println!(
+            "NETCHAN: gamestate at +{ms}ms serverId={} messageNum={} configstrings={set} map={map}",
+            client.server_id(),
+            client.incoming_sequence(),
+        );
+        self.gamestates
+            .push((ms, client.server_id(), client.incoming_sequence(), set, map));
+        self.awaiting_snapshot = true;
+    }
+
+    fn on_oob(&mut self, now: Instant, text: &str) {
+        let ms = self.elapsed_ms(now);
+        println!("NETCHAN: oob at +{ms}ms {text:?}");
+        self.oob.push((ms, text.to_string()));
+    }
+
+    /// `cmds` in order, ending at the client's current reliable sequence.
+    fn on_commands(&mut self, now: Instant, sequence: i32, cmds: &[String]) {
+        let ms = self.elapsed_ms(now);
+        let first = sequence - cmds.len() as i32 + 1;
+        for (i, text) in cmds.iter().enumerate() {
+            self.commands.push((ms, first + i as i32, text.clone()));
+        }
+    }
+
+    fn sample(&mut self, now: Instant, snap: &net::snapshot::Snapshot) {
+        if self.traced == Some(snap.message_num) {
+            return;
+        }
+        self.traced = Some(snap.message_num);
+        let ms = self.elapsed_ms(now);
+        if self.awaiting_snapshot {
+            self.awaiting_snapshot = false;
+            self.first_snapshot_after_gamestate = Some(ms);
+        }
+        let s = NetchanSample::take(ms, snap);
+        if s.pm_type == PM_INTERMISSION && self.intermission_at.is_none() {
+            println!("NETCHAN: intermission at +{ms}ms, eFlags {}", s.e_flags);
+            self.intermission_at = Some(ms);
+        }
+        if keep_sample(&mut self.last_kept, s.watched(), ms) {
+            self.trace.push(s);
+        }
+    }
+}
+
+/// Writes the map-cycle capture to
+/// `crates/server/tests/fixtures/netchan/<map>-<gametype>-<role>.txt`, with
+/// `<map>` the map the run started on. Every line is in the order the wire
+/// carried it, interleaved by `ms`.
+fn write_mapchange_fixture(
+    role: &str,
+    configstrings: &[String],
+    join: &JoinProbe,
+    probe: &MapChangeProbe,
+    map: &str,
+) -> anyhow::Result<()> {
+    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
+    let gametype = net::info_value_for_key(serverinfo, "g_gametype").unwrap_or("?");
+
+    let mut out = String::new();
+    out.push_str("# Retail CoD 1.1d dedicated server across a map end and a round restart.\n");
+    out.push_str(&format!(
+        "# map {map}, gametype {gametype}, joined {}, weapon {}, role {role}\n",
+        join.team, join.weapon
+    ));
+    out.push_str("# dedicated 1, sv_maxclients 8, sv_pure 0, stock scr_* defaults but for the\n");
+    out.push_str("# limit cvars the recipe sets. mapchange, one probe:\n");
+    out.push_str(
+        "#   tools/run_server.sh mp_carentan +set g_gametype dm +set scr_dm_timelimit 1 \\\n",
+    );
+    out.push_str("#     +set sv_mapRotation \"gametype dm map mp_carentan map mp_brecourt\"\n");
+    out.push_str(
+        "#   --net-probe <ip:port> --probe-team allies --save-mapchange --probe-secs 150\n",
+    );
+    out.push_str("# roundrestart, two probes on opposite teams, the target started first:\n");
+    out.push_str(
+        "#   tools/run_server.sh mp_carentan +set g_gametype sd +set scr_sd_roundlength 1 \\\n",
+    );
+    out.push_str("#     +set scr_friendlyfire 1\n");
+    out.push_str("#   --probe-team axis --probe-target --save-roundrestart --probe-secs 200\n");
+    out.push_str("#   --probe-team allies --save-roundrestart --probe-secs 160\n");
+    out.push_str("# One !gamestate per gamestate, one !cmd per serverCommand with its reliable\n");
+    out.push_str("# sequence, one !oob per connectionless packet, and one !trace per snapshot\n");
+    out.push_str("# whose watched fields moved plus one a second so a settled stretch still\n");
+    out.push_str("# carries a timeline. ms is since the capture started; serverTime is the\n");
+    out.push_str("# server's own clock. ammoclip is the non-zero entries, as index:value.\n");
+    if probe.gamestates.len() < 2 && role == "mapchange" {
+        out.push_str(
+            "# BROKEN only one gamestate: the run ended before the rotation loaded the \
+second map, so this file measures no map change.\n",
+        );
+    }
+    if role.starts_with("roundrestart") && !probe.commands.iter().any(|(_, _, t)| t == "n") {
+        out.push_str(
+            "# BROKEN no `n` command: no round restarted inside the run, so this file \
+measures no restart.\n",
+        );
+    }
+    out.push_str(&format!(
+        "role {role}\n!observed gamestates={} commands={} oob={} traced={} intermission_at_ms={} \
+first_snapshot_after_gamestate_ms={}\n",
+        probe.gamestates.len(),
+        probe.commands.len(),
+        probe.oob.len(),
+        probe.trace.len(),
+        probe
+            .intermission_at
+            .map_or("none".to_string(), |m| m.to_string()),
+        probe
+            .first_snapshot_after_gamestate
+            .map_or("none".to_string(), |m| m.to_string()),
+    ));
+
+    // Every line carries its own `ms`, so one merge by time reads as the wire
+    // did rather than as four grouped blocks.
+    let mut lines: Vec<(u128, usize, String)> = Vec::new();
+    for (i, (ms, id, num, set, map)) in probe.gamestates.iter().enumerate() {
+        lines.push((
+            *ms,
+            i,
+            format!(
+                "!gamestate ms={ms} serverId={id} messageNum={num} configstrings={set} mapname={map}\n"
+            ),
+        ));
+    }
+    for (i, (ms, seq, text)) in probe.commands.iter().enumerate() {
+        lines.push((*ms, i, format!("!cmd ms={ms} seq={seq} text={text}\n")));
+    }
+    for (i, (ms, text)) in probe.oob.iter().enumerate() {
+        lines.push((
+            *ms,
+            i,
+            format!("!oob ms={ms} text={}\n", text.replace('\n', "\\n")),
+        ));
+    }
+    for (i, s) in probe.trace.iter().enumerate() {
+        lines.push((s.elapsed_ms, i, s.line()));
+    }
+    lines.sort_by_key(|(ms, i, _)| (*ms, *i));
+    for (_, _, l) in lines {
+        out.push_str(&l);
+    }
+
+    let path = format!("{NETCHAN_FIXTURE_DIR}/{map}-{gametype}-{role}.txt");
+    std::fs::create_dir_all(NETCHAN_FIXTURE_DIR)?;
+    std::fs::write(&path, out)?;
+    println!("netchan: {role} -> {path}");
+    Ok(())
+}
+
 /// Writes the spawned player's wire state to `<map>-<gametype>.txt`. The map
 /// and gametype come out of cs 0 (serverinfo), so nothing here is hand-typed.
 fn write_playerstate_fixture(
@@ -4800,6 +5220,37 @@ mod tests {
     /// The stock rifle is semi-automatic: a held fire bit is one shot and then
     /// nothing, so every shot needs its own release edge. Counted at the
     /// probe's send rate rather than read off the pattern by eye.
+    /// A map change and a dm map restart both rerun retail's `ClientConnect`
+    /// and offer the team menu again, under the indices the last one used.
+    /// Without the re-arm the probe skips them and never spawns again; a join
+    /// left "settled" across a gamestate would have the capture reading the
+    /// new map's menu as a spawn.
+    #[test]
+    fn a_restart_and_a_gamestate_reopen_the_menus() {
+        let t0 = Instant::now();
+        let mut join = JoinProbe::new(Some("allies"));
+        join.main_menu = "weapon_american".to_string();
+        join.answered = vec![0, 1];
+        join.weapon = "m1carbine_mp".to_string();
+        join.answered_weapon = Some(t0);
+        assert!(join.settled(t0 + SPAWN_SETTLE));
+
+        // A map restart reopens the menu without unspawning the run: the sd
+        // pair crosses four of them and its script must not pause.
+        join.reopen_menus();
+        assert!(join.answered.is_empty());
+        assert!(join.main_menu.is_empty());
+        assert!(join.settled(t0 + SPAWN_SETTLE));
+
+        join.answered = vec![0, 1];
+        join.answered_weapon = Some(t0);
+        join.rearm();
+        assert!(join.answered.is_empty());
+        assert!(!join.settled(t0 + SPAWN_SETTLE));
+        // The team is the run's, not the map's: it survives.
+        assert_eq!(join.team, "allies");
+    }
+
     #[test]
     fn a_fire_step_taps_the_attack_bit_once_per_shot() {
         let script = combat_script();

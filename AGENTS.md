@@ -243,6 +243,26 @@ engineering setup works.
   retail put one on a temp entity or on the missile's own ring. All seven of
   these fixtures are committed retail evidence and a run against ours
   overwrites them: move them to `tmp/` and `git checkout` the directory after.
+  `--save-mapchange` and `--save-roundrestart` are the map-cycle captures.
+  They record the wire rather than one playerstate: every gamestate with its
+  `serverId`, every serverCommand with its reliable sequence, every
+  out-of-band packet and one `!trace` per snapshot whose watched fields
+  moved, all interleaved by `ms` into
+  `crates/server/tests/fixtures/netchan/<map>-<gametype>-<role>.txt`, named
+  for the map the run started on. `--save-mapchange` stands still through a
+  map end and the rotation that follows; `--save-roundrestart` is a pair,
+  the `--probe-target` half killing itself 20 s in to end the round and the
+  other half walking up and only watching. The recipe and the cvars each
+  needs are in every fixture's header. Both are retail evidence and a run
+  against ours overwrites them: move the files to `tmp/` and `git checkout`
+  the directory after.
+  A probe that crosses a gamestate or a map restart has to re-answer the
+  stock menus: retail reruns `ClientConnect` on both and reopens the team
+  menu under the indices the last one used, so `JoinProbe` clears them on
+  every gamestate past the first and on every `n`. Without that the probe
+  sits on the menu for the whole rest of the run. The dm capture shows the
+  restart case; sd, whose `pers[]` survives, reopens no menu and the clear
+  is inert there.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
@@ -340,12 +360,18 @@ engineering setup works.
 - `tools/run_probe.sh <probe> [map]` drives the same retail binary as the
   gsc oracle: it drops one `crates/gsc/tests/fixtures/semantics/probe_*.gsc`
   in as a gametype script, boots the server, and prints the `PROBE` lines
-  the script logged. `tools/capture_probes.sh` runs every probe that way and
+  the script logged. Anything after the map goes to the engine verbatim,
+  which is how the three `probe_persist_*` probes get the `sv_mapRotation`
+  they need to have a map to load after ending their own; `PROBE_SECS` is
+  `SECS` under the name those recipes use.
+  `tools/capture_probes.sh` runs every probe that way and
   writes the combined `retail-captures.txt` the A/B test in
-  `crates/gsc/tests/semantics_ab.rs` compares vcod's VM against. Both need
+  `crates/gsc/tests/semantics_ab.rs` compares vcod's VM against. It passes no
+  engine arguments, so those three sections are taken one at a time and
+  pasted in at their sorted position. Both need
   the same setup `run_server.sh` documents; a full capture takes a couple of
   minutes because every probe boots the server. Read that directory's
-  `README.md` before writing a new probe: three engine behaviours dictate its
+  `README.md` before writing a new probe: six engine behaviours dictate its
   shape, and each costs a wasted run to rediscover.
 - Live captures so far came from populated public servers (a TDM server on
   2026-08-24, an S&D server on 2026-08-25); a 60-100 s capture during a round
