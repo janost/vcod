@@ -87,6 +87,23 @@ pub fn step_pair(
     b: (&Rc<RefCell<Queues>>, &mut NetClient<ClientEnd>),
     now: Instant,
 ) -> (Vec<NetEvent>, Vec<NetEvent>) {
+    let (ea, eb, _) = step_pair_seen(sv, a, b, now);
+    (ea, eb)
+}
+
+/// What the server put on the wire in one frame, each packet with the
+/// address it is for.
+pub type SentPackets = Vec<(SocketAddr, Vec<u8>)>;
+
+/// [`step_pair`] handing back every packet the server sent this frame as
+/// well. A test about an out-of-band packet needs it: the client answers
+/// none of them and raises no event, so the wire is the only witness.
+pub fn step_pair_seen(
+    sv: &mut Server,
+    a: (&Rc<RefCell<Queues>>, &mut NetClient<ClientEnd>),
+    b: (&Rc<RefCell<Queues>>, &mut NetClient<ClientEnd>),
+    now: Instant,
+) -> (Vec<NetEvent>, Vec<NetEvent>, SentPackets) {
     for (addr, q) in [(ADDR, a.0), (ADDR_B, b.0)] {
         let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
         for p in pending {
@@ -94,11 +111,12 @@ pub fn step_pair(
         }
     }
     sv.tick(now);
-    for (to, p) in sv.take_outgoing() {
-        let q = if to == ADDR { a.0 } else { b.0 };
-        q.borrow_mut().to_client.push_back(p);
+    let sent = sv.take_outgoing();
+    for (to, p) in &sent {
+        let q = if *to == ADDR { a.0 } else { b.0 };
+        q.borrow_mut().to_client.push_back(p.clone());
     }
-    (a.1.pump_at(now), b.1.pump_at(now))
+    (a.1.pump_at(now), b.1.pump_at(now), sent)
 }
 
 /// Two clients through the stock menus onto one server, stepped together so
@@ -113,6 +131,20 @@ pub fn join_pair(
     a: (&str, &str),
     b: (&str, &str),
 ) -> (NetClient<ClientEnd>, NetClient<ClientEnd>) {
+    let (ca, cb, _, _) = join_pair_logged(sv, qa, qb, now, a, b);
+    (ca, cb)
+}
+
+/// [`join_pair`] handing back the two [`Join`]s as well, for a test that has
+/// to keep answering menus after the join: a new level opens them again.
+pub fn join_pair_logged(
+    sv: &mut Server,
+    qa: &Rc<RefCell<Queues>>,
+    qb: &Rc<RefCell<Queues>>,
+    now: &mut Instant,
+    a: (&str, &str),
+    b: (&str, &str),
+) -> (NetClient<ClientEnd>, NetClient<ClientEnd>, Join, Join) {
     // Distinct qports: the server keys a peer by ip and qport, so two clients
     // sharing one read as a single client reconnecting and the second is
     // refused. A real client is one per process and gets this for free.
@@ -137,7 +169,7 @@ pub fn join_pair(
             break;
         }
     }
-    (ca, cb)
+    (ca, cb, ja, jb)
 }
 
 pub fn connect(
@@ -613,6 +645,22 @@ impl Join {
         }
     }
 
+    fn send_answer(
+        &mut self,
+        cl: &mut NetClient<ClientEnd>,
+        now: Instant,
+        idx: i32,
+        reply: &str,
+        weapon_menu: bool,
+    ) {
+        cl.send_reliable(&format!("mr {} {idx} {reply}", cl.server_id()));
+        if weapon_menu {
+            self.answered_weapon_at = Some(now);
+        } else {
+            self.answered_team = true;
+        }
+    }
+
     pub fn on_server_command(
         &mut self,
         tokens: &[String],
@@ -639,18 +687,24 @@ impl Join {
                     self.log.push(format!("menu {idx} ({menu:?}) has no reply"));
                     return;
                 };
-                cl.send_reliable(&format!("mr {} {idx} {reply}", cl.server_id()));
+                let weapon_menu = menu.starts_with("weapon_");
+                self.send_answer(cl, now, idx, &reply, weapon_menu);
                 self.answered.push(idx);
                 self.log
                     .push(format!("answered menu {idx} ({menu}) with {reply}"));
-                if menu.starts_with("weapon_") {
-                    self.answered_weapon_at = Some(now);
-                } else {
-                    self.answered_team = true;
-                }
             }
             _ => {}
         }
+    }
+
+    /// A new level offers the stock menus again under the indices the last
+    /// one already answered, so a client that crosses a gamestate has to
+    /// forget what it answered or it sits on the team menu for the whole map.
+    pub fn reset_menus(&mut self) {
+        self.main_menu.clear();
+        self.answered.clear();
+        self.answered_team = false;
+        self.answered_weapon_at = None;
     }
 
     pub fn settled(&self, now: Instant) -> bool {
@@ -711,4 +765,208 @@ pub fn join(
         }
     }
     (cl, j)
+}
+
+// ------------------------------------------------------- the netchan capture
+
+/// One line of a `--save-mapchange` / `--save-roundrestart` fixture, and the
+/// same thing recorded off our own [`NetClient`]: what a client saw on the
+/// wire either side of a map change or a round restart.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetchanEvent {
+    /// Retail's is the probe's own clock, ours the frame grid; both count
+    /// from the first line of their run.
+    pub ms: i64,
+    pub kind: NetchanKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum NetchanKind {
+    Gamestate {
+        server_id: i32,
+        mapname: String,
+    },
+    /// The serverCommand verbatim, `d` and `n` included.
+    Cmd(String),
+    /// Command word and body, newlines escaped as the fixture writes them.
+    Oob(String),
+    /// The four playerstate fields both gates read. The fixture's trace line
+    /// carries eleven; the rest move every frame a client walks and would
+    /// make a settled stretch unreadable.
+    Trace {
+        pm_type: i32,
+        eflags: i32,
+        health: i32,
+        weapon: i32,
+    },
+}
+
+impl NetchanEvent {
+    pub fn cmd(&self) -> Option<&str> {
+        match &self.kind {
+            NetchanKind::Cmd(t) => Some(t),
+            _ => None,
+        }
+    }
+    pub fn trace(&self) -> Option<&NetchanKind> {
+        matches!(self.kind, NetchanKind::Trace { .. }).then_some(&self.kind)
+    }
+    pub fn pm_type(&self) -> Option<i32> {
+        match self.kind {
+            NetchanKind::Trace { pm_type, .. } => Some(pm_type),
+            _ => None,
+        }
+    }
+    pub fn eflags(&self) -> Option<i32> {
+        match self.kind {
+            NetchanKind::Trace { eflags, .. } => Some(eflags),
+            _ => None,
+        }
+    }
+}
+
+/// Parses a `tests/fixtures/netchan/*.txt` capture. Header comments, the
+/// `role` line and `!observed` are skipped; every other line is one event.
+/// The file is already sorted by `(ms, gamestate < cmd < oob < trace)`, which
+/// is the order [`record_netchan`] appends in.
+pub fn parse_netchan_fixture(text: &str) -> Vec<NetchanEvent> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_end();
+        // `key=value` up to the first space, except `text=`, which runs to
+        // end of line and may hold spaces of its own.
+        fn kv(rest: &str) -> BTreeMap<&str, &str> {
+            rest.split_whitespace()
+                .filter_map(|t| t.split_once('='))
+                .collect()
+        }
+        fn tail(rest: &str, key: &str) -> String {
+            rest.split_once(key)
+                .map_or(String::new(), |(_, v)| v.into())
+        }
+        fn ms(rest: &str) -> i64 {
+            kv(rest)["ms"].parse().expect("an ms on every line")
+        }
+        if let Some(rest) = line.strip_prefix("!gamestate ") {
+            let m = kv(rest);
+            out.push(NetchanEvent {
+                ms: ms(rest),
+                kind: NetchanKind::Gamestate {
+                    server_id: m["serverId"].parse().unwrap(),
+                    mapname: m["mapname"].to_string(),
+                },
+            });
+        } else if let Some(rest) = line.strip_prefix("!cmd ") {
+            out.push(NetchanEvent {
+                ms: ms(rest),
+                kind: NetchanKind::Cmd(tail(rest, "text=")),
+            });
+        } else if let Some(rest) = line.strip_prefix("!oob ") {
+            out.push(NetchanEvent {
+                ms: ms(rest),
+                kind: NetchanKind::Oob(tail(rest, "text=")),
+            });
+        } else if let Some(rest) = line.strip_prefix("!trace ") {
+            let m = kv(rest);
+            let i = |k: &str| m[k].parse::<i32>().unwrap();
+            out.push(NetchanEvent {
+                ms: ms(rest),
+                kind: NetchanKind::Trace {
+                    pm_type: i("pm_type"),
+                    eflags: i("eFlags"),
+                    health: i("health"),
+                    weapon: i("weapon"),
+                },
+            });
+        }
+    }
+    out
+}
+
+/// Appends this frame's wire to `out`, in the order the fixture writer sorts
+/// one `ms` into: the gamestate, then every serverCommand verbatim, then the
+/// out-of-band packets, then one trace.
+///
+/// The trace is unconditional; a capture keeps only the snapshots whose
+/// watched fields moved, so both sides go through [`collapse_traces`] before
+/// they are compared.
+pub fn record_netchan(
+    cl: &mut NetClient<ClientEnd>,
+    events: &[NetEvent],
+    now_ms: i64,
+    out: &mut Vec<NetchanEvent>,
+) {
+    let mut push = |kind| out.push(NetchanEvent { ms: now_ms, kind });
+    for e in events {
+        if *e == NetEvent::GamestateReady {
+            push(NetchanKind::Gamestate {
+                server_id: cl.server_id(),
+                mapname: vcod_common::net::info_value_for_key(cl.configstring(0), "mapname")
+                    .unwrap_or_default()
+                    .to_string(),
+            });
+        }
+    }
+    // Verbatim, off the reliable ring: `d` and `n` never reach `NetEvent`,
+    // and `d` is what carries the restart's new `sv_serverid`.
+    for text in cl.take_server_commands() {
+        push(NetchanKind::Cmd(text));
+    }
+    for e in events {
+        if let NetEvent::OutOfBand(text) = e {
+            push(NetchanKind::Oob(text.replace('\n', "\\n")));
+        }
+    }
+    if let Some(s) = cl.snapshots().newest() {
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        push(NetchanKind::Trace {
+            pm_type: s.ps.field_i32(p, "pm_type"),
+            eflags: s.ps.field_i32(p, "eFlags"),
+            health: s.ps.health(),
+            weapon: s.ps.field_i32(p, "weapon"),
+        });
+    }
+}
+
+/// Drops every trace whose four fields repeat the previous one, which is what
+/// a capture's own `keep_sample` does bar its once-a-second heartbeat. Both
+/// sides go through it, so the heartbeat lines and our per-frame traces
+/// collapse to the same transitions.
+pub fn collapse_traces(events: &[NetchanEvent]) -> Vec<NetchanEvent> {
+    let mut out: Vec<NetchanEvent> = Vec::new();
+    let mut last: Option<NetchanKind> = None;
+    for e in events {
+        if let NetchanKind::Trace { .. } = e.kind {
+            if last.as_ref() == Some(&e.kind) {
+                continue;
+            }
+            last = Some(e.kind.clone());
+        }
+        out.push(e.clone());
+    }
+    out
+}
+
+/// A usercmd holding the weapon the playerstate says the client holds. A
+/// `cmd.weapon` of 0 is not neutral: retail reads a byte differing from
+/// `ps.weapon` as a request to holster (`docs/research/cod11-combat.md`,
+/// section 1.8), so a replay that sent `NULL_USERCMD` would be asking for a
+/// putaway on every frame.
+pub fn holding(cl: &NetClient<ClientEnd>) -> UserCmd {
+    let p = &vcod_common::net::protocol::PROTOCOL_V1;
+    UserCmd {
+        weapon: cl
+            .snapshots()
+            .newest()
+            .map_or(0, |s| s.ps.field_i32(p, "weapon") as u8),
+        ..NULL_USERCMD
+    }
+}
+
+/// `sv_serverid` off a `d 1 \...\sv_serverid\17\...` configstring update.
+pub fn serverid_of(cmd: &str) -> Option<i32> {
+    let info = cmd.strip_prefix("d 1 ")?;
+    vcod_common::net::info_value_for_key(info, "sv_serverid")?
+        .parse()
+        .ok()
 }

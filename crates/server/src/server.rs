@@ -7,7 +7,8 @@
 
 use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
-use crate::game::host::ClientEvent;
+use crate::console;
+use crate::game::host::{ClientEvent, SpawnMode};
 use crate::game::script;
 use crate::game::temp_entity;
 use crate::spectate::ClientSim;
@@ -254,6 +255,18 @@ struct MoveSummary {
     buttons: u8,
 }
 
+/// Why a level load failed, which is what says whether the server can go on.
+#[derive(Debug)]
+pub enum LoadFailure {
+    /// Refused before anything was torn down, so the level that is serving is
+    /// untouched and the console line was a no-op.
+    KeptLevel(anyhow::Error),
+    /// Failed with the level already gone: no script to call `exitLevel`, no
+    /// table for a client to pull. Retail ends the process on this
+    /// (`Com_Error`) and so does vcod.
+    Fatal(anyhow::Error),
+}
+
 pub struct Server {
     cfg: ServerConfig,
     huff: Huffman,
@@ -263,6 +276,10 @@ pub struct Server {
     server_id: u8,
     checksum_feed: i32,
     configstrings: Vec<String>,
+    /// The table as the clients last heard it, which is what a mid-level
+    /// change is diffed against ([`Server::broadcast_configstring_changes`]).
+    /// Re-synced wherever a client is handed the whole table again.
+    sent_configstrings: Vec<String>,
     challenges: Vec<Challenge>,
     clients: Vec<Option<Client>>,
     outbox: Vec<(SocketAddr, Vec<u8>)>,
@@ -328,6 +345,40 @@ pub struct Server {
     /// it, which is what keeps a switch from being undone the frame after it
     /// lands.
     weapon_changes: Vec<(usize, u8)>,
+    /// Commands waiting to run, drained by `drain_console` at the top of
+    /// `tick` (`Cbuf_Execute`, docs/research/cod11-map-cycle.md section 5.2).
+    console: console::Console,
+    /// `sv_mapRotationCurrent`, consumed one token per `map_rotate`.
+    rotation: console::Rotation,
+    /// `sv_mapRotation`, mirrored here by `set_cvar` (doc section 5).
+    sv_map_rotation: String,
+    /// `svs.snapFlagServerBit`, toggled by a map load or restart and sent as
+    /// every snapshot's `snapFlags` (doc section 3 step 13, section 4
+    /// step 4).
+    snap_flag_server_bit: u32,
+    /// The cvar table the outgoing level left, stashed when its script is
+    /// dropped. Retail's `Cvar_Set` writes a process-global table that no
+    /// level boundary clears, so a script's `setCvar` outlives both a
+    /// restart and a map change; rebuilding from `default_mp.cfg` alone
+    /// would lose it.
+    carried_cvars: Option<crate::cvars::Cvars>,
+    /// `g_gametype` and `sv_maxclients` as the running level actually loaded
+    /// with, read off the table `load_scripts_with` built. Doc section 4
+    /// step 3 compares retail's latched value against its live one; this is
+    /// the same comparison's left-hand side, and it has to be the built
+    /// value rather than `cfg`, since a `+set` override outranks `cfg` in
+    /// [`Self::cvars`] and comparing against `cfg` escalates every restart
+    /// for the whole run.
+    level_cvars: Option<(String, String)>,
+    /// `svs.time` of the last spawn or restart, for the same-frame guard
+    /// (doc section 4 step 1).
+    last_spawn_tick: Option<i32>,
+    /// One `.gsc` answered from memory instead of the paks
+    /// ([`Self::overlay_script`]); `None` in every production run.
+    script_overlay: Option<(String, String)>,
+    /// A level load that failed with the level already torn down
+    /// ([`LoadFailure::Fatal`]), waiting for `main` to end the process on it.
+    fatal: Option<anyhow::Error>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -414,6 +465,7 @@ impl Server {
         let server_id = 0x10;
         let mut sv = Server {
             configstrings: configstrings::static_configstrings(&cfg, server_id),
+            sent_configstrings: configstrings::static_configstrings(&cfg, server_id),
             clients: (0..cfg.max_clients).map(|_| None).collect(),
             cfg,
             huff: Huffman::new(),
@@ -441,6 +493,15 @@ impl Server {
             fs: None,
             hit_rigs: Default::default(),
             weapon_changes: Vec::new(),
+            console: console::Console::new(),
+            rotation: console::Rotation::default(),
+            sv_map_rotation: String::new(),
+            snap_flag_server_bit: 0,
+            carried_cvars: None,
+            level_cvars: None,
+            last_spawn_tick: None,
+            script_overlay: None,
+            fatal: None,
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -465,6 +526,12 @@ impl Server {
 
     pub fn client_count(&self) -> usize {
         self.clients.iter().flatten().count()
+    }
+
+    /// `sv_serverid`. The high nibble is the map load, the low one the
+    /// restart count (docs/research/cod11-map-cycle.md, section 3 step 16).
+    pub fn server_id(&self) -> u8 {
+        self.server_id
     }
 
     pub fn take_outgoing(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
@@ -1040,12 +1107,14 @@ impl Server {
             .enumerate()
             .filter_map(|(slot, c)| c.as_ref().map(|_| slot))
             .collect();
-        // Tokens 2 and 3 are `level.teamScores[1]` and `[2]`. Both retail
-        // captures read 0 in each: the array starts zeroed and the `-9999`
-        // sentinel is something a gametype writes for itself (hud protocol
-        // doc, section 3). Hardcoded until a `setTeamScore` builtin gives
-        // them somewhere to live.
-        let mut text = format!("b {} 0 0", online.len());
+        // Tokens 2 and 3 are the two team scores, axis before allies, the
+        // order `DeathmatchScoreboardMessage` pushes them in (map-cycle doc,
+        // 6.3). Both retail captures read 0 in each: `dm` writes neither.
+        let [axis, allies] = self
+            .script
+            .as_ref()
+            .map_or([0, 0], |rt| rt.host.team_scores);
+        let mut text = format!("b {} {axis} {allies}", online.len());
         for slot in online {
             let mut field = |name: &str| {
                 self.client_field(slot, name)
@@ -1263,17 +1332,31 @@ impl Server {
     /// cosmetic: `!getCvar("scr_allow_fg42")` is what makes
     /// `_teams::restrictPlacedWeapons` `delete()` the map's placed fg42s, so
     /// the value moves entity numbering as well as the mirror.
+    ///
+    /// Past the first level the table comes from the one the outgoing level
+    /// left ([`Self::carried_cvars`]) rather than from `default_mp.cfg`
+    /// again: retail's is process-global and a script's `setCvar` survives
+    /// both boundaries. The config mirrors and the `+set` overrides are
+    /// replayed on top either way, so a `--set` still outranks a script.
     fn cvars(&self, fs: &vcod_common::pk3::Pk3Fs) -> crate::cvars::Cvars {
-        let mut cvars = crate::cvars::Cvars::new();
-        match fs.read("default_mp.cfg") {
-            Some(bytes) => {
-                let n = cvars.exec_cfg(&String::from_utf8_lossy(&bytes));
-                log::debug!("default_mp.cfg: {n} cvars set");
+        let mut cvars = match self.carried_cvars.clone() {
+            Some(c) => c,
+            None => {
+                let mut cvars = crate::cvars::Cvars::new();
+                match fs.read("default_mp.cfg") {
+                    Some(bytes) => {
+                        let n = cvars.exec_cfg(&String::from_utf8_lossy(&bytes));
+                        log::debug!("default_mp.cfg: {n} cvars set");
+                    }
+                    // A mount set without the localized pak loses every stock
+                    // `scr_*` value, so say so rather than run on script defaults.
+                    None => log::warn!(
+                        "default_mp.cfg not in the mounted paks; stock scr_* defaults lost"
+                    ),
+                }
+                cvars
             }
-            // A mount set without the localized pak loses every stock
-            // `scr_*` value, so say so rather than run on script defaults.
-            None => log::warn!("default_mp.cfg not in the mounted paks; stock scr_* defaults lost"),
-        }
+        };
         cvars.set("g_gametype", &self.cfg.gametype);
         cvars.set("sv_hostname", &self.cfg.hostname);
         cvars.set("sv_maxclients", &self.cfg.max_clients.to_string());
@@ -1284,14 +1367,13 @@ impl Server {
         cvars
     }
 
-    /// Loads and runs the gametype and map scripts. Called once at map load,
-    /// before any client connects. The script keeps allocating configstrings
-    /// after that (any `setModel`, `loadFX`, `playSound` or `ambientPlay`
-    /// from a thread that has passed a `wait`), so the table is not final at
-    /// gamestate time; `tick` copies the script's table back every frame. A
-    /// client already connected does not see a post-gamestate allocation,
-    /// because the server does not send the `d` configstring-update command
-    /// yet.
+    /// Loads and runs the gametype and map scripts. Called once per level,
+    /// before any client is let back in. The script keeps allocating
+    /// configstrings after that (any `setModel`, `loadFX`, `playSound` or
+    /// `ambientPlay` from a thread that has passed a `wait`), so the table is
+    /// not final at gamestate time; `tick` copies the script's table back
+    /// every frame and [`Self::broadcast_configstring_changes`] is what
+    /// carries a later allocation to a client that already has its gamestate.
     ///
     /// The table is cloned in, not moved: `ScriptRuntime::load` fails on a
     /// missing `.gsc`, an unresolvable map, a bad BSP or a failed entity
@@ -1299,18 +1381,72 @@ impl Server {
     /// it was, so the error the caller reports is about the script rather
     /// than about a half-cleared table. `main.rs` exits on it.
     pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
+        self.load_scripts_with(fs, false, None, Vec::new(), false)
+    }
+
+    /// The test seam for a gametype script that ships in no pak: `path` is a
+    /// canonical script path (no extension) and `text` its source, answered
+    /// instead of the paks on every later level load. Its only callers are
+    /// the semantics probes in `tests/semantics_ents.rs`, which need the real
+    /// console and restart paths under them.
+    #[doc(hidden)]
+    pub fn overlay_script(&mut self, path: &str, text: &str) {
+        self.script_overlay = Some((path.to_string(), text.to_string()));
+    }
+
+    /// Every line the running level's script has passed to `logPrint`.
+    /// Test-facing: a new level starts a new log, so a caller spanning a
+    /// restart collects this per level.
+    pub fn script_log(&self) -> &[String] {
+        self.script.as_ref().map_or(&[], |rt| rt.script_log())
+    }
+
+    /// `SV_InitGameProgs(savePersist)` (docs/research/cod11-map-cycle.md,
+    /// section 3 step 19): [`Self::load_scripts`] with retail's
+    /// `G_InitGame(levelTime, seed, restart, savePersist)` arguments and the
+    /// two tables `savePersist` decides the fate of, `game[]` and one
+    /// `pers[]` per client slot. `save_persist` is the whole of that
+    /// decision: both boundaries lift the two tables and both drop them
+    /// here when the outgoing level did not ask for them (section 1, and
+    /// the three `probe_persist_*` captures).
+    ///
+    /// `restart` skips re-reading what a restart cannot have changed: the
+    /// paks are the same and so is the map, so the animtree, the weapon
+    /// files and the hit-location table stay as they are. That is the whole
+    /// of the difference between the two paths here; retail's is the game
+    /// module it keeps loaded (section 4.1).
+    pub fn load_scripts_with(
+        &mut self,
+        fs: Rc<vcod_common::pk3::Pk3Fs>,
+        restart: bool,
+        carry: Option<vcod_gsc::GameCarry>,
+        pers: Vec<Option<vcod_gsc::ArrayCarry>>,
+        save_persist: bool,
+    ) -> anyhow::Result<()> {
         let cvars = self.cvars(&fs);
+        self.level_cvars = Some((
+            cvars.get("g_gametype").to_string(),
+            cvars.get("sv_maxclients").to_string(),
+        ));
         self.fs = Some(fs.clone());
-        self.anims = match vcod_common::animtree::PlayerAnims::load(&fs) {
-            Ok(a) => Some(a),
-            Err(e) => {
-                log::warn!("player anims: {e:#}, players will not animate");
-                None
-            }
+        if !restart {
+            self.anims = match vcod_common::animtree::PlayerAnims::load(&fs) {
+                Ok(a) => Some(a),
+                Err(e) => {
+                    log::warn!("player anims: {e:#}, players will not animate");
+                    None
+                }
+            };
+            self.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
+            self.hitlocs = crate::game::combat::HitLocTable::load(&fs);
+        }
+        let carry = match save_persist {
+            true => crate::game::script::Carry { game: carry, pers },
+            false => crate::game::script::Carry::default(),
         };
-        self.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
-        self.hitlocs = crate::game::combat::HitLocTable::load(&fs);
-        let rt = crate::game::script::ScriptRuntime::load(
+        let source = crate::game::script::PakScripts::new(fs.clone(), self.script_overlay.clone());
+        let rt = crate::game::script::ScriptRuntime::load_from(
+            Box::new(source),
             fs,
             &self.cfg.map,
             &self.cfg.gametype,
@@ -1319,12 +1455,14 @@ impl Server {
             self.world.clone(),
             self.weapon_table.clone(),
             self.sv_time_ms,
+            carry,
         )?;
         let mut configstrings = rt.configstrings().to_vec();
         rt.cvars()
             .write_mirror(&mut configstrings)
             .map_err(|e| anyhow::anyhow!("writing the cvar mirror: {e:?}"))?;
         self.configstrings = configstrings;
+        self.sync_sent_configstrings();
         self.script = Some(rt);
         Ok(())
     }
@@ -1351,10 +1489,481 @@ impl Server {
         self.script.as_mut()?.client_pers(slot, key)
     }
 
-    /// A `+set` for the next `load_scripts`.
+    /// One cvar as the running script reads it. `None` before
+    /// `load_scripts`. Test-facing: `cfg.gametype` picks which gametype
+    /// script loads and this table is what that script's own `getCvar`
+    /// answers from, so a rotation that wrote only one of the two is
+    /// invisible everywhere else.
+    pub fn script_cvar(&self, name: &str) -> Option<String> {
+        Some(self.script.as_ref()?.cvars().get(name).to_string())
+    }
+
+    /// A `+set` for the next `load_scripts`. `sv_mapRotation` and
+    /// `g_gametype` also mirror into their own fields, so `--set` and
+    /// `map_rotate`'s `gametype` token both work through one value
+    /// (docs/research/cod11-map-cycle.md section 5).
     pub fn set_cvar(&mut self, name: &str, value: &str) {
+        // In place when the name is already there, so the last write wins
+        // whether it came from `--set` or from a rotation token, and a
+        // rotation running for days does not grow the list a map at a time.
+        match self.cvar_overrides.iter_mut().find(|(n, _)| n == name) {
+            Some((_, v)) => *v = value.to_string(),
+            None => self
+                .cvar_overrides
+                .push((name.to_string(), value.to_string())),
+        }
+        match name {
+            "sv_mapRotation" => self.sv_map_rotation = value.to_string(),
+            "g_gametype" => {
+                self.cfg.gametype = value.to_string();
+                self.refresh_serverinfo();
+            }
+            _ => {}
+        }
+    }
+
+    /// `SV_Frame`'s cvar flush, the serverinfo half: a write to a cvar the
+    /// serverinfo string carries is followed by
+    /// `SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))`
+    /// (docs/research/cod11-map-cycle.md, 4.3). Both tables, because the
+    /// script owns its own copy between level loads and `tick` reads that one
+    /// back over this one every frame.
+    fn refresh_serverinfo(&mut self) {
+        let info = configstrings::serverinfo(&self.cfg).to_string();
+        if let Some(slot) = self.configstrings.get_mut(0) {
+            *slot = info.clone();
+        }
+        if let Some(rt) = self.script.as_mut() {
+            if let Some(slot) = rt.host.configstrings.get_mut(0) {
+                *slot = info;
+            }
+        }
+    }
+
+    /// What the next level load would stamp for `name`, given the config's
+    /// own value: a `+set` override if one names it, since [`Self::cvars`]
+    /// replays the override list last.
+    fn pending_cvar(&self, name: &str, from_cfg: &str) -> String {
         self.cvar_overrides
-            .push((name.to_string(), value.to_string()));
+            .iter()
+            .find(|(n, _)| n == name)
+            .map_or_else(|| from_cfg.to_string(), |(_, v)| v.clone())
+    }
+
+    /// `SV_SpawnServer` (docs/research/cod11-map-cycle.md, section 3), in the
+    /// order that list numbers. No gamestate is pushed: every client is
+    /// demoted to `CS_CONNECTED` and pulls one off the high-nibble branch of
+    /// `handle_client_packet` on its next message (section 3.1).
+    ///
+    /// The bsp is parsed before anything is torn down, so a `map` naming a
+    /// map the paks do not have leaves the level that is serving alone
+    /// ([`LoadFailure::KeptLevel`]); the script load past the teardown has no
+    /// such way back and is [`LoadFailure::Fatal`].
+    /// Retail's 250 ms sleep of step 4 has no counterpart here: this runs
+    /// inside a tick that owns the whole server, and sleeping would only
+    /// delay the same work.
+    pub fn spawn_server(&mut self, map: &str) -> Result<(), LoadFailure> {
+        let kept = |e: anyhow::Error| LoadFailure::KeptLevel(e);
+        let fs = self
+            .fs
+            .clone()
+            .ok_or_else(|| kept(anyhow::anyhow!("no paks are mounted")))?;
+        // Step 15's `CM_LoadMap`, pulled ahead of the teardown.
+        let bsp_path = fs
+            .resolve_map(map)
+            .ok_or_else(|| kept(anyhow::anyhow!("map {map} not found in the mounted paks")))?;
+        let bsp_bytes = fs
+            .read(&bsp_path)
+            .ok_or_else(|| kept(anyhow::anyhow!("reading {bsp_path}")))?;
+        let bsp = vcod_common::bsp::parse(&bsp_bytes).map_err(kept)?;
+
+        // Step 2: the flag is read off the outgoing level and handed to the
+        // incoming one's `G_InitGame`, along with the two tables it decides
+        // the fate of.
+        let (save_persist, carry) = self.lift_persistence();
+        // Step 3: every client whose state is `CS_PRIMED` or above, which is
+        // every one that has a gamestate to be told is stale.
+        let text = format!("loadingnewmap\n{map}\n{}", self.cfg.gametype);
+        let told: Vec<SocketAddr> = self
+            .clients
+            .iter()
+            .flatten()
+            .filter(|c| c.state != ClientState::Connected)
+            .map(|c| c.addr)
+            .collect();
+        for addr in told {
+            self.send_oob(addr, &text);
+        }
+        // Step 5: the game module is unloaded, its object table with it, and
+        // step 8's `memset(&sv, 0, ...)` takes everything the level queued.
+        self.script = None;
+        self.pending_attacks.clear();
+        self.pending_explosions.clear();
+        self.pending_script_commands.clear();
+        self.weapon_changes.clear();
+        // Step 9.
+        self.checksum_feed = (self.rand() << 16) ^ self.rand() ^ self.sv_time_ms;
+        // Step 13.
+        self.snap_flag_server_bit ^= console::SNAPFLAG_SERVERCOUNT;
+        // Step 15's `Cvar_Set("mapname", ...)` and the collision with it.
+        self.cfg.map = map.to_string();
+        self.load_world(World::from_bsp(&bsp, Some(&fs)));
+        // Step 16, then steps 7 and 10 with step 24 folded in: the table is
+        // rebuilt empty around the serverinfo and systeminfo the new id
+        // belongs in, which is where the client reads the id back from.
+        self.server_id = console::next_map_id(self.server_id);
+        self.configstrings = configstrings::static_configstrings(&self.cfg, self.server_id);
+        // Step 19. Past the teardown: a failure here leaves no level.
+        self.load_scripts_with(fs, false, carry.game, carry.pers, save_persist)
+            .map_err(LoadFailure::Fatal)?;
+        // Step 20: three frames, 100 ms of `svs.time` each.
+        for _ in 0..3 {
+            self.sv_time_ms = self.sv_time_ms.wrapping_add(100);
+            if let Some(rt) = self.script.as_mut() {
+                rt.run_frame(self.sv_time_ms);
+            }
+        }
+        // What those frames allocated, before anything reads the table back:
+        // every client here is `CS_CONNECTED` and pulls the whole table in
+        // the gamestate it asks for, so the diff has nothing to say about a
+        // level boundary (the restart path re-syncs the same way).
+        if let Some(rt) = self.script.as_ref() {
+            self.configstrings = rt.configstrings().to_vec();
+            if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
+                log::warn!("rebuilding the cvar mirror: {e:?}");
+            }
+        }
+        self.sync_sent_configstrings();
+        // Step 21.
+        self.rebuild_baselines();
+        // Step 22, after the settle frames and the baselines: `ClientConnect`
+        // again for everyone still on a netchan, then back to `CS_CONNECTED`.
+        for slot in 0..self.clients.len() {
+            let Some(c) = self.clients[slot].as_mut() else {
+                continue;
+            };
+            let name = c.name.clone();
+            c.reset_for_level();
+            if let Some(rt) = self.script.as_mut() {
+                rt.reconnect_client(slot, name, self.sv_time_ms);
+            }
+        }
+        self.last_spawn_tick = Some(self.sv_time_ms);
+        log::info!(
+            "map {map} ({}), serverId {:#04x}, {} clients kept",
+            self.cfg.gametype,
+            self.server_id,
+            self.client_count()
+        );
+        Ok(())
+    }
+
+    /// What the outgoing level asked to keep and the two tables it names
+    /// (map-cycle doc, section 1). Also stashes its cvar table, which is
+    /// process-global on retail and outlives both boundaries whatever
+    /// `savePersist` says. `false` and an empty carry when no level is
+    /// running.
+    fn lift_persistence(&mut self) -> (bool, crate::game::script::Carry) {
+        let Some(rt) = self.script.as_ref() else {
+            return (false, crate::game::script::Carry::default());
+        };
+        self.carried_cvars = Some(rt.cvars().clone());
+        (rt.host.save_persist, rt.take_carry())
+    }
+
+    /// `SV_MapRestart_f` (map-cycle doc, section 4), in the order that
+    /// numbered list. The level is re-inited in place: no gamestate, the
+    /// netchan and both reliable rings kept, and only a client that was
+    /// already `CS_ACTIVE` re-entered (step 11); a `CS_PRIMED` one is
+    /// promoted later by its own next message (4.4).
+    pub fn map_restart(&mut self) -> Result<(), LoadFailure> {
+        // Step 1: a second restart in one frame, or one straight after a
+        // spawn, is a no-op.
+        if self.last_spawn_tick == Some(self.sv_time_ms) {
+            return Ok(());
+        }
+        // Step 2.
+        if self.script.is_none() {
+            log::info!("Server is not running.");
+            return Ok(());
+        }
+        let Some(fs) = self.fs.clone() else {
+            return Err(LoadFailure::KeptLevel(anyhow::anyhow!(
+                "no paks are mounted"
+            )));
+        };
+        // Step 3: the escalation. A level that asked to keep its
+        // persistence gets the in-place restart even across one of these.
+        let save_persist = self.script.as_ref().is_some_and(|rt| rt.host.save_persist);
+        if !save_persist {
+            let changed = self
+                .level_cvars
+                .as_ref()
+                .and_then(|(gametype, max_clients)| {
+                    if *gametype != self.pending_cvar("g_gametype", &self.cfg.gametype) {
+                        Some("g_gametype")
+                    } else if *max_clients
+                        != self.pending_cvar("sv_maxclients", &self.cfg.max_clients.to_string())
+                    {
+                        Some("sv_maxclients")
+                    } else {
+                        None
+                    }
+                });
+            if let Some(name) = changed {
+                log::info!("{name} variable change -- restarting.");
+                let map = self.cfg.map.clone();
+                return self.spawn_server(&map);
+            }
+        }
+        let (_, carry) = self.lift_persistence();
+        // Step 4's six counters: what this level queued and nothing else,
+        // since a restart keeps the map and its collision.
+        self.pending_attacks.clear();
+        self.pending_explosions.clear();
+        self.pending_script_commands.clear();
+        self.weapon_changes.clear();
+        self.snap_flag_server_bit ^= console::SNAPFLAG_SERVERCOUNT;
+        // Step 5: only the low nibble moves.
+        self.server_id = console::next_restart_id(self.server_id);
+        // The table is rebuilt around the new id the way a spawn's is; 4.3
+        // is what carries slot 1 to a client that already has a gamestate.
+        self.configstrings = configstrings::static_configstrings(&self.cfg, self.server_id);
+        // Step 7: `SV_RestartGameProgs(savePersist)`. Past the teardown: the
+        // outgoing level's script is gone and a failure here leaves none.
+        self.load_scripts_with(fs, true, carry.game, carry.pers, save_persist)
+            .map_err(LoadFailure::Fatal)?;
+        // Step 8: three frames, 100 ms of `svs.time` each.
+        for _ in 0..3 {
+            self.sv_time_ms = self.sv_time_ms.wrapping_add(100);
+            if let Some(rt) = self.script.as_mut() {
+                rt.run_frame(self.sv_time_ms);
+            }
+        }
+        // What those frames allocated, before anything reads the table back.
+        if let Some(rt) = self.script.as_ref() {
+            self.configstrings = rt.configstrings().to_vec();
+            if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
+                log::warn!("rebuilding the cvar mirror: {e:?}");
+            }
+        }
+        // The incoming level's whole table, in one go: what a client keeps of
+        // it is what the burst below re-sends, and the diff has no business
+        // replaying a level boundary slot by slot (doc 4.5).
+        self.sync_sent_configstrings();
+        // The ambient the new level set, ahead of the `n` because retail's
+        // settle frames flush it before step 9 does
+        // (`tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`, seq 42-44).
+        if !self.configstring(3).is_empty() {
+            for slot in 0..self.clients.len() {
+                if self.clients[slot].is_some() {
+                    self.send_configstring_update(slot, 3);
+                }
+            }
+        }
+        // Steps 9 to 11: `n`, `ClientConnect` again, and back into the world
+        // for a client that was already in it.
+        for slot in 0..self.clients.len() {
+            let Some(c) = self.clients[slot].as_mut() else {
+                continue;
+            };
+            let was_active = c.state == ClientState::Active;
+            let name = c.name.clone();
+            let entering = c.last_cmd;
+            c.reset_for_restart();
+            // Through the guarded path, like every other reliable: a client
+            // whose acks have fallen a ring behind is dropped rather than
+            // handed an overwritten slot.
+            self.send_server_command(slot, "n");
+            // That guard can drop the slot; a client that is gone has no
+            // `ClientConnect` to run and no world to enter.
+            if self.clients[slot].is_none() {
+                continue;
+            }
+            if let Some(rt) = self.script.as_mut() {
+                rt.reconnect_client(slot, name, self.sv_time_ms);
+            }
+            if was_active {
+                // The sim `enter_world` builds carries a clear
+                // `EF_TELEPORT_BIT`, which is what retail's re-run
+                // `ClientConnect` leaves: the incoming level's first spawn is
+                // the flip that puts the client at 24 (map-cycle doc, 8.2).
+                self.enter_world(slot, Some(&entering));
+            }
+        }
+        // 4.3: `SV_Frame`'s cvar flush carrying the bumped `sv_serverid`,
+        // which is what puts the client on the new id.
+        for slot in 0..self.clients.len() {
+            if self.clients[slot].is_some() {
+                self.send_configstring_update(slot, 1);
+            }
+        }
+        self.last_spawn_tick = Some(self.sv_time_ms);
+        log::info!(
+            "map_restart {} ({}), serverId {:#04x}, {} clients kept",
+            self.cfg.map,
+            self.cfg.gametype,
+            self.server_id,
+            self.client_count()
+        );
+        Ok(())
+    }
+
+    /// `SV_CreateBaseline` (map-cycle doc, section 3 step 21), with the
+    /// divergence 3.3 records: only `--test-entities` is baselined.
+    fn rebuild_baselines(&mut self) {
+        self.baselines = match self.test_entities.as_ref() {
+            Some(te) => te.baselines(self.proto),
+            None => HashMap::new(),
+        };
+    }
+
+    /// `SV_SetConfigstring`'s per-client half, the `d <index> <text>` server
+    /// command. Two callers: the restart burst, which re-sends slots 3 and 1
+    /// to a client that keeps its gamestate (map-cycle doc, 4.3), and
+    /// [`Self::broadcast_configstring_changes`] once a frame. A map change
+    /// reaches neither: it re-syncs the table after its settle frames, so the
+    /// diff has nothing to say about the boundary, and every client it leaves
+    /// behind is `CS_CONNECTED`, which the diff skips. That is what keeps a
+    /// map change off the reliable stream entirely, the gamestate each client
+    /// pulls carrying the whole table instead (3.1).
+    fn send_configstring_update(&mut self, slot: usize, index: usize) {
+        let cmd = format!("d {index} {}", self.configstring(index));
+        self.send_server_command(slot, &cmd);
+    }
+
+    /// `SV_SetConfigstring`'s per-frame half: every slot the running level
+    /// changed goes out as `d <index> <text>` to every client, which is what
+    /// retail's broadcast gate lets through while `sv.state` reads 2
+    /// (map-cycle doc, 3.1). The script allocates all through the level -- a
+    /// `playSound` or `precacheString` from a thread past a `wait` -- and the
+    /// index a later `s` or event carries is worthless to a client whose slot
+    /// is still empty.
+    ///
+    /// Called after the script frame and before the frame's own client
+    /// commands, so the `d` naming an alias precedes the `s` that plays it.
+    /// A `CS_CONNECTED` client is skipped: it has no table to patch, and the
+    /// gamestate it pulls carries every slot allocated by then. UNVERIFIED:
+    /// what retail's own broadcast does with such a client; its gate is on
+    /// `sv.state`, not on the client's.
+    fn broadcast_configstring_changes(&mut self) {
+        let changed: Vec<usize> = (0..self.configstrings.len())
+            .filter(|&i| self.sent_configstrings.get(i) != self.configstrings.get(i))
+            .collect();
+        if changed.is_empty() {
+            return;
+        }
+        self.sync_sent_configstrings();
+        for slot in 0..self.clients.len() {
+            let has_table = self.clients[slot]
+                .as_ref()
+                .is_some_and(|c| c.state != ClientState::Connected);
+            if !has_table {
+                continue;
+            }
+            for &i in &changed {
+                self.send_configstring_update(slot, i);
+            }
+        }
+    }
+
+    /// Marks the whole table as already known to every client. The two level
+    /// boundaries hand it over wholesale -- a map change in the gamestate
+    /// each client pulls, a restart in the burst 4.3 describes -- so neither
+    /// leaves anything for the diff above to send.
+    fn sync_sent_configstrings(&mut self) {
+        self.sent_configstrings = self.configstrings.clone();
+    }
+
+    /// What [`Self::drain_console`] does with a level load's outcome.
+    /// Returns whether the console may keep running.
+    fn absorb_load(&mut self, what: &str, r: Result<(), LoadFailure>) -> bool {
+        match r {
+            Ok(()) => true,
+            Err(LoadFailure::KeptLevel(e)) => {
+                log::error!("{what}: {e:#}");
+                true
+            }
+            Err(LoadFailure::Fatal(e)) => {
+                self.fatal = Some(e.context(what.to_string()));
+                false
+            }
+        }
+    }
+
+    /// The load failure that left the server with no level, taken. The binary
+    /// polls it after every tick and ends the process on it, which is what
+    /// retail's `Com_Error` does: nothing can call `exitLevel` any more and
+    /// every client would pull an empty gamestate.
+    pub fn take_fatal(&mut self) -> Option<anyhow::Error> {
+        self.fatal.take()
+    }
+
+    /// Queues a line for `drain_console` to run at the top of the next tick,
+    /// `Cbuf_AddText`'s `EXEC_APPEND`.
+    pub fn push_console(&mut self, line: &str) {
+        self.console.push_back(line.to_string());
+    }
+
+    /// `Cbuf_Execute` for the three commands the map cycle uses; anything
+    /// else logs and drops. A command pushed by a builtin during the script
+    /// pass runs here, at the top of the next tick, which is `EXEC_APPEND`.
+    ///
+    /// A load that failed before the teardown -- no paks, a map the paks do
+    /// not have, a bsp that would not parse -- leaves the level that is
+    /// serving alone and is logged. One that failed after it -- the map or
+    /// gametype scripts -- has no level left to fall back to, so it stops the
+    /// drain and ends the process through [`Self::take_fatal`].
+    fn drain_console(&mut self) {
+        while let Some(line) = self.console.pop_front() {
+            match console::Command::parse(&line) {
+                console::Command::Map(map) => {
+                    // `map <the map already serving>` is a restart, not a
+                    // spawn (doc section 4.2).
+                    let r = if map.eq_ignore_ascii_case(&self.cfg.map) && self.script.is_some() {
+                        self.map_restart()
+                    } else {
+                        self.spawn_server(&map)
+                    };
+                    if !self.absorb_load(&format!("map {map}"), r) {
+                        return;
+                    }
+                }
+                console::Command::MapRestart => {
+                    let r = self.map_restart();
+                    if !self.absorb_load("map_restart", r) {
+                        return;
+                    }
+                }
+                console::Command::MapRotate => {
+                    let full = self.sv_map_rotation.clone();
+                    let before = self.cfg.gametype.clone();
+                    let mut gametype = before.clone();
+                    let next = self.rotation.rotate(&full, &mut gametype);
+                    for w in self.rotation.warnings.drain(..) {
+                        log::warn!("{w}");
+                    }
+                    if gametype != before {
+                        // Retail's plain `Cvar_Set` (doc section 5.2), so
+                        // through `set_cvar`: writing `cfg.gametype` alone
+                        // picks the new gametype's script while `cvars`
+                        // replays an earlier `--set g_gametype` over the
+                        // table that script then reads.
+                        self.set_cvar("g_gametype", &gametype);
+                        // A gametype change discards what exitLevel(true)
+                        // asked to keep (doc section 5.2).
+                        if let Some(rt) = self.script.as_mut() {
+                            rt.host.save_persist = false;
+                        }
+                    }
+                    match next {
+                        console::Rotate::Map(m) => self.console.push_front(format!("map {m}")),
+                        console::Rotate::Restart => self.console.push_front("map_restart".into()),
+                    }
+                }
+                console::Command::Unknown(l) => log::warn!("console: unknown command {l:?}"),
+            }
+        }
     }
 
     const FALLBACK_SPAWN: ([f32; 3], f32) = ([0.0, 0.0, 64.0], 0.0);
@@ -1393,6 +2002,7 @@ impl Server {
     }
 
     pub fn tick(&mut self, now: Instant) {
+        self.drain_console();
         self.check_timeouts(now);
         self.sv_time_ms = self.sv_time_ms.wrapping_add(FRAME_MS);
         // Wall gap between ticks: sv_time always advances exactly FRAME_MS, so
@@ -1506,6 +2116,8 @@ impl Server {
         }
 
         let mut client_commands = Vec::new();
+        let mut console_lines: Vec<String> = Vec::new();
+        let mut ranks_dirty = false;
         // A client that dropped between the packet and here has nothing left
         // to run its command against.
         let queued: Vec<(usize, ScriptCommand)> = std::mem::take(&mut self.pending_script_commands)
@@ -1601,7 +2213,9 @@ impl Server {
             }
             rt.deliver_hits(hits, self.sv_time_ms);
             rt.run_frame(self.sv_time_ms);
+            console_lines = rt.take_console();
             client_commands = rt.take_client_commands();
+            ranks_dirty = rt.take_ranks_dirty();
             // The script owns the table while it runs and allocates into it
             // from any thread, so the server re-reads it rather than trusting
             // the copy `load_scripts` took. A whole-table copy per frame is
@@ -1629,10 +2243,12 @@ impl Server {
                 let Some(sim) = c.sim.as_mut() else {
                     continue;
                 };
-                if s.player {
-                    sim.become_player(s.origin, s.yaw_deg, cmd_angles);
-                } else {
-                    sim.become_spectator(s.origin, s.yaw_deg, cmd_angles);
+                match s.mode {
+                    SpawnMode::Player => sim.become_player(s.origin, s.yaw_deg, cmd_angles),
+                    SpawnMode::Spectator => sim.become_spectator(s.origin, s.yaw_deg, cmd_angles),
+                    SpawnMode::Intermission => {
+                        sim.become_intermission(s.origin, s.yaw_deg, cmd_angles)
+                    }
                 }
             }
             // The machine's own switches first: `pickup` writes `ps.weapon`
@@ -1705,18 +2321,51 @@ impl Server {
             }
             for (slot, c) in self.clients.iter_mut().enumerate() {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-                    let v = rt.client_vitals(slot);
-                    sim.health = v.health;
-                    sim.max_health = v.max_health;
-                    sim.dead = v.dead;
+                    // `ClientEndFrame`'s intermission arm never copies
+                    // `ent->health` into the playerstate, so the camera keeps
+                    // the zero its own spawn left (map-cycle doc, 6.2).
+                    if sim.pm_type != crate::spectate::PmType::Intermission {
+                        let v = rt.client_vitals(slot);
+                        sim.health = v.health;
+                        sim.max_health = v.max_health;
+                        sim.dead = v.dead;
+                    }
                     sim.end_frame(self.sv_time_ms);
                 }
             }
         }
+        // `trap_SendConsoleCommand`'s `EXEC_APPEND`: what a builtin queued
+        // this frame runs at the top of the next tick, never mid-frame.
+        self.console.extend(console_lines);
+        // Ahead of the frame's client commands, so a slot the script just
+        // allocated is named before anything points at it.
+        self.broadcast_configstring_changes();
         // Outside the borrow: `setClientCvar` and `openMenu` queue rather
         // than send, and this is where the queue reaches the netchan.
         for (slot, cmd) in client_commands {
             self.send_server_command(slot, &cmd);
+        }
+        // `G_RunFrame`'s inlined drain (map-cycle doc, 6.3): a frame that
+        // moved a score pushes the scoreboard to every client in
+        // intermission, and no frame pushes one otherwise. The map-change
+        // capture carries no `b` its probe did not ask for, so a timer here
+        // would be a command retail never sends.
+        if ranks_dirty {
+            let watching: Vec<usize> = self
+                .clients
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| {
+                    c.as_ref()
+                        .and_then(|c| c.sim.as_ref())
+                        .is_some_and(|s| s.pm_type == crate::spectate::PmType::Intermission)
+                })
+                .map(|(slot, _)| slot)
+                .collect();
+            for slot in watching {
+                let text = self.scoreboard();
+                self.send_server_command(slot, &text);
+            }
         }
 
         // Every entity built once, then culled and written per client.
@@ -1923,14 +2572,10 @@ impl Server {
             .enumerate()
             .filter_map(|(i, c)| {
                 let sim = c.as_ref()?.sim.as_ref()?;
-                // A spectator is not a thing in the world: retail never links
-                // one, so nobody is sent an entity for it. Without this a
-                // player's crosshair names a spectator flying overhead. A dead
-                // player is hidden the same way: `ClientEndFrame` sets
-                // `SVF_NOCLIENT` on it every frame until it respawns, and the
-                // corpse in the body queue is what the others see (combat
-                // doc, 5.4).
-                if sim.pm_type != crate::spectate::PmType::Spectator && !sim.dead {
+                // A spectator, an intermission camera and a dead player are
+                // each unlinked or `SVF_NOCLIENT`, so nobody is sent an
+                // entity for one ([`crate::spectate::ClientSim::linked`]).
+                if sim.linked() {
                     Some((
                         i as u32,
                         sim.to_entity(self.proto, i, c.as_ref()?.last_processed_st),
@@ -2048,7 +2693,7 @@ impl Server {
                 server_time: self.sv_time_ms,
                 message_num,
                 delta_num: -1,
-                snap_flags: 0,
+                snap_flags: self.snap_flag_server_bit,
                 ps,
                 entities: visible,
                 clients: roster.clone(),
@@ -2140,6 +2785,25 @@ mod tests {
     }
     fn addr(port: u16) -> SocketAddr {
         SocketAddr::from(([127, 0, 0, 1], port))
+    }
+    /// Installs a hand-built runtime the way `load_scripts` does: the script
+    /// owns the configstring table from there on, so it starts from the
+    /// server's rather than from `for_test`'s empty one, and the server's
+    /// copy is taken back through the cvar mirror. Without it the first tick
+    /// reads every static slot as cleared and broadcasts the difference.
+    fn install_script(sv: &mut Server, mut rt: crate::game::script::ScriptRuntime) {
+        for (i, cs) in sv.configstrings.iter().enumerate() {
+            if rt.host.configstrings[i].is_empty() {
+                rt.host.configstrings[i] = cs.clone();
+            }
+        }
+        let mut cs = rt.configstrings().to_vec();
+        rt.cvars()
+            .write_mirror(&mut cs)
+            .expect("the cvar mirror fits");
+        sv.configstrings = cs;
+        sv.sync_sent_configstrings();
+        sv.script = Some(rt);
     }
     fn oob(cmd: &str) -> Vec<u8> {
         build_oob(cmd)
@@ -2360,9 +3024,12 @@ mod tests {
     fn a_configstring_allocated_after_a_wait_reaches_the_server() {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
-        sv.script = Some(crate::game::script::ScriptRuntime::for_test(
-            "main() { wait 0.5; loadfx(\"fx/impacts/newimps/minefield.efx\"); }",
-        ));
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test(
+                "main() { wait 0.5; loadfx(\"fx/impacts/newimps/minefield.efx\"); }",
+            ),
+        );
         // sv_time starts at 0 and each tick advances it one 50 ms frame, so
         // the thread is still suspended after the first.
         sv.tick(now);
@@ -2371,6 +3038,362 @@ mod tests {
             sv.tick(now);
         }
         assert_eq!(sv.configstring(781), "fx/impacts/newimps/minefield.efx");
+    }
+
+    /// `--set g_gametype` reaches the serverinfo configstring, not only the
+    /// script's cvar table: retail's cvar flush follows every serverinfo
+    /// write with `SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))`
+    /// (map-cycle doc 4.3), and `main.rs` replays the `--set` list after
+    /// `Server::new` has already stamped the table.
+    #[test]
+    fn a_set_of_a_serverinfo_cvar_reaches_configstring_0() {
+        let mut sv = Server::new(cfg(), Instant::now());
+        assert!(sv.configstring(0).contains("g_gametype\\dm"));
+        sv.set_cvar("g_gametype", "sd");
+        assert!(
+            sv.configstring(0).contains("g_gametype\\sd"),
+            "serverinfo: {:?}",
+            sv.configstring(0)
+        );
+    }
+
+    /// `SV_SetConfigstring` broadcasts a slot the running level changed to
+    /// every client that already has its gamestate (map-cycle doc, 3.1 and
+    /// 4.3). The announcer is what needs it: `playLocalSound` allocates its
+    /// alias slot and then sends `s <idx>`, so a client that never heard the
+    /// `d` reads an empty slot and plays nothing.
+    #[test]
+    fn a_configstring_allocated_mid_level_reaches_a_connected_client() {
+        let huff = Huffman::new();
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test(
+                "main() { wait 0.5; p = getentarray(\"player\", \"classname\"); \
+             p[0] playlocalsound(\"MP_announcer_allies_win\"); }",
+            ),
+        );
+        let mut nc = begun(&mut sv, now);
+        let mut seen: Vec<String> = Vec::new();
+        for _ in 0..16 {
+            sv.tick(now);
+            for (_, pkt) in sv.take_outgoing() {
+                seen.extend(server_commands(&mut nc, &pkt, &huff));
+            }
+        }
+        let d = seen
+            .iter()
+            .position(|c| c == "d 525 MP_announcer_allies_win")
+            .unwrap_or_else(|| panic!("no `d 525` in {seen:?}"));
+        let s = seen
+            .iter()
+            .position(|c| c == "s 1")
+            .unwrap_or_else(|| panic!("no `s 1` in {seen:?}"));
+        assert!(
+            d < s,
+            "the announcer's `s 1` came before its `d 525`: {seen:?}"
+        );
+    }
+
+    /// A `CS_CONNECTED` client has no table to patch: its gamestate has not
+    /// gone out, and the one it pulls carries every slot the level has
+    /// allocated by then. So the per-frame diff skips it and sends to the
+    /// clients that do. UNVERIFIED: whether retail gates its own broadcast
+    /// per client this way; `SV_SetConfigstring`'s gate is on `sv.state`
+    /// (map-cycle doc, 3.1) and nothing measured says what it does with a
+    /// client below `CS_PRIMED`.
+    #[test]
+    fn the_configstring_broadcast_skips_a_client_with_no_gamestate() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let _nc = connected(&mut sv, addr(5), now);
+        sv.sync_sent_configstrings();
+        assert_eq!(
+            sv.clients[0].as_ref().unwrap().state,
+            ClientState::Connected
+        );
+
+        let seq = sv.clients[0].as_ref().unwrap().netchan.reliable_sequence;
+        sv.configstrings[524] = "MP_announcer_allies_win".to_string();
+        sv.broadcast_configstring_changes();
+        assert_eq!(
+            sv.clients[0].as_ref().unwrap().netchan.reliable_sequence,
+            seq,
+            "a client with no gamestate was sent a `d`"
+        );
+
+        // The same slot moving again once the gamestate has gone out does
+        // reach it, so the skip above is the state and not the diff.
+        sv.clients[0].as_mut().unwrap().state = ClientState::Primed;
+        sv.configstrings[524] = "MP_announcer_axis_win".to_string();
+        sv.broadcast_configstring_changes();
+        let c = sv.clients[0].as_ref().unwrap();
+        assert_eq!(c.netchan.reliable_sequence, seq + 1);
+        assert_eq!(
+            c.netchan.reliable[c.netchan.reliable_sequence as usize & (MAX_RELIABLE_COMMANDS - 1)],
+            "d 524 MP_announcer_axis_win"
+        );
+    }
+
+    /// Doc 3 step 20: the settle frames allocate into the table, and every
+    /// client on the far side of a spawn pulls the whole of it in its own
+    /// gamestate. So the copy the per-frame diff works against is re-synced
+    /// after those frames, the way the restart path re-syncs after its own;
+    /// without it the first tick after a map change queues a `d` per slot the
+    /// three frames touched.
+    #[test]
+    fn a_spawn_re_syncs_the_table_the_broadcast_diffs_against() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(
+            ServerConfig {
+                gametype: "settle".into(),
+                ..cfg()
+            },
+            now,
+        );
+        // A gametype whose settle frames allocate: the `wait` is due in the
+        // first of the three.
+        sv.overlay_script(
+            "maps/mp/gametypes/settle",
+            "main() { maps\\mp\\gametypes\\_callbacksetup::SetupCallbacks(); \
+             wait 0.05; precacheShader(\"gfx/hud/settle\"); }",
+        );
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        sv.spawn_server("mp_brecourt").expect("the map load failed");
+        // What the next tick reads back out of the script, which is what it
+        // diffs the sent copy against.
+        let rt = sv.script.as_ref().expect("the spawn left no script");
+        let mut live = rt.configstrings().to_vec();
+        rt.cvars().write_mirror(&mut live).expect("the mirror fits");
+        assert!(
+            live.iter().any(|s| s == "gfx/hud/settle"),
+            "the settle frames allocated nothing, so this proves nothing"
+        );
+        let stale = |table: &[String]| -> Vec<usize> {
+            (0..live.len())
+                .filter(|&i| table.get(i) != live.get(i))
+                .collect()
+        };
+        assert!(
+            stale(&sv.sent_configstrings).is_empty(),
+            "the spawn left slots {:?} for the diff to send",
+            stale(&sv.sent_configstrings)
+        );
+        assert!(
+            stale(&sv.configstrings).is_empty(),
+            "the server's own copy is a frame behind the script at slots {:?}",
+            stale(&sv.configstrings)
+        );
+    }
+
+    /// `map_rotate`'s `gametype` token is a `Cvar_Set` (doc section 5.2), so
+    /// it has to outrank an earlier `--set g_gametype`: the token picks which
+    /// gametype script loads, and the cvar table is what that script's own
+    /// `getCvar` answers from. Writing only `cfg.gametype` splits the two.
+    #[test]
+    fn a_rotation_gametype_token_outranks_an_earlier_set() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let fs = Rc::new(fs);
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.set_cvar("g_gametype", "dm");
+        sv.set_cvar("sv_mapRotation", "gametype tdm map mp_brecourt");
+        let path = fs.resolve_map("mp_carentan").expect("map in the paks");
+        let bsp =
+            vcod_common::bsp::parse(&fs.read(&path).expect("read the bsp")).expect("parse the bsp");
+        sv.load_world(World::from_bsp(&bsp, Some(&fs)));
+        sv.load_scripts(fs).expect("load the scripts");
+        assert_eq!(sv.script_cvar("g_gametype").as_deref(), Some("dm"));
+
+        sv.push_console("map_rotate");
+        sv.tick(now);
+        assert_eq!(sv.cfg.map, "mp_brecourt", "the rotation did not load");
+        assert_eq!(sv.cfg.gametype, "tdm");
+        assert!(
+            sv.configstring(0).contains("g_gametype\\tdm"),
+            "serverinfo: {:?}",
+            sv.configstring(0)
+        );
+        assert_eq!(
+            sv.script_cvar("g_gametype").as_deref(),
+            Some("tdm"),
+            "the rotated level's script still reads the value `--set` left"
+        );
+    }
+
+    /// Doc section 4 step 3: a `g_gametype` that moved since the level
+    /// loaded turns a restart into a full spawn of the same map, so the
+    /// serverId's high nibble climbs where a restart would have moved the
+    /// low one. A level that asked to keep its persistence is exempt.
+    #[test]
+    fn a_gametype_change_escalates_a_restart_to_a_spawn() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let fs = Rc::new(fs);
+        let mut now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_scripts(fs).expect("load the scripts");
+        let before = sv.server_id;
+
+        // No change yet: the plain restart path.
+        sv.push_console("map_restart");
+        sv.tick(now);
+        assert_eq!(sv.server_id, console::next_restart_id(before));
+
+        // The rotation's `gametype` token, then a restart: the level is
+        // still running dm, so this escalates.
+        let id = sv.server_id;
+        sv.set_cvar("g_gametype", "tdm");
+        now += Duration::from_millis(50);
+        sv.push_console("map_restart");
+        sv.tick(now);
+        assert_eq!(
+            sv.server_id,
+            console::next_map_id(id),
+            "a gametype change did not escalate to a spawn"
+        );
+        assert_eq!(
+            sv.cfg.map, "mp_carentan",
+            "the escalation moved off the map"
+        );
+        assert_eq!(sv.script_cvar("g_gametype").as_deref(), Some("tdm"));
+    }
+
+    /// A load that fails after the teardown leaves no level to serve and no
+    /// console line that could bring one back, which is what retail ends the
+    /// process for: the server records it and `main` exits on it. A load that
+    /// fails before the teardown -- a map the paks do not have -- keeps the
+    /// level that is serving and records nothing.
+    #[test]
+    fn a_script_load_that_fails_after_the_teardown_is_fatal() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let mut now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+
+        // `resolve_map` fails ahead of everything the spawn tears down.
+        sv.push_console("map mp_nosuchmap");
+        sv.tick(now);
+        assert!(
+            sv.take_fatal().is_none(),
+            "a map the paks do not have took the server down"
+        );
+        assert_eq!(sv.cfg.map, "mp_carentan", "the failed map load moved off");
+
+        // The rotation's `gametype` token names a gametype with no script,
+        // and the `map` token behind it escalates to a spawn whose
+        // `load_scripts_with` fails with the level already gone.
+        now += Duration::from_millis(50);
+        sv.set_cvar("sv_mapRotation", "gametype nosuch map mp_carentan");
+        sv.push_console("map_rotate");
+        sv.tick(now);
+        let e = sv
+            .take_fatal()
+            .expect("a gametype with no script was survivable");
+        assert!(format!("{e:#}").contains("nosuch"), "{e:#}");
+        assert!(sv.take_fatal().is_none(), "the failure was reported twice");
+    }
+
+    /// Doc section 4 step 11: `SV_ClientEnterWorld` runs only for a client
+    /// that reads `CS_ACTIVE`. A `CS_PRIMED` one keeps its state through
+    /// the restart and is promoted by its own next message instead (4.4),
+    /// which is the branch the second half exercises.
+    #[test]
+    fn a_primed_client_is_not_re_entered_by_a_restart() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let mut nc = active(&mut sv, now);
+        assert_eq!(sv.clients[0].as_ref().unwrap().state, ClientState::Primed);
+
+        sv.map_restart().expect("the restart failed");
+        let c = sv.clients[0].as_ref().unwrap();
+        assert_eq!(
+            c.state,
+            ClientState::Primed,
+            "the restart entered a primed client"
+        );
+        assert!(
+            c.sim.is_none(),
+            "a primed client came out of the restart with a sim"
+        );
+
+        // Its next message still carries the old serverId: same high nibble,
+        // differing low one, which is the promotion branch.
+        let huff = Huffman::new();
+        let ack = nc.incoming_sequence as i32;
+        let pkt = nc.build_out(0x10, ack, 0, &ack_ops(), &huff).unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+        let c = sv.clients[0].as_ref().unwrap();
+        assert_eq!(c.state, ClientState::Active);
+        assert!(c.sim.is_some());
+    }
+
+    /// The other half of step 3: a `+set` that names one of the two cvars is
+    /// not a change. `cvars` replays the override list after stamping the
+    /// config's own value, so `--max-clients 4 --set sv_maxclients=8` loads
+    /// the level with 8; comparing that against the config's 4 would escalate
+    /// every restart for the whole run.
+    #[test]
+    fn a_set_override_of_sv_maxclients_is_not_a_gametype_change() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        assert_eq!(sv.cfg.max_clients, 4);
+        sv.set_cvar("sv_maxclients", "8");
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        assert_eq!(sv.script_cvar("sv_maxclients").as_deref(), Some("8"));
+
+        let before = sv.server_id;
+        sv.push_console("map_restart");
+        sv.tick(now);
+        assert_eq!(
+            sv.server_id,
+            console::next_restart_id(before),
+            "the override escalated a restart to a spawn"
+        );
+    }
+
+    /// Doc section 4 step 1: a second restart inside one frame is a no-op,
+    /// and so is one straight after a spawn.
+    #[test]
+    fn a_second_restart_in_one_frame_is_a_no_op() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let before = sv.server_id;
+        sv.push_console("map_restart");
+        sv.push_console("map_restart");
+        sv.tick(now);
+        assert_eq!(
+            sv.server_id,
+            console::next_restart_id(before),
+            "the second restart in the frame was not a no-op"
+        );
     }
 
     #[test]
@@ -2399,12 +3422,15 @@ mod tests {
         use crate::game::script::{ScriptRuntime, CALLBACK_SETUP};
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
-        sv.script = Some(ScriptRuntime::for_test_at(
-            CALLBACK_SETUP,
-            "main() { level.gone = 0; level.callbackPlayerDisconnect = ::d; }\n\
+        install_script(
+            &mut sv,
+            ScriptRuntime::for_test_at(
+                CALLBACK_SETUP,
+                "main() { level.gone = 0; level.callbackPlayerDisconnect = ::d; }\n\
              CodeCallback_PlayerDisconnect() { [[level.callbackPlayerDisconnect]](); }\n\
              d() { level.gone = level.gone + 1; }\n",
-        ));
+            ),
+        );
         let nc = connected(&mut sv, addr(5), now);
         sv.tick(now);
         let gone = |sv: &mut Server| sv.script.as_mut().unwrap().level_field("gone");
@@ -2662,6 +3688,24 @@ mod tests {
         let cmds = server_commands(&mut nc, &out[0].1, &huff);
         assert_eq!(cmds.len(), 1);
         assert!(cmds[0].starts_with("b 1 0 0 0 0 0 0 0"), "{:?}", cmds[0]);
+    }
+
+    /// The scoreboard's tokens 2 and 3 are the two team scores, axis
+    /// before allies, and `setTeamScore` mirrors each into configstring 5
+    /// and 6 (map-cycle doc, 6.3).
+    #[test]
+    fn the_scoreboard_carries_the_team_scores_axis_first() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test(
+                "main() { setTeamScore(\"axis\", 3); setTeamScore(\"allies\", -9999); }",
+            ),
+        );
+        assert_eq!(sv.scoreboard(), "b 0 3 -9999");
+        let cs = sv.script.as_ref().unwrap().configstrings();
+        assert_eq!((cs[5].as_str(), cs[6].as_str()), ("3", "-9999"));
     }
 
     fn count_replies(sv: &mut Server, to: SocketAddr) -> usize {

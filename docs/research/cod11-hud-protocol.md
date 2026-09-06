@@ -501,7 +501,7 @@ init path `0x3002c060`.
 | 29..43 | script | player head icons | material per index |
 | 44+ | `target_location_linkup` | location names | |
 | 108..139 | `G_TagIndex` | attachment tag names | |
-| 140..203 / 204..267 | writer not found in the stock module (no literal `trap_SetConfigstring` index in that range) | 64 pairs of (cvar name, cvar value) | `0x3002bc60` does `Cvar_Set(cs[140+i], cs[204+i])` for i < 64, stopping at the first empty name |
+| 140..203 / 204..267 | the engine, not the game module: `docs/research/cod11-map-cycle.md` 3.2 reads the writer at `0x808b148` in `cod_lnxded`, which is why no `trap_SetConfigstring` index in that range appears here | 64 pairs of (cvar name, cvar value) | `0x3002bc60` does `Cvar_Set(cs[140+i], cs[204+i])` for i < 64, stopping at the first empty name |
 | 268..523 | `G_ModelIndex` | xmodel paths | |
 | 524..779 | `G_SoundAliasIndex` | sound aliases | |
 | 780..843 | `G_EffectIndex` | `.efx` paths | |

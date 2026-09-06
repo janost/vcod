@@ -33,6 +33,156 @@ pub enum Target {
     Struct(StructId),
 }
 
+/// How deep a carried array may nest before the copy stops. gsc arrays are
+/// reference-typed, so `a[0] = a` is expressible and would otherwise recurse
+/// forever; anything past this reads `undefined` on the far side.
+const MAX_CARRY_DEPTH: u32 = 32;
+
+/// An array key with its text rather than an `Atom`, since atoms are per-`Vm`.
+#[derive(Clone, Debug)]
+enum CarryKey {
+    Int(i32),
+    Str(String),
+}
+
+/// One value lifted out of a `Vm`'s heap in a form the next one can rebuild:
+/// every atom carried as text and every nested array or struct by contents,
+/// because both the interner and the heap ids die with the old `Vm`.
+#[derive(Clone, Debug)]
+enum CarryValue {
+    /// `Undefined`, `Int`, `Float` and `Vector`: no heap or interner reach.
+    Plain(Value),
+    Str(String),
+    Localized(String),
+    Anim(String),
+    Function {
+        file: String,
+        name: String,
+    },
+    Array(Vec<(CarryKey, CarryValue)>),
+    Struct(Vec<(String, CarryValue)>),
+}
+
+/// The `game[]` table a level hands the next one when `exitLevel(true)` or
+/// `map_restart(true)` asked for it (docs/research/cod11-map-cycle.md,
+/// section 1). Entity handles are dropped to `Undefined` on the way out: the
+/// entity table they named goes with the level, which is what the retail
+/// probe measured (`# probe_persist_restart`, `after_game_ent_defined 0`).
+#[derive(Default, Debug)]
+pub struct GameCarry(ArrayCarry);
+
+/// One client's `pers[]` across the same handover, lifted and rebuilt the
+/// same way.
+#[derive(Default, Debug)]
+pub struct ArrayCarry {
+    entries: Vec<(CarryKey, CarryValue)>,
+}
+
+/// `id`'s contents, deep-copied out of `heap` with every atom resolved
+/// through `interner`.
+fn lift_array(heap: &Heap, interner: &Interner, id: ArrayId, depth: u32) -> ArrayCarry {
+    let entries = heap
+        .array_entries(id)
+        .into_iter()
+        .map(|(k, v)| {
+            let key = match k {
+                ArrayKey::Int(i) => CarryKey::Int(i),
+                ArrayKey::Str(a) => CarryKey::Str(interner.resolve(a).to_string()),
+            };
+            (key, lift_value(heap, interner, v, depth))
+        })
+        .collect();
+    ArrayCarry { entries }
+}
+
+fn lift_value(heap: &Heap, interner: &Interner, v: Value, depth: u32) -> CarryValue {
+    match v {
+        Value::Undefined | Value::Int(_) | Value::Float(_) | Value::Vector(_) => {
+            CarryValue::Plain(v)
+        }
+        Value::String(a) => CarryValue::Str(interner.resolve(a).to_string()),
+        Value::Localized(a) => CarryValue::Localized(interner.resolve(a).to_string()),
+        Value::Anim(a) => CarryValue::Anim(interner.resolve(a).to_string()),
+        Value::Function(f) => CarryValue::Function {
+            file: interner.resolve(f.file).to_string(),
+            name: interner.resolve(f.name).to_string(),
+        },
+        // The entity table is the level's; a handle into it means nothing
+        // to the next one.
+        Value::Entity(_) => CarryValue::Plain(Value::Undefined),
+        Value::Array(id) if depth < MAX_CARRY_DEPTH => {
+            CarryValue::Array(lift_array(heap, interner, id, depth + 1).entries)
+        }
+        Value::Struct(id) if depth < MAX_CARRY_DEPTH => {
+            let mut fields: Vec<(String, CarryValue)> = heap
+                .struct_fields(id)
+                .into_iter()
+                .map(|(f, v)| {
+                    (
+                        interner.resolve(f).to_string(),
+                        lift_value(heap, interner, v, depth + 1),
+                    )
+                })
+                .collect();
+            // `struct_fields` walks a `HashMap`; sorted so a carry is
+            // reproducible run to run.
+            fields.sort_by(|a, b| a.0.cmp(&b.0));
+            CarryValue::Struct(fields)
+        }
+        Value::Array(_) | Value::Struct(_) => {
+            log::warn!("carried value past {MAX_CARRY_DEPTH} levels of nesting, dropped");
+            CarryValue::Plain(Value::Undefined)
+        }
+    }
+}
+
+/// The inverse of `lift_array`, into an array `id` this `Vm` already owns.
+fn plant_array(heap: &mut Heap, interner: &mut Interner, id: ArrayId, carry: &ArrayCarry) {
+    for (k, v) in &carry.entries {
+        // Array keys intern exact, field names fold (atom.rs).
+        let key = match k {
+            CarryKey::Int(i) => ArrayKey::Int(*i),
+            CarryKey::Str(s) => ArrayKey::Str(interner.intern_exact(s)),
+        };
+        let value = plant_value(heap, interner, v);
+        heap.set_index(id, key, value);
+    }
+}
+
+fn plant_value(heap: &mut Heap, interner: &mut Interner, v: &CarryValue) -> Value {
+    match v {
+        CarryValue::Plain(v) => *v,
+        CarryValue::Str(s) => Value::String(interner.intern_exact(s)),
+        CarryValue::Localized(s) => Value::Localized(interner.intern_exact(s)),
+        CarryValue::Anim(s) => Value::Anim(interner.intern_folded(s)),
+        CarryValue::Function { file, name } => Value::Function(FuncRef {
+            file: interner.intern_folded(file),
+            name: interner.intern_folded(name),
+        }),
+        CarryValue::Array(entries) => {
+            let id = heap.new_array();
+            plant_array(
+                heap,
+                interner,
+                id,
+                &ArrayCarry {
+                    entries: entries.clone(),
+                },
+            );
+            Value::Array(id)
+        }
+        CarryValue::Struct(fields) => {
+            let id = heap.new_struct();
+            for (name, v) in fields {
+                let f = interner.intern_folded(name);
+                let value = plant_value(heap, interner, v);
+                heap.set_field(id, f, value);
+            }
+            Value::Struct(id)
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum ErrorKind {
     /// The host has no such builtin. Kills the thread that reached it and
@@ -144,6 +294,20 @@ impl Cx<'_> {
 
     pub fn array_len(&self, a: ArrayId) -> usize {
         self.heap.array_len(a)
+    }
+
+    /// One array's contents, lifted out of this heap for another `Vm`
+    /// (`ArrayCarry`). A host carrying a client's `pers[]` across a level
+    /// boundary takes it here.
+    pub fn take_array(&self, a: ArrayId) -> ArrayCarry {
+        lift_array(self.heap, self.interner, a, 0)
+    }
+
+    /// `take_array`'s inverse, into an array this `Vm` owns. Keys and
+    /// strings re-intern through this interner; existing entries under other
+    /// keys are left alone.
+    pub fn install_array(&mut self, a: ArrayId, carry: &ArrayCarry) {
+        plant_array(self.heap, self.interner, a, carry);
     }
 
     /// The same `%g` rendering string concatenation uses, so a builtin
@@ -419,6 +583,26 @@ impl Vm {
     /// this file's tests until a host needs it from inside a builtin.
     pub fn game_id(&self) -> ArrayId {
         self.game
+    }
+
+    /// `game[]` lifted out for the next level (`GameCarry`). The heap it
+    /// came from dies with this `Vm`, so the copy is deep and every atom in
+    /// it travels as text; an entity handle becomes `Undefined`.
+    pub fn take_game(&self) -> GameCarry {
+        GameCarry(self.take_array(self.game))
+    }
+
+    /// One array's contents, for a host carrying something other than
+    /// `game[]` across the same boundary (a client's `pers[]`).
+    pub fn take_array(&self, a: ArrayId) -> ArrayCarry {
+        lift_array(&self.heap, &self.interner, a, 0)
+    }
+
+    /// `take_game`'s inverse: the carried table into this `Vm`'s own
+    /// `game[]`, before any script runs.
+    pub fn install_game(&mut self, carry: &GameCarry) {
+        let game = self.game;
+        plant_array(&mut self.heap, &mut self.interner, game, &carry.0);
     }
 
     /// Every installed function, for a loader's cross-file scan and
@@ -1209,6 +1393,74 @@ pub(crate) mod tests {
         let game_id = vm.game_id();
         vm.heap_mut().set_index(game_id, k, Value::Int(9));
         assert_eq!(vm.heap().get_index(game_id, k), Value::Int(9));
+    }
+
+    /// `game[]` across a level boundary (docs/research/cod11-map-cycle.md,
+    /// section 1): strings and numbers survive whole, a nested array comes
+    /// with them, and an entity handle reads `undefined` on the far side,
+    /// which is what the retail probes measured. The two `Vm`s share no
+    /// interner and no heap, so this only passes if the copy is deep and
+    /// every atom was re-interned.
+    #[test]
+    fn game_carries_its_contents_into_a_fresh_vm_and_drops_entity_handles() {
+        let mut a = Vm::new();
+        let game = a.game_id();
+        a.with_cx(|cx| {
+            let k_num = ArrayKey::Str(cx.intern_exact("num"));
+            let k_str = ArrayKey::Str(cx.intern_exact("str"));
+            let k_ent = ArrayKey::Str(cx.intern_exact("ent"));
+            let k_nest = ArrayKey::Str(cx.intern_exact("nest"));
+            let s = Value::String(cx.intern_exact("kept"));
+            cx.set_index(game, k_num, Value::Int(7));
+            cx.set_index(game, k_str, s);
+            cx.set_index(game, k_ent, Value::Entity(EntId(3)));
+            let inner = cx.new_array();
+            let inner_key = ArrayKey::Str(cx.intern_exact("c"));
+            cx.set_index(inner, inner_key, Value::Float(0.5));
+            cx.set_index(game, k_nest, Value::Array(inner));
+        });
+        let carry = a.take_game();
+        drop(a);
+
+        let mut b = Vm::new();
+        b.install_game(&carry);
+        let game = b.game_id();
+        b.with_cx(|cx| {
+            let k = |cx: &mut Cx, s: &str| ArrayKey::Str(cx.intern_exact(s));
+            let key = k(cx, "num");
+            assert_eq!(cx.get_index(game, key), Value::Int(7));
+            let key = k(cx, "str");
+            let Value::String(text) = cx.get_index(game, key) else {
+                panic!("game[\"str\"] is not a string");
+            };
+            assert_eq!(cx.resolve(text), "kept");
+            let key = k(cx, "ent");
+            assert_eq!(cx.get_index(game, key), Value::Undefined);
+            let key = k(cx, "nest");
+            let Value::Array(inner) = cx.get_index(game, key) else {
+                panic!("game[\"nest\"] is not an array");
+            };
+            let key = k(cx, "c");
+            assert_eq!(cx.get_index(inner, key), Value::Float(0.5));
+        });
+    }
+
+    /// An array that holds itself is expressible, and the copy has to stop
+    /// rather than recurse to a stack overflow.
+    #[test]
+    fn a_self_referencing_array_carries_without_recursing_forever() {
+        let mut a = Vm::new();
+        let game = a.game_id();
+        a.with_cx(|cx| {
+            let key = ArrayKey::Str(cx.intern_exact("loop"));
+            cx.set_index(game, key, Value::Array(game));
+        });
+        let carry = a.take_game();
+        let mut b = Vm::new();
+        b.install_game(&carry);
+        let game = b.game_id();
+        let n = b.with_cx(|cx| cx.array_len(game));
+        assert_eq!(n, 1);
     }
 
     /// The G1 blocker: a builtin needs to allocate and populate a heap array

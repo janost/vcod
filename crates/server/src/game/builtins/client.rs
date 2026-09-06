@@ -245,20 +245,13 @@ pub(crate) fn client_receiver(host: &GameHost, recv: Option<Target>) -> Result<u
     }
 }
 
-/// The separator a localized string carries between its key and its
-/// substitution arguments, of which `setClientCvar`'s value has none, so it
-/// ends up trailing. Measured: retail sent `v cg_objectiveText
-/// "DM_KILL_OTHER_PLAYERS\x15"` for `setClientCvar("cg_objectiveText",
-/// &"DM_KILL_OTHER_PLAYERS")` on both gate maps.
-const LOCALIZED_SEP: char = '\u{15}';
-
-/// `self setClientCvar(name, value)`: the reliable command `v <name>
-/// "<value>"` (0x446e0, format string `v %s "%s"`). The name is never
-/// quoted and the value always is, so retail rewrites a `"` inside the value
-/// as `'` (0x447b2) rather than letting it close the argument early. A
+/// `self setClientCvar(name, value [, args...])`: the reliable command
+/// `v <name> "<value>"` (0x446e0, format string `v %s "%s"`). The name is
+/// never quoted and the value always is, so retail rewrites a `"` inside the
+/// value as `'` (0x447b2) rather than letting it close the argument early. A
 /// localized value takes the `Scr_GetType == 2` branch (0x44750) into
-/// `Scr_ConstructMessageString` (0x44765) instead of the plain string read,
-/// which is where `LOCALIZED_SEP` comes from.
+/// `Scr_ConstructMessageString` (0x44765), which is what packs the
+/// substitution arguments after it (`super::message`).
 pub fn set_client_cvar(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -272,13 +265,13 @@ pub fn set_client_cvar(
         ));
     };
     let name = cx.resolve(*name).to_string();
-    let mut value = cx
-        .format_number(value)
-        .ok_or(ErrorKind::BadType("setClientCvar takes a renderable value"))?
-        .replace('"', "'");
-    if matches!(args.get(1), Some(Value::Localized(_))) {
-        value.push(LOCALIZED_SEP);
+    let value = match value {
+        Value::Localized(_) => super::message::construct(host, cx, &args[1..]),
+        _ => cx
+            .format_number(value)
+            .ok_or(ErrorKind::BadType("setClientCvar takes a renderable value"))?,
     }
+    .replace('"', "'");
     host.client_commands
         .push((slot, format!("v {name} \"{value}\"")));
     Ok(Value::Undefined)
@@ -486,6 +479,13 @@ pub fn get_weapon_slot_weapon(
 /// script runs it ahead of both setters and a `switchToWeapon` on the weapon
 /// it just placed (`sd.gsc` 540-543), so a weapon set into a slot has to
 /// come out usable.
+///
+/// `"none"` is not a weapon name but weapon index 0, which empties the slot:
+/// retail compares the argument against `"none"` ahead of its name lookup
+/// (0x43ebd), and stock script feeds `getWeaponSlotWeapon`'s own `"none"`
+/// straight back in -- `sd.gsc`'s `spawnPlayer` re-gives the `pers["weapon2"]`
+/// `endRound` stashed, which is `"none"` for a player carrying one primary.
+/// Either way whatever stood in the slot is taken first (0x43f6b).
 pub fn set_weapon_slot_weapon(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -494,7 +494,16 @@ pub fn set_weapon_slot_weapon(
 ) -> Result<Value, ErrorKind> {
     let client = client_receiver(host, recv)?;
     let slot = slot_argument(cx, args)?;
-    let (_, index) = weapon_argument(cx, args.get(1..).unwrap_or_default())?;
+    let rest = args.get(1..).unwrap_or_default();
+    let index = match rest.first() {
+        Some(Value::String(a)) if cx.resolve(*a).eq_ignore_ascii_case("none") => 0,
+        _ => weapon_argument(cx, rest)?.1,
+    };
+    let standing = host.client_weapons[client].slots[slot] as usize;
+    host.client_weapons[client].take(standing);
+    if index == 0 {
+        return Ok(Value::Undefined);
+    }
     host.client_weapons[client].give(index, slot);
     if let Some(def) = host.weapons.get(index) {
         host.client_weapon_ops.push((
@@ -704,7 +713,7 @@ mod tests {
     fn set_viewmodel_stores_a_model_index_and_reads_the_name_back() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let recv = Some(Target::Entity(c));
             let name = Value::String(cx.intern_exact("xmodel/viewmodel_hands_us"));
             set_view_model(&mut host, cx, recv, &[name]).unwrap();
@@ -754,9 +763,9 @@ mod tests {
     fn a_spawn_point_inside_another_player_would_telefrag() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let a = host.ents.spawn_client(cx, 0).unwrap();
+            let a = host.ents.spawn_client(cx, 0, None).unwrap();
             set_origin(&mut host, cx, a, [0.0, 0.0, 0.0]);
-            let b = host.ents.spawn_client(cx, 1).unwrap();
+            let b = host.ents.spawn_client(cx, 1, None).unwrap();
             set_origin(&mut host, cx, b, [512.0, 0.0, 0.0]);
             let recv = Some(Target::Entity(b));
             let ask = |host: &mut GameHost, cx: &mut Cx, at: [f32; 3]| {
@@ -795,7 +804,7 @@ mod tests {
     fn the_spawn_loadout_builds_the_captured_weapon_words() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let e = host.ents.spawn_client(cx, 0).unwrap();
+            let e = host.ents.spawn_client(cx, 0, None).unwrap();
             let t = Some(Target::Entity(e));
             let named = |cx: &mut Cx, n: &str| Value::String(cx.intern_exact(n));
             for w in ["colt_mp", "fraggrenade_mp", "m1carbine_mp"] {
@@ -827,7 +836,7 @@ mod tests {
     fn the_join_commands_render_the_way_retail_sent_them() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let e = host.ents.spawn_client(cx, 3).unwrap();
+            let e = host.ents.spawn_client(cx, 3, None).unwrap();
             let t = Some(Target::Entity(e));
             host.allocators
                 .index(&mut host.configstrings, CsRange::Menu, "team_russiangerman")
@@ -862,6 +871,39 @@ mod tests {
         });
     }
 
+    /// A localized value takes its substitution arguments with it, which is
+    /// what names the winner in the map-end banner: retail's capture reads
+    /// `v cg_objectiveText "MPSCRIPT_WINS\x15vcod^7"` for
+    /// `setClientCvar("cg_objectiveText", &"MPSCRIPT_WINS", playername)`
+    /// (`tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`).
+    #[test]
+    fn a_localized_value_carries_its_substitution_arguments() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn_client(cx, 0, None).unwrap();
+            let name = Value::String(cx.intern_exact("vcod"));
+            if let Some(c) = host.ents.get_mut(e).and_then(|x| x.client.as_mut()) {
+                c[0] = name;
+            }
+            let cvar = Value::String(cx.intern_exact("cg_objectiveText"));
+            let text = Value::Localized(cx.intern_exact("MPSCRIPT_WINS"));
+            set_client_cvar(
+                &mut host,
+                cx,
+                Some(Target::Entity(e)),
+                &[cvar, text, Value::Entity(e)],
+            )
+            .unwrap();
+            assert_eq!(
+                host.client_commands,
+                vec![(
+                    0,
+                    "v cg_objectiveText \"MPSCRIPT_WINS\u{15}vcod^7\"".to_string()
+                )]
+            );
+        });
+    }
+
     /// The value is the only quoted argument on the line, so a `"` inside it
     /// would close the argument where it stands and leave the rest of the
     /// value as trailing tokens. Retail rewrites each one to `'` (0x447b2);
@@ -871,7 +913,7 @@ mod tests {
     fn a_quote_in_a_cvar_value_cannot_close_its_own_argument() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let e = host.ents.spawn_client(cx, 0).unwrap();
+            let e = host.ents.spawn_client(cx, 0, None).unwrap();
             let name = Value::String(cx.intern_exact("cg_objectiveText"));
             let value = Value::String(cx.intern_exact("say \"hi\" now"));
             set_client_cvar(&mut host, cx, Some(Target::Entity(e)), &[name, value]).unwrap();
@@ -889,7 +931,7 @@ mod tests {
     fn an_unprecached_menu_and_a_non_client_receiver_are_errors() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let client = host.ents.spawn_client(cx, 0).unwrap();
+            let client = host.ents.spawn_client(cx, 0, None).unwrap();
             let menu = Value::String(cx.intern_exact("team_russiangerman"));
             assert!(open_menu(&mut host, cx, Some(Target::Entity(client)), &[menu]).is_err());
 
@@ -909,7 +951,7 @@ mod tests {
     fn getcurrentweapon_names_what_the_client_holds() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let recv = Some(Target::Entity(c));
             let name =
                 |host: &mut GameHost, cx: &mut Cx| match get_current_weapon(host, cx, recv, &[])
@@ -931,7 +973,7 @@ mod tests {
     fn closemenu_queues_the_bare_u_command() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 3).unwrap();
+            let c = host.ents.spawn_client(cx, 3, None).unwrap();
             close_menu(&mut host, cx, Some(Target::Entity(c)), &[]).unwrap();
             assert_eq!(host.client_commands, vec![(3, "u".to_string())]);
             let prop = host.ents.spawn(cx).unwrap();
@@ -949,7 +991,7 @@ mod tests {
         let (mut vm, mut host) = fixture();
         host.level_time_ms = 5_000;
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             set_origin(&mut host, cx, c, [16.0, -32.0, 8.0]);
             let name = Value::String(cx.intern_exact("m1carbine_mp"));
             drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap();
@@ -983,7 +1025,7 @@ mod tests {
     fn dropitem_refuses_a_weapon_nothing_backs() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let name = Value::String(cx.intern_exact("blunderbuss_mp"));
             assert!(drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).is_err());
             assert_eq!(host.ents.iter_inuse().count(), 1, "no item was spawned");
@@ -996,7 +1038,7 @@ mod tests {
     fn dropitem_none_drops_nothing_and_does_not_raise() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let name = Value::String(cx.intern_exact("none"));
             assert_eq!(
                 drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap(),
@@ -1069,7 +1111,7 @@ mod tests {
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 2).unwrap();
+            let c = host.ents.spawn_client(cx, 2, None).unwrap();
             let recv = Some(Target::Entity(c));
             assert_eq!(
                 clone_player(&mut host, cx, recv, &[]).unwrap(),
@@ -1110,7 +1152,7 @@ mod tests {
     /// The stock allies loadout on client 0, with the ops it pushed dropped:
     /// what the three tests below start from.
     fn loadout(host: &mut GameHost, cx: &mut Cx) -> EntId {
-        let e = host.ents.spawn_client(cx, 0).unwrap();
+        let e = host.ents.spawn_client(cx, 0, None).unwrap();
         let t = Some(Target::Entity(e));
         for w in ["colt_mp", "fraggrenade_mp", "m1carbine_mp"] {
             let arg = Value::String(cx.intern_exact(w));
@@ -1249,6 +1291,37 @@ mod tests {
                 (0, WeaponOp::SwitchTo(thompson as u8)),
             ]
         );
+    }
+
+    /// `"none"` is weapon index 0, not an unknown weapon: the slot empties
+    /// and whatever stood in it is dropped. `sd.gsc`'s `spawnPlayer` re-gives
+    /// the `pers["weapon2"]` `endRound` stashed, which reads `"none"` for a
+    /// player carrying one primary, and an error there kills the whole spawn
+    /// (object model doc, section 20).
+    #[test]
+    fn setweaponslotweapon_takes_the_slot_and_none_leaves_it_empty() {
+        let Some((mut vm, mut host)) = armed_fixture() else {
+            return;
+        };
+        let thompson = weapon_index("thompson_mp").unwrap();
+        vm.with_cx(|cx| {
+            let e = loadout(&mut host, cx);
+            let t = Some(Target::Entity(e));
+            let primary = Value::String(cx.intern_exact("primary"));
+            let name = Value::String(cx.intern_exact("thompson_mp"));
+            set_weapon_slot_weapon(&mut host, cx, t, &[primary, name]).unwrap();
+            assert!(host.client_weapons[0].holds(thompson));
+
+            let none = Value::String(cx.intern_exact("none"));
+            set_weapon_slot_weapon(&mut host, cx, t, &[primary, none]).unwrap();
+            assert!(!host.client_weapons[0].holds(thompson));
+            match get_weapon_slot_weapon(&mut host, cx, t, &[primary]).unwrap() {
+                Value::String(a) => assert_eq!(cx.resolve(a), "none"),
+                v => panic!("{v:?}"),
+            }
+            // An already empty slot emptied again is a no-op, not an error.
+            set_weapon_slot_weapon(&mut host, cx, t, &[primary, none]).unwrap();
+        });
     }
 
     /// `takeAllWeapons` empties the host's copy, which is what the mirror

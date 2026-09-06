@@ -90,6 +90,26 @@ impl Heap {
     pub fn array_len(&self, a: ArrayId) -> usize {
         self.arrays.get(a.0 as usize).map_or(0, |e| e.len())
     }
+
+    /// Every key and value in an array, in `ArrayKey` order. For a caller
+    /// that has to walk one from outside the instruction loop; an id out of
+    /// range yields nothing.
+    pub fn array_entries(&self, a: ArrayId) -> Vec<(ArrayKey, Value)> {
+        self.arrays
+            .get(a.0 as usize)
+            .map(|e| e.iter().map(|(k, v)| (*k, *v)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Every field name and value on a struct. The order is the `HashMap`'s,
+    /// so a caller that needs a stable one sorts; nothing reads a struct back
+    /// in script order.
+    pub fn struct_fields(&self, s: StructId) -> Vec<(Atom, Value)> {
+        self.structs
+            .get(s.0 as usize)
+            .map(|f| f.iter().map(|(k, v)| (*k, *v)).collect())
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]

@@ -40,6 +40,7 @@ pub fn is_builtin(name: &str) -> bool {
         || builtins::mover::lookup(name).is_some()
         || builtins::cvar::lookup(name).is_some()
         || builtins::precache::lookup(name).is_some()
+        || builtins::score::lookup(name).is_some()
         || BUILTINS.contains(&name)
 }
 
@@ -69,8 +70,18 @@ pub struct SpawnRequest {
     pub slot: usize,
     pub origin: [f32; 3],
     pub yaw_deg: f32,
-    /// `sessionstate == "playing"`, which is what decides the sim's mode.
-    pub player: bool,
+    pub mode: SpawnMode,
+}
+
+/// Which movement path `self spawn(origin, angles)` puts a client on, read
+/// off its `sessionstate` (map-cycle doc, 6.1: the four legal strings and
+/// the word they map onto). `dead` spawns as a spectator: nothing simulates
+/// it either, and a death does not go through this builtin.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpawnMode {
+    Player,
+    Spectator,
+    Intermission,
 }
 
 /// One edge a weapon builtin made in a client's playerstate, queued for the
@@ -140,6 +151,17 @@ pub enum SimOp {
         attacker_origin: Option<[f32; 3]>,
         fatal: bool,
     },
+}
+
+/// `level+0x29f0`'s three readings (docs/research/cod11-map-cycle.md
+/// section 1). The latch is per-level: `G_InitGame` zeroes `level`, so a
+/// restart clears it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum LevelLatch {
+    #[default]
+    None,
+    MapRestart,
+    ExitLevel,
 }
 
 pub struct GameHost {
@@ -223,10 +245,19 @@ pub struct GameHost {
     /// per-call timestamp, which is why this lives on the host instead of
     /// being threaded through `get_time`'s own call.
     pub level_time_ms: i32,
-    /// Set by `exitLevel()`, drained and logged once per frame by
-    /// `run_frame`. No stage in this sub-project acts on it; stage 6 ("the
-    /// score limit ends the map") is where it does.
-    pub exit_level: bool,
+    /// `level+0x29f0`, the one-shot latch `map_restart` and `exitLevel`
+    /// share (docs/research/cod11-map-cycle.md section 1): 0 until one of
+    /// them runs, then 1 or 2, and the second call is a script error naming
+    /// whichever got there first.
+    pub level_latch: LevelLatch,
+    /// One client's `pers[]` from the outgoing level, by slot, installed by
+    /// `spawn_client` at the `ClientConnect` a restart reruns and taken as
+    /// it goes in. Empty on a boundary that kept nothing.
+    pub pers_carry: Vec<Option<vcod_gsc::ArrayCarry>>,
+    /// The console lines those two builtins queued
+    /// (`trap_SendConsoleCommand`), drained by
+    /// `ScriptRuntime::take_console` into the server's own buffer.
+    pub console: Vec<String>,
     /// Who owns a client's name, from `setClientNameMode`. Nothing reads it
     /// until clients exist: both of retail's readers are client code.
     pub client_name_mode: builtins::cvar::ClientNameMode,
@@ -256,6 +287,22 @@ pub struct GameHost {
     /// on a client (combat doc, 14.2): the `radiusDamage` builtin is the one
     /// reader, and a grenade's own blast never looks at it.
     pub ignore_radius_damage: bool,
+    /// The value retail's `vmMain` case 16 returns
+    /// (docs/research/cod11-map-cycle.md section 1): whether the outgoing
+    /// level asked to keep its script `pers` and `game` variable across the
+    /// boundary. Written by the `map_restart`/`exitLevel` builtins.
+    pub save_persist: bool,
+    /// `level+0x1fc` and `level+0x200`, axis first (map-cycle doc, 6.3):
+    /// what `getTeamScore` reads, what `setTeamScore` writes alongside
+    /// configstrings 5 and 6, and what the scoreboard's tokens 2 and 3
+    /// carry.
+    pub team_scores: [i32; 2],
+    /// `level+0x20c`: set where a score changes and read by the drain that
+    /// pushes the scoreboard to every client in intermission (map-cycle doc,
+    /// 6.3). Retail sets it in `CalculateRanks` and in `setTeamScore`; here
+    /// the `score` client field's own setter stands in for the first, since
+    /// no other write moves a rank.
+    pub ranks_dirty: bool,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -263,6 +310,19 @@ pub struct GameHost {
 pub(crate) const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
 impl GameHost {
+    /// Every client slot that holds a client entity, which is every client
+    /// from its `ClientConnect` to its disconnect. What a broadcast reliable
+    /// command (`iPrintLn`) goes to.
+    pub fn client_slots(&self) -> Vec<usize> {
+        (0..MAX_CLIENTS)
+            .filter(|&s| {
+                self.ents
+                    .get(EntId(s as u32))
+                    .is_some_and(|e| e.client.is_some())
+            })
+            .collect()
+    }
+
     pub fn new(configstrings: Vec<String>) -> GameHost {
         GameHost {
             configstrings,
@@ -285,7 +345,9 @@ impl GameHost {
             rng: RNG_SEED,
             script_log: Vec::new(),
             level_time_ms: 0,
-            exit_level: false,
+            level_latch: LevelLatch::None,
+            pers_carry: Vec::new(),
+            console: Vec::new(),
             items: crate::items::Items::new(),
             client_name_mode: builtins::cvar::ClientNameMode::default(),
             fs: None,
@@ -294,6 +356,31 @@ impl GameHost {
             bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
             missiles: crate::game::missile::Missiles::default(),
             ignore_radius_damage: false,
+            save_persist: false,
+            team_scores: [0, 0],
+            ranks_dirty: false,
+        }
+    }
+
+    /// `ExitLevel`'s first pass (map-cycle doc, section 2): every connected
+    /// client's `score` back to 0. It writes the field rather than calling
+    /// the setter, so the ranks are not dirtied and the outgoing level
+    /// pushes no last scoreboard.
+    ///
+    /// The second pass, which demotes each connected client to the
+    /// "connecting" state, has no counterpart here: nothing between this and
+    /// the `map_rotate` the same builtin queues reads a connection state, so
+    /// the demotion would be invisible on the wire.
+    pub fn zero_client_scores(&mut self) {
+        let i = fields::score_index();
+        for slot in 0..MAX_CLIENTS {
+            if let Some(c) = self
+                .ents
+                .get_mut(EntId(slot as u32))
+                .and_then(|e| e.client.as_mut())
+            {
+                c[i] = Value::Int(0);
+            }
         }
     }
 
@@ -461,10 +548,14 @@ impl Host for GameHost {
         if let Some(f) = builtins::precache::lookup(&folded) {
             return f(self, cx, recv, args);
         }
+        if let Some(f) = builtins::score::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
         match folded.as_str() {
             "setcullfog" => builtins::env::set_cull_fog(&mut self.configstrings, cx, args),
             "ambientplay" => builtins::env::ambient_play(&mut self.configstrings, cx, args),
-            "println" | "iprintln" | "logprint" => builtins::io::print_line(self, cx, args),
+            "iprintln" => builtins::io::iprint_line(self, cx, recv, args),
+            "println" | "logprint" => builtins::io::print_line(self, cx, args),
             _ => Err(ErrorKind::MissingBuiltin(name)),
         }
     }
@@ -613,6 +704,14 @@ impl Host for GameHost {
                     "archivetime" => Value::Int(0),
                     _ => value,
                 };
+                // Retail reaches `CalculateRanks` from the client field
+                // setter (`game.mp.i386.so` relocations at 0x418ef and
+                // 0x41b07), and that is what arms the intermission
+                // scoreboard drain (map-cycle doc, 6.3). Only a score moves
+                // a rank here.
+                if fields::CLIENT_FIELDS[i].name == "score" {
+                    self.ranks_dirty = true;
+                }
                 Ok(())
             }
             Route::Script => {
@@ -952,7 +1051,7 @@ mod tests {
     fn a_client_field_round_trips_and_a_map_entity_still_refuses_one() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let f = cx.intern_folded("sessionteam");
             let v = Value::String(cx.intern_exact("allies"));
             host.set_field(cx, c, f, v).unwrap();
@@ -981,13 +1080,13 @@ mod tests {
             let team = Value::String(cx.intern_exact("allies"));
             let pos = Value::Vector([1.0, 2.0, 3.0]);
 
-            let a = host.ents.spawn_client(cx, 0).unwrap();
+            let a = host.ents.spawn_client(cx, 0, None).unwrap();
             host.set_field(cx, a, sessionteam, team).unwrap();
             host.set_field(cx, a, origin, pos).unwrap();
             assert_eq!(host.get_field(cx, a, sessionteam), team);
             assert_eq!(host.get_field(cx, a, origin), pos);
 
-            let b = host.ents.spawn_client(cx, 1).unwrap();
+            let b = host.ents.spawn_client(cx, 1, None).unwrap();
             host.set_field(cx, b, origin, pos).unwrap();
             host.set_field(cx, b, sessionteam, team).unwrap();
             assert_eq!(host.get_field(cx, b, origin), pos);
@@ -1020,7 +1119,7 @@ mod tests {
     fn a_numeric_client_field_starts_at_zero() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let read = |host: &mut GameHost, cx: &mut Cx, f: &str| {
                 let atom = cx.intern_folded(f);
                 host.get_field(cx, c, atom)
@@ -1042,7 +1141,7 @@ mod tests {
     fn archivetime_reads_back_zero_whatever_was_written() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let atom = cx.intern_folded("archivetime");
             host.set_field(cx, c, atom, Value::Int(9)).unwrap();
             assert_eq!(host.get_field(cx, c, atom), Value::Int(0));

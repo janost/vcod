@@ -35,7 +35,7 @@ use vcod_common::pk3::Pk3Fs;
 use vcod_gsc::{FuncRef, Loader, ScriptSource, Value, Vm};
 use vcod_server::cvars::Cvars;
 use vcod_server::game::host::GameHost;
-use vcod_server::game::script::ScriptRuntime;
+use vcod_server::game::script::{Carry, ScriptRuntime};
 use vcod_server::game::spawn::spawn_entities_from_string;
 
 /// A probe's file plus a stub for the one script it calls across files.
@@ -321,8 +321,117 @@ fn probe_bootstrap_matches_retail() {
         None,
         Rc::new(vcod_server::weapons::WeaponTable::empty()),
         0,
+        Carry::default(),
     )
     .expect("load mp_pavlov on probe_bootstrap");
 
     assert_eq!(rt.script_log(), retail_probe_lines("probe_bootstrap"));
+}
+
+/// The three `probe_persist_*` probes measure what a level boundary leaves
+/// behind: `game[]`, `level` and an entity handle held in `game[]`, across
+/// `map_restart(true)`, `exitLevel(false)` and `exitLevel(true)`. Nothing
+/// short of the whole server reproduces that — the two builtins queue a
+/// console line, `Server::tick` drains it, and the level that comes back is
+/// what prints the after-half — so they are claimed here rather than in
+/// `crates/gsc`, where the VM has no host that can restart a level.
+///
+/// Each runs as the gametype script of mp_pavlov, overlaid on the paks the
+/// way `run_probe.sh` drops it in as one. The `exitLevel` pair needs the
+/// same `sv_mapRotation` the retail recipe gave them
+/// (`crates/gsc/tests/fixtures/semantics/README.md`), since `ExitLevel`
+/// queues `map_rotate` and the rotation is what names the map to load next;
+/// `map mp_pavlov` on mp_pavlov is the restart path
+/// (docs/research/cod11-map-cycle.md section 4.2), which is what retail did
+/// for them too.
+///
+/// A new level starts a new `logPrint` log, so the collector flushes on the
+/// serverId moving rather than on the log growing: the after-half is longer
+/// than the before-half, and a length test would miss the boundary.
+fn run_persist_probe(name: &str, rotation: Option<&str>) -> Vec<String> {
+    let fs = vcod_common::testing::game_fs().expect("game_fs, checked by the caller");
+    let text = std::fs::read_to_string(format!("../gsc/tests/fixtures/semantics/{name}.gsc"))
+        .unwrap_or_else(|e| panic!("read {name}.gsc: {e}"));
+
+    let mut now = std::time::Instant::now();
+    let cfg = vcod_server::ServerConfig {
+        map: "mp_pavlov".into(),
+        hostname: "vcod probe".into(),
+        max_clients: 8,
+        gametype: name.into(),
+        test_entities: 0,
+        trace: false,
+    };
+    let mut sv = vcod_server::Server::new(cfg, now);
+    sv.overlay_script(&format!("maps/mp/gametypes/{name}"), &text);
+    if let Some(r) = rotation {
+        sv.set_cvar("sv_mapRotation", r);
+    }
+    sv.load_scripts(Rc::new(fs))
+        .unwrap_or_else(|e| panic!("load mp_pavlov on {name}: {e:#}"));
+
+    // `run_probe.sh` greps `games_mp.log` for `PROBE ` lines, so the retail
+    // side of this comparison carries none of the engine's own log lines and
+    // ours must not either: `ExitLevel` writes one (map-cycle doc, section 2).
+    let probe_lines = |log: &[String]| -> Vec<String> {
+        log.iter()
+            .filter(|l| l.starts_with("PROBE "))
+            .cloned()
+            .collect()
+    };
+    let mut out: Vec<String> = probe_lines(sv.script_log());
+    let mut seen = sv.script_log().len();
+    let mut id = sv.server_id();
+    for _ in 0..300 {
+        now += std::time::Duration::from_millis(50);
+        sv.tick(now);
+        if sv.server_id() != id {
+            id = sv.server_id();
+            seen = 0;
+        }
+        let log = sv.script_log();
+        out.extend(probe_lines(&log[seen.min(log.len())..]));
+        seen = log.len();
+        if out.iter().any(|l| l.starts_with("PROBE after_pass")) {
+            break;
+        }
+    }
+    out
+}
+
+/// `map_restart(true)`: `game[]` survives, `level` does not, and the entity
+/// handle `game["ent"]` held reads undefined on the far side.
+#[test]
+fn probe_persist_restart_matches_retail() {
+    if vcod_common::testing::game_fs().is_none() {
+        return;
+    }
+    let ours = run_persist_probe("probe_persist_restart", None);
+    assert_eq!(ours, retail_probe_lines("probe_persist_restart"));
+}
+
+/// `exitLevel(false)`: `game[]` is freed with everything else.
+#[test]
+fn probe_persist_exit_matches_retail() {
+    if vcod_common::testing::game_fs().is_none() {
+        return;
+    }
+    let ours = run_persist_probe(
+        "probe_persist_exit",
+        Some("gametype probe_persist_exit map mp_pavlov map mp_pavlov"),
+    );
+    assert_eq!(ours, retail_probe_lines("probe_persist_exit"));
+}
+
+/// `exitLevel(true)`: the same end of level, keeping `game[]`.
+#[test]
+fn probe_persist_exit_save_matches_retail() {
+    if vcod_common::testing::game_fs().is_none() {
+        return;
+    }
+    let ours = run_persist_probe(
+        "probe_persist_exit_save",
+        Some("gametype probe_persist_exit_save map mp_pavlov map mp_pavlov"),
+    );
+    assert_eq!(ours, retail_probe_lines("probe_persist_exit_save"));
 }

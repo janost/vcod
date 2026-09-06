@@ -243,6 +243,29 @@ engineering setup works.
   retail put one on a temp entity or on the missile's own ring. All seven of
   these fixtures are committed retail evidence and a run against ours
   overwrites them: move them to `tmp/` and `git checkout` the directory after.
+  `--save-mapchange` and `--save-roundrestart` are the map-cycle captures.
+  They record the wire rather than one playerstate: every gamestate with its
+  `serverId`, every serverCommand with its reliable sequence, every
+  out-of-band packet and one `!trace` per snapshot whose watched fields
+  moved, all interleaved by `ms` into
+  `crates/server/tests/fixtures/netchan/<map>-<gametype>-<role>.txt`, named
+  for the map the run started on. `--save-mapchange` stands still through a
+  map end and the rotation that follows; `--save-roundrestart` is a pair,
+  the `--probe-target` half killing itself 20 s in to end the round and the
+  other half walking up and only watching. The recipe and the cvars each
+  needs are in its own fixture's header. Retail never pushes the `b`
+  scoreboard, it only answers `score`, so `--save-mapchange` asks every 2 s
+  and every `b` in that fixture is an answer; the round-restart shooter asks
+  for none and its fixture carries none. Both are retail evidence and a run
+  against ours overwrites them: move the files to `tmp/` and `git checkout`
+  the directory after.
+  A probe that crosses a gamestate or a map restart has to re-answer the
+  stock menus: retail reruns `ClientConnect` on both and reopens the team
+  menu under the indices the last one used, so `JoinProbe` clears them on
+  every gamestate past the first and on every `n`. Without that the probe
+  sits on the menu for the whole rest of the run. The dm capture shows the
+  restart case; sd, whose `pers[]` survives, reopens no menu and the clear
+  is inert there.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
@@ -284,7 +307,7 @@ engineering setup works.
   delta-compressed against the client's acked frame, with pmove-driven
   spectator flight, `--test-entities` for scripted packet entities and
   `--set NAME=VALUE` (retail's `+set`, e.g. `--set scr_friendlyfire=1` for
-  a teammate kill) (no restarts yet). A snapshot's entity list is the map's own: placed weapons,
+  a teammate kill). A snapshot's entity list is the map's own: placed weapons,
   script models and mounted MGs, culled per client against the BSP's PVS the
   way retail culls, so what a client is sent depends on where it stands. Other
   clients are in it too, each animated by the animscript machine
@@ -308,13 +331,22 @@ engineering setup works.
   and props, comes to rest, and explodes on its own ring at the end of its
   fuse, with the blast walking live clients through retail's linear falloff
   and `CanDamage`'s five-trace fraction. A player killed mid-cook drops the
-  live one. Not modelled: item pickup, intermission, map change and the
+  live one. A level ends the way retail's does, in script: `exitLevel` and
+  `map_restart` queue a console line, and the console
+  (`crates/server/src/console.rs`) runs `map`, `map_restart` and `map_rotate`
+  off `sv_mapRotation`, so a `dm` time limit reaches the intermission, the
+  intermission holds every client at `pm_type` 5 for the script's own wait,
+  and the next map's gamestate goes out on the live netchan
+  (`docs/research/cod11-map-cycle.md`). Not modelled: item pickup and the
   killcam. What a client still gets nothing of is movers, which no code
   spawns. A probe run against it reproduces the retail death capture
   field for field except for two: the `EV_RAISE_WEAPON` the death frame does
   not raise, and the `legsAnim` the respawn frame carries a frame late
-  (`docs/research/cod11-combat.md` section 9).
-- The tick, in order: expired clients, then each client's queued usercmds
+  (`docs/research/cod11-combat.md` section 9). What the map-cycle probes
+  measured of it is `docs/research/cod11-map-cycle.md` section 8.
+- The tick, in order: the console drains first (a `map`, `map_restart` or
+  `map_rotate` line an earlier frame's script queued reloads the level before
+  anything else runs), then expired clients, then each client's queued usercmds
   (`replay_moves`, one pmove step per cmd, which is where the weapon machine
   queues a frame's shots, swings and throws), then those themselves (a trace
   each, an impact temp entity and a hit per player struck), then the missiles
@@ -340,12 +372,18 @@ engineering setup works.
 - `tools/run_probe.sh <probe> [map]` drives the same retail binary as the
   gsc oracle: it drops one `crates/gsc/tests/fixtures/semantics/probe_*.gsc`
   in as a gametype script, boots the server, and prints the `PROBE` lines
-  the script logged. `tools/capture_probes.sh` runs every probe that way and
+  the script logged. Anything after the map goes to the engine verbatim,
+  which is how the three `probe_persist_*` probes get the `sv_mapRotation`
+  they need to have a map to load after ending their own; `PROBE_SECS` is
+  `SECS` under the name those recipes use.
+  `tools/capture_probes.sh` runs every probe that way and
   writes the combined `retail-captures.txt` the A/B test in
-  `crates/gsc/tests/semantics_ab.rs` compares vcod's VM against. Both need
+  `crates/gsc/tests/semantics_ab.rs` compares vcod's VM against. It passes no
+  engine arguments, so those three sections are taken one at a time and
+  pasted in at their sorted position. Both need
   the same setup `run_server.sh` documents; a full capture takes a couple of
   minutes because every probe boots the server. Read that directory's
-  `README.md` before writing a new probe: three engine behaviours dictate its
+  `README.md` before writing a new probe: six engine behaviours dictate its
   shape, and each costs a wasted run to rediscover.
 - Live captures so far came from populated public servers (a TDM server on
   2026-08-24, an S&D server on 2026-08-25); a 60-100 s capture during a round
@@ -537,11 +575,15 @@ never pasted decompiler output or disassembly listings.
 - The body queue is eight entities at 64..71 and has no lifetime timer. A
   corpse lives until its slot is reused, which the retail capture shows
   directly: the first corpse is still on the wire 190 s later.
-- `eFlags` bit `0x8` is the per-life teleport bit: retail alternates 16 and 24
-  across a player's lives and a client breaks interpolation on the changed
-  word. Leave it pinned and a retail client smears a respawning player from
-  its corpse to its new spawn. The respawn clears the event ring with it
-  (retail's first frame of a new life reads `eventSequence` 0).
+- `eFlags` bit `0x8` is the teleport bit and it flips on every *spawn*, not
+  every life: the connect's own `spawnSpectator`, the respawn's spectator
+  frame and the intermission camera each consume a flip, and a level boundary
+  clears the bit with the rest of the playerstate. A client breaks
+  interpolation on the changed word, so leave it pinned and a retail client
+  smears a respawning player from its corpse to its new spawn. The respawn
+  clears the event ring with it (retail's first frame of a new life reads
+  `eventSequence` 0). The spawn-for-spawn reading of the two committed
+  captures is in `docs/research/cod11-map-cycle.md`, 8.2.
 - A `clipOnly` weapon has no reserve at all. The frag's file reads
   `clipOnly 1` with `maxAmmo 3`, and retail's spawn line carries `clip=6:3`
   with no `ammo` entry for that index; writing the reserve anyway puts a
@@ -588,3 +630,50 @@ never pasted decompiler output or disassembly listings.
   ends on, so a byte sent once is reverted before the swap lands and the old
   weapon stays in hand. A first retail capture of the one-cmd version measured
   the frag never arriving and the cook firing the rifle instead.
+- A map change is pull-shaped. `SV_SpawnServer` sends no gamestate at all: the
+  only thing that leaves the server is the out-of-band `loadingnewmap` line to
+  every client at `CS_PRIMED` or above, and the gamestate goes out when that
+  client's next message arrives still carrying the old serverId and
+  `SV_ExecuteClientMessage` resends it. So a map change that pushes anything
+  on the reliable stream is wrong by construction
+  (`docs/research/cod11-map-cycle.md` 3.1).
+- `sv_serverid` is two nibbles and the high one skips zero. A map load bumps
+  the high nibble and keeps the low one, a restart bumps only the low one, and
+  a high nibble that wraps to 0 is bumped again, so 16 goes to 17 across a
+  restart and to 33 across a map change. `crates/server/src/console.rs` owns
+  the arithmetic and both paths share it; the client reads the value back out
+  of the systeminfo configstring, not out of the gamestate header.
+- A probe has to re-answer the stock team menu after every gamestate and,
+  under `dm`, after every restart. Retail reruns `ClientConnect` on both and
+  reopens the menu under the indices the last one used, so `JoinProbe` clears
+  them on every gamestate past the first and on every `n`. Under `sd`, whose
+  `pers[]` survives, no menu reopens and the clear is inert.
+- `game[]` survives a level boundary only when the caller passed `savePersist`,
+  and an entity handle stored in it never survives at all. `map_restart(1)`
+  and `exitLevel(1)` keep `game[]` and every client's `pers[]`, `map_restart(0)`
+  and `exitLevel(0)` free both, `level` is always new, and every entity handle
+  inside `game[]` is dropped whichever way the flag went. `dm.gsc` passes 0 and
+  `sd.gsc` passes 1, which is the whole reason a `dm` client is put back
+  through the team menu after a restart and an `sd` client is not.
+- Time limits and score limits are script, never engine. Neither binary
+  contains the string `timelimit`, `scorelimit` or `fraglimit`, and the game
+  module exports no `CheckExitRules`: every "the round is over" decision in
+  CoD 1.1 MP is a gametype script calling `exitLevel()` or `map_restart()`. A
+  server that hard-codes either in Rust is adding a rule retail does not have.
+  `g_intermissionDelay` is dead the same way: it is registered in
+  `gameCvarTable` and has no other reference in the module, so nothing reads
+  it, and `nextmap` is registered, set once inside the map load, and read by
+  nothing: the Q3 convention of the gametype writing it and the engine
+  executing it does not exist here, and `map_rotate` is the whole rotation.
+- `map <the map already serving>` is a restart, not a spawn. The engine
+  compares the requested name against the current one and takes
+  `SV_MapRestart_f`, so the low nibble moves and no gamestate goes out. A
+  rotation whose first entry names the map it is already on therefore restarts
+  before it ever changes map, which is what the retail capture shows
+  (`docs/research/cod11-map-cycle.md` 4.2).
+- A thread's own `notify` does not fire its own `endon`. A thread that
+  `endon`s an event and then notifies that event itself survives and runs on;
+  every *other* thread's `endon` on it still kills. Measured with
+  `probe_endon_self`, and it is what lets `dm.gsc`'s `endMap` reach its
+  `exitLevel` at all: ours used to kill the thread there and the map never
+  ended.

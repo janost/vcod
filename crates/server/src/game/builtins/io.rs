@@ -1,8 +1,8 @@
-//! Builtins that only produce output. All three go to the server log, which
-//! is what the probe reads; `iPrintLn` does not reach clients yet.
+//! Builtins that produce output. `println` and `logPrint` go to the server
+//! log; `iPrintLn` is a reliable command to the clients.
 
 use crate::game::host::GameHost;
-use vcod_gsc::{Cx, ErrorKind, Value};
+use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
 pub fn print_line(host: &mut GameHost, cx: &Cx, args: &[Value]) -> Result<Value, ErrorKind> {
     let line = render(cx, args);
@@ -11,6 +11,39 @@ pub fn print_line(host: &mut GameHost, cx: &Cx, args: &[Value]) -> Result<Value,
     // capture diff reads it the same way.
     for l in line.lines() {
         host.script_log.push(l.to_string());
+    }
+    Ok(Value::Undefined)
+}
+
+/// `iPrintLn(message [, args...])` and its receiver form: the reliable
+/// command `f "<message>"` to every client, or to the receiver alone when
+/// one is given (`Scr_MakeGameMessage` 0x5ccd8 with the word `f`, reached
+/// from 0x5cd28 with client -1 and from 0x45594 with the receiver). The
+/// message itself is packed by [`super::message::construct`].
+///
+/// Retail writes no log line here; this one is vcod's, because the probe
+/// reads the server log to see what a run did.
+pub fn iprint_line(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let text = super::message::construct(host, cx, args);
+    log::info!("script: iprintln {text}");
+    // The same rewrite `setClientCvar` does: the message is the line's only
+    // quoted argument, so a `"` in it would close that argument early.
+    let cmd = format!("f \"{}\"", text.replace('"', "'"));
+    match recv {
+        Some(_) => {
+            let slot = super::client::client_receiver(host, recv)?;
+            host.client_commands.push((slot, cmd));
+        }
+        None => {
+            for slot in host.client_slots() {
+                host.client_commands.push((slot, cmd.clone()));
+            }
+        }
     }
     Ok(Value::Undefined)
 }
@@ -30,6 +63,58 @@ fn render(cx: &Cx, args: &[Value]) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod iprintln_tests {
+    use super::*;
+    use crate::game::host::GameHost;
+
+    /// The two forms, against the retail capture's own lines: the global
+    /// `iprintln(&"MPSCRIPT_CONNECTED", self)` reaches every client as
+    /// `f "MPSCRIPT_CONNECTED\x15vcod^7"`, and the receiver form reaches one
+    /// (`tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`).
+    #[test]
+    fn iprintln_goes_out_as_the_f_reliable_command() {
+        let mut vm = vcod_gsc::Vm::new();
+        let mut host = GameHost::new(vec![String::new(); 2048]);
+        let ents = &mut host.ents;
+        let (a, b, key) = vm.with_cx(|cx| {
+            let a = ents.spawn_client(cx, 0, None).expect("a client");
+            let b = ents.spawn_client(cx, 1, None).expect("a client");
+            for (id, name) in [(a, "vcod"), (b, "other")] {
+                let name = Value::String(cx.intern_exact(name));
+                if let Some(c) = ents.get_mut(id).and_then(|e| e.client.as_mut()) {
+                    c[0] = name;
+                }
+            }
+            (a, b, cx.intern_exact("MPSCRIPT_CONNECTED"))
+        });
+        vm.with_cx(|cx| {
+            iprint_line(
+                &mut host,
+                cx,
+                None,
+                &[Value::Localized(key), Value::Entity(a)],
+            )
+            .unwrap();
+            iprint_line(
+                &mut host,
+                cx,
+                Some(Target::Entity(b)),
+                &[Value::Localized(key)],
+            )
+            .unwrap();
+        });
+        assert_eq!(
+            host.client_commands,
+            vec![
+                (0, "f \"MPSCRIPT_CONNECTED\u{15}vcod^7\"".to_string()),
+                (1, "f \"MPSCRIPT_CONNECTED\u{15}vcod^7\"".to_string()),
+                (1, "f \"MPSCRIPT_CONNECTED\u{15}\"".to_string()),
+            ]
+        );
+    }
 }
 
 #[cfg(test)]

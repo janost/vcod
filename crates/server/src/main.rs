@@ -115,6 +115,13 @@ fn main() -> Result<()> {
             server.handle_packet(from, &buf[..n], now);
         }
         server.tick(now);
+        // A level load that failed with the level already torn down: there is
+        // no script to end the level and no table for a client to pull, which
+        // is what retail's `Com_Error` ends the process for.
+        if let Some(e) = server.take_fatal() {
+            log::error!("{e:#}");
+            std::process::exit(1);
+        }
         for (to, pkt) in server.take_outgoing() {
             if let Err(e) = sock.send_to(&pkt, to) {
                 log::debug!("send to {to}: {e}");

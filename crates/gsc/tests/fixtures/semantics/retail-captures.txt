@@ -136,6 +136,12 @@ PROBE delete_count_after_wait 6
 PROBE at delete_reuse_after_wait
 PROBE delete_number_reuse_after_wait 299
 
+# probe_endon_self
+PROBE endon_self armed
+PROBE endon_self after_notify
+PROBE endon_self after_wait
+PROBE endon_self done 1
+
 # probe_ents
 PROBE at ents_deferred
 PROBE entarray_count 7
@@ -201,6 +207,49 @@ PROBE not_getcvar_allow_fg42 1
 PROBE notify_order first
 PROBE notify_order second
 PROBE notify_done 1
+
+# probe_persist_exit
+PROBE before_game_str kept
+PROBE before_game_num 7
+PROBE before_level_y 7
+PROBE at spawn
+PROBE before_game_ent_defined 1
+PROBE at end_level
+PROBE after_pass 2
+PROBE after_game_str_defined 0
+PROBE after_game_num_defined 0
+PROBE after_game_ent_defined 0
+PROBE after_level_y_defined 0
+
+# probe_persist_exit_save
+PROBE before_game_str kept
+PROBE before_game_num 7
+PROBE before_level_y 7
+PROBE at spawn
+PROBE before_game_ent_defined 1
+PROBE at end_level
+PROBE after_pass 2
+PROBE after_game_str_defined 1
+PROBE after_game_num_defined 1
+PROBE after_game_ent_defined 0
+PROBE after_level_y_defined 0
+PROBE after_game_str kept
+PROBE after_game_num 7
+
+# probe_persist_restart
+PROBE before_game_str kept
+PROBE before_game_num 7
+PROBE before_level_y 7
+PROBE at spawn
+PROBE before_game_ent_defined 1
+PROBE at end_level
+PROBE after_pass 2
+PROBE after_game_str_defined 1
+PROBE after_game_num_defined 1
+PROBE after_game_ent_defined 0
+PROBE after_level_y_defined 0
+PROBE after_game_str kept
+PROBE after_game_num 7
 
 # probe_self
 PROBE at self_receiver

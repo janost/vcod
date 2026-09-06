@@ -26,13 +26,40 @@ const MENURESPONSE_NOTIFY: &str = "menuresponse";
 /// path (lowercase, forward slashes, no extension; see `vcod_gsc::canonical`);
 /// the pak stores e.g. `maps/MP/_load.gsc`, and `Pk3Fs::read` already
 /// lowercases its lookup key, so appending `.gsc` is the only work here.
-struct PakScripts(Rc<Pk3Fs>);
+pub(crate) struct PakScripts {
+    fs: Rc<Pk3Fs>,
+    /// One canonical path answered from memory instead of the paks, for a
+    /// test whose gametype script does not ship in one
+    /// (`Server::overlay_script`).
+    overlay: Option<(String, String)>,
+}
+
+impl PakScripts {
+    pub(crate) fn new(fs: Rc<Pk3Fs>, overlay: Option<(String, String)>) -> PakScripts {
+        PakScripts { fs, overlay }
+    }
+}
 
 impl ScriptSource for PakScripts {
     fn read(&self, canonical: &str) -> Option<String> {
-        let bytes = self.0.read(&format!("{canonical}.gsc"))?;
+        if let Some((path, text)) = self.overlay.as_ref() {
+            if path == canonical {
+                return Some(text.clone());
+            }
+        }
+        let bytes = self.fs.read(&format!("{canonical}.gsc"))?;
         Some(String::from_utf8_lossy(&bytes).into_owned())
     }
+}
+
+/// What `savePersist` preserves across a level boundary
+/// (docs/research/cod11-map-cycle.md section 1): the `game[]` table and one
+/// `pers[]` per client slot. Both empty on a first load and on a boundary
+/// the outgoing level did not ask to persist.
+#[derive(Default)]
+pub struct Carry {
+    pub game: Option<vcod_gsc::GameCarry>,
+    pub pers: Vec<Option<vcod_gsc::ArrayCarry>>,
 }
 
 /// A script value as text, through the same `%g` rendering string
@@ -92,9 +119,10 @@ impl ScriptRuntime {
         world: Option<Rc<crate::world::World>>,
         weapons: Rc<crate::weapons::WeaponTable>,
         now_ms: i32,
+        carry: Carry,
     ) -> anyhow::Result<ScriptRuntime> {
         Self::load_from(
-            Box::new(PakScripts(fs.clone())),
+            Box::new(PakScripts::new(fs.clone(), None)),
             fs,
             map,
             gametype,
@@ -103,6 +131,7 @@ impl ScriptRuntime {
             world,
             weapons,
             now_ms,
+            carry,
         )
     }
 
@@ -121,10 +150,16 @@ impl ScriptRuntime {
         world: Option<Rc<crate::world::World>>,
         weapons: Rc<crate::weapons::WeaponTable>,
         now_ms: i32,
+        carry: Carry,
     ) -> anyhow::Result<ScriptRuntime> {
         let entry = format!("maps/mp/{map}");
         let gametype_entry = format!("maps/mp/gametypes/{gametype}");
         let mut vm = Vm::new();
+        // `game[]` before anything runs: the gametype's `main` reads it in
+        // its first statements (map-cycle doc, section 1).
+        if let Some(game) = carry.game.as_ref() {
+            vm.install_game(game);
+        }
         // One `Loader`, not two: its `loaded` set dedupes the files both
         // closures share, and `Vm::install` rejects a duplicate `FuncRef`, so
         // a second `Loader` would fail on the first shared file.
@@ -142,6 +177,7 @@ impl ScriptRuntime {
         host.weapons = weapons;
         host.fs = Some(fs.clone());
         host.level_time_ms = now_ms;
+        host.pers_carry = carry.pers;
 
         // `_load.gsc::main`, in mp_pavlov's own closure, calls `getEntArray`
         // in its first statements, so the object table must hold every map
@@ -640,6 +676,58 @@ impl ScriptRuntime {
             .map(|_| id)
     }
 
+    /// `SV_SpawnServer`'s client pass (docs/research/cod11-map-cycle.md,
+    /// section 3 step 22): the incoming level's `ClientConnect` for a client
+    /// that is already on the netchan. The object table is the new level's,
+    /// so this is a first connect as far as script is concerned. It runs
+    /// rather than queues, because retail runs it inside the spawn, after the
+    /// settle frames of step 20.
+    pub fn reconnect_client(&mut self, slot: usize, name: String, now_ms: i32) {
+        self.dispatch_client_event(ClientEvent::Connect { slot, name }, now_ms);
+    }
+
+    /// `game[]` lifted for the next level, and every client's `pers[]` with
+    /// it (docs/research/cod11-map-cycle.md section 1). Both leave this
+    /// runtime intact; the caller drops it right after.
+    pub fn take_carry(&self) -> Carry {
+        let pers = (0..crate::server::MAX_CLIENTS)
+            .map(|slot| {
+                self.client_pers_array(slot)
+                    .map(|id| self.vm.take_array(id))
+            })
+            .collect();
+        Carry {
+            game: Some(self.vm.take_game()),
+            pers,
+        }
+    }
+
+    /// A client's `.pers` array id, `None` for a slot with no client entity
+    /// or one whose field is not an array.
+    fn client_pers_array(&self, slot: usize) -> Option<vcod_gsc::ArrayId> {
+        let id = self.client_entity(slot)?;
+        let e = self.host.ents.get(id)?;
+        match e.client.as_ref()?.get(crate::game::fields::pers_index())? {
+            Value::Array(a) => Some(*a),
+            _ => None,
+        }
+    }
+
+    /// The console lines the level's builtins queued
+    /// (`trap_SendConsoleCommand`), drained in call order. `Server` runs
+    /// them at the top of its next tick, which is retail's `EXEC_APPEND`.
+    pub fn take_console(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.host.console)
+    }
+
+    /// `level+0x20c`, taken and cleared: whether a score moved this frame,
+    /// which is what arms the intermission scoreboard drain (map-cycle doc,
+    /// 6.3). Retail's drain clears the flag whether or not any client was in
+    /// intermission to receive one, so this takes rather than reads.
+    pub fn take_ranks_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.host.ranks_dirty)
+    }
+
     /// One queued client event. A callback the closure does not define is
     /// logged and skipped: a gametype without one is still a serving map,
     /// the same reading `load`'s missing-builtin pre-scan takes.
@@ -655,7 +743,15 @@ impl ScriptRuntime {
                 if let Some(v) = self.host.client_viewmodel.get_mut(slot) {
                     *v = 0;
                 }
-                let id = match self.vm.with_cx(|cx| self.host.ents.spawn_client(cx, slot)) {
+                // The carried `pers`, if the boundary this client crossed
+                // kept one; taken, so a later reconnect starts empty as
+                // retail's does.
+                let pers = self.host.pers_carry.get_mut(slot).and_then(Option::take);
+                let host = &mut self.host;
+                let id = match self
+                    .vm
+                    .with_cx(|cx| host.ents.spawn_client(cx, slot, pers.as_ref()))
+                {
                     Ok(id) => id,
                     Err(e) => {
                         log::error!("client {slot}: no entity: {e:?}");
@@ -685,6 +781,12 @@ impl ScriptRuntime {
                 self.vm.notify(id, event, &[]);
             }
             ClientEvent::Disconnect(slot) => {
+                // Whatever the last level boundary lifted for this slot dies
+                // with the client that owned it: the next occupant of the
+                // slot is a stranger and must not connect into its `pers[]`.
+                if let Some(c) = self.host.pers_carry.get_mut(slot) {
+                    *c = None;
+                }
                 // The callback runs first: it reads `self`, and freeing the
                 // slot ahead of it would hand it a dead entity.
                 if let Some(id) = self.client_entity(slot) {
@@ -854,13 +956,32 @@ impl ScriptRuntime {
 
     /// One server frame of script.
     pub fn run_frame(&mut self, now_ms: i32) {
-        self.host.level_time_ms = now_ms;
-        // Client events before everything else, in the order the netcode
-        // raised them: a `Begin` drained ahead of its own `Connect` finds no
-        // thread parked on the notify and strands the client silently.
+        // The packet pass, on the clock the netcode raised its events with:
+        // retail runs `ClientBegin`, `ClientCommand` and `ClientDisconnect`
+        // from `SV_ExecuteClientMessage` (map-cycle doc, 4.4), before
+        // `G_RunFrame` advances `level.time`. So a thread one of them wakes
+        // runs to its next suspend here, and a `wait 0` it takes is due in
+        // *this* frame's thread pass rather than the next one. That is what
+        // parks `sd.gsc`'s connect callback on its `waittill("menuresponse")`
+        // before the `openMenu` it just queued can be answered; one frame
+        // later and the answer notifies nothing and the client never leaves
+        // the team menu.
+        //
+        // `run_runnable`, not `run_frame`: this pass is the callbacks and
+        // whatever they notified, never a second deadline wake. Retail's is
+        // one `VM_Call` per event, not a `Scr_RunThreads`.
+        //
+        // Client events in the order the netcode raised them: a `Begin`
+        // drained ahead of its own `Connect` finds no thread parked on the
+        // notify and strands the client silently.
+        let packet_ms = self.host.level_time_ms;
         for ev in std::mem::take(&mut self.host.client_events) {
-            self.dispatch_client_event(ev, now_ms);
+            self.dispatch_client_event(ev, packet_ms);
         }
+        for e in self.vm.run_runnable(&mut self.host, packet_ms) {
+            log::warn!("script error: {e:?}");
+        }
+        self.host.level_time_ms = now_ms;
         // Thinks before threads: `G_RunFrame` runs the entity pass first, so
         // a script reading `getEntArray` in the same frame sees the freed
         // entity already gone. Whether retail really orders it this way is
@@ -873,12 +994,6 @@ impl ScriptRuntime {
             .run_thinks(now_ms, &vcod_common::net::protocol::PROTOCOL_V1);
         for e in self.vm.run_frame(&mut self.host, now_ms) {
             log::warn!("script error: {e:?}");
-        }
-        // Stage 6 ends the map on this; until then, log once and clear it
-        // so a script that called exitLevel does not spam every frame after.
-        if self.host.exit_level {
-            log::debug!("gsc: exitLevel() called, ending the map is not wired yet");
-            self.host.exit_level = false;
         }
     }
 }
@@ -927,6 +1042,50 @@ impl ScriptRuntime {
 mod tests {
     use super::*;
 
+    /// The packet pass runs the threads the netcode's events woke and
+    /// nothing else. It carries no deadline wake of its own, so a thread
+    /// looping on `wait 0` advances exactly one iteration per server frame;
+    /// waking deadlines there stepped it twice, once at the previous frame's
+    /// clock and again at this one's.
+    #[test]
+    fn a_wait_zero_loop_advances_once_per_server_frame() {
+        let mut rt = ScriptRuntime::for_test(
+            "main() { level.n = 0; for(;;) { wait 0; level.n = level.n + 1; } }",
+        );
+        for frame in 1..=5 {
+            rt.run_frame(frame * 50);
+            assert_eq!(
+                rt.level_field("n"),
+                Value::Int(frame),
+                "after {frame} frames"
+            );
+        }
+    }
+
+    /// `run_thinks` still runs ahead of the frame's thread pass, which is
+    /// `probe_delete`'s measurement: an entity deleted in one frame is out of
+    /// `getEntArray` for a thread that wakes past the deferred free, and
+    /// still in it for one that looks before. The packet pass ahead of both
+    /// must not step that thread early.
+    #[test]
+    fn a_deleted_entity_is_gone_by_the_thread_pass_that_looks_past_the_defer() {
+        let mut rt = ScriptRuntime::for_test(
+            "main() { e = spawn(\"script_origin\", (0, 0, 0)); e delete(); \
+             level.now = getentarray(\"script_origin\", \"classname\").size; \
+             wait 0.5; \
+             level.later = getentarray(\"script_origin\", \"classname\").size; }",
+        );
+        assert_eq!(
+            rt.level_field("now"),
+            Value::Int(1),
+            "delete() freed at once"
+        );
+        for frame in 1..=12 {
+            rt.run_frame(frame * 50);
+        }
+        assert_eq!(rt.level_field("later"), Value::Int(0));
+    }
+
     /// Both closures load into one `Vm` through one `Loader`, which is what
     /// keeps `Vm::install`'s duplicate rejection from firing on the first
     /// file the two share (`_utility`, `_teams` and the rest).
@@ -944,6 +1103,7 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
+            Carry::default(),
         );
         assert!(rt.is_ok(), "{:?}", rt.err());
     }
@@ -972,6 +1132,7 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
+            Carry::default(),
         )
         .expect("load mp_pavlov on dm");
         assert_eq!(rt.configstrings()[1180], "team_russiangerman");
@@ -1000,7 +1161,7 @@ mod tests {
                 if canonical == "maps/mp/gametypes/nomain" {
                     return Some("notMain() {}\n".to_string());
                 }
-                PakScripts(self.0.clone()).read(canonical)
+                PakScripts::new(self.0.clone(), None).read(canonical)
             }
         }
         let fs = Rc::new(fs);
@@ -1014,6 +1175,7 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
+            Carry::default(),
         );
         let Err(err) = err else {
             panic!("a gametype with no main must not load");
@@ -1038,6 +1200,90 @@ mod tests {
     #[test]
     fn the_menu_notify_is_spelled_menuresponse() {
         assert_eq!(MENURESPONSE_NOTIFY, "menuresponse");
+    }
+
+    /// What `savePersist` keeps for a client across a restart
+    /// (docs/research/cod11-map-cycle.md section 1): the `pers[]` table, and
+    /// not the rest of the entity. The second level is a second
+    /// `ScriptRuntime` with its own `Vm`, so this only passes if the copy
+    /// travelled as text through the carry and was re-interned on the far
+    /// side. The two levels default the key differently, so the value read
+    /// after says which one wrote it.
+    #[test]
+    fn a_carried_pers_is_back_on_the_client_the_next_level_connects() {
+        fn src(default_team: &str) -> String {
+            format!(
+                "main() {{ level.callbackPlayerConnect = ::c; }}\n\
+                 CodeCallback_PlayerConnect() {{ [[level.callbackPlayerConnect]](); }}\n\
+                 c() {{ if (!isdefined(self.pers[\"team\"])) self.pers[\"team\"] = \"{default_team}\"; \
+                       self.statusicon = self.pers[\"team\"]; }}\n"
+            )
+        }
+
+        let mut before = ScriptRuntime::for_test_at(CALLBACK_SETUP, &src("axis"));
+        before.reconnect_client(0, "vcod".into(), 50);
+        assert_eq!(before.client_pers(0, "team").as_deref(), Some("axis"));
+        // Something only the first level wrote, to show what does not carry.
+        before.host.client_vitals[0].health = 42;
+        let carry = before.take_carry();
+
+        let mut after = ScriptRuntime::for_test_at(CALLBACK_SETUP, &src("allies"));
+        after.host.pers_carry = carry.pers;
+        after.reconnect_client(0, "vcod".into(), 50);
+        assert_eq!(
+            after.client_pers(0, "team").as_deref(),
+            Some("axis"),
+            "the carried pers did not reach the reconnected client"
+        );
+        // The `gclient_t` itself does not carry: retail bzeroes it in
+        // `ClientConnect` and the script-side `pers` is the whole of what
+        // survives.
+        assert_eq!(after.host.client_vitals[0].health, 0);
+
+        // The carry is spent by the connect that took it, so the next one
+        // starts empty -- which is every connect but a persisting
+        // boundary's.
+        after.reconnect_client(0, "vcod".into(), 100);
+        assert_eq!(after.client_pers(0, "team").as_deref(), Some("allies"));
+    }
+
+    /// The carry a level boundary lifted is spent by a disconnect as well as
+    /// by a connect. `map_restart` sends its `n` through the reliable guard,
+    /// which can drop the client whose `pers[]` was just lifted, and the next
+    /// client to take that slot must not inherit the old one's team, score or
+    /// weapons.
+    #[test]
+    fn a_disconnect_spends_the_slot_s_carried_pers() {
+        fn src(default_team: &str) -> String {
+            format!(
+                "main() {{ level.callbackPlayerConnect = ::c; \
+                          level.callbackPlayerDisconnect = ::d; }}\n\
+                 CodeCallback_PlayerConnect() {{ [[level.callbackPlayerConnect]](); }}\n\
+                 CodeCallback_PlayerDisconnect() {{ [[level.callbackPlayerDisconnect]](); }}\n\
+                 c() {{ if (!isdefined(self.pers[\"team\"])) self.pers[\"team\"] = \"{default_team}\"; }}\n\
+                 d() {{ level.gone = 1; }}\n"
+            )
+        }
+
+        let mut before = ScriptRuntime::for_test_at(CALLBACK_SETUP, &src("axis"));
+        before.reconnect_client(0, "vcod".into(), 50);
+        assert_eq!(before.client_pers(0, "team").as_deref(), Some("axis"));
+        let carry = before.take_carry();
+
+        let mut after = ScriptRuntime::for_test_at(CALLBACK_SETUP, &src("allies"));
+        after.host.pers_carry = carry.pers;
+        // The drop the restart's `n` can cause: the slot has no entity in
+        // this runtime yet, its `ClientConnect` has not run.
+        after.push_client_event(ClientEvent::Disconnect(0));
+        after.run_frame(50);
+
+        after.reconnect_client(0, "stranger".into(), 100);
+        assert_eq!(
+            after.client_pers(0, "team").as_deref(),
+            Some("allies"),
+            "the dropped client's carried pers reached the next occupant"
+        );
+        assert!(after.aborts().is_empty(), "{:?}", after.aborts());
     }
 
     /// Connect arms the callback's `waittill("begin")` and Begin releases it.

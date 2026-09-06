@@ -1,0 +1,372 @@
+# Retail CoD 1.1d dedicated server across an S&D round restart.
+# map mp_carentan, gametype sd, joined allies, weapon m1carbine_mp, role roundrestart-shooter
+# dedicated 1, sv_maxclients 8, sv_pure 0, stock scr_* defaults but for the
+# limit cvars the recipe sets. Two probes on opposite teams, target first:
+#   tools/run_server.sh mp_carentan +set g_gametype sd +set scr_sd_roundlength 1 \
+#     +set scr_friendlyfire 1
+#   --net-probe <ip:port> --probe-team axis --probe-target --save-roundrestart \
+#     --probe-secs 200
+#   --net-probe <ip:port> --probe-team allies --save-roundrestart --probe-secs 160
+# This half never sends `score`, and retail sends the `b` scoreboard only in
+# answer to one, so this file carries no `b` line at all.
+# One !gamestate per gamestate, one !cmd per serverCommand with its reliable
+# sequence, one !oob per connectionless packet, and one !trace per snapshot
+# whose watched fields moved plus one a second so a settled stretch still
+# carries a timeline. ms is since the capture started; serverTime is the
+# server's own clock. ammoclip is the non-zero entries, as index:value.
+role roundrestart-shooter
+!observed gamestates=1 commands=56 oob=0 traced=297 intermission_at_ms=none first_snapshot_after_gamestate_ms=599
+!gamestate ms=306 serverId=16 messageNum=2 configstrings=273 mapname=mp_carentan
+!cmd ms=599 seq=1 text=f "MPSCRIPT_CONNECTEDvcod^7"
+!cmd ms=599 seq=2 text=v g_scriptMainMenu "team_americangerman"
+!cmd ms=599 seq=3 text=v scr_showweapontab "0"
+!cmd ms=599 seq=4 text=t 0
+!cmd ms=599 seq=5 text=v cg_objectiveText "SD_OBJ_SPECTATOR_ALLIESATTACKING"
+!trace ms=599 serverTime=31600 pm_type=4 eFlags=24 health=0 damageEvent=0 weapon=0 ammoclip=- eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=384.0,-624.0,296.0
+!cmd ms=665 seq=6 text=v scr_showweapontab "1"
+!cmd ms=665 seq=7 text=v g_scriptMainMenu "weapon_american"
+!cmd ms=665 seq=8 text=t 1
+!cmd ms=697 seq=9 text=v cg_objectiveText "SD_OBJ_ATTACKERS"
+!cmd ms=697 seq=10 text=f "MPSCRIPT_JOINED_ALLIESvcod^7"
+!trace ms=697 serverTime=31700 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=256.1,-1128.0,16.6
+!trace ms=1006 serverTime=32000 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=1 events=7,0,0,0 viewangles=0.0,0.0,0.0 origin=303.8,-1128.0,12.6
+!trace ms=2013 serverTime=33000 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=1 events=7,0,0,0 viewangles=0.0,0.0,0.0 origin=304.2,-1123.9,12.7
+!trace ms=3052 serverTime=34050 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=1 events=7,0,0,0 viewangles=0.0,0.0,0.0 origin=304.6,-1120.2,12.9
+!trace ms=3956 serverTime=34950 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=2 events=7,7,0,0 viewangles=0.7,-163.1,0.0 origin=264.2,-1130.9,15.2
+!trace ms=4312 serverTime=35300 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=3 events=7,7,7,0 viewangles=0.8,-163.1,0.0 origin=185.6,-1155.8,23.6
+!trace ms=4665 serverTime=35650 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=4 events=7,7,7,7 viewangles=0.8,-163.1,0.0 origin=109.6,-1179.0,25.9
+!trace ms=4754 serverTime=35750 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=5 events=139,7,7,7 viewangles=0.8,-163.1,0.0 origin=92.6,-1184.1,26.0
+!trace ms=5119 serverTime=36100 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=6 events=139,7,7,7 viewangles=0.8,78.8,0.0 origin=69.5,-1160.6,29.5
+!trace ms=5309 serverTime=36300 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=7 events=139,7,139,7 viewangles=0.9,78.8,0.0 origin=78.9,-1112.7,34.4
+!trace ms=5451 serverTime=36450 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=8 events=139,7,139,7 viewangles=1.0,78.8,0.0 origin=84.6,-1084.2,37.1
+!cmd ms=5765 seq=11 text=d 13 36700
+!cmd ms=5765 seq=12 text=d 12 0 16500 1 0.7 0.85 1 0
+!cmd ms=5765 seq=13 text=d 3 n\ambient_mp_carentan\t\36700
+!cmd ms=5765 seq=14 text=n
+!cmd ms=5765 seq=15 text=d 1 \bg_fallDamageMaxHeight\480\bg_fallDamageMinHeight\256\g_synchronousClients\0\pmove_fixed\0\pmove_msec\8\sv_cheats\0\sv_pure\0\sv_referencedPakNames\main/pak5 main/pak4 main/pak3 main/pak2 main/pak1 main/pak0 main/pak6 main/pak5 main/pak4 main/pak3 main/pak2 main/pak1 main/pak0 main/bonneville main/localized_english_pak5 main/localized_english_pak3 main/localized_english_pak2 main/localized_english_pak1 main/localized_english_pak0 main/localized_english_pak1 main/localized_english_pak0\sv_referencedPaks\77111478 -1825805837 918160098 616334813 1265884747 1048127331 1252304247 77111478 -1825805837 918160098 616334813 1265884747 -363972028 2000562497 643782635 -788625739 968878365 -961133319 -1187400494 -961133319 -1187400494 \sv_serverid\17\timescale\1
+!cmd ms=5765 seq=16 text=v scr_showweapontab "1"
+!cmd ms=5765 seq=17 text=v g_scriptMainMenu "weapon_american"
+!cmd ms=5765 seq=18 text=v cg_objectiveText "SD_OBJ_ATTACKERS"
+!trace ms=5765 serverTime=37050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=480.1,-1128.0,5.6
+!trace ms=6053 serverTime=37350 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=1 events=7,0,0,0 viewangles=0.4,78.8,0.0 origin=489.7,-1079.5,5.7
+!trace ms=6413 serverTime=37700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=2 events=7,7,0,0 viewangles=0.4,78.8,0.0 origin=504.8,-1002.6,5.3
+!trace ms=6749 serverTime=38050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=3 events=7,7,7,0 viewangles=0.4,78.8,0.0 origin=520.1,-928.9,9.1
+!trace ms=7013 serverTime=38300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=4 events=7,7,7,139 viewangles=0.5,78.8,0.0 origin=533.6,-870.8,18.1
+!trace ms=7112 serverTime=38400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=5 events=7,7,7,139 viewangles=0.6,78.8,0.0 origin=538.5,-849.8,22.4
+!cmd ms=7462 seq=19 text=d 528 german_move_in
+!cmd ms=7462 seq=20 text=d 529 american_move_in
+!cmd ms=7462 seq=21 text=s 5
+!trace ms=7462 serverTime=38750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=6 events=7,7,7,139 viewangles=0.8,137.8,0.0 origin=538.6,-773.7,35.5
+!trace ms=7511 serverTime=38800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=7 events=7,7,139,139 viewangles=0.9,137.8,0.0 origin=534.1,-766.3,37.2
+!trace ms=7822 serverTime=39100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=8 events=7,7,139,7 viewangles=1.0,137.8,0.0 origin=490.9,-715.2,40.7
+!trace ms=8012 serverTime=39300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=9 events=139,7,139,7 viewangles=1.0,137.8,0.0 origin=457.5,-684.2,43.1
+!trace ms=8123 serverTime=39400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=10 events=139,7,139,7 viewangles=1.0,137.8,0.0 origin=440.3,-669.8,46.2
+!trace ms=8455 serverTime=39750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=11 events=139,7,7,7 viewangles=1.2,137.8,0.0 origin=382.7,-621.3,56.6
+!trace ms=8955 serverTime=40250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=12 events=139,7,7,7 viewangles=1.2,-29.7,0.0 origin=429.3,-637.6,55.0
+!trace ms=9271 serverTime=40550 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=14 events=139,7,7,7 viewangles=1.1,-29.7,0.0 origin=486.3,-668.6,52.4
+!trace ms=9614 serverTime=40900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=15 events=139,7,7,7 viewangles=1.1,-29.7,0.0 origin=554.0,-706.0,49.1
+!trace ms=9814 serverTime=41100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=16 events=139,7,7,139 viewangles=1.0,38.2,0.0 origin=593.3,-712.8,49.2
+!trace ms=10012 serverTime=41300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=17 events=11,7,7,139 viewangles=1.1,38.2,0.0 origin=629.1,-686.6,50.3
+!trace ms=10305 serverTime=41600 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=18 events=11,139,7,139 viewangles=1.1,38.2,0.0 origin=680.5,-646.2,46.3
+!trace ms=10357 serverTime=41650 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=19 events=11,139,11,139 viewangles=1.0,38.2,0.0 origin=688.4,-638.9,42.6
+!trace ms=10703 serverTime=42000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=20 events=11,139,11,11 viewangles=0.8,38.2,0.0 origin=745.2,-588.4,23.9
+!trace ms=11064 serverTime=42350 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=21 events=11,139,11,11 viewangles=0.5,38.2,0.0 origin=803.7,-538.6,9.1
+!trace ms=11410 serverTime=42700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=22 events=11,11,11,11 viewangles=0.4,38.2,0.0 origin=863.6,-488.5,0.3
+!trace ms=11462 serverTime=42750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=23 events=11,11,139,11 viewangles=0.4,38.2,0.0 origin=872.4,-481.2,-0.4
+!trace ms=11801 serverTime=43100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=24 events=11,11,139,11 viewangles=0.3,38.2,0.0 origin=933.2,-431.6,-6.3
+!trace ms=12014 serverTime=43300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=25 events=139,11,139,11 viewangles=0.2,38.2,0.0 origin=967.9,-403.7,-8.6
+!trace ms=12104 serverTime=43400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=26 events=139,11,139,11 viewangles=0.2,38.2,0.0 origin=985.6,-389.6,-8.7
+!trace ms=12450 serverTime=43750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=27 events=139,11,7,11 viewangles=0.2,94.7,0.0 origin=1008.5,-319.7,-8.4
+!trace ms=12501 serverTime=43800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=28 events=139,11,7,139 viewangles=0.2,94.7,0.0 origin=1008.0,-304.7,-8.4
+!trace ms=12805 serverTime=44100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=29 events=7,11,7,139 viewangles=0.2,94.7,0.0 origin=1004.0,-237.8,-8.6
+!trace ms=13163 serverTime=44450 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=30 events=7,7,7,139 viewangles=0.3,94.7,0.0 origin=999.2,-159.4,-8.8
+!trace ms=13553 serverTime=44850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=31 events=7,7,7,139 viewangles=0.2,-149.8,0.0 origin=962.6,-111.5,-8.4
+!trace ms=13914 serverTime=45200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=32 events=7,7,7,7 viewangles=0.3,-149.8,0.0 origin=890.5,-144.2,-7.9
+!trace ms=14269 serverTime=45550 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=33 events=11,7,7,7 viewangles=0.3,-149.8,0.0 origin=825.7,-180.6,-2.9
+!trace ms=14663 serverTime=45950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=34 events=11,11,7,7 viewangles=0.5,41.3,0.0 origin=764.2,-213.1,4.8
+!trace ms=15060 serverTime=46350 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=35 events=11,11,11,7 viewangles=0.4,41.3,0.0 origin=824.1,-157.9,-4.1
+!trace ms=15414 serverTime=46700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=36 events=11,11,11,7 viewangles=0.3,41.3,0.0 origin=880.6,-107.4,-7.9
+!trace ms=15765 serverTime=47050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=37 events=7,11,11,7 viewangles=0.3,41.3,0.0 origin=941.2,-53.7,-8.9
+!trace ms=16100 serverTime=47400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=38 events=7,7,11,7 viewangles=0.2,14.2,0.0 origin=1013.2,-20.5,-12.3
+!trace ms=16459 serverTime=47750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=39 events=7,7,7,7 viewangles=0.1,14.2,0.0 origin=1088.7,-0.1,-15.9
+!trace ms=16811 serverTime=48100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=40 events=7,7,7,18 viewangles=0.1,14.2,0.0 origin=1168.2,7.7,-15.9
+!cmd ms=17063 seq=22 text=d 6 1
+!cmd ms=17063 seq=23 text=d 530 MP_announcer_allies_win
+!cmd ms=17063 seq=24 text=s 6
+!trace ms=17153 serverTime=48450 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=41 events=18,7,7,18 viewangles=0.1,14.2,0.0 origin=1244.3,24.8,-15.9
+!trace ms=17459 serverTime=48750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=42 events=18,18,7,18 viewangles=0.1,14.2,0.0 origin=1309.7,40.3,-17.5
+!trace ms=17855 serverTime=49150 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=43 events=18,18,18,18 viewangles=0.1,14.2,0.0 origin=1393.8,60.8,-19.5
+!trace ms=18186 serverTime=49450 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=44 events=18,18,18,18 viewangles=0.0,14.2,0.0 origin=1461.8,77.7,-23.2
+!trace ms=18723 serverTime=50000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=45 events=18,18,18,18 viewangles=-0.0,104.0,0.0 origin=1468.2,175.5,-23.9
+!trace ms=18952 serverTime=50250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=46 events=18,18,18,18 viewangles=-0.0,104.0,0.0 origin=1458.4,219.2,-23.9
+!trace ms=19341 serverTime=50600 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=47 events=18,18,18,18 viewangles=-0.0,104.0,0.0 origin=1439.9,295.5,-23.9
+!trace ms=19591 serverTime=50850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=48 events=18,18,18,18 viewangles=-0.0,104.0,0.0 origin=1421.2,371.7,-23.9
+!trace ms=19912 serverTime=51200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=49 events=18,18,18,18 viewangles=-0.0,104.0,0.0 origin=1402.5,447.9,-23.9
+!trace ms=20358 serverTime=51650 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=50 events=18,18,18,18 viewangles=-0.0,104.0,0.0 origin=1378.5,545.9,-23.9
+!trace ms=20420 serverTime=51700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=51 events=18,18,143,18 viewangles=-0.0,104.0,0.0 origin=1374.3,563.1,-15.9
+!trace ms=20522 serverTime=51800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=52 events=18,18,143,6 viewangles=0.2,104.0,0.0 origin=1370.8,577.5,-15.9
+!trace ms=20869 serverTime=52150 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=53 events=6,18,143,6 viewangles=0.1,79.7,0.0 origin=1359.1,661.6,-19.2
+!trace ms=21171 serverTime=52450 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=54 events=6,6,143,6 viewangles=0.0,79.7,0.0 origin=1367.4,727.7,-23.3
+!trace ms=21431 serverTime=52700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=55 events=6,6,143,6 viewangles=-0.0,79.7,0.0 origin=1377.1,783.8,-31.9
+!trace ms=21539 serverTime=52800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=56 events=6,6,143,18 viewangles=-0.2,79.7,0.0 origin=1379.4,797.3,-31.9
+!trace ms=21924 serverTime=53200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=57 events=18,6,143,18 viewangles=-0.2,79.7,0.0 origin=1395.1,885.6,-31.9
+!cmd ms=22245 seq=25 text=d 13 53350
+!cmd ms=22245 seq=26 text=d 12 0 16500 1 0.7 0.85 1 0
+!cmd ms=22245 seq=27 text=d 3 n\ambient_mp_carentan\t\53350
+!cmd ms=22245 seq=28 text=n
+!cmd ms=22245 seq=29 text=d 1 \bg_fallDamageMaxHeight\480\bg_fallDamageMinHeight\256\g_synchronousClients\0\pmove_fixed\0\pmove_msec\8\sv_cheats\0\sv_pure\0\sv_referencedPakNames\main/pak5 main/pak4 main/pak3 main/pak2 main/pak1 main/pak0 main/pak6 main/pak5 main/pak4 main/pak3 main/pak2 main/pak1 main/pak0 main/bonneville main/localized_english_pak5 main/localized_english_pak3 main/localized_english_pak2 main/localized_english_pak1 main/localized_english_pak0 main/localized_english_pak1 main/localized_english_pak0\sv_referencedPaks\77111478 -1825805837 918160098 616334813 1265884747 1048127331 1252304247 77111478 -1825805837 918160098 616334813 1265884747 -363972028 2000562497 643782635 -788625739 968878365 -961133319 -1187400494 -961133319 -1187400494 \sv_serverid\18\timescale\1
+!cmd ms=22245 seq=30 text=v scr_showweapontab "1"
+!cmd ms=22245 seq=31 text=v g_scriptMainMenu "weapon_american"
+!cmd ms=22245 seq=32 text=v cg_objectiveText "SD_OBJ_ATTACKERS"
+!trace ms=22245 serverTime=53800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=608.1,-1128.0,-22.0
+!trace ms=22354 serverTime=53950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=1 events=7,0,0,0 viewangles=0.1,132.3,0.0 origin=579.5,-1094.6,-13.2
+!trace ms=22701 serverTime=54300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=2 events=7,7,0,0 viewangles=0.3,132.3,0.0 origin=529.0,-1036.1,0.3
+!trace ms=23070 serverTime=54650 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=3 events=7,7,7,0 viewangles=0.4,132.3,0.0 origin=477.2,-977.3,8.8
+!trace ms=23415 serverTime=55000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=4 events=7,7,7,7 viewangles=0.5,40.5,0.0 origin=467.6,-912.5,14.3
+!trace ms=23754 serverTime=55350 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=6 events=7,139,7,7 viewangles=0.6,40.5,0.0 origin=521.7,-856.2,23.0
+!cmd ms=23808 seq=33 text=s 5
+!trace ms=24111 serverTime=55700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=7 events=7,139,7,7 viewangles=0.7,40.5,0.0 origin=580.3,-804.8,25.5
+!trace ms=24320 serverTime=55900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=8 events=7,139,7,139 viewangles=0.7,40.5,0.0 origin=614.2,-776.5,31.5
+!trace ms=24464 serverTime=56050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=9 events=7,139,7,139 viewangles=0.8,40.5,0.0 origin=638.9,-756.3,36.8
+!trace ms=24811 serverTime=56400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=10 events=7,11,7,139 viewangles=0.8,40.5,0.0 origin=698.0,-704.9,33.9
+!trace ms=25163 serverTime=56750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=11 events=7,11,11,139 viewangles=0.7,40.5,0.0 origin=756.4,-651.2,22.9
+!trace ms=25510 serverTime=57100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=12 events=7,11,11,11 viewangles=0.5,40.5,0.0 origin=812.9,-599.1,8.2
+!trace ms=25862 serverTime=57450 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=13 events=11,11,11,11 viewangles=0.4,96.1,0.0 origin=847.8,-530.3,1.2
+!trace ms=26157 serverTime=57750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=14 events=11,139,11,11 viewangles=0.4,96.1,0.0 origin=847.2,-462.8,2.5
+!trace ms=26212 serverTime=57800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=15 events=11,139,11,11 viewangles=0.4,96.1,0.0 origin=846.4,-451.6,2.9
+!trace ms=26508 serverTime=58100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=16 events=11,139,11,11 viewangles=0.4,96.1,0.0 origin=840.1,-384.6,0.8
+!trace ms=26653 serverTime=58250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=17 events=139,139,11,11 viewangles=0.4,96.1,0.0 origin=836.8,-351.2,0.1
+!trace ms=26906 serverTime=58500 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=18 events=139,11,11,11 viewangles=0.4,96.1,0.0 origin=831.1,-295.7,-1.6
+!trace ms=27207 serverTime=58800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=19 events=139,11,11,11 viewangles=0.4,96.1,0.0 origin=824.5,-228.7,-1.4
+!trace ms=27557 serverTime=59150 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=20 events=139,11,11,11 viewangles=0.3,96.1,0.0 origin=816.5,-151.0,-3.7
+!trace ms=28311 serverTime=59900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=21 events=7,11,11,11 viewangles=0.3,-18.3,0.0 origin=853.7,-129.6,-8.0
+!trace ms=28701 serverTime=60300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=22 events=7,7,11,11 viewangles=0.3,-18.3,0.0 origin=935.1,-157.2,-8.0
+!trace ms=29055 serverTime=60650 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=23 events=7,7,7,11 viewangles=0.3,-18.3,0.0 origin=1008.9,-183.5,-8.4
+!trace ms=29609 serverTime=61200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=24 events=7,7,7,7 viewangles=0.3,124.9,0.0 origin=970.0,-150.5,-7.9
+!trace ms=29959 serverTime=61550 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=25 events=7,7,7,7 viewangles=0.3,124.9,0.0 origin=923.9,-87.0,-7.9
+!trace ms=30305 serverTime=61900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=26 events=7,7,7,7 viewangles=0.3,124.9,0.0 origin=877.7,-23.5,-7.9
+!trace ms=30800 serverTime=62400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=27 events=7,7,7,7 viewangles=0.3,-17.1,0.0 origin=904.8,-18.5,-7.9
+!trace ms=31161 serverTime=62750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=28 events=7,7,7,7 viewangles=0.2,-17.1,0.0 origin=979.4,-42.7,-10.7
+!trace ms=31408 serverTime=63000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=29 events=143,7,7,7 viewangles=0.2,-17.1,0.0 origin=1031.9,-59.6,-7.9
+!trace ms=31458 serverTime=63050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=30 events=143,6,7,7 viewangles=0.3,-17.1,0.0 origin=1042.8,-63.0,-7.9
+!trace ms=31812 serverTime=63400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=31 events=143,6,6,7 viewangles=0.3,51.4,0.0 origin=1118.4,-67.6,-7.9
+!trace ms=32061 serverTime=63650 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=32 events=143,6,6,143 viewangles=0.3,51.4,0.0 origin=1162.5,-29.9,-15.9
+!trace ms=32159 serverTime=63750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=33 events=18,6,6,143 viewangles=0.1,51.4,0.0 origin=1176.1,-14.3,-15.9
+!trace ms=32516 serverTime=64100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=34 events=18,18,6,143 viewangles=0.1,51.4,0.0 origin=1225.8,46.1,-15.9
+!trace ms=32849 serverTime=64450 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=35 events=18,18,18,143 viewangles=0.1,51.4,0.0 origin=1272.3,103.7,-17.2
+!trace ms=33009 serverTime=64600 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=36 events=18,18,18,143 viewangles=0.1,25.5,0.0 origin=1298.2,128.3,-7.9
+!trace ms=33259 serverTime=64850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=37 events=18,18,18,143 viewangles=0.1,25.5,0.0 origin=1341.2,154.3,-19.5
+!trace ms=33402 serverTime=65000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=38 events=18,18,18,143 viewangles=0.1,25.5,0.0 origin=1370.8,170.3,-20.3
+!trace ms=33754 serverTime=65350 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=39 events=18,18,18,143 viewangles=-0.0,25.5,0.0 origin=1437.9,203.7,-23.9
+!trace ms=34157 serverTime=65750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=41 events=18,18,18,143 viewangles=-0.0,110.1,0.0 origin=1511.1,248.4,-15.9
+!trace ms=34404 serverTime=66000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=42 events=18,143,18,143 viewangles=0.1,110.1,0.0 origin=1504.5,295.8,-23.9
+!trace ms=34463 serverTime=66050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=43 events=18,143,18,143 viewangles=-0.0,110.1,0.0 origin=1499.5,311.9,-23.9
+!trace ms=34826 serverTime=66400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=44 events=18,143,18,18 viewangles=-0.0,110.1,0.0 origin=1473.9,385.6,-23.9
+!trace ms=35125 serverTime=66700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=45 events=18,143,18,18 viewangles=-0.0,110.1,0.0 origin=1450.9,449.5,-23.9
+!trace ms=35463 serverTime=67050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=46 events=18,18,18,18 viewangles=-0.0,110.1,0.0 origin=1424.4,522.7,-23.9
+!trace ms=35801 serverTime=67400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=47 events=18,18,18,18 viewangles=-0.0,110.1,0.0 origin=1398.1,595.6,-23.9
+!trace ms=36149 serverTime=67750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=49 events=18,18,18,143 viewangles=-0.1,110.1,0.0 origin=1371.7,668.4,-19.6
+!trace ms=36504 serverTime=68100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=50 events=18,6,18,143 viewangles=-0.0,110.1,0.0 origin=1345.0,741.3,-23.9
+!trace ms=36820 serverTime=68400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=51 events=18,6,6,143 viewangles=-0.0,110.1,0.0 origin=1320.4,808.4,-23.9
+!trace ms=36908 serverTime=68500 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=52 events=18,6,6,143 viewangles=-0.0,110.1,0.0 origin=1314.6,824.2,-31.9
+!trace ms=37162 serverTime=68750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=53 events=18,6,6,143 viewangles=-0.2,110.1,0.0 origin=1295.7,875.9,-31.9
+!trace ms=37508 serverTime=69100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=54 events=18,18,6,143 viewangles=-0.2,110.1,0.0 origin=1268.7,949.9,-31.9
+!trace ms=37815 serverTime=69400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=56 events=18,18,143,6 viewangles=-0.2,160.9,0.0 origin=1239.7,1013.0,-23.9
+!trace ms=38156 serverTime=69750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=57 events=6,18,143,6 viewangles=-0.0,160.9,0.0 origin=1169.9,1047.3,-23.9
+!trace ms=38507 serverTime=70100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=58 events=6,6,143,6 viewangles=0.0,160.9,0.0 origin=1096.2,1072.9,-20.2
+!trace ms=38859 serverTime=70450 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=59 events=6,6,6,6 viewangles=0.2,160.9,0.0 origin=1014.4,1072.9,-14.2
+!trace ms=39304 serverTime=70900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=60 events=6,6,6,6 viewangles=0.2,-9.6,0.0 origin=1041.4,1061.8,-15.9
+!trace ms=39651 serverTime=71250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=61 events=6,6,6,6 viewangles=0.1,-9.6,0.0 origin=1121.7,1047.3,-21.5
+!trace ms=40007 serverTime=71600 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=62 events=6,6,6,6 viewangles=-0.0,-9.6,0.0 origin=1199.1,1033.4,-23.9
+!trace ms=40361 serverTime=71950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=63 events=6,6,6,6 viewangles=-0.0,-9.6,0.0 origin=1276.9,1019.8,-23.9
+!trace ms=40654 serverTime=72250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=65 events=6,6,6,143 viewangles=-0.0,-9.6,0.0 origin=1339.4,1008.8,-31.9
+!trace ms=41019 serverTime=72600 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=66 events=6,18,6,143 viewangles=-0.2,-9.6,0.0 origin=1415.3,995.8,-31.9
+!trace ms=41348 serverTime=72950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=67 events=6,18,18,143 viewangles=-0.2,-9.6,0.0 origin=1487.8,983.4,-31.9
+!trace ms=41708 serverTime=73300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=68 events=6,18,18,18 viewangles=-0.2,-9.6,0.0 origin=1571.5,969.0,-31.9
+!trace ms=42068 serverTime=73650 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=69 events=18,18,18,18 viewangles=-0.2,-9.6,0.0 origin=1648.6,955.8,-31.9
+!trace ms=42156 serverTime=73750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=70 events=18,143,18,18 viewangles=-0.2,-9.6,0.0 origin=1663.4,953.3,-23.9
+!trace ms=42365 serverTime=73950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=71 events=18,143,6,18 viewangles=-0.0,-9.6,0.0 origin=1713.8,944.8,-23.9
+!trace ms=42782 serverTime=74350 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=72 events=18,143,6,6 viewangles=-0.0,120.7,0.0 origin=1762.6,965.6,-23.9
+!trace ms=43108 serverTime=74700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=73 events=6,143,6,6 viewangles=-0.0,120.7,0.0 origin=1731.5,1028.8,-23.9
+!trace ms=43413 serverTime=75000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=74 events=6,6,6,6 viewangles=-0.0,120.7,0.0 origin=1694.3,1092.8,-23.9
+!trace ms=43770 serverTime=75350 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=76 events=6,6,143,6 viewangles=-0.0,120.7,0.0 origin=1654.6,1159.9,-31.9
+!trace ms=44102 serverTime=75700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=77 events=18,6,143,6 viewangles=-0.2,120.7,0.0 origin=1618.3,1221.0,-31.9
+!trace ms=44454 serverTime=76050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=78 events=18,18,143,6 viewangles=-0.2,120.7,0.0 origin=1578.1,1288.4,-31.9
+!trace ms=44764 serverTime=76350 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=79 events=18,18,18,6 viewangles=-0.2,120.7,0.0 origin=1540.5,1351.6,-31.9
+!trace ms=45119 serverTime=76700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=80 events=18,18,18,18 viewangles=-0.2,120.7,0.0 origin=1500.6,1418.6,-31.9
+!trace ms=45457 serverTime=77050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=82 events=18,143,18,18 viewangles=-0.3,120.7,0.0 origin=1460.8,1485.4,-23.9
+!trace ms=45820 serverTime=77400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=83 events=18,143,6,18 viewangles=-0.0,120.7,0.0 origin=1421.2,1551.7,-23.9
+!trace ms=46160 serverTime=77750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=84 events=18,143,6,6 viewangles=-0.0,120.7,0.0 origin=1381.0,1612.9,-23.9
+!trace ms=46567 serverTime=78150 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=85 events=6,143,6,6 viewangles=-0.0,-123.6,0.0 origin=1317.7,1564.0,-23.9
+!trace ms=46861 serverTime=78450 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=86 events=6,6,6,6 viewangles=-0.0,-123.6,0.0 origin=1279.1,1508.5,-23.9
+!trace ms=47259 serverTime=78850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=87 events=6,6,6,6 viewangles=-0.0,-123.6,0.0 origin=1263.1,1425.1,-23.9
+!trace ms=47713 serverTime=79300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=88 events=6,6,6,6 viewangles=-0.0,65.7,0.0 origin=1283.8,1470.9,-23.9
+!trace ms=48004 serverTime=79600 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=89 events=6,6,6,6 viewangles=-0.0,65.7,0.0 origin=1311.4,1532.2,-23.9
+!trace ms=48355 serverTime=79950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=90 events=6,6,6,6 viewangles=-0.0,65.7,0.0 origin=1341.9,1599.8,-23.9
+!trace ms=49404 serverTime=81000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=90 events=6,6,6,6 viewangles=-0.0,85.0,0.0 origin=1355.4,1622.9,-23.9
+!trace ms=50406 serverTime=82000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=90 events=6,6,6,6 viewangles=-0.0,100.3,0.0 origin=1351.1,1622.9,-23.9
+!trace ms=51217 serverTime=82800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=91 events=6,6,6,6 viewangles=-0.0,-65.0,0.0 origin=1342.0,1643.1,-23.9
+!trace ms=51561 serverTime=83150 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=92 events=6,6,6,6 viewangles=-0.0,-65.0,0.0 origin=1357.9,1567.2,-23.9
+!trace ms=52330 serverTime=83900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=93 events=6,6,6,6 viewangles=-0.0,-65.0,0.0 origin=1425.7,1526.9,-23.9
+!trace ms=52620 serverTime=84200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=94 events=6,6,6,6 viewangles=-0.0,-65.0,0.0 origin=1460.5,1462.7,-23.9
+!trace ms=52707 serverTime=84300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=95 events=6,6,143,6 viewangles=-0.0,-65.0,0.0 origin=1470.0,1443.1,-31.9
+!trace ms=52972 serverTime=84550 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=96 events=6,6,143,18 viewangles=-0.2,-65.0,0.0 origin=1493.7,1392.8,-31.9
+!trace ms=53299 serverTime=84900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=97 events=18,6,143,18 viewangles=-0.2,-65.0,0.0 origin=1526.6,1323.1,-31.9
+!trace ms=53660 serverTime=85250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=98 events=18,18,143,18 viewangles=-0.2,-65.0,0.0 origin=1560.1,1252.1,-31.9
+!trace ms=54006 serverTime=85600 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=99 events=18,18,18,18 viewangles=-0.2,-65.0,0.0 origin=1593.8,1180.8,-31.9
+!trace ms=54349 serverTime=85950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=100 events=18,18,18,18 viewangles=-0.2,-65.0,0.0 origin=1627.3,1109.8,-31.9
+!trace ms=54672 serverTime=86250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=102 events=18,143,18,18 viewangles=-0.2,-65.0,0.0 origin=1658.1,1044.5,-23.9
+!trace ms=55018 serverTime=86600 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=103 events=18,143,6,18 viewangles=-0.0,-65.0,0.0 origin=1689.1,978.5,-23.9
+!trace ms=55356 serverTime=86950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=104 events=18,143,6,6 viewangles=-0.0,-65.0,0.0 origin=1722.5,907.0,-23.9
+!trace ms=55666 serverTime=87250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=105 events=6,143,6,6 viewangles=-0.0,-65.0,0.0 origin=1750.8,846.5,-23.9
+!trace ms=56121 serverTime=87700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=106 events=6,6,6,6 viewangles=-0.0,119.7,0.0 origin=1767.7,806.1,-23.9
+!trace ms=56466 serverTime=88050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=107 events=6,6,6,6 viewangles=-0.0,119.7,0.0 origin=1729.4,873.8,-23.9
+!trace ms=56819 serverTime=88400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=108 events=6,6,6,6 viewangles=-0.0,119.7,0.0 origin=1690.6,942.5,-23.9
+!trace ms=57161 serverTime=88750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=110 events=143,6,6,6 viewangles=-0.0,119.7,0.0 origin=1652.7,1009.5,-31.9
+!trace ms=57454 serverTime=89050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=111 events=143,6,18,6 viewangles=-0.2,119.7,0.0 origin=1620.1,1067.2,-31.9
+!trace ms=57815 serverTime=89400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=112 events=143,6,18,18 viewangles=-0.2,119.7,0.0 origin=1582.0,1134.8,-31.9
+!trace ms=58169 serverTime=89750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=113 events=18,6,18,18 viewangles=-0.2,119.7,0.0 origin=1541.0,1207.2,-31.9
+!trace ms=58501 serverTime=90100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=114 events=18,18,18,18 viewangles=-0.2,119.7,0.0 origin=1504.7,1271.6,-31.9
+!trace ms=58867 serverTime=90450 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=115 events=18,18,18,18 viewangles=-0.2,119.7,0.0 origin=1463.6,1344.2,-31.9
+!trace ms=58912 serverTime=90500 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=116 events=18,18,18,143 viewangles=-0.2,119.7,0.0 origin=1460.7,1349.5,-23.9
+!trace ms=59165 serverTime=90750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=117 events=6,18,18,143 viewangles=-0.0,119.7,0.0 origin=1431.7,1400.4,-23.9
+!trace ms=59511 serverTime=91100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=118 events=6,6,18,143 viewangles=-0.0,119.7,0.0 origin=1393.1,1468.2,-23.9
+!trace ms=59959 serverTime=91550 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=119 events=6,6,6,143 viewangles=-0.0,39.7,0.0 origin=1441.6,1515.7,-23.9
+!trace ms=60110 serverTime=91700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=120 events=6,6,6,143 viewangles=-0.0,39.7,0.0 origin=1466.8,1534.0,-31.9
+!trace ms=60313 serverTime=91900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=121 events=18,6,6,143 viewangles=-0.3,39.7,0.0 origin=1502.7,1562.9,-31.9
+!trace ms=60623 serverTime=92200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=122 events=18,18,6,143 viewangles=-0.3,39.7,0.0 origin=1553.7,1604.6,-31.9
+!trace ms=60967 serverTime=92550 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=123 events=18,18,18,143 viewangles=-0.3,126.4,0.0 origin=1580.0,1667.1,-31.9
+!trace ms=61320 serverTime=92900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=124 events=18,18,18,18 viewangles=-0.3,126.4,0.0 origin=1541.2,1736.0,-31.9
+!trace ms=61661 serverTime=93250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=125 events=18,18,18,18 viewangles=-0.3,126.4,0.0 origin=1495.8,1799.8,-31.9
+!trace ms=61960 serverTime=93550 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=126 events=18,18,18,18 viewangles=-0.3,126.4,0.0 origin=1456.7,1854.0,-31.9
+!trace ms=62318 serverTime=93900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=127 events=18,18,18,18 viewangles=-0.3,153.1,0.0 origin=1393.1,1902.0,-31.9
+!trace ms=62657 serverTime=94250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=128 events=18,18,18,18 viewangles=-0.3,153.1,0.0 origin=1324.0,1938.7,-31.9
+!trace ms=62702 serverTime=94300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=129 events=143,18,18,18 viewangles=-0.3,153.1,0.0 origin=1316.3,1941.9,-18.7
+!trace ms=62910 serverTime=94500 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=130 events=143,110,18,18 viewangles=-0.1,153.1,0.0 origin=1292.5,1937.6,-31.9
+!trace ms=63268 serverTime=94850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=131 events=143,110,18,18 viewangles=-0.4,153.1,0.0 origin=1229.2,1962.5,-34.1
+!trace ms=63600 serverTime=95200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=132 events=143,110,18,18 viewangles=-0.6,153.1,0.0 origin=1159.5,1996.8,-38.3
+!trace ms=63967 serverTime=95550 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=133 events=18,110,18,18 viewangles=-0.7,153.1,0.0 origin=1085.3,2033.7,-37.6
+!trace ms=64265 serverTime=95850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=134 events=18,18,18,18 viewangles=-0.5,153.1,0.0 origin=1025.6,2063.4,-33.6
+!trace ms=64608 serverTime=96200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=135 events=18,18,18,18 viewangles=-0.4,153.1,0.0 origin=955.9,2098.3,-31.9
+!trace ms=64956 serverTime=96550 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=136 events=18,18,18,18 viewangles=-0.4,153.1,0.0 origin=886.1,2133.3,-31.9
+!trace ms=65101 serverTime=96700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=137 events=143,18,18,18 viewangles=-0.5,153.1,0.0 origin=859.4,2146.6,-23.9
+!trace ms=65311 serverTime=96900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=138 events=143,6,18,18 viewangles=-0.0,153.1,0.0 origin=816.8,2168.2,-23.9
+!trace ms=65762 serverTime=97350 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=139 events=143,6,6,18 viewangles=-0.0,86.1,0.0 origin=800.7,2236.5,-23.9
+!trace ms=66104 serverTime=97700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=140 events=143,6,6,6 viewangles=-0.1,86.1,0.0 origin=805.0,2314.0,-23.9
+!trace ms=66403 serverTime=98000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=141 events=6,6,6,6 viewangles=-0.1,86.1,0.0 origin=809.0,2381.8,-23.9
+!trace ms=66760 serverTime=98350 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=142 events=6,6,6,6 viewangles=-0.1,86.1,0.0 origin=813.6,2460.4,-23.9
+!trace ms=67112 serverTime=98700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,118.8,0.0 origin=796.0,2537.9,-23.9
+!trace ms=68165 serverTime=99750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=69207 serverTime=100800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=70209 serverTime=101800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=71254 serverTime=102850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=72265 serverTime=103850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=73307 serverTime=104900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=74354 serverTime=105950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=75358 serverTime=106950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=76367 serverTime=107950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=77403 serverTime=109000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=78412 serverTime=110000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=79458 serverTime=111050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=80462 serverTime=112050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=81507 serverTime=113100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!cmd ms=81809 seq=34 text=d 5 1
+!cmd ms=81809 seq=35 text=d 531 MP_announcer_axis_win
+!cmd ms=81809 seq=36 text=s 7
+!trace ms=82557 serverTime=114150 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=83561 serverTime=115150 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=84608 serverTime=116200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=85657 serverTime=117250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!trace ms=86704 serverTime=118300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=143 events=6,6,6,6 viewangles=-0.1,121.0,0.0 origin=767.5,2596.3,-23.9
+!cmd ms=86864 seq=37 text=d 13 118400
+!cmd ms=86864 seq=38 text=d 12 0 16500 1 0.7 0.85 1 0
+!cmd ms=86864 seq=39 text=d 3 n\ambient_mp_carentan\t\118400
+!cmd ms=86864 seq=40 text=n
+!cmd ms=86864 seq=41 text=d 1 \bg_fallDamageMaxHeight\480\bg_fallDamageMinHeight\256\g_synchronousClients\0\pmove_fixed\0\pmove_msec\8\sv_cheats\0\sv_pure\0\sv_referencedPakNames\main/pak5 main/pak4 main/pak3 main/pak2 main/pak1 main/pak0 main/pak6 main/pak5 main/pak4 main/pak3 main/pak2 main/pak1 main/pak0 main/bonneville main/localized_english_pak5 main/localized_english_pak3 main/localized_english_pak2 main/localized_english_pak1 main/localized_english_pak0 main/localized_english_pak1 main/localized_english_pak0\sv_referencedPaks\77111478 -1825805837 918160098 616334813 1265884747 1048127331 1252304247 77111478 -1825805837 918160098 616334813 1265884747 -363972028 2000562497 643782635 -788625739 968878365 -961133319 -1187400494 -961133319 -1187400494 \sv_serverid\19\timescale\1
+!cmd ms=86864 seq=42 text=v scr_showweapontab "1"
+!cmd ms=86864 seq=43 text=v g_scriptMainMenu "weapon_american"
+!cmd ms=86864 seq=44 text=v cg_objectiveText "SD_OBJ_ATTACKERS"
+!trace ms=86864 serverTime=118750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=87904 serverTime=119800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!cmd ms=88559 seq=45 text=s 5
+!trace ms=88916 serverTime=120800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=89917 serverTime=121800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=90960 serverTime=122850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=92002 serverTime=123900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=93049 serverTime=124950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=94050 serverTime=125950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=95059 serverTime=126950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=96116 serverTime=128000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=97158 serverTime=129050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=98164 serverTime=130050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=99205 serverTime=131100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=100213 serverTime=132100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=101250 serverTime=133150 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=102251 serverTime=134150 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=103257 serverTime=135150 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=104305 serverTime=136200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=105311 serverTime=137200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=106355 serverTime=138250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!cmd ms=107115 seq=46 text=d 6 2
+!cmd ms=107115 seq=47 text=s 6
+!trace ms=107402 serverTime=139300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=108413 serverTime=140300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=109460 serverTime=141350 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=110500 serverTime=142400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!trace ms=111513 serverTime=143400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=-0.0,92.1,0.0 origin=640.1,-1064.0,-26.2
+!cmd ms=112152 seq=48 text=d 13 144000
+!cmd ms=112152 seq=49 text=d 12 0 16500 1 0.7 0.85 1 0
+!cmd ms=112152 seq=50 text=d 3 n\ambient_mp_carentan\t\144000
+!cmd ms=112152 seq=51 text=n
+!cmd ms=112152 seq=52 text=d 1 \bg_fallDamageMaxHeight\480\bg_fallDamageMinHeight\256\g_synchronousClients\0\pmove_fixed\0\pmove_msec\8\sv_cheats\0\sv_pure\0\sv_referencedPakNames\main/pak5 main/pak4 main/pak3 main/pak2 main/pak1 main/pak0 main/pak6 main/pak5 main/pak4 main/pak3 main/pak2 main/pak1 main/pak0 main/bonneville main/localized_english_pak5 main/localized_english_pak3 main/localized_english_pak2 main/localized_english_pak1 main/localized_english_pak0 main/localized_english_pak1 main/localized_english_pak0\sv_referencedPaks\77111478 -1825805837 918160098 616334813 1265884747 1048127331 1252304247 77111478 -1825805837 918160098 616334813 1265884747 -363972028 2000562497 643782635 -788625739 968878365 -961133319 -1187400494 -961133319 -1187400494 \sv_serverid\20\timescale\1
+!cmd ms=112152 seq=53 text=v scr_showweapontab "1"
+!cmd ms=112152 seq=54 text=v g_scriptMainMenu "weapon_american"
+!cmd ms=112152 seq=55 text=v cg_objectiveText "SD_OBJ_ATTACKERS"
+!trace ms=112565 serverTime=144750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=113608 serverTime=145800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!cmd ms=113859 seq=56 text=s 5
+!trace ms=114658 serverTime=146850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=115662 serverTime=147850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=116710 serverTime=148900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=117717 serverTime=149900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=118717 serverTime=150900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=119755 serverTime=151950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=120757 serverTime=152950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=121763 serverTime=153950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=122806 serverTime=155000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=123811 serverTime=156000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=124860 serverTime=157050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=125911 serverTime=158100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=126954 serverTime=159150 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=128004 serverTime=160200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=129011 serverTime=161200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=130011 serverTime=162200 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=131052 serverTime=163250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=132058 serverTime=164250 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=133104 serverTime=165300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=134118 serverTime=166300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=135161 serverTime=167350 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=136203 serverTime=168400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=137209 serverTime=169400 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=138252 serverTime=170450 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=139262 serverTime=171450 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=140266 serverTime=172450 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=141300 serverTime=173500 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=142352 serverTime=174550 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=143358 serverTime=175550 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=144406 serverTime=176600 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=145453 serverTime=177650 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=146457 serverTime=178650 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=147462 serverTime=179650 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=148503 serverTime=180700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=149506 serverTime=181700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=150516 serverTime=182700 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=151560 serverTime=183750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=152563 serverTime=184750 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=153614 serverTime=185800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=154664 serverTime=186850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=155699 serverTime=187900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=156705 serverTime=188900 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=157755 serverTime=189950 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=158806 serverTime=191000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7
+!trace ms=159810 serverTime=192000 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.4,90.6,0.0 origin=448.1,-1192.0,6.7

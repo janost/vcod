@@ -11,7 +11,7 @@ Re-capture with:
 COD_DIR=... tools/capture_probes.sh > crates/gsc/tests/fixtures/semantics/retail-captures.txt
 ```
 
-Five things about the retail side shape these files, all learned the hard
+Six things about the retail side shape these files, all learned the hard
 way:
 
 - **`logPrint` is the only output channel.** A dedicated server with no
@@ -60,6 +60,17 @@ way:
   the homepath cleared first, and an unexpectedly empty section stays
   suspect until the raw console (not just `run_probe.sh`'s filtered output)
   has been checked for "is not a valid gametype".
+
+- **`capture_probes.sh` passes no engine arguments, so a probe that needs
+  one is captured by hand.** `run_probe.sh` forwards anything after the map
+  to the engine, but the batch script calls it with the map alone. The three
+  `probe_persist_*` probes end the map they run on and need
+  `+set sv_mapRotation "gametype <probe> map mp_pavlov map mp_pavlov"` for
+  the engine to have something to load next, so their sections in
+  `retail-captures.txt` were taken one at a time with
+  `PROBE_SECS=40 tools/run_probe.sh <probe> mp_pavlov +set sv_mapRotation ...`
+  and pasted in at their sorted position. A regeneration of the whole file
+  through `capture_probes.sh` drops them; put them back the same way.
 
 Probes emit `PROBE at <name>` before an expression that might be fatal, so a
 run that dies names what killed it.
@@ -131,6 +142,16 @@ Five more probes measure what the configstring capture in
   the two policies apart. It runs in `crates/server` for `probe_ents`'
   reason: the entity numbers it prints and the counts it compares only mean
   anything against a real `mp_pavlov` load.
+
+The three `probe_persist_*` probes measure what a map end leaves behind:
+`game[]`, `level` and a spawned entity held in `game[]`, across
+`map_restart(true)`, `exitLevel(false)` and `exitLevel(true)`. Each runs its
+`main()` twice -- the engine runs the gametype's `main()` again on the new
+map -- and a cvar, not `game[]`, is what tells the two passes apart, since
+`game[]` is the thing under test and a guard that did not survive would put
+the server in a reload loop. All three run in `crates/server` for a fourth
+reason on top of `probe_ents`': ending a level takes an engine, and
+`Server` is where the console, the rotation and `map_restart` live.
 
 `probe_self` asks whether a call written without a receiver keeps the
 caller's `self`. It does, through a plain call, a `[[f]]()` call and a
