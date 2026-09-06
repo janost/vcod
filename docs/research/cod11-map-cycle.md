@@ -554,7 +554,8 @@ Three divergences on the wire:
   `ambient_play` pins configstring 3's `t` field to `0`, and configstring 13,
   `level.startTime`, is a static `"0"` in
   `crates/server/src/configstrings.rs`. Configstring 12 it does compute, and
-  byte-identically (`set_cull_fog` in the same file), but a restart
+  byte-identically (`set_cull_fog`, in `builtins/env.rs` beside
+  `ambient_play`), but a restart
   rebroadcasts only 1 and 3, so a client that survives one keeps the old
   level's string in every other slot. Benign only because none of vcod's own
   values move across a restart; driving 3 and 13 off `level_time_ms` is what
@@ -858,3 +859,194 @@ Nothing in vcod implements exit rules, by design: the gametype scripts the
 gsc VM already runs are what call `exitLevel()` and `map_restart()`, and
 `crates/server/src/game/builtins/cvar.rs` is where those two land. vcod does
 not model `nextmap` at all, since retail never reads it either.
+
+---
+
+## 8. What vcod's own server does, measured the same way
+
+`--save-mapchange` and `--save-roundrestart`, the two probe modes that took
+the retail captures, point at any server, so both were run against
+`cargo run -p vcod-server`. Every claim in this section is
+evidence about vcod, not about retail; the retail column is the three
+committed fixtures under `crates/server/tests/fixtures/netchan/`. Neither run
+is committed: both modes write into the retail fixtures' own names, so each
+run's files were moved out of the tree afterwards and the directory checked
+out again.
+
+Two runs, 2026-09-06, both on `mp_carentan`:
+
+- `dm`, 190 s, one probe. `--set g_gametype=dm --set scr_dm_timelimit=1 --set
+  'sv_mapRotation=gametype dm map mp_carentan map mp_brecourt'`, against
+  `--net-probe --probe-team allies --save-mapchange`. It spans two map ends:
+  the first rotation token is the map already serving, the second is
+  `mp_brecourt`.
+- `sd`, 200 s and 160 s, two probes on opposite teams. `--set g_gametype=sd
+  --set scr_sd_roundlength=1 --set scr_friendlyfire=1`, against
+  `--probe-team axis --probe-target --save-roundrestart` and `--probe-team
+  allies --save-roundrestart`. It spans three round restarts. Neither probe
+  reached a team on this run, for the reason 8.3 records, so what it measured
+  is the restart the round clock drives and not the one an elimination does.
+
+### 8.1 What matches
+
+VERIFIED, the `dm` run against `mp_carentan-dm-mapchange.txt`: two gamestates
+and one out-of-band line, in retail's order and with retail's numbers.
+`serverId` 16 on the first, 33 on the second; `mapname` `mp_carentan` then
+`mp_brecourt`; 246 configstrings then 217, both counts equal to retail's. The
+rotation's first token names the map already serving and took the restart
+path, moving the id to 17 in the low nibble, and only the second token spawned
+a server and moved it to 33 in the high nibble, which is the arithmetic 3 step
+16 and 4 step 5 describe and what 4.2's reading of `map <samemap>` predicts.
+
+VERIFIED, the same pair: the intermission burst is `u`, then
+`v g_scriptMainMenu "main"`, then `v cg_objectiveText`, all three in one
+millisecond, followed by the first `pm_type` 5 frame in the same millisecond.
+That frame reads `pm_type=5 eFlags=24 health=0 weapon=0`, an empty `ammoclip`,
+`eventSequence=0` with an empty ring, and `origin` 384.0,-624.0,184.0, which
+is field for field what retail's first intermission frame carries, the origin
+included. Both of the run's map ends held it for ten seconds and change,
+`dm.gsc`'s own `wait 10` between `endMap` and `exitLevel`.
+
+VERIFIED, the `dm` run: the restart's reliable burst is `d 3`, `n`, `d 1`, in
+that order and all in one millisecond, and the `d 1` systeminfo carries
+`sv_serverid\17`, retail's own value at that point. It is followed by the
+reopened team menu (`v g_scriptMainMenu "team_americangerman"`,
+`v scr_showweapontab "0"`, `t 0`, `v cg_objectiveText`), then one `pm_type` 4
+frame at the intermission origin, then the weapon menu
+(`v scr_showweapontab "1"`, `v g_scriptMainMenu "weapon_american"`, `t 1`) and
+the first live frame. Retail's burst is the same commands in the same order
+with the two extra `d` lines 8.2 records.
+
+VERIFIED, both boundaries of the `dm` run: the first live frame after each
+reads `pm_type=0 eFlags=16 health=100 weapon=12` and
+`ammoclip=3:7,6:3,10:15`, which is retail's frame and retail's spawn loadout,
+and the frame before it is a single `pm_type=4 eFlags=24 health=0` at the
+level's own spectator point, `384.0,-624.0,184.0` on `mp_carentan` and
+`-2779.0,1585.0,576.0` on `mp_brecourt`, both of them the origins retail's
+capture reads at the same two moments.
+
+VERIFIED, the `dm` run: one `loadingnewmap\nmp_brecourt\ndm` out-of-band line
+and nothing else outside the reliable stream, and no gamestate on the wire
+until after it. INFERRED, from that against `spawn_server`, which holds no
+gamestate send: the second gamestate went out in answer to the probe's next
+message rather than being pushed, so vcod's map change is pull-shaped the way
+3.1 reads retail's.
+
+VERIFIED, both runs: every `b` scoreboard line in the two capture halves that
+send `score` is an answer to one, and the halves that send none carry none.
+Nothing pushed a scoreboard at the intermission, which is the drain 6.3
+reads.
+
+VERIFIED, the `sd` run against `mp_carentan-sd-roundrestart-*.txt`: three
+round restarts, `serverId` 16 to 19 in the low nibble with no gamestate at any
+of them, each one's reliable burst `d 3`, `n`, `d 1` in one millisecond
+followed by the client cvars the gametype re-sends, and each burst about five
+seconds after the announcer command that ended the round. The gamestate
+carries 273 configstrings, retail's count on the same map and gametype.
+
+VERIFIED, the `sd` run: the reopened menu after a restart carries no `t`,
+where the `dm` run's does. INFERRED, from the two against 1's `savePersist`
+gate: `sd.gsc` passes 1 and its `pers["team"]` survives, so its
+`Callback_PlayerConnect` skips the `openMenu` that a `dm` client, whose
+`pers` was freed, takes.
+
+### 8.2 What differs
+
+The first is recorded in 4.5 already and is repeated here only as the
+capture's confirmation. The rest are open defects in vcod and none of them was
+fixed in this pass, because a run that finds one is a measurement and fixing
+it would have changed what the next run measured.
+
+VERIFIED, the `dm` run: the restart burst carries no `d 13` and no `d 12`
+where retail's carries both, and its `d 3` reads `t\0` where retail's reads
+the incoming level's start time. 4.5 records this as CS 3's `t` and CS 13's
+start time not being driven off the level clock, and the capture is what it
+was predicted from.
+
+VERIFIED, the `dm` run: no `f` server command at all, against five in retail's
+capture (`MPSCRIPT_CONNECTED` at each of the three level starts and
+`MPSCRIPT_TIME_LIMIT_REACHED` at each of the two map ends). INFERRED, from
+`GameHost::builtin` routing `iprintln` to the same handler as `println`: the
+builtin writes a log line and never reaches the wire, so no client is told
+that anyone connected or that the clock ran out. Retail is right; open.
+
+VERIFIED, the `dm` run: the intermission's `v cg_objectiveText` value is
+`MPSCRIPT_WINS` and the localized separator, where retail's is that plus the
+winner's name and colour code. INFERRED, from `set_client_cvar` reading
+`args[0]` and `args[1]` and no further: the substitution arguments a localized
+value takes are dropped, so the map-end banner names nobody. Retail is right;
+open.
+
+VERIFIED, the `dm` run: the life that begins after the restart carries
+`eFlags` 24, the same word the intermission before it carried, where retail's
+carries 16 against the intermission's 24. INFERRED, from `ClientSim::respawn`
+flipping the teleport bit only for a player spawn while the intermission and
+spectator wire word is a pinned 24: an intermission spawn consumes no flip on
+vcod, so the word does not change across the respawn that ends the
+intermission. The Gotcha in `AGENTS.md` says what a retail client does with an
+unchanged word there, and this is exactly the shape it warns about. Retail is
+right; open.
+
+VERIFIED, the `dm` run: the intermission frames read `viewangles` 0 on all
+three axes where retail's read a yaw of 90, `mp_carentan`'s own
+`mp_deathmatch_intermission` heading, and the two agree on the origin.
+INFERRED, from `ClientSim::to_wire` leaving `viewangles` unwritten and
+`spawn_delta_angles` putting the spawn yaw in `delta_angles` instead, which is
+`docs/protocol-1.1.md`, "Spectator view angles": the heading is on the wire in
+the other field and a client that adds `delta_angles` back arrives at the same
+90. Whether a retail client's intermission camera actually faces the same way
+is not settled by a headless capture and is on the hand-check list.
+
+VERIFIED, the `dm` run: the `loadingnewmap` line and the gamestate reached the
+probe in the same millisecond, where retail left 1493 ms between them.
+INFERRED, from `spawn_server` queueing the line into the outbox that
+`main.rs`'s loop flushes after the tick, with the map load inside that same
+tick: the line leaves vcod after the load rather than before it, so a client
+gets no advance warning and spends none of the load showing a loading screen.
+Cosmetic on a map that loads in a second; open.
+
+VERIFIED, the `sd` run: the announcer command `s 4` went out with no `d 528`
+naming the alias before it, where retail sends the `d 528` and then the `s 4`.
+VERIFIED, from a debug probe against the same server: configstring 528 is
+empty in vcod's gamestate. INFERRED, from `send_configstring_update` having
+callers on the restart path only: a configstring the script allocates after
+the level has loaded never reaches a client that already has its gamestate, so
+the index the `s` command carries points at an empty slot, and a team score
+write would not travel either. `load_scripts`'s doc comment says a later
+allocation does reach such a client, which the capture contradicts. Retail is
+right; open.
+
+VERIFIED, from a debug probe against a server started with
+`--set g_gametype=sd`: configstring 0 reads `g_gametype\dm` while the `sd`
+scripts are the ones running, which is why the `sd` run's fixtures came out
+named for `dm`. INFERRED, from `Server::new` stamping the table out of the
+config before `main.rs` replays the `--set` list: an override of that one cvar
+reaches the scripts and the gametype path but not the serverinfo a browser and
+a client read. Not a map-cycle defect, found by the map-cycle run; open.
+
+### 8.3 What the runs could not reach
+
+VERIFIED, the `sd` run: both probes answered the team menu and neither ever
+left it, both reading `team` 3 and `pm_type` 4 for the whole run, where the
+same probe against retail had its weapon menu 50 ms after its team menu and
+spawned. INFERRED, from `sd.gsc`'s `Callback_PlayerConnect`, whose `openMenu`
+comes before the `spawnSpectator` that calls `updateTeamStatus`, and from that
+function opening with `wait 0`: the `t 0` is on the wire while the connect
+thread is still suspended, and an answer that arrives inside that frame
+notifies an event no thread is parked on and is lost. The gate's harness
+models the same window with a one-frame answer delay. Open, and it is what
+kept this run from measuring an elimination-driven restart, the team scores,
+the win announcements and the weapons a client keeps across a restart.
+
+The `dm` rotation was two maps and never wrapped, so the wrap back to the
+first entry is measured by the gate and not by a capture.
+
+### 8.4 The gates
+
+This section is a measurement rather than a specification, so it has no "as
+implemented" of its own. What holds the two shapes to retail on every test run
+is `crates/server/tests/mapchange_ab.rs` and
+`crates/server/tests/roundrestart_ab.rs`, which replay the committed captures;
+the `savePersist` gate is the three `probe_persist_*` cases in
+`crates/server/tests/semantics_ents.rs`, and the rotation grammar and the
+serverId nibbles are unit tests in `crates/server/src/console.rs`.

@@ -588,7 +588,7 @@ The array blocks are themselves gated against the base frame, so they are full o
 
 #### The five array blocks
 
-Two functions carry the whole layout, and every address in this subsection is in the stripped `cod_lnxded` 1.1d ELF unless it names `game.mp.i386.so`, which is the 1.1d MP game module with its full dynamic symbol table and module-relative addresses (image base 0), the same module `docs/research/cod11-gsc-object-model.md` reads. The reader is the tail of `MSG_ReadDeltaPlayerstate` (`0x807e2f0`), `0x807e7b3..0x807eeb6`. The writer is the tail of `MSG_WriteDeltaPlayerstate` (`0x807d0f8`), `0x807d893..0x807e2ef`. VERIFIED: the two agree element for element, which is what lets a captured frame round-trip.
+Two functions carry the whole layout, and every address in this subsection is in the stripped `cod_lnxded` 1.1d ELF unless it names `game.mp.i386.so`, which is the 1.1d MP game module with its full dynamic symbol table and module-relative addresses (image base 0), the same module `docs/research/cod11-gsc-object-model.md` reads. The reader is the tail of `MSG_ReadDeltaPlayerstate` (`0x807e2f0`), `0x807e7b3..0x807eeb6`. The writer is the tail of `MSG_WriteDeltaPlayerstate` (`0x807d0f8`), `0x807d893..0x807e2ef`. VERIFIED: the two agree element for element. INFERRED, from that agreement: a captured frame round-trips.
 
 `playerState_t` is `0x20D0` bytes for delta purposes: the writer `bzero`s exactly that many for a null base (`0x807d116`). VERIFIED. Offsets below are into that struct, and member names are CoDExtended's `playerState_t` (`shared.h`), whose `weapons[0]` at 780, `weaponslots[0]` at 788, `viewangles[0]` at 192, `weapon` at 176 and `weaponstate` at 180 are the same offsets the netfield table pins. VERIFIED.
 

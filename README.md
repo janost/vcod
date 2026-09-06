@@ -47,8 +47,11 @@ combat effects.
   leaves a corpse in the body queue and drops the dead player's weapon, and
   the victim respawns on the use key. So do melee swings and grenades, the
   latter as real missile entities that fly, bounce, rest and explode with
-  retail's radius falloff. Not there yet: item pickup, intermission, map
-  change, the killcam and movers. `--test-entities` adds entities that move on
+  retail's radius falloff. A level ends the way retail's does, in script: the
+  gametype's own time or score limit runs the intermission, and the server's
+  console then restarts the map or loads the next entry of `sv_mapRotation`
+  and hands the new gamestate out on the live connection. Not there yet: item
+  pickup, the killcam and movers. `--test-entities` adds entities that move on
   the wire to exercise the packet-entity path.
 
 The whole thing runs on wgpu and winit, so in principle it is cross-platform.
@@ -277,9 +280,11 @@ These work in every mode:
 - Audio fidelity is matched to the retail engine on paper (falloff, panning,
   channel replacement, ducking) but not yet confirmed by ear against the real
   game.
-- The server runs the stock scripts, spawns players and moves them, but sends
-  a client no entities, so nobody sees another player, a mounted MG42 or a
-  door. There is no shooting, no damage and no score.
+- The server does not send a client the `f` centre-print messages the stock
+  scripts ask for (connect and disconnect notices, "time limit reached"), and
+  a configstring a script allocates after the map has loaded does not reach a
+  client that is already connected, so a round-end announcer sound names a
+  slot the client has nothing in.
 - Footsteps are silent. They are not playerstate events, so they travel by
   the entity path that does not exist yet.
 - A prone body's pitch on sloped ground (`proneDirectionPitch`,

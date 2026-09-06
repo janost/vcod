@@ -1364,6 +1364,13 @@ The other two arms clear that bit. The intermission arm does it at 0x40f11
 `SpectatorClientEndFrame` does the same pair at 0x407b7/0x407ad before it does
 anything else. VERIFIED, both stores.
 
+The intermission arm writes six more fields than those two, and `sessionstate`
+3 is reached only by a script assignment of `"intermission"`, the value
+`Scr_SetClientField` maps onto that word. Both are read out in
+`docs/research/cod11-map-cycle.md` section 6, which also has what arms the
+scoreboard drain the arm's `pm_type` selects clients for; the pointer is here
+because this is the table that gives `sessionstate` its four legal strings.
+
 Bit 18 is therefore the third member of the view-source group whose other two
 `cod11-events-and-fx.md` already records: 0x10000 following a client (set
 only on the follow-success path) and 0x20000 a forced follow, script

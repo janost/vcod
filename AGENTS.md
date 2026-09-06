@@ -307,7 +307,7 @@ engineering setup works.
   delta-compressed against the client's acked frame, with pmove-driven
   spectator flight, `--test-entities` for scripted packet entities and
   `--set NAME=VALUE` (retail's `+set`, e.g. `--set scr_friendlyfire=1` for
-  a teammate kill) (no restarts yet). A snapshot's entity list is the map's own: placed weapons,
+  a teammate kill). A snapshot's entity list is the map's own: placed weapons,
   script models and mounted MGs, culled per client against the BSP's PVS the
   way retail culls, so what a client is sent depends on where it stands. Other
   clients are in it too, each animated by the animscript machine
@@ -331,13 +331,22 @@ engineering setup works.
   and props, comes to rest, and explodes on its own ring at the end of its
   fuse, with the blast walking live clients through retail's linear falloff
   and `CanDamage`'s five-trace fraction. A player killed mid-cook drops the
-  live one. Not modelled: item pickup, intermission, map change and the
+  live one. A level ends the way retail's does, in script: `exitLevel` and
+  `map_restart` queue a console line, and the console
+  (`crates/server/src/console.rs`) runs `map`, `map_restart` and `map_rotate`
+  off `sv_mapRotation`, so a `dm` time limit reaches the intermission, the
+  intermission holds every client at `pm_type` 5 for the script's own wait,
+  and the next map's gamestate goes out on the live netchan
+  (`docs/research/cod11-map-cycle.md`). Not modelled: item pickup and the
   killcam. What a client still gets nothing of is movers, which no code
   spawns. A probe run against it reproduces the retail death capture
   field for field except for two: the `EV_RAISE_WEAPON` the death frame does
   not raise, and the `legsAnim` the respawn frame carries a frame late
-  (`docs/research/cod11-combat.md` section 9).
-- The tick, in order: expired clients, then each client's queued usercmds
+  (`docs/research/cod11-combat.md` section 9). What the map-cycle probes
+  measured of it is `docs/research/cod11-map-cycle.md` section 8.
+- The tick, in order: the console drains first (a `map`, `map_restart` or
+  `map_rotate` line an earlier frame's script queued reloads the level before
+  anything else runs), then expired clients, then each client's queued usercmds
   (`replay_moves`, one pmove step per cmd, which is where the weapon machine
   queues a frame's shots, swings and throws), then those themselves (a trace
   each, an impact temp entity and a hit per player struck), then the missiles
@@ -617,3 +626,50 @@ never pasted decompiler output or disassembly listings.
   ends on, so a byte sent once is reverted before the swap lands and the old
   weapon stays in hand. A first retail capture of the one-cmd version measured
   the frag never arriving and the cook firing the rifle instead.
+- A map change is pull-shaped. `SV_SpawnServer` sends no gamestate at all: the
+  only thing that leaves the server is the out-of-band `loadingnewmap` line to
+  every client at `CS_PRIMED` or above, and the gamestate goes out when that
+  client's next message arrives still carrying the old serverId and
+  `SV_ExecuteClientMessage` resends it. So a map change that pushes anything
+  on the reliable stream is wrong by construction
+  (`docs/research/cod11-map-cycle.md` 3.1).
+- `sv_serverid` is two nibbles and the high one skips zero. A map load bumps
+  the high nibble and keeps the low one, a restart bumps only the low one, and
+  a high nibble that wraps to 0 is bumped again, so 16 goes to 17 across a
+  restart and to 33 across a map change. `crates/server/src/console.rs` owns
+  the arithmetic and both paths share it; the client reads the value back out
+  of the systeminfo configstring, not out of the gamestate header.
+- A probe has to re-answer the stock team menu after every gamestate and,
+  under `dm`, after every restart. Retail reruns `ClientConnect` on both and
+  reopens the menu under the indices the last one used, so `JoinProbe` clears
+  them on every gamestate past the first and on every `n`. Under `sd`, whose
+  `pers[]` survives, no menu reopens and the clear is inert.
+- `game[]` survives a level boundary only when the caller passed `savePersist`,
+  and an entity handle stored in it never survives at all. `map_restart(1)`
+  and `exitLevel(1)` keep `game[]` and every client's `pers[]`, `map_restart(0)`
+  and `exitLevel(0)` free both, `level` is always new, and every entity handle
+  inside `game[]` is dropped whichever way the flag went. `dm.gsc` passes 0 and
+  `sd.gsc` passes 1, which is the whole reason a `dm` client is put back
+  through the team menu after a restart and an `sd` client is not.
+- Time limits and score limits are script, never engine. Neither binary
+  contains the string `timelimit`, `scorelimit` or `fraglimit`, and the game
+  module exports no `CheckExitRules`: every "the round is over" decision in
+  CoD 1.1 MP is a gametype script calling `exitLevel()` or `map_restart()`. A
+  server that hard-codes either in Rust is adding a rule retail does not have.
+  `g_intermissionDelay` is dead the same way: it is registered in
+  `gameCvarTable` and has no other reference in the module, so nothing reads
+  it, and `nextmap` is registered, set once inside the map load, and read by
+  nothing: the Q3 convention of the gametype writing it and the engine
+  executing it does not exist here, and `map_rotate` is the whole rotation.
+- `map <the map already serving>` is a restart, not a spawn. The engine
+  compares the requested name against the current one and takes
+  `SV_MapRestart_f`, so the low nibble moves and no gamestate goes out. A
+  rotation whose first entry names the map it is already on therefore restarts
+  before it ever changes map, which is what the retail capture shows
+  (`docs/research/cod11-map-cycle.md` 4.2).
+- A thread's own `notify` does not fire its own `endon`. A thread that
+  `endon`s an event and then notifies that event itself survives and runs on;
+  every *other* thread's `endon` on it still kills. Measured with
+  `probe_endon_self`, and it is what lets `dm.gsc`'s `endMap` reach its
+  `exitLevel` at all: ours used to kill the thread there and the map never
+  ended.
