@@ -32,8 +32,10 @@ pub fn set_cull_fog(cs: &mut [String], cx: &Cx, args: &[Value]) -> Result<Value,
 /// 0x5ae96). The `t` field is `level.time + fade * 1000`
 /// (docs/research/cod11-sound-system.md, "Per gsc call"); an optional second
 /// argument is accepted and dropped, and `t` is written as `0`. Only three
-/// shipped SP scripts pass a fade, no MP map does, and the level clock the
-/// real value needs is not wired to the host yet.
+/// shipped SP scripts pass a fade, no MP map does, and `host.level_time_ms`
+/// is not threaded to this builtin, which is one half of the restart
+/// divergence in docs/research/cod11-map-cycle.md 4.5: a pinned `t` never
+/// moves, so a restart has nothing to rebroadcast for slot 3.
 pub fn ambient_play(cs: &mut [String], cx: &Cx, args: &[Value]) -> Result<Value, ErrorKind> {
     debug_assert!(cs.len() > 3, "configstring table shorter than slot 3");
     let Some(Value::String(a)) = args.first() else {

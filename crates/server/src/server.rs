@@ -346,6 +346,14 @@ pub struct Server {
     /// restart and a map change; rebuilding from `default_mp.cfg` alone
     /// would lose it.
     carried_cvars: Option<crate::cvars::Cvars>,
+    /// `g_gametype` and `sv_maxclients` as the running level actually loaded
+    /// with, read off the table `load_scripts_with` built. Doc section 4
+    /// step 3 compares retail's latched value against its live one; this is
+    /// the same comparison's left-hand side, and it has to be the built
+    /// value rather than `cfg`, since a `+set` override outranks `cfg` in
+    /// [`Self::cvars`] and comparing against `cfg` escalates every restart
+    /// for the whole run.
+    level_cvars: Option<(String, String)>,
     /// `svs.time` of the last spawn or restart, for the same-frame guard
     /// (doc section 4 step 1).
     last_spawn_tick: Option<i32>,
@@ -470,6 +478,7 @@ impl Server {
             sv_map_rotation: String::new(),
             snap_flag_server_bit: 0,
             carried_cvars: None,
+            level_cvars: None,
             last_spawn_tick: None,
             script_overlay: None,
         };
@@ -1352,11 +1361,12 @@ impl Server {
         self.load_scripts_with(fs, false, None, Vec::new(), false)
     }
 
-    /// Overlays one `.gsc` on the paks for every later level load: `path` is
-    /// a canonical script path (no extension) and `text` its source.
-    /// Test-facing, and the only way to run a gametype script that does not
-    /// ship in a pak through the real console and restart paths; the
-    /// semantics probes in `tests/semantics_ents.rs` are its callers.
+    /// The test seam for a gametype script that ships in no pak: `path` is a
+    /// canonical script path (no extension) and `text` its source, answered
+    /// instead of the paks on every later level load. Its only callers are
+    /// the semantics probes in `tests/semantics_ents.rs`, which need the real
+    /// console and restart paths under them.
+    #[doc(hidden)]
     pub fn overlay_script(&mut self, path: &str, text: &str) {
         self.script_overlay = Some((path.to_string(), text.to_string()));
     }
@@ -1391,6 +1401,10 @@ impl Server {
         save_persist: bool,
     ) -> anyhow::Result<()> {
         let cvars = self.cvars(&fs);
+        self.level_cvars = Some((
+            cvars.get("g_gametype").to_string(),
+            cvars.get("sv_maxclients").to_string(),
+        ));
         self.fs = Some(fs.clone());
         if !restart {
             self.anims = match vcod_common::animtree::PlayerAnims::load(&fs) {
@@ -1479,6 +1493,16 @@ impl Server {
             "g_gametype" => self.cfg.gametype = value.to_string(),
             _ => {}
         }
+    }
+
+    /// What the next level load would stamp for `name`, given the config's
+    /// own value: a `+set` override if one names it, since [`Self::cvars`]
+    /// replays the override list last.
+    fn pending_cvar(&self, name: &str, from_cfg: &str) -> String {
+        self.cvar_overrides
+            .iter()
+            .find(|(n, _)| n == name)
+            .map_or_else(|| from_cfg.to_string(), |(_, v)| v.clone())
     }
 
     /// `SV_SpawnServer` (docs/research/cod11-map-cycle.md, section 3), in the
@@ -1611,16 +1635,20 @@ impl Server {
         // persistence gets the in-place restart even across one of these.
         let save_persist = self.script.as_ref().is_some_and(|rt| rt.host.save_persist);
         if !save_persist {
-            let changed = self.script.as_ref().and_then(|rt| {
-                let cv = rt.cvars();
-                if cv.get("g_gametype") != self.cfg.gametype {
-                    Some("g_gametype")
-                } else if cv.get("sv_maxclients") != self.cfg.max_clients.to_string() {
-                    Some("sv_maxclients")
-                } else {
-                    None
-                }
-            });
+            let changed = self
+                .level_cvars
+                .as_ref()
+                .and_then(|(gametype, max_clients)| {
+                    if *gametype != self.pending_cvar("g_gametype", &self.cfg.gametype) {
+                        Some("g_gametype")
+                    } else if *max_clients
+                        != self.pending_cvar("sv_maxclients", &self.cfg.max_clients.to_string())
+                    {
+                        Some("sv_maxclients")
+                    } else {
+                        None
+                    }
+                });
             if let Some(name) = changed {
                 log::info!("{name} variable change -- restarting.");
                 let map = self.cfg.map.clone();
@@ -2926,6 +2954,34 @@ mod tests {
         let c = sv.clients[0].as_ref().unwrap();
         assert_eq!(c.state, ClientState::Active);
         assert!(c.sim.is_some());
+    }
+
+    /// The other half of step 3: a `+set` that names one of the two cvars is
+    /// not a change. `cvars` replays the override list after stamping the
+    /// config's own value, so `--max-clients 4 --set sv_maxclients=8` loads
+    /// the level with 8; comparing that against the config's 4 would escalate
+    /// every restart for the whole run.
+    #[test]
+    fn a_set_override_of_sv_maxclients_is_not_a_gametype_change() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        assert_eq!(sv.cfg.max_clients, 4);
+        sv.set_cvar("sv_maxclients", "8");
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        assert_eq!(sv.script_cvar("sv_maxclients").as_deref(), Some("8"));
+
+        let before = sv.server_id;
+        sv.push_console("map_restart");
+        sv.tick(now);
+        assert_eq!(
+            sv.server_id,
+            console::next_restart_id(before),
+            "the override escalated a restart to a spawn"
+        );
     }
 
     /// Doc section 4 step 1: a second restart inside one frame is a no-op,
