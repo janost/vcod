@@ -136,6 +136,12 @@ PROBE delete_count_after_wait 6
 PROBE at delete_reuse_after_wait
 PROBE delete_number_reuse_after_wait 299
 
+# probe_endon_self
+PROBE endon_self armed
+PROBE endon_self after_notify
+PROBE endon_self after_wait
+PROBE endon_self done 1
+
 # probe_ents
 PROBE at ents_deferred
 PROBE entarray_count 7

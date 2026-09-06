@@ -413,7 +413,7 @@ inferred. The probes are `crates/gsc/tests/fixtures/semantics/probe_*.gsc`,
 run as gametype scripts by `tools/run_probe.sh`; retail's answers are
 committed beside them in `retail-captures.txt`, and
 `crates/gsc/tests/semantics_ab.rs` diffs vcod against them on every test run.
-It is green on the 24 probes it runs. Five more (`probe_bootstrap`,
+It is green on the 25 probes it runs. Five more (`probe_bootstrap`,
 `probe_cvar`, `probe_delete`, `probe_ents`, `probe_not_string`) need the
 object model, the cvar table or a real map, all of which live in
 `crates/server`, so they are measured there by
@@ -548,6 +548,20 @@ an explicit one does to the frames around it is not measured: vcod binds it to
 the callee's frame alone, so `a f()` rebinds for `f` only and the caller's
 `self` is back on return. Whether a *builtin* called without a receiver
 inherits it too is not measured either; vcod inherits for script calls only.
+
+**A thread survives notifying an event it has itself endon'd, VERIFIED
+(`probe_endon_self`).** A thread that registers `level endon("e")`, then
+executes `level notify("e")` itself, keeps running past the notify *and*
+resumes past its next `wait`: retail printed all four of the probe's lines,
+the last of them after a one-second wait. Stock `dm.gsc` depends on it. Its
+`endMap` runs inside a `Callback_PlayerKilled` thread whose first statement
+is `self endon("spawned")`, calls `spawnIntermission` (which notifies
+`"spawned"`) on every player including that one, and only then waits ten
+seconds and calls `exitLevel` — so a VM that let the notify kill the
+notifier would leave a score-limit map stuck at the intermission camera
+forever. `Vm::notify_from` (`crates/gsc/src/vm/sched.rs`) is the half that
+skips the issuing thread; an endon fired by any *other* thread still kills,
+which §10 covers.
 
 **`getentarray` order: map entities first, then spawn order, VERIFIED.** The
 map's own four `script_origin` entities come back before three the probe
@@ -693,8 +707,12 @@ added closes that (section 14 of
   step's queued notifies still have a live waiter, in queue order, deferred
   to the next project. Pinned by
   `sched::tests::two_notifies_of_the_same_event_in_one_step_coalesce_and_the_second_is_lost`.
-- **A thread killed by its own `endon` mid-step keeps executing to its next
-  suspend.** `main`'s `self thread killer();` runs `killer` synchronously
+- **A thread killed by *another* thread's `endon` notify mid-step keeps
+  executing to its next suspend.** The self-notify half of this is no longer
+  a divergence: a thread's own `notify` does not kill it, measured against
+  retail by `probe_endon_self` (§9) and implemented by `Vm::notify_from`.
+  What remains is a nested spawn's notify.
+  `main`'s `self thread killer();` runs `killer` synchronously
   (`Vm::spawn`), and if `killer` notifies the event `main` just registered
   via `endon`, that notify (`Vm::notify`) removes `main`'s entry from
   `self.threads` immediately — while `main`'s own `step_frames` call is
