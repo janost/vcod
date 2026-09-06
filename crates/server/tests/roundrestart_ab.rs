@@ -12,8 +12,9 @@
 //! Compared per half: every restart's three reliable commands and their order,
 //! the serverId the `d 1` carries, the absence of a gamestate, the respawn on
 //! the restart's own frame, and the length of the round that ran its timer
-//! out. Not a command-for-command diff -- the burst carries slots ours pins to
-//! constants (`mapchange_ab::CMD_GAPS`).
+//! out, plus the vitals either side of the respawn. Not a command-for-command
+//! diff -- the burst carries slots ours pins to constants
+//! (`mapchange_ab::CMD_GAPS`).
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
@@ -53,27 +54,90 @@ const TIMER_TOL_MS: i64 = 250;
 /// end-of-round wait.
 const TIMER_ROUND_FLOOR_MS: i64 = 60_000;
 
+/// The death that emptied a team, to the restart it ends the round with.
+/// `sd.gsc` gets there through a chain of script `wait`s, each of which lands
+/// on the next server frame rather than on the millisecond it asked for, and
+/// the death itself lands on whichever frame the `kill` was read on: a frame
+/// per link is not enough and a second covers the chain. Retail's is 5177 ms.
+const ELIMINATION_TOL_MS: i64 = ORDER_TOL_MS + 1000;
+
+/// Fields of the respawn this server still gets wrong across a round restart,
+/// each with why. An entry *suppresses* the comparison against retail below
+/// and asserts the divergence is still there, so an empty list is full
+/// coverage and an entry that starts matching fails. The two this list once
+/// held are fixed and gone.
+const RESTART_GAPS: &[(&str, &str)] = &[];
+
+/// The fields compared either side of the respawn. `RESTART_GAPS` may only
+/// name one of these, or it suppresses a comparison nothing makes.
+const RESPAWN_FIELDS: &[&str] = &[
+    "health before",
+    "health after",
+    "weapon before",
+    "weapon after",
+    "eFlags before",
+    "eFlags after",
+];
+
+/// The watched playerstate fields of one trace.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Vitals {
+    pm_type: i32,
+    eflags: i32,
+    health: i32,
+    weapon: i32,
+}
+
+/// A live client's respawn: what it had before the burst and what it came
+/// back with.
+#[derive(Clone, Copy)]
+struct Respawn {
+    before: Vitals,
+    after: Vitals,
+}
+
 /// One `map_restart` as a client saw it.
 struct Restart {
     cs3: i64,
     n: i64,
     cs1: i64,
     server_id: i32,
-    /// The last trace before the burst and the first playing one after it.
-    before: NetchanKind,
-    after: NetchanKind,
+    /// The last trace before the burst and the one in force after it.
+    before: Vitals,
+    after: Vitals,
     after_ms: i64,
 }
 
-fn trace_fields(k: &NetchanKind) -> (i32, i32, i32, i32) {
+fn vitals(k: &NetchanKind) -> Vitals {
     match *k {
         NetchanKind::Trace {
             pm_type,
             eflags,
             health,
             weapon,
-        } => (pm_type, eflags, health, weapon),
+        } => Vitals {
+            pm_type,
+            eflags,
+            health,
+            weapon,
+        },
         _ => unreachable!("not a trace"),
+    }
+}
+
+/// Compares one field of the respawn against retail, unless [`RESTART_GAPS`]
+/// suppresses it -- in which case the divergence itself is what is asserted,
+/// so a gap that starts matching fails and has to be deleted.
+fn compare(half: &str, what: &str, retail: i32, ours: i32) {
+    match RESTART_GAPS.iter().find(|(w, _)| *w == what) {
+        Some((_, why)) => assert_ne!(
+            retail, ours,
+            "{half}: {what} now matches retail; drop it from RESTART_GAPS ({why})"
+        ),
+        None => assert_eq!(
+            retail, ours,
+            "{half}: {what} is {retail} on retail and {ours} here"
+        ),
     }
 }
 
@@ -124,8 +188,8 @@ fn restarts(who: &str, events: &[NetchanEvent]) -> Vec<Restart> {
                 panic!("{who}: the `d 1` at {} ms carries no sv_serverid", cs1.ms)
             }),
             after_ms: after.ms,
-            before: before.kind,
-            after: after.kind,
+            before: vitals(&before.kind),
+            after: vitals(&after.kind),
         });
     }
     assert!(!out.is_empty(), "{who}: no round restarted in the run");
@@ -155,6 +219,25 @@ fn timer_round(who: &str, rs: &[Restart]) -> i64 {
                 rs.windows(2).map(|w| w[1].n - w[0].n).collect::<Vec<_>>()
             )
         })
+}
+
+/// From the death that emptied a team to the `n` of the restart it ends the
+/// round with. The death is the first trace reading `pm_type` 6 with no health
+/// left; retail's target dies at 23430 ms and the round restarts at 28607.
+fn elimination_wait(who: &str, events: &[NetchanEvent]) -> i64 {
+    let died = events
+        .iter()
+        .find(|e| {
+            e.trace()
+                .map(vitals)
+                .is_some_and(|v| v.pm_type == 6 && v.health == 0)
+        })
+        .unwrap_or_else(|| panic!("{who}: this half never died, so no round ended on it"));
+    let restart = events
+        .iter()
+        .find(|e| e.ms > died.ms && e.cmd() == Some("n"))
+        .unwrap_or_else(|| panic!("{who}: no restart after the death at {} ms", died.ms));
+    restart.ms - died.ms
 }
 
 #[test]
@@ -324,27 +407,51 @@ fn an_sd_round_restart_matches_retail() {
         );
 
         // --- the respawn itself, on the restart of a client that was alive ---
-        let live = |who: &str, rs: &[Restart]| -> (i32, i32, i32, i32, i32, i32, i32, i32) {
+        let live = |who: &str, rs: &[Restart]| -> Respawn {
             let x = rs
                 .iter()
-                .find(|x| trace_fields(&x.before).0 == 0)
+                .find(|x| x.before.pm_type == 0)
                 .unwrap_or_else(|| panic!("{who}: no restart caught this client alive"));
-            let (b, a) = (trace_fields(&x.before), trace_fields(&x.after));
-            (b.0, b.1, b.2, b.3, a.0, a.1, a.2, a.3)
+            Respawn {
+                before: x.before,
+                after: x.after,
+            }
         };
-        let rl = live(&r_who, &r);
-        let ol = live(&o_who, &o);
-        assert_eq!(
-            (rl.2, rl.6),
-            (ol.2, ol.6),
-            "{half}: health either side of the restart is {:?} on retail and {:?} here",
-            (rl.2, rl.6),
-            (ol.2, ol.6)
-        );
-        assert_eq!(
-            rl.3, ol.3,
-            "{half}: the weapon held before the restart is {} on retail and {} here",
-            rl.3, ol.3
+        let (rl, ol) = (live(&r_who, &r), live(&o_who, &o));
+        for (what, retail_v, ours_v) in [
+            ("health before", rl.before.health, ol.before.health),
+            ("health after", rl.after.health, ol.after.health),
+            ("weapon before", rl.before.weapon, ol.before.weapon),
+            ("weapon after", rl.after.weapon, ol.after.weapon),
+            ("eFlags before", rl.before.eflags, ol.before.eflags),
+            ("eFlags after", rl.after.eflags, ol.after.eflags),
+        ] {
+            assert!(
+                RESPAWN_FIELDS.contains(&what),
+                "{what:?} is compared but not named in RESPAWN_FIELDS"
+            );
+            compare(half, what, retail_v, ours_v);
+        }
+
+        // --- the round a death ended, from that death to the restart ---
+        if half == "target" {
+            let (rw, ow) = (
+                elimination_wait(&r_who, retail),
+                elimination_wait(&o_who, ours),
+            );
+            assert!(
+                (rw - ow).abs() <= ELIMINATION_TOL_MS,
+                "{half}: the death that ended the round is {rw} ms before the restart on \
+                 retail and {ow} ms here, over the {ELIMINATION_TOL_MS} ms tolerance"
+            );
+        }
+    }
+
+    // A gap naming a field nothing compares suppresses nothing.
+    for (what, why) in RESTART_GAPS {
+        assert!(
+            RESPAWN_FIELDS.contains(what),
+            "RESTART_GAPS names {what:?} ({why}), which no comparison reads"
         );
     }
 }

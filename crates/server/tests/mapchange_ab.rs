@@ -11,10 +11,11 @@
 //! What is compared is an ordered subsequence of markers -- the intermission
 //! frame, the restart's three reliable commands, the respawn, the second
 //! intermission, the out-of-band notice, the gamestate and the respawn on the
-//! second map -- and the interval between named pairs of them. Not a
-//! command-for-command diff: the burst carries reliable commands whose
-//! ordering inside one frame is not a wire fact either side pins, and
-//! [`CMD_GAPS`] lists the ones ours does not send at all.
+//! second map -- and the interval between named pairs of them, plus the
+//! presence of each command in [`BURST_CMDS`] and [`INTERMISSION_CMDS`] on
+//! both sides. Not a command-for-command diff: the ordering of the burst's
+//! commands inside one frame is not a wire fact either side pins. [`CMD_GAPS`]
+//! suppresses the three ours does not send at all.
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
@@ -48,27 +49,53 @@ const MENU_TOL_MS: i64 = 500;
 /// How often the probe asks for the scoreboard, and this replay with it.
 const SCORE_PERIOD_MS: i64 = 2000;
 
-/// Reliable commands the retail burst carries and ours does not, each with
-/// why. Empty is the goal. A gap that starts matching fails the guard at the
-/// end of the test, so the list cannot rot into a lie.
+/// Every reliable command retail's restart burst carries, as the first word or
+/// words that name it. Each is asserted present within [`ORDER_TOL_MS`] of the
+/// `n` on retail *and* here, unless [`CMD_GAPS`] suppresses it.
+const BURST_CMDS: &[&str] = &[
+    "d 13",
+    "d 12",
+    "d 3",
+    "n",
+    "d 1",
+    "f",
+    "v scr_showweapontab",
+    "v g_scriptMainMenu",
+    "t",
+    "v cg_objectiveText",
+];
+
+/// The same for the intermission's own frame.
+const INTERMISSION_CMDS: &[&str] = &["f", "u", "v g_scriptMainMenu", "v cg_objectiveText"];
+
+/// Commands of the two tables above ours does not send, each with why. An
+/// entry *suppresses* the presence comparison and asserts the divergence is
+/// still there -- retail sends it in that window and we do not -- so an empty
+/// list is full coverage and an entry that starts matching fails.
 const CMD_GAPS: &[(&str, &str)] = &[
     (
-        "d 13 ",
+        "d 13",
         "configstring 13 is `level.startTime` and vcod pins it to \"0\", so a \
          restart moves nothing to rebroadcast (map-cycle doc 4.5)",
     ),
     (
-        "d 12 ",
+        "d 12",
         "configstring 3's `t` is pinned by `ambient_play`, and 12 rides the \
          same burst on retail because `sv.restarting` broadcasts every write \
          (map-cycle doc 4.5)",
     ),
     (
-        "f ",
+        "f",
         "`iprintln` goes to the script log here, not out as the `f` reliable \
          command retail sends",
     ),
 ];
+
+/// A command names a pattern when it is that word or begins with it followed
+/// by a space, so `d 1` does not swallow `d 12`.
+fn names(cmd: &str, pat: &str) -> bool {
+    cmd == pat || (cmd.starts_with(pat) && cmd.as_bytes().get(pat.len()) == Some(&b' '))
+}
 
 type Match = fn(&NetchanEvent) -> bool;
 
@@ -284,8 +311,11 @@ fn a_dm_map_end_and_rotation_match_retail() {
         o.gap("loadingnewmap", "gamestate"),
     );
     assert!(
-        (0..=r_fetch + ORDER_TOL_MS).contains(&o_fetch),
-        "the gamestate is {o_fetch} ms after the notice here against retail's {r_fetch} ms"
+        (0..=ORDER_TOL_MS).contains(&o_fetch),
+        "the gamestate is {o_fetch} ms after the notice here, past the one frame it \
+         should take. Retail's is {r_fetch} ms because it sleeps 250 ms inside \
+         `SV_SpawnServer` and then waits for the client's next message; ours does \
+         neither, so the client's very next message brings it."
     );
 
     // --- the serverId nibbles, the same transition on both sides ---
@@ -344,17 +374,6 @@ fn a_dm_map_end_and_rotation_match_retail() {
         assert_eq!(between, 0, "{who}: the restart pushed a gamestate");
     }
 
-    // --- the intermission's own frame: `u` and the winner's objective text ---
-    for (who, m, events) in [("retail", &r, &retail), ("ours", &o, &ours)] {
-        let near = cmds_near(events, m.ms("intermission"), ORDER_TOL_MS);
-        for want in ["u", "v cg_objectiveText"] {
-            assert!(
-                near.iter().any(|c| c.starts_with(want)),
-                "{who}: no {want:?} within {ORDER_TOL_MS} ms of the intermission: {near:?}"
-            );
-        }
-    }
-
     // --- the scoreboard is an answer, so it arrives inside one `score` period ---
     for (who, m, events) in [("retail", &r, &retail), ("ours", &o, &ours)] {
         let at = m.ms("intermission");
@@ -369,31 +388,44 @@ fn a_dm_map_end_and_rotation_match_retail() {
         );
     }
 
-    // --- the known gaps, and the guard that deletes them ---
-    let burst = |events: &[NetchanEvent], m: &Marks| -> Vec<String> {
-        let at = m.ms("restart n");
-        cmds_near(events, at, ORDER_TOL_MS)
-            .into_iter()
-            .map(str::to_string)
-            .collect()
-    };
-    let (r_burst, o_burst) = (burst(&retail, &r), burst(&ours, &o));
-    for (prefix, why) in CMD_GAPS {
-        let in_retail = r_burst.iter().any(|c| c.starts_with(prefix))
-            || cmds_near(&retail, r.ms("intermission"), ORDER_TOL_MS)
-                .iter()
-                .any(|c| c.starts_with(prefix));
-        assert!(
-            in_retail,
-            "CMD_GAPS lists {prefix:?} ({why}) but retail does not send it either; drop it"
+    // --- the two command tables, and the gaps that suppress an entry ---
+    for (marker, table) in [
+        ("restart n", BURST_CMDS),
+        ("intermission", INTERMISSION_CMDS),
+    ] {
+        let (r_near, o_near) = (
+            cmds_near(&retail, r.ms(marker), ORDER_TOL_MS),
+            cmds_near(&ours, o.ms(marker), ORDER_TOL_MS),
         );
-        let in_ours = o_burst.iter().any(|c| c.starts_with(prefix))
-            || cmds_near(&ours, o.ms("intermission"), ORDER_TOL_MS)
-                .iter()
-                .any(|c| c.starts_with(prefix));
+        for pat in table {
+            let (in_retail, in_ours) = (
+                r_near.iter().any(|c| names(c, pat)),
+                o_near.iter().any(|c| names(c, pat)),
+            );
+            // The table is read off the fixture, so retail always has it; a
+            // pattern retail stopped sending is a table entry to delete.
+            assert!(
+                in_retail,
+                "retail sends no {pat:?} within {ORDER_TOL_MS} ms of {marker:?}; drop it \
+                 from the table: {r_near:?}"
+            );
+            match CMD_GAPS.iter().find(|(g, _)| g == pat) {
+                Some((_, why)) => assert!(
+                    !in_ours,
+                    "{pat:?} at {marker:?} now matches retail; drop it from CMD_GAPS ({why})"
+                ),
+                None => assert!(
+                    in_ours,
+                    "no {pat:?} within {ORDER_TOL_MS} ms of {marker:?} here: {o_near:?}"
+                ),
+            }
+        }
+    }
+    // A gap naming a command neither table carries suppresses nothing.
+    for (pat, why) in CMD_GAPS {
         assert!(
-            !in_ours,
-            "{prefix:?} now matches retail; drop it from CMD_GAPS ({why})"
+            BURST_CMDS.contains(pat) || INTERMISSION_CMDS.contains(pat),
+            "CMD_GAPS names {pat:?} ({why}), which neither command table reads"
         );
     }
 }
