@@ -33,6 +33,16 @@ pub enum Target {
     Struct(StructId),
 }
 
+/// The `game[]` table a level hands the next one when `exitLevel(true)` asked
+/// for it. Empty until the transplant is written.
+#[derive(Default, Debug)]
+pub struct GameCarry;
+
+/// One client's `pers[]` table across the same handover. Empty until the
+/// transplant is written.
+#[derive(Default, Debug)]
+pub struct ArrayCarry;
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum ErrorKind {
     /// The host has no such builtin. Kills the thread that reached it and
