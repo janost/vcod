@@ -1491,3 +1491,127 @@ fn the_score_limit_sends_both_clients_to_intermission_and_then_rotates() {
         ca.configstring(0)
     );
 }
+
+/// What an `sd` round restart leaves a client holding, and what it does to
+/// the per-life teleport bit. `endRound` stashes every living player's
+/// weapons in `pers[]` and calls `map_restart(true)`, so the restart's own
+/// `ClientConnect` re-gives them out of the carried `pers` (map-cycle doc,
+/// section 4, steps 10 and 11); a client that was dead has had those keys
+/// cleared by `Callback_PlayerKilled` and is re-given its menu weapon
+/// instead. Either way it comes back armed, and the re-entry counts as a new
+/// life, so `eFlags` 0x8 flips the way a death respawn's does.
+#[test]
+fn a_round_restart_leaves_both_clients_armed_and_flips_the_teleport_bit() {
+    use vcod_common::net::NetEvent;
+
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).expect("parse the bsp");
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(common::cfg(MAP, "sd"), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    // One frame of delay on every menu answer, for the reason
+    // `Join::delay_answers` documents.
+    let (mut ca, mut cb, mut ja, mut jb) = common::join_pair_delayed(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("axis", "kar98k_mp"),
+        1,
+    );
+
+    let p = &PROTOCOL_V1;
+    let watched = |cl: &vcod_common::net::NetClient<common::ClientEnd>| -> (i32, i32, i32) {
+        let s = cl.snapshots().newest().expect("a snapshot");
+        (
+            s.ps.field_i32(p, "pm_type"),
+            s.ps.field_i32(p, "eFlags"),
+            s.ps.field_i32(p, "weapon"),
+        )
+    };
+
+    // B kills itself, which eliminates the axis team and ends the round;
+    // `endRound` is what runs `map_restart(true)`. A is alive when it lands.
+    let mut before = None;
+    let mut restarted = None;
+    let mut killed = false;
+    for frame in 0..400 {
+        now += Duration::from_millis(50);
+        // The kill goes out once both are playing and A has a settled trace
+        // to compare against.
+        if !killed && frame >= 40 && watched(&ca).0 == 0 && watched(&cb).0 == 0 {
+            before = Some((watched(&ca), watched(&cb)));
+            cb.send_reliable("kill");
+            killed = true;
+        }
+        let (cmd_a, cmd_b) = (common::holding(&ca), common::holding(&cb));
+        ca.send_frame(&cmd_a);
+        cb.send_frame(&cmd_b);
+        let (ea, eb) = common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        for (i, (events, join, cl)) in [(ea, &mut ja, &mut ca), (eb, &mut jb, &mut cb)]
+            .into_iter()
+            .enumerate()
+        {
+            for e in &events {
+                match e {
+                    NetEvent::ServerCommand(t) => {
+                        // A restart reopens whatever menus the level's
+                        // connect callback opens, under the indices the last
+                        // one used.
+                        if t.first().map(String::as_str) == Some("n") {
+                            join.reset_menus();
+                            // Only the restart the kill caused: `startGame`
+                            // opens the match with one of its own.
+                            if killed && restarted.is_none() {
+                                restarted = Some(frame);
+                            }
+                        }
+                        join.on_server_command(t, cl, now);
+                    }
+                    NetEvent::Dropped(r) => panic!("client {i} dropped: {r}"),
+                    _ => {}
+                }
+            }
+            join.tick_answers(cl, now);
+        }
+        // A few frames past the restart: the respawn lands on the restart's
+        // own frame and the weapon mirror runs a frame behind it.
+        if restarted.is_some_and(|f| frame >= f + 5) {
+            break;
+        }
+    }
+    assert!(
+        restarted.is_some(),
+        "no round restarted; the kill never ended the round"
+    );
+    let (a_before, b_before) = before.expect("both clients played before the kill");
+    let (a_after, b_after) = (watched(&ca), watched(&cb));
+
+    assert_eq!(
+        a_after.2, a_before.2,
+        "the client that was alive came back holding {} where it held {} \
+         (`pers[\"weapon1\"]`/`weapon2`, one of which is \"none\")",
+        a_after.2, a_before.2
+    );
+    assert_eq!(
+        b_after.2, b_before.2,
+        "the client that was dead came back holding {} where it held {}",
+        b_after.2, b_before.2
+    );
+    assert_ne!(
+        a_after.1, a_before.1,
+        "the restart's respawn left `eFlags` at {}, so the per-life teleport \
+         bit never flipped and a retail client interpolates through it",
+        a_after.1
+    );
+}

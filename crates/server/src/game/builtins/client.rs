@@ -486,6 +486,13 @@ pub fn get_weapon_slot_weapon(
 /// script runs it ahead of both setters and a `switchToWeapon` on the weapon
 /// it just placed (`sd.gsc` 540-543), so a weapon set into a slot has to
 /// come out usable.
+///
+/// `"none"` is not a weapon name but weapon index 0, which empties the slot:
+/// retail compares the argument against `"none"` ahead of its name lookup
+/// (0x43ebd), and stock script feeds `getWeaponSlotWeapon`'s own `"none"`
+/// straight back in -- `sd.gsc`'s `spawnPlayer` re-gives the `pers["weapon2"]`
+/// `endRound` stashed, which is `"none"` for a player carrying one primary.
+/// Either way whatever stood in the slot is taken first (0x43f6b).
 pub fn set_weapon_slot_weapon(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -494,7 +501,16 @@ pub fn set_weapon_slot_weapon(
 ) -> Result<Value, ErrorKind> {
     let client = client_receiver(host, recv)?;
     let slot = slot_argument(cx, args)?;
-    let (_, index) = weapon_argument(cx, args.get(1..).unwrap_or_default())?;
+    let rest = args.get(1..).unwrap_or_default();
+    let index = match rest.first() {
+        Some(Value::String(a)) if cx.resolve(*a).eq_ignore_ascii_case("none") => 0,
+        _ => weapon_argument(cx, rest)?.1,
+    };
+    let standing = host.client_weapons[client].slots[slot] as usize;
+    host.client_weapons[client].take(standing);
+    if index == 0 {
+        return Ok(Value::Undefined);
+    }
     host.client_weapons[client].give(index, slot);
     if let Some(def) = host.weapons.get(index) {
         host.client_weapon_ops.push((
@@ -1249,6 +1265,37 @@ mod tests {
                 (0, WeaponOp::SwitchTo(thompson as u8)),
             ]
         );
+    }
+
+    /// `"none"` is weapon index 0, not an unknown weapon: the slot empties
+    /// and whatever stood in it is dropped. `sd.gsc`'s `spawnPlayer` re-gives
+    /// the `pers["weapon2"]` `endRound` stashed, which reads `"none"` for a
+    /// player carrying one primary, and an error there kills the whole spawn
+    /// (object model doc, section 20).
+    #[test]
+    fn setweaponslotweapon_takes_the_slot_and_none_leaves_it_empty() {
+        let Some((mut vm, mut host)) = armed_fixture() else {
+            return;
+        };
+        let thompson = weapon_index("thompson_mp").unwrap();
+        vm.with_cx(|cx| {
+            let e = loadout(&mut host, cx);
+            let t = Some(Target::Entity(e));
+            let primary = Value::String(cx.intern_exact("primary"));
+            let name = Value::String(cx.intern_exact("thompson_mp"));
+            set_weapon_slot_weapon(&mut host, cx, t, &[primary, name]).unwrap();
+            assert!(host.client_weapons[0].holds(thompson));
+
+            let none = Value::String(cx.intern_exact("none"));
+            set_weapon_slot_weapon(&mut host, cx, t, &[primary, none]).unwrap();
+            assert!(!host.client_weapons[0].holds(thompson));
+            match get_weapon_slot_weapon(&mut host, cx, t, &[primary]).unwrap() {
+                Value::String(a) => assert_eq!(cx.resolve(a), "none"),
+                v => panic!("{v:?}"),
+            }
+            // An already empty slot emptied again is a no-op, not an error.
+            set_weapon_slot_weapon(&mut host, cx, t, &[primary, none]).unwrap();
+        });
     }
 
     /// `takeAllWeapons` empties the host's copy, which is what the mirror
