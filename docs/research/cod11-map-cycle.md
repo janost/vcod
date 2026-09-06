@@ -33,12 +33,24 @@ mixed and each claim says which one it rests on:
   `SV_MapRotate_f`, `SV_Map_f`, `NextToken`, `SV_RestartGameProgs`,
   `SV_InitGameProgs`, `SV_ShutdownGameProgs`, `SV_SetConfigstring`,
   `SV_SendServerCommand`, `SV_SendClientGameState`, `SV_GentityNum`,
-  `SV_Frame`, `NET_OutOfBandPrint`, `CM_LoadMap`, `Hunk_Clear`, `COM_Parse`,
-  `Cbuf_ExecuteText`, `Cmd_AddCommand`, `Cvar_Get`, `Cvar_Set`,
-  `Cvar_VariableString`, `Cvar_VariableValue`, `Cvar_InfoString`,
-  `Com_Printf`, `Com_DPrintf`, `Q_strncpyz`, `VM_Call` and `va`.
+  `SV_CreateBaseline`, `SV_Frame`, `NET_OutOfBandPrint`, `CM_LoadMap`,
+  `Hunk_Clear`, `COM_Parse`, `Cbuf_ExecuteText`, `Cmd_AddCommand`,
+  `Cmd_Argv`, `Cvar_Get`, `Cvar_Set`, `Cvar_VariableString`,
+  `Q_strncmp`,
+  `Cvar_VariableValue`, `Cvar_InfoString`, `Com_Printf`, `Com_DPrintf`,
+  `Com_Error`, `Q_strncpyz`, `VM_Call`, `VM_Free` and `va`.
   UNVERIFIED: every name in that list. What each section rests on is the
-  address and what the instructions there do, both of which are cited.
+  address and what the instructions there do, both of which are cited. Any
+  engine name below that is not in that list carries its own label where it
+  appears, as `NET_Sleep` (3 step 4) and `FS_Restart` (3 step 9) do.
+
+Seven passages below are a bulleted or numbered list introduced by a pair of
+labelled sentences rather than by a label per item, the shape
+`cod11-combat.md` uses: the list carries exactly two kinds of claim, the
+operands and addresses on one side and the ordering and the branch conditions
+on the other, and they need opposite labels. Such a pair covers the list items
+that immediately follow it and nothing else; no prose paragraph in this
+document takes its label from a sentence above it.
 
 Claims that only restate an offset or a table another document already
 established cite that document instead of repeating the derivation.
@@ -444,30 +456,43 @@ mechanism behind the live measurement recorded in `docs/protocol-1.1.md`,
 
 ### 4.4 `SV_ExecuteClientMessage`'s two nibble branches
 
-My name for `cod_lnxded` `0x80872ec`. VERIFIED: the offsets, immediates,
-string addresses and call targets in the three paragraphs below, each read out
-of the instruction it sits in. INFERRED: the ordering in them and every
-"when", "unless" and "otherwise", which are branch conditions.
+My name for `cod_lnxded` `0x80872ec`.
 
-It compares the client's stored serverId at client offset `0x5a8f8` against
-the `sv_serverid` byte at `0x80e30c0` (`0x8087334..0x8087341`); equal takes
-the normal path, and so does a client whose `downloadName` byte at `0x10a64`
-is non-zero (`0x8087347..0x8087351`).
+VERIFIED: it holds a `cmp` of the client's stored serverId at client offset
+`0x5a8f8` against the `sv_serverid` byte at `0x80e30c0` at `0x808733f` whose
+`je` targets `0x8087451`, and a `cmp client+0x10a64, 0` at `0x808734a` whose
+`jne` targets the same `0x8087451`. VERIFIED: `client+0x10a64` is the
+`downloadName` byte, the same offset `docs/protocol-1.1.md` uses for the
+download state. INFERRED, off those two compares and their shared target: a
+matching serverId takes the normal path, and so does a client with a
+non-empty `downloadName` whatever its serverId.
 
-When the two `& 0xf0` high nibbles differ (`0x8087357..0x8087364`), the
-function resends the gamestate only when the client's `messageAcknowledge`
-(offset `0x10618`) is greater than its `gamestateMessageNum` (offset
-`0x1061c`), printing `"%s : dropped gamestate, resending\n"` (`0x80d4b00`)
-and calling `SV_SendClientGameState` (`0x8085eec`) at `0x8087447`; otherwise
-it returns without reading an op.
+VERIFIED: two `and`s masking both ids with `0xf0` sit at `0x8087357` and
+`0x808735d`, and the `cmp` of the two results at `0x8087362` carries a `jne`
+to `0x8087416`. VERIFIED: at `0x8087416` a `cmp` of the client's
+`messageAcknowledge` (offset `0x10618`) against its `gamestateMessageNum`
+(offset `0x1061c`) at `0x808741f` carries a `jle` to `0x808752c`, the
+function's exit, and past that `cmp` sit a `Com_DPrintf` with
+`"%s : dropped gamestate, resending\n"` (`0x80d4b00`) at `0x808743b` and a
+call to `SV_SendClientGameState` (`0x8085eec`) at `0x8087447`. INFERRED, off
+the first of those two compares: differing high nibbles are the map-change
+case. INFERRED, off the second and its `jle`: the gamestate is resent only to
+a client that has acknowledged a message past the one its last gamestate went
+in, and every other client returns without reading an op.
 
-When only the low nibble differs, the function returns unless the client's
-state word reads exactly 3 (`CS_PRIMED`); for a `CS_PRIMED` client it prints
-`"Going from CS_PRIMED to CS_ACTIVE for %s\n"` (`0x80d46a0`), sets the state
-word to 4, links `client->gentity` (offset `0x10a40`) to
-`SV_GentityNum(clientNum)`, writes -1 into `deltaMessage` (offset `0x10b04`)
-and `svs.time` into offset `0x10b14`, and calls `VM_Call(gvm, 3, clientNum)`,
-that is `ClientBegin` (`0x808736a..0x808740c`).
+VERIFIED: the fall-through from the `cmp` at `0x8087362` reaches a
+`cmp client+0, 3` at `0x808736a` whose `jne` targets `0x808752c`. VERIFIED:
+past that `cmp` sit `0x80bfea0(1)` at `0x8087378`, a `Com_DPrintf` with
+`"Going from CS_PRIMED to CS_ACTIVE for %s\n"` (`0x80d46a0`) at `0x8087394`,
+a store of 4 into `client+0` at `0x808739f`, a call to
+`SV_GentityNum(clientNum)` at `0x80873b8` whose result goes into
+`client+0x10a40` at `0x80873c2`, a store of -1 into `deltaMessage` (offset
+`0x10b04`) at `0x80873c8`, a store of `svs.time` into offset `0x10b14` at
+`0x80873dd` and a `VM_Call(gvm, 3, clientNum)` at `0x808740c`. VERIFIED: 3 is
+`ClientBegin` in the `vmMain` jump table of section 1, which puts that case at
+`0x50e70`. INFERRED, off the `cmp client+0, 3` and its `jne`: matching high
+nibbles with a differing low nibble promote a `CS_PRIMED` client and drop the
+message unread for every other state.
 
 ### 4.5 As implemented
 
@@ -552,17 +577,23 @@ queues.
 
 ### 5.3 `SV_Map_f`
 
-My name for `cod_lnxded` `0x8083c68`. VERIFIED: registered twice, as `map`
-(`0x80d3b9d`) at `0x8084b1f` and as `devmap` (`0x80d3919`) at `0x8084b58`;
-`Cmd_Argv(0)` compared against `"devmap"` is what decides whether
-`Cvar_Set("sv_cheats", "1")` (`0x80d3922`) runs at the end
-(`0x8083d00..0x8083d20`, `0x8083dac..0x8083dbd`).
+My name for `cod_lnxded` `0x8083c68`. VERIFIED: it is registered twice, as
+`map` (`0x80d3b9d`) at `0x8084b1f` and as `devmap` (`0x80d3919`) at
+`0x8084b58`. VERIFIED: it holds a comparison of `Cmd_Argv(0)` against
+`"devmap"` at `0x8083d13` whose result is kept in a register across the whole
+function (`0x8083d1d..0x8083d20`), a `test` of that register at `0x8083dac`
+with a `je` to `0x8083dc4`, and a `Cvar_Set("sv_cheats", "1")` (`0x80d3922`)
+at `0x8083dbd`. INFERRED, off that test and its jump: `sv_cheats` is set only
+when the command word was `devmap`.
 
-VERIFIED: the map argument may carry a `mp/` (`0x80d38e3`) or `mp\`
-(`0x80d38e7`) prefix, which is stripped by starting the copy three characters
-in and shrinking the bound from `0x40` to `0x3d`
-(`0x8083d23..0x8083d6a`). The branch to `SV_MapRestart_f` against
-`SV_SpawnServer` is 4.2's.
+VERIFIED: it holds a `Q_strncmp` of the map argument against `mp/`
+(`0x80d38e3`) at `0x8083d2e` and against `mp\` (`0x80d38e7`) at `0x8083d45`,
+and one `Q_strncpyz` at `0x8083d6a` reached from two argument setups, one
+pushing the argument plus 3 with a bound of `0x3d` (`0x8083d51..0x8083d5a`)
+and one pushing the argument itself with a bound of `0x40`
+(`0x8083d60..0x8083d65`). INFERRED, off those two comparisons and the two
+setups they select: either prefix is stripped and the bound shrinks with it. The compares picking
+`SV_MapRestart_f` over `SV_SpawnServer` are 4.2's.
 
 ### 5.4 As implemented
 
@@ -580,8 +611,8 @@ destructive token consumer and 5.2's keyword loop;
 VERIFIED: `ClientEndFrame` (`0x40e98`) holds a `cmp client+0x20ec, 2` at
 `0x40ebe` whose `jne` targets `0x414ed`, the function's exit, and a
 `cmp client+0x20d0, 3` at `0x40ed1`. INFERRED, off those two compares and
-their addresses: a client that is not fully connected reaches none of the three arms,
-and for one that is, `sessionstate` 3 takes the intermission arm
+their addresses: a client that is not fully connected reaches none of the
+three arms, and for one that is, `sessionstate` 3 takes the intermission arm
 (`cod11-gsc-object-model.md`, "What `ClientEndFrame` writes for a live
 client's own view").
 
@@ -600,10 +631,9 @@ from that: intermission is entered only by script assigning
 
 ### 6.2 The two arms
 
-VERIFIED: the offsets and immediates below, each a single store. INFERRED:
-the ordering.
-
-`ClientEndFrame`'s intermission arm (`0x40ed6..0x40f1f`) writes:
+`ClientEndFrame`'s intermission arm is `0x40ed6..0x40f1f`. VERIFIED: the
+offsets and immediates in the list below, each a single store. INFERRED: the
+order of the list.
 
 - `ent.takedamage` (`+0x171`) 0 and `ent.r.contents` (`+0x118`) 0.
 - `ent.r.svFlags` (`+0xf4`) `(svFlags & ~2) | 1`.
@@ -615,14 +645,17 @@ the ordering.
 - `ps.eFlags` (`+0x80`, netfield offset 128) is masked with `0xfffbfbff`,
   which clears bits `0x400` and `0x40000`. UNVERIFIED: what either bit means.
 
-`ClientThink_real`'s intermission arm (`0x3ffcf..0x4000a`), taken on the same
-`client+0x20d0 == 3` test at `0x3ffca`, does one thing: it latches two button
-words and returns. `client+0x21ec` takes `client+0x21e8`, `client+0x21e8`
-takes the byte at `client+0x20f4`, `client+0x21f8` takes `client+0x21f4`, and
-`client+0x21f4` takes the byte at `client+0x20f5`. INFERRED, off the return
-that follows: no pmove runs, no events are generated and the usercmd's
-movement axes and view angles are dropped, so an intermission client cannot
-move and its view is whatever the last pre-intermission frame left.
+VERIFIED: `ClientThink_real` (`0x3fee0`) holds a `cmp client+0x20d0, 3` at
+`0x3ffca` whose `jne` targets `0x40010`, and the block at
+`0x3ffcf..0x4000a` past it holds four stores and one jump: `client+0x21ec`
+takes `client+0x21e8`, `client+0x21e8` takes the byte at `client+0x20f4`,
+`client+0x21f8` takes `client+0x21f4`, `client+0x21f4` takes the byte at
+`client+0x20f5`, and `0x4000a` jumps to `0x40653`, the function's exit.
+
+INFERRED, off that compare and that jump: `sessionstate` 3 reaches only those
+four stores, so no pmove runs, no events are generated and the usercmd's
+movement axes and view angles are dropped; an intermission client cannot move,
+and its view is whatever the last pre-intermission frame left.
 
 ### 6.3 The scoreboard drain, and which team score is which
 
