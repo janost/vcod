@@ -1267,16 +1267,55 @@ accessors are methods 32 to 37 in this order: `getWeaponSlotWeapon` 0x43cf4,
 table `dump_builtins.py` walks; the two named ones carry symbols, the six
 resolve to addresses.
 
-What each does inside was not read. vcod's readings are the design's: a slot
-name resolved through the `weaponSlot` table above, `setWeaponSlotWeapon`
-giving the weapon and placing it in the slot the caller names with a full clip
-and its `startAmmo`, ammo and clip addressed by the slot's weapon's own ammo
-and clip index, `switchToWeapon` going through the putaway rather than
-swapping the weapon in place. The last of them follows the weapon machine of
+Only `setWeaponSlotWeapon` was read inside, below. For the rest vcod's
+readings are the design's: a slot name resolved through the `weaponSlot`
+table above, ammo and clip addressed by the slot's weapon's own ammo and clip
+index, `switchToWeapon` going through the putaway rather than swapping the
+weapon in place. The last of them follows the weapon machine of
 `docs/research/cod11-combat.md` section 1.8 rather than anything read at
 0x452a4's neighbours. Of the six, `setWeaponSlotWeapon`,
 `setWeaponSlotAmmo`, `setWeaponSlotClipAmmo` and `getWeaponSlotWeapon` are
 implemented; the two remaining getters are not.
+
+### `setWeaponSlotWeapon` inside, and its `"none"` argument
+
+VERIFIED: the slot argument goes through `BG_GetWeaponSlotForName` at
+0x43e7b, and a zero result is a `Scr_ParamError` carrying
+`"Unknown weaponslot name %s. Valid weaponslots are ..."` (0x73220) at
+0x43ea6.
+
+VERIFIED: the weapon argument is compared against `"none"` (0x731c0) with
+`Q_stricmp` at 0x43ec3, and a match stores weapon index 0 at 0x43ecf and
+jumps to 0x43f6b, past `BG_GetWeaponIndexForName` (0x43ee4), past its own
+`Scr_ParamError` and past the slot check at 0x43f26 that refuses a weapon
+whose file names a different `weaponSlot`.
+
+VERIFIED: at 0x43f6b the byte standing in the slot is read out of
+`client+0x314` and handed to `BG_TakePlayerWeapon` (0x36b78) when it is
+non-zero (0x43f7e), and `BG_GivePlayerWeapon` (0x36a38) is reached only past
+a `cmp` of the resolved index against 0 at 0x43f8d.
+
+INFERRED, off those two branches: `setWeaponSlotWeapon(slot, "none")` empties
+the slot instead of erroring, and every call takes whatever stood in the slot
+before it gives.
+
+VERIFIED: `BG_TakePlayerWeapon` returns at once for a weapon the player does
+not hold (`Com_BitCheck` at 0x36b92 over the branch at 0x36b9c) and ends in a
+`Com_BitClear` of that bit at 0x36c6e; between the two it walks the weapon
+list looking for another held weapon whose `BG_GetInfoForWeapon` record
+carries the same `+0x78` slot to leave standing in its place
+(0x36bee..0x36c44), and zeroes the slot byte when there is none (0x36c51).
+
+Why the `"none"` arm matters: stock script feeds `getWeaponSlotWeapon`'s own
+`"none"` straight back in. `sd.gsc`'s `endRound` stores
+`pers["weapon2"] = player getWeaponSlotWeapon("primaryb")`, which reads
+`"none"` for a player carrying one primary, and `spawnPlayer` re-gives it
+after the `map_restart`; a host that errors on the name kills the spawning
+thread at that line, and the player comes back holding nothing.
+
+Not modelled in `crates/server/src/game/builtins/client.rs`: the slot check
+at 0x43f26 and the replacement search inside the take, neither of which any
+stock loadout reaches.
 
 Whether retail's `setWeaponSlotAmmo` clamps its argument to the weapon's
 `maxAmmo` is UNVERIFIED: 0x44130 was not read. It matters because stock

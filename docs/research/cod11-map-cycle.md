@@ -519,6 +519,18 @@ re-read, since a restart changes neither the paks nor the map.
 
 Retail's restart has no baseline pass, and `map_restart` has none either.
 
+One thing crosses `Client::reset_for_restart` that no other level state does:
+`EF_TELEPORT_BIT`. Step 11 re-enters the same client on the same life, and
+`crates/server/src/spectate.rs`'s `ClientSim` is rebuilt by `enter_world`, so
+`map_restart` reads the bit off the outgoing sim and writes it back on the
+incoming one; the spawn the level's own `ClientConnect` runs then flips it as
+any respawn does. VERIFIED, from the retail round-restart capture: the
+shooter reads `eFlags` 16 on the life before the restart and 24 on the one
+after (`crates/server/tests/fixtures/netchan/mp_carentan-sd-roundrestart-shooter.txt`,
+`!trace ms=697` and `ms=5765`), and the target the same. Leave it pinned and
+a retail client interpolates a respawning player from its old position to its
+new spawn.
+
 Not modelled from the numbered list: step 6's `sv.state`, `sv.restarting`
 and the `sv_serverRestarting` cvar, none of which vcod has a counterpart for
 (what `sv.restarting` gates on retail, `SV_SetConfigstring`'s broadcast, vcod

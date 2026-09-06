@@ -46,6 +46,22 @@ impl PlayerWeapons {
         }
     }
 
+    /// `BG_TakePlayerWeapon` (`game.mp.i386.so` 0x36b78): the weapon is
+    /// dropped and every slot it stood in goes empty. One the player does not
+    /// hold is a no-op, which is what makes taking an empty slot's `0` one.
+    /// Retail's search for another held weapon of the same `weaponSlot` to
+    /// move in behind it is not modelled: no stock loadout gives two of one
+    /// slot.
+    pub fn take(&mut self, index: usize) {
+        if !self.holds(index) {
+            return;
+        }
+        self.held &= !(1u64 << index);
+        for s in self.slots.iter_mut().filter(|s| **s as usize == index) {
+            *s = 0;
+        }
+    }
+
     /// Whether the player holds that weapon: retail's
     /// `COM_BitCheck(ps.weapons, index)`.
     pub fn holds(&self, index: usize) -> bool {

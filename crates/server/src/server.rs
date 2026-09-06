@@ -1711,6 +1711,10 @@ impl Server {
             let was_active = c.state == ClientState::Active;
             let name = c.name.clone();
             let entering = c.last_cmd;
+            // The one thing the level state does not take with it: a restart
+            // re-enters the same life, so the teleport bit goes on
+            // alternating (`ClientSim::teleport_bit`).
+            let teleport_bit = c.sim.as_ref().map(ClientSim::teleport_bit);
             c.reset_for_restart();
             // Through the guarded path, like every other reliable: a client
             // whose acks have fallen a ring behind is dropped rather than
@@ -1726,6 +1730,12 @@ impl Server {
             }
             if was_active {
                 self.enter_world(slot, Some(&entering));
+                if let (Some(bit), Some(sim)) = (
+                    teleport_bit,
+                    self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()),
+                ) {
+                    sim.set_teleport_bit(bit);
+                }
             }
         }
         // 4.3: `SV_Frame`'s cvar flush carrying the bumped `sv_serverid`,

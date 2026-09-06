@@ -13,8 +13,7 @@
 //! the serverId the `d 1` carries, the absence of a gamestate, the respawn on
 //! the restart's own frame, and the length of the round that ran its timer
 //! out. Not a command-for-command diff -- the burst carries slots ours pins to
-//! constants (`mapchange_ab::CMD_GAPS`) -- and [`RESTART_GAPS`] lists what a
-//! respawn here still gets wrong.
+//! constants (`mapchange_ab::CMD_GAPS`).
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
@@ -53,25 +52,6 @@ const TIMER_TOL_MS: i64 = 250;
 /// limit is one minute, so anything past it is the timer's round plus the
 /// end-of-round wait.
 const TIMER_ROUND_FLOOR_MS: i64 = 60_000;
-
-/// What a live client's respawn still gets wrong across a round restart, each
-/// with the retail line that says so. Empty is the goal, and the guard below
-/// fails on any entry that starts matching, so this list cannot rot into a
-/// lie.
-const RESTART_GAPS: &[(&str, &str)] = &[
-    (
-        "weapon",
-        "retail carries the same weapon index either side of the restart \
-         (shooter 12, target 9); a client that was alive comes back holding \
-         nothing here, while one that was dead comes back armed",
-    ),
-    (
-        "eFlags",
-        "retail flips the per-life teleport bit 0x8 on the respawn (16 -> 24), \
-         which is what stops a client interpolating from the old position; \
-         ours leaves it where it was",
-    ),
-];
 
 /// One `map_restart` as a client saw it.
 struct Restart {
@@ -366,34 +346,5 @@ fn an_sd_round_restart_matches_retail() {
             "{half}: the weapon held before the restart is {} on retail and {} here",
             rl.3, ol.3
         );
-
-        // --- the known gaps, and the guard that deletes them ---
-        for (what, why) in RESTART_GAPS {
-            match *what {
-                "weapon" => {
-                    assert_eq!(
-                        rl.7, rl.3,
-                        "RESTART_GAPS: retail dropped the weapon too ({why})"
-                    );
-                    assert_eq!(
-                        ol.7, 0,
-                        "{half}: the weapon now survives the restart; drop it from \
-                         RESTART_GAPS ({why})"
-                    );
-                }
-                "eFlags" => {
-                    assert_ne!(
-                        rl.5, rl.1,
-                        "RESTART_GAPS: retail left the teleport bit alone too ({why})"
-                    );
-                    assert_eq!(
-                        ol.5, ol.1,
-                        "{half}: the teleport bit now flips on a restart; drop it from \
-                         RESTART_GAPS ({why})"
-                    );
-                }
-                other => panic!("RESTART_GAPS has no guard for {other:?}"),
-            }
-        }
     }
 }

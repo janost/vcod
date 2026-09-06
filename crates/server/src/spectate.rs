@@ -340,6 +340,21 @@ impl ClientSim {
         }
     }
 
+    /// `EF_TELEPORT_BIT`'s state, for a caller that has to carry it across a
+    /// sim it replaces. `SV_MapRestart_f` re-enters a client that was already
+    /// in the world (map-cycle doc, section 4, step 11) and that is the same
+    /// life going on, so the bit keeps alternating across the restart rather
+    /// than starting over; the retail round-restart capture reads `eFlags`
+    /// 16 -> 24 on it.
+    pub fn teleport_bit(&self) -> bool {
+        self.teleport_bit
+    }
+
+    /// The other half of [`ClientSim::teleport_bit`].
+    pub fn set_teleport_bit(&mut self, on: bool) {
+        self.teleport_bit = on;
+    }
+
     /// The mode change `spawnPlayer()` makes: the same sim, restarted at the
     /// spawn point the script chose. `cmd_angles` is the client's last-known
     /// cmd angles going into the spawn -- a spectator can have turned freely
