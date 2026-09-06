@@ -685,10 +685,12 @@ what the stock gametypes' round-end lines travel on.
 
 **`sd.gsc`'s `Callback_PlayerConnect` opens the team menu before it suspends,
 VERIFIED from the stock script.** The `else` arm calls `openMenu(game
-["menu_team"])` and only then `spawnSpectator()`, whose first statement is a
-call to that file's own `updateTeamStatus()`, which opens with `wait 0` and a
-comment saying the wait is there so `Callback_PlayerDisconnect` can finish
-first. INFERRED, from that order against the scheduler: the `t` command is on
+["menu_team"])` and only then `spawnSpectator()`, which after its opening
+`notify`, its `resettimeout()`, its session-state assignments and the
+`self spawn(...)` that places the camera calls that file's own
+`updateTeamStatus()`, and that function opens with `wait 0` and a comment
+saying the wait is there so `Callback_PlayerDisconnect` can finish first.
+INFERRED, from that order against the scheduler: the `t` command is on
 the wire while the connect thread is suspended and before it reaches the
 `waittill("menuresponse")` loop, so a menu answer that arrives inside that one
 frame notifies an event nothing is parked on and is dropped. `dm.gsc` has no
