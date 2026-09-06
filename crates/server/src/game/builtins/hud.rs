@@ -390,7 +390,7 @@ mod tests {
     fn the_three_allocators_differ_in_owner_and_team() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 3).unwrap();
+            let c = host.ents.spawn_client(cx, 3, None).unwrap();
             let all = ent(new_hud_elem(&mut host, cx, None, &[]).unwrap());
             let mine = ent(new_client_hud_elem(&mut host, cx, None, &[Value::Entity(c)]).unwrap());
             let axis = Value::String(cx.intern_exact("axis"));
@@ -457,7 +457,7 @@ mod tests {
     fn a_client_hud_elem_needs_a_player_and_destroy_frees_it() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let prop = host.ents.spawn(cx).unwrap();
             assert!(new_client_hud_elem(&mut host, cx, None, &[Value::Entity(prop)]).is_err());
             assert!(new_client_hud_elem(&mut host, cx, None, &[]).is_err());

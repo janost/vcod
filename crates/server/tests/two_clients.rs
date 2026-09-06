@@ -1106,3 +1106,162 @@ fn a_map_command_reloads_the_level_on_the_live_netchan() {
         "SNAPFLAG_SERVERCOUNT did not toggle"
     );
 }
+
+/// `map_restart` on the console re-inits the level in place: no gamestate,
+/// the netchan and both reliable rings kept, the serverId's low nibble up
+/// one and `d 3`, `n`, `d 1` on the wire in that order
+/// (docs/research/cod11-map-cycle.md section 4, and the `d 3`/`n`/`d 1` run
+/// in `tests/fixtures/netchan/mp_carentan-dm-mapchange.txt` seq 42-44).
+/// `map <the map already serving>` is the same path (section 4.2), which is
+/// the tail of this test.
+#[test]
+fn map_restart_re_inits_the_level_without_a_gamestate() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb, mut ja, mut jb) = common::join_pair_logged(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+
+    let p = &PROTOCOL_V1;
+    let first = ca.snapshots().newest().expect("A got no snapshot");
+    assert_eq!(
+        first.ps.field_i32(p, "pm_type"),
+        0,
+        "A never spawned before the restart, so the restart proves nothing"
+    );
+    let seq_before = ca.incoming_sequence();
+    let cmd_seq_before = ca.command_sequence();
+    let id_before = sv.server_id();
+
+    // The restart, then the same-map `map`, each asserted the same way.
+    for (line, expected) in [
+        (
+            "map_restart".to_string(),
+            vcod_server::console::next_restart_id(id_before),
+        ),
+        (
+            format!("map {MAP}"),
+            vcod_server::console::next_restart_id(vcod_server::console::next_restart_id(id_before)),
+        ),
+    ] {
+        // Read before each push: the bit toggles per restart, so a value
+        // taken once would read unchanged after the second one.
+        let snap_flags_before = ca
+            .snapshots()
+            .newest()
+            .expect("a snapshot before the restart")
+            .snap_flags;
+        ja.reset_menus();
+        jb.reset_menus();
+        sv.push_console(&line);
+        let mut gamestates = [0usize; 2];
+        // What each client saw on the reliable stream, in order, of the
+        // three commands the restart writes.
+        let mut wire: [Vec<String>; 2] = Default::default();
+        for _ in 0..600 {
+            now += Duration::from_millis(50);
+            ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+            cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+            let (ea, eb) = common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+            for (i, (events, join, cl)) in [(ea, &mut ja, &mut ca), (eb, &mut jb, &mut cb)]
+                .into_iter()
+                .enumerate()
+            {
+                for e in events {
+                    match e {
+                        vcod_common::net::NetEvent::GamestateReady => gamestates[i] += 1,
+                        vcod_common::net::NetEvent::ConfigstringChanged(idx)
+                            if matches!(idx, 1 | 3) =>
+                        {
+                            wire[i].push(format!("d {idx}"))
+                        }
+                        vcod_common::net::NetEvent::ServerCommand(tokens) => {
+                            // Retail reruns `ClientConnect` on a restart and
+                            // reopens the menus under the indices the last
+                            // level used, so `n` is what forgets them.
+                            if tokens.first().map(String::as_str) == Some("n") {
+                                wire[i].push("n".to_string());
+                                join.reset_menus();
+                            }
+                            join.on_server_command(&tokens, cl, now)
+                        }
+                        vcod_common::net::NetEvent::Dropped(r) => {
+                            panic!("client {i} dropped across {line}: {r}")
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if ja.settled(now) && jb.settled(now) {
+                break;
+            }
+        }
+
+        assert_eq!(gamestates, [0, 0], "{line} pushed a gamestate");
+        // The retail order, from the dm map-change capture's seq 42-44.
+        for (i, seen) in wire.iter().enumerate() {
+            assert_eq!(seen, &["d 3", "n", "d 1"], "{line}: client {i}'s wire");
+        }
+        assert_eq!(
+            sv.server_id(),
+            expected,
+            "{line}: the serverId low nibble did not climb, or the high one moved"
+        );
+        for (i, cl) in [&ca, &cb].into_iter().enumerate() {
+            assert_eq!(
+                cl.server_id(),
+                i32::from(sv.server_id()),
+                "client {i} never read the new serverId back off `d 1` after {line}"
+            );
+        }
+        assert!(
+            ca.configstring(0).contains(&format!("mapname\\{MAP}")),
+            "{line} moved the level off {MAP}: {:?}",
+            ca.configstring(0)
+        );
+        assert!(
+            ca.incoming_sequence() > seq_before,
+            "{line} restarted the netchan"
+        );
+        assert!(
+            ca.command_sequence() >= cmd_seq_before,
+            "{line}: the reliable command sequence went backwards"
+        );
+        for (i, (cl, join)) in [(&ca, &ja), (&cb, &jb)].into_iter().enumerate() {
+            let snap = cl
+                .snapshots()
+                .newest()
+                .expect("a snapshot after the restart");
+            assert_eq!(
+                snap.ps.field_i32(p, "pm_type"),
+                0,
+                "client {i} never spawned again after {line}: {}",
+                join.summary()
+            );
+        }
+        let snap = ca.snapshots().newest().expect("A got no snapshot after");
+        assert_ne!(
+            snap.snap_flags & 4,
+            snap_flags_before & 4,
+            "{line}: SNAPFLAG_SERVERCOUNT did not toggle"
+        );
+    }
+}

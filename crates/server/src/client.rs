@@ -102,6 +102,18 @@ impl Client {
         self.last_processed_st = 0;
     }
 
+    /// `SV_MapRestart_f`'s client pass (map-cycle doc, section 4 steps 9 to
+    /// 11): the level state goes and the connection state stays, because
+    /// the restart re-enters an `CS_ACTIVE` client itself and leaves a
+    /// `CS_PRIMED` one to its own next message (4.4). The snapshot ring
+    /// clears, which is retail's `deltaMessage = -1`, and `last_cmd` is
+    /// kept: step 11 hands it to `SV_ClientEnterWorld`.
+    pub fn reset_for_restart(&mut self) {
+        self.sim = None;
+        self.frames = vec![None; SV_PACKET_BACKUP];
+        self.pending.clear();
+    }
+
     /// The frame sent as `message_num`, if still in the ring.
     pub fn sent_frame(&self, message_num: u32) -> Option<&Snapshot> {
         self.frames[message_num as usize % SV_PACKET_BACKUP]

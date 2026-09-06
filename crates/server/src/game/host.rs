@@ -142,6 +142,17 @@ pub enum SimOp {
     },
 }
 
+/// `level+0x29f0`'s three readings (docs/research/cod11-map-cycle.md
+/// section 1). The latch is per-level: `G_InitGame` zeroes `level`, so a
+/// restart clears it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum LevelLatch {
+    #[default]
+    None,
+    MapRestart,
+    ExitLevel,
+}
+
 pub struct GameHost {
     pub configstrings: Vec<String>,
     pub ents: ObjectTable,
@@ -223,10 +234,19 @@ pub struct GameHost {
     /// per-call timestamp, which is why this lives on the host instead of
     /// being threaded through `get_time`'s own call.
     pub level_time_ms: i32,
-    /// Set by `exitLevel()`, drained and logged once per frame by
-    /// `run_frame`. No stage in this sub-project acts on it; stage 6 ("the
-    /// score limit ends the map") is where it does.
-    pub exit_level: bool,
+    /// `level+0x29f0`, the one-shot latch `map_restart` and `exitLevel`
+    /// share (docs/research/cod11-map-cycle.md section 1): 0 until one of
+    /// them runs, then 1 or 2, and the second call is a script error naming
+    /// whichever got there first.
+    pub level_latch: LevelLatch,
+    /// One client's `pers[]` from the outgoing level, by slot, installed by
+    /// `spawn_client` at the `ClientConnect` a restart reruns and taken as
+    /// it goes in. Empty on a boundary that kept nothing.
+    pub pers_carry: Vec<Option<vcod_gsc::ArrayCarry>>,
+    /// The console lines those two builtins queued
+    /// (`trap_SendConsoleCommand`), drained by
+    /// `ScriptRuntime::take_console` into the server's own buffer.
+    pub console: Vec<String>,
     /// Who owns a client's name, from `setClientNameMode`. Nothing reads it
     /// until clients exist: both of retail's readers are client code.
     pub client_name_mode: builtins::cvar::ClientNameMode,
@@ -290,7 +310,9 @@ impl GameHost {
             rng: RNG_SEED,
             script_log: Vec::new(),
             level_time_ms: 0,
-            exit_level: false,
+            level_latch: LevelLatch::None,
+            pers_carry: Vec::new(),
+            console: Vec::new(),
             items: crate::items::Items::new(),
             client_name_mode: builtins::cvar::ClientNameMode::default(),
             fs: None,
@@ -958,7 +980,7 @@ mod tests {
     fn a_client_field_round_trips_and_a_map_entity_still_refuses_one() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let f = cx.intern_folded("sessionteam");
             let v = Value::String(cx.intern_exact("allies"));
             host.set_field(cx, c, f, v).unwrap();
@@ -987,13 +1009,13 @@ mod tests {
             let team = Value::String(cx.intern_exact("allies"));
             let pos = Value::Vector([1.0, 2.0, 3.0]);
 
-            let a = host.ents.spawn_client(cx, 0).unwrap();
+            let a = host.ents.spawn_client(cx, 0, None).unwrap();
             host.set_field(cx, a, sessionteam, team).unwrap();
             host.set_field(cx, a, origin, pos).unwrap();
             assert_eq!(host.get_field(cx, a, sessionteam), team);
             assert_eq!(host.get_field(cx, a, origin), pos);
 
-            let b = host.ents.spawn_client(cx, 1).unwrap();
+            let b = host.ents.spawn_client(cx, 1, None).unwrap();
             host.set_field(cx, b, origin, pos).unwrap();
             host.set_field(cx, b, sessionteam, team).unwrap();
             assert_eq!(host.get_field(cx, b, origin), pos);
@@ -1026,7 +1048,7 @@ mod tests {
     fn a_numeric_client_field_starts_at_zero() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let read = |host: &mut GameHost, cx: &mut Cx, f: &str| {
                 let atom = cx.intern_folded(f);
                 host.get_field(cx, c, atom)
@@ -1048,7 +1070,7 @@ mod tests {
     fn archivetime_reads_back_zero_whatever_was_written() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let atom = cx.intern_folded("archivetime");
             host.set_field(cx, c, atom, Value::Int(9)).unwrap();
             assert_eq!(host.get_field(cx, c, atom), Value::Int(0));

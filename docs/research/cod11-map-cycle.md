@@ -510,10 +510,29 @@ message unread for every other state.
 `crates/server/src/server.rs`'s `map_restart` carries the numbered list,
 sharing `crates/server/src/console.rs`'s nibble arithmetic with `spawn_server`
 for step 5. `crates/server/src/game/script.rs`'s `load`/`load_from` take the
-`restart` flag and the carried `game` object that 4.1's two `VM_Call`s stand
-for, and `client_connect_again` is step 10. vcod has no VM to free, so 3 step
-5's unload against 4.1's reuse shows up only as whether the carried `game`
-object is taken.
+carried `game` and `pers` tables that 4.1's two `VM_Call`s stand for, and
+`reconnect_client` is step 10. vcod has no VM to free, so 3 step 5's unload
+against 4.1's reuse shows up only as whether those tables are carried; the
+`restart` flag stays on `Server::load_scripts_with`, where what it decides is
+that the animtree, the weapon files and the hit-location table are not
+re-read, since a restart changes neither the paks nor the map.
+
+Retail's restart has no baseline pass, and `map_restart` has none either.
+
+Two divergences on the wire:
+
+- The reliable stream carries `d 3`, `n` and `d 1`, in that order, and
+  nothing else. The retail capture the order comes from
+  (`crates/server/tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`, seq
+  40 to 44) opens with a `d 13` and a `d 12` as well, which are the two
+  slots the outgoing level's own script had moved; vcod has no per-slot
+  configstring diff to produce them, so it sends the one the new level
+  always writes.
+- The cvar table is carried from the outgoing level rather than rebuilt from
+  `default_mp.cfg`, on this path and on the map change alike, because
+  retail's `Cvar_Set` writes a process-global table that neither boundary
+  clears. A `+set` override is replayed on top either way, so it still
+  outranks a script's `setCvar`.
 
 ---
 
