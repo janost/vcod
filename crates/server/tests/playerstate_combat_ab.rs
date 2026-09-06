@@ -35,19 +35,114 @@ const SKIPPED: &[(&str, &str)] = &[(
      is unmeasured\")",
 )];
 
-/// Steps whose `weapAnim` indices are not compared, by map, with the reason.
-/// The states and the shot count still are. Empty is the goal and it is
-/// empty: pavlov's `idle_after` was the entry, and it earned itself back when
-/// the captures were retaken with the usercmd carrying the held weapon. The
-/// guard below fails on an entry that starts matching, so the list cannot rot
-/// into a lie.
-const ANIM_GAPS: &[(&str, &str, &str)] = &[];
+/// One channel of one step that the gate does not compare, keyed by map,
+/// capture kind and step label, with the reason. The kind is in the key
+/// because two captures share a map and a label: `ads` is the carbine's and
+/// `ads-sniper` the scoped rifle's, and a gap one weapon needs must not
+/// excuse the other.
+///
+/// Every entry is a known divergence from retail, not a fact about it, and
+/// the list is self-cleaning: [`check`] asserts that a gapped channel still
+/// differs, so an entry that starts matching fails the run rather than
+/// quietly outliving the defect it names. Empty is the goal. It was empty
+/// until the scoped-rifle capture landed; the four entries below are one
+/// open defect, named in [`RECHAMBER_GAP`].
+const KNOWN_GAPS: &[Gap] = &[
+    Gap {
+        map: "mp_carentan",
+        kind: "ads-sniper",
+        label: "ads_release",
+        channel: "weaponstate",
+        why: RECHAMBER_GAP,
+    },
+    Gap {
+        map: "mp_carentan",
+        kind: "ads-sniper",
+        label: "ads_release",
+        channel: "weaponDelay",
+        why: RECHAMBER_GAP,
+    },
+    Gap {
+        map: "mp_carentan",
+        kind: "ads-sniper",
+        label: "ads_release",
+        channel: "weapAnim",
+        why: RECHAMBER_GAP,
+    },
+    Gap {
+        map: "mp_carentan",
+        kind: "ads-sniper",
+        label: "ads_release",
+        channel: "torsoAnim",
+        why: RECHAMBER_GAP,
+    },
+    Gap {
+        map: "mp_carentan",
+        kind: "ads-sniper",
+        label: "ads_shot",
+        channel: "torsoAnim",
+        why: RECHAMBER_GAP,
+    },
+    Gap {
+        map: "mp_carentan",
+        kind: "ads-sniper",
+        label: "ads_walk",
+        channel: "transients",
+        why: ADS_WALK_GAP,
+    },
+];
 
-/// Steps whose `torsoAnim` is not compared, by map, with the reason. An entry
-/// suppresses the restart-toggle flip count with the indices, since a channel
-/// nobody writes cannot flip. Same self-cleaning guard as [`ANIM_GAPS`]: an
-/// entry that starts matching fails.
-const TORSO_GAPS: &[(&str, &str, &str)] = &[];
+/// The second open defect, and the one worth chasing: walking away from the
+/// capture's own spawn with the sight held, ours reads `groundEntityNum` 1023
+/// for one sample where retail reads 1022 for all 31. `update_ads_flag`
+/// clears the sight for an airborne frame, so `advance_ads` ramps *down* by
+/// `msec / adsTransOutTime` for that cmd and back up for the next: at 25 ms
+/// cmds that is -0.0625 then +0.083, and the capture reads the fraction
+/// moving 0.333 to 0.354 across a 50 ms frame it should have moved 0.167.
+/// On `kar98k_sniper_mp` (`adsZoomFov` 16) a client re-basing its zoom
+/// prediction off that is the twitch this branch was opened for.
+///
+/// The step's spread counter is gapped with it and for a weaker reason: the
+/// walk covers the map's own geometry, so when it stops climbing is a fact
+/// about where the walk ended, which is why `walks` steps are excluded
+/// wholesale elsewhere. Retail's counter starts decaying ~300 ms in and ours
+/// does not.
+///
+/// Only the walking sight step is gapped. Every standing one is compared,
+/// and the fraction matches there, which is what says the ramp itself is
+/// right and the ground trace is not.
+const ADS_WALK_GAP: &str = "ours goes airborne for one sample where retail never does, which reverses      the sight ramp for that cmd (see ADS_WALK_GAP, open)";
+
+/// The one open defect [`KNOWN_GAPS`] names, measured off the retail
+/// `mp_carentan-tdm-ads-sniper` capture: after a scoped `kar98k_sniper_mp`
+/// shot, ours runs a rechamber retail does not. Retail's `ads_release` reads
+/// `weaponstate` 0 and 9 with `weaponDelay` 0 throughout; ours holds
+/// `weaponstate` 5 for 12 samples and a 175 ms `weaponDelay`, and writes the
+/// rechamber's `weapAnim` 11 and 13 and a `torsoAnim` on the shot step as
+/// well. The sight fraction is unaffected -- it reads 1.0 through every held
+/// sample on both sides -- which is why the rest of this capture is compared
+/// rather than skipped. The fix is in the weapon machine
+/// (`vcod_common::pmove::weapon`); until it lands the channels are gapped and
+/// the divergence is visible here rather than absent.
+const RECHAMBER_GAP: &str = "ours runs a bolt-action rechamber after the scoped shot that retail does      not: retail holds `weaponDelay` 0 and never enters `weaponstate` 5, ours      holds 175 ms and 12 samples of it (see RECHAMBER_GAP, open)";
+
+/// One [`KNOWN_GAPS`] entry.
+struct Gap {
+    map: &'static str,
+    kind: &'static str,
+    label: &'static str,
+    /// `weapAnim`, `torsoAnim`, `weaponstate` or `weaponDelay`.
+    channel: &'static str,
+    why: &'static str,
+}
+
+/// The reason this map/kind/step/channel is not compared, if it is gapped.
+fn gapped(map: &str, kind: &str, label: &str, channel: &str) -> Option<&'static str> {
+    KNOWN_GAPS
+        .iter()
+        .find(|g| g.map == map && g.kind == kind && g.label == label && g.channel == channel)
+        .map(|g| g.why)
+}
 
 /// Steps whose `torsoAnim` index is drawn rather than fixed, with the reason.
 /// The `meleeattack` clause lists several anims per channel and retail draws
@@ -209,6 +304,13 @@ fn trace_of(s: &Sample, ms: i64) -> Trace {
         ]),
         pos_frac: Some(ps.field_f32(p, "fWeaponPosFrac")),
         spread: Some(ps.field_f32(p, "aimSpreadScale")),
+        viewangles: Some([
+            ps.field_f32(p, "viewangles[0]"),
+            ps.field_f32(p, "viewangles[1]"),
+            ps.field_f32(p, "viewangles[2]"),
+        ]),
+        pm_flags: Some(ps.field_i32(p, "pm_flags")),
+        ground_entity: Some(ps.field_i32(p, "groundEntityNum")),
         grenade_time_left: Some(ps.field_i32(p, "grenadeTimeLeft")),
         weapon_delay: Some(ps.field_i32(p, "weaponDelay")),
     }
@@ -253,33 +355,57 @@ fn transient_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
             continue;
         }
         let saturated = rf == 0.0 || rf == 1.0;
-        let frac_ok = near.iter().any(|o| {
-            o.pos_frac.is_some_and(|f| {
-                if saturated {
-                    f == rf
-                } else {
-                    (f - rf).abs() <= FRAC_TOL
-                }
-            })
-        });
+        let fracs: Vec<f32> = near.iter().filter_map(|o| o.pos_frac).collect();
+        let frac_ok = if saturated {
+            fracs.contains(&rf)
+        } else {
+            // On the slope, retail's sample can fall between two of ours,
+            // which is a ramp passing through its value rather than a miss:
+            // the two grids are 33-66 ms and 50 ms apart and the sniper's
+            // `ads_walk` puts retail's 0.573 between our 0.500 and 0.667.
+            // Bracketing says that directly; the tolerance is the fallback
+            // for an end of the window with nothing on the far side.
+            fracs.iter().any(|f| (f - rf).abs() <= FRAC_TOL)
+                || fracs.windows(2).any(|w| (w[0] - rf) * (w[1] - rf) <= 0.0)
+        };
         let spread_ok = near
             .iter()
             .any(|o| o.spread.is_some_and(|s| (s - rs).abs() <= SPREAD_TOL));
+        // The view is not a transient and gets no tolerance: retail writes
+        // `ps.viewangles` as `SHORT2ANGLE(cmd.angles + delta_angles)` and the
+        // replay sends the capture's own cmd angles, so every axis has to
+        // read the same float. `None` on a capture taken before the column
+        // existed, which is every one but the scoped rifle's.
+        if let Some(rv) = r.viewangles {
+            if let Some(ov) = near.iter().find_map(|o| o.viewangles) {
+                if ov != rv {
+                    bad.push(format!(
+                        "at {}ms retail viewangles {rv:?}, ours {ov:?}",
+                        r.ms
+                    ));
+                }
+            }
+        }
         if !frac_ok || !spread_ok {
             let ours_at: Vec<String> = near
                 .iter()
                 .map(|o| {
                     format!(
-                        "{}ms {:.3}/{:.1}",
+                        "{}ms {:.3}/{:.1} pm=0x{:x} ground={}",
                         o.ms,
                         o.pos_frac.unwrap_or(f32::NAN),
-                        o.spread.unwrap_or(f32::NAN)
+                        o.spread.unwrap_or(f32::NAN),
+                        o.pm_flags.unwrap_or(-1),
+                        o.ground_entity.unwrap_or(-1),
                     )
                 })
                 .collect();
             bad.push(format!(
-                "at {}ms retail fWeaponPosFrac {rf:.3} aimSpreadScale {rs:.1}, ours {}",
+                "at {}ms retail fWeaponPosFrac {rf:.3} aimSpreadScale {rs:.1} \
+                 pm=0x{:x} ground={}, ours {}",
                 r.ms,
+                r.pm_flags.unwrap_or(-1),
+                r.ground_entity.unwrap_or(-1),
                 ours_at.join(", ")
             ));
         }
@@ -351,13 +477,22 @@ fn check(map: &str, gametype: &str, kind: &str) {
             ));
         }
         let (rd, od) = (peak_delay(&step.trace), peak_delay(ours));
-        if step.trace.iter().any(|t| t.weapon_delay.is_some()) && (rd - od).abs() > FRAME_MS as i32
-        {
-            bad.push(format!(
+        let delay_same = !step.trace.iter().any(|t| t.weapon_delay.is_some())
+            || (rd - od).abs() <= FRAME_MS as i32;
+        match gapped(map, kind, &step.label, "weaponDelay") {
+            Some(why) => assert!(
+                !delay_same,
+                "{map} {kind} {}: weaponDelay matches now; drop the KNOWN_GAPS \
+                 entry ({why})",
+                step.label
+            ),
+            None if !delay_same => bad.push(format!(
                 "{}: the longest weaponDelay is {rd} on retail, {od} on ours",
                 step.label
-            ));
+            )),
+            None => {}
         }
+        let mut state_bad = Vec::new();
         for state in [1, 2, 3, 4, 5, 10, 11] {
             let ((r, r_runs), (o, o_runs)) = (
                 state_samples(&step.trace, state),
@@ -376,21 +511,27 @@ fn check(map: &str, gametype: &str, kind: &str) {
             // from.
             let slack = r_runs.max(o_runs).max(1);
             if r.abs_diff(o) > slack || r_runs.abs_diff(o_runs) > 1 {
-                bad.push(format!(
+                state_bad.push(format!(
                     "{}: weaponstate {state} holds {r} samples over {r_runs} runs on \
                      retail, {o} over {o_runs} on ours",
                     step.label
                 ));
             }
         }
+        match gapped(map, kind, &step.label, "weaponstate") {
+            Some(why) => assert!(
+                !state_bad.is_empty(),
+                "{map} {kind} {}: every weaponstate matches now; drop the KNOWN_GAPS \
+                 entry ({why})",
+                step.label
+            ),
+            None => bad.append(&mut state_bad),
+        }
         let same_anims = anims(&step.trace) == anims(ours);
-        match ANIM_GAPS
-            .iter()
-            .find(|(m, l, _)| *m == map && *l == step.label)
-        {
-            Some((.., why)) => assert!(
+        match gapped(map, kind, &step.label, "weapAnim") {
+            Some(why) => assert!(
                 !same_anims,
-                "{map} {}: the weapAnim indices match now; drop the ANIM_GAPS \
+                "{map} {kind} {}: the weapAnim indices match now; drop the KNOWN_GAPS \
                  entry ({why})",
                 step.label
             ),
@@ -424,13 +565,10 @@ fn check(map: &str, gametype: &str, kind: &str) {
             torso_flips(&step.trace),
             torso_flips(&ours[aligned.min(ours.len())..]),
         );
-        match TORSO_GAPS
-            .iter()
-            .find(|(m, l, _)| *m == map && *l == step.label)
-        {
-            Some((.., why)) => assert!(
+        match gapped(map, kind, &step.label, "torsoAnim") {
+            Some(why) => assert!(
                 !same_torsos,
-                "{map} {}: the torsoAnim indices match now; drop the TORSO_GAPS \
+                "{map} {kind} {}: the torsoAnim indices match now; drop the KNOWN_GAPS \
                  entry ({why})",
                 step.label
             ),
@@ -467,14 +605,21 @@ fn check(map: &str, gametype: &str, kind: &str) {
             }
         }
         let misses = transient_misses(&step.trace, ours);
-        if !misses.is_empty() {
-            bad.push(format!(
+        match gapped(map, kind, &step.label, "transients") {
+            Some(why) => assert!(
+                !misses.is_empty(),
+                "{map} {kind} {}: the sight and spread match now; drop the \
+                 KNOWN_GAPS entry ({why})",
+                step.label
+            ),
+            None if !misses.is_empty() => bad.push(format!(
                 "{}: {} of {} samples off\n    {}",
                 step.label,
                 misses.len(),
                 step.trace.len(),
                 misses.join("\n    ")
-            ));
+            )),
+            None => {}
         }
     }
     assert!(
@@ -502,6 +647,17 @@ fn the_sight_and_spread_match_retail_on_mp_carentan() {
 #[test]
 fn the_sight_and_spread_match_retail_on_mp_pavlov() {
     check("mp_pavlov", "dm", "ads");
+}
+
+/// The same sight script on the scoped rifle. `m1carbine_mp` is `adsZoomFov`
+/// 65, `kar98k_sniper_mp` 16, so the sniper is where a sight fraction that is
+/// merely close reads as the weapon twitching; this capture is what says the
+/// fraction is not what twitches. It is also the capture that measured
+/// `ps.viewangles` on the wire for a spawned player, which is compared here
+/// exactly.
+#[test]
+fn the_scoped_sight_and_view_match_retail_on_mp_carentan() {
+    check("mp_carentan", "tdm", "ads-sniper");
 }
 
 #[test]
