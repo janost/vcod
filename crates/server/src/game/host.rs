@@ -310,6 +310,19 @@ pub struct GameHost {
 pub(crate) const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
 impl GameHost {
+    /// Every client slot that holds a client entity, which is every client
+    /// from its `ClientConnect` to its disconnect. What a broadcast reliable
+    /// command (`iPrintLn`) goes to.
+    pub fn client_slots(&self) -> Vec<usize> {
+        (0..MAX_CLIENTS)
+            .filter(|&s| {
+                self.ents
+                    .get(EntId(s as u32))
+                    .is_some_and(|e| e.client.is_some())
+            })
+            .collect()
+    }
+
     pub fn new(configstrings: Vec<String>) -> GameHost {
         GameHost {
             configstrings,
@@ -541,7 +554,8 @@ impl Host for GameHost {
         match folded.as_str() {
             "setcullfog" => builtins::env::set_cull_fog(&mut self.configstrings, cx, args),
             "ambientplay" => builtins::env::ambient_play(&mut self.configstrings, cx, args),
-            "println" | "iprintln" | "logprint" => builtins::io::print_line(self, cx, args),
+            "iprintln" => builtins::io::iprint_line(self, cx, recv, args),
+            "println" | "logprint" => builtins::io::print_line(self, cx, args),
             _ => Err(ErrorKind::MissingBuiltin(name)),
         }
     }

@@ -264,18 +264,13 @@ fn an_sd_round_restart_matches_retail() {
 
     let qa = Rc::new(RefCell::new(common::Queues::default()));
     let qb = Rc::new(RefCell::new(common::Queues::default()));
-    // One frame of delay on every menu answer: `sd`'s `Callback_PlayerConnect`
-    // reaches its `menuresponse` loop only after `spawnSpectator` ->
-    // `updateTeamStatus`, whose first statement is `wait 0`, and this harness
-    // has no network delay of its own to cover that frame with.
-    let (mut ca, mut cb, mut ja, mut jb) = common::join_pair_delayed(
+    let (mut ca, mut cb, mut ja, mut jb) = common::join_pair_logged(
         &mut sv,
         &qa,
         &qb,
         &mut now,
         ("allies", "m1carbine_mp"),
         ("axis", "kar98k_mp"),
-        1,
     );
     let id_before = sv.server_id();
 
@@ -321,7 +316,6 @@ fn an_sd_round_restart_matches_retail() {
                 }
             }
             common::record_netchan(cl, &events, ms, &mut ours[i]);
-            join.tick_answers(cl, now);
         }
     }
     let ours = [

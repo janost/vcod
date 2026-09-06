@@ -950,13 +950,28 @@ impl ScriptRuntime {
 
     /// One server frame of script.
     pub fn run_frame(&mut self, now_ms: i32) {
-        self.host.level_time_ms = now_ms;
-        // Client events before everything else, in the order the netcode
-        // raised them: a `Begin` drained ahead of its own `Connect` finds no
-        // thread parked on the notify and strands the client silently.
+        // The packet pass, on the clock the netcode raised its events with:
+        // retail runs `ClientBegin`, `ClientCommand` and `ClientDisconnect`
+        // from `SV_ExecuteClientMessage` (map-cycle doc, 4.4), before
+        // `G_RunFrame` advances `level.time`. So a thread one of them wakes
+        // runs to its next suspend here, and a `wait 0` it takes is due in
+        // *this* frame's thread pass rather than the next one. That is what
+        // parks `sd.gsc`'s connect callback on its `waittill("menuresponse")`
+        // before the `openMenu` it just queued can be answered; one frame
+        // later and the answer notifies nothing and the client never leaves
+        // the team menu.
+        //
+        // Client events in the order the netcode raised them: a `Begin`
+        // drained ahead of its own `Connect` finds no thread parked on the
+        // notify and strands the client silently.
+        let packet_ms = self.host.level_time_ms;
         for ev in std::mem::take(&mut self.host.client_events) {
-            self.dispatch_client_event(ev, now_ms);
+            self.dispatch_client_event(ev, packet_ms);
         }
+        for e in self.vm.run_frame(&mut self.host, packet_ms) {
+            log::warn!("script error: {e:?}");
+        }
+        self.host.level_time_ms = now_ms;
         // Thinks before threads: `G_RunFrame` runs the entity pass first, so
         // a script reading `getEntArray` in the same frame sees the freed
         // entity already gone. Whether retail really orders it this way is

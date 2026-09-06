@@ -245,20 +245,13 @@ pub(crate) fn client_receiver(host: &GameHost, recv: Option<Target>) -> Result<u
     }
 }
 
-/// The separator a localized string carries between its key and its
-/// substitution arguments, of which `setClientCvar`'s value has none, so it
-/// ends up trailing. Measured: retail sent `v cg_objectiveText
-/// "DM_KILL_OTHER_PLAYERS\x15"` for `setClientCvar("cg_objectiveText",
-/// &"DM_KILL_OTHER_PLAYERS")` on both gate maps.
-const LOCALIZED_SEP: char = '\u{15}';
-
-/// `self setClientCvar(name, value)`: the reliable command `v <name>
-/// "<value>"` (0x446e0, format string `v %s "%s"`). The name is never
-/// quoted and the value always is, so retail rewrites a `"` inside the value
-/// as `'` (0x447b2) rather than letting it close the argument early. A
+/// `self setClientCvar(name, value [, args...])`: the reliable command
+/// `v <name> "<value>"` (0x446e0, format string `v %s "%s"`). The name is
+/// never quoted and the value always is, so retail rewrites a `"` inside the
+/// value as `'` (0x447b2) rather than letting it close the argument early. A
 /// localized value takes the `Scr_GetType == 2` branch (0x44750) into
-/// `Scr_ConstructMessageString` (0x44765) instead of the plain string read,
-/// which is where `LOCALIZED_SEP` comes from.
+/// `Scr_ConstructMessageString` (0x44765), which is what packs the
+/// substitution arguments after it (`super::message`).
 pub fn set_client_cvar(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -272,13 +265,13 @@ pub fn set_client_cvar(
         ));
     };
     let name = cx.resolve(*name).to_string();
-    let mut value = cx
-        .format_number(value)
-        .ok_or(ErrorKind::BadType("setClientCvar takes a renderable value"))?
-        .replace('"', "'");
-    if matches!(args.get(1), Some(Value::Localized(_))) {
-        value.push(LOCALIZED_SEP);
+    let value = match value {
+        Value::Localized(_) => super::message::construct(host, cx, &args[1..]),
+        _ => cx
+            .format_number(value)
+            .ok_or(ErrorKind::BadType("setClientCvar takes a renderable value"))?,
     }
+    .replace('"', "'");
     host.client_commands
         .push((slot, format!("v {name} \"{value}\"")));
     Ok(Value::Undefined)
@@ -874,6 +867,39 @@ mod tests {
                     ),
                     (3, "t 1".to_string()),
                 ]
+            );
+        });
+    }
+
+    /// A localized value takes its substitution arguments with it, which is
+    /// what names the winner in the map-end banner: retail's capture reads
+    /// `v cg_objectiveText "MPSCRIPT_WINS\x15vcod^7"` for
+    /// `setClientCvar("cg_objectiveText", &"MPSCRIPT_WINS", playername)`
+    /// (`tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`).
+    #[test]
+    fn a_localized_value_carries_its_substitution_arguments() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn_client(cx, 0, None).unwrap();
+            let name = Value::String(cx.intern_exact("vcod"));
+            if let Some(c) = host.ents.get_mut(e).and_then(|x| x.client.as_mut()) {
+                c[0] = name;
+            }
+            let cvar = Value::String(cx.intern_exact("cg_objectiveText"));
+            let text = Value::Localized(cx.intern_exact("MPSCRIPT_WINS"));
+            set_client_cvar(
+                &mut host,
+                cx,
+                Some(Target::Entity(e)),
+                &[cvar, text, Value::Entity(e)],
+            )
+            .unwrap();
+            assert_eq!(
+                host.client_commands,
+                vec![(
+                    0,
+                    "v cg_objectiveText \"MPSCRIPT_WINS\u{15}vcod^7\"".to_string()
+                )]
             );
         });
     }

@@ -264,6 +264,10 @@ pub struct Server {
     server_id: u8,
     checksum_feed: i32,
     configstrings: Vec<String>,
+    /// The table as the clients last heard it, which is what a mid-level
+    /// change is diffed against ([`Server::broadcast_configstring_changes`]).
+    /// Re-synced wherever a client is handed the whole table again.
+    sent_configstrings: Vec<String>,
     challenges: Vec<Challenge>,
     clients: Vec<Option<Client>>,
     outbox: Vec<(SocketAddr, Vec<u8>)>,
@@ -446,6 +450,7 @@ impl Server {
         let server_id = 0x10;
         let mut sv = Server {
             configstrings: configstrings::static_configstrings(&cfg, server_id),
+            sent_configstrings: configstrings::static_configstrings(&cfg, server_id),
             clients: (0..cfg.max_clients).map(|_| None).collect(),
             cfg,
             huff: Huffman::new(),
@@ -1351,8 +1356,8 @@ impl Server {
     /// configstrings after that (any `setModel`, `loadFX`, `playSound` or
     /// `ambientPlay` from a thread that has passed a `wait`), so the table is
     /// not final at gamestate time; `tick` copies the script's table back
-    /// every frame and [`Self::send_configstring_update`] is what carries a
-    /// later allocation to a client that already has its gamestate.
+    /// every frame and [`Self::broadcast_configstring_changes`] is what
+    /// carries a later allocation to a client that already has its gamestate.
     ///
     /// The table is cloned in, not moved: `ScriptRuntime::load` fails on a
     /// missing `.gsc`, an unresolvable map, a bad BSP or a failed entity
@@ -1441,6 +1446,7 @@ impl Server {
             .write_mirror(&mut configstrings)
             .map_err(|e| anyhow::anyhow!("writing the cvar mirror: {e:?}"))?;
         self.configstrings = configstrings;
+        self.sync_sent_configstrings();
         self.script = Some(rt);
         Ok(())
     }
@@ -1492,8 +1498,29 @@ impl Server {
         }
         match name {
             "sv_mapRotation" => self.sv_map_rotation = value.to_string(),
-            "g_gametype" => self.cfg.gametype = value.to_string(),
+            "g_gametype" => {
+                self.cfg.gametype = value.to_string();
+                self.refresh_serverinfo();
+            }
             _ => {}
+        }
+    }
+
+    /// `SV_Frame`'s cvar flush, the serverinfo half: a write to a cvar the
+    /// serverinfo string carries is followed by
+    /// `SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))`
+    /// (docs/research/cod11-map-cycle.md, 4.3). Both tables, because the
+    /// script owns its own copy between level loads and `tick` reads that one
+    /// back over this one every frame.
+    fn refresh_serverinfo(&mut self) {
+        let info = configstrings::serverinfo(&self.cfg).to_string();
+        if let Some(slot) = self.configstrings.get_mut(0) {
+            *slot = info.clone();
+        }
+        if let Some(rt) = self.script.as_mut() {
+            if let Some(slot) = rt.host.configstrings.get_mut(0) {
+                *slot = info;
+            }
         }
     }
 
@@ -1692,6 +1719,10 @@ impl Server {
                 log::warn!("rebuilding the cvar mirror: {e:?}");
             }
         }
+        // The incoming level's whole table, in one go: what a client keeps of
+        // it is what the burst below re-sends, and the diff has no business
+        // replaying a level boundary slot by slot (doc 4.5).
+        self.sync_sent_configstrings();
         // The ambient the new level set, ahead of the `n` because retail's
         // settle frames flush it before step 9 does
         // (`tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`, seq 42-44).
@@ -1711,10 +1742,6 @@ impl Server {
             let was_active = c.state == ClientState::Active;
             let name = c.name.clone();
             let entering = c.last_cmd;
-            // The one thing the level state does not take with it: a restart
-            // re-enters the same life, so the teleport bit goes on
-            // alternating (`ClientSim::teleport_bit`).
-            let teleport_bit = c.sim.as_ref().map(ClientSim::teleport_bit);
             c.reset_for_restart();
             // Through the guarded path, like every other reliable: a client
             // whose acks have fallen a ring behind is dropped rather than
@@ -1729,13 +1756,11 @@ impl Server {
                 rt.reconnect_client(slot, name, self.sv_time_ms);
             }
             if was_active {
+                // The sim `enter_world` builds carries a clear
+                // `EF_TELEPORT_BIT`, which is what retail's re-run
+                // `ClientConnect` leaves: the incoming level's first spawn is
+                // the flip that puts the client at 24 (map-cycle doc, 8.2).
                 self.enter_world(slot, Some(&entering));
-                if let (Some(bit), Some(sim)) = (
-                    teleport_bit,
-                    self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()),
-                ) {
-                    sim.set_teleport_bit(bit);
-                }
             }
         }
         // 4.3: `SV_Frame`'s cvar flush carrying the bumped `sv_serverid`,
@@ -1772,6 +1797,42 @@ impl Server {
     fn send_configstring_update(&mut self, slot: usize, index: usize) {
         let cmd = format!("d {index} {}", self.configstring(index));
         self.send_server_command(slot, &cmd);
+    }
+
+    /// `SV_SetConfigstring`'s per-frame half: every slot the running level
+    /// changed goes out as `d <index> <text>` to every client, which is what
+    /// retail's broadcast gate lets through while `sv.state` reads 2
+    /// (map-cycle doc, 3.1). The script allocates all through the level -- a
+    /// `playSound` or `precacheString` from a thread past a `wait` -- and the
+    /// index a later `s` or event carries is worthless to a client whose slot
+    /// is still empty.
+    ///
+    /// Called after the script frame and before the frame's own client
+    /// commands, so the `d` naming an alias precedes the `s` that plays it.
+    fn broadcast_configstring_changes(&mut self) {
+        let changed: Vec<usize> = (0..self.configstrings.len())
+            .filter(|&i| self.sent_configstrings.get(i) != self.configstrings.get(i))
+            .collect();
+        if changed.is_empty() {
+            return;
+        }
+        self.sync_sent_configstrings();
+        for slot in 0..self.clients.len() {
+            if self.clients[slot].is_none() {
+                continue;
+            }
+            for &i in &changed {
+                self.send_configstring_update(slot, i);
+            }
+        }
+    }
+
+    /// Marks the whole table as already known to every client. The two level
+    /// boundaries hand it over wholesale -- a map change in the gamestate
+    /// each client pulls, a restart in the burst 4.3 describes -- so neither
+    /// leaves anything for the diff above to send.
+    fn sync_sent_configstrings(&mut self) {
+        self.sent_configstrings = self.configstrings.clone();
     }
 
     /// Queues a line for `drain_console` to run at the top of the next tick,
@@ -2200,6 +2261,9 @@ impl Server {
         // `trap_SendConsoleCommand`'s `EXEC_APPEND`: what a builtin queued
         // this frame runs at the top of the next tick, never mid-frame.
         self.console.extend(console_lines);
+        // Ahead of the frame's client commands, so a slot the script just
+        // allocated is named before anything points at it.
+        self.broadcast_configstring_changes();
         // Outside the borrow: `setClientCvar` and `openMenu` queue rather
         // than send, and this is where the queue reaches the netchan.
         for (slot, cmd) in client_commands {
@@ -2646,6 +2710,25 @@ mod tests {
     fn addr(port: u16) -> SocketAddr {
         SocketAddr::from(([127, 0, 0, 1], port))
     }
+    /// Installs a hand-built runtime the way `load_scripts` does: the script
+    /// owns the configstring table from there on, so it starts from the
+    /// server's rather than from `for_test`'s empty one, and the server's
+    /// copy is taken back through the cvar mirror. Without it the first tick
+    /// reads every static slot as cleared and broadcasts the difference.
+    fn install_script(sv: &mut Server, mut rt: crate::game::script::ScriptRuntime) {
+        for (i, cs) in sv.configstrings.iter().enumerate() {
+            if rt.host.configstrings[i].is_empty() {
+                rt.host.configstrings[i] = cs.clone();
+            }
+        }
+        let mut cs = rt.configstrings().to_vec();
+        rt.cvars()
+            .write_mirror(&mut cs)
+            .expect("the cvar mirror fits");
+        sv.configstrings = cs;
+        sv.sync_sent_configstrings();
+        sv.script = Some(rt);
+    }
     fn oob(cmd: &str) -> Vec<u8> {
         build_oob(cmd)
     }
@@ -2865,9 +2948,12 @@ mod tests {
     fn a_configstring_allocated_after_a_wait_reaches_the_server() {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
-        sv.script = Some(crate::game::script::ScriptRuntime::for_test(
-            "main() { wait 0.5; loadfx(\"fx/impacts/newimps/minefield.efx\"); }",
-        ));
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test(
+                "main() { wait 0.5; loadfx(\"fx/impacts/newimps/minefield.efx\"); }",
+            ),
+        );
         // sv_time starts at 0 and each tick advances it one 50 ms frame, so
         // the thread is still suspended after the first.
         sv.tick(now);
@@ -2876,6 +2962,62 @@ mod tests {
             sv.tick(now);
         }
         assert_eq!(sv.configstring(781), "fx/impacts/newimps/minefield.efx");
+    }
+
+    /// `--set g_gametype` reaches the serverinfo configstring, not only the
+    /// script's cvar table: retail's cvar flush follows every serverinfo
+    /// write with `SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))`
+    /// (map-cycle doc 4.3), and `main.rs` replays the `--set` list after
+    /// `Server::new` has already stamped the table.
+    #[test]
+    fn a_set_of_a_serverinfo_cvar_reaches_configstring_0() {
+        let mut sv = Server::new(cfg(), Instant::now());
+        assert!(sv.configstring(0).contains("g_gametype\\dm"));
+        sv.set_cvar("g_gametype", "sd");
+        assert!(
+            sv.configstring(0).contains("g_gametype\\sd"),
+            "serverinfo: {:?}",
+            sv.configstring(0)
+        );
+    }
+
+    /// `SV_SetConfigstring` broadcasts a slot the running level changed to
+    /// every client that already has its gamestate (map-cycle doc, 3.1 and
+    /// 4.3). The announcer is what needs it: `playLocalSound` allocates its
+    /// alias slot and then sends `s <idx>`, so a client that never heard the
+    /// `d` reads an empty slot and plays nothing.
+    #[test]
+    fn a_configstring_allocated_mid_level_reaches_a_connected_client() {
+        let huff = Huffman::new();
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test(
+                "main() { wait 0.5; p = getentarray(\"player\", \"classname\"); \
+             p[0] playlocalsound(\"MP_announcer_allies_win\"); }",
+            ),
+        );
+        let mut nc = begun(&mut sv, now);
+        let mut seen: Vec<String> = Vec::new();
+        for _ in 0..16 {
+            sv.tick(now);
+            for (_, pkt) in sv.take_outgoing() {
+                seen.extend(server_commands(&mut nc, &pkt, &huff));
+            }
+        }
+        let d = seen
+            .iter()
+            .position(|c| c == "d 525 MP_announcer_allies_win")
+            .unwrap_or_else(|| panic!("no `d 525` in {seen:?}"));
+        let s = seen
+            .iter()
+            .position(|c| c == "s 1")
+            .unwrap_or_else(|| panic!("no `s 1` in {seen:?}"));
+        assert!(
+            d < s,
+            "the announcer's `s 1` came before its `d 525`: {seen:?}"
+        );
     }
 
     /// `map_rotate`'s `gametype` token is a `Cvar_Set` (doc section 5.2), so
@@ -3071,12 +3213,15 @@ mod tests {
         use crate::game::script::{ScriptRuntime, CALLBACK_SETUP};
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
-        sv.script = Some(ScriptRuntime::for_test_at(
-            CALLBACK_SETUP,
-            "main() { level.gone = 0; level.callbackPlayerDisconnect = ::d; }\n\
+        install_script(
+            &mut sv,
+            ScriptRuntime::for_test_at(
+                CALLBACK_SETUP,
+                "main() { level.gone = 0; level.callbackPlayerDisconnect = ::d; }\n\
              CodeCallback_PlayerDisconnect() { [[level.callbackPlayerDisconnect]](); }\n\
              d() { level.gone = level.gone + 1; }\n",
-        ));
+            ),
+        );
         let nc = connected(&mut sv, addr(5), now);
         sv.tick(now);
         let gone = |sv: &mut Server| sv.script.as_mut().unwrap().level_field("gone");
@@ -3343,9 +3488,12 @@ mod tests {
     fn the_scoreboard_carries_the_team_scores_axis_first() {
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
-        sv.script = Some(crate::game::script::ScriptRuntime::for_test(
-            "main() { setTeamScore(\"axis\", 3); setTeamScore(\"allies\", -9999); }",
-        ));
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test(
+                "main() { setTeamScore(\"axis\", 3); setTeamScore(\"allies\", -9999); }",
+            ),
+        );
         assert_eq!(sv.scoreboard(), "b 0 3 -9999");
         let cs = sv.script.as_ref().unwrap().configstrings();
         assert_eq!((cs[5].as_str(), cs[6].as_str()), ("3", "-9999"));
