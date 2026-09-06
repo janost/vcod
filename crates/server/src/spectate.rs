@@ -37,9 +37,15 @@ const PMF_OWN_VIEW: i32 = 0x40000;
 /// `PlayerState::ducked` carries it.
 const EF_CROUCH: i32 = 0x20;
 const EF_PRONE: i32 = 0x40;
-/// The per-life toggle. VERIFIED: retail alternates `eFlags` 16 and 24
-/// across a player's lives (`mp_carentan-dm-hit-target.txt` reads 115 samples
-/// at 16 against 101 at 24). INFERRED: a client breaks interpolation on the
+/// The per-spawn toggle: every spawn flips it, a spectator's and the
+/// intermission camera's included, and a level boundary clears it
+/// (docs/research/cod11-map-cycle.md, 8.2). Not per life --
+/// `mp_carentan-sd-roundrestart-target.txt` reads 24 on two consecutive
+/// lives (`!trace ms=28607` and `ms=118532`) because the spectator frame
+/// between them took the intervening flip. The `dm` hit capture's near-even
+/// split (115 samples at 16 against 101 at 24) is that same alternation seen
+/// from a run whose spawns happened to pair off.
+/// INFERRED: a client breaks interpolation on the
 /// changed word, so without it a respawn smears from the corpse to the spawn.
 /// The same bit `bodies::EFLAGS_ANIM_TOGGLE` inverts per body-queue push, for
 /// the same reason: a changed `eFlags` is what makes a client stop carrying
@@ -406,9 +412,9 @@ impl ClientSim {
         self.teleport_bit = !self.teleport_bit;
     }
 
-    /// A live player's `eFlags`: the base word, the per-life teleport bit and
-    /// nothing else. The stance bits ride on the playerstate copy only, which
-    /// is where the motion capture measured them.
+    /// The wire word for any mode: the base and the per-spawn teleport bit
+    /// and nothing else. The stance bits ride on a live player's playerstate
+    /// copy only, which is where the motion capture measured them.
     fn eflags(&self) -> i32 {
         PLAYER_EFLAGS
             | if self.teleport_bit {

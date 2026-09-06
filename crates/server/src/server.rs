@@ -1790,10 +1790,12 @@ impl Server {
     }
 
     /// `SV_SetConfigstring`'s per-client half, the `d <index> <text>` server
-    /// command. Nothing on the map path calls it: a map change puts nothing
-    /// at all on the reliable stream and the gamestate each client pulls
-    /// carries the whole table (map-cycle doc, 3.1). A restart, which keeps
-    /// the level serving, is what needs it (section 4.3).
+    /// command. Two callers: the restart burst, which re-sends slots 3 and 1
+    /// to a client that keeps its gamestate (map-cycle doc, 4.3), and
+    /// [`Self::broadcast_configstring_changes`] once a frame. Nothing on the
+    /// map path calls it: a map change puts nothing at all on the reliable
+    /// stream and the gamestate each client pulls carries the whole table
+    /// (3.1).
     fn send_configstring_update(&mut self, slot: usize, index: usize) {
         let cmd = format!("d {index} {}", self.configstring(index));
         self.send_server_command(slot, &cmd);

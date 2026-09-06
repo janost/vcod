@@ -519,17 +519,21 @@ re-read, since a restart changes neither the paks nor the map.
 
 Retail's restart has no baseline pass, and `map_restart` has none either.
 
-One thing crosses `Client::reset_for_restart` that no other level state does:
-`EF_TELEPORT_BIT`. Step 11 re-enters the same client on the same life, and
-`crates/server/src/spectate.rs`'s `ClientSim` is rebuilt by `enter_world`, so
-`map_restart` reads the bit off the outgoing sim and writes it back on the
-incoming one; the spawn the level's own `ClientConnect` runs then flips it as
-any respawn does. VERIFIED, from the retail round-restart capture: the
-shooter reads `eFlags` 16 on the life before the restart and 24 on the one
+`EF_TELEPORT_BIT` crosses `Client::reset_for_restart` the way every other
+piece of playerstate does, which is to say it does not: step 11 rebuilds
+`crates/server/src/spectate.rs`'s `ClientSim` through `enter_world`, and the
+new one starts with the bit clear, so the incoming level's first spawn is the
+flip that puts the client at 24. VERIFIED, from the retail round-restart
+capture: the shooter reads `eFlags` 16 on the life before the restart and 24
+on the one
 after (`crates/server/tests/fixtures/netchan/mp_carentan-sd-roundrestart-shooter.txt`,
-`!trace ms=697` and `ms=5765`), and the target the same. Leave it pinned and
-a retail client interpolates a respawning player from its old position to its
-new spawn.
+`!trace ms=697` and `ms=5765`), and the target the same. INFERRED, from that
+pair against the same file's `ms=28607` and `ms=118532`, two consecutive
+lives both at 24: what the restart moved is not an alternation the outgoing
+life was carrying, since a plain respawn does not always change the word;
+8.2 reads the rule off all three captures spawn for spawn. Leave the bit
+pinned and a retail client interpolates a respawning player from its old
+position to its new spawn.
 
 Not modelled from the numbered list: step 6's `sv.state`, `sv.restarting`
 and the `sv_serverRestarting` cvar, none of which vcod has a counterpart for
@@ -985,15 +989,19 @@ VERIFIED, the `dm` run: the life that begins after the restart carried
 `eFlags` 24, the same word the intermission before it carried, where retail's
 carries 16 against the intermission's 24. It was `ClientSim::respawn` flipping
 the teleport bit only for a player spawn while the spectator and intermission
-wire word was a pinned 24. VERIFIED, from the two committed captures read
+wire word was a pinned 24. VERIFIED, from the three committed captures read
 spawn for spawn: retail's word alternates on *every* spawn, the connect's
-`spawnSpectator` and the intermission camera included, and a level boundary
-clears it, which is why the `sd` target's post-death spectator frame reads 16
-where its first one read 24
-(`mp_carentan-sd-roundrestart-target.txt`, `!trace ms=335` and `ms=25436`).
-Fixed to that rule: every mode's spawn consumes a flip, the wire word is the
-bit rather than a constant, and a restart lets `enter_world` build a sim with
-the bit clear instead of carrying the outgoing one.
+`spawnSpectator` and the intermission camera included, which is why the `sd`
+target's post-death spectator frame reads 16 where its first one read 24 and
+why two of its consecutive lives both read 24
+(`mp_carentan-sd-roundrestart-target.txt`, `!trace ms=335`, `ms=25436`,
+`ms=28607` and `ms=118532`). INFERRED, from that rule against the `dm`
+capture's restart, whose spectator frame repeats the intermission's 24
+instead of flipping off it: a level boundary clears the bit with the rest of
+the playerstate, so the incoming level's first spawn is what sets it. Fixed
+to both: every mode's spawn consumes a flip, the wire word is the bit rather
+than a constant, and a restart lets `enter_world` build a sim with the bit
+clear instead of carrying the outgoing one.
 
 VERIFIED, the `dm` run: the intermission frames read `viewangles` 0 on all
 three axes where retail's read a yaw of 90, `mp_carentan`'s own

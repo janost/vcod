@@ -357,7 +357,8 @@ impl Vm {
     const MAX_THREADS_PER_FRAME: u32 = 1_000;
 
     /// Runs one server frame: promotes every `WaitingUntil` thread whose
-    /// deadline has passed to `Runnable`, then walks ids in ascending
+    /// deadline has passed to `Runnable`, then hands over to
+    /// [`Vm::step_runnable`], which walks ids in ascending
     /// order, up to `MAX_THREADS_PER_FRAME` of them, stepping
     /// (`step_thread`) whichever are `Runnable`. A thread spawned
     /// mid-frame (a threaded call, run immediately by `spawn`) is visited
@@ -376,7 +377,32 @@ impl Vm {
                 }
             }
         }
+        self.step_runnable(host)
+    }
 
+    /// The deadline wake of [`Vm::run_frame`] left out: steps whatever is
+    /// already `Runnable` and nothing else, so a `wait` that has come due
+    /// stays parked for the frame proper.
+    ///
+    /// This is the caller's packet pass -- the host has just started or
+    /// notified something outside the frame and wants those threads run to
+    /// their next suspend on the clock it happened at, which is what retail's
+    /// `SV_ExecuteClientMessage` callbacks get. Waking deadlines here instead
+    /// would step a thread looping on `wait 0` twice per server frame.
+    pub fn run_runnable(&mut self, host: &mut dyn Host, now_ms: i32) -> Vec<ScriptError> {
+        if !self
+            .threads
+            .iter()
+            .any(|t| matches!(t.state, ThreadState::Runnable))
+        {
+            return Vec::new();
+        }
+        self.now_ms = now_ms;
+        self.step_runnable(host)
+    }
+
+    /// The walk both passes share.
+    fn step_runnable(&mut self, host: &mut dyn Host) -> Vec<ScriptError> {
         let mut errors = Vec::new();
         let mut last_id: Option<u32> = None;
         let mut steps = 0;

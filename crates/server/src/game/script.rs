@@ -961,6 +961,10 @@ impl ScriptRuntime {
         // later and the answer notifies nothing and the client never leaves
         // the team menu.
         //
+        // `run_runnable`, not `run_frame`: this pass is the callbacks and
+        // whatever they notified, never a second deadline wake. Retail's is
+        // one `VM_Call` per event, not a `Scr_RunThreads`.
+        //
         // Client events in the order the netcode raised them: a `Begin`
         // drained ahead of its own `Connect` finds no thread parked on the
         // notify and strands the client silently.
@@ -968,7 +972,7 @@ impl ScriptRuntime {
         for ev in std::mem::take(&mut self.host.client_events) {
             self.dispatch_client_event(ev, packet_ms);
         }
-        for e in self.vm.run_frame(&mut self.host, packet_ms) {
+        for e in self.vm.run_runnable(&mut self.host, packet_ms) {
             log::warn!("script error: {e:?}");
         }
         self.host.level_time_ms = now_ms;
@@ -1031,6 +1035,50 @@ impl ScriptRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The packet pass runs the threads the netcode's events woke and
+    /// nothing else. It carries no deadline wake of its own, so a thread
+    /// looping on `wait 0` advances exactly one iteration per server frame;
+    /// waking deadlines there stepped it twice, once at the previous frame's
+    /// clock and again at this one's.
+    #[test]
+    fn a_wait_zero_loop_advances_once_per_server_frame() {
+        let mut rt = ScriptRuntime::for_test(
+            "main() { level.n = 0; for(;;) { wait 0; level.n = level.n + 1; } }",
+        );
+        for frame in 1..=5 {
+            rt.run_frame(frame * 50);
+            assert_eq!(
+                rt.level_field("n"),
+                Value::Int(frame),
+                "after {frame} frames"
+            );
+        }
+    }
+
+    /// `run_thinks` still runs ahead of the frame's thread pass, which is
+    /// `probe_delete`'s measurement: an entity deleted in one frame is out of
+    /// `getEntArray` for a thread that wakes past the deferred free, and
+    /// still in it for one that looks before. The packet pass ahead of both
+    /// must not step that thread early.
+    #[test]
+    fn a_deleted_entity_is_gone_by_the_thread_pass_that_looks_past_the_defer() {
+        let mut rt = ScriptRuntime::for_test(
+            "main() { e = spawn(\"script_origin\", (0, 0, 0)); e delete(); \
+             level.now = getentarray(\"script_origin\", \"classname\").size; \
+             wait 0.5; \
+             level.later = getentarray(\"script_origin\", \"classname\").size; }",
+        );
+        assert_eq!(
+            rt.level_field("now"),
+            Value::Int(1),
+            "delete() freed at once"
+        );
+        for frame in 1..=12 {
+            rt.run_frame(frame * 50);
+        }
+        assert_eq!(rt.level_field("later"), Value::Int(0));
+    }
 
     /// Both closures load into one `Vm` through one `Loader`, which is what
     /// keeps `Vm::install`'s duplicate rejection from firing on the first
