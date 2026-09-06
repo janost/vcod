@@ -226,6 +226,15 @@ const SPREAD_TOL: f32 = 26.0;
 /// Every retail sample of the sight fraction and the spread counter has one
 /// of ours within [`SAMPLE_SLACK_MS`] that reads the same to tolerance.
 /// Returns the misses, worst first.
+///
+/// [`FRAC_TOL`] buys slack for a point on a ramp, where the two sample grids
+/// sit half a frame apart. It buys none at the ends: 0.0 and 1.0 are where
+/// the ramp clamps, so a sample retail reads saturated at is one ours has to
+/// read saturated at too, exactly. That end is what the client's zoom sits
+/// at while a sight is held, and a fraction that leaves it for a frame is
+/// the twitch a scoped rifle shows -- `kar98k_sniper_mp` turns the same
+/// error into a four times larger swing than `m1carbine_mp`, `adsZoomFov`
+/// 16 against 65.
 fn transient_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
     let mut bad = Vec::new();
     for r in retail {
@@ -239,9 +248,16 @@ fn transient_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
         if near.is_empty() {
             continue;
         }
-        let frac_ok = near
-            .iter()
-            .any(|o| o.pos_frac.is_some_and(|f| (f - rf).abs() <= FRAC_TOL));
+        let saturated = rf == 0.0 || rf == 1.0;
+        let frac_ok = near.iter().any(|o| {
+            o.pos_frac.is_some_and(|f| {
+                if saturated {
+                    f == rf
+                } else {
+                    (f - rf).abs() <= FRAC_TOL
+                }
+            })
+        });
         let spread_ok = near
             .iter()
             .any(|o| o.spread.is_some_and(|s| (s - rs).abs() <= SPREAD_TOL));

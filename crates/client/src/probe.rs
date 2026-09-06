@@ -140,6 +140,7 @@ pub fn probe(
     pvs: bool,
     script: ShooterScript,
     team: Option<&str>,
+    weapon: Option<&str>,
     secs: u64,
     fs: Option<&vcod_common::pk3::Pk3Fs>,
 ) -> anyhow::Result<()> {
@@ -199,7 +200,7 @@ pub fn probe(
     let mut reached_active: Option<Instant> = None;
     let mut baseline_origin: Option<[f32; 3]> = None;
     let mut watch = ProbeWatch::default();
-    let mut join = JoinProbe::new(team);
+    let mut join = JoinProbe::new(team, weapon);
     let mut wrote_playerstate = false;
     let mut motion = MotionProbe::default();
     let mut combat = if save_grenade {
@@ -442,12 +443,20 @@ pub fn probe(
         } else if save_combat && combat.running() {
             cmd = combat.cmd();
             weapon_switch = combat.weapon_override(ps_weapon);
-            if let Some(o) = client
-                .snapshots()
-                .newest()
-                .map(|s| s.ps.origin(&net::protocol::PROTOCOL_V1))
-            {
-                combat.stall.apply(&mut cmd, now, o);
+            // Only a step that declares itself a walk is steered. The turn
+            // used to ride every step, so the detour a stalled walk earned
+            // was still on the cmd of every later step that pushed forward
+            // while the fixture's `!input` recorded the untouched yaw: the
+            // ads capture's `ads_walk` ran 45 degrees off the line it says
+            // it ran, which its `viewangles` column now shows.
+            if combat.step_walks() {
+                if let Some(o) = client
+                    .snapshots()
+                    .newest()
+                    .map(|s| s.ps.origin(&net::protocol::PROTOCOL_V1))
+                {
+                    combat.stall.apply(&mut cmd, now, o);
+                }
             }
             hold_view_yaw(&mut cmd, &client, &mut combat.spawn_delta_yaw);
         } else if (save_hit || shooter_walk) && hit.running() {
@@ -602,7 +611,12 @@ pub fn probe(
                         // off its `reloadTime` rather than one rifle's number.
                         combat.use_weapon(fs, &join.weapon, client.configstrings());
                         if combat.step(now, s) {
-                            write_combat_fixture(client.configstrings(), &join, &combat)?;
+                            write_combat_fixture(
+                                client.configstrings(),
+                                &join,
+                                &combat,
+                                tag.as_deref(),
+                            )?;
                             wrote_playerstate = true;
                             break;
                         }
@@ -1037,6 +1051,11 @@ struct JoinProbe {
     main_menu: String,
     /// Menu indices already answered, so a reopened menu is not answered twice.
     answered: Vec<i32>,
+    /// What the weapon menu is answered with when `--probe-weapon` names one,
+    /// instead of the nationality's default rifle. The stock menu accepts any
+    /// weapon `_teams::restrict` allows for it, which under the default
+    /// `scr_allow_*` cvars includes the two scoped rifles.
+    weapon_pick: Option<String>,
     weapon: String,
     /// When the weapon answer went out.
     answered_weapon: Option<Instant>,
@@ -1045,11 +1064,12 @@ struct JoinProbe {
 }
 
 impl JoinProbe {
-    fn new(team: Option<&str>) -> Self {
+    fn new(team: Option<&str>, weapon: Option<&str>) -> Self {
         Self {
             team: team.unwrap_or(DEFAULT_JOIN_TEAM).to_string(),
             main_menu: String::new(),
             answered: Vec::new(),
+            weapon_pick: weapon.map(str::to_string),
             weapon: String::new(),
             answered_weapon: None,
             commands: Vec::new(),
@@ -1076,7 +1096,9 @@ impl JoinProbe {
                 if self.answered.contains(&idx) {
                     return;
                 }
-                let Some(reply) = menu_reply(&self.main_menu, &self.team) else {
+                let Some(reply) =
+                    menu_reply(&self.main_menu, &self.team, self.weapon_pick.as_deref())
+                else {
                     println!(
                         "JOIN: menu {idx} ({:?}) has no scripted reply",
                         self.main_menu
@@ -1126,9 +1148,15 @@ impl JoinProbe {
 /// The team menu takes a team; the weapon menu takes a weapon `_teams::restrict`
 /// allows for that menu's nationality, which is why one weapon literal cannot
 /// serve both gate maps. All four are on under the stock `scr_allow_*` defaults.
-fn menu_reply<'a>(menu: &str, team: &'a str) -> Option<&'a str> {
+/// `weapon` overrides the default rifle with whatever `--probe-weapon` named;
+/// the server refuses one the menu's nationality does not allow and reopens
+/// the menu, which the probe never answers twice, so a wrong pick never spawns.
+fn menu_reply<'a>(menu: &str, team: &'a str, weapon: Option<&'a str>) -> Option<&'a str> {
     if menu.starts_with("team_") {
         return Some(team);
+    }
+    if let Some(w) = weapon {
+        return menu.starts_with("weapon_").then_some(w);
     }
     match menu.strip_prefix("weapon_")? {
         "american" => Some("m1carbine_mp"),
@@ -2064,6 +2092,13 @@ struct CombatSample {
     /// (combat doc, 6 and 1.3).
     grenade_time_left: i32,
     weapon_delay: i32,
+    /// `pm_flags` (0x20 is the gated ADS bit, 0x80 the ADS walk) and
+    /// `groundEntityNum`: the two inputs the sight ramp is gated on, so a
+    /// fraction that leaves 1.0 mid-hold can be read back to its cause.
+    pm_flags: i32,
+    ground_entity: i32,
+    /// The view the snapshot carries, which a client predicts against.
+    viewangles: [f32; 3],
     /// Every missile on the wire in this snapshot.
     missiles: Vec<MissileSample>,
 }
@@ -2179,6 +2214,12 @@ impl CombatProbe {
             kind: "grenade",
             ..Self::default()
         }
+    }
+
+    /// Whether the step in flight declares itself a walk, which is what
+    /// [`StallTurn`] is allowed to steer.
+    fn step_walks(&self) -> bool {
+        self.steps.get(self.idx).is_some_and(|s| s.walks)
     }
 
     /// The `cmd.weapon` this cmd carries, `None` to follow `ps.weapon`. See
@@ -2338,13 +2379,20 @@ impl CombatProbe {
                 aim_spread_scale: snap.ps.field_f32(p, "aimSpreadScale"),
                 grenade_time_left: snap.ps.field_i32(p, "grenadeTimeLeft"),
                 weapon_delay: snap.ps.field_i32(p, "weaponDelay"),
+                pm_flags: snap.ps.field_i32(p, "pm_flags"),
+                ground_entity: snap.ps.field_i32(p, "groundEntityNum"),
+                viewangles: [
+                    snap.ps.field_f32(p, "viewangles[0]"),
+                    snap.ps.field_f32(p, "viewangles[1]"),
+                    snap.ps.field_f32(p, "viewangles[2]"),
+                ],
                 missiles: self.missiles.sample(snap),
             };
             for m in &s.missiles {
                 println!("  {}", m.line(s.elapsed_ms).trim_end());
             }
             println!(
-                "  trace {label} +{:>5}ms st={} in={:02x}/{:02x} weaponstate={} weapAnim={} legsAnim={} torsoAnim={} evSeq={} events=[{},{},{},{}] ads={:.3} spread={:.1} nade={} delay={}",
+                "  trace {label} +{:>5}ms st={} in={:02x}/{:02x} weaponstate={} weapAnim={} legsAnim={} torsoAnim={} evSeq={} events=[{},{},{},{}] ads={:.3} spread={:.1} nade={} delay={} pm=0x{:x} ground={} view=[{:.2},{:.2}]",
                 s.elapsed_ms,
                 s.server_time,
                 s.buttons,
@@ -2362,6 +2410,10 @@ impl CombatProbe {
                 s.aim_spread_scale,
                 s.grenade_time_left,
                 s.weapon_delay,
+                s.pm_flags,
+                s.ground_entity,
+                s.viewangles[0],
+                s.viewangles[1],
             );
             self.trace.push(s);
         }
@@ -2531,6 +2583,7 @@ fn write_combat_fixture(
     configstrings: &[String],
     join: &JoinProbe,
     combat: &CombatProbe,
+    tag: Option<&str>,
 ) -> anyhow::Result<()> {
     let p = &net::protocol::PROTOCOL_V1;
     let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
@@ -2689,7 +2742,8 @@ waited_ready_ms={} retried={} snapshots={} weaponstate={} legsAnim={} torsoAnim=
             out.push_str(&format!(
                 "!trace ms={} serverTime={} buttons={} wbuttons={} weaponstate={} weapAnim={} \
 legsAnim={} torsoAnim={} eventSequence={} events[0]={} events[1]={} events[2]={} events[3]={} \
-fWeaponPosFrac={:.4} aimSpreadScale={:.2} grenadeTimeLeft={} weaponDelay={}\n",
+fWeaponPosFrac={:.4} aimSpreadScale={:.2} grenadeTimeLeft={} weaponDelay={} pm_flags={} \
+groundEntityNum={} viewangles[0]={:.4} viewangles[1]={:.4} viewangles[2]={:.4}\n",
                 s.elapsed_ms,
                 s.server_time,
                 s.buttons,
@@ -2707,6 +2761,11 @@ fWeaponPosFrac={:.4} aimSpreadScale={:.2} grenadeTimeLeft={} weaponDelay={}\n",
                 s.aim_spread_scale,
                 s.grenade_time_left,
                 s.weapon_delay,
+                s.pm_flags,
+                s.ground_entity,
+                s.viewangles[0],
+                s.viewangles[1],
+                s.viewangles[2],
             ));
             for m in &s.missiles {
                 out.push_str(&m.line(s.elapsed_ms));
@@ -2717,8 +2776,11 @@ fWeaponPosFrac={:.4} aimSpreadScale={:.2} grenadeTimeLeft={} weaponDelay={}\n",
         }
     }
 
+    // `--capture-tag` keeps a capture taken with another weapon beside the
+    // committed one rather than on top of it.
+    let suffix = tag.map(|t| format!("-{t}")).unwrap_or_default();
     let path = format!(
-        "{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-{}.txt",
+        "{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-{}{suffix}.txt",
         combat.kind
     );
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
@@ -5277,7 +5339,7 @@ mod tests {
     #[test]
     fn a_restart_and_a_gamestate_reopen_the_menus() {
         let t0 = Instant::now();
-        let mut join = JoinProbe::new(Some("allies"));
+        let mut join = JoinProbe::new(Some("allies"), None);
         join.main_menu = "weapon_american".to_string();
         join.answered = vec![0, 1];
         join.weapon = "m1carbine_mp".to_string();
