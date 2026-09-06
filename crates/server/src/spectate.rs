@@ -260,7 +260,8 @@ pub struct ClientSim {
     dead_yaw: i32,
     /// When the next `EV_PAIN` may fire.
     pain_after_ms: i32,
-    /// `EF_TELEPORT_BIT`'s current state, flipped by every player spawn.
+    /// `EF_TELEPORT_BIT`'s current state, flipped by every spawn of any
+    /// mode (docs/research/cod11-map-cycle.md, 8.2).
     teleport_bit: bool,
     /// `ps.stats[5]`, the spawn counter retail's `ClientSpawn` carries across
     /// its own memset (docs/protocol-1.1.md, "Block 1"). A byte on the wire,
@@ -331,28 +332,14 @@ impl ClientSim {
             feedback: DamageFeedback::default(),
             dead_yaw: 0,
             pain_after_ms: 0,
-            // Set, so the first player spawn's flip clears it: retail's first
-            // life reads `eFlags` 16 and each later one alternates.
-            teleport_bit: true,
+            // Clear, the way `ClientConnect`'s memset leaves `ps.eFlags`:
+            // the connect's own `spawnSpectator` is the flip that puts the
+            // first spectator frame at 24 and the life after it back at 16.
+            teleport_bit: false,
             // The constructor is the connect, before any spawn: the script's
             // own `spawnSpectator` is what takes it to the capture's 1.
             spawn_count: 0,
         }
-    }
-
-    /// `EF_TELEPORT_BIT`'s state, for a caller that has to carry it across a
-    /// sim it replaces. `SV_MapRestart_f` re-enters a client that was already
-    /// in the world (map-cycle doc, section 4, step 11) and that is the same
-    /// life going on, so the bit keeps alternating across the restart rather
-    /// than starting over; the retail round-restart capture reads `eFlags`
-    /// 16 -> 24 on it.
-    pub fn teleport_bit(&self) -> bool {
-        self.teleport_bit
-    }
-
-    /// The other half of [`ClientSim::teleport_bit`].
-    pub fn set_teleport_bit(&mut self, on: bool) {
-        self.teleport_bit = on;
     }
 
     /// The mode change `spawnPlayer()` makes: the same sim, restarted at the
@@ -413,11 +400,10 @@ impl ClientSim {
         // Retail's respawn frame reads an empty ring at sequence 0
         // (combat doc, 9.2).
         self.ring.clear();
-        // A spectator's `eFlags` is a constant on the wire, so only a player
-        // spawn consumes a flip.
-        if mode == PmType::Normal {
-            self.teleport_bit = !self.teleport_bit;
-        }
+        // Every spawn consumes a flip, a spectator's and the intermission
+        // camera's included: retail's capture reads 16 on a respawn's
+        // spectator frame and 24 on the next one (map-cycle doc, 8.2).
+        self.teleport_bit = !self.teleport_bit;
     }
 
     /// A live player's `eFlags`: the base word, the per-life teleport bit and
@@ -962,10 +948,8 @@ impl ClientSim {
                 (PmType::Spectator, _) => 4,
             },
         );
-        // The 0x8 a spectator carries is the same bit `EF_TELEPORT_BIT` names;
-        // a spectator's value is the capture's constant, not a mechanism. The
-        // intermission camera reads the same 24
-        // (`tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`).
+        // The stance bits ride only on a live player's word; a spectator and
+        // the intermission camera carry the base and the teleport bit alone.
         let stance_eflags = match self.ps.stance {
             pmove::Stance::Stand => 0,
             pmove::Stance::Crouch => EF_CROUCH,
@@ -973,11 +957,7 @@ impl ClientSim {
         };
         set(
             "eFlags",
-            if player {
-                self.eflags() | stance_eflags
-            } else {
-                24
-            },
+            self.eflags() | if player { stance_eflags } else { 0 },
         );
         set(
             "speed",
@@ -1221,6 +1201,10 @@ mod tests {
         let p = &PROTOCOL_V1;
         let world = vcod_common::collision::test_world(&[]);
         let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        // The connect's own `spawnSpectator`, which every stock gametype runs
+        // before the first player spawn: it is the first `EF_TELEPORT_BIT`
+        // flip and the life after it reads 16 because of it.
+        sim.become_spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.health = 100;
         sim.max_health = 100;
@@ -1730,6 +1714,10 @@ mod tests {
     fn a_standing_player_carries_the_captured_values() {
         let p = &PROTOCOL_V1;
         let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
+        // The connect's own `spawnSpectator`, which every stock gametype runs
+        // before the first player spawn: it is the first `EF_TELEPORT_BIT`
+        // flip and the life after it reads 16 because of it.
+        sim.become_spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         // The capture is of a player standing still on the floor.
         sim.ps.on_ground = true;
@@ -1750,7 +1738,8 @@ mod tests {
     #[test]
     fn wire_carries_the_pinned_constants_and_dynamic_fields() {
         let p = &PROTOCOL_V1;
-        let sim = ClientSim::spectator([10.0, 20.0, 30.0], 90.0, NULL_USERCMD.angles);
+        let mut sim = ClientSim::spectator([10.0, 20.0, 30.0], 90.0, NULL_USERCMD.angles);
+        sim.become_spectator([10.0, 20.0, 30.0], 90.0, NULL_USERCMD.angles);
         let w = sim.to_wire(p, 3, 114_800);
         assert_eq!(w.field_i32(p, "pm_type"), 4);
         assert_eq!(w.field_i32(p, "speed"), 400);

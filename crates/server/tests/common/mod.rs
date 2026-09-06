@@ -135,21 +135,6 @@ pub fn join_pair(
     (ca, cb)
 }
 
-/// [`join_pair_logged`] with each answer held back `delay` frames
-/// ([`Join::delay_answers`]). The caller keeps stepping the two joins with
-/// [`Join::tick_answers`] after it returns.
-pub fn join_pair_delayed(
-    sv: &mut Server,
-    qa: &Rc<RefCell<Queues>>,
-    qb: &Rc<RefCell<Queues>>,
-    now: &mut Instant,
-    a: (&str, &str),
-    b: (&str, &str),
-    delay: u32,
-) -> (NetClient<ClientEnd>, NetClient<ClientEnd>, Join, Join) {
-    join_pair_inner(sv, qa, qb, now, a, b, delay)
-}
-
 /// [`join_pair`] handing back the two [`Join`]s as well, for a test that has
 /// to keep answering menus after the join: a new level opens them again.
 pub fn join_pair_logged(
@@ -160,27 +145,12 @@ pub fn join_pair_logged(
     a: (&str, &str),
     b: (&str, &str),
 ) -> (NetClient<ClientEnd>, NetClient<ClientEnd>, Join, Join) {
-    join_pair_inner(sv, qa, qb, now, a, b, 0)
-}
-
-fn join_pair_inner(
-    sv: &mut Server,
-    qa: &Rc<RefCell<Queues>>,
-    qb: &Rc<RefCell<Queues>>,
-    now: &mut Instant,
-    a: (&str, &str),
-    b: (&str, &str),
-    delay: u32,
-) -> (NetClient<ClientEnd>, NetClient<ClientEnd>, Join, Join) {
     // Distinct qports: the server keys a peer by ip and qport, so two clients
     // sharing one read as a single client reconnecting and the second is
     // refused. A real client is one per process and gets this for free.
     let mut ca = NetClient::start_with_qport(ClientEnd(qa.clone()), *now, 0x2001);
     let mut cb = NetClient::start_with_qport(ClientEnd(qb.clone()), *now, 0x2002);
-    let (mut ja, mut jb) = (
-        Join::new(a.0, a.1).delay_answers(delay),
-        Join::new(b.0, b.1).delay_answers(delay),
-    );
+    let (mut ja, mut jb) = (Join::new(a.0, a.1), Join::new(b.0, b.1));
     for _ in 0..600 {
         *now += Duration::from_millis(50);
         ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
@@ -194,7 +164,6 @@ fn join_pair_inner(
                     _ => {}
                 }
             }
-            join.tick_answers(cl, *now);
         }
         if ja.settled(*now) && jb.settled(*now) {
             break;
@@ -661,11 +630,6 @@ pub struct Join {
     answered_team: bool,
     answered_weapon_at: Option<Instant>,
     log: Vec<String>,
-    /// Frames an answer waits before it goes out; see [`Join::delay_answers`].
-    delay: u32,
-    /// `(frames left, menu index, reply, the menu was a weapon menu)` for an
-    /// answer that has not gone out yet.
-    queued: Vec<(u32, i32, String, bool)>,
 }
 
 impl Join {
@@ -678,39 +642,6 @@ impl Join {
             answered_team: false,
             answered_weapon_at: None,
             log: Vec::new(),
-            delay: 0,
-            queued: Vec::new(),
-        }
-    }
-
-    /// Holds every menu answer back `frames` server frames instead of sending
-    /// it the moment the menu opens, and returns the join for chaining. The
-    /// caller then has to step it with [`Join::tick_answers`] once a frame.
-    ///
-    /// `sd`'s `Callback_PlayerConnect` reaches its `menuresponse` loop only
-    /// after `spawnSpectator` -> `updateTeamStatus`, whose first statement is
-    /// `wait 0`; a notify nothing is parked on is lost, and this harness has
-    /// no network delay at all, so an answer sent the instant the menu opens
-    /// races that suspension and the client never leaves the team menu. One
-    /// frame of delay is the round trip a real client pays anyway.
-    pub fn delay_answers(mut self, frames: u32) -> Self {
-        self.delay = frames;
-        self
-    }
-
-    /// Sends any answer whose delay has run out and ages the rest. Once a
-    /// frame, after the frame's events have been handed to
-    /// [`Join::on_server_command`]: an answer queued with a delay of one goes
-    /// out on the *next* call, one frame after the menu opened.
-    pub fn tick_answers(&mut self, cl: &mut NetClient<ClientEnd>, now: Instant) {
-        let due: Vec<(u32, i32, String, bool)> =
-            self.queued.iter().filter(|q| q.0 == 0).cloned().collect();
-        self.queued.retain(|q| q.0 > 0);
-        for q in self.queued.iter_mut() {
-            q.0 -= 1;
-        }
-        for (_, idx, reply, weapon_menu) in due {
-            self.send_answer(cl, now, idx, &reply, weapon_menu);
         }
     }
 
@@ -757,12 +688,7 @@ impl Join {
                     return;
                 };
                 let weapon_menu = menu.starts_with("weapon_");
-                if self.delay == 0 {
-                    self.send_answer(cl, now, idx, &reply, weapon_menu);
-                } else {
-                    self.queued
-                        .push((self.delay, idx, reply.clone(), weapon_menu));
-                }
+                self.send_answer(cl, now, idx, &reply, weapon_menu);
                 self.answered.push(idx);
                 self.log
                     .push(format!("answered menu {idx} ({menu}) with {reply}"));
@@ -779,7 +705,6 @@ impl Join {
         self.answered.clear();
         self.answered_team = false;
         self.answered_weapon_at = None;
-        self.queued.clear();
     }
 
     pub fn settled(&self, now: Instant) -> bool {
@@ -889,6 +814,12 @@ impl NetchanEvent {
     pub fn pm_type(&self) -> Option<i32> {
         match self.kind {
             NetchanKind::Trace { pm_type, .. } => Some(pm_type),
+            _ => None,
+        }
+    }
+    pub fn eflags(&self) -> Option<i32> {
+        match self.kind {
+            NetchanKind::Trace { eflags, .. } => Some(eflags),
             _ => None,
         }
     }

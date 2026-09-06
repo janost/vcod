@@ -84,11 +84,6 @@ const CMD_GAPS: &[(&str, &str)] = &[
          same burst on retail because `sv.restarting` broadcasts every write \
          (map-cycle doc 4.5)",
     ),
-    (
-        "f",
-        "`iprintln` goes to the script log here, not out as the `f` reliable \
-         command retail sends",
-    ),
 ];
 
 /// A command names a pattern when it is that word or begins with it followed
@@ -236,7 +231,6 @@ fn a_dm_map_end_and_rotation_match_retail() {
             }
         }
         common::record_netchan(&mut cl, &events, ms, &mut ours);
-        join.tick_answers(&mut cl, now);
         // The last marker: the respawn on the second map.
         if ours
             .iter()
@@ -299,6 +293,25 @@ fn a_dm_map_end_and_rotation_match_retail() {
                 m.gap(from, to)
             );
         }
+    }
+
+    // --- `EF_TELEPORT_BIT`, spawn for spawn ---
+    // Every spawn XORs the bit and a level boundary clears it with the rest
+    // of the playerstate, so the six traces above alternate 24, 16 in a
+    // pattern retail's capture pins exactly (map-cycle doc, 8.2).
+    for (name, _) in MARKERS.iter().filter(|(n, _)| {
+        matches!(
+            *n,
+            "intermission"
+                | "restart spectator"
+                | "restart playing"
+                | "second intermission"
+                | "map spectator"
+                | "map playing"
+        )
+    }) {
+        let (re, oe) = (r.event(name).eflags(), o.event(name).eflags());
+        assert_eq!(re, oe, "{name}: eFlags, retail {re:?} against ours {oe:?}");
     }
 
     // The one interval that is a recorded divergence rather than a match:

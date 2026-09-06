@@ -1518,16 +1518,16 @@ fn a_round_restart_leaves_both_clients_armed_and_flips_the_teleport_bit() {
 
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
-    // One frame of delay on every menu answer, for the reason
-    // `Join::delay_answers` documents.
-    let (mut ca, mut cb, mut ja, mut jb) = common::join_pair_delayed(
+    // No delay on the answers: `sd`'s connect callback is parked on
+    // `menuresponse` before the `t 0` that opens the menu leaves the server,
+    // so an answer that comes straight back is still heard.
+    let (mut ca, mut cb, mut ja, mut jb) = common::join_pair_logged(
         &mut sv,
         &qa,
         &qb,
         &mut now,
         ("allies", "m1carbine_mp"),
         ("axis", "kar98k_mp"),
-        1,
     );
 
     let p = &PROTOCOL_V1;
@@ -1582,7 +1582,6 @@ fn a_round_restart_leaves_both_clients_armed_and_flips_the_teleport_bit() {
                     _ => {}
                 }
             }
-            join.tick_answers(cl, now);
         }
         // A few frames past the restart: the respawn lands on the restart's
         // own frame and the weapon mirror runs a frame behind it.
