@@ -181,12 +181,9 @@ impl Bot {
         self.fire_cooldown = self.fire_cooldown.saturating_sub(1);
         let mut cmd = NULL_USERCMD;
         cmd.weapon = view.weapon;
-        match self.stage {
-            Stage::ToGrenade => return self.think_grenade(view, cmd),
-            Stage::Cook { left } => return self.think_cook(view, cmd, left),
-            Stage::BackToRifle { weapon } => return self.think_back(view, cmd, weapon),
-            Stage::Wander => {}
-        }
+        // Death and spectatorship outrank the stage machine: a corpse still
+        // in a grenade phase must reach the respawn press below, not sit in
+        // `think_cook` forever.
         if view.dead {
             self.respawn_ticks += 1;
             // Whatever the death interrupted, the new life starts clean: no
@@ -208,6 +205,12 @@ impl Bot {
             return cmd;
         }
         self.respawn_ticks = 0;
+        match self.stage {
+            Stage::ToGrenade => return self.think_grenade(view, cmd),
+            Stage::Cook { left } => return self.think_cook(view, cmd, left),
+            Stage::BackToRifle { weapon } => return self.think_back(view, cmd, weapon),
+            Stage::Wander => {}
+        }
         // A frag goes at a close enemy, occasionally, once the cooldown is
         // spent; the switch itself is the stage machine below.
         self.grenade_cooldown = self.grenade_cooldown.saturating_sub(1);
@@ -528,5 +531,42 @@ mod tests {
         assert!(switched.is_some(), "the bot never switched to the frag");
         assert!(held, "the pullback never held the trigger");
         assert!(released, "the cooked throw never released");
+    }
+
+    /// A death mid-grenade-phase must not strand the corpse: the stage
+    /// machine must not swallow the respawn press.
+    #[test]
+    fn a_bot_killed_mid_grenade_phase_still_presses_use() {
+        for start_stage in 0..3 {
+            let mut bot = Bot::new("allies", true, 1);
+            // Walk the machine into each non-wander stage by force.
+            match start_stage {
+                0 => {
+                    bot.rifle = 10;
+                    bot.stage = Stage::ToGrenade;
+                }
+                1 => {
+                    bot.rifle = 10;
+                    bot.stage = Stage::Cook { left: 5 };
+                }
+                _ => {
+                    bot.stage = Stage::BackToRifle { weapon: 10 };
+                }
+            }
+            let mut v = view();
+            v.dead = true;
+            v.playing = false;
+            let mut pressed = false;
+            for _ in 0..RESPAWN_DELAY + RESPAWN_RETRY * 3 {
+                if bot.think(&v).buttons & BUTTON_USE != 0 {
+                    pressed = true;
+                    break;
+                }
+            }
+            assert!(
+                pressed,
+                "stage {start_stage}: a bot killed mid-grenade-phase never pressed use"
+            );
+        }
     }
 }
