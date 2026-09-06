@@ -174,6 +174,17 @@ pub fn model_index(cs: &[String], name: &str) -> i32 {
         .map_or(0, |slot| slot as i32 + 1)
 }
 
+/// The index of a model a weapon file names. `GameHost::register_item`
+/// precaches the file's value verbatim, `xmodel/` prefix and all, where
+/// `WeaponDef` strips the prefix, so a lookup by the parsed name has to put
+/// it back.
+pub fn weapon_model_index(cs: &[String], name: &str) -> i32 {
+    if name.is_empty() {
+        return 0;
+    }
+    model_index(cs, &format!("xmodel/{name}"))
+}
+
 impl Allocators {
     pub fn new() -> Self {
         Allocators {

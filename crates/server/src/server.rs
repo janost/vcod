@@ -345,6 +345,10 @@ pub struct Server {
     /// it, which is what keeps a switch from being undone the frame after it
     /// lands.
     weapon_changes: Vec<(usize, u8)>,
+    /// Weapons a move spent the last round of, by slot: a `clipOnly` weapon
+    /// with no reserve left is taken away (combat doc, 1.5 step 9), which
+    /// pmove cannot do because the script host owns `ps.weapons`.
+    weapon_takes: Vec<(usize, u8)>,
     /// Commands waiting to run, drained by `drain_console` at the top of
     /// `tick` (`Cbuf_Execute`, docs/research/cod11-map-cycle.md section 5.2).
     console: console::Console,
@@ -493,6 +497,7 @@ impl Server {
             fs: None,
             hit_rigs: Default::default(),
             weapon_changes: Vec::new(),
+            weapon_takes: Vec::new(),
             console: console::Console::new(),
             rotation: console::Rotation::default(),
             sv_map_rotation: String::new(),
@@ -1601,6 +1606,7 @@ impl Server {
         self.pending_explosions.clear();
         self.pending_script_commands.clear();
         self.weapon_changes.clear();
+        self.weapon_takes.clear();
         // Step 9.
         self.checksum_feed = (self.rand() << 16) ^ self.rand() ^ self.sv_time_ms;
         // Step 13.
@@ -1723,6 +1729,7 @@ impl Server {
         self.pending_explosions.clear();
         self.pending_script_commands.clear();
         self.weapon_changes.clear();
+        self.weapon_takes.clear();
         self.snap_flag_server_bit ^= console::SNAPFLAG_SERVERCOUNT;
         // Step 5: only the low nibble moves.
         self.server_id = console::next_restart_id(self.server_id);
@@ -2069,7 +2076,7 @@ impl Server {
                             // with, which is silent on the wire.
                             let name = def.projectile_model.as_deref().unwrap_or_default();
                             let model =
-                                crate::configstrings::model_index(&self.configstrings, name);
+                                crate::configstrings::weapon_model_index(&self.configstrings, name);
                             if model == 0 && !name.is_empty() {
                                 log::warn!(
                                     "the grenade client {slot} threw carries {name:?}, \
@@ -2257,6 +2264,11 @@ impl Server {
             for (slot, weapon) in self.weapon_changes.drain(..) {
                 rt.set_client_weapon(slot, weapon);
             }
+            // The take after the switch, so a weapon the machine moved to is
+            // not the one dropped.
+            for (slot, weapon) in self.weapon_takes.drain(..) {
+                rt.take_client_weapon(slot, weapon);
+            }
             // What the client holds comes across the same way the
             // configstrings do: re-read every frame, because any thread can
             // have changed them. The held bits have to be among them --
@@ -2373,6 +2385,7 @@ impl Server {
         // The weapon changes are already drained when a script is loaded,
         // and a server without one has nothing to write them to.
         self.weapon_changes.clear();
+        self.weapon_takes.clear();
     }
 
     /// SV_UserMove for every client: one pmove step per queued usercmd, dt off
@@ -2443,6 +2456,18 @@ impl Server {
                         }
                         EV_FIRE_MELEE => self.pending_attacks.push(Attack::Swing { slot, weapon }),
                         _ => {}
+                    }
+                    // A `clipOnly` weapon with nothing left is taken away
+                    // (combat doc, 1.5 step 9), and 1.8's switch path then
+                    // takes `ps.weapon` to 0 on its own. Hung off the last
+                    // shot, not off `EV_NOAMMO`, which a dry trigger raises
+                    // too and keeps the weapon.
+                    if e.event == EV_FIRE_WEAPON_LASTSHOT {
+                        if let Some(def) = weapons.get(weapon as usize) {
+                            if def.clip_only && sim.ps.ammo[def.ammo_index] == 0 {
+                                self.weapon_takes.push((slot, weapon));
+                            }
+                        }
                     }
                 }
                 events.extend(raised);

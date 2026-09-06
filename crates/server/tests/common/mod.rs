@@ -254,6 +254,10 @@ pub struct Step {
     /// Retail's per-snapshot trace: (weaponstate, weapAnim, torsoAnim,
     /// eventSequence, events).
     pub trace: Vec<Trace>,
+    /// The playerstate the step ended at, as the field lines after its traces
+    /// carry it. Only the fields a gate names are compared; a transient is
+    /// not in here at all, since a settled sample cannot hold one.
+    pub settled: BTreeMap<String, i32>,
 }
 
 #[derive(Clone, Copy)]
@@ -305,6 +309,7 @@ pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
                 switch_weapon: 0,
                 switch_ms: 0,
                 trace: Vec::new(),
+                settled: BTreeMap::new(),
             });
             continue;
         }
@@ -384,8 +389,16 @@ pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
                 grenade_time_left: m.get("grenadeTimeLeft").map(|v| v.parse().unwrap()),
                 weapon_delay: m.get("weaponDelay").map(|v| v.parse().unwrap()),
             });
+        } else if !line.starts_with('!') {
+            // The settled field lines: `<name> <i32>`, the playerstate the
+            // step ended at.
+            if let Some((k, v)) = line.split_once(' ') {
+                if let Ok(v) = v.trim().parse::<i32>() {
+                    step.settled.insert(k.to_string(), v);
+                }
+            }
         }
-        // `!observed` and the settled field lines are not compared here.
+        // `!observed` is not compared here.
     }
     steps
 }
