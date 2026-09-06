@@ -781,6 +781,12 @@ impl ScriptRuntime {
                 self.vm.notify(id, event, &[]);
             }
             ClientEvent::Disconnect(slot) => {
+                // Whatever the last level boundary lifted for this slot dies
+                // with the client that owned it: the next occupant of the
+                // slot is a stranger and must not connect into its `pers[]`.
+                if let Some(c) = self.host.pers_carry.get_mut(slot) {
+                    *c = None;
+                }
                 // The callback runs first: it reads `self`, and freeing the
                 // slot ahead of it would hand it a dead entity.
                 if let Some(id) = self.client_entity(slot) {
@@ -1239,6 +1245,45 @@ mod tests {
         // boundary's.
         after.reconnect_client(0, "vcod".into(), 100);
         assert_eq!(after.client_pers(0, "team").as_deref(), Some("allies"));
+    }
+
+    /// The carry a level boundary lifted is spent by a disconnect as well as
+    /// by a connect. `map_restart` sends its `n` through the reliable guard,
+    /// which can drop the client whose `pers[]` was just lifted, and the next
+    /// client to take that slot must not inherit the old one's team, score or
+    /// weapons.
+    #[test]
+    fn a_disconnect_spends_the_slot_s_carried_pers() {
+        fn src(default_team: &str) -> String {
+            format!(
+                "main() {{ level.callbackPlayerConnect = ::c; \
+                          level.callbackPlayerDisconnect = ::d; }}\n\
+                 CodeCallback_PlayerConnect() {{ [[level.callbackPlayerConnect]](); }}\n\
+                 CodeCallback_PlayerDisconnect() {{ [[level.callbackPlayerDisconnect]](); }}\n\
+                 c() {{ if (!isdefined(self.pers[\"team\"])) self.pers[\"team\"] = \"{default_team}\"; }}\n\
+                 d() {{ level.gone = 1; }}\n"
+            )
+        }
+
+        let mut before = ScriptRuntime::for_test_at(CALLBACK_SETUP, &src("axis"));
+        before.reconnect_client(0, "vcod".into(), 50);
+        assert_eq!(before.client_pers(0, "team").as_deref(), Some("axis"));
+        let carry = before.take_carry();
+
+        let mut after = ScriptRuntime::for_test_at(CALLBACK_SETUP, &src("allies"));
+        after.host.pers_carry = carry.pers;
+        // The drop the restart's `n` can cause: the slot has no entity in
+        // this runtime yet, its `ClientConnect` has not run.
+        after.push_client_event(ClientEvent::Disconnect(0));
+        after.run_frame(50);
+
+        after.reconnect_client(0, "stranger".into(), 100);
+        assert_eq!(
+            after.client_pers(0, "team").as_deref(),
+            Some("allies"),
+            "the dropped client's carried pers reached the next occupant"
+        );
+        assert!(after.aborts().is_empty(), "{:?}", after.aborts());
     }
 
     /// Connect arms the callback's `waittill("begin")` and Begin releases it.
