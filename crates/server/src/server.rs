@@ -255,6 +255,18 @@ struct MoveSummary {
     buttons: u8,
 }
 
+/// Why a level load failed, which is what says whether the server can go on.
+#[derive(Debug)]
+pub enum LoadFailure {
+    /// Refused before anything was torn down, so the level that is serving is
+    /// untouched and the console line was a no-op.
+    KeptLevel(anyhow::Error),
+    /// Failed with the level already gone: no script to call `exitLevel`, no
+    /// table for a client to pull. Retail ends the process on this
+    /// (`Com_Error`) and so does vcod.
+    Fatal(anyhow::Error),
+}
+
 pub struct Server {
     cfg: ServerConfig,
     huff: Huffman,
@@ -364,6 +376,9 @@ pub struct Server {
     /// One `.gsc` answered from memory instead of the paks
     /// ([`Self::overlay_script`]); `None` in every production run.
     script_overlay: Option<(String, String)>,
+    /// A level load that failed with the level already torn down
+    /// ([`LoadFailure::Fatal`]), waiting for `main` to end the process on it.
+    fatal: Option<anyhow::Error>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -486,6 +501,7 @@ impl Server {
             level_cvars: None,
             last_spawn_tick: None,
             script_overlay: None,
+            fatal: None,
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -1540,23 +1556,26 @@ impl Server {
     /// `handle_client_packet` on its next message (section 3.1).
     ///
     /// The bsp is parsed before anything is torn down, so a `map` naming a
-    /// map the paks do not have leaves the level that is serving alone.
+    /// map the paks do not have leaves the level that is serving alone
+    /// ([`LoadFailure::KeptLevel`]); the script load past the teardown has no
+    /// such way back and is [`LoadFailure::Fatal`].
     /// Retail's 250 ms sleep of step 4 has no counterpart here: this runs
     /// inside a tick that owns the whole server, and sleeping would only
     /// delay the same work.
-    pub fn spawn_server(&mut self, map: &str) -> anyhow::Result<()> {
+    pub fn spawn_server(&mut self, map: &str) -> Result<(), LoadFailure> {
+        let kept = |e: anyhow::Error| LoadFailure::KeptLevel(e);
         let fs = self
             .fs
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("no paks are mounted"))?;
+            .ok_or_else(|| kept(anyhow::anyhow!("no paks are mounted")))?;
         // Step 15's `CM_LoadMap`, pulled ahead of the teardown.
         let bsp_path = fs
             .resolve_map(map)
-            .ok_or_else(|| anyhow::anyhow!("map {map} not found in the mounted paks"))?;
+            .ok_or_else(|| kept(anyhow::anyhow!("map {map} not found in the mounted paks")))?;
         let bsp_bytes = fs
             .read(&bsp_path)
-            .ok_or_else(|| anyhow::anyhow!("reading {bsp_path}"))?;
-        let bsp = vcod_common::bsp::parse(&bsp_bytes)?;
+            .ok_or_else(|| kept(anyhow::anyhow!("reading {bsp_path}")))?;
+        let bsp = vcod_common::bsp::parse(&bsp_bytes).map_err(kept)?;
 
         // Step 2: the flag is read off the outgoing level and handed to the
         // incoming one's `G_InitGame`, along with the two tables it decides
@@ -1594,8 +1613,9 @@ impl Server {
         // belongs in, which is where the client reads the id back from.
         self.server_id = console::next_map_id(self.server_id);
         self.configstrings = configstrings::static_configstrings(&self.cfg, self.server_id);
-        // Step 19.
-        self.load_scripts_with(fs, false, carry.game, carry.pers, save_persist)?;
+        // Step 19. Past the teardown: a failure here leaves no level.
+        self.load_scripts_with(fs, false, carry.game, carry.pers, save_persist)
+            .map_err(LoadFailure::Fatal)?;
         // Step 20: three frames, 100 ms of `svs.time` each.
         for _ in 0..3 {
             self.sv_time_ms = self.sv_time_ms.wrapping_add(100);
@@ -1603,6 +1623,17 @@ impl Server {
                 rt.run_frame(self.sv_time_ms);
             }
         }
+        // What those frames allocated, before anything reads the table back:
+        // every client here is `CS_CONNECTED` and pulls the whole table in
+        // the gamestate it asks for, so the diff has nothing to say about a
+        // level boundary (the restart path re-syncs the same way).
+        if let Some(rt) = self.script.as_ref() {
+            self.configstrings = rt.configstrings().to_vec();
+            if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
+                log::warn!("rebuilding the cvar mirror: {e:?}");
+            }
+        }
+        self.sync_sent_configstrings();
         // Step 21.
         self.rebuild_baselines();
         // Step 22, after the settle frames and the baselines: `ClientConnect`
@@ -1645,20 +1676,21 @@ impl Server {
     /// netchan and both reliable rings kept, and only a client that was
     /// already `CS_ACTIVE` re-entered (step 11); a `CS_PRIMED` one is
     /// promoted later by its own next message (4.4).
-    pub fn map_restart(&mut self) {
+    pub fn map_restart(&mut self) -> Result<(), LoadFailure> {
         // Step 1: a second restart in one frame, or one straight after a
         // spawn, is a no-op.
         if self.last_spawn_tick == Some(self.sv_time_ms) {
-            return;
+            return Ok(());
         }
         // Step 2.
         if self.script.is_none() {
             log::info!("Server is not running.");
-            return;
+            return Ok(());
         }
         let Some(fs) = self.fs.clone() else {
-            log::error!("map_restart: no paks are mounted");
-            return;
+            return Err(LoadFailure::KeptLevel(anyhow::anyhow!(
+                "no paks are mounted"
+            )));
         };
         // Step 3: the escalation. A level that asked to keep its
         // persistence gets the in-place restart even across one of these.
@@ -1681,10 +1713,7 @@ impl Server {
             if let Some(name) = changed {
                 log::info!("{name} variable change -- restarting.");
                 let map = self.cfg.map.clone();
-                if let Err(e) = self.spawn_server(&map) {
-                    log::error!("map_restart -> map {map}: {e:#}");
-                }
-                return;
+                return self.spawn_server(&map);
             }
         }
         let (_, carry) = self.lift_persistence();
@@ -1700,11 +1729,10 @@ impl Server {
         // The table is rebuilt around the new id the way a spawn's is; 4.3
         // is what carries slot 1 to a client that already has a gamestate.
         self.configstrings = configstrings::static_configstrings(&self.cfg, self.server_id);
-        // Step 7: `SV_RestartGameProgs(savePersist)`.
-        if let Err(e) = self.load_scripts_with(fs, true, carry.game, carry.pers, save_persist) {
-            log::error!("map_restart: {e:#}");
-            return;
-        }
+        // Step 7: `SV_RestartGameProgs(savePersist)`. Past the teardown: the
+        // outgoing level's script is gone and a failure here leaves none.
+        self.load_scripts_with(fs, true, carry.game, carry.pers, save_persist)
+            .map_err(LoadFailure::Fatal)?;
         // Step 8: three frames, 100 ms of `svs.time` each.
         for _ in 0..3 {
             self.sv_time_ms = self.sv_time_ms.wrapping_add(100);
@@ -1778,6 +1806,7 @@ impl Server {
             self.server_id,
             self.client_count()
         );
+        Ok(())
     }
 
     /// `SV_CreateBaseline` (map-cycle doc, section 3 step 21), with the
@@ -1792,10 +1821,12 @@ impl Server {
     /// `SV_SetConfigstring`'s per-client half, the `d <index> <text>` server
     /// command. Two callers: the restart burst, which re-sends slots 3 and 1
     /// to a client that keeps its gamestate (map-cycle doc, 4.3), and
-    /// [`Self::broadcast_configstring_changes`] once a frame. Nothing on the
-    /// map path calls it: a map change puts nothing at all on the reliable
-    /// stream and the gamestate each client pulls carries the whole table
-    /// (3.1).
+    /// [`Self::broadcast_configstring_changes`] once a frame. A map change
+    /// reaches neither: it re-syncs the table after its settle frames, so the
+    /// diff has nothing to say about the boundary, and every client it leaves
+    /// behind is `CS_CONNECTED`, which the diff skips. That is what keeps a
+    /// map change off the reliable stream entirely, the gamestate each client
+    /// pulls carrying the whole table instead (3.1).
     fn send_configstring_update(&mut self, slot: usize, index: usize) {
         let cmd = format!("d {index} {}", self.configstring(index));
         self.send_server_command(slot, &cmd);
@@ -1811,6 +1842,10 @@ impl Server {
     ///
     /// Called after the script frame and before the frame's own client
     /// commands, so the `d` naming an alias precedes the `s` that plays it.
+    /// A `CS_CONNECTED` client is skipped: it has no table to patch, and the
+    /// gamestate it pulls carries every slot allocated by then. UNVERIFIED:
+    /// what retail's own broadcast does with such a client; its gate is on
+    /// `sv.state`, not on the client's.
     fn broadcast_configstring_changes(&mut self) {
         let changed: Vec<usize> = (0..self.configstrings.len())
             .filter(|&i| self.sent_configstrings.get(i) != self.configstrings.get(i))
@@ -1820,7 +1855,10 @@ impl Server {
         }
         self.sync_sent_configstrings();
         for slot in 0..self.clients.len() {
-            if self.clients[slot].is_none() {
+            let has_table = self.clients[slot]
+                .as_ref()
+                .is_some_and(|c| c.state != ClientState::Connected);
+            if !has_table {
                 continue;
             }
             for &i in &changed {
@@ -1837,6 +1875,30 @@ impl Server {
         self.sent_configstrings = self.configstrings.clone();
     }
 
+    /// What [`Self::drain_console`] does with a level load's outcome.
+    /// Returns whether the console may keep running.
+    fn absorb_load(&mut self, what: &str, r: Result<(), LoadFailure>) -> bool {
+        match r {
+            Ok(()) => true,
+            Err(LoadFailure::KeptLevel(e)) => {
+                log::error!("{what}: {e:#}");
+                true
+            }
+            Err(LoadFailure::Fatal(e)) => {
+                self.fatal = Some(e.context(what.to_string()));
+                false
+            }
+        }
+    }
+
+    /// The load failure that left the server with no level, taken. The binary
+    /// polls it after every tick and ends the process on it, which is what
+    /// retail's `Com_Error` does: nothing can call `exitLevel` any more and
+    /// every client would pull an empty gamestate.
+    pub fn take_fatal(&mut self) -> Option<anyhow::Error> {
+        self.fatal.take()
+    }
+
     /// Queues a line for `drain_console` to run at the top of the next tick,
     /// `Cbuf_AddText`'s `EXEC_APPEND`.
     pub fn push_console(&mut self, line: &str) {
@@ -1846,21 +1908,33 @@ impl Server {
     /// `Cbuf_Execute` for the three commands the map cycle uses; anything
     /// else logs and drops. A command pushed by a builtin during the script
     /// pass runs here, at the top of the next tick, which is `EXEC_APPEND`.
+    ///
+    /// A load that failed before the teardown -- no paks, a map the paks do
+    /// not have, a bsp that would not parse -- leaves the level that is
+    /// serving alone and is logged. One that failed after it -- the map or
+    /// gametype scripts -- has no level left to fall back to, so it stops the
+    /// drain and ends the process through [`Self::take_fatal`].
     fn drain_console(&mut self) {
         while let Some(line) = self.console.pop_front() {
             match console::Command::parse(&line) {
                 console::Command::Map(map) => {
                     // `map <the map already serving>` is a restart, not a
                     // spawn (doc section 4.2).
-                    if map.eq_ignore_ascii_case(&self.cfg.map) && self.script.is_some() {
-                        self.map_restart();
-                    } else if let Err(e) = self.spawn_server(&map) {
-                        // A level that fails to load leaves the one serving
-                        // alone; the console must not take the server down.
-                        log::error!("map {map}: {e:#}");
+                    let r = if map.eq_ignore_ascii_case(&self.cfg.map) && self.script.is_some() {
+                        self.map_restart()
+                    } else {
+                        self.spawn_server(&map)
+                    };
+                    if !self.absorb_load(&format!("map {map}"), r) {
+                        return;
                     }
                 }
-                console::Command::MapRestart => self.map_restart(),
+                console::Command::MapRestart => {
+                    let r = self.map_restart();
+                    if !self.absorb_load("map_restart", r) {
+                        return;
+                    }
+                }
                 console::Command::MapRotate => {
                     let full = self.sv_map_rotation.clone();
                     let before = self.cfg.gametype.clone();
@@ -3022,6 +3096,101 @@ mod tests {
         );
     }
 
+    /// A `CS_CONNECTED` client has no table to patch: its gamestate has not
+    /// gone out, and the one it pulls carries every slot the level has
+    /// allocated by then. So the per-frame diff skips it and sends to the
+    /// clients that do. UNVERIFIED: whether retail gates its own broadcast
+    /// per client this way; `SV_SetConfigstring`'s gate is on `sv.state`
+    /// (map-cycle doc, 3.1) and nothing measured says what it does with a
+    /// client below `CS_PRIMED`.
+    #[test]
+    fn the_configstring_broadcast_skips_a_client_with_no_gamestate() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        let _nc = connected(&mut sv, addr(5), now);
+        sv.sync_sent_configstrings();
+        assert_eq!(
+            sv.clients[0].as_ref().unwrap().state,
+            ClientState::Connected
+        );
+
+        let seq = sv.clients[0].as_ref().unwrap().netchan.reliable_sequence;
+        sv.configstrings[524] = "MP_announcer_allies_win".to_string();
+        sv.broadcast_configstring_changes();
+        assert_eq!(
+            sv.clients[0].as_ref().unwrap().netchan.reliable_sequence,
+            seq,
+            "a client with no gamestate was sent a `d`"
+        );
+
+        // The same slot moving again once the gamestate has gone out does
+        // reach it, so the skip above is the state and not the diff.
+        sv.clients[0].as_mut().unwrap().state = ClientState::Primed;
+        sv.configstrings[524] = "MP_announcer_axis_win".to_string();
+        sv.broadcast_configstring_changes();
+        let c = sv.clients[0].as_ref().unwrap();
+        assert_eq!(c.netchan.reliable_sequence, seq + 1);
+        assert_eq!(
+            c.netchan.reliable[c.netchan.reliable_sequence as usize & (MAX_RELIABLE_COMMANDS - 1)],
+            "d 524 MP_announcer_axis_win"
+        );
+    }
+
+    /// Doc 3 step 20: the settle frames allocate into the table, and every
+    /// client on the far side of a spawn pulls the whole of it in its own
+    /// gamestate. So the copy the per-frame diff works against is re-synced
+    /// after those frames, the way the restart path re-syncs after its own;
+    /// without it the first tick after a map change queues a `d` per slot the
+    /// three frames touched.
+    #[test]
+    fn a_spawn_re_syncs_the_table_the_broadcast_diffs_against() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(
+            ServerConfig {
+                gametype: "settle".into(),
+                ..cfg()
+            },
+            now,
+        );
+        // A gametype whose settle frames allocate: the `wait` is due in the
+        // first of the three.
+        sv.overlay_script(
+            "maps/mp/gametypes/settle",
+            "main() { maps\\mp\\gametypes\\_callbacksetup::SetupCallbacks(); \
+             wait 0.05; precacheShader(\"gfx/hud/settle\"); }",
+        );
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        sv.spawn_server("mp_brecourt").expect("the map load failed");
+        // What the next tick reads back out of the script, which is what it
+        // diffs the sent copy against.
+        let rt = sv.script.as_ref().expect("the spawn left no script");
+        let mut live = rt.configstrings().to_vec();
+        rt.cvars().write_mirror(&mut live).expect("the mirror fits");
+        assert!(
+            live.iter().any(|s| s == "gfx/hud/settle"),
+            "the settle frames allocated nothing, so this proves nothing"
+        );
+        let stale = |table: &[String]| -> Vec<usize> {
+            (0..live.len())
+                .filter(|&i| table.get(i) != live.get(i))
+                .collect()
+        };
+        assert!(
+            stale(&sv.sent_configstrings).is_empty(),
+            "the spawn left slots {:?} for the diff to send",
+            stale(&sv.sent_configstrings)
+        );
+        assert!(
+            stale(&sv.configstrings).is_empty(),
+            "the server's own copy is a frame behind the script at slots {:?}",
+            stale(&sv.configstrings)
+        );
+    }
+
     /// `map_rotate`'s `gametype` token is a `Cvar_Set` (doc section 5.2), so
     /// it has to outrank an earlier `--set g_gametype`: the token picks which
     /// gametype script loads, and the cvar table is what that script's own
@@ -3100,6 +3269,44 @@ mod tests {
         assert_eq!(sv.script_cvar("g_gametype").as_deref(), Some("tdm"));
     }
 
+    /// A load that fails after the teardown leaves no level to serve and no
+    /// console line that could bring one back, which is what retail ends the
+    /// process for: the server records it and `main` exits on it. A load that
+    /// fails before the teardown -- a map the paks do not have -- keeps the
+    /// level that is serving and records nothing.
+    #[test]
+    fn a_script_load_that_fails_after_the_teardown_is_fatal() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let mut now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+
+        // `resolve_map` fails ahead of everything the spawn tears down.
+        sv.push_console("map mp_nosuchmap");
+        sv.tick(now);
+        assert!(
+            sv.take_fatal().is_none(),
+            "a map the paks do not have took the server down"
+        );
+        assert_eq!(sv.cfg.map, "mp_carentan", "the failed map load moved off");
+
+        // The rotation's `gametype` token names a gametype with no script,
+        // and the `map` token behind it escalates to a spawn whose
+        // `load_scripts_with` fails with the level already gone.
+        now += Duration::from_millis(50);
+        sv.set_cvar("sv_mapRotation", "gametype nosuch map mp_carentan");
+        sv.push_console("map_rotate");
+        sv.tick(now);
+        let e = sv
+            .take_fatal()
+            .expect("a gametype with no script was survivable");
+        assert!(format!("{e:#}").contains("nosuch"), "{e:#}");
+        assert!(sv.take_fatal().is_none(), "the failure was reported twice");
+    }
+
     /// Doc section 4 step 11: `SV_ClientEnterWorld` runs only for a client
     /// that reads `CS_ACTIVE`. A `CS_PRIMED` one keeps its state through
     /// the restart and is promoted by its own next message instead (4.4),
@@ -3116,7 +3323,7 @@ mod tests {
         let mut nc = active(&mut sv, now);
         assert_eq!(sv.clients[0].as_ref().unwrap().state, ClientState::Primed);
 
-        sv.map_restart();
+        sv.map_restart().expect("the restart failed");
         let c = sv.clients[0].as_ref().unwrap();
         assert_eq!(
             c.state,
