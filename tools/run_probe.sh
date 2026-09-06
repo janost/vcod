@@ -19,12 +19,20 @@
 #   COD_LNXDED_HOME  homepath holding main/game.mp.i386.so (default private/server)
 #   PORT             UDP port (default 28970, clear of run_server.sh's 28960)
 #   SECS             how long to let the server run (default 25)
+#   PROBE_SECS       alias for SECS, so a recipe can name either
 #
-#   tools/run_probe.sh <probe-name> [map]    map defaults to mp_pavlov
+#   tools/run_probe.sh <probe-name> [map] [+set cvar value ...]
+#     map defaults to mp_pavlov; anything after it is passed to the engine
+#     verbatim, the way run_server.sh does. The persistence probes need
+#     `+set sv_mapRotation "gametype <probe> map mp_pavlov map mp_pavlov"`,
+#     which is why the pass-through exists: a probe that ends the map has
+#     nothing to load next without it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PROBE="${1:?usage: tools/run_probe.sh <probe-name> [map]}"
 MAP="${2:-mp_pavlov}"
+# Everything past the map goes to the engine; ${@:3} is empty when there is none.
+ENGINE_ARGS=("${@:3}")
 SRC="crates/gsc/tests/fixtures/semantics/$PROBE.gsc"
 [ -f "$SRC" ] || { echo "no probe at $SRC" >&2; exit 1; }
 if [ -z "${COD_DIR:-}" ]; then
@@ -57,7 +65,7 @@ CONSOLE="$(mktemp)"
 trap 'rm -f "$CONSOLE"' EXIT
 rm -f "$LOG"
 
-timeout "${SECS:-25}" "$BIN" \
+timeout "${PROBE_SECS:-${SECS:-25}}" "$BIN" \
     +set dedicated 1 \
     +set developer 1 \
     +set logfile 2 \
@@ -69,7 +77,8 @@ timeout "${SECS:-25}" "$BIN" \
     +set sv_maxclients 8 \
     +set sv_pure 0 \
     +set g_gametype "$PROBE" \
-    +map "$MAP" > "$CONSOLE" 2>&1 || true
+    +map "$MAP" \
+    "${ENGINE_ARGS[@]}" > "$CONSOLE" 2>&1 || true
 
 # The engine stamps each log line with an elapsed "m:ss ".
 sed -n 's/^[[:space:]]*[0-9]*:[0-9]* \(PROBE .*\)$/\1/p' "$LOG" 2>/dev/null || true

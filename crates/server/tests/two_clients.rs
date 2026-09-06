@@ -957,3 +957,660 @@ fn a_broadcast_temp_entity_skips_the_cull_and_a_scoped_one_does_not() {
         "an all-but-A temp entity still reached A: {seen_a:?}"
     );
 }
+
+/// `map mp_brecourt` on the console: both clients keep their netchan, pull
+/// the new gamestate off the high-nibble branch, answer the stock menus
+/// again and spawn on the second map. Nobody is dropped and neither reliable
+/// ring restarts (docs/research/cod11-map-cycle.md, section 3).
+#[test]
+fn a_map_command_reloads_the_level_on_the_live_netchan() {
+    const NEXT: &str = "mp_brecourt";
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb, mut ja, mut jb) = common::join_pair_logged(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+
+    let p = &PROTOCOL_V1;
+    let first = ca.snapshots().newest().expect("A got no snapshot");
+    assert_eq!(
+        first.ps.field_i32(p, "pm_type"),
+        0,
+        "A never spawned on the first map, so the map change proves nothing"
+    );
+    let snap_flags_before = first.snap_flags;
+    let seq_before = ca.incoming_sequence();
+    let cmd_seq_before = ca.command_sequence();
+    let id_before = sv.server_id();
+
+    // A map nobody has: the console logs it and the level keeps serving.
+    sv.push_console("map mp_nosuchmap");
+    now += Duration::from_millis(50);
+    ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+    cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+    common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    assert_eq!(
+        sv.server_id(),
+        id_before,
+        "a map that failed to load changed the level"
+    );
+    assert!(
+        ca.configstring(0).contains(&format!("mapname\\{MAP}")),
+        "a map that failed to load moved the level off {MAP}"
+    );
+
+    // Both joins read settled from the first map; forget that, so the loop
+    // below cannot break before the change has even gone out.
+    ja.reset_menus();
+    jb.reset_menus();
+    sv.push_console(&format!("map {NEXT}"));
+    let mut gamestates = [0usize; 2];
+    let mut loading = Vec::new();
+    for _ in 0..600 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        let (ea, eb, sent) = common::step_pair_seen(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        for (to, pkt) in &sent {
+            if let Some(("loadingnewmap", rest)) = vcod_common::net::connectionless::parse_oob(pkt)
+            {
+                loading.push((*to, String::from_utf8_lossy(rest).into_owned()));
+            }
+        }
+        for (i, (events, join, cl)) in [(ea, &mut ja, &mut ca), (eb, &mut jb, &mut cb)]
+            .into_iter()
+            .enumerate()
+        {
+            for e in events {
+                match e {
+                    vcod_common::net::NetEvent::GamestateReady => {
+                        gamestates[i] += 1;
+                        join.reset_menus();
+                    }
+                    vcod_common::net::NetEvent::ServerCommand(tokens) => {
+                        join.on_server_command(&tokens, cl, now)
+                    }
+                    vcod_common::net::NetEvent::Dropped(r) => {
+                        panic!("client {i} dropped across the map change: {r}")
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if ja.settled(now) && jb.settled(now) {
+            break;
+        }
+    }
+
+    assert_eq!(gamestates, [1, 1], "one new gamestate per client");
+    // The only thing a map change puts on the wire itself: one out-of-band
+    // line to each client past `CS_CONNECTED`, and nothing reliable.
+    assert_eq!(loading.len(), 2, "loadingnewmap went to {loading:?}");
+    let mut told: Vec<std::net::SocketAddr> = loading.iter().map(|(to, _)| *to).collect();
+    told.sort();
+    assert_eq!(told, vec![common::ADDR, common::ADDR_B]);
+    for (_, body) in &loading {
+        assert_eq!(body.trim_end_matches(['\n', '\0']), format!("{NEXT}\ndm"));
+    }
+    assert_eq!(
+        sv.server_id(),
+        vcod_server::console::next_map_id(id_before),
+        "the serverId high nibble did not climb"
+    );
+    assert_eq!(
+        ca.server_id(),
+        i32::from(sv.server_id()),
+        "A is not on the new serverId"
+    );
+    assert!(
+        ca.configstring(0).contains(&format!("mapname\\{NEXT}")),
+        "configstring 0 still names another map: {:?}",
+        ca.configstring(0)
+    );
+    assert!(
+        ca.incoming_sequence() > seq_before,
+        "the netchan sequence restarted; the map change did not stay on the live one"
+    );
+    assert!(
+        ca.command_sequence() >= cmd_seq_before,
+        "the reliable command sequence went backwards"
+    );
+    let snap = ca.snapshots().newest().expect("A got no snapshot after");
+    assert_eq!(
+        snap.ps.field_i32(p, "pm_type"),
+        0,
+        "A never spawned on the second map: {}",
+        ja.summary()
+    );
+    assert_ne!(
+        snap.snap_flags & 4,
+        snap_flags_before & 4,
+        "SNAPFLAG_SERVERCOUNT did not toggle"
+    );
+}
+
+/// `map_restart` on the console re-inits the level in place: no gamestate,
+/// the netchan and both reliable rings kept, the serverId's low nibble up
+/// one and `d 3`, `n`, `d 1` on the wire in that order
+/// (docs/research/cod11-map-cycle.md section 4, and the `d 3`/`n`/`d 1` run
+/// in `tests/fixtures/netchan/mp_carentan-dm-mapchange.txt` seq 42-44).
+/// `map <the map already serving>` is the same path (section 4.2), which is
+/// the tail of this test.
+#[test]
+fn map_restart_re_inits_the_level_without_a_gamestate() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb, mut ja, mut jb) = common::join_pair_logged(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+
+    let p = &PROTOCOL_V1;
+    let first = ca.snapshots().newest().expect("A got no snapshot");
+    assert_eq!(
+        first.ps.field_i32(p, "pm_type"),
+        0,
+        "A never spawned before the restart, so the restart proves nothing"
+    );
+    let seq_before = ca.incoming_sequence();
+    let cmd_seq_before = ca.command_sequence();
+    let id_before = sv.server_id();
+
+    // The restart, then the same-map `map`, each asserted the same way.
+    for (line, expected) in [
+        (
+            "map_restart".to_string(),
+            vcod_server::console::next_restart_id(id_before),
+        ),
+        (
+            format!("map {MAP}"),
+            vcod_server::console::next_restart_id(vcod_server::console::next_restart_id(id_before)),
+        ),
+    ] {
+        // Read before each push: the bit toggles per restart, so a value
+        // taken once would read unchanged after the second one.
+        let snap_flags_before = ca
+            .snapshots()
+            .newest()
+            .expect("a snapshot before the restart")
+            .snap_flags;
+        ja.reset_menus();
+        jb.reset_menus();
+        sv.push_console(&line);
+        let mut gamestates = [0usize; 2];
+        // What each client saw on the reliable stream, in order, of the
+        // three commands the restart writes.
+        let mut wire: [Vec<String>; 2] = Default::default();
+        for _ in 0..600 {
+            now += Duration::from_millis(50);
+            ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+            cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+            let (ea, eb) = common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+            for (i, (events, join, cl)) in [(ea, &mut ja, &mut ca), (eb, &mut jb, &mut cb)]
+                .into_iter()
+                .enumerate()
+            {
+                for e in events {
+                    match e {
+                        vcod_common::net::NetEvent::GamestateReady => gamestates[i] += 1,
+                        vcod_common::net::NetEvent::ConfigstringChanged(idx)
+                            if matches!(idx, 1 | 3) =>
+                        {
+                            wire[i].push(format!("d {idx}"))
+                        }
+                        vcod_common::net::NetEvent::ServerCommand(tokens) => {
+                            // Retail reruns `ClientConnect` on a restart and
+                            // reopens the menus under the indices the last
+                            // level used, so `n` is what forgets them.
+                            if tokens.first().map(String::as_str) == Some("n") {
+                                wire[i].push("n".to_string());
+                                join.reset_menus();
+                            }
+                            join.on_server_command(&tokens, cl, now)
+                        }
+                        vcod_common::net::NetEvent::Dropped(r) => {
+                            panic!("client {i} dropped across {line}: {r}")
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if ja.settled(now) && jb.settled(now) {
+                break;
+            }
+        }
+
+        assert_eq!(gamestates, [0, 0], "{line} pushed a gamestate");
+        // The retail order, from the dm map-change capture's seq 42-44.
+        for (i, seen) in wire.iter().enumerate() {
+            assert_eq!(seen, &["d 3", "n", "d 1"], "{line}: client {i}'s wire");
+        }
+        assert_eq!(
+            sv.server_id(),
+            expected,
+            "{line}: the serverId low nibble did not climb, or the high one moved"
+        );
+        for (i, cl) in [&ca, &cb].into_iter().enumerate() {
+            assert_eq!(
+                cl.server_id(),
+                i32::from(sv.server_id()),
+                "client {i} never read the new serverId back off `d 1` after {line}"
+            );
+        }
+        assert!(
+            ca.configstring(0).contains(&format!("mapname\\{MAP}")),
+            "{line} moved the level off {MAP}: {:?}",
+            ca.configstring(0)
+        );
+        assert!(
+            ca.incoming_sequence() > seq_before,
+            "{line} restarted the netchan"
+        );
+        assert!(
+            ca.command_sequence() >= cmd_seq_before,
+            "{line}: the reliable command sequence went backwards"
+        );
+        for (i, (cl, join)) in [(&ca, &ja), (&cb, &jb)].into_iter().enumerate() {
+            let snap = cl
+                .snapshots()
+                .newest()
+                .expect("a snapshot after the restart");
+            assert_eq!(
+                snap.ps.field_i32(p, "pm_type"),
+                0,
+                "client {i} never spawned again after {line}: {}",
+                join.summary()
+            );
+        }
+        let snap = ca.snapshots().newest().expect("A got no snapshot after");
+        assert_ne!(
+            snap.snap_flags & 4,
+            snap_flags_before & 4,
+            "{line}: SNAPFLAG_SERVERCOUNT did not toggle"
+        );
+    }
+}
+
+/// The score limit ends the map (map-cycle doc 6, and section 2's
+/// `exitLevel`): `dm` with `scr_dm_scorelimit 1`, A kills B, and the stock
+/// `endMap` puts both clients at the intermission camera -- `pm_type` 5, a
+/// scoreboard and the winner's `cg_objectiveText` -- then ten seconds later
+/// calls `exitLevel(false)`, whose `map_rotate` loads the next map in
+/// `sv_mapRotation` on the live netchan.
+#[test]
+fn the_score_limit_sends_both_clients_to_intermission_and_then_rotates() {
+    use vcod_common::net::msg::{UserCmd, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD};
+    use vcod_common::net::NetEvent;
+
+    const NEXT: &str = "mp_brecourt";
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    // One kill ends it, and the rotation has to name a map that is not the
+    // one serving: `map <the map already serving>` is a restart (doc 4.2),
+    // which pushes no gamestate.
+    sv.set_cvar("scr_dm_scorelimit", "1");
+    sv.set_cvar("sv_mapRotation", &format!("map {NEXT} map {MAP}"));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb, mut ja, mut jb) = common::join_pair_logged(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+
+    let p = &PROTOCOL_V1;
+    let na = ca
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let nb = cb
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let spot = ca.snapshots().newest().unwrap().ps.origin(p);
+    assert!(
+        sv.test_clear_line(spot, 0.0, 40.0),
+        "no clear 40 units along +x from the spawn"
+    );
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+    let facing_a = UserCmd {
+        angles: [0, 32768, 0],
+        ..NULL_USERCMD
+    };
+    let ads = UserCmd {
+        buttons: BUTTON_ADS,
+        ..NULL_USERCMD
+    };
+    let fire = UserCmd {
+        buttons: BUTTON_ADS | BUTTON_ATTACK,
+        ..NULL_USERCMD
+    };
+
+    // Every reliable command each client took from the kill onward, so the
+    // scoreboard and the objective text can be looked for after the
+    // intermission rather than among the join's own.
+    let mut wire: [Vec<String>; 2] = Default::default();
+    let mut gamestates = [0usize; 2];
+    let mut step = |sv: &mut vcod_server::Server,
+                    ca: &mut _,
+                    cb: &mut _,
+                    ja: &mut common::Join,
+                    jb: &mut common::Join,
+                    wire: &mut [Vec<String>; 2],
+                    gamestates: &mut [usize; 2]| {
+        now += Duration::from_millis(50);
+        let (ea, eb) = common::step_pair(sv, (&qa, ca), (&qb, cb), now);
+        for (i, (events, join, cl)) in [(ea, ja, ca), (eb, jb, cb)].into_iter().enumerate() {
+            for e in events {
+                match e {
+                    NetEvent::GamestateReady => {
+                        gamestates[i] += 1;
+                        join.reset_menus();
+                    }
+                    NetEvent::ServerCommand(tokens) => {
+                        wire[i].push(tokens.join(" "));
+                        join.on_server_command(&tokens, cl, now);
+                    }
+                    NetEvent::Dropped(r) => panic!("client {i} dropped: {r}"),
+                    _ => {}
+                }
+            }
+        }
+    };
+
+    // Settle, then two taps: the carbine is semi-automatic, so the trigger
+    // is released in between (combat doc, 1.4).
+    for _ in 0..40 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
+        step(
+            &mut sv,
+            &mut ca,
+            &mut cb,
+            &mut ja,
+            &mut jb,
+            &mut wire,
+            &mut gamestates,
+        );
+    }
+    for seen in &mut wire {
+        seen.clear();
+    }
+    for round in 0..2 {
+        ca.send_frame(&fire);
+        cb.send_frame(&facing_a);
+        step(
+            &mut sv,
+            &mut ca,
+            &mut cb,
+            &mut ja,
+            &mut jb,
+            &mut wire,
+            &mut gamestates,
+        );
+        if round == 0 {
+            for _ in 0..30 {
+                ca.send_frame(&ads);
+                cb.send_frame(&facing_a);
+                step(
+                    &mut sv,
+                    &mut ca,
+                    &mut cb,
+                    &mut ja,
+                    &mut jb,
+                    &mut wire,
+                    &mut gamestates,
+                );
+            }
+        }
+    }
+    assert_eq!(
+        sv.client_field(na, "score").as_deref(),
+        Some("1"),
+        "A did not score the kill"
+    );
+
+    // The intermission itself: both frozen at `pm_type` 5 within a frame or
+    // two of the kill.
+    for _ in 0..30 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&NULL_USERCMD);
+        step(
+            &mut sv,
+            &mut ca,
+            &mut cb,
+            &mut ja,
+            &mut jb,
+            &mut wire,
+            &mut gamestates,
+        );
+    }
+    for (i, cl) in [&ca, &cb].into_iter().enumerate() {
+        let snap = cl.snapshots().newest().expect("a snapshot at intermission");
+        assert_eq!(
+            snap.ps.field_i32(p, "pm_type"),
+            5,
+            "client {i} is not at the intermission camera"
+        );
+        // Neither camera is linked, so neither is in the other's list.
+        assert!(
+            !snap.entities.contains_key(&(na as u32)) && !snap.entities.contains_key(&(nb as u32)),
+            "client {i} is still sent a player entity at intermission: {:?}",
+            snap.entities.keys().collect::<Vec<_>>()
+        );
+    }
+    for (i, seen) in wire.iter().enumerate() {
+        // One push per dirtying and no more: the kill's `attacker.score++`
+        // is the only score this level moved after the join.
+        let pushed = seen.iter().filter(|c| c.starts_with("b ")).count();
+        assert_eq!(
+            pushed, 1,
+            "client {i}'s scoreboards after the intermission began: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|c| c.starts_with("v cg_objectiveText")),
+            "client {i} got no objective text after the intermission began: {seen:?}"
+        );
+    }
+
+    // `wait 10` and then `exitLevel(false)`, whose `map_rotate` loads the
+    // next map on the live netchan.
+    for _ in 0..400 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&NULL_USERCMD);
+        step(
+            &mut sv,
+            &mut ca,
+            &mut cb,
+            &mut ja,
+            &mut jb,
+            &mut wire,
+            &mut gamestates,
+        );
+        if gamestates == [1, 1] {
+            break;
+        }
+    }
+    assert_eq!(gamestates, [1, 1], "the rotation never loaded {NEXT}");
+    assert!(
+        ca.configstring(0).contains(&format!("mapname\\{NEXT}")),
+        "the rotation loaded {:?}",
+        ca.configstring(0)
+    );
+}
+
+/// What an `sd` round restart leaves a client holding, and what it does to
+/// the per-life teleport bit. `endRound` stashes every living player's
+/// weapons in `pers[]` and calls `map_restart(true)`, so the restart's own
+/// `ClientConnect` re-gives them out of the carried `pers` (map-cycle doc,
+/// section 4, steps 10 and 11); a client that was dead has had those keys
+/// cleared by `Callback_PlayerKilled` and is re-given its menu weapon
+/// instead. Either way it comes back armed, and the re-entry counts as a new
+/// life, so `eFlags` 0x8 flips the way a death respawn's does.
+#[test]
+fn a_round_restart_leaves_both_clients_armed_and_flips_the_teleport_bit() {
+    use vcod_common::net::NetEvent;
+
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).expect("parse the bsp");
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(common::cfg(MAP, "sd"), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    // No delay on the answers: `sd`'s connect callback is parked on
+    // `menuresponse` before the `t 0` that opens the menu leaves the server,
+    // so an answer that comes straight back is still heard.
+    let (mut ca, mut cb, mut ja, mut jb) = common::join_pair_logged(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("axis", "kar98k_mp"),
+    );
+
+    let p = &PROTOCOL_V1;
+    let watched = |cl: &vcod_common::net::NetClient<common::ClientEnd>| -> (i32, i32, i32) {
+        let s = cl.snapshots().newest().expect("a snapshot");
+        (
+            s.ps.field_i32(p, "pm_type"),
+            s.ps.field_i32(p, "eFlags"),
+            s.ps.field_i32(p, "weapon"),
+        )
+    };
+
+    // B kills itself, which eliminates the axis team and ends the round;
+    // `endRound` is what runs `map_restart(true)`. A is alive when it lands.
+    let mut before = None;
+    let mut restarted = None;
+    let mut killed = false;
+    for frame in 0..400 {
+        now += Duration::from_millis(50);
+        // The kill goes out once both are playing and A has a settled trace
+        // to compare against.
+        if !killed && frame >= 40 && watched(&ca).0 == 0 && watched(&cb).0 == 0 {
+            before = Some((watched(&ca), watched(&cb)));
+            cb.send_reliable("kill");
+            killed = true;
+        }
+        let (cmd_a, cmd_b) = (common::holding(&ca), common::holding(&cb));
+        ca.send_frame(&cmd_a);
+        cb.send_frame(&cmd_b);
+        let (ea, eb) = common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        for (i, (events, join, cl)) in [(ea, &mut ja, &mut ca), (eb, &mut jb, &mut cb)]
+            .into_iter()
+            .enumerate()
+        {
+            for e in &events {
+                match e {
+                    NetEvent::ServerCommand(t) => {
+                        // A restart reopens whatever menus the level's
+                        // connect callback opens, under the indices the last
+                        // one used.
+                        if t.first().map(String::as_str) == Some("n") {
+                            join.reset_menus();
+                            // Only the restart the kill caused: `startGame`
+                            // opens the match with one of its own.
+                            if killed && restarted.is_none() {
+                                restarted = Some(frame);
+                            }
+                        }
+                        join.on_server_command(t, cl, now);
+                    }
+                    NetEvent::Dropped(r) => panic!("client {i} dropped: {r}"),
+                    _ => {}
+                }
+            }
+        }
+        // A few frames past the restart: the respawn lands on the restart's
+        // own frame and the weapon mirror runs a frame behind it.
+        if restarted.is_some_and(|f| frame >= f + 5) {
+            break;
+        }
+    }
+    assert!(
+        restarted.is_some(),
+        "no round restarted; the kill never ended the round"
+    );
+    let (a_before, b_before) = before.expect("both clients played before the kill");
+    let (a_after, b_after) = (watched(&ca), watched(&cb));
+
+    assert_eq!(
+        a_after.2, a_before.2,
+        "the client that was alive came back holding {} where it held {} \
+         (`pers[\"weapon1\"]`/`weapon2`, one of which is \"none\")",
+        a_after.2, a_before.2
+    );
+    assert_eq!(
+        b_after.2, b_before.2,
+        "the client that was dead came back holding {} where it held {}",
+        b_after.2, b_before.2
+    );
+    assert_ne!(
+        a_after.1, a_before.1,
+        "the restart's respawn left `eFlags` at {}, so the per-life teleport \
+         bit never flipped and a retail client interpolates through it",
+        a_after.1
+    );
+}

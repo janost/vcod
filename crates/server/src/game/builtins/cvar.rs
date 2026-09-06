@@ -3,7 +3,7 @@
 //! alongside them. Coercion answers (`atoi`/`atof`, case folding) come from
 //! `probe_cvar`'s retail capture.
 
-use crate::game::host::GameHost;
+use crate::game::host::{GameHost, LevelLatch};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
@@ -19,6 +19,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("resettimeout", reset_timeout),
     ("setarchive", set_archive),
     ("exitlevel", exit_level),
+    ("map_restart", map_restart),
     ("setclientnamemode", set_client_name_mode),
 ];
 
@@ -243,23 +244,65 @@ pub fn set_client_name_mode(
     Ok(Value::Undefined)
 }
 
-/// `exitLevel()`: sets a flag `ScriptRuntime::run_frame` reads and drains
-/// each frame. No stage in this sub-project acts on it; stage 6 ("the
-/// score limit ends the map") is where it does.
+/// `exitLevel([savePersist])` (map-cycle doc, sections 1 and 2): the shared
+/// one-shot latch, then `ExitLevel` itself -- the queued `map_rotate`, both
+/// team scores and every connected client's score back to 0, and the log
+/// line. Nothing else: no intermission state, no camera and no timer.
 pub fn exit_level(
     host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
-    _args: &[Value],
+    args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    host.exit_level = true;
+    latch(host, LevelLatch::ExitLevel, args)?;
+    host.console.push("map_rotate".to_string());
+    host.team_scores = [0, 0];
+    host.zero_client_scores();
+    host.script_log.push("ExitLevel: executed".to_string());
     Ok(Value::Undefined)
+}
+
+/// `map_restart([savePersist])` (map-cycle doc, section 1): the same latch
+/// and the same optional argument, queueing the other console command.
+pub fn map_restart(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    latch(host, LevelLatch::MapRestart, args)?;
+    host.console.push("map_restart".to_string());
+    Ok(Value::Undefined)
+}
+
+/// What the two share: the one-shot latch, whose error names whichever call
+/// got there first, and `savePersist` off the optional first argument.
+/// Retail reads it with `Scr_GetInt`, so a non-number is a script error.
+fn latch(host: &mut GameHost, which: LevelLatch, args: &[Value]) -> Result<(), ErrorKind> {
+    match host.level_latch {
+        LevelLatch::None => {}
+        LevelLatch::MapRestart => return Err(ErrorKind::BadType("map_restart already called")),
+        LevelLatch::ExitLevel => return Err(ErrorKind::BadType("exitlevel already called")),
+    }
+    // The argument is read before the latch takes, so a call that raises
+    // leaves the level able to end later; `Scr_GetInt` truncates a float
+    // rather than testing it against zero.
+    let save_persist = match args.first() {
+        None => false,
+        Some(Value::Int(i)) => *i != 0,
+        Some(Value::Float(f)) => (*f as i32) != 0,
+        Some(_) => return Err(ErrorKind::BadType("map_restart/exitLevel wants a number")),
+    };
+    host.level_latch = which;
+    host.save_persist = save_persist;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
+    use vcod_gsc::Host;
 
     /// `setClientNameMode` records retail's two modes and raises on anything
     /// else, the way `Scr_Error("Unknown mode")` does.
@@ -276,6 +319,93 @@ mod tests {
             let other = Value::String(cx.intern_exact("whenever"));
             assert!(set_client_name_mode(&mut host, cx, None, &[other]).is_err());
             assert_eq!(host.client_name_mode, ClientNameMode::Auto);
+        });
+    }
+
+    /// The two level-ending builtins share one latch, take the same
+    /// optional `savePersist` and queue different console lines
+    /// (docs/research/cod11-map-cycle.md sections 1 and 2). The second call
+    /// names whichever got there first, not the one being refused.
+    #[test]
+    fn map_restart_and_exitlevel_latch_once_and_stash_save_persist() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            map_restart(&mut host, cx, None, &[Value::Int(1)]).unwrap();
+            assert_eq!(host.level_latch, LevelLatch::MapRestart);
+            assert!(host.save_persist);
+            assert_eq!(host.console, vec!["map_restart".to_string()]);
+            // Both are refused now, and the message names the first call.
+            let e = exit_level(&mut host, cx, None, &[]).unwrap_err();
+            assert_eq!(e, ErrorKind::BadType("map_restart already called"));
+            assert!(map_restart(&mut host, cx, None, &[]).is_err());
+            // A refused call changes neither the flag nor the queue.
+            assert!(host.save_persist);
+            assert_eq!(host.console.len(), 1);
+        });
+
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            exit_level(&mut host, cx, None, &[Value::Int(0)]).unwrap();
+            assert_eq!(host.level_latch, LevelLatch::ExitLevel);
+            assert!(!host.save_persist);
+            // `ExitLevel` queues the rotation, not a restart (section 2).
+            assert_eq!(host.console, vec!["map_rotate".to_string()]);
+            let e = map_restart(&mut host, cx, None, &[]).unwrap_err();
+            assert_eq!(e, ErrorKind::BadType("exitlevel already called"));
+        });
+    }
+
+    /// `ExitLevel`'s two passes and its log line (map-cycle doc, section 2):
+    /// both team scores and every connected client's score back to 0, and
+    /// no scoreboard pushed for it -- the passes write the field rather
+    /// than calling the setter, so the ranks stay clean.
+    #[test]
+    fn exitlevel_zeroes_the_team_scores_and_every_client_score() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn_client(cx, 1, None).unwrap();
+            let score = cx.intern_folded("score");
+            host.set_field(cx, e, score, Value::Int(12)).unwrap();
+            host.team_scores = [4, 7];
+            host.ranks_dirty = false;
+
+            exit_level(&mut host, cx, None, &[]).unwrap();
+
+            assert_eq!(host.team_scores, [0, 0]);
+            assert_eq!(host.get_field(cx, e, score), Value::Int(0));
+            assert!(!host.ranks_dirty, "the outgoing level pushed a scoreboard");
+            assert_eq!(
+                host.script_log.last().map(String::as_str),
+                Some("ExitLevel: executed")
+            );
+        });
+    }
+
+    /// No argument is `savePersist` 0, the same as an explicit zero, and a
+    /// non-number is a script error where retail's `Scr_GetInt` raises one.
+    #[test]
+    fn save_persist_defaults_off_and_refuses_a_non_number() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            map_restart(&mut host, cx, None, &[]).unwrap();
+            assert!(!host.save_persist);
+        });
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let s = Value::String(cx.intern_exact("1"));
+            assert!(exit_level(&mut host, cx, None, &[s]).is_err());
+            assert_eq!(host.console.len(), 0);
+            // The latch did not take, so the level can still end.
+            assert_eq!(host.level_latch, LevelLatch::None);
+            exit_level(&mut host, cx, None, &[Value::Int(1)]).unwrap();
+            assert_eq!(host.level_latch, LevelLatch::ExitLevel);
+            assert!(host.save_persist);
+        });
+        // `Scr_GetInt` truncates: 0.5 is 0, not "non-zero".
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            map_restart(&mut host, cx, None, &[Value::Float(0.5)]).unwrap();
+            assert!(!host.save_persist);
         });
     }
 

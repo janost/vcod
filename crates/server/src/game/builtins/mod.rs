@@ -12,6 +12,8 @@ pub mod fx;
 pub mod hud;
 pub mod io;
 pub mod math;
+pub mod message;
 pub mod mover;
 pub mod precache;
+pub mod score;
 pub mod sound;

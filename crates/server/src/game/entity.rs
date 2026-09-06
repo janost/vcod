@@ -215,7 +215,16 @@ impl ObjectTable {
     /// (docs/research/cod11-gsc-object-model.md section 2). A second call on
     /// a slot that already holds a client entity replaces it outright, the
     /// same full reset a reconnect wants.
-    pub fn spawn_client(&mut self, cx: &mut Cx, slot: usize) -> Result<EntId, ErrorKind> {
+    ///
+    /// `pers` is the table the outgoing level asked to keep
+    /// (docs/research/cod11-map-cycle.md section 1); `None` builds an empty
+    /// one, which is every connect but a persisting restart's.
+    pub fn spawn_client(
+        &mut self,
+        cx: &mut Cx,
+        slot: usize,
+        pers: Option<&vcod_gsc::ArrayCarry>,
+    ) -> Result<EntId, ErrorKind> {
         if slot >= MAX_CLIENTS {
             return Err(ErrorKind::BadType("client slot out of range"));
         }
@@ -242,13 +251,14 @@ impl ObjectTable {
         // before `begin`, with `pers["team"]` undefined inside it
         // (docs/research/cod11-gsc-object-model.md, "Client fields").
         //
-        // A fresh array every call, where retail's handle is what survives
-        // the `gclient_t` reset -- that is the whole point of `pers`, whose
-        // contents outlive a round. Not measured, and equivalent today only
-        // because nothing yet re-runs `spawn_client` on a live client: a map
-        // change or a round restart, neither of which exists, is where the
-        // two readings part.
-        client[pers_index()] = Value::Array(cx.new_array());
+        // A fresh array, refilled from the carry when the outgoing level
+        // asked for it: retail keeps the handle across the `gclient_t`
+        // reset, which is the whole point of `pers`.
+        let pers_id = cx.new_array();
+        if let Some(carry) = pers {
+            cx.install_array(pers_id, carry);
+        }
+        client[pers_index()] = Value::Array(pers_id);
         let mut engine = vec![Value::Undefined; engine_slot_count()];
         // A client is `classname` "player" from the moment it exists, because
         // that is how every stock script reaches the players:
@@ -557,7 +567,7 @@ mod tests {
         let mut vm = vcod_gsc::Vm::new();
         let mut ents = ObjectTable::new();
         let before = ents.num_entities();
-        let id = vm.with_cx(|cx| ents.spawn_client(cx, 3).unwrap());
+        let id = vm.with_cx(|cx| ents.spawn_client(cx, 3, None).unwrap());
         assert_eq!(id, vcod_gsc::EntId(3));
         assert_eq!(
             ents.num_entities(),
@@ -575,7 +585,7 @@ mod tests {
     fn freeing_a_client_does_not_hand_its_number_to_the_map() {
         let mut vm = vcod_gsc::Vm::new();
         let mut ents = ObjectTable::new();
-        vm.with_cx(|cx| ents.spawn_client(cx, 2).unwrap());
+        vm.with_cx(|cx| ents.spawn_client(cx, 2, None).unwrap());
         ents.free_client(2);
         let first_map = vm.with_cx(|cx| ents.spawn(cx).unwrap());
         assert_eq!(first_map, vcod_gsc::EntId(FIRST_MAP_ENTITY));

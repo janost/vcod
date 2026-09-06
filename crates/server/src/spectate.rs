@@ -37,9 +37,15 @@ const PMF_OWN_VIEW: i32 = 0x40000;
 /// `PlayerState::ducked` carries it.
 const EF_CROUCH: i32 = 0x20;
 const EF_PRONE: i32 = 0x40;
-/// The per-life toggle. VERIFIED: retail alternates `eFlags` 16 and 24
-/// across a player's lives (`mp_carentan-dm-hit-target.txt` reads 115 samples
-/// at 16 against 101 at 24). INFERRED: a client breaks interpolation on the
+/// The per-spawn toggle: every spawn flips it, a spectator's and the
+/// intermission camera's included, and a level boundary clears it
+/// (docs/research/cod11-map-cycle.md, 8.2). Not per life --
+/// `mp_carentan-sd-roundrestart-target.txt` reads 24 on two consecutive
+/// lives (`!trace ms=28607` and `ms=118532`) because the spectator frame
+/// between them took the intervening flip. The `dm` hit capture's near-even
+/// split (115 samples at 16 against 101 at 24) is that same alternation seen
+/// from a run whose spawns happened to pair off.
+/// INFERRED: a client breaks interpolation on the
 /// changed word, so without it a respawn smears from the corpse to the spawn.
 /// The same bit `bodies::EFLAGS_ANIM_TOGGLE` inverts per body-queue push, for
 /// the same reason: a changed `eFlags` is what makes a client stop carrying
@@ -56,6 +62,9 @@ const PMF_BACKWARDS_RUN: i32 = 0x40;
 
 /// The dead `pm_type`, read off both retail deaths (combat doc, section 8).
 pub const PM_DEAD: i32 = 6;
+/// The intermission `pm_type` `ClientEndFrame`'s third arm writes
+/// (map-cycle doc, 6.2); the dm map-change capture's post-end traces read it.
+pub const PM_INTERMISSION: i32 = 5;
 /// `EV_PAIN` and `EV_DEATH` (`docs/research/cod11-events-and-fx.md`).
 const EV_PAIN: i32 = 187;
 const EV_DEATH: i32 = 189;
@@ -159,6 +168,10 @@ pub enum PmType {
     /// `pm_type` 4 on the wire, the value every client carries before it
     /// answers the team menu.
     Spectator,
+    /// `pm_type` 5, the camera a level's end parks every client at
+    /// (docs/research/cod11-map-cycle.md section 6.2). Nothing moves it and
+    /// nothing it presses is read.
+    Intermission,
 }
 
 /// The four-slot event ring a playerstate or an entity carries: written at
@@ -253,7 +266,8 @@ pub struct ClientSim {
     dead_yaw: i32,
     /// When the next `EV_PAIN` may fire.
     pain_after_ms: i32,
-    /// `EF_TELEPORT_BIT`'s current state, flipped by every player spawn.
+    /// `EF_TELEPORT_BIT`'s current state, flipped by every spawn of any
+    /// mode (docs/research/cod11-map-cycle.md, 8.2).
     teleport_bit: bool,
     /// `ps.stats[5]`, the spawn counter retail's `ClientSpawn` carries across
     /// its own memset (docs/protocol-1.1.md, "Block 1"). A byte on the wire,
@@ -324,9 +338,10 @@ impl ClientSim {
             feedback: DamageFeedback::default(),
             dead_yaw: 0,
             pain_after_ms: 0,
-            // Set, so the first player spawn's flip clears it: retail's first
-            // life reads `eFlags` 16 and each later one alternates.
-            teleport_bit: true,
+            // Clear, the way `ClientConnect`'s memset leaves `ps.eFlags`:
+            // the connect's own `spawnSpectator` is the flip that puts the
+            // first spectator frame at 24 and the life after it back at 16.
+            teleport_bit: false,
             // The constructor is the connect, before any spawn: the script's
             // own `spawnSpectator` is what takes it to the capture's 1.
             spawn_count: 0,
@@ -349,6 +364,28 @@ impl ClientSim {
         self.respawn(PmType::Spectator, origin, yaw_deg, cmd_angles);
     }
 
+    /// The third mode, through the same `self spawn(origin, angles)`:
+    /// `spawnIntermission()` parks the client at the map's intermission
+    /// point for the level's last ten seconds (map-cycle doc, section 6).
+    pub fn become_intermission(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
+        self.respawn(PmType::Intermission, origin, yaw_deg, cmd_angles);
+        // `ClientSpawn` zeroes the whole `gclient_t` and `ClientEndFrame`'s
+        // intermission arm never copies `ent->health` back into the
+        // playerstate, so the capture's `pm_type=5` traces read health 0
+        // where the same client read 100 a frame earlier. `Server`'s vitals
+        // mirror leaves an intermission sim alone for the same reason.
+        self.health = 0;
+        self.max_health = 0;
+    }
+
+    /// Whether the sim is something the other clients are sent an entity
+    /// for. Retail links neither spectator nor intermission client and sets
+    /// `SVF_NOCLIENT` on a dead one every frame (combat doc, 5.4;
+    /// map-cycle doc, 6.2).
+    pub fn linked(&self) -> bool {
+        self.pm_type == PmType::Normal && !self.dead
+    }
+
     fn respawn(&mut self, mode: PmType, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
         self.ps = pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg);
         self.pm_type = mode;
@@ -369,16 +406,15 @@ impl ClientSim {
         // Retail's respawn frame reads an empty ring at sequence 0
         // (combat doc, 9.2).
         self.ring.clear();
-        // A spectator's `eFlags` is a constant on the wire, so only a player
-        // spawn consumes a flip.
-        if mode == PmType::Normal {
-            self.teleport_bit = !self.teleport_bit;
-        }
+        // Every spawn consumes a flip, a spectator's and the intermission
+        // camera's included: retail's capture reads 16 on a respawn's
+        // spectator frame and 24 on the next one (map-cycle doc, 8.2).
+        self.teleport_bit = !self.teleport_bit;
     }
 
-    /// A live player's `eFlags`: the base word, the per-life teleport bit and
-    /// nothing else. The stance bits ride on the playerstate copy only, which
-    /// is where the motion capture measured them.
+    /// The wire word for any mode: the base and the per-spawn teleport bit
+    /// and nothing else. The stance bits ride on a live player's playerstate
+    /// copy only, which is where the motion capture measured them.
     fn eflags(&self) -> i32 {
         PLAYER_EFLAGS
             | if self.teleport_bit {
@@ -411,10 +447,19 @@ impl ClientSim {
             }
             return Vec::new();
         }
+        // `ClientThink_real`'s `sessionstate` 3 arm jumps to the function's
+        // exit past the view angles and the mover alike (map-cycle doc,
+        // 6.2), so the camera holds the origin and the view the spawn gave
+        // it however the client leans on its keyboard.
+        if self.pm_type == PmType::Intermission {
+            return Vec::new();
+        }
         self.ps.yaw = short_deg(cmd.angles[1] + self.delta_angles[1]).to_radians();
         // Wire pitch is positive down; the sim stores the camera's convention.
         self.ps.pitch = -short_deg(cmd.angles[0] + self.delta_angles[0]).to_radians();
         match (self.pm_type, world) {
+            // Taken by the early return above.
+            (PmType::Intermission, _) => {}
             // A spectator noclips, so it needs no world. `(Normal, None)` is
             // the two cases where a player has none either: a unit test that
             // mounts no map, and a server whose world failed to load, which
@@ -902,14 +947,15 @@ impl ClientSim {
         // Mode-dependent.
         set(
             "pm_type",
-            match (player, self.dead) {
-                (true, true) => PM_DEAD,
-                (true, false) => 0,
-                (false, _) => 4,
+            match (self.pm_type, self.dead) {
+                (PmType::Normal, true) => PM_DEAD,
+                (PmType::Normal, false) => 0,
+                (PmType::Intermission, _) => PM_INTERMISSION,
+                (PmType::Spectator, _) => 4,
             },
         );
-        // The 0x8 a spectator carries is the same bit `EF_TELEPORT_BIT` names;
-        // a spectator's value is the capture's constant, not a mechanism.
+        // The stance bits ride only on a live player's word; a spectator and
+        // the intermission camera carry the base and the teleport bit alone.
         let stance_eflags = match self.ps.stance {
             pmove::Stance::Stand => 0,
             pmove::Stance::Crouch => EF_CROUCH,
@@ -917,11 +963,7 @@ impl ClientSim {
         };
         set(
             "eFlags",
-            if player {
-                self.eflags() | stance_eflags
-            } else {
-                24
-            },
+            self.eflags() | if player { stance_eflags } else { 0 },
         );
         set(
             "speed",
@@ -1155,6 +1197,47 @@ mod tests {
     use super::*;
     use vcod_common::net::msg::NULL_USERCMD;
     use vcod_common::net::protocol::PROTOCOL_V1;
+
+    /// The intermission camera (map-cycle doc 6.2, and the `pm_type=5`
+    /// traces in `tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`):
+    /// `pm_type` 5, a spectator's `eFlags`, health 0, an origin nothing the
+    /// client presses moves, and no entity for anyone else.
+    #[test]
+    fn an_intermission_client_is_frozen_unlinked_and_at_pm_type_five() {
+        let p = &PROTOCOL_V1;
+        let world = vcod_common::collision::test_world(&[]);
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        // The connect's own `spawnSpectator`, which every stock gametype runs
+        // before the first player spawn: it is the first `EF_TELEPORT_BIT`
+        // flip and the life after it reads 16 because of it.
+        sim.become_spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.health = 100;
+        sim.max_health = 100;
+        assert!(sim.linked(), "a live player is linked");
+
+        sim.become_intermission([384.0, -624.0, 184.0], 90.0, NULL_USERCMD.angles);
+        let at = sim.ps.origin;
+        let forward = UserCmd {
+            forward: 127,
+            angles: [1000, 2000, 0],
+            ..NULL_USERCMD
+        };
+        for _ in 0..20 {
+            assert!(
+                sim.step(&forward, 0.05, Some(&world), &[]).is_empty(),
+                "the intermission camera raised an event"
+            );
+        }
+        assert_eq!(sim.ps.origin, at, "the intermission camera moved");
+        assert!(!sim.linked(), "the intermission camera is linked");
+
+        let w = sim.to_wire(p, 0, 0);
+        assert_eq!(w.field_i32(p, "pm_type"), PM_INTERMISSION);
+        assert_eq!(w.field_i32(p, "eFlags"), 24);
+        assert_eq!(w.health(), 0, "the spawn's memset is never written back");
+        assert_eq!(w.field_i32(p, "eventSequence"), 0);
+    }
 
     fn cmd(forward: i8, pitch_short: i32, yaw_short: i32) -> UserCmd {
         UserCmd {
@@ -1637,6 +1720,10 @@ mod tests {
     fn a_standing_player_carries_the_captured_values() {
         let p = &PROTOCOL_V1;
         let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
+        // The connect's own `spawnSpectator`, which every stock gametype runs
+        // before the first player spawn: it is the first `EF_TELEPORT_BIT`
+        // flip and the life after it reads 16 because of it.
+        sim.become_spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
         // The capture is of a player standing still on the floor.
         sim.ps.on_ground = true;
@@ -1657,7 +1744,8 @@ mod tests {
     #[test]
     fn wire_carries_the_pinned_constants_and_dynamic_fields() {
         let p = &PROTOCOL_V1;
-        let sim = ClientSim::spectator([10.0, 20.0, 30.0], 90.0, NULL_USERCMD.angles);
+        let mut sim = ClientSim::spectator([10.0, 20.0, 30.0], 90.0, NULL_USERCMD.angles);
+        sim.become_spectator([10.0, 20.0, 30.0], 90.0, NULL_USERCMD.angles);
         let w = sim.to_wire(p, 3, 114_800);
         assert_eq!(w.field_i32(p, "pm_type"), 4);
         assert_eq!(w.field_i32(p, "speed"), 400);

@@ -403,6 +403,16 @@ pub fn pers_index() -> usize {
         .expect("CLIENT_FIELDS carries pers")
 }
 
+/// `Route::Client`'s index for `.score`, which `ExitLevel` zeroes on every
+/// connected client without going through the field setter (map-cycle doc,
+/// section 2). Panics for the same reason [`pers_index`] does.
+pub fn score_index() -> usize {
+    CLIENT_FIELDS
+        .iter()
+        .position(|f| f.name == "score")
+        .expect("CLIENT_FIELDS carries score")
+}
+
 /// The same count over the HUD table, which is one shorter than the table:
 /// `color` and `alpha` share an offset and so share a slot.
 pub fn hud_slot_count() -> usize {

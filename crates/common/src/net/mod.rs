@@ -103,6 +103,9 @@ pub enum NetEvent {
     DownloadComplete(String),
     /// Any serverCommand not handled here, tokenized. The HUD reads `b` from it.
     ServerCommand(Vec<String>),
+    /// A connectionless packet the client did not act on itself (retail's
+    /// `loadingnewmap` before a map change), command word and the rest.
+    OutOfBand(String),
 }
 
 /// CoD 1.1 spectate client, generic over its [`Transport`] so the state
@@ -254,6 +257,17 @@ impl<T: Transport> NetClient<T> {
 
     pub fn server_id(&self) -> i32 {
         self.server_id
+    }
+
+    /// Highest serverCommand sequence executed, which is the sequence of the
+    /// last command [`NetClient::take_server_commands`] returned.
+    pub fn command_sequence(&self) -> i32 {
+        self.command_sequence
+    }
+
+    /// The netchan sequence of the newest message parsed.
+    pub fn incoming_sequence(&self) -> u32 {
+        self.netchan.incoming_sequence
     }
 
     /// Verbatim text of every serverCommand executed since the last call, in
@@ -525,7 +539,11 @@ impl<T: Transport> NetClient<T> {
                     self.handshake_print = Some(text);
                 }
             }
-            _ => {}
+            _ => {
+                let rest = String::from_utf8_lossy(rest);
+                self.events
+                    .push(NetEvent::OutOfBand(format!("{cmd}\n{}", rest.trim_end())));
+            }
         }
     }
 
@@ -1080,6 +1098,22 @@ mod tests {
         assert_eq!(c.state(), NetState::Active);
         assert!(c.snapshots().newest().is_none());
         assert!(c.configstring(0).contains("mapname"));
+    }
+
+    /// Retail announces a map change out of band and sends no gamestate with
+    /// it; the probe's capture needs the packet, so it becomes an event
+    /// instead of being dropped on the floor.
+    #[test]
+    fn an_unhandled_oob_packet_becomes_an_event() {
+        let t0 = Instant::now();
+        let mut c = NetClient::start(FakeTransport::default(), t0);
+        c.transport
+            .incoming
+            .push_back(oob("loadingnewmap", "\nmp_brecourt\ndm"));
+        let ev = c.pump_at(t0);
+        assert!(ev.contains(&NetEvent::OutOfBand(
+            "loadingnewmap\nmp_brecourt\ndm".to_string()
+        )));
     }
 
     #[test]

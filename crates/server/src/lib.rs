@@ -3,6 +3,7 @@
 
 pub mod client;
 pub mod configstrings;
+pub mod console;
 pub mod cvars;
 pub mod game;
 pub mod items;

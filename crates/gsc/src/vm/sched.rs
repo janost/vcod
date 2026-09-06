@@ -171,14 +171,36 @@ impl Vm {
     /// The event folds first: `waittill`/`endon` store the folded atom, and
     /// the name here may have arrived as any spelling of it (atom.rs).
     pub fn notify(&mut self, target: impl Into<Target>, event: Atom, args: &[Value]) {
+        self.notify_from(None, target, event, args);
+    }
+
+    /// [`Vm::notify`] knowing which thread executed the `notify`, which its
+    /// own endons do not kill: a thread that notifies an event it is itself
+    /// registered against runs on and resumes past its next `wait`
+    /// (`probe_endon_self`). Stock `dm.gsc`'s `endMap` depends on it -- it
+    /// runs inside a `Callback_PlayerKilled` thread that opened with
+    /// `self endon("spawned")`, calls `spawnIntermission` (which notifies
+    /// "spawned") on every player including that one, and only then waits
+    /// ten seconds and calls `exitLevel`. An endon fired by any *other*
+    /// thread still kills, which is what
+    /// `a_thread_killed_by_its_own_endon_mid_step_still_runs_to_its_next_suspend`
+    /// measures.
+    pub(crate) fn notify_from(
+        &mut self,
+        from: Option<ThreadId>,
+        target: impl Into<Target>,
+        event: Atom,
+        args: &[Value],
+    ) {
         let target = target.into();
         let event = self.interner.fold_atom(event);
         let mut i = 0;
         while i < self.threads.len() {
-            if self.threads[i]
-                .endons
-                .iter()
-                .any(|&(t, e)| t == target && e == event)
+            if Some(self.threads[i].id) != from
+                && self.threads[i]
+                    .endons
+                    .iter()
+                    .any(|&(t, e)| t == target && e == event)
             {
                 self.threads.remove(i);
             } else {
@@ -307,8 +329,10 @@ impl Vm {
             }
         }
 
+        // Attributed to the thread whose instructions queued them, so its
+        // own endons do not kill it (`notify_from`).
         for (target, event, args) in notifies {
-            self.notify(target, event, &args);
+            self.notify_from(Some(id), target, event, &args);
         }
     }
 
@@ -333,7 +357,8 @@ impl Vm {
     const MAX_THREADS_PER_FRAME: u32 = 1_000;
 
     /// Runs one server frame: promotes every `WaitingUntil` thread whose
-    /// deadline has passed to `Runnable`, then walks ids in ascending
+    /// deadline has passed to `Runnable`, then hands over to
+    /// [`Vm::step_runnable`], which walks ids in ascending
     /// order, up to `MAX_THREADS_PER_FRAME` of them, stepping
     /// (`step_thread`) whichever are `Runnable`. A thread spawned
     /// mid-frame (a threaded call, run immediately by `spawn`) is visited
@@ -352,7 +377,39 @@ impl Vm {
                 }
             }
         }
+        self.step_runnable(host)
+    }
 
+    /// The deadline wake of [`Vm::run_frame`] left out: steps whatever is
+    /// already `Runnable` and nothing else, so a `wait` that has come due
+    /// stays parked for the frame proper.
+    ///
+    /// This is the caller's packet pass -- the host has just started or
+    /// notified something outside the frame and wants those threads run to
+    /// their next suspend on the clock it happened at, which is what retail's
+    /// `SV_ExecuteClientMessage` callbacks get. Waking deadlines here instead
+    /// would step a thread looping on `wait 0` twice per server frame.
+    ///
+    /// "Whatever is `Runnable`" is two sets, not just the callbacks and the
+    /// threads their notifies woke: a waiter that a later thread woke at the
+    /// end of the previous frame's pass is `Runnable` too, and resumes here,
+    /// on the previous frame's clock and ahead of the host's own entity
+    /// pass. Nothing measures what cadence retail gives that second case
+    /// (docs/research/cod11-map-cycle.md, 8.3).
+    pub fn run_runnable(&mut self, host: &mut dyn Host, now_ms: i32) -> Vec<ScriptError> {
+        if !self
+            .threads
+            .iter()
+            .any(|t| matches!(t.state, ThreadState::Runnable))
+        {
+            return Vec::new();
+        }
+        self.now_ms = now_ms;
+        self.step_runnable(host)
+    }
+
+    /// The walk both passes share.
+    fn step_runnable(&mut self, host: &mut dyn Host) -> Vec<ScriptError> {
         let mut errors = Vec::new();
         let mut last_id: Option<u32> = None;
         let mut steps = 0;
@@ -1030,6 +1087,36 @@ mod tests {
             vm.thread_count(),
             1,
             "waiting forever on a second tick that already happened"
+        );
+    }
+
+    /// A thread that notifies an event it has itself registered an `endon`
+    /// for is not killed by it: it runs on and resumes past its next
+    /// `wait`. Measured against retail by `probe_endon_self`, and stock
+    /// `dm.gsc`'s `endMap` is the path that needs it (`notify_from`).
+    #[test]
+    fn a_thread_survives_notifying_its_own_endon() {
+        let mut vm = vm_with(
+            r#"main() {
+                self endon("die");
+                self notify("die");
+                sideEffectA();
+                wait 5;
+                done();
+            }"#,
+        );
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "main");
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1))), vec![]);
+
+        assert_eq!(vm.thread_count(), 1, "its own notify killed it");
+        assert!(host.calls.iter().any(|(n, _)| n == "sideeffecta"));
+        for frame in 1..=200 {
+            vm.run_frame(&mut host, frame * 50);
+        }
+        assert!(
+            host.calls.iter().any(|(n, _)| n == "done"),
+            "it never resumed past its own wait"
         );
     }
 

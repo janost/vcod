@@ -6,7 +6,7 @@
 
 use crate::configstrings::CsRange;
 use crate::game::entity::{ThinkFn, FIRST_HUD_ELEM};
-use crate::game::host::{GameHost, SpawnRequest};
+use crate::game::host::{GameHost, SpawnMode, SpawnRequest};
 use crate::server::MAX_CLIENTS;
 use glam::Vec3;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
@@ -184,11 +184,15 @@ fn client_spawn(
     let (origin, angles) = (*origin, *angles);
 
     let state = cx.intern_folded("sessionstate");
-    let player = match host.get_field(cx, id, state) {
-        Value::String(s) => cx.resolve(s) == "playing",
-        // `spawnIntermission` and a dead player have their own retail
-        // pm_types; neither is simulated, so both fly as spectators.
-        _ => false,
+    let mode = match host.get_field(cx, id, state) {
+        Value::String(s) => match cx.resolve(s) {
+            "playing" => SpawnMode::Player,
+            "intermission" => SpawnMode::Intermission,
+            // A dead client is not simulated either, and no death goes
+            // through this builtin.
+            _ => SpawnMode::Spectator,
+        },
+        _ => SpawnMode::Spectator,
     };
 
     let origin_field = cx.intern_folded("origin");
@@ -207,7 +211,7 @@ fn client_spawn(
         slot,
         origin,
         yaw_deg: angles[1],
-        player,
+        mode,
     });
     Ok(Value::Undefined)
 }
@@ -502,7 +506,7 @@ mod tests {
     fn a_receiver_picks_client_spawn_and_no_receiver_the_map_entity() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let e = host.ents.spawn_client(cx, 2).unwrap();
+            let e = host.ents.spawn_client(cx, 2, None).unwrap();
             let t = Some(Target::Entity(e));
             let state = cx.intern_folded("sessionstate");
             let playing = Value::String(cx.intern_exact("playing"));
@@ -516,8 +520,8 @@ mod tests {
             assert_eq!(host.client_spawns.len(), 1);
             let s = &host.client_spawns[0];
             assert_eq!(
-                (s.slot, s.origin, s.yaw_deg, s.player),
-                (2, [10.0, 20.0, 30.0], 90.0, true)
+                (s.slot, s.origin, s.yaw_deg, s.mode),
+                (2, [10.0, 20.0, 30.0], 90.0, SpawnMode::Player)
             );
             assert_eq!(
                 host.client_weapons[2],
@@ -526,11 +530,18 @@ mod tests {
             let origin = cx.intern_folded("origin");
             assert_eq!(host.get_field(cx, e, origin), at);
 
-            // A spectator's spawn goes through the same builtin.
-            let spectator = Value::String(cx.intern_exact("spectator"));
-            host.set_field(cx, e, state, spectator).unwrap();
-            spawn(&mut host, cx, t, &[at, angles]).unwrap();
-            assert!(!host.client_spawns[1].player);
+            // The other two modes go through the same builtin: the
+            // `sessionstate` string is the whole of what tells them apart
+            // (map-cycle doc, 6.1).
+            for (state_name, mode) in [
+                ("spectator", SpawnMode::Spectator),
+                ("intermission", SpawnMode::Intermission),
+            ] {
+                let v = Value::String(cx.intern_exact(state_name));
+                host.set_field(cx, e, state, v).unwrap();
+                spawn(&mut host, cx, t, &[at, angles]).unwrap();
+                assert_eq!(host.client_spawns.last().unwrap().mode, mode);
+            }
 
             // No receiver is still the free function.
             let cls = Value::String(cx.intern_exact("script_model"));
@@ -538,7 +549,7 @@ mod tests {
                 panic!("the free form returns the entity it made");
             };
             assert_eq!(made, EntId(crate::game::entity::FIRST_MAP_ENTITY));
-            assert_eq!(host.client_spawns.len(), 2);
+            assert_eq!(host.client_spawns.len(), 3);
         });
     }
 
