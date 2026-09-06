@@ -2767,6 +2767,26 @@ line; a melee kill and its icon; a death while cooking and the grenade the
 body drops; and a wall between the eye and the blast. PENDING; none of it is
 claimed here.
 
+### 9.6 What the third hand check found
+
+A 1.1 client on `vcod-server`, 2026-09-06.
+
+VERIFIED, `crates/common/src/pmove/weapon.rs`: **a player who threw its last
+grenade could not draw another weapon for the rest of its life.** `pm_weapon`
+resolved the held weapon's def and returned when there was none, so once
+1.8's switch path had taken `ps.weapon` to 0 -- which is exactly what the
+frag's own take leaves behind (9.5, "an empty frag stayed in vcod's weapon
+list") -- every later frame left the function before reading the usercmd's
+weapon byte, and the rifle the client asked for never arrived. INFERRED, off
+1.12: retail ends `PM_Weapon` on three tests and none of them is a missing
+def, so the switch path runs with weapon 0 in hand; there is no def to read,
+so no melee, no reload and no shot run with it. vcod was wrong; retail is
+right. Fixed: the missing def takes the switch check alone, and a putaway
+from weapon 0 leaves no drop time, so 1.8's pickup half raises the new weapon
+on the same frame. Pinned by
+`a_player_who_lost_its_last_grenade_can_switch_back` (pmove) and
+`a_client_out_of_grenades_gets_its_rifle_back` (`two_clients.rs`).
+
 ---
 
 ## 10. Open cells

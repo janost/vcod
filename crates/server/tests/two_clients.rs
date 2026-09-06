@@ -769,6 +769,142 @@ fn a_weapon_switch_off_the_usercmd_byte_happens_once() {
     );
 }
 
+/// Throwing the last grenade must not disarm the player for good. Retail's
+/// `BG_TakePlayerWeapon` clears the held bit on the last round of a
+/// `clipOnly` weapon (combat doc 1.5, step 9), and the switch path then takes
+/// `ps.weapon` to 0 because the player no longer owns it (1.8). Only the
+/// three stops of 1.12 end `PM_Weapon`, so the next weapon the client asks
+/// for still has to arrive: the machine used to return on the missing weapon
+/// def instead, and the player was left holding nothing until it respawned.
+#[test]
+fn a_client_out_of_grenades_gets_its_rifle_back() {
+    use vcod_common::net::msg::{UserCmd, BUTTON_ATTACK, NULL_USERCMD};
+    const EV_FIRE_WEAPON: i32 = 159;
+
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp =
+        vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse the bsp");
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let q = Rc::new(RefCell::new(Queues::default()));
+    let (mut cl, _join) = common::join(&mut sv, &q, &mut now, "allies", "m1carbine_mp");
+
+    let p = &PROTOCOL_V1;
+    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+    let frag = vcod_server::configstrings::weapon_index("fraggrenade_mp").unwrap() as u8;
+    let run = |sv: &mut vcod_server::Server,
+               cl: &mut vcod_common::net::NetClient<common::ClientEnd>,
+               now: &mut Instant,
+               cmd: &UserCmd,
+               frames: usize| {
+        for _ in 0..frames {
+            *now += Duration::from_millis(50);
+            cl.send_frame(cmd);
+            common::step(sv, &q, cl, *now);
+        }
+    };
+
+    // Three throws, aimed 45 degrees up so the blasts land well away: the
+    // byte held on every cmd, the trigger held past the pin and then
+    // released.
+    const UP45: i32 = -8192;
+    let cook = UserCmd {
+        weapon: frag,
+        buttons: BUTTON_ATTACK,
+        angles: [UP45, 0, 0],
+        ..NULL_USERCMD
+    };
+    let hold = UserCmd {
+        weapon: frag,
+        angles: [UP45, 0, 0],
+        ..NULL_USERCMD
+    };
+    run(&mut sv, &mut cl, &mut now, &hold, 30);
+    assert_eq!(
+        cl.snapshots().newest().unwrap().ps.field_i32(p, "weapon"),
+        i32::from(frag),
+        "the switch to the frag never landed"
+    );
+    for _ in 0..3 {
+        run(&mut sv, &mut cl, &mut now, &cook, 20);
+        run(&mut sv, &mut cl, &mut now, &hold, 30);
+    }
+    let held_bits = |cl: &vcod_common::net::NetClient<common::ClientEnd>| {
+        let ps = &cl.snapshots().newest().unwrap().ps;
+        (ps.field_i32(p, "weapons[0]") as u32 as u64)
+            | ((ps.field_i32(p, "weapons[1]") as u32 as u64) << 32)
+    };
+    assert_eq!(
+        held_bits(&cl) & (1 << frag),
+        0,
+        "the spent frag was never taken away"
+    );
+    assert_eq!(
+        cl.snapshots().newest().unwrap().ps.field_i32(p, "weapon"),
+        0,
+        "a player who owns no frag must be holding nothing"
+    );
+    assert_eq!(
+        cl.snapshots().newest().unwrap().ps.field_i32(p, "pm_type"),
+        0,
+        "the thrower blew itself up; the throws have to clear the player"
+    );
+
+    // And now the rifle back, the same way a retail client asks for it.
+    let rifle = UserCmd {
+        weapon: carbine,
+        angles: [UP45, 0, 0],
+        ..NULL_USERCMD
+    };
+    run(&mut sv, &mut cl, &mut now, &rifle, 30);
+    assert_eq!(
+        cl.snapshots().newest().unwrap().ps.field_i32(p, "weapon"),
+        i32::from(carbine),
+        "the client asked for its rifle and never got it"
+    );
+
+    let mut seq = Some(
+        cl.snapshots()
+            .newest()
+            .unwrap()
+            .ps
+            .field_i32(p, "eventSequence"),
+    );
+    let mut events: Vec<i32> = Vec::new();
+    let shoot = UserCmd {
+        weapon: carbine,
+        buttons: BUTTON_ATTACK,
+        angles: [UP45, 0, 0],
+        ..NULL_USERCMD
+    };
+    for i in 0..10 {
+        now += Duration::from_millis(50);
+        cl.send_frame(if i % 2 == 0 { &shoot } else { &rifle });
+        common::step(&mut sv, &q, &mut cl, now);
+        let Some(s) = cl.snapshots().newest() else {
+            continue;
+        };
+        let cur = s.ps.field_i32(p, "eventSequence");
+        if let Some(prev) = seq.replace(cur) {
+            let diff = ((cur - prev) & 0xff).min(4);
+            for n in 0..diff {
+                let slot = (prev + n) & 3;
+                events.push(s.ps.field_i32(p, &format!("events[{slot}]")));
+            }
+        }
+    }
+    assert!(
+        events.contains(&EV_FIRE_WEAPON),
+        "the rifle never fired; the ring carried {events:?}"
+    );
+}
+
 /// A corpse is not the dead client's own entity: both the client it was
 /// cloned from and everyone else are sent it. The body queue's first slot is
 /// entity 64, retail's own number
