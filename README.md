@@ -181,7 +181,13 @@ on a LAN or behind a firewall you control. `--max-clients` sets
 `sv_maxclients` (default 8). `--test-entities <n>` adds `n` entities that
 move on the wire, one of which cycles in and out, to exercise the
 packet-entity path; they are not rendered by a retail client, only present
-to drive the encoding. 0 (the default) is off. `--game-dir`, `--mod-dir` and
+to drive the encoding. 0 (the default) is off. `--bots <n>` adds `n` debug
+bots, each taking a real client slot: they join through the stock team menu,
+pick a weapon and wander the map (allies/axis alternating). `--bots-shoot`
+lets them fight: they engage the nearest enemy with a clear line of sight,
+tap fire paced by the weapon's `fireTime`, reload dry clips, throw a frag
+at close range and respawn on the use key. 0 (the default) is off.
+`--game-dir`, `--mod-dir` and
 `COD_DIR` work the same way as for the client.
 
 ## Controls
