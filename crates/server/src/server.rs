@@ -58,6 +58,9 @@ const MAX_PACKET_USERCMDS: u8 = 32;
 const MAX_PENDING_CMDS: usize = 64;
 /// pmove steps per snapshot tick; a flood beyond this fast-forwards.
 const MAX_CMDS_PER_TICK: usize = 32;
+/// How often a bot re-runs its enemy search (range gate + LOS traces).
+/// The cached verdict is at most this stale.
+const ENEMY_REFRESH_MS: i32 = 100;
 /// The tick pace (`1000 / sv_fps`), also the dt floor a fresh sim starts from.
 const FRAME_MS: i32 = 50;
 /// Retail's `MAX_CLIENTS`. Client slots index a 6-bit wire field
@@ -392,6 +395,10 @@ pub struct Server {
     /// `--bots` spawns on the first tick with scripts up, once; a map change
     /// finds the bots already in their slots and rejoins them.
     bots_spawned: bool,
+    /// Per bot, `(sv_time of the last look, the enemy that look found)`.
+    /// A fresh LOS trace per bot per tick was the other half of the 24-bot
+    /// CPU load; a bot does not need a new verdict every 50 ms.
+    bot_enemies: BTreeMap<usize, (i32, Option<crate::bots::EnemyView>)>,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -518,6 +525,7 @@ impl Server {
             fatal: None,
             bots: BTreeMap::new(),
             bots_spawned: false,
+            bot_enemies: BTreeMap::new(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -1385,11 +1393,23 @@ impl Server {
             }
         }
 
-        // Pass 2: what each bot's body sees, for the brains.
+        // Pass 2: what each bot's body sees, for the brains. The enemy
+        // lookup refreshes at ~10 Hz per bot and is cached in between.
         let views: Vec<(usize, crate::bots::BotView)> = slots
             .iter()
             .filter_map(|slot| {
-                let view = self.bot_view(*slot, &teams)?;
+                let fresh = self
+                    .bot_enemies
+                    .get(slot)
+                    .is_none_or(|(t, _)| self.sv_time_ms.wrapping_sub(*t) >= ENEMY_REFRESH_MS);
+                let enemy = if fresh {
+                    let e = self.bot_enemy(*slot, &teams);
+                    self.bot_enemies.insert(*slot, (self.sv_time_ms, e));
+                    e
+                } else {
+                    self.bot_enemies.get(slot)?.1
+                };
+                let view = self.bot_view(*slot, enemy)?;
                 Some((*slot, view))
             })
             .collect();
@@ -1405,6 +1425,8 @@ impl Server {
 
         // Pass 4: everything lands.
         self.bots.retain(|slot, _| self.clients[*slot].is_some());
+        self.bot_enemies
+            .retain(|slot, _| self.clients[*slot].is_some());
         for (slot, r) in replies {
             if let Some(bot) = self.bots.get_mut(&slot) {
                 let seq = bot.next_command_seq;
@@ -1484,10 +1506,14 @@ impl Server {
         }
     }
 
-    /// What one bot's body sees this tick, from its sim, the weapon table and
-    /// the precomputed team table. `None` between levels, where the null cmd
-    /// is all a bot can send.
-    fn bot_view(&self, slot: usize, teams: &[i32]) -> Option<crate::bots::BotView> {
+    /// What one bot's body sees this tick, from its sim and the weapon
+    /// table. `None` between levels, where the null cmd is all a bot can
+    /// send.
+    fn bot_view(
+        &self,
+        slot: usize,
+        enemy: Option<crate::bots::EnemyView>,
+    ) -> Option<crate::bots::BotView> {
         let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
         let weapons = self.weapon_table.clone();
         let def = weapons.get(sim.ps.weapon as usize);
@@ -1497,7 +1523,6 @@ impl Server {
                     .get(*i as usize)
                     .is_some_and(|d| d.weapon_type == "grenade")
         });
-        let enemy = self.bot_enemy(slot, teams);
         Some(crate::bots::BotView {
             origin: sim.ps.origin.into(),
             delta_angles: sim.delta_angles(),
@@ -1531,7 +1556,12 @@ impl Server {
             script::TEAM_ALLIES => their != script::TEAM_ALLIES,
             _ => true,
         };
-        let mut best: Option<(f32, crate::bots::EnemyView)> = None;
+        let my_eye: glam::Vec3 = me.eye_origin().into();
+        let world = self.world.as_ref().map(|w| &w.collision);
+        // In-range candidates nearest first; the first one the sightline
+        // reaches is the nearest visible enemy, so the trace loop stops
+        // early instead of scoring every candidate in a crowd.
+        let mut candidates: Vec<(f32, glam::Vec3, crate::bots::EnemyView)> = Vec::new();
         for (i, c) in self.clients.iter().enumerate() {
             if i == slot {
                 continue;
@@ -1545,31 +1575,32 @@ impl Server {
             if !team_enemy(teams.get(i).copied().unwrap_or(0)) {
                 continue;
             }
-            let eye = s.ps.view().eye;
-            let clear = match self.world.as_ref() {
-                Some(w) => w.collision.shot_trace(me.eye_origin().into(), eye).fraction >= 1.0,
-                None => true,
-            };
-            if !clear {
-                continue;
-            }
             let d = crate::bots::dist_sq(me.ps.origin.into(), s.ps.origin.into());
             if d > crate::bots::SHOOT_RANGE * crate::bots::SHOOT_RANGE {
                 continue;
             }
-            if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
-                // The brain aims here: chest height, since the eye-high trace
-                // above only proved the line, and a ray at a feet origin
-                // slopes into the floor before it scores a bone.
-                best = Some((
-                    d,
-                    crate::bots::EnemyView {
-                        origin: (s.ps.origin + glam::Vec3::Z * 40.0).into(),
-                    },
-                ));
+            candidates.push((
+                d,
+                s.ps.view().eye,
+                crate::bots::EnemyView {
+                    origin: (s.ps.origin + glam::Vec3::Z * 40.0).into(),
+                },
+            ));
+        }
+        candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, eye, enemy) in candidates {
+            // The brain aims at the chest, but the eye-high trace is what
+            // proves the line: a ray at a feet origin slopes into the floor
+            // before it scores a bone.
+            let clear = match world {
+                Some(w) => w.shot_trace(my_eye, eye).fraction >= 1.0,
+                None => true,
+            };
+            if clear {
+                return Some(enemy);
             }
         }
-        best.map(|(_, e)| e)
+        None
     }
 
     /// Test-facing, for the bot gates: the slots the bots hold.
