@@ -953,9 +953,10 @@ gate: `sd.gsc` passes 1 and its `pers["team"]` survives, so its
 ### 8.2 What differs
 
 The first is recorded in 4.5 already and is repeated here only as the
-capture's confirmation. The rest are open defects in vcod and none of them was
-fixed in this pass, because a run that finds one is a measurement and fixing
-it would have changed what the next run measured.
+capture's confirmation. Each of the rest was a defect in vcod that the run
+found; every bullet says what the capture read, what caused it and whether it
+has since been fixed. Three are still open: the two the first paragraphs of
+this section record and the `loadingnewmap` timing at the end.
 
 VERIFIED, the `dm` run: the restart burst carries no `d 13` and no `d 12`
 where retail's carries both, and its `d 3` reads `t\0` where retail's reads
@@ -965,27 +966,34 @@ was predicted from.
 
 VERIFIED, the `dm` run: no `f` server command at all, against five in retail's
 capture (`MPSCRIPT_CONNECTED` at each of the three level starts and
-`MPSCRIPT_TIME_LIMIT_REACHED` at each of the two map ends). INFERRED, from
-`GameHost::builtin` routing `iprintln` to the same handler as `println`: the
-builtin writes a log line and never reaches the wire, so no client is told
-that anyone connected or that the clock ran out. Retail is right; open.
+`MPSCRIPT_TIME_LIMIT_REACHED` at each of the two map ends). It was
+`GameHost::builtin` routing `iprintln` to the same handler as `println`, so
+the builtin only wrote a log line. Fixed: `builtins::io::iprint_line` sends
+`f "<message>"` to every client, or to the receiver alone when the call has
+one, which is the split between `Scr_MakeGameMessage`'s two callers at
+`0x5cd28` and `0x45594`.
 
 VERIFIED, the `dm` run: the intermission's `v cg_objectiveText` value is
 `MPSCRIPT_WINS` and the localized separator, where retail's is that plus the
-winner's name and colour code. INFERRED, from `set_client_cvar` reading
-`args[0]` and `args[1]` and no further: the substitution arguments a localized
-value takes are dropped, so the map-end banner names nobody. Retail is right;
-open.
+winner's name and colour code. It was `set_client_cvar` reading `args[0]` and
+`args[1]` and no further, so the substitution arguments were dropped. Fixed:
+`builtins::message::construct` packs them the way
+`Scr_ConstructMessageString` (`game.mp.i386.so` `0x594d0`) does, a player
+entity through the `%s^7` at `0x767d9`.
 
-VERIFIED, the `dm` run: the life that begins after the restart carries
+VERIFIED, the `dm` run: the life that begins after the restart carried
 `eFlags` 24, the same word the intermission before it carried, where retail's
-carries 16 against the intermission's 24. INFERRED, from `ClientSim::respawn`
-flipping the teleport bit only for a player spawn while the intermission and
-spectator wire word is a pinned 24: an intermission spawn consumes no flip on
-vcod, so the word does not change across the respawn that ends the
-intermission. The Gotcha in `AGENTS.md` says what a retail client does with an
-unchanged word there, and this is exactly the shape it warns about. Retail is
-right; open.
+carries 16 against the intermission's 24. It was `ClientSim::respawn` flipping
+the teleport bit only for a player spawn while the spectator and intermission
+wire word was a pinned 24. VERIFIED, from the two committed captures read
+spawn for spawn: retail's word alternates on *every* spawn, the connect's
+`spawnSpectator` and the intermission camera included, and a level boundary
+clears it, which is why the `sd` target's post-death spectator frame reads 16
+where its first one read 24
+(`mp_carentan-sd-roundrestart-target.txt`, `!trace ms=335` and `ms=25436`).
+Fixed to that rule: every mode's spawn consumes a flip, the wire word is the
+bit rather than a constant, and a restart lets `enter_world` build a sim with
+the bit clear instead of carrying the outgoing one.
 
 VERIFIED, the `dm` run: the intermission frames read `viewangles` 0 on all
 three axes where retail's read a yaw of 90, `mp_carentan`'s own
@@ -1007,22 +1015,26 @@ Cosmetic on a map that loads in a second; open.
 
 VERIFIED, the `sd` run: the announcer command `s 4` went out with no `d 528`
 naming the alias before it, where retail sends the `d 528` and then the `s 4`.
-VERIFIED, from a debug probe against the same server: configstring 528 is
-empty in vcod's gamestate. INFERRED, from `send_configstring_update` having
-callers on the restart path only: a configstring the script allocates after
-the level has loaded never reaches a client that already has its gamestate, so
-the index the `s` command carries points at an empty slot, and a team score
-write would not travel either. `load_scripts`'s doc comment says a later
-allocation does reach such a client, which the capture contradicts. Retail is
-right; open.
+VERIFIED, from a debug probe against the same server: configstring 528 was
+empty in vcod's gamestate. It was `send_configstring_update` having callers on
+the restart path only, so nothing a script allocated mid-level reached a
+client that already had its gamestate. Fixed:
+`Server::broadcast_configstring_changes` diffs the table against the copy the
+clients last heard after every script frame and sends `d <index> <text>` for
+each slot that moved, which is the broadcast 3.1's compare pair lets through
+while `sv.state` reads 2. It runs ahead of the frame's own client commands, so
+the `d` naming an alias precedes the `s` that plays it, and both level
+boundaries re-sync that copy rather than replaying a whole table slot by
+slot.
 
 VERIFIED, from a debug probe against a server started with
-`--set g_gametype=sd`: configstring 0 reads `g_gametype\dm` while the `sd`
-scripts are the ones running, which is why the `sd` run's fixtures came out
-named for `dm`. INFERRED, from `Server::new` stamping the table out of the
-config before `main.rs` replays the `--set` list: an override of that one cvar
-reaches the scripts and the gametype path but not the serverinfo a browser and
-a client read. Not a map-cycle defect, found by the map-cycle run; open.
+`--set g_gametype=sd`: configstring 0 read `g_gametype\dm` while the `sd`
+scripts were the ones running, which is why the `sd` run's fixtures came out
+named for `dm`. It was `Server::new` stamping the table out of the config
+before `main.rs` replays the `--set` list. Fixed: `Server::set_cvar` rewrites
+slot 0 from the serverinfo string when it mirrors a cvar that string carries,
+the way 4.3's cvar flush follows a serverinfo write with
+`SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))`.
 
 ### 8.3 What the runs could not reach
 
@@ -1031,12 +1043,24 @@ left it, both reading `team` 3 and `pm_type` 4 for the whole run, where the
 same probe against retail had its weapon menu 50 ms after its team menu and
 spawned. INFERRED, from `sd.gsc`'s `Callback_PlayerConnect`, whose `openMenu`
 comes before the `spawnSpectator` that calls `updateTeamStatus`, and from that
-function opening with `wait 0`: the `t 0` is on the wire while the connect
-thread is still suspended, and an answer that arrives inside that frame
-notifies an event no thread is parked on and is lost. The gate's harness
-models the same window with a one-frame answer delay. Open, and it is what
-kept this run from measuring an elimination-driven restart, the team scores,
-the win announcements and the weapons a client keeps across a restart.
+function opening with `wait 0`: the `t 0` was on the wire while the connect
+thread was still suspended, and an answer arriving inside that frame notified
+an event no thread was parked on and was lost. INFERRED, from 4.4's
+`VM_Call(gvm, 3, clientNum)` against vcod's own ordering: retail raises
+`ClientBegin` inside `SV_ExecuteClientMessage`, before `G_RunFrame` advances
+`level.time`, so the callback's `wait 0` is due in that same frame's thread
+pass; vcod dispatched the event at the top of `G_RunFrame`'s counterpart
+instead, which put the `waittill` one frame late. Fixed:
+`ScriptRuntime::run_frame` opens with a packet pass that dispatches the
+netcode's events on the previous frame's clock and steps the threads they
+wake, so the callback is parked on `menuresponse` before the `t 0` it queued
+can be answered. The gate's one-frame answer delay went with it, and the
+`sd` gates now answer the menu the instant it opens.
+
+The `sd` half of the run is therefore still unmeasured against retail: the
+elimination-driven restart, the team scores, the win announcements and the
+weapons a client keeps across a restart need a fresh capture now that the
+menu is answerable.
 
 The `dm` rotation was two maps and never wrapped, so the wrap back to the
 first entry is measured by the gate and not by a capture.

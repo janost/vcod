@@ -575,11 +575,15 @@ never pasted decompiler output or disassembly listings.
 - The body queue is eight entities at 64..71 and has no lifetime timer. A
   corpse lives until its slot is reused, which the retail capture shows
   directly: the first corpse is still on the wire 190 s later.
-- `eFlags` bit `0x8` is the per-life teleport bit: retail alternates 16 and 24
-  across a player's lives and a client breaks interpolation on the changed
-  word. Leave it pinned and a retail client smears a respawning player from
-  its corpse to its new spawn. The respawn clears the event ring with it
-  (retail's first frame of a new life reads `eventSequence` 0).
+- `eFlags` bit `0x8` is the teleport bit and it flips on every *spawn*, not
+  every life: the connect's own `spawnSpectator`, the respawn's spectator
+  frame and the intermission camera each consume a flip, and a level boundary
+  clears the bit with the rest of the playerstate. A client breaks
+  interpolation on the changed word, so leave it pinned and a retail client
+  smears a respawning player from its corpse to its new spawn. The respawn
+  clears the event ring with it (retail's first frame of a new life reads
+  `eventSequence` 0). The spawn-for-spawn reading of the two committed
+  captures is in `docs/research/cod11-map-cycle.md`, 8.2.
 - A `clipOnly` weapon has no reserve at all. The frag's file reads
   `clipOnly 1` with `maxAmmo 3`, and retail's spawn line carries `clip=6:3`
   with no `ammo` entry for that index; writing the reserve anyway puts a

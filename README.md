@@ -280,11 +280,6 @@ These work in every mode:
 - Audio fidelity is matched to the retail engine on paper (falloff, panning,
   channel replacement, ducking) but not yet confirmed by ear against the real
   game.
-- The server does not send a client the `f` centre-print messages the stock
-  scripts ask for (connect and disconnect notices, "time limit reached"), and
-  a configstring a script allocates after the map has loaded does not reach a
-  client that is already connected, so a round-end announcer sound names a
-  slot the client has nothing in.
 - Footsteps are silent. They are not playerstate events, so they travel by
   the entity path that does not exist yet.
 - A prone body's pitch on sloped ground (`proneDirectionPitch`,
