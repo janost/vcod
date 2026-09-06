@@ -213,7 +213,9 @@ const KNOWN_GAPS_OUT_OF_SCOPE: &[&str] = &[
     "probe_level_bracket",
     "probe_level_size",
     // The three persistence probes measure what an engine restarting a map
-    // leaves behind; this crate's VM has no host that can restart one.
+    // leaves behind; this crate's VM has no host that can restart one. Move
+    // them to RUN_IN_SERVER_CRATE once the server can restart a level: the
+    // measurement is then reproducible and the skip stops covering a gap.
     "probe_persist_exit",
     "probe_persist_exit_save",
     "probe_persist_restart",

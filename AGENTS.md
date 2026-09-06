@@ -253,7 +253,10 @@ engineering setup works.
   map end and the rotation that follows; `--save-roundrestart` is a pair,
   the `--probe-target` half killing itself 20 s in to end the round and the
   other half walking up and only watching. The recipe and the cvars each
-  needs are in every fixture's header. Both are retail evidence and a run
+  needs are in its own fixture's header. Retail never pushes the `b`
+  scoreboard, it only answers `score`, so `--save-mapchange` asks every 2 s
+  and every `b` in that fixture is an answer; the round-restart shooter asks
+  for none and its fixture carries none. Both are retail evidence and a run
   against ours overwrites them: move the files to `tmp/` and `git checkout`
   the directory after.
   A probe that crosses a gamestate or a map restart has to re-answer the
