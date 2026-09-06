@@ -45,7 +45,7 @@ const SKIPPED: &[(&str, &str)] = &[(
 /// the list is self-cleaning: [`check`] asserts that a gapped channel still
 /// differs, so an entry that starts matching fails the run rather than
 /// quietly outliving the defect it names. Empty is the goal. It was empty
-/// until the scoped-rifle capture landed; the four entries below are one
+/// until the scoped-rifle capture landed; the five entries below are one
 /// open defect, named in [`RECHAMBER_GAP`].
 const KNOWN_GAPS: &[Gap] = &[
     Gap {
@@ -83,37 +83,7 @@ const KNOWN_GAPS: &[Gap] = &[
         channel: "torsoAnim",
         why: RECHAMBER_GAP,
     },
-    Gap {
-        map: "mp_carentan",
-        kind: "ads-sniper",
-        label: "ads_walk",
-        channel: "transients",
-        why: ADS_WALK_GAP,
-    },
 ];
-
-/// The second open defect, and the one worth chasing: walking away from the
-/// capture's own spawn with the sight held, ours reads `groundEntityNum` 1023
-/// for one sample where retail reads 1022 for all 31. `update_ads_flag`
-/// clears the sight for an airborne frame, so `advance_ads` ramps *down* by
-/// `msec / adsTransOutTime` for that cmd and back up for the next: at 25 ms
-/// cmds that is -0.0625 then +0.083, and the capture reads the fraction
-/// moving 0.333 to 0.354 across a 50 ms frame it should have moved 0.167.
-/// On `kar98k_sniper_mp` (`adsZoomFov` 16) a client re-basing its zoom
-/// prediction off that is the twitch this branch was opened for.
-///
-/// The step's spread counter is gapped with it and for a weaker reason: the
-/// walk covers the map's own geometry, so when it stops climbing is a fact
-/// about where the walk ended, which is why `walks` steps are excluded
-/// wholesale elsewhere. Retail's counter starts decaying ~300 ms in and ours
-/// does not.
-///
-/// Only the walking sight step is gapped, and only its `transients`: the
-/// view is a separate channel and stays compared exactly through this step
-/// as through every other. Every standing sight step is compared whole, and
-/// the fraction matches there, which is what says the ramp itself is right
-/// and the ground trace is not.
-const ADS_WALK_GAP: &str = "ours goes airborne for one sample where retail never does, which reverses      the sight ramp for that cmd (see ADS_WALK_GAP, open)";
 
 /// The one open defect [`KNOWN_GAPS`] names, measured off the retail
 /// `mp_carentan-tdm-ads-sniper` capture: after a scoped `kar98k_sniper_mp`

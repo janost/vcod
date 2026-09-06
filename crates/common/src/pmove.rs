@@ -978,12 +978,18 @@ fn update_lean(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt
     ps.lean *= t.fraction;
 }
 
+/// Q3 `bg_pmove.c` `PM_GroundTrace`'s kickoff test: the player's own velocity
+/// is carrying it off the plane it is standing on. A plain `velocity.z <= 0.0`
+/// test fails in its place: OVERCLIP leaves a hair of positive z after a floor
+/// clip and the player would stay airborne.
+fn thrown_off_ground(ps: &PlayerState, normal: Vec3) -> bool {
+    ps.velocity.z > 0.0 && ps.velocity.dot(normal) > 10.0
+}
+
 /// Q3 `bg_pmove.c` `PM_GroundTrace`.
 fn ground_trace(ps: &mut PlayerState, world: &CollisionWorld) {
     let t = world.box_trace(ps.origin, ps.origin - Vec3::Z * 0.25, ps.mins(), ps.maxs());
-    // A plain `velocity.z <= 0.0` test fails: OVERCLIP leaves a hair of
-    // positive z after a floor clip and the player would stay airborne.
-    let thrown_off = ps.velocity.z > 0.0 && ps.velocity.dot(t.normal) > 10.0;
+    let thrown_off = thrown_off_ground(ps, t.normal);
     if t.fraction < 1.0 && t.normal.z >= MIN_WALK_NORMAL && !thrown_off {
         ps.on_ground = true;
         ps.ground_normal = t.normal;
@@ -1588,27 +1594,52 @@ fn step_slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravit
     };
     let start_o = ps.origin;
     let start_v = ps.velocity;
-    if !slide_move(ps, world, dt, gravity) {
+    let blocked = slide_move(ps, world, dt, gravity);
+    // Retail takes the down pass on every grounded frame, not only a blocked
+    // one: `PM_StepSlideMove` (0x350ec) tests `groundEntityNum` and jumps into
+    // the body when the player is on something, where Q3 returns as soon as
+    // the slide succeeded (docs/research/cod11-mantle.md, "The ground snap").
+    if !blocked && !ps.on_ground {
         return;
     }
     let (mins, maxs) = (ps.mins(), ps.maxs());
     let (down_o, down_v) = (ps.origin, ps.velocity);
 
-    // `allsolid`, not `startsolid`: a bbox merely touching the floor is
-    // startsolid, and stepping up is how that resolves.
-    let up = world.box_trace(start_o, start_o + Vec3::Z * step_size, mins, maxs);
-    let step = up.endpos.z - start_o.z;
-    if up.allsolid || step <= 0.0 {
-        return;
+    let mut step = 0.0;
+    if blocked {
+        // `allsolid`, not `startsolid`: a bbox merely touching the floor is
+        // startsolid, and stepping up is how that resolves.
+        let up = world.box_trace(start_o, start_o + Vec3::Z * step_size, mins, maxs);
+        if !up.allsolid && up.endpos.z > start_o.z {
+            step = up.endpos.z - start_o.z;
+            ps.origin = up.endpos;
+            ps.velocity = start_v;
+            slide_move(ps, world, dt, gravity);
+        }
     }
 
-    ps.origin = up.endpos;
-    ps.velocity = start_v;
-    slide_move(ps, world, dt, gravity);
-
-    let down = world.box_trace(ps.origin, ps.origin - Vec3::Z * step, mins, maxs);
-    if !down.allsolid {
+    // The snap itself: on the ground the push-down reaches half a step size
+    // past the step it took (0x352e8). It is what pulls a walker back onto a
+    // crest instead of letting the climb's upward velocity throw it off.
+    // The trace ahead of the move cannot see a velocity the move itself set
+    // -- a waterjump's launch is set inside it -- so the kickoff test is
+    // re-run against the velocity the snap would be fighting.
+    let snap = if ps.on_ground && !ps.on_ladder && !thrown_off_ground(ps, ps.ground_normal) {
+        step_size * 0.5
+    } else {
+        0.0
+    };
+    let down = world.box_trace(ps.origin, ps.origin - Vec3::Z * (step + snap), mins, maxs);
+    if down.fraction >= 1.0 {
+        // Nothing within reach: the step is undone and the snap is not a
+        // fall (0x353d0).
+        ps.origin.z -= step;
+    } else if !down.allsolid {
         ps.origin = down.endpos;
+        ps.velocity = clip_velocity(ps.velocity, down.normal);
+    }
+    if step == 0.0 {
+        return;
     }
     let stepped = (ps.origin.truncate() - start_o.truncate()).length_squared();
     let flat = (down_o.truncate() - start_o.truncate()).length_squared();
@@ -1616,10 +1647,6 @@ fn step_slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravit
         // into air, onto a too-steep slope, or the flat slide got further
         ps.origin = down_o;
         ps.velocity = down_v;
-        return;
-    }
-    if down.fraction < 1.0 {
-        ps.velocity = clip_velocity(ps.velocity, down.normal);
     }
 }
 
@@ -2394,6 +2421,61 @@ mod tests {
             wet_speed > 160.0 && wet_speed > dry_speed - 12.0,
             "ankle-deep run {wet_speed} vs dry {dry_speed}"
         );
+    }
+
+    /// A slope is not a launch ramp. Retail's `PM_StepSlideMove` (0x34fbc)
+    /// takes its down pass on every grounded frame and pushes half a step
+    /// size past the step it took, so a walker is pulled back onto the ground
+    /// at a crest instead of floating off it.
+    #[test]
+    fn walking_a_slope_never_leaves_the_ground() {
+        // 5 degrees over 300 units, then level ground at the top: the crest
+        // is what a walker used to launch off.
+        let w = crate::collision::ramp_test_world(5.0, 0.0, 300.0);
+        let mut ps = PlayerState::spawn(Vec3::new(-200.0, 0.0, 1.0), 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 40);
+        assert!(ps.on_ground, "the walker never settled on the floor");
+        let mut airborne = 0;
+        let forward = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..500 {
+            pmove(&mut ps, &forward, &w, 1.0 / 125.0, &[]);
+            if !ps.on_ground {
+                airborne += 1;
+            }
+        }
+        assert!(
+            ps.origin.x > 320.0,
+            "the walk never crossed the crest, at {}",
+            ps.origin
+        );
+        assert_eq!(
+            airborne, 0,
+            "the walk left the ground {airborne} frames, ending at {}",
+            ps.origin
+        );
+    }
+
+    /// Standing on a slope holds its height: the ground trace, the friction
+    /// and the gravity must settle rather than trade the player up and down.
+    #[test]
+    fn standing_on_a_slope_holds_its_height() {
+        let w = crate::collision::ramp_test_world(5.0, 0.0, 300.0);
+        let mut ps = PlayerState::spawn(Vec3::new(150.0, 0.0, 20.0), 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 60);
+        let (z, ground) = (ps.origin.z, ps.on_ground);
+        assert!(ground, "the stander is not on the slope at {}", ps.origin);
+        for _ in 0..100 {
+            pmove(&mut ps, &PmInput::default(), &w, 1.0 / 125.0, &[]);
+            assert_eq!(ps.on_ground, ground, "the ground flipped under a stander");
+            assert!(
+                (ps.origin.z - z).abs() < 0.01,
+                "a stander drifted from {z} to {}",
+                ps.origin.z
+            );
+        }
     }
 
     #[test]
