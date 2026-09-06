@@ -936,6 +936,27 @@ mod tests {
         assert_eq!(host.configstrings[271], "");
     }
 
+    /// The registration keeps the weapon file's own `xmodel/` prefix and
+    /// `WeaponDef` strips it, so a projectile is only found again through
+    /// [`crate::configstrings::weapon_model_index`]. A miss here is a grenade
+    /// the client has no model to draw.
+    #[test]
+    fn a_thrown_grenades_projectile_model_resolves_to_its_slot() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let def = vcod_common::weapon::load(&fs, "stielhandgranate_mp").unwrap();
+        let name = def.projectile_model.expect("the frag names a projectile");
+        let (_vm, mut host) = fixture();
+        host.fs = Some(std::rc::Rc::new(fs));
+        host.register_item("stielhandgranate_mp");
+        assert_ne!(
+            crate::configstrings::weapon_model_index(&host.configstrings, &name),
+            0,
+            "{name:?} is not in the model range the registration filled"
+        );
+    }
+
     /// A block whose `SP_` function frees consumes no entity number: the
     /// slot goes back on the free list and the next block takes it. Measured
     /// on the retail server, where `light` and `misc_model` report zero live

@@ -468,6 +468,16 @@ impl ScriptRuntime {
         }
     }
 
+    /// `BG_TakePlayerWeapon`, which the last round of a `clipOnly` weapon
+    /// with no reserve runs (`docs/research/cod11-combat.md` 1.5 step 9).
+    /// `ps.weapon` is left alone: the switch path takes it to 0 on its own
+    /// once the player no longer holds it (1.8).
+    pub fn take_client_weapon(&mut self, slot: usize, weapon: u8) {
+        if let Some(w) = self.host.client_weapons.get_mut(slot) {
+            w.take(weapon as usize);
+        }
+    }
+
     /// The ammo and current-weapon edges the weapon builtins made this frame,
     /// in call order. Drained rather than read, unlike `client_weapons`: they
     /// are edges, and applying one twice would refill a spent clip.

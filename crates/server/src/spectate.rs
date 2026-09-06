@@ -145,7 +145,7 @@ fn pm_input(cmd: &UserCmd) -> PmInput {
 }
 
 /// `ANGLE2SHORT(spawn_angle) - cmd.angles`, RTCW's `SetClientViewAngle`
-/// (docs/protocol-1.1.md, "Spectator view angles"). `cmd_angles` is the
+/// (docs/protocol-1.1.md, "View angles"). `cmd_angles` is the
 /// client's last-known angles at the moment of this spawn. Only a fresh
 /// connect's are zero; a client spawned by the script has been sending cmds
 /// since it entered the world, and without the subtraction its spawn would
@@ -156,6 +156,18 @@ fn spawn_delta_angles(yaw_deg: f32, cmd_angles: [i32; 3]) -> [i32; 3] {
         -cmd_angles[0],
         (yaw_deg * ANGLE2SHORT) as i32 - cmd_angles[1],
         -cmd_angles[2],
+    ]
+}
+
+/// `PM_UpdateViewAngles`: `ps.viewangles[i] = SHORT2ANGLE(cmd.angles[i] +
+/// delta_angles[i])`, per axis, wire convention (pitch positive down). Only a
+/// player's reaches the wire; see the `viewangles` write in
+/// [`ClientSim::to_wire`] and docs/protocol-1.1.md, "View angles".
+fn view_angles(cmd_angles: [i32; 3], delta_angles: [i32; 3]) -> [f32; 3] {
+    [
+        short_deg(cmd_angles[0] + delta_angles[0]),
+        short_deg(cmd_angles[1] + delta_angles[1]),
+        short_deg(cmd_angles[2] + delta_angles[2]),
     ]
 }
 
@@ -229,8 +241,13 @@ pub struct ClientSim {
     pub assembly: crate::game::hitrig::Assembly,
     /// The client's per-axis view offset, added back onto each cmd's angle
     /// by both `step` and the connected client itself.
-    /// docs/protocol-1.1.md, "Spectator view angles".
+    /// docs/protocol-1.1.md, "View angles".
     delta_angles: [i32; 3],
+    /// `ps.viewangles`, the sum of the two above, kept because the wire
+    /// carries it for a player and nothing else in the sim stores the roll.
+    /// Frozen for a dead or intermission client, both of which return before
+    /// the view update the way retail's own `PM_UpdateViewAngles` is skipped.
+    view_angles: [f32; 3],
     /// `serverTime` the running eye-height lerp started at, cleared when it
     /// settles. Retail stamps it and the client runs the lerp from it, so a
     /// zero here makes the client's prediction snap to the target and then be
@@ -326,6 +343,7 @@ impl ClientSim {
             viewmodel_index: 0,
             assembly: Default::default(),
             delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
+            view_angles: view_angles(cmd_angles, spawn_delta_angles(yaw_deg, cmd_angles)),
             view_lerp_start: None,
             anim: Default::default(),
             was_airborne: false,
@@ -390,6 +408,7 @@ impl ClientSim {
         self.ps = pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg);
         self.pm_type = mode;
         self.delta_angles = spawn_delta_angles(yaw_deg, cmd_angles);
+        self.view_angles = view_angles(cmd_angles, self.delta_angles);
         // A respawned player does not resume the anim it died in.
         self.anim = Default::default();
         self.was_airborne = false;
@@ -454,9 +473,10 @@ impl ClientSim {
         if self.pm_type == PmType::Intermission {
             return Vec::new();
         }
-        self.ps.yaw = short_deg(cmd.angles[1] + self.delta_angles[1]).to_radians();
+        self.view_angles = view_angles(cmd.angles, self.delta_angles);
+        self.ps.yaw = self.view_angles[1].to_radians();
         // Wire pitch is positive down; the sim stores the camera's convention.
-        self.ps.pitch = -short_deg(cmd.angles[0] + self.delta_angles[0]).to_radians();
+        self.ps.pitch = -self.view_angles[0].to_radians();
         match (self.pm_type, world) {
             // Taken by the early return above.
             (PmType::Intermission, _) => {}
@@ -1128,9 +1148,18 @@ impl ClientSim {
         {
             set(axis, self.ps.velocity[i].to_bits() as i32);
         }
-        // viewangles stays unwritten; the view lives in delta_angles instead
-        // and the client rebuilds it. docs/protocol-1.1.md, "Spectator view
-        // angles".
+        // A player's `viewangles` is on the wire, a spectator's is not, and
+        // the split is measured on both sides: docs/protocol-1.1.md,
+        // "View angles". The client rebuilds the view from
+        // `delta_angles` either way, so it is the delta that always travels.
+        if player {
+            for (i, axis) in ["viewangles[0]", "viewangles[1]", "viewangles[2]"]
+                .iter()
+                .enumerate()
+            {
+                set(axis, self.view_angles[i].to_bits() as i32);
+            }
+        }
         for (i, axis) in ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"]
             .iter()
             .enumerate()
@@ -1815,22 +1844,25 @@ mod tests {
         sim.step(&cmd, 0.05, None, &[]);
     }
 
-    /// The three-part edit, pinned as one behaviour: a sim spawned facing 90
+    /// The spectator half of the three-part edit: a sim spawned facing 90
     /// degrees reports that yaw to a client whose cmd angles are zero,
     /// because the offset lives in `delta_angles` and the client adds it
     /// back; `step` must add it back the same way to keep simulating at the
     /// spawn yaw once a real cmd arrives. A partial edit fails this: dropping
-    /// the delta write reports 0, keeping the `viewangles` write reports the
-    /// spawn angle there instead of leaving it unwritten, and reverting
-    /// `step` alone snaps the simulated yaw back to the cmd's raw 0 rather
-    /// than 90. `16_384` is `ANGLE2SHORT(90)`, the same value the committed
-    /// capture fixture carries (`crates/common/src/net/msg.rs:1826`). Pitch
-    /// (`[0]`) is asserted on both fields too, a strict superset of the
-    /// deleted `delta_angles_stay_zero`: only the yaw is spawn-dependent, so
-    /// a `spawn_delta_angles` that put the yaw in the wrong slot, or a
-    /// `viewangles[0]` write left behind, must fail here as well.
+    /// the delta write reports 0, and reverting `step` alone snaps the
+    /// simulated yaw back to the cmd's raw 0 rather than 90. `16_384` is
+    /// `ANGLE2SHORT(90)`, the same value the committed capture fixture
+    /// carries (`crates/common/src/net/msg.rs:1826`). Pitch (`[0]`) is
+    /// asserted on both fields too, a strict superset of the deleted
+    /// `delta_angles_stay_zero`: only the yaw is spawn-dependent, so a
+    /// `spawn_delta_angles` that put the yaw in the wrong slot must fail here
+    /// as well.
+    ///
+    /// A spectator's `viewangles` stays unwritten however far its view has
+    /// turned; the player half is
+    /// [`a_players_viewangles_carry_the_summed_view`].
     #[test]
-    fn delta_angles_carry_the_spawn_yaw_and_viewangles_stay_unwritten() {
+    fn delta_angles_carry_the_spawn_yaw_and_a_spectators_viewangles_stay_unwritten() {
         let p = &PROTOCOL_V1;
         let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 90.0, NULL_USERCMD.angles);
         let ps = sim.to_wire(p, 0, 0);
@@ -1844,6 +1876,63 @@ mod tests {
         // faces 0 instead of the spawn's 90.
         sim.step(&cmd(0, 0, 0), 0.05, None, &[]);
         assert_eq!(sim.ps.yaw.to_degrees(), 90.0);
+        // Turning does not put it on the wire either: the two spectator
+        // captures read 0 with `delta_angles[1]` 16384 throughout.
+        sim.step(&cmd(0, 0, 8192), 0.05, None, &[]);
+        assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "viewangles[1]"), 0);
+    }
+
+    /// The player half: a spawned client's `viewangles` is on the wire and is
+    /// `SHORT2ANGLE(cmd.angles + delta_angles)` per axis, retail's
+    /// `PM_UpdateViewAngles`.
+    ///
+    /// The numbers here are this test's own -- `become_player` at 225 degrees
+    /// puts 40960 in `delta_angles[1]`, and a cmd yaw of 0 makes the sum
+    /// -135.0 -- chosen so the two are not the same word and a write that
+    /// echoed the delta instead of summing would fail. The relation they
+    /// check is the retail one, measured off the `--save-ads` capture taken
+    /// on `mp_carentan` under `tdm` with `kar98k_sniper_mp`, which reads
+    /// `delta_angles[1]` 24576 and `viewangles[1]` -45.0 on every one of its
+    /// 355 `!trace` lines; that capture is compared field for field by
+    /// `playerstate_combat_ab`'s `the_scoped_sight_and_view_match_retail_on_mp_carentan`,
+    /// and docs/protocol-1.1.md, "View angles", carries the derivation.
+    ///
+    /// The relation holds in every other retail player capture too, including
+    /// the two whose `viewangles` reads 0 -- there the probe subtracts
+    /// `delta_angles` when it builds each cmd, so the sum is zero and the
+    /// field is not evidence of an unwritten one (`playerstate_ab.rs`,
+    /// `check_spawn_shape`).
+    ///
+    /// A turn is asserted too, off the motion captures: those read the spawn
+    /// yaw at every held pose and the spawn yaw plus the cmd's 60 degrees at
+    /// `turn_left`/`turn_right`, so a write that pinned the spawn angle
+    /// rather than summing would pass the first assert and fail this one.
+    #[test]
+    fn a_players_viewangles_carry_the_summed_view() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 64.0], 225.0, NULL_USERCMD.angles);
+        let view = |ps: &msg::PlayerState, i: usize| {
+            f32::from_bits(ps.field_i32(p, &format!("viewangles[{i}]")) as u32)
+        };
+        let ps = sim.to_wire(p, 0, 0);
+        assert_eq!(ps.field_i32(p, "delta_angles[1]"), 40_960);
+        assert_eq!(view(&ps, 1), -135.0);
+        assert_eq!(view(&ps, 0), 0.0);
+        assert_eq!(view(&ps, 2), 0.0);
+
+        // Spawned facing 225 and turning 45 to the right: -135 + 45. The
+        // angles are the shorts that land on a whole degree -- 8192 is 45 and
+        // 4096 is 22.5 -- since ANGLE2SHORT truncates and a 60 would leave the
+        // assert chasing the rounding rather than the sum.
+        sim.step(&cmd(0, 0, 8192), 0.05, None, &[]);
+        assert_eq!(view(&sim.to_wire(p, 0, 0), 1), -90.0);
+        // Pitch travels on its own axis, positive down the way the wire reads
+        // it, and the camera's own sign is the negative of it.
+        sim.step(&cmd(0, 4096, 8192), 0.05, None, &[]);
+        let ps = sim.to_wire(p, 0, 0);
+        assert_eq!(view(&ps, 0), 22.5);
+        assert_eq!(sim.ps.pitch.to_degrees(), -22.5);
     }
 
     /// The retail hit (combat doc, 8.4): the shooter at (1810, 2109.5), the
