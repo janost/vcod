@@ -519,15 +519,34 @@ re-read, since a restart changes neither the paks nor the map.
 
 Retail's restart has no baseline pass, and `map_restart` has none either.
 
-Two divergences on the wire:
+Not modelled from the numbered list: step 6's `sv.state`, `sv.restarting`
+and the `sv_serverRestarting` cvar, none of which vcod has a counterpart for
+(what `sv.restarting` gates on retail, `SV_SetConfigstring`'s broadcast, vcod
+does unconditionally); and step 10's drop of a client whose `ClientConnect`
+returned a denial string, since `reconnect_client` has no denial to return.
+
+Three divergences on the wire:
 
 - The reliable stream carries `d 3`, `n` and `d 1`, in that order, and
-  nothing else. The retail capture the order comes from
+  nothing else. VERIFIED, from the retail capture the order comes from
   (`crates/server/tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`, seq
-  40 to 44) opens with a `d 13` and a `d 12` as well, which are the two
-  slots the outgoing level's own script had moved; vcod has no per-slot
-  configstring diff to produce them, so it sends the one the new level
-  always writes.
+  40 to 44): the burst opens with `d 13 70050` and a `d 12`, all five
+  commands carry `ms=51016`, and `70050` is the number the `d 3` two lines
+  later carries as its own `t` field
+  (`d 3 n\ambient_mp_carentan\t\70050`). INFERRED, from that shared number
+  and 3.1's compare pair: those are the *incoming* level's own writes,
+  reaching the wire because `sv.restarting` is set and `SV_SetConfigstring`
+  broadcasts every write while it is.
+- vcod writes neither of those two off the level clock, which is why it has
+  nothing to broadcast for them: `crates/server/src/game/builtins/env.rs`'s
+  `ambient_play` pins configstring 3's `t` field to `0`, and configstring 13,
+  `level.startTime`, is a static `"0"` in
+  `crates/server/src/configstrings.rs`. Configstring 12 it does compute, and
+  byte-identically (`set_cull_fog` in the same file), but a restart
+  rebroadcasts only 1 and 3, so a client that survives one keeps the old
+  level's string in every other slot. Benign only because none of vcod's own
+  values move across a restart; driving 3 and 13 off `level_time_ms` is what
+  would make them move, and it moves the configstring gates with them.
 - The cvar table is carried from the outgoing level rather than rebuilt from
   `default_mp.cfg`, on this path and on the map change alike, because
   retail's `Cvar_Set` writes a process-global table that neither boundary

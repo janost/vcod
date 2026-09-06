@@ -282,13 +282,17 @@ fn latch(host: &mut GameHost, which: LevelLatch, args: &[Value]) -> Result<(), E
         LevelLatch::MapRestart => return Err(ErrorKind::BadType("map_restart already called")),
         LevelLatch::ExitLevel => return Err(ErrorKind::BadType("exitlevel already called")),
     }
-    host.level_latch = which;
-    host.save_persist = match args.first() {
+    // The argument is read before the latch takes, so a call that raises
+    // leaves the level able to end later; `Scr_GetInt` truncates a float
+    // rather than testing it against zero.
+    let save_persist = match args.first() {
         None => false,
         Some(Value::Int(i)) => *i != 0,
-        Some(Value::Float(f)) => *f != 0.0,
+        Some(Value::Float(f)) => (*f as i32) != 0,
         Some(_) => return Err(ErrorKind::BadType("map_restart/exitLevel wants a number")),
     };
+    host.level_latch = which;
+    host.save_persist = save_persist;
     Ok(())
 }
 
@@ -362,6 +366,17 @@ mod tests {
             let s = Value::String(cx.intern_exact("1"));
             assert!(exit_level(&mut host, cx, None, &[s]).is_err());
             assert_eq!(host.console.len(), 0);
+            // The latch did not take, so the level can still end.
+            assert_eq!(host.level_latch, LevelLatch::None);
+            exit_level(&mut host, cx, None, &[Value::Int(1)]).unwrap();
+            assert_eq!(host.level_latch, LevelLatch::ExitLevel);
+            assert!(host.save_persist);
+        });
+        // `Scr_GetInt` truncates: 0.5 is 0, not "non-zero".
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            map_restart(&mut host, cx, None, &[Value::Float(0.5)]).unwrap();
+            assert!(!host.save_persist);
         });
     }
 
