@@ -137,6 +137,7 @@ pub fn probe(
     addr: &str,
     save: Save,
     tag: Option<String>,
+    overwrite: bool,
     pvs: bool,
     script: ShooterScript,
     team: Option<&str>,
@@ -616,6 +617,7 @@ pub fn probe(
                                 &join,
                                 &combat,
                                 tag.as_deref(),
+                                overwrite,
                             )?;
                             wrote_playerstate = true;
                             break;
@@ -629,6 +631,7 @@ pub fn probe(
                                     client.configstrings(),
                                     &join,
                                     tag.as_deref(),
+                                    overwrite,
                                 )?;
                             }
                             break;
@@ -1568,6 +1571,25 @@ const BUTTON_ATTACK: u8 = 0x01;
 
 /// The stock frag, the only grenade in a spawn loadout.
 const FRAG_WEAPON: &str = "fraggrenade_mp";
+
+/// Writes a fixture that `--capture-tag` named, refusing to land on a file
+/// that is already there unless `--overwrite-fixture` says to. A tag is free
+/// text and nothing stops it spelling a committed fixture's name --
+/// `--save-ads --capture-tag sniper` writes exactly the path the scoped-rifle
+/// evidence lives at -- and a capture against vcod's own server silently
+/// replacing the retail oracle is the one mistake this directory cannot
+/// survive. An untagged write is the documented way to retake a fixture and
+/// goes through `std::fs::write` unguarded.
+fn write_tagged_fixture(path: &str, out: &str, overwrite: bool) -> anyhow::Result<()> {
+    if !overwrite && std::path::Path::new(path).exists() {
+        anyhow::bail!(
+            "{path} already exists; --capture-tag would replace it. Pass \
+             --overwrite-fixture if that is what you mean, or pick another tag."
+        );
+    }
+    std::fs::write(path, out)?;
+    Ok(())
+}
 
 /// A weapon's `cmd.weapon` byte: its slot in configstring 7, which is 1-based
 /// (docs/protocol-1.1.md, "Configstring 7"), and the name that slot holds.
@@ -2584,6 +2606,7 @@ fn write_combat_fixture(
     join: &JoinProbe,
     combat: &CombatProbe,
     tag: Option<&str>,
+    overwrite: bool,
 ) -> anyhow::Result<()> {
     let p = &net::protocol::PROTOCOL_V1;
     let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
@@ -2794,7 +2817,10 @@ groundEntityNum={} viewangles[0]={:.4} viewangles[1]={:.4} viewangles[2]={:.4}\n
         combat.kind
     );
     std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
-    std::fs::write(&path, out)?;
+    match tag {
+        Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
+        None => std::fs::write(&path, out)?,
+    }
     println!(
         "{}: {} steps, {} traced snapshots -> {path}",
         combat.kind,
@@ -4948,6 +4974,7 @@ fn write_entities_fixture(
     configstrings: &[String],
     join: &JoinProbe,
     tag: Option<&str>,
+    overwrite: bool,
 ) -> anyhow::Result<()> {
     let p = &net::protocol::PROTOCOL_V1;
     let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
@@ -5030,7 +5057,10 @@ sample of a set\n"
     }
 
     std::fs::create_dir_all(ENTITIES_FIXTURE_DIR)?;
-    std::fs::write(&path, out)?;
+    match tag {
+        Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
+        None => std::fs::write(&path, out)?,
+    }
     println!(
         "entities: {} stations this run, {} samples in the file ({} read, {} dropped as \
          repeats), {} distinct entity sets -> {path}",
@@ -5630,5 +5660,26 @@ mod tests {
             keep_sample(&mut last, vec![55], 1550),
             "the heartbeat is due"
         );
+    }
+
+    /// A tag is free text and can spell a committed fixture's name, so a
+    /// tagged write refuses a path that is already there. `--overwrite-fixture`
+    /// is the one way past it; the first write of a name is unaffected.
+    #[test]
+    fn a_tagged_write_refuses_to_replace_a_fixture() {
+        let dir = std::env::temp_dir().join(format!("vcod-tag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mp_carentan-tdm-ads-sniper.txt");
+        let path = path.to_str().unwrap();
+
+        write_tagged_fixture(path, "retail", false).expect("a name nothing holds yet");
+        let err = write_tagged_fixture(path, "ours", false)
+            .expect_err("the second write lands on the first");
+        assert!(err.to_string().contains("--overwrite-fixture"), "{err}");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "retail");
+
+        write_tagged_fixture(path, "ours", true).expect("the flag says to");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "ours");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

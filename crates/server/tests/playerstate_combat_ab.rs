@@ -108,9 +108,11 @@ const KNOWN_GAPS: &[Gap] = &[
 /// wholesale elsewhere. Retail's counter starts decaying ~300 ms in and ours
 /// does not.
 ///
-/// Only the walking sight step is gapped. Every standing one is compared,
-/// and the fraction matches there, which is what says the ramp itself is
-/// right and the ground trace is not.
+/// Only the walking sight step is gapped, and only its `transients`: the
+/// view is a separate channel and stays compared exactly through this step
+/// as through every other. Every standing sight step is compared whole, and
+/// the fraction matches there, which is what says the ramp itself is right
+/// and the ground trace is not.
 const ADS_WALK_GAP: &str = "ours goes airborne for one sample where retail never does, which reverses      the sight ramp for that cmd (see ADS_WALK_GAP, open)";
 
 /// The one open defect [`KNOWN_GAPS`] names, measured off the retail
@@ -131,7 +133,11 @@ struct Gap {
     map: &'static str,
     kind: &'static str,
     label: &'static str,
-    /// `weapAnim`, `torsoAnim`, `weaponstate` or `weaponDelay`.
+    /// `weapAnim`, `torsoAnim`, `weaponstate`, `weaponDelay`, `transients`
+    /// (the sight fraction and the spread counter together) or `viewangles`.
+    /// The last two are separate channels so a gap on one cannot hide a
+    /// regression in the other behind a self-clean assert that only knows
+    /// something still differs.
     channel: &'static str,
     why: &'static str,
 }
@@ -371,21 +377,6 @@ fn transient_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
         let spread_ok = near
             .iter()
             .any(|o| o.spread.is_some_and(|s| (s - rs).abs() <= SPREAD_TOL));
-        // The view is not a transient and gets no tolerance: retail writes
-        // `ps.viewangles` as `SHORT2ANGLE(cmd.angles + delta_angles)` and the
-        // replay sends the capture's own cmd angles, so every axis has to
-        // read the same float. `None` on a capture taken before the column
-        // existed, which is every one but the scoped rifle's.
-        if let Some(rv) = r.viewangles {
-            if let Some(ov) = near.iter().find_map(|o| o.viewangles) {
-                if ov != rv {
-                    bad.push(format!(
-                        "at {}ms retail viewangles {rv:?}, ours {ov:?}",
-                        r.ms
-                    ));
-                }
-            }
-        }
         if !frac_ok || !spread_ok {
             let ours_at: Vec<String> = near
                 .iter()
@@ -407,6 +398,39 @@ fn transient_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
                 r.pm_flags.unwrap_or(-1),
                 r.ground_entity.unwrap_or(-1),
                 ours_at.join(", ")
+            ));
+        }
+    }
+    bad
+}
+
+/// Every retail sample's `viewangles` against the nearest of ours, with no
+/// tolerance. The view is not a transient: retail writes it as
+/// `SHORT2ANGLE(cmd.angles + delta_angles)` and the replay sends the
+/// capture's own cmd angles, so every axis has to read the same float.
+///
+/// It is its own channel and not part of [`transient_misses`] on purpose. A
+/// gap that suppressed both would let a view regression hide behind a sight
+/// one, and the self-clean assert -- which only knows that *something* still
+/// differs -- would keep passing while it did.
+///
+/// Empty for a capture taken before the trace carried the three columns,
+/// which is every one but the scoped rifle's.
+fn view_misses(retail: &[Trace], ours: &[Trace]) -> Vec<String> {
+    let mut bad = Vec::new();
+    for r in retail {
+        let Some(rv) = r.viewangles else { continue };
+        let Some(ov) = ours
+            .iter()
+            .filter(|o| (o.ms - r.ms).abs() <= SAMPLE_SLACK_MS)
+            .find_map(|o| o.viewangles)
+        else {
+            continue;
+        };
+        if ov != rv {
+            bad.push(format!(
+                "at {}ms retail viewangles {rv:?}, ours {ov:?}",
+                r.ms
             ));
         }
     }
@@ -604,6 +628,23 @@ fn check(map: &str, gametype: &str, kind: &str) {
                 }
             }
         }
+        let view_bad = view_misses(&step.trace, ours);
+        match gapped(map, kind, &step.label, "viewangles") {
+            Some(why) => assert!(
+                !view_bad.is_empty(),
+                "{map} {kind} {}: the view matches now; drop the KNOWN_GAPS \
+                 entry ({why})",
+                step.label
+            ),
+            None if !view_bad.is_empty() => bad.push(format!(
+                "{}: {} of {} samples off\n    {}",
+                step.label,
+                view_bad.len(),
+                step.trace.len(),
+                view_bad.join("\n    ")
+            )),
+            None => {}
+        }
         let misses = transient_misses(&step.trace, ours);
         match gapped(map, kind, &step.label, "transients") {
             Some(why) => assert!(
@@ -639,6 +680,10 @@ fn the_weapon_channel_matches_retail_on_mp_pavlov() {
     check("mp_pavlov", "dm", "combat");
 }
 
+// Both carbine sight captures carry a `# NOTE` about `ads_walk`: it walked 45
+// degrees off its recorded yaw, the probe's stall turn having ridden every
+// step until 5233cc3. The transients this gate compares do not depend on the
+// heading, so the two stay usable as they are.
 #[test]
 fn the_sight_and_spread_match_retail_on_mp_carentan() {
     check("mp_carentan", "dm", "ads");
