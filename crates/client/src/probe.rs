@@ -2617,6 +2617,16 @@ fn write_combat_fixture(
     out.push_str("# the sight fraction and the spread counter (combat doc, 1.13 and 2.1),\n");
     out.push_str("# grenadeTimeLeft and weaponDelay as ms.\n");
     out.push_str("# Values are the raw i32 wire words, floats as their bit patterns.\n");
+    // Where the script stood and looked at its first step. A replay that
+    // starts anywhere else is looking somewhere else too, and `viewangles` is
+    // the sum of the cmd and the spawn's `delta_angles`, so a gate comparing
+    // the view needs this to put its own client where the capture's was.
+    let (spawn_origin, spawn_view) = combat.spawn_pose.unwrap_or_default();
+    out.push_str(&format!(
+        "# spawn origin={} viewangles={}\n",
+        vec_str(spawn_origin),
+        vec_str(spawn_view),
+    ));
     if combat.kind == "grenade" {
         out.push_str(
             "# press_buttons is held down for the first press_ms of the step rather than\n",
