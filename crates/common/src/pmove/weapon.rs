@@ -367,13 +367,27 @@ pub fn pm_weapon(
         return;
     }
     let Some(def) = weapon_def(weapons, ps.weapon) else {
+        // Any index the table cannot resolve, which with the stock table is
+        // only weapon 0: nothing to read a melee, a reload or a shot from.
+        // The switch path still runs, which is what lets a player whose last
+        // grenade `BG_TakePlayerWeapon` took ask for another weapon and get
+        // it (section 1.8, and 1.12 for the three stops that really do end
+        // `PM_Weapon`). Weapon 0 takes `putaway`'s short branch, so the
+        // pickup lands on this frame; a held index with no def would take the
+        // ordinary path and write `WEAP_DROP` with a drop time of 0.
+        if begin_change(ps, input, None, events)
+            && ps.weaponstate == WEAPON_DROPPING
+            && ps.weapon_time_ms == 0
+        {
+            pickup(ps, weapons, events);
+        }
         return;
     };
     melee_finish(ps, def, delay_expired, events);
     if melee_check(ps, input, def, delay_expired, events) {
         return;
     }
-    if begin_change(ps, input, def, events) {
+    if begin_change(ps, input, Some(def), events) {
         // The pickup half runs later in the same `PM_Weapon` (section 1.8), so
         // a putaway that left no drop time -- the cancelled pullback, a weapon
         // gone from under the player -- raises on this frame and never shows
@@ -542,7 +556,7 @@ fn melee_finish(
 fn begin_change(
     ps: &mut PlayerState,
     input: &PmInput,
-    def: &WeaponDef,
+    def: Option<&WeaponDef>,
     events: &mut Vec<PmEvent>,
 ) -> bool {
     // A pullback is the one `weaponstate` 3 a switch may interrupt, and it
@@ -590,10 +604,15 @@ pub fn begin_switch(
     target: u8,
     events: &mut Vec<PmEvent>,
 ) -> bool {
-    putaway(ps, def, target, events)
+    putaway(ps, Some(def), target, events)
 }
 
-fn putaway(ps: &mut PlayerState, def: &WeaponDef, target: u8, events: &mut Vec<PmEvent>) -> bool {
+fn putaway(
+    ps: &mut PlayerState,
+    def: Option<&WeaponDef>,
+    target: u8,
+    events: &mut Vec<PmEvent>,
+) -> bool {
     if ps.weaponstate == WEAPON_DROPPING {
         return false;
     }
@@ -612,7 +631,7 @@ fn putaway(ps: &mut PlayerState, def: &WeaponDef, target: u8, events: &mut Vec<P
         }
         return true;
     }
-    ps.weapon_time_ms = ms(def.drop_time);
+    ps.weapon_time_ms = ms(def.map_or(0.0, |d| d.drop_time));
     // The capture's `to_frag` reads `weapAnim` 521 through the whole putaway,
     // `WEAP_DROP` with the toggle flipped. The superseded captures read the
     // anim unchanged because they sent `cmd.weapon` 0 every frame, which is
@@ -627,12 +646,18 @@ fn putaway(ps: &mut PlayerState, def: &WeaponDef, target: u8, events: &mut Vec<P
 
 /// The pickup half of section 1.8. Retail re-reads `cmd.weapon` here; vcod
 /// raises the weapon the putaway latched, so the putaway a jump forces comes
-/// back to the same weapon even when the caller threads no weapon byte.
+/// back to the same weapon even when the caller threads no weapon byte. The
+/// ladder forces 0 the same way retail's `pm_flags & 0x10` does: without it
+/// this raises a weapon the next frame's ladder clause holsters again.
 fn pickup(ps: &mut PlayerState, weapons: &[Option<WeaponDef>], events: &mut Vec<PmEvent>) {
     let target = ps.pending_weapon;
     ps.pending_weapon = 0;
     let old = ps.weapon;
-    ps.weapon = if holds(ps, target) { target } else { 0 };
+    ps.weapon = if ps.on_ladder || !holds(ps, target) {
+        0
+    } else {
+        target
+    };
     // The two arms are exclusive and each writes `weapAnim` once: the same
     // weapon back in hand goes idle, a different one raises. The capture's
     // `to_frag` counts the toggle flips that prove it (section 1.14).
@@ -1246,6 +1271,99 @@ mod tests {
         assert_eq!(ps.weaponstate, WEAPON_RAISING);
         assert_eq!(ps.weapon, 2);
         assert_eq!(ps.ammoclip[1], 3);
+    }
+
+    /// The last frag leaves the player holding nothing, and the machine has
+    /// to keep answering the usercmd's weapon byte from there. Retail's
+    /// `BG_TakePlayerWeapon` clears the held bit on the last round of a
+    /// `clipOnly` weapon (section 1.5, step 9), the change check then begins
+    /// a change to 0 because the player no longer owns `ps.weapon`
+    /// (section 1.8), and the next weapon the client asks for still has to
+    /// arrive: only the three stops of 1.12 end `PM_Weapon` outright.
+    #[test]
+    fn a_player_who_lost_its_last_grenade_can_switch_back() {
+        let (mut ps, mut w) = armed(&frag());
+        // The carbine keeps its own clip: the frag's is about to run dry.
+        let mut rifle = carbine();
+        rifle.clip_index = 2;
+        rifle.ammo_index = 2;
+        w.push(Some(rifle.clone()));
+        give(&mut ps, 2, 2);
+        ps.ammoclip[1] = 1;
+        ps.ammo[1] = 0;
+        ps.ammoclip[2] = rifle.clip_size as i16;
+        ps.ammo[2] = 30;
+        let held = PmInput {
+            attack: true,
+            ..Default::default()
+        };
+        assert_eq!(step(&mut ps, &w, &held, 1), vec![EV_PULLBACK_WEAPON]);
+        // The pin holds for `holdFireTime`; the release after it throws.
+        assert!(step(&mut ps, &w, &held, 13).is_empty());
+        // Section 1.5, step 9: the spent `clipOnly` weapon raises `EV_NOAMMO`
+        // beside the shot, and it is that pair the host takes the weapon on.
+        assert_eq!(
+            step(&mut ps, &w, &PmInput::default(), 1),
+            vec![EV_FIRE_WEAPON_LASTSHOT, EV_NOAMMO]
+        );
+        assert_eq!(ps.ammoclip[1], 0);
+
+        // The host owns the held bits, so this is the take the server mirrors
+        // back into the playerstate on the frame after the last shot.
+        ps.weapons_held &= !(1u64 << 1);
+        let asks_for_the_frag = PmInput {
+            weapon: 1,
+            ..Default::default()
+        };
+        step(&mut ps, &w, &asks_for_the_frag, 40);
+        // A change to 0 happens and stays there while the client keeps asking
+        // for a weapon it does not own: the retail grenade capture's
+        // `idle_after` reads `weapon` 0 under exactly that input.
+        assert_eq!(ps.weapon, 0);
+        assert_eq!(ps.weaponstate, WEAPON_READY);
+
+        let asks_for_the_carbine = PmInput {
+            weapon: 2,
+            ..Default::default()
+        };
+        let ev = step(&mut ps, &w, &asks_for_the_carbine, 1);
+        // Weapon 0 has no drop time, so the raise lands on the same frame.
+        assert_eq!(ev, vec![EV_RAISE_WEAPON]);
+        assert_eq!(ps.weapon, 2);
+        step(&mut ps, &w, &asks_for_the_carbine, 20);
+        assert_eq!(ps.weaponstate, WEAPON_READY);
+        assert_eq!(
+            step(
+                &mut ps,
+                &w,
+                &PmInput {
+                    weapon: 2,
+                    attack: true,
+                    ..Default::default()
+                },
+                1
+            ),
+            vec![EV_FIRE_WEAPON]
+        );
+    }
+
+    /// The ladder forces weapon 0 in the pickup half too (1.8, dll
+    /// 0x300107c0: the new weapon is `cmd.weapon` forced to 0 when
+    /// `pm_flags & 0x10` is set). Without it a climber with nothing in hand
+    /// raises whatever its cmd byte names and the next frame's ladder clause
+    /// holsters it again, once per `raiseTime` for the whole climb.
+    #[test]
+    fn a_climber_with_nothing_in_hand_raises_nothing() {
+        let (mut ps, w) = armed(&carbine());
+        ps.weapon = 0;
+        ps.on_ladder = true;
+        let asks = PmInput {
+            weapon: 1,
+            ..Default::default()
+        };
+        assert_eq!(step(&mut ps, &w, &asks, 40), Vec::<i32>::new());
+        assert_eq!(ps.weapon, 0);
+        assert_eq!(ps.weaponstate, WEAPON_READY);
     }
 
     /// 1.10: the melee bit swings once per press -- the swipe, the hit event

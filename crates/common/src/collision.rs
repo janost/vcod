@@ -592,11 +592,51 @@ pub fn test_world(extra: &[(Vec3, Vec3)]) -> CollisionWorld {
     synthetic_world(&[("textures/test/solid", CONTENTS_SOLID, 0)], &specs)
 }
 
+/// Test helper: [`test_world`]'s floor with a ramp rising `deg` degrees along
+/// +x from `x0` to `x1`, and level ground at the ramp's height beyond it. The
+/// slope arrives as loose triangles, which is the only way this module takes
+/// geometry that is not axis-aligned.
+#[doc(hidden)]
+pub fn ramp_test_world(deg: f32, x0: f32, x1: f32) -> CollisionWorld {
+    let h = (x1 - x0) * deg.to_radians().tan();
+    let (y0, y1) = (-512.0, 512.0);
+    let quad = |a: Vec3, b: Vec3, c: Vec3, d: Vec3| [[a, b, c], [a, c, d]];
+    let mut tris = Vec::new();
+    tris.extend(quad(
+        Vec3::new(x0, y0, 0.0),
+        Vec3::new(x1, y0, h),
+        Vec3::new(x1, y1, h),
+        Vec3::new(x0, y1, 0.0),
+    ));
+    tris.extend(quad(
+        Vec3::new(x1, y0, h),
+        Vec3::new(1024.0, y0, h),
+        Vec3::new(1024.0, y1, h),
+        Vec3::new(x1, y1, h),
+    ));
+    synthetic_world_tris(
+        &[("textures/test/solid", CONTENTS_SOLID, 0)],
+        &[(0, [-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0])],
+        &tris,
+    )
+}
+
 /// Test helper: axial brushes with named materials `(name, contents, surface)`.
 #[doc(hidden)]
 pub fn synthetic_world(
     materials: &[(&str, u32, u32)],
     brushes: &[(usize, [f32; 3], [f32; 3])],
+) -> CollisionWorld {
+    synthetic_world_tris(materials, brushes, &[])
+}
+
+/// [`synthetic_world`] plus world-space triangles, the only way this module
+/// takes geometry that is not axis-aligned.
+#[doc(hidden)]
+pub fn synthetic_world_tris(
+    materials: &[(&str, u32, u32)],
+    brushes: &[(usize, [f32; 3], [f32; 3])],
+    tris: &[[Vec3; 3]],
 ) -> CollisionWorld {
     let side = |m: u32, v: f32| crate::bsp::BrushSide {
         plane_or_dist: v.to_bits(),
@@ -663,7 +703,7 @@ pub fn synthetic_world(
             leafs: vec![],
             pvs: None,
         },
-        &[],
+        tris,
     )
 }
 

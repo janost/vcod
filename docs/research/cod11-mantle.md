@@ -328,6 +328,48 @@ only place those values are ever produced - there is no non-ladder route to
   `PM_GetEffectiveStance` (0x34554) and `PM_GetViewHeightLerpTime` (0x345B8,
   200 ms stand/crouch family plus `bg_duck2prone_time`/`bg_prone2duck_time`).
 
+### The ground snap
+
+`PM_StepSlideMove` is not Q3's. Q3 and RTCW return the moment `PM_SlideMove`
+reports the move went through unobstructed, and their push-down pass only
+undoes the step-up they just took. CoD's runs a down pass on every grounded
+frame and reaches past the step.
+
+VERIFIED: at 0x350EC, on the path taken when `PM_SlideMove` returned 0, the
+function compares `ps->groundEntityNum` (ps+0x54) against 0x3FF and jumps into
+the body at 0x35116 when the two differ; the equal case returns unless
+`pm_flags & 0x10` is set and `velocity[2] > 0`. INFERRED: a player standing on
+something therefore takes the down pass whether or not its move was blocked,
+and an airborne one takes it only on a ladder going up.
+
+VERIFIED: the push-down point is built at 0x352D8 as `origin[2] - stepUp`,
+where `stepUp` is the up-trace's fraction times `stepSize + 1`, and at 0x352E8
+a further `stepSize * 0.5` (0x70EF8 holds 0.5) is subtracted from it when the
+flag at pml+0x30 is set and `pm_flags & 0x10` is clear (0x34FDF-0x34FF1).
+INFERRED: pml+0x30 is `groundPlane`, from its position in the Q3 `pml_t`
+layout the rest of this module matches, so the extra half step is taken for a
+player on a ground plane that is not on a ladder.
+
+VERIFIED: at 0x35380 the trace fraction is compared against 1.0; the
+`fraction < 1.0` arm writes `trace.endpos` into the origin and calls
+`PM_ClipVelocity` with the 1.001 overclip at 0x70EFC, and the other arm
+(0x353D0) subtracts `stepUp` from `origin[2]` and nothing else. INFERRED: so
+the extra half step pulls the player onto whatever is under it and is not
+itself a fall.
+
+INFERRED: this is what keeps a walking player on the ground at a slope's
+crest. `PM_WalkMove` clips the velocity into the ground plane, so a climb
+carries real upward velocity; where the slope levels out, the 0.25-unit ground
+trace of the next frame misses and the player is airborne with that velocity
+still on it. Nine units of reach under the feet is what takes it back down.
+
+VERIFIED: after the down pass, at 0x35756, the horizontal and vertical
+velocity are all scaled by an affine function of
+`|origin[2] - start_o[2]| / stepSize`, and at 0x3574B event 0x8F is added to
+the playerstate with the step delta, clamped to -16..24, biased by +128 as its
+parm. Neither is modelled in `crates/common/src/pmove.rs`; the event is what a
+client would smooth its view step with.
+
 ## State reference (observed pm_flags bits, internal ps+0xC)
 
 | bit | meaning | evidence |
@@ -394,7 +436,19 @@ Status after the pmove work landed on this branch:
    NOT ported: the +/-75 degree yaw lock (its ps+0x7C consumer is unverified)
    and climb anim events (walk mode has no event consumer yet). vcod models
    jumpTime as a dt-advanced ms counter instead of cmd.serverTime.
-5. Stands as the negative result: no mantle exists in retail 1.1. If
+5. SHIPPED - the ground snap of "Step-up and steep slopes": the down pass
+   runs on every grounded frame and reaches `stepSize * 0.5` past the step it
+   took. NOT ported: the post-step velocity scale and event 0x8F. One
+   deliberate deviation: retail's guards are `groundEntityNum` and the pml
+   ground-plane flag, both taken before the move, and vcod re-runs the
+   ground trace's own kickoff test against the current velocity before it
+   snaps, because a waterjump sets its launch velocity inside the move and
+   the snap would clip it away. The airborne arm's one exception
+   (`pm_flags & 0x10` with `velocity[2] > 0`, 0x350F5-0x35112) is not taken
+   either: vcod returns for every airborne player. That is a no-op today,
+   since the snap is 0 on a ladder anyway, and it would only matter if the
+   step-up half were ever wanted on a climb.
+6. Stands as the negative result: no mantle exists in retail 1.1. If
    ledge-climbing is wanted as a feature it would be a vcod extension with
    no retail counterpart - decide its constants, don't dig for them in the
    binary.
