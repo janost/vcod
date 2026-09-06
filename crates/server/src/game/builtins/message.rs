@@ -26,8 +26,9 @@ const PART_SEP: char = '\u{14}';
 /// banner.
 pub fn construct(host: &GameHost, cx: &Cx, args: &[Value]) -> String {
     let mut out = String::new();
-    // Retail opens with the flag set, so a message that starts with a plain
-    // string still gets no leading separator (0x594dc).
+    // Retail opens with the flag set (0x594dc), which is what gives a leading
+    // `\x15` to a message that opens with a number; the empty-buffer check is
+    // what keeps a leading `\x14` off one that opens with a key.
     let mut after_key = true;
     for &a in args {
         match a {
