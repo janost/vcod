@@ -244,9 +244,10 @@ pub fn set_client_name_mode(
     Ok(Value::Undefined)
 }
 
-/// `exitLevel()`: sets a flag `ScriptRuntime::run_frame` reads and drains
-/// each frame. No stage in this sub-project acts on it; stage 6 ("the
-/// score limit ends the map") is where it does.
+/// `exitLevel([savePersist])` (map-cycle doc, sections 1 and 2): the shared
+/// one-shot latch, then `ExitLevel` itself -- the queued `map_rotate`, both
+/// team scores and every connected client's score back to 0, and the log
+/// line. Nothing else: no intermission state, no camera and no timer.
 pub fn exit_level(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -254,9 +255,10 @@ pub fn exit_level(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     latch(host, LevelLatch::ExitLevel, args)?;
-    // `ExitLevel` (map-cycle doc, section 2). The score passes are stage
-    // 6d's next task; the console line is what ends the level.
     host.console.push("map_rotate".to_string());
+    host.team_scores = [0, 0];
+    host.zero_client_scores();
+    host.script_log.push("ExitLevel: executed".to_string());
     Ok(Value::Undefined)
 }
 
@@ -300,6 +302,7 @@ fn latch(host: &mut GameHost, which: LevelLatch, args: &[Value]) -> Result<(), E
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
+    use vcod_gsc::Host;
 
     /// `setClientNameMode` records retail's two modes and raises on anything
     /// else, the way `Scr_Error("Unknown mode")` does.
@@ -349,6 +352,32 @@ mod tests {
             assert_eq!(host.console, vec!["map_rotate".to_string()]);
             let e = map_restart(&mut host, cx, None, &[]).unwrap_err();
             assert_eq!(e, ErrorKind::BadType("exitlevel already called"));
+        });
+    }
+
+    /// `ExitLevel`'s two passes and its log line (map-cycle doc, section 2):
+    /// both team scores and every connected client's score back to 0, and
+    /// no scoreboard pushed for it -- the passes write the field rather
+    /// than calling the setter, so the ranks stay clean.
+    #[test]
+    fn exitlevel_zeroes_the_team_scores_and_every_client_score() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn_client(cx, 1, None).unwrap();
+            let score = cx.intern_folded("score");
+            host.set_field(cx, e, score, Value::Int(12)).unwrap();
+            host.team_scores = [4, 7];
+            host.ranks_dirty = false;
+
+            exit_level(&mut host, cx, None, &[]).unwrap();
+
+            assert_eq!(host.team_scores, [0, 0]);
+            assert_eq!(host.get_field(cx, e, score), Value::Int(0));
+            assert!(!host.ranks_dirty, "the outgoing level pushed a scoreboard");
+            assert_eq!(
+                host.script_log.last().map(String::as_str),
+                Some("ExitLevel: executed")
+            );
         });
     }
 

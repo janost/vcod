@@ -720,6 +720,14 @@ impl ScriptRuntime {
         std::mem::take(&mut self.host.console)
     }
 
+    /// `level+0x20c`, taken and cleared: whether a score moved this frame,
+    /// which is what arms the intermission scoreboard drain (map-cycle doc,
+    /// 6.3). Retail's drain clears the flag whether or not any client was in
+    /// intermission to receive one, so this takes rather than reads.
+    pub fn take_ranks_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.host.ranks_dirty)
+    }
+
     /// One queued client event. A callback the closure does not define is
     /// logged and skipped: a gametype without one is still a serving map,
     /// the same reading `load`'s missing-builtin pre-scan takes.

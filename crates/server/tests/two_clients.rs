@@ -1265,3 +1265,229 @@ fn map_restart_re_inits_the_level_without_a_gamestate() {
         );
     }
 }
+
+/// The score limit ends the map (map-cycle doc 6, and section 2's
+/// `exitLevel`): `dm` with `scr_dm_scorelimit 1`, A kills B, and the stock
+/// `endMap` puts both clients at the intermission camera -- `pm_type` 5, a
+/// scoreboard and the winner's `cg_objectiveText` -- then ten seconds later
+/// calls `exitLevel(false)`, whose `map_rotate` loads the next map in
+/// `sv_mapRotation` on the live netchan.
+#[test]
+fn the_score_limit_sends_both_clients_to_intermission_and_then_rotates() {
+    use vcod_common::net::msg::{UserCmd, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD};
+    use vcod_common::net::NetEvent;
+
+    const NEXT: &str = "mp_brecourt";
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    // One kill ends it, and the rotation has to name a map that is not the
+    // one serving: `map <the map already serving>` is a restart (doc 4.2),
+    // which pushes no gamestate.
+    sv.set_cvar("scr_dm_scorelimit", "1");
+    sv.set_cvar("sv_mapRotation", &format!("map {NEXT} map {MAP}"));
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb, mut ja, mut jb) = common::join_pair_logged(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+
+    let p = &PROTOCOL_V1;
+    let na = ca
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let nb = cb
+        .snapshots()
+        .newest()
+        .unwrap()
+        .ps
+        .field_i32(p, "clientNum") as usize;
+    let spot = ca.snapshots().newest().unwrap().ps.origin(p);
+    assert!(
+        sv.test_clear_line(spot, 0.0, 40.0),
+        "no clear 40 units along +x from the spawn"
+    );
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+    let facing_a = UserCmd {
+        angles: [0, 32768, 0],
+        ..NULL_USERCMD
+    };
+    let ads = UserCmd {
+        buttons: BUTTON_ADS,
+        ..NULL_USERCMD
+    };
+    let fire = UserCmd {
+        buttons: BUTTON_ADS | BUTTON_ATTACK,
+        ..NULL_USERCMD
+    };
+
+    // Every reliable command each client took from the kill onward, so the
+    // scoreboard and the objective text can be looked for after the
+    // intermission rather than among the join's own.
+    let mut wire: [Vec<String>; 2] = Default::default();
+    let mut gamestates = [0usize; 2];
+    let mut step = |sv: &mut vcod_server::Server,
+                    ca: &mut _,
+                    cb: &mut _,
+                    ja: &mut common::Join,
+                    jb: &mut common::Join,
+                    wire: &mut [Vec<String>; 2],
+                    gamestates: &mut [usize; 2]| {
+        now += Duration::from_millis(50);
+        let (ea, eb) = common::step_pair(sv, (&qa, ca), (&qb, cb), now);
+        for (i, (events, join, cl)) in [(ea, ja, ca), (eb, jb, cb)].into_iter().enumerate() {
+            for e in events {
+                match e {
+                    NetEvent::GamestateReady => {
+                        gamestates[i] += 1;
+                        join.reset_menus();
+                    }
+                    NetEvent::ServerCommand(tokens) => {
+                        wire[i].push(tokens.join(" "));
+                        join.on_server_command(&tokens, cl, now);
+                    }
+                    NetEvent::Dropped(r) => panic!("client {i} dropped: {r}"),
+                    _ => {}
+                }
+            }
+        }
+    };
+
+    // Settle, then two taps: the carbine is semi-automatic, so the trigger
+    // is released in between (combat doc, 1.4).
+    for _ in 0..40 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&facing_a);
+        step(
+            &mut sv,
+            &mut ca,
+            &mut cb,
+            &mut ja,
+            &mut jb,
+            &mut wire,
+            &mut gamestates,
+        );
+    }
+    for seen in &mut wire {
+        seen.clear();
+    }
+    for round in 0..2 {
+        ca.send_frame(&fire);
+        cb.send_frame(&facing_a);
+        step(
+            &mut sv,
+            &mut ca,
+            &mut cb,
+            &mut ja,
+            &mut jb,
+            &mut wire,
+            &mut gamestates,
+        );
+        if round == 0 {
+            for _ in 0..30 {
+                ca.send_frame(&ads);
+                cb.send_frame(&facing_a);
+                step(
+                    &mut sv,
+                    &mut ca,
+                    &mut cb,
+                    &mut ja,
+                    &mut jb,
+                    &mut wire,
+                    &mut gamestates,
+                );
+            }
+        }
+    }
+    assert_eq!(
+        sv.client_field(na, "score").as_deref(),
+        Some("1"),
+        "A did not score the kill"
+    );
+
+    // The intermission itself: both frozen at `pm_type` 5 within a frame or
+    // two of the kill.
+    for _ in 0..30 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&NULL_USERCMD);
+        step(
+            &mut sv,
+            &mut ca,
+            &mut cb,
+            &mut ja,
+            &mut jb,
+            &mut wire,
+            &mut gamestates,
+        );
+    }
+    for (i, cl) in [&ca, &cb].into_iter().enumerate() {
+        let snap = cl.snapshots().newest().expect("a snapshot at intermission");
+        assert_eq!(
+            snap.ps.field_i32(p, "pm_type"),
+            5,
+            "client {i} is not at the intermission camera"
+        );
+        // Neither camera is linked, so neither is in the other's list.
+        assert!(
+            !snap.entities.contains_key(&(na as u32)) && !snap.entities.contains_key(&(nb as u32)),
+            "client {i} is still sent a player entity at intermission: {:?}",
+            snap.entities.keys().collect::<Vec<_>>()
+        );
+    }
+    for (i, seen) in wire.iter().enumerate() {
+        // One push per dirtying and no more: the kill's `attacker.score++`
+        // is the only score this level moved after the join.
+        let pushed = seen.iter().filter(|c| c.starts_with("b ")).count();
+        assert_eq!(
+            pushed, 1,
+            "client {i}'s scoreboards after the intermission began: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|c| c.starts_with("v cg_objectiveText")),
+            "client {i} got no objective text after the intermission began: {seen:?}"
+        );
+    }
+
+    // `wait 10` and then `exitLevel(false)`, whose `map_rotate` loads the
+    // next map on the live netchan.
+    for _ in 0..400 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&NULL_USERCMD);
+        step(
+            &mut sv,
+            &mut ca,
+            &mut cb,
+            &mut ja,
+            &mut jb,
+            &mut wire,
+            &mut gamestates,
+        );
+        if gamestates == [1, 1] {
+            break;
+        }
+    }
+    assert_eq!(gamestates, [1, 1], "the rotation never loaded {NEXT}");
+    assert!(
+        ca.configstring(0).contains(&format!("mapname\\{NEXT}")),
+        "the rotation loaded {:?}",
+        ca.configstring(0)
+    );
+}

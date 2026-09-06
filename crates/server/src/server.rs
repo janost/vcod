@@ -8,7 +8,7 @@
 use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
 use crate::console;
-use crate::game::host::ClientEvent;
+use crate::game::host::{ClientEvent, SpawnMode};
 use crate::game::script;
 use crate::game::temp_entity;
 use crate::spectate::ClientSim;
@@ -1086,12 +1086,14 @@ impl Server {
             .enumerate()
             .filter_map(|(slot, c)| c.as_ref().map(|_| slot))
             .collect();
-        // Tokens 2 and 3 are `level.teamScores[1]` and `[2]`. Both retail
-        // captures read 0 in each: the array starts zeroed and the `-9999`
-        // sentinel is something a gametype writes for itself (hud protocol
-        // doc, section 3). Hardcoded until a `setTeamScore` builtin gives
-        // them somewhere to live.
-        let mut text = format!("b {} 0 0", online.len());
+        // Tokens 2 and 3 are the two team scores, axis before allies, the
+        // order `DeathmatchScoreboardMessage` pushes them in (map-cycle doc,
+        // 6.3). Both retail captures read 0 in each: `dm` writes neither.
+        let [axis, allies] = self
+            .script
+            .as_ref()
+            .map_or([0, 0], |rt| rt.host.team_scores);
+        let mut text = format!("b {} {axis} {allies}", online.len());
         for slot in online {
             let mut field = |name: &str| {
                 self.client_field(slot, name)
@@ -1968,6 +1970,7 @@ impl Server {
 
         let mut client_commands = Vec::new();
         let mut console_lines: Vec<String> = Vec::new();
+        let mut ranks_dirty = false;
         // A client that dropped between the packet and here has nothing left
         // to run its command against.
         let queued: Vec<(usize, ScriptCommand)> = std::mem::take(&mut self.pending_script_commands)
@@ -2065,6 +2068,7 @@ impl Server {
             rt.run_frame(self.sv_time_ms);
             console_lines = rt.take_console();
             client_commands = rt.take_client_commands();
+            ranks_dirty = rt.take_ranks_dirty();
             // The script owns the table while it runs and allocates into it
             // from any thread, so the server re-reads it rather than trusting
             // the copy `load_scripts` took. A whole-table copy per frame is
@@ -2092,10 +2096,12 @@ impl Server {
                 let Some(sim) = c.sim.as_mut() else {
                     continue;
                 };
-                if s.player {
-                    sim.become_player(s.origin, s.yaw_deg, cmd_angles);
-                } else {
-                    sim.become_spectator(s.origin, s.yaw_deg, cmd_angles);
+                match s.mode {
+                    SpawnMode::Player => sim.become_player(s.origin, s.yaw_deg, cmd_angles),
+                    SpawnMode::Spectator => sim.become_spectator(s.origin, s.yaw_deg, cmd_angles),
+                    SpawnMode::Intermission => {
+                        sim.become_intermission(s.origin, s.yaw_deg, cmd_angles)
+                    }
                 }
             }
             // The machine's own switches first: `pickup` writes `ps.weapon`
@@ -2168,10 +2174,15 @@ impl Server {
             }
             for (slot, c) in self.clients.iter_mut().enumerate() {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-                    let v = rt.client_vitals(slot);
-                    sim.health = v.health;
-                    sim.max_health = v.max_health;
-                    sim.dead = v.dead;
+                    // `ClientEndFrame`'s intermission arm never copies
+                    // `ent->health` into the playerstate, so the camera keeps
+                    // the zero its own spawn left (map-cycle doc, 6.2).
+                    if sim.pm_type != crate::spectate::PmType::Intermission {
+                        let v = rt.client_vitals(slot);
+                        sim.health = v.health;
+                        sim.max_health = v.max_health;
+                        sim.dead = v.dead;
+                    }
                     sim.end_frame(self.sv_time_ms);
                 }
             }
@@ -2183,6 +2194,28 @@ impl Server {
         // than send, and this is where the queue reaches the netchan.
         for (slot, cmd) in client_commands {
             self.send_server_command(slot, &cmd);
+        }
+        // `G_RunFrame`'s inlined drain (map-cycle doc, 6.3): a frame that
+        // moved a score pushes the scoreboard to every client in
+        // intermission, and no frame pushes one otherwise. The map-change
+        // capture carries no `b` its probe did not ask for, so a timer here
+        // would be a command retail never sends.
+        if ranks_dirty {
+            let watching: Vec<usize> = self
+                .clients
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| {
+                    c.as_ref()
+                        .and_then(|c| c.sim.as_ref())
+                        .is_some_and(|s| s.pm_type == crate::spectate::PmType::Intermission)
+                })
+                .map(|(slot, _)| slot)
+                .collect();
+            for slot in watching {
+                let text = self.scoreboard();
+                self.send_server_command(slot, &text);
+            }
         }
 
         // Every entity built once, then culled and written per client.
@@ -2389,14 +2422,10 @@ impl Server {
             .enumerate()
             .filter_map(|(i, c)| {
                 let sim = c.as_ref()?.sim.as_ref()?;
-                // A spectator is not a thing in the world: retail never links
-                // one, so nobody is sent an entity for it. Without this a
-                // player's crosshair names a spectator flying overhead. A dead
-                // player is hidden the same way: `ClientEndFrame` sets
-                // `SVF_NOCLIENT` on it every frame until it respawns, and the
-                // corpse in the body queue is what the others see (combat
-                // doc, 5.4).
-                if sim.pm_type != crate::spectate::PmType::Spectator && !sim.dead {
+                // A spectator, an intermission camera and a dead player are
+                // each unlinked or `SVF_NOCLIENT`, so nobody is sent an
+                // entity for one ([`crate::spectate::ClientSim::linked`]).
+                if sim.linked() {
                     Some((
                         i as u32,
                         sim.to_entity(self.proto, i, c.as_ref()?.last_processed_st),
@@ -3295,6 +3324,21 @@ mod tests {
         let cmds = server_commands(&mut nc, &out[0].1, &huff);
         assert_eq!(cmds.len(), 1);
         assert!(cmds[0].starts_with("b 1 0 0 0 0 0 0 0"), "{:?}", cmds[0]);
+    }
+
+    /// The scoreboard's tokens 2 and 3 are the two team scores, axis
+    /// before allies, and `setTeamScore` mirrors each into configstring 5
+    /// and 6 (map-cycle doc, 6.3).
+    #[test]
+    fn the_scoreboard_carries_the_team_scores_axis_first() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.script = Some(crate::game::script::ScriptRuntime::for_test(
+            "main() { setTeamScore(\"axis\", 3); setTeamScore(\"allies\", -9999); }",
+        ));
+        assert_eq!(sv.scoreboard(), "b 0 3 -9999");
+        let cs = sv.script.as_ref().unwrap().configstrings();
+        assert_eq!((cs[5].as_str(), cs[6].as_str()), ("3", "-9999"));
     }
 
     fn count_replies(sv: &mut Server, to: SocketAddr) -> usize {

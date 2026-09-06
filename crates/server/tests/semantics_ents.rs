@@ -370,8 +370,17 @@ fn run_persist_probe(name: &str, rotation: Option<&str>) -> Vec<String> {
     sv.load_scripts(Rc::new(fs))
         .unwrap_or_else(|e| panic!("load mp_pavlov on {name}: {e:#}"));
 
-    let mut out: Vec<String> = sv.script_log().to_vec();
-    let mut seen = out.len();
+    // `run_probe.sh` greps `games_mp.log` for `PROBE ` lines, so the retail
+    // side of this comparison carries none of the engine's own log lines and
+    // ours must not either: `ExitLevel` writes one (map-cycle doc, section 2).
+    let probe_lines = |log: &[String]| -> Vec<String> {
+        log.iter()
+            .filter(|l| l.starts_with("PROBE "))
+            .cloned()
+            .collect()
+    };
+    let mut out: Vec<String> = probe_lines(sv.script_log());
+    let mut seen = sv.script_log().len();
     let mut id = sv.server_id();
     for _ in 0..300 {
         now += std::time::Duration::from_millis(50);
@@ -381,7 +390,7 @@ fn run_persist_probe(name: &str, rotation: Option<&str>) -> Vec<String> {
             seen = 0;
         }
         let log = sv.script_log();
-        out.extend(log[seen.min(log.len())..].iter().cloned());
+        out.extend(probe_lines(&log[seen.min(log.len())..]));
         seen = log.len();
         if out.iter().any(|l| l.starts_with("PROBE after_pass")) {
             break;
