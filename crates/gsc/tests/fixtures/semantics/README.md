@@ -151,7 +151,10 @@ map -- and a cvar, not `game[]`, is what tells the two passes apart, since
 `game[]` is the thing under test and a guard that did not survive would put
 the server in a reload loop. All three are skipped in `semantics_ab.rs`'s
 `KNOWN_GAPS_OUT_OF_SCOPE`: what they measure is an engine restarting a map,
-which the VM in this crate has no host for.
+which the VM in this crate has no host for. Move them to
+`RUN_IN_SERVER_CRATE` once the server can restart a level -- the
+measurement is reproducible from that point on, and until it happens the
+skip is covering a gap rather than an out-of-scope question.
 
 `probe_self` asks whether a call written without a receiver keeps the
 caller's `self`. It does, through a plain call, a `[[f]]()` call and a

@@ -1,15 +1,14 @@
-# Retail CoD 1.1d dedicated server across a map end and a round restart.
+# Retail CoD 1.1d dedicated server across an S&D round restart.
 # map mp_carentan, gametype sd, joined axis, weapon kar98k_mp, role roundrestart-target
 # dedicated 1, sv_maxclients 8, sv_pure 0, stock scr_* defaults but for the
-# limit cvars the recipe sets. mapchange, one probe:
-#   tools/run_server.sh mp_carentan +set g_gametype dm +set scr_dm_timelimit 1 \
-#     +set sv_mapRotation "gametype dm map mp_carentan map mp_brecourt"
-#   --net-probe <ip:port> --probe-team allies --save-mapchange --probe-secs 150
-# roundrestart, two probes on opposite teams, the target started first:
+# limit cvars the recipe sets. Two probes on opposite teams, target first:
 #   tools/run_server.sh mp_carentan +set g_gametype sd +set scr_sd_roundlength 1 \
 #     +set scr_friendlyfire 1
-#   --probe-team axis --probe-target --save-roundrestart --probe-secs 200
-#   --probe-team allies --save-roundrestart --probe-secs 160
+#   --net-probe <ip:port> --probe-team axis --probe-target --save-roundrestart \
+#     --probe-secs 200
+#   --net-probe <ip:port> --probe-team allies --save-roundrestart --probe-secs 160
+# The probe sends `score` every 2 s, and retail sends the `b` scoreboard only
+# in answer to one, so every `b` line here was asked for, not pushed.
 # One !gamestate per gamestate, one !cmd per serverCommand with its reliable
 # sequence, one !oob per connectionless packet, and one !trace per snapshot
 # whose watched fields moved plus one a second so a settled stretch still
@@ -19,17 +18,17 @@ role roundrestart-target
 !observed gamestates=1 commands=168 oob=0 traced=197 intermission_at_ms=none first_snapshot_after_gamestate_ms=335
 !gamestate ms=295 serverId=16 messageNum=1 configstrings=273 mapname=mp_carentan
 !cmd ms=335 seq=1 text=f "MPSCRIPT_CONNECTEDvcod^7"
-!trace ms=335 serverTime=24950 pm_type=4 eFlags=24 health=0 damageEvent=0 weapon=0 ammoclip=- eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=384.0,-624.0,296.0
 !cmd ms=335 seq=2 text=v g_scriptMainMenu "team_americangerman"
 !cmd ms=335 seq=3 text=v scr_showweapontab "0"
 !cmd ms=335 seq=4 text=t 0
 !cmd ms=335 seq=5 text=v cg_objectiveText "SD_OBJ_SPECTATOR_ALLIESATTACKING"
+!trace ms=335 serverTime=24950 pm_type=4 eFlags=24 health=0 damageEvent=0 weapon=0 ammoclip=- eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=384.0,-624.0,296.0
 !cmd ms=385 seq=6 text=v scr_showweapontab "1"
 !cmd ms=385 seq=7 text=v g_scriptMainMenu "weapon_german"
 !cmd ms=385 seq=8 text=t 2
-!trace ms=434 serverTime=25050 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=864.0,2816.0,-31.9
 !cmd ms=434 seq=9 text=v cg_objectiveText "SD_OBJ_DEFENDERS"
 !cmd ms=434 seq=10 text=f "MPSCRIPT_JOINED_AXISvcod^7"
+!trace ms=434 serverTime=25050 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=864.0,2816.0,-31.9
 !trace ms=1441 serverTime=26050 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=864.0,2816.0,-31.9
 !trace ms=2488 serverTime=27100 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=864.0,2816.0,-31.9
 !cmd ms=3444 seq=11 text=b 1 0 0 0 0 1 0 0
@@ -48,7 +47,6 @@ role roundrestart-target
 !trace ms=10681 serverTime=35300 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=864.0,2816.0,-31.9
 !cmd ms=11492 seq=17 text=b 2 0 0 0 0 1 0 0 1 0 3 0 0
 !trace ms=11689 serverTime=36300 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=864.0,2816.0,-31.9
-!trace ms=12145 serverTime=37050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=696.0,3152.0,-23.9
 !cmd ms=12145 seq=18 text=d 13 36700
 !cmd ms=12145 seq=19 text=d 12 0 16500 1 0.7 0.85 1 0
 !cmd ms=12145 seq=20 text=d 3 n\ambient_mp_carentan\t\36700
@@ -57,6 +55,7 @@ role roundrestart-target
 !cmd ms=12145 seq=23 text=v scr_showweapontab "1"
 !cmd ms=12145 seq=24 text=v g_scriptMainMenu "weapon_german"
 !cmd ms=12145 seq=25 text=v cg_objectiveText "SD_OBJ_DEFENDERS"
+!trace ms=12145 serverTime=37050 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=696.0,3152.0,-23.9
 !trace ms=13185 serverTime=38100 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=696.0,3152.0,-23.9
 !cmd ms=13478 seq=26 text=b 2 0 0 0 0 1 0 0 1 0 0 0 0
 !cmd ms=13837 seq=27 text=d 528 german_move_in
@@ -75,18 +74,17 @@ role roundrestart-target
 !trace ms=21391 serverTime=46300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=696.0,3152.0,-23.9
 !cmd ms=21544 seq=33 text=b 2 0 0 0 0 1 0 0 1 0 3 0 0
 !trace ms=22392 serverTime=47300 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=696.0,3152.0,-23.9
-!trace ms=23430 serverTime=48350 pm_type=6 eFlags=24 health=0 damageEvent=0 weapon=0 ammoclip=9:8,23:3 eventSequence=2 events=189,155,0,0 viewangles=0.0,0.0,0.0 origin=696.0,3152.0,-23.9
 !cmd ms=23430 seq=34 text=d 6 1
 !cmd ms=23430 seq=35 text=d 530 MP_announcer_allies_win
 !cmd ms=23430 seq=36 text=s 6
+!trace ms=23430 serverTime=48350 pm_type=6 eFlags=24 health=0 damageEvent=0 weapon=0 ammoclip=9:8,23:3 eventSequence=2 events=189,155,0,0 viewangles=0.0,0.0,0.0 origin=696.0,3152.0,-23.9
 !trace ms=24430 serverTime=49350 pm_type=6 eFlags=24 health=0 damageEvent=0 weapon=0 ammoclip=9:8,23:3 eventSequence=2 events=189,155,0,0 viewangles=0.0,0.0,0.0 origin=696.0,3152.0,-24.0
-!trace ms=25436 serverTime=50350 pm_type=4 eFlags=16 health=0 damageEvent=0 weapon=0 ammoclip=- eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=696.0,3152.0,36.0
 !cmd ms=25436 seq=37 text=v cg_objectiveText "SD_OBJ_SPECTATOR_ALLIESATTACKING"
+!trace ms=25436 serverTime=50350 pm_type=4 eFlags=16 health=0 damageEvent=0 weapon=0 ammoclip=- eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=696.0,3152.0,36.0
 !cmd ms=25532 seq=38 text=b 2 0 1 1 0 0 0 0 0 -1 0 1 1
 !trace ms=26441 serverTime=51350 pm_type=4 eFlags=16 health=0 damageEvent=0 weapon=0 ammoclip=- eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=696.0,3152.0,36.0
 !trace ms=27493 serverTime=52400 pm_type=4 eFlags=16 health=0 damageEvent=0 weapon=0 ammoclip=- eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=696.0,3152.0,36.0
 !cmd ms=27526 seq=39 text=b 2 0 1 1 0 1 0 0 0 -1 0 1 1
-!trace ms=28607 serverTime=53800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=424.0,3168.0,-23.9
 !cmd ms=28607 seq=40 text=d 13 53350
 !cmd ms=28607 seq=41 text=d 12 0 16500 1 0.7 0.85 1 0
 !cmd ms=28607 seq=42 text=d 3 n\ambient_mp_carentan\t\53350
@@ -95,6 +93,7 @@ role roundrestart-target
 !cmd ms=28607 seq=45 text=v scr_showweapontab "1"
 !cmd ms=28607 seq=46 text=v g_scriptMainMenu "weapon_german"
 !cmd ms=28607 seq=47 text=v cg_objectiveText "SD_OBJ_DEFENDERS"
+!trace ms=28607 serverTime=53800 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=424.0,3168.0,-23.9
 !cmd ms=29546 seq=48 text=b 2 0 1 1 0 0 0 0 0 -1 3 1 0
 !trace ms=29631 serverTime=54850 pm_type=0 eFlags=24 health=100 damageEvent=0 weapon=9 ammoclip=7:5,9:8,23:3 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=424.0,3168.0,-23.9
 !cmd ms=30178 seq=49 text=s 4

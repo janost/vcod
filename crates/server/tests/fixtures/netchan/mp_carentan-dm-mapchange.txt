@@ -1,15 +1,12 @@
-# Retail CoD 1.1d dedicated server across a map end and a round restart.
+# Retail CoD 1.1d dedicated server across a map end and the rotation after it.
 # map mp_carentan, gametype dm, joined allies, weapon m1carbine_mp, role mapchange
 # dedicated 1, sv_maxclients 8, sv_pure 0, stock scr_* defaults but for the
-# limit cvars the recipe sets. mapchange, one probe:
+# limit cvars the recipe sets. One probe:
 #   tools/run_server.sh mp_carentan +set g_gametype dm +set scr_dm_timelimit 1 \
 #     +set sv_mapRotation "gametype dm map mp_carentan map mp_brecourt"
 #   --net-probe <ip:port> --probe-team allies --save-mapchange --probe-secs 150
-# roundrestart, two probes on opposite teams, the target started first:
-#   tools/run_server.sh mp_carentan +set g_gametype sd +set scr_sd_roundlength 1 \
-#     +set scr_friendlyfire 1
-#   --probe-team axis --probe-target --save-roundrestart --probe-secs 200
-#   --probe-team allies --save-roundrestart --probe-secs 160
+# The probe sends `score` every 2 s, and retail sends the `b` scoreboard only
+# in answer to one, so every `b` line here was asked for, not pushed.
 # One !gamestate per gamestate, one !cmd per serverCommand with its reliable
 # sequence, one !oob per connectionless packet, and one !trace per snapshot
 # whose watched fields moved plus one a second so a settled stretch still
@@ -19,17 +16,17 @@ role mapchange
 !observed gamestates=2 commands=115 oob=1 traced=149 intermission_at_ms=40883 first_snapshot_after_gamestate_ms=122182
 !gamestate ms=241 serverId=16 messageNum=1 configstrings=246 mapname=mp_carentan
 !cmd ms=281 seq=1 text=b 1 0 0 0 0 -1 0 2
-!trace ms=281 serverTime=19450 pm_type=4 eFlags=24 health=0 damageEvent=0 weapon=0 ammoclip=- eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=384.0,-624.0,184.0
 !cmd ms=281 seq=2 text=f "MPSCRIPT_CONNECTEDvcod^7"
 !cmd ms=281 seq=3 text=v g_scriptMainMenu "team_americangerman"
 !cmd ms=281 seq=4 text=v scr_showweapontab "0"
 !cmd ms=281 seq=5 text=t 0
 !cmd ms=281 seq=6 text=v cg_objectiveText "DM_KILL_OTHER_PLAYERS"
+!trace ms=281 serverTime=19450 pm_type=4 eFlags=24 health=0 damageEvent=0 weapon=0 ammoclip=- eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=384.0,-624.0,184.0
 !cmd ms=330 seq=7 text=v scr_showweapontab "1"
 !cmd ms=330 seq=8 text=v g_scriptMainMenu "weapon_american"
 !cmd ms=330 seq=9 text=t 1
-!trace ms=395 serverTime=19550 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=1184.0,1296.0,-7.9
 !cmd ms=395 seq=10 text=v cg_objectiveText "DM_KILL_OTHER_PLAYERS"
+!trace ms=395 serverTime=19550 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=1184.0,1296.0,-7.9
 !trace ms=1442 serverTime=20600 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=1184.0,1296.0,-7.9
 !cmd ms=2046 seq=11 text=b 1 0 0 0 0 3 0 0
 !trace ms=2493 serverTime=21650 pm_type=0 eFlags=16 health=100 damageEvent=0 weapon=12 ammoclip=3:7,6:3,10:15 eventSequence=0 events=0,0,0,0 viewangles=0.0,0.0,0.0 origin=1184.0,1296.0,-7.9

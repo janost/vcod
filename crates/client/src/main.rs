@@ -142,7 +142,9 @@ struct Args {
     /// gamestate with it) and one trace line per snapshot that moved. Writes
     /// crates/server/tests/fixtures/netchan/<map>-<gametype>-mapchange.txt,
     /// named for the map the run started on. Give it --probe-secs enough to
-    /// span the limit, the intermission and the next map's load.
+    /// span the limit, the intermission and the next map's load. It sends
+    /// `score` every 2 s, since retail answers the `b` scoreboard and never
+    /// pushes one: every `b` in that fixture is an answer to this probe.
     #[arg(long)]
     save_mapchange: bool,
     /// The same recording across a round restart instead of a map change, as

@@ -4142,11 +4142,14 @@ impl HitProbe {
 /// where `role` is the script's own prefix and the half: `hit-shooter`,
 /// `grenade-target` and so on. Both halves carry the same header keys, so a
 /// gate reads either the same way; `body` is the role's own section.
+#[allow(clippy::too_many_arguments)]
 fn write_hit_fixture(
     role: &str,
     configstrings: &[String],
     join: &JoinProbe,
     taken: &str,
+    // The target half's own first-kill delay, which is a parameter of the run.
+    first_kill: Duration,
     notes: &[String],
     body: &str,
 ) -> anyhow::Result<()> {
@@ -4167,7 +4170,7 @@ fn write_hit_fixture(
     out.push_str("# the server: a target that stands still and a shooter that walks up to it.\n");
     out.push_str(&format!(
         "# The target kills itself with the `kill` client command {} s in and every {} s\n",
-        TARGET_KILL_AT.as_secs(),
+        first_kill.as_secs(),
         TARGET_KILL_PERIOD.as_secs()
     ));
     out.push_str("# after, so the death, the corpse, the obituary and the respawn are captured\n");
@@ -4261,7 +4264,15 @@ and carries nothing about what a shot does to a player."
         target.elapsed_ms(now) / 1000
     );
     let role = format!("{}-target", script.prefix());
-    write_hit_fixture(&role, configstrings, join, &taken, &notes, &body)
+    write_hit_fixture(
+        &role,
+        configstrings,
+        join,
+        &taken,
+        target.kill_at,
+        &notes,
+        &body,
+    )
 }
 
 /// The shooter's half: the trace with what it could see of the target, the
@@ -4344,7 +4355,17 @@ traced={} throws={} missile_samples={} events={} obituaries={} corpse_edges={}\n
         hit.elapsed_ms(now) / 1000
     );
     let role = format!("{}-shooter", hit.script.prefix());
-    write_hit_fixture(&role, configstrings, join, &taken, &notes, &body)
+    // The shooter never runs beside a target on a shortened delay: the mode
+    // that shortens it writes the netchan fixture instead of this one.
+    write_hit_fixture(
+        &role,
+        configstrings,
+        join,
+        &taken,
+        TARGET_KILL_AT,
+        &notes,
+        &body,
+    )
 }
 
 /// Directory the map-cycle captures land in. They pin what the wire does
@@ -4544,34 +4565,57 @@ fn write_mapchange_fixture(
     let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
     let gametype = net::info_value_for_key(serverinfo, "g_gametype").unwrap_or("?");
 
+    let mapchange = role == "mapchange";
+
     let mut out = String::new();
-    out.push_str("# Retail CoD 1.1d dedicated server across a map end and a round restart.\n");
+    out.push_str(if mapchange {
+        "# Retail CoD 1.1d dedicated server across a map end and the rotation after it.\n"
+    } else {
+        "# Retail CoD 1.1d dedicated server across an S&D round restart.\n"
+    });
     out.push_str(&format!(
         "# map {map}, gametype {gametype}, joined {}, weapon {}, role {role}\n",
         join.team, join.weapon
     ));
     out.push_str("# dedicated 1, sv_maxclients 8, sv_pure 0, stock scr_* defaults but for the\n");
-    out.push_str("# limit cvars the recipe sets. mapchange, one probe:\n");
-    out.push_str(
-        "#   tools/run_server.sh mp_carentan +set g_gametype dm +set scr_dm_timelimit 1 \\\n",
-    );
-    out.push_str("#     +set sv_mapRotation \"gametype dm map mp_carentan map mp_brecourt\"\n");
-    out.push_str(
-        "#   --net-probe <ip:port> --probe-team allies --save-mapchange --probe-secs 150\n",
-    );
-    out.push_str("# roundrestart, two probes on opposite teams, the target started first:\n");
-    out.push_str(
-        "#   tools/run_server.sh mp_carentan +set g_gametype sd +set scr_sd_roundlength 1 \\\n",
-    );
-    out.push_str("#     +set scr_friendlyfire 1\n");
-    out.push_str("#   --probe-team axis --probe-target --save-roundrestart --probe-secs 200\n");
-    out.push_str("#   --probe-team allies --save-roundrestart --probe-secs 160\n");
+    if mapchange {
+        out.push_str("# limit cvars the recipe sets. One probe:\n");
+        out.push_str(
+            "#   tools/run_server.sh mp_carentan +set g_gametype dm +set scr_dm_timelimit 1 \\\n",
+        );
+        out.push_str("#     +set sv_mapRotation \"gametype dm map mp_carentan map mp_brecourt\"\n");
+        out.push_str(
+            "#   --net-probe <ip:port> --probe-team allies --save-mapchange --probe-secs 150\n",
+        );
+    } else {
+        out.push_str(
+            "# limit cvars the recipe sets. Two probes on opposite teams, target first:\n",
+        );
+        out.push_str(
+            "#   tools/run_server.sh mp_carentan +set g_gametype sd +set scr_sd_roundlength 1 \\\n",
+        );
+        out.push_str("#     +set scr_friendlyfire 1\n");
+        out.push_str(
+            "#   --net-probe <ip:port> --probe-team axis --probe-target --save-roundrestart \\\n",
+        );
+        out.push_str("#     --probe-secs 200\n");
+        out.push_str(
+            "#   --net-probe <ip:port> --probe-team allies --save-roundrestart --probe-secs 160\n",
+        );
+    }
+    // Retail pushes no scoreboard on its own, so a `b` line here is never
+    // evidence that it does; whether the file has any is whether its role asked.
+    out.push_str(if role == "roundrestart-shooter" {
+        "# This half never sends `score`, and retail sends the `b` scoreboard only in\n# answer to one, so this file carries no `b` line at all.\n"
+    } else {
+        "# The probe sends `score` every 2 s, and retail sends the `b` scoreboard only\n# in answer to one, so every `b` line here was asked for, not pushed.\n"
+    });
     out.push_str("# One !gamestate per gamestate, one !cmd per serverCommand with its reliable\n");
     out.push_str("# sequence, one !oob per connectionless packet, and one !trace per snapshot\n");
     out.push_str("# whose watched fields moved plus one a second so a settled stretch still\n");
     out.push_str("# carries a timeline. ms is since the capture started; serverTime is the\n");
     out.push_str("# server's own clock. ammoclip is the non-zero entries, as index:value.\n");
-    if probe.gamestates.len() < 2 && role == "mapchange" {
+    if probe.gamestates.len() < 2 && mapchange {
         out.push_str(
             "# BROKEN only one gamestate: the run ended before the rotation loaded the \
 second map, so this file measures no map change.\n",
@@ -4599,11 +4643,15 @@ first_snapshot_after_gamestate_ms={}\n",
     ));
 
     // Every line carries its own `ms`, so one merge by time reads as the wire
-    // did rather than as four grouped blocks.
-    let mut lines: Vec<(u128, usize, String)> = Vec::new();
+    // did rather than as four grouped blocks. A pump drains its events and its
+    // commands before it samples the snapshot, so lines sharing an `ms` are
+    // ranked by category rather than by their position in their own vector.
+    let (gamestate, cmd, oob, trace) = (0u8, 1u8, 2u8, 3u8);
+    let mut lines: Vec<(u128, u8, usize, String)> = Vec::new();
     for (i, (ms, id, num, set, map)) in probe.gamestates.iter().enumerate() {
         lines.push((
             *ms,
+            gamestate,
             i,
             format!(
                 "!gamestate ms={ms} serverId={id} messageNum={num} configstrings={set} mapname={map}\n"
@@ -4611,20 +4659,21 @@ first_snapshot_after_gamestate_ms={}\n",
         ));
     }
     for (i, (ms, seq, text)) in probe.commands.iter().enumerate() {
-        lines.push((*ms, i, format!("!cmd ms={ms} seq={seq} text={text}\n")));
+        lines.push((*ms, cmd, i, format!("!cmd ms={ms} seq={seq} text={text}\n")));
     }
     for (i, (ms, text)) in probe.oob.iter().enumerate() {
         lines.push((
             *ms,
+            oob,
             i,
             format!("!oob ms={ms} text={}\n", text.replace('\n', "\\n")),
         ));
     }
     for (i, s) in probe.trace.iter().enumerate() {
-        lines.push((s.elapsed_ms, i, s.line()));
+        lines.push((s.elapsed_ms, trace, i, s.line()));
     }
-    lines.sort_by_key(|(ms, i, _)| (*ms, *i));
-    for (_, _, l) in lines {
+    lines.sort_by_key(|(ms, rank, i, _)| (*ms, *rank, *i));
+    for (_, _, _, l) in lines {
         out.push_str(&l);
     }
 
