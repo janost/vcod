@@ -14,8 +14,11 @@ use vcod_common::net::msg::{self, UserCmd, NULL_USERCMD};
 pub(crate) const SHOOT_RANGE: f32 = 1500.0;
 /// A frag goes at a target this close and no further.
 const GRENADE_RANGE: f32 = 600.0;
-/// Ticks a dead bot waits before pressing use.
+/// Ticks a dead bot waits before its first use press.
 const RESPAWN_DELAY: u32 = 30;
+/// Ticks between use-press retries, and the press length: two ticks down,
+/// then 1 s of release, repeated until the script's poll catches one.
+const RESPAWN_RETRY: u32 = 20;
 /// The bot sends one cmd per tick; `sv_fps 20`.
 const TICK_MS: i32 = 50;
 
@@ -186,7 +189,15 @@ impl Bot {
         }
         if view.dead {
             self.respawn_ticks += 1;
-            if (RESPAWN_DELAY..RESPAWN_DELAY + 2).contains(&self.respawn_ticks) {
+            // Whatever the death interrupted, the new life starts clean: no
+            // throw resumes on respawn.
+            self.stage = Stage::Wander;
+            // The stock death flow polls the use key only after its own
+            // `wait 2` (dm.gsc, `waitRespawnButton`), so a one-shot press
+            // lands before any poll reads it; retry every second, the way
+            // the probe's target does.
+            let since_death = self.respawn_ticks.saturating_sub(RESPAWN_DELAY);
+            if self.respawn_ticks >= RESPAWN_DELAY && since_death % RESPAWN_RETRY < 2 {
                 cmd.buttons = msg::BUTTON_USE;
             }
             return cmd;
