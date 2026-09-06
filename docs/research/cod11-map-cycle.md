@@ -22,8 +22,23 @@ mixed and each claim says which one it rests on:
   a non-PIC `EXEC` whose first LOAD segment sits at `0x08048000` with file
   offset 0, so a virtual address is the file offset plus `0x8048000` and
   `objdump -d` over an address range reads straight. It carries no symbol
-  table, so every engine function named below is my name for it and is marked
-  as such the first time it appears.
+  table, so **no engine name below is a symbol**. Three are established
+  against these addresses elsewhere in the repo and are used unqualified:
+  `SV_DropClient` (`0x8085cf4`), `SV_ClientEnterWorld` (`0x80877d8`) and
+  `SV_ExecuteClientMessage` (`0x80872ec`), all three in
+  `docs/protocol-1.1.md` and `tools/re/net-notes.md`. Every other engine name
+  below is the Q3 or RTCW name for what the bytes at that address do, my
+  label rather than a recovered one, whether or not the sentence using it
+  repeats "my name for": `SV_SpawnServer`, `SV_MapRestart_f`,
+  `SV_MapRotate_f`, `SV_Map_f`, `NextToken`, `SV_RestartGameProgs`,
+  `SV_InitGameProgs`, `SV_ShutdownGameProgs`, `SV_SetConfigstring`,
+  `SV_SendServerCommand`, `SV_SendClientGameState`, `SV_GentityNum`,
+  `SV_Frame`, `NET_OutOfBandPrint`, `CM_LoadMap`, `Hunk_Clear`, `COM_Parse`,
+  `Cbuf_ExecuteText`, `Cmd_AddCommand`, `Cvar_Get`, `Cvar_Set`,
+  `Cvar_VariableString`, `Cvar_VariableValue`, `Cvar_InfoString`,
+  `Com_Printf`, `Com_DPrintf`, `Q_strncpyz`, `VM_Call` and `va`.
+  UNVERIFIED: every name in that list. What each section rests on is the
+  address and what the instructions there do, both of which are cited.
 
 Claims that only restate an offset or a table another document already
 established cite that document instead of repeating the derivation.
@@ -87,9 +102,10 @@ latch therefore clears on every level and every restart, which is what makes
 the guard per-level rather than per-process.
 
 VERIFIED: `G_InitGame`'s fourth stack argument, `+0x14`, is the same
-`savePersist` value, and when it is non-zero the whole `gameCvarTable`
-registration loop and the gametype validity check are jumped over
-(`0x4fb87..0x4fc1a`).
+`savePersist` value, and the `test`/`jne` pair at `0x4fb87` targets `0x4fc1a`,
+which is past both the `gameCvarTable` registration loop and the gametype
+validity check. INFERRED, off that branch: a non-zero `savePersist` skips
+both.
 
 ### 1.1 As implemented
 
@@ -253,7 +269,8 @@ it, all of which are branch conditions. Later tasks and sections cite these as
     and `SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))` at
     `0x808a8e1`, each clearing its own bit of the modified-flags word at
     `0x834a0e8` (`0x808a8b6`, `0x808a8e6`), then the `0x800`-flagged cvar
-    range through `0x806fbec(0x8c, 0x40, 0x800)` at `0x808a8ff`.
+    range through `0x806fbec(0x8c, 0x40, 0x800)` at `0x808a8ff`; 3.2 says
+    what that one writes.
 25. `sv.state` takes 2 (`0x808a90b`), the heartbeat `0x8084bd0()` runs
     (`0x808a915`), `Cvar_Set("sv_serverRestarting", "0")` (`0x808a927`) and
     the closing banner `0x80d55c0` prints.
@@ -266,18 +283,48 @@ three calls to that function, at `0x8087447`, `0x80876b1` and `0x8087a1e`, all
 of them reached from `SV_ExecuteClientMessage` (`0x80872ec`) or the `donedl`
 handler.
 
-VERIFIED: at `0x808a8c9` and `0x808a8e1` the configstrings are written while
-`sv.state` still reads 1 (step 17) and `sv.restarting` reads 0, and
-`SV_SetConfigstring` (`0x8089bf0`) reaches its broadcast loop only when
-`sv.state == 2` or `sv.restarting != 0` (the test pair at `0x8089c6c` and
-`0x8089c75`). INFERRED, from those two: a map change sends nothing at all on
-the reliable stream, what every client at `CS_PRIMED` or above gets is the
-out-of-band `loadingnewmap` line of step 3, and the gamestate arrives only
-once that client's next message reaches the new server carrying the old
-serverId and `SV_ExecuteClientMessage` resends it (4.4), which makes the map
-change pull-shaped.
+VERIFIED: `SV_SpawnServer` writes configstrings 1 and 0 at `0x808a8c9` and
+`0x808a8e1`, its last write of `sv.state` ahead of both is the 1 of step 17,
+and it holds no write of `sv.restarting` at all. VERIFIED:
+`SV_SetConfigstring` (`0x8089bf0`) holds a `cmp sv.state, 2` at `0x8089c6c`
+and a `cmp sv.restarting, 0` at `0x8089c75` between its store of the new
+string and its per-client loop.
 
-### 3.2 As implemented
+INFERRED, off those two compares: the loop runs only when `sv.state` reads 2
+or `sv.restarting` is set, so neither of `SV_SpawnServer`'s two configstring
+writes reaches a client. INFERRED, from that and the negative above: a map
+change sends nothing at all on the reliable stream, what every client at
+`CS_PRIMED` or above gets is the out-of-band `loadingnewmap` line of step 3,
+and the gamestate arrives only once that client's next message reaches the new
+server carrying the old serverId and `SV_ExecuteClientMessage` resends it
+(4.4), which makes the map change pull-shaped.
+
+### 3.2 The `0x800` cvar range is configstrings 140..203 and 204..267
+
+VERIFIED: `0x806fbec`, the call of step 24, holds a walk of the cvar list
+headed at `0x834a0e0` with its next pointer at `+0x24`, a
+`test cvar->flags, 0x800` at `0x806fc05` and a call to
+`0x808b148(<start>, <count>, cvar->name, cvar->string)` at `0x806fc16`.
+VERIFIED: `0x808b148` holds a loop over configstrings `<start> + i` bounded by
+`i < <count>`, a `cmp` of the slot's first byte against 0 at `0x808b172`, a
+`SV_SetConfigstring(<start> + i, name)` at `0x808b17c`, a `strcasecmp` of the
+slot against `name` at `0x808b18b`, a `Com_Error` with
+`"SV_SetConfigValueForKey: overflow"` (`0x80d52e0`) at `0x808b1a6` and a
+`SV_SetConfigstring(<start> + <count> + i, value)` at `0x808b1be`.
+
+INFERRED, off those two compares and the error's address: a `0x800`-flagged
+cvar takes the first slot that is empty or already carries its name, its name
+goes in that slot and its value `<count>` slots higher, and a table with no
+free slot errors.
+
+VERIFIED: step 24 passes `<start>` `0x8c`, which is 140, and `<count>`
+`0x40`, which is 64. INFERRED, from those two numbers against the ranges
+`cod11-hud-protocol.md` and `cod11-server-handshake.md` record: this is the
+writer for the 140..203 cvar names and 204..267 values that both documents
+say they could not find in the game module. It is in the engine, not the game
+module, which is why neither found it.
+
+### 3.3 As implemented
 
 `crates/server/src/server.rs`'s `spawn_server` carries this list;
 `snap_flag_server_bit` is step 13, the `loadingnewmap` out-of-band is step 3,
@@ -324,7 +371,7 @@ numbered list. INFERRED: the ordering and every branch condition in it.
    `0x83b67d8..0x83b67e4` (`0x8083eb0`), then `svs.snapFlagServerBit ^= 4`,
    the byte at `0x83b67a8` (`0x8083eba`).
 5. The serverId, the same byte at `0x80e30c0`, takes
-   `(id & 0xf0) + ((id + 1) & 0xf)` (`0x8083ebb..0x8083ece`), and
+   `(id & 0xf0) + ((id + 1) & 0xf)` (`0x8083eb5..0x8083ece`), and
    `Cvar_Set("sv_serverid", va("%i", id))` follows (`0x8083ed3..0x8083eea`).
    INFERRED, against 3 step 16: a restart moves only the low nibble and a map
    change only the high one.
@@ -352,13 +399,16 @@ numbered list. INFERRED: the ordering and every branch condition in it.
 
 ### 4.1 `SV_RestartGameProgs`
 
-My name for `0x8089350`. VERIFIED: it calls `VM_Call(gvm, 1, 1)`, that is
-`G_ShutdownGame(restart = 1)` (`0x808935f`), and then
-`VM_Call(gvm, 0, svs.time, <seed>, 1, savePersist)`, that is
-`G_InitGame(levelTime, seed, restart = 1, savePersist)`
-(`0x80893ad..0x80893c4`). VERIFIED: it never frees the VM, where
-`SV_ShutdownGameProgs` does (3 step 5). VERIFIED: it also clears
-`client[+0x10a40]` for every client (`0x80893d1..0x80893fa`).
+My name for `0x8089350`. VERIFIED: it holds two `VM_Call`s,
+`VM_Call(gvm, 1, 1)` at `0x808935d..0x8089367`, which is
+`G_ShutdownGame(restart = 1)`, and
+`VM_Call(gvm, 0, svs.time, <seed>, 1, savePersist)` at
+`0x80893ad..0x80893c4`, which is
+`G_InitGame(levelTime, seed, restart = 1, savePersist)`. INFERRED, off their
+addresses: the shutdown runs first and the init second. VERIFIED: the function
+holds no call to `VM_Free`, where `SV_ShutdownGameProgs` does (3 step 5).
+VERIFIED: it also clears `client[+0x10a40]` for every client
+(`0x80893d1..0x80893fa`).
 
 VERIFIED: `G_InitGame`'s third argument, `+0x10`, is the `restart` flag, and
 its only use in the function is to skip `ClearRegisteredItems`
@@ -367,45 +417,54 @@ its only use in the function is to skip `ClearRegisteredItems`
 ### 4.2 The escalation, and why `map <samemap>` is a restart
 
 VERIFIED: `SV_Map_f` (`0x8083c68`, 5.3) holds a call to `SV_MapRestart_f` at
-`0x8083d96` and one to `SV_SpawnServer` at `0x8083da4`, and the compare that
-picks between them is `com_sv_running->integer` non-zero at `0x8083d77`
-followed by `strcasecmp` of the requested name against the `mapname` cvar's
-string at `0x8083d8a`. INFERRED, off those two branches: `map <currentmap>` is
-a restart and `map <othermap>` is a full spawn.
+`0x8083d96`, one to `SV_SpawnServer` at `0x8083da4`, a
+`cmp com_sv_running->integer, 0` at `0x8083d77` and a `strcasecmp` of the
+requested name against the `mapname` cvar's string at `0x8083d8a`, and both
+compares carry a jump to `0x8083da0`, the instruction ahead of the
+`SV_SpawnServer` call. INFERRED, off those two compares and their jumps:
+`map <currentmap>` on a running server is a restart and anything else is a
+full spawn.
 
 ### 4.3 Where the new systeminfo comes from
 
-VERIFIED: `SV_Frame`'s cvar flush at `0x808d090` writes
-`SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))` when the modified
-word at `0x834a0e8` has bit 2 set and
-`SV_SetConfigstring(1, Cvar_InfoString(CVAR_SYSTEMINFO))` when it has bit 3
-set, clearing each bit as it goes (`0x808d090..0x808d0dd`). VERIFIED:
-`SV_SetConfigstring` broadcasts when `sv.state == 2` or `sv.restarting != 0`
-(3.1). INFERRED, off step 5's `Cvar_Set` and that gate: the `d 1 ...` a client
-sees after `n` is this flush carrying the bumped `sv_serverid`, which is the
+VERIFIED: `SV_Frame`'s cvar flush at `0x808d090..0x808d0dd` holds a `test` of
+bit 2 of the modified word at `0x834a0e8` at `0x808d090` over a
+`SV_SetConfigstring(0, Cvar_InfoString(CVAR_SERVERINFO))` at `0x808d0a9` and
+an `and` clearing that bit at `0x808d0ae`, and a `test` of bit 3 at
+`0x808d0b8` over a `SV_SetConfigstring(1, Cvar_InfoString(CVAR_SYSTEMINFO))`
+at `0x808d0d1` and an `and` clearing it at `0x808d0d6`. INFERRED, off those
+two tests: bit 2 pushes configstring 0 and bit 3 configstring 1, once per
+frame in which the bit was set.
+
+VERIFIED: `SV_SetConfigstring`'s broadcast gate is the compare pair of 3.1.
+INFERRED, off step 5's `Cvar_Set` and that gate: the `d 1 ...` a client sees
+after `n` is this flush carrying the bumped `sv_serverid`, which is the
 mechanism behind the live measurement recorded in `docs/protocol-1.1.md`,
 "map_restart and sv_serverid".
 
 ### 4.4 `SV_ExecuteClientMessage`'s two nibble branches
 
-My name for `cod_lnxded` `0x80872ec`. VERIFIED: it compares the client's
-stored serverId at client offset `0x5a8f8` against the `sv_serverid` byte at
-`0x80e30c0` (`0x8087334..0x8087341`); equal takes the normal path, and so does
-a client whose `downloadName` byte at `0x10a64` is non-zero
-(`0x8087347..0x8087351`).
+My name for `cod_lnxded` `0x80872ec`. VERIFIED: the offsets, immediates,
+string addresses and call targets in the three paragraphs below, each read out
+of the instruction it sits in. INFERRED: the ordering in them and every
+"when", "unless" and "otherwise", which are branch conditions.
 
-VERIFIED: when the two `& 0xf0` high nibbles differ (`0x8087357..0x8087364`),
-the function resends the gamestate only when the client's
-`messageAcknowledge` (offset `0x10618`) is greater than its
-`gamestateMessageNum` (offset `0x1061c`), printing
-`"%s : dropped gamestate, resending\n"` (`0x80d4b00`) and calling
-`SV_SendClientGameState` (`0x8085eec`) at `0x8087447`; otherwise it returns
-without reading an op.
+It compares the client's stored serverId at client offset `0x5a8f8` against
+the `sv_serverid` byte at `0x80e30c0` (`0x8087334..0x8087341`); equal takes
+the normal path, and so does a client whose `downloadName` byte at `0x10a64`
+is non-zero (`0x8087347..0x8087351`).
 
-VERIFIED: when only the low nibble differs, the function returns unless the
-client's state word reads exactly 3 (`CS_PRIMED`); for a `CS_PRIMED` client it
-prints `"Going from CS_PRIMED to CS_ACTIVE for %s\n"` (`0x80d46a0`), sets the
-state word to 4, links `client->gentity` (offset `0x10a40`) to
+When the two `& 0xf0` high nibbles differ (`0x8087357..0x8087364`), the
+function resends the gamestate only when the client's `messageAcknowledge`
+(offset `0x10618`) is greater than its `gamestateMessageNum` (offset
+`0x1061c`), printing `"%s : dropped gamestate, resending\n"` (`0x80d4b00`)
+and calling `SV_SendClientGameState` (`0x8085eec`) at `0x8087447`; otherwise
+it returns without reading an op.
+
+When only the low nibble differs, the function returns unless the client's
+state word reads exactly 3 (`CS_PRIMED`); for a `CS_PRIMED` client it prints
+`"Going from CS_PRIMED to CS_ACTIVE for %s\n"` (`0x80d46a0`), sets the state
+word to 4, links `client->gentity` (offset `0x10a40`) to
 `SV_GentityNum(clientNum)`, writes -1 into `deltaMessage` (offset `0x10b04`)
 and `svs.time` into offset `0x10b14`, and calls `VM_Call(gvm, 3, clientNum)`,
 that is `ClientBegin` (`0x808736a..0x808740c`).
@@ -518,10 +577,13 @@ destructive token consumer and 5.2's keyword loop;
 
 ### 6.1 What arms it
 
-VERIFIED: `ClientEndFrame` (`0x40e98`) reads the `sessionstate` word at
-`client+0x20d0` and compares it against 3 at `0x40ed1`. INFERRED, off that
-compare: 3 takes the intermission arm (`cod11-gsc-object-model.md`, "What
-`ClientEndFrame` writes for a live client's own view").
+VERIFIED: `ClientEndFrame` (`0x40e98`) holds a `cmp client+0x20ec, 2` at
+`0x40ebe` whose `jne` targets `0x414ed`, the function's exit, and a
+`cmp client+0x20d0, 3` at `0x40ed1`. INFERRED, off those two compares and
+their addresses: a client that is not fully connected reaches none of the three arms,
+and for one that is, `sessionstate` 3 takes the intermission arm
+(`cod11-gsc-object-model.md`, "What `ClientEndFrame` writes for a live
+client's own view").
 
 VERIFIED: `Scr_SetClientField` maps the four legal `sessionstate` strings onto
 that word as `playing` 0, `dead` 1, `spectator` 2, `intermission` 3, comparing
@@ -564,27 +626,37 @@ move and its view is whatever the last pre-intermission frame left.
 
 ### 6.3 The scoreboard drain, and which team score is which
 
-VERIFIED: `G_RunFrame` carries an inlined drain at `0x50ae9..0x50b42`. It
-tests `level+0x20c` for non-zero, and when it is set walks every client index
-below `level+0x1e0`, calling `DeathmatchScoreboardMessage(&g_entities[i])` for
-each client whose `client+0x20ec` reads 2 and whose `ps.pm_type`
-(`client+0x4`) reads 5, then clears `level+0x20c`.
+VERIFIED: `G_RunFrame` carries an inlined drain at `0x50ae9..0x50b42` holding
+a `cmp level+0x20c, 0` at `0x50ae9`, a client loop bounded by `level+0x1e0` at
+`0x50af4`, a `cmp client+0x20ec, 2` at `0x50b0b`, a `cmp client+0x4, 5` at
+`0x50b14`, a call to `DeathmatchScoreboardMessage(&g_entities[i])` at
+`0x50b1e` and a store of 0 into `level+0x20c` at `0x50b3b`.
 
-INFERRED, off that `pm_type == 5` test against 6.2's store: the periodic
-scoreboard push is exactly the set of clients in intermission, and the
-`pm_type` written by the intermission arm is what selects them.
+INFERRED, off those three compares and the store's address: the loop runs only
+when `level+0x20c` is set, sends to each client that passes both compares, and
+clears the flag afterwards. INFERRED, off the `client+0x4` compare against
+6.2's store: `client+0x4` is `ps.pm_type`, the periodic scoreboard push is
+exactly the set of clients in intermission, and the `pm_type` the intermission
+arm writes is what selects them.
 
 VERIFIED: `level+0x20c` is set to 1 by `CalculateRanks` at `0x50cf5` and by
 the `setteamscore` builtin at `0x5ba7e`.
 
 VERIFIED: the `setteamscore` builtin (`0x5b9dc`, functions table row 88) reads
-a const string, rejects anything that is not `scr_const+0x4` or
-`scr_const+0x8` with `"Illegal team string '%s'. Must be allies, or axis."`
-(`0x77fc0`), and then writes `Scr_GetInt(1)` into `level+0x200` and
-configstring 6 for the first and into `level+0x1fc` and configstring 5 for the
-second (`0x5ba37..0x5ba79`, the `"%i"` format at `0x77fac`). VERIFIED:
-`GScr_LoadConsts` fills `scr_const+0x4` from `"allies"` (`0x75f41`) and
-`scr_const+0x8` from `"axis"` (`0x75f51`) at `0x58598` and `0x585c8`.
+a const string through `Scr_GetConstString(0)`, holds a `cmp` of it against
+`scr_const+0x4` at `0x5b9f2` and against `scr_const+0x8` at `0x5b9fb`, a
+`Scr_Error` with `"Illegal team string '%s'. Must be allies, or axis."`
+(`0x77fc0`) at `0x5ba22`, a `Scr_GetInt(1)` at `0x5ba2f`, a third `cmp`
+against `scr_const+0x4` at `0x5ba37`, and two store pairs: `level+0x200` with
+`trap_SetConfigstring(6, va("%i", n))` at `0x5ba40..0x5ba59`, and
+`level+0x1fc` with `trap_SetConfigstring(5, ...)` at `0x5ba60..0x5ba79`. The
+`"%i"` format is `0x77fac`. VERIFIED: `GScr_LoadConsts` fills `scr_const+0x4`
+from `"allies"` (`0x75f41`) and `scr_const+0x8` from `"axis"` (`0x75f51`) at
+`0x58598` and `0x585c8`.
+
+INFERRED, off the third `cmp` and the two jumps out of it: the `allies` arm
+takes the first store pair and the `axis` arm the second, and a string that is
+neither takes the error.
 
 INFERRED, from the two stores against the two consts: `level+0x1fc` is the
 **axis** score and `level+0x200` the **allies** score, and configstring 5
