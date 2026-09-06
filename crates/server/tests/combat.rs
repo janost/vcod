@@ -31,6 +31,8 @@ fn cfg() -> vcod_server::ServerConfig {
         gametype: "dm".into(),
         test_entities: 0,
         trace: false,
+        bots: 0,
+        bots_shoot: false,
     }
 }
 

@@ -872,6 +872,17 @@ impl ClientSim {
         }
     }
 
+    /// `ps.delta_angles`, what a bot's absolute cmd angles must subtract to
+    /// aim right after a spawn.
+    pub fn delta_angles(&self) -> [i32; 3] {
+        self.delta_angles
+    }
+
+    /// `ps.viewangles`, degrees, wire convention (pitch positive down).
+    pub fn view_angles(&self) -> [f32; 3] {
+        self.view_angles
+    }
+
     /// The point a snapshot is built from: the origin lifted by the current
     /// view height. `SV_BuildClientSnapshot` (0x808f288) adds the playerstate's
     /// view height to `origin[2]` before it looks the leaf up, so a client

@@ -26,6 +26,8 @@ fn server_with_entities(test_entities: usize) -> Server {
             gametype: "dm".into(),
             test_entities,
             trace: false,
+            bots: 0,
+            bots_shoot: false,
         },
         Instant::now(),
     )
