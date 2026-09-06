@@ -2787,6 +2787,16 @@ on the same frame. Pinned by
 `a_player_who_lost_its_last_grenade_can_switch_back` (pmove) and
 `a_client_out_of_grenades_gets_its_rifle_back` (`two_clients.rs`).
 
+VERIFIED, `crates/common/src/pmove/weapon.rs`: **a climber holding nothing
+raised and holstered a weapon once per `raiseTime` for the whole climb.**
+1.8's pickup half forces the new weapon to 0 when `pm_flags & 0x10` is set
+(dll 0x300107c0); vcod's `pickup` read only the held bits. The clause was
+unreachable until the fix above, since weapon 0 returned at the def guard, and
+with it in place a ladder plus a non-zero cmd byte raises a weapon that the
+next frame's ladder clause in `begin_change` puts straight back away. vcod was
+wrong; retail is right. Fixed: the pickup forces 0 on a ladder, pinned by
+`a_climber_with_nothing_in_hand_raises_nothing`.
+
 VERIFIED, `crates/common/src/pmove.rs`: **a walker's view twitched vertically
 from the moment it left its spawn's elevation.** `step_slide_move` was Q3's:
 it returned as soon as the slide move went through unobstructed, and its

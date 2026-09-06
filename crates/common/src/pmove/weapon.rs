@@ -367,11 +367,14 @@ pub fn pm_weapon(
         return;
     }
     let Some(def) = weapon_def(weapons, ps.weapon) else {
-        // Weapon 0 has no def to read, so no melee, no reload and no shot;
-        // the switch path still runs, which is what lets a player whose last
+        // Any index the table cannot resolve, which with the stock table is
+        // only weapon 0: nothing to read a melee, a reload or a shot from.
+        // The switch path still runs, which is what lets a player whose last
         // grenade `BG_TakePlayerWeapon` took ask for another weapon and get
         // it (section 1.8, and 1.12 for the three stops that really do end
-        // `PM_Weapon`).
+        // `PM_Weapon`). Weapon 0 takes `putaway`'s short branch, so the
+        // pickup lands on this frame; a held index with no def would take the
+        // ordinary path and write `WEAP_DROP` with a drop time of 0.
         if begin_change(ps, input, None, events)
             && ps.weaponstate == WEAPON_DROPPING
             && ps.weapon_time_ms == 0
@@ -643,12 +646,18 @@ fn putaway(
 
 /// The pickup half of section 1.8. Retail re-reads `cmd.weapon` here; vcod
 /// raises the weapon the putaway latched, so the putaway a jump forces comes
-/// back to the same weapon even when the caller threads no weapon byte.
+/// back to the same weapon even when the caller threads no weapon byte. The
+/// ladder forces 0 the same way retail's `pm_flags & 0x10` does: without it
+/// this raises a weapon the next frame's ladder clause holsters again.
 fn pickup(ps: &mut PlayerState, weapons: &[Option<WeaponDef>], events: &mut Vec<PmEvent>) {
     let target = ps.pending_weapon;
     ps.pending_weapon = 0;
     let old = ps.weapon;
-    ps.weapon = if holds(ps, target) { target } else { 0 };
+    ps.weapon = if ps.on_ladder || !holds(ps, target) {
+        0
+    } else {
+        target
+    };
     // The two arms are exclusive and each writes `weapAnim` once: the same
     // weapon back in hand goes idle, a different one raises. The capture's
     // `to_frag` counts the toggle flips that prove it (section 1.14).
@@ -1336,6 +1345,25 @@ mod tests {
             ),
             vec![EV_FIRE_WEAPON]
         );
+    }
+
+    /// The ladder forces weapon 0 in the pickup half too (1.8, dll
+    /// 0x300107c0: the new weapon is `cmd.weapon` forced to 0 when
+    /// `pm_flags & 0x10` is set). Without it a climber with nothing in hand
+    /// raises whatever its cmd byte names and the next frame's ladder clause
+    /// holsters it again, once per `raiseTime` for the whole climb.
+    #[test]
+    fn a_climber_with_nothing_in_hand_raises_nothing() {
+        let (mut ps, w) = armed(&carbine());
+        ps.weapon = 0;
+        ps.on_ladder = true;
+        let asks = PmInput {
+            weapon: 1,
+            ..Default::default()
+        };
+        assert_eq!(step(&mut ps, &w, &asks, 40), Vec::<i32>::new());
+        assert_eq!(ps.weapon, 0);
+        assert_eq!(ps.weaponstate, WEAPON_READY);
     }
 
     /// 1.10: the melee bit swings once per press -- the swipe, the hit event
