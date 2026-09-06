@@ -135,6 +135,25 @@ struct Args {
     /// the respawn land whether or not the shooter ever gets a shot off.
     #[arg(long)]
     probe_target: bool,
+    /// Join a team, stand still and record what the wire does across a map
+    /// end and the rotation that follows: every gamestate with its serverId,
+    /// every serverCommand with its reliable sequence, every out-of-band
+    /// packet (retail announces a map change with `loadingnewmap` and sends no
+    /// gamestate with it) and one trace line per snapshot that moved. Writes
+    /// crates/server/tests/fixtures/netchan/<map>-<gametype>-mapchange.txt,
+    /// named for the map the run started on. Give it --probe-secs enough to
+    /// span the limit, the intermission and the next map's load.
+    #[arg(long)]
+    save_mapchange: bool,
+    /// The same recording across a round restart instead of a map change, as
+    /// a pair: with --probe-target it is the half that kills itself 20 s in
+    /// and ends the round, without it the half that walks up and only watches.
+    /// Writes <map>-<gametype>-roundrestart-target.txt and
+    /// -roundrestart-shooter.txt. A restart re-sends no gamestate, so what the
+    /// shooter's weapon column shows either side of it is the pers[] carry the
+    /// stock sd.gsc does by hand. Start the target first.
+    #[arg(long)]
+    save_roundrestart: bool,
     /// Join a team, walk the --probe-pvs route and write the entity trace to
     /// crates/server/tests/fixtures/entities/<map>-<gametype>.txt, the fixture
     /// crates/server/tests/entities_ab.rs diffs against. Separate from
@@ -532,6 +551,8 @@ fn main() -> Result<()> {
                 entities: args.save_entities,
                 hit: args.save_hit,
                 target: args.probe_target,
+                mapchange: args.save_mapchange,
+                roundrestart: args.save_roundrestart,
             },
             args.capture_tag.clone(),
             args.probe_pvs,

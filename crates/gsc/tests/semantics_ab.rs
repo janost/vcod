@@ -212,6 +212,11 @@ const KNOWN_GAPS_OUT_OF_SCOPE: &[&str] = &[
     "probe_game_dotwrite",
     "probe_level_bracket",
     "probe_level_size",
+    // The three persistence probes measure what an engine restarting a map
+    // leaves behind; this crate's VM has no host that can restart one.
+    "probe_persist_exit",
+    "probe_persist_exit_save",
+    "probe_persist_restart",
 ];
 
 #[test]
