@@ -660,7 +660,7 @@ The argument is the whole of the persistence gate: `game[]` and every client's
 `pers[]` are carried into the next level when it is non-zero and freed when it
 is zero, on both paths alike, while `level` is always new and every entity
 handle stored in `game[]` is dropped whatever the flag says. VERIFIED by
-`probe_persist_restart`, `probe_persist_exit` and `probe_persist_exit_keep`
+`probe_persist_restart`, `probe_persist_exit` and `probe_persist_exit_save`
 against retail: `map_restart(true)` keeps `game[]`, `exitLevel(false)` frees
 it, `exitLevel(true)` keeps it, and in all three the entity handle is gone.
 `dm.gsc` passes 0 at its map end and `sd.gsc` passes 1 at its round end, which

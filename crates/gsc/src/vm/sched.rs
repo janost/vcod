@@ -389,6 +389,13 @@ impl Vm {
     /// their next suspend on the clock it happened at, which is what retail's
     /// `SV_ExecuteClientMessage` callbacks get. Waking deadlines here instead
     /// would step a thread looping on `wait 0` twice per server frame.
+    ///
+    /// "Whatever is `Runnable`" is two sets, not just the callbacks and the
+    /// threads their notifies woke: a waiter that a later thread woke at the
+    /// end of the previous frame's pass is `Runnable` too, and resumes here,
+    /// on the previous frame's clock and ahead of the host's own entity
+    /// pass. Nothing measures what cadence retail gives that second case
+    /// (docs/research/cod11-map-cycle.md, 8.3).
     pub fn run_runnable(&mut self, host: &mut dyn Host, now_ms: i32) -> Vec<ScriptError> {
         if !self
             .threads
