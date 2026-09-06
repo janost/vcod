@@ -1012,7 +1012,7 @@ three axes where retail's read a yaw of 90, `mp_carentan`'s own
 `mp_deathmatch_intermission` heading, and the two agree on the origin.
 INFERRED, from `ClientSim::to_wire` leaving `viewangles` unwritten and
 `spawn_delta_angles` putting the spawn yaw in `delta_angles` instead, which is
-`docs/protocol-1.1.md`, "Spectator view angles": the heading is on the wire in
+`docs/protocol-1.1.md`, "View angles": the heading is on the wire in
 the other field and a client that adds `delta_angles` back arrives at the same
 90. Whether a retail client's intermission camera actually faces the same way
 is not settled by a headless capture and is on the hand-check list.

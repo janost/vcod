@@ -254,6 +254,10 @@ pub struct Step {
     /// Retail's per-snapshot trace: (weaponstate, weapAnim, torsoAnim,
     /// eventSequence, events).
     pub trace: Vec<Trace>,
+    /// The playerstate the step ended at, as the field lines after its traces
+    /// carry it. Only the fields a gate names are compared; a transient is
+    /// not in here at all, since a settled sample cannot hold one.
+    pub settled: BTreeMap<String, i32>,
 }
 
 #[derive(Clone, Copy)]
@@ -276,6 +280,15 @@ pub struct Trace {
     /// the trace carried them.
     pub grenade_time_left: Option<i32>,
     pub weapon_delay: Option<i32>,
+    /// `ps.viewangles`, degrees, wire convention; `None` on a capture taken
+    /// before the trace carried the three columns.
+    pub viewangles: Option<[f32; 3]>,
+    /// `pm_flags` (0x20 is the gated ADS bit) and `groundEntityNum`, the two
+    /// the sight ramp is gated on; `None` on a capture taken before the trace
+    /// carried them. Reported beside a sight miss, never compared on their
+    /// own.
+    pub pm_flags: Option<i32>,
+    pub ground_entity: Option<i32>,
 }
 
 pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
@@ -305,6 +318,7 @@ pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
                 switch_weapon: 0,
                 switch_ms: 0,
                 trace: Vec::new(),
+                settled: BTreeMap::new(),
             });
             continue;
         }
@@ -383,9 +397,26 @@ pub fn parse_fixture(text: &str, default_weapon: u8) -> Vec<Step> {
                 spread: f("aimSpreadScale"),
                 grenade_time_left: m.get("grenadeTimeLeft").map(|v| v.parse().unwrap()),
                 weapon_delay: m.get("weaponDelay").map(|v| v.parse().unwrap()),
+                viewangles: m.contains_key("viewangles[0]").then(|| {
+                    [
+                        f("viewangles[0]").unwrap(),
+                        f("viewangles[1]").unwrap(),
+                        f("viewangles[2]").unwrap(),
+                    ]
+                }),
+                pm_flags: m.get("pm_flags").map(|v| v.parse().unwrap()),
+                ground_entity: m.get("groundEntityNum").map(|v| v.parse().unwrap()),
             });
+        } else if !line.starts_with('!') {
+            // The settled field lines: `<name> <i32>`, the playerstate the
+            // step ended at.
+            if let Some((k, v)) = line.split_once(' ') {
+                if let Ok(v) = v.trim().parse::<i32>() {
+                    step.settled.insert(k.to_string(), v);
+                }
+            }
         }
-        // `!observed` and the settled field lines are not compared here.
+        // `!observed` is not compared here.
     }
     steps
 }
@@ -463,6 +494,19 @@ pub fn replay(
     if let Some((origin, yaw)) = place {
         sv.place_client(0, origin, yaw);
         yaw_short = (yaw * 65536.0 / 360.0) as i32;
+        // The client subtracts the `delta_angles` of the snapshot it last
+        // saw, so until the placed spawn's has reached it the view it asks
+        // for is built against the old one. The capture's own client had
+        // three seconds of that; a few frames is enough to converge.
+        let settle = UserCmd {
+            angles: [0, yaw_short, 0],
+            ..NULL_USERCMD
+        };
+        for _ in 0..4 {
+            now += Duration::from_millis(FRAME_MS as u64);
+            cl.send_frame(&settle);
+            self::step(&mut sv, &q, &mut cl, now);
+        }
     }
     let p = &vcod_common::net::protocol::PROTOCOL_V1;
     let mut out = Vec::new();
@@ -595,11 +639,27 @@ pub fn header_vec3(header: &BTreeMap<String, String>, key: &str) -> [f32; 3] {
 }
 
 /// Where a capture's own script stood and looked when it started, for a
-/// replay that has to throw from the same spot. `None` for a capture that
-/// records none, which is every one but the grenade's.
+/// replay that has to throw from the same spot and look the same way.
+/// `None` for a capture taken before either header existed.
+///
+/// The `# spawn` line is the general one every combat capture now carries;
+/// the grenade header is the older form and stays readable, since the
+/// committed grenade fixtures predate the other.
 pub fn captured_place(text: &str) -> Option<([f32; 3], f32)> {
-    let h = grenade_header(text)?;
+    let h = kv_header(text, "# spawn ").or_else(|| grenade_header(text))?;
     Some((header_vec3(&h, "origin"), header_vec3(&h, "viewangles")[1]))
+}
+
+/// A `# <tag> k=v k=v` header line as a map.
+fn kv_header(text: &str, tag: &str) -> Option<BTreeMap<String, String>> {
+    let line = text.lines().find(|l| l.starts_with(tag))?;
+    Some(
+        line[tag.len()..]
+            .split_whitespace()
+            .filter_map(|t| t.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    )
 }
 
 /// The team and weapon the retail playerstate capture was taken with, so a

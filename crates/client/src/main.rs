@@ -201,17 +201,31 @@ struct Args {
     /// <map>-<gametype>-grenade-death-shooter.txt and -grenade-death-target.txt.
     #[arg(long, conflicts_with_all = ["probe_sweep", "probe_melee", "probe_grenade"])]
     probe_grenade_death: bool,
-    /// Suffix for the --save-entities fixture name, so a capture taken under
-    /// different conditions lands beside the plain one rather than on top of
-    /// it: --capture-tag players writes <map>-<gametype>-players.txt.
+    /// Suffix for the --save-entities and combat fixture names, so a capture
+    /// taken under different conditions lands beside the plain one rather
+    /// than on top of it: --capture-tag players writes
+    /// <map>-<gametype>-players.txt. A tagged write refuses a path that
+    /// already exists, since a tag can spell a committed fixture's name;
+    /// --overwrite-fixture is how you mean it.
     #[arg(long)]
     capture_tag: Option<String>,
+    /// Let a --capture-tag write replace a fixture that is already there.
+    /// Without it the run fails rather than putting a capture taken against
+    /// vcod's own server where the retail oracle lives.
+    #[arg(long)]
+    overwrite_fixture: bool,
     /// Which team --net-probe answers the stock team menu with: allies, axis,
     /// autoassign or spectator. On its own it makes the probe join and then
     /// report the roster once a second, which is how two probes on opposite
     /// teams measured what clientState.team carries.
     #[arg(long)]
     probe_team: Option<String>,
+    /// What --net-probe answers the stock weapon menu with, instead of the
+    /// nationality's default rifle: any weapon that menu allows, e.g.
+    /// kar98k_sniper_mp on axis. A weapon the menu refuses reopens it and the
+    /// probe never spawns.
+    #[arg(long)]
+    probe_weapon: Option<String>,
     /// Seconds --net-probe stays connected; an SD round boundary needs a few minutes
     #[arg(long, default_value_t = 65)]
     probe_secs: u64,
@@ -557,9 +571,11 @@ fn main() -> Result<()> {
                 roundrestart: args.save_roundrestart,
             },
             args.capture_tag.clone(),
+            args.overwrite_fixture,
             args.probe_pvs,
             script,
             args.probe_team.as_deref(),
+            args.probe_weapon.as_deref(),
             args.probe_secs,
             fs.as_ref(),
         );

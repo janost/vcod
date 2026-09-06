@@ -2503,6 +2503,37 @@ It is one frame: the next one reads 634 and every frame after it. INFERRED:
 the animscript picks nothing until a move has run, so the spawn frame goes out
 before the standing idle is chosen, where retail's already carries it.
 
+Open, both found on 2026-09-06 by the `--save-ads` capture on
+`kar98k_sniper_mp` (`mp_carentan-tdm-ads-sniper`, the one that answered the
+"the scope twitches like crazy" hand-check report). Each is gapped in
+`playerstate_combat_ab`'s `KNOWN_GAPS`, which asserts the gap still applies,
+so both fail the run the moment they are fixed:
+
+- **A scoped shot leaves a rechamber retail does not run.** VERIFIED: the
+  `ads_release` step that follows the shot reads `weaponstate` 0 and 9 with
+  `weaponDelay` 0 throughout on retail, and on vcod holds `weaponstate` 5 for
+  12 of the step's samples with a 175 ms `weaponDelay`, writing the
+  rechamber's `weapAnim` 11 and 13 with it; `ads_shot` itself carries a
+  `torsoAnim` retail's does not. INFERRED: the bolt-action rechamber the
+  `kar98k_sniper_mp` file asks for is being run on a path retail's sight does
+  not take it down. The gap is `RECHAMBER_GAP`; the fix is in
+  `vcod_common::pmove::weapon`.
+- **The ground trace drops a walking player for a frame where retail never
+  does, and the sight ramp reverses with it.** VERIFIED: replaying the
+  capture from its own spawn, retail reads `groundEntityNum` 1022 on all 30
+  samples of `ads_walk` and vcod reads 1023 on one. VERIFIED: across the
+  whole capture taken against vcod at *its* own spawn there is no such
+  sample in 351, so the defect is position-dependent, not a constant.
+  INFERRED: `PM_UpdateAimDownSightFlag` clears the sight for an airborne
+  frame (1.13), so `advance_ads` ramps down by `msec / adsTransOutTime` for
+  that cmd and up for the next -- -0.0625 then +0.083 at the 25 ms cmds the
+  replay sends -- which is why the fraction moves 0.333 to 0.354 across a
+  frame it should have moved 0.167. INFERRED: on a weapon with `adsZoomFov`
+  16 a client re-basing its zoom prediction off that reads as the scope
+  twitching, which `m1carbine_mp`'s 65 would hide. The gap is
+  `ADS_WALK_GAP`; the suspect is `pmove::ground_trace`, a bare 0.25-unit box
+  trace with no hysteresis (`crates/common/src/pmove.rs`).
+
 Closed on 2026-09-05, off the `--probe-sweep` runs (3.4):
 
 - **A dead player's entity stayed on the wire.** Retail drops it on the
@@ -2658,6 +2689,43 @@ PTRS41, and retail latches none of them. Retail's own carbine, which spells
 the key, does latch: the lone capture's `cancel` step reads `weaponstate` 1
 for 54 frames under a held bit, and vcod reproduces that. vcod was wrong;
 retail is right. Fixed: the default is off (`crates/common/src/weapon.rs`).
+
+The next three came out of the hand check the end of this section asks for, a
+retail 1.1 client on `vcod-server` on 2026-09-06, rather than out of the four
+probe runs above.
+
+VERIFIED: **a bounce on any tagged surface was silent on vcod.** The client
+reads the bounce alias out of `grenade_bounce_<es.surfType>`
+(`cod11-sound-system.md` section 7a) and `iw_sound.csv` carries the
+`grenade_bounce_default` row and no other, while retail's bounce arm writes
+the material into the event parm alone and leaves `s.surfType` to the explode
+(13.1 step 5). vcod wrote `sound_material(tr.surfaceFlags)` into `s.surfType`
+on every bounce as well. INFERRED: a bounce on grass, gravel, dirt or concrete
+therefore asked for an alias no row has, which is a null handle and a no-op,
+where an untagged surface fell back to the `default` suffix and sounded.
+vcod was wrong; retail is right. Fixed: the bounce writes the parm only
+(`crates/server/src/game/missile.rs`).
+
+VERIFIED: **every throw logged a projectile model nothing had precached.**
+`RegisterItem` precaches the weapon file's `projectileModel` verbatim, prefix
+and all -- retail's own table reads `394 xmodel/projectile_GermanGrenade` and
+`386 xmodel/projectile_USGrenade`
+(`crates/server/tests/fixtures/configstrings/mp_carentan-dm.txt`) and
+`configstrings_ab` pins ours slot for slot -- while `WeaponDef` strips the
+`xmodel/` prefix, so the lookup at the throw compared a stripped name against a
+prefixed table and missed. VERIFIED: the index does not travel (11.1), so
+nothing on the wire moved; the warning was the whole symptom. Fixed: both
+lookups put the prefix back (`crates/server/src/configstrings.rs`).
+
+VERIFIED: **an empty frag stayed in vcod's weapon list.** The lone capture's
+`throw_down` step ends on `weapons[0]` 4112, `weaponslots[4]` 0 and `weapon`
+0; the step before it reads 4368, 8 and 8, and that is where vcod's replay of
+`throw_down` ended too. INFERRED: the drop is 1.5 step 9's `BG_TakePlayerWeapon` and
+the 0 in `ps.weapon` is 1.8's switch path finding the player no longer owns
+what he holds. vcod's pmove raised `EV_NOAMMO` and nothing consumed it, and
+the per-tick mirror put the held bit straight back. vcod was wrong; retail is
+right. Fixed: the last shot of a `clipOnly` weapon with no reserve queues a
+take beside the weapon change (`crates/server/src/server.rs`).
 
 VERIFIED: **the blast on a player is unmeasured against vcod.** The pair runs
 never closed the range: retail spawns two same-team clients 41 to 367 units

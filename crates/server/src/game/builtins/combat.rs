@@ -167,7 +167,7 @@ fn drop_cooking_grenade(host: &mut GameHost, cx: &mut Cx, slot: usize) {
     )
     .trunc();
     let name = def.projectile_model.clone().unwrap_or_default();
-    let model = crate::configstrings::model_index(&host.configstrings, &name);
+    let model = crate::configstrings::weapon_model_index(&host.configstrings, &name);
     if model == 0 && !name.is_empty() {
         log::warn!(
             "the grenade client {slot} died holding carries {name:?}, which nothing precached"

@@ -281,6 +281,18 @@ pub(crate) fn ray_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3) -> Option<f32>
     Some(t0)
 }
 
+/// The means of death and the damage flags a bullet carries, off the weapon
+/// file's `rifleBullet` (combat doc, 2.4). The stock bolt-actions spell it
+/// `0`, so a kar98k, an enfield or a mosin logs `MOD_PISTOL_BULLET` however
+/// little that reads like a rifle.
+fn bullet_mod(def: &WeaponDef) -> (&'static str, i32) {
+    if def.sounds.rifle_bullet {
+        ("MOD_RIFLE_BULLET", DFLAG_PASSTHRU)
+    } else {
+        ("MOD_PISTOL_BULLET", 0)
+    }
+}
+
 /// A player's shot: from the eye along the view with spread, against the
 /// world and every live player's box, and then against the bones of whoever
 /// the box test found (combat doc, sections 2 and 3). `sims` is every client
@@ -334,11 +346,7 @@ pub fn bullet_fire(
     } else {
         EV_BULLET_HIT_SMALL
     };
-    let (mod_, dflags) = if def.sounds.rifle_bullet {
-        ("MOD_RIFLE_BULLET", DFLAG_PASSTHRU)
-    } else {
-        ("MOD_PISTOL_BULLET", 0)
-    };
+    let (mod_, dflags) = bullet_mod(def);
     match traced {
         Traced::Player {
             slot,
@@ -726,6 +734,33 @@ mod tests {
         // The two the client draws a weapon icon for, not a MOD icon.
         assert!(!MOD_FLAGGED.contains(&mod_index("MOD_RIFLE_BULLET").unwrap()));
         assert!(!MOD_FLAGGED.contains(&mod_index("MOD_TRIGGER_HURT").unwrap()));
+    }
+
+    /// `rifleBullet` picks the means of death, and the stock files put the
+    /// bolt-actions and every smg on `MOD_PISTOL_BULLET`: a kar98k torso hit
+    /// logging one is retail behaviour, not a misread weapon.
+    #[test]
+    fn the_stock_weapons_means_of_death_is_the_files_rifle_bullet() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let want = [
+            ("kar98k_mp", "MOD_PISTOL_BULLET"),
+            ("enfield_mp", "MOD_PISTOL_BULLET"),
+            ("mosin_nagant_mp", "MOD_PISTOL_BULLET"),
+            ("mp44_mp", "MOD_PISTOL_BULLET"),
+            ("thompson_mp", "MOD_PISTOL_BULLET"),
+            ("colt_mp", "MOD_PISTOL_BULLET"),
+            ("m1carbine_mp", "MOD_RIFLE_BULLET"),
+            ("m1garand_mp", "MOD_RIFLE_BULLET"),
+            ("springfield_mp", "MOD_RIFLE_BULLET"),
+            ("kar98k_sniper_mp", "MOD_RIFLE_BULLET"),
+            ("bar_mp", "MOD_RIFLE_BULLET"),
+        ];
+        for (name, mod_) in want {
+            let def = vcod_common::weapon::load(&fs, name).unwrap();
+            assert_eq!(bullet_mod(&def).0, mod_, "{name}");
+        }
     }
 
     #[test]
