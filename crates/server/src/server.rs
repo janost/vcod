@@ -76,6 +76,10 @@ pub struct ServerConfig {
     /// Log one line per snapshot per client with the numbers that drive a
     /// client's prediction. Off by default; a busy server would flood.
     pub trace: bool,
+    /// Debug bots in play. Each takes a real slot; 0 is off.
+    pub bots: usize,
+    /// Whether the bots fight. Without it they only wander.
+    pub bots_shoot: bool,
 }
 
 /// `challenge_t`. Entries past `CHALLENGE_TTL` go on the next insert; the
@@ -383,6 +387,11 @@ pub struct Server {
     /// A level load that failed with the level already torn down
     /// ([`LoadFailure::Fatal`]), waiting for `main` to end the process on it.
     fatal: Option<anyhow::Error>,
+    /// The debug bots, by slot. An entry whose client is gone goes with it.
+    bots: BTreeMap<usize, crate::bots::Bot>,
+    /// `--bots` spawns on the first tick with scripts up, once; a map change
+    /// finds the bots already in their slots and rejoins them.
+    bots_spawned: bool,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -507,6 +516,8 @@ impl Server {
             last_spawn_tick: None,
             script_overlay: None,
             fatal: None,
+            bots: BTreeMap::new(),
+            bots_spawned: false,
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -1011,6 +1022,7 @@ impl Server {
 
     /// `SV_SendClientGameState`.
     fn send_gamestate(&mut self, slot: usize) {
+        let is_bot = self.clients[slot].as_ref().is_some_and(|c| c.is_bot);
         let Some(c) = self.clients[slot].as_mut() else {
             return;
         };
@@ -1031,6 +1043,10 @@ impl Server {
         gamestate::write(&mut w, self.proto, &gs);
         let ops = w.into_ops();
         log::info!("client {slot}: gamestate, {} bytes", ops.len());
+        // A bot pulls its own gamestate in step_bots and reads nothing back.
+        if is_bot {
+            return;
+        }
         for pkt in c.netchan.transmit(c.last_client_command, &ops, &self.huff) {
             self.outbox.push((c.addr, pkt));
         }
@@ -1265,6 +1281,10 @@ impl Server {
         c.netchan.reliable_sequence += 1;
         let seq = c.netchan.reliable_sequence;
         c.netchan.reliable[seq as usize & (MAX_RELIABLE_COMMANDS - 1)] = cmd.to_string();
+        // A bot reads the ring in step_bots; nothing leaves for its socket.
+        if c.is_bot {
+            return;
+        }
         let mut w = MsgWriter::new(&self.huff);
         write_pending_commands(&mut w, &c.netchan, c.reliable_ack);
         // The netchan appends the `svc_EOF`.
@@ -1304,13 +1324,277 @@ impl Server {
             .enumerate()
             .filter_map(|(i, c)| {
                 c.as_ref()
-                    .filter(|c| now.duration_since(c.last_packet) > TIMEOUT)
+                    .filter(|c| !c.is_bot && now.duration_since(c.last_packet) > TIMEOUT)
                     .map(|_| i)
             })
             .collect();
         for slot in stale {
             self.drop_client(slot, "EXE_TIMEDOUT");
         }
+    }
+
+    /// The bots' pass of the tick: join like a client, then move like one.
+    /// Runs before `replay_moves`, so a bot's cmd for this frame is in its
+    /// queue when the sim reads it. Four passes, because the brains need the
+    /// whole of `self` to think and their writes land after.
+    fn step_bots(&mut self) {
+        if self.cfg.bots == 0 {
+            return;
+        }
+        if !self.bots_spawned {
+            self.bots_spawned = true;
+            self.spawn_bots();
+        }
+        let sid = i32::from(self.server_id);
+        // The team table once per frame; `client_team` needs the script's
+        // mutable face, so the enemy pass reads this instead.
+        let teams: Vec<i32> = (0..self.clients.len())
+            .map(|slot| self.script.as_mut().map_or(0, |rt| rt.client_team(slot)))
+            .collect();
+
+        // Pass 1: the reliable commands each bot just received, answered the
+        // way a menu-opening client would execute them client-side.
+        let mut replies: Vec<(usize, String)> = Vec::new();
+        let mut joined: Vec<usize> = Vec::new();
+        let mut entering: Vec<usize> = Vec::new();
+        let slots: Vec<usize> = self.bots.keys().copied().collect();
+        for &slot in &slots {
+            let Some(c) = self.clients[slot].as_ref() else {
+                continue;
+            };
+            let Some(bot) = self.bots.get_mut(&slot) else {
+                continue;
+            };
+            let fresh: Vec<(i32, &str)> = (bot.last_seen_seq + 1
+                ..=c.netchan.reliable_sequence as i32)
+                .map(|seq| {
+                    (
+                        seq,
+                        c.netchan.reliable[seq as usize & (MAX_RELIABLE_COMMANDS - 1)].as_str(),
+                    )
+                })
+                .collect();
+            bot.last_seen_seq = c.netchan.reliable_sequence as i32;
+            replies.extend(bot.observe(sid, &fresh).into_iter().map(|r| (slot, r)));
+            match c.state {
+                ClientState::Connected => joined.push(slot),
+                // Primed and no sim yet: the entering cmd, which is not
+                // simulated (enter_world consumes it).
+                ClientState::Primed if c.sim.is_none() => entering.push(slot),
+                _ => {}
+            }
+        }
+
+        // Pass 2: what each bot's body sees, for the brains.
+        let views: Vec<(usize, crate::bots::BotView)> = slots
+            .iter()
+            .filter_map(|slot| {
+                let view = self.bot_view(*slot, &teams)?;
+                Some((*slot, view))
+            })
+            .collect();
+
+        // Pass 3: the tick's cmd.
+        let mut moves: Vec<(usize, UserCmd)> = Vec::new();
+        for (slot, view) in views {
+            if let Some(bot) = self.bots.get_mut(&slot) {
+                let cmd = bot.think(&view);
+                moves.push((slot, cmd));
+            }
+        }
+
+        // Pass 4: everything lands.
+        self.bots.retain(|slot, _| self.clients[*slot].is_some());
+        for (slot, r) in replies {
+            if let Some(bot) = self.bots.get_mut(&slot) {
+                let seq = bot.next_command_seq;
+                bot.next_command_seq += 1;
+                // Consumes its own ack bookkeeping; a bot is its own client.
+                self.client_command(slot, seq, r);
+            }
+        }
+        for slot in joined {
+            if let Some(bot) = self.bots.get_mut(&slot) {
+                bot.rearm();
+            }
+            self.send_gamestate(slot);
+        }
+        for (slot, cmd) in moves {
+            // Stamped here, not in the brain: the cmd rides the server's own
+            // clock, one 50 ms step per tick.
+            let cmd = UserCmd {
+                server_time: self.sv_time_ms,
+                ..cmd
+            };
+            // Enters the world on the Primed pass, queues on Active.
+            self.user_move(slot, vec![cmd]);
+        }
+        for slot in entering {
+            // The entering cmd carries the tick's clock: entry sets the
+            // client's cmd base to it, so the first simulated cmd steps a
+            // sane 50 ms.
+            self.user_move(
+                slot,
+                vec![UserCmd {
+                    server_time: self.sv_time_ms,
+                    ..NULL_USERCMD
+                }],
+            );
+        }
+        // The bot consumed everything; a real client's ack would say the same.
+        for &slot in self.bots.keys() {
+            if let Some(c) = self.clients[slot].as_mut() {
+                c.reliable_ack = c.netchan.reliable_sequence as i32;
+            }
+        }
+    }
+
+    /// Takes the first free slots for the configured bot count.
+    fn spawn_bots(&mut self) {
+        for i in 0..self.cfg.bots {
+            let Some(slot) = self.clients.iter().position(Option::is_none) else {
+                log::warn!("no free slot for bot {}", i + 1);
+                return;
+            };
+            let team = if i % 2 == 0 { "allies" } else { "axis" };
+            let mut bot = crate::bots::Bot::new(team, self.cfg.bots_shoot, self.rand() as u64);
+            let name = format!("bot{}", i + 1);
+            bot.name = name.clone();
+            let userinfo = format!("\\name\\{name}\\snaps\\20\\rate\\25000\\cl_anonymous\\0");
+            // A loopback address nothing listens on; every transmit to a bot
+            // is skipped, the addr only has to be unique.
+            let addr = SocketAddr::from(([127, 0, 0, 1], 65535 - i as u16));
+            let mut client = Client::new(
+                addr,
+                0x7000 + i as u16,
+                self.rand(),
+                userinfo,
+                Instant::now(),
+            );
+            client.is_bot = true;
+            self.clients[slot] = Some(client);
+            self.bots.insert(slot, bot);
+            if let Some(rt) = self.script.as_mut() {
+                rt.push_client_event(ClientEvent::Connect {
+                    slot,
+                    name: name.clone(),
+                });
+            }
+            log::info!("client {slot} {name:?} connected (bot, team {team})");
+        }
+    }
+
+    /// What one bot's body sees this tick, from its sim, the weapon table and
+    /// the precomputed team table. `None` between levels, where the null cmd
+    /// is all a bot can send.
+    fn bot_view(&self, slot: usize, teams: &[i32]) -> Option<crate::bots::BotView> {
+        let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
+        let weapons = self.weapon_table.clone();
+        let def = weapons.get(sim.ps.weapon as usize);
+        let grenade = (1u8..64).find(|i| {
+            sim.ps.weapons_held >> i & 1 == 1
+                && weapons
+                    .get(*i as usize)
+                    .is_some_and(|d| d.weapon_type == "grenade")
+        });
+        let enemy = self.bot_enemy(slot, teams);
+        Some(crate::bots::BotView {
+            origin: sim.ps.origin.into(),
+            delta_angles: sim.delta_angles(),
+            view: sim.view_angles(),
+            weapon: sim.ps.weapon,
+            weapons_held: sim.ps.weapons_held,
+            clip: def.map_or(-1, |d| sim.ps.ammoclip[d.clip_index]),
+            fire_time_ms: def.map_or(0, |d| (d.fire_time * 1000.0) as i32),
+            busy_ms: sim.ps.weapon_time_ms,
+            dead: sim.dead,
+            playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
+            enemy,
+            grenade,
+        })
+    }
+
+    /// The nearest live, playing client on another team with a clear eye
+    /// line. Team rules: axis and allies only fight each other; everyone
+    /// else is fair game to everyone (`dm` carries no teams).
+    fn bot_enemy(&self, slot: usize, teams: &[i32]) -> Option<crate::bots::EnemyView> {
+        if !self.cfg.bots_shoot {
+            return None;
+        }
+        let me = self.clients[slot].as_ref()?.sim.as_ref()?;
+        if me.pm_type != crate::spectate::PmType::Normal || me.dead {
+            return None;
+        }
+        let my_team = teams.get(slot).copied().unwrap_or(0);
+        let team_enemy = |their: i32| match my_team {
+            script::TEAM_AXIS => their != script::TEAM_AXIS,
+            script::TEAM_ALLIES => their != script::TEAM_ALLIES,
+            _ => true,
+        };
+        let mut best: Option<(f32, crate::bots::EnemyView)> = None;
+        for (i, c) in self.clients.iter().enumerate() {
+            if i == slot {
+                continue;
+            }
+            let Some(s) = c.as_ref().and_then(|c| c.sim.as_ref()) else {
+                continue;
+            };
+            if s.pm_type != crate::spectate::PmType::Normal || s.dead {
+                continue;
+            }
+            if !team_enemy(teams.get(i).copied().unwrap_or(0)) {
+                continue;
+            }
+            let eye = s.ps.view().eye;
+            let clear = match self.world.as_ref() {
+                Some(w) => w.collision.shot_trace(me.eye_origin().into(), eye).fraction >= 1.0,
+                None => true,
+            };
+            if !clear {
+                continue;
+            }
+            let d = crate::bots::dist_sq(me.ps.origin.into(), s.ps.origin.into());
+            if d > crate::bots::SHOOT_RANGE * crate::bots::SHOOT_RANGE {
+                continue;
+            }
+            if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+                // The brain aims here: chest height, since the eye-high trace
+                // above only proved the line, and a ray at a feet origin
+                // slopes into the floor before it scores a bone.
+                best = Some((
+                    d,
+                    crate::bots::EnemyView {
+                        origin: (s.ps.origin + glam::Vec3::Z * 40.0).into(),
+                    },
+                ));
+            }
+        }
+        best.map(|(_, e)| e)
+    }
+
+    /// Test-facing, for the bot gates: the slots the bots hold.
+    pub fn bot_slots(&self) -> Vec<usize> {
+        self.bots.keys().copied().collect()
+    }
+
+    /// Test-facing: where a bot's body is and what it is doing.
+    pub fn bot_body(&self, slot: usize) -> Option<crate::bots::BotBody> {
+        let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
+        Some(crate::bots::BotBody {
+            origin: sim.ps.origin.into(),
+            playing: sim.pm_type == crate::spectate::PmType::Normal && !sim.dead,
+            dead: sim.dead,
+            health: sim.health,
+            clip: {
+                let d = self.weapon_table.get(sim.ps.weapon as usize);
+                d.map_or(-1, |d| sim.ps.ammoclip[d.clip_index])
+            },
+        })
+    }
+
+    /// Test-facing: the script team value a bot landed in.
+    pub fn bot_team(&mut self, slot: usize) -> i32 {
+        self.script.as_mut().map_or(0, |rt| rt.client_team(slot))
     }
 
     /// Swap in the map built by the binary; tests run without one.
@@ -2011,6 +2295,7 @@ impl Server {
     pub fn tick(&mut self, now: Instant) {
         self.drain_console();
         self.check_timeouts(now);
+        self.step_bots();
         self.sv_time_ms = self.sv_time_ms.wrapping_add(FRAME_MS);
         // Wall gap between ticks: sv_time always advances exactly FRAME_MS, so
         // a gap far off it means the frames the client interpolates between
@@ -2657,6 +2942,11 @@ impl Server {
             let Some(c) = self.clients[slot].as_mut() else {
                 continue;
             };
+            // No socket to write to; the bot's slot still counts toward the
+            // roster and entity lists the real clients are sent.
+            if c.is_bot {
+                continue;
+            }
             let Some(sim) = c.sim.as_ref() else {
                 continue;
             };
@@ -2806,6 +3096,8 @@ mod tests {
             gametype: "dm".into(),
             test_entities: 0,
             trace: false,
+            bots: 0,
+            bots_shoot: false,
         }
     }
     fn addr(port: u16) -> SocketAddr {
