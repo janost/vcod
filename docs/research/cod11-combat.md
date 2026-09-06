@@ -2787,6 +2787,25 @@ on the same frame. Pinned by
 `a_player_who_lost_its_last_grenade_can_switch_back` (pmove) and
 `a_client_out_of_grenades_gets_its_rifle_back` (`two_clients.rs`).
 
+VERIFIED, `crates/common/src/pmove.rs`: **a walker's view twitched vertically
+from the moment it left its spawn's elevation.** `step_slide_move` was Q3's:
+it returned as soon as the slide move went through unobstructed, and its
+push-down pass only undid the step it had taken. Retail's `PM_StepSlideMove`
+does neither (`docs/research/cod11-mantle.md`, "The ground snap"), and without
+its extra half step under the feet a walker leaves the ground at every crest
+it crosses, because `PM_WalkMove` clips the velocity into the slope and the
+climb's upward component survives the moment the slope levels out.
+VERIFIED, the collision world of `mp_carentan` walked from (412, -1704):
+6 of 80 frames airborne with the origin jumping 4.38 to 4.04 to 3.99 across
+one crest, against 0 of 80 with the snap in. VERIFIED, the same fix closed
+the one open gap the ADS capture had left: `mp_carentan` `ads-sniper`
+`ads_walk` read `groundEntityNum` 1023 for one sample where retail read 1022
+for all 31, which reversed the sight ramp for that cmd, and both the sight
+and the spread now match retail sample for sample. vcod was wrong; retail is
+right. Fixed in `step_slide_move`, pinned by
+`walking_a_slope_never_leaves_the_ground` and
+`standing_on_a_slope_holds_its_height` (pmove).
+
 ---
 
 ## 10. Open cells
