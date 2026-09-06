@@ -694,6 +694,18 @@ order of the list.
 - `ps.eFlags` (`+0x80`, netfield offset 128) is masked with `0xfffbfbff`,
   which clears bits `0x400` and `0x40000`. UNVERIFIED: what either bit means.
 
+The arm writes no health, and the client's own health is gone by the time it
+is on the wire. VERIFIED: the dm map-change capture's `pm_type=5` traces read
+`health` 0 and `eFlags` 24 where the same client read 100 and 16 on the frame
+before (`crates/server/tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`).
+VERIFIED: `ClientSpawn` (`0x4268c`), which `spawnIntermission`'s own
+`self spawn(origin, angles)` reaches, bzeroes the whole `gclient_t` for
+`0x22c4` bytes at `0x42804`, copying `client+0x20d0` out and back for `0x104`
+bytes around it (`0x427ea`, `0x42824`), and stores no health at all.
+INFERRED, from those two against the arm's store list: `ps.stats[0]` is
+zeroed by that spawn and nothing copies `ent->health` back into it for a
+client in intermission, which is where the 0 on the wire comes from.
+
 VERIFIED: `ClientThink_real` (`0x3fee0`) holds a `cmp client+0x20d0, 3` at
 `0x3ffca` whose `jne` targets `0x40010`, and the block at
 `0x3ffcf..0x4000a` past it holds four stores and one jump: `client+0x21ec`
@@ -723,6 +735,15 @@ arm writes is what selects them.
 
 VERIFIED: `level+0x20c` is set to 1 by `CalculateRanks` at `0x50cf5` and by
 the `setteamscore` builtin at `0x5ba7e`.
+
+VERIFIED: the module's relocation table holds five `R_386_PC32` references to
+`CalculateRanks` (`0x50c60`): at `0x418ef` and `0x41b07`, both inside the
+range 6.1 reads `Scr_SetClientField`'s `sessionstate` stores out of, and at
+`ClientConnect+0x20c` (`0x42678`), `ClientDisconnect+0x174` (`0x42c20`) and
+`ClientBegin+0x21` (`0x42fa9`). INFERRED, from the first two sitting among
+the client field setter's arms: a script write to a client field is what
+dirties the flag during a live level, and the other three are the roster
+changing.
 
 VERIFIED: the `setteamscore` builtin (`0x5b9dc`, functions table row 88) reads
 a const string through `Scr_GetConstString(0)`, holds a `cmp` of it against
@@ -770,6 +791,9 @@ drain are the whole of intermission in the shipped module.
 
 `crates/server/src/spectate.rs` carries 6.2: `PmType::Intermission`,
 the `pm_type` 5 and `eFlags` writes, and the "no pmove" arm.
+`become_intermission` zeroes the sim's own health for the bzero above, and
+`crates/server/src/server.rs`'s per-frame vitals mirror skips an
+intermission sim so nothing writes it back.
 `crates/server/src/server.rs`'s `scoreboard` carries 6.3's drain and takes its
 two team scores from `crates/server/src/game/host.rs`'s `team_scores`, axis
 first. `crates/server/src/game/builtins/score.rs` carries `getteamscore` and

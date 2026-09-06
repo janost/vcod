@@ -40,6 +40,7 @@ pub fn is_builtin(name: &str) -> bool {
         || builtins::mover::lookup(name).is_some()
         || builtins::cvar::lookup(name).is_some()
         || builtins::precache::lookup(name).is_some()
+        || builtins::score::lookup(name).is_some()
         || BUILTINS.contains(&name)
 }
 
@@ -69,8 +70,18 @@ pub struct SpawnRequest {
     pub slot: usize,
     pub origin: [f32; 3],
     pub yaw_deg: f32,
-    /// `sessionstate == "playing"`, which is what decides the sim's mode.
-    pub player: bool,
+    pub mode: SpawnMode,
+}
+
+/// Which movement path `self spawn(origin, angles)` puts a client on, read
+/// off its `sessionstate` (map-cycle doc, 6.1: the four legal strings and
+/// the word they map onto). `dead` spawns as a spectator: nothing simulates
+/// it either, and a death does not go through this builtin.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpawnMode {
+    Player,
+    Spectator,
+    Intermission,
 }
 
 /// One edge a weapon builtin made in a client's playerstate, queued for the
@@ -281,6 +292,17 @@ pub struct GameHost {
     /// level asked to keep its script `pers` and `game` variable across the
     /// boundary. Written by the `map_restart`/`exitLevel` builtins.
     pub save_persist: bool,
+    /// `level+0x1fc` and `level+0x200`, axis first (map-cycle doc, 6.3):
+    /// what `getTeamScore` reads, what `setTeamScore` writes alongside
+    /// configstrings 5 and 6, and what the scoreboard's tokens 2 and 3
+    /// carry.
+    pub team_scores: [i32; 2],
+    /// `level+0x20c`: set where a score changes and read by the drain that
+    /// pushes the scoreboard to every client in intermission (map-cycle doc,
+    /// 6.3). Retail sets it in `CalculateRanks` and in `setTeamScore`; here
+    /// the `score` client field's own setter stands in for the first, since
+    /// no other write moves a rank.
+    pub ranks_dirty: bool,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -322,6 +344,30 @@ impl GameHost {
             missiles: crate::game::missile::Missiles::default(),
             ignore_radius_damage: false,
             save_persist: false,
+            team_scores: [0, 0],
+            ranks_dirty: false,
+        }
+    }
+
+    /// `ExitLevel`'s first pass (map-cycle doc, section 2): every connected
+    /// client's `score` back to 0. It writes the field rather than calling
+    /// the setter, so the ranks are not dirtied and the outgoing level
+    /// pushes no last scoreboard.
+    ///
+    /// The second pass, which demotes each connected client to the
+    /// "connecting" state, has no counterpart here: nothing between this and
+    /// the `map_rotate` the same builtin queues reads a connection state, so
+    /// the demotion would be invisible on the wire.
+    pub fn zero_client_scores(&mut self) {
+        let i = fields::score_index();
+        for slot in 0..MAX_CLIENTS {
+            if let Some(c) = self
+                .ents
+                .get_mut(EntId(slot as u32))
+                .and_then(|e| e.client.as_mut())
+            {
+                c[i] = Value::Int(0);
+            }
         }
     }
 
@@ -489,6 +535,9 @@ impl Host for GameHost {
         if let Some(f) = builtins::precache::lookup(&folded) {
             return f(self, cx, recv, args);
         }
+        if let Some(f) = builtins::score::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
         match folded.as_str() {
             "setcullfog" => builtins::env::set_cull_fog(&mut self.configstrings, cx, args),
             "ambientplay" => builtins::env::ambient_play(&mut self.configstrings, cx, args),
@@ -641,6 +690,14 @@ impl Host for GameHost {
                     "archivetime" => Value::Int(0),
                     _ => value,
                 };
+                // Retail reaches `CalculateRanks` from the client field
+                // setter (`game.mp.i386.so` relocations at 0x418ef and
+                // 0x41b07), and that is what arms the intermission
+                // scoreboard drain (map-cycle doc, 6.3). Only a score moves
+                // a rank here.
+                if fields::CLIENT_FIELDS[i].name == "score" {
+                    self.ranks_dirty = true;
+                }
                 Ok(())
             }
             Route::Script => {
