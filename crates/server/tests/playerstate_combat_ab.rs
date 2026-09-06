@@ -19,6 +19,10 @@ const EV_FIRE_WEAPON: i32 = 159;
 const EV_FIRE_WEAPON_LASTSHOT: i32 = 161;
 const EV_MELEE_SWIPE: i32 = 164;
 
+/// The settled fields a step's end is compared on: which weapons the player
+/// holds and which one is in hand.
+const HELD_FIELDS: &[&str] = &["weapons[0]", "weapon"];
+
 /// Steps the gate does not compare, with the reason. `walks` is the capture's
 /// own exclusion -- the stall response steers it, so where it ends up is not
 /// reproducible.
@@ -309,12 +313,13 @@ fn check(map: &str, gametype: &str, kind: &str) {
     // where a blast lands, and so who it hurts, is the map's business and
     // not the input's (`# grenade` header, AGENTS.md).
     let place = common::captured_place(&text);
-    let mine: Vec<Vec<Trace>> = replay(map, gametype, &steps, (&team, &weapon), fs, place)
+    let replayed = replay(map, gametype, &steps, (&team, &weapon), fs, place);
+    let mine: Vec<Vec<Trace>> = replayed
         .iter()
         .map(|step| step.iter().map(|s| trace_of(s, s.ms)).collect())
         .collect();
     let mut bad = Vec::new();
-    for (step, ours) in steps.iter().zip(&mine) {
+    for ((step, ours), samples) in steps.iter().zip(&mine).zip(&replayed) {
         if step.walks || SKIPPED.iter().any(|(l, _)| *l == step.label) {
             continue;
         }
@@ -444,6 +449,20 @@ fn check(map: &str, gametype: &str, kind: &str) {
                          ours ({rs} shots)",
                         step.label
                     ));
+                }
+            }
+        }
+        // What the step left the player holding: retail's last throw spends
+        // the frag's only clip and the weapon goes with it (combat doc, 1.5
+        // step 9), so `throw_down` ends on `weapons[0]` 4112 and `weapon` 0.
+        if let Some(last) = samples.last() {
+            for field in HELD_FIELDS {
+                let Some(r) = step.settled.get(*field) else {
+                    continue;
+                };
+                let o = last.ps.field_i32(&PROTOCOL_V1, field);
+                if o != *r {
+                    bad.push(format!("{}: {field} retail {r}, ours {o}", step.label));
                 }
             }
         }

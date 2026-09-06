@@ -270,11 +270,14 @@ impl Missile {
         // A sky brush frees the missile silently (12.3). Ours are not in the
         // collision world at all, so a grenade thrown at the sky flies on
         // and goes off on its fuse instead.
-        self.surf_type = sound_material(tr.surface_flags);
+        // The material goes in the event parm and nowhere else: 13.1 step 5
+        // leaves `s.surfType` to the explode, and the client keys the bounce
+        // alias off `surfType` (`cod11-sound-system.md` section 7a).
+        let material = sound_material(tr.surface_flags);
         let in_water = world.point_contents(self.origin) & CONTENTS_WATER != 0;
         let loud = self.bounce(prev_ms, now_ms, &tr, hit_player || in_water);
         if loud {
-            self.events.add(EV_GRENADE_BOUNCE, self.surf_type);
+            self.events.add(EV_GRENADE_BOUNCE, material);
             Stepped::Bounced
         } else {
             Stepped::Settled
@@ -569,6 +572,9 @@ mod tests {
     use vcod_common::collision::SURFACE_CLIP_EPSILON;
     use vcod_common::net::protocol::PROTOCOL_V1;
 
+    /// The sound-surface index of grass (`cod11-events-and-fx.md` section 4).
+    const GRASS: i32 = 10;
+
     /// The frag as the paks ship it, for the tests that do not mount them:
     /// `projectileSpeed` 960, `projectileSpeedUp` 120, `fuseTime` 4
     /// (`vcod_common::weapon`'s own parser test).
@@ -599,9 +605,23 @@ mod tests {
     /// ground snap above the surface: retail's rest is `endpos.z + 1.5`
     /// (section 12.2), and `endpos` sits `SURFACE_CLIP_EPSILON` off the
     /// plane.
+    ///
+    /// The bounce also carries the surface it struck as its event parm and
+    /// leaves `s.surfType` alone: the client formats
+    /// `grenade_bounce_<surfType>` and `iw_sound.csv` has only the `_default`
+    /// row, so a bounce that writes the material into `surfType` is silent
+    /// (section 13.1 step 5, `cod11-sound-system.md` section 7a).
     #[test]
     fn a_grenade_bounces_and_comes_to_rest_on_a_floor() {
-        let world = vcod_common::collision::test_world(&[]);
+        // A grass floor: the material rides surface-flag bits 20..24.
+        let world = vcod_common::collision::synthetic_world(
+            &[(
+                "textures/test/grass",
+                vcod_common::collision::CONTENTS_SOLID,
+                (GRASS as u32) << 20,
+            )],
+            &[(0, [-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0])],
+        );
         let (mut vm, mut host) = crate::game::testing::fixture();
         let mut ms = Missiles::default();
         armed(
@@ -622,6 +642,14 @@ mod tests {
         }
         let m = &ms.missiles()[0];
         assert!(bounces >= 1, "the floor bounced it at least once");
+        assert_eq!(
+            m.events.parms[0], GRASS,
+            "the bounce event carries the surface it struck"
+        );
+        assert_eq!(
+            m.surf_type, 0,
+            "a bounce leaves `s.surfType` alone; only the explode writes it"
+        );
         assert_eq!(m.traj.tr_type, TR_STATIONARY, "it came to rest");
         let rest = SURFACE_CLIP_EPSILON + GROUND_SNAP;
         assert!(
