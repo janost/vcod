@@ -704,7 +704,7 @@ mod tests {
     fn set_viewmodel_stores_a_model_index_and_reads_the_name_back() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let recv = Some(Target::Entity(c));
             let name = Value::String(cx.intern_exact("xmodel/viewmodel_hands_us"));
             set_view_model(&mut host, cx, recv, &[name]).unwrap();
@@ -754,9 +754,9 @@ mod tests {
     fn a_spawn_point_inside_another_player_would_telefrag() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let a = host.ents.spawn_client(cx, 0).unwrap();
+            let a = host.ents.spawn_client(cx, 0, None).unwrap();
             set_origin(&mut host, cx, a, [0.0, 0.0, 0.0]);
-            let b = host.ents.spawn_client(cx, 1).unwrap();
+            let b = host.ents.spawn_client(cx, 1, None).unwrap();
             set_origin(&mut host, cx, b, [512.0, 0.0, 0.0]);
             let recv = Some(Target::Entity(b));
             let ask = |host: &mut GameHost, cx: &mut Cx, at: [f32; 3]| {
@@ -795,7 +795,7 @@ mod tests {
     fn the_spawn_loadout_builds_the_captured_weapon_words() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let e = host.ents.spawn_client(cx, 0).unwrap();
+            let e = host.ents.spawn_client(cx, 0, None).unwrap();
             let t = Some(Target::Entity(e));
             let named = |cx: &mut Cx, n: &str| Value::String(cx.intern_exact(n));
             for w in ["colt_mp", "fraggrenade_mp", "m1carbine_mp"] {
@@ -827,7 +827,7 @@ mod tests {
     fn the_join_commands_render_the_way_retail_sent_them() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let e = host.ents.spawn_client(cx, 3).unwrap();
+            let e = host.ents.spawn_client(cx, 3, None).unwrap();
             let t = Some(Target::Entity(e));
             host.allocators
                 .index(&mut host.configstrings, CsRange::Menu, "team_russiangerman")
@@ -871,7 +871,7 @@ mod tests {
     fn a_quote_in_a_cvar_value_cannot_close_its_own_argument() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let e = host.ents.spawn_client(cx, 0).unwrap();
+            let e = host.ents.spawn_client(cx, 0, None).unwrap();
             let name = Value::String(cx.intern_exact("cg_objectiveText"));
             let value = Value::String(cx.intern_exact("say \"hi\" now"));
             set_client_cvar(&mut host, cx, Some(Target::Entity(e)), &[name, value]).unwrap();
@@ -889,7 +889,7 @@ mod tests {
     fn an_unprecached_menu_and_a_non_client_receiver_are_errors() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let client = host.ents.spawn_client(cx, 0).unwrap();
+            let client = host.ents.spawn_client(cx, 0, None).unwrap();
             let menu = Value::String(cx.intern_exact("team_russiangerman"));
             assert!(open_menu(&mut host, cx, Some(Target::Entity(client)), &[menu]).is_err());
 
@@ -909,7 +909,7 @@ mod tests {
     fn getcurrentweapon_names_what_the_client_holds() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let recv = Some(Target::Entity(c));
             let name =
                 |host: &mut GameHost, cx: &mut Cx| match get_current_weapon(host, cx, recv, &[])
@@ -931,7 +931,7 @@ mod tests {
     fn closemenu_queues_the_bare_u_command() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 3).unwrap();
+            let c = host.ents.spawn_client(cx, 3, None).unwrap();
             close_menu(&mut host, cx, Some(Target::Entity(c)), &[]).unwrap();
             assert_eq!(host.client_commands, vec![(3, "u".to_string())]);
             let prop = host.ents.spawn(cx).unwrap();
@@ -949,7 +949,7 @@ mod tests {
         let (mut vm, mut host) = fixture();
         host.level_time_ms = 5_000;
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             set_origin(&mut host, cx, c, [16.0, -32.0, 8.0]);
             let name = Value::String(cx.intern_exact("m1carbine_mp"));
             drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap();
@@ -983,7 +983,7 @@ mod tests {
     fn dropitem_refuses_a_weapon_nothing_backs() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let name = Value::String(cx.intern_exact("blunderbuss_mp"));
             assert!(drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).is_err());
             assert_eq!(host.ents.iter_inuse().count(), 1, "no item was spawned");
@@ -996,7 +996,7 @@ mod tests {
     fn dropitem_none_drops_nothing_and_does_not_raise() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0).unwrap();
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let name = Value::String(cx.intern_exact("none"));
             assert_eq!(
                 drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap(),
@@ -1069,7 +1069,7 @@ mod tests {
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 2).unwrap();
+            let c = host.ents.spawn_client(cx, 2, None).unwrap();
             let recv = Some(Target::Entity(c));
             assert_eq!(
                 clone_player(&mut host, cx, recv, &[]).unwrap(),
@@ -1110,7 +1110,7 @@ mod tests {
     /// The stock allies loadout on client 0, with the ops it pushed dropped:
     /// what the three tests below start from.
     fn loadout(host: &mut GameHost, cx: &mut Cx) -> EntId {
-        let e = host.ents.spawn_client(cx, 0).unwrap();
+        let e = host.ents.spawn_client(cx, 0, None).unwrap();
         let t = Some(Target::Entity(e));
         for w in ["colt_mp", "fraggrenade_mp", "m1carbine_mp"] {
             let arg = Value::String(cx.intern_exact(w));

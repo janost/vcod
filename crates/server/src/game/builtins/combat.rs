@@ -816,8 +816,8 @@ mod tests {
     fn obituary_encodes_a_weapon_index_or_a_flagged_mod() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let victim = host.ents.spawn_client(cx, 3).unwrap();
-            let attacker = host.ents.spawn_client(cx, 5).unwrap();
+            let victim = host.ents.spawn_client(cx, 3, None).unwrap();
+            let attacker = host.ents.spawn_client(cx, 5, None).unwrap();
             let origin = cx.intern_folded("origin");
             host.set_field(cx, victim, origin, Value::Vector([10.0, 20.0, 30.0]))
                 .unwrap();
@@ -858,7 +858,7 @@ mod tests {
     fn a_non_player_attacker_is_entitynum_world() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let victim = host.ents.spawn_client(cx, 1).unwrap();
+            let victim = host.ents.spawn_client(cx, 1, None).unwrap();
             let weapon = Value::String(cx.intern_exact("m1carbine_mp"));
             let m = Value::String(cx.intern_exact("MOD_FALLING"));
             let args = [Value::Entity(victim), Value::Undefined, weapon, m];

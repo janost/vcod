@@ -56,6 +56,7 @@ const ENGINE_MIRRORED: &[(&str, &str)] = &[
 /// take its default.
 const ENGINE_DEFAULTS: &[(&str, &str)] = &[("g_useGear", "1")];
 
+#[derive(Clone)]
 struct Cvar {
     /// The registration spelling. Lookup folds, the mirror does not: the
     /// capture holds `g_TeamName_Allies`, not `g_teamname_allies`.
@@ -67,6 +68,7 @@ struct Cvar {
     mirrored: bool,
 }
 
+#[derive(Clone)]
 pub struct Cvars {
     /// Keyed by the folded name, so lookup is case-insensitive the way
     /// `Cvar_FindVar` is, while the mirror keeps the registration

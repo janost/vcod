@@ -179,12 +179,21 @@ fn captures() -> BTreeMap<String, (Vec<String>, Option<String>)> {
 /// real `mp_pavlov.gsc`, so `ProbeSource`'s stub-everything-else answer
 /// cannot serve it: it needs the pak-backed source the server crate has,
 /// with the probe overlaid on the gametype path.
+///
+/// The three `probe_persist_*` probes need a fourth thing: an engine that
+/// can end a level. Each calls `map_restart` or `exitLevel`, which queue a
+/// console line the server drains, and measures what the level that comes
+/// back still has; `crates/server`'s `Server` is the only host with that
+/// machinery.
 const RUN_IN_SERVER_CRATE: &[&str] = &[
     "probe_bootstrap",
     "probe_cvar",
     "probe_delete",
     "probe_ents",
     "probe_not_string",
+    "probe_persist_exit",
+    "probe_persist_exit_save",
+    "probe_persist_restart",
 ];
 
 /// `game.foo = 1` and `level["k"] = "v"` are, on retail, *compile*-time
@@ -212,13 +221,6 @@ const KNOWN_GAPS_OUT_OF_SCOPE: &[&str] = &[
     "probe_game_dotwrite",
     "probe_level_bracket",
     "probe_level_size",
-    // The three persistence probes measure what an engine restarting a map
-    // leaves behind; this crate's VM has no host that can restart one. Move
-    // them to RUN_IN_SERVER_CRATE once the server can restart a level: the
-    // measurement is then reproducible and the skip stops covering a gap.
-    "probe_persist_exit",
-    "probe_persist_exit_save",
-    "probe_persist_restart",
 ];
 
 #[test]

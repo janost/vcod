@@ -502,7 +502,7 @@ mod tests {
     fn a_receiver_picks_client_spawn_and_no_receiver_the_map_entity() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let e = host.ents.spawn_client(cx, 2).unwrap();
+            let e = host.ents.spawn_client(cx, 2, None).unwrap();
             let t = Some(Target::Entity(e));
             let state = cx.intern_folded("sessionstate");
             let playing = Value::String(cx.intern_exact("playing"));
