@@ -1886,14 +1886,22 @@ mod tests {
     /// `SHORT2ANGLE(cmd.angles + delta_angles)` per axis, retail's
     /// `PM_UpdateViewAngles`.
     ///
-    /// The numbers are the retail `--save-ads` capture taken on `mp_carentan`
-    /// under `tdm` with `kar98k_sniper_mp`: `delta_angles[1]` 40960 and a
-    /// probe holding cmd yaw 0, and `viewangles[1]` -135.0 on every one of
-    /// its 356 samples. The same relation holds in every other retail player
-    /// capture, including the two whose `viewangles` reads 0 -- there the
-    /// probe subtracts `delta_angles` when it builds each cmd, so the sum is
-    /// zero and the field is not evidence of an unwritten one
-    /// (`playerstate_ab.rs`, `check_spawn_shape`).
+    /// The numbers here are this test's own -- `become_player` at 225 degrees
+    /// puts 40960 in `delta_angles[1]`, and a cmd yaw of 0 makes the sum
+    /// -135.0 -- chosen so the two are not the same word and a write that
+    /// echoed the delta instead of summing would fail. The relation they
+    /// check is the retail one, measured off the `--save-ads` capture taken
+    /// on `mp_carentan` under `tdm` with `kar98k_sniper_mp`, which reads
+    /// `delta_angles[1]` 24576 and `viewangles[1]` -45.0 on every one of its
+    /// 355 `!trace` lines; that capture is compared field for field by
+    /// `playerstate_combat_ab`'s `the_scoped_sight_and_view_match_retail_on_mp_carentan`,
+    /// and docs/protocol-1.1.md, "View angles", carries the derivation.
+    ///
+    /// The relation holds in every other retail player capture too, including
+    /// the two whose `viewangles` reads 0 -- there the probe subtracts
+    /// `delta_angles` when it builds each cmd, so the sum is zero and the
+    /// field is not evidence of an unwritten one (`playerstate_ab.rs`,
+    /// `check_spawn_shape`).
     ///
     /// A turn is asserted too, off the motion captures: those read the spawn
     /// yaw at every held pose and the spawn yaw plus the cmd's 60 degrees at

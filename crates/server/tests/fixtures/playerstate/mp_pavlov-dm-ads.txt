@@ -16,6 +16,13 @@
 # Each trace also carries fWeaponPosFrac and aimSpreadScale as decimals,
 # the sight fraction and the spread counter (combat doc, 1.13 and 2.1).
 # Values are the raw i32 wire words, floats as their bit patterns.
+# NOTE ads_walk walked 45 degrees off its recorded `!input yaw`: the probe's
+# stall turn rode every step until 5233cc3, so a detour a stalled walk earned
+# in `walk` was still on the cmd through `ads_walk` while the `!input` line
+# recorded the untouched yaw. Both `viewangles[1]` columns show it, 45 here
+# against the spawn yaw everywhere else. The sight and spread this step
+# records are unaffected -- neither depends on the heading -- but the heading
+# itself is wrong; retake before reading it.
 [step idle]
 !input buttons=0 wbuttons=0 up=0 forward=0 right=0 yaw=0 pulse_buttons=0 pulse_wbuttons=0 pulses=0 pulse_hold_ms=32 pulse_period_ms=378 hold_ms=1500 walks=0 wait_ready=0 weapon=18
 !observed fire_step=0 expected_shots=0 fired=0 shots_seen=0 seq_delta=0 waited_ready_ms=0 retried=0 snapshots=31 weaponstate=0 legsAnim=122 torsoAnim=0 weapAnim=0

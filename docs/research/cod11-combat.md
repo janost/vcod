@@ -2503,6 +2503,37 @@ It is one frame: the next one reads 634 and every frame after it. INFERRED:
 the animscript picks nothing until a move has run, so the spawn frame goes out
 before the standing idle is chosen, where retail's already carries it.
 
+Open, both found on 2026-09-06 by the `--save-ads` capture on
+`kar98k_sniper_mp` (`mp_carentan-tdm-ads-sniper`, the one that answered the
+"the scope twitches like crazy" hand-check report). Each is gapped in
+`playerstate_combat_ab`'s `KNOWN_GAPS`, which asserts the gap still applies,
+so both fail the run the moment they are fixed:
+
+- **A scoped shot leaves a rechamber retail does not run.** VERIFIED: the
+  `ads_release` step that follows the shot reads `weaponstate` 0 and 9 with
+  `weaponDelay` 0 throughout on retail, and on vcod holds `weaponstate` 5 for
+  12 of the step's samples with a 175 ms `weaponDelay`, writing the
+  rechamber's `weapAnim` 11 and 13 with it; `ads_shot` itself carries a
+  `torsoAnim` retail's does not. INFERRED: the bolt-action rechamber the
+  `kar98k_sniper_mp` file asks for is being run on a path retail's sight does
+  not take it down. The gap is `RECHAMBER_GAP`; the fix is in
+  `vcod_common::pmove::weapon`.
+- **The ground trace drops a walking player for a frame where retail never
+  does, and the sight ramp reverses with it.** VERIFIED: replaying the
+  capture from its own spawn, retail reads `groundEntityNum` 1022 on all 31
+  samples of `ads_walk` and vcod reads 1023 on one. VERIFIED: across the
+  whole capture taken against vcod at *its* own spawn there is no such
+  sample in 351, so the defect is position-dependent, not a constant.
+  INFERRED: `PM_UpdateAimDownSightFlag` clears the sight for an airborne
+  frame (1.13), so `advance_ads` ramps down by `msec / adsTransOutTime` for
+  that cmd and up for the next -- -0.0625 then +0.083 at the 25 ms cmds the
+  replay sends -- which is why the fraction moves 0.333 to 0.354 across a
+  frame it should have moved 0.167. INFERRED: on a weapon with `adsZoomFov`
+  16 a client re-basing its zoom prediction off that reads as the scope
+  twitching, which `m1carbine_mp`'s 65 would hide. The gap is
+  `ADS_WALK_GAP`; the suspect is `pmove::ground_trace`, a bare 0.25-unit box
+  trace with no hysteresis (`crates/common/src/pmove.rs`).
+
 Closed on 2026-09-05, off the `--probe-sweep` runs (3.4):
 
 - **A dead player's entity stayed on the wire.** Retail drops it on the
