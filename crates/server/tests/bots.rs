@@ -89,8 +89,20 @@ fn a_bot_with_shoot_on_wounds_the_other() {
     sv.place_client(slots[1], [a[0] + 100.0, a[1], a[2]], 180.0);
 
     let mut hurt = false;
-    for _ in 0..600 {
+    for tick in 0..600 {
         run(&mut sv, &mut now, 1);
+        // They wander apart; pull them eye to eye again while both live.
+        if tick % 50 == 0 {
+            let (ba, bb) = (
+                sv.bot_body(slots[0]).unwrap(),
+                sv.bot_body(slots[1]).unwrap(),
+            );
+            if ba.playing && bb.playing {
+                let a = ba.origin;
+                sv.place_client(slots[0], a, 0.0);
+                sv.place_client(slots[1], [a[0] + 100.0, a[1], a[2]], 180.0);
+            }
+        }
         let (ha, hb) = (
             sv.bot_body(slots[0]).unwrap().health,
             sv.bot_body(slots[1]).unwrap().health,
@@ -101,6 +113,59 @@ fn a_bot_with_shoot_on_wounds_the_other() {
         }
     }
     assert!(hurt, "30 s of mutual fire never drew blood");
+}
+
+/// A bot killed in the fight comes back on its own use press and keeps
+/// playing; it never sits out the round as a corpse.
+#[test]
+fn a_dead_bot_respawns_and_keeps_playing() {
+    let Some((mut sv, mut now)) = server_with(2, true) else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    run(&mut sv, &mut now, 100);
+    let slots = sv.bot_slots();
+    let a = sv.bot_body(slots[0]).unwrap().origin;
+    sv.place_client(slots[0], a, 0.0);
+    sv.place_client(slots[1], [a[0] + 100.0, a[1], a[2]], 180.0);
+
+    // Fight until someone dies, then give the use press 10 s to work. The
+    // two wander apart, so pull them eye to eye again whenever both are
+    // alive; only the death itself ends the loop.
+    let mut died = None;
+    for tick in 0..1200 {
+        run(&mut sv, &mut now, 1);
+        if tick % 50 == 0 {
+            let (ba, bb) = (
+                sv.bot_body(slots[0]).unwrap(),
+                sv.bot_body(slots[1]).unwrap(),
+            );
+            if ba.playing && bb.playing {
+                let a = ba.origin;
+                sv.place_client(slots[0], a, 0.0);
+                sv.place_client(slots[1], [a[0] + 100.0, a[1], a[2]], 180.0);
+            }
+        }
+        let dead = slots
+            .iter()
+            .copied()
+            .find(|s| sv.bot_body(*s).unwrap().dead);
+        if let Some(d) = dead {
+            died = Some(d);
+            break;
+        }
+    }
+    let Some(dead) = died else {
+        panic!("no bot died in 60 s; the respawn gate has nothing to test");
+    };
+    for _ in 0..200 {
+        run(&mut sv, &mut now, 1);
+        let b = sv.bot_body(dead).unwrap();
+        if !b.dead && b.playing {
+            return;
+        }
+    }
+    panic!("the dead bot never respawned");
 }
 
 #[test]
