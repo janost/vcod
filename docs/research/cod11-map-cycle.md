@@ -341,9 +341,13 @@ module, which is why neither found it.
 `crates/server/src/server.rs`'s `spawn_server` carries this list;
 `snap_flag_server_bit` is step 13, the `loadingnewmap` out-of-band is step 3,
 and `crates/server/src/client.rs`'s `Client::reset_for_level` is what step 22
-does to each surviving client. `send_configstring_update` carries 3.1's
-broadcast gate. `crates/server/src/console.rs` owns the serverId nibble
-arithmetic of step 16 so that 4 step 4 can share it.
+does to each surviving client. What keeps 3.1's negative is the caller set
+rather than a gate inside one function: `send_configstring_update` sends
+whatever it is handed, `broadcast_configstring_changes` is the per-frame half
+and skips a client that has no gamestate to patch yet, and the spawn re-syncs
+the copy that half diffs against after its settle frames, so the map path puts
+no `d` on the wire at all. `crates/server/src/console.rs` owns the serverId
+nibble arithmetic of step 16 so that 4 step 4 can share it.
 
 Step 21 is the one vcod does not follow, and the divergence is in the code
 rather than in the reading above. Retail's loop baselines every entity it
@@ -1060,10 +1064,15 @@ an event no thread was parked on and was lost. INFERRED, from 4.4's
 pass; vcod dispatched the event at the top of `G_RunFrame`'s counterpart
 instead, which put the `waittill` one frame late. Fixed:
 `ScriptRuntime::run_frame` opens with a packet pass that dispatches the
-netcode's events on the previous frame's clock and steps the threads they
-wake, so the callback is parked on `menuresponse` before the `t 0` it queued
-can be answered. The gate's one-frame answer delay went with it, and the
-`sd` gates now answer the menu the instant it opens.
+netcode's events on the previous frame's clock and then steps whatever is
+`Runnable`: the callbacks and their notifies, plus any waiter a later thread
+woke at the end of the previous frame's thread pass. The callback is therefore
+parked on `menuresponse` before the `t 0` it queued can be answered, and the
+`sd` gates now answer the menu the instant it opens instead of a frame later.
+INFERRED, off that pass stepping a state rather than a list of woken threads:
+the second case resumes on the previous frame's clock and ahead of the entity
+think pass. Neither capture separates it from a thread the same frame's
+callbacks woke, so its cadence against retail is unmeasured.
 
 The `sd` half of the run is therefore still unmeasured against retail: the
 elimination-driven restart, the team scores, the win announcements and the
