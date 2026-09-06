@@ -642,6 +642,58 @@ the engine actually arms are section 14 of
 `docs/research/cod11-gsc-object-model.md`; what the probe pins is the bound,
 not the constant, because its frames step 50 ms at a time.
 
+### The map-cycle builtins, and the `sd` connect race
+
+Five builtins end or restart a level or move the scores it ends on. The
+addresses each rests on are in `docs/research/cod11-map-cycle.md` sections 1,
+2 and 6, and in `docs/research/cod11-sound-system.md` section 9; what a script
+author has to know about them is here.
+
+**`map_restart(savePersist)` and `exitLevel(savePersist)` both queue a console
+line and return, VERIFIED (sections 1 and 2).** Neither reloads anything
+itself: `map_restart` queues `map_restart`, `exitLevel` clears the team scores
+and the connected clients' scores and queues `map_rotate`, and the engine runs
+the line at the top of a later frame, so the statements after the call in the
+calling thread still run. The pair shares one per-level latch and a second
+call is a fatal script error naming whichever of the two got there first.
+The argument is the whole of the persistence gate: `game[]` and every client's
+`pers[]` are carried into the next level when it is non-zero and freed when it
+is zero, on both paths alike, while `level` is always new and every entity
+handle stored in `game[]` is dropped whatever the flag says. VERIFIED by
+`probe_persist_restart`, `probe_persist_exit` and `probe_persist_exit_keep`
+against retail: `map_restart(true)` keeps `game[]`, `exitLevel(false)` frees
+it, `exitLevel(true)` keeps it, and in all three the entity handle is gone.
+`dm.gsc` passes 0 at its map end and `sd.gsc` passes 1 at its round end, which
+is why a `dm` client is put back through the team menu after a restart and an
+`sd` client is not.
+
+**`getTeamScore(team)` and `setTeamScore(team, n)` take `"allies"` or
+`"axis"` and nothing else, VERIFIED (section 6.3).** Any other string is a
+fatal script error. The setter writes configstring 5 for axis and 6 for
+allies, formatted `%i`, and dirties the flag whose drain pushes the `b`
+scoreboard to every client in intermission. It and `CalculateRanks` are the
+only two writers of that flag, so a team score write is one of exactly two
+ways a scoreboard goes out unasked.
+
+**`playLocalSound(alias)` reaches one client only.** VERIFIED
+(`docs/research/cod11-sound-system.md`, section 9): it allocates the alias the
+first empty configstring in the `CS_SOUNDS` block, at first use rather than at
+load, and sends that client the reliable command `s <index>`, non-positional,
+with no entity and no origin. The receiver must be a player, and a spectator
+counts as one, which is how a headless probe hears the announcer at all. It is
+what the stock gametypes' round-end lines travel on.
+
+**`sd.gsc`'s `Callback_PlayerConnect` opens the team menu before it suspends,
+VERIFIED from the stock script.** The `else` arm calls `openMenu(game
+["menu_team"])` and only then `spawnSpectator()`, whose first statement is a
+call to that file's own `updateTeamStatus()`, which opens with `wait 0` and a
+comment saying the wait is there so `Callback_PlayerDisconnect` can finish
+first. INFERRED, from that order against the scheduler: the `t` command is on
+the wire while the connect thread is suspended and before it reaches the
+`waittill("menuresponse")` loop, so a menu answer that arrives inside that one
+frame notifies an event nothing is parked on and is dropped. `dm.gsc` has no
+such wait between its `openMenu` and its loop.
+
 ### Still unestablished
 
 - **Unary `!` on a string that will not parse.** `!""` is fatal and `!"1"`

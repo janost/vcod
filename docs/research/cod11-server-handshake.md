@@ -231,8 +231,12 @@ fog params. All are worldspawn or script, so all map data.
 
 The pairing (`Cvar_Set(cs[140+i], cs[204+i])`, offset 64) is already recorded in
 `docs/research/cod11-hud-protocol.md`; this capture confirms it live
-and pins the stock values. Only 179/243 is map-dependent. `scr_motd` (180) has
-an empty value, which is also the loop's stop condition on the client.
+and pins the stock values. The server side of it is in the engine rather than
+the game module, which is why neither document found it there:
+`docs/research/cod11-map-cycle.md` 3.2 reads the writer at `0x808b148` in
+`cod_lnxded`, walking the cvar list for the `0x800` flag. Only 179/243 is
+map-dependent. `scr_motd` (180) has an empty value, which is also the loop's
+stop condition on the client.
 
 The table below is the seed for `ENGINE_MIRRORED` in
 `crates/server/src/cvars.rs`, the 21 engine cvars the game module registers
