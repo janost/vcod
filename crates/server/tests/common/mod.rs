@@ -87,6 +87,23 @@ pub fn step_pair(
     b: (&Rc<RefCell<Queues>>, &mut NetClient<ClientEnd>),
     now: Instant,
 ) -> (Vec<NetEvent>, Vec<NetEvent>) {
+    let (ea, eb, _) = step_pair_seen(sv, a, b, now);
+    (ea, eb)
+}
+
+/// What the server put on the wire in one frame, each packet with the
+/// address it is for.
+pub type SentPackets = Vec<(SocketAddr, Vec<u8>)>;
+
+/// [`step_pair`] handing back every packet the server sent this frame as
+/// well. A test about an out-of-band packet needs it: the client answers
+/// none of them and raises no event, so the wire is the only witness.
+pub fn step_pair_seen(
+    sv: &mut Server,
+    a: (&Rc<RefCell<Queues>>, &mut NetClient<ClientEnd>),
+    b: (&Rc<RefCell<Queues>>, &mut NetClient<ClientEnd>),
+    now: Instant,
+) -> (Vec<NetEvent>, Vec<NetEvent>, SentPackets) {
     for (addr, q) in [(ADDR, a.0), (ADDR_B, b.0)] {
         let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
         for p in pending {
@@ -94,11 +111,12 @@ pub fn step_pair(
         }
     }
     sv.tick(now);
-    for (to, p) in sv.take_outgoing() {
-        let q = if to == ADDR { a.0 } else { b.0 };
-        q.borrow_mut().to_client.push_back(p);
+    let sent = sv.take_outgoing();
+    for (to, p) in &sent {
+        let q = if *to == ADDR { a.0 } else { b.0 };
+        q.borrow_mut().to_client.push_back(p.clone());
     }
-    (a.1.pump_at(now), b.1.pump_at(now))
+    (a.1.pump_at(now), b.1.pump_at(now), sent)
 }
 
 /// Two clients through the stock menus onto one server, stepped together so
@@ -113,6 +131,20 @@ pub fn join_pair(
     a: (&str, &str),
     b: (&str, &str),
 ) -> (NetClient<ClientEnd>, NetClient<ClientEnd>) {
+    let (ca, cb, _, _) = join_pair_logged(sv, qa, qb, now, a, b);
+    (ca, cb)
+}
+
+/// [`join_pair`] handing back the two [`Join`]s as well, for a test that has
+/// to keep answering menus after the join: a new level opens them again.
+pub fn join_pair_logged(
+    sv: &mut Server,
+    qa: &Rc<RefCell<Queues>>,
+    qb: &Rc<RefCell<Queues>>,
+    now: &mut Instant,
+    a: (&str, &str),
+    b: (&str, &str),
+) -> (NetClient<ClientEnd>, NetClient<ClientEnd>, Join, Join) {
     // Distinct qports: the server keys a peer by ip and qport, so two clients
     // sharing one read as a single client reconnecting and the second is
     // refused. A real client is one per process and gets this for free.
@@ -137,7 +169,7 @@ pub fn join_pair(
             break;
         }
     }
-    (ca, cb)
+    (ca, cb, ja, jb)
 }
 
 pub fn connect(
@@ -651,6 +683,16 @@ impl Join {
             }
             _ => {}
         }
+    }
+
+    /// A new level offers the stock menus again under the indices the last
+    /// one already answered, so a client that crosses a gamestate has to
+    /// forget what it answered or it sits on the team menu for the whole map.
+    pub fn reset_menus(&mut self) {
+        self.main_menu.clear();
+        self.answered.clear();
+        self.answered_team = false;
+        self.answered_weapon_at = None;
     }
 
     pub fn settled(&self, now: Instant) -> bool {

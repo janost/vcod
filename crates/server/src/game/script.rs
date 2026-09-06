@@ -640,6 +640,16 @@ impl ScriptRuntime {
             .map(|_| id)
     }
 
+    /// `SV_SpawnServer`'s client pass (docs/research/cod11-map-cycle.md,
+    /// section 3 step 22): the incoming level's `ClientConnect` for a client
+    /// that is already on the netchan. The object table is the new level's,
+    /// so this is a first connect as far as script is concerned. It runs
+    /// rather than queues, because retail runs it inside the spawn, after the
+    /// settle frames of step 20.
+    pub fn reconnect_client(&mut self, slot: usize, name: String, now_ms: i32) {
+        self.dispatch_client_event(ClientEvent::Connect { slot, name }, now_ms);
+    }
+
     /// One queued client event. A callback the closure does not define is
     /// logged and skipped: a gametype without one is still a serving map,
     /// the same reading `load`'s missing-builtin pre-scan takes.

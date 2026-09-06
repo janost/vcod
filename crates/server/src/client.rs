@@ -86,6 +86,22 @@ impl Client {
         }
     }
 
+    /// `SV_SpawnServer`'s client pass (docs/research/cod11-map-cycle.md,
+    /// section 3 step 22): back to `CS_CONNECTED` with the level state gone
+    /// and the netchan and both reliable rings kept. `gamestate_message_num`
+    /// goes back to -1 so the next message off this client takes the
+    /// high-nibble branch and pulls the new gamestate; nothing is pushed
+    /// (section 3.1).
+    pub fn reset_for_level(&mut self) {
+        self.state = ClientState::Connected;
+        self.gamestate_message_num = -1;
+        self.sim = None;
+        self.frames = vec![None; SV_PACKET_BACKUP];
+        self.pending.clear();
+        self.last_cmd = NULL_USERCMD;
+        self.last_processed_st = 0;
+    }
+
     /// The frame sent as `message_num`, if still in the ring.
     pub fn sent_frame(&self, message_num: u32) -> Option<&Snapshot> {
         self.frames[message_num as usize % SV_PACKET_BACKUP]

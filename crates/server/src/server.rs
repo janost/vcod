@@ -336,10 +336,9 @@ pub struct Server {
     rotation: console::Rotation,
     /// `sv_mapRotation`, mirrored here by `set_cvar` (doc section 5).
     sv_map_rotation: String,
-    /// `svs.snapFlagServerBit`, toggled by a map load or restart (doc
-    /// section 3 step 13, section 4 step 4). Read once `spawn_server` and
-    /// `map_restart` exist.
-    #[allow(dead_code)]
+    /// `svs.snapFlagServerBit`, toggled by a map load or restart and sent as
+    /// every snapshot's `snapFlags` (doc section 3 step 13, section 4
+    /// step 4).
     snap_flag_server_bit: u32,
 }
 
@@ -482,6 +481,12 @@ impl Server {
 
     pub fn client_count(&self) -> usize {
         self.clients.iter().flatten().count()
+    }
+
+    /// `sv_serverid`. The high nibble is the map load, the low one the
+    /// restart count (docs/research/cod11-map-cycle.md, section 3 step 16).
+    pub fn server_id(&self) -> u8 {
+        self.server_id
     }
 
     pub fn take_outgoing(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
@@ -1301,14 +1306,13 @@ impl Server {
         cvars
     }
 
-    /// Loads and runs the gametype and map scripts. Called once at map load,
-    /// before any client connects. The script keeps allocating configstrings
-    /// after that (any `setModel`, `loadFX`, `playSound` or `ambientPlay`
-    /// from a thread that has passed a `wait`), so the table is not final at
-    /// gamestate time; `tick` copies the script's table back every frame. A
-    /// client already connected does not see a post-gamestate allocation,
-    /// because the server does not send the `d` configstring-update command
-    /// yet.
+    /// Loads and runs the gametype and map scripts. Called once per level,
+    /// before any client is let back in. The script keeps allocating
+    /// configstrings after that (any `setModel`, `loadFX`, `playSound` or
+    /// `ambientPlay` from a thread that has passed a `wait`), so the table is
+    /// not final at gamestate time; `tick` copies the script's table back
+    /// every frame and [`Self::send_configstring_update`] is what carries a
+    /// later allocation to a client that already has its gamestate.
     ///
     /// The table is cloned in, not moved: `ScriptRuntime::load` fails on a
     /// missing `.gsc`, an unresolvable map, a bad BSP or a failed entity
@@ -1316,6 +1320,24 @@ impl Server {
     /// it was, so the error the caller reports is about the script rather
     /// than about a half-cleared table. `main.rs` exits on it.
     pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
+        self.load_scripts_with(fs, false, None, Vec::new(), false)
+    }
+
+    /// `SV_InitGameProgs(savePersist)` (docs/research/cod11-map-cycle.md,
+    /// section 3 step 19): [`Self::load_scripts`] with retail's
+    /// `G_InitGame(levelTime, seed, restart, savePersist)` arguments and the
+    /// two tables `savePersist` decides the fate of, `game[]` and one
+    /// `pers[]` per client slot. The transplant itself is not written, so a
+    /// new level's tables start empty however the four read.
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_scripts_with(
+        &mut self,
+        fs: Rc<vcod_common::pk3::Pk3Fs>,
+        _restart: bool,
+        _carry: Option<vcod_gsc::GameCarry>,
+        _pers: Vec<Option<vcod_gsc::ArrayCarry>>,
+        _save_persist: bool,
+    ) -> anyhow::Result<()> {
         let cvars = self.cvars(&fs);
         self.fs = Some(fs.clone());
         self.anims = match vcod_common::animtree::PlayerAnims::load(&fs) {
@@ -1382,6 +1404,120 @@ impl Server {
         }
     }
 
+    /// `SV_SpawnServer` (docs/research/cod11-map-cycle.md, section 3), in the
+    /// order that list numbers. No gamestate is pushed: every client is
+    /// demoted to `CS_CONNECTED` and pulls one off the high-nibble branch of
+    /// `handle_client_packet` on its next message (section 3.1).
+    ///
+    /// The bsp is parsed before anything is torn down, so a `map` naming a
+    /// map the paks do not have leaves the level that is serving alone.
+    /// Retail's 250 ms sleep of step 4 has no counterpart here: this runs
+    /// inside a tick that owns the whole server, and sleeping would only
+    /// delay the same work.
+    pub fn spawn_server(&mut self, map: &str) -> anyhow::Result<()> {
+        let fs = self
+            .fs
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("no paks are mounted"))?;
+        // Step 15's `CM_LoadMap`, pulled ahead of the teardown.
+        let bsp_path = fs
+            .resolve_map(map)
+            .ok_or_else(|| anyhow::anyhow!("map {map} not found in the mounted paks"))?;
+        let bsp_bytes = fs
+            .read(&bsp_path)
+            .ok_or_else(|| anyhow::anyhow!("reading {bsp_path}"))?;
+        let bsp = vcod_common::bsp::parse(&bsp_bytes)?;
+
+        // Step 2: the flag is read off the outgoing level and handed to the
+        // incoming one's `G_InitGame`.
+        let save_persist = self.script.as_ref().is_some_and(|rt| rt.host.save_persist);
+        // Step 3: every client whose state is `CS_PRIMED` or above, which is
+        // every one that has a gamestate to be told is stale.
+        let text = format!("loadingnewmap\n{map}\n{}", self.cfg.gametype);
+        let told: Vec<SocketAddr> = self
+            .clients
+            .iter()
+            .flatten()
+            .filter(|c| c.state != ClientState::Connected)
+            .map(|c| c.addr)
+            .collect();
+        for addr in told {
+            self.send_oob(addr, &text);
+        }
+        // Step 5: the game module is unloaded, its object table with it, and
+        // step 8's `memset(&sv, 0, ...)` takes everything the level queued.
+        self.script = None;
+        self.pending_attacks.clear();
+        self.pending_explosions.clear();
+        self.pending_script_commands.clear();
+        self.weapon_changes.clear();
+        self.baselines.clear();
+        // Step 9.
+        self.checksum_feed = (self.rand() << 16) ^ self.rand() ^ self.sv_time_ms;
+        // Step 13.
+        self.snap_flag_server_bit ^= console::SNAPFLAG_SERVERCOUNT;
+        // Step 15's `Cvar_Set("mapname", ...)` and the collision with it.
+        self.cfg.map = map.to_string();
+        self.load_world(World::from_bsp(&bsp, Some(&fs)));
+        // Step 16, then steps 7 and 10 with step 24 folded in: the table is
+        // rebuilt empty around the serverinfo and systeminfo the new id
+        // belongs in, which is where the client reads the id back from.
+        self.server_id = console::next_map_id(self.server_id);
+        self.configstrings = configstrings::static_configstrings(&self.cfg, self.server_id);
+        // Step 19.
+        self.load_scripts_with(fs, false, None, Vec::new(), save_persist)?;
+        // Step 20: three frames, 100 ms of `svs.time` each.
+        for _ in 0..3 {
+            self.sv_time_ms = self.sv_time_ms.wrapping_add(100);
+            if let Some(rt) = self.script.as_mut() {
+                rt.run_frame(self.sv_time_ms);
+            }
+        }
+        // Step 21.
+        self.rebuild_baselines();
+        // Step 22, after the settle frames and the baselines: `ClientConnect`
+        // again for everyone still on a netchan, then back to `CS_CONNECTED`.
+        for slot in 0..self.clients.len() {
+            let Some(c) = self.clients[slot].as_mut() else {
+                continue;
+            };
+            let name = c.name.clone();
+            c.reset_for_level();
+            if let Some(rt) = self.script.as_mut() {
+                rt.reconnect_client(slot, name, self.sv_time_ms);
+            }
+        }
+        log::info!(
+            "map {map} ({}), serverId {:#04x}, {} clients kept",
+            self.cfg.gametype,
+            self.server_id,
+            self.client_count()
+        );
+        Ok(())
+    }
+
+    /// `SV_CreateBaseline` (map-cycle doc, section 3 step 21). vcod baselines
+    /// only what `--test-entities` puts on the wire: a script entity has gone
+    /// out against a null baseline ever since the object table reached the
+    /// snapshot, and a map change is not the place to change that.
+    fn rebuild_baselines(&mut self) {
+        self.baselines = match self.test_entities.as_ref() {
+            Some(te) => te.baselines(self.proto),
+            None => HashMap::new(),
+        };
+    }
+
+    /// `SV_SetConfigstring`'s per-client half, the `d <index> <text>` server
+    /// command. Nothing on the map path calls it: a map change puts nothing
+    /// at all on the reliable stream and the gamestate each client pulls
+    /// carries the whole table (map-cycle doc, 3.1). A restart, which keeps
+    /// the level serving, is what needs it.
+    #[allow(dead_code)]
+    fn send_configstring_update(&mut self, slot: usize, index: usize) {
+        let cmd = format!("d {index} {}", self.configstring(index));
+        self.send_server_command(slot, &cmd);
+    }
+
     /// Queues a line for `drain_console` to run at the top of the next tick,
     /// `Cbuf_AddText`'s `EXEC_APPEND`.
     pub fn push_console(&mut self, line: &str) {
@@ -1394,7 +1530,13 @@ impl Server {
     fn drain_console(&mut self) {
         while let Some(line) = self.console.pop_front() {
             match console::Command::parse(&line) {
-                console::Command::Map(map) => log::info!("console: map {map} (not wired yet)"),
+                console::Command::Map(map) => {
+                    // A level that fails to load leaves the one serving
+                    // alone; the console must not take the server down.
+                    if let Err(e) = self.spawn_server(&map) {
+                        log::error!("map {map}: {e:#}");
+                    }
+                }
                 console::Command::MapRestart => {
                     log::info!("console: map_restart (not wired yet)")
                 }
@@ -2114,7 +2256,7 @@ impl Server {
                 server_time: self.sv_time_ms,
                 message_num,
                 delta_num: -1,
-                snap_flags: 0,
+                snap_flags: self.snap_flag_server_bit,
                 ps,
                 entities: visible,
                 clients: roster.clone(),

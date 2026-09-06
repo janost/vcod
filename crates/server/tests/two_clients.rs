@@ -957,3 +957,152 @@ fn a_broadcast_temp_entity_skips_the_cull_and_a_scoped_one_does_not() {
         "an all-but-A temp entity still reached A: {seen_a:?}"
     );
 }
+
+/// `map mp_brecourt` on the console: both clients keep their netchan, pull
+/// the new gamestate off the high-nibble branch, answer the stock menus
+/// again and spawn on the second map. Nobody is dropped and neither reliable
+/// ring restarts (docs/research/cod11-map-cycle.md, section 3).
+#[test]
+fn a_map_command_reloads_the_level_on_the_live_netchan() {
+    const NEXT: &str = "mp_brecourt";
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
+    let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
+
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb, mut ja, mut jb) = common::join_pair_logged(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+
+    let p = &PROTOCOL_V1;
+    let first = ca.snapshots().newest().expect("A got no snapshot");
+    assert_eq!(
+        first.ps.field_i32(p, "pm_type"),
+        0,
+        "A never spawned on the first map, so the map change proves nothing"
+    );
+    let snap_flags_before = first.snap_flags;
+    let seq_before = ca.incoming_sequence();
+    let cmd_seq_before = ca.command_sequence();
+    let id_before = sv.server_id();
+
+    // A map nobody has: the console logs it and the level keeps serving.
+    sv.push_console("map mp_nosuchmap");
+    now += Duration::from_millis(50);
+    ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+    cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+    common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    assert_eq!(
+        sv.server_id(),
+        id_before,
+        "a map that failed to load changed the level"
+    );
+    assert!(
+        ca.configstring(0).contains(&format!("mapname\\{MAP}")),
+        "a map that failed to load moved the level off {MAP}"
+    );
+
+    // Both joins read settled from the first map; forget that, so the loop
+    // below cannot break before the change has even gone out.
+    ja.reset_menus();
+    jb.reset_menus();
+    sv.push_console(&format!("map {NEXT}"));
+    let mut gamestates = [0usize; 2];
+    let mut loading = Vec::new();
+    for _ in 0..600 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        let (ea, eb, sent) = common::step_pair_seen(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        for (to, pkt) in &sent {
+            if let Some(("loadingnewmap", rest)) = vcod_common::net::connectionless::parse_oob(pkt)
+            {
+                loading.push((*to, String::from_utf8_lossy(rest).into_owned()));
+            }
+        }
+        for (i, (events, join, cl)) in [(ea, &mut ja, &mut ca), (eb, &mut jb, &mut cb)]
+            .into_iter()
+            .enumerate()
+        {
+            for e in events {
+                match e {
+                    vcod_common::net::NetEvent::GamestateReady => {
+                        gamestates[i] += 1;
+                        join.reset_menus();
+                    }
+                    vcod_common::net::NetEvent::ServerCommand(tokens) => {
+                        join.on_server_command(&tokens, cl, now)
+                    }
+                    vcod_common::net::NetEvent::Dropped(r) => {
+                        panic!("client {i} dropped across the map change: {r}")
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if ja.settled(now) && jb.settled(now) {
+            break;
+        }
+    }
+
+    assert_eq!(gamestates, [1, 1], "one new gamestate per client");
+    // The only thing a map change puts on the wire itself: one out-of-band
+    // line to each client past `CS_CONNECTED`, and nothing reliable.
+    assert_eq!(loading.len(), 2, "loadingnewmap went to {loading:?}");
+    let mut told: Vec<std::net::SocketAddr> = loading.iter().map(|(to, _)| *to).collect();
+    told.sort();
+    assert_eq!(told, vec![common::ADDR, common::ADDR_B]);
+    for (_, body) in &loading {
+        assert_eq!(body.trim_end_matches(['\n', '\0']), format!("{NEXT}\ndm"));
+    }
+    assert_eq!(
+        sv.server_id(),
+        vcod_server::console::next_map_id(id_before),
+        "the serverId high nibble did not climb"
+    );
+    assert_eq!(
+        ca.server_id(),
+        i32::from(sv.server_id()),
+        "A is not on the new serverId"
+    );
+    assert!(
+        ca.configstring(0).contains(&format!("mapname\\{NEXT}")),
+        "configstring 0 still names another map: {:?}",
+        ca.configstring(0)
+    );
+    assert!(
+        ca.incoming_sequence() > seq_before,
+        "the netchan sequence restarted; the map change did not stay on the live one"
+    );
+    assert!(
+        ca.command_sequence() >= cmd_seq_before,
+        "the reliable command sequence went backwards"
+    );
+    let snap = ca.snapshots().newest().expect("A got no snapshot after");
+    assert_eq!(
+        snap.ps.field_i32(p, "pm_type"),
+        0,
+        "A never spawned on the second map: {}",
+        ja.summary()
+    );
+    assert_ne!(
+        snap.snap_flags & 4,
+        snap_flags_before & 4,
+        "SNAPFLAG_SERVERCOUNT did not toggle"
+    );
+}
