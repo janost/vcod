@@ -1390,13 +1390,29 @@ impl Server {
         self.script.as_mut()?.client_pers(slot, key)
     }
 
+    /// One cvar as the running script reads it. `None` before
+    /// `load_scripts`. Test-facing: `cfg.gametype` picks which gametype
+    /// script loads and this table is what that script's own `getCvar`
+    /// answers from, so a rotation that wrote only one of the two is
+    /// invisible everywhere else.
+    pub fn script_cvar(&self, name: &str) -> Option<String> {
+        Some(self.script.as_ref()?.cvars().get(name).to_string())
+    }
+
     /// A `+set` for the next `load_scripts`. `sv_mapRotation` and
     /// `g_gametype` also mirror into their own fields, so `--set` and
     /// `map_rotate`'s `gametype` token both work through one value
     /// (docs/research/cod11-map-cycle.md section 5).
     pub fn set_cvar(&mut self, name: &str, value: &str) {
-        self.cvar_overrides
-            .push((name.to_string(), value.to_string()));
+        // In place when the name is already there, so the last write wins
+        // whether it came from `--set` or from a rotation token, and a
+        // rotation running for days does not grow the list a map at a time.
+        match self.cvar_overrides.iter_mut().find(|(n, _)| n == name) {
+            Some((_, v)) => *v = value.to_string(),
+            None => self
+                .cvar_overrides
+                .push((name.to_string(), value.to_string())),
+        }
         match name {
             "sv_mapRotation" => self.sv_map_rotation = value.to_string(),
             "g_gametype" => self.cfg.gametype = value.to_string(),
@@ -1451,7 +1467,6 @@ impl Server {
         self.pending_explosions.clear();
         self.pending_script_commands.clear();
         self.weapon_changes.clear();
-        self.baselines.clear();
         // Step 9.
         self.checksum_feed = (self.rand() << 16) ^ self.rand() ^ self.sv_time_ms;
         // Step 13.
@@ -1496,10 +1511,8 @@ impl Server {
         Ok(())
     }
 
-    /// `SV_CreateBaseline` (map-cycle doc, section 3 step 21). vcod baselines
-    /// only what `--test-entities` puts on the wire: a script entity has gone
-    /// out against a null baseline ever since the object table reached the
-    /// snapshot, and a map change is not the place to change that.
+    /// `SV_CreateBaseline` (map-cycle doc, section 3 step 21), with the
+    /// divergence 3.3 records: only `--test-entities` is baselined.
     fn rebuild_baselines(&mut self) {
         self.baselines = match self.test_entities.as_ref() {
             Some(te) => te.baselines(self.proto),
@@ -1543,11 +1556,18 @@ impl Server {
                 console::Command::MapRotate => {
                     let full = self.sv_map_rotation.clone();
                     let before = self.cfg.gametype.clone();
-                    let next = self.rotation.rotate(&full, &mut self.cfg.gametype);
+                    let mut gametype = before.clone();
+                    let next = self.rotation.rotate(&full, &mut gametype);
                     for w in self.rotation.warnings.drain(..) {
                         log::warn!("{w}");
                     }
-                    if self.cfg.gametype != before {
+                    if gametype != before {
+                        // Retail's plain `Cvar_Set` (doc section 5.2), so
+                        // through `set_cvar`: writing `cfg.gametype` alone
+                        // picks the new gametype's script while `cvars`
+                        // replays an earlier `--set g_gametype` over the
+                        // table that script then reads.
+                        self.set_cvar("g_gametype", &gametype);
                         // A gametype change discards what exitLevel(true)
                         // asked to keep (doc section 5.2).
                         if let Some(rt) = self.script.as_mut() {
@@ -2579,6 +2599,44 @@ mod tests {
             sv.tick(now);
         }
         assert_eq!(sv.configstring(781), "fx/impacts/newimps/minefield.efx");
+    }
+
+    /// `map_rotate`'s `gametype` token is a `Cvar_Set` (doc section 5.2), so
+    /// it has to outrank an earlier `--set g_gametype`: the token picks which
+    /// gametype script loads, and the cvar table is what that script's own
+    /// `getCvar` answers from. Writing only `cfg.gametype` splits the two.
+    #[test]
+    fn a_rotation_gametype_token_outranks_an_earlier_set() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let fs = Rc::new(fs);
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.set_cvar("g_gametype", "dm");
+        sv.set_cvar("sv_mapRotation", "gametype tdm map mp_brecourt");
+        let path = fs.resolve_map("mp_carentan").expect("map in the paks");
+        let bsp =
+            vcod_common::bsp::parse(&fs.read(&path).expect("read the bsp")).expect("parse the bsp");
+        sv.load_world(World::from_bsp(&bsp, Some(&fs)));
+        sv.load_scripts(fs).expect("load the scripts");
+        assert_eq!(sv.script_cvar("g_gametype").as_deref(), Some("dm"));
+
+        sv.push_console("map_rotate");
+        sv.tick(now);
+        assert_eq!(sv.cfg.map, "mp_brecourt", "the rotation did not load");
+        assert_eq!(sv.cfg.gametype, "tdm");
+        assert!(
+            sv.configstring(0).contains("g_gametype\\tdm"),
+            "serverinfo: {:?}",
+            sv.configstring(0)
+        );
+        assert_eq!(
+            sv.script_cvar("g_gametype").as_deref(),
+            Some("tdm"),
+            "the rotated level's script still reads the value `--set` left"
+        );
     }
 
     #[test]

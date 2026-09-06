@@ -345,6 +345,17 @@ does to each surviving client. `send_configstring_update` carries 3.1's
 broadcast gate. `crates/server/src/console.rs` owns the serverId nibble
 arithmetic of step 16 so that 4 step 4 can share it.
 
+Step 21 is the one vcod does not follow, and the divergence is in the code
+rather than in the reading above. Retail's loop baselines every entity it
+copies, so a map's items, movers and turrets reach a client's first frame as
+a delta against their own baseline. `rebuild_baselines` writes only what
+`--test-entities` puts on the wire and leaves script entities to go out
+against a null baseline, which is what `Server::new` already does on the
+first map; a map change keeps that rather than giving the second map a wire
+shape the first never has. The cost is bytes on the frame each entity first
+appears in, not correctness: a null baseline is a legal delta base, and every
+later frame deltas against the previous one either way.
+
 ---
 
 ## 4. `SV_MapRestart_f`
