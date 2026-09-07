@@ -324,6 +324,7 @@ impl GameHost {
     }
 
     pub fn new(configstrings: Vec<String>) -> GameHost {
+        let allocators = Allocators::seeded(&configstrings);
         GameHost {
             configstrings,
             ents: ObjectTable::new(),
@@ -339,7 +340,7 @@ impl GameHost {
             client_entity_states: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
             weapons: std::rc::Rc::new(crate::weapons::WeaponTable::empty()),
-            allocators: Allocators::new(),
+            allocators,
             cvars: crate::cvars::Cvars::new(),
             world: None,
             rng: RNG_SEED,

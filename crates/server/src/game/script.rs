@@ -60,6 +60,10 @@ impl ScriptSource for PakScripts {
 pub struct Carry {
     pub game: Option<vcod_gsc::GameCarry>,
     pub pers: Vec<Option<vcod_gsc::ArrayCarry>>,
+    /// The item registry, which is engine state rather than script state:
+    /// a `map_restart` keeps it whether or not the level asked to persist,
+    /// the way it keeps the configstring table (map-cycle doc, 4.6).
+    pub items: Option<crate::items::Items>,
 }
 
 /// A script value as text, through the same `%g` rendering string
@@ -178,6 +182,9 @@ impl ScriptRuntime {
         host.fs = Some(fs.clone());
         host.level_time_ms = now_ms;
         host.pers_carry = carry.pers;
+        if let Some(items) = carry.items {
+            host.items = items;
+        }
 
         // `_load.gsc::main`, in mp_pavlov's own closure, calls `getEntArray`
         // in its first statements, so the object table must hold every map
@@ -709,6 +716,7 @@ impl ScriptRuntime {
         Carry {
             game: Some(self.vm.take_game()),
             pers,
+            items: Some(self.host.items.clone()),
         }
     }
 

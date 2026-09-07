@@ -35,6 +35,9 @@ pub struct Client {
     pub last_connect: Instant,
     /// `lastClientCommand`; goes back out as every message's `reliableAcknowledge`.
     pub last_client_command: i32,
+    /// `cl->nextReliableTime`: the end of the flood-protection window the
+    /// last non-exempt client command opened (`Server::client_command`).
+    pub next_reliable_ms: i32,
     /// The client's `reliableAcknowledge`, what it has seen of our server commands.
     pub reliable_ack: i32,
     pub message_ack: i32,
@@ -79,6 +82,7 @@ impl Client {
             last_packet: now,
             last_connect: now,
             last_client_command: 0,
+            next_reliable_ms: 0,
             reliable_ack: 0,
             message_ack: 0,
             last_processed_st: 0,
