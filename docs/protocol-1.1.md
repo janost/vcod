@@ -971,6 +971,36 @@ server.
 
 On a DM server the client auto-spawns as `GAME_SPECTATOR`, no team command needed. Send usercmds (movement axes plus `ANGLE2SHORT` view angles) every frame; the server flies the spectator and the position comes back in the playerState. It is a true noclip: the position integrates straight off the velocity with no trace, as Q3's `PM_NoclipMove` does. **This is a divergence from the RTCW lineage**, which sends `PM_SPECTATOR` to `PM_FlyMove` and so collides through `PM_StepSlideMove` (`bg_pmove.c:3927`), with `PM_NOCLIP` a separate pm_type. VERIFIED live 2026-08-28 by A/B with a retail client: against a retail server a spectator clips through the wires strung between lamp posts, through decoration cars (the ones by the allied spawn on mp_carentan), and through walls and the ground; against a vcod server that still collided, every one of them blocked. `forward = 127` moved my playerstate origin about 636 units over 2 seconds and stopped when I stopped sending it, which is the cheapest end-to-end proof the move path works.
 
+### Client commands are flood-protected
+
+`SV_ClientCommand` (`cod_lnxded` 0x8086e08) gates every client command on
+`sv_floodProtect` before the game sees it. VERIFIED, read out of the
+function: the three exemption compares are `strncmp` against `"team "` with
+length 5, `"score "` with 6 and `"mr "` with 3 (0x8086eb3-0x8086ee9, strings
+at 0x80d4a5b, 0x80d4a61 and 0x80d4a68, each spelled with the trailing
+space), the window is `svs.time + 800` written to `client+0x10b08`
+(0x8086f5f-0x8086f64), the drop compares `svs.time` against that field
+(0x8086f17-0x8086f23) behind three other tests, `com_cl_running->integer
+== 0`, `client->state > 3` and `sv_floodProtect->integer != 0`
+(0x8086efc-0x8086f15), and the dropped command is logged as
+`client text ignored for %s: %s` (0x80d4a80). INFERRED, from that control
+flow: a command that matches none of the three prefixes both opens the
+window and is subject to it, an exempt one does neither, an active client's
+non-exempt command inside the window reaches
+`SV_ExecuteClientCommand` with `clientOK` false, which runs the engine's
+own `ucmds` table entry if it is one and skips the game's `ClientCommand`
+otherwise, and a bare `score` is *not* exempt, since its NUL fails the
+compare against the space.
+
+VERIFIED, from `crates/server/tests/fixtures/netchan/mp_carentan-sd-roundrestart-target.txt`
+and two later pairs: the probe sends `score` every 2 s and `kill` every
+45 s, and retail killed it on the first and third `kill` and ignored the
+second and fourth, each of which landed 300 to 700 ms after a `score`;
+after each accepted `kill` the next `score` went unanswered (the 4 s gaps
+between `b` lines at `ms=21571` and `ms=111970`), which is the window the
+`kill` had opened. vcod's `client_command` applies the same rule
+(`FLOOD_WINDOW_MS`), and `tests/flood_protect.rs` measures it.
+
 ### View angles: `delta_angles` always, `viewangles` for a player only
 
 A retail server does not maintain `ps.viewangles` for a **spectator**. VERIFIED from both committed spectator captures: `viewangles[0]` and `viewangles[1]` are 0.0 on every frame of both, while `delta_angles[1]` holds 16384 (= 90 degrees, the spawn yaw) throughout. The probe that took those captures sends `cmd.angles = [0,0,0]` and never moves its view, so if the server were running RTCW's `PM_UpdateViewAngles` (`ps.viewangles[i] = SHORT2ANGLE(cmd.angles[i] + ps.delta_angles[i])`) the capture would read 90 degrees, not 0.

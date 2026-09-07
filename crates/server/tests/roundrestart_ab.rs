@@ -14,7 +14,13 @@
 //! the restart's own frame, and the length of the round that ran its timer
 //! out, plus the vitals either side of the respawn. Not a command-for-command
 //! diff -- the burst carries slots ours pins to constants
-//! (`mapchange_ab::CMD_GAPS`).
+//! (`mapchange_ab::CMD_GAPS`) -- but the *set* of configstring slots each
+//! half is sent an update for is compared whole: a restart keeps the
+//! engine's table, so the incoming level's registrations land where the
+//! outgoing level's did and nothing is re-broadcast (map-cycle doc, 4.6).
+//! Before that was modelled, the kill after a restart re-allocated the
+//! dropped weapon's model, the item registry and the elimination string at
+//! fresh slots, and every restart re-sent the move-in aliases.
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
@@ -34,6 +40,11 @@ const TARGET: &str = "tests/fixtures/netchan/mp_carentan-sd-roundrestart-target.
 /// the first round ends by elimination and the timer still has room to end the
 /// second one inside the run.
 const KILL_AT_MS: i64 = 20_000;
+
+/// Configstring slots whose updates are left out of the slot-set comparison:
+/// the restart burst's own (`mapchange_ab::CMD_GAPS` says why 12 and 13
+/// are ours to miss; 1 and 3 are compared as the burst).
+const CS_BURST_SLOTS: &[usize] = &[1, 3, 12, 13];
 
 /// How often the target half asks for the scoreboard. The shooter half asks
 /// for none, and its fixture carries no `b` line, which is the fixture
@@ -199,6 +210,23 @@ fn restarts(who: &str, events: &[NetchanEvent]) -> Vec<Restart> {
 /// The connect-time gamestate's serverId, and a check that nothing sent
 /// another one from the first restart onwards: a restart pushes none
 /// (map-cycle doc 3.1).
+/// Every slot a half was sent a `d <slot>` for over the run, as a sorted set
+/// minus [`CS_BURST_SLOTS`]. A set rather than a sequence: what it proves is
+/// which slots moved at all, and retail's run has one more elimination round
+/// (a second `d 6`) than the 120 s replayed here.
+fn updated_slots(events: &[NetchanEvent]) -> Vec<usize> {
+    let mut slots: Vec<usize> = events
+        .iter()
+        .filter_map(|e| e.cmd())
+        .filter_map(|c| c.strip_prefix("d "))
+        .filter_map(|rest| rest.split(' ').next()?.parse().ok())
+        .filter(|s| !CS_BURST_SLOTS.contains(s))
+        .collect();
+    slots.sort_unstable();
+    slots.dedup();
+    slots
+}
+
 fn one_gamestate(who: &str, events: &[NetchanEvent], from_ms: i64) {
     let late = events
         .iter()
@@ -261,6 +289,15 @@ fn an_sd_round_restart_matches_retail() {
     sv.set_cvar("scr_friendlyfire", "1");
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    // Retail ran a while before either probe joined (the target's gamestate
+    // reads serverTime 24950), so the first round's own `sayMoveIn` had
+    // played to nobody before the match-start restart; a join on the load
+    // frame would put that thread's alias allocation on the restart's own
+    // frame instead, where the slot-set comparison below cannot see it.
+    for _ in 0..200 {
+        now += Duration::from_millis(50);
+        sv.tick(now);
+    }
 
     let qa = Rc::new(RefCell::new(common::Queues::default()));
     let qb = Rc::new(RefCell::new(common::Queues::default()));
@@ -283,13 +320,17 @@ fn an_sd_round_restart_matches_retail() {
     for _ in 0..2400 {
         now += Duration::from_millis(50);
         let ms = now.duration_since(start).as_millis() as i64;
-        if ms >= next_score {
-            cb.send_reliable("score");
-            next_score += SCORE_PERIOD_MS;
-        }
+        // `kill` ahead of `score` in the frame both fall due, as the probe
+        // orders them: a bare `score` opens the flood window
+        // (`tests/flood_protect.rs`), and a `kill` behind it in the same
+        // message is dropped.
         if !killed && ms >= KILL_AT_MS {
             cb.send_reliable("kill");
             killed = true;
+        }
+        if ms >= next_score {
+            cb.send_reliable("score");
+            next_score += SCORE_PERIOD_MS;
         }
         let (cmd_a, cmd_b) = (common::holding(&ca), common::holding(&cb));
         ca.send_frame(&cmd_a);
@@ -330,6 +371,13 @@ fn an_sd_round_restart_matches_retail() {
         let (r_who, o_who) = (format!("retail {half}"), format!("ours {half}"));
         let r = restarts(&r_who, retail);
         let o = restarts(&o_who, ours);
+
+        // --- the slots updated over the run, as a set ---
+        assert_eq!(
+            updated_slots(ours),
+            updated_slots(retail),
+            "{half}: the configstring slots updated over the run differ from retail's"
+        );
 
         // --- the burst: `d 3`, `n`, `d 1`, in that order, in one frame ---
         for (who, rs) in [(&r_who, &r), (&o_who, &o)] {

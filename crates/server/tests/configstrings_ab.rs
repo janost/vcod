@@ -3,7 +3,7 @@
 //! match proves the script load order, the bootstrap sequence and the
 //! execution order inside each `main()`, none of which a semantic test sees.
 //!
-//! The captures are from `tools/run_server.sh` with `g_gametype dm`,
+//! The captures are from `tools/run_server.sh` with `g_gametype dm` (and one under `sd`),
 //! `sv_maxclients 8`, `sv_pure 0` and stock `scr_*` defaults; the fixture
 //! headers name them. Change any of those and the fixtures need retaking,
 //! because cvar defaults move slots.
@@ -22,7 +22,7 @@ const STRUCTURAL_SKIP: &[usize] = &[0, 1];
 /// list cannot rot into a lie.
 const GAPS: &[(usize, &str)] = &[];
 
-fn cfg(map: &str) -> vcod_server::ServerConfig {
+fn cfg(map: &str, gametype: &str) -> vcod_server::ServerConfig {
     vcod_server::ServerConfig {
         map: map.into(),
         hostname: "vcod test".into(),
@@ -30,7 +30,7 @@ fn cfg(map: &str) -> vcod_server::ServerConfig {
         // through the cvar table, so it has to match or the diff moves for
         // a reason that is not a bug.
         max_clients: 8,
-        gametype: "dm".into(),
+        gametype: gametype.into(),
         test_entities: 0,
         trace: false,
         bots: 0,
@@ -42,11 +42,8 @@ fn cfg(map: &str) -> vcod_server::ServerConfig {
 /// the gametype, so it comes from `cfg` rather than from a literal: a
 /// changed `cfg().gametype` has to move the fixture too, not silently keep
 /// reading the `dm` capture.
-fn retail(map: &str) -> BTreeMap<usize, String> {
-    let path = format!(
-        "tests/fixtures/configstrings/{map}-{}.txt",
-        cfg(map).gametype
-    );
+fn retail(map: &str, gametype: &str) -> BTreeMap<usize, String> {
+    let path = format!("tests/fixtures/configstrings/{map}-{gametype}.txt");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     text.lines()
         .filter(|l| !l.starts_with('#'))
@@ -60,9 +57,9 @@ fn retail(map: &str) -> BTreeMap<usize, String> {
 
 /// Our table at the same instant retail's was read: right after the scripts
 /// have loaded and every thread has reached its first wait.
-fn ours(map: &str, fs: vcod_common::pk3::Pk3Fs) -> BTreeMap<usize, String> {
+fn ours(map: &str, gametype: &str, fs: vcod_common::pk3::Pk3Fs) -> BTreeMap<usize, String> {
     let fs = std::rc::Rc::new(fs);
-    let mut sv = vcod_server::server::Server::new(cfg(map), std::time::Instant::now());
+    let mut sv = vcod_server::server::Server::new(cfg(map, gametype), std::time::Instant::now());
     let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
     let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
     let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
@@ -74,12 +71,12 @@ fn ours(map: &str, fs: vcod_common::pk3::Pk3Fs) -> BTreeMap<usize, String> {
         .collect()
 }
 
-fn check(map: &str) {
+fn check(map: &str, gametype: &str) {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
-    let retail = retail(map);
-    let ours = ours(map, fs);
+    let retail = retail(map, gametype);
+    let ours = ours(map, gametype, fs);
     let skip = |i: usize| STRUCTURAL_SKIP.contains(&i) || GAPS.iter().any(|(g, _)| *g == i);
 
     let mut diffs = Vec::new();
@@ -100,7 +97,7 @@ fn check(map: &str) {
     }
     assert!(
         diffs.is_empty(),
-        "{map}: {} configstring(s) differ from retail\n{}",
+        "{map} {gametype}: {} configstring(s) differ from retail\n{}",
         diffs.len(),
         diffs.join("\n")
     );
@@ -117,7 +114,7 @@ fn check(map: &str) {
 
 #[test]
 fn the_configstring_table_matches_retail_on_mp_pavlov() {
-    check("mp_pavlov");
+    check("mp_pavlov", "dm");
 }
 
 /// A second map with a much larger precache set (131 models against 93) and
@@ -126,5 +123,13 @@ fn the_configstring_table_matches_retail_on_mp_pavlov() {
 /// that hardcodes either one.
 #[test]
 fn the_configstring_table_matches_retail_on_mp_carentan() {
-    check("mp_carentan");
+    check("mp_carentan", "dm");
+}
+
+/// The other stock gametype the map-cycle gates run under, whose bootstrap
+/// precaches a different string set and only when `game["gamestarted"]` is
+/// unset (`tests/restart_carry.rs` is what checks the restart after it).
+#[test]
+fn the_configstring_table_matches_retail_on_mp_carentan_sd() {
+    check("mp_carentan", "sd");
 }

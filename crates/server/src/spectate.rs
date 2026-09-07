@@ -380,6 +380,12 @@ impl ClientSim {
     /// angles)`, so a spectator moves for exactly the reasons a player does.
     pub fn become_spectator(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
         self.respawn(PmType::Spectator, origin, yaw_deg, cmd_angles);
+        // As the intermission camera below: the spectator arm copies no
+        // health either, so a player parked as a spectator after a death
+        // reads 0 where its entity still holds 100 (the retail round-restart
+        // target reads `pm_type=4 health=0` on every such frame).
+        self.health = 0;
+        self.max_health = 0;
     }
 
     /// The third mode, through the same `self spawn(origin, angles)`:

@@ -200,6 +200,23 @@ impl Allocators {
         }
     }
 
+    /// Allocators that continue a table an earlier level filled: each
+    /// range's next free slot is the one past its last non-empty entry, so a
+    /// name the last level indexed is found where it was and a new one lands
+    /// after everything. This is what a `map_restart` needs, since the
+    /// engine keeps `sv.configstrings` across one (map-cycle doc, 4.6).
+    pub fn seeded(cs: &[String]) -> Self {
+        let mut a = Allocators::new();
+        for range in CsRange::ALL {
+            let (lo, hi) = range.bounds();
+            let used = (lo..=hi)
+                .rev()
+                .find(|&i| cs.get(i).is_some_and(|s| !s.is_empty()));
+            *a.next_mut(range) = used.map_or(lo, |i| i + 1);
+        }
+        a
+    }
+
     fn next_mut(&mut self, range: CsRange) -> &mut usize {
         match range {
             CsRange::StatusIcon => &mut self.status_icon,

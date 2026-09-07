@@ -141,6 +141,7 @@ fn hex_digit(nibble: u8) -> char {
 
 /// The registered-item bitset `precacheItem` builds and configstring 8
 /// reports, mirroring retail's `itemRegistered[]` (`.bss` 0x18e0e0).
+#[derive(Clone)]
 pub struct Items {
     registered: [bool; NUM_ITEMS],
 }
