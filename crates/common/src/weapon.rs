@@ -207,7 +207,10 @@ pub struct WeaponDef {
     /// carries `clip=6:3` with no `ammo` entry for index 6
     /// (docs/research/cod11-combat.md, section 9.2).
     pub clip_only: bool,
+    /// Rounds one loop segment of a segmented reload loads; 0 fills the clip.
     pub reload_ammo_add: u32,
+    /// Rounds the start segment loads; 0 loads none (combat doc, 1.7).
+    pub reload_start_add: u32,
     pub drop_time: f32,
     /// The name `BG_SetupAmmoIndexes` looks up (lowercased) to assign
     /// [`WeaponDef::ammo_index`]; see docs/protocol-1.1.md, "How `ammo[]` and
@@ -346,6 +349,7 @@ impl WeaponDef {
             max_ammo: parse_num(map, "maxAmmo", 0),
             clip_only: parse_bool(map, "clipOnly", false),
             reload_ammo_add: parse_num(map, "reloadAmmoAdd", 0),
+            reload_start_add: parse_num(map, "reloadStartAdd", 0),
             drop_time: parse_num(map, "dropTime", 0.0),
             ammo_name: map.get("ammoName").cloned().unwrap_or_default(),
             clip_name: map.get("clipName").cloned().unwrap_or_default(),
