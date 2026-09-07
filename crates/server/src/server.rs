@@ -194,11 +194,14 @@ pub(crate) struct Shot {
     /// Whether the shot left a settled sight (`fWeaponPosFrac == 1.0`),
     /// which picks `adsSpread` over the hip spread (combat doc, 2.1).
     pub ads: bool,
+    /// The aim the cmd's aim block left (`ClientSim::aim_angles`), which
+    /// down a sight is the swayed gun rather than the view (combat doc, 15).
+    pub aim: [f32; 2],
 }
 
 /// One attack a client's weapon step took this tick. The weapon index each
 /// arm carries is `ps.weapon` at the event, not whatever is in hand by the
-/// time the trace runs.
+/// time the trace runs, and the aim is the cmd's, for the same reason.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Attack {
     Shot(Shot),
@@ -206,6 +209,7 @@ pub(crate) enum Attack {
     Swing {
         slot: usize,
         weapon: u8,
+        aim: [f32; 2],
     },
     /// `EV_FIRE_WEAPON` from a grenade: the fuse left rides the event parm
     /// (combat doc, 1.11).
@@ -213,6 +217,7 @@ pub(crate) enum Attack {
         slot: usize,
         weapon: u8,
         fuse_left_ms: i32,
+        aim: [f32; 2],
     },
 }
 
@@ -2419,11 +2424,12 @@ impl Server {
             for attack in self.pending_attacks.drain(..) {
                 let (slot, weapon) = match attack {
                     Attack::Shot(s) => (s.slot, s.weapon),
-                    Attack::Swing { slot, weapon } => (slot, weapon),
+                    Attack::Swing { slot, weapon, .. } => (slot, weapon),
                     Attack::Throw {
                         slot,
                         weapon,
                         fuse_left_ms,
+                        aim,
                     } => {
                         // The throw leaves the thrower's eye at the weapon
                         // file's speed (combat doc, 11.3); the missile pass
@@ -2433,7 +2439,7 @@ impl Server {
                             weapons.get(weapon as usize),
                         ) {
                             let (origin, velocity) =
-                                crate::game::missile::throw_velocity(&me.ps, def);
+                                crate::game::missile::throw_velocity(&me.ps, aim, def);
                             // The projectile's model, indexed when the item was
                             // registered (`GameHost::register_item`). A miss
                             // means the map load stopped registering it and
@@ -2463,17 +2469,19 @@ impl Server {
                         def,
                         name,
                         shot.ads,
+                        shot.aim,
                         &sims,
                         collision,
                         &self.hitlocs,
                         bones.as_mut(),
                         &mut self.rng,
                     ),
-                    Attack::Swing { .. } => crate::game::combat::melee_fire(
+                    Attack::Swing { aim, .. } => crate::game::combat::melee_fire(
                         slot,
                         def,
                         name,
                         weapon,
+                        aim,
                         &sims,
                         collision,
                         &self.hitlocs,
@@ -2763,6 +2771,7 @@ impl Server {
         use vcod_common::pmove::weapon::{EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
         let collision = self.world.as_ref().map(|w| &w.collision);
         let weapons = self.weapon_table.clone();
+        let now_ms = self.sv_time_ms;
         let mut moved = vec![MoveSummary::default(); self.clients.len()];
         for (slot, m) in moved.iter_mut().enumerate() {
             let Some(c) = self.clients[slot].as_mut() else {
@@ -2805,6 +2814,9 @@ impl Server {
                 if dt_ms > MAX_PMOVE_ARREARS_MS {
                     base = cmd.server_time - MAX_PMOVE_ARREARS_MS;
                 }
+                // The aim block runs once per cmd, on the whole cmd, before
+                // the chop (`ClientThink_real` 0x40169-0x40456).
+                sim.update_aim(dt_ms, now_ms, weapons.defs());
                 let mut raised = Vec::new();
                 while base != cmd.server_time {
                     let msec = (cmd.server_time - base).min(MAX_FRAME_MS as i32);
@@ -2831,6 +2843,7 @@ impl Server {
                                 slot,
                                 weapon,
                                 fuse_left_ms: e.parm,
+                                aim: sim.aim_angles(),
                             })
                         }
                         EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT => {
@@ -2838,9 +2851,14 @@ impl Server {
                                 slot,
                                 weapon,
                                 ads: sim.ps.weapon_pos_frac == 1.0,
+                                aim: sim.aim_angles(),
                             }))
                         }
-                        EV_FIRE_MELEE => self.pending_attacks.push(Attack::Swing { slot, weapon }),
+                        EV_FIRE_MELEE => self.pending_attacks.push(Attack::Swing {
+                            slot,
+                            weapon,
+                            aim: sim.aim_angles(),
+                        }),
                         _ => {}
                     }
                     // A `clipOnly` weapon with nothing left is taken away

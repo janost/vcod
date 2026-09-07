@@ -115,6 +115,15 @@ struct Args {
     /// a gate replays it from the origin the header carries.
     #[arg(long)]
     save_grenade: bool,
+    /// Join a team, raise the sight and tap eight shots down it standing
+    /// still, printing every bullet-impact temp entity's origin beside the
+    /// shooter's eye and view, which is what measures the sight sway
+    /// (docs/research/cod11-combat.md, section 15). A measurement, not a
+    /// fixture: the same machine as --save-ads, and it writes nothing.
+    /// Use it with --probe-weapon kar98k_sniper_mp: adsSpread 0 makes the
+    /// scoped shot deterministic.
+    #[arg(long)]
+    probe_sway: bool,
     /// The shooter half of the hit capture: join a team, walk toward the other
     /// player until the eye-to-eye trace through the map's collision is clear,
     /// then fire a single shot, a burst and until the target dies, and watch
@@ -577,6 +586,7 @@ fn main() -> Result<()> {
                 combat: args.save_combat,
                 ads: args.save_ads,
                 grenade: args.save_grenade,
+                sway: args.probe_sway,
                 entities: args.save_entities,
                 hit: args.save_hit,
                 target: args.probe_target,

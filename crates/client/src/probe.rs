@@ -65,6 +65,8 @@ pub struct Save {
     pub combat: bool,
     pub ads: bool,
     pub grenade: bool,
+    /// `--probe-sway`: a measurement on the combat machine, no fixture.
+    pub sway: bool,
     pub entities: bool,
     pub hit: bool,
     pub target: bool,
@@ -156,6 +158,7 @@ pub fn probe(
         combat: save_combat,
         ads: save_ads,
         grenade: save_grenade,
+        sway: probe_sway,
         entities: save_entities,
         hit: save_hit,
         target: save_target,
@@ -174,8 +177,9 @@ pub fn probe(
     } else {
         script
     };
-    // The ADS and grenade captures are the combat capture running another script.
-    let save_combat = save_combat || save_ads || save_grenade;
+    // The ADS and grenade captures and the sway measurement are the combat
+    // capture running another script.
+    let save_combat = save_combat || save_ads || save_grenade || probe_sway;
     // The fixture is the route's output, so the capture drives the same walk;
     // the slope measurement walks it too, with the sight held.
     let pvs = pvs || save_entities || slope;
@@ -212,6 +216,8 @@ pub fn probe(
         CombatProbe::grenade()
     } else if save_ads {
         CombatProbe::ads()
+    } else if probe_sway {
+        CombatProbe::sway()
     } else {
         CombatProbe::default()
     };
@@ -307,9 +313,10 @@ pub fn probe(
                             .unwrap_or("unknown")
                             .to_string();
                     }
-                    if save_hit || shooter_walk {
-                        // The shooter's line-of-sight test needs the map's
-                        // collision, and the gamestate is where the map is named.
+                    if save_hit || shooter_walk || probe_sway {
+                        // The shooter's line-of-sight test and the sway run's
+                        // sightline scan need the map's collision, and the
+                        // gamestate is where the map is named.
                         let map = net::info_value_for_key(&gs.configstrings[0], "mapname")
                             .unwrap_or_default()
                             .to_string();
@@ -463,7 +470,10 @@ pub fn probe(
                     combat.stall.apply(&mut cmd, now, o);
                 }
             }
-            hold_view_yaw(&mut cmd, &client, &mut combat.spawn_delta_yaw);
+            match combat.aim_yaw {
+                Some(yaw) => cmd.angles[1] = yaw,
+                None => hold_view_yaw(&mut cmd, &client, &mut combat.spawn_delta_yaw),
+            }
         } else if (save_hit || shooter_walk) && hit.running() {
             // No `hold_view_yaw`: the aim is absolute, and the shooter's own
             // `viewangles` measured against the bearing say the server takes
@@ -621,14 +631,27 @@ pub fn probe(
                         // The join names the weapon; the reload step is sized
                         // off its `reloadTime` rather than one rifle's number.
                         combat.use_weapon(fs, &join.weapon, client.configstrings());
+                        if probe_sway && combat.aim_yaw.is_none() {
+                            if let Some(w) = hit.world.as_deref() {
+                                let p = &net::protocol::PROTOCOL_V1;
+                                let o = s.ps.origin(p);
+                                let eye =
+                                    [o[0], o[1], o[2] + s.ps.field_f32(p, "viewHeightCurrent")];
+                                combat.aim_yaw = Some(longest_sightline(w, eye));
+                            }
+                        }
                         if combat.step(now, s) {
-                            write_combat_fixture(
-                                client.configstrings(),
-                                &join,
-                                &combat,
-                                tag.as_deref(),
-                                overwrite,
-                            )?;
+                            // The sway run is a measurement: its impact lines
+                            // went to stdout and there is no fixture for it.
+                            if !probe_sway {
+                                write_combat_fixture(
+                                    client.configstrings(),
+                                    &join,
+                                    &combat,
+                                    tag.as_deref(),
+                                    overwrite,
+                                )?;
+                            }
                             wrote_playerstate = true;
                             break;
                         }
@@ -2022,6 +2045,55 @@ fn ads_script() -> Vec<CombatStep> {
     ]
 }
 
+/// The `--probe-sway` steps: the sight raised and held, then eight shots
+/// tapped down it standing still, spaced so a bolt action has rechambered.
+/// Where each lands against the raw view is the sway (combat doc, 15).
+fn sway_script() -> Vec<CombatStep> {
+    use net::msg::{BUTTON_ADS, NULL_USERCMD};
+    let sight = net::msg::UserCmd {
+        buttons: BUTTON_ADS,
+        ..NULL_USERCMD
+    };
+    let mut steps = vec![
+        CombatStep {
+            label: "idle",
+            base: NULL_USERCMD,
+            dur: Duration::from_millis(1000),
+            ..CombatStep::default()
+        },
+        CombatStep {
+            label: "ads_in",
+            base: sight,
+            dur: Duration::from_millis(1500),
+            ..CombatStep::default()
+        },
+    ];
+    for label in [
+        "scope_shot_1",
+        "scope_shot_2",
+        "scope_shot_3",
+        "scope_shot_4",
+        "scope_shot_5",
+        "scope_shot_6",
+        "scope_shot_7",
+        "scope_shot_8",
+    ] {
+        steps.push(CombatStep {
+            label,
+            base: sight,
+            pulse: Pulse {
+                buttons: BUTTON_ATTACK,
+                wbuttons: 0,
+                count: 1,
+            },
+            dur: Duration::from_millis(2500),
+            wait_ready: true,
+            ..CombatStep::default()
+        });
+    }
+    steps
+}
+
 /// The `--save-grenade` steps, every one standing still so a gate can replay
 /// it: one melee swing on the rifle, then the frag through a cook and a
 /// release, a cook held past the pin, a cook cancelled by a weapon switch and
@@ -2202,6 +2274,10 @@ struct CombatProbe {
     /// The player's origin and view at the first step, which is the spot a
     /// replay of this capture has to throw from.
     spawn_pose: Option<([f32; 3], [f32; 3])>,
+    /// `--probe-sway` only: the wire yaw of the longest clear sightline from
+    /// the spawn, so the impacts land far enough for the sway to be read off
+    /// their whole-unit origins. `None` holds the spawn view.
+    aim_yaw: Option<i32>,
 }
 
 impl Default for CombatProbe {
@@ -2227,8 +2303,34 @@ impl Default for CombatProbe {
             switch: WeaponSwitch::default(),
             missiles: MissileWatch::default(),
             spawn_pose: None,
+            aim_yaw: None,
         }
     }
+}
+
+/// The yaw, as a wire word, of the longest sightline from `eye` that still
+/// ends on something within 4000 units, scanned two degrees at a time at a
+/// level pitch. A sway run points its shots down it: at 44 units, which is
+/// what one carentan spawn faces, a whole-unit impact origin is 1.3 degrees
+/// wide and the sway is 0.45.
+fn longest_sightline(world: &vcod_common::collision::CollisionWorld, eye: [f32; 3]) -> i32 {
+    let start = glam::Vec3::from(eye);
+    let mut best = (0.0f32, 0.0f32);
+    for step in 0..180 {
+        let yaw = step as f32 * 2.0;
+        let (s, c) = yaw.to_radians().sin_cos();
+        let end = start + glam::Vec3::new(c, s, 0.0) * 4000.0;
+        let t = world.shot_trace(start, end);
+        if t.fraction < 1.0 && t.fraction > best.1 {
+            best = (yaw, t.fraction);
+        }
+    }
+    println!(
+        "SWAY: aiming at yaw {} where the wall is {:.0} units off",
+        best.0,
+        best.1 * 4000.0
+    );
+    deg_to_short(best.0) & 0xffff
 }
 
 impl CombatProbe {
@@ -2237,6 +2339,16 @@ impl CombatProbe {
         Self {
             steps: ads_script(),
             kind: "ads",
+            ..Self::default()
+        }
+    }
+
+    /// The `--probe-sway` measurement: the same machine running
+    /// [`sway_script`].
+    fn sway() -> Self {
+        Self {
+            steps: sway_script(),
+            kind: "sway",
             ..Self::default()
         }
     }
@@ -2423,6 +2535,32 @@ impl CombatProbe {
                 ],
                 missiles: self.missiles.sample(snap),
             };
+            // Every bullet-impact temp entity this snapshot carries, beside
+            // the eye and view it was fired from, for `--probe-sway`: the
+            // angle between the raw view and the eye-to-impact ray is the
+            // sway retail put on the shot.
+            for (&num, e) in &snap.entities {
+                let ev = e.field_i32(p, "eType") - crate::entities::ET_EVENTS;
+                if ev != EV_BULLET_HIT_SMALL && ev != EV_BULLET_HIT_LARGE {
+                    continue;
+                }
+                let pos = vcod_common::net::trajectory::Trajectory::read(e, p, "pos");
+                let eye = [
+                    snap.ps.field_f32(p, "origin[0]"),
+                    snap.ps.field_f32(p, "origin[1]"),
+                    snap.ps.field_f32(p, "origin[2]") + snap.ps.field_f32(p, "viewHeightCurrent"),
+                ];
+                println!(
+                    "  impact st={} ent={num} event={ev} origin={} eye={} leanf={} view=[{:.3},{:.3},{:.3}]",
+                    snap.server_time,
+                    vec_str(pos.base.into()),
+                    vec_str(eye),
+                    snap.ps.field_f32(p, "leanf"),
+                    s.viewangles[0],
+                    s.viewangles[1],
+                    s.viewangles[2],
+                );
+            }
             for m in &s.missiles {
                 println!("  {}", m.line(s.elapsed_ms).trim_end());
             }
@@ -3308,6 +3446,10 @@ const ENGAGE_RANGE: f32 = 700.0;
 /// the target, and the hip cone at 350 units is a nine-unit blur that reads
 /// nothing; the retail sweep that pinned the head line stood at 36 to 118.
 const SWEEP_RANGE: f32 = 120.0;
+/// The two bullet-impact temp entities (`docs/research/cod11-events-and-fx.md`,
+/// section 1), which `--probe-sway` reads the impact origin off.
+const EV_BULLET_HIT_SMALL: i32 = 173;
+const EV_BULLET_HIT_LARGE: i32 = 174;
 /// Heights up the target's body the line-of-sight trace tries. Only the eye is
 /// aimed at, but a target behind a low wall is one a shot can still reach.
 const LOS_HEIGHTS: [f32; 3] = [16.0, 40.0, EYE_HEIGHT];
