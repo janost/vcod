@@ -148,6 +148,10 @@ impl Bot {
                     // `set_client_cvar` quotes the value (hud protocol doc 0.1).
                     self.main_menu = menu.trim_matches('"').to_string();
                 }
+                // A restart reruns `ClientConnect` without a gamestate and
+                // reopens the menus under the indices the last level used
+                // (the `n` is what the probes forget them on too).
+                ["n"] => self.rearm(),
                 ["t", idx] => {
                     let Ok(idx) = idx.parse::<i32>() else {
                         continue;

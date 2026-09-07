@@ -194,6 +194,18 @@ are the same function, which is the "read-only after spawn" guard.
 `pers` is type 7, an object handle, which is how `self.pers["team"]` works
 without the engine knowing anything about the key.
 
+What `sessionstate`'s custom getter answers before script has written it is
+measured for the connect path: `"spectator"`. VERIFIED live on the retail
+1.1d server, 2026-09-07, with a copy of `sd.gsc` that logged
+`self.sessionstate` right after `Callback_PlayerConnect`'s
+`waittill("begin")`: every first connect and every reconnect across a
+`map_restart` printed `spectator`, before `spawnPlayer`'s own assignment
+printed `playing`. `_spawnlogic::getSpawnpoint_DM` depends on it, since it
+compares every player's `sessionstate` against strings and a fatal
+"cannot compare undefined" is what an undefined one gives; vcod's
+`spawn_client` seeds the field with that string. The other four custom
+getters' pre-write readings are still unmeasured.
+
 The engine, not script, puts that handle there. VERIFIED live on the retail
 1.1d server with `crates/gsc/tests/fixtures/semantics/client-probes/probe_pers.gsc`,
 run 2026-08-31 on mp_pavlov with one connected client (that directory's README
