@@ -574,6 +574,38 @@ Three divergences on the wire:
   clears. A `+set` override is replayed on top either way, so it still
   outranks a script's `setCvar`.
 
+### 4.6 What the engine keeps across a restart
+
+VERIFIED, from the retail round-restart captures
+(`crates/server/tests/fixtures/netchan/mp_carentan-sd-roundrestart-*.txt`
+and a second pair taken 2026-09-07): the configstring table survives a
+`map_restart`. The move-in aliases `german_move_in` and `american_move_in`
+are allocated and broadcast once, as `d 528` and `d 529` 1.7 s after the
+first restart, and never again across the three restarts that follow; the
+kill after a restart drops a `kar98k_mp` and the wire carries no `d 8`, no
+new model slot and no new localized-string slot for it, where
+`crates/server/tests/fixtures/configstrings/mp_carentan-sd.txt` places that
+weapon's world model at slot 340 and `SD_AXISHAVEBEENELIMINATED` at 1256 at
+load. VERIFIED, from `maps/mp/gametypes/sd.gsc` (pak5): `_teams::precache`
+and the `precacheString` list run only while `game["gamestarted"]` is
+unset, and `endRound` restarts with `map_restart(true)`, which keeps
+`game[]` (section 1). INFERRED, from the two together: the incoming level
+registers none of those itself, so the slots it finds on the first kill are
+the outgoing level's, which is only possible if the table and the item
+registry both outlive the restart. That is the Q3 lineage's shape too, where
+`SV_SpawnServer` clears `sv.configstrings` and `SV_MapRestart_f` does not.
+
+As implemented: `map_restart` overlays the static slots (0, 1 and the
+constants) onto the outgoing table instead of replacing it, the host's
+range allocators are seeded from the table it is handed
+(`Allocators::seeded`), and `Carry` carries the `Items` registry across a
+restart whether or not the level asked to persist, since it is engine state
+rather than script state. `map_restart(false)` frees `game[]` and the script
+precaches again, into the same slots. The measurement is
+`tests/roundrestart_ab.rs`'s slot-set comparison: before this, ours
+re-sent the move-in aliases after every restart and wrote `d 8`, `d 384`
+and `d 1245` on the first kill after one.
+
 ---
 
 ## 5. `SV_MapRotate_f` and the rotation grammar
@@ -738,6 +770,14 @@ INFERRED, off that compare and that jump: `sessionstate` 3 reaches only those
 four stores, so no pmove runs, no events are generated and the usercmd's
 movement axes and view angles are dropped; an intermission client cannot move,
 and its view is whatever the last pre-intermission frame left.
+
+The spectator arm copies no health either. VERIFIED, from the round-restart
+target capture: a player killed by its own `kill` reads `pm_type=6 health=0`,
+then `pm_type=4 eFlags=16 health=0` on every frame of the spectator spawn
+`Callback_PlayerKilled` parks it in (`ms=25436` to `28607`), and 100 again
+only on the restart's own spawn. vcod's `become_spectator` zeroes the sim's
+health with the intermission camera's and the per-frame vitals mirror skips
+both, where it used to copy the entity's 100 back in.
 
 ### 6.3 The scoreboard drain, and which team score is which
 
