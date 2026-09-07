@@ -103,7 +103,7 @@ The fields the combat path reads, all VERIFIED out of that table:
 | `0x250` | `hipSpreadFireAdd` | `0x26C` | `adsTransOutTime` |
 | `0x254` | `hipSpreadTurnAdd` | `0x3D4` | `adsReloadTransTime` |
 | `0x258` | `hipSpreadMoveAdd` | `0x25C` | `hipSpreadDuckedDecay` |
-| `0x260` | `hipSpreadProneDecay` | | |
+| `0x260` | `hipSpreadProneDecay` | `0x2F4` | `reloadStartAdd` |
 
 VERIFIED, `BG_SetupWeaponInfo` `0x36950`-`0x369a1`: `weapDef+0x414` and
 `weapDef+0x418` are not in the field table but derived at load, as
@@ -456,6 +456,36 @@ conditions.
   with `reloadEndTime` non-zero, the state goes to 9 with `WEAP_RELOAD_END`,
   `weaponTime` from `reloadEndTime` and event `0x9A` (`EV_RELOAD_END`, 154).
   State 9 goes to 0 with `WEAP_IDLE`.
+- Same function, ending the start segment: from state 7 or 8 with
+  `weaponTime` 0 it tests `ammoclip` against 0 on the state-8 arm, calls the
+  reload test, and has the same three exits the loop segment has: a loop
+  segment through `0x30010330`, state 9 with `WEAP_RELOAD_END`,
+  `reloadEndTime` and `0x9A`, or state 0 with `WEAP_IDLE`, the
+  `weaponrechamber` bit cleared ahead of the last two. A loop segment starts
+  only when the test still passes and the state is not 8 with rounds in the
+  clip; otherwise the reload ends there. In the `.so` this is `0x3820c`,
+  the test `0x3803c`, the segment starter `0x378bc` and the bit
+  `Com_BitClear`.
+- dll `0x3000fea0` (`.so` `0x37500`), the add the delay edge lands on: in
+  state 7 or 8 it reads `weaponDef->reloadStartAdd` (`0x2F4`) and returns
+  without a store when that field is 0; otherwise it reads `reloadAmmoAdd`
+  (`0x2F0`). Either count is compared against the clip size and the room
+  left in the clip, and the smaller of count and room lands, the whole room
+  when the count is 0 (loop only) or not below the clip size.
+
+VERIFIED: the offsets, immediates and call targets in the two items above,
+and that `0x2F4` is `reloadStartAdd` (field-table record 157 at VA `0x7D0FC`
+in the `.so`, type 4). INFERRED: the "only when", "otherwise" and "returns
+without a store" in them, which are branch conditions. VERIFIED: the three
+stock segmented files ship `reloadStartAdd` equal to `reloadAmmoAdd`
+(enfield 5, kar98k_sniper 1, springfield 1), so no stock capture can tell
+the two fields apart. VERIFIED, `mp_carentan-tdm-ads-sniper` `ads_reload`
+and `ads_release`: after one shot from a full five, the reload reads
+`weaponstate` 7 with `weapAnim` 13 and event 153 for `reloadStartTime`,
+its `weaponDelay` counting 1366 to 0 from `reloadStartAddTime`, then 9 with
+`weapAnim` 526 and event 154 for `reloadEndTime`, then 0; state 5 never
+appears. INFERRED: the start's one-round add filled the clip, the reload
+test refused a loop segment, and the reload went straight to its end.
 
 INFERRED: the keyless clause is the automatic reload on a dry clip, and it
 refuses to run for a prone player who is moving. INFERRED: the run of states
@@ -2503,21 +2533,12 @@ It is one frame: the next one reads 634 and every frame after it. INFERRED:
 the animscript picks nothing until a move has run, so the spawn frame goes out
 before the standing idle is chosen, where retail's already carries it.
 
-Open, both found on 2026-09-06 by the `--save-ads` capture on
-`kar98k_sniper_mp` (`mp_carentan-tdm-ads-sniper`, the one that answered the
-"the scope twitches like crazy" hand-check report). Each is gapped in
-`playerstate_combat_ab`'s `KNOWN_GAPS`, which asserts the gap still applies,
-so both fail the run the moment they are fixed:
+Open, found on 2026-09-06 by the `--save-ads` capture on `kar98k_sniper_mp`
+(`mp_carentan-tdm-ads-sniper`, the one that answered the "the scope twitches
+like crazy" hand-check report). It is gapped in `playerstate_combat_ab`'s
+`KNOWN_GAPS`, which asserts the gap still applies, so it fails the run the
+moment it is fixed:
 
-- **A scoped shot leaves a rechamber retail does not run.** VERIFIED: the
-  `ads_release` step that follows the shot reads `weaponstate` 0 and 9 with
-  `weaponDelay` 0 throughout on retail, and on vcod holds `weaponstate` 5 for
-  12 of the step's samples with a 175 ms `weaponDelay`, writing the
-  rechamber's `weapAnim` 11 and 13 with it; `ads_shot` itself carries a
-  `torsoAnim` retail's does not. INFERRED: the bolt-action rechamber the
-  `kar98k_sniper_mp` file asks for is being run on a path retail's sight does
-  not take it down. The gap is `RECHAMBER_GAP`; the fix is in
-  `vcod_common::pmove::weapon`.
 - **The ground trace drops a walking player for a frame where retail never
   does, and the sight ramp reverses with it.** VERIFIED: replaying the
   capture from its own spawn, retail reads `groundEntityNum` 1022 on all 30
@@ -2533,6 +2554,27 @@ so both fail the run the moment they are fixed:
   twitching, which `m1carbine_mp`'s 65 would hide. The gap is
   `ADS_WALK_GAP`; the suspect is `pmove::ground_trace`, a bare 0.25-unit box
   trace with no hysteresis (`crates/common/src/pmove.rs`).
+
+Closed on 2026-09-07, off the same capture:
+
+- **A scoped shot left a reload segment retail does not run** (was
+  `RECHAMBER_GAP`, and was never a rechamber). VERIFIED: the `ads_release`
+  step that follows the sight-held reload reads `weaponstate` 7, then 9 with
+  `weaponDelay` 0 throughout on retail, and on vcod held `weaponstate` 5 for
+  12 of the step's samples with a 175 ms `weaponDelay`, writing `weapAnim`
+  11 with it. VERIFIED: 5 is `WEAPON_RELOADING`, the segmented reload's loop
+  segment, 11 is its `WEAP_RELOAD`, and 175 is `reloadAddTime` 0.2 less one
+  25 ms cmd; the 12 samples are `reloadTime` 0.6. VERIFIED: the rifle ships
+  `clipSize` 5, `reloadStartAdd` 1 and `noPartialReload` 1, and the step
+  before the reload fired one round. INFERRED: the start segment's add
+  filled the clip, retail's start-segment exit (1.7, `0x30010c50`) ran the
+  reload test and refused the loop, and vcod's opened the loop
+  unconditionally, one segment of `reloadTime` that loaded nothing and the
+  `torsoAnim` the animscript hangs on it. Fixed: the start segment's exit
+  runs the reload test and ends the reload on a refusal, a state 8 with
+  rounds in the clip ends it too, and the start's add reads
+  `reloadStartAdd` rather than `reloadAmmoAdd`
+  (`vcod_common::pmove::weapon`).
 
 Closed on 2026-09-05, off the `--probe-sweep` runs (3.4):
 

@@ -829,21 +829,23 @@ fn reload_machine(
     }
     match ps.weaponstate {
         WEAPON_RELOAD_START | WEAPON_RELOAD_START_INTERUPT => {
-            begin_reload_proper(ps, def, events);
+            // The start's own add can fill the clip (kar98k_sniper after one
+            // shot), in which case no loop segment runs at all.
+            let interrupted =
+                ps.weaponstate == WEAPON_RELOAD_START_INTERUPT && ps.ammoclip[def.clip_index] != 0;
+            if !interrupted && can_reload(ps, def) {
+                begin_reload_proper(ps, def, events);
+            } else {
+                end_reload(ps, def, events);
+            }
         }
         WEAPON_RELOADING | WEAPON_RELOADING_INTERUPT => {
             let interrupted = ps.weaponstate == WEAPON_RELOADING_INTERUPT;
-            clear_rechamber(ps);
             if def.segmented_reload && !interrupted && can_reload(ps, def) {
+                clear_rechamber(ps);
                 begin_reload_proper(ps, def, events);
-            } else if def.segmented_reload && def.reload_end_time > 0.0 {
-                ps.weaponstate = WEAPON_RELOAD_END;
-                ps.weapon_time_ms = ms(def.reload_end_time);
-                set_anim(ps, WEAP_RELOAD_END);
-                push(events, EV_RELOAD_END);
             } else {
-                ps.weaponstate = WEAPON_READY;
-                set_anim(ps, WEAP_IDLE);
+                end_reload(ps, def, events);
             }
         }
         _ => {
@@ -852,6 +854,21 @@ fn reload_machine(
         }
     }
     true
+}
+
+/// A reload's last segment is over: a segmented weapon with a `reloadEndTime`
+/// runs its end state, anything else is ready (section 1.7).
+fn end_reload(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmEvent>) {
+    clear_rechamber(ps);
+    if def.segmented_reload && def.reload_end_time > 0.0 {
+        ps.weaponstate = WEAPON_RELOAD_END;
+        ps.weapon_time_ms = ms(def.reload_end_time);
+        set_anim(ps, WEAP_RELOAD_END);
+        push(events, EV_RELOAD_END);
+    } else {
+        ps.weaponstate = WEAPON_READY;
+        set_anim(ps, WEAP_IDLE);
+    }
 }
 
 /// The frame a reload's `weaponDelay` expires: a bolt-action's spent case
@@ -864,11 +881,16 @@ fn reload_delay_edge(ps: &mut PlayerState, def: &WeaponDef, events: &mut Vec<PmE
         return;
     }
     let (ci, ai) = (def.clip_index, def.ammo_index);
-    // A segmented reload loads `reloadAmmoAdd` rounds per segment.
-    let want = if def.segmented_reload && def.reload_ammo_add > 0 {
-        def.reload_ammo_add as i16
-    } else {
-        def.clip_size as i16
+    // The start segment loads `reloadStartAdd` rounds and a loop segment
+    // `reloadAmmoAdd`; a 0 start loads nothing, a 0 loop fills the clip.
+    let in_start = matches!(
+        ps.weaponstate,
+        WEAPON_RELOAD_START | WEAPON_RELOAD_START_INTERUPT
+    );
+    let want = match (in_start, def.reload_start_add, def.reload_ammo_add) {
+        (true, 0, _) => return,
+        (true, add, _) | (false, _, add) if add > 0 && add < def.clip_size => add as i16,
+        _ => def.clip_size as i16,
     };
     let room = (def.clip_size as i16 - ps.ammoclip[ci]).min(want);
     let take = room.min(ps.ammo[ai]).max(0);
@@ -1956,6 +1978,7 @@ mod tests {
         d.segmented_reload = true;
         d.no_partial_reload = true;
         d.reload_ammo_add = 1;
+        d.reload_start_add = 1;
         d.reload_add_time = 0.2;
         d.reload_start_time = 1.8;
         d.reload_start_add_time = 1.3;
@@ -1980,6 +2003,42 @@ mod tests {
         assert_eq!(ps.weaponstate, WEAPON_READY);
         assert_eq!(ps.ammoclip[1], 5);
         assert_eq!(ps.ammo[1], 27);
+    }
+
+    /// The start segment's own add can fill the clip, and then no loop
+    /// segment runs: the retail `kar98k_sniper_mp` capture reads
+    /// `weaponstate` 7 then 9, never 5, after a one-round reload
+    /// (cod11-combat.md, 9.2).
+    #[test]
+    fn a_start_segment_that_fills_the_clip_skips_the_loop() {
+        let mut d = def(0.33, 1.0, 0.6, 0.35, 5, true);
+        d.segmented_reload = true;
+        d.no_partial_reload = true;
+        d.reload_ammo_add = 1;
+        d.reload_start_add = 1;
+        d.reload_add_time = 0.2;
+        d.reload_start_time = 1.8;
+        d.reload_start_add_time = 1.4;
+        d.reload_end_time = 0.77;
+        let (mut ps, w) = armed(&d);
+        ps.ammoclip[1] = 4;
+        let input = PmInput {
+            reload: true,
+            ..Default::default()
+        };
+        let events = step(&mut ps, &w, &input, 1);
+        assert_eq!(events, vec![EV_RELOAD_START]);
+        let mut states = Vec::new();
+        let mut events = Vec::new();
+        for _ in 0..60 {
+            events.extend(step(&mut ps, &w, &PmInput::default(), 50));
+            states.push(ps.weaponstate);
+        }
+        assert_eq!(events, vec![EV_RELOAD_END]);
+        assert!(!states.contains(&WEAPON_RELOADING), "{states:?}");
+        assert!(states.contains(&WEAPON_RELOAD_END), "{states:?}");
+        assert_eq!(ps.weaponstate, WEAPON_READY);
+        assert_eq!(ps.ammoclip[1], 5);
     }
 
     /// The attack bit cuts a segmented reload short at the end of its segment.
