@@ -2909,8 +2909,9 @@ right. Fixed in `step_slide_move`, pinned by
   and the byte only reaches the server in the full usercmd branch, which a
   `wbuttons`, `upmove` or `weapon` change forces -- the three inputs those
   three steps used.
-- UNVERIFIED: the exact meaning of `client+0x220C` and `client+0x2210`, the
-  two floats `FireWeapon` substitutes for the view pitch and yaw.
+- Closed: `client+0x220C` and `client+0x2210` are the aim `ClientThink_real`
+  computes ahead of `Pmove`, the view rotated by the gun's own angles down a
+  sight. Section 15.
 
 ---
 
@@ -3533,3 +3534,267 @@ VERIFIED: its pain frame reads `aimSpreadScale` 94.00 off a counter that was
 0. INFERRED: section 6's step 5 adds `damage * 100 / maxHealth` there, so
 retail charged 94, which is what the falloff gives at the 78 units the replay
 measures between the blast and the thrower.
+
+---
+
+## 15. Where a shot goes: the aim block and the sight sway
+
+A scoped shot on retail does not leave along the view. Section 2.1 already
+read `FireWeapon` replacing the view's pitch and yaw with `client+0x220C` and
+`client+0x2210`; this section is what writes those two, which is a block at
+the top of `ClientThink_real` that runs once per usercmd ahead of `Pmove`
+and turns the view into the direction the gun points, sight sway included.
+The retail client draws its scoped view off the same functions (15.5), so
+the reticle and the bullet agree on retail by construction, and a server
+that fires along the raw view puts the bullet where the scope is not.
+
+### 15.1 The block
+
+VERIFIED, `ClientThink_real` `0x3fee0`, the addresses below; INFERRED, the
+order and every gate, which are control flow.
+
+- `0x3ff52`: `msec = ucmd->serverTime - ps->commandTime`, capped at 200
+  (`0xc8`); this is the cmd length the sway is stepped by, not the
+  66 ms chop `Pmove` runs.
+- `0x40186`: `BG_GetSpeed(ps, level.time)`. VERIFIED, `0x3450c`: with
+  `pm_flags & 0x10` (the ladder) it returns `ps->velocity[2]` when
+  `level.time - ps->jumpTime (0x64) > 499` and 0 otherwise; off a ladder
+  the horizontal `sqrt(vx² + vy²)`.
+- `0x401a2`: `BG_CalculateViewAngles` on a frame of `{ps, client+0x226c,
+  level.time, client+0x2274, client+0x2270, speed}`, and `0x401a7`-`0x401dd`
+  add its three outputs onto `ps->viewangles` (`ps+0xc0`) into a local
+  `aim`. The three client fields are section 6's damage kick: step 11's
+  stamp and steps 7 and 8's two angles.
+- `0x40229`: `BG_CalculateWeaponPosition_Sway(ps, &client+0x2278,
+  &client+0x2284, &client+0x2290, 1.0f, msec)`; 15.3.
+- `0x40332`: `BG_CalculateWeaponAngles` on a frame of `{ps, speed,
+  msec * 0.001 (.rodata 0x72d2c), client+0x229c..0x22a8, level.time,
+  client+0x226c, +0x2274, +0x2270, client+0x22ac..0x22c0,
+  client+0x2290..0x2298}`, written back into the same client fields at
+  `0x403d2`-`0x4043e`; 15.2.
+- `0x40347`: `BG_IsAimDownSightWeapon(ps->weapon)`, which is
+  `weaponDefs[w]->aimDownSight` (`0x2cc`) and nothing else (`0x3a970`, 25
+  bytes). With it set and `ps->fWeaponPosFrac` (`0xb8`) not 0 (`0x4035b`):
+  `AnglesToAxis(weaponAngles)` (`0x4037e`), `AnglesToAxis(aim)`
+  (`0x40394`), `MatrixMultiply(weaponAxis, viewAxis)` (`0x403b4`),
+  `AxisToAngles` back into `aim` (`0x403c4`).
+- `0x4044a` / `0x40456`: `client+0x220c = aim[0]`, `client+0x2210 = aim[1]`.
+- `0x40466`: `Pmove`.
+
+VERIFIED: `MatrixMultiply` (`0x3b5a8`) is the row product `out[i][j] =
+Σ in1[i][k] * in2[k][j]`, `AnglesToAxis` (`0x3ef3c`) is `AngleVectors` with
+the right vector negated (`vec3_origin - right`), and `AxisToAngles`
+(`0x3c808`) takes the yaw as `atan2(f[1], f[0])` and the pitch as
+`atan2(f[2], sqrt(f[0]² + f[1]²)) * -180 / PI` (`.rodata 0x72960` is
+-180.0), each with 360 added while negative. INFERRED: the composed forward
+is therefore the gun's forward expressed in the view's basis, `wf.x *
+viewForward + wf.y * viewLeft + wf.z * viewUp`, which is the gun's angles
+applied as a rotation in the view's own frame, and the stored pitch is in
+0..360 (a shot 0.4 degrees up reads 359.6).
+
+VERIFIED: the two fields are read by `FireWeapon` (`0x68dcc`, `0x68dd5`) and
+`FireWeaponMelee` (`0x69424`, `0x6942d`) and nowhere else in the module, and
+11.3 already has the grenade throw going through `FireWeapon`'s same angles.
+INFERRED: a bullet, a swing and a throw all leave along the block's aim; a
+grenade is not `aimDownSight`, so a throw gets the view plus its damage kick
+and no gun angles. INFERRED, from the position of the block ahead of
+`Pmove`: the aim is built from the playerstate the previous cmd left,
+`viewangles` included, so a shot goes along the view of the cmd before the
+one that pulled the trigger.
+
+### 15.2 `BG_CalculateWeaponAngles` (`0x3a1e4`)
+
+VERIFIED, the offsets, constants and call targets below, out of the
+function and the five static helpers it calls in this order; INFERRED, every
+condition. The output starts at zero and each term adds.
+
+- Lean roll: with `ps->leanf` (`0x40`) non-zero, `out[2] -= 2 *
+  GetLeanFraction(leanf)`, where `GetLeanFraction` (`0x7ba64`) is
+  `(2 - |f|) * f` (`.rodata 0x7a340` is 2.0).
+- Sight pitch: with `aimDownSight` set, `out[0] += fWeaponPosFrac *
+  adsAimPitch` (`0x344`). Every stock MP file reads `adsAimPitch 0`.
+- `0x39604`, the tilt under movement. The stance's minimum speed is
+  `proneRotMinSpeed` (`0x180`) under `eFlags 0x40`, `duckedRotMinSpeed`
+  (`0x17c`) under `0x20`, `standRotMinSpeed` (`0x178`) otherwise. At or
+  below it, or with `weaponstate` 5 (`WEAPON_RELOADING`), the target tilt is
+  zero; above it the target is the stance's `standRotP/Y/R` (`0x108`),
+  `duckedRot*` (`0x12c`) or `proneRot*` (`0x150`) scaled by `(speed - min) /
+  (ps->speed (0x44) - min)` clamped to 0..1, and then by `1 - fWeaponPosFrac`
+  when the fraction is non-zero. Each axis of the state at `client+0x229c`
+  eases toward its target by `dt * (target - cur) * rate`, `rate` being
+  `posProneRotRate` (`0x174`) when `viewHeightCurrent` (`0xd0`) equals
+  `proneViewHeight` (`0x33c`) and `posRotRate` (`0x170`) otherwise, with the
+  step floored at `dt * 0.1` toward the target (`.rodata 0x727fc`,
+  `0x72800`) and clamped at it. The state is added whole at a fraction of 0,
+  scaled by `1 - 2 * frac` below 0.5 (`0x72804`), and not at all above.
+- `0x3990c`, the idle. The amount is `hipIdleAmount` (`0x274`), or 80
+  (`0x7280c`) when the file spells 0, on a weapon with no sight, and
+  `hipIdleAmount + (adsIdleAmount (0x270) - hipIdleAmount) * frac` on one
+  with; a stance factor at `client+0x22a8` eases toward 1, `idleCrouchFactor`
+  (`0x278`) under `eFlags 0x20` or `idleProneFactor` (`0x27c`) under `0x40`
+  at 0.5 a second (`0x72808`), and scales the amount. Then, with `t` the
+  frame's `level.time` in milliseconds: `out[2] += amount * sin(t * 0.0005)
+  * 0.04` (`0x72810`, `0x72814`), `out[1] += amount * sin(t * 0.0007) *
+  0.01` (`0x72818`, `0x7281c`), `out[0] += 0.01 * sin(t * 0.001) * amount`
+  (`0x72820`). The sines are taken in x87 extended precision off an
+  integer time; an f32 argument at a few million milliseconds has no
+  fractional part left to carry the phase.
+- `0x39a5c`, the walk bob on the gun. `c = PI/4 + 2 * PI * bobCycle / 255 +
+  4 * PI` (`0x72824` is 255.0, `0x72828` PI, `0x72830` 2 PI, `0x72838` PI/4;
+  `bobCycle` is the byte at `ps+8`), `sp = speed * 0.16` (`0x72840`), and
+  the stance multiplier is 0.03 (`0x72848`) with `viewHeightTarget` (`0xcc`)
+  equal to `proneViewHeight` (`0x33c`), 0.0075 (`0x7284c`) with
+  `crouchViewHeight` (`0x340`), 0.007 (`0x72850`) otherwise, the product
+  capped at 10 (`0x72844`). `pitch = -((sin(PI/2 + 4c) * 0.2 + sin(2c)) *
+  0.75 * a)` (`0x72858`, `0x72854`, `0x72860`, `0x72864`), `yaw = -sin(c) *
+  a`, and `roll = min(sin(c - 3PI/20) * a', 0)` with `a'` off `sp * 1.5`
+  (`0x72870`, `0x72868`). With the fraction non-zero all three are scaled by
+  `1 - (1 - adsBobFactor (0x234)) * frac`, which is what that key is for.
+- `0x39ce8`, the damage kick on the gun, section 6's `client+0x226c` stamp
+  and its two angles. Nothing when the stamp is 0. `f = frac * 0.5 + 0.5`
+  (`0x72874`), the envelope rises over `f * 100` ms (`0x72878`) as
+  `GetLeanFraction(dt / rise)` and falls over `f * 400` more (`0x7287c`) as
+  `1 - GetLeanFraction(1 - r)` with `r = 1 - (dt - rise) / fall`, gone once
+  `r <= 0`; with the fraction non-zero and `adsOverlayReticle` (`0x228`)
+  set, `f *= 1 - frac * 0.75` (`0x72880`). Then `out[0] += g * f *
+  client+0x2274 * 0.5`, `out[1] -= g * f * client+0x2270`, `out[2] += g * f
+  * client+0x2270 * 0.5`.
+- `0x39e14`, the gun-kick spring: `adsGunKickAccel/SpeedMax/SpeedDecay/
+  StaticDecay` (`0x360`-`0x36c`) blended from the `hipGunKick*` four
+  (`0x3a0`-`0x3ac`) by the fraction, `gunMaxPitch`/`gunMaxYaw` (`0x280`,
+  `0x284`) as the clamps, stepped in 5 ms substeps (`0x72888`, `0x72890`),
+  a pitch and a yaw spring each settling at 0.25 (`0x72898`) and a velocity
+  under 1, off the state at `client+0x22ac..0x22c0`. VERIFIED, by
+  `objdump` over the module: the only instructions that touch
+  `client+0x22ac` through `+0x22c0` are `ClientThink_real`'s own copies in
+  and out of the frame. INFERRED: nothing in the game module ever kicks the
+  spring, so on a server it reads zero for the whole of a life and the
+  helper adds nothing; the kick a retail client sees after its own shot is
+  the cgame's copy of the same state and never reaches the server's aim.
+- Last, `out[0] = AngleSubtract(out[0], frame+0x44)` and `out[1] =
+  AngleSubtract(out[1], frame+0x48)`, the sway angles of 15.3.
+
+### 15.3 `BG_CalculateWeaponPosition_Sway` (`0x3a548`)
+
+VERIFIED: the signature is `(ps, vec3 *lastView, vec3 *offset, vec3
+*angles, float scale, int msec)` off the call at `0x40229`, the field
+reads below, and the constants; INFERRED: the conditions.
+
+- With `aimDownSight` clear the six hip keys are used as they are:
+  `swayMaxAngle` (`0x288`), `swayLerpSpeed` (`0x28c`), `swayPitchScale`
+  (`0x290`), `swayYawScale` (`0x294`), `swayHorizScale` (`0x298`),
+  `swayVertScale` (`0x29c`). With it set, each is blended toward its
+  `adsSway*` twin (`0x2a4`-`0x2b8`) by the fraction, but first: with the
+  fraction above 0 and `adsOverlayReticle` (`0x228`) non-zero the function
+  returns at `0x3a596` having written nothing, the last view included. A
+  scope freezes the turn sway for as long as the sight is up at all, and
+  `swayShellShockScale` (`0x2a0`) has no ADS twin and is not read here.
+- `AnglesSubtract(ps->viewangles, lastView)` (`0x3a687`) gives the per-axis
+  turn since the previous cmd; pitch and yaw are each clamped to
+  `±swayMaxAngle`.
+- `k = swayLerpSpeed * msec * 0.001` (`0x728e8`). Each of the four state
+  values moves `k` of the way to its target when the distance is over 0.001
+  (`0x728f0`) and the step does not overshoot it, and to the target outright
+  otherwise: `offset[1]` toward `yawTurn * swayHorizScale * scale`,
+  `offset[2]` toward `pitchTurn * swayVertScale * scale`, `angles[0]` toward
+  `pitchTurn * swayPitchScale * scale`, `angles[1]` toward `yawTurn *
+  swayYawScale * scale`, the two angle targets first pulled down by 360
+  while more than 180 (`0x728f8`, `0x728fc`) above the current value. Both
+  angles then go through `AngleNormalize180` (`0x3a8e5`, `0x3a8f8`) and
+  `lastView = ps->viewangles` (`0x3a900`-`0x3a91a`).
+- VERIFIED, `AngleNormalize180` `0x3eb70`: it sets the x87 control word
+  with `0xc00` (`0x3eb86`) before its `fistp`, which is round toward zero,
+  masks with `0xffff` and scales back by 360/65536. INFERRED: the
+  truncation is what lets a decaying lag reach zero; rounded to nearest it
+  stalls a few 65536ths out once a step is smaller than half of one, and
+  15.6 measured exactly that on the first implementation.
+- `scale` is 1.0 on the server (`0x4020e` pushes `0x3f800000`). VERIFIED,
+  cgame `0x300361f0`: the client passes `1 + (swayShellShockScale - 1) *
+  ease` through a shellshock and 1.0 otherwise, so the shellshock key is a
+  client-side thing.
+
+### 15.4 `BG_CalculateViewAngles` (`0x3a930`)
+
+VERIFIED: the offsets and constants; INFERRED: the conditions. Two helpers
+on a zeroed output.
+
+- `0x3a2d4`, the damage kick on the view. Nothing when `client+0x226c` is 0.
+  `f = 1 - frac * 0.5` (`0x728a0`), and with the fraction above 0 and
+  `adsOverlayReticle` set `f *= frac * 0.5 + 1`; the envelope is 15.2's
+  with a fixed 100 ms rise (`0x728a4`) and 400 ms fall (`0x728a8`); `out[0]
+  += g * f * client+0x2274`, `out[2] += g * f * client+0x2270`.
+- `0x3a3c4`, the sight's own walk bob: with `eFlags & 0xc000` clear, the
+  fraction non-zero and `adsViewBobMult` (`0x238`) non-zero, `c = 2 * PI *
+  bobCycle / 255 + 2 * PI` (`0x728ac`, `0x728b0`, `0x728b8`), the stance
+  multiplier of 15.2 by `viewHeightTarget` (`0x728c4`, `0x728c8`,
+  `0x728cc`) on the raw speed capped at 45 (`0x728c0`), then `out[0] -= frac
+  * adsViewBobMult * ((sin(PI/2 + 4c) * 0.2 + sin(2c)) * 0.75 * a)`
+  (`0x728d0`, `0x728d8`, `0x728e0`, `0x728e4`) and `out[1] -= frac *
+  adsViewBobMult * sin(c) * a`.
+
+### 15.5 The client draws the same thing
+
+VERIFIED, `cgame_mp_x86.dll` `0x300371f0`: it calls `0x300361f0` (the sway
+with the shellshock scale), `0x30012bf0` (`BG_CalculateWeaponAngles`, the
+same five helpers at `0x300120c0`, `0x30012500`, `0x30012610`,
+`0x300127e0` and `0x30012a60`), and with `aimDownSight` set and the
+fraction non-zero the same `MatrixMultiply` and `AxisToAngles` pair into
+`0x3020cb80`/`0x3020cb84`, and the raw pair otherwise. INFERRED: those two
+are the refdef's pitch and yaw, so what the scope shows is the world rotated
+by the same gun angles the server fires along, with the overlay fixed at the
+centre.
+
+### 15.6 Measured: the scoped kar98k on retail, and on ours
+
+The `--probe-sway` run: join axis on `mp_carentan` under `tdm` with
+`kar98k_sniper_mp`, turn to the longest clear sightline from the spawn, raise
+the sight, tap eight shots standing still, and print every bullet-impact
+temp entity's origin beside the eye and view. The file spells `adsSpread 0`,
+`adsAimPitch 0`, `adsIdleAmount 45`, `adsOverlayReticle FG42`, so a scoped
+shot has no cone and the angle between the raw view and the eye-to-impact
+ray is the sway alone: pitch `0.45 * sin(0.001 t)` and yaw `0.45 * sin(0.0007
+t)` off 15.2's idle, with the stance factor at 1 and every other term zero
+standing still.
+
+VERIFIED, retail, 2026-09-07, eight impacts 3700 to 4300 units out at yaw
+-141.998, muzzle `(976, -792, 56)`, `t` the snapshot's `serverTime`:
+
+| `serverTime` | pitch, measured | model | yaw, measured | model |
+|---|---|---|---|---|
+| 212050 | -0.438 | -0.450 | -0.317 | -0.317 |
+| 215100 | +0.448 | +0.448 | -0.128 | -0.101 |
+| 218100 | -0.422 | -0.437 | +0.422 | +0.430 |
+| 221150 | +0.428 | +0.425 | -0.347 | -0.343 |
+| 224150 | -0.379 | -0.400 | -0.108 | -0.078 |
+| 230050 | -0.274 | -0.295 | -0.327 | -0.327 |
+| 233100 | +0.254 | +0.262 | -0.122 | -0.086 |
+| 236100 | -0.184 | -0.208 | +0.423 | +0.425 |
+
+A retail impact origin is whole units, which at 4000 units is 0.014 degrees,
+and every residual is inside two of those. INFERRED: the shot leaves along
+the composed aim, both sines with the amplitudes and rates of 15.2, no
+constant offset, and the sight bit alone (the sway is frozen by the scope,
+the spring is zero) puts nothing else on it. INFERRED: with `t` taken 50 ms
+earlier the largest residual falls from 0.036 to 0.020 degrees, which is
+the `level.time` a cmd is processed under being the previous frame's, but
+the quantization does not separate the two readings.
+
+VERIFIED, ours, the same run against `vcod-server` (impacts 1940 units out,
+origins not snapped), first build: pitch within 0.002 degrees of the model
+at `t = serverTime` on every shot and yaw a constant 0.022 degrees over it,
+which is four 65536ths, the stall 15.3 describes: the lag the turn to the
+sightline left was frozen by the scope four units short of zero because the
+normalize rounded. With the truncation the same eight shots read within
+0.004 degrees of the model on both axes, the largest residual being 0.004
+on a yaw of -0.212 against -0.208.
+
+**As implemented.** `crates/common/src/pmove/aim.rs` is the block: the
+sway, the weapon angles with the four helpers that can be non-zero on a
+server, the view angles, and the composition; `ClientSim::update_aim`
+(`crates/server/src/spectate.rs`) runs it once per cmd on the whole cmd
+length before the 66 ms chop, off the view the previous cmd left, and keeps
+the state and the damage kick (`end_frame` now computes section 6's step 6
+angles as well as the bytes); `Attack::Shot`, `Swing` and `Throw` carry the
+aim, and `bullet_fire`, `melee_fire` and `throw_velocity` fire along it.
+Left out on purpose: the gun-kick spring (zero on a server), `eFlags 0xc000`
+(no mounted MG), and the shellshock scale (client-side).
