@@ -275,6 +275,20 @@ engineering setup works.
   8 ms), for every mode. Retail's deathmatch spawn for a lone client is
   random and often indoors, so a run that covers ground takes a few tries;
   read `moved` off the per-second summary before trusting a total.
+  `--save-slope` is that walk written down: every usercmd as it went on the
+  wire and every snapshot's origin, velocity, ground entity, view angles and
+  sight fraction, interleaved, to
+  `crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt`
+  (`--capture-tag` for a second run). `playerstate_slope_ab.rs` replays the
+  cmds on our mover twice, once free-running from the first snapshot and
+  once rebased on retail's state at every snapshot, and diffs the origin at
+  each snapshot's `commandTime`; `SLOPE_REPORT=1` prints every row and the
+  worst spots with the normal under them, `SLOPE_FIXTURE=<path>` with the
+  ignored test replays a run kept in `tmp/`, and `SLOPE_TRACE=<ct>` prints
+  ours cmd by cmd into that clock. The rebased error is what a retail client
+  predicting on our snapshots sees as a correction, so it is the number a
+  view twitch report turns into. Both committed fixtures are retail
+  evidence and a run against ours overwrites them.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
@@ -686,6 +700,24 @@ never pasted decompiler output or disassembly listings.
   rotation whose first entry names the map it is already on therefore restarts
   before it ever changes map, which is what the retail capture shows
   (`docs/research/cod11-map-cycle.md` 4.2).
+- The player is a capsule, not a box. `ClientThink_real` hands pmove
+  `trap_TraceCapsule` (the three trace slots at pm+0xe8/0xec/0xf0), and
+  the retail captures sit at the point height on every grade where a box
+  sits `15 tan` higher: one unit on a 4-degree street, which a predicting
+  retail client corrected on every snapshot as a view twitch. Along a
+  diagonal wall retail slides at 15 where a box's corner is 5 units inside.
+  `collision.rs` sweeps every prim as Q3's capsule shape
+  (`docs/research/cod11-mantle.md`, "The player is a capsule").
+  `--save-slope` plus `crates/server/tests/playerstate_slope_ab.rs` is the
+  measurement: retail's own cmd stream replayed on our mover from retail's
+  own state at every snapshot.
+- The wish speed is not `g_speed`. The walk cmd scale multiplies by the
+  weapon's `moveSpeedScale` (1.18 on the carbine), by `walkSpeedScale` 0.4
+  while the sight is held (`pm_flags` 0x80), by `backSpeedScale` 0.7 and
+  `strafeSpeedScale` 0.8 on those axes and by `leanSpeedScale` 0.4 on a
+  lean, so a sighted carbine walk is 89.7 and a plain run 224 (the mantle
+  doc, "The wish speed"). The motion gate never compared velocity, which is
+  how 190 flat survived for a month.
 - A thread's own `notify` does not fire its own `endon`. A thread that
   `endon`s an event and then notifies that event itself survives and runs on;
   every *other* thread's `endon` on it still kills. Measured with

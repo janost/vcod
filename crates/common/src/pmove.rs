@@ -21,6 +21,16 @@ pub const PM_SPECTATOR_FRICTION: f32 = 5.0;
 pub const SCALE_WALK: f32 = 0.4;
 pub const SCALE_CROUCH: f32 = 0.65;
 pub const SCALE_PRONE: f32 = 0.15;
+/// Retail's `ps.backSpeedScale`, `strafeSpeedScale` and `leanSpeedScale`
+/// as the wire carries them (`crates/server/tests/fixtures/playerstate/
+/// mp_carentan-dm.txt`); the walk mover's cmd scale reads all three
+/// (game.mp.i386.so 0x2e690, cod11-mantle.md "The wish speed").
+pub const SCALE_BACK: f32 = 0.7;
+pub const SCALE_STRAFE: f32 = 0.8;
+pub const SCALE_LEAN: f32 = 0.4;
+/// The wade slowdown `1 - waterlevel / 3 * WADE_SCALE` in the same scale
+/// (rodata 0x70890).
+const WADE_SCALE: f32 = 0.5;
 /// Ground-jump heights: vz = sqrt(2 * height * GRAVITY). Retail rodata
 /// 0x70BE8/0x70BEC, applied in fn 0x316F4 @0x31CC0 (game.mp.i386.so).
 pub const JUMP_HEIGHT_STAND: f32 = 34.0;
@@ -37,6 +47,8 @@ pub const PM_FRICTION: f32 = 5.5;
 /// Friction control floor: drop uses max(speed, stopspeed) (@0x2e500).
 pub const PM_STOPSPEED: f32 = 100.0;
 pub const STEPSIZE: f32 = 18.0;
+/// The revert test's margin, rodata 0x70ef4 (`PM_StepSlideMove` 0x35441).
+const STEP_REVERT_EPS: f32 = 0.001;
 /// Step height while prone (PM_StepSlideMove @0x35045 tests pm_flags bit 0x1).
 pub const STEPSIZE_PRONE: f32 = 10.0;
 pub const OVERCLIP: f32 = 1.001;
@@ -378,6 +390,11 @@ pub struct PlayerState {
     /// The previous cmd's sight bit, retail's `pm->oldcmd.buttons & 0x10`.
     /// Only the prone arm of the ADS flag reads it.
     pub last_cmd_ads: bool,
+    /// Retail's `pm_flags` 0x80, the ADS walk: the sight held on a player
+    /// who has the ADS flag, is not prone and is not reloading
+    /// (`PM_UpdatePlayerWalkingFlag`, 0x33694). It is what puts
+    /// `walkSpeedScale` on the wish speed.
+    pub walking: bool,
 }
 
 impl PlayerState {
@@ -432,6 +449,7 @@ impl PlayerState {
             grenade_cancelled: false,
             last_cmd_angles: [0; 2],
             last_cmd_ads: false,
+            walking: false,
         }
     }
 
@@ -526,6 +544,7 @@ pub fn pmove(
         weapons.get(ps.weapon as usize).and_then(Option::as_ref),
         dt,
     );
+    let weapon_def = weapons.get(ps.weapon as usize).and_then(Option::as_ref);
     let mut events = Vec::new();
     ps.jumped = false;
     let was_on_ground = ps.on_ground;
@@ -542,11 +561,16 @@ pub fn pmove(
     // Retail updates the ADS flag once per `pm_type` arm, after the ground
     // trace and before the arm's move (`PM_UpdateAimDownSightFlag`, combat
     // doc 1.13), so it reads the ground state the move starts from.
-    weapon::update_ads_flag(
-        ps,
-        input,
-        weapons.get(ps.weapon as usize).and_then(Option::as_ref),
-    );
+    weapon::update_ads_flag(ps, input, weapon_def);
+    // `PM_UpdatePlayerWalkingFlag` follows it in the same arm (0x342d8), so
+    // the walk reads the ADS flag this frame just set.
+    ps.walking = input.ads
+        && ps.ads_active
+        && ps.stance != Stance::Prone
+        && !matches!(
+            ps.weaponstate,
+            weapon::WEAPON_RELOADING..=weapon::WEAPON_RELOAD_END
+        );
     if ps.waterjump_ms > 0.0 {
         ps.waterjump_ms -= dt * 1000.0;
         if ps.waterjump_ms < 0.0 {
@@ -583,7 +607,7 @@ pub fn pmove(
         }
         if ps.on_ground {
             friction(ps, ps.on_ladder, dt);
-            walk_move(ps, input, world, dt, Some(&mut events));
+            walk_move(ps, input, weapon_def, world, dt, Some(&mut events));
         } else {
             air_move(ps, input, world, dt, Some(&mut events));
         }
@@ -626,9 +650,10 @@ pub fn dead_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
     ground_trace(ps, world);
     // No events and no post-step velocity scale for a corpse: retail's step
     // block sits behind `ps->pm_type > 5` (@0x35660).
+    ps.walking = false;
     if ps.on_ground {
         friction(ps, false, dt);
-        walk_move(ps, &idle, world, dt, None);
+        walk_move(ps, &idle, None, world, dt, None);
     } else {
         air_move(ps, &idle, world, dt, None);
     }
@@ -1077,15 +1102,68 @@ fn friction(ps: &mut PlayerState, on_ladder: bool, dt: f32) {
 }
 
 /// Desired direction (world space, unit or zero) and speed.
-fn wish(ps: &PlayerState, input: &PmInput) -> (Vec3, f32) {
+/// The walk mover's wish direction and speed, retail's `PM_CmdScale`
+/// (game.mp.i386.so 0x2e690, called from `PM_WalkMove` at 0x2f2bf): Q3's
+/// `speed * max / (127 * total)` over the cmd bytes, with a backpedal read
+/// through `backSpeedScale` and a strafe through `strafeSpeedScale` before
+/// the max is taken, then `walkSpeedScale` on the ADS walk and otherwise
+/// `runSpeedScale` with `leanSpeedScale` on a lean, the stance scale, the
+/// wade scale and the weapon's `moveSpeedScale`. The cmd magnitude then
+/// multiplies back in, so a lone full key wishes `SPEED_RUN` and a diagonal
+/// wishes no more (docs/research/cod11-mantle.md, "The wish speed").
+///
+/// `walk_slow` is the client's own fly-mode key and takes the walk scale.
+/// Not ported: the crouch-to-prone blend across the eye lerp, and the
+/// `wbuttons` 0x4 factor (0.4, rodata 0x70894), which no measured key sets.
+fn wish(ps: &PlayerState, input: &PmInput, weapon: Option<&WeaponDef>) -> (Vec3, f32) {
+    let (f, r) = (input.forward * 127.0, input.right * 127.0);
+    let max = if f < 0.0 { -f * SCALE_BACK } else { f }.max(r.abs() * SCALE_STRAFE);
+    if max <= 0.0 {
+        return (Vec3::ZERO, 0.0);
+    }
+    let total = (f * f + r * r).sqrt();
+    let mut scale = SPEED_RUN * max / (127.0 * total);
+    if ps.walking || input.walk_slow {
+        scale *= SCALE_WALK;
+    } else if ps.lean != 0.0 {
+        scale *= SCALE_LEAN;
+    }
+    scale *= ps.stance.speed_scale();
+    scale *= 1.0 - ps.water_level as f32 / 3.0 * WADE_SCALE;
+    if let Some(w) = weapon.filter(|w| w.move_speed_scale > 0.0) {
+        scale *= w.move_speed_scale;
+    }
     let fwd = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0);
     let right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
-    let dir = (fwd * input.forward + right * input.right).normalize_or_zero();
-    let scale = match ps.stance {
-        Stance::Stand if input.walk_slow => SCALE_WALK,
-        stance => stance.speed_scale(),
+    let wishvel = fwd * f + right * r;
+    (wishvel.normalize_or_zero(), wishvel.length() * scale)
+}
+
+/// The air mover's wish, retail's Q3-shaped scale (0x2e5bc, called from
+/// `PM_AirMove` at 0x2f083): the magnitude rule over forward, right and up,
+/// and the walk/run pick, with no stance, lean, weapon or wade factor. A
+/// held jump or a held stance key puts 127 in `upmove`, and that dilutes the
+/// horizontal wish the way Q3's does.
+fn wish_air(ps: &PlayerState, input: &PmInput) -> (Vec3, f32) {
+    let (f, r) = (input.forward * 127.0, input.right * 127.0);
+    let u = if input.jump || input.crouch || input.prone {
+        127.0
+    } else {
+        0.0
     };
-    (dir, SPEED_RUN * scale)
+    let max = f.abs().max(r.abs()).max(u);
+    if max <= 0.0 {
+        return (Vec3::ZERO, 0.0);
+    }
+    let total = (f * f + r * r + u * u).sqrt();
+    let mut scale = SPEED_RUN * max / (127.0 * total);
+    if ps.walking || input.walk_slow {
+        scale *= SCALE_WALK;
+    }
+    let fwd = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0);
+    let right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
+    let wishvel = fwd * f + right * r;
+    (wishvel.normalize_or_zero(), wishvel.length() * scale)
 }
 
 /// Q3 `bg_pmove.c` `PM_Accelerate`.
@@ -1167,6 +1245,7 @@ fn clip_velocity(vel: Vec3, normal: Vec3) -> Vec3 {
 fn walk_move(
     ps: &mut PlayerState,
     input: &PmInput,
+    weapon: Option<&WeaponDef>,
     world: &CollisionWorld,
     dt: f32,
     events: Option<&mut Vec<PmEvent>>,
@@ -1176,7 +1255,7 @@ fn walk_move(
         water_move(ps, input, world, dt, events);
         return;
     }
-    let (dir, wishspeed) = wish(ps, input);
+    let (dir, wishspeed) = wish(ps, input, weapon);
     // accelerate per stance: values selected at 0x2f4b0-0x2f4ca in the
     // steep-slope mover; walk-path application INFERRED
     let accel = match ps.stance {
@@ -1525,14 +1604,22 @@ fn air_move(
     events: Option<&mut Vec<PmEvent>>,
 ) {
     ps.air_speed_peak = ps.air_speed_peak.max(-ps.velocity.z);
-    let (dir, wishspeed) = wish(ps, input);
+    let (dir, wishspeed) = wish_air(ps, input);
     accelerate(ps, dir, wishspeed, PM_AIRACCELERATE, dt);
     step_slide_move(ps, world, dt, true, events);
     set_movement_dir(ps, input, dt);
 }
 
-/// Q3 `bg_slidemove.c` `PM_SlideMove`. Returns true if anything was hit.
-fn slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bool) -> bool {
+/// What [`slide_move`] ran into.
+#[derive(Clone, Copy)]
+struct Slide {
+    blocked: bool,
+    /// The start was inside something: the trace could not move at all.
+    stuck: bool,
+}
+
+/// Q3 `bg_slidemove.c` `PM_SlideMove`.
+fn slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bool) -> Slide {
     const NUM_BUMPS: usize = 4;
     let (mins, maxs) = (ps.mins(), ps.maxs());
 
@@ -1561,7 +1648,10 @@ fn slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bo
         if t.allsolid {
             // trapped in solid: keep the horizontal control, kill the fall
             ps.velocity.z = 0.0;
-            return true;
+            return Slide {
+                blocked: true,
+                stuck: true,
+            };
         }
         if t.fraction > 0.0 {
             ps.origin = t.endpos;
@@ -1574,7 +1664,10 @@ fn slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bo
 
         if planes.len() >= MAX_CLIP_PLANES {
             ps.velocity = Vec3::ZERO;
-            return true;
+            return Slide {
+                blocked: true,
+                stuck: false,
+            };
         }
         // same plane again: nudge out along it (epsilon on non-axial planes)
         if planes.iter().any(|p| t.normal.dot(*p) > 0.99) {
@@ -1611,7 +1704,10 @@ fn slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bo
                     .any(|(k, &p)| k != i && k != j && clipped.dot(p) < 0.1)
                 {
                     ps.velocity = Vec3::ZERO;
-                    return true;
+                    return Slide {
+                        blocked: true,
+                        stuck: false,
+                    };
                 }
             }
 
@@ -1624,7 +1720,10 @@ fn slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bo
     if gravity {
         ps.velocity = end_velocity;
     }
-    bumps != 0
+    Slide {
+        blocked: bumps != 0,
+        stuck: false,
+    }
 }
 
 /// Q3 `bg_slidemove.c` `PM_StepSlideMove`. Step height 18, or 10 while prone
@@ -1643,7 +1742,8 @@ fn step_slide_move(
     };
     let start_o = ps.origin;
     let start_v = ps.velocity;
-    let blocked = slide_move(ps, world, dt, gravity);
+    let slide = slide_move(ps, world, dt, gravity);
+    let blocked = slide.blocked;
     // Retail takes the down pass on every grounded frame, not only a blocked
     // one: `PM_StepSlideMove` (0x350ec) tests `groundEntityNum` and jumps into
     // the body when the player is on something, where Q3 returns as soon as
@@ -1653,12 +1753,17 @@ fn step_slide_move(
     }
     let (mins, maxs) = (ps.mins(), ps.maxs());
     let (down_o, down_v) = (ps.origin, ps.velocity);
+    // Retail's `ebx` (0x34fdf-0x34ff1): on a ground plane and not on a
+    // ladder. A waterjump sets its launch inside the move and the down
+    // pass's clip would take it away, so it is kept out of this.
+    let ground_plane = ps.on_ground && !ps.on_ladder && ps.waterjump_ms <= 0.0;
 
+    // The step-up runs on a blocked slide only (0x35166): the up trace over
+    // `stepSize + 1`, the slide again from up there, and `stepUp` the height
+    // gained (0x352d8).
     let mut step = 0.0;
     if blocked {
-        // `allsolid`, not `startsolid`: a bbox merely touching the floor is
-        // startsolid, and stepping up is how that resolves.
-        let up = world.box_trace(start_o, start_o + Vec3::Z * step_size, mins, maxs);
+        let up = world.box_trace(start_o, start_o + Vec3::Z * (step_size + 1.0), mins, maxs);
         if !up.allsolid && up.endpos.z > start_o.z {
             step = up.endpos.z - start_o.z;
             ps.origin = up.endpos;
@@ -1667,35 +1772,52 @@ fn step_slide_move(
         }
     }
 
-    // The snap itself: on the ground the push-down reaches half a step size
-    // past the step it took (0x352e8). It is what pulls a walker back onto a
-    // crest instead of letting the climb's upward velocity throw it off, and
-    // retail gates it on the ground state alone, never on the velocity: a
-    // walker whose slide a wall or a seam bevel just redirected has upward
-    // velocity into its ground plane, and the snap's clip is what takes that
-    // out again (docs/research/cod11-mantle.md, "The ground snap"). A
-    // waterjump sets its launch inside the move and must keep it.
-    let snap = if ps.on_ground && !ps.on_ladder && ps.waterjump_ms <= 0.0 {
-        step_size * 0.5
-    } else {
-        0.0
-    };
-    let down = world.box_trace(ps.origin, ps.origin - Vec3::Z * (step + snap), mins, maxs);
-    if down.fraction >= 1.0 {
-        // Nothing within reach: the step is undone and the snap is not a
-        // fall (0x353d0).
-        ps.origin.z -= step;
-    } else if !down.allsolid {
-        ps.origin = down.endpos;
-        ps.velocity = clip_velocity(ps.velocity, down.normal);
+    // The down pass: past the step by half a step size more on a ground
+    // plane (0x352e8), and taken on an unblocked grounded frame too, where
+    // it reaches 9 units under the plain slide (docs/research/cod11-mantle.md,
+    // "The ground snap").
+    if ground_plane || step != 0.0 {
+        let reach = step + if ground_plane { step_size * 0.5 } else { 0.0 };
+        let down = world.box_trace(ps.origin, ps.origin - Vec3::Z * reach, mins, maxs);
+        if down.fraction < 1.0 {
+            ps.origin = down.endpos;
+            ps.velocity = clip_velocity(ps.velocity, down.normal);
+        } else {
+            // Nothing within reach: the step is undone and the snap is not
+            // a fall (0x353d0).
+            ps.origin.z -= step;
+        }
     }
-    if step != 0.0 {
-        let stepped = (ps.origin.truncate() - start_o.truncate()).length_squared();
-        let flat = (down_o.truncate() - start_o.truncate()).length_squared();
-        if down.normal.z < MIN_WALK_NORMAL || flat > stepped {
-            // into air, onto a too-steep slope, or the flat slide got further
-            ps.origin = down_o;
-            ps.velocity = down_v;
+
+    // Retail's revert (0x353f7-0x3546e): the plain slide's displacement and
+    // the stepped one's, both projected on the velocity the down pass left,
+    // and the plain slide's state comes back whenever it got as far, so a
+    // step that cleared nothing is undone together with its down pass
+    // (docs/research/cod11-mantle.md, "The ground snap").
+    // A start inside a solid keeps its step out of it: retail's test would
+    // put it back, but retail never has a player there, since its spawns sit
+    // 0.125 up, and vcod's tests and its fallback spawn do.
+    let v = ps.velocity.truncate();
+    let flat = v.dot((down_o - start_o).truncate());
+    let stepped = v.dot((ps.origin - start_o).truncate());
+    if !slide.stuck && flat + STEP_REVERT_EPS > stepped {
+        ps.origin = down_o;
+        ps.velocity = down_v;
+        // The ground snap proper (0x354cc-0x3557b): a reverted move on a
+        // ground plane is pulled down by half a step size from the plain
+        // slide's end, which is what walks a player down a kerb without a
+        // fall and raises the negative step events the captures carry.
+        if ground_plane {
+            let down = world.box_trace(
+                ps.origin,
+                ps.origin - Vec3::Z * (step_size * 0.5),
+                mins,
+                maxs,
+            );
+            if down.fraction < 1.0 {
+                ps.origin = down.endpos;
+                ps.velocity = clip_velocity(ps.velocity, down.normal);
+            }
         }
     }
     // The step-up and the snap both reach this, and so does a reverted step:
@@ -2541,7 +2663,7 @@ mod tests {
     }
 
     #[test]
-    fn ankle_deep_water_barely_slows_running() {
+    fn ankle_deep_water_wades_at_retails_scale() {
         // retail has no wading wish clamp: nothing references
         // pm_waterSwimScale/pm_waterWadeScale and the walk mover (0x2F03C)
         // never reads water level - only the water-friction term slows you
@@ -2557,8 +2679,10 @@ mod tests {
         assert_eq!(wet.water_level, 1);
         let dry_speed = dry.velocity.truncate().length();
         let wet_speed = wet.velocity.truncate().length();
+        // Retail's cmd scale wades at `1 - waterlevel / 3 * 0.5`
+        // (cod11-mantle.md, "The wish speed").
         assert!(
-            wet_speed > 160.0 && wet_speed > dry_speed - 12.0,
+            (wet_speed - dry_speed * (1.0 - WADE_SCALE / 3.0)).abs() < 2.0,
             "ankle-deep run {wet_speed} vs dry {dry_speed}"
         );
     }
