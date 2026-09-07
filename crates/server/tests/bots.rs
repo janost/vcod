@@ -8,12 +8,12 @@ use std::time::{Duration, Instant};
 
 const MAP: &str = "mp_carentan";
 
-fn cfg(bots: usize, shoot: bool) -> vcod_server::ServerConfig {
+fn cfg(bots: usize, shoot: bool, gametype: &str) -> vcod_server::ServerConfig {
     vcod_server::ServerConfig {
         map: MAP.into(),
         hostname: "vcod test".into(),
         max_clients: 8,
-        gametype: "tdm".into(),
+        gametype: gametype.into(),
         test_entities: 0,
         trace: false,
         bots,
@@ -22,12 +22,16 @@ fn cfg(bots: usize, shoot: bool) -> vcod_server::ServerConfig {
 }
 
 fn server_with(bots: usize, shoot: bool) -> Option<(vcod_server::Server, Instant)> {
+    server_on(bots, shoot, "tdm")
+}
+
+fn server_on(bots: usize, shoot: bool, gametype: &str) -> Option<(vcod_server::Server, Instant)> {
     let fs = vcod_common::testing::game_fs()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp_bytes = fs.read(&bsp_path).expect("read the bsp");
     let bsp = vcod_common::bsp::parse(&bsp_bytes).expect("parse the bsp");
     let now = Instant::now();
-    let mut sv = vcod_server::Server::new(cfg(bots, shoot), now);
+    let mut sv = vcod_server::Server::new(cfg(bots, shoot, gametype), now);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     Some((sv, now))
@@ -189,4 +193,35 @@ fn a_bot_with_shoot_off_never_presses_the_trigger() {
         sv.bot_body(slots[1]).unwrap().health,
     );
     assert_eq!((ha, hb), (ha2, hb2), "an unarmed bot drew blood");
+}
+
+/// A restart reruns `ClientConnect` for every bot in one frame, and `dm`'s
+/// spawn picker (`_spawnlogic::getSpawnpoint_DM`) compares every other
+/// player's `sessionstate` against strings before the first spawn lands.
+/// Retail reads "spectator" on a client that nothing has written yet;
+/// ours read undefined, the compare aborted every bot's spawn thread, and
+/// the bots sat out the rest of the level as spectators.
+#[test]
+fn bots_spawn_again_after_a_dm_map_restart() {
+    let Some((mut sv, mut now)) = server_on(3, false, "dm") else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    run(&mut sv, &mut now, 100);
+    sv.push_console("map_restart");
+    run(&mut sv, &mut now, 200);
+
+    let aborts = sv.script_aborts();
+    assert!(
+        aborts.is_empty(),
+        "thread(s) aborted across the restart\n{}",
+        aborts.join("\n")
+    );
+    for slot in sv.bot_slots() {
+        let body = sv.bot_body(slot).expect("a bot with no body");
+        assert!(
+            body.playing,
+            "bot {slot} did not spawn again after the restart"
+        );
+    }
 }
