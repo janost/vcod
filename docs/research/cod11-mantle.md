@@ -363,12 +363,90 @@ carries real upward velocity; where the slope levels out, the 0.25-unit ground
 trace of the next frame misses and the player is airborne with that velocity
 still on it. Nine units of reach under the feet is what takes it back down.
 
-VERIFIED: after the down pass, at 0x35756, the horizontal and vertical
-velocity are all scaled by an affine function of
-`|origin[2] - start_o[2]| / stepSize`, and at 0x3574B event 0x8F is added to
-the playerstate with the step delta, clamped to -16..24, biased by +128 as its
-parm. Neither is modelled in `crates/common/src/pmove.rs`; the event is what a
-client would smooth its view step with.
+### The step event and the velocity scale
+
+The tail of `PM_StepSlideMove`, 0x35659 to 0x35799. Both halves are in
+`crates/common/src/pmove.rs` (`step_view`).
+
+VERIFIED: 0x8F is `EV_STEP_VIEW`, index 143 of the event-name table in
+`cgame_mp_x86.dll` (.data 0x30077040).
+
+VERIFIED: the relocation at 0x35752 names the callee
+`BG_AddPredictableEventToPlayerstate`, and the three pushes ahead of it
+(0x3574c, 0x3574b, 0x3574a) are the event id 0x8F, the parm and `pm->ps`.
+
+VERIFIED: retail puts the event on the wire on a plain walk. The hit capture
+`crates/server/tests/fixtures/playerstate/mp_carentan-dm-hit-shooter.txt`
+carries `events=143` with parms 121, 132, 136, 137 and 143, which under the
++128 bias below are steps of -7, +4, +8, +9 and +15 units.
+
+VERIFIED: the constants. The threshold at 0x35697 is the double 0.5 at
+0x70f08; the rounding bias at 0x356af is the float 0.5 at 0x70ef8, taken with
+the x87 rounding mode forced to truncate toward zero (`or ax,0xc00` @0x356c2);
+the clamp at 0x35727-0x35738 is -16..24; the parm bias at 0x35742 is +128; the
+scale factors at 0x35770 and 0x35776 are 0.8 (0x70f10) and 0.2 (0x70f14), and
+the multiply at 0x3577c-0x35799 covers all three velocity components.
+
+VERIFIED: the two reference heights are different slots. The event's step is
+measured against `down_o`, the origin stored at 0x35116 right after
+`PM_SlideMove` and before any step-up (loaded at 0x3568d); the velocity scale
+is measured against `start_o`, the origin stored at 0x34ff4 on entry (loaded at
+0x35761). Nothing writes either slot in between.
+
+INFERRED, from the control flow of 0x35659-0x35799: the tail runs when
+`ps->pm_type` is 5 or less (0x35660) and `PM_VerifyPronePosition` returned
+non-zero (0x3567f), and raises nothing when the step is half a unit or less or
+when the rounded step is 0 (0x356e9). The parm is that rounded step clamped and
+biased. The scale, applied after the event, is
+`0.2 + 0.8 * (1 - |origin[2] - start_o[2]| / stepSize)` with no clamp: a full
+18-unit step costs four fifths of the frame's speed, a step of nothing costs
+none.
+
+INFERRED, from the control flow of 0x35116-0x35659: every arm past the entry
+gate reaches the tail - the step-up, the down pass a grounded frame takes
+without one, and a step-up the "did the flat slide get further" test reverted.
+That is why the retail capture's parms run negative: the ground snap alone
+raises the event.
+
+INFERRED, from the control flow of 0x35057-0x35112: the entry gate lets an
+airborne player through only on the jump-origin allowance. A blocked move whose
+`fJumpOriginZ` is inside +/-0.001 rejoins the unblocked path at 0x350e5 and
+takes the same `groundEntityNum` test, so with that field 0 an airborne frame
+returns before the step-up. vcod does not model `fJumpOriginZ` and its gate
+lets a blocked airborne move step, which is a divergence in the step; the
+event and the scale are held to retail's reachable set by an explicit
+on-ground test in `step_slide_move`, since announcing a step retail never
+takes would put a view jolt on a client that retail's would not.
+
+VERIFIED: `PM_VerifyPronePosition` (0x346e0) returns 1 when `pm_flags & 1` is
+clear. INFERRED, from its control flow: with the bit set it runs the prone fit
+check and, on a refusal, writes its two arguments back over `ps->origin` and
+`ps->velocity` and returns 0, so a prone step that does not fit is undone and
+neither half of the tail runs. vcod does not port that revert - it runs no
+prone fit check inside the move.
+
+Not ported, and not read past its shape: past 0x3579c a third block, gated on
+a step of more than 3 units and on being on the ground, scales
+`min(|step| / 2, 4)` by the 1.25 at 0x70f18.
+
+**The consumer.** VERIFIED: `cgame_mp_x86.dll` handles 143 inside the event
+switch of the function at 0x3001dc10, which reads and writes two floats at
+.bss 0x302094dc and 0x302094e0 (Q3's `cg.stepChange` and `cg.stepTime`) and the
+constants 24.0 (0x3006940c), -16.0 (0x30069788), 0.01 (0x300693f4) and 0.9
+(0x300695ec). VERIFIED: the function at 0x30032860 reads the same pair and the
+0.01 and subtracts from the view origin at 0x3020959c.
+
+INFERRED, from the control flow of both: the handler carries any unfinished
+smoothing forward as
+`(100 - (cg.time - cg.stepTime)) * cg.stepChange * 0.01 * 0.9` while the
+previous step is still inside its 100 ms window and 0 otherwise, adds
+`parm - 128`, clamps the sum to -16..24 and stamps `cg.stepTime`; the function
+at 0x30032860 then lowers the eye by
+`(100 - (cg.time - cg.stepTime)) * cg.stepChange * 0.01` for those 100 ms.
+That is Q3's `CG_StepOffset` with `STEP_TIME` 100, one event carrying the size
+where Q3 has `EV_STEP_4..16`, and a 0.9 decay on the carry-forward Q3 does not
+have. INFERRED: the arm is gated on the event's entity being the local client,
+so the smoothing is the predicting client's own view and nothing else's.
 
 ## State reference (observed pm_flags bits, internal ps+0xC)
 
@@ -438,7 +516,11 @@ Status after the pmove work landed on this branch:
    jumpTime as a dt-advanced ms counter instead of cmd.serverTime.
 5. SHIPPED - the ground snap of "Step-up and steep slopes": the down pass
    runs on every grounded frame and reaches `stepSize * 0.5` past the step it
-   took. NOT ported: the post-step velocity scale and event 0x8F. One
+   took. SHIPPED - `EV_STEP_VIEW` (143) with the rounded, clamped and biased
+   step as its parm, and the post-step velocity scale, both under "The step
+   event and the velocity scale". NOT ported from that tail: the
+   `PM_VerifyPronePosition` revert that gates it (vcod runs no prone fit check
+   inside the move) and the third block past 0x3579c. One
    deliberate deviation: retail's guards are `groundEntityNum` and the pml
    ground-plane flag, both taken before the move, and vcod re-runs the
    ground trace's own kickoff test against the current velocity before it
