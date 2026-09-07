@@ -139,6 +139,8 @@ pub fn probe(
     tag: Option<String>,
     overwrite: bool,
     pvs: bool,
+    slope: bool,
+    cmd_ms: u64,
     script: ShooterScript,
     team: Option<&str>,
     weapon: Option<&str>,
@@ -174,8 +176,10 @@ pub fn probe(
     };
     // The ADS and grenade captures are the combat capture running another script.
     let save_combat = save_combat || save_ads || save_grenade;
-    // The fixture is the route's output, so the capture drives the same walk.
-    let pvs = pvs || save_entities;
+    // The fixture is the route's output, so the capture drives the same walk;
+    // the slope measurement walks it too, with the sight held.
+    let pvs = pvs || save_entities || slope;
+    let mut slope_stats = SlopeStats::default();
     // Every mode that needs a spawned player drives the same stock-menu join;
     // `--probe-team` alone joins and then just watches the roster.
     let joining = save_playerstate
@@ -470,6 +474,9 @@ pub fn probe(
             cmd = target_probe.cmd();
         } else if pvs && pvs_probe.running() {
             cmd = pvs_probe.cmd();
+            if slope {
+                cmd.buttons |= net::msg::BUTTON_ADS;
+            }
             hold_view_yaw(&mut cmd, &client, &mut pvs_probe.spawn_delta_yaw);
         }
         // A retail client sends the weapon it is holding on every cmd. The
@@ -494,6 +501,9 @@ pub fn probe(
         // Every iteration, not once a second; the event rings hold four slots
         // and `loopSound` can come and go between summaries.
         if let Some(s) = client.snapshots().newest() {
+            if slope && join.settled(now) {
+                slope_stats.observe(now, s);
+            }
             watch.check_sounds(s, client.configstrings());
             if netchan_capture {
                 netchan.sample(now, s);
@@ -655,7 +665,10 @@ pub fn probe(
         if now.duration_since(start) >= Duration::from_secs(secs) {
             break;
         }
-        std::thread::sleep(Duration::from_millis(16));
+        std::thread::sleep(Duration::from_millis(cmd_ms));
+    }
+    if slope {
+        slope_stats.report();
     }
 
     // The run's clock can end before the script does; what it has by then is
@@ -4872,6 +4885,119 @@ fn hold_view_yaw(
         s.ps.field_i32(&net::protocol::PROTOCOL_V1, "delta_angles[1]");
     let spawn = *spawn.get_or_insert(delta);
     cmd.angles[1] = (spawn + cmd.angles[1] - delta) & 0xffff;
+}
+
+/// What `--probe-slope` counts over the route walk, per second and for the
+/// run: snapshots with `groundEntityNum` 1023, reversals of the sight ramp
+/// while the sight is held, `EV_STEP_VIEW` (143) events with their parms and
+/// the mean horizontal speed. The same walk against retail and against ours
+/// is the comparison; a server that drops a walker off a slope for a frame
+/// shows it here as airborne snapshots and sight reversals it never asked for.
+#[derive(Default)]
+struct SlopeStats {
+    seen: Option<u32>,
+    prev_seq: Option<i32>,
+    prev_frac: Option<f32>,
+    rising: bool,
+    last_print: Option<Instant>,
+    second: SlopeCounts,
+    run: SlopeCounts,
+}
+
+#[derive(Default, Clone)]
+struct SlopeCounts {
+    snaps: usize,
+    air: usize,
+    adsrev: usize,
+    ev143: Vec<i32>,
+    speed_sum: f32,
+}
+
+impl SlopeCounts {
+    fn add(&mut self, air: bool, adsrev: bool, parms: &[i32], speed: f32) {
+        self.snaps += 1;
+        self.air += usize::from(air);
+        self.adsrev += usize::from(adsrev);
+        self.ev143.extend_from_slice(parms);
+        self.speed_sum += speed;
+    }
+
+    fn line(&self) -> String {
+        let mean = self.speed_sum / self.snaps.max(1) as f32;
+        format!(
+            "snaps {} air {} adsrev {} ev143 {} parms {:?} speed {mean:.0}",
+            self.snaps,
+            self.air,
+            self.adsrev,
+            self.ev143.len(),
+            &self.ev143[..self.ev143.len().min(12)]
+        )
+    }
+}
+
+impl SlopeStats {
+    fn observe(&mut self, now: Instant, snap: &net::snapshot::Snapshot) {
+        if self.seen == Some(snap.message_num) {
+            return;
+        }
+        self.seen = Some(snap.message_num);
+        let p = &net::protocol::PROTOCOL_V1;
+        let air = snap.ps.field_i32(p, "groundEntityNum") == net::protocol::ENTITYNUM_NONE as i32;
+        let frac = snap.ps.field_f32(p, "fWeaponPosFrac");
+        // A reversal is the ramp turning around: rising to falling or back.
+        let adsrev = match self.prev_frac {
+            Some(prev) if frac < prev && self.rising => {
+                self.rising = false;
+                true
+            }
+            Some(prev) if frac > prev && !self.rising => {
+                self.rising = true;
+                true
+            }
+            _ => false,
+        };
+        self.prev_frac = Some(frac);
+        // The ring is written below the sequence (`docs/protocol-1.1.md`);
+        // 8 bits on the wire, so the gain is taken modulo 256 and capped at
+        // the four slots that can still be read.
+        let seq = snap.ps.field_i32(p, "eventSequence");
+        let mut parms = Vec::new();
+        if let Some(prev) = self.prev_seq {
+            let gained = ((seq - prev) & 0xff).min(4);
+            for i in (seq - gained)..seq {
+                let slot = (i & 3) as usize;
+                if snap.ps.field_i32(p, &format!("events[{slot}]")) == 143 {
+                    parms.push(snap.ps.field_i32(p, &format!("eventParms[{slot}]")) - 128);
+                }
+            }
+        }
+        self.prev_seq = Some(seq);
+        let speed = snap
+            .ps
+            .field_f32(p, "velocity[0]")
+            .hypot(snap.ps.field_f32(p, "velocity[1]"));
+        self.second.add(air, adsrev, &parms, speed);
+        self.run.add(air, adsrev, &parms, speed);
+        let due = self
+            .last_print
+            .is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1));
+        if due {
+            self.last_print = Some(now);
+            let o = snap.ps.origin(p);
+            println!(
+                "slope: {} frac {frac:.2} origin=[{:.0},{:.0},{:.0}]",
+                self.second.line(),
+                o[0],
+                o[1],
+                o[2]
+            );
+            self.second = SlopeCounts::default();
+        }
+    }
+
+    fn report(&self) {
+        println!("slope total: {}", self.run.line());
+    }
 }
 
 /// One leg of the `--probe-pvs` route: a heading relative to where the spawn
