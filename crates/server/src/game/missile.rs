@@ -162,13 +162,14 @@ impl Default for Missiles {
 }
 
 /// Section 11.3: where a throw starts and how fast it leaves, from the
-/// thrower's view. Returns `(origin, velocity)`.
-pub fn throw_velocity(ps: &PlayerState, def: &WeaponDef) -> (Vec3, Vec3) {
+/// thrower's aim, which is `FireWeapon`'s same `client+0x220c` pair as a
+/// bullet's (`ClientSim::aim_angles`). Returns `(origin, velocity)`.
+pub fn throw_velocity(ps: &PlayerState, aim: [f32; 2], def: &WeaponDef) -> (Vec3, Vec3) {
     // The eye with lean, each component truncated toward zero -- retail sets
     // the x87 round-to-zero word for it, where the bullet's muzzle is
     // rounded instead (2.1).
     let origin = ps.view().eye.trunc();
-    let (yaw, pitch) = (ps.yaw, ps.pitch);
+    let (yaw, pitch) = crate::game::combat::aim_radians(aim);
     let forward = Vec3::new(
         pitch.cos() * yaw.cos(),
         pitch.cos() * yaw.sin(),
@@ -829,7 +830,7 @@ mod tests {
     #[test]
     fn the_throw_leaves_the_eye_at_the_weapon_files_speed() {
         let ps = PlayerState::spawn(Vec3::new(1200.0, 1760.0, 144.125), 90.0);
-        let (origin, velocity) = throw_velocity(&ps, &frag());
+        let (origin, velocity) = throw_velocity(&ps, [0.0, 90.0], &frag());
         assert!(
             (origin - Vec3::new(1200.0, 1760.0, 204.0)).length() < 0.01,
             "{origin}"
@@ -846,7 +847,7 @@ mod tests {
     fn the_throwers_speed_along_the_throw_is_added() {
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         ps.velocity = Vec3::new(190.0, 0.0, 0.0);
-        let (_, velocity) = throw_velocity(&ps, &frag());
+        let (_, velocity) = throw_velocity(&ps, [0.0, 0.0], &frag());
         let n = Vec3::new(960.0, 0.0, 120.0).normalize();
         let want = Vec3::new(960.0, 0.0, 120.0) + n * 190.0 * n.x;
         assert!((velocity - want).length() < 0.01, "{velocity} want {want}");

@@ -9,6 +9,7 @@ use crate::collision::CollisionWorld;
 use crate::weapon::WeaponDef;
 use glam::Vec3;
 
+pub mod aim;
 pub mod weapon;
 
 pub const GRAVITY: f32 = 800.0;
