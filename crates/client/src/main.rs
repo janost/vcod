@@ -172,6 +172,19 @@ struct Args {
     /// positions in one run, not reproducible places.
     #[arg(long)]
     probe_pvs: bool,
+    /// Walk the --probe-pvs route with the sight held and count, per second
+    /// and for the run, what a slope does to the playerstate: snapshots off
+    /// the ground, fWeaponPosFrac reversals, EV_STEP_VIEW (143) events with
+    /// their parms and the mean speed. Writes no fixture; the same run
+    /// against retail and against ours is the comparison. Pair it with
+    /// --probe-cmd-ms 8 to send usercmds at a high-fps client's rate.
+    #[arg(long)]
+    probe_slope: bool,
+    /// Milliseconds between usercmds the probe sends. A retail client at 125
+    /// fps sends one every 8 ms; the default is what every capture so far
+    /// was taken with.
+    #[arg(long, default_value_t = 16)]
+    probe_cmd_ms: u64,
     /// Turns --save-hit into a measurement instead of a capture: the shooter
     /// taps once per entry of a static table of pitch offsets around the aim
     /// at the target's eye, echoing the offset on each !trace line, and writes
@@ -573,6 +586,8 @@ fn main() -> Result<()> {
             args.capture_tag.clone(),
             args.overwrite_fixture,
             args.probe_pvs,
+            args.probe_slope,
+            args.probe_cmd_ms,
             script,
             args.probe_team.as_deref(),
             args.probe_weapon.as_deref(),
