@@ -58,6 +58,12 @@ const MAX_PACKET_USERCMDS: u8 = 32;
 const MAX_PENDING_CMDS: usize = 64;
 /// pmove steps per snapshot tick; a flood beyond this fast-forwards.
 const MAX_CMDS_PER_TICK: usize = 32;
+/// `Pmove`'s catch-up (`game.mp.i386.so` 0x34492): a client further in arrears
+/// than this has the excess dropped rather than simulated, which also bounds
+/// the chop loop to 16 steps per cmd. `docs/protocol-1.1.md`, "How long a cmd
+/// is simulated for", has the rest of retail's rule, including the two clamps
+/// vcod does not apply.
+const MAX_PMOVE_ARREARS_MS: i32 = 1000;
 /// How often a bot re-runs its enemy search (range gate + LOS traces).
 /// The cached verdict is at most this stale.
 const ENEMY_REFRESH_MS: i32 = 100;
@@ -2724,8 +2730,9 @@ impl Server {
             // What the client held going in, so a switch the machine made is
             // told apart from a playerstate reset between ticks.
             let held = sim.ps.weapon;
-            // Stale cmds (dt <= 0) are skipped whole; a flood past the per-tick
-            // cap resyncs to the newest cmd and keeps only the tail.
+            // Stale cmds (dt <= 0) are skipped whole; a long one is chopped
+            // rather than clamped away; a flood past the per-tick cap resyncs
+            // to the newest cmd and keeps only the tail.
             let mut last_cmd = None::<UserCmd>;
             // Every event the tick's moves raised, for the animation events:
             // a tick that ran several moves still raises each one.
@@ -2746,8 +2753,27 @@ impl Server {
                 if dt_ms <= 0 {
                     continue;
                 }
-                let dt = (dt_ms as f32 / 1000.0).min(MAX_FRAME_MS / 1000.0);
-                let raised = sim.step(&cmd, dt, collision, weapons.defs());
+                // A hitching client's gap is simulated, not discarded: retail
+                // walks `commandTime` up to the cmd's clock in steps of at most
+                // `MAX_FRAME_MS`, each its own `PmoveSingle`, and drops only
+                // the arrears past `MAX_PMOVE_ARREARS_MS`.
+                let mut base = c.last_processed_st;
+                if dt_ms > MAX_PMOVE_ARREARS_MS {
+                    base = cmd.server_time - MAX_PMOVE_ARREARS_MS;
+                }
+                let mut raised = Vec::new();
+                while base != cmd.server_time {
+                    let msec = (cmd.server_time - base).min(MAX_FRAME_MS as i32);
+                    base += msec;
+                    // Each step runs on a cmd stamped at its own end, which is
+                    // what the loop hands `PmoveSingle` (0x344e4) and what that
+                    // then leaves in `commandTime` (0x34074).
+                    let step = UserCmd {
+                        server_time: base,
+                        ..cmd
+                    };
+                    raised.extend(sim.step(&step, msec as f32 / 1000.0, collision, weapons.defs()));
+                }
                 for e in &raised {
                     let weapon = sim.ps.weapon;
                     let grenade = weapons

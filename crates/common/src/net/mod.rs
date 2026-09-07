@@ -841,7 +841,7 @@ impl<T: Transport> NetClient<T> {
         }
     }
 
-    /// `SV_UserMove`'s delta key (cod_lnxded 0x8087043).
+    /// `SV_UserMove`'s delta key (cod_lnxded 0x8086fa4, the mask at 0x8087060).
     fn usercmd_key(&self, message_ack: i32, reliable_ack: i32) -> i32 {
         let slot = reliable_ack as usize & (self.netchan.server_commands.len() - 1);
         let cmd = &self.netchan.server_commands[slot];
