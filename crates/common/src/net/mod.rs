@@ -327,10 +327,12 @@ impl<T: Transport> NetClient<T> {
     }
 
     /// Send one usercmd; a no-op unless active. Called every frame, which is
-    /// also the keepalive.
-    pub fn send_frame(&mut self, cmd: &UserCmd) {
+    /// also the keepalive. Returns the cmd as it went on the wire, stamped,
+    /// quantized and rebased on `delta_angles`, so a capture can record what
+    /// the server will replay rather than what the caller asked for.
+    pub fn send_frame(&mut self, cmd: &UserCmd) -> Option<UserCmd> {
         if self.state != NetState::Active {
-            return;
+            return None;
         }
         let mut to = *cmd;
         to.server_time = self.estimated_server_time();
@@ -347,6 +349,7 @@ impl<T: Transport> NetClient<T> {
             }
         }
         self.send_message(Some(to));
+        Some(to)
     }
 
     /// Queue a reliable `clc_clientCommand`, resent until acked.

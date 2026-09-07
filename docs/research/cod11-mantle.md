@@ -96,12 +96,17 @@ runs, in order:
 | | fn 0x30474 | ground trace, walking/steep-slope categorisation, landing events |
 | | `PM_UpdateAimDownSightFlag` etc. | weapon/stance updates |
 | | fn 0x336E8 | **ladder probe**, sets/clears `PMF_LADDER` + `vLadderVec` |
-| move | dispatch at 0x34305 | `pm_flags & PMF_LADDER` -> `PM_LadderMove` (0x33944); steep-slope flag -> fn 0x2F258; otherwise walk/air mover fn 0x2F03C |
+| move | dispatch at 0x34305 | `pm_flags & PMF_LADDER` -> `PM_LadderMove` (0x33944); `pml.walking` (pml+0x2c) set -> `PM_WalkMove` (0x2F258); otherwise `PM_AirMove` (0x2F03C) |
 | post | fns 0x30474, 0x30778 again | re-categorise |
 
-The walk/air mover (0x2F03C) is Q3-shaped: wishdir from cmd and yaw, wishspeed
-from `BG_GetSpeed` scaled by `ps.speed`-related scales, accelerate
-(`pm_accelerate` = 9.0 ground / 1.0 air), then `PM_StepSlideMove(gravity)`.
+Both movers are Q3-shaped: wishdir from cmd and yaw, wishspeed from the cmd
+scale ("The wish speed" below), accelerate (`pm_accelerate` = 9.0 ground /
+1.0 air), then `PM_StepSlideMove(gravity)`. An earlier read of this table
+had the two movers swapped and 0x2F258 down as a steep-slope mover:
+VERIFIED, 0x2F258 opens with a call to 0x2eb98 whose non-zero return goes to
+0x2F03C (0x2f26a), Q3's `PM_CheckJump` then `PM_AirMove` at the top of
+`PM_WalkMove`, and the dispatch tests `pml+0x2c` (0x34312), the `walking`
+slot of the `pml_t` layout the rest of this module matches.
 
 ## Jumps (there are two)
 
@@ -357,11 +362,26 @@ VERIFIED: at 0x35380 the trace fraction is compared against 1.0; the
 the extra half step pulls the player onto whatever is under it and is not
 itself a fall.
 
-INFERRED: this is what keeps a walking player on the ground at a slope's
-crest. `PM_WalkMove` clips the velocity into the ground plane, so a climb
-carries real upward velocity; where the slope levels out, the 0.25-unit ground
-trace of the next frame misses and the player is airborne with that velocity
-still on it. Nine units of reach under the feet is what takes it back down.
+An earlier read of this file inferred from the reach that the down pass is
+what keeps a walker on the ground at a crest. It is not, and vcod snapped a
+walker onto every floor within 9 units on every grounded frame on that
+reading until 2026-09-07. VERIFIED: at 0x35166 the slide's return value is
+tested and an unobstructed slide jumps to 0x352a0, past the up trace and
+the second slide, so an unobstructed grounded frame runs only the down
+trace (0x352c0-0x35335, with `stepUp` still 0) and then the revert test at
+0x353f7 below, which compares the down pass's result against the plain
+slide's along the velocity in x and y, equal by construction, and restores
+the plain slide's origin and velocity. VERIFIED by capture
+(`crates/server/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms-run3.txt`,
+`commandTime` 256091): walking off a 4-degree grade onto a floor 8 units
+lower, retail keeps `origin[2]` -23.875 for that cmd and falls under gravity
+over the next three snapshots (-24.83, -27.69, -32.45), where vcod's
+unconditional pass put it 8 units down in one 9 ms cmd, on the ground and
+with the step's speed scale applied. INFERRED: the down pass therefore
+survives only after a step-up that gained horizontal distance, which is
+what the `stepUp + 9` reach is for, and a walker on a crest at a
+high-fps client's cmd rate stays grounded because its rise per cmd is under
+the 0.25 units of the ground trace, not because anything pulls it down.
 
 VERIFIED: between the second `PM_SlideMove` call (0x35296) and the down trace
 (0x35335) the function tests two things and nothing else: the flag in `ebx`
@@ -375,9 +395,9 @@ current velocity before it snapped, and a walker rubbing a wall while
 climbing a slope, whose slide keeps the climb's upward component and loses
 the forward one, failed that test every frame: the snap was refused, the
 ground trace after the move read the same test and dropped the player, and
-the sight ramp reversed with it. The gate is the ground state alone now, with
-a waterjump in progress the one exclusion (its launch is set inside the
-move and the snap's clip would take it away).
+the sight ramp reversed with it. That gate is gone with the unconditional
+pass; what is left of it is the waterjump exclusion (its launch is set
+inside the move and the down pass's clip would take it away).
 
 VERIFIED: at 0x3533a a 16-bit word at +0x28 of the down trace is compared
 against 0x3f, and the at-or-below arm (0x35341-0x35377) writes the origin
@@ -388,13 +408,18 @@ that lands on a client is undone whole, and the tail never runs for it.
 VERIFIED: at 0x353f7-0x3544e the function compares
 `v . (down_o - start_o) + 0.001` (0x70ef4) against `v . (origin - start_o)`,
 with `v` the velocity as it stands after the down pass and both
-displacements taken in x and y, and the greater-former arm (0x3546e-0x35499)
-writes `down_o` and `down_v` back over the playerstate. INFERRED: this is
-the "did the flat slide get further" test, measured along the velocity
-rather than by length, and what it restores is the flat slide's state from
-before any down pass, so a reverted step ends the move unsnapped and the
-ground trace after it decides. vcod compares squared horizontal lengths
-instead and reverts to the same slot.
+displacements taken in x and y (`down_o - start_o` is formed at
+0x35146-0x35160, right after the slots are saved), and the greater-former
+arm (0x3546e-0x35499) writes `down_o` and `down_v` back over the
+playerstate. INFERRED: this is the "did the flat slide get further" test,
+measured along the velocity rather than by length, and what it restores is
+the flat slide's state from before any down pass, so a reverted step ends
+the move unsnapped and the ground trace after it decides; and since the
+0.001 is on the plain slide's side, a step whose slide got exactly as far as
+the plain one is reverted too. vcod's `step_slide_move` runs the same
+test on every frame now, with `STEP_REVERT_EPS` the 0.001; until 2026-09-07
+it compared squared horizontal lengths, only after a step-up, and let an
+unobstructed frame keep its down pass.
 
 ### What the collider does to a walker on a terrain seam
 
@@ -425,11 +450,101 @@ around `mp_carentan`'s deathmatch spawns, up and down each, the walks that
 left the ground with walkable floor inside 18 units below went from 101 to
 53 of 600, and every remaining one is a ledge, a prop or a fall of more than
 the snap's 9 units. VERIFIED: the same walks at 16 and 25 ms count the same
-way, so the cmd rate is not the trigger. VERIFIED: `--probe-slope` against
+way, so the cmd rate is not the trigger. Those counts were taken with the
+box sweep this section describes; the capsule ("The player is a capsule")
+replaced it the same day and the seam rules above still apply to it. VERIFIED: `--probe-slope` against
 the retail server on open ground reads `groundEntityNum` 1022 on all 1464
 snapshots and no sight reversal at 8 ms and at 25 ms, and against a
 staircase at 25 ms reads 27 airborne snapshots and 13 reversals, so retail
 itself drops a walker pushing against steps.
+
+### The player is a capsule
+
+Where retail's origin sits on a grade, and why vcod's sat a unit higher.
+Found by replaying retail's own cmd stream on vcod's mover from retail's
+own state at every snapshot (`crates/server/tests/playerstate_slope_ab.rs`,
+the rebased run): on the 3.3-degree street at mp_carentan (799, 1800-1900)
+ours landed 1.08 units above retail on every snapshot, on the 4-degree grade
+at (1190-1218, 2047-2073) 1.07, at the kerb at (1672, 928) retail stepped
+down with its centre 15 units past the kerb's straight edge where ours kept
+its corner on the kerb's diagonal edge for 7 more, and along the diagonal
+wall brush at (-568, 2088)-(-444, 1964) retail slid with its centre 15.1 to
+16.3 from the face where a box's corner would have been 5 units inside it.
+
+VERIFIED: `ClientThink_real` (game.mp.i386.so) stores `trap_TraceCapsule`
+into the pmove's three trace slots, `pm+0xe8`, `pm+0xec` and `pm+0xf0`
+(relocations at 0x400b1, 0x400b8 and 0x400bf), and `trap_PointContents`
+into `pm+0xf4` (0x400c6); `PM_StepSlideMove` calls `pm+0xe8` (0x3532f). So
+every trace the mover makes is a capsule trace, against brushes and terrain
+alike. VERIFIED: the tracemask it stores at `pm+0x34` (0x400a4) is
+0x2810011 for `pm_type` 5 or less and 0x810011 above it (0x40098).
+VERIFIED: `cod_lnxded` carries the string `^1Box collision on terrain
+currently being faked with capsule collision` at 0x85320, between
+`CM_GenerateTerrainCollide`'s error strings (0x85201-0x852c1) and
+`CM_ChangeAreaPortalState`'s. INFERRED: the shape is Q3's
+(`CM_TestBoundingBoxInCapsule`, `cm_trace.c`): radius the smaller of the
+half width and half height, sphere centres `halfheight - radius` above and
+below the box centre, every plane pushed out by the radius and tested
+against the sphere nearest it. For the player box that is a radius of 15
+with spheres 15 and 55 above the feet.
+
+VERIFIED by capture, against that shape: a capsule of radius `r` rests on a
+plane of normal `n` with its feet at `h + r (1 / n.z - 1)` above the point
+height `h`, which is 0.045 on the 4-degree grade; retail's origins there
+match vcod's *point* trace of the same mesh to within 0.03 (y 1899.57:
+retail -35.76, point -35.759; y 1840.50: retail -38.44, point -38.46), and
+a box rests at `h + r tan`, the 1.05 vcod carried. At the kerb the capsule's
+footprint releases the straight edge with the centre 15 past it and is
+16.3 from the diagonal edge there, so it drops where retail did (the
+`run4` capture, `commandTime` 285441, `EV_STEP_VIEW` -7 at x 1656-1661);
+a box's corner holds the diagonal until the centre is 21.2 past the straight
+edge, x 1650, which is where vcod dropped.
+
+vcod: `collision.rs` sweeps every prim as that capsule, `Capsule::of` on
+the trace box: brushes with their planes pushed out by the radius, Q3's
+sphere arm of `CM_TraceThroughBrush`, and triangles (the soups and the
+props' meshes) with their bevel planes pushed out the same way. A zero box
+is still a point, so the bullet sweep is unchanged; a missile's small box
+becomes a sphere of its half width, which is not measured against retail.
+
+What the replay measured, rebased on retail's state at every snapshot
+(`playerstate_slope_ab.rs`, the two committed captures, 1463 and 1469
+snapshots). VERIFIED: with the box sweep, the 190 wish speed and the
+unconditional down pass, the 8 ms capture read |dz| up to 8.0 and 1.08 on
+every snapshot of the 3.3-degree street, dxy up to 5.9, with 9 ground
+disagreements; with the wish speed fixed and the capsule, |dz| reads
+p50 0, p95 0.006, p99 0.10, max 0.96 (the foot of a kerb ramp at
+(1241, 2069)), dxy p50 0.02, p95 0.14, max 5.9 (a diagonal wall slide at
+(1790, 2086), where ours lags retail's 105 units/s by 3 to 6 per
+snapshot), and no ground disagreement. The 25 ms capture reads |dz| p95 0
+with one 18.5 row, dxy p95 0.30, max 4.5, 69 ground disagreements. Retail's
+own noise floor is the integer truncation of the velocity it sends, under
+0.05 per interval.
+
+Open, both seen in the 25 ms capture and neither in the mover:
+
+- Retail's player does not collide the prop at (-762, 1764, 151-170):
+  retail stops 15.12 from the `clip_nosight` brush 423 beside it and 14.1
+  from the prop's corner, so the prop is not in its trace, where vcod's
+  world carries the prop's xmodel mesh and steps 18.5 up its slanted
+  edge (`commandTime` 1195225). What retail collides xmodels with is not
+  read; the grenade-on-a-cart evidence in `cod11-combat.md` may be a
+  missile trace or a clip brush.
+- Retail stands inside two `clip_*` brushes vcod treats as player-solid:
+  the `clip_metal` `script_brushmodel` at (-196..-139, 2496..2606,
+  -32..-22), contents 0x280306c0, with retail's feet at -31.9 inside it
+  (the parked 25 ms run1, `commandTime` 1156000-1160000), and the
+  `clip_nosight` world brush 4254 (contents 0x28031640) at (-597, 1832,
+  144). Both carry bit 0x10000, which is in the player tracemask
+  0x2810011, so either that bit is not what vcod reads it as or those
+  brushes are not in retail's clip map as they stand in the lump. Not
+  resolved.
+
+Not measured: the terrain collide's own plane set. vcod expands its
+triangle's face, axis and edge-cross bevel planes by the radius, Q3's
+facet shape; whether `CM_GenerateTerrainCollide` builds the same bevels is
+not read, and a difference would show only at a triangle edge met
+obliquely.
 
 ### The step event and the velocity scale
 
@@ -515,6 +630,92 @@ That is Q3's `CG_StepOffset` with `STEP_TIME` 100, one event carrying the size
 where Q3 has `EV_STEP_4..16`, and a 0.9 decay on the carry-forward Q3 does not
 have. INFERRED: the arm is gated on the event's entity being the local client,
 so the smoothing is the predicting client's own view and nothing else's.
+
+## The wish speed
+
+What a cmd asks the mover for, per frame. Found by replaying retail's own
+cmd stream on vcod's mover (`crates/server/tests/playerstate_slope_ab.rs`):
+the sight-held route walk of every `--save-slope` capture settles at 63 per
+axis on a diagonal, 89.7 units/s, where vcod wished 190, and the ADS
+capture's plain walk at 224 (`mp_carentan-dm-ads.txt`, `walk`: velocity
+163, 154). Neither is `g_speed`.
+
+VERIFIED: `PM_WalkMove` (0x2f258) calls the cmd scale at 0x2e690 with a
+copy of the cmd (0x2f2bf), and `PM_AirMove` (0x2f03c) calls the one at
+0x2e5bc (0x2f083). The two are different functions.
+
+The walk scale, 0x2e690. VERIFIED, each a read of the instruction named:
+
+- `forwardmove` (cmd+0x14) below zero is multiplied by `ps.backSpeedScale`
+  (ps+0x360, 0x2e6b4) and `rightmove` (cmd+0x15) by `ps.strafeSpeedScale`
+  (ps+0x35c, 0x2e6e8), both then `fabs`, and the larger is the `max`; a
+  zero `max` returns 0 (0x2e712).
+- `total` is `sqrt(forwardmove^2 + rightmove^2)` over the raw bytes
+  (0x2e717-0x2e72d), and the scale is `ps.speed` (ps+0x44) times `max` over
+  `127.0` (0x70884) times `total` (0x2e732-0x2e746), Q3's `PM_CmdScale`.
+- `pm_flags` 0x80 set (the byte at ps+0xc read signed, 0x2e748) multiplies
+  by `ps.walkSpeedScale` (ps+0x34c); clear multiplies by `ps.runSpeedScale`
+  (ps+0x350) and then, when `ps.leanf` (ps+0x40) is non-zero, by
+  `ps.leanSpeedScale` (ps+0x364) (0x2e75a-0x2e771).
+- `pm_type` 2 multiplies by 3.0 (0x70888) and 3 by 6.0 (0x7088c), and both
+  skip the rest (0x2e781-0x2e79c).
+- The stance block (0x2e7a1-0x2e8d2) multiplies by `ps.proneSpeedScale`
+  (ps+0x354) or `ps.crouchSpeedScale` (ps+0x358), and across an eye lerp
+  between the prone and crouch heights (`ps.viewHeightLerpTarget` at ps+0xd8
+  against ps+0x33c and ps+0x340, the fraction from 0x308cc) by the two
+  blended by the fraction.
+- `pm->waterlevel` (pm+0xd9, the byte fn 0x30778 writes 0 to 3 at
+  0x30786-0x308b9) non-zero multiplies by `1 - waterlevel / 3.0 * 0.5`
+  (0x70888, 0x70890; 0x2e8d7-0x2e8fd).
+- `ps.weapon` (ps+0xb0) non-zero looks up `BG_GetInfoForWeapon` and, when
+  the float at info+0x214 is above zero, multiplies by it (0x2e906-0x2e953).
+  INFERRED: that field is the weapon file's `moveSpeedScale`, from the
+  numbers alone: 190 * 1.18 (the carbine's value) is the 224 the ADS capture
+  walks at, and 190 * 1.18 * 0.4 is the 89.7 the slope captures walk at.
+- `wbuttons` bit 0x4 (cmd+0x5, 0x2e959) multiplies by 0.4 (0x70894). No
+  measured key sets it (`docs/protocol-1.1.md`, "Usercmd input bits") and
+  vcod does not port it.
+
+The air scale, 0x2e5bc. VERIFIED: `max` is the largest of `|forwardmove|`,
+`|rightmove|` and `|upmove|` (cmd+0x14..0x16, 0x2e5c7-0x2e601), `total` is
+the root of the three squares (0x2e610-0x2e627), the scale is `ps.speed *
+max / (127.0 * total)` (0x2e648-0x2e654, 0x70878), then the same
+`pm_flags` 0x80 pick between `walkSpeedScale` and `runSpeedScale`
+(0x2e656-0x2e664) and the same `pm_type` 2 and 3 factors, and nothing
+else. INFERRED: a crouched or prone client's held `upmove` of -127 dilutes
+its airborne wish the way a held jump does, since the byte enters `total`
+unsigned.
+
+The walk flag. VERIFIED: `PM_UpdatePlayerWalkingFlag` (0x33694) clears
+`pm_flags` 0x80 first (0x3369d) and sets it (0x336dd) when `pm_type` is 5 or
+less, `cmd.buttons` has 0x10 (pm+0x8), `pm_flags` bit 0x1 (prone) is clear,
+`pm_flags` 0x20 (the ADS flag) is set and `weaponstate` (ps+0xb4) is none of
+5 to 9. VERIFIED: in the `PM_NORMAL` arm of `PmoveSingle` it runs at
+0x342d8, after `PM_UpdateAimDownSightFlag` (0x342d3) and before the ladder
+probe and the move dispatch. INFERRED: 0x80 is therefore the ADS walk, the
+sight held by a standing or crouched player who is not reloading, and
+`walkSpeedScale` (0.4 on the wire) is what slows a sighted walk to 0.4 of
+the run. Open: the ADS capture's snapshots carry the bit (`ads_in`,
+`ads_walk` read `pm_flags` 0x400a0) while every `--save-slope` snapshot at
+8, 16 and 25 ms reads 0x40020 with the sight held and the walk at 0.4, so
+something between the move and the snapshot clears it in that run shape and
+not the other; not chased, since a client recomputes the flag in its own
+`PmoveSingle` and the speed says the server had it set.
+
+VERIFIED: the wire playerstate carries the seven scales, and retail's spawn
+sends `walkSpeedScale` 0.4, `runSpeedScale` 1.0, `proneSpeedScale` 0.15,
+`crouchSpeedScale` 0.65, `strafeSpeedScale` 0.8, `backSpeedScale` 0.7 and
+`leanSpeedScale` 0.4 (`crates/server/tests/fixtures/playerstate/
+mp_carentan-dm.txt`; offsets 844 to 868 in the `playerStateFields` table at
+cod_lnxded 0x80d229c). VERIFIED against the motion capture: `run_back` at
+44 per axis and `strafe_right` at 50, 52 are 224 * 0.4 * 0.7 and 224 * 0.4
+* 0.8 with `leanf` stuck at -1 from the earlier lean poses, and `crouch_run`
+at 40, 42 is 224 * 0.4 * 0.65.
+
+vcod: `pmove::wish` and `pmove::wish_air` port the two, with
+`PlayerState::walking` as the flag and `WeaponDef::move_speed_scale` as the
+weapon factor. Not ported: the crouch-to-prone blend across the eye lerp
+and the `wbuttons` 0x4 factor.
 
 ## State reference (observed pm_flags bits, internal ps+0xC)
 

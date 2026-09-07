@@ -180,6 +180,14 @@ struct Args {
     /// --probe-cmd-ms 8 to send usercmds at a high-fps client's rate.
     #[arg(long)]
     probe_slope: bool,
+    /// Walk the --probe-slope route and write every usercmd sent and every
+    /// snapshot's movement fields to
+    /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
+    /// which playerstate_slope_ab.rs replays on our mover, origin for origin.
+    /// Retail evidence when taken against tools/run_server.sh; a run against
+    /// vcod-server overwrites it.
+    #[arg(long)]
+    save_slope: bool,
     /// Milliseconds between usercmds the probe sends. A retail client at 125
     /// fps sends one every 8 ms; the default is what every capture so far
     /// was taken with.
@@ -574,6 +582,7 @@ fn main() -> Result<()> {
                 configstrings: args.save_configstrings,
                 playerstate: args.save_playerstate,
                 motion: args.save_motion,
+                slope: args.save_slope,
                 combat: args.save_combat,
                 ads: args.save_ads,
                 grenade: args.save_grenade,
