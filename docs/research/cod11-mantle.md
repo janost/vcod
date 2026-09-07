@@ -500,51 +500,173 @@ footprint releases the straight edge with the centre 15 past it and is
 a box's corner holds the diagonal until the centre is 21.2 past the straight
 edge, x 1650, which is where vcod dropped.
 
-vcod: `collision.rs` sweeps every prim as that capsule, `Capsule::of` on
-the trace box: brushes with their planes pushed out by the radius, Q3's
-sphere arm of `CM_TraceThroughBrush`, and triangles (the soups and the
-props' meshes) with their bevel planes pushed out the same way. A zero box
-is still a point, so the bullet sweep is unchanged; a missile's small box
-becomes a sphere of its half width, which is not measured against retail.
+vcod: `collision.rs` sweeps every brush as that capsule, `Capsule::of` on
+the trace box, with its planes pushed out by the radius, Q3's sphere arm of
+`CM_TraceThroughBrush`; the terrain, the patches and the static models each
+take the shape retail gives them, below. A zero box is still a point, so
+the bullet sweep is unchanged.
 
 What the replay measured, rebased on retail's state at every snapshot
 (`playerstate_slope_ab.rs`, the two committed captures, 1463 and 1469
 snapshots). VERIFIED: with the box sweep, the 190 wish speed and the
 unconditional down pass, the 8 ms capture read |dz| up to 8.0 and 1.08 on
 every snapshot of the 3.3-degree street, dxy up to 5.9, with 9 ground
-disagreements; with the wish speed fixed and the capsule, |dz| reads
-p50 0, p95 0.006, p99 0.10, max 0.96 (the foot of a kerb ramp at
-(1241, 2069)), dxy p50 0.02, p95 0.14, max 5.9 (a diagonal wall slide at
-(1790, 2086), where ours lags retail's 105 units/s by 3 to 6 per
-snapshot), and no ground disagreement. The 25 ms capture reads |dz| p95 0
-with one 18.5 row, dxy p95 0.30, max 4.5, 69 ground disagreements. Retail's
-own noise floor is the integer truncation of the velocity it sends, under
-0.05 per interval.
+disagreements; with the wish speed fixed and the capsule on every prim as
+a Q3 facet polyhedron, |dz| read p50 0, p95 0.006, p99 0.10, max 0.96 (the
+foot of a kerb ramp at (1241, 2069)), dxy p50 0.02, p95 0.14, max 5.9,
+and the 25 ms capture |dz| p95 0 with one 18.5 row, dxy p95 0.30, max 4.5,
+69 ground disagreements. VERIFIED, after the three rules below went in:
+the 8 ms capture reads |dz| p95 0.005, p99 0.026, max 0.129, dxy p95
+0.130, p99 0.178, max 2.9, 2 rows past a unit; the 25 ms one |dz| 0 on
+every row, dxy p95 0.146, p99 0.449, max 4.5, 12 rows past a unit; no
+ground disagreement on either. Retail's own noise floor is the integer
+truncation of the velocity it sends, under 0.05 per interval. The 4.5 row
+is one 50 ms interval of motion at 90 units/s beside a diagonal post brush
+at (-776, 2000), a cmd's worth, and is not chased.
 
-Open, both seen in the 25 ms capture and neither in the mover:
+### Static models are clipped as a segment
 
-- Retail's player does not collide the prop at (-762, 1764, 151-170):
-  retail stops 15.12 from the `clip_nosight` brush 423 beside it and 14.1
-  from the prop's corner, so the prop is not in its trace, where vcod's
-  world carries the prop's xmodel mesh and steps 18.5 up its slanted
-  edge (`commandTime` 1195225). What retail collides xmodels with is not
-  read; the grenade-on-a-cart evidence in `cod11-combat.md` may be a
-  missile trace or a clip brush.
-- Retail stands inside two `clip_*` brushes vcod treats as player-solid:
-  the `clip_metal` `script_brushmodel` at (-196..-139, 2496..2606,
-  -32..-22), contents 0x280306c0, with retail's feet at -31.9 inside it
-  (the parked 25 ms run1, `commandTime` 1156000-1160000), and the
-  `clip_nosight` world brush 4254 (contents 0x28031640) at (-597, 1832,
-  144). Both carry bit 0x10000, which is in the player tracemask
-  0x2810011, so either that bit is not what vcod reads it as or those
-  brushes are not in retail's clip map as they stand in the lump. Not
-  resolved.
+The 18.5 row of the 25 ms capture: at `commandTime` 1195225 retail stands
+at (-750.3, 1778.1) against the `clip_nosight` brushes around a desk and a
+chair (`plainchair` at (-730, 1757), `desk_rolltop` at (-750, 1737)),
+where vcod's capsule stepped 18.6 up the chair's collision mesh.
 
-Not measured: the terrain collide's own plane set. vcod expands its
-triangle's face, axis and edge-cross bevel planes by the radius, Q3's
-facet shape; whether `CM_GenerateTerrainCollide` builds the same bevels is
-not read, and a difference would show only at a triangle edge met
-obliquely.
+VERIFIED: `cod_lnxded`'s `CM_LoadMap` parses every `misc_model` block of
+the entity string itself (the `classname`/`misc_model`/`model`/`origin`/
+`angles`/`modelscale_vec`/`modelscale` keys at 0x80cd1a7-0x80cd1e8, the
+parser at 0x80515d4), registers each xmodel (0x8051420) and links the ones
+whose descriptor has collision into a 2D tree (0x80594c4) keyed by the OR
+of their collision surfaces' `contents` (the loader ORs each surface's
+word, masked `& 0xdfff7ffb`, into the model at +0x48; 0x80c2b48 reads it).
+VERIFIED: `SV_Trace` (0x80916f4) walks that tree only when its last
+argument is set (0x805a58c from 0x80916f4, gated on `param_11`), and the
+game syscall dispatcher (0x8088333) sets it for case 0x2b alone, the
+`trap_LocationalTrace` wrapper (game.mp 0x73948); cases 0x22 `trap_Trace`
+and 0x23 `trap_TraceCapsule` pass 0. So the player's moves, which
+`ClientThink_real` runs through `trap_TraceCapsule`, never meet a static
+model, and a prop is solid to a player only where a mapper wrapped it in
+clip brushes, which is what the desk and chair have. VERIFIED: the static
+walk takes the trace's `start` and `end` alone (0x805a58c copies the two
+points and the mask, no bounds), transforms them into the model's frame
+(0x8051984) and intersects the segment with each collision surface whose
+`contents & mask` is set (0x80c203c): one-sided (`start` on or ahead of the
+plane, `end` behind), fraction `(d_start - 0.125) / (d_start - d_end)`
+(rodata 0x80db970), the crossing inside the two edge planes within -0.001
+and 1.001 (0x80db974, 0x80db978), the hit carrying the surface's
+`surf_flags` and `contents`. INFERRED: the fraction is not clamped, and
+pmove reads a negative one as zero since it moves the origin only for a
+positive one.
+
+VERIFIED: `Bullet_Fire_Extended` (game.mp 0x78890) traces with mask
+0x2802031 and `CanDamage` (0x5a098) with 0x2802091, both through
+`trap_LocationalTrace`, so a bullet and a blast see the props; `G_RunMissile`'s move trace is the same
+syscall (`cod11-combat.md` 12.1) with the missile's `clipmask`, 0x11 when
+unset, and the retail capture rests a frag on a crate stack's own mesh
+(`crates/server/tests/missile_ab.rs`). VERIFIED by census over the stock
+maps: brush content bit 0x10 is glass (`glass@brokenwindow`,
+`dam_window`: 0x2090, 0x8000010, 0x28000010), so a player and a bullet both
+stop at a window pane and a `misc_model` lamp's glass surface (contents
+0x10) stops a player's bullet, not a player.
+
+vcod: `props::collision_tris` hands every collision surface with non-zero
+`contents` to the world as `ModelTri`s; `CollisionWorld::shot_trace` and
+`missile_trace` clip them by the bare segment with those epsilons and
+masks, `box_trace` never does. The bounce parm a prop carries is now the
+surface's own (21 on the crate stack), which `missile_ab` compares.
+
+### Terrain is a swept sphere, a patch is a facet
+
+The kerb-ramp foot at (1241, 2069) and a street row at (799, 2075): the
+facet polyhedron lifted the capsule onto a flat's radius-wide slab a full
+radius before the seam where retail's rose along the ramp; the pavement
+kerb at (1059, 2445): retail stepped up the 8-unit kerb between x 1055.6
+and 1059.1, 13 to 16 units before the edge at 1072, and stood at -23.875
+with its centre 12.9 past the edge, where a swept sphere sags 7 units.
+
+VERIFIED: lump 24 is two kinds of record (`CM_LoadMap`'s loop at
+0x804b010): a byte 2 of 0 is a bezier patch (`u16 width`, `u16 height` at
++4/+6, `u32 first_vert` at +12 into lump 25) handed to
+`CM_GeneratePatchCollide` (0x804dfb4), anything else a terrain partition
+(`u16 vert_count`, `u16 index_count`, `u32 first_vert` at +8, `u32
+first_index` at +12 into lump 26, indices relative to `first_vert`) handed
+to `CM_GenerateTerrainCollide` (0x8051b30); either takes its contents from
+its material. mp_carentan carries 568 terrain and 534 patch records, and
+the render soups draw both. VERIFIED: the kerb wall at x 1072 is a 3x3
+patch of `concrete@stalin1` (record 1048; 1007 and 993/994 are the walls at
+the other two spots), and the pavement and the ramp are terrain (440, 452,
+486, 511).
+
+VERIFIED: the terrain clip (0x8052a58, reached from 0x80536c8 for a box or
+a capsule, a box being "faked with capsule collision", the 0x80cd320
+warning) sweeps one sphere per triangle: the lower one (start and end
+shifted down by `halfheight - radius`) unless the partition's flag byte
+says its faces all point down, then the upper. Against the face:
+`d_end < radius + 0.125` (0x80cd308) and moving in; a start deeper than
+that behind the face is solid only where the segment to the other sphere
+crosses the triangle; else `f = (d_start - r - 0.125) / (d_start -
+d_end)`, 0 when the start is already within, and the contact point's
+barycentrics decide: inside, a face hit; outside, the vertices the point
+is beyond are swept as spheres and the edges as cylinders (the edge frame
+records at +0x40, the vertex records at +0x34, built by 0x8051b30, which
+drops the edges shared by two triangles within its coplanarity tolerance
+at 0x80cd2ec). Every fraction loses 1e-5 (0x80cd30c) and one at or under
+that reads `startsolid` at 0. There is no bevel plane anywhere in it. The
+point arm (0x8052894) is the static-model clip's: front face, 0.125 back
+along the segment, barycentrics within -0.001 and 1.001 (0x80cd2f8-0x300).
+INFERRED: the flag byte is 1 when the partition has a downward face and
+no upward one (0x8051b30's tail: `bVar7 && !upward`), so a floor takes
+the lower sphere and a ceiling the upper, which is the sphere nearest the
+plane.
+
+VERIFIED: a patch goes through `CM_TraceThroughPatchCollide` (0x804e944),
+Q3's facet walk, and Q3's `CM_AddFacetBevels` (`cm_patch.c`) gives a
+facet its surface plane, a perpendicular border per edge, the six axial
+bevels and the edge-by-axis bevels, every one pushed out by the sphere's
+radius in the trace. That is the box-like reach: a flat 3x3 kerb-wall
+patch is one facet whose expanded top bevel holds the sphere at the full
+kerb height 12.9 units past the edge, and its expanded side plane is what
+the walking sphere hit at x 1057, where retail's step-up happened.
+
+vcod: `CollisionWorld::build` takes the terrain triangles from lumps 24-26
+(wound `cross(c - a, b - a)` out, Q3's `PlaneFromPoints`) and clips them
+with the sphere sweep above (`clip_sphere_triangle`); the render soups of
+model 0 stay facets under the polyhedron clip (`triangle_planes`), minus
+the ones that draw terrain, matched as a soup whose centroid lies inside a
+coplanar terrain triangle sharing one of its vertices (an edge match is
+not enough: the render mesh triangulates the grid the other way, and a
+flat patch abutting terrain shares an edge with it). A patch's bezier
+tessellation is not built; its render soup stands in, which is exact for
+the flat patches every kerb wall on carentan is. The `startsolid` a
+terrain touch reads is kept, since retail's stance and prone checks read
+the same flag off the same trace.
+
+### A submodel's brushes are its entity's
+
+The 5.9 dxy rows of the 8 ms capture, at (1758-1790, 2085-2118): retail
+walks through the `clip_metal` brushes 4286-4294 of model 6, a
+`script_brushmodel` with `script_gameobjectname bombzone` around the flak
+gun, which vcod's world held as solid.
+
+VERIFIED: `SP_script_brushmodel` (game.mp 0x70fb8) sets the brush model
+and links the entity, and nothing else puts a submodel's brushes into the
+clip; the world clip is model 0 (`CM_LoadMap` loads the submodels as
+inline models the entity code links). VERIFIED: `dm.gsc:78` and `tdm.gsc`
+hand `_gameobjects::main` an `allowed` list of their own name, `sd.gsc:123`
+adds `bombzone` and `blocker`, and `_gameobjects.gsc` `delete()`s every
+entity with a `script_gameobjectname` outside the list, so under `dm` both
+of carentan's bombzone brush models (5 and 6) are gone before the first
+client walks. The `clip_metal` box at (-196..-139, 2496..2606) the earlier
+reading listed is model 5, the other bombzone. VERIFIED: the `clip_nosight`
+world brush 4254 the same reading put retail inside is a sloped roof clip
+whose bounding box holds the point and whose planes do not (side 9 puts
+(-597, 1832, 144) 26 units outside); it was a bounding-box reading.
+
+vcod: `BrushPlanes` carries its model, `CollisionWorld::set_model_linked`
+drops a model's brushes out of every trace, the `delete` builtin calls it
+for an entity whose `model` is a `*N`, and `playerstate_slope_ab.rs`
+applies the `_gameobjects` rule itself since the replay runs no script.
+The stock MP maps place four `script_brushmodel`s in all: carentan's two
+bombzones and chateau's two gates.
 
 ### The step event and the velocity scale
 

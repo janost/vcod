@@ -650,11 +650,30 @@ never pasted decompiler output or disassembly listings.
   `eType` to 0, sets `eFlags` 256 and writes `EV_GRENADE_EXPLODE` on its own
   ring, so anything filtering entities on `eType == 4` drops exactly the frame
   the explosion is on.
-- Static props are in the server's collision world, not only the client's
-  prediction world. Retail's grenade comes to rest 35 units up on a cart the
-  bare BSP does not have, so `World::from_bsp` takes the paks. A prop's
-  triangles arrive without their material, which is why a bounce off one
-  carries `eventParm` 0 where retail carries the surface type.
+- Static props are clipped by the bare segment of a `trap_LocationalTrace`
+  and by nothing else: bullets, blasts and a flying frag meet a `misc_model`'s
+  collision mesh, a moving player never does (`SV_Trace` walks the static
+  models only on the flag that one syscall passes), so a prop stops a player
+  only where the mapper wrapped it in clip brushes. `World::from_bsp` takes
+  the paks for the props, `shot_trace` and `missile_trace` see them,
+  `box_trace` does not, and each surface keeps its `surf_flags`, which is
+  the bounce parm (`docs/research/cod11-mantle.md`, "Static models are
+  clipped as a segment").
+- Terrain is a swept sphere and a patch is a facet. Retail's terrain clip
+  (lumps 24-26) sweeps the capsule's nearer sphere against a triangle's
+  face, its edges as cylinders and its vertices as spheres, with no bevel
+  anywhere; a patch goes through Q3's facet walk, every border and bevel
+  pushed out by the radius, which is the box-like reach that holds a player
+  at full kerb height 13 units past a kerb wall's edge. The facet polyhedron
+  on terrain lifted the mover a unit at every ramp-to-flat seam; the sphere
+  on a patch would sag it 7 at every kerb. `collision.rs` splits the two off
+  lump 24's record kind (the mantle doc, "Terrain is a swept sphere, a
+  patch is a facet").
+- A submodel's brushes are in the clip only while its entity is linked.
+  `_gameobjects::main` `delete()`s every entity whose `script_gameobjectname`
+  the gametype did not list, which takes carentan's two bombzone
+  `script_brushmodel`s out of every gametype but `sd`; the `delete` builtin
+  unlinks the model and the slope gate applies the script's rule itself.
 - A stock frag bounces off a live player rather than detonating on it.
   `fraggrenade_mp` spells `damage` 0, and retail's direct-hit `MOD_GRENADE`
   arm is gated on that field, so the contact applies the soft damping and the
@@ -715,7 +734,7 @@ never pasted decompiler output or disassembly listings.
   sits `15 tan` higher: one unit on a 4-degree street, which a predicting
   retail client corrected on every snapshot as a view twitch. Along a
   diagonal wall retail slides at 15 where a box's corner is 5 units inside.
-  `collision.rs` sweeps every prim as Q3's capsule shape
+  `collision.rs` sweeps every brush as Q3's capsule shape
   (`docs/research/cod11-mantle.md`, "The player is a capsule").
   `--save-slope` plus `crates/server/tests/playerstate_slope_ab.rs` is the
   measurement: retail's own cmd stream replayed on our mover from retail's

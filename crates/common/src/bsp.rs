@@ -29,6 +29,9 @@ const LUMP_PORTALS: usize = 18;
 const LUMP_NODES: usize = 20;
 const LUMP_LEAFS: usize = 21;
 const LUMP_PVS: usize = 28;
+const LUMP_COLLISION_PARTS: usize = 24;
+const LUMP_COLLISION_VERTS: usize = 25;
+const LUMP_COLLISION_INDICES: usize = 26;
 
 #[derive(Debug)]
 pub struct Material {
@@ -200,6 +203,29 @@ impl Pvs {
     }
 }
 
+/// One lump-24 terrain partition: a triangle list the engine hands
+/// `CM_GenerateTerrainCollide`, indices relative to `first_vert`
+/// (docs/research/bsp-ibsp59-format.md, "Lump 24, collision partitions").
+#[derive(Debug, Clone)]
+pub struct TerrainPart {
+    pub material: u16,
+    pub first_vert: u32,
+    pub vert_count: u16,
+    pub first_index: u32,
+    pub index_count: u16,
+}
+
+/// One lump-24 patch partition: a `width x height` grid of bezier control
+/// points at `first_vert` of lump 25, the engine's `CM_GeneratePatchCollide`
+/// input. Kept for the record; vcod clips a patch through its render soup.
+#[derive(Debug, Clone)]
+pub struct PatchPart {
+    pub material: u16,
+    pub width: u16,
+    pub height: u16,
+    pub first_vert: u32,
+}
+
 #[derive(Debug)]
 pub struct Bsp {
     pub materials: Vec<Material>,
@@ -226,6 +252,11 @@ pub struct Bsp {
     pub leafs: Vec<Leaf>,
     /// `None` when the map ships no lump 28.
     pub pvs: Option<Pvs>,
+    /// Lumps 24-26: the engine's own terrain and patch collision input.
+    pub terrain: Vec<TerrainPart>,
+    pub patches: Vec<PatchPart>,
+    pub collision_verts: Vec<[f32; 3]>,
+    pub collision_indices: Vec<u16>,
 }
 
 impl Bsp {
@@ -766,6 +797,67 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
         cell: le_i32(b, 24),
     })?;
     let pvs = parse_pvs(lump(data, &dir, LUMP_PVS)?)?;
+    let collision_verts = records(
+        lump(data, &dir, LUMP_COLLISION_VERTS)?,
+        12,
+        "collision verts",
+        |b| le_vec3(b, 0),
+    )?;
+    let collision_indices = records(
+        lump(data, &dir, LUMP_COLLISION_INDICES)?,
+        2,
+        "collision indices",
+        |b| u16::from_le_bytes([b[0], b[1]]),
+    )?;
+    let mut terrain = Vec::new();
+    let mut patches = Vec::new();
+    for (i, b) in lump(data, &dir, LUMP_COLLISION_PARTS)?
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .enumerate()
+    {
+        let material = u16::from_le_bytes([b[0], b[1]]);
+        ensure!(
+            (material as usize) < materials.len(),
+            "collision partition {i} material out of range"
+        );
+        let (a, c) = (
+            u16::from_le_bytes([b[4], b[5]]),
+            u16::from_le_bytes([b[6], b[7]]),
+        );
+        if b[2] == 0 {
+            let first_vert = le_u32(b, 12);
+            ensure!(
+                first_vert as usize + a as usize * c as usize <= collision_verts.len(),
+                "patch partition {i} control points out of range"
+            );
+            patches.push(PatchPart {
+                material,
+                width: a,
+                height: c,
+                first_vert,
+            });
+        } else {
+            let (first_vert, first_index) = (le_u32(b, 8), le_u32(b, 12));
+            ensure!(
+                first_vert as usize + a as usize <= collision_verts.len()
+                    && first_index as usize + c as usize <= collision_indices.len()
+                    && c % 3 == 0,
+                "terrain partition {i} out of range"
+            );
+            for &ix in &collision_indices[first_index as usize..][..c as usize] {
+                ensure!(ix < a, "terrain partition {i} index past its vertices");
+            }
+            terrain.push(TerrainPart {
+                material,
+                first_vert,
+                vert_count: a,
+                first_index,
+                index_count: c,
+            });
+        }
+    }
 
     let soup_count = soups.len() as u64;
     let in_soups = |first: u32, count: u32| first as u64 + count as u64 <= soup_count;
@@ -907,6 +999,10 @@ pub fn parse(data: &[u8]) -> Result<Bsp> {
         nodes,
         leafs,
         pvs,
+        terrain,
+        patches,
+        collision_verts,
+        collision_indices,
     })
 }
 
@@ -1276,6 +1372,9 @@ mod tests {
             expect_first += b.num_sides as u32;
         }
         assert_eq!(expect_first as usize, bsp.brush_sides.len());
+        assert_eq!(bsp.terrain.len() + bsp.patches.len(), 619);
+        assert_eq!(bsp.collision_verts.len(), 6291);
+        assert_eq!(bsp.collision_indices.len(), 4496 * 3);
         for b in &bsp.brushes {
             let s = &bsp.brush_sides[b.first_side as usize..][..b.num_sides as usize];
             for axis in 0..3 {
