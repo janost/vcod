@@ -530,7 +530,11 @@ pub fn set_weapon_slot_weapon(
 /// reserve of whatever weapon occupies the slot. Ammo is indexed by the
 /// weapon's ammo *name*, not by the weapon, so two weapons sharing a name
 /// share the reserve (docs/protocol-1.1.md, "How `ammo[]` and `ammoclip[]`
-/// are indexed"). An empty slot names no weapon and so writes nothing.
+/// are indexed"). An empty slot names no weapon and so writes nothing. A
+/// clip-only weapon's reserve is its clip (0x4420f); the count is floored at
+/// 0 and capped at `BG_GetAmmoTypeMax` (0x44294), or the clip size on the
+/// clip-only arm, so `sd.gsc`'s 999 lands as the file's `maxAmmo`
+/// (object model doc, "The six slot accessors").
 pub fn set_weapon_slot_ammo(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -540,9 +544,16 @@ pub fn set_weapon_slot_ammo(
     let (client, slot, rounds) = slot_and_rounds(host, cx, recv, args)?;
     let index = host.client_weapons[client].slots[slot] as usize;
     if let Some(def) = host.weapons.get(index) {
-        let op = WeaponOp::SetAmmo {
-            ammo_index: def.ammo_index,
-            rounds,
+        let op = if def.clip_only {
+            WeaponOp::SetClip {
+                clip_index: def.clip_index,
+                rounds: clamp_rounds(rounds, def.clip_size),
+            }
+        } else {
+            WeaponOp::SetAmmo {
+                ammo_index: def.ammo_index,
+                rounds: clamp_rounds(rounds, def.max_ammo),
+            }
         };
         host.client_weapon_ops.push((client, op));
     }
@@ -551,7 +562,10 @@ pub fn set_weapon_slot_ammo(
 
 /// `self setWeaponSlotClipAmmo(slot, rounds)` (player method 37, 0x443e4):
 /// the same for the clip, which has its own name table and its own index
-/// space.
+/// space. Floored at 0 (0x444d7) and capped at `BG_GetAmmoClipSize`
+/// (0x444ed): `sd.gsc` writes 999 and retail's capture reads the kar98k at
+/// 5, and a clip past its size never reads "not full", which is what
+/// refused every rifle reload under `sd`.
 pub fn set_weapon_slot_clip_ammo(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -563,11 +577,16 @@ pub fn set_weapon_slot_clip_ammo(
     if let Some(def) = host.weapons.get(index) {
         let op = WeaponOp::SetClip {
             clip_index: def.clip_index,
-            rounds,
+            rounds: clamp_rounds(rounds, def.clip_size),
         };
         host.client_weapon_ops.push((client, op));
     }
     Ok(Value::Undefined)
+}
+
+/// The two setters' shared clamp: never below 0, never above `cap`.
+fn clamp_rounds(rounds: i16, cap: u32) -> i16 {
+    rounds.max(0).min(cap.min(i16::MAX as u32) as i16)
 }
 
 /// The receiver, slot and round count the two setters share.

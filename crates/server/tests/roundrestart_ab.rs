@@ -91,17 +91,20 @@ const RESPAWN_FIELDS: &[&str] = &[
 ];
 
 /// The watched playerstate fields of one trace.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 struct Vitals {
     pm_type: i32,
     eflags: i32,
     health: i32,
     weapon: i32,
+    /// The clips as the capture renders them: `sd.gsc` writes 999 into the
+    /// primary's and retail's setter caps it at the clip size.
+    ammoclip: String,
 }
 
 /// A live client's respawn: what it had before the burst and what it came
 /// back with.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Respawn {
     before: Vitals,
     after: Vitals,
@@ -120,17 +123,19 @@ struct Restart {
 }
 
 fn vitals(k: &NetchanKind) -> Vitals {
-    match *k {
+    match k {
         NetchanKind::Trace {
             pm_type,
             eflags,
             health,
             weapon,
+            ammoclip,
         } => Vitals {
-            pm_type,
-            eflags,
-            health,
-            weapon,
+            pm_type: *pm_type,
+            eflags: *eflags,
+            health: *health,
+            weapon: *weapon,
+            ammoclip: ammoclip.clone(),
         },
         _ => unreachable!("not a trace"),
     }
@@ -455,8 +460,8 @@ fn an_sd_round_restart_matches_retail() {
                 .find(|x| x.before.pm_type == 0)
                 .unwrap_or_else(|| panic!("{who}: no restart caught this client alive"));
             Respawn {
-                before: x.before,
-                after: x.after,
+                before: x.before.clone(),
+                after: x.after.clone(),
             }
         };
         let (rl, ol) = (live(&r_who, &r), live(&o_who, &o));
@@ -473,6 +478,15 @@ fn an_sd_round_restart_matches_retail() {
                 "{what:?} is compared but not named in RESPAWN_FIELDS"
             );
             compare(half, what, retail_v, ours_v);
+        }
+        // The clips either side of the respawn, as strings: `sd.gsc`'s
+        // `setWeaponSlotClipAmmo("primary", 999)` reads back as the clip
+        // size on retail (`7:5` for the kar98k), never as 999.
+        for (what, retail_v, ours_v) in [
+            ("ammoclip before", &rl.before.ammoclip, &ol.before.ammoclip),
+            ("ammoclip after", &rl.after.ammoclip, &ol.after.ammoclip),
+        ] {
+            assert_eq!(retail_v, ours_v, "{half}: {what} differs from retail");
         }
 
         // --- the round a death ended, from that death to the restart ---
