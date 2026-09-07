@@ -44,59 +44,11 @@ const SKIPPED: &[(&str, &str)] = &[(
 /// Every entry is a known divergence from retail, not a fact about it, and
 /// the list is self-cleaning: [`check`] asserts that a gapped channel still
 /// differs, so an entry that starts matching fails the run rather than
-/// quietly outliving the defect it names. Empty is the goal. It was empty
-/// until the scoped-rifle capture landed; the five entries below are one
-/// open defect, named in [`RECHAMBER_GAP`].
-const KNOWN_GAPS: &[Gap] = &[
-    Gap {
-        map: "mp_carentan",
-        kind: "ads-sniper",
-        label: "ads_release",
-        channel: "weaponstate",
-        why: RECHAMBER_GAP,
-    },
-    Gap {
-        map: "mp_carentan",
-        kind: "ads-sniper",
-        label: "ads_release",
-        channel: "weaponDelay",
-        why: RECHAMBER_GAP,
-    },
-    Gap {
-        map: "mp_carentan",
-        kind: "ads-sniper",
-        label: "ads_release",
-        channel: "weapAnim",
-        why: RECHAMBER_GAP,
-    },
-    Gap {
-        map: "mp_carentan",
-        kind: "ads-sniper",
-        label: "ads_release",
-        channel: "torsoAnim",
-        why: RECHAMBER_GAP,
-    },
-    Gap {
-        map: "mp_carentan",
-        kind: "ads-sniper",
-        label: "ads_shot",
-        channel: "torsoAnim",
-        why: RECHAMBER_GAP,
-    },
-];
-
-/// The one open defect [`KNOWN_GAPS`] names, measured off the retail
-/// `mp_carentan-tdm-ads-sniper` capture: after a scoped `kar98k_sniper_mp`
-/// shot, ours runs a rechamber retail does not. Retail's `ads_release` reads
-/// `weaponstate` 0 and 9 with `weaponDelay` 0 throughout; ours holds
-/// `weaponstate` 5 for 12 samples and a 175 ms `weaponDelay`, and writes the
-/// rechamber's `weapAnim` 11 and 13 and a `torsoAnim` on the shot step as
-/// well. The sight fraction is unaffected -- it reads 1.0 through every held
-/// sample on both sides -- which is why the rest of this capture is compared
-/// rather than skipped. The fix is in the weapon machine
-/// (`vcod_common::pmove::weapon`); until it lands the channels are gapped and
-/// the divergence is visible here rather than absent.
-const RECHAMBER_GAP: &str = "ours runs a bolt-action rechamber after the scoped shot that retail does      not: retail holds `weaponDelay` 0 and never enters `weaponstate` 5, ours      holds 175 ms and 12 samples of it (see RECHAMBER_GAP, open)";
+/// quietly outliving the defect it names. Empty is the goal and the state:
+/// the last entries were the scoped rifle's segmented reload, whose start
+/// segment ours followed with a loop segment retail skips because the start
+/// had already filled the clip (cod11-combat.md, 9.2, closed 2026-09-07).
+const KNOWN_GAPS: &[Gap] = &[];
 
 /// One [`KNOWN_GAPS`] entry.
 struct Gap {
