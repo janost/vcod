@@ -2533,11 +2533,15 @@ It is one frame: the next one reads 634 and every frame after it. INFERRED:
 the animscript picks nothing until a move has run, so the spawn frame goes out
 before the standing idle is chosen, where retail's already carries it.
 
-Open, found on 2026-09-06 by the `--save-ads` capture on `kar98k_sniper_mp`
-(`mp_carentan-tdm-ads-sniper`, the one that answered the "the scope twitches
-like crazy" hand-check report). It is gapped in `playerstate_combat_ab`'s
-`KNOWN_GAPS`, which asserts the gap still applies, so it fails the run the
-moment it is fixed:
+Closed on 2026-09-07, found on 2026-09-06 by the `--save-ads` capture on
+`kar98k_sniper_mp` (`mp_carentan-tdm-ads-sniper`, the one that answered the
+"the scope twitches like crazy" hand-check report), and closed in three
+parts: the ground snap of `PM_StepSlideMove` (cod11-mantle.md, "The ground
+snap"), which took the gap out of `playerstate_combat_ab`'s `KNOWN_GAPS`;
+then, off a hand check that still twitched on every slope, the snap's gate
+lost a velocity re-test retail does not have and the soup collider stopped
+reading a box on a terrain seam as `allsolid` (cod11-mantle.md, "What the
+collider does to a walker on a terrain seam"):
 
 - **The ground trace drops a walking player for a frame where retail never
   does, and the sight ramp reverses with it.** VERIFIED: replaying the
@@ -2551,9 +2555,11 @@ moment it is fixed:
   replay sends -- which is why the fraction moves 0.333 to 0.354 across a
   frame it should have moved 0.167. INFERRED: on a weapon with `adsZoomFov`
   16 a client re-basing its zoom prediction off that reads as the scope
-  twitching, which `m1carbine_mp`'s 65 would hide. The gap is
-  `ADS_WALK_GAP`; the suspect is `pmove::ground_trace`, a bare 0.25-unit box
-  trace with no hysteresis (`crates/common/src/pmove.rs`).
+  twitching, which `m1carbine_mp`'s 65 would hide. The gap was
+  `ADS_WALK_GAP`, and the suspect, `pmove::ground_trace` as a bare 0.25-unit
+  box trace with no hysteresis, was not it: the trace is retail's shape, and
+  what dropped the player was the snap not running and the collider not
+  answering under it.
 
 Closed on 2026-09-07, off the same capture:
 

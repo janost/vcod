@@ -1669,11 +1669,13 @@ fn step_slide_move(
 
     // The snap itself: on the ground the push-down reaches half a step size
     // past the step it took (0x352e8). It is what pulls a walker back onto a
-    // crest instead of letting the climb's upward velocity throw it off.
-    // The trace ahead of the move cannot see a velocity the move itself set
-    // -- a waterjump's launch is set inside it -- so the kickoff test is
-    // re-run against the velocity the snap would be fighting.
-    let snap = if ps.on_ground && !ps.on_ladder && !thrown_off_ground(ps, ps.ground_normal) {
+    // crest instead of letting the climb's upward velocity throw it off, and
+    // retail gates it on the ground state alone, never on the velocity: a
+    // walker whose slide a wall or a seam bevel just redirected has upward
+    // velocity into its ground plane, and the snap's clip is what takes that
+    // out again (docs/research/cod11-mantle.md, "The ground snap"). A
+    // waterjump sets its launch inside the move and must keep it.
+    let snap = if ps.on_ground && !ps.on_ladder && ps.waterjump_ms <= 0.0 {
         step_size * 0.5
     } else {
         0.0
