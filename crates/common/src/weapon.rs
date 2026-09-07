@@ -1,10 +1,11 @@
 //! Weapon state machine: picks the viewmodel clip (idle, fire, rechamber,
 //! reload, ADS) from LMB/RMB/R input and weapon-file times. Pure logic.
 //!
-//! Checked against the six WALK_LOADOUT files. Not modelled: sway, kick,
-//! segmented reloads, altWeapon. `adsBobFactor` semantics are INFERRED from
-//! its values (1 on rifles, 0 on thompson/springfield); no decompilation
-//! evidence yet.
+//! Checked against the six WALK_LOADOUT files. Not modelled here: segmented
+//! reloads, altWeapon. The sway, idle and kick keys are parsed into
+//! `AimDef` for the server's aim block (`crate::pmove::aim`); this file's
+//! own viewmodel machine still ignores them. `adsBobFactor` scales the walk
+//! bob on the gun down the sight (combat doc, 15.2).
 
 use crate::pk3::Pk3Fs;
 use anyhow::{anyhow, Result};
@@ -115,6 +116,98 @@ impl WeaponSounds {
     }
 }
 
+/// The keys `BG_CalculateWeaponAngles`, `BG_CalculateViewAngles` and
+/// `BG_CalculateWeaponPosition_Sway` read (`crate::pmove::aim`, combat doc
+/// section 15). An absent key reads as 0, as it does off retail's zeroed
+/// struct.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AimDef {
+    /// `adsOverlayReticle` other than `none`: a scope, which freezes the
+    /// turn sway for as long as the sight is up at all.
+    pub ads_overlay_reticle: bool,
+    pub hip_idle_amount: f32,
+    pub ads_idle_amount: f32,
+    pub idle_crouch_factor: f32,
+    pub idle_prone_factor: f32,
+    /// Degrees of pitch the sight adds at `fWeaponPosFrac` 1.
+    pub ads_aim_pitch: f32,
+    pub gun_max_pitch: f32,
+    pub gun_max_yaw: f32,
+    /// `[hip, ads]` for each of the six turn-sway keys.
+    pub sway_max_angle: [f32; 2],
+    pub sway_lerp_speed: [f32; 2],
+    pub sway_pitch_scale: [f32; 2],
+    pub sway_yaw_scale: [f32; 2],
+    pub sway_horiz_scale: [f32; 2],
+    pub sway_vert_scale: [f32; 2],
+    /// `standRotP/Y/R`, `duckedRot*`, `proneRot*`: the tilt the gun takes
+    /// at full speed in each stance.
+    pub stand_rot: [f32; 3],
+    pub ducked_rot: [f32; 3],
+    pub prone_rot: [f32; 3],
+    pub pos_rot_rate: f32,
+    pub pos_prone_rot_rate: f32,
+    pub stand_rot_min_speed: f32,
+    pub ducked_rot_min_speed: f32,
+    pub prone_rot_min_speed: f32,
+    /// `[hip, ads]` for each of the four gun-kick spring keys.
+    pub gun_kick_accel: [f32; 2],
+    pub gun_kick_speed_max: [f32; 2],
+    pub gun_kick_speed_decay: [f32; 2],
+    pub gun_kick_static_decay: [f32; 2],
+}
+
+impl AimDef {
+    pub fn from_map(map: &HashMap<String, String>) -> AimDef {
+        let f = |key: &str| parse_num(map, key, 0.0f32);
+        let pair = |key: &str| [f(key), f(&format!("ads{}", capitalize(key)))];
+        let rot = |stance: &str| {
+            [
+                f(&format!("{stance}RotP")),
+                f(&format!("{stance}RotY")),
+                f(&format!("{stance}RotR")),
+            ]
+        };
+        AimDef {
+            ads_overlay_reticle: opt_str(map, "adsOverlayReticle")
+                .is_some_and(|r| !r.eq_ignore_ascii_case("none")),
+            hip_idle_amount: f("hipIdleAmount"),
+            ads_idle_amount: f("adsIdleAmount"),
+            idle_crouch_factor: f("idleCrouchFactor"),
+            idle_prone_factor: f("idleProneFactor"),
+            ads_aim_pitch: f("adsAimPitch"),
+            gun_max_pitch: f("gunMaxPitch"),
+            gun_max_yaw: f("gunMaxYaw"),
+            sway_max_angle: pair("swayMaxAngle"),
+            sway_lerp_speed: pair("swayLerpSpeed"),
+            sway_pitch_scale: pair("swayPitchScale"),
+            sway_yaw_scale: pair("swayYawScale"),
+            sway_horiz_scale: pair("swayHorizScale"),
+            sway_vert_scale: pair("swayVertScale"),
+            stand_rot: rot("stand"),
+            ducked_rot: rot("ducked"),
+            prone_rot: rot("prone"),
+            pos_rot_rate: f("posRotRate"),
+            pos_prone_rot_rate: f("posProneRotRate"),
+            stand_rot_min_speed: f("standRotMinSpeed"),
+            ducked_rot_min_speed: f("duckedRotMinSpeed"),
+            prone_rot_min_speed: f("proneRotMinSpeed"),
+            gun_kick_accel: [f("hipGunKickAccel"), f("adsGunKickAccel")],
+            gun_kick_speed_max: [f("hipGunKickSpeedMax"), f("adsGunKickSpeedMax")],
+            gun_kick_speed_decay: [f("hipGunKickSpeedDecay"), f("adsGunKickSpeedDecay")],
+            gun_kick_static_decay: [f("hipGunKickStaticDecay"), f("adsGunKickStaticDecay")],
+        }
+    }
+}
+
+fn capitalize(key: &str) -> String {
+    let mut c = key.chars();
+    match c.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + c.as_str(),
+        None => String::new(),
+    }
+}
+
 /// Times in seconds.
 #[derive(Clone)]
 pub struct WeaponDef {
@@ -183,6 +276,7 @@ pub struct WeaponDef {
     /// Double-width `kill_icon` (hud-protocol doc, section 2).
     pub wide_kill_icon: bool,
     pub sounds: WeaponSounds,
+    pub aim: AimDef,
     pub damage: i32,
     pub melee_damage: i32,
     pub melee_delay: f32,
@@ -332,6 +426,7 @@ impl WeaponDef {
             kill_icon: opt_str(map, "killIcon"),
             wide_kill_icon: parse_bool(map, "wideKillIcon", false),
             sounds: WeaponSounds::from_map(map),
+            aim: AimDef::from_map(map),
             damage: parse_num(map, "damage", 0),
             melee_damage: parse_num(map, "meleeDamage", 0),
             melee_delay: parse_num(map, "meleeDelay", 0.0),

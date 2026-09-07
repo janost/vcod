@@ -283,6 +283,14 @@ pub struct ClientSim {
     dead_yaw: i32,
     /// When the next `EV_PAIN` may fire.
     pain_after_ms: i32,
+    /// The aim block's state between cmds (`pmove::aim`, combat doc 15).
+    aim_state: pmove::aim::AimState,
+    /// The last damage's kick, which the aim block plays out
+    /// (`P_DamageFeedback` step 6, combat doc 6).
+    kick: pmove::aim::DamageKick,
+    /// `client+0x220c/0x2210`: where this client's next shot, swing or
+    /// throw goes, computed once per cmd ahead of its moves.
+    aim: [f32; 2],
     /// `EF_TELEPORT_BIT`'s current state, flipped by every spawn of any
     /// mode (docs/research/cod11-map-cycle.md, 8.2).
     teleport_bit: bool,
@@ -336,6 +344,7 @@ impl ClientSim {
     /// -- `SV_ClientEnterWorld`'s `cmds[0]`, zero when there is none -- so
     /// the view it already had survives entry instead of snapping.
     pub fn spectator(origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) -> Self {
+        let view = view_angles(cmd_angles, spawn_delta_angles(yaw_deg, cmd_angles));
         ClientSim {
             ps: pmove::PlayerState::spawn(Vec3::from(origin), yaw_deg),
             pm_type: PmType::Spectator,
@@ -343,7 +352,10 @@ impl ClientSim {
             viewmodel_index: 0,
             assembly: Default::default(),
             delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
-            view_angles: view_angles(cmd_angles, spawn_delta_angles(yaw_deg, cmd_angles)),
+            view_angles: view,
+            aim_state: Default::default(),
+            kick: Default::default(),
+            aim: [view[0], view[1]],
             view_lerp_start: None,
             anim: Default::default(),
             was_airborne: false,
@@ -415,6 +427,11 @@ impl ClientSim {
         self.pm_type = mode;
         self.delta_angles = spawn_delta_angles(yaw_deg, cmd_angles);
         self.view_angles = view_angles(cmd_angles, self.delta_angles);
+        // `ClientSpawn`'s memset clears the aim block's state with the rest
+        // of the client.
+        self.aim_state = Default::default();
+        self.kick = Default::default();
+        self.aim = [self.view_angles[0], self.view_angles[1]];
         // A respawned player does not resume the anim it died in.
         self.anim = Default::default();
         self.was_airborne = false;
@@ -818,17 +835,26 @@ impl ClientSim {
         }
         let count = (self.damage.taken * 100 / self.max_health).min(127);
         self.ps.aim_spread_scale = (self.ps.aim_spread_scale + count as f32).min(255.0);
+        // Step 6's kick, split along and across the view (steps 7 and 8);
+        // the aim block plays it out from step 11's stamp.
+        let kick = (self.ps.aim_spread_scale * 0.2).clamp(5.0, 90.0);
         match self.damage.from {
             None => {
                 self.feedback.yaw = 255;
                 self.feedback.pitch = 255;
+                self.kick.side = 0.0;
+                self.kick.pitch = -kick;
             }
             Some(d) => {
                 let (pitch, yaw) = vec_to_angles(d);
                 self.feedback.pitch = (pitch / 360.0 * 256.0) as i32;
                 self.feedback.yaw = (yaw / 360.0 * 256.0) as i32;
+                let axis = pmove::aim::angles_to_axis(self.view_angles);
+                self.kick.side = -kick * d.dot(Vec3::from(axis[1]));
+                self.kick.pitch = kick * d.dot(Vec3::from(axis[0]));
             }
         }
+        self.kick.time_ms = now_ms.wrapping_sub(20);
         if now_ms.wrapping_sub(self.pain_after_ms) > 0 {
             let percent = (self.health as f32 * 100.0 / self.max_health as f32) as i32;
             self.add_event(EV_PAIN, percent.clamp(0, 100));
@@ -887,6 +913,32 @@ impl ClientSim {
     /// `ps.viewangles`, degrees, wire convention (pitch positive down).
     pub fn view_angles(&self) -> [f32; 3] {
         self.view_angles
+    }
+
+    /// `ClientThink_real`'s aim block, once per cmd ahead of its moves
+    /// (`pmove::aim`): reads the view the previous cmd left and the state
+    /// the moves have not yet touched, the way retail runs it before
+    /// `Pmove`. `msec` is the cmd's whole length, which retail caps at 200.
+    pub fn update_aim(&mut self, msec: i32, now_ms: i32, weapons: &[Option<WeaponDef>]) {
+        if self.pm_type != PmType::Normal || self.dead {
+            return;
+        }
+        let input = pmove::aim::AimInput {
+            def: weapons
+                .get(self.ps.weapon as usize)
+                .and_then(Option::as_ref),
+            view: self.view_angles,
+            msec: msec.min(200),
+            now_ms,
+            kick: self.kick,
+        };
+        self.aim = pmove::aim::aim_angles(&self.ps, &mut self.aim_state, &input);
+    }
+
+    /// Where the next shot, swing or throw goes: `client+0x220c/0x2210`,
+    /// degrees in the wire convention, as the last `update_aim` left it.
+    pub fn aim_angles(&self) -> [f32; 2] {
+        self.aim
     }
 
     /// The point a snapshot is built from: the origin lifted by the current

@@ -223,6 +223,12 @@ const SURF_NO_IMPACT: u32 = 0x4;
 /// How far a bullet travels: `muzzle + forward * 8192` (combat doc, 2.2).
 const BULLET_RANGE: f32 = 8192.0;
 
+/// The aim block's wire-convention degrees as the sim's radians: yaw as is,
+/// pitch negated (positive down on the wire, up in the sim).
+pub fn aim_radians(aim: [f32; 2]) -> (f32, f32) {
+    (aim[1].to_radians(), -aim[0].to_radians())
+}
+
 /// The cone's half-angle in degrees for this shot (combat doc, 2.1): the
 /// stance's hip minimum blended toward `hipSpreadMax` by `aimSpreadScale`,
 /// or the same blend from `adsSpread` off a settled sight. `ads` is
@@ -297,8 +303,10 @@ fn bullet_mod(def: &WeaponDef) -> (&'static str, i32) {
 /// world and every live player's box, and then against the bones of whoever
 /// the box test found (combat doc, sections 2 and 3). `sims` is every client
 /// with a sim, the shooter among them; `ads` is whether the shot left a
-/// settled sight; `weapon_name` is what the callback is told
-/// (`BG_GetInfoForWeapon(weapon)->name`). Damage is `weaponDef.damage`
+/// settled sight; `aim` is the pitch and yaw the cmd's aim block left
+/// (`ClientSim::aim_angles`, combat doc 15), which down a sight is the
+/// swayed gun rather than the view; `weapon_name` is what the callback is
+/// told (`BG_GetInfoForWeapon(weapon)->name`). Damage is `weaponDef.damage`
 /// through the hit-location table with no distance term (2.4). A rifle
 /// round's pass through the first player at half damage (2.4, step 5) is
 /// not modelled: the shot stops at its first hit.
@@ -308,6 +316,7 @@ pub fn bullet_fire(
     def: &WeaponDef,
     weapon_name: &str,
     ads: bool,
+    aim: [f32; 2],
     sims: &[(usize, &ClientSim)],
     world: Option<&CollisionWorld>,
     hitlocs: &HitLocTable,
@@ -323,7 +332,7 @@ pub fn bullet_fire(
     };
     // The muzzle: eye plus lean, each component rounded (2.1).
     let muzzle = me.ps.view().eye.round();
-    let (yaw, pitch) = (me.ps.yaw, me.ps.pitch);
+    let (yaw, pitch) = aim_radians(aim);
     let forward = Vec3::new(
         pitch.cos() * yaw.cos(),
         pitch.cos() * yaw.sin(),
@@ -509,6 +518,7 @@ pub fn melee_fire(
     def: &WeaponDef,
     weapon_name: &str,
     weapon_index: u8,
+    aim: [f32; 2],
     sims: &[(usize, &ClientSim)],
     world: Option<&CollisionWorld>,
     hitlocs: &HitLocTable,
@@ -523,7 +533,7 @@ pub fn melee_fire(
         return none;
     };
     let muzzle = me.ps.view().eye.round();
-    let (yaw, pitch) = (me.ps.yaw, me.ps.pitch);
+    let (yaw, pitch) = aim_radians(aim);
     let forward = Vec3::new(
         pitch.cos() * yaw.cos(),
         pitch.cos() * yaw.sin(),
@@ -815,7 +825,8 @@ mod tests {
     }
 
     /// Fires with no trace context, which is the no-paks path: the box hit
-    /// stands and carries no location.
+    /// stands and carries no location. The aim is the shooter's raw view, so
+    /// a test can point the shot by setting `ps.pitch` and `ps.yaw`.
     fn fire(
         def: &WeaponDef,
         sims: &[(usize, &ClientSim)],
@@ -823,11 +834,13 @@ mod tests {
         rng: &mut u64,
     ) -> ShotResult {
         let table = HitLocTable::default();
+        let ps = &sims[0].1.ps;
         bullet_fire(
             0,
             def,
             "m1carbine_mp",
             false,
+            [-ps.pitch.to_degrees(), ps.yaw.to_degrees()],
             sims,
             Some(world),
             &table,
@@ -890,6 +903,7 @@ mod tests {
             &zero_spread_carbine(),
             "m1carbine_mp",
             false,
+            a.aim_angles(),
             &[(0, &a), (1, &b)],
             Some(&world),
             &table,
@@ -1007,6 +1021,7 @@ mod tests {
                 &def,
                 "m1carbine_mp",
                 12,
+                sims[0].1.aim_angles(),
                 sims,
                 Some(&world),
                 &table,

@@ -225,6 +225,15 @@ engineering setup works.
   probe logs with the server's `D;`/`K;` lines and prints the height each
   hit crossed the victim at; both runs and what they settled are in
   `docs/research/cod11-combat.md`, section 3.4.
+  `--probe-sway` is the sight-sway measurement: the combat machine on a
+  script of eight scoped shots standing still, the view turned down the
+  longest clear sightline from the spawn, printing every bullet-impact temp
+  entity's origin beside the eye and view it left from. With
+  `--probe-weapon kar98k_sniper_mp` (`--probe-team axis` on carentan) the
+  shot has no spread, so the angle between the raw view and the eye-to-impact
+  ray is the sway retail put on it, and `docs/research/cod11-combat.md`
+  section 15 is what the same run against retail and against ours read.
+  It writes no fixture.
   `--probe-melee`, `--probe-grenade` and `--probe-grenade-death` swap the hit
   pair's bullet script for another one. Melee walks to within `MELEE_RANGE`
   (40 units; retail's swing reaches 64) and taps the melee bit through the
