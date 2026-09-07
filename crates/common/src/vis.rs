@@ -834,6 +834,10 @@ pub fn two_cell_world() -> Bsp {
             },
         ],
         pvs: None,
+        terrain: vec![],
+        patches: vec![],
+        collision_verts: vec![],
+        collision_indices: vec![],
     }
 }
 
@@ -1284,6 +1288,10 @@ mod tests {
                 },
             ],
             pvs: None,
+            terrain: vec![],
+            patches: vec![],
+            collision_verts: vec![],
+            collision_indices: vec![],
         }
     }
 

@@ -17,8 +17,9 @@ pub struct XModel {
     pub collision: Vec<CollSurf>,
 }
 
-/// One collision surface. Only `contents & collision::CONTENTS_SOLID` stops
-/// the player; tree canopies and signs carry 0, lamp glass 0x10.
+/// One collision surface. `contents` meets the trace mask the way a brush's
+/// does (solid 0x1, lamp glass 0x10; tree canopies and signs carry 0), and
+/// `flags` carries the sound material in bits 20-24.
 /// docs/research/xmodel-v14-format.md, "Collision block".
 pub struct CollSurf {
     pub contents: u32,

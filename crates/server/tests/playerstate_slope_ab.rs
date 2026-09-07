@@ -13,7 +13,8 @@
 //! the client's view would show.
 //!
 //! Set `SLOPE_REPORT=1` to print every snapshot's delta and the worst spots
-//! with the surface normal under them. Needs `COD_DIR`; without the paks it
+//! with the surface normal under them and what our world puts in the way of
+//! the cmd's wish direction there. Needs `COD_DIR`; without the paks it
 //! returns early.
 
 mod common;
@@ -214,6 +215,17 @@ struct Row {
     /// Our origin at the snapshot's clock in the free run.
     ours_free: Vec3,
     normal: Vec3,
+    /// The last cmd's wish direction on the ground plane, unit or zero.
+    wish: Vec3,
+}
+
+/// Where the cmd asked to go, in the world: forward and right against the
+/// cmd's yaw, the way `PM_CmdScale`'s caller builds the wish.
+fn wish_dir(cmd: &UserCmd, da: [i32; 3]) -> Vec3 {
+    let yaw = short_deg(cmd.angles[1] + da[1]).to_radians();
+    let forward = Vec3::new(yaw.cos(), yaw.sin(), 0.0);
+    let right = Vec3::new(yaw.sin(), -yaw.cos(), 0.0);
+    (forward * f32::from(cmd.forward) + right * f32::from(cmd.right)).normalize_or_zero()
 }
 
 /// `dz` is signed, ours minus retail; the stats take its magnitude.
@@ -271,6 +283,7 @@ fn replay(lines: &[Line], world: &CollisionWorld, weapons: &[Option<WeaponDef>])
         })
         .collect();
     let mut next_cmd = 0usize;
+    let mut wish = Vec3::ZERO;
     for l in lines {
         let Line::Snap(s) = l else { continue };
         if s.ct <= first.ct {
@@ -280,6 +293,7 @@ fn replay(lines: &[Line], world: &CollisionWorld, weapons: &[Option<WeaponDef>])
             let c = &cmds[next_cmd];
             run_cmd(&mut free, c, &mut free_st, da, world, weapons);
             run_cmd(&mut rebased, c, &mut rebased_st, da, world, weapons);
+            wish = wish_dir(c, da);
             next_cmd += 1;
         }
         rows.push(Row {
@@ -288,6 +302,7 @@ fn replay(lines: &[Line], world: &CollisionWorld, weapons: &[Option<WeaponDef>])
             rebased: delta(&rebased, s),
             ours_free: free.origin,
             normal: ground_normal(world, s.origin),
+            wish,
         });
         rebased = state_from(s, weapon);
         rebased_st = s.ct;
@@ -302,9 +317,11 @@ struct Stats {
     /// Median over the rows.
     typ_dz: f32,
     typ_dxy: f32,
-    /// 95th percentile over the rows.
+    /// 95th and 99th percentiles over the rows.
     p95_dz: f32,
     p95_dxy: f32,
+    p99_dz: f32,
+    p99_dxy: f32,
     /// Rows off by more than a unit on either axis.
     outliers: usize,
     ground_disagreements: usize,
@@ -323,6 +340,8 @@ fn stats(rows: &[Row], pick: impl Fn(&Row) -> Delta) -> Stats {
         typ_dxy: at(&dxy, 0.5),
         p95_dz: at(&dz, 0.95),
         p95_dxy: at(&dxy, 0.95),
+        p99_dz: at(&dz, 0.99),
+        p99_dxy: at(&dxy, 0.99),
         outliers: rows
             .iter()
             .filter(|r| pick(r).dz.abs() > 1.0 || pick(r).dxy > 1.0)
@@ -331,7 +350,26 @@ fn stats(rows: &[Row], pick: impl Fn(&Row) -> Delta) -> Stats {
     }
 }
 
-fn report(path: &str, rows: &[Row]) {
+/// What our world puts in the way at a retail spot: the player capsule
+/// swept 8 units along the wish and 18 down, each named by `describe`.
+fn obstacle(world: &CollisionWorld, at: Vec3, wish: Vec3) -> String {
+    let mins = Vec3::new(-15.0, -15.0, 0.0);
+    let maxs = Vec3::new(15.0, 15.0, 70.0);
+    let name = |t: &vcod_common::collision::Trace| match t.hit {
+        Some(p) if t.fraction < 1.0 => format!(
+            "{} f={:.3}{}",
+            world.describe(p),
+            t.fraction,
+            if t.startsolid { " startsolid" } else { "" }
+        ),
+        _ => "clear".into(),
+    };
+    let ahead = world.box_trace(at, at + wish * 8.0, mins, maxs);
+    let down = world.box_trace(at, at - Vec3::Z * 18.0, mins, maxs);
+    format!("ahead: {} | down: {}", name(&ahead), name(&down))
+}
+
+fn report(path: &str, rows: &[Row], world: &CollisionWorld) {
     let verbose = std::env::var_os("SLOPE_REPORT").is_some();
     if !verbose {
         return;
@@ -371,7 +409,8 @@ fn report(path: &str, rows: &[Row]) {
     for r in worst.iter().take(8) {
         let o = r.retail.origin;
         println!(
-            "  dz={:.3} dxy={:.3} at [{:.1},{:.1},{:.1}] normal=[{:.3},{:.3},{:.3}] ground={} vel=[{:.1},{:.1},{:.1}]",
+            "  ct={} dz={:.3} dxy={:.3} at [{:.1},{:.1},{:.1}] normal=[{:.3},{:.3},{:.3}] ground={} vel=[{:.1},{:.1},{:.1}] wish=[{:.2},{:.2}] {}",
+            r.retail.ct,
             r.rebased.dz,
             r.rebased.dxy,
             o.x,
@@ -384,6 +423,9 @@ fn report(path: &str, rows: &[Row]) {
             r.retail.velocity.x,
             r.retail.velocity.y,
             r.retail.velocity.z,
+            r.wish.x,
+            r.wish.y,
+            obstacle(world, o, r.wish),
         );
     }
     worst.sort_by(|a, b| b.rebased.dxy.total_cmp(&a.rebased.dxy));
@@ -391,7 +433,8 @@ fn report(path: &str, rows: &[Row]) {
     for r in worst.iter().take(8) {
         let o = r.retail.origin;
         println!(
-            "  dxy={:.3} dz={:.3} at [{:.1},{:.1},{:.1}] normal=[{:.3},{:.3},{:.3}] ground={}",
+            "  ct={} dxy={:.3} dz={:.3} at [{:.1},{:.1},{:.1}] normal=[{:.3},{:.3},{:.3}] ground={} vel=[{:.1},{:.1},{:.1}] wish=[{:.2},{:.2}] {}",
+            r.retail.ct,
             r.rebased.dxy,
             r.rebased.dz,
             o.x,
@@ -401,33 +444,84 @@ fn report(path: &str, rows: &[Row]) {
             r.normal.y,
             r.normal.z,
             r.retail.on_ground,
+            r.retail.velocity.x,
+            r.retail.velocity.y,
+            r.retail.velocity.z,
+            r.wish.x,
+            r.wish.y,
+            obstacle(world, o, r.wish),
+        );
+    }
+    println!("-- ground disagreements");
+    for r in rows.iter().filter(|r| r.rebased.ground_disagrees).take(8) {
+        let o = r.retail.origin;
+        println!(
+            "  ct={} at [{:.1},{:.1},{:.1}] retail ground={} {}",
+            r.retail.ct,
+            o.x,
+            o.y,
+            o.z,
+            r.retail.on_ground,
+            obstacle(world, o, r.wish),
         );
     }
 }
 
 /// What the rebased run may read, from the measurement of 2026-09-07
-/// (docs/research/cod11-mantle.md, "The player is a capsule"): on the 8 ms
-/// capture 95% of snapshots land within 0.006 vertically and 0.135
-/// horizontally of retail, on the 25 ms one within 0 and 0.30, and retail's
-/// own noise floor is the integer truncation of the velocity it sends, under
-/// 0.05 per interval. The share of snapshots off by more than a unit is 1.6%
-/// and 2.9%: wall corners and slides, one prop mesh retail's player does
-/// not collide, and the `clip_*` brushes the mantle doc lists as open. A
-/// box mover read 1.08 on every snapshot of the 3.3-degree street.
-const P95_TOLERANCE_Z: f32 = 0.1;
-const P95_TOLERANCE_XY: f32 = 0.5;
-/// The outlier share: the two captures sit at 1.6% and 2.9%.
-const OUTLIER_SHARE: f32 = 0.04;
+/// (docs/research/cod11-mantle.md, "Terrain is a swept sphere, a patch is
+/// a facet"): the 8 ms capture reads |dz| p95 0.005, p99 0.026, max 0.129
+/// and dxy p95 0.130, p99 0.178, max 2.9, the 25 ms one |dz| 0 throughout
+/// and dxy p95 0.146, p99 0.449, max 4.5, with 2 and 12 rows past a unit
+/// and no ground disagreement. Retail's own noise floor is the integer
+/// truncation of the velocity it sends, under 0.05 per interval. A box
+/// mover read 1.08 on every snapshot of the 3.3-degree street, and the
+/// facet polyhedron on terrain read 0.96 at a kerb-ramp foot.
+const P95_TOLERANCE_Z: f32 = 0.02;
+const P95_TOLERANCE_XY: f32 = 0.25;
+const P99_TOLERANCE_Z: f32 = 0.05;
+const P99_TOLERANCE_XY: f32 = 0.6;
+const MAX_TOLERANCE_Z: f32 = 0.5;
+/// The outlier share: the two captures sit at 0.14% and 0.8%.
+const OUTLIER_SHARE: f32 = 0.015;
 
 fn check(map: &str, gametype: &str, cmd_ms: u32) {
     let path = format!(
         "{}/tests/fixtures/playerstate/{map}-{gametype}-slope-{cmd_ms}ms.txt",
         env!("CARGO_MANIFEST_DIR")
     );
-    check_path(map, &path);
+    check_path(map, gametype, &path);
 }
 
-fn check_path(map: &str, path: &str) {
+/// What the stock gametype script does to the map's brush models before a
+/// client walks: `_gameobjects::main` `delete()`s every entity carrying a
+/// `script_gameobjectname` the gametype did not list (`dm.gsc:78`,
+/// `tdm.gsc:78`: their own name; `sd.gsc:123`: `sd`, `bombzone`,
+/// `blocker`), and a deleted `script_brushmodel` takes its brushes out of
+/// the clip. The server's `delete` builtin does this at run time; the
+/// replay has no script, so it applies the rule itself.
+fn unlink_gameobjects(world: &CollisionWorld, entities: &str, gametype: &str) {
+    let allowed: &[&str] = match gametype {
+        "sd" => &["sd", "bombzone", "blocker"],
+        g => &[g][..],
+    };
+    for block in vcod_common::bsp::entity_blocks(entities) {
+        let Some(name) = block.get("script_gameobjectname") else {
+            continue;
+        };
+        if allowed.contains(&name.as_str()) {
+            continue;
+        }
+        if let Some(n) = block
+            .get("model")
+            .and_then(|m| m.strip_prefix('*'))
+            .and_then(|n| n.parse::<usize>().ok())
+        {
+            world.set_model_linked(n, false);
+        }
+    }
+}
+
+fn check_path(map: &str, gametype: &str, path: &str) {
     let Some(fs) = vcod_common::testing::game_fs() else {
         return;
     };
@@ -436,16 +530,17 @@ fn check_path(map: &str, path: &str) {
     let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse");
     let world = vcod_server::world::World::from_bsp(&bsp, Some(&fs)).collision;
+    unlink_gameobjects(&world, &bsp.entities, gametype);
     let weapons = vcod_server::weapons::WeaponTable::load(&fs);
     let rows = replay(&lines, &world, weapons.defs());
     assert!(rows.len() > 100, "{path}: only {} snapshots", rows.len());
-    report(path, &rows);
+    report(path, &rows, &world);
     let free = stats(&rows, |r| r.free);
     let rebased = stats(&rows, |r| r.rebased);
     println!(
         "{path}: free run max dz {:.3} dxy {:.3} median dz {:.3} dxy {:.3}, ground disagreements {}; \
-         rebased max dz {:.3} dxy {:.3} median dz {:.3} dxy {:.3} p95 dz {:.3} dxy {:.3}, \
-         {} of {} rows past a unit, ground disagreements {}",
+         rebased max dz {:.3} dxy {:.3} median dz {:.3} dxy {:.3} p95 dz {:.3} dxy {:.3} \
+         p99 dz {:.3} dxy {:.3}, {} of {} rows past a unit, ground disagreements {}",
         free.max_dz,
         free.max_dxy,
         free.typ_dz,
@@ -457,6 +552,8 @@ fn check_path(map: &str, path: &str) {
         rebased.typ_dxy,
         rebased.p95_dz,
         rebased.p95_dxy,
+        rebased.p99_dz,
+        rebased.p99_dxy,
         rebased.outliers,
         rows.len(),
         rebased.ground_disagreements,
@@ -468,6 +565,17 @@ fn check_path(map: &str, path: &str) {
         rebased.p95_dxy
     );
     assert!(
+        rebased.p99_dz <= P99_TOLERANCE_Z && rebased.p99_dxy <= P99_TOLERANCE_XY,
+        "{path}: rebased p99 dz {:.3} dxy {:.3} past the tolerance",
+        rebased.p99_dz,
+        rebased.p99_dxy
+    );
+    assert!(
+        rebased.max_dz <= MAX_TOLERANCE_Z,
+        "{path}: rebased max dz {:.3} past the tolerance",
+        rebased.max_dz
+    );
+    assert!(
         (rebased.outliers as f32) <= OUTLIER_SHARE * rows.len() as f32,
         "{path}: {} of {} snapshots land more than a unit from retail",
         rebased.outliers,
@@ -476,13 +584,14 @@ fn check_path(map: &str, path: &str) {
 }
 
 /// A capture that is not committed: `SLOPE_FIXTURE=<path> SLOPE_MAP=<map>
-/// cargo test ... -- --ignored`, for a run kept in `tmp/`.
+/// SLOPE_GAMETYPE=<gt> cargo test ... -- --ignored`, for a run kept in `tmp/`.
 #[test]
 #[ignore]
 fn the_mover_replays_the_fixture_named_by_slope_fixture() {
     let path = std::env::var("SLOPE_FIXTURE").expect("SLOPE_FIXTURE");
     let map = std::env::var("SLOPE_MAP").unwrap_or_else(|_| "mp_carentan".into());
-    check_path(&map, &path);
+    let gametype = std::env::var("SLOPE_GAMETYPE").unwrap_or_else(|_| "dm".into());
+    check_path(&map, &gametype, &path);
 }
 
 #[test]

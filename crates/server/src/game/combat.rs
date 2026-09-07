@@ -653,7 +653,12 @@ pub fn can_damage(at: Vec3, v: &BlastVictim, world: &CollisionWorld) -> f32 {
     ];
     let clear = probes
         .iter()
-        .filter(|p| world.shot_trace(at, **p).fraction >= 1.0)
+        .filter(|p| {
+            world
+                .point_trace(at, **p, vcod_common::collision::MASK_BLAST, true)
+                .fraction
+                >= 1.0
+        })
         .count();
     match clear {
         0 => 0.0,

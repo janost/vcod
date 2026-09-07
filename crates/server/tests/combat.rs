@@ -752,12 +752,14 @@ fn angle_short(deg: f32) -> i32 {
 /// `at`, with a clear line of sight (combat doc, 14.1). The tests assert
 /// against this rather than a constant: where a grenade comes to rest is the
 /// bounce's business, so the distance is only known once it has.
-fn frag_damage(at: [f32; 3], feet: [f32; 3]) -> i32 {
+/// The stock frag's falloff at a distance, times `CanDamage`'s share, in
+/// the server's own f64 arithmetic (`radius_damage`).
+fn frag_damage(at: [f32; 3], feet: [f32; 3], fraction: f32) -> i32 {
     let d = dist(at, feet) as f64;
     if d >= 350.0 {
         return 0;
     }
-    (5.0 + (1.0 - d / 350.0) * 115.0) as i32
+    (fraction as f64 * (5.0 + (1.0 - d / 350.0) * 115.0)) as i32
 }
 
 fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -905,9 +907,11 @@ fn frag_index() -> u8 {
 }
 
 /// `G_RadiusDamage` end to end (combat doc, 14.1): a frag thrown at the
-/// ground behind the thrower hurts him and the player standing in the open
-/// 150 units the other way, each by the falloff at his own distance from
-/// where it came to rest.
+/// ground behind the thrower hurts him and the player 150 units the other
+/// way, each by the falloff at his own distance from where it came to rest
+/// scaled by `CanDamage`'s share of clear probes, which the chair the frag
+/// rolls behind on this spawn reads off the same static-model clip a
+/// bullet does.
 /// Retail's own pair capture is the same arithmetic: a blast at
 /// (1329, 3297, -22) left the target at (1192, 3296, -23.9) on health 26, 74
 /// off a distance of 137, and the thrower 151 units out on 30.
@@ -962,13 +966,13 @@ fn a_thrown_grenade_damages_a_player_in_its_blast() {
         (180.0, 80.0),
     );
     for (who, feet, cl) in [("thrower", a_feet, &ca), ("target", b_feet, &cb)] {
-        assert_eq!(
-            sv.test_can_damage(at, feet),
-            1.0,
-            "{who} stands in the open, {:.0} units from the blast",
+        let fraction = sv.test_can_damage(at, feet);
+        assert!(
+            fraction > 0.0,
+            "{who} is walled off from the blast, {:.0} units away",
             dist(at, feet)
         );
-        let expected = frag_damage(at, feet);
+        let expected = frag_damage(at, feet, fraction);
         assert!(expected > 0, "{who} is out of the blast entirely");
         assert_eq!(
             cl.snapshots().newest().unwrap().ps.health(),
