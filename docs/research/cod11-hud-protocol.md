@@ -406,8 +406,19 @@ Axis/Allies sections with team icons and totals, score-sorted rows, a
 Spectators section, `hud unk 0` throughout. No wire-level dump of a raw `b`
 line was kept, so token 4's unit (below) is still open.
 
+VERIFIED, the comparator's reads and compares (`.so` 0x50099-0x50109): it
+tests `cl[+0x20ec] == 1` on either side first (a connecting client sorts
+last), then `cl[+0x217c] == 3` on either side (a spectator sorts after a
+non-spectator, and two spectators order by their `gclient_t` address, which
+is slot order), then `cl[+0x20e0]` (score) with the greater first, then
+`cl[+0x20e4]` (deaths) with the fewer first, and returns 0 on a full tie.
+VERIFIED, from the retail round-restart target capture
+(`crates/server/tests/fixtures/netchan/mp_carentan-sd-roundrestart-target.txt`,
+`b 2 0 1 1 0 0 0 0 0 -1 1 1 0`): the 0-score row leads the -1-score one
+although its slot is the higher.
+
 **As implemented** (`Server::scoreboard`, `crates/server/src/server.rs`). One
-row per online client. The score comes from the client's own `.score` script
+row per online client, in that order, ties in slot order. The score comes from the client's own `.score` script
 field and the icon from `.statusicon`, resolved to its 1-based slot within
 `CsRange::StatusIcon`; both are where every stock gametype writes them. The
 team totals go out as `0 0`, hardcoded: no `setTeamScore` builtin exists yet,
