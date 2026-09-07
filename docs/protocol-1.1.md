@@ -790,7 +790,7 @@ Transcribed from disassembly. Widths and order VERIFIED live 2026-08-25: a retai
 ### The base cmd is built from the playerstate
 
 The `from` cmd the first usercmd of a message is decoded against is not the
-last cmd the server received. `SV_UserMove` (cod_lnxded `0x8087040`) builds
+last cmd the server received. `SV_UserMove` (cod_lnxded `0x8086fa4`) builds
 it fresh for every message: it fetches the client's game-side playerstate
 (`0x8089270`, the client number in), hands it with a 24-byte stack cmd to
 `0x807f5c0` (`0x80870a8`, the function's only caller), and passes that cmd
@@ -884,6 +884,88 @@ The trigger is **the first usercmd after the gamestate**: `SV_UserMove` promotes
 Entry is also where the game module is called: `SV_ClientEnterWorld` ends in `ClientBegin` (the `GAME("ClientBegin")` call in CoDExtended's `src/sv_client.c`). That is the notify `Callback_PlayerConnect`'s `waittill("begin")` blocks on, and it is an engine-to-game call, not a command any client sends. The gsc side of it is section 0.1 of `docs/research/cod11-hud-protocol.md`.
 
 The one other promotion path is the restart, above: a CS_PRIMED client whose serverId differs only in the low nibble goes to CS_ACTIVE with no entering cmd. ioq3 passes a null cmd on its equivalent path and zeroes `lastUsercmd` (`code/server/sv_ccmds.c`, `SV_MapRestart_f`); vcod does the same.
+
+### How long a cmd is simulated for
+
+A cmd's `serverTime` is the moment the client's own prediction has already
+reached, and the server integrates the whole distance between it and
+`ps.commandTime`. A gap left by a hitching client is chopped into steps, not
+clamped away.
+
+The engine does none of the timing. `SV_UserMove` (cod_lnxded `0x8086fa4`)
+reads a cmd count, rejects a message whose count is below 1 or above
+`MAX_PACKET_USERCMDS`, and per cmd skips the ones at or before
+`cl->lastUsercmd.serverTime` and the ones past the block's own last cmd.
+VERIFIED: `cmp $0x20` at `0x8087020` (so `MAX_PACKET_USERCMDS` is 32, as in
+the Q3 lineage), the `jle` at `0x8087286` against `cl+0x10624` (so the stale
+test is `<=`, not `<`), the `jg` at `0x808727b` against the block's last cmd,
+and the two `Com_Printf` strings `"cmdCount < 1"` (`0x80d4aa3`) and
+`"cmdCount > MAX_PACKET_USERCMDS"` (`0x80d4ac0`). INFERRED, off the branch
+targets: a stale cmd costs only itself and the message survives, while a bad
+count abandons the whole message. VERIFIED: no compare anywhere in
+`0x8086fa4`..`0x80872e9` reads a server clock, so the engine neither detects
+nor bounds a gap.
+
+The rule is in the game module's `ClientThink_real` (`game.mp.i386.so`
+`0x3fee0`), reached one cmd at a time:
+
+| step | what | where |
+|---|---|---|
+| clamp the cmd clock ahead | `serverTime = min(serverTime, level.time + 200)` | `0x3ff05`-`0x3ff13`, `add $0xc8` |
+| clamp it behind | `serverTime = max(serverTime, level.time - 1000)` | `0x3ff15`-`0x3ff23`, `add $0xfffffc18` |
+| the span | `msec = serverTime - ps.commandTime` | `0x3ff29` |
+| drop a stale cmd | `msec < 1` returns | `0x3ff31`, `test`/`jg` |
+| clamp the span | `msec = min(msec, 200)` | `0x3ff52`-`0x3ff5e`, `cmp $0xc8` |
+
+VERIFIED: every immediate in that table, and that `level.time` is
+`level + 0x1e8` (the relocations at `0x3ff06` and `0x3ff16` name `level`).
+
+The last row is the trap, and reading it as the dt clamp is wrong. That `msec`
+is a local: `ClientThink_real` copies the usercmd verbatim into `pm.cmd`
+(24 bytes, `0x40073`) and the clamped local goes only to the weapon-position
+and spread code (`0x40204`, `0x4023a`). INFERRED, off the dataflow between the
+clamp and its two readers.
+
+What integrates the move is `Pmove` (`0x3447c`), Q3's chop loop unchanged:
+
+- `finalTime = pm->cmd.serverTime`, and `finalTime < ps->commandTime` returns
+  (`0x3448e`).
+- `finalTime > ps->commandTime + 1000` snaps `ps->commandTime` to
+  `finalTime - 1000` (`0x34492`, `0x3449b`): arrears past a second are dropped
+  rather than simulated, which also caps the loop at 16 iterations.
+- Then, while `ps->commandTime != finalTime`: take
+  `msec = min(finalTime - ps->commandTime, 66)` (`0x344d3`, `0x344d8`; under
+  `pmove_fixed`, `min(..., pmove_msec)` instead, `0x344c5`), write
+  `pm->cmd.serverTime = ps->commandTime + msec` (`0x344e4`), call `PmoveSingle`
+  (`0x344e8`), and force `cmd.upmove` to 20 while `PMF_JUMP_HELD` is set
+  (`0x344f8`).
+- `PmoveSingle` clamps its own `pml.msec` to `[1, 200]` (`0x3404c`, `0x3405f`)
+  and writes `ps->commandTime = pm->cmd.serverTime` (`0x34074`).
+
+VERIFIED: every immediate above and the store at `0x34074`. So 66 is a chop
+granularity, not a discard: a 600 ms gap is ten `PmoveSingle` calls, and on
+exit `ps.commandTime` holds the cmd's own `serverTime`, which puts the
+client's replay boundary exactly where the client put it.
+
+`pmove_fixed` and `pmove_msec` do exist in CoD 1.1 MP, registered in
+`gameCvarTable` with defaults `0` and `8`, and `pmove_msec` is clamped to
+`[8, 33]` (`0x3ff68`-`0x3ff92`, the `.rodata` strings `"8"`, `"pmove_msec"`
+and `"33"` at `0x72d1c`, `0x72d1e`, `0x72d29`). VERIFIED. Both default off, so
+a stock server runs the 66 ms chop.
+
+**What vcod does.** `replay_moves` (`crates/server/src/server.rs`) runs the
+chop and the 1000 ms arrears bound, and leaves `last_processed_st` -- what
+goes out as `commandTime` -- at the cmd's own clock.
+`crates/server/tests/hitching_client.rs` pins it: a spectator silent for
+600 ms and then sending one cmd covers the whole gap, about 250 units, where
+the single clamped step it used to take covered 16. The `PMF_JUMP_HELD`
+`upmove` force is not modelled; vcod's own held-jump latch survives a chop
+instead. The two `level.time` clamps are not implemented either: they are a
+speed-cheat guard rather than part of the dt rule, and vcod seeds a client's
+`commandTime` from the entering cmd's own clock (`enter_world`) where retail
+leaves it at whatever `ClientSpawn` wrote, so a window measured against
+`sv_time` would strand a client whose handshake stamped that cmd ahead of the
+server.
 
 ## Spectator
 
@@ -984,7 +1066,7 @@ If you're porting a Q3/RTCW server, these are the things that will bite:
 10. `sv_serverid` is a byte (`0x10` per map load from a zero start, low nibble per `map_restart`) and a stale low nibble makes the server drop the whole client message, snapshots included, instead of Q3's "ignoring pre map_restart" path that keeps serving them.
 11. The client-to-server scramble covers the compressed op block from its byte 0, packet byte 15, with no `CL_ENCODE_START` offset into it; the 9 plain header bytes in front are never scrambled and the parity `c << (i & 1)` counts from the block's own start.
 12. The per-client drop notice is the reliable command `w "<reason>"` (`SV_DropClient` `0x8085cf4`), not Q3's `disconnect "<reason>"`. Bare `disconnect` only travels client to server.
-13. `MAX_RELIABLE_COMMANDS` is 64, not RTCW's 256. CoDExtended's `shared.h:135` and the `& 63` masks in `SV_UserMove` (cod_lnxded `0x8087043`) agree. Both reliable rings, and the scramble key that indexes them, are sized off it.
+13. `MAX_RELIABLE_COMMANDS` is 64, not RTCW's 256. CoDExtended's `shared.h:135` and the `& 63` masks in `SV_UserMove` (cod_lnxded `0x8086fa4`, the masks at `0x8086fe7` and `0x8087060`) agree. Both reliable rings, and the scramble key that indexes them, are sized off it.
 14. `MSG_ReadString` AND `MSG_ReadBigString` both map `%` -> `.`, 0x92 -> `'`, and every other byte over 127 -> `.` (CoDMP.exe `0x444e00`/`0x444e60`; Q3/RTCW keep high bytes in the big reader). This is wire compatibility, not cosmetics: the usercmd delta key is `checksumFeed ^ messageAcknowledge ^ Com_HashKey(serverCommands[reliableAcknowledge & 63], 32)`, `Com_HashKey` (`0x806810c`) multiplies raw sign-extended bytes with no substitution of its own, and the server hashes the string it queued while the client hashes the string it read. Only the read-time mapping keeps the two byte streams identical. A client that keeps high bytes (worse, re-encoded as two-byte UTF-8) computes a wrong key whenever the acked server command carries one - a chat line with a high-byte name - and the server then misreads the keyed framing bits of every move, so usercmds are dropped or garbled until an ASCII-clean command rotates into the slot. Live symptom: `ps.commandTime` frozen for 20+ s stretches, spectator movement applying seconds late or not at all, on busy servers only.
 
 15. A spectator noclips. RTCW-MP sends `PM_SPECTATOR` to `PM_FlyMove`, which collides through `PM_StepSlideMove`; CoD 1.1 integrates the position straight off the velocity with no trace, like Q3's separate `PM_NOCLIP`. VERIFIED live 2026-08-28 by A/B with a retail client against a retail server: wires between lamp posts, decoration cars and the map's own walls and ground all pass straight through. vcod collided until it did not (`spectator_move`, `crates/common/src/pmove.rs`).

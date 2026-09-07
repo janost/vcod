@@ -55,6 +55,9 @@ pub const VIEW_DEAD: f32 = 8.0;
 /// The dead eye drops 9 units per 50 ms snapshot, 60 to 8 over six frames in
 /// the same capture; a rate, not one of the stance lerp times.
 pub const DEAD_VIEW_LERP_SPEED: f32 = 180.0;
+/// The `Pmove` chop, not a discard: retail runs a move longer than this as
+/// several `PmoveSingle` steps of at most this length (`game.mp.i386.so`
+/// 0x344d3). `docs/protocol-1.1.md`, "How long a cmd is simulated for".
 pub const MAX_FRAME_MS: f32 = 66.0;
 pub const LEAN_MAX: f32 = 28.0; // eye offset in units; roll is lean/2 degrees
 pub const LEAN_TIME_TO_MS: f32 = 340.0;

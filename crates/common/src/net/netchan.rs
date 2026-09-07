@@ -18,7 +18,7 @@ const FRAGMENT_BIT: u32 = 1 << 31;
 const MAX_MSGLEN: usize = 32768;
 
 /// `MAX_RELIABLE_COMMANDS`, 64 on CoD 1.1, not RTCW's 256 (CoDExtended
-/// shared.h:135; `SV_UserMove` cod_lnxded 0x8087043).
+/// shared.h:135; `SV_UserMove` cod_lnxded 0x8086fa4, the mask at 0x8087060).
 pub const MAX_RELIABLE_COMMANDS: usize = 64;
 /// `SV_ENCODE_START` (qcommon.h:1152): past the plain `reliableAcknowledge`.
 const SV_ENCODE_START: usize = 4;

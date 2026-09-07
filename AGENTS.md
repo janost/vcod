@@ -486,10 +486,16 @@ never pasted decompiler output or disassembly listings.
   either `fold_atom` call is removed; re-run that mutation if you touch the
   fold sites.
 - `MAX_RELIABLE_COMMANDS` is 64 on CoD 1.1, not RTCW's 256: CoDExtended's
-  `shared.h:135` and the `& 63` masks in `SV_UserMove` (cod_lnxded 0x8087043)
+  `shared.h:135` and the `& 63` masks in `SV_UserMove` (cod_lnxded 0x8086fa4)
   agree. Both rings, and the scramble key that indexes them, are sized off it.
 - The server's per-client drop notice is the reliable command `w "<reason>"`
   (`SV_DropClient` 0x8085cf4). Bare `disconnect` only travels client to server.
+- 66 ms is a pmove chop, not a dt clamp. `Pmove` walks `ps.commandTime` up to
+  the cmd's `serverTime` in steps of at most 66, each its own `PmoveSingle`,
+  and drops only the arrears past 1000 ms, so a client that hitches for half a
+  second gets the whole gap simulated. The `msec = min(msec, 200)` in
+  `ClientThink_real` looks like the clamp and is not: it never reaches the
+  mover. `docs/protocol-1.1.md`, "How long a cmd is simulated for".
 - The retail client omits unchanged usercmd fields (change-bit 0, angles
   included), and a compact cmd carries no upper button, stance, `up` or
   weapon bits at all. What "unchanged" is relative to is not the previous
