@@ -860,6 +860,9 @@ pub enum NetchanKind {
         eflags: i32,
         health: i32,
         weapon: i32,
+        /// The non-zero clips as `index:rounds`, comma-joined, `-` for none:
+        /// the capture's own rendering.
+        ammoclip: String,
     },
 }
 
@@ -938,6 +941,7 @@ pub fn parse_netchan_fixture(text: &str) -> Vec<NetchanEvent> {
                     eflags: i("eFlags"),
                     health: i("health"),
                     weapon: i("weapon"),
+                    ammoclip: m["ammoclip"].to_string(),
                 },
             });
         }
@@ -981,11 +985,20 @@ pub fn record_netchan(
     }
     if let Some(s) = cl.snapshots().newest() {
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        let clips: Vec<String> = (0..64)
+            .filter(|&i| s.ps.clip(i) != 0)
+            .map(|i| format!("{i}:{}", s.ps.clip(i)))
+            .collect();
         push(NetchanKind::Trace {
             pm_type: s.ps.field_i32(p, "pm_type"),
             eflags: s.ps.field_i32(p, "eFlags"),
             health: s.ps.health(),
             weapon: s.ps.field_i32(p, "weapon"),
+            ammoclip: if clips.is_empty() {
+                "-".to_string()
+            } else {
+                clips.join(",")
+            },
         });
     }
 }
