@@ -239,6 +239,9 @@ pub struct WeaponDef {
     /// flag (combat doc, section 1.13). Absent on the grenades and the
     /// mounted MGs, which reads the same as 0.
     pub aim_down_sight: bool,
+    /// `moveSpeedScale`: the walk mover multiplies its wish speed by it
+    /// (`pmove::wish`). 1.18 on the carbine, 1.2 on the frag.
+    pub move_speed_scale: f32,
     pub ads_trans_in: f32,
     pub ads_trans_out: f32,
     /// `adsReloadTransTime`: how much of the tail of a reload the sight may
@@ -409,6 +412,7 @@ impl WeaponDef {
             no_partial_reload: parse_bool(map, "noPartialReload", false),
             raise_time: parse_num(map, "raiseTime", 0.0),
             aim_down_sight: parse_bool(map, "aimDownSight", false),
+            move_speed_scale: parse_num(map, "moveSpeedScale", 1.0),
             ads_trans_in: parse_num(map, "adsTransInTime", 0.0),
             ads_trans_out: parse_num(map, "adsTransOutTime", 0.0),
             ads_reload_trans_time: parse_num(map, "adsReloadTransTime", 0.0),

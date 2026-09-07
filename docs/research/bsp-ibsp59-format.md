@@ -280,7 +280,7 @@ vcod's rule: a soup collides when its material carries `0x1` or `0x10000`, or is
 
 ## Terrain has no brushes
 
-Ground-level spawns on mp_pavlov sit 200 or more units above the first brush below them (bedrock at z = -192). Terrain and patch surfaces exist only as render triangle soups, so brush collision alone drops the player through the ground and a triangle collider is required, not a fallback. `CollisionWorld::build` harvests the world model's soups (submodel meshes are replaced by their brush hulls), skipping sky materials and everything the soup-side content-word rule above drops, plus degenerate triangles (cross product under 1e-6); each triangle's AABB is padded by 0.25 units before building the BVH. Brushes and triangles are then swept with the same Q3 `CM_TraceThroughBrush` clip against plane sets expanded by the box (triangles get face, axis and edge-cross bevels).
+Ground-level spawns on mp_pavlov sit 200 or more units above the first brush below them (bedrock at z = -192). Terrain and patch surfaces exist only as render triangle soups, so brush collision alone drops the player through the ground and a triangle collider is required, not a fallback. `CollisionWorld::build` harvests the world model's soups (submodel meshes are replaced by their brush hulls), skipping sky materials and everything the soup-side content-word rule above drops, plus degenerate triangles (cross product under 1e-6); each triangle's AABB is padded by 0.25 units before building the BVH. Brushes and triangles are then swept with the Q3 `CM_TraceThroughBrush` clip against their planes (a triangle's face, axis and edge-cross bevels) pushed out by a capsule's radius and tested against its nearer sphere: retail's mover traces as a capsule, `trap_TraceCapsule`, against everything (`cod11-mantle.md`, "The player is a capsule").
 
 ## Movement constants and their provenance
 
@@ -290,9 +290,10 @@ Ground-level spawns on mp_pavlov sit 200 or more units above the first brush bel
 |---|---|---|
 | `GRAVITY` | 800 | `bg_public.h` `DEFAULT_GRAVITY` (g_gravity default) |
 | `SPEED_RUN` | 190 | CoD 1 `g_speed` default |
-| `SCALE_WALK` | 0.4 | CoD slow-walk modifier |
-| `SCALE_CROUCH` | 0.65 | CoD |
-| `SCALE_PRONE` | 0.15 | CoD |
+| `SCALE_WALK` | 0.4 | retail's wire `ps.walkSpeedScale`; the ADS walk (`cod11-mantle.md`, "The wish speed") |
+| `SCALE_CROUCH` | 0.65 | retail's wire `ps.crouchSpeedScale` |
+| `SCALE_PRONE` | 0.15 | retail's wire `ps.proneSpeedScale` |
+| `SCALE_BACK / SCALE_STRAFE / SCALE_LEAN` | 0.7 / 0.8 / 0.4 | retail's wire `ps.backSpeedScale`, `strafeSpeedScale`, `leanSpeedScale`, applied by the walk cmd scale at 0x2e690 |
 | `JUMP_HEIGHT_STAND / LOW` | 34 / 24 | retail rodata 0x70BE8/0x70BEC; vz = sqrt(2 * height * gravity). The forwardmove gate this row used to name was a misread, corrected 2026-09-01 against a live capture (`cod11-mantle.md`, "Jumps") |
 | `PM_ACCELERATE` | 9 | retail rodata 0x70844; Q3's is 10, RTCW-MP's 10 too - the community-documented "Q3 exact copy" was wrong |
 | `PM_DUCKED_ACCELERATE / PM_PRONE_ACCELERATE` | 12 / 19 | retail rodata; selected in the steep-slope mover @0x2f4b0-0x2f4ca, walk-path application INFERRED (`cod11-mantle.md`) |
@@ -320,9 +321,10 @@ this section used to carry. Two deliberate divergences remain. First,
 `PM_STOPSPEED`: retail's flat 100 makes prone unable to accelerate at all -
 gain per frame is `19 * dt * 28.5` = 4.33 against a floor loss of
 `100 * 5.5 * dt` = 4.40 - so `pmove.rs` keeps the floor scaled by stance
-until someone recovers how retail actually compensates. Second, there is no
-wading wish clamp: retail references neither wade-scale float anywhere in the
-walk mover, so shallow-water slowdown comes from the water friction term alone.
+until someone recovers how retail actually compensates. The wading slowdown
+this paragraph used to call absent is in the walk cmd scale, not the mover:
+`1 - waterlevel / 3 * 0.5` (`cod11-mantle.md`, "The wish speed"), and
+`pmove::wish` applies it.
 Water and ladder mechanics are documented in `pmove.rs`'s constant blocks with
 their sources; the full retail ladder constants live in `cod11-mantle.md`.
 The lean code is RTCW's `PM_UpdateLean` with two deliberate differences: CoD

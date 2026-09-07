@@ -84,26 +84,61 @@ fn tri_contents(content_flags: u32) -> Option<u32> {
     }
 }
 
-/// Q3 `cm_trace.c` `CM_TraceThroughBrush`, on planes already expanded by the box.
+/// The sweep shape a box becomes: retail's `ClientThink_real` hands pmove
+/// `trap_TraceCapsule`, so a player is a capsule against brushes and
+/// terrain alike, in Q3's `CM_TestBoundingBoxInCapsule` shape: the radius
+/// is the smaller of the half width and the half height, and the two sphere
+/// centres sit `offset` above and below the box centre. For the player that
+/// is a radius of 15 with spheres 15 and 55 above the feet, which rests on a
+/// grade at `h + 15 (1 / n.z - 1)` where a box rests at `h + 15 tan`, the
+/// 1-unit lift on a 4-degree street the retail captures do not carry, and
+/// which slides along a diagonal wall at 15 where a box's corner holds it
+/// at 21 (docs/research/cod11-mantle.md, "The player is a capsule").
+#[derive(Clone, Copy)]
+struct Capsule {
+    /// From the trace origin to the box centre.
+    center: Vec3,
+    radius: f32,
+    offset: Vec3,
+}
+
+impl Capsule {
+    fn of(mins: Vec3, maxs: Vec3) -> Capsule {
+        let half = (maxs - mins) * 0.5;
+        let radius = half.x.min(half.z);
+        Capsule {
+            center: (mins + maxs) * 0.5,
+            radius,
+            offset: Vec3::Z * (half.z - radius),
+        }
+    }
+}
+
+/// Q3 `cm_trace.c` `CM_TraceThroughBrush`, on planes already expanded by the
+/// shape.
 ///
-/// `hollow` is a triangle's clip. A start inside the box-expanded slab of a
-/// zero-thickness triangle is never `startsolid`, the way Q3's patch facets
-/// never are (`CM_TraceThroughPatchCollide`): a box resting on one facet of
-/// a terrain mesh sits inside the neighbouring facet's slab at every convex
-/// seam, and beside a kerb or a crate it is inside the top face's slab, and
-/// reading either as solid made the ground trace fail and trapped the walker
-/// (docs/research/cod11-mantle.md, "The ground snap"). A start within
-/// `SEAM_DEPTH` behind a face is resting on that face: a fraction-0 hit
-/// with the face's normal when the trace moves into it, nothing when it
-/// moves out. Deeper than that the triangle does not clip the trace at all.
-/// Q3's facets trust their winding, which a soup does not, so both faces of
-/// the slab clip an entry from outside.
+/// `sphere` is the capsule's sphere offset: each plane is tested against the
+/// sphere nearest it, the way Q3 sweeps a capsule through a brush
+/// (`cm_trace.c`, the `tw->sphere.use` arm), with `start` and `end` already
+/// at the capsule's centre. `hollow` is a triangle's clip. A start inside
+/// the expanded slab of a zero-thickness triangle is never `startsolid`, the
+/// way Q3's patch facets never are (`CM_TraceThroughPatchCollide`): a shape resting
+/// on one facet of a terrain mesh sits inside the neighbouring facet's slab
+/// at every convex seam, and beside a kerb or a crate it is inside the top
+/// face's slab, and reading either as solid made the ground trace fail and
+/// trapped the walker (docs/research/cod11-mantle.md, "The ground snap"). A
+/// start within `SEAM_DEPTH` behind a face is resting on that face: a
+/// fraction-0 hit with the face's normal when the trace moves into it,
+/// nothing when it moves out. Deeper than that the triangle does not clip
+/// the trace at all. Q3's facets trust their winding, which a soup does not,
+/// so both faces of the slab clip an entry from outside.
 fn clip_segment(
     trace: &mut Trace,
     start: Vec3,
     end: Vec3,
     planes: &[(Vec3, f32)],
     surface_flags: u32,
+    sphere: Vec3,
     hollow: bool,
 ) {
     let mut enter = -1.0f32;
@@ -115,8 +150,11 @@ fn clip_segment(
     let mut faces = [(0.0f32, 0.0f32); 2];
 
     for (i, &(n, d)) in planes.iter().enumerate() {
-        let d1 = n.dot(start) - d;
-        let d2 = n.dot(end) - d;
+        // The sphere nearest the plane is the one the plane's normal points
+        // away from.
+        let shift = if n.dot(sphere) > 0.0 { -sphere } else { sphere };
+        let d1 = n.dot(start + shift) - d;
+        let d2 = n.dot(end + shift) - d;
         if i < 2 {
             faces[i] = (d1, d2);
         }
@@ -187,31 +225,24 @@ fn clip_segment(
     }
 }
 
-/// Q3 `cm_trace.c` offset trick: planes pushed out by the box so the center
-/// segment can be clipped.
-fn expand_brush(planes: &[(Vec3, f32)], mins: Vec3, maxs: Vec3, out: &mut Vec<(Vec3, f32)>) {
+/// A brush's planes pushed out by the capsule's radius, Q3's
+/// `dist = plane->dist + tw->sphere.radius`.
+fn expand_brush(planes: &[(Vec3, f32)], radius: f32, out: &mut Vec<(Vec3, f32)>) {
     out.clear();
     for &(n, d) in planes {
-        let ofs = Vec3::new(
-            if n.x < 0.0 { maxs.x } else { mins.x },
-            if n.y < 0.0 { maxs.y } else { mins.y },
-            if n.z < 0.0 { maxs.z } else { mins.z },
-        );
-        out.push((n, d - n.dot(ofs)));
+        out.push((n, d + radius));
     }
 }
 
-/// Minkowski planes for a box-expanded triangle: face, axis bevels, edge x
-/// axis bevels. Edge hits report the bevel normal, which lets pmove slide
-/// around edges.
-fn triangle_planes(tri: &[Vec3; 3], mins: Vec3, maxs: Vec3, out: &mut Vec<(Vec3, f32)>) {
+/// Planes for a triangle swept by a capsule of `radius`: face, axis bevels,
+/// edge x axis bevels, each pushed out by the radius the way Q3 expands a
+/// patch facet for a sphere (`cm_patch.c`, `plane[3] += tw->sphere.radius`).
+/// Edge hits report the bevel normal, which lets pmove slide around edges.
+fn triangle_planes(tri: &[Vec3; 3], radius: f32, out: &mut Vec<(Vec3, f32)>) {
     out.clear();
     let mut push = |n: Vec3| {
         let d_tri = n.dot(tri[0]).max(n.dot(tri[1])).max(n.dot(tri[2]));
-        let expand = (-n.x * mins.x).max(-n.x * maxs.x)
-            + (-n.y * mins.y).max(-n.y * maxs.y)
-            + (-n.z * mins.z).max(-n.z * maxs.z);
-        out.push((n, d_tri + expand));
+        out.push((n, d_tri + radius));
     };
     let face = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
     push(face);
@@ -496,7 +527,18 @@ impl CollisionWorld {
 
         if !self.nodes.is_empty() {
             let mut scratch = Vec::new();
-            self.trace_node(0, start, end, mins, maxs, mask, &mut trace, &mut scratch);
+            let capsule = Capsule::of(mins, maxs);
+            self.trace_node(
+                0,
+                start,
+                end,
+                mins,
+                maxs,
+                capsule,
+                mask,
+                &mut trace,
+                &mut scratch,
+            );
         }
         trace.endpos = start + (end - start) * trace.fraction;
         trace
@@ -512,6 +554,7 @@ impl CollisionWorld {
         end: Vec3,
         mins: Vec3,
         maxs: Vec3,
+        capsule: Capsule,
         mask: u32,
         trace: &mut Trace,
         scratch: &mut Vec<(Vec3, f32)>,
@@ -532,15 +575,31 @@ impl CollisionWorld {
                         if brush.content_flags & mask == 0 {
                             continue;
                         }
-                        expand_brush(&brush.planes, mins, maxs, scratch);
-                        clip_segment(trace, start, end, scratch, brush.surface_flags, false);
+                        expand_brush(&brush.planes, capsule.radius, scratch);
+                        clip_segment(
+                            trace,
+                            start + capsule.center,
+                            end + capsule.center,
+                            scratch,
+                            brush.surface_flags,
+                            capsule.offset,
+                            false,
+                        );
                     }
                     Prim::Tri(t) => {
                         if self.tris_contents[t as usize] & mask == 0 {
                             continue;
                         }
-                        triangle_planes(&self.tris[t as usize], mins, maxs, scratch);
-                        clip_segment(trace, start, end, scratch, self.tris_surf[t as usize], true);
+                        triangle_planes(&self.tris[t as usize], capsule.radius, scratch);
+                        clip_segment(
+                            trace,
+                            start + capsule.center,
+                            end + capsule.center,
+                            scratch,
+                            self.tris_surf[t as usize],
+                            capsule.offset,
+                            true,
+                        );
                     }
                 }
             }
@@ -556,8 +615,8 @@ impl CollisionWorld {
         } else {
             (node.second, node.first)
         };
-        self.trace_node(near, start, end, mins, maxs, mask, trace, scratch);
-        self.trace_node(far, start, end, mins, maxs, mask, trace, scratch);
+        self.trace_node(near, start, end, mins, maxs, capsule, mask, trace, scratch);
+        self.trace_node(far, start, end, mins, maxs, capsule, mask, trace, scratch);
     }
 
     /// Only the tests call this now; `box_trace` walks the BVH itself via `trace_node`.
@@ -1128,16 +1187,33 @@ mod tests {
             enter: -1.0,
         };
         let mut scratch = Vec::new();
+        let capsule = Capsule::of(mins, maxs);
         for (prim, _, _) in &world.prims {
             match *prim {
                 Prim::Brush(i) => {
                     let brush = &world.brushes[i as usize];
-                    expand_brush(&brush.planes, mins, maxs, &mut scratch);
-                    clip_segment(&mut trace, start, end, &scratch, brush.surface_flags, false);
+                    expand_brush(&brush.planes, capsule.radius, &mut scratch);
+                    clip_segment(
+                        &mut trace,
+                        start + capsule.center,
+                        end + capsule.center,
+                        &scratch,
+                        brush.surface_flags,
+                        capsule.offset,
+                        false,
+                    );
                 }
                 Prim::Tri(i) => {
-                    triangle_planes(&world.tris[i as usize], mins, maxs, &mut scratch);
-                    clip_segment(&mut trace, start, end, &scratch, 0, true);
+                    triangle_planes(&world.tris[i as usize], capsule.radius, &mut scratch);
+                    clip_segment(
+                        &mut trace,
+                        start + capsule.center,
+                        end + capsule.center,
+                        &scratch,
+                        0,
+                        capsule.offset,
+                        true,
+                    );
                 }
             }
         }
