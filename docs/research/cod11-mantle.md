@@ -363,6 +363,74 @@ carries real upward velocity; where the slope levels out, the 0.25-unit ground
 trace of the next frame misses and the player is airborne with that velocity
 still on it. Nine units of reach under the feet is what takes it back down.
 
+VERIFIED: between the second `PM_SlideMove` call (0x35296) and the down trace
+(0x35335) the function tests two things and nothing else: the flag in `ebx`
+at 0x352a4 and `stepUp` against zero at 0x352a8-0x352ba (`fldz`, `fld
+[ebp-0xc0]`, `fucompp`), skipping to 0x353f7 only when both are clear.
+INFERRED: the velocity is never read on that path, so a grounded frame takes
+the down pass whatever its velocity is, including one a wall or a seam bevel
+just redirected into the ground plane. vcod used to re-run the ground
+trace's kickoff test (`velocity.z > 0 && velocity . normal > 10`) against the
+current velocity before it snapped, and a walker rubbing a wall while
+climbing a slope, whose slide keeps the climb's upward component and loses
+the forward one, failed that test every frame: the snap was refused, the
+ground trace after the move read the same test and dropped the player, and
+the sight ramp reversed with it. The gate is the ground state alone now, with
+a waterjump in progress the one exclusion (its launch is set inside the
+move and the snap's clip would take it away).
+
+VERIFIED: at 0x3533a a 16-bit word at +0x28 of the down trace is compared
+against 0x3f, and the at-or-below arm (0x35341-0x35377) writes the origin
+and velocity saved at 0x35116 back over the playerstate and returns.
+INFERRED: by its range that word is the hit entity number, so a down pass
+that lands on a client is undone whole, and the tail never runs for it.
+
+VERIFIED: at 0x353f7-0x3544e the function compares
+`v . (down_o - start_o) + 0.001` (0x70ef4) against `v . (origin - start_o)`,
+with `v` the velocity as it stands after the down pass and both
+displacements taken in x and y, and the greater-former arm (0x3546e-0x35499)
+writes `down_o` and `down_v` back over the playerstate. INFERRED: this is
+the "did the flat slide get further" test, measured along the velocity
+rather than by length, and what it restores is the flat slide's state from
+before any down pass, so a reverted step ends the move unsnapped and the
+ground trace after it decides. vcod compares squared horizontal lengths
+instead and reverts to the same slot.
+
+### What the collider does to a walker on a terrain seam
+
+Everything under this heading is a measurement of vcod, not of retail:
+retail's terrain collision is not read, and the numbers are from
+`crates/common/src/collision.rs` walking `mp_carentan`'s own mesh.
+
+VERIFIED: a box resting on one facet of a terrain mesh is inside the
+neighbouring facet's box-expanded slab wherever the two meet at a convex
+seam, by half the box width times the grade change, and beside an 8-unit
+kerb it is inside the kerb top's slab. The soup clip used to read a start
+inside a slab as `allsolid` the way `CM_TraceThroughBrush` reads a start
+inside a brush, so the 0.25-unit ground trace failed on the seam and the
+9-unit snap did nothing there. Q3's patch facets never report a start as
+solid (`CM_TraceThroughPatchCollide`, `cm_patch.c`), and the soup clip now
+does the same: a start within 8 units behind a face is a fraction-0 contact
+with that face, deeper than that the triangle does not clip the trace.
+
+VERIFIED: a box touching two surfaces clips both at fraction 0, and the one
+reported used to be whichever the BVH walk reached first, so the ground trace
+and the snap trace at the same origin could name different normals; the
+kickoff test then read a seam bevel's normal where the snap had clipped the
+velocity into the facet's. The contact reported is now the one with the
+largest unclamped enter fraction, which the two traces agree on.
+
+VERIFIED: walked offline at 8 ms with the sight held from 300 sloped spots
+around `mp_carentan`'s deathmatch spawns, up and down each, the walks that
+left the ground with walkable floor inside 18 units below went from 101 to
+53 of 600, and every remaining one is a ledge, a prop or a fall of more than
+the snap's 9 units. VERIFIED: the same walks at 16 and 25 ms count the same
+way, so the cmd rate is not the trigger. VERIFIED: `--probe-slope` against
+the retail server on open ground reads `groundEntityNum` 1022 on all 1464
+snapshots and no sight reversal at 8 ms and at 25 ms, and against a
+staircase at 25 ms reads 27 airborne snapshots and 13 reversals, so retail
+itself drops a walker pushing against steps.
+
 ### The step event and the velocity scale
 
 The tail of `PM_StepSlideMove`, 0x35659 to 0x35799. Both halves are in
@@ -520,16 +588,18 @@ Status after the pmove work landed on this branch:
    step as its parm, and the post-step velocity scale, both under "The step
    event and the velocity scale". NOT ported from that tail: the
    `PM_VerifyPronePosition` revert that gates it (vcod runs no prone fit check
-   inside the move) and the third block past 0x3579c. One
-   deliberate deviation: retail's guards are `groundEntityNum` and the pml
-   ground-plane flag, both taken before the move, and vcod re-runs the
-   ground trace's own kickoff test against the current velocity before it
-   snaps, because a waterjump sets its launch velocity inside the move and
-   the snap would clip it away. The airborne arm's one exception
+   inside the move) and the third block past 0x3579c. The snap's gate is
+   retail's, the ground state taken before the move, with one exclusion: a
+   waterjump in progress, whose launch is set inside the move and which the
+   snap's clip would take away. The velocity re-test that used to stand in
+   for that exclusion refused the snap to every walker rubbing a wall on a
+   slope ("The ground snap"). The airborne arm's one exception
    (`pm_flags & 0x10` with `velocity[2] > 0`, 0x350F5-0x35112) is not taken
    either: vcod returns for every airborne player. That is a no-op today,
    since the snap is 0 on a ladder anyway, and it would only matter if the
-   step-up half were ever wanted on a climb.
+   step-up half were ever wanted on a climb. The two collider artefacts that
+   dropped a walker at terrain seams and beside kerbs, and their fixes, are
+   under "What the collider does to a walker on a terrain seam".
 6. Stands as the negative result: no mantle exists in retail 1.1. If
    ledge-climbing is wanted as a feature it would be a vcod extension with
    no retail counterpart - decide its constants, don't dig for them in the

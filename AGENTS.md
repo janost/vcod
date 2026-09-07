@@ -266,6 +266,15 @@ engineering setup works.
   sits on the menu for the whole rest of the run. The dm capture shows the
   restart case; sd, whose `pers[]` survives, reopens no menu and the clear
   is inert there.
+  `--probe-slope` walks the `--probe-pvs` route with the sight held and
+  counts, per second and for the run, the snapshots off the ground, the
+  sight-ramp reversals, the `EV_STEP_VIEW` (143) events with their parms and
+  the mean speed; it writes no fixture, and the same run against retail and
+  against ours is the comparison. `--probe-cmd-ms N` sets the interval the
+  probe sends usercmds at (default 16; a 125 fps retail client sends every
+  8 ms), for every mode. Retail's deathmatch spawn for a lone client is
+  random and often indoors, so a run that covers ground takes a few tries;
+  read `moved` off the per-second summary before trusting a total.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with

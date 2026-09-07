@@ -49,9 +49,18 @@ pub struct Trace {
     pub surface_flags: u32,
     pub startsolid: bool,
     pub allsolid: bool,
+    /// The hit's unclamped enter fraction. A box touching two surfaces
+    /// clips both at fraction 0, and the one it sits closest to (the
+    /// largest raw value) is the contact reported, so a 0.25-unit ground
+    /// trace and a 9-unit snap agree on the normal at a mesh seam.
+    enter: f32,
 }
 
 pub const SURFACE_CLIP_EPSILON: f32 = 0.125;
+/// How far behind a triangle's face a start still counts as resting on it.
+/// A 30-unit box straddling a convex seam is inside the uphill facet's slab
+/// by half its width times the grade change, 8.7 units at 30 degrees.
+const SEAM_DEPTH: f32 = 8.0;
 
 /// The 5-bit sound-surface index every trace consumer reads
 /// (`cod11-events-and-fx.md`, section 4). 0 means the material carries no
@@ -76,22 +85,41 @@ fn tri_contents(content_flags: u32) -> Option<u32> {
 }
 
 /// Q3 `cm_trace.c` `CM_TraceThroughBrush`, on planes already expanded by the box.
+///
+/// `hollow` is a triangle's clip. A start inside the box-expanded slab of a
+/// zero-thickness triangle is never `startsolid`, the way Q3's patch facets
+/// never are (`CM_TraceThroughPatchCollide`): a box resting on one facet of
+/// a terrain mesh sits inside the neighbouring facet's slab at every convex
+/// seam, and beside a kerb or a crate it is inside the top face's slab, and
+/// reading either as solid made the ground trace fail and trapped the walker
+/// (docs/research/cod11-mantle.md, "The ground snap"). A start within
+/// `SEAM_DEPTH` behind a face is resting on that face: a fraction-0 hit
+/// with the face's normal when the trace moves into it, nothing when it
+/// moves out. Deeper than that the triangle does not clip the trace at all.
+/// Q3's facets trust their winding, which a soup does not, so both faces of
+/// the slab clip an entry from outside.
 fn clip_segment(
     trace: &mut Trace,
     start: Vec3,
     end: Vec3,
     planes: &[(Vec3, f32)],
     surface_flags: u32,
+    hollow: bool,
 ) {
     let mut enter = -1.0f32;
     let mut leave = 1.0f32;
     let mut clip_normal = Vec3::ZERO;
     let mut getout = false;
     let mut startout = false;
+    // The face pair's distances, for the resting test below.
+    let mut faces = [(0.0f32, 0.0f32); 2];
 
-    for &(n, d) in planes {
+    for (i, &(n, d)) in planes.iter().enumerate() {
         let d1 = n.dot(start) - d;
         let d2 = n.dot(end) - d;
+        if i < 2 {
+            faces[i] = (d1, d2);
+        }
         if d2 > 0.0 {
             getout = true;
         }
@@ -122,6 +150,22 @@ fn clip_segment(
     }
 
     if !startout {
+        if hollow {
+            // `triangle_planes` pushes the face first and its reverse second;
+            // the one the start is closer to is the surface it rests on.
+            let i = usize::from(faces[1].0 > faces[0].0);
+            let (d1, d2) = faces[i];
+            if d1 > -SEAM_DEPTH && d1 > d2 {
+                let enter = (d1 - SURFACE_CLIP_EPSILON) / (d1 - d2);
+                if trace.fraction > 0.0 || enter > trace.enter {
+                    trace.fraction = 0.0;
+                    trace.enter = enter;
+                    trace.normal = planes[i].0;
+                    trace.surface_flags = surface_flags;
+                }
+            }
+            return;
+        }
         trace.startsolid = true;
         if !getout {
             trace.allsolid = true;
@@ -132,10 +176,14 @@ fn clip_segment(
     }
     // `<=`, not Q3's `<`: a zero-thickness triangle's paired face planes make
     // enter == leave for a grazing ray. Brushes have thickness, so unaffected.
-    if enter <= leave && enter > -1.0 && enter < trace.fraction {
-        trace.fraction = enter.max(0.0);
-        trace.normal = clip_normal;
-        trace.surface_flags = surface_flags;
+    if enter <= leave && enter > -1.0 {
+        let fraction = enter.max(0.0);
+        if fraction < trace.fraction || (fraction == trace.fraction && enter > trace.enter) {
+            trace.fraction = fraction;
+            trace.enter = enter;
+            trace.normal = clip_normal;
+            trace.surface_flags = surface_flags;
+        }
     }
 }
 
@@ -443,6 +491,7 @@ impl CollisionWorld {
             surface_flags: 0,
             startsolid: false,
             allsolid: false,
+            enter: -1.0,
         };
 
         if !self.nodes.is_empty() {
@@ -484,14 +533,14 @@ impl CollisionWorld {
                             continue;
                         }
                         expand_brush(&brush.planes, mins, maxs, scratch);
-                        clip_segment(trace, start, end, scratch, brush.surface_flags);
+                        clip_segment(trace, start, end, scratch, brush.surface_flags, false);
                     }
                     Prim::Tri(t) => {
                         if self.tris_contents[t as usize] & mask == 0 {
                             continue;
                         }
                         triangle_planes(&self.tris[t as usize], mins, maxs, scratch);
-                        clip_segment(trace, start, end, scratch, self.tris_surf[t as usize]);
+                        clip_segment(trace, start, end, scratch, self.tris_surf[t as usize], true);
                     }
                 }
             }
@@ -1076,6 +1125,7 @@ mod tests {
             surface_flags: 0,
             startsolid: false,
             allsolid: false,
+            enter: -1.0,
         };
         let mut scratch = Vec::new();
         for (prim, _, _) in &world.prims {
@@ -1083,11 +1133,11 @@ mod tests {
                 Prim::Brush(i) => {
                     let brush = &world.brushes[i as usize];
                     expand_brush(&brush.planes, mins, maxs, &mut scratch);
-                    clip_segment(&mut trace, start, end, &scratch, brush.surface_flags);
+                    clip_segment(&mut trace, start, end, &scratch, brush.surface_flags, false);
                 }
                 Prim::Tri(i) => {
                     triangle_planes(&world.tris[i as usize], mins, maxs, &mut scratch);
-                    clip_segment(&mut trace, start, end, &scratch, 0);
+                    clip_segment(&mut trace, start, end, &scratch, 0, true);
                 }
             }
         }
