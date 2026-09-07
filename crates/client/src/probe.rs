@@ -62,6 +62,7 @@ pub struct Save {
     pub configstrings: bool,
     pub playerstate: bool,
     pub motion: bool,
+    pub slope: bool,
     pub combat: bool,
     pub ads: bool,
     pub grenade: bool,
@@ -155,6 +156,7 @@ pub fn probe(
         configstrings: save_configstrings,
         playerstate: save_playerstate,
         motion: save_motion,
+        slope: save_slope,
         combat: save_combat,
         ads: save_ads,
         grenade: save_grenade,
@@ -182,8 +184,10 @@ pub fn probe(
     let save_combat = save_combat || save_ads || save_grenade || probe_sway;
     // The fixture is the route's output, so the capture drives the same walk;
     // the slope measurement walks it too, with the sight held.
+    let slope = slope || save_slope;
     let pvs = pvs || save_entities || slope;
     let mut slope_stats = SlopeStats::default();
+    let mut slope_capture = SlopeCapture::default();
     // Every mode that needs a spawned player drives the same stock-menu join;
     // `--probe-team` alone joins and then just watches the roster.
     let joining = save_playerstate
@@ -497,7 +501,12 @@ pub fn probe(
         // byte only travels in the full usercmd branch, which a `wbuttons`,
         // `upmove` or `weapon` change forces (docs/protocol-1.1.md).
         cmd.weapon = weapon_switch.unwrap_or(ps_weapon);
-        client.send_frame(&cmd);
+        let sent = client.send_frame(&cmd);
+        if save_slope && slope_capture.recording() {
+            if let Some(c) = sent {
+                slope_capture.cmds.push(c);
+            }
+        }
 
         // Retail sends the `b` scoreboard only in answer to `score`, so the
         // one a map end produces is in the capture only if it is asked for.
@@ -513,6 +522,9 @@ pub fn probe(
         if let Some(s) = client.snapshots().newest() {
             if slope && join.settled(now) {
                 slope_stats.observe(now, s);
+                if save_slope {
+                    slope_capture.observe(s);
+                }
             }
             watch.check_sounds(s, client.configstrings());
             if netchan_capture {
@@ -658,6 +670,17 @@ pub fn probe(
                     } else if pvs {
                         if pvs_probe.step(now, s) {
                             pvs_probe.report();
+                            if save_slope {
+                                write_slope_fixture(
+                                    client.configstrings(),
+                                    &join,
+                                    &slope_capture,
+                                    cmd_ms,
+                                    tag.as_deref(),
+                                    overwrite,
+                                )?;
+                                wrote_playerstate = true;
+                            }
                             if save_entities {
                                 write_entities_fixture(
                                     &pvs_probe,
@@ -692,6 +715,17 @@ pub fn probe(
     }
     if slope {
         slope_stats.report();
+    }
+    if save_slope && !wrote_playerstate {
+        println!("slope: the run ended before the route did, writing what it has");
+        write_slope_fixture(
+            client.configstrings(),
+            &join,
+            &slope_capture,
+            cmd_ms,
+            tag.as_deref(),
+            overwrite,
+        )?;
     }
 
     // The run's clock can end before the script does; what it has by then is
@@ -5140,6 +5174,154 @@ impl SlopeStats {
     fn report(&self) {
         println!("slope total: {}", self.run.line());
     }
+}
+
+/// What `--save-slope` records: every usercmd as it went on the wire and every
+/// snapshot's movement fields, in the order they happened, from the first
+/// spawned snapshot on. `crates/server/tests/playerstate_slope_ab.rs` replays
+/// the cmds on our mover from the first snapshot's origin and diffs the
+/// origin at every snapshot's `commandTime`.
+#[derive(Default)]
+struct SlopeCapture {
+    seen: Option<u32>,
+    prev_seq: Option<i32>,
+    cmds: Vec<net::msg::UserCmd>,
+    /// `(index into cmds at which the snapshot arrived, the line)`.
+    snaps: Vec<(usize, String)>,
+}
+
+impl SlopeCapture {
+    fn recording(&self) -> bool {
+        !self.snaps.is_empty()
+    }
+
+    fn observe(&mut self, snap: &net::snapshot::Snapshot) {
+        if self.seen == Some(snap.message_num) {
+            return;
+        }
+        let p = &net::protocol::PROTOCOL_V1;
+        if snap.ps.field_i32(p, "pm_type") != PM_NORMAL {
+            return;
+        }
+        self.seen = Some(snap.message_num);
+        let f = |n: &str| snap.ps.field_f32(p, n);
+        let i = |n: &str| snap.ps.field_i32(p, n);
+        // The step events this snapshot brought, the way `SlopeStats` reads
+        // the ring.
+        let seq = i("eventSequence");
+        let mut steps = Vec::new();
+        if let Some(prev) = self.prev_seq {
+            let gained = ((seq - prev) & 0xff).min(4);
+            for k in (seq - gained)..seq {
+                let slot = (k & 3) as usize;
+                if i(&format!("events[{slot}]")) == 143 {
+                    steps.push((i(&format!("eventParms[{slot}]")) - 128).to_string());
+                }
+            }
+        }
+        self.prev_seq = Some(seq);
+        let line = format!(
+            "!snap msg={} t={} ct={} origin={},{},{} vel={},{},{} ground={} view={},{},{} \
+             frac={} da={},{},{} pm_flags={} step={} leanf={} weapon={} weaponstate={}",
+            snap.message_num,
+            snap.server_time,
+            i("commandTime"),
+            f("origin[0]"),
+            f("origin[1]"),
+            f("origin[2]"),
+            f("velocity[0]"),
+            f("velocity[1]"),
+            f("velocity[2]"),
+            i("groundEntityNum"),
+            f("viewangles[0]"),
+            f("viewangles[1]"),
+            f("viewangles[2]"),
+            f("fWeaponPosFrac"),
+            i("delta_angles[0]"),
+            i("delta_angles[1]"),
+            i("delta_angles[2]"),
+            i("pm_flags"),
+            steps.join(","),
+            f("leanf"),
+            i("weapon"),
+            i("weaponstate"),
+        );
+        self.snaps.push((self.cmds.len(), line));
+    }
+}
+
+/// Writes the route walk as `<map>-<gametype>-slope-<cmd_ms>ms.txt`: `!cmd`
+/// lines carry the usercmd as sent, `!snap` lines the playerstate the server
+/// answered with, interleaved in the order the probe saw them.
+fn write_slope_fixture(
+    configstrings: &[String],
+    join: &JoinProbe,
+    capture: &SlopeCapture,
+    cmd_ms: u64,
+    tag: Option<&str>,
+    overwrite: bool,
+) -> anyhow::Result<()> {
+    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
+    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let (map, gametype) = (key("mapname"), key("g_gametype"));
+    let mut out = String::new();
+    out.push_str(
+        "# Retail CoD 1.1d dedicated server playerstate along a walked route, per usercmd.\n",
+    );
+    out.push_str(&format!(
+        "# map {map}, g_gametype {gametype}, joined {}, weapon {}, dedicated 1,\n",
+        join.team, join.weapon
+    ));
+    out.push_str("# sv_maxclients 8, sv_pure 0, stock scr_* defaults, one client on the server.\n");
+    out.push_str(&format!(
+        "# Captured with tools/run_server.sh and --net-probe --save-slope --probe-cmd-ms {cmd_ms}:\n"
+    ));
+    out.push_str("# the --probe-pvs route with the sight held, from a random spawn. !cmd is a\n");
+    out.push_str("# usercmd as it went on the wire (angles already rebased on delta_angles),\n");
+    out.push_str("# !snap the playerstate the next snapshot carried, with ct its commandTime.\n");
+    out.push_str("# Floats are printed exactly; step lists the EV_STEP_VIEW parms the snapshot\n");
+    out.push_str("# brought, minus the 128 bias.\n");
+    out.push_str(&format!("# cmd_ms {cmd_ms}\n"));
+    let mut next_snap = capture.snaps.iter().peekable();
+    for (i, c) in capture.cmds.iter().enumerate() {
+        while let Some((at, line)) = next_snap.peek() {
+            if *at > i {
+                break;
+            }
+            out.push_str(line);
+            out.push('\n');
+            next_snap.next();
+        }
+        out.push_str(&format!(
+            "!cmd st={} buttons={} wbuttons={} weapon={} up={} forward={} right={} angles={},{},{}\n",
+            c.server_time,
+            c.buttons,
+            c.wbuttons,
+            c.weapon,
+            c.up,
+            c.forward,
+            c.right,
+            c.angles[0],
+            c.angles[1],
+            c.angles[2]
+        ));
+    }
+    for (_, line) in next_snap {
+        out.push_str(line);
+        out.push('\n');
+    }
+    let suffix = tag.map(|t| format!("-{t}")).unwrap_or_default();
+    let path = format!("{PLAYERSTATE_FIXTURE_DIR}/{map}-{gametype}-slope-{cmd_ms}ms{suffix}.txt");
+    match tag {
+        Some(_) => write_tagged_fixture(&path, &out, overwrite)?,
+        None => std::fs::write(&path, &out)?,
+    }
+    println!(
+        "slope: {} cmds, {} snapshots -> {path}",
+        capture.cmds.len(),
+        capture.snaps.len()
+    );
+    Ok(())
 }
 
 /// One leg of the `--probe-pvs` route: a heading relative to where the spawn
