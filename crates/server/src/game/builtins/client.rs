@@ -1222,6 +1222,8 @@ mod tests {
             assert_eq!(name(&mut host, cx, "grenade"), "fraggrenade_mp");
             assert_eq!(name(&mut host, cx, "primaryb"), "none");
 
+            // `sd.gsc`'s 999 lands as the carbine file's `maxAmmo` 400 and
+            // `clipSize` 15: both setters clamp (retail 0x442a4, 0x444ed).
             let primary = Value::String(cx.intern_exact("primary"));
             let args = [primary, Value::Int(999)];
             set_weapon_slot_ammo(&mut host, cx, t, &args).unwrap();
@@ -1233,14 +1235,14 @@ mod tests {
                         0,
                         WeaponOp::SetAmmo {
                             ammo_index,
-                            rounds: 999
+                            rounds: 400
                         }
                     ),
                     (
                         0,
                         WeaponOp::SetClip {
                             clip_index,
-                            rounds: 999
+                            rounds: 15
                         }
                     ),
                 ]
