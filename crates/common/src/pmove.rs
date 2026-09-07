@@ -127,6 +127,21 @@ const EV_FOOTSTEP_WALK_BASE: i32 = 24;
 const EV_FOOTSTEP_PRONE_BASE: i32 = 47;
 const EV_JUMP_BASE: i32 = 70;
 const EV_LANDING_BASE: i32 = 93;
+/// `EV_STEP_VIEW`: the vertical jump the step machinery added this frame,
+/// which the client smooths the eye over
+/// (docs/research/cod11-mantle.md, "The step event and the velocity scale").
+const EV_STEP_VIEW: i32 = 143;
+/// Step below which retail raises nothing (double @0x70f08).
+const STEP_VIEW_EPS: f32 = 0.5;
+/// Clamp and bias the rounded step takes before it becomes the parm
+/// (@0x35727-0x35742); the parm is 8 bits on the wire.
+const STEP_VIEW_MIN: i32 = -16;
+const STEP_VIEW_MAX: i32 = 24;
+const STEP_VIEW_BIAS: i32 = 128;
+/// Post-step velocity scale `0.2 + 0.8 * (1 - |dz| / stepSize)`
+/// (rodata 0x70f14/0x70f10, applied @0x35770).
+const STEP_SCALE_BASE: f32 = 0.2;
+const STEP_SCALE_GAIN: f32 = 0.8;
 /// Ladder climb steps stay quiet this long after a push-off
 /// (`cmd.serverTime - ps->jumpTime <= 0x12b`, @0x323b9-0x323c8).
 const LADDER_STEP_QUIET_MS: f32 = 299.0;
@@ -541,9 +556,9 @@ pub fn pmove(
     if let Some((normal, ladderforward)) = ladder {
         ladder_move(ps, input, normal, ladderforward, world, dt, &mut events);
     } else if ps.waterjump_ms > 0.0 {
-        water_jump_move(ps, world, dt);
+        water_jump_move(ps, world, dt, Some(&mut events));
     } else if ps.water_level > 1 {
-        water_move(ps, input, world, dt);
+        water_move(ps, input, world, dt, Some(&mut events));
     } else {
         // retail ground jump (fn 0x316F4 @0x31CC0): stance-dependent height,
         // horizontal velocity kept. Its bit-0x20 check (@0x31ccb) reads the
@@ -565,9 +580,9 @@ pub fn pmove(
         }
         if ps.on_ground {
             friction(ps, ps.on_ladder, dt);
-            walk_move(ps, input, world, dt);
+            walk_move(ps, input, world, dt, Some(&mut events));
         } else {
-            air_move(ps, input, world, dt);
+            air_move(ps, input, world, dt, Some(&mut events));
         }
     }
     ground_trace(ps, world);
@@ -606,11 +621,13 @@ pub fn dead_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
     // for a dead player (combat doc, 1.12 and 1.13).
     ps.ads_active = false;
     ground_trace(ps, world);
+    // No events and no post-step velocity scale for a corpse: retail's step
+    // block sits behind `ps->pm_type > 5` (@0x35660).
     if ps.on_ground {
         friction(ps, false, dt);
-        walk_move(ps, &idle, world, dt);
+        walk_move(ps, &idle, world, dt, None);
     } else {
-        air_move(ps, &idle, world, dt);
+        air_move(ps, &idle, world, dt, None);
     }
     ground_trace(ps, world);
     ps.view_height_speed = DEAD_VIEW_LERP_SPEED;
@@ -1144,10 +1161,16 @@ fn clip_velocity(vel: Vec3, normal: Vec3) -> Vec3 {
 }
 
 /// Q3 `bg_pmove.c` `PM_WalkMove`.
-fn walk_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
+fn walk_move(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    world: &CollisionWorld,
+    dt: f32,
+    events: Option<&mut Vec<PmEvent>>,
+) {
     // eye-deep and looking up an upward slope: swim instead of trudging
     if ps.water_level > 2 && forward3(ps).dot(ps.ground_normal) > 0.0 {
-        water_move(ps, input, world, dt);
+        water_move(ps, input, world, dt, events);
         return;
     }
     let (dir, wishspeed) = wish(ps, input);
@@ -1166,7 +1189,7 @@ fn walk_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: 
     // to PM_SetMovementDir (@0x2f6db), which is what keeps a prone player's
     // legs following its body while it turns on the spot.
     if ps.velocity.x != 0.0 || ps.velocity.y != 0.0 {
-        step_slide_move(ps, world, dt, false);
+        step_slide_move(ps, world, dt, false, events);
     }
     set_movement_dir(ps, input, dt);
 }
@@ -1196,9 +1219,15 @@ fn cmd_scale(input: &PmInput) -> f32 {
 
 /// RTCW `bg_pmove.c` `PM_WaterMove`. No gravity: buoyancy is implicit, the
 /// idle sink is a wish toward the bottom, jump is the up command.
-fn water_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
+fn water_move(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    world: &CollisionWorld,
+    dt: f32,
+    events: Option<&mut Vec<PmEvent>>,
+) {
     if try_start_water_jump(ps, world) {
-        water_jump_move(ps, world, dt);
+        water_jump_move(ps, world, dt, events);
         return;
     }
     friction(ps, ps.on_ladder, dt);
@@ -1255,8 +1284,13 @@ fn try_start_water_jump(ps: &mut PlayerState, world: &CollisionWorld) -> bool {
 
 /// RTCW `bg_pmove.c` `PM_WaterJumpMove`: no control, extra gravity, cancels
 /// once falling again (landing clears via ground_trace).
-fn water_jump_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
-    step_slide_move(ps, world, dt, true);
+fn water_jump_move(
+    ps: &mut PlayerState,
+    world: &CollisionWorld,
+    dt: f32,
+    events: Option<&mut Vec<PmEvent>>,
+) {
+    step_slide_move(ps, world, dt, true, events);
     ps.velocity.z -= GRAVITY * dt;
     if ps.velocity.z < 0.0 {
         ps.waterjump_ms = 0.0;
@@ -1395,7 +1429,7 @@ fn ladder_move(
                 parm: 0,
             });
         }
-        air_move(ps, input, world, dt);
+        air_move(ps, input, world, dt, Some(events));
         ps.since_jump_ms = 0.0;
         return;
     }
@@ -1470,7 +1504,7 @@ fn ladder_move(
         ps.velocity.y += k * n.y;
     }
     // no gravity while going up a ladder
-    step_slide_move(ps, world, dt, false);
+    step_slide_move(ps, world, dt, false, Some(events));
     // PM_LadderMove @0x33d71: the legs face into the wall, and the cap here
     // is 75 degrees, not the 90 the ground path uses.
     ps.movement_dir = clamp_movement_dir(
@@ -1480,11 +1514,17 @@ fn ladder_move(
 }
 
 /// Q3 `bg_pmove.c` `PM_AirMove`.
-fn air_move(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
+fn air_move(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    world: &CollisionWorld,
+    dt: f32,
+    events: Option<&mut Vec<PmEvent>>,
+) {
     ps.air_speed_peak = ps.air_speed_peak.max(-ps.velocity.z);
     let (dir, wishspeed) = wish(ps, input);
     accelerate(ps, dir, wishspeed, PM_AIRACCELERATE, dt);
-    step_slide_move(ps, world, dt, true);
+    step_slide_move(ps, world, dt, true, events);
     set_movement_dir(ps, input, dt);
 }
 
@@ -1586,7 +1626,13 @@ fn slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bo
 
 /// Q3 `bg_slidemove.c` `PM_StepSlideMove`. Step height 18, or 10 while prone
 /// (retail picks the height off pm_flags bit 0x1 @0x35045, not ladder state).
-fn step_slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bool) {
+fn step_slide_move(
+    ps: &mut PlayerState,
+    world: &CollisionWorld,
+    dt: f32,
+    gravity: bool,
+    events: Option<&mut Vec<PmEvent>>,
+) {
     let step_size = if ps.stance == Stance::Prone {
         STEPSIZE_PRONE
     } else {
@@ -1638,16 +1684,57 @@ fn step_slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravit
         ps.origin = down.endpos;
         ps.velocity = clip_velocity(ps.velocity, down.normal);
     }
-    if step == 0.0 {
+    if step != 0.0 {
+        let stepped = (ps.origin.truncate() - start_o.truncate()).length_squared();
+        let flat = (down_o.truncate() - start_o.truncate()).length_squared();
+        if down.normal.z < MIN_WALK_NORMAL || flat > stepped {
+            // into air, onto a too-steep slope, or the flat slide got further
+            ps.origin = down_o;
+            ps.velocity = down_v;
+        }
+    }
+    // The step-up and the snap both reach this, and so does a reverted step:
+    // retail's tail is past every arm of the move (@0x35659). It is out of
+    // reach in the air, though: retail's blocked arm rejoins the same
+    // `groundEntityNum` test when `fJumpOriginZ` is 0 (@0x3507d), so the only
+    // airborne step it announces is the jump-origin allowance vcod does not
+    // model. Ours still steps a blocked airborne move, and must not announce
+    // that one.
+    if let Some(events) = events {
+        if ps.on_ground {
+            step_view(ps, events, start_o.z, down_o.z, step_size);
+        }
+    }
+}
+
+/// The vertical jump the step machinery added, told to the client and paid
+/// for in speed. Retail measures the event against the position the plain
+/// slide left (@0x3568d) and the velocity scale against the frame's start
+/// (@0x35761), and skips both when the step moved the eye by half a unit or
+/// less (docs/research/cod11-mantle.md, "The step event and the velocity
+/// scale").
+fn step_view(
+    ps: &mut PlayerState,
+    events: &mut Vec<PmEvent>,
+    start_z: f32,
+    down_z: f32,
+    step_size: f32,
+) {
+    let stepped = ps.origin.z - down_z;
+    if stepped.abs() <= STEP_VIEW_EPS {
         return;
     }
-    let stepped = (ps.origin.truncate() - start_o.truncate()).length_squared();
-    let flat = (down_o.truncate() - start_o.truncate()).length_squared();
-    if down.normal.z < MIN_WALK_NORMAL || flat > stepped {
-        // into air, onto a too-steep slope, or the flat slide got further
-        ps.origin = down_o;
-        ps.velocity = down_v;
+    // rounded by a +0.5 bias and an x87 truncate toward zero (@0x356af)
+    let units = (stepped + 0.5) as i32;
+    if units == 0 {
+        return;
     }
+    events.push(PmEvent {
+        event: EV_STEP_VIEW,
+        parm: units.clamp(STEP_VIEW_MIN, STEP_VIEW_MAX) + STEP_VIEW_BIAS,
+    });
+    ps.velocity *=
+        STEP_SCALE_BASE + STEP_SCALE_GAIN * (1.0 - (ps.origin.z - start_z).abs() / step_size);
 }
 
 #[cfg(test)]
@@ -2370,6 +2457,54 @@ mod tests {
         );
     }
 
+    /// The step tail: the vertical jump the step added rides `EV_STEP_VIEW`
+    /// with a +128 bias, and the frame's velocity is scaled by how much of
+    /// the step height it used (docs/research/cod11-mantle.md, "The step
+    /// event and the velocity scale").
+    #[test]
+    fn a_step_announces_itself_and_costs_speed() {
+        let w = test_world(&[(Vec3::new(50.0, -200.0, 0.0), Vec3::new(1024.0, 200.0, 6.0))]);
+        let mut ps = PlayerState::spawn(Vec3::new(30.0, 0.0, 0.0), 0.0);
+        ps.on_ground = true;
+        ps.ground_normal = Vec3::Z;
+        let mut events = Vec::new();
+        for _ in 0..20 {
+            ps.velocity = Vec3::new(200.0, 0.0, 0.0);
+            step_slide_move(&mut ps, &w, 1.0 / 125.0, false, Some(&mut events));
+            if !events.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(
+            events,
+            vec![PmEvent {
+                event: EV_STEP_VIEW,
+                parm: 128 + 6,
+            }],
+            "a 6-unit step, biased by 128"
+        );
+        // 0.2 + 0.8 * (1 - 6/18)
+        assert!(
+            (ps.velocity.x - 200.0 * (0.2 + 0.8 * (1.0 - 6.0 / STEPSIZE))).abs() < 0.5,
+            "the step cost a third of the frame's speed, got {}",
+            ps.velocity.x
+        );
+    }
+
+    /// The tail is out of reach in the air: retail only gets there on a
+    /// grounded frame (@0x350ec).
+    #[test]
+    fn an_airborne_step_announces_nothing() {
+        let w = test_world(&[(Vec3::new(50.0, -200.0, 0.0), Vec3::new(1024.0, 200.0, 6.0))]);
+        let mut ps = PlayerState::spawn(Vec3::new(30.0, 0.0, 0.0), 0.0);
+        let mut events = Vec::new();
+        for _ in 0..20 {
+            ps.velocity = Vec3::new(200.0, 0.0, 0.0);
+            step_slide_move(&mut ps, &w, 1.0 / 125.0, false, Some(&mut events));
+        }
+        assert!(events.is_empty(), "{events:?}");
+    }
+
     #[test]
     fn prone_steps_lower_than_standing() {
         // retail picks the 10-unit step height off pm_flags bit 0x1
@@ -2379,7 +2514,7 @@ mod tests {
         stand.velocity = Vec3::new(200.0, 0.0, 0.0);
         for _ in 0..20 {
             stand.velocity.x = 200.0;
-            step_slide_move(&mut stand, &w, 1.0 / 125.0, false);
+            step_slide_move(&mut stand, &w, 1.0 / 125.0, false, None);
         }
         assert!(
             (stand.origin.z - 14.0).abs() < 0.5,
@@ -2391,7 +2526,7 @@ mod tests {
         prone.stance = Stance::Prone;
         for _ in 0..20 {
             prone.velocity.x = 200.0;
-            step_slide_move(&mut prone, &w, 1.0 / 125.0, false);
+            step_slide_move(&mut prone, &w, 1.0 / 125.0, false, None);
         }
         assert!(
             prone.origin.z < 1.0 && prone.origin.x < 36.0,
