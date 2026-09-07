@@ -3372,17 +3372,19 @@ VERIFIED, off the same lines: the exploded entity stays on the wire for about
 see it; vcod holds it for a fixed window instead.
 
 VERIFIED: the lone capture's second throw comes to rest at `z` 179.3 while its
-thrower stands at 144.1, 35 units up on a cart the bare BSP has no surface at.
-INFERRED, from that rest height against the bare BSP: retail's server clip
-includes the map's static props. `World::from_bsp` therefore takes the paks and
-builds the propped collision world for the server too; the client's prediction
-world always had them. Two things a prop costs,
-because its triangles reach vcod's world without the material they came from:
-a bounce off one carries `eventParm` 0 where retail carries the surface type
-(21 on the two committed throws that land on that cart), and retail's explode
-packs the normal of a 16-unit downward trace whose mask misses a prop's
-contents, so a grenade resting on one explodes with parm 0 where vcod finds
-the prop and packs 5. `crates/server/tests/missile_ab.rs` excludes both.
+thrower stands at 144.1, on a stack of `crate_misc1` xmodels at (1193, 1653)
+whose `clip_nosight` brushes (contents 0x28031640, tops at 178 and 205) are
+outside a 0x11 mask. VERIFIED: the move trace is `trap_LocationalTrace`
+(12.1), the one syscall whose `SV_Trace` walks the static models
+(`cod11-mantle.md`, "Static models are clipped as a segment"), so the frag
+rests on the crate's own collision mesh, and the bounce parm it carries
+(21 on both throws that land there) is that surface's `surf_flags`.
+`World::from_bsp` takes the paks for that, and `props::collision_tris`
+keeps each surface's word, so vcod's bounce reads 21 too. VERIFIED: the
+explode's 16-unit downward trace is a `trap_Trace`, which walks no static
+model, so a frag resting on a crate explodes with parm 0 (a zero normal)
+where one on world brush packs 5; vcod's explode traces the same way
+(`missile.rs`), and `crates/server/tests/missile_ab.rs` compares the parms.
 
 VERIFIED: a missile's `index` is 0 on the wire on both sides, and its
 `eFlags` `0x03000000` (11.1) sits above the 24-bit netfield, so nothing of it

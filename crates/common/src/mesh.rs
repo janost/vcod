@@ -251,6 +251,10 @@ mod tests {
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            terrain: vec![],
+            patches: vec![],
+            collision_verts: vec![],
+            collision_indices: vec![],
             pvs: None,
         }
     }

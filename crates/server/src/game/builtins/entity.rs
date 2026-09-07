@@ -244,14 +244,31 @@ pub fn spawn_struct(
 /// `delete()` defers the free rather than performing it now: it arms the
 /// entity's think for `DELETE_DEFER_MS` out, so a later `getEntArray` still
 /// sees it until that think comes due (`ScriptRuntime::run_frame`'s think
-/// pass). `_load.gsc`'s exploder threads end with one.
+/// pass). `_load.gsc`'s exploder threads end with one. The clip goes now:
+/// a `script_brushmodel`'s brushes are in the world only through its link
+/// (`SP_script_brushmodel`, game.mp 0x70fb8), and retail's `G_FreeEntity`
+/// unlinks, which is how `_gameobjects::main` takes carentan's bombzone
+/// clips out of every gametype but sd (docs/research/cod11-mantle.md, "A
+/// submodel's brushes are its entity's").
 pub fn delete(
     host: &mut GameHost,
-    _cx: &mut Cx,
+    cx: &mut Cx,
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
+    let model = cx.intern_folded("model");
+    if let Value::String(m) = host.get_field(cx, id, model) {
+        if let Some(n) = cx
+            .resolve(m)
+            .strip_prefix('*')
+            .and_then(|n| n.parse::<usize>().ok())
+        {
+            if let Some(world) = &host.world {
+                world.collision.set_model_linked(n, false);
+            }
+        }
+    }
     host.ents
         .schedule(id, ThinkFn::Free, host.level_time_ms + DELETE_DEFER_MS);
     Ok(Value::Undefined)

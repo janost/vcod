@@ -250,12 +250,13 @@ From the materials lump, per brush via `brush.material`:
 |---|---|
 | `0x1` | solid |
 | `0x4` | seen on terrain (snow) materials, which have no brushes |
+| `0x10` | glass: `glass@brokenwindow` 0x2090 and 0x8000010, `dam_window` and the shop windows 0x28000010, `workshopwindow` 0x28030010, and no other brush material (census over the stock MP maps) |
 | `0x20` | water |
 | `0x800` | sky |
 | `0x10000` | playerclip |
 | `0x20000` | monsterclip |
 
-The brush collision mask is `(content_flags & (0x1 | 0x10000)) != 0`. `collision.rs` defines `CONTENTS_SOLID`, `CONTENTS_PLAYERCLIP` and `CONTENTS_SKY` only; monsterclip is not referenced by any code path.
+The masks are retail's: a player moves with 0x2810011 (`ClientThink_real`'s tracemask, `cod11-mantle.md`), a bullet with 0x2802031 (`Bullet_Fire_Extended`), a blast with 0x2802091 (`CanDamage`), a frag with 0x11 (`G_RunMissile`'s default); `collision.rs` names them `MASK_PLAYERSOLID`, `MASK_SHOT`, `MASK_BLAST` and `MASK_MISSILE`. Of the bits above 0x20000 only 0x800000 and 0x2000000 are in a mask and no stock material carries either; 0x2000 is in both the shot and the blast mask and 0x80 in the blast's, and both ride the kerb and floor brushes' 0x2080 word, so a bullet stops on a kerb a player walks over as terrain. The shot mask's 0x20 is water, which vcod keeps as volumes rather than clip brushes, so a bullet does not stop at mp_harbor's water the way retail's does.
 
 Census over all 49 stock maps (SP and MP) in `pak[0-4].pk3` pins two more bits, both VERIFIED by decoding every lump-0 material of every map:
 
@@ -280,7 +281,27 @@ vcod's rule: a soup collides when its material carries `0x1` or `0x10000`, or is
 
 ## Terrain has no brushes
 
-Ground-level spawns on mp_pavlov sit 200 or more units above the first brush below them (bedrock at z = -192). Terrain and patch surfaces exist only as render triangle soups, so brush collision alone drops the player through the ground and a triangle collider is required, not a fallback. `CollisionWorld::build` harvests the world model's soups (submodel meshes are replaced by their brush hulls), skipping sky materials and everything the soup-side content-word rule above drops, plus degenerate triangles (cross product under 1e-6); each triangle's AABB is padded by 0.25 units before building the BVH. Brushes and triangles are then swept with the Q3 `CM_TraceThroughBrush` clip against their planes (a triangle's face, axis and edge-cross bevels) pushed out by a capsule's radius and tested against its nearer sphere: retail's mover traces as a capsule, `trap_TraceCapsule`, against everything (`cod11-mantle.md`, "The player is a capsule").
+Ground-level spawns on mp_pavlov sit 200 or more units above the first brush below them (bedrock at z = -192). Terrain and patch surfaces have no brushes: the engine collides them through lumps 24-26 (below), and the render soups draw the same surfaces. `CollisionWorld::build` takes the terrain partitions' triangles from those lumps and sweeps them as retail's sphere (`cod11-mantle.md`, "Terrain is a swept sphere, a patch is a facet"), and harvests the world model's soups as Q3 facets for everything else (submodel meshes are replaced by their brush hulls), skipping sky materials, everything the soup-side content-word rule above drops, degenerate triangles (cross product under 1e-6) and the soups that draw a terrain triangle; each triangle's AABB is padded by 0.25 units before building the BVH. Brushes are swept with the Q3 `CM_TraceThroughBrush` clip against their planes pushed out by a capsule's radius and tested against its nearer sphere: retail's mover traces as a capsule, `trap_TraceCapsule` (`cod11-mantle.md`, "The player is a capsule").
+
+### Lump 24, collision partitions (16 bytes)
+
+VERIFIED from `cod_lnxded`'s loader loop (0x804b010) and the shipped files:
+
+```
+u16 material            // into lump 0; its content_flags are the partition's
+u8  kind                // 0 = bezier patch, else terrain
+u8  pad
+// patch:
+u16 width, height       // control grid, width x height points
+u32 flags               // handed to CM_GeneratePatchCollide, not decoded
+u32 first_vert          // into lump 25
+// terrain:
+u16 vert_count, index_count
+u32 first_vert          // into lump 25
+u32 first_index         // into lump 26, indices relative to first_vert
+```
+
+Lump 25 is `f32 xyz` per vertex and lump 26 `u16` per index, both shared by the two kinds. mp_carentan carries 568 terrain and 534 patch records, mp_pavlov 619 in all; the patches are almost all 3x3, 3x5, 5x3 and 9x3 grids, and every kerb wall on carentan is a flat 3x3 one. `bsp.rs` parses the three lumps into `Bsp::terrain`, `patches`, `collision_verts` and `collision_indices`.
 
 ## Movement constants and their provenance
 

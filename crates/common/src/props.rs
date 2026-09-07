@@ -1,10 +1,10 @@
 //! `misc_model` props from the BSP entity lump: baked to world space in the
 //! map vertex format so they draw unlit through the map pipeline (`build`),
-//! and their solid collision triangles for the collision world
+//! and their collision triangles for the collision world
 //! (`collision_tris`).
 
 use crate::bsp::{self, DrawVert};
-use crate::collision::CONTENTS_SOLID;
+use crate::collision::ModelTri;
 use crate::mesh::IndexRange;
 use crate::pk3::Pk3Fs;
 use crate::xmodel;
@@ -260,23 +260,28 @@ pub fn build(fs: &Pk3Fs, entities: &str) -> Props {
     }
 }
 
-/// World-space triangles of one placement's solid collision surfaces, placed
-/// like `bake` places render vertices. Canopies and glass (`contents` without
-/// the solid bit) are left out, as retail leaves them passable.
-pub fn placed_collision_tris(p: &Placement, model: &xmodel::XModel, out: &mut Vec<[Vec3; 3]>) {
+/// World-space triangles of one placement's collision surfaces, placed like
+/// `bake` places render vertices, each with its surface's `contents` and
+/// flags for the trace mask and the sound material. A surface with contents
+/// 0 (a tree canopy, a hanging sign) can match no mask and is left out.
+pub fn placed_collision_tris(p: &Placement, model: &xmodel::XModel, out: &mut Vec<ModelTri>) {
     let rot = rotation(p.angles);
     let place = |v: Vec3| rot * (p.scale * v) + p.origin;
     for surf in &model.collision {
-        if surf.contents & CONTENTS_SOLID == 0 {
+        if surf.contents == 0 {
             continue;
         }
-        out.extend(surf.tris.iter().map(|t| t.map(place)));
+        out.extend(surf.tris.iter().map(|t| ModelTri {
+            tri: t.map(place),
+            contents: surf.contents,
+            surface_flags: surf.flags,
+        }));
     }
 }
 
-/// Every solid collision triangle of every placed prop, for
+/// Every collision triangle of every placed prop, for
 /// `CollisionWorld::build`. Models load once each.
-pub fn collision_tris(fs: &Pk3Fs, entities: &str) -> Vec<[Vec3; 3]> {
+pub fn collision_tris(fs: &Pk3Fs, entities: &str) -> Vec<ModelTri> {
     let placements = placements(entities);
     let mut cache: HashMap<String, Option<xmodel::XModel>> = HashMap::new();
     let mut out = Vec::new();
@@ -303,7 +308,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn placed_collision_keeps_solid_surfaces_and_transforms_them() {
+    fn placed_collision_keeps_contents_and_transforms_them() {
         let tri = [Vec3::ZERO, Vec3::X, Vec3::Y];
         let model = xmodel::XModel {
             lod: "t0".into(),
@@ -312,8 +317,8 @@ mod tests {
             bones: vec![],
             collision: vec![
                 xmodel::CollSurf {
-                    contents: CONTENTS_SOLID,
-                    flags: 0,
+                    contents: crate::collision::CONTENTS_SOLID,
+                    flags: 21 << 20,
                     tris: vec![tri],
                 },
                 xmodel::CollSurf {
@@ -334,25 +339,20 @@ mod tests {
         let mut out = Vec::new();
         placed_collision_tris(&p, &model, &mut out);
         assert_eq!(out.len(), 1, "the contents-0 surface is skipped");
+        assert_eq!(out[0].contents, crate::collision::CONTENTS_SOLID);
+        assert_eq!(crate::collision::sound_material(out[0].surface_flags), 21);
         // scale first, then yaw 90 turns +X into +Y and +Y into -X
-        assert!(
-            out[0][0].abs_diff_eq(Vec3::new(10.0, 0.0, 0.0), 1e-4),
-            "{out:?}"
-        );
-        assert!(
-            out[0][1].abs_diff_eq(Vec3::new(10.0, 2.0, 0.0), 1e-4),
-            "{out:?}"
-        );
-        assert!(
-            out[0][2].abs_diff_eq(Vec3::new(8.0, 0.0, 0.0), 1e-4),
-            "{out:?}"
-        );
+        let t = out[0].tri;
+        assert!(t[0].abs_diff_eq(Vec3::new(10.0, 0.0, 0.0), 1e-4), "{t:?}");
+        assert!(t[1].abs_diff_eq(Vec3::new(10.0, 2.0, 0.0), 1e-4), "{t:?}");
+        assert!(t[2].abs_diff_eq(Vec3::new(8.0, 0.0, 0.0), 1e-4), "{t:?}");
     }
 
-    /// End to end on retail data: a ray dropped onto a placed prop stops
-    /// earlier with the prop soup than without it, for at least one prop.
+    /// End to end on retail data: a shot dropped onto a placed prop stops
+    /// earlier with the prop mesh than without it, for at least one prop,
+    /// and a movement trace never does.
     #[test]
-    fn mp_pavlov_props_stop_traces() {
+    fn mp_pavlov_props_stop_shots_and_not_moves() {
         use crate::collision::CollisionWorld;
         let Some(fs) = crate::testing::game_fs() else {
             return;
@@ -364,11 +364,18 @@ mod tests {
         let world = CollisionWorld::build(&bsp, &tris);
         let blocked = placements(&bsp.entities).iter().any(|p| {
             let (top, bottom) = (p.origin + Vec3::Z * 200.0, p.origin - Vec3::Z * 10.0);
-            let with = world.box_trace(top, bottom, Vec3::ZERO, Vec3::ZERO);
-            let without = bare.box_trace(top, bottom, Vec3::ZERO, Vec3::ZERO);
+            let with = world.shot_trace(top, bottom);
+            let without = bare.shot_trace(top, bottom);
             with.fraction < without.fraction - 0.01
         });
         assert!(blocked);
+        let moved = placements(&bsp.entities).iter().all(|p| {
+            let (top, bottom) = (p.origin + Vec3::Z * 200.0, p.origin - Vec3::Z * 10.0);
+            let with = world.box_trace(top, bottom, Vec3::ZERO, Vec3::ZERO);
+            let without = bare.box_trace(top, bottom, Vec3::ZERO, Vec3::ZERO);
+            (with.fraction - without.fraction).abs() < 1e-6
+        });
+        assert!(moved, "a movement trace met a prop");
     }
 
     const ENTS: &str = r#"{

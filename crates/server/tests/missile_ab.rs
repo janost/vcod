@@ -9,17 +9,11 @@
 //! two flights are aligned on the frame the missile first reached the wire
 //! so a release a frame out does not read as a flight 48 units out.
 //!
-//! Two things the capture carries are deliberately not compared, both
-//! because a static prop's collision triangles reach our world without the
-//! material they came from (`vcod_common::props::collision_tris`):
-//!
-//! - a bounce off a prop carries `eventParm` 0 where retail carries the
-//!   surface type (21 on the two throws that land on the same cart);
-//! - retail's explode packs the normal of a 16-unit downward trace whose
-//!   mask (`0x11`) does not include whatever contents a prop has, so a
-//!   grenade resting on one explodes with parm 0 (a zero normal) where ours
-//!   finds the prop and packs 5 (straight up). The one throw that rests on
-//!   world brush reads 5 on both sides.
+//! The event parms are compared too: a bounce off a prop carries the
+//! surface type its xmodel collision surface names (21 on the two throws
+//! that land on the same crate stack), and the explode's 16-unit downward
+//! `trap_Trace` sees no static model, so a frag resting on a crate packs a
+//! zero normal (parm 0) where one on world brush packs 5.
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
@@ -315,14 +309,10 @@ fn a_thrown_grenade_flies_bounces_and_explodes_like_retail() {
                 );
             }
         }
-        // The ring the flight ended on: the events themselves, not their
-        // parms. A parm is the surface type the contact carried, and a
-        // static prop's triangles reach our collision world without their
-        // material, so a bounce off one reads 0 where retail reads the
-        // surface (see this file's module docs).
+        // The ring the flight ended on, events and parms.
         let ring = |ss: &[MissileSample]| {
             ss.last()
-                .map(|s| (s.events, s.event_sequence))
+                .map(|s| (s.events, s.event_sequence, s.event_parms))
                 .unwrap_or_default()
         };
         let parms = |ss: &[MissileSample]| ss.last().map(|s| s.event_parms).unwrap_or_default();
