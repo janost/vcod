@@ -236,7 +236,7 @@ impl Missile {
         // link box is the broad phase retail's locational trace starts from,
         // and the normal a box contact reports is the flight reversed where
         // retail's would be the bone's.
-        let mut tr = world.shot_trace(self.origin, to);
+        let mut tr = world.missile_trace(self.origin, to);
         let mut hit_player = false;
         if let Some((_, f)) = nearest_player(self.origin, to, self.owner, sims) {
             if f < tr.fraction {
@@ -252,7 +252,7 @@ impl Missile {
         // the downward trace and not the move, which is what makes a rolling
         // grenade bounce off the floor below it every frame.
         if tr.fraction >= 1.0 || tr.normal.z > GROUND_NORMAL_Z {
-            let down = world.shot_trace(self.origin, self.origin - Vec3::Z * GROUND_SNAP);
+            let down = world.missile_trace(self.origin, self.origin - Vec3::Z * GROUND_SNAP);
             if down.fraction < 1.0 {
                 let dz = down.endpos.z + GROUND_SNAP - self.origin.z;
                 self.origin.z += dz;
@@ -373,7 +373,14 @@ impl Missile {
         let mut normal = Vec3::ZERO;
         self.surf_type = 0;
         if let Some(world) = world {
-            let down = world.shot_trace(org, org - Vec3::Z * EXPLODE_TRACE_DOWN);
+            // `trap_Trace` on a zero box: no static models, so a frag resting
+            // on a crate's mesh packs a zero normal, as retail's does.
+            let down = world.point_trace(
+                org,
+                org - Vec3::Z * EXPLODE_TRACE_DOWN,
+                vcod_common::collision::MASK_MISSILE,
+                false,
+            );
             normal = down.normal;
             self.surf_type = sound_material(down.surface_flags);
             if world.point_contents(org) & CONTENTS_WATER != 0 {

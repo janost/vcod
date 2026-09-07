@@ -7,9 +7,16 @@
 
 use crate::bsp::Bsp;
 use glam::Vec3;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Shared with the xmodel collision surfaces, which use the same bits.
 pub const CONTENTS_SOLID: u32 = 0x1;
+/// Window panes (`glass@brokenwindow`, `dam_window`: 0x2090, 0x8000010,
+/// 0x28000010 over the stock maps) and lamp glass on xmodels. In retail's
+/// player mask, so a player stops at a window and a bullet does not
+/// (docs/research/bsp-ibsp59-format.md, "Content flags").
+pub const CONTENTS_GLASS: u32 = 0x10;
 const CONTENTS_PLAYERCLIP: u32 = 0x10000;
 const CONTENTS_SKY: u32 = 0x800;
 /// Census-proven water bit: docs/research/bsp-ibsp59-format.md, "Content flags".
@@ -20,11 +27,25 @@ pub const SURF_LADDER: u32 = 0x8;
 /// PLAYERCLIP (bsp-ibsp59-format.md, "Content flags").
 const CONTENTS_TERRAIN: u32 = 0x4;
 
-/// Movement sweeps stop on both clips; shots stop on SOLID only, so
-/// playerclip-only geometry (masked wire fences) blocks players but not
-/// bullets, like retail's MASK_SHOT.
-const TRACE_MASK_MOVE: u32 = CONTENTS_SOLID | CONTENTS_PLAYERCLIP;
-const TRACE_MASK_SHOT: u32 = CONTENTS_SOLID;
+/// Retail's player tracemask, the `pm->tracemask` `ClientThink_real` stores
+/// for a live player (docs/research/cod11-mantle.md, "The player is a
+/// capsule"): SOLID, GLASS, PLAYERCLIP and two bits (0x800000, 0x2000000)
+/// no stock material carries.
+pub const MASK_PLAYERSOLID: u32 = 0x2810011;
+/// The mask `Bullet_Fire_Extended` (game.mp 0x78890) hands
+/// `trap_LocationalTrace`: SOLID, GLASS, WATER, 0x2000 (the kerb and floor
+/// brushes' 0x2080 word) and the same two high bits. No PLAYERCLIP, so a
+/// masked wire fence stops a player and not a bullet.
+pub const MASK_SHOT: u32 = 0x2802031;
+/// `CanDamage`'s (0x5a098) mask for a blast's five probes: the shot mask
+/// with 0x80 for 0x20.
+pub const MASK_BLAST: u32 = 0x2802091;
+/// What a grenade flies against: `G_RunMissile` (game.mp 0x63fcc) traces
+/// with the entity's `clipmask` and falls back to 0x11, SOLID and GLASS,
+/// and no store into `fire_grenade`'s entity (0x643ac) was found.
+pub const MASK_MISSILE: u32 = CONTENTS_SOLID | CONTENTS_GLASS;
+const TRACE_MASK_MOVE: u32 = MASK_PLAYERSOLID;
+const TRACE_MASK_SHOT: u32 = MASK_SHOT;
 
 /// A brush as clip planes: point p is inside iff n·p <= d for every plane.
 pub struct BrushPlanes {
@@ -33,12 +54,33 @@ pub struct BrushPlanes {
     pub surface_flags: u32,
     /// Lump-0 content flags, reported by `point_contents`.
     pub content_flags: u32,
+    /// The brush's index in lump 4 and its material's name, for `describe`.
+    pub bsp_index: u32,
+    pub material: String,
+    /// The lump-27 model the brush belongs to; 0 is the world.
+    pub model: u32,
+}
+
+/// One collision triangle of a placed static xmodel. Retail's server clips
+/// static models as the bare start-to-end segment of a trace, whatever box
+/// or capsule the trace carries, one surface at a time against
+/// `contents & mask` (docs/research/cod11-mantle.md, "Static models are
+/// clipped as a segment"); the sweep shape never touches these.
+#[derive(Clone, Copy, Debug)]
+pub struct ModelTri {
+    /// Wound so `cross(b - a, c - a)` is the surface's outward normal.
+    pub tri: [Vec3; 3],
+    /// The xmodel collision surface's `contents` word.
+    pub contents: u32,
+    /// The surface's `surf_flags`, the sound material in bits 20-24.
+    pub surface_flags: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum Prim {
     Brush(u32),
     Tri(u32),
+    Model(u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -49,6 +91,8 @@ pub struct Trace {
     pub surface_flags: u32,
     pub startsolid: bool,
     pub allsolid: bool,
+    /// What the reported contact is against, for diagnostics (`describe`).
+    pub hit: Option<Prim>,
     /// The hit's unclamped enter fraction. A box touching two surfaces
     /// clips both at fraction 0, and the one it sits closest to (the
     /// largest raw value) is the contact reported, so a 0.25-unit ground
@@ -57,9 +101,17 @@ pub struct Trace {
 }
 
 pub const SURFACE_CLIP_EPSILON: f32 = 0.125;
-/// How far behind a triangle's face a start still counts as resting on it.
-/// A 30-unit box straddling a convex seam is inside the uphill facet's slab
-/// by half its width times the grade change, 8.7 units at 30 degrees.
+/// How far outside an edge plane the static-model clip still counts a
+/// crossing as inside the triangle (`cod_lnxded` rodata 0x80db974 and
+/// 0x80db978: -0.001 and 1.001).
+const MODEL_BARY_EPS: f32 = 0.001;
+/// What retail's terrain clip takes off every fraction it returns
+/// (`cod_lnxded` rodata 0x80cd30c); a fraction at or under it is a
+/// `startsolid` at 0. The radius pad is `SURFACE_CLIP_EPSILON` (0x80cd308).
+const TERRAIN_FRACTION_EPS: f32 = 1e-5;
+/// How far behind a facet's face a start still counts as resting on it.
+/// A 30-unit shape straddling a convex seam is inside the uphill facet's
+/// slab by half its width times the grade change, 8.7 units at 30 degrees.
 const SEAM_DEPTH: f32 = 8.0;
 
 /// The 5-bit sound-surface index every trace consumer reads
@@ -115,23 +167,25 @@ impl Capsule {
 }
 
 /// Q3 `cm_trace.c` `CM_TraceThroughBrush`, on planes already expanded by the
-/// shape.
+/// shape, which is retail's own brush arm (`cod_lnxded` 0x8054e90, the
+/// `sphere.use` branch: `dist + radius` per side, the sphere nearest the
+/// side) and, on a facet's planes, its patch arm (Q3's
+/// `CM_TraceThroughPatchCollide`, every border and bevel `+= radius`).
 ///
 /// `sphere` is the capsule's sphere offset: each plane is tested against the
-/// sphere nearest it, the way Q3 sweeps a capsule through a brush
-/// (`cm_trace.c`, the `tw->sphere.use` arm), with `start` and `end` already
-/// at the capsule's centre. `hollow` is a triangle's clip. A start inside
-/// the expanded slab of a zero-thickness triangle is never `startsolid`, the
-/// way Q3's patch facets never are (`CM_TraceThroughPatchCollide`): a shape resting
-/// on one facet of a terrain mesh sits inside the neighbouring facet's slab
-/// at every convex seam, and beside a kerb or a crate it is inside the top
-/// face's slab, and reading either as solid made the ground trace fail and
-/// trapped the walker (docs/research/cod11-mantle.md, "The ground snap"). A
-/// start within `SEAM_DEPTH` behind a face is resting on that face: a
-/// fraction-0 hit with the face's normal when the trace moves into it,
-/// nothing when it moves out. Deeper than that the triangle does not clip
-/// the trace at all. Q3's facets trust their winding, which a soup does not,
-/// so both faces of the slab clip an entry from outside.
+/// sphere nearest it, with `start` and `end` already at the capsule's
+/// centre. `hollow` is a facet's clip. A start inside the expanded slab of a
+/// zero-thickness facet is never `startsolid`, the way Q3's patch facets
+/// never are: a shape resting on one facet sits inside the neighbouring
+/// facet's slab at every convex seam, and beside a kerb it is inside the
+/// top face's slab, and reading either as solid made the ground trace fail
+/// and trapped the walker (docs/research/cod11-mantle.md, "The ground
+/// snap"). A start within `SEAM_DEPTH` behind a face is resting on that
+/// face: a fraction-0 hit with the face's normal when the trace moves into
+/// it, nothing when it moves out. Deeper than that the facet does not clip
+/// the trace at all. Q3's facets trust their winding, which a soup does
+/// not, so both faces of the slab clip an entry from outside.
+#[allow(clippy::too_many_arguments)]
 fn clip_segment(
     trace: &mut Trace,
     start: Vec3,
@@ -140,6 +194,7 @@ fn clip_segment(
     surface_flags: u32,
     sphere: Vec3,
     hollow: bool,
+    prim: Prim,
 ) {
     let mut enter = -1.0f32;
     let mut leave = 1.0f32;
@@ -200,6 +255,7 @@ fn clip_segment(
                     trace.enter = enter;
                     trace.normal = planes[i].0;
                     trace.surface_flags = surface_flags;
+                    trace.hit = Some(prim);
                 }
             }
             return;
@@ -209,10 +265,11 @@ fn clip_segment(
             trace.allsolid = true;
             trace.fraction = 0.0;
             trace.surface_flags = 0;
+            trace.hit = Some(prim);
         }
         return;
     }
-    // `<=`, not Q3's `<`: a zero-thickness triangle's paired face planes make
+    // `<=`, not Q3's `<`: a zero-thickness facet's paired face planes make
     // enter == leave for a grazing ray. Brushes have thickness, so unaffected.
     if enter <= leave && enter > -1.0 {
         let fraction = enter.max(0.0);
@@ -221,8 +278,51 @@ fn clip_segment(
             trace.enter = enter;
             trace.normal = clip_normal;
             trace.surface_flags = surface_flags;
+            trace.hit = Some(prim);
         }
     }
+}
+
+/// Retail's static-model clip (`cod_lnxded` 0x80c203c) on one triangle,
+/// which is also its point-vs-terrain arm (0x8052894, the same epsilons):
+/// the bare segment enters through the front face (`start` on or ahead of
+/// the plane, `end` behind it), the fraction backs off
+/// `SURFACE_CLIP_EPSILON` along the segment, and the crossing point has to
+/// land inside the edge planes within `MODEL_BARY_EPS`. A closer hit
+/// replaces the trace's; a tie does not. Retail leaves a fraction under
+/// zero as it is, which pmove reads the same as zero (it moves the origin
+/// only for a positive one); ours clamps.
+fn clip_segment_model(trace: &mut Trace, start: Vec3, end: Vec3, mt: &ModelTri, prim: Prim) {
+    let [a, b, c] = mt.tri;
+    let n = (b - a).cross(c - a).normalize();
+    let d1 = n.dot(start - a);
+    let d2 = n.dot(end - a);
+    if !(d2 < 0.0 && d1 >= 0.0) {
+        return;
+    }
+    let f = (d1 - SURFACE_CLIP_EPSILON) / (d1 - d2);
+    if f >= trace.fraction {
+        return;
+    }
+    let p = start + (end - start) * (d1 / (d1 - d2));
+    // Barycentrics of `p` in the triangle's plane: p = a + u (c - a) + v (b - a).
+    let (e1, e2, w) = (c - a, b - a, p - a);
+    let (d11, d12, d22) = (e1.dot(e1), e1.dot(e2), e2.dot(e2));
+    let (dw1, dw2) = (w.dot(e1), w.dot(e2));
+    let det = d11 * d22 - d12 * d12;
+    if det.abs() < 1e-12 {
+        return;
+    }
+    let u = (d22 * dw1 - d12 * dw2) / det;
+    let v = (d11 * dw2 - d12 * dw1) / det;
+    if u < -MODEL_BARY_EPS || v < -MODEL_BARY_EPS || u + v > 1.0 + MODEL_BARY_EPS {
+        return;
+    }
+    trace.fraction = f.max(0.0);
+    trace.enter = f;
+    trace.normal = n;
+    trace.surface_flags = mt.surface_flags;
+    trace.hit = Some(prim);
 }
 
 /// A brush's planes pushed out by the capsule's radius, Q3's
@@ -234,10 +334,14 @@ fn expand_brush(planes: &[(Vec3, f32)], radius: f32, out: &mut Vec<(Vec3, f32)>)
     }
 }
 
-/// Planes for a triangle swept by a capsule of `radius`: face, axis bevels,
+/// Planes for a facet swept by a capsule of `radius`: face, axis bevels,
 /// edge x axis bevels, each pushed out by the radius the way Q3 expands a
-/// patch facet for a sphere (`cm_patch.c`, `plane[3] += tw->sphere.radius`).
-/// Edge hits report the bevel normal, which lets pmove slide around edges.
+/// patch facet for a sphere (`cm_patch.c`, `CM_AddFacetBevels` for the
+/// planes, `plane[3] += tw->sphere.radius` in the trace). This is what a
+/// patch's render soup gets, and what a brush face's soup gets, which the
+/// brush behind it settles anyway (docs/research/cod11-mantle.md, "Terrain
+/// is a swept sphere, a patch is a facet"). Edge hits report the bevel
+/// normal, which lets pmove slide around edges.
 fn triangle_planes(tri: &[Vec3; 3], radius: f32, out: &mut Vec<(Vec3, f32)>) {
     out.clear();
     let mut push = |n: Vec3| {
@@ -264,6 +368,187 @@ fn triangle_planes(tri: &[Vec3; 3], radius: f32, out: &mut Vec<(Vec3, f32)>) {
     }
 }
 
+/// Retail's terrain clip (`cod_lnxded` 0x8052a58), one triangle at a time:
+/// the capsule's sphere nearest the face is swept against the face, and
+/// when its contact point projects outside the triangle, against the edges
+/// as cylinders and the vertices as spheres. Nothing is bevelled, so a
+/// sphere walking up a ramp into a flat is not lifted onto the flat's
+/// radius-wide slab a facet would put beside it
+/// (docs/research/cod11-mantle.md, "Terrain is a swept sphere, a patch is a
+/// facet"). The face is one-sided: a start deeper than
+/// the padded radius behind it is solid only where the capsule's axis
+/// crosses the triangle, else the triangle is skipped. Every fraction loses
+/// `TERRAIN_FRACTION_EPS`, and one at or under it is a `startsolid` at 0.
+/// Retail picks the sphere per terrain partition off a stored facing flag;
+/// ours takes the one nearest the plane, which is that flag for a floor and
+/// for a ceiling. A point trace takes retail's point arm instead
+/// (0x8052894): the front face alone, backed off `SURFACE_CLIP_EPSILON`
+/// along the segment, the crossing inside the edges within
+/// `MODEL_BARY_EPS`, no fraction epsilon and no `startsolid`.
+///
+/// `start` and `end` are the capsule's centre; `tri` is wound so
+/// `cross(b - a, c - a)` faces out.
+fn clip_sphere_triangle(
+    trace: &mut Trace,
+    start: Vec3,
+    end: Vec3,
+    tri: &[Vec3; 3],
+    capsule: Capsule,
+    surface_flags: u32,
+    prim: Prim,
+) {
+    let [a, b, c] = *tri;
+    let n = (b - a).cross(c - a).normalize();
+    if capsule.radius == 0.0 {
+        let mt = ModelTri {
+            tri: *tri,
+            contents: 0,
+            surface_flags,
+        };
+        clip_segment_model(trace, start, end, &mt, prim);
+        return;
+    }
+    let shift = if n.dot(capsule.offset) > 0.0 {
+        -capsule.offset
+    } else {
+        capsule.offset
+    };
+    let (s, e) = (start + shift, end + shift);
+    let r_eps = capsule.radius + SURFACE_CLIP_EPSILON;
+    let d_e = n.dot(e - a);
+    if d_e >= r_eps {
+        return;
+    }
+    let d_s = n.dot(s - a);
+    if d_s - d_e <= 0.0 {
+        return;
+    }
+    // Barycentrics of `p` projected along `n`: p = a + u (c - a) + v (b - a),
+    // and which edges it lies outside of, as retail's three bits.
+    let (e1, e2) = (c - a, b - a);
+    let (d11, d12, d22) = (e1.dot(e1), e1.dot(e2), e2.dot(e2));
+    let det = d11 * d22 - d12 * d12;
+    if det.abs() < 1e-12 {
+        return;
+    }
+    let outside = |p: Vec3| -> u32 {
+        let w = p - a;
+        let (dw1, dw2) = (w.dot(e1), w.dot(e2));
+        let u = (d22 * dw1 - d12 * dw2) / det;
+        let v = (d11 * dw2 - d12 * dw1) / det;
+        u32::from(u + v > 1.0) | (u32::from(u < 0.0) << 1) | (u32::from(v < 0.0) << 2)
+    };
+    let record = |trace: &mut Trace, raw: f32, normal: Vec3| {
+        if raw <= TERRAIN_FRACTION_EPS {
+            trace.fraction = 0.0;
+            trace.startsolid = true;
+        } else {
+            trace.fraction = raw - TERRAIN_FRACTION_EPS;
+        }
+        trace.enter = raw;
+        trace.normal = normal;
+        trace.surface_flags = surface_flags;
+        trace.hit = Some(prim);
+    };
+    if d_s <= -r_eps {
+        // Deep behind the face: solid where the axis to the other sphere
+        // crosses the triangle, at the near pad or at the far one.
+        let axis = -2.0 * shift;
+        let d_o = d_s + n.dot(axis);
+        if d_o <= -r_eps {
+            return;
+        }
+        let near = s + axis * ((-r_eps - d_s) / (d_o - d_s));
+        let far = if d_o < r_eps {
+            s + axis
+        } else {
+            s + axis * ((r_eps - d_s) / (d_o - d_s))
+        };
+        if outside(near) == 0 || outside(far) == 0 {
+            record(trace, 0.0, n);
+        }
+        return;
+    }
+    let dir = e - s;
+    let f = if d_s < r_eps {
+        0.0
+    } else {
+        (d_s - r_eps) / (d_s - d_e)
+    };
+    if f > trace.fraction {
+        return;
+    }
+    let p = s + dir * f;
+    let bits = outside(p);
+    if bits == 0 {
+        if f < trace.fraction || f > trace.enter {
+            record(trace, f, n);
+        }
+        return;
+    }
+    let dir_sq = dir.length_squared();
+    let r = capsule.radius;
+    // Vertex i is the one opposite edge i, in retail's bit order.
+    let verts = [a, c, b];
+    let edges = [(c, b), (a, b), (a, c)];
+    for i in 0..3 {
+        if bits & (1 << i) == 0 {
+            let q = s - verts[i];
+            let sep = q.length_squared() - r * r;
+            if sep <= 0.0 {
+                record(trace, 0.0, n);
+                continue;
+            }
+            let bq = dir.dot(q);
+            if bq >= 0.0 {
+                continue;
+            }
+            let disc = bq * bq - dir_sq * sep;
+            if disc < 0.0 {
+                continue;
+            }
+            let t = (-disc.sqrt() - bq) / dir_sq;
+            if t < trace.fraction {
+                record(trace, t, (q + dir * t) / r);
+            }
+        } else {
+            let (v0, v1) = edges[i];
+            let along = v1 - v0;
+            let len = along.length();
+            if len < 1e-6 {
+                continue;
+            }
+            let w = along / len;
+            let u_axis = n;
+            let v_axis = w.cross(u_axis);
+            let q = s - v0;
+            let (qu, qv, qw) = (q.dot(u_axis), q.dot(v_axis), q.dot(w));
+            let sep = qu * qu + qv * qv - r * r;
+            if sep <= 0.0 {
+                if (0.0..=len).contains(&qw) {
+                    record(trace, 0.0, n);
+                }
+                continue;
+            }
+            let (du, dv, dw) = (dir.dot(u_axis), dir.dot(v_axis), dir.dot(w));
+            let bq = du * qu + dv * qv;
+            if bq >= 0.0 {
+                continue;
+            }
+            let aa = du * du + dv * dv;
+            let disc = bq * bq - aa * sep;
+            if disc <= 0.0 {
+                continue;
+            }
+            let t = (-disc.sqrt() - bq) / aa;
+            if t < trace.fraction && (0.0..=len).contains(&(qw + t * dw)) {
+                let normal = (u_axis * (qu + t * du) + v_axis * (qv + t * dv)) / r;
+                record(trace, t, normal);
+            }
+        }
+    }
+}
+
 struct BvhNode {
     lo: Vec3,
     hi: Vec3,
@@ -278,14 +563,24 @@ struct BvhNode {
 pub struct CollisionWorld {
     pub brushes: Vec<BrushPlanes>,
     pub tris: Vec<[Vec3; 3]>,
+    /// The placed props' collision triangles, clipped as a segment only.
+    pub model_tris: Vec<ModelTri>,
     /// Per-triangle material `surface_flags`, parallel to `tris`. The sound
     /// surface rides bits 20-24 (`cod11-events-and-fx.md`, section 4).
     tris_surf: Vec<u32>,
     /// Per-triangle mask-relevant content flags, parallel to `tris`.
     tris_contents: Vec<u32>,
+    /// Parallel to `tris`: a lump-26 terrain triangle, swept as a sphere,
+    /// against a render soup's facet.
+    tris_terrain: Vec<bool>,
     nodes: Vec<BvhNode>,
     prims: Vec<(Prim, Vec3, Vec3)>,
     water: Vec<WaterVolume>,
+    /// Per lump-27 model, whether its brushes are in the clip. Retail holds
+    /// a submodel's brushes only through the entity that links them, so a
+    /// deleted `script_brushmodel` takes its brushes out; `set_model_linked`
+    /// is that unlink.
+    model_linked: Vec<AtomicBool>,
 }
 
 /// A water brush as clip planes plus its axial bounds for the cheap reject.
@@ -297,42 +592,69 @@ struct WaterVolume {
 
 const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
 
-/// Drops slivers, pads the AABB by 0.25 so the BVH query finds a triangle
-/// the box merely touches.
-fn push_tri(
-    tris: &mut Vec<[Vec3; 3]>,
-    tris_surf: &mut Vec<u32>,
-    tris_contents: &mut Vec<u32>,
-    prims: &mut Vec<(Prim, Vec3, Vec3)>,
-    [a, b, c]: [Vec3; 3],
-    surface_flags: u32,
-    contents: u32,
-) {
-    if (b - a).cross(c - a).length_squared() < 1e-6 {
-        return;
+/// The triangle lists under construction in `build`.
+struct Tris {
+    tris: Vec<[Vec3; 3]>,
+    surf: Vec<u32>,
+    contents: Vec<u32>,
+    terrain: Vec<bool>,
+    prims: Vec<(Prim, Vec3, Vec3)>,
+}
+
+impl Tris {
+    /// Drops slivers, pads the AABB by 0.25 so the BVH query finds a
+    /// triangle the box merely touches. `tri` is wound with
+    /// `cross(b - a, c - a)` on the outside, the side the sphere clip faces.
+    fn push(&mut self, [a, b, c]: [Vec3; 3], surface_flags: u32, contents: u32, terrain: bool) {
+        if (b - a).cross(c - a).length_squared() < 1e-6 {
+            return;
+        }
+        let lo = a.min(b).min(c) - Vec3::splat(0.25);
+        let hi = a.max(b).max(c) + Vec3::splat(0.25);
+        self.prims.push((Prim::Tri(self.tris.len() as u32), lo, hi));
+        self.tris.push([a, b, c]);
+        self.surf.push(surface_flags);
+        self.contents.push(contents);
+        self.terrain.push(terrain);
     }
-    let lo = a.min(b).min(c) - Vec3::splat(0.25);
-    let hi = a.max(b).max(c) + Vec3::splat(0.25);
-    prims.push((Prim::Tri(tris.len() as u32), lo, hi));
-    tris.push([a, b, c]);
-    tris_surf.push(surface_flags);
-    tris_contents.push(contents);
+}
+
+/// A vertex quantised to 1/8 unit, the key the terrain vertex table uses to
+/// match a render soup's triangle to the lump-26 triangles it draws.
+fn vkey(v: Vec3) -> [i32; 3] {
+    [
+        (v.x * 8.0).round() as i32,
+        (v.y * 8.0).round() as i32,
+        (v.z * 8.0).round() as i32,
+    ]
 }
 
 impl CollisionWorld {
-    /// `extra_tris` are world-space triangles from outside the BSP (the props'
-    /// collision meshes, `props::collision_tris`); they get the same treatment
-    /// as soup triangles.
+    /// `model_tris` are the placed props' collision triangles
+    /// (`props::collision_tris`), clipped the way retail clips static
+    /// models: by a point trace's segment, never by a movement trace.
     ///
     /// Every model's brushes enter (submodels translated by the entity origin
     /// from the entities lump), except those of `trigger*` entities: their
     /// brushes carry plain CONTENTS_SOLID in the lump, but retail leaves them
-    /// hollow to movement. Render triangles come from model 0 only - submodel
-    /// meshes are local-space and their brush hulls replace them.
-    pub fn build(bsp: &Bsp, extra_tris: &[[Vec3; 3]]) -> Self {
+    /// hollow to movement. The terrain partitions of lump 24 enter as the
+    /// engine's own triangles, swept as a sphere; the render soups of model
+    /// 0 enter as facets, minus the ones that draw terrain (a soup whose
+    /// centroid lies in a coplanar terrain triangle sharing a vertex with
+    /// it; the render mesh triangulates the same grid the other way, so an
+    /// edge match is not enough, and a flat patch abutting terrain shares
+    /// an edge without drawing it). Submodel meshes are local-space and
+    /// their brush hulls replace them.
+    pub fn build(bsp: &Bsp, model_tris: &[ModelTri]) -> Self {
         let mut brushes = Vec::new();
-        let mut prims = Vec::new();
         let mut water = Vec::new();
+        let mut t = Tris {
+            tris: Vec::new(),
+            surf: Vec::new(),
+            contents: Vec::new(),
+            terrain: Vec::new(),
+            prims: Vec::new(),
+        };
 
         #[derive(Clone, Copy)]
         struct Placement {
@@ -373,7 +695,13 @@ impl CollisionWorld {
             let placement = &placements[mi];
             let brush_range =
                 model.first_brush as usize..(model.first_brush + model.num_brushes) as usize;
-            for b in &bsp.brushes[brush_range] {
+            for (bi, b) in bsp
+                .brushes
+                .iter()
+                .enumerate()
+                .take(brush_range.end)
+                .skip(brush_range.start)
+            {
                 let mat = &bsp.materials[b.material as usize];
                 if placement.trigger
                     || mat.content_flags & (CONTENTS_SOLID | CONTENTS_PLAYERCLIP | CONTENTS_WATER)
@@ -413,15 +741,74 @@ impl CollisionWorld {
                         planes,
                         surface_flags: mat.surface_flags,
                         content_flags: mat.content_flags,
+                        bsp_index: bi as u32,
+                        material: mat.name.clone(),
+                        model: mi as u32,
                     });
-                    prims.push((Prim::Brush(idx), lo, hi));
+                    t.prims.push((Prim::Brush(idx), lo, hi));
                 }
             }
         }
 
-        let mut tris = Vec::new();
-        let mut tris_surf = Vec::new();
-        let mut tris_contents = Vec::new();
+        // The engine's terrain, wound the way `CM_GenerateTerrainCollide`
+        // takes its plane (Q3's `PlaneFromPoints`: `cross(c - a, b - a)`),
+        // and its vertices keyed for the soup pass.
+        let mut terrain_by_vertex: HashMap<[i32; 3], Vec<usize>> = HashMap::new();
+        for part in &bsp.terrain {
+            let mat = &bsp.materials[part.material as usize];
+            let Some(contents) = tri_contents(mat.content_flags) else {
+                continue;
+            };
+            let idx =
+                &bsp.collision_indices[part.first_index as usize..][..part.index_count as usize];
+            for tri in idx.as_chunks::<3>().0 {
+                let p = |i: usize| {
+                    Vec3::from_array(
+                        bsp.collision_verts[part.first_vert as usize + tri[i] as usize],
+                    )
+                };
+                let tri = [p(0), p(2), p(1)];
+                let before = t.tris.len();
+                t.push(tri, mat.surface_flags, contents, true);
+                if t.tris.len() == before {
+                    continue;
+                }
+                for v in tri {
+                    terrain_by_vertex.entry(vkey(v)).or_default().push(before);
+                }
+            }
+        }
+        // A soup triangle whose centroid lies in a coplanar terrain triangle
+        // sharing one of its vertices draws that terrain; the rest are
+        // facets. A soup winds clockwise seen from its normal's side
+        // (bsp-ibsp59-format.md, lump 6), so it is stored reversed.
+        let terrain_tris = t.tris.clone();
+        let draws_terrain = |tri: &[Vec3; 3]| {
+            let n = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
+            let c = (tri[0] + tri[1] + tri[2]) / 3.0;
+            tri.iter().any(|v| {
+                terrain_by_vertex.get(&vkey(*v)).is_some_and(|owners| {
+                    owners.iter().any(|&i| {
+                        let [a, b, cc] = terrain_tris[i];
+                        let n2 = (b - a).cross(cc - a).normalize();
+                        if n.dot(n2) < 0.995 || (n2.dot(c - a)).abs() > 0.5 {
+                            return false;
+                        }
+                        // Barycentrics of the centroid in that triangle's plane.
+                        let (e1, e2, w) = (cc - a, b - a, c - a);
+                        let (d11, d12, d22) = (e1.dot(e1), e1.dot(e2), e2.dot(e2));
+                        let (dw1, dw2) = (w.dot(e1), w.dot(e2));
+                        let det = d11 * d22 - d12 * d12;
+                        if det.abs() < 1e-12 {
+                            return false;
+                        }
+                        let u = (d22 * dw1 - d12 * dw2) / det;
+                        let v = (d11 * dw2 - d12 * dw1) / det;
+                        u >= -0.01 && v >= -0.01 && u + v <= 1.01
+                    })
+                })
+            })
+        };
         let world_model = &bsp.models[0];
         let soup_range = world_model.first_soup as usize
             ..(world_model.first_soup + world_model.num_soups) as usize;
@@ -438,43 +825,60 @@ impl CollisionWorld {
                 let p = |i: usize| {
                     Vec3::from_array(bsp.verts[soup.first_vertex as usize + tri[i] as usize].pos)
                 };
-                push_tri(
-                    &mut tris,
-                    &mut tris_surf,
-                    &mut tris_contents,
-                    &mut prims,
-                    [p(0), p(1), p(2)],
-                    mat.surface_flags,
-                    contents,
-                );
+                let tri = [p(0), p(2), p(1)];
+                if !terrain_by_vertex.is_empty() && draws_terrain(&tri) {
+                    continue;
+                }
+                t.push(tri, mat.surface_flags, contents, false);
             }
         }
-        for t in extra_tris {
-            push_tri(
-                &mut tris,
-                &mut tris_surf,
-                &mut tris_contents,
-                &mut prims,
-                *t,
-                0,
-                CONTENTS_SOLID,
-            );
+        let mut model_tris_out = Vec::with_capacity(model_tris.len());
+        for mt in model_tris {
+            let [a, b, c] = mt.tri;
+            if (b - a).cross(c - a).length_squared() < 1e-6 {
+                continue;
+            }
+            t.prims.push((
+                Prim::Model(model_tris_out.len() as u32),
+                a.min(b).min(c) - Vec3::splat(0.25),
+                a.max(b).max(c) + Vec3::splat(0.25),
+            ));
+            model_tris_out.push(*mt);
         }
 
         let mut nodes = Vec::new();
-        if !prims.is_empty() {
-            build_bvh(&mut prims, 0, &mut nodes);
+        if !t.prims.is_empty() {
+            build_bvh(&mut t.prims, 0, &mut nodes);
         }
 
         CollisionWorld {
             brushes,
-            tris,
-            tris_surf,
-            tris_contents,
+            tris: t.tris,
+            model_tris: model_tris_out,
+            tris_surf: t.surf,
+            tris_contents: t.contents,
+            tris_terrain: t.terrain,
             nodes,
-            prims,
+            prims: t.prims,
             water,
+            model_linked: bsp.models.iter().map(|_| AtomicBool::new(true)).collect(),
         }
+    }
+
+    /// Whether model `model`'s brushes clip. The server clears it when the
+    /// `script_brushmodel` that links them is deleted, the way retail's
+    /// `G_FreeEntity` unlinks (docs/research/cod11-mantle.md, "A submodel's
+    /// brushes are its entity's").
+    pub fn set_model_linked(&self, model: usize, linked: bool) {
+        if let Some(m) = self.model_linked.get(model) {
+            m.store(linked, Ordering::Relaxed);
+        }
+    }
+
+    fn brush_linked(&self, brush: &BrushPlanes) -> bool {
+        self.model_linked
+            .get(brush.model as usize)
+            .is_none_or(|m| m.load(Ordering::Relaxed))
     }
 
     /// Contents at a point: `CONTENTS_WATER` inside any water brush, plus the
@@ -495,7 +899,8 @@ impl CollisionWorld {
             if let Prim::Brush(b) = prim {
                 if p.cmple(*hi).all() && p.cmpge(*lo).all() {
                     let brush = &self.brushes[*b as usize];
-                    if brush.planes.iter().all(|&(n, d)| n.dot(p) <= d) {
+                    if self.brush_linked(brush) && brush.planes.iter().all(|&(n, d)| n.dot(p) <= d)
+                    {
                         out |= brush.content_flags;
                     }
                 }
@@ -504,17 +909,47 @@ impl CollisionWorld {
         out
     }
 
-    /// Movement sweep (`mins == maxs == ZERO` is a ray).
+    /// Movement sweep (`mins == maxs == ZERO` is a ray), retail's
+    /// `trap_Trace` / `trap_TraceCapsule`: brushes and terrain, never a
+    /// static model (`cod_lnxded` 0x80916f4 traces them only on the flag the
+    /// locational syscall passes).
     pub fn box_trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3) -> Trace {
-        self.trace_with_mask(start, end, mins, maxs, TRACE_MASK_MOVE)
+        self.trace_with_mask(start, end, mins, maxs, TRACE_MASK_MOVE, false)
     }
 
-    /// Bullet sweep against solids only; see [`TRACE_MASK_SHOT`].
+    /// Bullet segment, retail's `trap_LocationalTrace`: [`MASK_SHOT`] and the
+    /// static models.
     pub fn shot_trace(&self, start: Vec3, end: Vec3) -> Trace {
-        self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, TRACE_MASK_SHOT)
+        self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, TRACE_MASK_SHOT, true)
     }
 
-    fn trace_with_mask(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> Trace {
+    /// A point segment with any mask, with or without the static models:
+    /// retail's `trap_Trace` on a zero box is one without them.
+    pub fn point_trace(&self, start: Vec3, end: Vec3, mask: u32, statics: bool) -> Trace {
+        self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, mask, statics)
+    }
+
+    /// A missile's segment: [`MASK_MISSILE`] and the static models. The
+    /// syscall `G_RunMissile`'s `trap_Trace` reaches (`cod_lnxded` 0x8088333,
+    /// case 0x22) passes `SV_Trace` no static-model flag, yet the retail
+    /// capture rests a frag on a crate stack whose only geometry in that
+    /// mask is the crates' own mesh (`crates/server/tests/missile_ab.rs`,
+    /// z 179.3; the `clip_nosight` around them is 0x28031640, outside
+    /// 0x11). The capture wins; how retail gets there is open
+    /// (docs/research/cod11-combat.md, section 12).
+    pub fn missile_trace(&self, start: Vec3, end: Vec3) -> Trace {
+        self.trace_with_mask(start, end, Vec3::ZERO, Vec3::ZERO, MASK_MISSILE, true)
+    }
+
+    fn trace_with_mask(
+        &self,
+        start: Vec3,
+        end: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+        mask: u32,
+        statics: bool,
+    ) -> Trace {
         let mut trace = Trace {
             fraction: 1.0,
             endpos: end,
@@ -522,6 +957,7 @@ impl CollisionWorld {
             surface_flags: 0,
             startsolid: false,
             allsolid: false,
+            hit: None,
             enter: -1.0,
         };
 
@@ -536,6 +972,7 @@ impl CollisionWorld {
                 maxs,
                 capsule,
                 mask,
+                statics,
                 &mut trace,
                 &mut scratch,
             );
@@ -556,6 +993,7 @@ impl CollisionWorld {
         maxs: Vec3,
         capsule: Capsule,
         mask: u32,
+        statics: bool,
         trace: &mut Trace,
         scratch: &mut Vec<(Vec3, f32)>,
     ) {
@@ -572,7 +1010,7 @@ impl CollisionWorld {
                 match *prim {
                     Prim::Brush(b) => {
                         let brush = &self.brushes[b as usize];
-                        if brush.content_flags & mask == 0 {
+                        if brush.content_flags & mask == 0 || !self.brush_linked(brush) {
                             continue;
                         }
                         expand_brush(&brush.planes, capsule.radius, scratch);
@@ -584,22 +1022,43 @@ impl CollisionWorld {
                             brush.surface_flags,
                             capsule.offset,
                             false,
+                            *prim,
                         );
                     }
                     Prim::Tri(t) => {
                         if self.tris_contents[t as usize] & mask == 0 {
                             continue;
                         }
-                        triangle_planes(&self.tris[t as usize], capsule.radius, scratch);
-                        clip_segment(
-                            trace,
-                            start + capsule.center,
-                            end + capsule.center,
-                            scratch,
-                            self.tris_surf[t as usize],
-                            capsule.offset,
-                            true,
-                        );
+                        if self.tris_terrain[t as usize] {
+                            clip_sphere_triangle(
+                                trace,
+                                start + capsule.center,
+                                end + capsule.center,
+                                &self.tris[t as usize],
+                                capsule,
+                                self.tris_surf[t as usize],
+                                *prim,
+                            );
+                        } else {
+                            triangle_planes(&self.tris[t as usize], capsule.radius, scratch);
+                            clip_segment(
+                                trace,
+                                start + capsule.center,
+                                end + capsule.center,
+                                scratch,
+                                self.tris_surf[t as usize],
+                                capsule.offset,
+                                true,
+                                *prim,
+                            );
+                        }
+                    }
+                    Prim::Model(t) => {
+                        let mt = &self.model_tris[t as usize];
+                        if !statics || mt.contents & mask == 0 {
+                            continue;
+                        }
+                        clip_segment_model(trace, start, end, mt, *prim);
                     }
                 }
             }
@@ -615,8 +1074,42 @@ impl CollisionWorld {
         } else {
             (node.second, node.first)
         };
-        self.trace_node(near, start, end, mins, maxs, capsule, mask, trace, scratch);
-        self.trace_node(far, start, end, mins, maxs, capsule, mask, trace, scratch);
+        self.trace_node(
+            near, start, end, mins, maxs, capsule, mask, statics, trace, scratch,
+        );
+        self.trace_node(
+            far, start, end, mins, maxs, capsule, mask, statics, trace, scratch,
+        );
+    }
+
+    /// A one-line name for what a trace hit, for reports.
+    pub fn describe(&self, prim: Prim) -> String {
+        match prim {
+            Prim::Brush(b) => {
+                let br = &self.brushes[b as usize];
+                format!(
+                    "brush {} {} cf={:#x}",
+                    br.bsp_index, br.material, br.content_flags
+                )
+            }
+            Prim::Tri(t) => format!(
+                "{} tri {t} sf={:#x} cf={:#x}",
+                if self.tris_terrain[t as usize] {
+                    "terrain"
+                } else {
+                    "facet"
+                },
+                self.tris_surf[t as usize],
+                self.tris_contents[t as usize]
+            ),
+            Prim::Model(t) => {
+                let mt = &self.model_tris[t as usize];
+                format!(
+                    "xmodel tri {t} cf={:#x} sf={:#x} at {:?}",
+                    mt.contents, mt.surface_flags, mt.tri[0]
+                )
+            }
+        }
     }
 
     /// Only the tests call this now; `box_trace` walks the BVH itself via `trace_node`.
@@ -738,8 +1231,8 @@ pub fn synthetic_world(
     synthetic_world_tris(materials, brushes, &[])
 }
 
-/// [`synthetic_world`] plus world-space triangles, the only way this module
-/// takes geometry that is not axis-aligned.
+/// [`synthetic_world`] plus world-space triangles as soups of material 0,
+/// the only way this module takes swept geometry that is not axis-aligned.
 #[doc(hidden)]
 pub fn synthetic_world_tris(
     materials: &[(&str, u32, u32)],
@@ -771,6 +1264,30 @@ pub fn synthetic_world_tris(
             maxs[axis] = maxs[axis].max(hi[axis]);
         }
     }
+    let mut verts = Vec::new();
+    let mut indices = Vec::new();
+    let mut soups = Vec::new();
+    for tri in tris {
+        let first_vertex = verts.len() as u32;
+        verts.extend(tri.iter().map(|v| crate::bsp::DrawVert {
+            pos: v.to_array(),
+            uv: [0.0; 2],
+            lm_uv: [0.0; 2],
+            normal: [0.0, 0.0, 1.0],
+            color: [255; 4],
+        }));
+        let first_index = indices.len() as u32;
+        indices.extend_from_slice(&[0, 1, 2]);
+        soups.push(crate::bsp::TriangleSoup {
+            material: 0,
+            lightmap: crate::bsp::NO_LIGHTMAP,
+            first_vertex,
+            vertex_count: 3,
+            index_count: 3,
+            first_index,
+        });
+    }
+    let num_soups = soups.len() as u32;
     CollisionWorld::build(
         &crate::bsp::Bsp {
             materials: materials
@@ -782,9 +1299,9 @@ pub fn synthetic_world_tris(
                 })
                 .collect(),
             lightmaps: vec![],
-            soups: vec![],
-            verts: vec![],
-            indices: vec![],
+            soups,
+            verts,
+            indices,
             entities: String::new(),
             planes: vec![],
             brush_sides,
@@ -793,7 +1310,7 @@ pub fn synthetic_world_tris(
                 mins,
                 maxs,
                 first_soup: 0,
-                num_soups: 0,
+                num_soups,
                 first_brush: 0,
                 num_brushes: n,
             }],
@@ -809,9 +1326,13 @@ pub fn synthetic_world_tris(
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            terrain: vec![],
+            patches: vec![],
+            collision_verts: vec![],
+            collision_indices: vec![],
             pvs: None,
         },
-        tris,
+        &[],
     )
 }
 
@@ -819,34 +1340,66 @@ pub fn synthetic_world_tris(
 mod tests {
     use super::*;
 
-    /// Triangles from outside the BSP (props) clip like soup triangles.
+    /// A prop wall at x = 5000 facing -x, two triangles wound outward.
+    fn prop_wall(contents: u32) -> [ModelTri; 2] {
+        let (a, b, c, d) = (
+            Vec3::new(5000.0, -50.0, 0.0),
+            Vec3::new(5000.0, 50.0, 0.0),
+            Vec3::new(5000.0, 50.0, 100.0),
+            Vec3::new(5000.0, -50.0, 100.0),
+        );
+        let mt = |tri| ModelTri {
+            tri,
+            contents,
+            surface_flags: 21 << 20,
+        };
+        [mt([a, c, b]), mt([a, d, c])]
+    }
+
+    /// A prop's triangles stop a shot through them, front face only,
+    /// backing off the clip epsilon, and carry the surface's flags.
     #[test]
-    fn extra_triangles_stop_a_trace() {
-        let wall = [
-            [
-                Vec3::new(5000.0, -50.0, 0.0),
-                Vec3::new(5000.0, 50.0, 0.0),
-                Vec3::new(5000.0, 50.0, 100.0),
-            ],
-            [
-                Vec3::new(5000.0, -50.0, 0.0),
-                Vec3::new(5000.0, 50.0, 100.0),
-                Vec3::new(5000.0, -50.0, 100.0),
-            ],
-        ];
+    fn model_triangles_clip_a_shot() {
         let (start, end) = (Vec3::new(4900.0, 0.0, 50.0), Vec3::new(5100.0, 0.0, 50.0));
         let bare = CollisionWorld::build(&tiny_world(), &[]);
-        assert_eq!(
-            bare.box_trace(start, end, Vec3::ZERO, Vec3::ZERO).fraction,
-            1.0
-        );
-        let world = CollisionWorld::build(&tiny_world(), &wall);
-        let t = world.box_trace(start, end, Vec3::ZERO, Vec3::ZERO);
+        assert_eq!(bare.shot_trace(start, end).fraction, 1.0);
+        let world = CollisionWorld::build(&tiny_world(), &prop_wall(CONTENTS_SOLID));
+        let t = world.shot_trace(start, end);
         assert!(
-            t.fraction < 1.0 && (t.endpos.x - 5000.0).abs() < 0.5,
+            t.fraction < 1.0 && (t.endpos.x - (5000.0 - SURFACE_CLIP_EPSILON)).abs() < 1e-3,
             "{t:?}"
         );
         assert!(t.normal.abs_diff_eq(-Vec3::X, 1e-4), "{t:?}");
+        assert_eq!(sound_material(t.surface_flags), 21);
+        assert!(matches!(t.hit, Some(Prim::Model(_))), "{t:?}");
+        // From behind, the same wall is open.
+        assert_eq!(world.shot_trace(end, start).fraction, 1.0);
+        // A segment past the triangle's edge misses by more than the epsilon.
+        let over = world.shot_trace(start + Vec3::Z * 50.2, end + Vec3::Z * 50.2);
+        assert_eq!(over.fraction, 1.0, "{over:?}");
+        // Glass stops a shot too; a canopy (contents 0) stops nothing.
+        let glass = CollisionWorld::build(&tiny_world(), &prop_wall(CONTENTS_GLASS));
+        assert!(glass.shot_trace(start, end).fraction < 1.0);
+        let canopy = CollisionWorld::build(&tiny_world(), &prop_wall(0));
+        assert_eq!(canopy.shot_trace(start, end).fraction, 1.0);
+    }
+
+    /// A movement trace never meets a prop, whatever its shape: retail's
+    /// `trap_Trace` and `trap_TraceCapsule` leave the static models to the
+    /// locational trace, so a player walks through a chair a clip brush
+    /// does not wrap.
+    #[test]
+    fn model_triangles_never_meet_a_movement_trace() {
+        let world = CollisionWorld::build(&tiny_world(), &prop_wall(CONTENTS_SOLID));
+        let (start, end) = (Vec3::new(4900.0, 0.0, 10.0), Vec3::new(5100.0, 0.0, 10.0));
+        assert_eq!(
+            world.box_trace(start, end, Vec3::ZERO, Vec3::ZERO).fraction,
+            1.0
+        );
+        let mins = Vec3::new(-15.0, -15.0, 0.0);
+        let maxs = Vec3::new(15.0, 15.0, 70.0);
+        assert_eq!(world.box_trace(start, end, mins, maxs).fraction, 1.0);
+        assert!(world.shot_trace(start, end).fraction < 1.0);
     }
     use crate::bsp::{self, Bsp};
     use glam::Vec3;
@@ -914,6 +1467,10 @@ mod tests {
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            terrain: vec![],
+            patches: vec![],
+            collision_verts: vec![],
+            collision_indices: vec![],
             pvs: None,
         }
     }
@@ -1049,6 +1606,10 @@ mod tests {
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            terrain: vec![],
+            patches: vec![],
+            collision_verts: vec![],
+            collision_indices: vec![],
             pvs: None,
         }
     }
@@ -1184,6 +1745,7 @@ mod tests {
             surface_flags: 0,
             startsolid: false,
             allsolid: false,
+            hit: None,
             enter: -1.0,
         };
         let mut scratch = Vec::new();
@@ -1201,6 +1763,18 @@ mod tests {
                         brush.surface_flags,
                         capsule.offset,
                         false,
+                        *prim,
+                    );
+                }
+                Prim::Tri(i) if world.tris_terrain[i as usize] => {
+                    clip_sphere_triangle(
+                        &mut trace,
+                        start + capsule.center,
+                        end + capsule.center,
+                        &world.tris[i as usize],
+                        capsule,
+                        0,
+                        *prim,
                     );
                 }
                 Prim::Tri(i) => {
@@ -1213,6 +1787,16 @@ mod tests {
                         0,
                         capsule.offset,
                         true,
+                        *prim,
+                    );
+                }
+                Prim::Model(i) => {
+                    clip_segment_model(
+                        &mut trace,
+                        start,
+                        end,
+                        &world.model_tris[i as usize],
+                        *prim,
                     );
                 }
             }
@@ -1397,6 +1981,10 @@ mod tests {
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            terrain: vec![],
+            patches: vec![],
+            collision_verts: vec![],
+            collision_indices: vec![],
             pvs: None,
         }
     }
@@ -1508,6 +2096,10 @@ mod tests {
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            terrain: vec![],
+            patches: vec![],
+            collision_verts: vec![],
+            collision_indices: vec![],
             pvs: None,
         }
     }
@@ -1584,6 +2176,10 @@ mod tests {
             portals: vec![],
             nodes: vec![],
             leafs: vec![],
+            terrain: vec![],
+            patches: vec![],
+            collision_verts: vec![],
+            collision_indices: vec![],
             pvs: None,
         }
     }
@@ -1778,6 +2374,10 @@ mod tests {
                 portals: vec![],
                 nodes: vec![],
                 leafs: vec![],
+                terrain: vec![],
+                patches: vec![],
+                collision_verts: vec![],
+                collision_indices: vec![],
                 pvs: None,
             },
             &[],
