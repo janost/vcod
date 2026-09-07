@@ -1169,12 +1169,31 @@ impl Server {
     /// the netchan keeps no round-trip estimate, and 0 renders as a number
     /// where retail's `-1` renders as "-" for a client still connecting.
     fn scoreboard(&mut self) -> String {
-        let online: Vec<usize> = self
+        let mut online: Vec<usize> = self
             .clients
             .iter()
             .enumerate()
             .filter_map(|(slot, c)| c.as_ref().map(|_| slot))
             .collect();
+        // `level.sortedClients[]`'s order, `SortRanks` (.so 0x50090): a
+        // connecting client last, then spectators last among themselves by
+        // slot, then score descending, then deaths ascending; ties keep the
+        // slot order (hud protocol doc, section 3).
+        let mut key = |slot: usize| {
+            let connecting = self.clients[slot]
+                .as_ref()
+                .is_some_and(|c| c.state == ClientState::Connected);
+            let spectator = self
+                .client_field(slot, "sessionteam")
+                .is_some_and(|t| t == "spectator");
+            let mut num = |name: &str| {
+                self.client_field(slot, name)
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(0)
+            };
+            (connecting, spectator, -num("score"), num("deaths"), slot)
+        };
+        online.sort_by_key(|&slot| key(slot));
         // Tokens 2 and 3 are the two team scores, axis before allies, the
         // order `DeathmatchScoreboardMessage` pushes them in (map-cycle doc,
         // 6.3). Both retail captures read 0 in each: `dm` writes neither.

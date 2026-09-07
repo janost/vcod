@@ -336,6 +336,10 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     assert_eq!(row[2], "0", "dm sets no team scores");
     assert_eq!(row[3], "0");
     let cells: Vec<i64> = row[4..].iter().map(|s| s.parse().unwrap()).collect();
+    // `SortRanks`: the row order is score descending, so the killer's row
+    // leads (the retail round-restart target capture reads the 0-score row
+    // ahead of the -1-score one the same way).
+    assert_eq!(cells[0], 0, "A, who scored, is the first row");
     let of = |slot: usize| {
         cells
             .chunks(5)
