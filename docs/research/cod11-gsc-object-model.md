@@ -1279,8 +1279,19 @@ accessors are methods 32 to 37 in this order: `getWeaponSlotWeapon` 0x43cf4,
 table `dump_builtins.py` walks; the two named ones carry symbols, the six
 resolve to addresses.
 
-Only `setWeaponSlotWeapon` was read inside, below. For the rest vcod's
-readings are the design's: a slot name resolved through the `weaponSlot`
+`setWeaponSlotWeapon` was read inside, below, and the two setters' clamps
+were. VERIFIED, the compares and calls: `setWeaponSlotClipAmmo` zeroes a
+negative count (`xor esi,esi` at 0x444d7 behind the `jge` at 0x444d5), calls
+`BG_GetAmmoClipSize` and replaces a count above it with the answer
+(0x444dd-0x444f2), and stores at `client+0x20c+4*clip` (0x444f4-0x444ff);
+`setWeaponSlotAmmo` branches on `BG_WeaponIsClipOnly` (0x4420f) into the
+same clip clamp (0x44244-0x44254) or a reserve clamp against
+`BG_GetAmmoTypeMax` (0x44294-0x442a4). VERIFIED, from the retail
+round-restart target capture: `sd.gsc`'s `setWeaponSlotClipAmmo("primary",
+999)` reads back as `ammoclip=7:5` for the kar98k. INFERRED: the reserve's
+cap is the ammo *type's* maximum, which vcod reads as the slot weapon's own
+`maxAmmo`; no stock pair sharing an ammo name ships different values. For
+the rest vcod's readings are the design's: a slot name resolved through the `weaponSlot`
 table above, ammo and clip addressed by the slot's weapon's own ammo and clip
 index, `switchToWeapon` going through the putaway rather than swapping the
 weapon in place. The last of them follows the weapon machine of
