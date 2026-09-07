@@ -235,12 +235,21 @@ impl ObjectTable {
         // gametype write `self.deaths++` and `attacker.score++` on a client
         // that has scored nothing yet. The string and object fields keep
         // their undefined reading: those have custom getters, and what each
-        // returns before it is written is unmeasured.
+        // returns before it is written is unmeasured, but for one.
+        // `sessionstate` reads "spectator" from the first frame of a fresh
+        // connect, before any script wrote it (an sd.gsc instrumented to log
+        // it right after `waittill("begin")` printed `spectator` on every
+        // connect and reconnect of a retail 1.1d run, 2026-09-07). It has
+        // to: `_spawnlogic::getSpawnpoint_DM` compares every player's
+        // `sessionstate` against strings, and a client between reconnect
+        // and `begin` reading undefined there aborts everyone else's spawn,
+        // which is what parked the bots as spectators after every restart.
         let mut client: Vec<Value> = CLIENT_FIELDS
             .iter()
-            .map(|f| match f.ty {
-                crate::game::fields::FieldType::Int => Value::Int(0),
-                crate::game::fields::FieldType::Float => Value::Float(0.0),
+            .map(|f| match (f.name, f.ty) {
+                ("sessionstate", _) => Value::String(cx.intern_exact("spectator")),
+                (_, crate::game::fields::FieldType::Int) => Value::Int(0),
+                (_, crate::game::fields::FieldType::Float) => Value::Float(0.0),
                 _ => Value::Undefined,
             })
             .collect();
