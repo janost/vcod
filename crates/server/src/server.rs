@@ -64,6 +64,11 @@ const MAX_CMDS_PER_TICK: usize = 32;
 /// is simulated for", has the rest of retail's rule, including the two clamps
 /// vcod does not apply.
 const MAX_PMOVE_ARREARS_MS: i32 = 1000;
+/// `SV_ClientCommand`'s flood window (`cod_lnxded` 0x8086f5f, `add eax,0x320`):
+/// a non-exempt client command opens 800 ms during which every further
+/// non-exempt one from an active client is dropped before the game sees it
+/// (`docs/protocol-1.1.md`, "Client commands are flood-protected").
+const FLOOD_WINDOW_MS: i32 = 800;
 /// How often a bot re-runs its enemy search (range gate + LOS traces).
 /// The cached verdict is at most this stale.
 const ENEMY_REFRESH_MS: i32 = 100;
@@ -959,6 +964,29 @@ impl Server {
         let (word, args) = trimmed
             .split_once(char::is_whitespace)
             .unwrap_or((trimmed, ""));
+        // `sv_floodProtect`, which the systeminfo advertises as 1. The three
+        // exemptions are prefix compares with the space, so a bare `score`
+        // is not one of them and opens the window like any other command;
+        // that is what dropped every other `kill` the round-restart probe
+        // sent within 800 ms of its own `score`. Engine commands run either
+        // way, only the game's dispatch is skipped.
+        let exempt = ["team ", "score ", "mr "]
+            .iter()
+            .any(|p| trimmed.starts_with(p));
+        let mut client_ok = true;
+        if !exempt {
+            if c.state == ClientState::Active && self.sv_time_ms < c.next_reliable_ms {
+                client_ok = false;
+                log::debug!("client text ignored for {}: {trimmed}", c.name);
+            }
+            c.next_reliable_ms = self.sv_time_ms.wrapping_add(FLOOD_WINDOW_MS);
+        }
+        let engine_command = matches!(word, "disconnect" | "userinfo");
+        if !client_ok && !engine_command {
+            c.last_client_command = seq;
+            c.netchan.last_client_command_string = s;
+            return true;
+        }
         match word {
             "disconnect" => {
                 self.drop_client(slot, "EXE_DISCONNECTED");
@@ -1707,7 +1735,7 @@ impl Server {
     /// it was, so the error the caller reports is about the script rather
     /// than about a half-cleared table. `main.rs` exits on it.
     pub fn load_scripts(&mut self, fs: Rc<vcod_common::pk3::Pk3Fs>) -> anyhow::Result<()> {
-        self.load_scripts_with(fs, false, None, Vec::new(), false)
+        self.load_scripts_with(fs, false, crate::game::script::Carry::default(), false)
     }
 
     /// The test seam for a gametype script that ships in no pak: `path` is a
@@ -1745,8 +1773,7 @@ impl Server {
         &mut self,
         fs: Rc<vcod_common::pk3::Pk3Fs>,
         restart: bool,
-        carry: Option<vcod_gsc::GameCarry>,
-        pers: Vec<Option<vcod_gsc::ArrayCarry>>,
+        carry: crate::game::script::Carry,
         save_persist: bool,
     ) -> anyhow::Result<()> {
         let cvars = self.cvars(&fs);
@@ -1766,9 +1793,14 @@ impl Server {
             self.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
             self.hitlocs = crate::game::combat::HitLocTable::load(&fs);
         }
-        let carry = match save_persist {
-            true => crate::game::script::Carry { game: carry, pers },
-            false => crate::game::script::Carry::default(),
+        // `game[]` and `pers[]` are the script's and go only under
+        // `savePersist`; the item registry is the engine's and survives a
+        // restart either way, and a map change builds a fresh one (the
+        // spawn path hands an empty `Carry`).
+        let carry = crate::game::script::Carry {
+            game: carry.game.filter(|_| save_persist),
+            pers: if save_persist { carry.pers } else { Vec::new() },
+            items: carry.items.filter(|_| restart),
         };
         let source = crate::game::script::PakScripts::new(fs.clone(), self.script_overlay.clone());
         let rt = crate::game::script::ScriptRuntime::load_from(
@@ -1941,7 +1973,7 @@ impl Server {
         self.server_id = console::next_map_id(self.server_id);
         self.configstrings = configstrings::static_configstrings(&self.cfg, self.server_id);
         // Step 19. Past the teardown: a failure here leaves no level.
-        self.load_scripts_with(fs, false, carry.game, carry.pers, save_persist)
+        self.load_scripts_with(fs, false, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
         // Step 20: three frames, 100 ms of `svs.time` each.
         for _ in 0..3 {
@@ -2054,12 +2086,23 @@ impl Server {
         self.snap_flag_server_bit ^= console::SNAPFLAG_SERVERCOUNT;
         // Step 5: only the low nibble moves.
         self.server_id = console::next_restart_id(self.server_id);
-        // The table is rebuilt around the new id the way a spawn's is; 4.3
-        // is what carries slot 1 to a client that already has a gamestate.
-        self.configstrings = configstrings::static_configstrings(&self.cfg, self.server_id);
+        // `sv.configstrings` survives a restart: only a spawn clears it, so
+        // every slot the outgoing level allocated keeps its index and its
+        // text, and the incoming level's `G_ModelIndex` finds the same slot
+        // (map-cycle doc, 4.6). The static slots are rebuilt around the new
+        // id on top; 4.3 is what carries slot 1 to a client that already
+        // has a gamestate.
+        for (i, s) in configstrings::static_configstrings(&self.cfg, self.server_id)
+            .into_iter()
+            .enumerate()
+        {
+            if !s.is_empty() {
+                self.configstrings[i] = s;
+            }
+        }
         // Step 7: `SV_RestartGameProgs(savePersist)`. Past the teardown: the
         // outgoing level's script is gone and a failure here leaves none.
-        self.load_scripts_with(fs, true, carry.game, carry.pers, save_persist)
+        self.load_scripts_with(fs, true, carry, save_persist)
             .map_err(LoadFailure::Fatal)?;
         // Step 8: three frames, 100 ms of `svs.time` each.
         for _ in 0..3 {
@@ -2655,10 +2698,11 @@ impl Server {
             }
             for (slot, c) in self.clients.iter_mut().enumerate() {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-                    // `ClientEndFrame`'s intermission arm never copies
-                    // `ent->health` into the playerstate, so the camera keeps
-                    // the zero its own spawn left (map-cycle doc, 6.2).
-                    if sim.pm_type != crate::spectate::PmType::Intermission {
+                    // Neither `ClientEndFrame`'s intermission arm nor
+                    // `SpectatorClientEndFrame` copies `ent->health` into the
+                    // playerstate, so both keep the zero their own spawn left
+                    // (map-cycle doc, 6.2; `spectate.rs`, `become_spectator`).
+                    if sim.pm_type == crate::spectate::PmType::Normal {
                         let v = rt.client_vitals(slot);
                         sim.health = v.health;
                         sim.max_health = v.max_health;

@@ -56,6 +56,10 @@ struct Args {
 /// `sv_fps 20`.
 const FRAME: Duration = Duration::from_millis(50);
 
+/// How far behind the schedule the loop still runs ticks back to back
+/// before it resynchronises instead.
+const MAX_CATCH_UP: Duration = Duration::from_secs(1);
+
 /// Without a bound a flood keeps the socket readable, `tick` never runs and
 /// the outbox is never flushed.
 const MAX_PACKETS_PER_FRAME: usize = 256;
@@ -121,6 +125,12 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
     let mut buf = vec![0u8; 65536];
+    // A fixed schedule, not a sleep after each tick: `SV_Frame` runs one
+    // game frame per `sv_fps` slice of wall time and catches up when a
+    // frame overran, so `svs.time` tracks the wall clock. Sleeping the
+    // remainder of each tick lets every overshoot accumulate, which read as
+    // a serverTime 5-10% slow against a probe's wall clock under load.
+    let mut next = Instant::now();
     loop {
         let now = Instant::now();
         for _ in 0..MAX_PACKETS_PER_FRAME {
@@ -142,6 +152,14 @@ fn main() -> Result<()> {
                 log::debug!("send to {to}: {e}");
             }
         }
-        std::thread::sleep(FRAME.saturating_sub(now.elapsed()));
+        next += FRAME;
+        let after = Instant::now();
+        if next > after {
+            std::thread::sleep(next - after);
+        } else if after - next > MAX_CATCH_UP {
+            // A stall past the catch-up bound (a debugger, a suspend) is
+            // dropped rather than replayed as a burst of ticks.
+            next = after;
+        }
     }
 }

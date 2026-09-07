@@ -683,3 +683,25 @@ never pasted decompiler output or disassembly listings.
   `probe_endon_self`, and it is what lets `dm.gsc`'s `endMap` reach its
   `exitLevel` at all: ours used to kill the thread there and the map never
   ended.
+- Client commands are flood-protected, and a bare `score` is not exempt. A
+  non-exempt command opens an 800 ms window in which every further
+  non-exempt one from an active client is dropped before the game sees it;
+  the exemptions are the prefixes `team `, `score ` and `mr `, space
+  included (`docs/protocol-1.1.md`, "Client commands are flood-protected").
+  The round-restart target probe sends `score` every 2 s and `kill` every
+  45 s, and retail silently refused every other `kill` for landing inside
+  that window, which read as a sessionstate rule for a whole afternoon. A
+  probe that pairs commands spaces them past the window, and ours drops
+  them the same way now.
+- A `map_restart` keeps the engine's configstring table and the item
+  registry; only a map load clears them. `sd.gsc` precaches its weapons
+  only while `game["gamestarted"]` is unset, so a restart that carries
+  `game[]` registers none of them itself, and a table rebuilt from that
+  run re-allocated the dropped weapon's model, configstring 8 and the
+  elimination string at fresh slots on the first kill after it
+  (`docs/research/cod11-map-cycle.md`, 4.6).
+- The tick loop runs on an absolute schedule and catches up after an
+  overrun, the way `SV_Frame` does. Sleeping the remainder of each tick let
+  every sleep overshoot accumulate, and under load `serverTime` ran 5-10%
+  slow against a probe's wall clock: a map-change capture that expected the
+  rotation at 120 s ran out of its 150 s before it came.

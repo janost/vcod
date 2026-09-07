@@ -716,9 +716,14 @@ such wait between its `openMenu` and its loop.
   not measurement. vcod answers true on that inference (`values_equal`,
   `crates/gsc/src/vm/interp.rs`); every *mixed* pair with `undefined` errors,
   which is the measured half.
-- **String comparison against a localized string** (`&"KEY"`), and whether a
-  localized string renders as its key or its resolved text when
-  concatenated. No stock script does either.
+- **String comparison against a localized string** (`&"KEY"`). No stock
+  script does it. How one renders is measured on two paths: a message
+  argument renders as `KEY\x15` (`crates/server/src/game/builtins/message.rs`),
+  and so does a `setCvar` value, since `_teams::scoreboard`'s
+  `setcvar("g_TeamName_Allies", &"MPSCRIPT_AMERICAN")` reaches the retail
+  gamestate as `MPSCRIPT_AMERICAN\x15`
+  (`crates/server/tests/fixtures/configstrings/mp_carentan-sd.txt`, slots
+  223 and 224). Plain concatenation is still unmeasured.
 - **`format_g`'s exponent form.** No probe has driven a float outside
   roughly `1e-4 .. 1e6`, so whether retail's `%g` prints `1e+06` or
   something else is unmeasured; `format_g` (`crates/gsc/src/value.rs`)

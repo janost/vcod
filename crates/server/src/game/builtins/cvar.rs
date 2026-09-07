@@ -106,7 +106,11 @@ pub fn get_cvar_float(
 /// not Rust's own formatter, so a float renders the way `%g` does.
 /// `dm.gsc` calls `setCvar("scr_allow_vote", level.allowvote)` with an int
 /// and `updateScriptCvars` writes floats; both go through the same
-/// renderer `println` and `setCullFog` use.
+/// renderer `println` and `setCullFog` use. A localized key renders the way
+/// `setClientCvar`'s does, `KEY\x15`: `_teams::scoreboard`'s
+/// `setcvar("g_TeamName_Allies", &"MPSCRIPT_AMERICAN")` reaches the
+/// gamestate as `MPSCRIPT_AMERICAN\x15`
+/// (`tests/fixtures/configstrings/mp_carentan-sd.txt`, slots 223 and 224).
 pub fn set_cvar(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -117,9 +121,12 @@ pub fn set_cvar(
         return Err(ErrorKind::BadType("setCvar takes a name and a value"));
     };
     let name = cx.resolve(*name).to_string();
-    let rendered = cx
-        .format_number(value)
-        .ok_or(ErrorKind::BadType("setCvar takes a renderable value"))?;
+    let rendered = match value {
+        Value::Localized(_) => super::message::construct(host, cx, &[value]),
+        _ => cx
+            .format_number(value)
+            .ok_or(ErrorKind::BadType("setCvar takes a renderable value"))?,
+    };
     host.cvars.set(&name, &rendered);
     Ok(Value::Undefined)
 }
