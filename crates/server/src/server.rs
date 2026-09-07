@@ -3157,9 +3157,21 @@ impl Server {
                     Some(b) => format!("d{}", message_num - b.message_num),
                     None => "uncompressed".into(),
                 };
+                // The walker's own state, for chasing a prediction error a
+                // client reports against a headless run that cannot see it.
+                let walk = c.sim.as_ref().map_or(String::new(), |s| {
+                    format!(
+                        " z {:.2} vz {:.1} ground {} ads {} frac {:.3}",
+                        s.ps.origin.z,
+                        s.ps.velocity.z,
+                        u8::from(s.ps.on_ground),
+                        u8::from(s.ps.ads_active),
+                        s.ps.weapon_pos_frac
+                    )
+                });
                 log::info!(
                     "trace c{slot} msg {message_num} wall {} sv {} ct {} lead {} \
-cmds {processed} span {span} queued {queued} ack {} behind {ack_behind} {base_desc} {} B",
+cmds {processed} span {span} queued {queued} ack {} behind {ack_behind} {base_desc} {} B{walk}",
                     wall_ms.map_or("-".into(), |w| format!("{w:.1}")),
                     self.sv_time_ms,
                     command_time,
