@@ -119,15 +119,14 @@ pub fn abs_bounds(origin: [f32; 3], t: &Trigger) -> ([f32; 3], [f32; 3]) {
     offset_bounds(origin, t.mins, t.maxs)
 }
 
-/// The player's own clip box, which retail hands `trap_EntitiesInBox` around
-/// the client's origin. Half-width 15 and 0..72 standing, from the movement
-/// constants table in docs/research/cod11-mantle.md.
+/// The player's own clip box, which is what a touch's exact
+/// `trap_EntityContact` test measures against and not what the broad phase
+/// queries (docs/research/cod11-gsc-object-model.md section 22). Half-width 15
+/// and 0..72 standing, from the movement constants table in
+/// docs/research/cod11-mantle.md.
 pub const PLAYER_MINS: [f32; 3] = [-15.0, -15.0, 0.0];
 pub const PLAYER_MAXS: [f32; 3] = [15.0, 15.0, 72.0];
 
-/// An entity's absolute box: a registered trigger's submodel box around its
-/// current origin, a client's player box, and a point box for everything
-/// else, which is what an unset `r.mins`/`r.maxs` gives retail.
 fn entity_origin(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
     let origin_atom = cx.intern_folded("origin");
     match host.get_field(cx, id, origin_atom) {
@@ -136,6 +135,9 @@ fn entity_origin(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
     }
 }
 
+/// An entity's absolute box: a registered trigger's submodel box around its
+/// current origin, a client's player box, and a point box for everything
+/// else, which is what an unset `r.mins`/`r.maxs` gives retail.
 pub fn entity_abs_bounds(host: &mut GameHost, cx: &mut Cx, id: EntId) -> ([f32; 3], [f32; 3]) {
     let origin = entity_origin(host, cx, id);
     if let Some(t) = host.triggers.get(id) {
