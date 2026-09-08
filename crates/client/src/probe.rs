@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
+use vcod_common::net::trajectory::Trajectory;
 use vcod_common::net::{self, NetClient, NetEvent, NetState, SnapshotCapture, UdpTransport};
 
 /// Committed fixtures are absolute (the common crate's parser tests read
@@ -547,6 +548,7 @@ pub fn probe(
                 }
             }
             watch.check_sounds(s, client.configstrings());
+            watch.check_movers(s);
             if netchan_capture {
                 netchan.sample(now, s);
             }
@@ -802,6 +804,24 @@ pub fn probe(
     finish_probe(client, save_fixture, save_snapshots)
 }
 
+/// One trajectory group as one line, `trDuration` included: a bounded type
+/// is only readable with it, and the missile capture's `traj_str` leaves it
+/// out because a missile's trajectory is unbounded.
+fn mover_traj_str(t: &Trajectory) -> String {
+    format!(
+        "trType {} trTime {} trDuration {} base [{:.1},{:.1},{:.1}] delta [{:.1},{:.1},{:.1}]",
+        t.tr_type,
+        t.tr_time,
+        t.tr_duration,
+        t.base.x,
+        t.base.y,
+        t.base.z,
+        t.delta.x,
+        t.delta.y,
+        t.delta.z,
+    )
+}
+
 /// Per-second checks over the newest snapshot, for chasing wrong-model and
 /// sound-path reports headlessly.
 #[derive(Default)]
@@ -810,6 +830,9 @@ struct ProbeWatch {
     /// Live eType-2 corpses: entity -> (clientNum, first-seen serverTime).
     corpses: std::collections::HashMap<u32, (i32, i32)>,
     prop_origins: std::collections::HashMap<u32, (String, [f32; 3])>,
+    /// The last `pos`/`apos` trajectory seen per entity, so a change is
+    /// printed once rather than every snapshot it survives.
+    trajectories: std::collections::HashMap<u32, (Trajectory, Trajectory)>,
     loop_sounds: std::collections::HashMap<u32, i32>,
     events: vcod_common::net::events::EventTracker,
     /// Empty until the gamestate names the map, or when there is no game
@@ -940,6 +963,39 @@ impl ProbeWatch {
 
     /// `EventTracker::drain` is idempotent per `message_num`, so re-reading
     /// the same snapshot is free.
+    /// Every change to an entity's `pos` or `apos` trajectory group, which is
+    /// what says whether retail ships a mover as per-frame origins (`trType`
+    /// stationary, a new `trBase` every snapshot) or as a trajectory the
+    /// client extrapolates (one non-stationary group per verb). Runs per
+    /// snapshot rather than per second: a two-second move is 40 frames and a
+    /// once-a-second sample cannot tell the two shapes apart.
+    fn check_movers(&mut self, s: &net::snapshot::Snapshot) {
+        let p = &net::protocol::PROTOCOL_V1;
+        for (&num, ent) in &s.entities {
+            let now = (
+                Trajectory::read(ent, p, "pos"),
+                Trajectory::read(ent, p, "apos"),
+            );
+            let was = self.trajectories.insert(num, now);
+            if was.as_ref() == Some(&now) {
+                continue;
+            }
+            // A stationary entity that has never moved is the map's static
+            // set; only report one once it has moved at least once.
+            if was.is_none() && now.0.tr_type == 0 && now.1.tr_type == 0 {
+                continue;
+            }
+            println!(
+                "entity {num} serverTime {} eType {} pos {} apos {}",
+                s.server_time,
+                ent.field_i32(p, "eType"),
+                mover_traj_str(&now.0),
+                mover_traj_str(&now.1)
+            );
+        }
+        self.trajectories.retain(|n, _| s.entities.contains_key(n));
+    }
+
     fn check_sounds(&mut self, s: &net::snapshot::Snapshot, configstrings: &[String]) {
         let p = &net::protocol::PROTOCOL_V1;
         for (&num, ent) in &s.entities {
