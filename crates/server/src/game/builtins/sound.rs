@@ -1,9 +1,10 @@
-//! Sound builtins. All three allocate a sound-alias configstring, mirroring
-//! `G_SoundAliasIndex` (docs/research/cod11-sound-system.md: they share the
-//! 525-779 range). `playSound` raises `EV_SOUND_ALIAS` on the receiver's own
-//! event ring and `playLocalSound` reaches one client as the reliable command
-//! `s <idx>`; `playLoopSound` still queues no audible event, since
-//! `es.loopSound` is a netfield nothing here writes yet.
+//! Sound builtins. The three that take an alias allocate a sound-alias
+//! configstring, mirroring `G_SoundAliasIndex`
+//! (docs/research/cod11-sound-system.md: they share the 525-779 range).
+//! `playSound` raises `EV_SOUND_ALIAS` on the receiver's own event ring,
+//! `playLocalSound` reaches one client as the reliable command `s <idx>`, and
+//! `playLoopSound` writes the `es.loopSound` netfield that `stopLoopSound`
+//! clears.
 
 use crate::configstrings::CsRange;
 use crate::game::builtins::client::client_receiver;
@@ -17,6 +18,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("playsound", play_sound),
     ("playloopsound", play_loop_sound),
     ("playlocalsound", play_local_sound),
+    ("stoploopsound", stop_loop_sound),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -74,16 +76,37 @@ pub fn play_sound(
     Ok(Value::Undefined)
 }
 
-/// `<ent> playLoopSound(alias)`: `es.loopSound = idx` in retail; stage 5
-/// gives entities an `es` to write it into.
+/// `<ent> playLoopSound(alias)` (`0x5d980`): `es.loopSound = idx`, the index
+/// counted from `CS_SOUNDS` the same way `EV_SOUND_ALIAS`'s parm is. The field
+/// is state, not an event: the client plays `CS_SOUNDS + loopSound` every
+/// frame the entity is on the wire and the engine's looping dedupe collapses
+/// that into one voice (sound doc, section 9).
 pub fn play_loop_sound(
     host: &mut GameHost,
     cx: &mut Cx,
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let _id = entity_receiver(recv)?;
-    alloc_alias(host, cx, args)?;
+    let id = entity_receiver(recv)?;
+    let idx = (alloc_alias(host, cx, args)? - CS_SOUNDS) as i32;
+    if let Some(ent) = host.ents.get_mut(id) {
+        ent.loop_sound = idx;
+    }
+    Ok(Value::Undefined)
+}
+
+/// `<ent> stopLoopSound()` (`0x5d9d8`): `es.loopSound = 0`. It takes no alias
+/// and allocates no configstring; index 0 is the range's "none" slot.
+pub fn stop_loop_sound(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = entity_receiver(recv)?;
+    if let Some(ent) = host.ents.get_mut(id) {
+        ent.loop_sound = 0;
+    }
     Ok(Value::Undefined)
 }
 
@@ -176,6 +199,38 @@ mod tests {
                 .position(|s| s == "Explo_plant_no_tick")
                 .unwrap();
             assert_eq!(es.field_i32(p, "eventParms[0]"), (alias - CS_SOUNDS) as i32);
+        });
+    }
+
+    /// `playLoopSound` writes `es.loopSound` and it reaches the wire; the
+    /// index counts from `CS_SOUNDS`, and `stopLoopSound` puts back 0 without
+    /// touching the alias's slot.
+    #[test]
+    fn playloopsound_writes_the_loopsound_netfield() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            for (name, value) in [("classname", "script_model"), ("model", "xmodel/barrels")] {
+                let atom = cx.intern_folded(name);
+                let v = Value::String(cx.intern_exact(value));
+                host.set_field(cx, e, atom, v).unwrap();
+            }
+            host.allocators
+                .index(&mut host.configstrings, CsRange::Model, "xmodel/barrels")
+                .unwrap();
+
+            let a = Value::String(cx.intern_exact("bomb_tick"));
+            play_loop_sound(&mut host, cx, Some(Target::Entity(e)), &[a]).unwrap();
+            assert_eq!(host.configstrings[525], "bomb_tick");
+
+            let p = &vcod_common::net::protocol::PROTOCOL_V1;
+            let ents = crate::game::wire::packet_entities(&mut host, cx, p);
+            assert_eq!(ents[&e.0].field_i32(p, "loopSound"), 1);
+
+            stop_loop_sound(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            let ents = crate::game::wire::packet_entities(&mut host, cx, p);
+            assert_eq!(ents[&e.0].field_i32(p, "loopSound"), 0);
+            assert_eq!(host.configstrings[525], "bomb_tick");
         });
     }
 

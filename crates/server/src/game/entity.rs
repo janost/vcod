@@ -75,6 +75,14 @@ pub struct GEntity {
     /// once, off the sequence. Freeing the slot drops it, the way retail's
     /// `G_FreeEntity` clears the entity state.
     pub events: EventRing,
+    /// `es.loopSound` (offset 132, 8 bits), what `playLoopSound` writes and
+    /// `stopLoopSound` clears (docs/research/cod11-sound-system.md section 9).
+    /// It is an index counted from `CS_SOUNDS`, not a configstring number, and
+    /// it is state: the client replays it every frame the entity is on the
+    /// wire. A client entity's state is built from its playerstate
+    /// (`crate::spectate`) and does not carry this; no stock script calls
+    /// `playLoopSound` on a player.
+    pub loop_sound: i32,
 }
 
 /// `hudelem_t`'s owner field (`+0x70`) for an element every client is drawn:
@@ -213,6 +221,7 @@ impl ObjectTable {
             think: None,
             nextthink: 0,
             events: EventRing::default(),
+            loop_sound: 0,
         });
         Ok(id)
     }
@@ -299,6 +308,7 @@ impl ObjectTable {
             think: None,
             nextthink: 0,
             events: EventRing::default(),
+            loop_sound: 0,
         });
         Ok(EntId(slot as u32))
     }
@@ -355,6 +365,7 @@ impl ObjectTable {
             think: None,
             nextthink: 0,
             events: EventRing::default(),
+            loop_sound: 0,
         });
         Ok(EntId(FIRST_HUD_ELEM + i as u32))
     }
