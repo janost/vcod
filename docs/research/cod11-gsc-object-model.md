@@ -1478,6 +1478,22 @@ script: `spawn_client` puts a fresh array handle there, because
 `ClientConnect` (0x4250f) writes one and every gametype reads
 `self.pers["team"]` off it without creating it. Section 3 has the measurement.
 
+## 22. `G_TouchTriggers` tests two boxes
+
+`G_TouchTriggers` (0x3f88c, `game.mp.i386.so`) builds its candidate box from
+three floats in `.data` at 0x7dcdc, 0x7dce0 and 0x7dce4, which read 40, 40 and
+52 (VERIFIED; `.data` is mapped at VA 0x7b3a0 from file offset 0x7a3a0, so the
+raw dword at the virtual address belongs to another section and reads 0.0).
+
+INFERRED, from the function's control flow: those three are subtracted from
+and added to the client's origin to make the box handed to
+`trap_EntitiesInBox`, and each entity that query returns is then tested with
+`trap_EntityContact` against a second box built from the entity's own
+`r.mins`/`r.maxs` at +0x100..+0x114. So the first box is a broad phase and the
+second the exact test, and a trigger has to clear both: neither contains the
+other, since the candidate box reaches 52 units below the feet where the
+player's clip box reaches 72 above them.
+
 ## Open, and worth a probe
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.
