@@ -489,8 +489,14 @@ pub fn is_player(
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    // A non-entity answers false rather than refusing: retail's `isPlayer`
+    // (0x5efd4) opens with `Scr_GetType(0)` and jumps straight to
+    // `Scr_AddInt(0)` for anything but type 7, so `isPlayer(undefined)` is 0.
+    // VERIFIED, the type compare and both `Scr_AddInt` arms. It matters
+    // because a death with no attacker hands the callbacks `undefined`
+    // (`Scr_PlayerKilled` 0x5cb30) and `dm.gsc:492` calls this on it unguarded.
     let Some(Value::Entity(id)) = args.first() else {
-        return Err(ErrorKind::BadType("isPlayer takes an entity"));
+        return Ok(Value::Int(0));
     };
     Ok(Value::Int((id.0 < MAX_CLIENTS as u32) as i32))
 }
