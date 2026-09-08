@@ -236,9 +236,6 @@ pub struct ClientSim {
     /// The model configstring index `setViewmodel` left on the client,
     /// mirrored from the script host every frame the way the weapons are.
     pub viewmodel_index: i32,
-    /// `ps.serverCursorHint`, mirrored from the script host's touch pass every
-    /// frame the way the viewmodel is.
-    pub cursor_hint: i32,
     /// The body, head and helmet the character script dressed this client in,
     /// mirrored the same way: the locational trace poses the grafted rig they
     /// make (`crate::game::hitrig`).
@@ -354,7 +351,6 @@ impl ClientSim {
             pm_type: PmType::Spectator,
             ring: EventRing::default(),
             viewmodel_index: 0,
-            cursor_hint: crate::game::trigger::NO_CURSOR_HINT,
             assembly: Default::default(),
             delta_angles: spawn_delta_angles(yaw_deg, cmd_angles),
             view_angles: view,
@@ -1144,16 +1140,6 @@ impl ClientSim {
             // -1..1, left negative, the same convention retail sends.
             set("leanf", (self.ps.lean / pmove::LEAN_MAX).to_bits() as i32);
             set("serverCursorHintString", NO_CURSOR_HINT_STRING);
-            // `G_CheckForCursorHints` (0x4f59c) bails with the field zeroed
-            // once the client's health is not positive.
-            set(
-                "serverCursorHint",
-                if self.dead {
-                    crate::game::trigger::NO_CURSOR_HINT
-                } else {
-                    self.cursor_hint
-                },
-            );
             set("viewmodelIndex", self.viewmodel_index);
             set("legsAnim", self.anim.legs());
             set("torsoAnim", self.anim.torso());

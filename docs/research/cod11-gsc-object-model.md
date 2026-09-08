@@ -1495,6 +1495,15 @@ the stores and the two `G_SpawnString` calls. So `HINT_ACTIVATE` is the
 default hint of a `trigger_use` with no `cursorhint` key, and 0xff is
 `hintstring`'s own unset value. INFERRED, that ordering is control flow.
 
+The other half, `ent+0xd8`, is a configstring index rather than a table one.
+`G_GetHintStringIndex` (0x5a238) walks indices 0 to 0x1f, reading
+configstring `i + 0x4bc` each time, returns `i` for a `strcmp` match, claims
+the first empty slot with `trap_SetConfigstring` and writes -1 with a 0 return
+when all 32 are taken. VERIFIED, the two immediates, the bound at 0x5a2b1 and
+the three stores; INFERRED that the scan allocates rather than only looks up.
+So the hint-string range is 32 configstrings at base 1212 and 0xff is its
+unset marker, which is the -1 `serverCursorHintString` carries as 255.
+
 `G_CheckForCursorHints` (0x4f59c) reads `ent+0xdc` into
 `ps.serverCursorHint` and `ent+0xd8` into `ps.serverCursorHintString`, having
 taken the candidate entities from `G_GetActivateEnt` (0x4f14c). VERIFIED, the
@@ -1516,12 +1525,16 @@ and it touches none of the three hint fields. INFERRED for both, control flow.
 `trap_SetBrushModel`, `ent+0x118` = 0x20000000, `ent+0xf4` = 1, `svFlags |= 2`
 and `trap_LinkEntity`. VERIFIED, that is the whole function.
 
-vcod diverges here on purpose: `crates/server/src/game/trigger.rs` fires a
-`trigger_lookat` on contact with the rest of the touch pass and puts its hint
-on the toucher, since nothing in vcod runs an aim trace per frame yet. The
-hint value itself is retail's -- the `cursorhint` key, or `HINT_ACTIVATE` when
-the map gives none -- but that it comes from a `trigger_lookat` at all is
-vcod's, not measured.
+Cursor hints in retail are an aim-trace subsystem, not a touch one:
+`G_CheckForCursorHints` picks its candidates through `trap_LocationalTrace`
+alongside `CalcMuzzlePoints`, `BG_GetInfoForWeapon` and `G_IsTurretUsable`.
+VERIFIED, the function's own calls. No touch path writes any of the three hint
+fields: `SP_trigger_lookat` installs no touch function and the trigger touch
+path stores nothing at `ps+0x384`, `+0x388` or `+0x38c`. INFERRED, from the
+absence rather than from a store. vcod models none of this -- it runs no
+per-frame aim trace, so its clients carry `serverCursorHint` 0 and
+`serverCursorHintString` 255 always, which is what a client standing in the
+open gets from retail too.
 
 ### `legsAnim` needs the animscript state machine
 
