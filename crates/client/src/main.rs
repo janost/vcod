@@ -189,6 +189,15 @@ struct Args {
     /// --probe-cmd-ms 8 to send usercmds at a high-fps client's rate.
     #[arg(long)]
     probe_slope: bool,
+    /// Join a team and walk a long square route across the map's trigger
+    /// belts, pressing use after every death so the walk carries on through
+    /// the minefields it sets off. The client writes no fixture: the evidence
+    /// is the *server's* games_mp.log, logged by the
+    /// client-probes/probe_trigger.gsc gametype, which is what
+    /// crates/server/tests/triggers_ab.rs replays. Give it a long
+    /// --probe-secs; time spent dead does not count against a leg.
+    #[arg(long)]
+    probe_triggers: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -606,6 +615,7 @@ fn main() -> Result<()> {
             args.overwrite_fixture,
             args.probe_pvs,
             args.probe_slope,
+            args.probe_triggers,
             args.probe_cmd_ms,
             script,
             args.probe_team.as_deref(),

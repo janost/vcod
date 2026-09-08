@@ -22,6 +22,8 @@
 #   PROBE_SECS       alias for SECS, so a recipe can name either
 #
 #   tools/run_probe.sh <probe-name> [map] [+set cvar value ...]
+#     probe-name may carry a subdirectory (client-probes/probe_trigger); the
+#     gametype is installed under the basename either way.
 #     map defaults to mp_pavlov; anything after it is passed to the engine
 #     verbatim, the way run_server.sh does. The persistence probes need
 #     `+set sv_mapRotation "gametype <probe> map mp_pavlov map mp_pavlov"`,
@@ -30,6 +32,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PROBE="${1:?usage: tools/run_probe.sh <probe-name> [map]}"
+# A client-probe lives in a subdirectory; the engine takes a bare gametype name.
+NAME="$(basename "$PROBE")"
 MAP="${2:-mp_pavlov}"
 # Everything past the map goes to the engine; ${@:3} is empty when there is none.
 ENGINE_ARGS=("${@:3}")
@@ -57,8 +61,8 @@ mkdir -p "$GT"
 # probes left behind by earlier runs eventually crowd out the one being
 # installed. Only probe_* files are ours to remove.
 rm -f "$GT"/probe_*.gsc "$GT"/probe_*.txt
-cp "$SRC" "$GT/$PROBE.gsc"
-printf '"%s"\r\n' "$(echo "$PROBE" | tr '[:lower:]' '[:upper:]')" > "$GT/$PROBE.txt"
+cp "$SRC" "$GT/$NAME.gsc"
+printf '"%s"\r\n' "$(echo "$NAME" | tr '[:lower:]' '[:upper:]')" > "$GT/$NAME.txt"
 
 LOG="$HOMEPATH/main/games_mp.log"
 CONSOLE="$(mktemp)"
@@ -76,7 +80,7 @@ timeout "${PROBE_SECS:-${SECS:-25}}" "$BIN" \
     +set net_port "${PORT:-28970}" \
     +set sv_maxclients 8 \
     +set sv_pure 0 \
-    +set g_gametype "$PROBE" \
+    +set g_gametype "$NAME" \
     +map "$MAP" \
     "${ENGINE_ARGS[@]}" > "$CONSOLE" 2>&1 || true
 
