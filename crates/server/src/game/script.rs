@@ -105,6 +105,10 @@ pub struct ScriptRuntime {
     pub(crate) host: GameHost,
     entry: String,
     gametype_entry: String,
+    /// Draws the `wait`/`random` gate's random half (`Triggers::fire`), one
+    /// xorshift64* state per map load so a rerun of the same seed reproduces
+    /// the same firing pattern.
+    rng: u64,
 }
 
 impl ScriptRuntime {
@@ -123,6 +127,7 @@ impl ScriptRuntime {
         world: Option<Rc<crate::world::World>>,
         weapons: Rc<crate::weapons::WeaponTable>,
         now_ms: i32,
+        rng_seed: u64,
         carry: Carry,
     ) -> anyhow::Result<ScriptRuntime> {
         Self::load_from(
@@ -135,6 +140,7 @@ impl ScriptRuntime {
             world,
             weapons,
             now_ms,
+            rng_seed,
             carry,
         )
     }
@@ -154,6 +160,7 @@ impl ScriptRuntime {
         world: Option<Rc<crate::world::World>>,
         weapons: Rc<crate::weapons::WeaponTable>,
         now_ms: i32,
+        rng_seed: u64,
         carry: Carry,
     ) -> anyhow::Result<ScriptRuntime> {
         let entry = format!("maps/mp/{map}");
@@ -220,6 +227,7 @@ impl ScriptRuntime {
             host,
             entry,
             gametype_entry,
+            rng: rng_seed,
         };
         rt.start_bootstrap(now_ms)?;
         Ok(rt)
@@ -355,11 +363,20 @@ impl ScriptRuntime {
             .vm
             .with_cx(|cx| crate::game::trigger::touched(host, cx, client));
         let event = self.vm.with_cx(|cx| cx.intern_folded("trigger"));
+        let rng = &mut self.rng;
         for id in hits {
+            if !self.host.triggers.fire(id, now_ms, &mut |n| {
+                if n <= 0 {
+                    0
+                } else {
+                    ((vcod_common::rng::xorshift(rng) >> 33) as i32 & 0x7fff_ffff) % n
+                }
+            }) {
+                continue;
+            }
             self.vm
                 .notify(Target::Entity(id), event, &[Value::Entity(client)]);
         }
-        let _ = now_ms;
     }
 
     /// `Cmd_Kill_f`: the `kill` client command, which is the `suicide` builtin
@@ -1078,6 +1095,9 @@ impl ScriptRuntime {
             host,
             entry: path.to_string(),
             gametype_entry: String::new(),
+            // Fixed, not drawn: a test's `fire` gate must reproduce the same
+            // draw on every run.
+            rng: 0x5eed_5eed_5eed_5eed,
         };
         let main = rt.vm.func_ref(&rt.entry, "main");
         rt.vm.start_thread(&mut rt.host, 0, main, None, vec![]);
@@ -1213,6 +1233,7 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
+            1,
             Carry::default(),
         );
         assert!(rt.is_ok(), "{:?}", rt.err());
@@ -1242,6 +1263,7 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
+            1,
             Carry::default(),
         )
         .expect("load mp_pavlov on dm");
@@ -1285,6 +1307,7 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
+            1,
             Carry::default(),
         );
         let Err(err) = err else {

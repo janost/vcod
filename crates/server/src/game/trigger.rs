@@ -85,6 +85,24 @@ impl Triggers {
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
+
+    /// Whether a touch fires, arming the next window. Retail's `multi_wait`
+    /// arms `nextthink` from the `wait` and `random` keys; a `trigger_once`
+    /// is the same gate with an infinite window.
+    pub fn fire(&mut self, id: EntId, now_ms: i32, rng: &mut impl FnMut(i32) -> i32) -> bool {
+        let Some(t) = self.rows.get_mut(&id.0) else {
+            return false;
+        };
+        if now_ms < t.next_fire_ms {
+            return false;
+        }
+        t.next_fire_ms = match t.kind {
+            TriggerKind::Once => i32::MAX,
+            _ if t.wait_ms == 0 && t.random_ms == 0 => now_ms,
+            _ => now_ms + t.wait_ms + rng(t.random_ms),
+        };
+        true
+    }
 }
 
 pub fn kind_of(classname: &str) -> Option<TriggerKind> {
@@ -259,6 +277,53 @@ mod tests {
             place(&mut host, cx, -30.0);
             assert_eq!(touched(&mut host, cx, player), vec![at_feet]);
         });
+    }
+
+    /// `wait` gates a `trigger_multiple`: the first touch fires, touches
+    /// inside the window do not, and the one after it does. `random` widens
+    /// the window by up to its own value.
+    #[test]
+    fn wait_gates_a_multiple_and_random_widens_it() {
+        let mut ts = Triggers::default();
+        let id = EntId(72);
+        ts.register(id, TriggerKind::Multiple, [-8.0; 3], [8.0; 3], 500, 0);
+        let mut zero = |_: i32| 0;
+        assert!(ts.fire(id, 1000, &mut zero), "first touch fires");
+        assert!(!ts.fire(id, 1400, &mut zero), "inside the 500 ms window");
+        assert!(ts.fire(id, 1500, &mut zero), "the window has passed");
+
+        let mut half = |n: i32| n / 2;
+        ts.register(id, TriggerKind::Multiple, [-8.0; 3], [8.0; 3], 500, 400);
+        assert!(ts.fire(id, 0, &mut half));
+        assert!(!ts.fire(id, 690, &mut half), "500 + 400/2 is 700");
+        assert!(ts.fire(id, 700, &mut half));
+    }
+
+    /// A `trigger_once` fires once and then never again, however long the
+    /// toucher stands in it.
+    #[test]
+    fn a_once_trigger_fires_once() {
+        let mut ts = Triggers::default();
+        let id = EntId(73);
+        ts.register(id, TriggerKind::Once, [-8.0; 3], [8.0; 3], 0, 0);
+        let mut zero = |_: i32| 0;
+        assert!(ts.fire(id, 0, &mut zero));
+        assert!(!ts.fire(id, 1, &mut zero));
+        assert!(!ts.fire(id, 100_000, &mut zero));
+    }
+
+    /// With neither key set, every touch fires: that is what a bombzone does,
+    /// and `bombzone_think` relies on being notified every pass while the
+    /// player stands in it.
+    #[test]
+    fn no_wait_key_fires_every_touch() {
+        let mut ts = Triggers::default();
+        let id = EntId(74);
+        ts.register(id, TriggerKind::Multiple, [-8.0; 3], [8.0; 3], 0, 0);
+        let mut zero = |_: i32| 0;
+        for t in [0, 50, 100, 150] {
+            assert!(ts.fire(id, t, &mut zero), "touch at {t}");
+        }
     }
 
     /// `delete()` takes the row with the entity. `sd.gsc` deletes both
