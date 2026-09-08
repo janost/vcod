@@ -2,8 +2,9 @@
 //! runs against them. Which classnames are triggers, and what each does, is
 //! docs/superpowers/specs/2026-09-08-movers-triggers-sd-design.md section 3.
 
+use crate::game::host::GameHost;
 use std::collections::BTreeMap;
-use vcod_gsc::EntId;
+use vcod_gsc::{Cx, EntId, Host, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TriggerKind {
@@ -98,18 +99,56 @@ pub fn kind_of(classname: &str) -> Option<TriggerKind> {
     })
 }
 
-pub fn abs_bounds(origin: [f32; 3], t: &Trigger) -> ([f32; 3], [f32; 3]) {
+/// A box offset to an origin: the shape `abs_bounds` and the point/player
+/// cases share.
+fn offset_bounds(origin: [f32; 3], mins: [f32; 3], maxs: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     let lo = [
-        origin[0] + t.mins[0],
-        origin[1] + t.mins[1],
-        origin[2] + t.mins[2],
+        origin[0] + mins[0],
+        origin[1] + mins[1],
+        origin[2] + mins[2],
     ];
     let hi = [
-        origin[0] + t.maxs[0],
-        origin[1] + t.maxs[1],
-        origin[2] + t.maxs[2],
+        origin[0] + maxs[0],
+        origin[1] + maxs[1],
+        origin[2] + maxs[2],
     ];
     (lo, hi)
+}
+
+pub fn abs_bounds(origin: [f32; 3], t: &Trigger) -> ([f32; 3], [f32; 3]) {
+    offset_bounds(origin, t.mins, t.maxs)
+}
+
+/// The player's own clip box, which retail hands `trap_EntitiesInBox` around
+/// the client's origin. Half-width 15 and 0..72 standing, from the movement
+/// constants table in docs/research/cod11-mantle.md.
+pub const PLAYER_MINS: [f32; 3] = [-15.0, -15.0, 0.0];
+pub const PLAYER_MAXS: [f32; 3] = [15.0, 15.0, 72.0];
+
+/// An entity's absolute box: a registered trigger's submodel box around its
+/// current origin, a client's player box, and a point box for everything
+/// else, which is what an unset `r.mins`/`r.maxs` gives retail.
+pub fn entity_abs_bounds(host: &mut GameHost, cx: &mut Cx, id: EntId) -> ([f32; 3], [f32; 3]) {
+    let origin_atom = cx.intern_folded("origin");
+    let origin = match host.get_field(cx, id, origin_atom) {
+        Value::Vector(v) => v,
+        _ => [0.0; 3],
+    };
+    if let Some(t) = host.triggers.get(id) {
+        return abs_bounds(origin, t);
+    }
+    let is_client = host.ents.get(id).is_some_and(|e| e.client.is_some());
+    let (mins, maxs) = if is_client {
+        (PLAYER_MINS, PLAYER_MAXS)
+    } else {
+        ([0.0; 3], [0.0; 3])
+    };
+    offset_bounds(origin, mins, maxs)
+}
+
+/// Do two absolute boxes overlap, the test `trap_EntitiesInBox` performs.
+pub fn boxes_overlap(a: ([f32; 3], [f32; 3]), b: ([f32; 3], [f32; 3])) -> bool {
+    (0..3).all(|i| a.0[i] <= b.1[i] && a.1[i] >= b.0[i])
 }
 
 #[cfg(test)]
