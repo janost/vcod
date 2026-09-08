@@ -488,8 +488,38 @@ The heading's label above covers the table; every claim below carries its own.
   the byte means is not measured. Offset 0x171 is not in the entity field
   table of section 5, so it is engine-only state with no script-visible name,
   and the Q3 analogy that would call it `takedamage` is a guess, not evidence.
-  vcod does not model this gate: ours hurts a dead player lying in a
-  `trigger_hurt` and spends the 100 ms window doing it.
+  vcod does not model this gate, and it is the inner of two: a dead client
+  never reaches `hurt_touch` at all, because the touch pass upstream of it
+  drops them (8.2).
+
+### 8.2 `G_TouchTriggers` never reaches a dead client
+
+`G_TouchTriggers` (0x3f88c) opens with two guards, ahead of everything else it
+does, so every per-classname touch function below it -- `hurt_touch`'s
+`+0x171` byte included -- is a second, inner gate.
+
+- The first guard is "no client, no pass". VERIFIED: `mov 0x158(%eax),%eax`
+  at 0x3f89b (gentity+0x158 is `ent->client`, section 2), `test`/`je` at
+  0x3f8a1-0x3f8a3, landing on the function's exit at 0x3faa8.
+- The second is a compare of the dword at `client+0x4` against 1, returning
+  when it is greater. VERIFIED: `cmpl $0x1,0x4(%eax)` at 0x3f8a9 and the `jg`
+  at 0x3f8ad to the same exit.
+- `client+0x4` is `ps.pm_type`. INFERRED, from three readings that agree:
+  `ClientThink_real` computes its `msec` as `ucmd->serverTime - *client`
+  (0x3ff25), which puts `ps.commandTime` at `client+0x0` and so `pm_type` at
+  +0x4 on the Q3 `playerState_t` layout; `SpectatorThink` writes the immediate
+  4 there (0x3fb94) and `ClientEndFrame`'s intermission arm writes 5
+  (0x40f00, through `ent->client` loaded at 0x40eea); and 4 and 5 are the
+  values vcod measured on the wire for those two states.
+- So only `pm_type` 0 and 1 touch anything, and the dead (6), a spectator (4)
+  and the intermission camera (5) touch nothing. INFERRED, from the rule
+  against the measured values. A dead player lying in a trigger therefore
+  notifies it on no frame at all: the corpse waiting out a respawn in a
+  minefield re-fired `_minefields.gsc`'s `minefield_kill` on every pass until
+  vcod took the guard on.
+- An earlier vcod claim that retail notifies the dead and lets script decide,
+  read off `sd.gsc`'s `isalive(other)` tests, is wrong. Those tests cover a
+  player who dies mid-plant, and the module's own guard settles it.
 
 ## 9. Builtins are five tables, VERIFIED
 

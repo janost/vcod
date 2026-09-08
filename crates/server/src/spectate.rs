@@ -62,6 +62,8 @@ const PMF_BACKWARDS_RUN: i32 = 0x40;
 
 /// The dead `pm_type`, read off both retail deaths (combat doc, section 8).
 pub const PM_DEAD: i32 = 6;
+/// The spectator `pm_type`, what `SpectatorThink` writes.
+pub const PM_SPECTATOR: i32 = 4;
 /// The intermission `pm_type` `ClientEndFrame`'s third arm writes
 /// (map-cycle doc, 6.2); the dm map-change capture's post-end traces read it.
 pub const PM_INTERMISSION: i32 = 5;
@@ -421,6 +423,17 @@ impl ClientSim {
     /// map-cycle doc, 6.2).
     pub fn linked(&self) -> bool {
         self.pm_type == PmType::Normal && !self.dead
+    }
+
+    /// `ps.pm_type` as the wire carries it. The touch pass gates on it, so it
+    /// is read outside `to_wire` too.
+    pub fn wire_pm_type(&self) -> i32 {
+        match (self.pm_type, self.dead) {
+            (PmType::Normal, true) => PM_DEAD,
+            (PmType::Normal, false) => 0,
+            (PmType::Intermission, _) => PM_INTERMISSION,
+            (PmType::Spectator, _) => PM_SPECTATOR,
+        }
     }
 
     fn respawn(&mut self, mode: PmType, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
@@ -1038,15 +1051,7 @@ impl ClientSim {
         set("clientNum", client_num);
         set("commandTime", command_time);
         // Mode-dependent.
-        set(
-            "pm_type",
-            match (self.pm_type, self.dead) {
-                (PmType::Normal, true) => PM_DEAD,
-                (PmType::Normal, false) => 0,
-                (PmType::Intermission, _) => PM_INTERMISSION,
-                (PmType::Spectator, _) => 4,
-            },
-        );
+        set("pm_type", self.wire_pm_type());
         // The stance bits ride only on a live player's word; a spectator and
         // the intermission camera carry the base and the teleport bit alone.
         let stance_eflags = match self.ps.stance {
