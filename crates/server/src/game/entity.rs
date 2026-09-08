@@ -30,6 +30,7 @@ use crate::game::fields::{
     engine_slot_count, hud_slot_count, pers_index, route_hud, Route, CLIENT_FIELDS, HUD_WHITE,
 };
 use crate::server::MAX_CLIENTS;
+use crate::spectate::EventRing;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, StructId, Value};
 
 /// One script-visible object. `engine` is indexed by the dense slot
@@ -67,6 +68,13 @@ pub struct GEntity {
     /// (docs/research/cod11-gsc-object-model.md section 14), which is why
     /// `run_thinks` treats 0 as idle too.
     pub nextthink: i32,
+    /// `es.events`, what `G_PlaySoundAlias` appends to on an entity that is
+    /// not a client (docs/research/cod11-sound-system.md section 9). It is
+    /// state, not a per-frame queue: `crate::game::wire` writes it into
+    /// every one of the entity's snapshots and the client fires each slot
+    /// once, off the sequence. Freeing the slot drops it, the way retail's
+    /// `G_FreeEntity` clears the entity state.
+    pub events: EventRing,
 }
 
 /// `hudelem_t`'s owner field (`+0x70`) for an element every client is drawn:
@@ -204,6 +212,7 @@ impl ObjectTable {
             hud: None,
             think: None,
             nextthink: 0,
+            events: EventRing::default(),
         });
         Ok(id)
     }
@@ -289,6 +298,7 @@ impl ObjectTable {
             hud: None,
             think: None,
             nextthink: 0,
+            events: EventRing::default(),
         });
         Ok(EntId(slot as u32))
     }
@@ -344,6 +354,7 @@ impl ObjectTable {
             hud: Some(HudState::default()),
             think: None,
             nextthink: 0,
+            events: EventRing::default(),
         });
         Ok(EntId(FIRST_HUD_ELEM + i as u32))
     }

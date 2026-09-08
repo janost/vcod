@@ -135,8 +135,8 @@ impl Default for Vitals {
     }
 }
 
-/// One thing `finishPlayerDamage` did to a client that its sim has to act
-/// on, queued for the same reason `WeaponOp` is.
+/// One thing script did to a client that its sim has to act on, queued for
+/// the same reason `WeaponOp` is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SimOp {
     Damaged {
@@ -151,6 +151,10 @@ pub enum SimOp {
         attacker_origin: Option<[f32; 3]>,
         fatal: bool,
     },
+    /// One event for the client's own playerstate ring, which the sim owns:
+    /// `G_PlaySoundAlias`'s `ent->client` branch
+    /// (docs/research/cod11-sound-system.md, section 9).
+    Event { event: i32, parm: i32 },
 }
 
 /// `level+0x29f0`'s three readings (docs/research/cod11-map-cycle.md

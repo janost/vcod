@@ -970,7 +970,10 @@ mod tests {
                 fatal,
                 ..
             },
-        ) = ops[0];
+        ) = ops[0]
+        else {
+            panic!("a killing hit queues a Damaged op");
+        };
         assert_eq!((slot, damage, knockback, fatal), (0, 0, false, true));
     }
 }
