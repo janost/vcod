@@ -1172,6 +1172,10 @@ impl ScriptRuntime {
 mod tests {
     use super::*;
 
+    /// Any nonzero value works (`xorshift`'s only constraint); these tests
+    /// never touch a trigger, so the draw itself is never observed.
+    const TEST_RNG_SEED: u64 = 1;
+
     /// The packet pass runs the threads the netcode's events woke and
     /// nothing else. It carries no deadline wake of its own, so a thread
     /// looping on `wait 0` advances exactly one iteration per server frame;
@@ -1233,7 +1237,7 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
-            1,
+            TEST_RNG_SEED,
             Carry::default(),
         );
         assert!(rt.is_ok(), "{:?}", rt.err());
@@ -1263,7 +1267,7 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
-            1,
+            TEST_RNG_SEED,
             Carry::default(),
         )
         .expect("load mp_pavlov on dm");
@@ -1307,7 +1311,7 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
-            1,
+            TEST_RNG_SEED,
             Carry::default(),
         );
         let Err(err) = err else {
