@@ -288,6 +288,12 @@ fn link_submodel(host: &mut GameHost, cx: &mut Cx, id: EntId, linked: bool) {
     else {
         return;
     };
+    // Model 0 is the world clip itself, not a submodel; unlinking it would
+    // take every world brush out of every trace, and a stock `notsolid()` on
+    // a `"*0"` entity would do exactly that.
+    if n == 0 {
+        return;
+    }
     if let Some(world) = &host.world {
         world.collision.set_model_linked(n, linked);
     }
