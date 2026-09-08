@@ -100,6 +100,10 @@ pub const TEAM_AXIS: i32 = 1;
 pub const TEAM_ALLIES: i32 = 2;
 pub const TEAM_SPECTATOR: i32 = 3;
 
+/// The highest `ps.pm_type` `G_TouchTriggers` runs its pass for
+/// (docs/research/cod11-gsc-object-model.md 8.2).
+const TOUCH_MAX_PM_TYPE: i32 = 1;
+
 pub struct ScriptRuntime {
     vm: Vm,
     pub(crate) host: GameHost,
@@ -394,12 +398,10 @@ impl ScriptRuntime {
     /// parked in `waittill("trigger", other)` runnable; they run in this
     /// tick's script frame.
     ///
-    /// A spectator and an intermission client touch nothing: both of
-    /// `ClientThink_real`'s arms for them return before the pass
-    /// (docs/research/cod11-map-cycle.md 6.2). A dead player still does, and
-    /// that is not an oversight -- `sd.gsc`'s `bombzone_think` tests
-    /// `isalive(other)` itself, which would be dead code if the engine
-    /// filtered the dead out.
+    /// Only a client at `ps.pm_type <= 1` touches anything: the function's
+    /// own second guard, which takes the dead, a spectator and the
+    /// intermission camera out before the pass runs
+    /// (docs/research/cod11-gsc-object-model.md 8.2).
     ///
     /// `buttons` are the cmd's own rather than the host's mirrored copy, which
     /// is only written after the move pass this runs inside.
@@ -407,10 +409,7 @@ impl ScriptRuntime {
         let Some(client) = self.client_entity(slot) else {
             return;
         };
-        if matches!(
-            self.client_field(slot, "sessionstate").as_deref(),
-            Some("spectator" | "intermission")
-        ) {
+        if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
             return;
         }
         let host = &mut self.host;
@@ -528,6 +527,14 @@ impl ScriptRuntime {
     pub fn set_client_buttons(&mut self, slot: usize, buttons: u8) {
         if let Some(b) = self.host.client_buttons.get_mut(slot) {
             *b = buttons;
+        }
+    }
+
+    /// A client's wire `ps.pm_type` as the tick's moves left it, for the
+    /// touch pass's gate.
+    pub fn set_client_pm_type(&mut self, slot: usize, pm_type: i32) {
+        if let Some(t) = self.host.client_pm_type.get_mut(slot) {
+            *t = pm_type;
         }
     }
 
@@ -1832,13 +1839,14 @@ mod tests {
         assert_eq!(rt.level_field("hits"), Value::Int(1), "no further notify");
     }
 
-    /// A spectator and an intermission camera touch nothing -- retail's
-    /// arms for both return before the pass -- and a dead player standing in
-    /// one still does: `sd.gsc`'s `bombzone_think` does its own
-    /// `isalive(other)` test, so the engine cannot be filtering the dead out
-    /// or that line would never matter.
+    /// `G_TouchTriggers` runs its pass only for `ps.pm_type <= 1`
+    /// (docs/research/cod11-gsc-object-model.md 8.2), so of the four values a
+    /// client can carry on our wire only a living player's 0 gets through:
+    /// spectator 4, intermission 5 and dead 6 all fail the compare. The dead
+    /// case is the minefield bug -- a corpse lying in the trigger re-armed
+    /// `minefield_kill` on every pass.
     #[test]
-    fn only_a_simulated_client_touches_a_trigger() {
+    fn only_a_living_client_touches_a_trigger() {
         let mut rt = ScriptRuntime::for_test("main() { level.hits = 0; }");
         rt.install_for_test(
             "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
@@ -1857,12 +1865,17 @@ mod tests {
         rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
         rt.run_frame(0);
 
+        // A spectator, at `pm_type` 4. The old gate excluded it off
+        // `sessionstate`; the measured rule excludes it off the compare, so
+        // the behaviour is unchanged.
         rt.set_client_state_for_test(0, "spectator");
+        rt.set_client_pm_type(0, crate::spectate::PM_SPECTATOR);
         rt.touch_triggers_with_buttons(0, 50, 0);
         rt.run_frame(50);
         assert_eq!(rt.level_field("hits"), Value::Int(0), "a spectator touched");
 
         rt.set_client_state_for_test(0, "intermission");
+        rt.set_client_pm_type(0, crate::spectate::PM_INTERMISSION);
         rt.touch_triggers_with_buttons(0, 75, 0);
         rt.run_frame(75);
         assert_eq!(
@@ -1872,9 +1885,21 @@ mod tests {
         );
 
         rt.set_client_state_for_test(0, "dead");
+        rt.set_client_pm_type(0, crate::spectate::PM_DEAD);
         rt.touch_triggers_with_buttons(0, 100, 0);
         rt.run_frame(100);
-        assert_eq!(rt.level_field("hits"), Value::Int(1), "a corpse did not");
+        assert_eq!(rt.level_field("hits"), Value::Int(0), "a corpse touched");
+
+        // And the living player the gate is there to let through.
+        rt.set_client_state_for_test(0, "playing");
+        rt.set_client_pm_type(0, 0);
+        rt.touch_triggers_with_buttons(0, 125, 0);
+        rt.run_frame(125);
+        assert_eq!(
+            rt.level_field("hits"),
+            Value::Int(1),
+            "a live player did not"
+        );
     }
 
     /// A `trigger_hurt` damages the player standing in it through the stock

@@ -205,6 +205,10 @@ pub struct GameHost {
     /// Each client's last usercmd buttons, mirrored in by `Server` before
     /// the frame, for `useButtonPressed`.
     pub client_buttons: Vec<u8>,
+    /// Each client's wire `ps.pm_type`, mirrored in by `Server::replay_moves`
+    /// with the origin the touch pass tests. `G_TouchTriggers` gates on it
+    /// (`docs/research/cod11-gsc-object-model.md`, 8.2).
+    pub client_pm_type: Vec<i32>,
     /// Each client's `ps.grenadeTimeLeft`, mirrored in by
     /// `Server::replay_moves` with the entity states, which is the last read
     /// of it before a kill this tick: what a death drops
@@ -348,6 +352,7 @@ impl GameHost {
             client_weapon_ops: Vec::new(),
             client_vitals: vec![Vitals::default(); MAX_CLIENTS],
             client_buttons: vec![0; MAX_CLIENTS],
+            client_pm_type: vec![0; MAX_CLIENTS],
             client_grenade_ms: vec![0; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
