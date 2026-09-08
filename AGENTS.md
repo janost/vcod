@@ -298,10 +298,14 @@ engineering setup works.
   predicting on our snapshots sees as a correction, so it is the number a
   view twitch report turns into. Both committed fixtures are retail
   evidence and a run against ours overwrites them.
-  `--probe-triggers` is the touch pass's walk: it joins, walks eight compass
-  headings out of the spawn until each runs out of map, and presses use after
-  every death so a minefield does not end the run. The client writes no
-  fixture at all -- the evidence is the *server's* `games_mp.log`, logged by
+  `--probe-triggers` is the touch pass's walk: it joins, reads the map's
+  trigger brushes out of the BSP entity and model lumps, and walks at them one
+  at a time, nearest unvisited first, steering round buildings with a
+  look-ahead box trace against the map's own collision. It presses use after
+  every death so a minefield does not end the run, and kills itself when it
+  wedges somewhere the steer cannot get it out of. A blind route does not
+  work: a wander on mp_pavlov crossed one trigger in 190 s. The client writes
+  no fixture at all -- the evidence is the *server's* `games_mp.log`, logged by
   `crates/gsc/tests/fixtures/semantics/client-probes/probe_trigger.gsc`, which
   runs as the gametype and threads a `waittill("trigger", other)` onto every
   trigger entity the map spawned. `tools/run_probe.sh client-probes/probe_trigger
@@ -310,7 +314,11 @@ engineering setup works.
   `crates/server/tests/triggers_ab.rs` replays against ours by running the
   same probe script as our gametype and standing a client at every origin
   retail recorded a fire from. The walk is not the measurement and does not
-  have to reproduce: only the origins and the trigger entity numbers do.
+  have to reproduce: only the origins and the trigger entity numbers do. What
+  the committed mp_pavlov capture does not cover is the hurt half: the map's
+  one `trigger_hurt` is the kill volume under the floor, a walking player
+  never reaches it, and every fire line in that fixture is a
+  `trigger_multiple`.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
