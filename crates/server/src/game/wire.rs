@@ -223,6 +223,13 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
         setf(&mut e, &format!("apos.trBase[{axis}]"), *v);
     }
 
+    // The entity's own event ring, which `playSound` writes on a receiver
+    // that is not a client (sound doc, section 9).
+    if let Some(ring) = host.ents.get(id).map(|e| e.events) {
+        let mut set = |name: &str, v: i32| seti(&mut e, name, v);
+        ring.write(&mut set);
+    }
+
     match kind {
         Kind::Item(weapon) => {
             seti(&mut e, "eType", ET_ITEM);
