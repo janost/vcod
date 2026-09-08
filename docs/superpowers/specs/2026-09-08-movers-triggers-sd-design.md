@@ -159,6 +159,17 @@ the spawn function). We link those brushes at load, so `mp_depot`,
 Wiring the existing flag to the clip, plus the spawn-time non-solid state,
 closes it.
 
+Correction, from implementing it: the sentence above is wrong about the
+spawn function and there is no spawn-time state to add. VERIFIED:
+`SP_script_brushmodel` (game.mp 0x60fb8) is `trap_SetBrushModel`,
+`InitScriptMover`, a store of 1 to `r.contents` and `trap_LinkEntity`, with
+no other instruction. INFERRED, from that being the whole body: it reads no
+`script_exploder` key and gives an exploder brush model no state of its
+own. `maps/MP/_load.gsc` is what calls `notsolid()` on the four that have
+one, so wiring the builtin to the clip is the whole fix. The evidence and
+the census are in `docs/research/cod11-mantle.md`, "A submodel's brushes
+are its entity's".
+
 ## 4. Stage 2: the mover integrator, the wire and the moving clip
 
 ### 4.1 State

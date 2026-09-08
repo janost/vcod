@@ -670,14 +670,21 @@ the whole body: the spawn function reads no `script_exploder` key and gives
 an exploder brush model no state of its own, so every `script_brushmodel`
 spawns solid and linked whatever keys it carries.
 
-VERIFIED: `maps/mp/_load.gsc::main` is what takes an exploder's brushes
-out. It walks every `script_brushmodel` and `script_model`, and for one
-with `script_exploder` defined and `targetname` `exploder` or
-`exploderchunk` it calls `hide()` and then, when the classname is not
-`script_model`, `notsolid()`. VERIFIED from the entity lumps of every
-`maps/MP/*.bsp` in the paks: four `script_brushmodel`s reach that arm --
-mp_depot `*1`, mp_powcamp `*3` and `*9`, mp_rocket `*3` -- out of 38
-`script_brushmodel`s in all.
+VERIFIED, from the asset text: `maps/mp/_load.gsc::main` loops over the
+`script_brushmodel` and `script_model` arrays, and its body holds an arm
+whose tests are `isdefined(.script_exploder)` and `.targetname` against the
+literals `exploder` and `exploderchunk`, and whose statements are `hide()`
+and a `notsolid()` under a further test of `.classname != "script_model"`.
+INFERRED, from those tests and statements: that arm is what takes an
+exploder brush model's brushes out of the clip at map load, and the
+classname test is why a `script_model` keeps its solidity.
+
+VERIFIED, from the entity lump of every `maps/MP/*.bsp` in the mounted paks
+(16 BSPs, a superset of the 13 shipped with 1.1): four `script_brushmodel`s
+carry both a `script_exploder` key and a `targetname` of `exploder` --
+mp_depot `*1`, mp_powcamp `*3` and `*9`, mp_rocket `*3` -- and none carries
+`exploderchunk`. INFERRED: those four are the entities that arm unlinks,
+and every other `script_brushmodel` keeps its brushes.
 
 vcod: `BrushPlanes` carries its model, `CollisionWorld::set_model_linked`
 drops a model's brushes out of every trace, the `delete`, `solid` and
