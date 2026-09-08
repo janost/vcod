@@ -15,9 +15,11 @@
 #
 # PROBE watch <entity> <classname> is the census: every trigger entity that
 # survived the gametype's _gameobjects pass, in the order getEntArray returned
-# them. dm claims no gameobjects, so mp_pavlov's two bombzone trigger_multiples,
-# its trigger_lookat and its trigger_use are deleted and are not here; the 26
-# minefield trigger_multiples and the map's one trigger_hurt are.
+# them. dm claims no gameobjects, so the five entities carrying a
+# script_gameobjectname are deleted and are not here: three trigger_multiples
+# (bombzone_B *2, bombzone_A *3 and auto2 *34, the last a "re" retrieval zone),
+# the trigger_lookat and the trigger_use. What is left is the 26 minefield
+# trigger_multiples and the map's one trigger_hurt.
 #
 # PROBE fire <entity> <classname> <toucher entity> <toucher origin> is one
 # notify. None of the minefield triggers carries a wait or a random key, so
@@ -33,6 +35,13 @@
 # town's solid geometry and cannot be walked into; the census covers all 27
 # entities either way, and it is the census plus the origins here that the gate
 # replays, never the walk.
+#
+# What this does NOT evidence: the trigger_hurt at entity 72 fired zero times.
+# Its brush is the kill volume under the map's floor and a walking player never
+# reaches it, so every line here comes from a trigger_multiple. Nothing in this
+# file says anything about the hurt cadence, the damage a hurt deals or the
+# spawnflag that slows it; entity 72 is evidenced as existing and as surviving
+# the gametype's deletion pass, and no further.
 PROBE watch 83 trigger_multiple
 PROBE watch 84 trigger_multiple
 PROBE watch 85 trigger_multiple

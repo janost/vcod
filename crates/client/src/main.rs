@@ -189,13 +189,15 @@ struct Args {
     /// --probe-cmd-ms 8 to send usercmds at a high-fps client's rate.
     #[arg(long)]
     probe_slope: bool,
-    /// Join a team and walk a long square route across the map's trigger
-    /// belts, pressing use after every death so the walk carries on through
-    /// the minefields it sets off. The client writes no fixture: the evidence
-    /// is the *server's* games_mp.log, logged by the
-    /// client-probes/probe_trigger.gsc gametype, which is what
-    /// crates/server/tests/triggers_ab.rs replays. Give it a long
-    /// --probe-secs; time spent dead does not count against a leg.
+    /// Join a team and walk at the map's trigger brushes, read out of the BSP,
+    /// nearest unvisited first, steering round geometry with a look-ahead
+    /// trace against the map's own collision. It presses use after every death
+    /// so a minefield does not end the run, and kills itself when it wedges.
+    /// The client writes no fixture: the evidence is the *server's*
+    /// games_mp.log, logged by the client-probes/probe_trigger.gsc gametype,
+    /// which is what crates/server/tests/triggers_ab.rs replays. Give it a
+    /// long --probe-secs; most of a stock map's belt is walled off and each
+    /// unreachable brush costs a leg.
     #[arg(long)]
     probe_triggers: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every
