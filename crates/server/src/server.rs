@@ -2737,6 +2737,7 @@ impl Server {
                         sim.max_health = v.max_health;
                         sim.dead = v.dead;
                     }
+                    sim.cursor_hint = rt.cursor_hint(slot);
                     sim.end_frame(self.sv_time_ms);
                 }
             }
