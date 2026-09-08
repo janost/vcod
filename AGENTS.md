@@ -674,6 +674,11 @@ never pasted decompiler output or disassembly listings.
   the gametype did not list, which takes carentan's two bombzone
   `script_brushmodel`s out of every gametype but `sd`; the `delete` builtin
   unlinks the model and the slope gate applies the script's rule itself.
+  `solid()`/`notSolid()` are the other half of the same thing: retail's
+  `SP_script_brushmodel` gives an exploder brush model no spawn state of its
+  own, and `_load.gsc` is what `notsolid()`s the four on mp_depot, mp_powcamp
+  and mp_rocket, so a builtin that writes the flag without touching the clip
+  leaves three stock maps carrying collision retail does not.
 - A stock frag bounces off a live player rather than detonating on it.
   `fraggrenade_mp` spells `damage` 0, and retail's direct-hit `MOD_GRENADE`
   arm is gated on that field, so the contact applies the soft damping and the

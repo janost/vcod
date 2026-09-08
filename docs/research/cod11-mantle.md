@@ -647,7 +647,7 @@ walks through the `clip_metal` brushes 4286-4294 of model 6, a
 `script_brushmodel` with `script_gameobjectname bombzone` around the flak
 gun, which vcod's world held as solid.
 
-VERIFIED: `SP_script_brushmodel` (game.mp 0x70fb8) sets the brush model
+VERIFIED: `SP_script_brushmodel` (game.mp 0x60fb8) sets the brush model
 and links the entity, and nothing else puts a submodel's brushes into the
 clip; the world clip is model 0 (`CM_LoadMap` loads the submodels as
 inline models the entity code links). VERIFIED: `dm.gsc:78` and `tdm.gsc`
@@ -661,12 +661,31 @@ world brush 4254 the same reading put retail inside is a sloped roof clip
 whose bounding box holds the point and whose planes do not (side 9 puts
 (-597, 1832, 144) 26 units outside); it was a bounding-box reading.
 
+`delete()` is not the only script that takes a submodel out. VERIFIED:
+`SP_script_brushmodel` is four calls and one store -- `trap_SetBrushModel`,
+`InitScriptMover`, `self+0x118 = 1`, `trap_LinkEntity` -- with no other
+instruction in the function, and `+0x118` is `r.contents`
+(`docs/research/cod11-combat.md`, section 13). INFERRED, from that being
+the whole body: the spawn function reads no `script_exploder` key and gives
+an exploder brush model no state of its own, so every `script_brushmodel`
+spawns solid and linked whatever keys it carries.
+
+VERIFIED: `maps/mp/_load.gsc::main` is what takes an exploder's brushes
+out. It walks every `script_brushmodel` and `script_model`, and for one
+with `script_exploder` defined and `targetname` `exploder` or
+`exploderchunk` it calls `hide()` and then, when the classname is not
+`script_model`, `notsolid()`. VERIFIED from the entity lumps of every
+`maps/MP/*.bsp` in the paks: four `script_brushmodel`s reach that arm --
+mp_depot `*1`, mp_powcamp `*3` and `*9`, mp_rocket `*3` -- out of 38
+`script_brushmodel`s in all.
+
 vcod: `BrushPlanes` carries its model, `CollisionWorld::set_model_linked`
-drops a model's brushes out of every trace, the `delete` builtin calls it
-for an entity whose `model` is a `*N`, and `playerstate_slope_ab.rs`
-applies the `_gameobjects` rule itself since the replay runs no script.
-The stock MP maps place four `script_brushmodel`s in all: carentan's two
-bombzones and chateau's two gates.
+drops a model's brushes out of every trace, the `delete`, `solid` and
+`notSolid` builtins call it for an entity whose `model` is a `*N`, and
+`playerstate_slope_ab.rs` applies the `_gameobjects` rule itself since the
+replay runs no script. mp_depot's `*1` is both an exploder and a
+`bombzone`, so under every gametype but `sd` it is unlinked twice over: by
+`_load.gsc`'s `notsolid()` and by `_gameobjects::main`'s `delete()`.
 
 ### The step event and the velocity scale
 
