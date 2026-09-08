@@ -1145,7 +1145,7 @@ impl ScriptRuntime {
         // a script reading `getEntArray` in the same frame sees the freed
         // entity already gone. Whether retail really orders it this way is
         // what `probe_delete`'s post-wait count measures.
-        self.host.ents.run_thinks(now_ms);
+        self.host.run_entity_thinks(now_ms);
         // The body queue is not in the object table, so its own think -- the
         // 250 ms `eFlags` 0x800 clear -- runs beside the table's.
         self.host
@@ -1770,6 +1770,61 @@ mod tests {
         rt.touch_triggers_with_buttons(0, 100, 0);
         rt.run_frame(100);
         assert_eq!(rt.level_field("hits"), Value::Int(1));
+    }
+
+    /// A script `delete()` takes the trigger row with the entity, and the
+    /// entity number it hands back carries no box into its next tenant.
+    /// `sd.gsc` deletes both bombzones at the plant, so a row that outlived
+    /// its entity would keep firing at the old brush -- and, once the number
+    /// is reused, fire on a spawn that was never a trigger.
+    #[test]
+    fn a_deleted_trigger_takes_its_row_and_leaves_the_reused_number_clean() {
+        let mut rt = ScriptRuntime::for_test("main() { level.hits = 0; }");
+        rt.install_for_test(
+            "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
+             level.hits = level.hits + 1; } }\n\
+             remove() { self delete(); }",
+        );
+        let zone = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut().register(
+            zone,
+            crate::game::trigger::TriggerKind::Multiple,
+            [-64.0, -64.0, 0.0],
+            [64.0, 64.0, 64.0],
+            0,
+            0,
+        );
+        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
+        rt.set_client_state_for_test(0, "playing");
+        rt.touch_triggers_with_buttons(0, 0, 0);
+        rt.run_frame(0);
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "the row fires first");
+
+        // `delete()` defers the free by `DELETE_DEFER_MS`; 200 is past it.
+        rt.start_thread_for_test(zone, "remove", 0);
+        rt.run_frame(0);
+        rt.run_frame(200);
+
+        assert!(rt.host.ents.get(zone).is_none(), "the entity is gone");
+        assert!(rt.host.triggers.get(zone).is_none(), "the row is gone");
+
+        // The free list hands the number straight back out, and its new
+        // tenant is a plain entity: a point box at its own origin, not the
+        // dead trigger's brush.
+        let reused = rt.spawn_map_entity_for_test([300.0, 0.0, 0.0]);
+        assert_eq!(reused, zone, "the number is reused");
+        let host = &mut rt.host;
+        let bounds = rt
+            .vm
+            .with_cx(|cx| crate::game::trigger::entity_abs_bounds(host, cx, reused));
+        assert_eq!(bounds, ([300.0, 0.0, 0.0], [300.0, 0.0, 0.0]));
+
+        // And standing back in the old box notifies nobody.
+        rt.set_client_origin(0, [10.0, 0.0, 0.0]);
+        rt.touch_triggers_with_buttons(0, 250, 0);
+        rt.run_frame(250);
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "no further notify");
     }
 
     /// A spectator flying through a trigger touches nothing, and a dead

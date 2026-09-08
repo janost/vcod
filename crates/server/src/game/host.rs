@@ -433,6 +433,16 @@ impl GameHost {
         self.ents.free(id);
     }
 
+    /// `G_RunFrame`'s think pass, with every due `ThinkFn::Free` routed
+    /// through `free_entity`. The `delete` builtin and a dropped item both
+    /// schedule that think, so this is the path a deleted trigger's row is
+    /// dropped on.
+    pub fn run_entity_thinks(&mut self, now_ms: i32) {
+        for id in self.ents.run_thinks(now_ms) {
+            self.free_entity(id);
+        }
+    }
+
     /// The three HUD fields whose retail setter is not a plain store, and
     /// `None` for every other name so the caller falls through to the
     /// generic path. `color` (0x4b03c) and `alpha` (0x4c1fc) write byte
