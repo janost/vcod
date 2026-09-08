@@ -379,7 +379,14 @@ impl ObjectTable {
     /// `G_RunFrame`'s think pass: fire every entity whose `nextthink` has
     /// come due. Collect first, then act: a think that frees its entity
     /// would otherwise invalidate the walk.
-    pub fn run_thinks(&mut self, now_ms: i32) {
+    ///
+    /// Returns the ids a `ThinkFn::Free` came due for rather than freeing
+    /// them, so the caller can route each through `GameHost::free_entity`,
+    /// which is the only place the host's own per-entity tables (the trigger
+    /// row) are dropped. `Missiles::run` has the same shape for the same
+    /// reason.
+    #[must_use]
+    pub fn run_thinks(&mut self, now_ms: i32) -> Vec<EntId> {
         let due: Vec<(EntId, ThinkFn)> = self
             .ents
             .iter()
@@ -391,15 +398,17 @@ impl ObjectTable {
                 (e.nextthink != 0 && e.nextthink <= now_ms).then_some((EntId(i as u32), think))
             })
             .collect();
+        let mut freed = Vec::new();
         for (id, think) in due {
             if let Some(e) = self.get_mut(id) {
                 e.think = None;
                 e.nextthink = 0;
             }
             match think {
-                ThinkFn::Free => self.free(id),
+                ThinkFn::Free => freed.push(id),
             }
         }
+        freed
     }
 
     pub fn get(&self, id: EntId) -> Option<&GEntity> {
@@ -536,11 +545,12 @@ mod tests {
         let id = vm.with_cx(|cx| ents.spawn(cx).unwrap());
         ents.schedule(id, ThinkFn::Free, 100);
 
-        ents.run_thinks(50);
+        assert!(ents.run_thinks(50).is_empty(), "due before its time");
         assert!(ents.get(id).is_some(), "freed before the think was due");
         assert_eq!(ents.iter_inuse().count(), 1);
 
-        ents.run_thinks(100);
+        assert_eq!(ents.run_thinks(100), vec![id]);
+        ents.free(id);
         assert!(ents.get(id).is_none(), "still live past the think");
         assert_eq!(ents.iter_inuse().count(), 0);
 
@@ -558,10 +568,11 @@ mod tests {
         let mut ents = ObjectTable::new();
         let id = vm.with_cx(|cx| ents.spawn(cx).unwrap());
         ents.schedule(id, ThinkFn::Free, 100);
-        ents.run_thinks(100);
+        assert_eq!(ents.run_thinks(100), vec![id]);
+        ents.free(id);
         let reused = vm.with_cx(|cx| ents.spawn(cx).unwrap());
         assert_eq!(reused, id);
-        ents.run_thinks(200);
+        assert!(ents.run_thinks(200).is_empty());
         assert!(
             ents.get(reused).is_some(),
             "the think fired twice and freed the reuse"

@@ -102,7 +102,7 @@ pub fn spawn_entities_from_string(
             }
         }
         if SPAWN_FREES.contains(&classname.as_str()) {
-            host.ents.free(id);
+            host.free_entity(id);
         }
     }
     Ok(())

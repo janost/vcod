@@ -857,7 +857,7 @@ mod tests {
                 1,
                 "delete() must not free immediately"
             );
-            host.ents.run_thinks(host.level_time_ms + DELETE_DEFER_MS);
+            host.run_entity_thinks(host.level_time_ms + DELETE_DEFER_MS);
             assert_eq!(host.ents.iter_inuse().count(), 0);
         });
     }

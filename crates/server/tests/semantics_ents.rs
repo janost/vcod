@@ -217,7 +217,7 @@ fn probe_delete_matches_retail() {
     for frame in 1..=12 {
         let now_ms = frame * 50;
         host.level_time_ms = now_ms;
-        host.ents.run_thinks(now_ms);
+        host.run_entity_thinks(now_ms);
         if let Some(e) = vm.run_frame(&mut host, now_ms).into_iter().next() {
             panic!("probe_delete Callback_StartGameType errored: {e:?}");
         }
