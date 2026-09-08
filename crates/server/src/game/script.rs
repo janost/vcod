@@ -399,14 +399,8 @@ impl ScriptRuntime {
     /// oversight -- `sd.gsc`'s `bombzone_think` tests `isalive(other)` itself,
     /// which would be dead code if the engine filtered the dead out.
     ///
-    /// The buttons are the usercmd's own, since the host's mirrored copy is
-    /// only written after the move pass this runs inside.
-    pub fn touch_triggers(&mut self, slot: usize, now_ms: i32) {
-        let buttons = self.host.client_buttons.get(slot).copied().unwrap_or(0);
-        self.touch_triggers_with_buttons(slot, now_ms, buttons);
-    }
-
-    /// `touch_triggers` for a caller that has the cmd's buttons to hand.
+    /// `buttons` are the cmd's own rather than the host's mirrored copy, which
+    /// is only written after the move pass this runs inside.
     pub fn touch_triggers_with_buttons(&mut self, slot: usize, now_ms: i32, buttons: u8) {
         let Some(client) = self.client_entity(slot) else {
             return;
@@ -1731,14 +1725,14 @@ mod tests {
         assert_eq!(rt.client_entity(0), Some(player));
         rt.set_client_state_for_test(0, "playing");
 
-        rt.touch_triggers(0, 50);
+        rt.touch_triggers_with_buttons(0, 50, 0);
         rt.run_frame(50);
         assert_eq!(rt.level_field("hits"), Value::Int(1), "one notify");
         assert_eq!(rt.level_field("who"), Value::Entity(player));
 
         // Out of the box: no second notify.
         rt.set_client_origin(0, [500.0, 0.0, 0.0]);
-        rt.touch_triggers(0, 100);
+        rt.touch_triggers_with_buttons(0, 100, 0);
         rt.run_frame(100);
         assert_eq!(rt.level_field("hits"), Value::Int(1));
     }
@@ -1768,12 +1762,12 @@ mod tests {
         rt.run_frame(0);
 
         rt.set_client_state_for_test(0, "spectator");
-        rt.touch_triggers(0, 50);
+        rt.touch_triggers_with_buttons(0, 50, 0);
         rt.run_frame(50);
         assert_eq!(rt.level_field("hits"), Value::Int(0), "a spectator touched");
 
         rt.set_client_state_for_test(0, "dead");
-        rt.touch_triggers(0, 100);
+        rt.touch_triggers_with_buttons(0, 100, 0);
         rt.run_frame(100);
         assert_eq!(rt.level_field("hits"), Value::Int(1), "a corpse did not");
     }
@@ -1799,7 +1793,7 @@ mod tests {
         rt.triggers_mut()
             .register_hurt(hurt, [-64.0, -64.0, 0.0], [64.0, 64.0, 64.0], 5, 0);
 
-        rt.touch_triggers(0, 100);
+        rt.touch_triggers_with_buttons(0, 100, 0);
         rt.run_frame(100);
         let expected_mod = rt
             .vm
@@ -1808,11 +1802,11 @@ mod tests {
         assert_eq!(rt.level_field("mod"), Value::String(expected_mod));
         assert_eq!(rt.client_vitals(0).health, 95);
 
-        rt.touch_triggers(0, 150);
+        rt.touch_triggers_with_buttons(0, 150, 0);
         rt.run_frame(150);
         assert_eq!(rt.client_vitals(0).health, 95, "inside the 100 ms window");
 
-        rt.touch_triggers(0, 200);
+        rt.touch_triggers_with_buttons(0, 200, 0);
         rt.run_frame(200);
         assert_eq!(rt.client_vitals(0).health, 90);
     }
