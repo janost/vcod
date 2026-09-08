@@ -210,6 +210,7 @@ impl ScriptRuntime {
             .ok_or_else(|| anyhow::anyhow!("reading {bsp_path}"))?;
         let bsp = vcod_common::bsp::parse(&bsp_bytes)?;
         host.model_bounds = bsp.models.iter().map(|m| (m.mins, m.maxs)).collect();
+        host.model_brushes = crate::game::trigger::model_brush_hulls(&bsp);
         vm.with_cx(|cx| spawn_entities_from_string(&mut host, cx, &bsp.entities))
             .map_err(|e| anyhow::anyhow!("spawning {map}'s entities: {e:?}"))?;
 
@@ -1760,8 +1761,7 @@ mod tests {
         rt.triggers_mut().register(
             zone,
             crate::game::trigger::TriggerKind::Multiple,
-            [-64.0, -64.0, 0.0],
-            [64.0, 64.0, 64.0],
+            crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, 0.0], [64.0, 64.0, 64.0]),
             0,
             0,
         );
@@ -1801,8 +1801,7 @@ mod tests {
         rt.triggers_mut().register(
             zone,
             crate::game::trigger::TriggerKind::Multiple,
-            [-64.0, -64.0, 0.0],
-            [64.0, 64.0, 64.0],
+            crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, 0.0], [64.0, 64.0, 64.0]),
             0,
             0,
         );
@@ -1856,8 +1855,7 @@ mod tests {
         rt.triggers_mut().register(
             zone,
             crate::game::trigger::TriggerKind::Multiple,
-            [-64.0, -64.0, 0.0],
-            [64.0, 64.0, 64.0],
+            crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, 0.0], [64.0, 64.0, 64.0]),
             0,
             0,
         );
@@ -1920,8 +1918,12 @@ mod tests {
         rt.set_client_health_for_test(0, 100);
 
         let hurt = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
-        rt.triggers_mut()
-            .register_hurt(hurt, [-64.0, -64.0, 0.0], [64.0, 64.0, 64.0], 5, 0);
+        rt.triggers_mut().register_hurt(
+            hurt,
+            crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, 0.0], [64.0, 64.0, 64.0]),
+            5,
+            0,
+        );
 
         rt.touch_triggers_with_buttons(0, 100, 0);
         rt.run_frame(100);
@@ -1956,8 +1958,7 @@ mod tests {
         rt.triggers_mut().register(
             mount,
             crate::game::trigger::TriggerKind::Use,
-            [-64.0, -64.0, 0.0],
-            [64.0, 64.0, 64.0],
+            crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, 0.0], [64.0, 64.0, 64.0]),
             1000,
             0,
         );
