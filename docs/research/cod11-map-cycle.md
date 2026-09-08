@@ -771,6 +771,20 @@ four stores, so no pmove runs, no events are generated and the usercmd's
 movement axes and view angles are dropped; an intermission client cannot move,
 and its view is whatever the last pre-intermission frame left.
 
+VERIFIED: the same function's call to `G_TouchTriggers` is at `0x405b3`, past
+the `0x4000a` jump, and the `sessionstate` 2 arm at `0x40010` tail calls
+`SpectatorThink` (`0x3fab8`) and jumps to the same `0x40653` exit at
+`0x40022`. INFERRED, off those two jumps: neither an intermission client nor a
+spectator reaches the touch pass. vcod's `touch_triggers_with_buttons` gates
+on both strings for that reason; a dead player is not gated, which 8.1 of the
+object-model doc covers.
+
+VERIFIED: the call at `0x405b3` itself sits behind a `cmp client+0x21d8, 0` at
+`0x405a6` whose `jne` skips it, and `client+0x21d8` is written in exactly two
+places, `ClientCommand` (`0x48b81`) and `Cmd_Noclip_f` (`0x494bd`). INFERRED,
+off the writers: that word is the noclip flag and the compare is a noclip
+exemption, not a state gate. vcod has no noclip and models none of it.
+
 The spectator arm copies no health either. VERIFIED, from the round-restart
 target capture: a player killed by its own `kill` reads `pm_type=6 health=0`,
 then `pm_type=4 eFlags=16 health=0` on every frame of the spectator spawn
