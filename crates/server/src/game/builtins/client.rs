@@ -59,6 +59,13 @@ const DROPPED_ITEM_MS: i32 = 30_000;
 /// `self useButtonPressed()`: whether the client's last usercmd held the
 /// use button, which every stock `respawn()` loop polls. `Server` mirrors
 /// the buttons onto the host before the frame.
+///
+/// That mirror is the OR of every cmd the tick carried, while the touch pass
+/// reads one cmd's bits. The two agree at the instant a `trigger_use` fires;
+/// they can disagree only when a tick processes several cmds and the use bit
+/// changes mid-tick. `sd.gsc`'s plant loop pairs the two — woken by the
+/// trigger notify, then polling this — so stage 3 has to decide which
+/// reading it wants rather than inherit this one by accident.
 pub fn use_button_pressed(
     host: &mut GameHost,
     _cx: &mut Cx,

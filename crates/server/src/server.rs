@@ -1827,6 +1827,7 @@ impl Server {
             items: carry.items.filter(|_| restart),
         };
         let source = crate::game::script::PakScripts::new(fs.clone(), self.script_overlay.clone());
+        let rng_seed = vcod_common::rng::xorshift(&mut self.rng);
         let rt = crate::game::script::ScriptRuntime::load_from(
             Box::new(source),
             fs,
@@ -1837,6 +1838,7 @@ impl Server {
             self.world.clone(),
             self.weapon_table.clone(),
             self.sv_time_ms,
+            rng_seed,
             carry,
         )?;
         let mut configstrings = rt.configstrings().to_vec();
@@ -2792,6 +2794,9 @@ impl Server {
         let weapons = self.weapon_table.clone();
         let now_ms = self.sv_time_ms;
         let mut moved = vec![MoveSummary::default(); self.clients.len()];
+        // One entry per cmd that moved a client, with where that cmd left it
+        // and the buttons it carried.
+        let mut touched: Vec<(usize, [f32; 3], u8)> = Vec::new();
         for (slot, m) in moved.iter_mut().enumerate() {
             let Some(c) = self.clients[slot].as_mut() else {
                 continue;
@@ -2894,6 +2899,7 @@ impl Server {
                     }
                 }
                 events.extend(raised);
+                touched.push((slot, sim.origin(), cmd.buttons));
                 last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;
                 m.first_cmd_st.get_or_insert(cmd.server_time);
@@ -2921,6 +2927,17 @@ impl Server {
                     &events,
                     &mut self.rng,
                 );
+            }
+        }
+        // Retail runs the touch pass per usercmd inside `ClientThink_real`
+        // (0x405b3), right after the link; ours runs one pass per cmd here,
+        // where the script runtime is borrowable. The origin goes with it
+        // because the host's copy is only mirrored from the sim after the
+        // script frame, so the pass would otherwise test last tick's spot.
+        if let Some(rt) = self.script.as_mut() {
+            for (slot, origin, buttons) in touched {
+                rt.set_client_origin(slot, origin);
+                rt.touch_triggers_with_buttons(slot, now_ms, buttons);
             }
         }
         // The state each player ended the tick in, mirrored onto the host for

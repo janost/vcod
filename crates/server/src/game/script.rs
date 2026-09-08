@@ -105,6 +105,10 @@ pub struct ScriptRuntime {
     pub(crate) host: GameHost,
     entry: String,
     gametype_entry: String,
+    /// Draws the `wait`/`random` gate's random half (`Triggers::fire`), one
+    /// xorshift64* state per map load so a rerun of the same seed reproduces
+    /// the same firing pattern.
+    rng: u64,
 }
 
 impl ScriptRuntime {
@@ -123,6 +127,7 @@ impl ScriptRuntime {
         world: Option<Rc<crate::world::World>>,
         weapons: Rc<crate::weapons::WeaponTable>,
         now_ms: i32,
+        rng_seed: u64,
         carry: Carry,
     ) -> anyhow::Result<ScriptRuntime> {
         Self::load_from(
@@ -135,6 +140,7 @@ impl ScriptRuntime {
             world,
             weapons,
             now_ms,
+            rng_seed,
             carry,
         )
     }
@@ -154,6 +160,7 @@ impl ScriptRuntime {
         world: Option<Rc<crate::world::World>>,
         weapons: Rc<crate::weapons::WeaponTable>,
         now_ms: i32,
+        rng_seed: u64,
         carry: Carry,
     ) -> anyhow::Result<ScriptRuntime> {
         let entry = format!("maps/mp/{map}");
@@ -198,6 +205,7 @@ impl ScriptRuntime {
             .read(&bsp_path)
             .ok_or_else(|| anyhow::anyhow!("reading {bsp_path}"))?;
         let bsp = vcod_common::bsp::parse(&bsp_bytes)?;
+        host.model_bounds = bsp.models.iter().map(|m| (m.mins, m.maxs)).collect();
         vm.with_cx(|cx| spawn_entities_from_string(&mut host, cx, &bsp.entities))
             .map_err(|e| anyhow::anyhow!("spawning {map}'s entities: {e:?}"))?;
 
@@ -219,6 +227,7 @@ impl ScriptRuntime {
             host,
             entry,
             gametype_entry,
+            rng: rng_seed,
         };
         rt.start_bootstrap(now_ms)?;
         Ok(rt)
@@ -329,6 +338,134 @@ impl ScriptRuntime {
                 now_ms,
             ) {
                 log::error!("gsc: {e:#}");
+            }
+        }
+    }
+
+    /// Damage whose attacker is not a player. `hurt_touch` (0x64dc4) hands
+    /// `G_Damage` the trigger entity for both the inflictor and the attacker
+    /// and zero for the point and the direction, which the immediates it
+    /// pushes show directly (VERIFIED); the stock callback tests
+    /// `isPlayer(attacker)`, so a non-player attacker is a shape the corpus
+    /// already handles.
+    pub fn deliver_world_hit(
+        &mut self,
+        victim_slot: usize,
+        inflictor: EntId,
+        damage: i32,
+        dflags: i32,
+        mod_: &str,
+        now_ms: i32,
+    ) {
+        let Some(victim) = self.client_entity(victim_slot) else {
+            return;
+        };
+        let (mod_, weapon, hitloc) = self.vm.with_cx(|cx| {
+            (
+                cx.intern_exact(mod_),
+                cx.intern_exact("none"),
+                cx.intern_exact("none"),
+            )
+        });
+        let args = vec![
+            Value::Entity(inflictor),
+            Value::Entity(inflictor),
+            Value::Int(damage),
+            Value::Int(dflags),
+            Value::String(mod_),
+            Value::String(weapon),
+            Value::Vector([0.0; 3]),
+            Value::Vector([0.0; 3]),
+            Value::String(hitloc),
+        ];
+        if let Err(e) = self.start_with_args(
+            CALLBACK_SETUP,
+            "CodeCallback_PlayerDamage",
+            Some(Target::Entity(victim)),
+            args,
+            now_ms,
+        ) {
+            log::error!("gsc: {e:#}");
+        }
+    }
+
+    /// `G_TouchTriggers` for one client, which retail runs once per usercmd
+    /// from `ClientThink_real` (0x405b3). The notify only marks the threads
+    /// parked in `waittill("trigger", other)` runnable; they run in this
+    /// tick's script frame.
+    ///
+    /// A spectator and an intermission client touch nothing: both of
+    /// `ClientThink_real`'s arms for them return before the pass
+    /// (docs/research/cod11-map-cycle.md 6.2). A dead player still does, and
+    /// that is not an oversight -- `sd.gsc`'s `bombzone_think` tests
+    /// `isalive(other)` itself, which would be dead code if the engine
+    /// filtered the dead out.
+    ///
+    /// `buttons` are the cmd's own rather than the host's mirrored copy, which
+    /// is only written after the move pass this runs inside.
+    pub fn touch_triggers_with_buttons(&mut self, slot: usize, now_ms: i32, buttons: u8) {
+        let Some(client) = self.client_entity(slot) else {
+            return;
+        };
+        if matches!(
+            self.client_field(slot, "sessionstate").as_deref(),
+            Some("spectator" | "intermission")
+        ) {
+            return;
+        }
+        let host = &mut self.host;
+        let hits = self
+            .vm
+            .with_cx(|cx| crate::game::trigger::touched(host, cx, client));
+        let event = self.vm.with_cx(|cx| cx.intern_folded("trigger"));
+        let triggers = &mut self.host.triggers;
+        let rng = &mut self.rng;
+        // Drawn under the `rng` borrow and acted on after it: each entry is a
+        // trigger that fired, carrying its damage and flags if it hurts.
+        let fired: Vec<(EntId, Option<(i32, i32)>)> = hits
+            .into_iter()
+            .filter_map(|id| {
+                // A `trigger_use` answers the use key rather than contact
+                // (docs/superpowers/specs/2026-09-08-movers-triggers-sd-design.md
+                // 3.6). Ahead of `fire`, so a keyless touch leaves the `wait`
+                // window unarmed.
+                if triggers.get(id).map(|t| t.kind) == Some(crate::game::trigger::TriggerKind::Use)
+                    && buttons & vcod_common::net::msg::BUTTON_USE == 0
+                {
+                    return None;
+                }
+                if !triggers.fire(id, now_ms, &mut |n| {
+                    if n <= 0 {
+                        0
+                    } else {
+                        ((vcod_common::rng::xorshift(rng) >> 33) as i32 & 0x7fff_ffff) % n
+                    }
+                }) {
+                    return None;
+                }
+                let hurt = triggers
+                    .get(id)
+                    .filter(|t| t.kind == crate::game::trigger::TriggerKind::Hurt)
+                    .map(|t| (t.damage, t.dflags));
+                Some((id, hurt))
+            })
+            .collect();
+        for (id, hurt) in fired {
+            self.vm
+                .notify(Target::Entity(id), event, &[Value::Entity(client)]);
+            // The notify first: `hurt_touch` (0x64dc4) reaches its `G_Damage`
+            // only past the `Scr_Notify` (INFERRED, control flow), so a thread
+            // parked on the trigger sees the touch before the callback that
+            // may kill the toucher.
+            if let Some((damage, dflags)) = hurt {
+                self.deliver_world_hit(
+                    slot,
+                    id,
+                    damage,
+                    dflags,
+                    crate::game::trigger::MOD_TRIGGER_HURT,
+                    now_ms,
+                );
             }
         }
     }
@@ -916,7 +1053,11 @@ impl ScriptRuntime {
         now_ms: i32,
     ) -> crate::game::missile::MissileFrame {
         let host = &mut self.host;
-        host.missiles.run(&mut host.ents, world, sims, now_ms)
+        let frame = host.missiles.run(world, sims, now_ms);
+        for id in &frame.freed {
+            host.free_entity(*id);
+        }
+        frame
     }
 
     /// The missiles on the wire this frame. They are `SVF_BROADCAST`, so the
@@ -933,6 +1074,11 @@ impl ScriptRuntime {
 
     pub fn bodies_mut(&mut self) -> &mut crate::game::bodies::BodyQueue {
         &mut self.host.bodies
+    }
+
+    /// The map's triggers, for a test or a caller outside the game module.
+    pub fn triggers_mut(&mut self) -> &mut crate::game::trigger::Triggers {
+        &mut self.host.triggers
     }
 
     /// The cvar table as the script left it. `Server::tick` reads it back
@@ -1004,7 +1150,7 @@ impl ScriptRuntime {
         // a script reading `getEntArray` in the same frame sees the freed
         // entity already gone. Whether retail really orders it this way is
         // what `probe_delete`'s post-wait count measures.
-        self.host.ents.run_thinks(now_ms);
+        self.host.run_entity_thinks(now_ms);
         // The body queue is not in the object table, so its own think -- the
         // 250 ms `eFlags` 0x800 clear -- runs beside the table's.
         self.host
@@ -1040,10 +1186,75 @@ impl ScriptRuntime {
             host,
             entry: path.to_string(),
             gametype_entry: String::new(),
+            // Fixed, not drawn: a test's `fire` gate must reproduce the same
+            // draw on every run.
+            rng: 0x5eed_5eed_5eed_5eed,
         };
         let main = rt.vm.func_ref(&rt.entry, "main");
         rt.vm.start_thread(&mut rt.host, 0, main, None, vec![]);
         rt
+    }
+
+    /// Compile and install another file's worth of functions into a test
+    /// runtime, so a test can add a thread body after `for_test`.
+    pub fn install_for_test(&mut self, src: &str) {
+        let ast = vcod_gsc::parse::parse_file(src).expect("test script parses");
+        let fns = vcod_gsc::compile::compile_file(&ast, &self.entry, self.vm.interner_mut())
+            .expect("test script compiles");
+        self.vm.install(fns).expect("test script installs");
+    }
+
+    /// A map entity at `origin`, the way the entity lump makes one.
+    pub fn spawn_map_entity_for_test(&mut self, origin: [f32; 3]) -> EntId {
+        use vcod_gsc::Host;
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let id = host.ents.spawn(cx).unwrap();
+            let at = cx.intern_folded("origin");
+            host.set_field(cx, id, at, Value::Vector(origin)).unwrap();
+            id
+        })
+    }
+
+    /// A client entity in `slot` at `origin`.
+    pub fn spawn_client_for_test(&mut self, slot: usize, origin: [f32; 3]) -> EntId {
+        let host = &mut self.host;
+        let id = self
+            .vm
+            .with_cx(|cx| host.ents.spawn_client(cx, slot, None).unwrap());
+        self.set_client_origin(slot, origin);
+        id
+    }
+
+    /// A client's `sessionstate`, which `spawn_client` leaves at
+    /// `"spectator"`; the four legal strings are in
+    /// docs/research/cod11-map-cycle.md 6.1.
+    pub fn set_client_state_for_test(&mut self, slot: usize, state: &str) {
+        use vcod_gsc::Host;
+        let Some(ent) = self.client_entity(slot) else {
+            return;
+        };
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let field = cx.intern_folded("sessionstate");
+            let v = Value::String(cx.intern_exact(state));
+            host.set_field(cx, ent, field, v).unwrap();
+        });
+    }
+
+    /// Start `name` as a thread on `ent`, the way a script's `thread` does.
+    pub fn start_thread_for_test(&mut self, ent: EntId, name: &str, now_ms: i32) {
+        let f = self.vm.func_ref(&self.entry, name);
+        self.vm
+            .start_thread(&mut self.host, now_ms, f, Some(Target::Entity(ent)), vec![]);
+    }
+
+    /// Set a test client's health and max health, the way a spawn does.
+    pub fn set_client_health_for_test(&mut self, slot: usize, health: i32) {
+        if let Some(v) = self.host.client_vitals.get_mut(slot) {
+            v.health = health;
+            v.max_health = health;
+        }
     }
 
     /// Reads a folded field off `level`.
@@ -1059,6 +1270,10 @@ impl ScriptRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Any nonzero value works (`xorshift`'s only constraint); these tests
+    /// never touch a trigger, so the draw itself is never observed.
+    const TEST_RNG_SEED: u64 = 1;
 
     /// The packet pass runs the threads the netcode's events woke and
     /// nothing else. It carries no deadline wake of its own, so a thread
@@ -1121,9 +1336,45 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
+            TEST_RNG_SEED,
             Carry::default(),
         );
         assert!(rt.is_ok(), "{:?}", rt.err());
+    }
+
+    /// mp_depot's `*1` is a `script_brushmodel` carrying `script_exploder`
+    /// and `targetname "exploder"`, which is the arm of `_load.gsc::main`
+    /// that calls `notsolid()`. The bootstrap therefore has to leave those
+    /// brushes out of the clip; `*2` carries `script_exploder` with no
+    /// targetname, so no arm reaches it and it stays solid. mp_powcamp
+    /// (`*3`, `*9`) and mp_rocket (`*3`) are the other two stock maps with
+    /// one. The gametype is `sd` because `*1` is also a `bombzone`, which
+    /// `_gameobjects::main` deletes -- unlinking it for another reason --
+    /// under every other gametype.
+    #[test]
+    fn the_bootstrap_unlinks_mp_depots_exploder_brush_model() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let bytes = fs.read("maps/mp/mp_depot.bsp").expect("mp_depot.bsp");
+        let bsp = vcod_common::bsp::parse(&bytes).unwrap();
+        // No paks for the props: only the submodel brushes matter here.
+        let world = Rc::new(crate::world::World::from_bsp(&bsp, None));
+        ScriptRuntime::load(
+            Rc::new(fs),
+            "mp_depot",
+            "sd",
+            vec![String::new(); 2048],
+            crate::cvars::Cvars::new(),
+            Some(world.clone()),
+            Rc::new(crate::weapons::WeaponTable::empty()),
+            0,
+            TEST_RNG_SEED,
+            Carry::default(),
+        )
+        .expect("load mp_depot on sd");
+        assert!(!world.collision.model_linked(1), "exploder stays solid");
+        assert!(world.collision.model_linked(2));
     }
 
     /// `mp_pavlov.gsc` sets `game["allies"] = "russian"`, and dm's
@@ -1150,6 +1401,7 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
+            TEST_RNG_SEED,
             Carry::default(),
         )
         .expect("load mp_pavlov on dm");
@@ -1193,6 +1445,7 @@ mod tests {
             None,
             Rc::new(crate::weapons::WeaponTable::empty()),
             0,
+            TEST_RNG_SEED,
             Carry::default(),
         );
         let Err(err) = err else {
@@ -1480,5 +1733,228 @@ mod tests {
         rt.run_frame(100);
         let n = rt.level_field("n");
         assert_eq!(n, vcod_gsc::Value::Int(72));
+    }
+
+    /// A client standing in a trigger wakes the thread parked on it, with the
+    /// toucher as the notify's argument. Retail raises this inside
+    /// `G_TouchTriggers` (0x3f88c) with `Scr_AddEntity` supplying `other`.
+    #[test]
+    fn touching_a_trigger_notifies_the_parked_thread() {
+        let mut rt = ScriptRuntime::for_test(
+            "main() { level.hits = 0; level thread watch(); }\n\
+             watch() { for(;;) { level waittill(\"go\"); } }\n",
+        );
+        // The trigger's own thread, started on the entity the test registers.
+        let src = "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
+                   level.hits = level.hits + 1; level.who = other; } }";
+        rt.install_for_test(src);
+
+        let zone = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut().register(
+            zone,
+            crate::game::trigger::TriggerKind::Multiple,
+            [-64.0, -64.0, 0.0],
+            [64.0, 64.0, 64.0],
+            0,
+            0,
+        );
+        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.run_frame(0);
+
+        let player = rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
+        assert_eq!(rt.client_entity(0), Some(player));
+        rt.set_client_state_for_test(0, "playing");
+
+        rt.touch_triggers_with_buttons(0, 50, 0);
+        rt.run_frame(50);
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "one notify");
+        assert_eq!(rt.level_field("who"), Value::Entity(player));
+
+        // Out of the box: no second notify.
+        rt.set_client_origin(0, [500.0, 0.0, 0.0]);
+        rt.touch_triggers_with_buttons(0, 100, 0);
+        rt.run_frame(100);
+        assert_eq!(rt.level_field("hits"), Value::Int(1));
+    }
+
+    /// A script `delete()` takes the trigger row with the entity, and the
+    /// entity number it hands back carries no box into its next tenant.
+    /// `sd.gsc` deletes both bombzones at the plant, so a row that outlived
+    /// its entity would keep firing at the old brush -- and, once the number
+    /// is reused, fire on a spawn that was never a trigger.
+    #[test]
+    fn a_deleted_trigger_takes_its_row_and_leaves_the_reused_number_clean() {
+        let mut rt = ScriptRuntime::for_test("main() { level.hits = 0; }");
+        rt.install_for_test(
+            "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
+             level.hits = level.hits + 1; } }\n\
+             remove() { self delete(); }",
+        );
+        let zone = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut().register(
+            zone,
+            crate::game::trigger::TriggerKind::Multiple,
+            [-64.0, -64.0, 0.0],
+            [64.0, 64.0, 64.0],
+            0,
+            0,
+        );
+        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
+        rt.set_client_state_for_test(0, "playing");
+        rt.touch_triggers_with_buttons(0, 0, 0);
+        rt.run_frame(0);
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "the row fires first");
+
+        // `delete()` defers the free by `DELETE_DEFER_MS`; 200 is past it.
+        rt.start_thread_for_test(zone, "remove", 0);
+        rt.run_frame(0);
+        rt.run_frame(200);
+
+        assert!(rt.host.ents.get(zone).is_none(), "the entity is gone");
+        assert!(rt.host.triggers.get(zone).is_none(), "the row is gone");
+
+        // The free list hands the number straight back out, and its new
+        // tenant is a plain entity: a point box at its own origin, not the
+        // dead trigger's brush.
+        let reused = rt.spawn_map_entity_for_test([300.0, 0.0, 0.0]);
+        assert_eq!(reused, zone, "the number is reused");
+        let host = &mut rt.host;
+        let bounds = rt
+            .vm
+            .with_cx(|cx| crate::game::trigger::entity_abs_bounds(host, cx, reused));
+        assert_eq!(bounds, ([300.0, 0.0, 0.0], [300.0, 0.0, 0.0]));
+
+        // And standing back in the old box notifies nobody.
+        rt.set_client_origin(0, [10.0, 0.0, 0.0]);
+        rt.touch_triggers_with_buttons(0, 250, 0);
+        rt.run_frame(250);
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "no further notify");
+    }
+
+    /// A spectator and an intermission camera touch nothing -- retail's
+    /// arms for both return before the pass -- and a dead player standing in
+    /// one still does: `sd.gsc`'s `bombzone_think` does its own
+    /// `isalive(other)` test, so the engine cannot be filtering the dead out
+    /// or that line would never matter.
+    #[test]
+    fn only_a_simulated_client_touches_a_trigger() {
+        let mut rt = ScriptRuntime::for_test("main() { level.hits = 0; }");
+        rt.install_for_test(
+            "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
+             level.hits = level.hits + 1; } }",
+        );
+        let zone = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut().register(
+            zone,
+            crate::game::trigger::TriggerKind::Multiple,
+            [-64.0, -64.0, 0.0],
+            [64.0, 64.0, 64.0],
+            0,
+            0,
+        );
+        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
+        rt.run_frame(0);
+
+        rt.set_client_state_for_test(0, "spectator");
+        rt.touch_triggers_with_buttons(0, 50, 0);
+        rt.run_frame(50);
+        assert_eq!(rt.level_field("hits"), Value::Int(0), "a spectator touched");
+
+        rt.set_client_state_for_test(0, "intermission");
+        rt.touch_triggers_with_buttons(0, 75, 0);
+        rt.run_frame(75);
+        assert_eq!(
+            rt.level_field("hits"),
+            Value::Int(0),
+            "an intermission camera touched"
+        );
+
+        rt.set_client_state_for_test(0, "dead");
+        rt.touch_triggers_with_buttons(0, 100, 0);
+        rt.run_frame(100);
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "a corpse did not");
+    }
+
+    /// A `trigger_hurt` damages the player standing in it through the stock
+    /// damage callback, so the victim's health drops on the path a bullet's
+    /// hit already takes, and the 100 ms cadence `register_hurt` arms gates
+    /// the second helping.
+    #[test]
+    fn a_trigger_hurt_damages_the_player_in_it() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() {}\n\
+             CodeCallback_PlayerDamage(inflictor, attacker, damage, flags, mod, weapon, point, \
+             dir, hitloc) { level.damage = damage; level.mod = mod; \
+             self.health = self.health - damage; }\n",
+        );
+        rt.spawn_client_for_test(0, [0.0, 0.0, 0.0]);
+        rt.set_client_state_for_test(0, "playing");
+        rt.set_client_health_for_test(0, 100);
+
+        let hurt = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut()
+            .register_hurt(hurt, [-64.0, -64.0, 0.0], [64.0, 64.0, 64.0], 5, 0);
+
+        rt.touch_triggers_with_buttons(0, 100, 0);
+        rt.run_frame(100);
+        let expected_mod = rt
+            .vm
+            .with_cx(|cx| cx.intern_exact(crate::game::trigger::MOD_TRIGGER_HURT));
+        assert_eq!(rt.level_field("damage"), Value::Int(5));
+        assert_eq!(rt.level_field("mod"), Value::String(expected_mod));
+        assert_eq!(rt.client_vitals(0).health, 95);
+
+        rt.touch_triggers_with_buttons(0, 150, 0);
+        rt.run_frame(150);
+        assert_eq!(rt.client_vitals(0).health, 95, "inside the 100 ms window");
+
+        rt.touch_triggers_with_buttons(0, 200, 0);
+        rt.run_frame(200);
+        assert_eq!(rt.client_vitals(0).health, 90);
+    }
+
+    /// A `trigger_use` answers the use key: standing in one raises nothing
+    /// until the bit is down. The `auto1`/`auto2` MG42 mount pairs on the
+    /// stock maps are what this serves. The keyless touch also leaves the
+    /// `wait` window unarmed, so the next keyed touch still fires.
+    #[test]
+    fn a_trigger_use_needs_the_use_key() {
+        let mut rt = ScriptRuntime::for_test("main() { level.hits = 0; }");
+        rt.install_for_test(
+            "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
+             level.hits = level.hits + 1; } }",
+        );
+        let mount = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut().register(
+            mount,
+            crate::game::trigger::TriggerKind::Use,
+            [-64.0, -64.0, 0.0],
+            [64.0, 64.0, 64.0],
+            1000,
+            0,
+        );
+        rt.start_thread_for_test(mount, "trigger_think", 0);
+        rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
+        rt.set_client_state_for_test(0, "playing");
+        rt.run_frame(0);
+
+        rt.touch_triggers_with_buttons(0, 50, 0);
+        rt.run_frame(50);
+        assert_eq!(rt.level_field("hits"), Value::Int(0), "no use key");
+
+        rt.touch_triggers_with_buttons(0, 100, vcod_common::net::msg::BUTTON_USE);
+        rt.run_frame(100);
+        assert_eq!(
+            rt.level_field("hits"),
+            Value::Int(1),
+            "the window was armed"
+        );
+
+        rt.touch_triggers_with_buttons(0, 150, vcod_common::net::msg::BUTTON_USE);
+        rt.run_frame(150);
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "inside the window");
     }
 }

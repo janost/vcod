@@ -217,7 +217,7 @@ fn probe_delete_matches_retail() {
     for frame in 1..=12 {
         let now_ms = frame * 50;
         host.level_time_ms = now_ms;
-        host.ents.run_thinks(now_ms);
+        host.run_entity_thinks(now_ms);
         if let Some(e) = vm.run_frame(&mut host, now_ms).into_iter().next() {
             panic!("probe_delete Callback_StartGameType errored: {e:?}");
         }
@@ -321,6 +321,7 @@ fn probe_bootstrap_matches_retail() {
         None,
         Rc::new(vcod_server::weapons::WeaponTable::empty()),
         0,
+        1, // rng seed, arbitrary nonzero; this probe never touches a trigger
         Carry::default(),
     )
     .expect("load mp_pavlov on probe_bootstrap");

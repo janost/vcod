@@ -246,7 +246,7 @@ pub fn spawn_struct(
 /// sees it until that think comes due (`ScriptRuntime::run_frame`'s think
 /// pass). `_load.gsc`'s exploder threads end with one. The clip goes now:
 /// a `script_brushmodel`'s brushes are in the world only through its link
-/// (`SP_script_brushmodel`, game.mp 0x70fb8), and retail's `G_FreeEntity`
+/// (`SP_script_brushmodel`, game.mp 0x60fb8), and retail's `G_FreeEntity`
 /// unlinks, which is how `_gameobjects::main` takes carentan's bombzone
 /// clips out of every gametype but sd (docs/research/cod11-mantle.md, "A
 /// submodel's brushes are its entity's").
@@ -257,18 +257,7 @@ pub fn delete(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
-    let model = cx.intern_folded("model");
-    if let Value::String(m) = host.get_field(cx, id, model) {
-        if let Some(n) = cx
-            .resolve(m)
-            .strip_prefix('*')
-            .and_then(|n| n.parse::<usize>().ok())
-        {
-            if let Some(world) = &host.world {
-                world.collision.set_model_linked(n, false);
-            }
-        }
-    }
+    link_submodel(host, cx, id, false);
     host.ents
         .schedule(id, ThinkFn::Free, host.level_time_ms + DELETE_DEFER_MS);
     Ok(Value::Undefined)
@@ -284,13 +273,50 @@ fn set_hidden(host: &mut GameHost, recv: Option<Target>, hidden: bool) -> Result
     Ok(Value::Undefined)
 }
 
-fn set_solid(host: &mut GameHost, recv: Option<Target>, solid: bool) -> Result<Value, ErrorKind> {
+/// Links or unlinks the brushes of an entity whose `model` is the `*N`
+/// spelling of a BSP submodel; any other model, and any host with no map
+/// loaded, is a no-op.
+fn link_submodel(host: &mut GameHost, cx: &mut Cx, id: EntId, linked: bool) {
+    let model = cx.intern_folded("model");
+    let Value::String(m) = host.get_field(cx, id, model) else {
+        return;
+    };
+    let Some(n) = cx
+        .resolve(m)
+        .strip_prefix('*')
+        .and_then(|n| n.parse::<usize>().ok())
+    else {
+        return;
+    };
+    // Model 0 is the world clip itself, not a submodel; unlinking it would
+    // take every world brush out of every trace, and a stock `notsolid()` on
+    // a `"*0"` entity would do exactly that.
+    if n == 0 {
+        return;
+    }
+    if let Some(world) = &host.world {
+        world.collision.set_model_linked(n, linked);
+    }
+}
+
+/// The flag is what the wire build reads; the link is what the clip reads,
+/// since a submodel's brushes are in the world only through its entity
+/// (docs/research/cod11-mantle.md, "A submodel's brushes are its entity's").
+/// `_load.gsc` `notsolid()`s every `exploder` brush model at map load, which
+/// is the only place three stock maps lose that collision.
+fn set_solid(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    solid: bool,
+) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
     let e = host
         .ents
         .get_mut(id)
         .ok_or(ErrorKind::BadType("no such entity"))?;
     e.solid = solid;
+    link_submodel(host, cx, id, solid);
     Ok(Value::Undefined)
 }
 
@@ -317,20 +343,20 @@ pub fn show(
 
 pub fn solid(
     host: &mut GameHost,
-    _cx: &mut Cx,
+    cx: &mut Cx,
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    set_solid(host, recv, true)
+    set_solid(host, cx, recv, true)
 }
 
 pub fn not_solid(
     host: &mut GameHost,
-    _cx: &mut Cx,
+    cx: &mut Cx,
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    set_solid(host, recv, false)
+    set_solid(host, cx, recv, false)
 }
 
 /// `setModel(name)` allocates a model configstring slot and stores the name,
@@ -481,11 +507,8 @@ pub fn is_defined(
     ))
 }
 
-/// `isTouching(other)`. Entities gain real bounds in stage 5; until then
-/// this compares origins within a small box rather than pretending to be a
-/// real intersection test. `BOX` is invented, not measured: nothing has been
-/// read out of retail about what its `isTouching` compares, so the number is
-/// only a stand-in until entities carry bounds and the real test replaces it.
+/// `isTouching(other)`: a real box overlap between the receiver's absolute
+/// bounds and the argument's, the same test `trap_EntitiesInBox` performs.
 pub fn is_touching(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -497,15 +520,11 @@ pub fn is_touching(
         return Err(ErrorKind::BadType("isTouching takes an entity"));
     };
     let b = *b;
-    let origin = cx.intern_folded("origin");
-    let oa = host.get_field(cx, a, origin);
-    let ob = host.get_field(cx, b, origin);
-    let (Value::Vector(oa), Value::Vector(ob)) = (oa, ob) else {
-        return Ok(Value::Int(0));
-    };
-    const BOX: f32 = 32.0;
-    let touching = (0..3).all(|i| (oa[i] - ob[i]).abs() <= BOX);
-    Ok(Value::Int(touching as i32))
+    let ba = crate::game::trigger::entity_abs_bounds(host, cx, a);
+    let bb = crate::game::trigger::entity_abs_bounds(host, cx, b);
+    Ok(Value::Int(
+        crate::game::trigger::boxes_overlap(ba, bb) as i32
+    ))
 }
 
 #[cfg(test)]
@@ -606,6 +625,80 @@ mod tests {
                 placed[2].abs() < 1.0,
                 "expected the floor at z = 0, got {placed:?}"
             );
+        });
+    }
+
+    /// The submodel test world: model 0's floor plus a door brush local
+    /// (-8..8)^2 x 0..64 placed by a `script_brushmodel` at (200, 0, 0), so
+    /// its solid face is at x = 192.
+    fn brushmodel_world() -> World {
+        World {
+            collision: vcod_common::collision::submodel_test_world(
+                "{\n\"classname\" \"script_brushmodel\"\n\"model\" \"*1\"\n\"origin\" \"200 0 0\"\n}",
+                &[([-8.0, -8.0, 0.0], [8.0, 8.0, 64.0])],
+            ),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        }
+    }
+
+    /// A point sweep at door height that only the submodel can stop.
+    fn brushmodel_clips(world: &World) -> bool {
+        world
+            .collision
+            .box_trace(
+                Vec3::new(150.0, 0.0, 32.0),
+                Vec3::new(250.0, 0.0, 32.0),
+                Vec3::ZERO,
+                Vec3::ZERO,
+            )
+            .fraction
+            < 1.0
+    }
+
+    /// `notSolid()` has to reach the clip, not just the flag: a submodel's
+    /// brushes are in the world only through its entity, so this is the
+    /// unlink `_load.gsc` performs on every `exploder` brush model and
+    /// `_utility.gsc`'s `brush_show` undoes.
+    #[test]
+    fn notsolid_takes_a_brush_models_brushes_out_of_the_clip() {
+        let (mut vm, mut host) = fixture();
+        host.world = Some(Rc::new(brushmodel_world()));
+        let world = host.world.clone().unwrap();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let model = cx.intern_folded("model");
+            let star = Value::String(cx.intern_exact("*1"));
+            host.set_field(cx, e, model, star).unwrap();
+            let t = Some(Target::Entity(e));
+
+            assert!(brushmodel_clips(&world), "linked at load");
+
+            not_solid(&mut host, cx, t, &[]).unwrap();
+            assert!(!host.ents.get(e).unwrap().solid);
+            assert!(!brushmodel_clips(&world), "notSolid must unlink");
+
+            solid(&mut host, cx, t, &[]).unwrap();
+            assert!(host.ents.get(e).unwrap().solid);
+            assert!(brushmodel_clips(&world), "solid must relink");
+        });
+    }
+
+    /// An entity whose `model` is an xmodel name owns no brushes, so
+    /// `notSolid()` on one must not unlink submodel 1 -- or any script model
+    /// standing near a door would take the door out of the clip.
+    #[test]
+    fn notsolid_on_an_xmodel_entity_leaves_the_submodels_alone() {
+        let (mut vm, mut host) = fixture();
+        host.world = Some(Rc::new(brushmodel_world()));
+        let world = host.world.clone().unwrap();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let model = cx.intern_folded("model");
+            let name = Value::String(cx.intern_exact("xmodel/fx"));
+            host.set_field(cx, e, model, name).unwrap();
+            not_solid(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            assert!(brushmodel_clips(&world));
         });
     }
 
@@ -770,7 +863,7 @@ mod tests {
                 1,
                 "delete() must not free immediately"
             );
-            host.ents.run_thinks(host.level_time_ms + DELETE_DEFER_MS);
+            host.run_entity_thinks(host.level_time_ms + DELETE_DEFER_MS);
             assert_eq!(host.ents.iter_inuse().count(), 0);
         });
     }
@@ -840,6 +933,48 @@ mod tests {
                 Value::String(a) => assert_eq!(cx.resolve(a), "xmodel/fx"),
                 v => panic!("{v:?}"),
             }
+        });
+    }
+
+    /// `istouching` is a box overlap, not a distance: a player standing in a
+    /// bombzone 200 units wide is touching it well past the old 32-unit
+    /// origin comparison's reach, and one clear of the zone's edge plus the
+    /// player's own half-width is not. The boundary is the sum of the two
+    /// boxes' half-extents (100 + 15 = 115), not the zone's edge alone.
+    #[test]
+    fn is_touching_overlaps_boxes() {
+        let (mut vm, mut host) = crate::game::testing_world_fixture();
+        vm.with_cx(|cx| {
+            let zone = host.ents.spawn(cx).unwrap();
+            let origin = cx.intern_folded("origin");
+            host.set_field(cx, zone, origin, Value::Vector([0.0, 0.0, 0.0]))
+                .unwrap();
+            host.triggers.register(
+                zone,
+                crate::game::trigger::TriggerKind::Multiple,
+                [-100.0, -100.0, 0.0],
+                [100.0, 100.0, 64.0],
+                0,
+                0,
+            );
+
+            let player = host.ents.spawn_client(cx, 0, None).unwrap();
+            let inside = Some(Target::Entity(player));
+            host.set_field(cx, player, origin, Value::Vector([90.0, 0.0, 0.0]))
+                .unwrap();
+            assert_eq!(
+                is_touching(&mut host, cx, inside, &[Value::Entity(zone)]),
+                Ok(Value::Int(1)),
+                "90 is inside a box that reaches 100, well past the old 32-unit test"
+            );
+
+            host.set_field(cx, player, origin, Value::Vector([116.0, 0.0, 0.0]))
+                .unwrap();
+            assert_eq!(
+                is_touching(&mut host, cx, inside, &[Value::Entity(zone)]),
+                Ok(Value::Int(0)),
+                "116 clears the zone's 100 reach plus the player's own 15"
+            );
         });
     }
 }

@@ -447,6 +447,50 @@ None of the MP gametype spawn classnames (`mp_deathmatch_spawn`,
 `mp_teamdeathmatch_spawn`, the `mp_*_intermission` markers) are in the table,
 which is the case-four path above.
 
+### 8.1 `trigger_hurt`: what its spawn function and its touch do
+
+The heading's label above covers the table; every claim below carries its own.
+`SP_trigger_hurt` is at 0x64ef8 and the touch function it installs,
+`hurt_touch`, at 0x64dc4.
+
+- The damage comes from the `dmg` key. VERIFIED: `SP_trigger_hurt` reads
+  gentity+568 and, at 0x64fbb, writes 5 there; 568 is the `dmg` slot of the
+  entity field table in section 5, so the key name and the offset agree.
+  INFERRED, from the `cmp ... ,0` / `jne` the write sits behind: the 5 is a
+  default, and the condition is "the field is still 0", not "the key was
+  absent" -- a block spelling `"dmg" "0"` takes the default too.
+- The damage flags come from spawnflags. VERIFIED: `hurt_touch` contains a bit
+  test against the spawnflags word and the immediate 0x10, which reaches the
+  `dflags` argument of `G_Damage`; 0x10 is `DFLAG_NO_PROTECTION`
+  (`crates/server/src/game/combat.rs:68`). INFERRED, from the test and the
+  branch it feeds: the bit tested is spawnflag 0x8, and the argument is 0x10
+  when it is set and 0 when it is not.
+- The means of death is `MOD_TRIGGER_HURT`. VERIFIED: the `mod` argument is
+  the immediate 0x17, and index 23 of the mod table is `MOD_TRIGGER_HURT`
+  (`MOD_NAMES`, `crates/server/src/game/combat.rs:21-46`, and the table in
+  `cod11-combat.md`).
+- The inflictor and the attacker are both the trigger entity, and the point
+  and the direction are both zero. VERIFIED: `hurt_touch` pushes its own
+  `self` pointer twice and the immediate 0 for the other two.
+- A `trigger_hurt` has its own cadence and does not use the `wait` and
+  `random` keys the other trigger classnames take. VERIFIED: `hurt_touch`
+  reads and writes a timestamp at gentity+0x1cc, compares it against the level
+  clock, and contains the immediates 100 and 1000 as addends to that clock;
+  the function also contains a `Scr_Notify` call and the `G_Damage` call.
+  INFERRED, from the compare and the branches around it: the compare is an
+  early return taken when the timestamp is in the future, the 1000 is the
+  spawnflag 0x10 arm and the 100 the other, and the timestamp gates the
+  `Scr_Notify` as well as the `G_Damage`, both sitting past it.
+- `hurt_touch` tests a byte at gentity+0x171 **on the toucher**. VERIFIED: the
+  compare against 0 at 0x64dd2, on the function's second argument (loaded at
+  0x64dcc). INFERRED, from the `je` it feeds: it is an early return, and it is
+  the first gate in the function, ahead of the timestamp compare above. What
+  the byte means is not measured. Offset 0x171 is not in the entity field
+  table of section 5, so it is engine-only state with no script-visible name,
+  and the Q3 analogy that would call it `takedamage` is a guess, not evidence.
+  vcod does not model this gate: ours hurts a dead player lying in a
+  `trigger_hurt` and spends the 100 ms window doing it.
+
 ## 9. Builtins are five tables, VERIFIED
 
 This closes the "record struct never fully resolved" gap from
@@ -1428,6 +1472,77 @@ INFERRED, the two branches at 0x4f5d7 and 0x4f5e4. `ClientEndFrame` is one of
 its two callers, from the live arm above (the `R_386_PC32` relocation at
 0x4111a); the other is at 0x484c6. VERIFIED from the relocations.
 
+### `serverCursorHint` is an index into a nine-name table
+
+`hintStrings` (0x7e4d4) is 44 bytes, eleven pointer slots. Slot 0 holds the
+empty string and slots 1 to 9 hold, in order, `HINT_NONE`, `HINT_ACTIVATE`,
+`HINT_NOACTIVATE`, `HINT_DOOR`, `HINT_DOOR_LOCKED`, `HINT_MG42`,
+`HINT_HEALTH`, `HINT_LADDER`, `HINT_FRIENDLY`; slot 10 has no relocation.
+VERIFIED, read out of `.rel.data` (the raw dwords are zero without it).
+
+`setCursorHint` (0x5a0e4) takes one string, walks that table with
+`Q_strcasecmp` and stores the matching index into the entity dword at
+`ent+0xdc`. `HINT_INHERIT` stores -1 instead, and an unmatched name reaches
+`Scr_Error` with the "not a valid hint type" line at 0x76e40. INFERRED, the
+compares at 0x5a12e and 0x5a19d and the stores at 0x5a14f and 0x5a160; the
+addresses, the immediates and the strings are VERIFIED.
+
+`trigger_use` (0x5742c) is where a stock map's hint comes from. It stores 2
+into `ent+0xdc` at 0x5749f, then `G_SpawnString`s the `cursorhint` key
+(0x75e6c) and runs the same table walk over the result, and then stores 0xff
+into `ent+0xd8` at 0x57550 before reading the `hintstring` key. VERIFIED,
+the stores and the two `G_SpawnString` calls. So `HINT_ACTIVATE` is the
+default hint of a `trigger_use` with no `cursorhint` key, and 0xff is
+`hintstring`'s own unset value. INFERRED, that ordering is control flow.
+
+The other half, `ent+0xd8`, is a configstring index rather than a table one.
+`G_GetHintStringIndex` (0x5a238) holds a `trap_GetConfigstring` on
+`i + 0x4bc`, a `strcmp`, a `trap_SetConfigstring`, three stores through the
+out pointer at `ebp+0x8` (0x5a281, 0x5a2a7, 0x5a2b9), the loop bound 0x1f at
+0x5a2b1 and the two return values 1 and 0. VERIFIED, the addresses, the
+immediates and the calls. INFERRED, which of those runs under which
+condition: that the scan starts at 0, that a `strcmp` match returns `i`, that
+an empty slot is claimed and returned instead, and that exhausting all 32
+writes -1 and returns 0. INFERRED too, one level up, that the scan allocates
+rather than only looking up. So the hint-string range is 32 configstrings at
+base 1212 and 0xff is its unset marker, which is the -1
+`serverCursorHintString` carries as 255.
+
+`G_CheckForCursorHints` (0x4f59c) reads `ent+0xdc` into
+`ps.serverCursorHint` and `ent+0xd8` into `ps.serverCursorHintString`, having
+taken the candidate entities from `G_GetActivateEnt` (0x4f14c). VERIFIED, the
+loads at 0x4f6b8 and 0x4f6c6 and the stores at 0x4f83e and 0x4f854. The arm
+those two loads sit in is gated on the entity's classname word (`ent+0x176`)
+equalling `scr_const+0x94`, which `GScr_LoadConsts` fills with
+`Scr_AllocString("trigger_use")` at 0x58c58. VERIFIED, the compare and the
+allocation; INFERRED that the gate is what selects the arm.
+
+`trigger_lookat` sets no cursor hint. `scr_const+0x98`, the constant
+`GScr_LoadConsts` fills with `Scr_AllocString("trigger_lookat")` at 0x58c8a,
+is read in exactly one place in the module: `G_CheckForPreventFriendlyFire`
+(0x4f88c) at 0x4f98e, which compares it against the classname of whatever a
+`trap_LocationalTrace` down the player's aim hit and then calls `G_Trigger`.
+VERIFIED, the single relocation against that offset in `.rel.text` and the
+call at 0x4f9b2. So the kind fires off an aim trace rather than off contact,
+and it touches none of the three hint fields. INFERRED for both, control flow.
+`SP_trigger_lookat` (0x65df0) installs no touch or think function either, only
+`trap_SetBrushModel`, `ent+0x118` = 0x20000000, `ent+0xf4` = 1, `svFlags |= 2`
+and `trap_LinkEntity`. VERIFIED, that is the whole function.
+
+Cursor hints in retail are an aim-trace subsystem, not a touch one:
+`G_CheckForCursorHints` picks its candidates through `trap_LocationalTrace`
+alongside `CalcMuzzlePoints`, `BG_GetInfoForWeapon` and `G_IsTurretUsable`.
+VERIFIED, the function's own calls. No touch path writes any of the three hint
+fields: `SP_trigger_lookat` installs no touch function and the trigger touch
+path stores nothing at `ps+0x384`, `+0x388` or `+0x38c`. INFERRED, from the
+absence rather than from a store. vcod models none of this: it runs no
+per-frame aim trace, and `ClientSim::to_wire` writes `serverCursorHintString`
+255 and never touches `serverCursorHint`, which therefore keeps the null
+playerstate's 0. VERIFIED, read out of `crates/server/src/spectate.rs`. That
+those two are also what retail sends a client looking at nothing is a
+corollary of the INFERRED reading above, not a measurement: no capture of a
+client aimed at a `trigger_use` has been taken.
+
 ### `legsAnim` needs the animscript state machine
 
 `BG_PlayAnim` (0x2c338) is what writes `ps.legsAnim` (+0x70, netfield offset
@@ -1477,6 +1592,47 @@ distinct fields into one cell.
 script: `spawn_client` puts a fresh array handle there, because
 `ClientConnect` (0x4250f) writes one and every gametype reads
 `self.pers["team"]` off it without creating it. Section 3 has the measurement.
+
+## 22. `G_TouchTriggers` tests two boxes
+
+`G_TouchTriggers` (0x3f88c, `game.mp.i386.so`) builds its candidate box from
+three floats in `.data` at 0x7dcdc, 0x7dce0 and 0x7dce4, which read 40, 40 and
+52 (VERIFIED; `.data` is mapped at VA 0x7b3a0 from file offset 0x7a3a0, so the
+raw dword at the virtual address belongs to another section and reads 0.0).
+
+INFERRED, from the function's control flow: those three are subtracted from
+and added to the client's origin to make the box handed to
+`trap_EntitiesInBox`, and each entity that query returns is then tested with
+`trap_EntityContact` against a second box built from the entity's own
+`r.mins`/`r.maxs` at +0x100..+0x114. So the first box is a broad phase and the
+second the exact test, and a trigger has to clear both: neither contains the
+other, since the candidate box reaches 52 units below the feet where the
+player's clip box reaches 72 above them.
+
+### 22.1 The broad phase's contents mask excludes a `trigger_lookat`
+
+VERIFIED: the call at 0x3f925 pushes five arguments, the last of them the
+immediate 0x405c0008 at 0x3f918, ahead of 0x400 and the three pointers the
+box and the result list are built in. VERIFIED: 0x405c0008 has bit 29
+(0x20000000) clear. VERIFIED: `SP_trigger_lookat` (0x65df0) stores
+0x20000000 into `ent+0x118`, and `ent+0x118` is `r.contents`
+(`docs/research/cod11-combat.md`, section 13; `SpectatorClientEndFrame`
+0x4078f zeroes the same word for a spectator).
+
+INFERRED, off the argument being a mask tested against `r.contents`:
+`trap_EntitiesInBox` never returns a `trigger_lookat`, so retail's touch pass
+cannot reach one and the only path in the module that reads the classname is
+`G_CheckForPreventFriendlyFire`'s aim trace (section 20, "`trigger_lookat`
+sets no cursor hint"). The two readings agree: the kind fires off an aim
+trace, not off contact.
+
+vcod acts on that. `trigger::touched` skips a `LookAt` row, so ours notifies
+no `"trigger"` on contact either; it also runs no aim trace, so ours notifies
+a lookat on nothing at all. VERIFIED, read out of
+`crates/server/src/game/trigger.rs`. The aim-trace half is unmodelled and
+unmeasured — no capture of a retail `trigger_lookat` firing has been taken,
+and mp_pavlov's is deleted under `dm` before the committed A/B capture could
+reach it.
 
 ## Open, and worth a probe
 

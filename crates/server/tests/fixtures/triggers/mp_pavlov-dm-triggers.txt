@@ -1,0 +1,313 @@
+# Retail CoD 1.1d dedicated server trigger notifies under a walking client.
+# map mp_pavlov, g_gametype probe_trigger (whose main() calls
+# maps\mp\gametypes\dm::main()), joined allies, dedicated 1, sv_maxclients 8,
+# sv_pure 0, stock scr_* defaults, one client on the server. Captured 2026-09-08.
+# The evidence is the server's own games_mp.log, not a client capture: the
+# gametype is crates/gsc/tests/fixtures/semantics/client-probes/probe_trigger.gsc,
+# which threads a waittill("trigger", other) onto every trigger entity the map
+# spawned and logPrints one line per notify.
+#
+# Two shells:
+#   COD_LNXDED_HOME=<absolute path with no '+' in it> SECS=420 \
+#       tools/run_probe.sh client-probes/probe_trigger mp_pavlov
+#   cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-triggers \
+#       --probe-team allies --probe-secs 395
+#
+# PROBE watch <entity> <classname> is the census: every trigger entity that
+# survived the gametype's _gameobjects pass, in the order getEntArray returned
+# them. dm claims no gameobjects, so the five entities carrying a
+# script_gameobjectname are deleted and are not here: three trigger_multiples
+# (bombzone_B *2, bombzone_A *3 and auto2 *34, the last a "re" retrieval zone),
+# the trigger_lookat and the trigger_use. What is left is the 26 minefield
+# trigger_multiples and the map's one trigger_hurt.
+#
+# PROBE fire <entity> <classname> <toucher entity> <toucher origin> is one
+# notify. None of the minefield triggers carries a wait or a random key, so
+# retail fires on every touch pass while the player stands in one, which is why
+# one crossing is a run of lines rather than a single one; the origin on each
+# line is the toucher's at that pass.
+#
+# The route: --probe-triggers steers at the map's trigger brushes in turn,
+# nearest first, and kills itself when it wedges, so the run is a series of
+# walks out of whatever spawn the last death gave it. This one crossed six of
+# them -- entities 83, 93, 98, 101, 102 and 202 -- and died 14 times doing it,
+# each death a minefield the walk stood in. The remaining twenty sit behind the
+# town's solid geometry and cannot be walked into; the census covers all 27
+# entities either way, and it is the census plus the origins here that the gate
+# replays, never the walk.
+#
+# What this does NOT evidence: the trigger_hurt at entity 72 fired zero times.
+# Its brush is the kill volume under the map's floor and a walking player never
+# reaches it, so every line here comes from a trigger_multiple. Nothing in this
+# file says anything about the hurt cadence, the damage a hurt deals or the
+# spawnflag that slows it; entity 72 is evidenced as existing and as surviving
+# the gametype's deletion pass, and no further.
+PROBE watch 83 trigger_multiple
+PROBE watch 84 trigger_multiple
+PROBE watch 85 trigger_multiple
+PROBE watch 86 trigger_multiple
+PROBE watch 87 trigger_multiple
+PROBE watch 88 trigger_multiple
+PROBE watch 89 trigger_multiple
+PROBE watch 90 trigger_multiple
+PROBE watch 91 trigger_multiple
+PROBE watch 92 trigger_multiple
+PROBE watch 93 trigger_multiple
+PROBE watch 94 trigger_multiple
+PROBE watch 95 trigger_multiple
+PROBE watch 96 trigger_multiple
+PROBE watch 97 trigger_multiple
+PROBE watch 98 trigger_multiple
+PROBE watch 99 trigger_multiple
+PROBE watch 100 trigger_multiple
+PROBE watch 101 trigger_multiple
+PROBE watch 102 trigger_multiple
+PROBE watch 103 trigger_multiple
+PROBE watch 104 trigger_multiple
+PROBE watch 199 trigger_multiple
+PROBE watch 200 trigger_multiple
+PROBE watch 201 trigger_multiple
+PROBE watch 202 trigger_multiple
+PROBE watch 72 trigger_hurt
+PROBE triggers 27
+PROBE fire 83 trigger_multiple 0 (-7909.49, 8843.85, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7909.49, 8843.85, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7903.22, 8834.60, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7903.22, 8834.60, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7903.22, 8834.60, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7903.22, 8834.60, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7898.70, 8828.56, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7898.70, 8828.56, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7887.14, 8814.71, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7887.14, 8814.71, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7887.14, 8814.71, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7887.14, 8814.71, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7882.16, 8809.16, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7882.16, 8809.16, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7882.16, 8809.16, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7874.71, 8801.12, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7874.71, 8801.12, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7874.71, 8801.12, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7867.13, 8793.23, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7867.13, 8793.23, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7867.13, 8793.23, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7859.44, 8785.46, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7859.44, 8785.46, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7859.44, 8785.46, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7851.67, 8777.77, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7851.67, 8777.77, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7851.67, 8777.77, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7843.84, 8770.14, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7843.84, 8770.14, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7843.84, 8770.14, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7836.02, 8762.51, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7836.02, 8762.51, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7836.02, 8762.51, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7828.17, 8754.90, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7828.17, 8754.90, -47.87)
+PROBE fire 83 trigger_multiple 0 (-7828.17, 8754.90, -47.87)
+PROBE fire 202 trigger_multiple 0 (-7547.01, 11023.21, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7547.01, 11023.21, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7542.41, 11037.11, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7542.41, 11037.11, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7542.41, 11037.11, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7538.83, 11047.89, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7538.83, 11047.89, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7538.83, 11047.89, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7535.46, 11058.05, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7535.46, 11058.05, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7535.46, 11058.05, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7531.95, 11068.63, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7531.95, 11068.63, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7531.95, 11068.63, 40.13)
+PROBE fire 202 trigger_multiple 0 (-7528.57, 11078.79, 40.16)
+PROBE fire 202 trigger_multiple 0 (-7528.57, 11078.79, 40.16)
+PROBE fire 202 trigger_multiple 0 (-7528.57, 11078.79, 40.16)
+PROBE fire 202 trigger_multiple 0 (-7526.17, 11086.05, 40.21)
+PROBE fire 202 trigger_multiple 0 (-7526.17, 11086.05, 40.21)
+PROBE fire 202 trigger_multiple 0 (-7521.70, 11099.53, 40.32)
+PROBE fire 202 trigger_multiple 0 (-7521.70, 11099.53, 40.32)
+PROBE fire 202 trigger_multiple 0 (-7521.70, 11099.53, 40.32)
+PROBE fire 202 trigger_multiple 0 (-7518.33, 11109.70, 40.39)
+PROBE fire 202 trigger_multiple 0 (-7518.33, 11109.70, 40.39)
+PROBE fire 202 trigger_multiple 0 (-7518.33, 11109.70, 40.39)
+PROBE fire 202 trigger_multiple 0 (-7514.75, 11120.48, 40.48)
+PROBE fire 202 trigger_multiple 0 (-7514.75, 11120.48, 40.48)
+PROBE fire 202 trigger_multiple 0 (-7514.75, 11120.48, 40.48)
+PROBE fire 202 trigger_multiple 0 (-7511.24, 11131.06, 40.56)
+PROBE fire 202 trigger_multiple 0 (-7511.24, 11131.06, 40.56)
+PROBE fire 202 trigger_multiple 0 (-7511.24, 11131.06, 40.56)
+PROBE fire 202 trigger_multiple 0 (-7507.94, 11141.02, 40.63)
+PROBE fire 202 trigger_multiple 0 (-7507.94, 11141.02, 40.63)
+PROBE fire 202 trigger_multiple 0 (-7507.94, 11141.02, 40.63)
+PROBE fire 202 trigger_multiple 0 (-7505.47, 11148.48, 40.69)
+PROBE fire 202 trigger_multiple 0 (-7505.47, 11148.48, 40.69)
+PROBE fire 202 trigger_multiple 0 (-7501.00, 11161.97, 40.79)
+PROBE fire 202 trigger_multiple 0 (-7501.00, 11161.97, 40.79)
+PROBE fire 202 trigger_multiple 0 (-7501.00, 11161.97, 40.79)
+PROBE fire 101 trigger_multiple 0 (-10828.01, 11928.36, -21.71)
+PROBE fire 101 trigger_multiple 0 (-10835.17, 11936.59, -22.24)
+PROBE fire 101 trigger_multiple 0 (-10835.17, 11936.59, -22.24)
+PROBE fire 101 trigger_multiple 0 (-10835.17, 11936.59, -22.24)
+PROBE fire 101 trigger_multiple 0 (-10842.34, 11944.82, -22.78)
+PROBE fire 101 trigger_multiple 0 (-10842.34, 11944.82, -22.78)
+PROBE fire 101 trigger_multiple 0 (-10842.34, 11944.82, -22.78)
+PROBE fire 101 trigger_multiple 0 (-10849.52, 11953.05, -23.32)
+PROBE fire 101 trigger_multiple 0 (-10849.52, 11953.05, -23.32)
+PROBE fire 101 trigger_multiple 0 (-10849.52, 11953.05, -23.32)
+PROBE fire 101 trigger_multiple 0 (-10856.69, 11961.28, -23.86)
+PROBE fire 101 trigger_multiple 0 (-10856.69, 11961.28, -23.86)
+PROBE fire 101 trigger_multiple 0 (-10856.69, 11961.28, -23.86)
+PROBE fire 101 trigger_multiple 0 (-10863.86, 11969.51, -24.39)
+PROBE fire 101 trigger_multiple 0 (-10863.86, 11969.51, -24.39)
+PROBE fire 101 trigger_multiple 0 (-10863.86, 11969.51, -24.39)
+PROBE fire 101 trigger_multiple 0 (-10870.89, 11977.57, -24.92)
+PROBE fire 101 trigger_multiple 0 (-10870.89, 11977.57, -24.92)
+PROBE fire 101 trigger_multiple 0 (-10870.89, 11977.57, -24.92)
+PROBE fire 101 trigger_multiple 0 (-10878.09, 11985.78, -25.46)
+PROBE fire 101 trigger_multiple 0 (-10878.09, 11985.78, -25.46)
+PROBE fire 101 trigger_multiple 0 (-10878.09, 11985.78, -25.46)
+PROBE fire 101 trigger_multiple 0 (-10885.46, 11994.12, -26.00)
+PROBE fire 101 trigger_multiple 0 (-10885.46, 11994.12, -26.00)
+PROBE fire 101 trigger_multiple 0 (-10885.46, 11994.12, -26.00)
+PROBE fire 101 trigger_multiple 0 (-10892.54, 12002.14, -26.53)
+PROBE fire 101 trigger_multiple 0 (-10892.54, 12002.14, -26.53)
+PROBE fire 101 trigger_multiple 0 (-10892.54, 12002.14, -26.53)
+PROBE fire 101 trigger_multiple 0 (-10899.79, 12010.31, -27.06)
+PROBE fire 101 trigger_multiple 0 (-10899.79, 12010.31, -27.06)
+PROBE fire 101 trigger_multiple 0 (-10899.79, 12010.31, -27.06)
+PROBE fire 101 trigger_multiple 0 (-10907.21, 12018.61, -27.61)
+PROBE fire 101 trigger_multiple 0 (-10907.21, 12018.61, -27.61)
+PROBE fire 101 trigger_multiple 0 (-10907.21, 12018.61, -27.61)
+PROBE fire 101 trigger_multiple 0 (-10914.52, 12026.71, -28.14)
+PROBE fire 101 trigger_multiple 0 (-10914.52, 12026.71, -28.14)
+PROBE fire 101 trigger_multiple 0 (-10914.52, 12026.71, -28.14)
+PROBE fire 101 trigger_multiple 0 (-10921.85, 12034.80, -28.67)
+PROBE fire 101 trigger_multiple 0 (-10921.85, 12034.80, -28.67)
+PROBE fire 101 trigger_multiple 0 (-10921.85, 12034.80, -28.67)
+PROBE fire 102 trigger_multiple 0 (-10929.03, 12042.73, -29.19)
+PROBE fire 101 trigger_multiple 0 (-10929.03, 12042.73, -29.19)
+PROBE fire 101 trigger_multiple 0 (-10929.03, 12042.73, -29.19)
+PROBE fire 101 trigger_multiple 0 (-10929.03, 12042.73, -29.19)
+PROBE fire 101 trigger_multiple 0 (-10936.52, 12050.96, -29.74)
+PROBE fire 102 trigger_multiple 0 (-10936.52, 12050.96, -29.74)
+PROBE fire 101 trigger_multiple 0 (-10936.52, 12050.96, -29.74)
+PROBE fire 102 trigger_multiple 0 (-10936.52, 12050.96, -29.74)
+PROBE fire 101 trigger_multiple 0 (-10936.52, 12050.96, -29.74)
+PROBE fire 102 trigger_multiple 0 (-10936.52, 12050.96, -29.74)
+PROBE fire 101 trigger_multiple 0 (-10943.89, 12059.01, -30.27)
+PROBE fire 102 trigger_multiple 0 (-10943.89, 12059.01, -30.27)
+PROBE fire 101 trigger_multiple 0 (-10943.89, 12059.01, -30.27)
+PROBE fire 102 trigger_multiple 0 (-10943.89, 12059.01, -30.27)
+PROBE fire 101 trigger_multiple 0 (-10943.89, 12059.01, -30.27)
+PROBE fire 102 trigger_multiple 0 (-10943.89, 12059.01, -30.27)
+PROBE fire 101 trigger_multiple 0 (-10951.27, 12067.05, -30.80)
+PROBE fire 102 trigger_multiple 0 (-10951.27, 12067.05, -30.80)
+PROBE fire 101 trigger_multiple 0 (-10951.27, 12067.05, -30.80)
+PROBE fire 102 trigger_multiple 0 (-10951.27, 12067.05, -30.80)
+PROBE fire 101 trigger_multiple 0 (-10951.27, 12067.05, -30.80)
+PROBE fire 102 trigger_multiple 0 (-10951.27, 12067.05, -30.80)
+PROBE fire 101 trigger_multiple 0 (-10957.52, 12074.63, -31.29)
+PROBE fire 102 trigger_multiple 0 (-10957.52, 12074.63, -31.29)
+PROBE fire 101 trigger_multiple 0 (-10957.52, 12074.63, -31.29)
+PROBE fire 102 trigger_multiple 0 (-10957.52, 12074.63, -31.29)
+PROBE fire 101 trigger_multiple 0 (-10957.52, 12074.63, -31.29)
+PROBE fire 102 trigger_multiple 0 (-10957.52, 12074.63, -31.29)
+PROBE fire 98 trigger_multiple 0 (-10051.09, 12066.87, 24.11)
+PROBE fire 98 trigger_multiple 0 (-10055.38, 12077.19, 24.93)
+PROBE fire 98 trigger_multiple 0 (-10055.38, 12077.19, 24.93)
+PROBE fire 98 trigger_multiple 0 (-10055.38, 12077.19, 24.93)
+PROBE fire 98 trigger_multiple 0 (-10059.24, 12087.18, 25.80)
+PROBE fire 98 trigger_multiple 0 (-10059.24, 12087.18, 25.80)
+PROBE fire 98 trigger_multiple 0 (-10059.24, 12087.18, 25.80)
+PROBE fire 98 trigger_multiple 0 (-10062.97, 12097.42, 26.74)
+PROBE fire 98 trigger_multiple 0 (-10062.97, 12097.42, 26.74)
+PROBE fire 98 trigger_multiple 0 (-10062.97, 12097.42, 26.74)
+PROBE fire 98 trigger_multiple 0 (-10066.57, 12107.71, 27.72)
+PROBE fire 98 trigger_multiple 0 (-10066.57, 12107.71, 27.72)
+PROBE fire 98 trigger_multiple 0 (-10066.57, 12107.71, 27.72)
+PROBE fire 98 trigger_multiple 0 (-10066.57, 12107.71, 27.72)
+PROBE fire 98 trigger_multiple 0 (-10068.94, 12114.72, 28.41)
+PROBE fire 98 trigger_multiple 0 (-10068.94, 12114.72, 28.41)
+PROBE fire 98 trigger_multiple 0 (-10074.49, 12131.91, 30.16)
+PROBE fire 98 trigger_multiple 0 (-10074.49, 12131.91, 30.16)
+PROBE fire 98 trigger_multiple 0 (-10074.49, 12131.91, 30.16)
+PROBE fire 98 trigger_multiple 0 (-10074.49, 12131.91, 30.16)
+PROBE fire 98 trigger_multiple 0 (-10075.74, 12135.85, 30.56)
+PROBE fire 98 trigger_multiple 0 (-10075.74, 12135.85, 30.56)
+PROBE fire 98 trigger_multiple 0 (-10078.89, 12145.80, 31.59)
+PROBE fire 98 trigger_multiple 0 (-10078.89, 12145.80, 31.59)
+PROBE fire 98 trigger_multiple 0 (-10078.89, 12145.80, 31.59)
+PROBE fire 98 trigger_multiple 0 (-10083.21, 12159.72, 33.04)
+PROBE fire 98 trigger_multiple 0 (-10083.21, 12159.72, 33.04)
+PROBE fire 98 trigger_multiple 0 (-10083.21, 12159.72, 33.04)
+PROBE fire 98 trigger_multiple 0 (-10086.39, 12170.12, 34.14)
+PROBE fire 98 trigger_multiple 0 (-10086.39, 12170.12, 34.14)
+PROBE fire 98 trigger_multiple 0 (-10086.39, 12170.12, 34.14)
+PROBE fire 98 trigger_multiple 0 (-10090.58, 12183.84, 35.58)
+PROBE fire 98 trigger_multiple 0 (-10090.58, 12183.84, 35.58)
+PROBE fire 98 trigger_multiple 0 (-10090.58, 12183.84, 35.58)
+PROBE fire 98 trigger_multiple 0 (-10090.58, 12183.84, 35.58)
+PROBE fire 98 trigger_multiple 0 (-10091.66, 12187.38, 35.96)
+PROBE fire 98 trigger_multiple 0 (-10091.66, 12187.38, 35.96)
+PROBE fire 98 trigger_multiple 0 (-10095.81, 12201.11, 37.42)
+PROBE fire 98 trigger_multiple 0 (-10095.81, 12201.11, 37.42)
+PROBE fire 98 trigger_multiple 0 (-10095.81, 12201.11, 37.42)
+PROBE fire 93 trigger_multiple 0 (-10817.16, 8708.91, -44.31)
+PROBE fire 93 trigger_multiple 0 (-10827.78, 8706.40, -44.91)
+PROBE fire 93 trigger_multiple 0 (-10827.78, 8706.40, -44.91)
+PROBE fire 93 trigger_multiple 0 (-10827.78, 8706.40, -44.91)
+PROBE fire 93 trigger_multiple 0 (-10838.18, 8703.93, -45.50)
+PROBE fire 93 trigger_multiple 0 (-10838.18, 8703.93, -45.50)
+PROBE fire 93 trigger_multiple 0 (-10838.18, 8703.93, -45.50)
+PROBE fire 93 trigger_multiple 0 (-10849.01, 8701.37, -46.10)
+PROBE fire 93 trigger_multiple 0 (-10849.01, 8701.37, -46.10)
+PROBE fire 93 trigger_multiple 0 (-10849.01, 8701.37, -46.10)
+PROBE fire 93 trigger_multiple 0 (-10859.62, 8698.85, -46.70)
+PROBE fire 93 trigger_multiple 0 (-10859.62, 8698.85, -46.70)
+PROBE fire 93 trigger_multiple 0 (-10859.62, 8698.85, -46.70)
+PROBE fire 93 trigger_multiple 0 (-10870.24, 8696.33, -47.30)
+PROBE fire 93 trigger_multiple 0 (-10870.24, 8696.33, -47.30)
+PROBE fire 93 trigger_multiple 0 (-10870.24, 8696.33, -47.30)
+PROBE fire 93 trigger_multiple 0 (-10880.86, 8693.82, -47.89)
+PROBE fire 93 trigger_multiple 0 (-10880.86, 8693.82, -47.89)
+PROBE fire 93 trigger_multiple 0 (-10880.86, 8693.82, -47.89)
+PROBE fire 93 trigger_multiple 0 (-10891.47, 8691.30, -48.49)
+PROBE fire 93 trigger_multiple 0 (-10891.47, 8691.30, -48.49)
+PROBE fire 93 trigger_multiple 0 (-10891.47, 8691.30, -48.49)
+PROBE fire 93 trigger_multiple 0 (-10902.09, 8688.79, -49.09)
+PROBE fire 93 trigger_multiple 0 (-10902.09, 8688.79, -49.09)
+PROBE fire 93 trigger_multiple 0 (-10902.09, 8688.79, -49.09)
+PROBE fire 93 trigger_multiple 0 (-10912.70, 8686.27, -49.68)
+PROBE fire 93 trigger_multiple 0 (-10912.70, 8686.27, -49.68)
+PROBE fire 93 trigger_multiple 0 (-10912.70, 8686.27, -49.68)
+PROBE fire 93 trigger_multiple 0 (-10923.32, 8683.76, -50.28)
+PROBE fire 93 trigger_multiple 0 (-10923.32, 8683.76, -50.28)
+PROBE fire 93 trigger_multiple 0 (-10923.32, 8683.76, -50.28)
+PROBE fire 93 trigger_multiple 0 (-10933.93, 8681.24, -50.88)
+PROBE fire 93 trigger_multiple 0 (-10933.93, 8681.24, -50.88)
+PROBE fire 93 trigger_multiple 0 (-10933.93, 8681.24, -50.88)
+PROBE fire 93 trigger_multiple 0 (-10944.55, 8678.72, -51.45)
+PROBE fire 93 trigger_multiple 0 (-10944.55, 8678.72, -51.45)
+PROBE fire 93 trigger_multiple 0 (-10944.55, 8678.72, -51.45)
+PROBE fire 93 trigger_multiple 0 (-10955.17, 8676.21, -51.07)
+PROBE fire 93 trigger_multiple 0 (-10955.17, 8676.21, -51.07)
+PROBE fire 93 trigger_multiple 0 (-10955.17, 8676.21, -51.07)
+PROBE fire 93 trigger_multiple 0 (-10965.80, 8673.69, -50.69)
+PROBE fire 93 trigger_multiple 0 (-10965.80, 8673.69, -50.69)
+PROBE fire 93 trigger_multiple 0 (-10965.80, 8673.69, -50.69)
+PROBE fire 93 trigger_multiple 0 (-10976.42, 8671.17, -50.31)
+PROBE fire 93 trigger_multiple 0 (-10976.42, 8671.17, -50.31)
+PROBE fire 93 trigger_multiple 0 (-10976.42, 8671.17, -50.31)
+PROBE fire 93 trigger_multiple 0 (-10987.05, 8668.65, -49.93)
+PROBE fire 93 trigger_multiple 0 (-10987.05, 8668.65, -49.93)
+PROBE fire 93 trigger_multiple 0 (-10987.05, 8668.65, -49.93)
+PROBE fire 93 trigger_multiple 0 (-10997.67, 8666.14, -49.55)
+PROBE fire 93 trigger_multiple 0 (-10997.67, 8666.14, -49.55)
+PROBE fire 93 trigger_multiple 0 (-10997.67, 8666.14, -49.55)
+PROBE fire 93 trigger_multiple 0 (-11008.30, 8663.62, -49.17)
+PROBE fire 93 trigger_multiple 0 (-11008.30, 8663.62, -49.17)
+PROBE fire 93 trigger_multiple 0 (-11008.30, 8663.62, -49.17)
+PROBE fire 93 trigger_multiple 0 (-11018.92, 8661.10, -48.79)
+PROBE fire 93 trigger_multiple 0 (-11018.92, 8661.10, -48.79)
+PROBE fire 93 trigger_multiple 0 (-11018.92, 8661.10, -48.79)

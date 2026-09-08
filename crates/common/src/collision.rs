@@ -875,10 +875,16 @@ impl CollisionWorld {
         }
     }
 
-    fn brush_linked(&self, brush: &BrushPlanes) -> bool {
+    /// Reads [`set_model_linked`](Self::set_model_linked) back. An index past
+    /// the model count is `true`, matching the trace's own treatment of one.
+    pub fn model_linked(&self, model: usize) -> bool {
         self.model_linked
-            .get(brush.model as usize)
+            .get(model)
             .is_none_or(|m| m.load(Ordering::Relaxed))
+    }
+
+    fn brush_linked(&self, brush: &BrushPlanes) -> bool {
+        self.model_linked(brush.model as usize)
     }
 
     /// Contents at a point: `CONTENTS_WATER` inside any water brush, plus the
@@ -1229,6 +1235,79 @@ pub fn synthetic_world(
     brushes: &[(usize, [f32; 3], [f32; 3])],
 ) -> CollisionWorld {
     synthetic_world_tris(materials, brushes, &[])
+}
+
+/// Test helper: [`test_world`]'s floor as model 0 plus one submodel per
+/// `submodels` box, each holding a single brush in the model's own local
+/// space. `entities` is the entity lump verbatim, since a submodel's
+/// classname and `"model" "*N"` are what place its brushes and decide
+/// whether they are solid at all. The only shape in which
+/// [`CollisionWorld::set_model_linked`] is observable.
+#[doc(hidden)]
+pub fn submodel_test_world(entities: &str, submodels: &[([f32; 3], [f32; 3])]) -> CollisionWorld {
+    let side = |v: f32| crate::bsp::BrushSide {
+        plane_or_dist: v.to_bits(),
+        material: 0,
+    };
+    let floor = ([-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0]);
+    let mut brush_sides = Vec::new();
+    let mut brushes = Vec::new();
+    let mut models = Vec::new();
+    for (i, (lo, hi)) in std::iter::once(&floor).chain(submodels).enumerate() {
+        brushes.push(crate::bsp::Brush {
+            first_side: (i * 6) as u32,
+            num_sides: 6,
+            material: 0,
+        });
+        for axis in 0..3 {
+            brush_sides.push(side(lo[axis]));
+            brush_sides.push(side(hi[axis]));
+        }
+        models.push(crate::bsp::Model {
+            mins: *lo,
+            maxs: *hi,
+            first_soup: 0,
+            num_soups: 0,
+            first_brush: i as u32,
+            num_brushes: 1,
+        });
+    }
+    CollisionWorld::build(
+        &crate::bsp::Bsp {
+            materials: vec![crate::bsp::Material {
+                name: "textures/test/solid".into(),
+                surface_flags: 0,
+                content_flags: CONTENTS_SOLID,
+            }],
+            lightmaps: vec![],
+            soups: vec![],
+            verts: vec![],
+            indices: vec![],
+            entities: entities.to_string(),
+            planes: vec![],
+            brush_sides,
+            brushes,
+            models,
+            cull_groups: vec![],
+            cull_indices: vec![],
+            portal_verts: vec![],
+            occluders: vec![],
+            occluder_plane_indices: vec![],
+            occluder_edges: vec![],
+            occluder_indices: vec![],
+            aabb_nodes: vec![],
+            cells: vec![],
+            portals: vec![],
+            nodes: vec![],
+            leafs: vec![],
+            terrain: vec![],
+            patches: vec![],
+            collision_verts: vec![],
+            collision_indices: vec![],
+            pvs: None,
+        },
+        &[],
+    )
 }
 
 /// [`synthetic_world`] plus world-space triangles as soups of material 0,
