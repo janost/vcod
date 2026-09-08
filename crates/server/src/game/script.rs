@@ -338,10 +338,18 @@ impl ScriptRuntime {
     /// from `ClientThink_real` (0x405b3). The notify only marks the threads
     /// parked in `waittill("trigger", other)` runnable; they run in this
     /// tick's script frame.
+    ///
+    /// A spectator touches nothing: `ClientThink_real`'s spectator arm
+    /// returns before the pass. A dead player still does, and that is not an
+    /// oversight -- `sd.gsc`'s `bombzone_think` tests `isalive(other)` itself,
+    /// which would be dead code if the engine filtered the dead out.
     pub fn touch_triggers(&mut self, slot: usize, now_ms: i32) {
         let Some(client) = self.client_entity(slot) else {
             return;
         };
+        if self.client_field(slot, "sessionstate").as_deref() == Some("spectator") {
+            return;
+        }
         let host = &mut self.host;
         let hits = self
             .vm
@@ -1107,6 +1115,22 @@ impl ScriptRuntime {
         id
     }
 
+    /// A client's `sessionstate`, which `spawn_client` leaves at
+    /// `"spectator"`; the four legal strings are in
+    /// docs/research/cod11-map-cycle.md 6.1.
+    pub fn set_client_state_for_test(&mut self, slot: usize, state: &str) {
+        use vcod_gsc::Host;
+        let Some(ent) = self.client_entity(slot) else {
+            return;
+        };
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let field = cx.intern_folded("sessionstate");
+            let v = Value::String(cx.intern_exact(state));
+            host.set_field(cx, ent, field, v).unwrap();
+        });
+    }
+
     /// Start `name` as a thread on `ent`, the way a script's `thread` does.
     pub fn start_thread_for_test(&mut self, ent: EntId, name: &str, now_ms: i32) {
         let f = self.vm.func_ref(&self.entry, name);
@@ -1578,6 +1602,7 @@ mod tests {
 
         let player = rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
         assert_eq!(rt.client_entity(0), Some(player));
+        rt.set_client_state_for_test(0, "playing");
 
         rt.touch_triggers(0, 50);
         rt.run_frame(50);
@@ -1589,5 +1614,40 @@ mod tests {
         rt.touch_triggers(0, 100);
         rt.run_frame(100);
         assert_eq!(rt.level_field("hits"), Value::Int(1));
+    }
+
+    /// A spectator flying through a trigger touches nothing, and a dead
+    /// player standing in one still does: `sd.gsc`'s `bombzone_think` does
+    /// its own `isalive(other)` test, so the engine cannot be filtering the
+    /// dead out or that line would never matter.
+    #[test]
+    fn a_spectator_touches_nothing_and_a_dead_player_still_does() {
+        let mut rt = ScriptRuntime::for_test("main() { level.hits = 0; }");
+        rt.install_for_test(
+            "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
+             level.hits = level.hits + 1; } }",
+        );
+        let zone = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut().register(
+            zone,
+            crate::game::trigger::TriggerKind::Multiple,
+            [-64.0, -64.0, 0.0],
+            [64.0, 64.0, 64.0],
+            0,
+            0,
+        );
+        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
+        rt.run_frame(0);
+
+        rt.set_client_state_for_test(0, "spectator");
+        rt.touch_triggers(0, 50);
+        rt.run_frame(50);
+        assert_eq!(rt.level_field("hits"), Value::Int(0), "a spectator touched");
+
+        rt.set_client_state_for_test(0, "dead");
+        rt.touch_triggers(0, 100);
+        rt.run_frame(100);
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "a corpse did not");
     }
 }
