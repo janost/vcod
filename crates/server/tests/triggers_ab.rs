@@ -26,6 +26,14 @@
 //! with the three `script_gameobjectname` entities, and the map ships no
 //! `trigger_once` or `trigger_damage` at all.
 //!
+//! The gate has a structural blind spot beside that one. The probe's census
+//! is taken after `_gameobjects` has deleted its entities, so it can only see
+//! which triggers survived, never whether a deleted one left a row behind.
+//! A stale row fires at the dead brush and notifies a thread nobody is parked
+//! on, which produces no line on either side and so no diff. That case is
+//! pinned by a unit test instead
+//! (`a_deleted_trigger_takes_its_row_and_leaves_the_reused_number_clean`).
+//!
 //! A capture cannot be replayed as a walk -- the route is not reproducible and
 //! a retail spawn is random -- so the gate replays each recorded origin, the
 //! way `entities_ab.rs` does (docs/protocol-1.1.md, "Which entities a client

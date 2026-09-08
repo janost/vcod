@@ -401,7 +401,10 @@ engineering setup works.
   `map_rotate` line an earlier frame's script queued reloads the level before
   anything else runs), then expired clients, then each client's queued usercmds
   (`replay_moves`, one pmove step per cmd, which is where the weapon machine
-  queues a frame's shots, swings and throws), then those themselves (a trace
+  queues a frame's shots, swings and throws, and which mirrors each client's
+  origin onto the host and runs the touch pass per cmd right after, the way
+  retail updates `r.currentOrigin` and calls `G_TouchTriggers` inside
+  `ClientThink`), then those themselves (a trace
   each, an impact temp entity and a hit per player struck), then the missiles
   fly and any due fuse explodes, then the blasts become hits, then the client
   commands that start a script thread (`kill`, `mr`), which the packet pass
@@ -409,9 +412,12 @@ engineering setup works.
   `deliver_hits` so the damage callback has run before script, then the
   script frame, then the sim ops the
   script left (spawns, weapon gives and switches, the damage the callback
-  did), then the host-to-sim mirrors (weapons held, origin, health, the damage
+  did), then the host-to-sim mirrors (weapons held, health, the damage
   feedback `P_DamageFeedback` computes from the health the hit left), then the
-  entities are built once and culled and written per client. Move anything
+  entities are built once and culled and written per client. The origin is the
+  one mirror that no longer waits for that pass: the touch pass needs this
+  cmd's spot, not last tick's, so anything reading a client's host origin
+  between the two now sees the post-move value. Move anything else
   across that order and a snapshot reads a frame-old field.
 - `Cx::spawn` is for a builtin that needs script to run before its caller's
   next instruction: the queued thread starts the moment the builtin returns,

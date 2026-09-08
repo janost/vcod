@@ -13,6 +13,8 @@ pub enum TriggerKind {
     Use,
     LookAt,
     Hurt,
+    /// Recognised, registered and notified, but models no damage of its own:
+    /// deliberate, and the spec's 3.6 says so.
     Damage,
 }
 
@@ -23,7 +25,9 @@ pub struct Trigger {
     pub kind: TriggerKind,
     pub mins: [f32; 3],
     pub maxs: [f32; 3],
-    /// The `wait` and `random` keys as milliseconds; both 0 means no gate.
+    /// The refire window in milliseconds: the `wait` and `random` keys for
+    /// every kind but `Hurt`, where `register_hurt` puts the touch cadence
+    /// here instead. Both 0 means no gate.
     pub wait_ms: i32,
     pub random_ms: i32,
     /// Level-clock time this may fire again.
@@ -120,10 +124,6 @@ impl Triggers {
         self.rows.get(&id.0)
     }
 
-    pub fn get_mut(&mut self, id: EntId) -> Option<&mut Trigger> {
-        self.rows.get_mut(&id.0)
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = (EntId, &Trigger)> {
         self.rows.iter().map(|(id, t)| (EntId(*id), t))
     }
@@ -148,6 +148,10 @@ impl Triggers {
             return false;
         }
         t.next_fire_ms = match t.kind {
+            // Ours latches the window shut where the spec's 3.6 says retail
+            // frees the entity. Whether it does is unmeasured, so a
+            // `getEntArray` sees a fired `trigger_once` here and may not on
+            // retail; nothing is invented until that is measured.
             TriggerKind::Once => i32::MAX,
             _ if t.wait_ms == 0 && t.random_ms == 0 => now_ms,
             _ => now_ms + t.wait_ms + rng(t.random_ms),
@@ -391,6 +395,15 @@ mod tests {
         assert!(ts.fire(id, 0, &mut half));
         assert!(!ts.fire(id, 690, &mut half), "500 + 400/2 is 700");
         assert!(ts.fire(id, 700, &mut half));
+    }
+
+    /// The two spellings of the hurt mod agree. `MOD_TRIGGER_HURT` is the
+    /// string `deliver_world_hit` passes and `MOD_NAMES[23]` is what
+    /// `mod_index` looks it up in; a drift between them makes every
+    /// `trigger_hurt` death an unnamed mod.
+    #[test]
+    fn the_hurt_mod_name_matches_the_means_of_death_table() {
+        assert_eq!(crate::game::combat::MOD_NAMES[23], MOD_TRIGGER_HURT);
     }
 
     /// A `trigger_once` fires once and then never again, however long the
