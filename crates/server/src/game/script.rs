@@ -394,10 +394,12 @@ impl ScriptRuntime {
     /// parked in `waittill("trigger", other)` runnable; they run in this
     /// tick's script frame.
     ///
-    /// A spectator touches nothing: `ClientThink_real`'s spectator arm
-    /// returns before the pass. A dead player still does, and that is not an
-    /// oversight -- `sd.gsc`'s `bombzone_think` tests `isalive(other)` itself,
-    /// which would be dead code if the engine filtered the dead out.
+    /// A spectator and an intermission client touch nothing: both of
+    /// `ClientThink_real`'s arms for them return before the pass
+    /// (docs/research/cod11-map-cycle.md 6.2). A dead player still does, and
+    /// that is not an oversight -- `sd.gsc`'s `bombzone_think` tests
+    /// `isalive(other)` itself, which would be dead code if the engine
+    /// filtered the dead out.
     ///
     /// `buttons` are the cmd's own rather than the host's mirrored copy, which
     /// is only written after the move pass this runs inside.
@@ -405,7 +407,10 @@ impl ScriptRuntime {
         let Some(client) = self.client_entity(slot) else {
             return;
         };
-        if self.client_field(slot, "sessionstate").as_deref() == Some("spectator") {
+        if matches!(
+            self.client_field(slot, "sessionstate").as_deref(),
+            Some("spectator" | "intermission")
+        ) {
             return;
         }
         let host = &mut self.host;
@@ -1827,12 +1832,13 @@ mod tests {
         assert_eq!(rt.level_field("hits"), Value::Int(1), "no further notify");
     }
 
-    /// A spectator flying through a trigger touches nothing, and a dead
-    /// player standing in one still does: `sd.gsc`'s `bombzone_think` does
-    /// its own `isalive(other)` test, so the engine cannot be filtering the
-    /// dead out or that line would never matter.
+    /// A spectator and an intermission camera touch nothing -- retail's
+    /// arms for both return before the pass -- and a dead player standing in
+    /// one still does: `sd.gsc`'s `bombzone_think` does its own
+    /// `isalive(other)` test, so the engine cannot be filtering the dead out
+    /// or that line would never matter.
     #[test]
-    fn a_spectator_touches_nothing_and_a_dead_player_still_does() {
+    fn only_a_simulated_client_touches_a_trigger() {
         let mut rt = ScriptRuntime::for_test("main() { level.hits = 0; }");
         rt.install_for_test(
             "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
@@ -1855,6 +1861,15 @@ mod tests {
         rt.touch_triggers_with_buttons(0, 50, 0);
         rt.run_frame(50);
         assert_eq!(rt.level_field("hits"), Value::Int(0), "a spectator touched");
+
+        rt.set_client_state_for_test(0, "intermission");
+        rt.touch_triggers_with_buttons(0, 75, 0);
+        rt.run_frame(75);
+        assert_eq!(
+            rt.level_field("hits"),
+            Value::Int(0),
+            "an intermission camera touched"
+        );
 
         rt.set_client_state_for_test(0, "dead");
         rt.touch_triggers_with_buttons(0, 100, 0);
