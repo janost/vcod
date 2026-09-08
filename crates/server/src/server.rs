@@ -1827,6 +1827,7 @@ impl Server {
             items: carry.items.filter(|_| restart),
         };
         let source = crate::game::script::PakScripts::new(fs.clone(), self.script_overlay.clone());
+        let rng_seed = vcod_common::rng::xorshift(&mut self.rng);
         let rt = crate::game::script::ScriptRuntime::load_from(
             Box::new(source),
             fs,
@@ -1837,6 +1838,7 @@ impl Server {
             self.world.clone(),
             self.weapon_table.clone(),
             self.sv_time_ms,
+            rng_seed,
             carry,
         )?;
         let mut configstrings = rt.configstrings().to_vec();
