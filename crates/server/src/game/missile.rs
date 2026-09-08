@@ -141,6 +141,11 @@ pub struct Explosion {
 pub struct MissileFrame {
     pub exploded: Vec<Explosion>,
     pub temp: Vec<crate::game::temp_entity::TempEntity>,
+    /// Missiles whose ridden-out event freed them this frame. `Missiles` has
+    /// no `&mut GameHost` to free them itself, so the caller does it through
+    /// `GameHost::free_entity`, the one place an entity going away is wired
+    /// up to the tables that hang off it (triggers today).
+    pub freed: Vec<EntId>,
 }
 
 pub struct Missiles {
@@ -521,7 +526,6 @@ impl Missiles {
     /// exploded ones that have ridden out their event.
     pub fn run(
         &mut self,
-        ents: &mut ObjectTable,
         world: Option<&CollisionWorld>,
         sims: &[(usize, &ClientSim)],
         now_ms: i32,
@@ -529,6 +533,7 @@ impl Missiles {
         let mut frame = MissileFrame {
             exploded: Vec::new(),
             temp: Vec::new(),
+            freed: Vec::new(),
         };
         for m in &mut self.live {
             if let Some(at) = m.exploded_ms {
@@ -536,7 +541,7 @@ impl Missiles {
                 // event has aged out, and is freed with it.
                 if now_ms.wrapping_sub(at) > EVENT_VALID_MS {
                     m.gone = true;
-                    ents.free(m.id);
+                    frame.freed.push(m.id);
                 }
                 continue;
             }
@@ -695,11 +700,8 @@ mod tests {
         let (mut vm, mut host) = crate::game::testing::fixture();
         let mut ms = Missiles::default();
         let id = armed(&mut ms, &mut host, &mut vm, Vec3::ZERO, Vec3::ZERO, 10_000);
-        assert!(ms
-            .run(&mut host.ents, None, &[], 13_950)
-            .exploded
-            .is_empty());
-        let frame = ms.run(&mut host.ents, None, &[], 14_000);
+        assert!(ms.run(None, &[], 13_950).exploded.is_empty());
+        let frame = ms.run(None, &[], 14_000);
         assert_eq!(frame.exploded.len(), 1);
         assert_eq!(frame.exploded[0].inflictor, id);
         assert_eq!(frame.exploded[0].owner, 0);
@@ -720,7 +722,7 @@ mod tests {
         let (mut vm, mut host) = crate::game::testing::fixture();
         let mut ms = Missiles::default();
         let id = armed(&mut ms, &mut host, &mut vm, Vec3::ZERO, Vec3::ZERO, 0);
-        ms.run(&mut host.ents, None, &[], 4000);
+        ms.run(None, &[], 4000);
         let e = ms.entities(p).next().unwrap().1;
         assert_eq!(e.field_i32(p, "eType"), ET_GENERAL);
         assert_eq!(e.field_i32(p, "eFlags"), EFLAGS_EXPLODED);
@@ -731,9 +733,14 @@ mod tests {
             "the entity rides its own event"
         );
 
-        ms.run(&mut host.ents, None, &[], 4300);
+        let frame = ms.run(None, &[], 4300);
+        assert!(frame.freed.is_empty(), "not aged out yet");
         assert_eq!(ms.entities(p).count(), 1, "it rides one more 300 ms");
-        ms.run(&mut host.ents, None, &[], 4350);
+        let frame = ms.run(None, &[], 4350);
+        assert_eq!(frame.freed, vec![id]);
+        for freed in frame.freed {
+            host.free_entity(freed);
+        }
         assert_eq!(ms.entities(p).count(), 0, "and leaves the wire after that");
         assert!(host.ents.get(id).is_none(), "freed with it");
         // The number goes back to the pool: the next spawn takes it.
