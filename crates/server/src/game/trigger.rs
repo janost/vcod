@@ -1,8 +1,10 @@
-//! The map's triggers as a host-side table, and the box test the touch pass
-//! runs against them. Which classnames are triggers, and what each does, is
+//! The map's triggers as a host-side table, and the two-stage test the touch
+//! pass runs against them: a box query, then a contact against the trigger's
+//! own brushes. Which classnames are triggers, and what each does, is
 //! docs/superpowers/specs/2026-09-08-movers-triggers-sd-design.md section 3.
 
 use crate::game::host::GameHost;
+use glam::Vec3;
 use std::collections::BTreeMap;
 use vcod_gsc::{Atom, Cx, EntId, Host, Value};
 
@@ -18,13 +20,34 @@ pub enum TriggerKind {
     Damage,
 }
 
-/// One trigger. `mins`/`maxs` are the submodel's own box, so the absolute
-/// one is taken around the entity's current origin rather than cached.
+/// What a trigger occupies: the submodel's own box, and the model whose
+/// brushes the exact test measures against. Both are local, so the absolute
+/// shape is taken around the entity's current origin rather than cached.
+#[derive(Clone, Copy, Debug)]
+pub struct TriggerShape {
+    pub mins: [f32; 3],
+    pub maxs: [f32; 3],
+    /// Looked up in `GameHost::model_brushes`. `None` on a trigger with no
+    /// brush model, which then has only its box.
+    pub model: Option<u32>,
+}
+
+impl TriggerShape {
+    /// A box with no brushes under it, which is every shape a script builds.
+    pub fn boxed(mins: [f32; 3], maxs: [f32; 3]) -> Self {
+        Self {
+            mins,
+            maxs,
+            model: None,
+        }
+    }
+}
+
+/// One trigger.
 #[derive(Clone, Copy, Debug)]
 pub struct Trigger {
     pub kind: TriggerKind,
-    pub mins: [f32; 3],
-    pub maxs: [f32; 3],
+    pub shape: TriggerShape,
     /// The refire window in milliseconds: the `wait` and `random` keys for
     /// every kind but `Hurt`, where `register_hurt` puts the touch cadence
     /// here instead. Both 0 means no gate.
@@ -63,8 +86,7 @@ impl Triggers {
         &mut self,
         id: EntId,
         kind: TriggerKind,
-        mins: [f32; 3],
-        maxs: [f32; 3],
+        shape: TriggerShape,
         wait_ms: i32,
         random_ms: i32,
     ) {
@@ -72,8 +94,7 @@ impl Triggers {
             id.0,
             Trigger {
                 kind,
-                mins,
-                maxs,
+                shape,
                 wait_ms,
                 random_ms,
                 next_fire_ms: 0,
@@ -92,20 +113,13 @@ impl Triggers {
     /// Not modelled, and the same section says why: `hurt_touch` tests a byte
     /// on the *toucher* before its timestamp, so ours hurts a dead player
     /// where retail may not.
-    pub fn register_hurt(
-        &mut self,
-        id: EntId,
-        mins: [f32; 3],
-        maxs: [f32; 3],
-        damage: i32,
-        spawnflags: i32,
-    ) {
+    pub fn register_hurt(&mut self, id: EntId, shape: TriggerShape, damage: i32, spawnflags: i32) {
         let wait_ms = if spawnflags & HURT_SLOW == 0 {
             HURT_INTERVAL_MS
         } else {
             HURT_SLOW_INTERVAL_MS
         };
-        self.register(id, TriggerKind::Hurt, mins, maxs, wait_ms, 0);
+        self.register(id, TriggerKind::Hurt, shape, wait_ms, 0);
         if let Some(t) = self.rows.get_mut(&id.0) {
             t.damage = damage;
             t.dflags = if spawnflags & HURT_NO_PROTECTION == 0 {
@@ -189,7 +203,7 @@ fn offset_bounds(origin: [f32; 3], mins: [f32; 3], maxs: [f32; 3]) -> ([f32; 3],
 }
 
 pub fn abs_bounds(origin: [f32; 3], t: &Trigger) -> ([f32; 3], [f32; 3]) {
-    offset_bounds(origin, t.mins, t.maxs)
+    offset_bounds(origin, t.shape.mins, t.shape.maxs)
 }
 
 /// The player's own clip box, which is what a touch's exact
@@ -242,11 +256,68 @@ fn abs_bounds_with_atom(
 /// (docs/research/cod11-gsc-object-model.md section 22).
 const TOUCH_BOX: [f32; 3] = [40.0, 40.0, 52.0];
 
+/// One submodel brush as clip planes, model-local the way `Trigger::mins` is:
+/// the entity's current origin is applied at test time, so a relocated
+/// trigger takes its brushes with it. Point p is inside iff n·p <= d for
+/// every plane.
+pub struct BrushHull {
+    pub planes: Vec<(Vec3, f32)>,
+}
+
+/// Every lump-27 submodel's brushes as clip planes, indexed by model number,
+/// for the exact stage of the touch pass. Model 0 is the world and is left
+/// empty: no trigger uses it and its brushes are the map's whole solid
+/// geometry.
+///
+/// Trigger brushes are not in `CollisionWorld` -- it drops them on purpose,
+/// since retail leaves a trigger hollow to movement -- so they are decoded
+/// straight off the lump here, through the same side decode the clip uses.
+pub fn model_brush_hulls(bsp: &vcod_common::bsp::Bsp) -> Vec<Vec<BrushHull>> {
+    bsp.models
+        .iter()
+        .enumerate()
+        .map(|(mi, model)| {
+            if mi == 0 {
+                return Vec::new();
+            }
+            let range =
+                model.first_brush as usize..(model.first_brush + model.num_brushes) as usize;
+            bsp.brushes[range]
+                .iter()
+                .map(|b| {
+                    let mut planes = Vec::new();
+                    vcod_common::collision::brush_side_planes(bsp, b, Vec3::ZERO, &mut planes);
+                    BrushHull { planes }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Does an absolute box touch any of a model's brushes, the model sitting at
+/// `origin`? Q3's separating-plane test, which is what a contact test reduces
+/// to for an AABB: the box clears a brush only if some plane separates it, so
+/// a brush with no separating plane is in contact.
+fn box_contacts_hulls(centre: Vec3, half: Vec3, origin: Vec3, hulls: &[BrushHull]) -> bool {
+    let c = centre - origin;
+    hulls.iter().any(|b| {
+        b.planes.iter().all(|&(n, d)| {
+            let r = n.x.abs() * half.x + n.y.abs() * half.y + n.z.abs() * half.z;
+            n.dot(c) - r <= d
+        })
+    })
+}
+
 /// Every trigger this client touches, ascending entity number: the
 /// `trap_EntitiesInBox` broad phase around the origin, then the exact
-/// `trap_EntityContact` test against the client's own clip box. Neither box
-/// contains the other -- the candidate reaches 52 below the feet and the clip
-/// box 72 above them -- so both have to hold.
+/// `trap_EntityContact` test of the client's own clip box against the
+/// trigger's *brushes* (docs/research/cod11-gsc-object-model.md section 22).
+/// Neither box contains the other -- the candidate reaches 52 below the feet
+/// and the clip box 72 above them -- so both have to hold, and the box
+/// overlap is only the cheap reject in front of the plane loop.
+///
+/// A trigger whose model has no brushes decoded (script-registered, or a map
+/// loaded without a BSP) keeps the box as its exact test.
 pub fn touched(host: &mut GameHost, cx: &mut Cx, client: EntId) -> Vec<EntId> {
     let origin_atom = cx.intern_folded("origin");
     let origin = entity_origin(host, cx, client, origin_atom);
@@ -256,17 +327,37 @@ pub fn touched(host: &mut GameHost, cx: &mut Cx, client: EntId) -> Vec<EntId> {
         TOUCH_BOX,
     );
     let exact = abs_bounds_with_atom(host, cx, client, origin_atom);
+    let lo = Vec3::from_array(exact.0);
+    let hi = Vec3::from_array(exact.1);
+    let centre = (lo + hi) * 0.5;
+    let half = (hi - lo) * 0.5;
     let ids: Vec<EntId> = host.triggers.iter().map(|(id, _)| id).collect();
     ids.into_iter()
         .filter(|id| {
+            let Some(t) = host.triggers.get(*id).copied() else {
+                return false;
+            };
             // A `trigger_lookat`'s contents bit is not in the mask retail's
             // broad phase queries with, so no touch ever returns one
             // (docs/research/cod11-gsc-object-model.md 22.1).
-            if host.triggers.get(*id).map(|t| t.kind) == Some(TriggerKind::LookAt) {
+            if t.kind == TriggerKind::LookAt {
                 return false;
             }
-            let b = abs_bounds_with_atom(host, cx, *id, origin_atom);
-            boxes_overlap(candidate, b) && boxes_overlap(exact, b)
+            let t_origin = entity_origin(host, cx, *id, origin_atom);
+            let b = abs_bounds(t_origin, &t);
+            if !(boxes_overlap(candidate, b) && boxes_overlap(exact, b)) {
+                return false;
+            }
+            match t
+                .shape
+                .model
+                .and_then(|m| host.model_brushes.get(m as usize))
+            {
+                Some(hulls) if !hulls.is_empty() => {
+                    box_contacts_hulls(centre, half, Vec3::from_array(t_origin), hulls)
+                }
+                _ => true,
+            }
         })
         .collect()
 }
@@ -302,8 +393,7 @@ mod tests {
     fn abs_bounds_follow_the_origin() {
         let t = Trigger {
             kind: TriggerKind::Multiple,
-            mins: [-16.0, -16.0, 0.0],
-            maxs: [16.0, 16.0, 72.0],
+            shape: TriggerShape::boxed([-16.0, -16.0, 0.0], [16.0, 16.0, 72.0]),
             wait_ms: 0,
             random_ms: 0,
             next_fire_ms: 0,
@@ -323,7 +413,13 @@ mod tests {
         let mut ts = Triggers::default();
         let id = EntId(72);
         assert!(ts.is_empty());
-        ts.register(id, TriggerKind::Hurt, [-8.0; 3], [8.0; 3], 0, 0);
+        ts.register(
+            id,
+            TriggerKind::Hurt,
+            TriggerShape::boxed([-8.0; 3], [8.0; 3]),
+            0,
+            0,
+        );
         assert_eq!(ts.len(), 1);
         assert_eq!(ts.get(id).map(|t| t.kind), Some(TriggerKind::Hurt));
         ts.remove(id);
@@ -344,8 +440,13 @@ mod tests {
                 let id = host.ents.spawn(cx).unwrap();
                 host.set_field(cx, id, origin, Value::Vector([0.0, 0.0, z]))
                     .unwrap();
-                host.triggers
-                    .register(id, TriggerKind::Multiple, [-8.0; 3], [8.0; 3], 0, 0);
+                host.triggers.register(
+                    id,
+                    TriggerKind::Multiple,
+                    TriggerShape::boxed([-8.0; 3], [8.0; 3]),
+                    0,
+                    0,
+                );
                 id
             };
             let at_feet = place(&mut host, cx, 4.0);
@@ -368,7 +469,8 @@ mod tests {
                 let id = host.ents.spawn(cx).unwrap();
                 host.set_field(cx, id, origin, Value::Vector([0.0, 0.0, 4.0]))
                     .unwrap();
-                host.triggers.register(id, kind, [-8.0; 3], [8.0; 3], 0, 0);
+                host.triggers
+                    .register(id, kind, TriggerShape::boxed([-8.0; 3], [8.0; 3]), 0, 0);
                 id
             };
             let multiple = place(&mut host, cx, TriggerKind::Multiple);
@@ -384,14 +486,26 @@ mod tests {
     fn wait_gates_a_multiple_and_random_widens_it() {
         let mut ts = Triggers::default();
         let id = EntId(72);
-        ts.register(id, TriggerKind::Multiple, [-8.0; 3], [8.0; 3], 500, 0);
+        ts.register(
+            id,
+            TriggerKind::Multiple,
+            TriggerShape::boxed([-8.0; 3], [8.0; 3]),
+            500,
+            0,
+        );
         let mut zero = |_: i32| 0;
         assert!(ts.fire(id, 1000, &mut zero), "first touch fires");
         assert!(!ts.fire(id, 1400, &mut zero), "inside the 500 ms window");
         assert!(ts.fire(id, 1500, &mut zero), "the window has passed");
 
         let mut half = |n: i32| n / 2;
-        ts.register(id, TriggerKind::Multiple, [-8.0; 3], [8.0; 3], 500, 400);
+        ts.register(
+            id,
+            TriggerKind::Multiple,
+            TriggerShape::boxed([-8.0; 3], [8.0; 3]),
+            500,
+            400,
+        );
         assert!(ts.fire(id, 0, &mut half));
         assert!(!ts.fire(id, 690, &mut half), "500 + 400/2 is 700");
         assert!(ts.fire(id, 700, &mut half));
@@ -412,7 +526,13 @@ mod tests {
     fn a_once_trigger_fires_once() {
         let mut ts = Triggers::default();
         let id = EntId(73);
-        ts.register(id, TriggerKind::Once, [-8.0; 3], [8.0; 3], 0, 0);
+        ts.register(
+            id,
+            TriggerKind::Once,
+            TriggerShape::boxed([-8.0; 3], [8.0; 3]),
+            0,
+            0,
+        );
         let mut zero = |_: i32| 0;
         assert!(ts.fire(id, 0, &mut zero));
         assert!(!ts.fire(id, 1, &mut zero));
@@ -426,11 +546,173 @@ mod tests {
     fn no_wait_key_fires_every_touch() {
         let mut ts = Triggers::default();
         let id = EntId(74);
-        ts.register(id, TriggerKind::Multiple, [-8.0; 3], [8.0; 3], 0, 0);
+        ts.register(
+            id,
+            TriggerKind::Multiple,
+            TriggerShape::boxed([-8.0; 3], [8.0; 3]),
+            0,
+            0,
+        );
         let mut zero = |_: i32| 0;
         for t in [0, 50, 100, 150] {
             assert!(ts.fire(id, t, &mut zero), "touch at {t}");
         }
+    }
+
+    /// A trigger's own box for the test to register, with its model's
+    /// brushes under it.
+    fn place_wedge(host: &mut GameHost, cx: &mut Cx) -> EntId {
+        // A 256 x 256 x 128 brush cut by `x + y <= 256`: the half of its
+        // bounding box past that diagonal holds no brush at all, which is the
+        // shape of mp_pavlov's minefield wedges and where the reported death
+        // happened.
+        let diagonal = Vec3::new(1.0, 1.0, 0.0).normalize();
+        host.model_bounds = vec![
+            ([0.0; 3], [0.0; 3]),
+            ([0.0, 0.0, 0.0], [256.0, 256.0, 128.0]),
+        ];
+        host.model_brushes = vec![
+            Vec::new(),
+            vec![BrushHull {
+                planes: vec![
+                    (-Vec3::X, 0.0),
+                    (Vec3::X, 256.0),
+                    (-Vec3::Y, 0.0),
+                    (Vec3::Y, 256.0),
+                    (-Vec3::Z, 0.0),
+                    (Vec3::Z, 128.0),
+                    (diagonal, 256.0 / 2.0_f32.sqrt()),
+                ],
+            }],
+        ];
+        let origin = cx.intern_folded("origin");
+        let zone = host.ents.spawn(cx).unwrap();
+        host.set_field(cx, zone, origin, Value::Vector([0.0; 3]))
+            .unwrap();
+        host.triggers.register(
+            zone,
+            TriggerKind::Multiple,
+            TriggerShape {
+                mins: [0.0, 0.0, 0.0],
+                maxs: [256.0, 256.0, 128.0],
+                model: Some(1),
+            },
+            0,
+            0,
+        );
+        zone
+    }
+
+    /// The exact stage is a brush contact, not a bounds overlap: a player
+    /// standing in the bulge of a wedge's bounding box touches nothing, and
+    /// one inside the brush touches it. That difference is a minefield
+    /// killing a player meters clear of the mines
+    /// (docs/research/cod11-gsc-object-model.md section 22).
+    #[test]
+    fn a_wedge_is_touched_by_its_brush_and_not_by_the_bulge_of_its_box() {
+        let (mut vm, mut host) = crate::game::testing::fixture();
+        vm.with_cx(|cx| {
+            let zone = place_wedge(&mut host, cx);
+            let player = host.ents.spawn_client(cx, 0, None).unwrap();
+            let origin = cx.intern_folded("origin");
+            let at = |host: &mut GameHost, cx: &mut Cx, p: [f32; 3]| {
+                host.set_field(cx, player, origin, Value::Vector(p))
+                    .unwrap();
+                touched(host, cx, player)
+            };
+            assert_eq!(
+                at(&mut host, cx, [60.0, 60.0, 4.0]),
+                vec![zone],
+                "inside the brush"
+            );
+            assert!(
+                at(&mut host, cx, [200.0, 200.0, 4.0]).is_empty(),
+                "inside the bounding box, 70-odd units clear of the brush"
+            );
+        });
+    }
+
+    /// The same asymmetry against real geometry: one of mp_pavlov's shaped
+    /// `minefield` submodels, whose bounding box reaches well past its
+    /// brushes. Needs `COD_DIR`; without the paks it returns early.
+    #[test]
+    fn a_shaped_minefield_model_on_mp_pavlov_leaves_its_bounding_box_hollow() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let bytes = fs
+            .read("maps/mp/mp_pavlov.bsp")
+            .expect("mp_pavlov in the paks");
+        let bsp = vcod_common::bsp::parse(&bytes).expect("parse mp_pavlov");
+        let hulls = model_brush_hulls(&bsp);
+
+        // `*25` is one of the 19 minefield brushes carrying angled planes.
+        const MODEL: usize = 25;
+        assert!(
+            hulls[MODEL].iter().any(|b| b.planes.len() > 6),
+            "model *{MODEL} is a plain box; pick another shaped one"
+        );
+        let (mins, maxs) = (bsp.models[MODEL].mins, bsp.models[MODEL].maxs);
+
+        // Two stations sampled over the model's own box at its floor: one
+        // whose clip box meets a brush and one whose clip box meets only the
+        // box. The second existing at all is the bug.
+        let half = Vec3::new(15.0, 15.0, 36.0);
+        let mut inside = None;
+        let mut bulge = None;
+        for ix in 0..=32 {
+            for iy in 0..=32 {
+                let p = [
+                    mins[0] + (maxs[0] - mins[0]) * ix as f32 / 32.0,
+                    mins[1] + (maxs[1] - mins[1]) * iy as f32 / 32.0,
+                    mins[2],
+                ];
+                let centre = Vec3::new(p[0], p[1], p[2] + 36.0);
+                let clip = offset_bounds(p, PLAYER_MINS, PLAYER_MAXS);
+                if !boxes_overlap(clip, (mins, maxs)) {
+                    continue;
+                }
+                if box_contacts_hulls(centre, half, Vec3::ZERO, &hulls[MODEL]) {
+                    inside.get_or_insert(p);
+                } else {
+                    bulge.get_or_insert(p);
+                }
+            }
+        }
+        let inside = inside.expect("a station inside the minefield's brushes");
+        let bulge = bulge.expect("a station in its bounding box but in none of its brushes");
+
+        let (mut vm, mut host) = crate::game::testing::fixture();
+        host.model_bounds = bsp.models.iter().map(|m| (m.mins, m.maxs)).collect();
+        host.model_brushes = hulls;
+        vm.with_cx(|cx| {
+            let origin = cx.intern_folded("origin");
+            let zone = host.ents.spawn(cx).unwrap();
+            host.set_field(cx, zone, origin, Value::Vector([0.0; 3]))
+                .unwrap();
+            host.triggers.register(
+                zone,
+                TriggerKind::Hurt,
+                TriggerShape {
+                    mins,
+                    maxs,
+                    model: Some(MODEL as u32),
+                },
+                0,
+                0,
+            );
+            let player = host.ents.spawn_client(cx, 0, None).unwrap();
+            let at = |host: &mut GameHost, cx: &mut Cx, p: [f32; 3]| {
+                host.set_field(cx, player, origin, Value::Vector(p))
+                    .unwrap();
+                touched(host, cx, player)
+            };
+            assert_eq!(at(&mut host, cx, inside), vec![zone], "at {inside:?}");
+            assert!(
+                at(&mut host, cx, bulge).is_empty(),
+                "at {bulge:?}, which is in the box and in no brush"
+            );
+        });
     }
 
     /// `delete()` takes the row with the entity. `sd.gsc` deletes both
@@ -440,8 +722,13 @@ mod tests {
         let (mut vm, mut host) = crate::game::testing::fixture();
         vm.with_cx(|cx| {
             let id = host.ents.spawn(cx).unwrap();
-            host.triggers
-                .register(id, TriggerKind::Multiple, [-8.0; 3], [8.0; 3], 0, 0);
+            host.triggers.register(
+                id,
+                TriggerKind::Multiple,
+                TriggerShape::boxed([-8.0; 3], [8.0; 3]),
+                0,
+                0,
+            );
             host.free_entity(id);
             assert!(host.triggers.get(id).is_none());
             assert!(host.ents.get(id).is_none());
