@@ -767,7 +767,10 @@ impl ClientSim {
             attacker_origin,
             fatal,
             ..
-        } = *op;
+        } = *op
+        else {
+            unreachable!("take_damage is the Damaged arm of the sim-op drain");
+        };
         let dir = Vec3::from(dir);
         let has_dir = dir.length_squared() > 0.0;
         // Read before the knockback, which is this frame's impulse and not
@@ -2101,7 +2104,10 @@ mod tests {
             let mut op = hit_op(67, fatal);
             let SimOp::Damaged {
                 attacker_origin, ..
-            } = &mut op;
+            } = &mut op
+            else {
+                unreachable!("hit_op builds a Damaged op");
+            };
             *attacker_origin = Some([10.0, -586.5, 8.0]);
             op
         };

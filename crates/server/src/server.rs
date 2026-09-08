@@ -2704,9 +2704,9 @@ impl Server {
                 };
                 apply_weapon_op(sim, op, &weapons);
             }
-            // What `finishPlayerDamage` did to each sim, applied once, then
-            // the health mirror and the frame's damage feedback, in that
-            // order: `P_DamageFeedback` reads the health the hit left.
+            // What script did to each sim, applied once, then the health
+            // mirror and the frame's damage feedback, in that order:
+            // `P_DamageFeedback` reads the health the hit left.
             let anims = self.anims.as_ref();
             for (slot, op) in rt.take_sim_ops() {
                 let Some(sim) = self
@@ -2717,13 +2717,18 @@ impl Server {
                 else {
                     continue;
                 };
-                let index = sim.ps.weapon as usize;
-                let inputs = anims.map(|anims| crate::spectate::AnimInputs {
-                    anims,
-                    weapon: crate::items::item_name(index).unwrap_or_default(),
-                    weapon_class: weapons.class(index),
-                });
-                sim.take_damage(&op, inputs.as_ref(), &mut self.rng, self.sv_time_ms);
+                match op {
+                    crate::game::host::SimOp::Event { event, parm } => sim.add_event(event, parm),
+                    crate::game::host::SimOp::Damaged { .. } => {
+                        let index = sim.ps.weapon as usize;
+                        let inputs = anims.map(|anims| crate::spectate::AnimInputs {
+                            anims,
+                            weapon: crate::items::item_name(index).unwrap_or_default(),
+                            weapon_class: weapons.class(index),
+                        });
+                        sim.take_damage(&op, inputs.as_ref(), &mut self.rng, self.sv_time_ms);
+                    }
+                }
             }
             for (slot, c) in self.clients.iter_mut().enumerate() {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
@@ -4676,6 +4681,44 @@ mod tests {
         let s2 = latest_snapshot(&mut sv, &mut nc, &mut ring, later);
         let moved = s2.ps.origin(p)[0] - s.ps.origin(p)[0];
         assert!(moved > 1.0, "should have flown +X, dx {moved}");
+    }
+
+    /// A script's `playSound` on a player reaches that client's own event
+    /// ring, and through it the playerstate: the builtin only queues a
+    /// `SimOp`, so the drain after `run_frame` is what completes the path.
+    /// `_minefields.gsc`'s warning click is exactly this call.
+    #[test]
+    fn a_script_playsound_on_a_player_reaches_that_client_s_ring() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test(
+                "main() { \
+                   while (1) { \
+                     wait 0.05; \
+                     players = getentarray(\"player\", \"classname\"); \
+                     if (players.size > 0) { \
+                       players[0] playsound(\"minefield_click\"); \
+                       return; \
+                     } \
+                   } \
+                 }",
+            ),
+        );
+        let _nc = begun(&mut sv, now);
+        for _ in 0..4 {
+            sv.tick(now);
+        }
+        let ring = sv.clients[0]
+            .as_ref()
+            .and_then(|c| c.sim.as_ref())
+            .expect("slot 0 has a sim")
+            .ring;
+        assert_eq!(ring.seq, 1, "one event, the slot written below it");
+        assert_eq!(ring.events[0], 172, "EV_SOUND_ALIAS");
+        let alias = ring.parms[0] as usize + 524;
+        assert_eq!(sv.configstring(alias), "minefield_click");
     }
 
     /// Entry takes its `delta_angles` from the cmd that entered the world,
