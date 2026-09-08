@@ -342,6 +342,53 @@ impl ScriptRuntime {
         }
     }
 
+    /// Damage whose attacker is not a player. `hurt_touch` (0x64dc4) hands
+    /// `G_Damage` the trigger entity for both the inflictor and the attacker
+    /// and zero for the point and the direction, which the immediates it
+    /// pushes show directly (VERIFIED); the stock callback tests
+    /// `isPlayer(attacker)`, so a non-player attacker is a shape the corpus
+    /// already handles.
+    pub fn deliver_world_hit(
+        &mut self,
+        victim_slot: usize,
+        inflictor: EntId,
+        damage: i32,
+        dflags: i32,
+        mod_: &str,
+        now_ms: i32,
+    ) {
+        let Some(victim) = self.client_entity(victim_slot) else {
+            return;
+        };
+        let (mod_, weapon, hitloc) = self.vm.with_cx(|cx| {
+            (
+                cx.intern_exact(mod_),
+                cx.intern_exact("none"),
+                cx.intern_exact("none"),
+            )
+        });
+        let args = vec![
+            Value::Entity(inflictor),
+            Value::Entity(inflictor),
+            Value::Int(damage),
+            Value::Int(dflags),
+            Value::String(mod_),
+            Value::String(weapon),
+            Value::Vector([0.0; 3]),
+            Value::Vector([0.0; 3]),
+            Value::String(hitloc),
+        ];
+        if let Err(e) = self.start_with_args(
+            CALLBACK_SETUP,
+            "CodeCallback_PlayerDamage",
+            Some(Target::Entity(victim)),
+            args,
+            now_ms,
+        ) {
+            log::error!("gsc: {e:#}");
+        }
+    }
+
     /// `G_TouchTriggers` for one client, which retail runs once per usercmd
     /// from `ClientThink_real` (0x405b3). The notify only marks the threads
     /// parked in `waittill("trigger", other)` runnable; they run in this
@@ -363,19 +410,46 @@ impl ScriptRuntime {
             .vm
             .with_cx(|cx| crate::game::trigger::touched(host, cx, client));
         let event = self.vm.with_cx(|cx| cx.intern_folded("trigger"));
+        let triggers = &mut self.host.triggers;
         let rng = &mut self.rng;
-        for id in hits {
-            if !self.host.triggers.fire(id, now_ms, &mut |n| {
-                if n <= 0 {
-                    0
-                } else {
-                    ((vcod_common::rng::xorshift(rng) >> 33) as i32 & 0x7fff_ffff) % n
+        // Drawn under the `rng` borrow and acted on after it: each entry is a
+        // trigger that fired, carrying its damage and flags if it hurts.
+        let fired: Vec<(EntId, Option<(i32, i32)>)> = hits
+            .into_iter()
+            .filter_map(|id| {
+                if !triggers.fire(id, now_ms, &mut |n| {
+                    if n <= 0 {
+                        0
+                    } else {
+                        ((vcod_common::rng::xorshift(rng) >> 33) as i32 & 0x7fff_ffff) % n
+                    }
+                }) {
+                    return None;
                 }
-            }) {
-                continue;
-            }
+                let hurt = triggers
+                    .get(id)
+                    .filter(|t| t.kind == crate::game::trigger::TriggerKind::Hurt)
+                    .map(|t| (t.damage, t.dflags));
+                Some((id, hurt))
+            })
+            .collect();
+        for (id, hurt) in fired {
             self.vm
                 .notify(Target::Entity(id), event, &[Value::Entity(client)]);
+            // The notify first: `hurt_touch` (0x64dc4) reaches its `G_Damage`
+            // only past the `Scr_Notify` (INFERRED, control flow), so a thread
+            // parked on the trigger sees the touch before the callback that
+            // may kill the toucher.
+            if let Some((damage, dflags)) = hurt {
+                self.deliver_world_hit(
+                    slot,
+                    id,
+                    damage,
+                    dflags,
+                    crate::game::trigger::MOD_TRIGGER_HURT,
+                    now_ms,
+                );
+            }
         }
     }
 
@@ -1158,6 +1232,14 @@ impl ScriptRuntime {
             .start_thread(&mut self.host, now_ms, f, Some(Target::Entity(ent)), vec![]);
     }
 
+    /// Set a test client's health and max health, the way a spawn does.
+    pub fn set_client_health_for_test(&mut self, slot: usize, health: i32) {
+        if let Some(v) = self.host.client_vitals.get_mut(slot) {
+            v.health = health;
+            v.max_health = health;
+        }
+    }
+
     /// Reads a folded field off `level`.
     pub fn level_field(&mut self, name: &str) -> vcod_gsc::Value {
         let level = self.vm.level_id();
@@ -1676,5 +1758,44 @@ mod tests {
         rt.touch_triggers(0, 100);
         rt.run_frame(100);
         assert_eq!(rt.level_field("hits"), Value::Int(1), "a corpse did not");
+    }
+
+    /// A `trigger_hurt` damages the player standing in it through the stock
+    /// damage callback, so the victim's health drops on the path a bullet's
+    /// hit already takes, and the 100 ms cadence `register_hurt` arms gates
+    /// the second helping.
+    #[test]
+    fn a_trigger_hurt_damages_the_player_in_it() {
+        let mut rt = ScriptRuntime::for_test_at(
+            CALLBACK_SETUP,
+            "main() {}\n\
+             CodeCallback_PlayerDamage(inflictor, attacker, damage, flags, mod, weapon, point, \
+             dir, hitloc) { level.damage = damage; level.mod = mod; \
+             self.health = self.health - damage; }\n",
+        );
+        rt.spawn_client_for_test(0, [0.0, 0.0, 0.0]);
+        rt.set_client_state_for_test(0, "playing");
+        rt.set_client_health_for_test(0, 100);
+
+        let hurt = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut()
+            .register_hurt(hurt, [-64.0, -64.0, 0.0], [64.0, 64.0, 64.0], 5, 0);
+
+        rt.touch_triggers(0, 100);
+        rt.run_frame(100);
+        let expected_mod = rt
+            .vm
+            .with_cx(|cx| cx.intern_exact(crate::game::trigger::MOD_TRIGGER_HURT));
+        assert_eq!(rt.level_field("damage"), Value::Int(5));
+        assert_eq!(rt.level_field("mod"), Value::String(expected_mod));
+        assert_eq!(rt.client_vitals(0).health, 95);
+
+        rt.touch_triggers(0, 150);
+        rt.run_frame(150);
+        assert_eq!(rt.client_vitals(0).health, 95, "inside the 100 ms window");
+
+        rt.touch_triggers(0, 200);
+        rt.run_frame(200);
+        assert_eq!(rt.client_vitals(0).health, 90);
     }
 }

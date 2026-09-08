@@ -148,6 +148,10 @@ fn trigger_hurt_sound(block: &std::collections::HashMap<String, String>) -> Stri
 /// one naming a model the BSP has no bounds for, is registered with a zero
 /// box: it then touches nothing, which is what retail's unset `r.mins`/
 /// `r.maxs` do.
+///
+/// A `trigger_hurt` takes neither key: its cadence, damage and damage flags
+/// come from `dmg` and `spawnflags` instead, which `Triggers::register_hurt`
+/// documents.
 fn register_trigger(
     host: &mut GameHost,
     block: &std::collections::HashMap<String, String>,
@@ -166,6 +170,23 @@ fn register_trigger(
             .and_then(|v| v.trim().parse::<f32>().ok())
             .map_or(0, |s| (s * 1000.0) as i32)
     };
+    let int_key = |key: &str, default: i32| -> i32 {
+        block
+            .get(key)
+            .and_then(|v| v.trim().parse::<i32>().ok())
+            .filter(|n| *n != 0)
+            .unwrap_or(default)
+    };
+    if kind == crate::game::trigger::TriggerKind::Hurt {
+        host.triggers.register_hurt(
+            id,
+            bounds.0,
+            bounds.1,
+            int_key("dmg", crate::game::trigger::HURT_DEFAULT_DAMAGE),
+            int_key("spawnflags", 0),
+        );
+        return;
+    }
     host.triggers.register(
         id,
         kind,

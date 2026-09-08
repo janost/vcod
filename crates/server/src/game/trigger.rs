@@ -28,6 +28,10 @@ pub struct Trigger {
     pub random_ms: i32,
     /// Level-clock time this may fire again.
     pub next_fire_ms: i32,
+    /// What a touch takes off the toucher, and the damage flags it takes it
+    /// with. Both 0 on every kind but `Hurt`.
+    pub damage: i32,
+    pub dflags: i32,
 }
 
 // Keyed by `EntId::0` rather than `EntId` itself: `EntId` is a foreign type
@@ -38,6 +42,18 @@ pub struct Trigger {
 pub struct Triggers {
     rows: BTreeMap<u32, Trigger>,
 }
+
+/// The `dmg` key's default and the two spawnflags `register_hurt` reads; the
+/// evidence for each is on `register_hurt`.
+pub const HURT_DEFAULT_DAMAGE: i32 = 5;
+const HURT_NO_PROTECTION: i32 = 0x8;
+const HURT_SLOW: i32 = 0x10;
+const HURT_INTERVAL_MS: i32 = 100;
+const HURT_SLOW_INTERVAL_MS: i32 = 1000;
+
+/// `hurt_touch` (0x64dc4) calls `G_Damage` with mod 23, which is
+/// `MOD_TRIGGER_HURT` in the table in docs/research/cod11-combat.md.
+pub const MOD_TRIGGER_HURT: &str = "MOD_TRIGGER_HURT";
 
 impl Triggers {
     pub fn register(
@@ -58,8 +74,47 @@ impl Triggers {
                 wait_ms,
                 random_ms,
                 next_fire_ms: 0,
+                damage: 0,
+                dflags: 0,
             },
         );
+    }
+
+    /// A `trigger_hurt`, whose damage and cadence come from its own spawn
+    /// function rather than from the `wait`/`random` keys the other kinds use.
+    ///
+    /// VERIFIED, read as immediates out of `SP_trigger_hurt` (0x64ef8) and
+    /// `hurt_touch` (0x64dc4): the `dmg` key lands at gentity+568, which is
+    /// the entity field table's `dmg` slot; the spawn function writes 5 there;
+    /// the touch arms its own timestamp with 100 or 1000 ms; and it damages
+    /// with mod 23 (`MOD_TRIGGER_HURT`) and dflags 0 or 0x10
+    /// (`DFLAG_NO_PROTECTION`). INFERRED, read off the branches those
+    /// immediates sit on: the 5 is a default taken only when the key left the
+    /// field at 0, the 1000 and the 0x10 are the `0x10` and `0x8` spawnflag
+    /// arms, and the timestamp gates the notify as well as the damage, since
+    /// it is tested before both.
+    pub fn register_hurt(
+        &mut self,
+        id: EntId,
+        mins: [f32; 3],
+        maxs: [f32; 3],
+        damage: i32,
+        spawnflags: i32,
+    ) {
+        let wait_ms = if spawnflags & HURT_SLOW == 0 {
+            HURT_INTERVAL_MS
+        } else {
+            HURT_SLOW_INTERVAL_MS
+        };
+        self.register(id, TriggerKind::Hurt, mins, maxs, wait_ms, 0);
+        if let Some(t) = self.rows.get_mut(&id.0) {
+            t.damage = damage;
+            t.dflags = if spawnflags & HURT_NO_PROTECTION == 0 {
+                0
+            } else {
+                crate::game::combat::DFLAG_NO_PROTECTION
+            };
+        }
     }
 
     pub fn remove(&mut self, id: EntId) {
@@ -234,6 +289,8 @@ mod tests {
             wait_ms: 0,
             random_ms: 0,
             next_fire_ms: 0,
+            damage: 0,
+            dflags: 0,
         };
         assert_eq!(
             abs_bounds([100.0, -50.0, 8.0], &t),
