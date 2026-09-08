@@ -398,7 +398,16 @@ impl ScriptRuntime {
     /// returns before the pass. A dead player still does, and that is not an
     /// oversight -- `sd.gsc`'s `bombzone_think` tests `isalive(other)` itself,
     /// which would be dead code if the engine filtered the dead out.
+    ///
+    /// The buttons are the usercmd's own, since the host's mirrored copy is
+    /// only written after the move pass this runs inside.
     pub fn touch_triggers(&mut self, slot: usize, now_ms: i32) {
+        let buttons = self.host.client_buttons.get(slot).copied().unwrap_or(0);
+        self.touch_triggers_with_buttons(slot, now_ms, buttons);
+    }
+
+    /// `touch_triggers` for a caller that has the cmd's buttons to hand.
+    pub fn touch_triggers_with_buttons(&mut self, slot: usize, now_ms: i32, buttons: u8) {
         let Some(client) = self.client_entity(slot) else {
             return;
         };
@@ -417,6 +426,15 @@ impl ScriptRuntime {
         let fired: Vec<(EntId, Option<(i32, i32)>)> = hits
             .into_iter()
             .filter_map(|id| {
+                // A `trigger_use` answers the use key rather than contact
+                // (docs/superpowers/specs/2026-09-08-movers-triggers-sd-design.md
+                // 3.6). Ahead of `fire`, so a keyless touch leaves the `wait`
+                // window unarmed.
+                if triggers.get(id).map(|t| t.kind) == Some(crate::game::trigger::TriggerKind::Use)
+                    && buttons & vcod_common::net::msg::BUTTON_USE == 0
+                {
+                    return None;
+                }
                 if !triggers.fire(id, now_ms, &mut |n| {
                     if n <= 0 {
                         0
@@ -1797,5 +1815,47 @@ mod tests {
         rt.touch_triggers(0, 200);
         rt.run_frame(200);
         assert_eq!(rt.client_vitals(0).health, 90);
+    }
+
+    /// A `trigger_use` answers the use key: standing in one raises nothing
+    /// until the bit is down. The `auto1`/`auto2` MG42 mount pairs on the
+    /// stock maps are what this serves. The keyless touch also leaves the
+    /// `wait` window unarmed, so the next keyed touch still fires.
+    #[test]
+    fn a_trigger_use_needs_the_use_key() {
+        let mut rt = ScriptRuntime::for_test("main() { level.hits = 0; }");
+        rt.install_for_test(
+            "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
+             level.hits = level.hits + 1; } }",
+        );
+        let mount = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut().register(
+            mount,
+            crate::game::trigger::TriggerKind::Use,
+            [-64.0, -64.0, 0.0],
+            [64.0, 64.0, 64.0],
+            1000,
+            0,
+        );
+        rt.start_thread_for_test(mount, "trigger_think", 0);
+        rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
+        rt.set_client_state_for_test(0, "playing");
+        rt.run_frame(0);
+
+        rt.touch_triggers_with_buttons(0, 50, 0);
+        rt.run_frame(50);
+        assert_eq!(rt.level_field("hits"), Value::Int(0), "no use key");
+
+        rt.touch_triggers_with_buttons(0, 100, vcod_common::net::msg::BUTTON_USE);
+        rt.run_frame(100);
+        assert_eq!(
+            rt.level_field("hits"),
+            Value::Int(1),
+            "the window was armed"
+        );
+
+        rt.touch_triggers_with_buttons(0, 150, vcod_common::net::msg::BUTTON_USE);
+        rt.run_frame(150);
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "inside the window");
     }
 }

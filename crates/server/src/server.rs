@@ -2794,8 +2794,9 @@ impl Server {
         let weapons = self.weapon_table.clone();
         let now_ms = self.sv_time_ms;
         let mut moved = vec![MoveSummary::default(); self.clients.len()];
-        // One entry per cmd that moved a client, with where that cmd left it.
-        let mut touched: Vec<(usize, [f32; 3])> = Vec::new();
+        // One entry per cmd that moved a client, with where that cmd left it
+        // and the buttons it carried.
+        let mut touched: Vec<(usize, [f32; 3], u8)> = Vec::new();
         for (slot, m) in moved.iter_mut().enumerate() {
             let Some(c) = self.clients[slot].as_mut() else {
                 continue;
@@ -2898,7 +2899,7 @@ impl Server {
                     }
                 }
                 events.extend(raised);
-                touched.push((slot, sim.origin()));
+                touched.push((slot, sim.origin(), cmd.buttons));
                 last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;
                 m.first_cmd_st.get_or_insert(cmd.server_time);
@@ -2934,9 +2935,9 @@ impl Server {
         // because the host's copy is only mirrored from the sim after the
         // script frame, so the pass would otherwise test last tick's spot.
         if let Some(rt) = self.script.as_mut() {
-            for (slot, origin) in touched {
+            for (slot, origin, buttons) in touched {
                 rt.set_client_origin(slot, origin);
-                rt.touch_triggers(slot, now_ms);
+                rt.touch_triggers_with_buttons(slot, now_ms, buttons);
             }
         }
         // The state each player ended the tick in, mirrored onto the host for
