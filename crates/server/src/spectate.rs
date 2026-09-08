@@ -769,7 +769,7 @@ impl ClientSim {
             ..
         } = *op
         else {
-            return;
+            unreachable!("take_damage is the Damaged arm of the sim-op drain");
         };
         let dir = Vec3::from(dir);
         let has_dir = dir.length_squared() > 0.0;

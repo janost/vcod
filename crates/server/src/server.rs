@@ -4683,6 +4683,44 @@ mod tests {
         assert!(moved > 1.0, "should have flown +X, dx {moved}");
     }
 
+    /// A script's `playSound` on a player reaches that client's own event
+    /// ring, and through it the playerstate: the builtin only queues a
+    /// `SimOp`, so the drain after `run_frame` is what completes the path.
+    /// `_minefields.gsc`'s warning click is exactly this call.
+    #[test]
+    fn a_script_playsound_on_a_player_reaches_that_client_s_ring() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test(
+                "main() { \
+                   while (1) { \
+                     wait 0.05; \
+                     players = getentarray(\"player\", \"classname\"); \
+                     if (players.size > 0) { \
+                       players[0] playsound(\"minefield_click\"); \
+                       return; \
+                     } \
+                   } \
+                 }",
+            ),
+        );
+        let _nc = begun(&mut sv, now);
+        for _ in 0..4 {
+            sv.tick(now);
+        }
+        let ring = sv.clients[0]
+            .as_ref()
+            .and_then(|c| c.sim.as_ref())
+            .expect("slot 0 has a sim")
+            .ring;
+        assert_eq!(ring.seq, 1, "one event, the slot written below it");
+        assert_eq!(ring.events[0], 172, "EV_SOUND_ALIAS");
+        let alias = ring.parms[0] as usize + 524;
+        assert_eq!(sv.configstring(alias), "minefield_click");
+    }
+
     /// Entry takes its `delta_angles` from the cmd that entered the world,
     /// not from zero. `SV_ClientEnterWorld` stores `cmds[0]` in
     /// `lastUsercmd`, and `ClientSpawn` reads it back through
