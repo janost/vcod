@@ -1337,6 +1337,41 @@ mod tests {
         assert!(rt.is_ok(), "{:?}", rt.err());
     }
 
+    /// mp_depot's `*1` is a `script_brushmodel` carrying `script_exploder`
+    /// and `targetname "exploder"`, which is the arm of `_load.gsc::main`
+    /// that calls `notsolid()`. The bootstrap therefore has to leave those
+    /// brushes out of the clip; `*2` carries `script_exploder` with no
+    /// targetname, so no arm reaches it and it stays solid. mp_powcamp
+    /// (`*3`, `*9`) and mp_rocket (`*3`) are the other two stock maps with
+    /// one. The gametype is `sd` because `*1` is also a `bombzone`, which
+    /// `_gameobjects::main` deletes -- unlinking it for another reason --
+    /// under every other gametype.
+    #[test]
+    fn the_bootstrap_unlinks_mp_depots_exploder_brush_model() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let bytes = fs.read("maps/mp/mp_depot.bsp").expect("mp_depot.bsp");
+        let bsp = vcod_common::bsp::parse(&bytes).unwrap();
+        // No paks for the props: only the submodel brushes matter here.
+        let world = Rc::new(crate::world::World::from_bsp(&bsp, None));
+        ScriptRuntime::load(
+            Rc::new(fs),
+            "mp_depot",
+            "sd",
+            vec![String::new(); 2048],
+            crate::cvars::Cvars::new(),
+            Some(world.clone()),
+            Rc::new(crate::weapons::WeaponTable::empty()),
+            0,
+            TEST_RNG_SEED,
+            Carry::default(),
+        )
+        .expect("load mp_depot on sd");
+        assert!(!world.collision.model_linked(1), "exploder stays solid");
+        assert!(world.collision.model_linked(2));
+    }
+
     /// `mp_pavlov.gsc` sets `game["allies"] = "russian"`, and dm's
     /// `Callback_StartGameType` turns that into `team_russiangerman`, so
     /// this pins that the map's `main` ran before the code callback and that

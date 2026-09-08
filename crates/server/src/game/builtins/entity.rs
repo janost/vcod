@@ -257,18 +257,7 @@ pub fn delete(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
-    let model = cx.intern_folded("model");
-    if let Value::String(m) = host.get_field(cx, id, model) {
-        if let Some(n) = cx
-            .resolve(m)
-            .strip_prefix('*')
-            .and_then(|n| n.parse::<usize>().ok())
-        {
-            if let Some(world) = &host.world {
-                world.collision.set_model_linked(n, false);
-            }
-        }
-    }
+    link_submodel(host, cx, id, false);
     host.ents
         .schedule(id, ThinkFn::Free, host.level_time_ms + DELETE_DEFER_MS);
     Ok(Value::Undefined)
@@ -284,13 +273,44 @@ fn set_hidden(host: &mut GameHost, recv: Option<Target>, hidden: bool) -> Result
     Ok(Value::Undefined)
 }
 
-fn set_solid(host: &mut GameHost, recv: Option<Target>, solid: bool) -> Result<Value, ErrorKind> {
+/// Links or unlinks the brushes of an entity whose `model` is the `*N`
+/// spelling of a BSP submodel; any other model, and any host with no map
+/// loaded, is a no-op.
+fn link_submodel(host: &mut GameHost, cx: &mut Cx, id: EntId, linked: bool) {
+    let model = cx.intern_folded("model");
+    let Value::String(m) = host.get_field(cx, id, model) else {
+        return;
+    };
+    let Some(n) = cx
+        .resolve(m)
+        .strip_prefix('*')
+        .and_then(|n| n.parse::<usize>().ok())
+    else {
+        return;
+    };
+    if let Some(world) = &host.world {
+        world.collision.set_model_linked(n, linked);
+    }
+}
+
+/// The flag is what the wire build reads; the link is what the clip reads,
+/// since a submodel's brushes are in the world only through its entity
+/// (docs/research/cod11-mantle.md, "A submodel's brushes are its entity's").
+/// `_load.gsc` `notsolid()`s every `exploder` brush model at map load, which
+/// is the only place three stock maps lose that collision.
+fn set_solid(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    solid: bool,
+) -> Result<Value, ErrorKind> {
     let id = entity_receiver(recv)?;
     let e = host
         .ents
         .get_mut(id)
         .ok_or(ErrorKind::BadType("no such entity"))?;
     e.solid = solid;
+    link_submodel(host, cx, id, solid);
     Ok(Value::Undefined)
 }
 
@@ -317,20 +337,20 @@ pub fn show(
 
 pub fn solid(
     host: &mut GameHost,
-    _cx: &mut Cx,
+    cx: &mut Cx,
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    set_solid(host, recv, true)
+    set_solid(host, cx, recv, true)
 }
 
 pub fn not_solid(
     host: &mut GameHost,
-    _cx: &mut Cx,
+    cx: &mut Cx,
     recv: Option<Target>,
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    set_solid(host, recv, false)
+    set_solid(host, cx, recv, false)
 }
 
 /// `setModel(name)` allocates a model configstring slot and stores the name,
@@ -599,6 +619,80 @@ mod tests {
                 placed[2].abs() < 1.0,
                 "expected the floor at z = 0, got {placed:?}"
             );
+        });
+    }
+
+    /// The submodel test world: model 0's floor plus a door brush local
+    /// (-8..8)^2 x 0..64 placed by a `script_brushmodel` at (200, 0, 0), so
+    /// its solid face is at x = 192.
+    fn brushmodel_world() -> World {
+        World {
+            collision: vcod_common::collision::submodel_test_world(
+                "{\n\"classname\" \"script_brushmodel\"\n\"model\" \"*1\"\n\"origin\" \"200 0 0\"\n}",
+                &[([-8.0, -8.0, 0.0], [8.0, 8.0, 64.0])],
+            ),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        }
+    }
+
+    /// A point sweep at door height that only the submodel can stop.
+    fn brushmodel_clips(world: &World) -> bool {
+        world
+            .collision
+            .box_trace(
+                Vec3::new(150.0, 0.0, 32.0),
+                Vec3::new(250.0, 0.0, 32.0),
+                Vec3::ZERO,
+                Vec3::ZERO,
+            )
+            .fraction
+            < 1.0
+    }
+
+    /// `notSolid()` has to reach the clip, not just the flag: a submodel's
+    /// brushes are in the world only through its entity, so this is the
+    /// unlink `_load.gsc` performs on every `exploder` brush model and
+    /// `_utility.gsc`'s `brush_show` undoes.
+    #[test]
+    fn notsolid_takes_a_brush_models_brushes_out_of_the_clip() {
+        let (mut vm, mut host) = fixture();
+        host.world = Some(Rc::new(brushmodel_world()));
+        let world = host.world.clone().unwrap();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let model = cx.intern_folded("model");
+            let star = Value::String(cx.intern_exact("*1"));
+            host.set_field(cx, e, model, star).unwrap();
+            let t = Some(Target::Entity(e));
+
+            assert!(brushmodel_clips(&world), "linked at load");
+
+            not_solid(&mut host, cx, t, &[]).unwrap();
+            assert!(!host.ents.get(e).unwrap().solid);
+            assert!(!brushmodel_clips(&world), "notSolid must unlink");
+
+            solid(&mut host, cx, t, &[]).unwrap();
+            assert!(host.ents.get(e).unwrap().solid);
+            assert!(brushmodel_clips(&world), "solid must relink");
+        });
+    }
+
+    /// An entity whose `model` is an xmodel name owns no brushes, so
+    /// `notSolid()` on one must not unlink submodel 1 -- or any script model
+    /// standing near a door would take the door out of the clip.
+    #[test]
+    fn notsolid_on_an_xmodel_entity_leaves_the_submodels_alone() {
+        let (mut vm, mut host) = fixture();
+        host.world = Some(Rc::new(brushmodel_world()));
+        let world = host.world.clone().unwrap();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let model = cx.intern_folded("model");
+            let name = Value::String(cx.intern_exact("xmodel/fx"));
+            host.set_field(cx, e, model, name).unwrap();
+            not_solid(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            assert!(brushmodel_clips(&world));
         });
     }
 
