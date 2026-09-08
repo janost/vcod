@@ -319,6 +319,15 @@ engineering setup works.
   one `trigger_hurt` is the kill volume under the floor, a walking player
   never reaches it, and every fire line in that fixture is a
   `trigger_multiple`.
+  A plain `--net-probe` also prints every change to an entity's `pos`/`apos`
+  trajectory group, which is the mover half of the same arrangement:
+  `client-probes/probe_mover.gsc` under `run_probe.sh` in one shell calls each
+  of the ten scriptent verbs and logs `getorigin()` per frame, a `--net-probe`
+  in the other reads what those verbs put on the wire, and the two committed
+  halves are `crates/server/tests/fixtures/movers/`. What they measured is
+  `docs/research/cod11-movers.md`: seconds, deltas on the axis verbs, a
+  trapezoidal velocity profile with accel and decel in seconds of ramp, and a
+  trajectory the client extrapolates rather than per-frame origins.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with

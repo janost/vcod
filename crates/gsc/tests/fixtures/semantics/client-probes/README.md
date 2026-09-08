@@ -8,8 +8,9 @@ and reads `games_mp.log`. `tools/capture_probes.sh` globs
 would sit in that set as an empty section indistinguishable from a broken one.
 
 These probes need a client for their own reason -- one measures from
-`Callback_PlayerConnect`, the other from a notify only a walking player
-raises -- so they are here, outside both. Their output is quoted in whatever
+`Callback_PlayerConnect`, one from a notify only a walking player raises, and
+one has a half that is only visible on the wire -- so they are here, outside
+both. Their output is quoted in whatever
 research doc the measurement belongs to, or committed as a fixture a test in
 `crates/server` reads; neither is paired against `retail-captures.txt`.
 
@@ -111,3 +112,30 @@ cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-triggers \
 The output is committed as `crates/server/tests/fixtures/triggers/`'s capture
 and diffed by `crates/server/tests/triggers_ab.rs`, which runs this same file
 as our gametype so both sides log through the same `logPrint`.
+
+## probe_mover
+
+The ten scriptent mover verbs. Two halves of one run, which is why it is here
+rather than beside the other probes: the script logs `getorigin()` and
+`.angles` once per server frame through each verb, which settles the units and
+the motion law, and a `--net-probe` attached to the same server reads the
+`pos`/`apos` trajectory groups, which is the only way to see whether retail
+ships a mover as per-frame origins or as a trajectory. It needs no client for
+its own sake; it spawns one bobbing `script_model` over each player that
+connects, because mp_pavlov's two surviving map `script_model`s sit in one
+corner and a lone client spawns anywhere.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=75 \
+    tools/run_probe.sh client-probes/probe_mover mp_pavlov
+# 18 s later, in the second shell:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-secs 45
+```
+
+Both halves are committed under `crates/server/tests/fixtures/movers/` and
+written up in `docs/research/cod11-movers.md`.
+
+One thing it learned the expensive way: a mover verb on anything but a
+`script_brushmodel`, `script_model` or `script_origin` is a fatal script
+runtime error, so a first version that moved the map's placed weapons for
+PVS coverage died on its first frame.
