@@ -7,18 +7,20 @@
 //! Neither moves anything and neither stores anything. There is no per-frame
 //! integration and no wire path for a mover yet, so the only job here is to
 //! accept the call shapes the stock corpus uses instead of raising `BadType`
-//! at a script that is doing nothing wrong. Stage 5 gives entities a tick and
-//! decides then what state a mover needs; storing a velocity now would mean
-//! guessing at both its meaning (`moveGravity`'s is linear, `rotateVelocity`'s
-//! angular) and its units, neither of which has been measured.
+//! at a script that is doing nothing wrong.
+//!
+//! What each verb means is no longer open: `docs/research/cod11-movers.md`
+//! has the units, the trapezoidal motion law and the trajectory each one puts
+//! on the wire, measured against retail. The integrator that reads it is the
+//! next piece of work; until it exists, storing a velocity here would be
+//! state nothing evaluates.
 //!
 //! Real call sites from the extracted stock corpus fix the signatures:
-//! `self moveGravity((x, y, z), 12)` (the corpus's own comment reads
-//! `(x,y,z),time`) and `self rotateVelocity((250,250,250), 1, 0, 0)`
-//! (`(x,y,z),time,accel,decel`). `rotateVelocity`'s first argument is a
-//! target vector, not a yaw angle. The corpus does not pin what unit the
-//! time argument is in; every other gsc time argument (`wait`, `moveto`) is
-//! seconds, but that is an inference, not a measurement.
+//! `self moveGravity((x, y, z), 12)` and
+//! `self rotateVelocity((250,250,250), 1, 0, 0)`
+//! (`(x,y,z),time,accel,decel`). `rotateVelocity`'s first argument is an
+//! angular velocity in degrees per second, not a yaw angle, and the time
+//! argument is seconds (the movers doc, sections 2 and 6).
 
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::host::GameHost;
