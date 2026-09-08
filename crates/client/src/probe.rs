@@ -5429,6 +5429,15 @@ impl TriggerBox {
     fn holds(&self, p: [f32; 3]) -> bool {
         (0..2).all(|i| p[i] >= self.mins[i] && p[i] <= self.maxs[i])
     }
+
+    /// Horizontal distance to the centre, for the same reason `holds` ignores
+    /// z: the centre's z is the midpoint of a brush that spans the map's
+    /// whole height, so a 3D distance to it never falls below ~560 units and
+    /// the near test can never pass.
+    fn away_from(&self, p: [f32; 3]) -> f32 {
+        let c = self.centre();
+        ((c[0] - p[0]).powi(2) + (c[1] - p[1]).powi(2)).sqrt()
+    }
 }
 
 /// How close to a target box the walk counts as having reached it when it
@@ -5635,7 +5644,7 @@ impl TriggerProbe {
         let elapsed = self
             .started
             .map_or(Duration::ZERO, |t| now.duration_since(t));
-        if self.boxes[idx].holds(me) || dist(self.boxes[idx].centre(), me) < TRIGGER_NEAR {
+        if self.boxes[idx].holds(me) || self.boxes[idx].away_from(me) < TRIGGER_NEAR {
             if self.boxes[idx].holds(me) {
                 self.entered += 1;
                 println!(
@@ -5661,7 +5670,7 @@ impl TriggerProbe {
                 me[0],
                 me[1],
                 me[2],
-                dist(self.boxes[idx].centre(), me),
+                self.boxes[idx].away_from(me),
             );
             self.finish(idx);
             return;
@@ -5763,9 +5772,11 @@ impl TriggerProbe {
         let next = (0..self.boxes.len())
             .filter(|i| !self.visited[*i])
             .min_by(|a, b| {
-                dist(self.boxes[*a].centre(), me).total_cmp(&dist(self.boxes[*b].centre(), me))
+                self.boxes[*a]
+                    .away_from(me)
+                    .total_cmp(&self.boxes[*b].away_from(me))
             })?;
-        let away = dist(self.boxes[next].centre(), me);
+        let away = self.boxes[next].away_from(me);
         println!(
             "TRIGGERS: heading for *{} at {away:.0}u",
             self.boxes[next].model
