@@ -917,7 +917,11 @@ impl ScriptRuntime {
         now_ms: i32,
     ) -> crate::game::missile::MissileFrame {
         let host = &mut self.host;
-        host.missiles.run(&mut host.ents, world, sims, now_ms)
+        let frame = host.missiles.run(world, sims, now_ms);
+        for id in &frame.freed {
+            host.free_entity(*id);
+        }
+        frame
     }
 
     /// The missiles on the wire this frame. They are `SVF_BROADCAST`, so the
