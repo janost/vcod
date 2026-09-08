@@ -128,12 +128,16 @@ pub const PLAYER_MAXS: [f32; 3] = [15.0, 15.0, 72.0];
 /// An entity's absolute box: a registered trigger's submodel box around its
 /// current origin, a client's player box, and a point box for everything
 /// else, which is what an unset `r.mins`/`r.maxs` gives retail.
-pub fn entity_abs_bounds(host: &mut GameHost, cx: &mut Cx, id: EntId) -> ([f32; 3], [f32; 3]) {
+fn entity_origin(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
     let origin_atom = cx.intern_folded("origin");
-    let origin = match host.get_field(cx, id, origin_atom) {
+    match host.get_field(cx, id, origin_atom) {
         Value::Vector(v) => v,
         _ => [0.0; 3],
-    };
+    }
+}
+
+pub fn entity_abs_bounds(host: &mut GameHost, cx: &mut Cx, id: EntId) -> ([f32; 3], [f32; 3]) {
+    let origin = entity_origin(host, cx, id);
     if let Some(t) = host.triggers.get(id) {
         return abs_bounds(origin, t);
     }
@@ -144,6 +148,33 @@ pub fn entity_abs_bounds(host: &mut GameHost, cx: &mut Cx, id: EntId) -> ([f32; 
         ([0.0; 3], [0.0; 3])
     };
     offset_bounds(origin, mins, maxs)
+}
+
+/// The candidate box retail hands `trap_EntitiesInBox`, taken around the
+/// client's origin rather than around its clip box
+/// (docs/research/cod11-gsc-object-model.md section 22).
+const TOUCH_BOX: [f32; 3] = [40.0, 40.0, 52.0];
+
+/// Every trigger this client touches, ascending entity number: the
+/// `trap_EntitiesInBox` broad phase around the origin, then the exact
+/// `trap_EntityContact` test against the client's own clip box. Neither box
+/// contains the other -- the candidate reaches 52 below the feet and the clip
+/// box 72 above them -- so both have to hold.
+pub fn touched(host: &mut GameHost, cx: &mut Cx, client: EntId) -> Vec<EntId> {
+    let origin = entity_origin(host, cx, client);
+    let candidate = offset_bounds(
+        origin,
+        [-TOUCH_BOX[0], -TOUCH_BOX[1], -TOUCH_BOX[2]],
+        TOUCH_BOX,
+    );
+    let exact = entity_abs_bounds(host, cx, client);
+    let ids: Vec<EntId> = host.triggers.iter().map(|(id, _)| id).collect();
+    ids.into_iter()
+        .filter(|id| {
+            let b = entity_abs_bounds(host, cx, *id);
+            boxes_overlap(candidate, b) && boxes_overlap(exact, b)
+        })
+        .collect()
 }
 
 /// Do two absolute boxes overlap, the test `trap_EntitiesInBox` performs.
@@ -202,6 +233,30 @@ mod tests {
         ts.remove(id);
         assert!(ts.get(id).is_none());
         assert!(ts.is_empty());
+    }
+
+    /// A trigger has to clear both boxes: one 65 units up is inside the
+    /// client's clip box and outside the candidate box, one 30 down is the
+    /// other way round, and retail touches neither.
+    #[test]
+    fn a_touch_needs_both_the_candidate_box_and_the_clip_box() {
+        let (mut vm, mut host) = crate::game::testing::fixture();
+        vm.with_cx(|cx| {
+            let player = host.ents.spawn_client(cx, 0, None).unwrap();
+            let origin = cx.intern_folded("origin");
+            let place = |host: &mut GameHost, cx: &mut Cx, z: f32| {
+                let id = host.ents.spawn(cx).unwrap();
+                host.set_field(cx, id, origin, Value::Vector([0.0, 0.0, z]))
+                    .unwrap();
+                host.triggers
+                    .register(id, TriggerKind::Multiple, [-8.0; 3], [8.0; 3], 0, 0);
+                id
+            };
+            let at_feet = place(&mut host, cx, 4.0);
+            place(&mut host, cx, 65.0);
+            place(&mut host, cx, -30.0);
+            assert_eq!(touched(&mut host, cx, player), vec![at_feet]);
+        });
     }
 
     /// `delete()` takes the row with the entity. `sd.gsc` deletes both

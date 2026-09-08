@@ -334,6 +334,26 @@ impl ScriptRuntime {
         }
     }
 
+    /// `G_TouchTriggers` for one client, which retail runs once per usercmd
+    /// from `ClientThink_real` (0x405b3). The notify only marks the threads
+    /// parked in `waittill("trigger", other)` runnable; they run in this
+    /// tick's script frame.
+    pub fn touch_triggers(&mut self, slot: usize, now_ms: i32) {
+        let Some(client) = self.client_entity(slot) else {
+            return;
+        };
+        let host = &mut self.host;
+        let hits = self
+            .vm
+            .with_cx(|cx| crate::game::trigger::touched(host, cx, client));
+        let event = self.vm.with_cx(|cx| cx.intern_folded("trigger"));
+        for id in hits {
+            self.vm
+                .notify(Target::Entity(id), event, &[Value::Entity(client)]);
+        }
+        let _ = now_ms;
+    }
+
     /// `Cmd_Kill_f`: the `kill` client command, which is the `suicide` builtin
     /// reached from outside the VM. Same three effects -- the vitals, the
     /// `Damaged` op the sim reads, and `CodeCallback_PlayerKilled` with
@@ -1056,6 +1076,44 @@ impl ScriptRuntime {
         rt
     }
 
+    /// Compile and install another file's worth of functions into a test
+    /// runtime, so a test can add a thread body after `for_test`.
+    pub fn install_for_test(&mut self, src: &str) {
+        let ast = vcod_gsc::parse::parse_file(src).expect("test script parses");
+        let fns = vcod_gsc::compile::compile_file(&ast, &self.entry, self.vm.interner_mut())
+            .expect("test script compiles");
+        self.vm.install(fns).expect("test script installs");
+    }
+
+    /// A map entity at `origin`, the way the entity lump makes one.
+    pub fn spawn_map_entity_for_test(&mut self, origin: [f32; 3]) -> EntId {
+        use vcod_gsc::Host;
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let id = host.ents.spawn(cx).unwrap();
+            let at = cx.intern_folded("origin");
+            host.set_field(cx, id, at, Value::Vector(origin)).unwrap();
+            id
+        })
+    }
+
+    /// A client entity in `slot` at `origin`.
+    pub fn spawn_client_for_test(&mut self, slot: usize, origin: [f32; 3]) -> EntId {
+        let host = &mut self.host;
+        let id = self
+            .vm
+            .with_cx(|cx| host.ents.spawn_client(cx, slot, None).unwrap());
+        self.set_client_origin(slot, origin);
+        id
+    }
+
+    /// Start `name` as a thread on `ent`, the way a script's `thread` does.
+    pub fn start_thread_for_test(&mut self, ent: EntId, name: &str, now_ms: i32) {
+        let f = self.vm.func_ref(&self.entry, name);
+        self.vm
+            .start_thread(&mut self.host, now_ms, f, Some(Target::Entity(ent)), vec![]);
+    }
+
     /// Reads a folded field off `level`.
     pub fn level_field(&mut self, name: &str) -> vcod_gsc::Value {
         let level = self.vm.level_id();
@@ -1490,5 +1548,46 @@ mod tests {
         rt.run_frame(100);
         let n = rt.level_field("n");
         assert_eq!(n, vcod_gsc::Value::Int(72));
+    }
+
+    /// A client standing in a trigger wakes the thread parked on it, with the
+    /// toucher as the notify's argument. Retail raises this inside
+    /// `G_TouchTriggers` (0x3f88c) with `Scr_AddEntity` supplying `other`.
+    #[test]
+    fn touching_a_trigger_notifies_the_parked_thread() {
+        let mut rt = ScriptRuntime::for_test(
+            "main() { level.hits = 0; level thread watch(); }\n\
+             watch() { for(;;) { level waittill(\"go\"); } }\n",
+        );
+        // The trigger's own thread, started on the entity the test registers.
+        let src = "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
+                   level.hits = level.hits + 1; level.who = other; } }";
+        rt.install_for_test(src);
+
+        let zone = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut().register(
+            zone,
+            crate::game::trigger::TriggerKind::Multiple,
+            [-64.0, -64.0, 0.0],
+            [64.0, 64.0, 64.0],
+            0,
+            0,
+        );
+        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.run_frame(0);
+
+        let player = rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
+        assert_eq!(rt.client_entity(0), Some(player));
+
+        rt.touch_triggers(0, 50);
+        rt.run_frame(50);
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "one notify");
+        assert_eq!(rt.level_field("who"), Value::Entity(player));
+
+        // Out of the box: no second notify.
+        rt.set_client_origin(0, [500.0, 0.0, 0.0]);
+        rt.touch_triggers(0, 100);
+        rt.run_frame(100);
+        assert_eq!(rt.level_field("hits"), Value::Int(1));
     }
 }
