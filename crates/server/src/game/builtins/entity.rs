@@ -958,8 +958,10 @@ mod tests {
             host.triggers.register(
                 zone,
                 crate::game::trigger::TriggerKind::Multiple,
-                [-100.0, -100.0, 0.0],
-                [100.0, 100.0, 64.0],
+                crate::game::trigger::TriggerShape::boxed(
+                    [-100.0, -100.0, 0.0],
+                    [100.0, 100.0, 64.0],
+                ),
                 0,
                 0,
             );

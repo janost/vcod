@@ -592,6 +592,37 @@ struct WaterVolume {
 
 const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
 
+/// A lump-4 brush's sides as clip planes, appended to `out` and offset to
+/// `origin`, plus the brush's axial bounds. Sides 0..6 are the bit-cast axial
+/// bounds and sides 6.. index `Bsp::planes`
+/// (docs/research/bsp-ibsp59-format.md, "Brushes"). Point p is inside the
+/// brush iff n·p <= d for every plane returned.
+pub fn brush_side_planes(
+    bsp: &Bsp,
+    brush: &crate::bsp::Brush,
+    origin: Vec3,
+    out: &mut Vec<(Vec3, f32)>,
+) -> (Vec3, Vec3) {
+    let sides = &bsp.brush_sides[brush.first_side as usize..][..brush.num_sides as usize];
+    out.reserve(sides.len());
+    let mut lo = Vec3::ZERO;
+    let mut hi = Vec3::ZERO;
+    for axis in 0..3 {
+        let axis_lo = f32::from_bits(sides[axis * 2].plane_or_dist) + origin[axis];
+        let axis_hi = f32::from_bits(sides[axis * 2 + 1].plane_or_dist) + origin[axis];
+        out.push((-AXES[axis], -axis_lo));
+        out.push((AXES[axis], axis_hi));
+        lo[axis] = axis_lo;
+        hi[axis] = axis_hi;
+    }
+    for s in &sides[6..] {
+        let p = &bsp.planes[s.plane_or_dist as usize];
+        let n = Vec3::from_array(p.normal);
+        out.push((n, p.dist + n.dot(origin)));
+    }
+    (lo, hi)
+}
+
 /// The triangle lists under construction in `build`.
 struct Tris {
     tris: Vec<[Vec3; 3]>,
@@ -709,25 +740,8 @@ impl CollisionWorld {
                 {
                     continue;
                 }
-                let sides = &bsp.brush_sides[b.first_side as usize..][..b.num_sides as usize];
-                let mut planes = Vec::with_capacity(sides.len());
-                let mut lo = Vec3::ZERO;
-                let mut hi = Vec3::ZERO;
-                for axis in 0..3 {
-                    let axis_lo =
-                        f32::from_bits(sides[axis * 2].plane_or_dist) + placement.origin[axis];
-                    let axis_hi =
-                        f32::from_bits(sides[axis * 2 + 1].plane_or_dist) + placement.origin[axis];
-                    planes.push((-AXES[axis], -axis_lo));
-                    planes.push((AXES[axis], axis_hi));
-                    lo[axis] = axis_lo;
-                    hi[axis] = axis_hi;
-                }
-                for s in &sides[6..] {
-                    let p = &bsp.planes[s.plane_or_dist as usize];
-                    let n = Vec3::from_array(p.normal);
-                    planes.push((n, p.dist + n.dot(placement.origin)));
-                }
+                let mut planes = Vec::new();
+                let (lo, hi) = brush_side_planes(bsp, b, placement.origin, &mut planes);
                 if mat.content_flags & CONTENTS_WATER != 0 {
                     water.push(WaterVolume {
                         planes: planes.clone(),

@@ -34,6 +34,16 @@
 //! pinned by a unit test instead
 //! (`a_deleted_trigger_takes_its_row_and_leaves_the_reused_number_clean`).
 //!
+//! A second one, and it is the one that let a live bug through. The probe's
+//! walker steers at brush centres, so every station the fixture sampled sits
+//! well inside the real brush -- and inside the brush a bounding-box test and
+//! a brush contact agree. The gate stayed green for as long as ours tested
+//! the bounding box, while a player standing in the bulge of a wedge-shaped
+//! minefield died meters clear of the mines. Nothing here samples that bulge;
+//! two unit tests in `game::trigger` do
+//! (`a_wedge_is_touched_by_its_brush_and_not_by_the_bulge_of_its_box` and the
+//! mp_pavlov one beside it).
+//!
 //! A capture cannot be replayed as a walk -- the route is not reproducible and
 //! a retail spawn is random -- so the gate replays each recorded origin, the
 //! way `entities_ab.rs` does (docs/protocol-1.1.md, "Which entities a client

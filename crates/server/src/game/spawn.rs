@@ -143,11 +143,12 @@ fn trigger_hurt_sound(block: &std::collections::HashMap<String, String>) -> Stri
         .unwrap_or_else(|| "world_hurt_me".to_string())
 }
 
-/// A trigger's box is its submodel's (`"model" "*N"`), and its `wait` and
-/// `random` keys are seconds on the wire. A trigger with no brush model, or
-/// one naming a model the BSP has no bounds for, is registered with a zero
-/// box: it then touches nothing, which is what retail's unset `r.mins`/
-/// `r.maxs` do.
+/// A trigger's shape is its submodel's (`"model" "*N"`) -- the box for the
+/// cheap reject and the model number the exact test takes its brushes from --
+/// and its `wait` and `random` keys are seconds on the wire. A trigger with no
+/// brush model, or one naming a model the BSP has no bounds for, is registered
+/// with a zero box and no model: it then touches nothing, which is what
+/// retail's unset `r.mins`/`r.maxs` do.
 ///
 /// A `trigger_hurt` takes neither key: its cadence, damage and damage flags
 /// come from `dmg` and `spawnflags` instead, which `Triggers::register_hurt`
@@ -158,12 +159,19 @@ fn register_trigger(
     id: EntId,
     kind: crate::game::trigger::TriggerKind,
 ) {
-    let bounds = block
+    let model = block
         .get("model")
         .and_then(|m| m.strip_prefix('*'))
-        .and_then(|n| n.parse::<usize>().ok())
-        .and_then(|n| host.model_bounds.get(n).copied())
+        .and_then(|n| n.parse::<u32>().ok())
+        .filter(|n| host.model_bounds.get(*n as usize).is_some());
+    let bounds = model
+        .and_then(|n| host.model_bounds.get(n as usize).copied())
         .unwrap_or(([0.0; 3], [0.0; 3]));
+    let shape = crate::game::trigger::TriggerShape {
+        mins: bounds.0,
+        maxs: bounds.1,
+        model,
+    };
     let secs_ms = |key: &str| -> i32 {
         block
             .get(key)
@@ -180,21 +188,14 @@ fn register_trigger(
     if kind == crate::game::trigger::TriggerKind::Hurt {
         host.triggers.register_hurt(
             id,
-            bounds.0,
-            bounds.1,
+            shape,
             int_key("dmg", crate::game::trigger::HURT_DEFAULT_DAMAGE),
             int_key("spawnflags", 0),
         );
         return;
     }
-    host.triggers.register(
-        id,
-        kind,
-        bounds.0,
-        bounds.1,
-        secs_ms("wait"),
-        secs_ms("random"),
-    );
+    host.triggers
+        .register(id, kind, shape, secs_ms("wait"), secs_ms("random"));
 }
 
 /// `G_SpawnTurret` (0x52c84), reached from `SP_turret` for `misc_mg42` and
@@ -1176,7 +1177,12 @@ mod tests {
         );
         let (_, first) = host.triggers.iter().next().unwrap();
         assert_eq!(first.wait_ms, 500, "the wait key is seconds on the wire");
-        assert_eq!(first.mins, [-16.0, -16.0, 0.0], "submodel 1's box");
+        assert_eq!(first.shape.mins, [-16.0, -16.0, 0.0], "submodel 1's box");
+        assert_eq!(
+            first.shape.model,
+            Some(1),
+            "and the model its brushes come from"
+        );
     }
 
     /// `SP_trigger_hurt` (0x64ef8) always registers a sound alias, its own
