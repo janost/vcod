@@ -4723,6 +4723,78 @@ mod tests {
         assert_eq!(sv.configstring(alias), "minefield_click");
     }
 
+    /// The gap `_minefields.gsc` puts between the warning click and the
+    /// blast, measured on our clock. The stock script (pak5.pk3,
+    /// `maps/MP/_minefields.gsc`) is `playsound("minefield_click");
+    /// wait(.5); wait(randomFloat(.5));` and then an `istouching` re-check,
+    /// so retail's gap is 500 to 1000 ms by construction and every draw has
+    /// to land in it. A `wait` wakes on the first frame past its deadline,
+    /// which is what buys the extra frame at the top.
+    ///
+    /// The draws also have to differ: a `randomFloat` stuck at one value
+    /// would sit inside that window and pass everything else here.
+    ///
+    /// Six draws on our clock read 550, 700, 850, 750, 800, 850 ms, which is
+    /// what settles the open question of whether ours detonates sooner than
+    /// retail: it does not, and neither `wait` nor `randomFloat` is short.
+    #[test]
+    fn the_minefield_kill_delay_is_half_to_one_second() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test(
+                "main() { \
+                   while (1) { \
+                     wait 0.05; \
+                     players = getentarray(\"player\", \"classname\"); \
+                     if (players.size > 0) { \
+                       for (i = 0; i < 6; i++) { players[0] mine(); } \
+                       return; \
+                     } \
+                   } \
+                 } \
+                 mine() { \
+                   self playsound(\"minefield_click\"); \
+                   logprint(\"click\"); \
+                   wait(.5); \
+                   wait(randomFloat(.5)); \
+                   logprint(\"boom\"); \
+                 }",
+            ),
+        );
+        let _nc = begun(&mut sv, now);
+
+        let mut drained = sv.script_log().len();
+        let mut click: Option<i32> = None;
+        let mut gaps: Vec<i32> = Vec::new();
+        for frame in 0..200 {
+            sv.tick(now);
+            for line in &sv.script_log()[drained..] {
+                match line.trim() {
+                    "click" => click = Some(frame),
+                    "boom" => gaps.push((frame - click.take().expect("a click first")) * FRAME_MS),
+                    _ => {}
+                }
+            }
+            drained = sv.script_log().len();
+        }
+
+        assert_eq!(gaps.len(), 6, "six kills ran to the blast");
+        for gap in &gaps {
+            assert!(
+                (500..=1000 + FRAME_MS).contains(gap),
+                "a kill waited {gap} ms; the stock script waits 500 to 1000, \
+                 plus at most one frame of wake quantization. All: {gaps:?}"
+            );
+        }
+        assert!(
+            gaps.iter().any(|g| *g != gaps[0]),
+            "every draw was {} ms, so randomFloat is not drawing",
+            gaps[0]
+        );
+    }
+
     /// Entry takes its `delta_angles` from the cmd that entered the world,
     /// not from zero. `SV_ClientEnterWorld` stores `cmds[0]` in
     /// `lastUsercmd`, and `ClientSpawn` reads it back through
