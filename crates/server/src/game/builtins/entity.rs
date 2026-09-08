@@ -481,11 +481,8 @@ pub fn is_defined(
     ))
 }
 
-/// `isTouching(other)`. Entities gain real bounds in stage 5; until then
-/// this compares origins within a small box rather than pretending to be a
-/// real intersection test. `BOX` is invented, not measured: nothing has been
-/// read out of retail about what its `isTouching` compares, so the number is
-/// only a stand-in until entities carry bounds and the real test replaces it.
+/// `isTouching(other)`: a real box overlap between the receiver's absolute
+/// bounds and the argument's, the same test `trap_EntitiesInBox` performs.
 pub fn is_touching(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -497,15 +494,11 @@ pub fn is_touching(
         return Err(ErrorKind::BadType("isTouching takes an entity"));
     };
     let b = *b;
-    let origin = cx.intern_folded("origin");
-    let oa = host.get_field(cx, a, origin);
-    let ob = host.get_field(cx, b, origin);
-    let (Value::Vector(oa), Value::Vector(ob)) = (oa, ob) else {
-        return Ok(Value::Int(0));
-    };
-    const BOX: f32 = 32.0;
-    let touching = (0..3).all(|i| (oa[i] - ob[i]).abs() <= BOX);
-    Ok(Value::Int(touching as i32))
+    let ba = crate::game::trigger::entity_abs_bounds(host, cx, a);
+    let bb = crate::game::trigger::entity_abs_bounds(host, cx, b);
+    Ok(Value::Int(
+        crate::game::trigger::boxes_overlap(ba, bb) as i32
+    ))
 }
 
 #[cfg(test)]
@@ -840,6 +833,48 @@ mod tests {
                 Value::String(a) => assert_eq!(cx.resolve(a), "xmodel/fx"),
                 v => panic!("{v:?}"),
             }
+        });
+    }
+
+    /// `istouching` is a box overlap, not a distance: a player standing in a
+    /// bombzone 200 units wide is touching it well past the old 32-unit
+    /// origin comparison's reach, and one clear of the zone's edge plus the
+    /// player's own half-width is not. The boundary is the sum of the two
+    /// boxes' half-extents (100 + 15 = 115), not the zone's edge alone.
+    #[test]
+    fn is_touching_overlaps_boxes() {
+        let (mut vm, mut host) = crate::game::testing_world_fixture();
+        vm.with_cx(|cx| {
+            let zone = host.ents.spawn(cx).unwrap();
+            let origin = cx.intern_folded("origin");
+            host.set_field(cx, zone, origin, Value::Vector([0.0, 0.0, 0.0]))
+                .unwrap();
+            host.triggers.register(
+                zone,
+                crate::game::trigger::TriggerKind::Multiple,
+                [-100.0, -100.0, 0.0],
+                [100.0, 100.0, 64.0],
+                0,
+                0,
+            );
+
+            let player = host.ents.spawn_client(cx, 0, None).unwrap();
+            let inside = Some(Target::Entity(player));
+            host.set_field(cx, player, origin, Value::Vector([90.0, 0.0, 0.0]))
+                .unwrap();
+            assert_eq!(
+                is_touching(&mut host, cx, inside, &[Value::Entity(zone)]),
+                Ok(Value::Int(1)),
+                "90 is inside a box that reaches 100, well past the old 32-unit test"
+            );
+
+            host.set_field(cx, player, origin, Value::Vector([116.0, 0.0, 0.0]))
+                .unwrap();
+            assert_eq!(
+                is_touching(&mut host, cx, inside, &[Value::Entity(zone)]),
+                Ok(Value::Int(0)),
+                "116 clears the zone's 100 reach plus the player's own 15"
+            );
         });
     }
 }
