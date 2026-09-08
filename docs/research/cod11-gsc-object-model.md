@@ -1496,13 +1496,17 @@ default hint of a `trigger_use` with no `cursorhint` key, and 0xff is
 `hintstring`'s own unset value. INFERRED, that ordering is control flow.
 
 The other half, `ent+0xd8`, is a configstring index rather than a table one.
-`G_GetHintStringIndex` (0x5a238) walks indices 0 to 0x1f, reading
-configstring `i + 0x4bc` each time, returns `i` for a `strcmp` match, claims
-the first empty slot with `trap_SetConfigstring` and writes -1 with a 0 return
-when all 32 are taken. VERIFIED, the two immediates, the bound at 0x5a2b1 and
-the three stores; INFERRED that the scan allocates rather than only looks up.
-So the hint-string range is 32 configstrings at base 1212 and 0xff is its
-unset marker, which is the -1 `serverCursorHintString` carries as 255.
+`G_GetHintStringIndex` (0x5a238) holds a `trap_GetConfigstring` on
+`i + 0x4bc`, a `strcmp`, a `trap_SetConfigstring`, three stores through the
+out pointer at `ebp+0x8` (0x5a281, 0x5a2a7, 0x5a2b9), the loop bound 0x1f at
+0x5a2b1 and the two return values 1 and 0. VERIFIED, the addresses, the
+immediates and the calls. INFERRED, which of those runs under which
+condition: that the scan starts at 0, that a `strcmp` match returns `i`, that
+an empty slot is claimed and returned instead, and that exhausting all 32
+writes -1 and returns 0. INFERRED too, one level up, that the scan allocates
+rather than only looking up. So the hint-string range is 32 configstrings at
+base 1212 and 0xff is its unset marker, which is the -1
+`serverCursorHintString` carries as 255.
 
 `G_CheckForCursorHints` (0x4f59c) reads `ent+0xdc` into
 `ps.serverCursorHint` and `ent+0xd8` into `ps.serverCursorHintString`, having
@@ -1531,10 +1535,13 @@ alongside `CalcMuzzlePoints`, `BG_GetInfoForWeapon` and `G_IsTurretUsable`.
 VERIFIED, the function's own calls. No touch path writes any of the three hint
 fields: `SP_trigger_lookat` installs no touch function and the trigger touch
 path stores nothing at `ps+0x384`, `+0x388` or `+0x38c`. INFERRED, from the
-absence rather than from a store. vcod models none of this -- it runs no
-per-frame aim trace, so its clients carry `serverCursorHint` 0 and
-`serverCursorHintString` 255 always, which is what a client standing in the
-open gets from retail too.
+absence rather than from a store. vcod models none of this: it runs no
+per-frame aim trace, and `ClientSim::to_wire` writes `serverCursorHintString`
+255 and never touches `serverCursorHint`, which therefore keeps the null
+playerstate's 0. VERIFIED, read out of `crates/server/src/spectate.rs`. That
+those two are also what retail sends a client looking at nothing is a
+corollary of the INFERRED reading above, not a measurement: no capture of a
+client aimed at a `trigger_use` has been taken.
 
 ### `legsAnim` needs the animscript state machine
 
