@@ -1684,6 +1684,32 @@ INFERRED: gsc reads pushed arguments in reverse, so the callback is
 sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc)`, which is the signature the
 shipped `maps/mp/gametypes/_callbacksetup.gsc` declares.
 
+`Scr_PlayerKilled` (`0x5cb30`) pushes its attacker and inflictor the same
+way. VERIFIED: both functions compare the pointer against 0 and call
+`Scr_AddUndefined` on the null arm instead of substituting an entity
+(`0x5cae5` and `0x5cb01` in `Scr_PlayerDamage`, `0x5cbd4` in
+`Scr_PlayerKilled`). So a death with no attacker behind it -- a mine's
+`radiusDamage`, a `trigger_hurt`, a fall -- reaches both callbacks with
+`eAttacker` and `eInflictor` undefined, and nothing in the engine turns them
+into `g_entities[ENTITYNUM_WORLD]` first.
+
+What makes that safe for the stock scripts is `isPlayer`, `functions[81]` at
+`0x5efd4`. VERIFIED: it calls `Scr_GetType(0)` and branches to `Scr_AddInt(0)`
+for anything but type 7, then `Scr_GetPointerType(0)` and branches the same
+way for anything but 0x0d, and only then calls `Scr_GetEntity(0)` and tests
+the entity's `+0x158` -- the `gclient` pointer -- returning 1 when it is
+non-null and 0 when it is not. INFERRED, from those branches: `isPlayer` of
+an undefined, a string or a number is 0 rather than an error, which is what
+lets `dm.gsc`'s `Callback_PlayerKilled` call `isPlayer(attacker)` unguarded
+at line 492 on every world death.
+
+INFERRED, and a vcod divergence worth knowing: retail decides player-ness by
+that `gclient` pointer, where `crates/server/src/game/builtins/entity.rs`
+decides it by the entity number being below `MAX_CLIENTS`. The two agree on
+every entity a stock map produces, since numbers 0..63 are client slots by
+construction, and they would disagree only on a non-client entity numbered
+into that range, which nothing allocates.
+
 ### 4.5 `finishPlayerDamage`, which is where the damage lands
 
 VERIFIED: the script method `finishplayerdamage` is `0x4376c`, entry 25 of the
