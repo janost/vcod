@@ -86,6 +86,9 @@ pub fn spawn_entities_from_string(
         if classname == "trigger_hurt" {
             register_sound_alias(host, trigger_hurt_sound(&block));
         }
+        if let Some(kind) = crate::game::trigger::kind_of(&classname) {
+            register_trigger(host, &block, id, kind);
+        }
         if let Some(item) = spawn_item_name(host, cx, id, &classname) {
             host.register_item(&item.name);
             if !item.turret {
@@ -138,6 +141,39 @@ fn trigger_hurt_sound(block: &std::collections::HashMap<String, String>) -> Stri
         .get("sound")
         .cloned()
         .unwrap_or_else(|| "world_hurt_me".to_string())
+}
+
+/// A trigger's box is its submodel's (`"model" "*N"`), and its `wait` and
+/// `random` keys are seconds on the wire. A trigger with no brush model, or
+/// one naming a model the BSP has no bounds for, is registered with a zero
+/// box: it then touches nothing, which is what retail's unset `r.mins`/
+/// `r.maxs` do.
+fn register_trigger(
+    host: &mut GameHost,
+    block: &std::collections::HashMap<String, String>,
+    id: EntId,
+    kind: crate::game::trigger::TriggerKind,
+) {
+    let bounds = block
+        .get("model")
+        .and_then(|m| m.strip_prefix('*'))
+        .and_then(|n| n.parse::<usize>().ok())
+        .and_then(|n| host.model_bounds.get(n).copied())
+        .unwrap_or(([0.0; 3], [0.0; 3]));
+    let secs_ms = |key: &str| -> i32 {
+        block
+            .get(key)
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .map_or(0, |s| (s * 1000.0) as i32)
+    };
+    host.triggers.register(
+        id,
+        kind,
+        bounds.0,
+        bounds.1,
+        secs_ms("wait"),
+        secs_ms("random"),
+    );
 }
 
 /// `G_SpawnTurret` (0x52c84), reached from `SP_turret` for `misc_mg42` and
@@ -1089,6 +1125,37 @@ mod tests {
         })
         .unwrap();
         assert_eq!(host.configstrings[11], "0");
+    }
+
+    /// Every trigger classname in the lump gets a row, with the submodel's
+    /// bounds and its `wait` key in milliseconds. A non-trigger block gets
+    /// none.
+    #[test]
+    fn the_entity_lump_registers_its_triggers() {
+        let (mut vm, mut host) = crate::game::testing_world_fixture();
+        vm.with_cx(|cx| {
+            super::spawn_entities_from_string(
+                &mut host,
+                cx,
+                "{\n\"classname\" \"worldspawn\"\n}\n\
+                 {\n\"classname\" \"trigger_multiple\"\n\"model\" \"*1\"\n\"wait\" \"0.5\"\n}\n\
+                 {\n\"classname\" \"script_model\"\n\"model\" \"xmodel/barrels\"\n}\n\
+                 {\n\"classname\" \"trigger_hurt\"\n\"model\" \"*2\"\n}\n",
+            )
+            .unwrap();
+        });
+        assert_eq!(host.triggers.len(), 2);
+        let kinds: Vec<_> = host.triggers.iter().map(|(_, t)| t.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                crate::game::trigger::TriggerKind::Multiple,
+                crate::game::trigger::TriggerKind::Hurt
+            ]
+        );
+        let (_, first) = host.triggers.iter().next().unwrap();
+        assert_eq!(first.wait_ms, 500, "the wait key is seconds on the wire");
+        assert_eq!(first.mins, [-16.0, -16.0, 0.0], "submodel 1's box");
     }
 
     /// `SP_trigger_hurt` (0x64ef8) always registers a sound alias, its own

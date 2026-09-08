@@ -198,6 +198,7 @@ impl ScriptRuntime {
             .read(&bsp_path)
             .ok_or_else(|| anyhow::anyhow!("reading {bsp_path}"))?;
         let bsp = vcod_common::bsp::parse(&bsp_bytes)?;
+        host.model_bounds = bsp.models.iter().map(|m| (m.mins, m.maxs)).collect();
         vm.with_cx(|cx| spawn_entities_from_string(&mut host, cx, &bsp.entities))
             .map_err(|e| anyhow::anyhow!("spawning {map}'s entities: {e:?}"))?;
 
@@ -933,6 +934,11 @@ impl ScriptRuntime {
 
     pub fn bodies_mut(&mut self) -> &mut crate::game::bodies::BodyQueue {
         &mut self.host.bodies
+    }
+
+    /// The map's triggers, for a test or a caller outside the game module.
+    pub fn triggers_mut(&mut self) -> &mut crate::game::trigger::Triggers {
+        &mut self.host.triggers
     }
 
     /// The cvar table as the script left it. `Server::tick` reads it back
