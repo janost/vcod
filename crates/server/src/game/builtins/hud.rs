@@ -222,7 +222,7 @@ pub fn destroy(
     _args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let id = hud_receiver(host, recv)?;
-    host.ents.free(id);
+    host.free_entity(id);
     Ok(Value::Undefined)
 }
 

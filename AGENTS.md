@@ -298,6 +298,27 @@ engineering setup works.
   predicting on our snapshots sees as a correction, so it is the number a
   view twitch report turns into. Both committed fixtures are retail
   evidence and a run against ours overwrites them.
+  `--probe-triggers` is the touch pass's walk: it joins, reads the map's
+  trigger brushes out of the BSP entity and model lumps, and walks at them one
+  at a time, nearest unvisited first, steering round buildings with a
+  look-ahead box trace against the map's own collision. It presses use after
+  every death so a minefield does not end the run, and kills itself when it
+  wedges somewhere the steer cannot get it out of. A blind route does not
+  work: a wander on mp_pavlov crossed one trigger in 190 s. The client writes
+  no fixture at all -- the evidence is the *server's* `games_mp.log`, logged by
+  `crates/gsc/tests/fixtures/semantics/client-probes/probe_trigger.gsc`, which
+  runs as the gametype and threads a `waittill("trigger", other)` onto every
+  trigger entity the map spawned. `tools/run_probe.sh client-probes/probe_trigger
+  mp_pavlov` in one shell and the client in another; what it printed goes to
+  `crates/server/tests/fixtures/triggers/<map>-<gametype>-triggers.txt`, which
+  `crates/server/tests/triggers_ab.rs` replays against ours by running the
+  same probe script as our gametype and standing a client at every origin
+  retail recorded a fire from. The walk is not the measurement and does not
+  have to reproduce: only the origins and the trigger entity numbers do. What
+  the committed mp_pavlov capture does not cover is the hurt half: the map's
+  one `trigger_hurt` is the kill volume under the floor, a walking player
+  never reaches it, and every fire line in that fixture is a
+  `trigger_multiple`.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
@@ -380,7 +401,10 @@ engineering setup works.
   `map_rotate` line an earlier frame's script queued reloads the level before
   anything else runs), then expired clients, then each client's queued usercmds
   (`replay_moves`, one pmove step per cmd, which is where the weapon machine
-  queues a frame's shots, swings and throws), then those themselves (a trace
+  queues a frame's shots, swings and throws, and which mirrors each client's
+  origin onto the host and runs the touch pass per cmd right after, the way
+  retail updates `r.currentOrigin` and calls `G_TouchTriggers` inside
+  `ClientThink`), then those themselves (a trace
   each, an impact temp entity and a hit per player struck), then the missiles
   fly and any due fuse explodes, then the blasts become hits, then the client
   commands that start a script thread (`kill`, `mr`), which the packet pass
@@ -388,9 +412,12 @@ engineering setup works.
   `deliver_hits` so the damage callback has run before script, then the
   script frame, then the sim ops the
   script left (spawns, weapon gives and switches, the damage the callback
-  did), then the host-to-sim mirrors (weapons held, origin, health, the damage
+  did), then the host-to-sim mirrors (weapons held, health, the damage
   feedback `P_DamageFeedback` computes from the health the hit left), then the
-  entities are built once and culled and written per client. Move anything
+  entities are built once and culled and written per client. The origin is the
+  one mirror that no longer waits for that pass: the touch pass needs this
+  cmd's spot, not last tick's, so anything reading a client's host origin
+  between the two now sees the post-move value. Move anything else
   across that order and a snapshot reads a frame-old field.
 - `Cx::spawn` is for a builtin that needs script to run before its caller's
   next instruction: the queued thread starts the moment the builtin returns,
@@ -407,7 +434,10 @@ engineering setup works.
   the script logged. Anything after the map goes to the engine verbatim,
   which is how the three `probe_persist_*` probes get the `sv_mapRotation`
   they need to have a map to load after ending their own; `PROBE_SECS` is
-  `SECS` under the name those recipes use.
+  `SECS` under the name those recipes use. A probe name may carry a
+  subdirectory (`client-probes/probe_trigger`); the gametype is installed
+  under the basename, so a probe that needs a connected client is driven by
+  the same script as the rest.
   `tools/capture_probes.sh` runs every probe that way and
   writes the combined `retail-captures.txt` the A/B test in
   `crates/gsc/tests/semantics_ab.rs` compares vcod's VM against. It passes no
@@ -674,6 +704,11 @@ never pasted decompiler output or disassembly listings.
   the gametype did not list, which takes carentan's two bombzone
   `script_brushmodel`s out of every gametype but `sd`; the `delete` builtin
   unlinks the model and the slope gate applies the script's rule itself.
+  `solid()`/`notSolid()` are the other half of the same thing: retail's
+  `SP_script_brushmodel` gives an exploder brush model no spawn state of its
+  own, and `_load.gsc` is what `notsolid()`s the four on mp_depot, mp_powcamp
+  and mp_rocket, so a builtin that writes the flag without touching the clip
+  leaves three stock maps carrying collision retail does not.
 - A stock frag bounces off a live player rather than detonating on it.
   `fraggrenade_mp` spells `damage` 0, and retail's direct-hit `MOD_GRENADE`
   arm is gated on that field, so the contact applies the soft damping and the

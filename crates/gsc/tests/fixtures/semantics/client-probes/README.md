@@ -7,9 +7,11 @@ and reads `games_mp.log`. `tools/capture_probes.sh` globs
 `retail-captures.txt` section, so a probe that logs nothing without a client
 would sit in that set as an empty section indistinguishable from a broken one.
 
-These probes measure from `Callback_PlayerConnect` instead, so they are here,
-outside both. They are run by hand and their output is quoted in whatever
-research doc the measurement belongs to, rather than diffed by a test.
+These probes need a client for their own reason -- one measures from
+`Callback_PlayerConnect`, the other from a notify only a walking player
+raises -- so they are here, outside both. Their output is quoted in whatever
+research doc the measurement belongs to, or committed as a fixture a test in
+`crates/server` reads; neither is paired against `retail-captures.txt`.
 
 ## Running one
 
@@ -81,3 +83,31 @@ Three measurements out of it, all used in
 `docs/research/cod11-gsc-object-model.md`: `.pers` is an indexable object
 before `begin` and holds nothing, `.name` already carries the client's
 userinfo name, and reading an index off a genuinely undefined field is fatal.
+
+## probe_trigger
+
+Every `"trigger"` notify the engine's touch pass raises. It threads a
+`waittill("trigger", other)` onto every trigger entity of the six trigger
+classnames and logs one line per notify with the trigger's entity number, its
+classname, the toucher's entity number and the toucher's origin; a `PROBE
+watch` line per entity ahead of them is the census the map ended up with after
+the gametype's `_gameobjects` pass deleted what it did not claim.
+
+It calls `maps\mp\gametypes\dm::main()` itself, so a client can answer the
+stock team menu and spawn. The scan waits a second first: the entity lump is
+loaded before the gametype's `main()` runs but the map's own `main()` is not,
+so a scan without the wait would watch a trigger the map script goes on to
+delete or to move.
+
+`tools/run_probe.sh` drives it under its subdirectory name, so both shells are
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> SECS=400 \
+    tools/run_probe.sh client-probes/probe_trigger mp_pavlov
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-triggers \
+    --probe-team allies --probe-secs 380
+```
+
+The output is committed as `crates/server/tests/fixtures/triggers/`'s capture
+and diffed by `crates/server/tests/triggers_ab.rs`, which runs this same file
+as our gametype so both sides log through the same `logPrint`.

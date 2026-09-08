@@ -101,8 +101,9 @@ struct DamageFeedback {
 }
 
 /// `serverCursorHintString`'s no-hint sentinel, which is retail's -1 in an
-/// 8-bit netfield. Object model doc, section 20.
-const NO_CURSOR_HINT: i32 = 0xff;
+/// 8-bit netfield. A different field from `serverCursorHint`, whose own
+/// no-hint value is 0. Object model doc, section 20.
+const NO_CURSOR_HINT_STRING: i32 = 0xff;
 
 /// `stats[3]`'s "no teammate": retail's -1 in six raw bits, so the wire
 /// cannot tell it from client 63 (docs/protocol-1.1.md, "Block 1").
@@ -1138,7 +1139,7 @@ impl ClientSim {
             set("viewHeightLerpDown", i32::from(self.ps.view_lerp_down));
             // -1..1, left negative, the same convention retail sends.
             set("leanf", (self.ps.lean / pmove::LEAN_MAX).to_bits() as i32);
-            set("serverCursorHintString", NO_CURSOR_HINT);
+            set("serverCursorHintString", NO_CURSOR_HINT_STRING);
             set("viewmodelIndex", self.viewmodel_index);
             set("legsAnim", self.anim.legs());
             set("torsoAnim", self.anim.torso());
