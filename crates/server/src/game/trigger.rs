@@ -4,7 +4,7 @@
 
 use crate::game::host::GameHost;
 use std::collections::BTreeMap;
-use vcod_gsc::{Cx, EntId, Host, Value};
+use vcod_gsc::{Atom, Cx, EntId, Host, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TriggerKind {
@@ -196,9 +196,11 @@ pub fn abs_bounds(origin: [f32; 3], t: &Trigger) -> ([f32; 3], [f32; 3]) {
 pub const PLAYER_MINS: [f32; 3] = [-15.0, -15.0, 0.0];
 pub const PLAYER_MAXS: [f32; 3] = [15.0, 15.0, 72.0];
 
-fn entity_origin(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
-    let origin_atom = cx.intern_folded("origin");
-    match host.get_field(cx, id, origin_atom) {
+/// `origin` is taken as an already-interned atom rather than folded here:
+/// the touch pass calls this once per client plus once per trigger row per
+/// cmd, and folding lowercases and allocates every time.
+fn entity_origin(host: &mut GameHost, cx: &mut Cx, id: EntId, origin: Atom) -> [f32; 3] {
+    match host.get_field(cx, id, origin) {
         Value::Vector(v) => v,
         _ => [0.0; 3],
     }
@@ -208,7 +210,17 @@ fn entity_origin(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
 /// current origin, a client's player box, and a point box for everything
 /// else, which is what an unset `r.mins`/`r.maxs` gives retail.
 pub fn entity_abs_bounds(host: &mut GameHost, cx: &mut Cx, id: EntId) -> ([f32; 3], [f32; 3]) {
-    let origin = entity_origin(host, cx, id);
+    let origin = cx.intern_folded("origin");
+    abs_bounds_with_atom(host, cx, id, origin)
+}
+
+fn abs_bounds_with_atom(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+    origin_atom: Atom,
+) -> ([f32; 3], [f32; 3]) {
+    let origin = entity_origin(host, cx, id, origin_atom);
     if let Some(t) = host.triggers.get(id) {
         return abs_bounds(origin, t);
     }
@@ -232,13 +244,14 @@ const TOUCH_BOX: [f32; 3] = [40.0, 40.0, 52.0];
 /// contains the other -- the candidate reaches 52 below the feet and the clip
 /// box 72 above them -- so both have to hold.
 pub fn touched(host: &mut GameHost, cx: &mut Cx, client: EntId) -> Vec<EntId> {
-    let origin = entity_origin(host, cx, client);
+    let origin_atom = cx.intern_folded("origin");
+    let origin = entity_origin(host, cx, client, origin_atom);
     let candidate = offset_bounds(
         origin,
         [-TOUCH_BOX[0], -TOUCH_BOX[1], -TOUCH_BOX[2]],
         TOUCH_BOX,
     );
-    let exact = entity_abs_bounds(host, cx, client);
+    let exact = abs_bounds_with_atom(host, cx, client, origin_atom);
     let ids: Vec<EntId> = host.triggers.iter().map(|(id, _)| id).collect();
     ids.into_iter()
         .filter(|id| {
@@ -248,7 +261,7 @@ pub fn touched(host: &mut GameHost, cx: &mut Cx, client: EntId) -> Vec<EntId> {
             if host.triggers.get(*id).map(|t| t.kind) == Some(TriggerKind::LookAt) {
                 return false;
             }
-            let b = entity_abs_bounds(host, cx, *id);
+            let b = abs_bounds_with_atom(host, cx, *id, origin_atom);
             boxes_overlap(candidate, b) && boxes_overlap(exact, b)
         })
         .collect()
