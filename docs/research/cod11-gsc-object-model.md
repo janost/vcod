@@ -1472,6 +1472,57 @@ INFERRED, the two branches at 0x4f5d7 and 0x4f5e4. `ClientEndFrame` is one of
 its two callers, from the live arm above (the `R_386_PC32` relocation at
 0x4111a); the other is at 0x484c6. VERIFIED from the relocations.
 
+### `serverCursorHint` is an index into a nine-name table
+
+`hintStrings` (0x7e4d4) is 44 bytes, eleven pointer slots. Slot 0 holds the
+empty string and slots 1 to 9 hold, in order, `HINT_NONE`, `HINT_ACTIVATE`,
+`HINT_NOACTIVATE`, `HINT_DOOR`, `HINT_DOOR_LOCKED`, `HINT_MG42`,
+`HINT_HEALTH`, `HINT_LADDER`, `HINT_FRIENDLY`; slot 10 has no relocation.
+VERIFIED, read out of `.rel.data` (the raw dwords are zero without it).
+
+`setCursorHint` (0x5a0e4) takes one string, walks that table with
+`Q_strcasecmp` and stores the matching index into the entity dword at
+`ent+0xdc`. `HINT_INHERIT` stores -1 instead, and an unmatched name reaches
+`Scr_Error` with the "not a valid hint type" line at 0x76e40. INFERRED, the
+compares at 0x5a12e and 0x5a19d and the stores at 0x5a14f and 0x5a160; the
+addresses, the immediates and the strings are VERIFIED.
+
+`trigger_use` (0x5742c) is where a stock map's hint comes from. It stores 2
+into `ent+0xdc` at 0x5749f, then `G_SpawnString`s the `cursorhint` key
+(0x75e6c) and runs the same table walk over the result, and then stores 0xff
+into `ent+0xd8` at 0x57550 before reading the `hintstring` key. VERIFIED,
+the stores and the two `G_SpawnString` calls. So `HINT_ACTIVATE` is the
+default hint of a `trigger_use` with no `cursorhint` key, and 0xff is
+`hintstring`'s own unset value. INFERRED, that ordering is control flow.
+
+`G_CheckForCursorHints` (0x4f59c) reads `ent+0xdc` into
+`ps.serverCursorHint` and `ent+0xd8` into `ps.serverCursorHintString`, having
+taken the candidate entities from `G_GetActivateEnt` (0x4f14c). VERIFIED, the
+loads at 0x4f6b8 and 0x4f6c6 and the stores at 0x4f83e and 0x4f854. The arm
+those two loads sit in is gated on the entity's classname word (`ent+0x176`)
+equalling `scr_const+0x94`, which `GScr_LoadConsts` fills with
+`Scr_AllocString("trigger_use")` at 0x58c58. VERIFIED, the compare and the
+allocation; INFERRED that the gate is what selects the arm.
+
+`trigger_lookat` sets no cursor hint. `scr_const+0x98`, the constant
+`GScr_LoadConsts` fills with `Scr_AllocString("trigger_lookat")` at 0x58c8a,
+is read in exactly one place in the module: `G_CheckForPreventFriendlyFire`
+(0x4f88c) at 0x4f98e, which compares it against the classname of whatever a
+`trap_LocationalTrace` down the player's aim hit and then calls `G_Trigger`.
+VERIFIED, the single relocation against that offset in `.rel.text` and the
+call at 0x4f9b2. So the kind fires off an aim trace rather than off contact,
+and it touches none of the three hint fields. INFERRED for both, control flow.
+`SP_trigger_lookat` (0x65df0) installs no touch or think function either, only
+`trap_SetBrushModel`, `ent+0x118` = 0x20000000, `ent+0xf4` = 1, `svFlags |= 2`
+and `trap_LinkEntity`. VERIFIED, that is the whole function.
+
+vcod diverges here on purpose: `crates/server/src/game/trigger.rs` fires a
+`trigger_lookat` on contact with the rest of the touch pass and puts its hint
+on the toucher, since nothing in vcod runs an aim trace per frame yet. The
+hint value itself is retail's -- the `cursorhint` key, or `HINT_ACTIVATE` when
+the map gives none -- but that it comes from a `trigger_lookat` at all is
+vcod's, not measured.
+
 ### `legsAnim` needs the animscript state machine
 
 `BG_PlayAnim` (0x2c338) is what writes `ps.legsAnim` (+0x70, netfield offset

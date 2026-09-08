@@ -151,7 +151,8 @@ fn trigger_hurt_sound(block: &std::collections::HashMap<String, String>) -> Stri
 ///
 /// A `trigger_hurt` takes neither key: its cadence, damage and damage flags
 /// come from `dmg` and `spawnflags` instead, which `Triggers::register_hurt`
-/// documents.
+/// documents. `cursorhint` is retail's `trigger_use` key
+/// (`Triggers::set_cursor_hint`), read here for every kind that carries one.
 fn register_trigger(
     host: &mut GameHost,
     block: &std::collections::HashMap<String, String>,
@@ -195,6 +196,9 @@ fn register_trigger(
         secs_ms("wait"),
         secs_ms("random"),
     );
+    if let Some(hint) = block.get("cursorhint") {
+        host.triggers.set_cursor_hint(id, hint);
+    }
 }
 
 /// `G_SpawnTurret` (0x52c84), reached from `SP_turret` for `misc_mg42` and
