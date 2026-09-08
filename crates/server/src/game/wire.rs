@@ -214,13 +214,34 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
         }
     };
 
-    let origin = field_vec(host, cx, id, "origin").unwrap_or([0.0; 3]);
-    let angles = field_vec(host, cx, id, "angles").unwrap_or([0.0; 3]);
-    for (axis, v) in origin.iter().enumerate() {
-        setf(&mut e, &format!("pos.trBase[{axis}]"), *v);
-    }
-    for (axis, v) in angles.iter().enumerate() {
-        setf(&mut e, &format!("apos.trBase[{axis}]"), *v);
+    // A mover's own trajectory groups, which are what the client
+    // extrapolates between the two updates a move produces
+    // (`crate::game::mover`, docs/research/cod11-movers.md section 9). An
+    // entity no verb has touched is stationary at its `origin`/`angles`.
+    match host.movers.wire(id) {
+        Some((pos, apos)) => {
+            for (group, tr) in [("pos", pos), ("apos", apos)] {
+                seti(&mut e, &format!("{group}.trType"), tr.tr_type);
+                seti(&mut e, &format!("{group}.trTime"), tr.tr_time);
+                seti(&mut e, &format!("{group}.trDuration"), tr.tr_duration);
+                for (axis, v) in tr.base.to_array().iter().enumerate() {
+                    setf(&mut e, &format!("{group}.trBase[{axis}]"), *v);
+                }
+                for (axis, v) in tr.delta.to_array().iter().enumerate() {
+                    setf(&mut e, &format!("{group}.trDelta[{axis}]"), *v);
+                }
+            }
+        }
+        None => {
+            let origin = field_vec(host, cx, id, "origin").unwrap_or([0.0; 3]);
+            let angles = field_vec(host, cx, id, "angles").unwrap_or([0.0; 3]);
+            for (axis, v) in origin.iter().enumerate() {
+                setf(&mut e, &format!("pos.trBase[{axis}]"), *v);
+            }
+            for (axis, v) in angles.iter().enumerate() {
+                setf(&mut e, &format!("apos.trBase[{axis}]"), *v);
+            }
+        }
     }
 
     // The entity's own event ring, which `playSound` writes on a receiver

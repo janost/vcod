@@ -1164,6 +1164,16 @@ impl ScriptRuntime {
         self.host
             .bodies
             .run_thinks(now_ms, &vcod_common::net::protocol::PROTOCOL_V1);
+        // The movers belong to the same entity pass: retail integrates them
+        // in `G_RunFrame` ahead of the thread pass, so a thread parked on
+        // `movedone` wakes on the frame the motion ended rather than the one
+        // after (`crate::game::mover`).
+        let host = &mut self.host;
+        let done = self.vm.with_cx(|cx| crate::game::mover::run(host, cx));
+        for d in done {
+            let event = self.vm.with_cx(|cx| cx.intern_folded(d.event));
+            self.vm.notify(Target::Entity(d.ent), event, &[]);
+        }
         for e in self.vm.run_frame(&mut self.host, now_ms) {
             log::warn!("script error: {e:?}");
         }

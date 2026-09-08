@@ -291,6 +291,8 @@ pub struct GameHost {
     pub bodies: crate::game::bodies::BodyQueue,
     /// The grenades in the air (`crate::game::missile`).
     pub missiles: crate::game::missile::Missiles,
+    /// Every entity a mover verb has been called on (`crate::game::mover`).
+    pub movers: crate::game::mover::Movers,
     /// The map's triggers. Host-side beside the object table for the reason
     /// `missiles` is: retail's own state lives on the `gentity_t`, ours in a
     /// table the object model does not have to carry.
@@ -377,6 +379,7 @@ impl GameHost {
             temp_entities: Vec::new(),
             bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
             missiles: crate::game::missile::Missiles::default(),
+            movers: crate::game::mover::Movers::default(),
             triggers: crate::game::trigger::Triggers::default(),
             model_bounds: Vec::new(),
             model_brushes: Vec::new(),
@@ -444,6 +447,10 @@ impl GameHost {
     /// three have one entry point here rather than three call sites each.
     pub fn free_entity(&mut self, id: EntId) {
         self.triggers.remove(id);
+        // A mover's row goes with the entity rather than a frame later: the
+        // number is on the free list from here, and the next entity to take
+        // it would start out on the dead one's trajectory.
+        self.movers.forget(id);
         self.ents.free(id);
     }
 

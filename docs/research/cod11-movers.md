@@ -122,6 +122,17 @@ read `(0, 0, 0)` while the wire carried 360 (section 9).
 Whether `.origin` is written back the same way is UNVERIFIED; the probe read
 `getorigin()`.
 
+**Script sees the trajectory one server frame late.** VERIFIED, from both
+halves of the capture at once. `moveto((600,0,100), 1)` called at level time
+1050 put `trTime` 1050 on the wire, and yet `getorigin()` still read the start
+origin at 1100 and the first moved value, 125, at 1150; `movedone` came at
+2100 rather than at 1050 + 1000. Every phase agrees: `rotateyaw(90, 2)` called
+at 13450 raised `rotatedone` at 15500. So the script-visible origin and angles
+at level time `T` are the trajectory evaluated at `T - 50`, one frame at the
+default `sv_fps` 20, and the completion notify comes on the first frame whose
+lagged clock has passed the end. Whether the lag is one frame or a fixed 50 ms
+is UNVERIFIED; the capture ran at one frame rate.
+
 ## 9. What goes on the wire
 
 VERIFIED, and this is the load-bearing one: retail sends **a trajectory the

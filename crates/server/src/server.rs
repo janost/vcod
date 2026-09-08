@@ -73,7 +73,7 @@ const FLOOD_WINDOW_MS: i32 = 800;
 /// The cached verdict is at most this stale.
 const ENEMY_REFRESH_MS: i32 = 100;
 /// The tick pace (`1000 / sv_fps`), also the dt floor a fresh sim starts from.
-const FRAME_MS: i32 = 50;
+pub(crate) const FRAME_MS: i32 = 50;
 /// Retail's `MAX_CLIENTS`. Client slots index a 6-bit wire field
 /// (clientState entries; `ps.clientNum` gets 8), so more than 64 would
 /// collide silently.

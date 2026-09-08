@@ -35,7 +35,7 @@ pub const DEFAULT_GRAVITY: f32 = 800.0;
 
 /// `pos`/`apos` as it comes off the wire. `tr_duration` is 0 for the
 /// unbounded types.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Trajectory {
     pub tr_type: i32,
     pub tr_time: i32,
