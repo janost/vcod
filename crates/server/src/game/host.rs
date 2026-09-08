@@ -283,6 +283,14 @@ pub struct GameHost {
     pub bodies: crate::game::bodies::BodyQueue,
     /// The grenades in the air (`crate::game::missile`).
     pub missiles: crate::game::missile::Missiles,
+    /// The map's triggers. Host-side beside the object table for the reason
+    /// `missiles` is: retail's own state lives on the `gentity_t`, ours in a
+    /// table the object model does not have to carry.
+    pub triggers: crate::game::trigger::Triggers,
+    /// Per lump-27 model, the submodel's own box, for the brush entities that
+    /// read one. Filled at map load from the BSP; empty in a test that
+    /// mounts no map.
+    pub model_bounds: Vec<([f32; 3], [f32; 3])>,
     /// `setPlayerIgnoreRadiusDamage`'s flag, which sits on the level and not
     /// on a client (combat doc, 14.2): the `radiusDamage` builtin is the one
     /// reader, and a grenade's own blast never looks at it.
@@ -356,6 +364,8 @@ impl GameHost {
             temp_entities: Vec::new(),
             bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
             missiles: crate::game::missile::Missiles::default(),
+            triggers: crate::game::trigger::Triggers::default(),
+            model_bounds: Vec::new(),
             ignore_radius_damage: false,
             save_persist: false,
             team_scores: [0, 0],
@@ -412,6 +422,15 @@ impl GameHost {
     /// A uniform draw in `[0, 1)` off the host's own state.
     pub fn rand_unit(&mut self) -> f32 {
         rand_unit(&mut self.rng)
+    }
+
+    /// Free an entity and everything the host hangs off it. Retail's
+    /// `G_FreeEntity` unlinks the entity, which is what takes a submodel's
+    /// brushes out of the clip and a trigger out of the touch pass, so the
+    /// three have one entry point here rather than three call sites each.
+    pub fn free_entity(&mut self, id: EntId) {
+        self.triggers.remove(id);
+        self.ents.free(id);
     }
 
     /// The three HUD fields whose retail setter is not a plain store, and
