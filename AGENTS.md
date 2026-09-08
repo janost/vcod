@@ -298,6 +298,19 @@ engineering setup works.
   predicting on our snapshots sees as a correction, so it is the number a
   view twitch report turns into. Both committed fixtures are retail
   evidence and a run against ours overwrites them.
+  `--probe-triggers` is the touch pass's walk: it joins, walks eight compass
+  headings out of the spawn until each runs out of map, and presses use after
+  every death so a minefield does not end the run. The client writes no
+  fixture at all -- the evidence is the *server's* `games_mp.log`, logged by
+  `crates/gsc/tests/fixtures/semantics/client-probes/probe_trigger.gsc`, which
+  runs as the gametype and threads a `waittill("trigger", other)` onto every
+  trigger entity the map spawned. `tools/run_probe.sh client-probes/probe_trigger
+  mp_pavlov` in one shell and the client in another; what it printed goes to
+  `crates/server/tests/fixtures/triggers/<map>-<gametype>-triggers.txt`, which
+  `crates/server/tests/triggers_ab.rs` replays against ours by running the
+  same probe script as our gametype and standing a client at every origin
+  retail recorded a fire from. The walk is not the measurement and does not
+  have to reproduce: only the origins and the trigger entity numbers do.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
@@ -407,7 +420,10 @@ engineering setup works.
   the script logged. Anything after the map goes to the engine verbatim,
   which is how the three `probe_persist_*` probes get the `sv_mapRotation`
   they need to have a map to load after ending their own; `PROBE_SECS` is
-  `SECS` under the name those recipes use.
+  `SECS` under the name those recipes use. A probe name may carry a
+  subdirectory (`client-probes/probe_trigger`); the gametype is installed
+  under the basename, so a probe that needs a connected client is driven by
+  the same script as the rest.
   `tools/capture_probes.sh` runs every probe that way and
   writes the combined `retail-captures.txt` the A/B test in
   `crates/gsc/tests/semantics_ab.rs` compares vcod's VM against. It passes no
