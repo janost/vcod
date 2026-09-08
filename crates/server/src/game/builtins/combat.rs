@@ -391,8 +391,11 @@ pub fn radius_damage(
     let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
     for hit in hits {
         let args = vec![
-            // The world is the attacker and its own inflictor: retail hands
-            // `g_entities[1022]` over, which no script here can hold.
+            // The world is the attacker and its own inflictor, and it reaches
+            // script as `undefined`: `Scr_PlayerDamage` (0x5ca18) calls
+            // `Scr_AddUndefined` for a null attacker or inflictor rather than
+            // substituting an entity, and `Scr_PlayerKilled` (0x5cb30) does
+            // the same. VERIFIED, the two null compares and both call sites.
             Value::Undefined,
             Value::Undefined,
             Value::Int(hit.damage),
@@ -560,6 +563,53 @@ mod tests {
         });
         rt.run_frame(0);
         rt
+    }
+
+    /// `dm.gsc`'s own shape for a death with no player behind it: the killed
+    /// callback calls `isPlayer(attacker)` unguarded, the way line 492 does.
+    const WORLD_BLAST: &str = r#"
+        main() {}
+        CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+            self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+        }
+        CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {
+            level.was_player = isPlayer(eAttacker);
+            level.finished = 1;
+        }
+        mine() { radiusDamage((0,0,0), 300, 2000, 50); }
+    "#;
+
+    /// A blast a script sets off names the world as the attacker, and the
+    /// world is an *entity*: retail hands `g_entities[ENTITYNUM_WORLD]` over,
+    /// so `isPlayer(attacker)` answers false and the death runs on. Passing
+    /// `undefined` instead aborts the thread at the `isPlayer` call, which is
+    /// what `_minefields.gsc`'s `radiusDamage` did to every mine kill.
+    #[test]
+    fn a_world_blast_names_the_world_entity_as_the_attacker() {
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, WORLD_BLAST);
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "victim".into(),
+        });
+        rt.run_frame(0);
+        rt.host.client_vitals[0] = Vitals {
+            health: 100,
+            max_health: 100,
+            dead: false,
+        };
+        rt.set_client_origin(0, [0.0, 0.0, 0.0]);
+        let victim = rt.client_entity(0).expect("the client has an entity");
+        rt.start_thread_for_test(victim, "mine", 0);
+        rt.run_frame(0);
+
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.level_field("was_player"), Value::Int(0));
+        assert_eq!(
+            rt.level_field("finished"),
+            Value::Int(1),
+            "the callback has to run past the isPlayer call, not abort on it"
+        );
+        assert!(rt.client_vitals(0).dead, "2000 damage at zero range kills");
     }
 
     /// A killing `finishPlayerDamage` starts `CodeCallback_PlayerKilled`
