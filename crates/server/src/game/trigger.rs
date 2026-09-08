@@ -43,16 +43,15 @@ pub struct Triggers {
     rows: BTreeMap<u32, Trigger>,
 }
 
-/// The `dmg` key's default and the two spawnflags `register_hurt` reads; the
-/// evidence for each is on `register_hurt`.
+/// The `dmg` default, the two spawnflags and the two touch intervals, all
+/// from docs/research/cod11-gsc-object-model.md 8.1.
 pub const HURT_DEFAULT_DAMAGE: i32 = 5;
 const HURT_NO_PROTECTION: i32 = 0x8;
 const HURT_SLOW: i32 = 0x10;
 const HURT_INTERVAL_MS: i32 = 100;
 const HURT_SLOW_INTERVAL_MS: i32 = 1000;
 
-/// `hurt_touch` (0x64dc4) calls `G_Damage` with mod 23, which is
-/// `MOD_TRIGGER_HURT` in the table in docs/research/cod11-combat.md.
+/// The mod `hurt_touch` damages with (the same doc section).
 pub const MOD_TRIGGER_HURT: &str = "MOD_TRIGGER_HURT";
 
 impl Triggers {
@@ -80,19 +79,15 @@ impl Triggers {
         );
     }
 
-    /// A `trigger_hurt`, whose damage and cadence come from its own spawn
-    /// function rather than from the `wait`/`random` keys the other kinds use.
+    /// A `trigger_hurt`, whose damage, flags and cadence come from
+    /// `SP_trigger_hurt` (0x64ef8) and `hurt_touch` (0x64dc4) rather than from
+    /// the `wait`/`random` keys the other kinds take; the cadence rides
+    /// `wait_ms` because retail's timestamp gates its notify too
+    /// (docs/research/cod11-gsc-object-model.md 8.1).
     ///
-    /// VERIFIED, read as immediates out of `SP_trigger_hurt` (0x64ef8) and
-    /// `hurt_touch` (0x64dc4): the `dmg` key lands at gentity+568, which is
-    /// the entity field table's `dmg` slot; the spawn function writes 5 there;
-    /// the touch arms its own timestamp with 100 or 1000 ms; and it damages
-    /// with mod 23 (`MOD_TRIGGER_HURT`) and dflags 0 or 0x10
-    /// (`DFLAG_NO_PROTECTION`). INFERRED, read off the branches those
-    /// immediates sit on: the 5 is a default taken only when the key left the
-    /// field at 0, the 1000 and the 0x10 are the `0x10` and `0x8` spawnflag
-    /// arms, and the timestamp gates the notify as well as the damage, since
-    /// it is tested before both.
+    /// Not modelled, and the same section says why: `hurt_touch` tests a byte
+    /// on the *toucher* before its timestamp, so ours hurts a dead player
+    /// where retail may not.
     pub fn register_hurt(
         &mut self,
         id: EntId,
