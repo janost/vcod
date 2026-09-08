@@ -86,9 +86,10 @@ impl Triggers {
         self.rows.is_empty()
     }
 
-    /// Whether a touch fires, arming the next window. Retail's `multi_wait`
-    /// arms `nextthink` from the `wait` and `random` keys; a `trigger_once`
-    /// is the same gate with an infinite window.
+    /// Whether a touch fires, arming the next window from `wait_ms` and
+    /// `random_ms`. An ungated trigger (both 0) fires on every touch; a
+    /// gated one refuses until the window elapses; a `trigger_once` arms a
+    /// window that never elapses, so it fires exactly once.
     pub fn fire(&mut self, id: EntId, now_ms: i32, rng: &mut impl FnMut(i32) -> i32) -> bool {
         let Some(t) = self.rows.get_mut(&id.0) else {
             return false;
