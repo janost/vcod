@@ -459,11 +459,12 @@ The heading's label above covers the table; every claim below carries its own.
   INFERRED, from the `cmp ... ,0` / `jne` the write sits behind: the 5 is a
   default, and the condition is "the field is still 0", not "the key was
   absent" -- a block spelling `"dmg" "0"` takes the default too.
-- The damage flags come from spawnflags. VERIFIED: `hurt_touch` pushes 0x10
-  for the `dflags` argument of `G_Damage` when a bit test against the
-  spawnflags word is non-zero and 0 otherwise; 0x10 is `DFLAG_NO_PROTECTION`
-  (`crates/server/src/game/combat.rs:68`). INFERRED, from the branch: the bit
-  tested is spawnflag 0x8.
+- The damage flags come from spawnflags. VERIFIED: `hurt_touch` contains a bit
+  test against the spawnflags word and the immediate 0x10, which reaches the
+  `dflags` argument of `G_Damage`; 0x10 is `DFLAG_NO_PROTECTION`
+  (`crates/server/src/game/combat.rs:68`). INFERRED, from the test and the
+  branch it feeds: the bit tested is spawnflag 0x8, and the argument is 0x10
+  when it is set and 0 when it is not.
 - The means of death is `MOD_TRIGGER_HURT`. VERIFIED: the `mod` argument is
   the immediate 0x17, and index 23 of the mod table is `MOD_TRIGGER_HURT`
   (`MOD_NAMES`, `crates/server/src/game/combat.rs:21-46`, and the table in
@@ -473,20 +474,22 @@ The heading's label above covers the table; every claim below carries its own.
   `self` pointer twice and the immediate 0 for the other two.
 - A `trigger_hurt` has its own cadence and does not use the `wait` and
   `random` keys the other trigger classnames take. VERIFIED: `hurt_touch`
-  compares a timestamp at gentity+0x1cc against the level clock and, past
-  that compare, rewrites it as the clock plus either 100 or 1000. INFERRED,
-  from the branches: the compare is an early return when the timestamp is in
-  the future, the 1000 is the spawnflag 0x10 arm and the 100 the other, and
-  the timestamp gates the `Scr_Notify` as well as the `G_Damage`, since it is
-  tested before both.
-- `hurt_touch` tests a byte at gentity+0x171 **on the toucher** before
-  anything else. VERIFIED: the compare against 0 at 0x64dd2, on the function's
-  second argument (loaded at 0x64dcc). UNMEASURED: what the byte means. Offset
-  0x171 is not in the entity field table of section 5, so it is engine-only
-  state with no script-visible name, and the Q3 analogy that would call it
-  `takedamage` is a guess, not evidence. vcod does not model this gate: ours
-  hurts a dead player lying in a `trigger_hurt` and spends the 100 ms window
-  doing it.
+  reads and writes a timestamp at gentity+0x1cc, compares it against the level
+  clock, and contains the immediates 100 and 1000 as addends to that clock;
+  the function also contains a `Scr_Notify` call and the `G_Damage` call.
+  INFERRED, from the compare and the branches around it: the compare is an
+  early return taken when the timestamp is in the future, the 1000 is the
+  spawnflag 0x10 arm and the 100 the other, and the timestamp gates the
+  `Scr_Notify` as well as the `G_Damage`, both sitting past it.
+- `hurt_touch` tests a byte at gentity+0x171 **on the toucher**. VERIFIED: the
+  compare against 0 at 0x64dd2, on the function's second argument (loaded at
+  0x64dcc). INFERRED, from the `je` it feeds: it is an early return, and it is
+  the first gate in the function, ahead of the timestamp compare above. What
+  the byte means is not measured. Offset 0x171 is not in the entity field
+  table of section 5, so it is engine-only state with no script-visible name,
+  and the Q3 analogy that would call it `takedamage` is a guess, not evidence.
+  vcod does not model this gate: ours hurts a dead player lying in a
+  `trigger_hurt` and spends the 100 ms window doing it.
 
 ## 9. Builtins are five tables, VERIFIED
 
