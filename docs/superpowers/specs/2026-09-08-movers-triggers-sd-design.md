@@ -137,6 +137,11 @@ move pass queues rather than reentering the VM mid-frame.
 - `trigger_multiple`: gated by its `wait`/`random` keys through a per-entity
   next-fire time.
 - `trigger_once`: frees itself after one fire.
+  ANNOTATION 2026-09-08: ours latches the refire window shut instead, so the
+  entity survives in the object table and a `getEntArray` would see a
+  difference. Whether retail really frees it is unmeasured — this line was
+  written off Q3's `trigger_once`, not off the module — so the divergence is
+  recorded rather than closed. Measuring it is a follow-up.
 - `trigger_hurt`: damage through `finishPlayerDamage`, with the sound alias
   `spawn.rs` already registers (`SP_trigger_hurt` 0x64ef8, VERIFIED).
 - `trigger_use`: fires from the use key rather than from contact.
@@ -144,6 +149,12 @@ move pass queues rather than reentering the VM mid-frame.
   `serverCursorHintString` 255 sentinel is object-model section 20). Not
   cosmetic: `bombtrigger`, S&D's defuse trigger, is a `trigger_lookat` on
   every map that has one (VERIFIED, census).
+  ANNOTATION 2026-09-08: the cursor-hint claim is disproven — `SP_trigger_lookat`
+  touches no hint field and no touch path writes one (object-model section 20).
+  So is the assumption that the kind fires on contact: the broad phase's
+  contents mask excludes its `r.contents` bit (object-model 22.1), and the
+  module's only reader of the classname is an aim trace. Ours registers the
+  kind and notifies it on nothing; the aim trace is unmodelled.
 - `trigger_damage`: kind recognised, no missile touch path. Retail gives
   missiles their own (`G_GrenadeTouchTriggerDamage` 0x655a0), and no stock MP
   map places a `trigger_damage`, so it stays out.

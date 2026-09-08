@@ -246,7 +246,7 @@ pub fn spawn_struct(
 /// sees it until that think comes due (`ScriptRuntime::run_frame`'s think
 /// pass). `_load.gsc`'s exploder threads end with one. The clip goes now:
 /// a `script_brushmodel`'s brushes are in the world only through its link
-/// (`SP_script_brushmodel`, game.mp 0x70fb8), and retail's `G_FreeEntity`
+/// (`SP_script_brushmodel`, game.mp 0x60fb8), and retail's `G_FreeEntity`
 /// unlinks, which is how `_gameobjects::main` takes carentan's bombzone
 /// clips out of every gametype but sd (docs/research/cod11-mantle.md, "A
 /// submodel's brushes are its entity's").

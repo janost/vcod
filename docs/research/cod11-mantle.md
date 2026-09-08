@@ -662,7 +662,7 @@ whose bounding box holds the point and whose planes do not (side 9 puts
 (-597, 1832, 144) 26 units outside); it was a bounding-box reading.
 
 `delete()` is not the only script that takes a submodel out. VERIFIED:
-`SP_script_brushmodel` is four calls and one store -- `trap_SetBrushModel`,
+`SP_script_brushmodel` is three calls and one store -- `trap_SetBrushModel`,
 `InitScriptMover`, `self+0x118 = 1`, `trap_LinkEntity` -- with no other
 instruction in the function, and `+0x118` is `r.contents`
 (`docs/research/cod11-combat.md`, section 13). INFERRED, from that being
