@@ -1623,7 +1623,7 @@ script: `spawn_client` puts a fresh array handle there, because
 `ClientConnect` (0x4250f) writes one and every gametype reads
 `self.pers["team"]` off it without creating it. Section 3 has the measurement.
 
-## 22. `G_TouchTriggers` tests two boxes
+## 22. `G_TouchTriggers` is a box query, then a brush contact
 
 `G_TouchTriggers` (0x3f88c, `game.mp.i386.so`) builds its candidate box from
 three floats in `.data` at 0x7dcdc, 0x7dce0 and 0x7dce4, which read 40, 40 and
@@ -1632,12 +1632,28 @@ raw dword at the virtual address belongs to another section and reads 0.0).
 
 INFERRED, from the function's control flow: those three are subtracted from
 and added to the client's origin to make the box handed to
-`trap_EntitiesInBox`, and each entity that query returns is then tested with
-`trap_EntityContact` against a second box built from the entity's own
-`r.mins`/`r.maxs` at +0x100..+0x114. So the first box is a broad phase and the
-second the exact test, and a trigger has to clear both: neither contains the
-other, since the candidate box reaches 52 units below the feet where the
-player's clip box reaches 72 above them.
+`trap_EntitiesInBox`, and each entity that query returns is then handed to
+`trap_EntityContact` with the client's own `r.mins`/`r.maxs` at
++0x100..+0x114. So the box query is a broad phase and the contact call is the
+exact test, and a trigger has to clear both: neither shape contains the other,
+since the candidate box reaches 52 units below the feet where the player's
+clip box reaches 72 above them.
+
+VERIFIED, off the `trap_EntityContact` relocations in the function: the exact
+test is a contact against the trigger entity's **brush model**, not an overlap
+against its bounding box. That distinction is invisible for a box-shaped brush
+and enormous for a shaped one, because a brush cut by an angled plane has a
+bounding box strictly larger than itself.
+
+VERIFIED, read straight off mp_pavlov's lump 4 (a brush's first six sides are
+its axial bounds; anything past them is an angled plane): of the map's 26
+`minefield` brushes, 19 carry extra non-axial planes, up to 4 extra on `*25`
+and `*28`, and only 7 are plain boxes. `*28`'s bounding box measures
+432.6 x 1663.0 — a fractional extent only an angled cut produces — and `*25`
+is 696 x 1728 with a diagonal through it, so the part of its box holding no
+brush is meters wide. A touch pass that tests the bounding box kills a player
+that far clear of the mines, which is exactly the death reported against vcod
+on 2026-09-08 and what `trigger::box_contacts_hulls` now settles.
 
 ### 22.1 The broad phase's contents mask excludes a `trigger_lookat`
 

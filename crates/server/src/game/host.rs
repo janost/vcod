@@ -299,6 +299,10 @@ pub struct GameHost {
     /// read one. Filled at map load from the BSP; empty in a test that
     /// mounts no map.
     pub model_bounds: Vec<([f32; 3], [f32; 3])>,
+    /// Per lump-27 model, its brushes as clip planes, which is what the touch
+    /// pass's exact test measures against (`trigger::model_brush_hulls`).
+    /// Filled alongside `model_bounds`; empty in a test that mounts no map.
+    pub model_brushes: Vec<Vec<crate::game::trigger::BrushHull>>,
     /// `setPlayerIgnoreRadiusDamage`'s flag, which sits on the level and not
     /// on a client (combat doc, 14.2): the `radiusDamage` builtin is the one
     /// reader, and a grenade's own blast never looks at it.
@@ -375,6 +379,7 @@ impl GameHost {
             missiles: crate::game::missile::Missiles::default(),
             triggers: crate::game::trigger::Triggers::default(),
             model_bounds: Vec::new(),
+            model_brushes: Vec::new(),
             ignore_radius_damage: false,
             save_persist: false,
             team_scores: [0, 0],
