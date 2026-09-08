@@ -1639,11 +1639,24 @@ exact test, and a trigger has to clear both: neither shape contains the other,
 since the candidate box reaches 52 units below the feet where the player's
 clip box reaches 72 above them.
 
-VERIFIED, off the `trap_EntityContact` relocations in the function: the exact
-test is a contact against the trigger entity's **brush model**, not an overlap
-against its bounding box. That distinction is invisible for a box-shaped brush
-and enormous for a shaped one, because a brush cut by an angled plane has a
-bounding box strictly larger than itself.
+VERIFIED: the exact test is a `trap_EntityContact` call, one per candidate.
+The `add $0xfffffffc,%esp` and three pushes at 0x3fa10-0x3fa15 are followed by
+the `call` at 0x3fa16, whose operand at 0x3fa17 carries the `R_386_PC32`
+relocation against `trap_EntityContact` (`objdump -R`; the raw operand reads
+`fc ff ff ff`, since the relocation is what supplies the target, so a plain
+disassembly shows the call pointing at itself).
+
+INFERRED, from the Q3 lineage rather than from anything in this module: that
+syscall clips against the entity's **brush model**, not against its
+`r.mins`/`r.maxs`, the way `SV_EntityContact` does in Q3 and its descendants.
+The implementation is in the engine binary (`cod_lnxded`), not in
+`game.mp.i386.so`, and no address in it is cited here. What rests on this
+inference is only which of the two shapes the test uses; that the call happens
+at all is the VERIFIED line above.
+
+The distinction is invisible for a box-shaped brush and enormous for a shaped
+one, because a brush cut by an angled plane has a bounding box strictly larger
+than itself.
 
 VERIFIED, read straight off mp_pavlov's lump 4 (a brush's first six sides are
 its axial bounds; anything past them is an angled plane): of the map's 26
