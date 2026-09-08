@@ -2704,9 +2704,9 @@ impl Server {
                 };
                 apply_weapon_op(sim, op, &weapons);
             }
-            // What `finishPlayerDamage` did to each sim, applied once, then
-            // the health mirror and the frame's damage feedback, in that
-            // order: `P_DamageFeedback` reads the health the hit left.
+            // What script did to each sim, applied once, then the health
+            // mirror and the frame's damage feedback, in that order:
+            // `P_DamageFeedback` reads the health the hit left.
             let anims = self.anims.as_ref();
             for (slot, op) in rt.take_sim_ops() {
                 let Some(sim) = self
@@ -2717,13 +2717,18 @@ impl Server {
                 else {
                     continue;
                 };
-                let index = sim.ps.weapon as usize;
-                let inputs = anims.map(|anims| crate::spectate::AnimInputs {
-                    anims,
-                    weapon: crate::items::item_name(index).unwrap_or_default(),
-                    weapon_class: weapons.class(index),
-                });
-                sim.take_damage(&op, inputs.as_ref(), &mut self.rng, self.sv_time_ms);
+                match op {
+                    crate::game::host::SimOp::Event { event, parm } => sim.add_event(event, parm),
+                    crate::game::host::SimOp::Damaged { .. } => {
+                        let index = sim.ps.weapon as usize;
+                        let inputs = anims.map(|anims| crate::spectate::AnimInputs {
+                            anims,
+                            weapon: crate::items::item_name(index).unwrap_or_default(),
+                            weapon_class: weapons.class(index),
+                        });
+                        sim.take_damage(&op, inputs.as_ref(), &mut self.rng, self.sv_time_ms);
+                    }
+                }
             }
             for (slot, c) in self.clients.iter_mut().enumerate() {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {

@@ -1,14 +1,14 @@
 //! Sound builtins. All three allocate a sound-alias configstring, mirroring
 //! `G_SoundAliasIndex` (docs/research/cod11-sound-system.md: they share the
-//! 525-779 range). `playSound` and `playLoopSound` queue no audible event:
-//! that rides `es.event`/`es.loopSound` on the wire, which needs an entity
-//! state stage 5 builds. `playLocalSound` is the one that reaches a client,
-//! as the reliable command `s <idx>`.
+//! 525-779 range). `playSound` raises `EV_SOUND_ALIAS` on the receiver's own
+//! event ring and `playLocalSound` reaches one client as the reliable command
+//! `s <idx>`; `playLoopSound` still queues no audible event, since
+//! `es.loopSound` is a netfield nothing here writes yet.
 
 use crate::configstrings::CsRange;
 use crate::game::builtins::client::client_receiver;
 use crate::game::builtins::entity::entity_receiver;
-use crate::game::host::GameHost;
+use crate::game::host::{GameHost, SimOp};
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
@@ -40,15 +40,37 @@ fn alloc_alias(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<usize
 /// (docs/protocol-1.1.md, `s <idx>`).
 const CS_SOUNDS: usize = 524;
 
-/// `<ent> playSound(alias)`: `G_SoundAliasIndex` -> `G_PlaySoundAlias`.
+/// `EV_SOUND_ALIAS`, what `G_PlaySoundAlias` appends
+/// (docs/research/cod11-sound-system.md, section 9).
+const EV_SOUND_ALIAS: i32 = 172;
+
+/// `<ent> playSound(alias)`: `G_SoundAliasIndex` -> `G_PlaySoundAlias`. The
+/// two rings that call chooses between are owned by different halves of the
+/// server (sound doc, section 9): a client's is the sim's playerstate, so it
+/// travels as a `SimOp`, and an entity's is the one `crate::game::wire`
+/// writes into its snapshots.
 pub fn play_sound(
     host: &mut GameHost,
     cx: &mut Cx,
     recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    let _id = entity_receiver(recv)?;
-    alloc_alias(host, cx, args)?;
+    let id = entity_receiver(recv)?;
+    let parm = (alloc_alias(host, cx, args)? - CS_SOUNDS) as i32;
+    let Some(is_client) = host.ents.get(id).map(|e| e.client.is_some()) else {
+        return Ok(Value::Undefined);
+    };
+    if is_client {
+        host.client_sim_ops.push((
+            id.0 as usize,
+            SimOp::Event {
+                event: EV_SOUND_ALIAS,
+                parm,
+            },
+        ));
+    } else if let Some(ent) = host.ents.get_mut(id) {
+        ent.events.add(EV_SOUND_ALIAS, parm);
+    }
     Ok(Value::Undefined)
 }
 
@@ -84,6 +106,7 @@ pub fn play_local_sound(
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
+    use vcod_gsc::Host;
 
     /// `playSound` allocates a sound-alias configstring, mirroring
     /// `G_SoundAliasIndex`.
@@ -95,6 +118,64 @@ mod tests {
             let a = Value::String(cx.intern_exact("minefield_click"));
             play_sound(&mut host, cx, Some(Target::Entity(e)), &[a]).unwrap();
             assert_eq!(host.configstrings[525], "minefield_click");
+        });
+    }
+
+    /// `playSound` on a player queues the event for that client's sim: the
+    /// playerstate ring is the sim's, so the builtin cannot write it itself.
+    #[test]
+    fn playsound_on_a_player_queues_the_event_for_its_sim() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn_client(cx, 3, None).unwrap();
+            let a = Value::String(cx.intern_exact("MP_bomb_plant"));
+            play_sound(&mut host, cx, Some(Target::Entity(e)), &[a]).unwrap();
+            assert_eq!(host.configstrings[525], "MP_bomb_plant");
+            assert_eq!(
+                host.client_sim_ops,
+                vec![(
+                    3,
+                    crate::game::host::SimOp::Event {
+                        event: EV_SOUND_ALIAS,
+                        parm: 1,
+                    }
+                )]
+            );
+        });
+    }
+
+    /// `playSound` on a plain entity rides that entity's own event ring, and
+    /// the ring reaches the wire: the slot is written first and the sequence
+    /// after it, so the first event sits below sequence 1.
+    #[test]
+    fn playsound_on_an_entity_rides_its_own_event_ring() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            for (name, value) in [("classname", "script_model"), ("model", "xmodel/barrels")] {
+                let atom = cx.intern_folded(name);
+                let v = Value::String(cx.intern_exact(value));
+                host.set_field(cx, e, atom, v).unwrap();
+            }
+            host.allocators
+                .index(&mut host.configstrings, CsRange::Model, "xmodel/barrels")
+                .unwrap();
+
+            let a = Value::String(cx.intern_exact("Explo_plant_no_tick"));
+            play_sound(&mut host, cx, Some(Target::Entity(e)), &[a]).unwrap();
+            assert!(host.client_sim_ops.is_empty(), "not a client's playerstate");
+
+            let p = &vcod_common::net::protocol::PROTOCOL_V1;
+            let ents = crate::game::wire::packet_entities(&mut host, cx, p);
+            let es = &ents[&e.0];
+            assert_eq!(es.field_i32(p, "eventSequence"), 1);
+            assert_eq!(es.field_i32(p, "events[0]"), EV_SOUND_ALIAS);
+            let alias = host
+                .configstrings
+                .iter()
+                .position(|s| s == "Explo_plant_no_tick")
+                .unwrap();
+            assert_eq!(es.field_i32(p, "eventParms[0]"), (alias - CS_SOUNDS) as i32);
         });
     }
 
