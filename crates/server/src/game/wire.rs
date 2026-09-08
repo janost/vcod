@@ -230,6 +230,13 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
         ring.write(&mut set);
     }
 
+    // `es.loopSound`, what `playLoopSound` left on the entity. State rather
+    // than an event, so it rides every snapshot until `stopLoopSound` clears
+    // it (sound doc, section 9).
+    if let Some(idx) = host.ents.get(id).map(|e| e.loop_sound) {
+        seti(&mut e, "loopSound", idx);
+    }
+
     match kind {
         Kind::Item(weapon) => {
             seti(&mut e, "eType", ET_ITEM);
