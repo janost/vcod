@@ -242,6 +242,12 @@ pub fn touched(host: &mut GameHost, cx: &mut Cx, client: EntId) -> Vec<EntId> {
     let ids: Vec<EntId> = host.triggers.iter().map(|(id, _)| id).collect();
     ids.into_iter()
         .filter(|id| {
+            // A `trigger_lookat`'s contents bit is not in the mask retail's
+            // broad phase queries with, so no touch ever returns one
+            // (docs/research/cod11-gsc-object-model.md 22.1).
+            if host.triggers.get(*id).map(|t| t.kind) == Some(TriggerKind::LookAt) {
+                return false;
+            }
             let b = entity_abs_bounds(host, cx, *id);
             boxes_overlap(candidate, b) && boxes_overlap(exact, b)
         })
@@ -329,6 +335,28 @@ mod tests {
             place(&mut host, cx, 65.0);
             place(&mut host, cx, -30.0);
             assert_eq!(touched(&mut host, cx, player), vec![at_feet]);
+        });
+    }
+
+    /// A `trigger_lookat` sharing a box with a `trigger_multiple` is not
+    /// touched: retail's broad-phase contents mask has its bit clear
+    /// (docs/research/cod11-gsc-object-model.md 22.1).
+    #[test]
+    fn a_lookat_trigger_is_not_touched_where_a_multiple_is() {
+        let (mut vm, mut host) = crate::game::testing::fixture();
+        vm.with_cx(|cx| {
+            let player = host.ents.spawn_client(cx, 0, None).unwrap();
+            let origin = cx.intern_folded("origin");
+            let place = |host: &mut GameHost, cx: &mut Cx, kind| {
+                let id = host.ents.spawn(cx).unwrap();
+                host.set_field(cx, id, origin, Value::Vector([0.0, 0.0, 4.0]))
+                    .unwrap();
+                host.triggers.register(id, kind, [-8.0; 3], [8.0; 3], 0, 0);
+                id
+            };
+            let multiple = place(&mut host, cx, TriggerKind::Multiple);
+            place(&mut host, cx, TriggerKind::LookAt);
+            assert_eq!(touched(&mut host, cx, player), vec![multiple]);
         });
     }
 

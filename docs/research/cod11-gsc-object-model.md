@@ -1609,6 +1609,31 @@ second the exact test, and a trigger has to clear both: neither contains the
 other, since the candidate box reaches 52 units below the feet where the
 player's clip box reaches 72 above them.
 
+### 22.1 The broad phase's contents mask excludes a `trigger_lookat`
+
+VERIFIED: the call at 0x3f925 pushes five arguments, the last of them the
+immediate 0x405c0008 at 0x3f918, ahead of 0x400 and the three pointers the
+box and the result list are built in. VERIFIED: 0x405c0008 has bit 29
+(0x20000000) clear. VERIFIED: `SP_trigger_lookat` (0x65df0) stores
+0x20000000 into `ent+0x118`, and `ent+0x118` is `r.contents`
+(`docs/research/cod11-combat.md`, section 13; `SpectatorClientEndFrame`
+0x4078f zeroes the same word for a spectator).
+
+INFERRED, off the argument being a mask tested against `r.contents`:
+`trap_EntitiesInBox` never returns a `trigger_lookat`, so retail's touch pass
+cannot reach one and the only path in the module that reads the classname is
+`G_CheckForPreventFriendlyFire`'s aim trace (section 20, "`trigger_lookat`
+sets no cursor hint"). The two readings agree: the kind fires off an aim
+trace, not off contact.
+
+vcod acts on that. `trigger::touched` skips a `LookAt` row, so ours notifies
+no `"trigger"` on contact either; it also runs no aim trace, so ours notifies
+a lookat on nothing at all. VERIFIED, read out of
+`crates/server/src/game/trigger.rs`. The aim-trace half is unmodelled and
+unmeasured — no capture of a retail `trigger_lookat` firing has been taken,
+and mp_pavlov's is deleted under `dm` before the committed A/B capture could
+reach it.
+
 ## Open, and worth a probe
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.
