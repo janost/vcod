@@ -111,16 +111,6 @@ pub struct ScriptRuntime {
     rng: u64,
 }
 
-/// One trigger the touch pass fired, drawn out of the table before the
-/// dispatch so the borrow on `Triggers` ends first.
-struct Fired {
-    id: EntId,
-    kind: crate::game::trigger::TriggerKind,
-    cursor_hint: i32,
-    /// The damage and damage flags, `None` on every kind but `Hurt`.
-    hurt: Option<(i32, i32)>,
-}
-
 impl ScriptRuntime {
     /// Loads the gametype and map script closures, spawns the map's entities
     /// and runs the bootstrap. `map` and `gametype` are bare names, e.g.
@@ -415,12 +405,6 @@ impl ScriptRuntime {
         let Some(client) = self.client_entity(slot) else {
             return;
         };
-        // Ahead of the spectator gate and of the pass itself, so a client that
-        // touches nothing this frame -- or stops being a player -- loses the
-        // hint a `trigger_lookat` left on it.
-        if let Some(h) = self.host.client_cursor_hint.get_mut(slot) {
-            *h = crate::game::trigger::NO_CURSOR_HINT;
-        }
         if self.client_field(slot, "sessionstate").as_deref() == Some("spectator") {
             return;
         }
@@ -432,9 +416,8 @@ impl ScriptRuntime {
         let triggers = &mut self.host.triggers;
         let rng = &mut self.rng;
         // Drawn under the `rng` borrow and acted on after it: each entry is a
-        // trigger that fired, with its kind, its cursor hint and its damage
-        // and flags if it hurts.
-        let fired: Vec<Fired> = hits
+        // trigger that fired, carrying its damage and flags if it hurts.
+        let fired: Vec<(EntId, Option<(i32, i32)>)> = hits
             .into_iter()
             .filter_map(|id| {
                 // A `trigger_use` answers the use key rather than contact
@@ -455,31 +438,14 @@ impl ScriptRuntime {
                 }) {
                     return None;
                 }
-                let t = triggers.get(id)?;
-                let hurt = (t.kind == crate::game::trigger::TriggerKind::Hurt)
-                    .then_some((t.damage, t.dflags));
-                Some(Fired {
-                    id,
-                    kind: t.kind,
-                    cursor_hint: t.cursor_hint,
-                    hurt,
-                })
+                let hurt = triggers
+                    .get(id)
+                    .filter(|t| t.kind == crate::game::trigger::TriggerKind::Hurt)
+                    .map(|t| (t.damage, t.dflags));
+                Some((id, hurt))
             })
             .collect();
-        for Fired {
-            id,
-            kind,
-            cursor_hint,
-            hurt,
-        } in fired
-        {
-            // Retail's `trigger_lookat` sets no hint at all
-            // (`crate::game::trigger::hint_index`); this half is ours.
-            if kind == crate::game::trigger::TriggerKind::LookAt {
-                if let Some(h) = self.host.client_cursor_hint.get_mut(slot) {
-                    *h = cursor_hint;
-                }
-            }
+        for (id, hurt) in fired {
             self.vm
                 .notify(Target::Entity(id), event, &[Value::Entity(client)]);
             // The notify first: `hurt_touch` (0x64dc4) reaches its `G_Damage`
@@ -551,16 +517,6 @@ impl ScriptRuntime {
             .get(slot)
             .copied()
             .unwrap_or_default()
-    }
-
-    /// One client's `ps.serverCursorHint` as the touch pass left it, read
-    /// every frame the way `client_vitals` is.
-    pub fn cursor_hint(&self, slot: usize) -> i32 {
-        self.host
-            .client_cursor_hint
-            .get(slot)
-            .copied()
-            .unwrap_or(crate::game::trigger::NO_CURSOR_HINT)
     }
 
     /// The buttons of a client's last usercmd, for `useButtonPressed`.
@@ -1895,43 +1851,5 @@ mod tests {
         rt.touch_triggers_with_buttons(0, 150, vcod_common::net::msg::BUTTON_USE);
         rt.run_frame(150);
         assert_eq!(rt.level_field("hits"), Value::Int(1), "inside the window");
-    }
-
-    /// Standing in a `trigger_lookat` puts its `hintStrings` index in the
-    /// client's `ps.serverCursorHint`, and walking out of it clears the field
-    /// back to 0. `bombtrigger`, S&D's defuse trigger, is a `trigger_lookat`
-    /// on every stock map that carries one.
-    #[test]
-    fn a_trigger_lookat_sets_and_clears_the_cursor_hint() {
-        let mut rt = ScriptRuntime::for_test("main() {}");
-        rt.spawn_client_for_test(0, [0.0, 0.0, 0.0]);
-        rt.set_client_state_for_test(0, "playing");
-        let look = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
-        rt.triggers_mut().register(
-            look,
-            crate::game::trigger::TriggerKind::LookAt,
-            [-64.0, -64.0, 0.0],
-            [64.0, 64.0, 64.0],
-            0,
-            0,
-        );
-        rt.triggers_mut().set_cursor_hint(look, "HINT_HEALTH");
-        rt.run_frame(0);
-
-        assert_eq!(
-            rt.cursor_hint(0),
-            crate::game::trigger::NO_CURSOR_HINT,
-            "no hint before any touch"
-        );
-        rt.touch_triggers_with_buttons(0, 100, 0);
-        assert_eq!(rt.cursor_hint(0), 7, "HINT_HEALTH is hintStrings slot 7");
-
-        rt.set_client_origin(0, [1000.0, 0.0, 0.0]);
-        rt.touch_triggers_with_buttons(0, 200, 0);
-        assert_eq!(
-            rt.cursor_hint(0),
-            crate::game::trigger::NO_CURSOR_HINT,
-            "leaving clears it"
-        );
     }
 }

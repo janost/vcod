@@ -32,52 +32,6 @@ pub struct Trigger {
     /// with. Both 0 on every kind but `Hurt`.
     pub damage: i32,
     pub dflags: i32,
-    /// The `hintStrings` index this trigger puts in the toucher's
-    /// `ps.serverCursorHint`, `NO_CURSOR_HINT` for none.
-    pub cursor_hint: i32,
-}
-
-/// `hintStrings` (0x7e4d4) is 11 slots and slot 0 holds the empty string, so
-/// 0 is "no hint" in `ps.serverCursorHint`. Do not confuse it with
-/// `serverCursorHintString`'s own 255 sentinel, a different field
-/// (docs/research/cod11-gsc-object-model.md section 20).
-pub const NO_CURSOR_HINT: i32 = 0;
-
-/// `hintStrings` slot 2, `HINT_ACTIVATE`. It is what `trigger_use` (0x5742c)
-/// stores before it reads its `cursorhint` key, and vcod's fallback for a
-/// `trigger_lookat` too. That reuse is unmeasured: retail's `trigger_lookat`
-/// never reaches the cursor-hint code at all (see `hint_index`).
-pub const HINT_ACTIVATE: i32 = 2;
-
-/// The `hintStrings` index a `cursorhint` key names, case-insensitively the
-/// way retail's `Q_strcasecmp` walk is, with `HINT_INHERIT` as -1. Unknown
-/// names give `None`; retail then leaves the field at whatever it held.
-///
-/// Only `trigger_use` reads the key, and only a `trigger_use` reaches
-/// `G_CheckForCursorHints` (0x4f59c), whose sole classname test is against
-/// the `trigger_use` constant. The one read of the `trigger_lookat` constant
-/// in the module is in `G_CheckForPreventFriendlyFire` (0x4f88c), which fires
-/// the trigger off an aim trace and touches no hint field. So a
-/// `trigger_lookat` setting a hint is vcod's, not retail's.
-pub fn hint_index(name: &str) -> Option<i32> {
-    const NAMES: [&str; 9] = [
-        "HINT_NONE",
-        "HINT_ACTIVATE",
-        "HINT_NOACTIVATE",
-        "HINT_DOOR",
-        "HINT_DOOR_LOCKED",
-        "HINT_MG42",
-        "HINT_HEALTH",
-        "HINT_LADDER",
-        "HINT_FRIENDLY",
-    ];
-    if name.eq_ignore_ascii_case("HINT_INHERIT") {
-        return Some(-1);
-    }
-    NAMES
-        .iter()
-        .position(|n| n.eq_ignore_ascii_case(name))
-        .map(|i| i as i32 + 1)
 }
 
 // Keyed by `EntId::0` rather than `EntId` itself: `EntId` is a foreign type
@@ -121,18 +75,8 @@ impl Triggers {
                 next_fire_ms: 0,
                 damage: 0,
                 dflags: 0,
-                cursor_hint: HINT_ACTIVATE,
             },
         );
-    }
-
-    /// The `cursorhint` spawn key, as `trigger_use` (0x5742c) reads it: an
-    /// unknown name leaves the default alone, which is what retail's walk off
-    /// the end of `hintStrings` does.
-    pub fn set_cursor_hint(&mut self, id: EntId, name: &str) {
-        if let (Some(t), Some(hint)) = (self.rows.get_mut(&id.0), hint_index(name)) {
-            t.cursor_hint = hint;
-        }
     }
 
     /// A `trigger_hurt`, whose damage, flags and cadence come from
@@ -327,27 +271,6 @@ mod tests {
         assert_eq!(kind_of("misc_mg42"), None);
     }
 
-    /// The `cursorhint` key names a `hintStrings` slot, matched the way
-    /// retail's `Q_strcasecmp` walk matches it; an unknown name leaves the
-    /// registered default alone.
-    #[test]
-    fn cursorhint_names_map_to_hintstrings_slots() {
-        assert_eq!(hint_index("HINT_NONE"), Some(1));
-        assert_eq!(hint_index("hint_activate"), Some(HINT_ACTIVATE));
-        assert_eq!(hint_index("HINT_FRIENDLY"), Some(9));
-        assert_eq!(hint_index("HINT_INHERIT"), Some(-1));
-        assert_eq!(hint_index("HINT_NOPE"), None);
-
-        let mut ts = Triggers::default();
-        let id = EntId(75);
-        ts.register(id, TriggerKind::LookAt, [-8.0; 3], [8.0; 3], 0, 0);
-        assert_eq!(ts.get(id).map(|t| t.cursor_hint), Some(HINT_ACTIVATE));
-        ts.set_cursor_hint(id, "HINT_MG42");
-        assert_eq!(ts.get(id).map(|t| t.cursor_hint), Some(6));
-        ts.set_cursor_hint(id, "HINT_NOPE");
-        assert_eq!(ts.get(id).map(|t| t.cursor_hint), Some(6));
-    }
-
     /// Bounds are the submodel's, taken around the entity's *current* origin:
     /// `sd.gsc` relocates its defuse trigger with `bombtrigger.origin =
     /// level.bombmodel.origin`, so a cached absolute box would be wrong from
@@ -363,7 +286,6 @@ mod tests {
             next_fire_ms: 0,
             damage: 0,
             dflags: 0,
-            cursor_hint: NO_CURSOR_HINT,
         };
         assert_eq!(
             abs_bounds([100.0, -50.0, 8.0], &t),
