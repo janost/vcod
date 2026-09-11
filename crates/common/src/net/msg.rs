@@ -497,15 +497,38 @@ fn write_float_field(w: &mut MsgWriter, raw: i32) {
     }
 }
 
-/// One primitive read from array block 4, in the order the parse took it.
-/// Blocks 1 to 3 and 5 decode into [`PsArrays`]' named fields instead. The
-/// block reaches the wire only through the shared field reader, which has no
-/// byte or short form, so three variants cover it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PsArrayOp {
-    Bits(i32, i32),
-    Packed(i32, i32),
-    Long(i32),
+/// Elements in block 4, `ps.objective[16]`.
+pub const MAX_OBJECTIVES: usize = 16;
+
+/// One `objective_t` slot as block 4 carries it (docs/protocol-1.1.md,
+/// "Block 4"): a 3-bit state always present, then the six delta fields in
+/// wire order. `origin` is a float bit pattern, as [`HudElem`] stores its
+/// floats; use [`Objective::origin_f32`] / [`Objective::set_origin`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Objective {
+    pub state: i32,
+    pub origin: [i32; 3],
+    pub icon: i32,
+    pub ent_num: i32,
+    pub team_num: i32,
+}
+
+impl Objective {
+    pub fn origin_f32(&self) -> [f32; 3] {
+        [
+            f32::from_bits(self.origin[0] as u32),
+            f32::from_bits(self.origin[1] as u32),
+            f32::from_bits(self.origin[2] as u32),
+        ]
+    }
+
+    pub fn set_origin(&mut self, o: [f32; 3]) {
+        self.origin = [
+            o[0].to_bits() as i32,
+            o[1].to_bits() as i32,
+            o[2].to_bits() as i32,
+        ];
+    }
 }
 
 /// Fields per `hudelem_t` on the wire: table entries 6..33.
@@ -533,6 +556,18 @@ pub mod hud_field {
     pub const SORT: usize = 13;
     pub const VALUE: usize = 20;
     pub const LABEL: usize = 21;
+    pub const FROM_COLOR: usize = 14;
+    pub const FADE_START_TIME: usize = 15;
+    pub const FADE_TIME: usize = 16;
+    pub const SCALE_START_TIME: usize = 17;
+    pub const SCALE_TIME: usize = 18;
+    pub const FROM_HEIGHT: usize = 19;
+    pub const FROM_WIDTH: usize = 22;
+    pub const MOVE_START_TIME: usize = 23;
+    pub const MOVE_TIME: usize = 24;
+    pub const FROM_X: usize = 25;
+    pub const FROM_Y: usize = 26;
+    pub const DURATION: usize = 27;
 }
 
 /// One `hudelem_t` as block 5 carries it: table entries 6..33 in wire order,
@@ -582,10 +617,8 @@ pub struct PsArrays {
     pub ammo: [i16; 64],
     /// Block 3, `ps.ammoclip[64]`, the loaded magazine, by clip index.
     pub ammoclip: [i16; 64],
-    /// Block 4, `ps.objective[16]`, as the primitives the parse consumed,
-    /// replayed verbatim: nothing in vcod writes an objective. Empty means
-    /// the block's gate is clear.
-    pub objectives: Vec<PsArrayOp>,
+    /// Block 4, `ps.objective[16]` (docs/protocol-1.1.md, "Block 4").
+    pub objectives: [Objective; MAX_OBJECTIVES],
     /// Block 5's first array (`ps+0x1338`), the elements whose `archived` is
     /// set. It is the half a following spectator inherits with the
     /// playerstate it copies, which is what the flag names.
@@ -601,7 +634,7 @@ impl Default for PsArrays {
             stats: [0; 6],
             ammo: [0; 64],
             ammoclip: [0; 64],
-            objectives: Vec::new(),
+            objectives: [Objective::default(); MAX_OBJECTIVES],
             hud_archived: Vec::new(),
             hud_current: Vec::new(),
         }
@@ -785,8 +818,7 @@ pub fn write_delta_playerstate(
 }
 
 /// Mirror of [`read_ps_arrays`]. Every block carries only what differs from
-/// the base; block 4 replays `to.objectives`, which is empty for a
-/// server-built state and goes out as its clear gate.
+/// the base.
 fn write_ps_arrays(w: &mut MsgWriter, from: &PsArrays, to: &PsArrays) {
     // Block 1: the gate, then six raw bits selecting the changed scalars.
     let mut mask = 0i32;
@@ -827,15 +859,30 @@ fn write_ps_arrays(w: &mut MsgWriter, from: &PsArrays, to: &PsArrays) {
         write_short_array_group(w, &from.ammo, &to.ammo);
     }
     write_short_array_group(w, &from.ammoclip, &to.ammoclip);
-    // Block 4, replayed as it was parsed.
-    if to.objectives.is_empty() {
+    // Block 4: ps.objective[16], each a 3-bit state then six delta fields
+    // (docs/protocol-1.1.md, "Block 4").
+    if from.objectives == to.objectives {
         w.write_bits(0, 1);
-    }
-    for &op in &to.objectives {
-        match op {
-            PsArrayOp::Bits(bits, v) => w.write_bits(v, bits),
-            PsArrayOp::Packed(bits, v) => w.write_packed_bits(v, bits),
-            PsArrayOp::Long(v) => w.write_long(v),
+    } else {
+        w.write_bits(1, 1);
+        for i in 0..MAX_OBJECTIVES {
+            let from_o = from.objectives[i];
+            let o = to.objectives[i];
+            w.write_bits(o.state, 3);
+            if o == (Objective {
+                state: o.state,
+                ..from_o
+            }) {
+                w.write_bits(0, 1);
+            } else {
+                w.write_bits(1, 1);
+                write_delta_field(w, from_o.origin[0], o.origin[0], HUD_FIELD_BITS[0]);
+                write_delta_field(w, from_o.origin[1], o.origin[1], HUD_FIELD_BITS[1]);
+                write_delta_field(w, from_o.origin[2], o.origin[2], HUD_FIELD_BITS[2]);
+                write_delta_field(w, from_o.icon, o.icon, HUD_FIELD_BITS[3]);
+                write_delta_field(w, from_o.ent_num, o.ent_num, HUD_FIELD_BITS[4]);
+                write_delta_field(w, from_o.team_num, o.team_num, HUD_FIELD_BITS[5]);
+            }
         }
     }
     // Block 5's gate covers both arrays at once: retail compares the pair
@@ -884,52 +931,6 @@ const HUD_FIELD_BITS: [i32; 34] = [
     2, 32, 4, 8, 8, 10, 10, 0, 32, 32, 16, 32, 16, 10, 0, 8, 10, 32, 16, 10, 10, 32,
 ];
 
-/// Records every primitive it reads, so [`write_ps_arrays`] can put blocks 4
-/// and 5 back on the wire unchanged.
-struct ArrayReader<'a> {
-    r: &'a mut MsgReader,
-    ops: Vec<PsArrayOp>,
-}
-
-impl ArrayReader<'_> {
-    fn bits(&mut self, bits: i32) -> i32 {
-        let v = self.r.read_bits(bits);
-        self.ops.push(PsArrayOp::Bits(bits, v));
-        v
-    }
-
-    fn packed(&mut self, bits: i32) {
-        let v = self.r.read_packed_bits(bits);
-        self.ops.push(PsArrayOp::Packed(bits, v));
-    }
-
-    fn long(&mut self) {
-        let v = self.r.read_long();
-        self.ops.push(PsArrayOp::Long(v));
-    }
-
-    /// [`read_delta_field`] with the value thrown away; the base is always 0
-    /// inside these blocks.
-    fn delta_field(&mut self, bits: i32) {
-        if self.bits(1) == 0 {
-            return;
-        }
-        if bits == 0 {
-            // Zero flag, then the integral/full selector.
-            if self.bits(1) == 0 {
-                return;
-            }
-            if self.bits(1) == 0 {
-                self.packed(FLOAT_INT_BITS);
-            } else {
-                self.long();
-            }
-        } else if self.bits(1) != 0 {
-            self.packed(bits);
-        }
-    }
-}
-
 /// The trailing array blocks (cod_lnxded 0x807e7b3..0x807eeb6). Everything a
 /// block does not carry keeps the base frame's value.
 fn read_ps_arrays(r: &mut MsgReader, from: &PsArrays) -> PsArrays {
@@ -937,6 +938,7 @@ fn read_ps_arrays(r: &mut MsgReader, from: &PsArrays) -> PsArrays {
         stats: from.stats,
         ammo: from.ammo,
         ammoclip: from.ammoclip,
+        objectives: from.objectives,
         ..PsArrays::default()
     };
     // Block 1: a 6-bit mask selecting up to six scalars, each its own width.
@@ -968,23 +970,26 @@ fn read_ps_arrays(r: &mut MsgReader, from: &PsArrays) -> PsArrays {
     // Block 3: ps.ammoclip[64], the same four sub-blocks with no group gate.
     read_short_array_group(r, &mut out.ammoclip);
 
-    {
-        let mut a = ArrayReader { r, ops: Vec::new() };
-        // Block 4: ps.objective[16], each a 3-bit state then six delta fields.
-        if a.bits(1) == 1 {
-            for _ in 0..16 {
-                a.bits(3);
-                if a.bits(1) == 1 {
-                    for &bits in &HUD_FIELD_BITS[0..6] {
-                        a.delta_field(bits);
-                    }
-                }
+    // Block 4: ps.objective[16], each a 3-bit state then six delta fields
+    // (docs/protocol-1.1.md, "Block 4").
+    if r.read_bits(1) == 1 {
+        for i in 0..MAX_OBJECTIVES {
+            let from_o = from.objectives[i];
+            let o = &mut out.objectives[i];
+            o.state = r.read_bits(3);
+            if r.read_bits(1) == 1 {
+                o.origin[0] = read_delta_field(r, from_o.origin[0], HUD_FIELD_BITS[0]);
+                o.origin[1] = read_delta_field(r, from_o.origin[1], HUD_FIELD_BITS[1]);
+                o.origin[2] = read_delta_field(r, from_o.origin[2], HUD_FIELD_BITS[2]);
+                o.icon = read_delta_field(r, from_o.icon, HUD_FIELD_BITS[3]);
+                o.ent_num = read_delta_field(r, from_o.ent_num, HUD_FIELD_BITS[4]);
+                o.team_num = read_delta_field(r, from_o.team_num, HUD_FIELD_BITS[5]);
+            } else {
+                *o = Objective {
+                    state: o.state,
+                    ..from_o
+                };
             }
-        }
-        // A clear gate and an empty record mean the same zero bit, and
-        // dropping it lets a parsed state compare equal to a built one.
-        if !a.ops.iter().all(|&op| op == PsArrayOp::Bits(1, 0)) {
-            out.objectives = a.ops;
         }
     }
     // Block 5: one gate for the pair, then the archived array and the
@@ -2244,6 +2249,43 @@ mod tests {
         let mut w = MsgWriter::new(&h);
         write_delta_playerstate(&mut w, p, &third, &third);
         assert_eq!(w.bits_written(), 8 + 8, "the eight gates and the lc byte");
+    }
+
+    /// Block 4 both ways: two slots set against a null base, then the same
+    /// frame against itself, which costs only the block's clear gate.
+    #[test]
+    fn objective_block_round_trips_against_a_base() {
+        let h = Huffman::new();
+        let base = PsArrays::default();
+        let mut to = PsArrays::default();
+        to.objectives[0] = Objective {
+            state: 4,
+            origin: [0; 3],
+            icon: 3,
+            ent_num: 0x3ff,
+            team_num: 0,
+        };
+        to.objectives[0].set_origin([-146.0, 2490.0, 16.0]);
+        to.objectives[5] = Objective {
+            state: 2,
+            origin: [0; 3],
+            icon: 1,
+            ent_num: 12,
+            team_num: 2,
+        };
+        let mut w = MsgWriter::new(&h);
+        write_ps_arrays(&mut w, &base, &to);
+        let data = w.finish();
+        let mut r = MsgReader::new(&data, &h);
+        let back = read_ps_arrays(&mut r, &base);
+        assert_eq!(back.objectives, to.objectives);
+        assert_eq!(back.objectives[0].origin_f32(), [-146.0, 2490.0, 16.0]);
+
+        // Unchanged against the base costs the block's one clear gate bit.
+        let mut w = MsgWriter::new(&h);
+        write_ps_arrays(&mut w, &to, &to);
+        let mut r = MsgReader::new(&w.finish(), &h);
+        assert_eq!(read_ps_arrays(&mut r, &to).objectives, to.objectives);
     }
 
     /// The changed-mask path: a base that already carries ammo and a clip, and
