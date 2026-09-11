@@ -276,6 +276,7 @@ fn two_sd_clients_are_sent_both_bombzone_objectives() {
         ("axis", "kar98k_mp"),
     );
     // Past the match-start restart, which is where `_gameobjects` runs again.
+    let id_before = sv.server_id();
     for _ in 0..200 {
         now += Duration::from_millis(50);
         ca.send_frame(&NULL_USERCMD);
@@ -283,6 +284,7 @@ fn two_sd_clients_are_sent_both_bombzone_objectives() {
         common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
     }
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
+    assert_ne!(sv.server_id(), id_before, "the match never restarted");
     for (who, cl) in [("the allied client", &ca), ("the axis client", &cb)] {
         let s = cl.snapshots().newest().expect("a snapshot");
         let o = s.ps.arrays.objectives;

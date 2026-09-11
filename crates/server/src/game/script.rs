@@ -906,6 +906,7 @@ impl ScriptRuntime {
                 if let Some(v) = self.host.client_viewmodel.get_mut(slot) {
                     *v = 0;
                 }
+                self.host.reset_client_objectives(slot);
                 // The carried `pers`, if the boundary this client crossed
                 // kept one; taken, so a later reconnect starts empty as
                 // retail's does.
@@ -999,13 +1000,14 @@ impl ScriptRuntime {
         crate::game::wire::hud_elems(&self.host, slot, team)
     }
 
-    /// The objective table one client is sent, filtered on its
-    /// `clientState.team` ([`crate::game::host::GameHost::objectives_for`]).
+    /// One client's copy of the objective table, stepped for this frame
+    /// ([`crate::game::host::GameHost::objectives_for`]).
     pub fn objectives_for(
-        &self,
+        &mut self,
+        slot: usize,
         team: i32,
     ) -> [vcod_common::net::msg::Objective; vcod_common::net::msg::MAX_OBJECTIVES] {
-        self.host.objectives_for(team)
+        self.host.objectives_for(slot, team)
     }
 
     pub fn configstrings(&self) -> &[String] {

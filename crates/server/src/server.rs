@@ -3161,11 +3161,11 @@ impl Server {
             // arrays into the playerstate once per client per frame, so
             // they are read here rather than carried on the sim.
             let team = per_slot.get(slot).map_or(script::TEAM_SPECTATOR, |p| p.2);
-            if let Some(rt) = self.script.as_ref() {
+            if let Some(rt) = self.script.as_mut() {
                 let (archived, current) = rt.hud_elems(slot, team);
                 ps.arrays.hud_archived = archived;
                 ps.arrays.hud_current = current;
-                ps.arrays.objectives = rt.objectives_for(team);
+                ps.arrays.objectives = rt.objectives_for(slot, team);
             }
             let frame = snapshot::Snapshot {
                 server_time: self.sv_time_ms,

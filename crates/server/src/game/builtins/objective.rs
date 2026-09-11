@@ -6,9 +6,9 @@
 //! on detach; no entity here carries `eFlags`, so only the record's `entNum`
 //! moves.
 
-use crate::game::host::{GameHost, ENTITYNUM_NONE};
+use crate::game::host::{empty_objective, GameHost, ENTITYNUM_NONE};
 use crate::game::script::{TEAM_ALLIES, TEAM_AXIS};
-use vcod_common::net::msg::{Objective, MAX_OBJECTIVES};
+use vcod_common::net::msg::MAX_OBJECTIVES;
 use vcod_gsc::{Cx, ErrorKind, Target, Value};
 
 pub type Builtin = fn(&mut GameHost, &mut Cx, Option<Target>, &[Value]) -> Result<Value, ErrorKind>;
@@ -28,19 +28,11 @@ pub fn lookup(folded: &str) -> Option<Builtin> {
     NAMES.iter().find(|(n, _)| *n == folded).map(|(_, f)| *f)
 }
 
-/// A cleared record: what `objective_add` starts from and what
-/// `objective_delete` leaves.
-fn empty_record() -> Objective {
-    Objective {
-        ent_num: ENTITYNUM_NONE,
-        ..Objective::default()
-    }
-}
-
 fn index_arg(v: Option<&Value>) -> Result<usize, ErrorKind> {
     match v {
         Some(Value::Int(i)) if (0..MAX_OBJECTIVES as i32).contains(i) => Ok(*i as usize),
-        _ => Err(ErrorKind::BadType("objective index out of range")),
+        Some(Value::Int(_)) => Err(ErrorKind::BadType("objective index out of range")),
+        _ => Err(ErrorKind::BadType("objective index must be an integer")),
     }
 }
 
@@ -79,9 +71,10 @@ fn icon_arg(host: &mut GameHost, cx: &Cx, v: Option<&Value>) -> Result<i32, Erro
     host.allocators.shader_index(&mut host.configstrings, &name)
 }
 
-/// `objective_add(index, state, [origin], [icon])` (0x5a2d0): the slot is
-/// cleared first, so an add is the whole record and not an edit, and
-/// `teamNum` goes to 0 on every path.
+/// `objective_add(index, state, [origin], [icon])` (0x5a2d0): `teamNum` goes
+/// to 0 on every path. Clearing the origin and the icon when the call omits
+/// them diverges from retail, which leaves whatever the slot held; no stock
+/// script re-adds a slot without both.
 pub fn objective_add(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -95,7 +88,7 @@ pub fn objective_add(
     }
     let i = index_arg(args.first())?;
     let state = state_arg(cx, args.get(1))?;
-    let mut o = empty_record();
+    let mut o = empty_objective();
     o.state = state;
     if args.len() > 2 {
         o.set_origin(origin_arg(args.get(2))?);
@@ -107,9 +100,10 @@ pub fn objective_add(
     Ok(Value::Undefined)
 }
 
-/// `objective_delete(index)` (0x5e058). What a client is sent for the slot
-/// afterwards is state 0 over the six dwords its own copy already holds, so
-/// this zeroing is invisible on the wire (the object-model doc, 23.3).
+/// `objective_delete(index)` (0x5e058): the level record is zeroed. The
+/// client keeps its own copy, so what it is sent afterwards is state 0 over
+/// the icon and origin an earlier frame copied there
+/// ([`GameHost::objectives_for`]).
 pub fn objective_delete(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -117,7 +111,7 @@ pub fn objective_delete(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let i = index_arg(args.first())?;
-    host.objectives[i] = empty_record();
+    host.objectives[i] = empty_objective();
     Ok(Value::Undefined)
 }
 
@@ -231,6 +225,7 @@ pub fn objective_team(
 mod tests {
     use super::*;
     use crate::game::testing::fixture;
+    use vcod_common::net::msg::Objective;
     use vcod_gsc::Value;
 
     fn s(cx: &mut Cx, t: &str) -> Value {
@@ -287,25 +282,47 @@ mod tests {
         });
     }
 
+    /// Retail's filter runs per client onto that client's own copy, so the
+    /// axis objective reaches the allied client as state 0 and a deleted slot
+    /// keeps the icon and origin the copy already holds.
     #[test]
     fn objective_current_demotes_the_others_and_the_team_filter_blanks_the_state() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
             let current = s(cx, "current");
+            let icon = s(cx, "gfx/hud/hud@objectiveB.tga");
             objective_add(&mut host, cx, None, &[Value::Int(0), current]).unwrap();
-            objective_add(&mut host, cx, None, &[Value::Int(1), current]).unwrap();
+            let add_b = [
+                Value::Int(1),
+                current,
+                Value::Vector([1792.0, 2080.0, 20.0]),
+                icon,
+            ];
+            objective_add(&mut host, cx, None, &add_b).unwrap();
             objective_current(&mut host, cx, None, &[Value::Int(1)]).unwrap();
             assert_eq!((host.objectives[0].state, host.objectives[1].state), (1, 4));
             let axis_name = s(cx, "axis");
             objective_team(&mut host, cx, None, &[Value::Int(0), axis_name]).unwrap();
-            let allies = host.objectives_for(crate::game::script::TEAM_ALLIES);
+
+            // Slot 0 is the allied client, slot 1 the axis one.
+            let allies = host.objectives_for(0, crate::game::script::TEAM_ALLIES);
             assert_eq!(
                 allies[0].state, 0,
                 "an axis objective is sent to allies as state 0"
             );
             assert_eq!(allies[1].state, 4);
-            let axis = host.objectives_for(crate::game::script::TEAM_AXIS);
+            let axis = host.objectives_for(1, crate::game::script::TEAM_AXIS);
             assert_eq!(axis[0].state, 1);
+
+            // The allied client has slot 1 whole by now, so the delete leaves
+            // it the icon and the origin under a blanked state.
+            let before = allies[1];
+            assert_ne!(before.icon, 0);
+            objective_delete(&mut host, cx, None, &[Value::Int(1)]).unwrap();
+            let after = host.objectives_for(0, crate::game::script::TEAM_ALLIES)[1];
+            assert_eq!(after.state, 0);
+            assert_eq!(after.icon, before.icon);
+            assert_eq!(after.origin_f32(), [1792.0, 2080.0, 20.0]);
         });
     }
 }

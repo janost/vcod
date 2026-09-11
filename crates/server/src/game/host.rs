@@ -17,6 +17,15 @@ use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 /// unowned HUD element both carry.
 pub const ENTITYNUM_NONE: i32 = 0x3ff;
 
+/// A cleared level objective record: what `objective_add` starts from and
+/// what `objective_delete` leaves.
+pub fn empty_objective() -> Objective {
+    Objective {
+        ent_num: ENTITYNUM_NONE,
+        ..Objective::default()
+    }
+}
+
 /// The builtins `GameHost::builtin` answers from its own match, folded: the
 /// env and io names, which have no family module of their own. Every other
 /// builtin comes from a family's `NAMES`, and `is_builtin` walks both so the
@@ -337,6 +346,11 @@ pub struct GameHost {
     /// `objective_add` and `objective_delete` write, so a fresh table starts
     /// there rather than at the zeroed field's 0.
     pub objectives: [Objective; MAX_OBJECTIVES],
+    /// `client+0x3e8`, each client's own copy of the 16 records, which is
+    /// what block 4 carries. The per-frame filter writes into it rather than
+    /// rebuilding it, so a record the filter blanks keeps the six fields the
+    /// last copy left there ([`GameHost::objectives_for`]).
+    pub client_objectives: Vec<[Objective; MAX_OBJECTIVES]>,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -399,25 +413,37 @@ impl GameHost {
             save_persist: false,
             team_scores: [0, 0],
             ranks_dirty: false,
-            objectives: [Objective {
-                ent_num: ENTITYNUM_NONE,
-                ..Objective::default()
-            }; MAX_OBJECTIVES],
+            objectives: [empty_objective(); MAX_OBJECTIVES],
+            client_objectives: vec![[Objective::default(); MAX_OBJECTIVES]; MAX_CLIENTS],
         }
     }
 
-    /// The table as one client is sent it: the filter inlined in `G_RunFrame`
-    /// blanks the state of a record whose team is set and is not the
-    /// client's, leaving the other six fields on the wire
-    /// (docs/research/cod11-gsc-object-model.md 23.3).
-    pub fn objectives_for(&self, team: i32) -> [Objective; MAX_OBJECTIVES] {
-        let mut out = self.objectives;
-        for o in &mut out {
-            if o.team_num != 0 && o.team_num != team {
-                o.state = 0;
+    /// One client's copy of the table, stepped the way the filter inlined in
+    /// `G_RunFrame` steps it: a record whose state is 0, or whose team is set
+    /// and is not the client's, contributes its state alone, and every other
+    /// one is copied whole (docs/research/cod11-gsc-object-model.md 23.3).
+    /// That is why a deleted slot keeps the icon and origin an earlier frame
+    /// copied over.
+    pub fn objectives_for(&mut self, slot: usize, team: i32) -> [Objective; MAX_OBJECTIVES] {
+        let table = self.objectives;
+        let Some(copy) = self.client_objectives.get_mut(slot) else {
+            return [Objective::default(); MAX_OBJECTIVES];
+        };
+        for (dst, src) in copy.iter_mut().zip(table) {
+            if src.state == 0 || (src.team_num != 0 && src.team_num != team) {
+                dst.state = 0;
+            } else {
+                *dst = src;
             }
         }
-        out
+        *copy
+    }
+
+    /// A client's copy back to the zeroed `gclient_t` the connect gives it.
+    pub fn reset_client_objectives(&mut self, slot: usize) {
+        if let Some(o) = self.client_objectives.get_mut(slot) {
+            *o = [Objective::default(); MAX_OBJECTIVES];
+        }
     }
 
     /// `ExitLevel`'s first pass (map-cycle doc, section 2): every connected
