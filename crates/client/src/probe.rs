@@ -5534,9 +5534,25 @@ fn pvs_route() -> Vec<PvsLeg> {
     ]
 }
 
-/// A trigger brush the walk aims at, as the BSP entity lump and the model
-/// lump give it: the submodel's own box, which for a `trigger_multiple` with
-/// no `origin` key is already in world space.
+/// A brush entity's `origin` key, zero when it carries none. Lump 27's bounds
+/// are relative to it: mp_carentan's bombzones spell one and mp_pavlov's
+/// triggers do not, so an absolute reading walks a whole map off.
+fn entity_origin(key: Option<&str>) -> [f32; 3] {
+    let mut o = [0.0; 3];
+    if let Some(v) = key {
+        for (i, n) in v.split_whitespace().take(3).enumerate() {
+            o[i] = n.parse().unwrap_or(0.0);
+        }
+    }
+    o
+}
+
+fn offset_by(v: [f32; 3], by: [f32; 3]) -> [f32; 3] {
+    [v[0] + by[0], v[1] + by[1], v[2] + by[2]]
+}
+
+/// A trigger brush the walk aims at, in world space: the submodel's own box
+/// out of lump 27, moved by the entity's `origin` key.
 struct TriggerBox {
     /// The `*N` the entity's `model` key named, for the log line.
     model: usize,
@@ -5674,10 +5690,11 @@ impl TriggerProbe {
             let Some(m) = bsp.models.get(model) else {
                 continue;
             };
+            let at = entity_origin(key("origin"));
             self.boxes.push(TriggerBox {
                 model,
-                mins: m.mins,
-                maxs: m.maxs,
+                mins: offset_by(m.mins, at),
+                maxs: offset_by(m.maxs, at),
             });
         }
         self.visited = vec![false; self.boxes.len()];
@@ -6224,10 +6241,11 @@ impl SdProbe {
             let Some(m) = bsp.models.get(model) else {
                 continue;
             };
+            let at = entity_origin(key("origin"));
             self.zone = Some(TriggerBox {
                 model,
-                mins: m.mins,
-                maxs: m.maxs,
+                mins: offset_by(m.mins, at),
+                maxs: offset_by(m.maxs, at),
             });
         }
         let tris = vcod_common::props::collision_tris(fs, &bsp.entities);
@@ -6236,7 +6254,7 @@ impl SdProbe {
         )));
         match &self.zone {
             Some(z) => println!(
-                "SD: bombzone_A is *{} at [{:.0},{:.0},{:.0}]",
+                "SD: bombzone_A is *{} at [{:.0},{:.0},{:.0}] (world)",
                 z.model,
                 z.centre()[0],
                 z.centre()[1],
@@ -6330,7 +6348,12 @@ impl SdProbe {
             self.saw_current[i] |= o.state == SD_STATE_CURRENT;
         }
         let slot0 = objs[0].origin_f32();
-        let base0 = *self.slot0_origin.get_or_insert(slot0);
+        // Block 4 reads empty for the first snapshots after a join, so a base
+        // latched on the first frame seen is [0,0,0] and the first real
+        // update reads as the plant. Only an added slot is a base.
+        if self.slot0_origin.is_none() && objs[0].state != 0 {
+            self.slot0_origin = Some(slot0);
+        }
 
         // A death ends the run: the script the fixture replays cannot be
         // resumed from a respawn somewhere else.
@@ -6349,7 +6372,7 @@ impl SdProbe {
         // state, so an axis defender may never see the 4 the latch needs and
         // slot 0 relocating onto the charge is the whole signal there.
         let zone_deleted = self.saw_current[1] && objs[1].state == 0;
-        let slot0_moved = dist(slot0, base0) > 1.0;
+        let slot0_moved = self.slot0_origin.is_some_and(|b| dist(slot0, b) > 1.0);
         let planted = zone_deleted && slot0_moved;
         if self.role == SdRole::Defender && self.bomb.is_none() && (planted || slot0_moved) {
             println!(
