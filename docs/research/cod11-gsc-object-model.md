@@ -1816,21 +1816,40 @@ VERIFIED, off the defender fixture's `[phase sweep]` paired with the lookat
 fixture: from a standing eye 20.4 units horizontally from the charge and 60.1
 above it, at the 15 stations of the sweep, the aim and the offsets
 `pitch -8`, `pitch +8`, `yaw -15`, `yaw -8`, `yaw +8`, `yaw +15` and `yaw +30`
-fired on every frame of their 1.5 s window, and `pitch -45`, `pitch -30`,
-`pitch -15`, `pitch +15`, `pitch +30`, `pitch +45` and `yaw -30` fired not at
-all. The two fires that land inside a non-firing station's first 100 ms
-are the previous station's, still arriving while the new view walks to
-the server.
+fired on every frame from within 100 ms of entering the station to the end of
+its 1.5 s window, and `pitch -45`, `pitch -30`, `pitch -15`, `pitch +15`,
+`pitch +30` and `yaw -30` fired not at all. The lead-in is one or two frames:
+28 fires over the aim station's 30, 29 over `pitch -8`'s 31 and 29 over
+`yaw -15`'s 30, with every other firing station full.
+
+VERIFIED, off the defender fixture: `pitch +30` and `pitch +45` both settle at
+`viewangles[0]` 87.9, which is the engine's pitch clamp at 16000 in short units
+and 16.7 degrees below the 71.2 base aim rather than the 30 and 45 the probe
+asked for. Those are one data point, not two, and the offset it measures is
++16.7.
+
+VERIFIED, off the same pairing: each of `pitch -30`, `pitch +15` and `pitch +45`
+carries exactly two fires inside its first 100 ms and none after. INFERRED, off
+those landing in the same 100 ms the firing stations take to start: they are the
+previous station's fires, still arriving while the new view walks to the server,
+not fires of the station they are filed under.
 
 VERIFIED, off the same pairing: the defuse icon on the wire tracks the fires
 frame for frame. The 64x64 shader element enters the defender's HUD array in
-the snapshot whose `serverTime` equals the first fire's `getTime()`, and is
-gone in the first snapshot after the last fire, 50 ms later, at all four
-edges.
+the snapshot whose `serverTime` equals the first fire's `getTime()`, at all
+four leading edges. Three of the four trailing edges lag one snapshot, 50 ms
+(fires end 93400, 99450 and 111550; the icon is gone at 93450, 99500 and
+111600). The fourth does not: the last fire and the icon's last snapshot are
+both 124600. INFERRED, off that being the frame the defuse completed on and
+`sd.gsc` destroying the icon there: the completion takes the element off the
+wire on the same frame the fire happens, where a sweep that merely looks away
+leaves it standing until the next snapshot.
 
-The station origin is `-190.9, 2459.0, -21.9` and the charge sits at
-`-176.0, 2473.0, -22.0` (the defender fixture's `# station` line and the
-objectives column's slot 0). VERIFIED, off those two numbers and a 60-unit view
+The station origin is `-190.9, 2459.0, -21.9`, read off the `origin` on the
+sweep's own traces, and the charge sits at `-176.0, 2473.0, -22.0`, read off the
+objectives column's slot 0. The fixture's `# station` line carries the same x
+and y with z `-20.9`, which is where the probe stood before the snapshot the
+sweep began on. VERIFIED, off those two numbers and a 60-unit view
 height: the aim is yaw 43.2 and pitch 71.2 down, which is what the fixture's
 settled `viewangles` read at the aim station, and the range to the charge is
 63.5 units. A 16-unit trigger at that range subtends 7.2 degrees half-width to
@@ -1854,11 +1873,12 @@ the ray through the far top corner. Both disagreements are within about a unit
 of the boundary, so the box bounds, the view height or the charge origin is off
 by that much and this capture does not resolve which.
 
-VERIFIED, off the run that preceded this one and is not kept in the repo: a
-live body on the sightline stops the fire. That run left the planter standing
-88 units out along the defender-to-bomb line, the whole sweep logged zero
-fires, and the fires began once that client dropped. This capture's gsc probe
-teleports the planter away for that reason.
+VERIFIED, off the run that preceded this one and is not kept in the repo: that
+run left the planter standing 88 units out along the defender-to-bomb line, its
+whole sweep logged zero fires, and the fires began once that client dropped.
+INFERRED, off that pairing and the second trace's mask and classname compare
+above: a live body between the eye and the trigger is what stops the fire, and
+this capture's gsc probe teleports the planter away for that reason.
 
 
 ### 23.2 `linkTo`, `unlink`, `enableLinkTo`
@@ -1933,20 +1953,28 @@ and `-sd-defuse-defender.txt`.
 
 VERIFIED, off the plant fixture's `[phase hold2]`: `pm_type` reads 1 on all 100
 snapshots from the `linkTo` at `serverTime` 86800 to 91750, and 0 on the
-snapshot either side.
+snapshot before it. It also reads 0 at 91800, but that frame measures nothing
+about retail: it is the frame the gsc probe ran `unlink()` and `setOrigin` on
+the planter (`PROBE teleport_planter 1 (-512.00, 2688.00, -16.00)`, and the
+91800 trace's origin is `-512.0, 2688.0, -15.0`). The defuse fixture is the only
+half of this run that measures retail's own unlink latency.
 
 VERIFIED, off the same phase: a walk input moves a linked client not at all.
 The probe sent `forward=127` on 92 consecutive cmds, `st` 88750 to 90250, and
-across the 34 snapshots that span them the origin holds at
+across the 31 snapshots that span them the origin holds at
 `-192.8, 2457.1, -21.9` to the tenth of a unit and `velocity` reads
-`0.0, 0.0, 0.0` on every one. The re-anchor model in `G_RunClient` above is
-what the wire shows.
+`0.0, 0.0, 0.0` on every one. INFERRED, off that zero delta: the re-anchor in
+`G_RunClient` above is one account of it, and a mover that ignores the input
+outright under `pm_type` 1 is another; a zero origin delta with a zero velocity
+is consistent with both and this capture does not separate them.
 
 VERIFIED, off both fixtures: `groundEntityNum` reads 0x3ff on every linked
 snapshot but the first, which still carries the ground entity the last free
 frame stood on (177 on the plant, 177 on the defuse). `pm_flags` holds 262144
-across the link and the unlink, and `eFlags` changes only at the probe's two
-`setOrigin` teleports, not at the link.
+across the link and the unlink, and `eFlags` changes at no point of either
+sequence: on the attacker it moves only at the probe's two `setOrigin`
+teleports, `serverTime` 68750 and 91800, and on the defender only at its three,
+68750, 91800 and 130650.
 
 VERIFIED, off the plant fixture: the link and its release both land on the next
 snapshot after the cmd that caused them. Use first travels at `st` 83766 and
@@ -2139,7 +2167,10 @@ VERIFIED, off the plant fixture read against the wire: these elements travel in
 the playerstate's archived HUD array, not the current one. The first run of the
 same probe read `hud_current` alone and its column was empty through a whole
 plant at `pm_type` 1; reading the archived array first carries all four
-elements.
+elements. Both committed client fixtures still head their `hud=` column
+"unarchived HUD array", which is the label the probe carried when they were
+taken; the writer was corrected in 17e43b0 and a recapture's header will read
+differently.
 
 VERIFIED, off `maps/MP/gametypes/sd.gsc` in `pak5.pk3`: `bomb_think` creates
 the defuse icon on any `"trigger"` notify from a defender who `isOnGround()`,
