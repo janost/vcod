@@ -114,6 +114,27 @@ pub struct HudState {
     pub owner: u32,
     /// `+0x74`: the `clientState.team` this is drawn for, 0 for every team.
     pub team: i32,
+    /// `+0x20`, `fadeOverTime`'s snapshot of the `color` slot it interrupts
+    /// (docs/research/cod11-gsc-object-model.md 23.4).
+    pub from_color: i32,
+    /// `+0x24`, `+0x28`: `fadeOverTime`'s clock, `level.time` and the
+    /// duration in ms.
+    pub fade_start: i32,
+    pub fade_ms: i32,
+    /// `+0x44`, `+0x48`: `scaleOverTime`'s clock.
+    pub scale_start: i32,
+    pub scale_ms: i32,
+    /// `+0x40`, `+0x3c`: `scaleOverTime`'s snapshot of `width`/`height`
+    /// before it writes the new size.
+    pub from_width: i32,
+    pub from_height: i32,
+    /// `+0x54`, `+0x58`: `moveOverTime`'s clock.
+    pub move_start: i32,
+    pub move_ms: i32,
+    /// `+0x4c`, `+0x50`: `moveOverTime`'s snapshot of the `x`/`y` slots it
+    /// interrupts.
+    pub from_x: i32,
+    pub from_y: i32,
 }
 
 impl Default for HudState {
@@ -130,15 +151,29 @@ impl Default for HudState {
             text: 0,
             owner: HUD_OWNER_ALL,
             team: 0,
+            from_color: 0,
+            fade_start: 0,
+            fade_ms: 0,
+            scale_start: 0,
+            scale_ms: 0,
+            from_width: 0,
+            from_height: 0,
+            move_start: 0,
+            move_ms: 0,
+            from_x: 0,
+            from_y: 0,
         }
     }
 }
 
 impl HudState {
     /// The block every value-setting method clears before it writes its own
-    /// (`setText` 0x4c5bc..0x4c61d and its four twins clear the same one),
-    /// so an element that was a timer and becomes text carries no stale
-    /// deadline.
+    /// (`setText` 0x4c5bc..0x4c61d and its four twins clear the same one).
+    /// That block also zeroes `+0x3c..0x48`, the scale tween's four fields,
+    /// so `setText`/`setShader`/`setValue` cancel a running `scaleOverTime`
+    /// along with the payload; `+0x20..0x28` (fade) and `+0x4c..0x58` (move)
+    /// sit outside it and survive untouched
+    /// (docs/research/cod11-gsc-object-model.md 23.4).
     pub fn clear_payload(&mut self) {
         self.width = 0;
         self.height = 0;
@@ -146,6 +181,10 @@ impl HudState {
         self.time = 0;
         self.value = 0.0;
         self.text = 0;
+        self.from_width = 0;
+        self.from_height = 0;
+        self.scale_start = 0;
+        self.scale_ms = 0;
     }
 }
 

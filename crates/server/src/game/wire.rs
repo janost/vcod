@@ -150,13 +150,26 @@ fn build_hud_elem(host: &GameHost, id: EntId, state: &HudState) -> HudElem {
     for (field, name) in [(f::FONT_SCALE, "fontscale"), (f::SORT, "sort")] {
         e.set_f32(field, hud_field_f32(host, id, name));
     }
+    e.set(f::FROM_COLOR, state.from_color);
+    e.set(f::FADE_START_TIME, state.fade_start);
+    e.set(f::FADE_TIME, state.fade_ms);
+    e.set(f::SCALE_START_TIME, state.scale_start);
+    e.set(f::SCALE_TIME, state.scale_ms);
+    e.set(f::FROM_WIDTH, state.from_width);
+    e.set(f::FROM_HEIGHT, state.from_height);
+    e.set(f::MOVE_START_TIME, state.move_start);
+    e.set(f::MOVE_TIME, state.move_ms);
+    e.set(f::FROM_X, state.from_x);
+    e.set(f::FROM_Y, state.from_y);
     e
 }
 
 /// One HUD engine slot as the integer the wire wants. The enum fields
 /// (`font`, `alignx`, `aligny`) are stored as retail's index and read back
 /// as a name, so this takes the slot rather than going through `get_field`.
-fn hud_field_i32(host: &GameHost, id: EntId, name: &str) -> i32 {
+/// `pub(crate)`: the tween builtins in `builtins::hud` read `color`/`x`/`y`
+/// through it before they overwrite the state those slots snapshot.
+pub(crate) fn hud_field_i32(host: &GameHost, id: EntId, name: &str) -> i32 {
     match hud_slot_value(host, id, name) {
         Some(Value::Int(i)) => i,
         Some(Value::Float(f)) => f as i32,
