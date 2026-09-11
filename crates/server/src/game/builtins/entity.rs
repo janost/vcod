@@ -36,6 +36,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("getorigin", get_origin),
     ("getentitynumber", get_entity_number),
     ("isplayer", is_player),
+    ("isalive", is_alive),
     ("isdefined", is_defined),
     ("istouching", is_touching),
     ("placespawnpoint", place_spawnpoint),
@@ -501,6 +502,31 @@ pub fn is_player(
     Ok(Value::Int((id.0 < MAX_CLIENTS as u32) as i32))
 }
 
+/// `isAlive(ent)` (`.so` 0x5cf8c): 0 for an argument that is not an entity,
+/// otherwise `health > 0` (docs/research/cod11-gsc-object-model.md, 23.5). A
+/// client's health lives on the host's vitals array, not the generic field
+/// table; any other entity reads its `health` field as an int.
+pub fn is_alive(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let Some(Value::Entity(id)) = args.first() else {
+        return Ok(Value::Int(0));
+    };
+    let id = *id;
+    let alive = match host.ents.get(id) {
+        Some(e) if e.client.is_some() => host.client_vitals[id.0 as usize].health > 0,
+        Some(_) => {
+            let health = cx.intern_folded("health");
+            matches!(host.get_field(cx, id, health), Value::Int(n) if n > 0)
+        }
+        None => false,
+    };
+    Ok(Value::Int(alive as i32))
+}
+
 /// `isDefined(x)`: false only for a missing argument or `undefined` itself.
 pub fn is_defined(
     _host: &mut GameHost,
@@ -907,6 +933,38 @@ mod tests {
             let client = Value::Entity(EntId(3));
             assert_eq!(
                 is_player(&mut host, cx, None, &[client]).unwrap(),
+                Value::Int(1)
+            );
+        });
+    }
+
+    /// `isAlive` reads a client's health off the host's vitals array, a
+    /// non-entity argument answers 0, and any other entity reads its own
+    /// `health` field.
+    #[test]
+    fn is_alive_reads_health_and_refuses_nothing() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let player = host.ents.spawn_client(cx, 0, None).unwrap();
+            host.client_vitals[0].health = 100;
+            assert_eq!(
+                is_alive(&mut host, cx, None, &[Value::Entity(player)]).unwrap(),
+                Value::Int(1)
+            );
+            host.client_vitals[0].health = 0;
+            assert_eq!(
+                is_alive(&mut host, cx, None, &[Value::Entity(player)]).unwrap(),
+                Value::Int(0)
+            );
+            assert_eq!(
+                is_alive(&mut host, cx, None, &[Value::Undefined]).unwrap(),
+                Value::Int(0)
+            );
+            let prop = host.ents.spawn(cx).unwrap();
+            let h = cx.intern_folded("health");
+            host.set_field(cx, prop, h, Value::Int(50)).unwrap();
+            assert_eq!(
+                is_alive(&mut host, cx, None, &[Value::Entity(prop)]).unwrap(),
                 Value::Int(1)
             );
         });

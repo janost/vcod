@@ -539,6 +539,14 @@ impl ScriptRuntime {
         }
     }
 
+    /// A client's `ps.on_ground` as the tick's moves left it, for
+    /// `isOnGround` (docs/research/cod11-gsc-object-model.md, 23.5).
+    pub fn set_client_on_ground(&mut self, slot: usize, on_ground: bool) {
+        if let Some(g) = self.host.client_on_ground.get_mut(slot) {
+            *g = on_ground;
+        }
+    }
+
     /// A client's entity state as the tick's moves left it, for
     /// `cloneplayer`. `None` for a slot with no sim.
     pub fn set_client_entity_state(

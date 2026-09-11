@@ -272,10 +272,13 @@ struct MoveSummary {
     processed: usize,
     first_cmd_st: Option<i32>,
     last_cmd_st: Option<i32>,
-    /// The union of every replayed cmd's `buttons`, for the script's button
-    /// builtins: retail latches each cmd in `ClientThink` (0x41540), so a tap
-    /// inside a multi-cmd packet must not be lost to the packet's last cmd.
-    buttons: u8,
+    /// The last replayed cmd's buttons, for `useButtonPressed`: retail
+    /// stores each cmd's buttons on the client and the builtin tests that
+    /// word, so a tick that replayed several cmds answers with the last one,
+    /// not an OR (docs/research/cod11-gsc-object-model.md, 23.5). `None`
+    /// when the tick replayed nothing, so the mirror falls back to the
+    /// client's last received cmd.
+    last_buttons: Option<u8>,
 }
 
 /// Why a level load failed, which is what says whether the server can go on.
@@ -2528,7 +2531,10 @@ impl Server {
         if let Some(rt) = self.script.as_mut() {
             for (slot, c) in self.clients.iter().enumerate() {
                 if let Some(c) = c {
-                    rt.set_client_buttons(slot, c.last_cmd.buttons | moved[slot].buttons);
+                    rt.set_client_buttons(
+                        slot,
+                        moved[slot].last_buttons.unwrap_or(c.last_cmd.buttons),
+                    );
                 }
             }
             for te in impacts {
@@ -2800,9 +2806,10 @@ impl Server {
         let now_ms = self.sv_time_ms;
         let mut moved = vec![MoveSummary::default(); self.clients.len()];
         // One entry per cmd that moved a client, with where that cmd left it,
-        // the buttons it carried and the `pm_type` it left the client at,
-        // which is what the touch pass gates on.
-        let mut touched: Vec<(usize, [f32; 3], u8, i32)> = Vec::new();
+        // the buttons it carried, the `pm_type` it left the client at, which
+        // is what the touch pass gates on, and whether it left the client on
+        // the ground.
+        let mut touched: Vec<(usize, [f32; 3], u8, i32, bool)> = Vec::new();
         for (slot, m) in moved.iter_mut().enumerate() {
             let Some(c) = self.clients[slot].as_mut() else {
                 continue;
@@ -2905,12 +2912,18 @@ impl Server {
                     }
                 }
                 events.extend(raised);
-                touched.push((slot, sim.origin(), cmd.buttons, sim.wire_pm_type()));
+                touched.push((
+                    slot,
+                    sim.origin(),
+                    cmd.buttons,
+                    sim.wire_pm_type(),
+                    sim.ps.on_ground,
+                ));
                 last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;
                 m.first_cmd_st.get_or_insert(cmd.server_time);
                 m.last_cmd_st = Some(cmd.server_time);
-                m.buttons |= cmd.buttons;
+                m.last_buttons = Some(cmd.buttons);
                 m.processed += 1;
             }
             if sim.ps.weapon != held {
@@ -2941,9 +2954,10 @@ impl Server {
         // because the host's copy is only mirrored from the sim after the
         // script frame, so the pass would otherwise test last tick's spot.
         if let Some(rt) = self.script.as_mut() {
-            for (slot, origin, buttons, pm_type) in touched {
+            for (slot, origin, buttons, pm_type, on_ground) in touched {
                 rt.set_client_origin(slot, origin);
                 rt.set_client_pm_type(slot, pm_type);
+                rt.set_client_on_ground(slot, on_ground);
                 rt.touch_triggers_with_buttons(slot, now_ms, buttons);
             }
         }

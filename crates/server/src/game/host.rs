@@ -224,6 +224,10 @@ pub struct GameHost {
     /// with the origin the touch pass tests. `G_TouchTriggers` gates on it
     /// (`docs/research/cod11-gsc-object-model.md`, 8.2).
     pub client_pm_type: Vec<i32>,
+    /// Each client's `ps.on_ground`, mirrored in by `Server::replay_moves`
+    /// alongside `client_pm_type`, for `isOnGround`
+    /// (`docs/research/cod11-gsc-object-model.md`, 23.5).
+    pub client_on_ground: Vec<bool>,
     /// Each client's `ps.grenadeTimeLeft`, mirrored in by
     /// `Server::replay_moves` with the entity states, which is the last read
     /// of it before a kill this tick: what a death drops
@@ -385,6 +389,7 @@ impl GameHost {
             client_vitals: vec![Vitals::default(); MAX_CLIENTS],
             client_buttons: vec![0; MAX_CLIENTS],
             client_pm_type: vec![0; MAX_CLIENTS],
+            client_on_ground: vec![false; MAX_CLIENTS],
             client_grenade_ms: vec![0; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),

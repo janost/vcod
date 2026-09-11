@@ -37,6 +37,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("setviewmodel", set_view_model),
     ("getviewmodel", get_view_model),
     ("usebuttonpressed", use_button_pressed),
+    ("isonground", is_on_ground),
     ("getcurrentweapon", get_current_weapon),
     ("cloneplayer", clone_player),
     ("dropitem", drop_item),
@@ -60,12 +61,11 @@ const DROPPED_ITEM_MS: i32 = 30_000;
 /// use button, which every stock `respawn()` loop polls. `Server` mirrors
 /// the buttons onto the host before the frame.
 ///
-/// That mirror is the OR of every cmd the tick carried, while the touch pass
-/// reads one cmd's bits. The two agree at the instant a `trigger_use` fires;
-/// they can disagree only when a tick processes several cmds and the use bit
-/// changes mid-tick. `sd.gsc`'s plant loop pairs the two — woken by the
-/// trigger notify, then polling this — so stage 3 has to decide which
-/// reading it wants rather than inherit this one by accident.
+/// Retail stores each cmd's buttons on the client (`ClientThink_real`
+/// 0x40129) and the builtin tests that word (0x44ed2), so a frame with
+/// several cmds answers with its last one, not an OR
+/// (docs/research/cod11-gsc-object-model.md, 23.5); the touch pass reads
+/// each cmd's own bits and the two agree on the cmd that fired.
 pub fn use_button_pressed(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -75,6 +75,19 @@ pub fn use_button_pressed(
     let slot = client_receiver(host, recv)?;
     let held = host.client_buttons[slot] & vcod_common::net::msg::BUTTON_USE != 0;
     Ok(Value::Int(i32::from(held)))
+}
+
+/// `self isOnGround()` (`PlayerCmd_isOnGround`, 0x45014): `ps.groundEntityNum
+/// != 0x3ff` (docs/research/cod11-gsc-object-model.md, 23.5). `Server`
+/// mirrors `ps.on_ground` onto the host alongside `client_pm_type`.
+pub fn is_on_ground(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    Ok(Value::Int(host.client_on_ground[slot] as i32))
 }
 
 /// `self getCurrentWeapon()` (`PlayerCmd_getCurrentWeapon`): the name of the
@@ -765,6 +778,31 @@ mod tests {
             let name = Value::String(cx.intern_exact("xmodel/viewmodel_hands_us"));
             assert!(set_view_model(&mut host, cx, recv, &[name]).is_err());
             assert!(get_view_model(&mut host, cx, recv, &[]).is_err());
+        });
+    }
+
+    /// `isOnGround` answers the host's mirror of `ps.on_ground`, and refuses
+    /// a receiver with no `gclient_t` the way every other client builtin does.
+    #[test]
+    fn is_on_ground_reads_the_host_mirror_and_refuses_a_non_client() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
+            let recv = Some(Target::Entity(c));
+            host.client_on_ground[0] = true;
+            assert_eq!(
+                is_on_ground(&mut host, cx, recv, &[]).unwrap(),
+                Value::Int(1)
+            );
+            host.client_on_ground[0] = false;
+            assert_eq!(
+                is_on_ground(&mut host, cx, recv, &[]).unwrap(),
+                Value::Int(0)
+            );
+
+            let prop = host.ents.spawn(cx).unwrap();
+            let non_client = Some(Target::Entity(prop));
+            assert!(is_on_ground(&mut host, cx, non_client, &[]).is_err());
         });
     }
 
