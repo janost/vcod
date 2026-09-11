@@ -363,3 +363,51 @@ fn field_vec(host: &mut GameHost, cx: &mut Cx, id: EntId, name: &str) -> Option<
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::testing::fixture;
+
+    /// The eleven tween fields each land at their own `hud_field` wire index
+    /// (docs/research/cod11-gsc-object-model.md 23.4): a round-trip with
+    /// eleven distinct values catches a copy-pasted index the way the two
+    /// builtin tests, each exercising only their own tween, cannot.
+    #[test]
+    fn build_hud_elem_writes_every_tween_field_at_its_own_index() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            use crate::game::builtins::hud::new_hud_elem;
+            let Value::Entity(id) = new_hud_elem(&mut host, cx, None, &[]).unwrap() else {
+                panic!("newHudElem returns an object");
+            };
+            let state = HudState {
+                from_color: 1,
+                fade_start: 2,
+                fade_ms: 3,
+                scale_start: 4,
+                scale_ms: 5,
+                from_width: 6,
+                from_height: 7,
+                move_start: 8,
+                move_ms: 9,
+                from_x: 10,
+                from_y: 11,
+                ..host.ents.get(id).unwrap().hud.unwrap()
+            };
+            let e = build_hud_elem(&host, id, &state);
+            use vcod_common::net::msg::hud_field as f;
+            assert_eq!(e.get(f::FROM_COLOR), 1);
+            assert_eq!(e.get(f::FADE_START_TIME), 2);
+            assert_eq!(e.get(f::FADE_TIME), 3);
+            assert_eq!(e.get(f::SCALE_START_TIME), 4);
+            assert_eq!(e.get(f::SCALE_TIME), 5);
+            assert_eq!(e.get(f::FROM_WIDTH), 6);
+            assert_eq!(e.get(f::FROM_HEIGHT), 7);
+            assert_eq!(e.get(f::MOVE_START_TIME), 8);
+            assert_eq!(e.get(f::MOVE_TIME), 9);
+            assert_eq!(e.get(f::FROM_X), 10);
+            assert_eq!(e.get(f::FROM_Y), 11);
+        });
+    }
+}

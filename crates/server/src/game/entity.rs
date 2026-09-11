@@ -124,7 +124,7 @@ pub struct HudState {
     /// `+0x44`, `+0x48`: `scaleOverTime`'s clock.
     pub scale_start: i32,
     pub scale_ms: i32,
-    /// `+0x40`, `+0x3c`: `scaleOverTime`'s snapshot of `width`/`height`
+    /// `+0x3c`, `+0x40`: `scaleOverTime`'s snapshot of `width`/`height`
     /// before it writes the new size.
     pub from_width: i32,
     pub from_height: i32,

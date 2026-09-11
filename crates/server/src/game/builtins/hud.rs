@@ -325,18 +325,21 @@ fn set_any_timer(
 }
 
 /// The time argument all three tweens share: seconds to milliseconds,
-/// rounded the way `set_any_timer` rounds, refusing anything not above zero.
+/// rounded to the nearest ms (`time * 1000.0 + 0.5` truncated toward zero,
+/// not the timers' round-up), refusing anything outside `0 < seconds <= 60`
+/// (docs/research/cod11-gsc-object-model.md 23.4).
 fn tween_ms(v: Value) -> Result<i32, ErrorKind> {
     let seconds = match v {
         Value::Int(i) => i as f32,
         Value::Float(f) => f,
         _ => return Err(ErrorKind::BadType("a tween takes a time in seconds")),
     };
-    let ms = (seconds * 1000.0).ceil() as i32;
-    if ms <= 0 {
-        return Err(ErrorKind::BadType("a tween's time must be above zero"));
+    if !(seconds > 0.0 && seconds <= 60.0) {
+        return Err(ErrorKind::BadType(
+            "a tween's time must be above zero and at most 60 seconds",
+        ));
     }
-    Ok(ms)
+    Ok((seconds * 1000.0 + 0.5) as i32)
 }
 
 /// `<hudelem> scaleOverTime(time, width, height)` (0x4bd34, method 6):
@@ -543,6 +546,15 @@ mod tests {
             assert_eq!(state.text, 0, "the string is cleared");
             assert_eq!(host.configstrings[1501], "black");
         });
+    }
+
+    /// Retail refuses a time above 60 s and rounds to the nearest ms rather
+    /// than up (docs/research/cod11-gsc-object-model.md 23.4): 61 s is a
+    /// param error and a time too small to round up still converts.
+    #[test]
+    fn tween_ms_refuses_past_60_seconds_and_rounds_to_nearest() {
+        assert!(tween_ms(Value::Float(61.0)).is_err());
+        assert_eq!(tween_ms(Value::Float(0.0001)), Ok(0));
     }
 
     fn ent(v: Value) -> EntId {
