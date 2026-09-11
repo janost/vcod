@@ -6010,10 +6010,11 @@ const SD_WALK_FROM: Duration = Duration::from_secs(2);
 const SD_WALK_TO: Duration = Duration::from_millis(3500);
 const SD_DEFUSE_HOLD: Duration = Duration::from_secs(13);
 const SD_STATION: Duration = Duration::from_millis(1500);
-/// Where the defender's walk stops and the sweep starts. sd.gsc's defuse
-/// takes `distance(other.origin, self.origin) < 64`; 40 refused the spot the
-/// gsc teleport lands on (47 units out) and the walk left for the clutter.
-const SD_BOMB_RANGE: f32 = 60.0;
+/// Where the defender's walk stops and the sweep starts. Inside sd.gsc's
+/// `check_bomb` 32-unit test, so the defuse icon `bomb_think` creates on a
+/// lookat fire survives the frame and every fire reads as `icon=1`; further
+/// out `check_bomb` destroys it the same frame and the wire never shows it.
+const SD_BOMB_RANGE: f32 = 28.0;
 /// An origin jump past this between snapshots is the gsc teleport.
 const SD_TELEPORT_JUMP: f32 = 200.0;
 /// `setOrigin` keeps the walk's velocity, so a teleport frame inside the

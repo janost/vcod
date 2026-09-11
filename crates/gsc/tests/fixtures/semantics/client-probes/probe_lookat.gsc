@@ -157,7 +157,12 @@ watch_bomb_defenders()
 	}
 
 	//	After the defenders, since `dest` was taken off where the planter stood.
+	//	The planter is still linked to the bombzone here (the success branch
+	//	never unlinks; the zone's delete() is deferred), and G_RunClient
+	//	re-anchors a linked player every frame, so a setOrigin alone was
+	//	undone next frame. unlink() is a no-op on an unlinked entity.
 	planter_dest = (-512, 2688, -16);
+	planter unlink();
 	planter setOrigin(planter_dest);
 	logPrint("PROBE teleport_planter " + planter getEntityNumber() + " " + planter_dest + "\n");
 }
