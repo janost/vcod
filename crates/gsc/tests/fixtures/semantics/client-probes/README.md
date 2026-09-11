@@ -174,7 +174,9 @@ is a courtyard crossing. The same cvar also moves every
 defender to just behind the planter once the plant has spawned
 `level.bombmodel`, because the flak88 and the cart ring the zone and a walk
 that has to round them reached the charge 27 s after its 60 s fuse had blown
-it. A run without the cvar walks from the stock spawns and, on mp_carentan,
+it, and sends the planter back to the attackers' spawn at the same moment,
+since a planter left standing on the defender-to-bomb line is what the
+lookat's body trace stops at and no station fires. A run without the cvar walks from the stock spawns and, on mp_carentan,
 does not get there. Anything after the map name is passed
 to the engine verbatim, which takes its `+set` arguments in any order. Only
 mp_carentan has the two origins; on any other map the thread logs `PROBE

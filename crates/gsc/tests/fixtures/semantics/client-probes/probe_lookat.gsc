@@ -116,8 +116,11 @@ try_teleport(num)
 //	sit around the zone and a first run circled them for 90 s, reaching the
 //	bomb 27 s after it had exploded. So once the plant has spawned the bomb
 //	model, every alive defender is put just behind where the planter stood,
-//	which is ground a player demonstrably fits on. Same cvar gate as the spawn
-//	teleport, and once per level.
+//	which is ground a player demonstrably fits on. The planter itself goes
+//	back to the attackers' spawn at the same moment: standing 88 units out
+//	along the defender-to-bomb line it was what the lookat's body trace hit,
+//	and no station fired until it left. Same cvar gate as the spawn teleport,
+//	and once per level.
 watch_bomb_defenders()
 {
 	if (getcvar("probe_teleport") != "1")
@@ -152,6 +155,11 @@ watch_bomb_defenders()
 		player = players[i];
 		player try_teleport_defender(player getEntityNumber(), dest);
 	}
+
+	//	After the defenders, since `dest` was taken off where the planter stood.
+	planter_dest = (-512, 2688, -16);
+	planter setOrigin(planter_dest);
+	logPrint("PROBE teleport_planter " + planter getEntityNumber() + " " + planter_dest + "\n");
 }
 
 //	The alive attacker nearest the bomb: whoever planted it.

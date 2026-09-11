@@ -6013,6 +6013,10 @@ const SD_STATION: Duration = Duration::from_millis(1500);
 const SD_BOMB_RANGE: f32 = 60.0;
 /// An origin jump past this between snapshots is the gsc teleport.
 const SD_TELEPORT_JUMP: f32 = 200.0;
+/// `setOrigin` keeps the walk's velocity, so a teleport frame inside the
+/// radius slid 64 units on in the next half second; the sweep waits for the
+/// horizontal speed to fall under this.
+const SD_SETTLED_SPEED: f32 = 5.0;
 const SD_WATCH: Duration = Duration::from_secs(20);
 /// How far short of the bombzone the defender waits for the plant: inside the
 /// zone it would be standing on the attacker, and its own use press would
@@ -6298,7 +6302,16 @@ impl SdProbe {
                     cmd.forward = 127;
                 }
             }
-            SdPhase::Hold1 | SdPhase::Defuse => cmd.buttons |= BUTTON_USE,
+            SdPhase::Hold1 => cmd.buttons |= BUTTON_USE,
+            // The sweep can end outside the script's 64-unit defuse test
+            // (the slide after the teleport); the hold closes on the bomb
+            // under the approach's own stop rule, with the aim already on it.
+            SdPhase::Defuse => {
+                cmd.buttons |= BUTTON_USE;
+                if self.advance {
+                    cmd.forward = 127;
+                }
+            }
             // The walk inside the hold is what a link does to pmove: retail
             // pins a planting player to the bombzone entity.
             SdPhase::Hold2 => {
@@ -6347,6 +6360,11 @@ impl SdProbe {
         let ms = now.duration_since(started).as_millis();
         let in_phase = now.duration_since(phase_started);
         let origin = snap.ps.origin(p);
+        let velocity = [
+            snap.ps.field_f32(p, "velocity[0]"),
+            snap.ps.field_f32(p, "velocity[1]"),
+            snap.ps.field_f32(p, "velocity[2]"),
+        ];
         let h = snap.ps.field_f32(p, "viewHeightCurrent");
         let eye = [
             origin[0],
@@ -6472,11 +6490,7 @@ impl SdProbe {
                 eflags: snap.ps.field_i32(p, "eFlags"),
                 ground: snap.ps.field_i32(p, "groundEntityNum"),
                 origin,
-                velocity: [
-                    snap.ps.field_f32(p, "velocity[0]"),
-                    snap.ps.field_f32(p, "velocity[1]"),
-                    snap.ps.field_f32(p, "velocity[2]"),
-                ],
+                velocity,
                 viewangles: snap.ps.viewangles(p),
                 offset: self.offset(),
                 hud: sd_hud_str(&hud),
@@ -6506,7 +6520,8 @@ impl SdProbe {
                 SdRole::Defender
                     if self
                         .bomb
-                        .is_some_and(|b| horiz_dist(origin, b) <= SD_BOMB_RANGE) =>
+                        .is_some_and(|b| horiz_dist(origin, b) <= SD_BOMB_RANGE)
+                        && velocity[0].hypot(velocity[1]) < SD_SETTLED_SPEED =>
                 {
                     self.station_pose = Some((origin, snap.ps.viewangles(p)));
                     self.sweep_index = 0;
@@ -6600,8 +6615,9 @@ fn write_sd_fixture(
         "# it the walk starts a town away and never arrives on mp_carentan. It also puts\n",
     );
     out.push_str(
-        "# the defender at the planter's spot once the charge is down, inside the fuse.\n",
+        "# the defender at the planter's spot once the charge is down, inside the fuse,\n",
     );
+    out.push_str("# and the planter back on its spawn, off the defender's sightline.\n");
     out.push_str(&format!(
         "# Phases: wait {} s past the match-start restart; approach walks at bombzone_A's\n",
         SD_WAIT.as_secs()
