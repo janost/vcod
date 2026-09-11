@@ -67,6 +67,21 @@ pub const PM_SPECTATOR: i32 = 4;
 /// The intermission `pm_type` `ClientEndFrame`'s third arm writes
 /// (map-cycle doc, 6.2); the dm map-change capture's post-end traces read it.
 pub const PM_INTERMISSION: i32 = 5;
+/// A linked live player and a linked dead one, CoDExtended's
+/// `PM_NORMAL_LINKED` and `PM_DEAD_LINKED`. The two values and the
+/// decrement `G_RunClient` applies without a link record are read out of the
+/// module (docs/research/cod11-gsc-object-model.md, 23.2).
+pub const PM_NORMAL_LINKED: i32 = 1;
+pub const PM_DEAD_LINKED: i32 = 7;
+
+/// What `linkTo` left on a client: the parent it follows and the gap it
+/// stood at when it linked. `Server` re-applies the two every tick, which is
+/// `G_RunClient`'s own re-anchor (object-model doc, 23.2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Link {
+    pub parent: vcod_gsc::EntId,
+    pub offset: [f32; 3],
+}
 /// `EV_PAIN` and `EV_DEATH` (`docs/research/cod11-events-and-fx.md`).
 const EV_PAIN: i32 = 187;
 const EV_DEATH: i32 = 189;
@@ -280,6 +295,9 @@ pub struct ClientSim {
     /// Killed and not yet respawned: `PM_DEAD` on the wire, the dead move,
     /// no weapon step, no feedback.
     pub dead: bool,
+    /// `linkTo`'s record, `gentity_t+0x2e4`. Not `linked()`, which is about
+    /// whether the other clients are sent an entity for this one.
+    pub link_to: Option<Link>,
     damage: DamageAccum,
     feedback: DamageFeedback,
     /// `ps.stats[1]`, the yaw toward the killer (combat doc, 5.1, item 11).
@@ -364,6 +382,7 @@ impl ClientSim {
             was_airborne: false,
             strafing: None,
             jumped: false,
+            link_to: None,
             health: 0,
             max_health: 0,
             dead: false,
@@ -429,6 +448,8 @@ impl ClientSim {
     /// is read outside `to_wire` too.
     pub fn wire_pm_type(&self) -> i32 {
         match (self.pm_type, self.dead) {
+            (PmType::Normal, true) if self.link_to.is_some() => PM_DEAD_LINKED,
+            (PmType::Normal, false) if self.link_to.is_some() => PM_NORMAL_LINKED,
             (PmType::Normal, true) => PM_DEAD,
             (PmType::Normal, false) => 0,
             (PmType::Intermission, _) => PM_INTERMISSION,
@@ -446,6 +467,9 @@ impl ClientSim {
         self.aim_state = Default::default();
         self.kick = Default::default();
         self.aim = [self.view_angles[0], self.view_angles[1]];
+        // `ClientSpawn` calls `G_EntUnlink` on the spawning client
+        // (object-model doc, 23.2).
+        self.link_to = None;
         // A respawned player does not resume the anim it died in.
         self.anim = Default::default();
         self.was_airborne = false;
@@ -1084,7 +1108,10 @@ impl ClientSim {
                 self.ps.stance.view_height()
             };
             set("viewHeightTarget", target as i32);
-            let ground = match self.ps.on_ground {
+            // A linked client reads `ENTITYNUM_NONE` on every linked
+            // snapshot of both retail captures, whatever it stands on
+            // (object-model doc, 23.2).
+            let ground = match self.ps.on_ground && self.link_to.is_none() {
                 true => ENTITYNUM_WORLD,
                 false => ENTITYNUM_NONE,
             };

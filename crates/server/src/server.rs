@@ -2710,6 +2710,49 @@ impl Server {
                 };
                 apply_weapon_op(sim, op, &weapons);
             }
+            // `linkTo` and `unlink`, before the re-anchor below so a link
+            // made this frame is already pinned on this frame's wire: both
+            // retail captures read the new `pm_type` on the next snapshot
+            // after the cmd (object-model doc, 23.2).
+            for (slot, op) in rt.take_link_ops() {
+                let Some(sim) = self
+                    .clients
+                    .get_mut(slot)
+                    .and_then(Option::as_mut)
+                    .and_then(|c| c.sim.as_mut())
+                else {
+                    continue;
+                };
+                sim.link_to = match op {
+                    crate::game::host::LinkOp::Link { parent, offset } => {
+                        Some(crate::spectate::Link { parent, offset })
+                    }
+                    crate::game::host::LinkOp::Unlink => None,
+                };
+            }
+            // `G_RunClient`'s re-anchor: a linked client's origin is the
+            // parent's plus the offset it linked at, and a held walk input
+            // moves it not at all -- retail's plant capture reads the origin
+            // fixed and `velocity` zero across 92 forward cmds (23.2). A
+            // parent that is gone releases the link: `sd.gsc`'s plant
+            // success never unlinks, the bombzone's `delete()` is what frees
+            // the record.
+            for (slot, c) in self.clients.iter_mut().enumerate() {
+                let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) else {
+                    continue;
+                };
+                let Some(link) = sim.link_to else { continue };
+                match rt.entity_origin_of(link.parent) {
+                    Some(p) => {
+                        sim.ps.origin = glam::Vec3::from(p) + glam::Vec3::from(link.offset);
+                        sim.ps.velocity = glam::Vec3::ZERO;
+                        // The mirror loop above ran before the re-anchor, so
+                        // script's copy is written again here.
+                        rt.set_client_origin(slot, sim.origin());
+                    }
+                    None => sim.link_to = None,
+                }
+            }
             // What script did to each sim, applied once, then the health
             // mirror and the frame's damage feedback, in that order:
             // `P_DamageFeedback` reads the health the hit left.

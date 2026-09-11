@@ -172,6 +172,17 @@ pub enum SimOp {
     Event { event: i32, parm: i32 },
 }
 
+/// `linkTo` and `unlink` on a client, queued the way `SimOp` is: the link
+/// pins the client's playerstate, which lives on the sim. The offset is the
+/// gap the client already stood at when it linked, which is what retail's
+/// `G_SetFixedLink` mode-2 arm re-applies every frame
+/// (docs/research/cod11-gsc-object-model.md, 23.2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LinkOp {
+    Link { parent: EntId, offset: [f32; 3] },
+    Unlink,
+}
+
 /// `level+0x29f0`'s three readings (docs/research/cod11-map-cycle.md
 /// section 1). The latch is per-level: `G_InitGame` zeroes `level`, so a
 /// restart clears it.
@@ -246,6 +257,9 @@ pub struct GameHost {
     /// What `finishPlayerDamage` did to a client this frame, drained by
     /// `Server` after `run_frame` and applied to the sim once each.
     pub client_sim_ops: Vec<(usize, SimOp)>,
+    /// What `linkTo` and `unlink` did to a client this frame, drained by
+    /// `Server` after `run_frame`. Edges, like `client_sim_ops`.
+    pub client_link_ops: Vec<(usize, LinkOp)>,
     /// The map's weapon table, for the fields the builtins need: the ammo and
     /// clip indexes an op addresses, and the rounds it hands out.
     pub weapons: std::rc::Rc<crate::weapons::WeaponTable>,
@@ -401,6 +415,7 @@ impl GameHost {
             client_grenade_ms: vec![0; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
+            client_link_ops: Vec::new(),
             weapons: std::rc::Rc::new(crate::weapons::WeaponTable::empty()),
             allocators,
             cvars: crate::cvars::Cvars::new(),
@@ -793,6 +808,14 @@ impl Host for GameHost {
                 Ok(())
             }
             Route::Engine { slot, ty } => {
+                // An int-typed field takes a float by truncating it: the
+                // hudelem `x` is type 0 in retail's table (object-model doc,
+                // "HUD element fields") and stock `sd.gsc`'s plant writes
+                // `320 - level.barsize / 2.0` into it.
+                let value = match (ty, value) {
+                    (FieldType::Int, Value::Float(f)) => Value::Int(f as i32),
+                    _ => value,
+                };
                 if !type_accepts(ty, value) {
                     return Err(ErrorKind::BadType("wrong type for an engine field"));
                 }

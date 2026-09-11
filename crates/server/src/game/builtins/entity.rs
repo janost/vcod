@@ -6,7 +6,7 @@
 
 use crate::configstrings::CsRange;
 use crate::game::entity::{ThinkFn, FIRST_HUD_ELEM};
-use crate::game::host::{GameHost, SpawnMode, SpawnRequest};
+use crate::game::host::{GameHost, LinkOp, SpawnMode, SpawnRequest};
 use crate::server::MAX_CLIENTS;
 use glam::Vec3;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
@@ -40,6 +40,8 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("isdefined", is_defined),
     ("istouching", is_touching),
     ("placespawnpoint", place_spawnpoint),
+    ("linkto", link_to),
+    ("unlink", unlink),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -559,6 +561,57 @@ pub fn is_touching(
     ))
 }
 
+/// `self linkTo(parent [, tag, originOffset, anglesOffset])` (0x59cc4). The
+/// offset is the gap the receiver already stands at, which is what retail's
+/// fixed-link arm re-applies off the parent every frame; the sim owns the
+/// playerstate, so this only queues the edge
+/// (docs/research/cod11-gsc-object-model.md, 23.2).
+///
+/// The receiver must be a client: retail gates on its svFlags 0x20 and
+/// `ClientSpawn` is the only writer of that bit a stock MP script reaches,
+/// since neither `sd.gsc` nor `re.gsc` calls `enableLinkTo`.
+pub fn link_to(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = super::client::client_receiver(host, recv)?;
+    let Some(&Value::Entity(parent)) = args.first() else {
+        return Err(ErrorKind::BadType("linkTo needs an entity to link to"));
+    };
+    // The tag and the two offset vectors retail's four-argument form takes
+    // are accepted and ignored: no stock script passes them.
+    let origin = cx.intern_folded("origin");
+    let at = |host: &mut GameHost, cx: &mut Cx, id| match host.get_field(cx, id, origin) {
+        Value::Vector(v) => v,
+        _ => [0.0; 3],
+    };
+    let child = at(host, cx, EntId(slot as u32));
+    let anchor = at(host, cx, parent);
+    let offset = [
+        child[0] - anchor[0],
+        child[1] - anchor[1],
+        child[2] - anchor[2],
+    ];
+    host.client_link_ops
+        .push((slot, LinkOp::Link { parent, offset }));
+    Ok(Value::Undefined)
+}
+
+/// `self unlink()` (0x5d594). A no-op on an unlinked player: retail's
+/// `G_EntUnlink` returns having done nothing without a link record.
+pub fn unlink(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = super::client::client_receiver(host, recv)?;
+    host.client_link_ops.push((slot, LinkOp::Unlink));
+    Ok(Value::Undefined)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1041,6 +1094,63 @@ mod tests {
                 Ok(Value::Int(0)),
                 "116 clears the zone's 100 reach plus the player's own 15"
             );
+        });
+    }
+
+    /// `linkTo` takes the offset the client already stands at and `unlink`
+    /// releases it; both are edges the sim applies, and only a client links
+    /// in stock MP (object-model doc, 23.2).
+    #[test]
+    fn link_to_queues_the_offset_and_unlink_queues_the_release() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let player = host.ents.spawn_client(cx, 0, None).unwrap();
+            let o = cx.intern_folded("origin");
+            host.set_field(cx, player, o, Value::Vector([10.0, 0.0, 0.0]))
+                .unwrap();
+            let zone = host.ents.spawn(cx).unwrap();
+            host.set_field(cx, zone, o, Value::Vector([0.0, 0.0, 0.0]))
+                .unwrap();
+            link_to(
+                &mut host,
+                cx,
+                Some(Target::Entity(player)),
+                &[Value::Entity(zone)],
+            )
+            .unwrap();
+            assert_eq!(
+                host.client_link_ops,
+                vec![(
+                    0,
+                    LinkOp::Link {
+                        parent: zone,
+                        offset: [10.0, 0.0, 0.0]
+                    }
+                )]
+            );
+            unlink(&mut host, cx, Some(Target::Entity(player)), &[]).unwrap();
+            assert_eq!(host.client_link_ops[1], (0, LinkOp::Unlink));
+            assert!(
+                link_to(
+                    &mut host,
+                    cx,
+                    Some(Target::Entity(player)),
+                    &[Value::Undefined]
+                )
+                .is_err(),
+                "linkTo needs an entity to link to"
+            );
+            // Only a client links: retail gates on the receiver's svFlags
+            // 0x20, which `ClientSpawn` is what sets in stock MP (23.2).
+            assert!(link_to(
+                &mut host,
+                cx,
+                Some(Target::Entity(zone)),
+                &[Value::Entity(zone)]
+            )
+            .is_err());
+            // `unlink()` on an unlinked player is a no-op, not an error.
+            assert!(unlink(&mut host, cx, Some(Target::Entity(player)), &[]).is_ok());
         });
     }
 }

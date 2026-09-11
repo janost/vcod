@@ -514,6 +514,28 @@ impl ScriptRuntime {
         std::mem::take(&mut self.host.client_sim_ops)
     }
 
+    /// What `linkTo` and `unlink` did this frame, drained the same way.
+    pub fn take_link_ops(&mut self) -> Vec<(usize, crate::game::host::LinkOp)> {
+        std::mem::take(&mut self.host.client_link_ops)
+    }
+
+    /// Any live entity's `.origin`, `None` once it has been freed. The link
+    /// re-anchor reads the parent through it, and a freed parent is what
+    /// releases a successful planter: `sd.gsc` never unlinks it, the
+    /// bombzone's `delete()` does (object-model doc, 23.2).
+    pub fn entity_origin_of(&mut self, id: EntId) -> Option<[f32; 3]> {
+        use vcod_gsc::Host;
+        self.host.ents.get(id)?;
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let field = cx.intern_folded("origin");
+            match host.get_field(cx, id, field) {
+                Value::Vector(v) => Some(v),
+                _ => None,
+            }
+        })
+    }
+
     /// One client's health as the script left it, read every frame the way
     /// `client_weapons` is.
     pub fn client_vitals(&self, slot: usize) -> crate::game::host::Vitals {
