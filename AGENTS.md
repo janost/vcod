@@ -329,7 +329,8 @@ engineering setup works.
   with a forward cmd sent from 2 s to 3.5 s, which is what says whether a
   linked player still moves. The defender joins axis, waits the plant out on
   the objective slots, walks to the bomb, sweeps its view across it through 15
-  stations with use held, which is the lookat trigger's shape in degrees, and
+  stations without pressing use (a held use lets `bomb_think` finish the
+  defuse mid-sweep), which is the lookat trigger's shape in degrees, and
   then aims true and holds use through the defuse. Each `!trace` carries the
   movement fields, the sweep's offset, block 4 and the unarchived HUD array,
   so the progress bar's tween fields and the plant icon are in the file beside

@@ -5975,7 +5975,10 @@ enum SdPhase {
     Release,
     /// Attacker: use held until the plant lands; forward from 2 s to 3.5 s.
     Hold2,
-    /// Defender: the view sweep with use held, one entry per station.
+    /// Defender: the view sweep, aim only, one entry per station. Use is
+    /// not pressed: sd.gsc's `bomb_think` starts the defuse on the lookat's
+    /// first fire and its progress loop reads only `useButtonPressed`, so a
+    /// held use completed the defuse at station 7 and swept a deleted trigger.
     Sweep,
     /// Defender: aimed true, use held until the defuse lands.
     Defuse,
@@ -6155,7 +6158,7 @@ fn horiz_dist(a: [f32; 3], b: [f32; 3]) -> f32 {
 /// `--probe-plant` / `--probe-defuse`: one half each of the S&D pair. The
 /// attacker walks into `bombzone_A` and holds use through an aborted plant and
 /// a real one; the defender waits the plant out, walks to the bomb, sweeps its
-/// view across it with use held (the `trigger_lookat`'s shape) and then
+/// view across it without pressing use (the `trigger_lookat`'s shape) and then
 /// defuses. Both write their own fixture.
 struct SdProbe {
     role: SdRole,
@@ -6220,6 +6223,20 @@ impl SdProbe {
 
     fn running(&self) -> bool {
         self.phase != SdPhase::Done
+    }
+
+    /// The sweep's (yaw, pitch) stations at which any trace saw the defuse
+    /// icon: the lookat's shape as the wire shows it.
+    fn stations_with_icon(&self) -> Vec<(f32, f32)> {
+        SD_SWEEP
+            .iter()
+            .copied()
+            .filter(|&st| {
+                self.trace
+                    .iter()
+                    .any(|t| t.phase == SdPhase::Sweep && t.icon && t.offset == st)
+            })
+            .collect()
     }
 
     /// Reads `bombzone_A`'s submodel bounds and the map's collision, the same
@@ -6327,7 +6344,6 @@ impl SdProbe {
                 let (yaw, pitch) = self.offset();
                 cmd.angles[1] = (cmd.angles[1] + deg_to_short(yaw)) & 0xffff;
                 cmd.angles[0] = (cmd.angles[0] + deg_to_short(pitch)) & 0xffff;
-                cmd.buttons |= BUTTON_USE;
             }
         }
         cmd
@@ -6541,6 +6557,10 @@ impl SdProbe {
                     self.station_at = Some(now);
                 }
                 if self.sweep_index >= SD_SWEEP.len() {
+                    println!(
+                        "SD: sweep stations with icon: {:?}",
+                        self.stations_with_icon()
+                    );
                     SdPhase::Defuse
                 } else {
                     SdPhase::Sweep
@@ -6637,7 +6657,7 @@ fn write_sd_fixture(
         SD_SWEEP.len(),
         SD_STATION.as_millis()
     ));
-    out.push_str("# use held, then aims true and holds use through the defuse.\n");
+    out.push_str("# use not pressed, then aims true and holds use through the defuse.\n");
     out.push_str(&format!(
         "# station origin={} viewangles={}\n",
         sd.station_pose.map_or("?".to_string(), |(o, _)| vec_str(o)),
