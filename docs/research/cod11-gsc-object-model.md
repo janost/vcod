@@ -1693,6 +1693,286 @@ unmeasured — no capture of a retail `trigger_lookat` firing has been taken,
 and mp_pavlov's is deleted under `dm` before the committed A/B capture could
 reach it.
 
+## 23. The aim trace, linking, objectives and the HUD tweens
+
+What stage 3 of the gsc gameplay program needs out of the module: the trace
+that fires a `trigger_lookat`, the link that pins a planting player to a bomb,
+the objective table behind the compass icons, and the three hudelem tweens.
+Same conventions as everywhere above: `game.mp.i386.so`, addresses
+module-relative.
+
+### 23.1 The aim trace and `isLookingAt`
+
+VERIFIED: `G_RunFrame` (0x50478) calls `Scr_RunCurrentThreads` at 0x50653 and
+calls `ClientEndFrame` per in-use client at 0x50abd. INFERRED, off that
+ordering: the script frame runs before the aim trace, so an `isLookingAt` read
+in script frame N answers off the trace `ClientEndFrame` ran at the end of
+frame N-1.
+
+VERIFIED: `ClientEndFrame` (0x40e98) returns at once unless `client+0x20ec`
+reads 2 (0x40ebe), takes the intermission arm when sessionstate
+(`client+0x20d0`) reads 3 (0x40ed1) and `SpectatorClientEndFrame` when it
+reads 2 (0x40f27, call at 0x40f30), and only the fall-through reaches
+`G_CheckForPreventFriendlyFire` (0x4110d) and `G_CheckForCursorHints`
+(0x41119).
+
+VERIFIED, instruction by instruction, of `G_CheckForPreventFriendlyFire`
+(0x4f88c): it stores 0 to `client+0x2260` (0x4f8a1); returns when the byte
+`ent+0x172` is non-zero (0x4f8ab); calls `CalcMuzzlePoints(ent, &out)`
+(0x4f8c0), which reads the aim angles at `client+0x220c` and `+0x2210`
+(0x69424, 0x6942d) and the view height at `client+0xc8` (0x6941b); builds the
+end point as muzzle plus forward times 8192.0 (`.rodata` 0x7547c, arithmetic
+0x4f8fe..0x4f931); calls `trap_LocationalTrace` with contents mask 0x20000001
+(0x4f949) and again with 0x22802001 (0x4f96e), each followed by a return when
+the hit entity number is above 0x3fd (0x4f951, 0x4f976); compares the hit
+entity's classname word (`g_entities[n]+0x176`, stride 0x314) against
+`scr_const+0x98` (0x4f995); and on a match stores the entity pointer to
+`client+0x2260` (0x4f9aa) and calls `G_Trigger(trigger, ent)` (0x4f9b2).
+
+VERIFIED: the sixth argument to both traces is a priority-map pointer, not 0.
+It is `riflePriorityMap` when the held weapon at `client+0xb0` is non-zero and
+`BG_GetInfoForWeapon`'s record reads a non-zero `+0x2c0`, `bulletPriorityMap`
+otherwise; the two `R_386_32` relocations sit at 0x4f8ea and 0x4f8fa, inside
+the immediates of the stores at 0x4f8e7 and 0x4f8f7.
+
+VERIFIED: `scr_const+0x98` is `Scr_AllocString("trigger_lookat")`, the string
+at 0x7620c, filled by `GScr_LoadConsts` (0x58550).
+
+INFERRED, off the two masks alone: the first trace decides whether anything
+solid or a lookat volume is reached before the world, the second whether a
+body stands in front.
+
+VERIFIED, of `G_Trigger` (0x656f0): it returns having done nothing when
+`Scr_IsSystemActive(1)` answers 0 (0x6570d); when the counter at `level+0x29ec`
+reads exactly 0x100 it calls `Scr_AddEntity(toucher)` and
+`Scr_Notify(trigger, scr_const+0x92, 1)` (0x6571f, 0x65732); otherwise it
+appends a 12-byte record at `level+0x1dec + n*12` holding the two entity
+numbers and the two `+0x300` script handles, and increments the counter
+(0x65740..0x65772). So the immediate notify is the overflow path and the queue
+is the normal one. VERIFIED: `scr_const+0x92` is `"trigger"` (0x761e9).
+
+VERIFIED: `G_RunFrame` drains that queue at 0x50578..0x5064d, raising the same
+`"trigger"` notify per record whose two `+0x300` handles still match the
+entities they name (0x505f6), re-entering `Scr_RunCurrentThreads` (0x50653)
+until a pass adds no record, then zeroing the counter (0x50665).
+
+INFERRED, off neither path carrying a time or count gate: a `trigger_lookat`
+notifies once every server frame the aimer keeps looking at it.
+
+VERIFIED, of `isLookingAt` (0x4576c): it range-checks the receiver entity
+number against 0x3ff and errors when that entity carries no client pointer
+(0x45776, 0x4578a), takes its argument through `Scr_GetEntity(0)` (0x457d4)
+and answers `client+0x2260 == arg` through `Scr_AddInt` (0x457e4). It runs no
+trace of its own and computes no cone: it reads the last
+`G_CheckForPreventFriendlyFire` result back.
+
+### 23.2 `linkTo`, `unlink`, `enableLinkTo`
+
+VERIFIED, of `linkTo` (0x59cc4): it resolves the receiver to `g_entities[n]`
+(0x59cd7), type-checks argument 0 as an entity (0x59d0b, 0x59d1d), and errors
+`"entity (classname: '%s') does not currently support linkTo"` (0x76b80) when
+the **receiver**'s byte `ent+0x17d` has bit 0x20 clear (0x59d37). With no
+further argument the tag is the empty string at 0x76629 (0x59d97); with two
+arguments it calls `G_EntLinkTo(child, parent, tag)` (0x59daf), with four it
+takes two vectors and calls `G_EntLinkToWithOffset` (0x59ded).
+
+VERIFIED: the module writes `ent+0x17d` bit 0x20 at five places and no more, a
+byte scan of every `0x17c`/`0x17d` store: `G_SpawnItem` (0x4e7b9),
+`G_SpawnTurret` (0x52f65), `InitScriptMover` (0x6038d), `enableLinkTo`
+(0x5d6a0), and `ClientSpawn`, which writes the dword `ent+0x17c = 0x2000` at
+0x4276b, whose high byte is that same 0x20. That last one is why `sd.gsc`'s
+`other linkTo(self)` works on a player with no script calling `enableLinkTo`
+first. VERIFIED: `maps/MP/gametypes/sd.gsc` in `pak5.pk3` calls `linkTo` at
+its two plant sites and `enableLinkTo` nowhere, and `re.gsc` is the only other
+stock MP script that uses either builtin.
+
+VERIFIED, of `enableLinkTo` (0x5d5d0): it errors
+`"entity already has linkTo enabled"` (0x76ce0) when the bit is already set
+(0x5d602); errors
+`"entity (classname: '%s') does not currently support enableLinkTo"` (0x76d20)
+unless `ent+0x4` and the byte `ent+0x161` both read 0 (0x5d61b, 0x5d621), and,
+when either `ent+0x1fc` or `ent+0x200` is non-zero, unless the classname is
+`trigger_multiple` (0x7647e, `strcasecmp` at 0x5d658); then writes
+`ent+0x1fc = level.time` and `ent+0x200 = Think_GeneralLink` and sets the bit
+(0x5d68b..0x5d6a0).
+
+VERIFIED, of `G_RunClient` (0x40660): once `client+0x21d8` reads 0 (0x406a3)
+and `ent+0x2e4`, the link record, is non-null (0x406b0), it writes `ps.pm_type`
+(`client+0x4`) 1, or 7 when sessionstate `client+0x20d0` reads 1
+(0x406c2..0x406d0); calls `G_SetFixedLink(ent, 2)` (0x406d9),
+`G_SetOrigin(ent, ent+0x134)` (0x406e9) and `G_SetAngle(ent, ent+0x140)`
+(0x406fc); writes 1 to `ent+0xc` and `ent+0x30`; calls `trap_LinkEntity`
+(0x40713); and copies `ent+0x134..0x13c` into `ps.origin` at
+`client+0x14..0x1c` (0x40718..0x40742). VERIFIED: with no record, a `pm_type`
+of 1 or 7 is decremented back to 0 or 6 (0x40747..0x40755).
+
+VERIFIED: `G_SetFixedLink` (0x66540) on its mode-2 arm (0x666d0) runs
+`MatrixTransformVector` over the offset at `record+0x34` with the parent's axis
+and writes the result into `ent+0x134..0x13c`. That arm writes no angles; the
+mode-0 arm (0x66630) writes both.
+
+CoDExtended's `shared.h:698` names 1 `PM_NORMAL_LINKED` and 7
+`PM_DEAD_LINKED`. The names are the community's and UNVERIFIED; the two values
+and the decrement above are read out of the module.
+
+VERIFIED: the module compares `ps.pm_type` against 1 at exactly seven sites, a
+byte scan of both encodings over `.text`: `PM_UpdateLean` (0x32c63),
+`PM_AdjustAimSpreadScale` (0x38622 and 0x38736), `G_TouchTriggers` (0x3f8a9),
+`ClientEvents` (0x3fec9), `ClientEndFrame` (0x4124d) and
+`G_GetNonPVSFriendlyInfo` (0x42cad). None of them is in `PmoveSingle`.
+
+VERIFIED, of `unlink` (0x5d594): it calls `G_EntUnlink` (0x680d4), which, when
+a record exists, calls `G_SetOrigin` and `G_SetAngle` with the entity's own
+origin and angles (0x680f9, 0x68109), unhooks the entity from the parent's
+child list at `parent+0x2e8` through `record+0x4` (0x68118..0x6814c), clears
+`ent+0x2e4`, releases the tag string and frees the 0x70-byte record
+(0x68156..0x68167). VERIFIED: `ClientSpawn` calls `G_EntUnlink` on the
+spawning client (0x426f1), and those two are the only callers of the unlink
+half while `linkTo` is the only caller of either link half (`objdump -R`).
+
+Unmeasured: what velocity a linked client keeps, and what the mover does with
+`pm_type` 1. Nothing in `PmoveSingle` compares the field against 1, per the
+exhaustive site list above, so the disassembly does not hold the answer. The
+plant capture is what settles it, and Task 4 fills this paragraph in.
+
+### 23.3 The objective table and its builtins
+
+VERIFIED: `level+0x20` holds 16 records of 28 bytes, laid out `+0` state,
+`+4..+0xc` origin, `+0x10` entNum, `+0x14` teamNum, `+0x18` icon. The offsets
+come off `objective_delete`'s seven stores (0x5e0d6..0x5e112) and off the
+7-dword copy in `G_UpdateObjectiveToClients` (0x511f4). The same record's wire
+form is `docs/protocol-1.1.md`, block 4; state travels as three raw bits,
+which holds every value below.
+
+VERIFIED: `ObjectiveStateIndexFromString` (0x5e008) maps `scr_const+0x24`
+(`"empty"`, 0x75fbd) to 0, `+0x42` (`"invisible"`, 0x76050) to 2 and `+0x14`
+(`"current"`, 0x75f8f) to 4, and fails with the value 0 on anything else
+(0x5e011..0x5e046). Those three are also the three names the error string at
+0x770e0 lists.
+
+VERIFIED: `objective_current` (0x5a6ac) is the only writer of the fourth
+value, 1, and `scr_const+0x0`, which `GScr_LoadConsts` fills from `"active"`
+(0x75f2f), is referenced exactly once in the whole module, by that store
+itself. That is off a scan of all 295 `scr_const` relocations for addend 0.
+INFERRED: 1 is therefore the "active" state, named in the module and
+unreachable from script by name.
+
+VERIFIED, of `objective_add` (0x5a2d0): it needs at least two parameters
+(`Scr_Error` 0x77000 at 0x5a2ed); range-checks the index against 0..15
+(0x5a304); detaches whatever entity the slot held, clearing `eFlags`
+(`ent+0xf4`) bit 0x10 and writing `entNum = 0x3ff` (0x5a356, 0x5a35d); inlines
+the same three-name state map (0x5a374..0x5a396) and stores the answer at `+0`
+(0x5a3c9); with a third parameter takes `Scr_GetVector(2)` and writes each
+component rounded to the nearest integer into `+4`, `+8` and `+0xc` (0x5a407,
+0x5a42f, 0x5a461); writes `entNum = 0x3ff` (0x5a45a); with a fourth parameter
+runs the icon name through `G_ShaderIndex` into `+0x18` (0x5a4da); and writes
+`teamNum` 0 last, on every path (0x5a4e2). VERIFIED: an icon name carrying a
+character the scan rejects, or longer than 63, is a param error (0x76f80 at
+0x5a49c, 0x76fc0 at 0x5a4b3).
+
+VERIFIED: `G_ShaderIndex` (0x65ee8) scans configstrings from index 1 up to
+0x7f at `0x5dc + i` (0x65f2d), so an objective icon is configstring
+`1500 + n`, the same range and the same indexer base as the `shaderIndex`
+hudelem field (`docs/protocol-1.1.md`, block 5).
+
+VERIFIED: `objective_delete` (0x5e058) range-checks the index, detaches the
+attached entity the same way (0x5e0c0, 0x5e0c7), and writes state, origin,
+teamNum and icon 0 with `entNum = 0x3ff` (0x5e0d6..0x5e112).
+
+VERIFIED: `objective_state` (0x5a4f4) writes the mapped state at `+0` (0x5a59b)
+and, when that new state is 0 or 2, detaches the attached entity (0x5a5bf,
+0x5a5c6). VERIFIED: `objective_icon` (0x5a5d8) writes `G_ShaderIndex`'s answer
+at `+0x18` (0x5a69f). VERIFIED: `objective_position` (0x5e128) writes the three
+components, rounded the same way, at `+4`, `+8` and `+0xc` (0x5e1d4, 0x5e1fc,
+0x5e224).
+
+VERIFIED: `objective_onentity` (0x5e230) detaches the slot's previous entity
+(0x5e298, 0x5e29f), sets the new entity's `eFlags` bit 0x10 (0x5e2b3) and
+writes its entity number at `+0x10` (0x5e2bc).
+
+VERIFIED: `objective_team` (0x5e2c8) maps `scr_const+0x4` (`"allies"`) to 2,
+`+0x8` (`"axis"`) to 1 and `+0xf8` (`"none"`, 0x764c8) to 0, into `+0x14`
+(0x5e327, 0x5e33c, 0x5e351), and param-errors on anything else (0x77140 at
+0x5e378).
+
+VERIFIED: `objective_current` (0x5a6ac) is variadic. It reads
+`Scr_GetNumParam` indices, range-checks each, marks them in a 16-entry local
+map (0x5a703), then walks all 16 records writing 4 into every marked one and 1
+into every unmarked one that already read 4 (0x5a726, 0x5a735).
+
+VERIFIED: the per-client filter lives twice in the module. The exported
+`G_UpdateObjectiveToClients` (0x51160) walks every in-use client and all 16
+records, writing 0 at `client+0x3e8 + i*28` when the record's state is 0 or
+when its `teamNum` is non-zero and differs from the client's
+`clientState.team` at `client+0x217c`, and copying all 7 dwords otherwise
+(0x511c0..0x511f4). VERIFIED: nothing calls it, neither through a relocation
+nor through a resolved direct call. `G_RunFrame` carries the identical loop
+inlined at 0x50977..0x50a51, ahead of its `HudElem_UpdateClient` and
+`ClientEndFrame` passes, and that inlined copy is the live one.
+
+### 23.4 The three tweens
+
+VERIFIED: each of the three addresses its hudelem record as
+`g_hudelems + i*124` (`shl 5`, `sub`, then scale 4, e.g. 0x4c7f6..0x4c7fc),
+and each refuses a time of 0 or less and a time above 60.0 seconds with a
+param error. The six message strings are at 0x7495e, 0x74971, 0x748f0,
+0x74902, 0x74990 and 0x749a2; the three caps at 0x74984, 0x74ad0 and 0x74adc
+all read 60.0.
+
+VERIFIED: each converts its argument to milliseconds as `time * 1000.0 + 0.5`
+truncated toward zero under the usual x87 control-word swap. The multipliers
+at 0x74988, 0x74ad4 and 0x74ae0 all read 1000.0 and the addends at 0x7498c,
+0x74ad8 and 0x74ae4 all read 0.5, so the conversion rounds to the nearest
+millisecond rather than truncating.
+
+VERIFIED: `scaleOverTime(time, width, height)` (0x4bd34) demands exactly three
+parameters (0x74920 at 0x4bd5e), writes `+0x44` (scaleStartTime) `= level.time`
+(0x4bdea) and `+0x48` (scaleTime) the milliseconds (0x4be1b), copies `+0x30`
+into `+0x3c` (fromWidth) and `+0x34` into `+0x40` (fromHeight) (0x4be1e,
+0x4be24), then writes the new width and height at `+0x30` and `+0x34`
+(0x4be2a, 0x4be2d).
+
+VERIFIED: `fadeOverTime(time)` (0x4c720) writes `+0x24` (fadeStartTime)
+`= level.time` (0x4c7ad) and `+0x28` (fadeTime) the milliseconds (0x4c7db), and
+copies `+0x1c` into `+0x20` (fromColor) (0x4c7de, 0x4c7e1). It takes no target:
+the script writes the colour afterwards.
+
+VERIFIED: `moveOverTime(time)` (0x4c7ec) writes `+0x54` (moveStartTime)
+`= level.time` (0x4c879) and `+0x58` (moveTime) the milliseconds (0x4c8a7), and
+copies `+0x4` into `+0x4c` (fromX) and `+0x8` into `+0x50` (fromY) (0x4c8aa,
+0x4c8b3). Same shape: the script writes the new `x` and `y` afterwards.
+
+INFERRED, off each of the three reading the live field rather than any
+interpolated value: the `from` a restarted tween records is the server-side
+target of the tween it interrupts, not what the client had animated to, so a
+tween restarted mid-flight makes the client jump.
+
+VERIFIED, off `docs/protocol-1.1.md`'s block 5 table, whose entry numbers run
+from 6: the twelve fields above occupy wire indices 14 (`fromColor`), 15
+(`fadeStartTime`), 16 (`fadeTime`), 17 (`scaleStartTime`), 18 (`scaleTime`),
+19 (`fromHeight`), 22 (`fromWidth`), 23 (`moveStartTime`), 24 (`moveTime`), 25
+(`fromX`), 26 (`fromY`) and 27 (`duration`). Every record offset read above
+matches that table's offset column.
+
+### 23.5 `useButtonPressed`, `isOnGround`, `isAlive`
+
+VERIFIED: `PlayerCmd_useButtonPressed` (0x44e70) answers
+`client+0x21e8 & 0x40` (0x44ed2). VERIFIED: `ClientThink_real` writes
+`client+0x21e8` from the cmd's `buttons` byte at `client+0x20f4` on every cmd,
+on the intermission path (0x3fff1) and on the live path (0x40129), after
+copying the old value to `+0x21ec` (0x3ffde). So the builtin reads the last
+cmd's bits, never an OR over the server frame.
+
+VERIFIED: `PlayerCmd_isOnGround` (0x45014) answers `ps.groundEntityNum`
+(`client+0x54`) `!= 0x3ff` (0x45076).
+
+VERIFIED: `isAlive` (0x5cf8c) answers 0 for an argument whose `Scr_GetType` is
+not 7 or whose `Scr_GetPointerType` is not 0xd (0x5cf9f, 0x5cfb1, store at
+0x5cfbb), and otherwise answers `health` (`ent+0x230`) `> 0` (0x5cfcf). It
+reads no sessionstate and no client pointer. INFERRED, off that: a spectating
+client whose health is still above 0 answers true, and so does any non-client
+entity carrying health.
+
 ## Open, and worth a probe
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.

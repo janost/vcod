@@ -635,6 +635,24 @@ Those six entries carry their own names and offsets in `.data`, which `python3 t
 
 VERIFIED. Note the wire order is the table's, not the struct's: `icon` precedes `entNum` and `teamNum`.
 
+The values the game module puts in those fields, and the filter it applies per
+client, are read out of `game.mp.i386.so` in
+`docs/research/cod11-gsc-object-model.md` 23.3, which carries the address for
+each. `state` takes 0 for `"empty"`, 2 for `"invisible"` and 4 for
+`"current"`, the three names the state parser accepts. VERIFIED. It also takes
+1, which no name maps to and only `objective_current` writes, demoting every
+slot that read 4; reading that 1 as "active" is INFERRED. VERIFIED: `entNum`
+is `0x3ff` on both `objective_add` and `objective_delete`, so an objective is
+on the wire with no entity attached until `objective_onentity` names one.
+VERIFIED: `teamNum` is 0 for `"none"`, 1 for `"axis"` and 2 for `"allies"`,
+and `objective_add` resets it to 0 on every call. VERIFIED: `icon` is
+`G_ShaderIndex`'s answer, so it indexes configstring `1500 + n`, the same
+range the `shaderIndex` hudelem field uses. VERIFIED: the copy into a client's
+block writes state 0 instead of the record whenever the record's state is 0,
+or whenever its `teamNum` is non-zero and differs from that client's
+`clientState.team`, so an objective belonging to the other team reaches a
+client as an empty slot rather than not at all.
+
 **Block 5, two 31-entry `hudelem_t` arrays, stride 112.** One gate bit for the whole block; then the array at `ps+0x1338` and then the one at `ps+0x5A8`, each with the element cap 31 passed in (`0x807ee76`, `0x807ee90`). VERIFIED. CoDExtended calls `ps+0x5A8` `hud.current[31]` and `ps+0x1338` `hud.archival[31]`; those names are the community's and UNVERIFIED, only the offsets and the wire order are read out of the binary.
 
 One array (`0x807cf5c`) is a 5-bit count `n`, then for element `i` in `0..n` a 5-bit last-changed field index `j` and `j+1` delta fields off table entries `6+k` for `k` in `0..=j`. VERIFIED. Fields `j+1..28` are copied from the base (`0x807d073`), which is what fixes the per-element field count at 28 and the table's total at 34. VERIFIED. There is no element index on the wire: element `i` is the `i`-th of the array (`i*112`, `0x807d03e`). VERIFIED.
