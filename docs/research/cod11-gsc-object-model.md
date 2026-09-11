@@ -1719,7 +1719,9 @@ reads 2 (0x40f27, call at 0x40f30), and only the fall-through reaches
 `G_CheckForPreventFriendlyFire` (0x4f88c), claim by claim:
 
 - VERIFIED: it stores 0 to `client+0x2260` (0x4f8a1).
-- VERIFIED: it returns when the byte `ent+0x172` is non-zero (0x4f8ab).
+- VERIFIED: it compares the byte `ent+0x172` against 0 (0x4f8ab) and the
+  `jne` at 0x4f8b2 targets the epilogue at 0x4f9b7. INFERRED, off that branch:
+  a non-zero `ent+0x172` makes the function return having done nothing.
 - VERIFIED: it calls `CalcMuzzlePoints(ent, &out)` (0x4f8c0).
 - VERIFIED: `CalcMuzzlePoints` (0x693f4) reads the aim angles at
   `client+0x220c` and `+0x2210` (0x69424, 0x6942d) and the view height at
@@ -1728,19 +1730,28 @@ reads 2 (0x40f27, call at 0x40f30), and only the fall-through reaches
   0x7547c, arithmetic 0x4f8fe..0x4f931).
 - VERIFIED: it calls `trap_LocationalTrace` with contents mask 0x20000001
   (0x4f949) and again with 0x22802001 (0x4f96e).
-- VERIFIED: each trace is followed by a return when the hit entity number is
-  above 0x3fd (0x4f951, 0x4f976).
+- VERIFIED: after each trace it compares the result's entity-number word
+  against 0x3fd (0x4f951, 0x4f976), and both `ja`s (0x4f957, 0x4f97c) target
+  the epilogue at 0x4f9b7. INFERRED, off those two branches: a hit entity
+  number above 0x3fd, which is the world or no hit, ends the function.
 - VERIFIED: it compares the hit entity's classname word
-  (`g_entities[n]+0x176`, stride 0x314) against `scr_const+0x98` (0x4f995).
-- VERIFIED: on a match it stores the entity pointer to `client+0x2260`
-  (0x4f9aa) and calls `G_Trigger(trigger, ent)` (0x4f9b2).
+  (`g_entities[n]+0x176`, stride 0x314) against `scr_const+0x98` (0x4f995),
+  and the `jne` at 0x4f99c targets the same epilogue.
+- VERIFIED: it stores the entity pointer to `client+0x2260` (0x4f9aa) and
+  calls `G_Trigger(trigger, ent)` (0x4f9b2). INFERRED, off the `jne` above:
+  those two run only when the classname matches.
 
 VERIFIED: the sixth argument to both traces is a priority-map pointer, not 0.
 The two `R_386_32` relocations sit at 0x4f8ea and 0x4f8fa, inside the
-immediates of the stores at 0x4f8e7 and 0x4f8f7. VERIFIED: it is
-`riflePriorityMap` when the held weapon at `client+0xb0` is non-zero (the test
-at 0x4f8d7) and `BG_GetInfoForWeapon`'s record reads a non-zero `+0x2c0` (the
-compare at 0x4f8ee), `bulletPriorityMap` otherwise.
+immediates of the stores at 0x4f8e7 and 0x4f8f7: the store at 0x4f8e7 writes
+`riflePriorityMap` and the one at 0x4f8f7 writes `bulletPriorityMap`, both to
+the same slot the traces push. VERIFIED: the function tests the held weapon at
+`client+0xb0` (0x4f8d7) and compares `BG_GetInfoForWeapon`'s record `+0x2c0`
+against 0 (0x4f8ee).
+
+INFERRED, off those two branches: the argument is `riflePriorityMap` when the
+weapon is non-zero and its record's `+0x2c0` is non-zero, `bulletPriorityMap`
+otherwise.
 
 VERIFIED: `scr_const+0x98` is `Scr_AllocString("trigger_lookat")`, the string
 at 0x7620c, filled by `GScr_LoadConsts` (0x58550).
