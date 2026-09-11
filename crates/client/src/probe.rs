@@ -6007,7 +6007,12 @@ const SD_WALK_FROM: Duration = Duration::from_secs(2);
 const SD_WALK_TO: Duration = Duration::from_millis(3500);
 const SD_DEFUSE_HOLD: Duration = Duration::from_secs(13);
 const SD_STATION: Duration = Duration::from_millis(1500);
-const SD_BOMB_RANGE: f32 = 40.0;
+/// Where the defender's walk stops and the sweep starts. sd.gsc's defuse
+/// takes `distance(other.origin, self.origin) < 64`; 40 refused the spot the
+/// gsc teleport lands on (47 units out) and the walk left for the clutter.
+const SD_BOMB_RANGE: f32 = 60.0;
+/// An origin jump past this between snapshots is the gsc teleport.
+const SD_TELEPORT_JUMP: f32 = 200.0;
 const SD_WATCH: Duration = Duration::from_secs(20);
 /// How far short of the bombzone the defender waits for the plant: inside the
 /// zone it would be standing on the attacker, and its own use press would
@@ -6158,6 +6163,8 @@ struct SdProbe {
     zone: Option<TriggerBox>,
     world: Option<Box<vcod_common::collision::CollisionWorld>>,
     steer: Steer,
+    /// The last snapshot's origin, so a teleport reads as a jump.
+    last_origin: Option<[f32; 3]>,
     target: Option<[f32; 3]>,
     bomb: Option<[f32; 3]>,
     aim: Option<(i32, i32)>,
@@ -6190,6 +6197,7 @@ impl SdProbe {
             zone: None,
             world: None,
             steer: Steer::default(),
+            last_origin: None,
             target: None,
             bomb: None,
             aim: None,
@@ -6387,6 +6395,20 @@ impl SdProbe {
             self.bomb = Some(slot0);
             self.target = Some(slot0);
         }
+
+        // The gsc teleport lands mid-walk: a heading chosen and held before
+        // it walks the defender straight off the charge, so the steer is
+        // dropped here, before this frame's heading, stop test and transition
+        // all read the new origin.
+        if self.phase == SdPhase::Approach
+            && self
+                .last_origin
+                .is_some_and(|o| dist(origin, o) > SD_TELEPORT_JUMP)
+        {
+            println!("SD: origin jumped at +{ms}ms, dropping the steer");
+            self.steer = Steer::default();
+        }
+        self.last_origin = Some(origin);
 
         // The attacker looks level at the zone and the defender at the bomb;
         // a trigger brush's centre is the midpoint of a brush that spans the
