@@ -999,6 +999,15 @@ impl ScriptRuntime {
         crate::game::wire::hud_elems(&self.host, slot, team)
     }
 
+    /// The objective table one client is sent, filtered on its
+    /// `clientState.team` ([`crate::game::host::GameHost::objectives_for`]).
+    pub fn objectives_for(
+        &self,
+        team: i32,
+    ) -> [vcod_common::net::msg::Objective; vcod_common::net::msg::MAX_OBJECTIVES] {
+        self.host.objectives_for(team)
+    }
+
     pub fn configstrings(&self) -> &[String] {
         &self.host.configstrings
     }

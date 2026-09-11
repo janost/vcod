@@ -10,7 +10,12 @@ use crate::game::builtins;
 use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
 use crate::game::fields::{self, FieldType, Route};
 use crate::server::MAX_CLIENTS;
+use vcod_common::net::msg::{Objective, MAX_OBJECTIVES};
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
+
+/// `ENTITYNUM_NONE`, the entity number an unattached objective record and an
+/// unowned HUD element both carry.
+pub const ENTITYNUM_NONE: i32 = 0x3ff;
 
 /// The builtins `GameHost::builtin` answers from its own match, folded: the
 /// env and io names, which have no family module of their own. Every other
@@ -41,6 +46,7 @@ pub fn is_builtin(name: &str) -> bool {
         || builtins::cvar::lookup(name).is_some()
         || builtins::precache::lookup(name).is_some()
         || builtins::score::lookup(name).is_some()
+        || builtins::objective::lookup(name).is_some()
         || BUILTINS.contains(&name)
 }
 
@@ -325,6 +331,12 @@ pub struct GameHost {
     /// the `score` client field's own setter stands in for the first, since
     /// no other write moves a rank.
     pub ranks_dirty: bool,
+    /// `level+0x20`, the 16 objective records
+    /// (docs/research/cod11-gsc-object-model.md 23.3). A slot no
+    /// `objective_onentity` has attached reads `entNum` 0x3ff, which is what
+    /// `objective_add` and `objective_delete` write, so a fresh table starts
+    /// there rather than at the zeroed field's 0.
+    pub objectives: [Objective; MAX_OBJECTIVES],
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -387,7 +399,25 @@ impl GameHost {
             save_persist: false,
             team_scores: [0, 0],
             ranks_dirty: false,
+            objectives: [Objective {
+                ent_num: ENTITYNUM_NONE,
+                ..Objective::default()
+            }; MAX_OBJECTIVES],
         }
+    }
+
+    /// The table as one client is sent it: the filter inlined in `G_RunFrame`
+    /// blanks the state of a record whose team is set and is not the
+    /// client's, leaving the other six fields on the wire
+    /// (docs/research/cod11-gsc-object-model.md 23.3).
+    pub fn objectives_for(&self, team: i32) -> [Objective; MAX_OBJECTIVES] {
+        let mut out = self.objectives;
+        for o in &mut out {
+            if o.team_num != 0 && o.team_num != team {
+                o.state = 0;
+            }
+        }
+        out
     }
 
     /// `ExitLevel`'s first pass (map-cycle doc, section 2): every connected
@@ -600,6 +630,9 @@ impl Host for GameHost {
             return f(self, cx, recv, args);
         }
         if let Some(f) = builtins::score::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
+        if let Some(f) = builtins::objective::lookup(&folded) {
             return f(self, cx, recv, args);
         }
         match folded.as_str() {

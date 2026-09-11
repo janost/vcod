@@ -21,12 +21,12 @@ const TYPE_TEXT: i32 = 1;
 /// (`docs/research/clientstate-wire-format.md`, "Configstring map").
 const LOCALIZED_BASE: usize = 1244;
 
-fn cfg() -> vcod_server::ServerConfig {
+fn cfg(gametype: &str) -> vcod_server::ServerConfig {
     vcod_server::ServerConfig {
         map: MAP.into(),
         hostname: "vcod test".into(),
         max_clients: 8,
-        gametype: "dm".into(),
+        gametype: gametype.into(),
         test_entities: 0,
         trace: false,
         bots: 0,
@@ -35,10 +35,14 @@ fn cfg() -> vcod_server::ServerConfig {
 }
 
 fn server(now: Instant) -> Option<vcod_server::Server> {
+    server_with("dm", now)
+}
+
+fn server_with(gametype: &str, now: Instant) -> Option<vcod_server::Server> {
     let fs = vcod_common::testing::game_fs()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
-    let mut sv = vcod_server::Server::new(cfg(), now);
+    let mut sv = vcod_server::Server::new(cfg(gametype), now);
     sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
     sv.load_scripts(Rc::new(fs)).expect("load the scripts");
     Some(sv)
@@ -248,4 +252,44 @@ fn only_the_killed_client_is_sent_the_respawn_text() {
         sb.ps.arrays.hud_current.is_empty(),
         "the respawn text outlived the respawn"
     );
+}
+
+/// `_gameobjects::main` turns mp_carentan's two bombzones into objectives:
+/// `objective_add(0, "current", ...)` and `objective_add(1, ...)`, neither
+/// scoped to a team, so both reach a client of either side with its icon
+/// index and its origin (docs/research/cod11-gsc-object-model.md 23.3).
+#[test]
+fn two_sd_clients_are_sent_both_bombzone_objectives() {
+    let mut now = Instant::now();
+    let Some(mut sv) = server_with("sd", now) else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("axis", "kar98k_mp"),
+    );
+    // Past the match-start restart, which is where `_gameobjects` runs again.
+    for _ in 0..200 {
+        now += Duration::from_millis(50);
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&NULL_USERCMD);
+        common::step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+    for (who, cl) in [("the allied client", &ca), ("the axis client", &cb)] {
+        let s = cl.snapshots().newest().expect("a snapshot");
+        let o = s.ps.arrays.objectives;
+        assert_eq!(o[0].state, 4, "{who} is sent no bombzone A objective");
+        assert_eq!(o[1].state, 4, "{who} is sent no bombzone B objective");
+        assert_ne!(o[0].icon, 0, "{who}'s bombzone A carries no icon");
+        assert_eq!(o[0].team_num, 0, "the gametype scopes no objective");
+        assert_eq!(o[0].ent_num, 0x3ff);
+    }
 }

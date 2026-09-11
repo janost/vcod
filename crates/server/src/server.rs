@@ -3165,6 +3165,7 @@ impl Server {
                 let (archived, current) = rt.hud_elems(slot, team);
                 ps.arrays.hud_archived = archived;
                 ps.arrays.hud_current = current;
+                ps.arrays.objectives = rt.objectives_for(team);
             }
             let frame = snapshot::Snapshot {
                 server_time: self.sv_time_ms,
