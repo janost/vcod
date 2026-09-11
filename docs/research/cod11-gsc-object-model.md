@@ -1716,24 +1716,31 @@ reads 2 (0x40f27, call at 0x40f30), and only the fall-through reaches
 `G_CheckForPreventFriendlyFire` (0x4110d) and `G_CheckForCursorHints`
 (0x41119).
 
-VERIFIED, instruction by instruction, of `G_CheckForPreventFriendlyFire`
-(0x4f88c): it stores 0 to `client+0x2260` (0x4f8a1); returns when the byte
-`ent+0x172` is non-zero (0x4f8ab); calls `CalcMuzzlePoints(ent, &out)`
-(0x4f8c0), which reads the aim angles at `client+0x220c` and `+0x2210`
-(0x69424, 0x6942d) and the view height at `client+0xc8` (0x6941b); builds the
-end point as muzzle plus forward times 8192.0 (`.rodata` 0x7547c, arithmetic
-0x4f8fe..0x4f931); calls `trap_LocationalTrace` with contents mask 0x20000001
-(0x4f949) and again with 0x22802001 (0x4f96e), each followed by a return when
-the hit entity number is above 0x3fd (0x4f951, 0x4f976); compares the hit
-entity's classname word (`g_entities[n]+0x176`, stride 0x314) against
-`scr_const+0x98` (0x4f995); and on a match stores the entity pointer to
-`client+0x2260` (0x4f9aa) and calls `G_Trigger(trigger, ent)` (0x4f9b2).
+`G_CheckForPreventFriendlyFire` (0x4f88c), claim by claim:
+
+- VERIFIED: it stores 0 to `client+0x2260` (0x4f8a1).
+- VERIFIED: it returns when the byte `ent+0x172` is non-zero (0x4f8ab).
+- VERIFIED: it calls `CalcMuzzlePoints(ent, &out)` (0x4f8c0).
+- VERIFIED: `CalcMuzzlePoints` (0x693f4) reads the aim angles at
+  `client+0x220c` and `+0x2210` (0x69424, 0x6942d) and the view height at
+  `client+0xc8` (0x6941b).
+- VERIFIED: the end point is the muzzle plus forward times 8192.0 (`.rodata`
+  0x7547c, arithmetic 0x4f8fe..0x4f931).
+- VERIFIED: it calls `trap_LocationalTrace` with contents mask 0x20000001
+  (0x4f949) and again with 0x22802001 (0x4f96e).
+- VERIFIED: each trace is followed by a return when the hit entity number is
+  above 0x3fd (0x4f951, 0x4f976).
+- VERIFIED: it compares the hit entity's classname word
+  (`g_entities[n]+0x176`, stride 0x314) against `scr_const+0x98` (0x4f995).
+- VERIFIED: on a match it stores the entity pointer to `client+0x2260`
+  (0x4f9aa) and calls `G_Trigger(trigger, ent)` (0x4f9b2).
 
 VERIFIED: the sixth argument to both traces is a priority-map pointer, not 0.
-It is `riflePriorityMap` when the held weapon at `client+0xb0` is non-zero and
-`BG_GetInfoForWeapon`'s record reads a non-zero `+0x2c0`, `bulletPriorityMap`
-otherwise; the two `R_386_32` relocations sit at 0x4f8ea and 0x4f8fa, inside
-the immediates of the stores at 0x4f8e7 and 0x4f8f7.
+The two `R_386_32` relocations sit at 0x4f8ea and 0x4f8fa, inside the
+immediates of the stores at 0x4f8e7 and 0x4f8f7. VERIFIED: it is
+`riflePriorityMap` when the held weapon at `client+0xb0` is non-zero (the test
+at 0x4f8d7) and `BG_GetInfoForWeapon`'s record reads a non-zero `+0x2c0` (the
+compare at 0x4f8ee), `bulletPriorityMap` otherwise.
 
 VERIFIED: `scr_const+0x98` is `Scr_AllocString("trigger_lookat")`, the string
 at 0x7620c, filled by `GScr_LoadConsts` (0x58550).
@@ -1748,8 +1755,10 @@ reads exactly 0x100 it calls `Scr_AddEntity(toucher)` and
 `Scr_Notify(trigger, scr_const+0x92, 1)` (0x6571f, 0x65732); otherwise it
 appends a 12-byte record at `level+0x1dec + n*12` holding the two entity
 numbers and the two `+0x300` script handles, and increments the counter
-(0x65740..0x65772). So the immediate notify is the overflow path and the queue
-is the normal one. VERIFIED: `scr_const+0x92` is `"trigger"` (0x761e9).
+(0x65740..0x65772). VERIFIED: `scr_const+0x92` is `"trigger"` (0x761e9).
+
+INFERRED, off which arm that counter compare takes: the immediate notify is
+the overflow path and the queue is the normal one.
 
 VERIFIED: `G_RunFrame` drains that queue at 0x50578..0x5064d, raising the same
 `"trigger"` notify per record whose two `+0x300` handles still match the
@@ -1762,9 +1771,11 @@ notifies once every server frame the aimer keeps looking at it.
 VERIFIED, of `isLookingAt` (0x4576c): it range-checks the receiver entity
 number against 0x3ff and errors when that entity carries no client pointer
 (0x45776, 0x4578a), takes its argument through `Scr_GetEntity(0)` (0x457d4)
-and answers `client+0x2260 == arg` through `Scr_AddInt` (0x457e4). It runs no
-trace of its own and computes no cone: it reads the last
-`G_CheckForPreventFriendlyFire` result back.
+and answers `client+0x2260 == arg` through `Scr_AddInt` (0x457e4).
+
+INFERRED, off that being the whole of the function: it runs no trace of its
+own and computes no cone, it reads the last `G_CheckForPreventFriendlyFire`
+result back.
 
 ### 23.2 `linkTo`, `unlink`, `enableLinkTo`
 
@@ -1960,8 +1971,10 @@ VERIFIED: `PlayerCmd_useButtonPressed` (0x44e70) answers
 `client+0x21e8 & 0x40` (0x44ed2). VERIFIED: `ClientThink_real` writes
 `client+0x21e8` from the cmd's `buttons` byte at `client+0x20f4` on every cmd,
 on the intermission path (0x3fff1) and on the live path (0x40129), after
-copying the old value to `+0x21ec` (0x3ffde). So the builtin reads the last
-cmd's bits, never an OR over the server frame.
+copying the old value to `+0x21ec` (0x3ffde).
+
+INFERRED, off those two stores: the builtin reads the last cmd's bits, never
+an OR over the server frame.
 
 VERIFIED: `PlayerCmd_isOnGround` (0x45014) answers `ps.groundEntityNum`
 (`client+0x54`) `!= 0x3ff` (0x45076).
