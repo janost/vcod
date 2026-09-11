@@ -340,8 +340,8 @@ engineering setup works.
   That recipe passes `+set probe_teleport 1`, which is what puts both probes on
   a teamdeathmatch spawn in the zone's courtyard: mp_carentan's allied S&D
   spawns are a town away from `bombzone_A` and a first run spent all 380 s of
-  its walk never arriving, and which then moves the defender to the planter's
-  own spot once the charge is down, since the props ringing the zone cost a
+  its walk never arriving, and which then moves the defender to 20 units
+  from the charge once it is down, since the props ringing the zone cost a
   second run its whole 60 s fuse.
   The three fixtures are
   `crates/server/tests/fixtures/triggers/<map>-sd-lookat.txt` and

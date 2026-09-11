@@ -6635,9 +6635,7 @@ fn write_sd_fixture(
     out.push_str(
         "# it the walk starts a town away and never arrives on mp_carentan. It also puts\n",
     );
-    out.push_str(
-        "# the defender at the planter's spot once the charge is down, inside the fuse,\n",
-    );
+    out.push_str("# the defender 20 units from the charge once it is down, inside the fuse,\n");
     out.push_str("# and the planter back on its spawn, off the defender's sightline.\n");
     out.push_str(&format!(
         "# Phases: wait {} s past the match-start restart; approach walks at bombzone_A's\n",

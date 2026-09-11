@@ -115,8 +115,8 @@ try_teleport(num)
 //	a walk across the courtyard does not get there: the flak88 and the cart
 //	sit around the zone and a first run circled them for 90 s, reaching the
 //	bomb 27 s after it had exploded. So once the plant has spawned the bomb
-//	model, every alive defender is put just behind where the planter stood,
-//	which is ground a player demonstrably fits on. The planter itself goes
+//	model, every alive defender is put 20 units from the charge toward where
+//	the planter stood, at the planter's height. The planter itself goes
 //	back to the attackers' spawn at the same moment: standing 88 units out
 //	along the defender-to-bomb line it was what the lookat's body trace hit,
 //	and no station fired until it left. Same cvar gate as the spawn teleport,
@@ -145,9 +145,14 @@ watch_bomb_defenders()
 		logPrint("PROBE teleport_defender none\n");
 		return;
 	}
-	//	24 units back along the planter's own approach line, so the defender
-	//	lands on the open ground it came in over rather than inside the charge.
-	dest = planter.origin + vec_scale(vectornormalize(planter.origin - bomb), 24);
+	//	20 units out from the charge along the planter's own approach line:
+	//	inside the client's 28-unit stop and check_bomb's 32, so the defender
+	//	never walks. A landing 24 units behind the planter (47 out) left the
+	//	walk to close the gap past the flak88, whose script_model the client's
+	//	box-sweep steer treats as solid where retail clips nothing, and it
+	//	wandered the courtyard for the whole run.
+	dir = vectornormalize(planter.origin - bomb);
+	dest = (bomb[0] + dir[0] * 20, bomb[1] + dir[1] * 20, planter.origin[2]);
 
 	players = getentarray("player", "classname");
 	for (i = 0; i < players.size; i++)
@@ -200,10 +205,4 @@ try_teleport_defender(num, dest)
 
 	self setOrigin(dest);
 	logPrint("PROBE teleport_defender " + num + " " + dest + "\n");
-}
-
-//	maps\mp\_utility::vectorScale inline, so the probe loads no extra file.
-vec_scale(v, s)
-{
-	return (v[0] * s, v[1] * s, v[2] * s);
 }

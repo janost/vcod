@@ -171,7 +171,7 @@ around (300, 1200) without ever reaching the zone. Under the cvar the probe
 puts each player once per level on a teamdeathmatch spawn in the courtyard,
 416 units from the zone for the attacker and 541 for the defender, so the walk
 is a courtyard crossing. The same cvar also moves every
-defender to just behind the planter once the plant has spawned
+defender to 20 units from the charge, toward where the planter stood, once the plant has spawned
 `level.bombmodel`, because the flak88 and the cart ring the zone and a walk
 that has to round them reached the charge 27 s after its 60 s fuse had blown
 it, and sends the planter back to the attackers' spawn at the same moment,
