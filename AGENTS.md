@@ -332,7 +332,8 @@ engineering setup works.
   stations without pressing use (a held use lets `bomb_think` finish the
   defuse mid-sweep), which is the lookat trigger's shape in degrees, and
   then aims true and holds use through the defuse. Each `!trace` carries the
-  movement fields, the sweep's offset, block 4 and the unarchived HUD array,
+  movement fields, the sweep's offset, block 4 and both HUD arrays (archived
+  then current, `|` between),
   so the progress bar's tween fields and the plant icon are in the file beside
   the `pm_type` the link put the player at. Start the gsc probe first, then
   the defender, then the attacker, and give each a long `--probe-secs`; the
@@ -342,7 +343,9 @@ engineering setup works.
   spawns are a town away from `bombzone_A` and a first run spent all 380 s of
   its walk never arriving, and which then moves the defender to 20 units
   from the charge once it is down, since the props ringing the zone cost a
-  second run its whole 60 s fuse.
+  second run its whole 60 s fuse, and the planter back to its spawn, unlinked
+  first since stock sd.gsc's success branch never unlinks it: the attacker's
+  `pm_type` 1 -> 0 on that frame is the probe's doing.
   The three fixtures are
   `crates/server/tests/fixtures/triggers/<map>-sd-lookat.txt` and
   `crates/server/tests/fixtures/playerstate/<map>-sd-plant-attacker.txt` and

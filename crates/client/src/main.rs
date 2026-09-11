@@ -212,9 +212,9 @@ struct Args {
     #[arg(long, conflicts_with = "probe_defuse")]
     probe_plant: bool,
     /// The S&D defuse capture: joins the defenders, waits for the plant,
-    /// walks to the bomb, sweeps the view across it with use held (the
-    /// lookat trigger's shape), then aims true and holds use through the
-    /// defuse. Writes <map>-sd-defuse-defender.txt.
+    /// walks to the bomb, sweeps the view across it with the aim alone (the
+    /// lookat trigger's shape; a held use would let bomb_think finish the
+    /// defuse mid-sweep), then aims true and holds use through the defuse. Writes <map>-sd-defuse-defender.txt.
     #[arg(long, conflicts_with = "probe_plant")]
     probe_defuse: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every

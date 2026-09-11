@@ -840,11 +840,10 @@ pub fn probe(
             sd.phase.label()
         );
         // The phase it stopped in is what the file is short of; a reader has
-        // to see that before trusting it as the pair's evidence.
-        if sd.phase != SdPhase::Done {
-            sd.notes
-                .push(format!("# BROKEN run ended in {}", sd.phase.label()));
-        }
+        // to see that before trusting it as the pair's evidence. `Done` never
+        // reaches here: the step that enters it writes the file in the loop.
+        sd.notes
+            .push(format!("# BROKEN run ended in {}", sd.phase.label()));
         write_sd_fixture(client.configstrings(), &join, &sd)?;
     }
     if netchan_capture {
@@ -6017,9 +6016,9 @@ const SD_STATION: Duration = Duration::from_millis(1500);
 const SD_BOMB_RANGE: f32 = 28.0;
 /// An origin jump past this between snapshots is the gsc teleport.
 const SD_TELEPORT_JUMP: f32 = 200.0;
-/// `setOrigin` keeps the walk's velocity, so a teleport frame inside the
-/// radius slid 64 units on in the next half second; the sweep waits for the
-/// horizontal speed to fall under this.
+/// The sweep starts only once the horizontal speed is under this: `setOrigin`
+/// keeps whatever velocity the player had, so a station taken on the landing
+/// frame is taken from a spot the next frame has already left.
 const SD_SETTLED_SPEED: f32 = 5.0;
 const SD_WATCH: Duration = Duration::from_secs(20);
 /// How far short of the bombzone the defender waits for the plant: inside the
@@ -6052,7 +6051,12 @@ struct SdSample {
     viewangles: [f32; 3],
     /// The sweep's (yaw, pitch) offset in degrees; 0,0 outside the sweep.
     offset: (f32, f32),
-    /// The unarchived HUD array as `type:shader:w:h:fromW:fromH:scaleStart:scaleTime:x:y` per element.
+    /// The pitch the view took off the aim at the bomb, degrees, read out of
+    /// the snapshot: the requested offset saturates at the 87.9 degree clamp
+    /// when the base aim is steep.
+    pitch_applied: f32,
+    /// Both HUD arrays, archived then current with a `|` between, as
+    /// `type:shader:w:h:fromW:fromH:scaleStart:scaleTime:x:y` per element.
     hud: String,
     /// Block 4 as `i:state:icon:ent:team:x,y,z` per non-empty slot.
     objectives: String,
@@ -6067,7 +6071,7 @@ impl SdSample {
         format!(
             "!trace ms={} serverTime={} buttons={} forward={} pm_type={} pm_flags={} eFlags={} \
 groundEntityNum={} origin={} velocity={} viewangles={} yawOffset={:.1} pitchOffset={:.1} \
-icon={} bar={} hud={} objectives={}\n",
+pitchApplied={:.1} icon={} bar={} hud={} objectives={}\n",
             self.elapsed_ms,
             self.server_time,
             self.buttons,
@@ -6081,6 +6085,7 @@ icon={} bar={} hud={} objectives={}\n",
             vec_str(self.viewangles),
             self.offset.0,
             self.offset.1,
+            self.pitch_applied,
             self.icon as i32,
             self.bar as i32,
             if self.hud.is_empty() { "-" } else { &self.hud },
@@ -6093,10 +6098,22 @@ icon={} bar={} hud={} objectives={}\n",
     }
 }
 
-/// Both HUD arrays, archived first then current, as the ten fields a plant or
-/// a defuse moves. All ten are integer netfields (`HUD_FIELD_BITS`), so the
-/// raw word is the value.
-fn sd_hud_str(elems: &[net::msg::HudElem]) -> String {
+/// Both HUD arrays, archived first then current with a `|` between them (an
+/// empty half reads `-`), as the ten fields a plant or a defuse moves. All
+/// ten are integer netfields (`HUD_FIELD_BITS`), so the raw word is the value.
+fn sd_hud_str(archived: &[net::msg::HudElem], current: &[net::msg::HudElem]) -> String {
+    let half = |elems: &[net::msg::HudElem]| {
+        let s = sd_hud_elems_str(elems);
+        if s.is_empty() {
+            "-".to_string()
+        } else {
+            s
+        }
+    };
+    format!("{}|{}", half(archived), half(current))
+}
+
+fn sd_hud_elems_str(elems: &[net::msg::HudElem]) -> String {
     use net::msg::hud_field as h;
     elems
         .iter()
@@ -6176,6 +6193,8 @@ struct SdProbe {
     target: Option<[f32; 3]>,
     bomb: Option<[f32; 3]>,
     aim: Option<(i32, i32)>,
+    /// The un-offset pitch of the aim at the bomb, degrees, for `pitchApplied`.
+    aim_pitch_deg: Option<f32>,
     /// Whether the approach still pushes forward; the defender stops short.
     advance: bool,
     sweep_index: usize,
@@ -6209,6 +6228,7 @@ impl SdProbe {
             target: None,
             bomb: None,
             aim: None,
+            aim_pitch_deg: None,
             advance: true,
             sweep_index: 0,
             station_at: None,
@@ -6226,8 +6246,10 @@ impl SdProbe {
         self.phase != SdPhase::Done
     }
 
-    /// The sweep's (yaw, pitch) stations at which any trace saw the defuse
-    /// icon: the lookat's shape as the wire shows it.
+    /// The sweep's (yaw, pitch) stations at which a trace saw the defuse
+    /// icon: the lookat's shape as the wire shows it. A station's first two
+    /// traces are skipped, since the previous station's icon is still on the
+    /// wire there.
     fn stations_with_icon(&self) -> Vec<(f32, f32)> {
         SD_SWEEP
             .iter()
@@ -6235,7 +6257,9 @@ impl SdProbe {
             .filter(|&st| {
                 self.trace
                     .iter()
-                    .any(|t| t.phase == SdPhase::Sweep && t.icon && t.offset == st)
+                    .filter(|t| t.phase == SdPhase::Sweep && t.offset == st)
+                    .skip(2)
+                    .any(|t| t.icon)
             })
             .collect()
     }
@@ -6467,6 +6491,7 @@ impl SdProbe {
                 yaw
             };
             self.aim = Some((yaw & 0xffff, pitch & 0xffff));
+            self.aim_pitch_deg = Some(pitch as f32 * 360.0 / 65536.0);
         }
         // The defender stops short of the zone so its own use press does not
         // contest the plant, and stops at arm's length from the bomb.
@@ -6496,6 +6521,13 @@ impl SdProbe {
                 .copied()
                 .collect();
             let (icon, bar) = sd_icon_and_bar(&hud);
+            let viewangles = snap.ps.viewangles(p);
+            let pitch_applied = match (self.phase, self.aim_pitch_deg) {
+                (SdPhase::Sweep, Some(base)) => {
+                    (viewangles[0] - base + 180.0).rem_euclid(360.0) - 180.0
+                }
+                _ => 0.0,
+            };
             self.trace.push(SdSample {
                 phase: self.phase,
                 elapsed_ms: ms,
@@ -6508,9 +6540,10 @@ impl SdProbe {
                 ground: snap.ps.field_i32(p, "groundEntityNum"),
                 origin,
                 velocity,
-                viewangles: snap.ps.viewangles(p),
+                viewangles,
                 offset: self.offset(),
-                hud: sd_hud_str(&hud),
+                pitch_applied,
+                hud: sd_hud_str(&snap.ps.arrays.hud_archived, &snap.ps.arrays.hud_current),
                 objectives: sd_objectives_str(objs),
                 icon,
                 bar,
@@ -6636,7 +6669,11 @@ fn write_sd_fixture(
         "# it the walk starts a town away and never arrives on mp_carentan. It also puts\n",
     );
     out.push_str("# the defender 20 units from the charge once it is down, inside the fuse,\n");
-    out.push_str("# and the planter back on its spawn, off the defender's sightline.\n");
+    out.push_str("# and the planter back on its spawn, off the defender's sightline; the probe\n");
+    out.push_str(
+        "# unlinks it first (stock sd.gsc's success branch never does), so the attacker's\n",
+    );
+    out.push_str("# pm_type 1 -> 0 on the teleport frame is the probe's doing, not the plant's.\n");
     out.push_str(&format!(
         "# Phases: wait {} s past the match-start restart; approach walks at bombzone_A's\n",
         SD_WAIT.as_secs()
@@ -6672,13 +6709,19 @@ fn write_sd_fixture(
         "# !trace is one line per snapshot: the movement fields, the sweep's offset off\n",
     );
     out.push_str(
-        "# the aim at the bomb in degrees, whether a 64x64 shader element (the icon) and\n",
+        "# the aim at the bomb in degrees (pitchOffset is what was requested, pitchApplied\n",
     );
-    out.push_str("# a shader element with a running scaleTime (the bar) are on the wire, the\n");
     out.push_str(
-        "# unarchived HUD array as type:shader:w:h:fromW:fromH:scaleStart:scaleTime:x:y\n",
+        "# what the 87.9 degree pitch clamp left of it, read off the snapshot's viewangles),\n",
     );
-    out.push_str("# per element, and block 4 as i:state:icon:ent:team:x,y,z per non-empty slot.\n");
+    out.push_str(
+        "# whether a 64x64 shader element (the icon) and a shader element with a running\n",
+    );
+    out.push_str("# scaleTime (the bar) are on the wire, both HUD arrays, archived then current\n");
+    out.push_str(
+        "# with a | between, as type:shader:w:h:fromW:fromH:scaleStart:scaleTime:x:y per\n",
+    );
+    out.push_str("# element, and block 4 as i:state:icon:ent:team:x,y,z per non-empty slot.\n");
     for n in &sd.notes {
         out.push_str(n);
         out.push('\n');

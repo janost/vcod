@@ -179,8 +179,9 @@ since a planter left standing on the defender-to-bomb line is what the
 lookat's body trace stops at and no station fires. A run without the cvar walks from the stock spawns and, on mp_carentan,
 does not get there. Anything after the map name is passed
 to the engine verbatim, which takes its `+set` arguments in any order. Only
-mp_carentan has the two origins; on any other map the thread logs `PROBE
-teleport unsupported <map>` once and does nothing. `crates/server/tests`'s A/B
+mp_carentan has the two origins; on any other map the spawn thread logs `PROBE
+teleport unsupported <map>` once and does nothing, and the plant-time thread
+returns without a line. `crates/server/tests`'s A/B
 never sets the cvar, since it stands its clients where it wants them itself.
 
 What the three halves measure between them: how often a lookat fires while a
