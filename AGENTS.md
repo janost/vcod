@@ -319,6 +319,29 @@ engineering setup works.
   one `trigger_hurt` is the kill volume under the floor, a walking player
   never reaches it, and every fire line in that fixture is a
   `trigger_multiple`.
+  `--probe-plant` and `--probe-defuse` are the S&D pair, one probe each, and
+  they need a third shell: `client-probes/probe_lookat.gsc` runs as the
+  gametype under `tools/run_probe.sh` so the server's own `games_mp.log`
+  carries every `trigger_lookat` fire and every frame `isLookingAt` answered
+  true, which is the half no client can see. The attacker joins allies, walks
+  into `bombzone_A` (read out of the BSP by `targetname`), holds use two
+  seconds and releases it -- the abort -- then holds use through a full plant
+  with a forward cmd sent from 2 s to 3.5 s, which is what says whether a
+  linked player still moves. The defender joins axis, waits the plant out on
+  the objective slots, walks to the bomb, sweeps its view across it through 15
+  stations with use held, which is the lookat trigger's shape in degrees, and
+  then aims true and holds use through the defuse. Each `!trace` carries the
+  movement fields, the sweep's offset, block 4 and the unarchived HUD array,
+  so the progress bar's tween fields and the plant icon are in the file beside
+  the `pm_type` the link put the player at. Start the gsc probe first, then
+  the defender, then the attacker, and give each a long `--probe-secs`; the
+  recipe is in `probe_lookat`'s README section and in each fixture's header.
+  The three fixtures are
+  `crates/server/tests/fixtures/triggers/<map>-sd-lookat.txt` and
+  `crates/server/tests/fixtures/playerstate/<map>-sd-plant-attacker.txt` and
+  `-sd-defuse-defender.txt`, all retail evidence: a run against ours
+  overwrites the two client ones, so move them to `tmp/` and `git checkout`
+  the directory after.
   A plain `--net-probe` also prints every change to an entity's `pos`/`apos`
   trajectory group, which is the mover half of the same arrangement:
   `client-probes/probe_mover.gsc` under `run_probe.sh` in one shell calls each

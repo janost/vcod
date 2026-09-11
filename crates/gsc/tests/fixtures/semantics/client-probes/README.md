@@ -139,3 +139,43 @@ One thing it learned the expensive way: a mover verb on anything but a
 `script_brushmodel`, `script_model` or `script_origin` is a fatal script
 runtime error, so a first version that moved the map's placed weapons for
 PVS coverage died on its first frame.
+
+## probe_lookat
+
+The `trigger_lookat` half of S&D: every `"trigger"` notify the aim trace
+raises, and every player `isLookingAt` answers true for, polled once a server
+frame. It threads both onto each `trigger_lookat` the map spawned, logs a
+`PROBE watch` census line per entity and a `PROBE lookats` count, and then one
+`PROBE fire` per notify and one `PROBE looking` per frame a player is aimed at
+one. Each carries `getTime()`, which is what pairs a line with the `serverTime`
+on a client probe's own `!trace`.
+
+It calls `maps\mp\gametypes\sd::main()` itself, so the bombzones, the bomb and
+the lookat triggers are the stock gametype's. The scan waits a second first,
+for the same reason `probe_trigger` does.
+
+Three shells, the gsc probe first, then the defender, then the attacker:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> SECS=420 \
+    tools/run_probe.sh client-probes/probe_lookat mp_carentan
+# second and third shells, the defender first:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-defuse --probe-secs 400
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-plant --probe-secs 380
+```
+
+What the three halves measure between them: how often a lookat fires while a
+player is aimed at it (the server's log says every frame, with no wait gate in
+`G_Trigger`), what `isLookingAt` answers on the frames around a fire, the
+`pm_type` a planting player sits at while retail has it linked to the bombzone
+and what its velocity does under a forward cmd, the objective slots the plant
+and the defuse write and delete, and the HUD element the progress bar rides
+with its `scaleStartTime` / `scaleTime` / `fromWidth` / `fromHeight` tween
+fields.
+
+The server's log goes to
+`crates/server/tests/fixtures/triggers/<map>-sd-lookat.txt`; the two client
+halves write `crates/server/tests/fixtures/playerstate/<map>-sd-plant-attacker.txt`
+and `<map>-sd-defuse-defender.txt`. All three are retail evidence, and a run
+against `vcod-server` overwrites the two client ones: move them to `tmp/` and
+`git checkout` the fixture directory after.

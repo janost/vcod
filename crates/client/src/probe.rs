@@ -74,6 +74,10 @@ pub struct Save {
     pub target: bool,
     pub mapchange: bool,
     pub roundrestart: bool,
+    /// `--probe-plant`: the S&D attacker half of the plant/defuse pair.
+    pub plant: bool,
+    /// `--probe-defuse`: the defender half, which waits for that plant.
+    pub defuse: bool,
 }
 
 /// Which script the two halves of the hit capture run. The target's own
@@ -168,6 +172,8 @@ pub fn probe(
         target: save_target,
         mapchange: save_mapchange,
         roundrestart: save_roundrestart,
+        plant: save_plant,
+        defuse: save_defuse,
     } = save;
     // The two map-cycle captures record the same lines; the flag picks the
     // role and, for the round restart, which half of the pair this probe is.
@@ -200,6 +206,8 @@ pub fn probe(
         || netchan_capture
         || pvs
         || triggers
+        || save_plant
+        || save_defuse
         || team.is_some();
     // A sweep is a measurement, not a fixture: it walks a table of pitch
     // offsets instead of aiming at the eye, so the numbers it produces are not
@@ -216,6 +224,15 @@ pub fn probe(
     let mut reached_active: Option<Instant> = None;
     let mut baseline_origin: Option<[f32; 3]> = None;
     let mut watch = ProbeWatch::default();
+    // The S&D pair has to be on opposite teams: allies attack under sd.gsc's
+    // default, so the plant joins them and the defuse joins axis.
+    let team = team.or(if save_plant {
+        Some("allies")
+    } else if save_defuse {
+        Some("axis")
+    } else {
+        None
+    });
     let mut join = JoinProbe::new(team, weapon);
     let mut wrote_playerstate = false;
     let mut motion = MotionProbe::default();
@@ -240,6 +257,14 @@ pub fn probe(
     let mut pvs_probe = PvsProbe::default();
     let mut trigger_probe = TriggerProbe::default();
     let mut netchan = MapChangeProbe::default();
+    let mut sd = SdProbe::new(if save_plant {
+        SdRole::Attacker
+    } else {
+        SdRole::Defender
+    });
+    let mut wrote_sd = false;
+    // The S&D pair waits for its own first spawn the way the hit pair does.
+    let mut sd_spawned = false;
     // The fixture is named for the map the run started on, which is not the
     // map cs 0 holds once the rotation has moved on.
     let mut first_map = String::new();
@@ -326,6 +351,14 @@ pub fn probe(
                             .unwrap_or_default()
                             .to_string();
                         trigger_probe.load_map(fs, &map);
+                    }
+                    if save_plant || save_defuse {
+                        // The bombzone's bounds and the map's collision, both
+                        // out of the BSP the gamestate names.
+                        let map = net::info_value_for_key(&gs.configstrings[0], "mapname")
+                            .unwrap_or_default()
+                            .to_string();
+                        sd.load_map(fs, &map);
                     }
                     if save_hit || shooter_walk || probe_sway {
                         // The shooter's line-of-sight test and the sway run's
@@ -496,6 +529,10 @@ pub fn probe(
             weapon_switch = hit.weapon_override(ps_weapon);
         } else if save_target && target_probe.running() {
             cmd = target_probe.cmd();
+        } else if (save_plant || save_defuse) && sd.running() {
+            // No `hold_view_yaw`: the aim is absolute, at the bombzone or the
+            // bomb, the way the hit shooter's is.
+            cmd = sd.cmd(now);
         } else if triggers && trigger_probe.running() {
             // No `hold_view_yaw`: the walk steers at a world position, so its
             // yaw is a bearing rather than a heading off the spawn's facing.
@@ -516,6 +553,11 @@ pub fn probe(
         // `upmove` or `weapon` change forces (docs/protocol-1.1.md).
         cmd.weapon = weapon_switch.unwrap_or(ps_weapon);
         let sent = client.send_frame(&cmd);
+        if let Some(c) = sent {
+            if save_plant || save_defuse {
+                sd.record(c);
+            }
+        }
         if save_slope && slope_capture.recording() {
             if let Some(c) = sent {
                 slope_capture.cmds.push(c);
@@ -658,6 +700,25 @@ pub fn probe(
             }
         }
 
+        // The S&D pair runs across a link, whose `pm_type` is 1 rather than
+        // `PM_NORMAL`, so it is not gated on the playerstate the way the
+        // settled captures below are; it only waits for the first spawn.
+        if (save_plant || save_defuse) && join.settled(now) && !wrote_sd {
+            let done = match client.snapshots().newest() {
+                Some(s) => {
+                    sd_spawned |=
+                        s.ps.field_i32(&net::protocol::PROTOCOL_V1, "pm_type") == PM_NORMAL;
+                    sd_spawned && sd.step(now, s)
+                }
+                None => false,
+            };
+            if done {
+                write_sd_fixture(client.configstrings(), &join, &sd)?;
+                wrote_sd = true;
+                break;
+            }
+        }
+
         // A refused weapon reopens the same menu, which the probe answers
         // once and then ignores, so a sent answer is not an accepted one; the
         // playerstate is what tells a spawn from a still-spectating client.
@@ -772,6 +833,13 @@ pub fn probe(
         } else {
             write_shooter_fixture(client.configstrings(), &join, &hit, now)?;
         }
+    }
+    if (save_plant || save_defuse) && !wrote_sd {
+        println!(
+            "sd: the run ended in {} before the script did, writing what it has",
+            sd.phase.label()
+        );
+        write_sd_fixture(client.configstrings(), &join, &sd)?;
     }
     if netchan_capture {
         let role = if save_mapchange {
@@ -5854,6 +5922,718 @@ impl TriggerProbe {
             self.deaths,
         );
     }
+}
+
+/// Which half of the S&D pair this probe is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SdRole {
+    Attacker,
+    Defender,
+}
+
+impl SdRole {
+    /// The fixture name this half writes: `<map>-sd-<role>.txt`.
+    fn label(self) -> &'static str {
+        match self {
+            SdRole::Attacker => "plant-attacker",
+            SdRole::Defender => "defuse-defender",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SdPhase {
+    /// Both halves: wait past the match-start restart the second join causes.
+    Wait,
+    /// Walk to the station (the zone centre, or the planted bomb).
+    Approach,
+    /// Attacker: use held 2 s, then released 1 s (the abort).
+    Hold1,
+    Release,
+    /// Attacker: use held until the plant lands; forward from 2 s to 3.5 s.
+    Hold2,
+    /// Defender: the view sweep with use held, one entry per station.
+    Sweep,
+    /// Defender: aimed true, use held until the defuse lands.
+    Defuse,
+    Watch,
+    Done,
+}
+
+impl SdPhase {
+    fn label(self) -> &'static str {
+        match self {
+            SdPhase::Wait => "wait",
+            SdPhase::Approach => "approach",
+            SdPhase::Hold1 => "hold1",
+            SdPhase::Release => "release",
+            SdPhase::Hold2 => "hold2",
+            SdPhase::Sweep => "sweep",
+            SdPhase::Defuse => "defuse",
+            SdPhase::Watch => "watch",
+            SdPhase::Done => "done",
+        }
+    }
+}
+
+const SD_WAIT: Duration = Duration::from_secs(12);
+const SD_HOLD1: Duration = Duration::from_secs(2);
+const SD_RELEASE: Duration = Duration::from_secs(1);
+const SD_HOLD2: Duration = Duration::from_secs(9);
+const SD_WALK_FROM: Duration = Duration::from_secs(2);
+const SD_WALK_TO: Duration = Duration::from_millis(3500);
+const SD_DEFUSE_HOLD: Duration = Duration::from_secs(13);
+const SD_STATION: Duration = Duration::from_millis(1500);
+const SD_BOMB_RANGE: f32 = 40.0;
+const SD_WATCH: Duration = Duration::from_secs(20);
+/// How far short of the bombzone the defender waits for the plant: inside the
+/// zone it would be standing on the attacker, and its own use press would
+/// contest the plant it is here to watch.
+const SD_STANDOFF: f32 = 150.0;
+/// (yaw, pitch) degrees off the aim at the bomb, one station each.
+#[rustfmt::skip]
+const SD_SWEEP: [(f32, f32); 15] = [
+    (0.0, 0.0), (0.0, -30.0), (0.0, -15.0), (0.0, -8.0), (0.0, 8.0), (0.0, 15.0), (0.0, 30.0),
+    (-30.0, 0.0), (-15.0, 0.0), (-8.0, 0.0), (8.0, 0.0), (15.0, 0.0), (30.0, 0.0),
+    (0.0, 45.0), (0.0, -45.0),
+];
+
+/// One snapshot's line: what the wire says about the link, the bar, the
+/// objectives and the icon, beside the offset the sweep was at.
+struct SdSample {
+    phase: SdPhase,
+    elapsed_ms: u128,
+    server_time: i32,
+    buttons: u8,
+    forward: i8,
+    pm_type: i32,
+    pm_flags: i32,
+    eflags: i32,
+    ground: i32,
+    origin: [f32; 3],
+    velocity: [f32; 3],
+    viewangles: [f32; 3],
+    /// The sweep's (yaw, pitch) offset in degrees; 0,0 outside the sweep.
+    offset: (f32, f32),
+    /// The unarchived HUD array as `type:shader:w:h:fromW:fromH:scaleStart:scaleTime:x:y` per element.
+    hud: String,
+    /// Block 4 as `i:state:icon:ent:team:x,y,z` per non-empty slot.
+    objectives: String,
+    /// Whether the defuse or plant icon (a 64x64 shader element) is present.
+    icon: bool,
+    /// Whether a progress bar (a shader element with `scaleTime` non-zero) is present.
+    bar: bool,
+}
+
+impl SdSample {
+    fn line(&self) -> String {
+        format!(
+            "!trace ms={} serverTime={} buttons={} forward={} pm_type={} pm_flags={} eFlags={} \
+groundEntityNum={} origin={} velocity={} viewangles={} yawOffset={:.1} pitchOffset={:.1} \
+icon={} bar={} hud={} objectives={}\n",
+            self.elapsed_ms,
+            self.server_time,
+            self.buttons,
+            self.forward,
+            self.pm_type,
+            self.pm_flags,
+            self.eflags,
+            self.ground,
+            vec_str(self.origin),
+            vec_str(self.velocity),
+            vec_str(self.viewangles),
+            self.offset.0,
+            self.offset.1,
+            self.icon as i32,
+            self.bar as i32,
+            if self.hud.is_empty() { "-" } else { &self.hud },
+            if self.objectives.is_empty() {
+                "-"
+            } else {
+                &self.objectives
+            },
+        )
+    }
+}
+
+/// Block 5's unarchived array, the ten fields a plant or a defuse moves. All
+/// ten are integer netfields (`HUD_FIELD_BITS`), so the raw word is the value.
+fn sd_hud_str(elems: &[net::msg::HudElem]) -> String {
+    use net::msg::hud_field as h;
+    elems
+        .iter()
+        .map(|e| {
+            format!(
+                "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+                e.get(h::TYPE),
+                e.get(h::SHADER),
+                e.get(h::WIDTH),
+                e.get(h::HEIGHT),
+                e.get(h::FROM_WIDTH),
+                e.get(h::FROM_HEIGHT),
+                e.get(h::SCALE_START_TIME),
+                e.get(h::SCALE_TIME),
+                e.get(h::X),
+                e.get(h::Y),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A deleted slot still differs from the default one (`objective_delete`
+/// leaves `entNum` at 0x3ff), which is what makes the delete visible.
+fn sd_objectives_str(objs: &[net::msg::Objective]) -> String {
+    objs.iter()
+        .enumerate()
+        .filter(|(_, o)| **o != net::msg::Objective::default())
+        .map(|(i, o)| {
+            format!(
+                "{i}:{}:{}:{}:{}:{}",
+                o.state,
+                o.icon,
+                o.ent_num,
+                o.team_num,
+                vec_str(o.origin_f32()),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A 64x64 shader element is the plant/defuse icon; a shader element with a
+/// running `scaleTime` is the progress bar the tween drives.
+fn sd_icon_and_bar(elems: &[net::msg::HudElem]) -> (bool, bool) {
+    use net::msg::hud_field as h;
+    let icon = elems
+        .iter()
+        .any(|e| e.get(h::SHADER) != 0 && e.get(h::WIDTH) == 64 && e.get(h::HEIGHT) == 64);
+    let bar = elems
+        .iter()
+        .any(|e| e.get(h::SHADER) != 0 && e.get(h::SCALE_TIME) != 0);
+    (icon, bar)
+}
+
+fn horiz_dist(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
+/// `--probe-plant` / `--probe-defuse`: one half each of the S&D pair. The
+/// attacker walks into `bombzone_A` and holds use through an aborted plant and
+/// a real one; the defender waits the plant out, walks to the bomb, sweeps its
+/// view across it with use held (the `trigger_lookat`'s shape) and then
+/// defuses. Both write their own fixture.
+struct SdProbe {
+    role: SdRole,
+    phase: SdPhase,
+    phase_started: Option<Instant>,
+    /// The run's clock: when the first snapshot past the join reached `step`.
+    settled_at: Option<Instant>,
+    /// `bombzone_A`'s submodel bounds, read out of the BSP by `targetname`.
+    zone: Option<TriggerBox>,
+    world: Option<Box<vcod_common::collision::CollisionWorld>>,
+    steer: Steer,
+    target: Option<[f32; 3]>,
+    bomb: Option<[f32; 3]>,
+    aim: Option<(i32, i32)>,
+    /// Whether the approach still pushes forward; the defender stops short.
+    advance: bool,
+    sweep_index: usize,
+    /// When the current sweep station started.
+    station_at: Option<Instant>,
+    station_pose: Option<([f32; 3], [f32; 3])>,
+    /// Every cmd sent from `Hold1`/`Sweep` on, with the server time it carried.
+    cmds: Vec<(i32, net::msg::UserCmd)>,
+    trace: Vec<SdSample>,
+    traced: Option<u32>,
+    notes: Vec<String>,
+    /// Whether objective slot 0 (the bomb) and slot 1 (the zone) have ever
+    /// read state 4. A slot reads 0 both before the gametype fills it and
+    /// after the plant deletes it, so the edge needs the latch.
+    saw_current: [bool; 2],
+    /// Slot 0's origin the first time it was seen, which the plant moves.
+    slot0_origin: Option<[f32; 3]>,
+}
+
+impl SdProbe {
+    fn new(role: SdRole) -> Self {
+        SdProbe {
+            role,
+            phase: SdPhase::Wait,
+            phase_started: None,
+            settled_at: None,
+            zone: None,
+            world: None,
+            steer: Steer::default(),
+            target: None,
+            bomb: None,
+            aim: None,
+            advance: true,
+            sweep_index: 0,
+            station_at: None,
+            station_pose: None,
+            cmds: Vec::new(),
+            trace: Vec::new(),
+            traced: None,
+            notes: Vec::new(),
+            saw_current: [false; 2],
+            slot0_origin: None,
+        }
+    }
+
+    fn running(&self) -> bool {
+        self.phase != SdPhase::Done
+    }
+
+    /// Reads `bombzone_A`'s submodel bounds and the map's collision, the same
+    /// way [`TriggerProbe::load_map`] reads the whole trigger belt.
+    fn load_map(&mut self, fs: Option<&vcod_common::pk3::Pk3Fs>, map: &str) {
+        let Some(fs) = fs else {
+            println!("SD: no game data, the walk has nothing to steer at");
+            return;
+        };
+        let Some(bsp) = fs
+            .resolve_map(map)
+            .and_then(|p| fs.read(&p))
+            .and_then(|d| vcod_common::bsp::parse(&d).ok())
+        else {
+            println!("SD: cannot load {map}, the walk has nothing to steer at");
+            return;
+        };
+        for block in bsp.entities.split('}') {
+            let key = |k: &str| {
+                block
+                    .split_once(&format!("\"{k}\""))
+                    .and_then(|(_, rest)| rest.split('"').nth(1))
+            };
+            if key("targetname") != Some("bombzone_A") {
+                continue;
+            }
+            let Some(model) = key("model")
+                .and_then(|m| m.strip_prefix('*'))
+                .and_then(|n| n.parse::<usize>().ok())
+            else {
+                continue;
+            };
+            let Some(m) = bsp.models.get(model) else {
+                continue;
+            };
+            self.zone = Some(TriggerBox {
+                model,
+                mins: m.mins,
+                maxs: m.maxs,
+            });
+        }
+        let tris = vcod_common::props::collision_tris(fs, &bsp.entities);
+        self.world = Some(Box::new(vcod_common::collision::CollisionWorld::build(
+            &bsp, &tris,
+        )));
+        match &self.zone {
+            Some(z) => println!(
+                "SD: bombzone_A is *{} at [{:.0},{:.0},{:.0}]",
+                z.model,
+                z.centre()[0],
+                z.centre()[1],
+                z.centre()[2],
+            ),
+            None => println!("SD: {map} has no bombzone_A, the walk has nothing to steer at"),
+        }
+    }
+
+    /// The sweep's offset off the aim at the bomb, degrees.
+    fn offset(&self) -> (f32, f32) {
+        if self.phase != SdPhase::Sweep {
+            return (0.0, 0.0);
+        }
+        SD_SWEEP
+            .get(self.sweep_index)
+            .copied()
+            .unwrap_or((0.0, 0.0))
+    }
+
+    fn cmd(&self, now: Instant) -> net::msg::UserCmd {
+        let mut cmd = net::msg::NULL_USERCMD;
+        if let Some((yaw, pitch)) = self.aim {
+            cmd.angles[1] = yaw;
+            cmd.angles[0] = pitch;
+        }
+        match self.phase {
+            SdPhase::Wait | SdPhase::Release | SdPhase::Watch | SdPhase::Done => {}
+            SdPhase::Approach => {
+                if self.advance {
+                    cmd.forward = 127;
+                }
+            }
+            SdPhase::Hold1 | SdPhase::Defuse => cmd.buttons |= BUTTON_USE,
+            // The walk inside the hold is what a link does to pmove: retail
+            // pins a planting player to the bombzone entity.
+            SdPhase::Hold2 => {
+                cmd.buttons |= BUTTON_USE;
+                if let Some(t) = self.phase_started {
+                    let d = now.duration_since(t);
+                    if d >= SD_WALK_FROM && d < SD_WALK_TO {
+                        cmd.forward = 127;
+                    }
+                }
+            }
+            SdPhase::Sweep => {
+                let (yaw, pitch) = self.offset();
+                cmd.angles[1] = (cmd.angles[1] + deg_to_short(yaw)) & 0xffff;
+                cmd.angles[0] = (cmd.angles[0] + deg_to_short(pitch)) & 0xffff;
+                cmd.buttons |= BUTTON_USE;
+            }
+        }
+        cmd
+    }
+
+    /// Keeps the cmds of the replayable part: a gate stands a client at
+    /// `station_pose` and feeds it these.
+    fn record(&mut self, cmd: net::msg::UserCmd) {
+        if matches!(self.phase, SdPhase::Wait | SdPhase::Approach) {
+            return;
+        }
+        self.cmds.push((cmd.server_time, cmd));
+    }
+
+    fn enter(&mut self, now: Instant, next: SdPhase, ms: u128) {
+        if next == self.phase {
+            return;
+        }
+        println!("SD: {} -> {} at +{ms}ms", self.phase.label(), next.label());
+        self.phase = next;
+        self.phase_started = Some(now);
+        self.station_at = Some(now);
+    }
+
+    /// Feeds the newest snapshot in. Returns true once the run is done.
+    fn step(&mut self, now: Instant, snap: &net::snapshot::Snapshot) -> bool {
+        let p = &net::protocol::PROTOCOL_V1;
+        let started = *self.settled_at.get_or_insert(now);
+        let phase_started = *self.phase_started.get_or_insert(now);
+        let ms = now.duration_since(started).as_millis();
+        let in_phase = now.duration_since(phase_started);
+        let origin = snap.ps.origin(p);
+        let h = snap.ps.field_f32(p, "viewHeightCurrent");
+        let eye = [
+            origin[0],
+            origin[1],
+            origin[2] + if h > 0.0 { h } else { EYE_HEIGHT },
+        ];
+        let objs = &snap.ps.arrays.objectives;
+        for (i, o) in objs.iter().enumerate().take(2) {
+            self.saw_current[i] |= o.state == SD_STATE_CURRENT;
+        }
+        let slot0 = objs[0].origin_f32();
+        let base0 = *self.slot0_origin.get_or_insert(slot0);
+
+        // A death ends the run: the script the fixture replays cannot be
+        // resumed from a respawn somewhere else.
+        if snap.ps.field_i32(p, "pm_type") == PM_DEAD {
+            self.notes
+                .push(format!("# BROKEN died in {}", self.phase.label()));
+            println!("SD: died in {}, ending the run", self.phase.label());
+            self.enter(now, SdPhase::Done, ms);
+            return true;
+        }
+
+        // The plant, as the wire shows it: the zone's slot is deleted and the
+        // bomb's slot moves to where the charge went down.
+        let planted = self.saw_current[1] && objs[1].state == 0;
+        if self.role == SdRole::Defender
+            && self.bomb.is_none()
+            && planted
+            && dist(slot0, base0) > 1.0
+        {
+            println!(
+                "SD: plant seen at +{ms}ms, bomb at [{:.0},{:.0},{:.0}]",
+                slot0[0], slot0[1], slot0[2]
+            );
+            self.bomb = Some(slot0);
+            self.target = Some(slot0);
+        }
+
+        // The attacker looks level at the zone and the defender at the bomb;
+        // a trigger brush's centre is the midpoint of a brush that spans the
+        // map's height, so aiming at it would point the view at the sky.
+        let aim_point = match (self.role, self.phase) {
+            (SdRole::Defender, SdPhase::Sweep | SdPhase::Defuse) => self.bomb,
+            _ => self.target.map(|t| [t[0], t[1], eye[2]]),
+        };
+        if let Some(t) = aim_point {
+            let (yaw, pitch) = aim_at(eye, t);
+            let yaw = if self.phase == SdPhase::Approach {
+                let bearing = yaw as f32 * 360.0 / 65536.0;
+                deg_to_short(self.steer.heading(
+                    now,
+                    self.world.as_deref(),
+                    origin,
+                    bearing,
+                    STEER_AHEAD,
+                ))
+            } else {
+                yaw
+            };
+            self.aim = Some((yaw & 0xffff, pitch & 0xffff));
+        }
+        // The defender stops short of the zone so its own use press does not
+        // contest the plant, and stops at arm's length from the bomb.
+        self.advance = match (self.role, self.target) {
+            (SdRole::Defender, Some(t)) => {
+                let stop = if self.bomb.is_some() {
+                    SD_BOMB_RANGE
+                } else {
+                    SD_STANDOFF
+                };
+                horiz_dist(origin, t) > stop
+            }
+            _ => true,
+        };
+
+        if self.traced != Some(snap.message_num) {
+            self.traced = Some(snap.message_num);
+            let cmd = self.cmd(now);
+            let hud = &snap.ps.arrays.hud_current;
+            let (icon, bar) = sd_icon_and_bar(hud);
+            self.trace.push(SdSample {
+                phase: self.phase,
+                elapsed_ms: ms,
+                server_time: snap.server_time,
+                buttons: cmd.buttons,
+                forward: cmd.forward,
+                pm_type: snap.ps.field_i32(p, "pm_type"),
+                pm_flags: snap.ps.field_i32(p, "pm_flags"),
+                eflags: snap.ps.field_i32(p, "eFlags"),
+                ground: snap.ps.field_i32(p, "groundEntityNum"),
+                origin,
+                velocity: [
+                    snap.ps.field_f32(p, "velocity[0]"),
+                    snap.ps.field_f32(p, "velocity[1]"),
+                    snap.ps.field_f32(p, "velocity[2]"),
+                ],
+                viewangles: snap.ps.viewangles(p),
+                offset: self.offset(),
+                hud: sd_hud_str(hud),
+                objectives: sd_objectives_str(objs),
+                icon,
+                bar,
+            });
+        }
+
+        let next = match self.phase {
+            SdPhase::Wait if in_phase >= SD_WAIT => {
+                self.target = self.zone.as_ref().map(TriggerBox::centre);
+                if self.target.is_none() {
+                    self.notes
+                        .push("# BROKEN no bombzone_A: the walk never had a station".to_string());
+                }
+                SdPhase::Approach
+            }
+            SdPhase::Approach => match self.role {
+                SdRole::Attacker
+                    if self.zone.as_ref().is_some_and(|z| z.holds(origin))
+                        || self.target.is_none() =>
+                {
+                    self.station_pose = Some((origin, snap.ps.viewangles(p)));
+                    SdPhase::Hold1
+                }
+                SdRole::Defender
+                    if self
+                        .bomb
+                        .is_some_and(|b| horiz_dist(origin, b) <= SD_BOMB_RANGE) =>
+                {
+                    self.station_pose = Some((origin, snap.ps.viewangles(p)));
+                    self.sweep_index = 0;
+                    SdPhase::Sweep
+                }
+                _ => SdPhase::Approach,
+            },
+            SdPhase::Hold1 if in_phase >= SD_HOLD1 => SdPhase::Release,
+            SdPhase::Release if in_phase >= SD_RELEASE => SdPhase::Hold2,
+            SdPhase::Hold2 if in_phase >= SD_HOLD2 || planted => SdPhase::Watch,
+            SdPhase::Sweep => {
+                if self
+                    .station_at
+                    .is_some_and(|t| now.duration_since(t) >= SD_STATION)
+                {
+                    self.sweep_index += 1;
+                    self.station_at = Some(now);
+                }
+                if self.sweep_index >= SD_SWEEP.len() {
+                    SdPhase::Defuse
+                } else {
+                    SdPhase::Sweep
+                }
+            }
+            // The defuse deletes the bomb's own slot, which is the edge the
+            // hold waits for when it lands before the clock runs out.
+            SdPhase::Defuse
+                if in_phase >= SD_DEFUSE_HOLD || (self.saw_current[0] && objs[0].state == 0) =>
+            {
+                SdPhase::Watch
+            }
+            SdPhase::Watch if in_phase >= SD_WATCH => SdPhase::Done,
+            p => p,
+        };
+        self.enter(now, next, ms);
+        self.phase == SdPhase::Done
+    }
+}
+
+/// `ObjectiveStateIndexFromString`'s `"current"`
+/// (`docs/research/cod11-gsc-object-model.md`, the objective record).
+const SD_STATE_CURRENT: i32 = 4;
+
+/// `pmove_t`'s dead state, the one a killed player sits at.
+const PM_DEAD: i32 = 6;
+
+/// The pair's fixture: the header, the notes and one `[phase <name>]` block
+/// per phase, each holding its cmds interleaved with its traces by server time.
+fn write_sd_fixture(
+    configstrings: &[String],
+    join: &JoinProbe,
+    sd: &SdProbe,
+) -> anyhow::Result<()> {
+    let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
+    let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
+    let map = key("mapname");
+    let gametype = key("g_gametype");
+    let role = sd.role.label();
+
+    let mut out = String::new();
+    out.push_str(
+        "# Retail CoD 1.1d dedicated server: what a bomb plant and a bomb defuse do to a player.\n",
+    );
+    out.push_str(&format!(
+        "# map {map}, gametype sd (served as {gametype}), joined {}, weapon {}, role {}\n",
+        join.team,
+        join.weapon,
+        match sd.role {
+            SdRole::Attacker => "attacker",
+            SdRole::Defender => "defender",
+        },
+    ));
+    out.push_str("# Three shells, the gsc probe first, then the defender, then the attacker:\n");
+    out.push_str("#   COD_LNXDED_HOME=<absolute, no '+'> SECS=420 \\\n");
+    out.push_str("#       tools/run_probe.sh client-probes/probe_lookat mp_carentan\n");
+    out.push_str(
+        "#   cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-defuse --probe-secs 400\n",
+    );
+    out.push_str(
+        "#   cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-plant --probe-secs 380\n",
+    );
+    out.push_str(
+        "# The server's own games_mp.log carries the lookat fires and isLookingAt's answer;\n",
+    );
+    out.push_str("# this file is one client's side of the same run.\n");
+    out.push_str(&format!(
+        "# Phases: wait {} s past the match-start restart; approach walks at bombzone_A's\n",
+        SD_WAIT.as_secs()
+    ));
+    out.push_str(&format!(
+        "# centre; the attacker then holds use {} s and releases {} s (the abort) and holds\n",
+        SD_HOLD1.as_secs(),
+        SD_RELEASE.as_secs()
+    ));
+    out.push_str(&format!(
+        "# use through a full plant with forward sent from {} ms to {} ms; the defender\n",
+        SD_WALK_FROM.as_millis(),
+        SD_WALK_TO.as_millis()
+    ));
+    out.push_str(&format!(
+        "# waits the plant out, walks to the bomb and sweeps {} view stations of {} ms with\n",
+        SD_SWEEP.len(),
+        SD_STATION.as_millis()
+    ));
+    out.push_str("# use held, then aims true and holds use through the defuse.\n");
+    out.push_str(&format!(
+        "# station origin={} viewangles={}\n",
+        sd.station_pose.map_or("?".to_string(), |(o, _)| vec_str(o)),
+        sd.station_pose.map_or("?".to_string(), |(_, a)| vec_str(a)),
+    ));
+    out.push_str(
+        "# ms is since the first snapshot past the join; serverTime is the server's own\n",
+    );
+    out.push_str("# clock, and both !cmd and !trace carry it so a block reads in order.\n");
+    out.push_str("# !cmd is every usercmd sent from the station on: st, the input bits and the\n");
+    out.push_str("# three angle words, ANGLE2SHORT.\n");
+    out.push_str(
+        "# !trace is one line per snapshot: the movement fields, the sweep's offset off\n",
+    );
+    out.push_str(
+        "# the aim at the bomb in degrees, whether a 64x64 shader element (the icon) and\n",
+    );
+    out.push_str("# a shader element with a running scaleTime (the bar) are on the wire, the\n");
+    out.push_str(
+        "# unarchived HUD array as type:shader:w:h:fromW:fromH:scaleStart:scaleTime:x:y\n",
+    );
+    out.push_str("# per element, and block 4 as i:state:icon:ent:team:x,y,z per non-empty slot.\n");
+    for n in &sd.notes {
+        out.push_str(n);
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "!observed role={role} reached={} traced={} cmds={} sweep_stations={}\n",
+        sd.phase.label(),
+        sd.trace.len(),
+        sd.cmds.len(),
+        sd.sweep_index.min(SD_SWEEP.len()),
+    ));
+
+    // A cmd carries no phase of its own; the trace line it follows is what
+    // says which one it was sent in.
+    let mut phases: Vec<SdPhase> = Vec::new();
+    for s in &sd.trace {
+        if phases.last() != Some(&s.phase) {
+            phases.push(s.phase);
+        }
+    }
+    for phase in &phases {
+        out.push_str(&format!("[phase {}]\n", phase.label()));
+        let mut lines: Vec<(i32, usize, String)> = sd
+            .trace
+            .iter()
+            .filter(|s| s.phase == *phase)
+            .map(|s| (s.server_time, 0, s.line()))
+            .collect();
+        for (st, c) in &sd.cmds {
+            let at = sd
+                .trace
+                .iter()
+                .rev()
+                .find(|s| s.server_time <= *st)
+                .map(|s| s.phase);
+            if at != Some(*phase) {
+                continue;
+            }
+            lines.push((
+                *st,
+                1,
+                format!(
+                    "!cmd st={st} buttons={} wbuttons={} weapon={} up={} forward={} right={} \
+angles={},{},{}\n",
+                    c.buttons,
+                    c.wbuttons,
+                    c.weapon,
+                    c.up,
+                    c.forward,
+                    c.right,
+                    c.angles[0],
+                    c.angles[1],
+                    c.angles[2],
+                ),
+            ));
+        }
+        lines.sort_by_key(|(st, tag, _)| (*st, *tag));
+        for (_, _, l) in lines {
+            out.push_str(&l);
+        }
+    }
+
+    let path = format!("{PLAYERSTATE_FIXTURE_DIR}/{map}-sd-{role}.txt");
+    std::fs::create_dir_all(PLAYERSTATE_FIXTURE_DIR)?;
+    std::fs::write(&path, out)?;
+    println!("sd: {role} -> {path}");
+    Ok(())
 }
 
 /// What identifies an entity across snapshots. The slot number alone cannot: a
