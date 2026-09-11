@@ -336,6 +336,10 @@ engineering setup works.
   the `pm_type` the link put the player at. Start the gsc probe first, then
   the defender, then the attacker, and give each a long `--probe-secs`; the
   recipe is in `probe_lookat`'s README section and in each fixture's header.
+  That recipe passes `+set probe_teleport 1`, which is what puts both probes on
+  a teamdeathmatch spawn in the zone's courtyard: mp_carentan's allied S&D
+  spawns are a town away from `bombzone_A` and a first run spent all 380 s of
+  its walk never arriving.
   The three fixtures are
   `crates/server/tests/fixtures/triggers/<map>-sd-lookat.txt` and
   `crates/server/tests/fixtures/playerstate/<map>-sd-plant-attacker.txt` and

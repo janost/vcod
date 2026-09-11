@@ -6372,7 +6372,10 @@ impl SdProbe {
         // state, so an axis defender may never see the 4 the latch needs and
         // slot 0 relocating onto the charge is the whole signal there.
         let zone_deleted = self.saw_current[1] && objs[1].state == 0;
-        let slot0_moved = self.slot0_origin.is_some_and(|b| dist(slot0, b) > 1.0);
+        // The restart's own frames carry a blank block 4, whose slot 0 origin
+        // reads 0,0,0 against the latched base; only an added slot is a move.
+        let slot0_moved =
+            objs[0].state != 0 && self.slot0_origin.is_some_and(|b| dist(slot0, b) > 1.0);
         let planted = zone_deleted && slot0_moved;
         if self.role == SdRole::Defender && self.bomb.is_none() && (planted || slot0_moved) {
             println!(
@@ -6545,7 +6548,8 @@ fn write_sd_fixture(
     ));
     out.push_str("# Three shells, the gsc probe first, then the defender, then the attacker:\n");
     out.push_str("#   COD_LNXDED_HOME=<absolute, no '+'> SECS=420 \\\n");
-    out.push_str("#       tools/run_probe.sh client-probes/probe_lookat mp_carentan\n");
+    out.push_str("#       tools/run_probe.sh client-probes/probe_lookat mp_carentan \\\n");
+    out.push_str("#           +set probe_teleport 1\n");
     out.push_str(
         "#   cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-defuse --probe-secs 400\n",
     );
@@ -6556,6 +6560,10 @@ fn write_sd_fixture(
         "# The server's own games_mp.log carries the lookat fires and isLookingAt's answer;\n",
     );
     out.push_str("# this file is one client's side of the same run.\n");
+    out.push_str(
+        "# probe_teleport 1 puts both probes on a courtyard spawn beside the zone; without\n",
+    );
+    out.push_str("# it the walk starts a town away and never arrives on mp_carentan.\n");
     out.push_str(&format!(
         "# Phases: wait {} s past the match-start restart; approach walks at bombzone_A's\n",
         SD_WAIT.as_secs()

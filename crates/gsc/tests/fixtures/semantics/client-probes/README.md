@@ -158,11 +158,24 @@ Three shells, the gsc probe first, then the defender, then the attacker:
 
 ```
 COD_LNXDED_HOME=<absolute, no '+'> SECS=420 \
-    tools/run_probe.sh client-probes/probe_lookat mp_carentan
+    tools/run_probe.sh client-probes/probe_lookat mp_carentan +set probe_teleport 1
 # second and third shells, the defender first:
 cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-defuse --probe-secs 400
 cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-plant --probe-secs 380
 ```
+
+`probe_teleport 1` is why the walk arrives at all. mp_carentan's allied S&D
+spawns sit at y around -1064 and bombzone_A at (-146, 2490), some 3500 units
+through the town, and a first retail run spent its whole 380 s oscillating
+around (300, 1200) without ever reaching the zone. Under the cvar the probe
+puts each player once per level on a teamdeathmatch spawn in the courtyard,
+416 units from the zone for the attacker and 541 for the defender, so the walk
+is a courtyard crossing. A run without the cvar walks from the stock spawns
+and, on mp_carentan, does not get there. Anything after the map name is passed
+to the engine verbatim, which takes its `+set` arguments in any order. Only
+mp_carentan has the two origins; on any other map the thread logs `PROBE
+teleport unsupported <map>` once and does nothing. `crates/server/tests`'s A/B
+never sets the cvar, since it stands its clients where it wants them itself.
 
 What the three halves measure between them: how often a lookat fires while a
 player is aimed at it (the server's log says every frame, with no wait gate in
