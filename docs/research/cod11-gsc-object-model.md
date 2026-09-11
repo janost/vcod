@@ -1788,6 +1788,79 @@ INFERRED, off that being the whole of the function: it runs no trace of its
 own and computes no cone, it reads the last `G_CheckForPreventFriendlyFire`
 result back.
 
+Three retail captures on mp_carentan settle what the disassembly above leaves
+open. The server half is
+`crates/server/tests/fixtures/triggers/mp_carentan-sd-lookat.txt`, the two
+client halves are
+`crates/server/tests/fixtures/playerstate/mp_carentan-sd-plant-attacker.txt`
+and `-sd-defuse-defender.txt`, and all three are one run: the probe's
+`getTime()` and the clients' `serverTime` are the same clock, so a fire pairs
+with a snapshot by equality.
+
+VERIFIED, off the lookat fixture: mp_carentan spawns exactly one
+`trigger_lookat`, entity 170, and the census reads the same entity after every
+one of the run's four `InitGame:` boundaries.
+
+VERIFIED, off the lookat fixture: while a player's aim reaches the trigger the
+notify comes once every 50 ms, which is 20 per second at the server's tick.
+The fixture holds 444 fires in four contiguous runs of 30, 61, 152 and 201; all
+440 gaps inside those runs read exactly 50, and the only larger gaps (3050,
+3050 and 4550 ms) are the intervals the sweep spent aimed off the trigger.
+
+VERIFIED, off the lookat fixture: 444 `PROBE fire` lines against 443
+`PROBE looking`, and every fire but one carries a `looking` at the same
+`getTime()`. The exception is the last, `getTime` 124600, which is the frame
+the defuse completed on.
+
+VERIFIED, off the defender fixture's `[phase sweep]` paired with the lookat
+fixture: from a standing eye 20.4 units horizontally from the charge and 60.1
+above it, at the 15 stations of the sweep, the aim and the offsets
+`pitch -8`, `pitch +8`, `yaw -15`, `yaw -8`, `yaw +8`, `yaw +15` and `yaw +30`
+fired on every frame of their 1.5 s window, and `pitch -45`, `pitch -30`,
+`pitch -15`, `pitch +15`, `pitch +30`, `pitch +45` and `yaw -30` fired not at
+all. The two fires that land inside a non-firing station's first 100 ms
+are the previous station's, still arriving while the new view walks to
+the server.
+
+VERIFIED, off the same pairing: the defuse icon on the wire tracks the fires
+frame for frame. The 64x64 shader element enters the defender's HUD array in
+the snapshot whose `serverTime` equals the first fire's `getTime()`, and is
+gone in the first snapshot after the last fire, 50 ms later, at all four
+edges.
+
+The station origin is `-190.9, 2459.0, -21.9` and the charge sits at
+`-176.0, 2473.0, -22.0` (the defender fixture's `# station` line and the
+objectives column's slot 0). VERIFIED, off those two numbers and a 60-unit view
+height: the aim is yaw 43.2 and pitch 71.2 down, which is what the fixture's
+settled `viewangles` read at the aim station, and the range to the charge is
+63.5 units. A 16-unit trigger at that range subtends 7.2 degrees half-width to
+a face and 10.1 to a corner.
+
+INFERRED, off that half-width against the stations that fired: the pitch
+offsets behave as an angular test, 8 degrees inside the cone and 15 outside it,
+and the yaw offsets do not. At 71 degrees down the ray crosses the trigger's
+16x16 footprint rather than pointing at it, so a yaw offset slides the crossing
+sideways by roughly twice the horizontal reach times the half-angle's sine,
+about 10.6 units at 30 degrees, which is still inside a box whose corner reach
+is 11.3. INFERRED, off a slab test of the ray against the trigger's bounds
+(`-8..8` in x and y, `0..16` in z, taken from the charge origin): the yaw window
+that hits runs -26.2 to +27.1 degrees off the aim and the pitch window -16.7 to
++9.8, so the yaw window is both wider and asymmetric, and `yaw +30` sits 3.0
+degrees outside it where `yaw -30` sits 3.8 outside. That is the direction of
+the measured asymmetry and not its magnitude: the same slab test disagrees with
+the capture on `yaw +30`, which fired while the test puts the ray 0.99 units
+clear of the box, and on `pitch -15`, which did not fire while the test puts
+the ray through the far top corner. Both disagreements are within about a unit
+of the boundary, so the box bounds, the view height or the charge origin is off
+by that much and this capture does not resolve which.
+
+VERIFIED, off the run that preceded this one and is not kept in the repo: a
+live body on the sightline stops the fire. That run left the planter standing
+88 units out along the defender-to-bomb line, the whole sweep logged zero
+fires, and the fires began once that client dropped. This capture's gsc probe
+teleports the planter away for that reason.
+
+
 ### 23.2 `linkTo`, `unlink`, `enableLinkTo`
 
 VERIFIED, of `linkTo` (0x59cc4): it resolves the receiver to `g_entities[n]`
@@ -1852,10 +1925,50 @@ child list at `parent+0x2e8` through `record+0x4` (0x68118..0x6814c), clears
 spawning client (0x426f1), and those two are the only callers of the unlink
 half while `linkTo` is the only caller of either link half (`objdump -R`).
 
-Unmeasured: what velocity a linked client keeps, and what the mover does with
-`pm_type` 1. Nothing in `PmoveSingle` compares the field against 1, per the
-exhaustive site list above, so the disassembly does not hold the answer. The
-plant capture is what settles it, and Task 4 fills this paragraph in.
+What a linked client's mover does is measured rather than disassembled:
+nothing in `PmoveSingle` compares `pm_type` against 1, per the exhaustive site
+list above, so the answer is in
+`crates/server/tests/fixtures/playerstate/mp_carentan-sd-plant-attacker.txt`
+and `-sd-defuse-defender.txt`.
+
+VERIFIED, off the plant fixture's `[phase hold2]`: `pm_type` reads 1 on all 100
+snapshots from the `linkTo` at `serverTime` 86800 to 91750, and 0 on the
+snapshot either side.
+
+VERIFIED, off the same phase: a walk input moves a linked client not at all.
+The probe sent `forward=127` on 92 consecutive cmds, `st` 88750 to 90250, and
+across the 34 snapshots that span them the origin holds at
+`-192.8, 2457.1, -21.9` to the tenth of a unit and `velocity` reads
+`0.0, 0.0, 0.0` on every one. The re-anchor model in `G_RunClient` above is
+what the wire shows.
+
+VERIFIED, off both fixtures: `groundEntityNum` reads 0x3ff on every linked
+snapshot but the first, which still carries the ground entity the last free
+frame stood on (177 on the plant, 177 on the defuse). `pm_flags` holds 262144
+across the link and the unlink, and `eFlags` changes only at the probe's two
+`setOrigin` teleports, not at the link.
+
+VERIFIED, off the plant fixture: the link and its release both land on the next
+snapshot after the cmd that caused them. Use first travels at `st` 83766 and
+`serverTime` 83800 reads `pm_type` 1 with the progress bar on the wire; the
+release travels at `st` 85766 and 85800 reads `pm_type` 0 with the bar gone.
+
+VERIFIED, off the defuse fixture: `pm_type` reads 1 through the defuse and for
+two snapshots past the frame the bar ends on, 124600 and 124650, and 0 at
+124700. That 100 ms is retail's own unlink, with no probe teleport near it.
+
+VERIFIED, off `maps/MP/gametypes/sd.gsc` in `pak5.pk3`: the plant's success
+branch destroys the three HUD elements, `delete()`s both bombzones and returns
+without calling `unlink()`, where the branch the abort takes calls
+`other unlink()`. INFERRED, off that plus `G_EntUnlink` being called from
+nowhere else: a successful planter stays linked until the `delete()` of the
+bombzone it is linked to frees the record.
+
+VERIFIED, off the two runs that preceded this capture and are not kept in the
+repo: `setOrigin` on a still-linked player is undone by the next frame's
+re-anchor, and `unlink()` ahead of it takes effect immediately and the new
+origin then holds. That is why the gsc probe unlinks the planter before it
+moves it.
 
 ### 23.3 The objective table and its builtins
 
@@ -1932,6 +2045,29 @@ nor through a resolved direct call. `G_RunFrame` carries the identical loop
 inlined at 0x50977..0x50a51, ahead of its `HudElem_UpdateClient` and
 `ClientEndFrame` passes, and that inlined copy is the live one.
 
+VERIFIED, off `crates/server/tests/fixtures/playerstate/mp_carentan-sd-plant-attacker.txt`
+and `-sd-defuse-defender.txt`: before the plant, slots 0 and 1 both read state
+4, `teamNum` 0 and `entNum` 0x3ff, slot 0 at `-146, 2490, 16` with icon 8 and
+slot 1 at `1792, 2080, 20` with icon 11, and both slots reach the axis client
+as well as the allied one. VERIFIED, off `maps/MP/gametypes/sd.gsc` in
+`pak5.pk3`: the gametype calls `objective_team` nowhere, so that is the filter
+passing a `teamNum` of 0 rather than the table being unscoped.
+
+VERIFIED, off both fixtures at `serverTime` 91800, the frame the plant
+completes: slot 0 reads state 4, icon 14 and origin `-176, 2473, -22`, and slot
+1 reads state 0 with its icon 11 and its origin `1792, 2080, 20` still on the
+wire. VERIFIED, off sd.gsc: the script ran `objective_delete(0)`,
+`objective_delete(1)` and then `objective_add(0, "current", bombtrigger.origin,
+"gfx/hud/hud@bombplanted.tga")`, and `objective_delete` zeroes origin, teamNum
+and icon in the level record. INFERRED, off the inlined filter above writing
+only the state dword when a record's state is 0: what a client is sent for a
+deleted slot is state 0 over the six stale dwords its own copy already held,
+which is why slot 1's icon and origin survive a delete on the wire.
+
+VERIFIED, off the defender fixture at 124600, the frame the defuse completes:
+slot 0 goes to state 0 the same way, with icon 14 and the charge's origin still
+present.
+
 ### 23.4 The three tweens
 
 VERIFIED: each of the three addresses its hudelem record as
@@ -1975,6 +2111,44 @@ from 6: the twelve fields above occupy wire indices 14 (`fromColor`), 15
 19 (`fromHeight`), 22 (`fromWidth`), 23 (`moveStartTime`), 24 (`moveTime`), 25
 (`fromX`), 26 (`fromY`) and 27 (`duration`). Every record offset read above
 matches that table's offset column.
+
+VERIFIED, off `crates/server/tests/fixtures/playerstate/mp_carentan-sd-plant-attacker.txt`:
+a plant puts three elements on the attacker's wire, read as
+`type:shader:width:height:fromWidth:fromHeight:scaleStartTime:scaleTime:x:y`.
+The plant icon is `3:6:64:64:0:0:0:0:320:345`, the bar's background
+`3:2:292:12:0:0:0:0:320:385` and the bar itself `3:3:288:8:0:8:<start>:5000:176:385`,
+where `<start>` is the `level.time` of the frame the plant began. Only the bar
+carries a tween: `fromWidth` 0 and `fromHeight` 8 against a live width of 288
+is `scaleOverTime(level.planttime, level.barsize, 8)` after
+`setShader("white", 0, 8)`.
+
+VERIFIED, off `-sd-defuse-defender.txt`: the defuse's three are the same
+element shapes with `shader` 7 on the icon and `scaleTime` 10000 on the bar,
+`3:3:288:8:0:8:114600:10000:176:385`.
+
+VERIFIED, off both fixtures: the bar's `scaleTime` is the whole of the action's
+duration. The plant's bar starts at 86800 and the objective slots move at
+91800, 5000 ms later; the defuse's starts at 114600 and slot 0 goes to state 0
+at 124600, 10000 later.
+
+VERIFIED, off the plant fixture: an aborted plant carries no progress forward.
+The first hold ran from 83800 to a release at 85766 and the second hold's bar
+enters the wire at 86800 with `scaleStartTime` 86800 and the full 5000.
+
+VERIFIED, off the plant fixture read against the wire: these elements travel in
+the playerstate's archived HUD array, not the current one. The first run of the
+same probe read `hud_current` alone and its column was empty through a whole
+plant at `pm_type` 1; reading the archived array first carries all four
+elements.
+
+VERIFIED, off `maps/MP/gametypes/sd.gsc` in `pak5.pk3`: `bomb_think` creates
+the defuse icon on any `"trigger"` notify from a defender who `isOnGround()`,
+its own progress loop allows `distance(other.origin, self.origin) < 64`, and
+`check_bomb` destroys the icon as soon as `distance(self.origin,
+trigger.origin) < 32` stops holding. INFERRED, off those two radii: between 32
+and 64 units the icon is created and destroyed without a `wait` between, so it
+never reaches a snapshot, and a capture taken from 47 units out saw no icon at
+all.
 
 ### 23.5 `useButtonPressed`, `isOnGround`, `isAlive`
 
