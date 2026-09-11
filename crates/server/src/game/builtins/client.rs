@@ -38,6 +38,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("getviewmodel", get_view_model),
     ("usebuttonpressed", use_button_pressed),
     ("isonground", is_on_ground),
+    ("islookingat", is_looking_at),
     ("getcurrentweapon", get_current_weapon),
     ("cloneplayer", clone_player),
     ("dropitem", drop_item),
@@ -88,6 +89,23 @@ pub fn is_on_ground(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
     Ok(Value::Int(host.client_on_ground[slot] as i32))
+}
+
+/// `self isLookingAt(ent)` (0x4576c): whether `ent` is what the last aim
+/// trace entered. No trace or cone of its own
+/// (docs/research/cod11-gsc-object-model.md, 23.1).
+pub fn is_looking_at(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let looking = match args.first() {
+        Some(Value::Entity(id)) => host.client_lookat[slot] == Some(*id),
+        _ => false,
+    };
+    Ok(Value::Int(i32::from(looking)))
 }
 
 /// `self getCurrentWeapon()` (`PlayerCmd_getCurrentWeapon`): the name of the
@@ -803,6 +821,32 @@ mod tests {
             let prop = host.ents.spawn(cx).unwrap();
             let non_client = Some(Target::Entity(prop));
             assert!(is_on_ground(&mut host, cx, non_client, &[]).is_err());
+        });
+    }
+
+    /// `isLookingAt` answers the host's mirror of the last aim trace against
+    /// the entity asked about, 0 for any other argument, and refuses a
+    /// receiver with no `gclient_t`.
+    #[test]
+    fn is_looking_at_reads_the_host_mirror_of_the_aim_trace() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
+            let recv = Some(Target::Entity(c));
+            let zone = host.ents.spawn(cx).unwrap();
+            let other = host.ents.spawn(cx).unwrap();
+            host.client_lookat[0] = Some(zone);
+            let ask = |host: &mut GameHost, cx: &mut Cx, args: &[Value]| {
+                is_looking_at(host, cx, recv, args).unwrap()
+            };
+            assert_eq!(ask(&mut host, cx, &[Value::Entity(zone)]), Value::Int(1));
+            assert_eq!(ask(&mut host, cx, &[Value::Entity(other)]), Value::Int(0));
+            assert_eq!(ask(&mut host, cx, &[Value::Int(3)]), Value::Int(0));
+            host.client_lookat[0] = None;
+            assert_eq!(ask(&mut host, cx, &[Value::Entity(zone)]), Value::Int(0));
+
+            let non_client = Some(Target::Entity(other));
+            assert!(is_looking_at(&mut host, cx, non_client, &[Value::Entity(zone)]).is_err());
         });
     }
 

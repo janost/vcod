@@ -547,6 +547,43 @@ impl ScriptRuntime {
         }
     }
 
+    /// A client's eye (lean included) and `[pitch, yaw]` aim as the tick left
+    /// them, for `aim_lookat`.
+    pub fn set_client_aim(&mut self, slot: usize, eye: [f32; 3], aim: [f32; 2]) {
+        if let Some(a) = self.host.client_aim.get_mut(slot) {
+            *a = (eye, aim);
+        }
+    }
+
+    /// `ClientEndFrame`'s aim trace (`G_CheckForPreventFriendlyFire`,
+    /// 0x4f88c): once per frame per playing client, after the script frame,
+    /// the lookat the aim enters first is stored for `isLookingAt` and fired
+    /// through the same notify the touch pass raises, whose waiters run on
+    /// the next frame (docs/research/cod11-gsc-object-model.md 23.1). Every
+    /// frame it is aimed at, since `G_Trigger` gates nothing.
+    pub fn aim_lookat(&mut self, slot: usize, now_ms: i32) {
+        let Some(client) = self.client_entity(slot) else {
+            return;
+        };
+        if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
+            self.host.client_lookat[slot] = None;
+            return;
+        }
+        let (eye, aim) = self.host.client_aim[slot];
+        let host = &mut self.host;
+        let hit = self
+            .vm
+            .with_cx(|cx| crate::game::trigger::aim_trace(host, cx, eye, aim));
+        self.host.client_lookat[slot] = hit;
+        if let Some(id) = hit {
+            if self.host.triggers.fire(id, now_ms, &mut |_| 0) {
+                let event = self.vm.with_cx(|cx| cx.intern_folded("trigger"));
+                self.vm
+                    .notify(Target::Entity(id), event, &[Value::Entity(client)]);
+            }
+        }
+    }
+
     /// A client's entity state as the tick's moves left it, for
     /// `cloneplayer`. `None` for a slot with no sim.
     pub fn set_client_entity_state(
@@ -1294,6 +1331,15 @@ impl ScriptRuntime {
         }
     }
 
+    /// Writes a folded field on `level`.
+    pub fn set_level_field_for_test(&mut self, name: &str, v: Value) {
+        let level = self.vm.level_id();
+        self.vm.with_cx(|cx| {
+            let atom = cx.intern_folded(name);
+            cx.set_field(level, atom, v);
+        });
+    }
+
     /// Reads a folded field off `level`.
     pub fn level_field(&mut self, name: &str) -> vcod_gsc::Value {
         let level = self.vm.level_id();
@@ -1811,6 +1857,60 @@ mod tests {
         rt.touch_triggers_with_buttons(0, 100, 0);
         rt.run_frame(100);
         assert_eq!(rt.level_field("hits"), Value::Int(1));
+    }
+
+    /// The aim trace fires a `trigger_lookat` the client's view enters, with
+    /// the aimer as `other`, and `isLookingAt` answers off the same trace
+    /// (docs/research/cod11-gsc-object-model.md 23.1). Aimed away, neither.
+    #[test]
+    fn aiming_at_a_lookat_trigger_notifies_it_and_backs_islookingat() {
+        let mut rt = ScriptRuntime::for_test("main() { level.hits = 0; }");
+        rt.install_for_test(
+            "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
+             level.hits = level.hits + 1; level.who = other; } }\n\
+             check() { level.looking = self islookingat(level.zone); }",
+        );
+        let zone = rt.spawn_map_entity_for_test([300.0, 0.0, 0.0]);
+        rt.triggers_mut().register(
+            zone,
+            crate::game::trigger::TriggerKind::LookAt,
+            crate::game::trigger::TriggerShape::boxed([-20.0, -20.0, 40.0], [20.0, 20.0, 80.0]),
+            0,
+            0,
+        );
+        rt.set_level_field_for_test("zone", Value::Entity(zone));
+        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.run_frame(0);
+
+        let player = rt.spawn_client_for_test(0, [0.0, 0.0, 0.0]);
+        rt.set_client_state_for_test(0, "playing");
+        rt.set_client_pm_type(0, 0);
+
+        rt.set_client_aim(0, [0.0, 0.0, 60.0], [0.0, 0.0]);
+        rt.aim_lookat(0, 50);
+        rt.run_frame(50);
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "one notify");
+        assert_eq!(rt.level_field("who"), Value::Entity(player));
+        rt.start_thread_for_test(player, "check", 50);
+        rt.run_frame(100);
+        assert_eq!(rt.level_field("looking"), Value::Int(1));
+
+        // Aimed away: no fire, and the answer drops.
+        rt.set_client_aim(0, [0.0, 0.0, 60.0], [0.0, 90.0]);
+        rt.aim_lookat(0, 150);
+        rt.run_frame(150);
+        assert_eq!(rt.level_field("hits"), Value::Int(1));
+        rt.start_thread_for_test(player, "check", 150);
+        rt.run_frame(200);
+        assert_eq!(rt.level_field("looking"), Value::Int(0));
+
+        // Every frame it is aimed at, since `G_Trigger` gates nothing.
+        rt.set_client_aim(0, [0.0, 0.0, 60.0], [0.0, 0.0]);
+        rt.aim_lookat(0, 250);
+        rt.run_frame(250);
+        rt.aim_lookat(0, 300);
+        rt.run_frame(300);
+        assert_eq!(rt.level_field("hits"), Value::Int(3));
     }
 
     /// A script `delete()` takes the trigger row with the entity, and the

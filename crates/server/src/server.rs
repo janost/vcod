@@ -2751,6 +2751,19 @@ impl Server {
                     sim.end_frame(self.sv_time_ms);
                 }
             }
+            // `ClientEndFrame`'s aim trace, after the script frame and the
+            // mirrors so it reads the frame's final eye and aim; the fire it
+            // raises wakes its waiters next frame (object-model doc 23.1).
+            // The `pm_type` goes with it: a spawn above changed it with no
+            // cmd, and the runtime's gate is what clears a dead or
+            // spectating client's `isLookingAt`.
+            for (slot, c) in self.clients.iter().enumerate() {
+                if let Some(sim) = c.as_ref().and_then(|c| c.sim.as_ref()) {
+                    rt.set_client_pm_type(slot, sim.wire_pm_type());
+                    rt.set_client_aim(slot, sim.ps.view().eye.into(), sim.aim_angles());
+                    rt.aim_lookat(slot, self.sv_time_ms);
+                }
+            }
         }
         // `trap_SendConsoleCommand`'s `EXEC_APPEND`: what a builtin queued
         // this frame runs at the top of the next tick, never mid-frame.
