@@ -379,6 +379,7 @@ pub fn segment_enters_hulls(
     let d = end - start;
     hulls
         .iter()
+        .filter(|b| !b.planes.is_empty())
         .filter_map(|b| {
             let (mut t_enter, mut t_exit) = (0.0f32, 1.0f32);
             for &(n, dist) in &b.planes {
@@ -406,10 +407,18 @@ pub fn segment_enters_hulls(
 }
 
 /// The lookat trigger the client's aim ray enters first, if the world does
-/// not stop it sooner: `G_CheckForPreventFriendlyFire`'s trace
-/// (docs/research/cod11-gsc-object-model.md 23.1). `aim` is `[pitch, yaw]`
-/// in wire degrees, the pair `ClientSim::aim_angles` returns. A lookat with
-/// brushes is entered through them, one without through its box.
+/// not stop it sooner: `G_CheckForPreventFriendlyFire`'s first trace, mask
+/// 0x20000001 (docs/research/cod11-gsc-object-model.md 23.1). `aim` is
+/// `[pitch, yaw]` in wire degrees, the pair `ClientSim::aim_angles` returns.
+/// A lookat with brushes is entered through them, one without through its
+/// box.
+///
+/// Not modelled: retail's second trace (0x22802001, a body in front of the
+/// trigger), so a player standing between the aimer and the lookat does not
+/// block ours where it blocks retail's. Also unmeasured: retail's single
+/// trace ends the function on whatever entity it hits first, so an
+/// intervening non-lookat trigger brush may stop it on the wrong classname;
+/// ours skips every other kind and reaches the lookat behind it.
 pub fn aim_trace(host: &mut GameHost, cx: &mut Cx, eye: [f32; 3], aim: [f32; 2]) -> Option<EntId> {
     let start = Vec3::from(eye);
     let (yaw, pitch) = crate::game::combat::aim_radians(aim);
@@ -846,6 +855,15 @@ mod tests {
             std::slice::from_ref(&hull),
         );
         assert_eq!(inside, Some(0.0));
+        // A hull with no planes is nothing, not everything.
+        let empty = BrushHull { planes: Vec::new() };
+        assert!(segment_enters_hulls(
+            Vec3::ZERO,
+            Vec3::new(400.0, 40.0, 0.0),
+            o,
+            std::slice::from_ref(&empty)
+        )
+        .is_none());
     }
 
     /// The aim trace answers the nearest `trigger_lookat` on the ray and

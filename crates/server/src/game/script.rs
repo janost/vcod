@@ -563,6 +563,9 @@ impl ScriptRuntime {
     /// frame it is aimed at, since `G_Trigger` gates nothing.
     pub fn aim_lookat(&mut self, slot: usize, now_ms: i32) {
         let Some(client) = self.client_entity(slot) else {
+            if let Some(l) = self.host.client_lookat.get_mut(slot) {
+                *l = None;
+            }
             return;
         };
         if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
