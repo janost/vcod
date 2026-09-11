@@ -839,6 +839,12 @@ pub fn probe(
             "sd: the run ended in {} before the script did, writing what it has",
             sd.phase.label()
         );
+        // The phase it stopped in is what the file is short of; a reader has
+        // to see that before trusting it as the pair's evidence.
+        if sd.phase != SdPhase::Done {
+            sd.notes
+                .push(format!("# BROKEN run ended in {}", sd.phase.label()));
+        }
         write_sd_fixture(client.configstrings(), &join, &sd)?;
     }
     if netchan_capture {
@@ -6336,14 +6342,16 @@ impl SdProbe {
             return true;
         }
 
-        // The plant, as the wire shows it: the zone's slot is deleted and the
-        // bomb's slot moves to where the charge went down.
-        let planted = self.saw_current[1] && objs[1].state == 0;
-        if self.role == SdRole::Defender
-            && self.bomb.is_none()
-            && planted
-            && dist(slot0, base0) > 1.0
-        {
+        // Two signals, and the move is the one both paths rest on.
+        // `saw_current` is never reset, so a restart's momentary delete would
+        // read as a plant without the move under it; and a team-scoped
+        // objective reaches the other team as state 0 whatever its real
+        // state, so an axis defender may never see the 4 the latch needs and
+        // slot 0 relocating onto the charge is the whole signal there.
+        let zone_deleted = self.saw_current[1] && objs[1].state == 0;
+        let slot0_moved = dist(slot0, base0) > 1.0;
+        let planted = zone_deleted && slot0_moved;
+        if self.role == SdRole::Defender && self.bomb.is_none() && (planted || slot0_moved) {
             println!(
                 "SD: plant seen at +{ms}ms, bomb at [{:.0},{:.0},{:.0}]",
                 slot0[0], slot0[1], slot0[2]
