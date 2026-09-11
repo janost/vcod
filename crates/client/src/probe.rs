@@ -6011,8 +6011,9 @@ const SD_BOMB_RANGE: f32 = 40.0;
 const SD_WATCH: Duration = Duration::from_secs(20);
 /// How far short of the bombzone the defender waits for the plant: inside the
 /// zone it would be standing on the attacker, and its own use press would
-/// contest the plant it is here to watch.
-const SD_STANDOFF: f32 = 150.0;
+/// contest the plant it is here to watch. At 150 it wandered into the
+/// courtyard clutter; at 200 it waits on the road the teleport put it on.
+const SD_STANDOFF: f32 = 200.0;
 /// (yaw, pitch) degrees off the aim at the bomb, one station each.
 #[rustfmt::skip]
 const SD_SWEEP: [(f32, f32); 15] = [
@@ -6079,8 +6080,9 @@ icon={} bar={} hud={} objectives={}\n",
     }
 }
 
-/// Block 5's unarchived array, the ten fields a plant or a defuse moves. All
-/// ten are integer netfields (`HUD_FIELD_BITS`), so the raw word is the value.
+/// Both HUD arrays, archived first then current, as the ten fields a plant or
+/// a defuse moves. All ten are integer netfields (`HUD_FIELD_BITS`), so the
+/// raw word is the value.
 fn sd_hud_str(elems: &[net::msg::HudElem]) -> String {
     use net::msg::hud_field as h;
     elems
@@ -6426,8 +6428,17 @@ impl SdProbe {
         if self.traced != Some(snap.message_num) {
             self.traced = Some(snap.message_num);
             let cmd = self.cmd(now);
-            let hud = &snap.ps.arrays.hud_current;
-            let (icon, bar) = sd_icon_and_bar(hud);
+            // A `newClientHudElem` lands in the archived array, so the bar
+            // and the icon are invisible to a reader of `hud_current` alone.
+            let hud: Vec<net::msg::HudElem> = snap
+                .ps
+                .arrays
+                .hud_archived
+                .iter()
+                .chain(snap.ps.arrays.hud_current.iter())
+                .copied()
+                .collect();
+            let (icon, bar) = sd_icon_and_bar(&hud);
             self.trace.push(SdSample {
                 phase: self.phase,
                 elapsed_ms: ms,
@@ -6446,7 +6457,7 @@ impl SdProbe {
                 ],
                 viewangles: snap.ps.viewangles(p),
                 offset: self.offset(),
-                hud: sd_hud_str(hud),
+                hud: sd_hud_str(&hud),
                 objectives: sd_objectives_str(objs),
                 icon,
                 bar,
@@ -6563,7 +6574,12 @@ fn write_sd_fixture(
     out.push_str(
         "# probe_teleport 1 puts both probes on a courtyard spawn beside the zone; without\n",
     );
-    out.push_str("# it the walk starts a town away and never arrives on mp_carentan.\n");
+    out.push_str(
+        "# it the walk starts a town away and never arrives on mp_carentan. It also puts\n",
+    );
+    out.push_str(
+        "# the defender at the planter's spot once the charge is down, inside the fuse.\n",
+    );
     out.push_str(&format!(
         "# Phases: wait {} s past the match-start restart; approach walks at bombzone_A's\n",
         SD_WAIT.as_secs()

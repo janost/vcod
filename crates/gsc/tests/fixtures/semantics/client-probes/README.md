@@ -170,8 +170,12 @@ through the town, and a first retail run spent its whole 380 s oscillating
 around (300, 1200) without ever reaching the zone. Under the cvar the probe
 puts each player once per level on a teamdeathmatch spawn in the courtyard,
 416 units from the zone for the attacker and 541 for the defender, so the walk
-is a courtyard crossing. A run without the cvar walks from the stock spawns
-and, on mp_carentan, does not get there. Anything after the map name is passed
+is a courtyard crossing. The same cvar also moves every
+defender to just behind the planter once the plant has spawned
+`level.bombmodel`, because the flak88 and the cart ring the zone and a walk
+that has to round them reached the charge 27 s after its 60 s fuse had blown
+it. A run without the cvar walks from the stock spawns and, on mp_carentan,
+does not get there. Anything after the map name is passed
 to the engine verbatim, which takes its `+set` arguments in any order. Only
 mp_carentan has the two origins; on any other map the thread logs `PROBE
 teleport unsupported <map>` once and does nothing. `crates/server/tests`'s A/B
