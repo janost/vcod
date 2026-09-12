@@ -1045,3 +1045,153 @@ pub fn serverid_of(cmd: &str) -> Option<i32> {
         .parse()
         .ok()
 }
+
+// ------------------------------------------------------- the S&D captures
+
+/// One `!trace` line of a `--probe-plant` / `--probe-defuse` fixture: the
+/// movement fields, the sweep's offset, the two HUD flags the probe computed
+/// and block 4 as the wire carried it.
+#[derive(Debug, Clone)]
+pub struct SdTrace {
+    pub ms: i64,
+    pub server_time: i32,
+    pub buttons: u8,
+    pub forward: i8,
+    pub pm_type: i32,
+    pub ground: i32,
+    pub origin: [f32; 3],
+    pub velocity: [f32; 3],
+    pub viewangles: [f32; 3],
+    pub yaw_off: f32,
+    pub pitch_off: f32,
+    /// `pitchApplied`; `None` on a capture taken before the column existed.
+    pub pitch_applied: Option<f32>,
+    pub icon: bool,
+    pub bar: bool,
+    /// The HUD column verbatim, for a failure message.
+    pub hud: String,
+    /// Slot -> (state, icon, entNum, teamNum, origin), non-empty slots only.
+    pub objectives: BTreeMap<usize, (i32, i32, i32, i32, [f32; 3])>,
+}
+
+pub struct SdPhase {
+    pub name: String,
+    /// Every usercmd sent during the phase with its `st`, wire words.
+    pub cmds: Vec<(i32, UserCmd)>,
+    pub traces: Vec<SdTrace>,
+}
+
+pub struct SdFixture {
+    /// `# station origin=… viewangles=…`: where the replayable part starts.
+    pub station: ([f32; 3], [f32; 3]),
+    pub phases: Vec<SdPhase>,
+}
+
+impl SdFixture {
+    pub fn phase(&self, name: &str) -> &SdPhase {
+        self.phases
+            .iter()
+            .find(|p| p.name == name)
+            .unwrap_or_else(|| panic!("no [phase {name}] in the fixture"))
+    }
+}
+
+fn parse_vec3(s: &str) -> [f32; 3] {
+    let mut out = [0.0; 3];
+    for (i, v) in s.split(',').enumerate().take(3) {
+        out[i] = v.parse().unwrap_or_else(|_| panic!("a vector, got {s:?}"));
+    }
+    out
+}
+
+pub fn parse_sd_fixture(text: &str) -> SdFixture {
+    let station = kv_header(text, "# station ").expect("a `# station` header line");
+    let mut fx = SdFixture {
+        station: (
+            header_vec3(&station, "origin"),
+            header_vec3(&station, "viewangles"),
+        ),
+        phases: Vec::new(),
+    };
+    for line in text.lines() {
+        let line = line.trim_end();
+        if let Some(name) = line
+            .strip_prefix("[phase ")
+            .and_then(|l| l.strip_suffix(']'))
+        {
+            fx.phases.push(SdPhase {
+                name: name.to_string(),
+                cmds: Vec::new(),
+                traces: Vec::new(),
+            });
+            continue;
+        }
+        let Some(phase) = fx.phases.last_mut() else {
+            continue;
+        };
+        fn kv(rest: &str) -> BTreeMap<&str, &str> {
+            rest.split_whitespace()
+                .filter_map(|t| t.split_once('='))
+                .collect()
+        }
+        if let Some(rest) = line.strip_prefix("!cmd ") {
+            let m = kv(rest);
+            let i = |k: &str| m[k].parse::<i64>().unwrap();
+            let angles = parse_vec3(m["angles"]);
+            phase.cmds.push((
+                i("st") as i32,
+                UserCmd {
+                    buttons: i("buttons") as u8,
+                    wbuttons: i("wbuttons") as u8,
+                    weapon: i("weapon") as u8,
+                    up: i("up") as i8,
+                    forward: i("forward") as i8,
+                    right: i("right") as i8,
+                    angles: [angles[0] as i32, angles[1] as i32, angles[2] as i32],
+                    ..NULL_USERCMD
+                },
+            ));
+        } else if let Some(rest) = line.strip_prefix("!trace ") {
+            // `hud=` runs to `objectives=`, spaces inside.
+            let (head, objectives) = rest.split_once(" objectives=").unwrap_or((rest, ""));
+            let (head, hud) = head.split_once(" hud=").unwrap_or((head, ""));
+            let m = kv(head);
+            let i = |k: &str| m[k].parse::<i64>().unwrap();
+            let f = |k: &str| m[k].parse::<f32>().unwrap();
+            // An empty block reads `-`.
+            let objectives = objectives
+                .split_whitespace()
+                .filter(|slot| *slot != "-")
+                .map(|slot| {
+                    let mut it = slot.splitn(6, ':');
+                    let idx: usize = it.next().unwrap().parse().unwrap();
+                    let mut n = || it.next().unwrap().parse::<i32>().unwrap();
+                    let (state, icon, ent, team) = (n(), n(), n(), n());
+                    (
+                        idx,
+                        (state, icon, ent, team, parse_vec3(it.next().unwrap())),
+                    )
+                })
+                .collect();
+            phase.traces.push(SdTrace {
+                ms: i("ms"),
+                server_time: i("serverTime") as i32,
+                buttons: i("buttons") as u8,
+                forward: i("forward") as i8,
+                pm_type: i("pm_type") as i32,
+                ground: i("groundEntityNum") as i32,
+                origin: parse_vec3(m["origin"]),
+                velocity: parse_vec3(m["velocity"]),
+                viewangles: parse_vec3(m["viewangles"]),
+                yaw_off: f("yawOffset"),
+                pitch_off: f("pitchOffset"),
+                pitch_applied: m.get("pitchApplied").map(|v| v.parse().unwrap()),
+                icon: i("icon") != 0,
+                bar: i("bar") != 0,
+                hud: hud.to_string(),
+                objectives,
+            });
+        }
+    }
+    fx
+}
