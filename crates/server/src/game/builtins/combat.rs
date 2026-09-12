@@ -459,6 +459,14 @@ pub fn set_player_ignore_radius_damage(
 /// with (`["position"]` 31 call sites, `["fraction"]` 13, `["entity"]` 8,
 /// `["surfacetype"]` 3 in the extracted corpus), and array keys intern
 /// exactly, not folded, matching how any other string index does.
+///
+/// Retail's builtin (0x5abc4) writes five keys: `fraction`, `position` and
+/// `entity` always, then on a hit (`fraction != 1`, 0x5acf0) the trace's
+/// own `normal` and the surface name, and on a miss the normalised
+/// `end - start` as `normal` (0x5ad50..0x5ad7d) with `surfacetype` `"none"`.
+/// VERIFIED, the key strings out of `GScr_LoadConsts` (0x58550) and the
+/// writes; the branch is INFERRED off the `fcomp` at 0x5acf0.
+/// `_utility::getPlant` hands `["normal"]` to `orientToNormal`.
 pub fn bullet_trace(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -483,30 +491,38 @@ pub fn bullet_trace(
     let fraction = ArrayKey::Str(cx.intern_exact("fraction"));
     let entity = ArrayKey::Str(cx.intern_exact("entity"));
     let surfacetype = ArrayKey::Str(cx.intern_exact("surfacetype"));
+    let normal = ArrayKey::Str(cx.intern_exact("normal"));
 
-    match &host.world {
-        Some(world) => {
-            let start = Vec3::new(from[0], from[1], from[2]);
-            let end = Vec3::new(to[0], to[1], to[2]);
-            let t = world.collision.shot_trace(start, end);
-            cx.set_index(arr, fraction, Value::Float(t.fraction));
-            cx.set_index(
-                arr,
-                position,
-                Value::Vector([t.endpos.x, t.endpos.y, t.endpos.z]),
-            );
+    let start = Vec3::new(from[0], from[1], from[2]);
+    let end = Vec3::new(to[0], to[1], to[2]);
+    let t = host
+        .world
+        .as_ref()
+        .map(|w| w.collision.shot_trace(start, end));
+    let hit = t.as_ref().filter(|t| t.fraction < 1.0);
+    cx.set_index(arr, fraction, Value::Float(hit.map_or(1.0, |t| t.fraction)));
+    cx.set_index(
+        arr,
+        position,
+        Value::Vector(hit.map_or(to, |t| t.endpos.to_array())),
+    );
+    // `entity` needs entity bounds to resolve which gentity the trace
+    // stopped on (stage 5); a hit's `surfacetype` needs the surface-name
+    // table retail derives from `surface_flags`, which nothing here maps
+    // yet. Both stay undefined rather than guessing a value.
+    cx.set_index(arr, entity, Value::Undefined);
+    match hit {
+        Some(t) => {
+            cx.set_index(arr, normal, Value::Vector(t.normal.to_array()));
+            cx.set_index(arr, surfacetype, Value::Undefined);
         }
         None => {
-            cx.set_index(arr, fraction, Value::Float(1.0));
-            cx.set_index(arr, position, Value::Vector(to));
+            let dir = (end - start).normalize_or_zero();
+            cx.set_index(arr, normal, Value::Vector(dir.to_array()));
+            let none = Value::String(cx.intern_exact("none"));
+            cx.set_index(arr, surfacetype, none);
         }
     }
-    // `entity` needs entity bounds to resolve which gentity the trace
-    // stopped on (stage 5); `surfacetype` needs the surface-name table
-    // retail derives from `surface_flags`, which nothing here maps yet.
-    // Both stay undefined rather than guessing a value.
-    cx.set_index(arr, entity, Value::Undefined);
-    cx.set_index(arr, surfacetype, Value::Undefined);
     Ok(Value::Array(arr))
 }
 
@@ -834,9 +850,31 @@ mod tests {
         });
     }
 
+    /// `["normal"]` on a miss is the segment's own direction, normalised,
+    /// and `["surfacetype"]` is `"none"` (0x5ad50..0x5adb3).
+    #[test]
+    fn bullettrace_miss_carries_the_segment_direction_as_its_normal() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let from = Value::Vector([0.0, 0.0, 0.0]);
+            let to = Value::Vector([0.0, 0.0, -18.0]);
+            let args = [from, to, Value::Int(0), Value::Undefined];
+            let Value::Array(arr) = bullet_trace(&mut host, cx, None, &args).unwrap() else {
+                panic!()
+            };
+            let n = ArrayKey::Str(cx.intern_exact("normal"));
+            assert_eq!(cx.get_index(arr, n), Value::Vector([0.0, 0.0, -1.0]));
+            let st = ArrayKey::Str(cx.intern_exact("surfacetype"));
+            let Value::String(name) = cx.get_index(arr, st) else {
+                panic!("surfacetype is a string on a miss")
+            };
+            assert_eq!(cx.resolve(name), "none");
+        });
+    }
+
     /// With a real collision world, a trace straight down through the test
     /// floor (`vcod_common::collision::test_world`, top at z=0) stops short
-    /// of the end point: `fraction < 1`.
+    /// of the end point: `fraction < 1`, and `["normal"]` is the floor's.
     #[test]
     fn bullettrace_with_a_world_hits_real_geometry() {
         let (mut vm, mut host) = fixture();
@@ -857,6 +895,8 @@ mod tests {
                 panic!()
             };
             assert!(fraction < 1.0, "expected a hit, got fraction {fraction}");
+            let n = ArrayKey::Str(cx.intern_exact("normal"));
+            assert_eq!(cx.get_index(arr, n), Value::Vector([0.0, 0.0, 1.0]));
         });
     }
 
