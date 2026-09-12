@@ -2747,7 +2747,11 @@ impl Server {
                         sim.ps.origin = glam::Vec3::from(p) + glam::Vec3::from(link.offset);
                         sim.ps.velocity = glam::Vec3::ZERO;
                         // The mirror loop above ran before the re-anchor, so
-                        // script's copy is written again here.
+                        // script's copy is written again here. The anchor is
+                        // end-of-tick, where retail's is ahead of
+                        // `ClientThink`, so this tick's per-cmd touch passes
+                        // already ran at the un-anchored origins; the wire
+                        // carries the anchored one either way.
                         rt.set_client_origin(slot, sim.origin());
                     }
                     None => sim.link_to = None,
@@ -2803,6 +2807,10 @@ impl Server {
             for (slot, c) in self.clients.iter().enumerate() {
                 if let Some(sim) = c.as_ref().and_then(|c| c.sim.as_ref()) {
                     rt.set_client_pm_type(slot, sim.wire_pm_type());
+                    // The link the script frame made is only on the sim from
+                    // here, so the ground reading script sees next frame is
+                    // taken again after it.
+                    rt.set_client_on_ground(slot, sim.on_ground());
                     rt.set_client_aim(slot, sim.ps.view().eye.into(), sim.aim_angles());
                     rt.aim_lookat(slot, self.sv_time_ms);
                 }
@@ -2973,7 +2981,7 @@ impl Server {
                     sim.origin(),
                     cmd.buttons,
                     sim.wire_pm_type(),
-                    sim.ps.on_ground,
+                    sim.on_ground(),
                 ));
                 last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;

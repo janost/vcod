@@ -531,7 +531,11 @@ impl ScriptRuntime {
             let field = cx.intern_folded("origin");
             match host.get_field(cx, id, field) {
                 Value::Vector(v) => Some(v),
-                _ => None,
+                // Freedness is the `ents.get` above and nothing else: a live
+                // parent whose `origin` slot reads undefined anchors at the
+                // world origin, which is what `link_to` computed its offset
+                // against.
+                _ => Some([0.0; 3]),
             }
         })
     }

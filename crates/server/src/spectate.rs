@@ -444,6 +444,15 @@ impl ClientSim {
         self.pm_type == PmType::Normal && !self.dead
     }
 
+    /// `ps.groundEntityNum != ENTITYNUM_NONE`, which is what
+    /// `PlayerCmd_isOnGround` answers off: a linked client reads
+    /// `ENTITYNUM_NONE` on every linked snapshot of both retail captures, so
+    /// `isOnGround` is false under a link
+    /// (docs/research/cod11-gsc-object-model.md, 23.2 and 23.5).
+    pub fn on_ground(&self) -> bool {
+        self.ps.on_ground && self.link_to.is_none()
+    }
+
     /// `ps.pm_type` as the wire carries it. The touch pass gates on it, so it
     /// is read outside `to_wire` too.
     pub fn wire_pm_type(&self) -> i32 {
@@ -1108,10 +1117,7 @@ impl ClientSim {
                 self.ps.stance.view_height()
             };
             set("viewHeightTarget", target as i32);
-            // A linked client reads `ENTITYNUM_NONE` on every linked
-            // snapshot of both retail captures, whatever it stands on
-            // (object-model doc, 23.2).
-            let ground = match self.ps.on_ground && self.link_to.is_none() {
+            let ground = match self.on_ground() {
                 true => ENTITYNUM_WORLD,
                 false => ENTITYNUM_NONE,
             };
@@ -2055,6 +2061,36 @@ mod tests {
             attacker_origin: Some([1810.0, 2109.5, -23.9]),
             fatal,
         }
+    }
+
+    /// A linked client reads off the ground: `ENTITYNUM_NONE` on the wire and
+    /// false to `isOnGround`, which `PlayerCmd_isOnGround` answers off the
+    /// same field (object-model doc, 23.2 and 23.5).
+    #[test]
+    fn a_linked_client_reads_off_the_ground_and_at_pm_type_1() {
+        let p = &PROTOCOL_V1;
+        let mut sim = target();
+        assert!(sim.on_ground());
+        assert_eq!(sim.wire_pm_type(), 0);
+        sim.link_to = Some(Link {
+            parent: vcod_gsc::EntId(200),
+            offset: [0.0; 3],
+        });
+        assert!(
+            !sim.on_ground(),
+            "a linked client still reads on the ground"
+        );
+        assert_eq!(sim.wire_pm_type(), PM_NORMAL_LINKED);
+        let ps = sim.to_wire(p, 0, 0);
+        assert_eq!(
+            ps.fields[msg::PlayerState::field_index(p, "groundEntityNum").unwrap()],
+            ENTITYNUM_NONE as i32
+        );
+        sim.dead = true;
+        assert_eq!(sim.wire_pm_type(), PM_DEAD_LINKED);
+        // A spawn unlinks: `ClientSpawn` calls `G_EntUnlink`.
+        sim.become_player([0.0; 3], 0.0, NULL_USERCMD.angles);
+        assert_eq!(sim.link_to, None);
     }
 
     fn target() -> ClientSim {

@@ -808,14 +808,7 @@ impl Host for GameHost {
                 Ok(())
             }
             Route::Engine { slot, ty } => {
-                // An int-typed field takes a float by truncating it: the
-                // hudelem `x` is type 0 in retail's table (object-model doc,
-                // "HUD element fields") and stock `sd.gsc`'s plant writes
-                // `320 - level.barsize / 2.0` into it.
-                let value = match (ty, value) {
-                    (FieldType::Int, Value::Float(f)) => Value::Int(f as i32),
-                    _ => value,
-                };
+                let value = coerce(ty, value);
                 if !type_accepts(ty, value) {
                     return Err(ErrorKind::BadType("wrong type for an engine field"));
                 }
@@ -829,6 +822,7 @@ impl Host for GameHost {
                     return Err(ErrorKind::BadType("that entity has no client"));
                 };
                 let ty = fields::CLIENT_FIELDS[i].ty;
+                let value = coerce(ty, value);
                 if !type_accepts(ty, value) {
                     return Err(ErrorKind::BadType("wrong type for a client field"));
                 }
@@ -893,9 +887,28 @@ fn enum_index(cx: &Cx, names: &[&str], value: Value) -> Result<Value, ErrorKind>
     }
 }
 
-/// Which `Value` shapes each field type accepts. Retail converts in
-/// `Scr_SetGenericField`; we refuse a mismatch instead, so a script bug
-/// surfaces where retail would silently store a zero.
+/// The one conversion a field setter makes before the type check: a float
+/// into an int-typed slot, truncated toward zero.
+///
+/// INFERRED, and only from the fact that stock `sd.gsc` runs on retail: the
+/// hudelem `x` is type 0, an int, in retail's field table (object-model doc,
+/// "HUD element fields"), and the plant writes
+/// `320 - level.barsize / 2.0` into it, so `Scr_SetGenericField`'s int arm
+/// cannot be refusing a float. The rounding is not measured -- that value is
+/// 176.0, integral whichever way retail rounds -- and truncation toward zero
+/// is taken from the language doc's other numeric conversions. Open: a probe
+/// writing 1.7 into an int field and reading it back would pin it.
+fn coerce(ty: FieldType, v: Value) -> Value {
+    match (ty, v) {
+        (FieldType::Int, Value::Float(f)) => Value::Int(f as i32),
+        _ => v,
+    }
+}
+
+/// Which `Value` shapes each field type accepts once [`coerce`] has run.
+/// Retail converts more widely in `Scr_SetGenericField`; anything that is not
+/// the float-into-int above is refused here, so a script bug surfaces where
+/// retail would silently store a zero.
 fn type_accepts(ty: FieldType, v: Value) -> bool {
     use FieldType::*;
     match ty {
@@ -1241,8 +1254,9 @@ mod tests {
     }
 
     /// Writing the wrong type into a typed engine slot is refused. Retail
-    /// converts per field type in `Scr_SetGenericField`; we refuse rather than
-    /// silently coerce, so a script bug surfaces.
+    /// converts per field type in `Scr_SetGenericField`; only the
+    /// float-into-int [`coerce`] makes is followed here, and every other
+    /// mismatch is refused so a script bug surfaces.
     #[test]
     fn an_engine_slot_refuses_the_wrong_type() {
         let (mut vm, mut host) = fixture();
