@@ -86,6 +86,7 @@ the real corpus.
 | `#using_animtree("name");` | 114 | `animscripts/init.gsc:26` `#using_animtree ("generic_human");` (a space before the paren is legal) |
 | `/# ... #/` developer blocks | 32 | `_spawner.gsc:555` `/#[[anim.println]]("...");#/` |
 | vector literals `(x, y, z)` | 86 | `animscripts/utility.gsc:234` `poseOffset = (0,0,0);` |
+| vector component read `vec[0]`..`vec[2]` | 8 | `_utility.gsc:178` `vectorScale`, `_utility.gsc:250` `orientToNormal`; runs on every stock S&D plant. Reads a float. What retail answers to an out-of-range or non-integer key is unmeasured; vcod refuses both with a `BadType` |
 | empty array init `x = [];` | 157 | `dm.gsc:104` `level.healthqueue = [];` |
 | cast `(int)` | 12 | `_window.gsc:64` `xcount = (int)(yendorg[1]-windoworg[1])/spacing;` |
 | cast `(float)` | 17 | `_tankdrive.gsc:236` `x = (float) height;` |

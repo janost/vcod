@@ -492,6 +492,17 @@ impl Vm {
                 Op::LoadIndex => {
                     let key = pop!();
                     let obj = pop!();
+                    // A vector reads its components under 0..2 as floats:
+                    // `_utility::vectorScale` does so on every stock S&D
+                    // plant. What retail does with any other key is
+                    // unmeasured, so it is refused rather than guessed.
+                    if let Value::Vector(v) = obj {
+                        let Value::Int(i @ 0..=2) = key else {
+                            return Err(err(ErrorKind::BadType("vector index must be 0, 1 or 2")));
+                        };
+                        push!(Value::Float(v[i as usize]));
+                        continue;
+                    }
                     let Value::Array(id) = obj else {
                         return Err(err(ErrorKind::BadType("indexing needs an array")));
                     };

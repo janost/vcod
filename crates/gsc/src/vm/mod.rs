@@ -813,6 +813,30 @@ pub(crate) mod tests {
         assert_eq!(v, Value::Vector([11.0, 22.0, 33.0]));
     }
 
+    // `maps/MP/_utility.gsc` `vectorScale` and `orientToNormal` read
+    // `vec[0]`..`vec[2]` on every stock S&D plant, so the in-range read is
+    // pinned by the corpus; no retail probe measures the out-of-range or
+    // non-int key, and both stay a BadType until one does.
+    #[test]
+    fn a_vector_indexes_its_components_as_floats() {
+        let (v, _, _) = run("main() { v = (1.5, 2, 3); return (v[0], v[2], v[1]); }");
+        assert_eq!(v, Value::Vector([1.5, 3.0, 2.0]));
+        let (v, _, _) = run("main() { v = (1, 2, 3); return v[1] * 2; }");
+        assert_eq!(v, Value::Float(4.0));
+        assert!(matches!(
+            run_err("main() { v = (1, 2, 3); return v[3]; }"),
+            ErrorKind::BadType(_)
+        ));
+        assert!(matches!(
+            run_err("main() { v = (1, 2, 3); return v[\"x\"]; }"),
+            ErrorKind::BadType(_)
+        ));
+        assert!(matches!(
+            run_err("main() { v = (1, 2, 3); v[0] = 5; }"),
+            ErrorKind::BadType(_)
+        ));
+    }
+
     #[test]
     fn short_circuit_does_not_evaluate_the_right_side() {
         let (_, host, _) = run("main() { x = 0 && double(1); }");
