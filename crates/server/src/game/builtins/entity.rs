@@ -529,16 +529,26 @@ pub fn is_alive(
     Ok(Value::Int(alive as i32))
 }
 
-/// `isDefined(x)`: false only for a missing argument or `undefined` itself.
+/// `isDefined(x)`: false for a missing argument, `undefined` itself, and an
+/// entity handle whose slot is free. Retail catches the last by a
+/// generation counter (`gentity+0x300`, object-model doc section 14); a
+/// freed-slot check is what `Value::Entity` allows without one, and it
+/// reads a handle as live again once a new entity takes the slot. The
+/// counter is the complete fix (gsc-language doc, section 10).
+/// `sd.gsc:1859` depends on the freed case: `isDefined` on a `destroy()`ed
+/// progress bar decides whether the next plant makes a new one.
 pub fn is_defined(
-    _host: &mut GameHost,
+    host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    Ok(Value::Int(
-        !matches!(args.first(), None | Some(Value::Undefined)) as i32,
-    ))
+    let defined = match args.first() {
+        None | Some(Value::Undefined) => false,
+        Some(Value::Entity(id)) => host.ents.get(*id).is_some(),
+        Some(_) => true,
+    };
+    Ok(Value::Int(defined as i32))
 }
 
 /// `isTouching(other)`: a real box overlap between the receiver's absolute
@@ -1019,6 +1029,42 @@ mod tests {
             assert_eq!(
                 is_alive(&mut host, cx, None, &[Value::Entity(prop)]).unwrap(),
                 Value::Int(1)
+            );
+        });
+    }
+
+    /// A handle to a freed slot reads undefined: `sd.gsc:1859` tests
+    /// `isDefined(other.progressbackground)` on the handle its abort branch
+    /// `destroy()`ed, and creates a fresh element only when that is false.
+    /// The same for a `delete()`d entity once its deferred free has run.
+    #[test]
+    fn is_defined_reads_zero_on_a_freed_hud_elem_and_a_freed_entity() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let hud = super::super::hud::new_hud_elem(&mut host, cx, None, &[]).unwrap();
+            assert_eq!(
+                is_defined(&mut host, cx, None, &[hud]).unwrap(),
+                Value::Int(1)
+            );
+            let Value::Entity(hud_id) = hud else { panic!() };
+            super::super::hud::destroy(&mut host, cx, Some(Target::Entity(hud_id)), &[]).unwrap();
+            assert_eq!(
+                is_defined(&mut host, cx, None, &[hud]).unwrap(),
+                Value::Int(0)
+            );
+
+            let e = host.ents.spawn(cx).unwrap();
+            let ent = Value::Entity(e);
+            delete(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            assert_eq!(
+                is_defined(&mut host, cx, None, &[ent]).unwrap(),
+                Value::Int(1),
+                "delete() defers the free, so the handle still reads defined"
+            );
+            host.run_entity_thinks(host.level_time_ms + DELETE_DEFER_MS);
+            assert_eq!(
+                is_defined(&mut host, cx, None, &[ent]).unwrap(),
+                Value::Int(0)
             );
         });
     }
