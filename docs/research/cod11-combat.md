@@ -1801,10 +1801,12 @@ shipped `maps/mp/gametypes/_callbacksetup.gsc` declares.
 way. VERIFIED: both functions compare the pointer against 0 and call
 `Scr_AddUndefined` on the null arm instead of substituting an entity
 (`0x5cae5` and `0x5cb01` in `Scr_PlayerDamage`, `0x5cbd4` in
-`Scr_PlayerKilled`). So a death with no attacker behind it -- a mine's
-`radiusDamage`, a `trigger_hurt`, a fall -- reaches both callbacks with
-`eAttacker` and `eInflictor` undefined, and nothing in the engine turns them
-into `g_entities[ENTITYNUM_WORLD]` first.
+`Scr_PlayerKilled`). INFERRED, off those null arms: a death whose caller
+passed no attacker reaches both callbacks with `eAttacker` undefined, and
+nothing on this path turns it into `g_entities[ENTITYNUM_WORLD]`. The
+`radiusDamage` builtin is not such a caller: it passes the world entity
+itself (14.2), so a mine or a bomb reaches the callbacks with the world as
+`eAttacker` and only `eInflictor` undefined.
 
 What makes that safe for the stock scripts is `isPlayer`, `functions[81]` at
 `0x5efd4`. VERIFIED: it calls `Scr_GetType(0)` and branches to `Scr_AddInt(0)`
@@ -3620,8 +3622,8 @@ never touch `level+0x29F4`.
 
 What is left of the `radiusDamage` divergence entry in
 `cod11-gsc-language.md` after this: the victim walk, the standing box the
-builtin measures a victim with, and the `undefined` the callback gets where
-retail hands over the world entity. The flag is not among them.
+builtin measures a victim with. The flag is not among them, and neither is
+the attacker: vcod hands the callbacks the world entity too.
 
 ### 14.3 `CanDamage`
 

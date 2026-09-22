@@ -868,7 +868,7 @@ added closes that (section 14 of
   which the interpreter starts as soon as the builtin returns and before the
   calling thread's next instruction, so a script that damages and then reads
   `self.health` sees what the callback left, the way retail's synchronous call
-  does. Four things around it are still divergences, and every retail half
+  does. Three things around it are still divergences, and every retail half
   below is `docs/research/cod11-combat.md` section 14's, read out of the two
   functions there:
   - **A body between the blast and the victim does not shield it.** VERIFIED:
@@ -892,16 +892,11 @@ added closes that (section 14 of
     height (14.3). The host carries no stance, so a crouched or prone player
     is measured as if he stood. That moves the five probe points, not the
     distance, which is origin to origin either way.
-  - **The attacker reaches the callback as `undefined`.** VERIFIED: the
-    builtin passes `&g_entities[1022]`, the world entity (14.2), which no
-    script this VM runs can hold. INFERRED, since it is a branch condition:
-    the stock callback's own `isPlayer(eAttacker)` test takes the same branch
-    for both. vcod's fifth attacker argument is no
-    longer honoured, and no call in the shipped corpus passes one. VERIFIED:
-    retail reads its four arguments by index, `Scr_GetVector(0)` and
-    `Scr_GetFloat(1)` to `(3)` (14.2). INFERRED, from the absence of any arity
-    check in that body: a fifth argument is ignored rather than refused, which
-    is what vcod does with one.
+  - **Not a divergence: a fifth argument is ignored.** VERIFIED: retail
+    reads its four arguments by index, `Scr_GetVector(0)` and `Scr_GetFloat(1)` to `(3)`
+    (14.2). INFERRED, from the absence of any arity check in that body: a
+    fifth argument is ignored rather than refused, which is what vcod does
+    with one. No call in the shipped corpus passes one.
 - **Of the `SP_` layer, only what the wire can see runs.**
   `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces
   `G_CallSpawn`'s third case for the five classnames whose `SP_` function is

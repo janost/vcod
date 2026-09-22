@@ -389,15 +389,13 @@ pub fn radius_damage(
     );
     let (mod_, none) = (cx.intern_exact("MOD_EXPLOSIVE"), cx.intern_exact("none"));
     let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
+    // The inflictor is NULL and the attacker `g_entities[ENTITYNUM_WORLD]`
+    // (combat doc, 14.2), so the callbacks get `undefined` and the world.
+    let world_ent = host.ents.world(cx);
     for hit in hits {
         let args = vec![
-            // The world is the attacker and its own inflictor, and it reaches
-            // script as `undefined`: `Scr_PlayerDamage` (0x5ca18) calls
-            // `Scr_AddUndefined` for a null attacker or inflictor rather than
-            // substituting an entity, and `Scr_PlayerKilled` (0x5cb30) does
-            // the same. VERIFIED, the two null compares and both call sites.
             Value::Undefined,
-            Value::Undefined,
+            Value::Entity(world_ent),
             Value::Int(hit.damage),
             Value::Int(DFLAG_RADIUS),
             Value::String(mod_),
@@ -647,14 +645,16 @@ mod tests {
         rt
     }
 
-    /// `dm.gsc`'s own shape for a death with no player behind it: the killed
-    /// callback calls `isPlayer(attacker)` unguarded, the way line 492 does.
+    /// The stock gametypes' own shape for a death with no player behind it:
+    /// `sd.gsc:782` calls `attacker getEntityNumber()` ahead of any test,
+    /// and `dm.gsc:492` calls `isPlayer(attacker)` unguarded.
     const WORLD_BLAST: &str = r#"
         main() {}
         CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
             self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
         }
         CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {
+            level.playercam = eAttacker getEntityNumber();
             level.was_player = isPlayer(eAttacker);
             level.finished = 1;
         }
@@ -663,9 +663,9 @@ mod tests {
 
     /// A blast a script sets off names the world as the attacker, and the
     /// world is an *entity*: retail hands `g_entities[ENTITYNUM_WORLD]` over,
-    /// so `isPlayer(attacker)` answers false and the death runs on. Passing
-    /// `undefined` instead aborts the thread at the `isPlayer` call, which is
-    /// what `_minefields.gsc`'s `radiusDamage` did to every mine kill.
+    /// so `getEntityNumber` answers 1022, `isPlayer(attacker)` answers false
+    /// and the death runs on. Passing `undefined` instead aborted `sd.gsc`'s
+    /// killed callback at line 782 on every bomb kill.
     #[test]
     fn a_world_blast_names_the_world_entity_as_the_attacker() {
         let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, WORLD_BLAST);
@@ -685,6 +685,7 @@ mod tests {
         rt.run_frame(0);
 
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.level_field("playercam"), Value::Int(1022));
         assert_eq!(rt.level_field("was_player"), Value::Int(0));
         assert_eq!(
             rt.level_field("finished"),
@@ -773,8 +774,7 @@ mod tests {
     /// inside the radius, inline, before the calling thread's next line:
     /// the near client takes the falloff's damage and dies of it, the one
     /// 1000 units out takes nothing, and the flags the script is handed
-    /// carry `DFLAG_RADIUS`. The attacker is the world, which reaches the
-    /// callback as `undefined`.
+    /// carry `DFLAG_RADIUS`. The attacker is the world entity.
     ///
     /// The second blast is the dead check: a corpse is not damaged again,
     /// so the near client's callback ran once.
@@ -829,8 +829,8 @@ mod tests {
         assert_eq!(rt.client_field(0, "mod").as_deref(), Some("MOD_EXPLOSIVE"));
         assert_eq!(
             rt.client_field(0, "killer").as_deref(),
-            Some("0"),
-            "the world set this blast off, so the callback's attacker is undefined"
+            Some("1"),
+            "the world set this blast off, and the world is an entity"
         );
         assert_eq!(rt.client_field(0, "hits").as_deref(), Some("1"));
         assert_eq!(rt.client_vitals(0).health, 0);

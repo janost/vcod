@@ -206,6 +206,10 @@ pub struct ObjectTable {
     /// `fields::route_hud`, and its own script struct); the gentity-only
     /// `solid`, `hidden` and `attachments` go unused.
     huds: Vec<Option<GEntity>>,
+    /// `g_entities[ENTITYNUM_WORLD]`, once something has handed it to
+    /// script. Kept out of `ents` so no walk bounded by
+    /// `level.num_entities`, `getEntArray`'s or the snapshot's, reaches it.
+    world: Option<GEntity>,
     num_entities: u32,
     /// `level.firstFreeEnt`/`level.lastFreeEnt` (level+0x10, level+0x14): a
     /// FIFO of freed slots that `G_Spawn` drains before it bumps the counter.
@@ -223,6 +227,7 @@ impl ObjectTable {
         ObjectTable {
             ents: (0..MAX_GENTITIES).map(|_| None).collect(),
             huds: (0..MAX_HUDELEMS).map(|_| None).collect(),
+            world: None,
             num_entities: FIRST_MAP_ENTITY,
             free_list: std::collections::VecDeque::new(),
         }
@@ -263,6 +268,28 @@ impl ObjectTable {
             loop_sound: 0,
         });
         Ok(id)
+    }
+
+    /// The world as a script value: what the `radiusDamage` builtin passes
+    /// the damage callbacks as the attacker (docs/research/cod11-combat.md,
+    /// 14.2). Made on first use; the world carries no fields of its own.
+    pub fn world(&mut self, cx: &mut Cx) -> EntId {
+        if self.world.is_none() {
+            self.world = Some(GEntity {
+                engine: vec![Value::Undefined; engine_slot_count()],
+                client: None,
+                script: cx.new_struct(),
+                solid: true,
+                hidden: false,
+                attachments: Vec::new(),
+                hud: None,
+                think: None,
+                nextthink: 0,
+                events: EventRing::default(),
+                loop_sound: 0,
+            });
+        }
+        EntId(ENTITYNUM_WORLD)
     }
 
     /// A client's entity, at entity number == its client slot. Retail's
@@ -475,6 +502,7 @@ impl ObjectTable {
     pub fn get(&self, id: EntId) -> Option<&GEntity> {
         match id.0.checked_sub(FIRST_HUD_ELEM) {
             Some(i) => self.huds.get(i as usize)?.as_ref(),
+            None if id.0 == ENTITYNUM_WORLD => self.world.as_ref(),
             None => self.ents.get(id.0 as usize)?.as_ref(),
         }
     }
@@ -482,6 +510,7 @@ impl ObjectTable {
     pub fn get_mut(&mut self, id: EntId) -> Option<&mut GEntity> {
         match id.0.checked_sub(FIRST_HUD_ELEM) {
             Some(i) => self.huds.get_mut(i as usize)?.as_mut(),
+            None if id.0 == ENTITYNUM_WORLD => self.world.as_mut(),
             None => self.ents.get_mut(id.0 as usize)?.as_mut(),
         }
     }
