@@ -2741,18 +2741,22 @@ impl Server {
                 };
                 sim.link_to = match op {
                     crate::game::host::LinkOp::Link { parent, offset } => {
-                        Some(crate::spectate::Link { parent, offset })
+                        Some(crate::spectate::Link {
+                            parent,
+                            offset,
+                            velocity: sim.ps.velocity.into(),
+                        })
                     }
                     crate::game::host::LinkOp::Unlink => None,
                 };
             }
             // `G_RunClient`'s re-anchor: a linked client's origin is the
             // parent's plus the offset it linked at, and a held walk input
-            // moves it not at all -- retail's plant capture reads the origin
-            // fixed and `velocity` zero across 92 forward cmds (23.2). A
-            // parent that is gone releases the link: `sd.gsc`'s plant
-            // success never unlinks, the bombzone's `delete()` is what frees
-            // the record.
+            // moves it not at all. Its velocity is whatever it linked with:
+            // retail's plant capture holds 184,27 across the abort's two
+            // linked seconds and 0 under 92 forward cmds (23.2). A parent
+            // that is gone releases the link: `sd.gsc`'s plant success never
+            // unlinks, the bombzone's `delete()` is what frees the record.
             for (slot, c) in self.clients.iter_mut().enumerate() {
                 let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) else {
                     continue;
@@ -2761,7 +2765,7 @@ impl Server {
                 match rt.entity_origin_of(link.parent) {
                     Some(p) => {
                         sim.ps.origin = glam::Vec3::from(p) + glam::Vec3::from(link.offset);
-                        sim.ps.velocity = glam::Vec3::ZERO;
+                        sim.ps.velocity = link.velocity.into();
                         // The mirror loop above ran before the re-anchor, so
                         // script's copy is written again here. The anchor is
                         // end-of-tick, where retail's is ahead of

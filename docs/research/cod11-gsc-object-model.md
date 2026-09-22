@@ -2019,6 +2019,16 @@ across the 31 snapshots that span them the origin holds at
 outright under `pm_type` 1 is another; a zero origin delta with a zero velocity
 is consistent with both and this capture does not separate them.
 
+VERIFIED, off the plant fixture's `[phase hold1]`, the abort: the attacker
+links while still moving and its `velocity` reads `184.0, 27.0, 0.0` on every
+linked snapshot from 83800 to 85750 and on the release frame 85800, with the
+origin held at `-214.9, 2453.8, -21.9`; the snapshot after the release reads
+`138.0, 20.0, 0.0` and the origin has moved 7.6 units. INFERRED, off that and
+the zero of `[phase hold2]`: the link freezes the velocity at its value on the
+link frame rather than zeroing it, and the unlinked mover resumes from it.
+Measured on vcod's live run of this pair (23.7): ours zeroed it, which the
+gate's placed clients, linking from a standstill, could not see.
+
 VERIFIED, off both fixtures: `groundEntityNum` reads 0x3ff on every linked
 snapshot but the first, which still carries the ground entity the last free
 frame stood on (177 on the plant, 177 on the defuse).

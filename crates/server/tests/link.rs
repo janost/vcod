@@ -104,9 +104,13 @@ fn a_planting_client_is_linked_and_the_abort_releases_it() {
         ENTITYNUM_NONE,
         "a linked client reads no ground entity on either retail capture"
     );
-    for axis in ["velocity[0]", "velocity[1]", "velocity[2]"] {
+    // A planter that stood still links with no velocity. The z is held to
+    // under a unit, not to 0: retail's `PmoveSingle` snaps the velocity to
+    // integers and ours does not, so a grounded client carries a sub-unit z.
+    for axis in ["velocity[0]", "velocity[1]"] {
         assert_eq!(s.ps.field_f32(p, axis), 0.0, "{axis} under the link");
     }
+    assert!(s.ps.field_f32(p, "velocity[2]").abs() < 0.5);
     let before = s.ps.origin(p);
 
     // 30 more with a walk input held. Retail's capture sent 92 forward cmds
@@ -135,6 +139,75 @@ fn a_planting_client_is_linked_and_the_abort_releases_it() {
     }
     let s = ca.snapshots().newest().expect("a snapshot");
     assert_eq!(s.ps.field_i32(p, "pm_type"), 0, "the planter stayed linked");
+}
+
+/// A client that links while moving keeps the velocity it linked with:
+/// retail's abort reads `velocity` 184,27 on every linked snapshot and on
+/// the release frame, while the origin holds (object-model doc, 23.2).
+#[test]
+fn a_client_linked_on_the_move_keeps_its_velocity() {
+    let p = &PROTOCOL_V1;
+    let mut now = Instant::now();
+    let Some(mut sv) = server(now) else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("axis", "kar98k_mp"),
+    );
+    for _ in 0..200 {
+        now += Duration::from_millis(FRAME_MS as u64);
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&NULL_USERCMD);
+        step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+    }
+    sv.place_client(0, STATION, 0.0);
+    let weapon = ca
+        .snapshots()
+        .newest()
+        .expect("a snapshot")
+        .ps
+        .field_i32(p, "weapon") as u8;
+    // A few frames of walk to build speed, then use on top of it: the live
+    // probe's planter is still moving when its first use cmd goes out.
+    let walk = UserCmd {
+        forward: 127,
+        weapon,
+        ..NULL_USERCMD
+    };
+    let walk_use = UserCmd {
+        buttons: BUTTON_USE,
+        ..walk
+    };
+    let mut linked = Vec::new();
+    for i in 0..40 {
+        now += Duration::from_millis(FRAME_MS as u64);
+        ca.send_frame(if i < 4 { &walk } else { &walk_use });
+        cb.send_frame(&NULL_USERCMD);
+        step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        let s = ca.snapshots().newest().expect("a snapshot");
+        if s.ps.field_i32(p, "pm_type") == 1 {
+            let v = ["velocity[0]", "velocity[1]", "velocity[2]"].map(|a| s.ps.field_f32(p, a));
+            linked.push((s.ps.origin(p), v));
+        }
+    }
+    assert!(linked.len() > 10, "the planter never linked");
+    let (origin, velocity) = linked[0];
+    assert!(
+        velocity[0].hypot(velocity[1]) > 10.0,
+        "a client linked mid-walk reads velocity {velocity:?}"
+    );
+    for (o, v) in &linked {
+        assert_eq!(*o, origin, "a linked client moved");
+        assert_eq!(*v, velocity, "the velocity changed under the link");
+    }
 }
 
 /// `probe_lookat.gsc` under `probe_teleport 1` `setOrigin`s each player once

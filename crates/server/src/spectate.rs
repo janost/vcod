@@ -74,13 +74,16 @@ pub const PM_INTERMISSION: i32 = 5;
 pub const PM_NORMAL_LINKED: i32 = 1;
 pub const PM_DEAD_LINKED: i32 = 7;
 
-/// What `linkTo` left on a client: the parent it follows and the gap it
-/// stood at when it linked. `Server` re-applies the two every tick, which is
-/// `G_RunClient`'s own re-anchor (object-model doc, 23.2).
+/// What `linkTo` left on a client: the parent it follows, the gap it stood
+/// at when it linked and the velocity it had then. `Server` re-applies all
+/// three every tick, which is `G_RunClient`'s own re-anchor; retail's
+/// velocity holds its pre-link value under the link (object-model doc,
+/// 23.2).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Link {
     pub parent: vcod_gsc::EntId,
     pub offset: [f32; 3],
+    pub velocity: [f32; 3],
 }
 /// `EV_PAIN` and `EV_DEATH` (`docs/research/cod11-events-and-fx.md`).
 const EV_PAIN: i32 = 187;
@@ -2083,6 +2086,7 @@ mod tests {
         sim.link_to = Some(Link {
             parent: vcod_gsc::EntId(200),
             offset: [0.0; 3],
+            velocity: [0.0; 3],
         });
         assert!(
             !sim.on_ground(),
