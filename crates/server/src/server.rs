@@ -1752,6 +1752,9 @@ impl Server {
             }
         };
         cvars.set("g_gametype", &self.cfg.gametype);
+        // `SV_SpawnServer`'s `Cvar_Set("mapname", ...)` (map-cycle doc,
+        // section 3 step 15), which a script's `getCvar("mapname")` reads.
+        cvars.set("mapname", &self.cfg.map);
         cvars.set("sv_hostname", &self.cfg.hostname);
         cvars.set("sv_maxclients", &self.cfg.max_clients.to_string());
         cvars.set("debug", "0");
@@ -3773,6 +3776,15 @@ mod tests {
             "the server's own copy is a frame behind the script at slots {:?}",
             stale(&sv.configstrings)
         );
+    }
+
+    /// The level script's cvar table carries `mapname`, the probes' only way
+    /// to tell which map they run on; it used to read "".
+    #[test]
+    fn a_level_script_reads_the_map_name_cvar() {
+        let sv = Server::new(cfg(), Instant::now());
+        let cvars = sv.cvars(&vcod_common::pk3::Pk3Fs::empty());
+        assert_eq!(cvars.get("mapname"), "mp_carentan");
     }
 
     /// `map_rotate`'s `gametype` token is a `Cvar_Set` (doc section 5.2), so
