@@ -441,13 +441,14 @@ engineering setup works.
   `getPlant` puts the charge. Not modelled: item pickup, the killcam, a body
   between the eye and a lookat (retail's second trace), `enableLinkTo`, a
   linked player on a moving parent, a submodel entity as `groundEntityNum`,
-  and script models in weapon, blast and missile traces. What a client still
-  gets nothing of is movers, which no code spawns. A probe run against it
-  reproduces the retail death capture field for field except for two: the
-  `EV_RAISE_WEAPON` the death frame does not raise, and the `legsAnim` the
-  respawn frame carries a frame late (`docs/research/cod11-combat.md` section
-  9). What the map-cycle probes measured of it is
-  `docs/research/cod11-map-cycle.md` section 8.
+  and script models in weapon, blast and missile traces. The scriptent mover
+  verbs move things and their trajectories reach the wire
+  (`docs/research/cod11-movers.md`). A probe run against it reproduces the
+  retail death capture field for field except for two: the `EV_RAISE_WEAPON`
+  the death frame does not raise, and the `legsAnim` the respawn frame
+  carries a frame late (`docs/research/cod11-combat.md` section 9). What the
+  map-cycle probes measured of it is `docs/research/cod11-map-cycle.md`
+  section 8.
 - The tick, in order: the console drains first (a `map`, `map_restart` or
   `map_rotate` line an earlier frame's script queued reloads the level before
   anything else runs), then expired clients, then each client's queued usercmds
