@@ -240,10 +240,19 @@ fn calibrate(cmds: &[(i32, UserCmd)], traces: &[&SdTrace]) -> [i32; 3] {
     ]
 }
 
-/// Replays `cmds` into `slot`'s client from the window's first `st` to
-/// `end`, two cmds per frame on the 25 ms grid (each capture cmd at the
-/// first slot at or after its offset, a slot with none holding the last),
-/// sampling the client's newest snapshot after every frame.
+/// Where a window's clock starts: the retail frame at or before its first
+/// cmd, so our frame `i` pairs with retail's frame `(i + 1) * 50` ms on.
+fn window_base(cmds: &[(i32, UserCmd)]) -> i32 {
+    let st = cmds[0].0;
+    st - st.rem_euclid(FRAME_MS as i32)
+}
+
+/// Replays `cmds` into `slot`'s client from `window_base` to `end`, two cmds
+/// per frame on the 25 ms grid (a slot with no capture cmd holding the
+/// last), sampling the client's newest snapshot after every frame. A cmd
+/// goes into the frame retail ran it in, the first one stamped after its
+/// `st`: the defender's view cmd at `st` 94850 is on retail's 94900
+/// snapshot, not its 94850 one, and the planter's use at 86766 on 86800.
 fn replay(
     rig: &mut Rig,
     slot: usize,
@@ -251,13 +260,10 @@ fn replay(
     end: i32,
     mut delta: [i32; 3],
 ) -> Vec<Ours> {
-    let t0 = cmds[0].0;
+    let t0 = window_base(cmds);
     let mut by_slot: BTreeMap<i64, UserCmd> = BTreeMap::new();
     for (st, cmd) in cmds {
-        let offset = i64::from(st - t0);
-        // Nearest slot: retail ran a cmd stamped 1 ms before a frame in that
-        // frame, which a ceiling would push a frame late.
-        let grid = (offset + CMD_MS / 2) / CMD_MS * CMD_MS;
+        let grid = i64::from(st - t0) / CMD_MS * CMD_MS;
         let mut abs = *cmd;
         // Retail's clamp pushes `delta_angles[0]`; every later word is
         // relative to the pushed value.
@@ -278,7 +284,7 @@ fn replay(
     }
     let slots = (i64::from(end - t0) + CMD_MS - 1) / CMD_MS;
     let frames = slots / 2 + 1;
-    let mut current = by_slot[&0];
+    let mut current = *by_slot.values().next().expect("a cmd in the window");
     let mut out = Vec::new();
     for i in 0..frames {
         for half in 0..2 {
@@ -610,7 +616,15 @@ fn plant(rig: &mut Rig, attacker: &SdFixture, with_abort: bool) -> Diff {
         let delta = calibrate(&cmds, &traces);
         rig.place(0, attacker.station.0, attacker.station.1);
         let ours = replay(rig, 0, &cmds, release.traces[0].server_time - 1, delta);
-        diff_phase(&mut diff, rig, attacker, "hold1", &ours, cmds[0].0, false);
+        diff_phase(
+            &mut diff,
+            rig,
+            attacker,
+            "hold1",
+            &ours,
+            window_base(&cmds),
+            false,
+        );
     }
 
     // release and hold2 from retail's own hold2 origin and view.
@@ -630,8 +644,9 @@ fn plant(rig: &mut Rig, attacker: &SdFixture, with_abort: bool) -> Diff {
         hold2.traces.last().unwrap().server_time,
         delta,
     );
-    diff_phase(&mut diff, rig, attacker, "release", &ours, cmds[0].0, false);
-    diff_phase(&mut diff, rig, attacker, "hold2", &ours, cmds[0].0, true);
+    let t0 = window_base(&cmds);
+    diff_phase(&mut diff, rig, attacker, "release", &ours, t0, false);
+    diff_phase(&mut diff, rig, attacker, "hold2", &ours, t0, true);
     if report() {
         println!(
             "script aborts after the plant: {:?}",
@@ -721,7 +736,7 @@ fn the_defuse_and_the_lookat_match_retail_on_mp_carentan() {
     let delta = calibrate(&cmds, &traces);
     rig.place(1, defender.station.0, defender.station.1);
     let ours = replay(&mut rig, 1, &cmds, end, delta);
-    let t0 = cmds[0].0;
+    let t0 = window_base(&cmds);
 
     let mut diff = Diff {
         rows: Vec::new(),
