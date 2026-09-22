@@ -899,6 +899,40 @@ mod tests {
         });
     }
 
+    /// A world brush between the eye and a lookat stops the aim trace short
+    /// of it; the same trace with the brush gone reaches it.
+    #[test]
+    fn a_world_brush_between_eye_and_lookat_blocks_the_aim_trace() {
+        let (mut vm, mut host) = crate::game::testing::fixture();
+        let world = |extra: &[(Vec3, Vec3)]| {
+            Some(std::rc::Rc::new(crate::world::World {
+                collision: vcod_common::collision::test_world(extra),
+                vis: vcod_common::bsp::Visibility::none(),
+                spawn: ([0.0; 3], 0.0),
+            }))
+        };
+        vm.with_cx(|cx| {
+            let origin = cx.intern_folded("origin");
+            let id = host.ents.spawn(cx).unwrap();
+            host.set_field(cx, id, origin, Value::Vector([300.0, 0.0, 0.0]))
+                .unwrap();
+            host.triggers.register(
+                id,
+                TriggerKind::LookAt,
+                TriggerShape::boxed([-20.0, -20.0, 0.0], [20.0, 20.0, 80.0]),
+                0,
+                0,
+            );
+            host.world = world(&[]);
+            assert_eq!(
+                aim_trace(&mut host, cx, [0.0, 0.0, 60.0], [0.0, 0.0]),
+                Some(id)
+            );
+            host.world = world(&[(Vec3::new(150.0, -64.0, 0.0), Vec3::new(160.0, 64.0, 128.0))]);
+            assert_eq!(aim_trace(&mut host, cx, [0.0, 0.0, 60.0], [0.0, 0.0]), None);
+        });
+    }
+
     /// A lookat with brushes under it is entered through the brushes, not
     /// its box: the wedge's bulge is hollow to the aim the way it is to a
     /// touch.
