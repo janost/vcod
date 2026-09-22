@@ -143,7 +143,8 @@ fn a_planting_client_is_linked_and_the_abort_releases_it() {
 
 /// A client that links while moving keeps the velocity it linked with:
 /// retail's abort reads `velocity` 184,27 on every linked snapshot and on
-/// the release frame, while the origin holds (object-model doc, 23.2).
+/// the release frame, while the origin holds; only the frame after the
+/// release moves (object-model doc, 23.2).
 #[test]
 fn a_client_linked_on_the_move_keeps_its_velocity() {
     let p = &PROTOCOL_V1;
@@ -208,6 +209,31 @@ fn a_client_linked_on_the_move_keeps_its_velocity() {
         assert_eq!(*o, origin, "a linked client moved");
         assert_eq!(*v, velocity, "the velocity changed under the link");
     }
+
+    // Released: the abort unlinks on the frame use goes up.
+    let stand = UserCmd {
+        weapon,
+        ..NULL_USERCMD
+    };
+    let mut after = Vec::new();
+    for _ in 0..10 {
+        now += Duration::from_millis(FRAME_MS as u64);
+        ca.send_frame(&stand);
+        cb.send_frame(&NULL_USERCMD);
+        step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        let s = ca.snapshots().newest().expect("a snapshot");
+        if s.ps.field_i32(p, "pm_type") == 0 {
+            let v = ["velocity[0]", "velocity[1]", "velocity[2]"].map(|a| s.ps.field_f32(p, a));
+            after.push((s.ps.origin(p), v));
+        }
+    }
+    assert!(after.len() >= 2, "the abort never unlinked");
+    assert_eq!(
+        after[0],
+        (origin, velocity),
+        "the release frame already moved; retail's moves on the frame after"
+    );
+    assert_ne!(after[1].0, origin, "the released client did not resume");
 }
 
 /// `probe_lookat.gsc` under `probe_teleport 1` `setOrigin`s each player once

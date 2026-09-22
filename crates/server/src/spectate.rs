@@ -574,7 +574,15 @@ impl ClientSim {
                 dt,
             ),
             (PmType::Normal, Some(w)) => {
+                let held = self.link_to.map(|_| (self.ps.origin, self.ps.velocity));
                 let events = pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt, weapons);
+                // A linked client's cmds move neither its origin nor its
+                // velocity, the unlinking frame's included: retail's release
+                // frame still reads both as linked (object-model doc, 23.2).
+                if let Some((origin, velocity)) = held {
+                    self.ps.origin = origin;
+                    self.ps.velocity = velocity;
+                }
                 self.jumped |= self.ps.jumped;
                 // Retail holds a prone view inside the cone around the body by
                 // pushing `delta_angles`, so the client's own prediction lands

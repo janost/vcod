@@ -2025,7 +2025,9 @@ linked snapshot from 83800 to 85750 and on the release frame 85800, with the
 origin held at `-214.9, 2453.8, -21.9`; the snapshot after the release reads
 `138.0, 20.0, 0.0` and the origin has moved 7.6 units. INFERRED, off that and
 the zero of `[phase hold2]`: the link freezes the velocity at its value on the
-link frame rather than zeroing it, and the unlinked mover resumes from it.
+link frame rather than zeroing it, the cmds of the frame that unlinks move the
+client no more than the linked ones did, and the mover resumes from the frozen
+velocity on the frame after.
 Measured on vcod's live run of this pair (23.7): ours zeroed it, which the
 gate's placed clients, linking from a standstill, could not see.
 
