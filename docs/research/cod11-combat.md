@@ -904,9 +904,22 @@ VERIFIED, `FireWeapon` `0x68d68`: the shot's view angles are
 `ps->viewangles` with components 0 and 1 replaced from `client+0x220C` and
 `client+0x2210`, and `AngleVectors` turns them into a forward/right/up axis
 triple. VERIFIED: the muzzle is the entity's origin with
-`ps->viewHeightCurrent` (`ps+0xD0`) added to z, and the function calls
-`G_AddLean` on it and rounds each component to an integer with an explicit
-`fldcw`. INFERRED: the lean is applied before the rounding.
+`ps->viewHeightCurrent` (`ps+0xD0`) added to z (`0x68e14`), and the function
+calls `G_AddLean` on it (`0x68e25`) and rewrites each component through
+`fistp` and `fild` under a control word `| 0xc00` (`0x68e34`, `0x68e5c`,
+`0x68e84`), rounding control 11, which truncates toward zero, the same as
+`CalcMuzzlePoints` (`0x6948c..0x694dc`, object-model doc 23.1). INFERRED,
+off the three sitting past the call: the lean is applied before the
+truncation.
+
+VERIFIED: the melee swing's muzzle is built by `FireWeaponMelee` (`0x69504`),
+which calls `Weapon_Melee` (`0x69614`): the same `ps+0xD0` add (`0x6957e`),
+the same `G_AddLean` call (`0x6958f`) and the same three truncations
+(`0x6959e`, `0x695c6`, `0x695ee`). INFERRED, off the addresses: the same
+order.
+
+**As implemented.** `combat::muzzle_point`, shared by the shot, the swing and
+the throw (11.3), truncates the leaned eye per component.
 
 VERIFIED, `ClientEndFrame` `0x410f1`: `client+0x2240` is
 `ps->aimSpreadScale / 255.0`. INFERRED: it is computed once a frame, since

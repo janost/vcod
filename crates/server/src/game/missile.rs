@@ -170,10 +170,7 @@ impl Default for Missiles {
 /// thrower's aim, which is `FireWeapon`'s same `client+0x220c` pair as a
 /// bullet's (`ClientSim::aim_angles`). Returns `(origin, velocity)`.
 pub fn throw_velocity(ps: &PlayerState, aim: [f32; 2], def: &WeaponDef) -> (Vec3, Vec3) {
-    // The eye with lean, each component truncated toward zero -- retail sets
-    // the x87 round-to-zero word for it, where the bullet's muzzle is
-    // rounded instead (2.1).
-    let origin = ps.view().eye.trunc();
+    let origin = crate::game::combat::muzzle_point(ps);
     let (yaw, pitch) = crate::game::combat::aim_radians(aim);
     let forward = Vec3::new(
         pitch.cos() * yaw.cos(),
