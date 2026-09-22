@@ -325,6 +325,38 @@ fn clip_segment_model(trace: &mut Trace, start: Vec3, end: Vec3, mt: &ModelTri, 
     trace.hit = Some(prim);
 }
 
+/// The nearest hit closer than `fraction` of a point segment on one model's
+/// collision triangles, in whatever frame the triangles and the segment
+/// share: its fraction, normal and surface flags. Retail's entity pass runs
+/// this same clip (`cod_lnxded` 0x80c52c0 into 0x80c203c) on a linked xmodel
+/// entity, with the segment moved into the entity's frame (0x8066520).
+pub fn clip_model_tris(
+    start: Vec3,
+    end: Vec3,
+    tris: &[ModelTri],
+    mask: u32,
+    fraction: f32,
+) -> Option<(f32, Vec3, u32)> {
+    let mut trace = Trace {
+        fraction,
+        endpos: end,
+        normal: Vec3::ZERO,
+        surface_flags: 0,
+        startsolid: false,
+        allsolid: false,
+        hit: None,
+        enter: -1.0,
+    };
+    for (i, mt) in tris.iter().enumerate() {
+        if mt.contents & mask != 0 {
+            clip_segment_model(&mut trace, start, end, mt, Prim::Model(i as u32));
+        }
+    }
+    trace
+        .hit
+        .map(|_| (trace.fraction, trace.normal, trace.surface_flags))
+}
+
 /// A brush's planes pushed out by the capsule's radius, Q3's
 /// `dist = plane->dist + tw->sphere.radius`.
 fn expand_brush(planes: &[(Vec3, f32)], radius: f32, out: &mut Vec<(Vec3, f32)>) {

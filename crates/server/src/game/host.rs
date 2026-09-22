@@ -10,6 +10,9 @@ use crate::game::builtins;
 use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
 use crate::game::fields::{self, FieldType, Route};
 use crate::server::MAX_CLIENTS;
+use std::collections::HashMap;
+use std::rc::Rc;
+use vcod_common::collision::ModelTri;
 use vcod_common::net::msg::{Objective, MAX_OBJECTIVES};
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 
@@ -375,6 +378,10 @@ pub struct GameHost {
     /// rebuilding it, so a record the filter blanks keeps the six fields the
     /// last copy left there ([`GameHost::objectives_for`]).
     pub client_objectives: Vec<[Objective; MAX_OBJECTIVES]>,
+    /// Each xmodel's collision triangles in its own frame, by `.model` name,
+    /// loaded through `fs` the first time a trace meets an entity carrying
+    /// it; `None` for a name that did not load or has no collision.
+    pub xmodel_collision: HashMap<String, Option<Rc<[ModelTri]>>>,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -393,6 +400,30 @@ impl GameHost {
                     .is_some_and(|e| e.client.is_some())
             })
             .collect()
+    }
+
+    /// `xmodel_collision`'s entry for `name` (the `.model` value, `xmodel/`
+    /// prefix and all), loading it on first use.
+    pub fn xmodel_tris(&mut self, name: &str) -> Option<Rc<[ModelTri]>> {
+        if let Some(t) = self.xmodel_collision.get(name) {
+            return t.clone();
+        }
+        let tris = self.fs.as_ref().and_then(|fs| {
+            let model = vcod_common::xmodel::load(fs, name.strip_prefix("xmodel/")?).ok()?;
+            let at_rest = vcod_common::props::Placement {
+                model: String::new(),
+                origin: glam::Vec3::ZERO,
+                angles: glam::Vec3::ZERO,
+                scale: glam::Vec3::ONE,
+                color: [255; 4],
+                shadow_decal: false,
+            };
+            let mut out = Vec::new();
+            vcod_common::props::placed_collision_tris(&at_rest, &model, &mut out);
+            (!out.is_empty()).then(|| Rc::from(out))
+        });
+        self.xmodel_collision.insert(name.to_string(), tris.clone());
+        tris
     }
 
     pub fn new(configstrings: Vec<String>) -> GameHost {
@@ -443,6 +474,7 @@ impl GameHost {
             ranks_dirty: false,
             objectives: [empty_objective(); MAX_OBJECTIVES],
             client_objectives: vec![[Objective::default(); MAX_OBJECTIVES]; MAX_CLIENTS],
+            xmodel_collision: HashMap::new(),
         }
     }
 

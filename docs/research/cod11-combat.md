@@ -1164,6 +1164,59 @@ the PVS anyway.
 VERIFIED: `Bullet_Endpos` is `0x69624`, 0xcf bytes, and nothing in the
 combat path above calls it. UNVERIFIED: what does, and what it is for.
 
+### 2.7 What a `bulletTrace` clips
+
+VERIFIED, `GScr_BulletTrace` (`game.mp.i386.so` `0x5abc4`): it seeds the mask
+0x2802031 (`0x5abd2`) and replaces it with 0x802031 when `Scr_GetBool(2)`,
+`hitCharacters`, reads false (`0x5ac09`); the pass entity is 0x3ff unless
+argument 3 is an entity (`0x5ac1d..0x5ac3e`); and it calls
+`trap_LocationalTrace` with `bulletPriorityMap` (`0x5ac56`). VERIFIED: the
+result's `entity` is `Scr_AddUndefined` when the hit number less 0x3fe is at
+most 1 (`0x5aca6..0x5acb4`), and `Scr_AddEntity(&g_entities[n])` otherwise
+(`0x5acd3`). INFERRED: `entity` is undefined for the world and for a miss and
+names any entity the trace stopped on.
+
+VERIFIED: `SP_script_model` (`0x60ff4`) writes `r.contents` (`ent+0x118`)
+0x2080 (`0x61010`), ORs 4 into `r.svFlags` (`ent+0xf4`, `0x61020`) and calls
+`trap_LinkEntity` (`0x61028`). 0x2080 meets both masks above in bit 0x2000.
+
+VERIFIED, `cod_lnxded`, the per-entity clip `0x809105c` (section 3.1): it
+returns early when `ent+0x118` and the clip's mask share no bit; on a
+locational trace it resolves the entity's model record (`0x806e498`) and,
+with `svFlags & 4`, tests the model's collision contents against the mask
+(`0x80c53d0`), rejects on the model's bounds offset by the origin
+(`0x80c4f6c`, `0x805a788`), builds the entity's axis from `ent+0x140`
+(`0x806709c`), moves `start` and `end` into the frame of that axis and the
+origin at `ent+0x134` (`0x8066520`), and runs `0x80c52c0`, which walks the
+model's collision surfaces through `0x80c203c`, the same clip the static
+models take (`docs/research/cod11-mantle.md`, "Static models are clipped as a
+segment"). INFERRED, the branches: a linked `script_model` with collision
+stops a `bulletTrace` on its own mesh, at its origin and angles as they are
+when the trace runs, and a closer world hit keeps the world's.
+
+VERIFIED: `ScriptEntCmd_NotSolid` (`0x612cc`) and `ScriptEntCmd_Solid`
+(`0x61204`) print `"cannot use the solid/notsolid commands on a script_model
+entity"` (`0x78d00`) for a script model and write `ent+0x118` only on the
+`script_brushmodel` arm (`0x61378`, `0x612b8`); `ScrCmd_Hide` (`0x5dcac`)
+only ORs 0x10 into `ent+0x17d` (`0x5dcdf`). INFERRED: a hidden script model
+and one a script `notSolid()`ed both still stop a bullet trace.
+
+VERIFIED, off `maps/mp/mp_carentan.bsp`: `bombzone_A` (`*4`, origin
+`-146 2490 16`) stands over two script models at `-146 2490 -32`, angles
+`0 290 0`: `xmodel/turret_flak88_static_antiairlow`, and
+`xmodel/turret_flak88_static_antiairlow_d` with `targetname` `exploder`, which
+`_load.gsc` hides. VERIFIED, off the paks: both carry collision surfaces of
+contents 1. INFERRED, off the plant test in
+`crates/server/src/game/script.rs` reproducing the fixture's slot 0: the
+flat plate of that mesh at z -23 is what `getPlant`'s `(+16, +16)` fallback
+trace lands on, where the floor under the planter is clip with no shot
+contents and the two 18-unit traces meet nothing (object-model doc 23.6).
+
+vcod: the `bulletTrace` builtin clips every live `script_model` whose xmodel
+has collision, loaded once per model name, with the segment moved into the
+entity's frame. The weapon traces, `CanDamage` and the missile do not see
+script models yet, though they are the same syscall on retail.
+
 ---
 
 ## 3. Hit locations
@@ -1241,7 +1294,8 @@ ordering and its conditions, read off the branches.
   at `+0x54` and `priorityMap` at `+0x58`.
 - `0x80910c5`: the per-bone path is taken only when `locational` is non-zero,
   the entity resolves to a model record, and `gentity+0xf4 & 6` is non-zero.
-  Bit `0x4` selects a brush trace (`0x80c52c0`); bit `0x2` without `0x4` is the
+  Bit `0x4` selects the xmodel collision trace (`0x80c52c0`, section 2.7);
+  bit `0x2` without `0x4` is the
   animated-model arm, and it is the only one handed the `priorityMap`.
 - `0x8091236`: a ray/AABB reject against the entity's bounds runs before any of
   the expensive work. The link box is therefore a broad phase and nothing more:

@@ -1503,6 +1503,54 @@ mod tests {
         assert!(world.collision.model_linked(2));
     }
 
+    /// Stock `_utility::getPlant` from where retail's planter stood in the
+    /// plant capture, facing its view yaw: neither 18-unit trace meets the
+    /// clip-only floor, the fallback's `(+16, +16)` trace lands on bombzone_A's
+    /// flak88 `script_model`, and `objective_add` truncates that to the
+    /// `-176, 2473, -22` retail's slot 0 reads at 91800
+    /// (docs/research/cod11-gsc-object-model.md 23.3, 23.6).
+    #[test]
+    fn get_plant_puts_the_charge_where_retail_did_on_mp_carentan() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let bytes = fs.read("maps/mp/mp_carentan.bsp").expect("mp_carentan.bsp");
+        let bsp = vcod_common::bsp::parse(&bytes).unwrap();
+        let world = Rc::new(crate::world::World::from_bsp(&bsp, Some(&fs)));
+        let mut rt = ScriptRuntime::load(
+            Rc::new(fs),
+            "mp_carentan",
+            "sd",
+            vec![String::new(); 2048],
+            crate::cvars::Cvars::new(),
+            Some(world),
+            Rc::new(crate::weapons::WeaponTable::empty()),
+            0,
+            TEST_RNG_SEED,
+            Carry::default(),
+        )
+        .expect("load mp_carentan on sd");
+        rt.install_for_test(
+            "plant() { self.angles = (0, 29.6, 0); p = self maps\\mp\\_utility::getPlant(); \
+             level.charge = p.origin; objective_add(0, \"current\", p.origin); }",
+        );
+        let planter = rt.spawn_map_entity_for_test([-192.8, 2457.1, -21.9]);
+        rt.start_thread_for_test(planter, "plant", 0);
+        rt.run_frame(50);
+        assert_eq!(rt.aborts(), Vec::<String>::new());
+        let Value::Vector(charge) = rt.level_field("charge") else {
+            panic!("getPlant returned no origin");
+        };
+        // The slot is all retail measured of the charge, and it is truncated,
+        // so each component is within a unit of it rather than the point.
+        let retail = glam::Vec3::new(-176.0, 2473.0, -22.0);
+        assert!(
+            (glam::Vec3::from(charge) - retail).abs().max_element() < 1.0,
+            "charge at {charge:?}"
+        );
+        assert_eq!(rt.host.objectives[0].origin_f32(), retail.to_array());
+    }
+
     /// `mp_pavlov.gsc` sets `game["allies"] = "russian"`, and dm's
     /// `Callback_StartGameType` turns that into `team_russiangerman`, so
     /// this pins that the map's `main` ran before the code callback and that

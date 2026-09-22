@@ -62,7 +62,7 @@ pub struct Props {
 
 /// Q3 `AnglesToAxis` (code/game/q_math.c): `Rz(yaw) * Ry(pitch) * Rx(roll)`,
 /// with PITCH/YAW/ROLL at indices 0/1/2. Pinned by `rotation_matches_q3_angles_to_axis`.
-fn rotation(angles: Vec3) -> Mat3 {
+pub fn rotation(angles: Vec3) -> Mat3 {
     Mat3::from_rotation_z(angles.y.to_radians())
         * Mat3::from_rotation_y(angles.x.to_radians())
         * Mat3::from_rotation_x(angles.z.to_radians())

@@ -477,7 +477,7 @@ pub fn bullet_trace(
         Some(Value::Vector(from)),
         Some(Value::Vector(to)),
         Some(_hit_characters),
-        Some(_ignore_ent),
+        Some(ignore_ent),
     ) = (args.first(), args.get(1), args.get(2), args.get(3))
     else {
         return Err(ErrorKind::BadType(
@@ -485,6 +485,10 @@ pub fn bullet_trace(
         ));
     };
     let (from, to) = (*from, *to);
+    let ignore = match ignore_ent {
+        Value::Entity(id) => Some(*id),
+        _ => None,
+    };
 
     let arr = cx.new_array();
     let position = ArrayKey::Str(cx.intern_exact("position"));
@@ -499,21 +503,29 @@ pub fn bullet_trace(
         .world
         .as_ref()
         .map(|w| w.collision.shot_trace(start, end));
-    let hit = t.as_ref().filter(|t| t.fraction < 1.0);
-    cx.set_index(arr, fraction, Value::Float(hit.map_or(1.0, |t| t.fraction)));
+    let mut hit = t
+        .filter(|t| t.fraction < 1.0)
+        .map(|t| (t.fraction, t.normal, None));
+    if let Some(e) = script_model_hit(host, cx, start, end, ignore, hit.map_or(1.0, |h| h.0)) {
+        hit = Some(e);
+    }
+    cx.set_index(arr, fraction, Value::Float(hit.map_or(1.0, |h| h.0)));
     cx.set_index(
         arr,
         position,
-        Value::Vector(hit.map_or(to, |t| t.endpos.to_array())),
+        Value::Vector(hit.map_or(to, |h| (start + (end - start) * h.0).to_array())),
     );
-    // `entity` needs entity bounds to resolve which gentity the trace
-    // stopped on (stage 5); a hit's `surfacetype` needs the surface-name
-    // table retail derives from `surface_flags`, which nothing here maps
-    // yet. Both stay undefined rather than guessing a value.
-    cx.set_index(arr, entity, Value::Undefined);
+    // A player the trace stopped on is not resolved yet, and a hit's
+    // `surfacetype` needs the surface-name table retail derives from
+    // `surface_flags`, which nothing here maps yet. Both stay undefined
+    // rather than guessing a value.
+    let ent = hit
+        .and_then(|h| h.2)
+        .map_or(Value::Undefined, Value::Entity);
+    cx.set_index(arr, entity, ent);
     match hit {
-        Some(t) => {
-            cx.set_index(arr, normal, Value::Vector(t.normal.to_array()));
+        Some((_, n, _)) => {
+            cx.set_index(arr, normal, Value::Vector(n.to_array()));
             cx.set_index(arr, surfacetype, Value::Undefined);
         }
         None => {
@@ -524,6 +536,66 @@ pub fn bullet_trace(
         }
     }
     Ok(Value::Array(arr))
+}
+
+/// The nearest live `script_model` a `bulletTrace` segment crosses closer
+/// than `best`: fraction, world normal, entity. Retail's locational trace
+/// clips a script model's xmodel collision at its origin and angles, hidden
+/// or `notSolid()`ed alike (docs/research/cod11-combat.md 2.7), so `solid`
+/// is not read.
+fn script_model_hit(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    start: Vec3,
+    end: Vec3,
+    ignore: Option<EntId>,
+    best: f32,
+) -> Option<(f32, Vec3, Option<EntId>)> {
+    let classname = cx.intern_folded("classname");
+    let model = cx.intern_folded("model");
+    let origin = cx.intern_folded("origin");
+    let angles = cx.intern_folded("angles");
+    let ids: Vec<EntId> = host
+        .ents
+        .iter_inuse()
+        .map(|(id, _)| id)
+        .filter(|id| Some(*id) != ignore)
+        .collect();
+    let mut hit = None;
+    let mut best = best;
+    for id in ids {
+        let Value::String(c) = host.get_field(cx, id, classname) else {
+            continue;
+        };
+        if cx.resolve(c) != "script_model" {
+            continue;
+        }
+        let Value::String(m) = host.get_field(cx, id, model) else {
+            continue;
+        };
+        let name = cx.resolve(m).to_string();
+        let Some(tris) = host.xmodel_tris(&name) else {
+            continue;
+        };
+        let at = |v: Value| match v {
+            Value::Vector(v) => Vec3::from(v),
+            _ => Vec3::ZERO,
+        };
+        let o = at(host.get_field(cx, id, origin));
+        let axis = vcod_common::props::rotation(at(host.get_field(cx, id, angles)));
+        let local = |p: Vec3| axis.transpose() * (p - o);
+        if let Some((f, n, _)) = vcod_common::collision::clip_model_tris(
+            local(start),
+            local(end),
+            &tris,
+            vcod_common::collision::MASK_SHOT,
+            best,
+        ) {
+            best = f;
+            hit = Some((f, axis * n, Some(id)));
+        }
+    }
+    hit
 }
 
 #[cfg(test)]
@@ -897,6 +969,65 @@ mod tests {
             assert!(fraction < 1.0, "expected a hit, got fraction {fraction}");
             let n = ArrayKey::Str(cx.intern_exact("normal"));
             assert_eq!(cx.get_index(arr, n), Value::Vector([0.0, 0.0, 1.0]));
+        });
+    }
+
+    /// A linked `script_model` stops a `bulletTrace` on its xmodel's
+    /// collision, placed at the entity's origin and angles, and the result
+    /// names it; the same entity as `ignoreEnt` lets the trace through.
+    #[test]
+    fn bullettrace_clips_a_script_model_s_collision() {
+        let (mut vm, mut host) = fixture();
+        // A wall facing -X in the model's frame at x = 10.
+        let wall = vcod_common::collision::ModelTri {
+            tri: [
+                Vec3::new(10.0, -50.0, 0.0),
+                Vec3::new(10.0, -50.0, 100.0),
+                Vec3::new(10.0, 150.0, 0.0),
+            ],
+            contents: 1,
+            surface_flags: 0,
+        };
+        host.xmodel_collision
+            .insert("xmodel/test_wall".into(), Some(Rc::from(vec![wall])));
+        vm.with_cx(|cx| {
+            let id = host.ents.spawn(cx).unwrap();
+            for (name, v) in [
+                ("classname", Value::String(cx.intern_exact("script_model"))),
+                ("model", Value::String(cx.intern_exact("xmodel/test_wall"))),
+                ("origin", Value::Vector([100.0, 0.0, 0.0])),
+                ("angles", Value::Vector([0.0, 90.0, 0.0])),
+            ] {
+                let field = cx.intern_folded(name);
+                host.set_field(cx, id, field, v).unwrap();
+            }
+            // Yawed 90 about the origin, the wall stands across +Y at y = 10.
+            let from = Value::Vector([100.0, 0.0, 50.0]);
+            let to = Value::Vector([100.0, 200.0, 50.0]);
+            let args = [from, to, Value::Int(0), Value::Undefined];
+            let Value::Array(arr) = bullet_trace(&mut host, cx, None, &args).unwrap() else {
+                panic!()
+            };
+            let key = |cx: &mut Cx, k: &str| ArrayKey::Str(cx.intern_exact(k));
+            let k = key(cx, "position");
+            let Value::Vector(p) = cx.get_index(arr, k) else {
+                panic!()
+            };
+            assert!((p[1] - (10.0 - 0.125)).abs() < 1e-3, "{p:?}");
+            let k = key(cx, "normal");
+            let Value::Vector(n) = cx.get_index(arr, k) else {
+                panic!()
+            };
+            assert!(Vec3::from(n).abs_diff_eq(-Vec3::Y, 1e-5), "{n:?}");
+            let k = key(cx, "entity");
+            assert_eq!(cx.get_index(arr, k), Value::Entity(id));
+
+            let args = [from, to, Value::Int(0), Value::Entity(id)];
+            let Value::Array(arr) = bullet_trace(&mut host, cx, None, &args).unwrap() else {
+                panic!()
+            };
+            let k = key(cx, "fraction");
+            assert_eq!(cx.get_index(arr, k), Value::Float(1.0));
         });
     }
 

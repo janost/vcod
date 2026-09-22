@@ -2237,6 +2237,14 @@ function through `SpectatorThink` (0x4001d, then the jump to the exit at
 before reaching it. INFERRED: a planter's `self.angles` is its view yaw with
 the pitch dropped, which is the direction the first trace takes.
 
+INFERRED, off the plant test in `crates/server/src/game/script.rs`, which runs
+the stock `getPlant` from the fixture's planter origin and yaw against the
+map's collision and matches slot 0 (23.3): on retail's plant neither 18-unit
+trace hits, since the floor under the planter is clip with no shot contents,
+and the fallback's `(+16, +16)` trace wins on the flak88 `script_model` beside
+the zone (`docs/research/cod11-combat.md` 2.7), which puts the charge at about
+`(-176.8, 2473.1, -22.96)`, 23 units from the planter.
+
 ## Open, and worth a probe
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.
