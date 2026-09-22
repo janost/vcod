@@ -22,7 +22,7 @@
 mod common;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -50,18 +50,32 @@ const PLANTER_PARK: [f32; 3] = [-512.0, 2688.0, -16.0];
 const PITCH_CLAMP_SHORT: i32 = 16000;
 
 /// Rows of the plant diff that are known divergences, each a substring of
-/// the row it excuses. Empty: nothing is excused yet.
-const PLANT_GAPS: &[&str] = &[];
+/// the row it excuses.
+const PLANT_GAPS: &[&str] = &[
+    // The first linked frame of each hold. Retail's first linked snapshot
+    // still carries the pre-link ground entity, carentan's
+    // `script_brushmodel` `*5` (entity 177, the clip brush under
+    // bombzone_A); our pmove writes ENTITYNUM_WORLD for any ground, never a
+    // submodel's entity number, and our link writes 1023 from its first
+    // frame. A pmove change, deferred past this stage.
+    "hold1 ms=0 groundEntityNum: retail 177 ours 1023",
+    // The same first linked frame, on the second hold.
+    "hold2 ms=0 groundEntityNum: retail 177 ours 1023",
+];
 
 /// Rows of the defuse diff that are known divergences, same shape.
-const DEFUSE_GAPS: &[&str] = &[];
+const DEFUSE_GAPS: &[&str] = &[
+    // The defuse's first linked frame: the same pre-link `*5` ground entity
+    // as the plant's two rows, and the same deferred pmove change.
+    "defuse ms=100 groundEntityNum: retail 177 ours 1023",
+];
 
 /// Sweep stations `(yaw, pitch)` whose fired-or-not the hull edge decides
 /// differently on ours, recorded with the number rather than widened over.
 const LOOKAT_GAPS: &[(f32, f32)] = &[];
 
 fn report() -> bool {
-    std::env::var("SD_REPORT").is_ok()
+    std::env::var("SD_REPORT").is_ok_and(|v| v == "1")
 }
 
 fn read(path: &str) -> String {
@@ -153,8 +167,9 @@ impl Rig {
         n
     }
 
-    fn shader_name(&self, index: i32) -> String {
-        self.sv.configstring(1500 + index as usize).to_string()
+    /// `None` for an index our table holds no shader at.
+    fn shader_name(&self, index: i32) -> Option<&str> {
+        Some(self.sv.configstring(1500 + index as usize)).filter(|s| !s.is_empty())
     }
 }
 
@@ -330,7 +345,12 @@ fn replay(
 /// Our sample nearest a retail trace `rel` ms after the window's first cmd.
 fn paired(ours: &[Ours], rel: i64) -> &Ours {
     let i = ((rel + FRAME_MS / 2) / FRAME_MS - 1).max(0) as usize;
-    &ours[i.min(ours.len() - 1)]
+    assert!(
+        i < ours.len(),
+        "retail trace at {rel} ms is past our last sample ({})",
+        ours.len()
+    );
+    &ours[i]
 }
 
 // ----------------------------------------------------------------- the diff
@@ -347,16 +367,18 @@ fn icon_and_bar(elems: &[HudElem]) -> (bool, bool) {
     (icon, bar)
 }
 
-/// The shader elements of an array as `name:w:h:fromW:fromH:scaleTime:x:y`,
-/// sorted. `scaleStartTime` is a clock and left out.
-fn shader_elems_ours(rig: &Rig, elems: &[HudElem]) -> BTreeSet<String> {
-    elems
+/// The shader elements of the archived array followed by the current one, as
+/// `name:w:h:fromW:fromH:scaleTime:x:y`, sorted. `scaleStartTime` is a clock
+/// and left out.
+fn shader_elems_ours(rig: &Rig, archived: &[HudElem], current: &[HudElem]) -> Vec<String> {
+    let mut out: Vec<String> = archived
         .iter()
+        .chain(current)
         .filter(|e| e.get(h::TYPE) == 3)
         .map(|e| {
             format!(
                 "{}:{}:{}:{}:{}:{}:{}:{}",
-                rig.shader_name(e.get(h::SHADER)),
+                rig.shader_name(e.get(h::SHADER)).unwrap_or("?"),
                 e.get(h::WIDTH),
                 e.get(h::HEIGHT),
                 e.get(h::FROM_WIDTH),
@@ -366,25 +388,34 @@ fn shader_elems_ours(rig: &Rig, elems: &[HudElem]) -> BTreeSet<String> {
                 e.get(h::Y)
             )
         })
-        .collect()
+        .collect();
+    out.sort();
+    out
 }
 
 /// The same off a trace's `hud=` column
 /// (`type:shader:w:h:fromW:fromH:scaleStart:scaleTime:x:y` per element).
-fn shader_elems_retail(cs: &BTreeMap<usize, String>, hud: &str) -> BTreeSet<String> {
-    hud.split_whitespace()
+/// The column is the archived array followed by the current one: the
+/// committed fixtures concatenate the two with no separator (their headers'
+/// "unarchived" is the probe's old label for it), and a probe from 17e43b0 on
+/// writes `archived|current` with `-` for an empty half. Both parse here.
+fn shader_elems_retail(cs: &BTreeMap<usize, String>, hud: &str) -> Vec<String> {
+    let mut out: Vec<String> = hud
+        .split(|c: char| c.is_whitespace() || c == '|')
         .filter_map(|e| {
             let f: Vec<&str> = e.split(':').collect();
             (f.len() == 10 && f[0] == "3").then(|| {
                 let shader: usize = f[1].parse().unwrap();
-                let name = cs.get(&(1500 + shader)).cloned().unwrap_or_default();
+                let name = cs.get(&(1500 + shader)).map_or("?", String::as_str);
                 format!(
                     "{name}:{}:{}:{}:{}:{}:{}:{}",
                     f[2], f[3], f[4], f[5], f[7], f[8], f[9]
                 )
             })
         })
-        .collect()
+        .collect();
+    out.sort();
+    out
 }
 
 struct Diff {
@@ -466,7 +497,7 @@ impl Diff {
         if (bar || bar_c) != t.bar {
             self.row(phase, ms, "bar", t.bar, bar || bar_c);
         }
-        let ours_elems = shader_elems_ours(rig, &ps.arrays.hud_archived);
+        let ours_elems = shader_elems_ours(rig, &ps.arrays.hud_archived, &ps.arrays.hud_current);
         let retail_elems = shader_elems_retail(&self.cs, &t.hud);
         if ours_elems != retail_elems {
             self.row(
@@ -491,16 +522,19 @@ impl Diff {
             let retail_icon = self
                 .cs
                 .get(&(1500 + *icon as usize))
-                .cloned()
-                .unwrap_or_default();
+                .filter(|s| !s.is_empty())
+                .cloned();
             let ours_icon = rig.shader_name(o.icon);
-            if retail_icon != ours_icon {
+            if retail_icon.is_none() {
+                let row = format!("{phase} ms={ms} objective {slot}: unresolved icon {icon}");
+                self.rows.push(row);
+            } else if retail_icon.as_deref() != ours_icon {
                 self.row(
                     phase,
                     ms,
                     &format!("objective {slot} icon"),
-                    retail_icon,
-                    ours_icon,
+                    retail_icon.as_deref().unwrap_or("-"),
+                    ours_icon.unwrap_or("-"),
                 );
             }
             if o.ent_num != *ent || o.team_num != *team {
@@ -636,6 +670,11 @@ fn plant(rig: &mut Rig, attacker: &SdFixture, with_abort: bool) -> Diff {
     let traces: Vec<&SdTrace> = release.traces.iter().chain(hold2.traces.iter()).collect();
     let delta = calibrate(&cmds, &traces);
     let start = &hold2.traces[0];
+    // `place_client` is a respawn retail never did: `become_player` resets
+    // `pm_type`, flips the teleport bit, drops the link and clears the event
+    // ring. It stays because retail's client slid about 30 units into its
+    // link, so absolute origins differ; the anchor-drift check, which starts
+    // from retail's hold2 spot, is what makes the positions comparable.
     rig.place(0, start.origin, start.viewangles);
     let ours = replay(
         rig,
@@ -647,12 +686,11 @@ fn plant(rig: &mut Rig, attacker: &SdFixture, with_abort: bool) -> Diff {
     let t0 = window_base(&cmds);
     diff_phase(&mut diff, rig, attacker, "release", &ours, t0, false);
     diff_phase(&mut diff, rig, attacker, "hold2", &ours, t0, true);
-    if report() {
-        println!(
-            "script aborts after the plant: {:?}",
-            rig.sv.script_aborts()
-        );
-    }
+    assert_eq!(
+        rig.sv.script_aborts(),
+        Vec::<String>::new(),
+        "script aborts during the plant"
+    );
     diff
 }
 
@@ -737,6 +775,11 @@ fn the_defuse_and_the_lookat_match_retail_on_mp_carentan() {
     rig.place(1, defender.station.0, defender.station.1);
     let ours = replay(&mut rig, 1, &cmds, end, delta);
     let t0 = window_base(&cmds);
+    assert_eq!(
+        rig.sv.script_aborts(),
+        Vec::<String>::new(),
+        "script aborts during the defuse"
+    );
 
     let mut diff = Diff {
         rows: Vec::new(),
