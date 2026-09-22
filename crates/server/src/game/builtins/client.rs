@@ -66,8 +66,11 @@ const DROPPED_ITEM_MS: i32 = 30_000;
 /// Retail stores each cmd's buttons on the client (`ClientThink_real`
 /// 0x40129) and the builtin tests that word (0x44ed2), so a frame with
 /// several cmds answers with its last one, not an OR
-/// (docs/research/cod11-gsc-object-model.md, 23.5); the touch pass reads
-/// each cmd's own bits and the two agree on the cmd that fired.
+/// (docs/research/cod11-gsc-object-model.md, 23.5). The touch pass reads
+/// each cmd's own bits, so a tick replaying [use, no-use] fires the trigger on
+/// the first cmd while this answers 0. The two agree on the cmd the frame ends
+/// on, as retail's do: the notified thread runs at the next script frame, when
+/// `client+0x21e8` holds the frame's last cmd.
 pub fn use_button_pressed(
     host: &mut GameHost,
     _cx: &mut Cx,
