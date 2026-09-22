@@ -451,26 +451,43 @@ engineering setup works.
   section 8.
 - The tick, in order: the console drains first (a `map`, `map_restart` or
   `map_rotate` line an earlier frame's script queued reloads the level before
-  anything else runs), then expired clients, then each client's queued usercmds
-  (`replay_moves`, one pmove step per cmd, which is where the weapon machine
-  queues a frame's shots, swings and throws, and which mirrors each client's
-  origin onto the host and runs the touch pass per cmd right after, the way
-  retail updates `r.currentOrigin` and calls `G_TouchTriggers` inside
-  `ClientThink`), then those themselves (a trace
-  each, an impact temp entity and a hit per player struck), then the missiles
-  fly and any due fuse explodes, then the blasts become hits, then the client
-  commands that start a script thread (`kill`, `mr`), which the packet pass
-  only queues because it runs before the clock advances, then
-  `deliver_hits` so the damage callback has run before script, then the
-  script frame, then the sim ops the
-  script left (spawns, weapon gives and switches, the damage the callback
-  did), then the host-to-sim mirrors (weapons held, health, the damage
-  feedback `P_DamageFeedback` computes from the health the hit left), then the
-  entities are built once and culled and written per client. The origin is the
-  one mirror that no longer waits for that pass: the touch pass needs this
-  cmd's spot, not last tick's, so anything reading a client's host origin
-  between the two now sees the post-move value. Move anything else
-  across that order and a snapshot reads a frame-old field.
+  anything else runs), then expired clients, then the bots queue their cmds,
+  then the clock advances, then each client's queued usercmds (`replay_moves`,
+  one pmove step per cmd, which is where the weapon machine queues a frame's
+  shots, swings and throws). Each cmd's origin, `pm_type`, `on_ground`, view
+  yaw and buttons are recorded as it runs, and once every client has moved
+  they are mirrored onto the host cmd by cmd with the touch pass after each,
+  the way retail updates `r.currentOrigin` and calls `G_TouchTriggers` inside
+  `ClientThink`; a trigger the pass fires is queued, not woken, and its
+  `waittill` threads are notified at this tick's script frame on the frame's
+  clock, while a `trigger_hurt` starts the damage callback there and then. The
+  entity states `cloneplayer` reads are mirrored last in that pass. Then the
+  queued attacks themselves (a trace each, an impact temp entity and a hit per
+  player struck), then each client's last cmd buttons for `useButtonPressed`,
+  then the missiles fly and any due fuse explodes, then the blasts become
+  hits, then the client commands that start a script thread (`kill`, `mr`),
+  which the packet pass only queues because it runs before the clock advances,
+  then `deliver_hits` so the damage callback has run before script, then the
+  script frame, then the script's spawns, then the switches and takes the
+  weapon machine made, then the weapon mirrors (held, current, viewmodel, the
+  body a shot is traced against, and the origin back to script), then the
+  weapon ops, then the link ops (`linkTo`, `unlink`), then the re-anchor that
+  pins every linked client to its parent plus the offset and releases a link
+  whose parent is gone, then the sim ops the script left (events, `setOrigin`,
+  the damage the callback did), then the vitals mirror (health, and the damage
+  feedback `P_DamageFeedback` computes from the health the hit left) and
+  `end_frame`, then `ClientEndFrame`'s aim trace per playing client, off the
+  frame's final eye and aim with `pm_type` and `on_ground` mirrored again
+  beside it, whose fire wakes its waiters at the next tick's script frame,
+  then the console lines, configstring changes, server commands and
+  intermission scoreboard the script queued go out, and last the entities are
+  built once and culled and written per client. Origin, `pm_type`, `on_ground`
+  and yaw are the mirrors that no longer wait for the post-script pass: the
+  touch pass needs this cmd's values, not last tick's, so anything reading
+  them on the host between the move pass and the script frame sees the
+  post-move values. The re-anchor writes a linked client's origin again after
+  the script frame, so this tick's touch passes ran at the un-anchored spot.
+  Move anything else across that order and a snapshot reads a frame-old field.
 - `Cx::spawn` is for a builtin that needs script to run before its caller's
   next instruction: the queued thread starts the moment the builtin returns,
   which is how `finishPlayerDamage`'s killing hit gets
