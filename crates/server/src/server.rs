@@ -4818,8 +4818,9 @@ mod tests {
 
     /// `getPlant` reads a planter's `self.angles` for the direction of its
     /// first trace, and `ClientThink_real` writes a player's after every cmd:
-    /// the view's yaw with pitch and roll 0 (0x405e2..0x40606). The spawn's
-    /// yaw is not what it reads once the client has turned.
+    /// the view's yaw with pitch and roll 0
+    /// (docs/research/cod11-gsc-object-model.md 23.6). The spawn's yaw is not
+    /// what it reads once the client has turned.
     #[test]
     fn a_player_s_angles_field_carries_its_view_yaw() {
         let now = Instant::now();

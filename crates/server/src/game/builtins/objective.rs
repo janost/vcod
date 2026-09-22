@@ -50,8 +50,8 @@ fn state_arg(cx: &Cx, v: Option<&Value>) -> Result<i32, ErrorKind> {
     }
 }
 
-/// Retail truncates each component toward zero before storing it (the
-/// `fistp` under control word `| 0xc00`, 0x5a3e5..0x5a407).
+/// Each component truncated toward zero, as retail stores it
+/// (docs/research/cod11-gsc-object-model.md 23.3).
 fn origin_arg(v: Option<&Value>) -> Result<[f32; 3], ErrorKind> {
     match v {
         Some(Value::Vector(o)) => Ok([o[0].trunc(), o[1].trunc(), o[2].trunc()]),
@@ -255,10 +255,11 @@ mod tests {
         });
     }
 
-    /// The charge `getPlant` put down in the retail plant capture sits at
-    /// `(-176.8, 2473.1, -22.96)`, and slot 0 reads `-176, 2473, -22`
-    /// (docs/research/cod11-gsc-object-model.md 23.3): toward zero, not
-    /// nearest.
+    /// Retail's plant capture reads slot 0 at `-176, 2473, -22`
+    /// (docs/research/cod11-gsc-object-model.md 23.3). The fractional
+    /// charge `(-176.8, 2473.1, -22.96)` is our `getPlant` reproduction
+    /// (23.6), not a retail measurement; truncated it gives that slot,
+    /// rounded it would not.
     #[test]
     fn objective_origins_truncate_toward_zero() {
         let (mut vm, mut host) = fixture();

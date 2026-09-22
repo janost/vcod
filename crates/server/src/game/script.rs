@@ -772,7 +772,8 @@ impl ScriptRuntime {
     }
 
     /// Writes a player's `angles` the way `ClientThink_real` does after every
-    /// cmd it runs: pitch and roll 0, yaw the view's (0x405e2..0x40606).
+    /// cmd it runs: pitch and roll 0, yaw the view's
+    /// (docs/research/cod11-gsc-object-model.md 23.6).
     pub fn set_client_yaw(&mut self, slot: usize, yaw: f32) {
         use vcod_gsc::Host;
         let Some(ent) = self.client_entity(slot) else {

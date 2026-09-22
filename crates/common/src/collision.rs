@@ -328,8 +328,8 @@ fn clip_segment_model(trace: &mut Trace, start: Vec3, end: Vec3, mt: &ModelTri, 
 /// The nearest hit closer than `fraction` of a point segment on one model's
 /// collision triangles, in whatever frame the triangles and the segment
 /// share: its fraction, normal and surface flags. Retail's entity pass runs
-/// this same clip (`cod_lnxded` 0x80c52c0 into 0x80c203c) on a linked xmodel
-/// entity, with the segment moved into the entity's frame (0x8066520).
+/// the same clip on a linked xmodel entity, with the segment moved into the
+/// entity's frame (docs/research/cod11-combat.md 2.7).
 pub fn clip_model_tris(
     start: Vec3,
     end: Vec3,
