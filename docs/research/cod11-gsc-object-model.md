@@ -1686,12 +1686,9 @@ sets no cursor hint"). The two readings agree: the kind fires off an aim
 trace, not off contact.
 
 vcod acts on that. `trigger::touched` skips a `LookAt` row, so ours notifies
-no `"trigger"` on contact either; it also runs no aim trace, so ours notifies
-a lookat on nothing at all. VERIFIED, read out of
-`crates/server/src/game/trigger.rs`. The aim-trace half is unmodelled and
-unmeasured — no capture of a retail `trigger_lookat` firing has been taken,
-and mp_pavlov's is deleted under `dm` before the committed A/B capture could
-reach it.
+no `"trigger"` on contact either. VERIFIED, read out of
+`crates/server/src/game/trigger.rs`. The aim trace that does fire one is 23.1,
+and what it did on a live run against ours is 23.7.
 
 ## 23. The aim trace, linking, objectives and the HUD tweens
 
@@ -2336,7 +2333,99 @@ and the fallback's `(+16, +16)` trace wins on the flak88 `script_model` beside
 the zone (`docs/research/cod11-combat.md` 2.7), which puts the charge at about
 `(-176.8, 2473.1, -22.96)`, 23 units from the planter.
 
+### 23.7 The probe pair against ours
+
+Three live runs of the retail recipe (`client-probes/probe_lookat`'s README
+section) against `vcod-server` on 2026-09-22, not kept in the repo. Ours reads
+scripts only out of `.pk3` archives, so `probe_lookat.gsc` and its `.txt` went
+into a `zzz_` pak in a scratch game directory, and the server ran with
+`--gametype probe_lookat --set probe_teleport=1`. Everything below is a vcod
+measurement, compared with the retail run the three committed fixtures come
+from.
+
+The first run found five defects the placed-client gate cannot reach, all
+fixed since. VERIFIED, vcod measurement: `getCvar("mapname")` read `""`, so
+the probe's teleports never ran; `setOrigin` on a player was a missing
+builtin (23.2); the bomb's `radiusDamage` handed the killed callback an
+undefined attacker and `sd.gsc:782`'s `attacker getEntityNumber()` aborted
+it (`docs/research/cod11-combat.md`, 14.2); a planter that linked while
+walking read `velocity` 0 where retail holds 184,27 (23.2); and the frame
+that unlinked it had already moved it 7.6 units. The same run's defender
+never reached the sweep: it was still walking when the post-plant teleport
+landed it, kept its velocity (retail's `setOrigin` writes none), slid past
+the probe's 28-unit stop and circled the zone until the fuse ran out.
+
+VERIFIED, vcod measurement, run 3, with those fixed:
+
+- The attacker's plant icon appears 5700 ms into the approach, as on retail;
+  the link lands on the first snapshot after the first use cmd, at `pm_type`
+  1, with the progress bar on the same snapshot.
+- Under the abort's link the velocity holds at `183.4, 27.0, 0.0` and the
+  origin does not move, the release frame reads the same, and the three
+  frames after it read `138.3, 20.3`, `103.0, 15.1` and `76.0, 11.2`, where
+  retail reads `138, 20`, `103, 15` and `75, 12`.
+- The plant completes 5000 ms after its link frame. The defuse's bar and
+  link land 100 ms into the probe's defuse phase and it completes 10000 ms
+  after that. Both as on retail. Block 4 reads slot 0 state 4 with icon 14 at the charge and slot 1
+  state 0 after the plant, and slot 0 state 0 after the defuse.
+- The bar's tween fields read `scaleStartTime` equal to the first bar
+  snapshot's `serverTime`, `scaleTime` 5000 and 10000, `fromWidth` 0 and
+  `fromHeight` 8, as on retail.
+- The defender unlinks 100 ms after the defuse's completion frame, as on
+  retail.
+- 444 lookat fires and 444 `isLookingAt` answers, every fire with an answer
+  on the same `getTime()`; 440 of the 443 gaps between fires are 50 ms, the
+  rest are the sweep's dead stations. The 15 stations fire or stay dark
+  exactly as retail's do, and the defuse carries 201 fires, the first 100 ms
+  after its start and the last on its completion frame.
+- The server logs `A;1;allies;vcod;bomb_plant`, `A;0;axis;vcod;bomb_defuse`,
+  `W;axis;vcod` and `L;allies`, in retail's order.
+- The bomb is entity 179 on both servers; its `loopSound` goes to the
+  `bomb_tick` configstring when it is planted and to 0 when it is defused.
+  Taken as a set, the defender's probe log carries retail's sound events,
+  configstring changes and server commands one for one (`MP_bomb_plant` twice
+  on the attacker, `MP_bomb_defuse` on the defender's own ring, the announcer
+  `s` commands), save the restart's and the pak lists' below.
+
+VERIFIED, vcod measurement, run 2: with the defender standing 1.5 units from
+retail's station, pitch -15 fired and yaw +30 did not, the two stations
+section 23.1's slab model misses by about a unit; run 3, standing closer,
+matched retail on both. INFERRED: those two sit on the trigger's edge, and
+the difference is the station, not the trace.
+
+Still different, VERIFIED as vcod measurements unless labelled:
+
+- The first linked frame reads `groundEntityNum` 1023 where retail's still
+  reads 177 (23.2), the gate's allow-listed row.
+- `velocity` is fractional (`183.4, 27.0`) where retail's is whole. VERIFIED:
+  `PmoveSingle` ends with `trap_SnapVector` on `ps.velocity` (`ps+0x20`,
+  0x34451), and vcod's mover has no such snap. INFERRED: the snap is also why
+  the two servers' defenders, walking the same steer from the same spot,
+  part ways after the match-start restart, retail's velocity holding 1.3
+  degrees off the view where ours settles on it.
+- The probe's post-plant teleport lands one frame after the plant's
+  completion frame, where retail's lands on it, and at the defuse's completion
+  frame ours logs a `PROBE looking` beside the last fire where retail logs
+  none. INFERRED: both are the order threads run inside one frame. Retail
+  runs the threads the lookat queue woke before the timed waits due that
+  frame (the drain's own `Scr_RunCurrentThreads` sits ahead of `Scr_SetTime`,
+  23.1), and resumed the plant's `wait 0.05` loop ahead of the probe's older
+  poller; vcod steps every runnable thread in one pass, in start order.
+- The reliable stream's order inside a frame: retail interleaves `d` and `s`
+  in the order the script made them (`d 531`, `d 532`, `s 8`, `d 533` at the
+  plant), and ours sends every configstring change, ascending, before every
+  command. No command in these runs names a configstring set after it, so no
+  client reads a stale one.
+- The restart's `d 13`, `d 12` and `d 3` with a `t` of 0, which
+  `docs/research/cod11-map-cycle.md` 8.2 already records, and the systeminfo
+  string, which carries no `sv_referencedPaks` or `sv_referencedPakNames`.
+
 ## Open, and worth a probe
+
+- The order threads run in inside one server frame (23.7): a probe with two
+  threads parked on `wait 0.05` in start order A, B, where B is woken once by
+  a `trigger` notify and re-parks, logging which runs first on each later
+  frame, would say whether same-deadline waits resume in wait order.
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.
 - Whether `Scr_AddFields` really reads `radiant/keys.txt`. Section 6.
