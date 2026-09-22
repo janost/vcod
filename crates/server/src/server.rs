@@ -266,6 +266,19 @@ pub(crate) fn apply_weapon_op(
     }
 }
 
+/// One cmd that moved a client, as the touch pass after the moves needs it:
+/// where the cmd left the client, the buttons it carried, the `pm_type` the
+/// pass gates on, whether it left the client on the ground, and a player's
+/// view yaw (a spectator's `SpectatorThink` arm writes no angles).
+struct Touched {
+    slot: usize,
+    origin: [f32; 3],
+    buttons: u8,
+    pm_type: i32,
+    on_ground: bool,
+    yaw: Option<f32>,
+}
+
 /// What one client's usercmd replay did this tick, for the trace line.
 #[derive(Default, Clone, Copy)]
 struct MoveSummary {
@@ -2869,11 +2882,7 @@ impl Server {
         let weapons = self.weapon_table.clone();
         let now_ms = self.sv_time_ms;
         let mut moved = vec![MoveSummary::default(); self.clients.len()];
-        // One entry per cmd that moved a client, with where that cmd left it,
-        // the buttons it carried, the `pm_type` it left the client at, which
-        // is what the touch pass gates on, and whether it left the client on
-        // the ground.
-        let mut touched: Vec<(usize, [f32; 3], u8, i32, bool)> = Vec::new();
+        let mut touched: Vec<Touched> = Vec::new();
         for (slot, m) in moved.iter_mut().enumerate() {
             let Some(c) = self.clients[slot].as_mut() else {
                 continue;
@@ -2976,13 +2985,15 @@ impl Server {
                     }
                 }
                 events.extend(raised);
-                touched.push((
+                touched.push(Touched {
                     slot,
-                    sim.origin(),
-                    cmd.buttons,
-                    sim.wire_pm_type(),
-                    sim.on_ground(),
-                ));
+                    origin: sim.origin(),
+                    buttons: cmd.buttons,
+                    pm_type: sim.wire_pm_type(),
+                    on_ground: sim.on_ground(),
+                    yaw: (sim.pm_type == crate::spectate::PmType::Normal)
+                        .then(|| sim.view_angles()[1]),
+                });
                 last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;
                 m.first_cmd_st.get_or_insert(cmd.server_time);
@@ -3018,11 +3029,14 @@ impl Server {
         // because the host's copy is only mirrored from the sim after the
         // script frame, so the pass would otherwise test last tick's spot.
         if let Some(rt) = self.script.as_mut() {
-            for (slot, origin, buttons, pm_type, on_ground) in touched {
-                rt.set_client_origin(slot, origin);
-                rt.set_client_pm_type(slot, pm_type);
-                rt.set_client_on_ground(slot, on_ground);
-                rt.touch_triggers_with_buttons(slot, now_ms, buttons);
+            for t in touched {
+                rt.set_client_origin(t.slot, t.origin);
+                if let Some(yaw) = t.yaw {
+                    rt.set_client_yaw(t.slot, yaw);
+                }
+                rt.set_client_pm_type(t.slot, t.pm_type);
+                rt.set_client_on_ground(t.slot, t.on_ground);
+                rt.touch_triggers_with_buttons(t.slot, now_ms, t.buttons);
             }
         }
         // The state each player ended the tick in, mirrored onto the host for
@@ -4800,6 +4814,45 @@ mod tests {
         assert_eq!(ring.events[0], 172, "EV_SOUND_ALIAS");
         let alias = ring.parms[0] as usize + 524;
         assert_eq!(sv.configstring(alias), "minefield_click");
+    }
+
+    /// `getPlant` reads a planter's `self.angles` for the direction of its
+    /// first trace, and `ClientThink_real` writes a player's after every cmd:
+    /// the view's yaw with pitch and roll 0 (0x405e2..0x40606). The spawn's
+    /// yaw is not what it reads once the client has turned.
+    #[test]
+    fn a_player_s_angles_field_carries_its_view_yaw() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test("main() {}"),
+        );
+        let mut nc = begun(&mut sv, now);
+        sv.tick(now);
+        sv.place_client(0, [0.0, 0.0, 64.0], 90.0);
+        // Pitch 22.5 down, yaw 45 on the wire; the placed spawn's delta
+        // turns the yaw into 135.
+        let ack = nc.incoming_sequence as i32;
+        let cmd = UserCmd {
+            server_time: 100,
+            angles: [4096, 8192, 0],
+            ..Default::default()
+        };
+        let pkt = nc
+            .build_out(
+                i32::from(sv.server_id),
+                ack,
+                0,
+                &move_ops(sv.checksum_feed, ack, cmd),
+                &Huffman::new(),
+            )
+            .unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+        sv.tick(now + Duration::from_millis(50));
+        let rt = sv.script.as_mut().unwrap();
+        let ent = rt.client_entity(0).expect("client 0 has an entity");
+        assert_eq!(rt.field_str(ent, "angles"), "(0.00, 135.00, 0.00)");
     }
 
     /// The gap `_minefields.gsc` puts between the warning click and the

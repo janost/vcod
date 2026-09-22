@@ -779,6 +779,20 @@ impl ScriptRuntime {
         });
     }
 
+    /// Writes a player's `angles` the way `ClientThink_real` does after every
+    /// cmd it runs: pitch and roll 0, yaw the view's (0x405e2..0x40606).
+    pub fn set_client_yaw(&mut self, slot: usize, yaw: f32) {
+        use vcod_gsc::Host;
+        let Some(ent) = self.client_entity(slot) else {
+            return;
+        };
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let field = cx.intern_folded("angles");
+            let _ = host.set_field(cx, ent, field, Value::Vector([0.0, yaw, 0.0]));
+        });
+    }
+
     /// A client's body model as the roster's `modelindex`: the model number
     /// `configstring 268 + modelindex` resolves
     /// (`docs/research/clientstate-wire-format.md`). 0 when the client has no

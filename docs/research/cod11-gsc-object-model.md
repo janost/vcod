@@ -2212,6 +2212,31 @@ reads no sessionstate and no client pointer. INFERRED, off that: a spectating
 client whose health is still above 0 answers true, and so does any non-client
 entity carrying health.
 
+### 23.6 Where `getPlant` puts the charge
+
+VERIFIED, off `maps/MP/_utility.gsc` in `pak5.pk3`: `getPlant` builds its
+start as `self.origin + (0, 0, 10)` and its first trace origin as that plus
+`vectorScale(anglesToForward(self.angles), 11)`; it runs `bulletTrace` 18
+units down from the first origin, then from the start, each under an
+`if(trace["fraction"] < 1)` that returns the trace's `position` and
+`orientToNormal(trace["normal"])`; failing both, it traces 1000 down from
+six origins (those two and the start plus `(±16, ±16, 0)`), keeps
+`besttraceposition` under a strict `trace["fraction"] < besttracefraction`,
+and builds the angles from `trace["normal"]` after the loop. INFERRED, off
+that text: the first 18-unit hit wins, the fallback keeps the earliest of
+equal fractions, and the fallback's angles come from the last trace run
+rather than the winning one.
+
+VERIFIED: `ClientThink_real` stores 0 into all three `angles` components
+(`ent+0x140`, 0x405e2, 0x405ec, 0x405f6) and then `ps.viewangles[1]`
+(`client+0xc4`) into the yaw (0x40600..0x40606), right after the
+`G_TouchTriggers` call (0x405b3). INFERRED, off the branches: that block runs
+once per cmd on the live path, and a `sessionstate` 2 client leaves the
+function through `SpectatorThink` (0x4001d, then the jump to the exit at
+0x40022) and a `sessionstate` 3 one through the intermission arm (0x4000a)
+before reaching it. INFERRED: a planter's `self.angles` is its view yaw with
+the pitch dropped, which is the direction the first trace takes.
+
 ## Open, and worth a probe
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.
