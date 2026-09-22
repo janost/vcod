@@ -529,14 +529,10 @@ pub fn is_alive(
     Ok(Value::Int(alive as i32))
 }
 
-/// `isDefined(x)`: false for a missing argument, `undefined` itself, and an
-/// entity handle whose slot is free. Retail catches the last by a
-/// generation counter (`gentity+0x300`, object-model doc section 14); a
-/// freed-slot check is what `Value::Entity` allows without one, and it
-/// reads a handle as live again once a new entity takes the slot. The
-/// counter is the complete fix (gsc-language doc, section 10).
-/// `sd.gsc:1859` depends on the freed case: `isDefined` on a `destroy()`ed
-/// progress bar decides whether the next plant makes a new one.
+/// `isDefined(x)`: false for a missing argument, `undefined` itself, and a
+/// handle whose slot is free. A reused slot reads live again, where retail's
+/// entity generation counter would not; the S&D gate hit the HUD element case
+/// at `sd.gsc:1850`/`2019` (gsc-language doc, section 10).
 pub fn is_defined(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -1033,9 +1029,9 @@ mod tests {
         });
     }
 
-    /// A handle to a freed slot reads undefined: `sd.gsc:1859` tests
-    /// `isDefined(other.progressbackground)` on the handle its abort branch
-    /// `destroy()`ed, and creates a fresh element only when that is false.
+    /// A handle to a freed slot reads undefined: `sd.gsc:1850` (the plant) and
+    /// `2019` (the defuse) test `isDefined(other.progressbackground)` on the
+    /// handle an abort `destroy()`ed, and make a fresh element only on false.
     /// The same for a `delete()`d entity once its deferred free has run.
     #[test]
     fn is_defined_reads_zero_on_a_freed_hud_elem_and_a_freed_entity() {

@@ -1176,6 +1176,37 @@ most 1 (`0x5aca6..0x5acb4`), and `Scr_AddEntity(&g_entities[n])` otherwise
 (`0x5acd3`). INFERRED: `entity` is undefined for the world and for a miss and
 names any entity the trace stopped on.
 
+The result is an array with five string keys. VERIFIED, `GScr_LoadConsts`
+(`0x58550`): the `scr_const` slots the builtin names are allocated from
+these `.rodata` strings: 0x2c `entity` (`0x75f28`, stored at `0x58778`), 0x32
+`fraction` (`0x75ff5`, `0x587c0`), 0x5c `normal` (`0x760c6`, `0x589b8`), 0x64
+`position` (`0x760ea`, `0x58a18`), 0x80 `surfacetype` (`0x76174`,
+`0x58b68`) and 0xf8 `none` (`0x764c8`, `0x59108`).
+VERIFIED: `fraction` is the trace's first float, `[ebp-0x48]`
+(`0x5ac63..0x5ac7f`), and `position` the vector four bytes into the same
+result, `[ebp-0x44]` (`0x5ac8a..0x5ac9e`); `entity` follows as above.
+INFERRED: `position` is the trace's end position, so a miss reads the `end`
+argument.
+VERIFIED: `fld1` / `fcomp` against the fraction at `0x5acf0` and a `jne` on
+the C0/C2/C3 mask at `0x5acf8` choose between two arms. INFERRED: a
+`fraction` below 1 takes the fall-through arm (the hit) and 1 takes the jump
+to `0x5ad50` (the miss).
+VERIFIED, the fall-through arm: `normal` is the vector at `[ebp-0x38]`
+(`0x5acfd..0x5ad11`), and `surfacetype` is `trap_SurfaceTypeToName` of bits
+20..24 of the dword at `[ebp-0x2c]` (`0x5ad16..0x5ad44`). INFERRED: those
+are the hit plane's normal and the surface flags' material field.
+VERIFIED, the jump arm: `normal` is `VectorNormalize` of the second argument
+less the first (`0x5ad50..0x5ad90`), and `surfacetype` is
+`Scr_AddConstString(scr_const 0xf8)`, `"none"` (`0x5ad98..0x5adb3`).
+VERIFIED, the stock `maps/` scripts in `pak0..pak9`: all three `["normal"]`
+reads are in `maps/mp/_utility.gsc` `getPlant`, each handed to
+`orientToNormal`.
+
+vcod: the builtin writes the five keys, with the miss arm's `normal` and
+`"none"` as above; a hit's `surfacetype` and a player hit's `entity` stay
+undefined, since nothing maps the surface-flags field to its name table yet
+and the trace does not stop on players.
+
 VERIFIED: `SP_script_model` (`0x60ff4`) writes `r.contents` (`ent+0x118`)
 0x2080 (`0x61010`), ORs 4 into `r.svFlags` (`ent+0xf4`, `0x61020`) and calls
 `trap_LinkEntity` (`0x61028`). 0x2080 meets both masks above in bit 0x2000.

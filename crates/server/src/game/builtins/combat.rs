@@ -460,13 +460,7 @@ pub fn set_player_ignore_radius_damage(
 /// `["surfacetype"]` 3 in the extracted corpus), and array keys intern
 /// exactly, not folded, matching how any other string index does.
 ///
-/// Retail's builtin (0x5abc4) writes five keys: `fraction`, `position` and
-/// `entity` always, then on a hit (`fraction != 1`, 0x5acf0) the trace's
-/// own `normal` and the surface name, and on a miss the normalised
-/// `end - start` as `normal` (0x5ad50..0x5ad7d) with `surfacetype` `"none"`.
-/// VERIFIED, the key strings out of `GScr_LoadConsts` (0x58550) and the
-/// writes; the branch is INFERRED off the `fcomp` at 0x5acf0.
-/// `_utility::getPlant` hands `["normal"]` to `orientToNormal`.
+/// The five keys and what each arm writes: docs/research/cod11-combat.md 2.7.
 pub fn bullet_trace(
     host: &mut GameHost,
     cx: &mut Cx,
