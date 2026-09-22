@@ -581,6 +581,12 @@ impl ScriptRuntime {
     /// through the same notify the touch pass raises, whose waiters run on
     /// the next frame (docs/research/cod11-gsc-object-model.md 23.1). Every
     /// frame it is aimed at, since `G_Trigger` gates nothing.
+    ///
+    /// The `pm_type` gate skips a spectator and the intermission camera, as
+    /// `ClientEndFrame`'s own arms do. It also clears a dead client (`pm_type`
+    /// 6/7), where retail's sessionstate 1 reaches the trace subject to the
+    /// unread `ent+0x172` byte (23.1); every stock `isLookingAt` caller also
+    /// tests `isAlive`.
     pub fn aim_lookat(&mut self, slot: usize, now_ms: i32) {
         let Some(client) = self.client_entity(slot) else {
             if let Some(l) = self.host.client_lookat.get_mut(slot) {
