@@ -1,5 +1,6 @@
 //! What `sd.gsc`'s plant does to the planting client: `linkTo` pins it at
-//! `pm_type` 1 with no ground entity and no velocity, and the abort's
+//! `pm_type` 1 with no ground entity and the velocity it linked with (zero
+//! for a planter that linked standing still), and the abort's
 //! `unlink` lets go (docs/research/cod11-gsc-object-model.md, 23.2), and
 //! what `setOrigin` does to a player, which the S&D probe moves both clients
 //! with.
@@ -104,9 +105,9 @@ fn a_planting_client_is_linked_and_the_abort_releases_it() {
         ENTITYNUM_NONE,
         "a linked client reads no ground entity on either retail capture"
     );
-    // A planter that stood still links with no velocity. The z is held to
-    // under a unit, not to 0: retail's `PmoveSingle` snaps the velocity to
-    // integers and ours does not, so a grounded client carries a sub-unit z.
+    // A planter that stood still links with no velocity. The z bound is the
+    // half unit retail's velocity snap (`trap_SnapVector`, 0x34451) would
+    // round away; ours has no snap, so a grounded client carries a sub-unit z.
     for axis in ["velocity[0]", "velocity[1]"] {
         assert_eq!(s.ps.field_f32(p, axis), 0.0, "{axis} under the link");
     }
