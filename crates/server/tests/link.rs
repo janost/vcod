@@ -1,17 +1,20 @@
 //! What `sd.gsc`'s plant does to the planting client: `linkTo` pins it at
 //! `pm_type` 1 with no ground entity and no velocity, and the abort's
-//! `unlink` lets go (docs/research/cod11-gsc-object-model.md, 23.2).
+//! `unlink` lets go (docs/research/cod11-gsc-object-model.md, 23.2), and
+//! what `setOrigin` does to a player, which the S&D probe moves both clients
+//! with.
 //!
 //! Needs `COD_DIR`; without the paks it returns early.
 
 mod common;
 
-use common::{step_pair, Queues, FRAME_MS};
+use common::{step_pair, ClientEnd, Join, Queues, FRAME_MS};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use vcod_common::net::msg::{UserCmd, BUTTON_USE, NULL_USERCMD};
 use vcod_common::net::protocol::PROTOCOL_V1;
+use vcod_common::net::{NetClient, NetEvent};
 
 const MAP: &str = "mp_carentan";
 /// `ENTITYNUM_NONE` as the wire carries it.
@@ -19,6 +22,8 @@ const ENTITYNUM_NONE: i32 = 1023;
 /// Where the retail attacker planted from, the plant fixture's `# station`
 /// line: inside `bombzone_A`'s brush and on its floor.
 const STATION: [f32; 3] = [-225.0, 2452.0, -22.0];
+/// `EF_TELEPORT_BIT`.
+const EF_TELEPORT: i32 = 0x8;
 
 fn server(now: Instant) -> Option<vcod_server::Server> {
     let fs = vcod_common::testing::game_fs()?;
@@ -130,4 +135,71 @@ fn a_planting_client_is_linked_and_the_abort_releases_it() {
     }
     let s = ca.snapshots().newest().expect("a snapshot");
     assert_eq!(s.ps.field_i32(p, "pm_type"), 0, "the planter stayed linked");
+}
+
+/// `probe_lookat.gsc` under `probe_teleport 1` `setOrigin`s each player once
+/// onto a courtyard spawn, as soon as it is playing. The retail attacker's
+/// frame reads the origin one unit above the argument, `(-512, 2688, -15)`,
+/// with the teleport bit flipped (`eFlags` 24 -> 16 at `serverTime` 68750 in
+/// the plant fixture).
+#[test]
+fn set_origin_moves_a_player_a_unit_up_and_flips_the_teleport_bit() {
+    let p = &PROTOCOL_V1;
+    let mut now = Instant::now();
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut sv = vcod_server::Server::new(common::cfg(MAP, "probe_lookat"), now);
+    sv.overlay_script(
+        "maps/mp/gametypes/probe_lookat",
+        include_str!("../../gsc/tests/fixtures/semantics/client-probes/probe_lookat.gsc"),
+    );
+    sv.set_cvar("probe_teleport", "1");
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let mut ca = NetClient::start_with_qport(ClientEnd(qa.clone()), now, 0x2001);
+    let mut cb = NetClient::start_with_qport(ClientEnd(qb.clone()), now, 0x2002);
+    let mut ja = Join::new("allies", "m1carbine_mp");
+    let mut jb = Join::new("axis", "kar98k_mp");
+
+    // The join inline rather than through `join_pair`: the teleport lands
+    // inside it, and only the frame it lands on shows the lift.
+    let mut prev_eflags = None;
+    let mut landed = None;
+    for _ in 0..800 {
+        now += Duration::from_millis(FRAME_MS as u64);
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&NULL_USERCMD);
+        let (ea, eb) = step_pair(&mut sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        for (events, join, cl) in [(ea, &mut ja, &mut ca), (eb, &mut jb, &mut cb)] {
+            for e in events {
+                if let NetEvent::ServerCommand(tokens) = e {
+                    join.on_server_command(&tokens, cl, now);
+                }
+            }
+        }
+        let Some(s) = ca.snapshots().newest() else {
+            continue;
+        };
+        let origin = s.ps.origin(p);
+        let eflags = s.ps.field_i32(p, "eFlags");
+        if origin[0] == -512.0 && origin[1] == 2688.0 {
+            landed = Some((origin, prev_eflags, eflags));
+            break;
+        }
+        prev_eflags = Some(eflags);
+    }
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+    let (origin, before, after) = landed.expect("the attacker never reached the courtyard spawn");
+    assert_eq!(origin[2], -15.0, "setOrigin lifts the argument one unit");
+    assert_eq!(
+        before.map(|b| (b ^ after) & EF_TELEPORT),
+        Some(EF_TELEPORT),
+        "the teleport frame did not flip the teleport bit"
+    );
 }

@@ -14,7 +14,7 @@
 use crate::configstrings::{script_menu_index, weapon_index, CsRange};
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::entity::ThinkFn;
-use crate::game::host::{GameHost, WeaponOp};
+use crate::game::host::{GameHost, SimOp, WeaponOp};
 use crate::weapons::weapon_slot;
 use vcod_common::pmove;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
@@ -43,6 +43,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("cloneplayer", clone_player),
     ("dropitem", drop_item),
     ("closemenu", close_menu),
+    ("setorigin", set_player_origin),
 ];
 
 /// How long a dropped weapon lives before the server frees it.
@@ -76,6 +77,28 @@ pub fn use_button_pressed(
     let slot = client_receiver(host, recv)?;
     let held = host.client_buttons[slot] & vcod_common::net::msg::BUTTON_USE != 0;
     Ok(Value::Int(i32::from(held)))
+}
+
+/// `self setOrigin(origin)`, a player method only (0x43480): the origin one
+/// unit above the argument, the teleport bit flipped, velocity kept
+/// (docs/research/cod11-gsc-object-model.md, 23.2). The script's copy moves
+/// now so a read later this frame sees it; the sim's is queued.
+pub fn set_player_origin(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let Some(&Value::Vector([x, y, z])) = args.first() else {
+        return Err(ErrorKind::BadType("setOrigin takes a vector"));
+    };
+    let origin = [x, y, z + 1.0];
+    let field = cx.intern_folded("origin");
+    host.set_field(cx, EntId(slot as u32), field, Value::Vector(origin))?;
+    host.client_sim_ops
+        .push((slot, SimOp::SetOrigin { origin }));
+    Ok(Value::Undefined)
 }
 
 /// `self isOnGround()` (`PlayerCmd_isOnGround`, 0x45014): `ps.groundEntityNum

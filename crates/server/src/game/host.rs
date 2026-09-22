@@ -173,6 +173,8 @@ pub enum SimOp {
     /// `G_PlaySoundAlias`'s `ent->client` branch
     /// (docs/research/cod11-sound-system.md, section 9).
     Event { event: i32, parm: i32 },
+    /// A player's `setOrigin`, the unit lift already applied.
+    SetOrigin { origin: [f32; 3] },
 }
 
 /// `linkTo` and `unlink` on a client, queued the way `SimOp` is: the link

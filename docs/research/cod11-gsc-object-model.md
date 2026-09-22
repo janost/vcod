@@ -2061,6 +2061,19 @@ re-anchor, and `unlink()` ahead of it takes effect immediately and the new
 origin then holds. That is why the gsc probe unlinks the planter before it
 moves it.
 
+VERIFIED: `setorigin` is `player_methods[10]` (0x43480) and appears in no
+other method table. VERIFIED: its body reads one vector through
+`Scr_GetVector`, stores it into `ps.origin` (`client+0x14..0x1c`), adds 1.0 to
+the stored z (`fld1` at 0x4351d), xors 0x8, the teleport bit, into
+`ps.eFlags` (`client+0x80`, 0x43531), copies `ps.origin` into
+`r.currentOrigin` (`ent+0x134..0x13c`), and calls `trap_UnlinkEntity`,
+`BG_PlayerStateToEntityState` and `trap_LinkEntity`; it has no store to
+`ps.velocity`. INFERRED, off the branch at 0x434a5: an entity with no client
+is a script error.
+VERIFIED, off the plant fixture: the teleport frame, `serverTime` 68750,
+reads `origin` `-512.0, 2688.0, -15.0` for the probe's `(-512, 2688, -16)`,
+`eFlags` 16 where the frame before read 24, and `velocity` zero.
+
 ### 23.3 The objective table and its builtins
 
 VERIFIED: `level+0x20` holds 16 records of 28 bytes, laid out `+0` state,

@@ -513,6 +513,14 @@ impl ClientSim {
             }
     }
 
+    /// `setOrigin` on a player: the origin moves and the teleport bit flips,
+    /// so a client snaps rather than smearing across the gap; velocity and
+    /// the rest of the playerstate stay.
+    pub fn teleport(&mut self, origin: [f32; 3]) {
+        self.ps.origin = origin.into();
+        self.teleport_bit = !self.teleport_bit;
+    }
+
     pub fn add_event(&mut self, event: i32, parm: i32) {
         self.ring.add(event, parm);
     }
