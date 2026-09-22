@@ -50,10 +50,11 @@ fn state_arg(cx: &Cx, v: Option<&Value>) -> Result<i32, ErrorKind> {
     }
 }
 
-/// Retail rounds each component to the nearest integer before storing it.
+/// Retail truncates each component toward zero before storing it (the
+/// `fistp` under control word `| 0xc00`, 0x5a3e5..0x5a407).
 fn origin_arg(v: Option<&Value>) -> Result<[f32; 3], ErrorKind> {
     match v {
-        Some(Value::Vector(o)) => Ok([o[0].round(), o[1].round(), o[2].round()]),
+        Some(Value::Vector(o)) => Ok([o[0].trunc(), o[1].trunc(), o[2].trunc()]),
         _ => Err(ErrorKind::BadType("objective position takes a vector")),
     }
 }
@@ -251,6 +252,28 @@ mod tests {
             assert_eq!(o.team_num, 0);
             assert_eq!(o.icon, 1, "the first shader index handed out");
             assert_eq!(host.configstrings[1501], "gfx/hud/hud@objectiveA.tga");
+        });
+    }
+
+    /// The charge `getPlant` put down in the retail plant capture sits at
+    /// `(-176.8, 2473.1, -22.96)`, and slot 0 reads `-176, 2473, -22`
+    /// (docs/research/cod11-gsc-object-model.md 23.3): toward zero, not
+    /// nearest.
+    #[test]
+    fn objective_origins_truncate_toward_zero() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let state = s(cx, "current");
+            let args = [
+                Value::Int(0),
+                state,
+                Value::Vector([-176.8, 2473.6, -22.96]),
+            ];
+            objective_add(&mut host, cx, None, &args).unwrap();
+            assert_eq!(host.objectives[0].origin_f32(), [-176.0, 2473.0, -22.0]);
+            let args = [Value::Int(0), Value::Vector([10.9, -0.5, 0.99])];
+            objective_position(&mut host, cx, None, &args).unwrap();
+            assert_eq!(host.objectives[0].origin_f32(), [10.0, 0.0, 0.0]);
         });
     }
 

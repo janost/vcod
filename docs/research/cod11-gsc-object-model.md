@@ -2026,7 +2026,7 @@ VERIFIED, of `objective_add` (0x5a2d0): it needs at least two parameters
 (`ent+0xf4`) bit 0x10 and writing `entNum = 0x3ff` (0x5a356, 0x5a35d); inlines
 the same three-name state map (0x5a374..0x5a396) and stores the answer at `+0`
 (0x5a3c9); with a third parameter takes `Scr_GetVector(2)` and writes each
-component rounded to the nearest integer into `+4`, `+8` and `+0xc` (0x5a407,
+component truncated toward zero into `+4`, `+8` and `+0xc` (0x5a407,
 0x5a42f, 0x5a461); writes `entNum = 0x3ff` (0x5a45a); with a fourth parameter
 runs the icon name through `G_ShaderIndex` into `+0x18` (0x5a4da); and writes
 `teamNum` 0 last, on every path (0x5a4e2). VERIFIED: an icon name carrying a
@@ -2046,8 +2046,18 @@ VERIFIED: `objective_state` (0x5a4f4) writes the mapped state at `+0` (0x5a59b)
 and, when that new state is 0 or 2, detaches the attached entity (0x5a5bf,
 0x5a5c6). VERIFIED: `objective_icon` (0x5a5d8) writes `G_ShaderIndex`'s answer
 at `+0x18` (0x5a69f). VERIFIED: `objective_position` (0x5e128) writes the three
-components, rounded the same way, at `+4`, `+8` and `+0xc` (0x5e1d4, 0x5e1fc,
+components, truncated the same way, at `+4`, `+8` and `+0xc` (0x5e1d4, 0x5e1fc,
 0x5e224).
+
+VERIFIED: the conversion in both is `fistp` under a control word with
+`| 0xc00` (0x5a3ec, 0x5a414, 0x5a43c; 0x5e1b9, 0x5e1e1, 0x5e209), rounding
+control 11, which truncates toward zero, then `fild` back into the float
+slot. VERIFIED, off the plant fixture at 91800: slot 0 reads
+`-176, 2473, -22` after the plant, and the planter's origin on the same
+frame reads `-192.8, 2457.1, -21.9`. INFERRED, off `_utility::getPlant`'s
+fallback trace starting at `self.origin + (16, 16, 10)`: the charge's x is
+`-176.8`, which truncation turns into the `-176` the slot carries and
+nearest would have made `-177`.
 
 VERIFIED: `objective_onentity` (0x5e230) detaches the slot's previous entity
 (0x5e298, 0x5e29f), sets the new entity's `eFlags` bit 0x10 (0x5e2b3) and
