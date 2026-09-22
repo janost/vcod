@@ -1726,6 +1726,9 @@ reads 2 (0x40f27, call at 0x40f30), and only the fall-through reaches
 - VERIFIED: `CalcMuzzlePoints` (0x693f4) reads the aim angles at
   `client+0x220c` and `+0x2210` (0x69424, 0x6942d) and the view height at
   `client+0xc8` (0x6941b).
+- VERIFIED: past `G_AddLean` (0x6947d) it rewrites each muzzle component
+  through `fistp` under a control word `| 0xc00` (0x6948c, 0x694b4, 0x694dc),
+  so the trace starts at the eye truncated toward zero on every axis.
 - VERIFIED: the end point is the muzzle plus forward times 8192.0 (`.rodata`
   0x7547c, arithmetic 0x4f8fe..0x4f931).
 - VERIFIED: it calls `trap_LocationalTrace` with contents mask 0x20000001
@@ -1884,6 +1887,14 @@ clear of the box, and on `pitch -15`, which did not fire while the test puts
 the ray through the far top corner. Both disagreements are within about a unit
 of the boundary, so the box bounds, the view height or the charge origin is off
 by that much and this capture does not resolve which.
+
+VERIFIED, off `crates/server/tests/sd_plant_ab.rs` run against the three
+fixtures: with ours starting the aim trace at the eye truncated the way
+`CalcMuzzlePoints` truncates it, and the charge where `getPlant` puts it
+(23.6), all 15 stations fire or stay quiet as retail's did, `pitch -15` and
+`yaw +30` included. INFERRED: the unit the slab test above was off by is that
+truncation, which moves the station's eye from `-190.9, 2459.0, 38.1` to
+`-190, 2459, 38`.
 
 VERIFIED, off the run that preceded this one and is not kept in the repo: that
 run left the planter standing 88 units out along the defender-to-bomb line, its

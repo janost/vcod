@@ -1979,6 +1979,35 @@ mod tests {
         assert_eq!(rt.level_field("at"), Value::Int(50));
     }
 
+    /// The aim trace starts at the eye truncated toward zero, the way
+    /// `CalcMuzzlePoints` snaps the muzzle point (object-model doc 23.1): an
+    /// eye at z 60.9 aims level from z 60, under a box whose top is 60.5.
+    #[test]
+    fn the_aim_trace_starts_at_the_truncated_eye() {
+        let mut rt = ScriptRuntime::for_test("main() { level.hits = 0; }");
+        rt.install_for_test(
+            "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
+             level.hits = level.hits + 1; } }",
+        );
+        let zone = rt.spawn_map_entity_for_test([100.0, 0.0, 44.5]);
+        rt.triggers_mut().register(
+            zone,
+            crate::game::trigger::TriggerKind::LookAt,
+            crate::game::trigger::TriggerShape::boxed([-8.0, -8.0, 0.0], [8.0, 8.0, 16.0]),
+            0,
+            0,
+        );
+        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.run_frame(0);
+        rt.spawn_client_for_test(0, [0.9, 0.0, 0.0]);
+        rt.set_client_state_for_test(0, "playing");
+        rt.set_client_pm_type(0, 0);
+        rt.set_client_aim(0, [0.9, 0.0, 60.9], [0.0, 0.0]);
+        rt.aim_lookat(0, 50);
+        rt.run_frame(100);
+        assert_eq!(rt.level_field("hits"), Value::Int(1));
+    }
+
     /// The aim trace fires a `trigger_lookat` the client's view enters, with
     /// the aimer as `other`, and `isLookingAt` answers off the same trace
     /// (docs/research/cod11-gsc-object-model.md 23.1). Aimed away, neither.

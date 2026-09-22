@@ -420,7 +420,8 @@ pub fn segment_enters_hulls(
 /// intervening non-lookat trigger brush may stop it on the wrong classname;
 /// ours skips every other kind and reaches the lookat behind it.
 pub fn aim_trace(host: &mut GameHost, cx: &mut Cx, eye: [f32; 3], aim: [f32; 2]) -> Option<EntId> {
-    let start = Vec3::from(eye);
+    // `CalcMuzzlePoints` truncates the muzzle point toward zero (23.1).
+    let start = Vec3::from(eye).trunc();
     let (yaw, pitch) = crate::game::combat::aim_radians(aim);
     let forward = Vec3::new(
         pitch.cos() * yaw.cos(),
