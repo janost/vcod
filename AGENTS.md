@@ -432,13 +432,22 @@ engineering setup works.
   off `sv_mapRotation`, so a `dm` time limit reaches the intermission, the
   intermission holds every client at `pm_type` 5 for the script's own wait,
   and the next map's gamestate goes out on the live netchan
-  (`docs/research/cod11-map-cycle.md`). Not modelled: item pickup and the
-  killcam. What a client still gets nothing of is movers, which no code
-  spawns. A probe run against it reproduces the retail death capture
-  field for field except for two: the `EV_RAISE_WEAPON` the death frame does
-  not raise, and the `legsAnim` the respawn frame carries a frame late
-  (`docs/research/cod11-combat.md` section 9). What the map-cycle probes
-  measured of it is `docs/research/cod11-map-cycle.md` section 8.
+  (`docs/research/cod11-map-cycle.md`). The S&D plant and defuse run end to
+  end (`docs/research/cod11-gsc-object-model.md` 23): an aim trace per client
+  per frame fires the `trigger_lookat` it meets and answers `isLookingAt`,
+  `linkTo` pins a planter at `pm_type` 1 with its origin and velocity held,
+  the objectives travel in playerstate block 4, the progress bar rides the
+  three HUD tweens, and `bulletTrace` clips script models, which is where
+  `getPlant` puts the charge. Not modelled: item pickup, the killcam, a body
+  between the eye and a lookat (retail's second trace), `enableLinkTo`, a
+  linked player on a moving parent, a submodel entity as `groundEntityNum`,
+  and script models in weapon, blast and missile traces. What a client still
+  gets nothing of is movers, which no code spawns. A probe run against it
+  reproduces the retail death capture field for field except for two: the
+  `EV_RAISE_WEAPON` the death frame does not raise, and the `legsAnim` the
+  respawn frame carries a frame late (`docs/research/cod11-combat.md` section
+  9). What the map-cycle probes measured of it is
+  `docs/research/cod11-map-cycle.md` section 8.
 - The tick, in order: the console drains first (a `map`, `map_restart` or
   `map_rotate` line an earlier frame's script queued reloads the level before
   anything else runs), then expired clients, then each client's queued usercmds
@@ -846,6 +855,13 @@ never pasted decompiler output or disassembly listings.
   run re-allocated the dropped weapon's model, configstring 8 and the
   elimination string at fresh slots on the first kill after it
   (`docs/research/cod11-map-cycle.md`, 4.6).
+- A `trigger_lookat` is never touched. `G_TouchTriggers`' broad phase masks
+  it out, so walking into one does nothing; it fires off `ClientEndFrame`'s
+  aim trace, once every frame an eye rests on it, and the thread it wakes runs
+  on the next frame's clock, as every trigger-woken thread does. A plant or
+  defuse clocked off the frame of the touch lands a frame early, which is
+  what the S&D gate caught (`docs/research/cod11-gsc-object-model.md`, 22.1
+  and 23.1).
 - The tick loop runs on an absolute schedule and catches up after an
   overrun, the way `SV_Frame` does. Sleeping the remainder of each tick let
   every sleep overshoot accumulate, and under load `serverTime` ran 5-10%
