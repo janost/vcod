@@ -1982,7 +1982,8 @@ VERIFIED: the module compares `ps.pm_type` against 1 at exactly seven sites, a
 byte scan of both encodings over `.text`: `PM_UpdateLean` (0x32c63),
 `PM_AdjustAimSpreadScale` (0x38622 and 0x38736), `G_TouchTriggers` (0x3f8a9),
 `ClientEvents` (0x3fec9), `ClientEndFrame` (0x4124d) and
-`G_GetNonPVSFriendlyInfo` (0x42cad). None of them is in `PmoveSingle`.
+`G_GetNonPVSFriendlyInfo` (0x42cad). None of them is in `PmoveSingle`, which
+reaches `pm_type` 1 through a jump table instead (below).
 
 VERIFIED, of `unlink` (0x5d594): it calls `G_EntUnlink` (0x680d4), which, when
 a record exists, calls `G_SetOrigin` and `G_SetAngle` with the entity's own
@@ -1993,11 +1994,38 @@ child list at `parent+0x2e8` through `record+0x4` (0x68118..0x6814c), clears
 spawning client (0x426f1), and those two are the only callers of the unlink
 half while `linkTo` is the only caller of either link half (`objdump -R`).
 
-What a linked client's mover does is measured rather than disassembled:
-nothing in `PmoveSingle` compares `pm_type` against 1, per the exhaustive site
-list above, so the answer is in
+`PmoveSingle` compares `pm_type` against no immediate 1 (the site list above),
+but it dispatches on it. VERIFIED: 0x341b2..0x341c1 load `ps.pm_type`,
+decrement it, compare it against 6 with a `ja` to 0x34274, and jump through
+`[ecx*4 + 0x70ce8]`; the seven dwords at `.rodata` 0x70ce8 read 0x34220,
+0x341e6, 0x34200, 0x341c8, 0x34456, 0x34274, 0x34220. INFERRED, off that
+indexing: `pm_type` 1 and 7 share the arm at 0x34220, and `pm_type` 0 takes
+the `ja` to 0x34274, the default branch the mantle doc's "Frame flow of the
+normal-move path" walks.
+
+VERIFIED, of the 0x34220 arm: it stores 0x3ff into `ps+0x54`,
+`groundEntityNum` (0x34222); zeroes the two `pml` words at +0x30 and +0x2c
+(0x34229, 0x34233), the second of which the mantle doc reads as
+`pml.walking`; calls `PM_UpdateAimDownSightFlag` (0x3423d),
+`PM_UpdatePlayerWalkingFlag` (0x34242), fn 0x316f4 (0x34247), fn 0x32a44
+(0x3424c) and `PM_Weapon` (0x34251); tests `ps+0x81 & 0xc0` (0x3425d) with
+a `je` to 0x34456, the function's epilogue (0x34264); calls fn 0x322c8,
+`PM_Footsteps` (0x3426a); and ends in a `jmp` to 0x34456 (0x3426f). The
+`trap_SnapVector(ps.velocity)` call at 0x34451 sits just before 0x34456.
+INFERRED, off the `je` and the `jmp`: `PM_Footsteps` runs only when that
+bit test is non-zero, and the arm always leaves past the snap.
+VERIFIED: the arm calls none of fn 0x30778, the ground trace fn 0x30474,
+`PM_LadderMove` (0x33944), `PM_WalkMove` (0x2f258) or `PM_AirMove`
+(0x2f03c), which the default arm dispatches between.
+
+INFERRED, off that arm: a linked client's cmds run no walk, air or ladder
+move and no ground trace, and its velocity is neither integrated nor snapped;
+fn 0x316f4 still runs, and the mantle doc places the stance transitions, the
+view-height lerp, the ground jump and the ground snap inside it, so whether a
+linked client can raise a jump or a stance change is not settled by the
+dispatch alone. The two fixtures,
 `crates/server/tests/fixtures/playerstate/mp_carentan-sd-plant-attacker.txt`
-and `-sd-defuse-defender.txt`.
+and `-sd-defuse-defender.txt`, are what measure it.
 
 VERIFIED, off the plant fixture's `[phase hold2]`: `pm_type` reads 1 on all 100
 snapshots from the `linkTo` at `serverTime` 86800 to 91750, and 0 on the
@@ -2011,26 +2039,31 @@ VERIFIED, off the same phase: a walk input moves a linked client not at all.
 The probe sent `forward=127` on 92 consecutive cmds, `st` 88750 to 90250, and
 across the 31 snapshots that span them the origin holds at
 `-192.8, 2457.1, -21.9` to the tenth of a unit and `velocity` reads
-`0.0, 0.0, 0.0` on every one. INFERRED, off that zero delta: the re-anchor in
-`G_RunClient` above is one account of it, and a mover that ignores the input
-outright under `pm_type` 1 is another; a zero origin delta with a zero velocity
-is consistent with both and this capture does not separate them.
+`0.0, 0.0, 0.0` on every one. INFERRED, off the 0x34220 arm above: the mover
+ignores the input outright under `pm_type` 1, since the arm runs no walk move,
+and `G_RunClient`'s re-anchor holds the origin to the parent besides; the
+capture alone could not separate the two.
 
 VERIFIED, off the plant fixture's `[phase hold1]`, the abort: the attacker
 links while still moving and its `velocity` reads `184.0, 27.0, 0.0` on every
 linked snapshot from 83800 to 85750 and on the release frame 85800, with the
 origin held at `-214.9, 2453.8, -21.9`; the snapshot after the release reads
-`138.0, 20.0, 0.0` and the origin has moved 7.6 units. INFERRED, off that and
-the zero of `[phase hold2]`: the link freezes the velocity at its value on the
-link frame rather than zeroing it, the cmds of the frame that unlinks move the
-client no more than the linked ones did, and the mover resumes from the frozen
-velocity on the frame after.
-Measured on vcod's live run of this pair (23.7): ours zeroed it, which the
-gate's placed clients, linking from a standstill, could not see.
+`138.0, 20.0, 0.0` and the origin has moved 7.6 units. INFERRED, off that, the
+zero of `[phase hold2]` and the 0x34220 arm, which neither integrates nor
+snaps the velocity: the link freezes the velocity at its value on the link
+frame rather than zeroing it, the cmds of the frame that unlinks still run
+at `pm_type` 1 and so through the linked arm, and the mover resumes from the
+frozen velocity on the frame after.
+VERIFIED, vcod measurement (23.7): ours zeroed it, which the gate's placed
+clients, linking from a standstill, could not see.
 
 VERIFIED, off both fixtures: `groundEntityNum` reads 0x3ff on every linked
 snapshot but the first, which still carries the ground entity the last free
-frame stood on (177 on the plant, 177 on the defuse).
+frame stood on (177 on the plant, 177 on the defuse). INFERRED, off the
+0x34220 arm's store at 0x34222: the 0x3ff is the linked arm's own write. The
+first linked snapshot's 177 fits the cmds of that frame having run at
+`pm_type` 0, before `G_RunClient` wrote the 1; the order of the two inside a
+frame is not read here.
 
 Measured on vcod's own load of mp_carentan under `sd`, in vcod's entity
 numbering: entity 177 is the `script_brushmodel` `*5`, and a player box
@@ -2339,86 +2372,116 @@ Three live runs of the retail recipe (`client-probes/probe_lookat`'s README
 section) against `vcod-server` on 2026-09-22, not kept in the repo. Ours reads
 scripts only out of `.pk3` archives, so `probe_lookat.gsc` and its `.txt` went
 into a `zzz_` pak in a scratch game directory, and the server ran with
-`--gametype probe_lookat --set probe_teleport=1`. Everything below is a vcod
-measurement, compared with the retail run the three committed fixtures come
-from.
+`--gametype probe_lookat --set probe_teleport=1`. Each paragraph below labels
+its vcod measurements and its retail readings separately; the retail side is
+the committed plant, defuse and lookat fixtures unless it says otherwise.
 
-The first run found five defects the placed-client gate cannot reach, all
-fixed since. VERIFIED, vcod measurement: `getCvar("mapname")` read `""`, so
-the probe's teleports never ran; `setOrigin` on a player was a missing
-builtin (23.2); the bomb's `radiusDamage` handed the killed callback an
-undefined attacker and `sd.gsc:782`'s `attacker getEntityNumber()` aborted
-it (`docs/research/cod11-combat.md`, 14.2); a planter that linked while
-walking read `velocity` 0 where retail holds 184,27 (23.2); and the frame
-that unlinked it had already moved it 7.6 units. The same run's defender
-never reached the sweep: it was still walking when the post-plant teleport
-landed it, kept its velocity (retail's `setOrigin` writes none), slid past
-the probe's 28-unit stop and circled the zone until the fuse ran out.
+VERIFIED, vcod measurement (run 1): five defects the placed-client gate
+cannot reach, all fixed since. `getCvar("mapname")` read `""`, so the probe's
+teleports never ran; `setOrigin` on a player was a missing builtin (23.2);
+the bomb's `radiusDamage` handed the killed callback an undefined attacker
+and `sd.gsc:782`'s `attacker getEntityNumber()` aborted it
+(`docs/research/cod11-combat.md`, 14.2); a planter that linked while walking
+read `velocity` 0; and the frame that unlinked it had already moved it 7.6
+units. VERIFIED, off the plant fixture: retail holds 184,27 under that link
+and moves on the frame after the release (23.2).
 
-VERIFIED, vcod measurement, run 3, with those fixed:
+VERIFIED, vcod measurement (run 1): the defender never reached the sweep. It
+was still walking when the post-plant teleport landed it, kept its velocity,
+slid past the probe's 28-unit stop and circled the zone until the fuse ran
+out. VERIFIED, off `setorigin` at 0x43480 (23.2): retail's `setOrigin`
+writes no velocity either, so the slide is not a `setOrigin` divergence.
 
-- The attacker's plant icon appears 5700 ms into the approach, as on retail;
-  the link lands on the first snapshot after the first use cmd, at `pm_type`
-  1, with the progress bar on the same snapshot.
-- Under the abort's link the velocity holds at `183.4, 27.0, 0.0` and the
-  origin does not move, the release frame reads the same, and the three
-  frames after it read `138.3, 20.3`, `103.0, 15.1` and `76.0, 11.2`, where
-  retail reads `138, 20`, `103, 15` and `75, 12`.
-- The plant completes 5000 ms after its link frame. The defuse's bar and
-  link land 100 ms into the probe's defuse phase and it completes 10000 ms
-  after that. Both as on retail. Block 4 reads slot 0 state 4 with icon 14 at the charge and slot 1
-  state 0 after the plant, and slot 0 state 0 after the defuse.
-- The bar's tween fields read `scaleStartTime` equal to the first bar
-  snapshot's `serverTime`, `scaleTime` 5000 and 10000, `fromWidth` 0 and
-  `fromHeight` 8, as on retail.
-- The defender unlinks 100 ms after the defuse's completion frame, as on
-  retail.
-- 444 lookat fires and 444 `isLookingAt` answers, every fire with an answer
-  on the same `getTime()`; 440 of the 443 gaps between fires are 50 ms, the
-  rest are the sweep's dead stations. The 15 stations fire or stay dark
-  exactly as retail's do, and the defuse carries 201 fires, the first 100 ms
-  after its start and the last on its completion frame.
-- The server logs `A;1;allies;vcod;bomb_plant`, `A;0;axis;vcod;bomb_defuse`,
-  `W;axis;vcod` and `L;allies`, in retail's order.
-- The bomb is entity 179 on both servers; its `loopSound` goes to the
-  `bomb_tick` configstring when it is planted and to 0 when it is defused.
-  Taken as a set, the defender's probe log carries retail's sound events,
-  configstring changes and server commands one for one (`MP_bomb_plant` twice
-  on the attacker, `MP_bomb_defuse` on the defender's own ring, the announcer
-  `s` commands), save the restart's and the pak lists' below.
+Run 3, with those fixed:
 
-VERIFIED, vcod measurement, run 2: with the defender standing 1.5 units from
-retail's station, pitch -15 fired and yaw +30 did not, the two stations
+- VERIFIED, vcod measurement (run 3): the attacker's plant icon appears
+  5700 ms into the approach, and the link lands on the first snapshot after
+  the first use cmd, at `pm_type` 1, with the progress bar on the same
+  snapshot. VERIFIED, off the plant fixture: retail's icon appears 5700 ms
+  in, and its link and bar land the same way (23.2).
+- VERIFIED, vcod measurement (run 3): under the abort's link the velocity
+  holds at `183.4, 27.0, 0.0` with the origin fixed, the release frame reads
+  the same, and the three frames after it read `138.3, 20.3`, `103.0, 15.1`
+  and `76.0, 11.2`. VERIFIED, off the plant fixture: retail's read `138, 20`,
+  `103, 15` and `75, 12`.
+- VERIFIED, vcod measurement (run 3): the plant completes 5000 ms after its
+  link frame; the defuse's bar and link land 100 ms into the probe's defuse
+  phase and it completes 10000 ms after that; block 4 reads slot 0 state 4
+  with icon 14 at the charge and slot 1 state 0 after the plant, and slot 0
+  state 0 after the defuse. VERIFIED, off the plant and defuse fixtures:
+  retail reads the same durations, offsets and slot states.
+- VERIFIED, vcod measurement (run 3): the bar's `scaleStartTime` equals the
+  first bar snapshot's `serverTime`, with `scaleTime` 5000 and 10000,
+  `fromWidth` 0 and `fromHeight` 8. VERIFIED, off the plant and defuse
+  fixtures: retail's carry the same four fields.
+- VERIFIED, vcod measurement (run 3): the defender unlinks 100 ms after the
+  defuse's completion frame. VERIFIED, off the defuse fixture: so does
+  retail's (23.2).
+- VERIFIED, vcod measurement (run 3): 444 lookat fires and 444
+  `isLookingAt` answers, every fire with an answer on the same `getTime()`;
+  440 of the 443 gaps between fires are 50 ms, the rest are the sweep's
+  dead stations; the defuse carries 201 fires, the first 100 ms after its
+  start and the last on its completion frame. VERIFIED, off the lookat
+  fixture: retail's run carries 444 fires with 440 gaps of 50 ms and 201
+  fires across the defuse.
+- VERIFIED, vcod measurement (run 3) against the defuse and lookat
+  fixtures: each of the 15 sweep stations fires, or stays dark, exactly as
+  retail's does.
+- VERIFIED, vcod measurement (run 3): the server logs
+  `A;1;allies;vcod;bomb_plant`, `A;0;axis;vcod;bomb_defuse`, `W;axis;vcod`
+  and `L;allies`. VERIFIED, off the lookat fixture: retail logs the same
+  four in the same order.
+- VERIFIED, vcod measurement (run 3): the bomb is entity 179, and its
+  `loopSound` goes to the `bomb_tick` configstring when it is planted and to
+  0 when it is defused. VERIFIED, off retail run 9's defender probe log (not
+  kept in the repo): the same entity and the same two transitions.
+- VERIFIED, vcod measurement (run 3) against retail run 9's defender probe
+  log: taken as a set, ours carries retail's sound events, configstring
+  changes and server commands one for one (`MP_bomb_plant` twice on the
+  attacker, `MP_bomb_defuse` on the defender's own ring, the announcer `s`
+  commands), save the restart's and the pak lists' below.
+
+VERIFIED, vcod measurement (run 2): with the defender standing 1.5 units
+from retail's station, pitch -15 fired and yaw +30 did not, the two stations
 section 23.1's slab model misses by about a unit; run 3, standing closer,
 matched retail on both. INFERRED: those two sit on the trigger's edge, and
 the difference is the station, not the trace.
 
-Still different, VERIFIED as vcod measurements unless labelled:
+Still different:
 
-- The first linked frame reads `groundEntityNum` 1023 where retail's still
-  reads 177 (23.2), the gate's allow-listed row.
-- `velocity` is fractional (`183.4, 27.0`) where retail's is whole. VERIFIED:
-  `PmoveSingle` ends with `trap_SnapVector` on `ps.velocity` (`ps+0x20`,
-  0x34451), and vcod's mover has no such snap. INFERRED: the snap is also why
-  the two servers' defenders, walking the same steer from the same spot,
-  part ways after the match-start restart, retail's velocity holding 1.3
-  degrees off the view where ours settles on it.
-- The probe's post-plant teleport lands one frame after the plant's
-  completion frame, where retail's lands on it, and at the defuse's completion
-  frame ours logs a `PROBE looking` beside the last fire where retail logs
-  none. INFERRED: both are the order threads run inside one frame. Retail
-  runs the threads the lookat queue woke before the timed waits due that
-  frame (the drain's own `Scr_RunCurrentThreads` sits ahead of `Scr_SetTime`,
-  23.1), and resumed the plant's `wait 0.05` loop ahead of the probe's older
-  poller; vcod steps every runnable thread in one pass, in start order.
-- The reliable stream's order inside a frame: retail interleaves `d` and `s`
-  in the order the script made them (`d 531`, `d 532`, `s 8`, `d 533` at the
-  plant), and ours sends every configstring change, ascending, before every
-  command. No command in these runs names a configstring set after it, so no
-  client reads a stale one.
-- The restart's `d 13`, `d 12` and `d 3` with a `t` of 0, which
-  `docs/research/cod11-map-cycle.md` 8.2 already records, and the systeminfo
-  string, which carries no `sv_referencedPaks` or `sv_referencedPakNames`.
+- VERIFIED, vcod measurement (run 3): the first linked frame reads
+  `groundEntityNum` 1023. VERIFIED, off both fixtures: retail's reads 177
+  (23.2). This is the gate's allow-listed row.
+- VERIFIED, vcod measurement (run 3): `velocity` is fractional
+  (`183.4, 27.0`). VERIFIED, off the plant fixture: retail's is whole.
+  VERIFIED: `PmoveSingle`'s default arm calls `trap_SnapVector` on
+  `ps.velocity` (`ps+0x20`) at 0x34451 (23.2), and vcod's mover has no such
+  snap. INFERRED: the snap is also why the two servers' defenders, walking
+  the same steer from the same spot, part ways after the match-start
+  restart, retail's velocity holding 1.3 degrees off the view where ours
+  settles on it.
+- VERIFIED, vcod measurement (run 3): the probe's post-plant teleport lands
+  one frame after the plant's completion frame, and at the defuse's
+  completion frame ours logs a `PROBE looking` beside the last fire.
+  VERIFIED, off the plant and lookat fixtures: retail's teleport lands on the
+  completion frame, and its completion frame has the fire and no `looking`.
+  INFERRED: both are the order threads run inside one frame. Retail runs the
+  threads the lookat queue woke before the timed waits due that frame (the
+  drain's own `Scr_RunCurrentThreads` sits ahead of `Scr_SetTime`, 23.1), and
+  resumed the plant's `wait 0.05` loop ahead of the probe's older poller;
+  vcod steps every runnable thread in one pass, in start order.
+- VERIFIED, off retail run 9's defender probe log (not kept in the repo):
+  retail interleaves `d` and `s` in the order the script made them (`d 531`,
+  `d 532`, `s 8`, `d 533` at the plant). VERIFIED, vcod measurement (run 3):
+  ours sends every configstring change, ascending, before every command.
+  INFERRED: no command in these runs names a configstring set after it, so
+  no client reads a stale one.
+- VERIFIED, vcod measurement (run 3): the restart carries no `d 13` or
+  `d 12`, and its `d 3` has a `t` of 0; `docs/research/cod11-map-cycle.md`
+  8.2 records the same off its own runs. VERIFIED, vcod measurement (run 3)
+  against retail run 9's probe logs: ours sends no `sv_referencedPaks` or
+  `sv_referencedPakNames` in the systeminfo string, where retail's carries
+  both.
 
 ## Open, and worth a probe
 
