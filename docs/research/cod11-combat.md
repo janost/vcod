@@ -1166,15 +1166,25 @@ combat path above calls it. UNVERIFIED: what does, and what it is for.
 
 ### 2.7 What a `bulletTrace` clips
 
-VERIFIED, `GScr_BulletTrace` (`game.mp.i386.so` `0x5abc4`): it seeds the mask
-0x2802031 (`0x5abd2`) and replaces it with 0x802031 when `Scr_GetBool(2)`,
-`hitCharacters`, reads false (`0x5ac09`); the pass entity is 0x3ff unless
-argument 3 is an entity (`0x5ac1d..0x5ac3e`); and it calls
-`trap_LocationalTrace` with `bulletPriorityMap` (`0x5ac56`). VERIFIED: the
-result's `entity` is `Scr_AddUndefined` when the hit number less 0x3fe is at
-most 1 (`0x5aca6..0x5acb4`), and `Scr_AddEntity(&g_entities[n])` otherwise
-(`0x5acd3`). INFERRED: `entity` is undefined for the world and for a miss and
-names any entity the trace stopped on.
+VERIFIED, `GScr_BulletTrace` (`game.mp.i386.so` `0x5abc4`): it stores the
+mask 0x2802031 (`0x5abd2`), calls `Scr_GetBool(2)`, `hitCharacters`
+(`0x5abfd`), and has a second store of 0x802031 to the same slot (`0x5ac09`).
+INFERRED, off the `jne` at `0x5ac07` that jumps over that store: the narrower
+mask is the one taken when `hitCharacters` reads false.
+VERIFIED: it loads 0x3ff as the pass entity (`0x5abcd`), checks argument 3's
+`Scr_GetType` against 7 and `Scr_GetPointerType` against 0xd
+(`0x5ac1d..0x5ac32`), and replaces the pass entity with `Scr_GetEntity(3)`'s
+number (`0x5ac3e`). INFERRED, off the two `jne`s past that load: the pass
+entity stays 0x3ff unless argument 3 is an entity.
+VERIFIED: it calls `trap_LocationalTrace` with `bulletPriorityMap`
+(`0x5ac56`).
+VERIFIED: the result's `entity` is written by a `Scr_AddUndefined` call
+(`0x5acb4`) and a `Scr_AddEntity(&g_entities[n])` call (`0x5acd3`), and the
+compare between them is the hit number less 0x3fe against 1 as an unsigned
+16-bit word (`0x5aca6..0x5acb2`). INFERRED, off the `ja` at `0x5acb2`: the
+undefined is written when that difference is at most 1, the entity otherwise,
+so `entity` is undefined for the world and for a miss and names any entity
+the trace stopped on.
 
 The result is an array with five string keys. VERIFIED, `GScr_LoadConsts`
 (`0x58550`): the `scr_const` slots the builtin names are allocated from
@@ -1188,16 +1198,16 @@ result, `[ebp-0x44]` (`0x5ac8a..0x5ac9e`); `entity` follows as above.
 INFERRED: `position` is the trace's end position, so a miss reads the `end`
 argument.
 VERIFIED: `fld1` / `fcomp` against the fraction at `0x5acf0` and a `jne` on
-the C0/C2/C3 mask at `0x5acf8` choose between two arms. INFERRED: a
-`fraction` below 1 takes the fall-through arm (the hit) and 1 takes the jump
-to `0x5ad50` (the miss).
-VERIFIED, the fall-through arm: `normal` is the vector at `[ebp-0x38]`
-(`0x5acfd..0x5ad11`), and `surfacetype` is `trap_SurfaceTypeToName` of bits
-20..24 of the dword at `[ebp-0x2c]` (`0x5ad16..0x5ad44`). INFERRED: those
-are the hit plane's normal and the surface flags' material field.
-VERIFIED, the jump arm: `normal` is `VectorNormalize` of the second argument
-less the first (`0x5ad50..0x5ad90`), and `surfacetype` is
-`Scr_AddConstString(scr_const 0xf8)`, `"none"` (`0x5ad98..0x5adb3`).
+the C0/C2/C3 mask at `0x5acf8` whose target is `0x5ad50`. INFERRED, off that
+branch: a `fraction` below 1 falls through to `0x5acfa` (the hit) and 1 takes
+the jump (the miss).
+VERIFIED: the block at `0x5acfd..0x5ad44` writes `normal` from the vector at
+`[ebp-0x38]` and `surfacetype` from `trap_SurfaceTypeToName` of bits 20..24
+of the dword at `[ebp-0x2c]`. INFERRED: those are the hit plane's normal and
+the surface flags' material field.
+VERIFIED: the block at `0x5ad50..0x5adb3` writes `normal` as
+`VectorNormalize` of the second argument less the first, and `surfacetype`
+as `Scr_AddConstString(scr_const 0xf8)`, `"none"`.
 VERIFIED, the stock `maps/` scripts in `pak0..pak9`: all three `["normal"]`
 reads are in `maps/mp/_utility.gsc` `getPlant`, each handed to
 `orientToNormal`.
@@ -1212,25 +1222,30 @@ VERIFIED: `SP_script_model` (`0x60ff4`) writes `r.contents` (`ent+0x118`)
 `trap_LinkEntity` (`0x61028`). 0x2080 meets both masks above in bit 0x2000.
 
 VERIFIED, `cod_lnxded`, the per-entity clip `0x809105c` (section 3.1): it
-returns early when `ent+0x118` and the clip's mask share no bit; on a
-locational trace it resolves the entity's model record (`0x806e498`) and,
-with `svFlags & 4`, tests the model's collision contents against the mask
-(`0x80c53d0`), rejects on the model's bounds offset by the origin
-(`0x80c4f6c`, `0x805a788`), builds the entity's axis from `ent+0x140`
-(`0x806709c`), moves `start` and `end` into the frame of that axis and the
-origin at `ent+0x134` (`0x8066520`), and runs `0x80c52c0`, which walks the
-model's collision surfaces through `0x80c203c`, the same clip the static
-models take (`docs/research/cod11-mantle.md`, "Static models are clipped as a
-segment"). INFERRED, the branches: a linked `script_model` with collision
-stops a `bulletTrace` on its own mesh, at its origin and angles as they are
-when the trace runs, and a closer world hit keeps the world's.
+tests `ent+0x118` against the clip's mask, tests the locational-trace flag
+and `svFlags & 4`, and calls the model record lookup (`0x806e498`), a test
+of the model's collision contents against the mask (`0x80c53d0`), a bounds
+reject on the model's bounds offset by the origin (`0x80c4f6c`,
+`0x805a788`), the axis build from `ent+0x140` (`0x806709c`), a transform of
+`start` and `end` into the frame of that axis and the origin at `ent+0x134`
+(`0x8066520`), and `0x80c52c0`, which walks the model's collision surfaces
+through `0x80c203c`, the same clip the static models take
+(`docs/research/cod11-mantle.md`, "Static models are clipped as a
+segment"). INFERRED, off the branches: the function returns early when the
+contents and the mask share no bit, the model path runs only on a locational
+trace and only with `svFlags & 4`, and the calls run in the order listed.
+INFERRED, off the same: a linked `script_model` with collision stops a
+`bulletTrace` on its own mesh, at its origin and angles as they are when the
+trace runs, and a closer world hit keeps the world's.
 
 VERIFIED: `ScriptEntCmd_NotSolid` (`0x612cc`) and `ScriptEntCmd_Solid`
-(`0x61204`) print `"cannot use the solid/notsolid commands on a script_model
-entity"` (`0x78d00`) for a script model and write `ent+0x118` only on the
-`script_brushmodel` arm (`0x61378`, `0x612b8`); `ScrCmd_Hide` (`0x5dcac`)
-only ORs 0x10 into `ent+0x17d` (`0x5dcdf`). INFERRED: a hidden script model
-and one a script `notSolid()`ed both still stop a bullet trace.
+(`0x61204`) both reference the string `"cannot use the solid/notsolid
+commands on a script_model entity"` (`0x78d00`), and their only writes of
+`ent+0x118` are at `0x61378` and `0x612b8`. INFERRED, off their classname
+branches: the print is the `script_model` arm and the write sits on the
+`script_brushmodel` arm only. VERIFIED: `ScrCmd_Hide` (`0x5dcac`) writes
+nothing but an OR of 0x10 into `ent+0x17d` (`0x5dcdf`). INFERRED: a hidden
+script model and one a script `notSolid()`ed both still stop a bullet trace.
 
 VERIFIED, off `maps/mp/mp_carentan.bsp`: `bombzone_A` (`*4`, origin
 `-146 2490 16`) stands over two script models at `-146 2490 -32`, angles

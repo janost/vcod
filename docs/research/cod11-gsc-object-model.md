@@ -1709,12 +1709,14 @@ ordering: the script frame runs before the aim trace, so an `isLookingAt` read
 in script frame N answers off the trace `ClientEndFrame` ran at the end of
 frame N-1.
 
-VERIFIED: `ClientEndFrame` (0x40e98) returns at once unless `client+0x20ec`
-reads 2 (0x40ebe), takes the intermission arm when sessionstate
-(`client+0x20d0`) reads 3 (0x40ed1) and `SpectatorClientEndFrame` when it
-reads 2 (0x40f27, call at 0x40f30), and only the fall-through reaches
+VERIFIED: `ClientEndFrame` (0x40e98) compares `client+0x20ec` against 2
+(0x40ebe) and sessionstate (`client+0x20d0`) against 3 (0x40ed1) and 2
+(0x40f24), calls `SpectatorClientEndFrame` at 0x40f30, and calls
 `G_CheckForPreventFriendlyFire` (0x4110d) and `G_CheckForCursorHints`
-(0x41119).
+(0x41119). INFERRED, off the `jne` at 0x40ec5 and the jumps to the epilogue
+at 0x40f1f and 0x40f35: the function returns at once unless `client+0x20ec`
+reads 2, sessionstate 3 takes the intermission arm and 2 the spectator one,
+and only the fall-through reaches the two calls.
 
 `G_CheckForPreventFriendlyFire` (0x4f88c), claim by claim:
 
@@ -1726,9 +1728,11 @@ reads 2 (0x40f27, call at 0x40f30), and only the fall-through reaches
 - VERIFIED: `CalcMuzzlePoints` (0x693f4) reads the aim angles at
   `client+0x220c` and `+0x2210` (0x69424, 0x6942d) and the view height at
   `client+0xc8` (0x6941b).
-- VERIFIED: past `G_AddLean` (0x6947d) it rewrites each muzzle component
-  through `fistp` under a control word `| 0xc00` (0x6948c, 0x694b4, 0x694dc),
-  so the trace starts at the eye truncated toward zero on every axis.
+- VERIFIED: it calls `G_AddLean` (0x6947d) and rewrites each muzzle
+  component through `fistp` and `fild` under a control word `| 0xc00`
+  (0x6948c, 0x694b4, 0x694dc), rounding control 11, which truncates toward
+  zero. INFERRED, off those three sitting past the call: the lean is added
+  first, so the trace starts at the leaned eye truncated on every axis.
 - VERIFIED: the end point is the muzzle plus forward times 8192.0 (`.rodata`
   0x7547c, arithmetic 0x4f8fe..0x4f931).
 - VERIFIED: it calls `trap_LocationalTrace` with contents mask 0x20000001
@@ -1763,29 +1767,37 @@ INFERRED, off the two masks alone: the first trace decides whether anything
 solid or a lookat volume is reached before the world, the second whether a
 body stands in front.
 
-VERIFIED, of `G_Trigger` (0x656f0): it returns having done nothing when
-`Scr_IsSystemActive(1)` answers 0 (0x6570d); when the counter at `level+0x29ec`
-reads exactly 0x100 it calls `Scr_AddEntity(toucher)` and
-`Scr_Notify(trigger, scr_const+0x92, 1)` (0x6571f, 0x65732); otherwise it
-appends a 12-byte record at `level+0x1dec + n*12` holding the two entity
-numbers and the two `+0x300` script handles, and increments the counter
-(0x65740..0x65772). VERIFIED: `scr_const+0x92` is `"trigger"` (0x761e9).
+VERIFIED, of `G_Trigger` (0x656f0): it tests `Scr_IsSystemActive(1)`'s
+answer (0x6570b), compares the counter at `level+0x29ec` against 0x100
+(0x65714), calls `Scr_AddEntity(toucher)` and
+`Scr_Notify(trigger, scr_const+0x92, 1)` (0x6571f, 0x65732), and at
+0x65740..0x65772 appends a 12-byte record at `level+0x1dec + n*12` holding the
+two entity numbers and the two `+0x300` script handles and increments the
+counter. INFERRED, off the `je` at 0x6570d and the `jne` at 0x65719: a 0
+answer returns having done nothing, the notify runs when the counter reads
+exactly 0x100, and the append otherwise. VERIFIED: `scr_const+0x92` is
+`"trigger"` (0x761e9).
 
 INFERRED, off which arm that counter compare takes: the immediate notify is
 the overflow path and the queue is the normal one.
 
-VERIFIED: `G_RunFrame` drains that queue at 0x50578..0x5064d, raising the same
-`"trigger"` notify per record whose two `+0x300` handles still match the
-entities they name (0x505f6), re-entering `Scr_RunCurrentThreads` (0x50653)
-until a pass adds no record, then zeroing the counter (0x50665).
+VERIFIED: `G_RunFrame` walks that queue at 0x50578..0x5064d, calling
+`Scr_Notify` with the same `"trigger"` at 0x505f6, calls
+`Scr_RunCurrentThreads` at 0x50653 and zeroes the counter at 0x50665.
+INFERRED, off the handle compares in the walk and the `jne` at 0x5065f back to
+0x50547: the notify is raised per record whose two `+0x300` handles still
+match the entities they name, and the walk and the thread run repeat until a
+pass adds no record, after which the counter is zeroed.
 
 INFERRED, off neither path carrying a time or count gate: a `trigger_lookat`
 notifies once every server frame the aimer keeps looking at it.
 
 VERIFIED: `Touch_Multi` (0x65a18) and `hurt_touch` (0x64dc4) call
-`Scr_Notify` themselves (0x65a5b, 0x64e25) rather than `G_Trigger`, and
-`G_RunFrame` writes `level.time` (`level+0x1e8`, 0x50499) ahead of the queue
-drain and its `Scr_RunCurrentThreads` (0x50653). VERIFIED, off the plant and
+`Scr_Notify` themselves (0x65a5b, 0x64e25) rather than `G_Trigger`.
+VERIFIED: `G_RunFrame` writes `level.time` (`level+0x1e8`) from its argument
+at 0x50499, and the queue drain and its `Scr_RunCurrentThreads` sit at
+0x50578..0x50653. INFERRED, off those addresses and no jump from the drain
+back past 0x50499: the write happens before the drain. VERIFIED, off the plant and
 defuse fixtures: the progress bar's `scaleStartTime`, which `scaleOverTime`
 takes from `level.time` (23.4), equals the `serverTime` of the first snapshot
 carrying it on all three holds (83800, 86800, 114600), where the use cmd
@@ -1794,10 +1806,26 @@ plant). INFERRED: a thread a touch wakes during `ClientThink` runs no earlier
 than the next `G_RunFrame`, on that frame's `level.time`, whether the notify
 came through `G_Trigger`'s queue or straight from `Scr_Notify`.
 
-VERIFIED, of `isLookingAt` (0x4576c): it range-checks the receiver entity
-number against 0x3ff and errors when that entity carries no client pointer
-(0x45776, 0x4578a), takes its argument through `Scr_GetEntity(0)` (0x457d4)
-and answers `client+0x2260 == arg` through `Scr_AddInt` (0x457e4).
+VERIFIED: `G_RunFrame` calls `Scr_SetTime` with `level+0x1e8` at 0x5070c.
+VERIFIED: `Scr_SetTime` (0x6c494) is a stub that calls through the pointer
+slot at 0xc113c, which is in `.bss`, so the function the call reaches is one
+the engine supplies at run time and this module does not carry. VERIFIED: the
+`gettime` builtin (0x5d088) answers `level+0x1e8` through `Scr_AddInt`, not
+the engine's clock. INFERRED, off 0x5070c sitting past the drain's
+`Scr_RunCurrentThreads` (0x50653) and the plant completing at the bar's
+`scaleStartTime` + 5000 on retail's capture and on ours, which is 100
+`wait 0.05`s from the frame the trigger woke `bomb_think`: a thread the drain
+wakes on frame T reads T from `getTime()` although the engine's script clock
+is not handed T until later in the frame, and its first `wait 0.05` resumes
+on frame T + 50, so the late hand-off moves no `wait` a frame early.
+
+VERIFIED, of `isLookingAt` (0x4576c): it compares the receiver entity number
+against 0x3ff (0x45776) and the entity's client pointer against 0 (0x4578a),
+calls `Scr_Error` at 0x457a5 and 0x457c2, takes its argument through
+`Scr_GetEntity(0)` (0x457d4) and hands `Scr_AddInt` the compare of
+`client+0x2260` against the argument (0x457e4). INFERRED, off the `ja` at
+0x4577c and the `jne` at 0x45791: an out-of-range number or a missing client
+pointer is the error.
 
 INFERRED, off that being the whole of the function: it runs no trace of its
 own and computes no cone, it reads the last `G_CheckForPreventFriendlyFire`
@@ -1888,7 +1916,7 @@ the ray through the far top corner. Both disagreements are within about a unit
 of the boundary, so the box bounds, the view height or the charge origin is off
 by that much and this capture does not resolve which.
 
-VERIFIED, off `crates/server/tests/sd_plant_ab.rs` run against the three
+Measured on vcod, off `crates/server/tests/sd_plant_ab.rs` run against the three
 fixtures: with ours starting the aim trace at the eye truncated the way
 `CalcMuzzlePoints` truncates it, and the charge where `getPlant` puts it
 (23.6), all 15 stations fire or stay quiet as retail's did, `pitch -15` and
@@ -1995,12 +2023,14 @@ VERIFIED, off both fixtures: `groundEntityNum` reads 0x3ff on every linked
 snapshot but the first, which still carries the ground entity the last free
 frame stood on (177 on the plant, 177 on the defuse).
 
-VERIFIED, off our own load of mp_carentan under `sd`: entity 177 is the
-`script_brushmodel` `*5`, and a player box traced down at the plant spot
-`-192.8, 2457.1` rests at z `-21.875` on its brush 4281,
-`textures/common/clip_metal`, contents 0x280306c0, which meets neither shot
-mask (2.7 of the combat doc); the terrain under it is at `-31.875`. INFERRED,
-off the same load numbering the lookat 170 as retail does (23.1): retail's
+Measured on vcod's own load of mp_carentan under `sd`, in vcod's entity
+numbering: entity 177 is the `script_brushmodel` `*5`, and a player box
+traced down at the plant spot `-192.8, 2457.1` rests at z `-21.875` on its
+brush 4281, `textures/common/clip_metal`, contents 0x280306c0, which meets
+neither shot mask (2.7 of the combat doc); the terrain under it is at
+`-31.875`. Retail's numbering is not read here, only ours. INFERRED, off
+the same load numbering the lookat trigger 170, which retail's own census
+reads (23.1), and so spawning the map's entities in retail's order: retail's
 177 is that brush model, so a client standing on a submodel's brushes reads
 the submodel's entity as its ground, where ours writes 1022 for every
 ground. `pm_flags` holds 262144
@@ -2082,10 +2112,11 @@ at `+0x18` (0x5a69f). VERIFIED: `objective_position` (0x5e128) writes the three
 components, truncated the same way, at `+4`, `+8` and `+0xc` (0x5e1d4, 0x5e1fc,
 0x5e224).
 
-VERIFIED: the conversion in both is `fistp` under a control word with
+VERIFIED: the conversion in both is a `fistp` under a control word with
 `| 0xc00` (0x5a3ec, 0x5a414, 0x5a43c; 0x5e1b9, 0x5e1e1, 0x5e209), rounding
-control 11, which truncates toward zero, then `fild` back into the float
-slot. VERIFIED, off the plant fixture at 91800: slot 0 reads
+control 11, which truncates toward zero, and a `fild` into the float slot.
+INFERRED, off the `fild` sitting past each `fistp`: the slot ends up holding
+the truncated integer as a float. VERIFIED, off the plant fixture at 91800: slot 0 reads
 `-176, 2473, -22` after the plant, and the planter's origin on the same
 frame reads `-192.8, 2457.1, -21.9`. INFERRED, off `_utility::getPlant`'s
 fallback trace starting at `self.origin + (16, 16, 10)`: the charge's x is
@@ -2261,9 +2292,11 @@ equal fractions, and the fallback's angles come from the last trace run
 rather than the winning one.
 
 VERIFIED: `ClientThink_real` stores 0 into all three `angles` components
-(`ent+0x140`, 0x405e2, 0x405ec, 0x405f6) and then `ps.viewangles[1]`
-(`client+0xc4`) into the yaw (0x40600..0x40606), right after the
-`G_TouchTriggers` call (0x405b3). INFERRED, off the branches: that block runs
+(`ent+0x140`, 0x405e2, 0x405ec, 0x405f6) and `ps.viewangles[1]`
+(`client+0xc4`) into the yaw (0x40600..0x40606), and calls
+`G_TouchTriggers` at 0x405b3. INFERRED, off the addresses: the yaw store
+follows the zeroing, and both follow the `G_TouchTriggers` call.
+INFERRED, off the branches: that block runs
 once per cmd on the live path, and a `sessionstate` 2 client leaves the
 function through `SpectatorThink` (0x4001d, then the jump to the exit at
 0x40022) and a `sessionstate` 3 one through the intermission arm (0x4000a)
