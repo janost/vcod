@@ -51,10 +51,11 @@ fn state_arg(cx: &Cx, v: Option<&Value>) -> Result<i32, ErrorKind> {
 }
 
 /// Each component truncated toward zero, as retail stores it
-/// (docs/research/cod11-gsc-object-model.md 23.3).
+/// (docs/research/cod11-gsc-object-model.md 23.3). The `+ 0.0` turns `trunc`'s
+/// -0.0 into the +0.0 retail's `fistp`/`fild` round trip stores.
 fn origin_arg(v: Option<&Value>) -> Result<[f32; 3], ErrorKind> {
     match v {
-        Some(Value::Vector(o)) => Ok([o[0].trunc(), o[1].trunc(), o[2].trunc()]),
+        Some(Value::Vector(o)) => Ok(o.map(|c| c.trunc() + 0.0)),
         _ => Err(ErrorKind::BadType("objective position takes a vector")),
     }
 }
@@ -275,6 +276,8 @@ mod tests {
             let args = [Value::Int(0), Value::Vector([10.9, -0.5, 0.99])];
             objective_position(&mut host, cx, None, &args).unwrap();
             assert_eq!(host.objectives[0].origin_f32(), [10.0, 0.0, 0.0]);
+            // -0.5 goes through an integer, so the slot holds +0.0's bits.
+            assert_eq!(host.objectives[0].origin[1], 0);
         });
     }
 
