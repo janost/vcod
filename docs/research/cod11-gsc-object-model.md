@@ -1993,7 +1993,17 @@ is consistent with both and this capture does not separate them.
 
 VERIFIED, off both fixtures: `groundEntityNum` reads 0x3ff on every linked
 snapshot but the first, which still carries the ground entity the last free
-frame stood on (177 on the plant, 177 on the defuse). `pm_flags` holds 262144
+frame stood on (177 on the plant, 177 on the defuse).
+
+VERIFIED, off our own load of mp_carentan under `sd`: entity 177 is the
+`script_brushmodel` `*5`, and a player box traced down at the plant spot
+`-192.8, 2457.1` rests at z `-21.875` on its brush 4281,
+`textures/common/clip_metal`, contents 0x280306c0, which meets neither shot
+mask (2.7 of the combat doc); the terrain under it is at `-31.875`. INFERRED,
+off the same load numbering the lookat 170 as retail does (23.1): retail's
+177 is that brush model, so a client standing on a submodel's brushes reads
+the submodel's entity as its ground, where ours writes 1022 for every
+ground. `pm_flags` holds 262144
 across the link and the unlink, and `eFlags` changes at no point of either
 sequence: on the attacker it moves only at the probe's two `setOrigin`
 teleports, `serverTime` 68750 and 91800, and on the defender only at its three,
