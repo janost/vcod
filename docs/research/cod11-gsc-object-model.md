@@ -1779,6 +1779,18 @@ until a pass adds no record, then zeroing the counter (0x50665).
 INFERRED, off neither path carrying a time or count gate: a `trigger_lookat`
 notifies once every server frame the aimer keeps looking at it.
 
+VERIFIED: `Touch_Multi` (0x65a18) and `hurt_touch` (0x64dc4) call
+`Scr_Notify` themselves (0x65a5b, 0x64e25) rather than `G_Trigger`, and
+`G_RunFrame` writes `level.time` (`level+0x1e8`, 0x50499) ahead of the queue
+drain and its `Scr_RunCurrentThreads` (0x50653). VERIFIED, off the plant and
+defuse fixtures: the progress bar's `scaleStartTime`, which `scaleOverTime`
+takes from `level.time` (23.4), equals the `serverTime` of the first snapshot
+carrying it on all three holds (83800, 86800, 114600), where the use cmd
+that started each travelled between frames (`st` 83766 and 86766 on the
+plant). INFERRED: a thread a touch wakes during `ClientThink` runs no earlier
+than the next `G_RunFrame`, on that frame's `level.time`, whether the notify
+came through `G_Trigger`'s queue or straight from `Scr_Notify`.
+
 VERIFIED, of `isLookingAt` (0x4576c): it range-checks the receiver entity
 number against 0x3ff and errors when that entity carries no client pointer
 (0x45776, 0x4578a), takes its argument through `Scr_GetEntity(0)` (0x457d4)

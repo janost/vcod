@@ -417,7 +417,6 @@ impl ScriptRuntime {
         let hits = self
             .vm
             .with_cx(|cx| crate::game::trigger::touched(host, cx, client));
-        let event = self.vm.with_cx(|cx| cx.intern_folded("trigger"));
         let triggers = &mut self.host.triggers;
         let rng = &mut self.rng;
         // Drawn under the `rng` borrow and acted on after it: each entry is a
@@ -451,12 +450,7 @@ impl ScriptRuntime {
             })
             .collect();
         for (id, hurt) in fired {
-            self.vm
-                .notify(Target::Entity(id), event, &[Value::Entity(client)]);
-            // The notify first: `hurt_touch` (0x64dc4) reaches its `G_Damage`
-            // only past the `Scr_Notify` (INFERRED, control flow), so a thread
-            // parked on the trigger sees the touch before the callback that
-            // may kill the toucher.
+            self.host.trigger_fires.push((id, client));
             if let Some((damage, dflags)) = hurt {
                 self.deliver_world_hit(
                     slot,
@@ -606,9 +600,7 @@ impl ScriptRuntime {
         self.host.client_lookat[slot] = hit;
         if let Some(id) = hit {
             if self.host.triggers.fire(id, now_ms, &mut |_| 0) {
-                let event = self.vm.with_cx(|cx| cx.intern_folded("trigger"));
-                self.vm
-                    .notify(Target::Entity(id), event, &[Value::Entity(client)]);
+                self.host.trigger_fires.push((id, client));
             }
         }
     }
@@ -1253,6 +1245,17 @@ impl ScriptRuntime {
             log::warn!("script error: {e:?}");
         }
         self.host.level_time_ms = now_ms;
+        // A trigger's thread runs on the clock of the frame after the touch:
+        // retail's plant bar carries the `scaleStartTime` of the first
+        // snapshot it is on, and `G_RunFrame` drains the lookat queue after
+        // writing `level.time` (docs/research/cod11-gsc-object-model.md 23.1).
+        let event = self.vm.with_cx(|cx| cx.intern_folded("trigger"));
+        for (id, other) in std::mem::take(&mut self.host.trigger_fires) {
+            if self.host.ents.get(id).is_some() && self.host.ents.get(other).is_some() {
+                self.vm
+                    .notify(Target::Entity(id), event, &[Value::Entity(other)]);
+            }
+        }
         // Thinks before threads: `G_RunFrame` runs the entity pass first, so
         // a script reading `getEntArray` in the same frame sees the freed
         // entity already gone. Whether retail really orders it this way is
@@ -1948,6 +1951,32 @@ mod tests {
         rt.touch_triggers_with_buttons(0, 100, 0);
         rt.run_frame(100);
         assert_eq!(rt.level_field("hits"), Value::Int(1));
+    }
+
+    /// A touch lands between frames, and the thread it wakes runs on the
+    /// next frame's clock: retail's plant bar carries the `scaleStartTime` of
+    /// the first snapshot it is on (object-model doc 23.1).
+    #[test]
+    fn a_triggered_thread_runs_on_the_next_frame_s_clock() {
+        let mut rt = ScriptRuntime::for_test("main() {}");
+        rt.install_for_test(
+            "trigger_think() { self waittill(\"trigger\", other); level.at = getTime(); }",
+        );
+        let zone = rt.spawn_map_entity_for_test([0.0, 0.0, 0.0]);
+        rt.triggers_mut().register(
+            zone,
+            crate::game::trigger::TriggerKind::Multiple,
+            crate::game::trigger::TriggerShape::boxed([-64.0, -64.0, 0.0], [64.0, 64.0, 64.0]),
+            0,
+            0,
+        );
+        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.run_frame(0);
+        rt.spawn_client_for_test(0, [10.0, 0.0, 0.0]);
+        rt.set_client_state_for_test(0, "playing");
+        rt.touch_triggers_with_buttons(0, 0, 0);
+        rt.run_frame(50);
+        assert_eq!(rt.level_field("at"), Value::Int(50));
     }
 
     /// The aim trace fires a `trigger_lookat` the client's view enters, with

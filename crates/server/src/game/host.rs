@@ -248,6 +248,10 @@ pub struct GameHost {
     /// What the last aim trace entered, for `isLookingAt`
     /// (`docs/research/cod11-gsc-object-model.md`, 23.1).
     pub client_lookat: Vec<Option<EntId>>,
+    /// `(trigger, toucher)` for every trigger that fired since the last
+    /// script frame, notified once that frame's clock is set
+    /// (`ScriptRuntime::run_frame`).
+    pub trigger_fires: Vec<(EntId, EntId)>,
     /// Each client's `ps.grenadeTimeLeft`, mirrored in by
     /// `Server::replay_moves` with the entity states, which is the last read
     /// of it before a kill this tick: what a death drops
@@ -443,6 +447,7 @@ impl GameHost {
             client_on_ground: vec![false; MAX_CLIENTS],
             client_aim: vec![([0.0; 3], [0.0; 2]); MAX_CLIENTS],
             client_lookat: vec![None; MAX_CLIENTS],
+            trigger_fires: Vec::new(),
             client_grenade_ms: vec![0; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
