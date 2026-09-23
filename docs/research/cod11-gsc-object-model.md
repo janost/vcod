@@ -2495,11 +2495,14 @@ Still different:
 - VERIFIED, vcod measurement (run 3): `velocity` is fractional
   (`183.4, 27.0`). VERIFIED, off the plant fixture: retail's is whole.
   VERIFIED: `PmoveSingle`'s default arm calls `trap_SnapVector` on
-  `ps.velocity` (`ps+0x20`) at 0x34451 (23.2), and vcod's mover has no such
+  `ps.velocity` (`ps+0x20`) at 0x34451 (23.2), and vcod's mover had no such
   snap. INFERRED: the snap is also why the two servers' defenders, walking
   the same steer from the same spot, part ways after the match-start
   restart, retail's velocity holding 1.3 degrees off the view where ours
-  settles on it.
+  settles on it. Fixed since: the snap and the walk's accel floor it
+  exposed are in (`docs/research/cod11-mantle.md`, "The tail of the default
+  arm" and "The walk's accel floor"); no run of this recipe has been taken
+  against ours since.
 - VERIFIED, vcod measurement (run 3): the probe's post-plant teleport lands
   one frame after the plant's completion frame, and at the defuse's
   completion frame ours logs a `PROBE looking` beside the last fire.

@@ -39,14 +39,16 @@ pub const JUMP_HEIGHT_LOW: f32 = 24.0;
 // Accelerate/friction/stopspeed: retail CoD 1.1 rodata (game.mp.i386.so),
 // loaded by PM_Friction @0x2e460 and the movers.
 pub const PM_ACCELERATE: f32 = 9.0;
-/// Stance accelerates: values selected at 0x2f4b0-0x2f4ca in the steep-slope
-/// mover; their walk-path application is INFERRED from that selection.
+/// Stance accelerates, selected at 0x2f4b0-0x2f4ca in `PM_WalkMove`.
 pub const PM_DUCKED_ACCELERATE: f32 = 12.0;
 pub const PM_PRONE_ACCELERATE: f32 = 19.0;
 pub const PM_AIRACCELERATE: f32 = 1.0;
 pub const PM_FRICTION: f32 = 5.5;
 /// Friction control floor: drop uses max(speed, stopspeed) (@0x2e500).
 pub const PM_STOPSPEED: f32 = 100.0;
+/// The walk's own accel floor: `PM_WalkMove` scales the accel by
+/// max(wishspeed, 100) (rodata 0x70908, @0x2f50f), not by the wish speed.
+pub const WALK_ACCEL_FLOOR: f32 = 100.0;
 pub const STEPSIZE: f32 = 18.0;
 /// The revert test's margin, rodata 0x70ef4 (`PM_StepSlideMove` 0x35441).
 const STEP_REVERT_EPS: f32 = 0.001;
@@ -631,7 +633,33 @@ pub fn pmove(
     // Retail's `pm->oldcmd`: what the next step subtracts this one from.
     ps.last_cmd_angles = input.angles;
     ps.last_cmd_ads = input.ads;
+    clamp_velocity_to_move(ps, dt);
+    snap_velocity(ps);
     events
+}
+
+/// The default arm's tail ahead of the snap (0x34398-0x3443d): a frame that
+/// moved the player less than half what its velocity says takes the move
+/// itself, over the frame time, as the velocity.
+fn clamp_velocity_to_move(ps: &mut PlayerState, dt: f32) {
+    let moved = ps.origin - ps.move_start;
+    if ps.velocity.length_squared() * 0.25 > moved.length_squared() / (dt * dt) {
+        ps.velocity = moved / dt;
+    }
+}
+
+/// `trap_SnapVector(ps.velocity)`, the last call of `PmoveSingle`'s default
+/// arm: each component rounded to the nearest integer, ties to even, and
+/// stored back as a float (docs/research/cod11-mantle.md, "Frame flow").
+fn snap_velocity(ps: &mut PlayerState) {
+    // Through `i32` so a component rounding to zero stores +0.0, as the
+    // engine's `fistp`/`fild` pair does; `round_ties_even` alone keeps -0.0.
+    let snap = |v: f32| v.round_ties_even() as i32 as f32;
+    ps.velocity = Vec3::new(
+        snap(ps.velocity.x),
+        snap(ps.velocity.y),
+        snap(ps.velocity.z),
+    );
 }
 
 /// A dead player's frame: gravity and ground friction with no input, no
@@ -663,6 +691,9 @@ pub fn dead_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
     let step = ps.view_height_speed * dt;
     let gap = VIEW_DEAD - ps.view_height_cur;
     ps.view_height_cur += gap.clamp(-step, step);
+    // `pm_type` 6 takes the default arm, tail and snap included.
+    clamp_velocity_to_move(ps, dt);
+    snap_velocity(ps);
 }
 
 /// Retail footstep cadence (`PM_Footsteps` @0x322c8). The bob cycle ticks by
@@ -1085,11 +1116,7 @@ fn friction(ps: &mut PlayerState, on_ladder: bool, dt: f32) {
     }
     let mut drop = 0.0;
     if ps.on_ground && ps.water_level <= 1 {
-        // Retail floors drop at a flat 100 (@0x2e500), which stalls prone
-        // under the Q3 accelerate shape (4.4 loss vs 4.33 gain per frame);
-        // stance-scaling the floor is the labeled deviation that keeps every
-        // stance moving.
-        let control = speed.max(PM_STOPSPEED * ps.stance.speed_scale());
+        let control = speed.max(PM_STOPSPEED);
         drop += control * PM_FRICTION * dt;
     }
     if ps.water_level > 0 {
@@ -1257,8 +1284,6 @@ fn walk_move(
         return;
     }
     let (dir, wishspeed) = wish(ps, input, weapon);
-    // accelerate per stance: values selected at 0x2f4b0-0x2f4ca in the
-    // steep-slope mover; walk-path application INFERRED
     let accel = match ps.stance {
         Stance::Stand => PM_ACCELERATE,
         Stance::Crouch => PM_DUCKED_ACCELERATE,
@@ -1266,7 +1291,14 @@ fn walk_move(
     };
     // along the slope, so it costs no speed
     let dir = clip_velocity(dir, ps.ground_normal).normalize_or_zero();
-    accelerate(ps, dir, wishspeed, accel, dt);
+    // Q3's `PM_Accelerate` inline, with the rate floored: a prone or
+    // sighted wish of under 100 still gains 100's worth per frame, capped
+    // at the wish (docs/research/cod11-mantle.md, "The walk's accel floor").
+    let current = ps.velocity.dot(dir);
+    let add = wishspeed - current;
+    if add > 0.0 {
+        ps.velocity += dir * (accel * dt * wishspeed.max(WALK_ACCEL_FLOOR)).min(add);
+    }
     ps.velocity = clip_velocity(ps.velocity, ps.ground_normal);
     // Standing still skips the move but not the legs: retail jumps straight
     // to PM_SetMovementDir (@0x2f6db), which is what keeps a prone player's
@@ -2383,9 +2415,11 @@ mod tests {
             jump: true,
             ..Default::default()
         };
-        pmove(&mut ps, &launch, &w, 1.0 / 125.0, &[]);
-        for _ in 0..200 {
-            pmove(&mut ps, &run, &w, 1.0 / 125.0, &[]);
+        // 20 ms steps take a whole 16 off the velocity per frame, so the
+        // snap does not bend the arc (`a_125_fps_jump_goes_higher`).
+        pmove(&mut ps, &launch, &w, 0.02, &[]);
+        for _ in 0..80 {
+            pmove(&mut ps, &run, &w, 0.02, &[]);
             apex = apex.max(ps.origin.z);
         }
         assert!(
@@ -2516,7 +2550,7 @@ mod tests {
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50); // settle
         let mut apex = ps.origin.z;
-        for _ in 0..200 {
+        for _ in 0..80 {
             pmove(
                 &mut ps,
                 &PmInput {
@@ -2524,7 +2558,7 @@ mod tests {
                     ..Default::default()
                 },
                 &w,
-                1.0 / 125.0,
+                0.02,
                 &[],
             );
             apex = apex.max(ps.origin.z);
@@ -2533,6 +2567,56 @@ mod tests {
             (apex - JUMP_HEIGHT_STAND).abs() < 2.0,
             "standing apex {apex}, expected ~{JUMP_HEIGHT_STAND}"
         );
+    }
+
+    #[test]
+    fn the_velocity_snap_rounds_to_nearest_even_and_stores_plus_zero() {
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.velocity = Vec3::new(183.5, 26.5, -0.4);
+        snap_velocity(&mut ps);
+        assert_eq!(ps.velocity, Vec3::new(184.0, 26.0, 0.0));
+        assert_eq!(ps.velocity.z.to_bits(), 0, "a snapped -0.4 is +0.0");
+        ps.velocity = Vec3::new(-2.5, 137.6, -196.2);
+        snap_velocity(&mut ps);
+        assert_eq!(ps.velocity, Vec3::new(-2.0, 138.0, -196.0));
+    }
+
+    #[test]
+    fn a_frame_that_moved_under_half_its_velocity_takes_the_move_as_velocity() {
+        let mut ps = PlayerState::spawn(Vec3::new(1.0, 0.0, 0.0), 0.0);
+        ps.move_start = Vec3::ZERO;
+        // 1 unit in 8 ms is 125 u/s: 200 is under twice that and stays.
+        ps.velocity = Vec3::new(200.0, 0.0, 0.0);
+        clamp_velocity_to_move(&mut ps, 0.008);
+        assert_eq!(ps.velocity.x, 200.0);
+        ps.velocity = Vec3::new(300.0, 0.0, 40.0);
+        clamp_velocity_to_move(&mut ps, 0.008);
+        assert!(ps.velocity.abs_diff_eq(Vec3::new(125.0, 0.0, 0.0), 1e-3));
+    }
+
+    /// At 8 ms a frame's gravity is 6.4 and the snap keeps 6 of it, so a
+    /// 125 fps jump tops out over two units above the 34 a 20 ms one reaches.
+    #[test]
+    fn a_125_fps_jump_goes_higher() {
+        let apex = |dt: f32| {
+            let w = flat();
+            let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+            tick(&mut ps, &PmInput::default(), &w, 50);
+            let jump = PmInput {
+                jump: true,
+                ..Default::default()
+            };
+            pmove(&mut ps, &jump, &w, dt, &[]);
+            let mut apex = ps.origin.z;
+            for _ in 0..(1.6 / dt) as usize {
+                pmove(&mut ps, &PmInput::default(), &w, dt, &[]);
+                apex = apex.max(ps.origin.z);
+            }
+            apex
+        };
+        let (fast, slow) = (apex(0.008), apex(0.02));
+        assert!((slow - JUMP_HEIGHT_STAND).abs() < 1.0, "20 ms apex {slow}");
+        assert!(fast - slow > 1.5, "8 ms apex {fast}, 20 ms {slow}");
     }
 
     #[test]
@@ -3188,8 +3272,11 @@ mod tests {
         let solo = climb(0.0);
         let diag = climb(1.0);
         let ratio = diag / solo;
+        // Unsnapped the ratio is the cmd scale's 1/sqrt(2); at 8 ms steps the
+        // velocity snap takes a rounding share off both terminal speeds,
+        // 53.4 -> 50 and 37.8 -> 34.
         assert!(
-            diag < solo && (0.7..0.95).contains(&ratio),
+            diag < solo && (0.6..0.95).contains(&ratio),
             "W+D must climb slower than W alone, {solo} -> {diag} (x{ratio})"
         );
     }
