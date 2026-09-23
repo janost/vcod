@@ -272,6 +272,60 @@ PROBE size_empty_array 0
 PROBE at size_string
 PROBE size_string 4
 
+# probe_stale_ent_method
+PROBE at stale_ent_method
+PROBE_FATAL dead entity is not an entity
+
+# probe_stale_ent_read
+PROBE at stale_ent_read
+PROBE_FATAL dead entity is not an object
+
+# probe_stale_ent_write
+PROBE at stale_ent_write
+PROBE_FATAL dead entity is not an object
+
+# probe_stale_handle
+PROBE at stale_setup
+PROBE at stale_ent
+PROBE stale_ent_defined_immediate 1
+PROBE stale_ent_level_defined_immediate 1
+PROBE stale_ent_window_read stale_a
+PROBE stale_ent_window_number_same 1
+PROBE stale_ent_window_write stale_b
+PROBE stale_ent_defined_after_free 0
+PROBE stale_ent_level_defined_after_free 0
+PROBE stale_ent_slot_reused 1
+PROBE stale_ent_defined_after_reuse 0
+PROBE stale_ent_level_defined_after_reuse 0
+PROBE stale_ent_equals_new 0
+PROBE stale_ent_level_equals_new 0
+PROBE at stale_hud
+PROBE stale_hud_defined_immediate 0
+PROBE stale_hud_level_defined_immediate 0
+PROBE stale_hud_defined_after_new 0
+PROBE stale_hud_level_defined_after_new 0
+PROBE stale_hud_equals_new 0
+PROBE stale_hud_defined_after_wait 0
+PROBE at stale_hud_in_ent_field
+PROBE stale_hud_ent_field_defined 0
+PROBE stale_hud_ent_field_defined_after_new 0
+PROBE stale_hud_ent_field_equals_new 0
+PROBE at stale_ent_equals_own_copy
+PROBE stale_ent_equals_own_copy 1
+PROBE stale_done
+
+# probe_stale_hud_method
+PROBE at stale_hud_method
+PROBE_FATAL dead entity is not an entity
+
+# probe_stale_hud_read
+PROBE at stale_hud_read
+PROBE_FATAL dead entity is not an object
+
+# probe_stale_hud_write
+PROBE at stale_hud_write
+PROBE_FATAL dead entity is not an object
+
 # probe_truthy
 PROBE at truthy_nonempty_string
 PROBE_FATAL cannot cast "a" to bool

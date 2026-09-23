@@ -143,6 +143,15 @@ Five more probes measure what the configstring capture in
   reason: the entity numbers it prints and the counts it compares only mean
   anything against a real `mp_pavlov` load.
 
+`probe_stale_handle` measures what a handle to a deleted entity or a
+destroyed hudelem reads: live through `delete()`'s 100 ms window, then
+`isDefined` 0 and unequal to whatever takes the slot next, equal only to its
+own copies; a hudelem is dead as soon as `destroy()` returns. The six
+`probe_stale_ent_*`/`probe_stale_hud_*` probes are one fatal case each (a
+field read, a field write, a method call), since each kills the retail
+server. All seven run in `crates/server` for `probe_delete`'s reason, the
+object table, without its map.
+
 The three `probe_persist_*` probes measure what a map end leaves behind:
 `game[]`, `level` and a spawned entity held in `game[]`, across
 `map_restart(true)`, `exitLevel(false)` and `exitLevel(true)`. Each runs its

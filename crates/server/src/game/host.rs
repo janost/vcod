@@ -402,7 +402,8 @@ impl GameHost {
         (0..MAX_CLIENTS)
             .filter(|&s| {
                 self.ents
-                    .get(EntId(s as u32))
+                    .handle(s as u32)
+                    .and_then(|id| self.ents.get(id))
                     .is_some_and(|e| e.client.is_some())
             })
             .collect()
@@ -527,7 +528,7 @@ impl GameHost {
         for slot in 0..MAX_CLIENTS {
             if let Some(c) = self
                 .ents
-                .get_mut(EntId(slot as u32))
+                .by_number_mut(slot as u32)
                 .and_then(|e| e.client.as_mut())
             {
                 c[i] = Value::Int(0);
@@ -735,6 +736,10 @@ impl Host for GameHost {
             "println" | "logprint" => builtins::io::print_line(self, cx, args),
             _ => Err(ErrorKind::MissingBuiltin(name)),
         }
+    }
+
+    fn is_live(&self, ent: EntId) -> bool {
+        self.ents.get(ent).is_some()
     }
 
     fn get_field(&mut self, cx: &mut Cx, ent: EntId, field: Atom) -> Value {

@@ -210,6 +210,12 @@ pub struct ObjectTable {
     /// script. Kept out of `ents` so no walk bounded by
     /// `level.num_entities`, `getEntArray`'s or the snapshot's, reaches it.
     world: Option<GEntity>,
+    /// Each slot's generation, the `.1` of every handle to it, bumped when
+    /// the slot is freed so no handle outlives its object
+    /// (docs/research/cod11-gsc-language.md section 9). It survives the
+    /// slot's `None`, which is the point.
+    ent_gens: Vec<u32>,
+    hud_gens: Vec<u32>,
     num_entities: u32,
     /// `level.firstFreeEnt`/`level.lastFreeEnt` (level+0x10, level+0x14): a
     /// FIFO of freed slots that `G_Spawn` drains before it bumps the counter.
@@ -228,6 +234,8 @@ impl ObjectTable {
             ents: (0..MAX_GENTITIES).map(|_| None).collect(),
             huds: (0..MAX_HUDELEMS).map(|_| None).collect(),
             world: None,
+            ent_gens: vec![0; MAX_GENTITIES as usize],
+            hud_gens: vec![0; MAX_HUDELEMS as usize],
             num_entities: FIRST_MAP_ENTITY,
             free_list: std::collections::VecDeque::new(),
         }
@@ -242,17 +250,17 @@ impl ObjectTable {
     /// `G_Error` when the counter reaches `ENTITYNUM_WORLD` with nothing
     /// free; we raise instead.
     pub fn spawn(&mut self, cx: &mut Cx) -> Result<EntId, ErrorKind> {
-        let id = match self.free_list.pop_front() {
-            Some(n) => EntId(n),
+        let n = match self.free_list.pop_front() {
+            Some(n) => n,
             None => {
                 if self.num_entities >= ENTITYNUM_WORLD {
                     return Err(ErrorKind::BadType("entity table full"));
                 }
-                let id = EntId(self.num_entities);
                 self.num_entities += 1;
-                id
+                self.num_entities - 1
             }
         };
+        let id = EntId(n, self.ent_gens[n as usize]);
         let script = cx.new_struct();
         self.ents[id.0 as usize] = Some(GEntity {
             engine: vec![Value::Undefined; engine_slot_count()],
@@ -289,7 +297,7 @@ impl ObjectTable {
                 loop_sound: 0,
             });
         }
-        EntId(ENTITYNUM_WORLD)
+        EntId(ENTITYNUM_WORLD, 0)
     }
 
     /// A client's entity, at entity number == its client slot. Retail's
@@ -376,7 +384,7 @@ impl ObjectTable {
             events: EventRing::default(),
             loop_sound: 0,
         });
-        Ok(EntId(slot as u32))
+        Ok(EntId(slot as u32, self.ent_gens[slot]))
     }
 
     /// The client's slot goes back to being empty. It is deliberately not
@@ -388,8 +396,8 @@ impl ObjectTable {
     /// read it and a reset here would only be the second half of the same
     /// guarantee.
     pub fn free_client(&mut self, slot: usize) {
-        if slot < MAX_CLIENTS {
-            self.ents[slot] = None;
+        if slot < MAX_CLIENTS && self.ents[slot].take().is_some() {
+            self.ent_gens[slot] = self.ent_gens[slot].wrapping_add(1);
         }
     }
 
@@ -433,24 +441,28 @@ impl ObjectTable {
             events: EventRing::default(),
             loop_sound: 0,
         });
-        Ok(EntId(FIRST_HUD_ELEM + i as u32))
+        Ok(EntId(FIRST_HUD_ELEM + i as u32, self.hud_gens[i]))
     }
 
     /// `G_FreeEntity` (0x66948): clear the slot and put it on the tail of
     /// the free list, but only for numbers above the reserved range (the
     /// `index <= 71` skip at 0x66bb1). A HUD element takes the other path,
-    /// `HudElem_Free` (0x4c570), which only clears the record.
+    /// `HudElem_Free` (0x4c570), which only clears the record. Either way
+    /// the slot's generation moves on, and a stale `id` frees nothing.
     pub fn free(&mut self, id: EntId) {
-        if id.0 >= FIRST_HUD_ELEM {
-            if let Some(slot) = self.huds.get_mut((id.0 - FIRST_HUD_ELEM) as usize) {
-                *slot = None;
-            }
+        if self.get(id).is_none() || id.0 == ENTITYNUM_WORLD {
             return;
         }
-        let Some(slot) = self.ents.get_mut(id.0 as usize) else {
+        if id.0 >= FIRST_HUD_ELEM {
+            let i = (id.0 - FIRST_HUD_ELEM) as usize;
+            self.huds[i] = None;
+            self.hud_gens[i] = self.hud_gens[i].wrapping_add(1);
             return;
-        };
-        if slot.take().is_some() && id.0 >= FIRST_MAP_ENTITY {
+        }
+        let n = id.0 as usize;
+        self.ents[n] = None;
+        self.ent_gens[n] = self.ent_gens[n].wrapping_add(1);
+        if id.0 >= FIRST_MAP_ENTITY {
             self.free_list.push_back(id.0);
         }
     }
@@ -483,7 +495,8 @@ impl ObjectTable {
                 let e = e.as_ref()?;
                 let think = e.think?;
                 // Retail's `nextthink` of 0 is "no think", not "due now".
-                (e.nextthink != 0 && e.nextthink <= now_ms).then_some((EntId(i as u32), think))
+                (e.nextthink != 0 && e.nextthink <= now_ms)
+                    .then_some((EntId(i as u32, self.ent_gens[i]), think))
             })
             .collect();
         let mut freed = Vec::new();
@@ -499,30 +512,61 @@ impl ObjectTable {
         freed
     }
 
+    /// Whether `id` carries its slot's current generation. The world's stays
+    /// 0: `free` refuses it.
+    fn current(&self, id: EntId) -> bool {
+        let gen = match id.0.checked_sub(FIRST_HUD_ELEM) {
+            Some(i) => self.hud_gens.get(i as usize),
+            None => self.ent_gens.get(id.0 as usize),
+        };
+        gen == Some(&id.1)
+    }
+
+    /// The object `id` was handed out for, or `None` once it has been freed,
+    /// whatever holds the slot now.
     pub fn get(&self, id: EntId) -> Option<&GEntity> {
+        if !self.current(id) {
+            return None;
+        }
         match id.0.checked_sub(FIRST_HUD_ELEM) {
-            Some(i) => self.huds.get(i as usize)?.as_ref(),
+            Some(i) => self.huds[i as usize].as_ref(),
             None if id.0 == ENTITYNUM_WORLD => self.world.as_ref(),
-            None => self.ents.get(id.0 as usize)?.as_ref(),
+            None => self.ents[id.0 as usize].as_ref(),
         }
     }
 
     pub fn get_mut(&mut self, id: EntId) -> Option<&mut GEntity> {
-        match id.0.checked_sub(FIRST_HUD_ELEM) {
-            Some(i) => self.huds.get_mut(i as usize)?.as_mut(),
-            None if id.0 == ENTITYNUM_WORLD => self.world.as_mut(),
-            None => self.ents.get_mut(id.0 as usize)?.as_mut(),
+        if !self.current(id) {
+            return None;
         }
+        match id.0.checked_sub(FIRST_HUD_ELEM) {
+            Some(i) => self.huds[i as usize].as_mut(),
+            None if id.0 == ENTITYNUM_WORLD => self.world.as_mut(),
+            None => self.ents[id.0 as usize].as_mut(),
+        }
+    }
+
+    /// The live handle for entity number `n`, for code that holds a number
+    /// rather than a handle: a client slot, a trace's hit.
+    pub fn handle(&self, n: u32) -> Option<EntId> {
+        let id = EntId(n, *self.ent_gens.get(n as usize)?);
+        self.get(id).map(|_| id)
+    }
+
+    /// Whatever holds entity number `n` now.
+    pub fn by_number_mut(&mut self, n: u32) -> Option<&mut GEntity> {
+        let id = self.handle(n)?;
+        self.get_mut(id)
     }
 
     /// Ascending `g_hudelems` index, live records only. That is the order
     /// retail copies them to a client in (`HudElem_UpdateClient` 0x4bf00
     /// walks the pool from slot 0), and so the order they take on the wire.
     pub fn iter_hud_elems(&self) -> impl Iterator<Item = (EntId, &GEntity)> {
-        self.huds
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| e.as_ref().map(|e| (EntId(FIRST_HUD_ELEM + i as u32), e)))
+        self.huds.iter().enumerate().filter_map(|(i, e)| {
+            e.as_ref()
+                .map(|e| (EntId(FIRST_HUD_ELEM + i as u32, self.hud_gens[i]), e))
+        })
     }
 
     /// Ascending entity number, live slots only: `Scr_GetEntArray`'s walk.
@@ -530,7 +574,7 @@ impl ObjectTable {
         self.ents
             .iter()
             .enumerate()
-            .filter_map(|(i, e)| e.as_ref().map(|e| (EntId(i as u32), e)))
+            .filter_map(|(i, e)| e.as_ref().map(|e| (EntId(i as u32, self.ent_gens[i]), e)))
     }
 
     #[cfg(test)]
@@ -564,8 +608,8 @@ mod tests {
         let mut vm = vcod_gsc::Vm::new();
         vm.with_cx(|cx| {
             let mut t = ObjectTable::new();
-            assert_eq!(t.spawn(cx).unwrap(), EntId(72));
-            assert_eq!(t.spawn(cx).unwrap(), EntId(73));
+            assert_eq!(t.spawn(cx).unwrap(), EntId(72, 0));
+            assert_eq!(t.spawn(cx).unwrap(), EntId(73, 0));
             assert_eq!(t.num_entities(), 74);
         });
     }
@@ -587,8 +631,8 @@ mod tests {
                 t.iter_inuse().map(|(id, _)| id).collect::<Vec<_>>(),
                 vec![b]
             );
-            assert_eq!(t.spawn(cx).unwrap(), a);
-            assert_eq!(t.spawn(cx).unwrap(), EntId(74));
+            assert_eq!(t.spawn(cx).unwrap().0, a.0);
+            assert_eq!(t.spawn(cx).unwrap(), EntId(74, 0));
         });
     }
 
@@ -605,9 +649,44 @@ mod tests {
             t.free(b);
             t.free(a);
             t.free(a);
-            assert_eq!(t.spawn(cx).unwrap(), b);
-            assert_eq!(t.spawn(cx).unwrap(), a);
-            assert_eq!(t.spawn(cx).unwrap(), EntId(c.0 + 1));
+            assert_eq!(t.spawn(cx).unwrap().0, b.0);
+            assert_eq!(t.spawn(cx).unwrap().0, a.0);
+            assert_eq!(t.spawn(cx).unwrap(), EntId(c.0 + 1, 0));
+        });
+    }
+
+    /// A freed slot's next object gets a new generation, so a handle kept
+    /// past the free reaches nothing rather than the new occupant, and a
+    /// free through it frees nothing. Retail's stale handle is a dead entity
+    /// that equals nothing but its own copies (`# probe_stale_handle`).
+    #[test]
+    fn a_stale_handle_does_not_reach_its_slots_next_object() {
+        let mut vm = vcod_gsc::Vm::new();
+        vm.with_cx(|cx| {
+            let mut t = ObjectTable::new();
+            let old = t.spawn(cx).unwrap();
+            t.free(old);
+            let new = t.spawn(cx).unwrap();
+            assert_eq!(new.0, old.0, "the slot was not reused");
+            assert_ne!(new, old);
+            assert!(t.get(old).is_none());
+            assert_eq!(t.handle(old.0), Some(new));
+            t.free(old);
+            assert!(t.get(new).is_some(), "a stale free took the new object");
+
+            let old = t.spawn_hud_elem(cx).unwrap();
+            t.free(old);
+            let new = t.spawn_hud_elem(cx).unwrap();
+            assert_eq!(new.0, old.0, "the record was not reused");
+            assert!(t.get(old).is_none());
+            t.free(old);
+            assert!(t.get(new).is_some(), "a stale destroy took the new element");
+
+            let old = t.spawn_client(cx, 2, None).unwrap();
+            t.free_client(2);
+            let new = t.spawn_client(cx, 2, None).unwrap();
+            assert!(t.get(old).is_none());
+            assert!(t.get(new).is_some());
         });
     }
 
@@ -646,7 +725,7 @@ mod tests {
 
         // The number is back on the free list, so the next spawn reuses it.
         let next = vm.with_cx(|cx| ents.spawn(cx).unwrap());
-        assert_eq!(next, id);
+        assert_eq!(next.0, id.0);
     }
 
     /// A think fires once. Retail clears `nextthink` when it runs, so a
@@ -661,7 +740,7 @@ mod tests {
         assert_eq!(ents.run_thinks(100), vec![id]);
         ents.free(id);
         let reused = vm.with_cx(|cx| ents.spawn(cx).unwrap());
-        assert_eq!(reused, id);
+        assert_eq!(reused.0, id.0);
         assert!(ents.run_thinks(200).is_empty());
         assert!(
             ents.get(reused).is_some(),
@@ -678,14 +757,14 @@ mod tests {
         let mut ents = ObjectTable::new();
         let before = ents.num_entities();
         let id = vm.with_cx(|cx| ents.spawn_client(cx, 3, None).unwrap());
-        assert_eq!(id, vcod_gsc::EntId(3));
+        assert_eq!(id, vcod_gsc::EntId(3, 0));
         assert_eq!(
             ents.num_entities(),
             before,
             "a client moved the map counter"
         );
         let first_map = vm.with_cx(|cx| ents.spawn(cx).unwrap());
-        assert_eq!(first_map, vcod_gsc::EntId(FIRST_MAP_ENTITY));
+        assert_eq!(first_map, vcod_gsc::EntId(FIRST_MAP_ENTITY, 0));
     }
 
     /// Freeing a client returns its slot to nothing: the number is the slot's,
@@ -698,7 +777,7 @@ mod tests {
         vm.with_cx(|cx| ents.spawn_client(cx, 2, None).unwrap());
         ents.free_client(2);
         let first_map = vm.with_cx(|cx| ents.spawn(cx).unwrap());
-        assert_eq!(first_map, vcod_gsc::EntId(FIRST_MAP_ENTITY));
+        assert_eq!(first_map, vcod_gsc::EntId(FIRST_MAP_ENTITY, 0));
     }
 
     /// The table refuses to hand out `ENTITYNUM_WORLD` or anything above it.

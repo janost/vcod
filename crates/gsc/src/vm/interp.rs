@@ -265,6 +265,12 @@ fn not_of(v: Value, interner: &Interner) -> Result<bool, ErrorKind> {
     }
 }
 
+/// Retail's two texts for a handle whose object was freed
+/// (tests/fixtures/semantics/retail-captures.txt, `# probe_stale_*`): a
+/// field read or write says the first, a method call the second.
+pub(crate) const DEAD_OBJECT: ErrorKind = ErrorKind::BadType("dead entity is not an object");
+pub(crate) const DEAD_ENTITY: ErrorKind = ErrorKind::BadType("dead entity is not an entity");
+
 /// A call's receiver reads as a `Target` when it is an entity or a heap
 /// struct (`level` is one, and a common receiver in the corpus); `game` is
 /// array-typed, not a struct, so it falls through to `None` here like any
@@ -432,6 +438,9 @@ impl Vm {
                     let v = match obj {
                         Value::Struct(id) => self.heap.get_field(id, name),
                         Value::Entity(id) => {
+                            if !host.is_live(id) {
+                                return Err(err(DEAD_OBJECT));
+                            }
                             let mut cx = Cx {
                                 interner: &mut self.interner,
                                 heap: &mut self.heap,
@@ -468,6 +477,9 @@ impl Vm {
                     match obj {
                         Value::Struct(id) => self.heap.set_field(id, name, v),
                         Value::Entity(id) => {
+                            if !host.is_live(id) {
+                                return Err(err(DEAD_OBJECT));
+                            }
                             let mut cx = Cx {
                                 interner: &mut self.interner,
                                 heap: &mut self.heap,
@@ -553,6 +565,9 @@ impl Vm {
                             _ => return Err(err(ErrorKind::BadType("indexing needs an array"))),
                         },
                         Value::Entity(eid) => {
+                            if !host.is_live(eid) {
+                                return Err(err(DEAD_OBJECT));
+                            }
                             let mut cx = Cx {
                                 interner: &mut self.interner,
                                 heap: &mut self.heap,
@@ -694,6 +709,11 @@ impl Vm {
                     }
                     args.reverse();
                     let recv = if has_recv { as_target(pop!()) } else { None };
+                    if let Some(Target::Entity(id)) = recv {
+                        if !host.is_live(id) {
+                            return Err(err(DEAD_ENTITY));
+                        }
+                    }
                     let mut cx = Cx {
                         interner: &mut self.interner,
                         heap: &mut self.heap,

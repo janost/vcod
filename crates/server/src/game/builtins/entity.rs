@@ -593,7 +593,7 @@ pub fn link_to(
         Value::Vector(v) => v,
         _ => [0.0; 3],
     };
-    let child = at(host, cx, EntId(slot as u32));
+    let child = at(host, cx, entity_receiver(recv)?);
     let anchor = at(host, cx, parent);
     let offset = [
         child[0] - anchor[0],
@@ -675,7 +675,7 @@ mod tests {
             let Value::Entity(made) = spawn(&mut host, cx, None, &[cls, at]).unwrap() else {
                 panic!("the free form returns the entity it made");
             };
-            assert_eq!(made, EntId(crate::game::entity::FIRST_MAP_ENTITY));
+            assert_eq!(made, EntId(crate::game::entity::FIRST_MAP_ENTITY, 0));
             assert_eq!(host.client_spawns.len(), 3);
         });
     }
@@ -933,7 +933,7 @@ mod tests {
             let Value::Entity(e) = spawn(&mut host, cx, None, &[cls, at]).unwrap() else {
                 panic!()
             };
-            assert_eq!(e, EntId(72));
+            assert_eq!(e, EntId(72, 0));
             let o = cx.intern_folded("origin");
             assert_eq!(host.get_field(cx, e, o), Value::Vector([64.0, 0.0, 0.0]));
         });
@@ -989,7 +989,7 @@ mod tests {
                 is_player(&mut host, cx, None, &[map_ent]).unwrap(),
                 Value::Int(0)
             );
-            let client = Value::Entity(EntId(3));
+            let client = Value::Entity(EntId(3, 0));
             assert_eq!(
                 is_player(&mut host, cx, None, &[client]).unwrap(),
                 Value::Int(1)
@@ -1072,7 +1072,7 @@ mod tests {
     fn get_entity_number_refuses_a_hud_element() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
-            let hud = Some(Target::Entity(EntId(FIRST_HUD_ELEM)));
+            let hud = Some(Target::Entity(EntId(FIRST_HUD_ELEM, 0)));
             assert!(get_entity_number(&mut host, cx, hud, &[]).is_err());
         });
     }

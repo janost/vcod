@@ -24,6 +24,11 @@
 //! with the probe overlaid on the gametype path. `crates/gsc`'s
 //! `ProbeSource` stubs every other file out and cannot supply that.
 //!
+//! The seven `probe_stale_*` probes are claimed here for `probe_delete`'s
+//! reason without its map: what a handle reads once `delete()` or
+//! `destroy()` has freed its object needs this crate's object table and its
+//! deferred free, and nothing in them depends on the map's own entities.
+//!
 //! `probe_ents`, `probe_delete` and `probe_bootstrap` need `COD_DIR`;
 //! without the paks they return early, like every other game-data test in
 //! the workspace. `probe_cvar` and `probe_not_string` need no game data and
@@ -60,8 +65,8 @@ impl ScriptSource for ProbeSource {
 
 /// The `# <name>` section of `retail-captures.txt`, parsed with the same
 /// semantics `semantics_ab.rs::captures()` uses (`# name` starts a section,
-/// `PROBE ` lines collect). None of the three probes claimed here die on
-/// retail, so there is no `PROBE_FATAL` case to reproduce.
+/// `PROBE ` lines collect). `retail_probe_died` reads the `PROBE_FATAL`
+/// half.
 fn retail_probe_lines(name: &str) -> Vec<String> {
     let text = std::fs::read_to_string("../gsc/tests/fixtures/semantics/retail-captures.txt")
         .expect("read retail-captures.txt");
@@ -261,6 +266,86 @@ fn probe_not_string_matches_retail() {
         .unwrap_or_else(|e| panic!("probe_not_string main errored: {e:?}"));
 
     assert_eq!(host.script_log, retail_probe_lines("probe_not_string"));
+}
+
+/// Runs `name`'s `main` and then its `Callback_StartGameType` on a bare
+/// `GameHost`, stepping 50 ms frames with the entity think pass ahead of
+/// each, the order `probe_delete_matches_retail` uses. The callback goes
+/// through `call_now` first, since that is the path that returns an error
+/// the probe dies on before its first `wait`, and is rerun fresh through
+/// `start_thread` if it suspends. Returns the log and whether a thread died.
+fn run_stale_probe(name: &str) -> (Vec<String>, bool) {
+    let run = |threaded: bool| {
+        let (mut vm, main) = install(name);
+        let mut host = GameHost::new(vec![String::new(); 2048]);
+        vm.call_now(&mut host, 0, main, None, Vec::new())
+            .unwrap_or_else(|e| panic!("{name} main errored: {e:?}"));
+        let level = vm.level_id();
+        let callback = vm.with_cx(|cx| {
+            let field = cx.intern_folded("callbackstartgametype");
+            cx.get_field(level, field)
+        });
+        let Value::Function(callback) = callback else {
+            panic!("level.callbackStartGameType is {callback:?}, not a function");
+        };
+        if !threaded {
+            let r = vm.call_now(&mut host, 0, callback, None, Vec::new());
+            return (host.script_log, r.err().map(|e| e.kind));
+        }
+        let mut died = None;
+        vm.start_thread(&mut host, 0, callback, None, Vec::new());
+        for frame in 1..=12 {
+            let now_ms = frame * 50;
+            host.level_time_ms = now_ms;
+            host.run_entity_thinks(now_ms);
+            if let Some(e) = vm.run_frame(&mut host, now_ms).into_iter().next() {
+                died.get_or_insert(e.kind);
+            }
+        }
+        (host.script_log, died)
+    };
+    let (log, err) = match run(false) {
+        (_, Some(vcod_gsc::ErrorKind::SuspendedInImmediateCall)) => run(true),
+        r => r,
+    };
+    (log, err.is_some())
+}
+
+/// Whether retail's section for `name` ends in a `PROBE_FATAL` line.
+fn retail_probe_died(name: &str) -> bool {
+    let text = std::fs::read_to_string("../gsc/tests/fixtures/semantics/retail-captures.txt")
+        .expect("read retail-captures.txt");
+    let mut in_section = false;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("# ") {
+            in_section = rest.trim() == name;
+        } else if in_section && line.starts_with("PROBE_FATAL") {
+            return true;
+        }
+    }
+    false
+}
+
+/// A handle outlives its object on retail as a dead entity: live through
+/// `delete()`'s 100 ms window, then `isDefined` 0 and unequal to whatever
+/// takes the slot, equal only to its own copies, and fatal to a field read,
+/// a field write or a method call. A destroyed hudelem is dead at once. The
+/// six fatal cases are one probe each because each kills the retail server.
+#[test]
+fn probe_stale_handles_match_retail() {
+    for name in [
+        "probe_stale_handle",
+        "probe_stale_ent_method",
+        "probe_stale_ent_read",
+        "probe_stale_ent_write",
+        "probe_stale_hud_method",
+        "probe_stale_hud_read",
+        "probe_stale_hud_write",
+    ] {
+        let (ours, died) = run_stale_probe(name);
+        assert_eq!(ours, retail_probe_lines(name), "{name}");
+        assert_eq!(died, retail_probe_died(name), "{name}: died");
+    }
 }
 
 /// The pak-backed source with one probe overlaid on its gametype path, so

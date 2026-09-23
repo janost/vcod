@@ -98,7 +98,7 @@ pub fn set_player_origin(
     };
     let origin = [x, y, z + 1.0];
     let field = cx.intern_folded("origin");
-    host.set_field(cx, EntId(slot as u32), field, Value::Vector(origin))?;
+    host.set_field(cx, entity_receiver(recv)?, field, Value::Vector(origin))?;
     host.client_sim_ops
         .push((slot, SimOp::SetOrigin { origin }));
     Ok(Value::Undefined)
@@ -226,7 +226,7 @@ pub fn drop_item(
     let (name, index) = weapon_argument(cx, args)?;
     let origin = {
         let field = cx.intern_folded("origin");
-        match host.get_field(cx, EntId(slot as u32), field) {
+        match host.get_field(cx, entity_receiver(recv)?, field) {
             Value::Vector(v) => v,
             _ => [0.0; 3],
         }

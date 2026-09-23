@@ -61,13 +61,12 @@ pub struct Trigger {
     pub dflags: i32,
 }
 
-// Keyed by `EntId::0` rather than `EntId` itself: `EntId` is a foreign type
-// with no `Ord` impl, and the orphan rule refuses one added here. Entity
-// numbers are handed out in spawn order, so this also keeps `iter()` in the
-// order a map's triggers were loaded in.
+// `EntId` orders by entity number first, and entity numbers are handed out
+// in spawn order, so `iter()` walks a map's triggers in the order they were
+// loaded in.
 #[derive(Default)]
 pub struct Triggers {
-    rows: BTreeMap<u32, Trigger>,
+    rows: BTreeMap<EntId, Trigger>,
 }
 
 /// The `dmg` default, the two spawnflags and the two touch intervals, all
@@ -91,7 +90,7 @@ impl Triggers {
         random_ms: i32,
     ) {
         self.rows.insert(
-            id.0,
+            id,
             Trigger {
                 kind,
                 shape,
@@ -120,7 +119,7 @@ impl Triggers {
             HURT_SLOW_INTERVAL_MS
         };
         self.register(id, TriggerKind::Hurt, shape, wait_ms, 0);
-        if let Some(t) = self.rows.get_mut(&id.0) {
+        if let Some(t) = self.rows.get_mut(&id) {
             t.damage = damage;
             t.dflags = if spawnflags & HURT_NO_PROTECTION == 0 {
                 0
@@ -131,15 +130,15 @@ impl Triggers {
     }
 
     pub fn remove(&mut self, id: EntId) {
-        self.rows.remove(&id.0);
+        self.rows.remove(&id);
     }
 
     pub fn get(&self, id: EntId) -> Option<&Trigger> {
-        self.rows.get(&id.0)
+        self.rows.get(&id)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (EntId, &Trigger)> {
-        self.rows.iter().map(|(id, t)| (EntId(*id), t))
+        self.rows.iter().map(|(id, t)| (*id, t))
     }
 
     pub fn len(&self) -> usize {
@@ -155,7 +154,7 @@ impl Triggers {
     /// gated one refuses until the window elapses; a `trigger_once` arms a
     /// window that never elapses, so it fires exactly once.
     pub fn fire(&mut self, id: EntId, now_ms: i32, rng: &mut impl FnMut(i32) -> i32) -> bool {
-        let Some(t) = self.rows.get_mut(&id.0) else {
+        let Some(t) = self.rows.get_mut(&id) else {
             return false;
         };
         if now_ms < t.next_fire_ms {
@@ -514,7 +513,7 @@ mod tests {
     #[test]
     fn register_and_remove() {
         let mut ts = Triggers::default();
-        let id = EntId(72);
+        let id = EntId(72, 0);
         assert!(ts.is_empty());
         ts.register(
             id,
@@ -588,7 +587,7 @@ mod tests {
     #[test]
     fn wait_gates_a_multiple_and_random_widens_it() {
         let mut ts = Triggers::default();
-        let id = EntId(72);
+        let id = EntId(72, 0);
         ts.register(
             id,
             TriggerKind::Multiple,
@@ -628,7 +627,7 @@ mod tests {
     #[test]
     fn a_once_trigger_fires_once() {
         let mut ts = Triggers::default();
-        let id = EntId(73);
+        let id = EntId(73, 0);
         ts.register(
             id,
             TriggerKind::Once,
@@ -648,7 +647,7 @@ mod tests {
     #[test]
     fn no_wait_key_fires_every_touch() {
         let mut ts = Triggers::default();
-        let id = EntId(74);
+        let id = EntId(74, 0);
         ts.register(
             id,
             TriggerKind::Multiple,
@@ -941,7 +940,7 @@ mod tests {
         let (mut vm, mut host) = crate::game::testing::fixture();
         vm.with_cx(|cx| {
             let zone = place_wedge(&mut host, cx);
-            if let Some(t) = host.triggers.rows.get_mut(&zone.0) {
+            if let Some(t) = host.triggers.rows.get_mut(&zone) {
                 t.kind = TriggerKind::LookAt;
             }
             // Straight down into the brush half, and straight down into the

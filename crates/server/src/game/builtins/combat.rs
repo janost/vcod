@@ -278,7 +278,7 @@ pub fn suicide_effects(host: &mut GameHost, cx: &mut Cx, slot: usize) -> Option<
         },
     ));
     drop_cooking_grenade(host, cx, slot);
-    let me = Value::Entity(vcod_gsc::EntId(slot as u32));
+    let me = Value::Entity(host.ents.handle(slot as u32)?);
     let weapon = host.client_weapons[slot].current as usize;
     let weapon = crate::items::item_name(weapon).unwrap_or("none");
     Some(vec![
@@ -404,11 +404,10 @@ pub fn radius_damage(
             Value::Vector(hit.dir),
             Value::String(none),
         ];
-        cx.spawn(
-            callback,
-            Some(Target::Entity(EntId(hit.victim as u32))),
-            args,
-        );
+        let Some(victim) = host.ents.handle(hit.victim as u32) else {
+            continue;
+        };
+        cx.spawn(callback, Some(Target::Entity(victim)), args);
     }
     Ok(Value::Undefined)
 }
