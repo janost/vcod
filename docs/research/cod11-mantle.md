@@ -98,6 +98,7 @@ runs, in order:
 | | fn 0x336E8 | **ladder probe**, sets/clears `PMF_LADDER` + `vLadderVec` |
 | move | dispatch at 0x34305 | `pm_flags & PMF_LADDER` -> `PM_LadderMove` (0x33944); `pml.walking` (pml+0x2c) set -> `PM_WalkMove` (0x2F258); otherwise `PM_AirMove` (0x2F03C) |
 | post | fns 0x30474, 0x30778 again | re-categorise |
+| tail | 0x34398-0x3443d, then `trap_SnapVector` at 0x34451 | velocity clamp and snap, below |
 
 Both movers are Q3-shaped: wishdir from cmd and yaw, wishspeed from the cmd
 scale ("The wish speed" below), accelerate (`pm_accelerate` = 9.0 ground /
@@ -107,6 +108,44 @@ VERIFIED, 0x2F258 opens with a call to 0x2eb98 whose non-zero return goes to
 0x2F03C (0x2f26a), Q3's `PM_CheckJump` then `PM_AirMove` at the top of
 `PM_WalkMove`, and the dispatch tests `pml+0x2c` (0x34312), the `walking`
 slot of the `pml_t` layout the rest of this module matches.
+
+### The tail of the default arm
+
+VERIFIED, in `game.mp.i386.so`: 0x34398-0x343e8 take `ps.origin` less
+`pml.previous_origin` (pml+0x68..0x70, stored from `ps.origin` at
+0x34076-0x34091, ahead of the `pm_type` dispatch) and divide its squared
+length by the square of `pml.frametime` (pml+0x24, `msec * 0.001` at
+0x340b8); 0x343ea-0x343ff multiply the squared `ps.velocity` by the float
+0.25 at rodata 0x70ce4; 0x34410-0x3443a store the displacement over the
+frame time into all three velocity components. INFERRED, off the `jne` at
+0x3440e: the store runs when the scaled squared velocity is the larger, so a
+frame that moved less than half what its velocity says leaves with the
+displacement's own rate as its velocity.
+
+VERIFIED: 0x34443-0x34451 push `ps+0x20`, `ps.velocity`, and call
+`trap_SnapVector` (0x63c04, relocation at 0x34452), which passes syscall 0x3a
+through the engine's pointer (0x63c11). VERIFIED, in `cod_lnxded`: the game
+module's dispatcher is 0x8087dcc, the function `VM_Create("game", ...)`
+registers (0x8089124, name at rodata 0x80d51fc); its case 0x3a calls
+0x80c8810, which saves the control word, loads the one at .data 0x80e68b4
+(0x037f), and runs `fld`/`fistp`/`fild`/`fstp` over the three floats before
+restoring it. INFERRED, off that control word's rounding field (bits 10-11
+clear): each component is rounded to the nearest integer, ties to even, and
+a component that rounds to zero is stored as +0.0, since it passes through
+an integer.
+
+INFERRED, off the dispatch at 0x341c1 and the table at rodata 0x70ce8: only
+`pm_type` 0 and 6 reach the tail; the linked arm (1 and 7), the spectator
+arm and the others `jmp` to 0x34456, past it.
+
+VERIFIED, off the committed captures: every `velocity` in
+`crates/server/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms.txt` and
+`-sd-plant-attacker.txt` is a whole number. vcod: `pmove::pmove` and
+`pmove::dead_move` end in `clamp_velocity_to_move` and `snap_velocity`.
+What the two changed in the slope replay is under "The walk's accel floor".
+A consequence Q3 players know: at 8 ms a frame's gravity is 6.4 and the snap
+keeps about 6 of it, so a 125 fps jump rises about 36 units where a 20 ms
+one rises 34 (`a_125_fps_jump_goes_higher` in `pmove.rs`).
 
 ## Jumps (there are two)
 
@@ -519,8 +558,8 @@ and the 25 ms capture |dz| p95 0 with one 18.5 row, dxy p95 0.30, max 4.5,
 the 8 ms capture reads |dz| p95 0.005, p99 0.026, max 0.129, dxy p95
 0.130, p99 0.178, max 2.9, 2 rows past a unit; the 25 ms one |dz| 0 on
 every row, dxy p95 0.146, p99 0.449, max 4.5, 12 rows past a unit; no
-ground disagreement on either. Retail's own noise floor is the integer
-truncation of the velocity it sends, under 0.05 per interval. The 4.5 row
+ground disagreement on either. What the velocity snap and the walk's accel
+floor did to these numbers is under "The walk's accel floor". The 4.5 row
 is one 50 ms interval of motion at 90 units/s beside a diagonal post brush
 at (-776, 2000), a cmd's worth, and is not chased.
 
@@ -779,6 +818,53 @@ where Q3 has `EV_STEP_4..16`, and a 0.9 decay on the carry-forward Q3 does not
 have. INFERRED: the arm is gated on the event's entity being the local client,
 so the smoothing is the predicting client's own view and nothing else's.
 
+## The walk's accel floor
+
+VERIFIED, in `PM_WalkMove` (0x2f258): the accelerate is inline, not a call.
+0x2f4b0-0x2f4ca pick 19.0 (0x708f8), 9.0 (0x70900) or 12.0 (0x708fc);
+0x2f492-0x2f4a8 take 1.0 in their place on bit 2 of pml+0x50 or `pm_flags`
+0x200; 0x2f4d8-0x2f4de multiply by 0.25 (0x70904) on `pm_flags` 0x100.
+0x2f4e4-0x2f502 form the wish speed less the velocity along the wish
+direction; 0x2f50f-0x2f52c load 100.0 (rodata 0x70908) and multiply the
+accel by the frame time and by the wish speed or that 100; 0x2f53e-0x2f54f
+divide by `ps.friction` (ps+0x37c, the netfield `friction`, 1.0 on every
+capture); 0x2f563-0x2f582 add the result along the wish direction to the
+velocity. INFERRED, off the compares at 0x2f506, 0x2f515, 0x2f52e, 0x2f545
+and 0x2f551: nothing is added when the wish is already met, the rate is
+`accel * frametime * max(wishspeed, 100)`, the division applies only with a
+ground entity, and the result is capped at what the wish still lacks, both
+before and after the division. Q3's `PM_Accelerate` has no floor: a wish
+under 100, the 89.7 of a sighted walk or the 28.5 of a crawl, gains at 100's
+rate and stops at its own speed. 0x70908 has no other reference in the pmove
+range 0x2e400-0x35e00 (`objdump` byte scan), so the air, water and ladder
+accelerations do not take it.
+
+VERIFIED, off `mp_carentan-dm-slope-8ms.txt`: a sighted diagonal walk from
+rest reads `vel` -8, -18, -32, -42, -56 and -63 per axis on consecutive
+snapshots, 2 per axis per 8 ms cmd, where the unfloored rate less the
+100-floored friction's 4.4 leaves 1.46 per axis and the floored one 1.98.
+
+VERIFIED, vcod measurement (2026-09-23, `playerstate_slope_ab.rs` with
+`SLOPE_REPORT=1`, rebased on retail's state at every snapshot):
+
+| | 8 ms dxy p95 / p99 | 25 ms dxy p95 / p99 | 8 ms free-run dxy median |
+|---|---|---|---|
+| neither | 0.130 / 0.178 | 0.146 / 0.449 | 63.1 |
+| snap alone | 0.152 / 0.216 | 0.159 / 0.445 | 141.3 |
+| floor alone | 0.047 / 0.059 | 0.018 / 0.430 | 17.7 |
+| both | 0.000 / 0.001 | 0.004 / 0.430 | 0.024 |
+
+The max rows (2.9 and 4.5 units) and the counts past a unit (2 and 12) do
+not move; the velocity clamp of "The tail of the default arm" changes no
+row of either capture. The snap alone made the tail worse because it turned
+the missing floor's 1.46 per cmd into a whole 1 where retail rounds 1.98 to
+2. With both, the free run, which never rebases, stays within 0.024 of
+retail for half the 1463 snapshots of the 8 ms route.
+
+The friction's own floor stays the flat 100 of 0x2e500 (`PM_STOPSPEED`).
+vcod scaled it by stance until this floor was found, because without it a
+crawl's 4.33 gain per frame lost to that friction's 4.40.
+
 ## The wish speed
 
 What a cmd asks the mover for, per frame. Found by replaying retail's own
@@ -885,6 +971,7 @@ usage sites only.)
 | symbol | address | value |
 |---|---|---|
 | pm_stopspeed | 0x70824 | 100.0 |
+| walk accel floor | 0x70908 | 100.0 |
 | pm_ladderScale | 0x70828 | 0.5 |
 | pm_ladderPushOff | 0x7082C | 128.0 |
 | pm_ladderJumpTime | 0x70830 | 300 (ms, int) |
@@ -914,10 +1001,9 @@ Status after the pmove work landed on this branch:
    height 34 standing / 24 crouched-prone, forwardmove gate, horizontal
    velocity kept.
 2. SHIPPED - friction 5.5, accelerate 9, stopspeed 100, stance accelerates
-   12 ducked / 19 prone. One labeled deviation: vcod scales the stopspeed
-   control floor by stance (flat 100 verifiably stalls prone under the Q3
-   accelerate shape; retail's compensation was not recoverable from the x87
-   flow).
+   12 ducked / 19 prone, and the walk's accel floor of 100 ("The walk's
+   accel floor"). The stance-scaled stopspeed vcod carried until 2026-09-23
+   stood in for that floor and is gone.
 3. SHIPPED, with a correction to this document: step height is 10 while
    PRONE - the chooser @0x35034 tests pm_flags bit 0x1, not ladder state as
    this section previously claimed. vcod implements prone.

@@ -200,7 +200,8 @@ pub fn update_ads_flag(ps: &mut PlayerState, input: &PmInput, def: Option<&Weapo
             ps.weaponstate,
             WEAPON_RAISING | WEAPON_DROPPING | WEAPON_MELEE_WINDUP | WEAPON_MELEE_RELAX
         )
-        && ps.on_ground;
+        // A link passes for ground here (0x3727e), though its arm clears it.
+        && (ps.on_ground || ps.linked);
     if !keep {
         ps.ads_active = false;
     } else if ps.stance != Stance::Prone {
@@ -291,8 +292,10 @@ pub fn adjust_aim_spread_scale(
     let (add, decay) = match def {
         Some(def) if def.hip_spread_decay_rate != 0.0 => {
             let mut decay = def.hip_spread_decay_rate;
-            // The three stance arms are exclusive and airborne wins.
-            if !ps.on_ground {
+            // The three stance arms are exclusive and airborne wins; a link
+            // is not airborne (0x38622).
+            let airborne = !ps.on_ground && !ps.linked;
+            if airborne {
                 decay *= 0.5;
             } else if ps.stance == Stance::Prone {
                 decay *= def.hip_spread_prone_decay;
@@ -316,7 +319,7 @@ pub fn adjust_aim_spread_scale(
                 if def.hip_spread_move_add != 0.0 && (input.forward != 0.0 || input.right != 0.0) {
                     add += def.hip_spread_move_add;
                 }
-                if !ps.on_ground {
+                if airborne {
                     add += AIR_SPREAD_ADD;
                 }
             }

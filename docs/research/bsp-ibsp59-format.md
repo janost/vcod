@@ -317,11 +317,12 @@ Lump 25 is `f32 xyz` per vertex and lump 26 `u16` per index, both shared by the 
 | `SCALE_BACK / SCALE_STRAFE / SCALE_LEAN` | 0.7 / 0.8 / 0.4 | retail's wire `ps.backSpeedScale`, `strafeSpeedScale`, `leanSpeedScale`, applied by the walk cmd scale at 0x2e690 |
 | `JUMP_HEIGHT_STAND / LOW` | 34 / 24 | retail rodata 0x70BE8/0x70BEC; vz = sqrt(2 * height * gravity). The forwardmove gate this row used to name was a misread, corrected 2026-09-01 against a live capture (`cod11-mantle.md`, "Jumps") |
 | `PM_ACCELERATE` | 9 | retail rodata 0x70844; Q3's is 10, RTCW-MP's 10 too - the community-documented "Q3 exact copy" was wrong |
-| `PM_DUCKED_ACCELERATE / PM_PRONE_ACCELERATE` | 12 / 19 | retail rodata; selected in the steep-slope mover @0x2f4b0-0x2f4ca, walk-path application INFERRED (`cod11-mantle.md`) |
+| `PM_DUCKED_ACCELERATE / PM_PRONE_ACCELERATE` | 12 / 19 | retail rodata; selected in `PM_WalkMove` @0x2f4b0-0x2f4ca (`cod11-mantle.md`, "The walk's accel floor") |
 | `PM_AIRACCELERATE` | 1 | retail rodata 0x70848, same as Q3 |
 | `PM_FRICTION` | 5.5 | retail rodata 0x70854; Q3/RTCW-MP have 6 |
 | `PM_SPECTATOR_FRICTION` | 5 | retail rodata 0x70860; spectators use Q3's `PM_Friction` with this constant instead of the walk one |
-| `PM_STOPSPEED` | 100 | retail rodata 0x70824 (flat); vcod scales it per stance - see below |
+| `PM_STOPSPEED` | 100 | retail rodata 0x70824, flat |
+| `WALK_ACCEL_FLOOR` | 100 | retail rodata 0x70908: `PM_WalkMove` accelerates at `max(wishspeed, 100)` (`cod11-mantle.md`, "The walk's accel floor") |
 | `STEPSIZE` | 18 | `bg_local.h`; retail drops to 10 while PRONE (chooser @0x35045) |
 | `OVERCLIP` | 1.001 | `bg_local.h` |
 | `MIN_WALK_NORMAL` | 0.7 | `bg_local.h` (steeper than about 45.6 degrees is not ground) |
@@ -338,11 +339,11 @@ Lump 25 is `f32 xyz` per vertex and lump 26 `u16` per index, both shared by the 
 The friction/accelerate/jump rows were re-sourced from the retail binaries
 during the water/ladder work: the dedicated server's rodata table
 (`cod11-mantle.md`, "Tunables") contradicted the community-documented values
-this section used to carry. Two deliberate divergences remain. First,
-`PM_STOPSPEED`: retail's flat 100 makes prone unable to accelerate at all -
-gain per frame is `19 * dt * 28.5` = 4.33 against a floor loss of
-`100 * 5.5 * dt` = 4.40 - so `pmove.rs` keeps the floor scaled by stance
-until someone recovers how retail actually compensates. The wading slowdown
+this section used to carry. The stance-scaled `PM_STOPSPEED` that stood
+here as a deliberate divergence is gone: a crawl's gain of
+`19 * dt * 28.5` = 4.33 per frame lost to the flat floor's `100 * 5.5 * dt`
+= 4.40 only because the walk's accel floor was missing, and with it the
+gain is `19 * dt * 100`. The wading slowdown
 this paragraph used to call absent is in the walk cmd scale, not the mover:
 `1 - waterlevel / 3 * 0.5` (`cod11-mantle.md`, "The wish speed"), and
 `pmove::wish` applies it.

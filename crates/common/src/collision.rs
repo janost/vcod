@@ -6,9 +6,10 @@
 //! are required: docs/research/bsp-ibsp59-format.md, "Terrain has no brushes".
 
 use crate::bsp::Bsp;
+use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use glam::Vec3;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// Shared with the xmodel collision surfaces, which use the same bits.
 pub const CONTENTS_SOLID: u32 = 0x1;
@@ -613,6 +614,10 @@ pub struct CollisionWorld {
     /// deleted `script_brushmodel` takes its brushes out; `set_model_linked`
     /// is that unlink.
     model_linked: Vec<AtomicBool>,
+    /// Per lump-27 model, the entity number a trace that ends on its brushes
+    /// reports: the world's for model 0 and for any submodel the server has
+    /// not named an entity for.
+    model_entity: Vec<AtomicU32>,
 }
 
 /// A water brush as clip planes plus its axial bounds for the cheap reject.
@@ -908,6 +913,34 @@ impl CollisionWorld {
             prims: t.prims,
             water,
             model_linked: bsp.models.iter().map(|_| AtomicBool::new(true)).collect(),
+            model_entity: bsp
+                .models
+                .iter()
+                .map(|_| AtomicU32::new(ENTITYNUM_WORLD))
+                .collect(),
+        }
+    }
+
+    /// The entity whose link puts model `model`'s brushes in the clip, the
+    /// `script_brushmodel` or other `*N` entity the map load spawned.
+    pub fn set_model_entity(&self, model: usize, entity: u32) {
+        if let Some(m) = self.model_entity.get(model) {
+            m.store(entity, Ordering::Relaxed);
+        }
+    }
+
+    /// Q3's `trace.entityNum`: the entity the reported contact belongs to,
+    /// `ENTITYNUM_WORLD` for world geometry and `ENTITYNUM_NONE` for a trace
+    /// that hit nothing.
+    pub fn entity_num(&self, trace: &Trace) -> u32 {
+        match trace.hit {
+            Some(Prim::Brush(b)) => self
+                .model_entity
+                .get(self.brushes[b as usize].model as usize)
+                .map_or(ENTITYNUM_WORLD, |m| m.load(Ordering::Relaxed)),
+            Some(_) => ENTITYNUM_WORLD,
+            None if trace.fraction < 1.0 => ENTITYNUM_WORLD,
+            None => ENTITYNUM_NONE,
         }
     }
 

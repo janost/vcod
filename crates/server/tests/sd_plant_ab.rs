@@ -51,24 +51,10 @@ const PITCH_CLAMP_SHORT: i32 = 16000;
 
 /// Rows of the plant diff that are known divergences, each a substring of
 /// the row it excuses.
-const PLANT_GAPS: &[&str] = &[
-    // The first linked frame of each hold. Retail's first linked snapshot
-    // still carries the pre-link ground entity, carentan's
-    // `script_brushmodel` `*5` (entity 177, the clip brush under
-    // bombzone_A); our pmove writes ENTITYNUM_WORLD for any ground, never a
-    // submodel's entity number, and our link writes 1023 from its first
-    // frame. A pmove change, deferred past this stage.
-    "hold1 ms=0 groundEntityNum: retail 177 ours 1023",
-    // The same first linked frame, on the second hold.
-    "hold2 ms=0 groundEntityNum: retail 177 ours 1023",
-];
+const PLANT_GAPS: &[&str] = &[];
 
 /// Rows of the defuse diff that are known divergences, same shape.
-const DEFUSE_GAPS: &[&str] = &[
-    // The defuse's first linked frame: the same pre-link `*5` ground entity
-    // as the plant's two rows, and the same deferred pmove change.
-    "defuse ms=100 groundEntityNum: retail 177 ours 1023",
-];
+const DEFUSE_GAPS: &[&str] = &[];
 
 /// Sweep stations `(yaw, pitch)` whose fired-or-not the hull edge decides
 /// differently on ours, recorded with the number rather than widened over.
@@ -469,8 +455,11 @@ impl Diff {
             if pm_type != t.pm_type {
                 self.row(phase, ms, "pm_type", t.pm_type, pm_type);
             }
+            // The release window's first frame is the one retail's cmds
+            // still ran linked; ours replays it from a placement instead.
+            let placed = phase == "release" && ms == 0;
             let ground = ps.field_i32(p, "groundEntityNum");
-            if t.pm_type == 1 && ground != t.ground {
+            if ground != t.ground && !placed {
                 self.row(phase, ms, "groundEntityNum", t.ground, ground);
             }
             // Absolute origins are not comparable (retail slid into its

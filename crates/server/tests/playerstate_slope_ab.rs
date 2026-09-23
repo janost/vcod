@@ -467,17 +467,17 @@ fn report(path: &str, rows: &[Row], world: &CollisionWorld) {
     }
 }
 
-/// What the rebased run may read, from the measurement of 2026-09-07
-/// (docs/research/cod11-mantle.md, "Terrain is a swept sphere, a patch is
-/// a facet"): the 8 ms capture reads |dz| p95 0.005, p99 0.026, max 0.129
-/// and dxy p95 0.130, p99 0.178, max 2.9, the 25 ms one |dz| 0 throughout
-/// and dxy p95 0.146, p99 0.449, max 4.5, with 2 and 12 rows past a unit
-/// and no ground disagreement. Retail's own noise floor is the integer
-/// truncation of the velocity it sends, under 0.05 per interval. A box
+/// What the rebased run may read, from the measurement of 2026-09-23, with
+/// the velocity snap and the walk's accel floor (docs/research/cod11-mantle.md,
+/// "The tail of the default arm" and "The walk's accel floor"): the 8 ms
+/// capture reads |dz| p95 0.000, p99 0.017, max 0.125 and dxy p95 0.000,
+/// p99 0.001, max 2.9, the 25 ms one |dz| 0 throughout and dxy p95 0.004,
+/// p99 0.430, max 4.5, with 2 and 12 rows past a unit and no ground
+/// disagreement. Without the two the dxy p95 read 0.130 and 0.146. A box
 /// mover read 1.08 on every snapshot of the 3.3-degree street, and the
 /// facet polyhedron on terrain read 0.96 at a kerb-ramp foot.
 const P95_TOLERANCE_Z: f32 = 0.02;
-const P95_TOLERANCE_XY: f32 = 0.25;
+const P95_TOLERANCE_XY: f32 = 0.05;
 const P99_TOLERANCE_Z: f32 = 0.05;
 const P99_TOLERANCE_XY: f32 = 0.6;
 const MAX_TOLERANCE_Z: f32 = 0.5;

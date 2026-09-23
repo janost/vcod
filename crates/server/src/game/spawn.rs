@@ -103,9 +103,23 @@ pub fn spawn_entities_from_string(
         }
         if SPAWN_FREES.contains(&classname.as_str()) {
             host.free_entity(id);
+        } else if let (Some(n), Some(world)) = (submodel_index(&block), &host.world) {
+            // A trace that ends on the model's brushes names this entity,
+            // which is what a player standing on it reads as its ground.
+            world.collision.set_model_entity(n, id.0);
         }
     }
     Ok(())
+}
+
+/// The `N` of a block's `"model" "*N"`, for a submodel (N > 0).
+fn submodel_index(block: &std::collections::HashMap<String, String>) -> Option<usize> {
+    block
+        .get("model")?
+        .strip_prefix('*')?
+        .parse()
+        .ok()
+        .filter(|&n| n > 0)
 }
 
 /// `SP_worldspawn` (0x61cec): `G_SpawnString("northyaw", "", &out)` then, if
@@ -843,6 +857,40 @@ mod tests {
             )
             .is_err());
         });
+    }
+
+    /// A trace that ends on a `script_brushmodel`'s brushes reports the
+    /// entity the map load spawned for it, which is what a player standing
+    /// there carries as `groundEntityNum`: carentan's bombzone clip is 177 on
+    /// retail's wire (docs/research/cod11-gsc-object-model.md, 23.2).
+    #[test]
+    fn a_brush_model_names_its_entity_to_the_clip() {
+        let lump = "{\n\"classname\" \"worldspawn\"\n}\n\
+                    {\n\"classname\" \"script_brushmodel\"\n\"model\" \"*1\"\n\"origin\" \"200 0 0\"\n}\n";
+        let collision = vcod_common::collision::submodel_test_world(
+            lump,
+            &[([-8.0, -8.0, 0.0], [8.0, 8.0, 64.0])],
+        );
+        let (mut vm, mut host) = fixture();
+        host.world = Some(std::rc::Rc::new(crate::world::World {
+            collision,
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        }));
+        vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, lump))
+            .unwrap();
+        let collision = &host.world.as_ref().unwrap().collision;
+        let down = |x: f32| {
+            let t = collision.box_trace(
+                glam::Vec3::new(x, 0.0, 100.0),
+                glam::Vec3::new(x, 0.0, -100.0),
+                glam::Vec3::ZERO,
+                glam::Vec3::ZERO,
+            );
+            collision.entity_num(&t)
+        };
+        assert_eq!(down(200.0), crate::game::entity::FIRST_MAP_ENTITY);
+        assert_eq!(down(0.0), crate::game::entity::ENTITYNUM_WORLD);
     }
 
     /// A placed weapon registers its item at spawn, which is why retail's cs 8

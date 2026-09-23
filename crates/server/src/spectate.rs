@@ -4,7 +4,7 @@ use crate::game::host::SimOp;
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::msg::{self, UserCmd};
-use vcod_common::net::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD};
+use vcod_common::net::protocol::Protocol;
 use vcod_common::net::trajectory;
 use vcod_common::pmove::{self, PmEvent, PmInput};
 use vcod_common::weapon::WeaponDef;
@@ -448,12 +448,12 @@ impl ClientSim {
     }
 
     /// `ps.groundEntityNum != ENTITYNUM_NONE`, which is what
-    /// `PlayerCmd_isOnGround` answers off: a linked client reads
-    /// `ENTITYNUM_NONE` on every linked snapshot of both retail captures, so
-    /// `isOnGround` is false under a link
-    /// (docs/research/cod11-gsc-object-model.md, 23.2 and 23.5).
+    /// `PlayerCmd_isOnGround` answers off. The linked arm writes
+    /// `ENTITYNUM_NONE`, so `isOnGround` is false under a link from the first
+    /// frame whose cmds ran linked (docs/research/cod11-gsc-object-model.md,
+    /// 23.2 and 23.5).
     pub fn on_ground(&self) -> bool {
-        self.ps.on_ground && self.link_to.is_none()
+        self.ps.on_ground
     }
 
     /// `ps.pm_type` as the wire carries it. The touch pass gates on it, so it
@@ -574,15 +574,11 @@ impl ClientSim {
                 dt,
             ),
             (PmType::Normal, Some(w)) => {
-                let held = self.link_to.map(|_| (self.ps.origin, self.ps.velocity));
+                // The cmds see the link the last frame's script left, so the
+                // linking frame's run free and the unlinking frame's linked
+                // (object-model doc, 23.2).
+                self.ps.linked = self.link_to.is_some();
                 let events = pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt, weapons);
-                // A linked client's cmds move neither its origin nor its
-                // velocity, the unlinking frame's included: retail's release
-                // frame still reads both as linked (object-model doc, 23.2).
-                if let Some((origin, velocity)) = held {
-                    self.ps.origin = origin;
-                    self.ps.velocity = velocity;
-                }
                 self.jumped |= self.ps.jumped;
                 // Retail holds a prone view inside the cone around the body by
                 // pushing `delta_angles`, so the client's own prediction lands
@@ -645,10 +641,16 @@ impl ClientSim {
         if self.pm_type != PmType::Normal || self.dead {
             return;
         }
+        // The linked arm never calls the selection (0x322c8), so a linked
+        // player's legs, strafe and ground edges hold; its weapon events
+        // still play (object-model doc, 23.2).
+        let linked = self.ps.linked;
         // Retail's condition 8 (@0x32504): any forward component clears the
         // strafe, diagonals included; a cmd that is sideways only sets the
         // side; a cmd asking for neither leaves the condition as it was.
-        if cmd.forward != 0 {
+        if linked {
+            // held
+        } else if cmd.forward != 0 {
             self.strafing = None;
         } else if cmd.right != 0 {
             self.strafing = Some(if cmd.right < 0 {
@@ -705,6 +707,7 @@ impl ClientSim {
         let jumped = std::mem::take(&mut self.jumped);
         let script = &inputs.anims.script;
         match (self.ps.on_ground, self.was_airborne) {
+            _ if linked => {}
             (true, true) => {
                 // The landing writes the legs alone, `both` clause or not
                 // (combat doc, 1.14).
@@ -740,7 +743,7 @@ impl ClientSim {
         // the selection unless the ladder flag is set (@0x323a2), which is
         // what gives a climber its `climbup`/`climbdown` -- so a jump owns
         // the legs until the landing.
-        if self.ps.on_ground || self.ps.on_ladder {
+        if !linked && (self.ps.on_ground || self.ps.on_ladder) {
             let mut sel = script.select("combat", &conditions);
             // Retail leaves `torsoAnim` 0 in every settled pose of both
             // captures, although the clauses reached here are `both`. That 0
@@ -752,7 +755,9 @@ impl ClientSim {
         // Outside the airborne early-out: a shot fired in the air would
         // otherwise hold its torso until the landing.
         self.anim.clear_torso(now_ms);
-        self.was_airborne = !self.ps.on_ground;
+        if !linked {
+            self.was_airborne = !self.ps.on_ground;
+        }
     }
 
     /// One event clause on the two channels. A `both` clause is the whole
@@ -1051,13 +1056,7 @@ impl ClientSim {
         set("torsoAnim", self.anim.torso());
         set("weapon", i32::from(self.ps.weapon));
         self.ring.write(&mut set);
-        set(
-            "groundEntityNum",
-            match self.ps.on_ground {
-                true => ENTITYNUM_WORLD as i32,
-                false => ENTITYNUM_NONE as i32,
-            },
-        );
+        set("groundEntityNum", self.ps.ground_entity_num() as i32);
         // The lean the other client draws, the same -1..1 the playerstate
         // carries. Without it a leaning player stands straight to everyone
         // else.
@@ -1136,11 +1135,7 @@ impl ClientSim {
                 self.ps.stance.view_height()
             };
             set("viewHeightTarget", target as i32);
-            let ground = match self.on_ground() {
-                true => ENTITYNUM_WORLD,
-                false => ENTITYNUM_NONE,
-            };
-            set("groundEntityNum", ground as i32);
+            set("groundEntityNum", self.ps.ground_entity_num() as i32);
             // All three come out of one `ClientEndFrame` block a spectator
             // never reaches. Its guards are `sessionstate` playing,
             // `ps.clientNum == self` and, for the hint, `health > 0`;
@@ -1355,7 +1350,7 @@ fn vec_to_angles(v: Vec3) -> (f32, f32) {
 mod tests {
     use super::*;
     use vcod_common::net::msg::NULL_USERCMD;
-    use vcod_common::net::protocol::PROTOCOL_V1;
+    use vcod_common::net::protocol::{ENTITYNUM_NONE, PROTOCOL_V1};
 
     /// The intermission camera (map-cycle doc 6.2, and the `pm_type=5`
     /// traces in `tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`):
@@ -2082,13 +2077,24 @@ mod tests {
         }
     }
 
-    /// A linked client reads off the ground: `ENTITYNUM_NONE` on the wire and
-    /// false to `isOnGround`, which `PlayerCmd_isOnGround` answers off the
-    /// same field (object-model doc, 23.2 and 23.5).
+    /// A linked client's cmds run retail's linked arm: the frame the link
+    /// lands on still reads the ground its free cmds left, every frame after
+    /// reads `ENTITYNUM_NONE` on the wire and false to `isOnGround`, and a
+    /// held walk moves nothing and raises no footstep (object-model doc,
+    /// 23.2 and 23.5).
     #[test]
-    fn a_linked_client_reads_off_the_ground_and_at_pm_type_1() {
+    fn a_linked_client_runs_the_linked_arm_at_pm_type_1() {
         let p = &PROTOCOL_V1;
-        let mut sim = target();
+        let w = vcod_common::collision::test_world(&[]);
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        let run = UserCmd {
+            forward: 127,
+            ..NULL_USERCMD
+        };
+        for _ in 0..10 {
+            sim.step(&run, 0.05, Some(&w), &[]);
+        }
         assert!(sim.on_ground());
         assert_eq!(sim.wire_pm_type(), 0);
         sim.link_to = Some(Link {
@@ -2096,11 +2102,16 @@ mod tests {
             offset: [0.0; 3],
             velocity: [0.0; 3],
         });
-        assert!(
-            !sim.on_ground(),
-            "a linked client still reads on the ground"
-        );
+        assert!(sim.on_ground(), "the link frame's cmds ran free");
         assert_eq!(sim.wire_pm_type(), PM_NORMAL_LINKED);
+        let (origin, velocity) = (sim.ps.origin, sim.ps.velocity);
+        assert!(velocity.length() > 100.0);
+        for _ in 0..40 {
+            let events = sim.step(&run, 0.05, Some(&w), &[]);
+            assert!(events.is_empty(), "a linked walk raised {events:?}");
+        }
+        assert_eq!((sim.ps.origin, sim.ps.velocity), (origin, velocity));
+        assert!(!sim.on_ground());
         let ps = sim.to_wire(p, 0, 0);
         assert_eq!(
             ps.fields[msg::PlayerState::field_index(p, "groundEntityNum").unwrap()],
