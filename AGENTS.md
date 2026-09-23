@@ -440,8 +440,8 @@ engineering setup works.
   three HUD tweens, and `bulletTrace` clips script models, which is where
   `getPlant` puts the charge. Not modelled: item pickup, the killcam, a body
   between the eye and a lookat (retail's second trace), `enableLinkTo`, a
-  linked player on a moving parent, and script models in weapon, blast and missile traces. The scriptent mover
-  verbs move things and their trajectories reach the wire
+  linked player on a moving parent, and script models in weapon, blast and
+  missile traces. The scriptent mover verbs move things and their trajectories reach the wire
   (`docs/research/cod11-movers.md`). A probe run against it reproduces the
   retail death capture field for field except for two: the `EV_RAISE_WEAPON`
   the death frame does not raise, and the `legsAnim` the respawn frame
@@ -666,8 +666,8 @@ never pasted decompiler output or disassembly listings.
   connecting/loading phases draw HUD text only.
 - Movement constants come from retail rodata, not community lore: the table
   is in docs/research/cod11-mantle.md and bsp-ibsp59-format.md ("Movement
-  constants"). Mantling does not exist in
-  retail 1.1 MP; cod11-mantle.md is the negative result.
+  constants"). Mantling does not exist in retail 1.1 MP; cod11-mantle.md is
+  the negative result.
 - A configstring range's first slot comes from its indexer, never from a
   doc's summary. The status icon, head icon and script menu indexers scan
   from `i = 0`; the localized-string and shader ones scan from `i = 1`.
