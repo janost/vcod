@@ -749,7 +749,7 @@ mod tests {
             )
             .unwrap();
             let (id, _) = host.ents.iter_inuse().next().unwrap();
-            assert_eq!(id, EntId(72));
+            assert_eq!(id, EntId(72, 0));
             let cn = cx.intern_folded("classname");
             let cn_val = host.get_field(cx, id, cn);
             let cn_atom = match cn_val {
@@ -826,7 +826,7 @@ mod tests {
             )
             .unwrap();
             let ids: Vec<_> = host.ents.iter_inuse().map(|(i, _)| i).collect();
-            assert_eq!(ids, vec![EntId(72), EntId(73)]);
+            assert_eq!(ids, vec![EntId(72, 0), EntId(73, 0)]);
         });
     }
 
@@ -1037,8 +1037,8 @@ mod tests {
                  {\n\"classname\" \"script_origin\"\n\"targetname\" \"b\"\n}\n",
             )
             .unwrap();
-            let ids: Vec<_> = host.ents.iter_inuse().map(|(i, _)| i).collect();
-            assert_eq!(ids, vec![EntId(72), EntId(73)]);
+            let ids: Vec<_> = host.ents.iter_inuse().map(|(i, _)| i.0).collect();
+            assert_eq!(ids, vec![72, 73]);
         });
     }
 

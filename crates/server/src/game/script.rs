@@ -917,7 +917,7 @@ impl ScriptRuntime {
     }
 
     pub fn client_entity(&self, slot: usize) -> Option<EntId> {
-        let id = EntId(u32::try_from(slot).ok()?);
+        let id = self.host.ents.handle(u32::try_from(slot).ok()?)?;
         self.host
             .ents
             .get(id)
@@ -2109,7 +2109,7 @@ mod tests {
         // tenant is a plain entity: a point box at its own origin, not the
         // dead trigger's brush.
         let reused = rt.spawn_map_entity_for_test([300.0, 0.0, 0.0]);
-        assert_eq!(reused, zone, "the number is reused");
+        assert_eq!(reused.0, zone.0, "the number is reused");
         let host = &mut rt.host;
         let bounds = rt
             .vm
@@ -2267,5 +2267,68 @@ mod tests {
         rt.touch_triggers_with_buttons(0, 150, vcod_common::net::msg::BUTTON_USE);
         rt.run_frame(150);
         assert_eq!(rt.level_field("hits"), Value::Int(1), "inside the window");
+    }
+
+    /// The link re-anchor reads the parent through its handle, so a parent
+    /// freed and replaced in its slot between two frames releases the link
+    /// rather than handing the planter to the new occupant.
+    #[test]
+    fn a_freed_parent_has_no_origin_once_its_slot_is_reused() {
+        let mut rt = ScriptRuntime::for_test("main() {}");
+        let parent = rt.spawn_map_entity_for_test([1.0, 2.0, 3.0]);
+        assert_eq!(rt.entity_origin_of(parent), Some([1.0, 2.0, 3.0]));
+        rt.host.free_entity(parent);
+        let next = rt.spawn_map_entity_for_test([9.0, 9.0, 9.0]);
+        assert_eq!(next.0, parent.0, "the slot was not reused");
+        assert_eq!(rt.entity_origin_of(parent), None);
+    }
+
+    /// `sd.gsc`'s `bombzone_think` with two attackers: the first aborts and
+    /// destroys its bar, the second starts at the other zone and its bar
+    /// takes the freed record, the first retries. Its
+    /// `isdefined(other.progressbackground)` has to read 0, as a destroyed
+    /// hudelem does on retail (`# probe_stale_handle`), so it makes a bar of
+    /// its own and its `setShader` lands there rather than on the second's.
+    #[test]
+    fn a_retried_plant_gets_its_own_bar_after_another_took_the_freed_one() {
+        let mut rt = ScriptRuntime::for_test("main() {}");
+        rt.install_for_test(
+            "plant() { \
+               if(!isdefined(self.progressbackground)) \
+                 self.progressbackground = newClientHudElem(self); \
+               self.progressbackground setShader(\"black\", 124, 12); } \
+             abort() { self.progressbackground destroy(); }",
+        );
+        let a = rt.spawn_client_for_test(0, [0.0; 3]);
+        let b = rt.spawn_client_for_test(1, [0.0; 3]);
+        let bar = |rt: &mut ScriptRuntime, p: EntId| {
+            use vcod_gsc::Host;
+            let host = &mut rt.host;
+            rt.vm.with_cx(|cx| {
+                let f = cx.intern_folded("progressbackground");
+                host.get_field(cx, p, f)
+            })
+        };
+        rt.start_thread_for_test(a, "plant", 0);
+        let Value::Entity(first) = bar(&mut rt, a) else {
+            panic!("no bar for the first attempt");
+        };
+        rt.start_thread_for_test(a, "abort", 0);
+        rt.start_thread_for_test(b, "plant", 0);
+        let Value::Entity(b_bar) = bar(&mut rt, b) else {
+            panic!("no bar for the second attacker");
+        };
+        assert_eq!(b_bar.0, first.0, "the second bar did not reuse the record");
+        rt.start_thread_for_test(a, "plant", 0);
+        assert_eq!(rt.aborts(), Vec::<String>::new());
+
+        let Value::Entity(a_bar) = bar(&mut rt, a) else {
+            panic!("the retry made no bar");
+        };
+        assert_ne!(a_bar, b_bar, "the retry reused the other attacker's bar");
+        let owner =
+            |rt: &ScriptRuntime, id| rt.host.ents.get(id).and_then(|e| e.hud).map(|h| h.owner);
+        assert_eq!(owner(&rt, a_bar), Some(a.0));
+        assert_eq!(owner(&rt, b_bar), Some(b.0));
     }
 }

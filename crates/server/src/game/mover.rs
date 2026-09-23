@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn movegravity_notifies_without_stopping() {
         let mut movers = Movers::default();
-        let id = EntId(72);
+        let id = EntId(72, 0);
         movers.move_gravity(
             id,
             0,

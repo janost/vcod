@@ -613,13 +613,13 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(4))), vec![]);
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(4, 0))), vec![]);
         vm.run_frame(&mut host, 0);
 
         let menu = vm.interner_mut().intern_exact("team_americangerman");
         let resp = vm.interner_mut().intern_exact("allies");
         let ev = vm.interner_mut().intern_folded("menuresponse");
-        vm.notify(EntId(4), ev, &[Value::String(menu), Value::String(resp)]);
+        vm.notify(EntId(4, 0), ev, &[Value::String(menu), Value::String(resp)]);
         vm.run_frame(&mut host, 50);
 
         let (_, args) = host.calls.iter().find(|(n, _)| n == "got").unwrap();
@@ -631,11 +631,11 @@ mod tests {
         let mut vm = vm_with(r#"main() { self waittill("e"); done(); }"#);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1))), vec![]);
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1, 0))), vec![]);
         vm.run_frame(&mut host, 0);
 
         let ev = vm.interner_mut().intern_folded("e");
-        vm.notify(EntId(2), ev, &[]);
+        vm.notify(EntId(2, 0), ev, &[]);
         vm.run_frame(&mut host, 50);
         assert!(!host.calls.iter().any(|(n, _)| n == "done"));
         assert_eq!(vm.thread_count(), 1, "still waiting");
@@ -646,12 +646,12 @@ mod tests {
         let mut vm = vm_with(r#"main() { self endon("death"); wait 1; done(); }"#);
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(7))), vec![]);
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(7, 0))), vec![]);
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 1);
 
         let ev = vm.interner_mut().intern_folded("death");
-        vm.notify(EntId(7), ev, &[]);
+        vm.notify(EntId(7, 0), ev, &[]);
         vm.run_frame(&mut host, 2000);
         assert_eq!(vm.thread_count(), 0, "killed, not resumed");
         assert!(!host.calls.iter().any(|(n, _)| n == "done"));
@@ -676,11 +676,23 @@ mod tests {
         let mut host = TestHost::default();
         let waiter = vm.func_ref("test/script", "main");
         let pump = vm.func_ref("test/script", "pump");
-        vm.start_thread(&mut host, 0, waiter, Some(Target::Entity(EntId(3))), vec![]);
+        vm.start_thread(
+            &mut host,
+            0,
+            waiter,
+            Some(Target::Entity(EntId(3, 0))),
+            vec![],
+        );
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 1, "waiting");
 
-        vm.start_thread(&mut host, 50, pump, Some(Target::Entity(EntId(3))), vec![]);
+        vm.start_thread(
+            &mut host,
+            50,
+            pump,
+            Some(Target::Entity(EntId(3, 0))),
+            vec![],
+        );
         vm.run_frame(&mut host, 50);
         assert!(host.calls.iter().any(|(n, _)| n == "done"), "woken");
     }
@@ -699,13 +711,25 @@ mod tests {
         let mut host = TestHost::default();
         let waiter = vm.func_ref("test/script", "waiter");
         let dier = vm.func_ref("test/script", "dier");
-        vm.start_thread(&mut host, 0, waiter, Some(Target::Entity(EntId(5))), vec![]);
-        vm.start_thread(&mut host, 0, dier, Some(Target::Entity(EntId(5))), vec![]);
+        vm.start_thread(
+            &mut host,
+            0,
+            waiter,
+            Some(Target::Entity(EntId(5, 0))),
+            vec![],
+        );
+        vm.start_thread(
+            &mut host,
+            0,
+            dier,
+            Some(Target::Entity(EntId(5, 0))),
+            vec![],
+        );
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 2);
 
         let ev = vm.interner_mut().intern_exact("playerCONNECT");
-        vm.notify(EntId(5), ev, &[]);
+        vm.notify(EntId(5, 0), ev, &[]);
         vm.run_frame(&mut host, 2000);
         assert!(host.calls.iter().any(|(n, _)| n == "done"), "waiter woken");
         assert!(
@@ -800,11 +824,11 @@ mod tests {
         let mut host = TestHost::default();
         let fa = vm.func_ref("test/script", "a");
         let fb = vm.func_ref("test/script", "b");
-        vm.start_thread(&mut host, 0, fa, Some(Target::Entity(EntId(1))), vec![]);
-        vm.start_thread(&mut host, 0, fb, Some(Target::Entity(EntId(1))), vec![]);
+        vm.start_thread(&mut host, 0, fa, Some(Target::Entity(EntId(1, 0))), vec![]);
+        vm.start_thread(&mut host, 0, fb, Some(Target::Entity(EntId(1, 0))), vec![]);
         vm.run_frame(&mut host, 0);
         let ev = vm.interner_mut().intern_folded("e");
-        vm.notify(EntId(1), ev, &[]);
+        vm.notify(EntId(1, 0), ev, &[]);
         vm.run_frame(&mut host, 50);
         let order: Vec<&str> = host.calls.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(
@@ -840,7 +864,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1))), vec![]);
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1, 0))), vec![]);
         // Neither wake runs inline (a notify never reenters the VM): one
         // frame steps `getNotetrack` past its wait to fire "reply", the
         // next steps `main` past its own wait to run `got()`. Nothing in
@@ -931,7 +955,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1))), vec![]);
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1, 0))), vec![]);
         assert_eq!(
             vm.thread_count(),
             0,
@@ -1069,11 +1093,23 @@ mod tests {
         let mut host = TestHost::default();
         let waiter = vm.func_ref("test/script", "waiter");
         let pump = vm.func_ref("test/script", "pump");
-        vm.start_thread(&mut host, 0, waiter, Some(Target::Entity(EntId(1))), vec![]);
+        vm.start_thread(
+            &mut host,
+            0,
+            waiter,
+            Some(Target::Entity(EntId(1, 0))),
+            vec![],
+        );
         vm.run_frame(&mut host, 0);
         assert_eq!(vm.thread_count(), 1, "waiting on the first tick");
 
-        vm.start_thread(&mut host, 0, pump, Some(Target::Entity(EntId(1))), vec![]);
+        vm.start_thread(
+            &mut host,
+            0,
+            pump,
+            Some(Target::Entity(EntId(1, 0))),
+            vec![],
+        );
         vm.run_frame(&mut host, 0);
 
         let seen: Vec<Value> = host
@@ -1107,7 +1143,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1))), vec![]);
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1, 0))), vec![]);
 
         assert_eq!(vm.thread_count(), 1, "its own notify killed it");
         assert!(host.calls.iter().any(|(n, _)| n == "sideeffecta"));
@@ -1148,7 +1184,7 @@ mod tests {
         );
         let mut host = TestHost::default();
         let f = vm.func_ref("test/script", "main");
-        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1))), vec![]);
+        vm.start_thread(&mut host, 0, f, Some(Target::Entity(EntId(1, 0))), vec![]);
 
         assert_eq!(vm.thread_count(), 0, "killed by its own endon mid-step");
         assert!(host.calls.iter().any(|(n, _)| n == "sideeffecta"));

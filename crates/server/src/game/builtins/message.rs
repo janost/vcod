@@ -98,7 +98,7 @@ mod tests {
             }
             id
         });
-        assert_eq!(id, vcod_gsc::EntId(0));
+        assert_eq!(id, vcod_gsc::EntId(0, 0));
         host
     }
 
@@ -120,7 +120,7 @@ mod tests {
             vm.with_cx(|cx| construct(
                 &host,
                 cx,
-                &[Value::Localized(key), Value::Entity(vcod_gsc::EntId(0))]
+                &[Value::Localized(key), Value::Entity(vcod_gsc::EntId(0, 0))]
             )),
             "MPSCRIPT_WINS\u{15}vcod^7"
         );

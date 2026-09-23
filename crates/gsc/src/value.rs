@@ -3,8 +3,14 @@
 use crate::atom::{Atom, Interner};
 use crate::vm::ErrorKind;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct EntId(pub u32);
+/// A host object: `.0` is its slot number, `.1` the generation the host
+/// stamped the slot with when it handed this handle out. A host bumps a
+/// slot's generation when it frees the object, so a handle kept past the
+/// free never equals, and never reaches, whatever takes the slot next; it
+/// only equals copies of itself, which is what retail's dead entity does
+/// (tests/fixtures/semantics/retail-captures.txt, `# probe_stale_handle`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct EntId(pub u32, pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct StructId(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -116,7 +122,7 @@ mod tests {
         assert!(Value::Undefined.as_bool().is_err());
         assert!(Value::Vector([0.0, 0.0, 0.0]).as_bool().is_err());
         assert!(Value::Vector([1.0, 0.0, 0.0]).as_bool().is_err());
-        assert!(Value::Entity(EntId(0)).as_bool().is_err());
+        assert!(Value::Entity(EntId(0, 0)).as_bool().is_err());
     }
 
     /// Every value in tests/fixtures/semantics/retail-captures.txt's

@@ -381,6 +381,15 @@ pub trait Host {
         field: Atom,
         value: Value,
     ) -> Result<(), ErrorKind>;
+
+    /// Whether `ent` still names the object it was handed out for. A handle
+    /// that does not is retail's dead entity: `isDefined` reads 0 on it and
+    /// a field access or method call on it is fatal, which the VM raises
+    /// before the host sees either. A host that never frees can keep the
+    /// default.
+    fn is_live(&self, _ent: EntId) -> bool {
+        true
+    }
 }
 
 impl From<EntId> for Target {
@@ -695,6 +704,7 @@ impl Vm {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::interp::{DEAD_ENTITY, DEAD_OBJECT};
     use super::*;
     use crate::value::{EntId, Value};
     use std::collections::HashMap;
@@ -703,6 +713,8 @@ pub(crate) mod tests {
     pub(crate) struct TestHost {
         pub calls: Vec<(String, Vec<Value>)>,
         pub fields: HashMap<(u32, String), Value>,
+        /// Handles `is_live` refuses.
+        pub dead: Vec<EntId>,
     }
 
     impl Host for TestHost {
@@ -732,6 +744,10 @@ pub(crate) mod tests {
         fn get_field(&mut self, cx: &mut Cx, e: EntId, f: Atom) -> Value {
             let k = (e.0, cx.resolve(f).to_string());
             self.fields.get(&k).copied().unwrap_or(Value::Undefined)
+        }
+
+        fn is_live(&self, e: EntId) -> bool {
+            !self.dead.contains(&e)
         }
 
         fn set_field(&mut self, cx: &mut Cx, e: EntId, f: Atom, v: Value) -> Result<(), ErrorKind> {
@@ -926,9 +942,53 @@ pub(crate) mod tests {
         let mut host = TestHost::default();
         let main = vm.func_ref("test/script", "main");
         let v = vm
-            .call_now(&mut host, 0, main, Some(Target::Entity(EntId(1))), vec![])
+            .call_now(
+                &mut host,
+                0,
+                main,
+                Some(Target::Entity(EntId(1, 0))),
+                vec![],
+            )
             .unwrap();
         assert_is_x(v, &mut vm);
+    }
+
+    /// A handle the host calls dead is retail's dead entity: a field read, a
+    /// field write and a method call on it raise before the host sees them,
+    /// while `==` still compares it, equal only to its own copies
+    /// (tests/fixtures/semantics/retail-captures.txt, `# probe_stale_*`).
+    #[test]
+    fn a_dead_handle_refuses_fields_and_methods_but_still_compares() {
+        let stale = EntId(1, 0);
+        let reused = EntId(1, 1);
+        let run_on = |src: &str, args: Vec<Value>| {
+            let ast = crate::parse::parse_file(src).unwrap();
+            let mut vm = Vm::new();
+            let fns = crate::compile::compile_file(&ast, "test/script", vm.interner_mut()).unwrap();
+            vm.install(fns).unwrap();
+            let mut host = TestHost {
+                dead: vec![stale],
+                ..TestHost::default()
+            };
+            let main = vm.func_ref("test/script", "main");
+            let r = vm.call_now(&mut host, 0, main, None, args);
+            (r.map_err(|e| e.kind), host)
+        };
+        let dead = |src| run_on(src, vec![Value::Entity(stale)]).0;
+        assert_eq!(dead("main(e) { return e.x; }"), Err(DEAD_OBJECT));
+        assert_eq!(dead("main(e) { e.x = 1; }"), Err(DEAD_OBJECT));
+        assert_eq!(dead("main(e) { e.x[0] = 1; }"), Err(DEAD_OBJECT));
+        let (r, host) = run_on("main(e) { e double(1); }", vec![Value::Entity(stale)]);
+        assert_eq!(r, Err(DEAD_ENTITY));
+        assert!(host.calls.is_empty(), "the builtin ran on a dead receiver");
+        // An argument reaches the host untouched: answering `isDefined` on
+        // it is the host's job, and this one reads any value as defined.
+        assert_eq!(dead("main(e) { return isdefined(e); }"), Ok(Value::Int(1)));
+
+        let cmp = |a, b| run_on("main(a, b) { return a == b; }", vec![a, b]).0;
+        let (s, r) = (Value::Entity(stale), Value::Entity(reused));
+        assert_eq!(cmp(s, s), Ok(Value::Int(1)));
+        assert_eq!(cmp(s, r), Ok(Value::Int(0)));
     }
 
     #[test]
@@ -1437,7 +1497,7 @@ pub(crate) mod tests {
             let s = Value::String(cx.intern_exact("kept"));
             cx.set_index(game, k_num, Value::Int(7));
             cx.set_index(game, k_str, s);
-            cx.set_index(game, k_ent, Value::Entity(EntId(3)));
+            cx.set_index(game, k_ent, Value::Entity(EntId(3, 0)));
             let inner = cx.new_array();
             let inner_key = ArrayKey::Str(cx.intern_exact("c"));
             cx.set_index(inner, inner_key, Value::Float(0.5));

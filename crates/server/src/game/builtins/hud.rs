@@ -441,8 +441,8 @@ mod tests {
         vm.with_cx(|cx| {
             let a = new_hud_elem(&mut host, cx, None, &[]).unwrap();
             let b = new_hud_elem(&mut host, cx, None, &[]).unwrap();
-            assert_eq!(a, Value::Entity(EntId(FIRST_HUD_ELEM)));
-            assert_eq!(b, Value::Entity(EntId(FIRST_HUD_ELEM + 1)));
+            assert_eq!(a, Value::Entity(EntId(FIRST_HUD_ELEM, 0)));
+            assert_eq!(b, Value::Entity(EntId(FIRST_HUD_ELEM + 1, 0)));
             assert_eq!(host.ents.iter_inuse().count(), 0);
         });
     }
@@ -645,7 +645,7 @@ mod tests {
             else {
                 panic!("newClientHudElem returns an object");
             };
-            assert_eq!(id, EntId(FIRST_HUD_ELEM));
+            assert_eq!(id, EntId(FIRST_HUD_ELEM, 0));
             let text = Value::Localized(cx.intern_exact("MPSCRIPT_PRESS_ACTIVATE_TO_RESPAWN"));
             let recv = Some(Target::Entity(id));
             set_text(&mut host, cx, recv, &[text]).unwrap();
@@ -657,7 +657,7 @@ mod tests {
             // The freed record is the next one handed out.
             assert_eq!(
                 new_client_hud_elem(&mut host, cx, None, &[Value::Entity(c)]).unwrap(),
-                Value::Entity(EntId(FIRST_HUD_ELEM))
+                Value::Entity(EntId(FIRST_HUD_ELEM, 1))
             );
         });
     }

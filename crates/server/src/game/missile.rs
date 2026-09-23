@@ -742,7 +742,7 @@ mod tests {
         assert!(host.ents.get(id).is_none(), "freed with it");
         // The number goes back to the pool: the next spawn takes it.
         let next = vm.with_cx(|cx| host.ents.spawn(cx)).unwrap();
-        assert_eq!(next, id);
+        assert_eq!(next.0, id.0);
     }
 
     /// A bounce raises 177 only when the contact changed the velocity by

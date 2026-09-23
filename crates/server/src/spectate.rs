@@ -2092,7 +2092,7 @@ mod tests {
         assert!(sim.on_ground());
         assert_eq!(sim.wire_pm_type(), 0);
         sim.link_to = Some(Link {
-            parent: vcod_gsc::EntId(200),
+            parent: vcod_gsc::EntId(200, 0),
             offset: [0.0; 3],
             velocity: [0.0; 3],
         });
