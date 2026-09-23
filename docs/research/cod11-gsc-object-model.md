@@ -2138,8 +2138,17 @@ neither shot mask (2.7 of the combat doc); the terrain under it is at
 the same load numbering the lookat trigger 170, which retail's own census
 reads (23.1), and so spawning the map's entities in retail's order: retail's
 177 is that brush model, so a client standing on a submodel's brushes reads
-the submodel's entity as its ground, where ours writes 1022 for every
-ground. `pm_flags` holds 262144
+the submodel's entity as its ground.
+
+VERIFIED, of the ground trace fn 0x30474: on a walkable hit it calls the
+crash-land fn 0x2fd68 when `groundEntityNum` reads 0x3ff (0x306fc, 0x30721),
+then stores the trace's own entity number, the word at `ebp-0x20`, into
+`ps+0x54` (0x3072c-0x30732), and hands any number but 0x3fe to the touch
+list (0x3073b-0x30768). vcod: `CollisionWorld::entity_num` reports the
+entity the server named for a submodel at spawn
+(`CollisionWorld::set_model_entity`, from `spawn_entities_from_string`) and
+the world's for everything else, and `pmove`'s ground trace keeps it;
+until 2026-09-23 ours wrote 1022 for every ground. `pm_flags` holds 262144
 across the link and the unlink, and `eFlags` changes at no point of either
 sequence: on the attacker it moves only at the probe's two `setOrigin`
 teleports, `serverTime` 68750 and 91800, and on the defender only at its three,
@@ -2531,7 +2540,9 @@ Still different:
 
 - VERIFIED, vcod measurement (run 3): the first linked frame reads
   `groundEntityNum` 1023. VERIFIED, off both fixtures: retail's reads 177
-  (23.2). This is the gate's allow-listed row.
+  (23.2). Fixed since, with the linked arm and the submodel's entity number
+  (23.2); `sd_plant_ab.rs` now compares `groundEntityNum` on every trace but
+  the release window's placed first frame, and allows no row.
 - VERIFIED, vcod measurement (run 3): `velocity` is fractional
   (`183.4, 27.0`). VERIFIED, off the plant fixture: retail's is whole.
   VERIFIED: `PmoveSingle`'s default arm calls `trap_SnapVector` on

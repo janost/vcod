@@ -4,7 +4,7 @@ use crate::game::host::SimOp;
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::msg::{self, UserCmd};
-use vcod_common::net::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD};
+use vcod_common::net::protocol::Protocol;
 use vcod_common::net::trajectory;
 use vcod_common::pmove::{self, PmEvent, PmInput};
 use vcod_common::weapon::WeaponDef;
@@ -1056,13 +1056,7 @@ impl ClientSim {
         set("torsoAnim", self.anim.torso());
         set("weapon", i32::from(self.ps.weapon));
         self.ring.write(&mut set);
-        set(
-            "groundEntityNum",
-            match self.ps.on_ground {
-                true => ENTITYNUM_WORLD as i32,
-                false => ENTITYNUM_NONE as i32,
-            },
-        );
+        set("groundEntityNum", self.ps.ground_entity_num() as i32);
         // The lean the other client draws, the same -1..1 the playerstate
         // carries. Without it a leaning player stands straight to everyone
         // else.
@@ -1141,11 +1135,7 @@ impl ClientSim {
                 self.ps.stance.view_height()
             };
             set("viewHeightTarget", target as i32);
-            let ground = match self.on_ground() {
-                true => ENTITYNUM_WORLD,
-                false => ENTITYNUM_NONE,
-            };
-            set("groundEntityNum", ground as i32);
+            set("groundEntityNum", self.ps.ground_entity_num() as i32);
             // All three come out of one `ClientEndFrame` block a spectator
             // never reaches. Its guards are `sessionstate` playing,
             // `ps.clientNum == self` and, for the hint, `health > 0`;
@@ -1360,7 +1350,7 @@ fn vec_to_angles(v: Vec3) -> (f32, f32) {
 mod tests {
     use super::*;
     use vcod_common::net::msg::NULL_USERCMD;
-    use vcod_common::net::protocol::PROTOCOL_V1;
+    use vcod_common::net::protocol::{ENTITYNUM_NONE, PROTOCOL_V1};
 
     /// The intermission camera (map-cycle doc 6.2, and the `pm_type=5`
     /// traces in `tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`):

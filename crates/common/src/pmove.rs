@@ -6,6 +6,7 @@
 //! constants and their provenance".
 
 use crate::collision::CollisionWorld;
+use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use crate::weapon::WeaponDef;
 use glam::Vec3;
 
@@ -266,6 +267,10 @@ pub struct PlayerState {
     pub pitch: f32,
     pub stance: Stance,
     pub on_ground: bool,
+    /// The entity the last ground trace stood on, retail's `groundEntityNum`
+    /// while `on_ground`: the world, or a submodel entity's number. Read it
+    /// through [`PlayerState::ground_entity_num`].
+    pub ground_entity: u32,
     pub ground_normal: Vec3,
     pub lean: f32, // -LEAN_MAX..LEAN_MAX
     /// World yaw of the prone body in degrees, retail's `ps.proneDirection`.
@@ -412,6 +417,7 @@ impl PlayerState {
             pitch: 0.0,
             stance: Stance::Stand,
             on_ground: false,
+            ground_entity: ENTITYNUM_WORLD,
             ground_normal: Vec3::Z,
             lean: 0.0,
             prone_direction: 0.0,
@@ -457,6 +463,15 @@ impl PlayerState {
             last_cmd_ads: false,
             walking: false,
             linked: false,
+        }
+    }
+
+    /// `ps.groundEntityNum`: `ENTITYNUM_NONE` off the ground.
+    pub fn ground_entity_num(&self) -> u32 {
+        if self.on_ground {
+            self.ground_entity
+        } else {
+            ENTITYNUM_NONE
         }
     }
 
@@ -1128,6 +1143,8 @@ fn ground_trace(ps: &mut PlayerState, world: &CollisionWorld) {
     let thrown_off = thrown_off_ground(ps, t.normal);
     if t.fraction < 1.0 && t.normal.z >= MIN_WALK_NORMAL && !thrown_off {
         ps.on_ground = true;
+        // `groundEntityNum` is the trace's own entity (0x30732).
+        ps.ground_entity = world.entity_num(&t);
         ps.ground_normal = t.normal;
         ps.ground_surface_flags = t.surface_flags;
         // RTCW clears the waterjump lock on touching walkable ground
@@ -2626,6 +2643,26 @@ mod tests {
             (apex - JUMP_HEIGHT_STAND).abs() < 2.0,
             "standing apex {apex}, expected ~{JUMP_HEIGHT_STAND}"
         );
+    }
+
+    /// `groundEntityNum` is the ground trace's entity: a player on a
+    /// submodel carries the entity the server named for it, one on model 0
+    /// the world's number, and one in the air none.
+    #[test]
+    fn the_ground_entity_is_the_ground_traces_entity() {
+        let w = crate::collision::submodel_test_world(
+            "{\n\"classname\" \"script_brushmodel\"\n\"model\" \"*1\"\n\"origin\" \"200 0 0\"\n}",
+            &[([-32.0, -32.0, 0.0], [32.0, 32.0, 8.0])],
+        );
+        w.set_model_entity(1, 177);
+        let mut ps = PlayerState::spawn(Vec3::new(200.0, 0.0, 9.0), 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 10);
+        assert_eq!(ps.ground_entity_num(), 177);
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 1.0), 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 10);
+        assert_eq!(ps.ground_entity_num(), ENTITYNUM_WORLD);
+        ps.on_ground = false;
+        assert_eq!(ps.ground_entity_num(), ENTITYNUM_NONE);
     }
 
     #[test]
