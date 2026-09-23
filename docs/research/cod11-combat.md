@@ -904,9 +904,22 @@ VERIFIED, `FireWeapon` `0x68d68`: the shot's view angles are
 `ps->viewangles` with components 0 and 1 replaced from `client+0x220C` and
 `client+0x2210`, and `AngleVectors` turns them into a forward/right/up axis
 triple. VERIFIED: the muzzle is the entity's origin with
-`ps->viewHeightCurrent` (`ps+0xD0`) added to z, and the function calls
-`G_AddLean` on it and rounds each component to an integer with an explicit
-`fldcw`. INFERRED: the lean is applied before the rounding.
+`ps->viewHeightCurrent` (`ps+0xD0`) added to z (`0x68e14`), and the function
+calls `G_AddLean` on it (`0x68e25`) and rewrites each component through
+`fistp` and `fild` under a control word `| 0xc00` (`0x68e34`, `0x68e5c`,
+`0x68e84`), rounding control 11, which truncates toward zero, the same as
+`CalcMuzzlePoints` (`0x6948c..0x694dc`, object-model doc 23.1). INFERRED,
+off the three sitting past the call: the lean is applied before the
+truncation.
+
+VERIFIED: the melee swing's muzzle is built by `FireWeaponMelee` (`0x69504`),
+which calls `Weapon_Melee` (`0x69614`): the same `ps+0xD0` add (`0x6957e`),
+the same `G_AddLean` call (`0x6958f`) and the same three truncations
+(`0x6959e`, `0x695c6`, `0x695ee`). INFERRED, off the addresses: the same
+order.
+
+**As implemented.** `combat::muzzle_point`, shared by the shot, the swing and
+the throw (11.3), truncates the leaned eye per component.
 
 VERIFIED, `ClientEndFrame` `0x410f1`: `client+0x2240` is
 `ps->aimSpreadScale / 255.0`. INFERRED: it is computed once a frame, since
@@ -1164,6 +1177,105 @@ the PVS anyway.
 VERIFIED: `Bullet_Endpos` is `0x69624`, 0xcf bytes, and nothing in the
 combat path above calls it. UNVERIFIED: what does, and what it is for.
 
+### 2.7 What a `bulletTrace` clips
+
+VERIFIED, `GScr_BulletTrace` (`game.mp.i386.so` `0x5abc4`): it stores the
+mask 0x2802031 (`0x5abd2`), calls `Scr_GetBool(2)`, `hitCharacters`
+(`0x5abfd`), and has a second store of 0x802031 to the same slot (`0x5ac09`).
+INFERRED, off the `jne` at `0x5ac07` that jumps over that store: the narrower
+mask is the one taken when `hitCharacters` reads false.
+VERIFIED: it loads 0x3ff as the pass entity (`0x5abcd`), checks argument 3's
+`Scr_GetType` against 7 and `Scr_GetPointerType` against 0xd
+(`0x5ac1d..0x5ac32`), and replaces the pass entity with `Scr_GetEntity(3)`'s
+number (`0x5ac3e`). INFERRED, off the two `jne`s past that load: the pass
+entity stays 0x3ff unless argument 3 is an entity.
+VERIFIED: it calls `trap_LocationalTrace` with `bulletPriorityMap`
+(`0x5ac56`).
+VERIFIED: the result's `entity` is written by a `Scr_AddUndefined` call
+(`0x5acb4`) and a `Scr_AddEntity(&g_entities[n])` call (`0x5acd3`), and the
+compare between them is the hit number less 0x3fe against 1 as an unsigned
+16-bit word (`0x5aca6..0x5acb2`). INFERRED, off the `ja` at `0x5acb2`: the
+undefined is written when that difference is at most 1, the entity otherwise,
+so `entity` is undefined for the world and for a miss and names any entity
+the trace stopped on.
+
+The result is an array with five string keys. VERIFIED, `GScr_LoadConsts`
+(`0x58550`): the `scr_const` slots the builtin names are allocated from
+these `.rodata` strings: 0x2c `entity` (`0x75f28`, stored at `0x58778`), 0x32
+`fraction` (`0x75ff5`, `0x587c0`), 0x5c `normal` (`0x760c6`, `0x589b8`), 0x64
+`position` (`0x760ea`, `0x58a18`), 0x80 `surfacetype` (`0x76174`,
+`0x58b68`) and 0xf8 `none` (`0x764c8`, `0x59108`).
+VERIFIED: `fraction` is the trace's first float, `[ebp-0x48]`
+(`0x5ac63..0x5ac7f`), and `position` the vector four bytes into the same
+result, `[ebp-0x44]` (`0x5ac8a..0x5ac9e`); `entity` follows as above.
+INFERRED: `position` is the trace's end position, so a miss reads the `end`
+argument.
+VERIFIED: `fld1` / `fcomp` against the fraction at `0x5acf0` and a `jne` on
+the C0/C2/C3 mask at `0x5acf8` whose target is `0x5ad50`. INFERRED, off that
+branch: a `fraction` below 1 falls through to `0x5acfa` (the hit) and 1 takes
+the jump (the miss).
+VERIFIED: the block at `0x5acfd..0x5ad44` writes `normal` from the vector at
+`[ebp-0x38]` and `surfacetype` from `trap_SurfaceTypeToName` of bits 20..24
+of the dword at `[ebp-0x2c]`. INFERRED: those are the hit plane's normal and
+the surface flags' material field.
+VERIFIED: the block at `0x5ad50..0x5adb3` writes `normal` as
+`VectorNormalize` of the second argument less the first, and `surfacetype`
+as `Scr_AddConstString(scr_const 0xf8)`, `"none"`.
+VERIFIED, the stock `maps/` scripts in `pak0..pak9`: all three `["normal"]`
+reads are in `maps/mp/_utility.gsc` `getPlant`, each handed to
+`orientToNormal`.
+
+vcod: the builtin writes the five keys, with the miss arm's `normal` and
+`"none"` as above; a hit's `surfacetype` and a player hit's `entity` stay
+undefined, since nothing maps the surface-flags field to its name table yet
+and the trace does not stop on players.
+
+VERIFIED: `SP_script_model` (`0x60ff4`) writes `r.contents` (`ent+0x118`)
+0x2080 (`0x61010`), ORs 4 into `r.svFlags` (`ent+0xf4`, `0x61020`) and calls
+`trap_LinkEntity` (`0x61028`). 0x2080 meets both masks above in bit 0x2000.
+
+VERIFIED, `cod_lnxded`, the per-entity clip `0x809105c` (section 3.1): it
+tests `ent+0x118` against the clip's mask, tests the locational-trace flag
+and `svFlags & 4`, and calls the model record lookup (`0x806e498`), a test
+of the model's collision contents against the mask (`0x80c53d0`), a bounds
+reject on the model's bounds offset by the origin (`0x80c4f6c`,
+`0x805a788`), the axis build from `ent+0x140` (`0x806709c`), a transform of
+`start` and `end` into the frame of that axis and the origin at `ent+0x134`
+(`0x8066520`), and `0x80c52c0`, which walks the model's collision surfaces
+through `0x80c203c`, the same clip the static models take
+(`docs/research/cod11-mantle.md`, "Static models are clipped as a
+segment"). INFERRED, off the branches: the function returns early when the
+contents and the mask share no bit, the model path runs only on a locational
+trace and only with `svFlags & 4`, and the calls run in the order listed.
+INFERRED, off the same: a linked `script_model` with collision stops a
+`bulletTrace` on its own mesh, at its origin and angles as they are when the
+trace runs, and a closer world hit keeps the world's.
+
+VERIFIED: `ScriptEntCmd_NotSolid` (`0x612cc`) and `ScriptEntCmd_Solid`
+(`0x61204`) both reference the string `"cannot use the solid/notsolid
+commands on a script_model entity"` (`0x78d00`), and their only writes of
+`ent+0x118` are at `0x61378` and `0x612b8`. INFERRED, off their classname
+branches: the print is the `script_model` arm and the write sits on the
+`script_brushmodel` arm only. VERIFIED: `ScrCmd_Hide` (`0x5dcac`) writes
+nothing but an OR of 0x10 into `ent+0x17d` (`0x5dcdf`). INFERRED: a hidden
+script model and one a script `notSolid()`ed both still stop a bullet trace.
+
+VERIFIED, off `maps/mp/mp_carentan.bsp`: `bombzone_A` (`*4`, origin
+`-146 2490 16`) stands over two script models at `-146 2490 -32`, angles
+`0 290 0`: `xmodel/turret_flak88_static_antiairlow`, and
+`xmodel/turret_flak88_static_antiairlow_d` with `targetname` `exploder`, which
+`_load.gsc` hides. VERIFIED, off the paks: both carry collision surfaces of
+contents 1. INFERRED, off the plant test in
+`crates/server/src/game/script.rs` reproducing the fixture's slot 0: the
+flat plate of that mesh at z -23 is what `getPlant`'s `(+16, +16)` fallback
+trace lands on, where the floor under the planter is clip with no shot
+contents and the two 18-unit traces meet nothing (object-model doc 23.6).
+
+vcod: the `bulletTrace` builtin clips every live `script_model` whose xmodel
+has collision, loaded once per model name, with the segment moved into the
+entity's frame. The weapon traces, `CanDamage` and the missile do not see
+script models yet, though they are the same syscall on retail.
+
 ---
 
 ## 3. Hit locations
@@ -1241,7 +1353,8 @@ ordering and its conditions, read off the branches.
   at `+0x54` and `priorityMap` at `+0x58`.
 - `0x80910c5`: the per-bone path is taken only when `locational` is non-zero,
   the entity resolves to a model record, and `gentity+0xf4 & 6` is non-zero.
-  Bit `0x4` selects a brush trace (`0x80c52c0`); bit `0x2` without `0x4` is the
+  Bit `0x4` selects the xmodel collision trace (`0x80c52c0`, section 2.7);
+  bit `0x2` without `0x4` is the
   animated-model arm, and it is the only one handed the `priorityMap`.
 - `0x8091236`: a ray/AABB reject against the entity's bounds runs before any of
   the expensive work. The link box is therefore a broad phase and nothing more:
@@ -1688,10 +1801,12 @@ shipped `maps/mp/gametypes/_callbacksetup.gsc` declares.
 way. VERIFIED: both functions compare the pointer against 0 and call
 `Scr_AddUndefined` on the null arm instead of substituting an entity
 (`0x5cae5` and `0x5cb01` in `Scr_PlayerDamage`, `0x5cbd4` in
-`Scr_PlayerKilled`). So a death with no attacker behind it -- a mine's
-`radiusDamage`, a `trigger_hurt`, a fall -- reaches both callbacks with
-`eAttacker` and `eInflictor` undefined, and nothing in the engine turns them
-into `g_entities[ENTITYNUM_WORLD]` first.
+`Scr_PlayerKilled`). INFERRED, off those null arms: a death whose caller
+passed no attacker reaches both callbacks with `eAttacker` undefined, and
+nothing on this path turns it into `g_entities[ENTITYNUM_WORLD]`. The
+`radiusDamage` builtin is not such a caller: it passes the world entity
+itself (14.2), so a mine or a bomb reaches the callbacks with the world as
+`eAttacker` and only `eInflictor` undefined.
 
 What makes that safe for the stock scripts is `isPlayer`, `functions[81]` at
 `0x5efd4`. VERIFIED: it calls `Scr_GetType(0)` and branches to `Scr_AddInt(0)`
@@ -3507,8 +3622,8 @@ never touch `level+0x29F4`.
 
 What is left of the `radiusDamage` divergence entry in
 `cod11-gsc-language.md` after this: the victim walk, the standing box the
-builtin measures a victim with, and the `undefined` the callback gets where
-retail hands over the world entity. The flag is not among them.
+builtin measures a victim with. The flag is not among them, and neither is
+the attacker: vcod hands the callbacks the world entity too.
 
 ### 14.3 `CanDamage`
 

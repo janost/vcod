@@ -200,6 +200,23 @@ struct Args {
     /// unreachable brush costs a leg.
     #[arg(long)]
     probe_triggers: bool,
+    /// The S&D plant capture: joins the attackers, walks into bombzone_A,
+    /// holds use for 2 s and releases (the abort), then holds use through a
+    /// full plant with a forward walk sent 2 s in (what a link does to
+    /// pmove), and stands still after. Writes
+    /// crates/server/tests/fixtures/playerstate/<map>-sd-plant-attacker.txt.
+    /// Pair with --probe-defuse on the other team, and run
+    /// client-probes/probe_lookat as the gametype so the server's log carries
+    /// the lookat fires. Retail evidence when taken against tools/run_probe.sh;
+    /// a run against vcod-server overwrites it.
+    #[arg(long, conflicts_with = "probe_defuse")]
+    probe_plant: bool,
+    /// The S&D defuse capture: joins the defenders, waits for the plant,
+    /// walks to the bomb, sweeps the view across it with the aim alone (the
+    /// lookat trigger's shape; a held use would let bomb_think finish the
+    /// defuse mid-sweep), then aims true and holds use through the defuse. Writes <map>-sd-defuse-defender.txt.
+    #[arg(long, conflicts_with = "probe_plant")]
+    probe_defuse: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -612,6 +629,8 @@ fn main() -> Result<()> {
                 target: args.probe_target,
                 mapchange: args.save_mapchange,
                 roundrestart: args.save_roundrestart,
+                plant: args.probe_plant,
+                defuse: args.probe_defuse,
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,

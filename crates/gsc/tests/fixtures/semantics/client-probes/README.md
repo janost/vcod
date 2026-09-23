@@ -139,3 +139,63 @@ One thing it learned the expensive way: a mover verb on anything but a
 `script_brushmodel`, `script_model` or `script_origin` is a fatal script
 runtime error, so a first version that moved the map's placed weapons for
 PVS coverage died on its first frame.
+
+## probe_lookat
+
+The `trigger_lookat` half of S&D: every `"trigger"` notify the aim trace
+raises, and every player `isLookingAt` answers true for, polled once a server
+frame. It threads both onto each `trigger_lookat` the map spawned, logs a
+`PROBE watch` census line per entity and a `PROBE lookats` count, and then one
+`PROBE fire` per notify and one `PROBE looking` per frame a player is aimed at
+one. Each carries `getTime()`, which is what pairs a line with the `serverTime`
+on a client probe's own `!trace`.
+
+It calls `maps\mp\gametypes\sd::main()` itself, so the bombzones, the bomb and
+the lookat triggers are the stock gametype's. The scan waits a second first,
+for the same reason `probe_trigger` does.
+
+Three shells, the gsc probe first, then the defender, then the attacker:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> SECS=420 \
+    tools/run_probe.sh client-probes/probe_lookat mp_carentan +set probe_teleport 1
+# second and third shells, the defender first:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-defuse --probe-secs 400
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-plant --probe-secs 380
+```
+
+`probe_teleport 1` is why the walk arrives at all. mp_carentan's allied S&D
+spawns sit at y around -1064 and bombzone_A at (-146, 2490), some 3500 units
+through the town, and a first retail run spent its whole 380 s oscillating
+around (300, 1200) without ever reaching the zone. Under the cvar the probe
+puts each player once per level on a teamdeathmatch spawn in the courtyard,
+416 units from the zone for the attacker and 541 for the defender, so the walk
+is a courtyard crossing. The same cvar also moves every
+defender to 20 units from the charge, toward where the planter stood, once the plant has spawned
+`level.bombmodel`, because the flak88 and the cart ring the zone and a walk
+that has to round them reached the charge 27 s after its 60 s fuse had blown
+it, and sends the planter back to the attackers' spawn at the same moment,
+since a planter left standing on the defender-to-bomb line is what the
+lookat's body trace stops at and no station fires. A run without the cvar walks from the stock spawns and, on mp_carentan,
+does not get there. Anything after the map name is passed
+to the engine verbatim, which takes its `+set` arguments in any order. Only
+mp_carentan has the two origins; on any other map the spawn thread logs `PROBE
+teleport unsupported <map>` once and does nothing, and the plant-time thread
+returns without a line. `crates/server/tests`'s A/B
+never sets the cvar, since it stands its clients where it wants them itself.
+
+What the three halves measure between them: how often a lookat fires while a
+player is aimed at it (the server's log says every frame, with no wait gate in
+`G_Trigger`), what `isLookingAt` answers on the frames around a fire, the
+`pm_type` a planting player sits at while retail has it linked to the bombzone
+and what its velocity does under a forward cmd, the objective slots the plant
+and the defuse write and delete, and the HUD element the progress bar rides
+with its `scaleStartTime` / `scaleTime` / `fromWidth` / `fromHeight` tween
+fields.
+
+The server's log goes to
+`crates/server/tests/fixtures/triggers/<map>-sd-lookat.txt`; the two client
+halves write `crates/server/tests/fixtures/playerstate/<map>-sd-plant-attacker.txt`
+and `<map>-sd-defuse-defender.txt`. All three are retail evidence, and a run
+against `vcod-server` overwrites the two client ones: move them to `tmp/` and
+`git checkout` the fixture directory after.

@@ -9,9 +9,8 @@
 //! access on the value `newHudElem` returns already works: `host.rs` routes
 //! by entity number and `ObjectTable` keeps the HUD range in its own vector.
 //!
-//! Still missing from the method table: `setClock`/`setClockUp`, the three
-//! `*OverTime` animators and `reset`. No stock gametype's bootstrap calls
-//! one.
+//! Still missing from the method table: `setClock`/`setClockUp` and `reset`.
+//! No stock gametype's bootstrap calls one.
 
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::entity::{HudState, FIRST_HUD_ELEM};
@@ -33,6 +32,9 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("setvalue", set_value),
     ("setshader", set_shader),
     ("destroy", destroy),
+    ("scaleovertime", scale_over_time),
+    ("fadeovertime", fade_over_time),
+    ("moveovertime", move_over_time),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -322,11 +324,114 @@ fn set_any_timer(
     Ok(Value::Undefined)
 }
 
+/// The time argument all three tweens share: seconds to milliseconds,
+/// rounded to the nearest ms (`time * 1000.0 + 0.5` truncated toward zero,
+/// not the timers' round-up), refusing anything outside `0 < seconds <= 60`
+/// (docs/research/cod11-gsc-object-model.md 23.4).
+fn tween_ms(v: Value) -> Result<i32, ErrorKind> {
+    let seconds = match v {
+        Value::Int(i) => i as f32,
+        Value::Float(f) => f,
+        _ => return Err(ErrorKind::BadType("a tween takes a time in seconds")),
+    };
+    if !(seconds > 0.0 && seconds <= 60.0) {
+        return Err(ErrorKind::BadType(
+            "a tween's time must be above zero and at most 60 seconds",
+        ));
+    }
+    Ok((seconds * 1000.0 + 0.5) as i32)
+}
+
+/// `<hudelem> scaleOverTime(time, width, height)` (0x4bd34, method 6):
+/// stamps `scaleStartTime`/`scaleTime`, snapshots the live size into
+/// `fromWidth`/`fromHeight`, then writes the new size
+/// (docs/research/cod11-gsc-object-model.md 23.4). It does not tag the
+/// element or touch its shader; a script calls it right after `setShader`.
+pub fn scale_over_time(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = hud_receiver(host, recv)?;
+    let [t, w, h] = args else {
+        return Err(ErrorKind::BadType(
+            "scaleOverTime takes time, width, height",
+        ));
+    };
+    let ms = tween_ms(*t)?;
+    let (w, h) = match (as_int(*w), as_int(*h)) {
+        (Some(w), Some(h)) => (w, h),
+        _ => return Err(ErrorKind::BadType("a size must be a number")),
+    };
+    let now = host.level_time_ms;
+    with_hud(host, id, |s| {
+        s.scale_start = now;
+        s.scale_ms = ms;
+        s.from_width = s.width;
+        s.from_height = s.height;
+        s.width = w;
+        s.height = h;
+    })?;
+    Ok(Value::Undefined)
+}
+
+/// `<hudelem> fadeOverTime(time)` (0x4c720, method 7): stamps
+/// `fadeStartTime`/`fadeTime`, snapshots the live `color` slot into
+/// `fromColor`, and takes no target of its own -- the script writes the new
+/// `color` afterwards.
+pub fn fade_over_time(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = hud_receiver(host, recv)?;
+    let [t] = args else {
+        return Err(ErrorKind::BadType("fadeOverTime takes a time"));
+    };
+    let ms = tween_ms(*t)?;
+    let from_color = crate::game::wire::hud_field_i32(host, id, "color");
+    let now = host.level_time_ms;
+    with_hud(host, id, |s| {
+        s.fade_start = now;
+        s.fade_ms = ms;
+        s.from_color = from_color;
+    })?;
+    Ok(Value::Undefined)
+}
+
+/// `<hudelem> moveOverTime(time)` (0x4c7ec, method 9): the same shape as
+/// `fadeOverTime` over `x`/`y` instead of `color`.
+pub fn move_over_time(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let id = hud_receiver(host, recv)?;
+    let [t] = args else {
+        return Err(ErrorKind::BadType("moveOverTime takes a time"));
+    };
+    let ms = tween_ms(*t)?;
+    let from_x = crate::game::wire::hud_field_i32(host, id, "x");
+    let from_y = crate::game::wire::hud_field_i32(host, id, "y");
+    let now = host.level_time_ms;
+    with_hud(host, id, |s| {
+        s.move_start = now;
+        s.move_ms = ms;
+        s.from_x = from_x;
+        s.from_y = from_y;
+    })?;
+    Ok(Value::Undefined)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::game::entity::HUD_OWNER_ALL;
     use crate::game::testing::fixture;
+    use vcod_gsc::Host;
 
     /// A HUD element is numbered in its own range and is not a gentity, so
     /// it must not show up in `getEntArray`'s walk.
@@ -443,11 +548,84 @@ mod tests {
         });
     }
 
+    /// Retail refuses a time above 60 s and rounds to the nearest ms rather
+    /// than up (docs/research/cod11-gsc-object-model.md 23.4): 61 s is a
+    /// param error and a time too small to round up still converts.
+    #[test]
+    fn tween_ms_refuses_past_60_seconds_and_rounds_to_nearest() {
+        assert!(tween_ms(Value::Float(61.0)).is_err());
+        assert_eq!(tween_ms(Value::Float(0.0001)), Ok(0));
+    }
+
     fn ent(v: Value) -> EntId {
         match v {
             Value::Entity(id) => id,
             other => panic!("expected a HUD element, got {other:?}"),
         }
+    }
+
+    /// The plant bar's shape (docs/research/cod11-gsc-object-model.md 23.4,
+    /// the mp_carentan-sd-plant-attacker fixture): `setShader` then
+    /// `scaleOverTime` snapshots the size it interrupts and stamps the
+    /// clock, and a non-positive time is the param error retail raises.
+    #[test]
+    fn scale_over_time_snapshots_the_size_and_stamps_the_clock() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            host.level_time_ms = 7_000;
+            let id = ent(new_hud_elem(&mut host, cx, None, &[]).unwrap());
+            let recv = Some(Target::Entity(id));
+            let white = Value::String(cx.intern_exact("white"));
+            set_shader(&mut host, cx, recv, &[white, Value::Int(0), Value::Int(8)]).unwrap();
+            scale_over_time(
+                &mut host,
+                cx,
+                recv,
+                &[Value::Int(5), Value::Int(288), Value::Int(8)],
+            )
+            .unwrap();
+            let s = host.ents.get(id).unwrap().hud.unwrap();
+            assert_eq!((s.width, s.height), (288, 8));
+            assert_eq!((s.from_width, s.from_height), (0, 8));
+            assert_eq!((s.scale_start, s.scale_ms), (7_000, 5_000));
+            assert!(scale_over_time(
+                &mut host,
+                cx,
+                recv,
+                &[Value::Int(0), Value::Int(1), Value::Int(1)]
+            )
+            .is_err());
+        });
+    }
+
+    /// `fadeOverTime` and `moveOverTime` take no target of their own: they
+    /// snapshot the script-visible `color`/`x`/`y` slots a script writes
+    /// separately (docs/research/cod11-gsc-object-model.md 23.4).
+    #[test]
+    fn fade_and_move_over_time_snapshot_colour_and_position() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            host.level_time_ms = 1_000;
+            let id = ent(new_hud_elem(&mut host, cx, None, &[]).unwrap());
+            let recv = Some(Target::Entity(id));
+            // x, y and color are script fields: write them the way a script does.
+            for (name, v) in [("x", Value::Int(320)), ("y", Value::Int(385))] {
+                let f = cx.intern_folded(name);
+                host.set_field(cx, id, f, v).unwrap();
+            }
+            fade_over_time(&mut host, cx, recv, &[Value::Float(1.0)]).unwrap();
+            move_over_time(&mut host, cx, recv, &[Value::Float(0.25)]).unwrap();
+            let s = host.ents.get(id).unwrap().hud.unwrap();
+            assert_eq!((s.fade_start, s.fade_ms), (1_000, 1_000));
+            assert_eq!(
+                (s.move_start, s.move_ms, s.from_x, s.from_y),
+                (1_000, 250, 320, 385)
+            );
+            assert_eq!(
+                s.from_color,
+                crate::game::wire::hud_field_i32(&host, id, "color")
+            );
+        });
     }
 
     /// `newClientHudElem` takes a player and nothing else: retail's own

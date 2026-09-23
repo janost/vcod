@@ -10,7 +10,24 @@ use crate::game::builtins;
 use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
 use crate::game::fields::{self, FieldType, Route};
 use crate::server::MAX_CLIENTS;
+use std::collections::HashMap;
+use std::rc::Rc;
+use vcod_common::collision::ModelTri;
+use vcod_common::net::msg::{Objective, MAX_OBJECTIVES};
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
+
+/// `ENTITYNUM_NONE`, the entity number an unattached objective record and an
+/// unowned HUD element both carry.
+pub const ENTITYNUM_NONE: i32 = 0x3ff;
+
+/// A cleared level objective record: what `objective_add` starts from and
+/// what `objective_delete` leaves.
+pub fn empty_objective() -> Objective {
+    Objective {
+        ent_num: ENTITYNUM_NONE,
+        ..Objective::default()
+    }
+}
 
 /// The builtins `GameHost::builtin` answers from its own match, folded: the
 /// env and io names, which have no family module of their own. Every other
@@ -41,6 +58,7 @@ pub fn is_builtin(name: &str) -> bool {
         || builtins::cvar::lookup(name).is_some()
         || builtins::precache::lookup(name).is_some()
         || builtins::score::lookup(name).is_some()
+        || builtins::objective::lookup(name).is_some()
         || BUILTINS.contains(&name)
 }
 
@@ -155,6 +173,19 @@ pub enum SimOp {
     /// `G_PlaySoundAlias`'s `ent->client` branch
     /// (docs/research/cod11-sound-system.md, section 9).
     Event { event: i32, parm: i32 },
+    /// A player's `setOrigin`, the unit lift already applied.
+    SetOrigin { origin: [f32; 3] },
+}
+
+/// `linkTo` and `unlink` on a client, queued the way `SimOp` is: the link
+/// pins the client's playerstate, which lives on the sim. The offset is the
+/// gap the client already stood at when it linked, which is what retail's
+/// `G_SetFixedLink` mode-2 arm re-applies every frame
+/// (docs/research/cod11-gsc-object-model.md, 23.2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LinkOp {
+    Link { parent: EntId, offset: [f32; 3] },
+    Unlink,
 }
 
 /// `level+0x29f0`'s three readings (docs/research/cod11-map-cycle.md
@@ -209,6 +240,20 @@ pub struct GameHost {
     /// with the origin the touch pass tests. `G_TouchTriggers` gates on it
     /// (`docs/research/cod11-gsc-object-model.md`, 8.2).
     pub client_pm_type: Vec<i32>,
+    /// Each client's `ps.on_ground`, mirrored in by `Server::replay_moves`
+    /// alongside `client_pm_type`, for `isOnGround`
+    /// (`docs/research/cod11-gsc-object-model.md`, 23.5).
+    pub client_on_ground: Vec<bool>,
+    /// Each client's eye and `[pitch, yaw]` aim as the tick left them, for
+    /// the aim trace `Server::tick` runs after the script frame.
+    pub client_aim: Vec<([f32; 3], [f32; 2])>,
+    /// What the last aim trace entered, for `isLookingAt`
+    /// (`docs/research/cod11-gsc-object-model.md`, 23.1).
+    pub client_lookat: Vec<Option<EntId>>,
+    /// `(trigger, toucher)` for every trigger that fired since the last
+    /// script frame, notified once that frame's clock is set
+    /// (`ScriptRuntime::run_frame`).
+    pub trigger_fires: Vec<(EntId, EntId)>,
     /// Each client's `ps.grenadeTimeLeft`, mirrored in by
     /// `Server::replay_moves` with the entity states, which is the last read
     /// of it before a kill this tick: what a death drops
@@ -221,6 +266,9 @@ pub struct GameHost {
     /// What `finishPlayerDamage` did to a client this frame, drained by
     /// `Server` after `run_frame` and applied to the sim once each.
     pub client_sim_ops: Vec<(usize, SimOp)>,
+    /// What `linkTo` and `unlink` did to a client this frame, drained by
+    /// `Server` after `run_frame`. Edges, like `client_sim_ops`.
+    pub client_link_ops: Vec<(usize, LinkOp)>,
     /// The map's weapon table, for the fields the builtins need: the ammo and
     /// clip indexes an op addresses, and the rounds it hands out.
     pub weapons: std::rc::Rc<crate::weapons::WeaponTable>,
@@ -325,6 +373,21 @@ pub struct GameHost {
     /// the `score` client field's own setter stands in for the first, since
     /// no other write moves a rank.
     pub ranks_dirty: bool,
+    /// `level+0x20`, the 16 objective records
+    /// (docs/research/cod11-gsc-object-model.md 23.3). A slot no
+    /// `objective_onentity` has attached reads `entNum` 0x3ff, which is what
+    /// `objective_add` and `objective_delete` write, so a fresh table starts
+    /// there rather than at the zeroed field's 0.
+    pub objectives: [Objective; MAX_OBJECTIVES],
+    /// `client+0x3e8`, each client's own copy of the 16 records, which is
+    /// what block 4 carries. The per-frame filter writes into it rather than
+    /// rebuilding it, so a record the filter blanks keeps the six fields the
+    /// last copy left there ([`GameHost::objectives_for`]).
+    pub client_objectives: Vec<[Objective; MAX_OBJECTIVES]>,
+    /// Each xmodel's collision triangles in its own frame, by `.model` name,
+    /// loaded through `fs` the first time a trace meets an entity carrying
+    /// it; `None` for a name that did not load or has no collision.
+    pub xmodel_collision: HashMap<String, Option<Rc<[ModelTri]>>>,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -345,6 +408,30 @@ impl GameHost {
             .collect()
     }
 
+    /// `xmodel_collision`'s entry for `name` (the `.model` value, `xmodel/`
+    /// prefix and all), loading it on first use.
+    pub fn xmodel_tris(&mut self, name: &str) -> Option<Rc<[ModelTri]>> {
+        if let Some(t) = self.xmodel_collision.get(name) {
+            return t.clone();
+        }
+        let tris = self.fs.as_ref().and_then(|fs| {
+            let model = vcod_common::xmodel::load(fs, name.strip_prefix("xmodel/")?).ok()?;
+            let at_rest = vcod_common::props::Placement {
+                model: String::new(),
+                origin: glam::Vec3::ZERO,
+                angles: glam::Vec3::ZERO,
+                scale: glam::Vec3::ONE,
+                color: [255; 4],
+                shadow_decal: false,
+            };
+            let mut out = Vec::new();
+            vcod_common::props::placed_collision_tris(&at_rest, &model, &mut out);
+            (!out.is_empty()).then(|| Rc::from(out))
+        });
+        self.xmodel_collision.insert(name.to_string(), tris.clone());
+        tris
+    }
+
     pub fn new(configstrings: Vec<String>) -> GameHost {
         let allocators = Allocators::seeded(&configstrings);
         GameHost {
@@ -359,9 +446,14 @@ impl GameHost {
             client_vitals: vec![Vitals::default(); MAX_CLIENTS],
             client_buttons: vec![0; MAX_CLIENTS],
             client_pm_type: vec![0; MAX_CLIENTS],
+            client_on_ground: vec![false; MAX_CLIENTS],
+            client_aim: vec![([0.0; 3], [0.0; 2]); MAX_CLIENTS],
+            client_lookat: vec![None; MAX_CLIENTS],
+            trigger_fires: Vec::new(),
             client_grenade_ms: vec![0; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
+            client_link_ops: Vec::new(),
             weapons: std::rc::Rc::new(crate::weapons::WeaponTable::empty()),
             allocators,
             cvars: crate::cvars::Cvars::new(),
@@ -387,6 +479,37 @@ impl GameHost {
             save_persist: false,
             team_scores: [0, 0],
             ranks_dirty: false,
+            objectives: [empty_objective(); MAX_OBJECTIVES],
+            client_objectives: vec![[Objective::default(); MAX_OBJECTIVES]; MAX_CLIENTS],
+            xmodel_collision: HashMap::new(),
+        }
+    }
+
+    /// One client's copy of the table, stepped the way the filter inlined in
+    /// `G_RunFrame` steps it: a record whose state is 0, or whose team is set
+    /// and is not the client's, contributes its state alone, and every other
+    /// one is copied whole (docs/research/cod11-gsc-object-model.md 23.3).
+    /// That is why a deleted slot keeps the icon and origin an earlier frame
+    /// copied over.
+    pub fn objectives_for(&mut self, slot: usize, team: i32) -> [Objective; MAX_OBJECTIVES] {
+        let table = self.objectives;
+        let Some(copy) = self.client_objectives.get_mut(slot) else {
+            return [Objective::default(); MAX_OBJECTIVES];
+        };
+        for (dst, src) in copy.iter_mut().zip(table) {
+            if src.state == 0 || (src.team_num != 0 && src.team_num != team) {
+                dst.state = 0;
+            } else {
+                *dst = src;
+            }
+        }
+        *copy
+    }
+
+    /// A client's copy back to the zeroed `gclient_t` the connect gives it.
+    pub fn reset_client_objectives(&mut self, slot: usize) {
+        if let Some(o) = self.client_objectives.get_mut(slot) {
+            *o = [Objective::default(); MAX_OBJECTIVES];
         }
     }
 
@@ -602,6 +725,9 @@ impl Host for GameHost {
         if let Some(f) = builtins::score::lookup(&folded) {
             return f(self, cx, recv, args);
         }
+        if let Some(f) = builtins::objective::lookup(&folded) {
+            return f(self, cx, recv, args);
+        }
         match folded.as_str() {
             "setcullfog" => builtins::env::set_cull_fog(&mut self.configstrings, cx, args),
             "ambientplay" => builtins::env::ambient_play(&mut self.configstrings, cx, args),
@@ -721,6 +847,7 @@ impl Host for GameHost {
                 Ok(())
             }
             Route::Engine { slot, ty } => {
+                let value = coerce(ty, value);
                 if !type_accepts(ty, value) {
                     return Err(ErrorKind::BadType("wrong type for an engine field"));
                 }
@@ -734,6 +861,7 @@ impl Host for GameHost {
                     return Err(ErrorKind::BadType("that entity has no client"));
                 };
                 let ty = fields::CLIENT_FIELDS[i].ty;
+                let value = coerce(ty, value);
                 if !type_accepts(ty, value) {
                     return Err(ErrorKind::BadType("wrong type for a client field"));
                 }
@@ -798,9 +926,28 @@ fn enum_index(cx: &Cx, names: &[&str], value: Value) -> Result<Value, ErrorKind>
     }
 }
 
-/// Which `Value` shapes each field type accepts. Retail converts in
-/// `Scr_SetGenericField`; we refuse a mismatch instead, so a script bug
-/// surfaces where retail would silently store a zero.
+/// The one conversion a field setter makes before the type check: a float
+/// into an int-typed slot, truncated toward zero.
+///
+/// INFERRED, and only from the fact that stock `sd.gsc` runs on retail: the
+/// hudelem `x` is type 0, an int, in retail's field table (object-model doc,
+/// "HUD element fields"), and the plant writes
+/// `320 - level.barsize / 2.0` into it, so `Scr_SetGenericField`'s int arm
+/// cannot be refusing a float. The rounding is not measured -- that value is
+/// 176.0, integral whichever way retail rounds -- and truncation toward zero
+/// is taken from the language doc's other numeric conversions. Open: a probe
+/// writing 1.7 into an int field and reading it back would pin it.
+fn coerce(ty: FieldType, v: Value) -> Value {
+    match (ty, v) {
+        (FieldType::Int, Value::Float(f)) => Value::Int(f as i32),
+        _ => v,
+    }
+}
+
+/// Which `Value` shapes each field type accepts once [`coerce`] has run.
+/// Retail converts more widely in `Scr_SetGenericField`; anything that is not
+/// the float-into-int above is refused here, so a script bug surfaces where
+/// retail would silently store a zero.
 fn type_accepts(ty: FieldType, v: Value) -> bool {
     use FieldType::*;
     match ty {
@@ -1146,8 +1293,9 @@ mod tests {
     }
 
     /// Writing the wrong type into a typed engine slot is refused. Retail
-    /// converts per field type in `Scr_SetGenericField`; we refuse rather than
-    /// silently coerce, so a script bug surfaces.
+    /// converts per field type in `Scr_SetGenericField`; only the
+    /// float-into-int [`coerce`] makes is followed here, and every other
+    /// mismatch is refused so a script bug surfaces.
     #[test]
     fn an_engine_slot_refuses_the_wrong_type() {
         let (mut vm, mut host) = fixture();

@@ -266,16 +266,32 @@ pub(crate) fn apply_weapon_op(
     }
 }
 
+/// One cmd that moved a client, as the touch pass after the moves needs it:
+/// where the cmd left the client, the buttons it carried, the `pm_type` the
+/// pass gates on, whether it left the client on the ground, and a player's
+/// view yaw (a spectator's `SpectatorThink` arm writes no angles).
+struct Touched {
+    slot: usize,
+    origin: [f32; 3],
+    buttons: u8,
+    pm_type: i32,
+    on_ground: bool,
+    yaw: Option<f32>,
+}
+
 /// What one client's usercmd replay did this tick, for the trace line.
 #[derive(Default, Clone, Copy)]
 struct MoveSummary {
     processed: usize,
     first_cmd_st: Option<i32>,
     last_cmd_st: Option<i32>,
-    /// The union of every replayed cmd's `buttons`, for the script's button
-    /// builtins: retail latches each cmd in `ClientThink` (0x41540), so a tap
-    /// inside a multi-cmd packet must not be lost to the packet's last cmd.
-    buttons: u8,
+    /// The last replayed cmd's buttons, for `useButtonPressed`: retail
+    /// stores each cmd's buttons on the client and the builtin tests that
+    /// word, so a tick that replayed several cmds answers with the last one,
+    /// not an OR (docs/research/cod11-gsc-object-model.md, 23.5). `None`
+    /// when the tick replayed nothing, so the mirror falls back to the
+    /// client's last received cmd.
+    last_buttons: Option<u8>,
 }
 
 /// Why a level load failed, which is what says whether the server can go on.
@@ -1736,6 +1752,9 @@ impl Server {
             }
         };
         cvars.set("g_gametype", &self.cfg.gametype);
+        // `SV_SpawnServer`'s `Cvar_Set("mapname", ...)` (map-cycle doc,
+        // section 3 step 15), which a script's `getCvar("mapname")` reads.
+        cvars.set("mapname", &self.cfg.map);
         cvars.set("sv_hostname", &self.cfg.hostname);
         cvars.set("sv_maxclients", &self.cfg.max_clients.to_string());
         cvars.set("debug", "0");
@@ -2528,7 +2547,10 @@ impl Server {
         if let Some(rt) = self.script.as_mut() {
             for (slot, c) in self.clients.iter().enumerate() {
                 if let Some(c) = c {
-                    rt.set_client_buttons(slot, c.last_cmd.buttons | moved[slot].buttons);
+                    rt.set_client_buttons(
+                        slot,
+                        moved[slot].last_buttons.unwrap_or(c.last_cmd.buttons),
+                    );
                 }
             }
             for te in impacts {
@@ -2704,6 +2726,57 @@ impl Server {
                 };
                 apply_weapon_op(sim, op, &weapons);
             }
+            // `linkTo` and `unlink`, before the re-anchor below so a link
+            // made this frame is already pinned on this frame's wire: both
+            // retail captures read the new `pm_type` on the next snapshot
+            // after the cmd (object-model doc, 23.2).
+            for (slot, op) in rt.take_link_ops() {
+                let Some(sim) = self
+                    .clients
+                    .get_mut(slot)
+                    .and_then(Option::as_mut)
+                    .and_then(|c| c.sim.as_mut())
+                else {
+                    continue;
+                };
+                sim.link_to = match op {
+                    crate::game::host::LinkOp::Link { parent, offset } => {
+                        Some(crate::spectate::Link {
+                            parent,
+                            offset,
+                            velocity: sim.ps.velocity.into(),
+                        })
+                    }
+                    crate::game::host::LinkOp::Unlink => None,
+                };
+            }
+            // `G_RunClient`'s re-anchor: a linked client's origin is the
+            // parent's plus the offset it linked at, and a held walk input
+            // moves it not at all. Its velocity is whatever it linked with:
+            // retail's plant capture holds 184,27 across the abort's two
+            // linked seconds and 0 under 92 forward cmds (23.2). A parent
+            // that is gone releases the link: `sd.gsc`'s plant success never
+            // unlinks, the bombzone's `delete()` is what frees the record.
+            for (slot, c) in self.clients.iter_mut().enumerate() {
+                let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) else {
+                    continue;
+                };
+                let Some(link) = sim.link_to else { continue };
+                match rt.entity_origin_of(link.parent) {
+                    Some(p) => {
+                        sim.ps.origin = glam::Vec3::from(p) + glam::Vec3::from(link.offset);
+                        sim.ps.velocity = link.velocity.into();
+                        // The mirror loop above ran before the re-anchor, so
+                        // script's copy is written again here. The anchor is
+                        // end-of-tick, where retail's is ahead of
+                        // `ClientThink`, so this tick's per-cmd touch passes
+                        // already ran at the un-anchored origins; the wire
+                        // carries the anchored one either way.
+                        rt.set_client_origin(slot, sim.origin());
+                    }
+                    None => sim.link_to = None,
+                }
+            }
             // What script did to each sim, applied once, then the health
             // mirror and the frame's damage feedback, in that order:
             // `P_DamageFeedback` reads the health the hit left.
@@ -2719,6 +2792,7 @@ impl Server {
                 };
                 match op {
                     crate::game::host::SimOp::Event { event, parm } => sim.add_event(event, parm),
+                    crate::game::host::SimOp::SetOrigin { origin } => sim.teleport(origin),
                     crate::game::host::SimOp::Damaged { .. } => {
                         let index = sim.ps.weapon as usize;
                         let inputs = anims.map(|anims| crate::spectate::AnimInputs {
@@ -2743,6 +2817,23 @@ impl Server {
                         sim.dead = v.dead;
                     }
                     sim.end_frame(self.sv_time_ms);
+                }
+            }
+            // `ClientEndFrame`'s aim trace, after the script frame and the
+            // mirrors so it reads the frame's final eye and aim; the fire it
+            // raises wakes its waiters next frame (object-model doc 23.1).
+            // The `pm_type` goes with it: a spawn above changed it with no
+            // cmd, and the runtime's gate is what clears a dead or
+            // spectating client's `isLookingAt`.
+            for (slot, c) in self.clients.iter().enumerate() {
+                if let Some(sim) = c.as_ref().and_then(|c| c.sim.as_ref()) {
+                    rt.set_client_pm_type(slot, sim.wire_pm_type());
+                    // The link the script frame made is only on the sim from
+                    // here, so the ground reading script sees next frame is
+                    // taken again after it.
+                    rt.set_client_on_ground(slot, sim.on_ground());
+                    rt.set_client_aim(slot, sim.ps.view().eye.into(), sim.aim_angles());
+                    rt.aim_lookat(slot, self.sv_time_ms);
                 }
             }
         }
@@ -2799,10 +2890,7 @@ impl Server {
         let weapons = self.weapon_table.clone();
         let now_ms = self.sv_time_ms;
         let mut moved = vec![MoveSummary::default(); self.clients.len()];
-        // One entry per cmd that moved a client, with where that cmd left it,
-        // the buttons it carried and the `pm_type` it left the client at,
-        // which is what the touch pass gates on.
-        let mut touched: Vec<(usize, [f32; 3], u8, i32)> = Vec::new();
+        let mut touched: Vec<Touched> = Vec::new();
         for (slot, m) in moved.iter_mut().enumerate() {
             let Some(c) = self.clients[slot].as_mut() else {
                 continue;
@@ -2905,12 +2993,20 @@ impl Server {
                     }
                 }
                 events.extend(raised);
-                touched.push((slot, sim.origin(), cmd.buttons, sim.wire_pm_type()));
+                touched.push(Touched {
+                    slot,
+                    origin: sim.origin(),
+                    buttons: cmd.buttons,
+                    pm_type: sim.wire_pm_type(),
+                    on_ground: sim.on_ground(),
+                    yaw: (sim.pm_type == crate::spectate::PmType::Normal)
+                        .then(|| sim.view_angles()[1]),
+                });
                 last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;
                 m.first_cmd_st.get_or_insert(cmd.server_time);
                 m.last_cmd_st = Some(cmd.server_time);
-                m.buttons |= cmd.buttons;
+                m.last_buttons = Some(cmd.buttons);
                 m.processed += 1;
             }
             if sim.ps.weapon != held {
@@ -2941,10 +3037,14 @@ impl Server {
         // because the host's copy is only mirrored from the sim after the
         // script frame, so the pass would otherwise test last tick's spot.
         if let Some(rt) = self.script.as_mut() {
-            for (slot, origin, buttons, pm_type) in touched {
-                rt.set_client_origin(slot, origin);
-                rt.set_client_pm_type(slot, pm_type);
-                rt.touch_triggers_with_buttons(slot, now_ms, buttons);
+            for t in touched {
+                rt.set_client_origin(t.slot, t.origin);
+                if let Some(yaw) = t.yaw {
+                    rt.set_client_yaw(t.slot, yaw);
+                }
+                rt.set_client_pm_type(t.slot, t.pm_type);
+                rt.set_client_on_ground(t.slot, t.on_ground);
+                rt.touch_triggers_with_buttons(t.slot, now_ms, t.buttons);
             }
         }
         // The state each player ended the tick in, mirrored onto the host for
@@ -3161,10 +3261,11 @@ impl Server {
             // arrays into the playerstate once per client per frame, so
             // they are read here rather than carried on the sim.
             let team = per_slot.get(slot).map_or(script::TEAM_SPECTATOR, |p| p.2);
-            if let Some(rt) = self.script.as_ref() {
+            if let Some(rt) = self.script.as_mut() {
                 let (archived, current) = rt.hud_elems(slot, team);
                 ps.arrays.hud_archived = archived;
                 ps.arrays.hud_current = current;
+                ps.arrays.objectives = rt.objectives_for(slot, team);
             }
             let frame = snapshot::Snapshot {
                 server_time: self.sv_time_ms,
@@ -3680,6 +3781,15 @@ mod tests {
             "the server's own copy is a frame behind the script at slots {:?}",
             stale(&sv.configstrings)
         );
+    }
+
+    /// The level script's cvar table carries `mapname`, the probes' only way
+    /// to tell which map they run on; it used to read "".
+    #[test]
+    fn a_level_script_reads_the_map_name_cvar() {
+        let sv = Server::new(cfg(), Instant::now());
+        let cvars = sv.cvars(&vcod_common::pk3::Pk3Fs::empty());
+        assert_eq!(cvars.get("mapname"), "mp_carentan");
     }
 
     /// `map_rotate`'s `gametype` token is a `Cvar_Set` (doc section 5.2), so
@@ -4721,6 +4831,46 @@ mod tests {
         assert_eq!(ring.events[0], 172, "EV_SOUND_ALIAS");
         let alias = ring.parms[0] as usize + 524;
         assert_eq!(sv.configstring(alias), "minefield_click");
+    }
+
+    /// `getPlant` reads a planter's `self.angles` for the direction of its
+    /// first trace, and `ClientThink_real` writes a player's after every cmd:
+    /// the view's yaw with pitch and roll 0
+    /// (docs/research/cod11-gsc-object-model.md 23.6). The spawn's yaw is not
+    /// what it reads once the client has turned.
+    #[test]
+    fn a_player_s_angles_field_carries_its_view_yaw() {
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test("main() {}"),
+        );
+        let mut nc = begun(&mut sv, now);
+        sv.tick(now);
+        sv.place_client(0, [0.0, 0.0, 64.0], 90.0);
+        // Pitch 22.5 down, yaw 45 on the wire; the placed spawn's delta
+        // turns the yaw into 135.
+        let ack = nc.incoming_sequence as i32;
+        let cmd = UserCmd {
+            server_time: 100,
+            angles: [4096, 8192, 0],
+            ..Default::default()
+        };
+        let pkt = nc
+            .build_out(
+                i32::from(sv.server_id),
+                ack,
+                0,
+                &move_ops(sv.checksum_feed, ack, cmd),
+                &Huffman::new(),
+            )
+            .unwrap();
+        sv.handle_packet(addr(5), &pkt, now);
+        sv.tick(now + Duration::from_millis(50));
+        let rt = sv.script.as_mut().unwrap();
+        let ent = rt.client_entity(0).expect("client 0 has an entity");
+        assert_eq!(rt.field_str(ent, "angles"), "(0.00, 135.00, 0.00)");
     }
 
     /// The gap `_minefields.gsc` puts between the warning click and the

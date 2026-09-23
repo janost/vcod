@@ -14,7 +14,7 @@
 use crate::configstrings::{script_menu_index, weapon_index, CsRange};
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::entity::ThinkFn;
-use crate::game::host::{GameHost, WeaponOp};
+use crate::game::host::{GameHost, SimOp, WeaponOp};
 use crate::weapons::weapon_slot;
 use vcod_common::pmove;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
@@ -37,10 +37,13 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("setviewmodel", set_view_model),
     ("getviewmodel", get_view_model),
     ("usebuttonpressed", use_button_pressed),
+    ("isonground", is_on_ground),
+    ("islookingat", is_looking_at),
     ("getcurrentweapon", get_current_weapon),
     ("cloneplayer", clone_player),
     ("dropitem", drop_item),
     ("closemenu", close_menu),
+    ("setorigin", set_player_origin),
 ];
 
 /// How long a dropped weapon lives before the server frees it.
@@ -60,12 +63,14 @@ const DROPPED_ITEM_MS: i32 = 30_000;
 /// use button, which every stock `respawn()` loop polls. `Server` mirrors
 /// the buttons onto the host before the frame.
 ///
-/// That mirror is the OR of every cmd the tick carried, while the touch pass
-/// reads one cmd's bits. The two agree at the instant a `trigger_use` fires;
-/// they can disagree only when a tick processes several cmds and the use bit
-/// changes mid-tick. `sd.gsc`'s plant loop pairs the two — woken by the
-/// trigger notify, then polling this — so stage 3 has to decide which
-/// reading it wants rather than inherit this one by accident.
+/// Retail stores each cmd's buttons on the client (`ClientThink_real`
+/// 0x40129) and the builtin tests that word (0x44ed2), so a frame with
+/// several cmds answers with its last one, not an OR
+/// (docs/research/cod11-gsc-object-model.md, 23.5). The touch pass reads
+/// each cmd's own bits, so a tick replaying [use, no-use] fires the trigger on
+/// the first cmd while this answers 0. The two agree on the cmd the frame ends
+/// on, as retail's do: the notified thread runs at the next script frame, when
+/// `client+0x21e8` holds the frame's last cmd.
 pub fn use_button_pressed(
     host: &mut GameHost,
     _cx: &mut Cx,
@@ -75,6 +80,58 @@ pub fn use_button_pressed(
     let slot = client_receiver(host, recv)?;
     let held = host.client_buttons[slot] & vcod_common::net::msg::BUTTON_USE != 0;
     Ok(Value::Int(i32::from(held)))
+}
+
+/// `self setOrigin(origin)`, a player method only (0x43480): the origin one
+/// unit above the argument, the teleport bit flipped, velocity kept
+/// (docs/research/cod11-gsc-object-model.md, 23.2). The script's copy moves
+/// now so a read later this frame sees it; the sim's is queued.
+pub fn set_player_origin(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let Some(&Value::Vector([x, y, z])) = args.first() else {
+        return Err(ErrorKind::BadType("setOrigin takes a vector"));
+    };
+    let origin = [x, y, z + 1.0];
+    let field = cx.intern_folded("origin");
+    host.set_field(cx, EntId(slot as u32), field, Value::Vector(origin))?;
+    host.client_sim_ops
+        .push((slot, SimOp::SetOrigin { origin }));
+    Ok(Value::Undefined)
+}
+
+/// `self isOnGround()` (`PlayerCmd_isOnGround`, 0x45014): `ps.groundEntityNum
+/// != 0x3ff` (docs/research/cod11-gsc-object-model.md, 23.5). `Server`
+/// mirrors `ps.on_ground` onto the host alongside `client_pm_type`.
+pub fn is_on_ground(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    Ok(Value::Int(host.client_on_ground[slot] as i32))
+}
+
+/// `self isLookingAt(ent)` (0x4576c): whether `ent` is what the last aim
+/// trace entered. No trace or cone of its own
+/// (docs/research/cod11-gsc-object-model.md, 23.1).
+pub fn is_looking_at(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let looking = match args.first() {
+        Some(Value::Entity(id)) => host.client_lookat[slot] == Some(*id),
+        _ => false,
+    };
+    Ok(Value::Int(i32::from(looking)))
 }
 
 /// `self getCurrentWeapon()` (`PlayerCmd_getCurrentWeapon`): the name of the
@@ -765,6 +822,57 @@ mod tests {
             let name = Value::String(cx.intern_exact("xmodel/viewmodel_hands_us"));
             assert!(set_view_model(&mut host, cx, recv, &[name]).is_err());
             assert!(get_view_model(&mut host, cx, recv, &[]).is_err());
+        });
+    }
+
+    /// `isOnGround` answers the host's mirror of `ps.on_ground`, and refuses
+    /// a receiver with no `gclient_t` the way every other client builtin does.
+    #[test]
+    fn is_on_ground_reads_the_host_mirror_and_refuses_a_non_client() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
+            let recv = Some(Target::Entity(c));
+            host.client_on_ground[0] = true;
+            assert_eq!(
+                is_on_ground(&mut host, cx, recv, &[]).unwrap(),
+                Value::Int(1)
+            );
+            host.client_on_ground[0] = false;
+            assert_eq!(
+                is_on_ground(&mut host, cx, recv, &[]).unwrap(),
+                Value::Int(0)
+            );
+
+            let prop = host.ents.spawn(cx).unwrap();
+            let non_client = Some(Target::Entity(prop));
+            assert!(is_on_ground(&mut host, cx, non_client, &[]).is_err());
+        });
+    }
+
+    /// `isLookingAt` answers the host's mirror of the last aim trace against
+    /// the entity asked about, 0 for any other argument, and refuses a
+    /// receiver with no `gclient_t`.
+    #[test]
+    fn is_looking_at_reads_the_host_mirror_of_the_aim_trace() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
+            let recv = Some(Target::Entity(c));
+            let zone = host.ents.spawn(cx).unwrap();
+            let other = host.ents.spawn(cx).unwrap();
+            host.client_lookat[0] = Some(zone);
+            let ask = |host: &mut GameHost, cx: &mut Cx, args: &[Value]| {
+                is_looking_at(host, cx, recv, args).unwrap()
+            };
+            assert_eq!(ask(&mut host, cx, &[Value::Entity(zone)]), Value::Int(1));
+            assert_eq!(ask(&mut host, cx, &[Value::Entity(other)]), Value::Int(0));
+            assert_eq!(ask(&mut host, cx, &[Value::Int(3)]), Value::Int(0));
+            host.client_lookat[0] = None;
+            assert_eq!(ask(&mut host, cx, &[Value::Entity(zone)]), Value::Int(0));
+
+            let non_client = Some(Target::Entity(other));
+            assert!(is_looking_at(&mut host, cx, non_client, &[Value::Entity(zone)]).is_err());
         });
     }
 

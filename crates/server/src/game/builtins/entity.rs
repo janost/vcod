@@ -6,7 +6,7 @@
 
 use crate::configstrings::CsRange;
 use crate::game::entity::{ThinkFn, FIRST_HUD_ELEM};
-use crate::game::host::{GameHost, SpawnMode, SpawnRequest};
+use crate::game::host::{GameHost, LinkOp, SpawnMode, SpawnRequest};
 use crate::server::MAX_CLIENTS;
 use glam::Vec3;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
@@ -36,9 +36,12 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("getorigin", get_origin),
     ("getentitynumber", get_entity_number),
     ("isplayer", is_player),
+    ("isalive", is_alive),
     ("isdefined", is_defined),
     ("istouching", is_touching),
     ("placespawnpoint", place_spawnpoint),
+    ("linkto", link_to),
+    ("unlink", unlink),
 ];
 
 pub fn lookup(folded: &str) -> Option<Builtin> {
@@ -501,16 +504,47 @@ pub fn is_player(
     Ok(Value::Int((id.0 < MAX_CLIENTS as u32) as i32))
 }
 
-/// `isDefined(x)`: false only for a missing argument or `undefined` itself.
+/// `isAlive(ent)` (`.so` 0x5cf8c): 0 for an argument that is not an entity,
+/// otherwise `health > 0` (docs/research/cod11-gsc-object-model.md, 23.5). A
+/// client's health lives on the host's vitals array, not the generic field
+/// table; any other entity reads its `health` field as an int.
+pub fn is_alive(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    _recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let Some(Value::Entity(id)) = args.first() else {
+        return Ok(Value::Int(0));
+    };
+    let id = *id;
+    let alive = match host.ents.get(id) {
+        Some(e) if e.client.is_some() => host.client_vitals[id.0 as usize].health > 0,
+        Some(_) => {
+            let health = cx.intern_folded("health");
+            matches!(host.get_field(cx, id, health), Value::Int(n) if n > 0)
+        }
+        None => false,
+    };
+    Ok(Value::Int(alive as i32))
+}
+
+/// `isDefined(x)`: false for a missing argument, `undefined` itself, and a
+/// handle whose slot is free. A reused slot reads live again, where retail's
+/// entity generation counter would not; the S&D gate hit the HUD element case
+/// at `sd.gsc:1850`/`2019` (gsc-language doc, section 10).
 pub fn is_defined(
-    _host: &mut GameHost,
+    host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
-    Ok(Value::Int(
-        !matches!(args.first(), None | Some(Value::Undefined)) as i32,
-    ))
+    let defined = match args.first() {
+        None | Some(Value::Undefined) => false,
+        Some(Value::Entity(id)) => host.ents.get(*id).is_some(),
+        Some(_) => true,
+    };
+    Ok(Value::Int(defined as i32))
 }
 
 /// `isTouching(other)`: a real box overlap between the receiver's absolute
@@ -531,6 +565,57 @@ pub fn is_touching(
     Ok(Value::Int(
         crate::game::trigger::boxes_overlap(ba, bb) as i32
     ))
+}
+
+/// `self linkTo(parent [, tag, originOffset, anglesOffset])` (0x59cc4). The
+/// offset is the gap the receiver already stands at, which is what retail's
+/// fixed-link arm re-applies off the parent every frame; the sim owns the
+/// playerstate, so this only queues the edge
+/// (docs/research/cod11-gsc-object-model.md, 23.2).
+///
+/// The receiver must be a client: retail gates on its svFlags 0x20 and
+/// `ClientSpawn` is the only writer of that bit a stock MP script reaches,
+/// since neither `sd.gsc` nor `re.gsc` calls `enableLinkTo`.
+pub fn link_to(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = super::client::client_receiver(host, recv)?;
+    let Some(&Value::Entity(parent)) = args.first() else {
+        return Err(ErrorKind::BadType("linkTo needs an entity to link to"));
+    };
+    // The tag and the two offset vectors retail's four-argument form takes
+    // are accepted and ignored: no stock script passes them.
+    let origin = cx.intern_folded("origin");
+    let at = |host: &mut GameHost, cx: &mut Cx, id| match host.get_field(cx, id, origin) {
+        Value::Vector(v) => v,
+        _ => [0.0; 3],
+    };
+    let child = at(host, cx, EntId(slot as u32));
+    let anchor = at(host, cx, parent);
+    let offset = [
+        child[0] - anchor[0],
+        child[1] - anchor[1],
+        child[2] - anchor[2],
+    ];
+    host.client_link_ops
+        .push((slot, LinkOp::Link { parent, offset }));
+    Ok(Value::Undefined)
+}
+
+/// `self unlink()` (0x5d594). A no-op on an unlinked player: retail's
+/// `G_EntUnlink` returns having done nothing without a link record.
+pub fn unlink(
+    host: &mut GameHost,
+    _cx: &mut Cx,
+    recv: Option<Target>,
+    _args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = super::client::client_receiver(host, recv)?;
+    host.client_link_ops.push((slot, LinkOp::Unlink));
+    Ok(Value::Undefined)
 }
 
 #[cfg(test)]
@@ -912,6 +997,74 @@ mod tests {
         });
     }
 
+    /// `isAlive` reads a client's health off the host's vitals array, a
+    /// non-entity argument answers 0, and any other entity reads its own
+    /// `health` field.
+    #[test]
+    fn is_alive_reads_health_and_refuses_nothing() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let player = host.ents.spawn_client(cx, 0, None).unwrap();
+            host.client_vitals[0].health = 100;
+            assert_eq!(
+                is_alive(&mut host, cx, None, &[Value::Entity(player)]).unwrap(),
+                Value::Int(1)
+            );
+            host.client_vitals[0].health = 0;
+            assert_eq!(
+                is_alive(&mut host, cx, None, &[Value::Entity(player)]).unwrap(),
+                Value::Int(0)
+            );
+            assert_eq!(
+                is_alive(&mut host, cx, None, &[Value::Undefined]).unwrap(),
+                Value::Int(0)
+            );
+            let prop = host.ents.spawn(cx).unwrap();
+            let h = cx.intern_folded("health");
+            host.set_field(cx, prop, h, Value::Int(50)).unwrap();
+            assert_eq!(
+                is_alive(&mut host, cx, None, &[Value::Entity(prop)]).unwrap(),
+                Value::Int(1)
+            );
+        });
+    }
+
+    /// A handle to a freed slot reads undefined: `sd.gsc:1850` (the plant) and
+    /// `2019` (the defuse) test `isDefined(other.progressbackground)` on the
+    /// handle an abort `destroy()`ed, and make a fresh element only on false.
+    /// The same for a `delete()`d entity once its deferred free has run.
+    #[test]
+    fn is_defined_reads_zero_on_a_freed_hud_elem_and_a_freed_entity() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let hud = super::super::hud::new_hud_elem(&mut host, cx, None, &[]).unwrap();
+            assert_eq!(
+                is_defined(&mut host, cx, None, &[hud]).unwrap(),
+                Value::Int(1)
+            );
+            let Value::Entity(hud_id) = hud else { panic!() };
+            super::super::hud::destroy(&mut host, cx, Some(Target::Entity(hud_id)), &[]).unwrap();
+            assert_eq!(
+                is_defined(&mut host, cx, None, &[hud]).unwrap(),
+                Value::Int(0)
+            );
+
+            let e = host.ents.spawn(cx).unwrap();
+            let ent = Value::Entity(e);
+            delete(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            assert_eq!(
+                is_defined(&mut host, cx, None, &[ent]).unwrap(),
+                Value::Int(1),
+                "delete() defers the free, so the handle still reads defined"
+            );
+            host.run_entity_thinks(host.level_time_ms + DELETE_DEFER_MS);
+            assert_eq!(
+                is_defined(&mut host, cx, None, &[ent]).unwrap(),
+                Value::Int(0)
+            );
+        });
+    }
+
     /// `getEntityNumber` on a HUD element is a type error: HUD elements have
     /// their own field table and are not gentities
     /// (docs/research/cod11-gsc-object-model.md section 3).
@@ -983,6 +1136,63 @@ mod tests {
                 Ok(Value::Int(0)),
                 "116 clears the zone's 100 reach plus the player's own 15"
             );
+        });
+    }
+
+    /// `linkTo` takes the offset the client already stands at and `unlink`
+    /// releases it; both are edges the sim applies, and only a client links
+    /// in stock MP (object-model doc, 23.2).
+    #[test]
+    fn link_to_queues_the_offset_and_unlink_queues_the_release() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let player = host.ents.spawn_client(cx, 0, None).unwrap();
+            let o = cx.intern_folded("origin");
+            host.set_field(cx, player, o, Value::Vector([10.0, 0.0, 0.0]))
+                .unwrap();
+            let zone = host.ents.spawn(cx).unwrap();
+            host.set_field(cx, zone, o, Value::Vector([0.0, 0.0, 0.0]))
+                .unwrap();
+            link_to(
+                &mut host,
+                cx,
+                Some(Target::Entity(player)),
+                &[Value::Entity(zone)],
+            )
+            .unwrap();
+            assert_eq!(
+                host.client_link_ops,
+                vec![(
+                    0,
+                    LinkOp::Link {
+                        parent: zone,
+                        offset: [10.0, 0.0, 0.0]
+                    }
+                )]
+            );
+            unlink(&mut host, cx, Some(Target::Entity(player)), &[]).unwrap();
+            assert_eq!(host.client_link_ops[1], (0, LinkOp::Unlink));
+            assert!(
+                link_to(
+                    &mut host,
+                    cx,
+                    Some(Target::Entity(player)),
+                    &[Value::Undefined]
+                )
+                .is_err(),
+                "linkTo needs an entity to link to"
+            );
+            // Only a client links: retail gates on the receiver's svFlags
+            // 0x20, which `ClientSpawn` is what sets in stock MP (23.2).
+            assert!(link_to(
+                &mut host,
+                cx,
+                Some(Target::Entity(zone)),
+                &[Value::Entity(zone)]
+            )
+            .is_err());
+            // `unlink()` on an unlinked player is a no-op, not an error.
+            assert!(unlink(&mut host, cx, Some(Target::Entity(player)), &[]).is_ok());
         });
     }
 }

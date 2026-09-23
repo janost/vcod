@@ -13,6 +13,7 @@ use vcod_common::net::events::dir_to_byte;
 use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::playerpose::pose_player;
+use vcod_common::pmove::PlayerState;
 use vcod_common::weapon::WeaponDef;
 use vcod_gsc::EntId;
 
@@ -299,6 +300,12 @@ fn bullet_mod(def: &WeaponDef) -> (&'static str, i32) {
     }
 }
 
+/// Where a shot, a swing or a throw starts: the eye plus lean, each
+/// component truncated toward zero (combat doc 2.1).
+pub fn muzzle_point(ps: &PlayerState) -> Vec3 {
+    ps.view().eye.trunc()
+}
+
 /// A player's shot: from the eye along the view with spread, against the
 /// world and every live player's box, and then against the bones of whoever
 /// the box test found (combat doc, sections 2 and 3). `sims` is every client
@@ -330,8 +337,7 @@ pub fn bullet_fire(
     let Some((_, me)) = sims.iter().find(|(slot, _)| *slot == shooter) else {
         return none;
     };
-    // The muzzle: eye plus lean, each component rounded (2.1).
-    let muzzle = me.ps.view().eye.round();
+    let muzzle = muzzle_point(&me.ps);
     let (yaw, pitch) = aim_radians(aim);
     let forward = Vec3::new(
         pitch.cos() * yaw.cos(),
@@ -532,7 +538,7 @@ pub fn melee_fire(
     let Some((_, me)) = sims.iter().find(|(slot, _)| *slot == attacker) else {
         return none;
     };
-    let muzzle = me.ps.view().eye.round();
+    let muzzle = muzzle_point(&me.ps);
     let (yaw, pitch) = aim_radians(aim);
     let forward = Vec3::new(
         pitch.cos() * yaw.cos(),

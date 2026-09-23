@@ -86,6 +86,7 @@ the real corpus.
 | `#using_animtree("name");` | 114 | `animscripts/init.gsc:26` `#using_animtree ("generic_human");` (a space before the paren is legal) |
 | `/# ... #/` developer blocks | 32 | `_spawner.gsc:555` `/#[[anim.println]]("...");#/` |
 | vector literals `(x, y, z)` | 86 | `animscripts/utility.gsc:234` `poseOffset = (0,0,0);` |
+| vector component read `vec[0]`..`vec[2]` | 42 | `_utility.gsc:178` `vectorScale`, `_utility.gsc:250` `orientToNormal`; runs on every stock S&D plant. Reads a float. Counted as files with a constant `[0]`, `[1]` or `[2]` on an entity vector field (`.origin`, `.angles`: 24 files, 16 of them `.origin`) or on a local or parameter holding a vector (an assignment from a vector literal, a vector field or a vector-returning builtin, then read by hand), comments stripped; 27 of the 42 are under `maps/`. The out-of-range and non-integer key are a §10 entry |
 | empty array init `x = [];` | 157 | `dm.gsc:104` `level.healthqueue = [];` |
 | cast `(int)` | 12 | `_window.gsc:64` `xcount = (int)(yendorg[1]-windoworg[1])/spacing;` |
 | cast `(float)` | 17 | `_tankdrive.gsc:236` `x = (float) height;` |
@@ -740,9 +741,9 @@ such wait between its `openMenu` and its loop.
 
 ## 10. Divergences kept as documentation, not code
 
-Eleven places where the implementation made a deliberate call the corpus
+Twelve places where the implementation made a deliberate call the corpus
 cannot settle, recorded here rather than silently baked into behaviour that
-looks authoritative. A twelfth is gone: `delete()` used to free the entity
+looks authoritative. A thirteenth is gone: `delete()` used to free the entity
 on the spot where retail defers it, and the entity think scheduler stage 3
 added closes that (section 14 of
 `docs/research/cod11-gsc-object-model.md`, and `probe_delete` in §9).
@@ -842,6 +843,13 @@ added closes that (section 14 of
   counter that drifted to a float is likelier than a script meaning to key
   by a fractional value. Retail's behaviour here is unmeasured; it may well
   be fatal.
+- **A vector refuses every key but the integers 0, 1 and 2.** `LoadIndex`
+  (`crates/gsc/src/vm/interp.rs`) reads `v[0]`..`v[2]` as a float and
+  answers any other key on a vector, an out-of-range integer or a float
+  among them, with a `BadType`; a store into a vector component is refused
+  the same way. So a float key on a vector is refused where a float key on
+  an array truncates (the entry above). Retail's answer to both is
+  unmeasured; the corpus pins only the in-range integer read (§2).
 - **Every endon kill lands before any notify wake.** `Vm::notify`
   (`crates/gsc/src/vm/sched.rs`) makes two passes over `threads` — kills
   first, then wakes — so a thread that has both an `endon` and a `waittill`
@@ -860,7 +868,7 @@ added closes that (section 14 of
   which the interpreter starts as soon as the builtin returns and before the
   calling thread's next instruction, so a script that damages and then reads
   `self.health` sees what the callback left, the way retail's synchronous call
-  does. Four things around it are still divergences, and every retail half
+  does. Three things around it are still divergences, and every retail half
   below is `docs/research/cod11-combat.md` section 14's, read out of the two
   functions there:
   - **A body between the blast and the victim does not shield it.** VERIFIED:
@@ -884,16 +892,11 @@ added closes that (section 14 of
     height (14.3). The host carries no stance, so a crouched or prone player
     is measured as if he stood. That moves the five probe points, not the
     distance, which is origin to origin either way.
-  - **The attacker reaches the callback as `undefined`.** VERIFIED: the
-    builtin passes `&g_entities[1022]`, the world entity (14.2), which no
-    script this VM runs can hold. INFERRED, since it is a branch condition:
-    the stock callback's own `isPlayer(eAttacker)` test takes the same branch
-    for both. vcod's fifth attacker argument is no
-    longer honoured, and no call in the shipped corpus passes one. VERIFIED:
-    retail reads its four arguments by index, `Scr_GetVector(0)` and
-    `Scr_GetFloat(1)` to `(3)` (14.2). INFERRED, from the absence of any arity
-    check in that body: a fifth argument is ignored rather than refused, which
-    is what vcod does with one.
+  - **Not a divergence: a fifth argument is ignored.** VERIFIED: retail
+    reads its four arguments by index, `Scr_GetVector(0)` and `Scr_GetFloat(1)` to `(3)`
+    (14.2). INFERRED, from the absence of any arity check in that body: a
+    fifth argument is ignored rather than refused, which is what vcod does
+    with one. No call in the shipped corpus passes one.
 - **Of the `SP_` layer, only what the wire can see runs.**
   `spawn_entities_from_string` (`crates/server/src/game/spawn.rs`) reproduces
   `G_CallSpawn`'s third case for the five classnames whose `SP_` function is
@@ -920,8 +923,14 @@ added closes that (section 14 of
   the new occupant's fields under the old handle instead of hitting an
   error. Before slot reuse landed, the same stale handle pointed at a dead
   slot and failed cleanly instead; this branch made an existing gap
-  reachable rather than opening a new one. Not reachable by any script in
-  the corpus today, since nothing in it holds an entity handle across a
-  delete and a respawn, but a real hazard for a third-party script that
-  does. Closing it needs a generation counter stored beside the slot and
-  checked on every handle dereference, not a fix to the free list itself.
+  reachable rather than opening a new one. The stock S&D script reaches it
+  with two attackers. INFERRED, off `sd.gsc`'s `bombzone_think` (the
+  `isdefined(other.progressbackground)` test at 1850, the abort's
+  `destroy()` at 1930) and vcod's free list, which hands a freed HUD slot to
+  the next allocation at once, lowest free first, with no deferral:
+  attacker 1 aborts at bombzone A and destroys its bar elements, attacker 2
+  starts at B and is given those slots, attacker 1 retries, and the test
+  reads 1 on attacker 2's element, so attacker 1 makes no bar of its own and
+  its `setShader` lands on attacker 2's. Closing it needs a generation
+  counter stored beside the slot and checked on every handle dereference,
+  not a fix to the free list itself.

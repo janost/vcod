@@ -1686,14 +1686,838 @@ sets no cursor hint"). The two readings agree: the kind fires off an aim
 trace, not off contact.
 
 vcod acts on that. `trigger::touched` skips a `LookAt` row, so ours notifies
-no `"trigger"` on contact either; it also runs no aim trace, so ours notifies
-a lookat on nothing at all. VERIFIED, read out of
-`crates/server/src/game/trigger.rs`. The aim-trace half is unmodelled and
-unmeasured — no capture of a retail `trigger_lookat` firing has been taken,
-and mp_pavlov's is deleted under `dm` before the committed A/B capture could
-reach it.
+no `"trigger"` on contact either. VERIFIED, read out of
+`crates/server/src/game/trigger.rs`. The aim trace that does fire one is 23.1,
+and what it did on a live run against ours is 23.7.
+
+## 23. The aim trace, linking, objectives and the HUD tweens
+
+What stage 3 of the gsc gameplay program needs out of the module: the trace
+that fires a `trigger_lookat`, the link that pins a planting player to a bomb,
+the objective table behind the compass icons, and the three hudelem tweens.
+Same conventions as everywhere above: `game.mp.i386.so`, addresses
+module-relative.
+
+### 23.1 The aim trace and `isLookingAt`
+
+VERIFIED: `G_RunFrame` (0x50478) calls `Scr_RunCurrentThreads` at 0x50653 and
+calls `ClientEndFrame` per in-use client at 0x50abd. INFERRED, off that
+ordering: the script frame runs before the aim trace, so an `isLookingAt` read
+in script frame N answers off the trace `ClientEndFrame` ran at the end of
+frame N-1.
+
+VERIFIED: `ClientEndFrame` (0x40e98) compares `client+0x20ec` against 2
+(0x40ebe) and sessionstate (`client+0x20d0`) against 3 (0x40ed1) and 2
+(0x40f24), calls `SpectatorClientEndFrame` at 0x40f30, and calls
+`G_CheckForPreventFriendlyFire` (0x4110d) and `G_CheckForCursorHints`
+(0x41119). INFERRED, off the `jne` at 0x40ec5 and the jumps to the epilogue
+at 0x40f1f and 0x40f35: the function returns at once unless `client+0x20ec`
+reads 2, sessionstate 3 takes the intermission arm and 2 the spectator one,
+and only the fall-through reaches the two calls.
+
+`G_CheckForPreventFriendlyFire` (0x4f88c), claim by claim:
+
+- VERIFIED: it stores 0 to `client+0x2260` (0x4f8a1).
+- VERIFIED: it compares the byte `ent+0x172` against 0 (0x4f8ab) and the
+  `jne` at 0x4f8b2 targets the epilogue at 0x4f9b7. INFERRED, off that branch:
+  a non-zero `ent+0x172` makes the function return having done nothing.
+- VERIFIED: it calls `CalcMuzzlePoints(ent, &out)` (0x4f8c0).
+- VERIFIED: `CalcMuzzlePoints` (0x693f4) reads the aim angles at
+  `client+0x220c` and `+0x2210` (0x69424, 0x6942d) and the view height at
+  `client+0xc8` (0x6941b).
+- VERIFIED: it calls `G_AddLean` (0x6947d) and rewrites each muzzle
+  component through `fistp` and `fild` under a control word `| 0xc00`
+  (0x6948c, 0x694b4, 0x694dc), rounding control 11, which truncates toward
+  zero. INFERRED, off those three sitting past the call: the lean is added
+  first, so the trace starts at the leaned eye truncated on every axis.
+- VERIFIED: the end point is the muzzle plus forward times 8192.0 (`.rodata`
+  0x7547c, arithmetic 0x4f8fe..0x4f931).
+- VERIFIED: it calls `trap_LocationalTrace` with contents mask 0x20000001
+  (0x4f949) and again with 0x22802001 (0x4f96e).
+- VERIFIED: after each trace it compares the result's entity-number word
+  against 0x3fd (0x4f951, 0x4f976), and both `ja`s (0x4f957, 0x4f97c) target
+  the epilogue at 0x4f9b7. INFERRED, off those two branches: a hit entity
+  number above 0x3fd, which is the world or no hit, ends the function.
+- VERIFIED: it compares the hit entity's classname word
+  (`g_entities[n]+0x176`, stride 0x314) against `scr_const+0x98` (0x4f995),
+  and the `jne` at 0x4f99c targets the same epilogue.
+- VERIFIED: it stores the entity pointer to `client+0x2260` (0x4f9aa) and
+  calls `G_Trigger(trigger, ent)` (0x4f9b2). INFERRED, off the `jne` above:
+  those two run only when the classname matches.
+
+VERIFIED: the sixth argument to both traces is a priority-map pointer, not 0.
+The two `R_386_32` relocations sit at 0x4f8ea and 0x4f8fa, inside the
+immediates of the stores at 0x4f8e7 and 0x4f8f7: the store at 0x4f8e7 writes
+`riflePriorityMap` and the one at 0x4f8f7 writes `bulletPriorityMap`, both to
+the same slot the traces push. VERIFIED: the function tests the held weapon at
+`client+0xb0` (0x4f8d7) and compares `BG_GetInfoForWeapon`'s record `+0x2c0`
+against 0 (0x4f8ee).
+
+INFERRED, off those two branches: the argument is `riflePriorityMap` when the
+weapon is non-zero and its record's `+0x2c0` is non-zero, `bulletPriorityMap`
+otherwise.
+
+VERIFIED: `scr_const+0x98` is `Scr_AllocString("trigger_lookat")`, the string
+at 0x7620c, filled by `GScr_LoadConsts` (0x58550).
+
+INFERRED, off the two masks alone: the first trace decides whether anything
+solid or a lookat volume is reached before the world, the second whether a
+body stands in front.
+
+VERIFIED, of `G_Trigger` (0x656f0): it tests `Scr_IsSystemActive(1)`'s
+answer (0x6570b), compares the counter at `level+0x29ec` against 0x100
+(0x65714), calls `Scr_AddEntity(toucher)` and
+`Scr_Notify(trigger, scr_const+0x92, 1)` (0x6571f, 0x65732), and at
+0x65740..0x65772 appends a 12-byte record at `level+0x1dec + n*12` holding the
+two entity numbers and the two `+0x300` script handles and increments the
+counter. INFERRED, off the `je` at 0x6570d and the `jne` at 0x65719: a 0
+answer returns having done nothing, the notify runs when the counter reads
+exactly 0x100, and the append otherwise. VERIFIED: `scr_const+0x92` is
+`"trigger"` (0x761e9).
+
+INFERRED, off which arm that counter compare takes: the immediate notify is
+the overflow path and the queue is the normal one.
+
+VERIFIED: `G_RunFrame` walks that queue at 0x50578..0x5064d, calling
+`Scr_Notify` with the same `"trigger"` at 0x505f6, calls
+`Scr_RunCurrentThreads` at 0x50653 and zeroes the counter at 0x50665.
+INFERRED, off the handle compares in the walk and the `jne` at 0x5065f back to
+0x50547: the notify is raised per record whose two `+0x300` handles still
+match the entities they name, and the walk and the thread run repeat until a
+pass adds no record, after which the counter is zeroed.
+
+INFERRED, off neither path carrying a time or count gate: a `trigger_lookat`
+notifies once every server frame the aimer keeps looking at it.
+
+VERIFIED: `Touch_Multi` (0x65a18) and `hurt_touch` (0x64dc4) call
+`Scr_Notify` themselves (0x65a5b, 0x64e25) rather than `G_Trigger`.
+VERIFIED: `G_RunFrame` writes `level.time` (`level+0x1e8`) from its argument
+at 0x50499, and the queue drain and its `Scr_RunCurrentThreads` sit at
+0x50578..0x50653. INFERRED, off those addresses and no jump from the drain
+back past 0x50499: the write happens before the drain. VERIFIED, off the plant and
+defuse fixtures: the progress bar's `scaleStartTime`, which `scaleOverTime`
+takes from `level.time` (23.4), equals the `serverTime` of the first snapshot
+carrying it on all three holds (83800, 86800, 114600), where the use cmd
+that started each travelled between frames (`st` 83766 and 86766 on the
+plant). INFERRED: a thread a touch wakes during `ClientThink` runs no earlier
+than the next `G_RunFrame`, on that frame's `level.time`, whether the notify
+came through `G_Trigger`'s queue or straight from `Scr_Notify`.
+
+VERIFIED: `G_RunFrame` calls `Scr_SetTime` with `level+0x1e8` at 0x5070c.
+VERIFIED: `Scr_SetTime` (0x6c494) is a stub that calls through the pointer
+slot at 0xc113c, which is in `.bss`, so the function the call reaches is one
+the engine supplies at run time and this module does not carry. VERIFIED: the
+`gettime` builtin (0x5d088) answers `level+0x1e8` through `Scr_AddInt`, not
+the engine's clock. INFERRED, off 0x5070c sitting past the drain's
+`Scr_RunCurrentThreads` (0x50653) and the plant completing at the bar's
+`scaleStartTime` + 5000 on retail's capture and on ours, which is 100
+`wait 0.05`s from the frame the trigger woke `bomb_think`: a thread the drain
+wakes on frame T reads T from `getTime()` although the engine's script clock
+is not handed T until later in the frame, and its first `wait 0.05` resumes
+on frame T + 50, so the late hand-off moves no `wait` a frame early.
+
+VERIFIED, of `isLookingAt` (0x4576c): it compares the receiver entity number
+against 0x3ff (0x45776) and the entity's client pointer against 0 (0x4578a),
+calls `Scr_Error` at 0x457a5 and 0x457c2, takes its argument through
+`Scr_GetEntity(0)` (0x457d4) and hands `Scr_AddInt` the compare of
+`client+0x2260` against the argument (0x457e4). INFERRED, off the `ja` at
+0x4577c and the `jne` at 0x45791: an out-of-range number or a missing client
+pointer is the error.
+
+INFERRED, off that being the whole of the function: it runs no trace of its
+own and computes no cone, it reads the last `G_CheckForPreventFriendlyFire`
+result back.
+
+Three retail captures on mp_carentan settle what the disassembly above leaves
+open. The server half is
+`crates/server/tests/fixtures/triggers/mp_carentan-sd-lookat.txt`, the two
+client halves are
+`crates/server/tests/fixtures/playerstate/mp_carentan-sd-plant-attacker.txt`
+and `-sd-defuse-defender.txt`, and all three are one run: the probe's
+`getTime()` and the clients' `serverTime` are the same clock, so a fire pairs
+with a snapshot by equality.
+
+VERIFIED, off the lookat fixture: mp_carentan spawns exactly one
+`trigger_lookat`, entity 170, and the census reads the same entity after every
+one of the run's four `InitGame:` boundaries.
+
+VERIFIED, off the lookat fixture: while a player's aim reaches the trigger the
+notify comes once every 50 ms, which is 20 per second at the server's tick.
+The fixture holds 444 fires in four contiguous runs of 30, 61, 152 and 201; all
+440 gaps inside those runs read exactly 50, and the only larger gaps (3050,
+3050 and 4550 ms) are the intervals the sweep spent aimed off the trigger.
+
+VERIFIED, off the lookat fixture: 444 `PROBE fire` lines against 443
+`PROBE looking`, and every fire but one carries a `looking` at the same
+`getTime()`. The exception is the last, `getTime` 124600, which is the frame
+the defuse completed on.
+
+VERIFIED, off the defender fixture's `[phase sweep]` paired with the lookat
+fixture: from a standing eye 20.4 units horizontally from the charge and 60.1
+above it, at the 15 stations of the sweep, the aim and the offsets
+`pitch -8`, `pitch +8`, `yaw -15`, `yaw -8`, `yaw +8`, `yaw +15` and `yaw +30`
+fired on every frame from within 100 ms of entering the station to the end of
+its 1.5 s window, and `pitch -45`, `pitch -30`, `pitch -15`, `pitch +15`,
+`pitch +30` and `yaw -30` fired not at all. The lead-in is one or two frames:
+28 fires over the aim station's 30, 29 over `pitch -8`'s 31 and 29 over
+`yaw -15`'s 30, with every other firing station full.
+
+VERIFIED, off the defender fixture: `pitch +30` and `pitch +45` both settle at
+`viewangles[0]` 87.9, which is the engine's pitch clamp at 16000 in short units
+and 16.7 degrees below the 71.2 base aim rather than the 30 and 45 the probe
+asked for. Those are one data point, not two, and the offset it measures is
++16.7.
+
+VERIFIED, off the same pairing: each of `pitch -30`, `pitch +15` and `pitch +45`
+carries exactly two fires inside its first 100 ms and none after. INFERRED, off
+those landing in the same 100 ms the firing stations take to start: they are the
+previous station's fires, still arriving while the new view walks to the server,
+not fires of the station they are filed under.
+
+VERIFIED, off the same pairing: the defuse icon on the wire tracks the fires
+frame for frame. The 64x64 shader element enters the defender's HUD array in
+the snapshot whose `serverTime` equals the first fire's `getTime()`, at all
+four leading edges. Three of the four trailing edges lag one snapshot, 50 ms
+(fires end 93400, 99450 and 111550; the icon is gone at 93450, 99500 and
+111600). The fourth does not: the last fire and the icon's last snapshot are
+both 124600. INFERRED, off that being the frame the defuse completed on and
+`sd.gsc` destroying the icon there: the completion takes the element off the
+wire on the same frame the fire happens, where a sweep that merely looks away
+leaves it standing until the next snapshot.
+
+The station origin is `-190.9, 2459.0, -21.9`, read off the `origin` on the
+sweep's own traces, and the charge sits at `-176.0, 2473.0, -22.0`, read off the
+objectives column's slot 0. The fixture's `# station` line carries the same x
+and y with z `-20.9`, which is where the probe stood before the snapshot the
+sweep began on. VERIFIED, off those two numbers and a 60-unit view
+height: the aim is yaw 43.2 and pitch 71.2 down, which is what the fixture's
+settled `viewangles` read at the aim station, and the range to the charge is
+63.5 units. A 16-unit trigger at that range subtends 7.2 degrees half-width to
+a face and 10.1 to a corner.
+
+INFERRED, off that half-width against the stations that fired: the pitch
+offsets behave as an angular test, 8 degrees inside the cone and 15 outside it,
+and the yaw offsets do not. At 71 degrees down the ray crosses the trigger's
+16x16 footprint rather than pointing at it, so a yaw offset slides the crossing
+sideways by roughly twice the horizontal reach times the half-angle's sine,
+about 10.6 units at 30 degrees, which is still inside a box whose corner reach
+is 11.3. INFERRED, off a slab test of the ray against the trigger's bounds
+(`-8..8` in x and y, `0..16` in z, taken from the charge origin): the yaw window
+that hits runs -26.2 to +27.1 degrees off the aim and the pitch window -16.7 to
++9.8, so the yaw window is both wider and asymmetric, and `yaw +30` sits 3.0
+degrees outside it where `yaw -30` sits 3.8 outside. That is the direction of
+the measured asymmetry and not its magnitude: the same slab test disagrees with
+the capture on `yaw +30`, which fired while the test puts the ray 0.99 units
+clear of the box, and on `pitch -15`, which did not fire while the test puts
+the ray through the far top corner. Both disagreements are within about a unit
+of the boundary, so the box bounds, the view height or the charge origin is off
+by that much and this capture does not resolve which.
+
+Measured on vcod, off `crates/server/tests/sd_plant_ab.rs` run against the three
+fixtures: with ours starting the aim trace at the eye truncated the way
+`CalcMuzzlePoints` truncates it, and the charge where `getPlant` puts it
+(23.6), all 15 stations fire or stay quiet as retail's did, `pitch -15` and
+`yaw +30` included. INFERRED: the unit the slab test above was off by is that
+truncation, which moves the station's eye from `-190.9, 2459.0, 38.1` to
+`-190, 2459, 38`.
+
+VERIFIED, off the run that preceded this one and is not kept in the repo: that
+run left the planter standing 88 units out along the defender-to-bomb line, its
+whole sweep logged zero fires, and the fires began once that client dropped.
+INFERRED, off that pairing and the second trace's mask and classname compare
+above: a live body between the eye and the trigger is what stops the fire, and
+this capture's gsc probe teleports the planter away for that reason.
+
+
+### 23.2 `linkTo`, `unlink`, `enableLinkTo`
+
+VERIFIED, of `linkTo` (0x59cc4): it resolves the receiver to `g_entities[n]`
+(0x59cd7), type-checks argument 0 as an entity (0x59d0b, 0x59d1d), tests bit
+0x20 of the **receiver**'s byte `ent+0x17d` (0x59d37) and carries the error
+`"entity (classname: '%s') does not currently support linkTo"` (0x76b80). It
+passes the empty string at 0x76629 as a tag (0x59d97), calls
+`G_EntLinkTo(child, parent, tag)` (0x59daf), and reads two vectors and calls
+`G_EntLinkToWithOffset` (0x59ded). INFERRED, off the branches around those
+sites: the error fires when the bit is clear, the empty tag is what a call
+with no further argument gets, a call with two arguments reaches
+`G_EntLinkTo` and one with four reaches `G_EntLinkToWithOffset`.
+
+VERIFIED: the module writes `ent+0x17d` bit 0x20 at five places and no more, a
+byte scan of every `0x17c`/`0x17d` store: `G_SpawnItem` (0x4e7b9),
+`G_SpawnTurret` (0x52f65), `InitScriptMover` (0x6038d), `enableLinkTo`
+(0x5d6a0), and `ClientSpawn`, which writes the dword `ent+0x17c = 0x2000` at
+0x4276b, whose high byte is that same 0x20. That last one is why `sd.gsc`'s
+`other linkTo(self)` works on a player with no script calling `enableLinkTo`
+first. VERIFIED: `maps/MP/gametypes/sd.gsc` in `pak5.pk3` calls `linkTo` at
+its two plant sites and `enableLinkTo` nowhere, and `re.gsc` is the only other
+stock MP script that uses either builtin.
+
+VERIFIED, of `enableLinkTo` (0x5d5d0): it tests the bit (0x5d602) and
+carries the error `"entity already has linkTo enabled"` (0x76ce0); it tests
+`ent+0x4` and the byte `ent+0x161` against 0 (0x5d61b, 0x5d621), reads
+`ent+0x1fc` and `ent+0x200`, compares the classname against
+`trigger_multiple` (0x7647e, `strcasecmp` at 0x5d658) and carries the error
+`"entity (classname: '%s') does not currently support enableLinkTo"`
+(0x76d20); it writes `ent+0x1fc = level.time` and
+`ent+0x200 = Think_GeneralLink` and sets the bit (0x5d68b..0x5d6a0).
+INFERRED, off the branches between those sites: the first error fires when
+the bit is already set, the second unless `ent+0x4` and `ent+0x161` both read
+0 and, when either `ent+0x1fc` or `ent+0x200` is non-zero, unless the
+classname is `trigger_multiple`, and the three stores run only once every
+check has passed.
+
+VERIFIED, of `G_RunClient` (0x40660): it tests `client+0x21d8` against 0
+(0x406a3) and `ent+0x2e4`, the link record, against null (0x406b0); it
+compares sessionstate `client+0x20d0` against 1 and stores 1 or 7 to
+`ps.pm_type` (`client+0x4`) (0x406c2..0x406d0); it calls
+`G_SetFixedLink(ent, 2)` (0x406d9), `G_SetOrigin(ent, ent+0x134)` (0x406e9)
+and `G_SetAngle(ent, ent+0x140)` (0x406fc); writes 1 to `ent+0xc` and
+`ent+0x30`; calls `trap_LinkEntity` (0x40713); and copies
+`ent+0x134..0x13c` into `ps.origin` at `client+0x14..0x1c`
+(0x40718..0x40742). INFERRED, off the branches at 0x406a3 and 0x406b0: that
+block runs once `client+0x21d8` reads 0 and the record is non-null, and the
+`pm_type` it writes is 7 when sessionstate reads 1 and 1 otherwise.
+VERIFIED: 0x40747..0x40755 decrement a `pm_type` of 1 or 7 back to 0 or 6.
+INFERRED, off the branch into that range: the decrement runs when there is
+no record.
+
+VERIFIED: `G_SetFixedLink` (0x66540) on its mode-2 arm (0x666d0) runs
+`MatrixTransformVector` over the offset at `record+0x34` with the parent's axis
+and writes the result into `ent+0x134..0x13c`. That arm writes no angles; the
+mode-0 arm (0x66630) writes both.
+
+CoDExtended's `shared.h:698` names 1 `PM_NORMAL_LINKED` and 7
+`PM_DEAD_LINKED`. The names are the community's and UNVERIFIED; the two values
+and the decrement above are read out of the module.
+
+VERIFIED: the module compares `ps.pm_type` against 1 at exactly seven sites, a
+byte scan of both encodings over `.text`: `PM_UpdateLean` (0x32c63),
+`PM_AdjustAimSpreadScale` (0x38622 and 0x38736), `G_TouchTriggers` (0x3f8a9),
+`ClientEvents` (0x3fec9), `ClientEndFrame` (0x4124d) and
+`G_GetNonPVSFriendlyInfo` (0x42cad). None of them is in `PmoveSingle`, which
+reaches `pm_type` 1 through a jump table instead (below).
+
+VERIFIED, of `unlink` (0x5d594): it calls `G_EntUnlink` (0x680d4). VERIFIED,
+of `G_EntUnlink`: it calls `G_SetOrigin` and `G_SetAngle` with the entity's
+own origin and angles (0x680f9, 0x68109), unhooks the entity from the parent's
+child list at `parent+0x2e8` through `record+0x4` (0x68118..0x6814c), clears
+`ent+0x2e4`, releases the tag string and frees the 0x70-byte record
+(0x68156..0x68167). INFERRED, off the branch ahead of those calls: all of it
+runs only when a record exists. VERIFIED: `ClientSpawn` calls `G_EntUnlink` on the
+spawning client (0x426f1), and those two are the only callers of the unlink
+half while `linkTo` is the only caller of either link half (`objdump -R`).
+
+`PmoveSingle` compares `pm_type` against no immediate 1 (the site list above),
+but it dispatches on it. VERIFIED: 0x341b2..0x341c1 load `ps.pm_type`,
+decrement it, compare it against 6 with a `ja` to 0x34274, and jump through
+`[ecx*4 + 0x70ce8]`; the seven dwords at `.rodata` 0x70ce8 read 0x34220,
+0x341e6, 0x34200, 0x341c8, 0x34456, 0x34274, 0x34220. INFERRED, off that
+indexing: `pm_type` 1 and 7 share the arm at 0x34220, and `pm_type` 0 takes
+the `ja` to 0x34274, the default branch the mantle doc's "Frame flow of the
+normal-move path" walks.
+
+VERIFIED, of the 0x34220 arm: it stores 0x3ff into `ps+0x54`,
+`groundEntityNum` (0x34222); zeroes the two `pml` words at +0x30 and +0x2c
+(0x34229, 0x34233), the second of which the mantle doc reads as
+`pml.walking`; calls `PM_UpdateAimDownSightFlag` (0x3423d),
+`PM_UpdatePlayerWalkingFlag` (0x34242), fn 0x316f4 (0x34247), fn 0x32a44
+(0x3424c) and `PM_Weapon` (0x34251); tests `ps+0x81 & 0xc0` (0x3425d) with
+a `je` to 0x34456, the function's epilogue (0x34264); calls fn 0x322c8,
+`PM_Footsteps` (0x3426a); and ends in a `jmp` to 0x34456 (0x3426f). The
+`trap_SnapVector(ps.velocity)` call at 0x34451 sits just before 0x34456.
+INFERRED, off the `je` and the `jmp`: `PM_Footsteps` runs only when that
+bit test is non-zero, and the arm always leaves past the snap.
+VERIFIED: the arm calls none of fn 0x30778, the ground trace fn 0x30474,
+`PM_LadderMove` (0x33944), `PM_WalkMove` (0x2f258) or `PM_AirMove`
+(0x2f03c), which the default arm dispatches between.
+
+INFERRED, off that arm: a linked client's cmds run no walk, air or ladder
+move and no ground trace, and its velocity is neither integrated nor snapped;
+fn 0x316f4 still runs, and the mantle doc places the stance transitions, the
+view-height lerp, the ground jump and the ground snap inside it, so whether a
+linked client can raise a jump or a stance change is not settled by the
+dispatch alone. The two fixtures,
+`crates/server/tests/fixtures/playerstate/mp_carentan-sd-plant-attacker.txt`
+and `-sd-defuse-defender.txt`, are what measure it.
+
+VERIFIED, off the plant fixture's `[phase hold2]`: `pm_type` reads 1 on all 100
+snapshots from the `linkTo` at `serverTime` 86800 to 91750, and 0 on the
+snapshot before it. It also reads 0 at 91800, but that frame measures nothing
+about retail: it is the frame the gsc probe ran `unlink()` and `setOrigin` on
+the planter (`PROBE teleport_planter 1 (-512.00, 2688.00, -16.00)`, and the
+91800 trace's origin is `-512.0, 2688.0, -15.0`). The defuse fixture is the only
+half of this run that measures retail's own unlink latency.
+
+VERIFIED, off the same phase: a walk input moves a linked client not at all.
+The probe sent `forward=127` on 92 consecutive cmds, `st` 88750 to 90250, and
+across the 31 snapshots that span them the origin holds at
+`-192.8, 2457.1, -21.9` to the tenth of a unit and `velocity` reads
+`0.0, 0.0, 0.0` on every one. INFERRED, off the 0x34220 arm above: the mover
+ignores the input outright under `pm_type` 1, since the arm runs no walk move,
+and `G_RunClient`'s re-anchor holds the origin to the parent besides; the
+capture alone could not separate the two.
+
+VERIFIED, off the plant fixture's `[phase hold1]`, the abort: the attacker
+links while still moving and its `velocity` reads `184.0, 27.0, 0.0` on every
+linked snapshot from 83800 to 85750 and on the release frame 85800, with the
+origin held at `-214.9, 2453.8, -21.9`; the snapshot after the release reads
+`138.0, 20.0, 0.0` and the origin has moved 7.6 units. INFERRED, off that, the
+zero of `[phase hold2]` and the 0x34220 arm, which neither integrates nor
+snaps the velocity: the link freezes the velocity at its value on the link
+frame rather than zeroing it, the cmds of the frame that unlinks still run
+at `pm_type` 1 and so through the linked arm, and the mover resumes from the
+frozen velocity on the frame after.
+VERIFIED, vcod measurement (23.7): ours zeroed it, which the gate's placed
+clients, linking from a standstill, could not see.
+
+VERIFIED, off both fixtures: `groundEntityNum` reads 0x3ff on every linked
+snapshot but the first, which still carries the ground entity the last free
+frame stood on (177 on the plant, 177 on the defuse). INFERRED, off the
+0x34220 arm's store at 0x34222: the 0x3ff is the linked arm's own write. The
+first linked snapshot's 177 fits the cmds of that frame having run at
+`pm_type` 0, before `G_RunClient` wrote the 1; the order of the two inside a
+frame is not read here.
+
+Measured on vcod's own load of mp_carentan under `sd`, in vcod's entity
+numbering: entity 177 is the `script_brushmodel` `*5`, and a player box
+traced down at the plant spot `-192.8, 2457.1` rests at z `-21.875` on its
+brush 4281, `textures/common/clip_metal`, contents 0x280306c0, which meets
+neither shot mask (2.7 of the combat doc); the terrain under it is at
+`-31.875`. Retail's numbering is not read here, only ours. INFERRED, off
+the same load numbering the lookat trigger 170, which retail's own census
+reads (23.1), and so spawning the map's entities in retail's order: retail's
+177 is that brush model, so a client standing on a submodel's brushes reads
+the submodel's entity as its ground, where ours writes 1022 for every
+ground. `pm_flags` holds 262144
+across the link and the unlink, and `eFlags` changes at no point of either
+sequence: on the attacker it moves only at the probe's two `setOrigin`
+teleports, `serverTime` 68750 and 91800, and on the defender only at its three,
+68750, 91800 and 130650.
+
+VERIFIED, off the plant fixture: the link and its release both land on the next
+snapshot after the cmd that caused them. Use first travels at `st` 83766 and
+`serverTime` 83800 reads `pm_type` 1 with the progress bar on the wire; the
+release travels at `st` 85766 and 85800 reads `pm_type` 0 with the bar gone.
+
+VERIFIED, off the defuse fixture: `pm_type` reads 1 through the defuse and for
+two snapshots past the frame the bar ends on, 124600 and 124650, and 0 at
+124700. That 100 ms is retail's own unlink, with no probe teleport near it.
+
+VERIFIED, off `maps/MP/gametypes/sd.gsc` in `pak5.pk3`: the plant's success
+branch destroys the three HUD elements, `delete()`s both bombzones and returns
+without calling `unlink()`, where the branch the abort takes calls
+`other unlink()`. INFERRED, off that plus `G_EntUnlink` being called from
+nowhere else: a successful planter stays linked until the `delete()` of the
+bombzone it is linked to frees the record.
+
+VERIFIED, off the two runs that preceded this capture and are not kept in the
+repo: `setOrigin` on a still-linked player is undone by the next frame's
+re-anchor, and `unlink()` ahead of it takes effect immediately and the new
+origin then holds. That is why the gsc probe unlinks the planter before it
+moves it.
+
+VERIFIED: `setorigin` is `player_methods[10]` (0x43480) and appears in no
+other method table. VERIFIED: its body reads one vector through
+`Scr_GetVector`, stores it into `ps.origin` (`client+0x14..0x1c`), adds 1.0 to
+the stored z (`fld1` at 0x4351d), xors 0x8, the teleport bit, into
+`ps.eFlags` (`client+0x80`, 0x43531), copies `ps.origin` into
+`r.currentOrigin` (`ent+0x134..0x13c`), and calls `trap_UnlinkEntity`,
+`BG_PlayerStateToEntityState` and `trap_LinkEntity`; it has no store to
+`ps.velocity`. INFERRED, off the branch at 0x434a5: an entity with no client
+is a script error.
+VERIFIED, off the plant fixture: the teleport frame, `serverTime` 68750,
+reads `origin` `-512.0, 2688.0, -15.0` for the probe's `(-512, 2688, -16)`,
+`eFlags` 16 where the frame before read 24, and `velocity` zero.
+
+### 23.3 The objective table and its builtins
+
+VERIFIED: `level+0x20` holds 16 records of 28 bytes, laid out `+0` state,
+`+4..+0xc` origin, `+0x10` entNum, `+0x14` teamNum, `+0x18` icon. The offsets
+come off `objective_delete`'s seven stores (0x5e0d6..0x5e112) and off the
+7-dword copy in `G_UpdateObjectiveToClients` (0x511f4). The same record's wire
+form is `docs/protocol-1.1.md`, block 4; state travels as three raw bits,
+which holds every value below.
+
+VERIFIED: `ObjectiveStateIndexFromString` (0x5e008) maps `scr_const+0x24`
+(`"empty"`, 0x75fbd) to 0, `+0x42` (`"invisible"`, 0x76050) to 2 and `+0x14`
+(`"current"`, 0x75f8f) to 4, and fails with the value 0 on anything else
+(0x5e011..0x5e046). Those three are also the three names the error string at
+0x770e0 lists.
+
+VERIFIED: `objective_current` (0x5a6ac) is the only writer of the fourth
+value, 1, and `scr_const+0x0`, which `GScr_LoadConsts` fills from `"active"`
+(0x75f2f), is referenced exactly once in the whole module, by that store
+itself. That is off a scan of all 295 `scr_const` relocations for addend 0.
+INFERRED: 1 is therefore the "active" state, named in the module and
+unreachable from script by name.
+
+VERIFIED, of `objective_add` (0x5a2d0): it needs at least two parameters
+(`Scr_Error` 0x77000 at 0x5a2ed); range-checks the index against 0..15
+(0x5a304); detaches whatever entity the slot held, clearing `eFlags`
+(`ent+0xf4`) bit 0x10 and writing `entNum = 0x3ff` (0x5a356, 0x5a35d); inlines
+the same three-name state map (0x5a374..0x5a396) and stores the answer at `+0`
+(0x5a3c9); takes `Scr_GetVector(2)` and writes each component truncated
+toward zero into `+4`, `+8` and `+0xc` (0x5a407, 0x5a42f, 0x5a461); writes
+`entNum = 0x3ff` (0x5a45a); runs the icon name through `G_ShaderIndex` into
+`+0x18` (0x5a4da); and writes `teamNum` 0 (0x5a4e2). INFERRED, off the
+parameter-count branches: the vector is read only with a third parameter, the
+icon only with a fourth, and the `teamNum` store comes last on every path.
+VERIFIED: an icon name carrying a
+character the scan rejects, or longer than 63, is a param error (0x76f80 at
+0x5a49c, 0x76fc0 at 0x5a4b3).
+
+VERIFIED: `G_ShaderIndex` (0x65ee8) scans configstrings from index 1 up to
+0x7f at `0x5dc + i` (0x65f2d), so an objective icon is configstring
+`1500 + n`, the same range and the same indexer base as the `shaderIndex`
+hudelem field (`docs/protocol-1.1.md`, block 5).
+
+VERIFIED: `objective_delete` (0x5e058) range-checks the index, detaches the
+attached entity the same way (0x5e0c0, 0x5e0c7), and writes state, origin,
+teamNum and icon 0 with `entNum = 0x3ff` (0x5e0d6..0x5e112).
+
+VERIFIED: `objective_state` (0x5a4f4) writes the mapped state at `+0` (0x5a59b)
+and carries the same detach of the attached entity (0x5a5bf, 0x5a5c6).
+INFERRED, off the branch ahead of the detach: it runs only when the new state
+is 0 or 2. VERIFIED: `objective_icon` (0x5a5d8) writes `G_ShaderIndex`'s answer
+at `+0x18` (0x5a69f). VERIFIED: `objective_position` (0x5e128) writes the three
+components, truncated the same way, at `+4`, `+8` and `+0xc` (0x5e1d4, 0x5e1fc,
+0x5e224).
+
+VERIFIED: the conversion in both is a `fistp` under a control word with
+`| 0xc00` (0x5a3ec, 0x5a414, 0x5a43c; 0x5e1b9, 0x5e1e1, 0x5e209), rounding
+control 11, which truncates toward zero, and a `fild` into the float slot.
+INFERRED, off the `fild` sitting past each `fistp`: the slot ends up holding
+the truncated integer as a float. VERIFIED, off the plant fixture at 91800: slot 0 reads
+`-176, 2473, -22` after the plant, and the planter's origin on the same
+frame reads `-192.8, 2457.1, -21.9`. INFERRED, off `_utility::getPlant`'s
+fallback trace starting at `self.origin + (16, 16, 10)`: the charge's x is
+`-176.8`, which truncation turns into the `-176` the slot carries and
+nearest would have made `-177`.
+
+VERIFIED: `objective_onentity` (0x5e230) detaches the slot's previous entity
+(0x5e298, 0x5e29f), sets the new entity's `eFlags` bit 0x10 (0x5e2b3) and
+writes its entity number at `+0x10` (0x5e2bc).
+
+VERIFIED: `objective_team` (0x5e2c8) maps `scr_const+0x4` (`"allies"`) to 2,
+`+0x8` (`"axis"`) to 1 and `+0xf8` (`"none"`, 0x764c8) to 0, into `+0x14`
+(0x5e327, 0x5e33c, 0x5e351), and param-errors on anything else (0x77140 at
+0x5e378).
+
+VERIFIED: `objective_current` (0x5a6ac) is variadic. It reads
+`Scr_GetNumParam` indices, range-checks each and marks them in a 16-entry
+local map (0x5a703); it stores 4 (0x5a726) and 1 (0x5a735) into record state
+words. INFERRED, off the loop and the branches around those two stores: after
+the marking it walks all 16 records, writing 4 into every marked one and 1
+into every unmarked one that already read 4.
+
+VERIFIED: the per-client filter lives twice in the module. The exported
+`G_UpdateObjectiveToClients` (0x51160) loops over the clients and the 16
+records, tests the record's state against 0, compares its `teamNum` with the
+client's `clientState.team` at `client+0x217c`, stores 0 at
+`client+0x3e8 + i*28` and copies 7 dwords to the same place
+(0x511c0..0x511f4). INFERRED, off the branches between those sites: it skips
+a client not in use, writes the 0 when the record's state is 0 or when its
+`teamNum` is non-zero and differs from the client's team, and copies the
+record otherwise. VERIFIED: nothing calls it, neither through a relocation
+nor through a resolved direct call. `G_RunFrame` carries the identical loop
+inlined at 0x50977..0x50a51, ahead of its `HudElem_UpdateClient` and
+`ClientEndFrame` passes, and that inlined copy is the live one.
+
+VERIFIED, off `crates/server/tests/fixtures/playerstate/mp_carentan-sd-plant-attacker.txt`
+and `-sd-defuse-defender.txt`: before the plant, slots 0 and 1 both read state
+4, `teamNum` 0 and `entNum` 0x3ff, slot 0 at `-146, 2490, 16` with icon 8 and
+slot 1 at `1792, 2080, 20` with icon 11, and both slots reach the axis client
+as well as the allied one. VERIFIED, off `maps/MP/gametypes/sd.gsc` in
+`pak5.pk3`: the gametype calls `objective_team` nowhere, so that is the filter
+passing a `teamNum` of 0 rather than the table being unscoped.
+
+VERIFIED, off both fixtures at `serverTime` 91800, the frame the plant
+completes: slot 0 reads state 4, icon 14 and origin `-176, 2473, -22`, and slot
+1 reads state 0 with its icon 11 and its origin `1792, 2080, 20` still on the
+wire. VERIFIED, off sd.gsc: the script ran `objective_delete(0)`,
+`objective_delete(1)` and then `objective_add(0, "current", bombtrigger.origin,
+"gfx/hud/hud@bombplanted.tga")`, and `objective_delete` zeroes origin, teamNum
+and icon in the level record. INFERRED, off the inlined filter above writing
+only the state dword when a record's state is 0: what a client is sent for a
+deleted slot is state 0 over the six stale dwords its own copy already held,
+which is why slot 1's icon and origin survive a delete on the wire.
+
+VERIFIED, off the defender fixture at 124600, the frame the defuse completes:
+slot 0 goes to state 0 the same way, with icon 14 and the charge's origin still
+present.
+
+### 23.4 The three tweens
+
+VERIFIED: each of the three addresses its hudelem record as
+`g_hudelems + i*124` (`shl 5` and `sub`, scaled by 4, e.g.
+0x4c7f6..0x4c7fc), and each compares its time against 0 and against a cap and
+carries two param-error strings. The six message strings are at 0x7495e,
+0x74971, 0x748f0, 0x74902, 0x74990 and 0x749a2; the three caps at 0x74984,
+0x74ad0 and 0x74adc all read 60.0. INFERRED, off the branches on those
+compares: each refuses a time of 0 or less and a time above 60.0 seconds with
+a param error.
+
+VERIFIED: each converts its argument to milliseconds as `time * 1000.0 + 0.5`
+truncated toward zero under the usual x87 control-word swap. The multipliers
+at 0x74988, 0x74ad4 and 0x74ae0 all read 1000.0 and the addends at 0x7498c,
+0x74ad8 and 0x74ae4 all read 0.5, so the conversion rounds to the nearest
+millisecond rather than truncating.
+
+VERIFIED: `scaleOverTime(time, width, height)` (0x4bd34) tests its parameter
+count against 3 and carries the error 0x74920 (0x4bd5e), writes `+0x44`
+(scaleStartTime) `= level.time` (0x4bdea) and `+0x48` (scaleTime) the
+milliseconds (0x4be1b), copies `+0x30` into `+0x3c` (fromWidth) and `+0x34`
+into `+0x40` (fromHeight) (0x4be1e, 0x4be24), and writes the new width and
+height at `+0x30` and `+0x34` (0x4be2a, 0x4be2d). INFERRED, off the branch at
+0x4bd5e and the addresses: a count other than three is the error, and the
+copies run ahead of the new size's stores, so `fromWidth` and `fromHeight`
+take the old size.
+
+VERIFIED: `fadeOverTime(time)` (0x4c720) writes `+0x24` (fadeStartTime)
+`= level.time` (0x4c7ad) and `+0x28` (fadeTime) the milliseconds (0x4c7db), and
+copies `+0x1c` into `+0x20` (fromColor) (0x4c7de, 0x4c7e1). It takes no target:
+the script writes the colour afterwards.
+
+VERIFIED: `moveOverTime(time)` (0x4c7ec) writes `+0x54` (moveStartTime)
+`= level.time` (0x4c879) and `+0x58` (moveTime) the milliseconds (0x4c8a7), and
+copies `+0x4` into `+0x4c` (fromX) and `+0x8` into `+0x50` (fromY) (0x4c8aa,
+0x4c8b3). Same shape: the script writes the new `x` and `y` afterwards.
+
+INFERRED, off each of the three reading the live field rather than any
+interpolated value: the `from` a restarted tween records is the server-side
+target of the tween it interrupts, not what the client had animated to, so a
+tween restarted mid-flight makes the client jump.
+
+VERIFIED, off `docs/protocol-1.1.md`'s block 5 table, whose entry numbers run
+from 6: the twelve fields above occupy wire indices 14 (`fromColor`), 15
+(`fadeStartTime`), 16 (`fadeTime`), 17 (`scaleStartTime`), 18 (`scaleTime`),
+19 (`fromHeight`), 22 (`fromWidth`), 23 (`moveStartTime`), 24 (`moveTime`), 25
+(`fromX`), 26 (`fromY`) and 27 (`duration`). Every record offset read above
+matches that table's offset column.
+
+VERIFIED, off `crates/server/tests/fixtures/playerstate/mp_carentan-sd-plant-attacker.txt`:
+a plant puts three elements on the attacker's wire, read as
+`type:shader:width:height:fromWidth:fromHeight:scaleStartTime:scaleTime:x:y`.
+The plant icon is `3:6:64:64:0:0:0:0:320:345`, the bar's background
+`3:2:292:12:0:0:0:0:320:385` and the bar itself `3:3:288:8:0:8:<start>:5000:176:385`,
+where `<start>` is the `level.time` of the frame the plant began. Only the bar
+carries a tween: `fromWidth` 0 and `fromHeight` 8 against a live width of 288
+is `scaleOverTime(level.planttime, level.barsize, 8)` after
+`setShader("white", 0, 8)`.
+
+VERIFIED, off `-sd-defuse-defender.txt`: the defuse's three are the same
+element shapes with `shader` 7 on the icon and `scaleTime` 10000 on the bar,
+`3:3:288:8:0:8:114600:10000:176:385`.
+
+VERIFIED, off both fixtures: the bar's `scaleTime` is the whole of the action's
+duration. The plant's bar starts at 86800 and the objective slots move at
+91800, 5000 ms later; the defuse's starts at 114600 and slot 0 goes to state 0
+at 124600, 10000 later.
+
+VERIFIED, off the plant fixture: an aborted plant carries no progress forward.
+The first hold ran from 83800 to a release at 85766 and the second hold's bar
+enters the wire at 86800 with `scaleStartTime` 86800 and the full 5000.
+
+VERIFIED, off the plant fixture read against the wire: these elements travel in
+the playerstate's archived HUD array, not the current one. The first run of the
+same probe read `hud_current` alone and its column was empty through a whole
+plant at `pm_type` 1; reading the archived array first carries all four
+elements. Both committed client fixtures still head their `hud=` column
+"unarchived HUD array", which is the label the probe carried when they were
+taken; the writer was corrected in 17e43b0 and a recapture's header will read
+differently.
+
+VERIFIED, off `maps/MP/gametypes/sd.gsc` in `pak5.pk3`: `bomb_think` creates
+the defuse icon on any `"trigger"` notify from a defender who `isOnGround()`,
+its own progress loop allows `distance(other.origin, self.origin) < 64`, and
+`check_bomb` destroys the icon as soon as `distance(self.origin,
+trigger.origin) < 32` stops holding. INFERRED, off those two radii: between 32
+and 64 units the icon is created and destroyed without a `wait` between, so it
+never reaches a snapshot, and a capture taken from 47 units out saw no icon at
+all.
+
+### 23.5 `useButtonPressed`, `isOnGround`, `isAlive`
+
+VERIFIED: `PlayerCmd_useButtonPressed` (0x44e70) answers
+`client+0x21e8 & 0x40` (0x44ed2). VERIFIED: `ClientThink_real` writes
+`client+0x21e8` from the cmd's `buttons` byte at `client+0x20f4` on every cmd,
+on the intermission path (0x3fff1) and on the live path (0x40129), after
+copying the old value to `+0x21ec` (0x3ffde).
+
+INFERRED, off those two stores: the builtin reads the last cmd's bits, never
+an OR over the server frame.
+
+VERIFIED: `PlayerCmd_isOnGround` (0x45014) answers `ps.groundEntityNum`
+(`client+0x54`) `!= 0x3ff` (0x45076).
+
+VERIFIED: `isAlive` (0x5cf8c) compares `Scr_GetType` against 7 and
+`Scr_GetPointerType` against 0xd (0x5cf9f, 0x5cfb1), stores 0 as its answer
+at 0x5cfbb, and compares `health` (`ent+0x230`) against 0 (0x5cfcf).
+INFERRED, off the branches between those sites: an argument whose type is not
+7 or whose pointer type is not 0xd answers 0, and any other answers
+`health > 0`. VERIFIED: it reads no sessionstate and no client pointer.
+INFERRED, off that: a spectating
+client whose health is still above 0 answers true, and so does any non-client
+entity carrying health.
+
+### 23.6 Where `getPlant` puts the charge
+
+VERIFIED, off `maps/MP/_utility.gsc` in `pak5.pk3`: `getPlant` builds its
+start as `self.origin + (0, 0, 10)` and its first trace origin as that plus
+`vectorScale(anglesToForward(self.angles), 11)`; it runs `bulletTrace` 18
+units down from the first origin, then from the start, each under an
+`if(trace["fraction"] < 1)` that returns the trace's `position` and
+`orientToNormal(trace["normal"])`; failing both, it traces 1000 down from
+six origins (those two and the start plus `(±16, ±16, 0)`), keeps
+`besttraceposition` under a strict `trace["fraction"] < besttracefraction`,
+and builds the angles from `trace["normal"]` after the loop. INFERRED, off
+that text: the first 18-unit hit wins, the fallback keeps the earliest of
+equal fractions, and the fallback's angles come from the last trace run
+rather than the winning one.
+
+VERIFIED: `ClientThink_real` stores 0 into all three `angles` components
+(`ent+0x140`, 0x405e2, 0x405ec, 0x405f6) and `ps.viewangles[1]`
+(`client+0xc4`) into the yaw (0x40600..0x40606), and calls
+`G_TouchTriggers` at 0x405b3. INFERRED, off the addresses: the yaw store
+follows the zeroing, and both follow the `G_TouchTriggers` call.
+INFERRED, off the branches: that block runs
+once per cmd on the live path, and a `sessionstate` 2 client leaves the
+function through `SpectatorThink` (0x4001d, then the jump to the exit at
+0x40022) and a `sessionstate` 3 one through the intermission arm (0x4000a)
+before reaching it. INFERRED: a planter's `self.angles` is its view yaw with
+the pitch dropped, which is the direction the first trace takes.
+
+INFERRED, off the plant test in `crates/server/src/game/script.rs`, which runs
+the stock `getPlant` from the fixture's planter origin and yaw against the
+map's collision and matches slot 0 (23.3): on retail's plant neither 18-unit
+trace hits, since the floor under the planter is clip with no shot contents,
+and the fallback's `(+16, +16)` trace wins on the flak88 `script_model` beside
+the zone (`docs/research/cod11-combat.md` 2.7), which puts the charge at about
+`(-176.8, 2473.1, -22.96)`, 23 units from the planter.
+
+### 23.7 The probe pair against ours
+
+Three live runs of the retail recipe (`client-probes/probe_lookat`'s README
+section) against `vcod-server` on 2026-09-22, not kept in the repo. Ours reads
+scripts only out of `.pk3` archives, so `probe_lookat.gsc` and its `.txt` went
+into a `zzz_` pak in a scratch game directory, and the server ran with
+`--gametype probe_lookat --set probe_teleport=1`. Each paragraph below labels
+its vcod measurements and its retail readings separately; the retail side is
+the committed plant, defuse and lookat fixtures unless it says otherwise.
+
+VERIFIED, vcod measurement (run 1): five defects the placed-client gate
+cannot reach, all fixed since. `getCvar("mapname")` read `""`, so the probe's
+teleports never ran; `setOrigin` on a player was a missing builtin (23.2);
+the bomb's `radiusDamage` handed the killed callback an undefined attacker
+and `sd.gsc:782`'s `attacker getEntityNumber()` aborted it
+(`docs/research/cod11-combat.md`, 14.2); a planter that linked while walking
+read `velocity` 0; and the frame that unlinked it had already moved it 7.6
+units. VERIFIED, off the plant fixture: retail holds 184,27 under that link
+and moves on the frame after the release (23.2).
+
+VERIFIED, vcod measurement (run 1): the defender never reached the sweep. It
+was still walking when the post-plant teleport landed it, kept its velocity,
+slid past the probe's 28-unit stop and circled the zone until the fuse ran
+out. VERIFIED, off `setorigin` at 0x43480 (23.2): retail's `setOrigin`
+writes no velocity either, so the slide is not a `setOrigin` divergence.
+
+Run 3, with those fixed:
+
+- VERIFIED, vcod measurement (run 3): the attacker's plant icon appears
+  5700 ms into the approach, and the link lands on the first snapshot after
+  the first use cmd, at `pm_type` 1, with the progress bar on the same
+  snapshot. VERIFIED, off the plant fixture: retail's icon appears 5700 ms
+  in, and its link and bar land the same way (23.2).
+- VERIFIED, vcod measurement (run 3): under the abort's link the velocity
+  holds at `183.4, 27.0, 0.0` with the origin fixed, the release frame reads
+  the same, and the three frames after it read `138.3, 20.3`, `103.0, 15.1`
+  and `76.0, 11.2`. VERIFIED, off the plant fixture: retail's read `138, 20`,
+  `103, 15` and `75, 12`.
+- VERIFIED, vcod measurement (run 3): the plant completes 5000 ms after its
+  link frame; the defuse's bar and link land 100 ms into the probe's defuse
+  phase and it completes 10000 ms after that; block 4 reads slot 0 state 4
+  with icon 14 at the charge and slot 1 state 0 after the plant, and slot 0
+  state 0 after the defuse. VERIFIED, off the plant and defuse fixtures:
+  retail reads the same durations, offsets and slot states.
+- VERIFIED, vcod measurement (run 3): the bar's `scaleStartTime` equals the
+  first bar snapshot's `serverTime`, with `scaleTime` 5000 and 10000,
+  `fromWidth` 0 and `fromHeight` 8. VERIFIED, off the plant and defuse
+  fixtures: retail's carry the same four fields.
+- VERIFIED, vcod measurement (run 3): the defender unlinks 100 ms after the
+  defuse's completion frame. VERIFIED, off the defuse fixture: so does
+  retail's (23.2).
+- VERIFIED, vcod measurement (run 3): 444 lookat fires and 444
+  `isLookingAt` answers, every fire with an answer on the same `getTime()`;
+  440 of the 443 gaps between fires are 50 ms, the rest are the sweep's
+  dead stations; the defuse carries 201 fires, the first 100 ms after its
+  start and the last on its completion frame. VERIFIED, off the lookat
+  fixture: retail's run carries 444 fires with 440 gaps of 50 ms and 201
+  fires across the defuse.
+- VERIFIED, vcod measurement (run 3) against the defuse and lookat
+  fixtures: each of the 15 sweep stations fires, or stays dark, exactly as
+  retail's does.
+- VERIFIED, vcod measurement (run 3): the server logs
+  `A;1;allies;vcod;bomb_plant`, `A;0;axis;vcod;bomb_defuse`, `W;axis;vcod`
+  and `L;allies`. VERIFIED, off the lookat fixture: retail logs the same
+  four in the same order.
+- VERIFIED, vcod measurement (run 3): the bomb is entity 179, and its
+  `loopSound` goes to the `bomb_tick` configstring when it is planted and to
+  0 when it is defused. VERIFIED, off retail run 9's defender probe log (not
+  kept in the repo): the same entity and the same two transitions.
+- VERIFIED, vcod measurement (run 3) against retail run 9's defender probe
+  log: taken as a set, ours carries retail's sound events, configstring
+  changes and server commands one for one (`MP_bomb_plant` twice on the
+  attacker, `MP_bomb_defuse` on the defender's own ring, the announcer `s`
+  commands), save the restart's and the pak lists' below.
+
+VERIFIED, vcod measurement (run 2): with the defender standing 1.5 units
+from retail's station, pitch -15 fired and yaw +30 did not, the two stations
+section 23.1's slab model misses by about a unit; run 3, standing closer,
+matched retail on both. INFERRED: those two sit on the trigger's edge, and
+the difference is the station, not the trace.
+
+Still different:
+
+- VERIFIED, vcod measurement (run 3): the first linked frame reads
+  `groundEntityNum` 1023. VERIFIED, off both fixtures: retail's reads 177
+  (23.2). This is the gate's allow-listed row.
+- VERIFIED, vcod measurement (run 3): `velocity` is fractional
+  (`183.4, 27.0`). VERIFIED, off the plant fixture: retail's is whole.
+  VERIFIED: `PmoveSingle`'s default arm calls `trap_SnapVector` on
+  `ps.velocity` (`ps+0x20`) at 0x34451 (23.2), and vcod's mover has no such
+  snap. INFERRED: the snap is also why the two servers' defenders, walking
+  the same steer from the same spot, part ways after the match-start
+  restart, retail's velocity holding 1.3 degrees off the view where ours
+  settles on it.
+- VERIFIED, vcod measurement (run 3): the probe's post-plant teleport lands
+  one frame after the plant's completion frame, and at the defuse's
+  completion frame ours logs a `PROBE looking` beside the last fire.
+  VERIFIED, off the plant and lookat fixtures: retail's teleport lands on the
+  completion frame, and its completion frame has the fire and no `looking`.
+  INFERRED: both are the order threads run inside one frame. Retail runs the
+  threads the lookat queue woke before the timed waits due that frame (the
+  drain's own `Scr_RunCurrentThreads` sits ahead of `Scr_SetTime`, 23.1), and
+  resumed the plant's `wait 0.05` loop ahead of the probe's older poller;
+  vcod steps every runnable thread in one pass, in start order.
+- VERIFIED, off retail run 9's defender probe log (not kept in the repo):
+  retail interleaves `d` and `s` in the order the script made them (`d 531`,
+  `d 532`, `s 8`, `d 533` at the plant). VERIFIED, vcod measurement (run 3):
+  ours sends every configstring change, ascending, before every command.
+  INFERRED: no command in these runs names a configstring set after it, so
+  no client reads a stale one.
+- VERIFIED, vcod measurement (run 3): the restart carries no `d 13` or
+  `d 12`, and its `d 3` has a `t` of 0; `docs/research/cod11-map-cycle.md`
+  8.2 records the same off its own runs. VERIFIED, vcod measurement (run 3)
+  against retail run 9's probe logs: ours sends no `sv_referencedPaks` or
+  `sv_referencedPakNames` in the systeminfo string, where retail's carries
+  both.
 
 ## Open, and worth a probe
+
+- The order threads run in inside one server frame (23.7): a probe with two
+  threads parked on `wait 0.05` in start order A, B, where B is woken once by
+  a `trigger` notify and re-parks, logging which runs first on each later
+  frame, would say whether same-deadline waits resume in wait order.
 
 - Whether `Scr_FindField` searches only the radiant fields. Section 7.
 - Whether `Scr_AddFields` really reads `radiant/keys.txt`. Section 6.

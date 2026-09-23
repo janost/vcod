@@ -389,15 +389,13 @@ pub fn radius_damage(
     );
     let (mod_, none) = (cx.intern_exact("MOD_EXPLOSIVE"), cx.intern_exact("none"));
     let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
+    // The inflictor is NULL and the attacker `g_entities[ENTITYNUM_WORLD]`
+    // (combat doc, 14.2), so the callbacks get `undefined` and the world.
+    let world_ent = host.ents.world(cx);
     for hit in hits {
         let args = vec![
-            // The world is the attacker and its own inflictor, and it reaches
-            // script as `undefined`: `Scr_PlayerDamage` (0x5ca18) calls
-            // `Scr_AddUndefined` for a null attacker or inflictor rather than
-            // substituting an entity, and `Scr_PlayerKilled` (0x5cb30) does
-            // the same. VERIFIED, the two null compares and both call sites.
             Value::Undefined,
-            Value::Undefined,
+            Value::Entity(world_ent),
             Value::Int(hit.damage),
             Value::Int(DFLAG_RADIUS),
             Value::String(mod_),
@@ -459,6 +457,8 @@ pub fn set_player_ignore_radius_damage(
 /// with (`["position"]` 31 call sites, `["fraction"]` 13, `["entity"]` 8,
 /// `["surfacetype"]` 3 in the extracted corpus), and array keys intern
 /// exactly, not folded, matching how any other string index does.
+///
+/// The five keys and what each arm writes: docs/research/cod11-combat.md 2.7.
 pub fn bullet_trace(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -469,7 +469,7 @@ pub fn bullet_trace(
         Some(Value::Vector(from)),
         Some(Value::Vector(to)),
         Some(_hit_characters),
-        Some(_ignore_ent),
+        Some(ignore_ent),
     ) = (args.first(), args.get(1), args.get(2), args.get(3))
     else {
         return Err(ErrorKind::BadType(
@@ -477,37 +477,117 @@ pub fn bullet_trace(
         ));
     };
     let (from, to) = (*from, *to);
+    let ignore = match ignore_ent {
+        Value::Entity(id) => Some(*id),
+        _ => None,
+    };
 
     let arr = cx.new_array();
     let position = ArrayKey::Str(cx.intern_exact("position"));
     let fraction = ArrayKey::Str(cx.intern_exact("fraction"));
     let entity = ArrayKey::Str(cx.intern_exact("entity"));
     let surfacetype = ArrayKey::Str(cx.intern_exact("surfacetype"));
+    let normal = ArrayKey::Str(cx.intern_exact("normal"));
 
-    match &host.world {
-        Some(world) => {
-            let start = Vec3::new(from[0], from[1], from[2]);
-            let end = Vec3::new(to[0], to[1], to[2]);
-            let t = world.collision.shot_trace(start, end);
-            cx.set_index(arr, fraction, Value::Float(t.fraction));
-            cx.set_index(
-                arr,
-                position,
-                Value::Vector([t.endpos.x, t.endpos.y, t.endpos.z]),
-            );
+    let start = Vec3::new(from[0], from[1], from[2]);
+    let end = Vec3::new(to[0], to[1], to[2]);
+    let t = host
+        .world
+        .as_ref()
+        .map(|w| w.collision.shot_trace(start, end));
+    let mut hit = t
+        .filter(|t| t.fraction < 1.0)
+        .map(|t| (t.fraction, t.normal, None));
+    if let Some(e) = script_model_hit(host, cx, start, end, ignore, hit.map_or(1.0, |h| h.0)) {
+        hit = Some(e);
+    }
+    cx.set_index(arr, fraction, Value::Float(hit.map_or(1.0, |h| h.0)));
+    cx.set_index(
+        arr,
+        position,
+        Value::Vector(hit.map_or(to, |h| (start + (end - start) * h.0).to_array())),
+    );
+    // A player the trace stopped on is not resolved yet, and a hit's
+    // `surfacetype` needs the surface-name table retail derives from
+    // `surface_flags`, which nothing here maps yet. Both stay undefined
+    // rather than guessing a value.
+    let ent = hit
+        .and_then(|h| h.2)
+        .map_or(Value::Undefined, Value::Entity);
+    cx.set_index(arr, entity, ent);
+    match hit {
+        Some((_, n, _)) => {
+            cx.set_index(arr, normal, Value::Vector(n.to_array()));
+            cx.set_index(arr, surfacetype, Value::Undefined);
         }
         None => {
-            cx.set_index(arr, fraction, Value::Float(1.0));
-            cx.set_index(arr, position, Value::Vector(to));
+            let dir = (end - start).normalize_or_zero();
+            cx.set_index(arr, normal, Value::Vector(dir.to_array()));
+            let none = Value::String(cx.intern_exact("none"));
+            cx.set_index(arr, surfacetype, none);
         }
     }
-    // `entity` needs entity bounds to resolve which gentity the trace
-    // stopped on (stage 5); `surfacetype` needs the surface-name table
-    // retail derives from `surface_flags`, which nothing here maps yet.
-    // Both stay undefined rather than guessing a value.
-    cx.set_index(arr, entity, Value::Undefined);
-    cx.set_index(arr, surfacetype, Value::Undefined);
     Ok(Value::Array(arr))
+}
+
+/// The nearest live `script_model` a `bulletTrace` segment crosses closer
+/// than `best`: fraction, world normal, entity. Retail's locational trace
+/// clips a script model's xmodel collision at its origin and angles, hidden
+/// or `notSolid()`ed alike (docs/research/cod11-combat.md 2.7), so `solid`
+/// is not read.
+fn script_model_hit(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    start: Vec3,
+    end: Vec3,
+    ignore: Option<EntId>,
+    best: f32,
+) -> Option<(f32, Vec3, Option<EntId>)> {
+    let classname = cx.intern_folded("classname");
+    let model = cx.intern_folded("model");
+    let origin = cx.intern_folded("origin");
+    let angles = cx.intern_folded("angles");
+    let ids: Vec<EntId> = host
+        .ents
+        .iter_inuse()
+        .map(|(id, _)| id)
+        .filter(|id| Some(*id) != ignore)
+        .collect();
+    let mut hit = None;
+    let mut best = best;
+    for id in ids {
+        let Value::String(c) = host.get_field(cx, id, classname) else {
+            continue;
+        };
+        if cx.resolve(c) != "script_model" {
+            continue;
+        }
+        let Value::String(m) = host.get_field(cx, id, model) else {
+            continue;
+        };
+        let name = cx.resolve(m).to_string();
+        let Some(tris) = host.xmodel_tris(&name) else {
+            continue;
+        };
+        let at = |v: Value| match v {
+            Value::Vector(v) => Vec3::from(v),
+            _ => Vec3::ZERO,
+        };
+        let o = at(host.get_field(cx, id, origin));
+        let axis = vcod_common::props::rotation(at(host.get_field(cx, id, angles)));
+        let local = |p: Vec3| axis.transpose() * (p - o);
+        if let Some((f, n, _)) = vcod_common::collision::clip_model_tris(
+            local(start),
+            local(end),
+            &tris,
+            vcod_common::collision::MASK_SHOT,
+            best,
+        ) {
+            best = f;
+            hit = Some((f, axis * n, Some(id)));
+        }
+    }
+    hit
 }
 
 #[cfg(test)]
@@ -565,14 +645,16 @@ mod tests {
         rt
     }
 
-    /// `dm.gsc`'s own shape for a death with no player behind it: the killed
-    /// callback calls `isPlayer(attacker)` unguarded, the way line 492 does.
+    /// The stock gametypes' own shape for a death with no player behind it:
+    /// `sd.gsc:782` calls `attacker getEntityNumber()` ahead of any test,
+    /// and `dm.gsc:492` calls `isPlayer(attacker)` unguarded.
     const WORLD_BLAST: &str = r#"
         main() {}
         CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
             self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
         }
         CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {
+            level.playercam = eAttacker getEntityNumber();
             level.was_player = isPlayer(eAttacker);
             level.finished = 1;
         }
@@ -581,9 +663,9 @@ mod tests {
 
     /// A blast a script sets off names the world as the attacker, and the
     /// world is an *entity*: retail hands `g_entities[ENTITYNUM_WORLD]` over,
-    /// so `isPlayer(attacker)` answers false and the death runs on. Passing
-    /// `undefined` instead aborts the thread at the `isPlayer` call, which is
-    /// what `_minefields.gsc`'s `radiusDamage` did to every mine kill.
+    /// so `getEntityNumber` answers 1022, `isPlayer(attacker)` answers false
+    /// and the death runs on. Passing `undefined` instead aborted `sd.gsc`'s
+    /// killed callback at line 782 on every bomb kill.
     #[test]
     fn a_world_blast_names_the_world_entity_as_the_attacker() {
         let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, WORLD_BLAST);
@@ -603,6 +685,7 @@ mod tests {
         rt.run_frame(0);
 
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.level_field("playercam"), Value::Int(1022));
         assert_eq!(rt.level_field("was_player"), Value::Int(0));
         assert_eq!(
             rt.level_field("finished"),
@@ -691,8 +774,7 @@ mod tests {
     /// inside the radius, inline, before the calling thread's next line:
     /// the near client takes the falloff's damage and dies of it, the one
     /// 1000 units out takes nothing, and the flags the script is handed
-    /// carry `DFLAG_RADIUS`. The attacker is the world, which reaches the
-    /// callback as `undefined`.
+    /// carry `DFLAG_RADIUS`. The attacker is the world entity.
     ///
     /// The second blast is the dead check: a corpse is not damaged again,
     /// so the near client's callback ran once.
@@ -747,8 +829,8 @@ mod tests {
         assert_eq!(rt.client_field(0, "mod").as_deref(), Some("MOD_EXPLOSIVE"));
         assert_eq!(
             rt.client_field(0, "killer").as_deref(),
-            Some("0"),
-            "the world set this blast off, so the callback's attacker is undefined"
+            Some("1"),
+            "the world set this blast off, and the world is an entity"
         );
         assert_eq!(rt.client_field(0, "hits").as_deref(), Some("1"));
         assert_eq!(rt.client_vitals(0).health, 0);
@@ -834,9 +916,31 @@ mod tests {
         });
     }
 
+    /// `["normal"]` on a miss is the segment's own direction, normalised,
+    /// and `["surfacetype"]` is `"none"` (0x5ad50..0x5adb3).
+    #[test]
+    fn bullettrace_miss_carries_the_segment_direction_as_its_normal() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let from = Value::Vector([0.0, 0.0, 0.0]);
+            let to = Value::Vector([0.0, 0.0, -18.0]);
+            let args = [from, to, Value::Int(0), Value::Undefined];
+            let Value::Array(arr) = bullet_trace(&mut host, cx, None, &args).unwrap() else {
+                panic!()
+            };
+            let n = ArrayKey::Str(cx.intern_exact("normal"));
+            assert_eq!(cx.get_index(arr, n), Value::Vector([0.0, 0.0, -1.0]));
+            let st = ArrayKey::Str(cx.intern_exact("surfacetype"));
+            let Value::String(name) = cx.get_index(arr, st) else {
+                panic!("surfacetype is a string on a miss")
+            };
+            assert_eq!(cx.resolve(name), "none");
+        });
+    }
+
     /// With a real collision world, a trace straight down through the test
     /// floor (`vcod_common::collision::test_world`, top at z=0) stops short
-    /// of the end point: `fraction < 1`.
+    /// of the end point: `fraction < 1`, and `["normal"]` is the floor's.
     #[test]
     fn bullettrace_with_a_world_hits_real_geometry() {
         let (mut vm, mut host) = fixture();
@@ -857,6 +961,67 @@ mod tests {
                 panic!()
             };
             assert!(fraction < 1.0, "expected a hit, got fraction {fraction}");
+            let n = ArrayKey::Str(cx.intern_exact("normal"));
+            assert_eq!(cx.get_index(arr, n), Value::Vector([0.0, 0.0, 1.0]));
+        });
+    }
+
+    /// A linked `script_model` stops a `bulletTrace` on its xmodel's
+    /// collision, placed at the entity's origin and angles, and the result
+    /// names it; the same entity as `ignoreEnt` lets the trace through.
+    #[test]
+    fn bullettrace_clips_a_script_model_s_collision() {
+        let (mut vm, mut host) = fixture();
+        // A wall facing -X in the model's frame at x = 10.
+        let wall = vcod_common::collision::ModelTri {
+            tri: [
+                Vec3::new(10.0, -50.0, 0.0),
+                Vec3::new(10.0, -50.0, 100.0),
+                Vec3::new(10.0, 150.0, 0.0),
+            ],
+            contents: 1,
+            surface_flags: 0,
+        };
+        host.xmodel_collision
+            .insert("xmodel/test_wall".into(), Some(Rc::from(vec![wall])));
+        vm.with_cx(|cx| {
+            let id = host.ents.spawn(cx).unwrap();
+            for (name, v) in [
+                ("classname", Value::String(cx.intern_exact("script_model"))),
+                ("model", Value::String(cx.intern_exact("xmodel/test_wall"))),
+                ("origin", Value::Vector([100.0, 0.0, 0.0])),
+                ("angles", Value::Vector([0.0, 90.0, 0.0])),
+            ] {
+                let field = cx.intern_folded(name);
+                host.set_field(cx, id, field, v).unwrap();
+            }
+            // Yawed 90 about the origin, the wall stands across +Y at y = 10.
+            let from = Value::Vector([100.0, 0.0, 50.0]);
+            let to = Value::Vector([100.0, 200.0, 50.0]);
+            let args = [from, to, Value::Int(0), Value::Undefined];
+            let Value::Array(arr) = bullet_trace(&mut host, cx, None, &args).unwrap() else {
+                panic!()
+            };
+            let key = |cx: &mut Cx, k: &str| ArrayKey::Str(cx.intern_exact(k));
+            let k = key(cx, "position");
+            let Value::Vector(p) = cx.get_index(arr, k) else {
+                panic!()
+            };
+            assert!((p[1] - (10.0 - 0.125)).abs() < 1e-3, "{p:?}");
+            let k = key(cx, "normal");
+            let Value::Vector(n) = cx.get_index(arr, k) else {
+                panic!()
+            };
+            assert!(Vec3::from(n).abs_diff_eq(-Vec3::Y, 1e-5), "{n:?}");
+            let k = key(cx, "entity");
+            assert_eq!(cx.get_index(arr, k), Value::Entity(id));
+
+            let args = [from, to, Value::Int(0), Value::Entity(id)];
+            let Value::Array(arr) = bullet_trace(&mut host, cx, None, &args).unwrap() else {
+                panic!()
+            };
+            let k = key(cx, "fraction");
+            assert_eq!(cx.get_index(arr, k), Value::Float(1.0));
         });
     }
 

@@ -319,6 +319,39 @@ engineering setup works.
   one `trigger_hurt` is the kill volume under the floor, a walking player
   never reaches it, and every fire line in that fixture is a
   `trigger_multiple`.
+  `--probe-plant` and `--probe-defuse` are the S&D pair, one probe each, and
+  they need a third shell: `client-probes/probe_lookat.gsc` runs as the
+  gametype under `tools/run_probe.sh` so the server's own `games_mp.log`
+  carries every `trigger_lookat` fire and every frame `isLookingAt` answered
+  true, which is the half no client can see. The attacker joins allies, walks
+  into `bombzone_A` (read out of the BSP by `targetname`), holds use two
+  seconds and releases it -- the abort -- then holds use through a full plant
+  with a forward cmd sent from 2 s to 3.5 s, which is what says whether a
+  linked player still moves. The defender joins axis, waits the plant out on
+  the objective slots, walks to the bomb, sweeps its view across it through 15
+  stations without pressing use (a held use lets `bomb_think` finish the
+  defuse mid-sweep), which is the lookat trigger's shape in degrees, and
+  then aims true and holds use through the defuse. Each `!trace` carries the
+  movement fields, the sweep's offset, block 4 and both HUD arrays (archived
+  then current, `|` between),
+  so the progress bar's tween fields and the plant icon are in the file beside
+  the `pm_type` the link put the player at. Start the gsc probe first, then
+  the defender, then the attacker, and give each a long `--probe-secs`; the
+  recipe is in `probe_lookat`'s README section and in each fixture's header.
+  That recipe passes `+set probe_teleport 1`, which is what puts both probes on
+  a teamdeathmatch spawn in the zone's courtyard: mp_carentan's allied S&D
+  spawns are a town away from `bombzone_A` and a first run spent all 380 s of
+  its walk never arriving, and which then moves the defender to 20 units
+  from the charge once it is down, since the props ringing the zone cost a
+  second run its whole 60 s fuse, and the planter back to its spawn, unlinked
+  first since stock sd.gsc's success branch never unlinks it: the attacker's
+  `pm_type` 1 -> 0 on that frame is the probe's doing.
+  The three fixtures are
+  `crates/server/tests/fixtures/triggers/<map>-sd-lookat.txt` and
+  `crates/server/tests/fixtures/playerstate/<map>-sd-plant-attacker.txt` and
+  `-sd-defuse-defender.txt`, all retail evidence: a run against ours
+  overwrites the two client ones, so move them to `tmp/` and `git checkout`
+  the directory after.
   A plain `--net-probe` also prints every change to an entity's `pos`/`apos`
   trajectory group, which is the mover half of the same arrangement:
   `client-probes/probe_mover.gsc` under `run_probe.sh` in one shell calls each
@@ -399,35 +432,62 @@ engineering setup works.
   off `sv_mapRotation`, so a `dm` time limit reaches the intermission, the
   intermission holds every client at `pm_type` 5 for the script's own wait,
   and the next map's gamestate goes out on the live netchan
-  (`docs/research/cod11-map-cycle.md`). Not modelled: item pickup and the
-  killcam. What a client still gets nothing of is movers, which no code
-  spawns. A probe run against it reproduces the retail death capture
-  field for field except for two: the `EV_RAISE_WEAPON` the death frame does
-  not raise, and the `legsAnim` the respawn frame carries a frame late
-  (`docs/research/cod11-combat.md` section 9). What the map-cycle probes
-  measured of it is `docs/research/cod11-map-cycle.md` section 8.
+  (`docs/research/cod11-map-cycle.md`). The S&D plant and defuse run end to
+  end (`docs/research/cod11-gsc-object-model.md` 23): an aim trace per client
+  per frame fires the `trigger_lookat` it meets and answers `isLookingAt`,
+  `linkTo` pins a planter at `pm_type` 1 with its origin and velocity held,
+  the objectives travel in playerstate block 4, the progress bar rides the
+  three HUD tweens, and `bulletTrace` clips script models, which is where
+  `getPlant` puts the charge. Not modelled: item pickup, the killcam, a body
+  between the eye and a lookat (retail's second trace), `enableLinkTo`, a
+  linked player on a moving parent, a submodel entity as `groundEntityNum`,
+  and script models in weapon, blast and missile traces. The scriptent mover
+  verbs move things and their trajectories reach the wire
+  (`docs/research/cod11-movers.md`). A probe run against it reproduces the
+  retail death capture field for field except for two: the `EV_RAISE_WEAPON`
+  the death frame does not raise, and the `legsAnim` the respawn frame
+  carries a frame late (`docs/research/cod11-combat.md` section 9). What the
+  map-cycle probes measured of it is `docs/research/cod11-map-cycle.md`
+  section 8.
 - The tick, in order: the console drains first (a `map`, `map_restart` or
   `map_rotate` line an earlier frame's script queued reloads the level before
-  anything else runs), then expired clients, then each client's queued usercmds
-  (`replay_moves`, one pmove step per cmd, which is where the weapon machine
-  queues a frame's shots, swings and throws, and which mirrors each client's
-  origin onto the host and runs the touch pass per cmd right after, the way
-  retail updates `r.currentOrigin` and calls `G_TouchTriggers` inside
-  `ClientThink`), then those themselves (a trace
-  each, an impact temp entity and a hit per player struck), then the missiles
-  fly and any due fuse explodes, then the blasts become hits, then the client
-  commands that start a script thread (`kill`, `mr`), which the packet pass
-  only queues because it runs before the clock advances, then
-  `deliver_hits` so the damage callback has run before script, then the
-  script frame, then the sim ops the
-  script left (spawns, weapon gives and switches, the damage the callback
-  did), then the host-to-sim mirrors (weapons held, health, the damage
-  feedback `P_DamageFeedback` computes from the health the hit left), then the
-  entities are built once and culled and written per client. The origin is the
-  one mirror that no longer waits for that pass: the touch pass needs this
-  cmd's spot, not last tick's, so anything reading a client's host origin
-  between the two now sees the post-move value. Move anything else
-  across that order and a snapshot reads a frame-old field.
+  anything else runs), then expired clients, then the bots queue their cmds,
+  then the clock advances, then each client's queued usercmds (`replay_moves`,
+  one pmove step per cmd, which is where the weapon machine queues a frame's
+  shots, swings and throws). Each cmd's origin, `pm_type`, `on_ground`, view
+  yaw and buttons are recorded as it runs, and once every client has moved
+  they are mirrored onto the host cmd by cmd with the touch pass after each,
+  the way retail updates `r.currentOrigin` and calls `G_TouchTriggers` inside
+  `ClientThink`; a trigger the pass fires is queued, not woken, and its
+  `waittill` threads are notified at this tick's script frame on the frame's
+  clock, while a `trigger_hurt` starts the damage callback there and then. The
+  entity states `cloneplayer` reads are mirrored last in that pass. Then the
+  queued attacks themselves (a trace each, an impact temp entity and a hit per
+  player struck), then each client's last cmd buttons for `useButtonPressed`,
+  then the missiles fly and any due fuse explodes, then the blasts become
+  hits, then the client commands that start a script thread (`kill`, `mr`),
+  which the packet pass only queues because it runs before the clock advances,
+  then `deliver_hits` so the damage callback has run before script, then the
+  script frame, then the script's spawns, then the switches and takes the
+  weapon machine made, then the weapon mirrors (held, current, viewmodel, the
+  body a shot is traced against, and the origin back to script), then the
+  weapon ops, then the link ops (`linkTo`, `unlink`), then the re-anchor that
+  pins every linked client to its parent plus the offset and releases a link
+  whose parent is gone, then the sim ops the script left (events, `setOrigin`,
+  the damage the callback did), then the vitals mirror (health, and the damage
+  feedback `P_DamageFeedback` computes from the health the hit left) and
+  `end_frame`, then `ClientEndFrame`'s aim trace per playing client, off the
+  frame's final eye and aim with `pm_type` and `on_ground` mirrored again
+  beside it, whose fire wakes its waiters at the next tick's script frame,
+  then the console lines, configstring changes, server commands and
+  intermission scoreboard the script queued go out, and last the entities are
+  built once and culled and written per client. Origin, `pm_type`, `on_ground`
+  and yaw are the mirrors that no longer wait for the post-script pass: the
+  touch pass needs this cmd's values, not last tick's, so anything reading
+  them on the host between the move pass and the script frame sees the
+  post-move values. The re-anchor writes a linked client's origin again after
+  the script frame, so this tick's touch passes ran at the un-anchored spot.
+  Move anything else across that order and a snapshot reads a frame-old field.
 - `Cx::spawn` is for a builtin that needs script to run before its caller's
   next instruction: the queued thread starts the moment the builtin returns,
   which is how `finishPlayerDamage`'s killing hit gets
@@ -813,6 +873,13 @@ never pasted decompiler output or disassembly listings.
   run re-allocated the dropped weapon's model, configstring 8 and the
   elimination string at fresh slots on the first kill after it
   (`docs/research/cod11-map-cycle.md`, 4.6).
+- A `trigger_lookat` is never touched. `G_TouchTriggers`' broad phase masks
+  it out, so walking into one does nothing; it fires off `ClientEndFrame`'s
+  aim trace, once every frame an eye rests on it, and the thread it wakes runs
+  on the next frame's clock, as every trigger-woken thread does. A plant or
+  defuse clocked off the frame of the touch lands a frame early, which is
+  what the S&D gate caught (`docs/research/cod11-gsc-object-model.md`, 22.1
+  and 23.1).
 - The tick loop runs on an absolute schedule and catches up after an
   overrun, the way `SV_Frame` does. Sleeping the remainder of each tick let
   every sleep overshoot accumulate, and under load `serverTime` ran 5-10%

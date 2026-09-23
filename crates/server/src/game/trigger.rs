@@ -362,6 +362,109 @@ pub fn touched(host: &mut GameHost, cx: &mut Cx, client: EntId) -> Vec<EntId> {
         .collect()
 }
 
+/// How far the aim ray reaches: muzzle plus forward times 8192
+/// (docs/research/cod11-gsc-object-model.md 23.1).
+pub const AIM_TRACE_RANGE: f32 = 8192.0;
+
+/// The fraction along `start..end` at which the segment first enters any of
+/// a model's hulls, the model sitting at `origin`; `None` when it enters
+/// none. A start already inside a hull enters it at 0.
+pub fn segment_enters_hulls(
+    start: Vec3,
+    end: Vec3,
+    origin: Vec3,
+    hulls: &[BrushHull],
+) -> Option<f32> {
+    let s = start - origin;
+    let d = end - start;
+    hulls
+        .iter()
+        .filter(|b| !b.planes.is_empty())
+        .filter_map(|b| {
+            let (mut t_enter, mut t_exit) = (0.0f32, 1.0f32);
+            for &(n, dist) in &b.planes {
+                let s_dist = n.dot(s) - dist;
+                let rate = n.dot(d);
+                if rate.abs() < 1e-6 {
+                    if s_dist > 0.0 {
+                        return None;
+                    }
+                    continue;
+                }
+                let t = -s_dist / rate;
+                if rate > 0.0 {
+                    t_exit = t_exit.min(t);
+                } else {
+                    t_enter = t_enter.max(t);
+                }
+                if t_enter > t_exit {
+                    return None;
+                }
+            }
+            Some(t_enter)
+        })
+        .min_by(|a, b| a.total_cmp(b))
+}
+
+/// The lookat trigger the client's aim ray enters first, if the world does
+/// not stop it sooner: `G_CheckForPreventFriendlyFire`'s first trace, mask
+/// 0x20000001 (docs/research/cod11-gsc-object-model.md 23.1). `aim` is
+/// `[pitch, yaw]` in wire degrees, the pair `ClientSim::aim_angles` returns.
+/// A lookat with brushes is entered through them, one without through its
+/// box.
+///
+/// Not modelled: retail's second trace (0x22802001, a body in front of the
+/// trigger), so a player standing between the aimer and the lookat does not
+/// block ours where it blocks retail's. Also unmeasured: retail's single
+/// trace ends the function on whatever entity it hits first, so an
+/// intervening non-lookat trigger brush may stop it on the wrong classname;
+/// ours skips every other kind and reaches the lookat behind it.
+pub fn aim_trace(host: &mut GameHost, cx: &mut Cx, eye: [f32; 3], aim: [f32; 2]) -> Option<EntId> {
+    // `CalcMuzzlePoints` truncates the muzzle point toward zero (23.1).
+    let start = Vec3::from(eye).trunc();
+    let (yaw, pitch) = crate::game::combat::aim_radians(aim);
+    let forward = Vec3::new(
+        pitch.cos() * yaw.cos(),
+        pitch.cos() * yaw.sin(),
+        pitch.sin(),
+    );
+    let end = start + forward * AIM_TRACE_RANGE;
+    let world_f = host
+        .world
+        .as_ref()
+        .map_or(1.0, |w| w.collision.shot_trace(start, end).fraction);
+    let rows: Vec<(EntId, Trigger)> = host
+        .triggers
+        .iter()
+        .filter(|(_, t)| t.kind == TriggerKind::LookAt)
+        .map(|(id, t)| (id, *t))
+        .collect();
+    let origin_atom = cx.intern_folded("origin");
+    let mut best: Option<(f32, EntId)> = None;
+    for (id, t) in rows {
+        let origin = entity_origin(host, cx, id, origin_atom);
+        let f = match t
+            .shape
+            .model
+            .and_then(|m| host.model_brushes.get(m as usize))
+        {
+            Some(hulls) if !hulls.is_empty() => {
+                segment_enters_hulls(start, end, Vec3::from(origin), hulls)
+            }
+            _ => {
+                let (lo, hi) = abs_bounds(origin, &t);
+                crate::game::combat::ray_box(start, end, lo.into(), hi.into())
+            }
+        };
+        if let Some(f) = f {
+            if f < world_f && best.is_none_or(|(b, _)| f < b) {
+                best = Some((f, id));
+            }
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
 /// Do two absolute boxes overlap, the test `trap_EntitiesInBox` performs.
 pub fn boxes_overlap(a: ([f32; 3], [f32; 3]), b: ([f32; 3], [f32; 3])) -> bool {
     (0..3).all(|i| a.0[i] <= b.1[i] && a.1[i] >= b.0[i])
@@ -711,6 +814,145 @@ mod tests {
             assert!(
                 at(&mut host, cx, bulge).is_empty(),
                 "at {bulge:?}, which is in the box and in no brush"
+            );
+        });
+    }
+
+    /// A segment through a hull enters it at the near face, and one that
+    /// passes beside it enters nothing.
+    #[test]
+    fn a_lookat_hull_on_the_ray_is_found_and_a_box_beside_it_is_not() {
+        let hull = BrushHull {
+            planes: vec![
+                (Vec3::X, 16.0),
+                (-Vec3::X, 16.0),
+                (Vec3::Y, 16.0),
+                (-Vec3::Y, 16.0),
+                (Vec3::Z, 16.0),
+                (-Vec3::Z, 16.0),
+            ],
+        };
+        let o = Vec3::new(200.0, 0.0, 0.0);
+        let f = segment_enters_hulls(
+            Vec3::ZERO,
+            Vec3::new(400.0, 0.0, 0.0),
+            o,
+            std::slice::from_ref(&hull),
+        )
+        .unwrap();
+        assert!((f - 184.0 / 400.0).abs() < 1e-4);
+        assert!(segment_enters_hulls(
+            Vec3::ZERO,
+            Vec3::new(400.0, 40.0, 0.0),
+            o,
+            std::slice::from_ref(&hull)
+        )
+        .is_none());
+        // A start inside the hull enters it at 0.
+        let inside = segment_enters_hulls(
+            Vec3::new(200.0, 0.0, 0.0),
+            Vec3::new(400.0, 0.0, 0.0),
+            o,
+            std::slice::from_ref(&hull),
+        );
+        assert_eq!(inside, Some(0.0));
+        // A hull with no planes is nothing, not everything.
+        let empty = BrushHull { planes: Vec::new() };
+        assert!(segment_enters_hulls(
+            Vec3::ZERO,
+            Vec3::new(400.0, 40.0, 0.0),
+            o,
+            std::slice::from_ref(&empty)
+        )
+        .is_none());
+    }
+
+    /// The aim trace answers the nearest `trigger_lookat` on the ray and
+    /// nothing else: a `trigger_multiple` in front of it is not a lookat,
+    /// and a lookat further down the ray loses to the nearer one
+    /// (docs/research/cod11-gsc-object-model.md 23.1).
+    #[test]
+    fn the_aim_trace_returns_the_nearest_lookat_and_skips_other_kinds() {
+        let (mut vm, mut host) = crate::game::testing::fixture();
+        vm.with_cx(|cx| {
+            let origin = cx.intern_folded("origin");
+            let place_at = |host: &mut GameHost, cx: &mut Cx, kind, at: [f32; 3]| {
+                let id = host.ents.spawn(cx).unwrap();
+                host.set_field(cx, id, origin, Value::Vector(at)).unwrap();
+                host.triggers.register(
+                    id,
+                    kind,
+                    TriggerShape::boxed([-20.0, -20.0, 0.0], [20.0, 20.0, 80.0]),
+                    0,
+                    0,
+                );
+                id
+            };
+            let near = place_at(&mut host, cx, TriggerKind::Multiple, [100.0, 0.0, 0.0]);
+            let far = place_at(&mut host, cx, TriggerKind::LookAt, [300.0, 0.0, 0.0]);
+            let farther = place_at(&mut host, cx, TriggerKind::LookAt, [500.0, 0.0, 0.0]);
+            let hit = aim_trace(&mut host, cx, [0.0, 0.0, 60.0], [0.0, 0.0]);
+            assert_eq!(hit, Some(far));
+            let miss = aim_trace(&mut host, cx, [0.0, 0.0, 60.0], [0.0, 90.0]);
+            assert_eq!(miss, None);
+            let _ = (near, farther);
+        });
+    }
+
+    /// A world brush between the eye and a lookat stops the aim trace short
+    /// of it; the same trace with the brush gone reaches it.
+    #[test]
+    fn a_world_brush_between_eye_and_lookat_blocks_the_aim_trace() {
+        let (mut vm, mut host) = crate::game::testing::fixture();
+        let world = |extra: &[(Vec3, Vec3)]| {
+            Some(std::rc::Rc::new(crate::world::World {
+                collision: vcod_common::collision::test_world(extra),
+                vis: vcod_common::bsp::Visibility::none(),
+                spawn: ([0.0; 3], 0.0),
+            }))
+        };
+        vm.with_cx(|cx| {
+            let origin = cx.intern_folded("origin");
+            let id = host.ents.spawn(cx).unwrap();
+            host.set_field(cx, id, origin, Value::Vector([300.0, 0.0, 0.0]))
+                .unwrap();
+            host.triggers.register(
+                id,
+                TriggerKind::LookAt,
+                TriggerShape::boxed([-20.0, -20.0, 0.0], [20.0, 20.0, 80.0]),
+                0,
+                0,
+            );
+            host.world = world(&[]);
+            assert_eq!(
+                aim_trace(&mut host, cx, [0.0, 0.0, 60.0], [0.0, 0.0]),
+                Some(id)
+            );
+            host.world = world(&[(Vec3::new(150.0, -64.0, 0.0), Vec3::new(160.0, 64.0, 128.0))]);
+            assert_eq!(aim_trace(&mut host, cx, [0.0, 0.0, 60.0], [0.0, 0.0]), None);
+        });
+    }
+
+    /// A lookat with brushes under it is entered through the brushes, not
+    /// its box: the wedge's bulge is hollow to the aim the way it is to a
+    /// touch.
+    #[test]
+    fn the_aim_trace_enters_a_lookat_through_its_brushes() {
+        let (mut vm, mut host) = crate::game::testing::fixture();
+        vm.with_cx(|cx| {
+            let zone = place_wedge(&mut host, cx);
+            if let Some(t) = host.triggers.rows.get_mut(&zone.0) {
+                t.kind = TriggerKind::LookAt;
+            }
+            // Straight down into the brush half, and straight down into the
+            // bulge past the diagonal.
+            assert_eq!(
+                aim_trace(&mut host, cx, [60.0, 60.0, 200.0], [90.0, 0.0]),
+                Some(zone)
+            );
+            assert_eq!(
+                aim_trace(&mut host, cx, [200.0, 200.0, 200.0], [90.0, 0.0]),
+                None
             );
         });
     }

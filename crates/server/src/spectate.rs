@@ -67,6 +67,24 @@ pub const PM_SPECTATOR: i32 = 4;
 /// The intermission `pm_type` `ClientEndFrame`'s third arm writes
 /// (map-cycle doc, 6.2); the dm map-change capture's post-end traces read it.
 pub const PM_INTERMISSION: i32 = 5;
+/// A linked live player and a linked dead one, CoDExtended's
+/// `PM_NORMAL_LINKED` and `PM_DEAD_LINKED`. The two values and the
+/// decrement `G_RunClient` applies without a link record are read out of the
+/// module (docs/research/cod11-gsc-object-model.md, 23.2).
+pub const PM_NORMAL_LINKED: i32 = 1;
+pub const PM_DEAD_LINKED: i32 = 7;
+
+/// What `linkTo` left on a client: the parent it follows, the gap it stood
+/// at when it linked and the velocity it had then. `Server` re-applies all
+/// three every tick, which is `G_RunClient`'s own re-anchor; retail's
+/// velocity holds its pre-link value under the link (object-model doc,
+/// 23.2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Link {
+    pub parent: vcod_gsc::EntId,
+    pub offset: [f32; 3],
+    pub velocity: [f32; 3],
+}
 /// `EV_PAIN` and `EV_DEATH` (`docs/research/cod11-events-and-fx.md`).
 const EV_PAIN: i32 = 187;
 const EV_DEATH: i32 = 189;
@@ -280,6 +298,9 @@ pub struct ClientSim {
     /// Killed and not yet respawned: `PM_DEAD` on the wire, the dead move,
     /// no weapon step, no feedback.
     pub dead: bool,
+    /// `linkTo`'s record, `gentity_t+0x2e4`. Not `linked()`, which is about
+    /// whether the other clients are sent an entity for this one.
+    pub link_to: Option<Link>,
     damage: DamageAccum,
     feedback: DamageFeedback,
     /// `ps.stats[1]`, the yaw toward the killer (combat doc, 5.1, item 11).
@@ -364,6 +385,7 @@ impl ClientSim {
             was_airborne: false,
             strafing: None,
             jumped: false,
+            link_to: None,
             health: 0,
             max_health: 0,
             dead: false,
@@ -425,10 +447,21 @@ impl ClientSim {
         self.pm_type == PmType::Normal && !self.dead
     }
 
+    /// `ps.groundEntityNum != ENTITYNUM_NONE`, which is what
+    /// `PlayerCmd_isOnGround` answers off: a linked client reads
+    /// `ENTITYNUM_NONE` on every linked snapshot of both retail captures, so
+    /// `isOnGround` is false under a link
+    /// (docs/research/cod11-gsc-object-model.md, 23.2 and 23.5).
+    pub fn on_ground(&self) -> bool {
+        self.ps.on_ground && self.link_to.is_none()
+    }
+
     /// `ps.pm_type` as the wire carries it. The touch pass gates on it, so it
     /// is read outside `to_wire` too.
     pub fn wire_pm_type(&self) -> i32 {
         match (self.pm_type, self.dead) {
+            (PmType::Normal, true) if self.link_to.is_some() => PM_DEAD_LINKED,
+            (PmType::Normal, false) if self.link_to.is_some() => PM_NORMAL_LINKED,
             (PmType::Normal, true) => PM_DEAD,
             (PmType::Normal, false) => 0,
             (PmType::Intermission, _) => PM_INTERMISSION,
@@ -446,6 +479,9 @@ impl ClientSim {
         self.aim_state = Default::default();
         self.kick = Default::default();
         self.aim = [self.view_angles[0], self.view_angles[1]];
+        // `ClientSpawn` calls `G_EntUnlink` on the spawning client
+        // (object-model doc, 23.2).
+        self.link_to = None;
         // A respawned player does not resume the anim it died in.
         self.anim = Default::default();
         self.was_airborne = false;
@@ -478,6 +514,14 @@ impl ClientSim {
             } else {
                 0
             }
+    }
+
+    /// `setOrigin` on a player: the origin moves and the teleport bit flips,
+    /// so a client snaps rather than smearing across the gap; velocity and
+    /// the rest of the playerstate stay.
+    pub fn teleport(&mut self, origin: [f32; 3]) {
+        self.ps.origin = origin.into();
+        self.teleport_bit = !self.teleport_bit;
     }
 
     pub fn add_event(&mut self, event: i32, parm: i32) {
@@ -530,7 +574,15 @@ impl ClientSim {
                 dt,
             ),
             (PmType::Normal, Some(w)) => {
+                let held = self.link_to.map(|_| (self.ps.origin, self.ps.velocity));
                 let events = pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt, weapons);
+                // A linked client's cmds move neither its origin nor its
+                // velocity, the unlinking frame's included: retail's release
+                // frame still reads both as linked (object-model doc, 23.2).
+                if let Some((origin, velocity)) = held {
+                    self.ps.origin = origin;
+                    self.ps.velocity = velocity;
+                }
                 self.jumped |= self.ps.jumped;
                 // Retail holds a prone view inside the cone around the body by
                 // pushing `delta_angles`, so the client's own prediction lands
@@ -1084,7 +1136,7 @@ impl ClientSim {
                 self.ps.stance.view_height()
             };
             set("viewHeightTarget", target as i32);
-            let ground = match self.ps.on_ground {
+            let ground = match self.on_ground() {
                 true => ENTITYNUM_WORLD,
                 false => ENTITYNUM_NONE,
             };
@@ -2028,6 +2080,37 @@ mod tests {
             attacker_origin: Some([1810.0, 2109.5, -23.9]),
             fatal,
         }
+    }
+
+    /// A linked client reads off the ground: `ENTITYNUM_NONE` on the wire and
+    /// false to `isOnGround`, which `PlayerCmd_isOnGround` answers off the
+    /// same field (object-model doc, 23.2 and 23.5).
+    #[test]
+    fn a_linked_client_reads_off_the_ground_and_at_pm_type_1() {
+        let p = &PROTOCOL_V1;
+        let mut sim = target();
+        assert!(sim.on_ground());
+        assert_eq!(sim.wire_pm_type(), 0);
+        sim.link_to = Some(Link {
+            parent: vcod_gsc::EntId(200),
+            offset: [0.0; 3],
+            velocity: [0.0; 3],
+        });
+        assert!(
+            !sim.on_ground(),
+            "a linked client still reads on the ground"
+        );
+        assert_eq!(sim.wire_pm_type(), PM_NORMAL_LINKED);
+        let ps = sim.to_wire(p, 0, 0);
+        assert_eq!(
+            ps.fields[msg::PlayerState::field_index(p, "groundEntityNum").unwrap()],
+            ENTITYNUM_NONE as i32
+        );
+        sim.dead = true;
+        assert_eq!(sim.wire_pm_type(), PM_DEAD_LINKED);
+        // A spawn unlinks: `ClientSpawn` calls `G_EntUnlink`.
+        sim.become_player([0.0; 3], 0.0, NULL_USERCMD.angles);
+        assert_eq!(sim.link_to, None);
     }
 
     fn target() -> ClientSim {
