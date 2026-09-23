@@ -418,7 +418,9 @@ It is green on the 25 probes it runs. Five more (`probe_bootstrap`,
 `probe_cvar`, `probe_delete`, `probe_ents`, `probe_not_string`) need the
 object model, the cvar table or a real map, all of which live in
 `crates/server`, so they are measured there by
-`crates/server/tests/semantics_ents.rs` against the same capture file. Three
+`crates/server/tests/semantics_ents.rs` against the same capture file, and
+so are the seven `probe_stale_*`, which free an object and read its handle
+back. Three
 (`probe_game_dotwrite`, `probe_level_bracket`, `probe_level_size`) are
 captured but skipped for the reasons `§10` and `semantics_ab.rs`'s
 `KNOWN_GAPS_OUT_OF_SCOPE` give.
@@ -643,6 +645,50 @@ the engine actually arms are section 14 of
 `docs/research/cod11-gsc-object-model.md`; what the probe pins is the bound,
 not the constant, because its frames step 50 ms at a time.
 
+**A handle outlives its object as a dead entity (`probe_stale_handle` and
+six `probe_stale_*` probes, one per fatal case).** What a script holding a
+handle to a freed entity or hudelem reads, whether the handle sits in a local,
+in a field of `level` or in a field of another entity:
+
+- VERIFIED: inside `delete()`'s 100 ms window the entity is live.
+  `isDefined` reads 1, a field reads back and takes a write, and
+  `getEntityNumber` answers the entity's own number.
+- VERIFIED: past the free, `isDefined` reads 0, and still reads 0 once a
+  later spawn has taken the same entity number (`stale_ent_slot_reused 1`).
+- VERIFIED: `==` between the dead handle and the slot's new occupant is 0,
+  and between the dead handle and its own copy in `level` is 1.
+- VERIFIED: a hudelem is dead the moment `destroy()` returns: `isDefined` 0
+  at once, through a local, `level` and an entity field (`sd.gsc`'s
+  `other.progressbackground` shape), and `==` against the next `newHudElem`
+  is 0. Whether that next element took the destroyed record the probe cannot
+  say, since script has no number for a hudelem.
+- VERIFIED: a field read or a field write through a dead handle, entity or
+  hudelem, is fatal with `dead entity is not an object`, and a method call
+  (`getEntityNumber`, a second `destroy`) is fatal with `dead entity is not
+  an entity`.
+- VERIFIED: `dead entity` is an entry of the engine VM's value type-name
+  table in `cod_lnxded` (the string at 0x80d758c, the table at 0x80e3180,
+  beside `entity`, `dead thread` and `dead object`), and the two messages are
+  the format strings `%s is not an object` (0x80d773d, 0x80d7d16) and `%s is
+  not an entity` (0x80d7be9). The free reaches the VM through the game
+  module: `G_FreeEntity` calls `Scr_FreeEntity` at 0x66b7d, which calls
+  `Scr_FreeEntityNum` at 0x62066; `HudElem_Free` calls `Scr_FreeHudElem` at
+  0x4c57e; `Scr_FreeEntityNum` (0x6c0f8) calls through the engine import slot
+  at 0xc1088 (call targets read off the relocations). INFERRED, from the
+  message and the chain: the free turns the script's object into the dead
+  type in place, which is why every copy of the handle goes dead at once and
+  a new spawn gets an object of its own.
+
+vcod reproduces this with a generation. `EntId` carries the slot's
+generation beside its number, `ObjectTable` bumps it on every free (entity,
+hudelem and client alike), a handle whose generation is not the slot's
+reaches nothing, `Host::is_live` says so to the interpreter, which raises
+retail's two texts on a field access or a method call through it, and `==`
+compares both halves, which is retail's equal-only-to-its-copies. Not
+measured: a dead handle passed to a builtin other than `isDefined`
+(`linkTo(dead)`), or used with `notify`, `waittill`, `endon` or `thread`;
+ours leaves each to the builtin or the scheduler.
+
 ### The map-cycle builtins, and the `sd` connect race
 
 Five builtins end or restart a level or move the scores it ends on. The
@@ -736,17 +782,22 @@ such wait between its `openMenu` and its loop.
   `PartialEq`, so a genuinely mixed pair (`vector == "a"`, `entity == "a"`)
   answers `false`, but two vectors, entities, arrays or function pointers
   compare by value and can answer **true**. Retail's "pair has unmatching
-  types" message suggests the mixed case is fatal there; the same-type cases
-  are plausible but unmeasured. No probe has driven either.
+  types" message suggests the mixed case is fatal there. Of the same-type
+  cases only entities are measured (`probe_stale_handle`, above: a handle
+  equals its copies, dead or not, and nothing else); vectors, arrays and
+  function pointers are plausible but unmeasured.
 
 ## 10. Divergences kept as documentation, not code
 
-Twelve places where the implementation made a deliberate call the corpus
+Eleven places where the implementation made a deliberate call the corpus
 cannot settle, recorded here rather than silently baked into behaviour that
-looks authoritative. A thirteenth is gone: `delete()` used to free the entity
+looks authoritative. Two more are gone. `delete()` used to free the entity
 on the spot where retail defers it, and the entity think scheduler stage 3
 added closes that (section 14 of
-`docs/research/cod11-gsc-object-model.md`, and `probe_delete` in §9).
+`docs/research/cod11-gsc-object-model.md`, and `probe_delete` in §9). A
+script handle used to be a bare entity number, so a stale one read whatever
+spawned into its slot next; it carries a generation now and reads as
+retail's dead entity (`probe_stale_handle` in §9).
 
 - **Two `notify`s of the same event on the same target queued within one
   scheduling step coalesce; the second is lost.** `Op::Notify` queues rather
@@ -911,26 +962,3 @@ added closes that (section 14 of
   with every Radiant key applied, which is what the corpus reads them for,
   but their engine-side setup is absent. Nothing measured so far depends on
   it; a script that asks a `func_door` to move is the case that would.
-- **A script entity handle carries no generation, so a stale one silently
-  aliases whatever spawns into the freed slot next.** Retail bumps a
-  per-entity generation counter at `gentity+0x300` on every free and checks
-  a script handle against it, which is what a stale handle is caught by
-  (section 14 of docs/research/cod11-gsc-object-model.md, `G_FreeEntity`
-  0x66948). `Value::Entity(EntId)` (`crates/gsc/src/value.rs:7`) is a bare
-  entity number with no such tag, and now that `ObjectTable`'s free list
-  (`crates/server/src/game/entity.rs`) hands a freed slot straight back out
-  to the next spawn, a script holding a handle to the deleted entity reads
-  the new occupant's fields under the old handle instead of hitting an
-  error. Before slot reuse landed, the same stale handle pointed at a dead
-  slot and failed cleanly instead; this branch made an existing gap
-  reachable rather than opening a new one. The stock S&D script reaches it
-  with two attackers. INFERRED, off `sd.gsc`'s `bombzone_think` (the
-  `isdefined(other.progressbackground)` test at 1850, the abort's
-  `destroy()` at 1930) and vcod's free list, which hands a freed HUD slot to
-  the next allocation at once, lowest free first, with no deferral:
-  attacker 1 aborts at bombzone A and destroys its bar elements, attacker 2
-  starts at B and is given those slots, attacker 1 retries, and the test
-  reads 1 on attacker 2's element, so attacker 1 makes no bar of its own and
-  its `setShader` lands on attacker 2's. Closing it needs a generation
-  counter stored beside the slot and checked on every handle dereference,
-  not a fix to the free list itself.

@@ -743,8 +743,19 @@ entities. `G_Spawn` reads the head, and when it is not null takes that
 entity (0x668c8), pops it, and clears the tail too if the list is now empty;
 only an empty list reaches the counter path, and only that path can hit the
 `G_Error`. `G_FreeEntity` appends at the tail, and its guard is what keeps
-the 0..71 reserved range out of the list. `gentity+0x300` is a generation
-counter, which is what stale script handles are checked against.
+the 0..71 reserved range out of the list.
+
+`gentity+0x300` is a free count that survives the free. VERIFIED:
+`G_FreeEntity` loads it at 0x66b8b, clears the record with `__bzero(ent,
+0x314)` at 0x66b97, and stores the loaded value plus one at 0x66be6. VERIFIED,
+from a scan of the module's disassembly for the displacement: its other
+readers are `Add_Ammo`, `Drop_Weapon`, `G_RunFrame`, `hurt_touch`,
+`Activate_trigger_damage`, `G_Trigger` and `Touch_Multi`. What those use it
+for was not read. It is not what catches a stale script handle, which an
+earlier pass of this section claimed: a stale handle is the script VM's own
+`dead entity` type, measured by `probe_stale_handle`
+(docs/research/cod11-gsc-language.md §9, which also has the call chain from
+`G_FreeEntity` into the VM).
 
 VERIFIED live, measured on mp_chateau (2026-08-29): after the map load the first spawn was
 217 and the second 218. Deleting the first and spawning again gave 219, not
