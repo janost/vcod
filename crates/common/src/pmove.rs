@@ -398,6 +398,9 @@ pub struct PlayerState {
     /// (`PM_UpdatePlayerWalkingFlag`, 0x33694). It is what puts
     /// `walkSpeedScale` on the wish speed.
     pub walking: bool,
+    /// `ps.pm_type` 1, the link `linkTo` makes: [`pmove`] runs retail's
+    /// linked arm, which moves nothing. The caller owns the link and sets it.
+    pub linked: bool,
 }
 
 impl PlayerState {
@@ -453,6 +456,7 @@ impl PlayerState {
             last_cmd_angles: [0; 2],
             last_cmd_ads: false,
             walking: false,
+            linked: false,
         }
     }
 
@@ -553,6 +557,10 @@ pub fn pmove(
     let was_on_ground = ps.on_ground;
     // retail's `pml.previous_origin`, taken at the top of PmoveSingle
     ps.move_start = ps.origin;
+    if ps.linked {
+        linked_move(ps, input, world, dt, weapons, &mut events);
+        return events;
+    }
     if ps.on_ground {
         ps.air_speed_peak = 0.0;
     }
@@ -567,13 +575,7 @@ pub fn pmove(
     weapon::update_ads_flag(ps, input, weapon_def);
     // `PM_UpdatePlayerWalkingFlag` follows it in the same arm (0x342d8), so
     // the walk reads the ADS flag this frame just set.
-    ps.walking = input.ads
-        && ps.ads_active
-        && ps.stance != Stance::Prone
-        && !matches!(
-            ps.weaponstate,
-            weapon::WEAPON_RELOADING..=weapon::WEAPON_RELOAD_END
-        );
+    ps.walking = walking_flag(ps, input);
     if ps.waterjump_ms > 0.0 {
         ps.waterjump_ms -= dt * 1000.0;
         if ps.waterjump_ms < 0.0 {
@@ -636,6 +638,55 @@ pub fn pmove(
     clamp_velocity_to_move(ps, dt);
     snap_velocity(ps);
     events
+}
+
+/// `PmoveSingle`'s arm for `pm_type` 1 (0x34220): no ground trace, no move,
+/// no footsteps and no velocity snap, so a linked player's origin and velocity
+/// stay where the link froze them. What runs is the view (prone cap, lean),
+/// the sight flags, the stance and its eye lerp, the timers and the weapon
+/// (docs/research/cod11-gsc-object-model.md, 23.2).
+fn linked_move(
+    ps: &mut PlayerState,
+    input: &PmInput,
+    world: &CollisionWorld,
+    dt: f32,
+    weapons: &[Option<WeaponDef>],
+    events: &mut Vec<PmEvent>,
+) {
+    // `PM_UpdateViewAngles`, ahead of the dispatch in every arm; under a link
+    // the lean skips its wall clamp (0x32c63).
+    update_prone_yaw(ps, world, dt);
+    update_lean_unclamped(ps, input, dt);
+    // The arm's first store: `groundEntityNum` 1023, `pml.walking` and
+    // `pml.groundPlane` 0.
+    ps.on_ground = false;
+    ps.ground_normal = Vec3::Z;
+    ps.ground_surface_flags = 0;
+    weapon::update_ads_flag(
+        ps,
+        input,
+        weapons.get(ps.weapon as usize).and_then(Option::as_ref),
+    );
+    ps.walking = walking_flag(ps, input);
+    update_stance(ps, input, world, dt);
+    if ps.waterjump_ms > 0.0 {
+        ps.waterjump_ms = (ps.waterjump_ms - dt * 1000.0).max(0.0);
+    }
+    weapon::pm_weapon(ps, input, weapons, (dt * 1000.0).round() as i32, events);
+    ps.last_cmd_angles = input.angles;
+    ps.last_cmd_ads = input.ads;
+}
+
+/// `PM_UpdatePlayerWalkingFlag` (0x33694): the sight held on a player who
+/// has the ADS flag, is not prone and is not reloading.
+fn walking_flag(ps: &PlayerState, input: &PmInput) -> bool {
+    input.ads
+        && ps.ads_active
+        && ps.stance != Stance::Prone
+        && !matches!(
+            ps.weaponstate,
+            weapon::WEAPON_RELOADING..=weapon::WEAPON_RELOAD_END
+        )
 }
 
 /// The default arm's tail ahead of the snap (0x34398-0x3443d): a frame that
@@ -1017,6 +1068,26 @@ fn update_prone_yaw(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
 }
 
 fn update_lean(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
+    if !update_lean_unclamped(ps, input, dt) {
+        return;
+    }
+
+    // wall clamp with RTCW's lean box
+    let start = ps.origin + Vec3::Z * ps.view_height();
+    let mut right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
+    right.z = if ps.lean < 0.0 { 0.25 } else { -0.25 };
+    let end = start + right * ps.lean;
+    let t = world.box_trace(
+        start,
+        end,
+        Vec3::new(-12.0, -12.0, -6.0),
+        Vec3::new(12.0, 12.0, 10.0),
+    );
+    ps.lean *= t.fraction;
+}
+
+/// The lean's ramp without the wall clamp; true when a lean key drove it.
+fn update_lean_unclamped(ps: &mut PlayerState, input: &PmInput, dt: f32) -> bool {
     let msec = dt * 1000.0;
     let mut dir = 0.0f32;
     if input.lean_left {
@@ -1037,22 +1108,10 @@ fn update_lean(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt
         } else {
             (ps.lean + step).min(0.0)
         };
-        return;
+        return false;
     }
     ps.lean = (ps.lean + dir * (msec / LEAN_TIME_TO_MS) * LEAN_MAX).clamp(-LEAN_MAX, LEAN_MAX);
-
-    // wall clamp with RTCW's lean box
-    let start = ps.origin + Vec3::Z * ps.view_height();
-    let mut right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
-    right.z = if ps.lean < 0.0 { 0.25 } else { -0.25 };
-    let end = start + right * ps.lean;
-    let t = world.box_trace(
-        start,
-        end,
-        Vec3::new(-12.0, -12.0, -6.0),
-        Vec3::new(12.0, 12.0, 10.0),
-    );
-    ps.lean *= t.fraction;
+    true
 }
 
 /// Q3 `bg_pmove.c` `PM_GroundTrace`'s kickoff test: the player's own velocity

@@ -2043,13 +2043,53 @@ VERIFIED: the arm calls none of fn 0x30778, the ground trace fn 0x30474,
 (0x2f03c), which the default arm dispatches between.
 
 INFERRED, off that arm: a linked client's cmds run no walk, air or ladder
-move and no ground trace, and its velocity is neither integrated nor snapped;
-fn 0x316f4 still runs, and the mantle doc places the stance transitions, the
-view-height lerp, the ground jump and the ground snap inside it, so whether a
-linked client can raise a jump or a stance change is not settled by the
-dispatch alone. The two fixtures,
-`crates/server/tests/fixtures/playerstate/mp_carentan-sd-plant-attacker.txt`
-and `-sd-defuse-defender.txt`, are what measure it.
+move and no ground trace, and its velocity is neither integrated nor snapped.
+
+What the calls it does make reach, read on 2026-09-23 with
+`tools/re/annotate_func.py`:
+
+- VERIFIED: fn 0x32a44 counts `ps+0x10` down by `pml.msec` and at zero
+  clears `pm_flags` 0x100, 0x200 and 0x2000 (0x32a60), and counts `ps+0x6c`
+  and `ps+0x74` down to 0 (0x32a7d-0x32abc): Q3's `PM_DropTimers`.
+- VERIFIED: fn 0x322c8, `PM_Footsteps` in
+  `docs/research/player-model-anim-system.md`, selects the legs anim and calls
+  `PM_FootstepEvent` at 0x32482 and 0x328bc; `PM_FootstepEvent`'s one other
+  caller is `PM_StepSlideMove` (relocation at 0x3585d), which also raises
+  `EV_STEP_VIEW` (the mantle doc, "The step event and the velocity scale").
+  The arm calls 0x322c8 only past the `ps+0x81 & 0xc0` test at 0x3425d,
+  eFlags 0x4000 and 0x8000, the two bits fn 0x316f4 turns into the prone
+  and duck `pm_flags` (0x31849-0x31881). INFERRED: those are the bits a
+  mounted turret sets, so a linked planter raises no footstep, no step event
+  and no legs selection.
+- VERIFIED: the one velocity store in fn 0x316f4 (0x31d02, `velocity[2]`)
+  sits behind a `groundEntityNum != 0x3ff` test (0x31cdc), and the arm wrote
+  0x3ff at 0x34222 before calling it. INFERRED: a link takes no jump
+  velocity; the stance transitions and the eye lerp still run.
+- VERIFIED: `PM_UpdateAimDownSightFlag` keeps the ADS flag when
+  `pml.groundPlane` (pml+0x30) is set or `pm_type` reads 1 (0x37275-0x3727e,
+  a register compare); `PM_AdjustAimSpreadScale` takes its airborne arms
+  only when `groundEntityNum` is 0x3ff and `pm_type` is not 1 (0x38619,
+  0x38622; 0x3872d, 0x38736); `PM_UpdateLean` takes lean input when
+  `groundEntityNum` is not 0x3ff or `pm_type` is 1 (0x32af2-0x32afe) and
+  skips its wall-clamp trace when `pm_type` is 1 (0x32c63). INFERRED: under
+  a link the sight, the spread and the lean behave as on the ground, and the
+  lean is not clamped to walls.
+
+The byte scan above that found seven `pm_type == 1` compares looked for the
+memory-operand encodings only; 0x3727e compares a register loaded from
+`ps.pm_type` at 0x3723f, and a scan for that shape was not run.
+
+VERIFIED, off the plant fixture's `[phase hold1]`: the release frame, 85800,
+reads `pm_type` 0 with `groundEntityNum` 1023 and the linked velocity, and
+85850 reads 177 and the first decayed velocity. INFERRED: the cmds a frame
+runs see the `pm_type` the previous frame's `G_RunClient` left, so the
+unlinking frame's run the linked arm and the ground reappears on the next.
+
+vcod: `pmove::pmove` takes the linked arm on `PlayerState::linked`, which
+`ClientSim::step` sets from the link record before each cmd; the arm clears
+the ground and runs the view, the sight flags, the stance, the timers and
+the weapon, and `update_anims` holds the legs, the strafe condition and the
+ground edges while it is set.
 
 VERIFIED, off the plant fixture's `[phase hold2]`: `pm_type` reads 1 on all 100
 snapshots from the `linkTo` at `serverTime` 86800 to 91750, and 0 on the

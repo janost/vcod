@@ -56,18 +56,17 @@ const PLANT_GAPS: &[&str] = &[
     // still carries the pre-link ground entity, carentan's
     // `script_brushmodel` `*5` (entity 177, the clip brush under
     // bombzone_A); our pmove writes ENTITYNUM_WORLD for any ground, never a
-    // submodel's entity number, and our link writes 1023 from its first
-    // frame. A pmove change, deferred past this stage.
-    "hold1 ms=0 groundEntityNum: retail 177 ours 1023",
+    // submodel's entity number.
+    "hold1 ms=0 groundEntityNum: retail 177 ours 1022",
     // The same first linked frame, on the second hold.
-    "hold2 ms=0 groundEntityNum: retail 177 ours 1023",
+    "hold2 ms=0 groundEntityNum: retail 177 ours 1022",
 ];
 
 /// Rows of the defuse diff that are known divergences, same shape.
 const DEFUSE_GAPS: &[&str] = &[
     // The defuse's first linked frame: the same pre-link `*5` ground entity
-    // as the plant's two rows, and the same deferred pmove change.
-    "defuse ms=100 groundEntityNum: retail 177 ours 1023",
+    // as the plant's two rows.
+    "defuse ms=100 groundEntityNum: retail 177 ours 1022",
 ];
 
 /// Sweep stations `(yaw, pitch)` whose fired-or-not the hull edge decides
