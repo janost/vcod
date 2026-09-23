@@ -185,6 +185,9 @@ fn captures() -> BTreeMap<String, (Vec<String>, Option<String>)> {
 /// console line the server drains, and measures what the level that comes
 /// back still has; `crates/server`'s `Server` is the only host with that
 /// machinery.
+///
+/// The seven `probe_stale_*` probes free an entity or a hudelem and read
+/// the handle back, which needs the object table and its deferred free.
 const RUN_IN_SERVER_CRATE: &[&str] = &[
     "probe_bootstrap",
     "probe_cvar",
@@ -194,6 +197,13 @@ const RUN_IN_SERVER_CRATE: &[&str] = &[
     "probe_persist_exit",
     "probe_persist_exit_save",
     "probe_persist_restart",
+    "probe_stale_ent_method",
+    "probe_stale_ent_read",
+    "probe_stale_ent_write",
+    "probe_stale_handle",
+    "probe_stale_hud_method",
+    "probe_stale_hud_read",
+    "probe_stale_hud_write",
 ];
 
 /// `game.foo = 1` and `level["k"] = "v"` are, on retail, *compile*-time
