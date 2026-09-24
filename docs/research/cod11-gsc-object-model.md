@@ -1570,13 +1570,20 @@ and it touches none of the three hint fields. INFERRED for both, control flow.
 `trap_SetBrushModel`, `ent+0x118` = 0x20000000, `ent+0xf4` = 1, `svFlags |= 2`
 and `trap_LinkEntity`. VERIFIED, that is the whole function.
 
-Cursor hints in retail are an aim-trace subsystem, not a touch one:
-`G_CheckForCursorHints` picks its candidates through `trap_LocationalTrace`
-alongside `CalcMuzzlePoints`, `BG_GetInfoForWeapon` and `G_IsTurretUsable`.
-VERIFIED, the function's own calls. No touch path writes any of the three hint
-fields: `SP_trigger_lookat` installs no touch function and the trigger touch
-path stores nothing at `ps+0x384`, `+0x388` or `+0x38c`. INFERRED, from the
-absence rather than from a store. vcod models none of this: it runs no
+Cursor hints in retail are an aim-based subsystem, not a touch one. VERIFIED,
+the function's own calls: `G_CheckForCursorHints` calls `G_GetActivateEnt`
+(0x4f622), `G_IsTurretUsable`, `BG_GetInfoForWeapon` and `Com_BitCheck`, and
+neither `trap_LocationalTrace` nor `CalcMuzzlePoints`. VERIFIED,
+`G_GetActivateEnt` (0x4f14c): it calls `CalcMuzzlePoint` (0x4f19f, not
+`CalcMuzzlePoints`), `trap_EntitiesInBox` (0x4f237) and `trap_Trace`
+(0x4f52e). INFERRED: candidates come from a box around the muzzle filtered by
+distance and view cone, with a line-of-sight trace per candidate; the scoring
+and the trace are in `docs/research/cod11-items.md`, section 2. An earlier
+version of this paragraph named `trap_LocationalTrace` and `CalcMuzzlePoints`
+here, which the listings do not show. No touch path writes any of the three
+hint fields: `SP_trigger_lookat` installs no touch function and the trigger
+touch path stores nothing at `ps+0x384`, `+0x388` or `+0x38c`. INFERRED, from
+the absence rather than from a store. vcod models none of this: it runs no
 per-frame aim trace, and `ClientSim::to_wire` writes `serverCursorHintString`
 255 and never touches `serverCursorHint`, which therefore keeps the null
 playerstate's 0. VERIFIED, read out of `crates/server/src/spectate.rs`. That

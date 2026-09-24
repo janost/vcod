@@ -2104,12 +2104,14 @@ A body born on an earlier frame is never re-read.
 weapon off the player with `BG_TakePlayerWeapon` and hands the entity to
 `LaunchItem` (0x4db98). VERIFIED that `LaunchItem` stores `+0x4 = 3`
 (`ET_ITEM`), ORs 0x10 into the entity state's `eFlags` byte at 0x4dc93 (the
-`eFlags` 16 the placed-weapon traces carry), stores `pos.trType` 5 and `pos.trTime = level.time`, and arms
-`DroppedItemClearOwner` at `level.time + 1000`. VERIFIED that the store of
-0x10 into `+0x17c` at 0x4dd24 is the gentity `flags` dropped-item bit, which
-`Touch_Item` tests at 0x4d9ad and 0x4da0e, and not the wire field. VERIFIED
-that `DroppedItemClearOwner` (0x4efb4) only writes 0x3fe into `s.clientNum`,
-and that the two `0x7530` immediates in `.text` sit in `Cmd_CallVote_f` and
+`eFlags` 16 the placed-weapon traces carry), stores `pos.trType` 5 and
+`pos.trTime = level.time`, and arms `DroppedItemClearOwner` at `level.time +
+1000`. VERIFIED that `LaunchItem` stores 0x10 into `+0x17c` at 0x4dd24 and
+that `Touch_Item` tests that bit at 0x4d9ad and 0x4da0e; `+0x17c` is not the
+wire `eFlags`. INFERRED, from CoDExtended's `gentity_t` layout, that `+0x17c`
+is the gentity `flags` field and 0x10 its dropped-item bit. VERIFIED that
+`DroppedItemClearOwner` (0x4efb4) only writes 0x3fe into `s.clientNum`, and
+that the two `0x7530` immediates in `.text` sit in `Cmd_CallVote_f` and
 `fire_rocket`. INFERRED from `GetFreeCueSpot` (0x4da44) and `G_RunItem`
 (0x4eb18): a drop lives until it is picked up, until a 33rd drop evicts it
 from the 32-slot ring, or until it lands in `CONTENTS_NODROP`

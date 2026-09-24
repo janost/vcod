@@ -70,9 +70,10 @@ VERIFIED, `BG_PlayerTouchesItem` (0x2e3bc): it evaluates the item's `pos`
 trajectory at `level.time` and compares `ps.origin - itemOrigin` against 36
 and -36 on x and y (`.rodata` 0x701b8, 0x701bc) and against 18 and -88 on z
 (0x701c0, 0x701c4). INFERRED: a touch is `|dx| <= 36`, `|dy| <= 36` and
-`-88 <= ps.z - item.z <= 18`. INFERRED: since the box query reaches only 52
-units in z and an item's bounds are about ±1, the box query and not the -88
-bounds how far below the player an item can be.
+`-88 <= ps.z - item.z <= 18`: an item up to 18 below the player's origin
+or up to 88 above it. INFERRED: since the box query reaches only 52 units in
+z and an item's bounds are about ±1, the box query and not the -88 caps how
+far above the player's origin an item can sit, at about 52.
 
 VERIFIED: the pass holds a notify of the item `"touch"` with the player
 (0x3fa42) and of the player `"touch"` with the item (0x3fa61), through
@@ -252,18 +253,19 @@ grenade cap is 3 across every grenade type together.
 at the player.
 
 The reserve, `count` (`ent+0x250`). INFERRED: a negative `count` reads as 0
-(0x4cd16). VERIFIED: `dropAmmoMin` and `dropAmmoMax` are loaded at 0x4cd2d and
-0x4cd33. INFERRED: a zero `count` loads them and orders them so the larger is
-first (0x4cd3b..0x4cd41). INFERRED, from the x87 sequence at 0x4cd4b..0x4cdad:
-when both are 0, `count = 1 + trunc(0.5 * (clipSize - 1) * (1 - rand() / 2^31)
-+ 0.5)`. The constants are VERIFIED: 0x74bcc reads -2^-31 and 0x74bd0 reads
-0.5, and the truncation runs under a control word `| 0xc00`. INFERRED: a
-placed panzerfaust (`clipSize` 1, both drop fields 0) always yields `count` 1.
-INFERRED, off 0x4cdc4..0x4cdd3: when the two differ, `count = rand() % (max -
-min) + min`; when equal, `count = min` (0x4cde3); a result at or below 0
-becomes 0 (0x4cdf5). VERIFIED: the reserve is compared against
-`BG_GetAmmoTypeMax` (0x4ce1a) and the max is stored into `+0x250` at 0x4ce3a.
-INFERRED: the reserve is capped at the ammo max after it is drawn.
+(0x4cd16). VERIFIED: `dropAmmoMax` (`+0x304`) is loaded at 0x4cd2d and
+`dropAmmoMin` (`+0x300`) at 0x4cd33. INFERRED: a zero `count` loads them and
+orders them so the larger is first (0x4cd3b..0x4cd41). INFERRED, from the x87
+sequence at 0x4cd4b..0x4cdad: when both are 0, `count = 1 + trunc(0.5 *
+(clipSize - 1) * (1 - rand() / 2^31) + 0.5)`. The constants are VERIFIED:
+0x74bcc reads -2^-31 and 0x74bd0 reads 0.5, and the truncation runs under a
+control word `| 0xc00`. INFERRED: a placed panzerfaust (`clipSize` 1, both
+drop fields 0) always yields `count` 1. INFERRED, off 0x4cdc4..0x4cdd3: when
+the two differ, `count = rand() % (max - min) + min`; when equal, `count =
+min` (0x4cde3); a result at or below 0 becomes 0 (0x4cdf5). VERIFIED: the
+reserve is compared against `BG_GetAmmoTypeMax` (0x4ce1a) and the max is
+stored into `+0x250` at 0x4ce3a. INFERRED: the reserve is capped at the ammo
+max after it is drawn.
 
 The clip (`ent+0x2cc`). INFERRED: a negative clip reads as 0 (0x4ce5c).
 INFERRED, off 0x4ce68..0x4ced1: a zero clip becomes `min(clipSize, count)`
@@ -544,10 +546,13 @@ VERIFIED, `BG_TakePlayerWeapon` (0x36b78): it clears the slot byte in
 follows `def+0x2fc` clearing each chained weapon's bit (0x36c7e..0x36cb4).
 INFERRED: the chain is the alternate-mode weapon.
 
-VERIFIED, with a tag (`dropItem`'s default `"tag_weapon_right"`, `.rodata`
-0x731d4, `PlayerCmd_dropItem` 0x43720): `G_DObjGetWorldTag` (0x4e0bb), a
-capsule trace with mask 0x411 from the entity's centre to the tag that moves
-`pos.trBase` and `currentOrigin` and sets `trTime = level.time`
+VERIFIED: the tag argument (`ebp+0x10`) is compared against 0 at 0x4e0a2, with
+a `je` to 0x4e273. INFERRED: the block below runs only when a tag is passed,
+which `dropItem` always does (its default is `"tag_weapon_right"`, `.rodata`
+0x731d4, loaded at 0x43720 in `PlayerCmd_dropItem`) and the swap never does
+(it passes NULL). VERIFIED, the tag block's instructions: `G_DObjGetWorldTag`
+(0x4e0bb), a capsule trace with mask 0x411 from the entity's centre to the tag
+that moves `pos.trBase` and `currentOrigin` and sets `trTime = level.time`
 (0x4e14b..0x4e194); angles from the tag axis with roll +90 (0x74d64);
 `apos.trType = 2`, `apos.trTime = level.time`, `apos.trDelta = crandom() *
 (50, 40, 60)` (0x4e252..0x4e270, constants 0x74d54, 0x74d68, 0x74d6c).
@@ -611,20 +616,29 @@ dropper's entity number on a drop (0x4dcae) and 0x3fe once
 of `clientstate-wire-format.md`.
 
 VERIFIED, against `crates/server/tests/fixtures/entities/mp_carentan-dm.txt`:
-placed items read `eFlags 16`, `clientNum 254`, `groundEntityNum 1022`,
-`index 23` (the panzerfaust) and `apos.trBase[2]` 0x42b40000 (90.0).
-VERIFIED: `FinishSpawningItem` traces a capsule 4096 units down with mask 0x411
-(0x4e350, 0x74db4), calls `G_SetOrigin`, and adds 90 (0x74dbc) to a weapon's
-roll at 0x4e4cf. INFERRED: a placed item is dropped to the floor with
-`pos.trType` 0, which is what the fixture carries.
+placed items read `eFlags 16`, `clientNum 254`, `groundEntityNum 1022`, `index
+23` (the panzerfaust) and `apos.trBase[2]` 0x42b40000 (90.0). VERIFIED:
+`FinishSpawningItem` traces a capsule 4096 units down with mask 0x411
+(0x4e350, 0x74db4), calls `G_SetOrigin`, compares the item's giType against 1
+at 0x4e4c6, and adds 90 (0x74dbc) to the roll at 0x4e4cf. INFERRED: the roll
+add runs only for a weapon item (giType 1). INFERRED: a placed item is dropped
+to the floor with `pos.trType` 0, which is what the fixture carries.
 
-VERIFIED: `G_SpawnItem` (0x4e634) for a script `spawn` adds 90 (0x74e40) to a
-weapon's roll and links in place (0x4e7f8..0x4e847); `level.spawning`
-(`level+0x1344`) is written only by `G_SpawnEntitiesFromString` (0x622e4,
-0x62326). INFERRED: outside the map load, a spawned item gets
-`groundEntityNum` 0x3ff unless `spawnflags & 1`, and `G_RunItem` then switches
-it to `pos.trType` 5 at `level.time` (0x4eb24..0x4eb3f), so it falls and
-settles.
+VERIFIED, `G_SpawnItem` (0x4e634): a compare of `level.spawning`
+(`level+0x1344`) against 0 at 0x4e7c3; an arm that stores `FinishSpawningItem`
+as the think at `level.time + 200` (0x4e7dc..0x4e7ec); a test of
+`spawnflags & 1` at 0x4e7f8 with a `jne` to 0x4e820; a store of 0x3ff into
+`groundEntityNum` (`ent+0x7c`, 0x4e801); a giType compare against 1 at
+0x4e808; an add of 90 (0x74e40) to the roll (`ent+0x148`, 0x4e814); then
+`G_SetAngle`, `G_SetOrigin` and `trap_LinkEntity` (0x4e82b..0x4e847).
+VERIFIED: `level.spawning` is written only by `G_SpawnEntitiesFromString`
+(0x622e4, 0x62326). INFERRED: during the map load an item waits 200 ms for
+`FinishSpawningItem`; outside it (a script `spawn`) the item is linked in
+place, and unless `spawnflags & 1` it gets `groundEntityNum` 0x3ff and, for a
+weapon, the +90 roll. INFERRED: a script spawn with `spawnflags & 1` skips
+both, since the `jne` at 0x4e7ff passes over the 0x3ff store and the roll
+add. INFERRED: `G_RunItem` then switches an airborne item to `pos.trType` 5
+at `level.time` (0x4eb24..0x4eb3f), so it falls and settles.
 
 VERIFIED: the bounds (±1), `contents 0x407c0108` and `svFlags 0x200` are
 server-side only; none is an entity netfield. INFERRED: the touch never uses
@@ -654,9 +668,14 @@ is involved in a pickup.
 
 VERIFIED, the builtins stock scripts use: `precacheItem`,
 `spawn("item_health", ...)`, `dropItem(weapon [, tag])`, `delete` and
-`getcurrentweapon`. VERIFIED: `PlayerCmd_dropItem` (0x43684) returns the
-dropped entity through `GScr_AddEntity` (0x4375b), and a name that is not a
-weapon goes through `BG_FindItem` and `Drop_Item` (0x4ed30). VERIFIED, stock
+`getcurrentweapon`. VERIFIED: `PlayerCmd_dropItem` (0x43684) calls
+`BG_GetWeaponIndexForName` (0x436f2) and tests its result against 0
+(0x436fd, `je` to 0x43735), calls `Drop_Weapon` (0x4372b), `BG_FindItem`
+(0x43739) and `Drop_Item` (0x4ed30, called at 0x4374b), and passes the
+result to `GScr_AddEntity` (0x4375b). INFERRED: a weapon name goes to
+`Drop_Weapon`, any other name through `BG_FindItem` to `Drop_Item`, and the
+builtin returns the dropped entity (undefined when `BG_FindItem` finds
+nothing). VERIFIED, stock
 scripts: every gametype calls `self dropItem(self getcurrentweapon())` on
 death (dm 531, tdm 626, sd 832, re 938, bel 656). INFERRED: the death weapon
 drop is script, like the health drop.
