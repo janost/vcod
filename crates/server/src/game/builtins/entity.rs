@@ -223,7 +223,8 @@ fn client_spawn(
 }
 
 /// `spawn(classname, origin)`: a live entity with both fields set, numbered
-/// after everything already in the table.
+/// after everything already in the table. An item classname makes an item
+/// (`dm.gsc`'s `dropHealth` spawns `item_health`).
 fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Value, ErrorKind> {
     let [Value::String(cls), Value::Vector(at)] = args else {
         return Err(ErrorKind::BadType("spawn takes a classname and an origin"));
@@ -234,6 +235,16 @@ fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Valu
     host.set_field(cx, id, cn, Value::String(cls))?;
     let og = cx.intern_folded("origin");
     host.set_field(cx, id, og, Value::Vector(at))?;
+    // `G_SpawnItem` for a `bg_itemlist` classname: registered, an item, and
+    // on the floor, where retail's `G_RunItem` would drop it a frame later.
+    let name = cx.resolve(cls).to_string();
+    if let Some(index) = crate::items::classname_index(&name) {
+        let item = crate::items::item_name(index).unwrap_or(&name).to_string();
+        host.register_item(&item);
+        crate::game::item::attach(host, id, index);
+        let weapon = crate::game::spawn::is_weapon_row(index);
+        crate::game::spawn::drop_item_to_floor(host, cx, id, weapon);
+    }
     Ok(Value::Entity(id))
 }
 
@@ -681,6 +692,30 @@ mod tests {
             assert_eq!(made, EntId(crate::game::entity::FIRST_MAP_ENTITY, 0));
             assert_eq!(host.client_spawns.len(), 3);
         });
+    }
+
+    /// `dropHealth()`'s `spawn("item_health", origin)` makes an item: row 68
+    /// registered and on the wire as an `ET_ITEM` no dropper owns.
+    #[test]
+    fn a_script_spawned_item_health_is_an_item_on_the_wire() {
+        let (mut vm, mut host) = fixture();
+        let id = vm.with_cx(|cx| {
+            let cls = Value::String(cx.intern_exact("item_health"));
+            let at = Value::Vector([10.0, 20.0, 30.0]);
+            let Value::Entity(id) = spawn(&mut host, cx, None, &[cls, at]).unwrap() else {
+                panic!("spawn returns the entity");
+            };
+            id
+        });
+        assert_eq!(host.ents.get(id).unwrap().item.unwrap().index, 68);
+        assert_eq!(&host.configstrings[8][17..], "1");
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        let ents = vm.with_cx(|cx| crate::game::wire::packet_entities(&mut host, cx, p));
+        let e = &ents[&id.0];
+        assert_eq!(e.field_i32(p, "eType"), 3);
+        assert_eq!(e.field_i32(p, "index"), 68);
+        assert_eq!(e.field_i32(p, "clientNum"), 254);
+        assert_eq!(e.field_i32(p, "groundEntityNum"), 1022);
     }
 
     /// `spawn` on an entity that is not a player is retail's

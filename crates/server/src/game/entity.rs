@@ -83,6 +83,9 @@ pub struct GEntity {
     /// (`crate::spectate`) and does not carry this; no stock script calls
     /// `playLoopSound` on a player.
     pub loop_sound: i32,
+    /// The `bg_itemlist` half of an item entity (`crate::game::item`);
+    /// `None` for everything else.
+    pub item: Option<crate::game::item::ItemState>,
 }
 
 /// `hudelem_t`'s owner field (`+0x70`) for an element every client is drawn:
@@ -195,6 +198,9 @@ impl HudState {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ThinkFn {
     Free,
+    /// `DroppedItemClearOwner` (0x4efb4): the dropper may take its own drop
+    /// again (docs/research/cod11-items.md, section 8).
+    ClearOwner,
 }
 
 pub struct ObjectTable {
@@ -274,6 +280,7 @@ impl ObjectTable {
             nextthink: 0,
             events: EventRing::default(),
             loop_sound: 0,
+            item: None,
         });
         Ok(id)
     }
@@ -295,6 +302,7 @@ impl ObjectTable {
                 nextthink: 0,
                 events: EventRing::default(),
                 loop_sound: 0,
+                item: None,
             });
         }
         EntId(ENTITYNUM_WORLD, 0)
@@ -383,6 +391,7 @@ impl ObjectTable {
             nextthink: 0,
             events: EventRing::default(),
             loop_sound: 0,
+            item: None,
         });
         Ok(EntId(slot as u32, self.ent_gens[slot]))
     }
@@ -440,6 +449,7 @@ impl ObjectTable {
             nextthink: 0,
             events: EventRing::default(),
             loop_sound: 0,
+            item: None,
         });
         Ok(EntId(FIRST_HUD_ELEM + i as u32, self.hud_gens[i]))
     }
@@ -507,6 +517,11 @@ impl ObjectTable {
             }
             match think {
                 ThinkFn::Free => freed.push(id),
+                ThinkFn::ClearOwner => {
+                    if let Some(item) = self.get_mut(id).and_then(|e| e.item.as_mut()) {
+                        item.owner = None;
+                    }
+                }
             }
         }
         freed

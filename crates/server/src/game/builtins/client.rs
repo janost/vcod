@@ -13,7 +13,6 @@
 
 use crate::configstrings::{script_menu_index, weapon_index, CsRange};
 use crate::game::builtins::entity::entity_receiver;
-use crate::game::entity::ThinkFn;
 use crate::game::host::{GameHost, SimOp, WeaponOp};
 use vcod_common::pmove;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
@@ -44,19 +43,6 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("closemenu", close_menu),
     ("setorigin", set_player_origin),
 ];
-
-/// How long a dropped weapon lives before the server frees it.
-///
-/// A deliberate divergence, and the only one in this file that retail
-/// contradicts outright: retail's `Drop_Weapon` (`.so` 0x4dd40) hands the
-/// entity to `LaunchItem` (0x4db98), whose only think is
-/// `DroppedItemClearOwner` a second out, so a dropped weapon lives until
-/// somebody picks it up. Nothing in the module frees one on a timer (the two
-/// `0x7530` immediates in `.text` are in `Cmd_CallVote_f` and `fire_rocket`).
-/// Pickup on touch is not this stage, so an item with retail's lifetime would
-/// never leave; the timer bounds the entity table until the touch path exists
-/// to replace it.
-const DROPPED_ITEM_MS: i32 = 30_000;
 
 /// `self useButtonPressed()`: whether the client's last usercmd held the
 /// use button, which every stock `respawn()` loop polls. `Server` mirrors
@@ -184,32 +170,18 @@ pub fn clone_player(
     Ok(Value::Undefined)
 }
 
-/// `self dropItem(name)` (`.so` 0x43684): the named weapon on the ground
-/// where the player stands. Retail resolves the name to a weapon index and
-/// calls `Drop_Weapon`, which spawns a `bg_itemlist` entity through
-/// `LaunchItem`; here the entity is spawned the way
-/// `spawn_entities_from_string` spawns a map's `mpweapon_*`, so it reaches the
-/// wire as the same `ET_ITEM` (`crate::game::wire`). `weaponinfo` carries the
-/// weapon, which is what `kind_of` reads; the classname only has to open with
-/// `mpweapon_` for it to look there.
-///
-/// The rounds go with the item: the retail death frame reads
-/// `clip=3:7,6:3 ammo=3:56`, the held carbine's index gone from both arrays
-/// where the spawn line had it in each (combat doc, 9.1), and `player_die`
-/// itself stores no ammo (5.1), so the clear belongs here. What is left out
-/// is the rest of `BG_TakePlayerWeapon`: the weapon stays in the player's
-/// held set, which costs nothing on the death path the stock scripts use --
-/// the respawn re-gives the loadout -- and keeps a gametype that drops a
-/// weapon it means to keep from being disarmed outright. Pickup on touch
-/// does not exist yet either, which is what `DROPPED_ITEM_MS` stands in for.
+/// `self dropItem(name)` (`.so` 0x43684) -> `Drop_Weapon` -> `LaunchItem`
+/// (docs/research/cod11-items.md section 8): the weapon is taken, its rounds
+/// ride the item, and a `clipOnly` weapon with an empty clip or a weapon
+/// not held leaves nothing. Returns the item, as `GScr_AddEntity` (0x4375b)
+/// hands it back, or undefined when nothing dropped.
 ///
 /// A name no weapon file backs raises, the same reading `weapon_argument`
 /// takes for every other weapon builtin. `"none"` is the exception and is a
 /// no-op: `getCurrentWeapon` reports it for `ps.weapon` 0, and stock
 /// `dm.gsc:531` is `self dropItem(self getcurrentweapon());` with no guard,
 /// so raising there would kill the killed callback before its `respawn()`
-/// and leave the player dead for the rest of the map. UNVERIFIED: what
-/// retail's `Drop_Weapon` does for index 0; 0x4dd40 was not read.
+/// and leave the player dead for the rest of the map.
 pub fn drop_item(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -222,52 +194,17 @@ pub fn drop_item(
             return Ok(Value::Undefined);
         }
     }
-    let (name, index) = weapon_argument(cx, args)?;
-    let origin = {
-        let field = cx.intern_folded("origin");
-        match host.get_field(cx, entity_receiver(recv)?, field) {
-            Value::Vector(v) => v,
-            _ => [0.0; 3],
-        }
+    let (_, index) = weapon_argument(cx, args)?;
+    let before = crate::game::item::inventory(host, slot);
+    let mut inv = before;
+    let weapons = host.weapons.clone();
+    let dropped = crate::game::pickup::drop_weapon(&mut inv, &weapons, index as u8);
+    crate::game::item::write_back(host, slot, &before, &inv);
+    let Some(d) = dropped else {
+        return Ok(Value::Undefined);
     };
-    let id = host.ents.spawn(cx)?;
-    let classname = crate::game::spawn::radiant_name(&name).unwrap_or("mpweapon_dropped");
-    for (field, value) in [
-        ("classname", Value::String(cx.intern_exact(classname))),
-        ("weaponinfo", Value::String(cx.intern_exact(&name))),
-        ("origin", Value::Vector(origin)),
-    ] {
-        let atom = cx.intern_folded(field);
-        host.set_field(cx, id, atom, value)?;
-    }
-    host.register_item(&name);
-    // The drop lands: retail's `LaunchItem` sends it out under gravity and
-    // `G_RunItem` settles it on the first contact, which is the same resting
-    // place a placed weapon's own drop trace finds.
-    crate::game::spawn::drop_item_to_floor(host, cx, id);
-    // The rounds go with the item. VERIFIED: retail's death frame carries
-    // `clip=3:7,6:3 ammo=3:56`, the held carbine's index 10 gone from both
-    // arrays, where the spawn line had it in each (combat doc, 9.2).
-    if let Some(def) = host.weapons.get(index) {
-        let (clip_index, ammo_index) = (def.clip_index, def.ammo_index);
-        host.weapon_op(
-            slot,
-            WeaponOp::SetClip {
-                clip_index,
-                rounds: 0,
-            },
-        );
-        host.weapon_op(
-            slot,
-            WeaponOp::SetAmmo {
-                ammo_index,
-                rounds: 0,
-            },
-        );
-    }
-    host.ents
-        .schedule(id, ThinkFn::Free, host.level_time_ms + DROPPED_ITEM_MS);
-    Ok(Value::Undefined)
+    let id = crate::game::item::launch_weapon(host, cx, slot, d, crate::game::item::DropAt::Feet)?;
+    Ok(Value::Entity(id))
 }
 
 /// `self closeMenu()` (`.so` 0x45574): the reliable command `u`, with no
@@ -779,6 +716,7 @@ pub fn get_view_model(
 mod tests {
     use super::*;
     use crate::configstrings::CsRange;
+    use crate::game::entity::ThinkFn;
     use crate::game::testing::fixture;
 
     /// A builtin's ammo op lands on the host's mirror at once, so a pickup
@@ -1142,42 +1080,68 @@ mod tests {
         });
     }
 
-    /// A dropped weapon is spawned as the placed weapon it is: a
-    /// `mpweapon_*` classname with the weapon in `weaponinfo`, at the
-    /// player's own origin, with the free think armed. `wire::kind_of` reads
-    /// exactly those two fields, so this is what puts it on the wire as an
-    /// `ET_ITEM`.
+    /// `Drop_Weapon` through `LaunchItem`: the carbine leaves the player's
+    /// hands with its rounds, lands where the player stood, names its dropper
+    /// in `clientNum` for 1000 ms, takes a ring slot, and comes back as the
+    /// builtin's return value.
     #[test]
-    fn dropitem_spawns_a_placed_weapon_where_the_player_stands() {
+    fn dropitem_drops_the_weapon_with_its_rounds_and_the_owner_lockout() {
         let (mut vm, mut host) = fixture();
+        host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
         host.level_time_ms = 5_000;
+        let carbine = weapon_index("m1carbine_mp").unwrap();
+        let (clip_index, ammo_index) = {
+            let d = host.weapons.get(carbine).unwrap();
+            (d.clip_index, d.ammo_index)
+        };
+        host.client_weapons[0].give(carbine, 1);
+        host.client_ammo[0].ammo[ammo_index] = 400;
+        host.client_ammo[0].clip[clip_index] = 12;
         vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 0, None).unwrap();
             set_origin(&mut host, cx, c, [16.0, -32.0, 8.0]);
             let name = Value::String(cx.intern_exact("m1carbine_mp"));
-            drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap();
-
-            let (id, _) = host.ents.iter_inuse().find(|(id, _)| *id != c).unwrap();
-            let read = |host: &mut GameHost, cx: &mut Cx, f: &str| {
-                let atom = cx.intern_folded(f);
-                host.get_field(cx, id, atom)
+            let Value::Entity(id) =
+                drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap()
+            else {
+                panic!("dropItem returns the item");
             };
-            match read(&mut host, cx, "classname") {
-                Value::String(a) => assert_eq!(cx.resolve(a), "mpweapon_m1carbine"),
-                v => panic!("{v:?}"),
-            }
-            match read(&mut host, cx, "weaponinfo") {
-                Value::String(a) => assert_eq!(cx.resolve(a), "m1carbine_mp"),
-                v => panic!("{v:?}"),
-            }
-            assert_eq!(
-                read(&mut host, cx, "origin"),
-                Value::Vector([16.0, -32.0, 8.0])
-            );
+            let item = host.ents.get(id).unwrap().item.unwrap();
+            assert_eq!(item.index as usize, carbine);
+            assert_eq!(item.clip, 12);
+            assert_eq!(item.owner, Some(0));
+            assert!(item.dropped);
+            let count = cx.intern_folded("count");
+            assert_eq!(host.get_field(cx, id, count), Value::Int(400));
             let e = host.ents.get(id).unwrap();
-            assert_eq!(e.think, Some(ThinkFn::Free));
-            assert_eq!(e.nextthink, 5_000 + DROPPED_ITEM_MS);
+            assert_eq!(e.think, Some(ThinkFn::ClearOwner));
+            assert_eq!(e.nextthink, 6_000);
         });
+        assert!(!host.client_weapons[0].holds(carbine));
+        assert_eq!(host.client_ammo[0].ammo[ammo_index], 0);
+        assert_eq!(host.client_ammo[0].clip[clip_index], 0);
+        assert!(host.ents.run_thinks(6_000).is_empty());
+        let (id, _) = host
+            .ents
+            .iter_inuse()
+            .find(|(_, e)| e.item.is_some())
+            .unwrap();
+        assert_eq!(host.ents.get(id).unwrap().item.unwrap().owner, None);
+    }
+
+    #[test]
+    fn dropitem_of_a_weapon_not_held_drops_nothing() {
+        let (mut vm, mut host) = fixture();
+        host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
+            let name = Value::String(cx.intern_exact("fg42_mp"));
+            assert_eq!(
+                drop_item(&mut host, cx, Some(Target::Entity(c)), &[name]).unwrap(),
+                Value::Undefined
+            );
+        });
+        assert_eq!(host.ents.iter_inuse().count(), 1);
     }
 
     /// A name no weapon file backs raises rather than spawning an item with

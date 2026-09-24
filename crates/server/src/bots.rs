@@ -133,7 +133,7 @@ impl Bot {
 
     /// xorshift64* masked to 31 bits, the server's own generator.
     fn rand(&mut self) -> i32 {
-        (vcod_common::rng::xorshift(&mut self.rng) >> 33) as i32 & 0x7fff_ffff
+        crate::game::host::rand_int(&mut self.rng)
     }
 
     /// The reliable server commands the bot received this tick, as

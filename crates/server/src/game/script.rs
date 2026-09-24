@@ -437,7 +437,7 @@ impl ScriptRuntime {
                     if n <= 0 {
                         0
                     } else {
-                        ((vcod_common::rng::xorshift(rng) >> 33) as i32 & 0x7fff_ffff) % n
+                        crate::game::host::rand_int(rng) % n
                     }
                 }) {
                     return None;

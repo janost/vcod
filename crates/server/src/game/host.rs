@@ -429,6 +429,8 @@ pub struct GameHost {
     /// loaded through `fs` the first time a trace meets an entity carrying
     /// it; `None` for a name that did not load or has no collision.
     pub xmodel_collision: HashMap<String, Option<Rc<[ModelTri]>>>,
+    /// `level+0x1d5c`, the 32 most recent drops (`crate::game::item`).
+    pub drop_ring: crate::game::item::DropRing,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -535,6 +537,7 @@ impl GameHost {
             objectives: [empty_objective(); MAX_OBJECTIVES],
             client_objectives: vec![[Objective::default(); MAX_OBJECTIVES]; MAX_CLIENTS],
             xmodel_collision: HashMap::new(),
+            drop_ring: Default::default(),
         }
     }
 
@@ -615,6 +618,12 @@ impl GameHost {
     /// A uniform draw in `[0, 1)` off the host's own state.
     pub fn rand_unit(&mut self) -> f32 {
         rand_unit(&mut self.rng)
+    }
+
+    /// [`rand_int`] off the host's own state; the pickup's
+    /// `dropAmmoMin..Max` draw uses it.
+    pub fn rand_int(&mut self) -> i32 {
+        rand_int(&mut self.rng)
     }
 
     /// Free an entity and everything the host hangs off it. Retail's
@@ -727,6 +736,11 @@ fn hud_color_word(e: &crate::game::entity::GEntity) -> u32 {
 /// draws from `Server`'s state the same way.
 pub fn rand_unit(state: &mut u64) -> f32 {
     vcod_common::rng::xorshift(state) as f32 / u64::MAX as f32
+}
+
+/// A glibc-`rand()`-shaped draw, `0..=0x7fff_ffff`.
+pub fn rand_int(state: &mut u64) -> i32 {
+    (vcod_common::rng::xorshift(state) >> 33) as i32 & 0x7fff_ffff
 }
 
 impl Host for GameHost {
