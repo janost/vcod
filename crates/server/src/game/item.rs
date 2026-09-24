@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(ents[&id.0].field_i32(p, "clientNum"), 3);
         assert_eq!(ents[&id.0].field_i32(p, "groundEntityNum"), 1022);
         assert_eq!(ents[&swap.0].field_i32(p, "groundEntityNum"), 0);
-        host.run_entity_thinks(OWNER_LOCKOUT_MS);
+        vm.with_cx(|cx| host.run_entity_thinks(cx, OWNER_LOCKOUT_MS));
         let ents = vm.with_cx(|cx| crate::game::wire::packet_entities(&mut host, cx, p));
         assert_eq!(ents[&id.0].field_i32(p, "clientNum"), 254);
     }

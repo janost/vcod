@@ -7,7 +7,7 @@
 
 use crate::configstrings::{Allocators, CsRange};
 use crate::game::builtins;
-use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
+use crate::game::entity::{ObjectTable, ThinkFn, FIRST_HUD_ELEM};
 use crate::game::fields::{self, FieldType, Route};
 use crate::server::MAX_CLIENTS;
 use std::collections::HashMap;
@@ -640,12 +640,22 @@ impl GameHost {
     }
 
     /// `G_RunFrame`'s think pass, with every due `ThinkFn::Free` routed
-    /// through `free_entity`. The `delete` builtin and a dropped item both
-    /// schedule that think, so this is the path a deleted trigger's row is
-    /// dropped on.
-    pub fn run_entity_thinks(&mut self, now_ms: i32) {
-        for id in self.ents.run_thinks(now_ms) {
-            self.free_entity(id);
+    /// through `free_entity` and every `ThinkFn::SettleItem` landed. The
+    /// `delete` builtin and an evicted drop both schedule the free, so this
+    /// is the path a deleted trigger's row is dropped on.
+    pub fn run_entity_thinks(&mut self, cx: &mut Cx, now_ms: i32) {
+        for (id, think) in self.ents.run_thinks(now_ms) {
+            match think {
+                ThinkFn::SettleItem => {
+                    let row = self.ents.get(id).and_then(|e| e.item).map(|i| i.index);
+                    if let Some(row) = row {
+                        let weapon = crate::game::spawn::is_weapon_row(row as usize);
+                        crate::game::spawn::drop_item_to_floor(self, cx, id, weapon);
+                    }
+                }
+                ThinkFn::Free => self.free_entity(id),
+                ThinkFn::ClearOwner => {}
+            }
         }
     }
 

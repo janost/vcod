@@ -201,6 +201,10 @@ pub enum ThinkFn {
     /// `DroppedItemClearOwner` (0x4efb4): the dropper may take its own drop
     /// again (docs/research/cod11-items.md, section 8).
     ClearOwner,
+    /// `G_RunItem`'s landing for a script-spawned item: floored and aligned
+    /// a frame after `spawn`, off whatever angles the script wrote since
+    /// (docs/research/cod11-items.md section 9).
+    SettleItem,
 }
 
 pub struct ObjectTable {
@@ -490,13 +494,13 @@ impl ObjectTable {
     /// come due. Collect first, then act: a think that frees its entity
     /// would otherwise invalidate the walk.
     ///
-    /// Returns the ids a `ThinkFn::Free` came due for rather than freeing
-    /// them, so the caller can route each through `GameHost::free_entity`,
-    /// which is the only place the host's own per-entity tables (the trigger
-    /// row) are dropped. `Missiles::run` has the same shape for the same
-    /// reason.
+    /// Returns the thinks the table cannot run itself: `ThinkFn::Free`, so
+    /// the caller can route each through `GameHost::free_entity`, which is
+    /// the only place the host's own per-entity tables (the trigger row) are
+    /// dropped, and `ThinkFn::SettleItem`, which needs the world and the
+    /// VM. `Missiles::run` has the same shape for the same reason.
     #[must_use]
-    pub fn run_thinks(&mut self, now_ms: i32) -> Vec<EntId> {
+    pub fn run_thinks(&mut self, now_ms: i32) -> Vec<(EntId, ThinkFn)> {
         let due: Vec<(EntId, ThinkFn)> = self
             .ents
             .iter()
@@ -509,14 +513,14 @@ impl ObjectTable {
                     .then_some((EntId(i as u32, self.ent_gens[i]), think))
             })
             .collect();
-        let mut freed = Vec::new();
+        let mut left = Vec::new();
         for (id, think) in due {
             if let Some(e) = self.get_mut(id) {
                 e.think = None;
                 e.nextthink = 0;
             }
             match think {
-                ThinkFn::Free => freed.push(id),
+                ThinkFn::Free | ThinkFn::SettleItem => left.push((id, think)),
                 ThinkFn::ClearOwner => {
                     if let Some(item) = self.get_mut(id).and_then(|e| e.item.as_mut()) {
                         item.owner = None;
@@ -524,7 +528,7 @@ impl ObjectTable {
                 }
             }
         }
-        freed
+        left
     }
 
     /// Whether `id` carries its slot's current generation. The world's stays
@@ -733,7 +737,7 @@ mod tests {
         assert!(ents.get(id).is_some(), "freed before the think was due");
         assert_eq!(ents.iter_inuse().count(), 1);
 
-        assert_eq!(ents.run_thinks(100), vec![id]);
+        assert_eq!(ents.run_thinks(100), vec![(id, ThinkFn::Free)]);
         ents.free(id);
         assert!(ents.get(id).is_none(), "still live past the think");
         assert_eq!(ents.iter_inuse().count(), 0);
@@ -752,7 +756,7 @@ mod tests {
         let mut ents = ObjectTable::new();
         let id = vm.with_cx(|cx| ents.spawn(cx).unwrap());
         ents.schedule(id, ThinkFn::Free, 100);
-        assert_eq!(ents.run_thinks(100), vec![id]);
+        assert_eq!(ents.run_thinks(100), vec![(id, ThinkFn::Free)]);
         ents.free(id);
         let reused = vm.with_cx(|cx| ents.spawn(cx).unwrap());
         assert_eq!(reused.0, id.0);

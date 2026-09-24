@@ -1286,7 +1286,8 @@ impl ScriptRuntime {
         // a script reading `getEntArray` in the same frame sees the freed
         // entity already gone. Whether retail really orders it this way is
         // what `probe_delete`'s post-wait count measures.
-        self.host.run_entity_thinks(now_ms);
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.run_entity_thinks(cx, now_ms));
         // The body queue is not in the object table, so its own think -- the
         // 250 ms `eFlags` 0x800 clear -- runs beside the table's.
         self.host
