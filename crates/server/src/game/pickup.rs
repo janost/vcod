@@ -529,7 +529,8 @@ pub fn cursor_hint(kind: ItemKind, owned: bool) -> i32 {
         ItemKind::Weapon(w) if owned => i32::from(w) + 0x49,
         ItemKind::Weapon(w) => i32::from(w) + 9,
         ItemKind::Health { .. } => 7,
-        ItemKind::Ammo => unreachable!("can_grab refuses every ammo item"),
+        // `can_grab` refuses every ammo item, so `activate_ent` never picks one.
+        ItemKind::Ammo => 0,
     }
 }
 
