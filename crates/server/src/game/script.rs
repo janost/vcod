@@ -632,6 +632,19 @@ impl ScriptRuntime {
         }
     }
 
+    /// A client's ammo arrays as the tick's moves left them, for the item
+    /// pass and `dropItem`.
+    pub fn set_client_ammo(
+        &mut self,
+        slot: usize,
+        ammo: [i16; vcod_common::pmove::weapon::NUM_AMMO],
+        clip: [i16; vcod_common::pmove::weapon::NUM_AMMO],
+    ) {
+        if let Some(a) = self.host.client_ammo.get_mut(slot) {
+            *a = crate::game::host::AmmoArrays { ammo, clip };
+        }
+    }
+
     /// `Cmd_MenuResponse_f` (0x486d8): notify the client's entity with the
     /// menu's **name** and the response. The name, not the index the client
     /// sent -- retail reads configstring `CsRange::Menu.start + index` back

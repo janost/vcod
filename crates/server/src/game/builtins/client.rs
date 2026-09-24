@@ -251,20 +251,20 @@ pub fn drop_item(
     // arrays, where the spawn line had it in each (combat doc, 9.2).
     if let Some(def) = host.weapons.get(index) {
         let (clip_index, ammo_index) = (def.clip_index, def.ammo_index);
-        host.client_weapon_ops.push((
+        host.weapon_op(
             slot,
             WeaponOp::SetClip {
                 clip_index,
                 rounds: 0,
             },
-        ));
-        host.client_weapon_ops.push((
+        );
+        host.weapon_op(
             slot,
             WeaponOp::SetAmmo {
                 ammo_index,
                 rounds: 0,
             },
-        ));
+        );
     }
     host.ents
         .schedule(id, ThinkFn::Free, host.level_time_ms + DROPPED_ITEM_MS);
@@ -401,22 +401,23 @@ pub fn give_weapon(
     let (name, index) = weapon_argument(cx, args)?;
     let weapon_slot = weapon_slot(host.fs.as_deref(), &name).unwrap_or(0);
     host.client_weapons[slot].give(index, weapon_slot);
-    if let Some(def) = host.weapons.get(index) {
-        host.client_weapon_ops.push((
+    let weapons = host.weapons.clone();
+    if let Some(def) = weapons.get(index) {
+        host.weapon_op(
             slot,
             WeaponOp::SetClip {
                 clip_index: def.clip_index,
                 rounds: def.clip_size as i16,
             },
-        ));
+        );
         if !def.clip_only {
-            host.client_weapon_ops.push((
+            host.weapon_op(
                 slot,
                 WeaponOp::SetAmmo {
                     ammo_index: def.ammo_index,
                     rounds: def.start_ammo as i16,
                 },
-            ));
+            );
         }
     }
     Ok(Value::Undefined)
@@ -435,26 +436,27 @@ pub fn give_max_ammo(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
     let (_, index) = weapon_argument(cx, args)?;
-    if let Some(def) = host.weapons.get(index) {
+    let weapons = host.weapons.clone();
+    if let Some(def) = weapons.get(index) {
         // A `clipOnly` weapon has no reserve: the frag's file reads
         // `clipOnly 1` with `maxAmmo 3`, and retail's spawn line carries
         // `clip=6:3` with no `ammo` entry for index 6 (combat doc, 9.2).
         if !def.clip_only {
-            host.client_weapon_ops.push((
+            host.weapon_op(
                 slot,
                 WeaponOp::SetAmmo {
                     ammo_index: def.ammo_index,
                     rounds: def.max_ammo as i16,
                 },
-            ));
+            );
         }
-        host.client_weapon_ops.push((
+        host.weapon_op(
             slot,
             WeaponOp::SetClip {
                 clip_index: def.clip_index,
                 rounds: def.clip_size as i16,
             },
-        ));
+        );
     }
     Ok(Value::Undefined)
 }
@@ -473,8 +475,7 @@ pub fn set_spawn_weapon(
     let w = &mut host.client_weapons[slot];
     if w.holds(index) {
         w.current = index as u8;
-        host.client_weapon_ops
-            .push((slot, WeaponOp::SetCurrent(index as u8)));
+        host.weapon_op(slot, WeaponOp::SetCurrent(index as u8));
     }
     Ok(Value::Undefined)
 }
@@ -500,8 +501,7 @@ pub fn switch_to_weapon(
     if !host.client_weapons[slot].holds(index) {
         return Err(ErrorKind::BadType("that player does not hold that weapon"));
     }
-    host.client_weapon_ops
-        .push((slot, WeaponOp::SwitchTo(index as u8)));
+    host.weapon_op(slot, WeaponOp::SwitchTo(index as u8));
     Ok(Value::Undefined)
 }
 
@@ -516,7 +516,7 @@ pub fn take_all_weapons(
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
     host.client_weapons[slot] = crate::weapons::PlayerWeapons::default();
-    host.client_weapon_ops.push((slot, WeaponOp::TakeAll));
+    host.weapon_op(slot, WeaponOp::TakeAll);
     Ok(Value::Undefined)
 }
 
@@ -569,22 +569,23 @@ pub fn set_weapon_slot_weapon(
         return Ok(Value::Undefined);
     }
     host.client_weapons[client].give(index, slot);
-    if let Some(def) = host.weapons.get(index) {
-        host.client_weapon_ops.push((
+    let weapons = host.weapons.clone();
+    if let Some(def) = weapons.get(index) {
+        host.weapon_op(
             client,
             WeaponOp::SetClip {
                 clip_index: def.clip_index,
                 rounds: def.clip_size as i16,
             },
-        ));
+        );
         if !def.clip_only {
-            host.client_weapon_ops.push((
+            host.weapon_op(
                 client,
                 WeaponOp::SetAmmo {
                     ammo_index: def.ammo_index,
                     rounds: def.start_ammo as i16,
                 },
-            ));
+            );
         }
     }
     Ok(Value::Undefined)
@@ -619,7 +620,7 @@ pub fn set_weapon_slot_ammo(
                 rounds: clamp_rounds(rounds, def.max_ammo),
             }
         };
-        host.client_weapon_ops.push((client, op));
+        host.weapon_op(client, op);
     }
     Ok(Value::Undefined)
 }
@@ -643,7 +644,7 @@ pub fn set_weapon_slot_clip_ammo(
             clip_index: def.clip_index,
             rounds: clamp_rounds(rounds, def.clip_size),
         };
-        host.client_weapon_ops.push((client, op));
+        host.weapon_op(client, op);
     }
     Ok(Value::Undefined)
 }
@@ -781,6 +782,34 @@ mod tests {
     use super::*;
     use crate::configstrings::CsRange;
     use crate::game::testing::fixture;
+
+    /// A builtin's ammo op lands on the host's mirror at once, so a pickup
+    /// or a `dropItem` later in the same frame reads it; the sim still gets
+    /// the op to apply after the frame.
+    #[test]
+    fn a_weapon_op_updates_the_ammo_mirror_in_the_same_frame() {
+        use crate::game::host::AmmoArrays;
+        let (_vm, mut host) = fixture();
+        host.weapon_op(
+            0,
+            WeaponOp::SetAmmo {
+                ammo_index: 10,
+                rounds: 400,
+            },
+        );
+        host.weapon_op(
+            0,
+            WeaponOp::SetClip {
+                clip_index: 10,
+                rounds: 15,
+            },
+        );
+        assert_eq!(host.client_ammo[0].ammo[10], 400);
+        assert_eq!(host.client_ammo[0].clip[10], 15);
+        assert_eq!(host.client_weapon_ops.len(), 2);
+        host.weapon_op(0, WeaponOp::TakeAll);
+        assert_eq!(host.client_ammo[0], AmmoArrays::default());
+    }
 
     fn set_origin(host: &mut GameHost, cx: &mut Cx, id: EntId, at: [f32; 3]) {
         let field = cx.intern_folded("origin");

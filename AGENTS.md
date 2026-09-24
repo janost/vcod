@@ -472,8 +472,11 @@ engineering setup works.
   then the clock advances, then each client's queued usercmds (`replay_moves`,
   one pmove step per cmd, which is where the weapon machine queues a frame's
   shots, swings and throws). Each cmd's origin, `pm_type`, `on_ground`, view
-  yaw and buttons are recorded as it runs, and once every client has moved
-  they are mirrored onto the host cmd by cmd with the touch pass after each,
+  yaw, buttons and, once the machine has switched it, `ps.weapon` are
+  recorded as it runs, and once every client has moved each client's ammo
+  and clip arrays are copied onto the host (`client_ammo`, which every
+  `GameHost::weapon_op` then moves in place) and the rest are mirrored onto
+  the host cmd by cmd with the touch pass after each,
   the way retail updates `r.currentOrigin` and calls `G_TouchTriggers` inside
   `ClientThink`; a trigger the pass fires is queued, not woken, and its
   `waittill` threads are notified at this tick's script frame on the frame's
@@ -498,8 +501,9 @@ engineering setup works.
   beside it, whose fire wakes its waiters at the next tick's script frame,
   then the console lines, configstring changes, server commands and
   intermission scoreboard the script queued go out, and last the entities are
-  built once and culled and written per client. Origin, `pm_type`, `on_ground`
-  and yaw are the mirrors that no longer wait for the post-script pass: the
+  built once and culled and written per client. Origin, `pm_type`,
+  `on_ground`, yaw, the current weapon and the ammo arrays are the mirrors
+  that no longer wait for the post-script pass: the
   touch pass needs this cmd's values, not last tick's, so anything reading
   them on the host between the move pass and the script frame sees the
   post-move values. The re-anchor writes a linked client's origin again after

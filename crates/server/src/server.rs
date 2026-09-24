@@ -268,8 +268,10 @@ pub(crate) fn apply_weapon_op(
 
 /// One cmd that moved a client, as the touch pass after the moves needs it:
 /// where the cmd left the client, the buttons it carried, the `pm_type` the
-/// pass gates on, whether it left the client on the ground, and a player's
-/// view yaw (a spectator's `SpectatorThink` arm writes no angles).
+/// pass gates on, whether it left the client on the ground, a player's view
+/// yaw (a spectator's `SpectatorThink` arm writes no angles), and the
+/// `ps.weapon` the cmd left once the tick's moves have switched it, which an
+/// item grab reads.
 struct Touched {
     slot: usize,
     origin: [f32; 3],
@@ -277,6 +279,7 @@ struct Touched {
     pm_type: i32,
     on_ground: bool,
     yaw: Option<f32>,
+    weapon: Option<u8>,
 }
 
 /// What one client's usercmd replay did this tick, for the trace line.
@@ -2901,6 +2904,7 @@ impl Server {
             // What the client held going in, so a switch the machine made is
             // told apart from a playerstate reset between ticks.
             let held = sim.ps.weapon;
+            let mut switched = false;
             // Stale cmds (dt <= 0) are skipped whole; a long one is chopped
             // rather than clamped away; a flood past the per-tick cap resyncs
             // to the newest cmd and keeps only the tail.
@@ -2993,6 +2997,7 @@ impl Server {
                     }
                 }
                 events.extend(raised);
+                switched |= sim.ps.weapon != held;
                 touched.push(Touched {
                     slot,
                     origin: sim.origin(),
@@ -3001,6 +3006,7 @@ impl Server {
                     on_ground: sim.on_ground(),
                     yaw: (sim.pm_type == crate::spectate::PmType::Normal)
                         .then(|| sim.view_angles()[1]),
+                    weapon: switched.then_some(sim.ps.weapon),
                 });
                 last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;
@@ -3037,6 +3043,13 @@ impl Server {
         // because the host's copy is only mirrored from the sim after the
         // script frame, so the pass would otherwise test last tick's spot.
         if let Some(rt) = self.script.as_mut() {
+            // The ammo the touch pass reads, once per tick: the pass itself
+            // moves the host's copy as it grabs.
+            for (slot, c) in self.clients.iter().enumerate() {
+                if let Some(sim) = c.as_ref().and_then(|c| c.sim.as_ref()) {
+                    rt.set_client_ammo(slot, sim.ps.ammo, sim.ps.ammoclip);
+                }
+            }
             for t in touched {
                 rt.set_client_origin(t.slot, t.origin);
                 if let Some(yaw) = t.yaw {
@@ -3044,6 +3057,11 @@ impl Server {
                 }
                 rt.set_client_pm_type(t.slot, t.pm_type);
                 rt.set_client_on_ground(t.slot, t.on_ground);
+                // Ahead of `weapon_changes`, which lands after the script
+                // frame: a grab tests `ps.weapon` as this cmd left it.
+                if let Some(w) = t.weapon {
+                    rt.set_client_weapon(t.slot, w);
+                }
                 rt.touch_triggers_with_buttons(t.slot, now_ms, t.buttons);
             }
         }

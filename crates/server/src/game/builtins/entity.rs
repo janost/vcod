@@ -204,6 +204,9 @@ fn client_spawn(
     host.set_field(cx, id, angles_field, Value::Vector(angles))?;
 
     host.client_weapons[slot] = crate::weapons::PlayerWeapons::default();
+    // `ClientSpawn` gives the sim a fresh playerstate, ammo included; the
+    // script's gives that follow land on this.
+    host.client_ammo[slot] = crate::game::host::AmmoArrays::default();
     // `ClientSpawn` re-stores `sess.maxHealth` into the fresh playerstate
     // (docs/protocol-1.1.md, "Block 1"); the gametype writes both fields
     // again right after, so this is what a spawn without that script does.

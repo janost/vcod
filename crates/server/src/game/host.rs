@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use vcod_common::collision::ModelTri;
 use vcod_common::net::msg::{Objective, MAX_OBJECTIVES};
+use vcod_common::pmove::weapon::NUM_AMMO;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 
 /// `ENTITYNUM_NONE`, the entity number an unattached objective record and an
@@ -130,6 +131,44 @@ pub enum WeaponOp {
     SwitchTo(u8),
 }
 
+/// A client's `ps.ammo` and `ps.ammoclip` as the host last knew them: copied
+/// from the sim once a tick before the touch pass, and moved by every
+/// [`GameHost::weapon_op`] in between, so a pickup and a `dropItem` in the
+/// same tick read each other's writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AmmoArrays {
+    pub ammo: [i16; NUM_AMMO],
+    pub clip: [i16; NUM_AMMO],
+}
+
+impl Default for AmmoArrays {
+    fn default() -> Self {
+        AmmoArrays {
+            ammo: [0; NUM_AMMO],
+            clip: [0; NUM_AMMO],
+        }
+    }
+}
+
+impl AmmoArrays {
+    pub fn apply(&mut self, op: WeaponOp) {
+        match op {
+            WeaponOp::SetClip { clip_index, rounds } => {
+                if let Some(c) = self.clip.get_mut(clip_index) {
+                    *c = rounds;
+                }
+            }
+            WeaponOp::SetAmmo { ammo_index, rounds } => {
+                if let Some(a) = self.ammo.get_mut(ammo_index) {
+                    *a = rounds;
+                }
+            }
+            WeaponOp::TakeAll => *self = AmmoArrays::default(),
+            WeaponOp::SetCurrent(_) | WeaponOp::SwitchTo(_) => {}
+        }
+    }
+}
+
 /// A client's health as the script sees it: `self.health`, `self.maxhealth`
 /// and whether `finishPlayerDamage` has killed it since its last spawn. The
 /// host is the owner; `Server` mirrors it into the sim every frame.
@@ -229,6 +268,8 @@ pub struct GameHost {
     /// clip every frame would make the weapon bottomless -- so `Server`
     /// drains them after `run_frame` and applies each once.
     pub client_weapon_ops: Vec<(usize, WeaponOp)>,
+    /// Each client's ammo arrays ([`AmmoArrays`]), by slot.
+    pub client_ammo: Vec<AmmoArrays>,
     /// Each client's health, authoritative here: the `health` and
     /// `maxhealth` accessors on a client entity read and write it, and
     /// `Server` mirrors it into the sim every frame.
@@ -433,6 +474,16 @@ impl GameHost {
         tris
     }
 
+    /// Queues `op` for the client's sim and applies it to the host's mirror
+    /// now. Every weapon op goes through here; a push straight onto
+    /// `client_weapon_ops` leaves the mirror stale for the rest of the frame.
+    pub fn weapon_op(&mut self, slot: usize, op: WeaponOp) {
+        if let Some(a) = self.client_ammo.get_mut(slot) {
+            a.apply(op);
+        }
+        self.client_weapon_ops.push((slot, op));
+    }
+
     pub fn new(configstrings: Vec<String>) -> GameHost {
         let allocators = Allocators::seeded(&configstrings);
         GameHost {
@@ -444,6 +495,7 @@ impl GameHost {
             client_weapons: vec![crate::weapons::PlayerWeapons::default(); MAX_CLIENTS],
             client_viewmodel: vec![0; MAX_CLIENTS],
             client_weapon_ops: Vec::new(),
+            client_ammo: vec![AmmoArrays::default(); MAX_CLIENTS],
             client_vitals: vec![Vitals::default(); MAX_CLIENTS],
             client_buttons: vec![0; MAX_CLIENTS],
             client_pm_type: vec![0; MAX_CLIENTS],
