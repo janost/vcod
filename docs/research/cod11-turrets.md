@@ -56,13 +56,14 @@ turret's record.
 | `cl+0x20d0` | `sessionstate` | VERIFIED, `cod11-map-cycle.md`; the name is INFERRED |
 | `cl+0x21e8` | the last cmd's buttons byte | VERIFIED, `cod11-gsc-object-model.md` 23.5 |
 
-The turret record: 32 of them, 0x40 bytes each, array at 0xaa180.
-VERIFIED: `G_SpawnTurret` walks `0xaa180` in 0x40 steps comparing each first
-dword against zero, holds a bound of 0x20 and `Com_Error(1, "G_SpawnTurret:
-max number of turrets (%d) exceeded")` (string 0x75960, call 0x52cc3), and
-calls `__bzero(rec, 0x40)` at 0x52cd1. INFERRED: a 33rd turret is a fatal
-error. VERIFIED: `G_InitTurrets` (0x53034) zeroes
-the 32 first dwords, and `G_InitGame` calls it (0x4fe18).
+The turret record: 32 of them, 0x40 bytes each, array at 0xaa180. VERIFIED:
+`G_SpawnTurret` holds the base `0xaa180`, a stride of 0x40, a compare of a
+record's first dword against zero, a bound of 0x20, `Com_Error(1,
+"G_SpawnTurret: max number of turrets (%d) exceeded")` (string 0x75960, call
+0x52cc3) and `__bzero(rec, 0x40)` (0x52cd1). INFERRED: it scans for the first
+free record, clears it, and a 33rd turret is a fatal error. VERIFIED:
+`G_InitTurrets` (0x53034) zeroes the 32 first dwords, and `G_InitGame` calls
+it (0x4fe18).
 
 | off | written by | meaning | evidence |
 |---|---|---|---|
@@ -109,7 +110,9 @@ carentan, harbor, hurtgen) are bombzone and exploder props, and the
 capture `crates/server/tests/fixtures/entities/mp_carentan-dm.txt`: carentan's
 two `eType` 11 entities are **297** (`pos.trBase` -500 1896 175, yaw 295,
 `angles2[0]` -63) and **298** (1712 1830 8, yaw 229, `angles2[0]` -72), with
-`index` 58 and `weapon` 16 on both, in every sample of that file. So the gun a
+`index` 58 and `weapon` 16 on both, in samples 2, 3 and 4 of that file
+(fixture lines 242-261, 373-392, 504-523). Samples 0 and 1 carry neither: the
+probe stood where the PVS culls them. So the gun a
 probe mounts on carentan at 1712 1830 8 goes on the wire as entity 298, and
 `viewlocked_entNum` and `otherEntityNum` read 298, not 855. An earlier survey
 and the first version of the design spec called the two turrets #853 and
@@ -169,11 +172,14 @@ VERIFIED, the weapon field table's `{name, offset, type}` records
 INFERRED: `fireTime` is held in milliseconds, so the stock gun's reads 50
 (`cod11-combat.md`, the type-7 reading).
 
-VERIFIED: `BG_SetupWeaponInfo` (0x36674) walks every weapon, and for each
-whose `useHintString` is non-empty calls `G_GetHintStringIndex(def+0x40c,
-def->useHintString)` (0x369f5), with `Com_Error(1, "Too many different
-hintstring values on weapons. Max allowed is %i different strings", 0x20)`
-(string 0x72360) on a zero return. INFERRED: `def+0x40c` holds the slot in the
+VERIFIED: `BG_SetupWeaponInfo` (0x36674) holds a load of `def->useHintString`
+(0x369e0) and a test of its first byte (0x369e6), a call to
+`G_GetHintStringIndex(def+0x40c, def->useHintString)` (0x369f5), a test of
+its return (0x369fd) and `Com_Error(1, "Too many different hintstring values
+on weapons. Max allowed is %i different strings", 0x20)` (string 0x72360,
+call 0x36a0d). INFERRED: the call runs for every weapon whose
+`useHintString` is non-empty, and a zero return is the fatal error.
+INFERRED: `def+0x40c` holds the slot in the
 32-entry hint-string range at configstring 1212 (`cod11-gsc-object-model.md`,
 the hint-string paragraph), so the stock turret's is slot 0. VERIFIED:
 retail's carentan configstring 1212 reads `CGAME_USEMG42`
@@ -199,19 +205,19 @@ VERIFIED, `G_SpawnTurret` (0x52c84), the stores and calls:
 
 - the record allocation above, `ent+0x15c = rec` (0x52cdc) and `rec+0 = 1`;
 - `s.weapon = BG_GetWeaponIndex(weaponinfo)` (0x52cec), with
-  `Com_Error(1, "bad weaponinfo '%s' specified for turret")` (0x759a0) beside
-  it;
+  `Com_Error(1, "bad weaponinfo '%s' specified for turret")` (0x759a0);
 - `BG_GetInfoForWeapon` (0x52d21), a compare of `level+0x1c` against 0
   (0x52d2b), `IsItemRegistered` (0x52d3e) and `Scr_Error` on `"turret '%s'
-  not precached"` (0x759ca, 0x52d5f), then `RegisterItem(weapon, 1)`
+  not precached"` (0x759ca, 0x52d5f), and `RegisterItem(weapon, 1)`
   (0x52d73);
 - `rec+0x8 = 0`, `rec+0x20 = def->stance`, `rec+0x24 = -1`, `rec+0x28 = 0`
-  (0x52d78..0x52d8f), and the two alias bytes from `G_SoundAliasIndex` on
-  `def+0xa0` and `def+0xa4`, or 0 (0x52db1..0x52de4);
+  (0x52d78..0x52d8f), stores of `G_SoundAliasIndex` on `def+0xa0` and
+  `def+0xa4` into the two alias bytes, and stores of 0 into the same bytes
+  (0x52db1..0x52de4);
 - `G_SpawnFloat` on `rightarc` (0x759e5), `leftarc` (0x759ee), `toparc`
   (0x759f6) and `bottomarc` (0x759fd), each with the empty default
   (0x759e4), and loads of the weapon file's `rightArc`, `leftArc`, `topArc`
-  and `bottomArc` beside them;
+  and `bottomArc`;
 - a compare of `health` (`ent+0x230`) against 0 (0x52ee7) and a store of 100
   (0x52ef0);
 - `G_SpawnInt("damage", "0", &ent->dmg)` (key 0x75a09, 0x52f0e), a store of
@@ -233,11 +239,13 @@ max(bottomarc, 0)`. So the stock gun's record reads yaw -45..45 and pitch
 the engine's usual convention, which is why `leftarc` and `bottomarc` are the
 maxima.
 
-INFERRED: each arc key falls back to the weapon file when absent, a zero
-`health` becomes 100, a negative `dmg` becomes 0, the `damage` key overrides
-the weapon file only when present, the
-precache check applies only outside the map load (`level+0x1c` zero, a
-script spawn), and the model comes from the map's `model` key through the
+INFERRED: the order of the list is the order the function runs in; each
+alias byte is 0 when its weapon-file string is empty; the precache
+`Scr_Error` is reached only when `level+0x1c` is zero (outside the map load,
+a script spawn) and the item is not registered; each arc key falls back to
+the weapon file when absent; a zero `health` becomes 100; the `damage` key
+overrides the weapon file only when present and a negative `dmg` becomes 0;
+and the model comes from the map's `model` key through the
 generic spawn parse, since neither function sets one; the capture's `index`
 58 is `xmodel/mg42_bipod` (`docs/protocol-1.1.md`). INFERRED: nothing
 installs a `die` or `pain` callback, so a turret has health 100 and
@@ -252,26 +260,33 @@ rest"; they are not repeated here.
 
 ### 4.1 The use key
 
-VERIFIED: `ClientThink_real` calls `Cmd_Activate_f(ent)` at 0x4064e behind a
-`test cl+0x21f0, 0x40`, the use bit's rising edge (`cod11-items.md` section
-1). INFERRED: a mount happens inside the cmd that pressed use, after that
-cmd's touch pass, and not at the end of the server frame.
+VERIFIED: `ClientThink_real` holds a `test cl+0x21f0, 0x40` at 0x4063e and a
+call to `Cmd_Activate_f(ent)` at 0x4064e, and `cl+0x21f0` is written from
+`cmd.buttons & ~oldButtons` (`cod11-items.md` section 1). INFERRED: the call
+is taken only on the use bit's rising edge. INFERRED: a mount happens inside
+the cmd that pressed use, after that cmd's touch pass, and not at the end of
+the server frame.
 
 VERIFIED, `Cmd_Activate_f` (0x48468):
 
-- a call to `Scr_IsSystemActive(1)` at 0x4847e with a branch to the exit on 0;
-- a compare of the player's busy byte against 0 at 0x4848e; past it, a test
-  of `ps.eFlags` byte 1 against 0xc0 (0x4849d), a store of 2 into the busy
-  byte (0x484a6) or of 0 (0x484b0), and a jump to the exit (0x484bc);
-- `G_CheckForCursorHints(player)` (0x484c5) and a load of
-  `cl+0x3b8` compared against 0x3ff (0x484d3);
-- on the candidate `g_entities[cl+0x3b8]`: classname compares against the
-  `func_door` and `func_door_rotating` constants (`G_TryDoor`), against
-  `trigger_use` (a `"trigger"` notify), `eType` 3 (the item arm), and `eType`
-  11 at 0x485b0 with `G_IsTurretUsable(turret, player)` at 0x485ba and the
-  call through `turret->use(turret, player, player)` at 0x485d6.
+- a call to `Scr_IsSystemActive(1)` at 0x4847e and a test of its return;
+- a compare of the player's busy byte against 0 at 0x4848e, a test of
+  `ps.eFlags` byte 1 against 0xc0 (0x4849d), stores of 2 (0x484a6) and of 0
+  (0x484b0) into the busy byte, and a `jmp` at 0x484bc;
+- `G_CheckForCursorHints(player)` (0x484c5) and a compare of `cl+0x3b8`
+  against 0x3ff (0x484d3);
+- a load of `g_entities[cl+0x3b8]` (0x484e2..0x484ef); classname compares
+  against the `func_door` and `func_door_rotating` constants and a call to
+  `G_TryDoor`, a compare against `trigger_use` and a `"trigger"` notify, an
+  `eType` compare against 3 (the item arm), an `eType` compare against 11 at
+  0x485b0, `G_IsTurretUsable(turret, player)` at 0x485ba, and the call through
+  `turret->use(turret, player, player)` at 0x485d6.
 
-INFERRED: a use press while mounted does nothing but request the dismount
+INFERRED: `Scr_IsSystemActive` returning 0 ends the function; a non-zero busy
+byte takes the 2-or-0 store and the `jmp` at 0x484bc leaves the function;
+otherwise the cursor scan runs and a 0x3ff candidate ends it; the candidate
+is then tested against each arm in the order listed. INFERRED: a use press
+while mounted does nothing but request the dismount
 (busy byte 2, acted on by the next mounted frame, section 8), and runs no
 cursor scan, no pickup and no door; a busy byte left on a player who is not
 mounted is simply cleared. INFERRED: an `eType` 11 candidate that fails
@@ -311,20 +326,23 @@ the scan's.
 ### 4.3 The cursor hint
 
 VERIFIED, `G_CheckForCursorHints` (0x4f59c), the turret arm: an `eType` 11
-compare at 0x4f6e2, `G_IsTurretUsable` at 0x4f6ef followed in address order
-by a `je` to the loop increment at 0x4f870, `mov edi, 6` at 0x4f714, a test of
-`*def->useHintString` (0x4f70e, 0x4f71c) and a load of `def+0x40c` into the
-hint-string register (0x4f734). INFERRED: a usable turret hints 6,
-`HINT_MG42` (slot 6 of `hintStrings`, `cod11-gsc-object-model.md`), with the
-weapon's hint-string slot, and an unusable one is skipped for the next
-candidate.
+compare at 0x4f6e2, `G_IsTurretUsable` at 0x4f6ef, a `je` at 0x4f6f9 whose
+target operand is 0x4f870 (the loop increment), `mov edi, 6` at 0x4f714, a
+test of `*def->useHintString` (0x4f70e, 0x4f71c) and a load of `def+0x40c`
+into the hint-string register (0x4f734). INFERRED: a false return takes the
+`je`, so an unusable turret is skipped for the next candidate; a usable one
+hints 6, `HINT_MG42` (slot 6 of `hintStrings`, `cod11-gsc-object-model.md`),
+with the weapon's hint-string slot.
 
-VERIFIED: the function stores 0 into `cl+0x384` and 0x3ff into `cl+0x3b8`
-ahead of its busy-byte gate at 0x4f5e4, and the -1 into
-`serverCursorHintString` at 0x4f603 sits past that gate (`cod11-items.md`
-2.3). INFERRED: a mounted player reads `serverCursorHint` 0 every frame and
-keeps whatever `serverCursorHintString` held when it mounted, which is the
-turret's own slot 0.
+VERIFIED: the function stores 0 into `cl+0x384` (0x4f5ba), 0 into `cl+0x388`
+(0x4f5c4) and 0x3ff into `cl+0x3b8` (0x4f5ce), compares the player's `health`
+against 0 (0x4f5d7) and its busy byte against 0 (0x4f5e4), and stores -1 into
+`serverCursorHintString` at 0x4f603 (`cod11-items.md` 2.3). INFERRED: the
+three stores run on every call, and a player with health at or below 0 or a
+non-zero busy byte leaves before the -1 store. INFERRED: a mounted player
+reads `serverCursorHint` 0 every frame and keeps whatever
+`serverCursorHintString` held when it mounted, which is the turret's own slot
+0.
 
 INFERRED, from the loop at 0x4f870: when every candidate is an unusable
 turret, the loop ends with `cl+0x3b8` naming the last one and the hint 0, and
@@ -342,25 +360,26 @@ second):
 - `rec+0x4 |= 0x800` (0x52aee);
 - `rec+0x2c..0x34` = the player's `r.currentOrigin` (0x52af8..0x52b0a);
 - player `s.otherEntityNum` = the turret's number (0x52b0f);
-- stores of 2, 1 and 0 into `rec+0x24` (0x52b1f, 0x52b2c, 0x52b35) beside
-  tests of `pm_flags & 1` (0x52b1b) and `pm_flags & 2` (0x52b28);
+- tests of `pm_flags & 1` (0x52b1b) and `pm_flags & 2` (0x52b28), and
+  stores of 2, 1 and 0 into `rec+0x24` (0x52b1f, 0x52b2c, 0x52b35);
 - `ps.eFlags` byte 1: `|= 0x40` with `&= 0x7f` (0x52b4d, 0x52b5a), `|= 0x80`
-  with `&= 0xbf` (0x52b71, 0x52b7e) and `|= 0xc0` (0x52b90), beside compares
+  with `&= 0xbf` (0x52b71, 0x52b7e) and `|= 0xc0` (0x52b90), and compares
   of `rec+0x20` against 2 (0x52b3f) and 1 (0x52b63);
 - turret `+0x28c..0x294` = its `r.currentAngles` (0x52bae..0x52bc6);
 - `angles2[i]` for i = 0, 1 = `AngleSubtract(ps.viewangles[i],
-  r.currentAngles[i])` (0x52c07), stored (0x52c0c), then compares against
-  `rec+0x14 + 4i` and `rec+0xc + 4i` with a store of the bound over it
-  (0x52c15..0x52c39);
+  r.currentAngles[i])` (0x52c07), stored (0x52c0c); compares against
+  `rec+0x14 + 4i` and `rec+0xc + 4i` and a store of the bound into the same
+  slot (0x52c15..0x52c39);
 - `SetClientViewAngle(player, (angles2[0] + pitch, angles2[1] + yaw, 0))`
   (0x52c75).
 
-INFERRED: the saved stance is prone 2, crouch 1, stand 0; a prone gun sets
-`eFlags` 0x4000, a duck gun 0x8000 and a stand gun 0xC000; the barrel is put
-where the player is looking, clamped to the arcs, and the view is snapped to
-the barrel even when nothing was clamped, since no compare sits in front of
-the `SetClientViewAngle` call. The mount writes no 15-degree rate
-limit (that is the per-frame step, section 6.2) and leaves `angles2[2]` alone.
+INFERRED: the stores run in the order listed; each clamp store happens only
+past its bound; the saved stance is prone 2, crouch 1, stand 0; a prone gun
+sets `eFlags` 0x4000, a duck gun 0x8000 and a stand gun 0xC000; the barrel is
+put where the player is looking, clamped to the arcs, and the view is snapped
+to the barrel even when nothing was clamped, since no compare sits in front of
+the `SetClientViewAngle` call. The mount writes no 15-degree rate limit (that
+is the per-frame step, section 6.2) and leaves `angles2[2]` alone.
 
 VERIFIED, absence in the function's 0x1e8 bytes: no store to `ps.weapon`,
 `ps.pm_type` or `ps.pm_flags`. INFERRED: the carried weapon stays in
@@ -376,9 +395,11 @@ script can force a mount; no stock script does (section 1).
 VERIFIED, `PmoveSingle`, the `pm_type` 0 arm (0x341b5..0x34276): an `eFlags &
 0xC000` test, `groundEntityNum = 0x3ff`, two pml fields zeroed, and calls to
 `PM_UpdateAimDownSightFlag`, `PM_UpdatePlayerWalkingFlag`, 0x316f4, 0x32a44
-and 0x322c8, and a jump to the function's tail. INFERRED: a mounted player
-does not move, has no friction, fires no weapon and reads as airborne to
-pmove, while view angles are still updated earlier in `PmoveSingle`.
+and 0x322c8, and a `jmp` whose target is the function's tail. INFERRED: the
+arm is taken on a mounted bit and skips the rest of the move. INFERRED: a
+mounted player does not move, has no friction, fires no weapon and reads as
+airborne to pmove, while view angles are still updated earlier in
+`PmoveSingle`.
 
 VERIFIED, 0x316f4 (the stance step), from the Ghidra body at `000416f4`: an
 `eFlags & 0xC000` test, compares against 0x4000 and 0x8000, and the `pm_flags`
@@ -387,9 +408,9 @@ takes the first pair, 0x8000 the second and 0xC000 the third: pmove puts the
 player's stance to the gun's, and a stand gun reads `pm_flags` with neither
 bit, whatever stance the player mounted from.
 
-VERIFIED: `PM_Weapon` (0x390e0) holds an `eFlags & 0xC000` test beside a
-return (`cod11-combat.md` 1.12). INFERRED: no weapon state, switch, reload or
-fire event comes out of pmove while mounted.
+VERIFIED: `PM_Weapon` (0x390e0) holds an `eFlags & 0xC000` test
+(`cod11-combat.md` 1.12). INFERRED: the function returns on it, so no
+weapon state, switch, reload or fire event comes out of pmove while mounted.
 
 VERIFIED, `PM_UpdateViewAngles`: one `eFlags & 0xC000` test (0x32f87) and no
 load of any turret record or arc. INFERRED: the test skips the prone yaw cap
@@ -416,11 +437,14 @@ client whose own body is its view (`pm_flags` 0x40000, the live arm's bit,
 
 VERIFIED, `turret_think_client` (0x52340): a compare of the owner's busy byte
 against 1 (0x5235c) and of its `sessionstate` against 0 (0x5236b), the call to
-0x521d4 (0x52379), and the loop-sound block (section 6.4); both compares
-branch to the release (0x523e0, section 8). VERIFIED: 0x521d4 calls 0x5201c
-(aim, 0x521ee) and 0x515a8 (body placement, 0x521f8), and holds the fire code
-at higher addresses. INFERRED: the body is placed off this frame's new
-`angles2`, and the shot leaves after both.
+0x521d4 (0x52379), and the loop-sound block (section 6.4); the two `jne`
+instructions at 0x52363 and 0x52372 carry the target 0x523e0, the release
+(section 8). VERIFIED: 0x521d4 calls 0x5201c (aim, 0x521ee) and 0x515a8 (body
+placement, 0x521f8), and holds the fire code at higher addresses. INFERRED: a
+busy byte other than 1 or a `sessionstate` other than 0 takes the release
+instead of the mounted frame; the aim runs before the placement and both
+before the shot. INFERRED: the body is placed off this frame's new `angles2`,
+and the shot leaves after both.
 
 ### 6.2 Aim (0x5201c)
 
@@ -429,39 +453,44 @@ Re-read with `annotate_func.py` for this document.
 VERIFIED, the stores: `ps.viewlocked = 1` (0x5203f), `ps.viewlocked_entNum`
 = the turret (0x52051), `ps.gunfx = 0` (0x52065).
 
-VERIFIED, the loop over i = 0 (pitch) and 1 (yaw) (counter at `ebp-0x24`,
-0x52155): `want = AngleSubtract(ps.viewangles[i], r.currentAngles[i])`
-(0x520aa); a compare against `rec+0x14 + 4i` (0x520bb) and `rec+0xc + 4i`
-(0x520d0) with the bound stored over `want` and a flag set (0x520df);
-`d = AngleSubtract(want, angles2[i])` (0x52106), `|d|` compared against 15.0
-(double 0x758f8) at 0x52112, and `want = angles2[i] + 15.0` or `- 15.0`
-(float 0x75900, 0x52137 / 0x52143) with the same flag set (0x52121).
-INFERRED: the clamp to the arcs comes first and the rate limit second, so the
-barrel moves toward the clamped aim by at most 15 degrees a frame, 300
-degrees a second at 20 frames, and a step that starts inside the arcs stays
-inside them.
+VERIFIED, a body indexed by i = 0 (pitch) and 1 (yaw), with a counter at
+`ebp-0x24` set to 1 (0x52079) and decremented at 0x52155: `want =
+AngleSubtract(ps.viewangles[i], r.currentAngles[i])` (0x520aa); a compare
+against `rec+0x14 + 4i` (0x520bb) and `rec+0xc + 4i` (0x520d0), and stores of
+the bound into `want` and of 1 into a flag (0x520df, 0x520e6); `d =
+AngleSubtract(want, angles2[i])` (0x52106), `|d|` compared against 15.0
+(double 0x758f8) at 0x52112, and `want = angles2[i] + 15.0` or `- 15.0` (float
+0x75900, 0x52137 / 0x52143) and a store of 1 into the same flag (0x52121).
+INFERRED: the body runs twice; each bound and each 15-degree step is stored
+only when exceeded. INFERRED: the clamp to the arcs comes first and the rate
+limit second, so the barrel moves toward the clamped aim by at most 15 degrees
+a frame, 300 degrees a second at 20 frames, and a step that starts inside the
+arcs stays inside them.
 
-VERIFIED, after the loop: `angles2[0] = want0` (0x52164), `angles2[1] =
+VERIFIED, at 0x5215e..0x521c5: `angles2[0] = want0` (0x52164), `angles2[1] =
 want1` (0x5216d), `angles2[2] = 0` (0x52170); a test of `rec+0x4` against
-0x800 (0x5217d) with `rec+0x4 &= ~0x800` (0x52188) and `turret s.eFlags ^= 8`
-(0x5218b); a test of the flag (0x5218f) and `SetClientViewAngle(player,
-(want0 + pitch, want1 + yaw, 0))` (0x521c5). INFERRED: the first mounted
-frame after a mount flips the turret's teleport bit, so a client snaps the
-barrel instead of lerping it across the mount; the view is rewritten only on
-a frame where a clamp or the rate limit changed `want`, so a view inside the
-arcs and within 15 degrees of the barrel is left to the client's own
-prediction.
+0x800 (0x5217d), `rec+0x4 &= ~0x800` (0x52188) and `turret s.eFlags ^= 8`
+(0x5218b); a test of the flag (0x5218f) and `SetClientViewAngle(player, (want0
++ pitch, want1 + yaw, 0))` (0x521c5). INFERRED: the clear and the xor run only
+when 0x800 is set, and the view call only when the flag is set. INFERRED: the
+first mounted frame after a mount flips the turret's teleport bit, so a client
+snaps the barrel instead of lerping it across the mount; the view is rewritten
+only on a frame where a clamp or the rate limit changed `want`, so a view
+inside the arcs and within 15 degrees of the barrel is left to the client's
+own prediction.
 
 ### 6.3 Fire (0x521d4)
 
 Re-read with `annotate_func.py` for this document, which found the two
 refinements marked below.
 
-VERIFIED, after the two calls: `BG_GetInfoForWeapon(s.weapon)` (0x5220a),
-`ps.viewlocked = 1` (0x52217), `turret s.eFlags &= ~0x400` (0x52221), `rec+0x8
-+= -50` (immediate 0xffffffce, 0x5222b) with a `jg` to the exit (0x52233),
-`rec+0x8 = 0` (0x52239), a test of `cl+0x21e8 & 1` (0x52246) with a `je` to
-the exit. INFERRED: the cooldown drops 50 per server frame whatever the
+VERIFIED, at 0x521fd..0x5224d: `BG_GetInfoForWeapon(s.weapon)` (0x5220a),
+`ps.viewlocked = 1` (0x52217), `turret s.eFlags &= ~0x400` (0x52221),
+`rec+0x8 += -50` (immediate 0xffffffce, 0x5222b), a `jg` at 0x52233 and a
+`je` at 0x5224d whose target operands are both 0x52333, `rec+0x8 = 0`
+(0x52239), and a test of `cl+0x21e8 & 1` (0x52246). INFERRED: 0x52333 is the
+epilogue, so a cooldown still above 0 or a clear attack bit ends the frame
+with no shot. INFERRED: the cooldown drops 50 per server frame whatever the
 frame's length, and a frame fires when the cooldown has reached 0 and the
 last cmd of the frame has attack set: held, not an edge, and a tap that
 starts and ends between two frames is never seen.
@@ -471,7 +500,7 @@ fireTime` (0x52279..0x52281), a compare of the player's client pointer against
 null (0x52287), a store of `&g_entities[1022]` (relocation addend 0xc49d8,
 0x5229d), a compare of the player pointer against `&g_entities[1023]` (addend
 0xc4cec, 0x522a4) and a store of the player pointer (0x522ac), and a call to
-0x51488 (0x522bb) with a test of its return (0x522c3). Further on: `wp+0x3c =
+0x51488 (0x522bb) with a test of its return (0x522c3); `wp+0x3c =
 def` (0x522d6), a compare of `def->weaponType` (`+0x70`) against 0 (0x522dc),
 `Bullet_Fire(attacker, 0, ent->dmg, &wp, turret)` (0x522f1),
 `Weapon_RocketLauncher_Fire(turret, 0, &wp)` (0x52307) and `G_AddEvent(turret,
@@ -494,16 +523,17 @@ client skips straight to `eFlags |= 0x400` (the `je` at 0x5228e lands on
 
 VERIFIED, 0x51488 (the fire parameters): `G_DObjGetWorldTagMatrix` on the
 turret for `tag_flash` (0x75780, call 0x514a6) and `tag_player` (0x757d9,
-0x514dd), each with a `Com_Printf("Couldn't find %s on turret (entity %d,
-classname '%s').")` (0x757a0) and a 0 return beside it;
-`AngleVectors(ps.viewangles)` into `wp+0`, `+0xc`, `+0x18` (0x5152b);
-`wp+0x30..0x38 = wp+0..8` (0x51532..0x5153e); `VectorNormalize(flash.origin
-- player.origin)` (0x5156f); `wp+0x24..0x2c = tag_player.origin + forward *
-that length` (0x51574..0x51598). INFERRED: the bullet leaves from a point on
-the player's view ray through `tag_player`, as far out as `tag_flash` is,
-aimed along the player's view rather than along `angles2`; the two agree
-except on a frame the rate limit bit, where the view has just been pulled to
-the barrel.
+0x514dd), a test of each return, one `Com_Printf("Couldn't find %s on turret
+(entity %d, classname '%s').")` (0x757a0, call 0x51507) and a store of 0 into
+the return register (0x5150c); `AngleVectors(ps.viewangles)` into `wp+0`,
+`+0xc`, `+0x18` (0x5152b); `wp+0x30..0x38 = wp+0..8` (0x51532..0x5153e);
+`VectorNormalize(flash.origin - player.origin)` (0x5156f); `wp+0x24..0x2c =
+tag_player.origin + forward * that length` (0x51574..0x51598). INFERRED: a
+missing tag prints the line and returns 0 before any of the vector work.
+INFERRED: the bullet leaves from a point on the player's view ray through
+`tag_player`, as far out as `tag_flash` is, aimed along the player's view
+rather than along `angles2`; the two agree except on a frame the rate limit
+bit, where the view has just been pulled to the barrel.
 
 VERIFIED, `Bullet_Fire` (0x690dc): the spread argument goes through `tan`,
 the range is 8192.0 (0x79cd8), and `Bullet_Fire_Extended` is handed the
@@ -517,24 +547,30 @@ MP, the gun never runs dry and never overheats.
 
 ### 6.4 The loop sound
 
-VERIFIED, `turret_think_client` after the 0x521d4 call: `s.loopSound = 0`
-(0x52387); a compare of `rec+0x28` against 0 (0x52391) with a `jle` to the
-exit; `s.loopSound = rec+0x3c` (0x5239f); `rec+0x28 += -50` (0x523a8) with a
-`jg` to the exit; a compare of `rec+0x3d` against 0 (0x523b6) with a `je` to
-the exit; `s.loopSound = 0` (0x523c0) and `G_PlaySoundAlias(turret, rec+0x3d)`
-(0x523d3). VERIFIED: `G_PlaySoundAlias` on an entity with no client writes
-`EV_SOUND_ALIAS` (172) with the alias as parm on the entity's own event ring
-(`cod11-sound-system.md`).
+VERIFIED, `turret_think_client` at 0x5237e..0x523d8: `s.loopSound = 0`
+(0x52387); a compare of `rec+0x28` against 0 (0x52391); `s.loopSound =
+rec+0x3c` (0x5239f); `rec+0x28 += -50` (0x523a8); a compare of `rec+0x3d`
+against 0 (0x523b6); `s.loopSound = 0` (0x523c0) and
+`G_PlaySoundAlias(turret, rec+0x3d)` (0x523d3); and a `jle` (0x52395), a
+`jg` (0x523b0) and a `je` (0x523ba) whose target operands are all 0x524bf.
+VERIFIED, `cod11-sound-system.md`: `G_PlaySoundAlias` holds a
+path that writes `EV_SOUND_ALIAS` (172) into the playerstate ring and one
+that writes it into the entity's own ring, with the alias as parm.
+
+INFERRED: 0x524bf is the epilogue; the loop alias is set only while the timer
+is positive, the timer drops only then, and the cooldown alias plays only on
+the frame the timer reaches 0 or below with a stop alias present; a turret,
+having no client, takes the entity-ring path.
 
 INFERRED, frame by frame from the last shot (timer 150 after the fire block):
-that frame and the next read `loopSound` = `weap_mg42_loop`'s index; the
-third reads `loopSound` 0 and carries one `EV_SOUND_ALIAS` for
-`weap_mg42_cooldown` on the turret. So the loop is on the wire for two
-snapshots counting the last shot's frame, not 150 ms past it as a first
-reading put it, and the cooldown event comes 100 ms after the last shot.
-INFERRED: the release zeroes the timer and `loopSound` (section 8), so a
-release mid-burst cuts the loop with no cooldown event, and the same countdown
-in `turret_think` (section 9) has nothing to count in the stock flow.
+that frame and the next read `loopSound` = `weap_mg42_loop`'s index; the third
+reads `loopSound` 0 and carries one `EV_SOUND_ALIAS` for `weap_mg42_cooldown`
+on the turret. So the loop is on the wire for two snapshots counting the last
+shot's frame, not 150 ms past it as a first reading put it, and the cooldown
+event comes 100 ms after the last shot. INFERRED: the release zeroes the timer
+and `loopSound` (section 8), so a release mid-burst cuts the loop with no
+cooldown event, and the same countdown in `turret_think` (section 9) has
+nothing to count in the stock flow.
 
 ## 7. Body placement
 
@@ -614,14 +650,16 @@ sends none. INFERRED: the stance event is `EV_STANCE_FORCE_PRONE` (142),
 mounted from.
 
 VERIFIED, `TeleportPlayer` (0x51380): a compare of `sessionstate` against 0
-(0x51395) with `G_TempEntity` for 200 at the old origin and 199 at the new
-one (0x513aa, 0x513c6), `trap_UnlinkEntity`, `ps.origin` = the destination
-with 1.0 added to z (0x51414..0x51419), `ps.eFlags ^= 8` (0x51428),
+(0x51395), `G_TempEntity` for 200 at the old origin and 199 at the new one
+(0x513aa, 0x513c6), `trap_UnlinkEntity`, `ps.origin` = the destination with
+1.0 added to z (0x51414..0x51419), `ps.eFlags ^= 8` (0x51428),
 `SetClientViewAngle` (0x51434), `BG_PlayerStateToEntityState`,
-`r.currentOrigin = ps.origin`, and a conditional `trap_LinkEntity`. INFERRED:
-the player lands one unit above where it stood to mount, facing the angles
-its entity had, with `EV_PLAYER_TELEPORT_OUT`/`_IN` temp entities only when
-it is still playing, and the teleport bit flipped.
+`r.currentOrigin = ps.origin` (0x51457..0x51469), a `test ebx, ebx` (0x5146f)
+and `trap_LinkEntity` (0x51477). INFERRED: the temp entities are made only for
+`sessionstate` 0 and the relink only when `ebx` is non-zero. INFERRED: the
+player lands one unit above where it stood to mount, facing the angles its
+entity had, with `EV_PLAYER_TELEPORT_OUT`/`_IN` temp entities only when it is
+still playing, and the teleport bit flipped.
 
 The triggers, INFERRED from the call sites:
 
@@ -645,8 +683,8 @@ and loses them here.
 
 ## 9. The unowned barrel
 
-VERIFIED, `turret_think` (0x5328c): `nextthink += 50`, a test of `ent+0x2e4`
-beside a `G_GeneralLink` call, a test of `g_entities[r.ownerNum].client`
+VERIFIED, `turret_think` (0x5328c): `nextthink += 50`, a test of `ent+0x2e4`,
+a `G_GeneralLink` call, a test of `g_entities[r.ownerNum].client`
 against null, the loop-sound countdown of section 6.4, a clear of `s.eFlags`
 0x400, and a call to 0x524cc with a vector of (`rec+0x1c`, 0) and a third
 argument 0 (0x5333b). INFERRED: the countdown, the clear and the slew run only
@@ -688,15 +726,15 @@ the 'both' body part"` (`.so` 0x6e7e0, `turretanim` at 0x6e7ca; cgame
 0x30068d70).
 
 VERIFIED, `BG_AnimUpdatePlayerStateConditions`: an `eFlags & 0xC000` test and
-stores of 1 and 0 into one condition slot (0x2a454), and a later slot written
+stores of 1 and 0 into one condition slot (0x2a454), and another slot written
 from the pmove cmd's attack bit. INFERRED: the slot reads 1 exactly when a
 mounted bit is set, and the two slots are `mounted` and `firing`, by their
 order against the script's condition list.
 
 VERIFIED, 0x322c8 (Ghidra body at `000422c8`): an `eFlags & 0xC000` test,
-tests of `pm_flags` 0x1 and 0x2, and the values 3, 2 and 1 written to the one
-variable the function then takes its movetype from. INFERRED: a mounted player
-gets 3 when prone, 2 when crouched and 1 otherwise, and those are the
+tests of `pm_flags` 0x1 and 0x2, and stores of 3, 2 and 1 into one local.
+INFERRED: the function takes its movetype from that local, and a mounted
+player gets 3 when prone, 2 when crouched and 1 otherwise, and those are the
 `idleprone`, `idlecr` and `idle` movetypes, so with 0x316f4 putting `pm_flags`
 to the gun's stance a stand gun always plays `idle`.
 
@@ -707,10 +745,12 @@ which turret a player's body belongs on.
 
 ## 11. Kill credit
 
-VERIFIED, `player_die` (0x49a48), step 3 in `cod11-combat.md` 5.1: the weapon
-is replaced by `g_entities[attacker->s.otherEntityNum]->s.weapon` behind tests
-of the attacker's client, its `eFlags & 0xC000`, and that entity's `eType`
-against 11. INFERRED: a kill from the gun is credited to
+VERIFIED, `player_die` (0x49a48), step 3 in `cod11-combat.md` 5.1: a load of
+`g_entities[attacker->s.otherEntityNum]->s.weapon` into the weapon argument,
+and tests of the weapon against 0, of the attacker's client, of its `eFlags &
+0xC000` and of that entity's `eType` against 11. INFERRED: the replacement
+happens only when all four pass (`cod11-combat.md` labels that condition
+INFERRED too). INFERRED: a kill from the gun is credited to
 `mg42_bipod_stand_mp`, not the gunner's carried weapon, which is what puts the
 MG42 kill icon on the obituary.
 
