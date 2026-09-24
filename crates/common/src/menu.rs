@@ -120,7 +120,9 @@ fn block<'a>(tokens: &'a [String], i: &mut usize) -> &'a [String] {
         }
         j += 1;
     }
-    let end = j - 1; // index of the matching '}'
+    // Unbalanced input (a brace with no match) takes everything left rather
+    // than panicking: a menu cut off mid-block still parses what it has.
+    let end = if depth == 0 { j - 1 } else { j };
     *i = j;
     &tokens[start..end]
 }
@@ -309,6 +311,15 @@ mod tests {
         assert!(!gate.passes(Some("0")));
         assert!(gate.passes(Some("1")));
         assert!(gate.passes(None));
+    }
+
+    #[test]
+    fn a_menu_cut_off_mid_block_parses_what_it_has() {
+        // A `{` with no matching `}` must not panic, whatever depth it's at.
+        parse("menuDef {");
+        parse("{ menuDef { itemDef {");
+        let m = parse("{ menuDef { name \"x\"");
+        assert_eq!(m.name, "x");
     }
 
     #[test]
