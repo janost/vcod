@@ -15,7 +15,6 @@ use crate::configstrings::{script_menu_index, weapon_index, CsRange};
 use crate::game::builtins::entity::entity_receiver;
 use crate::game::entity::ThinkFn;
 use crate::game::host::{GameHost, SimOp, WeaponOp};
-use crate::weapons::weapon_slot;
 use vcod_common::pmove;
 use vcod_gsc::{Cx, EntId, ErrorKind, Host, Target, Value};
 
@@ -398,10 +397,9 @@ pub fn give_weapon(
     args: &[Value],
 ) -> Result<Value, ErrorKind> {
     let slot = client_receiver(host, recv)?;
-    let (name, index) = weapon_argument(cx, args)?;
-    let weapon_slot = weapon_slot(host.fs.as_deref(), &name).unwrap_or(0);
-    host.client_weapons[slot].give(index, weapon_slot);
+    let (_, index) = weapon_argument(cx, args)?;
     let weapons = host.weapons.clone();
+    host.client_weapons[slot].give(index, weapons.slot(index));
     if let Some(def) = weapons.get(index) {
         host.weapon_op(
             slot,

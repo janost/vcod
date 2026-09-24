@@ -74,19 +74,6 @@ impl PlayerWeapons {
     }
 }
 
-/// The `weaponSlot` a weapon file names, as its index in [`SLOT_NAMES`].
-/// `None` when there are no paks to read, when the file has no `weaponSlot`
-/// key, or when it names a slot the table does not have.
-pub fn weapon_slot(fs: Option<&Pk3Fs>, name: &str) -> Option<usize> {
-    let bytes = fs?.read(&format!("weapons/mp/{name}"))?;
-    let map = vcod_common::xmodel::parse_weapon(&String::from_utf8_lossy(&bytes));
-    let named = map.get("weaponSlot")?;
-    SLOT_NAMES
-        .iter()
-        .position(|s| *s == named.as_str())
-        .filter(|i| *i > 0)
-}
-
 /// Every weapon file in [`crate::configstrings::WEAPON_LIST`], parsed once at
 /// map load and indexed the way the wire is (`crate::items::NUM_ITEMS`
 /// entries, 0 unused, 1.. the CS 7 order). The animscript reads
@@ -229,11 +216,11 @@ mod tests {
         let Some(fs) = vcod_common::testing::game_fs() else {
             return;
         };
-        let fs = Some(&fs);
-        assert_eq!(weapon_slot(fs, "m1carbine_mp"), Some(1));
-        assert_eq!(weapon_slot(fs, "colt_mp"), Some(3));
-        assert_eq!(weapon_slot(fs, "fraggrenade_mp"), Some(4));
-        assert_eq!(weapon_slot(fs, "no_such_weapon_mp"), None);
+        let t = WeaponTable::load(&fs);
+        assert_eq!(t.slot(weapon_index("m1carbine_mp").unwrap()), 1);
+        assert_eq!(t.slot(weapon_index("colt_mp").unwrap()), 3);
+        assert_eq!(t.slot(weapon_index("fraggrenade_mp").unwrap()), 4);
+        assert_eq!(t.slot(0), 0);
     }
 
     /// The `weaponclass` condition in `mp/playeranim.script` is this field.
