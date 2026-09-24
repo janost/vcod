@@ -8,6 +8,7 @@ pub mod bsp;
 pub mod collision;
 pub mod game_dir;
 pub mod localize;
+pub mod menu;
 pub mod mesh;
 pub mod net;
 pub mod pk3;
