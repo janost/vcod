@@ -282,6 +282,9 @@ struct Touched {
     yaw: Option<f32>,
     weapon: Option<u8>,
     take: Option<u8>,
+    /// The eye and `ps.viewangles` the cmd left, for the use key's aim.
+    eye: [f32; 3],
+    view: [f32; 3],
 }
 
 /// What one client's usercmd replay did this tick, for the trace line.
@@ -3012,6 +3015,8 @@ impl Server {
                         .then(|| sim.view_angles()[1]),
                     weapon: switched.then_some(sim.ps.weapon),
                     take,
+                    eye: sim.ps.view().eye.into(),
+                    view: sim.view_angles(),
                 });
                 last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;
@@ -3047,6 +3052,8 @@ impl Server {
         // where the script runtime is borrowable. The origin goes with it
         // because the host's copy is only mirrored from the sim after the
         // script frame, so the pass would otherwise test last tick's spot.
+        // The item half follows the trigger half on each cmd, and the use
+        // key after both.
         if let Some(rt) = self.script.as_mut() {
             // The ammo the touch pass reads, once per tick: the pass itself
             // moves the host's copy as it grabs.
@@ -3072,6 +3079,7 @@ impl Server {
                     rt.take_client_weapon(t.slot, w);
                 }
                 rt.touch_triggers_with_buttons(t.slot, now_ms, t.buttons);
+                rt.item_pass(t.slot, t.buttons, t.eye, t.view);
             }
         }
         // The state each player ended the tick in, mirrored onto the host for
@@ -4922,6 +4930,84 @@ mod tests {
             }
         }
         panic!("the frag was never thrown");
+    }
+
+    /// A use key on the cmd whose move finished a switch grabs with the new
+    /// `ps.weapon` in hand: both primaries are full, so the swap drops the
+    /// weapon being held, and with the colt the tick started on it would
+    /// have dropped the carbine from the primary slot instead (section 5).
+    #[test]
+    fn a_grab_on_the_switch_cmd_swaps_out_the_new_weapon() {
+        use vcod_common::net::msg::BUTTON_USE;
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 1.0], 0.0),
+        });
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test("main() {}"),
+        );
+        sv.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
+        let _nc = begun(&mut sv, now);
+        sv.tick(now);
+        sv.place_client(0, [0.0, 0.0, 1.0], 0.0);
+        let index = |n| crate::configstrings::weapon_index(n).unwrap();
+        let (carbine, thompson, colt) = (
+            index("m1carbine_mp"),
+            index("thompson_mp"),
+            index("colt_mp"),
+        );
+        let table = sv.weapon_table.clone();
+        let mut held = crate::weapons::PlayerWeapons::default();
+        for (w, slot) in [(carbine, 1), (thompson, 2), (colt, 3)] {
+            held.give(w, slot);
+        }
+        held.current = colt as u8;
+        let rt = sv.script.as_mut().unwrap();
+        rt.host.weapons = table.clone();
+        rt.host.client_weapons[0] = held;
+        rt.host.client_vitals[0] = crate::game::host::Vitals {
+            health: 100,
+            max_health: 100,
+            dead: false,
+        };
+        let pf = rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 50.0], 0);
+        let c = sv.clients[0].as_mut().unwrap();
+        let sim = c.sim.as_mut().unwrap();
+        sim.ps.weapons_held = held.held;
+        sim.ps.weapon_slots = held.slots;
+        sim.ps.weapon = colt as u8;
+        for w in [carbine, thompson, colt] {
+            let d = table.get(w).unwrap();
+            sim.ps.ammoclip[d.clip_index] = d.clip_size as _;
+            sim.ps.ammo[d.ammo_index] = d.max_ammo as _;
+        }
+        // One cmd long enough for the colt's putaway to end inside it.
+        let cmd = UserCmd {
+            server_time: c.last_processed_st + 1000,
+            weapon: thompson as u8,
+            buttons: BUTTON_USE,
+            ..NULL_USERCMD
+        };
+        c.pending.push(cmd);
+        sv.replay_moves();
+        let sim = sv.clients[0].as_ref().unwrap().sim.as_ref().unwrap();
+        assert_eq!(sim.ps.weapon, thompson as u8, "the switch did not land");
+        let rt = sv.script.as_mut().unwrap();
+        assert!(rt.host.ents.get(pf).unwrap().item.unwrap().taken);
+        let dropped: Vec<usize> = rt
+            .host
+            .ents
+            .iter_inuse()
+            .filter_map(|(_, e)| e.item.filter(|i| i.dropped).map(|i| i.index as usize))
+            .collect();
+        assert_eq!(dropped, vec![thompson]);
     }
 
     /// `getPlant` reads a planter's `self.angles` for the direction of its

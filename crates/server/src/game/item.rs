@@ -192,6 +192,181 @@ pub fn launch_weapon(
     Ok(id)
 }
 
+fn origin_of(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
+    let field = cx.intern_folded("origin");
+    match host.get_field(cx, id, field) {
+        Value::Vector(v) => v,
+        _ => [0.0; 3],
+    }
+}
+
+fn live_items(host: &GameHost) -> Vec<(EntId, ItemState)> {
+    host.ents
+        .iter_inuse()
+        .filter_map(|(id, e)| e.item.filter(|i| !i.taken).map(|i| (id, i)))
+        .collect()
+}
+
+/// The items `G_TouchTriggers` would hand `Touch_Item` for a player at
+/// `player`, ascending entity number.
+pub fn touching(host: &mut GameHost, cx: &mut Cx, player: [f32; 3]) -> Vec<EntId> {
+    live_items(host)
+        .into_iter()
+        .map(|(id, _)| id)
+        .filter(|&id| crate::game::pickup::touches(player, origin_of(host, cx, id)))
+        .collect()
+}
+
+/// `G_GetActivateEnt`'s choice (section 2.1): the best-scoring grabbable
+/// item in reach whose centre the muzzle can see past the world. Retail
+/// scores an ungrabbable one 10000 behind and cuts it off the list; leaving
+/// it out is the same list.
+pub fn activate_ent(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    slot: usize,
+    eye: [f32; 3],
+    view: [f32; 3],
+) -> Option<EntId> {
+    use crate::game::pickup::{activate_score, can_grab, item_kind};
+    let muzzle = glam::Vec3::from(eye).trunc().to_array();
+    let forward = crate::game::spawn::angle_forward(view);
+    let inv = inventory(host, slot);
+    let weapons = host.weapons.clone();
+    let mut scored: Vec<(EntId, f32, [f32; 3])> = Vec::new();
+    for (id, item) in live_items(host) {
+        let Some(kind) = item_kind(item.index as usize) else {
+            continue;
+        };
+        if !can_grab(
+            &inv,
+            kind,
+            item.owner.map(usize::from),
+            slot,
+            false,
+            &weapons,
+        ) {
+            continue;
+        }
+        let centre = origin_of(host, cx, id);
+        if let Some(s) = activate_score(muzzle, forward, centre) {
+            scored.push((id, s, centre));
+        }
+    }
+    scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let world = host.world.clone();
+    scored.into_iter().find_map(|(id, _, c)| {
+        let blocked = world.as_ref().is_some_and(|w| {
+            let tr = w.collision.point_trace(
+                muzzle.into(),
+                c.into(),
+                vcod_common::collision::CONTENTS_SOLID | vcod_common::collision::CONTENTS_GLASS,
+                false,
+            );
+            tr.fraction < 1.0 && w.collision.entity_num(&tr) == ENTITYNUM_WORLD
+        });
+        (!blocked).then_some(id)
+    })
+}
+
+/// `Touch_Item` (section 7) for `slot` on item `id`, `touched` for the walk
+/// and not the use key: the arithmetic, then its writes.
+pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: bool) {
+    use crate::game::pickup::{ItemCounts, ItemKind, ItemView};
+    let Some(state) = host.ents.get(id).and_then(|e| e.item) else {
+        return;
+    };
+    if state.taken {
+        return;
+    }
+    let count_atom = cx.intern_folded("count");
+    let count = match host.get_field(cx, id, count_atom) {
+        Value::Int(n) => n,
+        _ => 0,
+    };
+    let classname_atom = cx.intern_folded("classname");
+    let classname = match host.get_field(cx, id, classname_atom) {
+        Value::String(s) => cx.resolve(s).to_string(),
+        _ => String::new(),
+    };
+    let mut counts = ItemCounts {
+        count,
+        clip: state.clip,
+    };
+    let before = inventory(host, slot);
+    let mut inv = before;
+    let pools = host.cvars.get("g_weaponAmmoPools") == "1";
+    let weapons = host.weapons.clone();
+    let out = crate::game::pickup::touch_item(
+        &mut inv,
+        &ItemView {
+            index: state.index as usize,
+            owner: state.owner.map(usize::from),
+            classname: &classname,
+        },
+        &mut counts,
+        slot,
+        touched,
+        &weapons,
+        pools,
+        &mut || host.rand_int(),
+    );
+    write_back(host, slot, &before, &inv);
+    let _ = host.set_field(cx, id, count_atom, Value::Int(counts.count));
+    if let Some(i) = host.ents.get_mut(id).and_then(|e| e.item.as_mut()) {
+        i.clip = counts.clip;
+    }
+    if let Some(line) = out.log {
+        log::info!("script: {line}");
+        host.script_log.push(line);
+    }
+    for c in out.commands {
+        host.client_commands.push((slot, c));
+    }
+    if !out.taken {
+        return;
+    }
+    let origin = origin_of(host, cx, id);
+    let angles_atom = cx.intern_folded("angles");
+    let angles = match host.get_field(cx, id, angles_atom) {
+        Value::Vector(v) => v,
+        _ => [0.0; 3],
+    };
+    let swapped = out
+        .drop
+        .and_then(|d| launch_weapon(host, cx, slot, d, DropAt::Exactly { origin, angles }).ok());
+    if let Some(player) = host.ents.handle(slot as u32) {
+        let args = match crate::game::pickup::item_kind(state.index as usize) {
+            Some(ItemKind::Weapon(_)) => vec![
+                Value::Entity(player),
+                swapped.map_or(Value::Undefined, Value::Entity),
+            ],
+            _ => vec![Value::Entity(player)],
+        };
+        host.item_notifies.push((id, "trigger", args));
+    }
+    if let Some(event) = out.event {
+        host.client_sim_ops.push((
+            slot,
+            crate::game::host::SimOp::Event {
+                event,
+                parm: i32::from(state.index),
+            },
+        ));
+    }
+    if let Some(e) = host.ents.get_mut(id) {
+        if let Some(i) = e.item.as_mut() {
+            i.taken = true;
+        }
+        e.think = None;
+        e.nextthink = 0;
+    }
+    if state.dropped {
+        let at = host.level_time_ms + FREE_AFTER_PICKUP_MS;
+        host.ents.schedule(id, ThinkFn::Free, at);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

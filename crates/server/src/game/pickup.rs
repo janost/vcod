@@ -496,15 +496,10 @@ pub fn touch_item(
     out
 }
 
-/// `G_GetActivateEnt`'s first pass for one candidate (section 2.1): `None`
-/// outside the query box, past 128 units or outside the 0.76 cone, else the
-/// score the candidates sort on, lowest first.
-pub fn activate_score(
-    muzzle: [f32; 3],
-    forward: [f32; 3],
-    centre: [f32; 3],
-    grabbable: bool,
-) -> Option<f32> {
+/// `G_GetActivateEnt`'s first pass for one grabbable candidate (section
+/// 2.1): `None` outside the query box, past 128 units or outside the 0.76
+/// cone, else the score the candidates sort on, lowest first.
+pub fn activate_score(muzzle: [f32; 3], forward: [f32; 3], centre: [f32; 3]) -> Option<f32> {
     const BOX: [f32; 3] = [192.0, 192.0, 96.0];
     const RANGE: f32 = 128.0;
     const COS: f32 = 0.76;
@@ -524,11 +519,7 @@ pub fn activate_score(
     if dot <= 0.0 || dot < COS {
         return None;
     }
-    let mut score = (1.0 - (dot - COS) / 0.24) * 256.0;
-    if !grabbable {
-        score += 10_000.0;
-    }
-    Some(score + dist)
+    Some((1.0 - (dot - COS) / 0.24) * 256.0 + dist)
 }
 
 /// `G_CheckForCursorHints`' value for an item (section 2.3).
@@ -1295,12 +1286,10 @@ mod tests {
     #[test]
     fn the_activate_cone_is_128_units_and_cosine_point_76() {
         let fwd = [1.0, 0.0, 0.0];
-        let s = activate_score([0.0; 3], fwd, [60.0, 0.0, 0.0], true).unwrap();
+        let s = activate_score([0.0; 3], fwd, [60.0, 0.0, 0.0]).unwrap();
         assert!((s - 60.0).abs() < 1e-3, "{s}");
-        assert!(activate_score([0.0; 3], fwd, [128.5, 0.0, 0.0], true).is_none());
-        assert!(activate_score([0.0; 3], fwd, [40.0, 40.0, 0.0], true).is_none());
-        let far = activate_score([0.0; 3], fwd, [60.0, 0.0, 0.0], false).unwrap();
-        assert!((far - 10_060.0).abs() < 1e-2, "{far}");
+        assert!(activate_score([0.0; 3], fwd, [128.5, 0.0, 0.0]).is_none());
+        assert!(activate_score([0.0; 3], fwd, [40.0, 40.0, 0.0]).is_none());
     }
 
     #[test]

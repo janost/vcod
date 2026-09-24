@@ -295,6 +295,13 @@ pub struct GameHost {
     /// script frame, notified once that frame's clock is set
     /// (`ScriptRuntime::run_frame`).
     pub trigger_fires: Vec<(EntId, EntId)>,
+    /// Each client's previous cmd buttons, for the use key's rising edge
+    /// (`ClientThink_real` 0x40106..0x4011d).
+    pub client_old_buttons: Vec<u8>,
+    /// `(entity, event, args)` for every `"touch"` and `"trigger"` the item
+    /// pass raised since the last script frame, notified at its start the
+    /// way `trigger_fires` are.
+    pub item_notifies: Vec<(EntId, &'static str, Vec<Value>)>,
     /// Each client's `ps.grenadeTimeLeft`, mirrored in by
     /// `Server::replay_moves` with the entity states, which is the last read
     /// of it before a kill this tick: what a death drops
@@ -505,6 +512,8 @@ impl GameHost {
             client_aim: vec![([0.0; 3], [0.0; 2]); MAX_CLIENTS],
             client_lookat: vec![None; MAX_CLIENTS],
             trigger_fires: Vec::new(),
+            client_old_buttons: vec![0; MAX_CLIENTS],
+            item_notifies: Vec::new(),
             client_grenade_ms: vec![0; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
