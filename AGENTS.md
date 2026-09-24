@@ -482,7 +482,8 @@ engineering setup works.
   `r.currentOrigin` and calls `G_TouchTriggers` inside `ClientThink`; a
   trigger the pass fires is queued, not woken, and its `waittill` threads are
   notified at this tick's script frame on the frame's clock (the item pass's
-  `touch` and `trigger` notifies too), while a `trigger_hurt` starts the
+  `touch` and `trigger` notifies too, whose waiters run first, ahead of the
+  frame's thinks and `wait`s), while a `trigger_hurt` starts the
   damage callback there and then. The item pass writes weapons and health onto
   the host at once and queues its ammo as weapon ops and its event as a sim
   op, both applied after the script frame; the ammo it reads is the host's

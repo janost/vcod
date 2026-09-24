@@ -1346,6 +1346,18 @@ impl ScriptRuntime {
             log::warn!("script error: {e:?}");
         }
         self.host.level_time_ms = now_ms;
+        // The item pass's notifies, on this frame's clock, and their waiters
+        // run here, ahead of every `wait` this frame brings due
+        // (docs/research/cod11-items.md, 13.1).
+        for (id, event, args) in std::mem::take(&mut self.host.item_notifies) {
+            if self.host.ents.get(id).is_some() {
+                let event = self.vm.with_cx(|cx| cx.intern_folded(event));
+                self.vm.notify(Target::Entity(id), event, &args);
+            }
+        }
+        for e in self.vm.run_runnable(&mut self.host, now_ms) {
+            log::warn!("script error: {e:?}");
+        }
         // A trigger's thread runs on the clock of the frame after the touch:
         // retail's plant bar carries the `scaleStartTime` of the first
         // snapshot it is on, and `G_RunFrame` drains the lookat queue after
@@ -1355,13 +1367,6 @@ impl ScriptRuntime {
             if self.host.ents.get(id).is_some() && self.host.ents.get(other).is_some() {
                 self.vm
                     .notify(Target::Entity(id), event, &[Value::Entity(other)]);
-            }
-        }
-        // The item pass's notifies, on the same clock and for the same reason.
-        for (id, event, args) in std::mem::take(&mut self.host.item_notifies) {
-            if self.host.ents.get(id).is_some() {
-                let event = self.vm.with_cx(|cx| cx.intern_folded(event));
-                self.vm.notify(Target::Entity(id), event, &args);
             }
         }
         // Thinks before threads: `G_RunFrame` runs the entity pass first, so
@@ -2771,5 +2776,32 @@ mod tests {
         assert!(!rt.host.ents.get(id).unwrap().item.unwrap().taken);
         rt.run_frame(50);
         assert!(rt.script_log().iter().any(|l| l == "touched item_health"));
+    }
+
+    /// A thread an item notify wakes runs before the frame's `wait`s come
+    /// due, whatever the two threads' ages: an older loop polling a flag the
+    /// `"trigger"` waiter sets sees it on the grab's own frame, the way
+    /// retail's `probe_pickup` teleport did (docs/research/cod11-items.md,
+    /// 13.1).
+    #[test]
+    fn an_item_notified_thread_runs_before_the_frames_waits() {
+        let mut rt = pickup_rig_with(
+            "main() { level.flag = 0; thread poll(); }\n\
+             poll() { for (;;) { wait 0.05; if (level.flag) { logPrint(\"seen \" + getTime()); return; } } }\n\
+             watch() { self waittill(\"trigger\", player); level.flag = 1; }\n\
+             CodeCallback_PlayerConnect() {}\n",
+        );
+        rt.host.client_vitals[0].health = 50;
+        let id = rt.place_item("item_health", [0.0, 0.0, 1.0], 0);
+        rt.start_thread_for_test(id, "watch", 0);
+        rt.item_pass(0, 0, [0.0, 0.0, 60.0], DOWN);
+        rt.run_frame(50);
+        rt.run_frame(100);
+        let seen: Vec<&String> = rt
+            .script_log()
+            .iter()
+            .filter(|l| l.starts_with("seen"))
+            .collect();
+        assert_eq!(seen, vec!["seen 50"]);
     }
 }
