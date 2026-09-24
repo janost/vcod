@@ -3,7 +3,7 @@
 //! arithmetic (`crate::game::pickup`) runs on. Addresses are in
 //! docs/research/cod11-items.md.
 
-use crate::game::entity::ThinkFn;
+use crate::game::entity::{ThinkFn, ENTITYNUM_WORLD};
 use crate::game::host::{GameHost, WeaponOp};
 use crate::game::pickup::{Dropped, Inventory};
 use vcod_common::pmove::weapon::NUM_AMMO;
@@ -24,6 +24,10 @@ pub struct ItemState {
     pub dropped: bool,
     /// `svFlags & 1` after a pickup: off every snapshot, out of both passes.
     pub taken: bool,
+    /// `s.groundEntityNum`: the world once the item has come to rest on it,
+    /// 0 for a swap's drop, which never lands (docs/research/cod11-items.md
+    /// 12.6).
+    pub ground: i32,
 }
 
 pub const DROP_RING: usize = 32;
@@ -65,6 +69,7 @@ pub fn attach(host: &mut GameHost, id: EntId, index: usize) {
             owner: None,
             dropped: false,
             taken: false,
+            ground: ENTITYNUM_WORLD as i32,
         });
     }
 }
@@ -169,6 +174,10 @@ pub fn launch_weapon(
             owner: Some(slot as u8),
             dropped: true,
             taken: false,
+            ground: match at {
+                DropAt::Feet => ENTITYNUM_WORLD as i32,
+                DropAt::Exactly { .. } => 0,
+            },
         });
     }
     let now = host.level_time_ms;
@@ -254,11 +263,12 @@ mod tests {
         assert!(!ents.contains_key(&id.0));
     }
 
-    /// A drop carries its dropper in `clientNum` until the lockout clears,
-    /// and `groundEntityNum` 0 where a placed item reads the world, as the
-    /// retail swap drop does (docs/research/cod11-items.md 12.6).
+    /// A drop carries its dropper in `clientNum` until the lockout clears.
+    /// `groundEntityNum` is how it arrived: a `dropItem` drop has landed on
+    /// the world, a swap's drop never flew and reads 0, as the retail swap
+    /// does (docs/research/cod11-items.md 12.6).
     #[test]
-    fn a_drop_names_its_dropper_and_reads_ground_zero() {
+    fn a_drop_names_its_dropper_and_its_ground_is_how_it_arrived() {
         let (mut vm, mut host) = fixture();
         let fg = crate::configstrings::weapon_index("fg42_mp").unwrap() as u8;
         let d = Dropped {
@@ -266,14 +276,20 @@ mod tests {
             count: 70,
             clip: 20,
         };
-        let id = vm.with_cx(|cx| {
+        let (id, swap) = vm.with_cx(|cx| {
             host.ents.spawn_client(cx, 3, None).unwrap();
-            launch_weapon(&mut host, cx, 3, d, DropAt::Feet).unwrap()
+            let id = launch_weapon(&mut host, cx, 3, d, DropAt::Feet).unwrap();
+            let at = DropAt::Exactly {
+                origin: [826.0, 2274.0, -22.8],
+                angles: [0.0, 270.0, 90.0],
+            };
+            (id, launch_weapon(&mut host, cx, 3, d, at).unwrap())
         });
         let p = &vcod_common::net::protocol::PROTOCOL_V1;
         let ents = vm.with_cx(|cx| crate::game::wire::packet_entities(&mut host, cx, p));
         assert_eq!(ents[&id.0].field_i32(p, "clientNum"), 3);
-        assert_eq!(ents[&id.0].field_i32(p, "groundEntityNum"), 0);
+        assert_eq!(ents[&id.0].field_i32(p, "groundEntityNum"), 1022);
+        assert_eq!(ents[&swap.0].field_i32(p, "groundEntityNum"), 0);
         host.run_entity_thinks(OWNER_LOCKOUT_MS);
         let ents = vm.with_cx(|cx| crate::game::wire::packet_entities(&mut host, cx, p));
         assert_eq!(ents[&id.0].field_i32(p, "clientNum"), 254);

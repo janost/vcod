@@ -27,7 +27,7 @@ use super::host::GameHost;
 use crate::game::entity::{HudState, HUD_OWNER_ALL};
 use std::collections::BTreeMap;
 use vcod_common::net::msg::{EntityState, HudElem, MAX_HUD_ELEMS};
-use vcod_common::net::protocol::{Protocol, ENTITYNUM_WORLD};
+use vcod_common::net::protocol::Protocol;
 use vcod_gsc::EntId;
 use vcod_gsc::{Cx, Host, Value};
 
@@ -276,14 +276,11 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
         Kind::Item {
             index,
             client_num,
-            dropped,
+            ground,
         } => {
             seti(&mut e, "eType", ET_ITEM);
             seti(&mut e, "index", index);
             seti(&mut e, "eFlags", ITEM_EFLAGS);
-            // The swap's drop in the retail pickup capture reads 0 where every
-            // placed item reads the world (docs/research/cod11-items.md 12.6).
-            let ground = if dropped { 0 } else { ENTITYNUM_WORLD as i32 };
             seti(&mut e, "groundEntityNum", ground);
             seti(&mut e, "clientNum", client_num);
         }
@@ -318,7 +315,7 @@ enum Kind {
     Item {
         index: i32,
         client_num: i32,
-        dropped: bool,
+        ground: i32,
     },
     /// A script model, by its model configstring index.
     ScriptMover(i32),
@@ -334,7 +331,7 @@ fn kind_of(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Opti
         return Some(Kind::Item {
             index: i32::from(item.index),
             client_num: item.owner.map_or(ITEM_CLIENTNUM, i32::from),
-            dropped: item.dropped,
+            ground: item.ground,
         });
     }
     if classname == "misc_mg42" || classname == "misc_turret" {

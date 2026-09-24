@@ -1111,6 +1111,7 @@ mod tests {
             assert_eq!(item.clip, 12);
             assert_eq!(item.owner, Some(0));
             assert!(item.dropped);
+            assert_eq!(item.ground, 1022, "a dropItem drop has landed");
             let count = cx.intern_folded("count");
             assert_eq!(host.get_field(cx, id, count), Value::Int(400));
             let e = host.ents.get(id).unwrap();

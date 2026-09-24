@@ -915,6 +915,16 @@ its path writes the ground entity, and the 0 is whatever the allocation left,
 not a landing. Where `G_Spawn` gets that 0 I have not read, so the
 early-level reading is not ruled out either.
 
+VERIFIED, `G_BounceItem` (0x4e858): `movzx eax, word [ebx+0x28]` at
+0x4ea1b and `mov [ecx+0x7c], eax` at 0x4ea1f, a store into
+`groundEntityNum`. INFERRED: `ebx` is the item's trace, so a drop that
+lands through `G_BounceItem` takes the entity it landed on as its ground,
+the world's 1022 on a floor; a `dropItem` drop is launched at `pos.trType`
+5 (section 8) and lands that way. INFERRED: the swap's drop is placed with
+`G_SetOrigin` at `trType` 0, never reaches `G_BounceItem`, and its 0 is the
+value `G_Spawn` left unwritten. No capture of a death drop measures its
+`groundEntityNum` yet.
+
 ### 12.7 The dropper's lockout
 
 VERIFIED, client fixture: item 170's `clientNum` reads 0 on every snapshot
