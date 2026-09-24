@@ -6966,6 +6966,12 @@ struct PickupProbe {
     stations: Vec<(PickupPhase, [f32; 3], [f32; 3])>,
     traced: Option<u32>,
     notes: Vec<String>,
+    /// Every phase entered, in order.
+    visited: Vec<PickupPhase>,
+    /// What each phase took: an `a <index>` or a pickup event on the
+    /// playerstate's ring.
+    took: Vec<(PickupPhase, String)>,
+    events: vcod_common::net::events::EventTracker,
 }
 
 impl PickupProbe {
@@ -7015,6 +7021,7 @@ impl PickupProbe {
                 .get(1)
                 .and_then(|t| t.parse().ok())
                 .filter(|&i| i != 0);
+            self.took.push((self.phase, tokens.join(" ")));
         }
         let ms = self.ms(now);
         self.lines.push((
@@ -7044,6 +7051,10 @@ impl PickupProbe {
         );
         self.phase = next;
         self.phase_started = Some(now);
+        self.visited.push(next);
+        if next == PickupPhase::Done {
+            self.note_takes();
+        }
         self.tap_at = match next {
             PickupPhase::Use1 | PickupPhase::Use2 => Some(now + PICKUP_SETTLE),
             PickupPhase::Early => self.use2_tap.map(|t| t + PICKUP_EARLY_TAP),
@@ -7056,6 +7067,31 @@ impl PickupProbe {
         if next == PickupPhase::Switch {
             self.switch_to = Some(self.idx_carbine).filter(|&i| i != 0);
         }
+    }
+
+    /// A phase that should have taken something and saw neither an `a` nor a
+    /// pickup event would otherwise leave a fixture that reads as complete.
+    /// `early` taps inside the dropper's lockout and should take nothing, but
+    /// a neighbouring panzerfaust can answer it.
+    fn note_takes(&mut self) {
+        let took = |phase| {
+            self.took
+                .iter()
+                .filter(|(p, _)| *p == phase)
+                .map(|(_, t)| t.as_str())
+                .collect::<Vec<_>>()
+        };
+        let mut notes = Vec::new();
+        for phase in [PickupPhase::Touch2, PickupPhase::Use2, PickupPhase::Late] {
+            if self.visited.contains(&phase) && took(phase).is_empty() {
+                notes.push(format!("# BROKEN {} took nothing", phase.label()));
+            }
+        }
+        let early = took(PickupPhase::Early);
+        if !early.is_empty() {
+            notes.push(format!("# early took {}", early.join(", ")));
+        }
+        self.notes.extend(notes);
     }
 
     /// The item with `index` nearest `eye`, where the snapshot carries one.
@@ -7172,22 +7208,39 @@ eventParms={},{},{},{} origin={} viewangles={}",
             PickupPhase::Early | PickupPhase::Late => Some(self.idx_carbine),
             _ => None,
         };
-        self.aim = Some(
-            match target.and_then(|i| Self::nearest_item(snap, i, eye)) {
-                Some(at) => {
-                    let (yaw, pitch) = aim_at(eye, at);
-                    (yaw & 0xffff, pitch & 0xffff)
-                }
-                None => {
-                    let v = snap.ps.viewangles(p);
-                    (deg_to_short(v[1]) & 0xffff, deg_to_short(v[0]) & 0xffff)
-                }
-            },
-        );
+        // Latched once the tap is down: a taken item leaves the wire, and the
+        // view must not swing to whatever `nearest_item` finds next.
+        let tapped = self.tap_at.is_some_and(|t| now >= t);
+        if !(tapped && self.aim.is_some()) {
+            self.aim = Some(
+                match target.and_then(|i| Self::nearest_item(snap, i, eye)) {
+                    Some(at) => {
+                        let (yaw, pitch) = aim_at(eye, at);
+                        (yaw & 0xffff, pitch & 0xffff)
+                    }
+                    None => {
+                        let v = snap.ps.viewangles(p);
+                        (deg_to_short(v[1]) & 0xffff, deg_to_short(v[0]) & 0xffff)
+                    }
+                },
+            );
+        }
 
         if self.traced != Some(snap.message_num) {
             self.traced = Some(snap.message_num);
             self.trace(ms, snap);
+        }
+        for ev in self.events.drain(snap, p) {
+            let own = ev.entity_num == u32::MAX;
+            if own
+                && matches!(
+                    ev.event,
+                    crate::fx::registry::EV_ITEM_PICKUP | crate::fx::registry::EV_AMMO_PICKUP
+                )
+            {
+                self.took
+                    .push((self.phase, format!("event {} parm {}", ev.event, ev.parm)));
+            }
         }
 
         let weapon = snap.ps.field_i32(p, "weapon") as u8;
@@ -8091,7 +8144,7 @@ mod tests {
 
     /// `dm` spawns and the gsc teleports before the join settles, so the
     /// capture's first snapshot is already on the fg42 and no jump is ever
-    /// seen for it (ledger ruling R1). The second teleport is seen by position
+    /// seen for it. The second teleport is seen by position
     /// too, whichever fg42 `getentarray` handed the gsc first.
     #[test]
     fn pickup_starts_on_the_first_fg42_without_seeing_a_jump() {
@@ -8128,6 +8181,127 @@ mod tests {
         assert!(pk.touch2_at.is_none(), "still on the first fg42");
         pk.step(t0, &snap(3, [second[0], second[1] - 30.0, 20.0]));
         assert!(pk.touch2_at.is_some(), "on the second fg42");
+    }
+
+    /// A snapshot with the given playerstate fields and item entities
+    /// (`(num, index, xyz)`), for driving [`PickupProbe::step`].
+    fn pickup_snap(
+        num: u32,
+        ps_fields: &[(&str, i32)],
+        items: &[(u32, i32, [f32; 3])],
+    ) -> net::snapshot::Snapshot {
+        use net::msg::{EntityState, PlayerState};
+        let p = &net::protocol::PROTOCOL_V1;
+        let mut ps = PlayerState::null(p);
+        for &(n, v) in ps_fields {
+            ps.fields[PlayerState::field_index(p, n).unwrap()] = v;
+        }
+        let entities = items
+            .iter()
+            .map(|&(n, index, at)| {
+                let mut e = EntityState::null(p);
+                e.number = n;
+                let mut set =
+                    |f: &str, v: i32| e.fields[EntityState::field_index(p, f).unwrap()] = v;
+                set("eType", crate::entities::ET_ITEM);
+                set("index", index);
+                for (i, c) in at.into_iter().enumerate() {
+                    set(&format!("pos.trBase[{i}]"), c.to_bits() as i32);
+                }
+                (n, e)
+            })
+            .collect();
+        net::snapshot::Snapshot {
+            server_time: 1000 + 50 * num as i32,
+            message_num: num,
+            delta_num: -1,
+            snap_flags: 0,
+            ps,
+            entities,
+            clients: BTreeMap::new(),
+            valid: true,
+        }
+    }
+
+    /// The swap's tap and the two carbine taps rise at +0, +500 and +1500 ms
+    /// of the swap's own tap, on the probe's own send clock.
+    #[test]
+    fn pickup_taps_use_at_the_swap_and_either_side_of_the_lockout() {
+        let mut pk = PickupProbe {
+            phase: PickupPhase::Switch,
+            idx_carbine: 10,
+            ..PickupProbe::default()
+        };
+        let t0 = Instant::now();
+        let mut rises = Vec::new();
+        let mut down = false;
+        // 4 ms divides every mark, so a rise lands on it rather than after it.
+        for k in 0..800u32 {
+            let now = t0 + Duration::from_millis(u64::from(k) * 4);
+            let snap = pickup_snap(k + 1, &[("weapon", 10)], &[]);
+            pk.step(now, &snap);
+            let pressed = pk.cmd(now).buttons & BUTTON_USE != 0;
+            if pressed && !down {
+                rises.push(now);
+            }
+            down = pressed;
+        }
+        let tap = pk.use2_tap.expect("use2 was entered");
+        let at: Vec<u128> = rises
+            .iter()
+            .map(|r| r.duration_since(tap).as_millis())
+            .collect();
+        assert_eq!(at, vec![0, 500, 1500]);
+    }
+
+    /// Once the use tap is down the aim holds: the taken fg42 leaves the wire
+    /// and the view must not swing to the next item `nearest_item` finds.
+    #[test]
+    fn pickup_latches_the_aim_at_the_tap() {
+        let mut pk = PickupProbe {
+            phase: PickupPhase::Aim,
+            idx_fg42: 6,
+            ..PickupProbe::default()
+        };
+        let t0 = Instant::now();
+        let near = [(251, 6, [100.0, 0.0, 0.0])];
+        let far = [(257, 6, [0.0, 100.0, 0.0])];
+        pk.step(t0, &pickup_snap(1, &[], &near));
+        pk.enter(t0, PickupPhase::Use1);
+        pk.step(t0, &pickup_snap(2, &[], &near));
+        let aimed = pk.aim;
+        assert_eq!(aimed.map(|a| a.0), Some(0), "yaw 0, at the near fg42");
+        let after_tap = t0 + PICKUP_SETTLE;
+        pk.step(after_tap, &pickup_snap(3, &[], &far));
+        assert_eq!(pk.aim, aimed, "the aim moved after the tap");
+    }
+
+    /// A phase that should take something and did not is marked, and a take
+    /// inside the owner lockout is recorded rather than marked.
+    #[test]
+    fn pickup_marks_a_phase_that_took_nothing() {
+        let t0 = Instant::now();
+        let mut pk = PickupProbe::default();
+        for phase in [
+            PickupPhase::Touch2,
+            PickupPhase::Switch,
+            PickupPhase::Use2,
+            PickupPhase::Early,
+        ] {
+            pk.enter(t0, phase);
+        }
+        pk.on_server_command(t0, &["a".to_string(), "9".to_string()]);
+        pk.enter(t0, PickupPhase::Late);
+        pk.enter(t0, PickupPhase::Done);
+        assert_eq!(
+            pk.notes,
+            vec![
+                "# BROKEN touch2 took nothing",
+                "# BROKEN use2 took nothing",
+                "# BROKEN late took nothing",
+                "# early took a 9",
+            ]
+        );
     }
 
     /// A retail client switches to what an `a <index>` names; the byte rides

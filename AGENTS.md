@@ -366,7 +366,8 @@ engineering setup works.
   because retail runs the probe as gametype `probe_pickup`; the server
   half's `PROBE` and `Weapon:` lines are copied into `-pickup-script.txt` by
   hand. Both are retail evidence, and a run against ours overwrites the
-  client one.
+  client one: move it to `tmp/` and `git checkout` the fixture directory
+  after.
   A plain `--net-probe` also prints every change to an entity's `pos`/`apos`
   trajectory group, which is the mover half of the same arrangement:
   `client-probes/probe_mover.gsc` under `run_probe.sh` in one shell calls each
