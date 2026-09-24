@@ -425,7 +425,7 @@ pub struct Server {
     /// (doc section 4 step 1).
     last_spawn_tick: Option<i32>,
     /// One `.gsc` answered from memory instead of the paks
-    /// ([`Self::overlay_script`]); `None` in every production run.
+    /// ([`Self::overlay_script`]); `None` unless `--gametype-script` or a test set it.
     script_overlay: Option<(String, String)>,
     /// A level load that failed with the level already torn down
     /// ([`LoadFailure::Fatal`]), waiting for `main` to end the process on it.
@@ -1791,10 +1791,10 @@ impl Server {
 
     /// The test seam for a gametype script that ships in no pak: `path` is a
     /// canonical script path (no extension) and `text` its source, answered
-    /// instead of the paks on every later level load. Its only callers are
-    /// the semantics probes in `tests/semantics_ents.rs`, which need the real
-    /// console and restart paths under them.
-    #[doc(hidden)]
+    /// instead of the paks on every later level load. `--gametype-script`
+    /// uses it to run a client probe as the gametype, and the tests that need
+    /// the real console and restart paths under a probe script call it
+    /// directly.
     pub fn overlay_script(&mut self, path: &str, text: &str) {
         self.script_overlay = Some((path.to_string(), text.to_string()));
     }

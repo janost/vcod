@@ -1030,3 +1030,64 @@ comes from the placed panzerfaust 256 at (821, 2274), 5 units from 171, and
 from 37200 the hint comes from 171. INFERRED: retail's 32 on that
 stretch is a placed panzerfaust too; the capture does not record which
 entity a hint came from.
+
+### 13.4 Measured against ours
+
+One run on 2026-09-24 of section 12's recipe with vcod as the server:
+`vcod-server mp_carentan --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_pickup.gsc --set
+probe_teleport=1 --set scr_allow_fg42=1` and `--net-probe 127.0.0.1:28960
+--save-pickup --probe-secs 120` against it. It walked the probe's own
+timing and the gsc probe's own teleports, where the gate places the view off
+retail's snapshots. The two files it wrote, the client fixture and the
+server's log, went to `tmp/item-pickup/` and are not committed. Times below
+are relative to a phase's first snapshot, since ours ran on its own clock.
+
+VERIFIED, both client files: the same ten phases in the same order; every
+phase's `!server` lines identical; every phase's `!item` lines identical as a
+set, trajectories included; the inventory at each phase's end identical
+(`weapons`, `slots`, `clip`, `ammo`); the cursor hint reading 15, 79, 32, 21
+and 32 in the same phases; each drop's `clientNum` reading 0 from its swap
+snapshot through +900 ms and 254 from +950, for item 170 and for item 171.
+VERIFIED, both script logs: the same `Weapon:`, `trigger` and `teleport`
+lines in the same order with the same arguments, and the touch on the second
+fg42 2050 ms after the first `trigger` on both.
+
+VERIFIED, the ring, each difference with its ruling:
+
+- Both swaps (`use2`, `late`): retail's snapshot reads the 146 and the 155
+  with `weapon` 0; ours reads the 146 with the old weapon and the 155 with
+  the new one on the next snapshot. The one-frame lag of 13.2, as ruled.
+- `use1` and `switch`: the putaway 156 carries parm 9 on ours and 0 on
+  retail. `touch2`, 50 ms after the 148: ours adds a 98 on the 2-unit drop
+  after the second teleport. Both are the two pmove divergences the gate
+  found; neither is item pickup and neither is fixed here.
+- `wait`: ours reads `eventSequence` 1 with a 99 on its first snapshot,
+  retail 0. INFERRED: the landing event of the drop after the first
+  teleport, the same divergence as the 98, on another surface.
+- `use1`: the raise comes 700 ms after the putaway on ours and 650 on retail.
+  VERIFIED, `weapons/mp/m1carbine_mp`: `dropTime` 0.67. INFERRED: both are
+  670 ms seen through 50 ms snapshots, not a difference.
+
+VERIFIED, found by this run and not by the gate, none of it item pickup, so
+none of it is fixed here:
+
+- Where the player comes to rest after each teleport. Retail reads z 31.7 on
+  the first fg42 and -23.7 on the second; ours 31.5 and -23.9. VERIFIED,
+  vcod's own traces of mp_carentan at those two points: both are terrain
+  (triangles 501 and 2526), and a player box traced down stops at 31.494 and
+  -23.875. INFERRED: ours rests where its trace stops and retail about
+  0.2 units higher. The gate allows 0.5 per snapshot and never flagged it.
+  Retail's first-spot `y` also reads -821.9 where ours stays at -822.0.
+- The `aim` phase's view: retail aims at (87.9, -90) and ours at (90, 69.1).
+  INFERRED: ours stands exactly on the item's `x` and `y`, so the aim at it
+  is straight down with a yaw read off rounding noise; a consequence of the
+  item above, and the hint and the grab that follow match.
+- The census: retail's `PROBE item` lines carry `getTime()` 1050, ours 1000.
+  VERIFIED, `crates/server/tests/fixtures/movers/mp_pavlov-dm-movers.txt`:
+  retail's `PROBE time0` after the same `wait 1` from `main` also reads
+  1050. The gate compares the census by name only.
+- Retail's log carries `PROBE other 0 noclass 23650`, the probe's own slot
+  seen before its first spawn (12.6); ours has none. VERIFIED,
+  `crates/server/src/game/entity.rs`: ours gives a client `classname`
+  "player" from the moment the slot exists.
