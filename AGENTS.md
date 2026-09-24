@@ -507,8 +507,9 @@ engineering setup works.
   hits, then the client commands that start a script thread (`kill`, `mr`),
   which the packet pass only queues because it runs before the clock advances,
   then `deliver_hits` so the damage callback has run before script, then the
-  script frame, then the script's spawns, then the switches and takes the
-  weapon machine made, then the weapon mirrors (held, current, viewmodel, the
+  script frame, then the script's spawns, then the switches the weapon
+  machine made (its takes already landed at their cmd's touch, and only
+  there), then the weapon mirrors (held, current, viewmodel, the
   body a shot is traced against, and the origin back to script), then the
   weapon ops, then the link ops (`linkTo`, `unlink`), then the re-anchor that
   pins every linked client to its parent plus the offset and releases a link

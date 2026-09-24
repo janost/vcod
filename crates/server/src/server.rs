@@ -281,6 +281,9 @@ struct Touched {
     on_ground: bool,
     yaw: Option<f32>,
     weapon: Option<u8>,
+    /// A `clipOnly` weapon this cmd spent the last round of (combat doc, 1.5
+    /// step 9); pmove cannot take it because the script host owns
+    /// `ps.weapons`.
     take: Option<u8>,
     /// The eye and `ps.viewangles` the cmd left, for the use key's aim.
     eye: [f32; 3],
@@ -392,10 +395,6 @@ pub struct Server {
     /// it, which is what keeps a switch from being undone the frame after it
     /// lands.
     weapon_changes: Vec<(usize, u8)>,
-    /// Weapons a move spent the last round of, by slot: a `clipOnly` weapon
-    /// with no reserve left is taken away (combat doc, 1.5 step 9), which
-    /// pmove cannot do because the script host owns `ps.weapons`.
-    weapon_takes: Vec<(usize, u8)>,
     /// Commands waiting to run, drained by `drain_console` at the top of
     /// `tick` (`Cbuf_Execute`, docs/research/cod11-map-cycle.md section 5.2).
     console: console::Console,
@@ -553,7 +552,6 @@ impl Server {
             fs: None,
             hit_rigs: Default::default(),
             weapon_changes: Vec::new(),
-            weapon_takes: Vec::new(),
             console: console::Console::new(),
             rotation: console::Rotation::default(),
             sv_map_rotation: String::new(),
@@ -2012,7 +2010,6 @@ impl Server {
         self.pending_explosions.clear();
         self.pending_script_commands.clear();
         self.weapon_changes.clear();
-        self.weapon_takes.clear();
         // Step 9.
         self.checksum_feed = (self.rand() << 16) ^ self.rand() ^ self.sv_time_ms;
         // Step 13.
@@ -2135,7 +2132,6 @@ impl Server {
         self.pending_explosions.clear();
         self.pending_script_commands.clear();
         self.weapon_changes.clear();
-        self.weapon_takes.clear();
         self.snap_flag_server_bit ^= console::SNAPFLAG_SERVERCOUNT;
         // Step 5: only the low nibble moves.
         self.server_id = console::next_restart_id(self.server_id);
@@ -2688,11 +2684,6 @@ impl Server {
             for (slot, weapon) in self.weapon_changes.drain(..) {
                 rt.set_client_weapon(slot, weapon);
             }
-            // The take already landed at its cmd's touch in `replay_moves`;
-            // taking a weapon no longer held is a no-op.
-            for (slot, weapon) in self.weapon_takes.drain(..) {
-                rt.take_client_weapon(slot, weapon);
-            }
             // What the client holds comes across the same way the
             // configstrings do: re-read every frame, because any thread can
             // have changed them. The held bits have to be among them --
@@ -2886,7 +2877,6 @@ impl Server {
         // The weapon changes are already drained when a script is loaded,
         // and a server without one has nothing to write them to.
         self.weapon_changes.clear();
-        self.weapon_takes.clear();
     }
 
     /// SV_UserMove for every client: one pmove step per queued usercmd, dt off
@@ -2999,7 +2989,6 @@ impl Server {
                     if e.event == EV_FIRE_WEAPON_LASTSHOT {
                         if let Some(def) = weapons.get(weapon as usize) {
                             if def.clip_only && sim.ps.ammo[def.ammo_index] == 0 {
-                                self.weapon_takes.push((slot, weapon));
                                 take = Some(weapon);
                             }
                         }
@@ -4873,17 +4862,10 @@ mod tests {
         assert_eq!(sv.configstring(alias), "minefield_click");
     }
 
-    /// A `clipOnly` weapon's last round takes it before that cmd's touch
-    /// pass, as retail's `PM_Weapon` does ahead of `G_TouchTriggers`
-    /// (combat doc 1.5 step 9): a grab on the same cmd must not see the frag
-    /// as held and top it up. Read straight after `replay_moves`, which is
-    /// where the touch pass ends and before the post-script take.
-    #[test]
-    fn the_last_frag_is_taken_before_that_cmd_s_touch() {
-        use vcod_common::net::msg::BUTTON_ATTACK;
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
+    /// A client holding its last frag and nothing else, in a server running
+    /// `script`, with the `serverTime` its next cmd builds on.
+    fn last_frag_in_hand(script: &str) -> Option<(Server, i32, usize)> {
+        let fs = vcod_common::testing::game_fs()?;
         let now = Instant::now();
         let mut sv = Server::new(cfg(), now);
         sv.load_world(World {
@@ -4893,7 +4875,7 @@ mod tests {
         });
         install_script(
             &mut sv,
-            crate::game::script::ScriptRuntime::for_test("main() {}"),
+            crate::game::script::ScriptRuntime::for_test(script),
         );
         sv.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
         let _nc = begun(&mut sv, now);
@@ -4904,7 +4886,9 @@ mod tests {
         let mut held = crate::weapons::PlayerWeapons::default();
         held.give(frag, sv.weapon_table.slot(frag));
         held.current = frag as u8;
-        sv.script.as_mut().unwrap().host.client_weapons[0] = held;
+        let rt = sv.script.as_mut().unwrap();
+        rt.host.weapons = sv.weapon_table.clone();
+        rt.host.client_weapons[0] = held;
         let c = sv.clients[0].as_mut().unwrap();
         let sim = c.sim.as_mut().unwrap();
         sim.ps.weapons_held = held.held;
@@ -4912,21 +4896,41 @@ mod tests {
         sim.ps.weapon = frag as u8;
         sim.ps.ammoclip[def.clip_index] = 1;
         sim.ps.ammo[def.ammo_index] = 0;
-        let mut st = c.last_processed_st;
+        let st = c.last_processed_st;
+        Some((sv, st, frag))
+    }
 
-        // Hold the trigger through the pullback, then let go: the release
-        // is the throw, and the throw is the last round.
+    /// The cmds that hold the trigger through the pullback and then let go:
+    /// the release is the throw, and the throw is the last round.
+    fn frag_throw_cmd(i: i32, st: i32, frag: usize) -> UserCmd {
+        use vcod_common::net::msg::BUTTON_ATTACK;
+        UserCmd {
+            server_time: st + 50 * (i + 1),
+            weapon: frag as u8,
+            buttons: if i < 20 { BUTTON_ATTACK } else { 0 },
+            ..NULL_USERCMD
+        }
+    }
+
+    /// A `clipOnly` weapon's last round takes it before that cmd's touch
+    /// pass, as retail's `PM_Weapon` does ahead of `G_TouchTriggers`
+    /// (combat doc 1.5 step 9): a grab on the same cmd must not see the frag
+    /// as held and top it up. Read straight after `replay_moves`, which is
+    /// where the touch pass ends and before the script frame.
+    #[test]
+    fn the_last_frag_is_taken_before_that_cmd_s_touch() {
+        let Some((mut sv, st, frag)) = last_frag_in_hand("main() {}") else {
+            return;
+        };
         for i in 0..60 {
-            st += 50;
-            let cmd = UserCmd {
-                server_time: st,
-                weapon: frag as u8,
-                buttons: if i < 20 { BUTTON_ATTACK } else { 0 },
-                ..NULL_USERCMD
-            };
+            let cmd = frag_throw_cmd(i, st, frag);
             sv.clients[0].as_mut().unwrap().pending.push(cmd);
             sv.replay_moves();
-            if !sv.weapon_takes.is_empty() {
+            let thrown = sv
+                .pending_attacks
+                .iter()
+                .any(|a| matches!(a, Attack::Throw { .. }));
+            if thrown {
                 assert!(
                     !sv.script.as_ref().unwrap().host.client_weapons[0].holds(frag),
                     "the spent frag was still held when its cmd's touch ran"
@@ -4935,6 +4939,41 @@ mod tests {
             }
         }
         panic!("the frag was never thrown");
+    }
+
+    /// The take happens once, at the cmd's touch: a frag the script gives
+    /// back in the frame it was thrown stays held.
+    #[test]
+    fn a_frag_given_back_in_the_frame_it_was_thrown_stays_held() {
+        let script = "main() { \
+               while (1) { \
+                 wait 0.05; \
+                 g = getentarray(\"grenade\", \"classname\"); \
+                 if (g.size > 0) { \
+                   p = getentarray(\"player\", \"classname\"); \
+                   p[0] giveweapon(\"fraggrenade_mp\"); \
+                   logprint(\"regive\"); \
+                   return; \
+                 } \
+               } \
+             }";
+        let Some((mut sv, st, frag)) = last_frag_in_hand(script) else {
+            return;
+        };
+        let now = Instant::now();
+        for i in 0..60 {
+            let cmd = frag_throw_cmd(i, st, frag);
+            sv.clients[0].as_mut().unwrap().pending.push(cmd);
+            sv.tick(now);
+            if sv.script_log().iter().any(|l| l.trim() == "regive") {
+                assert!(
+                    sv.script.as_ref().unwrap().host.client_weapons[0].holds(frag),
+                    "the frag the script gave back was taken again"
+                );
+                return;
+            }
+        }
+        panic!("the script never saw the grenade");
     }
 
     /// A use key on the cmd whose move finished a switch grabs with the new
