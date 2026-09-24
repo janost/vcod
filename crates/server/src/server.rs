@@ -3101,6 +3101,9 @@ impl Server {
                 // run later in this tick, so what they read is this frame's
                 // and not the last one's.
                 rt.set_client_grenade_ms(slot, sim.map_or(0, |(s, _)| s.ps.grenade_time_left_ms));
+                if let Some((s, _)) = sim {
+                    rt.set_client_height(slot, (s.ps.maxs() - s.ps.mins()).z);
+                }
             }
         }
         moved

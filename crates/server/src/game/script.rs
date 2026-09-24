@@ -704,6 +704,13 @@ impl ScriptRuntime {
         }
     }
 
+    /// A client's box height as the tick's moves left it, for `dropItem`.
+    pub fn set_client_height(&mut self, slot: usize, height: f32) {
+        if let Some(h) = self.host.client_height.get_mut(slot) {
+            *h = height;
+        }
+    }
+
     /// A client's ammo arrays as the tick's moves left them, for the item
     /// pass and `dropItem`. Ops still queued for that client's sim are
     /// re-applied on top, since the sim has not seen them yet.

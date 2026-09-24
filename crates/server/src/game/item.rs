@@ -136,7 +136,10 @@ pub fn launch_weapon(
         .unwrap_or_default()
         .to_string();
     let (origin, angles) = match at {
-        // The dropper's yaw seeds the alignment the landing does.
+        // The dropper's yaw seeds the alignment the landing does. The launch
+        // is from the box's mid-height (items.md section 8): a grounded
+        // origin sits within a quarter unit of the floor, so the landing
+        // trace would start inside it.
         DropAt::Feet => {
             let player = host
                 .ents
@@ -149,8 +152,10 @@ pub fn launch_weapon(
                     _ => [0.0; 3],
                 }
             };
-            let origin = read("origin");
-            (origin, [0.0, read("angles")[1], 0.0])
+            let mut origin = read("origin");
+            let yaw = read("angles")[1];
+            origin[2] += host.client_height.get(slot).copied().unwrap_or(0.0) * 0.5;
+            (origin, [0.0, yaw, 0.0])
         }
         DropAt::Exactly { origin, angles } => (origin, angles),
     };
@@ -479,8 +484,11 @@ mod tests {
         assert_eq!(ents[&id.0].field_i32(p, "clientNum"), 254);
     }
 
-    /// A death drop lands the way retail's `G_BounceItem` lays it: on the
-    /// floor, facing the dropper's yaw, with a weapon's 90 degrees of roll.
+    /// A death drop lands the way retail's `G_BounceItem` lays it: its box
+    /// clear of the floor, facing the dropper's yaw, with a weapon's 90
+    /// degrees of roll. The dropper stands where pmove leaves a grounded
+    /// player, a fraction above the floor, so a trace from its bare origin
+    /// would start inside the floor.
     #[test]
     fn a_feet_drop_faces_the_droppers_yaw_and_takes_the_weapon_roll() {
         let (mut vm, mut host) = fixture();
@@ -498,13 +506,19 @@ mod tests {
         vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 0, None).unwrap();
             for (name, v) in [
-                ("origin", [16.0, -32.0, 8.0]),
+                ("origin", [16.0, -32.0, 0.125]),
                 ("angles", [10.0, 45.0, 0.0]),
             ] {
                 let f = cx.intern_folded(name);
                 host.set_field(cx, c, f, Value::Vector(v)).unwrap();
             }
             let id = launch_weapon(&mut host, cx, 0, d, DropAt::Feet).unwrap();
+            let origin = cx.intern_folded("origin");
+            let Value::Vector(o) = host.get_field(cx, id, origin) else {
+                panic!("the drop has an origin");
+            };
+            let rest = 1.0 + vcod_common::collision::SURFACE_CLIP_EPSILON;
+            assert!((o[2] - rest).abs() < 1e-3, "z {}", o[2]);
             let angles = cx.intern_folded("angles");
             let Value::Vector(a) = host.get_field(cx, id, angles) else {
                 panic!("the drop has angles");
