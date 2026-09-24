@@ -370,6 +370,28 @@ engineering setup works.
   hand. Both are retail evidence, and a run against ours overwrites the
   client one: move it to `tmp/` and `git checkout` the fixture directory
   after.
+  `--save-turret` is the mounted MG capture. It joins allies and needs
+  `client-probes/probe_turret` as the gametype under `tools/run_probe.sh`
+  with `+set probe_teleport 1`, plus a second `--probe-team axis` client
+  started before it: the gsc puts the gunner 40 units behind mp_carentan's
+  gun at (1712 1830 8) and the axis client 300 units in front, and the probe
+  waits until it stands within 60 units of the gun. It reads the gun out of
+  the entity lump and its wire number off the snapshot (the `eType` 11
+  nearest the lump origin), then aims at it, taps use to mount, sweeps yaw
+  -90..90 and pitch -60..60 off the gun's yaw two degrees a cmd, turns 60 in
+  one cmd, holds attack a second along the gun and a second at the axis
+  client, waits for the cooldown alias, taps use to dismount, remounts from a
+  crouch and dismounts, strafes out of the arc and taps use once more, which
+  must not mount. The fire bit is held, not tapped, because the mounted frame
+  reads the held bit (`docs/research/cod11-turrets.md` 6.3). It writes
+  `crates/server/tests/fixtures/turret/<map>-dm-turret.txt`: per phase a
+  `!station`, every `!cmd`, a `!trace` per snapshot with the view lock fields,
+  a `!turret` line whenever the gun's entity changed, every drained event as
+  `!event`, every bullet-impact temp entity as `!impact`, and every server
+  command as `!server`. The gunner's own entity is never in its own snapshot,
+  so the axis probe's log is the only other view of it. The fixture is retail
+  evidence and a run against ours overwrites it: move it to `tmp/` and
+  `git checkout` the fixture directory after.
   A plain `--net-probe` also prints every change to an entity's `pos`/`apos`
   trajectory group, which is the mover half of the same arrangement:
   `client-probes/probe_mover.gsc` under `run_probe.sh` in one shell calls each
