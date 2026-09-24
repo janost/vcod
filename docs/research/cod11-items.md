@@ -357,18 +357,30 @@ it). INFERRED, from its first test of `def+0x7c`: `BG_GetStackSlotForWeapon`
 (0x36cc8) never offers a slot on stock content. VERIFIED: `panzerfaust_mp` is
 `weaponSlot primary`, `clipOnly 1`.
 
-VERIFIED, `BG_GivePlayerWeapon` (0x36a38): a `Com_BitCheck` of the weapon
-(0x36a52) and compares of `def+0x74` against 6 and 7 (0x36a69, 0x36a6e), each
-with a branch to a return of 0 (0x36a73); a `Com_BitSet` of the weapon
-(0x36a90); stores of the weapon into `cl+0x315` (0x36ad3), `cl+0x316`
-(0x36aee) and `cl+0x314 + weaponSlot` (0x36b07), each beside a compare of that
-byte against 0; and a loop that reads `def+0x2fc` and calls `Com_BitSet` on
-each weapon it names (0x36b0a..0x36b64). INFERRED: a weapon already held is not
-given again; a new one takes the first empty slot its class allows, or none;
-and every weapon on its alt-fire chain is held beside it with no slot, which is
-the `fg42_semi_mp` bit the capture reads beside the fg42's (section 12.4).
+VERIFIED, `BG_GivePlayerWeapon` (0x36a38), the instructions: a
+`Com_BitCheck` of the weapon (0x36a52) with a `jne` to 0x36a73, which is
+`xor eax, eax` and a jump to the epilogue; compares of `def+0x74` against 6
+(0x36a69, `je` to 0x36a73) and 7 (0x36a6e); a `Com_BitSet` of the weapon
+(0x36a90); byte compares against 0 and stores of the weapon at `cl+0x315`
+(0x36ac8, 0x36ad3), `cl+0x316` (0x36ae3, 0x36aee) and `cl+0x314 + weaponSlot`
+(0x36aff, 0x36b07); and `def+0x2fc` read at 0x36b0a and 0x36b42 beside a
+`Com_BitCheck` (0x36b5a) and a `Com_BitSet` (0x36b22) of the index it holds.
+INFERRED, off those branches: a weapon already held is not given again; a new
+one takes the first empty slot its class allows, or none; and every weapon on
+its alt-fire chain that is not yet held is held beside it with no slot, which
+is the `fg42_semi_mp` bit the capture reads beside the fg42's (section 12.4).
 INFERRED: a weapon whose `def+0x74` reads 6 or 7 is never given; what that
 field is I have not read.
+
+VERIFIED, `BG_IsPlayerWeaponInSlot(ps, weapon, followAlt)` (0x3a9f4), the
+instructions: byte loads of `cl+0x315` and `cl+0x316` (0x3aa53, 0x3aa5e) and
+of `cl+0x314 + weaponSlot` (0x3aa7b), each compared against the weapon index;
+a test of the third argument (0x3aa87) beside a read of `def+0x2fc`
+(0x3aa8d); and a compare against the starting index with a `jne` back to the
+slot compares (0x3aa99, 0x3aa9c). INFERRED: with `followAlt` set, a weapon
+counts as in a slot when it or any weapon on its alt-fire chain sits in one,
+so an alt mode in hand is in its base weapon's slot. VERIFIED: `Pickup_Weapon`
+pushes 1 as that argument (0x4cf77).
 
 INFERRED, the slot conflict in `Pickup_Weapon`, off the branches at
 0x4cf44..0x4d160, for a new weapon W and the held weapon H (`ps.weapon`,
@@ -389,19 +401,19 @@ INFERRED, the slot conflict in `Pickup_Weapon`, off the branches at
    `Com_Printf` of the "cannot swap out a debug weapon" line (0x74b40) and
    the pickup fails (0x4cf74..0x4cfeb).
 
-VERIFIED: ahead of case 1, `ps.weapon` is compared against 0 (0x4cf56) and,
-when non-zero, passed to `Com_BitCheck` (0x4cf68), whose zero result branches
-to the return of 0 (0x4cf72). INFERRED: while `ps.weapon` names a weapon the
-player no longer holds, every pickup of an unowned weapon fails with no
-message.
+VERIFIED, `Pickup_Weapon`'s instructions before case 1: a `test` of
+`ps.weapon` (`cl+0xb0`, 0x4cf56) with a `je` to 0x4cff7; a `Com_BitCheck` of
+it (0x4cf68) with a `je` at 0x4cf72 to 0x4cff0, which is `xor eax, eax` and a
+jump to the epilogue. INFERRED: while `ps.weapon` names a weapon the player no
+longer holds, every pickup of an unowned weapon fails with no message.
 
-VERIFIED: past the three `Drop_Weapon` calls, a compare of the returned entity
-against 0 branches to the return of 0 (0x4d160, 0x4d164), ahead of
-`BG_GivePlayerWeapon` (0x4d1cd). INFERRED: a swap whose drop yields no entity
-fails with the old weapon already taken and the new one not given; an empty
-`clipOnly` weapon, which `Drop_Weapon` takes without dropping (section 8), is
-the stock way there, and the next use finds the slot empty and takes the
-item.
+VERIFIED: the stores of `Drop_Weapon`'s return into `ebp-0x2c` (0x4d0ab,
+0x4d0c5); a compare of `ebp-0x2c` against 0 at 0x4d160 with a `je` to 0x4cff0
+(0x4d164); `BG_GivePlayerWeapon` called at 0x4d1cd. INFERRED: a swap whose
+drop yields no entity returns 0 before the give, with the old weapon already
+taken; an empty `clipOnly` weapon, which `Drop_Weapon` takes without dropping
+(section 8), is the stock way there, and the next use finds the slot empty
+and takes the item.
 
 VERIFIED: the drop is `Drop_Weapon(player, weapon, NULL)` (0x4d0a6, 0x4d0c0),
 and `G_SetOrigin` with the picked-up item's `currentOrigin` (`+0x134`),

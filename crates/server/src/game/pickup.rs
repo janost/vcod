@@ -128,6 +128,15 @@ fn take(inv: &mut Inventory, weapon: usize) {
     }
 }
 
+/// `BG_IsPlayerWeaponInSlot` with `followAlt` set (section 5): the weapon or
+/// its alt-fire partner sits in a slot.
+fn in_a_slot(weapons: &PlayerWeapons, weapon: usize) -> bool {
+    let alt = crate::items::alt_weapon_index(weapon);
+    weapons.slots[1..=5]
+        .iter()
+        .any(|&s| s != 0 && (s as usize == weapon || Some(s as usize) == alt))
+}
+
 /// `BG_GetMaxPickupableAmmo` (section 3). Negative once a shared cap is
 /// over its limit, which is how `add_ammo` trims it.
 pub fn max_pickupable(inv: &Inventory, table: &WeaponTable, weapon: usize) -> i32 {
@@ -402,6 +411,13 @@ fn pickup_weapon(
     // (section 5), until pmove clears it.
     let current = inv.weapons.current as usize;
     if current != 0 && !inv.weapons.holds(current) {
+        return false;
+    }
+    // Case 5: a held weapon in no slot is never swapped out.
+    if current != 0
+        && !in_a_slot(&inv.weapons, current)
+        && empty_slot_for(&inv.weapons, table.slot(wi)).is_none()
+    {
         return false;
     }
     let out_weapon = match outgoing(inv, table, wi) {
@@ -1165,6 +1181,115 @@ mod tests {
         assert!(!out.taken);
         assert!(out.commands.is_empty());
         assert_eq!(inv, before);
+    }
+
+    /// Case 5: a held weapon that sits in no slot, with no empty slot for
+    /// the new one, refuses the grab without a message.
+    #[test]
+    fn a_slotless_weapon_in_hand_is_never_swapped_out() {
+        let t = table();
+        let mut inv = allies(&t);
+        let pf = idx("panzerfaust_mp");
+        inv.weapons.give(idx("fg42_mp") as usize, 2);
+        inv.weapons.give(pf as usize, 0);
+        inv.weapons.current = pf;
+        let before = inv;
+        let out = touch_item(
+            &mut inv,
+            &view(idx("stielhandgranate_mp")),
+            &mut ItemCounts { count: 0, clip: 0 },
+            0,
+            false,
+            &t,
+            false,
+            &mut no_rand(),
+        );
+        assert!(!out.taken);
+        assert!(out.commands.is_empty());
+        assert_eq!(inv, before);
+    }
+
+    /// An alt mode in hand counts as in its base weapon's slot, so it is not
+    /// case 5: the grenade swap goes through case 3.
+    #[test]
+    fn an_alt_mode_in_hand_sits_in_its_base_weapon_s_slot() {
+        let t = table();
+        let mut inv = allies(&t);
+        let (fg, semi) = (idx("fg42_mp"), idx("fg42_semi_mp"));
+        inv.weapons.give(fg as usize, 2);
+        inv.weapons.give(semi as usize, 0);
+        inv.weapons.current = semi;
+        let out = touch_item(
+            &mut inv,
+            &view(idx("stielhandgranate_mp")),
+            &mut ItemCounts { count: 0, clip: 0 },
+            0,
+            false,
+            &t,
+            false,
+            &mut no_rand(),
+        );
+        assert!(out.taken);
+        assert_eq!(out.drop.map(|d| d.weapon), Some(idx("fraggrenade_mp")));
+        assert_eq!(inv.weapons.slots[4], idx("stielhandgranate_mp"));
+    }
+
+    /// The owned arm's leftover is written to the item's own fields: a
+    /// `count` of -1 goes 5 further below zero and that comes off the clip,
+    /// 15 to 9 (0x4d2a0..0x4d2cf), where subtracting the gain from the
+    /// resolved reserve of 0 would leave 10.
+    #[test]
+    fn a_negative_count_takes_its_overflow_off_the_clip() {
+        let t = table();
+        let mut inv = allies(&t);
+        let carbine = idx("m1carbine_mp");
+        let d = t.get(carbine as usize).unwrap();
+        inv.ammo[d.ammo_index] = 395;
+        let mut counts = ItemCounts {
+            count: -1,
+            clip: 15,
+        };
+        let out = touch_item(
+            &mut inv,
+            &view(carbine),
+            &mut counts,
+            0,
+            true,
+            &t,
+            true,
+            &mut no_rand(),
+        );
+        assert!(!out.taken);
+        assert_eq!(inv.ammo[d.ammo_index], 400);
+        assert_eq!(counts, ItemCounts { count: -1, clip: 9 });
+    }
+
+    /// Under `g_weaponAmmoPools 1` a partial take keeps the item, but the
+    /// ammo line has already gone out on the gain (0x4d23b..0x4d28f).
+    #[test]
+    fn a_pools_refusal_still_sends_the_ammo_line() {
+        let t = table();
+        let mut inv = allies(&t);
+        let fg = idx("fg42_mp");
+        let d = t.get(fg as usize).unwrap();
+        inv.weapons.give(fg as usize, 2);
+        inv.clip[d.clip_index] = 20;
+        inv.ammo[d.ammo_index] = 319;
+        let out = touch_item(
+            &mut inv,
+            &view(fg),
+            &mut ItemCounts { count: 90, clip: 0 },
+            0,
+            true,
+            &t,
+            true,
+            &mut no_rand(),
+        );
+        assert!(!out.taken);
+        assert_eq!(
+            out.commands,
+            vec!["f \"GAME_PICKUP_AMMO\u{14}WEAPON_FG42\"".to_string()]
+        );
     }
 
     #[test]
