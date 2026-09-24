@@ -506,6 +506,7 @@ engineering setup works.
   `end_frame`, then `ClientEndFrame`'s aim trace per playing client, off the
   frame's final eye and aim with `pm_type` and `on_ground` mirrored again
   beside it, whose fire wakes its waiters at the next tick's script frame,
+  and beside it the cursor hint for the item the use key would pick now,
   then the console lines, configstring changes, server commands and
   intermission scoreboard the script queued go out, and last the entities are
   built once and culled and written per client. Origin, `pm_type`,

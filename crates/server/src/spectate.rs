@@ -301,6 +301,9 @@ pub struct ClientSim {
     /// `linkTo`'s record, `gentity_t+0x2e4`. Not `linked()`, which is about
     /// whether the other clients are sent an entity for this one.
     pub link_to: Option<Link>,
+    /// `ps.serverCursorHint`, written every frame by the end-of-frame pass
+    /// (`ScriptRuntime::cursor_hint_pass`).
+    pub cursor_hint: i32,
     damage: DamageAccum,
     feedback: DamageFeedback,
     /// `ps.stats[1]`, the yaw toward the killer (combat doc, 5.1, item 11).
@@ -386,6 +389,7 @@ impl ClientSim {
             strafing: None,
             jumped: false,
             link_to: None,
+            cursor_hint: 0,
             health: 0,
             max_health: 0,
             dead: false,
@@ -482,6 +486,9 @@ impl ClientSim {
         // `ClientSpawn` calls `G_EntUnlink` on the spawning client
         // (object-model doc, 23.2).
         self.link_to = None;
+        // `ClientSpawn`'s memset. Only a playing client's end frame writes
+        // the hint again, so a spectator and the intermission camera keep 0.
+        self.cursor_hint = 0;
         // A respawned player does not resume the anim it died in.
         self.anim = Default::default();
         self.was_airborne = false;
@@ -1194,6 +1201,7 @@ impl ClientSim {
             set("viewHeightLerpDown", i32::from(self.ps.view_lerp_down));
             // -1..1, left negative, the same convention retail sends.
             set("leanf", (self.ps.lean / pmove::LEAN_MAX).to_bits() as i32);
+            set("serverCursorHint", self.cursor_hint & 0xff);
             set("serverCursorHintString", NO_CURSOR_HINT_STRING);
             set("viewmodelIndex", self.viewmodel_index);
             set("legsAnim", self.anim.legs());
@@ -1953,6 +1961,21 @@ mod tests {
             pmove::SPEED_SPECTATOR as i32,
             "a player still moves at the spectator's speed"
         );
+    }
+
+    /// A player's hint reaches the wire; the next spawn clears it.
+    #[test]
+    fn the_cursor_hint_rides_a_players_wire_until_the_next_spawn() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
+        sim.cursor_hint = 79;
+        let ps = sim.to_wire(p, 0, 0);
+        assert_eq!(ps.field_i32(p, "serverCursorHint"), 79);
+        assert_eq!(ps.field_i32(p, "serverCursorHintVal"), 0);
+        assert_eq!(ps.field_i32(p, "serverCursorHintString"), 255);
+        sim.become_spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
+        assert_eq!(sim.cursor_hint, 0);
     }
 
     /// A spectator noclips and a player collides. With no world a player still

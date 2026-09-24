@@ -650,6 +650,39 @@ impl ScriptRuntime {
         }
     }
 
+    /// `G_CheckForCursorHints` (0x4f59c) as `ClientEndFrame` runs it every
+    /// frame: the hint for the item the use key would pick now, 0 for none
+    /// or for a player not alive (docs/research/cod11-items.md, section 2.3).
+    pub fn cursor_hint_pass(&mut self, slot: usize, eye: [f32; 3], view: [f32; 3]) -> i32 {
+        let v = self
+            .host
+            .client_vitals
+            .get(slot)
+            .copied()
+            .unwrap_or_default();
+        if self.client_entity(slot).is_none() || v.health <= 0 || v.dead {
+            return 0;
+        }
+        if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
+            return 0;
+        }
+        let host = &mut self.host;
+        let hit = self
+            .vm
+            .with_cx(|cx| crate::game::item::activate_ent(host, cx, slot, eye, view));
+        let Some(item) = hit
+            .and_then(|id| self.host.ents.get(id))
+            .and_then(|e| e.item)
+        else {
+            return 0;
+        };
+        let Some(kind) = crate::game::pickup::item_kind(item.index as usize) else {
+            return 0;
+        };
+        let owned = self.host.client_weapons[slot].holds(item.index as usize);
+        crate::game::pickup::cursor_hint(kind, owned)
+    }
+
     /// A client's entity state as the tick's moves left it, for
     /// `cloneplayer`. `None` for a slot with no sim.
     pub fn set_client_entity_state(
@@ -2662,6 +2695,68 @@ mod tests {
         assert!(rt
             .take_client_commands()
             .contains(&(0, format!("a {panzerfaust}"))));
+    }
+
+    const EYE: [f32; 3] = [0.0, 0.0, 60.0];
+    const AT_ITEM: [f32; 3] = [36.0, 0.0, 0.0];
+
+    #[test]
+    fn aiming_at_an_unowned_fg42_hints_nine_past_its_index() {
+        let mut rt = pickup_rig();
+        rt.place_item("mpweapon_fg42", [40.0, 0.0, 30.0], 90);
+        // fg42 is index 6: the capture's 15 (docs/research/cod11-items.md 12.3).
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 15);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, [-36.0, 0.0, 0.0]), 0);
+        rt.host.client_vitals[0] = crate::game::host::Vitals {
+            health: 0,
+            max_health: 100,
+            dead: true,
+        };
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 0);
+    }
+
+    /// An owned fg42 short of full hints 73 past its index, the capture's
+    /// 79, and once taken the same aim hints nothing.
+    #[test]
+    fn an_owned_weapon_hints_73_past_its_index_until_taken() {
+        let mut rt = pickup_rig();
+        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
+        let d = rt.host.weapons.get(fg).unwrap().clone();
+        rt.host.client_weapons[0].give(fg, 2);
+        rt.host.client_ammo[0].ammo[d.ammo_index] = 100;
+        rt.place_item("mpweapon_fg42", [40.0, 0.0, 30.0], 90);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 79);
+        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_ITEM);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 0);
+    }
+
+    /// The capture's swap: 32 on the panzerfaust, 0 on the carbine it
+    /// dropped while its dropper is locked out, 21 once the lock clears.
+    #[test]
+    fn an_owner_locked_drop_hints_nothing_until_its_lock_clears() {
+        let mut rt = pickup_rig();
+        let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
+        rt.host.client_weapons[0].give(fg, 2);
+        rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 30.0], 0);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 32);
+        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_ITEM);
+        let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap();
+        let drop = rt
+            .host
+            .ents
+            .iter_inuse()
+            .find_map(|(id, e)| e.item.filter(|i| i.index as usize == carbine).map(|_| id))
+            .expect("the carbine was dropped");
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 0);
+        rt.host
+            .ents
+            .get_mut(drop)
+            .unwrap()
+            .item
+            .as_mut()
+            .unwrap()
+            .owner = None;
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 21);
     }
 
     /// The item pass's notifies reach script at the next frame: a player

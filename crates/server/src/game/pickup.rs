@@ -522,13 +522,14 @@ pub fn activate_score(muzzle: [f32; 3], forward: [f32; 3], centre: [f32; 3]) -> 
     Some((1.0 - (dot - COS) / 0.24) * 256.0 + dist)
 }
 
-/// `G_CheckForCursorHints`' value for an item (section 2.3).
+/// `G_CheckForCursorHints`' value for an item (section 2.3), for the one
+/// `activate_ent` picked.
 pub fn cursor_hint(kind: ItemKind, owned: bool) -> i32 {
     match kind {
         ItemKind::Weapon(w) if owned => i32::from(w) + 0x49,
         ItemKind::Weapon(w) => i32::from(w) + 9,
-        ItemKind::Ammo => -1 + 0x49,
         ItemKind::Health { .. } => 7,
+        ItemKind::Ammo => unreachable!("can_grab refuses every ammo item"),
     }
 }
 
