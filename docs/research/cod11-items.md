@@ -990,7 +990,10 @@ BSP-placed one settles at map load instead, inline in
 fall: it traces straight down and stops there rather than flying a
 trajectory, and a weapon's `align_to_surface` call adds the 90 degrees of
 roll a launched weapon lands with. A death or a script drop instead takes
-the dropper's yaw outright (`DropAt::Feet`), and a swap's drop is placed
+the dropper's yaw outright and starts its trace at the dropper's box
+mid-height, the z `Drop_Weapon` launches from (section 8), since a grounded
+origin sits inside the trace box's reach of the floor (`DropAt::Feet`); a
+swap's drop is placed
 exactly where the item it replaced lay (`DropAt::Exactly`), never landing,
 which is why its `groundEntityNum` reads 0 rather than the world's 1022
 (section 9).
