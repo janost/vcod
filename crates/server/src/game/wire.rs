@@ -27,11 +27,12 @@ use super::host::GameHost;
 use crate::game::entity::{HudState, HUD_OWNER_ALL};
 use std::collections::BTreeMap;
 use vcod_common::net::msg::{EntityState, HudElem, MAX_HUD_ELEMS};
-use vcod_common::net::protocol::{Protocol, ENTITYNUM_WORLD};
+use vcod_common::net::protocol::Protocol;
 use vcod_gsc::EntId;
 use vcod_gsc::{Cx, Host, Value};
 
-/// `ET_ITEM`: a placed weapon, `index` a 1-based index into configstring 7.
+/// `ET_ITEM`: an item, `index` its `bg_itemlist` row (a weapon's is its
+/// configstring 7 index).
 const ET_ITEM: i32 = 3;
 /// `ET_SCRIPTMOVER`: a script model, `index` a model configstring index.
 const ET_SCRIPTMOVER: i32 = 8;
@@ -42,9 +43,9 @@ const ET_PLAYER: i32 = 1;
 /// model index.
 const ET_TURRET: i32 = 11;
 
-/// `eFlags` and `clientNum` as the traces carry them on a placed weapon. Both
-/// are constants of the spawn path rather than anything we compute, so they
-/// are transcribed with the capture as their evidence.
+/// `eFlags` as the traces carry it on every item, and `clientNum` on one no
+/// dropper's lockout holds: 0x3fe through the 8-bit netfield
+/// (docs/research/cod11-items.md section 9).
 const ITEM_EFLAGS: i32 = 16;
 const ITEM_CLIENTNUM: i32 = 254;
 /// A turret's `apos.trType` in both maps' traces.
@@ -272,12 +273,16 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
     }
 
     match kind {
-        Kind::Item(weapon) => {
+        Kind::Item {
+            index,
+            client_num,
+            ground,
+        } => {
             seti(&mut e, "eType", ET_ITEM);
-            seti(&mut e, "index", weapon);
+            seti(&mut e, "index", index);
             seti(&mut e, "eFlags", ITEM_EFLAGS);
-            seti(&mut e, "groundEntityNum", ENTITYNUM_WORLD as i32);
-            seti(&mut e, "clientNum", ITEM_CLIENTNUM);
+            seti(&mut e, "groundEntityNum", ground);
+            seti(&mut e, "clientNum", client_num);
         }
         Kind::ScriptMover(model) => {
             seti(&mut e, "eType", ET_SCRIPTMOVER);
@@ -306,8 +311,12 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
 
 /// What one classname puts on the wire, if anything.
 enum Kind {
-    /// A placed weapon, by its 1-based configstring 7 index.
-    Item(i32),
+    /// An item, by its `bg_itemlist` row, with the `clientNum` it carries.
+    Item {
+        index: i32,
+        client_num: i32,
+        ground: i32,
+    },
     /// A script model, by its model configstring index.
     ScriptMover(i32),
     /// A mounted MG: its model configstring index and its weapon index.
@@ -315,18 +324,21 @@ enum Kind {
 }
 
 fn kind_of(host: &mut GameHost, cx: &mut Cx, id: EntId, classname: &str) -> Option<Kind> {
+    if let Some(item) = host.ents.get(id).and_then(|e| e.item) {
+        if item.taken {
+            return None;
+        }
+        return Some(Kind::Item {
+            index: i32::from(item.index),
+            client_num: item.owner.map_or(ITEM_CLIENTNUM, i32::from),
+            ground: item.ground,
+        });
+    }
     if classname == "misc_mg42" || classname == "misc_turret" {
         let weapon = field_string(host, cx, id, "weaponinfo")
             .and_then(|w| crate::configstrings::weapon_index(&w))
             .unwrap_or(0) as i32;
         return Some(Kind::Turret(model_index(host, cx, id)?, weapon));
-    }
-    if classname.starts_with("mpweapon_") {
-        let weapon = field_string(host, cx, id, "weaponinfo")
-            .or_else(|| crate::game::spawn::radiant_weapon(classname).map(str::to_string))?;
-        return Some(Kind::Item(
-            crate::configstrings::weapon_index(&weapon)? as i32
-        ));
     }
     if classname == "script_model" {
         return Some(Kind::ScriptMover(model_index(host, cx, id)?));

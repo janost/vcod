@@ -199,3 +199,56 @@ halves write `crates/server/tests/fixtures/playerstate/<map>-sd-plant-attacker.t
 and `<map>-sd-defuse-defender.txt`. All three are retail evidence, and a run
 against `vcod-server` overwrites the two client ones: move them to `tmp/` and
 `git checkout` the fixture directory after.
+
+## probe_pickup
+
+Every `"touch"` and `"trigger"` notify an item entity or a player takes, for
+the A/B in `crates/server/tests/pickup_ab.rs`. It logs one `PROBE item` line
+per watched entity at first sight (its number, classname, `getTime()` and
+origin), one `PROBE other` line for any other non-player entity a scan first
+sees after the startup census (so a dropped weapon whose classname is not in
+the watched list still shows up), one `PROBE touch` per item's own `"touch"`
+notify and one `PROBE ptouch` per player's, one `PROBE trigger` per item's
+`"trigger"` notify with the toucher and, if the pickup swapped out a held
+weapon, that weapon's number and classname (`undefined` otherwise), and one
+`PROBE teleport` per `probe_teleport` move.
+
+The watched classnames are mp_carentan's two placed weapon kinds
+(`mpweapon_fg42`, `mpweapon_panzerfaust`, `docs/research/cod11-items.md`
+§4.1's stock numbers), the allied loadout a weapon swap drops
+(`mpweapon_m1carbine`, `mpweapon_colt`, `mpweapon_fraggrenade`) and the
+health `dm` drops on a death (`item_health`); an unlisted classname is a
+`PROBE other` line instead. The census's `PROBE item` lines are what
+measured the two fg42s at entities 252 and 258
+(`docs/research/cod11-items.md` §12.1).
+
+It calls `maps\mp\gametypes\dm::main()` itself, so a client can answer the
+stock team menu and spawn. mp_carentan's two fg42s sit a town apart, so
+under `probe_teleport 1` each live player is put on the first one on its
+first spawn and, once that fg42's own `"trigger"` notify has fired (i.e. it
+has been taken), on the second one two seconds later; both moves are onto
+the item's own `origin`, not a nearby spot, so Task 3's `--save-pickup`
+finds "on the first fg42" by the stepped snapshot's position (within 48
+units xy of the fg42's origin, or a jump, ledger ruling R1) without having
+to see the teleport as an origin jump. A run without the cvar never
+teleports and never logs a `PROBE teleport` line, since an unset cvar reads
+`""`. `crates/server/tests/pickup_ab.rs` sets it, so ours teleports the way
+retail did.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> SECS=150 \
+    tools/run_probe.sh client-probes/probe_pickup mp_carentan \
+        +set probe_teleport 1 +set scr_allow_fg42 1
+# about 15 s later, in the second shell:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-pickup --probe-secs 120
+```
+
+`scr_allow_fg42 1` is needed because stock `default_mp.cfg` sets it 0, and
+`_teams::restrictPlacedWeapons` then deletes both fg42s at map load.
+
+The `PROBE` lines plus the server's own `Weapon:` and `Item:` lines (read
+straight out of `games_mp.log`, which `run_probe.sh` does not print) go to
+`crates/server/tests/fixtures/items/mp_carentan-dm-pickup-script.txt`; the
+client half writes `mp_carentan-dm-pickup.txt`. Both are retail evidence,
+and a run against `vcod-server` overwrites the client one: move it to
+`tmp/` and `git checkout` the fixture directory after.

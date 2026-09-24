@@ -343,6 +343,20 @@ pub struct WeaponDef {
     /// Index into `ps.ammoclip`, same rule, separate namespace from
     /// `ammo_index`.
     pub clip_index: usize,
+    /// `displayName`, the localized key the pickup's `f` line carries.
+    pub display_name: String,
+    /// `dropAmmoMin`/`dropAmmoMax`: the reserve an item with no `count`
+    /// hands out (docs/research/cod11-items.md, section 4).
+    pub drop_ammo_min: i32,
+    pub drop_ammo_max: i32,
+    /// `sharedAmmoCap`, and the name that groups the weapons under it.
+    pub shared_ammo_cap: i32,
+    pub shared_ammo_cap_name: String,
+    /// `weaponSlot` as written, lowercased; `WeaponTable::slot` resolves it.
+    pub weapon_slot: String,
+    /// The shared cap's index, assigned by `WeaponTable` off
+    /// `shared_ammo_cap_name` the way `ammo_index` is off `ammo_name`.
+    pub shared_cap_index: Option<usize>,
 }
 
 /// Absence is normal (a spread key on a turret file, an ammo key on a
@@ -473,6 +487,16 @@ impl WeaponDef {
             ads_spread: parse_num(map, "adsSpread", 0.0),
             ammo_index: 0,
             clip_index: 0,
+            display_name: map.get("displayName").cloned().unwrap_or_default(),
+            drop_ammo_min: parse_num(map, "dropAmmoMin", 0),
+            drop_ammo_max: parse_num(map, "dropAmmoMax", 0),
+            shared_ammo_cap: parse_num(map, "sharedAmmoCap", 0),
+            shared_ammo_cap_name: map.get("sharedAmmoCapName").cloned().unwrap_or_default(),
+            weapon_slot: map
+                .get("weaponSlot")
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_default(),
+            shared_cap_index: None,
         }
     }
 }
@@ -774,6 +798,27 @@ mod tests {
             def.sounds.alt_switch.as_deref(),
             Some("weap_thompson_altswitch")
         );
+    }
+
+    /// The fields the item pickup reads, off the shipped files
+    /// (docs/research/cod11-items.md, the weapon file table).
+    #[test]
+    fn the_pickup_fields_parse_off_the_stock_files() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let fg42 = load(&fs, "fg42_mp").unwrap();
+        assert_eq!(fg42.display_name, "WEAPON_FG42");
+        assert_eq!((fg42.drop_ammo_min, fg42.drop_ammo_max), (100, 200));
+        assert_eq!(fg42.weapon_slot, "primary");
+        assert_eq!(fg42.shared_ammo_cap_name, "");
+        let frag = load(&fs, "fraggrenade_mp").unwrap();
+        assert_eq!(frag.shared_ammo_cap, 3);
+        assert_eq!(frag.shared_ammo_cap_name, "grenades");
+        assert_eq!(frag.weapon_slot, "grenade");
+        let pf = load(&fs, "panzerfaust_mp").unwrap();
+        assert_eq!((pf.drop_ammo_min, pf.drop_ammo_max), (0, 0));
+        assert!(pf.clip_only);
     }
 
     #[test]

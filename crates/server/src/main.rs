@@ -32,6 +32,11 @@ struct Args {
     /// g_gametype: the script under maps/mp/gametypes to run
     #[arg(long, default_value = "dm")]
     gametype: String,
+    /// A gametype script from disk instead of the paks: overlaid at
+    /// maps/mp/gametypes/<stem> and run as gametype <stem>. For the client
+    /// probes in crates/gsc/tests/fixtures/semantics/client-probes/.
+    #[arg(long)]
+    gametype_script: Option<std::path::PathBuf>,
     /// Scripted entities that exercise the packet-entity wire path. 0 is off.
     #[arg(long, default_value_t = 0)]
     test_entities: usize,
@@ -92,6 +97,23 @@ fn main() -> Result<()> {
     let bsp_bytes = fs.read(&bsp_path).context("reading the bsp")?;
     let bsp = vcod_common::bsp::parse(&bsp_bytes).context("parsing the bsp")?;
 
+    let overlay = match &args.gametype_script {
+        Some(path) => {
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .context("--gametype-script needs a file name")?
+                .to_string();
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            Some((stem, text))
+        }
+        None => None,
+    };
+    let gametype = overlay
+        .as_ref()
+        .map_or(args.gametype.clone(), |(s, _)| s.clone());
+
     let sock = UdpSocket::bind(("0.0.0.0", args.port))
         .with_context(|| format!("binding udp/{}", args.port))?;
     sock.set_nonblocking(true)?;
@@ -101,7 +123,7 @@ fn main() -> Result<()> {
             map: args.map,
             hostname: args.hostname,
             max_clients: args.max_clients,
-            gametype: args.gametype,
+            gametype,
             test_entities: args.test_entities,
             bots: args.bots,
             bots_shoot: args.bots_shoot,
@@ -110,6 +132,9 @@ fn main() -> Result<()> {
         Instant::now(),
     );
     server.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    if let Some((stem, text)) = &overlay {
+        server.overlay_script(&format!("maps/mp/gametypes/{stem}"), text);
+    }
     for pair in &args.set {
         let Some((name, value)) = pair.split_once('=') else {
             bail!("--set takes NAME=VALUE, got {pair:?}");

@@ -204,6 +204,9 @@ fn client_spawn(
     host.set_field(cx, id, angles_field, Value::Vector(angles))?;
 
     host.client_weapons[slot] = crate::weapons::PlayerWeapons::default();
+    // `ClientSpawn` gives the sim a fresh playerstate, ammo included; the
+    // script's gives that follow land on this.
+    host.client_ammo[slot] = crate::game::host::AmmoArrays::default();
     // `ClientSpawn` re-stores `sess.maxHealth` into the fresh playerstate
     // (docs/protocol-1.1.md, "Block 1"); the gametype writes both fields
     // again right after, so this is what a spawn without that script does.
@@ -220,7 +223,8 @@ fn client_spawn(
 }
 
 /// `spawn(classname, origin)`: a live entity with both fields set, numbered
-/// after everything already in the table.
+/// after everything already in the table. An item classname makes an item
+/// (`dm.gsc`'s `dropHealth` spawns `item_health`).
 fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Value, ErrorKind> {
     let [Value::String(cls), Value::Vector(at)] = args else {
         return Err(ErrorKind::BadType("spawn takes a classname and an origin"));
@@ -231,6 +235,20 @@ fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Valu
     host.set_field(cx, id, cn, Value::String(cls))?;
     let og = cx.intern_folded("origin");
     host.set_field(cx, id, og, Value::Vector(at))?;
+    // `G_SpawnItem` for a `bg_itemlist` classname: registered and an item
+    // now, landed a frame later the way `G_RunItem` lands it, so the angles
+    // the script writes after `spawn` returns are what the landing aligns.
+    let name = cx.resolve(cls).to_string();
+    if let Some(index) = crate::items::classname_index(&name) {
+        let item = crate::items::item_name(index).unwrap_or(&name).to_string();
+        host.register_item(&item);
+        crate::game::item::attach(host, id, index);
+        // Unset angles are the zero the landing aligns from.
+        let angles = cx.intern_folded("angles");
+        host.set_field(cx, id, angles, Value::Vector([0.0; 3]))?;
+        host.ents
+            .schedule(id, ThinkFn::SettleItem, host.level_time_ms + 1);
+    }
     Ok(Value::Entity(id))
 }
 
@@ -680,6 +698,76 @@ mod tests {
         });
     }
 
+    /// `dropHealth()`'s `spawn("item_health", origin)` makes an item: row 68
+    /// registered and on the wire as an `ET_ITEM` no dropper owns.
+    #[test]
+    fn a_script_spawned_item_health_is_an_item_on_the_wire() {
+        let (mut vm, mut host) = fixture();
+        let id = vm.with_cx(|cx| {
+            let cls = Value::String(cx.intern_exact("item_health"));
+            let at = Value::Vector([10.0, 20.0, 30.0]);
+            let Value::Entity(id) = spawn(&mut host, cx, None, &[cls, at]).unwrap() else {
+                panic!("spawn returns the entity");
+            };
+            id
+        });
+        assert_eq!(host.ents.get(id).unwrap().item.unwrap().index, 68);
+        assert_eq!(&host.configstrings[8][17..], "1");
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        let ents = vm.with_cx(|cx| crate::game::wire::packet_entities(&mut host, cx, p));
+        let e = &ents[&id.0];
+        assert_eq!(e.field_i32(p, "eType"), 3);
+        assert_eq!(e.field_i32(p, "index"), 68);
+        assert_eq!(e.field_i32(p, "clientNum"), 254);
+        assert_eq!(e.field_i32(p, "groundEntityNum"), 1022);
+    }
+
+    /// `dropHealth()`'s shape: `spawn("item_health", ..)`, then a random yaw
+    /// written into `.angles` before the frame ends. The pack lands on the
+    /// next think pass, so the landing aligns the script's yaw to the slope
+    /// rather than the script's write flattening an earlier alignment.
+    #[test]
+    fn a_script_spawned_item_health_lands_on_the_slope_facing_the_scripts_yaw() {
+        let (mut vm, mut host) = fixture();
+        host.world = Some(Rc::new(World {
+            collision: vcod_common::collision::ramp_test_world(10.0, 0.0, 512.0),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        }));
+        host.level_time_ms = 1_000;
+        vm.with_cx(|cx| {
+            let cls = Value::String(cx.intern_exact("item_health"));
+            let at = Value::Vector([256.0, 0.0, 200.0]);
+            let Value::Entity(id) = spawn(&mut host, cx, None, &[cls, at]).unwrap() else {
+                panic!("spawn returns the entity");
+            };
+            let (origin, angles) = (cx.intern_folded("origin"), cx.intern_folded("angles"));
+            host.set_field(cx, id, angles, Value::Vector([0.0, 30.0, 0.0]))
+                .unwrap();
+            assert_eq!(host.get_field(cx, id, origin), at, "landed inside spawn");
+
+            host.run_entity_thinks(cx, 1_050);
+            let Value::Vector(o) = host.get_field(cx, id, origin) else {
+                panic!("the item has an origin");
+            };
+            assert!(o[2] < 60.0, "still in the air at {}", o[2]);
+            let Value::Vector(a) = host.get_field(cx, id, angles) else {
+                panic!("the item has angles");
+            };
+            let slope = 10f32.to_radians();
+            let normal = [-slope.sin(), 0.0, slope.cos()];
+            let f = crate::game::spawn::angle_forward(a);
+            let along: f32 = (0..3).map(|i| f[i] * normal[i]).sum();
+            assert!(along.abs() < 1e-3, "{a:?} does not lie on the slope");
+            assert!(
+                (a[1] - 30.0).abs() < 1.5,
+                "yaw {} is not the script's",
+                a[1]
+            );
+            assert!(a[2].abs() < 15.0, "roll {} took a weapon's", a[2]);
+        });
+    }
+
     /// `spawn` on an entity that is not a player is retail's
     /// `entity %i is not a player`, not a silently ignored move.
     #[test]
@@ -954,7 +1042,7 @@ mod tests {
                 1,
                 "delete() must not free immediately"
             );
-            host.run_entity_thinks(host.level_time_ms + DELETE_DEFER_MS);
+            host.run_entity_thinks(cx, host.level_time_ms + DELETE_DEFER_MS);
             assert_eq!(host.ents.iter_inuse().count(), 0);
         });
     }
@@ -1057,7 +1145,7 @@ mod tests {
                 Value::Int(1),
                 "delete() defers the free, so the handle still reads defined"
             );
-            host.run_entity_thinks(host.level_time_ms + DELETE_DEFER_MS);
+            host.run_entity_thinks(cx, host.level_time_ms + DELETE_DEFER_MS);
             assert_eq!(
                 is_defined(&mut host, cx, None, &[ent]).unwrap(),
                 Value::Int(0)

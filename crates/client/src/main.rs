@@ -217,6 +217,16 @@ struct Args {
     /// defuse mid-sweep), then aims true and holds use through the defuse. Writes <map>-sd-defuse-defender.txt.
     #[arg(long, conflicts_with = "probe_plant")]
     probe_defuse: bool,
+    /// The item pickup capture: joins allies, waits for
+    /// client-probes/probe_pickup's teleport onto the first fg42, stands on
+    /// it, aims at it and takes it with the use key, takes the second one's
+    /// ammo by touch after the probe's second teleport, then swaps the
+    /// carbine for a panzerfaust and back. Writes
+    /// crates/server/tests/fixtures/items/<map>-dm-pickup.txt.
+    /// Retail evidence when taken against tools/run_probe.sh; a run against
+    /// vcod-server overwrites it.
+    #[arg(long)]
+    save_pickup: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -631,6 +641,7 @@ fn main() -> Result<()> {
                 roundrestart: args.save_roundrestart,
                 plant: args.probe_plant,
                 defuse: args.probe_defuse,
+                pickup: args.save_pickup,
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,

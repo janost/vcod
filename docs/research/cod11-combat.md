@@ -2103,25 +2103,22 @@ A body born on an earlier frame is never re-read.
 `BG_GetWeaponIndexForName` and calls `Drop_Weapon` (0x4dd40), which takes the
 weapon off the player with `BG_TakePlayerWeapon` and hands the entity to
 `LaunchItem` (0x4db98). VERIFIED that `LaunchItem` stores `+0x4 = 3`
-(`ET_ITEM`), `+0x17c = 0x10` (the `eFlags` 16 the placed-weapon traces
-carry), `pos.trType` 5, `pos.trTime = level.time`, and the entity's think as
-`DroppedItemClearOwner` at `level.time + 1000`; VERIFIED that
-`DroppedItemClearOwner` (0x4efb4) does nothing but write `0x3fe` into the
-owner field, and that neither function arms a free. VERIFIED that the two
-`0x7530` (30000) immediates in the module's `.text` are in `Cmd_CallVote_f`
-and `fire_rocket`, so no dropped item is freed on a timer anywhere in it: a
-retail drop lives until somebody picks it up.
+(`ET_ITEM`), ORs 0x10 into the entity state's `eFlags` byte at 0x4dc93 (the
+`eFlags` 16 the placed-weapon traces carry), stores `pos.trType` 5 and
+`pos.trTime = level.time`, and arms `DroppedItemClearOwner` at `level.time +
+1000`. VERIFIED that `LaunchItem` stores 0x10 into `+0x17c` at 0x4dd24 and
+that `Touch_Item` tests that bit at 0x4d9ad and 0x4da0e; `+0x17c` is not the
+wire `eFlags`. INFERRED, from CoDExtended's `gentity_t` layout, that `+0x17c`
+is the gentity `flags` field and 0x10 its dropped-item bit. VERIFIED that
+`DroppedItemClearOwner` (0x4efb4) only writes 0x3fe into `s.clientNum`, and
+that the two `0x7530` immediates in `.text` sit in `Cmd_CallVote_f` and
+`fire_rocket`. INFERRED from `GetFreeCueSpot` (0x4da44) and `G_RunItem`
+(0x4eb18): a drop lives until it is picked up, until a drop made while
+all 32 ring slots are held evicts it from slot 0, which in play is the
+slot evicted every time, or until it lands in `CONTENTS_NODROP`
+(`docs/research/cod11-items.md`, section 8).
 
-vcod diverges on two of those, both deliberately. It does not take the weapon
-off the player, because the stock death path re-gives the loadout on respawn
-and nothing else calls the builtin yet. And it arms `ThinkFn::Free` 30 000 ms
-out (`DROPPED_ITEM_MS`), because pickup on touch does not exist: with retail's
-lifetime every death would leave an item that never goes away. The timer is a
-placeholder for the touch path, not a claim about retail. The drop runs the
-same `drop_item_to_floor` a placed weapon does, which stands in for the
-`LaunchItem` launch and the `G_RunItem` settle behind it: the wire then reads
-`pos.trType` 0 with `groundEntityNum` 1022, which is what all 133 item samples
-in `crates/server/tests/fixtures/entities/` carry.
+What vcod does with a drop is in `docs/research/cod11-items.md`, section 13.
 
 ### 5.3 The corpse runs item physics, and settles
 
@@ -2775,8 +2772,9 @@ them: rifle rounds passing through a player at half damage (2.3); the
 the `EV_RAISE_WEAPON` (155) retail raises on the death frame beside `EV_DEATH`;
 the direct-hit `MOD_GRENADE` arm (13.1), which a stock frag cannot reach
 because its file spells `damage` 0; the pitch rate `G_MissileLandAngles`
-redraws at a bounce (11.2); the splash event 173 and the water mask of 12.1;
-and item pickup.
+redraws at a bounce (11.2); and the splash event 173 and the water mask of
+12.1. Item pickup is modelled; `docs/research/cod11-items.md` is its own
+research doc.
 
 Melee (1.10, 2.5) and grenades (1.11, 11 to 14) were absent from the run 9.1
 to 9.3 measured, and the radius-damage falloff vcod carried then was RTCW's

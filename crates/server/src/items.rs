@@ -47,6 +47,20 @@ fn item_index(name: &str) -> Option<usize> {
         .map(|(i, ..)| *i)
 }
 
+/// The `bg_itemlist` row a spawned classname names, the match `G_CallSpawn`
+/// makes before its `spawns` table: a weapon's Radiant name or one of the
+/// five compiled-in rows.
+pub fn classname_index(classname: &str) -> Option<usize> {
+    crate::game::spawn::radiant_weapon(classname)
+        .and_then(crate::configstrings::weapon_index)
+        .or_else(|| {
+            STATIC_ITEMS
+                .iter()
+                .find(|(_, n, _)| *n == classname)
+                .map(|(i, ..)| *i)
+        })
+}
+
 /// The item name at `index`, the inverse of `item_index`.
 pub(crate) fn item_name(index: usize) -> Option<&'static str> {
     if let Some(name) = index
@@ -100,7 +114,7 @@ pub fn item_models(fs: Option<&Pk3Fs>, name: &str) -> Vec<String> {
 /// its alt mode), which this crate does not parse yet; deriving it from
 /// the adjacent-slot naming convention instead of hand-copying the five
 /// known pairs keeps it from drifting out of step with `WEAPON_LIST`.
-fn alt_weapon_index(index: usize) -> Option<usize> {
+pub(crate) fn alt_weapon_index(index: usize) -> Option<usize> {
     let weapons: Vec<&str> = WEAPON_LIST.split(' ').collect();
     if index == 0 || index > weapons.len() {
         return None;

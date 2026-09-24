@@ -7,13 +7,14 @@
 
 use crate::configstrings::{Allocators, CsRange};
 use crate::game::builtins;
-use crate::game::entity::{ObjectTable, FIRST_HUD_ELEM};
+use crate::game::entity::{ObjectTable, ThinkFn, FIRST_HUD_ELEM};
 use crate::game::fields::{self, FieldType, Route};
 use crate::server::MAX_CLIENTS;
 use std::collections::HashMap;
 use std::rc::Rc;
 use vcod_common::collision::ModelTri;
 use vcod_common::net::msg::{Objective, MAX_OBJECTIVES};
+use vcod_common::pmove::weapon::NUM_AMMO;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, Host, Target, Value};
 
 /// `ENTITYNUM_NONE`, the entity number an unattached objective record and an
@@ -130,6 +131,44 @@ pub enum WeaponOp {
     SwitchTo(u8),
 }
 
+/// A client's `ps.ammo` and `ps.ammoclip` as the host last knew them: copied
+/// from the sim once a tick before the touch pass, and moved by every
+/// [`GameHost::weapon_op`] in between, so a pickup and a `dropItem` in the
+/// same tick read each other's writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AmmoArrays {
+    pub ammo: [i16; NUM_AMMO],
+    pub clip: [i16; NUM_AMMO],
+}
+
+impl Default for AmmoArrays {
+    fn default() -> Self {
+        AmmoArrays {
+            ammo: [0; NUM_AMMO],
+            clip: [0; NUM_AMMO],
+        }
+    }
+}
+
+impl AmmoArrays {
+    pub fn apply(&mut self, op: WeaponOp) {
+        match op {
+            WeaponOp::SetClip { clip_index, rounds } => {
+                if let Some(c) = self.clip.get_mut(clip_index) {
+                    *c = rounds;
+                }
+            }
+            WeaponOp::SetAmmo { ammo_index, rounds } => {
+                if let Some(a) = self.ammo.get_mut(ammo_index) {
+                    *a = rounds;
+                }
+            }
+            WeaponOp::TakeAll => *self = AmmoArrays::default(),
+            WeaponOp::SetCurrent(_) | WeaponOp::SwitchTo(_) => {}
+        }
+    }
+}
+
 /// A client's health as the script sees it: `self.health`, `self.maxhealth`
 /// and whether `finishPlayerDamage` has killed it since its last spawn. The
 /// host is the owner; `Server` mirrors it into the sim every frame.
@@ -229,6 +268,8 @@ pub struct GameHost {
     /// clip every frame would make the weapon bottomless -- so `Server`
     /// drains them after `run_frame` and applies each once.
     pub client_weapon_ops: Vec<(usize, WeaponOp)>,
+    /// Each client's ammo arrays ([`AmmoArrays`]), by slot.
+    pub client_ammo: Vec<AmmoArrays>,
     /// Each client's health, authoritative here: the `health` and
     /// `maxhealth` accessors on a client entity read and write it, and
     /// `Server` mirrors it into the sim every frame.
@@ -254,11 +295,21 @@ pub struct GameHost {
     /// script frame, notified once that frame's clock is set
     /// (`ScriptRuntime::run_frame`).
     pub trigger_fires: Vec<(EntId, EntId)>,
+    /// Each client's previous cmd buttons, for the use key's rising edge
+    /// (`ClientThink_real` 0x40106..0x4011d).
+    pub client_old_buttons: Vec<u8>,
+    /// `(entity, event, args)` for every `"touch"` and `"trigger"` the item
+    /// pass raised since the last script frame, notified at its start the
+    /// way `trigger_fires` are.
+    pub item_notifies: Vec<(EntId, &'static str, Vec<Value>)>,
     /// Each client's `ps.grenadeTimeLeft`, mirrored in by
     /// `Server::replay_moves` with the entity states, which is the last read
     /// of it before a kill this tick: what a death drops
     /// (`docs/research/cod11-combat.md` 5.1 step 5).
     pub client_grenade_ms: Vec<i32>,
+    /// Each client's box height (`maxs.z - mins.z`, by stance), mirrored in
+    /// with the entity states, for the height `Drop_Weapon` launches from.
+    pub client_height: Vec<f32>,
     /// Each client's entity state as the tick's moves left it, mirrored in by
     /// `Server::replay_moves` before the script frame. `cloneplayer` copies
     /// the slot's entry into the body queue; nothing else reads it.
@@ -388,6 +439,8 @@ pub struct GameHost {
     /// loaded through `fs` the first time a trace meets an entity carrying
     /// it; `None` for a name that did not load or has no collision.
     pub xmodel_collision: HashMap<String, Option<Rc<[ModelTri]>>>,
+    /// `level+0x1d5c`, the 32 most recent drops (`crate::game::item`).
+    pub drop_ring: crate::game::item::DropRing,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -433,6 +486,16 @@ impl GameHost {
         tris
     }
 
+    /// Queues `op` for the client's sim and applies it to the host's mirror
+    /// now. Every weapon op goes through here; a push straight onto
+    /// `client_weapon_ops` leaves the mirror stale for the rest of the frame.
+    pub fn weapon_op(&mut self, slot: usize, op: WeaponOp) {
+        if let Some(a) = self.client_ammo.get_mut(slot) {
+            a.apply(op);
+        }
+        self.client_weapon_ops.push((slot, op));
+    }
+
     pub fn new(configstrings: Vec<String>) -> GameHost {
         let allocators = Allocators::seeded(&configstrings);
         GameHost {
@@ -444,6 +507,7 @@ impl GameHost {
             client_weapons: vec![crate::weapons::PlayerWeapons::default(); MAX_CLIENTS],
             client_viewmodel: vec![0; MAX_CLIENTS],
             client_weapon_ops: Vec::new(),
+            client_ammo: vec![AmmoArrays::default(); MAX_CLIENTS],
             client_vitals: vec![Vitals::default(); MAX_CLIENTS],
             client_buttons: vec![0; MAX_CLIENTS],
             client_pm_type: vec![0; MAX_CLIENTS],
@@ -451,7 +515,10 @@ impl GameHost {
             client_aim: vec![([0.0; 3], [0.0; 2]); MAX_CLIENTS],
             client_lookat: vec![None; MAX_CLIENTS],
             trigger_fires: Vec::new(),
+            client_old_buttons: vec![0; MAX_CLIENTS],
+            item_notifies: Vec::new(),
             client_grenade_ms: vec![0; MAX_CLIENTS],
+            client_height: vec![vcod_common::pmove::HEIGHT_STAND; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
             client_link_ops: Vec::new(),
@@ -483,6 +550,7 @@ impl GameHost {
             objectives: [empty_objective(); MAX_OBJECTIVES],
             client_objectives: vec![[Objective::default(); MAX_OBJECTIVES]; MAX_CLIENTS],
             xmodel_collision: HashMap::new(),
+            drop_ring: Default::default(),
         }
     }
 
@@ -565,6 +633,12 @@ impl GameHost {
         rand_unit(&mut self.rng)
     }
 
+    /// [`rand_int`] off the host's own state; the pickup's
+    /// `dropAmmoMin..Max` draw uses it.
+    pub fn rand_int(&mut self) -> i32 {
+        rand_int(&mut self.rng)
+    }
+
     /// Free an entity and everything the host hangs off it. Retail's
     /// `G_FreeEntity` unlinks the entity, which is what takes a submodel's
     /// brushes out of the clip and a trigger out of the touch pass, so the
@@ -579,12 +653,22 @@ impl GameHost {
     }
 
     /// `G_RunFrame`'s think pass, with every due `ThinkFn::Free` routed
-    /// through `free_entity`. The `delete` builtin and a dropped item both
-    /// schedule that think, so this is the path a deleted trigger's row is
-    /// dropped on.
-    pub fn run_entity_thinks(&mut self, now_ms: i32) {
-        for id in self.ents.run_thinks(now_ms) {
-            self.free_entity(id);
+    /// through `free_entity` and every `ThinkFn::SettleItem` landed. The
+    /// `delete` builtin and an evicted drop both schedule the free, so this
+    /// is the path a deleted trigger's row is dropped on.
+    pub fn run_entity_thinks(&mut self, cx: &mut Cx, now_ms: i32) {
+        for (id, think) in self.ents.run_thinks(now_ms) {
+            match think {
+                ThinkFn::SettleItem => {
+                    let row = self.ents.get(id).and_then(|e| e.item).map(|i| i.index);
+                    if let Some(row) = row {
+                        let weapon = crate::game::spawn::is_weapon_row(row as usize);
+                        crate::game::spawn::drop_item_to_floor(self, cx, id, weapon);
+                    }
+                }
+                ThinkFn::Free => self.free_entity(id),
+                ThinkFn::ClearOwner => {}
+            }
         }
     }
 
@@ -675,6 +759,11 @@ fn hud_color_word(e: &crate::game::entity::GEntity) -> u32 {
 /// draws from `Server`'s state the same way.
 pub fn rand_unit(state: &mut u64) -> f32 {
     vcod_common::rng::xorshift(state) as f32 / u64::MAX as f32
+}
+
+/// A glibc-`rand()`-shaped draw, `0..=0x7fff_ffff`.
+pub fn rand_int(state: &mut u64) -> i32 {
+    (vcod_common::rng::xorshift(state) >> 33) as i32 & 0x7fff_ffff
 }
 
 impl Host for GameHost {

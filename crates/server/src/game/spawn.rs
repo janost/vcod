@@ -91,14 +91,17 @@ pub fn spawn_entities_from_string(
         }
         if let Some(item) = spawn_item_name(host, cx, id, &classname) {
             host.register_item(&item.name);
-            if !item.turret {
-                drop_item_to_floor(host, cx, id);
-            }
-            if item.turret {
-                for alias in turret_sound_aliases(host.fs.as_deref(), &item.name) {
-                    register_sound_alias(host, alias);
+            match item.row {
+                Some(row) => {
+                    crate::game::item::attach(host, id, row);
+                    drop_item_to_floor(host, cx, id, is_weapon_row(row));
                 }
-                settle_turret_pitch(host, cx, id);
+                None => {
+                    for alias in turret_sound_aliases(host.fs.as_deref(), &item.name) {
+                        register_sound_alias(host, alias);
+                    }
+                    settle_turret_pitch(host, cx, id);
+                }
             }
         }
         if SPAWN_FREES.contains(&classname.as_str()) {
@@ -304,7 +307,9 @@ const RADIANT_NAMES: &[(&str, &str)] = &[
 /// straight after the entity is built, before any script runs, and neither
 /// function frees the entity, so a later script `delete()` still finds it.
 ///
-/// A placed weapon's classname is looked up in `RADIANT_NAMES`; both gate
+/// An item's classname goes through `items::classname_index`: a placed
+/// weapon's is looked up in `RADIANT_NAMES`, the five compiled-in rows
+/// (`item_health` and its siblings) match by name. Both gate
 /// maps place `mpweapon_fg42`/`mpweapon_panzerfaust` entities that
 /// `_teams.gsc`'s `restrictPlacedWeapons` later deletes by that same
 /// classname (VERIFIED, read from the shipped BSPs and script).
@@ -331,11 +336,11 @@ const RADIANT_NAMES: &[(&str, &str)] = &[
 /// neither gate map has one.
 ///
 /// Skipped for a turret, which goes through `G_SpawnTurret` instead. The
-/// `dropItem` builtin runs it too: retail hands its entity to `LaunchItem`,
-/// which launches it under `pos.trType` 5 and lets `G_RunItem` settle it to
-/// `trType` 0 with `groundEntityNum` = world, which is what all 133 item
-/// samples in `crates/server/tests/fixtures/entities/` carry.
-pub fn drop_item_to_floor(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+/// `dropItem` builtin and a script `spawn` of an item run it too: retail
+/// launches or links those in the air and lets `G_RunItem` settle them, which
+/// ends where this trace does. `weapon` adds the 90 degrees of roll a
+/// weapon row takes (docs/research/cod11-items.md section 9).
+pub fn drop_item_to_floor(host: &mut GameHost, cx: &mut Cx, id: EntId, weapon: bool) {
     const DROP: f32 = 4096.0;
     const R: f32 = 1.0;
     let Some(world) = host.world.clone() else {
@@ -370,8 +375,16 @@ pub fn drop_item_to_floor(host: &mut GameHost, cx: &mut Cx, id: EntId) {
     let Value::Vector(radiant) = host.get_field(cx, id, angles) else {
         return;
     };
-    let aligned = align_to_surface(radiant, tr.normal.into());
+    let aligned = align_to_surface(radiant, tr.normal.into(), weapon);
     let _ = host.set_field(cx, id, angles, Value::Vector(aligned));
+}
+
+/// Whether a `bg_itemlist` row is a weapon's, `giType` 1.
+pub(crate) fn is_weapon_row(row: usize) -> bool {
+    matches!(
+        crate::game::pickup::item_kind(row),
+        Some(crate::game::pickup::ItemKind::Weapon(_))
+    )
 }
 
 /// The barrel pitch an unmanned turret comes to rest at, recorded for
@@ -479,15 +492,16 @@ fn transform(v: glam::Vec3, axis: &[glam::Vec3; 3]) -> glam::Vec3 {
 /// mapper's yaw survives and the mapper's roll does not), two cross products
 /// orthogonalise that forward against the normal, and `AxisToAngles` turns the
 /// axis into angles. Then 90 degrees of roll (rodata `0x74dbc`) for an item
-/// whose `bg_itemlist` type is 1, which every placeable weapon is, and every
-/// placed item on both gate maps is a weapon.
-fn align_to_surface(radiant: [f32; 3], normal: [f32; 3]) -> [f32; 3] {
+/// whose `bg_itemlist` type is 1, which every placeable weapon is.
+fn align_to_surface(radiant: [f32; 3], normal: [f32; 3], weapon: bool) -> [f32; 3] {
     const WEAPON_ROLL: f32 = 90.0;
     let up = normal;
     let right = cross(up, angle_forward(radiant));
     let forward = cross(right, up);
     let mut out = axis_to_angles([forward, right, up]);
-    out[2] += WEAPON_ROLL;
+    if weapon {
+        out[2] += WEAPON_ROLL;
+    }
     out
 }
 
@@ -500,7 +514,7 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 }
 
 /// `AngleVectors`' forward, the only one of the three the item path asks for.
-fn angle_forward(angles: [f32; 3]) -> [f32; 3] {
+pub(crate) fn angle_forward(angles: [f32; 3]) -> [f32; 3] {
     let (sp, cp) = angles[0].to_radians().sin_cos();
     let (sy, cy) = angles[1].to_radians().sin_cos();
     [cp * cy, cp * sy, -sp]
@@ -566,7 +580,7 @@ mod align_tests {
     /// forward does not depend on roll.
     #[test]
     fn a_flat_floor_keeps_the_yaw_and_adds_the_weapon_roll() {
-        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, 0.0, 1.0]);
+        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, 0.0, 1.0], true);
         assert!(out[0].abs() < 1e-3, "pitch {}", out[0]);
         assert!((out[1] - 90.0).abs() < 1e-3, "yaw {}", out[1]);
         assert!((out[2] - 90.0).abs() < 1e-3, "roll {}", out[2]);
@@ -580,7 +594,7 @@ mod align_tests {
     #[test]
     fn a_tilted_floor_tips_the_item_and_leaves_the_roll_inside_one_turn() {
         let tilt = 2f32.to_radians();
-        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, -tilt.sin(), tilt.cos()]);
+        let out = align_to_surface([0.0, 90.0, 180.0], [0.0, -tilt.sin(), tilt.cos()], true);
         assert!(
             out[2] > 0.0 && out[2] < 180.0,
             "roll {} left its turn",
@@ -595,8 +609,9 @@ mod align_tests {
 }
 
 /// The Radiant classname that places a weapon, the reverse of
-/// [`radiant_weapon`]. `dropItem` spawns a dropped weapon under it so the
-/// entity reaches the wire as the same `ET_ITEM` a placed one does. `None`
+/// [`radiant_weapon`]. A dropped weapon's entity carries it as its
+/// classname, which is what script reads off a retail drop
+/// (docs/research/cod11-items.md 12.6). `None`
 /// for the weapons no map can place, which is most of the pistols and every
 /// mounted MG.
 pub fn radiant_name(weapon: &str) -> Option<&'static str> {
@@ -621,35 +636,33 @@ fn spawn_item_name(
     id: EntId,
     classname: &str,
 ) -> Option<SpawnItem> {
-    if classname.starts_with("mpweapon_") {
-        return RADIANT_NAMES
-            .iter()
-            .find(|(radiant, _)| *radiant == classname)
-            .map(|(_, weapon)| SpawnItem {
-                name: weapon.to_string(),
-                turret: false,
-            });
+    if let Some(row) = crate::items::classname_index(classname) {
+        return crate::items::item_name(row).map(|name| SpawnItem {
+            name: name.to_string(),
+            row: Some(row),
+        });
     }
     if classname == "misc_mg42" || classname == "misc_turret" {
         let weaponinfo = cx.intern_folded("weaponinfo");
         if let Value::String(s) = host.get_field(cx, id, weaponinfo) {
             return Some(SpawnItem {
                 name: cx.resolve(s).to_string(),
-                turret: true,
+                row: None,
             });
         }
     }
     None
 }
 
-/// What a spawned entity registers. `turret` carries which of the two
-/// paths above matched, because only the `SP_turret` one also registers
-/// sound aliases: deciding that at the call site would mean repeating the
+/// What a spawned entity registers. `row` carries which of the two paths
+/// above matched: the `bg_itemlist` row `G_SpawnItem` makes the entity an
+/// item of, or `None` for `SP_turret`, the one that also registers sound
+/// aliases. Deciding that at the call site would mean repeating the
 /// classname test, and a third turret classname added to one copy and not
 /// the other would silently lose the aliases.
 struct SpawnItem {
     name: String,
-    turret: bool,
+    row: Option<usize>,
 }
 
 /// `G_ParseField`: the entity field table first, case-insensitively, then
@@ -905,6 +918,21 @@ mod tests {
         vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, lump))
             .unwrap();
         assert_ne!(host.items.bitstring(), Items::new().bitstring());
+    }
+
+    /// A map-placed `item_health` is `G_SpawnItem`'s too: it becomes an item
+    /// of row 68, not a bare entity.
+    #[test]
+    fn a_placed_item_health_is_an_item_of_row_sixty_eight() {
+        let (mut vm, mut host) = fixture();
+        let lump = "{\n\"classname\" \"worldspawn\"\n}\n\
+                    {\n\"classname\" \"item_health\"\n\"origin\" \"0 0 0\"\n}\n";
+        vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, lump))
+            .unwrap();
+        let (_, e) = host.ents.iter_inuse().next().unwrap();
+        let item = e.item.expect("the entity carries the item component");
+        assert_eq!(item.index, 68);
+        assert!(!item.dropped);
     }
 
     /// Pins the exact bit: `fg42_mp` is configstring 7 index 6, and

@@ -851,7 +851,7 @@ bit 0 with no per-map factor in common besides the `dm` gametype.
 
 **M2, does registering a weapon also register its alt-fire mode?** Yes,
 and it is engine/weapon-definition behaviour, not a placed-entity
-artifact — Task 8 owns these bits. In `RegisterItem`, after the item's own
+artifact. In `RegisterItem`, after the item's own
 bit is set, it checks `bg_itemlist[index]`'s `giType` field (offset 0x20)
 against `1` (`IT_WEAPON`); on a match it calls `BG_GetInfoForWeapon`
 (`.text` 0x3ac68, resolved via `readelf -r`) for the weapon's definition,
@@ -1007,10 +1007,15 @@ VERIFIED from the shipped `maps/MP/gametypes/_teams.gsc` (pak5):
 `deletePlacedEntity("mpweapon_panzerfaust")` when the matching
 `scr_allow_*` cvar is unset, and `deletePlacedEntity` is
 `getentarray(classname, "classname")` followed by `.delete()` on each hit.
-This is why retail's configstring 8 keeps the `fg42_mp`/`panzerfaust_mp`
-bits even though the map's placed copies are gone by the time a round
-starts: registration already happened at spawn, and `delete()` only frees
-the entity a tenth of a second later (section 14), not the item.
+This is why retail's configstring 8 keeps the `fg42_mp` bit even though
+the map's placed fg42s are gone by the time a round starts (stock
+`scr_allow_fg42` is `"0"`, `cod11-gsc-language.md` section 9): registration
+already happened at spawn, and `delete()` only frees the entity a tenth of a
+second later (section 14), not the item. VERIFIED, the retail pickup capture
+(`crates/server/tests/fixtures/items/mp_carentan-dm-pickup-script.txt`, run
+with the stock `scr_allow_panzerfaust`): all eight placed panzerfausts are
+still there after the map load, so the `panzerfaust_mp` bit comes from live
+entities (`cod11-items.md` section 12.1).
 
 INFERRED FROM DECOMPILATION, the one link not closed: I have not traced the
 function that copies a weapon's `radiantName` into its `bg_itemlist` row at
@@ -1570,13 +1575,20 @@ and it touches none of the three hint fields. INFERRED for both, control flow.
 `trap_SetBrushModel`, `ent+0x118` = 0x20000000, `ent+0xf4` = 1, `svFlags |= 2`
 and `trap_LinkEntity`. VERIFIED, that is the whole function.
 
-Cursor hints in retail are an aim-trace subsystem, not a touch one:
-`G_CheckForCursorHints` picks its candidates through `trap_LocationalTrace`
-alongside `CalcMuzzlePoints`, `BG_GetInfoForWeapon` and `G_IsTurretUsable`.
-VERIFIED, the function's own calls. No touch path writes any of the three hint
-fields: `SP_trigger_lookat` installs no touch function and the trigger touch
-path stores nothing at `ps+0x384`, `+0x388` or `+0x38c`. INFERRED, from the
-absence rather than from a store. vcod models none of this: it runs no
+Cursor hints in retail are an aim-based subsystem, not a touch one. VERIFIED,
+the function's own calls: `G_CheckForCursorHints` calls `G_GetActivateEnt`
+(0x4f622), `G_IsTurretUsable`, `BG_GetInfoForWeapon` and `Com_BitCheck`, and
+neither `trap_LocationalTrace` nor `CalcMuzzlePoints`. VERIFIED,
+`G_GetActivateEnt` (0x4f14c): it calls `CalcMuzzlePoint` (0x4f19f, not
+`CalcMuzzlePoints`), `trap_EntitiesInBox` (0x4f237) and `trap_Trace`
+(0x4f52e). INFERRED: candidates come from a box around the muzzle filtered by
+distance and view cone, with a line-of-sight trace per candidate; the scoring
+and the trace are in `docs/research/cod11-items.md`, section 2. An earlier
+version of this paragraph named `trap_LocationalTrace` and `CalcMuzzlePoints`
+here, which the listings do not show. No touch path writes any of the three
+hint fields: `SP_trigger_lookat` installs no touch function and the trigger
+touch path stores nothing at `ps+0x384`, `+0x388` or `+0x38c`. INFERRED, from
+the absence rather than from a store. vcod models none of this: it runs no
 per-frame aim trace, and `ClientSim::to_wire` writes `serverCursorHintString`
 255 and never touches `serverCursorHint`, which therefore keeps the null
 playerstate's 0. VERIFIED, read out of `crates/server/src/spectate.rs`. That

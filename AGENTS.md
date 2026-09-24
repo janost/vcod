@@ -352,6 +352,24 @@ engineering setup works.
   `-sd-defuse-defender.txt`, all retail evidence: a run against ours
   overwrites the two client ones, so move them to `tmp/` and `git checkout`
   the directory after.
+  `--save-pickup` is the item pickup capture. It joins allies and needs
+  `client-probes/probe_pickup` as the gametype under `tools/run_probe.sh` with
+  `+set probe_teleport 1 +set scr_allow_fg42 1`: mp_carentan's two fg42s are
+  a town apart and the gsc puts the player on each in turn, and stock
+  `default_mp.cfg`'s `scr_allow_fg42 0` would have
+  `_teams::restrictPlacedWeapons` delete both at map load. The first teleport lands before the
+  join settles, so the probe reads "on the first fg42" off its position, not
+  off a jump. It stands on the first, aims at it, takes it with use, takes
+  the second's ammo by touch, then swaps the carbine for a panzerfaust with
+  one tap on the dropped carbine inside the dropper's lockout and one past
+  it. It answers every `a <index>` the way a retail client does, holding the
+  byte until `ps.weapon` reads it. It writes
+  `crates/server/tests/fixtures/items/<map>-dm-pickup.txt`, named `dm`
+  because retail runs the probe as gametype `probe_pickup`; the server
+  half's `PROBE` and `Weapon:` lines are copied into `-pickup-script.txt` by
+  hand. Both are retail evidence, and a run against ours overwrites the
+  client one: move it to `tmp/` and `git checkout` the fixture directory
+  after.
   A plain `--net-probe` also prints every change to an entity's `pos`/`apos`
   trajectory group, which is the mover half of the same arrangement:
   `client-probes/probe_mover.gsc` under `run_probe.sh` in one shell calls each
@@ -400,9 +418,10 @@ engineering setup works.
   `crates/server/tests/configstrings_ab.rs`. `cargo run -p vcod-server -- <map>` runs **ours**:
   the handshake, the gamestate, client commands and moves, and snapshots
   delta-compressed against the client's acked frame, with pmove-driven
-  spectator flight, `--test-entities` for scripted packet entities and
-  `--set NAME=VALUE` (retail's `+set`, e.g. `--set scr_friendlyfire=1` for
-  a teammate kill). A snapshot's entity list is the map's own: placed weapons,
+  spectator flight, `--test-entities` for scripted packet entities,
+  `--gametype-script <file>`, which runs a gametype script from disk and is
+  how a client probe runs against ours, and `--set NAME=VALUE` (retail's
+  `+set`, e.g. `--set scr_friendlyfire=1` for a teammate kill). A snapshot's entity list is the map's own: placed weapons,
   script models and mounted MGs, culled per client against the BSP's PVS the
   way retail culls, so what a client is sent depends on where it stands. Other
   clients are in it too, each animated by the animscript machine
@@ -438,7 +457,16 @@ engineering setup works.
   `linkTo` pins a planter at `pm_type` 1 with its origin and velocity held,
   the objectives travel in playerstate block 4, the progress bar rides the
   three HUD tweens, and `bulletTrace` clips script models, which is where
-  `getPlant` puts the charge. Not modelled: item pickup, the killcam, a body
+  `getPlant` puts the charge. Items are picked up the way retail's
+  `Touch_Item` does it: walking over a weapon the player carries takes its
+  ammo, the use key's rising edge takes the best-scored grabbable item within
+  128 units of the muzzle (a weapon not carried swaps out the one in its
+  slot, dropped where the item lay), a health pack heals, a drop names its
+  dropper in `clientNum` for 1000 ms, and 32 drops at most stay on the ground
+  (`docs/research/cod11-items.md`); the launch flight, respawn,
+  `CONTENTS_NODROP` and `cg_predictItems`'s event choice are not modelled,
+  and `trigger_use` stays on the touch pass rather than joining the use key's
+  scan. Not modelled: the killcam, a body
   between the eye and a lookat (retail's second trace), `enableLinkTo`, a
   linked player on a moving parent, and script models in weapon, blast and
   missile traces. The scriptent mover verbs move things and their trajectories reach the wire
@@ -454,12 +482,25 @@ engineering setup works.
   then the clock advances, then each client's queued usercmds (`replay_moves`,
   one pmove step per cmd, which is where the weapon machine queues a frame's
   shots, swings and throws). Each cmd's origin, `pm_type`, `on_ground`, view
-  yaw and buttons are recorded as it runs, and once every client has moved
-  they are mirrored onto the host cmd by cmd with the touch pass after each,
-  the way retail updates `r.currentOrigin` and calls `G_TouchTriggers` inside
-  `ClientThink`; a trigger the pass fires is queued, not woken, and its
-  `waittill` threads are notified at this tick's script frame on the frame's
-  clock, while a `trigger_hurt` starts the damage callback there and then. The
+  yaw, buttons, the `ps.weapon` a move switched to and the `clipOnly` weapon a
+  last round spent are recorded as it runs, and once every client has moved,
+  each client's ammo and clip arrays are copied onto the host (`client_ammo`,
+  which every `GameHost::weapon_op` then moves in place, and ops still queued
+  are re-applied on top) and the rest are mirrored onto the host cmd by cmd,
+  the take included, with the touch pass after each, the item half of it after
+  the trigger half and the use key after both, the way retail updates
+  `r.currentOrigin` and calls `G_TouchTriggers` inside `ClientThink`; a
+  trigger the pass fires is queued, not woken, and its `waittill` threads are
+  notified at this tick's script frame on the frame's clock (the item pass's
+  `touch` and `trigger` notifies too, whose waiters run first, ahead of the
+  frame's thinks and `wait`s, together with any other thread already
+  runnable; where retail drains a trigger's notifies against the `wait`
+  pass is not measured), while a `trigger_hurt` starts the
+  damage callback there and then. The item pass writes weapons and health onto
+  the host at once and queues its ammo as weapon ops and its event as a sim
+  op, both applied after the script frame; the ammo it reads is the host's
+  mirror, copied from each sim once before the pass and moved by every weapon
+  op after, so a `dropItem` in the script frame sees what the pass took. The
   entity states `cloneplayer` reads are mirrored last in that pass. Then the
   queued attacks themselves (a trace each, an impact temp entity and a hit per
   player struck), then each client's last cmd buttons for `useButtonPressed`,
@@ -467,8 +508,9 @@ engineering setup works.
   hits, then the client commands that start a script thread (`kill`, `mr`),
   which the packet pass only queues because it runs before the clock advances,
   then `deliver_hits` so the damage callback has run before script, then the
-  script frame, then the script's spawns, then the switches and takes the
-  weapon machine made, then the weapon mirrors (held, current, viewmodel, the
+  script frame, then the script's spawns, then the switches the weapon
+  machine made (its takes already landed at their cmd's touch, and only
+  there), then the weapon mirrors (held, current, viewmodel, the
   body a shot is traced against, and the origin back to script), then the
   weapon ops, then the link ops (`linkTo`, `unlink`), then the re-anchor that
   pins every linked client to its parent plus the offset and releases a link
@@ -478,15 +520,18 @@ engineering setup works.
   `end_frame`, then `ClientEndFrame`'s aim trace per playing client, off the
   frame's final eye and aim with `pm_type` and `on_ground` mirrored again
   beside it, whose fire wakes its waiters at the next tick's script frame,
+  and beside it the cursor hint for the item the use key would pick now,
   then the console lines, configstring changes, server commands and
   intermission scoreboard the script queued go out, and last the entities are
-  built once and culled and written per client. Origin, `pm_type`, `on_ground`
-  and yaw are the mirrors that no longer wait for the post-script pass: the
-  touch pass needs this cmd's values, not last tick's, so anything reading
-  them on the host between the move pass and the script frame sees the
-  post-move values. The re-anchor writes a linked client's origin again after
-  the script frame, so this tick's touch passes ran at the un-anchored spot.
-  Move anything else across that order and a snapshot reads a frame-old field.
+  built once and culled and written per client. Origin, `pm_type`,
+  `on_ground`, yaw, the ammo arrays, the last-round take and the current
+  weapon, but only the one a move switched to, are the mirrors that no longer
+  wait for the post-script pass: the touch pass needs this cmd's values, not
+  last tick's, so anything reading them on the host between the move pass and
+  the script frame sees the post-move values. The re-anchor writes a linked
+  client's origin again after the script frame, so this tick's touch passes
+  ran at the un-anchored spot. Move anything else across that order and a
+  snapshot reads a frame-old field.
 - `Cx::spawn` is for a builtin that needs script to run before its caller's
   next instruction: the queued thread starts the moment the builtin returns,
   which is how `finishPlayerDamage`'s killing hit gets
@@ -884,3 +929,7 @@ never pasted decompiler output or disassembly listings.
   every sleep overshoot accumulate, and under load `serverTime` ran 5-10%
   slow against a probe's wall clock: a map-change capture that expected the
   rotation at 120 s ran out of its 150 s before it came.
+- An item's `count` field is its reserve and 0 means "not set", not "empty":
+  a placed weapon with no `count` draws `dropAmmoMin..Max`, and a drop writes
+  -1 for an empty reserve or clip so the pickup does not draw one
+  (`docs/research/cod11-items.md`, sections 4 and 8).
