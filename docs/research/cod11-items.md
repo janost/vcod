@@ -637,10 +637,11 @@ is full, each further drop evicts the one before it.
 VERIFIED, `G_RunItem` (0x4eb18): a `trap_PointContents` with mask 0x80000000
 (0x4ec47..0x4ec4f) and a `G_FreeEntity` (0x4ec5f). INFERRED: an item whose
 origin lands in `CONTENTS_NODROP` is freed. INFERRED, from the absence of any
-other free: a drop lives until it is picked up, until a 33rd drop evicts it,
-or until it lands in `CONTENTS_NODROP`. VERIFIED: the two `0x7530` immediates
-in `.text` sit in `Cmd_CallVote_f` (0x47fac) and `fire_rocket` (0x54666), so
-no 30-second item timer exists.
+other free: a drop lives until it is picked up, until it holds slot 0 when a
+drop is made with all 32 slots held (slot 0 is evicted every time, as
+above), or until it lands in `CONTENTS_NODROP`. VERIFIED: the two `0x7530`
+immediates in `.text` sit in `Cmd_CallVote_f` (0x47fac) and `fire_rocket`
+(0x54666), so no 30-second item timer exists.
 
 VERIFIED: `ClientEvents` (0x3fd24) turns `EV_DROPWEAPON` (196) into
 `Drop_Weapon(player, ps.weapon, "tag_weapon_right")` (jump table `.rodata`

@@ -52,8 +52,9 @@ combat effects.
   falloff. A level ends the way retail's does, in script: the gametype's own
   time or score limit runs the intermission, and the server's console then
   restarts the map or loads the next entry of `sv_mapRotation` and hands the
-  new gamestate out on the live connection. Not there yet: the killcam and
-  movers. `--test-entities` adds entities that move on the wire to exercise
+  new gamestate out on the live connection. Script movers move entities and
+  their trajectories reach the wire. Not there yet: the killcam.
+  `--test-entities` adds entities that move on the wire to exercise
   the packet-entity path.
 
 The whole thing runs on wgpu and winit, so in principle it is cross-platform.

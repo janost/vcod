@@ -851,7 +851,7 @@ bit 0 with no per-map factor in common besides the `dm` gametype.
 
 **M2, does registering a weapon also register its alt-fire mode?** Yes,
 and it is engine/weapon-definition behaviour, not a placed-entity
-artifact — Task 8 owns these bits. In `RegisterItem`, after the item's own
+artifact. In `RegisterItem`, after the item's own
 bit is set, it checks `bg_itemlist[index]`'s `giType` field (offset 0x20)
 against `1` (`IT_WEAPON`); on a match it calls `BG_GetInfoForWeapon`
 (`.text` 0x3ac68, resolved via `readelf -r`) for the weapon's definition,

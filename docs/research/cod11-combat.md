@@ -2113,8 +2113,9 @@ is the gentity `flags` field and 0x10 its dropped-item bit. VERIFIED that
 `DroppedItemClearOwner` (0x4efb4) only writes 0x3fe into `s.clientNum`, and
 that the two `0x7530` immediates in `.text` sit in `Cmd_CallVote_f` and
 `fire_rocket`. INFERRED from `GetFreeCueSpot` (0x4da44) and `G_RunItem`
-(0x4eb18): a drop lives until it is picked up, until a 33rd drop evicts it
-from the 32-slot ring, or until it lands in `CONTENTS_NODROP`
+(0x4eb18): a drop lives until it is picked up, until a drop made while
+all 32 ring slots are held evicts it from slot 0, which in play is the
+slot evicted every time, or until it lands in `CONTENTS_NODROP`
 (`docs/research/cod11-items.md`, section 8).
 
 What vcod does with a drop is in `docs/research/cod11-items.md`, section 13.
