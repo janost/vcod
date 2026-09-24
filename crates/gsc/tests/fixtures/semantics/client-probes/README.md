@@ -252,3 +252,34 @@ straight out of `games_mp.log`, which `run_probe.sh` does not print) go to
 client half writes `mp_carentan-dm-pickup.txt`. Both are retail evidence,
 and a run against `vcod-server` overwrites the client one: move it to
 `tmp/` and `git checkout` the fixture directory after.
+
+## probe_turret
+
+Mounted MG's server half. It logs every `misc_mg42` once (`PROBE turret
+<num> <origin> <angles>`), and under `probe_teleport 1` puts each spawning
+player at a fixed spot around the gun nearest (1712 1830 8), mp_carentan's
+one MG: an allied player 40 units behind it facing along its yaw, an axis
+player 300 units in front facing back down it, both inside the gun's
+128-unit activate range and its ±45 degree arc. It logs each move as `PROBE
+place <clientnum> <team> <origin> <yaw>`. The hits themselves never need a
+script line: the engine's own `D;`/`K;` records in `games_mp.log` carry the
+weapon and MOD of every one, the same evidence the hit-capture probes read.
+
+`watch_delete`, gated on `probe_delete_after N` (retail runs leave it
+unset), deletes the same gun N seconds in; only the A/B rig sets the cvar,
+for the mount's release-on-delete case.
+
+It calls `maps\mp\gametypes\dm::main()` itself, so a client can answer the
+stock team menu and spawn.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=200 \
+    tools/run_probe.sh client-probes/probe_turret mp_carentan +set probe_teleport 1
+# second shell, about 15 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team axis --probe-secs 180
+# third shell:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-turret --probe-secs 170
+```
+
+The server's `PROBE` lines and `games_mp.log`'s `D;`/`K;` records are the
+retail evidence a later capture reads; this probe itself writes no fixture.
