@@ -209,20 +209,6 @@ mod tests {
         assert_eq!(w.slots, [0; NUM_SLOTS]);
     }
 
-    /// The three slots the stock loadout fills, read out of the shipped
-    /// weapon files. Needs the paks; without them there is nothing to read.
-    #[test]
-    fn the_stock_loadout_slots_come_from_the_weapon_files() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
-        let t = WeaponTable::load(&fs);
-        assert_eq!(t.slot(weapon_index("m1carbine_mp").unwrap()), 1);
-        assert_eq!(t.slot(weapon_index("colt_mp").unwrap()), 3);
-        assert_eq!(t.slot(weapon_index("fraggrenade_mp").unwrap()), 4);
-        assert_eq!(t.slot(0), 0);
-    }
-
     /// The `weaponclass` condition in `mp/playeranim.script` is this field.
     /// Values read straight out of the shipped weapon files, through the
     /// table rather than the standalone lookup `PlayerWeapons` used to use.
@@ -319,6 +305,7 @@ mod tests {
         );
         assert_eq!(get("m1carbine_mp").shared_cap_index, None);
         assert_eq!(t.slot(weapon_index("fg42_mp").unwrap()), 1);
+        assert_eq!(t.slot(weapon_index("m1carbine_mp").unwrap()), 1);
         assert_eq!(t.slot(weapon_index("colt_mp").unwrap()), 3);
         assert_eq!(t.slot(weapon_index("fraggrenade_mp").unwrap()), 4);
         assert_eq!(t.slot(0), 0);

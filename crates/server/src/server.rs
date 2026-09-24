@@ -270,8 +270,9 @@ pub(crate) fn apply_weapon_op(
 /// where the cmd left the client, the buttons it carried, the `pm_type` the
 /// pass gates on, whether it left the client on the ground, a player's view
 /// yaw (a spectator's `SpectatorThink` arm writes no angles), and the
-/// `ps.weapon` the cmd left once the tick's moves have switched it, which an
-/// item grab reads.
+/// `ps.weapon` the cmd left once the tick's moves have switched it and the
+/// `clipOnly` weapon its last round emptied, both of which an item grab
+/// reads.
 struct Touched {
     slot: usize,
     origin: [f32; 3],
@@ -280,6 +281,7 @@ struct Touched {
     on_ground: bool,
     yaw: Option<f32>,
     weapon: Option<u8>,
+    take: Option<u8>,
 }
 
 /// What one client's usercmd replay did this tick, for the trace line.
@@ -2683,8 +2685,8 @@ impl Server {
             for (slot, weapon) in self.weapon_changes.drain(..) {
                 rt.set_client_weapon(slot, weapon);
             }
-            // The take after the switch, so a weapon the machine moved to is
-            // not the one dropped.
+            // The take already landed at its cmd's touch in `replay_moves`;
+            // taking a weapon no longer held is a no-op.
             for (slot, weapon) in self.weapon_takes.drain(..) {
                 rt.take_client_weapon(slot, weapon);
             }
@@ -2940,6 +2942,7 @@ impl Server {
                 // the chop (`ClientThink_real` 0x40169-0x40456).
                 sim.update_aim(dt_ms, now_ms, weapons.defs());
                 let mut raised = Vec::new();
+                let mut take = None;
                 while base != cmd.server_time {
                     let msec = (cmd.server_time - base).min(MAX_FRAME_MS as i32);
                     base += msec;
@@ -2992,6 +2995,7 @@ impl Server {
                         if let Some(def) = weapons.get(weapon as usize) {
                             if def.clip_only && sim.ps.ammo[def.ammo_index] == 0 {
                                 self.weapon_takes.push((slot, weapon));
+                                take = Some(weapon);
                             }
                         }
                     }
@@ -3007,6 +3011,7 @@ impl Server {
                     yaw: (sim.pm_type == crate::spectate::PmType::Normal)
                         .then(|| sim.view_angles()[1]),
                     weapon: switched.then_some(sim.ps.weapon),
+                    take,
                 });
                 last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;
@@ -3061,6 +3066,10 @@ impl Server {
                 // frame: a grab tests `ps.weapon` as this cmd left it.
                 if let Some(w) = t.weapon {
                     rt.set_client_weapon(t.slot, w);
+                }
+                // Retail takes it inside `PM_Weapon`, ahead of the touch.
+                if let Some(w) = t.take {
+                    rt.take_client_weapon(t.slot, w);
                 }
                 rt.touch_triggers_with_buttons(t.slot, now_ms, t.buttons);
             }
@@ -4849,6 +4858,70 @@ mod tests {
         assert_eq!(ring.events[0], 172, "EV_SOUND_ALIAS");
         let alias = ring.parms[0] as usize + 524;
         assert_eq!(sv.configstring(alias), "minefield_click");
+    }
+
+    /// A `clipOnly` weapon's last round takes it before that cmd's touch
+    /// pass, as retail's `PM_Weapon` does ahead of `G_TouchTriggers`
+    /// (combat doc 1.5 step 9): a grab on the same cmd must not see the frag
+    /// as held and top it up. Read straight after `replay_moves`, which is
+    /// where the touch pass ends and before the post-script take.
+    #[test]
+    fn the_last_frag_is_taken_before_that_cmd_s_touch() {
+        use vcod_common::net::msg::BUTTON_ATTACK;
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let now = Instant::now();
+        let mut sv = Server::new(cfg(), now);
+        sv.load_world(World {
+            collision: test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        });
+        install_script(
+            &mut sv,
+            crate::game::script::ScriptRuntime::for_test("main() {}"),
+        );
+        sv.weapon_table = Rc::new(crate::weapons::WeaponTable::load(&fs));
+        let _nc = begun(&mut sv, now);
+        sv.tick(now);
+        sv.place_client(0, [0.0, 0.0, 64.0], 0.0);
+        let frag = crate::configstrings::weapon_index("fraggrenade_mp").unwrap();
+        let def = sv.weapon_table.get(frag).unwrap().clone();
+        let mut held = crate::weapons::PlayerWeapons::default();
+        held.give(frag, sv.weapon_table.slot(frag));
+        held.current = frag as u8;
+        sv.script.as_mut().unwrap().host.client_weapons[0] = held;
+        let c = sv.clients[0].as_mut().unwrap();
+        let sim = c.sim.as_mut().unwrap();
+        sim.ps.weapons_held = held.held;
+        sim.ps.weapon_slots = held.slots;
+        sim.ps.weapon = frag as u8;
+        sim.ps.ammoclip[def.clip_index] = 1;
+        sim.ps.ammo[def.ammo_index] = 0;
+        let mut st = c.last_processed_st;
+
+        // Hold the trigger through the pullback, then let go: the release
+        // is the throw, and the throw is the last round.
+        for i in 0..60 {
+            st += 50;
+            let cmd = UserCmd {
+                server_time: st,
+                weapon: frag as u8,
+                buttons: if i < 20 { BUTTON_ATTACK } else { 0 },
+                ..NULL_USERCMD
+            };
+            sv.clients[0].as_mut().unwrap().pending.push(cmd);
+            sv.replay_moves();
+            if !sv.weapon_takes.is_empty() {
+                assert!(
+                    !sv.script.as_ref().unwrap().host.client_weapons[0].holds(frag),
+                    "the spent frag was still held when its cmd's touch ran"
+                );
+                return;
+            }
+        }
+        panic!("the frag was never thrown");
     }
 
     /// `getPlant` reads a planter's `self.angles` for the direction of its

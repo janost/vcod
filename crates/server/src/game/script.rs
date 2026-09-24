@@ -633,15 +633,21 @@ impl ScriptRuntime {
     }
 
     /// A client's ammo arrays as the tick's moves left them, for the item
-    /// pass and `dropItem`.
+    /// pass and `dropItem`. Ops still queued for that client's sim are
+    /// re-applied on top, since the sim has not seen them yet.
     pub fn set_client_ammo(
         &mut self,
         slot: usize,
         ammo: [i16; vcod_common::pmove::weapon::NUM_AMMO],
         clip: [i16; vcod_common::pmove::weapon::NUM_AMMO],
     ) {
-        if let Some(a) = self.host.client_ammo.get_mut(slot) {
-            *a = crate::game::host::AmmoArrays { ammo, clip };
+        let host = &mut self.host;
+        let Some(a) = host.client_ammo.get_mut(slot) else {
+            return;
+        };
+        *a = crate::game::host::AmmoArrays { ammo, clip };
+        for (_, op) in host.client_weapon_ops.iter().filter(|(s, _)| *s == slot) {
+            a.apply(*op);
         }
     }
 
@@ -1419,6 +1425,34 @@ impl ScriptRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The per-tick copy from the sim keeps an op the sim has not applied
+    /// yet: the copy predates it, the mirror must not.
+    #[test]
+    fn the_per_tick_ammo_copy_keeps_a_queued_op() {
+        use crate::game::host::WeaponOp;
+        use vcod_common::pmove::weapon::NUM_AMMO;
+        let mut rt = ScriptRuntime::for_test("main() {}");
+        rt.host.weapon_op(
+            0,
+            WeaponOp::SetAmmo {
+                ammo_index: 10,
+                rounds: 400,
+            },
+        );
+        rt.host.weapon_op(
+            1,
+            WeaponOp::SetClip {
+                clip_index: 3,
+                rounds: 7,
+            },
+        );
+        let mut clip = [0; NUM_AMMO];
+        clip[3] = 2;
+        rt.set_client_ammo(0, [0; NUM_AMMO], clip);
+        assert_eq!(rt.host.client_ammo[0].ammo[10], 400);
+        assert_eq!(rt.host.client_ammo[0].clip[3], 2, "slot 1's op leaked");
+    }
 
     /// Any nonzero value works (`xorshift`'s only constraint); these tests
     /// never touch a trigger, so the draw itself is never observed.
