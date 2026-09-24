@@ -100,7 +100,7 @@ pub fn item_models(fs: Option<&Pk3Fs>, name: &str) -> Vec<String> {
 /// its alt mode), which this crate does not parse yet; deriving it from
 /// the adjacent-slot naming convention instead of hand-copying the five
 /// known pairs keeps it from drifting out of step with `WEAPON_LIST`.
-fn alt_weapon_index(index: usize) -> Option<usize> {
+pub(crate) fn alt_weapon_index(index: usize) -> Option<usize> {
     let weapons: Vec<&str> = WEAPON_LIST.split(' ').collect();
     if index == 0 || index > weapons.len() {
         return None;

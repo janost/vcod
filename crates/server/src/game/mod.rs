@@ -10,6 +10,7 @@ pub mod hitrig;
 pub mod host;
 pub mod missile;
 pub mod mover;
+pub mod pickup;
 pub mod script;
 pub mod spawn;
 pub mod temp_entity;

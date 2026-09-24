@@ -357,6 +357,19 @@ it). INFERRED, from its first test of `def+0x7c`: `BG_GetStackSlotForWeapon`
 (0x36cc8) never offers a slot on stock content. VERIFIED: `panzerfaust_mp` is
 `weaponSlot primary`, `clipOnly 1`.
 
+VERIFIED, `BG_GivePlayerWeapon` (0x36a38): a `Com_BitCheck` of the weapon
+(0x36a52) and compares of `def+0x74` against 6 and 7 (0x36a69, 0x36a6e), each
+with a branch to a return of 0 (0x36a73); a `Com_BitSet` of the weapon
+(0x36a90); stores of the weapon into `cl+0x315` (0x36ad3), `cl+0x316`
+(0x36aee) and `cl+0x314 + weaponSlot` (0x36b07), each beside a compare of that
+byte against 0; and a loop that reads `def+0x2fc` and calls `Com_BitSet` on
+each weapon it names (0x36b0a..0x36b64). INFERRED: a weapon already held is not
+given again; a new one takes the first empty slot its class allows, or none;
+and every weapon on its alt-fire chain is held beside it with no slot, which is
+the `fg42_semi_mp` bit the capture reads beside the fg42's (section 12.4).
+INFERRED: a weapon whose `def+0x74` reads 6 or 7 is never given; what that
+field is I have not read.
+
 INFERRED, the slot conflict in `Pickup_Weapon`, off the branches at
 0x4cf44..0x4d160, for a new weapon W and the held weapon H (`ps.weapon`,
 `cl+0xb0`):
@@ -375,6 +388,20 @@ INFERRED, the slot conflict in `Pickup_Weapon`, off the branches at
 5. H is held but sits in no slot and W has no empty or stack slot:
    `Com_Printf` of the "cannot swap out a debug weapon" line (0x74b40) and
    the pickup fails (0x4cf74..0x4cfeb).
+
+VERIFIED: ahead of case 1, `ps.weapon` is compared against 0 (0x4cf56) and,
+when non-zero, passed to `Com_BitCheck` (0x4cf68), whose zero result branches
+to the return of 0 (0x4cf72). INFERRED: while `ps.weapon` names a weapon the
+player no longer holds, every pickup of an unowned weapon fails with no
+message.
+
+VERIFIED: past the three `Drop_Weapon` calls, a compare of the returned entity
+against 0 branches to the return of 0 (0x4d160, 0x4d164), ahead of
+`BG_GivePlayerWeapon` (0x4d1cd). INFERRED: a swap whose drop yields no entity
+fails with the old weapon already taken and the new one not given; an empty
+`clipOnly` weapon, which `Drop_Weapon` takes without dropping (section 8), is
+the stock way there, and the next use finds the slot empty and takes the
+item.
 
 VERIFIED: the drop is `Drop_Weapon(player, weapon, NULL)` (0x4d0a6, 0x4d0c0),
 and `G_SetOrigin` with the picked-up item's `currentOrigin` (`+0x134`),

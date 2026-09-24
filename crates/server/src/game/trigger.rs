@@ -253,7 +253,7 @@ fn abs_bounds_with_atom(
 /// The candidate box retail hands `trap_EntitiesInBox`, taken around the
 /// client's origin rather than around its clip box
 /// (docs/research/cod11-gsc-object-model.md section 22).
-const TOUCH_BOX: [f32; 3] = [40.0, 40.0, 52.0];
+pub(crate) const TOUCH_BOX: [f32; 3] = [40.0, 40.0, 52.0];
 
 /// One submodel brush as clip planes, model-local the way `Trigger::mins` is:
 /// the entity's current origin is applied at test time, so a relocated
