@@ -968,4 +968,59 @@ taken or freed ends or parks without an error.
 
 ## 13. As implemented
 
-Filled when the implementation lands.
+`crates/server/tests/pickup_ab.rs` replays section 12's capture against
+vcod: the probe as the gametype under the recipe's `probe_teleport 1` and
+`scr_allow_fg42 1`, the capture's cmds on retail's clock, the view each
+retail snapshot reports, and a diff of the weapon, the cursor hint, the
+item and weapon events and the origin per snapshot, the inventory, the
+pickup events, the commands and the items per phase, and the script log's
+`Weapon:`, `trigger`, `touch` and `ptouch` lines per phase as a set. The
+rulings it needed are below.
+
+### 13.1 An item notify's waiters run before the frame's waits
+
+VERIFIED, `probe_pickup.gsc`: `watch_trigger` is the only writer of
+`level.probe_taken`, and `try_teleport` runs in the `watch_teleports` loop,
+started in `main` before any item watcher, and calls `wait 2` between reading
+the flag and the second `setOrigin`. VERIFIED, the client fixture: the second
+teleport is on the 31300 snapshot, 2000 ms after the 29300 grab. INFERRED:
+the loop, parked on `wait 0.05`, read the flag in the 29300 frame, so the
+`"trigger"` waiter ran before that frame's `wait`s came due. VERIFIED, the
+script fixture: the census loop's `PROBE item 170` line, from a thread also
+started before the watchers, follows the 34750 `trigger` and `touch` lines.
+INFERRED: the same order.
+
+vcod delivers the item pass's notifies at the top of the script frame, on
+the frame's clock, and runs their waiters there, before the entity thinks,
+the movers and the frame's `wait` pass (`ScriptRuntime::run_frame`). The
+thread pass had run them in thread age, and the gate read the teleport at
+31350 and the ammo pickup at 31400. Where retail's drain sits relative to
+the entity thinks is not measured; a trigger's notifies keep their old
+place.
+
+### 13.2 The swap disarm lands a frame late
+
+VERIFIED, sections 12.6 and 12.7: each swap snapshot (34750 and 36250) reads
+`weapon` 0 with 155 beside the 146, and the next reads the new weapon.
+VERIFIED, the gate on vcod: the 146 is on the same snapshot with `weapon`
+still the old one, and the 155 is on the next beside the new weapon; no
+snapshot reads `weapon` 0. INFERRED: vcod runs every cmd's pmove before the
+deferred touch pass, so the disarm that retail's tap frame runs on the unheld
+`ps.weapon` (section 5) runs on the next tick's first cmd, and that tick's
+later cmd, which already carries the new weapon byte, raises the new weapon
+before the snapshot goes out.
+
+Ruling: accepted, not restructured. Moving the touch pass inside each cmd's
+move is a tick-order redesign for a one-frame raise delay; a retail client
+sees the raise one snapshot late and no `weapon` 0 frame. The gate's `GAPS`
+row `swap disarm one frame late` excuses exactly this shape, one frame, on
+`weapon` and 155 only.
+
+### 13.3 The cursor hint on the locked drop
+
+VERIFIED, the gate on vcod: the hint reads 32 from 36250 to 37150, while
+item 171 is locked to its dropper, and comes from the placed panzerfaust 256
+at (821, 2274), 5 units from 171; from 37200 it comes from 171. The values
+match section 12.3 snapshot for snapshot. INFERRED: retail's 32 on that
+stretch is a placed panzerfaust too; the capture does not record which
+entity a hint came from.
