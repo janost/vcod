@@ -7495,6 +7495,12 @@ const TURRET_FLICK: f32 = 60.0;
 const TURRET_PITCH_EDGE: f32 = 60.0;
 const TURRET_YAW_EDGE: f32 = 90.0;
 const ET_TURRET: i32 = 11;
+/// The strafe stops once the bearing off the gun's "behind" direction passes
+/// this, well outside the stock gun's 45-degree arc...
+const TURRET_REFUSE_BEARING: f32 = 60.0;
+/// ...while still this close, inside the use scan's 128-unit reach, so the
+/// refused tap tests the arc and not the range.
+const TURRET_REFUSE_RANGE: f32 = 100.0;
 
 /// `--save-turret`'s phases, in order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -7581,6 +7587,38 @@ fn sweep_step(i: usize, edge: f32) -> Option<f32> {
 /// Yaw offset from the gun's own yaw for sweep step `i`, -90..=90 in 2s.
 fn turret_sweep_offset(i: usize) -> Option<f32> {
     sweep_step(i, TURRET_YAW_EDGE)
+}
+
+/// `at`'s horizontal bearing in degrees from the gun, measured against the
+/// direction behind it (`yaw + 180`), and its horizontal distance. The arc
+/// test in `G_IsTurretUsable` reads the same angle (cod11-turrets.md 4.2).
+fn turret_bearing(gun: [f32; 3], yaw: f32, at: [f32; 3]) -> (f32, f32) {
+    let (dx, dy) = (at[0] - gun[0], at[1] - gun[1]);
+    let d = dx.hypot(dy);
+    let (s, c) = yaw.to_radians().sin_cos();
+    let cos = if d > 0.0 { (-c * dx - s * dy) / d } else { 1.0 };
+    (cos.clamp(-1.0, 1.0).acos().to_degrees(), d)
+}
+
+/// Where the strafe out of the arc stands.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum StrafeStop {
+    /// Still inside the refuse bearing: keep strafing.
+    Inside,
+    /// Past the bearing and inside the range: stop here.
+    Outside,
+    /// Past the range: a refusal here would test the distance.
+    OutOfRange,
+}
+
+fn turret_strafe_stop(bearing: f32, dist: f32) -> StrafeStop {
+    if dist >= TURRET_REFUSE_RANGE {
+        StrafeStop::OutOfRange
+    } else if bearing > TURRET_REFUSE_BEARING {
+        StrafeStop::Outside
+    } else {
+        StrafeStop::Inside
+    }
 }
 
 /// The gunner's playerstate as one `!trace` line.
@@ -7845,6 +7883,13 @@ impl TurretProbe {
             TurretPhase::Crouch | TurretPhase::Refused => Some(now + TURRET_SETTLE),
             _ => None,
         };
+        if next == TurretPhase::Refused {
+            if let Some(g) = &self.gun {
+                let (bearing, d) = turret_bearing(g.origin, g.yaw, snap.ps.origin(p));
+                self.notes
+                    .push(format!("# refused bearing={bearing:.1} dist={d:.1}"));
+            }
+        }
         if next != TurretPhase::Done {
             self.stations
                 .push((next, snap.ps.origin(p), snap.ps.viewangles(p)));
@@ -7879,7 +7924,9 @@ impl TurretProbe {
         let in_phase = now.duration_since(phase_started);
         let ms = self.ms(now);
 
-        let Some((gun_origin, gun_num)) = self.gun.as_ref().map(|g| (g.origin, g.num)) else {
+        let Some((gun_origin, gun_yaw, gun_num)) =
+            self.gun.as_ref().map(|g| (g.origin, g.yaw, g.num))
+        else {
             self.notes.push(format!(
                 "# BROKEN no misc_mg42 near {} {} in the entity lump (no game data?)",
                 TURRET_XY[0], TURRET_XY[1]
@@ -8006,7 +8053,24 @@ impl TurretProbe {
             TurretPhase::Dismount if settled => TurretPhase::Crouch,
             TurretPhase::Crouch if in_phase >= TURRET_SETTLE * 2 => TurretPhase::Uncrouch,
             TurretPhase::Uncrouch if settled => TurretPhase::Strafe,
-            TurretPhase::Strafe if in_phase >= TURRET_STRAFE => TurretPhase::Refused,
+            TurretPhase::Strafe => {
+                let (bearing, d) = turret_bearing(gun_origin, gun_yaw, origin);
+                match turret_strafe_stop(bearing, d) {
+                    StrafeStop::Outside => TurretPhase::Refused,
+                    StrafeStop::OutOfRange => {
+                        self.notes.push(format!(
+                            "# BROKEN strafe passed {TURRET_REFUSE_RANGE} units at bearing {bearing:.1} before leaving the arc"
+                        ));
+                        TurretPhase::Refused
+                    }
+                    StrafeStop::Inside if in_phase >= TURRET_STRAFE => {
+                        self.notes
+                            .push("# BROKEN strafe never left the arc".to_string());
+                        TurretPhase::Refused
+                    }
+                    StrafeStop::Inside => TurretPhase::Strafe,
+                }
+            }
             TurretPhase::Refused if in_phase >= TURRET_SETTLE * 2 => TurretPhase::Done,
             p => p,
         };
@@ -8065,7 +8129,11 @@ fn write_turret_fixture(
 # the gun, 2 degrees a cmd, each at least {sw} ms; flick turns 60 in one cmd for {s} ms; fire\n\
 # holds attack {f} ms along the gun, target {f} ms at the axis client; cool waits for the\n\
 # cooldown alias or {c} ms; dismount taps use; crouch holds crouch and taps use {s} ms in;\n\
-# uncrouch taps use; strafe holds right {st} ms; refused faces the gun and taps use {s} ms in.\n",
+# uncrouch taps use; strafe holds right until the bearing off the gun's back passes {rb}\n\
+# degrees inside {rr} units ({st} ms at most); refused faces the gun and taps use {s} ms in.\n\
+# refused bearing= and dist= are measured at refused's station.\n",
+        rb = TURRET_REFUSE_BEARING,
+        rr = TURRET_REFUSE_RANGE,
         s = TURRET_SETTLE.as_millis(),
         sw = TURRET_SWEEP.as_millis(),
         f = TURRET_FIRE.as_millis(),
@@ -9109,13 +9177,23 @@ mod tests {
         let mut rises = Vec::new();
         let mut fire_cmds = (0, 0);
         let mut first_yaw = None;
+        // 40 behind the gun; the strafe walks right at 200 units a second.
+        let (s, c) = 229f32.to_radians().sin_cos();
+        let mut lateral = 0.0f32;
         for k in 0..6000u32 {
             let now = t0 + Duration::from_millis(u64::from(k) * 4);
+            if tp.phase == TurretPhase::Strafe {
+                lateral += 0.8;
+            }
+            let at = [
+                gun[0] - 40.0 * c + lateral * s,
+                gun[1] - 40.0 * s - lateral * c,
+            ];
             let snap = pickup_snap(
                 k + 1,
                 &[
-                    ("origin[0]", bits(gun[0] - 30.0)),
-                    ("origin[1]", bits(gun[1] - 26.0)),
+                    ("origin[0]", bits(at[0])),
+                    ("origin[1]", bits(at[1])),
                     ("origin[2]", bits(gun[2])),
                     ("viewlocked", i32::from(mounted)),
                 ],
@@ -9158,13 +9236,44 @@ mod tests {
             "{fire_cmds:?}"
         );
         assert_eq!(first_yaw, Some(deg_to_short(229.0 - 90.0) & 0xffff));
+        assert_eq!(tp.notes.len(), 3, "{:?}", tp.notes);
         assert_eq!(
-            tp.notes,
-            [
-                "# BROKEN target: the axis client was never in the snapshot",
-                "# REFUSED ok",
-            ]
+            tp.notes[0],
+            "# BROKEN target: the axis client was never in the snapshot"
         );
+        assert!(
+            tp.notes[1].starts_with("# refused bearing=60."),
+            "{:?}",
+            tp.notes
+        );
+        assert_eq!(tp.notes[2], "# REFUSED ok");
+    }
+
+    /// The strafe stops outside the arc but inside the use range: 40 behind
+    /// is inside, and so is 40 across at 45 degrees; 40 behind and 80 across
+    /// is out of the arc at 89 units, and 200 across is out of range.
+    #[test]
+    fn turret_strafe_stops_outside_the_arc_and_inside_the_range() {
+        let gun = [1712.0f32, 1830.0, 8.0];
+        let yaw = 229.0f32;
+        let (s, c) = yaw.to_radians().sin_cos();
+        let spot = |behind: f32, across: f32| {
+            [
+                gun[0] - behind * c + across * s,
+                gun[1] - behind * s - across * c,
+                gun[2],
+            ]
+        };
+        let stop = |at| {
+            let (b, d) = turret_bearing(gun, yaw, at);
+            turret_strafe_stop(b, d)
+        };
+        let (b, d) = turret_bearing(gun, yaw, spot(40.0, 0.0));
+        assert!(b.abs() < 1e-3 && (d - 40.0).abs() < 1e-3, "{b} {d}");
+        assert_eq!(stop(spot(40.0, 0.0)), StrafeStop::Inside);
+        assert_eq!(stop(spot(40.0, 40.0)), StrafeStop::Inside, "45 degrees");
+        assert_eq!(stop(spot(40.0, 80.0)), StrafeStop::Outside);
+        assert_eq!(stop(spot(40.0, 200.0)), StrafeStop::OutOfRange);
     }
 
     /// A trace 20 samples a second for minutes is unreadable and huge, and a

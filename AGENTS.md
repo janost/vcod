@@ -381,8 +381,10 @@ engineering setup works.
   -90..90 and pitch -60..60 off the gun's yaw two degrees a cmd, turns 60 in
   one cmd, holds attack a second along the gun and a second at the axis
   client, waits for the cooldown alias, taps use to dismount, remounts from a
-  crouch and dismounts, strafes out of the arc and taps use once more, which
-  must not mount. The fire bit is held, not tapped, because the mounted frame
+  crouch and dismounts, then strafes right until its bearing off the gun's
+  back passes 60 degrees while still inside 100 units, so the last use tap
+  fails the arc test and not the 128-unit use range, and taps use once more,
+  which must not mount. The fire bit is held, not tapped, because the mounted frame
   reads the held bit (`docs/research/cod11-turrets.md` 6.3). It writes
   `crates/server/tests/fixtures/turret/<map>-dm-turret.txt`: per phase a
   `!station`, every `!cmd`, a `!trace` per snapshot with the view lock fields,
