@@ -332,9 +332,16 @@ pub fn touch(host: &mut GameHost, cx: &mut Cx, id: EntId, slot: usize, touched: 
         Value::Vector(v) => v,
         _ => [0.0; 3],
     };
-    let swapped = out
-        .drop
-        .and_then(|d| launch_weapon(host, cx, slot, d, DropAt::Exactly { origin, angles }).ok());
+    let swapped = out.drop.and_then(|d| {
+        launch_weapon(host, cx, slot, d, DropAt::Exactly { origin, angles })
+            .inspect_err(|e| {
+                log::warn!(
+                    "client {slot}: swap drop of weapon {} failed, the weapon is lost: {e:?}",
+                    d.weapon
+                )
+            })
+            .ok()
+    });
     if let Some(player) = host.ents.handle(slot as u32) {
         let args = match crate::game::pickup::item_kind(state.index as usize) {
             Some(ItemKind::Weapon(_)) => vec![

@@ -1051,6 +1051,9 @@ impl ScriptRuntime {
                 if let Some(v) = self.host.client_viewmodel.get_mut(slot) {
                     *v = 0;
                 }
+                if let Some(b) = self.host.client_old_buttons.get_mut(slot) {
+                    *b = 0;
+                }
                 self.host.reset_client_objectives(slot);
                 // The carried `pers`, if the boundary this client crossed
                 // kept one; taken, so a later reconnect starts empty as
@@ -2516,6 +2519,33 @@ mod tests {
         assert!(rt.script_log().iter().any(|l| l == "Item: 0 item_health"));
     }
 
+    /// A grabbed drop is freed 100 ms on; a grabbed placed item stays
+    /// allocated, off the wire (section 7, removal).
+    #[test]
+    fn a_grabbed_drop_is_freed_and_a_grabbed_placed_item_stays_hidden() {
+        let mut rt = pickup_rig();
+        rt.host.client_vitals[0].health = 10;
+        let placed = rt.place_item("item_health", [0.0, 0.0, 1.0], 0);
+        let drop = rt.place_item("item_health", [4.0, 0.0, 1.0], 0);
+        rt.host
+            .ents
+            .get_mut(drop)
+            .unwrap()
+            .item
+            .as_mut()
+            .unwrap()
+            .dropped = true;
+        rt.item_pass(0, 0, [0.0, 0.0, 60.0], DOWN);
+        rt.run_frame(50);
+        assert!(rt.host.ents.get(drop).is_some(), "freed before 100 ms");
+        rt.run_frame(100);
+        assert!(rt.host.ents.get(drop).is_none(), "the drop was not freed");
+        rt.run_frame(1000);
+        assert!(rt.host.ents.get(placed).unwrap().item.unwrap().taken);
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        assert!(!rt.packet_entities(p).contains_key(&placed.0));
+    }
+
     #[test]
     fn a_health_pack_at_full_health_stays() {
         let mut rt = pickup_rig();
@@ -2622,6 +2652,12 @@ mod tests {
         assert!(rt.host.item_notifies.iter().any(|(id, ev, args)| *id == pf
             && *ev == "trigger"
             && args == &vec![Value::Entity(client), Value::Entity(drop)]));
+        // `Cmd_Activate_f` notifies the item alone, never the player.
+        assert!(!rt
+            .host
+            .item_notifies
+            .iter()
+            .any(|(id, ev, _)| *id == client && *ev == "touch"));
         let panzerfaust = crate::configstrings::weapon_index("panzerfaust_mp").unwrap();
         assert!(rt
             .take_client_commands()
