@@ -1,0 +1,273 @@
+# Retail CoD 1.1d dedicated server item notifies and pickup log lines under the
+# --save-pickup client.
+# map mp_carentan, g_gametype probe_pickup (whose main() calls
+# maps\mp\gametypes\dm::main()), joined allies, dedicated 1, sv_maxclients 8,
+# sv_pure 0, stock scr_* defaults except scr_allow_fg42 1, one client on the
+# server. Captured 2026-09-24. The evidence is the server's own games_mp.log:
+# the gametype is crates/gsc/tests/fixtures/semantics/client-probes/probe_pickup.gsc,
+# which threads a waittill("touch") and a waittill("trigger") onto every watched
+# item and a waittill("touch") onto every player, and logPrints one line per
+# notify. The Weapon: and Item: lines are the engine's own (Touch_Item). The
+# client half of the same run is mp_carentan-dm-pickup.txt beside this file.
+#
+# Two shells, the gsc probe first:
+#   COD_LNXDED_HOME=<absolute, no '+'> SECS=150 \
+#       tools/run_probe.sh client-probes/probe_pickup mp_carentan +set probe_teleport 1 +set scr_allow_fg42 1
+#   cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-pickup --probe-secs 120
+# scr_allow_fg42 1 is not stock: default_mp.cfg sets it 0, and
+# _teams::restrictPlacedWeapons then deletes both fg42s at map load. A run
+# without it has no fg42 to take.
+#
+# PROBE item <num> <classname> <getTime> <origin>: a watched item at first sight.
+# PROBE other <num> <classname> <getTime>: any other non-player entity first
+#   seen after the startup census.
+# PROBE touch <num> <getTime> <otherNum>: a "touch" notify on an item.
+# PROBE ptouch <playerNum> <getTime> <itemNum>: a "touch" notify on a player.
+# PROBE trigger <num> <getTime> <playerNum> <swapped>: a "trigger" notify on an
+#   item; <swapped> is undefined or <num>:<classname> of the weapon the pickup
+#   dropped.
+# PROBE teleport <playerNum> <step> <origin>: a probe_teleport move, step 1 or 2.
+# Weapon: <playerNum> <weapon> and Item: <playerNum> <classname>: the engine's
+#   pickup log line.
+# Standing on an item logs one touch and one ptouch line per 50 ms server
+# frame, while the client sent a usercmd every 16 ms: a line per frame, not
+# per cmd.
+PROBE item 247 mpweapon_panzerfaust 1050 (388.00, -792.00, 32.52)
+PROBE item 248 mpweapon_panzerfaust 1050 (393.00, -792.00, 32.55)
+PROBE item 249 mpweapon_panzerfaust 1050 (404.00, -792.00, 32.62)
+PROBE item 250 mpweapon_panzerfaust 1050 (399.00, -792.00, 32.59)
+PROBE item 252 mpweapon_fg42 1050 (468.00, -822.00, 32.53)
+PROBE item 253 mpweapon_panzerfaust 1050 (810.00, 2274.00, -22.83)
+PROBE item 254 mpweapon_panzerfaust 1050 (815.00, 2274.00, -22.83)
+PROBE item 255 mpweapon_panzerfaust 1050 (826.00, 2274.00, -22.83)
+PROBE item 256 mpweapon_panzerfaust 1050 (821.00, 2274.00, -22.83)
+PROBE item 258 mpweapon_fg42 1050 (838.00, 2222.00, -22.83)
+PROBE other 0 noclass 23650
+PROBE teleport 0 1 (468.00, -822.00, 32.53)
+PROBE ptouch 0 24050 252
+PROBE touch 252 24050 0
+PROBE ptouch 0 24100 252
+PROBE touch 252 24100 0
+PROBE ptouch 0 24150 252
+PROBE touch 252 24150 0
+PROBE ptouch 0 24200 252
+PROBE touch 252 24200 0
+PROBE ptouch 0 24250 252
+PROBE touch 252 24250 0
+PROBE ptouch 0 24300 252
+PROBE touch 252 24300 0
+PROBE ptouch 0 24350 252
+PROBE touch 252 24350 0
+PROBE ptouch 0 24400 252
+PROBE touch 252 24400 0
+PROBE ptouch 0 24450 252
+PROBE touch 252 24450 0
+PROBE ptouch 0 24500 252
+PROBE touch 252 24500 0
+PROBE ptouch 0 24550 252
+PROBE touch 252 24550 0
+PROBE ptouch 0 24600 252
+PROBE touch 252 24600 0
+PROBE ptouch 0 24650 252
+PROBE touch 252 24650 0
+PROBE ptouch 0 24700 252
+PROBE touch 252 24700 0
+PROBE ptouch 0 24750 252
+PROBE touch 252 24750 0
+PROBE ptouch 0 24800 252
+PROBE touch 252 24800 0
+PROBE ptouch 0 24850 252
+PROBE touch 252 24850 0
+PROBE ptouch 0 24900 252
+PROBE touch 252 24900 0
+PROBE ptouch 0 24950 252
+PROBE touch 252 24950 0
+PROBE ptouch 0 25000 252
+PROBE touch 252 25000 0
+PROBE ptouch 0 25050 252
+PROBE touch 252 25050 0
+PROBE ptouch 0 25100 252
+PROBE touch 252 25100 0
+PROBE ptouch 0 25150 252
+PROBE touch 252 25150 0
+PROBE ptouch 0 25200 252
+PROBE touch 252 25200 0
+PROBE ptouch 0 25250 252
+PROBE touch 252 25250 0
+PROBE ptouch 0 25300 252
+PROBE touch 252 25300 0
+PROBE ptouch 0 25350 252
+PROBE touch 252 25350 0
+PROBE ptouch 0 25400 252
+PROBE touch 252 25400 0
+PROBE ptouch 0 25450 252
+PROBE touch 252 25450 0
+PROBE ptouch 0 25500 252
+PROBE touch 252 25500 0
+PROBE ptouch 0 25550 252
+PROBE touch 252 25550 0
+PROBE ptouch 0 25600 252
+PROBE touch 252 25600 0
+PROBE ptouch 0 25650 252
+PROBE touch 252 25650 0
+PROBE ptouch 0 25700 252
+PROBE touch 252 25700 0
+PROBE ptouch 0 25750 252
+PROBE touch 252 25750 0
+PROBE ptouch 0 25800 252
+PROBE touch 252 25800 0
+PROBE ptouch 0 25850 252
+PROBE touch 252 25850 0
+PROBE ptouch 0 25900 252
+PROBE touch 252 25900 0
+PROBE ptouch 0 25950 252
+PROBE touch 252 25950 0
+PROBE ptouch 0 26000 252
+PROBE touch 252 26000 0
+PROBE ptouch 0 26050 252
+PROBE touch 252 26050 0
+PROBE ptouch 0 26100 252
+PROBE touch 252 26100 0
+PROBE ptouch 0 26150 252
+PROBE touch 252 26150 0
+PROBE ptouch 0 26200 252
+PROBE touch 252 26200 0
+PROBE ptouch 0 26250 252
+PROBE touch 252 26250 0
+PROBE ptouch 0 26300 252
+PROBE touch 252 26300 0
+PROBE ptouch 0 26350 252
+PROBE touch 252 26350 0
+PROBE ptouch 0 26400 252
+PROBE touch 252 26400 0
+PROBE ptouch 0 26450 252
+PROBE touch 252 26450 0
+PROBE ptouch 0 26500 252
+PROBE touch 252 26500 0
+PROBE ptouch 0 26550 252
+PROBE touch 252 26550 0
+PROBE ptouch 0 26600 252
+PROBE touch 252 26600 0
+PROBE ptouch 0 26650 252
+PROBE touch 252 26650 0
+PROBE ptouch 0 26700 252
+PROBE touch 252 26700 0
+PROBE ptouch 0 26750 252
+PROBE touch 252 26750 0
+PROBE ptouch 0 26800 252
+PROBE touch 252 26800 0
+PROBE ptouch 0 26850 252
+PROBE touch 252 26850 0
+PROBE ptouch 0 26900 252
+PROBE touch 252 26900 0
+PROBE ptouch 0 26950 252
+PROBE touch 252 26950 0
+PROBE ptouch 0 27000 252
+PROBE touch 252 27000 0
+PROBE ptouch 0 27050 252
+PROBE touch 252 27050 0
+PROBE ptouch 0 27100 252
+PROBE touch 252 27100 0
+PROBE ptouch 0 27150 252
+PROBE touch 252 27150 0
+PROBE ptouch 0 27200 252
+PROBE touch 252 27200 0
+PROBE ptouch 0 27250 252
+PROBE touch 252 27250 0
+PROBE ptouch 0 27300 252
+PROBE touch 252 27300 0
+PROBE ptouch 0 27350 252
+PROBE touch 252 27350 0
+PROBE ptouch 0 27400 252
+PROBE touch 252 27400 0
+PROBE ptouch 0 27450 252
+PROBE touch 252 27450 0
+PROBE ptouch 0 27500 252
+PROBE touch 252 27500 0
+PROBE ptouch 0 27550 252
+PROBE touch 252 27550 0
+PROBE ptouch 0 27600 252
+PROBE touch 252 27600 0
+PROBE ptouch 0 27650 252
+PROBE touch 252 27650 0
+PROBE ptouch 0 27700 252
+PROBE touch 252 27700 0
+PROBE ptouch 0 27750 252
+PROBE touch 252 27750 0
+PROBE ptouch 0 27800 252
+PROBE touch 252 27800 0
+PROBE ptouch 0 27850 252
+PROBE touch 252 27850 0
+PROBE ptouch 0 27900 252
+PROBE touch 252 27900 0
+PROBE ptouch 0 27950 252
+PROBE touch 252 27950 0
+PROBE ptouch 0 28000 252
+PROBE touch 252 28000 0
+PROBE ptouch 0 28050 252
+PROBE touch 252 28050 0
+PROBE ptouch 0 28100 252
+PROBE touch 252 28100 0
+PROBE ptouch 0 28150 252
+PROBE touch 252 28150 0
+PROBE ptouch 0 28200 252
+PROBE touch 252 28200 0
+PROBE ptouch 0 28250 252
+PROBE touch 252 28250 0
+PROBE ptouch 0 28300 252
+PROBE touch 252 28300 0
+PROBE ptouch 0 28350 252
+PROBE touch 252 28350 0
+PROBE ptouch 0 28400 252
+PROBE touch 252 28400 0
+PROBE ptouch 0 28450 252
+PROBE touch 252 28450 0
+PROBE ptouch 0 28500 252
+PROBE touch 252 28500 0
+PROBE ptouch 0 28550 252
+PROBE touch 252 28550 0
+PROBE ptouch 0 28600 252
+PROBE touch 252 28600 0
+PROBE ptouch 0 28650 252
+PROBE touch 252 28650 0
+PROBE ptouch 0 28700 252
+PROBE touch 252 28700 0
+PROBE ptouch 0 28750 252
+PROBE touch 252 28750 0
+PROBE ptouch 0 28800 252
+PROBE touch 252 28800 0
+PROBE ptouch 0 28850 252
+PROBE touch 252 28850 0
+PROBE ptouch 0 28900 252
+PROBE touch 252 28900 0
+PROBE ptouch 0 28950 252
+PROBE touch 252 28950 0
+PROBE ptouch 0 29000 252
+PROBE touch 252 29000 0
+PROBE ptouch 0 29050 252
+PROBE touch 252 29050 0
+PROBE ptouch 0 29100 252
+PROBE touch 252 29100 0
+PROBE ptouch 0 29150 252
+PROBE touch 252 29150 0
+PROBE ptouch 0 29200 252
+PROBE touch 252 29200 0
+PROBE ptouch 0 29250 252
+PROBE touch 252 29250 0
+Weapon: 0 fg42_mp
+PROBE trigger 252 29300 0 undefined
+PROBE ptouch 0 29300 252
+PROBE touch 252 29300 0
+PROBE teleport 0 2 (838.00, 2222.00, -22.83)
+Weapon: 0 fg42_mp
+PROBE trigger 258 31350 0 undefined
+PROBE ptouch 0 31350 258
+PROBE touch 258 31350 0
+Weapon: 0 panzerfaust_mp
+PROBE trigger 255 34750 0 170:mpweapon_m1carbine
+PROBE touch 255 34750 0
+PROBE item 170 mpweapon_m1carbine 34750 (826.00, 2274.00, -22.83)
+Weapon: 0 m1carbine_mp
+PROBE trigger 170 36250 0 171:mpweapon_panzerfaust
+PROBE touch 170 36250 0
+PROBE item 171 mpweapon_panzerfaust 36250 (826.00, 2274.00, -22.83)

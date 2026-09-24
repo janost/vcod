@@ -278,7 +278,9 @@ INFERRED, the stock numbers: a placed `mpweapon_fg42` (`count 90`, no clip,
 placements and files: `mpweapon_fg42` and `mpweapon_mp44` carry `count 90` in
 every stock BSP that places them, `mpweapon_panzerfaust` carries no `count`;
 `fg42_mp` is clip 20 / max 320 / drop 100..200, `mp44_mp` 30 / 240 /
-150..210, `panzerfaust_mp` 1 / 1 / 0..0.
+150..210, `panzerfaust_mp` 1 / 1 / 0..0. VERIFIED, `default_mp.cfg` and a
+retail run (section 12.1): a stock server sets `scr_allow_fg42 0` and has no
+placed fg42 left after the map load.
 
 ### 4.2 `Add_Ammo(ent, weapon, count, fillClip)` (0x4ca10)
 
@@ -442,7 +444,9 @@ VERIFIED: `Touch_Item` calls `G_LogPrintf("Weapon: %i %s\n", playerEntNum,
 def+4)` (0x74d06) or `"Item: %i %s\n"` (0x74d15) with the classname.
 INFERRED: an accepted grab logs the first for a weapon and the second
 otherwise, and the line goes to `games_mp.log` before the pickup
-function runs, so a refused swap still logs.
+function runs, so a refused swap still logs. VERIFIED, the retail capture
+(section 12.4): `def+4` is the weapon's own name, not the item classname; the
+line reads `Weapon: 0 fg42_mp`, not `mpweapon_fg42`.
 
 VERIFIED: `Touch_Item` calls `Pickup_Weapon` at 0x4d798, `Add_Ammo` at
 0x4d7b7 and `Pickup_Health`, and loads 40 (`mov edi, 0x28` at 0x4d861).
@@ -706,7 +710,182 @@ What vcod leaves out, each with the retail reading it skips:
 
 ## 12. The retail capture
 
-Filled by the retail capture; see `crates/server/tests/fixtures/items/`.
+One run on 2026-09-24 against the retail 1.1d dedicated server on
+mp_carentan, with `client-probes/probe_pickup` as the gametype under
+`+set probe_teleport 1 +set scr_allow_fg42 1`, wrote two fixtures in
+`crates/server/tests/fixtures/items/`: `mp_carentan-dm-pickup.txt`, the
+`--save-pickup` client ("the client fixture" below), and
+`mp_carentan-dm-pickup-script.txt`, the server's own `games_mp.log` ("the
+script fixture"). Times are server times: a `!trace`'s `serverTime` and a
+`PROBE` line's `getTime()`. The client fixture records an item entity's
+`index`, `clientNum`, `eFlags`, `groundEntityNum` and trajectories, and none
+of its event fields. The probe's client number is 0.
+
+### 12.1 A stock server has no fg42 on mp_carentan
+
+VERIFIED, `default_mp.cfg` in `localized_english_pak0.pk3`: it carries
+`set scr_allow_fg42 0`, the only `scr_allow_*` line set to 0
+(`crates/server/src/cvars.rs` already mirrors it). VERIFIED, a first run
+without the override: its census logged the eight panzerfausts and no fg42,
+and the teleport thread logged `teleport unsupported mp_carentan`. VERIFIED, a
+scratch gametype logging `getentarray("mpweapon_fg42", "classname")` on
+retail: 2 at `main()` with `scr_allow_fg42` reading `0`, 2 at `getTime()` 100
+and 0 from 200 on; with `+set scr_allow_fg42 1` on the command line it reads 2
+throughout. INFERRED: `_teams::restrictPlacedWeapons` deletes both at map
+load on a stock server, so the capture needs the override, and a stock `dm`
+round on mp_carentan has no fg42 to pick up.
+
+VERIFIED, the script fixture's census: the fg42s are entities 252 at
+(468, -822, 32.53) and 258 at (838, 2222, -22.83), and the panzerfausts
+247..250 and 253..256. Numbering the lump's item blocks alone gives 251 and
+257, one low. VERIFIED, the entity lump: an `ammo_panzerfaust_box3`
+`script_model` sits just before each fg42, and
+`crates/server/tests/fixtures/entities/mp_carentan-dm.txt` carries entity 257
+as `eType 8`, `index 56`.
+
+### 12.2 Standing on an unowned weapon
+
+VERIFIED, client fixture, `[phase stand]` and `[phase aim]`: no `!server`
+line, `eventSequence` 0 throughout, and entity 252 on the wire with `index 6`
+and `clientNum 254`. VERIFIED, script fixture: `touch 252 <t> 0` and
+`ptouch 0 <t> 252` at every 50 ms from 24050 to 29300, and no `trigger` line
+for 252 before 29300. INFERRED, as sections 1 and 3 predict: the touch pass
+notifies for an unowned weapon and the grab test then refuses it on a touch.
+
+VERIFIED: the log carries one line of each per 50 ms server frame, while the
+client sent a usercmd every 16 ms. INFERRED: the log cannot count notifies
+inside one frame, so section 1's once-per-usercmd touch pass is neither
+confirmed nor refuted here.
+
+VERIFIED, script fixture: on every grab frame the `Weapon:` line comes first,
+then the `trigger` line, then that frame's `touch` lines. INFERRED: script
+line order inside a frame is not the order the engine raised the notifies in
+(sections 1 and 2 read `"touch"` as raised first), so a comparison against
+this file treats one frame's lines as a set.
+
+### 12.3 The cursor hint
+
+VERIFIED, client fixture, the `hint=` column
+(`serverCursorHint:Val:String`):
+
+- `0:0:255` through `stand`, the view level and the fg42 under the feet;
+- `15:0:255` from 28050 in `aim`, the view pitched 87.9 down at fg42 #1: 9 + 6;
+- `79:0:255` at 31300, the first snapshot on fg42 #2 with an fg42 held: 73 + 6;
+- `32:0:255` from 34450 in `use2`, aimed at a panzerfaust: 9 + 23;
+- `0:0:255` from 34750 to 35650, with the dropped carbine owned by the probe
+  and a panzerfaust held, then `21:0:255` (9 + 12) from 35700, the snapshot
+  the carbine's `clientNum` first reads 254;
+- `serverCursorHintVal` 0 and `serverCursorHintString` 255 on every trace.
+
+INFERRED: every value matches section 2.3's encoding (unowned weapon
+`9 + giTag`, owned `73 + giTag`), and an item the grab test refuses hints
+nothing. Retail sends a hint for an item, so Task 10 runs with this encoding.
+
+### 12.4 The use key on an unowned weapon
+
+VERIFIED, client fixture, `[phase use1]`: the tap's two cmds carry
+`buttons=64` (st 29266 and 29283); the snapshot at 29300 carries
+`!server a 6`; `events[0]` 146 with `eventParms[0]` 6 (`eventSequence` 0 to
+1); `weapons[0]` 4368 to 4560, bits 6 and 7 added (`fg42_mp` and its alt
+`fg42_semi_mp`); `weaponslots[0]` 0x04000C00 to 0x04060C00, which is slot 2
+(`primaryb`) from 0 to 6 with slot 1 keeping the carbine's 12; clip `5:20` and
+ammo `5:70` added; and entity 252 gone from the `!item` lines. `weapon` stays
+12 on that frame. VERIFIED: the putaway (156) at 29350 and the raise (155) at
+30000 bring `weapon` to 6, and every cmd from st 29300 on carries weapon byte
+6. INFERRED: those two events are the probe's answer to `a 6` (the client
+switch in section 4.3), not part of the pickup. VERIFIED, script fixture:
+`Weapon: 0 fg42_mp` and `PROBE trigger 252 29300 0 undefined`.
+
+INFERRED, all as predicted: clip 20 and reserve 70 out of `count 90`
+(section 4.1), the empty `primaryb` slot (section 5), `a` on a use and the
+event on the player with the item index as its parm (sections 4.3 and 7), the
+item off the wire on the event's own frame (section 7), and undefined for the
+swapped item (section 7). Section 7 now notes the `Weapon:` line's name.
+
+### 12.5 Walking onto an owned weapon
+
+VERIFIED, client fixture, `[phase touch2]`: the probe stands at
+(838, 2222, -21.8) from 31300, after the script fixture's
+`PROBE teleport 0 2`; the snapshot at 31350 carries `events[3]` 148
+with parm 6 (`eventSequence` 3 to 4), `!server f
+GAME_PICKUP_AMMO\x14WEAPON_FG42`, ammo `5:70` to `5:160` with clip `5:20`
+unchanged, and entity 258 gone. VERIFIED, script fixture: `Weapon: 0 fg42_mp`,
+`PROBE trigger 258 31350 0 undefined`, and one `touch 258` and one
+`ptouch 0 ... 258`, both at 31350.
+
+INFERRED, as predicted by section 4.3: the owned arm hands the item's whole
+90 (clip 20 plus reserve 70) to `Add_Ammo` with `fillClip` 0, so all of it
+lands in the reserve. VERIFIED, the `trigger` line above: a pickup through
+the owned arm notifies `"trigger"` on the item, with undefined for the
+swapped item, which section 7 had only read off control flow. VERIFIED: the
+pickup took on the first frame the probe stood there.
+
+### 12.6 The swap
+
+VERIFIED, client fixture, `[phase use2]`: the tap's cmds at st 34716 and
+34733; the snapshot at 34750 carries `!server a 23`, events 146 (parm 23) and
+155 (parm 0) in slots 2 and 3 (`eventSequence` 6 to 8), `weapon` 0 with
+`weaponstate` 1, `weapons[0]` 8389072 (bit 12 cleared, bit 23 set),
+`weaponslots[0]` 0x04061700 (slot 1 from 12 to 23), clip `18:1` added and
+clip `10:15` and ammo `10:400` gone, entity 255 gone, and a new item 170 with
+`index 12`, `clientNum 0`, `eFlags 16`, `groundEntityNum 0`, `pos` type 0 at
+(826, 2274, -22.8) and `apos` (0, 270, 90), both entity 255's own. The
+snapshot at 34800 reads `weapon` 23. VERIFIED, script fixture:
+`Weapon: 0 panzerfaust_mp`, `PROBE trigger 255 34750 0 170:mpweapon_m1carbine`,
+one `touch 255 34750 0` and no `ptouch`, then
+`PROBE item 170 mpweapon_m1carbine 34750`. VERIFIED: the run has no
+`PROBE other` line besides `other 0 noclass` (entity 0, the probe's own
+slot), so the watch list covered the drop.
+
+INFERRED, as predicted: the same `weaponSlot` drops the held weapon (section
+5, case 2), laid where the new one lay and at rest (section 5); the drop
+takes the dropper's whole reserve and clip (section 8); a placed panzerfaust
+yields clip 1 and no reserve (section 4.1); the `"trigger"` notify carries the
+dropped item next to the player (section 10); and a use sends `"touch"` to the
+item alone (section 2). VERIFIED, two readings sections 5 to 9 did not have:
+the swap frame reads `weapon` 0 with `EV_RAISE_WEAPON` (155) on the ring
+beside the pickup event, and a swap's drop reads `groundEntityNum` 0 where a
+placed item reads 1022.
+
+### 12.7 The dropper's lockout
+
+VERIFIED, client fixture: item 170's `clientNum` reads 0 on every snapshot
+from 34750 to 35650 and 254 from 35700. The first `!item` reading 254 is at
+probe ms 8754 and the use2 tap's first `!cmd` at ms 7761, 993 ms apart,
+inside the predicted 1000 ± 50. INFERRED: the grab ran at `level.time` 34700,
+since the tap's cmd time 34716 falls between the frames at 34700 and 34750,
+and `DroppedItemClearOwner` ran at 35700, exactly section 8's 1000 ms.
+
+VERIFIED, `[phase early]`: the tap's cmds at st 35217 and 35234 raise no
+pickup event, no `!server` line and no `trigger` line, and the fixture carries
+no `# early took` note. INFERRED: the carbine was still locked and every
+placed panzerfaust in reach was owned and full, so nothing could be grabbed.
+
+VERIFIED, `[phase late]`: the tap at st 36217; the snapshot at 36250 carries
+`!server a 12`, events 146 (parm 12) and 155 in slots 0 and 1, `weapon` 0,
+the carbine back in slot 1 (`weaponslots[0]` 0x04060C00, `weapons[0]` 4560)
+with clip `10:15` and ammo `10:400`, clip `18:1` gone, item 170 gone, and a
+new item 171 with `index 23`, `clientNum 0`, at item 170's origin and angles;
+171's `clientNum` reads 254 from 37200. VERIFIED, script fixture:
+`Weapon: 0 m1carbine_mp` and `PROBE trigger 170 36250 0 171:mpweapon_panzerfaust`.
+INFERRED: the drop kept the 400 and 15 it was dropped with and handed them
+back whole (sections 4.3 and 8).
+
+### 12.8 Where the event rides
+
+VERIFIED: all five pickup events in the run (146 four times, 148 once) arrive
+in the playerstate's `events` ring with the item's `index` as the parm.
+VERIFIED: each taken item left the wire on the snapshot that carries its
+event, and the client fixture records no item event field. INFERRED: an event
+on the item's own state is not observable in this capture, so section 7's "no
+event lands on the item entity" stays INFERRED.
+
+### 12.9 The watcher threads
+
+VERIFIED: the server ran its full 150 s with no `script runtime error` in its
+console, and the watchers on item 170, spawned mid-run, logged its `touch`
+and `trigger` lines. INFERRED: a watcher's `endon("death")` on an item that is
+taken or freed ends or parks without an error.
 
 ## 13. As implemented
 
