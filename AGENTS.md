@@ -456,7 +456,16 @@ engineering setup works.
   `linkTo` pins a planter at `pm_type` 1 with its origin and velocity held,
   the objectives travel in playerstate block 4, the progress bar rides the
   three HUD tweens, and `bulletTrace` clips script models, which is where
-  `getPlant` puts the charge. Not modelled: item pickup, the killcam, a body
+  `getPlant` puts the charge. Items are picked up the way retail's
+  `Touch_Item` does it: walking over a weapon the player carries takes its
+  ammo, the use key's rising edge takes the best-scored grabbable item within
+  128 units of the muzzle (a weapon not carried swaps out the one in its
+  slot, dropped where the item lay), a health pack heals, a drop names its
+  dropper in `clientNum` for 1000 ms, and 32 drops at most stay on the ground
+  (`docs/research/cod11-items.md`); the launch flight, respawn,
+  `CONTENTS_NODROP` and `cg_predictItems`'s event choice are not modelled,
+  and `trigger_use` stays on the touch pass rather than joining the use key's
+  scan. Not modelled: the killcam, a body
   between the eye and a lookat (retail's second trace), `enableLinkTo`, a
   linked player on a moving parent, and script models in weapon, blast and
   missile traces. The scriptent mover verbs move things and their trajectories reach the wire
@@ -918,3 +927,7 @@ never pasted decompiler output or disassembly listings.
   every sleep overshoot accumulate, and under load `serverTime` ran 5-10%
   slow against a probe's wall clock: a map-change capture that expected the
   rotation at 120 s ran out of its 150 s before it came.
+- An item's `count` field is its reserve and 0 means "not set", not "empty":
+  a placed weapon with no `count` draws `dropAmmoMin..Max`, and a drop writes
+  -1 for an empty reserve or clip so the pickup does not draw one
+  (`docs/research/cod11-items.md`, sections 4 and 8).

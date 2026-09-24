@@ -2771,8 +2771,9 @@ them: rifle rounds passing through a player at half damage (2.3); the
 the `EV_RAISE_WEAPON` (155) retail raises on the death frame beside `EV_DEATH`;
 the direct-hit `MOD_GRENADE` arm (13.1), which a stock frag cannot reach
 because its file spells `damage` 0; the pitch rate `G_MissileLandAngles`
-redraws at a bounce (11.2); the splash event 173 and the water mask of 12.1;
-and item pickup.
+redraws at a bounce (11.2); and the splash event 173 and the water mask of
+12.1. Item pickup is modelled; `docs/research/cod11-items.md` is its own
+research doc.
 
 Melee (1.10, 2.5) and grenades (1.11, 11 to 14) were absent from the run 9.1
 to 9.3 measured, and the radius-damage falloff vcod carried then was RTCW's

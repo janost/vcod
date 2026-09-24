@@ -968,6 +968,54 @@ taken or freed ends or parks without an error.
 
 ## 13. As implemented
 
+`Touch_Item` is `crate::game::pickup::touch_item`, pure over an `Inventory`
+and the item's `ItemCounts`; `crate::game::item::touch` builds both off the
+host's mirrors, runs it and writes the result back. `G_GetActivateEnt` is
+`crate::game::item::activate_ent`, called from `ScriptRuntime::item_pass`
+(`crates/server/src/game/script.rs`) on the use key's rising edge, in the same
+pass as the walk-over touches; `G_CheckForCursorHints` is
+`ScriptRuntime::cursor_hint_pass`, run beside `ClientEndFrame`'s aim trace.
+`Drop_Weapon` is `crate::game::pickup::drop_weapon` and `LaunchItem` is
+`crate::game::item::launch_weapon`, both reached from a death
+(`crate::game::combat`) and from the `dropItem` builtin
+(`crate::game::builtins::client::drop_item`); the 32-slot ring is
+`crate::game::item::DropRing`. A script-spawned item (the `spawn` builtin on
+a `bg_itemlist` classname, `crate::game::builtins::entity`) settles on its
+first think (`ThinkFn::SettleItem`) rather than inline, so the angles a
+script writes right after `spawn` returns are what the landing aligns; a
+BSP-placed one settles at map load instead, inline in
+`spawn_entities_from_string`. Both call the same floor trace,
+`crate::game::spawn::drop_item_to_floor`, which stands in for `G_RunItem`'s
+fall: it traces straight down and stops there rather than flying a
+trajectory, and a weapon's `align_to_surface` call adds the 90 degrees of
+roll a launched weapon lands with. A death or a script drop instead takes
+the dropper's yaw outright (`DropAt::Feet`), and a swap's drop is placed
+exactly where the item it replaced lay (`DropAt::Exactly`), never landing,
+which is why its `groundEntityNum` reads 0 rather than the world's 1022
+(section 9).
+
+The pickup arithmetic never touches a player entity's fields directly:
+`crate::game::item::inventory` copies the host's `client_weapons`,
+`client_ammo` and `client_vitals` mirrors into an `Inventory`, `touch_item`
+mutates a copy of it, and `write_back` copies the weapons and health onto the
+host at once and queues every changed ammo or clip count as a `WeaponOp`,
+applied to the sim after the script frame like every other weapon op, so a
+`dropItem` call in the same script frame reads what an earlier pickup already
+took. An empty-clip drop is picked up empty, the way its `-1` count or clip
+reads (section 4.1). The use key's own scan filters every ungrabbable
+candidate out with `can_grab` before it scores or traces the survivors,
+matching `G_GetActivateEnt`'s list once the ungrabbable entries it scores
+10000 units behind are cut (section 2.1).
+
+Three divergences with retail that are not test failures: an item notify
+fires at the top of the next script frame rather than inline with the touch
+that raised it (13.1); the settle is a floor trace rather than `G_RunItem`'s
+flight (section 11); and `trigger_use` stays on the touch pass rather than
+joining the use key's scan inside `G_GetActivateEnt` (section 11), along with
+the rest of that section's list. The retail-capture gate's one `GAPS` ruling
+is 13.2's swap disarm, one frame late, with no snapshot ever reading `weapon`
+0; section 13.4 is a further live run against ours rather than the gate.
+
 `crates/server/tests/pickup_ab.rs` replays section 12's capture against
 vcod: the probe as the gametype under the recipe's `probe_teleport 1` and
 `scr_allow_fg42 1`, the capture's cmds on retail's clock, the view each
@@ -1059,12 +1107,15 @@ VERIFIED, the ring, each difference with its ruling:
   with `weapon` 0; ours reads the 146 with the old weapon and the 155 with
   the new one on the next snapshot. The one-frame lag of 13.2, as ruled.
 - `use1` and `switch`: the putaway 156 carries parm 9 on ours and 0 on
-  retail. `touch2`, 50 ms after the 148: ours adds a 98 on the 2-unit drop
-  after the second teleport. Both are the two pmove divergences the gate
-  found; neither is item pickup and neither is fixed here.
+  retail. Both are the two pmove divergences the gate found; neither is item
+  pickup and neither is fixed here. Ruling: open, outside item pickup
+  (pmove).
+- `touch2`, 50 ms after the 148: ours adds a 98 on the 2-unit drop after the
+  second teleport. Ruling: open, outside item pickup (pmove).
 - `wait`: ours reads `eventSequence` 1 with a 99 on its first snapshot,
   retail 0. INFERRED: the landing event of the drop after the first
-  teleport, the same divergence as the 98, on another surface.
+  teleport, the same divergence as the 98, on another surface. Ruling: open,
+  outside item pickup (pmove).
 - `use1`: the raise comes 700 ms after the putaway on ours and 650 on retail.
   VERIFIED, `weapons/mp/m1carbine_mp`: `dropTime` 0.67. INFERRED: both are
   670 ms seen through 50 ms snapshots, not a difference.
@@ -1079,15 +1130,20 @@ none of it is fixed here:
   -23.875. INFERRED: ours rests where its trace stops and retail about
   0.2 units higher. The gate allows 0.5 per snapshot and never flagged it.
   Retail's first-spot `y` also reads -821.9 where ours stays at -822.0.
+  Ruling: open, outside item pickup (pmove/collision).
 - The `aim` phase's view: retail aims at (87.9, -90) and ours at (90, 69.1).
   INFERRED: ours stands exactly on the item's `x` and `y`, so the aim at it
   is straight down with a yaw read off rounding noise; a consequence of the
-  item above, and the hint and the grab that follow match.
+  item above, and the hint and the grab that follow match. The same
+  divergence carries into the `use1`, `touch2` and `use2` traces, each aimed
+  at the item the phase before teleported onto.
 - The census: retail's `PROBE item` lines carry `getTime()` 1050, ours 1000.
   VERIFIED, `crates/server/tests/fixtures/movers/mp_pavlov-dm-movers.txt`:
   retail's `PROBE time0` after the same `wait 1` from `main` also reads
-  1050. The gate compares the census by name only.
+  1050. The gate compares the census by name only. Ruling: open, outside item
+  pickup (level clock).
 - Retail's log carries `PROBE other 0 noclass 23650`, the probe's own slot
   seen before its first spawn (12.6); ours has none. VERIFIED,
   `crates/server/src/game/entity.rs`: ours gives a client `classname`
-  "player" from the moment the slot exists.
+  "player" from the moment the slot exists. Ruling: open, outside item pickup
+  (client entity).

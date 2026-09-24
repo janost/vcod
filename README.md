@@ -44,15 +44,17 @@ combat effects.
   each other player animated off `mp/playeranim.script`. Combat works: a shot
   traces against the world and every live player, a hit runs the stock
   `CodeCallback_PlayerDamage` for its damage, knockback and obituary, a kill
-  leaves a corpse in the body queue and drops the dead player's weapon, and
-  the victim respawns on the use key. So do melee swings and grenades, the
-  latter as real missile entities that fly, bounce, rest and explode with
-  retail's radius falloff. A level ends the way retail's does, in script: the
-  gametype's own time or score limit runs the intermission, and the server's
-  console then restarts the map or loads the next entry of `sv_mapRotation`
-  and hands the new gamestate out on the live connection. Not there yet: item
-  pickup, the killcam and movers. `--test-entities` adds entities that move on
-  the wire to exercise the packet-entity path.
+  leaves a corpse in the body queue and drops the dead player's weapon, which
+  any player can walk over for its ammo or pick up with the use key, as it can
+  the map's own placed weapons and the health packs `dm` drops, and the victim
+  respawns on the use key. So do melee swings and grenades, the latter as real
+  missile entities that fly, bounce, rest and explode with retail's radius
+  falloff. A level ends the way retail's does, in script: the gametype's own
+  time or score limit runs the intermission, and the server's console then
+  restarts the map or loads the next entry of `sv_mapRotation` and hands the
+  new gamestate out on the live connection. Not there yet: the killcam and
+  movers. `--test-entities` adds entities that move on the wire to exercise
+  the packet-entity path.
 
 The whole thing runs on wgpu and winit, so in principle it is cross-platform.
 I have only run it on Linux.
