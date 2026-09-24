@@ -135,31 +135,33 @@ pub fn launch_weapon(
     let name = crate::items::item_name(d.weapon as usize)
         .unwrap_or_default()
         .to_string();
-    let origin = match at {
+    let (origin, angles) = match at {
+        // The dropper's yaw seeds the alignment the landing does.
         DropAt::Feet => {
             let player = host
                 .ents
                 .handle(slot as u32)
                 .ok_or(ErrorKind::BadType("no such player"))?;
-            let field = cx.intern_folded("origin");
-            match host.get_field(cx, player, field) {
-                Value::Vector(v) => v,
-                _ => [0.0; 3],
-            }
+            let mut read = |name: &str| {
+                let field = cx.intern_folded(name);
+                match host.get_field(cx, player, field) {
+                    Value::Vector(v) => v,
+                    _ => [0.0; 3],
+                }
+            };
+            let origin = read("origin");
+            (origin, [0.0, read("angles")[1], 0.0])
         }
-        DropAt::Exactly { origin, .. } => origin,
+        DropAt::Exactly { origin, angles } => (origin, angles),
     };
     let id = host.ents.spawn(cx)?;
     let classname = crate::game::spawn::radiant_name(&name).unwrap_or("mpweapon_dropped");
-    let mut fields = vec![
+    for (field, value) in [
         ("classname", Value::String(cx.intern_exact(classname))),
         ("origin", Value::Vector(origin)),
+        ("angles", Value::Vector(angles)),
         ("count", Value::Int(d.count)),
-    ];
-    if let DropAt::Exactly { angles, .. } = at {
-        fields.push(("angles", Value::Vector(angles)));
-    }
-    for (field, value) in fields {
+    ] {
         let atom = cx.intern_folded(field);
         host.set_field(cx, id, atom, value)?;
     }
@@ -293,5 +295,41 @@ mod tests {
         host.run_entity_thinks(OWNER_LOCKOUT_MS);
         let ents = vm.with_cx(|cx| crate::game::wire::packet_entities(&mut host, cx, p));
         assert_eq!(ents[&id.0].field_i32(p, "clientNum"), 254);
+    }
+
+    /// A death drop lands the way retail's `G_BounceItem` lays it: on the
+    /// floor, facing the dropper's yaw, with a weapon's 90 degrees of roll.
+    #[test]
+    fn a_feet_drop_faces_the_droppers_yaw_and_takes_the_weapon_roll() {
+        let (mut vm, mut host) = fixture();
+        host.world = Some(std::rc::Rc::new(crate::world::World {
+            collision: vcod_common::collision::test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        }));
+        let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+        let d = Dropped {
+            weapon: carbine,
+            count: 400,
+            clip: 15,
+        };
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 0, None).unwrap();
+            for (name, v) in [
+                ("origin", [16.0, -32.0, 8.0]),
+                ("angles", [10.0, 45.0, 0.0]),
+            ] {
+                let f = cx.intern_folded(name);
+                host.set_field(cx, c, f, Value::Vector(v)).unwrap();
+            }
+            let id = launch_weapon(&mut host, cx, 0, d, DropAt::Feet).unwrap();
+            let angles = cx.intern_folded("angles");
+            let Value::Vector(a) = host.get_field(cx, id, angles) else {
+                panic!("the drop has angles");
+            };
+            assert!(a[0].abs() < 1e-3, "pitch {}", a[0]);
+            assert!((a[1] - 45.0).abs() < 1e-3, "yaw {}", a[1]);
+            assert!((a[2] - 90.0).abs() < 1e-3, "roll {}", a[2]);
+        });
     }
 }

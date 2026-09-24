@@ -1130,10 +1130,15 @@ mod tests {
         assert_eq!(host.ents.get(id).unwrap().item.unwrap().owner, None);
     }
 
+    /// `Drop_Weapon` on a weapon the player does not hold: no item, no ammo
+    /// op, and the player's weapons as they were.
     #[test]
     fn dropitem_of_a_weapon_not_held_drops_nothing() {
         let (mut vm, mut host) = fixture();
         host.weapons = std::rc::Rc::new(crate::game::pickup::tests_table());
+        let carbine = weapon_index("m1carbine_mp").unwrap();
+        host.client_weapons[0].give(carbine, 1);
+        let held = host.client_weapons[0];
         vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 0, None).unwrap();
             let name = Value::String(cx.intern_exact("fg42_mp"));
@@ -1143,6 +1148,8 @@ mod tests {
             );
         });
         assert_eq!(host.ents.iter_inuse().count(), 1);
+        assert!(host.client_weapon_ops.is_empty());
+        assert_eq!(host.client_weapons[0], held);
     }
 
     /// A name no weapon file backs raises rather than spawning an item with

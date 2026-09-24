@@ -242,6 +242,9 @@ fn spawn_entity(host: &mut GameHost, cx: &mut Cx, args: &[Value]) -> Result<Valu
         let item = crate::items::item_name(index).unwrap_or(&name).to_string();
         host.register_item(&item);
         crate::game::item::attach(host, id, index);
+        // Unset angles are the zero the landing aligns from.
+        let angles = cx.intern_folded("angles");
+        host.set_field(cx, id, angles, Value::Vector([0.0; 3]))?;
         let weapon = crate::game::spawn::is_weapon_row(index);
         crate::game::spawn::drop_item_to_floor(host, cx, id, weapon);
     }
@@ -716,6 +719,35 @@ mod tests {
         assert_eq!(e.field_i32(p, "index"), 68);
         assert_eq!(e.field_i32(p, "clientNum"), 254);
         assert_eq!(e.field_i32(p, "groundEntityNum"), 1022);
+    }
+
+    /// A spawned `item_health` with no angles is laid on the slope it lands
+    /// on, and takes no weapon roll.
+    #[test]
+    fn a_script_spawned_item_health_is_aligned_to_the_slope() {
+        let (mut vm, mut host) = fixture();
+        host.world = Some(Rc::new(World {
+            collision: vcod_common::collision::ramp_test_world(10.0, 0.0, 512.0),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        }));
+        vm.with_cx(|cx| {
+            let cls = Value::String(cx.intern_exact("item_health"));
+            let at = Value::Vector([256.0, 0.0, 200.0]);
+            let Value::Entity(id) = spawn(&mut host, cx, None, &[cls, at]).unwrap() else {
+                panic!("spawn returns the entity");
+            };
+            let angles = cx.intern_folded("angles");
+            let Value::Vector(a) = host.get_field(cx, id, angles) else {
+                panic!("the item has angles");
+            };
+            assert!(
+                (a[0] - 350.0).abs() < 0.5,
+                "pitch {} is not the slope",
+                a[0]
+            );
+            assert!(a[2].abs() < 1e-3, "roll {}", a[2]);
+        });
     }
 
     /// `spawn` on an entity that is not a player is retail's

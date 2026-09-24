@@ -920,6 +920,21 @@ mod tests {
         assert_ne!(host.items.bitstring(), Items::new().bitstring());
     }
 
+    /// A map-placed `item_health` is `G_SpawnItem`'s too: it becomes an item
+    /// of row 68, not a bare entity.
+    #[test]
+    fn a_placed_item_health_is_an_item_of_row_sixty_eight() {
+        let (mut vm, mut host) = fixture();
+        let lump = "{\n\"classname\" \"worldspawn\"\n}\n\
+                    {\n\"classname\" \"item_health\"\n\"origin\" \"0 0 0\"\n}\n";
+        vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, lump))
+            .unwrap();
+        let (_, e) = host.ents.iter_inuse().next().unwrap();
+        let item = e.item.expect("the entity carries the item component");
+        assert_eq!(item.index, 68);
+        assert!(!item.dropped);
+    }
+
     /// Pins the exact bit: `fg42_mp` is configstring 7 index 6, and
     /// `RegisterItem`'s alt-fire link sets `fg42_semi_mp` (index 7) along
     /// with it, so nibble 1 (bits 4-7) comes out `0b1100` = `c`. A wrong
