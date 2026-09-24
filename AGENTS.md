@@ -352,6 +352,21 @@ engineering setup works.
   `-sd-defuse-defender.txt`, all retail evidence: a run against ours
   overwrites the two client ones, so move them to `tmp/` and `git checkout`
   the directory after.
+  `--save-pickup` is the item pickup capture. It joins allies and needs
+  `client-probes/probe_pickup` as the gametype under `tools/run_probe.sh` with
+  `+set probe_teleport 1`: mp_carentan's two fg42s are a town apart, and the
+  gsc puts the player on each in turn. The first teleport lands before the
+  join settles, so the probe reads "on the first fg42" off its position, not
+  off a jump. It stands on the first, aims at it, takes it with use, takes
+  the second's ammo by touch, then swaps the carbine for a panzerfaust with
+  one tap on the dropped carbine inside the dropper's lockout and one past
+  it. It answers every `a <index>` the way a retail client does, holding the
+  byte until `ps.weapon` reads it. It writes
+  `crates/server/tests/fixtures/items/<map>-dm-pickup.txt`, named `dm`
+  because retail runs the probe as gametype `probe_pickup`; the server
+  half's `PROBE` and `Weapon:` lines are copied into `-pickup-script.txt` by
+  hand. Both are retail evidence, and a run against ours overwrites the
+  client one.
   A plain `--net-probe` also prints every change to an entity's `pos`/`apos`
   trajectory group, which is the mover half of the same arrangement:
   `client-probes/probe_mover.gsc` under `run_probe.sh` in one shell calls each
