@@ -119,8 +119,8 @@ watch_player_touch(num)
 
 //	mp_carentan's two fg42s are a town apart, so with `probe_teleport 1` each
 //	live player is put on the first once, and on the second two seconds after
-//	the first has been taken. The A/B gate places its client itself and never
-//	sets the cvar; an unset cvar reads "".
+//	the first has been taken. The A/B gate sets the cvar too; an unset cvar
+//	reads "".
 watch_teleports()
 {
 	if (getcvar("probe_teleport") != "1")

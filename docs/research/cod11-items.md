@@ -983,7 +983,8 @@ VERIFIED, `probe_pickup.gsc`: `watch_trigger` is the only writer of
 `level.probe_taken`, and `try_teleport` runs in the `watch_teleports` loop,
 started in `main` before any item watcher, and calls `wait 2` between reading
 the flag and the second `setOrigin`. VERIFIED, the client fixture: the second
-teleport is on the 31300 snapshot, 2000 ms after the 29300 grab. INFERRED:
+teleport is on the 31300 snapshot, 2000 ms after the 29300 trigger notify.
+INFERRED:
 the loop, parked on `wait 0.05`, read the flag in the 29300 frame, so the
 `"trigger"` waiter ran before that frame's `wait`s came due. VERIFIED, the
 script fixture: the census loop's `PROBE item 170` line, from a thread also
@@ -991,12 +992,15 @@ started before the watchers, follows the 34750 `trigger` and `touch` lines.
 INFERRED: the same order.
 
 vcod delivers the item pass's notifies at the top of the script frame, on
-the frame's clock, and runs their waiters there, before the entity thinks,
-the movers and the frame's `wait` pass (`ScriptRuntime::run_frame`). The
-thread pass had run them in thread age, and the gate read the teleport at
-31350 and the ammo pickup at 31400. Where retail's drain sits relative to
-the entity thinks is not measured; a trigger's notifies keep their old
-place.
+the frame's clock, and on a frame that has any runs their waiters there,
+before the entity thinks, the movers and the frame's `wait` pass
+(`ScriptRuntime::run_frame`); any other thread already runnable at that
+point runs there with them. The thread pass had run them in thread age, and
+the gate read the teleport at 31350 and the ammo pickup at 31400. Where
+retail's drain sits relative to the entity thinks is not measured. INFERRED,
+unmeasured: where retail drains a trigger's notifies relative to the `wait`
+pass; vcod keeps them where they were so the trigger and S&D gates keep
+their baselines.
 
 ### 13.2 The swap disarm lands a frame late
 
@@ -1019,8 +1023,10 @@ row `swap disarm one frame late` excuses exactly this shape, one frame, on
 ### 13.3 The cursor hint on the locked drop
 
 VERIFIED, the gate on vcod: the hint reads 32 from 36250 to 37150, while
-item 171 is locked to its dropper, and comes from the placed panzerfaust 256
-at (821, 2274), 5 units from 171; from 37200 it comes from 171. The values
-match section 12.3 snapshot for snapshot. INFERRED: retail's 32 on that
+item 171 is locked to its dropper, and the values match section 12.3
+snapshot for snapshot. VERIFIED, temporary instrumentation of
+`cursor_hint_pass` during a gate run, since reverted: the 32 on that stretch
+comes from the placed panzerfaust 256 at (821, 2274), 5 units from 171, and
+from 37200 the hint comes from 171. INFERRED: retail's 32 on that
 stretch is a placed panzerfaust too; the capture does not record which
 entity a hint came from.

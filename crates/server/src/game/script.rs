@@ -1348,15 +1348,20 @@ impl ScriptRuntime {
         self.host.level_time_ms = now_ms;
         // The item pass's notifies, on this frame's clock, and their waiters
         // run here, ahead of every `wait` this frame brings due
-        // (docs/research/cod11-items.md, 13.1).
-        for (id, event, args) in std::mem::take(&mut self.host.item_notifies) {
-            if self.host.ents.get(id).is_some() {
-                let event = self.vm.with_cx(|cx| cx.intern_folded(event));
-                self.vm.notify(Target::Entity(id), event, &args);
+        // (docs/research/cod11-items.md, 13.1). Any other thread already
+        // `Runnable` runs here with them; a frame with no item notify skips
+        // the pass.
+        let item_notifies = std::mem::take(&mut self.host.item_notifies);
+        if !item_notifies.is_empty() {
+            for (id, event, args) in item_notifies {
+                if self.host.ents.get(id).is_some() {
+                    let event = self.vm.with_cx(|cx| cx.intern_folded(event));
+                    self.vm.notify(Target::Entity(id), event, &args);
+                }
             }
-        }
-        for e in self.vm.run_runnable(&mut self.host, now_ms) {
-            log::warn!("script error: {e:?}");
+            for e in self.vm.run_runnable(&mut self.host, now_ms) {
+                log::warn!("script error: {e:?}");
+            }
         }
         // A trigger's thread runs on the clock of the frame after the touch:
         // retail's plant bar carries the `scaleStartTime` of the first

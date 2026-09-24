@@ -28,7 +28,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use common::{holding, ClientEnd, Queues, CMD_MS, FRAME_MS};
-use vcod_common::net::msg::{EntityState, UserCmd, NULL_USERCMD};
+use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::snapshot::Snapshot;
 use vcod_common::net::trajectory::Trajectory;
@@ -145,6 +145,8 @@ struct Sample {
     health: i32,
     /// Items within 256 units of the origin.
     items: BTreeSet<ItemKey>,
+    /// The same items as `(entity number, index, clientNum)`.
+    nums: BTreeSet<(i32, i32, i32)>,
 }
 
 /// The ring's new slots between two samples: `(prev..cur)`, the order
@@ -296,6 +298,7 @@ fn parse(text: &str) -> Capture {
                     i("groundEntityNum"),
                     at,
                 ));
+                s.nums.insert((i("num"), i("index"), i("clientNum")));
             }
         }
     }
@@ -399,7 +402,7 @@ impl Rig {
         out.clip = pairs(&s.ps.arrays.ammoclip);
         out.ammo = pairs(&s.ps.arrays.ammo);
         out.health = s.ps.health();
-        out.items = items_near(s, out.origin);
+        (out.items, out.nums) = items_near(s, out.origin);
         out
     }
 
@@ -412,23 +415,28 @@ impl Rig {
     }
 }
 
-fn items_near(s: &Snapshot, me: [f32; 3]) -> BTreeSet<ItemKey> {
+fn items_near(s: &Snapshot, me: [f32; 3]) -> (BTreeSet<ItemKey>, BTreeSet<(i32, i32, i32)>) {
     let p = &PROTOCOL_V1;
-    s.entities
-        .values()
-        .filter(|e: &&EntityState| e.field_i32(p, "eType") == ET_ITEM)
-        .filter_map(|e| {
-            let at: [f32; 3] = Trajectory::read(e, p, "pos").evaluate(s.server_time).into();
-            (dist(at, me) <= ITEM_RADIUS).then(|| {
-                item_key(
-                    e.field_i32(p, "index"),
-                    e.field_i32(p, "clientNum"),
-                    e.field_i32(p, "groundEntityNum"),
-                    at,
-                )
-            })
-        })
-        .collect()
+    let mut items = BTreeSet::new();
+    let mut nums = BTreeSet::new();
+    for (&num, e) in &s.entities {
+        if e.field_i32(p, "eType") != ET_ITEM {
+            continue;
+        }
+        let at: [f32; 3] = Trajectory::read(e, p, "pos").evaluate(s.server_time).into();
+        if dist(at, me) > ITEM_RADIUS {
+            continue;
+        }
+        let (index, client) = (e.field_i32(p, "index"), e.field_i32(p, "clientNum"));
+        items.insert(item_key(
+            index,
+            client,
+            e.field_i32(p, "groundEntityNum"),
+            at,
+        ));
+        nums.insert((num as i32, index, client));
+    }
+    (items, nums)
 }
 
 /// The view each retail snapshot reports, as the capture cmd's exact wire
@@ -628,21 +636,23 @@ fn unlag_swaps(retail: &[Sample], ours: &mut BTreeMap<i32, Sample>, rows: &mut V
 }
 
 /// The ring's item and weapon events, `EV_ITEM_PICKUP` (146) up, with the
-/// parm on the three pickup events only. The movement events below 146 and
-/// the weapon events' parms are the motion and combat gates' business.
+/// parm on the three pickup events and `EV_RAISE_WEAPON`. The movement
+/// events below 146 and the other weapon events' parms are the motion and
+/// combat gates' business.
 fn ring(events: &[(i32, i32)]) -> String {
     let kept: Vec<String> = events
         .iter()
         .filter(|(e, _)| *e >= 146)
         .map(|&(e, p)| match e {
-            146..=148 => format!("{e}:{p}"),
+            146..=148 | EV_RAISE_WEAPON => format!("{e}:{p}"),
             _ => e.to_string(),
         })
         .collect();
     format!("[{}]", kept.join(","))
 }
 
-/// Weapon, hint, the ring and the origin, snapshot by snapshot.
+/// Weapon, hint, the ring, the items in reach and the origin, snapshot by
+/// snapshot.
 fn diff_snapshots(cap: &Capture, ours: &[Sample], rows: &mut Vec<String>) {
     let mut ours: BTreeMap<i32, Sample> = ours.iter().map(|s| (s.t, s.clone())).collect();
     unlag_swaps(&cap.retail, &mut ours, rows);
@@ -660,6 +670,7 @@ fn diff_snapshots(cap: &Capture, ours: &[Sample], rows: &mut Vec<String>) {
         row("weapon", r.weapon.to_string(), o.weapon.to_string());
         row("hint", r.hint.clone(), o.hint.clone());
         row("ring", ring(&r.events), ring(&o.events));
+        row("items", format!("{:?}", r.nums), format!("{:?}", o.nums));
         if dist(r.origin, o.origin) > ORIGIN_EPS {
             row(
                 "origin",

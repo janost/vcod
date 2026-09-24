@@ -230,9 +230,10 @@ has been taken), on the second one two seconds later; both moves are onto
 the item's own `origin`, not a nearby spot, so Task 3's `--save-pickup`
 finds "on the first fg42" by the stepped snapshot's position (within 48
 units xy of the fg42's origin, or a jump, ledger ruling R1) without having
-to see the teleport as an origin jump. A run without the cvar (`dm`'s A/B
-gate) never teleports and never logs a `PROBE teleport` line, since an unset
-cvar reads `""`.
+to see the teleport as an origin jump. A run without the cvar never
+teleports and never logs a `PROBE teleport` line, since an unset cvar reads
+`""`. `crates/server/tests/pickup_ab.rs` sets it, so ours teleports the way
+retail did.
 
 ```
 COD_LNXDED_HOME=<absolute, no '+'> SECS=150 \
