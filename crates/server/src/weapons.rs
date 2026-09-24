@@ -124,21 +124,30 @@ impl WeaponTable {
     }
 
     /// Walks [`crate::configstrings::WEAPON_LIST`] in wire order, parsing
-    /// each weapon file and assigning its ammo/clip indexes. A missing file
-    /// logs and leaves that slot `None` rather than failing the map load.
+    /// each weapon file. A missing file logs and leaves that slot `None`
+    /// rather than failing the map load.
     pub fn load(fs: &Pk3Fs) -> WeaponTable {
-        let mut ammo_names: Vec<String> = Vec::new();
-        let mut clip_names: Vec<String> = Vec::new();
         let mut defs: Vec<Option<WeaponDef>> = vec![None; crate::items::NUM_ITEMS];
         for (i, name) in crate::configstrings::WEAPON_LIST.split(' ').enumerate() {
             match vcod_common::weapon::load(fs, name) {
-                Ok(mut def) => {
-                    def.ammo_index = name_index(&mut ammo_names, &def.ammo_name);
-                    def.clip_index = name_index(&mut clip_names, &def.clip_name);
-                    defs[i + 1] = Some(def);
-                }
+                Ok(def) => defs[i + 1] = Some(def),
                 Err(e) => log::warn!("weapon table: {name}: {e:#}"),
             }
+        }
+        WeaponTable::from_defs(defs)
+    }
+
+    /// Assigns the ammo, clip and shared-cap indexes in index order, the walk
+    /// `load` does over the parsed files. A test hands it hand-built defs.
+    pub fn from_defs(mut defs: Vec<Option<WeaponDef>>) -> WeaponTable {
+        let mut ammo_names: Vec<String> = Vec::new();
+        let mut clip_names: Vec<String> = Vec::new();
+        let mut cap_names: Vec<String> = Vec::new();
+        for def in defs.iter_mut().flatten() {
+            def.ammo_index = name_index(&mut ammo_names, &def.ammo_name);
+            def.clip_index = name_index(&mut clip_names, &def.clip_name);
+            def.shared_cap_index = (!def.shared_ammo_cap_name.is_empty())
+                .then(|| name_index(&mut cap_names, &def.shared_ammo_cap_name));
         }
         WeaponTable { defs }
     }
@@ -155,6 +164,15 @@ impl WeaponTable {
     /// this. `""` for the empty slot 0 and for any index with no weapon.
     pub fn class(&self, index: usize) -> &str {
         self.get(index).map_or("", |d| d.weapon_class.as_str())
+    }
+
+    /// The `SLOT_NAMES` index the weapon file's `weaponSlot` names, 0 for a
+    /// weapon with none.
+    pub fn slot(&self, index: usize) -> usize {
+        self.get(index)
+            .and_then(|d| SLOT_NAMES.iter().position(|s| *s == d.weapon_slot))
+            .filter(|&i| i > 0)
+            .unwrap_or(0)
     }
 }
 
@@ -296,6 +314,27 @@ mod tests {
         assert_eq!(at(&clip, 10), Some(def("m1carbine_mp").clip_size as i32));
         assert_eq!(at(&ammo, 3), Some(def("colt_mp").max_ammo as i32));
         assert_eq!(at(&ammo, 10), Some(def("m1carbine_mp").max_ammo as i32));
+    }
+
+    /// Both stock frags name the one `grenades` cap, so they share an index;
+    /// a rifle has none. And a weapon's slot is its file's `weaponSlot`.
+    #[test]
+    fn the_shared_cap_and_the_slot_come_off_the_table() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let t = WeaponTable::load(&fs);
+        let get = |n: &str| t.get(weapon_index(n).unwrap()).unwrap();
+        assert!(get("fraggrenade_mp").shared_cap_index.is_some());
+        assert_eq!(
+            get("fraggrenade_mp").shared_cap_index,
+            get("stielhandgranate_mp").shared_cap_index
+        );
+        assert_eq!(get("m1carbine_mp").shared_cap_index, None);
+        assert_eq!(t.slot(weapon_index("fg42_mp").unwrap()), 1);
+        assert_eq!(t.slot(weapon_index("colt_mp").unwrap()), 3);
+        assert_eq!(t.slot(weapon_index("fraggrenade_mp").unwrap()), 4);
+        assert_eq!(t.slot(0), 0);
     }
 
     /// The ammo/clip index rule (docs/protocol-1.1.md, "How `ammo[]` and
