@@ -27,6 +27,8 @@
 #   item; <swapped> is undefined or <num>:<classname> of the weapon the pickup
 #   dropped.
 # PROBE teleport <playerNum> <step> <origin>: a probe_teleport move, step 1 or 2.
+# PROBE teleport unsupported <mapname>: probe_teleport is set and the map has
+#   fewer than two mpweapon_fg42 (none in this capture).
 # Weapon: <playerNum> <weapon> and Item: <playerNum> <classname>: the engine's
 #   pickup log line.
 # Standing on an item logs one touch and one ptouch line per 50 ms server

@@ -725,15 +725,14 @@ of its event fields. The probe's client number is 0.
 
 VERIFIED, `default_mp.cfg` in `localized_english_pak0.pk3`: it carries
 `set scr_allow_fg42 0`, the only `scr_allow_*` line set to 0
-(`crates/server/src/cvars.rs` already mirrors it). VERIFIED, a first run
-without the override: its census logged the eight panzerfausts and no fg42,
-and the teleport thread logged `teleport unsupported mp_carentan`. VERIFIED, a
-scratch gametype logging `getentarray("mpweapon_fg42", "classname")` on
-retail: 2 at `main()` with `scr_allow_fg42` reading `0`, 2 at `getTime()` 100
-and 0 from 200 on; with `+set scr_allow_fg42 1` on the command line it reads 2
-throughout. INFERRED: `_teams::restrictPlacedWeapons` deletes both at map
-load on a stock server, so the capture needs the override, and a stock `dm`
-round on mp_carentan has no fg42 to pick up.
+(`crates/server/src/cvars.rs` already mirrors it). `cod11-gsc-language.md`
+section 9 and `cod11-gsc-object-model.md` section 17 record that
+`_teams::restrictPlacedWeapons` deletes every `mpweapon_fg42` on that value.
+VERIFIED, a first run of this recipe without the override (its log is not
+committed): the census logged the eight panzerfausts and no fg42, and the
+teleport thread logged `teleport unsupported mp_carentan`. INFERRED: a stock
+`dm` round on mp_carentan has no fg42 to pick up, and the capture needs the
+override.
 
 VERIFIED, the script fixture's census: the fg42s are entities 252 at
 (468, -822, 32.53) and 258 at (838, 2222, -22.83), and the panzerfausts
@@ -768,18 +767,29 @@ this file treats one frame's lines as a set.
 VERIFIED, client fixture, the `hint=` column
 (`serverCursorHint:Val:String`):
 
-- `0:0:255` through `stand`, the view level and the fg42 under the feet;
-- `15:0:255` from 28050 in `aim`, the view pitched 87.9 down at fg42 #1: 9 + 6;
-- `79:0:255` at 31300, the first snapshot on fg42 #2 with an fg42 held: 73 + 6;
-- `32:0:255` from 34450 in `use2`, aimed at a panzerfaust: 9 + 23;
+- `0:0:255` from 26950 to 28000, through `stand` and the first `aim`
+  snapshot, the view level and the fg42 under the feet;
+- `15:0:255` from 28050 to 29250, the view pitched 87.9 down at fg42 #1:
+  9 + 6;
+- `0:0:255` from 29300 to 31250, fg42 #1 taken and the view still on its
+  spot;
+- `79:0:255` at 31300 only, the first snapshot on fg42 #2 with an fg42 held:
+  73 + 6;
+- `0:0:255` from 31350 to 34400, fg42 #2 taken, through the rest of `touch2`
+  and all of `switch`;
+- `32:0:255` from 34450 to 34700 in `use2`, aimed at a panzerfaust: 9 + 23;
 - `0:0:255` from 34750 to 35650, with the dropped carbine owned by the probe
-  and a panzerfaust held, then `21:0:255` (9 + 12) from 35700, the snapshot
-  the carbine's `clientNum` first reads 254;
+  and a panzerfaust held;
+- `21:0:255` (9 + 12) from 35700 to 36200, from the snapshot the carbine's
+  `clientNum` first reads 254;
+- `32:0:255` from 36250 to the last trace at 42200, the carbine held again
+  and the aim still on the spot where the panzerfaust dropped;
 - `serverCursorHintVal` 0 and `serverCursorHintString` 255 on every trace.
 
 INFERRED: every value matches section 2.3's encoding (unowned weapon
 `9 + giTag`, owned `73 + giTag`), and an item the grab test refuses hints
-nothing. Retail sends a hint for an item, so Task 10 runs with this encoding.
+nothing. Retail sends a hint for an item, so vcod sends the hint, in this
+encoding.
 
 ### 12.4 The use key on an unowned weapon
 
@@ -799,8 +809,8 @@ switch in section 4.3), not part of the pickup. VERIFIED, script fixture:
 INFERRED, all as predicted: clip 20 and reserve 70 out of `count 90`
 (section 4.1), the empty `primaryb` slot (section 5), `a` on a use and the
 event on the player with the item index as its parm (sections 4.3 and 7), the
-item off the wire on the event's own frame (section 7), and undefined for the
-swapped item (section 7). Section 7 now notes the `Weapon:` line's name.
+undefined for the swapped item (section 7). VERIFIED: the item left the wire
+on the event's own frame, as section 7 predicts. Section 7 now notes the `Weapon:` line's name.
 
 ### 12.5 Walking onto an owned weapon
 
@@ -818,7 +828,10 @@ INFERRED, as predicted by section 4.3: the owned arm hands the item's whole
 lands in the reserve. VERIFIED, the `trigger` line above: a pickup through
 the owned arm notifies `"trigger"` on the item, with undefined for the
 swapped item, which section 7 had only read off control flow. VERIFIED: the
-pickup took on the first frame the probe stood there.
+probe is on the spot at 31300 with hint 79 and no event, and the 148 arrives
+at 31350. INFERRED: the teleport's `setOrigin` ran in the 31300 script frame,
+after that frame's touch pass, so 31350 was the first touch pass at the new
+spot.
 
 ### 12.6 The swap
 
@@ -834,8 +847,9 @@ snapshot at 34800 reads `weapon` 23. VERIFIED, script fixture:
 `Weapon: 0 panzerfaust_mp`, `PROBE trigger 255 34750 0 170:mpweapon_m1carbine`,
 one `touch 255 34750 0` and no `ptouch`, then
 `PROBE item 170 mpweapon_m1carbine 34750`. VERIFIED: the run has no
-`PROBE other` line besides `other 0 noclass` (entity 0, the probe's own
-slot), so the watch list covered the drop.
+`PROBE other` line besides `other 0 noclass 23650`. INFERRED: that line is
+entity 0, the probe's own slot seen before its first spawn, so the watch list
+covered the drop.
 
 INFERRED, as predicted: the same `weaponSlot` drops the held weapon (section
 5, case 2), laid where the new one lay and at rest (section 5); the drop
@@ -846,6 +860,21 @@ item alone (section 2). VERIFIED, two readings sections 5 to 9 did not have:
 the swap frame reads `weapon` 0 with `EV_RAISE_WEAPON` (155) on the ring
 beside the pickup event, and a swap's drop reads `groundEntityNum` 0 where a
 placed item reads 1022.
+
+VERIFIED: the capture reads the drops' 0 only between level times 34750 and
+42200, while `crates/server/tests/fixtures/entities/mp_carentan-dm.txt`'s
+header says items read 0 for the first minute after a map load; the placed
+items here already read 1022 at 26950. INFERRED: the capture alone cannot
+tell "a drop reads 0" from an early-level effect. VERIFIED, the listings:
+`LaunchItem` has no store into `groundEntityNum` (`ent+0x7c`); the stores in
+the item functions are `G_SpawnItem` (0x3ff at 0x4e801), `FinishSpawningItem`
+(0x4e437) and `G_BounceItem` (0x4ea1f); `G_RunItem` compares it against 0x3ff
+at 0x4eb24 and compares `pos.trType` against 0 and 8 before a `G_RunThink`
+call (0x4eb42..0x4eb57). INFERRED: `G_RunItem` only thinks for a stationary
+item, so after a swap's `G_SetOrigin` puts the drop at `trType` 0 nothing on
+its path writes the ground entity, and the 0 is whatever the allocation left,
+not a landing. Where `G_Spawn` gets that 0 I have not read, so the
+early-level reading is not ruled out either.
 
 ### 12.7 The dropper's lockout
 
@@ -873,7 +902,8 @@ back whole (sections 4.3 and 8).
 
 ### 12.8 Where the event rides
 
-VERIFIED: all five pickup events in the run (146 four times, 148 once) arrive
+VERIFIED: all four pickup events in the run (146 at 29300, 34750 and 36250,
+148 at 31350) arrive
 in the playerstate's `events` ring with the item's `index` as the parm.
 VERIFIED: each taken item left the wire on the snapshot that carries its
 event, and the client fixture records no item event field. INFERRED: an event

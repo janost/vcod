@@ -5,8 +5,7 @@
 #       tools/run_probe.sh client-probes/probe_pickup mp_carentan +set probe_teleport 1 +set scr_allow_fg42 1
 #   cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-pickup --probe-secs 120
 # scr_allow_fg42 1 is not stock: default_mp.cfg sets it 0, and _teams::restrictPlacedWeapons
-# then deletes both fg42s at map load. A run without it has no fg42 to take (added to this
-# header by hand; the writer in probe.rs does not print it).
+# then deletes both fg42s at map load. A run without it has no fg42 to take.
 # The gsc probe puts the player on the first fg42 at spawn and on the second two
 # seconds after the first is taken; every jump in origin here is one of those.
 # Phases: stand 1000 ms; aim 1000 ms; use1 taps use 300 ms in; touch2 holds 2000 ms past

@@ -1007,10 +1007,15 @@ VERIFIED from the shipped `maps/MP/gametypes/_teams.gsc` (pak5):
 `deletePlacedEntity("mpweapon_panzerfaust")` when the matching
 `scr_allow_*` cvar is unset, and `deletePlacedEntity` is
 `getentarray(classname, "classname")` followed by `.delete()` on each hit.
-This is why retail's configstring 8 keeps the `fg42_mp`/`panzerfaust_mp`
-bits even though the map's placed copies are gone by the time a round
-starts: registration already happened at spawn, and `delete()` only frees
-the entity a tenth of a second later (section 14), not the item.
+This is why retail's configstring 8 keeps the `fg42_mp` bit even though
+the map's placed fg42s are gone by the time a round starts (stock
+`scr_allow_fg42` is `"0"`, `cod11-gsc-language.md` section 9): registration
+already happened at spawn, and `delete()` only frees the entity a tenth of a
+second later (section 14), not the item. VERIFIED, the retail pickup capture
+(`crates/server/tests/fixtures/items/mp_carentan-dm-pickup-script.txt`, run
+with the stock `scr_allow_panzerfaust`): all eight placed panzerfausts are
+still there after the map load, so the `panzerfaust_mp` bit comes from live
+entities (`cod11-items.md` section 12.1).
 
 INFERRED FROM DECOMPILATION, the one link not closed: I have not traced the
 function that copies a weapon's `radiantName` into its `bg_itemlist` row at

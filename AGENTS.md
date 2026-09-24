@@ -354,8 +354,10 @@ engineering setup works.
   the directory after.
   `--save-pickup` is the item pickup capture. It joins allies and needs
   `client-probes/probe_pickup` as the gametype under `tools/run_probe.sh` with
-  `+set probe_teleport 1`: mp_carentan's two fg42s are a town apart, and the
-  gsc puts the player on each in turn. The first teleport lands before the
+  `+set probe_teleport 1 +set scr_allow_fg42 1`: mp_carentan's two fg42s are
+  a town apart and the gsc puts the player on each in turn, and stock
+  `default_mp.cfg`'s `scr_allow_fg42 0` would have
+  `_teams::restrictPlacedWeapons` delete both at map load. The first teleport lands before the
   join settles, so the probe reads "on the first fg42" off its position, not
   off a jump. It stands on the first, aims at it, takes it with use, takes
   the second's ammo by touch, then swaps the carbine for a panzerfaust with

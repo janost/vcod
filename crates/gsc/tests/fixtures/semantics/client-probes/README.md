@@ -218,8 +218,9 @@ The watched classnames are mp_carentan's two placed weapon kinds
 §4.1's stock numbers), the allied loadout a weapon swap drops
 (`mpweapon_m1carbine`, `mpweapon_colt`, `mpweapon_fraggrenade`) and the
 health `dm` drops on a death (`item_health`); an unlisted classname is a
-`PROBE other` line instead, which is how Task 4 confirms the two fg42
-entity numbers (currently INFERRED at 251 and 257) rather than trusting them.
+`PROBE other` line instead. The census's `PROBE item` lines are what
+measured the two fg42s at entities 252 and 258
+(`docs/research/cod11-items.md` §12.1).
 
 It calls `maps\mp\gametypes\dm::main()` itself, so a client can answer the
 stock team menu and spawn. mp_carentan's two fg42s sit a town apart, so
@@ -235,10 +236,14 @@ cvar reads `""`.
 
 ```
 COD_LNXDED_HOME=<absolute, no '+'> SECS=150 \
-    tools/run_probe.sh client-probes/probe_pickup mp_carentan +set probe_teleport 1
+    tools/run_probe.sh client-probes/probe_pickup mp_carentan \
+        +set probe_teleport 1 +set scr_allow_fg42 1
 # about 15 s later, in the second shell:
 cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-pickup --probe-secs 120
 ```
+
+`scr_allow_fg42 1` is needed because stock `default_mp.cfg` sets it 0, and
+`_teams::restrictPlacedWeapons` then deletes both fg42s at map load.
 
 The `PROBE` lines plus the server's own `Weapon:` and `Item:` lines (read
 straight out of `games_mp.log`, which `run_probe.sh` does not print) go to

@@ -7255,7 +7255,8 @@ eventParms={},{},{},{} origin={} viewangles={}",
             }
             PickupPhase::Wait if in_phase >= PICKUP_WAIT => {
                 self.notes.push(
-                    "# BROKEN no teleport: run client-probes/probe_pickup with +set probe_teleport 1"
+                    "# BROKEN no teleport: run client-probes/probe_pickup with \
++set probe_teleport 1 +set scr_allow_fg42 1"
                         .to_string(),
                 );
                 PickupPhase::Done
@@ -7329,10 +7330,14 @@ fn write_pickup_fixture(
     out.push_str("# Two shells, the gsc probe first:\n");
     out.push_str("#   COD_LNXDED_HOME=<absolute, no '+'> SECS=150 \\\n");
     out.push_str(
-        "#       tools/run_probe.sh client-probes/probe_pickup mp_carentan +set probe_teleport 1\n",
+        "#       tools/run_probe.sh client-probes/probe_pickup mp_carentan +set probe_teleport 1 +set scr_allow_fg42 1\n",
     );
     out.push_str(
         "#   cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-pickup --probe-secs 120\n",
+    );
+    out.push_str(
+        "# scr_allow_fg42 1 is not stock: default_mp.cfg sets it 0, and _teams::restrictPlacedWeapons\n\
+# then deletes both fg42s at map load. A run without it has no fg42 to take.\n",
     );
     out.push_str(
         "# The gsc probe puts the player on the first fg42 at spawn and on the second two\n",
