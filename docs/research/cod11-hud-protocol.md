@@ -802,7 +802,7 @@ retail can produce.
 
 ### Font slots
 
-VERIFIED, the constants: `font` 0 takes a text scale of `fontScale * 0.25`
+VERIFIED, the constants `0x3001f120` loads per slot: `font` 0 takes a text scale of `fontScale * 0.25`
 (`0x3006950c` reads 0.25) and a height from the engine's font-height trap
 (`0x35`); `font` 1 and 2 take `fontScale * 0.33333334` (`0x30069548`) and the
 immediates 16 and 16 (slot 1) or 16 and 8 (slot 2). INFERRED: those are the
@@ -819,8 +819,8 @@ VERIFIED, the strings and constants: a non-zero `label` (`+0x2c`) is looked up
 as configstring `0x4dc + n` through the localize call tagged `"hudelem
 string"`; the value format is `"%g"` (`0x30064b28`); the timer formatters are
 `0x3001ece0` (`"%i:%02i"`, `"%i:%02i:%02i"`) and `0x3001ed60` (`"%i:%02i.%i"`,
-`"%i:%02i:%02i.%i"`). INFERRED, off the switch in the element-setup function
-that follows `0x3001ee20`: type 1 prints its `text` (`+0x68`) configstring,
+`"%i:%02i:%02i.%i"`). INFERRED, off the type switch in `0x3001f120`, the
+element-setup function: type 1 prints its `text` (`+0x68`) configstring,
 type 2 prints `value` (`+0x64`) through `"%g"`, types 4 and 5 go through the
 whole-second formatter and 6 and 7 through the tenths one, each fed by
 `0x3001ec70` (section 5, "There is no round-timer configstring"), and types 3,
@@ -840,8 +840,9 @@ the width runs linearly from `fromWidth` (`+0x3c`, again the font height when
 0) to that; height the same off `+0x34` and `+0x40`. VERIFIED: the stock S&D
 progress bar is `setShader("white", 0, 8)` then `scaleOverTime(planttime,
 barsize, 8)` (`maps/MP/gametypes/sd.gsc` in `pak5.pk3`). INFERRED, from the
-two together: that bar grows from the font height, not from 0. INFERRED, off `0x3001ef50`: a shader element whose
-`font` is not 0 is never shorter than the font height.
+two together: that bar grows from the font height, not from 0. INFERRED,
+off `0x3001ef50`: a shader element whose `font` is not 0 is never shorter than
+the font height.
 
 INFERRED, off `0x3001efb0` and `0x3001f020`: the position is `x` (`+0x4`) and
 `y` (`+0x8`), moved from `fromX` (`+0x4c`) and `fromY` (`+0x50`) the same way
@@ -850,12 +851,12 @@ then subtracts half the element's width and 2 all of it, and `alignY`
 (`+0x18`) does the same with the height. VERIFIED: the half is `0x3006930c`,
 which reads 0.5.
 
-INFERRED, off the tail of the element-setup function: while `0 < fadeTime`
+INFERRED, off the tail of `0x3001f120`: while `0 < fadeTime`
 (`+0x28`) and `cg.time - fadeStartTime` (`+0x24`) is below it, each byte lane
 runs linearly from `fromColor` (`+0x20`) to `color` (`+0x1c`), and the result
-is scaled by `0x30069420` to 0..1. VERIFIED: that constant reads 1/255. Lane `+0x1c` is red and `+0x1f`
-alpha, as the server's getters read them (`cod11-gsc-object-model.md`, "HUD
-element fields").
+is scaled by `0x30069420` to 0..1. VERIFIED: that constant reads 1/255.
+Lane `+0x1c` is red and `+0x1f` alpha, as the server's getters read them
+(`cod11-gsc-object-model.md`, "HUD element fields").
 
 None of the three tweens clamps a start time ahead of `cg.time`; the
 fraction goes negative and extrapolates past the `from` value. INFERRED.
@@ -870,6 +871,186 @@ element's timer value by 360 over `duration` (`+0x60`), or by `0x300695d0`
 INFERRED: the face is drawn at the element's rect and the needle over it,
 turned one revolution per `duration` ms, or per minute without one. Which way
 the needle turns on screen is not measured.
+
+---
+
+## 9. The native player HUD
+
+The layout file is VERIFIED: pak0 `ui_mp/hud.menu` and the `COMPASS_*`
+defines in `ui_mp/menudef.h`. What each ownerdraw does is read out of
+`cgame_mp_x86.dll` (1.1), labelled per claim below. Rects are virtual 640x480,
+menu origin plus item offset.
+
+| Item | Rect | Art | Ownerdraw |
+|---|---|---|---|
+| cursor hint | 300, 325, 40x40 | per hint | `CG_CURSORHINT` 72 |
+| stance | 100, 434.375, 40x40 | `hudStance{Stand,Crouch,Prone}` | `CG_PLAYER_STANCE` 20 |
+| weapon name back | 242.5, 431, 320x20 | `gfx/hud/hud@weaponnameback.tga` | 82 |
+| ammo back | 557.5, 421.625, 80x40 | `gfx/hud/hud@ammocounterback.tga` | 6 |
+| weapon name | 242.5, 446, 320x30, textscale .3 | | 81 |
+| ammo text | 570, 444.625, 55x40, textscale .21 | | `CG_PLAYER_AMMO_VALUE` 5 |
+| health back | 501, 460, 130x12 | `gfx/hud/hud@health_back.tga` | `CG_DRAW_SHADER` |
+| health bar | 502, 461, 128x10, forecolor 0.7 0.4 0 | `gfx/hud/hud@health_bar.tga` | 89 |
+| health cross | 488, 460, 12x12 | `gfx/hud/hud@health_cross.tga` | `CG_DRAW_SHADER` |
+| compass back, face | -25, 345, 160x160 | `hud@compassback`, `hud@compassface` | 84 |
+| compass highlight | -25, 345, 160x160 | `hud@compasshighlight` | 85 |
+| compass needle | 35, 395, 40x40 | `hud@compass_arrow` | 85 |
+| objective pointers | -25, 345, 160x160 | | 86 |
+
+VERIFIED, the dispatch tables: the ownerdraw switch subtracts 4 from the id at
+`0x30026bdf` and indexes the byte table at `0x300270f0` and then the jump
+table at `0x3002706c`; for ids 5, 20, 72, 81, 82, 84, 85, 86 and 89 those
+tables land on `0x30026c1e`, `0x30026d2a`, `0x30026c36`, `0x30026edb`,
+`0x30026f00`, `0x30026f3e`, `0x30026f5b`, `0x30026f78` and `0x30026f95`,
+whose calls are `0x30025ab0`, `0x30023f50`, `0x300251f0`, `0x30023c30`,
+`0x30023d50`, `0x30024800`, `0x30025120`, `0x30024d20` and `0x300248c0`.
+INFERRED: those are each id's handler, which is how the claims below are
+attributed.
+
+VERIFIED, the defaults in the cgame's cvar table: `cg_hudDamageIconTime` 2000,
+`cg_hudDamageIconWidth` 128, `cg_hudDamageIconHeight` 64,
+`cg_hudDamageIconOffset` 32, `cg_hudCompassSize` 1.0,
+`cg_hudCompassMaxRange` 1024, `cg_hudCompassMinRange` 0,
+`cg_hudCompassMinRadius` 0, `cg_hudObjectiveMaxHeight` 70,
+`cg_hudObjectiveMinHeight` -70, `cg_hudObjectiveMinAlpha` 1,
+`cg_cursorHints` 3, `cg_crosshairAlpha` 1.0 and `cg_crosshairDynamic` 0
+(the entries sit at `0x30074aa4`..`0x30074c54`, name then default string).
+vcod uses these values as constants.
+
+VERIFIED, the weapon-file fields the HUD reads, from the cgame's weapon field
+table (`{name, offset, type}` records around `0x30075558`): `displayName`
+`+0x8`, `modeName` `+0x6c`, `reticleCenter` `+0xe8`, `reticleSide` `+0xec`,
+`reticleCenterSize` `+0xf0`, `reticleSideSize` `+0xf4`, `reticleMinOfs`
+`+0xf8`, `hudIcon` `+0x18c`, `modeIcon` `+0x190`, `ammoIcon` `+0x194`,
+`hipSpreadStandMin` `+0x23c`, `hipSpreadDuckedMin` `+0x240`,
+`hipSpreadProneMin` `+0x244`, `hipSpreadMax` `+0x248`, `hipReticleSidePos`
+`+0x264`, `clipOnly` `+0x2d4`, `wideListIcon` `+0x2d8`, `adsAimPitch`
+`+0x344`, `adsCrosshairInFrac` `+0x348`, `adsCrosshairOutFrac` `+0x34c`.
+
+### Crosshair
+
+INFERRED, off `0x30016760` and `0x3000fa50`: the hip spread in degrees is
+`min + (max - min) * aimSpreadScale / 255`, `min` being the prone minimum when
+`pm_flags & 1`, the ducked one when `& 2` and the standing one otherwise, and
+it is multiplied by a sight shrink factor. Each arm then sits
+`spread * 640 / fov_x` virtual pixels off the centre horizontally and
+`spread * 480 / fov_y` vertically, floored at `reticleMinOfs`. VERIFIED: the
+two numerators are `0x300694fc` (640.0) and `0x3006973c` (480.0), and the fov
+is an `fpatan` times the double at `0x300693c8`, which reads 114.59.
+INFERRED: that is `360 / pi`, so the fov is in degrees.
+
+INFERRED, same function: with the sight fraction `f` above 0, `t = f - (1 -
+X)` for `X` = `adsCrosshairInFrac` or `adsCrosshairOutFrac` (picked by a flag
+this reading did not name), and when `t > 0` the shrink is `1 - 0.5 * t / X`;
+the arms' travel and both images' sizes take it. At `f` 1 nothing is drawn.
+INFERRED: `adsAimPitch` drops the reticle by `480 / fov_y * adsAimPitch * t`
+in the same arm; stock MP files do not set it and vcod leaves it out.
+
+INFERRED, off the four-arm loop: the arm table is top, right, bottom, left,
+direction `(0,-1) (1,0) (0,1) (-1,0)`, corner offset in arm sizes
+`(-0.5,-1) (0,-0.5) (-0.5,0) (-1,-0.5)`, a one-pixel nudge `(0,-1)` on the top
+arm and `(-1,0)` on the left, pulled in by `hipReticleSidePos` arm sizes; the
+bottom and left arms draw the image flipped (`t` 1 to 0) and the right and
+left ones turned 90 degrees. The arm and centre sizes are passed to the draw
+call without the screen scale the travel gets, so they are window pixels.
+Which way the 90-degree turn goes is not measured.
+
+### Health
+
+INFERRED, off `0x300248c0`: the share is `stats[0] / stats[2]` clamped to
+0..1, and 0 when either is 0; the bar is cropped, texture `s` 0 to the share,
+not squeezed. Above half the forecolor's red and blue are scaled by
+`2 * (1 - share)`, at or below half its green becomes `(share + 0.2) * green +
+0.3`. INFERRED: a red tail from the share to the share last shown holds one
+frame, then drains by `0x30069490` per ms, and resets when the playerstate's
+client number changes. VERIFIED, the constants: `0x300693d4` reads 0.2,
+`0x30069454` 0.3 and `0x30069490` 0.0012.
+
+### Weapon name and ammo
+
+INFERRED, off `0x30023c30` and `0x30023d50`: the name is the localized
+`displayName`, or `"%s / %s"` with the localized `modeName` when that is not
+blank, right-aligned 28 units in from the rect's right edge; the backdrop is
+the text's width plus 36 wide, right-aligned on the same edge. VERIFIED:
+`0x30069400` reads 28.0 and `0x30069584` 36.0.
+
+INFERRED, off `0x30025ab0` and `0x3000f920`: a weapon that is not `clipOnly`
+prints `ammoclip[clipIndex]` through `"%2i"` at the rect's left, `"|"`
+centred, and the reserve through `"%i"` right-aligned; a `clipOnly` weapon
+prints its clip alone, centred. Both counts cap at 999. VERIFIED, the three
+strings: `0x3006526c`, `0x30063148` and `0x3006567c`. INFERRED, off
+`0x3000f920`: a weapon with a shared ammo cap sums the cap's weapons the
+player holds instead. vcod prints the weapon's own.
+
+### Stance
+
+INFERRED, off `0x30023f50`: prone on bit 1 and crouch on bit 2 of a stance
+word, standing otherwise, and `hudStanceFlash` drawn over it for a second
+after a change. vcod reads the stance from `eFlags` (`0x40` prone, `0x20`
+crouch) and leaves the flash out.
+
+### Compass
+
+INFERRED, off `0x30024800` and `0x30019bd0`: the back and face turn by the view
+yaw less `northyaw` (configstring 11), smoothed by a spring; the highlight and
+the needle do not turn (`0x30025120`). vcod turns the face without the spring.
+
+INFERRED, off `0x30024d20`: only objectives in state 4 are drawn; the target
+is the objective's origin, or its entity's when `entNum` is not `0x3ff`; the
+20x20 icon's centre is `(55 - sin a * r, 425 - cos a * r)` for the bearing
+`a` off the view yaw, with `r = 43.75 * clamp(distance / 1024)` at the cvar
+defaults above. VERIFIED: `0x300695fc` reads 43.75 and `0x30069448` 20.0.
+INFERRED: the icon is the objective's configstring `1500 + icon` material
+with its extension dropped and `_up` or `_down` appended when the target is
+more than 70 units above or below the view. VERIFIED: `0x30024c40` holds the
+three suffix strings `""`, `"_up"` and `"_down"`. Which suffix goes with which
+side, and that `a` grows to the left, are INFERRED from the geometry, not
+measured.
+
+### Cursor hint
+
+VERIFIED, the registrations: `hintActivate`, `hintNoActivate`, `hintDoor`,
+`hintNoDoor`, `hintMg42`, `hintHealth`, `hintLadder` and `hintFriendly` are
+stored at `0x301d5ad8` to `0x301d5af4`, four bytes apart, and the weapon
+setup stores a material at `0x301d5af4 + 4 * weapon` and another at
+`0x301d5bf4 + 4 * weapon`. INFERRED, off the weapon setup's branches: the
+first is the weapon's `hudIcon` and the second its `ammoIcon`, each
+`hintActivate` when the key is blank. INFERRED, off
+`0x300251f0` indexing that run from `0x301d5ad0` by the hint: hint 2..8 are
+the named ones in order, 9 is `hintFriendly`, `9 + w` weapon `w`'s hud icon
+and `73 + w` its ammo icon, which agrees with the server's encoding
+(`cod11-items.md` 2.3); 0 and 1 draw nothing. VERIFIED: `hintNoDoor` is not
+in pak4's `scripts/hud.shader`, which has `hintDoorLocked` instead. INFERRED:
+that hint has no art in retail either.
+
+INFERRED, same function: with `cg_cursorHints` 3 the icon's alpha pulses as
+`(sin(cg.time * 0.0066667) + 1) / 2`; a `wideListIcon` weapon's icon is drawn
+twice as wide, shifted left by half the rect. A hint string (configstring
+`1212 + serverCursorHintString`, `cod11-gsc-object-model.md`) is localized,
+its `[%s]` filled with the use key's binding, and printed at textscale .21
+centred on the rect with its baseline one text height above it. VERIFIED:
+`0x300696d4` reads 0.0066667 and `0x30063188` is `"[%s]"`. The weapon hints'
+own composed sentence is not modelled.
+
+### Damage direction
+
+VERIFIED: `0x3002faa0` and `0x30028d00` call `0x300287f0` with the
+playerstate's `damageYaw`, `damagePitch` and `damageCount`, and each call site
+compares `damageEvent` with the previous playerstate's and `damageCount` with
+0. INFERRED, off those two compares: a changed event with a non-zero count is
+a hit, which is the increment the server makes (`cod11-combat.md`).
+
+INFERRED, off `0x300287f0`: yaw and pitch both 255 add no icon; otherwise the
+oldest of eight slots takes the time and `damageYaw / 255 * 360` plus a random
+jitter of up to 10 degrees either way. VERIFIED: the jitter's constants are
+`0x30069448` (20.0) and `0x30069330` (32768.0). vcod leaves the jitter out.
+
+INFERRED, off `0x300172f0`: each slot younger than `cg_hudDamageIconTime` draws
+`hudHitDirection` over `(-64, 32)` to `(64, 96)` about the screen centre,
+turned by the view yaw less the slot's yaw, with alpha
+`min(1, 2 - 2 * age / time)`. So an icon below the crosshair is a hit from
+behind. VERIFIED: the centre is `0x300695e4` (320.0) and `0x300695e0`
+(240.0). The sense of the turn is inferred from that geometry, not measured.
 
 ---
 

@@ -399,6 +399,29 @@ pub struct WeaponDef {
     /// The shared cap's index, assigned by `WeaponTable` off
     /// `shared_ammo_cap_name` the way `ammo_index` is off `ammo_name`.
     pub shared_cap_index: Option<usize>,
+    /// `reticleCenter` and `reticleSide`, the hip crosshair's centre image and
+    /// the image its four arms share; `None` when blank.
+    pub reticle_center: Option<String>,
+    pub reticle_side: Option<String>,
+    /// Window pixels, not virtual ones (docs/research/cod11-hud-protocol.md,
+    /// section 9).
+    pub reticle_center_size: f32,
+    pub reticle_side_size: f32,
+    /// The least an arm sits off the centre, in virtual pixels.
+    pub reticle_min_ofs: f32,
+    /// Arm sizes each arm is pulled back toward the centre by.
+    pub hip_reticle_side_pos: f32,
+    /// The tail of the sight fraction over which the crosshair shrinks, the
+    /// sight going up and coming down.
+    pub ads_crosshair_in_frac: f32,
+    pub ads_crosshair_out_frac: f32,
+    /// The cursor hint's icon for this weapon, and for its ammo.
+    pub hud_icon: Option<String>,
+    pub ammo_icon: Option<String>,
+    /// Doubles the cursor hint icon's width.
+    pub wide_list_icon: bool,
+    /// Localized key the HUD's weapon name appends after a `/`; blank on most.
+    pub mode_name: String,
     /// Which `WeaponAnim` keys this file names a non-blank clip for (kar98k's
     /// `reloadStartAnim` and `reloadEndAnim` are blank, for instance):
     /// `view_anim` and `resolve` fall back to idle rather than pick a clip
@@ -650,6 +673,18 @@ impl WeaponDef {
                 .map(|s| s.to_ascii_lowercase())
                 .unwrap_or_default(),
             shared_cap_index: None,
+            reticle_center: opt_str(map, "reticleCenter"),
+            reticle_side: opt_str(map, "reticleSide"),
+            reticle_center_size: parse_num(map, "reticleCenterSize", 0.0),
+            reticle_side_size: parse_num(map, "reticleSideSize", 0.0),
+            reticle_min_ofs: parse_num(map, "reticleMinOfs", 0.0),
+            hip_reticle_side_pos: parse_num(map, "hipReticleSidePos", 0.0),
+            ads_crosshair_in_frac: parse_num(map, "adsCrosshairInFrac", 0.0),
+            ads_crosshair_out_frac: parse_num(map, "adsCrosshairOutFrac", 0.0),
+            hud_icon: opt_str(map, "hudIcon"),
+            ammo_icon: opt_str(map, "ammoIcon"),
+            wide_list_icon: parse_bool(map, "wideListIcon", false),
+            mode_name: map.get("modeName").cloned().unwrap_or_default(),
             anim_keys: WeaponAnim::ALL
                 .into_iter()
                 .filter(|a| opt_str(map, a.key()).is_some())
@@ -976,6 +1011,54 @@ mod tests {
         let pf = load(&fs, "panzerfaust_mp").unwrap();
         assert_eq!((pf.drop_ammo_min, pf.drop_ammo_max), (0, 0));
         assert!(pf.clip_only);
+    }
+
+    /// The keys the native HUD reads, off the shipped files.
+    #[test]
+    fn the_hud_fields_parse_off_the_stock_files() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let carbine = load(&fs, "m1carbine_mp").unwrap();
+        assert_eq!(carbine.reticle_center, None);
+        assert_eq!(
+            carbine.reticle_side.as_deref(),
+            Some("gfx/reticle/side_skinny.tga")
+        );
+        assert_eq!(
+            (carbine.reticle_center_size, carbine.reticle_side_size),
+            (4.0, 8.0)
+        );
+        assert_eq!(carbine.reticle_min_ofs, 0.0);
+        assert_eq!(
+            (
+                carbine.ads_crosshair_in_frac,
+                carbine.ads_crosshair_out_frac
+            ),
+            (1.0, 0.2)
+        );
+        assert_eq!(
+            carbine.hud_icon.as_deref(),
+            Some("gfx/icons/hud@m1carbine.tga")
+        );
+        assert_eq!(
+            carbine.ammo_icon.as_deref(),
+            Some("gfx/icons/hud@ammo2.tga")
+        );
+        assert!(carbine.wide_list_icon);
+        assert_eq!(carbine.mode_name, "");
+        let frag = load(&fs, "fraggrenade_mp").unwrap();
+        assert_eq!(
+            frag.reticle_center.as_deref(),
+            Some("gfx/reticle/center_cross.tga")
+        );
+        assert_eq!(frag.reticle_side, None);
+        assert_eq!(
+            (frag.reticle_center_size, frag.reticle_min_ofs),
+            (32.0, 4.0)
+        );
+        let thompson = load(&fs, "thompson_mp").unwrap();
+        assert_eq!(thompson.mode_name, "WEAPON_FULLAUTO");
     }
 
     #[test]

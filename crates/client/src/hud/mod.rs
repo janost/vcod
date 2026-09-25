@@ -7,6 +7,8 @@ pub mod font;
 pub mod hudelem;
 pub mod killfeed;
 pub mod menu;
+#[allow(dead_code)] // wired in by the HUD wiring task
+pub mod player;
 pub mod scoreboard;
 pub mod status;
 
