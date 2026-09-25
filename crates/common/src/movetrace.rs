@@ -9,9 +9,11 @@ pub const CONTENTS_BODY: u32 = 0x2000000;
 pub const CONTENTS_CORPSE: u32 = 0x4000000;
 /// `ClientThink_real`'s mask for `pm_type` > 5, and `BG_CheckProneValid`'s.
 pub const MASK_DEADSOLID: u32 = 0x810011;
-/// The sphere/cylinder radius pad (`cod_lnxded` 0x80557c6); see the task-1
-/// fix report for the RE detail and Task 8's capture as the arbiter of its
-/// value and where it applies.
+/// The sphere/cylinder radius pad (`cod_lnxded` 0x80557c6); see
+/// `docs/research/cod11-player-clip.md` for the RE detail, with Task 8's
+/// capture as the arbiter of its value and where it applies.
+/// Must stay >= `SURFACE_CLIP_EPSILON`, or the early-out below lets a small
+/// step away from a resting contact clip to fraction 0 instead of clearing.
 pub const BODY_RADIUS_EPS: f32 = 0.125;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -137,12 +139,9 @@ fn clip_capsule(t: &mut Trace, start: Vec3, end: Vec3, mover: Capsule, hh_m: f32
     );
 }
 
-/// Squared distance from `p` to the closest point on segment `a`-`b`. Q3's
-/// `CM_DistanceFromLineSquared` reaches the same value through a per-axis
-/// bounding-box check on the infinite line's projection instead of a
-/// clamped one; the two agree because the check direction is the segment's
-/// own, so a projection outside the segment is outside on every axis the
-/// direction has a component on.
+/// Squared distance from `p` to the closest point on segment `a`-`b`; Q3's
+/// `CM_DistanceFromLineSquared` reaches the same value via a per-axis check
+/// on the infinite line's projection rather than a clamp, equivalent here.
 fn dist_to_segment_sq(p: Vec3, a: Vec3, b: Vec3) -> f32 {
     let ab = b - a;
     let len_sq = ab.length_squared();
@@ -157,16 +156,14 @@ fn dist_to_segment_sq(p: Vec3, a: Vec3, b: Vec3) -> f32 {
 /// Q3 `CM_TraceThroughVerticalCylinder`: an infinite-height circle swept
 /// against a segment, clamped to the cylinder's half height `h` about `o`.
 /// `startsolid` tests the bare radius `r`; the quadratic pads it by
-/// `BODY_RADIUS_EPS` where Q3 uses `RADIUS_EPSILON`, and the early-out below
-/// pads it by `SURFACE_CLIP_EPSILON` where Q3 does too (two distinct Q3
-/// constants; vcod folds both into `BODY_RADIUS_EPS` for the quadratic and
-/// reuses `SURFACE_CLIP_EPSILON` itself for the early-out, matching Q3's
-/// actual choice there since that one isn't part of the open question).
+/// `BODY_RADIUS_EPS` (Q3's `RADIUS_EPSILON`), the early-out below by
+/// `SURFACE_CLIP_EPSILON`, matching Q3's own two constants there.
 fn trace_cylinder(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, h: f32, entity: u32) {
     let rel = (start - o).with_z(0.0);
     if (start.z - o.z).abs() <= h && rel.length_squared() < r * r {
-        let end_rel = (end - o).with_z(0.0);
-        let end_inside = (end.z - o.z).abs() <= h && end_rel.length_squared() < r * r;
+        // Q3 gates entry on the start point's z-span but tests the end
+        // point on radius alone, with no z-span check on it.
+        let end_inside = (end - o).with_z(0.0).length_squared() < r * r;
         set_startsolid(t, entity, end_inside);
         return;
     }
@@ -245,13 +242,11 @@ fn trace_sphere(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, entity: 
     }
 }
 
-/// Mirrors Q3's inline startsolid block in both leaf traces: startsolid
-/// always fires when the start point is inside the bare radius, and
-/// allsolid only when the end point is too (`CM_TraceThroughSphere`,
-/// `CM_TraceThroughVerticalCylinder`). pmove branches on allsolid alone to
-/// declare a mover fully stuck (`pmove.rs`'s `slide_move`/step-up); a bare
-/// startsolid still clips at fraction 0 and lets the slide-plane bump try a
-/// way out.
+/// Mirrors Q3's inline startsolid block: startsolid fires when the start
+/// point is inside the bare radius, allsolid only when the end point is
+/// too. pmove (`slide_move`/step-up) treats allsolid alone as fully stuck;
+/// a bare startsolid still clips at fraction 0 and lets the slide bump try
+/// a way out.
 fn set_startsolid(t: &mut Trace, entity: u32, end_inside: bool) {
     t.startsolid = true;
     t.fraction = 0.0;
@@ -442,9 +437,14 @@ mod tests {
         );
         assert!(fall.fraction < 1.0);
         let rest = fall.endpos;
-        // pmove's 0.25-unit down probe for on_ground.
+        // pmove's 0.25-unit down probe for on_ground: still resting on the
+        // sphere, so it should stop short with the sphere's normal, not
+        // fall through or register stuck.
         let ground = mw.box_trace(rest, rest - Vec3::Z * 0.25, STAND.0, STAND.1, LIVE);
-        assert!(!ground.allsolid, "{ground:?}");
+        assert!(
+            ground.fraction < 1.0 && ground.normal.z > 0.7 && !ground.startsolid,
+            "{ground:?}"
+        );
         let step = mw.box_trace(
             rest,
             rest + Vec3::new(2.0, 0.0, 0.0),
@@ -452,7 +452,33 @@ mod tests {
             STAND.1,
             LIVE,
         );
-        assert!(!step.allsolid, "{step:?}");
+        assert!(step.fraction == 1.0 && !step.startsolid, "{step:?}");
+    }
+
+    #[test]
+    fn a_small_step_directly_away_from_a_resting_contact_clears_at_fraction_one() {
+        // Pins the BODY_RADIUS_EPS >= SURFACE_CLIP_EPSILON dependency: too
+        // small a pad and the early-out misses this step, so the quadratic's
+        // clamped-to-zero root clips it instead of letting it through.
+        let w = test_world(&[]);
+        let bodies = [body_at(100.0, 70.0)];
+        let mw = MoveWorld::new(&w, &bodies, 0);
+        let t = mw.box_trace(
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(200.0, 0.0, 1.0),
+            STAND.0,
+            STAND.1,
+            LIVE,
+        );
+        assert!(t.fraction < 1.0);
+        let away = mw.box_trace(
+            t.endpos,
+            t.endpos - Vec3::new(0.05, 0.0, 0.0),
+            STAND.0,
+            STAND.1,
+            LIVE,
+        );
+        assert!(away.fraction == 1.0 && !away.startsolid, "{away:?}");
     }
 
     #[test]
