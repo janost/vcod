@@ -350,7 +350,8 @@ pub struct ClientSim {
     /// The last cmd's angles, retail's `pers.cmd.angles`, which
     /// `set_view_angle` rewrites `delta_angles` against.
     last_cmd_angles: [i32; 3],
-    /// `r.contents`: `CONTENTS_BODY` while alive and playing, else 0.
+    /// `r.contents`: `CONTENTS_BODY` while alive and playing, `CONTENTS_CORPSE`
+    /// after a death or a stuck push until the next end frame, else 0.
     pub contents: u32,
     /// The entity `solid`, packed at the last link from the box and contents
     /// then, never at end frame (docs/research/cod11-player-clip.md).

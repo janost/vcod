@@ -2969,14 +2969,8 @@ impl Server {
             );
             mirror_vitals(&mut self.clients, rt);
             // `G_RunFrame`'s own slot order (0x50ab0-0x50ad7), not arrival
-            // order: that applies only to `ClientThink` (`replay_moves`).
-            // `update_contents` then, for a live sim, `StuckInClient` off a
-            // view rebuilt this slot so an earlier slot's fresh contents
-            // (BODY, or CORPSE if it was just marked stuck) are seen. No
-            // link follows a CORPSE write here: `end_frame` is
-            // `P_DamageFeedback` and never relinks, so the pushed player's
-            // `solid` stays packed on the wire until its own next cmd runs
-            // `relink`.
+            // order (docs/research/cod11-player-clip.md 4.2, 6). No link
+            // follows a CORPSE write here.
             for slot in 0..self.clients.len() {
                 let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
                     continue;

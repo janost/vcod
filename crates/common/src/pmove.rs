@@ -566,8 +566,6 @@ pub struct PmInput {
     pub angles: [i32; 2],
 }
 
-/// `dt` in seconds, clamped to `MAX_FRAME_MS`. Returns the frame's movement
-/// sound events in wire `EV_*` numbering.
 /// `PM_DropTimers` (0x32a44) runs from `PmoveSingle` for every `pm_type`, so
 /// every arm below calls this once a move to keep a pushed player's penalty
 /// ticking down even while linked, mounted or dead.
@@ -582,6 +580,8 @@ fn drop_knockback(ps: &mut PlayerState, dt: f32) {
     }
 }
 
+/// `dt` in seconds, clamped to `MAX_FRAME_MS`. Returns the frame's movement
+/// sound events in wire `EV_*` numbering.
 pub fn pmove(
     ps: &mut PlayerState,
     input: &PmInput,
