@@ -2,7 +2,7 @@
 
 use crate::game::host::SimOp;
 use glam::Vec3;
-use vcod_common::movetrace::{Body, MoveWorld, CONTENTS_BODY};
+use vcod_common::movetrace::{Body, MoveWorld, CONTENTS_BODY, CONTENTS_CORPSE};
 use vcod_common::net::msg::{self, UserCmd};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::net::trajectory;
@@ -577,6 +577,16 @@ impl ClientSim {
         };
     }
 
+    /// The death edge. `player_die` writes `CONTENTS_CORPSE`, outside every
+    /// mover's mask, so the body stops blocking before the next end frame
+    /// zeroes it.
+    pub fn die(&mut self) {
+        if !self.dead {
+            self.dead = true;
+            self.contents = CONTENTS_CORPSE;
+        }
+    }
+
     /// `SV_LinkEntity`'s `solid`, off the box and contents at the link.
     fn relink(&mut self) {
         self.linked_solid = if self.contents & (CONTENTS_BODY | 1) != 0 {
@@ -1053,7 +1063,7 @@ impl ClientSim {
             // standing player for 1.35 s, doubling it under the next shot.
             return;
         }
-        self.dead = true;
+        self.die();
         // The cook went with the drop: retail's `fire_grenade` clears
         // `grenadeTimeLeft` on the thrower, and the retail death frame reads
         // 0 (combat doc, 11.1 and 5.1 step 5).
@@ -2537,6 +2547,24 @@ mod tests {
     /// toward the attacker in `stats[1]`, and the feedback left as the last
     /// surviving hit wrote it (combat doc, 8.4). Then the body: no input
     /// moves it, and the eye drops 9 units a frame to `deadViewHeight`.
+    /// A killing hit is `player_die`'s CORPSE write at once, so the body
+    /// stops blocking before the end frame zeroes it: a turret's kill lands
+    /// after that frame's end-frame pass.
+    #[test]
+    fn a_killing_hit_leaves_a_corpse_no_mover_clips() {
+        use vcod_common::collision::MASK_PLAYERSOLID;
+        use vcod_common::movetrace::MASK_DEADSOLID;
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0; 3], 0.0, NULL_USERCMD.angles);
+        assert_eq!(sim.body(3).map(|b| b.contents), Some(CONTENTS_BODY));
+        sim.take_damage(&hit_op(100, true), None, &mut 1, 1000);
+        assert_eq!(sim.contents, CONTENTS_CORPSE);
+        let b = sim.body(3).expect("a corpse stays linked");
+        assert_eq!(b.contents & (MASK_PLAYERSOLID | MASK_DEADSOLID), 0);
+        sim.update_contents();
+        assert_eq!(sim.body(3), None);
+    }
+
     #[test]
     fn a_fatal_hit_kills_freezes_the_feedback_and_drops_the_eye() {
         let p = &PROTOCOL_V1;

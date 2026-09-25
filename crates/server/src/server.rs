@@ -309,7 +309,11 @@ fn mirror_vitals(clients: &mut [Option<Client>], rt: &script::ScriptRuntime) {
                 let v = rt.client_vitals(slot);
                 sim.health = v.health;
                 sim.max_health = v.max_health;
-                sim.dead = v.dead;
+                if v.dead {
+                    sim.die();
+                } else {
+                    sim.dead = false;
+                }
             }
         }
     }
