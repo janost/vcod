@@ -177,18 +177,10 @@ impl PlayInput {
 
     fn on_press(&mut self, action: Action) {
         match action {
-            Action::Crouch => {
-                self.wanted_stance = match self.wanted_stance {
-                    Stance::Stand | Stance::Prone => Stance::Crouch,
-                    Stance::Crouch => Stance::Stand,
-                };
-            }
-            Action::Prone => {
-                self.wanted_stance = match self.wanted_stance {
-                    Stance::Prone => Stance::Stand,
-                    Stance::Stand | Stance::Crouch => Stance::Prone,
-                };
-            }
+            // Retail's `gocrouch` and `goprone` set the stance outright, never
+            // toggle; only `+gostand` (Space) stands up.
+            Action::Crouch => self.wanted_stance = Stance::Crouch,
+            Action::Prone => self.wanted_stance = Stance::Prone,
             Action::Jump => {
                 if self.wanted_stance != Stance::Stand {
                     self.wanted_stance = Stance::Stand;
@@ -203,7 +195,7 @@ impl PlayInput {
     }
 
     /// Lets go of every held key, for a grab release or focus loss. The
-    /// stance and a pending switch stay: both are toggles, not holds.
+    /// stance and a pending switch stay: neither is a held key.
     pub fn release_all(&mut self) {
         self.down.clear();
         self.jump_consumed_by_stand = false;
@@ -388,18 +380,51 @@ mod tests {
     }
 
     #[test]
-    fn crouch_toggles_and_holds_up_down() {
+    fn crouch_holds_up_down_until_space_stands() {
         let mut i = PlayInput::default();
         i.key(Action::Crouch, true);
         i.key(Action::Crouch, false);
         let c = i.build(100, &held(10));
         assert_ne!(c.wbuttons & msg::WBUTTON_CROUCH, 0);
         assert_eq!(c.up, -127);
-        i.key(Action::Crouch, true);
-        i.key(Action::Crouch, false);
+        i.key(Action::Jump, true);
+        i.key(Action::Jump, false);
         let c = i.build(108, &held(10));
         assert_eq!(c.wbuttons & msg::WBUTTON_CROUCH, 0);
         assert_eq!(c.up, 0);
+    }
+
+    #[test]
+    fn c_while_crouched_stays_crouched() {
+        let mut i = PlayInput::default();
+        for t in [100, 108] {
+            i.key(Action::Crouch, true);
+            i.key(Action::Crouch, false);
+            assert_ne!(i.build(t, &held(10)).wbuttons & msg::WBUTTON_CROUCH, 0);
+        }
+    }
+
+    #[test]
+    fn ctrl_while_prone_stays_prone() {
+        let mut i = PlayInput::default();
+        for t in [100, 108] {
+            i.key(Action::Prone, true);
+            i.key(Action::Prone, false);
+            assert_ne!(i.build(t, &held(10)).wbuttons & msg::WBUTTON_PRONE, 0);
+        }
+    }
+
+    #[test]
+    fn c_and_ctrl_switch_between_crouch_and_prone() {
+        let mut i = PlayInput::default();
+        i.key(Action::Prone, true);
+        i.key(Action::Prone, false);
+        i.key(Action::Crouch, true);
+        let c = i.build(100, &held(10));
+        assert_eq!(
+            c.wbuttons & (msg::WBUTTON_CROUCH | msg::WBUTTON_PRONE),
+            msg::WBUTTON_CROUCH
+        );
     }
 
     #[test]

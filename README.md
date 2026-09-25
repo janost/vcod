@@ -227,8 +227,8 @@ which retail binds to `toggle cl_run` and vcod uses for the sight.
 |---|---|
 | W / A / S / D | Move forward / left / back / right |
 | Space | Stand up from crouch or prone; jump when standing |
-| C | Toggle crouch |
-| Ctrl | Toggle prone |
+| C | Crouch |
+| Ctrl | Prone |
 | Q / E | Lean left / right (held) |
 | LMB | Fire (semi-automatic weapons fire once per click) |
 | RMB | Aim down the sight (held) |
@@ -240,7 +240,7 @@ which retail binds to `toggle cl_run` and vcod uses for the sight.
 | Tab | Scoreboard (held) |
 
 The position comes from the server and is not predicted yet. As a
-spectator, Space rises while held and C sinks until pressed again. A map
+spectator, Space rises while held and C sinks until Space is pressed. A map
 change on the server shows a loading screen (and downloads missing paks the
 way the connect does) and continues on the new map.
 

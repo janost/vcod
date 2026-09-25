@@ -1247,7 +1247,7 @@ impl App {
     }
 
     /// On grab release or focus loss, so no held key stays latched. Prone
-    /// stays, it is a stance toggle. The scoreboard drops, Tab is held too.
+    /// and the `--connect` stance stay, neither is a held key. The scoreboard drops, Tab is held too.
     fn clear_held_keys(&mut self) {
         match &mut self.mode {
             Mode::Fly(_) => self.input = InputState::default(),
@@ -1389,7 +1389,7 @@ impl ApplicationHandler for App {
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
-                // auto-repeat would retrigger the jump and the prone toggle
+                // auto-repeat would retrigger the jump and walk's prone toggle
                 if event.repeat {
                     return;
                 }
