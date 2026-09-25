@@ -25,7 +25,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use vcod_common::pk3::Pk3Fs;
-use vcod_common::{bsp, collision, mesh, net, pmove, props, skeleton, weapon, xanim, xmodel};
+use vcod_common::{bsp, collision, mesh, net, pmove, props, weapon, xmodel};
 
 use camera::{FlyCamera, InputState};
 use renderer::{DynamicModelInstance, Renderer};
@@ -387,7 +387,7 @@ enum Mode {
         motion: viewmodel::ViewmodelMotion,
         /// `None` when the anims failed to load; the viewmodel then draws
         /// statically. Boxed to keep the variants a similar size.
-        view_weapon: Option<Box<ViewWeapon>>,
+        view_weapon: Option<Box<viewmodel::ViewWeapon>>,
         /// Minimal configstring table so weapon cues resolve through the same
         /// path as `--connect`: CS 7 carries [`WALK_LOADOUT`].
         configstrings: Vec<String>,
@@ -405,15 +405,6 @@ enum Mode {
         reload_edge: bool,
         ads_held: bool,
     },
-}
-
-struct ViewWeapon {
-    skeleton: skeleton::Skeleton,
-    pose: skeleton::PoseBuffer,
-    state: weapon::WeaponState,
-    def: weapon::WeaponDef,
-    /// Missing entries fall back to Idle's clip.
-    anims: HashMap<weapon::WeaponAnim, (xanim::XAnim, skeleton::AnimBinding)>,
 }
 
 /// Held movement keys, folded into `PmInput`'s float axes once per frame.
@@ -767,7 +758,7 @@ fn main() -> Result<()> {
     };
 
     let (viewmodel, view_weapon) = if args.walk && net_client.is_none() {
-        load_view_weapon(&fs, "kar98k_mp").unwrap_or_else(|| {
+        viewmodel::load_view_weapon(&fs, "kar98k_mp").unwrap_or_else(|| {
             log::warn!("no viewmodel; walking without one");
             (Vec::new(), None)
         })
@@ -1076,7 +1067,7 @@ fn walk_mode(
     map: &str,
     bsp: &bsp::Bsp,
     fs: &Pk3Fs,
-    view_weapon: Option<Box<ViewWeapon>>,
+    view_weapon: Option<Box<viewmodel::ViewWeapon>>,
 ) -> Result<Mode> {
     let Some((origin, yaw)) = bsp::find_spawn(&bsp.entities) else {
         bail!("map {map} has no player spawn; run without --walk to fly");
@@ -1127,79 +1118,6 @@ fn walk_mode(
         fire_held: false,
         reload_edge: false,
         ads_held: false,
-    })
-}
-
-/// Hands first so the gun draws over them and the shared skeleton takes the
-/// hands' bones as its base. `None` if a model is missing (walk mode then has
-/// no viewmodel); the inner `None` means the models loaded but the anims did not.
-fn load_view_weapon(
-    fs: &Pk3Fs,
-    name: &str,
-) -> Option<(Vec<xmodel::XModel>, Option<Box<ViewWeapon>>)> {
-    let text = fs.read(&format!("weapons/mp/{name}"))?;
-    let weapon = xmodel::parse_weapon(&String::from_utf8_lossy(&text));
-    let mut models = Vec::new();
-    for key in ["handModel", "gunModel"] {
-        let name = weapon.get(key)?;
-        match xmodel::load(fs, name) {
-            Ok(mut m) => {
-                if key == "handModel" {
-                    xmodel::apply_viewhands_placeholder_override(&mut m);
-                }
-                models.push(m);
-            }
-            Err(e) => {
-                log::warn!("viewmodel {name}: {e:#}");
-                return None;
-            }
-        }
-    }
-    let animated = load_anims(fs, &weapon, &models).map(Box::new);
-    Some((models, animated))
-}
-
-/// A clip that is unnamed or fails to load is skipped and its state plays
-/// idle. Without idle there is no fallback, so the rig is dropped and the
-/// viewmodel draws in bind pose.
-fn load_anims(
-    fs: &Pk3Fs,
-    weapon: &HashMap<String, String>,
-    models: &[xmodel::XModel],
-) -> Option<ViewWeapon> {
-    let [hands, gun] = models else {
-        return None;
-    };
-    // same order as set_viewmodel, so bone_sets[i] matches model i
-    let skeleton = skeleton::Skeleton::build(&[hands, gun]);
-
-    let mut anims = HashMap::new();
-    for which in weapon::WeaponAnim::ALL {
-        let key = which.key();
-        let Some(name) = weapon.get(key).map(|n| n.trim()).filter(|n| !n.is_empty()) else {
-            log::warn!("weapon: no {key}, that state will play idle");
-            continue;
-        };
-        match xanim::load(fs, name) {
-            Ok(anim) => {
-                let binding = skeleton.bind(&anim);
-                anims.insert(which, (anim, binding));
-            }
-            Err(e) => log::warn!("xanim {name} ({key}): {e:#}"),
-        }
-    }
-    if !anims.contains_key(&weapon::WeaponAnim::Idle) {
-        log::warn!("no idle anim loaded; drawing the viewmodel statically");
-        return None;
-    }
-
-    let def = weapon::WeaponDef::from_map(weapon);
-    Some(ViewWeapon {
-        pose: skeleton::PoseBuffer::new(&skeleton),
-        skeleton,
-        state: weapon::WeaponState::new(def.clone()),
-        def,
-        anims,
     })
 }
 
@@ -2164,7 +2082,7 @@ impl ApplicationHandler for App {
                         if let Some(slot) = switch_to.take() {
                             if slot != *weapon_slot && slot < WALK_LOADOUT.len() {
                                 let name = WALK_LOADOUT[slot];
-                                match load_view_weapon(&self.fs, name) {
+                                match viewmodel::load_view_weapon(&self.fs, name) {
                                     Some((models, vw)) => {
                                         r.set_viewmodel(&self.fs, &models);
                                         *reserve = vw.as_ref().map_or(0, |w| w.def.start_ammo);
@@ -2458,60 +2376,6 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Drives the real kar98k through the redraw loop's calls without a window.
-    /// Reaches idle, fire, rechamber, ADS up and ADS fire; not LastShot,
-    /// AdsDown or Reloading.
-    #[test]
-    fn real_kar98k_animates_through_a_fire_and_ads_cycle() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
-        let (models, view_weapon) = load_view_weapon(&fs, "kar98k_mp").expect("kar98k viewmodel");
-        assert_eq!(models.len(), 2);
-        let mut w = view_weapon.expect("kar98k anim rig");
-        assert!(
-            w.anims.contains_key(&weapon::WeaponAnim::Idle),
-            "the rig only exists when idle loaded"
-        );
-
-        // fire every 40th frame so the bolt cycle completes; ADS for the second half
-        let mut poses = Vec::new();
-        for step in 0..240 {
-            let out = w.state.update(
-                1.0 / 60.0,
-                weapon::WeaponInput {
-                    fire: step > 60 && step % 40 == 0,
-                    fire_held: false,
-                    ads: step > 120,
-                    reload: false,
-                },
-            );
-            let (anim, binding) = w
-                .anims
-                .get(&out.anim)
-                .or_else(|| w.anims.get(&weapon::WeaponAnim::Idle))
-                .unwrap_or_else(|| panic!("{:?} has no clip and no idle fallback", out.anim));
-            let frame = anim.frame_pos(out.anim_time, out.looping);
-            assert!(
-                frame.is_finite() && frame >= 0.0 && frame <= (anim.frame_count - 1) as f32,
-                "{:?} frame {frame} out of range",
-                out.anim
-            );
-            w.pose.apply(anim, binding, frame);
-            for (i, model) in models.iter().enumerate() {
-                let mats = w.pose.skin_matrices(&w.skeleton, i);
-                assert_eq!(mats.len(), model.bones.len(), "model {i} bone count");
-                assert!(mats.iter().all(|m| m.is_finite()), "model {i} step {step}");
-            }
-            poses.push(w.pose.skin_matrices(&w.skeleton, 1));
-        }
-        // a static rig would be a silent failure
-        assert!(
-            poses.iter().any(|p| p != &poses[0]),
-            "the gun never moved across 240 frames"
-        );
-    }
 
     /// Snapshots arrive at 20 Hz and the window redraws at 60 Hz, so render
     /// time must advance every frame, not per snapshot.
