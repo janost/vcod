@@ -63,20 +63,21 @@ fn tokenize(text: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        let c = bytes[i] as char;
-        if c.is_whitespace() {
+        // Byte tests only, all ASCII, so every slice boundary is a char boundary.
+        let c = bytes[i];
+        if c.is_ascii_whitespace() {
             i += 1;
-        } else if c == '#' || (c == '/' && bytes.get(i + 1) == Some(&b'/')) {
+        } else if c == b'#' || (c == b'/' && bytes.get(i + 1) == Some(&b'/')) {
             while i < bytes.len() && bytes[i] != b'\n' {
                 i += 1;
             }
-        } else if c == '/' && bytes.get(i + 1) == Some(&b'*') {
+        } else if c == b'/' && bytes.get(i + 1) == Some(&b'*') {
             i += 2;
             while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
                 i += 1;
             }
             i = (i + 2).min(bytes.len());
-        } else if c == '"' {
+        } else if c == b'"' {
             let start = i + 1;
             i += 1;
             while i < bytes.len() && bytes[i] != b'"' {
@@ -84,14 +85,14 @@ fn tokenize(text: &str) -> Vec<String> {
             }
             tokens.push(text[start..i].to_string());
             i += 1;
-        } else if c == '{' || c == '}' || c == ';' {
-            tokens.push(c.to_string());
+        } else if c == b'{' || c == b'}' || c == b';' {
+            tokens.push((c as char).to_string());
             i += 1;
         } else {
             let start = i;
             while i < bytes.len() {
-                let c = bytes[i] as char;
-                if c.is_whitespace() || c == '{' || c == '}' || c == ';' || c == '"' {
+                let c = bytes[i];
+                if c.is_ascii_whitespace() || matches!(c, b'{' | b'}' | b';' | b'"') {
                     break;
                 }
                 i += 1;
@@ -320,6 +321,14 @@ mod tests {
         parse("{ menuDef { itemDef {");
         let m = parse("{ menuDef { name \"x\"");
         assert_eq!(m.name, "x");
+    }
+
+    #[test]
+    fn non_ascii_text_tokenizes_without_panicking() {
+        // 0x85 and 0xA0 are UTF-8 continuation bytes that read as whitespace as a char.
+        assert_eq!(parse("{ menuDef { name à } }").name, "à");
+        parse("{ menuDef { itemDef { text Å } } }");
+        parse("{ menuDef { name\u{a0}\"x\" } }");
     }
 
     #[test]
