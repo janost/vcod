@@ -393,9 +393,12 @@ engineering setup works.
   a `!turret` line whenever the gun's entity changed, every drained event as
   `!event`, every bullet-impact temp entity as `!impact`, and every server
   command as `!server`. The gunner's own entity is never in its own snapshot,
-  so the axis probe's log is the only other view of it. The fixture is retail
-  evidence and a run against ours overwrites it: move it to `tmp/` and
-  `git checkout` the fixture directory after.
+  so the axis probe's log is the only other view of it.
+  `crates/server/tests/turret_ab.rs` replays its cmds on ours and diffs every
+  snapshot (`TURRET_REPORT=1` prints every row); how it pairs the two and
+  what its `GAPS` let through is `docs/research/cod11-turrets.md` 13.1. The
+  fixture is retail evidence and a run against ours overwrites it: move it to
+  `tmp/` and `git checkout` the fixture directory after.
   A plain `--net-probe` also prints every change to an entity's `pos`/`apos`
   trajectory group, which is the mover half of the same arrangement:
   `client-probes/probe_mover.gsc` under `run_probe.sh` in one shell calls each

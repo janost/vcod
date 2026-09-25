@@ -1015,9 +1015,13 @@ VERIFIED: `legsAnim` 32 is `standMG42_aim`, 33 `standMG42_fire`, 111
 `crates/common/src/animtree.rs` over the stock paks; 544 and 545 are 32 and
 33 with the 512 toggle bit.
 
-INFERRED: the use cmd runs when it arrives, and the probe's cmds arrive about
-18 ms behind their `serverTime` (the probe's `cmdLag`), so cmd 24736 ran after
-frame 24750 and cmd 38282 just before frame 38300. On the stand mount more
+VERIFIED, over every snapshot past `wait` where the asked view moves from one
+cmd to the next: the snapshot at `T` reads the view of the last cmd stamped
+below `T`, except the one at 30150, whose `delta_angles[0]` 10740 is
+`ANGLE2SHORT(40)` less the wire pitch of cmd 30132, not of cmd 30148.
+INFERRED: a cmd stamped in `[T - 50, T)` runs before frame `T` as a rule,
+and 30148 and the use cmd 24736 are the two that reached the server after
+their frame; cmd 38282 ran before frame 38300 by the rule. On the stand mount more
 cmds ran in the same frame after the mount, so pmove's stance step (0x316f4,
 section 5) and the mounted movetype had run before `ClientEndFrame`; on the
 crouch mount the use cmd was the frame's last, the animation step still chose
@@ -1373,3 +1377,78 @@ may carry 0xC000; no capture covers it.
   product rounds to 54 first.
 - A gun with no `stopFireSound` keeps its loop on through the frame the
   timer runs out, as section 6.4's `je` past the clear reads.
+
+### 13.1 The replay against the capture
+
+`crates/server/tests/turret_ab.rs` replays the fixture's cmds on ours and
+compares every `!trace` and `!turret` field, the drained events and the
+impacts, snapshot by snapshot; `TURRET_REPORT=1` prints every row. How it
+pairs the two:
+
+- Our frame that ran the cmds stamped in `[T - 50, T)` pairs with retail's
+  snapshot `T` (12.1). The two cmds 12.1 names as late, 24736 and 30148, go
+  to the frame after.
+- Each cmd goes out as the view retail's server built from it: its wire
+  angles plus `delta_angles` of retail's snapshot `T - 50`. `delta_angles`
+  and the gunner's own `eventSequence` are compared as their change from the
+  first pair, since the join leaves each side its own offset.
+- The rig numbers the clients as retail did, target 0 and gunner 1, so the
+  victim is numbered below its gunner on both (12.5).
+- Ours starts at retail's settled spot, to the fixture's 0.1 print.
+  VERIFIED: the `PROBE place` line reads y 1860.19 (script line 32) and
+  every pre-mount trace 1860.5 (fixture lines 42-90). INFERRED: retail's
+  landing from the placement ended 0.31 units off the spot, and no line of
+  the capture says why; our landing stays on the spot. Every
+  release teleports back to the mount spot, so the offset would ride through
+  every later phase.
+- Origins are compared to 0.25 units, `viewangles` to the print plus one
+  `ANGLE2SHORT` step, `angles2` to the print plus 0.01 degrees, impacts to one
+  unit per axis (they reach the wire truncated), the rest exactly.
+
+What the replay found, fixed: `G_TempEntity`'s truncation (section 8) now
+applies to every temp entity at the wire (`temp_entity::build`), so the
+fire phase's twenty impacts read retail's (1648, 1492, -31); the landing
+ladder reads the fall height and the land anim is gated on the landing speed
+and the legs timer (`cod11-sound-system.md`, "Landing"), so a release's
+one-unit drop lands in silence and keeps `pb_stand_alert`, as both releases
+read.
+
+What it lets through, each a `GAPS` line in the gate:
+
+- The stand mount's first snapshot, 24800: all of a tick's pmove steps run
+  before the per-cmd use pass, so the cmds after the use cmd run unmounted and
+  ours keeps the spot, `groundEntityNum` 1022 and `pb_stand_alert` for a
+  frame where retail is placed and plays `standMG42_aim`. Retail does that
+  only on the crouch mount, where the use cmd was the frame's last.
+- The target phase's second impact behind the target at 34900 and 34950:
+  the pass-through above.
+- The kill snapshot, 34950: VERIFIED (12.5), retail's carries the victim's
+  entity with the `EV_PAIN` (parm 47) the round before raised; INFERRED
+  (12.5), copied in the victim's own `ClientEndFrame` ahead of the gunner's. Ours builds entity states at the
+  snapshot and a dead client has none (`cod11-combat.md` 5.4), so that pain
+  never reaches the gunner.
+- The killing round's impact at 34950 lands about 4 units nearer the gun
+  along the ray than retail's (1517, 1612 against 1514, 1609). The victim was
+  knocked back by the round before, and neither half of the capture carries
+  its origin, so whether the knockback or the pose differs is open.
+- The crouch release's one-unit drop: at 38900 ours reads grounded 0.2 above
+  the floor (z -23.66), where VERIFIED (fixture lines 1431 and 1436) retail reads
+  `groundEntityNum` 1023 at the same printed height and 1022 at -23.9 on the
+  next snapshot; the hint and the legs follow
+  the ground. The stand release lands on the same snapshot on both, and the
+  capture holds one of each. Ours then stays 0.21 above the floor, inside the
+  origin tolerance.
+- The strafe's first footstep falls on 39500 on ours and 39600 on retail:
+  `bobCycle` is not in the capture and the join leaves each side its own.
+- The strafe slides along the nest wall into the sandbags' 52-degree face
+  at 39800 (brush normal z 0.614 in vcod's clip of mp_carentan). VERIFIED,
+  fixture lines 1512-1513: retail steps up it with `EV_STEP_VIEW` parm 139,
+  11 units; ours raises parm 142, 14 units, 2.5 units short. That is
+  unmounted pmove on a steep face, not the turret, and every origin after it,
+  the refused phase's included, carries the difference; the refused mount
+  itself (`viewlocked` 0 throughout) matches.
+
+The kill credit matches as well: after the replay, ours logs the same `D;`
+and `K;` records as script lines 33-34 once the client numbers and names are
+dropped, `m1carbine_mp` on the wound and `mg42_bipod_stand_mp` on the kill,
+53 and `torso_upper` on both.
