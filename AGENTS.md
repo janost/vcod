@@ -510,7 +510,8 @@ engineering setup works.
   anything else runs), then expired clients, then the bots queue their cmds,
   then the clock advances, then each client's queued usercmds (`replay_moves`,
   one pmove step per cmd, which is where the weapon machine queues a frame's
-  shots, swings and throws). Each cmd's origin, `pm_type`, `on_ground`, view
+  shots, swings and throws; a client's cmds after a use press wait for the
+  touch pass and run in a second round, so a mount lands inside the use cmd). Each cmd's origin, `pm_type`, `on_ground`, view
   yaw, buttons, the `ps.weapon` a move switched to and the `clipOnly` weapon a
   last round spent are recorded as it runs, and once every client has moved,
   each client's ammo and clip arrays are copied onto the host (`client_ammo`,

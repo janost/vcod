@@ -3113,199 +3113,230 @@ impl Server {
         let weapons = self.weapon_table.clone();
         let now_ms = self.sv_time_ms;
         let mut moved = vec![MoveSummary::default(); self.clients.len()];
-        let mut touched: Vec<Touched> = Vec::new();
-        for (slot, m) in moved.iter_mut().enumerate() {
-            let Some(c) = self.clients[slot].as_mut() else {
-                continue;
-            };
-            let Some(sim) = c.sim.as_mut() else {
-                continue;
-            };
-            // What the client held going in, so a switch the machine made is
-            // told apart from a playerstate reset between ticks.
-            let held = sim.ps.weapon;
-            let mut switched = false;
-            // Stale cmds (dt <= 0) are skipped whole; a long one is chopped
-            // rather than clamped away; a flood past the per-tick cap resyncs
-            // to the newest cmd and keeps only the tail.
-            let mut last_cmd = None::<UserCmd>;
-            // Every event the tick's moves raised, for the animation events:
-            // a tick that ran several moves still raises each one.
-            let mut events = Vec::new();
-            while !c.pending.is_empty() {
-                let cmd = c.pending[0];
-                if m.processed >= MAX_CMDS_PER_TICK {
-                    // The resync keeps the newest two cmds and sets the base
-                    // as if only the last replays, so the penultimate may
-                    // double-count one frame; harmless for flight.
-                    c.last_processed_st =
-                        c.pending.last().unwrap().server_time.wrapping_sub(FRAME_MS);
-                    c.pending.drain(..c.pending.len().saturating_sub(2));
-                    break;
-                }
-                c.pending.remove(0);
-                let dt_ms = cmd.server_time.wrapping_sub(c.last_processed_st);
-                if dt_ms <= 0 {
+        // Retail's use pass runs inside the cmd that pressed it (turrets doc
+        // 12.1), so a client's cmds after a use press wait for the touch pass
+        // and run in a second round: a mount lands before them, as retail's
+        // does.
+        let mut use_held: Vec<bool> = (0..self.clients.len())
+            .map(|slot| {
+                self.script.as_ref().is_some_and(|rt| {
+                    rt.client_old_buttons(slot) & vcod_common::net::msg::BUTTON_USE != 0
+                })
+            })
+            .collect();
+        loop {
+            let mut split = false;
+            let mut touched: Vec<Touched> = Vec::new();
+            for (slot, m) in moved.iter_mut().enumerate() {
+                let Some(c) = self.clients[slot].as_mut() else {
                     continue;
-                }
-                // A hitching client's gap is simulated, not discarded: retail
-                // walks `commandTime` up to the cmd's clock in steps of at most
-                // `MAX_FRAME_MS`, each its own `PmoveSingle`, and drops only
-                // the arrears past `MAX_PMOVE_ARREARS_MS`.
-                let mut base = c.last_processed_st;
-                if dt_ms > MAX_PMOVE_ARREARS_MS {
-                    base = cmd.server_time - MAX_PMOVE_ARREARS_MS;
-                }
-                // The aim block runs once per cmd, on the whole cmd, before
-                // the chop (`ClientThink_real` 0x40169-0x40456).
-                sim.update_aim(dt_ms, now_ms, weapons.defs());
-                let mut raised = Vec::new();
-                let mut take = None;
-                while base != cmd.server_time {
-                    let msec = (cmd.server_time - base).min(MAX_FRAME_MS as i32);
-                    base += msec;
-                    // Each step runs on a cmd stamped at its own end, which is
-                    // what the loop hands `PmoveSingle` (0x344e4) and what that
-                    // then leaves in `commandTime` (0x34074).
-                    let step = UserCmd {
-                        server_time: base,
-                        ..cmd
-                    };
-                    raised.extend(sim.step(&step, msec as f32 / 1000.0, collision, weapons.defs()));
-                }
-                for e in &raised {
-                    let weapon = sim.ps.weapon;
-                    let grenade = weapons
-                        .get(weapon as usize)
-                        .is_some_and(|d| d.weapon_type == "grenade");
-                    match e.event {
-                        // A grenade's fire event is the throw, and the parm
-                        // is what is left of the fuse (combat doc, 1.11).
-                        EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT if grenade => {
-                            self.pending_attacks.push(Attack::Throw {
-                                slot,
-                                weapon,
-                                fuse_left_ms: e.parm,
-                                aim: sim.aim_angles(),
-                            })
-                        }
-                        EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT => {
-                            self.pending_attacks.push(Attack::Shot(Shot {
-                                slot,
-                                weapon,
-                                ads: sim.ps.weapon_pos_frac == 1.0,
-                                aim: sim.aim_angles(),
-                            }))
-                        }
-                        EV_FIRE_MELEE => self.pending_attacks.push(Attack::Swing {
-                            slot,
-                            weapon,
-                            aim: sim.aim_angles(),
-                        }),
-                        _ => {}
+                };
+                let Some(sim) = c.sim.as_mut() else {
+                    continue;
+                };
+                // What the client held going in, so a switch the machine made is
+                // told apart from a playerstate reset between ticks.
+                let held = sim.ps.weapon;
+                let mut switched = false;
+                // Stale cmds (dt <= 0) are skipped whole; a long one is chopped
+                // rather than clamped away; a flood past the per-tick cap resyncs
+                // to the newest cmd and keeps only the tail.
+                let mut last_cmd = None::<UserCmd>;
+                // Every event the tick's moves raised, for the animation events:
+                // a tick that ran several moves still raises each one.
+                let mut events = Vec::new();
+                while !c.pending.is_empty() {
+                    let cmd = c.pending[0];
+                    if m.processed >= MAX_CMDS_PER_TICK {
+                        // The resync keeps the newest two cmds and sets the base
+                        // as if only the last replays, so the penultimate may
+                        // double-count one frame; harmless for flight.
+                        c.last_processed_st =
+                            c.pending.last().unwrap().server_time.wrapping_sub(FRAME_MS);
+                        c.pending.drain(..c.pending.len().saturating_sub(2));
+                        break;
                     }
-                    // A `clipOnly` weapon with nothing left is taken away
-                    // (combat doc, 1.5 step 9), and 1.8's switch path then
-                    // takes `ps.weapon` to 0 on its own. Hung off the last
-                    // shot, not off `EV_NOAMMO`, which a dry trigger raises
-                    // too and keeps the weapon.
-                    if e.event == EV_FIRE_WEAPON_LASTSHOT {
-                        if let Some(def) = weapons.get(weapon as usize) {
-                            if def.clip_only && sim.ps.ammo[def.ammo_index] == 0 {
-                                take = Some(weapon);
+                    c.pending.remove(0);
+                    let dt_ms = cmd.server_time.wrapping_sub(c.last_processed_st);
+                    if dt_ms <= 0 {
+                        continue;
+                    }
+                    // A hitching client's gap is simulated, not discarded: retail
+                    // walks `commandTime` up to the cmd's clock in steps of at most
+                    // `MAX_FRAME_MS`, each its own `PmoveSingle`, and drops only
+                    // the arrears past `MAX_PMOVE_ARREARS_MS`.
+                    let mut base = c.last_processed_st;
+                    if dt_ms > MAX_PMOVE_ARREARS_MS {
+                        base = cmd.server_time - MAX_PMOVE_ARREARS_MS;
+                    }
+                    // The aim block runs once per cmd, on the whole cmd, before
+                    // the chop (`ClientThink_real` 0x40169-0x40456).
+                    sim.update_aim(dt_ms, now_ms, weapons.defs());
+                    let mut raised = Vec::new();
+                    let mut take = None;
+                    while base != cmd.server_time {
+                        let msec = (cmd.server_time - base).min(MAX_FRAME_MS as i32);
+                        base += msec;
+                        // Each step runs on a cmd stamped at its own end, which is
+                        // what the loop hands `PmoveSingle` (0x344e4) and what that
+                        // then leaves in `commandTime` (0x34074).
+                        let step = UserCmd {
+                            server_time: base,
+                            ..cmd
+                        };
+                        raised.extend(sim.step(
+                            &step,
+                            msec as f32 / 1000.0,
+                            collision,
+                            weapons.defs(),
+                        ));
+                    }
+                    for e in &raised {
+                        let weapon = sim.ps.weapon;
+                        let grenade = weapons
+                            .get(weapon as usize)
+                            .is_some_and(|d| d.weapon_type == "grenade");
+                        match e.event {
+                            // A grenade's fire event is the throw, and the parm
+                            // is what is left of the fuse (combat doc, 1.11).
+                            EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT if grenade => {
+                                self.pending_attacks.push(Attack::Throw {
+                                    slot,
+                                    weapon,
+                                    fuse_left_ms: e.parm,
+                                    aim: sim.aim_angles(),
+                                })
+                            }
+                            EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT => {
+                                self.pending_attacks.push(Attack::Shot(Shot {
+                                    slot,
+                                    weapon,
+                                    ads: sim.ps.weapon_pos_frac == 1.0,
+                                    aim: sim.aim_angles(),
+                                }))
+                            }
+                            EV_FIRE_MELEE => self.pending_attacks.push(Attack::Swing {
+                                slot,
+                                weapon,
+                                aim: sim.aim_angles(),
+                            }),
+                            _ => {}
+                        }
+                        // A `clipOnly` weapon with nothing left is taken away
+                        // (combat doc, 1.5 step 9), and 1.8's switch path then
+                        // takes `ps.weapon` to 0 on its own. Hung off the last
+                        // shot, not off `EV_NOAMMO`, which a dry trigger raises
+                        // too and keeps the weapon.
+                        if e.event == EV_FIRE_WEAPON_LASTSHOT {
+                            if let Some(def) = weapons.get(weapon as usize) {
+                                if def.clip_only && sim.ps.ammo[def.ammo_index] == 0 {
+                                    take = Some(weapon);
+                                }
                             }
                         }
                     }
-                }
-                events.extend(raised);
-                switched |= sim.ps.weapon != held;
-                touched.push(Touched {
-                    slot,
-                    origin: sim.origin(),
-                    buttons: cmd.buttons,
-                    pm_type: sim.wire_pm_type(),
-                    on_ground: sim.on_ground(),
-                    yaw: (sim.pm_type == crate::spectate::PmType::Normal)
-                        .then(|| sim.view_angles()[1]),
-                    weapon: switched.then_some(sim.ps.weapon),
-                    take,
-                    eye: sim.ps.view().eye.into(),
-                    view: sim.view_angles(),
-                    grenade_ms: sim.ps.grenade_time_left_ms,
-                    stance: sim.ps.stance,
-                });
-                last_cmd = Some(cmd);
-                c.last_processed_st = cmd.server_time;
-                m.first_cmd_st.get_or_insert(cmd.server_time);
-                m.last_cmd_st = Some(cmd.server_time);
-                m.last_buttons = Some(cmd.buttons);
-                m.processed += 1;
-            }
-            if sim.ps.weapon != held {
-                self.weapon_changes.push((slot, sim.ps.weapon));
-            }
-            // The animation the client should be playing, from the state the
-            // moves just produced and the input that produced it.
-            if let (Some(anims), Some(cmd)) = (self.anims.as_ref(), last_cmd) {
-                let index = sim.ps.weapon as usize;
-                let weapon = crate::items::item_name(index).unwrap_or_default();
-                let class = self.weapon_table.class(index);
-                sim.update_anims(
-                    &crate::spectate::AnimInputs {
-                        anims,
-                        weapon,
-                        weapon_class: class,
-                    },
-                    &cmd,
-                    self.sv_time_ms,
-                    &events,
-                    &mut self.rng,
-                );
-            }
-        }
-        // Retail runs the touch pass per usercmd inside `ClientThink_real`
-        // (0x405b3), right after the link; ours runs one pass per cmd here,
-        // where the script runtime is borrowable. The origin goes with it
-        // because the host's copy is only mirrored from the sim after the
-        // script frame, so the pass would otherwise test last tick's spot.
-        // The item half follows the trigger half on each cmd, and the use
-        // key after both.
-        if let Some(rt) = self.script.as_mut() {
-            // The ammo the touch pass reads, once per tick: the pass itself
-            // moves the host's copy as it grabs.
-            for (slot, c) in self.clients.iter().enumerate() {
-                if let Some(sim) = c.as_ref().and_then(|c| c.sim.as_ref()) {
-                    rt.set_client_ammo(slot, sim.ps.ammo, sim.ps.ammoclip);
-                }
-            }
-            for t in touched {
-                rt.set_client_origin(t.slot, t.origin);
-                if let Some(yaw) = t.yaw {
-                    rt.set_client_yaw(t.slot, yaw);
-                }
-                rt.set_client_pm_type(t.slot, t.pm_type);
-                rt.set_client_on_ground(t.slot, t.on_ground);
-                // Ahead of `weapon_changes`, which lands after the script
-                // frame: a grab tests `ps.weapon` as this cmd left it.
-                if let Some(w) = t.weapon {
-                    rt.set_client_weapon(t.slot, w);
-                }
-                // Retail takes it inside `PM_Weapon`, ahead of the touch.
-                if let Some(w) = t.take {
-                    rt.take_client_weapon(t.slot, w);
-                }
-                rt.set_client_grenade_ms(t.slot, t.grenade_ms);
-                rt.touch_triggers_with_buttons(t.slot, now_ms, t.buttons);
-                rt.item_pass(t.slot, t.buttons, t.eye, t.view);
-                // The mount lands inside the use cmd (turrets doc 12.1), so
-                // it reaches the sim before the next cmd's pass runs.
-                for (turret, stance, view) in
-                    rt.take_turret_mounts(t.slot, t.origin, t.stance, t.view)
-                {
-                    if let Some(sim) = self.clients[t.slot].as_mut().and_then(|c| c.sim.as_mut()) {
-                        crate::game::turret::mount_sim(sim, turret, stance, view);
+                    events.extend(raised);
+                    switched |= sim.ps.weapon != held;
+                    touched.push(Touched {
+                        slot,
+                        origin: sim.origin(),
+                        buttons: cmd.buttons,
+                        pm_type: sim.wire_pm_type(),
+                        on_ground: sim.on_ground(),
+                        yaw: (sim.pm_type == crate::spectate::PmType::Normal)
+                            .then(|| sim.view_angles()[1]),
+                        weapon: switched.then_some(sim.ps.weapon),
+                        take,
+                        eye: sim.ps.view().eye.into(),
+                        view: sim.view_angles(),
+                        grenade_ms: sim.ps.grenade_time_left_ms,
+                        stance: sim.ps.stance,
+                    });
+                    last_cmd = Some(cmd);
+                    c.last_processed_st = cmd.server_time;
+                    m.first_cmd_st.get_or_insert(cmd.server_time);
+                    m.last_cmd_st = Some(cmd.server_time);
+                    m.last_buttons = Some(cmd.buttons);
+                    m.processed += 1;
+                    let use_down = cmd.buttons & vcod_common::net::msg::BUTTON_USE != 0;
+                    let pressed = use_down && !use_held[slot];
+                    use_held[slot] = use_down;
+                    if pressed && self.script.is_some() && !c.pending.is_empty() {
+                        split = true;
+                        break;
                     }
                 }
+                if sim.ps.weapon != held {
+                    self.weapon_changes.push((slot, sim.ps.weapon));
+                }
+                // The animation the client should be playing, from the state the
+                // moves just produced and the input that produced it.
+                if let (Some(anims), Some(cmd)) = (self.anims.as_ref(), last_cmd) {
+                    let index = sim.ps.weapon as usize;
+                    let weapon = crate::items::item_name(index).unwrap_or_default();
+                    let class = self.weapon_table.class(index);
+                    sim.update_anims(
+                        &crate::spectate::AnimInputs {
+                            anims,
+                            weapon,
+                            weapon_class: class,
+                        },
+                        &cmd,
+                        self.sv_time_ms,
+                        &events,
+                        &mut self.rng,
+                    );
+                }
+            }
+            // Retail runs the touch pass per usercmd inside `ClientThink_real`
+            // (0x405b3), right after the link; ours runs one pass per cmd here,
+            // where the script runtime is borrowable. The origin goes with it
+            // because the host's copy is only mirrored from the sim after the
+            // script frame, so the pass would otherwise test last tick's spot.
+            // The item half follows the trigger half on each cmd, and the use
+            // key after both.
+            if let Some(rt) = self.script.as_mut() {
+                // The ammo the touch pass reads, once per tick: the pass itself
+                // moves the host's copy as it grabs.
+                for (slot, c) in self.clients.iter().enumerate() {
+                    if let Some(sim) = c.as_ref().and_then(|c| c.sim.as_ref()) {
+                        rt.set_client_ammo(slot, sim.ps.ammo, sim.ps.ammoclip);
+                    }
+                }
+                for t in touched {
+                    rt.set_client_origin(t.slot, t.origin);
+                    if let Some(yaw) = t.yaw {
+                        rt.set_client_yaw(t.slot, yaw);
+                    }
+                    rt.set_client_pm_type(t.slot, t.pm_type);
+                    rt.set_client_on_ground(t.slot, t.on_ground);
+                    // Ahead of `weapon_changes`, which lands after the script
+                    // frame: a grab tests `ps.weapon` as this cmd left it.
+                    if let Some(w) = t.weapon {
+                        rt.set_client_weapon(t.slot, w);
+                    }
+                    // Retail takes it inside `PM_Weapon`, ahead of the touch.
+                    if let Some(w) = t.take {
+                        rt.take_client_weapon(t.slot, w);
+                    }
+                    rt.set_client_grenade_ms(t.slot, t.grenade_ms);
+                    rt.touch_triggers_with_buttons(t.slot, now_ms, t.buttons);
+                    rt.item_pass(t.slot, t.buttons, t.eye, t.view);
+                    // The mount lands inside the use cmd (turrets doc 12.1), so
+                    // it reaches the sim before the next cmd's pass runs.
+                    for (turret, stance, view) in
+                        rt.take_turret_mounts(t.slot, t.origin, t.stance, t.view)
+                    {
+                        if let Some(sim) =
+                            self.clients[t.slot].as_mut().and_then(|c| c.sim.as_mut())
+                        {
+                            crate::game::turret::mount_sim(sim, turret, stance, view);
+                        }
+                    }
+                }
+            }
+            if !split {
+                break;
             }
         }
         // The state each player ended the tick in, mirrored onto the host for

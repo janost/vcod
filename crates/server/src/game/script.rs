@@ -474,6 +474,12 @@ impl ScriptRuntime {
         }
     }
 
+    /// The buttons of the last cmd `item_pass` saw from `slot`, which its
+    /// use edge is taken against.
+    pub fn client_old_buttons(&self, slot: usize) -> u8 {
+        self.host.client_old_buttons.get(slot).copied().unwrap_or(0)
+    }
+
     /// The item half of `G_TouchTriggers` and then `Cmd_Activate_f`, for one
     /// cmd (docs/research/cod11-items.md, sections 1 and 2): every item in
     /// the touch box, then, on the use key's rising edge, the one the aim

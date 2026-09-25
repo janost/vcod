@@ -858,6 +858,41 @@ fn a_mounted_player_plays_the_mg42_aim_and_fire_clauses() {
     );
 }
 
+/// The use pass runs inside the cmd that pressed it, so the frame's later
+/// cmd runs mounted and the first snapshot that reads the lock already has
+/// the body on the gun and the mounted anim, as retail's first stand-mount
+/// snapshot does (`docs/research/cod11-turrets.md` 12.1).
+#[test]
+fn the_first_locked_snapshot_is_already_placed() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let anims = PlayerAnims::load(&fs).unwrap();
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    let before = rig.hold(1);
+    assert_eq!(before.viewlocked, 0);
+    let h = rig.still();
+    let used = UserCmd {
+        buttons: h.buttons | BUTTON_USE,
+        ..h
+    };
+    let s = rig.frame([used, h]);
+    assert_eq!(
+        s.viewlocked, 1,
+        "the use frame's snapshot is the first locked one"
+    );
+    assert_eq!(s.ground, 1023);
+    assert_eq!(
+        s.legs_anim & !ANIM_TOGGLEBIT,
+        anims.wire_of("standMG42_aim").unwrap()
+    );
+    let moved = dist_xy(s.origin, [before.origin[0], before.origin[1]]);
+    assert!(moved > 1.0, "still at the mount spot: {:?}", s.origin);
+    assert!(dist_xy(s.origin, GUN_NEAR) < 60.0, "{:?}", s.origin);
+}
+
 // ------------------------------------------------------------ the retail gate
 //
 // The retail capture replayed on ours. `turret/mp_carentan-dm-turret.txt` is
@@ -893,9 +928,6 @@ const LATE: &[i32] = &[24736, 30148];
 /// Rows the diff lets through, each a substring of the rows it excuses and
 /// the reason, which `docs/research/cod11-turrets.md` 13 carries too.
 const GAPS: &[(&str, &str)] = &[
-    ("[mount] ground t=24800", SAME_TICK),
-    ("[mount] legs_anim t=24800", SAME_TICK),
-    ("[mount] origin t=24800", SAME_TICK),
     (
         "[target] event t=34900: retail only (174, 52, ",
         PASS_THROUGH,
@@ -945,9 +977,6 @@ const GAPS: &[(&str, &str)] = &[
     ("[refused] legs_anim t=40250", SANDBAG),
 ];
 
-const SAME_TICK: &str = "the cmds after the use cmd in the same tick run unmounted, so the \
-    stand mount's first snapshot keeps the stance and the spot it mounted from for a frame; \
-    retail does that only on its crouch mount, where the use cmd was the frame's last";
 const PASS_THROUGH: &str = "a round stops at the first player it hits: the rifle-bullet \
     pass-through that puts retail's second impact on the world behind the target is not \
     modelled";

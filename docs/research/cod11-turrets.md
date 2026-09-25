@@ -1315,8 +1315,9 @@ one the probe's cmds asked for.
 The mounted frame is `ScriptRuntime::turret_think_client` over
 `game::turret`'s `aim`, `fire_tick`, `loop_tick` and `muzzle`, run once per
 server frame for every gunner after the cursor hint, last in the server's
-`ClientEndFrame` pass. Body placement (section 7) runs between the aim and
-the fire: `vcod_common::turretpose::place_gunner` from the gunner's legs
+`ClientEndFrame` pass. A use press splits the client's cmds for the tick:
+the ones after it run once the touch pass has mounted it (13.1). Body
+placement (section 7) runs between the aim and the fire: `vcod_common::turretpose::place_gunner` from the gunner's legs
 anim, then the trace down onto the map's collision, then the origin and the
 body's yaw mirrored to script.
 
@@ -1409,7 +1410,18 @@ pairs the two:
   `ANGLE2SHORT` step, `angles2` to the print plus 0.01 degrees, the rest
   exactly, impacts included: both sides truncate them to whole units.
 
-What the replay found, fixed: `G_TempEntity`'s truncation (section 8) now
+What the replay found, fixed: the stand mount's first snapshot, 24800, kept
+the spot, `groundEntityNum` 1022 and `pb_stand_alert` on ours, where
+VERIFIED (fixture line 93) retail reads 1023, the placed origin and
+`legsAnim` 32, `standMG42_aim`. All of a tick's pmove steps ran before the
+per-cmd use pass, so the cmds after the use cmd ran unmounted. A client's
+cmds after a use press now wait for the touch pass and run in a second
+round, so the mount lands inside the use cmd as 12.1 reads, and the rig's
+`the_first_locked_snapshot_is_already_placed` pins it. The crouch mount,
+where the use cmd was the frame's last, still keeps the stance for a frame
+on both, and the gate compares those rows with no `GAPS` line.
+
+Also fixed: `G_TempEntity`'s truncation (section 8) now
 applies to every temp entity at the wire (`temp_entity::build`), so the
 fire phase's twenty impacts read retail's (1648, 1492, -31); the landing
 ladder reads the fall height and the land anim is gated on the landing speed
@@ -1419,12 +1431,6 @@ read.
 
 What it lets through, each a `GAPS` line in the gate:
 
-- The stand mount's first snapshot, 24800: all of a tick's pmove steps run
-  before the per-cmd use pass, so the cmds after the use cmd run unmounted and
-  ours keeps the spot, `groundEntityNum` 1022 and `pb_stand_alert` for a
-  frame where VERIFIED (fixture line 93) retail reads 1023, the placed
-  origin and `legsAnim` 32, `standMG42_aim`. Retail does that only on the
-  crouch mount, where the use cmd was the frame's last (12.1).
 - The target phase's second impact behind the target at 34900 and 34950:
   the pass-through above.
 - The kill snapshot, 34950: VERIFIED (12.5), retail's carries the victim's
@@ -1476,11 +1482,16 @@ gunner client third (`--net-probe 127.0.0.1:28990 --save-turret
 
 VERIFIED, D1: the use cmd (`buttons=64`) reaches the server and the very
 next snapshot already reads `viewlocked=1`, `viewlocked_entNum=298` and
-`eFlags=49176` (0xC018), matching retail's own first-mounted values. Body
-placement lands one frame later than that (`groundEntityNum` 1022 and the
-pre-mount origin on the viewlock-only frame, 1023 and the placed origin
-the frame after), reproducing the `GAPS` line in 13.1 exactly. The crouch
-mount does not show the gap: the first mounted frame already reads
+`eFlags=49176` (0xC018), matching retail's own first-mounted values. This
+run predates the round split in 13.1. Body placement landed two frames
+later: VERIFIED, `tmp/turret-ours.txt` lines 94 and 97 (40650 and 40700)
+read `viewlocked=1` with `groundEntityNum` 1022, the pre-mount origin and
+`legsAnim` 122, and line 101 (40750) reads 1023, the placed origin and 544.
+INFERRED: 40650 is the unmounted cmds after the use cmd, which the round
+split fixes, and 40700 a tick that ran no cmd at all, since the probe sent
+cmd 40700 at the same `ms` it read that snapshot; with no mounted pmove
+step the anim stays unmounted, and retail's placement needs one too (12.1).
+The crouch mount does not show the gap: the first mounted frame already reads
 `eFlags=49200` (0xC030) with the crouch held and `groundEntityNum` 1022,
 and the next reads `pm_flags` 262144, `eFlags=49168` (0xC010),
 `groundEntityNum` 1023 and the placed origin, field for field what 12.1
