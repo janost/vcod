@@ -66,6 +66,21 @@ impl Replay {
             .push_back((self.pred.command_time, ps.origin, ps.view_height()));
     }
 
+    /// Puts `old`'s results from before this replay's `commandTime` ahead of
+    /// its own, moved by the correction at that time, so the render clock
+    /// can still sit behind a snapshot that acked the cmds it is drawing.
+    fn carry_older(&mut self, old: &Replay) {
+        let (t, origin, height) = self.results[0];
+        let (old_origin, old_height) = old.sample(f64::from(t));
+        let (d_origin, d_height) = (origin - old_origin, height - old_height);
+        for &(rt, o, h) in old.results.iter().rev().filter(|e| e.0 < t) {
+            if self.results.len() == RESULTS {
+                break;
+            }
+            self.results.push_front((rt, o + d_origin, h + d_height));
+        }
+    }
+
     /// Origin and view height at cmd time `t`, linear between the two
     /// results around it and held at either end.
     fn sample(&self, t: f64) -> (Vec3, f32) {
@@ -163,11 +178,14 @@ impl Predictor {
             self.max_correction = 0.0;
             self.log_ms = now_ms;
         }
-        if matches!(&self.replay, Some(r) if r.snap == *ps) {
-            let r = self.replay.as_mut().expect("matched above");
+        // Brought up to this frame's cmds first even when a new snapshot
+        // replaces it: that one carries its older results over.
+        if let Some(r) = &mut self.replay {
             let n = r.run(ring, world, weapons, |_| {});
             self.count(n);
-        } else if !self.replay_snapshot(p, ps, ring, world, weapons, now_ms) {
+        }
+        let unchanged = self.replay.as_ref().is_some_and(|r| r.snap == *ps);
+        if !unchanged && !self.replay_snapshot(p, ps, ring, world, weapons, now_ms) {
             return None;
         }
         let r = self.replay.as_ref().expect("replayed above");
@@ -225,6 +243,9 @@ impl Predictor {
             .next()
             .filter(|c| c.server_time == command_time);
         let mut r = Replay::new(ps, predict::from_wire(p, ps, last_cmd));
+        if let Some(old) = &self.replay {
+            r.carry_older(old);
+        }
 
         // Last frame's prediction against this one's at the same cmd: the
         // correction the snapshot brought.
@@ -549,5 +570,92 @@ mod tests {
         assert_eq!(xs[..20], even[..20]);
         assert!(xs[1..].windows(2).all(|w| w[1] >= w[0]), "{xs:?}");
         assert!(xs[30..].windows(2).all(|w| w[1] > w[0]), "{xs:?}");
+    }
+
+    /// `pred` as the server would send it, for the fields a flat run reads.
+    fn wire(pred: &Predicted) -> msg::PlayerState {
+        let ps = &pred.ps;
+        let mut w = standing(pred.command_time, ps.origin.x);
+        for i in 0..3 {
+            set(
+                &mut w,
+                &format!("origin[{i}]"),
+                ps.origin[i].to_bits() as i32,
+            );
+            set(
+                &mut w,
+                &format!("velocity[{i}]"),
+                ps.velocity[i].to_bits() as i32,
+            );
+        }
+        set(&mut w, "groundEntityNum", ps.ground_entity_num() as i32);
+        set(
+            &mut w,
+            "viewHeightCurrent",
+            ps.view_height().to_bits() as i32,
+        );
+        set(&mut w, "bobCycle", i32::from(ps.bob_cycle));
+        set(&mut w, "movementDir", ps.movement_dir & 0xff);
+        w
+    }
+
+    /// A forward run at `hz` local fps with a snapshot every 50 ms that
+    /// acks all but the newest `unacked` cmds, taken off a reference run of
+    /// the same cmds. Returns the drawn x per frame.
+    fn walk_acked(hz: f64, frames: usize, unacked: usize) -> Vec<f32> {
+        let world = test_world(&[]);
+        let first = standing(5000, 0.0);
+        let mut truth = vec![predict::from_wire(P, &first, None)];
+        let mut snap = first;
+        let mut clock = super::super::cmds::CmdClock::default();
+        let mut r = CmdRing::default();
+        let mut pr = Predictor::default();
+        (0..frames)
+            .map(|k| {
+                let local = k as f64 * 1000.0 / hz;
+                for t in clock.due(5000 + local as i32) {
+                    let cmd = UserCmd {
+                        server_time: t,
+                        forward: 127,
+                        ..Default::default()
+                    };
+                    r.push(cmd);
+                    let mut next = *truth.last().unwrap();
+                    predict::run_cmd(&mut next, &cmd, &world, &[]);
+                    truth.push(next);
+                }
+                let prev_local = (k as f64 - 1.0) * 1000.0 / hz;
+                if k > 0 && (local / 50.0).floor() != (prev_local / 50.0).floor() {
+                    snap = wire(&truth[truth.len().saturating_sub(1 + unacked)]);
+                }
+                pr.predict(P, &snap, &r, &world, &[], local)
+                    .unwrap()
+                    .origin
+                    .x
+            })
+            .collect()
+    }
+
+    fn step_range(xs: &[f32]) -> (f32, f32) {
+        xs.windows(2)
+            .map(|w| w[1] - w[0])
+            .fold((f32::MAX, f32::MIN), |(lo, hi), d| (lo.min(d), hi.max(d)))
+    }
+
+    /// A snapshot that acks the newest cmd, or all but one, puts its
+    /// `commandTime` inside the render clock's window; the camera still
+    /// moves evenly across it.
+    #[test]
+    fn a_snapshot_inside_the_render_window_does_not_jump() {
+        for unacked in [0, 1, 3] {
+            let xs = walk_acked(60.0, 120, unacked);
+            let (lo, hi) = step_range(&xs[60..]);
+            assert!(lo > 1.0 && hi - lo < 0.01, "unacked {unacked}: {lo}..{hi}");
+            let xs = walk_acked(144.0, 300, unacked);
+            assert!(
+                xs[20..].windows(2).all(|w| w[1] > w[0]),
+                "unacked {unacked}: {xs:?}"
+            );
+        }
     }
 }
