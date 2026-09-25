@@ -130,7 +130,7 @@ pub fn text(
 /// Draws `elems` in retail's order: sorted by `sort`, stably, so pass the
 /// archived array first and the current one after it. `fonts` are the
 /// `default`, `bigfixed` and `smallfixed` slots; no fixed-font atlas ships,
-/// so pass the default font for those.
+/// so the caller passes loaded proportional fonts for those.
 pub fn build(
     elems: &[HudElem],
     configstrings: &[String],

@@ -3860,9 +3860,8 @@ fn hud_texture_path(name: &str, image_map: &HashMap<String, String>, fs: &Pk3Fs)
     }
 }
 
-/// HUD names resolve through the shader-script material map before falling
-/// back to a bare pk3 path, so `hudStanceStand`/`hintHealth` find their first
-/// stage's image. Unresolvable names warn once; the caller caches the `None`.
+/// The bind group for a HUD texture name ([`hud_texture_path`]). Unresolvable
+/// names warn once; the caller caches the `None`.
 fn resolve_hud_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

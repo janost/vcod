@@ -798,8 +798,8 @@ archived array then the current one, each stopping at its first `type` 0,
 and it is what `qsort` sorts. INFERRED, off the comparator's compare: the
 order is ascending by `sort`. INFERRED, off `0x3001f980`'s loop: the elements
 are drawn in that order.
-`qsort` is not stable, so the order of two elements with equal `sort` is
-unspecified; vcod sorts stably, archived first, which is one of the orders
+INFERRED: the CRT `qsort` makes no stability promise, so the order of two
+elements with equal `sort` is unspecified; vcod sorts stably, archived first, which is one of the orders
 retail can produce.
 
 ### Font slots
@@ -1143,6 +1143,18 @@ turned by the view yaw less the slot's yaw, with alpha
 behind. VERIFIED: the centre is `0x300695e4` (320.0) and `0x300695e0`
 (240.0). The sense of the turn is inferred from that geometry, not measured.
 
+### What vcod does not draw
+
+| Retail piece | Where | vcod |
+|---|---|---|
+| The followed player's native HUD | the playerstate a follower is sent is the followed player's | hidden while following; hudelems still drawn |
+| Compass friendlies | `hud.menu` item `compassfrieldlies`, `CG_PLAYER_COMPASS_FRIENDS` | not drawn |
+| Weapon mode icon | ownerdraw 83, `modeIcon` (`+0x190`) | not drawn |
+| Stance flash | `hudStanceFlash`, `0x30023f50` | not drawn |
+| Turret reticle | `0x30016610` | no crosshair on a mounted gun |
+| Sight overlay | `0x30015fe0` | not drawn; its alpha factor taken as 1 |
+| Compass spring, damage-icon jitter, `adsAimPitch`, shared ammo caps | above | left out, each noted above |
+| Fixed-width fonts | section 8, "Font slots" | drawn and measured with a loaded proportional font |
 
 ---
 

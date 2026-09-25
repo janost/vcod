@@ -332,6 +332,14 @@ These work in every mode:
   ([docs/research/cod11-turrets.md](docs/research/cod11-turrets.md)). The
   vcod client does not draw them yet -- it renders the gun's `eType` (11) as
   nothing.
+- The player HUD leaves out a few retail pieces: the followed player's
+  health, ammo and compass while following (only the script's HUD elements
+  are drawn then), friendly players on the compass, the weapon mode icon,
+  the stance-change flash, the mounted gun's own reticle (no crosshair is
+  drawn on a mounted gun), and the fixed-width fonts, which draw in the
+  proportional HUD font instead
+  ([docs/research/cod11-hud-protocol.md](docs/research/cod11-hud-protocol.md),
+  section 9).
 - Walk-mode bullet impacts resolve per surface through `fx/iw_impacts.csv`
   like spectate does, plus tracers. No penetration, grenades or projectiles.
 - Walk mode carries six weapons on keys 1-6 (colt, thompson, mp40, mp44,
