@@ -1,7 +1,107 @@
-//! Walk bob and mouse sway for the first-person weapon rig. Pure math, no
-//! rendering or windowing types.
+//! The first-person weapon rig: loading the hands, gun and clips, and the
+//! walk bob and mouse sway. No rendering or windowing types.
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
+use std::collections::HashMap;
+use vcod_common::pk3::Pk3Fs;
+use vcod_common::{skeleton, weapon, xanim, xmodel};
+
+pub struct ViewWeapon {
+    pub skeleton: skeleton::Skeleton,
+    pub pose: skeleton::PoseBuffer,
+    pub state: weapon::WeaponState,
+    pub def: weapon::WeaponDef,
+    /// Missing entries fall back to Idle's clip.
+    pub anims: HashMap<weapon::WeaponAnim, (xanim::XAnim, skeleton::AnimBinding)>,
+}
+
+/// Hands first so the gun draws over them and the shared skeleton takes the
+/// hands' bones as its base. `None` if a model is missing (walk mode then has
+/// no viewmodel); the inner `None` means the models loaded but the anims did not.
+pub fn load_view_weapon(
+    fs: &Pk3Fs,
+    name: &str,
+) -> Option<(Vec<xmodel::XModel>, Option<Box<ViewWeapon>>)> {
+    load_view_weapon_with_hands(fs, name, None)
+}
+
+/// [`load_view_weapon`] with `hands_model` in place of the file's
+/// `handModel`: retail draws the hands `ps.viewmodelIndex` names
+/// (docs/research/cod11-gsc-object-model.md, "`setViewmodel` reaches
+/// `ps.viewmodelIndex`"). The `xmodel/` prefix is optional.
+pub fn load_view_weapon_with_hands(
+    fs: &Pk3Fs,
+    name: &str,
+    hands_model: Option<&str>,
+) -> Option<(Vec<xmodel::XModel>, Option<Box<ViewWeapon>>)> {
+    let text = fs.read(&format!("weapons/mp/{name}"))?;
+    let weapon = xmodel::parse_weapon(&String::from_utf8_lossy(&text));
+    let hands = match hands_model {
+        Some(h) => h.strip_prefix("xmodel/").unwrap_or(h),
+        None => weapon.get("handModel")?,
+    };
+    let mut models = Vec::new();
+    for (i, name) in [hands, weapon.get("gunModel")?].into_iter().enumerate() {
+        match xmodel::load(fs, name) {
+            Ok(mut m) => {
+                if i == 0 {
+                    xmodel::apply_viewhands_placeholder_override(&mut m);
+                }
+                models.push(m);
+            }
+            Err(e) => {
+                log::warn!("viewmodel {name}: {e:#}");
+                return None;
+            }
+        }
+    }
+    let animated = load_anims(fs, &weapon, &models).map(Box::new);
+    Some((models, animated))
+}
+
+/// A clip that is unnamed or fails to load is skipped and its state plays
+/// idle. Without idle there is no fallback, so the rig is dropped and the
+/// viewmodel draws in bind pose.
+pub fn load_anims(
+    fs: &Pk3Fs,
+    weapon: &HashMap<String, String>,
+    models: &[xmodel::XModel],
+) -> Option<ViewWeapon> {
+    let [hands, gun] = models else {
+        return None;
+    };
+    // same order as set_viewmodel, so bone_sets[i] matches model i
+    let skeleton = skeleton::Skeleton::build(&[hands, gun]);
+
+    let mut anims = HashMap::new();
+    for which in weapon::WeaponAnim::ALL {
+        let key = which.key();
+        let Some(name) = weapon.get(key).map(|n| n.trim()).filter(|n| !n.is_empty()) else {
+            log::debug!("weapon: no {key}, that state will play idle");
+            continue;
+        };
+        match xanim::load(fs, name) {
+            Ok(anim) => {
+                let binding = skeleton.bind(&anim);
+                anims.insert(which, (anim, binding));
+            }
+            Err(e) => log::warn!("xanim {name} ({key}): {e:#}"),
+        }
+    }
+    if !anims.contains_key(&weapon::WeaponAnim::Idle) {
+        log::warn!("no idle anim loaded; drawing the viewmodel statically");
+        return None;
+    }
+
+    let def = weapon::WeaponDef::from_map(weapon);
+    Some(ViewWeapon {
+        pose: skeleton::PoseBuffer::new(&skeleton),
+        skeleton,
+        state: weapon::WeaponState::new(def.clone()),
+        def,
+        anims,
+    })
+}
 
 /// Model space (X forward, Y left, Z up, tag_view at the eye) to view space
 /// (X right, Y up, -Z forward). A rotation, so one-sided winding survives.
@@ -96,6 +196,82 @@ impl Default for ViewmodelMotion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Drives the real kar98k through the redraw loop's calls without a window.
+    /// Reaches idle, fire, rechamber, ADS up and ADS fire; not LastShot,
+    /// AdsDown or Reloading.
+    #[test]
+    fn real_kar98k_animates_through_a_fire_and_ads_cycle() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let (models, view_weapon) = load_view_weapon(&fs, "kar98k_mp").expect("kar98k viewmodel");
+        assert_eq!(models.len(), 2);
+        let mut w = view_weapon.expect("kar98k anim rig");
+        assert!(
+            w.anims.contains_key(&weapon::WeaponAnim::Idle),
+            "the rig only exists when idle loaded"
+        );
+
+        // fire every 40th frame so the bolt cycle completes; ADS for the second half
+        let mut poses = Vec::new();
+        for step in 0..240 {
+            let out = w.state.update(
+                1.0 / 60.0,
+                weapon::WeaponInput {
+                    fire: step > 60 && step % 40 == 0,
+                    fire_held: false,
+                    ads: step > 120,
+                    reload: false,
+                },
+            );
+            let (anim, binding) = w
+                .anims
+                .get(&out.anim)
+                .or_else(|| w.anims.get(&weapon::WeaponAnim::Idle))
+                .unwrap_or_else(|| panic!("{:?} has no clip and no idle fallback", out.anim));
+            let frame = anim.frame_pos(out.anim_time, out.looping);
+            assert!(
+                frame.is_finite() && frame >= 0.0 && frame <= (anim.frame_count - 1) as f32,
+                "{:?} frame {frame} out of range",
+                out.anim
+            );
+            w.pose.apply(anim, binding, frame);
+            for (i, model) in models.iter().enumerate() {
+                let mats = w.pose.skin_matrices(&w.skeleton, i);
+                assert_eq!(mats.len(), model.bones.len(), "model {i} bone count");
+                assert!(mats.iter().all(|m| m.is_finite()), "model {i} step {step}");
+            }
+            poses.push(w.pose.skin_matrices(&w.skeleton, 1));
+        }
+        // a static rig would be a silent failure
+        assert!(
+            poses.iter().any(|p| p != &poses[0]),
+            "the gun never moved across 240 frames"
+        );
+    }
+
+    /// The nationality hands replace the file's `handModel`; the gun and the
+    /// clips still come from the weapon file.
+    #[test]
+    fn hands_override_replaces_the_file_hand_model() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let (own, _) = load_view_weapon(&fs, "m1carbine_mp").expect("carbine viewmodel");
+        let (us, rig) =
+            load_view_weapon_with_hands(&fs, "m1carbine_mp", Some("xmodel/viewmodel_hands_us"))
+                .expect("carbine with the US hands");
+        assert_eq!(us.len(), 2);
+        // The hand files share one mesh and differ in their sleeve skins.
+        assert_ne!(
+            us[0].materials, own[0].materials,
+            "hands must come from the override"
+        );
+        assert!(us[0].materials.iter().any(|m| m == "viewsleeves_new.tga"));
+        assert_eq!(us[1].lod, own[1].lod, "the gun stays the file's");
+        assert!(rig.is_some_and(|w| w.anims.contains_key(&weapon::WeaponAnim::Idle)));
+    }
 
     #[test]
     fn bob_advances_only_when_moving_on_ground() {

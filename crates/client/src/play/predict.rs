@@ -28,8 +28,7 @@ pub struct PredictedView {
     pub view_height: f32,
     /// Raw 16-bit wire values, the prone cone's push included.
     pub delta_angles: [i32; 3],
-    /// Read by nothing yet; the predicted events are stage 4's.
-    #[allow(dead_code)]
+    /// The replayed state at the newest cmd, for the viewmodel.
     pub pred: Predicted,
 }
 

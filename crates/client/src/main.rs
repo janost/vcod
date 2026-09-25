@@ -25,7 +25,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use vcod_common::pk3::Pk3Fs;
-use vcod_common::{bsp, collision, mesh, net, pmove, props, skeleton, weapon, xanim, xmodel};
+use vcod_common::{bsp, collision, mesh, net, pmove, props, weapon, xmodel};
 
 use camera::{FlyCamera, InputState};
 use renderer::{DynamicModelInstance, Renderer};
@@ -345,6 +345,8 @@ struct LivePhase {
     weapons: Vec<Option<weapon::WeaponDef>>,
     scene: entities::EntityScene,
     events: net::events::EventTracker,
+    /// Our own ring's events already played off the prediction.
+    predicted_events: play::events::PredictedEvents,
     clock: ServerClock,
     last_loop_snap: Option<u32>,
 }
@@ -358,6 +360,7 @@ fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport
         weapons: vcod_common::weapon_table::from_configstring(fs, net.configstring(7)),
         scene: entities::EntityScene::new(),
         events: net::events::EventTracker::new(),
+        predicted_events: play::events::PredictedEvents::default(),
         clock: ServerClock::new(),
         last_loop_snap: None,
     }))
@@ -377,6 +380,8 @@ enum Mode {
         ring: play::cmds::CmdRing,
         /// Boxed to keep the variants a similar size.
         predictor: Box<play::predict::Predictor>,
+        /// Boxed to keep the variants a similar size.
+        view: Box<play::view::OnlineView>,
         phase: Phase,
         /// Boxed to keep the variants a similar size.
         join: Box<play::join::Join>,
@@ -394,7 +399,7 @@ enum Mode {
         motion: viewmodel::ViewmodelMotion,
         /// `None` when the anims failed to load; the viewmodel then draws
         /// statically. Boxed to keep the variants a similar size.
-        view_weapon: Option<Box<ViewWeapon>>,
+        view_weapon: Option<Box<viewmodel::ViewWeapon>>,
         /// Minimal configstring table so weapon cues resolve through the same
         /// path as `--connect`: CS 7 carries [`WALK_LOADOUT`].
         configstrings: Vec<String>,
@@ -412,15 +417,6 @@ enum Mode {
         reload_edge: bool,
         ads_held: bool,
     },
-}
-
-struct ViewWeapon {
-    skeleton: skeleton::Skeleton,
-    pose: skeleton::PoseBuffer,
-    state: weapon::WeaponState,
-    def: weapon::WeaponDef,
-    /// Missing entries fall back to Idle's clip.
-    anims: HashMap<weapon::WeaponAnim, (xanim::XAnim, skeleton::AnimBinding)>,
 }
 
 /// Held movement keys, folded into `PmInput`'s float axes once per frame.
@@ -775,7 +771,7 @@ fn main() -> Result<()> {
     };
 
     let (viewmodel, view_weapon) = if args.walk && net_client.is_none() {
-        load_view_weapon(&fs, "kar98k_mp").unwrap_or_else(|| {
+        viewmodel::load_view_weapon(&fs, "kar98k_mp").unwrap_or_else(|| {
             log::warn!("no viewmodel; walking without one");
             (Vec::new(), None)
         })
@@ -817,6 +813,7 @@ fn main() -> Result<()> {
                 clock: play::cmds::CmdClock::default(),
                 ring: play::cmds::CmdRing::default(),
                 predictor: Box::default(),
+                view: Box::default(),
                 phase: Phase::Connecting {
                     since: Instant::now(),
                 },
@@ -1084,7 +1081,7 @@ fn walk_mode(
     map: &str,
     bsp: &bsp::Bsp,
     fs: &Pk3Fs,
-    view_weapon: Option<Box<ViewWeapon>>,
+    view_weapon: Option<Box<viewmodel::ViewWeapon>>,
 ) -> Result<Mode> {
     let Some((origin, yaw)) = bsp::find_spawn(&bsp.entities) else {
         bail!("map {map} has no player spawn; run without --walk to fly");
@@ -1135,79 +1132,6 @@ fn walk_mode(
         fire_held: false,
         reload_edge: false,
         ads_held: false,
-    })
-}
-
-/// Hands first so the gun draws over them and the shared skeleton takes the
-/// hands' bones as its base. `None` if a model is missing (walk mode then has
-/// no viewmodel); the inner `None` means the models loaded but the anims did not.
-fn load_view_weapon(
-    fs: &Pk3Fs,
-    name: &str,
-) -> Option<(Vec<xmodel::XModel>, Option<Box<ViewWeapon>>)> {
-    let text = fs.read(&format!("weapons/mp/{name}"))?;
-    let weapon = xmodel::parse_weapon(&String::from_utf8_lossy(&text));
-    let mut models = Vec::new();
-    for key in ["handModel", "gunModel"] {
-        let name = weapon.get(key)?;
-        match xmodel::load(fs, name) {
-            Ok(mut m) => {
-                if key == "handModel" {
-                    xmodel::apply_viewhands_placeholder_override(&mut m);
-                }
-                models.push(m);
-            }
-            Err(e) => {
-                log::warn!("viewmodel {name}: {e:#}");
-                return None;
-            }
-        }
-    }
-    let animated = load_anims(fs, &weapon, &models).map(Box::new);
-    Some((models, animated))
-}
-
-/// A clip that is unnamed or fails to load is skipped and its state plays
-/// idle. Without idle there is no fallback, so the rig is dropped and the
-/// viewmodel draws in bind pose.
-fn load_anims(
-    fs: &Pk3Fs,
-    weapon: &HashMap<String, String>,
-    models: &[xmodel::XModel],
-) -> Option<ViewWeapon> {
-    let [hands, gun] = models else {
-        return None;
-    };
-    // same order as set_viewmodel, so bone_sets[i] matches model i
-    let skeleton = skeleton::Skeleton::build(&[hands, gun]);
-
-    let mut anims = HashMap::new();
-    for which in weapon::WeaponAnim::ALL {
-        let key = which.key();
-        let Some(name) = weapon.get(key).map(|n| n.trim()).filter(|n| !n.is_empty()) else {
-            log::warn!("weapon: no {key}, that state will play idle");
-            continue;
-        };
-        match xanim::load(fs, name) {
-            Ok(anim) => {
-                let binding = skeleton.bind(&anim);
-                anims.insert(which, (anim, binding));
-            }
-            Err(e) => log::warn!("xanim {name} ({key}): {e:#}"),
-        }
-    }
-    if !anims.contains_key(&weapon::WeaponAnim::Idle) {
-        log::warn!("no idle anim loaded; drawing the viewmodel statically");
-        return None;
-    }
-
-    let def = weapon::WeaponDef::from_map(weapon);
-    Some(ViewWeapon {
-        pose: skeleton::PoseBuffer::new(&skeleton),
-        skeleton,
-        state: weapon::WeaponState::new(def.clone()),
-        def,
-        anims,
     })
 }
 
@@ -1610,10 +1534,12 @@ impl ApplicationHandler for App {
                         clock: cmd_clock,
                         ring,
                         predictor,
+                        view,
                         phase,
                         join,
                         menu_view,
                     } => {
+                        let mut vm = None;
                         let events = net.pump();
                         let mut gamestate_ready = false;
                         for ev in &events {
@@ -1875,6 +1801,7 @@ impl ApplicationHandler for App {
                                         weapons,
                                         scene,
                                         events,
+                                        predicted_events,
                                         clock,
                                         last_loop_snap,
                                     } = &mut **live;
@@ -1981,6 +1908,28 @@ impl ApplicationHandler for App {
                                     if let Some(v) = &predicted {
                                         cam.pos = v.origin + Vec3::Z * v.view_height;
                                     }
+                                    let view_ps = net.snapshots().newest().and_then(|s| {
+                                        (!following && pmove::predict::predictable(pm_type)).then(
+                                            || match &predicted {
+                                                Some(v) => play::view::ViewPs::from_predicted(
+                                                    &v.pred,
+                                                    s.ps.field_i32(p, "viewmodelIndex"),
+                                                ),
+                                                None => play::view::ViewPs::from_snapshot(p, &s.ps),
+                                            },
+                                        )
+                                    });
+                                    if let Some(ps) = &view_ps {
+                                        if let Some(models) =
+                                            view.sync_rig(&self.fs, net.configstrings(), ps)
+                                        {
+                                            r.set_viewmodel(&self.fs, &models);
+                                            self.viewmodel = models;
+                                        }
+                                    }
+                                    let (vm_draw, fov) =
+                                        view.frame(weapons, view_ps.as_ref(), dt, local_ms);
+                                    vm = vm_draw;
                                     if !snapshot_view {
                                         let delta = match &predicted {
                                             Some(v) => v.delta_angles,
@@ -2004,15 +1953,19 @@ impl ApplicationHandler for App {
                                         audio::cues::ps_entity(ps_client),
                                     );
 
-                                    let (muzzle_pos, muzzle_dir) =
-                                        view_muzzle(cam.pos, cam_forward, cam_right, cam_up);
+                                    let (muzzle_pos, muzzle_dir) = view
+                                        .muzzle(cam.pos, (cam_forward, cam_right, cam_up), fov)
+                                        .unwrap_or_else(|| {
+                                            view_muzzle(cam.pos, cam_forward, cam_right, cam_up)
+                                        });
                                     muzzles.insert(u32::MAX, (muzzle_pos, muzzle_dir));
-                                    // While following, the followed player's bullet hits
-                                    // carry `other_entity_num == ps_client`, and that body
-                                    // is excluded from the muzzle map, so key the view
-                                    // muzzle under `ps_client` too or they get no tracer.
-                                    if following {
-                                        muzzles.insert(ps_client as u32, (muzzle_pos, muzzle_dir));
+                                    // Bullet hits carry the shooter's number in
+                                    // `other_entity_num`, and the body the camera rides
+                                    // (ours, or the followed player's) is excluded from
+                                    // the muzzle map, so key the view muzzle under it too
+                                    // or its shots get no tracer.
+                                    if let Ok(num) = u32::try_from(skip_num) {
+                                        muzzles.insert(num, (muzzle_pos, muzzle_dir));
                                     }
 
                                     r.set_dynamic_models(&instances);
@@ -2045,8 +1998,52 @@ impl ApplicationHandler for App {
                                         let ctx = fx::registry::ResolveCtx {
                                             muzzles: &muzzles,
                                             weapon_flash: &weapon_flash,
+                                            view_flash: vm.is_some().then_some(weapons.as_slice()),
                                         };
-                                        for ev in events.drain(newest, p) {
+                                        // Our own ring plays off the prediction, and
+                                        // the snapshot's copy of it is skipped. The
+                                        // frame we die or reach the intermission still
+                                        // skips the copies, then tracking stops.
+                                        let own = ps_client == client_num;
+                                        let predicting =
+                                            own && pmove::predict::predictable(pm_type);
+                                        let mut evs = Vec::new();
+                                        if !own {
+                                            predicted_events.stop();
+                                        } else if let Some(v) =
+                                            predicted.as_ref().filter(|_| predicting)
+                                        {
+                                            predicted_events.start_after(events.ps_sequence());
+                                            let pred = &v.pred;
+                                            evs.extend(
+                                                predicted_events
+                                                    .take_predicted(
+                                                        pred.event_sequence,
+                                                        pred.events,
+                                                        pred.event_parms,
+                                                    )
+                                                    .into_iter()
+                                                    .map(|(_, event, parm)| {
+                                                        play::events::game_event(
+                                                            pred, ps_client, event, parm,
+                                                        )
+                                                    }),
+                                            );
+                                        }
+                                        for (seq, ev) in events.drain_seq(newest, p) {
+                                            if own
+                                                && seq.is_some_and(|s| {
+                                                    !predicted_events.filter_snapshot(s, ev.event)
+                                                })
+                                            {
+                                                continue;
+                                            }
+                                            evs.push(ev);
+                                        }
+                                        if !predicting {
+                                            predicted_events.stop();
+                                        }
+                                        for ev in evs {
                                             self.ev_seen += 1;
                                             if let Some(hud) = &mut self.hud {
                                                 hud.on_game_event(&ev, &hud_frame);
@@ -2134,7 +2131,9 @@ impl ApplicationHandler for App {
                                     }
 
                                     renderer::Frame {
-                                        view_proj: cam.view_proj(aspect),
+                                        view_proj: camera::view_proj_from(
+                                            cam.pos, cam.yaw, cam.pitch, 0.0, fov, aspect,
+                                        ),
                                         eye: cam.pos,
                                         fwd: cam_forward,
                                         time,
@@ -2144,7 +2143,7 @@ impl ApplicationHandler for App {
                                 }
                             }
                         };
-                        (frame, None)
+                        (frame, vm)
                     }
                     Mode::Walk {
                         world,
@@ -2172,7 +2171,7 @@ impl ApplicationHandler for App {
                         if let Some(slot) = switch_to.take() {
                             if slot != *weapon_slot && slot < WALK_LOADOUT.len() {
                                 let name = WALK_LOADOUT[slot];
-                                match load_view_weapon(&self.fs, name) {
+                                match viewmodel::load_view_weapon(&self.fs, name) {
                                     Some((models, vw)) => {
                                         r.set_viewmodel(&self.fs, &models);
                                         *reserve = vw.as_ref().map_or(0, |w| w.def.start_ammo);
@@ -2310,6 +2309,7 @@ impl ApplicationHandler for App {
                                     let ctx = fx::registry::ResolveCtx {
                                         muzzles: &muzzles,
                                         weapon_flash: &HashMap::new(),
+                                        view_flash: None,
                                     };
                                     let ev = net::events::GameEvent {
                                         event: fx::registry::EV_BULLET_HIT_SMALL,
@@ -2445,7 +2445,10 @@ impl ApplicationHandler for App {
             let (dx, dy) = (dx as f32, dy as f32);
             match &mut self.mode {
                 Mode::Fly(cam) => cam.mouse_delta(dx, dy),
-                Mode::Online { input, .. } => input.mouse(dx, dy),
+                Mode::Online { input, view, .. } => {
+                    input.mouse(dx, dy);
+                    view.mouse(dx, dy);
+                }
                 Mode::Walk {
                     ps, mouse_delta, ..
                 } => {
@@ -2466,60 +2469,6 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Drives the real kar98k through the redraw loop's calls without a window.
-    /// Reaches idle, fire, rechamber, ADS up and ADS fire; not LastShot,
-    /// AdsDown or Reloading.
-    #[test]
-    fn real_kar98k_animates_through_a_fire_and_ads_cycle() {
-        let Some(fs) = vcod_common::testing::game_fs() else {
-            return;
-        };
-        let (models, view_weapon) = load_view_weapon(&fs, "kar98k_mp").expect("kar98k viewmodel");
-        assert_eq!(models.len(), 2);
-        let mut w = view_weapon.expect("kar98k anim rig");
-        assert!(
-            w.anims.contains_key(&weapon::WeaponAnim::Idle),
-            "the rig only exists when idle loaded"
-        );
-
-        // fire every 40th frame so the bolt cycle completes; ADS for the second half
-        let mut poses = Vec::new();
-        for step in 0..240 {
-            let out = w.state.update(
-                1.0 / 60.0,
-                weapon::WeaponInput {
-                    fire: step > 60 && step % 40 == 0,
-                    fire_held: false,
-                    ads: step > 120,
-                    reload: false,
-                },
-            );
-            let (anim, binding) = w
-                .anims
-                .get(&out.anim)
-                .or_else(|| w.anims.get(&weapon::WeaponAnim::Idle))
-                .unwrap_or_else(|| panic!("{:?} has no clip and no idle fallback", out.anim));
-            let frame = anim.frame_pos(out.anim_time, out.looping);
-            assert!(
-                frame.is_finite() && frame >= 0.0 && frame <= (anim.frame_count - 1) as f32,
-                "{:?} frame {frame} out of range",
-                out.anim
-            );
-            w.pose.apply(anim, binding, frame);
-            for (i, model) in models.iter().enumerate() {
-                let mats = w.pose.skin_matrices(&w.skeleton, i);
-                assert_eq!(mats.len(), model.bones.len(), "model {i} bone count");
-                assert!(mats.iter().all(|m| m.is_finite()), "model {i} step {step}");
-            }
-            poses.push(w.pose.skin_matrices(&w.skeleton, 1));
-        }
-        // a static rig would be a silent failure
-        assert!(
-            poses.iter().any(|p| p != &poses[0]),
-            "the gun never moved across 240 frames"
-        );
-    }
 
     /// Snapshots arrive at 20 Hz and the window redraws at 60 Hz, so render
     /// time must advance every frame, not per snapshot.

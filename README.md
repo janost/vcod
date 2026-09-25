@@ -35,10 +35,15 @@ combat effects.
   them. Your own movement and view are predicted: every cmd the server has
   not answered yet is replayed on the latest snapshot through the server's
   own movement step, so the view responds at the cmd rate (125 Hz) and a
-  correction eases out over 100 ms. It renders every player as an assembled
-  soldier playing the server-driven animations. Kill feed, chat, scoreboard,
-  sounds, tracers, impacts and muzzle flashes come from the same events the
-  retail client reads. It downloads every pak
+  correction eases out over 100 ms. Your own weapon is drawn in first
+  person with the hands the server names for your team, playing the clip
+  the predicted playerstate picks, and the sight zooms to the weapon's own
+  fov. Your fire, reload, switch, footstep and jump events play off the
+  prediction, the muzzle flash at the viewmodel's barrel, and are not
+  played again when the snapshot carrying them arrives. It renders every
+  player as an assembled soldier playing the server-driven animations.
+  Kill feed, chat, scoreboard, sounds, tracers, impacts and muzzle flashes
+  come from the same events the retail client reads. It downloads every pak
   the server references and the install lacks, the way the retail client
   does, so mod paks arrive along with the map's own.
 - `vcod-server` answers server browsers, accepts connections and hands out the
@@ -344,8 +349,13 @@ These work in every mode:
 - Audio fidelity is matched to the retail engine on paper (falloff, panning,
   channel replacement, ducking) but not yet confirmed by ear against the real
   game.
-- Footsteps are silent. They are not playerstate events, so they travel by
-  the entity path that does not exist yet.
+- Other players' footsteps are silent. They are not playerstate events, so
+  they travel by the entity path that does not exist yet. Your own
+  footsteps play off the prediction.
+- Against `vcod-server`, running while firing an automatic weapon can play a
+  shot's sound and flash twice. The server does not send `bobCycle` yet, so
+  the predicted footsteps drift from its own and shift the events after
+  them.
 - A prone body's pitch on sloped ground (`proneDirectionPitch`,
   `proneTorsoPitch`) is not modelled. Both are animation inputs, so they
   change how a prone body is drawn rather than how it moves, and no client
