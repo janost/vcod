@@ -1471,31 +1471,50 @@ dropped, `m1carbine_mp` on the wound and `mg42_bipod_stand_mp` on the kill,
 
 ### 13.2 The live run against ours
 
-A second run of the same recipe, live rather than replayed: `vcod-server`
-on mp_carentan (port 28990, `--gametype-script client-probes/probe_turret.gsc
+A second run of the same recipe, live rather than replayed, taken again on
+2026-09-25 after the round-split fix landed: `vcod-server` on mp_carentan
+(port 28990, `--gametype-script client-probes/probe_turret.gsc
 --set probe_teleport=1`), the axis client second
 (`--net-probe 127.0.0.1:28990 --probe-team axis --probe-secs 180`), the
 gunner client third (`--net-probe 127.0.0.1:28990 --save-turret
---probe-secs 170`), all on 2026-09-25. It overwrote the committed
-`mp_carentan-dm-turret.txt`; that capture moved to `tmp/turret-ours.txt` and
-`git checkout` restored the fixture directory, `git status` clean afterward.
+--probe-secs 170`). It overwrote the committed `mp_carentan-dm-turret.txt`;
+that capture moved to `tmp/turret-ours-2.txt` (the pre-fix run stays at
+`tmp/turret-ours.txt` for comparison) and `git checkout` restored the
+fixture directory, `git status` clean afterward.
 
 VERIFIED, D1: the use cmd (`buttons=64`) reaches the server and the very
 next snapshot already reads `viewlocked=1`, `viewlocked_entNum=298` and
-`eFlags=49176` (0xC018), matching retail's own first-mounted values. This
-run predates the round split in 13.1. Body placement landed two frames
-later: VERIFIED, `tmp/turret-ours.txt` lines 94 and 97 (40650 and 40700)
-read `viewlocked=1` with `groundEntityNum` 1022, the pre-mount origin and
-`legsAnim` 122, and line 101 (40750) reads 1023, the placed origin and 544.
-INFERRED: 40650 is the unmounted cmds after the use cmd, which the round
-split fixes, and 40700 a tick that ran no cmd at all, since the probe sent
-cmd 40700 at the same `ms` it read that snapshot; with no mounted pmove
-step the anim stays unmounted, and retail's placement needs one too (12.1).
-The crouch mount does not show the gap: the first mounted frame already reads
-`eFlags=49200` (0xC030) with the crouch held and `groundEntityNum` 1022,
-and the next reads `pm_flags` 262144, `eFlags=49168` (0xC010),
-`groundEntityNum` 1023 and the placed origin, field for field what 12.1
-reads for retail's crouch mount.
+`eFlags=49176` (0xC018), matching retail's own first-mounted values --
+unchanged from the pre-fix run. Body placement now lands one frame later
+instead of two: VERIFIED, `tmp/turret-ours-2.txt` line 88 is the use cmd
+(`st=36216`), line 93 (`serverTime=36250`, the very next snapshot) already
+reads `viewlocked=1` but keeps `groundEntityNum` 1022, the pre-mount origin
+and `legsAnim` 634, and line 97 (`serverTime=36300`, one 50 ms frame later)
+reads 1023, the placed origin and `legsAnim` 32. The round split closed the
+first of the two gap ticks the pre-fix run showed (12.1's `pb_stand_alert`
+mismatch, fixed per 13.1); the second cause 13.1 already named for that
+run -- "a tick that ran no cmd at all... with no mounted pmove step the
+anim stays unmounted, and retail's placement needs one too" -- still applies
+here and is now the whole of the gap: no cmd lands in the round that mounts
+the gun (the use tap is the only cmd that tick; the next cmd the client had
+already queued arrives too late over the wire to fall into that tick's
+second round), so `update_anims` cannot pick the mounted pose until the
+following tick's own cmd runs, and `turret_think_client`'s placement reads
+that same lagging `legs_anim()`. This is not a regression from 13.1's replay
+result: the replay feeds every post-use cmd at once, so its second round
+always has one to run in the same tick and places same-frame; a live client
+sending at the probe's default ~16 ms only sometimes has a second cmd queued
+by the time the mount's tick runs, and this capture is the case where it did
+not. INFERRED: retail's own capture (12.1) never shows this gap because its
+125 fps client (8 ms cmd spacing) has several cmds already queued whenever a
+server tick lands, so its second round is never empty. The crouch mount does
+not show the gap either, on this run or the last: the first mounted frame
+already reads `eFlags=49200` (0xC030) with the crouch held and
+`groundEntityNum` 1022, and the next reads `pm_flags` 262144, `eFlags=49168`
+(0xC010), `groundEntityNum` 1023 and the placed origin, field for field what
+12.1 reads for retail's crouch mount -- the same one-cmd-per-tick timing
+that leaves the stand mount's gap open happened not to trip the crouch one
+on either run.
 
 VERIFIED, D3: `angles2[1]` clamps at exactly -45.0/45.0 and `angles2[0]` at
 exactly -40.0/40.0 through the sweep, the same arc as section 2's stock
@@ -1556,4 +1575,8 @@ capsule-vs-box clip difference already predicts for that phase.
 
 No mismatch outside the `GAPS` list 13.1 already carries turned up in this
 run: every divergence found here is one of the six already named there,
-measured a second time on a fresh capture rather than a new finding.
+measured a second time on a fresh capture rather than a new finding. D1's
+one-tick lock-to-placement gap is not a seventh: 13.1 already named its
+cause (a tick with no cmd to run) as the half of the old two-tick gap the
+round split does not touch, and this run is that half on its own, not a
+regression from it.

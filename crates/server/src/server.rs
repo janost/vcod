@@ -3104,9 +3104,11 @@ impl Server {
 
     /// SV_UserMove for every client: one pmove step per queued usercmd, dt off
     /// the cmd clocks, matching the client's own prediction, then the anims the
-    /// resulting state implies. Returns what each slot replayed, for the trace
-    /// line `send_snapshots` writes. The shots, swings and throws the weapon
-    /// step took land in `pending_attacks`, which the combat path drains.
+    /// resulting state implies. A use press splits a client's remaining cmds
+    /// into a second round, run after the touch pass, so a mount lands inside
+    /// the use cmd. Returns what each slot replayed, for the trace line
+    /// `send_snapshots` writes. The shots, swings and throws the weapon step
+    /// took land in `pending_attacks`, which the combat path drains.
     fn replay_moves(&mut self) -> Vec<MoveSummary> {
         use vcod_common::pmove::weapon::{EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
         let collision = self.world.as_ref().map(|w| &w.collision);
@@ -3296,7 +3298,7 @@ impl Server {
             // The item half follows the trigger half on each cmd, and the use
             // key after both.
             if let Some(rt) = self.script.as_mut() {
-                // The ammo the touch pass reads, once per tick: the pass itself
+                // The ammo the touch pass reads, once per round: the pass itself
                 // moves the host's copy as it grabs.
                 for (slot, c) in self.clients.iter().enumerate() {
                     if let Some(sim) = c.as_ref().and_then(|c| c.sim.as_ref()) {
