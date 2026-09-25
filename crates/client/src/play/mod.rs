@@ -5,3 +5,6 @@ pub mod cvars;
 #[allow(dead_code)]
 pub mod cmds;
 pub mod join;
+// wired in by the Mode::Online task
+#[allow(dead_code)]
+pub mod input;
