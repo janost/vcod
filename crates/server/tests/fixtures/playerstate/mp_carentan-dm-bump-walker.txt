@@ -16,8 +16,11 @@
 # after the placement. !snap is the walker's playerstate per snapshot, stance from
 # pm_flags, with the target's entity: target= its pos.trBase, target_vel its
 # pos.trDelta, target_solid its packed solid. Floats are printed exactly.
+# BROKEN stand/jump landed on 1022, not on the target
 # the target's solid read 0 during crouch/jump (top byte Some(0), stance 82)
+# BROKEN crouch/jump landed on 1022, not on the target
 # the target's solid read 0 during prone/jump (top byte Some(0), stance 62)
+# BROKEN prone/jump landed on 1022, not on the target
 [phase settle]
 !station ms=0 origin=932,-376,-151.875 target=1132,-376,-151
 !cmd ms=16 st=26333 buttons=0 wbuttons=0 weapon=12 up=0 forward=0 right=0 angles=0,49152,0

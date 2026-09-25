@@ -1995,7 +1995,7 @@ fn step_slide_move(
         let reach = step + if ground_plane { step_size * 0.5 } else { 0.0 };
         let down = world.box_trace(ps.origin, ps.origin - Vec3::Z * reach, mins, maxs, mask);
         // A down pass that meets a player drops the step and the snap and
-        // keeps the plain slide (0x3533a; docs/research/cod11-player-clip.md).
+        // keeps the plain slide (0x3533a; docs/research/cod11-player-clip.md 2.3).
         if world.entity_num(&down) < MAX_CLIENTS {
             ps.origin = down_o;
             ps.velocity = down_v;
@@ -4459,7 +4459,7 @@ mod tests {
     fn lean_is_blocked_by_a_body() {
         // yaw 0's right vector is -Y, where lean_right swings the eye; a body
         // there should cut the lean short the way a wall does (INFERRED,
-        // PM_UpdateLean's 0x2810011 == MASK_PLAYERSOLID, docs/design/2026-09-25-player-clip-design.md).
+        // PM_UpdateLean's 0x2810011 == MASK_PLAYERSOLID, docs/research/cod11-player-clip.md 1.1).
         let w = flat();
         let bodies = [body(0.0, -35.0, 0.0)];
         let mw = MoveWorld::new(&w, &bodies, 0);

@@ -9,9 +9,7 @@ pub const CONTENTS_BODY: u32 = 0x2000000;
 pub const CONTENTS_CORPSE: u32 = 0x4000000;
 /// `ClientThink_real`'s mask for `pm_type` > 5, and `BG_CheckProneValid`'s.
 pub const MASK_DEADSOLID: u32 = 0x810011;
-/// How far a body hit stops short of the bare Minkowski radius, measured
-/// along the start point's normal (`cod_lnxded` 0x80cd424, 0x80cd428).
-/// Head-on stop 30.125 in all three target stances: `mp_carentan-dm-bump-walker.txt`, phases `stand/headon`, `crouch/headon`, `prone/headon`.
+/// A body hit's backoff along the start normal (docs/research/cod11-player-clip.md 2.2, 9.1).
 pub const BODY_RADIUS_EPS: f32 = 0.125;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -101,11 +99,7 @@ impl<'a> MoveWorld<'a> {
     }
 }
 
-/// Q3 `CM_TraceCapsuleThroughCapsule`: the Minkowski sum of two upright
-/// capsules is an upright capsule of the summed radius and summed segment
-/// half-lengths, so the sweep is the mover's centre ray against that
-/// capsule (two spheres and, when there is a vertical span left over, a
-/// cylinder). The two primitives are retail's own, not Q3's (below).
+/// The mover's centre swept through the Minkowski sum of the two capsules (docs/research/cod11-player-clip.md 2.2).
 fn clip_capsule(t: &mut Trace, start: Vec3, end: Vec3, mover: Capsule, hh_m: f32, b: &Body) {
     let c = start + mover.center;
     let c_end = end + mover.center;
@@ -122,9 +116,7 @@ fn clip_capsule(t: &mut Trace, start: Vec3, end: Vec3, mover: Capsule, hh_m: f32
     if h > 0.0 {
         trace_cylinder(t, c, c_end, o, r, h, b.entity);
     }
-    // The mover's own two sphere centres trace against the body's opposite
-    // sphere: the mover's bottom sphere sweeps past the body's top, and the
-    // mover's top sweeps past the body's bottom.
+    // Each mover sphere meets the body's opposite one: bottom on top, top on bottom.
     trace_sphere(t, c - mover.offset, c_end - mover.offset, top, r, b.entity);
     trace_sphere(
         t,
@@ -136,14 +128,7 @@ fn clip_capsule(t: &mut Trace, start: Vec3, end: Vec3, mover: Capsule, hh_m: f32
     );
 }
 
-/// Retail's cylinder trace (`cod_lnxded` 0x8055980): an infinite-height
-/// circle of radius `r` swept against a segment, clamped to the half height
-/// `h` about `o`. A start inside `r` is startsolid, and allsolid when the end
-/// is inside the z-span, whatever its xy; a move that is not closing on the
-/// axis, or whose line misses `r`, is not clipped at all; a hit must lie in
-/// the z-span at the raw root and is backed off `BODY_RADIUS_EPS` along the
-/// start point's normal, which is also the normal it reports
-/// (docs/research/cod11-player-clip.md).
+/// Retail's cylinder, `cod_lnxded` 0x8055980, half height `h` about `o` (docs/research/cod11-player-clip.md 2.2).
 fn trace_cylinder(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, h: f32, entity: u32) {
     let rel = (start - o).with_z(0.0);
     let c = rel.length_squared() - r * r;
@@ -165,8 +150,7 @@ fn trace_cylinder(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, h: f32
     t.hit = Some(Prim::Body(entity));
 }
 
-/// Retail's sphere trace (`cod_lnxded` 0x8055794): the cylinder's rules in
-/// three dimensions, a point swept against a sphere of radius `r` about `o`.
+/// Retail's sphere, `cod_lnxded` 0x8055794 (docs/research/cod11-player-clip.md 2.2).
 fn trace_sphere(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, entity: u32) {
     let rel = start - o;
     let c = rel.length_squared() - r * r;
@@ -187,11 +171,7 @@ fn trace_sphere(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, entity: 
     t.hit = Some(Prim::Body(entity));
 }
 
-/// The entry root of `|rel + delta f| = r`, raw and less the backoff, or
-/// `None` when the move is not closing (`rel . delta >= 0`, which a zero
-/// `delta` is) or its line misses the radius. `c` is `|rel|^2 - r^2`; the
-/// backed-off root may be negative, which the callers clamp to 0 after the
-/// fraction test.
+/// `(raw, backed off)` entry roots, `None` unless closing and hitting; the second may be negative.
 fn backed_off_root(rel: Vec3, delta: Vec3, c: f32) -> Option<(f32, f32)> {
     let b = rel.dot(delta);
     if b >= 0.0 {
@@ -206,10 +186,7 @@ fn backed_off_root(rel: Vec3, delta: Vec3, c: f32) -> Option<(f32, f32)> {
     Some((f0, f0 + BODY_RADIUS_EPS * rel.length() / b))
 }
 
-/// The start is inside the bare radius: fraction 0 with the start point's
-/// normal, and allsolid when the primitive's end test says so. pmove
-/// (`slide_move`/step-up) treats allsolid alone as fully stuck; a bare
-/// startsolid still clips at fraction 0 and lets the slide bump try a way out.
+/// A start inside the bare radius (docs/research/cod11-player-clip.md 2.2).
 fn set_startsolid(t: &mut Trace, entity: u32, rel: Vec3, end_inside: bool) {
     t.startsolid = true;
     t.fraction = 0.0;

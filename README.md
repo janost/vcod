@@ -317,10 +317,8 @@ These work in every mode:
   and still stop the player, but bullets pass them, as on a retail server.
 - Submodels (doors, exploding walls) collide by their brush hulls, but only
   as static geometry: no entity-driven movers, so there is nothing to ride.
-- Prediction runs on the map's collision only: players and movers do not
-  block the predicted player. `vcod-server` does not clip players against
-  each other either; on a retail server, walking into another player can
-  mispredict until the next snapshot corrects it.
+- Movers do not block the predicted player: prediction clips the map and the
+  other players only.
 - Mounted MGs are usable on the server: mount, aim within the arc, fire and
   dismount all replay retail's behavior
   ([docs/research/cod11-turrets.md](docs/research/cod11-turrets.md)). The

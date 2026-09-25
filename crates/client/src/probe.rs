@@ -8987,7 +8987,16 @@ impl BumpProbe {
             }
             BumpPhase::Back2 if nav_done(self) || nav_timeout => BumpPhase::JumpLine,
             BumpPhase::JumpLine if nav_done(self) || nav_timeout => BumpPhase::Jump,
-            BumpPhase::Jump if self.landed => BumpPhase::Land,
+            BumpPhase::Jump if self.landed => {
+                if self.target.map(|t| t.1 as i32) != Some(self.ground) {
+                    self.notes.push(format!(
+                        "# BROKEN {} landed on {}, not on the target",
+                        self.label(),
+                        self.ground
+                    ));
+                }
+                BumpPhase::Land
+            }
             BumpPhase::Jump if in_phase >= BUMP_JUMP_LIMIT => {
                 self.notes.push(format!(
                     "# BROKEN {} never landed (airborne {})",

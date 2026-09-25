@@ -376,10 +376,17 @@ carries the motion between snapshots instead of stepping to each one.
 `apos.trType` is 1 and `apos.trBase[1]` is the body yaw; a player entity
 carries no pitch.
 
-INFERRED: `solid` 6684943 decodes as `(maxs[2] + 32) << 16 | -mins[2] << 8 |
-half width`, which is 0x66 = 102 = 70 + 32, 0x01 and 0x0f = 15 -- the pmove box
-standing, one unit deep and 15 wide. One value against one known box, so the
-packing is a reading and not a measurement.
+`solid` is packed by `SV_LinkEntity` (cod_lnxded `0x80908b0`) as
+`(maxs.z + 32) << 16 | -mins.z << 8 | maxs.x`, each byte truncated and
+clamped to `[1, 255]`, and 0 unless `r.contents` holds 0x2000000 or 0x1.
+VERIFIED, the stores, the float 32.0 at `0x80d6648` and the compares against
+1 and 255; the branches are INFERRED. The server's player box starts at the
+feet, `mins.z` 0, so the middle byte is the clamp's 1, not a box one unit
+deep; a client decoding `mins.z = -zd` puts the box's floor one unit below
+the feet. VERIFIED, the player-clip capture: 6684943 standing, 5374223
+crouched and 4063503 prone, the packing of `maxs.z` 70, 50 and 30 with
+`maxs.x` 15. When it is written and what a client does with it is
+`docs/research/cod11-player-clip.md`, sections 4 and 5.
 
 `angles2[1]` is the player's `movementDir`. VERIFIED, out of the 1.1d game
 module `game.mp.i386.so`: `BG_PlayerStateToEntityStateExtrapolate` loads
@@ -1153,10 +1160,11 @@ Everything else holds: the huffman table, the svc/clc opcodes, netchan fragmenta
 
 ## What vcod's server does that retail does not
 
-Anti-abuse behaviour only; the wire format is unchanged (`crates/server/src/server.rs`).
+Anti-abuse behaviour, and one ordering difference; the wire format is unchanged (`crates/server/src/server.rs`).
 
 - Connectionless queries (`getinfo`, `getstatus`, `getchallenge`) and the out-of-band `disconnect` are rate limited the way ioquake3 does it: a per-source-address bucket (10 burst, one back per second, 1024 addresses tracked) and a global reply bucket (10 per 100 ms). Excess requests are dropped silently. Retail answers every one, which makes `getstatus` a reflection amplifier.
 - A netchan message is parsed in full (header checks, `serverId`, every command and every usercmd) before anything about the client is updated. Retail commits the sequence number, the address and the timeout stamp first, so one spoofed packet with a client's IP and qport and a huge sequence number stalls that client until it times out.
 - A `connect` that matches a live client's address and qport may replace it only when it carries that client's challenge, or when the slot has been silent for `sv_reconnectlimit` (3 s). Retail hands the slot over on the address match alone.
 - Challenges expire after 60 s.
+- Clients' moves run in slot order, not packet arrival order. Retail's `SV_UserMove` calls the game's `ClientThink` per cmd as each client's message is parsed (cod_lnxded `0x80872cb`; the call is VERIFIED, that it is `ClientThink` is INFERRED), so a player moves against wherever every earlier packet in the frame left the others. `replay_moves` runs each client's queued cmds at the tick, lowest slot first, so when two players close on each other within one frame, which of them stops against the other can differ (`docs/research/cod11-player-clip.md`, section 12).
 
