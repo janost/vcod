@@ -994,7 +994,7 @@ playerstate from the newest snapshot and replays every cmd it sent with a
 `serverTime` past that snapshot's `commandTime` through `pmove::predict`,
 which is the per-cmd step the server runs, the chop and the arrears bound
 included (`crates/client/src/play/predict.rs`). A history that no longer
-reaches back to `commandTime` draws the snapshot unpredicted rather than
+reaches back to `commandTime` draws the interpolated snapshots rather than
 replaying from the wrong base, and a correction a new snapshot brings is
 eased out over 100 ms. Retail's cgame registers the cvar for that as
 `cg_errordecay` with default `"100"`: the cvar-table entry at

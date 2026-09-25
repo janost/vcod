@@ -4,8 +4,8 @@
 //! `predictor_matches_the_server_step` runs a scripted cmd stream through
 //! `ClientSim` the way `replay_moves` does and, every fifth cmd, rebuilds the
 //! predictor from the playerstate the server would send, round-tripped
-//! through the wire codec, then runs the next cmds on both and compares them
-//! field for field. Same code on the same inputs, so everything is exact
+//! through the wire codec, then runs the next cmds on both and compares the
+//! fields prediction draws from. Same code on the same inputs, so everything is exact
 //! except what the wire itself narrows. The event ring's half,
 //! `predictor_ring_matches_the_server_step`, is ignored until `bobCycle`
 //! travels.

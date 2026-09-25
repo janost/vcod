@@ -34,11 +34,11 @@ combat effects.
   default binds, one usercmd per 8 ms as a 125 fps retail client builds
   them. Your own movement and view are predicted: every cmd the server has
   not answered yet is replayed on the latest snapshot through the server's
-  own movement step, so the view responds at frame rate and a correction
-  eases out over 100 ms. It renders
-  every player as an assembled soldier playing the server-driven animations.
-  Kill feed, chat, scoreboard, sounds, tracers, impacts and muzzle flashes
-  come from the same events the retail client reads. It downloads every pak
+  own movement step, so the view responds at the cmd rate (125 Hz) and a
+  correction eases out over 100 ms. It renders every player as an assembled
+  soldier playing the server-driven animations. Kill feed, chat, scoreboard,
+  sounds, tracers, impacts and muzzle flashes come from the same events the
+  retail client reads. It downloads every pak
   the server references and the install lacks, the way the retail client
   does, so mod paks arrive along with the map's own.
 - `vcod-server` answers server browsers, accepts connections and hands out the

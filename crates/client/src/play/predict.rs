@@ -242,13 +242,8 @@ impl Predictor {
     }
 }
 
-/// The brush models the stock map-load scripts take out of the clip before a
-/// client walks (AGENTS.md, "A submodel's brushes are in the clip only while
-/// its entity is linked"): `_gameobjects::main` `delete()`s every entity whose
-/// `script_gameobjectname` the gametype did not list, and `_load.gsc`
-/// `notsolid()`s every `script_brushmodel` carrying `script_exploder` with
-/// targetname `exploder` or `exploderchunk`. A triggered exploder's
-/// `solid()` later in the round is not seen here.
+/// The brush models the stock map-load scripts take out of the clip (AGENTS.md,
+/// "A submodel's brushes are in the clip only while its entity is linked").
 pub fn unlink_script_brushes(world: &CollisionWorld, entities: &str, gametype: &str) {
     let allowed: &[&str] = match gametype {
         "sd" => &["sd", "bombzone", "blocker"],

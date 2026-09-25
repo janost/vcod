@@ -822,6 +822,10 @@ never pasted decompiler output or disassembly listings.
   own, and `_load.gsc` is what `notsolid()`s the four on mp_depot, mp_powcamp
   and mp_rocket, so a builtin that writes the flag without touching the clip
   leaves three stock maps carrying collision retail does not.
+- `pmove/predict.rs` and `weapon_table.rs` in `vcod-common` are copies of
+  `ClientSim::step`, `replay_moves` and `WeaponTable::from_defs` until the
+  dedupe: change them together. `crates/server/tests/predict_ab.rs` is the
+  gate, and it needs the paks, so CI skips it.
 - A stock frag bounces off a live player rather than detonating on it.
   `fraggrenade_mp` spells `damage` 0, and retail's direct-hit `MOD_GRENADE`
   arm is gated on that field, so the contact applies the soft damping and the
