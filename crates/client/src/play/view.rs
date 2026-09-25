@@ -1,7 +1,6 @@
 //! The playing client's own first-person weapon: the rig for `ps.weapon`
 //! with the hands `ps.viewmodelIndex` names, posed from `ps.weapAnim`.
 
-use crate::entities::{split_weapon_list, weapon_name_for_index};
 use crate::renderer::VmDraw;
 use crate::viewmodel::{self, ViewWeapon, ViewmodelMotion};
 use glam::Vec3;
@@ -60,22 +59,32 @@ struct RigKey {
     hands: Option<String>,
 }
 
-/// `None` for weapon 0 or an index configstring 7 does not name: no
-/// viewmodel. Hands index 0 keeps the weapon file's own `handModel`.
-fn rig_key(configstrings: &[String], weapon: u8, viewmodel_index: i32) -> Option<RigKey> {
+/// The weapon file and hands model `ps` names, borrowed from the
+/// configstrings. `None` for weapon 0 or an index configstring 7 (1-based,
+/// empty tokens skipped as `entities::split_weapon_list` does) does not name:
+/// no viewmodel. Hands index 0 keeps the weapon file's own `handModel`.
+fn rig_names(
+    configstrings: &[String],
+    weapon: u8,
+    viewmodel_index: i32,
+) -> Option<(&str, Option<&str>)> {
     let cs = |i: usize| configstrings.get(i).map(String::as_str).unwrap_or("");
-    let weapons = split_weapon_list(cs(7));
-    let name = weapon_name_for_index(&weapons, i32::from(weapon))?;
+    let name = cs(7)
+        .split(' ')
+        .filter(|s| !s.is_empty())
+        .nth(usize::from(weapon).checked_sub(1)?)?;
     let hands = usize::try_from(viewmodel_index)
         .ok()
         .filter(|&i| i > 0)
         .map(|i| cs(CS_MODELS_V1 + i))
-        .filter(|h| !h.is_empty())
-        .map(str::to_string);
-    Some(RigKey {
-        weapon: name.to_string(),
-        hands,
-    })
+        .filter(|h| !h.is_empty());
+    Some((name, hands))
+}
+
+impl RigKey {
+    fn names(&self) -> (&str, Option<&str>) {
+        (&self.weapon, self.hands.as_deref())
+    }
 }
 
 /// The frac trend `view_anim` reads, held through the frames between two cmds
@@ -128,18 +137,22 @@ impl OnlineView {
         configstrings: &[String],
         ps: &ViewPs,
     ) -> Option<Vec<XModel>> {
-        let key = rig_key(configstrings, ps.weapon, ps.viewmodel_index);
-        if self.built_for.as_ref() == Some(&key) {
-            return None;
+        let names = rig_names(configstrings, ps.weapon, ps.viewmodel_index);
+        if let Some(built) = &self.built_for {
+            if built.as_ref().map(RigKey::names) == names {
+                return None;
+            }
         }
-        self.built_for = Some(key.clone());
+        self.built_for = Some(names.map(|(weapon, hands)| RigKey {
+            weapon: weapon.to_string(),
+            hands: hands.map(str::to_string),
+        }));
         self.rig = None;
         self.clock = ViewAnimClock::default();
-        let key = key?;
-        let (models, rig) =
-            viewmodel::load_view_weapon_with_hands(fs, &key.weapon, key.hands.as_deref())?;
+        let (weapon, hands) = names?;
+        let (models, rig) = viewmodel::load_view_weapon_with_hands(fs, weapon, hands)?;
         if rig.is_none() {
-            log::warn!("viewmodel {}: no anim rig, not drawing it", key.weapon);
+            log::warn!("viewmodel {weapon}: no anim rig, not drawing it");
         }
         self.rig = rig;
         self.rig.is_some().then_some(models)
@@ -232,25 +245,20 @@ mod tests {
     }
 
     #[test]
-    fn rig_key_follows_weapon_and_hands() {
+    fn rig_names_follow_weapon_and_hands() {
         let cs = configstrings();
-        let carbine_us = rig_key(&cs, 1, 82).expect("carbine");
-        assert_eq!(carbine_us.weapon, "m1carbine_mp");
-        assert_eq!(
-            carbine_us.hands.as_deref(),
-            Some("xmodel/viewmodel_hands_us")
-        );
-        assert_eq!(rig_key(&cs, 1, 82), Some(carbine_us.clone()));
-        assert_ne!(rig_key(&cs, 2, 82), Some(carbine_us.clone()), "weapon");
-        assert_ne!(rig_key(&cs, 1, 52), Some(carbine_us), "hands");
-        assert_eq!(rig_key(&cs, 1, 0).and_then(|k| k.hands), None);
+        let carbine_us = Some(("m1carbine_mp", Some("xmodel/viewmodel_hands_us")));
+        assert_eq!(rig_names(&cs, 1, 82), carbine_us);
+        assert_ne!(rig_names(&cs, 2, 82), carbine_us, "weapon");
+        assert_ne!(rig_names(&cs, 1, 52), carbine_us, "hands");
+        assert_eq!(rig_names(&cs, 1, 0), Some(("m1carbine_mp", None)));
     }
 
     #[test]
     fn weapon_zero_draws_nothing() {
         let cs = configstrings();
-        assert_eq!(rig_key(&cs, 0, 82), None);
-        assert_eq!(rig_key(&cs, 9, 82), None, "past the end of CS 7");
+        assert_eq!(rig_names(&cs, 0, 82), None);
+        assert_eq!(rig_names(&cs, 9, 82), None, "past the end of CS 7");
 
         let mut view = OnlineView::default();
         let fs = Pk3Fs::empty();
@@ -329,31 +337,44 @@ mod tests {
         assert!(view.sync_rig(&fs, &cs, &ps(1, 82)).is_none(), "no rebuild");
         let weapons = vcod_common::weapon_table::from_configstring(&fs, &cs[7]);
 
-        let mut state = ps(1, 82);
-        let mut now = 0.0;
-        let mut step = |view: &mut OnlineView, state: &ViewPs| {
-            now += 16.0;
+        // Gun bones for one frame at `now`.
+        let pose = |view: &mut OnlineView, state: &ViewPs, now: f64| {
             let (draw, fov) = view.frame(&weapons, Some(state), 0.016, now);
             let draw = draw.expect("drawn");
             assert_eq!(draw.bone_sets.len(), 2);
             assert!(draw.bone_sets.iter().flatten().all(|m| m.is_finite()));
             (draw.bone_sets[1].clone(), fov)
         };
-        step(&mut view, &state);
-        state.weap_anim = 2 | 512;
-        let fired = step(&mut view, &state).0;
-        state.weap_anim = 2;
-        for _ in 0..5 {
-            step(&mut view, &state);
-        }
-        assert_ne!(step(&mut view, &state).0, fired, "the fire clip plays");
 
-        state.weap_anim = 0;
-        state.ads_frac = 1.0;
-        let (up, fov) = step(&mut view, &state);
+        // The same clock driven once at hip idle and once through one shot,
+        // a single edge onto 514 held from there.
+        let mut idle = OnlineView::default();
+        idle.sync_rig(&fs, &cs, &ps(1, 82));
+        let hip = ps(1, 82);
+        let mut shot = ps(1, 82);
+        shot.weap_anim = 2 | 512;
+        pose(&mut view, &hip, 0.0);
+        pose(&mut idle, &hip, 0.0);
+        let mut fired = Vec::new();
+        for i in 1..=10 {
+            let now = f64::from(i) * 16.0;
+            let (fire, _) = pose(&mut view, &shot, now);
+            assert_ne!(
+                fire,
+                pose(&mut idle, &hip, now).0,
+                "fire, not idle, at {now} ms"
+            );
+            fired.push(fire);
+        }
+        assert_ne!(fired[0], fired[9], "the fire clip plays");
+
+        let mut sighted = ps(1, 82);
+        sighted.ads_frac = 1.0;
+        let (up, fov) = pose(&mut view, &sighted, 1000.0);
         assert!(fov < DEFAULT_FOV, "the sight zooms");
-        for _ in 0..30 {
-            assert_eq!(step(&mut view, &state).0, up, "a raised sight holds");
+        for i in 1..=30 {
+            let now = 1000.0 + f64::from(i) * 16.0;
+            assert_eq!(pose(&mut view, &sighted, now).0, up, "a raised sight holds");
         }
 
         // A team change swaps the hands and rebuilds.
