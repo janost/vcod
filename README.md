@@ -25,14 +25,19 @@ combat effects.
   the game's own xanim clips. Footsteps follow the retail cadence per surface,
   the weapon plays its file's fire/rechamber/reload sounds, and landings pick
   their alias from fall speed.
-- `--connect <ip:port>` joins a CoD 1.1 server as a spectator. The client does
-  the handshake, Huffman coding, netchan, delta snapshots and usercmds, follows
-  the server's spectator camera, and renders every player as an assembled
-  soldier playing the server-driven animations. Kill feed, chat, scoreboard,
-  sounds, tracers, impacts and muzzle flashes come from the same events the
-  retail client reads. It downloads every pak the server references and the
-  install lacks, the way the retail client does, so mod paks arrive along with
-  the map's own.
+- `--connect <ip:port>` joins a CoD 1.1 server. The client does the
+  handshake, Huffman coding, netchan, delta snapshots and usercmds, and picks a
+  team and a weapon through the stock script menus the server opens, or
+  answers them from `--team` and `--weapon`. Until you join it follows the
+  server's spectator camera; once spawned the camera sits at your player's eye.
+  Movement is not predicted yet: the view moves when the server's snapshot
+  does. The usercmd carries the movement axes, the view angles and the held
+  weapon but no buttons yet, so you cannot fire or press use. It renders
+  every player as an assembled soldier playing the server-driven animations.
+  Kill feed, chat, scoreboard, sounds, tracers, impacts and muzzle flashes
+  come from the same events the retail client reads. It downloads every pak
+  the server references and the install lacks, the way the retail client
+  does, so mod paks arrive along with the map's own.
 - `vcod-server` answers server browsers, accepts connections and hands out the
   gamestate, so a retail 1.1 client loads the map, then keeps it alive with
   delta-compressed snapshots against the client's last acked frame. It runs
@@ -149,6 +154,7 @@ vcod mp_pavlov
 vcod mp_pavlov --walk
 vcod --list
 vcod --connect <ip:port>
+vcod --connect <ip:port> --team axis --weapon kar98k_mp
 vcod mp_pavlov --game-dir /path/to/CallOfDuty
 ```
 
@@ -161,9 +167,13 @@ vcod mp_pavlov --game-dir /path/to/CallOfDuty
   untested.
 - `--walk` starts at a player spawn point as a collidable soldier. Needs a map
   with a spawn entity and collidable geometry.
-- `--connect ip:port` spectates a live server. To find a populated one, the
+- `--connect ip:port` joins a live server. To find a populated one, the
   master server at `codmaster.activision.com:20510` still answers
   `getservers 1 full empty`.
+- `--team <allies|axis|autoassign|spectator>` answers the stock team menu
+  without showing it; `--weapon <name>` does the same for the weapon menu,
+  with a weapon file name such as `m1carbine_mp`. A weapon the menu refuses
+  reopens it, and then you pick by hand.
 - `--debug-overlay` (or F3 at runtime) shows frame time, draw stats, net and
   audio counters.
 - `--no-audio` runs silent; `--volume <0..1>` sets the master volume.
@@ -211,6 +221,16 @@ In spectate mode the position comes from the server; the mouse drives the look
 angles. Hold Tab for the scoreboard. A map change on the server shows a loading
 screen (and downloads missing paks the way the connect does) and continues on
 the new map.
+
+| Input | Action |
+|---|---|
+| M | Open the main script menu: the team menu, or on stock gametypes the weapon menu once you have a team |
+| 0-9 | Pick the menu row bound to that key |
+| Up / Down, Enter | Move the menu selection, pick it |
+| Esc | Close the menu |
+
+While a menu is open these keys go to it, and Esc closes it rather than
+releasing the mouse; W / A / S / D still move.
 
 These work in every mode:
 
