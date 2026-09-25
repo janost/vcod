@@ -1138,26 +1138,17 @@ fn fr_bucket(forward: i8, right: i8) -> i32 {
 }
 
 /// `MSG_WriteDeltaUsercmdKey`, reconstructed from the reader at cod_lnxded
-/// 0x807b7f8. Emits the compact branch unless a field it cannot carry
-/// (`up`, `weapon`, `wbuttons`, button bits above 0) differs from `from`:
-/// the compact encoding has no slot for them, so the receiver would keep
-/// its stored value. Forward/right can only be +127, -127 or 0; `flags`
-/// is never sent.
-///
-/// Angles and the forward/right code are always announced; every other
-/// field rides a change bit against `from`, so an omitted field decodes
-/// against the receiver's stored previous cmd — retail's outCmd chaining,
-/// where `from` is the client's last *sent* cmd. A lost packet degrades
-/// one cmd, which retail also lives with.
+/// 0x807b7f8. Always the absolute serverTime and the full branch with every
+/// field announced, so `from` decides nothing; the two comments below say
+/// why. Forward/right can only be +127, -127 or 0; `flags` is never sent.
 /// docs/protocol-1.1.md, "Client to server message body".
 pub fn write_delta_usercmd(w: &mut MsgWriter, key: i32, from: &UserCmd, to: &UserCmd) {
     // serverTime preamble: 1 = 8-bit delta from the base, 0 = 32-bit absolute.
-    // The server decodes the 8-bit delta against its last *received* cmd, while
-    // `from` here is our last *sent* one. We send a single usercmd per message
-    // with no backup copies, so one dropped or reordered packet desyncs the two
-    // chains and the server then rejects every later cmd (commandTime freezes,
-    // spectator flight stops until reconnect). Retail's redundant backup cmds
-    // heal such a gap; lacking those, always send the absolute serverTime.
+    // The server decodes the 8-bit delta against its own base, not `from` (our
+    // last *sent* cmd), and a packet can open with the previous packet's cmds
+    // repeated, whose times run behind `from`. A dropped or reordered packet
+    // would desync the two and the server would reject every later cmd, so
+    // always send the absolute serverTime.
     let _ = from;
     w.write_bits(0, 1);
     w.write_long(to.server_time);
