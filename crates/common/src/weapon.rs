@@ -27,10 +27,22 @@ pub enum WeaponAnim {
     AdsLastShot,
     AdsRechamber,
     Raise,
+    Melee,
+    Drop,
+    ReloadEmpty,
+    ReloadStart,
+    ReloadEnd,
+    AltDrop,
+    AltRaise,
+    /// The grenade pullback hold, wire index 17 (combat doc, 1.11); the
+    /// pmove side names the same index `WEAP_GRENADE_PULLBACK`.
+    HoldFire,
+    /// Shown in place of `Idle` when the clip is dry and the file names one.
+    EmptyIdle,
 }
 
 impl WeaponAnim {
-    pub const ALL: [WeaponAnim; 11] = [
+    pub const ALL: [WeaponAnim; 20] = [
         WeaponAnim::Idle,
         WeaponAnim::Fire,
         WeaponAnim::LastShot,
@@ -42,6 +54,15 @@ impl WeaponAnim {
         WeaponAnim::AdsLastShot,
         WeaponAnim::AdsRechamber,
         WeaponAnim::Raise,
+        WeaponAnim::Melee,
+        WeaponAnim::Drop,
+        WeaponAnim::ReloadEmpty,
+        WeaponAnim::ReloadStart,
+        WeaponAnim::ReloadEnd,
+        WeaponAnim::AltDrop,
+        WeaponAnim::AltRaise,
+        WeaponAnim::HoldFire,
+        WeaponAnim::EmptyIdle,
     ];
 
     pub fn key(self) -> &'static str {
@@ -57,7 +78,25 @@ impl WeaponAnim {
             WeaponAnim::AdsLastShot => "adsLastShotAnim",
             WeaponAnim::AdsRechamber => "adsRechamberAnim",
             WeaponAnim::Raise => "raiseAnim",
+            WeaponAnim::Melee => "meleeAnim",
+            WeaponAnim::Drop => "dropAnim",
+            WeaponAnim::ReloadEmpty => "reloadEmptyAnim",
+            WeaponAnim::ReloadStart => "reloadStartAnim",
+            WeaponAnim::ReloadEnd => "reloadEndAnim",
+            WeaponAnim::AltDrop => "altDropAnim",
+            WeaponAnim::AltRaise => "altRaiseAnim",
+            WeaponAnim::HoldFire => "holdFireAnim",
+            WeaponAnim::EmptyIdle => "emptyIdleAnim",
         }
+    }
+
+    /// The four readings `view_anim` gives wire index 0: none of them has a
+    /// weapon-file length of its own, so `resolve` never times one out.
+    fn is_idle_kind(self) -> bool {
+        matches!(
+            self,
+            WeaponAnim::Idle | WeaponAnim::EmptyIdle | WeaponAnim::AdsUp | WeaponAnim::AdsDown
+        )
     }
 }
 
@@ -357,6 +396,11 @@ pub struct WeaponDef {
     /// The shared cap's index, assigned by `WeaponTable` off
     /// `shared_ammo_cap_name` the way `ammo_index` is off `ammo_name`.
     pub shared_cap_index: Option<usize>,
+    /// Which `WeaponAnim` keys this file names a non-blank clip for (kar98k's
+    /// `reloadStartAnim` and `reloadEndAnim` are blank, for instance):
+    /// `view_anim` and `resolve` fall back to idle rather than pick a clip
+    /// that was never loaded.
+    pub anim_keys: std::collections::HashSet<WeaponAnim>,
 }
 
 /// Absence is normal (a spread key on a turret file, an ammo key on a
@@ -405,6 +449,112 @@ pub fn load(fs: &Pk3Fs, name: &str) -> Result<WeaponDef> {
         .ok_or_else(|| anyhow!("{path} not found in pk3s"))?;
     let map = crate::xmodel::parse_weapon(&String::from_utf8_lossy(&text));
     Ok(WeaponDef::from_map(&map))
+}
+
+/// Bit 512 on `ps.weapAnim`: retail flips it on every `set_anim`, including a
+/// repeat of the same clip, so it is not part of the wire index (combat doc,
+/// 1.2).
+const ANIM_TOGGLE_BIT: i32 = 512;
+
+/// Picks the viewmodel clip for the wire's `ps.weapAnim`
+/// (docs/research/cod11-combat.md, 1.2; index table there, constants in
+/// `crates/common/src/pmove/weapon.rs`). The plan's sketch of this signature
+/// carried `weaponstate`, unused by any row below, and omitted `frac_trend`
+/// and `def`, both of which row 0 needs (the AdsUp/AdsDown split and the
+/// EmptyIdle/Idle one); see the task-1 report for that correction.
+pub fn view_anim(
+    def: &WeaponDef,
+    weap_anim: i32,
+    ads_frac: f32,
+    frac_trend: i32,
+    clip_empty: bool,
+) -> WeaponAnim {
+    match weap_anim & !ANIM_TOGGLE_BIT {
+        0 => {
+            if ads_frac >= 1.0 || frac_trend > 0 {
+                WeaponAnim::AdsUp
+            } else if frac_trend < 0 {
+                WeaponAnim::AdsDown
+            } else if clip_empty && def.anim_keys.contains(&WeaponAnim::EmptyIdle) {
+                WeaponAnim::EmptyIdle
+            } else {
+                WeaponAnim::Idle
+            }
+        }
+        2 => WeaponAnim::Fire,
+        3 => WeaponAnim::LastShot,
+        4 => WeaponAnim::Rechamber,
+        5 => WeaponAnim::AdsFire,
+        6 => WeaponAnim::AdsLastShot,
+        7 => WeaponAnim::AdsRechamber,
+        8 => WeaponAnim::Melee,
+        9 => WeaponAnim::Drop,
+        10 => WeaponAnim::Raise,
+        11 => WeaponAnim::Reload,
+        12 => WeaponAnim::ReloadEmpty,
+        13 => WeaponAnim::ReloadStart,
+        14 => WeaponAnim::ReloadEnd,
+        15 => WeaponAnim::AltDrop,
+        16 => WeaponAnim::AltRaise,
+        17 => WeaponAnim::HoldFire,
+        _ => WeaponAnim::Idle,
+    }
+}
+
+/// Tracks how long the current `weapAnim` clip has been playing, off the
+/// wire's own restart signal (any change to the field, index or toggle bit
+/// alike, per `--debug-overlay`'s "anim restarts" counter) and the direction
+/// `ads_frac` is moving, which `view_anim`'s row 0 needs and the plan left
+/// implicit ("the caller passes the trend").
+#[derive(Default)]
+pub struct ViewAnimClock {
+    last_weap_anim: Option<i32>,
+    started_ms: f64,
+    last_frac: f32,
+}
+
+impl ViewAnimClock {
+    /// Returns whether this frame restarted the clip, how many ms into it
+    /// the clip now is, and the `ads_frac` trend since last frame (-1
+    /// falling, 0 unchanged, 1 rising).
+    pub fn update(&mut self, weap_anim: i32, ads_frac: f32, now_ms: f64) -> (bool, f64, i32) {
+        let restarted = self.last_weap_anim != Some(weap_anim);
+        if restarted {
+            self.started_ms = now_ms;
+        }
+        self.last_weap_anim = Some(weap_anim);
+        let trend = if ads_frac > self.last_frac {
+            1
+        } else if ads_frac < self.last_frac {
+            -1
+        } else {
+            0
+        };
+        self.last_frac = ads_frac;
+        (restarted, now_ms - self.started_ms, trend)
+    }
+}
+
+/// A clip that has run past its weapon-file length without the wire resetting
+/// `weapAnim` (a rechamber ending, a released shot: combat doc, "What
+/// weapAnim is not written by") falls to the idle reading for the current
+/// frac and clip state, rather than looping or freezing on its last frame.
+/// Ruling, since retail's cgame is not decompiled here: falling to idle is
+/// the reading that matches a weapAnim left at fire after the shot.
+pub fn resolve(
+    def: &WeaponDef,
+    anim: WeaponAnim,
+    ms_in: f64,
+    clip_len_ms: f64,
+    idle_for_state: WeaponAnim,
+) -> (WeaponAnim, f64) {
+    if !anim.is_idle_kind() && ms_in >= clip_len_ms {
+        return (idle_for_state, ms_in - clip_len_ms);
+    }
+    if !def.anim_keys.contains(&anim) {
+        return (idle_for_state, ms_in);
+    }
+    (anim, ms_in)
 }
 
 impl WeaponDef {
@@ -497,6 +647,10 @@ impl WeaponDef {
                 .map(|s| s.to_ascii_lowercase())
                 .unwrap_or_default(),
             shared_cap_index: None,
+            anim_keys: WeaponAnim::ALL
+                .into_iter()
+                .filter(|a| opt_str(map, a.key()).is_some())
+                .collect(),
         }
     }
 }
@@ -1354,5 +1508,129 @@ mod tests {
         let d = WeaponDef::from_map(&map);
         let name = d.world_model.expect("kar98k_mp ships a worldModel");
         assert!(name.to_lowercase().contains("kar98"), "{name}");
+    }
+
+    /// A def with every `WeaponAnim` key filled in, for `view_anim`/`resolve`
+    /// tests that don't care about a specific weapon file.
+    fn full_def() -> WeaponDef {
+        let mut map = HashMap::new();
+        for which in WeaponAnim::ALL {
+            map.insert(which.key().to_string(), "some_anim".to_string());
+        }
+        WeaponDef::from_map(&map)
+    }
+
+    #[test]
+    fn toggle_edge_restarts() {
+        let mut clock = ViewAnimClock::default();
+        let (restarted, ms, _) = clock.update(514, 0.0, 0.0);
+        assert!(restarted, "the first frame always starts a clip");
+        assert_eq!(ms, 0.0);
+
+        let (restarted, ms, _) = clock.update(2, 0.0, 100.0);
+        assert!(restarted, "514 -> 2 is a different index");
+        assert_eq!(ms, 0.0);
+
+        let (restarted, ms, _) = clock.update(514, 0.0, 150.0);
+        assert!(restarted, "2 -> 514 restarts even back at the same index");
+        assert_eq!(ms, 0.0);
+
+        let (restarted, ms, _) = clock.update(514, 0.0, 175.0);
+        assert!(!restarted, "514 -> 514 holds the clip running");
+        assert_eq!(ms, 25.0);
+    }
+
+    #[test]
+    fn frac_trend() {
+        let mut clock = ViewAnimClock::default();
+        clock.update(0, 0.2, 0.0);
+        let (_, _, trend) = clock.update(0, 0.5, 16.0);
+        assert_eq!(trend, 1, "0.2 -> 0.5 is rising");
+        let (_, _, trend) = clock.update(0, 0.3, 32.0);
+        assert_eq!(trend, -1, "0.5 -> 0.3 is falling");
+        let (_, _, trend) = clock.update(0, 0.3, 48.0);
+        assert_eq!(trend, 0, "0.3 -> 0.3 is unchanged");
+    }
+
+    #[test]
+    fn index_maps_per_table() {
+        let def = full_def();
+        let cases = [
+            (2, WeaponAnim::Fire),
+            (3, WeaponAnim::LastShot),
+            (4, WeaponAnim::Rechamber),
+            (5, WeaponAnim::AdsFire),
+            (6, WeaponAnim::AdsLastShot),
+            (7, WeaponAnim::AdsRechamber),
+            (8, WeaponAnim::Melee),
+            (9, WeaponAnim::Drop),
+            (10, WeaponAnim::Raise),
+            (11, WeaponAnim::Reload),
+            (12, WeaponAnim::ReloadEmpty),
+            (13, WeaponAnim::ReloadStart),
+            (14, WeaponAnim::ReloadEnd),
+            (15, WeaponAnim::AltDrop),
+            (16, WeaponAnim::AltRaise),
+            (17, WeaponAnim::HoldFire),
+            (99, WeaponAnim::Idle),
+        ];
+        for (index, want) in cases {
+            // Each index is tested both bare and with the restart toggle set,
+            // since the mapping must mask it off first.
+            assert_eq!(view_anim(&def, index, 0.0, 0, false), want, "index {index}");
+            assert_eq!(
+                view_anim(&def, index | 512, 0.0, 0, false),
+                want,
+                "index {index} | 512"
+            );
+        }
+
+        // Index 0, idle: ads_frac >= 1 or a rising trend hold AdsUp, a
+        // falling trend holds AdsDown, an empty clip with the key present
+        // shows EmptyIdle, and otherwise it's plain Idle.
+        assert_eq!(view_anim(&def, 0, 1.0, 0, false), WeaponAnim::AdsUp);
+        assert_eq!(view_anim(&def, 0, 0.4, 1, false), WeaponAnim::AdsUp);
+        assert_eq!(view_anim(&def, 0, 0.4, -1, false), WeaponAnim::AdsDown);
+        assert_eq!(view_anim(&def, 0, 0.0, 0, true), WeaponAnim::EmptyIdle);
+        assert_eq!(view_anim(&def, 0, 0.0, 0, false), WeaponAnim::Idle);
+
+        // No emptyIdleAnim in the file: clip_empty falls back to plain Idle.
+        let bare = WeaponDef::default();
+        assert_eq!(view_anim(&bare, 0, 0.0, 0, true), WeaponAnim::Idle);
+    }
+
+    #[test]
+    fn finished_clip_falls_to_idle() {
+        let def = full_def();
+        let (anim, ms) = resolve(&def, WeaponAnim::Fire, 500.0, 400.0, WeaponAnim::Idle);
+        assert_eq!(anim, WeaponAnim::Idle);
+        assert_eq!(ms, 100.0, "the overrun carries into the idle clip");
+
+        // Still running: unchanged.
+        let (anim, ms) = resolve(&def, WeaponAnim::Fire, 300.0, 400.0, WeaponAnim::Idle);
+        assert_eq!(anim, WeaponAnim::Fire);
+        assert_eq!(ms, 300.0);
+
+        // Idle kinds never time out, however long ms_in runs.
+        let (anim, _) = resolve(&def, WeaponAnim::Idle, 1e9, 400.0, WeaponAnim::Idle);
+        assert_eq!(anim, WeaponAnim::Idle);
+    }
+
+    #[test]
+    fn blank_key_falls_back() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let kar = load(&fs, "kar98k_mp").unwrap();
+        assert!(
+            !kar.anim_keys.contains(&WeaponAnim::ReloadStart),
+            "kar98k_mp's reloadStartAnim is blank"
+        );
+        let (anim, ms) = resolve(&kar, WeaponAnim::ReloadStart, 10.0, 400.0, WeaponAnim::Idle);
+        assert_eq!(anim, WeaponAnim::Idle);
+        assert_eq!(
+            ms, 10.0,
+            "no clip length applies to a clip that never loaded"
+        );
     }
 }
