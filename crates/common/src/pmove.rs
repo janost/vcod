@@ -591,7 +591,7 @@ pub fn pmove(
         ps.stance = gun;
         ps.ducked = gun == Stance::Crouch;
         ps.lean = 0.0;
-        footsteps(ps, input, world, dt, &mut events);
+        ps.on_ladder = false;
         return events;
     }
     if ps.linked {
@@ -2056,6 +2056,23 @@ mod tests {
         pmove(&mut ps, &input, &world, 0.05, &[]);
         assert_eq!(ps.stance, Stance::Prone);
         assert_eq!(ps.lean, 0.0);
+    }
+
+    /// 0x34274 calls no footstep routine, so a gunner mounted off a ladder
+    /// neither steps nor stays on it.
+    #[test]
+    fn a_mounted_player_takes_no_step_and_leaves_the_ladder() {
+        let world = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.mounted = Some(Stance::Stand);
+        ps.on_ladder = true;
+        ps.since_jump_ms = 10_000.0;
+        ps.velocity = Vec3::new(0.0, 0.0, 200.0);
+        let before = ps.bob_cycle;
+        let events = pmove(&mut ps, &PmInput::default(), &world, 0.05, &[]);
+        assert!(!ps.on_ladder);
+        assert_eq!(ps.bob_cycle, before);
+        assert!(events.is_empty(), "{events:?}");
     }
 
     /// Flat ground whose material carries the dirt sound surface (6).
