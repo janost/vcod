@@ -780,6 +780,99 @@ string before measuring its width.
 
 ---
 
+## 8. How the cgame draws a hudelem
+
+Everything in this section is read out of `cgame_mp_x86.dll` (1.1). The
+element fields are named by their offsets in `hudelem_t`, which
+`docs/protocol-1.1.md` "Block 5" maps to the wire.
+
+### Order
+
+VERIFIED: `0x3001f920` walks two runs of 31 pointers at stride 112, the first
+from the snapshot playerstate's `+0x1338` and the second from its `+0x5A8`,
+compares each element's `type` word against 0, and hands the list it built to
+the CRT `qsort` (`0x3004b350`) with the comparator at `0x3001f8e0`. VERIFIED:
+the comparator loads the float at `+0x6c` (`sort`) of both elements, subtracts
+them and returns -1, 1 or 0. INFERRED, off those branches: the list is the
+archived array then the current one, each stopping at its first `type` 0, and
+it is sorted ascending by `sort`; `0x3001f980` then draws it in that order.
+`qsort` is not stable, so the order of two elements with equal `sort` is
+unspecified; vcod sorts stably, archived first, which is one of the orders
+retail can produce.
+
+### Font slots
+
+VERIFIED, the constants: `font` 0 takes a text scale of `fontScale * 0.25`
+(`0x3006950c` reads 0.25) and a height from the engine's font-height trap
+(`0x35`); `font` 1 and 2 take `fontScale * 0.33333334` (`0x30069548`) and the
+immediates 16 and 16 (slot 1) or 16 and 8 (slot 2). INFERRED: those are the
+`default`, `bigfixed` and `smallfixed` names the script's `font` field takes
+(`cod11-gsc-object-model.md`, "HUD element fields"), and the 16s are the fixed
+cell's height in virtual pixels. VERIFIED from the pak listing: `pak5.pk3`
+ships only `fonts/fontImage_{12,16,18,24,30,32}`, no fixed-width atlas. vcod
+draws the two fixed slots with a loaded font at retail's `fontScale / 3`, and
+reads the default slot's height as its tallest glyph at the element's scale.
+
+### What each type prints
+
+VERIFIED, the strings and constants: a non-zero `label` (`+0x2c`) is looked up
+as configstring `0x4dc + n` through the localize call tagged `"hudelem
+string"`; the value format is `"%g"` (`0x30064b28`); the timer formatters are
+`0x3001ece0` (`"%i:%02i"`, `"%i:%02i:%02i"`) and `0x3001ed60` (`"%i:%02i.%i"`,
+`"%i:%02i:%02i.%i"`). INFERRED, off the switch in the element-setup function
+that follows `0x3001ee20`: type 1 prints its `text` (`+0x68`) configstring,
+type 2 prints `value` (`+0x64`) through `"%g"`, types 4 and 5 go through the
+whole-second formatter and 6 and 7 through the tenths one, each fed by
+`0x3001ec70` (section 5, "There is no round-timer configstring"), and types 3,
+8 and 9 print nothing and take their width from `0x3001ee20`.
+
+INFERRED, off `0x3001f090`'s loop: when both the label and the text are
+non-empty they are merged into one string, the label copied up to a `%s`,
+the text in its place, then the rest of the label; a label with no `%s`
+prefixes the text.
+
+### Size, position and colour
+
+INFERRED, off `0x3001ee20` and `0x3001ee90`: a shader element's width is its
+`width` (`+0x30`), or the font height when that is 0, and while
+`0 < scaleTime` (`+0x48`) and `cg.time - scaleStartTime` (`+0x44`) is below it
+the width runs linearly from `fromWidth` (`+0x3c`, again the font height when
+0) to that; height the same off `+0x34` and `+0x40`. VERIFIED: the stock S&D
+progress bar is `setShader("white", 0, 8)` then `scaleOverTime(planttime,
+barsize, 8)` (`maps/MP/gametypes/sd.gsc` in `pak5.pk3`). INFERRED, from the
+two together: that bar grows from the font height, not from 0. INFERRED, off `0x3001ef50`: a shader element whose
+`font` is not 0 is never shorter than the font height.
+
+INFERRED, off `0x3001efb0` and `0x3001f020`: the position is `x` (`+0x4`) and
+`y` (`+0x8`), moved from `fromX` (`+0x4c`) and `fromY` (`+0x50`) the same way
+over `moveTime` (`+0x58`) from `moveStartTime` (`+0x54`); `alignX` (`+0x14`) 1
+then subtracts half the element's width and 2 all of it, and `alignY`
+(`+0x18`) does the same with the height. VERIFIED: the half is `0x3006930c`,
+which reads 0.5.
+
+INFERRED, off the tail of the element-setup function: while `0 < fadeTime`
+(`+0x28`) and `cg.time - fadeStartTime` (`+0x24`) is below it, each byte lane
+runs linearly from `fromColor` (`+0x20`) to `color` (`+0x1c`), and the result
+is scaled by `0x30069420` to 0..1. VERIFIED: that constant reads 1/255. Lane `+0x1c` is red and `+0x1f`
+alpha, as the server's getters read them (`cod11-gsc-object-model.md`, "HUD
+element fields").
+
+None of the three tweens clamps a start time ahead of `cg.time`; the
+fraction goes negative and extrapolates past the `from` value. INFERRED.
+vcod clamps the fraction to 0..1.
+
+### The two clocks
+
+VERIFIED: `0x3001f520` registers the element's material and a second one
+named after it with `"Needle"` (`0x30064b20`) appended, and scales the
+element's timer value by 360 over `duration` (`+0x60`), or by `0x300695d0`
+(1.0922667, `65536 / 60000`) when `duration` is 0, before `ANGLE2SHORT`.
+INFERRED: the face is drawn at the element's rect and the needle over it,
+turned one revolution per `duration` ms, or per minute without one. Which way
+the needle turns on screen is not measured.
+
+---
+
 ## UNVERIFIED summary
 
 | # | Claim | Check that settles it |
@@ -787,7 +880,7 @@ string before measuring its width.
 | 1 | `killIcon<Mod>` material names bind to `gfx/hud/death_<mod>.dds` (section 2). No stock pk3 entry carries the name; the mapping is by name correspondence only. | Run the stock 1.1 MP client, take a melee death, screenshot the killfeed. |
 | 2 | Scores token 4 is the Q3 `pers.enterTime` slot; unit unknown, and the field has no write site in the stock server module (section 3). | Log a real `b` line from a `score` request and compare token 4 against a known join time. |
 | 3 | Resolved: the `b` grammar. The 2026-08-24 live sweep held the Tab scoreboard against a populated server and confirmed it on screen (section 3). No raw wire dump was kept, so token 4's unit (item 2) is still open. | n/a |
-| 4 | Resolved: the hudelem transport is the playerstate's array block 5, filled per client by `HudElem_UpdateClient` (section 5, "How a hudelem reaches the client"). What the cgame does with its copy is still only read as far as the clock formatter. | n/a |
+| 4 | Resolved: the hudelem transport is the playerstate's array block 5, filled per client by `HudElem_UpdateClient` (section 5, "How a hudelem reaches the client"), and what the cgame draws from it is section 8. | n/a |
 | 5 | The second font header float's id-internal field name (section 6). Its use is settled. | Nothing downstream depends on it. |
 | 6 | Whether the stock client's own status header shows the same CS-5/6-vs-`b` transient disagreement observed live (section 5). vcod's header prefers the `b` reply once one has arrived. | Compare the stock client's header text to its own Tab scoreboard in the same frame against a server showing a fresh score change; not yet done. |
 | 7 | Trap `4`'s official name (section 1). Its nine-argument signature is settled from the call site. | Decompile the engine's cgame syscall dispatcher and read case 4. |

@@ -3,6 +3,8 @@
 
 pub mod chat;
 pub mod font;
+#[allow(dead_code)] // wired in by the HUD wiring task
+pub mod hudelem;
 pub mod killfeed;
 pub mod menu;
 pub mod scoreboard;
