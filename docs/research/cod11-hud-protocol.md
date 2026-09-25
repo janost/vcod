@@ -788,30 +788,43 @@ element fields are named by their offsets in `hudelem_t`, which
 
 ### Order
 
-VERIFIED: `0x3001f920` walks two runs of 31 pointers at stride 112, the first
-from the snapshot playerstate's `+0x1338` and the second from its `+0x5A8`,
-compares each element's `type` word against 0, and hands the list it built to
-the CRT `qsort` (`0x3004b350`) with the comparator at `0x3001f8e0`. VERIFIED:
-the comparator loads the float at `+0x6c` (`sort`) of both elements, subtracts
-them and returns -1, 1 or 0. INFERRED, off those branches: the list is the
-archived array then the current one, each stopping at its first `type` 0, and
-it is sorted ascending by `sort`; `0x3001f980` then draws it in that order.
+VERIFIED: `0x3001f920` holds the bound 31 (`0x1f`), the element stride 112
+(`0x1c` dwords) and the snapshot playerstate's `+0x1338` and `+0x5A8`, reads
+each element's `type` word, and calls the CRT `qsort` (`0x3004b350`) with the
+comparator `0x3001f8e0`. VERIFIED: the comparator loads the float at `+0x6c`
+(`sort`) of both elements and holds the return values -1, 1 and 0.
+INFERRED, off `0x3001f920`'s two loops and their exits: the list is the
+archived array then the current one, each stopping at its first `type` 0,
+and it is what `qsort` sorts. INFERRED, off the comparator's compare: the
+order is ascending by `sort`. INFERRED, off `0x3001f980`'s loop: the elements
+are drawn in that order.
 `qsort` is not stable, so the order of two elements with equal `sort` is
 unspecified; vcod sorts stably, archived first, which is one of the orders
 retail can produce.
 
 ### Font slots
 
-VERIFIED, the constants `0x3001f120` loads per slot: `font` 0 takes a text scale of `fontScale * 0.25`
-(`0x3006950c` reads 0.25) and a height from the engine's font-height trap
-(`0x35`); `font` 1 and 2 take `fontScale * 0.33333334` (`0x30069548`) and the
-immediates 16 and 16 (slot 1) or 16 and 8 (slot 2). INFERRED: those are the
+VERIFIED, the constants `0x3001f120` loads: 0.25 (`0x3006950c`), the
+engine's font-height trap `0x35`, 0.33333334 (`0x30069548`), and the
+immediates 16 and 16, and 16 and 8, stored to the setup record's `+0x28` and
+`+0x2c`; the scale goes to `+0x24`. INFERRED, off its switch on `font`: slot
+0 takes a text scale of `fontScale * 0.25`, the trap's height and a `+0x2c`
+of 0; slots 1 and 2 take `fontScale * 0.33333334`, a height of 16, and a
+`+0x2c` of 16 (slot 1) or 8 (slot 2). VERIFIED: `0x3001ec10`, the text
+width, multiplies the result of trap `0x3a` by `+0x2c`, and has a second
+path that calls trap `0x34` with the record's `+0x20` and `+0x24`. INFERRED,
+off its compare of `+0x2c` with 0: a fixed slot takes the first path, trap
+`0x3a` counts the string's characters, and its text is `+0x2c` wide per
+character, so `+0x2c` is the
+fixed cell's width, and the two fixed slots are 16x16 and 8x16 cells whose
+width does not take `fontScale`. INFERRED: slots 0, 1 and 2 are the
 `default`, `bigfixed` and `smallfixed` names the script's `font` field takes
-(`cod11-gsc-object-model.md`, "HUD element fields"), and the 16s are the fixed
-cell's height in virtual pixels. VERIFIED from the pak listing: `pak5.pk3`
+(`cod11-gsc-object-model.md`, "HUD element fields"). VERIFIED from the pak listing: `pak5.pk3`
 ships only `fonts/fontImage_{12,16,18,24,30,32}`, no fixed-width atlas. vcod
-draws the two fixed slots with a loaded font at retail's `fontScale / 3`, and
-reads the default slot's height as its tallest glyph at the element's scale.
+draws the two fixed slots with a loaded font at retail's `fontScale / 3` and
+measures them with that font, not per cell, so a fixed-slot string aligned
+centre or right sits off retail's by the difference; it reads the default
+slot's height as its tallest glyph at the element's scale.
 
 ### What each type prints
 
@@ -890,9 +903,12 @@ vcod clamps the fraction to 0..1.
 ### The two clocks
 
 VERIFIED: `0x3001f520` registers the element's material and a second one
-named after it with `"Needle"` (`0x30064b20`) appended, and scales the
-element's timer value by 360 over `duration` (`+0x60`), or by `0x300695d0`
-(1.0922667, `65536 / 60000`) when `duration` is 0, before `ANGLE2SHORT`.
+named after it with `"Needle"` (`0x30064b20`) appended, reads `duration`
+(`+0x60`), and holds the constant `0x300695d0` (1.0922667, `65536 / 60000`).
+INFERRED, off its branch on `duration` and the order of its arithmetic: the
+element's timer value is scaled by 360 over `duration`, or by `0x300695d0`
+when `duration` is 0, and truncated to a 16-bit angle (`ANGLE2SHORT`) before
+it turns the needle.
 INFERRED: the face is drawn at the element's rect and the needle over it,
 turned one revolution per `duration` ms, or per minute without one. Which way
 the needle turns on screen is not measured.
@@ -1082,11 +1098,14 @@ own composed sentence is not modelled.
 
 ### Damage direction
 
-VERIFIED: `0x3002faa0` and `0x30028d00` call `0x300287f0` with the
-playerstate's `damageYaw`, `damagePitch` and `damageCount`, and each call site
-compares `damageEvent` with the previous playerstate's and `damageCount` with
-0. INFERRED, off those two compares: a changed event with a non-zero count is
-a hit, which is the increment the server makes (`cod11-combat.md`).
+VERIFIED: `0x3002faa0` and `0x30028d00` pass `0x300287f0` the
+playerstate's `damageYaw`, `damagePitch` and `damageCount`, and each reads
+`damageEvent` from the current and the previous playerstate and
+`damageCount` from the current one. INFERRED, off the compares each call site
+makes on those reads: the call is made when the event differs from the
+previous playerstate's and the count is not 0, so a changed event with a
+non-zero count is a hit, which is the increment the server makes
+(`cod11-combat.md`).
 
 INFERRED, off `0x300287f0`: yaw and pitch both 255 add no icon; otherwise the
 oldest of eight slots takes the time and `damageYaw / 255 * 360` plus a random
