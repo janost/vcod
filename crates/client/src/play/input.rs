@@ -105,20 +105,20 @@ enum WeaponRequest {
     Prev,
 }
 
-/// The slot 1..=5 that holds `held.weapon`, or 1 if none does (nothing is
-/// bound to slot 0, so this is only reached at all for a weapon that fell
-/// out of the cycle range).
-fn current_slot(held: &Held) -> usize {
+/// The slot 1..=5 that holds `weapon`, or 1 if none does (nothing is bound
+/// to slot 0, so this is only reached at all for a weapon that fell out of
+/// the cycle range).
+fn slot_of(held: &Held, weapon: u8) -> usize {
     CYCLE_SLOTS
         .clone()
-        .find(|&n| held.slots[n] == held.weapon)
+        .find(|&n| held.slots[n] == weapon)
         .unwrap_or(1)
 }
 
-/// Next (or, `forward` false, previous) nonzero slot from the current one,
+/// Next (or, `forward` false, previous) nonzero slot from `from`'s,
 /// wrapping through 1..=5. 0 if none of the other four are set.
-fn step_slot(held: &Held, forward: bool) -> u8 {
-    let mut n = current_slot(held);
+fn step_slot(held: &Held, from: u8, forward: bool) -> u8 {
+    let mut n = slot_of(held, from);
     for _ in 0..5 {
         n = match forward {
             true if n == *CYCLE_SLOTS.end() => *CYCLE_SLOTS.start(),
@@ -143,7 +143,8 @@ pub struct PlayInput {
     /// forced stand at spawn, say) so the client does not fight it.
     wanted_stance: Stance,
     last_seen_stance: Stance,
-    pending_request: Option<WeaponRequest>,
+    /// Weapon binds pressed since the last `build`, in order.
+    pending_requests: Vec<WeaponRequest>,
     /// A switch in flight: the cmd carries this weapon until the playerstate
     /// reports it, then this clears and the cmd follows `Held::weapon` again.
     pending_weapon: Option<u8>,
@@ -152,8 +153,9 @@ pub struct PlayInput {
     jump_consumed_by_stand: bool,
     /// Raw view angles, ANGLE2SHORT units, accumulated from mouse counts;
     /// pitch (index 0) down-positive, yaw (index 1) as `FlyCamera`'s own
-    /// sign. Index 2 (roll) is unused. No clamp: the server clamps nothing
-    /// and stage 3's pmove owns any clamp.
+    /// sign. Index 2 (roll) is unused. Unclamped: retail's server clamps
+    /// pitch at 16000 short units, and the drawn view clamps the same way
+    /// (`own_view` in main.rs).
     raw_angles: [i32; 3],
 }
 
@@ -193,9 +195,9 @@ impl PlayInput {
                     self.jump_consumed_by_stand = true;
                 }
             }
-            Action::Slot(n) => self.pending_request = Some(WeaponRequest::Slot(n)),
-            Action::NextWeapon => self.pending_request = Some(WeaponRequest::Next),
-            Action::PrevWeapon => self.pending_request = Some(WeaponRequest::Prev),
+            Action::Slot(n) => self.pending_requests.push(WeaponRequest::Slot(n)),
+            Action::NextWeapon => self.pending_requests.push(WeaponRequest::Next),
+            Action::PrevWeapon => self.pending_requests.push(WeaponRequest::Prev),
             _ => {}
         }
     }
@@ -220,16 +222,6 @@ impl PlayInput {
     }
 
     fn resolve_pending(&mut self, held: &Held) {
-        if let Some(req) = self.pending_request.take() {
-            let candidate = match req {
-                WeaponRequest::Slot(n) => held.slots.get(n).copied().unwrap_or(0),
-                WeaponRequest::Next => step_slot(held, true),
-                WeaponRequest::Prev => step_slot(held, false),
-            };
-            if candidate != 0 && candidate != held.weapon {
-                self.pending_weapon = Some(candidate);
-            }
-        }
         // Read, or no longer held at all (a death, a map change): either way
         // the cmd goes back to following the playerstate.
         if self
@@ -237,6 +229,19 @@ impl PlayInput {
             .is_some_and(|w| w == held.weapon || !held.slots.contains(&w))
         {
             self.pending_weapon = None;
+        }
+        // A step goes from the selection still in flight, as retail's does,
+        // so a second wheel notch before the swap lands moves on again.
+        for req in std::mem::take(&mut self.pending_requests) {
+            let selected = self.pending_weapon.unwrap_or(held.weapon);
+            let candidate = match req {
+                WeaponRequest::Slot(n) => held.slots.get(n).copied().unwrap_or(0),
+                WeaponRequest::Next => step_slot(held, selected, true),
+                WeaponRequest::Prev => step_slot(held, selected, false),
+            };
+            if candidate != 0 {
+                self.pending_weapon = (candidate != held.weapon).then_some(candidate);
+            }
         }
     }
 
@@ -354,6 +359,25 @@ mod tests {
             stance: Stance::Stand,
         };
         assert_eq!(i.build(116, &other).weapon, 12);
+    }
+
+    #[test]
+    fn a_second_notch_steps_from_the_pending_selection() {
+        // slot 1 holds 10 (in hand), slot 3 holds 3, slot 4 holds 6.
+        let mut i = PlayInput::default();
+        i.key(Action::NextWeapon, true);
+        i.key(Action::NextWeapon, false);
+        assert_eq!(i.build(100, &held(10)).weapon, 3);
+        i.key(Action::NextWeapon, true);
+        i.key(Action::NextWeapon, false);
+        assert_eq!(i.build(108, &held(10)).weapon, 6);
+        // Two notches inside one cmd both count; the second wraps back to
+        // the weapon in hand, which cancels the switch.
+        i.key(Action::PrevWeapon, true);
+        i.key(Action::PrevWeapon, false);
+        i.key(Action::PrevWeapon, true);
+        i.key(Action::PrevWeapon, false);
+        assert_eq!(i.build(116, &held(10)).weapon, 10);
     }
 
     #[test]

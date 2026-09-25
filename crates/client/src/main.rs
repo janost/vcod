@@ -31,7 +31,7 @@ use camera::{FlyCamera, InputState};
 use renderer::{DynamicModelInstance, Renderer};
 
 #[derive(Parser)]
-#[command(about = "Call of Duty (2003) map viewer and spectator client")]
+#[command(about = "Call of Duty (2003) map viewer and client")]
 struct Args {
     /// Map name, e.g. mp_pavlov
     map: Option<String>,
@@ -314,12 +314,12 @@ struct Args {
 }
 
 /// The map every mode reads: the renderer builds from it, entities resolve
-/// submodels in it. `None` while the spectator is between maps.
+/// submodels in it. `None` while `--connect` is between maps.
 struct World {
     bsp: bsp::Bsp,
 }
 
-/// Where the spectator is between connecting and drawing a map.
+/// Where `--connect` is between connecting and drawing a map.
 enum Phase {
     Connecting {
         since: Instant,
@@ -331,7 +331,7 @@ enum Phase {
     Live(Box<LivePhase>),
 }
 
-/// Everything the spectator needs to draw a map.
+/// Everything `--connect` needs to draw a map.
 struct LivePhase {
     world: collision::CollisionWorld,
     scene: entities::EntityScene,
@@ -381,7 +381,7 @@ enum Mode {
         /// statically. Boxed to keep the variants a similar size.
         view_weapon: Option<Box<ViewWeapon>>,
         /// Minimal configstring table so weapon cues resolve through the same
-        /// path as spectate: CS 7 carries [`WALK_LOADOUT`].
+        /// path as `--connect`: CS 7 carries [`WALK_LOADOUT`].
         configstrings: Vec<String>,
         /// Active index into [`WALK_LOADOUT`].
         weapon_slot: usize,
@@ -452,8 +452,8 @@ fn play_action(code: KeyCode) -> Option<play::input::Action> {
         KeyCode::KeyD => Action::Right,
         KeyCode::Space => Action::Jump,
         KeyCode::KeyC => Action::Crouch,
-        KeyCode::ControlLeft => Action::Prone,
-        KeyCode::ShiftLeft => Action::Melee,
+        KeyCode::ControlLeft | KeyCode::ControlRight => Action::Prone,
+        KeyCode::ShiftLeft | KeyCode::ShiftRight => Action::Melee,
         KeyCode::KeyF => Action::Use,
         KeyCode::KeyR => Action::Reload,
         KeyCode::KeyQ => Action::LeanLeft,
@@ -509,7 +509,7 @@ impl ServerClock {
 #[allow(clippy::too_many_arguments)]
 fn hud_lines(
     mode: &Mode,
-    // The spectate entity scene; fly/walk have none.
+    // The online entity scene; fly/walk have none.
     scene: Option<&entities::EntityScene>,
     stats: &hud_text::HudStats,
     // (build_instances, render, fx step+build_quads) ms
@@ -715,7 +715,7 @@ fn main() -> Result<()> {
         None => None,
     };
 
-    // Fly and walk need their map up front; spectate learns it from the
+    // Fly and walk need their map up front; online learns it from the
     // server inside the loop and loads through the same path as a map change.
     let local = if net_client.is_none() {
         let Some(map) = args.map.as_deref() else {
@@ -879,17 +879,22 @@ fn main() -> Result<()> {
     }
 }
 
-/// `ps.delta_angles` in usercmd angle order [pitch, yaw, roll].
-const DELTA_ANGLE_FIELDS: [&str; 3] = ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"];
-
 /// The camera's (yaw, pitch) in radians for our own playerstate: the raw cmd
 /// angles plus `delta_angles`, which is the view the server builds
 /// (docs/protocol-1.1.md, "View angles"). Wire pitch is down-positive, the
-/// camera's up-positive.
+/// camera's up-positive. Pitch is drawn clamped at retail's limit; the cmd
+/// still carries the raw angle.
 fn own_view(raw: [i32; 3], delta: [i32; 3]) -> (f32, f32) {
-    let deg = |i: usize| (raw[i].wrapping_add(delta[i]) as i16) as f32 * 360.0 / 65536.0;
-    (deg(1).to_radians(), -deg(0).to_radians())
+    let short = |i: usize| raw[i].wrapping_add(delta[i]) as i16;
+    let deg = |s: i16| s as f32 * 360.0 / 65536.0;
+    let pitch = short(0).clamp(-PITCH_CLAMP_SHORT, PITCH_CLAMP_SHORT);
+    (deg(short(1)).to_radians(), -deg(pitch).to_radians())
 }
+
+/// Retail's view pitch clamp, 87.9 degrees in short units
+/// (docs/research/cod11-gsc-object-model.md, the defender fixture's
+/// `viewangles[0]`).
+const PITCH_CLAMP_SHORT: i16 = 16000;
 
 /// Synthetic muzzle for playerState-ring fire events (`entity_num ==
 /// u32::MAX` in `net::events`): the ridden body is `skip_num`, never drawn,
@@ -1200,7 +1205,7 @@ struct App {
     debug_overlay: bool,
     cull_mode: renderer::CullMode,
     hud_stats: hud_text::HudStats,
-    /// Spectate frames without a straddling snapshot pair. Cumulative; the
+    /// Online frames without a straddling snapshot pair. Cumulative; the
     /// overlay shows the rate.
     interp_misses: u64,
     /// Cumulative events drained, and those with an unrecognized code.
@@ -1505,10 +1510,13 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,
                 };
+                let grabbed = self.grabbed;
                 match &mut self.mode {
                     Mode::Fly(cam) => cam.adjust_speed(scroll),
                     // Retail binds MWHEELDOWN to weapnext, MWHEELUP to weapprev.
-                    Mode::Online { input, .. } if scroll != 0.0 => {
+                    Mode::Online {
+                        input, menu_view, ..
+                    } if grabbed && menu_view.is_none() && scroll != 0.0 => {
                         let action = if scroll < 0.0 {
                             play::input::Action::NextWeapon
                         } else {
@@ -1530,7 +1538,7 @@ impl ApplicationHandler for App {
                 let cull = self.cull_mode;
                 let Some(r) = &mut self.renderer else { return };
                 let aspect = r.aspect();
-                // Set inside the spectate arm where `self` is borrowed out
+                // Set inside the online arm where `self` is borrowed out
                 // field-by-field; acted on once the borrows end.
                 let mut fatal: Option<anyhow::Error> = None;
                 let (mut frame, vm) = match &mut self.mode {
@@ -1679,9 +1687,13 @@ impl ApplicationHandler for App {
                             cmd_clock.reset();
                             ring.clear();
                         }
-                        // Also before the map is up, so the first cmd goes out
-                        // as soon as the gamestate makes the client active.
-                        if net.state() == net::NetState::Active {
+                        // Only with the map up: the first cmd after a gamestate
+                        // is what enters the client into the world
+                        // (docs/protocol-1.1.md, "Entering the world").
+                        if matches!(phase, Phase::Live(_))
+                            && !gamestate_ready
+                            && net.state() == net::NetState::Active
+                        {
                             let times = cmd_clock.due(net.server_clock_ms());
                             if !times.is_empty() {
                                 let held = net.snapshots().newest().map_or_else(
@@ -1835,6 +1847,14 @@ impl ApplicationHandler for App {
                                         .newest()
                                         .map_or(-1, |s| s.ps.field_i32(p, "clientNum"));
                                     let following = ps_client >= 0 && ps_client != client_num;
+                                    // Intermission (5) and dead (6, 7) take no view
+                                    // from the cmd (Q3 `PM_UpdateViewAngles`), so
+                                    // those draw the snapshot's view, as following does.
+                                    let pm_type = net
+                                        .snapshots()
+                                        .newest()
+                                        .map_or(0, |s| s.ps.field_i32(p, "pm_type"));
+                                    let snapshot_view = following || (5..=7).contains(&pm_type);
                                     let skip_num = if following { ps_client } else { client_num };
                                     // Rebuilt every frame so absent entities (PVS churn) drop out.
                                     let mut instances: Vec<DynamicModelInstance> = Vec::new();
@@ -1883,7 +1903,7 @@ impl ApplicationHandler for App {
                                                 * (1.0 - f)
                                                 + b.ps.field_f32(p, "viewHeightCurrent") * f;
                                             cam.pos = pos + Vec3::Z * vh;
-                                            if following {
+                                            if snapshot_view {
                                                 let va_a = a.ps.viewangles(p);
                                                 let va_b = b.ps.viewangles(p);
                                                 cam.yaw = camera::lerp_angle(va_a[1], va_b[1], f)
@@ -1898,16 +1918,17 @@ impl ApplicationHandler for App {
                                             cam.pos = Vec3::from(newest.ps.origin(p))
                                                 + Vec3::Z
                                                     * newest.ps.field_f32(p, "viewHeightCurrent");
-                                            if following {
+                                            if snapshot_view {
                                                 let va = newest.ps.viewangles(p);
                                                 cam.yaw = va[1].to_radians();
                                                 cam.pitch = -va[0].to_radians();
                                             }
                                         }
                                     }
-                                    if !following {
+                                    if !snapshot_view {
                                         let delta = net.snapshots().newest().map_or([0; 3], |s| {
-                                            DELTA_ANGLE_FIELDS.map(|name| s.ps.field_i32(p, name))
+                                            net::DELTA_ANGLE_FIELDS
+                                                .map(|name| s.ps.field_i32(p, name))
                                         });
                                         (cam.yaw, cam.pitch) = own_view(input.raw_angles(), delta);
                                     }
@@ -2315,7 +2336,7 @@ impl ApplicationHandler for App {
                     self.fail(event_loop, err);
                     return;
                 }
-                // The scene lives in the spectate phase now, so pull it back
+                // The scene lives in the online phase, so pull it back
                 // out for the overlay after the mode's mutable borrows end.
                 let scene = match &self.mode {
                     Mode::Online {
@@ -2475,6 +2496,15 @@ mod tests {
         // A delta sent as the unsigned 16-bit value wraps like a signed one.
         let (yaw, _) = own_view([0, 0, 0], [0, 65536 - quarter, 0]);
         assert!((yaw.to_degrees() + 90.0).abs() < 0.01);
+        // Past straight down draws at the clamp, either way.
+        for raw_pitch in [quarter - 100, 20_000, -20_000] {
+            let (_, pitch) = own_view([raw_pitch, 0, 0], [0; 3]);
+            assert!(
+                (pitch.to_degrees().abs() - 87.89).abs() < 0.01,
+                "pitch {}",
+                pitch.to_degrees()
+            );
+        }
     }
 
     #[test]

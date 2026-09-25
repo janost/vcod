@@ -883,8 +883,8 @@ impl<T: Transport> NetClient<T> {
 /// this keeps only the most recent ones.
 const MAX_MOVE_CMDS: usize = 32;
 
-/// In usercmd angle order [pitch, yaw, roll].
-const DELTA_ANGLE_FIELDS: [&str; 3] = ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"];
+/// `ps.delta_angles`, in usercmd angle order [pitch, yaw, roll].
+pub const DELTA_ANGLE_FIELDS: [&str; 3] = ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"];
 
 /// The compact usercmd encoding carries only -127, 0 or 127 per axis.
 fn quantize_move(v: i8) -> i8 {

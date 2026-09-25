@@ -12,7 +12,7 @@ pub const MAX_PACKET_CMDS: usize = 32;
 
 /// Which server times to build cmds for, one call per rendered frame. Ticks
 /// at multiples of [`CMD_MS`] since the last call; a small backward step in
-/// the estimate (`net/mod.rs` `estimated_server_time` re-anchoring on a
+/// the estimate (`NetClient::server_clock_ms` re-anchoring on a
 /// snapshot) is absorbed by waiting rather than re-ticking, and a step of a
 /// second or more (a new gamestate) restarts the clock instead.
 #[derive(Default)]
