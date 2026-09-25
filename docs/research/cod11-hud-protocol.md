@@ -840,9 +840,25 @@ the width runs linearly from `fromWidth` (`+0x3c`, again the font height when
 0) to that; height the same off `+0x34` and `+0x40`. VERIFIED: the stock S&D
 progress bar is `setShader("white", 0, 8)` then `scaleOverTime(planttime,
 barsize, 8)` (`maps/MP/gametypes/sd.gsc` in `pak5.pk3`). INFERRED, from the
-two together: that bar grows from the font height, not from 0. INFERRED,
-off `0x3001ef50`: a shader element whose `font` is not 0 is never shorter than
-the font height.
+two together: that bar grows from the font height, not from 0.
+
+VERIFIED: `0x3001ef50` reads the dword at `+0x10` and the float at `+0x28`
+of the structure `ecx` points at, and `0x3001f120` passes it `esi`
+(`0x3001f2d9`), the setup record it fills. INFERRED, off `0x3001ef50`'s
+branches: it returns the font height (`+0x28`) in place of the element's
+height when that dword is non-zero and the element's height is not above
+it; that height is what the box is placed by. VERIFIED: `0x3001f120` stores
+the label string's pointer at the record's `+0x10`, the localize result at
+`0x3001f1f0` or the empty string `0x3006193c` at `0x3001f1f7`, and
+`0x3001f090` writes `0x3006193c` there again after a merge. INFERRED, from
+those stores: that pointer is never null, so the floor applies to every
+element, whatever its `font`. INFERRED, off `0x3001f6f0` (type 3) and
+`0x3001f520` (types 8 and 9): the shader is drawn at the unfloored
+`0x3001ee90` height `h`, at the record's `y` plus `(H - h) * 0.5` for
+`alignY` 1 and `H - h` for 2, where `H` is the floored height, which cancels
+the floor. INFERRED: the floored height therefore only moves the label
+(`0x3001f490` places its text inside `H` by the font height the same way),
+and a shader is aligned by its own height.
 
 INFERRED, off `0x3001efb0` and `0x3001f020`: the position is `x` (`+0x4`) and
 `y` (`+0x8`), moved from `fromX` (`+0x4c`) and `fromY` (`+0x50`) the same way

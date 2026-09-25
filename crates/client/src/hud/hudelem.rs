@@ -218,10 +218,7 @@ fn draw(
         )
     };
     let w = tween(f::WIDTH, f::FROM_WIDTH);
-    let mut h = tween(f::HEIGHT, f::FROM_HEIGHT);
-    if e.get(f::FONT) != 0 {
-        h = h.max(tf.height);
-    }
+    let h = tween(f::HEIGHT, f::FROM_HEIGHT);
     let (x, y) = place(e, now, w, h);
     out.push(v.quad(x, y, w, h, color, material));
     if ty >= 8 {
@@ -515,6 +512,22 @@ pub(crate) mod tests {
                 [200.0, 164.0]
             ]
         );
+    }
+
+    #[test]
+    fn a_shader_shorter_than_its_font_aligns_by_its_own_height() {
+        let cs = cs_with(&[(CS_SHADERS + 5, "white")]);
+        let e = elem(&[
+            (f::TYPE, 3),
+            (f::SHADER, 5),
+            (f::FONT, 1),
+            (f::Y, 100),
+            (f::ALIGN_Y, 2),
+            (f::WIDTH, 64),
+            (f::HEIGHT, 4),
+        ]);
+        let q = &run(&[e], &cs, 0, (640.0, 480.0))[0];
+        assert_eq!((q.verts[0][1], q.verts[2][1]), (96.0, 100.0));
     }
 
     #[test]
