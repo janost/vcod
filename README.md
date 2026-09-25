@@ -29,10 +29,11 @@ combat effects.
   handshake, Huffman coding, netchan, delta snapshots and usercmds, and picks a
   team and a weapon through the stock script menus the server opens, or
   answers them from `--team` and `--weapon`. Until you join it follows the
-  server's spectator camera; once spawned the camera sits at your player's eye.
-  Movement is not predicted yet: the view moves when the server's snapshot
-  does. The usercmd carries the movement axes, the view angles and the held
-  weapon but no buttons yet, so you cannot fire or press use. It renders
+  server's spectator camera; once spawned you play: move, jump, crouch, go
+  prone, lean, fire, aim, reload, melee, use and switch weapons on retail's
+  default binds, one usercmd per 8 ms as a 125 fps retail client builds
+  them. Movement is not predicted yet, so the view moves when the
+  server's snapshot does and lags your input by the round trip. It renders
   every player as an assembled soldier playing the server-driven animations.
   Kill feed, chat, scoreboard, sounds, tracers, impacts and muzzle flashes
   come from the same events the retail client reads. It downloads every pak
@@ -207,7 +208,7 @@ at close range and respawn on the use key. 0 (the default) is off.
 
 Click to capture the mouse, Esc to release it, mouse to look around.
 
-### Fly mode (default) and spectate
+### Fly mode (default)
 
 | Input | Action |
 |---|---|
@@ -217,10 +218,31 @@ Click to capture the mouse, Esc to release it, mouse to look around.
 | Shift | Speed boost |
 | Scroll | Adjust fly speed |
 
-In spectate mode the position comes from the server; the mouse drives the look
-angles. Hold Tab for the scoreboard. A map change on the server shows a loading
-screen (and downloads missing paks the way the connect does) and continues on
-the new map.
+### Playing (`--connect`)
+
+The binds follow retail's `config_mp.cfg`, except the right mouse button,
+which retail binds to `toggle cl_run` and vcod uses for the sight.
+
+| Input | Action |
+|---|---|
+| W / A / S / D | Move forward / left / back / right |
+| Space | Stand up from crouch or prone; jump when standing |
+| C | Toggle crouch |
+| Ctrl | Toggle prone |
+| Q / E | Lean left / right (held) |
+| LMB | Fire (semi-automatic weapons fire once per click) |
+| RMB | Aim down the sight (held) |
+| R | Reload |
+| Shift | Melee |
+| F | Use: pick up a weapon, plant or defuse, respawn after a death |
+| 1 / 2 / 3 / 4 | Weapon slot: primary, second primary, pistol, grenade |
+| Scroll | Next / previous weapon |
+| Tab | Scoreboard (held) |
+
+The position comes from the server and is not predicted yet. As a
+spectator, Space rises while held and C sinks until pressed again. A map
+change on the server shows a loading screen (and downloads missing paks the
+way the connect does) and continues on the new map.
 
 | Input | Action |
 |---|---|
@@ -229,8 +251,9 @@ the new map.
 | Up / Down, Enter | Move the menu selection, pick it |
 | Esc | Close the menu |
 
-While a menu is open these keys go to it, and Esc closes it rather than
-releasing the mouse; W / A / S / D still move.
+While a menu is open these keys go to it, so the digits pick a row instead of
+a weapon, and Esc closes it rather than releasing the mouse; W / A / S / D
+still move.
 
 These work in every mode:
 
