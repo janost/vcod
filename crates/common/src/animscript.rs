@@ -124,7 +124,9 @@ impl AnimScript {
         out
     }
 
-    /// Whether any line naming `name` carries `turretanim`.
+    /// Whether any line naming `name` carries `turretanim`. Retail keeps the
+    /// flag on the anim's own record, which any such line sets (turrets doc
+    /// 7.1), so this is the same test.
     pub fn is_turret_anim(&self, name: &str) -> bool {
         let name = fold(name);
         self.states

@@ -598,55 +598,87 @@ call 0x51f8d); stores to `ps.origin[2]` (0x51f1b, 0x51fb3);
 
 Re-read with `annotate_func.py` over 0x515a8..0x5201b for this section. `ent`
 is the player, `tur` the turret, `ci` the player's `bgs` client info
-(`bgs + clientNum * 0x448`). VERIFIED, each by the instruction named:
+(`bgs + clientNum * 0x448`). Each item carries its own labels.
 
-- the gate: the word at `ci+0x9ba78` compared to 0 (0x515c7), the pointer at
-  `ci+0x9ba7c` compared to null (0x515d4) and its `+0x50 & 4` (0x515e2);
-- the anim handle: that word with bit 0x200 cleared (`and ah,0xfd`, 0x51671)
-  under `Scr_GetAnimsIndex`'s result in the high half; the tree is the dword
-  at `ci+0x9bb2c` (0x51638);
-- `vectosignedyaw` on the first three floats of `tag_weapon`'s matrix
-  (0x51682), and that matrix's floats at `+0x30`, `+0x34` and `+0x38`
-  (0x51e9e, 0x51eaa, 0x51710);
-- `AnglesToAxis(tur.r.currentAngles)` into a 4x3 whose last row is
-  `tur.r.currentOrigin` (0x5169d..0x516c0); the dot of `ent.r.currentOrigin -
-  tur.r.currentOrigin` with that axis's third row (0x516c5..0x51700), kept at
-  `ebp-0x154`, and the same dot minus the tag's `+0x38`, kept at `ebp-0x140`;
-- a loop over the anim's children, bounded by `trap_XAnimGetNumChildren`
-  (0x5173e, 0x51a10). Per child: its goal weight 1.0 (0x51812); `x = 0.5 * n
-  - yaw / weaponDef+0x400`, `n` the child's own child count
-  (0x5184e..0x51878); compares against 0 and `n - 1` (0x5187e..0x518b8); a
-  `fistp` under control word bits 0xc00, round toward zero (0x518c0..0x518eb);
-  `f = x - trunc(x)` (0x518fd); grandchild `trunc(x)` given `1 - f`
-  (0x5195b); a compare of `f` against 0 (0x5196b); grandchild `trunc(x) + 1`
-  given `f` (0x519b6); `trap_XAnimCalcAbsDelta` on the child (0x519d4) with
-  its translation at `ebp-0xc..-0x4`; a compare of the translation's z
-  against `ebp-0x140` (0x519df) and a `je` out of the loop (0x519ea); stores
-  of that z, `f` and `trunc(x)` (0x519ec..0x51a04);
-- after the loop: `trap_XAnimClearTree` on the anim (0x51a33), the last
-  child's two grandchildren given `1 - f` and `f` again (0x51aa8, 0x51b35),
-  and compares of the loop index against 0 and the child count
-  (0x51b3d..0x51b52); one arm looks up `tag_aim` (0x51b64) and gives the
-  child 1.0 (0x51e57); the other computes `(ebp-0x140 - z_prev) / (z - z_prev)`
-  (0x51bf0..0x51c14), gives it to the child (0x51c7a) and its complement to
-  child `i - 1` (0x51d1a), and gives child `i - 1`'s stored grandchild pair
-  the stored `1 - f` and `f` (0x51da8, 0x51e57). Every goal weight after the
-  loop carries a blend time built from the child's current weight
-  (`trap_XAnimGetWeight`), 1000.0 (0x758f4) and the int at `level+0x1f0`;
-- `trap_XAnimCalcAbsDelta` on the whole anim (0x51e7b); `VectorAngleMultiply`
-  of its translation by the tag's yaw (0x51e90); a local origin of that
-  translation's x and y plus the tag's `+0x30` and `+0x34`, and `ebp-0x154`
-  for z (0x51e9b..0x51ebf); `RotationToYaw` of the delta's rotation plus the
-  tag's yaw into `YawToAxis` (0x51ec3..0x51edb); `MatrixMultiply43` of that
-  local 4x3 with the turret's (0x51ef2); the product's last row stored to
-  `ps.origin` (0x51efa..0x51f1b);
-- `trap_Trace` with a zero box from (`ps.origin[0]`, `ps.origin[1]`,
-  `tur.r.currentOrigin[2]`) to `ps.origin`, the player's number to skip and
-  mask 0x2810011 (0x51f1e..0x51f8d); a compare of 1.0 against the fraction
-  (0x51f97) and a store of the trace's `+0xc` to `ps.origin[2]` (0x51fb3);
-- `BG_PlayerStateToEntityState` (0x51fc6), `ps.origin` into
-  `ent.r.currentOrigin` (0x51fd7..0x51fec), `AxisToAngles` of the product's
-  axis into `ent.r.currentAngles` (0x51ffb), `trap_LinkEntity` (0x5200a).
+- VERIFIED: a compare of the word at `ci+0x9ba78` against 0 (0x515c7), a
+  compare of the pointer at `ci+0x9ba7c` against null (0x515d4) and a test of
+  its `+0x50` byte against 4 (0x515e2). VERIFIED: `BG_ParseCommands` keeps its
+  third argument plus 0x50 at `ebp-0xc` (0x2866a) and ORs 4 into the byte at
+  that base plus the anim index times 0x5c (0x2896d..0x28973), next to the
+  push of the `turretanim` string (0x28946). INFERRED: `+0x50 & 4` is a flag on
+  the 92-byte `animation_t` record, set by any script line that names the anim
+  with `turretanim`, and the placement runs only while the current legs anim
+  carries it.
+- VERIFIED: the word at `ci+0x9ba78` with bit 0x200 cleared (`and ah,0xfd`,
+  0x51671) and `Scr_GetAnimsIndex`'s result shifted into the high half
+  (0x51652), and the dword at `ci+0x9bb2c` loaded as the first argument of
+  every `trap_XAnim*` call (0x51638). INFERRED: the handle is the legs anim
+  in the player's own anim tree.
+- VERIFIED: `vectosignedyaw` called on the pointer `G_DObjGetLocalTagMatrix`
+  returned for `tag_weapon` (0x51682), and loads of that matrix's floats at
+  `+0x30`, `+0x34` and `+0x38` (0x51e9e, 0x51eaa, 0x51710). INFERRED: the
+  first three floats are the tag's forward axis and `+0x30..+0x38` its
+  translation in the gun's model space.
+- VERIFIED: `AnglesToAxis(tur.r.currentAngles)` into `ebp-0x3c` (0x5169d) and
+  `tur.r.currentOrigin` stored right after it at `ebp-0x18..-0x10`
+  (0x516ae..0x516c0); `ent.r.currentOrigin - tur.r.currentOrigin` multiplied
+  by the floats at `ebp-0x24..-0x1c` and summed (0x516c5..0x51700), stored at
+  `ebp-0x154` (0x5170a), and that sum minus the tag's `+0x38` stored at
+  `ebp-0x140` (0x51719). INFERRED: the first is the player's height above the
+  gun along the gun's up axis, the second that height below `tag_weapon`.
+- VERIFIED, the immediates and calls between 0x5173e and 0x51a16:
+  `trap_XAnimGetNumChildren` on the anim (0x5173e), `trap_XAnimGetChildAt`
+  (0x517e9), `trap_XAnimSetGoalWeight` with 1.0 (0x51812),
+  `trap_XAnimGetNumChildren` on the child (0x5181e), a multiply of that count
+  by 0.5 (0x51854, 0x758f0), a divide of the tag's yaw by the weapon def's
+  `+0x400` (0x5186c), compares against 0 and against the count minus one
+  (0x5187e..0x518ae), a `fistp` under control word bits 0xc00 (0x518df), a
+  subtract of the integer back out (0x518fd), `trap_XAnimSetGoalWeight` with
+  `1 - f` (0x5195b), a compare of `f` against 0 (0x5196b),
+  `trap_XAnimGetChildAt` with the index plus one (0x51986) and
+  `trap_XAnimSetGoalWeight` with `f` (0x519b6), `trap_XAnimCalcAbsDelta` on
+  the child with its translation out at `ebp-0xc` (0x519d4), a compare of the
+  float at `ebp-0x4` against `ebp-0x140` (0x519df), stores of that float, `f`
+  and the index (0x519ec..0x51a04), an increment of `ebp-0x12c` and a compare
+  against the child count (0x51a0a, 0x51a10). INFERRED: this is a loop over
+  the anim's children (the rows); per row the column position is `x = 0.5 * n
+  - yaw / animHorRotateInc` clamped to `[0, n - 1]`, rounded toward zero, and
+  split between the two columns either side; the `je` at 0x519ea leaves the
+  loop at the first row whose delta z reaches the target, and every other row
+  leaves its z, `f` and index behind for the next.
+- VERIFIED, the calls between 0x51a20 and 0x51e57: `trap_XAnimClearTree` on
+  the anim (0x51a33); `trap_XAnimSetGoalWeight` with `1 - f` and with `f`
+  (0x51aa8, 0x51b35); compares of `ebp-0x12c` against 0 and against the child
+  count (0x51b3d, 0x51b4c); `G_DObjGetLocalTagMatrix` for `tag_aim` (0x51b64)
+  and a `jmp` to a `trap_XAnimSetGoalWeight` with 1.0 (0x51be7, 0x51e57);
+  `(ebp-0x140 - z_prev) / (z - z_prev)` (0x51bf0..0x51c14) passed to
+  `trap_XAnimSetGoalWeight` (0x51c7a); `trap_XAnimGetChildAt` with the index
+  minus one (0x51c9b) and its goal weight one minus that (0x51d1a); the
+  stored index and `f` passed on to two more `trap_XAnimSetGoalWeight` calls
+  (0x51da8, 0x51e57). VERIFIED: every one of these weights is passed with a
+  time built from `trap_XAnimGetWeight`, 1000.0 (0x758f4) and the int at
+  `level+0x1f0`. INFERRED: a loop that broke at the first row or never broke
+  gives that end row alone weight 1 (the `tag_aim` lookup only guards it);
+  otherwise the breaking row gets `t`, the row before it `1 - t`, and each
+  row its own column pair.
+- VERIFIED: `trap_XAnimCalcAbsDelta` on the whole anim (0x51e7b);
+  `VectorAngleMultiply` of its translation by the tag's yaw (0x51e90); the
+  translation's x and y plus the tag's `+0x30` and `+0x34` stored at
+  `ebp-0x48`, `ebp-0x44`, and `ebp-0x154` stored at `ebp-0x40`
+  (0x51e9b..0x51ebf); `RotationToYaw` of the delta's rotation plus the tag's
+  yaw passed to `YawToAxis` into `ebp-0x6c` (0x51ec3..0x51edb);
+  `MatrixMultiply43` of `ebp-0x6c` with `ebp-0x3c` into `ebp-0x9c` (0x51ef2);
+  stores of `ebp-0x78..-0x70` into `ps.origin` (0x51efa..0x51f1b).
+- VERIFIED: `trap_Trace` with a zero box, start `ps.origin[0]`,
+  `ps.origin[1]` and `tur.r.currentOrigin[2]`, end `ps.origin`, the player's
+  number as the skip entity and mask 0x2810011 (0x51f1e..0x51f8d); a compare
+  of 1.0 against the fraction (0x51f97) and a store of the trace's `+0xc` into
+  `ps.origin[2]` (0x51fb3). INFERRED: a trace that hits something moves the
+  origin's z onto what it hit, and a clear one leaves it.
+- VERIFIED: `BG_PlayerStateToEntityState` (0x51fc6), stores of `ps.origin`
+  into `ent.r.currentOrigin` (0x51fd7..0x51fec), `AxisToAngles` from
+  `ebp-0x9c` into `ent.r.currentAngles` (0x51ffb) and `trap_LinkEntity`
+  (0x5200a).
 
 VERIFIED, the leaves (pak0, flag 0x2 root tracks, one key each): the 21
 `pb_standMG42gunner_aim_*` root translations read z -39.57 on every `15down`
@@ -682,15 +714,22 @@ INFERRED, each from 7.1's control flow:
   the gun's axis and origin. The body's yaw is the blend's root yaw plus the
   tag's, in the gun's frame.
 - The trace lifts the origin onto whatever lies between the gun's height and
-  that spot; a clear trace leaves the player's own height.
+  that spot; a clear trace leaves the player's own height. Nothing here puts
+  the player on the floor: the z is the height the player mounted at, which
+  pmove left on the ground, and the mounted pmove arm moves nothing
+  (section 5). vcod's port does the same.
 
 VERIFIED, the replay: `every_captured_gunner_origin_replays`
 (`crates/server/src/game/turret.rs`) runs vcod's port of 7.2 over the gun's
 `angles2` and the gunner's origin of all 260 mounted snapshots on a turret
 anim in the 12.2 capture, both tables and every snapshot between, through
-mp_carentan's collision: max 0.099 units, mean 0.049, z -23.9 on every one.
+mp_carentan's collision: horizontal residual max 0.099 units, mean 0.049.
 The fixture prints one decimal, so that is its rounding. Walking the
-children in file order instead misses by up to 3.0 (mean 1.8).
+children in file order instead misses by up to 3.0 (mean 1.8). The test
+feeds the captured origin in, so its z says nothing about the trace; the
+same test feeds each snapshot again from 16 units under the floor, and the
+trace lifts every one onto mp_carentan's floor at -23.875, the capture's
+-23.9.
 
 Not determined:
 
@@ -1302,10 +1341,12 @@ spot. INFERRED: retail's clone copies `ps.eFlags`
 `ClientEndFrame` releases, so a retail corpse of a gunner killed by `kill`
 may carry 0xC000; no capture covers it.
 
-- The placement's trace sees the world's brushes and terrain only, where
-  retail's `trap_Trace` also clips entities. The yaw goes to script as the
-  whole of `angles`, pitch and roll 0, where retail's `AxisToAngles` carries
-  a tilted gun's pitch and roll too.
+- The placement's trace sees the world's brushes and terrain only.
+  INFERRED, from the skip-entity argument 7.1 reads: retail's `trap_Trace`
+  also clips entities. The yaw goes to script as the whole of `angles`, pitch
+  and roll 0. INFERRED, from the `AxisToAngles` call 7.1 reads on the gun's
+  axis times the body's: retail carries a tilted gun's pitch and roll there
+  too.
 - INFERRED: the muzzle takes `tag_flash`'s distance from `tag_player` off the
   model's bind pose, where 0x51488 reads both tags off the animated model
   (section 6.3).

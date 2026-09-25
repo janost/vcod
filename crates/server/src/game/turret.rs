@@ -352,6 +352,22 @@ pub fn tag_weapon_local(tags: &TurretTags, angles2: [f32; 3]) -> (Vec3, glam::Qu
     (tags.aim + barrel * (tags.weapon - tags.aim), barrel)
 }
 
+/// 0x515a8's trace (turrets doc 7.1): from the gun's height down to the
+/// placed spot, whose z moves onto whatever the trace meets. World geometry
+/// only, no entities.
+pub fn lift_onto_floor(
+    collision: &vcod_common::collision::CollisionWorld,
+    mut at: Vec3,
+    gun_z: f32,
+) -> Vec3 {
+    let start = Vec3::new(at.x, at.y, gun_z);
+    let tr = collision.point_trace(start, at, vcod_common::collision::MASK_PLAYERSOLID, false);
+    if tr.fraction < 1.0 {
+        at.z = tr.endpos.z;
+    }
+    at
+}
+
 /// `EV_STANCE_FORCE_STAND`/`_CROUCH`/`_PRONE` (`cod11-events-and-fx.md`).
 const EV_STANCE_FORCE_STAND: i32 = 140;
 const EV_STANCE_FORCE_CROUCH: i32 = 141;
@@ -840,31 +856,28 @@ mod tests {
         assert_eq!(frames.len(), 260, "mounted snapshots on a turret anim");
         let (mut max, mut sum) = (0.0f32, 0.0);
         for (line, legs, a2, want) in frames {
-            let (mut at, _) = vcod_common::turretpose::place_gunner(
-                &anims,
-                |n| vcod_common::xanim::load(&fs, n).ok().map(std::rc::Rc::new),
-                legs,
-                tag_weapon_local(&tags, a2),
-                turret,
-                want,
-                15.0,
-            )
-            .unwrap_or_else(|| panic!("line {line}: no placement"));
-            let start = Vec3::new(at.x, at.y, gun.z);
-            let tr = world.collision.point_trace(
-                start,
-                at,
-                vcod_common::collision::MASK_PLAYERSOLID,
-                false,
-            );
-            if tr.fraction < 1.0 {
-                at.z = tr.endpos.z;
-            }
-            assert!((at.z - -23.9).abs() < 0.05, "line {line}: z {}", at.z);
-            let err = (at - want).length();
+            let place = |from: Vec3| {
+                let (at, _) = vcod_common::turretpose::place_gunner(
+                    &anims,
+                    |n| vcod_common::xanim::load(&fs, n).ok().map(std::rc::Rc::new),
+                    legs,
+                    tag_weapon_local(&tags, a2),
+                    turret,
+                    from,
+                    15.0,
+                )
+                .unwrap_or_else(|| panic!("line {line}: no placement"));
+                lift_onto_floor(&world.collision, at, gun.z)
+            };
+            let at = place(want);
+            let err = (at - want).truncate().length();
             assert!(err < 0.25, "line {line}: {at:?} vs {want:?}, off {err}");
             max = max.max(err);
             sum += err;
+            // The placement keeps the height it is handed; only the trace
+            // moves it, so the floor has to come from the trace.
+            let sunk = place(want - Vec3::Z * 16.0);
+            assert!((sunk.z - want.z).abs() < 0.05, "line {line}: z {}", sunk.z);
         }
         eprintln!(
             "placement residual over 260 snapshots: max {max:.3} mean {:.3}",

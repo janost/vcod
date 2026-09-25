@@ -641,19 +641,8 @@ impl ScriptRuntime {
             _ => None,
         };
         if let Some((mut at, _)) = placed {
-            // Dropped onto what lies between the gun's height and the spot
-            // (0x51f6c): world geometry only, no entities.
             if let Some(world) = &self.host.world {
-                let start = glam::Vec3::new(at.x, at.y, origin[2]);
-                let tr = world.collision.point_trace(
-                    start,
-                    at,
-                    vcod_common::collision::MASK_PLAYERSOLID,
-                    false,
-                );
-                if tr.fraction < 1.0 {
-                    at.z = tr.endpos.z;
-                }
+                at = crate::game::turret::lift_onto_floor(&world.collision, at, origin[2]);
             }
             sim.ps.origin = at;
         }

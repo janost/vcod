@@ -158,7 +158,8 @@ mod tests {
                 15.0,
             )
             .unwrap_or_else(|| panic!("line {line}: no placement"));
-            let err = (at - Vec3::from(want)).length();
+            // Horizontal only: z is the height handed in (turrets doc 7.2).
+            let err = (at - Vec3::from(want)).truncate().length();
             assert!(err < 0.25, "line {line}: {at:?} vs {want:?}, off {err}");
         }
     }
