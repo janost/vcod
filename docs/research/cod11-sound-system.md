@@ -913,6 +913,16 @@ release, `cod11-turrets.md` 12.7) lands in silence where a 32-unit one plays
 the landing. An earlier read of this paragraph said "landing speed", and vcod
 compared a speed in units a second against the 4/8/12 until 2026-09-25.
 
+VERIFIED, the anim at the head of the function: a compare of `ps+0x6c`
+(`legsTimer`) against 0 (0x2fd84), an `fcomp` of -220.0 (rodata 0x70a08)
+against `pml.previous_velocity[2]` (0x2fd8a..0x2fd9b), and a call to
+`BG_AnimScriptEvent(ps, 5, 0, 1)` (0x2fd9d..0x2fda4). INFERRED: the land anim
+(event 5) plays only when the legs timer has run out and the move began
+falling faster than 220 units a second; any slower landing keeps whatever the
+legs were playing. VERIFIED on the wire: the turret capture's two releases
+end in a one-unit drop and keep `pb_stand_alert` through the landing
+(`cod11-turrets.md` 12.7, fixture lines 1274-1281).
+
 Other movement emitters seen while in there, for completeness: stair-step 143
 (parm = clamped step delta + 128), foliage rustle 139 (cvar-driven interval
 trace @0x328cc), water enter/leave 144/145, forced stance 140/141/142.
@@ -934,7 +944,9 @@ trace @0x328cc), water enter/leave 144/145, forced stance 140/141/142.
   window after a push-off gates the climb steps.
 - The fall height comes from the fastest downward speed sampled while
   airborne (within one frame of gravity of retail's kinematic value), squared
-  over `2 * GRAVITY`.
+  over `2 * GRAVITY`. The land anim is gated in `ClientSim::update_anims` on
+  `PlayerState::land_anim` (the move's starting vertical speed below -220)
+  and on no event anim holding the legs.
 - Fall damage does not exist locally, so only the damage-free landing ladder
   applies; the x0.67 hard-landing velocity damp is not ported (movement, not
   sound).

@@ -299,6 +299,9 @@ pub struct ClientSim {
     /// several moves still raises the event. Leaving the ground is not enough:
     /// a ledge and a ladder do that without a jump.
     jumped: bool,
+    /// A landing since the last `update_anims` fast enough for the land
+    /// anim (`PlayerState::land_anim`).
+    land_anim: bool,
     /// `ps.stats[0]` and `stats[2]`, mirrored from the host's vitals every
     /// frame; the host is where the script's `self.health` lands.
     pub health: i32,
@@ -414,6 +417,7 @@ impl ClientSim {
             was_airborne: false,
             strafing: None,
             jumped: false,
+            land_anim: false,
             link_to: None,
             cursor_hint: 0,
             cursor_hint_string: -1,
@@ -528,6 +532,7 @@ impl ClientSim {
         self.was_airborne = false;
         self.strafing = None;
         self.jumped = false;
+        self.land_anim = false;
         // `ClientSpawn`'s memset: the damage fields read 0 again after a
         // respawn (combat doc, 8.4), and so does the dead yaw.
         self.dead = false;
@@ -691,6 +696,7 @@ impl ClientSim {
                 self.ps.linked = self.link_to.is_some();
                 let events = pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt, weapons);
                 self.jumped |= self.ps.jumped;
+                self.land_anim |= self.ps.land_anim;
                 // Retail holds a prone view inside the cone around the body by
                 // pushing `delta_angles`, so the client's own prediction lands
                 // in the same place (docs/research/cod11-mantle.md, "Prone").
@@ -834,10 +840,14 @@ impl ClientSim {
         // `run_back` and reads the run loop while airborne, so a fall and a
         // mounted ladder animate whatever they were doing.
         let jumped = std::mem::take(&mut self.jumped);
+        let land_anim = std::mem::take(&mut self.land_anim);
         let script = &inputs.anims.script;
         match (self.ps.on_ground, self.was_airborne) {
             _ if linked => {}
-            (true, true) => {
+            // `PM_CrashLand` raises the land anim only on a fast landing and
+            // only with `legsTimer` 0 (cod11-sound-system.md, "Landing"): the
+            // one-unit drop off a turret release plays none.
+            (true, true) if land_anim && !self.anim.legs_held(now_ms) => {
                 // The landing writes the legs alone, `both` clause or not
                 // (combat doc, 1.14).
                 let mut sel = script.select_event("land", &conditions);
@@ -1695,9 +1705,37 @@ mod tests {
                 "the flight kept selecting at {t}"
             );
         }
+        // The landing pmove reports, fast enough for the land anim.
         sim.ps.on_ground = true;
+        sim.land_anim = true;
         sim.update_anims(&inputs, &NULL_USERCMD, 1300, &[], &mut 1u64);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_land"));
+    }
+
+    /// A landing slower than `LAND_ANIM_SPEED`, the one-unit drop a turret
+    /// release ends in, plays no land anim: the retail turret capture keeps
+    /// `pb_stand_alert` through it (`tests/turret_ab.rs`).
+    #[test]
+    fn a_slow_landing_plays_no_land_anim() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let inputs = AnimInputs {
+            anims: &anims,
+            weapon: "m1carbine_mp",
+            weapon_class: "rifle",
+        };
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.on_ground = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1000, &[], &mut 1u64);
+        let before = sim.anim.legs();
+        sim.ps.on_ground = false;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[], &mut 1u64);
+        sim.ps.on_ground = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1100, &[], &mut 1u64);
+        assert_eq!(sim.anim.legs(), before, "no land anim, no toggle flip");
     }
 
     /// Leaving the ground is not jumping. Retail's own mp_pavlov capture backs

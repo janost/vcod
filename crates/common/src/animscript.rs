@@ -633,6 +633,14 @@ impl AnimState {
         self.legs.wire()
     }
 
+    /// Whether an event anim still holds the legs at `now_ms`, retail's
+    /// `legsTimer` running.
+    pub fn legs_held(&self, now_ms: i32) -> bool {
+        self.legs
+            .held_until_ms
+            .is_some_and(|t| now_ms.wrapping_sub(t) < 0)
+    }
+
     pub fn torso(&self) -> i32 {
         self.torso.wire()
     }

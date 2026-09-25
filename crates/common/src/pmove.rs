@@ -147,6 +147,9 @@ const EV_FOOTSTEP_WALK_BASE: i32 = 24;
 const EV_FOOTSTEP_PRONE_BASE: i32 = 47;
 const EV_JUMP_BASE: i32 = 70;
 const EV_LANDING_BASE: i32 = 93;
+/// `PM_CrashLand`'s gate on the land anim, against the vertical velocity the
+/// move started with (`game.mp.i386.so` rodata 0x70a08).
+pub const LAND_ANIM_SPEED: f32 = -220.0;
 /// `EV_STEP_VIEW`: the vertical jump the step machinery added this frame,
 /// which the client smooths the eye over
 /// (docs/research/cod11-mantle.md, "The step event and the velocity scale").
@@ -342,6 +345,10 @@ pub struct PlayerState {
     /// without having jumped, and the animation machine has to tell those
     /// apart (docs/research/player-model-anim-system.md).
     pub jumped: bool,
+    /// Whether this move landed fast enough for the land anim: `PM_CrashLand`
+    /// raises it only below [`LAND_ANIM_SPEED`] (docs/research/cod11-sound-system.md,
+    /// "Landing"). Cleared at the top of every move, like `jumped`.
+    pub land_anim: bool,
     /// `ps.weapon`, a 1-based index into configstring 7; 0 is no weapon.
     pub weapon: u8,
     /// `ps.weapons`, bit N for weapon N.
@@ -446,6 +453,7 @@ impl PlayerState {
             view_lerp_down: false,
             backwards_run: false,
             jumped: false,
+            land_anim: false,
             weapon: 0,
             weapons_held: 0,
             weapon_slots: [0; weapon::NUM_SLOTS],
@@ -575,9 +583,12 @@ pub fn pmove(
     let weapon_def = weapons.get(ps.weapon as usize).and_then(Option::as_ref);
     let mut events = Vec::new();
     ps.jumped = false;
+    ps.land_anim = false;
     let was_on_ground = ps.on_ground;
-    // retail's `pml.previous_origin`, taken at the top of PmoveSingle
+    // retail's `pml.previous_origin` and `previous_velocity`, taken at the
+    // top of PmoveSingle
     ps.move_start = ps.origin;
+    let start_vz = ps.velocity.z;
     // 0x34274: a mounted player's pmove updates the sight flag, the walking
     // flag and the stance to the gun's, and returns before the move/ground/
     // weapon dispatch below ever runs; the turret moves the body
@@ -661,6 +672,7 @@ pub fn pmove(
     footsteps(ps, input, world, dt, &mut events);
     if !was_on_ground && ps.on_ground {
         crash_land(ps, &mut events);
+        ps.land_anim = start_vz < LAND_ANIM_SPEED;
     }
     weapon::pm_weapon(
         ps,
