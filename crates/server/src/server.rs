@@ -1274,6 +1274,43 @@ impl Server {
         }
     }
 
+    /// Mounts `slot` on the turret numbered `gun` as a use press would, from
+    /// `mount_origin` and past the reach and arc tests. Test-facing, like
+    /// `place_client`: it puts a second gunner on a map with one reachable
+    /// gun. False when either is missing or the gun is manned.
+    pub fn test_mount(&mut self, slot: usize, gun: u32, mount_origin: [f32; 3]) -> bool {
+        let Some(rt) = self.script.as_mut() else {
+            return false;
+        };
+        let Some(sim) = self
+            .clients
+            .get_mut(slot)
+            .and_then(Option::as_mut)
+            .and_then(|c| c.sim.as_mut())
+        else {
+            return false;
+        };
+        let Some(turret) = rt.host.turrets.keys().copied().find(|id| id.0 == gun) else {
+            return false;
+        };
+        if rt.host.turrets[&turret].busy != 0 {
+            return false;
+        }
+        rt.host
+            .turret_ops
+            .push(crate::game::turret::TurretOp::Mount { slot, turret });
+        let mounts = rt.take_turret_mounts(
+            slot,
+            mount_origin,
+            vcod_common::pmove::Stance::Stand,
+            sim.view_angles(),
+        );
+        for (turret, stance, view) in &mounts {
+            crate::game::turret::mount_sim(sim, *turret, *stance, *view);
+        }
+        !mounts.is_empty()
+    }
+
     /// The blasts the last tick's missile pass set off, after the same
     /// tick's radius damage pass charged them. Test-facing: the replay in
     /// `tests/common` counts them per frame.
@@ -2758,6 +2795,9 @@ impl Server {
                 // `ClientSpawn` lets go of a gun first (turrets doc 8). The
                 // teleport's events go out only for a spawn into play, the
                 // `sessionstate` the script set ahead of the spawn.
+                // A gun deleted this frame queued its release for here; the
+                // spawn comes after it, as `G_FreeTurret` ran first in retail.
+                rt.apply_turret_releases(s.slot, sim);
                 let temps = rt.release_turret(s.slot, sim);
                 if s.mode == SpawnMode::Player {
                     for te in temps {
@@ -2968,6 +3008,18 @@ impl Server {
                 for slot in feedback_now {
                     if let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) {
                         sim.end_frame(self.sv_time_ms);
+                    }
+                }
+                // A gunner these rounds killed lets go now: its own pass
+                // above ran while it was alive, and its death snapshot and
+                // corpse must not carry the gun.
+                for (slot, c) in self.clients.iter_mut().enumerate() {
+                    if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
+                        if !sim.linked() {
+                            for te in rt.release_turret(slot, sim) {
+                                rt.push_temp_entity(te);
+                            }
+                        }
                     }
                 }
             }

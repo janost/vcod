@@ -601,3 +601,114 @@ fn a_gunner_who_disconnects_leaves_the_gun_to_walk_home() {
     let s = target_gun_angles2(&rig).unwrap();
     assert_eq!(s[1], 0.0, "{s:?}");
 }
+
+/// A gunner killed by another gun's round lets go on the frame it dies,
+/// though its own `ClientEndFrame` ran before the round was traced, and its
+/// corpse lies where it died, not where the release teleports the dead
+/// player. Carentan has one gun a player can reach, so the target is put on
+/// the other one from a mount spot 64 units away.
+#[test]
+fn a_gunner_killed_by_a_turret_round_lets_go_that_frame() {
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    let p = &PROTOCOL_V1;
+    rig.tap(BUTTON_USE);
+    let other = rig
+        .sv
+        .all_entities()
+        .into_iter()
+        .find(|(n, e)| *n != rig.gun && e.field_i32(p, "eType") == ET_MG42)
+        .map(|(n, _)| n)
+        .expect("carentan's second gun");
+    let died_at = rig
+        .target
+        .snapshots()
+        .newest()
+        .map(|s| s.ps.origin(p))
+        .unwrap();
+    let mount_spot = [died_at[0], died_at[1] + 64.0, died_at[2]];
+    assert!(rig.sv.test_mount(1, other, mount_spot));
+    rig.hold(1);
+    let t = rig.target.snapshots().newest().unwrap();
+    assert_eq!(
+        t.ps.field_i32(p, "viewlocked"),
+        1,
+        "the target mans the gun"
+    );
+
+    let gun = rig.gun_origin();
+    let (dx, dy, dz) = (
+        died_at[0] - gun[0],
+        died_at[1] - gun[1],
+        died_at[2] + 40.0 - (gun[2] + 21.0),
+    );
+    let yaw = dy.atan2(dx).to_degrees();
+    let pitch = -dz.atan2(dx.hypot(dy)).to_degrees();
+    for _ in 0..4 {
+        rig.look([pitch, yaw]);
+    }
+    let h = rig.still();
+    let fire = UserCmd {
+        buttons: h.buttons | BUTTON_ATTACK,
+        ..h
+    };
+    let mut dead = None;
+    for _ in 0..20 {
+        rig.frame([fire, fire]);
+        let t = rig.target.snapshots().newest().unwrap();
+        if t.ps.field_i32(p, "pm_type") == 6 {
+            dead = Some(t.clone());
+            break;
+        }
+    }
+    let t = dead.expect("the rounds kill the target");
+    assert_eq!(t.ps.field_i32(p, "viewlocked"), 0);
+    assert_eq!(t.ps.field_i32(p, "eFlags") & 0xC000, 0);
+    let corpse = rig
+        .gunner
+        .snapshots()
+        .newest()
+        .unwrap()
+        .entities
+        .iter()
+        .find(|(&n, e)| (64..72).contains(&n) && e.field_i32(p, "clientNum") == 1)
+        .map(|(_, e)| e.clone())
+        .expect("the target's corpse in the gunner's view");
+    assert_eq!(corpse.field_i32(p, "eFlags") & 0xC000, 0);
+    let at = corpse.origin(p);
+    assert!(
+        dist_xy(at, [died_at[0], died_at[1]]) < 1.0,
+        "corpse {at:?}, died at {died_at:?}, mounted from {mount_spot:?}"
+    );
+}
+
+/// `ClientSpawn` lets go of the gun (turrets doc 8): a live gunner who
+/// picks spectator from the team menu is spawned where the spectator spawn
+/// is, not teleported back to where it mounted, and the gun is free.
+#[test]
+fn a_gunner_spawned_as_a_spectator_lets_go() {
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    let mounted_from = rig.hold(1).origin;
+    rig.tap(BUTTON_USE);
+    assert_eq!(rig.hold(2).viewlocked, 1);
+    let (lo, hi) = vcod_server::configstrings::CsRange::Menu.bounds();
+    let team_menu = (lo..=hi)
+        .find(|&i| rig.sv.configstring(i).starts_with("team_"))
+        .expect("the team menu precached")
+        - lo;
+    let mr = format!("mr {} {team_menu} spectator", rig.gunner.server_id());
+    rig.gunner.send_reliable(&mr);
+    let s = rig.hold(3);
+    assert_eq!(s.pm_type, 4, "spectating");
+    assert_eq!((s.viewlocked, s.e_flags & 0xC000), (0, 0));
+    assert!(
+        dist_xy(s.origin, [mounted_from[0], mounted_from[1]]) > 64.0,
+        "spectator at {:?}, mounted from {mounted_from:?}",
+        s.origin
+    );
+    rig.hold(20);
+    assert_eq!(target_gun_angles2(&rig).map(|a| a[1]), Some(0.0));
+}
