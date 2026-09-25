@@ -174,6 +174,10 @@ impl OnlineView {
         let mouse = std::mem::take(&mut self.mouse);
         self.flash = None;
         let (Some(ps), Some(w)) = (ps, self.rig.as_deref_mut()) else {
+            // A respawn whose `weapAnim` matches the pre-death one bit for bit
+            // still restarts the raise.
+            self.clock = ViewAnimClock::default();
+            self.trend = 0;
             return (None, DEFAULT_FOV);
         };
         let clip_empty = weapons
@@ -295,6 +299,16 @@ mod tests {
         let (draw, fov) = view.frame(&[], Some(&ps(0, 82)), 0.016, 0.0);
         assert!(draw.is_none());
         assert_eq!(fov, DEFAULT_FOV);
+    }
+
+    #[test]
+    fn not_drawing_restarts_the_clip_clock() {
+        let mut view = OnlineView::default();
+        view.clock.update(10 | 512, 0.5, 0.0);
+        view.trend = 1;
+        view.frame(&[], None, 0.016, 100.0);
+        assert!(view.clock.update(10 | 512, 0.5, 200.0).0, "raise restarts");
+        assert_eq!(view.trend, 0);
     }
 
     #[test]

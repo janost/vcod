@@ -77,7 +77,7 @@ pub fn load_anims(
     for which in weapon::WeaponAnim::ALL {
         let key = which.key();
         let Some(name) = weapon.get(key).map(|n| n.trim()).filter(|n| !n.is_empty()) else {
-            log::warn!("weapon: no {key}, that state will play idle");
+            log::debug!("weapon: no {key}, that state will play idle");
             continue;
         };
         match xanim::load(fs, name) {
