@@ -1083,6 +1083,11 @@ impl ClientSim {
         self.ps.origin.into()
     }
 
+    /// The wire `legsAnim`, restart bit included.
+    pub fn legs_anim(&self) -> i32 {
+        self.anim.legs()
+    }
+
     /// What the locational trace poses this client's bones from: the two
     /// live anim indices with the phase each is at, and the aim the spine
     /// layer bends by.

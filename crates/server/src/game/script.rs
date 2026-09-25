@@ -574,13 +574,19 @@ impl ScriptRuntime {
     /// `turret_think_client` (0x52340, turrets doc 6) for the gun `slot`
     /// mans, once per server frame in `ClientEndFrame`: the aim, the fire
     /// and the loop sound, on the record, the gun's entity and the gunner's
-    /// sim. `attack_held` is the frame's last cmd's attack bit. Returns the
-    /// round the gun fired, for the server to trace.
+    /// sim. `attack_held` is the frame's last cmd's attack bit. `body` is
+    /// what the body placement reads the gunner's anims from; without it the
+    /// body stays where it is. Returns the round the gun fired, for the
+    /// server to trace.
     pub fn turret_think_client(
         &mut self,
         slot: usize,
         sim: &mut crate::spectate::ClientSim,
         attack_held: bool,
+        body: Option<(
+            &vcod_common::animtree::PlayerAnims,
+            &mut crate::game::hitrig::HitRigs,
+        )>,
     ) -> Option<TurretShot> {
         use crate::game::turret::{aim, fire_tick, loop_tick, muzzle};
         let id = *self
@@ -615,7 +621,42 @@ impl ScriptRuntime {
         if let Some(view) = aim(rec, sim.view_angles(), angles) {
             sim.set_view_angle(view);
         }
-        // Body placement (0x515a8) goes here, task 12.
+        let placed = match (body, &rec.tags, self.host.fs.as_deref()) {
+            (Some((anims, rigs)), Some(tags), Some(fs)) => {
+                let tag_weapon = crate::game::turret::tag_weapon_local(tags, rec.angles2);
+                let turret = (
+                    glam::Vec3::from(origin),
+                    vcod_common::turretpose::angles_quat(angles),
+                );
+                vcod_common::turretpose::place_gunner(
+                    anims,
+                    |name| rigs.clip(fs, name),
+                    sim.legs_anim(),
+                    tag_weapon,
+                    turret,
+                    sim.ps.origin,
+                    rec.def.anim_hor_rotate_inc,
+                )
+            }
+            _ => None,
+        };
+        if let Some((mut at, _)) = placed {
+            // Dropped onto what lies between the gun's height and the spot
+            // (0x51f6c): world geometry only, no entities.
+            if let Some(world) = &self.host.world {
+                let start = glam::Vec3::new(at.x, at.y, origin[2]);
+                let tr = world.collision.point_trace(
+                    start,
+                    at,
+                    vcod_common::collision::MASK_PLAYERSOLID,
+                    false,
+                );
+                if tr.fraction < 1.0 {
+                    at.z = tr.endpos.z;
+                }
+            }
+            sim.ps.origin = at;
+        }
         sim.firing = fire_tick(rec, attack_held);
         let mut shot = None;
         if sim.firing {
@@ -642,6 +683,10 @@ impl ScriptRuntime {
             if stop {
                 ent.events.add(EV_SOUND_ALIAS, stop_index);
             }
+        }
+        if let Some((_, yaw)) = placed {
+            self.set_client_origin(slot, sim.origin());
+            self.set_client_yaw(slot, yaw);
         }
         shot
     }
@@ -1093,6 +1138,22 @@ impl ScriptRuntime {
         self.vm.with_cx(|cx| {
             let field = cx.intern_folded("origin");
             let _ = host.set_field(cx, ent, field, Value::Vector(origin));
+        });
+    }
+
+    /// Writes an entity's `origin` and `angles` as script would. Test-facing
+    /// (`Server::test_place_entity`).
+    pub fn place_entity(&mut self, num: u32, origin: [f32; 3], angles: [f32; 3]) {
+        use vcod_gsc::Host;
+        let Some(id) = self.host.ents.handle(num) else {
+            return;
+        };
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            for (name, v) in [("origin", origin), ("angles", angles)] {
+                let field = cx.intern_folded(name);
+                let _ = host.set_field(cx, id, field, Value::Vector(v));
+            }
         });
     }
 

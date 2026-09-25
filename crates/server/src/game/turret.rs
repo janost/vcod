@@ -344,6 +344,14 @@ pub fn muzzle(
     (player + Vec3::from(forward) * reach).into()
 }
 
+/// `G_DObjGetLocalTagMatrix(turret, "tag_weapon")` for 0x515a8 (turrets
+/// doc 7): the tag in the gun's model space, turned with the barrel about
+/// `tag_aim` the way the controller turns it.
+pub fn tag_weapon_local(tags: &TurretTags, angles2: [f32; 3]) -> (Vec3, glam::Quat) {
+    let barrel = vcod_common::turretpose::angles_quat([angles2[0], angles2[1], 0.0]);
+    (tags.aim + barrel * (tags.weapon - tags.aim), barrel)
+}
+
 /// `EV_STANCE_FORCE_STAND`/`_CROUCH`/`_PRONE` (`cod11-events-and-fx.md`).
 const EV_STANCE_FORCE_STAND: i32 = 140;
 const EV_STANCE_FORCE_CROUCH: i32 = 141;
@@ -777,6 +785,91 @@ mod tests {
             );
             assert_eq!(r.angles2[2], 0.0);
         }
+    }
+
+    /// Every mounted snapshot of the retail capture (turrets doc 12.2): its
+    /// gun's `angles2` through [`tag_weapon_local`], `place_gunner` and the
+    /// trace down onto mp_carentan's own collision, against the origin
+    /// retail sent. `(line, legsAnim, angles2, origin)` per snapshot.
+    #[test]
+    fn every_captured_gunner_origin_replays() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).unwrap();
+        let bones = vcod_common::xmodel::load_bones(&fs, "mg42_bipod").unwrap();
+        let tags = TurretTags::from_bones(&bones).unwrap();
+        let bsp = vcod_common::bsp::parse(&fs.read("maps/mp/mp_carentan.bsp").unwrap()).unwrap();
+        let world = crate::world::World::from_bsp(&bsp, None);
+        let gun = Vec3::new(1712.0, 1830.0, 8.0);
+        let turret = (gun, vcod_common::turretpose::angles_quat([0.0, 229.0, 0.0]));
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/turret/mp_carentan-dm-turret.txt"
+        ))
+        .unwrap();
+        let field = |l: &str, k: &str| -> Vec<f32> {
+            let v = l.split(' ').find_map(|w| w.strip_prefix(k)).unwrap();
+            v.split(',').map(|x| x.parse().unwrap()).collect()
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        let mut angles2 = [0.0; 3];
+        let mut frames = Vec::new();
+        for (i, l) in lines.iter().enumerate() {
+            if l.starts_with("!turret ") {
+                angles2.copy_from_slice(&field(l, "angles2="));
+            }
+            if !l.starts_with("!trace ") {
+                continue;
+            }
+            // The gun's line for this snapshot follows it when the gun changed.
+            let ms = l.split(' ').find(|w| w.starts_with("ms=")).unwrap();
+            if let Some(t) = lines[i + 1..]
+                .iter()
+                .take_while(|n| !n.starts_with("!trace "))
+                .find(|n| n.starts_with("!turret ") && n.split(' ').any(|w| w == ms))
+            {
+                angles2.copy_from_slice(&field(t, "angles2="));
+            }
+            let legs = field(l, "legsAnim=")[0] as i32;
+            if field(l, "viewlocked=")[0] == 0.0 || ![32, 33].contains(&(legs & 511)) {
+                continue;
+            }
+            frames.push((i + 1, legs, angles2, Vec3::from_slice(&field(l, "origin="))));
+        }
+        assert_eq!(frames.len(), 260, "mounted snapshots on a turret anim");
+        let (mut max, mut sum) = (0.0f32, 0.0);
+        for (line, legs, a2, want) in frames {
+            let (mut at, _) = vcod_common::turretpose::place_gunner(
+                &anims,
+                |n| vcod_common::xanim::load(&fs, n).ok().map(std::rc::Rc::new),
+                legs,
+                tag_weapon_local(&tags, a2),
+                turret,
+                want,
+                15.0,
+            )
+            .unwrap_or_else(|| panic!("line {line}: no placement"));
+            let start = Vec3::new(at.x, at.y, gun.z);
+            let tr = world.collision.point_trace(
+                start,
+                at,
+                vcod_common::collision::MASK_PLAYERSOLID,
+                false,
+            );
+            if tr.fraction < 1.0 {
+                at.z = tr.endpos.z;
+            }
+            assert!((at.z - -23.9).abs() < 0.05, "line {line}: z {}", at.z);
+            let err = (at - want).length();
+            assert!(err < 0.25, "line {line}: {at:?} vs {want:?}, off {err}");
+            max = max.max(err);
+            sum += err;
+        }
+        eprintln!(
+            "placement residual over 260 snapshots: max {max:.3} mean {:.3}",
+            sum / 260.0
+        );
     }
 
     #[test]

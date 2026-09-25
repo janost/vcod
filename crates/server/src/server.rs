@@ -1311,6 +1311,14 @@ impl Server {
         !mounts.is_empty()
     }
 
+    /// Moves the entity numbered `num` as script would. Test-facing, like
+    /// `test_mount`: carentan's second gun sits out of the first one's arc.
+    pub fn test_place_entity(&mut self, num: u32, origin: [f32; 3], angles: [f32; 3]) {
+        if let Some(rt) = self.script.as_mut() {
+            rt.place_entity(num, origin, angles);
+        }
+    }
+
     /// The blasts the last tick's missile pass set off, after the same
     /// tick's radius damage pass charged them. Test-facing: the replay in
     /// `tests/common` counts them per frame.
@@ -2936,6 +2944,7 @@ impl Server {
                         slot,
                         sim,
                         buttons & vcod_common::net::msg::BUTTON_ATTACK != 0,
+                        self.anims.as_ref().map(|a| (a, &mut self.hit_rigs)),
                     ));
                 }
             }

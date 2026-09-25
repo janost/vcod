@@ -594,20 +594,118 @@ children"`, 0x75860), `trap_XAnimGetChildAt`, `trap_XAnimGetWeight` and
 call 0x51f8d); stores to `ps.origin[2]` (0x51f1b, 0x51fb3);
 `BG_PlayerStateToEntityState`; `AxisToAngles`; `trap_LinkEntity`.
 
-INFERRED, all of the following, from the call list and nothing finer:
+### 7.1 The reads and stores
 
-- the routine runs only when the player's current anim line carries
-  `turretanim` (the `+0x50 & 4` flag), and needs `tag_weapon` and `tag_aim`
-  on the turret model;
-- it sets the blend weights of the mounted anim's children (the yaw columns
-  and the three pitch rows, section 10) from `angles2` and the weapon's
-  `animHorRotateInc` (`+0x400`), whose stock 15 matches the stand grid's
-  column step and the prone file's 20 the prone grid's;
-- it takes the blended anim's absolute root delta and builds the player's
-  origin and yaw so that the anim's gun lands on the turret's `tag_weapon`;
-- it traces down from there to the turret's height and drops `ps.origin[2]`
-  onto what it hits, then copies the playerstate to the entity state and sets
-  `r.currentOrigin = ps.origin` and `r.currentAngles` from the axis.
+Re-read with `annotate_func.py` over 0x515a8..0x5201b for this section. `ent`
+is the player, `tur` the turret, `ci` the player's `bgs` client info
+(`bgs + clientNum * 0x448`). VERIFIED, each by the instruction named:
+
+- the gate: the word at `ci+0x9ba78` compared to 0 (0x515c7), the pointer at
+  `ci+0x9ba7c` compared to null (0x515d4) and its `+0x50 & 4` (0x515e2);
+- the anim handle: that word with bit 0x200 cleared (`and ah,0xfd`, 0x51671)
+  under `Scr_GetAnimsIndex`'s result in the high half; the tree is the dword
+  at `ci+0x9bb2c` (0x51638);
+- `vectosignedyaw` on the first three floats of `tag_weapon`'s matrix
+  (0x51682), and that matrix's floats at `+0x30`, `+0x34` and `+0x38`
+  (0x51e9e, 0x51eaa, 0x51710);
+- `AnglesToAxis(tur.r.currentAngles)` into a 4x3 whose last row is
+  `tur.r.currentOrigin` (0x5169d..0x516c0); the dot of `ent.r.currentOrigin -
+  tur.r.currentOrigin` with that axis's third row (0x516c5..0x51700), kept at
+  `ebp-0x154`, and the same dot minus the tag's `+0x38`, kept at `ebp-0x140`;
+- a loop over the anim's children, bounded by `trap_XAnimGetNumChildren`
+  (0x5173e, 0x51a10). Per child: its goal weight 1.0 (0x51812); `x = 0.5 * n
+  - yaw / weaponDef+0x400`, `n` the child's own child count
+  (0x5184e..0x51878); compares against 0 and `n - 1` (0x5187e..0x518b8); a
+  `fistp` under control word bits 0xc00, round toward zero (0x518c0..0x518eb);
+  `f = x - trunc(x)` (0x518fd); grandchild `trunc(x)` given `1 - f`
+  (0x5195b); a compare of `f` against 0 (0x5196b); grandchild `trunc(x) + 1`
+  given `f` (0x519b6); `trap_XAnimCalcAbsDelta` on the child (0x519d4) with
+  its translation at `ebp-0xc..-0x4`; a compare of the translation's z
+  against `ebp-0x140` (0x519df) and a `je` out of the loop (0x519ea); stores
+  of that z, `f` and `trunc(x)` (0x519ec..0x51a04);
+- after the loop: `trap_XAnimClearTree` on the anim (0x51a33), the last
+  child's two grandchildren given `1 - f` and `f` again (0x51aa8, 0x51b35),
+  and compares of the loop index against 0 and the child count
+  (0x51b3d..0x51b52); one arm looks up `tag_aim` (0x51b64) and gives the
+  child 1.0 (0x51e57); the other computes `(ebp-0x140 - z_prev) / (z - z_prev)`
+  (0x51bf0..0x51c14), gives it to the child (0x51c7a) and its complement to
+  child `i - 1` (0x51d1a), and gives child `i - 1`'s stored grandchild pair
+  the stored `1 - f` and `f` (0x51da8, 0x51e57). Every goal weight after the
+  loop carries a blend time built from the child's current weight
+  (`trap_XAnimGetWeight`), 1000.0 (0x758f4) and the int at `level+0x1f0`;
+- `trap_XAnimCalcAbsDelta` on the whole anim (0x51e7b); `VectorAngleMultiply`
+  of its translation by the tag's yaw (0x51e90); a local origin of that
+  translation's x and y plus the tag's `+0x30` and `+0x34`, and `ebp-0x154`
+  for z (0x51e9b..0x51ebf); `RotationToYaw` of the delta's rotation plus the
+  tag's yaw into `YawToAxis` (0x51ec3..0x51edb); `MatrixMultiply43` of that
+  local 4x3 with the turret's (0x51ef2); the product's last row stored to
+  `ps.origin` (0x51efa..0x51f1b);
+- `trap_Trace` with a zero box from (`ps.origin[0]`, `ps.origin[1]`,
+  `tur.r.currentOrigin[2]`) to `ps.origin`, the player's number to skip and
+  mask 0x2810011 (0x51f1e..0x51f8d); a compare of 1.0 against the fraction
+  (0x51f97) and a store of the trace's `+0xc` to `ps.origin[2]` (0x51fb3);
+- `BG_PlayerStateToEntityState` (0x51fc6), `ps.origin` into
+  `ent.r.currentOrigin` (0x51fd7..0x51fec), `AxisToAngles` of the product's
+  axis into `ent.r.currentAngles` (0x51ffb), `trap_LinkEntity` (0x5200a).
+
+VERIFIED, the leaves (pak0, flag 0x2 root tracks, one key each): the 21
+`pb_standMG42gunner_aim_*` root translations read z -39.57 on every `15down`
+leaf, -47.46 on every `level` leaf and -55.41 on every `15up` leaf, x between
+-11.92 and -17.21, y between 2.85 and 6.01; the root rotations are the
+column's own yaw, `45left` +45 through `45right` -45, none on `forward`. The
+`fire` leaves carry the same values, except the three `fire_30left` leaves,
+which key a second translation at frame 5, (-15.99, 5.62) against (-15.33,
+5.35) at frame 0.
+
+### 7.2 What it does
+
+INFERRED, each from 7.1's control flow:
+
+- The placement runs only when the legs anim carries `turretanim`. That anim
+  is taken as a two-level blend, its children the rows and theirs the
+  columns, in the engine's child order, the reverse of the file's
+  (`player-model-anim-system.md`, "Animation indices: the animtree"). For
+  `standMG42_aim` that is rows `15up`, `level`, `15down`, root z increasing,
+  and columns `45right` through `45left`.
+- The column position is `n / 2 - yaw / animHorRotateInc`, clamped to the
+  row and split between the two columns either side. With 7 columns and 15
+  degrees the gun's yaw 0 lands halfway between `forward` and `15left`, not
+  on `forward`: the 0.5 multiplies `n`, not `n - 1`.
+- The barrel's pitch is not read. The row is found by height: the target is
+  the player's height above the gun minus `tag_weapon`'s height in the gun's
+  frame, which the barrel's pitch moves about `tag_aim`. The first row whose
+  root z reaches the target is blended linearly with the row before it so the
+  blend's z equals the target; a target below the first row or above the
+  last takes that row alone.
+- The origin is the blended root translation turned by `tag_weapon`'s yaw and
+  added to its x and y, at the player's own height, carried into the world by
+  the gun's axis and origin. The body's yaw is the blend's root yaw plus the
+  tag's, in the gun's frame.
+- The trace lifts the origin onto whatever lies between the gun's height and
+  that spot; a clear trace leaves the player's own height.
+
+VERIFIED, the replay: `every_captured_gunner_origin_replays`
+(`crates/server/src/game/turret.rs`) runs vcod's port of 7.2 over the gun's
+`angles2` and the gunner's origin of all 260 mounted snapshots on a turret
+anim in the 12.2 capture, both tables and every snapshot between, through
+mp_carentan's collision: max 0.099 units, mean 0.049, z -23.9 on every one.
+The fixture prints one decimal, so that is its rounding. Walking the
+children in file order instead misses by up to 3.0 (mean 1.8).
+
+Not determined:
+
+- Which time `XAnimCalcAbsDelta` samples a root with more than one key at.
+  vcod reads frame 0. Only the three `fire_30left` leaves differ, by 0.7 at
+  their last frame, and no captured firing snapshot blends them.
+- The body's yaw. VERIFIED, 7.1: `BG_PlayerStateToEntityState` is called at a
+  lower address than the `AxisToAngles` store. INFERRED: the entity state is
+  built before the store, so the yaw never reaches the wire and no capture
+  can check it. vcod blends the leaves' yaw rotations by weight.
+- The blend times, and whether the goal weights pose anything besides this
+  routine's own deltas (the gunner's server-side body for a locational hit,
+  for one). vcod does not keep them.
+
+### 7.3 The tags and the client's copy
 
 VERIFIED: the turret model's `tag_aim` is at (-2.98, 0.06, 12.87) and its
 children `tag_player` at (-45.09, 0.06, 20.92), `tag_weapon` at (-33.59,
@@ -619,17 +717,13 @@ anims (`standMG42gun_{aim,fire,recover}_foward`, 9 tracks) key only
 
 VERIFIED, `cgame_mp_x86.dll` (1.1): the same two warnings at 0x30062fd0
 (`tag_aim`) and 0x30063048 (`tag_weapon`), and `"Turret has no bone:
-tag_player"` at 0x3006227c. INFERRED: a retail client places a mounted body
+tag_player"` at 0x3006227c; both warnings are referenced from the function at
+0x300279b0 in the Ghidra export. INFERRED: a retail client places a mounted body
 itself with the same routine, so the server's `ps.origin` is what a client
 predicts against, not what it draws from.
 
-**Open question.** Whether sampling the `standMG42_aim` leaves at the
-turret's `angles2` with vcod's xanim and skeleton code reproduces retail's
-`ps.origin` to the unit is not known yet. The retail origins to match are
-the two tables in 12.2. VERIFIED there: every mounted snapshot's origin sits
-on the floor, 31.9 below the gun's origin.
-Nor is what `playerPositionDist` (`+0x404`) feeds. VERIFIED, absence: no
-operand at `+0x404` sits in 0x51488..0x53400. INFERRED: the 42-unit
+**Open question.** What `playerPositionDist` (`+0x404`) feeds. VERIFIED,
+absence: no operand at `+0x404` sits in 0x51488..0x53400. INFERRED: the 42-unit
 horizontal gap between `tag_aim` and `tag_player` against its 46 is a
 coincidence as far as the bytes go.
 
@@ -947,9 +1041,8 @@ VERIFIED, the pitch sweep at `angles2[1]` 0 (negative pitch is up):
 INFERRED: the body turns with the barrel's yaw but is no rigid offset: it
 sits 46 to 49.5 behind and 2.4 to 6.8 left across the yaw arc, and pitch
 pulls it in toward the gun in both directions, to 39.6 at full up and 40.3 at
-full down. That is the shape of the blended `standMG42_aim` leaves of section
-7 rather than a formula, so a reimplementation either samples the anims or
-fits these two tables. The other mounted snapshots (the mount-phase drift,
+full down. That is the shape of the blended `standMG42_aim` leaves: section
+7.2 replays both tables and every snapshot between them to 0.1. The other mounted snapshots (the mount-phase drift,
 the flick, fire and the crouch remount) fall between the table's rows and
 are all in the fixture.
 
@@ -1175,7 +1268,10 @@ one the probe's cmds asked for.
 The mounted frame is `ScriptRuntime::turret_think_client` over
 `game::turret`'s `aim`, `fire_tick`, `loop_tick` and `muzzle`, run once per
 server frame for every gunner after the cursor hint, last in the server's
-`ClientEndFrame` pass. Body placement (section 7) is not in it yet.
+`ClientEndFrame` pass. Body placement (section 7) runs between the aim and
+the fire: `vcod_common::turretpose::place_gunner` from the gunner's legs
+anim, then the trace down onto the map's collision, then the origin and the
+body's yaw mirrored to script.
 
 The release (section 8) is `game::turret::release` on the record and
 `release_sim` on the gunner, reached from four places:
@@ -1206,6 +1302,10 @@ spot. INFERRED: retail's clone copies `ps.eFlags`
 `ClientEndFrame` releases, so a retail corpse of a gunner killed by `kill`
 may carry 0xC000; no capture covers it.
 
+- The placement's trace sees the world's brushes and terrain only, where
+  retail's `trap_Trace` also clips entities. The yaw goes to script as the
+  whole of `angles`, pitch and roll 0, where retail's `AxisToAngles` carries
+  a tilted gun's pitch and roll too.
 - INFERRED: the muzzle takes `tag_flash`'s distance from `tag_player` off the
   model's bind pose, where 0x51488 reads both tags off the animated model
   (section 6.3).

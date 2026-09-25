@@ -609,8 +609,9 @@ fn a_gunner_who_disconnects_leaves_the_gun_to_walk_home() {
 /// A gunner killed by another gun's round lets go on the frame it dies,
 /// though its own `ClientEndFrame` ran before the round was traced, and its
 /// corpse lies where it died, not where the release teleports the dead
-/// player. Carentan has one gun a player can reach, so the target is put on
-/// the other one from a mount spot 64 units away.
+/// player. Carentan's second gun is out of the first one's arc, so it is
+/// moved to put its gunner's body where the target stood, and the target
+/// mounts it from 64 units away.
 #[test]
 fn a_gunner_killed_by_a_turret_round_lets_go_that_frame() {
     let Some(mut rig) = rig_with(&[]) else {
@@ -625,20 +626,38 @@ fn a_gunner_killed_by_a_turret_round_lets_go_that_frame() {
         .find(|(n, e)| *n != rig.gun && e.field_i32(p, "eType") == ET_MG42)
         .map(|(n, _)| n)
         .expect("carentan's second gun");
-    let died_at = rig
+    let stood = rig
         .target
         .snapshots()
         .newest()
         .map(|s| s.ps.origin(p))
         .unwrap();
-    let mount_spot = [died_at[0], died_at[1] + 64.0, died_at[2]];
+    // The body sits about 47 units behind a gun and 32 below it (turrets
+    // doc 12.2), so the gun goes that far past the target, facing away.
+    let gun = rig.gun_origin();
+    let away = (stood[1] - gun[1]).atan2(stood[0] - gun[0]);
+    let other_at = [
+        stood[0] + 47.0 * away.cos(),
+        stood[1] + 47.0 * away.sin(),
+        stood[2] + 31.9,
+    ];
+    rig.sv
+        .test_place_entity(other, other_at, [0.0, away.to_degrees(), 0.0]);
+    let mount_spot = [stood[0], stood[1] + 64.0, stood[2]];
     assert!(rig.sv.test_mount(1, other, mount_spot));
-    rig.hold(1);
+    // The target still faces the first gun, so its barrel swings to the arc
+    // and the body with it; four frames settle both.
+    rig.hold(4);
     let t = rig.target.snapshots().newest().unwrap();
     assert_eq!(
         t.ps.field_i32(p, "viewlocked"),
         1,
         "the target mans the gun"
+    );
+    let died_at = t.ps.origin(p);
+    assert!(
+        dist_xy(died_at, [stood[0], stood[1]]) < 64.0,
+        "placed at {died_at:?}, stood at {stood:?}"
     );
 
     let gun = rig.gun_origin();
