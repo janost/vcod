@@ -691,33 +691,32 @@ which key a second translation at frame 5, (-15.99, 5.62) against (-15.33,
 
 ### 7.2 What it does
 
-INFERRED, each from 7.1's control flow:
-
-- The placement runs only when the legs anim carries `turretanim`. That anim
-  is taken as a two-level blend, its children the rows and theirs the
-  columns, in the engine's child order, the reverse of the file's
-  (`player-model-anim-system.md`, "Animation indices: the animtree"). For
-  `standMG42_aim` that is rows `15up`, `level`, `15down`, root z increasing,
-  and columns `45right` through `45left`.
-- The column position is `n / 2 - yaw / animHorRotateInc`, clamped to the
-  row and split between the two columns either side. With 7 columns and 15
-  degrees the gun's yaw 0 lands halfway between `forward` and `15left`, not
-  on `forward`: the 0.5 multiplies `n`, not `n - 1`.
-- The barrel's pitch is not read. The row is found by height: the target is
-  the player's height above the gun minus `tag_weapon`'s height in the gun's
-  frame, which the barrel's pitch moves about `tag_aim`. The first row whose
-  root z reaches the target is blended linearly with the row before it so the
-  blend's z equals the target; a target below the first row or above the
-  last takes that row alone.
-- The origin is the blended root translation turned by `tag_weapon`'s yaw and
-  added to its x and y, at the player's own height, carried into the world by
-  the gun's axis and origin. The body's yaw is the blend's root yaw plus the
-  tag's, in the gun's frame.
-- The trace lifts the origin onto whatever lies between the gun's height and
-  that spot; a clear trace leaves the player's own height. Nothing here puts
-  the player on the floor: the z is the height the player mounted at, which
-  pmove left on the ground, and the mounted pmove arm moves nothing
-  (section 5). vcod's port does the same.
+- INFERRED, 7.1's control flow: the placement runs only when the legs anim
+  carries `turretanim`. That anim is taken as a two-level blend, its children
+  the rows and theirs the columns, in the engine's child order, the reverse
+  of the file's (`player-model-anim-system.md`, "Animation indices: the
+  animtree"). For `standMG42_aim` that is rows `15up`, `level`, `15down`,
+  root z increasing, and columns `45right` through `45left`.
+- INFERRED, 7.1's control flow: the column position is
+  `n / 2 - yaw / animHorRotateInc`, clamped to the row and split between the
+  two columns either side. With 7 columns and 15 degrees the gun's yaw 0
+  lands halfway between `forward` and `15left`, not on `forward`: the 0.5
+  multiplies `n`, not `n - 1`.
+- INFERRED, 7.1's control flow: the barrel's pitch is not read. The row is
+  found by height: the target is the player's height above the gun minus
+  `tag_weapon`'s height in the gun's frame, which the barrel's pitch moves
+  about `tag_aim`. The first row whose root z reaches the target is blended
+  linearly with the row before it so the blend's z equals the target; a
+  target below the first row or above the last takes that row alone.
+- INFERRED, 7.1's control flow: the origin is the blended root translation
+  turned by `tag_weapon`'s yaw and added to its x and y, at the player's own
+  height, carried into the world by the gun's axis and origin. The body's
+  yaw is the blend's root yaw plus the tag's, in the gun's frame.
+- INFERRED, 7.1's control flow: the trace lifts the origin onto whatever
+  lies between the gun's height and that spot; a clear trace leaves the
+  player's own height. Nothing here puts the player on the floor: the z is
+  the height the player mounted at, which pmove left on the ground, and the
+  mounted pmove arm moves nothing (section 5). vcod's port does the same.
 
 VERIFIED, the replay: `every_captured_gunner_origin_replays`
 (`crates/server/src/game/turret.rs`) runs vcod's port of 7.2 over the gun's
@@ -1485,36 +1484,46 @@ fixture directory, `git status` clean afterward.
 VERIFIED, D1: the use cmd (`buttons=64`) reaches the server and the very
 next snapshot already reads `viewlocked=1`, `viewlocked_entNum=298` and
 `eFlags=49176` (0xC018), matching retail's own first-mounted values --
-unchanged from the pre-fix run. Body placement now lands one frame later
-instead of two: VERIFIED, `tmp/turret-ours-2.txt` line 88 is the use cmd
-(`st=36216`), line 93 (`serverTime=36250`, the very next snapshot) already
-reads `viewlocked=1` but keeps `groundEntityNum` 1022, the pre-mount origin
-and `legsAnim` 634, and line 97 (`serverTime=36300`, one 50 ms frame later)
-reads 1023, the placed origin and `legsAnim` 32. The round split closed the
-first of the two gap ticks the pre-fix run showed (12.1's `pb_stand_alert`
-mismatch, fixed per 13.1); the second cause 13.1 already named for that
-run -- "a tick that ran no cmd at all... with no mounted pmove step the
-anim stays unmounted, and retail's placement needs one too" -- still applies
-here and is now the whole of the gap: no cmd lands in the round that mounts
-the gun (the use tap is the only cmd that tick; the next cmd the client had
-already queued arrives too late over the wire to fall into that tick's
-second round), so `update_anims` cannot pick the mounted pose until the
-following tick's own cmd runs, and `turret_think_client`'s placement reads
-that same lagging `legs_anim()`. This is not a regression from 13.1's replay
-result: the replay feeds every post-use cmd at once, so its second round
-always has one to run in the same tick and places same-frame; a live client
-sending at the probe's default ~16 ms only sometimes has a second cmd queued
-by the time the mount's tick runs, and this capture is the case where it did
-not. INFERRED: retail's own capture (12.1) never shows this gap because its
-125 fps client (8 ms cmd spacing) has several cmds already queued whenever a
-server tick lands, so its second round is never empty. The crouch mount does
-not show the gap either, on this run or the last: the first mounted frame
-already reads `eFlags=49200` (0xC030) with the crouch held and
+unchanged from the pre-fix run. VERIFIED: body placement now lands one
+frame later instead of two -- `tmp/turret-ours-2.txt` line 88 is the use
+cmd (`st=36216`), line 93 (`serverTime=36250`, the very next snapshot)
+already reads `viewlocked=1` but keeps `groundEntityNum` 1022, the
+pre-mount origin and `legsAnim` 634, and line 97 (`serverTime=36300`, one
+50 ms frame later) reads 1023, the placed origin and `legsAnim` 32.
+
+INFERRED: the round split closed the first of the two gap ticks the pre-fix
+run showed (12.1's `pb_stand_alert` mismatch, fixed per 13.1); the second
+cause 13.1 already named for that run -- "a tick that ran no cmd at all...
+with no mounted pmove step the anim stays unmounted, and retail's placement
+needs one too" -- still applies here and is now the whole of the gap: no cmd
+lands in the round that mounts the gun (the use tap is the only cmd that
+tick; the next cmd the client had already queued arrives too late over the
+wire to fall into that tick's second round), so `update_anims` cannot pick
+the mounted pose until the following tick's own cmd runs, and
+`turret_think_client`'s placement reads that same lagging `legs_anim()`.
+
+INFERRED: this is not a regression from 13.1's replay result -- the replay
+feeds every post-use cmd at once, so its second round always has one to run
+in the same tick and places same-frame; a live client sending at the
+probe's default ~16 ms only sometimes has a second cmd queued by the time
+the mount's tick runs, and this capture is the case where it did not.
+
+INFERRED, correcting the claim below against 12.1: retail's own capture
+does not show a same-frame placement across the board. 12.1's crouch mount
+(VERIFIED there, lines 1368 vs 1373) already carries this same
+one-tick-old-pose shape, for the reason 12.1 itself gives: that use cmd was
+the frame's last, so no further pmove step ran behind it that frame. Only
+retail's *stand* mount avoids it, because extra cmds happened to run in the
+same frame after that particular use tap. So a 125 fps client's tighter cmd
+spacing makes a same-frame placement more likely, not certain, and 12.1's
+own crouch capture is the counter-example already in this document.
+
+VERIFIED: the crouch mount on ours reproduces that native one-tick shape
+rather than adding to it, on this run or the last -- the first mounted
+frame already reads `eFlags=49200` (0xC030) with the crouch held and
 `groundEntityNum` 1022, and the next reads `pm_flags` 262144, `eFlags=49168`
 (0xC010), `groundEntityNum` 1023 and the placed origin, field for field what
-12.1 reads for retail's crouch mount -- the same one-cmd-per-tick timing
-that leaves the stand mount's gap open happened not to trip the crouch one
-on either run.
+12.1 reads for retail's crouch mount.
 
 VERIFIED, D3: `angles2[1]` clamps at exactly -45.0/45.0 and `angles2[0]` at
 exactly -40.0/40.0 through the sweep, the same arc as section 2's stock
