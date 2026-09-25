@@ -11,8 +11,9 @@ document-level default: every claim carries its own label. VERIFIED is a byte
 read out of the module, an asset or a committed capture (an immediate, a
 relocation, a string, a store at an offset, a table entry). INFERRED is
 anything read off control flow, which includes the order of two stores and
-every branch condition, and anything that says what a field means. No retail
-capture of a mount exists yet; section 12 is where one goes.
+every branch condition, and anything that says what a field means. Section
+12 reads the retail capture of a mount on mp_carentan; the earlier sections
+point there where the capture bears on a claim.
 
 Module: `game.mp.i386.so`, the 1.1d Linux dedicated server's MP game module.
 Addresses are the module's own VAs as `nm -D`, `objdump` and
@@ -342,7 +343,7 @@ three stores run on every call, and a player with health at or below 0 or a
 non-zero busy byte leaves before the -1 store. INFERRED: a mounted player
 reads `serverCursorHint` 0 every frame and keeps whatever
 `serverCursorHintString` held when it mounted, which is the turret's own slot
-0.
+0. VERIFIED on the wire: 12.10.
 
 INFERRED, from the loop at 0x4f870: when every candidate is an unusable
 turret, the loop ends with `cl+0x3b8` naming the last one and the hint 0, and
@@ -444,7 +445,8 @@ placement, 0x521f8), and holds the fire code at higher addresses. INFERRED: a
 busy byte other than 1 or a `sessionstate` other than 0 takes the release
 instead of the mounted frame; the aim runs before the placement and both
 before the shot. INFERRED: the body is placed off this frame's new `angles2`,
-and the shot leaves after both.
+and the shot leaves after both. VERIFIED, 12.2: each snapshot's origin
+matches that snapshot's `angles2`.
 
 ### 6.2 Aim (0x5201c)
 
@@ -477,7 +479,7 @@ first mounted frame after a mount flips the turret's teleport bit, so a client
 snaps the barrel instead of lerping it across the mount; the view is rewritten
 only on a frame where a clamp or the rate limit changed `want`, so a view
 inside the arcs and within 15 degrees of the barrel is left to the client's
-own prediction.
+own prediction. VERIFIED on the wire: 12.3.
 
 ### 6.3 Fire (0x521d4)
 
@@ -519,7 +521,9 @@ mounted frame. Refinement one: a failed tag lookup in 0x51488 skips the
 bullet and the event but still reaches `viewlocked = 2` and `eFlags |= 0x400`
 (the `je` at 0x522c5 lands on 0x5231f). Refinement two: a player with no
 client skips straight to `eFlags |= 0x400` (the `je` at 0x5228e lands on
-0x5232f).
+0x5232f). VERIFIED, 12.4: a held trigger fires on every server frame with one
+event each, `viewlocked` 2 exactly on those frames, and 20 rounds from a still
+barrel land on one point.
 
 VERIFIED, 0x51488 (the fire parameters): `G_DObjGetWorldTagMatrix` on the
 turret for `tag_flash` (0x75780, call 0x514a6) and `tag_player` (0x757d9,
@@ -567,7 +571,8 @@ that frame and the next read `loopSound` = `weap_mg42_loop`'s index; the third
 reads `loopSound` 0 and carries one `EV_SOUND_ALIAS` for `weap_mg42_cooldown`
 on the turret. So the loop is on the wire for two snapshots counting the last
 shot's frame, not 150 ms past it as a first reading put it, and the cooldown
-event comes 100 ms after the last shot. INFERRED: the release zeroes the timer
+event comes 100 ms after the last shot. VERIFIED, 12.4: the capture shows
+those three frames exactly. INFERRED: the release zeroes the timer
 and `loopSound` (section 8), so a release mid-burst cuts the loop with no
 cooldown event, and the same countdown in `turret_think` (section 9) has
 nothing to count in the stock flow.
@@ -620,7 +625,9 @@ predicts against, not what it draws from.
 
 **Open question.** Whether sampling the `standMG42_aim` leaves at the
 turret's `angles2` with vcod's xanim and skeleton code reproduces retail's
-`ps.origin` to the unit is not known until a capture exists (section 12).
+`ps.origin` to the unit is not known yet. The retail origins to match are
+the two tables in 12.2. VERIFIED there: every mounted snapshot's origin sits
+on the floor, 31.9 below the gun's origin.
 Nor is what `playerPositionDist` (`+0x404`) feeds. VERIFIED, absence: no
 operand at `+0x404` sits in 0x51488..0x53400. INFERRED: the 42-unit
 horizontal gap between `tag_aim` and `tag_player` against its 46 is a
@@ -646,8 +653,10 @@ VERIFIED, the release body, the same stores in `G_ClientStopUsingTurret`
 INFERRED: a saved 2 sends 0x8e, a 1 0x8d, anything else 0x8c, and a -1
 sends none. INFERRED: the stance event is `EV_STANCE_FORCE_PRONE` (142),
 `EV_STANCE_FORCE_CROUCH` (141) or `EV_STANCE_FORCE_STAND` (140)
-(`cod11-events-and-fx.md`), and puts the player back in the stance it
-mounted from.
+(`cod11-events-and-fx.md`), and asks the client to go back to the stance it
+mounted from. VERIFIED, 12.7: a stand mount's release raises 140, a crouch
+mount's 141, and after the crouch one `pm_flags` carries no crouch bit, so
+the server itself does not restore the stance.
 
 VERIFIED, `TeleportPlayer` (0x51380): a compare of `sessionstate` against 0
 (0x51395), `G_TempEntity` for 200 at the old origin and 199 at the new one
@@ -659,12 +668,16 @@ and `trap_LinkEntity` (0x51477). INFERRED: the temp entities are made only for
 `sessionstate` 0 and the relink only when `ebx` is non-zero. INFERRED: the
 player lands one unit above where it stood to mount, facing the angles its
 entity had, with `EV_PLAYER_TELEPORT_OUT`/`_IN` temp entities only when it is
-still playing, and the teleport bit flipped.
+still playing, and the teleport bit flipped. VERIFIED, 12.7: both releases
+in the capture land one unit above the mount origin with 200 and 199 on temp
+entities and the teleport bit flipped; the facing is not separable from the
+probe's own view there.
 
 The triggers, INFERRED from the call sites:
 
 - the use key: `Cmd_Activate_f` sets the busy byte to 2 (section 4.1), and
-  the next `turret_think_client` finds it not 1 (0x5235c) and releases;
+  the next `turret_think_client`, the same server frame's (12.7), finds it
+  not 1 (0x5235c) and releases;
 - death: a killed client's `sessionstate` leaves 0 in the stock
   `CodeCallback_PlayerKilled`, a dead client still takes `ClientEndFrame`'s
   live arm and keeps `pm_flags` 0x40000, and `turret_think_client` finds
@@ -693,16 +706,25 @@ of the weapon's `vertTurnSpeed`/`horTurnSpeed` (`+0x3f0`/`+0x3f4`), a multiply
 by 0.05 (0x7590c) and a test of its third argument, and `turret_think` is its
 only caller. INFERRED: the 200 applies when that argument is 0, so an unmanned
 barrel walks back to (rest pitch, 0) at 10 degrees a frame, 200 a second, and
-the turn speeds in the weapon file are dead in MP. INFERRED: with the owner at
+the turn speeds in the weapon file are dead in MP. VERIFIED, 12.8: each axis
+steps at most 10 a frame, independently of the other. INFERRED: with the owner at
 0x3ff the test reads the world entity's client, which is null, so every
 unmanned frame takes this branch.
 
 VERIFIED: `turret_controller` (0x53348) hands (`angles2[0]`, `angles2[1]`, 0)
 to `G_DObjSetControlTagAngles` for `tag_aim` and `tag_aim_animated`, and
-(`angles2[2]`, 0, 0) for `tag_flash` (`docs/protocol-1.1.md`). VERIFIED: 0x524cc
-stores the step it could not take in `angles2[2]` (same section), and the
-aim step writes `angles2[2] = 0` (section 6.2). INFERRED: the flash tilts
-only while an unmanned barrel is still slewing.
+(`angles2[2]`, 0, 0) for `tag_flash` (`docs/protocol-1.1.md`). VERIFIED,
+0x524cc re-read with `annotate_func.py` for section 12: it adds `angles2[2]`
+into `angles2[0]` on entry (0x524eb..0x524f4); steps each axis by
+`AngleSubtract` toward the target, clamped to the limit (0x52588..0x525ec);
+copies the new `angles2[0]` into `angles2[2]` (0x525f4); clamps a second
+`AngleSubtract` of it against the entry pitch to the same limit
+(0x52642..0x52671); and stores that as `angles2[0]` and `angles2[2]` minus it
+as `angles2[2]` (0x52676..0x5267f). VERIFIED: the aim step writes `angles2[2]
+= 0` (section 6.2). INFERRED: `angles2[2]` carries into the next frame the
+part of the pitch step the second clamp refused; starting from 0 with both
+clamps at 10 that part is always 0, so the stock slew never tilts the flash.
+VERIFIED, 12.8: `angles2[2]` reads 0.0 on every slewing snapshot.
 
 ## 10. Anims
 
@@ -755,10 +777,338 @@ INFERRED too). INFERRED: a kill from the gun is credited to
 MG42 kill icon on the obituary.
 
 Not determined from the bytes: the means of death and the hit location a
-turret bullet carries through `Bullet_Fire_Extended`. The `D;`/`K;` lines a
-retail `games_mp.log` writes for a turret kill are the evidence for both
-(section 12).
+turret bullet carries through `Bullet_Fire_Extended`. VERIFIED, 12.6: the
+capture's `D;` and `K;` lines read `MOD_RIFLE_BULLET` and `torso_upper`, and
+the `D;` line names the gunner's carried weapon where the `K;` line names
+`mg42_bipod_stand_mp`.
 
 ## 12. What the capture measured
+
+The retail capture is two committed files, both from one run on 2026-09-25:
+`crates/server/tests/fixtures/turret/mp_carentan-dm-turret.txt` (the
+`--save-turret` gunner's side, "fixture line N" below) and
+`mp_carentan-dm-turret-script.txt` beside it (the server's `PROBE`, `D;` and
+`K;` lines, "script line N"). The recipe is in both headers and in
+`client-probes/README.md`, `probe_turret`. Client 0 is the `--probe-team
+axis` target, placed 300 units in front of the gun (script line 31); client
+1 is the gunner, placed 40 units behind it (script line 32). The gun is wire
+entity 298 (fixture line 3, script line 30). The 40-unit spot took the mount
+on the first tap, so no spot was moved. One run was taken; section 12.11 says
+what it leaves open.
+
+Evidence below is a fixture line. A "snapshot" is one `!trace` line, one per
+50 ms server frame; `st` is its `serverTime`.
+
+### 12.1 The mount frame (D1)
+
+VERIFIED, the stand mount: the use cmd is fixture line 88 (`st` 24736,
+`buttons` 64); the snapshot at 24750 (line 90) still reads `viewlocked` 0;
+the first mounted snapshot is 24800 (line 93). It reads `viewlocked` 1,
+`viewlocked_entNum` 298, `eFlags` 49176 (0xC018, the 0x18 it had with 0xC000
+over it), `pm_flags` 262144 (0x40000, unchanged), `groundEntityNum` 1023,
+`pm_type` 0, `weapon` 12 (unchanged), `legsAnim` 32, `torsoAnim` 0, `gunfx`
+0, hint `0:0:0` and `eventSequence` 1 (unchanged: the mount raises no event
+on the gunner). The origin already moved, 1738.2,1860.5 to 1745.7,1861.4.
+The gun's line 94 reads `angles2` (-16.4, 0.3) against a view of (-16.4,
+-130.7), which is the view minus the gun's angles (0, 229), and `eFlags` 8
+where the wait phase read 0 (line 43).
+
+VERIFIED, the crouch mount: use cmds at `st` 38282 and 38300 (lines
+1366-1367), crouch held in every cmd. The first mounted snapshot, 38300 (line
+1368), reads `viewlocked` 1/298 and `eFlags` 49200 (0xC030) but keeps the
+crouch: `pm_flags` 262146, `groundEntityNum` 1022, `legsAnim` 111
+(`pb_crouch_alert`) and the pre-mount origin. The gun reads `angles2` (-38.4,
+0.3) and `eFlags` 8 to 0 (line 1369). The next snapshot, 38350 (line 1373),
+reads `pm_flags` 262144, `eFlags` 49168 (0xC010), `groundEntityNum` 1023,
+`legsAnim` 544 and a placed origin, with crouch still held.
+
+VERIFIED: `legsAnim` 32 is `standMG42_aim`, 33 `standMG42_fire`, 111
+`pb_crouch_alert` and 122 `pb_stand_alert`, by `AnimIndex` in
+`crates/common/src/animtree.rs` over the stock paks; 544 and 545 are 32 and
+33 with the 512 toggle bit.
+
+INFERRED: the use cmd runs when it arrives, and the probe's cmds arrive about
+18 ms behind their `serverTime` (the probe's `cmdLag`), so cmd 24736 ran after
+frame 24750 and cmd 38282 just before frame 38300. On the stand mount more
+cmds ran in the same frame after the mount, so pmove's stance step (0x316f4,
+section 5) and the mounted movetype had run before `ClientEndFrame`; on the
+crouch mount the use cmd was the frame's last, the animation step still chose
+the crouch idle, and the placement's `turretanim` test (section 7) skipped the
+body. INFERRED: the mount lands inside the use cmd, and the body placement and
+mounted anim need one mounted pmove step in the same frame.
+
+### 12.2 Where the body goes (D2)
+
+VERIFIED, every mounted snapshot: `ps.origin[2]` reads -23.9, the floor, 31.9
+below the gun's origin (all 261 mounted `!trace` lines). VERIFIED: the xy
+origin moves with the gun's `angles2` on the same snapshot. The yaw sweep
+steps `angles2[1]` -45 to -44 between lines 145 and 174 and the origin moves
+from 1761.3,1831.0 to 1761.3,1831.8 on that same snapshot; revisits of one
+`angles2` read one origin (0, 45) at lines 250 and 841, (10, 30) at lines 835
+and 876, to 0.1.
+
+Below, "behind" is the distance behind the gun's origin along the barrel's
+world yaw (229 + `angles2[1]`) and "left" the distance to its left, both
+computed from the fixture's origins. VERIFIED, the yaw sweep at `angles2[0]`
+0:
+
+| `angles2[1]` | line | origin | behind | left |
+|---|---|---|---|---|
+| -45 | 145 | 1761.3,1831.0 | 49.2 | 2.4 |
+| -38 | 179 | 1761.1,1836.8 | 49.5 | 2.7 |
+| -32 | 184 | 1760.2,1841.3 | 49.4 | 3.3 |
+| -24 | 190 | 1758.3,1847.2 | 49.2 | 4.0 |
+| -14 | 199 | 1753.6,1854.4 | 48.1 | 3.9 |
+| -6 | 205 | 1749.1,1859.2 | 47.0 | 3.9 |
+| -2 | 209 | 1747.3,1861.0 | 46.7 | 4.7 |
+| 6 | 215 | 1743.5,1864.3 | 46.2 | 6.1 |
+| 12 | 220 | 1739.7,1868.3 | 46.9 | 5.7 |
+| 18 | 225 | 1735.1,1872.4 | 48.1 | 4.7 |
+| 24 | 230 | 1730.3,1875.2 | 48.6 | 4.3 |
+| 30 | 235 | 1726.4,1875.5 | 47.4 | 5.5 |
+| 36 | 240 | 1722.6,1875.5 | 46.3 | 6.6 |
+| 42 | 245 | 1718.0,1876.6 | 46.5 | 6.8 |
+| 45 | 250 | 1715.4,1877.3 | 46.9 | 6.7 |
+
+VERIFIED, the pitch sweep at `angles2[1]` 0 (negative pitch is up):
+
+| `angles2[0]` | line | origin | behind | left |
+|---|---|---|---|---|
+| -40 | 498 | 1741.8,1856.6 | 39.6 | 5.0 |
+| -32 | 508 | 1743.5,1858.6 | 42.3 | 5.0 |
+| -26 | 513 | 1744.6,1859.8 | 43.9 | 5.1 |
+| -20 | 518 | 1745.4,1860.8 | 45.2 | 5.0 |
+| -14 | 523 | 1746.1,1861.6 | 46.2 | 5.0 |
+| -8 | 528 | 1746.5,1862.1 | 46.9 | 5.0 |
+| -2 | 533 | 1746.5,1862.0 | 46.8 | 5.0 |
+| 4 | 538 | 1746.1,1861.6 | 46.2 | 5.0 |
+| 10 | 543 | 1745.9,1861.3 | 45.9 | 5.1 |
+| 16 | 548 | 1745.7,1861.1 | 45.6 | 5.0 |
+| 22 | 553 | 1745.3,1860.6 | 44.9 | 5.1 |
+| 28 | 558 | 1744.5,1859.7 | 43.7 | 5.0 |
+| 36 | 564 | 1743.0,1858.0 | 41.5 | 5.0 |
+| 40 | 568 | 1742.2,1857.1 | 40.3 | 5.0 |
+
+INFERRED: the body turns with the barrel's yaw but is no rigid offset: it
+sits 46 to 49.5 behind and 2.4 to 6.8 left across the yaw arc, and pitch
+pulls it in toward the gun in both directions, to 39.6 at full up and 40.3 at
+full down. That is the shape of the blended `standMG42_aim` leaves of section
+7 rather than a formula, so a reimplementation either samples the anims or
+fits these two tables. The other mounted snapshots (the mount-phase drift,
+the flick, fire and the crouch remount) fall between the table's rows and
+are all in the fixture.
+
+### 12.3 The arcs, the view and the 15-degree step (D3)
+
+VERIFIED, yaw: while the cmds ask for more than 45 either side, `angles2[1]`
+reads -45.0 and the view yaw 184.0 (229 - 45) on every snapshot (lines
+145-170), and 45.0 with 274.0 (229 + 45) (lines 250-481). VERIFIED, pitch:
+`angles2[0]` -40.0 with view pitch -40.0 (line 498) and 40.0 with 40.0 (lines
+568-820). VERIFIED: on those snapshots `delta_angles` moves every frame (for
+example 0 to 6371 to 11650 to 15837, lines 145-158), and on the yaw sweep's
+in-range snapshots, where the view follows the cmd at 6 degrees a frame,
+`delta_angles` holds at 0,21844,0 (lines 174-245).
+
+VERIFIED, the 15-degree step: the flick asks for (0, 60) off the gun from a
+barrel at (40, 0), and `angles2` reads (25, 15), (10, 30), then (0, 45), the
+last clamped, with the view equal to the barrel plus the gun's angles on each
+(lines 830-841: 25.0,244.0; 10.0,259.0; 0.0,274.0) and `delta_angles`
+rewritten on each. The pitch sweep's first step from (0, 45) toward (-60, 0)
+reads (-15, 30), (-30, 15), (-40, 0) (lines 488-498). The fire phase's first
+snapshot steps (0, 45) to (10, 30) (line 877). Each axis moves at most 15 a
+frame.
+
+INFERRED: this confirms section 6.2's reading on the wire. The clamp holds the
+barrel at the arc and pulls the view back to it every frame the cmd asks
+past it. The step limits each axis to 15 degrees a frame and pulls the view
+to the barrel on every frame it limits. A view inside the arcs and within 15
+degrees of the barrel is left alone.
+
+The pitch-edge hold (lines 574-820) shows `delta_angles[0]` stepping 3642 a
+frame. INFERRED: that is the probe, not the server: it writes each cmd's
+wire angles as its asked view minus the last snapshot's `delta_angles`, and
+the server's rewrite feeds back into the next cmd.
+
+### 12.4 Fire and the loop sound (D4)
+
+VERIFIED: attack is held from cmd `st` 33766 (line 873) to cmd 35000 (line
+1076), and the gun fires on 25 consecutive snapshots, 33800 to 35000 (lines
+876-1081). Each carries one `EV_FIRE_WEAPON_MG42` (168, parm 0) on the gun's
+own ring, the gun's `eventSequence` stepping 1 to 25, one per 50 ms frame.
+Every one of those snapshots reads `viewlocked` 2, gun `eFlags` 1032 (0x408)
+and gun `loopSound` 2; the gunner's `ps.eFlags` reads 50200 (0xC418) and its
+`legsAnim` 545.
+
+VERIFIED: the snapshot after the last shot, 35050 (line 1085), reads
+`viewlocked` 1, gunner `eFlags` 49176, `legsAnim` 32, gun `eFlags` 8 and
+`loopSound` still 2 (line 1086). The one after, 35100, reads `loopSound` 0
+and an `EV_SOUND_ALIAS` (172) with parm 3 on the gun's own ring, entity 298,
+`eventSequence` 26 (lines 1090-1091). VERIFIED: `loopSound` 2 and parm 3 are
+configstrings 526 and 527, `weap_mg42_loop` and `weap_mg42_cooldown`
+(section 2). INFERRED: this is section 6.4's reading exactly: the loop is on
+for the last shot's frame and the next, and the cooldown plays on the third,
+on the turret, not on a temp entity.
+
+VERIFIED: the 20 shots of the fire phase, from a still gunner at a still
+barrel (10, 30), all put their `EV_BULLET_HIT_LARGE` (174) impact at
+1648,1492,-31 (lines 879-1031). INFERRED: a turret bullet has no spread
+(section 6.3).
+
+VERIFIED: the one instruction between 0x521d4 and 0x524cc that sets 0x400 in
+an `eFlags` byte is the gun's (`or BYTE PTR [ebx+0x9], 0x4` at 0x5232f), and the retail carbine capture
+`playerstate/mp_carentan-tdm-hit-target.txt` reads `eFlags` 1040 (0x410) on
+its line 80, a frame carrying `EV_FIRE_WEAPON`. INFERRED: the gunner's 0x400
+is the generic firing flag the attack bit sets, not a turret store.
+
+### 12.5 When the hit lands (D5)
+
+VERIFIED: the target phase fires five rounds, `st` 34800 to 35000. Rounds at
+34800 and 34850 hit the world far from the target (lines 1041, 1049). The
+round at 34900 (fire `eventSequence` 23) puts an impact at 1518,1612,22, at
+the target, and a second at 1248,1308,14 on the world behind it (lines
+1054-1060). The round at 34950 (`eventSequence` 24) does the same, and the
+same snapshot carries `EV_PAIN` (187) with parm 47 on entity 0 and
+`EV_OBITUARY` (201) on temp entity 180 (lines 1064-1072). The round at 35000
+reaches only the world behind (line 1080). VERIFIED: the server logged one
+`D;` and one `K;` for client 0, both 53 damage (script lines 33-34), and 53
+is short of the target's 100 health.
+
+INFERRED: the 34900 round is the `D;` hit and the 34950 round the `K;` hit.
+The kill's obituary is in the same snapshot as the fire event that caused it,
+so a turret round's trace and damage run in the gunner's mounted frame, the
+same server frame as the shot, not the next one. INFERRED: the first hit's
+`EV_PAIN` (parm 47, the 47 health the 53 left) reaches entity 0 one snapshot
+after its round. The victim's entity state is copied from its playerstate in
+its own `ClientEndFrame`, and client 0's runs before the gunner's, client 1,
+fires. A victim numbered above its gunner would show the pain on the round's
+own snapshot. VERIFIED, the second impact behind the target on both hitting
+rounds: the round goes on past the player it hits. INFERRED: that is the
+rifle-bullet pass-through of `cod11-combat.md` 2.4, step 5, at half damage,
+since the stock turret file sets `rifleBullet 1`.
+
+### 12.6 Kill credit (D6)
+
+VERIFIED, script lines 33-34: `D;0;axis;vcod;1;allies;vcod;m1carbine_mp;53;MOD_RIFLE_BULLET;torso_upper`
+and `K;0;;vcod;1;;vcod;mg42_bipod_stand_mp;53;MOD_RIFLE_BULLET;torso_upper`.
+The wound names the gunner's carried weapon, the kill names the turret's.
+INFERRED: the weapon the damage callback is handed comes from the attacker's
+own state, not from the turret's weapon def in the round's parameters, and
+only `player_die`'s replacement (section 11) swaps in the turret's
+`s.weapon`, so `CodeCallback_PlayerDamage` sees `m1carbine_mp` and
+`CodeCallback_PlayerKilled` sees `mg42_bipod_stand_mp`. INFERRED: 53 is
+`(int)(60 * 0.9f)`, the file's `damage` 60 times `torso_upper`'s 0.9 in
+`info/mp_lochit_dmgtable` (`cod11-combat.md` 3.5), truncated below 54 by the
+float product. The means of death is `MOD_RIFLE_BULLET` and the hit location
+an ordinary body location, which section 11 left open.
+
+### 12.7 The release (D7)
+
+VERIFIED, the use dismount: use cmd `st` 37282 (line 1272), released on
+snapshot 37300 (line 1274). That snapshot reads `viewlocked` 0,
+`viewlocked_entNum` 1023, `eFlags` 16 (0xC018 lost 0xC000 and the teleport
+bit 8), origin 1738.2,1860.5,-22.9, which is the pre-mount origin one unit
+up, `groundEntityNum` 1023, `legsAnim` still 32 and hint `0:0:0`. It carries
+`EV_PLAYER_TELEPORT_OUT` (200) on temp entity 252, `EV_PLAYER_TELEPORT_IN`
+(199) on temp entity 258 and `EV_STANCE_FORCE_STAND` (140) on the gunner's own
+ring (lines 1275-1277). The next snapshot (line 1281) reads origin z -23.9,
+`groundEntityNum` 1022, `legsAnim` 634 and hint `6:0:0`. The gun keeps its
+`angles2` and `eFlags` on the release snapshot; its `loopSound` was already 0.
+
+VERIFIED, the crouch remount's release: use cmd 38800 (line 1418), released
+on 38850 (line 1424): `eFlags` 49168 to 24 (the teleport bit set again),
+the same pre-mount origin one unit up, 200 and 199 on temp entities 170 and
+171, and `EV_STANCE_FORCE_CROUCH` (141) on the ring (lines 1425-1427).
+`pm_flags` reads 262144, no crouch bit, on that snapshot and every one after
+it.
+
+INFERRED: the release runs in the frame of the use cmd that asked for it: the
+busy byte 2 set in the cmd is read by the same frame's `turret_think_client`.
+INFERRED: the stance event is all the release does to the stance. The server
+does not put the player back into a crouch; a retail client acting on 141
+would, and the probe does not act on it.
+
+VERIFIED: the view after both releases reads (0, 229), the gun's own yaw,
+with `delta_angles` unchanged across the release (lines 1274, 1424). The
+probe's cmds asked for the same view (0, 229) in both phases, so this capture
+cannot tell `TeleportPlayer`'s angle apart from the cmd's.
+
+VERIFIED: before the first mount `viewlocked_entNum` reads 0 (line 42), after
+a release 1023 (line 1274 onward).
+
+### 12.8 The unowned barrel (D8)
+
+VERIFIED: from the snapshot after the use release, `angles2` reads (-10, 0),
+(-20, 0) and so on to (-70, 0), then (-72, 0), one step per frame (lines
+1282-1317). After the crouch remount's release it reads (-13.6, -41.6) on the
+release snapshot, then (-23.6, -31.6), (-33.6, -21.6), (-43.6, -11.6),
+(-53.6, -1.6), (-63.6, 0.0), (-72.0, 0.0) (lines 1420-1457). -72 is the
+barrel's rest pitch of the wait phase (line 43). The slew starts on the
+snapshot after the release; the release snapshot keeps the barrel where the
+gunner left it.
+
+INFERRED: each axis steps toward (rest pitch, 0) by at most 10 degrees a
+frame, independently: yaw reaches 0 on a 1.6-degree step while pitch still
+takes 10.
+
+VERIFIED: `angles2[2]` reads 0.0 on all 99 `!turret` lines, the 14 slewing
+ones included. INFERRED: that is section 9's re-reading of 0x524cc, where the
+carried part stays 0 when both clamps are 10, and not the flash tilt an
+earlier reading of this document expected while the barrel slewed.
+
+### 12.9 The gunner's anims (D9)
+
+VERIFIED: on the 261 mounted snapshots, `torsoAnim` reads 0 on all of them
+and `legsAnim` one of 32, 544 (`standMG42_aim`), 545 (`standMG42_fire`) or,
+on the crouch mount's first snapshot only, 111. 545 is on exactly the 25
+snapshots that fire (lines 876-1077); the snapshot after the last shot reads
+32 (line 1085). The crouch remount reads 544 throughout, with crouch held
+(lines 1373-1419). INFERRED: the mounted clause picks `standMG42_fire` on
+frames whose last cmd held attack and `standMG42_aim` otherwise, whatever
+stance the player mounted from, and its `both` body part reaches the wire as
+`legsAnim` with `torsoAnim` 0.
+
+### 12.10 The cursor hint (D10)
+
+VERIFIED: standing 40 units behind the gun facing it the hint reads `6:0:0`
+(lines 49-90): `serverCursorHint` 6, `serverCursorHintVal` 0,
+`serverCursorHintString` 0, the slot of configstring 1212, `CGAME_USEMG42`
+(section 2). Facing away (the wait snapshot, line 42) it reads `0:0:255`.
+Mounted it reads `0:0:0` on every snapshot, and on the release snapshot too
+(line 1274); the snapshot after reads `6:0:0` again (line 1281). INFERRED:
+section 4.3's reading holds: the mounted player's scan leaves early with the
+hint 0 and the string it had at the mount.
+
+### 12.11 What this capture leaves open
+
+The refused mount. The fixture's notes (lines 27-30) read `# BROKEN strafe
+passed 100 units at bearing 50.5`, `# refused bearing=56.2 dist=126.9`,
+`# BROKEN refused tap at dist=126.9` and `# REFUSED ok`. VERIFIED: the tap at
+56.2 degrees mounted nothing. It was also 126.9 units out horizontally, at
+the edge of the use scan's 128, so the capture does not say which test
+refused it. VERIFIED, the strafe (lines 1471-1531): the gunner hit a wall at
+about 1707,1888 and slid along it at a bearing of 45 to 46 degrees until it
+was past 100 units. VERIFIED, a 30 by 30 by 70 box swept with
+`vcod_common::collision::CollisionWorld::box_trace` over mp_carentan's BSP
+(vcod's clip, a box rather than retail's capsule): no point at a bearing of
+50 or more and inside 100 units of the gun is reachable in a straight line
+from the 40-unit spot, and a strafe either way from it stops at a bearing of
+34 to 44. INFERRED: the nest's side walls stand at about 44 to 46 degrees off
+the gun's back, so no placement behind this gun gives the strafe what it
+needs, and an arc refusal here needs either a stop just past 45 along the
+right-hand wall (about 60 units out) or a tap from in front of the gun.
+
+VERIFIED, lines 1491 and 1495: the hint goes from `6:0:0` to `0:0:255` while
+the bearing, computed from the two origins, goes from 39.2 to 45.3 and the
+angle between the view and the gun from 39 to 45. INFERRED: the gun leaves
+the scan's 0.76-cosine cone (about 40.5 degrees) in the same step, so the
+hint does not settle the arc either.
+
+The mount-phase drift. VERIFIED: between the mount and the yaw sweep the
+barrel's yaw runs 0.3 to -41.6 with no clamp (lines 93-140). INFERRED: that
+is the probe re-aiming at the gun from an eye the placement kept moving, not
+retail behaviour; the lines still serve as D2 samples.
+
+The release view: 12.7 cannot separate the angle the release sets from the
+one the probe's cmds asked for.
 
 ## 13. As implemented

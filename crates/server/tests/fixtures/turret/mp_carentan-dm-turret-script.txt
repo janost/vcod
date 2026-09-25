@@ -1,0 +1,34 @@
+# Retail CoD 1.1d dedicated server log lines under the --save-turret client.
+# map mp_carentan, g_gametype probe_turret (whose main() calls
+# maps\mp\gametypes\dm::main()), probe_teleport 1, dedicated 1,
+# sv_maxclients 8, sv_pure 0, stock scr_* defaults, two clients: client 0 a
+# --probe-team axis net-probe standing as the target, client 1 the
+# --save-turret gunner (allies). Captured 2026-09-25. The evidence is the
+# server's own games_mp.log: the gametype is
+# crates/gsc/tests/fixtures/semantics/client-probes/probe_turret.gsc, which
+# logs every misc_mg42 and every placement it makes; the D; and K; records are
+# the stock dm script's own. The client half of the same run is
+# mp_carentan-dm-turret.txt beside this file.
+#
+# Three shells, the gsc probe first:
+#   COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=230 \
+#       tools/run_probe.sh client-probes/probe_turret mp_carentan +set probe_teleport 1
+#   cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team axis --probe-secs 180
+#   cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-turret --probe-secs 170
+# The axis client started 15 s after the server and the gunner 5 s after it.
+# The gunner's placement, 40 units behind the gun, took the mount on the first
+# tap; no spot was moved.
+#
+# PROBE turret <num> <origin> <angles>: a misc_mg42 at the startup census.
+# PROBE place <clientNum> <team> <origin> <yaw>: a probe_teleport move.
+# D;<victimNum>;<team>;<name>;<attackerNum>;<team>;<name>;<weapon>;<damage>;<mod>;<hitloc>
+# K; the same fields for the killing hit.
+# Lines are copied from games_mp.log with the engine's m:ss stamp, leading
+# padding trimmed;
+# every PROBE, D; and K; line of the run is here and nothing else.
+0:01 PROBE turret 297 (-500.00, 1896.00, 175.00) (0.00, 295.00, 0.00)
+0:01 PROBE turret 298 (1712.00, 1830.00, 8.00) (0.00, 229.00, 0.00)
+0:16 PROBE place 0 axis (1515.18, 1603.59, 8.00) 409
+0:21 PROBE place 1 allies (1738.24, 1860.19, 8.00) 229
+0:34 D;0;axis;vcod;1;allies;vcod;m1carbine_mp;53;MOD_RIFLE_BULLET;torso_upper
+0:34 K;0;;vcod;1;;vcod;mg42_bipod_stand_mp;53;MOD_RIFLE_BULLET;torso_upper
