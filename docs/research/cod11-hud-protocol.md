@@ -831,6 +831,15 @@ non-empty they are merged into one string, the label copied up to a `%s`,
 the text in its place, then the rest of the label; a label with no `%s`
 prefixes the text.
 
+INFERRED, off `0x3001f7e0`: a non-empty label is drawn by `0x3001f490`
+ahead of the type switch, for every type, and the draw position then moves
+right by the label's width (`+0x14`) before the text, the shader
+(`0x3001f6f0`) or the clock (`0x3001f520`) is drawn. INFERRED, off
+`0x3001ef00` and the tail of `0x3001f120`: the width the element is aligned
+by is the label's width plus the text's or the shader's. So a shader or clock
+with a label is laid out label first, the pair aligned as one box; for the
+text types the merge above leaves the label empty, so it rides in the text.
+
 ### Size, position and colour
 
 INFERRED, off `0x3001ee20` and `0x3001ee90`: a shader element's width is its

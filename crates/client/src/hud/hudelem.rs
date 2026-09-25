@@ -190,11 +190,11 @@ fn draw(
         _ => None,
     };
 
+    let label = match e.get(f::LABEL) {
+        0 => String::new(),
+        i => localized(loc, cs, CS_LOCALIZED + i as usize),
+    };
     if let Some(body) = body {
-        let label = match e.get(f::LABEL) {
-            0 => String::new(),
-            i => localized(loc, cs, CS_LOCALIZED + i as usize),
-        };
         let s = merge_label(&label, &body);
         if s.is_empty() {
             return;
@@ -204,9 +204,6 @@ fn draw(
         return;
     }
 
-    let Some(material) = shader(cs, e.get(f::SHADER)) else {
-        return;
-    };
     let tween = |to: usize, from: usize| {
         let or_font = |n: i32| if n == 0 { tf.height } else { n as f32 };
         lerp_over(
@@ -219,7 +216,21 @@ fn draw(
     };
     let w = tween(f::WIDTH, f::FROM_WIDTH);
     let h = tween(f::HEIGHT, f::FROM_HEIGHT);
-    let (x, y) = place(e, now, w, h);
+    // The label leads the shader in one box; each aligns by its own height.
+    let label_w = if label.is_empty() {
+        0.0
+    } else {
+        tf.width(&label)
+    };
+    let (x, y) = place(e, now, label_w + w, h);
+    if label_w > 0.0 {
+        let (_, label_y) = place(e, now, label_w + w, tf.height);
+        text(tf.font, &label, (x, label_y), tf.px_scale(v), color, v, out);
+    }
+    let Some(material) = shader(cs, e.get(f::SHADER)) else {
+        return;
+    };
+    let x = x + label_w;
     out.push(v.quad(x, y, w, h, color, material));
     if ty >= 8 {
         let ms = timer_ms(ty, e.get(f::TIME), now) as f32;
@@ -528,6 +539,27 @@ pub(crate) mod tests {
         ]);
         let q = &run(&[e], &cs, 0, (640.0, 480.0))[0];
         assert_eq!((q.verts[0][1], q.verts[2][1]), (96.0, 100.0));
+    }
+
+    #[test]
+    fn a_shader_label_leads_it_inside_the_aligned_box() {
+        let cs = cs_with(&[(CS_SHADERS + 5, "white"), (CS_LOCALIZED + 2, "AB")]);
+        let e = elem(&[
+            (f::TYPE, 3),
+            (f::SHADER, 5),
+            (f::LABEL, 2),
+            (f::X, 100),
+            (f::Y, 50),
+            (f::ALIGN_X, 2),
+            (f::WIDTH, 20),
+            (f::HEIGHT, 20),
+        ]);
+        let out = run(&[e], &cs, 0, (640.0, 480.0));
+        // Two glyphs of 6: the label spans 68..80 and the shader 80..100.
+        let label = glyph_bounds(&out[..4]);
+        assert!(close(label[0], 68.0) && close(label[2], 80.0), "{label:?}");
+        let shader = out.last().expect("shader");
+        assert_eq!((shader.verts[0][0], shader.verts[1][0]), (80.0, 100.0));
     }
 
     #[test]
