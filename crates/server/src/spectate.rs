@@ -2,7 +2,7 @@
 
 use crate::game::host::SimOp;
 use glam::Vec3;
-use vcod_common::collision::CollisionWorld;
+use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::msg::{self, UserCmd};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::net::trajectory;
@@ -649,7 +649,7 @@ impl ClientSim {
         &mut self,
         cmd: &UserCmd,
         dt: f32,
-        world: Option<&CollisionWorld>,
+        world: Option<MoveWorld<'_>>,
         weapons: &[Option<WeaponDef>],
     ) -> Vec<PmEvent> {
         // `pers.cmd` takes every cmd, ahead of the dead and intermission returns.
@@ -659,7 +659,7 @@ impl ClientSim {
         // 1.12 and 6, the `pm_type > 5` returns).
         if self.dead {
             if let Some(w) = world {
-                pmove::dead_move(&mut self.ps, w, dt);
+                pmove::dead_move(&mut self.ps, &w, dt);
             }
             return Vec::new();
         }
@@ -694,7 +694,7 @@ impl ClientSim {
                 // linking frame's run free and the unlinking frame's linked
                 // (object-model doc, 23.2).
                 self.ps.linked = self.link_to.is_some();
-                let events = pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt, weapons);
+                let events = pmove::pmove(&mut self.ps, &pm_input(cmd), &w, dt, weapons);
                 self.jumped |= self.ps.jumped;
                 self.land_anim |= self.ps.land_anim;
                 // Retail holds a prone view inside the cone around the body by
@@ -1549,7 +1549,8 @@ mod tests {
         };
         for _ in 0..20 {
             assert!(
-                sim.step(&forward, 0.05, Some(&world), &[]).is_empty(),
+                sim.step(&forward, 0.05, Some(MoveWorld::bare(&world)), &[])
+                    .is_empty(),
                 "the intermission camera raised an event"
             );
         }
@@ -1952,7 +1953,7 @@ mod tests {
         let mut t = 1000;
         for _ in 0..20 {
             t += 50;
-            sim.step(&prone(t, 0.0), 0.05, Some(&w), &[]);
+            sim.step(&prone(t, 0.0), 0.05, Some(MoveWorld::bare(&w)), &[]);
         }
         assert_eq!(sim.ps.stance, pmove::Stance::Prone);
         let before = sim.delta_angles[1];
@@ -1963,7 +1964,7 @@ mod tests {
 
         // Well past the cone: the body cannot swing the whole way in one
         // frame, so the rest comes off the view.
-        sim.step(&prone(t + 50, 150.0), 0.05, Some(&w), &[]);
+        sim.step(&prone(t + 50, 150.0), 0.05, Some(MoveWorld::bare(&w)), &[]);
         assert_ne!(
             sim.delta_angles[1], before,
             "a view past the cap must be pushed back"
@@ -1992,16 +1993,16 @@ mod tests {
         // Settle on the floor first, so the only thing moving is the eye.
         for _ in 0..20 {
             t += 50;
-            sim.step(&NULL_USERCMD, 0.05, Some(&w), &[]);
+            sim.step(&NULL_USERCMD, 0.05, Some(MoveWorld::bare(&w)), &[]);
         }
         assert_eq!(lerp_time(&sim), 0, "a settled eye carries no stamp");
 
         t += 50;
-        sim.step(&crouch(t), 0.05, Some(&w), &[]);
+        sim.step(&crouch(t), 0.05, Some(MoveWorld::bare(&w)), &[]);
         assert_eq!(lerp_time(&sim), t, "the stamp is the cmd that started it");
         let started = t;
         t += 50;
-        sim.step(&crouch(t), 0.05, Some(&w), &[]);
+        sim.step(&crouch(t), 0.05, Some(MoveWorld::bare(&w)), &[]);
         assert_eq!(
             lerp_time(&sim),
             started,
@@ -2010,7 +2011,7 @@ mod tests {
 
         for _ in 0..20 {
             t += 50;
-            sim.step(&crouch(t), 0.05, Some(&w), &[]);
+            sim.step(&crouch(t), 0.05, Some(MoveWorld::bare(&w)), &[]);
         }
         assert!(sim.ps.view_height_settled());
         assert_eq!(lerp_time(&sim), 0, "the stamp clears when the eye settles");
@@ -2358,7 +2359,7 @@ mod tests {
             ..NULL_USERCMD
         };
         for _ in 0..10 {
-            sim.step(&run, 0.05, Some(&w), &[]);
+            sim.step(&run, 0.05, Some(MoveWorld::bare(&w)), &[]);
         }
         assert!(sim.on_ground());
         assert_eq!(sim.wire_pm_type(), 0);
@@ -2372,7 +2373,7 @@ mod tests {
         let (origin, velocity) = (sim.ps.origin, sim.ps.velocity);
         assert!(velocity.length() > 100.0);
         for _ in 0..40 {
-            let events = sim.step(&run, 0.05, Some(&w), &[]);
+            let events = sim.step(&run, 0.05, Some(MoveWorld::bare(&w)), &[]);
             assert!(events.is_empty(), "a linked walk raised {events:?}");
         }
         assert_eq!((sim.ps.origin, sim.ps.velocity), (origin, velocity));
@@ -2476,13 +2477,13 @@ mod tests {
             op
         };
         for _ in 0..20 {
-            sim.step(&NULL_USERCMD, 0.05, Some(&w_test), &[]);
+            sim.step(&NULL_USERCMD, 0.05, Some(MoveWorld::bare(&w_test)), &[]);
         }
         sim.take_damage(&op(false), None, &mut 1, 1000);
         sim.health = 33;
         sim.end_frame(1000);
         for _ in 0..10 {
-            sim.step(&NULL_USERCMD, 0.05, Some(&w_test), &[]);
+            sim.step(&NULL_USERCMD, 0.05, Some(MoveWorld::bare(&w_test)), &[]);
         }
         assert_eq!(sim.ps.velocity.length(), 0.0, "the knockback has decayed");
 
@@ -2520,7 +2521,7 @@ mod tests {
             ..NULL_USERCMD
         };
         for expect in [51.0, 42.0, 33.0, 24.0, 15.0, 8.0, 8.0] {
-            let events = sim.step(&run, 0.05, Some(&w_test), &[]);
+            let events = sim.step(&run, 0.05, Some(MoveWorld::bare(&w_test)), &[]);
             assert!(events.is_empty(), "a dead player fires nothing");
             assert_eq!(
                 sim.to_wire(p, 0, 0).field_f32(p, "viewHeightCurrent"),
@@ -2532,7 +2533,7 @@ mod tests {
         assert_eq!(sim.ps.velocity.truncate(), glam::Vec2::ZERO);
         let before = sim.ps.origin;
         for _ in 0..5 {
-            sim.step(&run, 0.05, Some(&w_test), &[]);
+            sim.step(&run, 0.05, Some(MoveWorld::bare(&w_test)), &[]);
         }
         assert_eq!(sim.ps.origin, before, "input does not move a body");
 

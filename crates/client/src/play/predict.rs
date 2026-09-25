@@ -7,6 +7,7 @@ use super::cmds::{CmdRing, CMD_MS};
 use glam::Vec3;
 use std::collections::VecDeque;
 use vcod_common::collision::CollisionWorld;
+use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::msg;
 use vcod_common::net::protocol::Protocol;
 use vcod_common::pmove::predict::{self, Predicted};
@@ -107,7 +108,7 @@ impl Replay {
     fn run(
         &mut self,
         ring: &CmdRing,
-        world: &CollisionWorld,
+        world: &MoveWorld,
         weapons: &[Option<WeaponDef>],
         mut after: impl FnMut(&Predicted),
     ) -> usize {
@@ -164,7 +165,7 @@ impl Predictor {
         p: &Protocol,
         ps: &msg::PlayerState,
         ring: &CmdRing,
-        world: &CollisionWorld,
+        world: &MoveWorld,
         weapons: &[Option<WeaponDef>],
         now_ms: f64,
     ) -> Option<PredictedView> {
@@ -215,7 +216,7 @@ impl Predictor {
         p: &Protocol,
         ps: &msg::PlayerState,
         ring: &CmdRing,
-        world: &CollisionWorld,
+        world: &MoveWorld,
         weapons: &[Option<WeaponDef>],
         now_ms: f64,
     ) -> bool {
@@ -379,6 +380,7 @@ mod tests {
     /// A miss is `None`, so the caller draws stage 2's interpolated snapshots.
     fn history_gap_draws_the_snapshot() {
         let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
         let snap = standing(5000, 0.0);
         let run = |oldest: i32| {
             let mut pr = Predictor::default();
@@ -411,6 +413,7 @@ mod tests {
     #[test]
     fn an_unchanged_snapshot_runs_only_the_new_cmd() {
         let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
         let snap = standing(5000, 0.0);
         let mut r = ring((5008..=5040).step_by(8), true);
         let mut pr = Predictor::default();
@@ -448,6 +451,7 @@ mod tests {
     #[test]
     fn not_predictable_is_none() {
         let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
         let mut snap = standing(5000, 0.0);
         set(&mut snap, "pm_type", 6);
         let r = ring((5008..=5040).step_by(8), false);
@@ -461,6 +465,7 @@ mod tests {
     /// flipped or not. Returns the second frame's drawn and predicted x.
     fn corrected(x: f32, flip: bool) -> (f32, f32) {
         let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
         let r = ring((5008..=5040).step_by(8), false);
         let mut pr = Predictor::default();
         pr.predict(P, &standing(5000, 0.0), &r, &world, &[], 0.0)
@@ -487,6 +492,7 @@ mod tests {
     #[test]
     fn error_decays_over_100_ms() {
         let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
         let r = ring((5008..=5040).step_by(8), false);
         let mut pr = Predictor::default();
         let first = pr
@@ -514,6 +520,7 @@ mod tests {
         resend_at: usize,
     ) -> Vec<f32> {
         let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
         let snap = standing(5000, 0.0);
         let mut resent = snap.clone();
         set(&mut resent, "damageEvent", 1);
@@ -603,6 +610,7 @@ mod tests {
     /// the same cmds. Returns the drawn x per frame.
     fn walk_acked(hz: f64, frames: usize, unacked: usize) -> Vec<f32> {
         let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
         let first = standing(5000, 0.0);
         let mut truth = vec![predict::from_wire(P, &first, None)];
         let mut snap = first;

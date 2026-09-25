@@ -18,6 +18,7 @@
 use glam::Vec3;
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::collision::CollisionWorld;
+use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::huffman::Huffman;
 use vcod_common::net::msg::{
     self, UserCmd, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, WBUTTON_CROUCH, WBUTTON_PRONE,
@@ -130,7 +131,12 @@ impl Run<'_> {
         };
         self.server_step(&cmd);
         self.prone_corrections += usize::from(self.sim.delta_angles() != da);
-        predict::run_cmd(&mut self.pred, &cmd, self.world, self.weapons);
+        predict::run_cmd(
+            &mut self.pred,
+            &cmd,
+            &MoveWorld::bare(self.world),
+            self.weapons,
+        );
         self.compare();
         self.last_cmd = cmd;
         self.cmds += 1;
@@ -155,8 +161,12 @@ impl Run<'_> {
                 server_time: base,
                 ..*cmd
             };
-            self.sim
-                .step(&step, msec as f32 / 1000.0, Some(self.world), self.weapons);
+            self.sim.step(
+                &step,
+                msec as f32 / 1000.0,
+                Some(MoveWorld::bare(self.world)),
+                self.weapons,
+            );
         }
         self.st = cmd.server_time;
     }
@@ -699,12 +709,13 @@ fn replay(lines: &[Line], world: &CollisionWorld, weapons: &[Option<WeaponDef>])
     let mut last_ct = first.ct;
     let mut next_cmd = 0usize;
     let mut rows = Vec::new();
+    let mw = MoveWorld::bare(world);
     for s in snaps {
         if s.ct <= last_ct {
             continue;
         }
         while next_cmd < cmds.len() && cmds[next_cmd].server_time <= s.ct {
-            predict::run_cmd(&mut pred, &cmds[next_cmd], world, weapons);
+            predict::run_cmd(&mut pred, &cmds[next_cmd], &mw, weapons);
             next_cmd += 1;
         }
         let d = pred.ps.origin - s.origin;

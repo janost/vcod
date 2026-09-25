@@ -1897,9 +1897,10 @@ impl ApplicationHandler for App {
                                         }
                                     }
                                     let predicted = if ps_client == client_num {
+                                        let mw = vcod_common::movetrace::MoveWorld::bare(world);
                                         net.snapshots().newest().and_then(|s| {
                                             predictor
-                                                .predict(p, &s.ps, ring, world, weapons, local_ms)
+                                                .predict(p, &s.ps, ring, &mw, weapons, local_ms)
                                         })
                                     } else {
                                         predictor.reset();
@@ -2188,7 +2189,8 @@ impl ApplicationHandler for App {
                         }
 
                         (input.forward, input.right) = keys.axes();
-                        for ev in pmove::pmove(ps, input, world, dt, &[]) {
+                        let mw = vcod_common::movetrace::MoveWorld::bare(world);
+                        for ev in pmove::pmove(ps, input, &mw, dt, &[]) {
                             self.audio.on_game_event(
                                 &self.fs,
                                 &net::events::GameEvent {

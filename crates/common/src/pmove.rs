@@ -5,7 +5,8 @@
 //! constant's provenance: docs/research/bsp-ibsp59-format.md, "Movement
 //! constants and their provenance".
 
-use crate::collision::CollisionWorld;
+use crate::collision::MASK_PLAYERSOLID;
+use crate::movetrace::{MoveWorld, MASK_DEADSOLID};
 use crate::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use crate::weapon::WeaponDef;
 use glam::Vec3;
@@ -554,7 +555,7 @@ pub struct PmInput {
 pub fn pmove(
     ps: &mut PlayerState,
     input: &PmInput,
-    world: &CollisionWorld,
+    world: &MoveWorld,
     dt: f32,
     weapons: &[Option<WeaponDef>],
 ) -> Vec<PmEvent> {
@@ -616,7 +617,7 @@ pub fn pmove(
     update_prone_yaw(ps, world, dt);
     update_lean(ps, input, world, dt);
     set_water_level(ps, world);
-    ground_trace(ps, world);
+    ground_trace(ps, world, MASK_PLAYERSOLID);
     // Retail updates the ADS flag once per `pm_type` arm, after the ground
     // trace and before the arm's move (`PM_UpdateAimDownSightFlag`, combat
     // doc 1.13), so it reads the ground state the move starts from.
@@ -636,9 +637,9 @@ pub fn pmove(
     if let Some((normal, ladderforward)) = ladder {
         ladder_move(ps, input, normal, ladderforward, world, dt, &mut events);
     } else if ps.waterjump_ms > 0.0 {
-        water_jump_move(ps, world, dt, Some(&mut events));
+        water_jump_move(ps, world, dt, MASK_PLAYERSOLID, Some(&mut events));
     } else if ps.water_level > 1 {
-        water_move(ps, input, world, dt, Some(&mut events));
+        water_move(ps, input, world, dt, MASK_PLAYERSOLID, Some(&mut events));
     } else {
         // retail ground jump (fn 0x316F4 @0x31CC0): stance-dependent height,
         // horizontal velocity kept. Its bit-0x20 check (@0x31ccb) reads the
@@ -660,12 +661,20 @@ pub fn pmove(
         }
         if ps.on_ground {
             friction(ps, ps.on_ladder, dt);
-            walk_move(ps, input, weapon_def, world, dt, Some(&mut events));
+            walk_move(
+                ps,
+                input,
+                weapon_def,
+                world,
+                dt,
+                MASK_PLAYERSOLID,
+                Some(&mut events),
+            );
         } else {
-            air_move(ps, input, world, dt, Some(&mut events));
+            air_move(ps, input, world, dt, MASK_PLAYERSOLID, Some(&mut events));
         }
     }
-    ground_trace(ps, world);
+    ground_trace(ps, world, MASK_PLAYERSOLID);
     set_water_level(ps, world);
 
     // PM_Footsteps @0x322c8 runs once per move, after the final ground trace.
@@ -697,7 +706,7 @@ pub fn pmove(
 fn linked_move(
     ps: &mut PlayerState,
     input: &PmInput,
-    world: &CollisionWorld,
+    world: &MoveWorld,
     dt: f32,
     weapons: &[Option<WeaponDef>],
     events: &mut Vec<PmEvent>,
@@ -766,7 +775,7 @@ fn snap_velocity(ps: &mut PlayerState) {
 /// stance, lean or weapon step, and the eye easing to `VIEW_DEAD`. Q3's
 /// `PM_DEAD` arm of `PmoveSingle` with the movement input zeroed; the eye
 /// rate is the retail capture's (`DEAD_VIEW_LERP_SPEED`).
-pub fn dead_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
+pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
     let idle = PmInput::default();
     ps.jumped = false;
@@ -776,17 +785,17 @@ pub fn dead_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
     // death froze it: the weapon step that would ramp it down does not run
     // for a dead player (combat doc, 1.12 and 1.13).
     ps.ads_active = false;
-    ground_trace(ps, world);
+    ground_trace(ps, world, MASK_DEADSOLID);
     // No events and no post-step velocity scale for a corpse: retail's step
     // block sits behind `ps->pm_type > 5` (@0x35660).
     ps.walking = false;
     if ps.on_ground {
         friction(ps, false, dt);
-        walk_move(ps, &idle, None, world, dt, None);
+        walk_move(ps, &idle, None, world, dt, MASK_DEADSOLID, None);
     } else {
-        air_move(ps, &idle, world, dt, None);
+        air_move(ps, &idle, world, dt, MASK_DEADSOLID, None);
     }
-    ground_trace(ps, world);
+    ground_trace(ps, world, MASK_DEADSOLID);
     ps.view_height_speed = DEAD_VIEW_LERP_SPEED;
     let step = ps.view_height_speed * dt;
     let gap = VIEW_DEAD - ps.view_height_cur;
@@ -803,7 +812,7 @@ pub fn dead_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
 fn footsteps(
     ps: &mut PlayerState,
     input: &PmInput,
-    world: &CollisionWorld,
+    world: &MoveWorld,
     dt: f32,
     events: &mut Vec<PmEvent>,
 ) {
@@ -913,7 +922,7 @@ fn push_surface_step(
 /// its material, run-numbered; miss or material 0 defaults to metal (@0x32039).
 fn ladder_step_event(
     ps: &PlayerState,
-    world: &CollisionWorld,
+    world: &MoveWorld,
     old: u8,
     new: u8,
     events: &mut Vec<PmEvent>,
@@ -932,6 +941,7 @@ fn ladder_step_event(
         ps.origin - ps.ladder_normal * LADDER_STEP_PROBE,
         mins,
         maxs,
+        MASK_PLAYERSOLID,
     );
     let mut mat = crate::collision::sound_material(t.surface_flags);
     if t.fraction >= 1.0 || mat == 0 {
@@ -1008,7 +1018,7 @@ pub fn spectator_move(ps: &mut PlayerState, forward: f32, right: f32, up: f32, d
 }
 
 /// Standing back up needs headroom for the taller bbox.
-fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
+fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f32) {
     let before = ps.stance;
     let mut desired = if input.prone {
         Stance::Prone
@@ -1030,7 +1040,7 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, 
         ps.stance = desired;
     } else {
         let maxs = Vec3::new(HALF_WIDTH, HALF_WIDTH, desired.height());
-        let t = world.box_trace(ps.origin, ps.origin, ps.mins(), maxs);
+        let t = world.box_trace(ps.origin, ps.origin, ps.mins(), maxs, MASK_PLAYERSOLID);
         if !t.startsolid {
             ps.stance = desired;
         }
@@ -1066,14 +1076,14 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, 
 /// the body goes (`BG_CheckProneValid` 0x2d428, first trace at 0x2d57a).
 /// Sloped-ground pitch, the rest of that function, is an animation output and
 /// is not modelled.
-pub fn prone_fits(world: &CollisionWorld, origin: Vec3, yaw_deg: f32) -> bool {
+pub fn prone_fits(world: &MoveWorld, origin: Vec3, yaw_deg: f32) -> bool {
     let back = (yaw_deg + 180.0).to_radians();
     let dir = Vec3::new(back.cos(), back.sin(), 0.0);
     // Retail traces from the player's origin, which sits at the feet.
     let start = origin + Vec3::Z * VIEW_PRONE;
     let end = start + dir * PRONE_BODY_LENGTH;
     let half = Vec3::splat(PRONE_BODY_HALF_BOX);
-    let t = world.box_trace(start, end, -half, half);
+    let t = world.box_trace(start, end, -half, half, MASK_DEADSOLID);
     !t.startsolid && t.fraction >= 1.0
 }
 
@@ -1088,7 +1098,7 @@ fn normalize180(deg: f32) -> f32 {
 /// cap is enforced by pushing `delta_angles`, so the correction is reported
 /// here and the caller applies it to whatever owns the view
 /// (docs/research/cod11-mantle.md, "Prone").
-fn update_prone_yaw(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
+fn update_prone_yaw(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
     ps.view_yaw_correction = 0.0;
     if ps.stance != Stance::Prone {
         return;
@@ -1118,7 +1128,7 @@ fn update_prone_yaw(ps: &mut PlayerState, world: &CollisionWorld, dt: f32) {
     }
 }
 
-fn update_lean(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt: f32) {
+fn update_lean(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f32) {
     if !update_lean_unclamped(ps, input, dt) {
         return;
     }
@@ -1133,6 +1143,7 @@ fn update_lean(ps: &mut PlayerState, input: &PmInput, world: &CollisionWorld, dt
         end,
         Vec3::new(-12.0, -12.0, -6.0),
         Vec3::new(12.0, 12.0, 10.0),
+        MASK_PLAYERSOLID,
     );
     ps.lean *= t.fraction;
 }
@@ -1174,8 +1185,14 @@ fn thrown_off_ground(ps: &PlayerState, normal: Vec3) -> bool {
 }
 
 /// Q3 `bg_pmove.c` `PM_GroundTrace`.
-fn ground_trace(ps: &mut PlayerState, world: &CollisionWorld) {
-    let t = world.box_trace(ps.origin, ps.origin - Vec3::Z * 0.25, ps.mins(), ps.maxs());
+fn ground_trace(ps: &mut PlayerState, world: &MoveWorld, mask: u32) {
+    let t = world.box_trace(
+        ps.origin,
+        ps.origin - Vec3::Z * 0.25,
+        ps.mins(),
+        ps.maxs(),
+        mask,
+    );
     let thrown_off = thrown_off_ground(ps, t.normal);
     if t.fraction < 1.0 && t.normal.z >= MIN_WALK_NORMAL && !thrown_off {
         ps.on_ground = true;
@@ -1193,7 +1210,7 @@ fn ground_trace(ps: &mut PlayerState, world: &CollisionWorld) {
 }
 
 /// Feet, waist and eye point-contents samples; swimming starts at waist-deep.
-fn set_water_level(ps: &mut PlayerState, world: &CollisionWorld) {
+fn set_water_level(ps: &mut PlayerState, world: &MoveWorld) {
     use crate::collision::CONTENTS_WATER;
     ps.water_level = 0;
     let o = ps.origin;
@@ -1386,13 +1403,14 @@ fn walk_move(
     ps: &mut PlayerState,
     input: &PmInput,
     weapon: Option<&WeaponDef>,
-    world: &CollisionWorld,
+    world: &MoveWorld,
     dt: f32,
+    mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
     // eye-deep and looking up an upward slope: swim instead of trudging
     if ps.water_level > 2 && forward3(ps).dot(ps.ground_normal) > 0.0 {
-        water_move(ps, input, world, dt, events);
+        water_move(ps, input, world, dt, mask, events);
         return;
     }
     let (dir, wishspeed) = wish(ps, input, weapon);
@@ -1416,7 +1434,7 @@ fn walk_move(
     // to PM_SetMovementDir (@0x2f6db), which is what keeps a prone player's
     // legs following its body while it turns on the spot.
     if ps.velocity.x != 0.0 || ps.velocity.y != 0.0 {
-        step_slide_move(ps, world, dt, false, events);
+        step_slide_move(ps, world, dt, false, mask, events);
     }
     set_movement_dir(ps, input, dt);
 }
@@ -1449,12 +1467,13 @@ fn cmd_scale(input: &PmInput) -> f32 {
 fn water_move(
     ps: &mut PlayerState,
     input: &PmInput,
-    world: &CollisionWorld,
+    world: &MoveWorld,
     dt: f32,
+    mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
     if try_start_water_jump(ps, world) {
-        water_jump_move(ps, world, dt, events);
+        water_jump_move(ps, world, dt, mask, events);
         return;
     }
     friction(ps, ps.on_ladder, dt);
@@ -1485,12 +1504,12 @@ fn water_move(
     if ps.on_ground && ps.velocity.dot(ps.ground_normal) < 0.0 {
         ps.velocity = clip_velocity(ps.velocity, ps.ground_normal);
     }
-    slide_move(ps, world, dt, false);
+    slide_move(ps, world, dt, false, mask);
 }
 
 /// RTCW `bg_pmove.c` `PM_CheckWaterJump`: chest-deep against a low lip, the
 /// probe 4 units up must hit solid and 20 units up must be clear.
-fn try_start_water_jump(ps: &mut PlayerState, world: &CollisionWorld) -> bool {
+fn try_start_water_jump(ps: &mut PlayerState, world: &MoveWorld) -> bool {
     use crate::collision::CONTENTS_SOLID;
     if ps.waterjump_ms > 0.0 || ps.water_level != 2 {
         return false;
@@ -1513,11 +1532,12 @@ fn try_start_water_jump(ps: &mut PlayerState, world: &CollisionWorld) -> bool {
 /// once falling again (landing clears via ground_trace).
 fn water_jump_move(
     ps: &mut PlayerState,
-    world: &CollisionWorld,
+    world: &MoveWorld,
     dt: f32,
+    mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
-    step_slide_move(ps, world, dt, true, events);
+    step_slide_move(ps, world, dt, true, mask, events);
     ps.velocity.z -= GRAVITY * dt;
     if ps.velocity.z < 0.0 {
         ps.waterjump_ms = 0.0;
@@ -1533,7 +1553,7 @@ fn water_jump_move(
 fn check_ladder_move(
     ps: &mut PlayerState,
     input: &PmInput,
-    world: &CollisionWorld,
+    world: &MoveWorld,
 ) -> Option<(Vec3, bool)> {
     // retail's pm_time gate covers exactly this lock in vcod
     if ps.waterjump_ms > 0.0 {
@@ -1570,6 +1590,7 @@ fn check_ladder_move(
         ps.origin + dir * tracedist,
         probe_mins,
         probe_maxs,
+        MASK_PLAYERSOLID,
     );
     let mut ladder = t.fraction < 1.0 && t.surface_flags & crate::collision::SURF_LADDER != 0;
     let normal = t.normal;
@@ -1583,6 +1604,7 @@ fn check_ladder_move(
             ps.origin - normal * tracedist,
             probe_mins,
             probe_maxs,
+            MASK_PLAYERSOLID,
         );
         if back.fraction < 1.0 && back.surface_flags & crate::collision::SURF_LADDER != 0 {
             ladder = true;
@@ -1639,7 +1661,7 @@ fn ladder_move(
     input: &PmInput,
     normal: Vec3,
     ladderforward: bool,
-    world: &CollisionWorld,
+    world: &MoveWorld,
     dt: f32,
     events: &mut Vec<PmEvent>,
 ) {
@@ -1656,7 +1678,7 @@ fn ladder_move(
                 parm: 0,
             });
         }
-        air_move(ps, input, world, dt, Some(events));
+        air_move(ps, input, world, dt, MASK_PLAYERSOLID, Some(events));
         ps.since_jump_ms = 0.0;
         return;
     }
@@ -1731,7 +1753,7 @@ fn ladder_move(
         ps.velocity.y += k * n.y;
     }
     // no gravity while going up a ladder
-    step_slide_move(ps, world, dt, false, Some(events));
+    step_slide_move(ps, world, dt, false, MASK_PLAYERSOLID, Some(events));
     // PM_LadderMove @0x33d71: the legs face into the wall, and the cap here
     // is 75 degrees, not the 90 the ground path uses.
     ps.movement_dir = clamp_movement_dir(
@@ -1744,14 +1766,15 @@ fn ladder_move(
 fn air_move(
     ps: &mut PlayerState,
     input: &PmInput,
-    world: &CollisionWorld,
+    world: &MoveWorld,
     dt: f32,
+    mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
     ps.air_speed_peak = ps.air_speed_peak.max(-ps.velocity.z);
     let (dir, wishspeed) = wish_air(ps, input);
     accelerate(ps, dir, wishspeed, PM_AIRACCELERATE, dt);
-    step_slide_move(ps, world, dt, true, events);
+    step_slide_move(ps, world, dt, true, mask, events);
     set_movement_dir(ps, input, dt);
 }
 
@@ -1764,7 +1787,7 @@ struct Slide {
 }
 
 /// Q3 `bg_slidemove.c` `PM_SlideMove`.
-fn slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bool) -> Slide {
+fn slide_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32, gravity: bool, mask: u32) -> Slide {
     const NUM_BUMPS: usize = 4;
     let (mins, maxs) = (ps.mins(), ps.maxs());
 
@@ -1789,7 +1812,7 @@ fn slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bo
     let mut bumps = 0;
     for _ in 0..NUM_BUMPS {
         let end = ps.origin + ps.velocity * time_left;
-        let t = world.box_trace(ps.origin, end, mins, maxs);
+        let t = world.box_trace(ps.origin, end, mins, maxs, mask);
         if t.allsolid {
             // trapped in solid: keep the horizontal control, kill the fall
             ps.velocity.z = 0.0;
@@ -1875,9 +1898,10 @@ fn slide_move(ps: &mut PlayerState, world: &CollisionWorld, dt: f32, gravity: bo
 /// (retail picks the height off pm_flags bit 0x1 @0x35045, not ladder state).
 fn step_slide_move(
     ps: &mut PlayerState,
-    world: &CollisionWorld,
+    world: &MoveWorld,
     dt: f32,
     gravity: bool,
+    mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
     let step_size = if ps.stance == Stance::Prone {
@@ -1887,7 +1911,7 @@ fn step_slide_move(
     };
     let start_o = ps.origin;
     let start_v = ps.velocity;
-    let slide = slide_move(ps, world, dt, gravity);
+    let slide = slide_move(ps, world, dt, gravity, mask);
     let blocked = slide.blocked;
     // Retail takes the down pass on every grounded frame, not only a blocked
     // one: `PM_StepSlideMove` (0x350ec) tests `groundEntityNum` and jumps into
@@ -1908,12 +1932,18 @@ fn step_slide_move(
     // gained (0x352d8).
     let mut step = 0.0;
     if blocked {
-        let up = world.box_trace(start_o, start_o + Vec3::Z * (step_size + 1.0), mins, maxs);
+        let up = world.box_trace(
+            start_o,
+            start_o + Vec3::Z * (step_size + 1.0),
+            mins,
+            maxs,
+            mask,
+        );
         if !up.allsolid && up.endpos.z > start_o.z {
             step = up.endpos.z - start_o.z;
             ps.origin = up.endpos;
             ps.velocity = start_v;
-            slide_move(ps, world, dt, gravity);
+            slide_move(ps, world, dt, gravity, mask);
         }
     }
 
@@ -1923,7 +1953,7 @@ fn step_slide_move(
     // "The ground snap").
     if ground_plane || step != 0.0 {
         let reach = step + if ground_plane { step_size * 0.5 } else { 0.0 };
-        let down = world.box_trace(ps.origin, ps.origin - Vec3::Z * reach, mins, maxs);
+        let down = world.box_trace(ps.origin, ps.origin - Vec3::Z * reach, mins, maxs, mask);
         if down.fraction < 1.0 {
             ps.origin = down.endpos;
             ps.velocity = clip_velocity(ps.velocity, down.normal);
@@ -1958,6 +1988,7 @@ fn step_slide_move(
                 ps.origin - Vec3::Z * (step_size * 0.5),
                 mins,
                 maxs,
+                mask,
             );
             if down.fraction < 1.0 {
                 ps.origin = down.endpos;
@@ -2012,7 +2043,8 @@ fn step_view(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collision::test_world;
+    use crate::collision::{test_world, CollisionWorld};
+    use crate::movetrace::{Body, CONTENTS_BODY};
 
     fn flat() -> CollisionWorld {
         test_world(&[])
@@ -2025,6 +2057,7 @@ mod tests {
     #[test]
     fn a_death_clears_the_ads_flag() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         ps.ads_active = true;
         ps.weapon_pos_frac = 1.0;
@@ -2039,6 +2072,7 @@ mod tests {
     #[test]
     fn a_mounted_player_does_not_move_or_fire() {
         let world = flat();
+        let world = MoveWorld::bare(&world);
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.0), 0.0);
         ps.mounted = Some(Stance::Stand);
         let input = PmInput {
@@ -2061,6 +2095,7 @@ mod tests {
     #[test]
     fn a_mounted_player_takes_the_gun_stance_whatever_the_cmd_asks() {
         let world = flat();
+        let world = MoveWorld::bare(&world);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         ps.mounted = Some(Stance::Prone);
         let input = PmInput {
@@ -2077,6 +2112,7 @@ mod tests {
     #[test]
     fn a_mounted_player_takes_no_step_and_leaves_the_ladder() {
         let world = flat();
+        let world = MoveWorld::bare(&world);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         ps.mounted = Some(Stance::Stand);
         ps.on_ladder = true;
@@ -2137,7 +2173,7 @@ mod tests {
         )
     }
 
-    fn tick(ps: &mut PlayerState, input: &PmInput, w: &CollisionWorld, n: usize) {
+    fn tick(ps: &mut PlayerState, input: &PmInput, w: &MoveWorld, n: usize) {
         for _ in 0..n {
             pmove(ps, input, w, 1.0 / 125.0, &[]);
         }
@@ -2150,6 +2186,7 @@ mod tests {
     #[test]
     fn viewheight_lerps_on_stance_change() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50); // settle on the ground
         assert_eq!(ps.view_height(), VIEW_STAND);
@@ -2181,6 +2218,7 @@ mod tests {
     #[test]
     fn movement_dir_is_the_legs_yaw_off_the_view() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         // From a standstill each time: velocity left over from the previous
         // input keeps the displacement off the key being held.
         let held = |input: &PmInput| {
@@ -2247,6 +2285,7 @@ mod tests {
     #[test]
     fn falls_and_lands_on_floor() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 50.0), 0.0);
         tick(&mut ps, &PmInput::default(), &w, 250);
         assert!(ps.on_ground);
@@ -2259,6 +2298,7 @@ mod tests {
     #[test]
     fn running_steps_fire_on_the_retail_cadence() {
         let w = dirt_flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         let run = PmInput {
             forward: 1.0,
@@ -2295,6 +2335,7 @@ mod tests {
     #[test]
     fn walk_key_and_stances_are_silent() {
         let w = dirt_flat();
+        let w = MoveWorld::bare(&w);
         for (name, input) in [
             (
                 "walk key",
@@ -2338,6 +2379,7 @@ mod tests {
     #[test]
     fn glide_suppresses_step_events() {
         let w = dirt_flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         let run = PmInput {
             forward: 1.0,
@@ -2357,6 +2399,7 @@ mod tests {
     #[test]
     fn landing_plays_one_event_from_the_impact_bands() {
         let w = dirt_flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 200.0), 0.0);
         let idle = PmInput::default();
         let mut events = Vec::new();
@@ -2374,6 +2417,7 @@ mod tests {
     #[test]
     fn a_one_unit_drop_lands_silently() {
         let w = dirt_flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 1.0), 0.0);
         ps.on_ground = false;
         let idle = PmInput::default();
@@ -2391,6 +2435,7 @@ mod tests {
     #[test]
     fn only_a_fast_landing_reports_the_land_anim() {
         let w = dirt_flat();
+        let w = MoveWorld::bare(&w);
         let idle = PmInput::default();
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 200.0), 0.0);
         ps.on_ground = false;
@@ -2430,6 +2475,7 @@ mod tests {
     #[test]
     fn water_steps_use_the_fixed_water_ids() {
         let w = shallow_water();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, -6.0), 0.0);
         let run = PmInput {
             forward: 1.0,
@@ -2466,7 +2512,13 @@ mod tests {
         ps.velocity.z = 80.0;
         let mut events = Vec::new();
         for _ in 0..20 {
-            footsteps(&mut ps, &input, &dirt_flat(), dt, &mut events);
+            footsteps(
+                &mut ps,
+                &input,
+                &MoveWorld::bare(&dirt_flat()),
+                dt,
+                &mut events,
+            );
         }
         assert!(!events.is_empty(), "climbing at vz=80 must step");
         assert!(events
@@ -2482,6 +2534,7 @@ mod tests {
             )],
             &[(0, [16.0, -1024.0, -16.0], [32.0, 1024.0, 512.0])],
         );
+        let wall = MoveWorld::bare(&wall);
         let mut ps = PlayerState::spawn(Vec3::new(1.0, 0.0, 40.0), 0.0);
         ps.on_ground = false;
         ps.on_ladder = true;
@@ -2522,6 +2575,7 @@ mod tests {
                 (1, [16.0, -1024.0, 0.0], [32.0, 1024.0, 512.0]),
             ],
         );
+        let wall = MoveWorld::bare(&wall);
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.0), 0.0);
         ps.since_jump_ms = 10_000.0;
         pmove(&mut ps, &PmInput::default(), &wall, 1.0 / 125.0, &[]);
@@ -2559,12 +2613,24 @@ mod tests {
         let mut events = Vec::new();
         for _ in 0..5 {
             ps.since_jump_ms += 50.0;
-            footsteps(&mut ps, &input, &dirt_flat(), 0.05, &mut events);
+            footsteps(
+                &mut ps,
+                &input,
+                &MoveWorld::bare(&dirt_flat()),
+                0.05,
+                &mut events,
+            );
         }
         assert!(events.is_empty(), "quiet for 299 ms, got {events:?}");
         for _ in 0..20 {
             ps.since_jump_ms += 50.0;
-            footsteps(&mut ps, &input, &dirt_flat(), 0.05, &mut events);
+            footsteps(
+                &mut ps,
+                &input,
+                &MoveWorld::bare(&dirt_flat()),
+                0.05,
+                &mut events,
+            );
         }
         assert!(!events.is_empty(), "climbing must step once quiet");
     }
@@ -2576,6 +2642,7 @@ mod tests {
     #[test]
     fn accelerates_to_run_speed_cap() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(
             &mut ps,
@@ -2595,6 +2662,7 @@ mod tests {
     #[test]
     fn friction_stops_the_player() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(
             &mut ps,
@@ -2616,6 +2684,7 @@ mod tests {
     #[test]
     fn ground_jump_apex_matches_stance_height() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let run = PmInput {
             forward: 1.0,
             ..Default::default()
@@ -2675,6 +2744,7 @@ mod tests {
             Vec3::new(-40.0, -30.0, -8.0),
             Vec3::new(-20.0, 30.0, 72.0),
         )]);
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 20);
         let prone = PmInput {
@@ -2711,6 +2781,7 @@ mod tests {
     #[test]
     fn a_prone_view_swings_the_body_and_is_capped() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 20);
         let prone = PmInput {
@@ -2761,6 +2832,7 @@ mod tests {
         // a retail server jumps a probe holding upmove alone
         // (docs/research/cod11-mantle.md, "Jumps").
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50); // settle
         let mut apex = ps.origin.z;
@@ -2793,6 +2865,7 @@ mod tests {
             &[([-32.0, -32.0, 0.0], [32.0, 32.0, 8.0])],
         );
         w.set_model_entity(1, 177);
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(200.0, 0.0, 9.0), 0.0);
         tick(&mut ps, &PmInput::default(), &w, 10);
         assert_eq!(ps.ground_entity_num(), 177);
@@ -2834,6 +2907,7 @@ mod tests {
     fn a_125_fps_jump_goes_higher() {
         let apex = |dt: f32| {
             let w = flat();
+            let w = MoveWorld::bare(&w);
             let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
             tick(&mut ps, &PmInput::default(), &w, 50);
             let jump = PmInput {
@@ -2859,6 +2933,7 @@ mod tests {
         // ladder push-off (@0x33964) and steep-slope jump (@0x2f279), never
         // by the ground jump; its bit-0x20 gate is ADS idle state, not a timer
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let hop = PmInput {
             forward: 1.0,
             jump: true,
@@ -2884,6 +2959,7 @@ mod tests {
         // the ADS button is held (@0x37247); without ADS modeled, prone jumps
         // like crouch at the 24-unit height (@0x70bec)
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let hop = PmInput {
             forward: 1.0,
             jump: true,
@@ -2910,13 +2986,21 @@ mod tests {
     #[test]
     fn a_step_announces_itself_and_costs_speed() {
         let w = test_world(&[(Vec3::new(50.0, -200.0, 0.0), Vec3::new(1024.0, 200.0, 6.0))]);
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(30.0, 0.0, 0.0), 0.0);
         ps.on_ground = true;
         ps.ground_normal = Vec3::Z;
         let mut events = Vec::new();
         for _ in 0..20 {
             ps.velocity = Vec3::new(200.0, 0.0, 0.0);
-            step_slide_move(&mut ps, &w, 1.0 / 125.0, false, Some(&mut events));
+            step_slide_move(
+                &mut ps,
+                &w,
+                1.0 / 125.0,
+                false,
+                MASK_PLAYERSOLID,
+                Some(&mut events),
+            );
             if !events.is_empty() {
                 break;
             }
@@ -2942,11 +3026,19 @@ mod tests {
     #[test]
     fn an_airborne_step_announces_nothing() {
         let w = test_world(&[(Vec3::new(50.0, -200.0, 0.0), Vec3::new(1024.0, 200.0, 6.0))]);
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(30.0, 0.0, 0.0), 0.0);
         let mut events = Vec::new();
         for _ in 0..20 {
             ps.velocity = Vec3::new(200.0, 0.0, 0.0);
-            step_slide_move(&mut ps, &w, 1.0 / 125.0, false, Some(&mut events));
+            step_slide_move(
+                &mut ps,
+                &w,
+                1.0 / 125.0,
+                false,
+                MASK_PLAYERSOLID,
+                Some(&mut events),
+            );
         }
         assert!(events.is_empty(), "{events:?}");
     }
@@ -2956,11 +3048,12 @@ mod tests {
         // retail picks the 10-unit step height off pm_flags bit 0x1
         // (PM_StepSlideMove @0x35045), 18 otherwise (@0x35034)
         let w = test_world(&[(Vec3::new(50.0, -200.0, 0.0), Vec3::new(1024.0, 200.0, 14.0))]);
+        let w = MoveWorld::bare(&w);
         let mut stand = PlayerState::spawn(Vec3::new(30.0, 0.0, 0.0), 0.0);
         stand.velocity = Vec3::new(200.0, 0.0, 0.0);
         for _ in 0..20 {
             stand.velocity.x = 200.0;
-            step_slide_move(&mut stand, &w, 1.0 / 125.0, false, None);
+            step_slide_move(&mut stand, &w, 1.0 / 125.0, false, MASK_PLAYERSOLID, None);
         }
         assert!(
             (stand.origin.z - 14.0).abs() < 0.5,
@@ -2972,7 +3065,7 @@ mod tests {
         prone.stance = Stance::Prone;
         for _ in 0..20 {
             prone.velocity.x = 200.0;
-            step_slide_move(&mut prone, &w, 1.0 / 125.0, false, None);
+            step_slide_move(&mut prone, &w, 1.0 / 125.0, false, MASK_PLAYERSOLID, None);
         }
         assert!(
             prone.origin.z < 1.0 && prone.origin.x < 36.0,
@@ -2987,6 +3080,7 @@ mod tests {
         // pm_waterSwimScale/pm_waterWadeScale and the walk mover (0x2F03C)
         // never reads water level - only the water-friction term slows you
         let w = pool_world();
+        let w = MoveWorld::bare(&w);
         let run = PmInput {
             forward: 1.0,
             ..Default::default()
@@ -3015,6 +3109,7 @@ mod tests {
         // 5 degrees over 300 units, then level ground at the top: the crest
         // is what a walker used to launch off.
         let w = crate::collision::ramp_test_world(5.0, 0.0, 300.0);
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(-200.0, 0.0, 1.0), 0.0);
         tick(&mut ps, &PmInput::default(), &w, 40);
         assert!(ps.on_ground, "the walker never settled on the floor");
@@ -3046,6 +3141,7 @@ mod tests {
     #[test]
     fn standing_on_a_slope_holds_its_height() {
         let w = crate::collision::ramp_test_world(5.0, 0.0, 300.0);
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(150.0, 0.0, 20.0), 0.0);
         tick(&mut ps, &PmInput::default(), &w, 60);
         let (z, ground) = (ps.origin.z, ps.on_ground);
@@ -3072,6 +3168,7 @@ mod tests {
                 Vec3::new(-50.0, 200.0, 40.0),
             ),
         ]);
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(
             &mut ps,
@@ -3108,6 +3205,7 @@ mod tests {
     #[test]
     fn slides_along_wall() {
         let w = test_world(&[(Vec3::new(50.0, -400.0, 0.0), Vec3::new(100.0, 400.0, 100.0))]);
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(
             &mut ps,
@@ -3137,6 +3235,7 @@ mod tests {
             Vec3::new(-1024.0, -1024.0, 60.0),
             Vec3::new(1024.0, 1024.0, 100.0),
         )]);
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         ps.stance = Stance::Crouch;
         let crouched = PmInput {
@@ -3157,6 +3256,7 @@ mod tests {
     #[test]
     fn prone_is_slowest() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         let prone = PmInput {
             forward: 1.0,
@@ -3171,6 +3271,7 @@ mod tests {
     #[test]
     fn lean_ramps_up_clamps_and_returns() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50); // settle
         let lean_r = PmInput {
@@ -3190,6 +3291,7 @@ mod tests {
         // Wall on +Y (the left side at yaw 0), past y=12 so the lean box does
         // not start inside it, which would pin fraction at 0.
         let w = test_world(&[(Vec3::new(-200.0, 20.0, 0.0), Vec3::new(200.0, 70.0, 200.0))]);
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50);
         let lean_l = PmInput {
@@ -3208,6 +3310,7 @@ mod tests {
     #[test]
     fn prone_blocks_lean() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         let input = PmInput {
             prone: true,
@@ -3225,6 +3328,7 @@ mod tests {
         };
         let bsp = crate::bsp::parse(&data).unwrap();
         let world = CollisionWorld::build(&bsp, &[]);
+        let world = MoveWorld::bare(&world);
         let (origin, yaw) = crate::bsp::find_spawn(&bsp.entities).unwrap();
         let mut ps = PlayerState::spawn(Vec3::from(origin) + Vec3::Z * 2.0, yaw);
         // must land on terrain triangles near the spawn, not fall to bedrock
@@ -3260,6 +3364,7 @@ mod tests {
     #[test]
     fn view_reflects_stance_and_lean() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50);
         let v = ps.view();
@@ -3284,6 +3389,7 @@ mod tests {
     #[test]
     fn water_level_tracks_depth() {
         let w = pool_world();
+        let w = MoveWorld::bare(&w);
         // deep floor: only the eye stays above the surface? no - fully under
         let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -73.0), 0.0);
         tick(&mut ps, &PmInput::default(), &w, 5);
@@ -3308,6 +3414,7 @@ mod tests {
     #[test]
     fn swimming_caps_at_the_swim_speed() {
         let w = pool_world();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -20.0), 0.0);
         tick(
             &mut ps,
@@ -3329,6 +3436,7 @@ mod tests {
     #[test]
     fn idle_player_sinks_without_freefall() {
         let w = pool_world();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -20.0), 0.0);
         let start = ps.origin.z;
         let input = PmInput::default();
@@ -3351,6 +3459,7 @@ mod tests {
     #[test]
     fn jump_key_swims_up() {
         let w = pool_world();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -30.0), 0.0);
         tick(
             &mut ps,
@@ -3373,6 +3482,7 @@ mod tests {
     #[test]
     fn looking_up_while_submerged_walk_turns_into_swim() {
         let w = pool_world();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(0.0, -200.0, -73.0), 0.0);
         ps.pitch = 20.0f32.to_radians();
         tick(
@@ -3413,6 +3523,7 @@ mod tests {
     #[test]
     fn grabs_a_ladder_and_climbs_it_holding_forward() {
         let w = ladder_world();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(20.0, 0.0, 0.2), 0.0);
         tick(
             &mut ps,
@@ -3437,6 +3548,7 @@ mod tests {
     #[test]
     fn no_ladder_grab_when_idle_or_backing_off() {
         let w = ladder_world();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(33.0, 0.0, 0.2), 0.0);
         tick(&mut ps, &PmInput::default(), &w, 30);
         assert!(!ps.on_ladder, "idle at the base must not grab");
@@ -3456,6 +3568,7 @@ mod tests {
     #[test]
     fn climb_rate_follows_pitch() {
         let w = ladder_world();
+        let w = MoveWorld::bare(&w);
         let input = PmInput {
             forward: 1.0,
             ..Default::default()
@@ -3487,6 +3600,7 @@ mod tests {
         // retail runs the wish through PM_CmdScale, so W+D must not beat the
         // vertical rate of W alone (up 30 deg for a climb-dominated wish)
         let w = ladder_world();
+        let w = MoveWorld::bare(&w);
         let climb = |right: f32| {
             let mut ps = PlayerState::spawn(Vec3::new(33.0, 0.0, 5.0), 0.0);
             ps.pitch = 30.0f32.to_radians();
@@ -3518,6 +3632,7 @@ mod tests {
     #[test]
     fn releasing_input_mid_climb_hangs_without_sliding() {
         let w = ladder_world();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::new(20.0, 0.0, 0.2), 0.0);
         tick(
             &mut ps,
@@ -3549,6 +3664,7 @@ mod tests {
         // retail shrinks the probe bbox horizontally (@0x70cb0), so a
         // sideways hover this close to the wall must NOT grab
         let w = ladder_world();
+        let w = MoveWorld::bare(&w);
         let input = PmInput {
             forward: 1.0,
             ..Default::default()
@@ -3566,6 +3682,7 @@ mod tests {
     #[test]
     fn facing_away_mid_climb_keeps_the_grab() {
         let w = ladder_world();
+        let w = MoveWorld::bare(&w);
         let run = PmInput {
             forward: 1.0,
             ..Default::default()
@@ -3601,6 +3718,7 @@ mod tests {
     #[test]
     fn dropping_onto_the_ladder_from_above_catches() {
         let w = ladder_world();
+        let w = MoveWorld::bare(&w);
         // past the face plane, above the wall top region, falling; facing the
         // wall so the first trace hits it more than a unit away and the
         // grab-from-above guard pushes back into it
@@ -3681,6 +3799,7 @@ mod tests {
     #[test]
     fn ladder_push_off_leaves_the_wall_with_reflected_forward() {
         let w = ladder_world();
+        let w = MoveWorld::bare(&w);
         let climb = PmInput {
             forward: 1.0,
             ..Default::default()
@@ -3728,6 +3847,7 @@ mod tests {
         // detection is skipped while within pm_ladderJumpTime of a push-off
         // (@0x33822, pm_ladderJumpTime = 300 @0x70830)
         let w = ladder_world();
+        let w = MoveWorld::bare(&w);
         let climb = PmInput {
             forward: 1.0,
             ..Default::default()
@@ -3758,6 +3878,7 @@ mod tests {
         // velocity along the ladder normal and press into the wall at 250,
         // or 500 holding forward (rodata 0x70cd4/0x70cd8)
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let n = Vec3::new(-1.0, 0.0, 0.0); // wall to the east, normal west
 
         let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 40.0), 0.0);
@@ -3824,6 +3945,7 @@ mod tests {
         // 0.5 * upscale * cmdScale (@0x33a50), so W past the fz=-0.25 pitch
         // falls back to 250 and S below it strengthens to 500
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let n = Vec3::new(-1.0, 0.0, 0.0);
         let vx = |pitch_deg: f32, forward: f32| {
             let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 40.0), 0.0);
@@ -3901,6 +4023,7 @@ mod tests {
     #[test]
     fn ladder_friction_bleeds_speed_far_faster_than_plain_air() {
         let w = flat();
+        let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         ps.velocity = Vec3::new(100.0, 0.0, 50.0);
         friction(&mut ps, true, 1.0 / 125.0);
@@ -3938,6 +4061,7 @@ mod tests {
                 continue;
             };
             let world = CollisionWorld::build(&bsp, &[]);
+            let world = MoveWorld::bare(&world);
             let axial_bounds = |b: &crate::bsp::Brush| -> ([f32; 3], [f32; 3]) {
                 let sides = &bsp.brush_sides[b.first_side as usize..][..b.num_sides as usize];
                 let mut lo = [0.0f32; 3];
@@ -4021,6 +4145,7 @@ mod tests {
     #[test]
     fn water_jump_leaps_out_of_the_pool() {
         let w = pool_world();
+        let w = MoveWorld::bare(&w);
         // far enough from the lip that the bbox clears it only after rising
         let mut ps = PlayerState::spawn(Vec3::new(172.0, 0.0, 0.2), 0.0);
         let input = PmInput {
@@ -4091,5 +4216,78 @@ mod tests {
             "and fly straight through rather than slide: y {}",
             ps.origin.y
         );
+    }
+
+    fn body(x: f32, y: f32, z: f32) -> Body {
+        Body {
+            entity: 7,
+            origin: Vec3::new(x, y, z),
+            mins: Vec3::new(-15.0, -15.0, 0.0),
+            maxs: Vec3::new(15.0, 15.0, 70.0),
+            contents: CONTENTS_BODY,
+        }
+    }
+
+    #[test]
+    fn a_run_into_a_player_stops_at_its_capsule() {
+        let w = flat();
+        let bodies = [body(60.0, 0.0, 0.0)];
+        let mw = MoveWorld::new(&w, &bodies, 0);
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        let run = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..40 {
+            pmove(&mut ps, &run, &mw, 0.008, &[]);
+        }
+        assert!(
+            ps.origin.x <= 60.0 - 30.0 && ps.origin.x > 60.0 - 31.0,
+            "{}",
+            ps.origin.x
+        );
+    }
+
+    #[test]
+    fn dead_mask_ignores_bodies() {
+        let w = flat();
+        let bodies = [body(20.0, 0.0, 0.0)];
+        let mw = MoveWorld::new(&w, &bodies, 0);
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.velocity = Vec3::new(200.0, 0.0, 0.0);
+        for _ in 0..10 {
+            dead_move(&mut ps, &mw, 0.05);
+        }
+        assert!(
+            ps.origin.x > 5.0,
+            "a corpse slides through players: {}",
+            ps.origin.x
+        );
+    }
+
+    #[test]
+    fn prone_fit_ignores_bodies() {
+        let w = flat();
+        let bodies = [body(30.0, 0.0, 0.0)];
+        assert!(prone_fits(&MoveWorld::new(&w, &bodies, 0), Vec3::ZERO, 0.0));
+    }
+
+    #[test]
+    fn lands_on_a_body() {
+        let w = flat();
+        let bodies = [body(0.0, 0.0, 0.0)];
+        let mw = MoveWorld::new(&w, &bodies, 0);
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 120.0), 0.0);
+        ps.on_ground = false;
+        for _ in 0..60 {
+            pmove(&mut ps, &PmInput::default(), &mw, 0.016, &[]);
+        }
+        assert!(
+            ps.on_ground && ps.ground_entity == 7,
+            "{:?} {}",
+            ps.origin,
+            ps.ground_entity
+        );
+        assert!((ps.origin.z - 70.0).abs() < 1.0, "{}", ps.origin.z);
     }
 }

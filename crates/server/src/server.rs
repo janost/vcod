@@ -3110,8 +3110,9 @@ impl Server {
     /// `send_snapshots` writes. The shots, swings and throws the weapon step
     /// took land in `pending_attacks`, which the combat path drains.
     fn replay_moves(&mut self) -> Vec<MoveSummary> {
+        use vcod_common::movetrace::MoveWorld;
         use vcod_common::pmove::weapon::{EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
-        let collision = self.world.as_ref().map(|w| &w.collision);
+        let collision = self.world.as_ref().map(|w| MoveWorld::bare(&w.collision));
         let weapons = self.weapon_table.clone();
         let now_ms = self.sv_time_ms;
         let mut moved = vec![MoveSummary::default(); self.clients.len()];

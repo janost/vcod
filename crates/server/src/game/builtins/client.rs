@@ -1547,6 +1547,7 @@ mod tests {
         );
 
         let world = vcod_common::collision::test_world(&[]);
+        let world = vcod_common::movetrace::MoveWorld::bare(&world);
         let cmd = vcod_common::net::msg::NULL_USERCMD;
         let mut sim = player_sim();
         sim.ps.weapons_held = host.client_weapons[0].held;
@@ -1558,7 +1559,7 @@ mod tests {
 
         let mut raised = Vec::new();
         for _ in 0..40 {
-            let events = sim.step(&cmd, 0.05, Some(&world), host.weapons.defs());
+            let events = sim.step(&cmd, 0.05, Some(world), host.weapons.defs());
             raised.extend(events.into_iter().map(|e| e.event));
         }
         assert!(raised.contains(&EV_RAISE_WEAPON), "raised: {raised:?}");
