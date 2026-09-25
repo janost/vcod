@@ -725,11 +725,14 @@ The triggers, INFERRED from the call sites:
 - deleting the turret: `G_FreeEntity` calls `G_FreeTurret` (0x66b6f), which
   releases any gunner and clears the record.
 
-VERIFIED: `ClientDisconnect` (0x42aac) calls `G_FreeEntity` on the player
-(0x42bfc). VERIFIED: `G_FreeEntity`'s loop over every entity compares
-`r.ownerNum` against the freed number (0x66aef), stores 0x3ff there
-(0x66af7), compares `s.eType` against 11 (0x66b01) and stores 0 to the busy
-byte at +0x172 (0x66b07). INFERRED: a gunner who disconnects leaves its gun
+VERIFIED: `ClientDisconnect` (0x42aac) calls `G_FreeEntity` (0x42bfc).
+VERIFIED: `G_FreeEntity` holds a compare of `r.ownerNum` against the freed
+entity's number (0x66aef), a store of 0x3ff there (0x66af7), a compare of
+`s.eType` against 11 (0x66b01) and a store of 0 to the busy byte at +0x172
+(0x66b07), stepping 0x314 bytes an iteration (0x66b1a). INFERRED: the free is
+of the player's own entity, and the four run for every entity in a loop, the
+busy store only when the owner test matched and the entity is a turret.
+INFERRED: a gunner who disconnects leaves its gun
 unowned and free without any of the release body: no `rec+0x28` clear, so
 the loop sound plays out under `turret_think`'s unowned branch (section 9),
 and no stance event or teleport, since the player is gone.
@@ -1179,8 +1182,10 @@ The release (section 8) is `game::turret::release` on the record and
 
 - `turret_think_client` releases instead of running the frame when the busy
   byte is not 1 or the gunner is dead or not playing. The use key's busy 2 is
-  set in the cmd's own item pass, ahead of the touch pass's `pm_type` gate,
-  since `Cmd_Activate_f` has none.
+  set in the cmd's own item pass, ahead of the touch pass's `pm_type` gate.
+  INFERRED, section 4.1: `Cmd_Activate_f` has no `pm_type` gate of its own.
+- the turret pass releases, after its rounds' damage callback, any gunner
+  those rounds killed, so the victim's death snapshot is already unlocked.
 - a spawn the script queued releases before the sim is reset, and keeps the
   teleport's temp entities only for a spawn into play, the `sessionstate`
   the script set ahead of it.
@@ -1194,7 +1199,9 @@ A level boundary builds the script runtime and every sim afresh, a
 a released barrel starts home on the frame after its release, as 12.8
 measured. A corpse cloned off a gunner killed on the gun is re-read from the
 sim at the snapshot build, after the death frame's release, so it reaches the
-wire without the mounted bits. INFERRED: retail's clone copies `ps.eFlags`
+wire without the mounted bits; the re-read keeps the place and facing the
+clone took, since the release teleports the dead player back to its mount
+spot. INFERRED: retail's clone copies `ps.eFlags`
 (`cod11-combat.md`, the `cloneplayer` table) before that frame's
 `ClientEndFrame` releases, so a retail corpse of a gunner killed by `kill`
 may carry 0xC000; no capture covers it.
