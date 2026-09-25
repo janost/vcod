@@ -242,6 +242,7 @@ pub fn obituary(
         attacker,
         weapon: 0,
         origin,
+        client_num: 0,
         scope: Scope::Broadcast,
     });
     Ok(Value::Undefined)

@@ -51,6 +51,13 @@ const EF_PRONE: i32 = 0x40;
 /// the same reason: a changed `eFlags` is what makes a client stop carrying
 /// the previous occupant of that entity number forward.
 const EF_TELEPORT_BIT: i32 = 0x8;
+/// The mounted-gun bits by the gun's stance (turrets doc, 4.4 and 12.1).
+const EF_MOUNTED_STAND: i32 = 0xC000;
+const EF_MOUNTED_DUCK: i32 = 0x8000;
+const EF_MOUNTED_PRONE: i32 = 0x4000;
+/// `docs/research/cod11-events-and-fx.md`.
+const EV_PLAYER_TELEPORT_IN: i32 = 199;
+const EV_PLAYER_TELEPORT_OUT: i32 = 200;
 const PMF_DUCKED: i32 = 0x2;
 const PMF_PRONE: i32 = 0x1;
 /// Held jump, retail's 0x8 (set @0x2ec34, cleared @0x34135); the capture reads
@@ -326,6 +333,18 @@ pub struct ClientSim {
     /// so it wraps; every spawn of either mode bumps it, which puts the lone
     /// spectator's capture at 1.
     spawn_count: u8,
+    /// `ps.viewlocked` (0 free, 1 on a turret, 2 on a frame the turret
+    /// fired), `ps.viewlocked_entNum` (the turret; 0 after a spawn,
+    /// `ENTITYNUM_NONE` after a release, turrets doc 12.7) and `ps.gunfx`.
+    pub viewlocked: u8,
+    pub viewlocked_ent: u32,
+    pub gunfx: u8,
+    /// The turret this client mans: `s.otherEntityNum` and the gun's stance
+    /// as `eFlags` 0xC000/0x8000/0x4000 (turrets doc, 4.4).
+    pub mounted_on: Option<(u32, crate::game::turret::TurretStance)>,
+    /// The last cmd's angles, retail's `pers.cmd.angles`, which
+    /// `set_view_angle` rewrites `delta_angles` against.
+    last_cmd_angles: [i32; 3],
 }
 
 /// Everything the animscript needs that the sim does not own: the script
@@ -404,6 +423,11 @@ impl ClientSim {
             // The constructor is the connect, before any spawn: the script's
             // own `spawnSpectator` is what takes it to the capture's 1.
             spawn_count: 0,
+            viewlocked: 0,
+            viewlocked_ent: 0,
+            gunfx: 0,
+            mounted_on: None,
+            last_cmd_angles: cmd_angles,
         }
     }
 
@@ -502,6 +526,14 @@ impl ClientSim {
         self.dead_yaw = 0;
         self.pain_after_ms = 0;
         self.spawn_count = self.spawn_count.wrapping_add(1);
+        // The memset again: the capture's first trace, after a spawn, reads
+        // `viewlocked_entNum` 0 (turrets doc, 12.7). `ps.mounted` went with
+        // the fresh `ps` above.
+        self.viewlocked = 0;
+        self.viewlocked_ent = 0;
+        self.gunfx = 0;
+        self.mounted_on = None;
+        self.last_cmd_angles = cmd_angles;
         // Retail's respawn frame reads an empty ring at sequence 0
         // (combat doc, 9.2).
         self.ring.clear();
@@ -511,11 +543,20 @@ impl ClientSim {
         self.teleport_bit = !self.teleport_bit;
     }
 
-    /// The wire word for any mode: the base and the per-spawn teleport bit
-    /// and nothing else. The stance bits ride on a live player's playerstate
-    /// copy only, which is where the motion capture measured them.
+    /// The wire word for any mode: the base, the per-spawn teleport bit and
+    /// the mounted-gun bits. The stance bits ride on a live player's
+    /// playerstate copy only, which is where the motion capture measured
+    /// them.
     fn eflags(&self) -> i32 {
+        use crate::game::turret::TurretStance;
+        let mounted = match self.mounted_on {
+            None => 0,
+            Some((_, TurretStance::Stand)) => EF_MOUNTED_STAND,
+            Some((_, TurretStance::Duck)) => EF_MOUNTED_DUCK,
+            Some((_, TurretStance::Prone)) => EF_MOUNTED_PRONE,
+        };
         PLAYER_EFLAGS
+            | mounted
             | if self.teleport_bit {
                 EF_TELEPORT_BIT
             } else {
@@ -529,6 +570,56 @@ impl ClientSim {
     pub fn teleport(&mut self, origin: [f32; 3]) {
         self.ps.origin = origin.into();
         self.teleport_bit = !self.teleport_bit;
+    }
+
+    /// `SetClientViewAngle` (0x41e30): the view becomes `angles` (degrees,
+    /// wire convention) and `delta_angles` is rewritten so the last cmd's
+    /// angles land on it. Retail's prone arm, which clamps the angles to the
+    /// prone cone first, is not modelled.
+    pub fn set_view_angle(&mut self, angles: [f32; 3]) {
+        for (i, a) in angles.iter().enumerate() {
+            self.delta_angles[i] = ((a * ANGLE2SHORT) as i32 & 0xffff) - self.last_cmd_angles[i];
+        }
+        self.view_angles = angles;
+        self.ps.yaw = angles[1].to_radians();
+        self.ps.pitch = -angles[0].to_radians();
+    }
+
+    /// `TeleportPlayer` (0x51380, turrets doc 8 and 12.7). A playing client
+    /// raises `EV_PLAYER_TELEPORT_OUT` at the old origin and `_IN` at the
+    /// destination, returned for the caller to queue since the host owns the
+    /// temp entities; `client_num` is this client's slot, which both carry.
+    pub fn teleport_player(
+        &mut self,
+        client_num: usize,
+        origin: [f32; 3],
+        angles: [f32; 3],
+    ) -> Vec<crate::game::temp_entity::TempEntity> {
+        use crate::game::temp_entity::{Scope, TempEntity};
+        // `G_TempEntity` snaps its origin toward zero.
+        let temp = |event: i32, at: [f32; 3]| TempEntity {
+            event,
+            parm: 0,
+            surf_type: 0,
+            other: 0,
+            attacker: 0,
+            weapon: 0,
+            client_num: client_num as i32,
+            origin: at.map(f32::trunc),
+            scope: Scope::Pvs,
+        };
+        let temps = if self.pm_type == PmType::Normal && !self.dead {
+            vec![
+                temp(EV_PLAYER_TELEPORT_OUT, self.origin()),
+                temp(EV_PLAYER_TELEPORT_IN, origin),
+            ]
+        } else {
+            Vec::new()
+        };
+        self.ps.origin = Vec3::from(origin) + Vec3::Z;
+        self.teleport_bit = !self.teleport_bit;
+        self.set_view_angle(angles);
+        temps
     }
 
     pub fn add_event(&mut self, event: i32, parm: i32) {
@@ -545,6 +636,8 @@ impl ClientSim {
         world: Option<&CollisionWorld>,
         weapons: &[Option<WeaponDef>],
     ) -> Vec<PmEvent> {
+        // `pers.cmd` takes every cmd, ahead of the dead and intermission returns.
+        self.last_cmd_angles = cmd.angles;
         // A dead player's view is frozen and its body falls and slides;
         // nothing it presses reaches the mover or the weapon (combat doc,
         // 1.12 and 6, the `pm_type > 5` returns).
@@ -1062,6 +1155,12 @@ impl ClientSim {
         // weapon's, and the next task is what gives it a value.
         set("torsoAnim", self.anim.torso());
         set("weapon", i32::from(self.ps.weapon));
+        // The gun a gunner mans (turrets doc, 4.4); 0 off one, as release
+        // writes it.
+        set(
+            "otherEntityNum",
+            self.mounted_on.map_or(0, |(gun, _)| gun as i32),
+        );
         self.ring.write(&mut set);
         set("groundEntityNum", self.ps.ground_entity_num() as i32);
         // The lean the other client draws, the same -1..1 the playerstate
@@ -1214,6 +1313,9 @@ impl ClientSim {
             set("fWeaponPosFrac", self.ps.weapon_pos_frac.to_bits() as i32);
             set("aimSpreadScale", self.ps.aim_spread_scale.to_bits() as i32);
         }
+        set("viewlocked", i32::from(self.viewlocked));
+        set("viewlocked_entNum", self.viewlocked_ent as i32);
+        set("gunfx", i32::from(self.gunfx));
         // What the client holds; both layouts are in the object model doc,
         // section 20. The sim owns all of it: the script host's copy is
         // mirrored into `ps` every frame, and the weapon machine writes
@@ -1357,6 +1459,7 @@ fn vec_to_angles(v: Vec3) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::turret::TurretStance;
     use vcod_common::net::msg::NULL_USERCMD;
     use vcod_common::net::protocol::{ENTITYNUM_NONE, PROTOCOL_V1};
 
@@ -2332,6 +2435,108 @@ mod tests {
         assert_eq!(w.field_i32(p, "damagePitch"), 255);
         assert_eq!(w.field_i32(p, "damageCount"), 20);
         assert_eq!(sim.ps.velocity, Vec3::ZERO);
+    }
+
+    #[test]
+    fn set_view_angle_rewrites_delta_angles_against_the_last_cmd() {
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.last_cmd_angles = [100, 2000, 0];
+        sim.set_view_angle([10.0, 90.0, 0.0]);
+        let d = sim.delta_angles();
+        assert_eq!(d[0], (10.0 * ANGLE2SHORT) as i32 - 100);
+        assert_eq!(d[1], (90.0 * ANGLE2SHORT) as i32 - 2000);
+        assert_eq!(sim.view_angles()[1], 90.0);
+    }
+
+    /// `step` keeps the cmd's angles, so the view `set_view_angle` wrote is
+    /// what the next cmd carrying the same angles derives.
+    #[test]
+    fn a_forced_view_survives_the_next_cmd() {
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        let c = cmd(0, 1234, -5678);
+        sim.step(&c, 0.05, None, &[]);
+        sim.set_view_angle([-20.0, 135.0, 0.0]);
+        sim.step(&c, 0.05, None, &[]);
+        let v = sim.view_angles();
+        assert!((v[0] + 20.0).abs() < 0.01, "{v:?}");
+        assert!((v[1] - 135.0).abs() < 0.01, "{v:?}");
+    }
+
+    #[test]
+    fn a_mounted_client_writes_the_view_lock_and_stance_eflags() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        sim.mounted_on = Some((298, TurretStance::Stand));
+        sim.viewlocked = 1;
+        sim.viewlocked_ent = 298;
+        let ps = sim.to_wire(p, 0, 0);
+        assert_eq!(ps.field_i32(p, "viewlocked"), 1);
+        assert_eq!(ps.field_i32(p, "viewlocked_entNum"), 298);
+        assert_eq!(ps.field_i32(p, "eFlags") & 0xC000, 0xC000);
+        let e = sim.to_entity(p, 3, 0);
+        assert_eq!(e.field_i32(p, "eFlags") & 0xC000, 0xC000);
+        assert_eq!(e.field_i32(p, "otherEntityNum"), 298);
+
+        sim.mounted_on = Some((298, TurretStance::Duck));
+        assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "eFlags") & 0xC000, 0x8000);
+        sim.mounted_on = Some((298, TurretStance::Prone));
+        assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "eFlags") & 0xC000, 0x4000);
+    }
+
+    /// `ClientSpawn`'s memset: the capture's first trace, a fresh spawn,
+    /// reads `viewlocked_entNum` 0 (turrets doc, 12.7).
+    #[test]
+    fn a_respawn_clears_the_mount() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        sim.mounted_on = Some((298, TurretStance::Stand));
+        sim.viewlocked = 2;
+        sim.viewlocked_ent = 298;
+        sim.gunfx = 1;
+        sim.ps.mounted = Some(pmove::Stance::Stand);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        assert_eq!(sim.mounted_on, None);
+        assert_eq!(sim.ps.mounted, None);
+        let w = sim.to_wire(p, 0, 0);
+        assert_eq!(w.field_i32(p, "viewlocked"), 0);
+        assert_eq!(w.field_i32(p, "viewlocked_entNum"), 0);
+        assert_eq!(w.field_i32(p, "gunfx"), 0);
+        assert_eq!(w.field_i32(p, "eFlags") & 0xC000, 0);
+        assert_eq!(sim.to_entity(p, 3, 0).field_i32(p, "otherEntityNum"), 0);
+    }
+
+    /// `TeleportPlayer` (turrets doc, section 8 and 12.7): 200 at the old
+    /// origin and 199 at the destination on temp entities naming the
+    /// client, the origin a unit above the destination, the bit flipped and
+    /// the view set.
+    #[test]
+    fn teleport_player_raises_out_and_in_and_flips_the_bit() {
+        use crate::game::temp_entity::Scope;
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([5.7, -3.2, 8.9], 0.0, [0; 3]);
+        let bit = sim.eflags() & EF_TELEPORT_BIT;
+        let temps = sim.teleport_player(4, [10.5, 0.0, -23.9], [0.0, 45.0, 0.0]);
+        assert_eq!(sim.ps.origin, Vec3::new(10.5, 0.0, -22.9));
+        assert_ne!(sim.eflags() & EF_TELEPORT_BIT, bit);
+        assert_eq!(sim.view_angles()[1], 45.0);
+        let got: Vec<_> = temps
+            .iter()
+            .map(|t| (t.event, t.origin, t.client_num, t.scope))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (200, [5.0, -3.0, 8.0], 4, Scope::Pvs),
+                (199, [10.0, 0.0, -23.0], 4, Scope::Pvs),
+            ]
+        );
+
+        // A client not playing moves and flips without either event.
+        sim.dead = true;
+        assert!(sim.teleport_player(4, [0.0; 3], [0.0; 3]).is_empty());
+        assert_eq!(sim.ps.origin.z, 1.0);
     }
 
     /// A spectator noclips, so flight needs no collision world and a server

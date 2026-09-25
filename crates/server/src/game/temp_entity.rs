@@ -38,6 +38,8 @@ const _: () = {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
     Broadcast,
+    /// Everyone, culled by PVS: a bare `G_TempEntity` sets no `svFlags`.
+    Pvs,
     AllBut(usize),
     Only(usize),
 }
@@ -56,6 +58,8 @@ pub struct TempEntity {
     /// caller fills it in carry one: the melee hit and miss
     /// (`docs/research/cod11-combat.md` 2.5).
     pub weapon: i32,
+    /// `clientNum`, which only the caller that fills it in carries.
+    pub client_num: i32,
     pub origin: [f32; 3],
     pub scope: Scope,
 }
@@ -75,6 +79,7 @@ pub fn build(te: &TempEntity, number: u32, p: &Protocol) -> EntityState {
     set("otherEntityNum", te.other as i32);
     set("attackerEntityNum", te.attacker);
     set("weapon", te.weapon);
+    set("clientNum", te.client_num);
     for (axis, v) in te.origin.iter().enumerate() {
         set(&format!("pos.trBase[{axis}]"), v.to_bits() as i32);
     }
@@ -99,11 +104,11 @@ pub fn advance(cursor: u32, count: usize) -> u32 {
 }
 
 /// Whether one client's snapshot may carry this temp entity at all. A
-/// `Broadcast` one still skips the PVS cull; the two scoped ones are culled
+/// `Broadcast` one still skips the PVS cull; the other three are culled
 /// like any other entity once this says yes (`crate::server`).
 pub fn visible_to(te: &TempEntity, slot: usize) -> bool {
     match te.scope {
-        Scope::Broadcast => true,
+        Scope::Broadcast | Scope::Pvs => true,
         Scope::AllBut(s) => s != slot,
         Scope::Only(s) => s == slot,
     }
@@ -123,6 +128,7 @@ mod tests {
             attacker: 0,
             weapon: 0,
             origin: [0.0; 3],
+            client_num: 0,
             scope: Scope::Broadcast,
         }
     }
@@ -137,6 +143,7 @@ mod tests {
             attacker: 5,
             weapon: 0,
             origin: [1.0, 2.0, 3.0],
+            client_num: 0,
             scope: Scope::Broadcast,
         };
         let p = &PROTOCOL_V1;
