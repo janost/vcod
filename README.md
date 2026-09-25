@@ -313,8 +313,9 @@ These work in every mode:
 - Submodels (doors, exploding walls) collide by their brush hulls, but only
   as static geometry: no entity-driven movers, so there is nothing to ride.
 - Prediction runs on the map's collision only: players and movers do not
-  block the predicted player (the server does not clip players against each
-  other either).
+  block the predicted player. `vcod-server` does not clip players against
+  each other either; on a retail server, walking into another player can
+  mispredict until the next snapshot corrects it.
 - Walk-mode bullet impacts resolve per surface through `fx/iw_impacts.csv`
   like spectate does, plus tracers. No penetration, grenades or projectiles.
 - Walk mode carries six weapons on keys 1-6 (colt, thompson, mp40, mp44,

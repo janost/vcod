@@ -996,10 +996,16 @@ which is the per-cmd step the server runs, the chop and the arrears bound
 included (`crates/client/src/play/predict.rs`). A history that no longer
 reaches back to `commandTime` draws the snapshot unpredicted rather than
 replaying from the wrong base, and a correction a new snapshot brings is
-eased out over 100 ms, as `cg_errorDecay` does. The equivalence gate is
-`crates/server/tests/predict_ab.rs`: it steps the server's `ClientSim` and
-the predictor side by side through the wire codec and compares them field
-for field.
+eased out over 100 ms. Retail's cgame registers the cvar for that as
+`cg_errordecay` with default `"100"`: the cvar-table entry at
+`cgame_mp_x86.dll` `0x30074e04` points at the name string at `0x30064434`
+and the default string at `0x30064990`. VERIFIED. The ease is linear over
+those milliseconds, as Q3's `CG_CalcViewValues` scales the error. INFERRED
+from the lineage. A new error is added to what is left of the one being
+eased, as Q3's `CG_PredictPlayerState` does. INFERRED from the lineage. The
+equivalence gate is `crates/server/tests/predict_ab.rs`: it steps the
+server's `ClientSim` and the predictor side by side through the wire codec
+and compares the fields prediction draws from.
 
 ## Spectator
 
