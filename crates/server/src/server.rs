@@ -2792,6 +2792,9 @@ impl Server {
                 match op {
                     crate::game::host::SimOp::Event { event, parm } => sim.add_event(event, parm),
                     crate::game::host::SimOp::SetOrigin { origin } => sim.teleport(origin),
+                    crate::game::host::SimOp::SetViewAngles { angles } => {
+                        sim.set_view_angle(angles)
+                    }
                     crate::game::host::SimOp::Damaged { .. } => {
                         let index = sim.ps.weapon as usize;
                         let inputs = anims.map(|anims| crate::spectate::AnimInputs {

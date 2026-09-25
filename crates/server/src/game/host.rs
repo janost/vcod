@@ -214,6 +214,8 @@ pub enum SimOp {
     Event { event: i32, parm: i32 },
     /// A player's `setOrigin`, the unit lift already applied.
     SetOrigin { origin: [f32; 3] },
+    /// A player's `setPlayerAngles`: `SetClientViewAngle` on the sim.
+    SetViewAngles { angles: [f32; 3] },
 }
 
 /// `linkTo` and `unlink` on a client, queued the way `SimOp` is: the link

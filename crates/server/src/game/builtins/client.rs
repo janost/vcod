@@ -42,6 +42,7 @@ pub const NAMES: &[(&str, Builtin)] = &[
     ("dropitem", drop_item),
     ("closemenu", close_menu),
     ("setorigin", set_player_origin),
+    ("setplayerangles", set_player_angles),
 ];
 
 /// `self useButtonPressed()`: whether the client's last usercmd held the
@@ -86,6 +87,26 @@ pub fn set_player_origin(
     host.set_field(cx, entity_receiver(recv)?, field, Value::Vector(origin))?;
     host.client_sim_ops
         .push((slot, SimOp::SetOrigin { origin }));
+    Ok(Value::Undefined)
+}
+
+/// `self setPlayerAngles(angles)`, a player method (0x44df0): a straight
+/// `SetClientViewAngle` call. The script's `angles` moves now, as retail's
+/// `r.currentAngles` does; the sim's view is queued.
+pub fn set_player_angles(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    recv: Option<Target>,
+    args: &[Value],
+) -> Result<Value, ErrorKind> {
+    let slot = client_receiver(host, recv)?;
+    let Some(&Value::Vector(angles)) = args.first() else {
+        return Err(ErrorKind::BadType("setPlayerAngles takes a vector"));
+    };
+    let field = cx.intern_folded("angles");
+    host.set_field(cx, entity_receiver(recv)?, field, Value::Vector(angles))?;
+    host.client_sim_ops
+        .push((slot, SimOp::SetViewAngles { angles }));
     Ok(Value::Undefined)
 }
 
@@ -1543,5 +1564,51 @@ mod tests {
         assert!(raised.contains(&EV_RAISE_WEAPON), "raised: {raised:?}");
         assert!(!raised.contains(&EV_PUTAWAY_WEAPON), "one putaway, not two");
         assert_eq!(sim.ps.weapon, colt as u8);
+    }
+
+    /// `setPlayerAngles` reaches the sim as a queued op (the one `Server`
+    /// applies with `ClientSim::set_view_angle`), and the script's own
+    /// `angles` moves at once, as `SetClientViewAngle` writes
+    /// `r.currentAngles` (0x4209f).
+    #[test]
+    fn setplayerangles_queues_the_view_for_the_sim() {
+        use crate::game::host::ClientEvent;
+        use crate::game::script::ScriptRuntime;
+        let mut rt = ScriptRuntime::for_test(
+            r#"
+            main() {}
+            look() {
+                self setPlayerAngles((10, 90, 0));
+                self.seen = self.angles[1];
+            }
+        "#,
+        );
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 0,
+            name: "p".into(),
+        });
+        rt.run_frame(0);
+        let e = rt.client_entity(0).unwrap();
+        rt.start_thread_for_test(e, "look", 0);
+        rt.run_frame(50);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.client_field(0, "seen").as_deref(), Some("90"));
+        let ops = rt.take_sim_ops();
+        assert_eq!(
+            ops,
+            vec![(
+                0,
+                SimOp::SetViewAngles {
+                    angles: [10.0, 90.0, 0.0]
+                }
+            )]
+        );
+        let mut sim = crate::spectate::ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        let SimOp::SetViewAngles { angles } = ops[0].1 else {
+            unreachable!()
+        };
+        sim.set_view_angle(angles);
+        assert_eq!(sim.view_angles(), [10.0, 90.0, 0.0]);
     }
 }
