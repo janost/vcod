@@ -45,10 +45,6 @@ impl ClientCvars {
         })?;
         configstrings.get(i + MIRROR_VALUE_OFFSET).cloned()
     }
-
-    pub fn clear(&mut self) {
-        self.set.clear();
-    }
 }
 
 #[cfg(test)]

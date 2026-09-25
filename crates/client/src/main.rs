@@ -5,7 +5,6 @@ mod fx;
 mod hud;
 mod hud_text;
 mod loading;
-#[allow(dead_code)] // wired in by the --connect join task
 mod play;
 mod probe;
 mod quick_chat;
@@ -57,6 +56,12 @@ struct Args {
     /// Connect to a CoD server (ip:port) and spectate
     #[arg(long)]
     connect: Option<String>,
+    /// Answer the stock team menu with this after --connect
+    #[arg(long)]
+    team: Option<String>,
+    /// Answer the stock weapon menu with this weapon file name (e.g. m1carbine_mp)
+    #[arg(long)]
+    weapon: Option<String>,
     /// Overwrite the committed gamestate.bin fixture with the --net-probe capture.
     /// Off by default: the parser tests pin that file, and a capture from another
     /// map or a mid-round server is not a drop-in. Otherwise the probe writes to tmp/.
@@ -356,6 +361,10 @@ enum Mode {
         cam: FlyCamera,
         input: InputState,
         phase: Phase,
+        /// Boxed to keep the variants a similar size.
+        join: Box<play::join::Join>,
+        /// The open script menu as drawn; rebuilt when `join` opens another.
+        menu_view: Option<hud::menu::MenuView>,
     },
     Walk {
         /// Boxed to keep the variants a similar size.
@@ -717,16 +726,17 @@ fn main() -> Result<()> {
         (Vec::new(), None)
     };
 
-    let hud = if net_client.is_some() {
-        match hud::Hud::new(&fs) {
+    let (hud, localized) = if net_client.is_some() {
+        let hud = match hud::Hud::new(&fs) {
             Ok(hud) => Some(hud),
             Err(e) => {
                 log::warn!("hud: {e}, disabling the on-screen HUD");
                 None
             }
-        }
+        };
+        (hud, vcod_common::localize::Localized::load(&fs))
     } else {
-        None
+        (None, vcod_common::localize::Localized::default())
     };
 
     // Fly and walk have no aliases, but `.efx` spawns carry cues and need a listener.
@@ -750,6 +760,11 @@ fn main() -> Result<()> {
                 phase: Phase::Connecting {
                     since: Instant::now(),
                 },
+                join: Box::new(play::join::Join::new(
+                    args.team.clone(),
+                    args.weapon.clone(),
+                )),
+                menu_view: None,
             },
             None,
             "vcod — connecting".to_string(),
@@ -818,6 +833,8 @@ fn main() -> Result<()> {
         fx_ms: 0.0,
         hud,
         hud_ms: 0.0,
+        localized,
+        menus: hud::menu::MenuCache::default(),
         audio,
         quick_chat: quick_chat::QuickChat::new(0x51ee),
         error: None,
@@ -834,9 +851,10 @@ fn angle2short(deg: f32) -> i32 {
     (deg * 65536.0 / 360.0) as i32 & 0xffff
 }
 
-/// Position is server-authoritative, so only movement axes and look angles;
-/// `server_time` is filled by `send_frame`.
-fn usercmd_from_input(input: &InputState, cam: &FlyCamera) -> net::msg::UserCmd {
+/// Position is server-authoritative, so only movement axes, look angles and
+/// `weapon`, which must be the held one: a byte differing from `ps.weapon`
+/// reads as a holster. `server_time` is filled by `send_frame`.
+fn usercmd_from_input(input: &InputState, cam: &FlyCamera, weapon: u8) -> net::msg::UserCmd {
     let axis = |pos: bool, neg: bool| (pos as i32 - neg as i32) as i8 * 127;
     // Camera pitch is up-positive, usercmd pitch is down-positive.
     let pitch_deg = -cam.pitch.to_degrees();
@@ -848,6 +866,7 @@ fn usercmd_from_input(input: &InputState, cam: &FlyCamera) -> net::msg::UserCmd 
         // A nonzero `up` selects the full usercmd branch, which carries it;
         // the compact branch is the one that cannot (write_delta_usercmd).
         up: axis(input.up, input.down),
+        weapon,
         ..Default::default()
     }
 }
@@ -1172,6 +1191,9 @@ struct App {
     fx_ms: f32,
     hud: Option<hud::Hud>,
     hud_ms: f32,
+    /// Menu labels; empty outside `--connect`.
+    localized: vcod_common::localize::Localized,
+    menus: hud::menu::MenuCache,
     audio: audio::AudioSystem,
     quick_chat: quick_chat::QuickChat,
     error: Option<anyhow::Error>,
@@ -1230,6 +1252,67 @@ impl App {
             hud.scoreboard.visible = false;
         }
     }
+
+    /// The open script menu's keys, ahead of every other binding, and M to
+    /// open the main menu when none is. False when the key is not the menu's.
+    fn menu_key(&mut self, code: KeyCode) -> bool {
+        let Mode::Spectate {
+            net,
+            join,
+            menu_view,
+            ..
+        } = &mut self.mode
+        else {
+            return false;
+        };
+        let Some(view) = menu_view else {
+            if code == KeyCode::KeyM {
+                join.open_main(net.configstrings());
+                return true;
+            }
+            return false;
+        };
+        let response = match code {
+            KeyCode::Escape => {
+                join.close();
+                return true;
+            }
+            KeyCode::ArrowUp => {
+                view.up();
+                return true;
+            }
+            KeyCode::ArrowDown => {
+                view.down();
+                return true;
+            }
+            KeyCode::Enter => view.selected_response(),
+            _ => match digit_key(code) {
+                Some(key) => view.response_for_key(key),
+                None => return false,
+            },
+        };
+        if let Some(cmd) = response.and_then(|r| join.choose(r, net.server_id())) {
+            net.send_reliable(&cmd);
+        }
+        true
+    }
+}
+
+/// A menu `execKey` name for the digit row.
+fn digit_key(code: KeyCode) -> Option<&'static str> {
+    Some(match code {
+        KeyCode::Digit0 => "0",
+        KeyCode::Digit1 => "1",
+        KeyCode::Digit2 => "2",
+        KeyCode::Digit3 => "3",
+        KeyCode::Digit4 => "4",
+        KeyCode::Digit5 => "5",
+        KeyCode::Digit6 => "6",
+        KeyCode::Digit7 => "7",
+        KeyCode::Digit8 => "8",
+        KeyCode::Digit9 => "9",
+        _ => return None,
+    })
 }
 
 impl ApplicationHandler for App {
@@ -1283,6 +1366,9 @@ impl ApplicationHandler for App {
                 };
                 // auto-repeat would retrigger the jump and the prone toggle
                 if event.repeat {
+                    return;
+                }
+                if pressed && self.menu_key(code) {
                     return;
                 }
                 if code == KeyCode::Escape && pressed {
@@ -1449,6 +1535,8 @@ impl ApplicationHandler for App {
                         cam,
                         input,
                         phase,
+                        join,
+                        menu_view,
                     } => {
                         let events = net.pump();
                         let mut gamestate_ready = false;
@@ -1474,6 +1562,16 @@ impl ApplicationHandler for App {
                                 }
                                 // `j/k/l` is quick chat; `s <idx>` is the announcer.
                                 net::NetEvent::ServerCommand(ref tokens) => {
+                                    if tokens.first().is_some_and(|t| t == "n") {
+                                        join.on_restart();
+                                    }
+                                    for cmd in join.on_server_command(
+                                        tokens,
+                                        net.configstrings(),
+                                        net.server_id(),
+                                    ) {
+                                        net.send_reliable(&cmd);
+                                    }
                                     let newest = net.snapshots().newest();
                                     let protocol = &net::protocol::PROTOCOL_V1;
                                     let quick_chat = self.quick_chat.on_server_command(
@@ -1493,8 +1591,24 @@ impl ApplicationHandler for App {
                                         );
                                     }
                                 }
-                                net::NetEvent::GamestateReady => gamestate_ready = true,
+                                net::NetEvent::GamestateReady => {
+                                    join.on_gamestate();
+                                    gamestate_ready = true;
+                                }
                                 _ => {}
+                            }
+                        }
+
+                        match join.open() {
+                            None => *menu_view = None,
+                            Some(open)
+                                if menu_view.as_ref().is_some_and(|v| v.title == open.name) => {}
+                            Some(open) => {
+                                *menu_view = self.menus.get(&self.fs, &open.name).map(|menu| {
+                                    hud::menu::view(menu, &self.localized, |c| {
+                                        join.cvars.get(c, net.configstrings())
+                                    })
+                                });
                             }
                         }
 
@@ -1754,7 +1868,11 @@ impl ApplicationHandler for App {
                                     r.set_dynamic_models(&instances);
 
                                     // Every frame; also the keepalive.
-                                    net.send_frame(&usercmd_from_input(input, cam));
+                                    let weapon = net
+                                        .snapshots()
+                                        .newest()
+                                        .map_or(0, |s| s.ps.field_i32(p, "weapon") as u8);
+                                    net.send_frame(&usercmd_from_input(input, cam, weapon));
 
                                     // Step before this frame's events spawn, or the
                                     // [now-dt, now] integration would move particles born
@@ -1775,7 +1893,7 @@ impl ApplicationHandler for App {
                                         protocol: p,
                                         server_time: newest.map_or(0, |s| s.server_time),
                                         fs: &self.fs,
-                                        menu: None,
+                                        menu: menu_view.as_ref(),
                                     };
 
                                     // Events use the newest snapshot, not the interpolation
@@ -2218,6 +2336,7 @@ mod tests {
                 ..Default::default()
             },
             &cam,
+            0,
         );
         assert_eq!(rising.up, 127, "Space must climb");
 
@@ -2227,6 +2346,7 @@ mod tests {
                 ..Default::default()
             },
             &cam,
+            0,
         );
         assert_eq!(falling.up, -127, "Ctrl must descend");
 
@@ -2237,6 +2357,7 @@ mod tests {
                 ..Default::default()
             },
             &cam,
+            0,
         );
         assert_eq!(held.up, 0, "both held cancels");
     }

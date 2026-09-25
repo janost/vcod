@@ -1,6 +1,6 @@
 //! The server's open script menu drawn as a keyboard list: a stock
 //! `.menu` file (`vcod_common::menu`) turned into localized, cvar-filtered
-//! rows and glyph quads. Wired in by the --connect join task.
+//! rows and glyph quads.
 
 use std::collections::HashMap;
 

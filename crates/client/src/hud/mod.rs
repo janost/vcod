@@ -4,8 +4,6 @@
 pub mod chat;
 pub mod font;
 pub mod killfeed;
-/// Wired in by the --connect join task.
-#[allow(dead_code)]
 pub mod menu;
 pub mod scoreboard;
 pub mod status;
