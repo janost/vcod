@@ -105,6 +105,11 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     ps.jump_latched = pm_flags & PMF_JUMP_HELD != 0;
     ps.backwards_run = pm_flags & PMF_BACKWARDS_RUN != 0;
     ps.ads_active = pm_flags & weapon::PMF_ADS != 0;
+    ps.knockback_ms = if pm_flags & super::PMF_TIME_KNOCKBACK != 0 {
+        int("pm_time") as f32
+    } else {
+        0.0
+    };
 
     ps.view_lerp_target = s8("viewHeightLerpTarget") as f32;
     ps.view_lerp_down = int("viewHeightLerpDown") != 0;
@@ -375,6 +380,21 @@ mod tests {
             set(&mut w, &format!("delta_angles[{i}]"), pred.delta_angles[i]);
         }
         w
+    }
+
+    /// `pm_time` only means the knockback timer while `pm_flags` 0x100 is
+    /// set (plan-phase read 3); the byte itself carries other timers too.
+    #[test]
+    fn from_wire_reads_the_knockback_timer() {
+        let p = &PROTOCOL_V1;
+        let mut w = msg::PlayerState::null(p);
+        set(&mut w, "pm_time", 300);
+        set(&mut w, "pm_flags", super::super::PMF_TIME_KNOCKBACK);
+        assert_eq!(from_wire(p, &w, None).ps.knockback_ms, 300.0);
+
+        let mut w = msg::PlayerState::null(p);
+        set(&mut w, "pm_time", 300);
+        assert_eq!(from_wire(p, &w, None).ps.knockback_ms, 0.0);
     }
 
     #[test]

@@ -58,6 +58,14 @@ const STEP_REVERT_EPS: f32 = 0.001;
 /// Step height while prone (PM_StepSlideMove @0x35045 tests pm_flags bit 0x1).
 pub const STEPSIZE_PRONE: f32 = 10.0;
 pub const OVERCLIP: f32 = 1.001;
+/// `pm_flags` bit 0x100, the player-clip knockback timer
+/// (`docs/research/cod11-player-clip.md`, `PM_DropTimers` 0x32a44).
+pub const PMF_TIME_KNOCKBACK: i32 = 0x100;
+/// `PM_Friction`'s ground control multiplier while the knockback timer runs
+/// (0x2e51c).
+const KNOCKBACK_FRICTION_SCALE: f32 = 0.3;
+/// `PM_WalkMove`'s accel multiplier while the knockback timer runs (0x2f4d8).
+const KNOCKBACK_ACCEL_SCALE: f32 = 0.25;
 pub const MIN_WALK_NORMAL: f32 = 0.7;
 pub const MAX_CLIP_PLANES: usize = 5;
 pub const HALF_WIDTH: f32 = 15.0; // bbox is (-15,-15,0)..(15,15,height)
@@ -289,6 +297,11 @@ pub struct PlayerState {
     pub water_level: u32,
     /// Remaining control lock while flying out of water; 0 when free.
     pub waterjump_ms: f32,
+    /// Remaining player-clip push penalty, `pm_time` with `pm_flags` 0x100;
+    /// 0 when free. Quarters `walk_move`'s accel and softens ground friction
+    /// to 0.3 of its control term while it runs (plan-phase read 3,
+    /// `docs/research/cod11-player-clip.md`). Task 5 sets it.
+    pub knockback_ms: f32,
     /// Touching a climbable surface (trace hit with SURF_LADDER) this frame.
     pub on_ladder: bool,
     /// Plane normal of that surface; persists while off the wall so the
@@ -437,6 +450,7 @@ impl PlayerState {
             view_yaw_correction: 0.0,
             water_level: 0,
             waterjump_ms: 0.0,
+            knockback_ms: 0.0,
             on_ladder: false,
             ladder_normal: Vec3::ZERO,
             since_jump_ms: f32::INFINITY,
@@ -630,6 +644,16 @@ pub fn pmove(
         if ps.waterjump_ms < 0.0 {
             ps.waterjump_ms = 0.0;
         }
+    }
+    // `PM_DropTimers` (0x32a44): zeroed once the frame's ms reach it,
+    // otherwise subtracted.
+    if ps.knockback_ms > 0.0 {
+        let ms = dt * 1000.0;
+        ps.knockback_ms = if ms >= ps.knockback_ms {
+            0.0
+        } else {
+            ps.knockback_ms - ms
+        };
     }
     // retail checks ladders right after the first ground trace and dispatches
     // them before waterjump/water
@@ -1245,7 +1269,10 @@ fn friction(ps: &mut PlayerState, on_ladder: bool, dt: f32) {
     }
     let mut drop = 0.0;
     if ps.on_ground && ps.water_level <= 1 {
-        let control = speed.max(PM_STOPSPEED);
+        let mut control = speed.max(PM_STOPSPEED);
+        if ps.knockback_ms > 0.0 {
+            control *= KNOCKBACK_FRICTION_SCALE;
+        }
         drop += control * PM_FRICTION * dt;
     }
     if ps.water_level > 0 {
@@ -1414,11 +1441,14 @@ fn walk_move(
         return;
     }
     let (dir, wishspeed) = wish(ps, input, weapon);
-    let accel = match ps.stance {
+    let mut accel = match ps.stance {
         Stance::Stand => PM_ACCELERATE,
         Stance::Crouch => PM_DUCKED_ACCELERATE,
         Stance::Prone => PM_PRONE_ACCELERATE,
     };
+    if ps.knockback_ms > 0.0 {
+        accel *= KNOCKBACK_ACCEL_SCALE;
+    }
     // along the slope, so it costs no speed
     let dir = clip_velocity(dir, ps.ground_normal).normalize_or_zero();
     // Q3's `PM_Accelerate` inline, with the rate floored: a prone or
@@ -2048,6 +2078,65 @@ mod tests {
 
     fn flat() -> CollisionWorld {
         test_world(&[])
+    }
+
+    /// `PM_WalkMove`'s accel and `PM_Friction`'s ground control both scale
+    /// down while the knockback timer runs (plan-phase read 3).
+    #[test]
+    fn knockback_quarters_accel_and_softens_friction() {
+        let w = flat();
+        let mw = MoveWorld::bare(&w);
+        let run = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        let mut free = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.1), 0.0);
+        let mut kb = free;
+        kb.knockback_ms = 300.0;
+        pmove(&mut free, &run, &mw, 0.008, &[]);
+        pmove(&mut kb, &run, &mw, 0.008, &[]);
+        // snap_velocity rounds each component to the nearest unit, which
+        // alone can move either side by up to 0.5; the tolerance covers
+        // both roundings rather than the raw 0.25 ratio.
+        assert!(
+            (kb.velocity.x - free.velocity.x * 0.25).abs() < 0.75,
+            "{} vs {}",
+            kb.velocity.x,
+            free.velocity.x
+        );
+
+        let mut slide = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.1), 0.0);
+        slide.velocity = Vec3::new(190.0, 0.0, 0.0);
+        let mut slide_kb = slide;
+        slide_kb.knockback_ms = 300.0;
+        pmove(&mut slide, &PmInput::default(), &mw, 0.008, &[]);
+        pmove(&mut slide_kb, &PmInput::default(), &mw, 0.008, &[]);
+        assert!(slide_kb.velocity.x > slide.velocity.x);
+    }
+
+    /// `PM_DropTimers` zeroes the timer once the frame's ms reach it, and
+    /// otherwise subtracts (plan-phase read 3).
+    #[test]
+    fn knockback_runs_out() {
+        let w = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.knockback_ms = 20.0;
+        pmove(
+            &mut ps,
+            &PmInput::default(),
+            &MoveWorld::bare(&w),
+            0.016,
+            &[],
+        );
+        assert_eq!(ps.knockback_ms, 4.0);
+        pmove(
+            &mut ps,
+            &PmInput::default(),
+            &MoveWorld::bare(&w),
+            0.016,
+            &[],
+        );
+        assert_eq!(ps.knockback_ms, 0.0);
     }
 
     /// A death takes the sight down: `PmoveSingle`'s dead arm calls

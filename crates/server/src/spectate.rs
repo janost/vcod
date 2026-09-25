@@ -1316,14 +1316,21 @@ impl ClientSim {
             } else {
                 0
             };
+            let knockback = if self.ps.knockback_ms > 0.0 {
+                pmove::PMF_TIME_KNOCKBACK
+            } else {
+                0
+            };
             set(
                 "pm_flags",
                 PMF_OWN_VIEW
                     | stance_pmflags
                     | jump_held
                     | backwards
+                    | knockback
                     | pmove::weapon::ads_pm_flags(&self.ps),
             );
+            set("pm_time", self.ps.knockback_ms as i32);
             // The client predicts its own eye lerp; without these it restarts
             // from our value every snapshot and the view shakes for as long
             // as the lerp lasts.
@@ -2388,6 +2395,38 @@ mod tests {
         // A spawn unlinks: `ClientSpawn` calls `G_EntUnlink`.
         sim.become_player([0.0; 3], 0.0, NULL_USERCMD.angles);
         assert_eq!(sim.link_to, None);
+    }
+
+    /// `to_wire` carries the knockback timer as `pm_time` plus `pm_flags`
+    /// 0x100 (plan-phase read 3), and clears both once the timer is free.
+    #[test]
+    fn to_wire_carries_the_knockback_timer() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.knockback_ms = 300.0;
+        let ws = sim.to_wire(p, 0, 0);
+        assert_eq!(
+            ws.fields[msg::PlayerState::field_index(p, "pm_time").unwrap()],
+            300
+        );
+        assert_ne!(
+            ws.fields[msg::PlayerState::field_index(p, "pm_flags").unwrap()]
+                & pmove::PMF_TIME_KNOCKBACK,
+            0
+        );
+
+        sim.ps.knockback_ms = 0.0;
+        let ws = sim.to_wire(p, 0, 0);
+        assert_eq!(
+            ws.fields[msg::PlayerState::field_index(p, "pm_time").unwrap()],
+            0
+        );
+        assert_eq!(
+            ws.fields[msg::PlayerState::field_index(p, "pm_flags").unwrap()]
+                & pmove::PMF_TIME_KNOCKBACK,
+            0
+        );
     }
 
     fn target() -> ClientSim {
