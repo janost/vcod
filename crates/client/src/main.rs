@@ -350,6 +350,9 @@ struct LivePhase {
     predicted_events: play::events::PredictedEvents,
     clock: ServerClock,
     last_loop_snap: Option<u32>,
+    /// Last frame's `entity_pos`: retail predicts before it re-lerps, so the
+    /// predictor clips against where the players were drawn a frame ago.
+    drawn_pos: HashMap<u32, Vec3>,
 }
 
 fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport>) -> Phase {
@@ -364,6 +367,7 @@ fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport
         predicted_events: play::events::PredictedEvents::default(),
         clock: ServerClock::new(),
         last_loop_snap: None,
+        drawn_pos: HashMap::new(),
     }))
 }
 
@@ -1805,6 +1809,7 @@ impl ApplicationHandler for App {
                                         predicted_events,
                                         clock,
                                         last_loop_snap,
+                                        drawn_pos,
                                     } = &mut **live;
                                     let bsp =
                                         &self.world.as_ref().expect("live phase has a map").bsp;
@@ -1898,15 +1903,22 @@ impl ApplicationHandler for App {
                                         }
                                     }
                                     let predicted = if ps_client == client_num {
-                                        let mw = MoveWorld::bare(world);
                                         net.snapshots().newest().and_then(|s| {
-                                            predictor
-                                                .predict(p, &s.ps, ring, &mw, weapons, local_ms)
+                                            let bodies = play::predict::solid_bodies(
+                                                p,
+                                                &s.entities,
+                                                client_num as u32,
+                                                drawn_pos,
+                                            );
+                                            predictor.predict(
+                                                p, &s.ps, ring, world, &bodies, weapons, local_ms,
+                                            )
                                         })
                                     } else {
                                         predictor.reset();
                                         None
                                     };
+                                    drawn_pos.clone_from(&entity_pos);
                                     if let Some(v) = &predicted {
                                         cam.pos = v.origin + Vec3::Z * v.view_height;
                                     }

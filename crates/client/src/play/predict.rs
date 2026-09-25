@@ -5,9 +5,9 @@
 
 use super::cmds::{CmdRing, CMD_MS};
 use glam::Vec3;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use vcod_common::collision::CollisionWorld;
-use vcod_common::movetrace::MoveWorld;
+use vcod_common::movetrace::{Body, MoveWorld, CONTENTS_BODY};
 use vcod_common::net::msg;
 use vcod_common::net::protocol::Protocol;
 use vcod_common::pmove::predict::{self, Predicted};
@@ -19,6 +19,12 @@ const ERROR_DECAY_MS: f64 = 100.0;
 const SNAP_DISTANCE: f32 = 256.0;
 /// `eFlags` teleport bit; it flips on every spawn (AGENTS.md, Gotchas).
 const EF_TELEPORT: i32 = 0x8;
+/// `eFlags` capsule bit; the client clips only capsule entities.
+const EF_CAPSULE: i32 = 0x10;
+const ET_PLAYER: i32 = 1;
+const ET_ITEM: i32 = 3;
+/// A brush submodel's `solid`; its brushes are already in the world.
+const SOLID_BMODEL: i32 = 0xffffff;
 
 /// What the camera draws for a predicted frame.
 pub struct PredictedView {
@@ -157,15 +163,18 @@ pub struct Predictor {
 }
 
 impl Predictor {
-    /// `ps` is the newest snapshot's playerstate, ours; `None` when its
+    /// `ps` is the newest snapshot's playerstate, ours, and `bodies` what it
+    /// clips against besides the map ([`solid_bodies`]); `None` when its
     /// `pm_type` is not one the client predicts, or when the cmd history no
     /// longer reaches back to its `commandTime` (a miss).
+    #[allow(clippy::too_many_arguments)]
     pub fn predict(
         &mut self,
         p: &Protocol,
         ps: &msg::PlayerState,
         ring: &CmdRing,
-        world: &MoveWorld,
+        world: &CollisionWorld,
+        bodies: &[Body],
         weapons: &[Option<WeaponDef>],
         now_ms: f64,
     ) -> Option<PredictedView> {
@@ -173,6 +182,7 @@ impl Predictor {
             self.reset();
             return None;
         }
+        let world = &MoveWorld::new(world, bodies, ps.field_i32(p, "clientNum") as u32);
         if now_ms - self.log_ms >= 1000.0 {
             log::debug!("predict: max correction {:.2}u", self.max_correction);
             self.max_correction = 0.0;
@@ -307,6 +317,37 @@ impl Predictor {
     }
 }
 
+/// The snapshot's solid entities as the predictor clips them, retail's
+/// `CG_BuildSolidList` and `CG_ClipMoveToEntities`
+/// (`docs/research/cod11-player-clip.md`). `lerped` is where each was drawn,
+/// else its `trBase` stands in.
+pub fn solid_bodies(
+    p: &Protocol,
+    entities: &BTreeMap<u32, msg::EntityState>,
+    own: u32,
+    lerped: &HashMap<u32, Vec3>,
+) -> Vec<Body> {
+    let mut out = Vec::new();
+    for (&n, e) in entities {
+        let solid = e.field_i32(p, "solid");
+        let etype = e.field_i32(p, "eType");
+        if n == own || solid == 0 || solid == SOLID_BMODEL || etype == ET_ITEM {
+            continue;
+        }
+        if e.field_i32(p, "eFlags") & EF_CAPSULE == 0 {
+            log::debug!("predict: solid entity {n} (eType {etype}) is no capsule, skipped");
+            continue;
+        }
+        let origin = lerped
+            .get(&n)
+            .copied()
+            .unwrap_or_else(|| Vec3::from(e.origin(p)));
+        let contents = if etype == ET_PLAYER { CONTENTS_BODY } else { 1 };
+        out.push(Body::from_solid(n, origin, solid, contents));
+    }
+    out
+}
+
 /// The brush models the stock map-load scripts take out of the clip (AGENTS.md,
 /// "A submodel's brushes are in the clip only while its entity is linked").
 pub fn unlink_script_brushes(world: &CollisionWorld, entities: &str, gametype: &str) {
@@ -342,7 +383,9 @@ pub fn unlink_script_brushes(world: &CollisionWorld, entities: &str, gametype: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, HashMap};
     use vcod_common::collision::test_world;
+    use vcod_common::movetrace::{Body, CONTENTS_BODY};
     use vcod_common::net::msg::UserCmd;
     use vcod_common::net::protocol::{ENTITYNUM_WORLD, PROTOCOL_V1};
 
@@ -380,12 +423,11 @@ mod tests {
     /// A miss is `None`, so the caller draws stage 2's interpolated snapshots.
     fn history_gap_draws_the_snapshot() {
         let world = test_world(&[]);
-        let world = MoveWorld::bare(&world);
         let snap = standing(5000, 0.0);
         let run = |oldest: i32| {
             let mut pr = Predictor::default();
             let r = ring((oldest..=5200).step_by(8), true);
-            (pr.predict(P, &snap, &r, &world, &[], 0.0), pr.misses)
+            (pr.predict(P, &snap, &r, &world, &[], &[], 0.0), pr.misses)
         };
 
         let (v, misses) = run(5008);
@@ -403,7 +445,7 @@ mod tests {
 
         let mut pr = Predictor::default();
         assert!(pr
-            .predict(P, &snap, &CmdRing::default(), &world, &[], 0.0)
+            .predict(P, &snap, &CmdRing::default(), &world, &[], &[], 0.0)
             .is_none());
         assert_eq!(pr.misses, 1);
     }
@@ -413,24 +455,90 @@ mod tests {
     #[test]
     fn an_unchanged_snapshot_runs_only_the_new_cmd() {
         let world = test_world(&[]);
-        let world = MoveWorld::bare(&world);
         let snap = standing(5000, 0.0);
         let mut r = ring((5008..=5040).step_by(8), true);
         let mut pr = Predictor::default();
-        pr.predict(P, &snap, &r, &world, &[], 0.0).unwrap();
+        pr.predict(P, &snap, &r, &world, &[], &[], 0.0).unwrap();
         assert_eq!(pr.cmds_run, 5);
         r.push(UserCmd {
             server_time: 5048,
             forward: 127,
             ..Default::default()
         });
-        let v = pr.predict(P, &snap, &r, &world, &[], 8.0).unwrap();
+        let v = pr.predict(P, &snap, &r, &world, &[], &[], 8.0).unwrap();
         assert_eq!(pr.cmds_run, 6);
         let full = Predictor::default()
-            .predict(P, &snap, &r, &world, &[], 8.0)
+            .predict(P, &snap, &r, &world, &[], &[], 8.0)
             .unwrap();
         assert_eq!(v.origin, full.origin);
         assert_eq!(v.pred.command_time, 5048);
+    }
+
+    fn entity(num: u32, fields: &[(&str, i32)], origin: Vec3) -> msg::EntityState {
+        let mut e = msg::EntityState::null(P);
+        e.number = num;
+        let mut put = |name: &str, v: i32| {
+            e.fields[msg::EntityState::field_index(P, name).unwrap()] = v;
+        };
+        for &(name, v) in fields {
+            put(name, v);
+        }
+        for i in 0..3 {
+            put(&format!("pos.trBase[{i}]"), origin[i].to_bits() as i32);
+        }
+        e
+    }
+
+    #[test]
+    fn solid_bodies_keeps_capsule_players_only() {
+        let standing = 6684943;
+        let at = Vec3::new(40.0, 0.0, 0.0);
+        let ents: BTreeMap<u32, msg::EntityState> = [
+            entity(1, &[("eType", 1), ("solid", standing), ("eFlags", 16)], at),
+            entity(2, &[("eType", 3), ("solid", standing), ("eFlags", 16)], at),
+            entity(3, &[("eType", 1), ("solid", 0), ("eFlags", 16)], at),
+            entity(4, &[("solid", 0xffffff), ("eFlags", 16)], at),
+            entity(5, &[("eType", 1), ("solid", standing), ("eFlags", 16)], at),
+            entity(6, &[("eType", 1), ("solid", standing)], at),
+        ]
+        .into_iter()
+        .map(|e| (e.number, e))
+        .collect();
+        let lerped = HashMap::from([(1, Vec3::new(100.0, 0.0, 0.0))]);
+
+        let bodies = solid_bodies(P, &ents, 5, &lerped);
+
+        assert_eq!(
+            bodies,
+            [Body {
+                entity: 1,
+                origin: Vec3::new(100.0, 0.0, 0.0),
+                mins: Vec3::new(-15.0, -15.0, -1.0),
+                maxs: Vec3::new(15.0, 15.0, 70.0),
+                contents: CONTENTS_BODY,
+            }]
+        );
+    }
+
+    #[test]
+    fn prediction_stops_at_a_snapshot_player() {
+        let world = test_world(&[]);
+        let body = Body::from_solid(9, Vec3::new(60.0, 0.0, 0.0), 6684943, CONTENTS_BODY);
+        // 16 ms apart so the capped history still reaches the snapshot.
+        let r = ring((5008..=6000).step_by(16), true);
+        let v = Predictor::default()
+            .predict(P, &standing(5000, 0.0), &r, &world, &[body], &[], 0.0)
+            .unwrap();
+        let short = 60.0 - v.pred.ps.origin.x;
+        assert!((30.0..31.0).contains(&short), "stopped {short} short");
+
+        let open = Predictor::default()
+            .predict(P, &standing(5000, 0.0), &r, &world, &[], &[], 0.0)
+            .unwrap();
+        assert!(
+            open.pred.ps.origin.x > 100.0,
+            "the run reaches past it bare"
+        );
     }
 
     /// mp_depot's `*1` is an exploder and a `bombzone`, so `sd` keeps the
@@ -451,12 +559,11 @@ mod tests {
     #[test]
     fn not_predictable_is_none() {
         let world = test_world(&[]);
-        let world = MoveWorld::bare(&world);
         let mut snap = standing(5000, 0.0);
         set(&mut snap, "pm_type", 6);
         let r = ring((5008..=5040).step_by(8), false);
         assert!(Predictor::default()
-            .predict(P, &snap, &r, &world, &[], 0.0)
+            .predict(P, &snap, &r, &world, &[], &[], 0.0)
             .is_none());
     }
 
@@ -465,16 +572,15 @@ mod tests {
     /// flipped or not. Returns the second frame's drawn and predicted x.
     fn corrected(x: f32, flip: bool) -> (f32, f32) {
         let world = test_world(&[]);
-        let world = MoveWorld::bare(&world);
         let r = ring((5008..=5040).step_by(8), false);
         let mut pr = Predictor::default();
-        pr.predict(P, &standing(5000, 0.0), &r, &world, &[], 0.0)
+        pr.predict(P, &standing(5000, 0.0), &r, &world, &[], &[], 0.0)
             .unwrap();
         let mut snap = standing(5016, x);
         if flip {
             set(&mut snap, "eFlags", 16 | 0x8);
         }
-        let v = pr.predict(P, &snap, &r, &world, &[], 16.0).unwrap();
+        let v = pr.predict(P, &snap, &r, &world, &[], &[], 16.0).unwrap();
         (v.origin.x, v.pred.ps.origin.x)
     }
 
@@ -492,16 +598,18 @@ mod tests {
     #[test]
     fn error_decays_over_100_ms() {
         let world = test_world(&[]);
-        let world = MoveWorld::bare(&world);
         let r = ring((5008..=5040).step_by(8), false);
         let mut pr = Predictor::default();
         let first = pr
-            .predict(P, &standing(5000, 0.0), &r, &world, &[], 0.0)
+            .predict(P, &standing(5000, 0.0), &r, &world, &[], &[], 0.0)
             .unwrap();
         assert_eq!(first.origin.x, 0.0);
         let snap = standing(5016, 10.0);
         let at = |pr: &mut Predictor, ms: f64| {
-            pr.predict(P, &snap, &r, &world, &[], ms).unwrap().origin.x
+            pr.predict(P, &snap, &r, &world, &[], &[], ms)
+                .unwrap()
+                .origin
+                .x
         };
         assert_eq!(at(&mut pr, 16.0), 0.0, "the correction starts fully eased");
         assert!((at(&mut pr, 66.0) - 5.0).abs() < 1e-4);
@@ -520,7 +628,6 @@ mod tests {
         resend_at: usize,
     ) -> Vec<f32> {
         let world = test_world(&[]);
-        let world = MoveWorld::bare(&world);
         let snap = standing(5000, 0.0);
         let mut resent = snap.clone();
         set(&mut resent, "damageEvent", 1);
@@ -538,7 +645,10 @@ mod tests {
                     });
                 }
                 let s = if k >= resend_at { &resent } else { &snap };
-                pr.predict(P, s, &r, &world, &[], local).unwrap().origin.x
+                pr.predict(P, s, &r, &world, &[], &[], local)
+                    .unwrap()
+                    .origin
+                    .x
             })
             .collect()
     }
@@ -610,7 +720,6 @@ mod tests {
     /// the same cmds. Returns the drawn x per frame.
     fn walk_acked(hz: f64, frames: usize, unacked: usize) -> Vec<f32> {
         let world = test_world(&[]);
-        let world = MoveWorld::bare(&world);
         let first = standing(5000, 0.0);
         let mut truth = vec![predict::from_wire(P, &first, None)];
         let mut snap = first;
@@ -628,14 +737,14 @@ mod tests {
                     };
                     r.push(cmd);
                     let mut next = *truth.last().unwrap();
-                    predict::run_cmd(&mut next, &cmd, &world, &[]);
+                    predict::run_cmd(&mut next, &cmd, &MoveWorld::bare(&world), &[]);
                     truth.push(next);
                 }
                 let prev_local = (k as f64 - 1.0) * 1000.0 / hz;
                 if k > 0 && (local / 50.0).floor() != (prev_local / 50.0).floor() {
                     snap = wire(&truth[truth.len().saturating_sub(1 + unacked)]);
                 }
-                pr.predict(P, &snap, &r, &world, &[], local)
+                pr.predict(P, &snap, &r, &world, &[], &[], local)
                     .unwrap()
                     .origin
                     .x
