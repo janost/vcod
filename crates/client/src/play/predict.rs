@@ -3,9 +3,6 @@
 //! (`vcod_common::pmove::predict`), and retail's `cg_errorDecay` easing out
 //! what a new snapshot corrects.
 
-// Wired into `Mode::Online` by the next commit.
-#![allow(dead_code)]
-
 use super::cmds::{CmdRing, CMD_MS};
 use glam::Vec3;
 use vcod_common::collision::CollisionWorld;
@@ -28,6 +25,8 @@ pub struct PredictedView {
     pub view_height: f32,
     /// Raw 16-bit wire values, the prone cone's push included.
     pub delta_angles: [i32; 3],
+    /// Read by nothing yet; the predicted events are stage 4's.
+    #[allow(dead_code)]
     pub pred: Predicted,
 }
 
@@ -43,6 +42,12 @@ pub struct Predictor {
     error: Vec3,
     /// Local ms the error was last added to.
     error_ms: f64,
+    /// The error still drawn on the last frame, `None` when it was not
+    /// predicted.
+    drawn_error: Option<f32>,
+    /// The longest correction since `log_ms`, logged once a second.
+    max_correction: f32,
+    log_ms: f64,
 }
 
 impl Predictor {
@@ -60,6 +65,11 @@ impl Predictor {
         if !predict::predictable(ps.field_i32(p, "pm_type")) {
             self.reset();
             return None;
+        }
+        if now_ms - self.log_ms >= 1000.0 {
+            log::debug!("predict: max correction {:.2}u", self.max_correction);
+            self.max_correction = 0.0;
+            self.log_ms = now_ms;
         }
         let command_time = ps.field_i32(p, "commandTime");
         let teleport = ps.field_i32(p, "eFlags") & EF_TELEPORT != 0;
@@ -99,6 +109,7 @@ impl Predictor {
         }
         if let (Some((_, before)), Some(after)) = (self.last, at_last) {
             let delta = after - before;
+            self.max_correction = self.max_correction.max(delta.length());
             if delta.length() > SNAP_DISTANCE {
                 self.error = Vec3::ZERO;
             } else if delta != Vec3::ZERO {
@@ -107,7 +118,15 @@ impl Predictor {
             }
         }
         self.last = Some((pred.command_time, pred.ps.origin));
-        Some(view(pred, pred.ps.origin - self.error * self.decay(now_ms)))
+        let error = self.error * self.decay(now_ms);
+        self.drawn_error = Some(error.length());
+        Some(view(pred, pred.ps.origin - error))
+    }
+
+    /// The correction drawn on the last frame, in units; `None` when that
+    /// frame was not predicted.
+    pub fn drawn_error(&self) -> Option<f32> {
+        self.drawn_error
     }
 
     /// Forgets the last frame's prediction and any correction in flight.
@@ -119,11 +138,40 @@ impl Predictor {
     fn snap(&mut self) {
         self.last = None;
         self.error = Vec3::ZERO;
+        self.drawn_error = None;
     }
 
     /// The share of the error still drawn at `now_ms`, 1 down to 0.
     fn decay(&self, now_ms: f64) -> f32 {
         ((ERROR_DECAY_MS - (now_ms - self.error_ms)) / ERROR_DECAY_MS).clamp(0.0, 1.0) as f32
+    }
+}
+
+/// What the stock gametype script does to the map's brush models before a
+/// client walks: `_gameobjects::main` `delete()`s every entity carrying a
+/// `script_gameobjectname` the gametype did not list, and a deleted
+/// `script_brushmodel` takes its brushes out of the clip (AGENTS.md, "A
+/// submodel's brushes are in the clip only while its entity is linked").
+/// Copy of `crates/server/tests/playerstate_slope_ab.rs`'s.
+pub fn unlink_gameobjects(world: &CollisionWorld, entities: &str, gametype: &str) {
+    let allowed: &[&str] = match gametype {
+        "sd" => &["sd", "bombzone", "blocker"],
+        g => &[g][..],
+    };
+    for block in vcod_common::bsp::entity_blocks(entities) {
+        let Some(name) = block.get("script_gameobjectname") else {
+            continue;
+        };
+        if allowed.contains(&name.as_str()) {
+            continue;
+        }
+        if let Some(n) = block
+            .get("model")
+            .and_then(|m| m.strip_prefix('*'))
+            .and_then(|n| n.parse::<usize>().ok())
+        {
+            world.set_model_linked(n, false);
+        }
     }
 }
 

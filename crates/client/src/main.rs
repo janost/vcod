@@ -334,15 +334,21 @@ enum Phase {
 /// Everything `--connect` needs to draw a map.
 struct LivePhase {
     world: collision::CollisionWorld,
+    /// Configstring 7's weapons, for prediction.
+    weapons: Vec<Option<weapon::WeaponDef>>,
     scene: entities::EntityScene,
     events: net::events::EventTracker,
     clock: ServerClock,
     last_loop_snap: Option<u32>,
 }
 
-fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp) -> Phase {
+fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport>) -> Phase {
+    let world = collision::CollisionWorld::build(bsp, &props::collision_tris(fs, &bsp.entities));
+    let gametype = net::info_value_for_key(net.configstring(0), "g_gametype").unwrap_or("");
+    play::predict::unlink_gameobjects(&world, &bsp.entities, gametype);
     Phase::Live(Box::new(LivePhase {
-        world: collision::CollisionWorld::build(bsp, &props::collision_tris(fs, &bsp.entities)),
+        world,
+        weapons: vcod_common::weapon_table::from_configstring(fs, net.configstring(7)),
         scene: entities::EntityScene::new(),
         events: net::events::EventTracker::new(),
         clock: ServerClock::new(),
@@ -362,6 +368,8 @@ enum Mode {
         input: Box<play::input::PlayInput>,
         clock: play::cmds::CmdClock,
         ring: play::cmds::CmdRing,
+        /// Boxed to keep the variants a similar size.
+        predictor: Box<play::predict::Predictor>,
         phase: Phase,
         /// Boxed to keep the variants a similar size.
         join: Box<play::join::Join>,
@@ -597,8 +605,20 @@ fn hud_lines(
                 ps.on_ground as u8
             ));
         }
-        Mode::Online { net, cam, .. } => {
+        Mode::Online {
+            net,
+            cam,
+            predictor,
+            ..
+        } => {
             lines.push(cam_line("online", cam.pos, cam.yaw, cam.pitch));
+            let error = predictor.drawn_error();
+            lines.push(format!(
+                "pred {} miss {} err {:.1}",
+                if error.is_some() { "on" } else { "off" },
+                predictor.misses,
+                error.unwrap_or(0.0)
+            ));
             lines.push(format!(
                 "net: {:?}  drops {}",
                 net.state(),
@@ -788,6 +808,7 @@ fn main() -> Result<()> {
                 input: Box::default(),
                 clock: play::cmds::CmdClock::default(),
                 ring: play::cmds::CmdRing::default(),
+                predictor: Box::default(),
                 phase: Phase::Connecting {
                     since: Instant::now(),
                 },
@@ -976,7 +997,7 @@ fn load_map(
     if let Some(window) = window {
         window.set_title(title);
     }
-    let phase = live_phase(fs, &bsp);
+    let phase = live_phase(fs, &bsp, net);
     r.load_world(&bsp, fs)?;
     *world = Some(World { bsp });
     Ok(phase)
@@ -1580,6 +1601,7 @@ impl ApplicationHandler for App {
                         input,
                         clock: cmd_clock,
                         ring,
+                        predictor,
                         phase,
                         join,
                         menu_view,
@@ -1605,6 +1627,14 @@ impl ApplicationHandler for App {
                                         &self.fs,
                                         net::info_value_for_key(net.configstring(3), "n"),
                                     );
+                                }
+                                net::NetEvent::ConfigstringChanged(7) => {
+                                    if let Phase::Live(live) = phase {
+                                        live.weapons = vcod_common::weapon_table::from_configstring(
+                                            &self.fs,
+                                            net.configstring(7),
+                                        );
+                                    }
                                 }
                                 // `j/k/l` is quick chat; `s <idx>` is the announcer.
                                 net::NetEvent::ServerCommand(ref tokens) => {
@@ -1690,6 +1720,7 @@ impl ApplicationHandler for App {
                         if gamestate_ready {
                             cmd_clock.reset();
                             ring.clear();
+                            predictor.reset();
                         }
                         // Only with the map up: the first cmd after a gamestate
                         // is what enters the client into the world
@@ -1833,6 +1864,7 @@ impl ApplicationHandler for App {
                                 } else {
                                     let LivePhase {
                                         world,
+                                        weapons,
                                         scene,
                                         events,
                                         clock,
@@ -1929,11 +1961,26 @@ impl ApplicationHandler for App {
                                             }
                                         }
                                     }
+                                    let predicted = if ps_client == client_num {
+                                        net.snapshots().newest().and_then(|s| {
+                                            predictor
+                                                .predict(p, &s.ps, ring, world, weapons, local_ms)
+                                        })
+                                    } else {
+                                        predictor.reset();
+                                        None
+                                    };
+                                    if let Some(v) = &predicted {
+                                        cam.pos = v.origin + Vec3::Z * v.view_height;
+                                    }
                                     if !snapshot_view {
-                                        let delta = net.snapshots().newest().map_or([0; 3], |s| {
-                                            net::DELTA_ANGLE_FIELDS
-                                                .map(|name| s.ps.field_i32(p, name))
-                                        });
+                                        let delta = match &predicted {
+                                            Some(v) => v.delta_angles,
+                                            None => net.snapshots().newest().map_or([0; 3], |s| {
+                                                net::DELTA_ANGLE_FIELDS
+                                                    .map(|name| s.ps.field_i32(p, name))
+                                            }),
+                                        };
                                         (cam.yaw, cam.pitch) = own_view(input.raw_angles(), delta);
                                     }
 
