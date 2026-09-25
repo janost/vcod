@@ -841,21 +841,24 @@ VERIFIED: `setPlayerAngles` (player method 11, 0x44df0) calls
 (0x44e24..0x44e43). INFERRED: those two are the not-a-player error path, and
 the builtin is otherwise the vector read followed by `SetClientViewAngle`.
 
-The triggers, INFERRED from the call sites:
+The triggers:
 
-- the use key: `Cmd_Activate_f` sets the busy byte to 2 (section 4.1), and
-  the next `turret_think_client`, the same server frame's (12.7), finds it
-  not 1 (0x5235c) and releases;
-- death: a killed client's `sessionstate` leaves 0 in the stock
-  `CodeCallback_PlayerKilled`, a dead client still takes `ClientEndFrame`'s
-  live arm and keeps `pm_flags` 0x40000, and `turret_think_client` finds
-  `sessionstate` non-zero (0x5236b) and releases;
-- a respawn: `ClientSpawn` (0x426c4..0x426e2) tests `pm_flags & 0x40000` and
-  `eFlags & 0xC000` and calls `G_ClientStopUsingTurret` on
-  `g_entities[viewlocked_entNum]`, which is the path a switch to spectator
-  takes if it goes through `ClientSpawn`;
-- deleting the turret: `G_FreeEntity` calls `G_FreeTurret` (0x66b6f), which
-  releases any gunner and clears the record.
+- INFERRED, from the call sites: the use key. `Cmd_Activate_f` sets the busy
+  byte to 2 (section 4.1), and the next `turret_think_client` finds it not 1
+  (0x5235c) and releases. VERIFIED, 12.7: that next `turret_think_client` is
+  the same server frame's; the fixture's use cmd `st` 37282 (fixture line
+  1272) is released on snapshot 37300 (fixture line 1274), one snapshot
+  later and no cmd between.
+- INFERRED, from the call sites: death. A killed client's `sessionstate`
+  leaves 0 in the stock `CodeCallback_PlayerKilled`, a dead client still
+  takes `ClientEndFrame`'s live arm and keeps `pm_flags` 0x40000, and
+  `turret_think_client` finds `sessionstate` non-zero (0x5236b) and releases.
+- INFERRED, from the call sites: a respawn. `ClientSpawn` (0x426c4..0x426e2)
+  tests `pm_flags & 0x40000` and `eFlags & 0xC000` and calls
+  `G_ClientStopUsingTurret` on `g_entities[viewlocked_entNum]`, which is the
+  path a switch to spectator takes if it goes through `ClientSpawn`.
+- INFERRED, from the call sites: deleting the turret. `G_FreeEntity` calls
+  `G_FreeTurret` (0x66b6f), which releases any gunner and clears the record.
 
 VERIFIED: `ClientDisconnect` (0x42aac) calls `G_FreeEntity` (0x42bfc).
 VERIFIED: `G_FreeEntity` holds a compare of `r.ownerNum` against the freed
@@ -1381,6 +1384,32 @@ may carry 0xC000; no capture covers it.
   product rounds to 54 first.
 - A gun with no `stopFireSound` keeps its loop on through the frame the
   timer runs out, as section 6.4's `je` past the clear reads.
+- INFERRED: every gunner's aim and fire run in `turret_think_client` before
+  any gunner's round is traced, so two gunners in each other's arc can both
+  fire in the same frame. Retail traces and delivers each gunner's hit
+  inside that gunner's own `ClientEndFrame` pass instead, so its second
+  gunner traced is already dead before its own shot runs; a frame like that
+  can end in a mutual kill here that retail's per-client order forecloses.
+- The hit trace poses a gunner in the view-yaw frame `place_gunner` wrote
+  that frame. INFERRED, from the `AxisToAngles` call 7.1 reads: retail's
+  placement carries the body yaw off the gun's own axis instead, which
+  diverges from the view yaw by up to roughly 45 degrees at the arc's
+  edges; unmeasured, no capture pins which pose a live round is traced
+  against.
+- The gunner's `ps.eFlags` bit 0x400 (`EF_FIRING`) is set only on the frame
+  `fire_tick` actually fires the gun, tied to the gun's own cooldown, where
+  12.4 infers it as the generic attack-bit flag a firing entity carries for
+  as long as the trigger is held. INFERRED and unmeasured: whether retail's
+  flag ever separates from the gun's own shot for a turret gunner
+  specifically is not covered by any capture.
+- The turret pass's damage callback (`deliver_hits`) runs after the tick's
+  one `take_link_ops` drain, so a `linkTo`/`unlink` or a client spawn its
+  script notify queues waits for the next tick's drain rather than reaching
+  this frame's wire.
+- `activate_ent` drops an unusable turret before the trace pass that would
+  otherwise clip it against the world, where retail's use/hint loop traces
+  every candidate first and only then steps past one `G_IsTurretUsable`
+  refuses (`crates/server/src/game/item.rs`).
 
 ### 13.1 The replay against the capture
 
