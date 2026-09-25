@@ -35,9 +35,9 @@ combat effects.
   weapon but no buttons yet, so you cannot fire or press use. It renders
   every player as an assembled soldier playing the server-driven animations.
   Kill feed, chat, scoreboard, sounds, tracers, impacts and muzzle flashes
-  come from the same events the retail client reads. It downloads every pak the server references and the
-  install lacks, the way the retail client does, so mod paks arrive along with
-  the map's own.
+  come from the same events the retail client reads. It downloads every pak
+  the server references and the install lacks, the way the retail client
+  does, so mod paks arrive along with the map's own.
 - `vcod-server` answers server browsers, accepts connections and hands out the
   gamestate, so a retail 1.1 client loads the map, then keeps it alive with
   delta-compressed snapshots against the client's last acked frame. It runs

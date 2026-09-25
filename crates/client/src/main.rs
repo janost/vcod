@@ -53,14 +53,15 @@ struct Args {
     /// Headless: connect to a CoD server, dump the gamestate, then exit
     #[arg(long)]
     net_probe: Option<String>,
-    /// Connect to a CoD server (ip:port) and spectate
+    /// Connect to a CoD server (ip:port) and join it through the stock team
+    /// and weapon menus; spectator is one of the team menu's choices
     #[arg(long)]
     connect: Option<String>,
     /// Answer the stock team menu with this after --connect
-    #[arg(long)]
+    #[arg(long, requires = "connect")]
     team: Option<String>,
     /// Answer the stock weapon menu with this weapon file name (e.g. m1carbine_mp)
-    #[arg(long)]
+    #[arg(long, requires = "connect")]
     weapon: Option<String>,
     /// Overwrite the committed gamestate.bin fixture with the --net-probe capture.
     /// Off by default: the parser tests pin that file, and a capture from another
@@ -363,8 +364,9 @@ enum Mode {
         phase: Phase,
         /// Boxed to keep the variants a similar size.
         join: Box<play::join::Join>,
-        /// The open script menu as drawn; rebuilt when `join` opens another.
-        menu_view: Option<hud::menu::MenuView>,
+        /// The open script menu as drawn, keyed by the configstring name it
+        /// was built for; rebuilt when `join` opens another.
+        menu_view: Option<(String, hud::menu::MenuView)>,
     },
     Walk {
         /// Boxed to keep the variants a similar size.
@@ -798,6 +800,7 @@ fn main() -> Result<()> {
         println!("LMB fire, RMB aim, R reload, 1-6 weapons");
     } else if args.connect.is_some() {
         println!("WASD move (server-authoritative), mouse look; look up/down to ascend/descend");
+        println!("M opens the script menu; 0-9 or arrows + Enter pick, Esc closes");
     } else {
         println!("WASD + Space/Ctrl fly, Shift boost, scroll changes speed");
     }
@@ -1265,7 +1268,7 @@ impl App {
         else {
             return false;
         };
-        let Some(view) = menu_view else {
+        let Some((_, view)) = menu_view else {
             if code == KeyCode::KeyM {
                 join.open_main(net.configstrings());
                 return true;
@@ -1602,12 +1605,15 @@ impl ApplicationHandler for App {
                         match join.open() {
                             None => *menu_view = None,
                             Some(open)
-                                if menu_view.as_ref().is_some_and(|v| v.title == open.name) => {}
+                                if menu_view
+                                    .as_ref()
+                                    .is_some_and(|(name, _)| *name == open.name) => {}
                             Some(open) => {
                                 *menu_view = self.menus.get(&self.fs, &open.name).map(|menu| {
-                                    hud::menu::view(menu, &self.localized, |c| {
+                                    let view = hud::menu::view(menu, &self.localized, |c| {
                                         join.cvars.get(c, net.configstrings())
-                                    })
+                                    });
+                                    (open.name.clone(), view)
                                 });
                             }
                         }
@@ -1893,7 +1899,7 @@ impl ApplicationHandler for App {
                                         protocol: p,
                                         server_time: newest.map_or(0, |s| s.server_time),
                                         fs: &self.fs,
-                                        menu: menu_view.as_ref(),
+                                        menu: menu_view.as_ref().map(|(_, v)| v),
                                     };
 
                                     // Events use the newest snapshot, not the interpolation

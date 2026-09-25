@@ -30,7 +30,8 @@ pub struct MenuView {
 
 /// Builds a [`MenuView`]: rows from `menu.choices(cvar)`, labels through
 /// `loc.translate`, each row's `key` matched against `menu.exec_keys` by
-/// its response text.
+/// its response text. The selection starts on the first keyed row, since
+/// unkeyed rows are tabs like the team menu's "View Map"; row 0 if none is.
 pub fn view(menu: &Menu, loc: &Localized, cvar: impl Fn(&str) -> Option<String>) -> MenuView {
     let rows = menu
         .choices(cvar)
@@ -48,12 +49,13 @@ pub fn view(menu: &Menu, loc: &Localized, cvar: impl Fn(&str) -> Option<String>)
                 key,
             }
         })
-        .collect();
+        .collect::<Vec<MenuRow>>();
+    let selected = rows.iter().position(|r| r.key.is_some()).unwrap_or(0);
     MenuView {
         title: menu.name.clone(),
         background: menu.background.clone(),
         rows,
-        selected: 0,
+        selected,
     }
 }
 
@@ -210,6 +212,26 @@ mod tests {
         });
         assert_eq!(v.rows.len(), 1);
         assert_eq!(v.rows[0].response, "m1garand_mp");
+    }
+
+    #[test]
+    fn selection_starts_on_the_first_keyed_row() {
+        let m = vcod_common::menu::parse(
+            r#"{ menuDef { name "team_x"
+      itemDef { name "v" visible 1 text "View Map" action { scriptMenuResponse "viewmap"; } }
+      itemDef { name "a" visible 1 text "Allies" action { scriptMenuResponse "allies"; } }
+      execKey "1" { scriptMenuResponse "allies"; }
+    } }"#,
+        );
+        let v = view(&m, &Localized::default(), |_| None);
+        assert_eq!(v.selected_response(), Some("allies"));
+
+        let unkeyed = vcod_common::menu::parse(
+            r#"{ menuDef { name "x"
+      itemDef { name "v" visible 1 text "View Map" action { scriptMenuResponse "viewmap"; } }
+    } }"#,
+        );
+        assert_eq!(view(&unkeyed, &Localized::default(), |_| None).selected, 0);
     }
 
     #[test]
