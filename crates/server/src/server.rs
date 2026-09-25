@@ -2919,6 +2919,7 @@ impl Server {
             mirror_vitals(&mut self.clients, rt);
             for c in self.clients.iter_mut() {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
+                    sim.update_contents();
                     sim.end_frame(self.sv_time_ms);
                 }
             }
@@ -3110,9 +3111,17 @@ impl Server {
     /// `send_snapshots` writes. The shots, swings and throws the weapon step
     /// took land in `pending_attacks`, which the combat path drains.
     fn replay_moves(&mut self) -> Vec<MoveSummary> {
-        use vcod_common::movetrace::MoveWorld;
+        use vcod_common::movetrace::{Body, MoveWorld};
         use vcod_common::pmove::weapon::{EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
-        let collision = self.world.as_ref().map(|w| MoveWorld::bare(&w.collision));
+        let collision = self.world.as_ref().map(|w| &w.collision);
+        // Every client's body, the mover's own rewritten after each of its
+        // steps: retail relinks after each `Pmove`.
+        let mut bodies: Vec<Body> = self
+            .clients
+            .iter()
+            .enumerate()
+            .filter_map(|(s, c)| c.as_ref()?.sim.as_ref()?.body(s as u32))
+            .collect();
         let weapons = self.weapon_table.clone();
         let now_ms = self.sv_time_ms;
         let mut moved = vec![MoveSummary::default(); self.clients.len()];
@@ -3190,9 +3199,11 @@ impl Server {
                         raised.extend(sim.step(
                             &step,
                             msec as f32 / 1000.0,
-                            collision,
+                            collision.map(|w| MoveWorld::new(w, &bodies, slot as u32)),
                             weapons.defs(),
                         ));
+                        bodies.retain(|b| b.entity != slot as u32);
+                        bodies.extend(sim.body(slot as u32));
                     }
                     for e in &raised {
                         let weapon = sim.ps.weapon;

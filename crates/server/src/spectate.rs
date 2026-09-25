@@ -2,7 +2,7 @@
 
 use crate::game::host::SimOp;
 use glam::Vec3;
-use vcod_common::movetrace::MoveWorld;
+use vcod_common::movetrace::{Body, MoveWorld, CONTENTS_BODY};
 use vcod_common::net::msg::{self, UserCmd};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::net::trajectory;
@@ -16,14 +16,9 @@ use vcod_common::weapon::WeaponDef;
 /// (`crates/client/src/entities.rs` carries the table).
 const ET_PLAYER: i32 = 1;
 
-/// A player entity's `eFlags`, `solid` and `pos.trDuration`, transcribed from
-/// the retail two-probe capture rather than derived. `solid` decodes as
-/// `(maxs[2] + 32) << 16 | -mins[2] << 8 | half width`, which for 6684943 is
-/// a 70-unit standing box one unit deep and 15 wide -- the pmove box, and the
-/// same for every player, so a constant is faithful until something makes it
-/// vary. INFERRED, from that one value against the known box.
+/// A player entity's `eFlags` and `pos.trDuration`, transcribed from the
+/// retail two-probe capture rather than derived.
 const PLAYER_EFLAGS: i32 = 16;
-const PLAYER_SOLID: i32 = 6684943;
 const PLAYER_TR_DURATION: i32 = 50;
 
 const PMF_OWN_VIEW: i32 = 0x40000;
@@ -355,6 +350,11 @@ pub struct ClientSim {
     /// The last cmd's angles, retail's `pers.cmd.angles`, which
     /// `set_view_angle` rewrites `delta_angles` against.
     last_cmd_angles: [i32; 3],
+    /// `r.contents`: `CONTENTS_BODY` while alive and playing, else 0.
+    pub contents: u32,
+    /// The entity `solid`, packed at the last link from the box and contents
+    /// then, never at end frame (docs/research/cod11-player-clip.md).
+    pub linked_solid: i32,
 }
 
 /// Everything the animscript needs that the sim does not own: the script
@@ -441,6 +441,8 @@ impl ClientSim {
             mounted_on: None,
             firing: false,
             last_cmd_angles: cmd_angles,
+            contents: 0,
+            linked_solid: 0,
         }
     }
 
@@ -557,6 +559,42 @@ impl ClientSim {
         // camera's included: retail's capture reads 16 on a respawn's
         // spectator frame and 24 on the next one (map-cycle doc, 8.2).
         self.teleport_bit = !self.teleport_bit;
+        // `G_SetClientContents`, then the spawn's link.
+        self.contents = if mode == PmType::Normal {
+            CONTENTS_BODY
+        } else {
+            0
+        };
+        self.relink();
+    }
+
+    /// `ClientEndFrame`'s contents write, once per frame before `end_frame`.
+    pub fn update_contents(&mut self) {
+        self.contents = if self.pm_type == PmType::Normal && !self.dead {
+            CONTENTS_BODY
+        } else {
+            0
+        };
+    }
+
+    /// `SV_LinkEntity`'s `solid`, off the box and contents at the link.
+    fn relink(&mut self) {
+        self.linked_solid = if self.contents & (CONTENTS_BODY | 1) != 0 {
+            Body::pack_solid(self.ps.mins(), self.ps.maxs())
+        } else {
+            0
+        };
+    }
+
+    /// What the other movers clip against, `None` while the contents are 0.
+    pub fn body(&self, slot: u32) -> Option<Body> {
+        (self.contents != 0).then(|| Body {
+            entity: slot,
+            origin: self.ps.origin,
+            mins: self.ps.mins(),
+            maxs: self.ps.maxs(),
+            contents: self.contents,
+        })
     }
 
     /// The wire word for any mode: the base, the per-spawn teleport bit, the
@@ -661,6 +699,7 @@ impl ClientSim {
             if let Some(w) = world {
                 pmove::dead_move(&mut self.ps, &w, dt);
             }
+            self.relink();
             return Vec::new();
         }
         // `ClientThink_real`'s `sessionstate` 3 arm jumps to the function's
@@ -722,9 +761,11 @@ impl ClientSim {
                     };
                     self.add_event(e.event, parm);
                 }
+                self.relink();
                 return events;
             }
         }
+        self.relink();
         // A spectator raises none: it has no weapon and no footsteps.
         Vec::new()
     }
@@ -1195,7 +1236,8 @@ impl ClientSim {
         set("eType", ET_PLAYER);
         set("clientNum", slot as i32);
         set("eFlags", self.eflags());
-        set("solid", PLAYER_SOLID);
+        // Packed at link time: docs/research/cod11-player-clip.md.
+        set("solid", self.linked_solid);
         set("legsAnim", self.anim.legs());
         // The torso does travel: the shoot, reload and putaway poses are the
         // weapon's, and the next task is what gives it a value.
