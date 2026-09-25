@@ -675,27 +675,39 @@ probe's own view there.
 
 VERIFIED, `TeleportPlayer`: each temp entity takes the player's
 `s.clientNum` (gentity +0x90, the entity netfield at offset 144; stores
-0x513b7 and 0x513d3). The 200 is made at `ps.origin` (`client+0x14`,
-0x513a6) and the 199 at the destination argument before the one-unit lift
-(0x513c5). VERIFIED, `G_TempEntity` (0x67938): no `svFlags` store, and the
-origin goes through three truncating `fistp`/`fild` pairs before
-`G_SetOrigin` (0x67995..0x67a0c). INFERRED: the pair is culled by PVS like
-any entity, not broadcast, and carries an origin snapped toward zero.
+0x513b7 and 0x513d3). VERIFIED: the 200's `G_TempEntity` call (0x513aa) is
+handed `ps.origin` (`client+0x14`, 0x513a6). VERIFIED: the 199's call
+(0x513c6) is handed the destination argument (0x513c5). INFERRED: that
+argument is read before the one-unit lift at 0x51414, so the 199 sits at the
+unlifted destination.
+
+VERIFIED, `G_TempEntity` (0x67938): no `svFlags` store. VERIFIED: its origin
+goes through three truncating `fistp`/`fild` pairs (0x67995..0x679fe).
+VERIFIED: it calls `G_SetOrigin` (0x67a0c). INFERRED: the snapped origin is
+the one `G_SetOrigin` stores, so the pair carries an origin snapped toward
+zero. INFERRED: the pair is culled by PVS like any entity, not broadcast.
 
 VERIFIED, `SetClientViewAngle` (0x41e30): a test of `ps.pm_flags & 1`
-(0x41e56) and of `ps.eFlags` byte 1 against 0xc0 (0x41e60) in front of a
-block that reads `ps.proneDirection` (+0x368) through `AngleDelta` and
-`AngleNormalize180`; then, per axis, `ANGLE2SHORT(angle)` truncated, masked
-with 0xffff, minus the dword at `client+0x20f8 + 4i`, stored to
-`ps.delta_angles[i]` (0x42060..0x42098); then the angles stored to the
-entity's +0x140..0x148 and to `ps.viewangles` (0x4209f..0x420e1). The ps
-offsets are the CoDMP.exe playerstate netfield table's (`pm_flags` 12,
-`eFlags` 128, `delta_angles` 72, `viewangles` 192, `proneDirection` 872).
-INFERRED: `client+0x20f8` is `pers.cmd.angles`, the last cmd's; the prone
-block clamps the asked angles to the prone cone only for a prone player off
-a gun; +0x140 is `r.currentAngles`. VERIFIED: `setPlayerAngles` (player
-method 11, 0x44df0) is `Scr_GetVector(0)` and one `SetClientViewAngle` call
-(0x44e60).
+(0x41e56). VERIFIED: a test of `ps.eFlags` byte 1 against 0xc0 (0x41e60).
+VERIFIED: a block reads `ps.proneDirection` (+0x368) through `AngleDelta`
+and `AngleNormalize180` (0x41e76..0x41e90). VERIFIED: a per-axis loop
+stores `ANGLE2SHORT(angle)`, truncated, masked with 0xffff, minus the dword
+at `client+0x20f8 + 4i`, to `ps.delta_angles[i]` (0x42060..0x42098).
+VERIFIED: the angles are stored to the entity's +0x140..0x148 and to
+`ps.viewangles` (0x4209f..0x420e1). VERIFIED: the ps offsets are the
+CoDMP.exe playerstate netfield table's (`pm_flags` 12, `eFlags` 128,
+`delta_angles` 72, `viewangles` 192, `proneDirection` 872). INFERRED: the
+two tests guard the `proneDirection` block, which runs only for a prone
+player off a gun and clamps the asked angles to the prone cone before the
+loop. INFERRED: the loop runs after that block and the angle stores after
+the loop. INFERRED: `client+0x20f8` is `pers.cmd.angles`, the last cmd's.
+INFERRED: +0x140 is `r.currentAngles`.
+
+VERIFIED: `setPlayerAngles` (player method 11, 0x44df0) calls
+`Scr_GetVector(0)` (0x44e56). VERIFIED: it calls `SetClientViewAngle`
+(0x44e60). VERIFIED: its only other calls are `va` and `Scr_Error`
+(0x44e24..0x44e43). INFERRED: those two are the not-a-player error path, and
+the builtin is otherwise the vector read followed by `SetClientViewAngle`.
 
 The triggers, INFERRED from the call sites:
 

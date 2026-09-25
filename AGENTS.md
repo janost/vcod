@@ -541,7 +541,7 @@ engineering setup works.
   weapon ops, then the link ops (`linkTo`, `unlink`), then the re-anchor that
   pins every linked client to its parent plus the offset and releases a link
   whose parent is gone, then the sim ops the script left (events, `setOrigin`,
-  the damage the callback did), then the vitals mirror (health, and the damage
+  `setPlayerAngles`, the damage the callback did), then the vitals mirror (health, and the damage
   feedback `P_DamageFeedback` computes from the health the hit left) and
   `end_frame`, then `ClientEndFrame`'s aim trace per playing client, off the
   frame's final eye and aim with `pm_type` and `on_ground` mirrored again
