@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use vcod_common::net::events::{byte_to_dir, GameEvent};
 use vcod_common::pk3::Pk3Fs;
+use vcod_common::weapon::WeaponDef;
 
 // EV_* ids from `cgame_mp_x86.dll` `eventnames[]` (VA 0x30077040), identical
 // in every MP module and in 1.5. The SP module's table diverges from 173 up.
@@ -219,9 +220,10 @@ pub struct ResolveCtx<'a> {
     /// 1-based CS7 weapon index to that weapon file's `worldFlashEffect`.
     /// Missing falls back to [`flash_effect_path`].
     pub weapon_flash: &'a HashMap<i32, String>,
-    /// The drawn viewmodel's `viewFlashEffect`, for playerState-ring fire
-    /// events (`entity_num == u32::MAX`); `None` while no viewmodel is drawn.
-    pub view_flash: Option<&'a str>,
+    /// Configstring 7's weapons while a viewmodel is drawn, for the
+    /// `viewFlashEffect` of playerState-ring fire events
+    /// (`entity_num == u32::MAX`); `None` while none is drawn.
+    pub view_flash: Option<&'a [Option<WeaponDef>]>,
 }
 
 /// Class-based guess when `ctx.weapon_flash` has no entry. Every MG42/PTRS41
@@ -313,15 +315,26 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
         | EV_FIRE_QUADBARREL_1
         | EV_FIRE_QUADBARREL_2 => match ctx.muzzles.get(&ev.entity_num) {
             Some(&(pos, dir)) => {
-                let view = ctx.view_flash.filter(|_| ev.entity_num == u32::MAX);
-                let path = view
-                    .or_else(|| ctx.weapon_flash.get(&ev.weapon).map(String::as_str))
-                    .unwrap_or_else(|| flash_effect_path(ev.event))
-                    .to_string();
-                vec![Resolved::Spawn {
-                    path,
-                    at: SpawnAt::Directed { pos, dir },
-                }]
+                let path = match ctx.view_flash.filter(|_| ev.entity_num == u32::MAX) {
+                    // First person draws the view flash or nothing
+                    // (`CG_MuzzleFlash`, doc section 5b).
+                    Some(weapons) => usize::try_from(ev.weapon)
+                        .ok()
+                        .and_then(|i| weapons.get(i)?.as_ref()?.view_flash_effect.clone()),
+                    None => Some(
+                        ctx.weapon_flash
+                            .get(&ev.weapon)
+                            .cloned()
+                            .unwrap_or_else(|| flash_effect_path(ev.event).to_string()),
+                    ),
+                };
+                match path {
+                    Some(path) => vec![Resolved::Spawn {
+                        path,
+                        at: SpawnAt::Directed { pos, dir },
+                    }],
+                    None => vec![Resolved::Known],
+                }
             }
             None => vec![Resolved::Known],
         },
@@ -740,8 +753,9 @@ mod tests {
         }
     }
 
-    /// First person flashes the view effect (`CG_MuzzleFlash`,
-    /// docs/research/cod11-events-and-fx.md 5b); anyone else's shot, the world one.
+    /// First person flashes the fired weapon's view effect, or nothing when
+    /// its file has none (`CG_MuzzleFlash`, docs/research/cod11-events-and-fx.md
+    /// 5b); anyone else's shot, the world one.
     #[test]
     fn view_fire_takes_the_view_flash() {
         let mut muzzles = HashMap::new();
@@ -749,22 +763,34 @@ mod tests {
         muzzles.insert(7u32, (Vec3::ZERO, Vec3::X));
         let mut weapon_flash = HashMap::new();
         weapon_flash.insert(5, "fx/muzzleflashes/thompson.efx".to_string());
+        let mut weapons = vec![None; 6];
+        weapons[5] = Some(WeaponDef {
+            view_flash_effect: Some("fx/muzzleflashes/thompsonview.efx".to_string()),
+            ..WeaponDef::default()
+        });
+        weapons[2] = Some(WeaponDef::default());
         let ctx = ResolveCtx {
             muzzles: &muzzles,
             weapon_flash: &weapon_flash,
-            view_flash: Some("fx/muzzleflashes/thompsonview.efx"),
+            view_flash: Some(&weapons),
         };
-        let path = |entity_num| {
+        let path = |entity_num, weapon| {
             let mut e = ev(EV_FIRE_WEAPON, 0, 0, [0.0; 3]);
             e.entity_num = entity_num;
-            e.weapon = 5;
+            e.weapon = weapon;
             match resolve_with(&e, &ImpactTable::default(), &ctx).remove(0) {
-                Resolved::Spawn { path, .. } => path,
+                Resolved::Spawn { path, .. } => Some(path),
+                Resolved::Known => None,
                 other => panic!("{other:?}"),
             }
         };
-        assert_eq!(path(u32::MAX), "fx/muzzleflashes/thompsonview.efx");
-        assert_eq!(path(7), "fx/muzzleflashes/thompson.efx");
+        assert_eq!(
+            path(u32::MAX, 5).as_deref(),
+            Some("fx/muzzleflashes/thompsonview.efx")
+        );
+        assert_eq!(path(u32::MAX, 2), None, "no viewFlashEffect, no flash");
+        assert_eq!(path(u32::MAX, 9), None, "not in configstring 7");
+        assert_eq!(path(7, 5).as_deref(), Some("fx/muzzleflashes/thompson.efx"));
     }
 
     /// Impact first, then tracer: the order `CG_BulletHitWall` runs them.

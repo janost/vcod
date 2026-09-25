@@ -246,12 +246,6 @@ impl OnlineView {
         let world = |v: Vec3| right * v.x * k + up * v.y * k - forward * v.z;
         Some((eye + world(pos), world(dir).normalize_or_zero()))
     }
-
-    /// The drawn weapon's `viewFlashEffect`; `None` while no viewmodel is drawn.
-    pub fn flash_effect(&self) -> Option<&str> {
-        self.flash?;
-        self.rig.as_ref()?.def.view_flash_effect.as_deref()
-    }
 }
 
 #[cfg(test)]
@@ -437,10 +431,6 @@ mod tests {
         assert_ne!(fired[0], fired[9], "the fire clip plays");
 
         assert!(view.flash.is_some(), "the gun has a tag_flash");
-        assert_eq!(
-            view.flash_effect(),
-            Some("fx/muzzleflashes/standardflashviewmp.efx")
-        );
 
         let mut sighted = ps(1, 82);
         sighted.ads_frac = 1.0;

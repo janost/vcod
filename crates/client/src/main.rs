@@ -1951,12 +1951,13 @@ impl ApplicationHandler for App {
                                             view_muzzle(cam.pos, cam_forward, cam_right, cam_up)
                                         });
                                     muzzles.insert(u32::MAX, (muzzle_pos, muzzle_dir));
-                                    // While following, the followed player's bullet hits
-                                    // carry `other_entity_num == ps_client`, and that body
-                                    // is excluded from the muzzle map, so key the view
-                                    // muzzle under `ps_client` too or they get no tracer.
-                                    if following {
-                                        muzzles.insert(ps_client as u32, (muzzle_pos, muzzle_dir));
+                                    // Bullet hits carry the shooter's number in
+                                    // `other_entity_num`, and the body the camera rides
+                                    // (ours, or the followed player's) is excluded from
+                                    // the muzzle map, so key the view muzzle under it too
+                                    // or its shots get no tracer.
+                                    if let Ok(num) = u32::try_from(skip_num) {
+                                        muzzles.insert(num, (muzzle_pos, muzzle_dir));
                                     }
 
                                     r.set_dynamic_models(&instances);
@@ -1989,16 +1990,21 @@ impl ApplicationHandler for App {
                                         let ctx = fx::registry::ResolveCtx {
                                             muzzles: &muzzles,
                                             weapon_flash: &weapon_flash,
-                                            view_flash: view.flash_effect(),
+                                            view_flash: vm.is_some().then_some(weapons.as_slice()),
                                         };
                                         // Our own ring plays off the prediction, and
-                                        // the snapshot's copy of it is skipped.
-                                        let own = ps_client == client_num
-                                            && pmove::predict::predictable(pm_type);
+                                        // the snapshot's copy of it is skipped. The
+                                        // frame we die or reach the intermission still
+                                        // skips the copies, then tracking stops.
+                                        let own = ps_client == client_num;
+                                        let predicting =
+                                            own && pmove::predict::predictable(pm_type);
                                         let mut evs = Vec::new();
                                         if !own {
                                             predicted_events.stop();
-                                        } else if let Some(v) = &predicted {
+                                        } else if let Some(v) =
+                                            predicted.as_ref().filter(|_| predicting)
+                                        {
                                             predicted_events.start_after(events.ps_sequence());
                                             let pred = &v.pred;
                                             evs.extend(
@@ -2025,6 +2031,9 @@ impl ApplicationHandler for App {
                                                 continue;
                                             }
                                             evs.push(ev);
+                                        }
+                                        if !predicting {
+                                            predicted_events.stop();
                                         }
                                         for ev in evs {
                                             self.ev_seen += 1;
