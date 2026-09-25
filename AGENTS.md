@@ -399,6 +399,41 @@ engineering setup works.
   what its `GAPS` let through is `docs/research/cod11-turrets.md` 13.1. The
   fixture is retail evidence and a run against ours overwrites it: move it to
   `tmp/` and `git checkout` the fixture directory after.
+  `--save-bump` and `--probe-bump-target` are the player-clip pair, one probe
+  each, and they need a third shell: `client-probes/probe_bump` runs as the
+  gametype under `tools/run_probe.sh` with `+set probe_teleport 1`, which puts
+  the axis `--probe-bump-target` client on a flat brush floor on mp_carentan
+  and the allied `--save-bump` walker 200 units behind it, both facing +x.
+  Start the gsc probe first, the target about 12 s later and the walker about
+  10 s after that, with `--probe-secs` 185 on the target and 170 on the
+  walker. Once it sees the walker on
+  its mark the target stands 35 s, crouches 25 s, stands 1.5 s (a prone
+  straight out of a crouch is sometimes refused) and lies prone 25 s; the
+  walker waits for the target's `solid` top byte to read each stance, then
+  walks into it head-on, glances past 20 units off the line and jumps at it
+  from rest 40 units out. It writes
+  `crates/server/tests/fixtures/playerstate/<map>-dm-bump-walker.txt`: every
+  `!cmd`, and a `!snap` per snapshot with the walker's movement fields and the
+  target entity's origin, velocity and `solid`. The overlap capture is the same
+  three shells with `+set probe_overlap 1` on the server, whose gsc
+  `setorigin`s the target onto the walker 12 s and 30 s after both are placed,
+  and `--capture-tag overlap` on the walker, which stands through the first
+  and walks through the second. The spectator-slot capture adds a plain
+  `--net-probe` started before the target, so it holds slot 0 and never
+  joins, and tags the walker `overlap-spectator`. Each run's `PROBE` lines go
+  to `-bump-script.txt`, `-bump-overlap-script.txt` and
+  `-bump-overlap-spectator-script.txt` beside the walker fixtures, with the
+  target's `BUMPT` lines, its own side of each push, appended as comments.
+  `crates/server/tests/bump_ab.rs` replays the walker's cmds on our pmove with
+  the target as a body, free-running per phase and rebased on retail's state
+  at every snapshot; `BUMP_REPORT=1` prints every row, `BUMP_TRACE=<ct>` prints
+  ours cmd by cmd into that clock, and the jump rows it lets through are its
+  named `GAPS`. `crates/server/tests/stuck_ab.rs` holds both overlap captures
+  and our server to the same push properties (`STUCK_REPORT=1`). What they
+  measured is `docs/research/cod11-player-clip.md` 9 and 10. All six files are
+  retail evidence: a walker run against ours overwrites the untagged fixture
+  and refuses the tagged ones without `--overwrite-fixture`, so move them to
+  `tmp/` and `git checkout` the fixture directory after.
   A plain `--net-probe` also prints every change to an entity's `pos`/`apos`
   trajectory group, which is the mover half of the same arrangement:
   `client-probes/probe_mover.gsc` under `run_probe.sh` in one shell calls each
@@ -514,8 +549,10 @@ engineering setup works.
   `map_rotate` line an earlier frame's script queued reloads the level before
   anything else runs), then expired clients, then the bots queue their cmds,
   then the clock advances, then each client's queued usercmds (`replay_moves`,
-  one pmove step per cmd, which is where the weapon machine queues a frame's
-  shots, swings and throws; a client's cmds after a use press wait for the
+  one pmove step per cmd against every other client's capsule, the mover's
+  own entry in that body list rewritten after each of its steps so a later
+  slot moves against an earlier one's new position; it is also where the
+  weapon machine queues a frame's shots, swings and throws; a client's cmds after a use press wait for the
   touch pass and run in a second round, so a mount lands inside the use cmd,
   and the anim update also runs per round, off that round's last cmd). Each cmd's origin, `pm_type`, `on_ground`, view
   yaw, buttons, the `ps.weapon` a move switched to and the `clipOnly` weapon a
@@ -553,9 +590,11 @@ engineering setup works.
   pins every linked client to its parent plus the offset and releases a link
   whose parent is gone, then the sim ops the script left (events, `setOrigin`,
   `setPlayerAngles`, the damage the callback did), then the vitals mirror (health, and the damage
-  feedback `P_DamageFeedback` computes from the health the hit left) and
-  `end_frame`, then `ClientEndFrame`'s aim trace per playing client, off the
-  frame's final eye and aim with `pm_type` and `on_ground` mirrored again
+  feedback `P_DamageFeedback` computes from the health the hit left), then
+  slot by slot the contents write, `StuckInClient`'s scan for a live player
+  (the push and its CORPSE mark, which reach the wire `solid` only at the
+  pushed player's next cmd) and `end_frame`, then `ClientEndFrame`'s aim
+  trace per playing client, off the frame's final eye and aim with `pm_type` and `on_ground` mirrored again
   beside it, whose fire wakes its waiters at the next tick's script frame,
   and beside it the cursor hint for the item the use key would pick now,
   then each gunner's `turret_think_client` (the gunner half of a release
@@ -976,6 +1015,15 @@ never pasted decompiler output or disassembly listings.
   every sleep overshoot accumulate, and under load `serverTime` ran 5-10%
   slow against a probe's wall clock: a map-change capture that expected the
   rotation at 120 s ran out of its 150 s before it came.
+- A player is solid only while `r.contents` says so, and the wire `solid` is
+  written at link time. The end frame writes the contents (BODY while
+  playing, 0 dead, spectating or at intermission, CORPSE on a player
+  `StuckInClient` pushed), but `SV_LinkEntity` packs `solid` only at the link
+  after each cmd's move and at spawn, never at end frame, so a stuck player's
+  `solid` reads 0 one cmd late and a client that sends no cmds keeps its last
+  one. The link also clamps `-mins.z` to at least 1, so a client decodes a
+  player's box one unit below its feet (`docs/research/cod11-player-clip.md`,
+  1.2 and 4).
 - An item's `count` field is its reserve and 0 means "not set", not "empty":
   a placed weapon with no `count` draws `dropAmmoMin..Max`, and a drop writes
   -1 for an empty reserve or clip so the pickup does not draw one

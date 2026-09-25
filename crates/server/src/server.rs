@@ -10,13 +10,15 @@ use crate::configstrings;
 use crate::console;
 use crate::game::host::{ClientEvent, SpawnMode};
 use crate::game::script;
+use crate::game::stuck::{stuck_in_client, StuckView};
 use crate::game::temp_entity;
-use crate::spectate::ClientSim;
+use crate::spectate::{ClientSim, PmType};
 use crate::world::{TestEntities, World};
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+use vcod_common::movetrace::CONTENTS_CORPSE;
 use vcod_common::net::connectionless::{build_oob, parse_connect, parse_oob, Info};
 use vcod_common::net::gamestate::{self, Gamestate};
 use vcod_common::net::huffman::Huffman;
@@ -309,7 +311,11 @@ fn mirror_vitals(clients: &mut [Option<Client>], rt: &script::ScriptRuntime) {
                 let v = rt.client_vitals(slot);
                 sim.health = v.health;
                 sim.max_health = v.max_health;
-                sim.dead = v.dead;
+                if v.dead {
+                    sim.die();
+                } else {
+                    sim.dead = false;
+                }
             }
         }
     }
@@ -1325,6 +1331,20 @@ impl Server {
         }
     }
 
+    /// Queues a client `setorigin` as the script frame would, applied at the
+    /// next tick's sim-op pass: after that tick's moves and before its end
+    /// frame. Test-facing: the stuck gate overlaps two players the way
+    /// `probe_bump.gsc` did on retail.
+    pub fn test_script_set_origin(&mut self, slot: usize, origin: [f32; 3]) {
+        let rt = self
+            .script
+            .as_mut()
+            .expect("a script runtime to queue the setorigin on");
+        rt.host
+            .client_sim_ops
+            .push((slot, crate::game::host::SimOp::SetOrigin { origin }));
+    }
+
     /// Moves the entity numbered `num` as script would. Test-facing, like
     /// `test_mount`: carentan's second gun sits out of the first one's arc.
     pub fn test_place_entity(&mut self, num: u32, origin: [f32; 3], angles: [f32; 3]) {
@@ -1742,6 +1762,37 @@ impl Server {
             }
             log::info!("client {slot} {name:?} connected (bot, team {team})");
         }
+    }
+
+    /// One slot's `StuckInClient` view: `None` for a free slot, `own_view`
+    /// false for a connected client with no sim yet, a spectator or an
+    /// intermission client.
+    fn stuck_view(c: &Option<Client>) -> Option<StuckView> {
+        let client = c.as_ref()?;
+        let Some(sim) = client.sim.as_ref() else {
+            return Some(StuckView {
+                own_view: false,
+                playing: false,
+                health: 0,
+                contents: 0,
+                origin: glam::Vec3::ZERO,
+                mins: glam::Vec3::ZERO,
+                maxs: glam::Vec3::ZERO,
+                vel_xy: glam::Vec2::ZERO,
+                speed: 0.0,
+            });
+        };
+        Some(StuckView {
+            own_view: sim.pm_type == PmType::Normal,
+            playing: sim.pm_type == PmType::Normal && !sim.dead,
+            health: sim.health,
+            contents: sim.contents,
+            origin: sim.ps.origin,
+            mins: sim.ps.mins(),
+            maxs: sim.ps.maxs(),
+            vel_xy: sim.ps.velocity.truncate(),
+            speed: vcod_common::pmove::SPEED_RUN,
+        })
     }
 
     /// What one bot's body sees this tick, from its sim and the weapon
@@ -2917,10 +2968,44 @@ impl Server {
                 self.sv_time_ms,
             );
             mirror_vitals(&mut self.clients, rt);
-            for c in self.clients.iter_mut() {
-                if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-                    sim.end_frame(self.sv_time_ms);
+            // `G_RunFrame`'s own slot order (0x50ab0-0x50ad7), not arrival
+            // order (docs/research/cod11-player-clip.md 4.2, 6). No link
+            // follows a CORPSE write here.
+            for slot in 0..self.clients.len() {
+                let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
+                    continue;
+                };
+                sim.update_contents();
+                let live = sim.pm_type == PmType::Normal && !sim.dead && sim.health > 0;
+                if live {
+                    let views: Vec<Option<StuckView>> =
+                        self.clients.iter().map(Self::stuck_view).collect();
+                    let rand = || (vcod_common::rng::xorshift(&mut self.rng) >> 33) as u32;
+                    if let Some(push) = stuck_in_client(slot, &views, rand) {
+                        let me = self.clients[slot]
+                            .as_mut()
+                            .and_then(|c| c.sim.as_mut())
+                            .unwrap();
+                        me.ps.velocity.x = push.self_vel.x;
+                        me.ps.velocity.y = push.self_vel.y;
+                        me.ps.knockback_ms = 300.0;
+                        // The caller marks only self a corpse (0x411b8); the
+                        // partner marks itself on its own turn through the scan.
+                        me.contents = CONTENTS_CORPSE;
+                        let other = self.clients[push.other]
+                            .as_mut()
+                            .and_then(|c| c.sim.as_mut())
+                            .unwrap();
+                        other.ps.velocity.x = push.other_vel.x;
+                        other.ps.velocity.y = push.other_vel.y;
+                        other.ps.knockback_ms = 300.0;
+                    }
                 }
+                self.clients[slot]
+                    .as_mut()
+                    .and_then(|c| c.sim.as_mut())
+                    .unwrap()
+                    .end_frame(self.sv_time_ms);
             }
             // `ClientEndFrame`'s aim trace and cursor hint, after the script
             // frame and the mirrors so they read the frame's final eye, aim
@@ -3110,8 +3195,17 @@ impl Server {
     /// `send_snapshots` writes. The shots, swings and throws the weapon step
     /// took land in `pending_attacks`, which the combat path drains.
     fn replay_moves(&mut self) -> Vec<MoveSummary> {
+        use vcod_common::movetrace::{Body, MoveWorld};
         use vcod_common::pmove::weapon::{EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
         let collision = self.world.as_ref().map(|w| &w.collision);
+        // Every client's body, the mover's own rewritten after each of its
+        // steps: retail relinks after each `Pmove`.
+        let mut bodies: Vec<Body> = self
+            .clients
+            .iter()
+            .enumerate()
+            .filter_map(|(s, c)| c.as_ref()?.sim.as_ref()?.body(s as u32))
+            .collect();
         let weapons = self.weapon_table.clone();
         let now_ms = self.sv_time_ms;
         let mut moved = vec![MoveSummary::default(); self.clients.len()];
@@ -3189,9 +3283,11 @@ impl Server {
                         raised.extend(sim.step(
                             &step,
                             msec as f32 / 1000.0,
-                            collision,
+                            collision.map(|w| MoveWorld::new(w, &bodies, slot as u32)),
                             weapons.defs(),
                         ));
+                        bodies.retain(|b| b.entity != slot as u32);
+                        bodies.extend(sim.body(slot as u32));
                     }
                     for e in &raised {
                         let weapon = sim.ps.weapon;

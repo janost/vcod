@@ -10,6 +10,7 @@ pub mod game_dir;
 pub mod localize;
 pub mod menu;
 pub mod mesh;
+pub mod movetrace;
 pub mod net;
 pub mod pk3;
 pub mod playerpose;

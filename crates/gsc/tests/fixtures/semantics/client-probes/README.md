@@ -283,3 +283,59 @@ cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-turret --probe-secs 170
 
 The server's `PROBE` lines and `games_mp.log`'s `D;`/`K;` records are the
 retail evidence a later capture reads; this probe itself writes no fixture.
+
+## probe_bump
+
+Player-vs-player clipping's server half. Under `probe_teleport 1` it puts
+each spawning axis player on a flat brush floor on mp_carentan at
+(1132 -376 -151.875) and each allied player 200 units behind it along -x,
+both facing +x, once per spawn, and logs each move as `PROBE place <time>
+<clientnum> <team> <origin> <yaw>`. The floor is flat from 280 units behind the
+spot to 360 in front and 70 either side, which a throwaway `test_ground_under` /
+`test_clear_line` search in `crates/server` found; on any other map the thread
+logs `PROBE teleport unsupported <map>` and does nothing.
+
+Under `probe_overlap 1` it also waits for both players to be placed (`PROBE
+both_placed <time>`), then `setorigin`s the axis player onto the allied one's
+origin 12 s and 30 s later (`PROBE overlap <time> <target> <walker> <origin>`)
+and logs `PROBE state <time> <clientnum> <team> <origin> <isOnGround>` for every
+playing player every frame from 1 s before to 3 s after each. 1.1 gsc has no
+`getvelocity` (`tools/re/dump_builtins.py` lists none), so the per-frame
+origins stand in for it.
+
+It calls `maps\mp\gametypes\dm::main()` itself, so a client can answer the
+stock team menu and spawn. Three shells, the gsc probe first, then the target,
+then the walker:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=200 \
+    tools/run_probe.sh client-probes/probe_bump mp_carentan +set probe_teleport 1
+# second shell, about 12 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-bump-target --probe-team axis --probe-secs 185
+# third shell, about 10 s after that:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-bump --probe-team allies --probe-secs 170
+```
+
+`--probe-bump-target` starts its schedule once it sees the walker on its mark:
+standing 35 s, crouched 25 s, standing 1.5 s (a prone straight out of a
+crouch is sometimes refused), prone 25 s, standing. `--save-bump` runs its
+script once per stance, each started once the target's `solid` top byte reads
+that stance: a head-on walk, a walk back, a glance 20 units right of the line,
+a walk back, a jump from rest 10 units short of contact, a walk back. It writes
+`crates/server/tests/fixtures/playerstate/<map>-dm-bump-walker.txt`.
+
+The overlap capture is the same three shells with `+set probe_overlap 1` on
+the server and `--capture-tag overlap` on the walker, which picks its overlap
+script: still through the first setorigin, then walking +x through the second,
+clocked off the placement's server time. The spectator-slot capture adds a
+plain `--net-probe 127.0.0.1:28970 --probe-secs 185` started before the target,
+so it holds slot 0 and never joins, and tags the walker `overlap-spectator`.
+The gsc's `PROBE` lines of each run go to
+`<map>-dm-bump-script.txt`, `-bump-overlap-script.txt` and
+`-bump-overlap-spectator-script.txt` beside the walker fixtures, with the
+target's own push lines (`BUMPT`, its stdout) appended as comments.
+
+All six files are retail evidence. A walker run against `vcod-server`
+overwrites the untagged one and refuses the tagged ones without
+`--overwrite-fixture`: move them to `tmp/` and `git checkout` the fixture
+directory after.

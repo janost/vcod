@@ -82,6 +82,8 @@ pub enum Prim {
     Brush(u32),
     Tri(u32),
     Model(u32),
+    /// A player capsule hit, carrying its entity number (`movetrace.rs`).
+    Body(u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -148,15 +150,15 @@ fn tri_contents(content_flags: u32) -> Option<u32> {
 /// which slides along a diagonal wall at 15 where a box's corner holds it
 /// at 21 (docs/research/cod11-mantle.md, "The player is a capsule").
 #[derive(Clone, Copy)]
-struct Capsule {
+pub(crate) struct Capsule {
     /// From the trace origin to the box centre.
-    center: Vec3,
-    radius: f32,
-    offset: Vec3,
+    pub(crate) center: Vec3,
+    pub(crate) radius: f32,
+    pub(crate) offset: Vec3,
 }
 
 impl Capsule {
-    fn of(mins: Vec3, maxs: Vec3) -> Capsule {
+    pub(crate) fn of(mins: Vec3, maxs: Vec3) -> Capsule {
         let half = (maxs - mins) * 0.5;
         let radius = half.x.min(half.z);
         Capsule {
@@ -938,6 +940,7 @@ impl CollisionWorld {
                 .model_entity
                 .get(self.brushes[b as usize].model as usize)
                 .map_or(ENTITYNUM_WORLD, |m| m.load(Ordering::Relaxed)),
+            Some(Prim::Body(e)) => e,
             Some(_) => ENTITYNUM_WORLD,
             None if trace.fraction < 1.0 => ENTITYNUM_WORLD,
             None => ENTITYNUM_NONE,
@@ -1145,6 +1148,8 @@ impl CollisionWorld {
                         }
                         clip_segment_model(trace, start, end, mt, *prim);
                     }
+                    // Never stored in world.prims; only movetrace.rs constructs it.
+                    Prim::Body(_) => unreachable!(),
                 }
             }
             return;
@@ -1194,6 +1199,7 @@ impl CollisionWorld {
                     mt.contents, mt.surface_flags, mt.tri[0]
                 )
             }
+            Prim::Body(e) => format!("body {e}"),
         }
     }
 
@@ -1957,6 +1963,8 @@ mod tests {
                         *prim,
                     );
                 }
+                // Never stored in world.prims; only movetrace.rs constructs it.
+                Prim::Body(_) => unreachable!(),
             }
         }
         trace.endpos = start + (end - start) * trace.fraction;

@@ -2,7 +2,7 @@
 
 use crate::game::host::SimOp;
 use glam::Vec3;
-use vcod_common::collision::CollisionWorld;
+use vcod_common::movetrace::{Body, MoveWorld, CONTENTS_BODY, CONTENTS_CORPSE};
 use vcod_common::net::msg::{self, UserCmd};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::net::trajectory;
@@ -16,14 +16,9 @@ use vcod_common::weapon::WeaponDef;
 /// (`crates/client/src/entities.rs` carries the table).
 const ET_PLAYER: i32 = 1;
 
-/// A player entity's `eFlags`, `solid` and `pos.trDuration`, transcribed from
-/// the retail two-probe capture rather than derived. `solid` decodes as
-/// `(maxs[2] + 32) << 16 | -mins[2] << 8 | half width`, which for 6684943 is
-/// a 70-unit standing box one unit deep and 15 wide -- the pmove box, and the
-/// same for every player, so a constant is faithful until something makes it
-/// vary. INFERRED, from that one value against the known box.
+/// A player entity's `eFlags` and `pos.trDuration`, transcribed from the
+/// retail two-probe capture rather than derived.
 const PLAYER_EFLAGS: i32 = 16;
-const PLAYER_SOLID: i32 = 6684943;
 const PLAYER_TR_DURATION: i32 = 50;
 
 const PMF_OWN_VIEW: i32 = 0x40000;
@@ -355,6 +350,12 @@ pub struct ClientSim {
     /// The last cmd's angles, retail's `pers.cmd.angles`, which
     /// `set_view_angle` rewrites `delta_angles` against.
     last_cmd_angles: [i32; 3],
+    /// `r.contents`: `CONTENTS_BODY` while alive and playing, `CONTENTS_CORPSE`
+    /// after a death or a stuck push until the next end frame, else 0.
+    pub contents: u32,
+    /// The entity `solid`, packed at the last link from the box and contents
+    /// then, never at end frame (docs/research/cod11-player-clip.md).
+    pub linked_solid: i32,
 }
 
 /// Everything the animscript needs that the sim does not own: the script
@@ -441,6 +442,8 @@ impl ClientSim {
             mounted_on: None,
             firing: false,
             last_cmd_angles: cmd_angles,
+            contents: 0,
+            linked_solid: 0,
         }
     }
 
@@ -557,6 +560,52 @@ impl ClientSim {
         // camera's included: retail's capture reads 16 on a respawn's
         // spectator frame and 24 on the next one (map-cycle doc, 8.2).
         self.teleport_bit = !self.teleport_bit;
+        // `G_SetClientContents`, then the spawn's link.
+        self.contents = if mode == PmType::Normal {
+            CONTENTS_BODY
+        } else {
+            0
+        };
+        self.relink();
+    }
+
+    /// `ClientEndFrame`'s contents write, once per frame before `end_frame`.
+    pub fn update_contents(&mut self) {
+        self.contents = if self.pm_type == PmType::Normal && !self.dead {
+            CONTENTS_BODY
+        } else {
+            0
+        };
+    }
+
+    /// The death edge. `player_die` writes `CONTENTS_CORPSE`, outside every
+    /// mover's mask, so the body stops blocking before the next end frame
+    /// zeroes it.
+    pub fn die(&mut self) {
+        if !self.dead {
+            self.dead = true;
+            self.contents = CONTENTS_CORPSE;
+        }
+    }
+
+    /// `SV_LinkEntity`'s `solid`, off the box and contents at the link.
+    fn relink(&mut self) {
+        self.linked_solid = if self.contents & (CONTENTS_BODY | 1) != 0 {
+            Body::pack_solid(self.ps.mins(), self.ps.maxs())
+        } else {
+            0
+        };
+    }
+
+    /// What the other movers clip against, `None` while the contents are 0.
+    pub fn body(&self, slot: u32) -> Option<Body> {
+        (self.contents != 0).then(|| Body {
+            entity: slot,
+            origin: self.ps.origin,
+            mins: self.ps.mins(),
+            maxs: self.ps.maxs(),
+            contents: self.contents,
+        })
     }
 
     /// The wire word for any mode: the base, the per-spawn teleport bit, the
@@ -649,7 +698,7 @@ impl ClientSim {
         &mut self,
         cmd: &UserCmd,
         dt: f32,
-        world: Option<&CollisionWorld>,
+        world: Option<MoveWorld<'_>>,
         weapons: &[Option<WeaponDef>],
     ) -> Vec<PmEvent> {
         // `pers.cmd` takes every cmd, ahead of the dead and intermission returns.
@@ -659,8 +708,9 @@ impl ClientSim {
         // 1.12 and 6, the `pm_type > 5` returns).
         if self.dead {
             if let Some(w) = world {
-                pmove::dead_move(&mut self.ps, w, dt);
+                pmove::dead_move(&mut self.ps, &w, dt);
             }
+            self.relink();
             return Vec::new();
         }
         // `ClientThink_real`'s `sessionstate` 3 arm jumps to the function's
@@ -694,7 +744,7 @@ impl ClientSim {
                 // linking frame's run free and the unlinking frame's linked
                 // (object-model doc, 23.2).
                 self.ps.linked = self.link_to.is_some();
-                let events = pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt, weapons);
+                let events = pmove::pmove(&mut self.ps, &pm_input(cmd), &w, dt, weapons);
                 self.jumped |= self.ps.jumped;
                 self.land_anim |= self.ps.land_anim;
                 // Retail holds a prone view inside the cone around the body by
@@ -722,9 +772,11 @@ impl ClientSim {
                     };
                     self.add_event(e.event, parm);
                 }
+                self.relink();
                 return events;
             }
         }
+        self.relink();
         // A spectator raises none: it has no weapon and no footsteps.
         Vec::new()
     }
@@ -1012,7 +1064,7 @@ impl ClientSim {
             // standing player for 1.35 s, doubling it under the next shot.
             return;
         }
-        self.dead = true;
+        self.die();
         // The cook went with the drop: retail's `fire_grenade` clears
         // `grenadeTimeLeft` on the thrower, and the retail death frame reads
         // 0 (combat doc, 11.1 and 5.1 step 5).
@@ -1195,7 +1247,8 @@ impl ClientSim {
         set("eType", ET_PLAYER);
         set("clientNum", slot as i32);
         set("eFlags", self.eflags());
-        set("solid", PLAYER_SOLID);
+        // Packed at link time: docs/research/cod11-player-clip.md.
+        set("solid", self.linked_solid);
         set("legsAnim", self.anim.legs());
         // The torso does travel: the shoot, reload and putaway poses are the
         // weapon's, and the next task is what gives it a value.
@@ -1316,14 +1369,21 @@ impl ClientSim {
             } else {
                 0
             };
+            let knockback = if self.ps.knockback_ms > 0.0 {
+                pmove::PMF_TIME_KNOCKBACK
+            } else {
+                0
+            };
             set(
                 "pm_flags",
                 PMF_OWN_VIEW
                     | stance_pmflags
                     | jump_held
                     | backwards
+                    | knockback
                     | pmove::weapon::ads_pm_flags(&self.ps),
             );
+            set("pm_time", self.ps.knockback_ms as i32);
             // The client predicts its own eye lerp; without these it restarts
             // from our value every snapshot and the view shakes for as long
             // as the lerp lasts.
@@ -1549,7 +1609,8 @@ mod tests {
         };
         for _ in 0..20 {
             assert!(
-                sim.step(&forward, 0.05, Some(&world), &[]).is_empty(),
+                sim.step(&forward, 0.05, Some(MoveWorld::bare(&world)), &[])
+                    .is_empty(),
                 "the intermission camera raised an event"
             );
         }
@@ -1952,7 +2013,7 @@ mod tests {
         let mut t = 1000;
         for _ in 0..20 {
             t += 50;
-            sim.step(&prone(t, 0.0), 0.05, Some(&w), &[]);
+            sim.step(&prone(t, 0.0), 0.05, Some(MoveWorld::bare(&w)), &[]);
         }
         assert_eq!(sim.ps.stance, pmove::Stance::Prone);
         let before = sim.delta_angles[1];
@@ -1963,7 +2024,7 @@ mod tests {
 
         // Well past the cone: the body cannot swing the whole way in one
         // frame, so the rest comes off the view.
-        sim.step(&prone(t + 50, 150.0), 0.05, Some(&w), &[]);
+        sim.step(&prone(t + 50, 150.0), 0.05, Some(MoveWorld::bare(&w)), &[]);
         assert_ne!(
             sim.delta_angles[1], before,
             "a view past the cap must be pushed back"
@@ -1992,16 +2053,16 @@ mod tests {
         // Settle on the floor first, so the only thing moving is the eye.
         for _ in 0..20 {
             t += 50;
-            sim.step(&NULL_USERCMD, 0.05, Some(&w), &[]);
+            sim.step(&NULL_USERCMD, 0.05, Some(MoveWorld::bare(&w)), &[]);
         }
         assert_eq!(lerp_time(&sim), 0, "a settled eye carries no stamp");
 
         t += 50;
-        sim.step(&crouch(t), 0.05, Some(&w), &[]);
+        sim.step(&crouch(t), 0.05, Some(MoveWorld::bare(&w)), &[]);
         assert_eq!(lerp_time(&sim), t, "the stamp is the cmd that started it");
         let started = t;
         t += 50;
-        sim.step(&crouch(t), 0.05, Some(&w), &[]);
+        sim.step(&crouch(t), 0.05, Some(MoveWorld::bare(&w)), &[]);
         assert_eq!(
             lerp_time(&sim),
             started,
@@ -2010,7 +2071,7 @@ mod tests {
 
         for _ in 0..20 {
             t += 50;
-            sim.step(&crouch(t), 0.05, Some(&w), &[]);
+            sim.step(&crouch(t), 0.05, Some(MoveWorld::bare(&w)), &[]);
         }
         assert!(sim.ps.view_height_settled());
         assert_eq!(lerp_time(&sim), 0, "the stamp clears when the eye settles");
@@ -2358,7 +2419,7 @@ mod tests {
             ..NULL_USERCMD
         };
         for _ in 0..10 {
-            sim.step(&run, 0.05, Some(&w), &[]);
+            sim.step(&run, 0.05, Some(MoveWorld::bare(&w)), &[]);
         }
         assert!(sim.on_ground());
         assert_eq!(sim.wire_pm_type(), 0);
@@ -2372,7 +2433,7 @@ mod tests {
         let (origin, velocity) = (sim.ps.origin, sim.ps.velocity);
         assert!(velocity.length() > 100.0);
         for _ in 0..40 {
-            let events = sim.step(&run, 0.05, Some(&w), &[]);
+            let events = sim.step(&run, 0.05, Some(MoveWorld::bare(&w)), &[]);
             assert!(events.is_empty(), "a linked walk raised {events:?}");
         }
         assert_eq!((sim.ps.origin, sim.ps.velocity), (origin, velocity));
@@ -2387,6 +2448,38 @@ mod tests {
         // A spawn unlinks: `ClientSpawn` calls `G_EntUnlink`.
         sim.become_player([0.0; 3], 0.0, NULL_USERCMD.angles);
         assert_eq!(sim.link_to, None);
+    }
+
+    /// `to_wire` carries the knockback timer as `pm_time` plus `pm_flags`
+    /// 0x100 (plan-phase read 3), and clears both once the timer is free.
+    #[test]
+    fn to_wire_carries_the_knockback_timer() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.knockback_ms = 300.0;
+        let ws = sim.to_wire(p, 0, 0);
+        assert_eq!(
+            ws.fields[msg::PlayerState::field_index(p, "pm_time").unwrap()],
+            300
+        );
+        assert_ne!(
+            ws.fields[msg::PlayerState::field_index(p, "pm_flags").unwrap()]
+                & pmove::PMF_TIME_KNOCKBACK,
+            0
+        );
+
+        sim.ps.knockback_ms = 0.0;
+        let ws = sim.to_wire(p, 0, 0);
+        assert_eq!(
+            ws.fields[msg::PlayerState::field_index(p, "pm_time").unwrap()],
+            0
+        );
+        assert_eq!(
+            ws.fields[msg::PlayerState::field_index(p, "pm_flags").unwrap()]
+                & pmove::PMF_TIME_KNOCKBACK,
+            0
+        );
     }
 
     fn target() -> ClientSim {
@@ -2455,6 +2548,24 @@ mod tests {
     /// toward the attacker in `stats[1]`, and the feedback left as the last
     /// surviving hit wrote it (combat doc, 8.4). Then the body: no input
     /// moves it, and the eye drops 9 units a frame to `deadViewHeight`.
+    /// A killing hit is `player_die`'s CORPSE write at once, so the body
+    /// stops blocking before the end frame zeroes it: a turret's kill lands
+    /// after that frame's end-frame pass.
+    #[test]
+    fn a_killing_hit_leaves_a_corpse_no_mover_clips() {
+        use vcod_common::collision::MASK_PLAYERSOLID;
+        use vcod_common::movetrace::MASK_DEADSOLID;
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0; 3], 0.0, NULL_USERCMD.angles);
+        assert_eq!(sim.body(3).map(|b| b.contents), Some(CONTENTS_BODY));
+        sim.take_damage(&hit_op(100, true), None, &mut 1, 1000);
+        assert_eq!(sim.contents, CONTENTS_CORPSE);
+        let b = sim.body(3).expect("a corpse stays linked");
+        assert_eq!(b.contents & (MASK_PLAYERSOLID | MASK_DEADSOLID), 0);
+        sim.update_contents();
+        assert_eq!(sim.body(3), None);
+    }
+
     #[test]
     fn a_fatal_hit_kills_freezes_the_feedback_and_drops_the_eye() {
         let p = &PROTOCOL_V1;
@@ -2476,13 +2587,13 @@ mod tests {
             op
         };
         for _ in 0..20 {
-            sim.step(&NULL_USERCMD, 0.05, Some(&w_test), &[]);
+            sim.step(&NULL_USERCMD, 0.05, Some(MoveWorld::bare(&w_test)), &[]);
         }
         sim.take_damage(&op(false), None, &mut 1, 1000);
         sim.health = 33;
         sim.end_frame(1000);
         for _ in 0..10 {
-            sim.step(&NULL_USERCMD, 0.05, Some(&w_test), &[]);
+            sim.step(&NULL_USERCMD, 0.05, Some(MoveWorld::bare(&w_test)), &[]);
         }
         assert_eq!(sim.ps.velocity.length(), 0.0, "the knockback has decayed");
 
@@ -2520,7 +2631,7 @@ mod tests {
             ..NULL_USERCMD
         };
         for expect in [51.0, 42.0, 33.0, 24.0, 15.0, 8.0, 8.0] {
-            let events = sim.step(&run, 0.05, Some(&w_test), &[]);
+            let events = sim.step(&run, 0.05, Some(MoveWorld::bare(&w_test)), &[]);
             assert!(events.is_empty(), "a dead player fires nothing");
             assert_eq!(
                 sim.to_wire(p, 0, 0).field_f32(p, "viewHeightCurrent"),
@@ -2532,7 +2643,7 @@ mod tests {
         assert_eq!(sim.ps.velocity.truncate(), glam::Vec2::ZERO);
         let before = sim.ps.origin;
         for _ in 0..5 {
-            sim.step(&run, 0.05, Some(&w_test), &[]);
+            sim.step(&run, 0.05, Some(MoveWorld::bare(&w_test)), &[]);
         }
         assert_eq!(sim.ps.origin, before, "input does not move a body");
 

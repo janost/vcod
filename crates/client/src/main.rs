@@ -24,6 +24,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
+use vcod_common::movetrace::MoveWorld;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::{bsp, collision, mesh, net, pmove, props, weapon, xmodel};
 
@@ -242,6 +243,23 @@ struct Args {
     /// `client-probes/probe_turret` as the gametype with `probe_teleport 1`.
     #[arg(long)]
     save_turret: bool,
+    /// With `--net-probe`: the player-clip walker. Waits for
+    /// `client-probes/probe_bump`'s placement 200 units behind the
+    /// `--probe-bump-target` client on mp_carentan, then walks into it
+    /// head-on, at a 20-unit glance and in a jump once per stance it takes;
+    /// writes `crates/server/tests/fixtures/playerstate/<map>-dm-bump-walker.txt`.
+    /// A `--capture-tag` starting `overlap` runs the overlap script instead
+    /// (stand, then walk through the gsc's `probe_overlap 1` setorigins) and
+    /// writes `<map>-dm-bump-<tag>-walker.txt`. Retail evidence when taken
+    /// against tools/run_probe.sh; a run against vcod-server overwrites it.
+    #[arg(long, conflicts_with = "probe_bump_target")]
+    save_bump: bool,
+    /// With `--net-probe`: the player-clip target. Joins, stands where
+    /// `client-probes/probe_bump` puts it and, once the walker stands on its
+    /// mark, stands 35 s, crouches 25 s, stands 1.5 s, lies prone 25 s and
+    /// stands. Writes no fixture; prints its playerstate while a push is on it.
+    #[arg(long, conflicts_with = "save_bump")]
+    probe_bump_target: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -349,6 +367,8 @@ struct LivePhase {
     predicted_events: play::events::PredictedEvents,
     clock: ServerClock,
     last_loop_snap: Option<u32>,
+    /// Last frame's `entity_pos`, what prediction clips (docs/research/cod11-player-clip.md).
+    drawn_pos: HashMap<u32, Vec3>,
 }
 
 fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport>) -> Phase {
@@ -363,6 +383,7 @@ fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport
         predicted_events: play::events::PredictedEvents::default(),
         clock: ServerClock::new(),
         last_loop_snap: None,
+        drawn_pos: HashMap::new(),
     }))
 }
 
@@ -706,6 +727,8 @@ fn main() -> Result<()> {
                 defuse: args.probe_defuse,
                 pickup: args.save_pickup,
                 turret: args.save_turret,
+                bump: args.save_bump,
+                bump_target: args.probe_bump_target,
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,
@@ -1817,6 +1840,7 @@ impl ApplicationHandler for App {
                                         predicted_events,
                                         clock,
                                         last_loop_snap,
+                                        drawn_pos,
                                     } = &mut **live;
                                     let bsp =
                                         &self.world.as_ref().expect("live phase has a map").bsp;
@@ -1912,13 +1936,21 @@ impl ApplicationHandler for App {
                                     }
                                     let predicted = if ps_client == client_num {
                                         net.snapshots().newest().and_then(|s| {
-                                            predictor
-                                                .predict(p, &s.ps, ring, world, weapons, local_ms)
+                                            let bodies = play::predict::solid_bodies(
+                                                p,
+                                                &s.entities,
+                                                client_num as u32,
+                                                drawn_pos,
+                                            );
+                                            predictor.predict(
+                                                p, &s.ps, ring, world, &bodies, weapons, local_ms,
+                                            )
                                         })
                                     } else {
                                         predictor.reset();
                                         None
                                     };
+                                    drawn_pos.clone_from(&entity_pos);
                                     if let Some(v) = &predicted {
                                         cam.pos = v.origin + Vec3::Z * v.view_height;
                                     }
@@ -2222,7 +2254,8 @@ impl ApplicationHandler for App {
                         }
 
                         (input.forward, input.right) = keys.axes();
-                        for ev in pmove::pmove(ps, input, world, dt, &[]) {
+                        let mw = MoveWorld::bare(world);
+                        for ev in pmove::pmove(ps, input, &mw, dt, &[]) {
                             self.audio.on_game_event(
                                 &self.fs,
                                 &net::events::GameEvent {

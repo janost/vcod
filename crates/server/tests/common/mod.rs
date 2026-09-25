@@ -19,6 +19,11 @@ pub const ADDR: SocketAddr =
 pub const ADDR_B: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 31338);
 
+/// A third client's address, for a test that needs a spectator or other
+/// third role beside a joined pair.
+pub const ADDR_C: SocketAddr =
+    SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 31339);
+
 #[derive(Default)]
 pub struct Queues {
     pub to_server: VecDeque<Vec<u8>>,
@@ -38,6 +43,28 @@ impl Transport for ClientEnd {
     }
 }
 
+/// One exchange each way, then one client pump, for a client at `addr`.
+/// `step` is this at [`ADDR`]; a test with a client at another address (a
+/// spectator alongside a joined pair) calls this directly.
+pub fn step_at(
+    sv: &mut Server,
+    addr: SocketAddr,
+    q: &Rc<RefCell<Queues>>,
+    cl: &mut NetClient<ClientEnd>,
+    now: Instant,
+) -> Vec<NetEvent> {
+    let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
+    for p in pending {
+        sv.handle_packet(addr, &p, now);
+    }
+    sv.tick(now);
+    for (to, p) in sv.take_outgoing() {
+        assert_eq!(to, addr);
+        q.borrow_mut().to_client.push_back(p);
+    }
+    cl.pump_at(now)
+}
+
 /// One exchange each way, then one client pump.
 pub fn step(
     sv: &mut Server,
@@ -45,16 +72,7 @@ pub fn step(
     cl: &mut NetClient<ClientEnd>,
     now: Instant,
 ) -> Vec<NetEvent> {
-    let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
-    for p in pending {
-        sv.handle_packet(ADDR, &p, now);
-    }
-    sv.tick(now);
-    for (to, p) in sv.take_outgoing() {
-        assert_eq!(to, ADDR);
-        q.borrow_mut().to_client.push_back(p);
-    }
-    cl.pump_at(now)
+    step_at(sv, ADDR, q, cl, now)
 }
 
 /// Like `step`, but the server's reply never reaches the client — a lost
@@ -119,6 +137,36 @@ pub fn step_pair_seen(
     (a.1.pump_at(now), b.1.pump_at(now), sent)
 }
 
+/// [`step_pair`] extended to a third client, each named by its own address:
+/// a spectator or other third role whose packets must not spill into either
+/// paired client's queue the way a two-way router would.
+pub fn step_trio(
+    sv: &mut Server,
+    a: (SocketAddr, &Rc<RefCell<Queues>>, &mut NetClient<ClientEnd>),
+    b: (SocketAddr, &Rc<RefCell<Queues>>, &mut NetClient<ClientEnd>),
+    c: (SocketAddr, &Rc<RefCell<Queues>>, &mut NetClient<ClientEnd>),
+    now: Instant,
+) -> (Vec<NetEvent>, Vec<NetEvent>, Vec<NetEvent>) {
+    for (addr, q) in [(a.0, a.1), (b.0, b.1), (c.0, c.1)] {
+        let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
+        for p in pending {
+            sv.handle_packet(addr, &p, now);
+        }
+    }
+    sv.tick(now);
+    for (to, p) in sv.take_outgoing() {
+        let q = if to == a.0 {
+            a.1
+        } else if to == b.0 {
+            b.1
+        } else {
+            c.1
+        };
+        q.borrow_mut().to_client.push_back(p);
+    }
+    (a.2.pump_at(now), b.2.pump_at(now), c.2.pump_at(now))
+}
+
 /// Two clients through the stock menus onto one server, stepped together so
 /// each is live while the other joins. Each takes its own `(team, weapon)`:
 /// the weapon menu is per nationality, so two clients on opposite teams
@@ -172,17 +220,23 @@ pub fn join_pair_logged(
     (ca, cb, ja, jb)
 }
 
-pub fn connect(
+/// Drives an already-built client through the connect handshake at `addr`
+/// until its gamestate lands. Shared by [`connect`] and [`connect_at`], which
+/// differ only in how the client is built (a real client is one per process
+/// and gets a fine qport for free off `NetClient::start`; a harness running
+/// several in one process needs a qport of its own per client instead).
+fn run_connect(
     sv: &mut Server,
+    addr: SocketAddr,
     q: &Rc<RefCell<Queues>>,
     now: &mut Instant,
-) -> NetClient<ClientEnd> {
-    let mut cl = NetClient::start(ClientEnd(q.clone()), *now);
+    cl: &mut NetClient<ClientEnd>,
+) {
     for _ in 0..40 {
         *now += Duration::from_millis(250);
-        let events = step(sv, q, &mut cl, *now);
+        let events = step_at(sv, addr, q, cl, *now);
         if events.contains(&NetEvent::GamestateReady) {
-            return cl;
+            return;
         }
         assert!(
             !events.iter().any(|e| matches!(e, NetEvent::Dropped(_))),
@@ -193,6 +247,31 @@ pub fn connect(
         "no gamestate within 10 s of simulated time; state {:?}",
         cl.state()
     );
+}
+
+pub fn connect(
+    sv: &mut Server,
+    q: &Rc<RefCell<Queues>>,
+    now: &mut Instant,
+) -> NetClient<ClientEnd> {
+    let mut cl = NetClient::start(ClientEnd(q.clone()), *now);
+    run_connect(sv, ADDR, q, now, &mut cl);
+    cl
+}
+
+/// [`connect`] at an address and qport of the caller's choosing, for a
+/// client sharing a process (and so a qport space) with others already
+/// connected.
+pub fn connect_at(
+    sv: &mut Server,
+    addr: SocketAddr,
+    q: &Rc<RefCell<Queues>>,
+    now: &mut Instant,
+    qport: u16,
+) -> NetClient<ClientEnd> {
+    let mut cl = NetClient::start_with_qport(ClientEnd(q.clone()), *now, qport);
+    run_connect(sv, addr, q, now, &mut cl);
+    cl
 }
 
 // --------------------------------------------------------------- the fixtures

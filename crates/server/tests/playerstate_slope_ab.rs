@@ -22,6 +22,7 @@ mod common;
 use glam::Vec3;
 use std::collections::BTreeMap;
 use vcod_common::collision::CollisionWorld;
+use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::msg::{
     UserCmd, BUTTON_ADS, BUTTON_ATTACK, BUTTON_MELEE, BUTTON_USE, NULL_USERCMD, WBUTTON_CROUCH,
     WBUTTON_LEAN_LEFT, WBUTTON_LEAN_RIGHT, WBUTTON_PRONE, WBUTTON_RELOAD,
@@ -146,7 +147,7 @@ fn run_cmd(
     cmd: &UserCmd,
     last_st: &mut i32,
     da: [i32; 3],
-    world: &CollisionWorld,
+    world: &MoveWorld,
     weapons: &[Option<WeaponDef>],
 ) {
     let dt_ms = cmd.server_time.wrapping_sub(*last_st);
@@ -284,6 +285,7 @@ fn replay(lines: &[Line], world: &CollisionWorld, weapons: &[Option<WeaponDef>])
         .collect();
     let mut next_cmd = 0usize;
     let mut wish = Vec3::ZERO;
+    let mw = MoveWorld::bare(world);
     for l in lines {
         let Line::Snap(s) = l else { continue };
         if s.ct <= first.ct {
@@ -291,8 +293,8 @@ fn replay(lines: &[Line], world: &CollisionWorld, weapons: &[Option<WeaponDef>])
         }
         while next_cmd < cmds.len() && cmds[next_cmd].server_time <= s.ct {
             let c = &cmds[next_cmd];
-            run_cmd(&mut free, c, &mut free_st, da, world, weapons);
-            run_cmd(&mut rebased, c, &mut rebased_st, da, world, weapons);
+            run_cmd(&mut free, c, &mut free_st, da, &mw, weapons);
+            run_cmd(&mut rebased, c, &mut rebased_st, da, &mw, weapons);
             wish = wish_dir(c, da);
             next_cmd += 1;
         }

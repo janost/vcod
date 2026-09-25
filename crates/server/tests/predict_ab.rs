@@ -18,6 +18,7 @@
 use glam::Vec3;
 use std::collections::{BTreeMap, HashMap};
 use vcod_common::collision::CollisionWorld;
+use vcod_common::movetrace::{Body, MoveWorld, CONTENTS_BODY};
 use vcod_common::net::huffman::Huffman;
 use vcod_common::net::msg::{
     self, UserCmd, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD, WBUTTON_CROUCH, WBUTTON_PRONE,
@@ -84,6 +85,8 @@ struct Run<'a> {
     sim: ClientSim,
     pred: Predicted,
     world: &'a CollisionWorld,
+    /// The other players, the same on both sides; the sim is client 0.
+    bodies: Vec<Body>,
     weapons: &'a [Option<WeaponDef>],
     /// `c.last_processed_st`: the server's clock for this client.
     st: i32,
@@ -130,7 +133,12 @@ impl Run<'_> {
         };
         self.server_step(&cmd);
         self.prone_corrections += usize::from(self.sim.delta_angles() != da);
-        predict::run_cmd(&mut self.pred, &cmd, self.world, self.weapons);
+        predict::run_cmd(
+            &mut self.pred,
+            &cmd,
+            &MoveWorld::new(self.world, &self.bodies, 0),
+            self.weapons,
+        );
         self.compare();
         self.last_cmd = cmd;
         self.cmds += 1;
@@ -155,8 +163,12 @@ impl Run<'_> {
                 server_time: base,
                 ..*cmd
             };
-            self.sim
-                .step(&step, msec as f32 / 1000.0, Some(self.world), self.weapons);
+            self.sim.step(
+                &step,
+                msec as f32 / 1000.0,
+                Some(MoveWorld::new(self.world, &self.bodies, 0)),
+                self.weapons,
+            );
         }
         self.st = cmd.server_time;
     }
@@ -321,17 +333,15 @@ fn predictor_ring_matches_the_server_step() {
     step_side_by_side(true);
 }
 
-/// The script both tests run: every movement mode, a hitch past the chop, a
-/// prone turn past the cone, a weapon switch, taps, a reload and the sight.
-fn step_side_by_side(ring: bool) {
-    let Some(fs) = vcod_common::testing::game_fs() else {
-        return;
-    };
+/// A carbine and colt player at mp_carentan's first spawn, on both sides.
+fn start<'a>(
+    world: &'a CollisionWorld,
+    entities: &str,
+    weapons: &'a [Option<WeaponDef>],
+    ring: bool,
+) -> Run<'a> {
     let cs7 = retail_cs7();
-    let weapons = vcod_common::weapon_table::from_configstring(&fs, cs7);
-    let (world, entities) = load_world(&fs, "mp_carentan");
-    let (origin, yaw) = vcod_common::bsp::find_spawn(&entities).expect("a spawn");
-
+    let (origin, yaw) = vcod_common::bsp::find_spawn(entities).expect("a spawn");
     let carbine = weapon_index(cs7, "m1carbine_mp");
     let colt = weapon_index(cs7, "colt_mp");
     let def = |i: u8| weapons[i as usize].as_ref().expect("weapon loads");
@@ -353,11 +363,12 @@ fn step_side_by_side(ring: bool) {
         weapon: carbine,
         ..NULL_USERCMD
     };
-    let mut run = Run {
+    Run {
         pred: predict::from_wire(P, &sim.to_wire(P, 0, t0), Some(&first)),
         sim,
-        world: &world,
-        weapons: &weapons,
+        world,
+        bodies: Vec::new(),
+        weapons,
         st: t0,
         last_cmd: first,
         view: [0; 2],
@@ -369,7 +380,91 @@ fn step_side_by_side(ring: bool) {
         prone_corrections: 0,
         mismatches: Vec::new(),
         counts: BTreeMap::new(),
+    }
+}
+
+/// A standing player 60 units ahead, handed to both sides: the run into it,
+/// a strafe along it, a jump at it and a crouched push.
+#[test]
+fn server_and_predictor_agree_beside_a_body() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
     };
+    let weapons = vcod_common::weapon_table::from_configstring(&fs, retail_cs7());
+    let (world, entities) = load_world(&fs, "mp_carentan");
+    let mut run = start(&world, &entities, &weapons, true);
+    run.hold(input(|_| {}), 40, 0.0);
+    let yaw = run.sim.view_angles()[1].to_radians();
+    let at = run.sim.ps.origin + Vec3::new(yaw.cos(), yaw.sin(), 0.0) * 60.0;
+    run.bodies = vec![Body::from_solid(1, at, 6684943, CONTENTS_BODY)];
+
+    let mut closest = f32::MAX;
+    let mut push = |run: &mut Run, template: UserCmd, n: usize| {
+        for _ in 0..n {
+            run.send(template, 8);
+            closest = closest.min((run.sim.ps.origin - at).truncate().length());
+        }
+    };
+    push(&mut run, input(|c| c.forward = 127), 120);
+    push(
+        &mut run,
+        input(|c| {
+            c.forward = 127;
+            c.right = 127
+        }),
+        30,
+    );
+    push(&mut run, input(|c| c.forward = -127), 60);
+    push(
+        &mut run,
+        input(|c| {
+            c.forward = 127;
+            c.up = 127
+        }),
+        3,
+    );
+    push(&mut run, input(|c| c.forward = 127), 90);
+    push(
+        &mut run,
+        input(|c| {
+            c.forward = 127;
+            c.wbuttons = WBUTTON_CROUCH
+        }),
+        60,
+    );
+
+    println!(
+        "beside a body: {} cmds, closest {closest:.3}, {} mismatching reads {:?}",
+        run.cmds,
+        run.mismatches.len(),
+        run.counts
+    );
+    for m in run.mismatches.iter().take(40) {
+        println!("  {m}");
+    }
+    assert!(
+        (30.0..31.0).contains(&closest),
+        "the body did not stop the run: closest {closest}"
+    );
+    assert!(
+        run.mismatches.is_empty(),
+        "the predictor diverged from the server's step: {:?}",
+        run.counts
+    );
+}
+
+/// The script both tests run: every movement mode, a hitch past the chop, a
+/// prone turn past the cone, a weapon switch, taps, a reload and the sight.
+fn step_side_by_side(ring: bool) {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let cs7 = retail_cs7();
+    let weapons = vcod_common::weapon_table::from_configstring(&fs, cs7);
+    let (world, entities) = load_world(&fs, "mp_carentan");
+    let colt = weapon_index(cs7, "colt_mp");
+    let def = |i: u8| weapons[i as usize].as_ref().expect("weapon loads");
+    let mut run = start(&world, &entities, &weapons, ring);
 
     // Land, then run forward with a slow turn.
     run.hold(input(|_| {}), 40, 0.0);
@@ -699,12 +794,13 @@ fn replay(lines: &[Line], world: &CollisionWorld, weapons: &[Option<WeaponDef>])
     let mut last_ct = first.ct;
     let mut next_cmd = 0usize;
     let mut rows = Vec::new();
+    let mw = MoveWorld::bare(world);
     for s in snaps {
         if s.ct <= last_ct {
             continue;
         }
         while next_cmd < cmds.len() && cmds[next_cmd].server_time <= s.ct {
-            predict::run_cmd(&mut pred, &cmds[next_cmd], world, weapons);
+            predict::run_cmd(&mut pred, &cmds[next_cmd], &mw, weapons);
             next_cmd += 1;
         }
         let d = pred.ps.origin - s.origin;

@@ -6,6 +6,7 @@
 
 use glam::Vec3;
 use vcod_common::collision::{synthetic_world_tris, CollisionWorld, CONTENTS_SOLID};
+use vcod_common::movetrace::MoveWorld;
 use vcod_common::pmove::{pmove, PlayerState, PmInput};
 
 const MINS: Vec3 = Vec3::new(-15.0, -15.0, 0.0);
@@ -132,7 +133,7 @@ fn a_box_beside_a_soup_kerb_finds_the_floor_under_it() {
     );
 }
 
-fn walk(w: &CollisionWorld, start: Vec3, yaw: f32, frames: usize) -> (PlayerState, usize) {
+fn walk(w: &MoveWorld, start: Vec3, yaw: f32, frames: usize) -> (PlayerState, usize) {
     let mut ps = PlayerState::spawn(start, yaw);
     for _ in 0..80 {
         pmove(&mut ps, &PmInput::default(), w, 0.016, &[]);
@@ -158,6 +159,7 @@ fn walk(w: &CollisionWorld, start: Vec3, yaw: f32, frames: usize) -> (PlayerStat
 #[test]
 fn a_wall_rubbing_walk_stays_on_the_ground_at_8_ms() {
     let w = ramp_with_wall();
+    let w = MoveWorld::bare(&w);
     let (ps, airborne) = walk(&w, Vec3::new(120.0, -400.0, 40.0), 60.0, 550);
     assert!(ps.origin.y > 250.0, "the walk stalled at {}", ps.origin);
     assert_eq!(
@@ -172,6 +174,7 @@ fn a_wall_rubbing_walk_stays_on_the_ground_at_8_ms() {
 #[test]
 fn a_convex_seam_keeps_the_ground_at_8_ms() {
     let w = convex_seam();
+    let w = MoveWorld::bare(&w);
     let (ps, airborne) = walk(&w, Vec3::new(-20.0, 0.0, 1.0), 0.0, 500);
     assert!(
         ps.origin.x > 340.0,

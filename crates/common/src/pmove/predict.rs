@@ -4,7 +4,7 @@
 //! `crates/server/src/server.rs`); keep them in step until the dedupe.
 
 use super::{weapon, PlayerState, PmInput, Stance};
-use crate::collision::CollisionWorld;
+use crate::movetrace::MoveWorld;
 use crate::net::msg::{self, UserCmd};
 use crate::net::protocol::{Protocol, ENTITYNUM_NONE};
 use crate::weapon::WeaponDef;
@@ -105,6 +105,11 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     ps.jump_latched = pm_flags & PMF_JUMP_HELD != 0;
     ps.backwards_run = pm_flags & PMF_BACKWARDS_RUN != 0;
     ps.ads_active = pm_flags & weapon::PMF_ADS != 0;
+    ps.knockback_ms = if pm_flags & super::PMF_TIME_KNOCKBACK != 0 {
+        int("pm_time") as f32
+    } else {
+        0.0
+    };
 
     ps.view_lerp_target = s8("viewHeightLerpTarget") as f32;
     ps.view_lerp_down = int("viewHeightLerpDown") != 0;
@@ -253,7 +258,7 @@ pub fn view_angles(cmd_angles: [i32; 3], delta_angles: [i32; 3]) -> [f32; 3] {
 pub fn run_cmd(
     pred: &mut Predicted,
     cmd: &UserCmd,
-    world: &CollisionWorld,
+    world: &MoveWorld,
     weapons: &[Option<WeaponDef>],
 ) {
     let dt_ms = cmd.server_time.wrapping_sub(pred.command_time);
@@ -282,7 +287,7 @@ fn step(
     pred: &mut Predicted,
     cmd: &UserCmd,
     dt: f32,
-    world: &CollisionWorld,
+    world: &MoveWorld,
     weapons: &[Option<WeaponDef>],
 ) {
     // Dead, spectator and intermission states are drawn from the snapshot.
@@ -377,6 +382,21 @@ mod tests {
         w
     }
 
+    /// `pm_time` only means the knockback timer while `pm_flags` 0x100 is
+    /// set (plan-phase read 3); the byte itself carries other timers too.
+    #[test]
+    fn from_wire_reads_the_knockback_timer() {
+        let p = &PROTOCOL_V1;
+        let mut w = msg::PlayerState::null(p);
+        set(&mut w, "pm_time", 300);
+        set(&mut w, "pm_flags", super::super::PMF_TIME_KNOCKBACK);
+        assert_eq!(from_wire(p, &w, None).ps.knockback_ms, 300.0);
+
+        let mut w = msg::PlayerState::null(p);
+        set(&mut w, "pm_time", 300);
+        assert_eq!(from_wire(p, &w, None).ps.knockback_ms, 0.0);
+    }
+
     #[test]
     fn from_wire_reads_the_mounted_stance_off_eflags() {
         let p = &PROTOCOL_V1;
@@ -449,6 +469,7 @@ mod tests {
     #[test]
     fn a_cmd_already_run_does_nothing() {
         let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
         let before = from_wire(&PROTOCOL_V1, &standing(5000), None);
         for t in [5000, 4990] {
             let mut pred = before;
@@ -462,6 +483,7 @@ mod tests {
     #[test]
     fn a_long_cmd_is_chopped_and_arrears_dropped() {
         let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
         let travel = |dt: i32| {
             let mut pred = from_wire(&PROTOCOL_V1, &standing(5000), None);
             let mut c = cmd(5000 + dt);
@@ -479,6 +501,7 @@ mod tests {
     /// the uninterrupted run is on.
     fn lerp_continues(first: &[u8], second: u8, rebuild_after_ms: i32) {
         let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
         let mut pred = from_wire(&PROTOCOL_V1, &standing(1000), None);
         let mut t = 1000;
         let run = |pred: &mut Predicted, t: &mut i32, wbuttons: u8, ms: i32| {
@@ -537,6 +560,7 @@ mod tests {
     #[test]
     fn a_prone_turn_past_the_cone_moves_delta_angles() {
         let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
         let mut pred = from_wire(&PROTOCOL_V1, &standing(1000), None);
         let mut t = 1000;
         for _ in 0..80 {
@@ -565,6 +589,7 @@ mod tests {
     #[test]
     fn events_fill_the_ring_and_the_fuse_stays_off_it() {
         let world = test_world(&[]);
+        let world = MoveWorld::bare(&world);
         let frag = WeaponDef {
             clip_size: 3,
             fire_time: 1.0,
