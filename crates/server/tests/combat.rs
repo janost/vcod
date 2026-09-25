@@ -669,11 +669,12 @@ fn a_melee_swing_hits_and_the_kill_shows_the_melee_icon() {
         .field_i32(p, "clientNum") as usize;
     let spot = ca.snapshots().newest().unwrap().ps.origin(p);
     assert!(
-        sv.test_clear_line(spot, 0.0, 30.0),
-        "no clear 30 units along +x from the spawn"
+        sv.test_clear_line(spot, 0.0, 40.0),
+        "no clear 40 units along +x from the spawn"
     );
     sv.place_client(na, spot, 0.0);
-    sv.place_client(nb, [spot[0] + 30.0, spot[1], spot[2]], 180.0);
+    // 30 is StuckInClient's exact touch threshold (2 * HALF_WIDTH); 40 stays clear of it and inside the 64-unit melee reach.
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
     let facing_a = UserCmd {
         angles: [0, 32768, 0], // ANGLE2SHORT(180)
         ..NULL_USERCMD
