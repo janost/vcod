@@ -1,9 +1,14 @@
 //! The per-turret record `G_SpawnTurret` builds at map load
 //! (`docs/research/cod11-turrets.md` sections 2 and 3): a weapon file parsed
 //! once into a [`TurretDef`], combined with the entity's own spawn keys into
-//! the [`TurretRecord`] the host keeps per turret entity. Later mount, aim,
-//! fire and release code mutates the record in place; this module only
-//! builds it.
+//! the [`TurretRecord`] the host keeps per turret entity, and the use key's
+//! half of a mount (section 4). Aim, fire and release mutate the record in
+//! place.
+
+use crate::spectate::ClientSim;
+use vcod_common::pmove::aim::{angle_normalize_180, angle_subtract};
+use vcod_common::pmove::Stance;
+use vcod_gsc::EntId;
 
 /// The turret keys of a weapon file (`weapons/mp/<name>`), weapon-def
 /// offsets in docs/research/cod11-turrets.md section 2.
@@ -34,8 +39,8 @@ pub enum TurretStance {
 }
 
 /// `rec+0x0c..0x1c`: a turret's live state, one per spawned `misc_mg42`/
-/// `misc_turret`. Mount, aim, fire and release (later tasks) all mutate a
-/// record already in `GameHost::turrets`; this module only builds it.
+/// `misc_turret`. Mount, aim, fire and release all mutate a
+/// record already in `GameHost::turrets`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TurretRecord {
     pub weapon: String,
@@ -136,6 +141,87 @@ impl TurretRecord {
     }
 }
 
+/// `G_IsTurretUsable` (0x5314c) with 0x52880's arc test (turrets doc 4.2):
+/// nobody on the gun, no frag in hand, on the ground, and the player inside
+/// the cone about the yaw arc's centre as seen from the gun, horizontally.
+/// Retail's `takedamage` gate always passes: nothing clears it on a turret.
+pub fn usable(
+    rec: &TurretRecord,
+    turret_origin: [f32; 3],
+    turret_yaw: f32,
+    player_origin: [f32; 3],
+    grenade_time_left: i32,
+    on_ground: bool,
+) -> bool {
+    if rec.busy != 0 || grenade_time_left != 0 || !on_ground {
+        return false;
+    }
+    let [ymin, ymax] = rec.yaw_range;
+    let half = (ymax.abs() + ymin.abs()) * 0.5;
+    let centre = angle_normalize_180(turret_yaw + ymin + half).to_radians();
+    let (dx, dy) = (
+        turret_origin[0] - player_origin[0],
+        turret_origin[1] - player_origin[1],
+    );
+    let len = dx.hypot(dy);
+    if len == 0.0 {
+        return true;
+    }
+    let dot = (centre.cos() * dx + centre.sin() * dy) / len;
+    // Retail's compare lets a NaN through; the clamp keeps `acos` off one.
+    dot.clamp(-1.0, 1.0).acos().to_degrees() <= half
+}
+
+/// `turret_use` (0x52a9c)'s record half (turrets doc 4.4): the gun is
+/// manned, the barrel goes where the player looks, clamped to the arcs, and
+/// the returned view is the barrel's, which [`mount_sim`] snaps the player to.
+pub fn mount(
+    rec: &mut TurretRecord,
+    slot: usize,
+    player_origin: [f32; 3],
+    stance: Stance,
+    view: [f32; 3],
+    turret_angles: [f32; 3],
+) -> [f32; 3] {
+    rec.owner = Some(slot);
+    rec.busy = 1;
+    rec.fresh_mount = true;
+    rec.mount_origin = player_origin;
+    rec.mount_stance = Some(stance);
+    let ranges = [rec.pitch_range, rec.yaw_range];
+    for i in 0..2 {
+        rec.angles2[i] =
+            angle_subtract(view[i], turret_angles[i]).clamp(ranges[i][0], ranges[i][1]);
+    }
+    [
+        rec.angles2[0] + turret_angles[0],
+        rec.angles2[1] + turret_angles[1],
+        0.0,
+    ]
+}
+
+/// `turret_use`'s player half: the view lock, the mounted bits and the view
+/// snapped onto the barrel.
+pub fn mount_sim(sim: &mut ClientSim, turret: u32, stance: TurretStance, view: [f32; 3]) {
+    sim.mounted_on = Some((turret, stance));
+    sim.viewlocked = 1;
+    sim.viewlocked_ent = turret;
+    sim.ps.mounted = Some(match stance {
+        TurretStance::Stand => Stance::Stand,
+        TurretStance::Duck => Stance::Crouch,
+        TurretStance::Prone => Stance::Prone,
+    });
+    sim.set_view_angle(view);
+}
+
+/// What the use key did to a turret, queued by `ScriptRuntime::item_pass`
+/// and applied to the sim by the server right after it, since the host holds
+/// the record and the server the sim.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TurretOp {
+    Mount { slot: usize, turret: EntId },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +259,74 @@ mod tests {
         assert_eq!(r.pitch_range, [0.0, 40.0]);
         assert_eq!(r.dmg, 80);
         assert_eq!(r.angles2, [-63.0, 0.0, 0.0]);
+    }
+
+    fn rec() -> TurretRecord {
+        TurretRecord::new(
+            "mg42_bipod_stand_mp",
+            TurretDef::parse(STAND).unwrap(),
+            TurretKeys::default(),
+            -63.0,
+        )
+    }
+
+    #[test]
+    fn a_player_behind_the_gun_can_use_it() {
+        // Gun at the origin facing +x; player 40 units behind.
+        assert!(usable(&rec(), [0.0; 3], 0.0, [-40.0, 0.0, 0.0], 0, true));
+    }
+
+    #[test]
+    fn the_arc_edge_is_inclusive_and_past_it_is_refused() {
+        let at = |deg: f32| {
+            let r = deg.to_radians();
+            [-40.0 * r.cos(), -40.0 * r.sin(), 0.0]
+        };
+        assert!(usable(&rec(), [0.0; 3], 0.0, at(44.9), 0, true));
+        assert!(!usable(&rec(), [0.0; 3], 0.0, at(46.0), 0, true));
+        assert!(
+            !usable(&rec(), [0.0; 3], 0.0, [40.0, 0.0, 0.0], 0, true),
+            "in front of the gun"
+        );
+    }
+
+    #[test]
+    fn a_busy_turret_is_not_usable() {
+        let mut r = rec();
+        r.busy = 1;
+        assert!(!usable(&r, [0.0; 3], 0.0, [-40.0, 0.0, 0.0], 0, true));
+    }
+
+    #[test]
+    fn a_held_frag_or_the_air_refuses_the_mount() {
+        assert!(!usable(
+            &rec(),
+            [0.0; 3],
+            0.0,
+            [-40.0, 0.0, 0.0],
+            4000,
+            true
+        ));
+        assert!(!usable(&rec(), [0.0; 3], 0.0, [-40.0, 0.0, 0.0], 0, false));
+    }
+
+    #[test]
+    fn mounting_clamps_the_view_into_the_arcs() {
+        let mut r = rec();
+        let view = mount(
+            &mut r,
+            3,
+            [-40.0, 0.0, 0.0],
+            Stance::Crouch,
+            [0.0, 80.0, 0.0],
+            [0.0, 0.0, 0.0],
+        );
+        assert_eq!(r.owner, Some(3));
+        assert_eq!(r.busy, 1);
+        assert_eq!(r.angles2[1], 45.0);
+        assert_eq!(view[1], 45.0);
+        assert_eq!(r.mount_stance, Some(Stance::Crouch));
+        assert!(r.fresh_mount);
     }
 
     #[test]

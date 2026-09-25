@@ -311,6 +311,9 @@ pub struct ClientSim {
     /// `ps.serverCursorHint`, written every frame by the end-of-frame pass
     /// (`ScriptRuntime::cursor_hint_pass`).
     pub cursor_hint: i32,
+    /// `ps.serverCursorHintString`, -1 for none: the same pass writes it,
+    /// and leaves it alone for a dead player or a gunner (turrets doc 4.3).
+    pub cursor_hint_string: i32,
     damage: DamageAccum,
     feedback: DamageFeedback,
     /// `ps.stats[1]`, the yaw toward the killer (combat doc, 5.1, item 11).
@@ -409,6 +412,7 @@ impl ClientSim {
             jumped: false,
             link_to: None,
             cursor_hint: 0,
+            cursor_hint_string: -1,
             health: 0,
             max_health: 0,
             dead: false,
@@ -513,6 +517,7 @@ impl ClientSim {
         // `ClientSpawn`'s memset. Only a playing client's end frame writes
         // the hint again, so a spectator and the intermission camera keep 0.
         self.cursor_hint = 0;
+        self.cursor_hint_string = -1;
         // A respawned player does not resume the anim it died in.
         self.anim = Default::default();
         self.was_airborne = false;
@@ -1301,7 +1306,14 @@ impl ClientSim {
             // -1..1, left negative, the same convention retail sends.
             set("leanf", (self.ps.lean / pmove::LEAN_MAX).to_bits() as i32);
             set("serverCursorHint", self.cursor_hint & 0xff);
-            set("serverCursorHintString", NO_CURSOR_HINT_STRING);
+            set(
+                "serverCursorHintString",
+                if self.cursor_hint_string < 0 {
+                    NO_CURSOR_HINT_STRING
+                } else {
+                    self.cursor_hint_string
+                },
+            );
             set("viewmodelIndex", self.viewmodel_index);
             set("legsAnim", self.anim.legs());
             set("torsoAnim", self.anim.torso());

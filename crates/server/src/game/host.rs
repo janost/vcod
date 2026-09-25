@@ -384,6 +384,9 @@ pub struct GameHost {
     /// reads `angles2` and the view-lock/firing bits off it; mount, aim,
     /// fire and release mutate it in place.
     pub turrets: std::collections::HashMap<EntId, crate::game::turret::TurretRecord>,
+    /// Mounts the use key made this cmd, drained by the server onto the sims
+    /// right after `item_pass`.
+    pub turret_ops: Vec<crate::game::turret::TurretOp>,
     /// The events raised this frame, put on the wire as temp entities and
     /// dropped by the snapshot build: retail frees a `G_TempEntity` the
     /// frame after it is sent.
@@ -539,6 +542,7 @@ impl GameHost {
             client_name_mode: builtins::cvar::ClientNameMode::default(),
             fs: None,
             turrets: std::collections::HashMap::new(),
+            turret_ops: Vec::new(),
             temp_entities: Vec::new(),
             bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
             missiles: crate::game::missile::Missiles::default(),

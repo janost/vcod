@@ -50,6 +50,12 @@ fn deg_to_short(deg: f32) -> i32 {
     (deg * 65536.0 / 360.0) as i32 & 0xffff
 }
 
+/// As [`deg_to_short`], rounded: a view read back off the wire is already a
+/// short, and truncating it would walk the view down a short per frame.
+fn deg_to_short_rounded(deg: f32) -> i32 {
+    (deg * 65536.0 / 360.0).round() as i32 & 0xffff
+}
+
 struct Rig {
     sv: Server,
     qg: Rc<RefCell<Queues>>,
@@ -117,7 +123,7 @@ fn rig_with(cvars: &[(&str, &str)]) -> Option<Rig> {
         gun: 0,
     };
     for _ in 0..40 {
-        let h = holding(&rig.gunner);
+        let h = rig.still();
         rig.frame([h, h]);
     }
     assert!(
@@ -142,6 +148,12 @@ fn rig_with(cvars: &[(&str, &str)]) -> Option<Rig> {
         .map(|(&n, _)| n)
         .expect("the turret entity in the gunner's snapshot");
     rig.gun = gun;
+    // The joins' `holding` cmds turned the view back to yaw 0 after the
+    // script's `setPlayerAngles`; face the gun the way the retail probe did.
+    let (me, at) = (rig.sample().origin, rig.gun_origin());
+    let yaw = (at[1] - me[1]).atan2(at[0] - me[0]).to_degrees();
+    rig.look([0.0, yaw]);
+    rig.hold(1);
     Some(rig)
 }
 
@@ -168,11 +180,24 @@ impl Rig {
         self.sample()
     }
 
-    /// `n` frames of `holding` cmds.
+    /// The gunner's `holding` cmd with the mouse left where it is: the
+    /// angles are the newest snapshot's view, since `holding`'s zero angles
+    /// are an absolute turn to yaw 0 and would undo `setPlayerAngles` and a
+    /// mount's view snap.
+    fn still(&self) -> UserCmd {
+        let mut h = holding(&self.gunner);
+        if let Some(s) = self.gunner.snapshots().newest() {
+            let v = s.ps.viewangles(&PROTOCOL_V1);
+            h.angles = [deg_to_short_rounded(v[0]), deg_to_short_rounded(v[1]), 0];
+        }
+        h
+    }
+
+    /// `n` frames of [`Rig::still`] cmds.
     fn hold(&mut self, n: usize) -> Sample {
         let mut s = Sample::default();
         for _ in 0..n {
-            let h = holding(&self.gunner);
+            let h = self.still();
             s = self.frame([h, h]);
         }
         s
@@ -180,7 +205,7 @@ impl Rig {
 
     /// One frame whose first cmd adds `buttons`, then one holding frame.
     fn tap(&mut self, buttons: u8) -> Sample {
-        let h = holding(&self.gunner);
+        let h = self.still();
         let tapped = UserCmd {
             buttons: h.buttons | buttons,
             ..h
@@ -190,7 +215,7 @@ impl Rig {
     }
 
     /// The gunner's view turned to `angles` (absolute, degrees) for one
-    /// frame. `NetClient::send_frame` already subtracts `delta_angles`
+    /// frame; `hold` and `tap` keep it. `NetClient::send_frame` already subtracts `delta_angles`
     /// before it puts a cmd on the wire, so this passes the absolute shorts
     /// and lets it.
     fn look(&mut self, angles: [f32; 2]) -> Sample {
@@ -262,4 +287,21 @@ fn the_rig_places_the_gunner_behind_the_gun() {
     let gun = rig.gun_origin();
     let d = ((s.origin[0] - gun[0]).powi(2) + (s.origin[1] - gun[1]).powi(2)).sqrt();
     assert!(d < 60.0, "gunner {:?} gun {:?}", s.origin, gun);
+}
+
+/// Behind the gun and facing it the hint is `HINT_MG42`; the use key mounts
+/// it, and the mounted frames read the lock, the stand bits and no hint
+/// (`docs/research/cod11-turrets.md` 12.1 and 12.10).
+#[test]
+fn standing_behind_the_gun_shows_hint_mg42_and_use_mounts_it() {
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    assert_eq!(rig.hold(1).hint, 6);
+    rig.tap(vcod_common::net::msg::BUTTON_USE);
+    let s = rig.hold(2);
+    assert_eq!(s.viewlocked, 1);
+    assert_eq!(s.viewlocked_ent, rig.gun as i32);
+    assert_eq!(s.e_flags & 0xC000, 0xC000);
+    assert_eq!(s.hint, 0);
 }

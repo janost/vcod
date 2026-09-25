@@ -280,6 +280,20 @@ pub fn script_menu_index(cs: &[String], name: &str) -> Option<usize> {
     (lo..=hi).find(|s| cs[*s] == name).map(|s| s - lo)
 }
 
+/// The first of the 32 hint-string configstrings `G_GetHintStringIndex`
+/// (0x5a238) fills (`docs/research/cod11-gsc-object-model.md`, the
+/// hint-string paragraph).
+const HINT_STRINGS: usize = 1212;
+const MAX_HINT_STRINGS: usize = 32;
+
+/// The slot within the hint-string range holding `name`, which is what
+/// `serverCursorHintString` carries: the stock turret's `CGAME_USEMG42` is 0.
+pub fn hint_string_index(cs: &[String], name: &str) -> Option<i32> {
+    (0..MAX_HINT_STRINGS)
+        .find(|i| cs.get(HINT_STRINGS + i).is_some_and(|s| s == name))
+        .map(|i| i as i32)
+}
+
 /// The inverse: what `Cmd_MenuResponse_f` (0x486d8) reads back out of
 /// configstring `CsRange::Menu.start + index` to name the menu in its
 /// `menuresponse` notify. Empty when nothing precached that slot, which is

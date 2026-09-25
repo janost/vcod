@@ -205,6 +205,15 @@ fn origin_of(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
     }
 }
 
+/// Any entity's `angles`, zero when unset.
+pub fn angles_of(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
+    let field = cx.intern_folded("angles");
+    match host.get_field(cx, id, field) {
+        Value::Vector(v) => v,
+        _ => [0.0; 3],
+    }
+}
+
 fn live_items(host: &GameHost) -> Vec<(EntId, ItemState)> {
     host.ents
         .iter_inuse()
@@ -222,23 +231,36 @@ pub fn touching(host: &mut GameHost, cx: &mut Cx, player: [f32; 3]) -> Vec<EntId
         .collect()
 }
 
+/// What the use key and the cursor hint found: an item to take or a turret
+/// to man.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Activate {
+    Item(EntId),
+    Turret(EntId),
+}
+
+/// A turret's bounds centre above its origin: `G_SpawnTurret`'s box is
+/// (-32, -32, 0) to (32, 32, 56) (`docs/research/cod11-turrets.md` 3, 4.1).
+const TURRET_CENTRE_Z: f32 = 28.0;
+
 /// `G_GetActivateEnt`'s choice (section 2.1): the best-scoring grabbable
-/// item in reach whose centre the muzzle can see past the world. Retail
-/// scores an ungrabbable one 10000 behind and cuts it off the list; leaving
-/// it out is the same list.
+/// item or usable turret in reach whose centre the muzzle can see past the
+/// world. Retail scores an ungrabbable item 10000 behind and cuts it off the
+/// list, and its use and hint loops step past a turret `G_IsTurretUsable`
+/// refuses (turrets doc 4.1, 4.3); leaving both out is the same choice.
 pub fn activate_ent(
     host: &mut GameHost,
     cx: &mut Cx,
     slot: usize,
     eye: [f32; 3],
     view: [f32; 3],
-) -> Option<EntId> {
+) -> Option<Activate> {
     use crate::game::pickup::{activate_score, can_grab, item_kind};
     let muzzle = glam::Vec3::from(eye).trunc().to_array();
     let forward = crate::game::spawn::angle_forward(view);
     let inv = inventory(host, slot);
     let weapons = host.weapons.clone();
-    let mut scored: Vec<(EntId, f32, [f32; 3])> = Vec::new();
+    let mut scored: Vec<(Activate, f32, [f32; 3])> = Vec::new();
     for (id, item) in live_items(host) {
         let Some(kind) = item_kind(item.index as usize) else {
             continue;
@@ -255,12 +277,35 @@ pub fn activate_ent(
         }
         let centre = origin_of(host, cx, id);
         if let Some(s) = activate_score(muzzle, forward, centre) {
-            scored.push((id, s, centre));
+            scored.push((Activate::Item(id), s, centre));
+        }
+    }
+    let player = host
+        .ents
+        .handle(slot as u32)
+        .map_or([0.0; 3], |c| origin_of(host, cx, c));
+    let grenade_ms = host.client_grenade_ms.get(slot).copied().unwrap_or(0);
+    let on_ground = host.client_on_ground.get(slot).copied().unwrap_or(false);
+    let mut turrets: Vec<EntId> = host.turrets.keys().copied().collect();
+    turrets.sort();
+    for id in turrets {
+        if host.ents.get(id).is_none() {
+            continue;
+        }
+        let origin = origin_of(host, cx, id);
+        let yaw = angles_of(host, cx, id)[1];
+        let rec = &host.turrets[&id];
+        if !crate::game::turret::usable(rec, origin, yaw, player, grenade_ms, on_ground) {
+            continue;
+        }
+        let centre = [origin[0], origin[1], origin[2] + TURRET_CENTRE_Z];
+        if let Some(s) = activate_score(muzzle, forward, centre) {
+            scored.push((Activate::Turret(id), s, centre));
         }
     }
     scored.sort_by(|a, b| a.1.total_cmp(&b.1));
     let world = host.world.clone();
-    scored.into_iter().find_map(|(id, _, c)| {
+    scored.into_iter().find_map(|(hit, _, c)| {
         let blocked = world.as_ref().is_some_and(|w| {
             let tr = w.collision.point_trace(
                 muzzle.into(),
@@ -270,7 +315,7 @@ pub fn activate_ent(
             );
             tr.fraction < 1.0 && w.collision.entity_num(&tr) == ENTITYNUM_WORLD
         });
-        (!blocked).then_some(id)
+        (!blocked).then_some(hit)
     })
 }
 

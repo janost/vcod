@@ -288,6 +288,11 @@ struct Touched {
     /// The eye and `ps.viewangles` the cmd left, for the use key's aim.
     eye: [f32; 3],
     view: [f32; 3],
+    /// `ps.grenadeTimeLeft` as the cmd left it: a frag in hand refuses a
+    /// turret (`G_IsTurretUsable`).
+    grenade_ms: i32,
+    /// The stance a mount saves for the release.
+    stance: vcod_common::pmove::Stance,
 }
 
 /// What one client's usercmd replay did this tick, for the trace line.
@@ -2836,8 +2841,12 @@ impl Server {
                     rt.set_client_on_ground(slot, sim.on_ground());
                     rt.set_client_aim(slot, sim.ps.view().eye.into(), sim.aim_angles());
                     rt.aim_lookat(slot, self.sv_time_ms);
-                    sim.cursor_hint =
+                    let (hint, string) =
                         rt.cursor_hint_pass(slot, sim.ps.view().eye.into(), sim.view_angles());
+                    sim.cursor_hint = hint;
+                    if let Some(string) = string {
+                        sim.cursor_hint_string = string;
+                    }
                 }
             }
         }
@@ -3011,6 +3020,8 @@ impl Server {
                     take,
                     eye: sim.ps.view().eye.into(),
                     view: sim.view_angles(),
+                    grenade_ms: sim.ps.grenade_time_left_ms,
+                    stance: sim.ps.stance,
                 });
                 last_cmd = Some(cmd);
                 c.last_processed_st = cmd.server_time;
@@ -3072,8 +3083,18 @@ impl Server {
                 if let Some(w) = t.take {
                     rt.take_client_weapon(t.slot, w);
                 }
+                rt.set_client_grenade_ms(t.slot, t.grenade_ms);
                 rt.touch_triggers_with_buttons(t.slot, now_ms, t.buttons);
                 rt.item_pass(t.slot, t.buttons, t.eye, t.view);
+                // The mount lands inside the use cmd (turrets doc 12.1), so
+                // it reaches the sim before the next cmd's pass runs.
+                for (turret, stance, view) in
+                    rt.take_turret_mounts(t.slot, t.origin, t.stance, t.view)
+                {
+                    if let Some(sim) = self.clients[t.slot].as_mut().and_then(|c| c.sim.as_mut()) {
+                        crate::game::turret::mount_sim(sim, turret, stance, view);
+                    }
+                }
             }
         }
         // The state each player ended the tick in, mirrored onto the host for
