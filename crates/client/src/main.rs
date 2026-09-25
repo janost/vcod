@@ -1962,9 +1962,12 @@ impl ApplicationHandler for App {
                                         }
                                     }
                                     let predicted = if ps_client == client_num {
+                                        let clock = play::predict::Clock {
+                                            local_ms,
+                                            server_ms: net.server_clock_ms(),
+                                        };
                                         net.snapshots().newest().and_then(|s| {
-                                            predictor
-                                                .predict(p, &s.ps, ring, world, weapons, local_ms)
+                                            predictor.predict(p, &s.ps, ring, world, weapons, clock)
                                         })
                                     } else {
                                         predictor.reset();

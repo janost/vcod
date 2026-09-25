@@ -20,8 +20,10 @@ const EF_TELEPORT: i32 = 0x8;
 
 /// What the camera draws for a predicted frame.
 pub struct PredictedView {
-    /// The predicted origin minus what is left of the eased correction.
+    /// Eased between the results before and after the newest cmd, minus
+    /// what is left of the correction.
     pub origin: Vec3,
+    /// Eased the same way as `origin`.
     pub view_height: f32,
     /// Raw 16-bit wire values, the prone cone's push included.
     pub delta_angles: [i32; 3],
@@ -30,10 +32,51 @@ pub struct PredictedView {
     pub pred: Predicted,
 }
 
+/// The frame's two clocks.
+#[derive(Clone, Copy)]
+pub struct Clock {
+    /// Monotonic wall ms; the error decays on it.
+    pub local_ms: f64,
+    /// `NetClient::server_clock_ms`, the clock cmds are stamped with.
+    pub server_ms: i32,
+}
+
 /// The replay drawn last frame, and the snapshot playerstate it started from.
 struct Replay {
     snap: msg::PlayerState,
     pred: Predicted,
+    /// Origin and view height before the newest cmd ran; the camera eases
+    /// from here to `pred` over that cmd's [`CMD_MS`].
+    prev: (Vec3, f32),
+}
+
+impl Replay {
+    fn new(snap: &msg::PlayerState, pred: Predicted) -> Self {
+        Replay {
+            snap: snap.clone(),
+            prev: (pred.ps.origin, pred.ps.view_height()),
+            pred,
+        }
+    }
+
+    /// Runs every cmd past `pred.command_time`, oldest first, calling
+    /// `after` after each; returns how many ran.
+    fn run(
+        &mut self,
+        ring: &CmdRing,
+        world: &CollisionWorld,
+        weapons: &[Option<WeaponDef>],
+        mut after: impl FnMut(&Predicted),
+    ) -> usize {
+        let mut n = 0;
+        for cmd in ring.since(self.pred.command_time) {
+            self.prev = (self.pred.ps.origin, self.pred.ps.view_height());
+            predict::run_cmd(&mut self.pred, cmd, world, weapons);
+            after(&self.pred);
+            n += 1;
+        }
+        n
+    }
 }
 
 #[derive(Default)]
@@ -72,29 +115,37 @@ impl Predictor {
         ring: &CmdRing,
         world: &CollisionWorld,
         weapons: &[Option<WeaponDef>],
-        now_ms: f64,
+        clock: Clock,
     ) -> Option<PredictedView> {
         if !predict::predictable(ps.field_i32(p, "pm_type")) {
             self.reset();
             return None;
         }
-        if now_ms - self.log_ms >= 1000.0 {
+        if clock.local_ms - self.log_ms >= 1000.0 {
             log::debug!("predict: max correction {:.2}u", self.max_correction);
             self.max_correction = 0.0;
-            self.log_ms = now_ms;
+            self.log_ms = clock.local_ms;
         }
         if matches!(&self.replay, Some(r) if r.snap == *ps) {
             let r = self.replay.as_mut().expect("matched above");
-            let n = replay(&mut r.pred, ring, world, weapons, |_| {});
+            let n = r.run(ring, world, weapons, |_| {});
             self.count(n);
-        } else if !self.replay_snapshot(p, ps, ring, world, weapons, now_ms) {
+        } else if !self.replay_snapshot(p, ps, ring, world, weapons, clock.local_ms) {
             return None;
         }
-        let pred = self.replay.as_ref().expect("replayed above").pred;
+        let r = self.replay.as_ref().expect("replayed above");
+        let pred = r.pred;
         self.last = Some((pred.command_time, pred.ps.origin));
-        let error = self.error * self.decay(now_ms);
+        let error = self.error * self.decay(clock.local_ms);
         self.drawn_error = Some(error.length());
-        Some(view(pred, pred.ps.origin - error))
+        let f = cmd_fraction(clock.server_ms, pred.command_time);
+        let (prev_origin, prev_height) = r.prev;
+        Some(PredictedView {
+            origin: prev_origin.lerp(pred.ps.origin, f) - error,
+            view_height: prev_height + (pred.ps.view_height() - prev_height) * f,
+            delta_angles: pred.delta_angles,
+            pred,
+        })
     }
 
     /// A new snapshot: rebuild from it, replay every cmd past its
@@ -130,15 +181,15 @@ impl Predictor {
             .since(command_time.wrapping_sub(1))
             .next()
             .filter(|c| c.server_time == command_time);
-        let mut pred = predict::from_wire(p, ps, last_cmd);
+        let mut r = Replay::new(ps, predict::from_wire(p, ps, last_cmd));
 
         // Last frame's prediction against this one's at the same cmd: the
         // correction the snapshot brought.
         let last = self.last;
         let mut at_last = last
-            .filter(|&(t, _)| t == pred.command_time)
-            .map(|_| pred.ps.origin);
-        let n = replay(&mut pred, ring, world, weapons, |pred| {
+            .filter(|&(t, _)| t == r.pred.command_time)
+            .map(|_| r.pred.ps.origin);
+        let n = r.run(ring, world, weapons, |pred| {
             if last.is_some_and(|(t, _)| t == pred.command_time) {
                 at_last = Some(pred.ps.origin);
             }
@@ -154,10 +205,7 @@ impl Predictor {
                 self.error_ms = now_ms;
             }
         }
-        self.replay = Some(Replay {
-            snap: ps.clone(),
-            pred,
-        });
+        self.replay = Some(r);
         true
     }
 
@@ -231,31 +279,10 @@ pub fn unlink_script_brushes(world: &CollisionWorld, entities: &str, gametype: &
     }
 }
 
-/// Runs every cmd past `pred.command_time`, oldest first, calling `after`
-/// after each; returns how many ran.
-fn replay(
-    pred: &mut Predicted,
-    ring: &CmdRing,
-    world: &CollisionWorld,
-    weapons: &[Option<WeaponDef>],
-    mut after: impl FnMut(&Predicted),
-) -> usize {
-    let mut n = 0;
-    for cmd in ring.since(pred.command_time) {
-        predict::run_cmd(pred, cmd, world, weapons);
-        after(pred);
-        n += 1;
-    }
-    n
-}
-
-fn view(pred: Predicted, origin: Vec3) -> PredictedView {
-    PredictedView {
-        origin,
-        view_height: pred.ps.view_height(),
-        delta_angles: pred.delta_angles,
-        pred,
-    }
+/// How far the camera is from the result before the newest cmd to the
+/// newest's: `server_ms` runs between the [`CMD_MS`] ticks cmds are built on.
+fn cmd_fraction(server_ms: i32, newest_cmd_ms: i32) -> f32 {
+    (server_ms.wrapping_sub(newest_cmd_ms) as f32 / CMD_MS as f32).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -266,6 +293,15 @@ mod tests {
     use vcod_common::net::protocol::{ENTITYNUM_WORLD, PROTOCOL_V1};
 
     const P: &Protocol = &PROTOCOL_V1;
+
+    /// A frame at `local_ms` whose server clock is past every cmd, so the
+    /// camera sits on the newest cmd's result.
+    fn clock(local_ms: f64) -> Clock {
+        Clock {
+            local_ms,
+            server_ms: 1_000_000,
+        }
+    }
 
     fn set(w: &mut msg::PlayerState, name: &str, v: i32) {
         w.fields[msg::PlayerState::field_index(P, name).unwrap()] = v;
@@ -303,7 +339,7 @@ mod tests {
         let run = |oldest: i32| {
             let mut pr = Predictor::default();
             let r = ring((oldest..=5200).step_by(8), true);
-            (pr.predict(P, &snap, &r, &world, &[], 0.0), pr.misses)
+            (pr.predict(P, &snap, &r, &world, &[], clock(0.0)), pr.misses)
         };
 
         let (v, misses) = run(5008);
@@ -321,7 +357,7 @@ mod tests {
 
         let mut pr = Predictor::default();
         assert!(pr
-            .predict(P, &snap, &CmdRing::default(), &world, &[], 0.0)
+            .predict(P, &snap, &CmdRing::default(), &world, &[], clock(0.0))
             .is_none());
         assert_eq!(pr.misses, 1);
     }
@@ -334,17 +370,17 @@ mod tests {
         let snap = standing(5000, 0.0);
         let mut r = ring((5008..=5040).step_by(8), true);
         let mut pr = Predictor::default();
-        pr.predict(P, &snap, &r, &world, &[], 0.0).unwrap();
+        pr.predict(P, &snap, &r, &world, &[], clock(0.0)).unwrap();
         assert_eq!(pr.cmds_run, 5);
         r.push(UserCmd {
             server_time: 5048,
             forward: 127,
             ..Default::default()
         });
-        let v = pr.predict(P, &snap, &r, &world, &[], 8.0).unwrap();
+        let v = pr.predict(P, &snap, &r, &world, &[], clock(8.0)).unwrap();
         assert_eq!(pr.cmds_run, 6);
         let full = Predictor::default()
-            .predict(P, &snap, &r, &world, &[], 8.0)
+            .predict(P, &snap, &r, &world, &[], clock(8.0))
             .unwrap();
         assert_eq!(v.origin, full.origin);
         assert_eq!(v.pred.command_time, 5048);
@@ -372,7 +408,7 @@ mod tests {
         set(&mut snap, "pm_type", 6);
         let r = ring((5008..=5040).step_by(8), false);
         assert!(Predictor::default()
-            .predict(P, &snap, &r, &world, &[], 0.0)
+            .predict(P, &snap, &r, &world, &[], clock(0.0))
             .is_none());
     }
 
@@ -383,13 +419,13 @@ mod tests {
         let world = test_world(&[]);
         let r = ring((5008..=5040).step_by(8), false);
         let mut pr = Predictor::default();
-        pr.predict(P, &standing(5000, 0.0), &r, &world, &[], 0.0)
+        pr.predict(P, &standing(5000, 0.0), &r, &world, &[], clock(0.0))
             .unwrap();
         let mut snap = standing(5016, x);
         if flip {
             set(&mut snap, "eFlags", 16 | 0x8);
         }
-        let v = pr.predict(P, &snap, &r, &world, &[], 16.0).unwrap();
+        let v = pr.predict(P, &snap, &r, &world, &[], clock(16.0)).unwrap();
         (v.origin.x, v.pred.ps.origin.x)
     }
 
@@ -410,16 +446,69 @@ mod tests {
         let r = ring((5008..=5040).step_by(8), false);
         let mut pr = Predictor::default();
         let first = pr
-            .predict(P, &standing(5000, 0.0), &r, &world, &[], 0.0)
+            .predict(P, &standing(5000, 0.0), &r, &world, &[], clock(0.0))
             .unwrap();
         assert_eq!(first.origin.x, 0.0);
         let snap = standing(5016, 10.0);
         let at = |pr: &mut Predictor, ms: f64| {
-            pr.predict(P, &snap, &r, &world, &[], ms).unwrap().origin.x
+            pr.predict(P, &snap, &r, &world, &[], clock(ms))
+                .unwrap()
+                .origin
+                .x
         };
         assert_eq!(at(&mut pr, 16.0), 0.0, "the correction starts fully eased");
         assert!((at(&mut pr, 66.0) - 5.0).abs() < 1e-4);
         assert!((at(&mut pr, 116.0) - 10.0).abs() < 1e-4);
         assert_eq!(at(&mut pr, 500.0), 10.0);
+    }
+
+    #[test]
+    fn cmd_fraction_runs_over_one_cmd() {
+        assert_eq!(cmd_fraction(5040, 5040), 0.0);
+        assert_eq!(cmd_fraction(5042, 5040), 0.25);
+        assert_eq!(cmd_fraction(5046, 5040), 0.75);
+        assert_eq!(cmd_fraction(5048, 5040), 1.0);
+        assert_eq!(cmd_fraction(5100, 5040), 1.0, "a stalled cmd clock holds");
+        assert_eq!(
+            cmd_fraction(5030, 5040),
+            0.0,
+            "a clock re-anchored back holds"
+        );
+    }
+
+    /// Between two cmd ticks the camera eases from the result before the
+    /// newest cmd to the newest's instead of stepping.
+    #[test]
+    fn the_camera_moves_between_cmds() {
+        let world = test_world(&[]);
+        let snap = standing(5000, 0.0);
+        let r = ring((5008..=5040).step_by(8), true);
+        let mut pr = Predictor::default();
+        let at = |pr: &mut Predictor, server_ms: i32| {
+            let c = Clock {
+                local_ms: 0.0,
+                server_ms,
+            };
+            pr.predict(P, &snap, &r, &world, &[], c).unwrap().origin.x
+        };
+        let before_newest = {
+            let mut short = CmdRing::default();
+            for c in r.since(0).take(4) {
+                short.push(*c);
+            }
+            Predictor::default()
+                .predict(P, &snap, &short, &world, &[], clock(0.0))
+                .unwrap()
+                .origin
+                .x
+        };
+        let newest = at(&mut pr, 5048);
+        assert!(newest > before_newest);
+        assert_eq!(at(&mut pr, 5040), before_newest);
+        let half = at(&mut pr, 5044);
+        assert!(
+            (half - (before_newest + newest) / 2.0).abs() < 1e-4,
+            "{half}"
+        );
     }
 }
