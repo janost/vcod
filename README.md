@@ -35,8 +35,13 @@ combat effects.
   them. Your own movement and view are predicted: every cmd the server has
   not answered yet is replayed on the latest snapshot through the server's
   own movement step, so the view responds at the cmd rate (125 Hz) and a
-  correction eases out over 100 ms. It renders every player as an assembled
-  soldier playing the server-driven animations. Kill feed, chat, scoreboard,
+  correction eases out over 100 ms. Your own weapon is drawn in first
+  person with the hands the server names for your team, playing the clip
+  the predicted playerstate picks, and the sight zooms to the weapon's own
+  fov. Your fire, reload, switch, footstep and jump events play off the
+  prediction, the muzzle flash at the viewmodel's barrel, and are not
+  played again when the snapshot carrying them arrives. It renders every
+  player as an assembled soldier playing the server-driven animations. Kill feed, chat, scoreboard,
   sounds, tracers, impacts and muzzle flashes come from the same events the
   retail client reads. It downloads every pak
   the server references and the install lacks, the way the retail client
