@@ -8155,7 +8155,8 @@ fn write_turret_fixture(
         join.team, join.weapon
     ));
     out.push_str("# Three shells, the gsc probe first:\n");
-    out.push_str("#   COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=200 \\\n");
+    // The probe cannot see the server's own run length, so the header names none.
+    out.push_str("#   COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=<past both clients> \\\n");
     out.push_str(
         "#       tools/run_probe.sh client-probes/probe_turret mp_carentan +set probe_teleport 1\n",
     );

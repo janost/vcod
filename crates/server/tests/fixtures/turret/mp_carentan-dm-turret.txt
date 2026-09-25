@@ -3,7 +3,7 @@
 # turret 298 origin=1712.0,1830.0,8.0 angles=0.0,229.0,0.0
 # gunner team=allies weapon=m1carbine_mp
 # Three shells, the gsc probe first:
-#   COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=200 \
+#   COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=230 \
 #       tools/run_probe.sh client-probes/probe_turret mp_carentan +set probe_teleport 1
 #   cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team axis --probe-secs 180
 #   cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-turret --probe-secs 170

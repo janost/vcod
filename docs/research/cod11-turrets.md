@@ -706,22 +706,29 @@ of the weapon's `vertTurnSpeed`/`horTurnSpeed` (`+0x3f0`/`+0x3f4`), a multiply
 by 0.05 (0x7590c) and a test of its third argument, and `turret_think` is its
 only caller. INFERRED: the 200 applies when that argument is 0, so an unmanned
 barrel walks back to (rest pitch, 0) at 10 degrees a frame, 200 a second, and
-the turn speeds in the weapon file are dead in MP. VERIFIED, 12.8: each axis
-steps at most 10 a frame, independently of the other. INFERRED: with the owner at
+the turn speeds in the weapon file are dead in MP. VERIFIED, 12.8: no axis
+moves more than 10 in a frame. INFERRED, 12.8: each axis is capped on its
+own. INFERRED: with the owner at
 0x3ff the test reads the world entity's client, which is null, so every
 unmanned frame takes this branch.
 
 VERIFIED: `turret_controller` (0x53348) hands (`angles2[0]`, `angles2[1]`, 0)
 to `G_DObjSetControlTagAngles` for `tag_aim` and `tag_aim_animated`, and
 (`angles2[2]`, 0, 0) for `tag_flash` (`docs/protocol-1.1.md`). VERIFIED,
-0x524cc re-read with `annotate_func.py` for section 12: it adds `angles2[2]`
-into `angles2[0]` on entry (0x524eb..0x524f4); steps each axis by
-`AngleSubtract` toward the target, clamped to the limit (0x52588..0x525ec);
-copies the new `angles2[0]` into `angles2[2]` (0x525f4); clamps a second
-`AngleSubtract` of it against the entry pitch to the same limit
-(0x52642..0x52671); and stores that as `angles2[0]` and `angles2[2]` minus it
-as `angles2[2]` (0x52676..0x5267f). VERIFIED: the aim step writes `angles2[2]
-= 0` (section 6.2). INFERRED: `angles2[2]` carries into the next frame the
+0x524cc re-read with `annotate_func.py` for section 12: an add of
+`angles2[2]` into `angles2[0]` with its store (0x524eb..0x524f4); a
+two-pass loop holding a multiply by 0.05, an `AngleSubtract` call, compares
+against the limit and its negation, and an add stored back into each
+`angles2` slot (0x52588..0x525ec); a store of `angles2[0]` into `angles2[2]`
+(0x525f4); a second `AngleSubtract` call with the same compares
+(0x52642..0x52671); and stores to `angles2[0]` and `angles2[2]`
+(0x52676..0x5267f). INFERRED, the order and the branches: the entry adds the
+carried `angles2[2]` back into the pitch; the loop steps each axis toward the
+target, clamped to the limit; `angles2[2]` takes the stepped pitch; the
+second subtract measures that against the entry pitch and clamps it to the
+same limit; `angles2[0]` becomes the entry pitch plus the clamped step and
+`angles2[2]` what the clamp refused. VERIFIED: the aim step writes
+`angles2[2] = 0` (section 6.2). INFERRED: `angles2[2]` carries into the next frame the
 part of the pitch step the second clamp refused; starting from 0 with both
 clamps at 10 that part is always 0, so the stock slew never tilts the flash.
 VERIFIED, 12.8: `angles2[2]` reads 0.0 on every slewing snapshot.
@@ -955,7 +962,8 @@ barrel (10, 30), all put their `EV_BULLET_HIT_LARGE` (174) impact at
 (section 6.3).
 
 VERIFIED: the one instruction between 0x521d4 and 0x524cc that sets 0x400 in
-an `eFlags` byte is the gun's (`or BYTE PTR [ebx+0x9], 0x4` at 0x5232f), and the retail carbine capture
+an `eFlags` byte is the byte-wide OR of 0x4 into byte 1 of the gun's
+`s.eFlags` at 0x5232f, and the retail carbine capture
 `playerstate/mp_carentan-tdm-hit-target.txt` reads `eFlags` 1040 (0x410) on
 its line 80, a frame carrying `EV_FIRE_WEAPON`. INFERRED: the gunner's 0x400
 is the generic firing flag the attack bit sets, not a turret store.
@@ -970,8 +978,9 @@ the target, and a second at 1248,1308,14 on the world behind it (lines
 same snapshot carries `EV_PAIN` (187) with parm 47 on entity 0 and
 `EV_OBITUARY` (201) on temp entity 180 (lines 1064-1072). The round at 35000
 reaches only the world behind (line 1080). VERIFIED: the server logged one
-`D;` and one `K;` for client 0, both 53 damage (script lines 33-34), and 53
-is short of the target's 100 health.
+`D;` and one `K;` for client 0, both 53 damage (script lines 33-34).
+INFERRED: the target spawned at the stock 100 health, which no committed line
+of this run carries, so one 53 wounds and the second kills.
 
 INFERRED: the 34900 round is the `D;` hit and the 34950 round the `K;` hit.
 The kill's obituary is in the same snapshot as the fire event that caused it,
@@ -981,8 +990,10 @@ same server frame as the shot, not the next one. INFERRED: the first hit's
 after its round. The victim's entity state is copied from its playerstate in
 its own `ClientEndFrame`, and client 0's runs before the gunner's, client 1,
 fires. A victim numbered above its gunner would show the pain on the round's
-own snapshot. VERIFIED, the second impact behind the target on both hitting
-rounds: the round goes on past the player it hits. INFERRED: that is the
+own snapshot. VERIFIED: both hitting rounds carry a second impact on the
+world behind the target in the same snapshot (lines 1058-1059 and
+1070-1071).
+INFERRED: the round goes on past the player it hits, and that is the
 rifle-bullet pass-through of `cod11-combat.md` 2.4, step 5, at half damage,
 since the stock turret file sets `rifleBullet 1`.
 
