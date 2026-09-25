@@ -7,8 +7,9 @@ use vcod_common::net::events::GameEvent;
 use vcod_common::pmove::predict::Predicted;
 
 const EVENT_RING: i32 = 4;
-/// Q3's `MAX_PREDICTED_EVENTS`: how far back a played event is remembered.
-const REMEMBERED: usize = 8;
+/// How many sequences back a played event is remembered: Q3's
+/// `MAX_PREDICTED_EVENTS`. Divides 256, so `seq % REMEMBERED` survives the wrap.
+const REMEMBERED: usize = 16;
 
 /// `seq - from` on the wire's 8-bit ring, signed: negative is behind.
 fn ahead(seq: i32, from: i32) -> i32 {
@@ -19,8 +20,8 @@ fn ahead(seq: i32, from: i32) -> i32 {
 pub struct PredictedEvents {
     /// One past the newest sequence played, `None` while not predicting.
     played_to: Option<i32>,
-    /// `(seq, event)` played, at `seq & 7`. `None` is unknown: the drain,
-    /// not the prediction, played it or nobody did.
+    /// `(seq, event)` played, at `seq % REMEMBERED`. `None`: nothing played
+    /// at that slot since tracking started.
     played: [Option<(i32, i32)>; REMEMBERED],
 }
 
@@ -237,6 +238,23 @@ mod tests {
             [(1, PICKUP, 0)]
         );
         assert!(!e.filter_snapshot(1, PICKUP));
+    }
+
+    /// A prediction running well ahead of the drained snapshot, as automatic
+    /// fire and footsteps do at a few hundred ms of round trip: every copy
+    /// the snapshots bring back is still remembered and skipped.
+    #[test]
+    fn twelve_ahead_every_copy_is_skipped_once() {
+        let mut e = tracking(0);
+        let event_at = |s: i32| if s % 3 == 0 { FOOTSTEP } else { FIRE };
+        let mut ring = [0; 4];
+        for s in 0..12 {
+            ring[(s & 3) as usize] = event_at(s);
+            assert_eq!(e.take_predicted(s + 1, ring, [0; 4]), [(s, event_at(s), 0)]);
+        }
+        for s in 0..12 {
+            assert!(!e.filter_snapshot(s, event_at(s)), "copy of {s} replayed");
+        }
     }
 
     /// A predicted footstep the server never raised: its real fire at that
