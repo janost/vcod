@@ -4,6 +4,9 @@
 pub mod chat;
 pub mod font;
 pub mod killfeed;
+/// Wired in by the --connect join task.
+#[allow(dead_code)]
+pub mod menu;
 pub mod scoreboard;
 pub mod status;
 
@@ -66,6 +69,8 @@ pub struct HudFrame<'a> {
     pub server_time: i32,
     /// Lazy weapon-file loads for killfeed icons.
     pub fs: &'a Pk3Fs,
+    /// The server's open script menu, if any; drawn on top of everything else.
+    pub menu: Option<&'a menu::MenuView>,
 }
 
 impl Hud {
@@ -181,6 +186,17 @@ impl Hud {
                 f.screen_w,
                 &names,
                 &status.gametype,
+                &mut out,
+            );
+        }
+        // Last, so the open menu sits on top of everything else.
+        if let Some(view) = f.menu {
+            menu::build(
+                view,
+                &self.font_text,
+                HUD_SCALE,
+                f.screen_w,
+                f.screen_h,
                 &mut out,
             );
         }

@@ -963,6 +963,7 @@ fn loading_frame(
             protocol: &net::protocol::PROTOCOL_V1,
             server_time: 0,
             fs,
+            menu: None,
         };
         let quads = hud.build(&f);
         r.set_hud_quads(fs, quads);
@@ -1774,6 +1775,7 @@ impl ApplicationHandler for App {
                                         protocol: p,
                                         server_time: newest.map_or(0, |s| s.server_time),
                                         fs: &self.fs,
+                                        menu: None,
                                     };
 
                                     // Events use the newest snapshot, not the interpolation
