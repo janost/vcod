@@ -18,9 +18,10 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use common::{holding, ClientEnd, Queues, CMD_MS};
-use vcod_common::net::msg::UserCmd;
+use vcod_common::net::msg::{UserCmd, BUTTON_ATTACK, BUTTON_USE};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::NetClient;
+use vcod_common::pmove::aim::angle_subtract;
 use vcod_server::Server;
 
 const MAP: &str = "mp_carentan";
@@ -31,6 +32,9 @@ const PROBE_SRC: &str = concat!(
 );
 /// `misc_mg42`'s wire `eType`.
 const ET_MG42: i32 = 11;
+/// `docs/research/cod11-events-and-fx.md` section 1.
+const EV_FIRE_WEAPON_MG42: i32 = 168;
+const EV_SOUND_ALIAS: i32 = 172;
 /// The spot the probe script places its clients around (its own comment).
 const GUN_NEAR: [f32; 2] = [1712.0, 1830.0];
 
@@ -85,6 +89,8 @@ struct Sample {
     turret_angles2: [f32; 3],
     turret_loop: i32,
     turret_e_flags: i32,
+    /// The gun's own ring, oldest first, as far as `eventSequence` has filled it.
+    turret_events: Vec<i32>,
 }
 
 /// `probe_turret` as the gametype, both clients through the stock menus,
@@ -270,6 +276,12 @@ impl Rig {
                 .map(|i| gun.map_or(0.0, |e| e.field_f32(p, &format!("angles2[{i}]")))),
             turret_loop: gun.map_or(0, |e| e.field_i32(p, "loopSound")),
             turret_e_flags: gun.map_or(0, |e| e.field_i32(p, "eFlags")),
+            turret_events: gun.map_or(Vec::new(), |e| {
+                let seq = e.field_i32(p, "eventSequence");
+                ((seq - 4).max(0)..seq)
+                    .map(|i| e.field_i32(p, &format!("events[{}]", i & 3)))
+                    .collect()
+            }),
         }
     }
 }
@@ -298,10 +310,115 @@ fn standing_behind_the_gun_shows_hint_mg42_and_use_mounts_it() {
         return;
     };
     assert_eq!(rig.hold(1).hint, 6);
-    rig.tap(vcod_common::net::msg::BUTTON_USE);
+    rig.tap(BUTTON_USE);
     let s = rig.hold(2);
     assert_eq!(s.viewlocked, 1);
     assert_eq!(s.viewlocked_ent, rig.gun as i32);
     assert_eq!(s.e_flags & 0xC000, 0xC000);
     assert_eq!(s.hint, 0);
+}
+
+/// A view turned past the arc drags the barrel to the edge, 15 degrees a
+/// frame, and holds it and the view there (`docs/research/cod11-turrets.md`
+/// 6.2 and 12.3).
+#[test]
+fn a_manned_gun_follows_the_view_and_stops_at_the_edge() {
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    rig.tap(BUTTON_USE);
+    let yaw = rig.gun_yaw();
+    for _ in 0..10 {
+        rig.look([0.0, yaw + 90.0]);
+    }
+    let s = rig.hold(1);
+    assert!(
+        (s.turret_angles2[1] - 45.0).abs() < 0.01,
+        "{:?}",
+        s.turret_angles2
+    );
+    assert!(
+        (angle_subtract(s.viewangles[1], yaw) - 45.0).abs() < 0.1,
+        "view {:?} gun yaw {yaw}",
+        s.viewangles
+    );
+}
+
+/// A held trigger fires on every frame, the frame reads `viewlocked` 2 and
+/// 0x400 on both the gun and the gunner, and the loop stays one frame past
+/// the last shot before the cooldown alias ends it (turrets doc 6.3, 6.4 and
+/// 12.4).
+#[test]
+fn holding_attack_fires_and_the_loop_sound_follows() {
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    rig.tap(BUTTON_USE);
+    let h = rig.still();
+    let fire = UserCmd {
+        buttons: h.buttons | BUTTON_ATTACK,
+        ..h
+    };
+    let s = rig.frame([fire, fire]);
+    assert_ne!(s.turret_loop, 0);
+    assert_eq!(s.turret_e_flags & 0x400, 0x400);
+    assert_eq!(s.e_flags & 0x400, 0x400);
+    assert_eq!(s.viewlocked, 2);
+    assert_eq!(s.turret_events.last(), Some(&EV_FIRE_WEAPON_MG42));
+    let s = rig.frame([fire, fire]);
+    assert_eq!(s.viewlocked, 2, "a second shot on the next frame");
+    let s = rig.hold(1);
+    assert_ne!(
+        s.turret_loop, 0,
+        "the loop outlasts the last shot by a frame"
+    );
+    assert_eq!(
+        (s.viewlocked, s.e_flags & 0x400, s.turret_e_flags & 0x400),
+        (1, 0, 0)
+    );
+    let s = rig.hold(1);
+    assert_eq!(s.turret_loop, 0);
+    assert_eq!(s.turret_events.last(), Some(&EV_SOUND_ALIAS));
+    let s = rig.hold(5);
+    assert_eq!(s.turret_loop, 0);
+}
+
+/// A round on the target takes its health on the snapshot of the frame it
+/// was fired on, not the next one (turrets doc 12.5).
+#[test]
+fn a_round_on_the_target_lands_in_the_frame_it_was_fired() {
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    rig.tap(BUTTON_USE);
+    let p = &PROTOCOL_V1;
+    let gun = rig.gun_origin();
+    let target = rig
+        .target
+        .snapshots()
+        .newest()
+        .map(|s| s.ps.origin(p))
+        .expect("the target's snapshot");
+    // From about `tag_player`'s height to the target's chest.
+    let (dx, dy, dz) = (
+        target[0] - gun[0],
+        target[1] - gun[1],
+        target[2] + 40.0 - (gun[2] + 21.0),
+    );
+    let yaw = dy.atan2(dx).to_degrees();
+    let pitch = -dz.atan2(dx.hypot(dy)).to_degrees();
+    for _ in 0..4 {
+        rig.look([pitch, yaw]);
+    }
+    let before = rig.target.snapshots().newest().unwrap().ps.health();
+    assert_eq!(before, 100);
+    let h = rig.still();
+    let fire = UserCmd {
+        buttons: h.buttons | BUTTON_ATTACK,
+        ..h
+    };
+    let s = rig.frame([fire, fire]);
+    assert_eq!(s.viewlocked, 2);
+    let after = rig.target.snapshots().newest().unwrap().ps.health();
+    assert!(after < before, "health {after} on the shot's own snapshot");
 }

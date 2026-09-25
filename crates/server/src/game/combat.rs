@@ -292,8 +292,8 @@ pub(crate) fn ray_box(start: Vec3, end: Vec3, lo: Vec3, hi: Vec3) -> Option<f32>
 /// file's `rifleBullet` (combat doc, 2.4). The stock bolt-actions spell it
 /// `0`, so a kar98k, an enfield or a mosin logs `MOD_PISTOL_BULLET` however
 /// little that reads like a rifle.
-fn bullet_mod(def: &WeaponDef) -> (&'static str, i32) {
-    if def.sounds.rifle_bullet {
+fn bullet_mod(rifle_bullet: bool) -> (&'static str, i32) {
+    if rifle_bullet {
         ("MOD_RIFLE_BULLET", DFLAG_PASSTHRU)
     } else {
         ("MOD_PISTOL_BULLET", 0)
@@ -350,18 +350,86 @@ pub fn bullet_fire(
     let r = spread_deg(def, me, ads).to_radians().tan() * BULLET_RANGE;
     let end = muzzle + forward * BULLET_RANGE + right * (x * r) + up * (y * r);
 
-    let priority = if def.sounds.rifle_bullet {
+    let round = Round {
+        damage: def.damage,
+        rifle_bullet: def.sounds.rifle_bullet,
+        weapon_name,
+    };
+    fire_round(
+        shooter, muzzle, end, forward, round, sims, world, hitlocs, bones,
+    )
+}
+
+/// A turret's round (turrets doc 6.3): `Bullet_Fire` with no spread from the
+/// muzzle the gun worked out, along `dir`. The callback is told the gunner's
+/// carried weapon and names the gunner as the inflictor (turrets doc 13).
+#[allow(clippy::too_many_arguments)]
+pub fn bullet_fire_from(
+    shooter: usize,
+    muzzle: Vec3,
+    dir: Vec3,
+    damage: i32,
+    rifle_bullet: bool,
+    weapon_name: &str,
+    sims: &[(usize, &ClientSim)],
+    world: Option<&CollisionWorld>,
+    hitlocs: &HitLocTable,
+    bones: Option<&mut BoneTraceCtx>,
+) -> ShotResult {
+    let round = Round {
+        damage,
+        rifle_bullet,
+        weapon_name,
+    };
+    let end = muzzle + dir * BULLET_RANGE;
+    fire_round(
+        shooter, muzzle, end, dir, round, sims, world, hitlocs, bones,
+    )
+}
+
+/// What a bullet carries beyond its path.
+struct Round<'a> {
+    damage: i32,
+    rifle_bullet: bool,
+    weapon_name: &'a str,
+}
+
+/// `(int)(damage * multiplier)`: `G_Damage` multiplies on the x87 stack and
+/// truncates with an explicit `fldcw` (combat doc 4.2), so the product is
+/// taken wider than a float before the cut.
+fn located_damage(damage: i32, multiplier: f32) -> i32 {
+    (damage as f64 * multiplier as f64) as i32
+}
+
+/// One bullet from `muzzle` to `end`: the trace, the impact and the hit.
+#[allow(clippy::too_many_arguments)]
+fn fire_round(
+    shooter: usize,
+    muzzle: Vec3,
+    end: Vec3,
+    forward: Vec3,
+    round: Round,
+    sims: &[(usize, &ClientSim)],
+    world: Option<&CollisionWorld>,
+    hitlocs: &HitLocTable,
+    bones: Option<&mut BoneTraceCtx>,
+) -> ShotResult {
+    let none = ShotResult {
+        impact: None,
+        hit: None,
+    };
+    let priority = if round.rifle_bullet {
         &RIFLE_PRIORITY
     } else {
         &BULLET_PRIORITY
     };
     let traced = trace_attack(muzzle, end, shooter, sims, world, priority, bones);
-    let event = if def.sounds.rifle_bullet {
+    let event = if round.rifle_bullet {
         EV_BULLET_HIT_LARGE
     } else {
         EV_BULLET_HIT_SMALL
     };
-    let (mod_, dflags) = bullet_mod(def);
+    let (mod_, dflags) = bullet_mod(round.rifle_bullet);
     match traced {
         Traced::Player {
             slot,
@@ -369,8 +437,7 @@ pub fn bullet_fire(
             hitloc,
         } => {
             let point = muzzle + (end - muzzle) * fraction;
-            // Truncated toward zero, `G_Damage`'s explicit `fldcw` (4.2).
-            let damage = (def.damage as f32 * hitlocs.multiplier(hitloc)) as i32;
+            let damage = located_damage(round.damage, hitlocs.multiplier(hitloc));
             ShotResult {
                 impact: Some(TempEntity {
                     event,
@@ -392,7 +459,7 @@ pub fn bullet_fire(
                     damage,
                     dflags,
                     mod_,
-                    weapon: weapon_name.to_string(),
+                    weapon: round.weapon_name.to_string(),
                     point: point.into(),
                     dir: forward.into(),
                     hitloc,
@@ -785,7 +852,7 @@ mod tests {
         ];
         for (name, mod_) in want {
             let def = vcod_common::weapon::load(&fs, name).unwrap();
-            assert_eq!(bullet_mod(&def).0, mod_, "{name}");
+            assert_eq!(bullet_mod(def.sounds.rifle_bullet).0, mod_, "{name}");
         }
     }
 
@@ -972,6 +1039,51 @@ mod tests {
         assert_ne!(te.surf_type, 7);
         assert_eq!(te.scope, Scope::Broadcast);
         assert!(te.origin[2].abs() < 0.2, "on the floor, {:?}", te.origin);
+    }
+
+    /// A turret round (turrets doc 6.3): no spread, from the muzzle the gun
+    /// computed along the gunner's view, carrying the gun's damage and the
+    /// rifle means of death.
+    #[test]
+    fn a_turret_round_leaves_its_muzzle_along_the_view_and_names_the_gun() {
+        let world = vcod_common::collision::test_world(&[]);
+        let table = HitLocTable::default();
+        let a = new_for_test([0.0, 0.0, 0.0], 0.0);
+        let b = new_for_test([100.0, 0.0, 0.0], 180.0);
+        let r = bullet_fire_from(
+            0,
+            Vec3::new(40.0, 0.0, 40.0),
+            Vec3::X,
+            60,
+            true,
+            "m1carbine_mp",
+            &[(0, &a), (1, &b)],
+            Some(&world),
+            &table,
+            None,
+        );
+        let hit = r.hit.expect("the round reached B");
+        assert_eq!((hit.victim, hit.attacker), (1, 0));
+        assert_eq!(hit.inflictor, None);
+        assert_eq!(hit.damage, 60);
+        assert_eq!((hit.mod_, hit.dflags), ("MOD_RIFLE_BULLET", DFLAG_PASSTHRU));
+        assert_eq!(hit.weapon, "m1carbine_mp");
+        assert!((hit.point[0] - 85.0).abs() < 0.01, "{:?}", hit.point);
+        assert!((hit.point[2] - 40.0).abs() < 0.01, "{:?}", hit.point);
+        let te = r.impact.expect("a flesh impact");
+        assert_eq!(
+            (te.event, te.surf_type, te.scope),
+            (174, 7, Scope::AllBut(1))
+        );
+    }
+
+    /// `G_Damage` multiplies on the x87 stack and truncates (combat doc 4.2):
+    /// the turret capture's 53 is 60 * 0.9f there, where a float product
+    /// rounds to 54 first (turrets doc 12.6).
+    #[test]
+    fn the_hit_location_product_truncates_at_extended_precision() {
+        assert_eq!(located_damage(60, 0.9), 53);
+        assert_eq!(located_damage(45, 1.5), 67);
     }
 
     /// The trace picks the nearer of the world and a player: a wall between

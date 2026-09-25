@@ -280,6 +280,19 @@ pub fn script_menu_index(cs: &[String], name: &str) -> Option<usize> {
     (lo..=hi).find(|s| cs[*s] == name).map(|s| s - lo)
 }
 
+/// `CS_SOUNDS`: an alias index counts from here, so the range's first slot
+/// is 1 (docs/protocol-1.1.md, `s <idx>`).
+const CS_SOUNDS: usize = 524;
+
+/// The index an already registered sound alias travels as, in
+/// `EV_SOUND_ALIAS`'s parm and in `loopSound`; `None` if nothing indexed it.
+pub fn sound_alias_index(cs: &[String], name: &str) -> Option<i32> {
+    let (lo, hi) = CsRange::SoundAlias.bounds();
+    (lo..=hi)
+        .find(|&i| cs.get(i).is_some_and(|s| s == name))
+        .map(|i| (i - CS_SOUNDS) as i32)
+}
+
 /// The first of the 32 hint-string configstrings `G_GetHintStringIndex`
 /// (0x5a238) fills (`docs/research/cod11-gsc-object-model.md`, the
 /// hint-string paragraph).

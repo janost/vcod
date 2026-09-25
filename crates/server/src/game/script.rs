@@ -6,7 +6,7 @@ use std::rc::Rc;
 use crate::game::host::{ClientEvent, GameHost, SpawnRequest};
 use crate::game::item::Activate;
 use crate::game::spawn::spawn_entities_from_string;
-use crate::game::turret::TurretOp;
+use crate::game::turret::{TurretOp, TurretShot};
 use vcod_common::pk3::Pk3Fs;
 use vcod_gsc::{EntId, Loader, ScriptSource, Target, Value, Vm};
 
@@ -109,6 +109,10 @@ const TOUCH_MAX_PM_TYPE: i32 = 1;
 /// `serverCursorHint` for a usable turret, slot 6 of `hintStrings`
 /// (`docs/research/cod11-turrets.md` 4.3).
 const HINT_MG42: i32 = 6;
+/// A manned gun's shot and its cooldown alias, both on the gun's own ring
+/// (`docs/research/cod11-events-and-fx.md` section 1, turrets doc 6.3, 6.4).
+const EV_FIRE_WEAPON_MG42: i32 = 168;
+const EV_SOUND_ALIAS: i32 = 172;
 
 pub struct ScriptRuntime {
     vm: Vm,
@@ -553,6 +557,83 @@ impl ScriptRuntime {
             out.push((turret.0, rec.def.stance, view));
         }
         out
+    }
+
+    /// `turret_think_client` (0x52340, turrets doc 6) for the gun `slot`
+    /// mans, once per server frame in `ClientEndFrame`: the aim, the fire
+    /// and the loop sound, on the record, the gun's entity and the gunner's
+    /// sim. `attack_held` is the frame's last cmd's attack bit. Returns the
+    /// round the gun fired, for the server to trace.
+    pub fn turret_think_client(
+        &mut self,
+        slot: usize,
+        sim: &mut crate::spectate::ClientSim,
+        attack_held: bool,
+    ) -> Option<TurretShot> {
+        use crate::game::turret::{aim, fire_tick, loop_tick, muzzle};
+        let id = *self
+            .host
+            .turrets
+            .iter()
+            .find(|(_, r)| r.owner == Some(slot))?
+            .0;
+        // The release arm is task 10's; until then a gun asked to let go, or
+        // a gunner no longer playing, runs no frame.
+        let playing = sim.pm_type == crate::spectate::PmType::Normal && !sim.dead;
+        if self.host.turrets[&id].busy != 1 || !playing {
+            return None;
+        }
+        let host = &mut self.host;
+        let (origin, angles) = self.vm.with_cx(|cx| {
+            (
+                crate::game::item::origin_of(host, cx, id),
+                crate::game::item::angles_of(host, cx, id),
+            )
+        });
+        let cs = &self.host.configstrings;
+        let rec = self.host.turrets.get_mut(&id)?;
+        let alias = |name: &Option<String>| {
+            name.as_deref()
+                .and_then(|n| crate::configstrings::sound_alias_index(cs, n))
+                .unwrap_or(0)
+        };
+        let (loop_index, stop_index) = (alias(&rec.def.loop_sound), alias(&rec.def.stop_sound));
+
+        sim.viewlocked = 1;
+        sim.viewlocked_ent = id.0;
+        sim.gunfx = 0;
+        if let Some(view) = aim(rec, sim.view_angles(), angles) {
+            sim.set_view_angle(view);
+        }
+        // Body placement (0x515a8) goes here, task 12.
+        sim.firing = fire_tick(rec, attack_held);
+        let mut shot = None;
+        if sim.firing {
+            sim.viewlocked = 2;
+            let forward = crate::game::spawn::angle_forward(sim.view_angles());
+            // A missing tag skips the round and its event, not the flags.
+            if let Some(tags) = &rec.tags {
+                shot = Some(TurretShot {
+                    slot,
+                    muzzle: muzzle(tags, origin, angles, rec.angles2, forward).into(),
+                    dir: forward.into(),
+                    damage: rec.dmg,
+                    rifle_bullet: rec.def.rifle_bullet,
+                });
+            }
+        }
+        let (loop_sound, stop) = loop_tick(rec, loop_index);
+        let fired = shot.is_some();
+        if let Some(ent) = self.host.ents.get_mut(id) {
+            if fired {
+                ent.events.add(EV_FIRE_WEAPON_MG42, 0);
+            }
+            ent.loop_sound = loop_sound;
+            if stop {
+                ent.events.add(EV_SOUND_ALIAS, stop_index);
+            }
+        }
+        shot
     }
 
     /// `Cmd_Kill_f`: the `kill` client command, which is the `suicide` builtin

@@ -108,6 +108,7 @@ pub fn finish_player_damage(
     ));
     if fatal {
         drop_cooking_grenade(host, cx, slot);
+        let weapon = gun_credit(host, cx, attacker_slot, *weapon).unwrap_or(*weapon);
         let killed = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerKilled");
         cx.spawn(
             killed,
@@ -117,13 +118,31 @@ pub fn finish_player_damage(
                 *attacker,
                 Value::Int(damage),
                 *mod_,
-                *weapon,
+                weapon,
                 Value::Vector(dir),
                 *hitloc,
             ],
         );
     }
     Ok(Value::Undefined)
+}
+
+/// `player_die`'s kill credit (turrets doc 11): a killer on a gun has the
+/// kill put on the gun's weapon, provided the weapon he was credited with
+/// names one at all.
+fn gun_credit(
+    host: &GameHost,
+    cx: &mut Cx,
+    attacker: Option<usize>,
+    weapon: Value,
+) -> Option<Value> {
+    let Value::String(name) = weapon else {
+        return None;
+    };
+    crate::configstrings::weapon_index(cx.resolve(name)).filter(|&i| i != 0)?;
+    let attacker = attacker?;
+    let rec = host.turrets.values().find(|r| r.owner == Some(attacker))?;
+    Some(Value::String(cx.intern_exact(&rec.weapon)))
 }
 
 /// The z `player_die` raises the drop's origin by (combat doc, 5.1 step 5).
@@ -693,6 +712,62 @@ mod tests {
             "the callback has to run past the isPlayer call, not abort on it"
         );
         assert!(rt.client_vitals(0).dead, "2000 damage at zero range kills");
+    }
+
+    const WEAPON_CALLBACKS: &str = r#"
+        main() {}
+        CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+            self.hurtby = sWeapon;
+            self finishPlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc);
+        }
+        CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {
+            self.killedby = sWeapon;
+        }
+    "#;
+
+    /// `player_die`'s replacement (turrets doc 11, 12.6): a kill by a
+    /// mounted gunner names the gun's weapon to the killed callback, while
+    /// the damage callback still sees the gunner's own.
+    #[test]
+    fn a_gunners_kill_is_credited_to_the_gun() {
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, WEAPON_CALLBACKS);
+        for (slot, name) in [(0, "victim"), (1, "gunner")] {
+            rt.push_client_event(ClientEvent::Connect {
+                slot,
+                name: name.into(),
+            });
+        }
+        rt.run_frame(0);
+        let def = crate::game::turret::TurretDef::parse(
+            "WEAPONFILE\\weaponClass\\turret\\damage\\60\\fireTime\\0.05",
+        )
+        .unwrap();
+        let mut rec = crate::game::turret::TurretRecord::new(
+            "mg42_bipod_stand_mp",
+            def,
+            Default::default(),
+            0.0,
+        );
+        rec.owner = Some(1);
+        rec.busy = 1;
+        rt.host.turrets.insert(vcod_gsc::EntId(298, 0), rec);
+        for health in [100, 10] {
+            rt.host.client_vitals[0] = Vitals {
+                health,
+                max_health: 100,
+                dead: false,
+            };
+            rt.deliver_hits(vec![hit(53)], 50);
+        }
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(
+            rt.client_field(0, "hurtby").as_deref(),
+            Some("m1carbine_mp")
+        );
+        assert_eq!(
+            rt.client_field(0, "killedby").as_deref(),
+            Some("mg42_bipod_stand_mp")
+        );
     }
 
     /// A killing `finishPlayerDamage` starts `CodeCallback_PlayerKilled`

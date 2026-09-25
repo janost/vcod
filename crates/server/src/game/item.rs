@@ -197,7 +197,7 @@ pub fn launch_weapon(
     Ok(id)
 }
 
-fn origin_of(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
+pub fn origin_of(host: &mut GameHost, cx: &mut Cx, id: EntId) -> [f32; 3] {
     let field = cx.intern_folded("origin");
     match host.get_field(cx, id, field) {
         Value::Vector(v) => v,

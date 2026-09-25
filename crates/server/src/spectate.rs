@@ -55,6 +55,7 @@ const EF_TELEPORT_BIT: i32 = 0x8;
 const EF_MOUNTED_STAND: i32 = 0xC000;
 const EF_MOUNTED_DUCK: i32 = 0x8000;
 const EF_MOUNTED_PRONE: i32 = 0x4000;
+const EF_FIRING: i32 = 0x400;
 /// `docs/research/cod11-events-and-fx.md`.
 const EV_PLAYER_TELEPORT_IN: i32 = 199;
 const EV_PLAYER_TELEPORT_OUT: i32 = 200;
@@ -345,6 +346,9 @@ pub struct ClientSim {
     /// The turret this client mans: `s.otherEntityNum` and the gun's stance
     /// as `eFlags` 0xC000/0x8000/0x4000 (turrets doc, 4.4).
     pub mounted_on: Option<(u32, crate::game::turret::TurretStance)>,
+    /// `ps.eFlags` 0x400, on a frame the gun this client mans fired (turrets
+    /// doc 12.4).
+    pub firing: bool,
     /// The last cmd's angles, retail's `pers.cmd.angles`, which
     /// `set_view_angle` rewrites `delta_angles` against.
     last_cmd_angles: [i32; 3],
@@ -431,6 +435,7 @@ impl ClientSim {
             viewlocked_ent: 0,
             gunfx: 0,
             mounted_on: None,
+            firing: false,
             last_cmd_angles: cmd_angles,
         }
     }
@@ -538,6 +543,7 @@ impl ClientSim {
         self.viewlocked_ent = 0;
         self.gunfx = 0;
         self.mounted_on = None;
+        self.firing = false;
         self.last_cmd_angles = cmd_angles;
         // Retail's respawn frame reads an empty ring at sequence 0
         // (combat doc, 9.2).
@@ -548,8 +554,8 @@ impl ClientSim {
         self.teleport_bit = !self.teleport_bit;
     }
 
-    /// The wire word for any mode: the base, the per-spawn teleport bit and
-    /// the mounted-gun bits. The stance bits ride on a live player's
+    /// The wire word for any mode: the base, the per-spawn teleport bit, the
+    /// mounted-gun bits and the gun's firing bit. The stance bits ride on a live player's
     /// playerstate copy only, which is where the motion capture measured
     /// them.
     fn eflags(&self) -> i32 {
@@ -567,6 +573,7 @@ impl ClientSim {
             } else {
                 0
             }
+            | if self.firing { EF_FIRING } else { 0 }
     }
 
     /// `setOrigin` on a player: the origin moves and the teleport bit flips,

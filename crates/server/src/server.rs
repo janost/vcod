@@ -221,6 +221,100 @@ pub(crate) enum Attack {
     },
 }
 
+/// What each client holds, from the host onto its sim, and the sim's origin
+/// back to script.
+fn mirror_weapons(clients: &mut [Option<Client>], rt: &mut script::ScriptRuntime) {
+    for (slot, c) in clients.iter_mut().enumerate() {
+        if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
+            let w = rt.client_weapons(slot);
+            sim.ps.weapons_held = w.held;
+            sim.ps.weapon_slots = w.slots;
+            sim.ps.weapon = w.current;
+            sim.viewmodel_index = rt.client_viewmodel(slot);
+            // The body, head and helmet the character script dressed the
+            // client in: what a shot at it is traced against.
+            if let Some(a) = rt.client_assembly(slot) {
+                if a != sim.assembly {
+                    sim.assembly = a;
+                }
+            }
+            // And back the other way: the sim owns where a player is, so the
+            // script's copy is written from it every frame.
+            rt.set_client_origin(slot, sim.origin());
+        }
+    }
+}
+
+/// The weapon ops script queued, each applied once.
+fn apply_weapon_ops(
+    clients: &mut [Option<Client>],
+    rt: &mut script::ScriptRuntime,
+    weapons: &crate::weapons::WeaponTable,
+) {
+    for (slot, op) in rt.take_weapon_ops() {
+        if let Some(sim) = clients
+            .get_mut(slot)
+            .and_then(Option::as_mut)
+            .and_then(|c| c.sim.as_mut())
+        {
+            apply_weapon_op(sim, op, weapons);
+        }
+    }
+}
+
+/// What script did to each sim, applied once: events, `setOrigin`,
+/// `setPlayerAngles` and the damage the callback did.
+fn apply_sim_ops(
+    clients: &mut [Option<Client>],
+    rt: &mut script::ScriptRuntime,
+    anims: Option<&vcod_common::animtree::PlayerAnims>,
+    weapons: &crate::weapons::WeaponTable,
+    rng: &mut u64,
+    now_ms: i32,
+) {
+    use crate::game::host::SimOp;
+    for (slot, op) in rt.take_sim_ops() {
+        let Some(sim) = clients
+            .get_mut(slot)
+            .and_then(Option::as_mut)
+            .and_then(|c| c.sim.as_mut())
+        else {
+            continue;
+        };
+        match op {
+            SimOp::Event { event, parm } => sim.add_event(event, parm),
+            SimOp::SetOrigin { origin } => sim.teleport(origin),
+            SimOp::SetViewAngles { angles } => sim.set_view_angle(angles),
+            SimOp::Damaged { .. } => {
+                let index = sim.ps.weapon as usize;
+                let inputs = anims.map(|anims| crate::spectate::AnimInputs {
+                    anims,
+                    weapon: crate::items::item_name(index).unwrap_or_default(),
+                    weapon_class: weapons.class(index),
+                });
+                sim.take_damage(&op, inputs.as_ref(), rng, now_ms);
+            }
+        }
+    }
+}
+
+/// The host's health onto each playing sim. Neither `ClientEndFrame`'s
+/// intermission arm nor `SpectatorClientEndFrame` copies `ent->health` into
+/// the playerstate, so both keep the zero their own spawn left (map-cycle
+/// doc, 6.2; `spectate.rs`, `become_spectator`).
+fn mirror_vitals(clients: &mut [Option<Client>], rt: &script::ScriptRuntime) {
+    for (slot, c) in clients.iter_mut().enumerate() {
+        if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
+            if sim.pm_type == crate::spectate::PmType::Normal {
+                let v = rt.client_vitals(slot);
+                sim.health = v.health;
+                sim.max_health = v.max_health;
+                sim.dead = v.dead;
+            }
+        }
+    }
+}
+
 /// One `WeaponOp` against a client's playerstate. The op is an edge the
 /// script made, so it is applied once, where `client_weapons` is mirrored
 /// every frame.
@@ -2645,20 +2739,6 @@ impl Server {
             }
             rt.deliver_hits(hits, self.sv_time_ms);
             rt.run_frame(self.sv_time_ms);
-            console_lines = rt.take_console();
-            client_commands = rt.take_client_commands();
-            ranks_dirty = rt.take_ranks_dirty();
-            // The script owns the table while it runs and allocates into it
-            // from any thread, so the server re-reads it rather than trusting
-            // the copy `load_scripts` took. A whole-table copy per frame is
-            // cheap next to a snapshot, and there is no single write choke
-            // point on the host's table to hang a dirty flag off. The cvar
-            // mirror gets the same treatment: a thread past a `wait` can
-            // still call `setCvar`.
-            self.configstrings = rt.configstrings().to_vec();
-            if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
-                log::warn!("rebuilding the cvar mirror: {e:?}");
-            }
             // `self spawn(origin, angles)` moves the sim, which no builtin
             // can reach; this is where the queue lands. Before the weapons,
             // because a spawn resets the whole playerstate and would wipe the
@@ -2697,39 +2777,11 @@ impl Server {
             // sim reset outside a move comes back armed. The write-back
             // above is what makes that safe: the host's copy already carries
             // whatever the machine switched to this tick.
-            for (slot, c) in self.clients.iter_mut().enumerate() {
-                if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-                    let w = rt.client_weapons(slot);
-                    sim.ps.weapons_held = w.held;
-                    sim.ps.weapon_slots = w.slots;
-                    sim.ps.weapon = w.current;
-                    sim.viewmodel_index = rt.client_viewmodel(slot);
-                    // The body, head and helmet the character script dressed
-                    // the client in: what a shot at it is traced against.
-                    if let Some(a) = rt.client_assembly(slot) {
-                        if a != sim.assembly {
-                            sim.assembly = a;
-                        }
-                    }
-                    // And back the other way: the sim owns where a player is,
-                    // so the script's copy is written from it every frame.
-                    rt.set_client_origin(slot, sim.origin());
-                }
-            }
+            mirror_weapons(&mut self.clients, rt);
             // The ammo and the current weapon, which are edges rather than
             // state: applying a full clip every frame would make the weapon
             // bottomless.
-            for (slot, op) in rt.take_weapon_ops() {
-                let Some(sim) = self
-                    .clients
-                    .get_mut(slot)
-                    .and_then(Option::as_mut)
-                    .and_then(|c| c.sim.as_mut())
-                else {
-                    continue;
-                };
-                apply_weapon_op(sim, op, &weapons);
-            }
+            apply_weapon_ops(&mut self.clients, rt, &weapons);
             // `linkTo` and `unlink`, before the re-anchor below so a link
             // made this frame is already pinned on this frame's wire: both
             // retail captures read the new `pm_type` on the next snapshot
@@ -2785,44 +2837,17 @@ impl Server {
             // mirror and the frame's damage feedback, in that order:
             // `P_DamageFeedback` reads the health the hit left.
             let anims = self.anims.as_ref();
-            for (slot, op) in rt.take_sim_ops() {
-                let Some(sim) = self
-                    .clients
-                    .get_mut(slot)
-                    .and_then(Option::as_mut)
-                    .and_then(|c| c.sim.as_mut())
-                else {
-                    continue;
-                };
-                match op {
-                    crate::game::host::SimOp::Event { event, parm } => sim.add_event(event, parm),
-                    crate::game::host::SimOp::SetOrigin { origin } => sim.teleport(origin),
-                    crate::game::host::SimOp::SetViewAngles { angles } => {
-                        sim.set_view_angle(angles)
-                    }
-                    crate::game::host::SimOp::Damaged { .. } => {
-                        let index = sim.ps.weapon as usize;
-                        let inputs = anims.map(|anims| crate::spectate::AnimInputs {
-                            anims,
-                            weapon: crate::items::item_name(index).unwrap_or_default(),
-                            weapon_class: weapons.class(index),
-                        });
-                        sim.take_damage(&op, inputs.as_ref(), &mut self.rng, self.sv_time_ms);
-                    }
-                }
-            }
-            for (slot, c) in self.clients.iter_mut().enumerate() {
+            apply_sim_ops(
+                &mut self.clients,
+                rt,
+                anims,
+                &weapons,
+                &mut self.rng,
+                self.sv_time_ms,
+            );
+            mirror_vitals(&mut self.clients, rt);
+            for c in self.clients.iter_mut() {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-                    // Neither `ClientEndFrame`'s intermission arm nor
-                    // `SpectatorClientEndFrame` copies `ent->health` into the
-                    // playerstate, so both keep the zero their own spawn left
-                    // (map-cycle doc, 6.2; `spectate.rs`, `become_spectator`).
-                    if sim.pm_type == crate::spectate::PmType::Normal {
-                        let v = rt.client_vitals(slot);
-                        sim.health = v.health;
-                        sim.max_health = v.max_health;
-                        sim.dead = v.dead;
-                    }
                     sim.end_frame(self.sv_time_ms);
                 }
             }
@@ -2848,6 +2873,106 @@ impl Server {
                         sim.cursor_hint_string = string;
                     }
                 }
+            }
+            // `turret_think_client`, last in `ClientEndFrame` (turrets doc
+            // 6.1): each gunner's aim, fire and loop sound, and the rounds
+            // traced and delivered on this same frame (12.5).
+            let mut shots = Vec::new();
+            for (slot, c) in self.clients.iter_mut().enumerate() {
+                let Some(c) = c.as_mut() else { continue };
+                let buttons = moved[slot].last_buttons.unwrap_or(c.last_cmd.buttons);
+                if let Some(sim) = c.sim.as_mut() {
+                    shots.extend(rt.turret_think_client(
+                        slot,
+                        sim,
+                        buttons & vcod_common::net::msg::BUTTON_ATTACK != 0,
+                    ));
+                }
+            }
+            if !shots.is_empty() {
+                let mut turret_hits = Vec::new();
+                {
+                    let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
+                        .clients
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
+                        .collect();
+                    let collision = self.world.as_ref().map(|w| &w.collision);
+                    let mut bones = match (self.fs.as_deref(), self.anims.as_ref()) {
+                        (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
+                            fs,
+                            anims,
+                            rigs: &mut self.hit_rigs,
+                            now_ms: self.sv_time_ms,
+                        }),
+                        _ => None,
+                    };
+                    for shot in shots {
+                        // The callback is told the gunner's own weapon
+                        // (turrets doc 12.6); `player_die` credits the gun.
+                        let carried = sims
+                            .iter()
+                            .find(|(s, _)| *s == shot.slot)
+                            .map_or(0, |(_, sim)| sim.ps.weapon as usize);
+                        let r = crate::game::combat::bullet_fire_from(
+                            shot.slot,
+                            shot.muzzle,
+                            shot.dir,
+                            shot.damage,
+                            shot.rifle_bullet,
+                            crate::items::item_name(carried).unwrap_or_default(),
+                            &sims,
+                            collision,
+                            &self.hitlocs,
+                            bones.as_mut(),
+                        );
+                        if let Some(te) = r.impact {
+                            rt.push_temp_entity(te);
+                        }
+                        turret_hits.extend(r.hit);
+                    }
+                }
+                // The damage callback runs here, after the script frame, so
+                // what it leaves is applied again. A victim numbered above its
+                // gunner takes its feedback this frame; one below had its
+                // `ClientEndFrame` already and takes it on the next.
+                let feedback_now: Vec<usize> = turret_hits
+                    .iter()
+                    .filter(|h| h.victim > h.attacker)
+                    .map(|h| h.victim)
+                    .collect();
+                rt.deliver_hits(turret_hits, self.sv_time_ms);
+                mirror_weapons(&mut self.clients, rt);
+                apply_weapon_ops(&mut self.clients, rt, &weapons);
+                apply_sim_ops(
+                    &mut self.clients,
+                    rt,
+                    self.anims.as_ref(),
+                    &weapons,
+                    &mut self.rng,
+                    self.sv_time_ms,
+                );
+                mirror_vitals(&mut self.clients, rt);
+                for slot in feedback_now {
+                    if let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) {
+                        sim.end_frame(self.sv_time_ms);
+                    }
+                }
+            }
+            console_lines = rt.take_console();
+            client_commands = rt.take_client_commands();
+            ranks_dirty = rt.take_ranks_dirty();
+            // The script owns the table while it runs and allocates into it
+            // from any thread, so the server re-reads it rather than trusting
+            // the copy `load_scripts` took. A whole-table copy per frame is
+            // cheap next to a snapshot, and there is no single write choke
+            // point on the host's table to hang a dirty flag off. The cvar
+            // mirror gets the same treatment: a thread past a `wait` can
+            // still call `setCvar`.
+            self.configstrings = rt.configstrings().to_vec();
+            if let Err(e) = rt.cvars().write_mirror(&mut self.configstrings) {
+                log::warn!("rebuilding the cvar mirror: {e:?}");
             }
         }
         // `trap_SendConsoleCommand`'s `EXEC_APPEND`: what a builtin queued

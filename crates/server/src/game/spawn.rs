@@ -100,7 +100,8 @@ pub fn spawn_entities_from_string(
                     for alias in turret_sound_aliases(host.fs.as_deref(), &item.name) {
                         register_sound_alias(host, alias);
                     }
-                    let rest = settle_turret_pitch(host, cx, id);
+                    let bones = turret_bones(host, cx, id);
+                    let rest = settle_turret_pitch(host, cx, id, bones.as_deref());
                     if let Some(def) = turret_def(host.fs.as_deref(), &item.name) {
                         let keys = turret_keys(&block);
                         if host.turrets.len() >= MAX_TURRETS {
@@ -112,10 +113,12 @@ pub fn spawn_entities_from_string(
                                 "G_SpawnTurret: max number of turrets ({MAX_TURRETS}) exceeded"
                             );
                         } else {
-                            host.turrets.insert(
-                                id,
-                                crate::game::turret::TurretRecord::new(&item.name, def, keys, rest),
-                            );
+                            let mut rec =
+                                crate::game::turret::TurretRecord::new(&item.name, def, keys, rest);
+                            rec.tags = bones
+                                .as_deref()
+                                .and_then(crate::game::turret::TurretTags::from_bones);
+                            host.turrets.insert(id, rec);
                         }
                     }
                 }
@@ -457,33 +460,21 @@ pub(crate) fn is_weapon_row(row: usize) -> bool {
 /// toward the pitch is not modelled, so a turret here is settled from map
 /// load, and the ray stops on SOLID where retail's mask is 0x11. Neither
 /// moves either carentan turret off retail's value.
-fn settle_turret_pitch(host: &mut GameHost, cx: &mut Cx, id: EntId) -> f32 {
-    let (Some(world), Some(fs)) = (host.world.clone(), host.fs.clone()) else {
+fn settle_turret_pitch(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+    bones: Option<&[vcod_common::xmodel::Bone]>,
+) -> f32 {
+    let (Some(world), Some(bones)) = (host.world.clone(), bones) else {
         return DEFAULT_TURRET_PITCH;
     };
-    let (origin_at, angles_at, model_at) = (
-        cx.intern_folded("origin"),
-        cx.intern_folded("angles"),
-        cx.intern_folded("model"),
-    );
+    let (origin_at, angles_at) = (cx.intern_folded("origin"), cx.intern_folded("angles"));
     let Value::Vector(origin) = host.get_field(cx, id, origin_at) else {
         return DEFAULT_TURRET_PITCH;
     };
     let Value::Vector(angles) = host.get_field(cx, id, angles_at) else {
         return DEFAULT_TURRET_PITCH;
-    };
-    let Value::String(model) = host.get_field(cx, id, model_at) else {
-        return DEFAULT_TURRET_PITCH;
-    };
-    // The `model` key is the pak path; `xmodel::load_bones` wants the name.
-    let model = cx.resolve(model).trim_start_matches("xmodel/").to_string();
-
-    let bones = match vcod_common::xmodel::load_bones(&fs, &model) {
-        Ok(b) => b,
-        Err(e) => {
-            log::warn!("turret model {model}: {e}");
-            return DEFAULT_TURRET_PITCH;
-        }
     };
     let tag = |n: &str| bones.iter().find(|b| b.name == n).map(|b| b.pos);
     // A model missing either tag keeps the seed: `turret_think_init` returns
@@ -492,6 +483,25 @@ fn settle_turret_pitch(host: &mut GameHost, cx: &mut Cx, id: EntId) -> f32 {
         return DEFAULT_TURRET_PITCH;
     };
     sweep_rest_pitch(&world.collision, origin, angles, aim, butt)
+}
+
+/// The bones of a turret's `model`, `None` with no paks or a model that does
+/// not load.
+fn turret_bones(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    id: EntId,
+) -> Option<Vec<vcod_common::xmodel::Bone>> {
+    let fs = host.fs.clone()?;
+    let model_at = cx.intern_folded("model");
+    let Value::String(model) = host.get_field(cx, id, model_at) else {
+        return None;
+    };
+    // The `model` key is the pak path; `xmodel::load_bones` wants the name.
+    let model = cx.resolve(model).trim_start_matches("xmodel/").to_string();
+    vcod_common::xmodel::load_bones(&fs, &model)
+        .map_err(|e| log::warn!("turret model {model}: {e}"))
+        .ok()
 }
 
 /// `G_SpawnTurret`'s seed (rodata `0x75a10`), which a sweep that hits nothing
@@ -1412,6 +1422,28 @@ mod tests {
             for (slot, value) in *expected {
                 assert_eq!(host.configstrings[*slot], *value, "{map} cs[{slot}]");
             }
+        }
+    }
+
+    /// Both carentan turrets load the five tags the mounted frame reads, off
+    /// the model the entity names; the muzzle needs `tag_flash` ahead of
+    /// `tag_player`.
+    #[test]
+    fn carentans_turrets_carry_their_model_tags() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let fs = std::rc::Rc::new(fs);
+        let (mut vm, mut host) = fixture();
+        host.fs = Some(fs.clone());
+        let bytes = fs.read("maps/mp/mp_carentan.bsp").unwrap();
+        let bsp = vcod_common::bsp::parse(&bytes).unwrap();
+        vm.with_cx(|cx| super::spawn_entities_from_string(&mut host, cx, &bsp.entities))
+            .unwrap();
+        assert_eq!(host.turrets.len(), 2);
+        for rec in host.turrets.values() {
+            let tags = rec.tags.expect("every tag on the stock model");
+            assert!(tags.flash.x > tags.player.x, "{tags:?}");
         }
     }
 }
