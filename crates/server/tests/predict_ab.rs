@@ -7,8 +7,8 @@
 //! through the wire codec, then runs the next cmds on both and compares the
 //! fields prediction draws from. Same code on the same inputs, so everything is exact
 //! except what the wire itself narrows. The event ring's half,
-//! `predictor_ring_matches_the_server_step`, is ignored until `bobCycle`
-//! travels.
+//! `predictor_ring_matches_the_server_step`, needed `bobCycle` on the wire
+//! before it could pass; it does now.
 //!
 //! `predictor_replays_retail_slope_runs` is `playerstate_slope_ab.rs`'s
 //! rebased replay with the predictor in place of the bare mover: retail's
@@ -314,11 +314,9 @@ fn predictor_matches_the_server_step() {
 }
 
 /// The event ring under the same script. Footsteps fire off `bobCycle`, which
-/// `from_wire` reads but `ClientSim::to_wire` does not send, so a predictor
-/// rebuilt from our wire restarts the phase at 0 and lays its footsteps on
-/// other cmds than the server does.
+/// `to_wire` now carries, so a predictor rebuilt from the wire resumes the
+/// phase where the server left it instead of restarting at 0.
 #[test]
-#[ignore = "bobCycle is not on vcod-server's wire yet (ClientSim::to_wire); lands with the post-mounted-mg dedupe"]
 fn predictor_ring_matches_the_server_step() {
     step_side_by_side(true);
 }
