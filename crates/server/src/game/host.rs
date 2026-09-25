@@ -214,6 +214,8 @@ pub enum SimOp {
     Event { event: i32, parm: i32 },
     /// A player's `setOrigin`, the unit lift already applied.
     SetOrigin { origin: [f32; 3] },
+    /// A player's `setPlayerAngles`: `SetClientViewAngle` on the sim.
+    SetViewAngles { angles: [f32; 3] },
 }
 
 /// `linkTo` and `unlink` on a client, queued the way `SimOp` is: the link
@@ -377,10 +379,15 @@ pub struct GameHost {
     /// fresh host, so a unit test that mounts nothing registers the bit and
     /// precaches no weapon model.
     pub fs: Option<std::rc::Rc<vcod_common::pk3::Pk3Fs>>,
-    /// Each turret's settled barrel pitch, by entity, from the sweep
-    /// `crate::game::spawn::settle_turret_pitch` runs at map load. `wire.rs`
-    /// puts it on the wire as `angles2[0]`.
-    pub turret_pitch: std::collections::HashMap<EntId, f32>,
+    /// Each turret's live record, by entity, built at spawn from its weapon
+    /// file and its own arc/damage keys (`crate::game::turret`). `wire.rs`
+    /// reads `angles2` and the view-lock/firing bits off it; mount, aim,
+    /// fire and release mutate it in place.
+    pub turrets: std::collections::HashMap<EntId, crate::game::turret::TurretRecord>,
+    /// Mounts the use key made this cmd, drained by the server onto the sims
+    /// right after `item_pass`, and releases a freed gun queued for its
+    /// gunner, drained in `ClientEndFrame`.
+    pub turret_ops: Vec<crate::game::turret::TurretOp>,
     /// The events raised this frame, put on the wire as temp entities and
     /// dropped by the snapshot build: retail frees a `G_TempEntity` the
     /// frame after it is sent.
@@ -535,7 +542,8 @@ impl GameHost {
             items: crate::items::Items::new(),
             client_name_mode: builtins::cvar::ClientNameMode::default(),
             fs: None,
-            turret_pitch: std::collections::HashMap::new(),
+            turrets: std::collections::HashMap::new(),
+            turret_ops: Vec::new(),
             temp_entities: Vec::new(),
             bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
             missiles: crate::game::missile::Missiles::default(),
@@ -644,6 +652,18 @@ impl GameHost {
     /// brushes out of the clip and a trigger out of the touch pass, so the
     /// three have one entry point here rather than three call sites each.
     pub fn free_entity(&mut self, id: EntId) {
+        // `G_FreeTurret` (turrets doc 8): a manned gun lets its gunner go
+        // before the record goes; the sim half waits for `ClientEndFrame`.
+        if let Some(mut rec) = self.turrets.remove(&id) {
+            if let Some((slot, origin, stance)) = crate::game::turret::release(&mut rec) {
+                self.turret_ops
+                    .push(crate::game::turret::TurretOp::Release {
+                        slot,
+                        origin,
+                        stance,
+                    });
+            }
+        }
         self.triggers.remove(id);
         // A mover's row goes with the entity rather than a frame later: the
         // number is on the free list from here, and the next entity to take
@@ -668,6 +688,29 @@ impl GameHost {
                 }
                 ThinkFn::Free => self.free_entity(id),
                 ThinkFn::ClearOwner => {}
+            }
+        }
+    }
+
+    /// `turret_think` (0x5328c, turrets doc 9) for every gun nobody mans:
+    /// the loop sound runs out, the firing bit clears and the barrel walks
+    /// home. A manned gun's frame is `ScriptRuntime::turret_think_client`.
+    pub fn run_turret_thinks(&mut self) {
+        use crate::game::turret::{loop_tick, slew_home, sound_indices};
+        for (id, rec) in self.turrets.iter_mut() {
+            if rec.owner.is_some() {
+                continue;
+            }
+            let (loop_index, stop_index) = sound_indices(rec, &self.configstrings);
+            let (loop_sound, stop) = loop_tick(rec, loop_index);
+            rec.firing = false;
+            slew_home(rec);
+            if let Some(ent) = self.ents.get_mut(*id) {
+                ent.loop_sound = loop_sound;
+                if stop {
+                    ent.events
+                        .add(crate::game::script::EV_SOUND_ALIAS, stop_index);
+                }
             }
         }
     }

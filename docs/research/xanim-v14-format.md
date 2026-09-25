@@ -33,7 +33,7 @@ note_count x { cstr name; u16 frame }
 
 ## Flag extensions, in brief
 
-Decoded in `player-model-anim-system.md`. Flag `0x1` (loop) stores `frame_count + 1` key positions, the extra one being the loop-closing repeat of frame 0; vcod folds it into `XAnim::frame_count` so key indices stay in `0..frame_count` and `duration()` is the loop period. Flag `0x2` (delta, root motion) inserts one nameless track between the header and the bitsets, shaped like a bone track with yaw-only i16 rotations; the client parses and drops it. Flag `0x3` composes both. Independently of the flags, the sparse frame-index list is u8 while the highest index fits a byte and u16 above that (`frame_count > 256` in the parser, counting the loop key).
+Decoded in `player-model-anim-system.md`. Flag `0x1` (loop) stores `frame_count + 1` key positions, the extra one being the loop-closing repeat of frame 0; vcod folds it into `XAnim::frame_count` so key indices stay in `0..frame_count` and `duration()` is the loop period. Flag `0x2` (delta, root motion) inserts one nameless track between the header and the bitsets, shaped like a bone track with yaw-only i16 rotations; vcod keeps it as `XAnim::root`, which only the mounted gunner's body placement reads (`cod11-turrets.md` section 7). Flag `0x3` composes both. Independently of the flags, the sparse frame-index list is u8 while the highest index fits a byte and u16 above that (`frame_count > 256` in the parser, counting the loop key).
 
 ## Timing
 

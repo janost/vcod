@@ -17,6 +17,8 @@ pub struct XAnim {
     /// Header flag 0x1.
     pub looping: bool,
     pub tracks: Vec<Track>,
+    /// Header flag 0x2's nameless root-motion track, yaw-only rotations.
+    pub root: Option<Track>,
     /// Notetracks, no runtime consumer yet.
     pub notes: Vec<(String, u16)>,
 }
@@ -109,21 +111,30 @@ pub fn parse(name: &str, data: &[u8]) -> Result<XAnim> {
             Ok((0..count.min(frame_count) as u16).collect())
         }
     };
-    // The root-motion track has yaw-only rotations. The server owns entity
-    // movement, so it is read and dropped.
-    if root_motion {
+    let root = if root_motion {
         let rc = r.u16()? as u32;
         ensure!(rc <= frame_count, "{name}: delta rot {rc} > {frame_count}");
-        let n = frames_of(&mut r, rc)?.len();
-        r.skip(2 * n)?;
+        let rot_keys = frames_of(&mut r, rc)?
+            .into_iter()
+            .map(|f| Ok((f, dequant(0, 0, r.i16()?))))
+            .collect::<Result<Vec<_>>>()?;
         let tc = r.u16()? as u32;
         ensure!(
             tc <= frame_count,
             "{name}: delta trans {tc} > {frame_count}"
         );
-        let n = frames_of(&mut r, tc)?.len();
-        r.skip(12 * n)?;
-    }
+        let trans_keys = frames_of(&mut r, tc)?
+            .into_iter()
+            .map(|f| Ok((f, Vec3::new(r.f32()?, r.f32()?, r.f32()?))))
+            .collect::<Result<Vec<_>>>()?;
+        Some(Track {
+            bone: String::new(),
+            rot_keys,
+            trans_keys,
+        })
+    } else {
+        None
+    };
     let nb = bone_count.div_ceil(8);
     r.skip(nb)?; // bitset A, role unknown
     let simple = r.take(nb)?.to_vec(); // bitset B: z-only rotation keys
@@ -184,6 +195,7 @@ pub fn parse(name: &str, data: &[u8]) -> Result<XAnim> {
         framerate,
         looping,
         tracks,
+        root,
         notes,
     })
 }
@@ -381,6 +393,30 @@ mod tests {
         assert_eq!(a.tracks[0].rot_keys.len(), 1);
         assert!(a.tracks[0].trans_keys.is_empty());
         assert_eq!(a.notes, vec![("land".to_string(), 2)]);
+        let root = a.root.expect("flag 0x2 keeps the root track");
+        assert_eq!(root.rot_keys.len(), 1);
+        assert_eq!(root.rot_keys[0].1, dequant(0, 0, 4096));
+        assert_eq!(
+            root.trans_keys,
+            vec![(0, Vec3::ZERO), (2, Vec3::new(7.0, 0.0, 0.0))]
+        );
+        assert!(parse("plain", &fixture()).unwrap().root.is_none());
+    }
+
+    #[test]
+    fn the_mg42_gunner_leaves_carry_a_root_track() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let a = load(&fs, "pb_standMG42gunner_aim_forward_level").unwrap();
+        let root = a.root.expect("root track");
+        let (trans, _) = root.sample(0.0);
+        assert!(
+            trans
+                .unwrap()
+                .abs_diff_eq(Vec3::new(-11.92, 6.01, -47.46), 0.01),
+            "{trans:?}"
+        );
     }
 
     #[test]

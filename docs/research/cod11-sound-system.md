@@ -895,11 +895,35 @@ Only `PM_Jump`'s ladder push-off / steep-slope launch emits `EV_JUMP_*`
 
 **Landing** (`PM_CrashLand` @0x2fd68, called by the ground-trace helper on an
 air -> ground transition): water level 3 skips; damage-free impact ladder on
-the kinematic landing speed: <= 4 silent, < 8 a walk-step id (24 + mat),
-< 12 a run-step id (1 + mat), >= 12 an `EV_LANDING_*` (93 + mat) plus a x0.67
-velocity damp; `sf & 0x2000`/material 0 degrade to silence. Damage routes to
+the fall height: <= 4 silent, < 8 a walk-step id (24 + mat), < 12 a run-step
+id (1 + mat), >= 12 an `EV_LANDING_*` (93 + mat) plus a x0.67 velocity damp;
+`sf & 0x2000`/material 0 degrade to silence. Damage routes to
 `EV_LANDING_PAIN_*` (116 + mat, parm = damage percent) instead - sound-wise
 that alias pair resolves through section 7b like the rest.
+
+VERIFIED, `game.mp.i386.so`: the function solves the landing speed off
+`pml.previous_velocity[2]` (pml+0x7c) and `pml.previous_origin[2]`
+(0x2fdb4..0x2fe15), squares it and divides it by twice `ps.gravity`
+(ps+0x3c, 0x2fe1e..0x2fe2e), and hands both to the debug print `"landing vel:
+%.1f fall height: %.1f\n"` (string 0x70940, pushed at 0x2fe49). VERIFIED: the
+ladder's compares are `fcom` against 4.0 (0x70a10, at 0x30130), 8.0 (0x70a3c,
+0x30141) and 12.0 (0x70a18, 0x30170). INFERRED: the value the ladder compares
+is that fall height in units, not the speed, so a one-unit drop (a turret
+release, `cod11-turrets.md` 12.7) lands in silence where a 32-unit one plays
+the landing. An earlier read of this paragraph said "landing speed", and vcod
+compared a speed in units a second against the 4/8/12 until 2026-09-25.
+
+VERIFIED, the anim at the head of the function: a compare of `ps+0x6c`
+(`legsTimer`) against 0 (0x2fd84), an `fcomp` of -220.0 (rodata 0x70a08)
+against `pml.previous_velocity[2]` (0x2fd8a..0x2fd9b), and a call to
+`BG_AnimScriptEvent(ps, 5, 0, 1)` (0x2fd9d..0x2fda4). INFERRED: the land anim
+(event 5) plays only when the legs timer has run out and the move began
+falling faster than 220 units a second; any slower landing keeps whatever the
+legs were playing. VERIFIED on the wire: the turret capture's two releases
+each end in a one-unit drop and go from `standMG42_aim` straight to
+`pb_stand_alert` with no land anim between, the stand release at fixture
+lines 1274-1281 and the crouch release at 1424-1436 (`cod11-turrets.md`
+12.7).
 
 Other movement emitters seen while in there, for completeness: stair-step 143
 (parm = clamped step delta + 128), foliage rustle 139 (cvar-driven interval
@@ -920,8 +944,11 @@ trace @0x328cc), water enter/leave 144/145, forced stance 140/141/142.
   in practice means push-offs from the base are audible and mid-wall push-offs
   are not (the downward trace of a climb hits nothing). The 299 ms quiet
   window after a push-off gates the climb steps.
-- Landing impact approximates retail's kinematic value with the fastest
-  downward speed sampled while airborne (within one frame of gravity).
+- The fall height comes from the fastest downward speed sampled while
+  airborne (within one frame of gravity of retail's kinematic value), squared
+  over `2 * GRAVITY`. The land anim is gated in `ClientSim::update_anims` on
+  `PlayerState::land_anim` (the move's starting vertical speed below -220)
+  and on no event anim holding the legs.
 - Fall damage does not exist locally, so only the damage-free landing ladder
   applies; the x0.67 hard-landing velocity damp is not ported (movement, not
   sound).

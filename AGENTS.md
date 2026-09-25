@@ -370,6 +370,35 @@ engineering setup works.
   hand. Both are retail evidence, and a run against ours overwrites the
   client one: move it to `tmp/` and `git checkout` the fixture directory
   after.
+  `--save-turret` is the mounted MG capture. It joins allies and needs
+  `client-probes/probe_turret` as the gametype under `tools/run_probe.sh`
+  with `+set probe_teleport 1`, plus a second `--probe-team axis` client
+  started before it: the gsc puts the gunner 40 units behind mp_carentan's
+  gun at (1712 1830 8) and the axis client 300 units in front, and the probe
+  waits until it stands within 60 units of the gun. It reads the gun out of
+  the entity lump and its wire number off the snapshot (the `eType` 11
+  nearest the lump origin), then aims at it, taps use to mount, sweeps yaw
+  -90..90 and pitch -60..60 off the gun's yaw two degrees a cmd, turns 60 in
+  one cmd, holds attack a second at the gun's yaw +30 and 10 degrees down
+  (off the target's line, so the target lives and the rounds hit the world)
+  and a second at the axis client, waits for the cooldown alias, taps use to
+  dismount, remounts from a crouch and dismounts, then strafes right until
+  its bearing off the gun's
+  back passes 50 degrees while still inside 100 units, so the last use tap
+  fails the arc test and not the 128-unit use range, and taps use once more,
+  which must not mount. The fire bit is held, not tapped, because the mounted frame
+  reads the held bit (`docs/research/cod11-turrets.md` 6.3). It writes
+  `crates/server/tests/fixtures/turret/<map>-dm-turret.txt`: per phase a
+  `!station`, every `!cmd`, a `!trace` per snapshot with the view lock fields,
+  a `!turret` line whenever the gun's entity changed, every drained event as
+  `!event`, every bullet-impact temp entity as `!impact`, and every server
+  command as `!server`. The gunner's own entity is never in its own snapshot,
+  so the axis probe's log is the only other view of it.
+  `crates/server/tests/turret_ab.rs` replays its cmds on ours and diffs every
+  snapshot (`TURRET_REPORT=1` prints every row); how it pairs the two and
+  what its `GAPS` let through is `docs/research/cod11-turrets.md` 13.1. The
+  fixture is retail evidence and a run against ours overwrites it: move it to
+  `tmp/` and `git checkout` the fixture directory after.
   A plain `--net-probe` also prints every change to an entity's `pos`/`apos`
   trajectory group, which is the mover half of the same arrangement:
   `client-probes/probe_mover.gsc` under `run_probe.sh` in one shell calls each
@@ -430,7 +459,7 @@ engineering setup works.
   measured): stance, direction, strafing, the jump and the landing all pick an
   index out of `mp/playeranim.script`, and a swing draws among the
   `meleeattack` clause's lines. What the machine does not cover yet is the two
-  turn movetypes and the mounted-MG anims. A shot is a trace against the world
+  turn movetypes. A shot is a trace against the world
   and every live player's box, a hit runs the stock
   `CodeCallback_PlayerDamage`, and `finishPlayerDamage` is where health,
   knockback, the pain and death events and `CodeCallback_PlayerKilled`
@@ -469,7 +498,12 @@ engineering setup works.
   scan. Not modelled: the killcam, a body
   between the eye and a lookat (retail's second trace), `enableLinkTo`, a
   linked player on a moving parent, and script models in weapon, blast and
-  missile traces. The scriptent mover verbs move things and their trajectories reach the wire
+  missile traces. A mounted MG (`crates/server/src/game/turret.rs`,
+  `docs/research/cod11-turrets.md`) mounts inside the use cmd that presses it,
+  locks the gunner's pmove and view to the gun's arc, and aims, fires and
+  loops its sound in `turret_think_client`'s own pass after `ClientEndFrame`'s
+  aim trace, releasing back to the gunner's own stance on a second use, a
+  kill, or the gun's own deletion. The scriptent mover verbs move things and their trajectories reach the wire
   (`docs/research/cod11-movers.md`). A probe run against it reproduces the
   retail death capture field for field except for two: the `EV_RAISE_WEAPON`
   the death frame does not raise, and the `legsAnim` the respawn frame
@@ -481,14 +515,17 @@ engineering setup works.
   anything else runs), then expired clients, then the bots queue their cmds,
   then the clock advances, then each client's queued usercmds (`replay_moves`,
   one pmove step per cmd, which is where the weapon machine queues a frame's
-  shots, swings and throws). Each cmd's origin, `pm_type`, `on_ground`, view
+  shots, swings and throws; a client's cmds after a use press wait for the
+  touch pass and run in a second round, so a mount lands inside the use cmd,
+  and the anim update also runs per round, off that round's last cmd). Each cmd's origin, `pm_type`, `on_ground`, view
   yaw, buttons, the `ps.weapon` a move switched to and the `clipOnly` weapon a
-  last round spent are recorded as it runs, and once every client has moved,
-  each client's ammo and clip arrays are copied onto the host (`client_ammo`,
+  last round spent are recorded as it runs, and once every client has moved
+  this round, each client's ammo and clip arrays are copied onto the host (`client_ammo`,
   which every `GameHost::weapon_op` then moves in place, and ops still queued
   are re-applied on top) and the rest are mirrored onto the host cmd by cmd,
   the take included, with the touch pass after each, the item half of it after
-  the trigger half and the use key after both, the way retail updates
+  the trigger half and the use key after both -- the same use key whose rising
+  edge arms a turret mount there, once the gun's arc allows it -- the way retail updates
   `r.currentOrigin` and calls `G_TouchTriggers` inside `ClientThink`; a
   trigger the pass fires is queued, not woken, and its `waittill` threads are
   notified at this tick's script frame on the frame's clock (the item pass's
@@ -499,7 +536,7 @@ engineering setup works.
   damage callback there and then. The item pass writes weapons and health onto
   the host at once and queues its ammo as weapon ops and its event as a sim
   op, both applied after the script frame; the ammo it reads is the host's
-  mirror, copied from each sim once before the pass and moved by every weapon
+  mirror, copied from each sim once per round before the pass and moved by every weapon
   op after, so a `dropItem` in the script frame sees what the pass took. The
   entity states `cloneplayer` reads are mirrored last in that pass. Then the
   queued attacks themselves (a trace each, an impact temp entity and a hit per
@@ -515,12 +552,18 @@ engineering setup works.
   weapon ops, then the link ops (`linkTo`, `unlink`), then the re-anchor that
   pins every linked client to its parent plus the offset and releases a link
   whose parent is gone, then the sim ops the script left (events, `setOrigin`,
-  the damage the callback did), then the vitals mirror (health, and the damage
+  `setPlayerAngles`, the damage the callback did), then the vitals mirror (health, and the damage
   feedback `P_DamageFeedback` computes from the health the hit left) and
   `end_frame`, then `ClientEndFrame`'s aim trace per playing client, off the
   frame's final eye and aim with `pm_type` and `on_ground` mirrored again
   beside it, whose fire wakes its waiters at the next tick's script frame,
   and beside it the cursor hint for the item the use key would pick now,
+  then each gunner's `turret_think_client` (the gunner half of a release
+  a deleted gun queued, then aim, fire, loop sound, or the release itself on
+  a use press or a death), whose rounds are traced and handed to the damage callback right there, with the
+  weapons mirrored again and the sim ops, weapon ops and health that callback
+  leaves applied a second time, closing with a second `end_frame` for a
+  victim numbered above its gunner,
   then the console lines, configstring changes, server commands and
   intermission scoreboard the script queued go out, and last the entities are
   built once and culled and written per client. Origin, `pm_type`,

@@ -235,6 +235,13 @@ struct Args {
     /// vcod-server overwrites it.
     #[arg(long)]
     save_pickup: bool,
+    /// With `--net-probe`: mount mp_carentan's MG at (1712 1830 8), sweep it
+    /// past both arcs, fire it, dismount, remount from a crouch, and try a
+    /// mount from outside the arc; writes
+    /// `crates/server/tests/fixtures/turret/<map>-dm-turret.txt`. Needs
+    /// `client-probes/probe_turret` as the gametype with `probe_teleport 1`.
+    #[arg(long)]
+    save_turret: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -702,6 +709,7 @@ fn main() -> Result<()> {
                 plant: args.probe_plant,
                 defuse: args.probe_defuse,
                 pickup: args.save_pickup,
+                turret: args.save_turret,
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,

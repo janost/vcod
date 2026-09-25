@@ -280,6 +280,33 @@ pub fn script_menu_index(cs: &[String], name: &str) -> Option<usize> {
     (lo..=hi).find(|s| cs[*s] == name).map(|s| s - lo)
 }
 
+/// `CS_SOUNDS`: an alias index counts from here, so the range's first slot
+/// is 1 (docs/protocol-1.1.md, `s <idx>`).
+const CS_SOUNDS: usize = 524;
+
+/// The index an already registered sound alias travels as, in
+/// `EV_SOUND_ALIAS`'s parm and in `loopSound`; `None` if nothing indexed it.
+pub fn sound_alias_index(cs: &[String], name: &str) -> Option<i32> {
+    let (lo, hi) = CsRange::SoundAlias.bounds();
+    (lo..=hi)
+        .find(|&i| cs.get(i).is_some_and(|s| s == name))
+        .map(|i| (i - CS_SOUNDS) as i32)
+}
+
+/// The first of the 32 hint-string configstrings `G_GetHintStringIndex`
+/// (0x5a238) fills (`docs/research/cod11-gsc-object-model.md`, the
+/// hint-string paragraph).
+const HINT_STRINGS: usize = 1212;
+const MAX_HINT_STRINGS: usize = 32;
+
+/// The slot within the hint-string range holding `name`, which is what
+/// `serverCursorHintString` carries: the stock turret's `CGAME_USEMG42` is 0.
+pub fn hint_string_index(cs: &[String], name: &str) -> Option<i32> {
+    (0..MAX_HINT_STRINGS)
+        .find(|i| cs.get(HINT_STRINGS + i).is_some_and(|s| s == name))
+        .map(|i| i as i32)
+}
+
 /// The inverse: what `Cmd_MenuResponse_f` (0x486d8) reads back out of
 /// configstring `CsRange::Menu.start + index` to name the menu in its
 /// `menuresponse` notify. Empty when nothing precached that slot, which is

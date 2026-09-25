@@ -1588,13 +1588,15 @@ version of this paragraph named `trap_LocationalTrace` and `CalcMuzzlePoints`
 here, which the listings do not show. No touch path writes any of the three
 hint fields: `SP_trigger_lookat` installs no touch function and the trigger
 touch path stores nothing at `ps+0x384`, `+0x388` or `+0x38c`. INFERRED, from
-the absence rather than from a store. vcod models none of this: it runs no
-per-frame aim trace, and `ClientSim::to_wire` writes `serverCursorHintString`
-255 and never touches `serverCursorHint`, which therefore keeps the null
-playerstate's 0. VERIFIED, read out of `crates/server/src/spectate.rs`. That
-those two are also what retail sends a client looking at nothing is a
-corollary of the INFERRED reading above, not a measurement: no capture of a
-client aimed at a `trigger_use` has been taken.
+the absence rather than from a store. vcod writes `serverCursorHint` from
+`ScriptRuntime::cursor_hint_pass`, the item arm only, and
+`serverCursorHintString` as a constant 255. VERIFIED, read out of
+`crates/server/src/game/script.rs` and `crates/server/src/spectate.rs`. The
+item arm's hint values are in `docs/research/cod11-items.md` section 2.3, and
+the turret arm's hint 6 with the weapon's hint-string slot, together with
+what a mounted player's hint fields read, is in
+`docs/research/cod11-turrets.md` section 4.3. No capture of a client aimed at
+a `trigger_use` has been taken.
 
 ### `legsAnim` needs the animscript state machine
 

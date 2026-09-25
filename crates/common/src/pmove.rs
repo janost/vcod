@@ -147,6 +147,9 @@ const EV_FOOTSTEP_WALK_BASE: i32 = 24;
 const EV_FOOTSTEP_PRONE_BASE: i32 = 47;
 const EV_JUMP_BASE: i32 = 70;
 const EV_LANDING_BASE: i32 = 93;
+/// `PM_CrashLand`'s gate on the land anim, against the vertical velocity the
+/// move started with (`game.mp.i386.so` rodata 0x70a08).
+pub const LAND_ANIM_SPEED: f32 = -220.0;
 /// `EV_STEP_VIEW`: the vertical jump the step machinery added this frame,
 /// which the client smooths the eye over
 /// (docs/research/cod11-mantle.md, "The step event and the velocity scale").
@@ -342,6 +345,10 @@ pub struct PlayerState {
     /// without having jumped, and the animation machine has to tell those
     /// apart (docs/research/player-model-anim-system.md).
     pub jumped: bool,
+    /// Whether this move landed fast enough for the land anim: `PM_CrashLand`
+    /// raises it only below [`LAND_ANIM_SPEED`] (docs/research/cod11-sound-system.md,
+    /// "Landing"). Cleared at the top of every move, like `jumped`.
+    pub land_anim: bool,
     /// `ps.weapon`, a 1-based index into configstring 7; 0 is no weapon.
     pub weapon: u8,
     /// `ps.weapons`, bit N for weapon N.
@@ -407,6 +414,10 @@ pub struct PlayerState {
     /// `ps.pm_type` 1, the link `linkTo` makes: [`pmove`] runs retail's
     /// linked arm, which moves nothing. The caller owns the link and sets it.
     pub linked: bool,
+    /// `eFlags & 0xC000`, the mounted-gun bits: `Some(stance)` while riding a
+    /// turret, the gun's own stance. `None` off a gun. The caller owns the
+    /// mount and sets it (docs/research/cod11-turrets.md, section 5).
+    pub mounted: Option<Stance>,
 }
 
 impl PlayerState {
@@ -442,6 +453,7 @@ impl PlayerState {
             view_lerp_down: false,
             backwards_run: false,
             jumped: false,
+            land_anim: false,
             weapon: 0,
             weapons_held: 0,
             weapon_slots: [0; weapon::NUM_SLOTS],
@@ -464,6 +476,7 @@ impl PlayerState {
             last_cmd_ads: false,
             walking: false,
             linked: false,
+            mounted: None,
         }
     }
 
@@ -570,9 +583,28 @@ pub fn pmove(
     let weapon_def = weapons.get(ps.weapon as usize).and_then(Option::as_ref);
     let mut events = Vec::new();
     ps.jumped = false;
+    ps.land_anim = false;
     let was_on_ground = ps.on_ground;
-    // retail's `pml.previous_origin`, taken at the top of PmoveSingle
+    // retail's `pml.previous_origin` and `previous_velocity`, taken at the
+    // top of PmoveSingle
     ps.move_start = ps.origin;
+    let start_vz = ps.velocity.z;
+    // 0x34274: a mounted player's pmove updates the sight flag, the walking
+    // flag and the stance to the gun's, and returns before the move/ground/
+    // weapon dispatch below ever runs; the turret moves the body
+    // (docs/research/cod11-turrets.md, section 5).
+    if let Some(gun) = ps.mounted {
+        ps.on_ground = false;
+        ps.ground_normal = Vec3::Z;
+        ps.ground_surface_flags = 0;
+        weapon::update_ads_flag(ps, input, weapon_def);
+        ps.walking = walking_flag(ps, input);
+        ps.stance = gun;
+        ps.ducked = gun == Stance::Crouch;
+        ps.lean = 0.0;
+        ps.on_ladder = false;
+        return events;
+    }
     if ps.linked {
         linked_move(ps, input, world, dt, weapons, &mut events);
         return events;
@@ -640,6 +672,7 @@ pub fn pmove(
     footsteps(ps, input, world, dt, &mut events);
     if !was_on_ground && ps.on_ground {
         crash_land(ps, &mut events);
+        ps.land_anim = start_vz < LAND_ANIM_SPEED;
     }
     weapon::pm_weapon(
         ps,
@@ -910,16 +943,18 @@ fn ladder_step_event(
     });
 }
 
-/// Landing sound from `PM_CrashLand`'s damage-free ladder (@0x30141): nothing
-/// at or under 4, a walk-step to 8, a run-step to 12, a land event past that.
+/// Landing sound from `PM_CrashLand`'s damage-free ladder (@0x30130): the
+/// fall height `v^2 / 2g` of the landing speed, nothing at or under 4 units,
+/// a walk-step to 8, a run-step to 12, a land event past that
+/// (docs/research/cod11-sound-system.md, "Landing").
 fn crash_land(ps: &mut PlayerState, events: &mut Vec<PmEvent>) {
-    let impact = std::mem::take(&mut ps.air_speed_peak);
-    if let Some(ev) = landing_event(impact, ps) {
+    let speed = std::mem::take(&mut ps.air_speed_peak);
+    if let Some(ev) = landing_event(speed * speed / (2.0 * GRAVITY), ps) {
         events.push(ev);
     }
 }
 
-fn landing_event(impact: f32, ps: &PlayerState) -> Option<PmEvent> {
+fn landing_event(height: f32, ps: &PlayerState) -> Option<PmEvent> {
     if ps.water_level >= 3 {
         return None;
     }
@@ -931,11 +966,11 @@ fn landing_event(impact: f32, ps: &PlayerState) -> Option<PmEvent> {
     if mat == 0 {
         return None;
     }
-    let id = if impact >= 12.0 {
+    let id = if height >= 12.0 {
         EV_LANDING_BASE + mat
-    } else if impact >= 8.0 {
+    } else if height >= 8.0 {
         EV_FOOTSTEP_RUN_BASE + mat
-    } else if impact > 4.0 {
+    } else if height > 4.0 {
         EV_FOOTSTEP_WALK_BASE + mat
     } else {
         return None;
@@ -1309,9 +1344,9 @@ fn clamp_movement_dir(deg: i32, cap: i32) -> i32 {
 /// whole degree, as retail's `(int)` casts are.
 fn set_movement_dir(ps: &mut PlayerState, input: &PmInput, dt: f32) {
     // Prone lays the legs along the body instead (@0x2e98d). Retail skips
-    // this branch while the view is locked to another entity (eFlags
-    // 0xc000, the mounted-gun case); nothing here mounts anything.
-    if ps.stance == Stance::Prone {
+    // this branch while the view is locked to another entity, eFlags
+    // 0xc000; `ps.mounted` carries that state here.
+    if ps.stance == Stance::Prone && ps.mounted.is_none() {
         ps.movement_dir = clamp_movement_dir(
             angle_delta(ps.prone_direction, ps.yaw.to_degrees()) as i32,
             MOVEMENT_DIR_CAP,
@@ -1998,6 +2033,62 @@ mod tests {
         assert_eq!(ps.weapon_pos_frac, 1.0);
     }
 
+    /// The mounted arm (0x34274) never reaches the move dispatch or
+    /// `PM_Weapon`, so a mounted player's origin holds and no fire event
+    /// comes out of pmove (docs/research/cod11-turrets.md, section 5).
+    #[test]
+    fn a_mounted_player_does_not_move_or_fire() {
+        let world = flat();
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.0), 0.0);
+        ps.mounted = Some(Stance::Stand);
+        let input = PmInput {
+            forward: 127.0,
+            attack: true,
+            ..Default::default()
+        };
+        let before = ps.origin;
+        let events = pmove(&mut ps, &input, &world, 0.05, &[]);
+        assert_eq!(ps.origin, before);
+        assert!(!ps.on_ground, "groundEntityNum NONE while mounted");
+        assert!(events.iter().all(
+            |e| e.event != weapon::EV_FIRE_WEAPON && e.event != weapon::EV_FIRE_WEAPON_LASTSHOT
+        ));
+    }
+
+    /// The stance step (0x316f4) puts the player at the gun's stance
+    /// whatever the cmd asks, and `PM_UpdateLean` forces the lean input to 0
+    /// (docs/research/cod11-turrets.md, section 5).
+    #[test]
+    fn a_mounted_player_takes_the_gun_stance_whatever_the_cmd_asks() {
+        let world = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.mounted = Some(Stance::Prone);
+        let input = PmInput {
+            crouch: true,
+            ..Default::default()
+        };
+        pmove(&mut ps, &input, &world, 0.05, &[]);
+        assert_eq!(ps.stance, Stance::Prone);
+        assert_eq!(ps.lean, 0.0);
+    }
+
+    /// 0x34274 calls no footstep routine, so a gunner mounted off a ladder
+    /// neither steps nor stays on it.
+    #[test]
+    fn a_mounted_player_takes_no_step_and_leaves_the_ladder() {
+        let world = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.mounted = Some(Stance::Stand);
+        ps.on_ladder = true;
+        ps.since_jump_ms = 10_000.0;
+        ps.velocity = Vec3::new(0.0, 0.0, 200.0);
+        let before = ps.bob_cycle;
+        let events = pmove(&mut ps, &PmInput::default(), &world, 0.05, &[]);
+        assert!(!ps.on_ladder);
+        assert_eq!(ps.bob_cycle, before);
+        assert!(events.is_empty(), "{events:?}");
+    }
+
     /// Flat ground whose material carries the dirt sound surface (6).
     fn dirt_flat() -> CollisionWorld {
         crate::collision::synthetic_world(
@@ -2277,11 +2368,57 @@ mod tests {
         assert_eq!(ids, vec![EV_LANDING_BASE + 6], "a long fall lands once");
     }
 
+    /// The ladder reads the fall height, not the speed: the one-unit drop a
+    /// turret release ends in lands in silence, as the retail turret capture
+    /// reads it (`crates/server/tests/turret_ab.rs`).
     #[test]
-    fn landing_sound_bands_follow_impact() {
+    fn a_one_unit_drop_lands_silently() {
+        let w = dirt_flat();
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 1.0), 0.0);
+        ps.on_ground = false;
+        let idle = PmInput::default();
+        let mut events = Vec::new();
+        for _ in 0..20 {
+            events.extend(pmove(&mut ps, &idle, &w, 8.0 / 1000.0, &[]));
+        }
+        assert!(ps.on_ground);
+        assert!(events.is_empty(), "{events:?}");
+    }
+
+    /// The land anim's speed half: a 200-unit fall lands faster than
+    /// `LAND_ANIM_SPEED` and reports it on the landing move only; a
+    /// one-unit drop never does.
+    #[test]
+    fn only_a_fast_landing_reports_the_land_anim() {
+        let w = dirt_flat();
+        let idle = PmInput::default();
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 200.0), 0.0);
+        ps.on_ground = false;
+        let mut reported = Vec::new();
+        for i in 0..500 {
+            let was = ps.on_ground;
+            pmove(&mut ps, &idle, &w, 8.0 / 1000.0, &[]);
+            if ps.land_anim {
+                reported.push((i, was, ps.on_ground));
+            }
+        }
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert_eq!((reported[0].1, reported[0].2), (false, true));
+
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 1.0), 0.0);
+        ps.on_ground = false;
+        for _ in 0..20 {
+            pmove(&mut ps, &idle, &w, 8.0 / 1000.0, &[]);
+            assert!(!ps.land_anim);
+        }
+        assert!(ps.on_ground);
+    }
+
+    #[test]
+    fn landing_sound_bands_follow_fall_height() {
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         ps.ground_surface_flags = 6 << 20;
-        let band = |impact: f32| landing_event(impact, &ps).map(|e| e.event);
+        let band = |height: f32| landing_event(height, &ps).map(|e| e.event);
         assert_eq!(band(4.0), None);
         assert_eq!(band(4.5), Some(EV_FOOTSTEP_WALK_BASE + 6));
         assert_eq!(band(11.5), Some(EV_FOOTSTEP_RUN_BASE + 6));

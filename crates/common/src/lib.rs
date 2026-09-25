@@ -19,6 +19,7 @@ pub mod rng;
 pub mod shader;
 pub mod skeleton;
 pub mod testing;
+pub mod turretpose;
 pub mod vis;
 pub mod voicechat;
 pub mod weapon;

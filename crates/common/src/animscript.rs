@@ -64,6 +64,9 @@ pub struct AnimRef {
     pub name: String,
     pub duration_ms: Option<u32>,
     pub blend_ms: Option<u32>,
+    /// The line's `turretanim` modifier: the anim record's `+0x50 & 4` that
+    /// gates the gunner's body placement (turrets doc 7).
+    pub turret: bool,
 }
 
 /// A condition list and what it selects. An empty `conditions` is the file's
@@ -119,6 +122,20 @@ impl AnimScript {
             }
         }
         out
+    }
+
+    /// Whether any line naming `name` carries `turretanim`. Retail keeps the
+    /// flag on the anim's own record, which any such line sets (turrets doc
+    /// 7.1), so this is the same test.
+    pub fn is_turret_anim(&self, name: &str) -> bool {
+        let name = fold(name);
+        self.states
+            .values()
+            .flatten()
+            .chain(self.events.values())
+            .flat_map(|b| &b.clauses)
+            .flat_map(|c| c.legs.iter().chain(&c.torso))
+            .any(|a| a.turret && a.name == name)
     }
 
     /// Every anim name an `EVENTS` block names. These are the ones whose own
@@ -281,9 +298,8 @@ fn parse_conditions(line: &str, defines: &Defines) -> Vec<Condition> {
 }
 
 /// `both|legs|torso <name> [duration <n>] [blendtime <n>] [turretanim]`.
-/// Anything else on the line is ignored, which is what makes the trailing
-/// `turretanim` modifier harmless. A clause may list more than one line per
-/// channel (death and melee do), so this pushes rather than overwrites.
+/// Anything else on the line is ignored. A clause may list more than one line
+/// per channel (death and melee do), so this pushes rather than overwrites.
 fn apply_anim_line(line: &str, clause: &mut Clause) {
     let mut w = line.split_whitespace();
     let Some(part) = w.next() else { return };
@@ -295,12 +311,14 @@ fn apply_anim_line(line: &str, clause: &mut Clause) {
         name: fold(name),
         duration_ms: None,
         blend_ms: None,
+        turret: false,
     };
     while let Some(key) = w.next() {
-        let value = w.next().and_then(|v| v.parse::<u32>().ok());
+        let mut value = || w.next().and_then(|v| v.parse::<u32>().ok());
         match key {
-            "duration" => anim.duration_ms = value,
-            "blendtime" => anim.blend_ms = value,
+            "duration" => anim.duration_ms = value(),
+            "blendtime" => anim.blend_ms = value(),
+            "turretanim" => anim.turret = true,
             _ => {}
         }
     }
@@ -383,11 +401,11 @@ pub struct Conditions {
     /// `weapon_position ads`.
     pub ads: bool,
     pub strafing: Option<Side>,
-    /// `mounted mg42`. Nothing mounts a turret yet, so this is always `None`.
+    /// `mounted mg42`, set while the player mans a turret
+    /// (docs/research/cod11-turrets.md section 10).
     pub mounted: Option<String>,
-    /// `ps.weaponstate` reads firing. The shipped file's only `firing` clauses
-    /// are `mounted mg42, firing`, so nothing decides on it until a turret
-    /// does.
+    /// The shipped file's only `firing` clauses are `mounted mg42, firing`
+    /// (docs/research/cod11-turrets.md section 10).
     pub firing: bool,
 }
 
@@ -615,6 +633,14 @@ impl AnimState {
         self.legs.wire()
     }
 
+    /// Whether an event anim still holds the legs at `now_ms`, retail's
+    /// `legsTimer` running.
+    pub fn legs_held(&self, now_ms: i32) -> bool {
+        self.legs
+            .held_until_ms
+            .is_some_and(|t| now_ms.wrapping_sub(t) < 0)
+    }
+
     pub fn torso(&self) -> i32 {
         self.torso.wire()
     }
@@ -798,6 +824,19 @@ land
             land.clauses[0].torso.is_empty(),
             "`legs` leaves torso alone"
         );
+    }
+
+    #[test]
+    fn turretanim_marks_the_anim_and_eats_no_neighbour() {
+        let text = SAMPLE.replace(
+            "\t\t\tboth pb_stand_ads_pistol\n",
+            "\t\t\tboth standMG42_aim turretanim duration 50\n",
+        );
+        let s = AnimScript::parse(&text).unwrap();
+        assert!(s.is_turret_anim("standmg42_aim"));
+        assert!(!s.is_turret_anim("pb_stand_alert"));
+        let idle = &s.state("combat").unwrap()[0];
+        assert_eq!(idle.clauses[0].legs[0].duration_ms, Some(50));
     }
 
     /// A clause may list more than one anim line per channel (death and melee
@@ -1158,6 +1197,7 @@ land
             name: name.into(),
             duration_ms,
             blend_ms: None,
+            turret: false,
         }
     }
 

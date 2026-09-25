@@ -69,7 +69,7 @@ fn angle_normalize_360(a: f32) -> f32 {
 }
 
 /// `AngleNormalize180` (`0x3eb70`).
-fn angle_normalize_180(a: f32) -> f32 {
+pub fn angle_normalize_180(a: f32) -> f32 {
     let a = angle_normalize_360(a);
     if a > 180.0 {
         a - 360.0
@@ -80,7 +80,7 @@ fn angle_normalize_180(a: f32) -> f32 {
 
 /// `AngleSubtract` (`0x3e968`): the difference wrapped into -180..180 by
 /// repeated 360s, no rounding.
-fn angle_subtract(a: f32, b: f32) -> f32 {
+pub fn angle_subtract(a: f32, b: f32) -> f32 {
     let mut d = a - b;
     while d > 180.0 {
         d -= 360.0;

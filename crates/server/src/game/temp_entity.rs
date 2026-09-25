@@ -38,6 +38,8 @@ const _: () = {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
     Broadcast,
+    /// Everyone, culled by PVS: a bare `G_TempEntity` sets no `svFlags`.
+    Pvs,
     AllBut(usize),
     Only(usize),
 }
@@ -56,11 +58,15 @@ pub struct TempEntity {
     /// caller fills it in carry one: the melee hit and miss
     /// (`docs/research/cod11-combat.md` 2.5).
     pub weapon: i32,
+    /// `clientNum`, which only the caller that fills it in carries.
+    pub client_num: i32,
     pub origin: [f32; 3],
     pub scope: Scope,
 }
 
-/// The entity state one temp entity puts on the wire at `number`.
+/// The entity state one temp entity puts on the wire at `number`. The origin
+/// is truncated toward zero, as `G_TempEntity` (0x67938) stores it
+/// (`docs/research/cod11-turrets.md` 8).
 pub fn build(te: &TempEntity, number: u32, p: &Protocol) -> EntityState {
     let mut e = EntityState::null(p);
     e.number = number;
@@ -75,8 +81,12 @@ pub fn build(te: &TempEntity, number: u32, p: &Protocol) -> EntityState {
     set("otherEntityNum", te.other as i32);
     set("attackerEntityNum", te.attacker);
     set("weapon", te.weapon);
+    set("clientNum", te.client_num);
     for (axis, v) in te.origin.iter().enumerate() {
-        set(&format!("pos.trBase[{axis}]"), v.to_bits() as i32);
+        set(
+            &format!("pos.trBase[{axis}]"),
+            (v.trunc() + 0.0).to_bits() as i32,
+        );
     }
     e
 }
@@ -99,11 +109,11 @@ pub fn advance(cursor: u32, count: usize) -> u32 {
 }
 
 /// Whether one client's snapshot may carry this temp entity at all. A
-/// `Broadcast` one still skips the PVS cull; the two scoped ones are culled
+/// `Broadcast` one still skips the PVS cull; the other three are culled
 /// like any other entity once this says yes (`crate::server`).
 pub fn visible_to(te: &TempEntity, slot: usize) -> bool {
     match te.scope {
-        Scope::Broadcast => true,
+        Scope::Broadcast | Scope::Pvs => true,
         Scope::AllBut(s) => s != slot,
         Scope::Only(s) => s == slot,
     }
@@ -123,6 +133,7 @@ mod tests {
             attacker: 0,
             weapon: 0,
             origin: [0.0; 3],
+            client_num: 0,
             scope: Scope::Broadcast,
         }
     }
@@ -137,6 +148,7 @@ mod tests {
             attacker: 5,
             weapon: 0,
             origin: [1.0, 2.0, 3.0],
+            client_num: 0,
             scope: Scope::Broadcast,
         };
         let p = &PROTOCOL_V1;
@@ -147,6 +159,18 @@ mod tests {
         assert_eq!(e.field_i32(p, "otherEntityNum"), 3);
         assert_eq!(e.field_i32(p, "attackerEntityNum"), 5);
         assert_eq!(e.origin(p), [1.0, 2.0, 3.0]);
+    }
+
+    /// A bullet's impact point reaches the wire whole, each axis toward
+    /// zero: the turret capture's rounds read (1648, 1492, -31).
+    #[test]
+    fn the_origin_is_truncated_toward_zero() {
+        let te = TempEntity {
+            origin: [1648.0751, 1492.962, -31.875],
+            ..flesh_hit()
+        };
+        let p = &PROTOCOL_V1;
+        assert_eq!(build(&te, 900, p).origin(p), [1648.0, 1492.0, -31.0]);
     }
 
     #[test]

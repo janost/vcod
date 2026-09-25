@@ -16,6 +16,7 @@ pub mod script;
 pub mod spawn;
 pub mod temp_entity;
 pub mod trigger;
+pub mod turret;
 pub mod wire;
 
 /// `testing::fixture` with a two-submodel world attached, for the paths that

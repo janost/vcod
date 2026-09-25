@@ -49,6 +49,25 @@ const SETTLE_DROP: f32 = 128.0;
 /// reads the value back, and a constant keeps a body's origin reproducible.
 const SETTLE_LIFT: f32 = 0.25;
 
+/// The fields `clone_of` and `settle` place a body with, which a refresh
+/// keeps from the clone.
+const PLACE_FIELDS: [&str; 14] = [
+    "pos.trType",
+    "pos.trTime",
+    "pos.trBase[0]",
+    "pos.trBase[1]",
+    "pos.trBase[2]",
+    "pos.trDelta[0]",
+    "pos.trDelta[1]",
+    "pos.trDelta[2]",
+    "apos.trBase[0]",
+    "apos.trBase[1]",
+    "apos.trBase[2]",
+    "groundEntityNum",
+    "apos.trType",
+    "apos.trTime",
+];
+
 pub struct Body {
     pub state: EntityState,
     pub born_ms: i32,
@@ -103,7 +122,8 @@ impl BodyQueue {
         number
     }
 
-    /// Re-reads every body born this frame from its source client's sim.
+    /// Re-reads every body born this frame from its source client's sim,
+    /// keeping the place and facing it was cloned with.
     pub fn refresh_newborn(
         &mut self,
         now_ms: i32,
@@ -117,7 +137,7 @@ impl BodyQueue {
                 continue;
             }
             if let Some(fresh) = body.source.take().and_then(&mut from_sim) {
-                body.state = clone_of(
+                let mut state = clone_of(
                     &fresh,
                     BODY_FIRST + i as u32,
                     self.toggles[i],
@@ -125,6 +145,14 @@ impl BodyQueue {
                     collision,
                     p,
                 );
+                // Where it lay at the clone: a gunner's release teleports
+                // the sim back to its mount spot after (turrets doc 8).
+                for name in PLACE_FIELDS {
+                    if let Some(f) = EntityState::field_index(p, name) {
+                        state.fields[f] = body.state.fields[f];
+                    }
+                }
+                body.state = state;
             }
         }
     }
@@ -354,6 +382,32 @@ mod tests {
         fresh.fields[EntityState::field_index(p, "legsAnim").unwrap()] = 999;
         q.refresh_newborn(1000, |_| Some(fresh.clone()), None, p);
         assert_eq!(q.entities().next().unwrap().1.field_i32(p, "legsAnim"), 18);
+    }
+
+    /// A gunner's release teleports its sim back to the mount spot after the
+    /// clone (turrets doc 8), so the refresh keeps the place and facing the
+    /// body was cloned with and takes only the rest.
+    #[test]
+    fn refresh_newborn_keeps_the_place_it_was_cloned_at() {
+        let p = &PROTOCOL_V1;
+        let set = |e: &mut EntityState, n: &str, v: f32| {
+            e.fields[EntityState::field_index(p, n).unwrap()] = v.to_bits() as i32;
+        };
+        let mut q = BodyQueue::new(1);
+        let mut dead = dying(p, 4);
+        set(&mut dead, "pos.trBase[1]", 16.0);
+        set(&mut dead, "apos.trBase[1]", 90.0);
+        q.push(dead, Some(4), 1000, None, p);
+        let mut released = dying(p, 4);
+        set(&mut released, "pos.trBase[0]", -40.0);
+        set(&mut released, "pos.trBase[1]", 0.0);
+        set(&mut released, "apos.trBase[1]", 229.0);
+        released.fields[EntityState::field_index(p, "legsAnim").unwrap()] = 18;
+        q.refresh_newborn(1000, |_| Some(released.clone()), None, p);
+        let body = q.entities().next().unwrap().1;
+        assert_eq!(body.origin(p)[..2], [32.0, 16.0]);
+        assert_eq!(body.field_f32(p, "apos.trBase[1]"), 90.0);
+        assert_eq!(body.field_i32(p, "legsAnim"), 18);
     }
 
     /// The queue is retail's own eight slots at 64..71, the numbers the

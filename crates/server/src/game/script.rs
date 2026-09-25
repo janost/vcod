@@ -4,7 +4,9 @@
 use std::rc::Rc;
 
 use crate::game::host::{ClientEvent, GameHost, SpawnRequest};
+use crate::game::item::Activate;
 use crate::game::spawn::spawn_entities_from_string;
+use crate::game::turret::{TurretOp, TurretShot};
 use vcod_common::pk3::Pk3Fs;
 use vcod_gsc::{EntId, Loader, ScriptSource, Target, Value, Vm};
 
@@ -103,6 +105,14 @@ pub const TEAM_SPECTATOR: i32 = 3;
 /// The highest `ps.pm_type` `G_TouchTriggers` runs its pass for
 /// (docs/research/cod11-gsc-object-model.md 8.2).
 const TOUCH_MAX_PM_TYPE: i32 = 1;
+
+/// `serverCursorHint` for a usable turret, slot 6 of `hintStrings`
+/// (`docs/research/cod11-turrets.md` 4.3).
+const HINT_MG42: i32 = 6;
+/// A manned gun's shot and its cooldown alias, both on the gun's own ring
+/// (`docs/research/cod11-events-and-fx.md` section 1, turrets doc 6.3, 6.4).
+const EV_FIRE_WEAPON_MG42: i32 = 168;
+pub(crate) const EV_SOUND_ALIAS: i32 = 172;
 
 pub struct ScriptRuntime {
     vm: Vm,
@@ -464,6 +474,12 @@ impl ScriptRuntime {
         }
     }
 
+    /// The buttons of the last cmd `item_pass` saw from `slot`, which its
+    /// use edge is taken against.
+    pub fn client_old_buttons(&self, slot: usize) -> u8 {
+        self.host.client_old_buttons.get(slot).copied().unwrap_or(0)
+    }
+
     /// The item half of `G_TouchTriggers` and then `Cmd_Activate_f`, for one
     /// cmd (docs/research/cod11-items.md, sections 1 and 2): every item in
     /// the touch box, then, on the use key's rising edge, the one the aim
@@ -474,10 +490,25 @@ impl ScriptRuntime {
             return;
         };
         let old = std::mem::replace(&mut self.host.client_old_buttons[slot], buttons);
+        let pressed = buttons & !old & vcod_common::net::msg::BUTTON_USE != 0;
+        // `Cmd_Activate_f`'s busy byte (0x4848e), which has no `pm_type`
+        // gate: a gunner's press asks for the release and does nothing else
+        // (turrets doc 4.1).
+        let mut release_asked = false;
+        if pressed {
+            if let Some(rec) = self
+                .host
+                .turrets
+                .values_mut()
+                .find(|r| r.owner == Some(slot))
+            {
+                rec.busy = 2;
+                release_asked = true;
+            }
+        }
         if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
             return;
         }
-        let pressed = buttons & !old & vcod_common::net::msg::BUTTON_USE != 0;
         let host = &mut self.host;
         self.vm.with_cx(|cx| {
             use vcod_gsc::Host;
@@ -492,15 +523,224 @@ impl ScriptRuntime {
                     .push((client, "touch", vec![Value::Entity(id)]));
                 crate::game::item::touch(host, cx, id, slot, true);
             }
+            if !pressed || release_asked {
+                return;
+            }
             let v = host.client_vitals[slot];
-            if pressed && v.health > 0 && !v.dead {
-                if let Some(id) = crate::game::item::activate_ent(host, cx, slot, eye, view) {
+            if v.health <= 0 || v.dead {
+                return;
+            }
+            match crate::game::item::activate_ent(host, cx, slot, eye, view) {
+                Some(Activate::Item(id)) => {
                     host.item_notifies
                         .push((id, "touch", vec![Value::Entity(client)]));
                     crate::game::item::touch(host, cx, id, slot, false);
                 }
+                Some(Activate::Turret(turret)) => {
+                    host.turret_ops.push(TurretOp::Mount { slot, turret });
+                }
+                None => {}
             }
         });
+    }
+
+    /// `turret_use` (0x52a9c)'s record half for the mount `item_pass` just
+    /// queued for `slot`, off the state of the cmd that pressed use. The
+    /// record is manned at once, so a second client's press in the same
+    /// frame finds the gun busy. Returns what the sim half needs: the
+    /// turret's entity number, its stance and the view to snap to.
+    pub fn take_turret_mounts(
+        &mut self,
+        slot: usize,
+        origin: [f32; 3],
+        stance: vcod_common::pmove::Stance,
+        view: [f32; 3],
+    ) -> Vec<(u32, crate::game::turret::TurretStance, [f32; 3])> {
+        let ops = std::mem::take(&mut self.host.turret_ops);
+        let mut out = Vec::new();
+        for op in ops {
+            let TurretOp::Mount { slot: s, turret } = op else {
+                self.host.turret_ops.push(op);
+                continue;
+            };
+            debug_assert_eq!(s, slot, "a mount is drained after its own cmd's pass");
+            let host = &mut self.host;
+            let angles = self
+                .vm
+                .with_cx(|cx| crate::game::item::angles_of(host, cx, turret));
+            let Some(rec) = self.host.turrets.get_mut(&turret) else {
+                continue;
+            };
+            let view = crate::game::turret::mount(rec, s, origin, stance, view, angles);
+            out.push((turret.0, rec.def.stance, view));
+        }
+        out
+    }
+
+    /// `turret_think_client` (0x52340, turrets doc 6) for the gun `slot`
+    /// mans, once per server frame in `ClientEndFrame`: the aim, the fire
+    /// and the loop sound, on the record, the gun's entity and the gunner's
+    /// sim. `attack_held` is the frame's last cmd's attack bit. `body` is
+    /// what the body placement reads the gunner's anims from; without it the
+    /// body stays where it is. Returns the round the gun fired, for the
+    /// server to trace.
+    pub fn turret_think_client(
+        &mut self,
+        slot: usize,
+        sim: &mut crate::spectate::ClientSim,
+        attack_held: bool,
+        body: Option<(
+            &vcod_common::animtree::PlayerAnims,
+            &mut crate::game::hitrig::HitRigs,
+        )>,
+    ) -> Option<TurretShot> {
+        use crate::game::turret::{aim, fire_tick, loop_tick, muzzle};
+        let id = *self
+            .host
+            .turrets
+            .iter()
+            .find(|(_, r)| r.owner == Some(slot))?
+            .0;
+        // A gun asked to let go, or a gunner no longer playing (dead,
+        // spectating), is released instead (0x5235c, 0x5236b).
+        let playing = sim.pm_type == crate::spectate::PmType::Normal && !sim.dead;
+        if self.host.turrets[&id].busy != 1 || !playing {
+            for te in self.release_turret(slot, sim) {
+                self.push_temp_entity(te);
+            }
+            return None;
+        }
+        let host = &mut self.host;
+        let (origin, angles) = self.vm.with_cx(|cx| {
+            (
+                crate::game::item::origin_of(host, cx, id),
+                crate::game::item::angles_of(host, cx, id),
+            )
+        });
+        let rec = self.host.turrets.get_mut(&id)?;
+        let (loop_index, stop_index) =
+            crate::game::turret::sound_indices(rec, &self.host.configstrings);
+
+        sim.viewlocked = 1;
+        sim.viewlocked_ent = id.0;
+        sim.gunfx = 0;
+        if let Some(view) = aim(rec, sim.view_angles(), angles) {
+            sim.set_view_angle(view);
+        }
+        let placed = match (body, &rec.tags, self.host.fs.as_deref()) {
+            (Some((anims, rigs)), Some(tags), Some(fs)) => {
+                let tag_weapon = crate::game::turret::tag_weapon_local(tags, rec.angles2);
+                let turret = (
+                    glam::Vec3::from(origin),
+                    vcod_common::turretpose::angles_quat(angles),
+                );
+                vcod_common::turretpose::place_gunner(
+                    anims,
+                    |name| rigs.clip(fs, name),
+                    sim.legs_anim(),
+                    tag_weapon,
+                    turret,
+                    sim.ps.origin,
+                    rec.def.anim_hor_rotate_inc,
+                )
+            }
+            _ => None,
+        };
+        if let Some((mut at, _)) = placed {
+            if let Some(world) = &self.host.world {
+                at = crate::game::turret::lift_onto_floor(&world.collision, at, origin[2]);
+            }
+            sim.ps.origin = at;
+        }
+        sim.firing = fire_tick(rec, attack_held);
+        let mut shot = None;
+        if sim.firing {
+            sim.viewlocked = 2;
+            let forward = crate::game::spawn::angle_forward(sim.view_angles());
+            // A missing tag skips the round and its event, not the flags.
+            if let Some(tags) = &rec.tags {
+                shot = Some(TurretShot {
+                    slot,
+                    muzzle: muzzle(tags, origin, angles, rec.angles2, forward).into(),
+                    dir: forward.into(),
+                    damage: rec.dmg,
+                    rifle_bullet: rec.def.rifle_bullet,
+                });
+            }
+        }
+        let (loop_sound, stop) = loop_tick(rec, loop_index);
+        let fired = shot.is_some();
+        if let Some(ent) = self.host.ents.get_mut(id) {
+            if fired {
+                ent.events.add(EV_FIRE_WEAPON_MG42, 0);
+            }
+            ent.loop_sound = loop_sound;
+            if stop {
+                ent.events.add(EV_SOUND_ALIAS, stop_index);
+            }
+        }
+        if let Some((_, yaw)) = placed {
+            self.set_client_origin(slot, sim.origin());
+            self.set_client_yaw(slot, yaw);
+        }
+        shot
+    }
+
+    /// `G_ClientStopUsingTurret` (0x53054, turrets doc 8) on the gun `slot`
+    /// mans, if any: the record freed, the gun's loop cut and the gunner put
+    /// back where it mounted, its new origin mirrored to script. Returns
+    /// `TeleportPlayer`'s temp entities for the caller to queue.
+    pub fn release_turret(
+        &mut self,
+        slot: usize,
+        sim: &mut crate::spectate::ClientSim,
+    ) -> Vec<crate::game::temp_entity::TempEntity> {
+        let Some((id, rec)) = self
+            .host
+            .turrets
+            .iter_mut()
+            .find(|(_, r)| r.owner == Some(slot))
+        else {
+            return Vec::new();
+        };
+        let id = *id;
+        let Some((_, origin, stance)) = crate::game::turret::release(rec) else {
+            return Vec::new();
+        };
+        if let Some(ent) = self.host.ents.get_mut(id) {
+            ent.loop_sound = 0;
+        }
+        let temps = crate::game::turret::release_sim(sim, slot, origin, stance);
+        self.set_client_origin(slot, sim.origin());
+        temps
+    }
+
+    /// The sim half of every release `GameHost::free_entity` queued for
+    /// `slot` (`G_FreeTurret`, turrets doc 8), each temp entity queued.
+    pub fn apply_turret_releases(&mut self, slot: usize, sim: &mut crate::spectate::ClientSim) {
+        let ops = std::mem::take(&mut self.host.turret_ops);
+        for op in ops {
+            match op {
+                TurretOp::Release {
+                    slot: s,
+                    origin,
+                    stance,
+                } if s == slot => {
+                    for te in crate::game::turret::release_sim(sim, slot, origin, stance) {
+                        self.push_temp_entity(te);
+                    }
+                    self.set_client_origin(slot, sim.origin());
+                }
+                op => self.host.turret_ops.push(op),
+            }
+        }
+    }
+
+    /// Drops the releases queued for a slot with no sim to apply them to.
+    pub fn drop_turret_releases(&mut self) {
+        self.host
+            .turret_ops
+            .retain(|op| !matches!(op, TurretOp::Release { .. }));
     }
 
     /// `Cmd_Kill_f`: the `kill` client command, which is the `suicide` builtin
@@ -651,9 +891,16 @@ impl ScriptRuntime {
     }
 
     /// `G_CheckForCursorHints` (0x4f59c) as `ClientEndFrame` runs it every
-    /// frame: the hint for the item the use key would pick now, 0 for none
-    /// or for a player not alive (docs/research/cod11-items.md, section 2.3).
-    pub fn cursor_hint_pass(&mut self, slot: usize, eye: [f32; 3], view: [f32; 3]) -> i32 {
+    /// frame: the hint for what the use key would pick now, 0 for none or for
+    /// a player not alive (docs/research/cod11-items.md, section 2.3), and
+    /// `serverCursorHintString`: `None` leaves it as it was, which a dead
+    /// player and a gunner do (turrets doc 4.3), `Some(-1)` is no string.
+    pub fn cursor_hint_pass(
+        &mut self,
+        slot: usize,
+        eye: [f32; 3],
+        view: [f32; 3],
+    ) -> (i32, Option<i32>) {
         let v = self
             .host
             .client_vitals
@@ -661,26 +908,40 @@ impl ScriptRuntime {
             .copied()
             .unwrap_or_default();
         if self.client_entity(slot).is_none() || v.health <= 0 || v.dead {
-            return 0;
+            return (0, None);
+        }
+        if self.host.turrets.values().any(|r| r.owner == Some(slot)) {
+            return (0, None);
         }
         if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
-            return 0;
+            return (0, Some(-1));
         }
         let host = &mut self.host;
         let hit = self
             .vm
             .with_cx(|cx| crate::game::item::activate_ent(host, cx, slot, eye, view));
-        let Some(item) = hit
-            .and_then(|id| self.host.ents.get(id))
-            .and_then(|e| e.item)
-        else {
-            return 0;
+        let id = match hit {
+            None => return (0, Some(-1)),
+            Some(Activate::Turret(id)) => {
+                let string = self.host.turrets[&id]
+                    .def
+                    .use_hint_string
+                    .as_deref()
+                    .and_then(|name| {
+                        crate::configstrings::hint_string_index(&self.host.configstrings, name)
+                    });
+                return (HINT_MG42, Some(string.unwrap_or(-1)));
+            }
+            Some(Activate::Item(id)) => id,
+        };
+        let Some(item) = self.host.ents.get(id).and_then(|e| e.item) else {
+            return (0, Some(-1));
         };
         let Some(kind) = crate::game::pickup::item_kind(item.index as usize) else {
-            return 0;
+            return (0, Some(-1));
         };
         let owned = self.host.client_weapons[slot].holds(item.index as usize);
-        crate::game::pickup::cursor_hint(kind, owned)
+        (crate::game::pickup::cursor_hint(kind, owned), Some(-1))
     }
 
     /// A client's entity state as the tick's moves left it, for
@@ -872,6 +1133,22 @@ impl ScriptRuntime {
         self.vm.with_cx(|cx| {
             let field = cx.intern_folded("origin");
             let _ = host.set_field(cx, ent, field, Value::Vector(origin));
+        });
+    }
+
+    /// Writes an entity's `origin` and `angles` as script would. Test-facing
+    /// (`Server::test_place_entity`).
+    pub fn place_entity(&mut self, num: u32, origin: [f32; 3], angles: [f32; 3]) {
+        use vcod_gsc::Host;
+        let Some(id) = self.host.ents.handle(num) else {
+            return;
+        };
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            for (name, v) in [("origin", origin), ("angles", angles)] {
+                let field = cx.intern_folded(name);
+                let _ = host.set_field(cx, id, field, Value::Vector(v));
+            }
         });
     }
 
@@ -1148,6 +1425,14 @@ impl ScriptRuntime {
                     // freed entity otherwise (`Vm::kill_threads_of`).
                     self.vm.kill_threads_of(Target::Entity(id));
                 }
+                // `G_FreeEntity` on the player (turrets doc 8): a gun it
+                // manned is unowned, its loop left to the unmanned think.
+                for rec in self.host.turrets.values_mut() {
+                    if rec.owner == Some(slot) {
+                        rec.owner = None;
+                        rec.busy = 0;
+                    }
+                }
                 self.host.ents.free_client(slot);
             }
         }
@@ -1387,6 +1672,7 @@ impl ScriptRuntime {
         // what `probe_delete`'s post-wait count measures.
         let host = &mut self.host;
         self.vm.with_cx(|cx| host.run_entity_thinks(cx, now_ms));
+        self.host.run_turret_thinks();
         // The body queue is not in the object table, so its own think -- the
         // 250 ms `eFlags` 0x800 clear -- runs beside the table's.
         self.host
@@ -2714,6 +3000,100 @@ mod tests {
             .contains(&(0, format!("a {panzerfaust}"))));
     }
 
+    /// A stock stand turret at (40, 0, 0) facing +x, and `pickup_rig`'s
+    /// client plus a second one, both on the ground behind it.
+    fn turret_rig() -> (ScriptRuntime, EntId) {
+        use vcod_gsc::Host;
+        let mut rt = pickup_rig();
+        rt.push_client_event(ClientEvent::Connect {
+            slot: 1,
+            name: "q".into(),
+        });
+        rt.run_frame(0);
+        rt.host.client_vitals[1] = rt.host.client_vitals[0];
+        rt.set_client_origin(1, [0.0, 4.0, 0.0]);
+        rt.set_client_on_ground(0, true);
+        rt.set_client_on_ground(1, true);
+        rt.host.configstrings[1212] = "CGAME_USEMG42".into();
+        let host = &mut rt.host;
+        let gun = rt.vm.with_cx(|cx| {
+            let id = host.ents.spawn(cx).unwrap();
+            let a = cx.intern_folded("origin");
+            host.set_field(cx, id, a, Value::Vector([40.0, 0.0, 0.0]))
+                .unwrap();
+            id
+        });
+        let def = crate::game::turret::TurretDef::parse(
+            "WEAPONFILE\\weaponClass\\turret\\leftArc\\45\\rightArc\\45\\topArc\\40\\bottomArc\\40\\useHintString\\CGAME_USEMG42",
+        )
+        .unwrap();
+        rt.host.turrets.insert(
+            gun,
+            crate::game::turret::TurretRecord::new(
+                "mg42_bipod_stand_mp",
+                def,
+                Default::default(),
+                0.0,
+            ),
+        );
+        (rt, gun)
+    }
+
+    const AT_GUN: [f32; 3] = [30.0, 0.0, 0.0];
+
+    /// How many mounts the drain after `slot`'s pass applied.
+    fn mount_queued(rt: &mut ScriptRuntime, slot: usize) -> usize {
+        rt.take_turret_mounts(slot, [0.0; 3], vcod_common::pmove::Stance::Stand, AT_GUN)
+            .len()
+    }
+
+    #[test]
+    fn a_usable_turret_hints_mg42_with_its_hint_string_slot() {
+        let (mut rt, _) = turret_rig();
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_GUN), (6, Some(0)));
+    }
+
+    /// The server drains each cmd's mount before the next cmd's pass, so the
+    /// second client's press in the same frame finds the gun manned.
+    #[test]
+    fn two_presses_on_one_gun_mount_only_the_first() {
+        let (mut rt, gun) = turret_rig();
+        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        assert_eq!(mount_queued(&mut rt, 0), 1);
+        rt.item_pass(1, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        assert_eq!(mount_queued(&mut rt, 1), 0);
+        assert_eq!(rt.host.turrets[&gun].owner, Some(0));
+    }
+
+    /// A gunner's press is the release request and nothing else, and a
+    /// gunner reads hint 0 with the string left where the mount left it.
+    #[test]
+    fn a_gunners_use_press_asks_for_the_release_and_mounts_nothing() {
+        let (mut rt, gun) = turret_rig();
+        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        mount_queued(&mut rt, 0);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_GUN), (0, None));
+        let fg42 = rt.place_item("mpweapon_fg42", [40.0, 0.0, 40.0], 90);
+        rt.item_pass(0, 0, EYE, AT_GUN);
+        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        assert!(rt.host.turret_ops.is_empty());
+        assert_eq!(rt.host.turrets[&gun].busy, 2);
+        assert!(!rt.host.ents.get(fg42).unwrap().item.unwrap().taken);
+    }
+
+    /// `Cmd_Activate_f` has no `pm_type` gate (turrets doc 4.1): a gunner
+    /// past the touch pass's gate still asks for the release.
+    #[test]
+    fn a_gunners_press_asks_for_the_release_whatever_its_pm_type() {
+        let (mut rt, gun) = turret_rig();
+        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        mount_queued(&mut rt, 0);
+        rt.item_pass(0, 0, EYE, AT_GUN);
+        rt.set_client_pm_type(0, 6);
+        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        assert_eq!(rt.host.turrets[&gun].busy, 2);
+    }
+
     const EYE: [f32; 3] = [0.0, 0.0, 60.0];
     const AT_ITEM: [f32; 3] = [36.0, 0.0, 0.0];
 
@@ -2722,14 +3102,14 @@ mod tests {
         let mut rt = pickup_rig();
         rt.place_item("mpweapon_fg42", [40.0, 0.0, 30.0], 90);
         // fg42 is index 6: the capture's 15 (docs/research/cod11-items.md 12.3).
-        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 15);
-        assert_eq!(rt.cursor_hint_pass(0, EYE, [-36.0, 0.0, 0.0]), 0);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 15);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, [-36.0, 0.0, 0.0]).0, 0);
         rt.host.client_vitals[0] = crate::game::host::Vitals {
             health: 0,
             max_health: 100,
             dead: true,
         };
-        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 0);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 0);
     }
 
     /// An owned fg42 short of full hints 73 past its index, the capture's
@@ -2742,9 +3122,9 @@ mod tests {
         rt.host.client_weapons[0].give(fg, 2);
         rt.host.client_ammo[0].ammo[d.ammo_index] = 100;
         rt.place_item("mpweapon_fg42", [40.0, 0.0, 30.0], 90);
-        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 79);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 79);
         rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_ITEM);
-        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 0);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 0);
     }
 
     /// The capture's swap: 32 on the panzerfaust, 0 on the carbine it
@@ -2755,7 +3135,7 @@ mod tests {
         let fg = crate::configstrings::weapon_index("fg42_mp").unwrap();
         rt.host.client_weapons[0].give(fg, 2);
         rt.place_item("mpweapon_panzerfaust", [40.0, 0.0, 30.0], 0);
-        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 32);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 32);
         rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_ITEM);
         let carbine = crate::configstrings::weapon_index("m1carbine_mp").unwrap();
         let drop = rt
@@ -2764,7 +3144,7 @@ mod tests {
             .iter_inuse()
             .find_map(|(id, e)| e.item.filter(|i| i.index as usize == carbine).map(|_| id))
             .expect("the carbine was dropped");
-        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 0);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 0);
         rt.host
             .ents
             .get_mut(drop)
@@ -2773,7 +3153,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .owner = None;
-        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM), 21);
+        assert_eq!(rt.cursor_hint_pass(0, EYE, AT_ITEM).0, 21);
     }
 
     /// The item pass's notifies reach script at the next frame: a player

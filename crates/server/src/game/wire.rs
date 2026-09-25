@@ -50,6 +50,12 @@ const ITEM_EFLAGS: i32 = 16;
 const ITEM_CLIENTNUM: i32 = 254;
 /// A turret's `apos.trType` in both maps' traces.
 const TURRET_APOS_TRTYPE: i32 = 3;
+/// `s.eFlags` bit `0x8`: the teleport bit, flipped by the aim step's first
+/// frame after a mount (`docs/research/cod11-turrets.md` section 6.2).
+const TURRET_EFLAGS_TELEPORT: i32 = 0x8;
+/// `s.eFlags` bit `0x400`: set on a firing frame, cleared at the top of the
+/// next (`docs/research/cod11-turrets.md` section 6.3).
+const TURRET_EFLAGS_FIRING: i32 = 0x400;
 
 /// The `r.mins`/`r.maxs` an entity's spawn function leaves on it. The clusters
 /// it links with come from this grown by the engine's link epsilon, which is
@@ -298,11 +304,21 @@ fn build(host: &mut GameHost, cx: &mut Cx, p: &Protocol, id: EntId) -> Option<En
             // captures carries 3 here and nothing in the module has been read
             // that says why.
             seti(&mut e, "apos.trType", TURRET_APOS_TRTYPE);
-            // The barrel's settled pitch, from the sweep
-            // `game::spawn::settle_turret_pitch` runs at map load. A host with
-            // no collision world ran no sweep and sends zero.
-            if let Some(pitch) = host.turret_pitch.get(&id).copied() {
-                setf(&mut e, "angles2[0]", pitch);
+            // The barrel's own record, built at spawn (`game::turret`). A
+            // host with no collision world built no record and sends the
+            // entity with everything else at its zeroed default: rest pitch
+            // 0, no view lock, no firing bit.
+            if let Some(rec) = host.turrets.get(&id) {
+                setf(&mut e, "angles2[0]", rec.angles2[0]);
+                setf(&mut e, "angles2[1]", rec.angles2[1]);
+                let mut eflags = 0;
+                if rec.teleport_bit {
+                    eflags |= TURRET_EFLAGS_TELEPORT;
+                }
+                if rec.firing {
+                    eflags |= TURRET_EFLAGS_FIRING;
+                }
+                seti(&mut e, "eFlags", eflags);
             }
         }
     }

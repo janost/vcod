@@ -21,6 +21,8 @@ const PM_DEAD_LINKED: i32 = 7;
 
 const EF_CROUCH: i32 = 0x20;
 const EF_PRONE: i32 = 0x40;
+/// The mounted-gun bits, one value per gun stance (docs/research/cod11-turrets.md 4.4).
+const EF_MOUNTED: i32 = 0xC000;
 const PMF_DUCKED: i32 = 0x2;
 const PMF_JUMP_HELD: i32 = 0x8;
 const PMF_BACKWARDS_RUN: i32 = 0x40;
@@ -81,6 +83,12 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
         Stance::Crouch
     } else {
         Stance::Stand
+    };
+    ps.mounted = match eflags & EF_MOUNTED {
+        0xC000 => Some(Stance::Stand),
+        0x8000 => Some(Stance::Crouch),
+        0x4000 => Some(Stance::Prone),
+        _ => None,
     };
     let ground = int("groundEntityNum") as u32;
     ps.on_ground = ground != ENTITYNUM_NONE;
@@ -367,6 +375,21 @@ mod tests {
             set(&mut w, &format!("delta_angles[{i}]"), pred.delta_angles[i]);
         }
         w
+    }
+
+    #[test]
+    fn from_wire_reads_the_mounted_stance_off_eflags() {
+        let p = &PROTOCOL_V1;
+        for (bits, want) in [
+            (0, None),
+            (0xC000, Some(Stance::Stand)),
+            (0x8000, Some(Stance::Crouch)),
+            (0x4000, Some(Stance::Prone)),
+        ] {
+            let mut w = msg::PlayerState::null(p);
+            set(&mut w, "eFlags", 16 | bits);
+            assert_eq!(from_wire(p, &w, None).ps.mounted, want, "eFlags {bits:#x}");
+        }
     }
 
     #[test]

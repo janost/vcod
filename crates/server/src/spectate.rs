@@ -51,6 +51,14 @@ const EF_PRONE: i32 = 0x40;
 /// the same reason: a changed `eFlags` is what makes a client stop carrying
 /// the previous occupant of that entity number forward.
 const EF_TELEPORT_BIT: i32 = 0x8;
+/// The mounted-gun bits by the gun's stance (turrets doc, 4.4 and 12.1).
+const EF_MOUNTED_STAND: i32 = 0xC000;
+const EF_MOUNTED_DUCK: i32 = 0x8000;
+const EF_MOUNTED_PRONE: i32 = 0x4000;
+const EF_FIRING: i32 = 0x400;
+/// `docs/research/cod11-events-and-fx.md`.
+const EV_PLAYER_TELEPORT_IN: i32 = 199;
+const EV_PLAYER_TELEPORT_OUT: i32 = 200;
 const PMF_DUCKED: i32 = 0x2;
 const PMF_PRONE: i32 = 0x1;
 /// Held jump, retail's 0x8 (set @0x2ec34, cleared @0x34135); the capture reads
@@ -291,6 +299,9 @@ pub struct ClientSim {
     /// several moves still raises the event. Leaving the ground is not enough:
     /// a ledge and a ladder do that without a jump.
     jumped: bool,
+    /// A landing since the last `update_anims` fast enough for the land
+    /// anim (`PlayerState::land_anim`).
+    land_anim: bool,
     /// `ps.stats[0]` and `stats[2]`, mirrored from the host's vitals every
     /// frame; the host is where the script's `self.health` lands.
     pub health: i32,
@@ -304,6 +315,9 @@ pub struct ClientSim {
     /// `ps.serverCursorHint`, written every frame by the end-of-frame pass
     /// (`ScriptRuntime::cursor_hint_pass`).
     pub cursor_hint: i32,
+    /// `ps.serverCursorHintString`, -1 for none: the same pass writes it,
+    /// and leaves it alone for a dead player or a gunner (turrets doc 4.3).
+    pub cursor_hint_string: i32,
     damage: DamageAccum,
     feedback: DamageFeedback,
     /// `ps.stats[1]`, the yaw toward the killer (combat doc, 5.1, item 11).
@@ -326,6 +340,21 @@ pub struct ClientSim {
     /// so it wraps; every spawn of either mode bumps it, which puts the lone
     /// spectator's capture at 1.
     spawn_count: u8,
+    /// `ps.viewlocked` (0 free, 1 on a turret, 2 on a frame the turret
+    /// fired), `ps.viewlocked_entNum` (the turret; 0 after a spawn,
+    /// `ENTITYNUM_NONE` after a release, turrets doc 12.7) and `ps.gunfx`.
+    pub viewlocked: u8,
+    pub viewlocked_ent: u32,
+    pub gunfx: u8,
+    /// The turret this client mans: `s.otherEntityNum` and the gun's stance
+    /// as `eFlags` 0xC000/0x8000/0x4000 (turrets doc, 4.4).
+    pub mounted_on: Option<(u32, crate::game::turret::TurretStance)>,
+    /// `ps.eFlags` 0x400, on a frame the gun this client mans fired (turrets
+    /// doc 12.4).
+    pub firing: bool,
+    /// The last cmd's angles, retail's `pers.cmd.angles`, which
+    /// `set_view_angle` rewrites `delta_angles` against.
+    last_cmd_angles: [i32; 3],
 }
 
 /// Everything the animscript needs that the sim does not own: the script
@@ -388,8 +417,10 @@ impl ClientSim {
             was_airborne: false,
             strafing: None,
             jumped: false,
+            land_anim: false,
             link_to: None,
             cursor_hint: 0,
+            cursor_hint_string: -1,
             health: 0,
             max_health: 0,
             dead: false,
@@ -404,6 +435,12 @@ impl ClientSim {
             // The constructor is the connect, before any spawn: the script's
             // own `spawnSpectator` is what takes it to the capture's 1.
             spawn_count: 0,
+            viewlocked: 0,
+            viewlocked_ent: 0,
+            gunfx: 0,
+            mounted_on: None,
+            firing: false,
+            last_cmd_angles: cmd_angles,
         }
     }
 
@@ -489,11 +526,13 @@ impl ClientSim {
         // `ClientSpawn`'s memset. Only a playing client's end frame writes
         // the hint again, so a spectator and the intermission camera keep 0.
         self.cursor_hint = 0;
+        self.cursor_hint_string = -1;
         // A respawned player does not resume the anim it died in.
         self.anim = Default::default();
         self.was_airborne = false;
         self.strafing = None;
         self.jumped = false;
+        self.land_anim = false;
         // `ClientSpawn`'s memset: the damage fields read 0 again after a
         // respawn (combat doc, 8.4), and so does the dead yaw.
         self.dead = false;
@@ -502,6 +541,15 @@ impl ClientSim {
         self.dead_yaw = 0;
         self.pain_after_ms = 0;
         self.spawn_count = self.spawn_count.wrapping_add(1);
+        // The memset again: the capture's first trace, after a spawn, reads
+        // `viewlocked_entNum` 0 (turrets doc, 12.7). `ps.mounted` went with
+        // the fresh `ps` above.
+        self.viewlocked = 0;
+        self.viewlocked_ent = 0;
+        self.gunfx = 0;
+        self.mounted_on = None;
+        self.firing = false;
+        self.last_cmd_angles = cmd_angles;
         // Retail's respawn frame reads an empty ring at sequence 0
         // (combat doc, 9.2).
         self.ring.clear();
@@ -511,16 +559,26 @@ impl ClientSim {
         self.teleport_bit = !self.teleport_bit;
     }
 
-    /// The wire word for any mode: the base and the per-spawn teleport bit
-    /// and nothing else. The stance bits ride on a live player's playerstate
-    /// copy only, which is where the motion capture measured them.
+    /// The wire word for any mode: the base, the per-spawn teleport bit, the
+    /// mounted-gun bits and the gun's firing bit. The stance bits ride on a live player's
+    /// playerstate copy only, which is where the motion capture measured
+    /// them.
     fn eflags(&self) -> i32 {
+        use crate::game::turret::TurretStance;
+        let mounted = match self.mounted_on {
+            None => 0,
+            Some((_, TurretStance::Stand)) => EF_MOUNTED_STAND,
+            Some((_, TurretStance::Duck)) => EF_MOUNTED_DUCK,
+            Some((_, TurretStance::Prone)) => EF_MOUNTED_PRONE,
+        };
         PLAYER_EFLAGS
+            | mounted
             | if self.teleport_bit {
                 EF_TELEPORT_BIT
             } else {
                 0
             }
+            | if self.firing { EF_FIRING } else { 0 }
     }
 
     /// `setOrigin` on a player: the origin moves and the teleport bit flips,
@@ -529,6 +587,55 @@ impl ClientSim {
     pub fn teleport(&mut self, origin: [f32; 3]) {
         self.ps.origin = origin.into();
         self.teleport_bit = !self.teleport_bit;
+    }
+
+    /// `SetClientViewAngle` (0x41e30): the view becomes `angles` (degrees,
+    /// wire convention) and `delta_angles` is rewritten so the last cmd's
+    /// angles land on it. Retail's prone arm, which clamps the angles to the
+    /// prone cone first, is not modelled.
+    pub fn set_view_angle(&mut self, angles: [f32; 3]) {
+        for (i, a) in angles.iter().enumerate() {
+            self.delta_angles[i] = ((a * ANGLE2SHORT) as i32 & 0xffff) - self.last_cmd_angles[i];
+        }
+        self.view_angles = angles;
+        self.ps.yaw = angles[1].to_radians();
+        self.ps.pitch = -angles[0].to_radians();
+    }
+
+    /// `TeleportPlayer` (0x51380, turrets doc 8 and 12.7). A playing client
+    /// raises `EV_PLAYER_TELEPORT_OUT` at the old origin and `_IN` at the
+    /// destination, returned for the caller to queue since the host owns the
+    /// temp entities; `client_num` is this client's slot, which both carry.
+    pub fn teleport_player(
+        &mut self,
+        client_num: usize,
+        origin: [f32; 3],
+        angles: [f32; 3],
+    ) -> Vec<crate::game::temp_entity::TempEntity> {
+        use crate::game::temp_entity::{Scope, TempEntity};
+        let temp = |event: i32, at: [f32; 3]| TempEntity {
+            event,
+            parm: 0,
+            surf_type: 0,
+            other: 0,
+            attacker: 0,
+            weapon: 0,
+            client_num: client_num as i32,
+            origin: at,
+            scope: Scope::Pvs,
+        };
+        let temps = if self.pm_type == PmType::Normal && !self.dead {
+            vec![
+                temp(EV_PLAYER_TELEPORT_OUT, self.origin()),
+                temp(EV_PLAYER_TELEPORT_IN, origin),
+            ]
+        } else {
+            Vec::new()
+        };
+        self.ps.origin = Vec3::from(origin) + Vec3::Z;
+        self.teleport_bit = !self.teleport_bit;
+        self.set_view_angle(angles);
+        temps
     }
 
     pub fn add_event(&mut self, event: i32, parm: i32) {
@@ -545,6 +652,8 @@ impl ClientSim {
         world: Option<&CollisionWorld>,
         weapons: &[Option<WeaponDef>],
     ) -> Vec<PmEvent> {
+        // `pers.cmd` takes every cmd, ahead of the dead and intermission returns.
+        self.last_cmd_angles = cmd.angles;
         // A dead player's view is frozen and its body falls and slides;
         // nothing it presses reaches the mover or the weapon (combat doc,
         // 1.12 and 6, the `pm_type > 5` returns).
@@ -587,6 +696,7 @@ impl ClientSim {
                 self.ps.linked = self.link_to.is_some();
                 let events = pmove::pmove(&mut self.ps, &pm_input(cmd), w, dt, weapons);
                 self.jumped |= self.ps.jumped;
+                self.land_anim |= self.ps.land_anim;
                 // Retail holds a prone view inside the cone around the body by
                 // pushing `delta_angles`, so the client's own prediction lands
                 // in the same place (docs/research/cod11-mantle.md, "Prone").
@@ -675,6 +785,16 @@ impl ClientSim {
         // blocks are unreachable; the prone arm never reads that bit at all
         // (@0x326f1), which is why prone moves through `walkprone`.
         let movetype = match (self.ps.stance, moving, back) {
+            // Retail's 0x322c8 takes the stance straight off `eFlags & 0xC000`
+            // for a mounted player, ahead of both the ladder flag and the
+            // speed test: a stand gun always plays `idle` however the
+            // gunner's residual velocity from before the mount reads
+            // (turrets doc, section 10).
+            _ if self.mounted_on.is_some() => match self.ps.stance {
+                pmove::Stance::Prone => Movetype::IdleProne,
+                pmove::Stance::Crouch => Movetype::IdleCr,
+                pmove::Stance::Stand => Movetype::Idle,
+            },
             // A climber is off the ground and still selects: retail's ladder
             // flag bypasses the airborne early-out (@0x323af).
             _ if self.ps.on_ladder && self.ps.velocity.z >= 0.0 => Movetype::ClimbUp,
@@ -698,8 +818,16 @@ impl ClientSim {
             // (combat doc, 1.13).
             ads: self.ps.ads_active,
             strafing: self.strafing,
-            mounted: None,
-            firing: self.ps.weaponstate == vcod_common::pmove::weapon::WEAPON_FIRING,
+            mounted: self.mounted_on.map(|_| "mg42".to_string()),
+            // The turret never runs the weapon state machine, so a mounted
+            // gunner's `firing` clause reads the cmd's raw attack bit instead
+            // of `weaponstate` (turrets doc 10, condition slot 0x2a454's
+            // neighbour).
+            firing: if self.mounted_on.is_some() {
+                cmd.buttons & msg::BUTTON_ATTACK != 0
+            } else {
+                self.ps.weaponstate == vcod_common::pmove::weapon::WEAPON_FIRING
+            },
         };
         let resolve = |name: &str| inputs.anims.wire_of(name);
         let length = |name: &str| inputs.anims.length_ms(name);
@@ -712,10 +840,14 @@ impl ClientSim {
         // `run_back` and reads the run loop while airborne, so a fall and a
         // mounted ladder animate whatever they were doing.
         let jumped = std::mem::take(&mut self.jumped);
+        let land_anim = std::mem::take(&mut self.land_anim);
         let script = &inputs.anims.script;
         match (self.ps.on_ground, self.was_airborne) {
             _ if linked => {}
-            (true, true) => {
+            // `PM_CrashLand` raises the land anim only on a fast landing and
+            // only with `legsTimer` 0 (cod11-sound-system.md, "Landing"): the
+            // one-unit drop off a turret release plays none.
+            (true, true) if land_anim && !self.anim.legs_held(now_ms) => {
                 // The landing writes the legs alone, `both` clause or not
                 // (combat doc, 1.14).
                 let mut sel = script.select_event("land", &conditions);
@@ -749,8 +881,10 @@ impl ClientSim {
         // Nothing is selected while off the ground -- retail returns before
         // the selection unless the ladder flag is set (@0x323a2), which is
         // what gives a climber its `climbup`/`climbdown` -- so a jump owns
-        // the legs until the landing.
-        if !linked && (self.ps.on_ground || self.ps.on_ladder) {
+        // the legs until the landing. A mounted player is also off the
+        // ground (`ps.mounted` clears `on_ground` in pmove) but the 0x322c8
+        // mounted arm runs ahead of that early-out (turrets doc, section 10).
+        if !linked && (self.ps.on_ground || self.ps.on_ladder || self.mounted_on.is_some()) {
             let mut sel = script.select("combat", &conditions);
             // Retail leaves `torsoAnim` 0 in every settled pose of both
             // captures, although the clauses reached here are `both`. That 0
@@ -818,7 +952,7 @@ impl ClientSim {
             weapon_class: inputs.weapon_class.to_ascii_lowercase(),
             ads: false,
             strafing: self.strafing,
-            mounted: None,
+            mounted: self.mounted_on.map(|_| "mg42".to_string()),
             firing: false,
         }
     }
@@ -958,6 +1092,11 @@ impl ClientSim {
         self.ps.origin.into()
     }
 
+    /// The wire `legsAnim`, restart bit included.
+    pub fn legs_anim(&self) -> i32 {
+        self.anim.legs()
+    }
+
     /// What the locational trace poses this client's bones from: the two
     /// live anim indices with the phase each is at, and the aim the spine
     /// layer bends by.
@@ -1062,6 +1201,12 @@ impl ClientSim {
         // weapon's, and the next task is what gives it a value.
         set("torsoAnim", self.anim.torso());
         set("weapon", i32::from(self.ps.weapon));
+        // The gun a gunner mans (turrets doc, 4.4); 0 off one, as release
+        // writes it.
+        set(
+            "otherEntityNum",
+            self.mounted_on.map_or(0, |(gun, _)| gun as i32),
+        );
         self.ring.write(&mut set);
         set("groundEntityNum", self.ps.ground_entity_num() as i32);
         // The lean the other client draws, the same -1..1 the playerstate
@@ -1202,7 +1347,14 @@ impl ClientSim {
             // -1..1, left negative, the same convention retail sends.
             set("leanf", (self.ps.lean / pmove::LEAN_MAX).to_bits() as i32);
             set("serverCursorHint", self.cursor_hint & 0xff);
-            set("serverCursorHintString", NO_CURSOR_HINT_STRING);
+            set(
+                "serverCursorHintString",
+                if self.cursor_hint_string < 0 {
+                    NO_CURSOR_HINT_STRING
+                } else {
+                    self.cursor_hint_string
+                },
+            );
             set("viewmodelIndex", self.viewmodel_index);
             set("legsAnim", self.anim.legs());
             set("torsoAnim", self.anim.torso());
@@ -1214,6 +1366,9 @@ impl ClientSim {
             set("fWeaponPosFrac", self.ps.weapon_pos_frac.to_bits() as i32);
             set("aimSpreadScale", self.ps.aim_spread_scale.to_bits() as i32);
         }
+        set("viewlocked", i32::from(self.viewlocked));
+        set("viewlocked_entNum", self.viewlocked_ent as i32);
+        set("gunfx", i32::from(self.gunfx));
         // What the client holds; both layouts are in the object model doc,
         // section 20. The sim owns all of it: the script host's copy is
         // mirrored into `ps` every frame, and the weapon machine writes
@@ -1357,6 +1512,7 @@ fn vec_to_angles(v: Vec3) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::turret::TurretStance;
     use vcod_common::net::msg::NULL_USERCMD;
     use vcod_common::net::protocol::{ENTITYNUM_NONE, PROTOCOL_V1};
 
@@ -1549,9 +1705,74 @@ mod tests {
                 "the flight kept selecting at {t}"
             );
         }
+        // The landing pmove reports, fast enough for the land anim.
         sim.ps.on_ground = true;
+        sim.land_anim = true;
         sim.update_anims(&inputs, &NULL_USERCMD, 1300, &[], &mut 1u64);
         assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_land"));
+    }
+
+    /// A landing slower than `LAND_ANIM_SPEED`, the one-unit drop a turret
+    /// release ends in, plays no land anim: the retail turret capture keeps
+    /// `pb_stand_alert` through it (`tests/turret_ab.rs`).
+    #[test]
+    fn a_slow_landing_plays_no_land_anim() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let inputs = AnimInputs {
+            anims: &anims,
+            weapon: "m1carbine_mp",
+            weapon_class: "rifle",
+        };
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.on_ground = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1000, &[], &mut 1u64);
+        let before = sim.anim.legs();
+        sim.ps.on_ground = false;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[], &mut 1u64);
+        sim.ps.on_ground = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1100, &[], &mut 1u64);
+        assert_eq!(sim.anim.legs(), before, "no land anim, no toggle flip");
+    }
+
+    /// The land anim's timer half: a fast landing while the last land anim
+    /// still holds the legs (`legsTimer` running) raises no second one.
+    #[test]
+    fn a_landing_inside_the_last_land_anim_plays_none() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let inputs = AnimInputs {
+            anims: &anims,
+            weapon: "m1carbine_mp",
+            weapon_class: "rifle",
+        };
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.on_ground = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1000, &[], &mut 1u64);
+        sim.ps.on_ground = false;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[], &mut 1u64);
+        sim.ps.on_ground = true;
+        sim.land_anim = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1100, &[], &mut 1u64);
+        assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_land"));
+        let first = sim.anim.legs();
+        // Airborne and down again inside the clause's `duration 100`.
+        sim.ps.on_ground = false;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1120, &[], &mut 1u64);
+        sim.ps.on_ground = true;
+        sim.land_anim = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1150, &[], &mut 1u64);
+        assert_eq!(
+            sim.anim.legs(),
+            first,
+            "the held land anim is not restarted"
+        );
     }
 
     /// Leaving the ground is not jumping. Retail's own mp_pavlov capture backs
@@ -2332,6 +2553,108 @@ mod tests {
         assert_eq!(w.field_i32(p, "damagePitch"), 255);
         assert_eq!(w.field_i32(p, "damageCount"), 20);
         assert_eq!(sim.ps.velocity, Vec3::ZERO);
+    }
+
+    #[test]
+    fn set_view_angle_rewrites_delta_angles_against_the_last_cmd() {
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.last_cmd_angles = [100, 2000, 0];
+        sim.set_view_angle([10.0, 90.0, 0.0]);
+        let d = sim.delta_angles();
+        assert_eq!(d[0], (10.0 * ANGLE2SHORT) as i32 - 100);
+        assert_eq!(d[1], (90.0 * ANGLE2SHORT) as i32 - 2000);
+        assert_eq!(sim.view_angles()[1], 90.0);
+    }
+
+    /// `step` keeps the cmd's angles, so the view `set_view_angle` wrote is
+    /// what the next cmd carrying the same angles derives.
+    #[test]
+    fn a_forced_view_survives_the_next_cmd() {
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        let c = cmd(0, 1234, -5678);
+        sim.step(&c, 0.05, None, &[]);
+        sim.set_view_angle([-20.0, 135.0, 0.0]);
+        sim.step(&c, 0.05, None, &[]);
+        let v = sim.view_angles();
+        assert!((v[0] + 20.0).abs() < 0.01, "{v:?}");
+        assert!((v[1] - 135.0).abs() < 0.01, "{v:?}");
+    }
+
+    #[test]
+    fn a_mounted_client_writes_the_view_lock_and_stance_eflags() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        sim.mounted_on = Some((298, TurretStance::Stand));
+        sim.viewlocked = 1;
+        sim.viewlocked_ent = 298;
+        let ps = sim.to_wire(p, 0, 0);
+        assert_eq!(ps.field_i32(p, "viewlocked"), 1);
+        assert_eq!(ps.field_i32(p, "viewlocked_entNum"), 298);
+        assert_eq!(ps.field_i32(p, "eFlags") & 0xC000, 0xC000);
+        let e = sim.to_entity(p, 3, 0);
+        assert_eq!(e.field_i32(p, "eFlags") & 0xC000, 0xC000);
+        assert_eq!(e.field_i32(p, "otherEntityNum"), 298);
+
+        sim.mounted_on = Some((298, TurretStance::Duck));
+        assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "eFlags") & 0xC000, 0x8000);
+        sim.mounted_on = Some((298, TurretStance::Prone));
+        assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "eFlags") & 0xC000, 0x4000);
+    }
+
+    /// `ClientSpawn`'s memset: the capture's first trace, a fresh spawn,
+    /// reads `viewlocked_entNum` 0 (turrets doc, 12.7).
+    #[test]
+    fn a_respawn_clears_the_mount() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        sim.mounted_on = Some((298, TurretStance::Stand));
+        sim.viewlocked = 2;
+        sim.viewlocked_ent = 298;
+        sim.gunfx = 1;
+        sim.ps.mounted = Some(pmove::Stance::Stand);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        assert_eq!(sim.mounted_on, None);
+        assert_eq!(sim.ps.mounted, None);
+        let w = sim.to_wire(p, 0, 0);
+        assert_eq!(w.field_i32(p, "viewlocked"), 0);
+        assert_eq!(w.field_i32(p, "viewlocked_entNum"), 0);
+        assert_eq!(w.field_i32(p, "gunfx"), 0);
+        assert_eq!(w.field_i32(p, "eFlags") & 0xC000, 0);
+        assert_eq!(sim.to_entity(p, 3, 0).field_i32(p, "otherEntityNum"), 0);
+    }
+
+    /// `TeleportPlayer` (turrets doc, section 8 and 12.7): 200 at the old
+    /// origin and 199 at the destination on temp entities naming the
+    /// client, the origin a unit above the destination, the bit flipped and
+    /// the view set.
+    #[test]
+    fn teleport_player_raises_out_and_in_and_flips_the_bit() {
+        use crate::game::temp_entity::Scope;
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([5.7, -3.2, 8.9], 0.0, [0; 3]);
+        let bit = sim.eflags() & EF_TELEPORT_BIT;
+        let temps = sim.teleport_player(4, [10.5, 0.0, -23.9], [0.0, 45.0, 0.0]);
+        assert_eq!(sim.ps.origin, Vec3::new(10.5, 0.0, -22.9));
+        assert_ne!(sim.eflags() & EF_TELEPORT_BIT, bit);
+        assert_eq!(sim.view_angles()[1], 45.0);
+        let got: Vec<_> = temps
+            .iter()
+            .map(|t| (t.event, t.origin, t.client_num, t.scope))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (200, [5.7, -3.2, 8.9], 4, Scope::Pvs),
+                (199, [10.5, 0.0, -23.9], 4, Scope::Pvs),
+            ]
+        );
+
+        // A client not playing moves and flips without either event.
+        sim.dead = true;
+        assert!(sim.teleport_player(4, [0.0; 3], [0.0; 3]).is_empty());
+        assert_eq!(sim.ps.origin.z, 1.0);
     }
 
     /// A spectator noclips, so flight needs no collision world and a server

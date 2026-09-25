@@ -316,6 +316,11 @@ These work in every mode:
   block the predicted player. `vcod-server` does not clip players against
   each other either; on a retail server, walking into another player can
   mispredict until the next snapshot corrects it.
+- Mounted MGs are usable on the server: mount, aim within the arc, fire and
+  dismount all replay retail's behavior
+  ([docs/research/cod11-turrets.md](docs/research/cod11-turrets.md)). The
+  vcod client does not draw them yet -- it renders the gun's `eType` (11) as
+  nothing.
 - Walk-mode bullet impacts resolve per surface through `fx/iw_impacts.csv`
   like spectate does, plus tracers. No penetration, grenades or projectiles.
 - Walk mode carries six weapons on keys 1-6 (colt, thompson, mp40, mp44,
