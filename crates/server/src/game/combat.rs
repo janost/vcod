@@ -625,7 +625,7 @@ pub fn melee_fire(
         } => {
             let point = muzzle + (end - muzzle) * fraction;
             let damage = def.melee_damage + (vcod_common::rng::xorshift(rng) % 5) as i32;
-            let damage = (damage as f32 * hitlocs.multiplier(hitloc)) as i32;
+            let damage = located_damage(damage, hitlocs.multiplier(hitloc));
             ShotResult {
                 impact: Some(TempEntity {
                     event: EV_MELEE_HIT,
@@ -1176,6 +1176,36 @@ mod tests {
         let te = r.impact.expect("the miss event");
         assert_eq!(te.event, EV_MELEE_MISS);
         assert_eq!(te.other, ENTITYNUM_NONE);
+    }
+
+    /// A melee hit goes through the same `located_damage` as a bullet
+    /// (combat doc 4.2, turrets doc 12.6): a 0.9 location multiplier
+    /// truncates at extended precision, not at `f32`.
+    #[test]
+    fn a_melee_hit_at_a_09_location_truncates_like_a_bullet() {
+        let world = vcod_common::collision::test_world(&[]);
+        let mut table = HitLocTable::default();
+        table.mult[0] = 0.9; // "none": the melee trace here carries no rig.
+        let a = new_for_test([0.0, 0.0, 0.0], 0.0);
+        let near = new_for_test([30.0, 0.0, 0.0], 180.0);
+        let def = melee_carbine();
+        let mut rng = 1u64;
+        let mut expected_rng = rng;
+        let base = def.melee_damage + (vcod_common::rng::xorshift(&mut expected_rng) % 5) as i32;
+        let r = melee_fire(
+            0,
+            &def,
+            "m1carbine_mp",
+            12,
+            a.aim_angles(),
+            &[(0, &a), (1, &near)],
+            Some(&world),
+            &table,
+            None,
+            &mut rng,
+        );
+        let hit = r.hit.expect("the swing reached B");
+        assert_eq!(hit.damage, located_damage(base, 0.9));
     }
 
     /// A standing client as a blast candidate: the box and the eye

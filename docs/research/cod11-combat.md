@@ -1739,7 +1739,9 @@ numbering and every condition in it.
    puts `sess.connected` seven dwords past `sess.sessionState` at
    `client+0x20D0`.
 4. `damage = (int)(damage * g_fHitLocDamageMult[hitLoc])`, truncated toward
-   zero by an explicit `fldcw` of `0xC00`.
+   zero by an explicit `fldcw` of `0xC00`. This runs once for every means of
+   death that reaches `G_Damage`, melee included: the product is taken at
+   x87 width, not `f32` width (turrets doc 12.6's 53 from `60 * 0.9`).
 5. The weapon passed on is `inflictor->s.weapon` (`entityState+200`), or
    `attacker->s.weapon` when there is no inflictor, or 0 when there is
    neither.
