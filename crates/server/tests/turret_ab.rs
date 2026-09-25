@@ -18,11 +18,15 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use common::{holding, ClientEnd, Queues, CMD_MS};
+use vcod_common::animtree::PlayerAnims;
 use vcod_common::net::msg::{UserCmd, BUTTON_ATTACK, BUTTON_USE};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::NetClient;
 use vcod_common::pmove::aim::angle_subtract;
 use vcod_server::Server;
+
+/// `animscript.rs:494`.
+const ANIM_TOGGLEBIT: i32 = 512;
 
 const MAP: &str = "mp_carentan";
 const PROBE_PATH: &str = "maps/mp/gametypes/probe_turret";
@@ -711,4 +715,32 @@ fn a_gunner_spawned_as_a_spectator_lets_go() {
     );
     rig.hold(20);
     assert_eq!(target_gun_angles2(&rig).map(|a| a[1]), Some(0.0));
+}
+
+/// A mounted gunner plays the `mounted mg42` clauses off `mp/playeranim.script`:
+/// `standMG42_aim` at rest and `standMG42_fire` while the attack bit is held
+/// (`docs/research/cod11-turrets.md` 10 and 12.9).
+#[test]
+fn a_mounted_player_plays_the_mg42_aim_and_fire_clauses() {
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        return;
+    };
+    let anims = PlayerAnims::load(&fs).unwrap();
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    rig.tap(BUTTON_USE);
+    let s = rig.hold(3);
+    assert_eq!(
+        s.legs_anim & !ANIM_TOGGLEBIT,
+        anims.wire_of("standMG42_aim").unwrap()
+    );
+    let mut fire = rig.still();
+    fire.buttons |= BUTTON_ATTACK;
+    rig.frame([fire, fire]);
+    let s = rig.frame([fire, fire]);
+    assert_eq!(
+        s.legs_anim & !ANIM_TOGGLEBIT,
+        anims.wire_of("standMG42_fire").unwrap()
+    );
 }

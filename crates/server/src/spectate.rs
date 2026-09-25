@@ -780,6 +780,16 @@ impl ClientSim {
         // blocks are unreachable; the prone arm never reads that bit at all
         // (@0x326f1), which is why prone moves through `walkprone`.
         let movetype = match (self.ps.stance, moving, back) {
+            // Retail's 0x322c8 takes the stance straight off `eFlags & 0xC000`
+            // for a mounted player, ahead of both the ladder flag and the
+            // speed test: a stand gun always plays `idle` however the
+            // gunner's residual velocity from before the mount reads
+            // (turrets doc, section 10).
+            _ if self.mounted_on.is_some() => match self.ps.stance {
+                pmove::Stance::Prone => Movetype::IdleProne,
+                pmove::Stance::Crouch => Movetype::IdleCr,
+                pmove::Stance::Stand => Movetype::Idle,
+            },
             // A climber is off the ground and still selects: retail's ladder
             // flag bypasses the airborne early-out (@0x323af).
             _ if self.ps.on_ladder && self.ps.velocity.z >= 0.0 => Movetype::ClimbUp,
@@ -803,8 +813,16 @@ impl ClientSim {
             // (combat doc, 1.13).
             ads: self.ps.ads_active,
             strafing: self.strafing,
-            mounted: None,
-            firing: self.ps.weaponstate == vcod_common::pmove::weapon::WEAPON_FIRING,
+            mounted: self.mounted_on.map(|_| "mg42".to_string()),
+            // The turret never runs the weapon state machine, so a mounted
+            // gunner's `firing` clause reads the cmd's raw attack bit instead
+            // of `weaponstate` (turrets doc 10, condition slot 0x2a454's
+            // neighbour).
+            firing: if self.mounted_on.is_some() {
+                cmd.buttons & msg::BUTTON_ATTACK != 0
+            } else {
+                self.ps.weaponstate == vcod_common::pmove::weapon::WEAPON_FIRING
+            },
         };
         let resolve = |name: &str| inputs.anims.wire_of(name);
         let length = |name: &str| inputs.anims.length_ms(name);
@@ -854,8 +872,10 @@ impl ClientSim {
         // Nothing is selected while off the ground -- retail returns before
         // the selection unless the ladder flag is set (@0x323a2), which is
         // what gives a climber its `climbup`/`climbdown` -- so a jump owns
-        // the legs until the landing.
-        if !linked && (self.ps.on_ground || self.ps.on_ladder) {
+        // the legs until the landing. A mounted player is also off the
+        // ground (`ps.mounted` clears `on_ground` in pmove) but the 0x322c8
+        // mounted arm runs ahead of that early-out (turrets doc, section 10).
+        if !linked && (self.ps.on_ground || self.ps.on_ladder || self.mounted_on.is_some()) {
             let mut sel = script.select("combat", &conditions);
             // Retail leaves `torsoAnim` 0 in every settled pose of both
             // captures, although the clauses reached here are `both`. That 0
@@ -923,7 +943,7 @@ impl ClientSim {
             weapon_class: inputs.weapon_class.to_ascii_lowercase(),
             ads: false,
             strafing: self.strafing,
-            mounted: None,
+            mounted: self.mounted_on.map(|_| "mg42".to_string()),
             firing: false,
         }
     }
