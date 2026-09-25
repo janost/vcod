@@ -64,7 +64,9 @@ pub struct TempEntity {
     pub scope: Scope,
 }
 
-/// The entity state one temp entity puts on the wire at `number`.
+/// The entity state one temp entity puts on the wire at `number`. The origin
+/// is truncated toward zero, as `G_TempEntity` (0x67938) stores it
+/// (`docs/research/cod11-turrets.md` 8).
 pub fn build(te: &TempEntity, number: u32, p: &Protocol) -> EntityState {
     let mut e = EntityState::null(p);
     e.number = number;
@@ -81,7 +83,10 @@ pub fn build(te: &TempEntity, number: u32, p: &Protocol) -> EntityState {
     set("weapon", te.weapon);
     set("clientNum", te.client_num);
     for (axis, v) in te.origin.iter().enumerate() {
-        set(&format!("pos.trBase[{axis}]"), v.to_bits() as i32);
+        set(
+            &format!("pos.trBase[{axis}]"),
+            (v.trunc() + 0.0).to_bits() as i32,
+        );
     }
     e
 }
@@ -154,6 +159,18 @@ mod tests {
         assert_eq!(e.field_i32(p, "otherEntityNum"), 3);
         assert_eq!(e.field_i32(p, "attackerEntityNum"), 5);
         assert_eq!(e.origin(p), [1.0, 2.0, 3.0]);
+    }
+
+    /// A bullet's impact point reaches the wire whole, each axis toward
+    /// zero: the turret capture's rounds read (1648, 1492, -31).
+    #[test]
+    fn the_origin_is_truncated_toward_zero() {
+        let te = TempEntity {
+            origin: [1648.0751, 1492.962, -31.875],
+            ..flesh_hit()
+        };
+        let p = &PROTOCOL_V1;
+        assert_eq!(build(&te, 900, p).origin(p), [1648.0, 1492.0, -31.0]);
     }
 
     #[test]

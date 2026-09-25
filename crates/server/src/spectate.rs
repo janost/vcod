@@ -608,7 +608,6 @@ impl ClientSim {
         angles: [f32; 3],
     ) -> Vec<crate::game::temp_entity::TempEntity> {
         use crate::game::temp_entity::{Scope, TempEntity};
-        // `G_TempEntity` snaps its origin toward zero.
         let temp = |event: i32, at: [f32; 3]| TempEntity {
             event,
             parm: 0,
@@ -617,7 +616,7 @@ impl ClientSim {
             attacker: 0,
             weapon: 0,
             client_num: client_num as i32,
-            origin: at.map(f32::trunc),
+            origin: at,
             scope: Scope::Pvs,
         };
         let temps = if self.pm_type == PmType::Normal && !self.dead {
@@ -2572,8 +2571,8 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                (200, [5.0, -3.0, 8.0], 4, Scope::Pvs),
-                (199, [10.0, 0.0, -23.0], 4, Scope::Pvs),
+                (200, [5.7, -3.2, 8.9], 4, Scope::Pvs),
+                (199, [10.5, 0.0, -23.9], 4, Scope::Pvs),
             ]
         );
 
