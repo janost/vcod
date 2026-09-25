@@ -39,9 +39,11 @@ pub struct PredictedView {
     pub pred: Predicted,
 }
 
-/// The replay drawn last frame, and the snapshot playerstate it started from.
+/// The replay drawn last frame, and the snapshot playerstate and bodies it
+/// started from.
 struct Replay {
     snap: msg::PlayerState,
+    bodies: Vec<Body>,
     pred: Predicted,
     /// `(commandTime, origin, view height)` after each of the last few cmds
     /// run, oldest first; the camera samples between them.
@@ -53,9 +55,10 @@ struct Replay {
 const RESULTS: usize = 6;
 
 impl Replay {
-    fn new(snap: &msg::PlayerState, pred: Predicted) -> Self {
+    fn new(snap: &msg::PlayerState, bodies: &[Body], pred: Predicted) -> Self {
         let mut r = Replay {
             snap: snap.clone(),
+            bodies: bodies.to_vec(),
             pred,
             results: VecDeque::with_capacity(RESULTS),
         };
@@ -150,8 +153,10 @@ pub struct Predictor {
     /// The longest correction since `log_ms`, logged once a second.
     max_correction: f32,
     log_ms: f64,
-    /// Kept while the snapshot is unchanged, so a frame runs only the cmds
-    /// built since the last one (ioq3's `cg_optimizePrediction`).
+    /// Kept while the snapshot and the bodies are unchanged, so a frame runs
+    /// only the cmds built since the last one. vcod's own shortcut: retail
+    /// replays every cmd every frame, and this is exact only while the clip
+    /// is static.
     replay: Option<Replay>,
     /// The render clock in cmd-time ms: advanced by local frame time only,
     /// so a snapshot or the server clock's re-anchor never moves it, and
@@ -194,7 +199,10 @@ impl Predictor {
             let n = r.run(ring, world, weapons, |_| {});
             self.count(n);
         }
-        let unchanged = self.replay.as_ref().is_some_and(|r| r.snap == *ps);
+        let unchanged = self
+            .replay
+            .as_ref()
+            .is_some_and(|r| r.snap == *ps && r.bodies == bodies);
         if !unchanged && !self.replay_snapshot(p, ps, ring, world, weapons, now_ms) {
             return None;
         }
@@ -219,8 +227,9 @@ impl Predictor {
         })
     }
 
-    /// A new snapshot: rebuild from it, replay every cmd past its
-    /// `commandTime`, and ease out what it corrected. False on a miss.
+    /// A new snapshot or moved bodies: rebuild from the snapshot, replay every
+    /// cmd past its `commandTime`, and ease out what it corrected. False on a
+    /// miss.
     fn replay_snapshot(
         &mut self,
         p: &Protocol,
@@ -252,7 +261,7 @@ impl Predictor {
             .since(command_time.wrapping_sub(1))
             .next()
             .filter(|c| c.server_time == command_time);
-        let mut r = Replay::new(ps, predict::from_wire(p, ps, last_cmd));
+        let mut r = Replay::new(ps, world.bodies, predict::from_wire(p, ps, last_cmd));
         if let Some(old) = &self.replay {
             r.carry_older(old);
         }
@@ -500,6 +509,7 @@ mod tests {
             entity(4, &[("solid", 0xffffff), ("eFlags", 16)], at),
             entity(5, &[("eType", 1), ("solid", standing), ("eFlags", 16)], at),
             entity(6, &[("eType", 1), ("solid", standing)], at),
+            entity(7, &[("solid", standing), ("eFlags", 16)], at),
         ]
         .into_iter()
         .map(|e| (e.number, e))
@@ -508,15 +518,19 @@ mod tests {
 
         let bodies = solid_bodies(P, &ents, 5, &lerped);
 
+        let body = |entity, origin, contents| Body {
+            entity,
+            origin,
+            mins: Vec3::new(-15.0, -15.0, -1.0),
+            maxs: Vec3::new(15.0, 15.0, 70.0),
+            contents,
+        };
         assert_eq!(
             bodies,
-            [Body {
-                entity: 1,
-                origin: Vec3::new(100.0, 0.0, 0.0),
-                mins: Vec3::new(-15.0, -15.0, -1.0),
-                maxs: Vec3::new(15.0, 15.0, 70.0),
-                contents: CONTENTS_BODY,
-            }]
+            [
+                body(1, Vec3::new(100.0, 0.0, 0.0), CONTENTS_BODY),
+                body(7, at, 1),
+            ]
         );
     }
 
@@ -539,6 +553,35 @@ mod tests {
             open.pred.ps.origin.x > 100.0,
             "the run reaches past it bare"
         );
+    }
+
+    /// A body that moved since the last frame replays from the snapshot, as
+    /// a fresh predictor would, rather than keeping cmds run against the old
+    /// pose.
+    #[test]
+    fn a_moved_body_replays_the_kept_cmds() {
+        let world = test_world(&[]);
+        let snap = standing(5000, 0.0);
+        let r = ring((5008..=6000).step_by(16), true);
+        let at = |x| {
+            [Body::from_solid(
+                9,
+                Vec3::new(x, 0.0, 0.0),
+                6684943,
+                CONTENTS_BODY,
+            )]
+        };
+        let mut pr = Predictor::default();
+        pr.predict(P, &snap, &r, &world, &at(60.0), &[], 0.0)
+            .unwrap();
+        let moved = pr
+            .predict(P, &snap, &r, &world, &at(80.0), &[], 8.0)
+            .unwrap();
+        let fresh = Predictor::default()
+            .predict(P, &snap, &r, &world, &at(80.0), &[], 8.0)
+            .unwrap();
+        assert_eq!(moved.pred.ps.origin, fresh.pred.ps.origin);
+        assert!(moved.pred.ps.origin.x > 45.0, "{}", moved.pred.ps.origin.x);
     }
 
     /// mp_depot's `*1` is an exploder and a `bombzone`, so `sd` keeps the

@@ -350,8 +350,7 @@ struct LivePhase {
     predicted_events: play::events::PredictedEvents,
     clock: ServerClock,
     last_loop_snap: Option<u32>,
-    /// Last frame's `entity_pos`: retail predicts before it re-lerps, so the
-    /// predictor clips against where the players were drawn a frame ago.
+    /// Last frame's `entity_pos`, what prediction clips (docs/research/cod11-player-clip.md).
     drawn_pos: HashMap<u32, Vec3>,
 }
 
