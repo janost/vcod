@@ -1,7 +1,7 @@
 //! Contains routines ported from the Quake III Arena GPL source, Copyright (C) 1999-2005 Id Software, Inc.,
 //! and the RTCW-MP GPL source, Copyright (C) 1999-2010 id Software LLC, a ZeniMax Media company. See NOTICE.
 //!
-//! Q3/RTCW-derived player movement on top of `collision::box_trace`. Every
+//! Q3/RTCW-derived player movement on top of `movetrace::MoveWorld`. Every
 //! constant's provenance: docs/research/bsp-ibsp59-format.md, "Movement
 //! constants and their provenance".
 
@@ -4268,7 +4268,9 @@ mod tests {
     #[test]
     fn prone_fit_ignores_bodies() {
         let w = flat();
-        let bodies = [body(30.0, 0.0, 0.0)];
+        // yaw 0 traces backward (-x) for the prone body's length, so the
+        // body has to sit behind the player to be in the trace's way at all.
+        let bodies = [body(-30.0, 0.0, 0.0)];
         assert!(prone_fits(&MoveWorld::new(&w, &bodies, 0), Vec3::ZERO, 0.0));
     }
 
@@ -4289,5 +4291,28 @@ mod tests {
             ps.ground_entity
         );
         assert!((ps.origin.z - 70.0).abs() < 1.0, "{}", ps.origin.z);
+    }
+
+    #[test]
+    fn lean_is_blocked_by_a_body() {
+        // yaw 0's right vector is -Y, where lean_right swings the eye; a body
+        // there should cut the lean short the way a wall does (INFERRED,
+        // PM_UpdateLean's 0x2810011 == MASK_PLAYERSOLID, docs/design/2026-09-25-player-clip-design.md).
+        let w = flat();
+        let bodies = [body(0.0, -35.0, 0.0)];
+        let mw = MoveWorld::new(&w, &bodies, 0);
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &mw, 50);
+        let lean_r = PmInput {
+            lean_right: true,
+            ..Default::default()
+        };
+        tick(&mut ps, &lean_r, &mw, 125);
+        assert!(ps.lean > 0.0);
+        assert!(
+            ps.lean < LEAN_MAX - 1.0,
+            "a body should limit lean, got {}",
+            ps.lean
+        );
     }
 }
