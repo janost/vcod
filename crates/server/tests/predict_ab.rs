@@ -318,7 +318,7 @@ fn predictor_matches_the_server_step() {
 /// rebuilt predictor restarts the phase at 0 and lays its footsteps on other
 /// cmds than the server does.
 #[test]
-#[ignore = "bobCycle is not on our wire: predicted footsteps land on other cmds"]
+#[ignore = "bobCycle is not on vcod-server's wire yet (ClientSim::to_wire); lands with the post-mounted-mg dedupe"]
 fn predictor_ring_matches_the_server_step() {
     step_side_by_side(true);
 }

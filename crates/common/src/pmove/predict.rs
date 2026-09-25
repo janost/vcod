@@ -90,6 +90,7 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     ps.lean = float("leanf") * super::LEAN_MAX;
     ps.prone_direction = float("proneDirection");
     ps.movement_dir = s8("movementDir");
+    ps.bob_cycle = int("bobCycle") as u8;
 
     let pm_flags = int("pm_flags");
     ps.ducked = pm_flags & PMF_DUCKED != 0;
@@ -104,6 +105,7 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
         ps.view_height_speed = lerp_speed(
             ps.stance.view_height(),
             ps.view_height_cur,
+            ps.ducked,
             command_time - view_lerp_start,
         );
     }
@@ -163,23 +165,36 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
 }
 
 /// The eye lerp's pace, which the wire does not carry: `update_stance` fixes
-/// it at a stance change as the whole gap over the transition's lerp time.
-/// The stance it left is not on the wire either, so each stance the eye can be
-/// coming from is tried and the one whose lerp puts the eye here after
-/// `elapsed_ms` wins. Exact for a single transition; a stance changed again
-/// mid-lerp starts from a height no stance has and comes out approximate.
-fn lerp_speed(target: f32, cur: f32, elapsed_ms: i32) -> f32 {
-    [Stance::Stand, Stance::Crouch, Stance::Prone]
-        .map(Stance::view_height)
+/// it at a stance change as the whole gap from the stance it left over the
+/// transition's lerp time. The stance it left is not on the wire either. Into
+/// prone, `ducked` names it: entering a crouch sets the flag and entering prone
+/// leaves it. Otherwise each stance the eye lies between it and the target is
+/// tried, and the one whose lerp puts the eye here after `elapsed_ms` wins; the
+/// stamp trails the change by one slice (at most 66 ms), and the two sources a
+/// standing target can have are 200 ms or more apart. So a single transition
+/// comes out exact; a stance changed again mid-lerp started from a height no
+/// stance has and comes out approximate.
+fn lerp_speed(target: f32, cur: f32, ducked: bool, elapsed_ms: i32) -> f32 {
+    let pace = |from: f32| {
+        let ms = if from == super::VIEW_PRONE || target == super::VIEW_PRONE {
+            super::VIEW_LERP_PRONE_MS
+        } else {
+            super::VIEW_LERP_MS
+        };
+        (target - from).abs() / ms * 1000.0
+    };
+    if target == super::VIEW_PRONE {
+        return pace(if ducked {
+            super::VIEW_CROUCH
+        } else {
+            super::VIEW_STAND
+        });
+    }
+    [super::VIEW_STAND, super::VIEW_CROUCH, super::VIEW_PRONE]
         .into_iter()
         .filter(|&from| from != target && (from - cur) * (target - cur) <= 0.0)
         .map(|from| {
-            let ms = if from == super::VIEW_PRONE || target == super::VIEW_PRONE {
-                super::VIEW_LERP_PRONE_MS
-            } else {
-                super::VIEW_LERP_MS
-            };
-            let speed = (target - from).abs() / ms * 1000.0;
+            let speed = pace(from);
             let implied_ms = (from - cur).abs() / speed * 1000.0;
             (speed, (implied_ms - elapsed_ms as f32).abs())
         })
@@ -368,6 +383,7 @@ mod tests {
         // Signed 16-bit fields arrive unsigned.
         set(&mut w, "weaponTime", 0xffff);
         set(&mut w, "movementDir", 0xd3);
+        set(&mut w, "bobCycle", 200);
         let pred = from_wire(p, &w, None);
         assert_eq!(pred.ps.origin.x, 100.0);
         assert_eq!(pred.ps.stance, Stance::Prone);
@@ -379,10 +395,11 @@ mod tests {
         assert_eq!(pred.command_time, 5000);
         assert_eq!(pred.ps.weapon_time_ms, -1);
         assert_eq!(pred.ps.movement_dir, -45);
+        assert_eq!(pred.ps.bob_cycle, 200);
     }
 
-    /// Review focus 3: a putaway in flight raises the weapon the cmd at
-    /// `commandTime` asked for, not weapon 0.
+    /// A putaway in flight raises the weapon the cmd at `commandTime` asked
+    /// for, not weapon 0.
     #[test]
     fn the_cmd_at_command_time_seeds_what_the_wire_lacks() {
         let mut w = standing(5000);
@@ -487,11 +504,13 @@ mod tests {
         lerp_continues(&[msg::WBUTTON_PRONE], 0, 96);
         lerp_continues(&[msg::WBUTTON_PRONE], 0, 304);
         lerp_continues(&[0], msg::WBUTTON_PRONE, 304);
+        lerp_continues(&[0], msg::WBUTTON_PRONE, 376);
+        lerp_continues(&[0], msg::WBUTTON_PRONE, 384);
+        lerp_continues(&[0], msg::WBUTTON_PRONE, 392);
         lerp_continues(&[msg::WBUTTON_CROUCH], msg::WBUTTON_PRONE, 304);
     }
 
-    /// Review focus 4: turning a prone view past the cone pushes
-    /// `delta_angles`.
+    /// Turning a prone view past the cone pushes `delta_angles`.
     #[test]
     fn a_prone_turn_past_the_cone_moves_delta_angles() {
         let world = test_world(&[]);
