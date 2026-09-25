@@ -566,6 +566,20 @@ pub struct PmInput {
 
 /// `dt` in seconds, clamped to `MAX_FRAME_MS`. Returns the frame's movement
 /// sound events in wire `EV_*` numbering.
+/// `PM_DropTimers` (0x32a44) runs from `PmoveSingle` for every `pm_type`, so
+/// every arm below calls this once a move to keep a pushed player's penalty
+/// ticking down even while linked, mounted or dead.
+fn drop_knockback(ps: &mut PlayerState, dt: f32) {
+    if ps.knockback_ms > 0.0 {
+        let ms = dt * 1000.0;
+        ps.knockback_ms = if ms >= ps.knockback_ms {
+            0.0
+        } else {
+            ps.knockback_ms - ms
+        };
+    }
+}
+
 pub fn pmove(
     ps: &mut PlayerState,
     input: &PmInput,
@@ -618,6 +632,7 @@ pub fn pmove(
         ps.ducked = gun == Stance::Crouch;
         ps.lean = 0.0;
         ps.on_ladder = false;
+        drop_knockback(ps, dt);
         return events;
     }
     if ps.linked {
@@ -645,16 +660,7 @@ pub fn pmove(
             ps.waterjump_ms = 0.0;
         }
     }
-    // `PM_DropTimers` (0x32a44): zeroed once the frame's ms reach it,
-    // otherwise subtracted.
-    if ps.knockback_ms > 0.0 {
-        let ms = dt * 1000.0;
-        ps.knockback_ms = if ms >= ps.knockback_ms {
-            0.0
-        } else {
-            ps.knockback_ms - ms
-        };
-    }
+    drop_knockback(ps, dt);
     // retail checks ladders right after the first ground trace and dispatches
     // them before waterjump/water
     let ladder = check_ladder_move(ps, input, world);
@@ -754,6 +760,7 @@ fn linked_move(
     if ps.waterjump_ms > 0.0 {
         ps.waterjump_ms = (ps.waterjump_ms - dt * 1000.0).max(0.0);
     }
+    drop_knockback(ps, dt);
     weapon::pm_weapon(ps, input, weapons, (dt * 1000.0).round() as i32, events);
     ps.last_cmd_angles = input.angles;
     ps.last_cmd_ads = input.ads;
@@ -804,6 +811,7 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
     let idle = PmInput::default();
     ps.jumped = false;
     ps.move_start = ps.origin;
+    drop_knockback(ps, dt);
     // `PM_ClearAimDownSightFlag` (`game.mp.i386.so` 0x3abd4), which
     // `PmoveSingle` calls in the dead arm. The fraction is left where the
     // death froze it: the weapon step that would ramp it down does not run
@@ -2093,13 +2101,15 @@ mod tests {
         let mut free = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.1), 0.0);
         let mut kb = free;
         kb.knockback_ms = 300.0;
-        pmove(&mut free, &run, &mw, 0.008, &[]);
-        pmove(&mut kb, &run, &mw, 0.008, &[]);
-        // snap_velocity rounds each component to the nearest unit, which
-        // alone can move either side by up to 0.5; the tolerance covers
-        // both roundings rather than the raw 0.25 ratio.
+        // One frame can't separate a 0.25 accel scale from snap_velocity's
+        // rounding, which alone moves either side by up to 0.5; ten frames
+        // of walk accel put both well clear of that noise floor.
+        for _ in 0..10 {
+            pmove(&mut free, &run, &mw, 0.016, &[]);
+            pmove(&mut kb, &run, &mw, 0.016, &[]);
+        }
         assert!(
-            (kb.velocity.x - free.velocity.x * 0.25).abs() < 0.75,
+            (kb.velocity.x - free.velocity.x * 0.25).abs() < 3.0,
             "{} vs {}",
             kb.velocity.x,
             free.velocity.x
@@ -2120,6 +2130,33 @@ mod tests {
     fn knockback_runs_out() {
         let w = flat();
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.knockback_ms = 20.0;
+        pmove(
+            &mut ps,
+            &PmInput::default(),
+            &MoveWorld::bare(&w),
+            0.016,
+            &[],
+        );
+        assert_eq!(ps.knockback_ms, 4.0);
+        pmove(
+            &mut ps,
+            &PmInput::default(),
+            &MoveWorld::bare(&w),
+            0.016,
+            &[],
+        );
+        assert_eq!(ps.knockback_ms, 0.0);
+    }
+
+    /// `PM_DropTimers` runs from `PmoveSingle` for every `pm_type`, so a
+    /// linked player (an S&D planter) still drops the timer even though
+    /// `linked_move` skips the move, ground and weapon dispatch.
+    #[test]
+    fn a_linked_player_still_drops_knockback() {
+        let w = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.linked = true;
         ps.knockback_ms = 20.0;
         pmove(
             &mut ps,
