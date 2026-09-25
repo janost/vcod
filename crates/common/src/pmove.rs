@@ -66,6 +66,8 @@ pub const PMF_TIME_KNOCKBACK: i32 = 0x100;
 const KNOCKBACK_FRICTION_SCALE: f32 = 0.3;
 /// `PM_WalkMove`'s accel multiplier while the knockback timer runs (0x2f4d8).
 const KNOCKBACK_ACCEL_SCALE: f32 = 0.25;
+/// Entity numbers below this are clients.
+const MAX_CLIENTS: u32 = 64;
 pub const MIN_WALK_NORMAL: f32 = 0.7;
 pub const MAX_CLIP_PLANES: usize = 5;
 pub const HALF_WIDTH: f32 = 15.0; // bbox is (-15,-15,0)..(15,15,height)
@@ -1992,6 +1994,13 @@ fn step_slide_move(
     if ground_plane || step != 0.0 {
         let reach = step + if ground_plane { step_size * 0.5 } else { 0.0 };
         let down = world.box_trace(ps.origin, ps.origin - Vec3::Z * reach, mins, maxs, mask);
+        // A down pass that meets a player drops the step and the snap and
+        // keeps the plain slide (0x3533a; docs/research/cod11-player-clip.md).
+        if world.entity_num(&down) < MAX_CLIENTS {
+            ps.origin = down_o;
+            ps.velocity = down_v;
+            return;
+        }
         if down.fraction < 1.0 {
             ps.origin = down.endpos;
             ps.velocity = clip_velocity(ps.velocity, down.normal);
@@ -4371,6 +4380,33 @@ mod tests {
             ps.origin.x <= 60.0 - 30.0 && ps.origin.x > 60.0 - 31.0,
             "{}",
             ps.origin.x
+        );
+    }
+
+    #[test]
+    fn a_run_into_a_prone_player_does_not_step_onto_it() {
+        let w = flat();
+        // Both resting where a floor holds a player, 0.125 up.
+        let prone = Body {
+            maxs: Vec3::new(15.0, 15.0, 30.0),
+            ..body(60.0, 0.0, 0.125)
+        };
+        let bodies = [prone];
+        let mw = MoveWorld::new(&w, &bodies, 0);
+        let mut ps = PlayerState::spawn(Vec3::Z * 0.125, 0.0);
+        let run = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        for _ in 0..60 {
+            pmove(&mut ps, &run, &mw, 0.008, &[]);
+        }
+        // A push this slow creeps inside the backoff through the step's down
+        // pass, which misses the bare radius; nothing gets past that.
+        assert!(
+            ps.origin.z == 0.125 && (30.0..30.2).contains(&(60.0 - ps.origin.x)),
+            "{:?}",
+            ps.origin
         );
     }
 
