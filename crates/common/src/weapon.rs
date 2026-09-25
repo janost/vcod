@@ -461,10 +461,8 @@ const ANIM_TOGGLE_BIT: i32 = 512;
 
 /// Picks the viewmodel clip for the wire's `ps.weapAnim`
 /// (docs/research/cod11-combat.md, 1.2; index table there, constants in
-/// `crates/common/src/pmove/weapon.rs`). The plan's sketch of this signature
-/// carried `weaponstate`, unused by any row below, and omitted `frac_trend`
-/// and `def`, both of which row 0 needs (the AdsUp/AdsDown split and the
-/// EmptyIdle/Idle one); see the task-1 report for that correction.
+/// `crates/common/src/pmove/weapon.rs`). Index 0 reads `frac_trend` for the
+/// sight clips and `def` for whether the weapon has an empty idle.
 pub fn view_anim(
     def: &WeaponDef,
     weap_anim: i32,
@@ -504,11 +502,10 @@ pub fn view_anim(
     }
 }
 
-/// Tracks how long the current `weapAnim` clip has been playing, off the
-/// wire's own restart signal (any change to the field, index or toggle bit
-/// alike, per `--debug-overlay`'s "anim restarts" counter) and the direction
-/// `ads_frac` is moving, which `view_anim`'s row 0 needs and the plan left
-/// implicit ("the caller passes the trend").
+/// Tracks how long the current `weapAnim` clip has been playing and the
+/// direction `ads_frac` is moving. The clip restarts on any change to the
+/// field: every `set_anim` inverts bit `0x200`, so a repeat of the same clip
+/// changes it too (docs/research/cod11-combat.md, 1.2).
 #[derive(Default)]
 pub struct ViewAnimClock {
     last_weap_anim: Option<i32>,
@@ -539,13 +536,13 @@ impl ViewAnimClock {
 }
 
 /// A clip that has run past its weapon-file length without the wire resetting
-/// `weapAnim` (a rechamber ending, a released shot: combat doc, "What
-/// weapAnim is not written by") falls to the idle reading for the current
-/// frac and clip state, rather than looping or freezing on its last frame.
-/// Ruling, since retail's cgame is not decompiled here: falling to idle is
-/// the reading that matches a weapAnim left at fire after the shot. The one
-/// exception is `HoldFire`, the grenade held at the pin, which holds its last
-/// frame until `weapAnim` changes.
+/// `weapAnim` (a rechamber ending, a released shot:
+/// player-model-anim-system.md, "What `weapAnim` is not written by") falls to
+/// the idle reading for the current frac and clip state, rather than looping
+/// or freezing on its last frame. INFERRED: retail's cgame is not decompiled
+/// here; falling to idle matches a `weapAnim` left at fire after the shot. The
+/// one exception is `HoldFire`, the grenade held at the pin, which holds its
+/// last frame until `weapAnim` changes.
 pub fn resolve(
     def: &WeaponDef,
     anim: WeaponAnim,

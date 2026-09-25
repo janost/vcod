@@ -347,6 +347,10 @@ These work in every mode:
 - Other players' footsteps are silent. They are not playerstate events, so
   they travel by the entity path that does not exist yet. Your own
   footsteps play off the prediction.
+- Against `vcod-server`, running while firing an automatic weapon can play a
+  shot's sound and flash twice. The server does not send `bobCycle` yet, so
+  the predicted footsteps drift from its own and shift the events after
+  them.
 - A prone body's pitch on sloped ground (`proneDirectionPitch`,
   `proneTorsoPitch`) is not modelled. Both are animation inputs, so they
   change how a prone body is drawn rather than how it moves, and no client
