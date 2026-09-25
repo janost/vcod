@@ -3,6 +3,7 @@
 
 pub mod cmds;
 pub mod cvars;
+pub mod events;
 pub mod input;
 pub mod join;
 pub mod predict;

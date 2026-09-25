@@ -338,6 +338,8 @@ struct LivePhase {
     weapons: Vec<Option<weapon::WeaponDef>>,
     scene: entities::EntityScene,
     events: net::events::EventTracker,
+    /// Our own ring's events already played off the prediction.
+    predicted_events: play::events::PredictedEvents,
     clock: ServerClock,
     last_loop_snap: Option<u32>,
 }
@@ -351,6 +353,7 @@ fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport
         weapons: vcod_common::weapon_table::from_configstring(fs, net.configstring(7)),
         scene: entities::EntityScene::new(),
         events: net::events::EventTracker::new(),
+        predicted_events: play::events::PredictedEvents::default(),
         clock: ServerClock::new(),
         last_loop_snap: None,
     }))
@@ -1790,6 +1793,7 @@ impl ApplicationHandler for App {
                                         weapons,
                                         scene,
                                         events,
+                                        predicted_events,
                                         clock,
                                         last_loop_snap,
                                     } = &mut **live;
@@ -1941,8 +1945,11 @@ impl ApplicationHandler for App {
                                         audio::cues::ps_entity(ps_client),
                                     );
 
-                                    let (muzzle_pos, muzzle_dir) =
-                                        view_muzzle(cam.pos, cam_forward, cam_right, cam_up);
+                                    let (muzzle_pos, muzzle_dir) = view
+                                        .muzzle(cam.pos, (cam_forward, cam_right, cam_up), fov)
+                                        .unwrap_or_else(|| {
+                                            view_muzzle(cam.pos, cam_forward, cam_right, cam_up)
+                                        });
                                     muzzles.insert(u32::MAX, (muzzle_pos, muzzle_dir));
                                     // While following, the followed player's bullet hits
                                     // carry `other_entity_num == ps_client`, and that body
@@ -1982,8 +1989,44 @@ impl ApplicationHandler for App {
                                         let ctx = fx::registry::ResolveCtx {
                                             muzzles: &muzzles,
                                             weapon_flash: &weapon_flash,
+                                            view_flash: view.flash_effect(),
                                         };
-                                        for ev in events.drain(newest, p) {
+                                        // Our own ring plays off the prediction, and
+                                        // the snapshot's copy of it is skipped.
+                                        let own = ps_client == client_num
+                                            && pmove::predict::predictable(pm_type);
+                                        let mut evs = Vec::new();
+                                        if !own {
+                                            predicted_events.stop();
+                                        } else if let Some(v) = &predicted {
+                                            predicted_events.start_after(events.ps_sequence());
+                                            let pred = &v.pred;
+                                            evs.extend(
+                                                predicted_events
+                                                    .take_predicted(
+                                                        pred.event_sequence,
+                                                        pred.events,
+                                                        pred.event_parms,
+                                                    )
+                                                    .into_iter()
+                                                    .map(|(_, event, parm)| {
+                                                        play::events::game_event(
+                                                            pred, ps_client, event, parm,
+                                                        )
+                                                    }),
+                                            );
+                                        }
+                                        for (seq, ev) in events.drain_seq(newest, p) {
+                                            if own
+                                                && seq.is_some_and(|s| {
+                                                    !predicted_events.filter_snapshot(s)
+                                                })
+                                            {
+                                                continue;
+                                            }
+                                            evs.push(ev);
+                                        }
+                                        for ev in evs {
                                             self.ev_seen += 1;
                                             if let Some(hud) = &mut self.hud {
                                                 hud.on_game_event(&ev, &hud_frame);
@@ -2249,6 +2292,7 @@ impl ApplicationHandler for App {
                                     let ctx = fx::registry::ResolveCtx {
                                         muzzles: &muzzles,
                                         weapon_flash: &HashMap::new(),
+                                        view_flash: None,
                                     };
                                     let ev = net::events::GameEvent {
                                         event: fx::registry::EV_BULLET_HIT_SMALL,

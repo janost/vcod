@@ -31,7 +31,7 @@ const MSAA_SAMPLES: u32 = 4;
 
 /// The viewmodel has its own projection. CoD draws the weapon at a fixed FOV
 /// regardless of the world's, with a much nearer near plane.
-const VM_FOV_DEG: f32 = 65.0;
+pub const VM_FOV_DEG: f32 = 65.0;
 const VM_NEAR: f32 = 1.0;
 const VM_FAR: f32 = 500.0;
 /// Depth-range fraction the viewmodel is squeezed into, so the world cannot poke through it.

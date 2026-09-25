@@ -156,6 +156,20 @@ impl EventTracker {
     /// Events fired since the last drained snapshot. Idempotent per
     /// message_num.
     pub fn drain(&mut self, snap: &Snapshot, p: &Protocol) -> Vec<GameEvent> {
+        self.drain_seq(snap, p)
+            .into_iter()
+            .map(|(_, ev)| ev)
+            .collect()
+    }
+
+    /// The playerstate ring's `eventSequence` at the last drain.
+    pub fn ps_sequence(&self) -> Option<i32> {
+        self.ps_seq
+    }
+
+    /// [`Self::drain`], each playerstate-ring event with the 8-bit sequence
+    /// it was written at; `None` for entity events.
+    pub fn drain_seq(&mut self, snap: &Snapshot, p: &Protocol) -> Vec<(Option<i32>, GameEvent)> {
         if self.last_message == Some(snap.message_num) {
             return Vec::new();
         }
@@ -168,7 +182,7 @@ impl EventTracker {
                 let key = (etype, es.field_i32(p, "eventParm"));
                 if self.fired.get(&num) != Some(&key) {
                     self.fired.insert(num, key);
-                    out.push(Self::event_from(es, p, num, etype - ET_EVENTS, key.1));
+                    out.push((None, Self::event_from(es, p, num, etype - ET_EVENTS, key.1)));
                 }
                 continue;
             }
@@ -181,7 +195,7 @@ impl EventTracker {
                         let slot = (i & 3) as usize;
                         let ev = es.field_i32(p, &format!("events[{slot}]"));
                         let parm = es.field_i32(p, &format!("eventParms[{slot}]"));
-                        out.push(Self::event_from(es, p, num, ev, parm));
+                        out.push((None, Self::event_from(es, p, num, ev, parm)));
                     }
                 }
             }
@@ -198,18 +212,21 @@ impl EventTracker {
                 let diff = seq_diff(cur, prev).min(EVENT_RING);
                 for i in (cur - diff)..cur {
                     let slot = (i & 3) as usize;
-                    out.push(GameEvent {
-                        event: snap.ps.field_i32(p, &format!("events[{slot}]")),
-                        parm: snap.ps.field_i32(p, &format!("eventParms[{slot}]")),
-                        entity_num: u32::MAX,
-                        client_num: snap.ps.field_i32(p, "clientNum"),
-                        weapon: snap.ps.field_i32(p, "weapon"),
-                        surf_type: 0,
-                        pos: snap.ps.origin(p),
-                        dir: [0.0; 3],
-                        other_entity_num: u32::MAX,
-                        attacker_entity_num: -1,
-                    });
+                    out.push((
+                        Some(i & 0xff),
+                        GameEvent {
+                            event: snap.ps.field_i32(p, &format!("events[{slot}]")),
+                            parm: snap.ps.field_i32(p, &format!("eventParms[{slot}]")),
+                            entity_num: u32::MAX,
+                            client_num: snap.ps.field_i32(p, "clientNum"),
+                            weapon: snap.ps.field_i32(p, "weapon"),
+                            surf_type: 0,
+                            pos: snap.ps.origin(p),
+                            dir: [0.0; 3],
+                            other_entity_num: u32::MAX,
+                            attacker_entity_num: -1,
+                        },
+                    ));
                 }
             }
         }
@@ -460,6 +477,28 @@ mod tests {
         s2.ps.fields[fi("events[1]")] = 155; // EV_RAISE_WEAPON
         let evs = t.drain(&s2, p);
         assert_eq!(evs.iter().map(|e| e.event).collect::<Vec<_>>(), [189, 155]);
+    }
+
+    /// The sequence each playerstate-ring event was written at, kept in 8
+    /// bits across the wrap; entity events carry none.
+    #[test]
+    fn drain_seq_names_the_ring_sequence() {
+        let p = &PROTOCOL_V1;
+        let mut t = EventTracker::new();
+        let fi = |n| PlayerState::field_index(p, n).unwrap();
+        let mut s1 = snap(p, 1, 1000, vec![ent(p, 5, &[("eventSequence", 0)])]);
+        s1.ps.fields[fi("eventSequence")] = 254;
+        t.drain_seq(&s1, p);
+        assert_eq!(t.ps_sequence(), Some(254));
+        let mut s2 = snap(
+            p,
+            2,
+            1050,
+            vec![ent(p, 5, &[("eventSequence", 1), ("events[0]", 7)])],
+        );
+        s2.ps.fields[fi("eventSequence")] = 1;
+        let seqs: Vec<_> = t.drain_seq(&s2, p).into_iter().map(|(s, _)| s).collect();
+        assert_eq!(seqs, [None, Some(254), Some(255), Some(0)]);
     }
 
     /// The same shape on an entity ring, which shares the walk.

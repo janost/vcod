@@ -1,7 +1,7 @@
 //! The playing client's own first-person weapon: the rig for `ps.weapon`
 //! with the hands `ps.viewmodelIndex` names, posed from `ps.weapAnim`.
 
-use crate::renderer::VmDraw;
+use crate::renderer::{VmDraw, VM_FOV_DEG};
 use crate::viewmodel::{self, ViewWeapon, ViewmodelMotion};
 use glam::Vec3;
 use vcod_common::net::msg;
@@ -120,6 +120,9 @@ pub struct OnlineView {
     trend: i32,
     motion: ViewmodelMotion,
     mouse: (f32, f32),
+    /// `tag_flash` as last drawn, view space (X right, Y up, -Z forward):
+    /// position and the tag's forward.
+    flash: Option<(Vec3, Vec3)>,
 }
 
 impl OnlineView {
@@ -169,6 +172,7 @@ impl OnlineView {
         now_ms: f64,
     ) -> (Option<VmDraw>, f32) {
         let mouse = std::mem::take(&mut self.mouse);
+        self.flash = None;
         let (Some(ps), Some(w)) = (ps, self.rig.as_deref_mut()) else {
             return (None, DEFAULT_FOV);
         };
@@ -210,13 +214,43 @@ impl OnlineView {
         };
         self.motion
             .update(dt, ground_speed, ps.on_ground, mouse.0, mouse.1, damp);
+        let transform = self.motion.transform();
+        self.flash = w.skeleton.bone_index("tag_flash").map(|bi| {
+            let (pos, rot) = w.pose.bone_world(&w.skeleton, bi);
+            (
+                transform.transform_point3(pos),
+                transform.transform_vector3(rot * Vec3::X),
+            )
+        });
         (
             Some(VmDraw {
-                transform: self.motion.transform(),
+                transform,
                 bone_sets,
             }),
             fov,
         )
+    }
+
+    /// The drawn viewmodel's `tag_flash` in world space, for the camera at
+    /// `eye` with basis `(forward, right, up)` and vertical `fov`. The
+    /// viewmodel has its own projection, so the point is scaled across the
+    /// view axis to where the world camera draws it on the same pixel.
+    pub fn muzzle(
+        &self,
+        eye: Vec3,
+        (forward, right, up): (Vec3, Vec3, Vec3),
+        fov: f32,
+    ) -> Option<(Vec3, Vec3)> {
+        let (pos, dir) = self.flash?;
+        let k = (fov.to_radians() / 2.0).tan() / (VM_FOV_DEG.to_radians() / 2.0).tan();
+        let world = |v: Vec3| right * v.x * k + up * v.y * k - forward * v.z;
+        Some((eye + world(pos), world(dir).normalize_or_zero()))
+    }
+
+    /// The drawn weapon's `viewFlashEffect`; `None` while no viewmodel is drawn.
+    pub fn flash_effect(&self) -> Option<&str> {
+        self.flash?;
+        self.rig.as_ref()?.def.view_flash_effect.as_deref()
     }
 }
 
@@ -321,6 +355,40 @@ mod tests {
         );
     }
 
+    /// The flash lands on the pixel the viewmodel's projection draws its
+    /// `tag_flash` at, whatever the world fov.
+    #[test]
+    fn muzzle_lands_where_the_viewmodel_draws_it() {
+        let aspect = 16.0 / 9.0;
+        let at = Vec3::new(3.0, -2.5, -22.0);
+        let vm_proj = glam::camera::rh::proj::directx::perspective(
+            VM_FOV_DEG.to_radians(),
+            aspect,
+            1.0,
+            500.0,
+        );
+        let want = vm_proj.project_point3(at);
+        let mut view = OnlineView {
+            flash: Some((at, Vec3::NEG_Z)),
+            ..OnlineView::default()
+        };
+        let eye = Vec3::new(100.0, -40.0, 60.0);
+        let (yaw, pitch) = (0.7_f32, -0.3_f32);
+        let basis = crate::camera::basis(yaw, pitch);
+        for fov in [DEFAULT_FOV, 55.0] {
+            let (pos, dir) = view.muzzle(eye, basis, fov).expect("drawn");
+            let got = crate::camera::view_proj_from(eye, yaw, pitch, 0.0, fov, aspect)
+                .project_point3(pos);
+            assert!(
+                (got.truncate() - want.truncate()).length() < 1e-4,
+                "{fov}: {got} {want}"
+            );
+            assert!(dir.dot(basis.0) > 0.999, "along the view: {dir}");
+        }
+        view.flash = None;
+        assert!(view.muzzle(eye, basis, DEFAULT_FOV).is_none());
+    }
+
     /// The real carbine with the US hands, driven through a hip shot and a
     /// raised sight: every frame poses, and the sight holds still once up.
     #[test]
@@ -367,6 +435,12 @@ mod tests {
             fired.push(fire);
         }
         assert_ne!(fired[0], fired[9], "the fire clip plays");
+
+        assert!(view.flash.is_some(), "the gun has a tag_flash");
+        assert_eq!(
+            view.flash_effect(),
+            Some("fx/muzzleflashes/standardflashviewmp.efx")
+        );
 
         let mut sighted = ps(1, 82);
         sighted.ads_frac = 1.0;

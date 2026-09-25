@@ -311,6 +311,9 @@ pub struct WeaponDef {
     /// (docs/research/cod11-events-and-fx.md, section 5b). `None` lets
     /// `fx::registry::resolve` pick a class-based flash.
     pub world_flash_effect: Option<String>,
+    /// First-person muzzle flash, on the viewmodel's `tag_flash` (same doc
+    /// section).
+    pub view_flash_effect: Option<String>,
     /// Killfeed material, kept verbatim: `Pk3Fs` resolves the `@` itself.
     /// `None` when absent or empty; the killfeed then uses the means-of-death
     /// icon (docs/research/cod11-hud-protocol.md, section 2).
@@ -593,6 +596,7 @@ impl WeaponDef {
                 .get("worldModel")
                 .map(|v| v.strip_prefix("xmodel/").unwrap_or(v).to_string()),
             world_flash_effect: map.get("worldFlashEffect").map(|v| v.trim().to_string()),
+            view_flash_effect: map.get("viewFlashEffect").map(|v| v.trim().to_string()),
             kill_icon: opt_str(map, "killIcon"),
             wide_kill_icon: parse_bool(map, "wideKillIcon", false),
             sounds: WeaponSounds::from_map(map),
@@ -1497,6 +1501,11 @@ mod tests {
         assert_eq!(
             thompson.world_flash_effect.as_deref(),
             Some("fx/muzzleflashes/thompson.efx")
+        );
+        let carbine = load(&fs, "m1carbine_mp").unwrap();
+        assert_eq!(
+            carbine.view_flash_effect.as_deref(),
+            Some("fx/muzzleflashes/standardflashviewmp.efx")
         );
     }
 
