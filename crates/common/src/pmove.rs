@@ -407,6 +407,10 @@ pub struct PlayerState {
     /// `ps.pm_type` 1, the link `linkTo` makes: [`pmove`] runs retail's
     /// linked arm, which moves nothing. The caller owns the link and sets it.
     pub linked: bool,
+    /// `eFlags & 0xC000`, the mounted-gun bits: `Some(stance)` while riding a
+    /// turret, the gun's own stance. `None` off a gun. The caller owns the
+    /// mount and sets it (docs/research/cod11-turrets.md, section 5).
+    pub mounted: Option<Stance>,
 }
 
 impl PlayerState {
@@ -464,6 +468,7 @@ impl PlayerState {
             last_cmd_ads: false,
             walking: false,
             linked: false,
+            mounted: None,
         }
     }
 
@@ -573,6 +578,22 @@ pub fn pmove(
     let was_on_ground = ps.on_ground;
     // retail's `pml.previous_origin`, taken at the top of PmoveSingle
     ps.move_start = ps.origin;
+    // 0x34274: a mounted player's pmove updates the sight flag, the walking
+    // flag and the stance to the gun's, and returns before the move/ground/
+    // weapon dispatch below ever runs; the turret moves the body
+    // (docs/research/cod11-turrets.md, section 5).
+    if let Some(gun) = ps.mounted {
+        ps.on_ground = false;
+        ps.ground_normal = Vec3::Z;
+        ps.ground_surface_flags = 0;
+        weapon::update_ads_flag(ps, input, weapon_def);
+        ps.walking = walking_flag(ps, input);
+        ps.stance = gun;
+        ps.ducked = gun == Stance::Crouch;
+        ps.lean = 0.0;
+        footsteps(ps, input, world, dt, &mut events);
+        return events;
+    }
     if ps.linked {
         linked_move(ps, input, world, dt, weapons, &mut events);
         return events;
@@ -1309,9 +1330,9 @@ fn clamp_movement_dir(deg: i32, cap: i32) -> i32 {
 /// whole degree, as retail's `(int)` casts are.
 fn set_movement_dir(ps: &mut PlayerState, input: &PmInput, dt: f32) {
     // Prone lays the legs along the body instead (@0x2e98d). Retail skips
-    // this branch while the view is locked to another entity (eFlags
-    // 0xc000, the mounted-gun case); nothing here mounts anything.
-    if ps.stance == Stance::Prone {
+    // this branch while the view is locked to another entity, eFlags
+    // 0xc000; `ps.mounted` carries that state here.
+    if ps.stance == Stance::Prone && ps.mounted.is_none() {
         ps.movement_dir = clamp_movement_dir(
             angle_delta(ps.prone_direction, ps.yaw.to_degrees()) as i32,
             MOVEMENT_DIR_CAP,
@@ -1996,6 +2017,45 @@ mod tests {
         dead_move(&mut ps, &w, 0.05);
         assert!(!ps.ads_active);
         assert_eq!(ps.weapon_pos_frac, 1.0);
+    }
+
+    /// The mounted arm (0x34274) never reaches the move dispatch or
+    /// `PM_Weapon`, so a mounted player's origin holds and no fire event
+    /// comes out of pmove (docs/research/cod11-turrets.md, section 5).
+    #[test]
+    fn a_mounted_player_does_not_move_or_fire() {
+        let world = flat();
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.0), 0.0);
+        ps.mounted = Some(Stance::Stand);
+        let input = PmInput {
+            forward: 127.0,
+            attack: true,
+            ..Default::default()
+        };
+        let before = ps.origin;
+        let events = pmove(&mut ps, &input, &world, 0.05, &[]);
+        assert_eq!(ps.origin, before);
+        assert!(!ps.on_ground, "groundEntityNum NONE while mounted");
+        assert!(events.iter().all(
+            |e| e.event != weapon::EV_FIRE_WEAPON && e.event != weapon::EV_FIRE_WEAPON_LASTSHOT
+        ));
+    }
+
+    /// The stance step (0x316f4) puts the player at the gun's stance
+    /// whatever the cmd asks, and `PM_UpdateLean` forces the lean input to 0
+    /// (docs/research/cod11-turrets.md, section 5).
+    #[test]
+    fn a_mounted_player_takes_the_gun_stance_whatever_the_cmd_asks() {
+        let world = flat();
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        ps.mounted = Some(Stance::Prone);
+        let input = PmInput {
+            crouch: true,
+            ..Default::default()
+        };
+        pmove(&mut ps, &input, &world, 0.05, &[]);
+        assert_eq!(ps.stance, Stance::Prone);
+        assert_eq!(ps.lean, 0.0);
     }
 
     /// Flat ground whose material carries the dirt sound surface (6).
