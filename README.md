@@ -40,7 +40,13 @@ combat effects.
   the predicted playerstate picks, and the sight zooms to the weapon's own
   fov. Your fire, reload, switch, footstep and jump events play off the
   prediction, the muzzle flash at the viewmodel's barrel, and are not
-  played again when the snapshot carrying them arrives. It renders every
+  played again when the snapshot carrying them arrives. While you play, the
+  HUD draws what the stock `hud.menu` lays out: a crosshair that opens with
+  the weapon's spread, health, ammo and weapon name, stance, a compass with
+  the objectives on it, the use-key hint and the direction a hit came from.
+  The gametype script's own HUD elements (the S&D clock, the plant and
+  defuse icons and progress bar, announcements) are drawn whether you play,
+  spectate or follow. It renders every
   player as an assembled soldier playing the server-driven animations.
   Kill feed, chat, scoreboard, sounds, tracers, impacts and muzzle flashes
   come from the same events the retail client reads. It downloads every pak
