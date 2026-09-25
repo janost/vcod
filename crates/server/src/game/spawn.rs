@@ -100,7 +100,24 @@ pub fn spawn_entities_from_string(
                     for alias in turret_sound_aliases(host.fs.as_deref(), &item.name) {
                         register_sound_alias(host, alias);
                     }
-                    settle_turret_pitch(host, cx, id);
+                    let rest = settle_turret_pitch(host, cx, id);
+                    if let Some(def) = turret_def(host.fs.as_deref(), &item.name) {
+                        let keys = turret_keys(&block);
+                        if host.turrets.len() >= MAX_TURRETS {
+                            // `G_SpawnTurret`'s own bound (0x52cc3): a 33rd
+                            // turret is Com_Error's fatal
+                            // "G_SpawnTurret: max number of turrets (%d) exceeded"
+                            // in retail; we log and spawn no record instead.
+                            log::error!(
+                                "G_SpawnTurret: max number of turrets ({MAX_TURRETS}) exceeded"
+                            );
+                        } else {
+                            host.turrets.insert(
+                                id,
+                                crate::game::turret::TurretRecord::new(&item.name, def, keys, rest),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -240,6 +257,48 @@ fn turret_sound_aliases(fs: Option<&vcod_common::pk3::Pk3Fs>, weaponinfo: &str) 
         .filter(|v| !v.is_empty())
         .cloned()
         .collect()
+}
+
+/// The turret record's cap, `G_SpawnTurret`'s own bound: 32 records, 0x40
+/// bytes each, array at 0xaa180 (`docs/research/cod11-turrets.md` section 0's
+/// table). A misc_mg42/misc_turret past the 32nd spawns as an entity with no
+/// record, rather than retail's fatal `Com_Error`.
+const MAX_TURRETS: usize = 32;
+
+/// `weapons/mp/{weaponinfo}`, parsed into a [`crate::game::turret::TurretDef`].
+/// Reads the same file `turret_sound_aliases` already read for the alias
+/// names, keyed by the entity's own `weaponinfo` value.
+fn turret_def(
+    fs: Option<&vcod_common::pk3::Pk3Fs>,
+    weaponinfo: &str,
+) -> Option<crate::game::turret::TurretDef> {
+    let bytes = fs?.read(&format!("weapons/mp/{weaponinfo}"))?;
+    crate::game::turret::TurretDef::parse(&String::from_utf8_lossy(&bytes))
+}
+
+/// The `leftarc`/`rightarc`/`toparc`/`bottomarc`/`damage` spawn keys off the
+/// entity's raw BSP block, case-folded the way `G_SpawnFloat`/`G_SpawnInt`
+/// match a key name. None of the five reaches script: neither
+/// `fields::ENTITY_FIELDS` nor `fields::RADIANT_KEYS` names any of them (the
+/// AGENTS.md gotcha on Radiant keys), so they are read here off the block
+/// `spawn_entities_from_string` already holds rather than through
+/// `host.get_field`.
+fn turret_keys(
+    block: &std::collections::HashMap<String, String>,
+) -> crate::game::turret::TurretKeys {
+    let f = |key: &str| -> Option<f32> {
+        block
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .and_then(|(_, v)| v.trim().parse().ok())
+    };
+    crate::game::turret::TurretKeys {
+        left: f("leftarc"),
+        right: f("rightarc"),
+        top: f("toparc"),
+        bottom: f("bottomarc"),
+        damage: f("damage").map(|v| v as i32),
+    }
 }
 
 fn register_sound_alias(host: &mut GameHost, name: String) {
@@ -387,20 +446,20 @@ pub(crate) fn is_weapon_row(row: usize) -> bool {
     )
 }
 
-/// The barrel pitch an unmanned turret comes to rest at, recorded for
-/// `wire.rs` to send as `angles2[0]`. Retail's `turret_think_init` (0x5268c)
-/// finds it by swinging the stock down in -3 degree steps until the segment
-/// from `tag_aim` to it hits the world; the evidence is in
-/// `docs/protocol-1.1.md`, "A turret's `angles2[0]` is where its barrel came
-/// to rest".
+/// The barrel pitch an unmanned turret comes to rest at, for
+/// `TurretRecord::new`'s `rest_pitch`/`angles2[0]` seed. Retail's
+/// `turret_think_init` (0x5268c) finds it by swinging the stock down in -3
+/// degree steps until the segment from `tag_aim` to it hits the world; the
+/// evidence is in `docs/protocol-1.1.md`, "A turret's `angles2[0]` is where
+/// its barrel came to rest".
 ///
 /// Two divergences, both bounded: the 10-degrees-a-frame walk retail takes
 /// toward the pitch is not modelled, so a turret here is settled from map
 /// load, and the ray stops on SOLID where retail's mask is 0x11. Neither
 /// moves either carentan turret off retail's value.
-fn settle_turret_pitch(host: &mut GameHost, cx: &mut Cx, id: EntId) {
+fn settle_turret_pitch(host: &mut GameHost, cx: &mut Cx, id: EntId) -> f32 {
     let (Some(world), Some(fs)) = (host.world.clone(), host.fs.clone()) else {
-        return;
+        return DEFAULT_TURRET_PITCH;
     };
     let (origin_at, angles_at, model_at) = (
         cx.intern_folded("origin"),
@@ -408,33 +467,31 @@ fn settle_turret_pitch(host: &mut GameHost, cx: &mut Cx, id: EntId) {
         cx.intern_folded("model"),
     );
     let Value::Vector(origin) = host.get_field(cx, id, origin_at) else {
-        return;
+        return DEFAULT_TURRET_PITCH;
     };
     let Value::Vector(angles) = host.get_field(cx, id, angles_at) else {
-        return;
+        return DEFAULT_TURRET_PITCH;
     };
     let Value::String(model) = host.get_field(cx, id, model_at) else {
-        return;
+        return DEFAULT_TURRET_PITCH;
     };
     // The `model` key is the pak path; `xmodel::load_bones` wants the name.
     let model = cx.resolve(model).trim_start_matches("xmodel/").to_string();
 
-    host.turret_pitch.insert(id, DEFAULT_TURRET_PITCH);
     let bones = match vcod_common::xmodel::load_bones(&fs, &model) {
         Ok(b) => b,
         Err(e) => {
             log::warn!("turret model {model}: {e}");
-            return;
+            return DEFAULT_TURRET_PITCH;
         }
     };
     let tag = |n: &str| bones.iter().find(|b| b.name == n).map(|b| b.pos);
     // A model missing either tag keeps the seed: `turret_think_init` returns
     // before the sweep when either lookup fails.
     let (Some(aim), Some(butt)) = (tag("tag_aim"), tag("tag_butt")) else {
-        return;
+        return DEFAULT_TURRET_PITCH;
     };
-    let pitch = sweep_rest_pitch(&world.collision, origin, angles, aim, butt);
-    host.turret_pitch.insert(id, pitch);
+    sweep_rest_pitch(&world.collision, origin, angles, aim, butt)
 }
 
 /// `G_SpawnTurret`'s seed (rodata `0x75a10`), which a sweep that hits nothing
@@ -468,7 +525,7 @@ fn sweep_rest_pitch(
 }
 
 /// `AnglesToAxis` (0x3ef3c): forward, *negated* right, up.
-fn angles_to_axis(a: [f32; 3]) -> [glam::Vec3; 3] {
+pub(crate) fn angles_to_axis(a: [f32; 3]) -> [glam::Vec3; 3] {
     let (sp, cp) = a[0].to_radians().sin_cos();
     let (sy, cy) = a[1].to_radians().sin_cos();
     let (sr, cr) = a[2].to_radians().sin_cos();
@@ -480,7 +537,7 @@ fn angles_to_axis(a: [f32; 3]) -> [glam::Vec3; 3] {
 }
 
 /// `MatrixTransformVector` (0x3e220): the vector's components scale the axes.
-fn transform(v: glam::Vec3, axis: &[glam::Vec3; 3]) -> glam::Vec3 {
+pub(crate) fn transform(v: glam::Vec3, axis: &[glam::Vec3; 3]) -> glam::Vec3 {
     axis[0] * v.x + axis[1] * v.y + axis[2] * v.z
 }
 

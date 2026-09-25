@@ -377,10 +377,11 @@ pub struct GameHost {
     /// fresh host, so a unit test that mounts nothing registers the bit and
     /// precaches no weapon model.
     pub fs: Option<std::rc::Rc<vcod_common::pk3::Pk3Fs>>,
-    /// Each turret's settled barrel pitch, by entity, from the sweep
-    /// `crate::game::spawn::settle_turret_pitch` runs at map load. `wire.rs`
-    /// puts it on the wire as `angles2[0]`.
-    pub turret_pitch: std::collections::HashMap<EntId, f32>,
+    /// Each turret's live record, by entity, built at spawn from its weapon
+    /// file and its own arc/damage keys (`crate::game::turret`). `wire.rs`
+    /// reads `angles2` and the view-lock/firing bits off it; mount, aim,
+    /// fire and release mutate it in place.
+    pub turrets: std::collections::HashMap<EntId, crate::game::turret::TurretRecord>,
     /// The events raised this frame, put on the wire as temp entities and
     /// dropped by the snapshot build: retail frees a `G_TempEntity` the
     /// frame after it is sent.
@@ -535,7 +536,7 @@ impl GameHost {
             items: crate::items::Items::new(),
             client_name_mode: builtins::cvar::ClientNameMode::default(),
             fs: None,
-            turret_pitch: std::collections::HashMap::new(),
+            turrets: std::collections::HashMap::new(),
             temp_entities: Vec::new(),
             bodies: crate::game::bodies::BodyQueue::new(crate::game::bodies::BODY_QUEUE_SIZE),
             missiles: crate::game::missile::Missiles::default(),
