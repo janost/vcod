@@ -913,6 +913,14 @@ const GAPS: &[(&str, &str)] = &[
         PASS_THROUGH,
     ),
     (
+        "[target] impact t=34900: retail only 174@[1518.0, 1612.0",
+        ENTRY_POINT,
+    ),
+    (
+        "[target] impact t=34900: ours only 174@[1517.0, 1611.0",
+        ENTRY_POINT,
+    ),
+    (
         "[target] event t=34950: retail only (187, 47, \"client 0\")",
         END_FRAME,
     ),
@@ -932,7 +940,8 @@ const GAPS: &[(&str, &str)] = &[
     ("[strafe] origin t=398", SANDBAG),
     ("[strafe] origin t=399", SANDBAG),
     ("[strafe] origin t=40000", SANDBAG),
-    ("[refused] origin", SANDBAG),
+    ("[refused] origin t=40", SANDBAG),
+    ("[refused] origin t=41000", SANDBAG),
     ("[refused] legs_anim t=40250", SANDBAG),
 ];
 
@@ -948,6 +957,9 @@ const END_FRAME: &str = "entity states are built at snapshot time, and a client 
 const KILLING_ROUND: &str = "the killing round meets a victim the round before knocked back, \
     and lands about 4 units nearer the gun along the ray than retail's; neither half of the capture \
     carries the victim's origin, so whether the knockback or the pose differs is open";
+const ENTRY_POINT: &str = "the wounding round enters the target's body one truncation step \
+    lower in x and y than retail's, along the same ray: where it enters is the posed bone box \
+    the locational trace meets (cod11-combat.md 3.4), not the turret";
 const CROUCH_DROP: &str = "the crouch release's one-unit drop reads grounded 0.2 above the \
     floor on ours and airborne at the same height on retail, which lands a frame later; the \
     stand release lands on the same frame on both, and the capture holds one of each";
@@ -963,9 +975,10 @@ const PRINT_EPS: f32 = 0.05;
 /// One `ANGLE2SHORT` step.
 const SHORT_DEG: f32 = 360.0 / 65536.0;
 const ANGLES2_EPS: f32 = 0.01;
-/// Impact origins reach the wire truncated to whole units, so one step per
-/// axis.
-const IMPACT_EPS: f32 = 1.0;
+/// The largest move the start rebase may make on any axis: retail's
+/// placement landed 0.31 off the spot; anything bigger is a placement
+/// regression, not that.
+const REBASE_MAX: f32 = 0.5;
 
 fn report() -> bool {
     std::env::var("TURRET_REPORT").is_ok_and(|v| v == "1")
@@ -1138,7 +1151,12 @@ fn rig(cap: &Capture) -> Option<Rig> {
     let at = cap.traces.first().expect("a snapshot").1.origin;
     let mut ours = rig.sample().origin;
     for i in 0..3 {
-        if (ours[i] - at[i]).abs() > PRINT_EPS {
+        let off = ours[i] - at[i];
+        assert!(
+            off.abs() <= REBASE_MAX,
+            "the placement put ours {off} off retail's spot on axis {i}: {ours:?} against {at:?}"
+        );
+        if off.abs() > PRINT_EPS {
             ours[i] = at[i];
         }
     }
@@ -1305,9 +1323,9 @@ fn diff(cap: &Capture, ours: &[Sample]) -> Vec<String> {
             ("ours", &o.impacts, &r.impacts),
         ] {
             for (e, at) in a.iter() {
-                let met = b
-                    .iter()
-                    .any(|(f, bt)| e == f && (0..3).all(|i| (at[i] - bt[i]).abs() <= IMPACT_EPS));
+                // Both sides truncate to whole units (`G_TempEntity`), so
+                // equal or not at all.
+                let met = b.iter().any(|(f, bt)| e == f && at == bt);
                 if !met {
                     rows.push(format!("[{phase}] impact t={t}: {side} only {e}@{at:?}"));
                 }
