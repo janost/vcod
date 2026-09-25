@@ -1,6 +1,6 @@
 //! Client-side prediction: the newest snapshot's playerstate with every cmd
 //! the server has not run yet replayed on top through the server's own step
-//! (`vcod_common::pmove::predict`), and retail's `cg_errorDecay` easing out
+//! (`vcod_common::pmove::predict`), and retail's `cg_errordecay` easing out
 //! what a new snapshot corrects.
 
 use super::cmds::{CmdRing, CMD_MS};
@@ -11,7 +11,7 @@ use vcod_common::net::protocol::Protocol;
 use vcod_common::pmove::predict::{self, Predicted};
 use vcod_common::weapon::WeaponDef;
 
-/// `cg_errorDecay`: how long a correction takes to ease out.
+/// `cg_errordecay`: how long a correction takes to ease out.
 const ERROR_DECAY_MS: f64 = 100.0;
 /// A correction longer than this is drawn at once.
 const SNAP_DISTANCE: f32 = 256.0;
@@ -147,22 +147,31 @@ impl Predictor {
     }
 }
 
-/// What the stock gametype script does to the map's brush models before a
-/// client walks: `_gameobjects::main` `delete()`s every entity carrying a
-/// `script_gameobjectname` the gametype did not list, and a deleted
-/// `script_brushmodel` takes its brushes out of the clip (AGENTS.md, "A
-/// submodel's brushes are in the clip only while its entity is linked").
-/// Copy of `crates/server/tests/playerstate_slope_ab.rs`'s.
-pub fn unlink_gameobjects(world: &CollisionWorld, entities: &str, gametype: &str) {
+/// The brush models the stock map-load scripts take out of the clip before a
+/// client walks (AGENTS.md, "A submodel's brushes are in the clip only while
+/// its entity is linked"): `_gameobjects::main` `delete()`s every entity whose
+/// `script_gameobjectname` the gametype did not list, and `_load.gsc`
+/// `notsolid()`s every `script_brushmodel` carrying `script_exploder` with
+/// targetname `exploder` or `exploderchunk`. A triggered exploder's
+/// `solid()` later in the round is not seen here.
+pub fn unlink_script_brushes(world: &CollisionWorld, entities: &str, gametype: &str) {
     let allowed: &[&str] = match gametype {
         "sd" => &["sd", "bombzone", "blocker"],
+        "re" => &["re", "retrieval"],
         g => &[g][..],
     };
     for block in vcod_common::bsp::entity_blocks(entities) {
-        let Some(name) = block.get("script_gameobjectname") else {
-            continue;
-        };
-        if allowed.contains(&name.as_str()) {
+        let deleted = block
+            .get("script_gameobjectname")
+            .is_some_and(|name| !allowed.contains(&name.as_str()));
+        let exploder = block
+            .get("classname")
+            .is_some_and(|c| c == "script_brushmodel")
+            && block.contains_key("script_exploder")
+            && block
+                .get("targetname")
+                .is_some_and(|t| t == "exploder" || t == "exploderchunk");
+        if !deleted && !exploder {
             continue;
         }
         if let Some(n) = block
@@ -232,15 +241,37 @@ mod tests {
         assert!(v.origin.x > 10.0, "a full history replays: {}", v.origin);
         assert_eq!(pr.misses, 0);
 
+        let edge = ring((5008..=5200).step_by(8), true);
+        pr.predict(P, &snap, &edge, &world, &[], 8.0).unwrap();
+        assert_eq!(pr.misses, 0, "oldest at commandTime + 8 still reaches");
+        let edge = ring((5016..=5200).step_by(8), true);
+        pr.predict(P, &snap, &edge, &world, &[], 12.0).unwrap();
+        assert_eq!(pr.misses, 1, "oldest at commandTime + 16 is a gap");
+
         let gap = ring((5100..=5200).step_by(8), true);
         let v = pr.predict(P, &snap, &gap, &world, &[], 16.0).unwrap();
         assert_eq!(v.origin, Vec3::ZERO);
-        assert_eq!(pr.misses, 1);
+        assert_eq!(pr.misses, 2);
 
         let empty = CmdRing::default();
         let v = pr.predict(P, &snap, &empty, &world, &[], 32.0).unwrap();
         assert_eq!(v.origin, Vec3::ZERO);
-        assert_eq!(pr.misses, 2);
+        assert_eq!(pr.misses, 3);
+    }
+
+    /// mp_depot's `*1` is an exploder and a `bombzone`, so `sd` keeps the
+    /// gameobject and `_load.gsc` still takes it out; `*2` carries
+    /// `script_exploder` with no targetname and stays solid.
+    #[test]
+    fn mp_depots_exploder_leaves_the_clip_under_sd() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let bsp = vcod_common::bsp::parse(&fs.read("maps/mp/mp_depot.bsp").unwrap()).unwrap();
+        let world = CollisionWorld::build(&bsp, &[]);
+        unlink_script_brushes(&world, &bsp.entities, "sd");
+        assert!(!world.model_linked(1));
+        assert!(world.model_linked(2));
     }
 
     #[test]
