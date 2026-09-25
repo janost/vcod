@@ -29,9 +29,8 @@ pub struct TurretDef {
     pub use_hint_string: Option<String>,
 }
 
-/// `rec+0x20`: 0 stand, 1 duck, 2 prone, from the weapon's `stance` key. The
-/// order is VERIFIED from the `.data` pointer table at 0x7c958..0x7c960
-/// (section 2 of the research doc).
+/// `rec+0x20`, from the weapon's `stance` key; order per
+/// `docs/research/cod11-turrets.md`'s turret record table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurretStance {
     Stand,

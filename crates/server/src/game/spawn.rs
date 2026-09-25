@@ -105,10 +105,9 @@ pub fn spawn_entities_from_string(
                     if let Some(def) = turret_def(host.fs.as_deref(), &item.name) {
                         let keys = turret_keys(&block);
                         if host.turrets.len() >= MAX_TURRETS {
-                            // `G_SpawnTurret`'s own bound (0x52cc3): a 33rd
-                            // turret is Com_Error's fatal
-                            // "G_SpawnTurret: max number of turrets (%d) exceeded"
-                            // in retail; we log and spawn no record instead.
+                            // Retail's `Com_Error` here is fatal
+                            // (`docs/research/cod11-turrets.md`'s turret
+                            // record table); we log and spawn no record.
                             log::error!(
                                 "G_SpawnTurret: max number of turrets ({MAX_TURRETS}) exceeded"
                             );
@@ -262,10 +261,9 @@ fn turret_sound_aliases(fs: Option<&vcod_common::pk3::Pk3Fs>, weaponinfo: &str) 
         .collect()
 }
 
-/// The turret record's cap, `G_SpawnTurret`'s own bound: 32 records, 0x40
-/// bytes each, array at 0xaa180 (`docs/research/cod11-turrets.md` section 0's
-/// table). A misc_mg42/misc_turret past the 32nd spawns as an entity with no
-/// record, rather than retail's fatal `Com_Error`.
+/// `G_SpawnTurret`'s own bound (`docs/research/cod11-turrets.md`'s turret
+/// record table). A misc_mg42/misc_turret past the 32nd spawns as an entity
+/// with no record, rather than retail's fatal `Com_Error`.
 const MAX_TURRETS: usize = 32;
 
 /// `weapons/mp/{weaponinfo}`, parsed into a [`crate::game::turret::TurretDef`].

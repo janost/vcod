@@ -246,8 +246,10 @@ const TURRET_CENTRE_Z: f32 = 28.0;
 /// `G_GetActivateEnt`'s choice (section 2.1): the best-scoring grabbable
 /// item or usable turret in reach whose centre the muzzle can see past the
 /// world. Retail scores an ungrabbable item 10000 behind and cuts it off the
-/// list, and its use and hint loops step past a turret `G_IsTurretUsable`
-/// refuses (turrets doc 4.1, 4.3); leaving both out is the same choice.
+/// list; an unusable turret is scored the same way here, but retail traces
+/// first and only then steps its use/hint loop past a turret
+/// `G_IsTurretUsable` refuses, so a refused turret there still spends a
+/// trace ours never takes (turrets doc 13).
 pub fn activate_ent(
     host: &mut GameHost,
     cx: &mut Cx,
