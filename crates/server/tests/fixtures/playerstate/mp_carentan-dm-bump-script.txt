@@ -1,0 +1,19 @@
+# Retail CoD 1.1d dedicated server log lines under the player-clip captures.
+# map mp_carentan, g_gametype probe_bump (whose main() calls
+# maps\mp\gametypes\dm::main()), probe_teleport 1, dedicated 1,
+# sv_maxclients 8, sv_pure 0, stock scr_* defaults. Captured 2026-09-25.
+# Clients: 0 the --probe-bump-target (axis), 1 the --save-bump walker (allies).
+# The evidence is the server's own games_mp.log, logged by
+# crates/gsc/tests/fixtures/semantics/client-probes/probe_bump.gsc; the client
+# half of the same run is mp_carentan-dm-bump-walker.txt beside this file.
+#
+# PROBE place <time> <clientNum> <team> <origin> <yaw>: a probe_teleport move.
+#
+# Three shells, the gsc probe first; the target 12 s after the server, the
+# walker 10 s after the target:
+#   COD_LNXDED_HOME=<absolute, no '+'> PORT=28985 PROBE_SECS=200 \
+#       tools/run_probe.sh client-probes/probe_bump mp_carentan +set probe_teleport 1
+#   cargo run -p vcod -- --net-probe 127.0.0.1:28985 --probe-bump-target --probe-team axis --probe-secs 185
+#   cargo run -p vcod -- --net-probe 127.0.0.1:28985 --save-bump --probe-team allies --probe-secs 170
+PROBE place 13350 0 axis (1132.00, -376.00, -151.88) 0
+PROBE place 23350 1 allies (932.00, -376.00, -151.88) 0

@@ -243,6 +243,23 @@ struct Args {
     /// `client-probes/probe_turret` as the gametype with `probe_teleport 1`.
     #[arg(long)]
     save_turret: bool,
+    /// With `--net-probe`: the player-clip walker. Waits for
+    /// `client-probes/probe_bump`'s placement 200 units behind the
+    /// `--probe-bump-target` client on mp_carentan, then walks into it
+    /// head-on, at a 20-unit glance and in a jump once per stance it takes;
+    /// writes `crates/server/tests/fixtures/playerstate/<map>-dm-bump-walker.txt`.
+    /// A `--capture-tag` starting `overlap` runs the overlap script instead
+    /// (stand, then walk through the gsc's `probe_overlap 1` setorigins) and
+    /// writes `<map>-dm-bump-<tag>-walker.txt`. Retail evidence when taken
+    /// against tools/run_probe.sh; a run against vcod-server overwrites it.
+    #[arg(long, conflicts_with = "probe_bump_target")]
+    save_bump: bool,
+    /// With `--net-probe`: the player-clip target. Joins, stands where
+    /// `client-probes/probe_bump` puts it and, once the walker stands on its
+    /// mark, stands 35 s, crouches 25 s, stands 1.5 s, lies prone 25 s and
+    /// stands. Writes no fixture; prints its playerstate while a push is on it.
+    #[arg(long, conflicts_with = "save_bump")]
+    probe_bump_target: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -710,6 +727,8 @@ fn main() -> Result<()> {
                 defuse: args.probe_defuse,
                 pickup: args.save_pickup,
                 turret: args.save_turret,
+                bump: args.save_bump,
+                bump_target: args.probe_bump_target,
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,
