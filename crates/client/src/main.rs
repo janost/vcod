@@ -337,7 +337,6 @@ struct LivePhase {
     scene: entities::EntityScene,
     events: net::events::EventTracker,
     clock: ServerClock,
-    seeded: bool,
     last_loop_snap: Option<u32>,
 }
 
@@ -347,20 +346,22 @@ fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp) -> Phase {
         scene: entities::EntityScene::new(),
         events: net::events::EventTracker::new(),
         clock: ServerClock::new(),
-        seeded: false,
         last_loop_snap: None,
     }))
 }
 
 enum Mode {
     Fly(FlyCamera),
-    /// Position follows the interpolated server playerState; look angles are
-    /// local and echoed to the server each frame, like a Q3 free spectator.
-    Spectate {
+    /// Position follows the interpolated playerstate. The client joins
+    /// through the stock menus and plays or spectates as the snapshot says.
+    Online {
         /// Boxed to keep the variants a similar size.
         net: Box<net::NetClient<net::UdpTransport>>,
         cam: FlyCamera,
-        input: InputState,
+        /// Boxed to keep the variants a similar size.
+        input: Box<play::input::PlayInput>,
+        clock: play::cmds::CmdClock,
+        ring: play::cmds::CmdRing,
         phase: Phase,
         /// Boxed to keep the variants a similar size.
         join: Box<play::join::Join>,
@@ -440,6 +441,32 @@ fn digit_slot(code: KeyCode) -> Option<usize> {
     })
 }
 
+/// Retail's `config_mp.cfg` binds for `--connect`; the mouse buttons and
+/// wheel are mapped where their events arrive.
+fn play_action(code: KeyCode) -> Option<play::input::Action> {
+    use play::input::Action;
+    Some(match code {
+        KeyCode::KeyW => Action::Forward,
+        KeyCode::KeyS => Action::Back,
+        KeyCode::KeyA => Action::Left,
+        KeyCode::KeyD => Action::Right,
+        KeyCode::Space => Action::Jump,
+        KeyCode::KeyC => Action::Crouch,
+        KeyCode::ControlLeft => Action::Prone,
+        KeyCode::ShiftLeft => Action::Melee,
+        KeyCode::KeyF => Action::Use,
+        KeyCode::KeyR => Action::Reload,
+        KeyCode::KeyQ => Action::LeanLeft,
+        KeyCode::KeyE => Action::LeanRight,
+        // `weaponslot primary`, `primaryb`, `pistol`, `grenade`.
+        KeyCode::Digit1 => Action::Slot(1),
+        KeyCode::Digit2 => Action::Slot(2),
+        KeyCode::Digit3 => Action::Slot(3),
+        KeyCode::Digit4 => Action::Slot(4),
+        _ => return None,
+    })
+}
+
 impl WalkKeys {
     /// (forward, right) in -1..1, opposite keys cancel.
     fn axes(&self) -> (f32, f32) {
@@ -491,7 +518,7 @@ fn hud_lines(
     ev_counts: (u64, u64),
     // (particles, decals, lights)
     fx_counts: (usize, usize, usize),
-    // (hud quads, hud build+upload ms, Hud::unknown); zeros outside Spectate
+    // (hud quads, hud build+upload ms, Hud::unknown); zeros outside Online
     hud_counts: (usize, f32, u64),
     audio: audio::AudioStats,
     r: &Renderer,
@@ -570,8 +597,8 @@ fn hud_lines(
                 ps.on_ground as u8
             ));
         }
-        Mode::Spectate { net, cam, .. } => {
-            lines.push(cam_line("spec", cam.pos, cam.yaw, cam.pitch));
+        Mode::Online { net, cam, .. } => {
+            lines.push(cam_line("online", cam.pos, cam.yaw, cam.pitch));
             lines.push(format!(
                 "net: {:?}  drops {}",
                 net.state(),
@@ -755,10 +782,12 @@ fn main() -> Result<()> {
 
     let (mode, world, title) = if let Some(net) = net_client {
         (
-            Mode::Spectate {
+            Mode::Online {
                 net: Box::new(net),
                 cam: FlyCamera::new(Vec3::ZERO, 0.0),
-                input: InputState::default(),
+                input: Box::default(),
+                clock: play::cmds::CmdClock::default(),
+                ring: play::cmds::CmdRing::default(),
                 phase: Phase::Connecting {
                     since: Instant::now(),
                 },
@@ -799,7 +828,8 @@ fn main() -> Result<()> {
         println!("WASD move, Space jump, Ctrl crouch, Z prone, Q/E lean, Shift walk");
         println!("LMB fire, RMB aim, R reload, 1-6 weapons");
     } else if args.connect.is_some() {
-        println!("WASD move (server-authoritative), mouse look; look up/down to ascend/descend");
+        println!("WASD move, Space jump/stand, C crouch, Ctrl prone, Q/E lean, Shift melee, F use");
+        println!("LMB fire, RMB aim, R reload, 1-4 weapon slots, wheel next/prev weapon");
         println!("M opens the script menu; 0-9 or arrows + Enter pick, Esc closes");
     } else {
         println!("WASD + Space/Ctrl fly, Shift boost, scroll changes speed");
@@ -849,29 +879,16 @@ fn main() -> Result<()> {
     }
 }
 
-/// `ANGLE2SHORT` (q_shared.h).
-fn angle2short(deg: f32) -> i32 {
-    (deg * 65536.0 / 360.0) as i32 & 0xffff
-}
+/// `ps.delta_angles` in usercmd angle order [pitch, yaw, roll].
+const DELTA_ANGLE_FIELDS: [&str; 3] = ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"];
 
-/// Position is server-authoritative, so only movement axes, look angles and
-/// `weapon`, which must be the held one: a byte differing from `ps.weapon`
-/// reads as a holster. `server_time` is filled by `send_frame`.
-fn usercmd_from_input(input: &InputState, cam: &FlyCamera, weapon: u8) -> net::msg::UserCmd {
-    let axis = |pos: bool, neg: bool| (pos as i32 - neg as i32) as i8 * 127;
-    // Camera pitch is up-positive, usercmd pitch is down-positive.
-    let pitch_deg = -cam.pitch.to_degrees();
-    let yaw_deg = cam.yaw.to_degrees();
-    net::msg::UserCmd {
-        angles: [angle2short(pitch_deg), angle2short(yaw_deg), 0],
-        forward: axis(input.forward, input.back),
-        right: axis(input.right, input.left),
-        // A nonzero `up` selects the full usercmd branch, which carries it;
-        // the compact branch is the one that cannot (write_delta_usercmd).
-        up: axis(input.up, input.down),
-        weapon,
-        ..Default::default()
-    }
+/// The camera's (yaw, pitch) in radians for our own playerstate: the raw cmd
+/// angles plus `delta_angles`, which is the view the server builds
+/// (docs/protocol-1.1.md, "View angles"). Wire pitch is down-positive, the
+/// camera's up-positive.
+fn own_view(raw: [i32; 3], delta: [i32; 3]) -> (f32, f32) {
+    let deg = |i: usize| (raw[i].wrapping_add(delta[i]) as i16) as f32 * 360.0 / 65536.0;
+    (deg(1).to_radians(), -deg(0).to_radians())
 }
 
 /// Synthetic muzzle for playerState-ring fire events (`entity_num ==
@@ -1229,7 +1246,7 @@ impl App {
     fn clear_held_keys(&mut self) {
         match &mut self.mode {
             Mode::Fly(_) => self.input = InputState::default(),
-            Mode::Spectate { input, .. } => *input = InputState::default(),
+            Mode::Online { input, .. } => input.release_all(),
             Mode::Walk {
                 input,
                 keys,
@@ -1259,7 +1276,7 @@ impl App {
     /// The open script menu's keys, ahead of every other binding, and M to
     /// open the main menu when none is. False when the key is not the menu's.
     fn menu_key(&mut self, code: KeyCode) -> bool {
-        let Mode::Spectate {
+        let Mode::Online {
             net,
             join,
             menu_view,
@@ -1399,13 +1416,7 @@ impl ApplicationHandler for App {
                         KeyCode::ShiftLeft => self.input.boost = pressed,
                         _ => {}
                     },
-                    Mode::Spectate { net, input, .. } => match code {
-                        KeyCode::KeyW => input.forward = pressed,
-                        KeyCode::KeyS => input.back = pressed,
-                        KeyCode::KeyA => input.left = pressed,
-                        KeyCode::KeyD => input.right = pressed,
-                        KeyCode::Space => input.up = pressed,
-                        KeyCode::ControlLeft => input.down = pressed,
+                    Mode::Online { net, input, .. } => match code {
                         // The server never pushes scores: send `score` on the
                         // down edge, and every 2 s while held (see the redraw
                         // tick; docs/research/cod11-hud-protocol.md, section 4).
@@ -1419,7 +1430,11 @@ impl ApplicationHandler for App {
                                 }
                             }
                         }
-                        _ => {}
+                        _ => {
+                            if let Some(action) = play_action(code) {
+                                input.key(action, pressed);
+                            }
+                        }
                     },
                     Mode::Walk {
                         input,
@@ -1462,34 +1477,48 @@ impl ApplicationHandler for App {
                 if !self.grabbed {
                     return;
                 }
-                let Mode::Walk {
-                    fire_edge,
-                    fire_held,
-                    ads_held,
-                    ..
-                } = &mut self.mode
-                else {
-                    return;
-                };
-                match button {
-                    MouseButton::Left if pressed => {
-                        *fire_edge = true;
-                        *fire_held = true;
-                    }
-                    MouseButton::Left => *fire_held = false,
-                    MouseButton::Right => *ads_held = pressed,
-                    _ => {}
+                match &mut self.mode {
+                    Mode::Walk {
+                        fire_edge,
+                        fire_held,
+                        ads_held,
+                        ..
+                    } => match button {
+                        MouseButton::Left if pressed => {
+                            *fire_edge = true;
+                            *fire_held = true;
+                        }
+                        MouseButton::Left => *fire_held = false,
+                        MouseButton::Right => *ads_held = pressed,
+                        _ => {}
+                    },
+                    Mode::Online { input, .. } => match button {
+                        MouseButton::Left => input.key(play::input::Action::Attack, pressed),
+                        MouseButton::Right => input.key(play::input::Action::Ads, pressed),
+                        _ => {}
+                    },
+                    Mode::Fly(_) => {}
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let Mode::Fly(cam) = &mut self.mode else {
-                    return;
-                };
                 let scroll = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.0,
                 };
-                cam.adjust_speed(scroll);
+                match &mut self.mode {
+                    Mode::Fly(cam) => cam.adjust_speed(scroll),
+                    // Retail binds MWHEELDOWN to weapnext, MWHEELUP to weapprev.
+                    Mode::Online { input, .. } if scroll != 0.0 => {
+                        let action = if scroll < 0.0 {
+                            play::input::Action::NextWeapon
+                        } else {
+                            play::input::Action::PrevWeapon
+                        };
+                        input.key(action, true);
+                        input.key(action, false);
+                    }
+                    _ => {}
+                }
             }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
@@ -1533,10 +1562,12 @@ impl ApplicationHandler for App {
                             None,
                         )
                     }
-                    Mode::Spectate {
+                    Mode::Online {
                         net,
                         cam,
                         input,
+                        clock: cmd_clock,
+                        ring,
                         phase,
                         join,
                         menu_view,
@@ -1641,6 +1672,30 @@ impl ApplicationHandler for App {
                             if hud.scoreboard.due(time) {
                                 net.send_reliable("score");
                                 hud.scoreboard.mark_requested(time);
+                            }
+                        }
+
+                        if gamestate_ready {
+                            cmd_clock.reset();
+                            ring.clear();
+                        }
+                        // Also before the map is up, so the first cmd goes out
+                        // as soon as the gamestate makes the client active.
+                        if net.state() == net::NetState::Active {
+                            let times = cmd_clock.due(net.server_clock_ms());
+                            if !times.is_empty() {
+                                let held = net.snapshots().newest().map_or_else(
+                                    play::input::Held::default,
+                                    |s| {
+                                        play::input::Held::from_ps(
+                                            &s.ps,
+                                            &net::protocol::PROTOCOL_V1,
+                                        )
+                                    },
+                                );
+                                let new: Vec<_> =
+                                    times.iter().map(|&t| input.build(t, &held)).collect();
+                                net.send_cmds(&ring.packet(&new));
                             }
                         }
 
@@ -1765,7 +1820,6 @@ impl ApplicationHandler for App {
                                         scene,
                                         events,
                                         clock,
-                                        seeded,
                                         last_loop_snap,
                                     } = &mut **live;
                                     let bsp =
@@ -1829,7 +1883,7 @@ impl ApplicationHandler for App {
                                                 * (1.0 - f)
                                                 + b.ps.field_f32(p, "viewHeightCurrent") * f;
                                             cam.pos = pos + Vec3::Z * vh;
-                                            if !*seeded {
+                                            if following {
                                                 let va_a = a.ps.viewangles(p);
                                                 let va_b = b.ps.viewangles(p);
                                                 cam.yaw = camera::lerp_angle(va_a[1], va_b[1], f)
@@ -1837,7 +1891,6 @@ impl ApplicationHandler for App {
                                                 cam.pitch =
                                                     -camera::lerp_angle(va_a[0], va_b[0], f)
                                                         .to_radians();
-                                                *seeded = true;
                                             }
                                         } else if let Some(newest) = net.snapshots().newest() {
                                             self.interp_misses += 1;
@@ -1845,7 +1898,18 @@ impl ApplicationHandler for App {
                                             cam.pos = Vec3::from(newest.ps.origin(p))
                                                 + Vec3::Z
                                                     * newest.ps.field_f32(p, "viewHeightCurrent");
+                                            if following {
+                                                let va = newest.ps.viewangles(p);
+                                                cam.yaw = va[1].to_radians();
+                                                cam.pitch = -va[0].to_radians();
+                                            }
                                         }
+                                    }
+                                    if !following {
+                                        let delta = net.snapshots().newest().map_or([0; 3], |s| {
+                                            DELTA_ANGLE_FIELDS.map(|name| s.ps.field_i32(p, name))
+                                        });
+                                        (cam.yaw, cam.pitch) = own_view(input.raw_angles(), delta);
                                     }
 
                                     let (cam_forward, cam_right, cam_up) =
@@ -1872,13 +1936,6 @@ impl ApplicationHandler for App {
                                     }
 
                                     r.set_dynamic_models(&instances);
-
-                                    // Every frame; also the keepalive.
-                                    let weapon = net
-                                        .snapshots()
-                                        .newest()
-                                        .map_or(0, |s| s.ps.field_i32(p, "weapon") as u8);
-                                    net.send_frame(&usercmd_from_input(input, cam, weapon));
 
                                     // Step before this frame's events spawn, or the
                                     // [now-dt, now] integration would move particles born
@@ -2261,7 +2318,7 @@ impl ApplicationHandler for App {
                 // The scene lives in the spectate phase now, so pull it back
                 // out for the overlay after the mode's mutable borrows end.
                 let scene = match &self.mode {
-                    Mode::Spectate {
+                    Mode::Online {
                         phase: Phase::Live(live),
                         ..
                     } => Some(&live.scene),
@@ -2308,7 +2365,7 @@ impl ApplicationHandler for App {
             let (dx, dy) = (dx as f32, dy as f32);
             match &mut self.mode {
                 Mode::Fly(cam) => cam.mouse_delta(dx, dy),
-                Mode::Spectate { cam, .. } => cam.mouse_delta(dx, dy),
+                Mode::Online { input, .. } => input.mouse(dx, dy),
                 Mode::Walk {
                     ps, mouse_delta, ..
                 } => {
@@ -2329,44 +2386,6 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Space and Ctrl reach the server. `up` rides the full usercmd branch,
-    /// not the compact one, so it needs the axis set like forward and right.
-    #[test]
-    fn usercmd_carries_the_up_axis() {
-        let cam = FlyCamera::new(Vec3::ZERO, 0.0);
-
-        let rising = usercmd_from_input(
-            &InputState {
-                up: true,
-                ..Default::default()
-            },
-            &cam,
-            0,
-        );
-        assert_eq!(rising.up, 127, "Space must climb");
-
-        let falling = usercmd_from_input(
-            &InputState {
-                down: true,
-                ..Default::default()
-            },
-            &cam,
-            0,
-        );
-        assert_eq!(falling.up, -127, "Ctrl must descend");
-
-        let held = usercmd_from_input(
-            &InputState {
-                up: true,
-                down: true,
-                ..Default::default()
-            },
-            &cam,
-            0,
-        );
-        assert_eq!(held.up, 0, "both held cancels");
-    }
 
     /// Drives the real kar98k through the redraw loop's calls without a window.
     /// Reaches idle, fire, rechamber, ADS up and ADS fire; not LastShot,
@@ -2435,6 +2454,27 @@ mod tests {
             t0 < t1 && t1 < t2 && t2 < t3,
             "render time froze between snapshots: {t0} {t1} {t2} {t3}"
         );
+    }
+
+    #[test]
+    fn own_view_adds_delta_angles_and_flips_pitch() {
+        // 90 degrees of yaw from delta alone, 45 more from the mouse; wire
+        // pitch 10 degrees down reads as the camera looking down.
+        let quarter = 16384;
+        let (yaw, pitch) = own_view([1820, quarter / 2, 0], [0, quarter, 0]);
+        assert!(
+            (yaw.to_degrees() - 135.0).abs() < 0.01,
+            "yaw {}",
+            yaw.to_degrees()
+        );
+        assert!(
+            (pitch.to_degrees() + 10.0).abs() < 0.01,
+            "pitch {}",
+            pitch.to_degrees()
+        );
+        // A delta sent as the unsigned 16-bit value wraps like a signed one.
+        let (yaw, _) = own_view([0, 0, 0], [0, 65536 - quarter, 0]);
+        assert!((yaw.to_degrees() + 90.0).abs() < 0.01);
     }
 
     #[test]

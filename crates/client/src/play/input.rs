@@ -4,7 +4,8 @@
 //! the weapon byte.
 
 use std::collections::HashSet;
-use vcod_common::net::msg::{self, UserCmd};
+use vcod_common::net::msg::{self, PlayerState, UserCmd};
+use vcod_common::net::protocol::Protocol;
 
 /// `eFlags` bits the server writes for a crouched/prone player
 /// (`crates/server/src/spectate.rs`, `to_wire`), the inverse the caller reads
@@ -71,11 +72,28 @@ impl Stance {
 /// weapon held, the eight weapon slots (`weaponslots[0]`/`weaponslots[4]`
 /// unpacked little-endian, the inverse of
 /// `vcod_common::pmove::weapon::pack_slots`), and the stance
-/// ([`Stance::from_eflags`]).
+/// ([`Stance::from_eflags`]). The default (weapon 0, no slots, standing)
+/// stands in before the first snapshot.
+#[derive(Default)]
 pub struct Held {
     pub weapon: u8,
     pub slots: [u8; 8],
     pub stance: Stance,
+}
+
+impl Held {
+    pub fn from_ps(ps: &PlayerState, p: &Protocol) -> Held {
+        let lo = ps.field_i32(p, "weaponslots[0]").to_le_bytes();
+        let hi = ps.field_i32(p, "weaponslots[4]").to_le_bytes();
+        let mut slots = [0u8; 8];
+        slots[..4].copy_from_slice(&lo);
+        slots[4..].copy_from_slice(&hi);
+        Held {
+            weapon: ps.field_i32(p, "weapon") as u8,
+            slots,
+            stance: Stance::from_eflags(ps.field_i32(p, "eFlags")),
+        }
+    }
 }
 
 /// A weapon-select bind not yet resolved against a playerstate (`build`
@@ -182,6 +200,13 @@ impl PlayInput {
         }
     }
 
+    /// Lets go of every held key, for a grab release or focus loss. The
+    /// stance and a pending switch stay: both are toggles, not holds.
+    pub fn release_all(&mut self) {
+        self.down.clear();
+        self.jump_consumed_by_stand = false;
+    }
+
     pub fn mouse(&mut self, dx: f32, dy: f32) {
         // Wire pitch is down-positive; `FlyCamera::mouse_delta` is
         // up-positive (`pitch -= dy * SENS`), so this accumulator takes the
@@ -192,10 +217,6 @@ impl PlayInput {
 
     pub fn raw_angles(&self) -> [i32; 3] {
         self.raw_angles
-    }
-
-    pub fn set_raw_angles(&mut self, a: [i32; 3]) {
-        self.raw_angles = a;
     }
 
     fn resolve_pending(&mut self, held: &Held) {
@@ -437,6 +458,36 @@ mod tests {
         };
         let c = i.build(108, &stood);
         assert_eq!(c.wbuttons & msg::WBUTTON_CROUCH, 0);
+    }
+
+    #[test]
+    fn held_unpacks_the_playerstate() {
+        let p = &vcod_common::net::protocol::PROTOCOL_V1;
+        let mut ps = PlayerState::null(p);
+        let mut set = |name: &str, v: i32| {
+            ps.fields[PlayerState::field_index(p, name).unwrap()] = v;
+        };
+        set("weapon", 10);
+        let [lo, hi] = vcod_common::pmove::weapon::pack_slots(&[0, 10, 0, 3, 6, 0, 0, 7]);
+        set("weaponslots[0]", lo);
+        set("weaponslots[4]", hi);
+        set("eFlags", EF_PRONE);
+        let h = Held::from_ps(&ps, p);
+        assert_eq!(h.weapon, 10);
+        assert_eq!(h.slots, [0, 10, 0, 3, 6, 0, 0, 7]);
+        assert_eq!(h.stance, Stance::Prone);
+    }
+
+    #[test]
+    fn release_all_lets_go_of_keys_but_keeps_the_stance() {
+        let mut i = PlayInput::default();
+        i.key(Action::Forward, true);
+        i.key(Action::Attack, true);
+        i.key(Action::Crouch, true);
+        i.release_all();
+        let c = i.build(100, &held(10));
+        assert_eq!((c.forward, c.buttons), (0, 0));
+        assert_ne!(c.wbuttons & msg::WBUTTON_CROUCH, 0);
     }
 
     #[test]
