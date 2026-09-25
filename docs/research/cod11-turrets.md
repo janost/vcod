@@ -1021,7 +1021,11 @@ below `T`, except the one at 30150, whose `delta_angles[0]` 10740 is
 `ANGLE2SHORT(40)` less the wire pitch of cmd 30132, not of cmd 30148.
 INFERRED: a cmd stamped in `[T - 50, T)` runs before frame `T` as a rule,
 and 30148 and the use cmd 24736 are the two that reached the server after
-their frame; cmd 38282 ran before frame 38300 by the rule. On the stand mount more
+their frame; cmd 38282 ran before frame 38300 by the rule. For 24736 no view
+moves to say so either way; the reading rests on the mount alone, and the
+crouch mount is the counter-evidence to a server that mounts a frame late:
+VERIFIED (lines 1366-1368), its use cmd 38282 mounted on 38300, the frame its
+stamp puts it in. On the stand mount more
 cmds ran in the same frame after the mount, so pmove's stance step (0x316f4,
 section 5) and the mounted movetype had run before `ClientEndFrame`; on the
 crouch mount the use cmd was the frame's last, the animation step still chose
@@ -1402,8 +1406,8 @@ pairs the two:
   release teleports back to the mount spot, so the offset would ride through
   every later phase.
 - Origins are compared to 0.25 units, `viewangles` to the print plus one
-  `ANGLE2SHORT` step, `angles2` to the print plus 0.01 degrees, impacts to one
-  unit per axis (they reach the wire truncated), the rest exactly.
+  `ANGLE2SHORT` step, `angles2` to the print plus 0.01 degrees, the rest
+  exactly, impacts included: both sides truncate them to whole units.
 
 What the replay found, fixed: `G_TempEntity`'s truncation (section 8) now
 applies to every temp entity at the wire (`temp_entity::build`), so the
@@ -1418,8 +1422,9 @@ What it lets through, each a `GAPS` line in the gate:
 - The stand mount's first snapshot, 24800: all of a tick's pmove steps run
   before the per-cmd use pass, so the cmds after the use cmd run unmounted and
   ours keeps the spot, `groundEntityNum` 1022 and `pb_stand_alert` for a
-  frame where retail is placed and plays `standMG42_aim`. Retail does that
-  only on the crouch mount, where the use cmd was the frame's last.
+  frame where VERIFIED (fixture line 93) retail reads 1023, the placed
+  origin and `legsAnim` 32, `standMG42_aim`. Retail does that only on the
+  crouch mount, where the use cmd was the frame's last (12.1).
 - The target phase's second impact behind the target at 34900 and 34950:
   the pass-through above.
 - The kill snapshot, 34950: VERIFIED (12.5), retail's carries the victim's
@@ -1428,7 +1433,10 @@ What it lets through, each a `GAPS` line in the gate:
   snapshot and a dead client has none (`cod11-combat.md` 5.4), so that pain
   never reaches the gunner.
 - The killing round's impact at 34950 lands about 4 units nearer the gun
-  along the ray than retail's (1517, 1612 against 1514, 1609). The victim was
+  along the ray than retail's: ours (1517, 1612), VERIFIED retail (1514,
+  1609) at fixture line 1068. The wounding round's at 34900 enters one
+  truncation step lower in x and y (ours 1517, 1611; retail 1518, 1612 at
+  line 1057). The victim was
   knocked back by the round before, and neither half of the capture carries
   its origin, so whether the knockback or the pose differs is open.
 - The crouch release's one-unit drop: at 38900 ours reads grounded 0.2 above
@@ -1438,8 +1446,10 @@ What it lets through, each a `GAPS` line in the gate:
   the ground. The stand release lands on the same snapshot on both, and the
   capture holds one of each. Ours then stays 0.21 above the floor, inside the
   origin tolerance.
-- The strafe's first footstep falls on 39500 on ours and 39600 on retail:
-  `bobCycle` is not in the capture and the join leaves each side its own.
+- The strafe's first footstep falls on 39500 on ours and, VERIFIED (fixture
+  lines 1495-1496, event 6 on the playerstate ring), 39600 on retail.
+  INFERRED: `bobCycle` is not in the capture and the join leaves each side
+  its own, which is where the phase comes from.
 - The strafe slides along the nest wall into the sandbags' 52-degree face
   at 39800 (brush normal z 0.614 in vcod's clip of mp_carentan). VERIFIED,
   fixture lines 1512-1513: retail steps up it with `EV_STEP_VIEW` parm 139,

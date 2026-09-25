@@ -920,8 +920,10 @@ against `pml.previous_velocity[2]` (0x2fd8a..0x2fd9b), and a call to
 (event 5) plays only when the legs timer has run out and the move began
 falling faster than 220 units a second; any slower landing keeps whatever the
 legs were playing. VERIFIED on the wire: the turret capture's two releases
-end in a one-unit drop and keep `pb_stand_alert` through the landing
-(`cod11-turrets.md` 12.7, fixture lines 1274-1281).
+each end in a one-unit drop and go from `standMG42_aim` straight to
+`pb_stand_alert` with no land anim between, the stand release at fixture
+lines 1274-1281 and the crouch release at 1424-1436 (`cod11-turrets.md`
+12.7).
 
 Other movement emitters seen while in there, for completeness: stair-step 143
 (parm = clamped step delta + 128), foliage rustle 139 (cvar-driven interval
