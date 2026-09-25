@@ -1,7 +1,7 @@
-//! Playing on a server: the stock menus, the usercmd stream, and later
-//! prediction.
+//! Playing on a server: the stock menus, the usercmd stream and prediction.
 
 pub mod cmds;
 pub mod cvars;
 pub mod input;
 pub mod join;
+pub mod predict;
