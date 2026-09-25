@@ -5,6 +5,7 @@
 
 use super::cmds::{CmdRing, CMD_MS};
 use glam::Vec3;
+use std::collections::VecDeque;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::net::msg;
 use vcod_common::net::protocol::Protocol;
@@ -20,10 +21,10 @@ const EF_TELEPORT: i32 = 0x8;
 
 /// What the camera draws for a predicted frame.
 pub struct PredictedView {
-    /// Eased between the results before and after the newest cmd, minus
-    /// what is left of the correction.
+    /// The replay at the render clock, between the two cmd results around
+    /// it, minus what is left of the correction.
     pub origin: Vec3,
-    /// Eased the same way as `origin`.
+    /// Sampled the same way as `origin`.
     pub view_height: f32,
     /// Raw 16-bit wire values, the prone cone's push included.
     pub delta_angles: [i32; 3],
@@ -36,18 +37,55 @@ pub struct PredictedView {
 struct Replay {
     snap: msg::PlayerState,
     pred: Predicted,
-    /// Origin and view height before the newest cmd ran; the camera eases
-    /// from here to `pred` over that cmd's [`CMD_MS`].
-    prev: (Vec3, f32),
+    /// `(commandTime, origin, view height)` after each of the last few cmds
+    /// run, oldest first; the camera samples between them.
+    results: VecDeque<(i32, Vec3, f32)>,
 }
+
+/// Enough results to cover the render clock's window of two cmds behind the
+/// newest, with room for a frame's worth of new ones.
+const RESULTS: usize = 6;
 
 impl Replay {
     fn new(snap: &msg::PlayerState, pred: Predicted) -> Self {
-        Replay {
+        let mut r = Replay {
             snap: snap.clone(),
-            prev: (pred.ps.origin, pred.ps.view_height()),
             pred,
+            results: VecDeque::with_capacity(RESULTS),
+        };
+        r.record();
+        r
+    }
+
+    fn record(&mut self) {
+        let ps = &self.pred.ps;
+        if self.results.len() == RESULTS {
+            self.results.pop_front();
         }
+        self.results
+            .push_back((self.pred.command_time, ps.origin, ps.view_height()));
+    }
+
+    /// Origin and view height at cmd time `t`, linear between the two
+    /// results around it and held at either end.
+    fn sample(&self, t: f64) -> (Vec3, f32) {
+        let at = |i: usize| {
+            let (_, o, h) = self.results[i];
+            (o, h)
+        };
+        let Some(i) = self
+            .results
+            .iter()
+            .position(|&(rt, _, _)| f64::from(rt) >= t)
+        else {
+            return at(self.results.len() - 1);
+        };
+        if i == 0 {
+            return at(0);
+        }
+        let ((t0, o0, h0), (t1, o1, h1)) = (self.results[i - 1], self.results[i]);
+        let f = ((t - f64::from(t0)) / f64::from(t1 - t0)) as f32;
+        (o0.lerp(o1, f), h0 + (h1 - h0) * f)
     }
 
     /// Runs every cmd past `pred.command_time`, oldest first, calling
@@ -61,8 +99,11 @@ impl Replay {
     ) -> usize {
         let mut n = 0;
         for cmd in ring.since(self.pred.command_time) {
-            self.prev = (self.pred.ps.origin, self.pred.ps.view_height());
+            let before = self.pred.command_time;
             predict::run_cmd(&mut self.pred, cmd, world, weapons);
+            if self.pred.command_time != before {
+                self.record();
+            }
             after(&self.pred);
             n += 1;
         }
@@ -91,10 +132,11 @@ pub struct Predictor {
     /// Kept while the snapshot is unchanged, so a frame runs only the cmds
     /// built since the last one (ioq3's `cg_optimizePrediction`).
     replay: Option<Replay>,
-    /// The newest cmd's time and the local ms of the first frame that ran
-    /// it; the camera's ease toward it runs on the local clock, which a
-    /// snapshot never steps back.
-    newest_cmd: Option<(i32, f64)>,
+    /// The render clock in cmd-time ms: advanced by local frame time only,
+    /// so a snapshot or the server clock's re-anchor never moves it, and
+    /// held within two cmds behind the newest. With the local ms it was
+    /// last advanced at.
+    drawn: Option<(f64, f64)>,
     #[cfg(test)]
     cmds_run: usize,
 }
@@ -133,14 +175,17 @@ impl Predictor {
         self.last = Some((pred.command_time, pred.ps.origin));
         let error = self.error * self.decay(now_ms);
         self.drawn_error = Some(error.length());
-        if self.newest_cmd.is_none_or(|(t, _)| t != pred.command_time) {
-            self.newest_cmd = Some((pred.command_time, now_ms));
+        let newest = f64::from(pred.command_time);
+        let t = match self.drawn {
+            Some((t, at)) => t + (now_ms - at),
+            None => newest - f64::from(CMD_MS),
         }
-        let f = cmd_fraction(now_ms, self.newest_cmd.map_or(now_ms, |(_, seen)| seen));
-        let (prev_origin, prev_height) = r.prev;
+        .clamp(newest - f64::from(2 * CMD_MS), newest);
+        self.drawn = Some((t, now_ms));
+        let (origin, view_height) = r.sample(t);
         Some(PredictedView {
-            origin: prev_origin.lerp(pred.ps.origin, f) - error,
-            view_height: prev_height + (pred.ps.view_height() - prev_height) * f,
+            origin: origin - error,
+            view_height,
             delta_angles: pred.delta_angles,
             pred,
         })
@@ -229,7 +274,7 @@ impl Predictor {
 
     fn snap(&mut self) {
         self.replay = None;
-        self.newest_cmd = None;
+        self.drawn = None;
         self.last = None;
         self.error = Vec3::ZERO;
         self.drawn_error = None;
@@ -271,12 +316,6 @@ pub fn unlink_script_brushes(world: &CollisionWorld, entities: &str, gametype: &
             world.set_model_linked(n, false);
         }
     }
-}
-
-/// How far the camera is from the result before the newest cmd to the
-/// newest's, `now_ms - seen_ms` local ms after that cmd was first run.
-fn cmd_fraction(now_ms: f64, seen_ms: f64) -> f32 {
-    ((now_ms - seen_ms) / f64::from(CMD_MS)).clamp(0.0, 1.0) as f32
 }
 
 #[cfg(test)]
@@ -444,58 +483,71 @@ mod tests {
         assert_eq!(at(&mut pr, 500.0), 10.0);
     }
 
-    #[test]
-    fn cmd_fraction_runs_over_one_cmd() {
-        assert_eq!(cmd_fraction(100.0, 100.0), 0.0);
-        assert_eq!(cmd_fraction(102.0, 100.0), 0.25);
-        assert_eq!(cmd_fraction(106.0, 100.0), 0.75);
-        assert_eq!(cmd_fraction(108.0, 100.0), 1.0);
-        assert_eq!(cmd_fraction(160.0, 100.0), 1.0, "a stalled cmd clock holds");
-    }
-
-    /// Between two cmds the camera eases from the result before the newest
-    /// cmd to the newest's on the local clock, and a new snapshot on the
-    /// same newest cmd (the server clock's re-anchor) does not restart the
-    /// ease or step it back.
-    #[test]
-    fn the_camera_moves_between_cmds_and_never_back() {
+    /// Frames at `hz` local fps, `CmdClock` building running cmds off a
+    /// server clock that tracks local time minus `server_lag(frame)`, one
+    /// unchanged snapshot, a resent copy of it from `resend_at` on. Returns
+    /// the drawn x per frame.
+    fn walk(
+        hz: f64,
+        frames: usize,
+        server_lag: impl Fn(usize) -> i32,
+        resend_at: usize,
+    ) -> Vec<f32> {
         let world = test_world(&[]);
         let snap = standing(5000, 0.0);
-        let r = ring((5008..=5040).step_by(8), true);
-        let mut short = CmdRing::default();
-        for c in r.since(0).take(4) {
-            short.push(*c);
-        }
-        let before_newest = Predictor::default()
-            .predict(P, &snap, &short, &world, &[], 0.0)
-            .unwrap()
-            .pred
-            .ps
-            .origin
-            .x;
-
-        let mut pr = Predictor::default();
         let mut resent = snap.clone();
         set(&mut resent, "damageEvent", 1);
-        let mut xs = Vec::new();
-        for (ms, s) in [
-            (0.0, &snap),
-            (2.0, &snap),
-            (4.0, &resent),
-            (6.0, &resent),
-            (8.0, &resent),
-            (12.0, &resent),
-        ] {
-            xs.push(pr.predict(P, s, &r, &world, &[], ms).unwrap().origin.x);
-        }
-        let newest = xs[4];
-        assert_eq!(xs[0], before_newest);
-        assert!(
-            (xs[2] - (before_newest + newest) / 2.0).abs() < 1e-4,
-            "{xs:?}"
-        );
-        assert!(xs.windows(2).all(|w| w[1] >= w[0]), "{xs:?}");
-        assert!(xs[0] < xs[1] && xs[3] < xs[4], "{xs:?}");
-        assert_eq!(xs[5], newest);
+        let mut clock = super::super::cmds::CmdClock::default();
+        let mut r = CmdRing::default();
+        let mut pr = Predictor::default();
+        (0..frames)
+            .map(|k| {
+                let local = k as f64 * 1000.0 / hz;
+                for t in clock.due(5000 + local as i32 - server_lag(k)) {
+                    r.push(UserCmd {
+                        server_time: t,
+                        forward: 127,
+                        ..Default::default()
+                    });
+                }
+                let s = if k >= resend_at { &resent } else { &snap };
+                pr.predict(P, s, &r, &world, &[], local).unwrap().origin.x
+            })
+            .collect()
+    }
+
+    /// At 60 Hz the cmd clock lands 2 or 3 cmds a frame; the render clock
+    /// still moves the camera the same distance every frame.
+    #[test]
+    fn sixty_hz_moves_evenly() {
+        let xs = walk(60.0, 120, |_| 0, usize::MAX);
+        let steps: Vec<f32> = xs[60..].windows(2).map(|w| w[1] - w[0]).collect();
+        let (lo, hi) = steps
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), &d| (lo.min(d), hi.max(d)));
+        assert!(lo > 1.0, "moving at speed: {steps:?}");
+        assert!(hi - lo < 0.01, "{lo}..{hi}: {steps:?}");
+    }
+
+    /// Above the cmd rate the camera still moves every frame.
+    #[test]
+    fn one_forty_four_hz_never_repeats_or_goes_back() {
+        let xs = walk(144.0, 300, |_| 0, usize::MAX);
+        assert!(xs[20..].windows(2).all(|w| w[1] > w[0]), "{xs:?}");
+    }
+
+    /// The server clock steps back 30 ms at frame 20, as it does when a
+    /// snapshot re-anchors it, and a new snapshot arrives there too. No cmd
+    /// is built for a few frames, so the camera holds at the newest result,
+    /// and the render clock, which runs on local time only, never steps it
+    /// back or restarts the ease.
+    #[test]
+    fn a_server_clock_re_anchor_does_not_move_the_render_clock() {
+        let lag = |k: usize| if k >= 20 { 30 } else { 0 };
+        let xs = walk(60.0, 60, lag, 20);
+        let even = walk(60.0, 60, |_| 0, usize::MAX);
+        assert_eq!(xs[..20], even[..20]);
+        assert!(xs[1..].windows(2).all(|w| w[1] >= w[0]), "{xs:?}");
+        assert!(xs[30..].windows(2).all(|w| w[1] > w[0]), "{xs:?}");
     }
 }
