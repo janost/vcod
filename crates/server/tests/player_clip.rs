@@ -60,6 +60,22 @@ impl Rig {
         let s = self.cb.snapshots().newest()?;
         Some(s.entities.get(&na)?.field_i32(&PROTOCOL_V1, "solid"))
     }
+
+    /// A's `pos.trDelta` (its wire velocity) in B's newest snapshot, `None`
+    /// when B is not sent A.
+    fn vel_of_a_seen_by_b(&self) -> Option<[f32; 2]> {
+        let na = Self::num(&self.ca) as u32;
+        let s = self.cb.snapshots().newest()?;
+        let e = s.entities.get(&na)?;
+        Some([
+            e.field_f32(&PROTOCOL_V1, "pos.trDelta[0]"),
+            e.field_f32(&PROTOCOL_V1, "pos.trDelta[1]"),
+        ])
+    }
+}
+
+fn dist_xy(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
 /// `holding` looking along `yaw`. The client sends absolute view angles and
@@ -272,7 +288,6 @@ fn crouched_and_prone_solid_on_the_wire() {
 }
 
 #[test]
-#[ignore = "needs StuckInClient (Task 5)"]
 fn stuck_player_solid_reads_zero_after_its_next_cmd() {
     let Some(mut r) = joined() else {
         eprintln!("COD_DIR unset or has no main/: skipping");
@@ -293,4 +308,201 @@ fn stuck_player_solid_reads_zero_after_its_next_cmd() {
         seen.contains(&Some(0)),
         "A's solid never read 0 while stuck: {seen:?}"
     );
+}
+
+#[test]
+fn overlapping_pair_pushes_apart() {
+    let Some(mut r) = joined() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let spot = Rig::origin(&r.ca);
+    r.sv.place_client(Rig::num(&r.ca), spot, 0.0);
+    r.sv.place_client(Rig::num(&r.cb), spot, 180.0);
+    let mut push_speed = None;
+    for _ in 0..20 {
+        let (a, b) = (common::holding(&r.ca), common::holding(&r.cb));
+        r.step(&a, &b);
+        if push_speed.is_none() {
+            if let Some([vx, vy]) = r.vel_of_a_seen_by_b() {
+                let speed = (vx * vx + vy * vy).sqrt();
+                if speed > 100.0 {
+                    push_speed = Some(speed);
+                }
+            }
+        }
+    }
+    let speed = push_speed.expect("B never saw A's push velocity on the wire");
+    assert!((speed - 190.0).abs() < 2.0, "push speed {speed}");
+    let d = dist_xy(Rig::origin(&r.ca), Rig::origin(&r.cb));
+    assert!(d >= 30.0, "the pair is still {d:.2} apart after 1 s");
+}
+
+/// A third socket, for the test that needs a spectator holding a slot beside
+/// the pushed pair.
+const ADDR_C: std::net::SocketAddr =
+    std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 31339);
+
+/// `common::step`, parameterized on the address: the spectator here needs a
+/// third socket distinct from `common::ADDR`/`ADDR_B`.
+fn step_solo(
+    sv: &mut Server,
+    addr: std::net::SocketAddr,
+    q: &Rc<RefCell<Queues>>,
+    cl: &mut Client,
+    now: Instant,
+) -> Vec<NetEvent> {
+    let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
+    for p in pending {
+        sv.handle_packet(addr, &p, now);
+    }
+    sv.tick(now);
+    for (to, p) in sv.take_outgoing() {
+        assert_eq!(to, addr);
+        q.borrow_mut().to_client.push_back(p);
+    }
+    cl.pump_at(now)
+}
+
+/// `common::connect`, parameterized on address and qport.
+fn connect_solo(
+    sv: &mut Server,
+    addr: std::net::SocketAddr,
+    q: &Rc<RefCell<Queues>>,
+    now: &mut Instant,
+    qport: u16,
+) -> Client {
+    let mut cl = NetClient::start_with_qport(ClientEnd(q.clone()), *now, qport);
+    for _ in 0..40 {
+        *now += Duration::from_millis(250);
+        let events = step_solo(sv, addr, q, &mut cl, *now);
+        if events.contains(&NetEvent::GamestateReady) {
+            return cl;
+        }
+        assert!(
+            !events.iter().any(|e| matches!(e, NetEvent::Dropped(_))),
+            "{events:?}"
+        );
+    }
+    panic!("the spectator never reached a gamestate");
+}
+
+/// `common::step_pair`, extended to a third address: the spectator's own
+/// packets are routed here too, so its snapshots do not spill into either
+/// player's queue the way a two-way router would.
+fn step_trio(
+    sv: &mut Server,
+    s: (std::net::SocketAddr, &Rc<RefCell<Queues>>, &mut Client),
+    a: (std::net::SocketAddr, &Rc<RefCell<Queues>>, &mut Client),
+    b: (std::net::SocketAddr, &Rc<RefCell<Queues>>, &mut Client),
+    now: Instant,
+) -> (Vec<NetEvent>, Vec<NetEvent>, Vec<NetEvent>) {
+    for (addr, q) in [(s.0, s.1), (a.0, a.1), (b.0, b.1)] {
+        let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
+        for p in pending {
+            sv.handle_packet(addr, &p, now);
+        }
+    }
+    sv.tick(now);
+    for (to, p) in sv.take_outgoing() {
+        let q = if to == s.0 {
+            s.1
+        } else if to == a.0 {
+            a.1
+        } else {
+            b.1
+        };
+        q.borrow_mut().to_client.push_back(p);
+    }
+    (s.2.pump_at(now), a.2.pump_at(now), b.2.pump_at(now))
+}
+
+#[test]
+fn a_spectator_anywhere_disables_the_push() {
+    let Some((mut sv, mut now)) = server() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let qs = Rc::new(RefCell::new(Queues::default()));
+    // Connects alone first, so it is the only client the slot table has ever
+    // seen and holds slot 0 once the pair joins beside it.
+    let mut cs = connect_solo(&mut sv, ADDR_C, &qs, &mut now, 0x2000);
+
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let mut ca = NetClient::start_with_qport(ClientEnd(qa.clone()), now, 0x2001);
+    let mut cb = NetClient::start_with_qport(ClientEnd(qb.clone()), now, 0x2002);
+    let (mut ja, mut jb) = (
+        Join::new("allies", "m1carbine_mp"),
+        Join::new("allies", "m1carbine_mp"),
+    );
+    for _ in 0..600 {
+        now += Duration::from_millis(50);
+        cs.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        let (_, ea, eb) = step_trio(
+            &mut sv,
+            (ADDR_C, &qs, &mut cs),
+            (common::ADDR, &qa, &mut ca),
+            (common::ADDR_B, &qb, &mut cb),
+            now,
+        );
+        for e in ea {
+            if let NetEvent::ServerCommand(tokens) = e {
+                ja.on_server_command(&tokens, &mut ca, now);
+            }
+        }
+        for e in eb {
+            if let NetEvent::ServerCommand(tokens) = e {
+                jb.on_server_command(&tokens, &mut cb, now);
+            }
+        }
+        if ja.settled(now) && jb.settled(now) {
+            break;
+        }
+    }
+    assert!(ja.settled(now) && jb.settled(now), "the pair never joined");
+
+    let num = |cl: &Client| {
+        cl.snapshots()
+            .newest()
+            .unwrap()
+            .ps
+            .field_i32(&PROTOCOL_V1, "clientNum") as usize
+    };
+    assert_eq!(
+        num(&cs),
+        0,
+        "the spectator connected first and must hold slot 0"
+    );
+
+    let (na, nb) = (num(&ca), num(&cb));
+    let a_spot = cl_origin(&ca);
+    sv.place_client(na, a_spot, 0.0);
+    sv.place_client(nb, a_spot, 180.0);
+    for _ in 0..20 {
+        now += Duration::from_millis(50);
+        cs.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        let a = common::holding(&ca);
+        let b = common::holding(&cb);
+        ca.send_frame(&a);
+        cb.send_frame(&b);
+        step_trio(
+            &mut sv,
+            (ADDR_C, &qs, &mut cs),
+            (common::ADDR, &qa, &mut ca),
+            (common::ADDR_B, &qb, &mut cb),
+            now,
+        );
+    }
+    let d = dist_xy(cl_origin(&ca), cl_origin(&cb));
+    assert!(
+        d < 5.0,
+        "the pair separated by {d:.2} despite the spectator's slot-0 veto"
+    );
+}
+
+fn cl_origin(cl: &Client) -> [f32; 3] {
+    cl.snapshots().newest().unwrap().ps.origin(&PROTOCOL_V1)
 }

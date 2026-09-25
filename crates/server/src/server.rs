@@ -1748,6 +1748,38 @@ impl Server {
         }
     }
 
+    /// One slot's `StuckInClient` view: `None` for a free slot, `own_view`
+    /// false for a connected client with no sim yet, a spectator or an
+    /// intermission client.
+    fn stuck_view(c: &Option<Client>) -> Option<crate::game::stuck::StuckView> {
+        use crate::spectate::PmType;
+        let client = c.as_ref()?;
+        let Some(sim) = client.sim.as_ref() else {
+            return Some(crate::game::stuck::StuckView {
+                own_view: false,
+                playing: false,
+                health: 0,
+                contents: 0,
+                origin: glam::Vec3::ZERO,
+                mins: glam::Vec3::ZERO,
+                maxs: glam::Vec3::ZERO,
+                vel_xy: glam::Vec2::ZERO,
+                speed: 0.0,
+            });
+        };
+        Some(crate::game::stuck::StuckView {
+            own_view: sim.pm_type == PmType::Normal,
+            playing: sim.pm_type == PmType::Normal && !sim.dead,
+            health: sim.health,
+            contents: sim.contents,
+            origin: sim.ps.origin,
+            mins: sim.ps.mins(),
+            maxs: sim.ps.maxs(),
+            vel_xy: sim.ps.velocity.truncate(),
+            speed: vcod_common::pmove::SPEED_RUN,
+        })
+    }
+
     /// What one bot's body sees this tick, from its sim and the weapon
     /// table. `None` between levels, where the null cmd is all a bot can
     /// send.
@@ -2921,11 +2953,46 @@ impl Server {
                 self.sv_time_ms,
             );
             mirror_vitals(&mut self.clients, rt);
-            for c in self.clients.iter_mut() {
-                if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-                    sim.update_contents();
-                    sim.end_frame(self.sv_time_ms);
+            // Slot order, retail's arrival order stand-in: `update_contents`
+            // then, for a live sim, `StuckInClient` off a view rebuilt this
+            // slot so an earlier slot's fresh contents (BODY, or CORPSE if it
+            // was just marked stuck) are seen, before `end_frame` links it.
+            for slot in 0..self.clients.len() {
+                let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
+                    continue;
+                };
+                sim.update_contents();
+                let live =
+                    sim.pm_type == crate::spectate::PmType::Normal && !sim.dead && sim.health > 0;
+                if live {
+                    let views: Vec<Option<crate::game::stuck::StuckView>> =
+                        self.clients.iter().map(Self::stuck_view).collect();
+                    let rand = || (vcod_common::rng::xorshift(&mut self.rng) >> 33) as u32;
+                    if let Some(push) = crate::game::stuck::stuck_in_client(slot, &views, rand) {
+                        let me = self.clients[slot]
+                            .as_mut()
+                            .and_then(|c| c.sim.as_mut())
+                            .unwrap();
+                        me.ps.velocity.x = push.self_vel.x;
+                        me.ps.velocity.y = push.self_vel.y;
+                        me.ps.knockback_ms = 300.0;
+                        // The caller marks only self a corpse (0x411b8); the
+                        // partner marks itself on its own turn through the scan.
+                        me.contents = vcod_common::movetrace::CONTENTS_CORPSE;
+                        let other = self.clients[push.other]
+                            .as_mut()
+                            .and_then(|c| c.sim.as_mut())
+                            .unwrap();
+                        other.ps.velocity.x = push.other_vel.x;
+                        other.ps.velocity.y = push.other_vel.y;
+                        other.ps.knockback_ms = 300.0;
+                    }
                 }
+                self.clients[slot]
+                    .as_mut()
+                    .and_then(|c| c.sim.as_mut())
+                    .unwrap()
+                    .end_frame(self.sv_time_ms);
             }
             // `ClientEndFrame`'s aim trace and cursor hint, after the script
             // frame and the mirrors so they read the frame's final eye, aim

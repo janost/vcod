@@ -14,6 +14,7 @@ pub mod mover;
 pub mod pickup;
 pub mod script;
 pub mod spawn;
+pub mod stuck;
 pub mod temp_entity;
 pub mod trigger;
 pub mod turret;
