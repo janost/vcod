@@ -586,8 +586,11 @@ fn use_on_the_gun_lets_go_and_the_barrel_walks_home() {
 
 /// `turret_think_client`'s `sessionstate` test (turrets doc 8): a gunner
 /// killed on the gun lets go that frame, and the gun is free for its next
-/// life. The corpse is cloned off a released player, so it carries no
-/// mounted bits.
+/// life. The clone happens before the release, but the corpse's fields are
+/// re-read from the sim at snapshot build, after the release has run, so it
+/// carries no mounted bits; this pins ours where turrets doc 13 only infers
+/// that retail's clone runs first and a retail corpse may keep 0xC000, since
+/// no capture covers it.
 #[test]
 fn a_death_releases_the_turret() {
     let Some(mut rig) = rig_with(&[]) else {
@@ -968,11 +971,30 @@ const GAPS: &[(&str, &str)] = &[
     ("[strafe] eventSequence t=395", FOOTSTEP),
     ("[strafe] event t=39500: ours only (6, 0, ", FOOTSTEP),
     ("[strafe] event t=39600: retail only (6, 0, ", FOOTSTEP),
-    ("[strafe] event t=39800: ", SANDBAG),
+    ("[strafe] event t=39800: retail only (143, 139, ", SANDBAG),
+    ("[strafe] event t=39800: ours only (143, 142, ", SANDBAG),
     ("[strafe] origin t=398", SANDBAG),
     ("[strafe] origin t=399", SANDBAG),
     ("[strafe] origin t=40000", SANDBAG),
-    ("[refused] origin t=40", SANDBAG),
+    ("[refused] origin t=40050", SANDBAG),
+    ("[refused] origin t=40100", SANDBAG),
+    ("[refused] origin t=40150", SANDBAG),
+    ("[refused] origin t=40200", SANDBAG),
+    ("[refused] origin t=40250", SANDBAG),
+    ("[refused] origin t=40300", SANDBAG),
+    ("[refused] origin t=40350", SANDBAG),
+    ("[refused] origin t=40400", SANDBAG),
+    ("[refused] origin t=40450", SANDBAG),
+    ("[refused] origin t=40500", SANDBAG),
+    ("[refused] origin t=40550", SANDBAG),
+    ("[refused] origin t=40600", SANDBAG),
+    ("[refused] origin t=40650", SANDBAG),
+    ("[refused] origin t=40700", SANDBAG),
+    ("[refused] origin t=40750", SANDBAG),
+    ("[refused] origin t=40800", SANDBAG),
+    ("[refused] origin t=40850", SANDBAG),
+    ("[refused] origin t=40900", SANDBAG),
+    ("[refused] origin t=40950", SANDBAG),
     ("[refused] origin t=41000", SANDBAG),
     ("[refused] legs_anim t=40250", SANDBAG),
 ];
