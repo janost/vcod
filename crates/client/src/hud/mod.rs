@@ -21,7 +21,6 @@ use vcod_common::net::protocol::Protocol;
 use vcod_common::net::NetEvent;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::predict::Predicted;
-use vcod_common::pmove::weapon::PMF_ADS_WALK;
 use vcod_common::pmove::Stance;
 use vcod_common::weapon::WeaponDef;
 
@@ -278,7 +277,7 @@ impl Hud {
 fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
     let int = |name: &str| ps.field_i32(f.protocol, name);
     let mut eflags = int("eFlags");
-    let (weapon, ammo, ammoclip, aim_spread_scale, ads_frac, ads_held) = match f.predicted {
+    let (weapon, ammo, ammoclip, aim_spread_scale, ads_frac) = match f.predicted {
         Some(pred) => {
             let s = &pred.ps;
             eflags &= !(EF_CROUCH | EF_PRONE);
@@ -293,7 +292,6 @@ fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
                 &s.ammoclip,
                 s.aim_spread_scale,
                 s.weapon_pos_frac,
-                s.walking,
             )
         }
         None => (
@@ -302,7 +300,6 @@ fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
             &ps.arrays.ammoclip,
             ps.field_f32(f.protocol, "aimSpreadScale"),
             ps.field_f32(f.protocol, "fWeaponPosFrac"),
-            int("pm_flags") & PMF_ADS_WALK != 0,
         ),
     };
     PlayerView {
@@ -315,7 +312,6 @@ fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
         ammoclip,
         aim_spread_scale,
         ads_frac,
-        ads_held,
         view_yaw: f.view_yaw,
         eye: f.eye,
         fov: (fov_x_4_3(f.fov), f.fov),

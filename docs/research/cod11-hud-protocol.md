@@ -984,11 +984,35 @@ is an `fpatan` times the double at `0x300693c8`, which reads 114.59.
 INFERRED: that is `360 / pi`, so the fov is in degrees.
 
 INFERRED, same function: with the sight fraction `f` above 0, `t = f - (1 -
-X)` for `X` = `adsCrosshairInFrac` or `adsCrosshairOutFrac` (picked by a flag
-this reading did not name), and when `t > 0` the shrink is `1 - 0.5 * t / X`;
+X)` for `X` = `adsCrosshairInFrac` or `adsCrosshairOutFrac`, picked by the
+flag at `0x30209458`, and when `t > 0` the shrink is `1 - 0.5 * t / X`;
 the arms' travel and both images' sizes take it. At `f` 1 nothing is drawn.
 INFERRED: `adsAimPitch` drops the reticle by `480 / fov_y * adsAimPitch * t`
 in the same arm; stock MP files do not set it and vcod leaves it out.
+
+VERIFIED: `0x30036bd0` is the only writer of `0x30209458`, storing 1 at
+`0x30036c63` and 0 at `0x30036c75`; it reads the held weapon's `+0x2cc`,
+which the weapon field table names `aimDownSight` (`0x30075c4c`), the float
+`0x30207214`, and its own copy of that float at `0x30209454`. VERIFIED: the
+snapshot interpolation writes `0x30207214` from the float at `+0xc4` of the
+two snapshots it lerps between. INFERRED: that is `fWeaponPosFrac` (the
+playerstate's `+0xb8`) behind the snapshot's 12-byte header. INFERRED, off
+`0x30036bd0`'s branches: for a weapon with `aimDownSight`, when the fraction
+has left 0 or 1 since the last call, the flag becomes 1 if it moved up and 0
+if it moved down, and the copy is updated; otherwise the flag holds. So the
+in-fraction applies from the moment the sight starts rising until it next
+starts falling, prone and mid-reload included. INFERRED, off `0x30016760`'s
+test of the flag: 1 picks `adsCrosshairInFrac`.
+
+VERIFIED: `0x30016760` tests the dword at `0x302071dc` against `0xc000` at
+`0x300167b1`, compares
+`0x302074d4` with `0x3ff` at `0x300167c0`, and has a tail jump to
+`0x30016610` at `0x300167d6`. INFERRED: `0x302071dc` is `eFlags`, `+0x80`
+into the playerstate copy whose `+0xb8` is `0x30207214`, and `0xc000` its
+mounted-gun bits. INFERRED, off those branches: on a mounted gun
+the weapon reticle is not drawn; `0x30016610` draws the turret's reticle, or
+nothing when `0x302074d4` is `0x3ff`. vcod draws no crosshair on a mounted
+gun.
 
 INFERRED, off the four-arm loop: the arm table is top, right, bottom, left,
 direction `(0,-1) (1,0) (0,1) (-1,0)`, corner offset in arm sizes
@@ -1118,6 +1142,7 @@ turned by the view yaw less the slot's yaw, with alpha
 `min(1, 2 - 2 * age / time)`. So an icon below the crosshair is a hit from
 behind. VERIFIED: the centre is `0x300695e4` (320.0) and `0x300695e0`
 (240.0). The sense of the turn is inferred from that geometry, not measured.
+
 
 ---
 

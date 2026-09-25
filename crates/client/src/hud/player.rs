@@ -43,8 +43,6 @@ pub struct PlayerView<'a> {
     /// 0..255.
     pub aim_spread_scale: f32,
     pub ads_frac: f32,
-    /// `pm_flags` 0x80: the sight is going up rather than coming down.
-    pub ads_held: bool,
     /// World degrees.
     pub view_yaw: f32,
     pub eye: [f32; 3],
@@ -68,11 +66,15 @@ pub struct Context<'a> {
     pub entity_origin: &'a dyn Fn(i32) -> Option<[f32; 3]>,
 }
 
-/// The two pieces of state the native HUD keeps across frames.
+/// `eFlags` 0x4000 and 0x8000: riding a mounted gun.
+const EF_MOUNTED: i32 = 0xC000;
+
+/// The state the native HUD keeps across frames.
 #[derive(Default)]
 pub struct PlayerHud {
     pub damage: DamageIndicators,
     health_lag: HealthLag,
+    sight: SightDirection,
 }
 
 impl PlayerHud {
@@ -99,9 +101,13 @@ impl PlayerHud {
         let frac = health_fraction(p.health, p.max_health);
         let lag = self.health_lag.step(p.client_num, frac, now);
         health(frac, lag, &v, out);
+        let raising = self.sight.step(p.weapon, p.ads_frac);
         if let Some(def) = p.weapon {
             weapon_info(def, p, cx, &v, out);
-            crosshair(def, p, &v, out);
+            // Retail draws the turret's own reticle there, which vcod does not.
+            if p.eflags & EF_MOUNTED == 0 {
+                crosshair(def, p, raising, &v, out);
+            }
         }
         cursor_hint(p, cx, now, &v, out);
         self.damage.build(p.view_yaw, now, &v, out);
@@ -307,14 +313,43 @@ pub fn arm_offset(
     )
 }
 
+/// Which way the sight last started moving: set when `fWeaponPosFrac` leaves
+/// 0 or 1 upward, cleared when it leaves downward, held otherwise, and only
+/// tracked for a weapon with `aimDownSight`.
+#[derive(Default)]
+pub struct SightDirection {
+    prev: f32,
+    raising: bool,
+}
+
+impl SightDirection {
+    pub fn step(&mut self, weapon: Option<&WeaponDef>, frac: f32) -> bool {
+        if weapon.is_some_and(|d| d.aim_down_sight) {
+            let at_rest = |f: f32| f == 0.0 || f == 1.0;
+            if !at_rest(frac) && at_rest(self.prev) && frac != self.prev {
+                self.raising = self.prev <= frac;
+            }
+            self.prev = frac;
+        }
+        self.raising
+    }
+}
+
 /// The crosshair's quads, none at full sight or with no reticle. Its images
 /// are sized in window pixels; only the arms' travel scales with the screen.
-pub fn crosshair(def: &WeaponDef, p: &PlayerView, v: &Virtual, out: &mut Vec<HudQuad>) {
+/// `raising` picks `adsCrosshairInFrac` over `adsCrosshairOutFrac`.
+pub fn crosshair(
+    def: &WeaponDef,
+    p: &PlayerView,
+    raising: bool,
+    v: &Virtual,
+    out: &mut Vec<HudQuad>,
+) {
     if p.ads_frac >= 1.0 {
         return;
     }
     let mut shrink = 1.0;
-    let tail = if p.ads_held {
+    let tail = if raising {
         def.ads_crosshair_in_frac
     } else {
         def.ads_crosshair_out_frac
@@ -601,7 +636,6 @@ mod tests {
             ammoclip: ammo,
             aim_spread_scale: 0.0,
             ads_frac: 0.0,
-            ads_held: false,
             view_yaw: 0.0,
             eye: [0.0; 3],
             fov: (80.0, 64.0),
@@ -648,7 +682,7 @@ mod tests {
                 ..view(&ammo, &[])
             };
             let mut out = Vec::new();
-            crosshair(&def, &p, &v, &mut out);
+            crosshair(&def, &p, false, &v, &mut out);
             assert_eq!(out.len(), 4, "four arms, no centre image");
             let (cx, cy) = (960.0, 540.0);
             let top = &out[0].verts;
@@ -671,8 +705,85 @@ mod tests {
             ..view(&ammo, &[])
         };
         let mut out = Vec::new();
-        crosshair(&carbine(), &p, &Virtual::new((640.0, 480.0)), &mut out);
+        crosshair(
+            &carbine(),
+            &p,
+            false,
+            &Virtual::new((640.0, 480.0)),
+            &mut out,
+        );
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_prone_raise_shrinks_by_the_in_frac() {
+        let def = WeaponDef {
+            aim_down_sight: true,
+            ads_crosshair_in_frac: 0.5,
+            ads_crosshair_out_frac: 0.2,
+            ..carbine()
+        };
+        let mut sight = SightDirection::default();
+        // Prone never sets pm_flags 0x80; only the fraction leaving 0 counts.
+        assert!(!sight.step(Some(&def), 0.0));
+        assert!(sight.step(Some(&def), 0.6));
+        assert!(sight.step(Some(&def), 0.8), "held while the sight moves");
+        let ammo = [0i16; 64];
+        let p = PlayerView {
+            eflags: EF_PRONE,
+            ads_frac: 0.8,
+            ..view(&ammo, &[])
+        };
+        let v = Virtual::new((640.0, 480.0));
+        let side = |raising: bool| {
+            let mut out = Vec::new();
+            crosshair(&def, &p, raising, &v, &mut out);
+            out[0].verts[1][0] - out[0].verts[0][0]
+        };
+        // 0.3 into the in-frac's 0.5 tail shrinks it to 0.7; 0.8 is not yet
+        // inside the out-frac's 0.2 tail.
+        assert!(
+            close(side(true), def.reticle_side_size * 0.7),
+            "{}",
+            side(true)
+        );
+        assert!(close(side(false), def.reticle_side_size));
+
+        // Leaving 1 downward clears it; a weapon without a sight holds it.
+        assert!(sight.step(Some(&def), 1.0));
+        assert!(!sight.step(Some(&def), 0.9));
+        assert!(!sight.step(None, 0.0));
+        assert!(!sight.step(None, 0.5));
+    }
+
+    #[test]
+    fn a_mounted_gun_draws_no_weapon_crosshair() {
+        let font = test_font();
+        let ammo = [0i16; 64];
+        let cs = vec![String::new(); 2048];
+        let origin = |_: i32| None;
+        let cx = Context {
+            weapons: &[],
+            configstrings: &cs,
+            loc: &Localized::default(),
+            font: &font,
+            entity_origin: &origin,
+        };
+        let def = carbine();
+        let arms = |eflags: i32| {
+            let p = PlayerView {
+                eflags,
+                weapon: Some(&def),
+                ..view(&ammo, &[])
+            };
+            let mut out = Vec::new();
+            PlayerHud::default().build(&p, &cx, 0, (640.0, 480.0), &mut out);
+            out.iter()
+                .filter(|q| Some(&q.texture) == def.reticle_side.as_ref())
+                .count()
+        };
+        assert_eq!(arms(0), 4);
+        assert_eq!(arms(0xC000), 0);
     }
 
     #[test]
@@ -686,7 +797,13 @@ mod tests {
             ..view(&ammo, &[])
         };
         let mut out = Vec::new();
-        crosshair(&carbine(), &p, &Virtual::new((640.0, 480.0)), &mut out);
+        crosshair(
+            &carbine(),
+            &p,
+            false,
+            &Virtual::new((640.0, 480.0)),
+            &mut out,
+        );
         assert!(out.iter().all(|q| q.rgba[3] == CROSSHAIR_ALPHA_MIN));
     }
 
