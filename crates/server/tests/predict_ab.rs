@@ -314,9 +314,9 @@ fn predictor_matches_the_server_step() {
 }
 
 /// The event ring under the same script. Footsteps fire off `bobCycle`, which
-/// `ClientSim::to_wire` does not send and `from_wire` does not read, so a
-/// rebuilt predictor restarts the phase at 0 and lays its footsteps on other
-/// cmds than the server does.
+/// `from_wire` reads but `ClientSim::to_wire` does not send, so a predictor
+/// rebuilt from our wire restarts the phase at 0 and lays its footsteps on
+/// other cmds than the server does.
 #[test]
 #[ignore = "bobCycle is not on vcod-server's wire yet (ClientSim::to_wire); lands with the post-mounted-mg dedupe"]
 fn predictor_ring_matches_the_server_step() {

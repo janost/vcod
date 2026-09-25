@@ -32,8 +32,10 @@ combat effects.
   server's spectator camera; once spawned you play: move, jump, crouch, go
   prone, lean, fire, aim, reload, melee, use and switch weapons on retail's
   default binds, one usercmd per 8 ms as a 125 fps retail client builds
-  them. Movement is not predicted yet, so the view moves when the
-  server's snapshot does and lags your input by the round trip. It renders
+  them. Your own movement and view are predicted: every cmd the server has
+  not answered yet is replayed on the latest snapshot through the server's
+  own movement step, so the view responds at frame rate and a correction
+  eases out over 100 ms. It renders
   every player as an assembled soldier playing the server-driven animations.
   Kill feed, chat, scoreboard, sounds, tracers, impacts and muzzle flashes
   come from the same events the retail client reads. It downloads every pak
@@ -239,10 +241,11 @@ which retail binds to `toggle cl_run` and vcod uses for the sight.
 | Scroll | Next / previous weapon |
 | Tab | Scoreboard (held) |
 
-The position comes from the server and is not predicted yet. As a
-spectator, Space rises while held and C sinks until Space is pressed. A map
-change on the server shows a loading screen (and downloads missing paks the
-way the connect does) and continues on the new map.
+The position is predicted from the latest snapshot while you play; while
+spectating, dead, following or at the intermission it comes from the
+server. As a spectator, Space rises while held and C sinks until Space is
+pressed. A map change on the server shows a loading screen (and downloads
+missing paks the way the connect does) and continues on the new map.
 
 | Input | Action |
 |---|---|
@@ -309,6 +312,9 @@ These work in every mode:
   and still stop the player, but bullets pass them, as on a retail server.
 - Submodels (doors, exploding walls) collide by their brush hulls, but only
   as static geometry: no entity-driven movers, so there is nothing to ride.
+- Prediction runs on the map's collision only: players and movers do not
+  block the predicted player (the server does not clip players against each
+  other either).
 - Walk-mode bullet impacts resolve per surface through `fx/iw_impacts.csv`
   like spectate does, plus tracers. No penetration, grenades or projectiles.
 - Walk mode carries six weapons on keys 1-6 (colt, thompson, mp40, mp44,

@@ -989,6 +989,18 @@ leaves it at whatever `ClientSpawn` wrote, so a window measured against
 `sv_time` would strand a client whose handshake stamped that cmd ahead of the
 server.
 
+The vcod client predicts on the same rule. Each frame it rebuilds the sim
+playerstate from the newest snapshot and replays every cmd it sent with a
+`serverTime` past that snapshot's `commandTime` through `pmove::predict`,
+which is the per-cmd step the server runs, the chop and the arrears bound
+included (`crates/client/src/play/predict.rs`). A history that no longer
+reaches back to `commandTime` draws the snapshot unpredicted rather than
+replaying from the wrong base, and a correction a new snapshot brings is
+eased out over 100 ms, as `cg_errorDecay` does. The equivalence gate is
+`crates/server/tests/predict_ab.rs`: it steps the server's `ClientSim` and
+the predictor side by side through the wire codec and compares them field
+for field.
+
 ## Spectator
 
 On a DM server the client auto-spawns as `GAME_SPECTATOR`, no team command needed. Send usercmds (movement axes plus `ANGLE2SHORT` view angles) every frame; the server flies the spectator and the position comes back in the playerState. It is a true noclip: the position integrates straight off the velocity with no trace, as Q3's `PM_NoclipMove` does. **This is a divergence from the RTCW lineage**, which sends `PM_SPECTATOR` to `PM_FlyMove` and so collides through `PM_StepSlideMove` (`bg_pmove.c:3927`), with `PM_NOCLIP` a separate pm_type. VERIFIED live 2026-08-28 by A/B with a retail client: against a retail server a spectator clips through the wires strung between lamp posts, through decoration cars (the ones by the allied spawn on mp_carentan), and through walls and the ground; against a vcod server that still collided, every one of them blocked. `forward = 127` moved my playerstate origin about 636 units over 2 seconds and stopped when I stopped sending it, which is the cheapest end-to-end proof the move path works.
