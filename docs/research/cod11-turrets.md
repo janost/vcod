@@ -725,6 +725,15 @@ The triggers, INFERRED from the call sites:
 - deleting the turret: `G_FreeEntity` calls `G_FreeTurret` (0x66b6f), which
   releases any gunner and clears the record.
 
+VERIFIED: `ClientDisconnect` (0x42aac) calls `G_FreeEntity` on the player
+(0x42bfc). VERIFIED: `G_FreeEntity`'s loop over every entity compares
+`r.ownerNum` against the freed number (0x66aef), stores 0x3ff there
+(0x66af7), compares `s.eType` against 11 (0x66b01) and stores 0 to the busy
+byte at +0x172 (0x66b07). INFERRED: a gunner who disconnects leaves its gun
+unowned and free without any of the release body: no `rec+0x28` clear, so
+the loop sound plays out under `turret_think`'s unowned branch (section 9),
+and no stance event or teleport, since the player is gone.
+
 VERIFIED: `StopFollowing` (0x46b8c) clears `eFlags` 0xC000, `viewlocked`,
 `viewlocked_entNum` and `gunfx` on a spectator's playerstate. INFERRED: a
 spectator following a gunner inherits those fields through the follow copy
@@ -1163,8 +1172,32 @@ one the probe's cmds asked for.
 The mounted frame is `ScriptRuntime::turret_think_client` over
 `game::turret`'s `aim`, `fire_tick`, `loop_tick` and `muzzle`, run once per
 server frame for every gunner after the cursor hint, last in the server's
-`ClientEndFrame` pass. Body placement (section 7) and the release (section 8)
-are not in it yet.
+`ClientEndFrame` pass. Body placement (section 7) is not in it yet.
+
+The release (section 8) is `game::turret::release` on the record and
+`release_sim` on the gunner, reached from four places:
+
+- `turret_think_client` releases instead of running the frame when the busy
+  byte is not 1 or the gunner is dead or not playing. The use key's busy 2 is
+  set in the cmd's own item pass, ahead of the touch pass's `pm_type` gate,
+  since `Cmd_Activate_f` has none.
+- a spawn the script queued releases before the sim is reset, and keeps the
+  teleport's temp entities only for a spawn into play, the `sessionstate`
+  the script set ahead of it.
+- `GameHost::free_entity` releases the record of a manned gun and queues the
+  gunner's half, which lands in the same frame's `ClientEndFrame` pass.
+- a disconnect frees the record's owner and busy byte only.
+
+A level boundary builds the script runtime and every sim afresh, a
+`map_restart` included, so no mount survives one. The unowned think
+(section 9) runs for every gun nobody mans right after the entity thinks, so
+a released barrel starts home on the frame after its release, as 12.8
+measured. A corpse cloned off a gunner killed on the gun is re-read from the
+sim at the snapshot build, after the death frame's release, so it reaches the
+wire without the mounted bits. INFERRED: retail's clone copies `ps.eFlags`
+(`cod11-combat.md`, the `cloneplayer` table) before that frame's
+`ClientEndFrame` releases, so a retail corpse of a gunner killed by `kill`
+may carry 0xC000; no capture covers it.
 
 - INFERRED: the muzzle takes `tag_flash`'s distance from `tag_player` off the
   model's bind pose, where 0x51488 reads both tags off the animated model
