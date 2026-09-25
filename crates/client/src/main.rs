@@ -2019,7 +2019,7 @@ impl ApplicationHandler for App {
                                         for (seq, ev) in events.drain_seq(newest, p) {
                                             if own
                                                 && seq.is_some_and(|s| {
-                                                    !predicted_events.filter_snapshot(s)
+                                                    !predicted_events.filter_snapshot(s, ev.event)
                                                 })
                                             {
                                                 continue;

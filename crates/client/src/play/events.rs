@@ -1,27 +1,33 @@
 //! The playing client's own events, played off the prediction and not again
-//! off the snapshot that confirms them (retail cgame's predictable events).
+//! off the snapshot that confirms them: retail cgame's predictable events,
+//! deduped per sequence and event the way Q3's
+//! `CG_CheckChangedPredictableEvents` does.
 
 use vcod_common::net::events::GameEvent;
 use vcod_common::pmove::predict::Predicted;
 
 const EVENT_RING: i32 = 4;
+/// Q3's `MAX_PREDICTED_EVENTS`: how far back a played event is remembered.
+const REMEMBERED: usize = 8;
 
 /// `seq - from` on the wire's 8-bit ring, signed: negative is behind.
 fn ahead(seq: i32, from: i32) -> i32 {
     i32::from((seq - from) as u8 as i8)
 }
 
-/// The high-water mark of the playerstate ring's events already played:
-/// one past the newest sequence played, `None` while not predicting.
 #[derive(Default)]
 pub struct PredictedEvents {
+    /// One past the newest sequence played, `None` while not predicting.
     played_to: Option<i32>,
+    /// `(seq, event)` played, at `seq & 7`. `None` is unknown: the drain,
+    /// not the prediction, played it or nobody did.
+    played: [Option<(i32, i32)>; REMEMBERED],
 }
 
 impl PredictedEvents {
     /// Not predicting: the snapshot drain plays the whole ring.
     pub fn stop(&mut self) {
-        self.played_to = None;
+        *self = PredictedEvents::default();
     }
 
     /// Starts tracking at the snapshot drain's own mark, so what it has not
@@ -32,8 +38,17 @@ impl PredictedEvents {
         }
     }
 
-    /// `(seq, event, parm)` for the predicted ring's slots not played yet,
-    /// oldest first.
+    fn was_played(&self, seq: i32, event: i32) -> bool {
+        self.played[seq as usize % REMEMBERED] == Some((seq, event))
+    }
+
+    fn record(&mut self, seq: i32, event: i32) {
+        self.played[seq as usize % REMEMBERED] = Some((seq, event));
+    }
+
+    /// `(seq, event, parm)` to play off the predicted ring, oldest first:
+    /// slots past the mark, and slots under it whose event is not the one
+    /// played there (a replay on a new snapshot changed it).
     pub fn take_predicted(
         &mut self,
         pred_seq: i32,
@@ -41,38 +56,46 @@ impl PredictedEvents {
         parms: [i32; 4],
     ) -> Vec<(i32, i32, i32)> {
         let pred_seq = pred_seq & 0xff;
-        let Some(from) = self.played_to else {
+        let Some(mark) = self.played_to else {
             self.played_to = Some(pred_seq);
             return Vec::new();
         };
-        let n = ahead(pred_seq, from);
-        if n <= 0 {
-            if n < -EVENT_RING {
-                self.played_to = Some(pred_seq);
-            }
+        // A respawn restarts the ring at 0 (AGENTS.md, Gotchas).
+        if ahead(pred_seq, mark) < -EVENT_RING {
+            self.stop();
+            self.played_to = Some(pred_seq);
             return Vec::new();
         }
-        self.played_to = Some(pred_seq);
-        (pred_seq - n.min(EVENT_RING)..pred_seq)
-            .map(|s| {
-                let slot = (s & 3) as usize;
-                (s & 0xff, events[slot], parms[slot])
-            })
-            .collect()
+        let mut out = Vec::new();
+        for s in pred_seq - EVENT_RING..pred_seq {
+            let seq = s & 0xff;
+            let slot = (s & 3) as usize;
+            let event = events[slot];
+            let changed = self.played[seq as usize % REMEMBERED]
+                .is_some_and(|(at, e)| at == seq && e != event);
+            if ahead(seq, mark) >= 0 || changed {
+                self.record(seq, event);
+                out.push((seq, event, parms[slot]));
+            }
+        }
+        if ahead(pred_seq, mark) > 0 {
+            self.played_to = Some(pred_seq);
+        }
+        out
     }
 
-    /// Whether a snapshot's playerstate-ring event at `seq` still has to
-    /// play: false for a copy of one already played.
-    pub fn filter_snapshot(&mut self, seq: i32) -> bool {
+    /// Whether a snapshot's playerstate-ring `event` at `seq` still has to
+    /// play: false only for the copy of one played at that sequence.
+    pub fn filter_snapshot(&mut self, seq: i32, event: i32) -> bool {
         let seq = seq & 0xff;
-        let Some(from) = self.played_to else {
-            return true;
-        };
-        let d = ahead(seq, from);
-        if (-EVENT_RING..0).contains(&d) {
+        let below = self.played_to.is_some_and(|mark| ahead(seq, mark) < 0);
+        if below && self.was_played(seq, event) {
             return false;
         }
-        self.played_to = Some((seq + 1) & 0xff);
+        self.record(seq, event);
+        if self.played_to.is_some() && !below {
+            self.played_to = Some((seq + 1) & 0xff);
+        }
         true
     }
 }
@@ -97,10 +120,10 @@ pub fn game_event(pred: &Predicted, client_num: i32, event: i32, parm: i32) -> G
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fx::registry::{EV_FIRE_WEAPON as FIRE, EV_PAIN as PAIN, EV_RELOAD as RELOAD};
 
-    const FIRE: i32 = 159;
-    const RELOAD: i32 = 150;
-    const PAIN: i32 = 191;
+    const PICKUP: i32 = 20;
+    const FOOTSTEP: i32 = 1;
 
     fn tracking(at: i32) -> PredictedEvents {
         let mut e = PredictedEvents::default();
@@ -136,31 +159,43 @@ mod tests {
     #[test]
     fn snapshot_copy_is_skipped() {
         let mut e = tracking(0);
-        e.take_predicted(3, [FIRE, RELOAD, FIRE, 0], [0; 4]);
-        assert!((0..3).all(|s| !e.filter_snapshot(s)));
+        let ring = [FIRE, RELOAD, FIRE, 0];
+        e.take_predicted(3, ring, [0; 4]);
+        assert!((0..3).all(|s| !e.filter_snapshot(s, ring[s as usize])));
         // The drain's ring walk hands negative sequences across the wrap.
         let mut e = tracking(254);
         e.take_predicted(1, [FIRE; 4], [0; 4]);
-        assert!([-2, -1, 0].into_iter().all(|s| !e.filter_snapshot(s)));
+        assert!([-2, -1, 0].into_iter().all(|s| !e.filter_snapshot(s, FIRE)));
     }
 
-    /// A respawn restarts the ring at 0 (AGENTS.md, Gotchas): the mark goes
-    /// back with it, or the new life's events are all swallowed.
+    /// After a hitch the drain carries sequences more than a ring below the
+    /// mark: the ones the prediction played are skipped, the one it could not
+    /// reach plays, and nothing resets.
+    #[test]
+    fn a_hitch_skips_what_was_played_and_plays_the_rest() {
+        let mut e = tracking(10);
+        let ring = [FIRE, RELOAD, FIRE, RELOAD];
+        let played: Vec<_> = e.take_predicted(16, ring, [0; 4]);
+        assert_eq!(
+            played.iter().map(|p| p.0).collect::<Vec<_>>(),
+            [12, 13, 14, 15]
+        );
+        assert!(e.filter_snapshot(11, ring[3]), "never played");
+        for s in 12..=14 {
+            assert!(!e.filter_snapshot(s, ring[(s & 3) as usize]), "{s}");
+        }
+        assert!(e.take_predicted(16, ring, [0; 4]).is_empty());
+    }
+
+    /// A respawn restarts the ring at 0 (AGENTS.md, Gotchas): the prediction
+    /// resets the mark, or the new life's events are all swallowed.
     #[test]
     fn sequence_going_back_resets() {
         let mut e = tracking(0);
         e.take_predicted(40, [FIRE; 4], [0; 4]);
         assert!(e.take_predicted(1, [FIRE; 4], [0; 4]).is_empty());
+        assert!(e.filter_snapshot(0, FIRE), "the drain plays the new life's");
         assert_eq!(e.take_predicted(2, [FIRE; 4], [0; 4]), [(1, FIRE, 0)]);
-
-        let mut e = tracking(0);
-        e.take_predicted(40, [FIRE; 4], [0; 4]);
-        assert!(e.filter_snapshot(0));
-        assert!(e.filter_snapshot(1));
-        assert!(
-            e.take_predicted(2, [FIRE; 4], [0; 4]).is_empty(),
-            "the drain played those"
-        );
 
         // A misprediction a few behind is not a reset.
         let mut e = tracking(0);
@@ -175,11 +210,42 @@ mod tests {
     fn server_only_events_still_play() {
         let mut e = tracking(0);
         e.take_predicted(3, [FIRE, FIRE, FIRE, 0], [0; 4]);
-        assert!(e.filter_snapshot(3), "above the mark");
+        assert!(e.filter_snapshot(3, PAIN), "above the mark");
         assert!(e
             .take_predicted(4, [FIRE, FIRE, FIRE, PAIN], [0; 4])
             .is_empty());
-        assert_eq!(e.take_predicted(5, [FIRE, 0, 0, 0], [0; 4]), [(4, FIRE, 0)]);
+        assert_eq!(
+            e.take_predicted(5, [FIRE, FIRE, FIRE, PAIN], [0; 4]),
+            [(4, FIRE, 0)]
+        );
+    }
+
+    /// The server put a pickup where the prediction put a fire: the pickup
+    /// plays, off either path, once.
+    #[test]
+    fn a_server_event_under_a_predicted_one_plays() {
+        let mut e = tracking(0);
+        e.take_predicted(2, [FIRE, FIRE, 0, 0], [0; 4]);
+        assert!(e.filter_snapshot(1, PICKUP));
+        assert!(e.take_predicted(2, [FIRE, PICKUP, 0, 0], [0; 4]).is_empty());
+
+        // The replay on the new snapshot sees it first.
+        let mut e = tracking(0);
+        e.take_predicted(2, [FIRE, FIRE, 0, 0], [0; 4]);
+        assert_eq!(
+            e.take_predicted(2, [FIRE, PICKUP, 0, 0], [0; 4]),
+            [(1, PICKUP, 0)]
+        );
+        assert!(!e.filter_snapshot(1, PICKUP));
+    }
+
+    /// A predicted footstep the server never raised: its real fire at that
+    /// sequence plays.
+    #[test]
+    fn a_real_event_over_a_phantom_plays() {
+        let mut e = tracking(0);
+        e.take_predicted(1, [FOOTSTEP, 0, 0, 0], [0; 4]);
+        assert!(e.filter_snapshot(0, FIRE));
     }
 
     #[test]
@@ -187,14 +253,15 @@ mod tests {
         let mut e = tracking(0);
         e.take_predicted(3, [FIRE; 4], [0; 4]);
         e.stop();
-        assert!((0..3).all(|s| e.filter_snapshot(s)));
+        assert!((0..3).all(|s| e.filter_snapshot(s, FIRE)));
         // Back to predicting: from the drain's mark, not the stale one.
+        e.stop();
         e.start_after(Some(5));
         assert_eq!(
             e.take_predicted(7, [0, FIRE, RELOAD, 0], [0; 4]),
             [(5, FIRE, 0), (6, RELOAD, 0)]
         );
         e.start_after(Some(0));
-        assert!(!e.filter_snapshot(6), "a no-op while tracking");
+        assert!(!e.filter_snapshot(6, RELOAD), "a no-op while tracking");
     }
 }
