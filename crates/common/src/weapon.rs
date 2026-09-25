@@ -540,7 +540,9 @@ impl ViewAnimClock {
 /// weapAnim is not written by") falls to the idle reading for the current
 /// frac and clip state, rather than looping or freezing on its last frame.
 /// Ruling, since retail's cgame is not decompiled here: falling to idle is
-/// the reading that matches a weapAnim left at fire after the shot.
+/// the reading that matches a weapAnim left at fire after the shot. The one
+/// exception is `HoldFire`, the grenade held at the pin, which holds its last
+/// frame until `weapAnim` changes.
 pub fn resolve(
     def: &WeaponDef,
     anim: WeaponAnim,
@@ -548,7 +550,7 @@ pub fn resolve(
     clip_len_ms: f64,
     idle_for_state: WeaponAnim,
 ) -> (WeaponAnim, f64) {
-    if !anim.is_idle_kind() && ms_in >= clip_len_ms {
+    if !anim.is_idle_kind() && anim != WeaponAnim::HoldFire && ms_in >= clip_len_ms {
         return (idle_for_state, ms_in - clip_len_ms);
     }
     if !def.anim_keys.contains(&anim) {
@@ -1614,6 +1616,21 @@ mod tests {
         // Idle kinds never time out, however long ms_in runs.
         let (anim, _) = resolve(&def, WeaponAnim::Idle, 1e9, 400.0, WeaponAnim::Idle);
         assert_eq!(anim, WeaponAnim::Idle);
+    }
+
+    #[test]
+    fn hold_fire_holds_past_its_clip() {
+        let def = full_def();
+        assert_eq!(
+            resolve(
+                &def,
+                WeaponAnim::HoldFire,
+                10_000.0,
+                600.0,
+                WeaponAnim::Idle
+            ),
+            (WeaponAnim::HoldFire, 10_000.0)
+        );
     }
 
     #[test]

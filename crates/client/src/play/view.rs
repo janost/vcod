@@ -303,6 +303,16 @@ mod tests {
         assert_eq!(clip_time(WeaponAnim::Idle, 2500.0, 0.0, secs), (2.5, true));
     }
 
+    /// `resolve` keeps `HoldFire` past its clip; played once, it clamps to
+    /// the last frame rather than looping.
+    #[test]
+    fn held_grenade_holds_its_last_frame() {
+        assert_eq!(
+            clip_time(WeaponAnim::HoldFire, 10_000.0, 0.0, 0.6),
+            (10.0, false)
+        );
+    }
+
     /// The real carbine with the US hands, driven through a hip shot and a
     /// raised sight: every frame poses, and the sight holds still once up.
     #[test]
