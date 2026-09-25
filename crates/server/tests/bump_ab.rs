@@ -497,13 +497,6 @@ fn report(rows: &[Row], spot: Vec3) {
     }
 }
 
-/// The slope gate's rebased bounds (`playerstate_slope_ab.rs`).
-const P95_TOLERANCE_Z: f32 = 0.02;
-const P95_TOLERANCE_XY: f32 = 0.05;
-const P99_TOLERANCE_Z: f32 = 0.05;
-const P99_TOLERANCE_XY: f32 = 0.6;
-const MAX_TOLERANCE_Z: f32 = 0.5;
-
 /// Loads the map the way the slope gate does, with `dm`'s gameobject rule.
 fn load() -> Option<(CollisionWorld, vcod_server::weapons::WeaponTable)> {
     let fs = vcod_common::testing::game_fs()?;
@@ -572,33 +565,48 @@ fn captured_solid_values_are_the_three_stance_packs_at_a_fixed_spot() {
 }
 
 /// Rebased rows the mover misses for reasons outside player clipping: the
-/// phase, the snapshot `commandTime` and which of the two pmove jump
-/// differences the walker's jump exposed (docs/research/cod11-player-clip.md,
-/// "What the bump capture measured"). Kept out of the stats and checked to
-/// still miss, so an entry that starts matching fails.
-const GAPS: &[(&str, i32, &str)] = &[
-    ("stand/jump", 39083, TAKEOFF),
-    ("stand/jump", 39682, REJUMP),
-    ("stand/land", 39732, REJUMP),
-    ("crouch/jump", 70232, TAKEOFF),
-    ("crouch/land", 70882, REJUMP),
-    ("prone/jump", 97033, TAKEOFF),
-    ("prone/land", 97666, REJUMP),
+/// phase, the snapshot `commandTime`, the most the row may miss by (the
+/// larger of |dz| and dxy, a ground disagreement aside) and which of the
+/// three pmove jump differences the walker's jump exposed
+/// (docs/research/cod11-player-clip.md, "What the bump capture measured").
+/// Kept out of the per-row bound and checked to still miss, so an entry that
+/// starts matching fails, and to miss by no more than its bound.
+const GAPS: &[(&str, i32, f32, &str)] = &[
+    ("stand/jump", 39083, 0.6, TAKEOFF),
+    ("stand/jump", 39483, 0.12, AIR_STEP),
+    ("stand/jump", 39533, 0.12, AIR_STEP),
+    ("stand/jump", 39682, 4.0, REJUMP),
+    ("stand/land", 39732, 11.0, REJUMP),
+    ("crouch/jump", 70232, 0.6, TAKEOFF),
+    ("crouch/land", 70882, 11.0, REJUMP),
+    ("prone/jump", 97033, 0.6, TAKEOFF),
+    ("prone/land", 97666, 8.0, REJUMP),
 ];
 /// Retail's forward jump leaves at 249.8 (`PM_Jump`'s `sqrt(g * 78)`), ours
-/// at 233.2.
+/// at 233.2: 0.54-0.55 low on the first row.
 const TAKEOFF: &str = "takeoff speed";
 /// Ours jumps again off the landing with up still held; retail's held-jump
-/// latch (`pm_flags` 0x8) refuses.
+/// latch (`pm_flags` 0x8) refuses: 3.8-10.7 high.
 const REJUMP: &str = "held-jump latch";
+/// Ours steps a blocked airborne move up and over the target's shoulder and
+/// comes down 30.01 from it; retail steps only under `fJumpOriginZ` and holds
+/// the side at 30.125: 0.09-0.10 in xy.
+const AIR_STEP: &str = "airborne step";
+
+/// The most a row outside `GAPS` may differ from retail, per axis.
+const ROW_TOLERANCE: f32 = 0.01;
 
 fn is_gap(r: &Row) -> bool {
     GAPS.iter()
-        .any(|(p, ct, _)| *p == r.phase && *ct == r.retail.ct)
+        .any(|(p, ct, ..)| *p == r.phase && *ct == r.retail.ct)
+}
+
+fn size(d: Delta) -> f32 {
+    d.dz.abs().max(d.dxy)
 }
 
 fn misses(d: Delta) -> bool {
-    d.dz.abs() > MAX_TOLERANCE_Z || d.dxy > P99_TOLERANCE_XY || d.ground_disagrees
+    size(d) > ROW_TOLERANCE || d.ground_disagrees
 }
 
 /// The walker's centre distance from the target's, on the floor plane.
@@ -650,28 +658,19 @@ fn the_mover_bumps_where_retail_does() {
             "{glance}: closest retail {retail:.4} ours {ours:.4}"
         );
     }
-    for (phase, ct, why) in GAPS {
+    for (phase, ct, max, why) in GAPS {
         let row = rows
             .iter()
             .find(|r| r.phase == *phase && r.retail.ct == *ct)
             .unwrap_or_else(|| panic!("GAPS names {phase} ct={ct}, which the fixture lacks"));
         assert!(
-            misses(row.rebased),
-            "GAPS entry {phase} ct={ct} ({why}) now matches: {:?}",
+            misses(row.rebased) && size(row.rebased) <= *max,
+            "GAPS entry {phase} ct={ct} ({why}, at most {max}) reads {:?}",
             row.rebased
         );
     }
     let kept = || rows.iter().filter(|r| !is_gap(r));
-    let rebased = stats(kept(), |r| r.rebased);
-    println!("rebased outside GAPS {rebased}");
-    assert!(
-        rebased.p95_dz <= P95_TOLERANCE_Z && rebased.p95_dxy <= P95_TOLERANCE_XY,
-        "rebased p95 past the tolerance: {rebased}"
-    );
-    assert!(
-        rebased.p99_dz <= P99_TOLERANCE_Z && rebased.p99_dxy <= P99_TOLERANCE_XY,
-        "rebased p99 past the tolerance: {rebased}"
-    );
+    println!("rebased outside GAPS {}", stats(kept(), |r| r.rebased));
     if let Some(r) = kept().find(|r| misses(r.rebased)) {
         panic!(
             "{} ct={} misses outside GAPS: {:?}",

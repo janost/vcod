@@ -1336,11 +1336,13 @@ impl Server {
     /// frame. Test-facing: the stuck gate overlaps two players the way
     /// `probe_bump.gsc` did on retail.
     pub fn test_script_set_origin(&mut self, slot: usize, origin: [f32; 3]) {
-        if let Some(rt) = self.script.as_mut() {
-            rt.host
-                .client_sim_ops
-                .push((slot, crate::game::host::SimOp::SetOrigin { origin }));
-        }
+        let rt = self
+            .script
+            .as_mut()
+            .expect("a script runtime to queue the setorigin on");
+        rt.host
+            .client_sim_ops
+            .push((slot, crate::game::host::SimOp::SetOrigin { origin }));
     }
 
     /// Moves the entity numbered `num` as script would. Test-facing, like

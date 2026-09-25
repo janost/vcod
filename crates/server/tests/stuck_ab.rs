@@ -607,6 +607,9 @@ fn ours_does_not_push_beside_a_spectator_in_slot_0() {
         eprintln!("COD_DIR unset or has no main/: skipping");
         return;
     };
+    let first = frames[0];
+    let overlap = (first.walker.origin - first.target.unwrap().origin).truncate();
+    assert!(overlap.length() < 1.0, "the setorigin missed: {first:?}");
     for f in &frames {
         let t = f.target.unwrap();
         assert!(
