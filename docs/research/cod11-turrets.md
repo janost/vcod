@@ -1159,3 +1159,36 @@ The release view: 12.7 cannot separate the angle the release sets from the
 one the probe's cmds asked for.
 
 ## 13. As implemented
+
+The mounted frame is `ScriptRuntime::turret_think_client` over
+`game::turret`'s `aim`, `fire_tick`, `loop_tick` and `muzzle`, run once per
+server frame for every gunner after the cursor hint, last in the server's
+`ClientEndFrame` pass. Body placement (section 7) and the release (section 8)
+are not in it yet.
+
+- INFERRED: the muzzle takes `tag_flash`'s distance from `tag_player` off the
+  model's bind pose, where 0x51488 reads both tags off the animated model
+  (section 6.3).
+- The round is traced and its hits handed to the damage callback in the frame
+  it was fired (12.5), after that frame's script frame. What the callback
+  leaves (sim ops, weapon ops, health) is applied a second time there. A
+  victim numbered above its gunner takes its damage feedback that frame and
+  one numbered below on the next, which is 12.5's INFERRED reading of the
+  `ClientEndFrame` order. The victim's `EV_DEATH` and entity state reach the
+  wire on the round's own snapshot either way, since entity states here are
+  built at snapshot time rather than copied at each client's end frame.
+- The damage callback is handed the gunner's carried weapon and the killing
+  arm of `finishPlayerDamage` swaps in the gun's (section 11, 12.6).
+- INFERRED: the callback's `eInflictor` is the gunner, not the gun. 12.6's
+  `D;` line names `m1carbine_mp`, `cod11-combat.md` 4.2 step 5 passes
+  `inflictor->s.weapon` on, and the gun's `s.weapon` is
+  `mg42_bipod_stand_mp` (section 11), so the inflictor `G_Damage` saw was
+  not the gun, whatever `Bullet_Fire` was handed at 0x522f1.
+- A round stops at the first player it hits. The pass-through 12.5 shows (a
+  second impact on the world behind the target) is not modelled, the same as
+  for a carried rifle's round.
+- The hit-location product is taken wider than a float before the
+  truncation, as the x87 takes it: `60 * 0.9` reads 53 as in 12.6, where a float
+  product rounds to 54 first.
+- A gun with no `stopFireSound` keeps its loop on through the frame the
+  timer runs out, as section 6.4's `je` past the clear reads.

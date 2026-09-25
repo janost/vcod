@@ -547,6 +547,9 @@ engineering setup works.
   frame's final eye and aim with `pm_type` and `on_ground` mirrored again
   beside it, whose fire wakes its waiters at the next tick's script frame,
   and beside it the cursor hint for the item the use key would pick now,
+  then each gunner's `turret_think_client` (aim, fire, loop sound), whose
+  rounds are traced and handed to the damage callback right there, with the
+  sim ops, weapon ops and health that callback leaves applied a second time,
   then the console lines, configstring changes, server commands and
   intermission scoreboard the script queued go out, and last the entities are
   built once and culled and written per client. Origin, `pm_type`,
