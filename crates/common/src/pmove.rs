@@ -931,16 +931,18 @@ fn ladder_step_event(
     });
 }
 
-/// Landing sound from `PM_CrashLand`'s damage-free ladder (@0x30141): nothing
-/// at or under 4, a walk-step to 8, a run-step to 12, a land event past that.
+/// Landing sound from `PM_CrashLand`'s damage-free ladder (@0x30130): the
+/// fall height `v^2 / 2g` of the landing speed, nothing at or under 4 units,
+/// a walk-step to 8, a run-step to 12, a land event past that
+/// (docs/research/cod11-sound-system.md, "Landing").
 fn crash_land(ps: &mut PlayerState, events: &mut Vec<PmEvent>) {
-    let impact = std::mem::take(&mut ps.air_speed_peak);
-    if let Some(ev) = landing_event(impact, ps) {
+    let speed = std::mem::take(&mut ps.air_speed_peak);
+    if let Some(ev) = landing_event(speed * speed / (2.0 * GRAVITY), ps) {
         events.push(ev);
     }
 }
 
-fn landing_event(impact: f32, ps: &PlayerState) -> Option<PmEvent> {
+fn landing_event(height: f32, ps: &PlayerState) -> Option<PmEvent> {
     if ps.water_level >= 3 {
         return None;
     }
@@ -952,11 +954,11 @@ fn landing_event(impact: f32, ps: &PlayerState) -> Option<PmEvent> {
     if mat == 0 {
         return None;
     }
-    let id = if impact >= 12.0 {
+    let id = if height >= 12.0 {
         EV_LANDING_BASE + mat
-    } else if impact >= 8.0 {
+    } else if height >= 8.0 {
         EV_FOOTSTEP_RUN_BASE + mat
-    } else if impact > 4.0 {
+    } else if height > 4.0 {
         EV_FOOTSTEP_WALK_BASE + mat
     } else {
         return None;
@@ -2354,11 +2356,28 @@ mod tests {
         assert_eq!(ids, vec![EV_LANDING_BASE + 6], "a long fall lands once");
     }
 
+    /// The ladder reads the fall height, not the speed: the one-unit drop a
+    /// turret release ends in lands in silence, as the retail turret capture
+    /// reads it (`crates/server/tests/turret_ab.rs`).
     #[test]
-    fn landing_sound_bands_follow_impact() {
+    fn a_one_unit_drop_lands_silently() {
+        let w = dirt_flat();
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 1.0), 0.0);
+        ps.on_ground = false;
+        let idle = PmInput::default();
+        let mut events = Vec::new();
+        for _ in 0..20 {
+            events.extend(pmove(&mut ps, &idle, &w, 8.0 / 1000.0, &[]));
+        }
+        assert!(ps.on_ground);
+        assert!(events.is_empty(), "{events:?}");
+    }
+
+    #[test]
+    fn landing_sound_bands_follow_fall_height() {
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         ps.ground_surface_flags = 6 << 20;
-        let band = |impact: f32| landing_event(impact, &ps).map(|e| e.event);
+        let band = |height: f32| landing_event(height, &ps).map(|e| e.event);
         assert_eq!(band(4.0), None);
         assert_eq!(band(4.5), Some(EV_FOOTSTEP_WALK_BASE + 6));
         assert_eq!(band(11.5), Some(EV_FOOTSTEP_RUN_BASE + 6));
