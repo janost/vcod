@@ -1288,6 +1288,12 @@ impl ClientSim {
             };
             set("viewHeightTarget", target as i32);
             set("groundEntityNum", self.ps.ground_entity_num() as i32);
+            // The footstep phase; a spectator never ticks it. The predictor
+            // rebuilds from this on every wire round-trip
+            // (`vcod_common::pmove::predict::from_wire`), so a stale 0 here
+            // restarts the phase and shifts its footstep events onto other
+            // cmds than the ones that raised them server-side.
+            set("bobCycle", i32::from(self.ps.bob_cycle));
             // All three come out of one `ClientEndFrame` block a spectator
             // never reaches. Its guards are `sessionstate` playing,
             // `ps.clientNum == self` and, for the hint, `health > 0`;
@@ -2146,7 +2152,22 @@ mod tests {
         assert_eq!(w.field_i32(p, "mins[0]"), (-15f32).to_bits() as i32);
         assert_eq!(w.field_f32(p, "maxs[2]"), 70.0);
         assert_eq!(w.field_i32(p, "gravity"), 0);
+        // A spectator never ticks the footstep phase; the player half is
+        // `bob_cycle_reaches_the_wire_for_a_player`.
         assert_eq!(w.field_i32(p, "bobCycle"), 0);
+    }
+
+    /// `from_wire` rebuilds the predictor's footstep phase from this field
+    /// (`vcod_common::pmove::predict::from_wire`), so a value `step` left on
+    /// `ps.bob_cycle` has to survive the round trip unchanged.
+    #[test]
+    fn bob_cycle_reaches_the_wire_for_a_player() {
+        let p = &PROTOCOL_V1;
+        let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 64.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.bob_cycle = 173;
+        let w = sim.to_wire(p, 0, 0);
+        assert_eq!(w.field_i32(p, "bobCycle"), i32::from(sim.ps.bob_cycle));
     }
 
     /// `step` reads cmd angles in the wire's positive-down convention and
