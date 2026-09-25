@@ -239,7 +239,10 @@ impl Hud {
         // The scoreboard reuses the parsed gametype; its last `b` reply
         // overrides CS 5/6 (status.rs).
         let status = status::read_status(f.configstrings, f.server_time, self.scoreboard.totals());
-        status::build(&status, &self.font_header, f.screen_w, &mut out);
+        // vcod's own header, which retail does not draw: spectators only.
+        if !f.local_player {
+            status::build(&status, &self.font_header, f.screen_w, &mut out);
+        }
         if self.scoreboard.visible {
             let names = |client: u32| -> Option<(String, i32)> {
                 let cs = f.clients.get(&client)?;
@@ -404,6 +407,7 @@ mod tests {
             (5, 200.0, 0x10)
         );
         assert_eq!(snap.cursor_hint_string, -1, "retail's -1 arrives as 255");
+        assert_eq!(snap.fov, (fov_x_4_3(75.0), 75.0));
 
         let own = player_view(&ps, &frame(&ps, Some(&pred), &fs, &loc, &clients));
         assert_eq!(
@@ -445,6 +449,11 @@ mod tests {
         let own = drawn(&mut hud, true);
         assert!(own.iter().any(|t| t == "white"));
         assert!(own.iter().any(|t| t.contains("health_back")));
+
+        // The status header is the only header-font text in these frames.
+        let header = hud.font_header.page.clone();
+        assert!(following.contains(&header), "header for a spectator");
+        assert!(!own.contains(&header), "no header while playing");
     }
 
     #[test]

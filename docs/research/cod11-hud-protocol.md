@@ -929,8 +929,11 @@ VERIFIED, the defaults in the cgame's cvar table: `cg_hudDamageIconTime` 2000,
 `cg_hudCompassMaxRange` 1024, `cg_hudCompassMinRange` 0,
 `cg_hudCompassMinRadius` 0, `cg_hudObjectiveMaxHeight` 70,
 `cg_hudObjectiveMinHeight` -70, `cg_hudObjectiveMinAlpha` 1,
-`cg_cursorHints` 3, `cg_crosshairAlpha` 1.0 and `cg_crosshairDynamic` 0
-(the entries sit at `0x30074aa4`..`0x30074c54`, name then default string).
+`cg_cursorHints` 3, `cg_crosshairAlpha` 1.0, `cg_crosshairAlphaMin` 0.7 and
+`cg_crosshairDynamic` 0 (the entries sit at `0x30074aa4`..`0x30074c54`, name
+then default string; each is a `{vmCvar_t *, name, default, flags}` record,
+so `cg_crosshairAlpha`'s value is at `0x301db788` and
+`cg_crosshairAlphaMin`'s at `0x301df208`).
 vcod uses these values as constants.
 
 VERIFIED, the weapon-file fields the HUD reads, from the cgame's weapon field
@@ -971,6 +974,22 @@ left ones turned 90 degrees. The arm and centre sizes are passed to the draw
 call without the screen scale the travel gets, so they are window pixels.
 Which way the 90-degree turn goes is not measured.
 
+VERIFIED: `0x30016760` multiplies
+`1 - [0x30207534] * 0x30069420` (1/255) by the return of `0x30015fe0` and by
+`cg_crosshairAlpha` (`0x301db788`), and compares the product with
+`cg_crosshairAlphaMin` (`0x301df208`) at `0x30016bb3`. VERIFIED: the snapshot
+interpolation writes `0x30207534` from the float at `+0x3e4` of the two
+snapshots it lerps between. INFERRED: that is the playerstate's
+`aimSpreadScale` (`+0x3d8`, `docs/protocol-1.1.md`) behind the snapshot's
+12-byte header, lerped. INFERRED, off the compare: the arms' alpha is
+`max((1 - aimSpreadScale / 255) * cg_crosshairAlpha, cg_crosshairAlphaMin)`,
+so at the defaults they fade from 1 to 0.7, reached at `aimSpreadScale` 76.5;
+the centre image takes `cg_crosshairAlpha` times the same return, unfloored.
+INFERRED: `0x30015fe0` returns 1 whenever its first call (`0x30015f20`)
+returns 0, and its other branch draws the sight overlay; vcod takes the
+return as 1 and does not draw the overlay. vcod reads `aimSpreadScale` off
+the prediction or the newest snapshot, not lerped.
+
 ### Health
 
 INFERRED, off `0x300248c0`: the share is `stats[0] / stats[2]` clamped to
@@ -1006,6 +1025,10 @@ after a change. vcod reads the stance from `eFlags` (`0x40` prone, `0x20`
 crouch) and leaves the flash out.
 
 ### Compass
+
+VERIFIED: `hud.menu` lists the compass items back (84), highlight (85),
+face (84), needle (85), friendlies, objective pointers (86). INFERRED: a menu
+draws its items in file order, so the highlight is under the face.
 
 INFERRED, off `0x30024800` and `0x30019bd0`: the back and face turn by the view
 yaw less `northyaw` (configstring 11), smoothed by a spring; the highlight and

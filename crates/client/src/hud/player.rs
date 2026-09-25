@@ -6,6 +6,7 @@
 use super::font::{self, Font};
 use super::hudelem::{self, Virtual, CS_SHADERS};
 use super::HudQuad;
+use crate::play::input::{EF_CROUCH, EF_PRONE};
 use vcod_common::localize::Localized;
 use vcod_common::net::msg::Objective;
 use vcod_common::weapon::WeaponDef;
@@ -15,8 +16,9 @@ pub const CS_HINT_STRINGS: usize = 1212;
 /// `northyaw`, the compass's north in world yaw degrees.
 pub const CS_NORTHYAW: usize = 11;
 
-const EF_CROUCH: i32 = 0x20;
-const EF_PRONE: i32 = 0x40;
+/// `cg_crosshairAlpha` and `cg_crosshairAlphaMin` at their cvar-table defaults.
+const CROSSHAIR_ALPHA: f32 = 1.0;
+const CROSSHAIR_ALPHA_MIN: f32 = 0.7;
 const WHITE: [f32; 4] = [1.0; 4];
 
 /// The playerstate's damage-feedback fields; they never clear, so only a
@@ -324,22 +326,24 @@ pub fn crosshair(def: &WeaponDef, p: &PlayerView, v: &Virtual, out: &mut Vec<Hud
         }
     }
     let [cx, cy] = v.point(320.0, 240.0);
-    let px_quad = |x: f32, y: f32, s: f32, uvs: [[f32; 2]; 4], texture: &str| HudQuad {
+    let px_quad = |x: f32, y: f32, s: f32, uvs: [[f32; 2]; 4], rgba, texture: &str| HudQuad {
         verts: [[x, y], [x + s, y], [x + s, y + s], [x, y + s]],
         uvs,
-        rgba: WHITE,
+        rgba,
         texture: texture.to_string(),
     };
 
     if let Some(center) = &def.reticle_center {
         let s = def.reticle_center_size * shrink;
         let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-        out.push(px_quad(cx - s / 2.0, cy - s / 2.0, s, uvs, center));
+        let rgba = [1.0, 1.0, 1.0, CROSSHAIR_ALPHA];
+        out.push(px_quad(cx - s / 2.0, cy - s / 2.0, s, uvs, rgba, center));
     }
     let Some(side) = &def.reticle_side else {
         return;
     };
     let (ox, oy) = arm_offset(def, p.eflags, p.aim_spread_scale, shrink, p.fov);
+    let arm_rgba = [1.0, 1.0, 1.0, arm_alpha(p.aim_spread_scale)];
     let s = def.reticle_side_size * shrink;
     // Top, right, bottom, left: direction, the arm's corner in sizes, and a
     // one-pixel nudge on the top and left arms.
@@ -358,8 +362,13 @@ pub fn crosshair(def: &WeaponDef, p: &PlayerView, v: &Virtual, out: &mut Vec<Hud
         } else {
             [[0.0, t1], [0.0, t0], [1.0, t0], [1.0, t1]]
         };
-        out.push(px_quad(x, y, s, uvs, side));
+        out.push(px_quad(x, y, s, uvs, arm_rgba, side));
     }
+}
+
+/// The arms fade as the spread opens, down to `cg_crosshairAlphaMin`.
+pub fn arm_alpha(aim_spread_scale: f32) -> f32 {
+    ((1.0 - aim_spread_scale / 255.0) * CROSSHAIR_ALPHA).max(CROSSHAIR_ALPHA_MIN)
 }
 
 /// The compass rect's centre, where objective bearings are measured from.
@@ -370,10 +379,12 @@ fn compass(p: &PlayerView, cx: &Context, north_yaw: f32, v: &Virtual, out: &mut 
     let half = size / 2.0;
     let corners = [[-half, -half], [half, -half], [half, half], [-half, half]];
     let turn = p.view_yaw - north_yaw;
-    for material in ["gfx/hud/hud@compassback.tga", "gfx/hud/hud@compassface.tga"] {
-        out.push(v.rotated(COMPASS_CENTRE, corners, turn, WHITE, material));
-    }
+    // hud.menu's item order: back, highlight, face, needle.
+    let back = "gfx/hud/hud@compassback.tga";
+    out.push(v.rotated(COMPASS_CENTRE, corners, turn, WHITE, back));
     out.push(v.quad(x, y, size, size, WHITE, "gfx/hud/hud@compasshighlight.tga"));
+    let face = "gfx/hud/hud@compassface.tga";
+    out.push(v.rotated(COMPASS_CENTRE, corners, turn, WHITE, face));
     out.push(v.quad(
         x + 60.0,
         y + 50.0,
@@ -662,6 +673,49 @@ mod tests {
         let mut out = Vec::new();
         crosshair(&carbine(), &p, &Virtual::new((640.0, 480.0)), &mut out);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn crosshair_arms_fade_with_the_spread_down_to_the_floor() {
+        assert_eq!(arm_alpha(0.0), 1.0);
+        assert!(close(arm_alpha(51.0), 0.8));
+        assert_eq!(arm_alpha(255.0), CROSSHAIR_ALPHA_MIN);
+        let ammo = [0i16; 64];
+        let p = PlayerView {
+            aim_spread_scale: 255.0,
+            ..view(&ammo, &[])
+        };
+        let mut out = Vec::new();
+        crosshair(&carbine(), &p, &Virtual::new((640.0, 480.0)), &mut out);
+        assert!(out.iter().all(|q| q.rgba[3] == CROSSHAIR_ALPHA_MIN));
+    }
+
+    #[test]
+    fn compass_draws_in_the_menu_item_order() {
+        let font = test_font();
+        let ammo = [0i16; 64];
+        let cs = vec![String::new(); 2048];
+        let origin = |_: i32| None;
+        let cx = Context {
+            weapons: &[],
+            configstrings: &cs,
+            loc: &Localized::default(),
+            font: &font,
+            entity_origin: &origin,
+        };
+        let mut out = Vec::new();
+        let v = Virtual::new((640.0, 480.0));
+        compass(&view(&ammo, &[]), &cx, 0.0, &v, &mut out);
+        let order: Vec<&str> = out.iter().map(|q| q.texture.as_str()).collect();
+        assert_eq!(
+            order,
+            [
+                "gfx/hud/hud@compassback.tga",
+                "gfx/hud/hud@compasshighlight.tga",
+                "gfx/hud/hud@compassface.tga",
+                "gfx/hud/hud@compass_arrow.tga",
+            ]
+        );
     }
 
     #[test]
