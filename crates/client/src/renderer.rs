@@ -2508,10 +2508,19 @@ impl Renderer {
                     &self.hud_pass.texture_layout,
                     &self.hud_pass.sampler,
                     fs,
+                    self.shaders.image_map(),
                     &quad.texture,
                 );
                 self.hud_pass.textures.insert(quad.texture.clone(), bg);
             }
+
+            // `black` shares `white`'s 1x1 texture; force the rgb here so it
+            // draws black regardless of the element colour, alpha untouched.
+            let rgba = if quad.texture == "black" {
+                [0.0, 0.0, 0.0, quad.rgba[3]]
+            } else {
+                quad.rgba
+            };
 
             for i in 0..4 {
                 let [px, py] = quad.verts[i];
@@ -2519,7 +2528,7 @@ impl Renderer {
                     // pixel coords, origin top-left -> clip space
                     pos: [px / w * 2.0 - 1.0, 1.0 - py / h * 2.0],
                     uv: quad.uvs[i],
-                    color: quad.rgba,
+                    color: rgba,
                 });
             }
             match runs.last_mut() {
@@ -3818,21 +3827,59 @@ fn create_hud_pass(device: &wgpu::Device, format: wgpu::TextureFormat) -> HudPas
     }
 }
 
-/// HUD names are pk3 paths, not shader-script materials, so the alias map
-/// is empty. Unresolvable names warn once; the caller caches the `None`.
+/// Where a HUD texture name resolves. `white` and `$whiteimage` are the
+/// engine built-in; `black` (pak4 `scripts/hud.shader`: `map $whiteimage`,
+/// `rgbGen const 0`) shares the same texture, and `set_hud_quads` forces the
+/// quad colour to black for it.
+#[derive(Debug, PartialEq, Eq)]
+enum HudTex {
+    White,
+    Black,
+    Path(String),
+    Missing,
+}
+
+/// A material name (`hudStanceStand`, `hintHealth`) resolves through the
+/// shader-script image map, same as fx; anything else is a bare pk3 path.
+/// `ShaderLib::load` folds every material name to lowercase, so the lookup
+/// does too before falling back to the name as given.
+fn hud_texture_path(name: &str, image_map: &HashMap<String, String>, fs: &Pk3Fs) -> HudTex {
+    match name {
+        "white" | "$whiteimage" => return HudTex::White,
+        "black" => return HudTex::Black,
+        _ => {}
+    }
+    let path = image_map
+        .get(name)
+        .or_else(|| image_map.get(&name.to_ascii_lowercase()))
+        .map(String::as_str)
+        .unwrap_or(name);
+    match resolve_fx_path(&HashMap::new(), fs, path) {
+        Some(p) => HudTex::Path(p),
+        None => HudTex::Missing,
+    }
+}
+
+/// HUD names resolve through the shader-script material map before falling
+/// back to a bare pk3 path, so `hudStanceStand`/`hintHealth` find their first
+/// stage's image. Unresolvable names warn once; the caller caches the `None`.
 fn resolve_hud_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     texture_layout: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
     fs: &Pk3Fs,
+    image_map: &HashMap<String, String>,
     name: &str,
 ) -> Option<wgpu::BindGroup> {
-    let Some(path) = resolve_fx_path(&HashMap::new(), fs, name) else {
-        log::warn!("hud: no texture found for {name:?}, dropping its quads");
-        return None;
+    let img = match hud_texture_path(name, image_map, fs) {
+        HudTex::White | HudTex::Black => assets::white_1x1(),
+        HudTex::Path(path) => assets::load_path_image(fs, &path),
+        HudTex::Missing => {
+            log::warn!("hud: no texture found for {name:?}, dropping its quads");
+            return None;
+        }
     };
-    let img = assets::load_path_image(fs, &path);
     let view = upload_image(device, queue, name, &img);
     Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some(name),
@@ -4571,6 +4618,44 @@ mod tests {
                 "{name} should decode as BC-compressed, exercising the upload_image path"
             );
         }
+    }
+
+    /// `white` and `$whiteimage` are the engine built-in; `black` shares its
+    /// texture (pak4 `scripts/hud.shader`: both stage `map $whiteimage`,
+    /// `black` differs only by `rgbGen const 0`, which `set_hud_quads`
+    /// applies to the quad colour).
+    #[test]
+    fn hud_texture_path_resolves_the_white_and_black_built_ins() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let no_mapping = HashMap::new();
+        assert_eq!(hud_texture_path("white", &no_mapping, &fs), HudTex::White);
+        assert_eq!(
+            hud_texture_path("$whiteimage", &no_mapping, &fs),
+            HudTex::White
+        );
+        assert_eq!(hud_texture_path("black", &no_mapping, &fs), HudTex::Black);
+    }
+
+    #[test]
+    fn hud_texture_path_resolves_a_material_a_plain_path_and_a_miss() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let shaders = vcod_common::assets::load_shaders(&fs);
+        assert_eq!(
+            hud_texture_path("hudStanceStand", shaders.image_map(), &fs),
+            HudTex::Path("gfx/hud/stance_stand.dds".to_string())
+        );
+        assert_eq!(
+            hud_texture_path("gfx/hud/hud@compassback", &HashMap::new(), &fs),
+            HudTex::Path("gfx/hud/hud@compassback.tga".to_string())
+        );
+        assert_eq!(
+            hud_texture_path("gfx/hud/does_not_exist", &HashMap::new(), &fs),
+            HudTex::Missing
+        );
     }
 
     #[test]
