@@ -3,23 +3,31 @@
 
 pub mod chat;
 pub mod font;
+pub mod hudelem;
 pub mod killfeed;
 pub mod menu;
+pub mod player;
 pub mod scoreboard;
 pub mod status;
 
 use std::collections::{BTreeMap, HashMap};
 
 use crate::fx::registry::EV_OBITUARY;
+use crate::play::input::{EF_CROUCH, EF_PRONE};
+use vcod_common::localize::Localized;
 use vcod_common::net::events::GameEvent;
-use vcod_common::net::msg::ClientState;
+use vcod_common::net::msg::{ClientState, HudElem, PlayerState};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::net::NetEvent;
 use vcod_common::pk3::Pk3Fs;
+use vcod_common::pmove::predict::Predicted;
+use vcod_common::pmove::Stance;
+use vcod_common::weapon::WeaponDef;
 
 use chat::Chat;
 use font::Font;
 use killfeed::Killfeed;
+use player::{DamageFeedback, PlayerHud, PlayerView};
 use scoreboard::Scoreboard;
 
 /// Body text, e.g. chat.
@@ -52,6 +60,7 @@ pub struct Hud {
     /// Per-CS7-index `(killIcon, wideKillIcon)`. `None` caches a failed load
     /// so it is tried once.
     kill_icons: HashMap<i32, Option<(String, bool)>>,
+    player: PlayerHud,
     pub unknown: u64,
 }
 
@@ -69,6 +78,25 @@ pub struct HudFrame<'a> {
     pub fs: &'a Pk3Fs,
     /// The server's open script menu, if any; drawn on top of everything else.
     pub menu: Option<&'a menu::MenuView>,
+    /// The newest snapshot's playerstate: ours, or the followed player's.
+    /// Its hudelems are drawn whoever it belongs to.
+    pub ps: Option<&'a PlayerState>,
+    /// Our replay while predicting; its weapon, ammo, spread and stance stand
+    /// in for the snapshot's.
+    pub predicted: Option<&'a Predicted>,
+    /// `ps` is ours and alive (`pm_type` 0 or 1), which is when the native
+    /// player HUD is drawn.
+    pub local_player: bool,
+    /// Configstring 7's defs, index = weapon number.
+    pub weapons: &'a [Option<WeaponDef>],
+    pub localized: &'a Localized,
+    /// The camera's yaw in degrees, and its eye.
+    pub view_yaw: f32,
+    pub eye: [f32; 3],
+    /// The drawn vertical fov, degrees.
+    pub fov: f32,
+    /// An entity's current origin, for objectives placed on one.
+    pub entity_origin: &'a dyn Fn(i32) -> Option<[f32; 3]>,
 }
 
 impl Hud {
@@ -80,6 +108,7 @@ impl Hud {
             killfeed: Killfeed::new(),
             scoreboard: Scoreboard::new(),
             kill_icons: HashMap::new(),
+            player: PlayerHud::default(),
             unknown: 0,
         })
     }
@@ -164,6 +193,44 @@ impl Hud {
     /// This frame's quads from every element, at [`HUD_SCALE`].
     pub fn build(&mut self, f: &HudFrame) -> Vec<HudQuad> {
         let mut out = Vec::new();
+        let screen = (f.screen_w, f.screen_h);
+        match f.ps.filter(|_| f.local_player) {
+            Some(ps) => {
+                let view = player_view(ps, f);
+                let cx = player::Context {
+                    weapons: f.weapons,
+                    configstrings: f.configstrings,
+                    loc: f.localized,
+                    font: &self.font_text,
+                    entity_origin: f.entity_origin,
+                };
+                self.player
+                    .build(&view, &cx, f.server_time, screen, &mut out);
+            }
+            // The next life starts from a fresh baseline, so a hit taken
+            // meanwhile does not flash on return.
+            None => self.player = PlayerHud::default(),
+        }
+        if let Some(ps) = f.ps {
+            let elems: Vec<HudElem> = ps
+                .arrays
+                .hud_archived
+                .iter()
+                .chain(&ps.arrays.hud_current)
+                .copied()
+                .collect();
+            // No fixed-width atlas ships: bigfixed takes the header font.
+            let fonts = (&self.font_text, &self.font_header, &self.font_text);
+            hudelem::build(
+                &elems,
+                f.configstrings,
+                f.localized,
+                fonts,
+                f.server_time,
+                screen,
+                &mut out,
+            );
+        }
         self.chat
             .build(&self.font_text, HUD_SCALE, f.screen_h, f.now, &mut out);
         self.killfeed
@@ -171,7 +238,10 @@ impl Hud {
         // The scoreboard reuses the parsed gametype; its last `b` reply
         // overrides CS 5/6 (status.rs).
         let status = status::read_status(f.configstrings, f.server_time, self.scoreboard.totals());
-        status::build(&status, &self.font_header, f.screen_w, &mut out);
+        // vcod's own header, which retail does not draw: spectators only.
+        if !f.local_player {
+            status::build(&status, &self.font_header, f.screen_w, &mut out);
+        }
         if self.scoreboard.visible {
             let names = |client: u32| -> Option<(String, i32)> {
                 let cs = f.clients.get(&client)?;
@@ -202,9 +272,191 @@ impl Hud {
     }
 }
 
+/// The native HUD's inputs off `ps`, with the replay's fields in place of
+/// the snapshot's where `f.predicted` has them.
+fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
+    let int = |name: &str| ps.field_i32(f.protocol, name);
+    let mut eflags = int("eFlags");
+    let (weapon, ammo, ammoclip, aim_spread_scale, ads_frac) = match f.predicted {
+        Some(pred) => {
+            let s = &pred.ps;
+            eflags &= !(EF_CROUCH | EF_PRONE);
+            eflags |= match s.stance {
+                Stance::Stand => 0,
+                Stance::Crouch => EF_CROUCH,
+                Stance::Prone => EF_PRONE,
+            };
+            (
+                usize::from(s.weapon),
+                &s.ammo,
+                &s.ammoclip,
+                s.aim_spread_scale,
+                s.weapon_pos_frac,
+            )
+        }
+        None => (
+            int("weapon") as usize,
+            &ps.arrays.ammo,
+            &ps.arrays.ammoclip,
+            ps.field_f32(f.protocol, "aimSpreadScale"),
+            ps.field_f32(f.protocol, "fWeaponPosFrac"),
+        ),
+    };
+    PlayerView {
+        client_num: int("clientNum"),
+        health: ps.health(),
+        max_health: ps.max_health(),
+        eflags,
+        weapon: f.weapons.get(weapon).and_then(Option::as_ref),
+        ammo,
+        ammoclip,
+        aim_spread_scale,
+        ads_frac,
+        view_yaw: f.view_yaw,
+        eye: f.eye,
+        fov: (fov_x_4_3(f.fov), f.fov),
+        objectives: &ps.arrays.objectives,
+        cursor_hint: int("serverCursorHint"),
+        // Playerstate fields arrive unsigned; retail's -1 is 255.
+        cursor_hint_string: i32::from(int("serverCursorHintString") as u8 as i8),
+        damage: DamageFeedback {
+            event: int("damageEvent"),
+            yaw: int("damageYaw"),
+            pitch: int("damagePitch"),
+            count: int("damageCount"),
+        },
+    }
+}
+
+/// The horizontal fov across the 640x480 virtual screen for a vertical
+/// `fov_y`, both in degrees.
+fn fov_x_4_3(fov_y: f32) -> f32 {
+    2.0 * ((fov_y / 2.0).to_radians().tan() * 4.0 / 3.0)
+        .atan()
+        .to_degrees()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vcod_common::net::msg::hud_field as msg_field;
+    use vcod_common::net::protocol::PROTOCOL_V1;
+
+    fn frame<'a>(
+        ps: &'a PlayerState,
+        predicted: Option<&'a Predicted>,
+        fs: &'a Pk3Fs,
+        loc: &'a Localized,
+        clients: &'a BTreeMap<u32, ClientState>,
+    ) -> HudFrame<'a> {
+        HudFrame {
+            now: 0.0,
+            screen_w: 640.0,
+            screen_h: 480.0,
+            configstrings: &[],
+            clients,
+            protocol: &PROTOCOL_V1,
+            server_time: 0,
+            fs,
+            menu: None,
+            ps: Some(ps),
+            predicted,
+            local_player: true,
+            weapons: &[],
+            localized: loc,
+            view_yaw: 0.0,
+            eye: [0.0; 3],
+            fov: 75.0,
+            entity_origin: &|_| None,
+        }
+    }
+
+    #[test]
+    fn the_replay_stands_in_for_the_snapshot_weapon_fields() {
+        let p = &PROTOCOL_V1;
+        let mut ps = PlayerState::null(p);
+        let mut set = |name: &str, v: i32| {
+            ps.fields[PlayerState::field_index(p, name).expect(name)] = v;
+        };
+        set("eFlags", 0x10);
+        set("aimSpreadScale", 200f32.to_bits() as i32);
+        set("serverCursorHintString", 255);
+        ps.arrays.ammoclip[10] = 5;
+        let mut pred = Predicted {
+            ps: vcod_common::pmove::PlayerState::spawn(glam::Vec3::ZERO, 0.0),
+            pm_type: 0,
+            delta_angles: [0; 3],
+            command_time: 0,
+            view_lerp_start: 0,
+            event_sequence: 0,
+            events: [0; 4],
+            event_parms: [0; 4],
+        };
+        pred.ps.ammoclip[10] = 4;
+        pred.ps.aim_spread_scale = 50.0;
+        pred.ps.stance = Stance::Crouch;
+        let (fs, loc, clients) = (Pk3Fs::empty(), Localized::default(), BTreeMap::new());
+
+        let snap = player_view(&ps, &frame(&ps, None, &fs, &loc, &clients));
+        assert_eq!(
+            (snap.ammoclip[10], snap.aim_spread_scale, snap.eflags),
+            (5, 200.0, 0x10)
+        );
+        assert_eq!(snap.cursor_hint_string, -1, "retail's -1 arrives as 255");
+        assert_eq!(snap.fov, (fov_x_4_3(75.0), 75.0));
+
+        let own = player_view(&ps, &frame(&ps, Some(&pred), &fs, &loc, &clients));
+        assert_eq!(
+            (own.ammoclip[10], own.aim_spread_scale, own.eflags),
+            (4, 50.0, 0x10 | EF_CROUCH)
+        );
+    }
+
+    #[test]
+    fn the_native_hud_waits_for_our_own_live_playerstate_and_hudelems_do_not() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let mut hud = Hud::new(&fs).expect("hud");
+        let mut ps = PlayerState::null(&PROTOCOL_V1);
+        let mut bar = HudElem::default();
+        bar.set(msg_field::TYPE, 3);
+        bar.set(msg_field::SHADER, 1);
+        bar.set(msg_field::WIDTH, 10);
+        bar.set(msg_field::HEIGHT, 10);
+        bar.set(msg_field::COLOR, -1);
+        ps.arrays.hud_current.push(bar);
+        let mut cs = vec![String::new(); hudelem::CS_SHADERS + 2];
+        cs[hudelem::CS_SHADERS + 1] = "white".into();
+        let (loc, clients) = (Localized::default(), BTreeMap::new());
+        let drawn = |hud: &mut Hud, local_player: bool| -> Vec<String> {
+            let f = HudFrame {
+                configstrings: &cs,
+                local_player,
+                ..frame(&ps, None, &fs, &loc, &clients)
+            };
+            hud.build(&f).into_iter().map(|q| q.texture).collect()
+        };
+
+        let following = drawn(&mut hud, false);
+        assert!(following.iter().any(|t| t == "white"));
+        assert!(!following.iter().any(|t| t.contains("health_back")));
+
+        let own = drawn(&mut hud, true);
+        assert!(own.iter().any(|t| t == "white"));
+        assert!(own.iter().any(|t| t.contains("health_back")));
+
+        // The status header is the only header-font text in these frames.
+        let header = hud.font_header.page.clone();
+        assert!(following.contains(&header), "header for a spectator");
+        assert!(!own.contains(&header), "no header while playing");
+    }
+
+    #[test]
+    fn the_virtual_screen_fov_is_4_3_wide() {
+        // A 90-degree 4:3 frustum is 73.74 degrees tall.
+        assert!((fov_x_4_3(73.739_8) - 90.0).abs() < 1e-3);
+    }
 
     #[test]
     fn on_gamestate_forgets_the_map_but_keeps_chat() {

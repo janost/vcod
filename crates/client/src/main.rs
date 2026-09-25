@@ -1014,6 +1014,7 @@ fn load_map(
 fn loading_frame(
     r: &mut Renderer,
     fs: &Pk3Fs,
+    localized: &vcod_common::localize::Localized,
     hud: &mut Option<hud::Hud>,
     now: f32,
     aspect: f32,
@@ -1034,6 +1035,15 @@ fn loading_frame(
             server_time: 0,
             fs,
             menu: None,
+            ps: None,
+            predicted: None,
+            local_player: false,
+            weapons: &[],
+            localized,
+            view_yaw: 0.0,
+            eye: [0.0; 3],
+            fov: camera::DEFAULT_FOV_DEG,
+            entity_origin: &|_| None,
         };
         let quads = hud.build(&f);
         r.set_hud_quads(fs, quads);
@@ -1705,6 +1715,7 @@ impl ApplicationHandler for App {
                                 loading_frame(
                                     r,
                                     &self.fs,
+                                    &self.localized,
                                     &mut self.hud,
                                     time,
                                     aspect,
@@ -1756,6 +1767,7 @@ impl ApplicationHandler for App {
                                 loading_frame(
                                     r,
                                     &self.fs,
+                                    &self.localized,
                                     &mut self.hud,
                                     time,
                                     aspect,
@@ -1788,6 +1800,7 @@ impl ApplicationHandler for App {
                                     loading_frame(
                                         r,
                                         &self.fs,
+                                        &self.localized,
                                         &mut self.hud,
                                         time,
                                         aspect,
@@ -1834,10 +1847,11 @@ impl ApplicationHandler for App {
                                     let mut weapon_flash: HashMap<i32, String> = HashMap::new();
                                     let mut entity_pos: HashMap<u32, Vec3> = HashMap::new();
 
-                                    if let Some(newest_time) =
-                                        net.snapshots().newest().map(|s| s.server_time)
-                                    {
-                                        let render_time = clock.render_time(local_ms, newest_time);
+                                    let render_time = net
+                                        .snapshots()
+                                        .newest()
+                                        .map(|s| clock.render_time(local_ms, s.server_time));
+                                    if let Some(render_time) = render_time {
                                         if let Some((a, b)) =
                                             net.snapshots().two_for_time(render_time)
                                         {
@@ -1980,6 +1994,12 @@ impl ApplicationHandler for App {
 
                                     let no_clients = BTreeMap::new();
                                     let newest = net.snapshots().newest();
+                                    let local_player = ps_client == client_num
+                                        && pmove::predict::predictable(pm_type);
+                                    let entity_origin = |num: i32| {
+                                        let num = u32::try_from(num).ok()?;
+                                        entity_pos.get(&num).map(|v| v.to_array())
+                                    };
                                     let hud_frame = hud::HudFrame {
                                         now: time,
                                         screen_w,
@@ -1987,9 +2007,23 @@ impl ApplicationHandler for App {
                                         configstrings: net.configstrings(),
                                         clients: newest.map_or(&no_clients, |s| &s.clients),
                                         protocol: p,
-                                        server_time: newest.map_or(0, |s| s.server_time),
+                                        // The render clock, so hudelem tweens and
+                                        // timers move between snapshots.
+                                        server_time: render_time.unwrap_or(0),
                                         fs: &self.fs,
                                         menu: menu_view.as_ref().map(|(_, v)| v),
+                                        ps: newest.map(|s| &s.ps),
+                                        predicted: predicted
+                                            .as_ref()
+                                            .filter(|_| local_player)
+                                            .map(|v| &v.pred),
+                                        local_player,
+                                        weapons,
+                                        localized: &self.localized,
+                                        view_yaw: cam.yaw.to_degrees(),
+                                        eye: cam.pos.to_array(),
+                                        fov,
+                                        entity_origin: &entity_origin,
                                     };
 
                                     // Events use the newest snapshot, not the interpolation
