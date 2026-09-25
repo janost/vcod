@@ -11,7 +11,7 @@ pub const CONTENTS_CORPSE: u32 = 0x4000000;
 pub const MASK_DEADSOLID: u32 = 0x810011;
 /// How far a body hit stops short of the bare Minkowski radius, measured
 /// along the start point's normal (`cod_lnxded` 0x80cd424, 0x80cd428).
-/// Head-on stop 30.125 in all three target stances: `mp_carentan-dm-bump-walker.txt` `*/headon` (lines 191, 2724, 4918).
+/// Head-on stop 30.125 in all three target stances: `mp_carentan-dm-bump-walker.txt`, phases `stand/headon`, `crouch/headon`, `prone/headon`.
 pub const BODY_RADIUS_EPS: f32 = 0.125;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -119,7 +119,7 @@ fn clip_capsule(t: &mut Trace, start: Vec3, end: Vec3, mover: Capsule, hh_m: f32
 
     let r = bc.radius + r_m;
     let h = hh_b + hh_m - r;
-    if h > 0.0 && (c_end - c).with_z(0.0) != Vec3::ZERO {
+    if h > 0.0 {
         trace_cylinder(t, c, c_end, o, r, h, b.entity);
     }
     // The mover's own two sphere centres trace against the body's opposite
@@ -138,23 +138,25 @@ fn clip_capsule(t: &mut Trace, start: Vec3, end: Vec3, mover: Capsule, hh_m: f32
 
 /// Retail's cylinder trace (`cod_lnxded` 0x8055980): an infinite-height
 /// circle of radius `r` swept against a segment, clamped to the half height
-/// `h` about `o`. A start inside `r` is startsolid; a move that is not
-/// closing on the axis, or whose line misses `r`, is not clipped at all; a
-/// hit is backed off `BODY_RADIUS_EPS` along the start point's normal, which
-/// is also the normal it reports (docs/research/cod11-player-clip.md).
+/// `h` about `o`. A start inside `r` is startsolid, and allsolid when the end
+/// is inside the z-span, whatever its xy; a move that is not closing on the
+/// axis, or whose line misses `r`, is not clipped at all; a hit must lie in
+/// the z-span at the raw root and is backed off `BODY_RADIUS_EPS` along the
+/// start point's normal, which is also the normal it reports
+/// (docs/research/cod11-player-clip.md).
 fn trace_cylinder(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, h: f32, entity: u32) {
     let rel = (start - o).with_z(0.0);
     let c = rel.length_squared() - r * r;
     if (start.z - o.z).abs() <= h && c <= 0.0 {
-        let end_inside = (end - o).with_z(0.0).length_squared() <= r * r;
+        let end_inside = (end.z - o.z).abs() <= h;
         set_startsolid(t, entity, rel, end_inside);
         return;
     }
     let delta = (end - start).with_z(0.0);
-    let Some(f) = backed_off_root(rel, delta, c) else {
+    let Some((f0, f)) = backed_off_root(rel, delta, c) else {
         return;
     };
-    if f >= t.fraction || (start.lerp(end, f.max(0.0)).z - o.z).abs() > h {
+    if f >= t.fraction || (start.lerp(end, f0).z - o.z).abs() > h {
         return;
     }
     t.fraction = f.max(0.0);
@@ -173,7 +175,7 @@ fn trace_sphere(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, entity: 
         set_startsolid(t, entity, rel, end_inside);
         return;
     }
-    let Some(f) = backed_off_root(rel, end - start, c) else {
+    let Some((_, f)) = backed_off_root(rel, end - start, c) else {
         return;
     };
     if f >= t.fraction {
@@ -185,11 +187,12 @@ fn trace_sphere(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, entity: 
     t.hit = Some(Prim::Body(entity));
 }
 
-/// The entry root of `|rel + delta f| = r` less the backoff, or `None` when
-/// the move is not closing (`rel . delta >= 0`) or its line misses the
-/// radius. `c` is `|rel|^2 - r^2`; the result may be negative, which the
-/// callers clamp to 0 after the fraction test.
-fn backed_off_root(rel: Vec3, delta: Vec3, c: f32) -> Option<f32> {
+/// The entry root of `|rel + delta f| = r`, raw and less the backoff, or
+/// `None` when the move is not closing (`rel . delta >= 0`, which a zero
+/// `delta` is) or its line misses the radius. `c` is `|rel|^2 - r^2`; the
+/// backed-off root may be negative, which the callers clamp to 0 after the
+/// fraction test.
+fn backed_off_root(rel: Vec3, delta: Vec3, c: f32) -> Option<(f32, f32)> {
     let b = rel.dot(delta);
     if b >= 0.0 {
         return None;
@@ -199,11 +202,12 @@ fn backed_off_root(rel: Vec3, delta: Vec3, c: f32) -> Option<f32> {
     if disc < 0.0 {
         return None;
     }
-    Some((-b - disc.sqrt()) / a + BODY_RADIUS_EPS * rel.length() / b)
+    let f0 = (-b - disc.sqrt()) / a;
+    Some((f0, f0 + BODY_RADIUS_EPS * rel.length() / b))
 }
 
 /// The start is inside the bare radius: fraction 0 with the start point's
-/// normal, and allsolid only when the end is inside too. pmove
+/// normal, and allsolid when the primitive's end test says so. pmove
 /// (`slide_move`/step-up) treats allsolid alone as fully stuck; a bare
 /// startsolid still clips at fraction 0 and lets the slide bump try a way out.
 fn set_startsolid(t: &mut Trace, entity: u32, rel: Vec3, end_inside: bool) {
@@ -380,20 +384,17 @@ mod tests {
     }
 
     #[test]
-    fn starting_inside_and_moving_clear_is_startsolid_not_allsolid() {
+    fn starting_inside_is_allsolid_until_the_end_leaves_the_z_span() {
+        // Retail's cylinder reads the end's z alone: a walk out sideways
+        // stays allsolid, a move up past the body does not.
         let w = test_world(&[]);
         let bodies = [body_at(0.0, 70.0)];
         let mw = MoveWorld::new(&w, &bodies, 0);
-        // The body's own centre is well inside; the end point is well clear.
-        let t = mw.box_trace(
-            Vec3::new(0.0, 0.0, 1.0),
-            Vec3::new(200.0, 0.0, 1.0),
-            STAND.0,
-            STAND.1,
-            LIVE,
-        );
-        assert!(t.startsolid);
-        assert!(!t.allsolid, "{t:?}");
+        let start = Vec3::new(0.0, 0.0, 1.0);
+        let side = mw.box_trace(start, start + Vec3::X * 200.0, STAND.0, STAND.1, LIVE);
+        assert!(side.startsolid && side.allsolid, "{side:?}");
+        let up = mw.box_trace(start, start + Vec3::Z * 200.0, STAND.0, STAND.1, LIVE);
+        assert!(up.startsolid && !up.allsolid, "{up:?}");
     }
 
     #[test]
