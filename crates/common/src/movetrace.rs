@@ -79,8 +79,19 @@ impl<'a> MoveWorld<'a> {
             return t;
         }
         let mover = Capsule::of(mins, maxs);
+        // Broad phase: a body whose padded box misses the padded swept AABB
+        // can't be hit, since the backoff only ever shortens a real hit and
+        // startsolid needs overlap.
+        const PAD: Vec3 = Vec3::splat(1.0);
+        let swept_min = start.min(end) + mins - PAD;
+        let swept_max = start.max(end) + maxs + PAD;
         for b in self.bodies {
             if b.entity == self.pass || b.contents & mask == 0 {
+                continue;
+            }
+            let b_min = b.origin + b.mins - PAD;
+            let b_max = b.origin + b.maxs + PAD;
+            if b_max.cmplt(swept_min).any() || b_min.cmpgt(swept_max).any() {
                 continue;
             }
             clip_capsule(&mut t, start, end, mover, (maxs - mins).z * 0.5, b);
@@ -429,6 +440,23 @@ mod tests {
             LIVE,
         );
         assert!(away.fraction == 1.0 && !away.startsolid, "{away:?}");
+    }
+
+    #[test]
+    fn a_body_just_outside_the_swept_box_is_skipped() {
+        // The trace runs 0..200 on x with a 15-unit mover radius and a
+        // 1-unit pad on each side, so the swept box reaches x=216. A body
+        // whose own padded box starts past that (origin 233: 233-15-1=217)
+        // never reaches clip_capsule.
+        let w = test_world(&[]);
+        let (s, e) = (Vec3::new(0.0, 0.0, 1.0), Vec3::new(200.0, 0.0, 1.0));
+        let far = [body_at(233.0, 70.0)];
+        assert_eq!(
+            MoveWorld::new(&w, &far, 0)
+                .box_trace(s, e, STAND.0, STAND.1, LIVE)
+                .fraction,
+            1.0
+        );
     }
 
     #[test]
