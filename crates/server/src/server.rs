@@ -1331,6 +1331,18 @@ impl Server {
         }
     }
 
+    /// Queues a client `setorigin` as the script frame would, applied at the
+    /// next tick's sim-op pass: after that tick's moves and before its end
+    /// frame. Test-facing: the stuck gate overlaps two players the way
+    /// `probe_bump.gsc` did on retail.
+    pub fn test_script_set_origin(&mut self, slot: usize, origin: [f32; 3]) {
+        if let Some(rt) = self.script.as_mut() {
+            rt.host
+                .client_sim_ops
+                .push((slot, crate::game::host::SimOp::SetOrigin { origin }));
+        }
+    }
+
     /// Moves the entity numbered `num` as script would. Test-facing, like
     /// `test_mount`: carentan's second gun sits out of the first one's arc.
     pub fn test_place_entity(&mut self, num: u32, origin: [f32; 3], angles: [f32; 3]) {
