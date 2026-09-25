@@ -1462,3 +1462,87 @@ The kill credit matches as well: after the replay, ours logs the same `D;`
 and `K;` records as script lines 33-34 once the client numbers and names are
 dropped, `m1carbine_mp` on the wound and `mg42_bipod_stand_mp` on the kill,
 53 and `torso_upper` on both.
+
+### 13.2 The live run against ours
+
+A second run of the same recipe, live rather than replayed: `vcod-server`
+on mp_carentan (port 28990, `--gametype-script client-probes/probe_turret.gsc
+--set probe_teleport=1`), the axis client second
+(`--net-probe 127.0.0.1:28990 --probe-team axis --probe-secs 180`), the
+gunner client third (`--net-probe 127.0.0.1:28990 --save-turret
+--probe-secs 170`), all on 2026-09-25. It overwrote the committed
+`mp_carentan-dm-turret.txt`; that capture moved to `tmp/turret-ours.txt` and
+`git checkout` restored the fixture directory, `git status` clean afterward.
+
+VERIFIED, D1: the use cmd (`buttons=64`) reaches the server and the very
+next snapshot already reads `viewlocked=1`, `viewlocked_entNum=298` and
+`eFlags=49176` (0xC018), matching retail's own first-mounted values. Body
+placement lands one frame later than that (`groundEntityNum` 1022 and the
+pre-mount origin on the viewlock-only frame, 1023 and the placed origin
+the frame after), reproducing the `GAPS` line in 13.1 exactly. The crouch
+mount does not show the gap: the first mounted frame already reads
+`eFlags=49200` (0xC030) with the crouch held and `groundEntityNum` 1022,
+and the next reads `pm_flags` 262144, `eFlags=49168` (0xC010),
+`groundEntityNum` 1023 and the placed origin, field for field what 12.1
+reads for retail's crouch mount.
+
+VERIFIED, D3: `angles2[1]` clamps at exactly -45.0/45.0 and `angles2[0]` at
+exactly -40.0/40.0 through the sweep, the same arc as section 2's stock
+file and 12.3's capture.
+
+VERIFIED, D4: the fire phase writes one `EV_FIRE_WEAPON_MG42` (168) on the
+gun's ring every 50 ms frame, `viewlocked=2`, gun `eFlags=1032` (0x408),
+`loopSound=2`, gunner `ps.eFlags=50200` (0xC418) and `legsAnim` 33/545
+throughout, and all twenty impacts of the fire phase land at (1648, 1492,
+-31), retail's own value from 12.4 -- the `G_TempEntity` truncation fix
+13.1 already logged holds on a fresh capture. The loop clears two frames
+after the last shot and the cooldown (`EV_SOUND_ALIAS` parm 3, cs 527)
+plays on the frame after that, the same two-frame shape 12.4 reads.
+
+VERIFIED, D5/D6: the target phase's two hitting rounds land at (1517,
+1611) and (1516, 1612), each about a unit off retail's (1518, 1612) --
+the truncation-step difference 13.1 already attributes to the pass-through
+gap, reproduced here rather than newly found. The kill's `EV_OBITUARY`
+(201) rides the same snapshot as the killing round's fire event, as 12.5
+reads; the wounding round's `EV_PAIN` on the victim's own entity does not
+reach the gunner's snapshot, the entity-state-at-snapshot gap 13.1 already
+lists. The server's own log carries
+`D;0;axis;vcod;1;allies;vcod;m1carbine_mp;53;MOD_RIFLE_BULLET;torso_upper`
+and
+`K;0;;vcod;1;;vcod;mg42_bipod_stand_mp;53;MOD_RIFLE_BULLET;torso_upper`,
+identical to script lines 33-34 once the two runs' shared client numbers
+and name are set aside.
+
+VERIFIED, D7: the release snapshot reads `viewlocked=0`,
+`viewlocked_entNum=1023`, `eFlags=16` (0xC018 losing 0xC000 and the
+teleport bit) and the origin one unit above the pre-mount spot, carrying
+`EV_PLAYER_TELEPORT_OUT` (200), `EV_PLAYER_TELEPORT_IN` (199) and
+`EV_STANCE_FORCE_STAND` (140) -- the same fields and events 12.7 reads on
+retail's stand release. The crouch release reads the same shape with
+`EV_STANCE_FORCE_CROUCH` (141) in place of the stand event and `eFlags` 48
+losing to 16, matching 12.7's crouch-release reading too.
+
+VERIFIED, D8: the unowned barrel steps (-10, 0), (-20, 0) ... (-70, 0),
+(-72, 0), one 10-degree step a frame, starting the frame after the
+release -- the same table 12.8 reads off retail.
+
+VERIFIED, D9: `torsoAnim` stays 0 throughout; `legsAnim` carries 33/545
+through the fire snapshots and 32/544 (the same anim, the 512 toggle bit
+differing run to run) everywhere else mounted, matching 12.9's reading
+that the mounted clause distinguishes only fire from aim.
+
+VERIFIED, D10: the hint reads `6:0:0` standing off the gun, `0:0:0` on
+every mounted snapshot including the release snapshot, and `6:0:0` again
+the frame after -- 12.10's reading reproduced.
+
+VERIFIED: the run's own notes carry the same shape as retail's --
+`# BROKEN strafe passed 100 units at bearing 49.1`,
+`# refused bearing=53.1 dist=118.8`, `# BROKEN refused tap at dist=118.8`,
+`# REFUSED ok` against retail's 50.5/56.2/126.9/ok -- the refused mount
+still refuses and the strafe still exhausts its 100-unit cap before
+clearing the arc, with the exact bearings differing the way 13.1's
+capsule-vs-box clip difference already predicts for that phase.
+
+No mismatch outside the `GAPS` list 13.1 already carries turned up in this
+run: every divergence found here is one of the six already named there,
+measured a second time on a fresh capture rather than a new finding.
