@@ -335,7 +335,7 @@ impl<T: Transport> NetClient<T> {
             return None;
         }
         let mut to = *cmd;
-        to.server_time = self.estimated_server_time();
+        to.server_time = self.server_clock_ms();
         // The compact move encoding carries only -127/0/127 per axis.
         to.forward = quantize_move(cmd.forward);
         to.right = quantize_move(cmd.right);
@@ -348,8 +348,23 @@ impl<T: Transport> NetClient<T> {
                 to.angles[i] = (to.angles[i] - da) & 0xffff;
             }
         }
-        self.send_message(Some(to));
+        self.send_message(&[to]);
         Some(to)
+    }
+
+    /// Send one message whose `clc_move` carries every cmd of `cmds` (more
+    /// than [`MAX_MOVE_CMDS`] keeps the last of them), chained from
+    /// `last_sent_cmd`. Unlike `send_frame`, the caller's cmds go out
+    /// verbatim: no stamping, no quantizing, no `delta_angles` rebase. The
+    /// server adds `delta_angles` itself (docs/protocol-1.1.md, "View
+    /// angles"). A no-op unless active; an empty slice still sends queued
+    /// reliable commands, like `send_frame` would with none pending.
+    pub fn send_cmds(&mut self, cmds: &[UserCmd]) {
+        if self.state != NetState::Active {
+            return;
+        }
+        let start = cmds.len().saturating_sub(MAX_MOVE_CMDS);
+        self.send_message(&cmds[start..]);
     }
 
     /// Queue a reliable `clc_clientCommand`, resent until acked.
@@ -380,7 +395,7 @@ impl<T: Transport> NetClient<T> {
         self.download = Some(dl);
         self.stopdl_sent = false;
         self.send_reliable(&format!("download {remote}"));
-        self.send_message(None);
+        self.send_message(&[]);
         self.last_send = self.now;
         Ok(())
     }
@@ -394,7 +409,7 @@ impl<T: Transport> NetClient<T> {
     /// `LoadingGamestate`.
     pub fn finish_downloads(&mut self) {
         self.send_reliable("donedl");
-        self.send_message(None);
+        self.send_message(&[]);
         self.state = NetState::LoadingGamestate;
         self.connect_deadline = self.now + GAMESTATE_TIMEOUT;
         self.last_send = self.now;
@@ -403,7 +418,7 @@ impl<T: Transport> NetClient<T> {
     pub fn disconnect(&mut self) {
         if matches!(self.state, NetState::LoadingGamestate | NetState::Active) {
             self.send_reliable("disconnect");
-            self.send_message(None);
+            self.send_message(&[]);
         }
         self.state = NetState::Disconnected;
     }
@@ -453,7 +468,7 @@ impl<T: Transport> NetClient<T> {
                     return;
                 }
                 if self.now.duration_since(self.last_send) >= GAMESTATE_POKE {
-                    self.send_message(None);
+                    self.send_message(&[]);
                     self.last_send = self.now;
                 }
             }
@@ -465,7 +480,7 @@ impl<T: Transport> NetClient<T> {
                 {
                     // Keep reliable resends flowing during a download; no render
                     // loop is sending frames yet.
-                    self.send_message(None);
+                    self.send_message(&[]);
                     self.last_send = self.now;
                 }
             }
@@ -621,7 +636,7 @@ impl<T: Transport> NetClient<T> {
             // Download data counts as liveness, and the acks go out now: nothing
             // else sends while the render loop is idle.
             self.last_snapshot = self.now;
-            self.send_message(None);
+            self.send_message(&[]);
             self.last_send = self.now;
         }
 
@@ -795,8 +810,10 @@ impl<T: Transport> NetClient<T> {
         }
     }
 
-    /// Client message: unacked reliables, an optional move, `clc_EOF`.
-    fn send_message(&mut self, cmd: Option<UserCmd>) {
+    /// Client message: unacked reliables, `cmds` as one `clc_move` (skipped
+    /// when empty), `clc_EOF`. Each cmd is written full-branch, chained from
+    /// the one before it under the same key, the first from `last_sent_cmd`.
+    fn send_message(&mut self, cmds: &[UserCmd]) {
         let message_ack = self.netchan.incoming_sequence as i32;
         let reliable_ack = self.command_sequence;
 
@@ -814,8 +831,7 @@ impl<T: Transport> NetClient<T> {
             w.write_long(seq as i32);
             w.write_string(&s);
         }
-        let mut sent = None;
-        if let Some(to) = cmd {
+        if !cmds.is_empty() {
             let key = self.usercmd_key(message_ack, reliable_ack);
             // clc_moveNoDelta sets our deltaMessage to -1 and every snapshot back
             // is a full keyframe; once we hold a snapshot, clc_move lets the server
@@ -826,9 +842,12 @@ impl<T: Transport> NetClient<T> {
                 CLC_MOVE_NO_DELTA
             };
             w.write_bits(clc, 2);
-            w.write_byte(1); // one usercmd
-            write_delta_usercmd(&mut w, key, &self.last_sent_cmd, &to);
-            sent = Some(to);
+            w.write_byte(cmds.len() as u8);
+            let mut from = self.last_sent_cmd;
+            for to in cmds {
+                write_delta_usercmd(&mut w, key, &from, to);
+                from = *to;
+            }
         }
         w.write_bits(CLC_EOF, 2);
         let ops = w.into_ops();
@@ -838,8 +857,8 @@ impl<T: Transport> NetClient<T> {
                 .build_out(self.server_id, message_ack, reliable_ack, &ops, &self.huff)
         {
             self.transport.send(&pkt);
-            if let Some(to) = sent {
-                self.last_sent_cmd = to;
+            if let Some(to) = cmds.last() {
+                self.last_sent_cmd = *to;
             }
         }
     }
@@ -851,11 +870,18 @@ impl<T: Transport> NetClient<T> {
         self.checksum_feed ^ message_ack ^ com_hash_key(cmd, 32)
     }
 
-    fn estimated_server_time(&self) -> i32 {
+    /// The server's clock, extrapolated from the last snapshot's `server_time`
+    /// by wall-clock elapsed since it arrived.
+    pub fn server_clock_ms(&self) -> i32 {
         let elapsed = self.now.duration_since(self.server_time_at).as_millis() as i32;
         self.server_time.wrapping_add(elapsed)
     }
 }
+
+/// `send_cmds` caps a single `clc_move` here, same as the server's
+/// `MAX_PACKET_USERCMDS` (`crates/server/src/server.rs`); more cmds than
+/// this keeps only the most recent ones.
+const MAX_MOVE_CMDS: usize = 32;
 
 /// In usercmd angle order [pitch, yaw, roll].
 const DELTA_ANGLE_FIELDS: [&str; 3] = ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"];
@@ -1164,7 +1190,7 @@ mod tests {
         assert_eq!(c.netchan.reliable_acknowledge, u32::MAX);
 
         c.send_frame(&UserCmd::default());
-        c.send_message(None);
+        c.send_message(&[]);
     }
 
     fn active_client() -> NetClient<FakeTransport> {
@@ -1465,14 +1491,14 @@ mod tests {
         assert_eq!(c.state(), NetState::Disconnected);
     }
 
-    /// Decode packet `i` the way the server would: unscramble, decompress,
-    /// walk to the clc_move, delta-decode its first cmd against `base`.
-    fn decoded_move_cmd(
+    /// Unscramble and decompress packet `i` the way the server would, and
+    /// walk to its clc_move: returns the usercmd key, a reader positioned
+    /// right after the cmd count, and the count itself.
+    fn sent_move(
         c: &NetClient<FakeTransport>,
         h: &Huffman,
         i: usize,
-        base: &UserCmd,
-    ) -> Option<UserCmd> {
+    ) -> Option<(i32, MsgReader, u8)> {
         let pkt = &c.transport.sent[i];
         let body = &pkt[6..];
         let server_id = body[0] as i32;
@@ -1496,8 +1522,8 @@ mod tests {
         loop {
             match r.read_bits(2) {
                 CLC_MOVE | CLC_MOVE_NO_DELTA => {
-                    r.read_byte(); // count
-                    return msg::read_delta_usercmd(&mut r, key, base).ok();
+                    let count = r.read_byte();
+                    return Some((key, r, count));
                 }
                 CLC_CLIENT_COMMAND => {
                     r.read_long();
@@ -1506,6 +1532,34 @@ mod tests {
                 _ => return None,
             }
         }
+    }
+
+    /// Decode packet `i`'s clc_move's first cmd against `base`.
+    fn decoded_move_cmd(
+        c: &NetClient<FakeTransport>,
+        h: &Huffman,
+        i: usize,
+        base: &UserCmd,
+    ) -> Option<UserCmd> {
+        let (key, mut r, _count) = sent_move(c, h, i)?;
+        msg::read_delta_usercmd(&mut r, key, base).ok()
+    }
+
+    /// Decode every cmd of packet `i`'s clc_move, chained from `base`.
+    fn decoded_move_cmds(
+        c: &NetClient<FakeTransport>,
+        h: &Huffman,
+        i: usize,
+        base: &UserCmd,
+    ) -> Option<Vec<UserCmd>> {
+        let (key, mut r, count) = sent_move(c, h, i)?;
+        let mut prev = *base;
+        let mut out = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            prev = msg::read_delta_usercmd(&mut r, key, &prev).ok()?;
+            out.push(prev);
+        }
+        Some(out)
     }
 
     /// Moves chain from the last sent cmd, retail outCmd-style. From a null
@@ -1531,6 +1585,45 @@ mod tests {
         assert_eq!(press.up, 127);
         let release = decoded_move_cmd(&c, &h, base_pkt + 1, &press).expect("second move decodes");
         assert_eq!(release.up, 0, "release must decode as 0, not replay 127");
+    }
+
+    #[test]
+    fn send_cmds_packs_several_cmds_the_server_decodes_in_order() {
+        let mut c = active_client();
+        let h = Huffman::new();
+
+        let base_pkt = c.transport.sent.len();
+        let cmds: Vec<UserCmd> = (0..3)
+            .map(|i| UserCmd {
+                server_time: 1000 + 8 * i,
+                forward: 127,
+                weapon: 4,
+                angles: [0, 1000 * i, 0],
+                ..Default::default()
+            })
+            .collect();
+        c.send_cmds(&cmds);
+        assert_eq!(c.transport.sent.len(), base_pkt + 1, "one message per call");
+
+        let decoded = decoded_move_cmds(&c, &h, base_pkt, &NULL_USERCMD).expect("move decodes");
+        assert_eq!(decoded.len(), 3);
+        assert_eq!(decoded, cmds, "unrebased, unstamped, field for field");
+
+        // More than 32 cmds keeps the last 32.
+        let base_pkt = c.transport.sent.len();
+        let many: Vec<UserCmd> = (0..40)
+            .map(|i| UserCmd {
+                server_time: 5000 + 8 * i,
+                forward: 127,
+                weapon: 4,
+                angles: [0, i, 0],
+                ..Default::default()
+            })
+            .collect();
+        c.send_cmds(&many);
+        let decoded = decoded_move_cmds(&c, &h, base_pkt, &NULL_USERCMD).expect("move decodes");
+        assert_eq!(decoded.len(), 32);
+        assert_eq!(decoded, many[8..], "the last 32, not the first");
     }
 
     #[test]
