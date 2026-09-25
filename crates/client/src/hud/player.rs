@@ -527,10 +527,6 @@ impl DamageIndicators {
             .filter(|&(age, _)| (0..DAMAGE_ICON_MS).contains(&age))
     }
 
-    pub fn active(&self, now: i32) -> usize {
-        self.live(now).count()
-    }
-
     /// Each icon below the screen centre turned by the view against the
     /// hit's direction, opaque for the first second and fading over the
     /// second.
@@ -722,12 +718,12 @@ mod tests {
         };
         // The first playerstate seen is the baseline, not a hit.
         d.feed(hit(3, 20), 1_000);
-        assert_eq!(d.active(1_000), 0);
+        assert_eq!(d.live(1_000).count(), 0);
         d.feed(hit(4, 20), 1_050);
-        assert_eq!(d.active(1_100), 1);
+        assert_eq!(d.live(1_100).count(), 1);
         // The same fields again: no new hit.
         d.feed(hit(4, 20), 1_100);
-        assert_eq!(d.active(1_150), 1);
+        assert_eq!(d.live(1_150).count(), 1);
         // A change with no damage, and damage from nowhere, add nothing.
         d.feed(hit(5, 0), 1_200);
         d.feed(
@@ -739,8 +735,8 @@ mod tests {
             },
             1_250,
         );
-        assert_eq!(d.active(1_300), 1);
-        assert_eq!(d.active(3_100), 0, "gone 2 s after the hit");
+        assert_eq!(d.live(1_300).count(), 1);
+        assert_eq!(d.live(3_100).count(), 0, "gone 2 s after the hit");
     }
 
     #[test]
