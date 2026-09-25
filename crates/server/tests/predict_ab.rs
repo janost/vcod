@@ -458,6 +458,27 @@ fn step_side_by_side(ring: bool) {
         0.0,
     );
     run.hold(input(|_| {}), 60, 0.0);
+    // Mounted on a stand gun: the step holds the player still whatever it
+    // asks for, and the predictor has to read that off eFlags.
+    let view = run.sim.view_angles();
+    vcod_server::game::turret::mount_sim(
+        &mut run.sim,
+        298,
+        vcod_server::game::turret::TurretStance::Stand,
+        view,
+    );
+    // The client learns of the mount from the next snapshot, not from a cmd.
+    let w = over_the_wire(&run.sim.to_wire(P, 0, run.st));
+    run.pred = predict::from_wire(P, &w, Some(&run.last_cmd));
+    run.hold(
+        input(|c| {
+            c.forward = 127;
+            c.right = 127;
+            c.wbuttons = WBUTTON_CROUCH
+        }),
+        40,
+        0.5,
+    );
 
     println!(
         "predictor vs server{}: {} cmds, {} rebuilds ({} mid-putaway, {} mid eye lerp), \
