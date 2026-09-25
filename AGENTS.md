@@ -561,7 +561,9 @@ engineering setup works.
   then each gunner's `turret_think_client` (the gunner half of a release
   a deleted gun queued, then aim, fire, loop sound, or the release itself on
   a use press or a death), whose rounds are traced and handed to the damage callback right there, with the
-  sim ops, weapon ops and health that callback leaves applied a second time,
+  weapons mirrored again and the sim ops, weapon ops and health that callback
+  leaves applied a second time, closing with a second `end_frame` for a
+  victim numbered above its gunner,
   then the console lines, configstring changes, server commands and
   intermission scoreboard the script queued go out, and last the entities are
   built once and culled and written per client. Origin, `pm_type`,
