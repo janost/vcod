@@ -11,6 +11,7 @@ use crate::weapon::WeaponDef;
 use glam::Vec3;
 
 pub mod aim;
+pub mod predict;
 pub mod weapon;
 
 pub const GRAVITY: f32 = 800.0;
