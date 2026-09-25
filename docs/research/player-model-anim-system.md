@@ -67,7 +67,7 @@ u16 rot_count; [frame indices]; rot_count * i16      // z-only quat, dequantized
 u16 trans_count; [frame indices]; trans_count * 3*f32
 ```
 
-Frame-index lists follow the same sparse rule as bone tracks (present only when `1 < count < frame_count`). The server owns entity movement, so the client parses this and drops it.
+Frame-index lists follow the same sparse rule as bone tracks (present only when `1 < count < frame_count`). vcod keeps it as `XAnim::root`. Its one reader is the mounted gunner's body placement, which hangs the `standMG42_*` leaves' root translation off the gun (`cod11-turrets.md` section 7).
 
 Flag 0x3 is simply both rules composed; no third layout.
 

@@ -345,6 +345,7 @@ mod tests {
             framerate: 30.0,
             looping: false,
             notes: vec![],
+            root: None,
             tracks: vec![Track {
                 bone: bone.into(),
                 rot_keys: vec![(0, rot)],
