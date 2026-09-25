@@ -22,5 +22,6 @@ pub mod testing;
 pub mod vis;
 pub mod voicechat;
 pub mod weapon;
+pub mod weapon_table;
 pub mod xanim;
 pub mod xmodel;

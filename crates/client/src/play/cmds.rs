@@ -2,12 +2,15 @@
 //! (docs/protocol-1.1.md, "How long a cmd is simulated for"; AGENTS.md, "66
 //! ms is a pmove chop").
 
+use std::collections::VecDeque;
 use vcod_common::net::msg::UserCmd;
 use vcod_common::net::MAX_MOVE_CMDS;
 
 /// The cmd interval a 125 fps retail client produces, one cmd per frame.
 /// Retail has no fixed sim step; this client picks that rate.
 pub const CMD_MS: i32 = 8;
+/// `MAX_RELIABLE_COMMANDS`-sized backup ring the ring below is capped to.
+pub const CMD_BACKUP: usize = 64;
 
 /// Which server times to build cmds for, one call per rendered frame. Ticks
 /// at multiples of [`CMD_MS`] since the last call; a small backward step in
@@ -50,20 +53,33 @@ impl CmdClock {
     }
 }
 
-/// The previous-packet-plus-new packing every CoD client sends
-/// (`docs/protocol-1.1.md`, "Client to server message body"), so a dropped
-/// packet's cmds ride the next one.
+/// The outgoing cmd history: a capped backup for prediction's replay
+/// ([`CmdRing::since`]) plus the previous-packet-plus-new packing every CoD
+/// client sends (`docs/protocol-1.1.md`, "Client to server message body"),
+/// so a dropped packet's cmds ride the next one.
 #[derive(Default)]
 pub struct CmdRing {
+    backup: VecDeque<UserCmd>,
     /// The `new` cmds handed to the last [`CmdRing::packet`] call, repeated
     /// ahead of the next one.
     last_new: Vec<UserCmd>,
 }
 
 impl CmdRing {
-    /// The previous packet's new cmds followed by `new`, at most
-    /// [`MAX_MOVE_CMDS`] with the most recent kept.
+    pub fn push(&mut self, cmd: UserCmd) {
+        if self.backup.len() == CMD_BACKUP {
+            self.backup.pop_front();
+        }
+        self.backup.push_back(cmd);
+    }
+
+    /// Pushes `new` onto the backup ring and returns the previous packet's
+    /// cmds followed by `new`, at most [`MAX_MOVE_CMDS`] with the most recent
+    /// kept.
     pub fn packet(&mut self, new: &[UserCmd]) -> Vec<UserCmd> {
+        for &cmd in new {
+            self.push(cmd);
+        }
         let mut packet: Vec<UserCmd> = self
             .last_new
             .iter()
@@ -78,7 +94,15 @@ impl CmdRing {
         packet
     }
 
+    /// Cmds with `server_time >` the argument, oldest first.
+    pub fn since(&self, server_time: i32) -> impl Iterator<Item = &UserCmd> {
+        self.backup
+            .iter()
+            .filter(move |c| c.server_time > server_time)
+    }
+
     pub fn clear(&mut self) {
+        self.backup.clear();
         self.last_new.clear();
     }
 }
@@ -145,5 +169,27 @@ mod tests {
             p3.iter().map(|c| c.server_time).collect::<Vec<_>>(),
             vec![24, 32]
         );
+    }
+
+    #[test]
+    fn since_returns_newer_cmds_oldest_first() {
+        let mut r = CmdRing::default();
+        for t in (8..=80).step_by(8) {
+            r.push(cmd(t));
+        }
+        assert_eq!(
+            r.since(56).map(|c| c.server_time).collect::<Vec<_>>(),
+            vec![64, 72, 80]
+        );
+    }
+
+    #[test]
+    fn ring_keeps_the_last_cmd_backup() {
+        let mut r = CmdRing::default();
+        for t in 0..100 {
+            r.push(cmd(t));
+        }
+        assert_eq!(r.since(i32::MIN).count(), CMD_BACKUP);
+        assert_eq!(r.since(i32::MIN).next().unwrap().server_time, 36);
     }
 }
