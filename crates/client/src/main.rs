@@ -370,6 +370,8 @@ enum Mode {
         ring: play::cmds::CmdRing,
         /// Boxed to keep the variants a similar size.
         predictor: Box<play::predict::Predictor>,
+        /// Boxed to keep the variants a similar size.
+        view: Box<play::view::OnlineView>,
         phase: Phase,
         /// Boxed to keep the variants a similar size.
         join: Box<play::join::Join>,
@@ -800,6 +802,7 @@ fn main() -> Result<()> {
                 clock: play::cmds::CmdClock::default(),
                 ring: play::cmds::CmdRing::default(),
                 predictor: Box::default(),
+                view: Box::default(),
                 phase: Phase::Connecting {
                     since: Instant::now(),
                 },
@@ -1520,10 +1523,12 @@ impl ApplicationHandler for App {
                         clock: cmd_clock,
                         ring,
                         predictor,
+                        view,
                         phase,
                         join,
                         menu_view,
                     } => {
+                        let mut vm = None;
                         let events = net.pump();
                         let mut gamestate_ready = false;
                         for ev in &events {
@@ -1891,6 +1896,28 @@ impl ApplicationHandler for App {
                                     if let Some(v) = &predicted {
                                         cam.pos = v.origin + Vec3::Z * v.view_height;
                                     }
+                                    let view_ps = net.snapshots().newest().and_then(|s| {
+                                        (!following && pmove::predict::predictable(pm_type)).then(
+                                            || match &predicted {
+                                                Some(v) => play::view::ViewPs::from_predicted(
+                                                    &v.pred,
+                                                    s.ps.field_i32(p, "viewmodelIndex"),
+                                                ),
+                                                None => play::view::ViewPs::from_snapshot(p, &s.ps),
+                                            },
+                                        )
+                                    });
+                                    if let Some(ps) = &view_ps {
+                                        if let Some(models) =
+                                            view.sync_rig(&self.fs, net.configstrings(), ps)
+                                        {
+                                            r.set_viewmodel(&self.fs, &models);
+                                            self.viewmodel = models;
+                                        }
+                                    }
+                                    let (vm_draw, fov) =
+                                        view.frame(weapons, view_ps.as_ref(), dt, local_ms);
+                                    vm = vm_draw;
                                     if !snapshot_view {
                                         let delta = match &predicted {
                                             Some(v) => v.delta_angles,
@@ -2044,7 +2071,9 @@ impl ApplicationHandler for App {
                                     }
 
                                     renderer::Frame {
-                                        view_proj: cam.view_proj(aspect),
+                                        view_proj: camera::view_proj_from(
+                                            cam.pos, cam.yaw, cam.pitch, 0.0, fov, aspect,
+                                        ),
                                         eye: cam.pos,
                                         fwd: cam_forward,
                                         time,
@@ -2054,7 +2083,7 @@ impl ApplicationHandler for App {
                                 }
                             }
                         };
-                        (frame, None)
+                        (frame, vm)
                     }
                     Mode::Walk {
                         world,
@@ -2355,7 +2384,10 @@ impl ApplicationHandler for App {
             let (dx, dy) = (dx as f32, dy as f32);
             match &mut self.mode {
                 Mode::Fly(cam) => cam.mouse_delta(dx, dy),
-                Mode::Online { input, .. } => input.mouse(dx, dy),
+                Mode::Online { input, view, .. } => {
+                    input.mouse(dx, dy);
+                    view.mouse(dx, dy);
+                }
                 Mode::Walk {
                     ps, mouse_delta, ..
                 } => {
