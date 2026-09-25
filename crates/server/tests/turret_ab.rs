@@ -3,7 +3,8 @@
 //! it, both by `probe_turret.gsc`'s `watch_teleports` under
 //! `probe_teleport 1`. Tasks 8-11 add their own tests against this rig as
 //! the mount, the arc clamp, the fire path and the release each land; task
-//! 13 replays a retail fixture on top of it.
+//! 13 replays a retail fixture on top of it (the gate at the end of this
+//! file).
 //!
 //! Stock turret facts (global constraints): `mg42_bipod_stand_mp`, arcs
 //! ±45 yaw and -40..+40 pitch, 60 damage, 50 ms `fireTime`, stance 0
@@ -14,12 +15,14 @@
 mod common;
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use common::{holding, ClientEnd, Queues, CMD_MS};
+use common::{holding, ClientEnd, Queues, CMD_MS, FRAME_MS};
 use vcod_common::animtree::PlayerAnims;
-use vcod_common::net::msg::{UserCmd, BUTTON_ATTACK, BUTTON_USE};
+use vcod_common::net::events::EventTracker;
+use vcod_common::net::msg::{UserCmd, BUTTON_ATTACK, BUTTON_USE, NULL_USERCMD};
 use vcod_common::net::protocol::PROTOCOL_V1;
 use vcod_common::net::NetClient;
 use vcod_common::pmove::aim::angle_subtract;
@@ -39,6 +42,8 @@ const ET_MG42: i32 = 11;
 /// `docs/research/cod11-events-and-fx.md` section 1.
 const EV_FIRE_WEAPON_MG42: i32 = 168;
 const EV_SOUND_ALIAS: i32 = 172;
+const EV_BULLET_HIT_SMALL: i32 = 173;
+const EV_BULLET_HIT_LARGE: i32 = 174;
 /// The spot the probe script places its clients around (its own comment).
 const GUN_NEAR: [f32; 2] = [1712.0, 1830.0];
 
@@ -73,33 +78,67 @@ struct Rig {
     gunner: NetClient<ClientEnd>,
     /// Axis, placed 300 units in front, facing back at the gunner.
     target: NetClient<ClientEnd>,
+    /// The gunner joined second, on `ADDR_B`, and is client 1, as in the
+    /// retail capture; otherwise it is client 0 on `ADDR`.
+    gunner_second: bool,
+    /// The gunner's snapshot events, drained once per frame.
+    events: EventTracker,
     /// The turret's own entity number, read off the gunner's snapshot once
     /// the placement has settled.
     gun: u32,
 }
 
-// Tasks 8-11 read the fields the smoke test does not.
-#[allow(dead_code)]
+/// One drained event: the id, its parm and whose it was (see [`who`]).
+type Ev = (i32, i32, String);
+
+/// One snapshot of the gunner, ours off its client and retail's off a
+/// `!trace` line and the `!turret`, `!event` and `!impact` lines after it.
 #[derive(Clone, Debug, Default)]
 struct Sample {
+    /// Retail's `serverTime`; ours carries the one it pairs with.
+    t: i32,
     viewlocked: i32,
     viewlocked_ent: i32,
     e_flags: i32,
     pm_type: i32,
+    pm_flags: i32,
+    ground: i32,
     legs_anim: i32,
+    torso_anim: i32,
     hint: i32,
+    hint_val: i32,
+    hint_string: i32,
+    gunfx: i32,
+    weapon: i32,
+    event_sequence: i32,
     origin: [f32; 3],
     viewangles: [f32; 3],
+    delta_angles: [i32; 3],
     turret_angles2: [f32; 3],
     turret_loop: i32,
     turret_e_flags: i32,
+    turret_other: i32,
+    turret_event_seq: i32,
     /// The gun's own ring, oldest first, as far as `eventSequence` has filled it.
     turret_events: Vec<i32>,
+    /// The gun's four ring slots and parms as they sit.
+    turret_ring: [i32; 4],
+    turret_parms: [i32; 4],
+    /// Every event drained off this snapshot.
+    events: Vec<Ev>,
+    /// Every `EV_BULLET_HIT_SMALL`/`LARGE` temp entity: the event and origin.
+    impacts: Vec<(i32, [f32; 3])>,
 }
 
 /// `probe_turret` as the gametype, both clients through the stock menus,
 /// then held until the script's teleport has placed them and settled.
 fn rig_with(cvars: &[(&str, &str)]) -> Option<Rig> {
+    build(cvars, "m1carbine_mp", false)
+}
+
+/// The rig with `cvars` set and the gunner joining with `weapon`; with
+/// `gunner_second` the target connects first and takes client 0.
+fn build(cvars: &[(&str, &str)], weapon: &str, gunner_second: bool) -> Option<Rig> {
     let fs = vcod_common::testing::game_fs()?;
     let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
@@ -115,14 +154,26 @@ fn rig_with(cvars: &[(&str, &str)]) -> Option<Rig> {
     sv.load_scripts(fs).expect("load the scripts");
     let qg = Rc::new(RefCell::new(Queues::default()));
     let qt = Rc::new(RefCell::new(Queues::default()));
-    let (gunner, target) = common::join_pair(
-        &mut sv,
-        &qg,
-        &qt,
-        &mut now,
-        ("allies", "m1carbine_mp"),
-        ("axis", "kar98k_mp"),
-    );
+    let (gunner, target) = if gunner_second {
+        let (t, g) = common::join_pair(
+            &mut sv,
+            &qt,
+            &qg,
+            &mut now,
+            ("axis", "kar98k_mp"),
+            ("allies", weapon),
+        );
+        (g, t)
+    } else {
+        common::join_pair(
+            &mut sv,
+            &qg,
+            &qt,
+            &mut now,
+            ("allies", weapon),
+            ("axis", "kar98k_mp"),
+        )
+    };
     let mut rig = Rig {
         sv,
         qg,
@@ -130,6 +181,8 @@ fn rig_with(cvars: &[(&str, &str)]) -> Option<Rig> {
         now,
         gunner,
         target,
+        gunner_second,
+        events: EventTracker::new(),
         gun: 0,
     };
     for _ in 0..40 {
@@ -167,27 +220,51 @@ fn rig_with(cvars: &[(&str, &str)]) -> Option<Rig> {
     Some(rig)
 }
 
-// Tasks 8-11 fill in the tests that use `hold`, `tap`, `look` and `command`;
-// this rig lands ahead of them, so the impl carries dead code until then.
-#[allow(dead_code)]
 impl Rig {
     /// One server frame: two gunner cmds (`CMD_MS` apart), the target
     /// holding.
     fn frame(&mut self, cmds: [UserCmd; 2]) -> Sample {
-        for cmd in cmds {
-            self.now += Duration::from_millis(CMD_MS as u64);
+        self.frame_at(&[(CMD_MS, cmds[0]), (2 * CMD_MS, cmds[1])])
+    }
+
+    /// One server frame whose gunner cmds go out `ms` into it, each stamped
+    /// that far past the last snapshot; the target holds.
+    fn frame_at(&mut self, cmds: &[(i64, UserCmd)]) -> Sample {
+        let start = self.now;
+        for &(ms, cmd) in cmds {
+            self.now = start + Duration::from_millis(ms as u64);
             self.gunner.pump_at(self.now);
             self.gunner.send_frame(&cmd);
         }
+        self.now = start + Duration::from_millis(FRAME_MS as u64);
         self.target.pump_at(self.now);
         self.target.send_frame(&holding(&self.target));
-        common::step_pair(
-            &mut self.sv,
-            (&self.qg, &mut self.gunner),
-            (&self.qt, &mut self.target),
-            self.now,
-        );
-        self.sample()
+        if self.gunner_second {
+            common::step_pair(
+                &mut self.sv,
+                (&self.qt, &mut self.target),
+                (&self.qg, &mut self.gunner),
+                self.now,
+            );
+        } else {
+            common::step_pair(
+                &mut self.sv,
+                (&self.qg, &mut self.gunner),
+                (&self.qt, &mut self.target),
+                self.now,
+            );
+        }
+        let mut s = self.sample();
+        if let Some(snap) = self.gunner.snapshots().newest() {
+            for e in self.events.drain(snap, &PROTOCOL_V1) {
+                if e.event == EV_BULLET_HIT_SMALL || e.event == EV_BULLET_HIT_LARGE {
+                    s.impacts.push((e.event, e.pos));
+                }
+                s.events
+                    .push((e.event, e.parm, who(e.entity_num as i64, self.gun)));
+            }
+        }
+        s
     }
 
     /// The gunner's `holding` cmd with the mouse left where it is: the
@@ -267,25 +344,42 @@ impl Rig {
         };
         let ps = |name: &str| s.ps.field_i32(p, name);
         let gun = s.entities.get(&self.gun);
+        let g = |name: &str| gun.map_or(0, |e| e.field_i32(p, name));
         Sample {
+            t: s.server_time,
             viewlocked: ps("viewlocked"),
             viewlocked_ent: ps("viewlocked_entNum"),
             e_flags: ps("eFlags"),
             pm_type: ps("pm_type"),
+            pm_flags: ps("pm_flags"),
+            ground: ps("groundEntityNum"),
             legs_anim: ps("legsAnim"),
+            torso_anim: ps("torsoAnim"),
             hint: ps("serverCursorHint"),
+            hint_val: ps("serverCursorHintVal"),
+            hint_string: ps("serverCursorHintString"),
+            gunfx: ps("gunfx"),
+            weapon: ps("weapon"),
+            event_sequence: ps("eventSequence"),
             origin: s.ps.origin(p),
             viewangles: s.ps.viewangles(p),
+            delta_angles: [0, 1, 2].map(|i| ps(&format!("delta_angles[{i}]"))),
             turret_angles2: [0, 1, 2]
                 .map(|i| gun.map_or(0.0, |e| e.field_f32(p, &format!("angles2[{i}]")))),
-            turret_loop: gun.map_or(0, |e| e.field_i32(p, "loopSound")),
-            turret_e_flags: gun.map_or(0, |e| e.field_i32(p, "eFlags")),
+            turret_loop: g("loopSound"),
+            turret_e_flags: g("eFlags"),
+            turret_other: g("otherEntityNum"),
+            turret_event_seq: g("eventSequence"),
             turret_events: gun.map_or(Vec::new(), |e| {
                 let seq = e.field_i32(p, "eventSequence");
                 ((seq - 4).max(0)..seq)
                     .map(|i| e.field_i32(p, &format!("events[{}]", i & 3)))
                     .collect()
             }),
+            turret_ring: [0, 1, 2, 3].map(|i| g(&format!("events[{i}]"))),
+            turret_parms: [0, 1, 2, 3].map(|i| g(&format!("eventParms[{i}]"))),
+            events: Vec::new(),
+            impacts: Vec::new(),
         }
     }
 }
@@ -762,4 +856,538 @@ fn a_mounted_player_plays_the_mg42_aim_and_fire_clauses() {
         s.legs_anim & !ANIM_TOGGLEBIT,
         anims.wire_of("standMG42_fire").unwrap()
     );
+}
+
+// ------------------------------------------------------------ the retail gate
+//
+// The retail capture replayed on ours. `turret/mp_carentan-dm-turret.txt` is
+// the gunner's side (every cmd, every snapshot, the gun's entity, every drained
+// event and impact) and `-turret-script.txt` the server's `D;`/`K;` lines,
+// both from one run (`docs/research/cod11-turrets.md` 12). The rig numbers
+// the clients as retail did, target 0 and gunner 1, since a victim numbered
+// below its gunner takes its pain a frame late (12.5).
+//
+// Retail's snapshot `T` pairs with our frame that ran the cmds stamped in
+// `[T - 50, T)`: a cmd sent on receipt of snapshot `T - 50` carries that
+// time and runs in the next frame, and in every snapshot where the asked
+// view moves between cmds the view is the last one stamped below `T`. Each
+// cmd goes out as the view retail's server built from it, its wire angles
+// plus retail's `delta_angles` of snapshot `T - 50`, which is the view ours
+// builds too whatever `delta_angles` the join left us.
+
+const FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/turret/mp_carentan-dm-turret.txt"
+);
+const SCRIPT_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/turret/mp_carentan-dm-turret-script.txt"
+);
+
+/// Cmds that reached retail's server after the frame their stamp puts them
+/// in (12.1): the stand mount's use cmd, whose 24750 is still unmounted and
+/// 24800 mounted and placed, and 30148, whose pitch clamp at 30150 is built
+/// off 30132's wire angles.
+const LATE: &[i32] = &[24736, 30148];
+
+/// Rows the diff lets through, each a substring of the rows it excuses and
+/// the reason, which `docs/research/cod11-turrets.md` 13 carries too.
+const GAPS: &[(&str, &str)] = &[
+    ("[mount] ground t=24800", SAME_TICK),
+    ("[mount] legs_anim t=24800", SAME_TICK),
+    ("[mount] origin t=24800", SAME_TICK),
+    (
+        "[target] event t=34900: retail only (174, 52, ",
+        PASS_THROUGH,
+    ),
+    (
+        "[target] impact t=34900: retail only 174@[1248.0, 1308.0",
+        PASS_THROUGH,
+    ),
+    (
+        "[target] event t=34950: retail only (174, 52, ",
+        PASS_THROUGH,
+    ),
+    (
+        "[target] impact t=34950: retail only 174@[1248.0, 1312.0",
+        PASS_THROUGH,
+    ),
+    (
+        "[target] event t=34950: retail only (187, 47, \"client 0\")",
+        END_FRAME,
+    ),
+    (
+        "[target] impact t=34950: retail only 174@[1514.0, 1609.0",
+        KILLING_ROUND,
+    ),
+    ("[target] impact t=34950: ours only 174@[151", KILLING_ROUND),
+    ("[uncrouch] ground t=38900", CROUCH_DROP),
+    ("[uncrouch] hint t=38900", CROUCH_DROP),
+    ("[uncrouch] hint_string t=38900", CROUCH_DROP),
+    ("[uncrouch] legs_anim t=38900", CROUCH_DROP),
+    ("[strafe] eventSequence t=395", FOOTSTEP),
+    ("[strafe] event t=39500: ours only (6, 0, ", FOOTSTEP),
+    ("[strafe] event t=39600: retail only (6, 0, ", FOOTSTEP),
+    ("[strafe] event t=39800: ", SANDBAG),
+    ("[strafe] origin t=398", SANDBAG),
+    ("[strafe] origin t=399", SANDBAG),
+    ("[strafe] origin t=40000", SANDBAG),
+    ("[refused] origin", SANDBAG),
+    ("[refused] legs_anim t=40250", SANDBAG),
+];
+
+const SAME_TICK: &str = "the cmds after the use cmd in the same tick run unmounted, so the \
+    stand mount's first snapshot keeps the stance and the spot it mounted from for a frame; \
+    retail does that only on its crouch mount, where the use cmd was the frame's last";
+const PASS_THROUGH: &str = "a round stops at the first player it hits: the rifle-bullet \
+    pass-through that puts retail's second impact on the world behind the target is not \
+    modelled";
+const END_FRAME: &str = "entity states are built at snapshot time, and a client dead by then \
+    has none: retail copies the victim's state in its own ClientEndFrame, ahead of the \
+    gunner's, so the kill snapshot still carries it with the pain the round before raised";
+const KILLING_ROUND: &str = "the killing round meets a victim the round before knocked back, \
+    and lands about 4 units nearer the gun along the ray than retail's; neither half of the capture \
+    carries the victim's origin, so whether the knockback or the pose differs is open";
+const CROUCH_DROP: &str = "the crouch release's one-unit drop reads grounded 0.2 above the \
+    floor on ours and airborne at the same height on retail, which lands a frame later; the \
+    stand release lands on the same frame on both, and the capture holds one of each";
+const FOOTSTEP: &str = "footstep phase: bobCycle is not in the capture and the join leaves \
+    each side its own, so the strafe's first footstep falls two frames apart";
+const SANDBAG: &str = "the strafe slides along the nest wall into the sandbags' 52-degree \
+    face at 39800, where retail steps 11 units up it and ours 14, 2.5 units short; unmounted \
+    pmove on a steep face, and every origin after it carries the difference";
+
+const ORIGIN_EPS: f32 = 0.25;
+/// Retail's fixture prints angles to 0.1.
+const PRINT_EPS: f32 = 0.05;
+/// One `ANGLE2SHORT` step.
+const SHORT_DEG: f32 = 360.0 / 65536.0;
+const ANGLES2_EPS: f32 = 0.01;
+/// Impact origins reach the wire truncated to whole units, so one step per
+/// axis.
+const IMPACT_EPS: f32 = 1.0;
+
+fn report() -> bool {
+    std::env::var("TURRET_REPORT").is_ok_and(|v| v == "1")
+}
+
+/// Whose event it was: the gunner's own ring, the gun, a client, a corpse,
+/// or a temp entity, whose number is each server's own free list.
+fn who(num: i64, gun: u32) -> String {
+    match num {
+        n if n == u32::MAX as i64 => "ps".to_string(),
+        n if n == gun as i64 => "gun".to_string(),
+        0..=63 => format!("client {num}"),
+        64..=71 => "body".to_string(),
+        _ => "temp".to_string(),
+    }
+}
+
+fn kv(rest: &str) -> BTreeMap<&str, &str> {
+    rest.split_whitespace()
+        .filter_map(|t| t.split_once('='))
+        .collect()
+}
+
+fn floats<const N: usize>(s: &str) -> [f32; N] {
+    let mut out = [0.0; N];
+    for (i, v) in s.split(',').take(N).enumerate() {
+        out[i] = v.parse().unwrap_or_else(|_| panic!("numbers, got {s:?}"));
+    }
+    out
+}
+
+fn ints<const N: usize>(s: &str) -> [i32; N] {
+    floats::<N>(s).map(|v| v as i32)
+}
+
+fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
+struct RetailCmd {
+    st: i32,
+    /// With the wire angles, as retail's server received them.
+    cmd: UserCmd,
+}
+
+struct Capture {
+    weapon: String,
+    gun: u32,
+    cmds: Vec<RetailCmd>,
+    /// Every snapshot with its phase, `wait` included.
+    traces: Vec<(String, Sample)>,
+}
+
+fn parse(text: &str) -> Capture {
+    let header = |key: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix(key))
+            .unwrap_or_else(|| panic!("no {key:?} header"))
+    };
+    let weapon = kv(header("# gunner "))["weapon"].to_string();
+    let gun = header("# turret ")
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.parse().ok())
+        .expect("the gun's number in the header");
+    let mut phase = String::new();
+    let mut cmds = Vec::new();
+    let mut traces: Vec<(String, Sample)> = Vec::new();
+    // The gun's fields as of the last `!turret`: the line is written only
+    // when one moved.
+    let mut turret = Sample::default();
+    for line in text.lines() {
+        if let Some(name) = line
+            .strip_prefix("[phase ")
+            .and_then(|l| l.strip_suffix(']'))
+        {
+            phase = name.to_string();
+        } else if let Some(rest) = line.strip_prefix("!cmd ") {
+            let m = kv(rest);
+            let i = |k: &str| m[k].parse::<i32>().unwrap();
+            cmds.push(RetailCmd {
+                st: i("st"),
+                cmd: UserCmd {
+                    buttons: i("buttons") as u8,
+                    wbuttons: i("wbuttons") as u8,
+                    weapon: i("weapon") as u8,
+                    up: i("up") as i8,
+                    forward: i("forward") as i8,
+                    right: i("right") as i8,
+                    angles: ints(m["angles"]),
+                    ..NULL_USERCMD
+                },
+            });
+        } else if let Some(rest) = line.strip_prefix("!trace ") {
+            let m = kv(rest);
+            let i = |k: &str| m[k].parse::<i32>().unwrap();
+            let [hint, hint_val, hint_string] = {
+                let h: Vec<i32> = m["hint"].split(':').map(|v| v.parse().unwrap()).collect();
+                [h[0], h[1], h[2]]
+            };
+            let s = Sample {
+                t: i("serverTime"),
+                viewlocked: i("viewlocked"),
+                viewlocked_ent: i("viewlocked_entNum"),
+                e_flags: i("eFlags"),
+                pm_type: i("pm_type"),
+                pm_flags: i("pm_flags"),
+                ground: i("groundEntityNum"),
+                legs_anim: i("legsAnim"),
+                torso_anim: i("torsoAnim"),
+                hint,
+                hint_val,
+                hint_string,
+                gunfx: i("gunfx"),
+                weapon: i("weapon"),
+                event_sequence: i("eventSequence"),
+                origin: floats(m["origin"]),
+                viewangles: floats(m["viewangles"]),
+                delta_angles: ints(m["delta_angles"]),
+                ..turret.clone()
+            };
+            traces.push((phase.clone(), s));
+        } else if let Some(rest) = line.strip_prefix("!turret ") {
+            let m = kv(rest);
+            let i = |k: &str| m[k].parse::<i32>().unwrap();
+            turret.turret_angles2 = floats(m["angles2"]);
+            turret.turret_e_flags = i("eFlags");
+            turret.turret_loop = i("loopSound");
+            turret.turret_other = i("otherEntityNum");
+            turret.turret_event_seq = i("eventSequence");
+            turret.turret_ring = ints(m["events"]);
+            turret.turret_parms = ints(m["eventParms"]);
+            let s = &mut traces.last_mut().expect("a !turret after a !trace").1;
+            s.turret_angles2 = turret.turret_angles2;
+            s.turret_e_flags = turret.turret_e_flags;
+            s.turret_loop = turret.turret_loop;
+            s.turret_other = turret.turret_other;
+            s.turret_event_seq = turret.turret_event_seq;
+            s.turret_ring = turret.turret_ring;
+            s.turret_parms = turret.turret_parms;
+        } else if let Some(rest) = line.strip_prefix("!event ") {
+            let m = kv(rest);
+            let i = |k: &str| m[k].parse::<i64>().unwrap();
+            let s = &mut traces.last_mut().expect("an !event after a !trace").1;
+            s.events
+                .push((i("event") as i32, i("parm") as i32, who(i("entity"), gun)));
+        } else if let Some(rest) = line.strip_prefix("!impact ") {
+            let m = kv(rest);
+            let s = &mut traces.last_mut().expect("an !impact after a !trace").1;
+            s.impacts
+                .push((m["event"].parse().unwrap(), floats(m["origin"])));
+        }
+    }
+    Capture {
+        weapon,
+        gun,
+        cmds,
+        traces,
+    }
+}
+
+/// The rig as the capture's recipe left retail: the gunner joined with the
+/// header's weapon, as client 1, standing where retail's did. Retail's
+/// landing from the gsc's placement ended 0.31 units off the spot in y, which
+/// no line of the capture explains and ours does not reproduce; every
+/// release teleports back to that spot, so ours starts there, to the
+/// fixture's print precision (`docs/research/cod11-turrets.md` 13).
+fn rig(cap: &Capture) -> Option<Rig> {
+    let mut rig = build(&[], &cap.weapon, true)?;
+    let at = cap.traces.first().expect("a snapshot").1.origin;
+    let mut ours = rig.sample().origin;
+    for i in 0..3 {
+        if (ours[i] - at[i]).abs() > PRINT_EPS {
+            ours[i] = at[i];
+        }
+    }
+    rig.sv.test_set_client_origin(1, ours);
+    rig.hold(1);
+    Some(rig)
+}
+
+/// The retail snapshot a cmd's effect first shows in.
+fn frame_of(cap: &Capture, st: i32) -> Option<i32> {
+    let t = cap.traces.iter().map(|(_, s)| s.t).find(|&t| st < t)?;
+    Some(if LATE.contains(&st) {
+        t + FRAME_MS as i32
+    } else {
+        t
+    })
+}
+
+/// Every snapshot from `aim` on, each paired with our frame that ran the
+/// same cmds, tagged with retail's time. The weapon byte is ours: our
+/// configstring 7 need not number the carbine as retail's does.
+fn replay(rig: &mut Rig, cap: &Capture) -> Vec<Sample> {
+    assert_eq!(
+        rig.gun, cap.gun,
+        "the gun's entity number, ours against retail's"
+    );
+    let first = cap
+        .traces
+        .iter()
+        .position(|(phase, _)| phase != "wait")
+        .expect("snapshots past wait");
+    let mut out = Vec::new();
+    for k in first..cap.traces.len() {
+        let (prev, t) = (&cap.traces[k - 1].1, cap.traces[k].1.t);
+        let weapon = holding(&rig.gunner).weapon;
+        let batch: Vec<(i64, UserCmd)> = cap
+            .cmds
+            .iter()
+            .filter(|c| frame_of(cap, c.st) == Some(t))
+            .map(|c| {
+                let mut cmd = UserCmd { weapon, ..c.cmd };
+                for i in 0..3 {
+                    cmd.angles[i] = (cmd.angles[i] + prev.delta_angles[i]) & 0xffff;
+                }
+                ((c.st - prev.t).clamp(0, FRAME_MS as i32 - 1) as i64, cmd)
+            })
+            .collect();
+        let mut s = rig.frame_at(&batch);
+        s.t = t;
+        out.push(s);
+    }
+    out
+}
+
+fn angle_off(a: f32, b: f32) -> f32 {
+    ((a - b + 180.0).rem_euclid(360.0) - 180.0).abs()
+}
+
+/// Every `!trace` and `!turret` field, the drained events and the impacts,
+/// snapshot by snapshot, one row per field that differs, reading
+/// `[phase] field t=T: retail .. ours ..`. `delta_angles` and the gunner's
+/// `eventSequence` are compared as their change from the first pair: the
+/// join leaves each side its own offset. The gunner's ring slots are
+/// compared as the drained events, one row per event only one side raised.
+fn diff(cap: &Capture, ours: &[Sample]) -> Vec<String> {
+    let anims = vcod_common::testing::game_fs().and_then(|fs| PlayerAnims::load(&fs).ok());
+    let anim = |wire: i32| {
+        let name = anims.as_ref().and_then(|a| a.name(wire)).unwrap_or("?");
+        format!("{wire} ({name})")
+    };
+    let mut rows = Vec::new();
+    let phase_of: BTreeMap<i32, &str> = cap.traces.iter().map(|(p, s)| (s.t, p.as_str())).collect();
+    let retail: BTreeMap<i32, &Sample> = cap.traces.iter().map(|(_, s)| (s.t, s)).collect();
+    let Some(o0) = ours.first() else {
+        return vec!["no samples of ours".to_string()];
+    };
+    let r0 = retail[&o0.t];
+    let delta0 = [0, 1, 2].map(|i| (o0.delta_angles[i] - r0.delta_angles[i]) & 0xffff);
+    let seq0 = (o0.event_sequence - r0.event_sequence) & 0xff;
+    for o in ours {
+        let r = retail[&o.t];
+        let (phase, t) = (phase_of[&o.t], o.t);
+        let mut row = |field: &str, a: String, b: String| {
+            if a != b {
+                rows.push(format!("[{phase}] {field} t={t}: retail {a} ours {b}"));
+            }
+        };
+        macro_rules! exact {
+            ($($f:ident),*) => {
+                $(row(stringify!($f), format!("{:?}", r.$f), format!("{:?}", o.$f));)*
+            };
+        }
+        exact!(
+            pm_type,
+            pm_flags,
+            e_flags,
+            ground,
+            viewlocked,
+            viewlocked_ent,
+            gunfx,
+            hint,
+            hint_val,
+            hint_string,
+            weapon,
+            turret_e_flags,
+            turret_loop,
+            turret_other,
+            turret_event_seq,
+            turret_ring,
+            turret_parms
+        );
+        row("legs_anim", anim(r.legs_anim), anim(o.legs_anim));
+        row("torso_anim", anim(r.torso_anim), anim(o.torso_anim));
+        if dist(r.origin, o.origin) > ORIGIN_EPS {
+            row(
+                "origin",
+                format!("{:?}", r.origin),
+                format!("{:?}", o.origin),
+            );
+        }
+        if (0..3).any(|i| angle_off(r.viewangles[i], o.viewangles[i]) > PRINT_EPS + SHORT_DEG) {
+            row(
+                "viewangles",
+                format!("{:?}", r.viewangles),
+                format!("{:?}", o.viewangles),
+            );
+        }
+        if (0..3)
+            .any(|i| angle_off(r.turret_angles2[i], o.turret_angles2[i]) > PRINT_EPS + ANGLES2_EPS)
+        {
+            row(
+                "angles2",
+                format!("{:?}", r.turret_angles2),
+                format!("{:?}", o.turret_angles2),
+            );
+        }
+        let rebased = [0, 1, 2].map(|i| (o.delta_angles[i] - delta0[i]) & 0xffff);
+        row(
+            "delta_angles",
+            format!("{:?}", r.delta_angles),
+            format!("{rebased:?}"),
+        );
+        row(
+            "eventSequence",
+            r.event_sequence.to_string(),
+            ((o.event_sequence - seq0) & 0xff).to_string(),
+        );
+        for (side, a, b) in [
+            ("retail", &r.events, &o.events),
+            ("ours", &o.events, &r.events),
+        ] {
+            let mut left = b.clone();
+            for e in a {
+                match left.iter().position(|x| x == e) {
+                    Some(i) => {
+                        left.remove(i);
+                    }
+                    None => rows.push(format!("[{phase}] event t={t}: {side} only {e:?}")),
+                }
+            }
+        }
+        for (side, a, b) in [
+            ("retail", &r.impacts, &o.impacts),
+            ("ours", &o.impacts, &r.impacts),
+        ] {
+            for (e, at) in a.iter() {
+                let met = b
+                    .iter()
+                    .any(|(f, bt)| e == f && (0..3).all(|i| (at[i] - bt[i]).abs() <= IMPACT_EPS));
+                if !met {
+                    rows.push(format!("[{phase}] impact t={t}: {side} only {e}@{at:?}"));
+                }
+            }
+        }
+    }
+    rows
+}
+
+/// Fails on any row no [`GAPS`] entry names, and on any entry that named no
+/// row, so the list cannot outlive what it excuses.
+fn finish(rows: Vec<String>) {
+    let (gapped, real): (Vec<String>, Vec<String>) = rows
+        .into_iter()
+        .partition(|r| GAPS.iter().any(|(g, _)| r.contains(g)));
+    if report() {
+        for r in &gapped {
+            let why = GAPS.iter().find(|(g, _)| r.contains(g)).unwrap().1;
+            println!("gap: {r}\n     {why}");
+        }
+        for r in &real {
+            println!("{r}");
+        }
+    }
+    let stale: Vec<&str> = GAPS
+        .iter()
+        .map(|(g, _)| *g)
+        .filter(|g| !gapped.iter().any(|r| r.contains(g)))
+        .collect();
+    assert!(real.is_empty(), "{} rows:\n{}", real.len(), real.join("\n"));
+    assert!(
+        stale.is_empty(),
+        "GAPS entries that match no row: {stale:?}"
+    );
+}
+
+#[test]
+fn the_mount_sweep_fire_and_release_match_retail_on_mp_carentan() {
+    let cap = parse(&read(FIXTURE));
+    let Some(mut rig) = rig(&cap) else { return };
+    let ours = replay(&mut rig, &cap);
+    finish(diff(&cap, &ours));
+}
+
+/// A `D;` or `K;` line's kind, teams, weapon, damage, means of death and hit
+/// location: the client numbers and names are each server's own. Retail's
+/// lines carry the log's `m:ss` stamp first.
+fn damage_key(line: &str) -> Option<String> {
+    let body = match line.split_once(' ') {
+        Some((stamp, rest)) if stamp.contains(':') && !stamp.contains(';') => rest,
+        _ => line,
+    };
+    if !(body.starts_with("D;") || body.starts_with("K;")) {
+        return None;
+    }
+    let f: Vec<&str> = body.split(';').collect();
+    Some(
+        [0, 2, 5, 7, 8, 9, 10]
+            .map(|i| f.get(i).copied().unwrap_or("?"))
+            .join(";"),
+    )
+}
+
+#[test]
+fn the_turret_kill_is_credited_to_the_mg42() {
+    let cap = parse(&read(FIXTURE));
+    let Some(mut rig) = rig(&cap) else { return };
+    replay(&mut rig, &cap);
+    let script = read(SCRIPT_FIXTURE);
+    let retail: Vec<String> = script
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(damage_key)
+        .collect();
+    assert_eq!(retail.len(), 2, "{retail:?}");
+    let ours: Vec<String> = rig
+        .sv
+        .script_log()
+        .iter()
+        .filter_map(|l| damage_key(l))
+        .collect();
+    assert_eq!(ours, retail);
 }

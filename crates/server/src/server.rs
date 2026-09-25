@@ -1311,6 +1311,20 @@ impl Server {
         !mounts.is_empty()
     }
 
+    /// Moves a client's playerstate origin and nothing else: no teleport
+    /// bit, no event, no view. Test-facing: a replay starts from a retail
+    /// capture's settled origin where the join left ours elsewhere.
+    pub fn test_set_client_origin(&mut self, slot: usize, origin: [f32; 3]) {
+        if let Some(sim) = self
+            .clients
+            .get_mut(slot)
+            .and_then(Option::as_mut)
+            .and_then(|c| c.sim.as_mut())
+        {
+            sim.ps.origin = origin.into();
+        }
+    }
+
     /// Moves the entity numbered `num` as script would. Test-facing, like
     /// `test_mount`: carentan's second gun sits out of the first one's arc.
     pub fn test_place_entity(&mut self, num: u32, origin: [f32; 3], angles: [f32; 3]) {
