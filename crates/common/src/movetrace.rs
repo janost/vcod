@@ -2,22 +2,16 @@
 //! retail's `SV_Trace` world-then-entities walk
 //! (docs/research/cod11-player-clip.md).
 
-use crate::collision::{Capsule, CollisionWorld, Prim, Trace};
+use crate::collision::{Capsule, CollisionWorld, Prim, Trace, SURFACE_CLIP_EPSILON};
 use glam::Vec3;
 
 pub const CONTENTS_BODY: u32 = 0x2000000;
 pub const CONTENTS_CORPSE: u32 = 0x4000000;
 /// `ClientThink_real`'s mask for `pm_type` > 5, and `BG_CheckProneValid`'s.
 pub const MASK_DEADSOLID: u32 = 0x810011;
-/// Step 1's read of `cod_lnxded`: the sphere/cylinder trace adds `tw+0xf8`
-/// to the radius (0x80557c6), but that field traces back through
-/// `CM_TraceCapsuleThroughCapsule`'s tw pointer to a value either memcpy'd
-/// from the mover's own capsule descriptor or computed as a per-axis extent
-/// in the box-mover branch, not a rodata immediate reachable in the ~20
-/// minute budget. Falls back to `SURFACE_CLIP_EPSILON`: the retail melee
-/// fixture (`mp_carentan-tdm-melee-shooter.txt` lines 58-60) stops two
-/// standing players 30.1 apart, which fits 0.125 better than Q3's 1.0.
-/// Task 8's capture is the arbiter.
+/// The sphere/cylinder radius pad (`cod_lnxded` 0x80557c6); see the task-1
+/// fix report for the RE detail and Task 8's capture as the arbiter of its
+/// value and where it applies.
 pub const BODY_RADIUS_EPS: f32 = 0.125;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -80,6 +74,8 @@ impl<'a> MoveWorld<'a> {
     }
 
     pub fn box_trace(&self, start: Vec3, end: Vec3, mins: Vec3, maxs: Vec3, mask: u32) -> Trace {
+        // world.box_trace always clips against TRACE_MASK_MOVE; mask here
+        // only filters which bodies this trace clips against.
         let mut t = self.world.box_trace(start, end, mins, maxs);
         if t.fraction == 0.0 {
             return t;
@@ -141,32 +137,62 @@ fn clip_capsule(t: &mut Trace, start: Vec3, end: Vec3, mover: Capsule, hh_m: f32
     );
 }
 
+/// Squared distance from `p` to the closest point on segment `a`-`b`. Q3's
+/// `CM_DistanceFromLineSquared` reaches the same value through a per-axis
+/// bounding-box check on the infinite line's projection instead of a
+/// clamped one; the two agree because the check direction is the segment's
+/// own, so a projection outside the segment is outside on every axis the
+/// direction has a component on.
+fn dist_to_segment_sq(p: Vec3, a: Vec3, b: Vec3) -> f32 {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    let f = if len_sq > 1e-8 {
+        ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    p.distance_squared(a + ab * f)
+}
+
 /// Q3 `CM_TraceThroughVerticalCylinder`: an infinite-height circle swept
 /// against a segment, clamped to the cylinder's half height `h` about `o`.
+/// `startsolid` tests the bare radius `r`; the quadratic pads it by
+/// `BODY_RADIUS_EPS` where Q3 uses `RADIUS_EPSILON`, and the early-out below
+/// pads it by `SURFACE_CLIP_EPSILON` where Q3 does too (two distinct Q3
+/// constants; vcod folds both into `BODY_RADIUS_EPS` for the quadratic and
+/// reuses `SURFACE_CLIP_EPSILON` itself for the early-out, matching Q3's
+/// actual choice there since that one isn't part of the open question).
 fn trace_cylinder(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, h: f32, entity: u32) {
-    let ray = (end - start).with_z(0.0);
     let rel = (start - o).with_z(0.0);
+    if (start.z - o.z).abs() <= h && rel.length_squared() < r * r {
+        let end_rel = (end - o).with_z(0.0);
+        let end_inside = (end.z - o.z).abs() <= h && end_rel.length_squared() < r * r;
+        set_startsolid(t, entity, end_inside);
+        return;
+    }
+    let ray = (end - start).with_z(0.0);
     let a = ray.length_squared();
     if a < 1e-8 {
         return;
     }
+    // Early out when the segment's closest approach never reaches the bare
+    // radius and the end point has cleared the padded one: paired with the
+    // fraction clamp below, a start already inside the pad still registers
+    // as touching rather than as a miss.
+    let closest_sq = dist_to_segment_sq(o.with_z(0.0), start.with_z(0.0), end.with_z(0.0));
+    let end_rel = (end - o).with_z(0.0);
+    if closest_sq >= r * r && end_rel.length_squared() > (r + SURFACE_CLIP_EPSILON).powi(2) {
+        return;
+    }
     let b = 2.0 * rel.dot(ray);
     let c = rel.length_squared() - (r + BODY_RADIUS_EPS).powi(2);
-    if c < 0.0 {
-        // Already inside the cylinder's disc; the z-span test below decides
-        // startsolid.
-        if (start.z - o.z).abs() < h {
-            set_startsolid(t, entity);
-        }
-        return;
-    }
     let disc = b * b - 4.0 * a * c;
-    if disc < 0.0 {
+    if disc <= 0.0 {
         return;
     }
-    let f = (-b - disc.sqrt()) / (2.0 * a);
-    if !(0.0..=1.0).contains(&f) {
-        return;
+    let mut f = (-b - disc.sqrt()) / (2.0 * a);
+    if f < 0.0 {
+        f = 0.0;
     }
     let hit = start.lerp(end, f);
     if (hit.z - o.z).abs() > h {
@@ -180,30 +206,36 @@ fn trace_cylinder(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, h: f32
     }
 }
 
-/// Q3 `CM_TraceThroughSphere`: a point swept against a sphere of radius
-/// `r + BODY_RADIUS_EPS`; `startsolid`/`allsolid` test the bare `r`.
+/// Q3 `CM_TraceThroughSphere`: a point swept against a sphere of radius `r`;
+/// `startsolid`/`allsolid` test that bare radius, the quadratic pads it by
+/// `BODY_RADIUS_EPS` where Q3 uses `RADIUS_EPSILON`, and the early-out below
+/// pads it by `SURFACE_CLIP_EPSILON`, matching Q3's own choice there.
 fn trace_sphere(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, entity: u32) {
-    let ray = end - start;
     let rel = start - o;
+    if rel.length_squared() < r * r {
+        let end_inside = (end - o).length_squared() < r * r;
+        set_startsolid(t, entity, end_inside);
+        return;
+    }
+    let ray = end - start;
     let a = ray.length_squared();
     if a < 1e-8 {
-        if rel.length_squared() < r * r {
-            set_startsolid(t, entity);
-        }
+        return;
+    }
+    let closest_sq = dist_to_segment_sq(o, start, end);
+    let end_sq = (end - o).length_squared();
+    if closest_sq >= r * r && end_sq > (r + SURFACE_CLIP_EPSILON).powi(2) {
         return;
     }
     let b = 2.0 * rel.dot(ray);
-    if rel.length_squared() < r * r {
-        set_startsolid(t, entity);
-    }
     let c = rel.length_squared() - (r + BODY_RADIUS_EPS).powi(2);
     let disc = b * b - 4.0 * a * c;
-    if disc < 0.0 {
+    if disc <= 0.0 {
         return;
     }
-    let f = (-b - disc.sqrt()) / (2.0 * a);
-    if !(0.0..=1.0).contains(&f) {
-        return;
+    let mut f = (-b - disc.sqrt()) / (2.0 * a);
+    if f < 0.0 {
+        f = 0.0;
     }
     if f < t.fraction {
         t.fraction = f;
@@ -213,13 +245,20 @@ fn trace_sphere(t: &mut Trace, start: Vec3, end: Vec3, o: Vec3, r: f32, entity: 
     }
 }
 
-/// Unlike the world's brush clip, a sphere or cylinder primitive never
-/// computes a partial exit fraction, so a start inside one is stuck outright.
-fn set_startsolid(t: &mut Trace, entity: u32) {
+/// Mirrors Q3's inline startsolid block in both leaf traces: startsolid
+/// always fires when the start point is inside the bare radius, and
+/// allsolid only when the end point is too (`CM_TraceThroughSphere`,
+/// `CM_TraceThroughVerticalCylinder`). pmove branches on allsolid alone to
+/// declare a mover fully stuck (`pmove.rs`'s `slide_move`/step-up); a bare
+/// startsolid still clips at fraction 0 and lets the slide-plane bump try a
+/// way out.
+fn set_startsolid(t: &mut Trace, entity: u32, end_inside: bool) {
     t.startsolid = true;
-    t.allsolid = true;
     t.fraction = 0.0;
     t.hit = Some(Prim::Body(entity));
+    if end_inside {
+        t.allsolid = true;
+    }
 }
 
 #[cfg(test)]
@@ -324,6 +363,96 @@ mod tests {
             LIVE,
         );
         assert!(t.startsolid && t.fraction == 0.0);
+    }
+
+    #[test]
+    fn walking_in_at_any_angle_then_pulling_away_clears_at_fraction_one() {
+        let w = test_world(&[]);
+        let bodies = [body_at(0.0, 70.0)];
+        let mw = MoveWorld::new(&w, &bodies, 0);
+        for i in 0..64 {
+            let a = i as f32 / 64.0 * std::f32::consts::TAU;
+            let dir = Vec3::new(a.cos(), a.sin(), 0.0);
+            let up = Vec3::new(0.0, 0.0, 1.0);
+            let t = mw.box_trace(-dir * 200.0 + up, dir * 200.0 + up, STAND.0, STAND.1, LIVE);
+            assert!(t.fraction < 1.0, "angle {a} missed the body");
+            // Pull straight back out along the approach direction.
+            let away = mw.box_trace(t.endpos, t.endpos - dir * 50.0, STAND.0, STAND.1, LIVE);
+            assert!(
+                away.fraction == 1.0 && !away.startsolid,
+                "angle {a} stuck moving away: {away:?}"
+            );
+            // Slide along the tangent instead of pulling back.
+            let tangent = Vec3::new(-dir.y, dir.x, 0.0);
+            let side = mw.box_trace(t.endpos, t.endpos + tangent * 50.0, STAND.0, STAND.1, LIVE);
+            assert!(
+                side.fraction == 1.0 && !side.startsolid,
+                "angle {a} stuck on tangent: {side:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tracing_further_into_a_resting_contact_does_not_pass_through() {
+        let w = test_world(&[]);
+        let bodies = [body_at(0.0, 70.0)];
+        let mw = MoveWorld::new(&w, &bodies, 0);
+        for i in 0..64 {
+            let a = i as f32 / 64.0 * std::f32::consts::TAU;
+            let dir = Vec3::new(a.cos(), a.sin(), 0.0);
+            let up = Vec3::new(0.0, 0.0, 1.0);
+            let t = mw.box_trace(-dir * 200.0 + up, dir * 200.0 + up, STAND.0, STAND.1, LIVE);
+            assert!(t.fraction < 1.0, "angle {a} missed the body");
+            let further = mw.box_trace(t.endpos, t.endpos + dir * 50.0, STAND.0, STAND.1, LIVE);
+            assert!(
+                further.fraction < 1e-4 && further.endpos.distance(t.endpos) < 0.01,
+                "angle {a} passed through: {further:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn starting_inside_and_moving_clear_is_startsolid_not_allsolid() {
+        let w = test_world(&[]);
+        let bodies = [body_at(0.0, 70.0)];
+        let mw = MoveWorld::new(&w, &bodies, 0);
+        // The body's own centre is well inside; the end point is well clear.
+        let t = mw.box_trace(
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(200.0, 0.0, 1.0),
+            STAND.0,
+            STAND.1,
+            LIVE,
+        );
+        assert!(t.startsolid);
+        assert!(!t.allsolid, "{t:?}");
+    }
+
+    #[test]
+    fn resting_on_the_top_sphere_a_ground_check_and_a_side_step_do_not_stick() {
+        let w = test_world(&[]);
+        let bodies = [body_at(0.0, 70.0)];
+        let mw = MoveWorld::new(&w, &bodies, 0);
+        let fall = mw.box_trace(
+            Vec3::new(0.0, 0.0, 200.0),
+            Vec3::new(0.0, 0.0, 0.0),
+            STAND.0,
+            STAND.1,
+            LIVE,
+        );
+        assert!(fall.fraction < 1.0);
+        let rest = fall.endpos;
+        // pmove's 0.25-unit down probe for on_ground.
+        let ground = mw.box_trace(rest, rest - Vec3::Z * 0.25, STAND.0, STAND.1, LIVE);
+        assert!(!ground.allsolid, "{ground:?}");
+        let step = mw.box_trace(
+            rest,
+            rest + Vec3::new(2.0, 0.0, 0.0),
+            STAND.0,
+            STAND.1,
+            LIVE,
+        );
+        assert!(!step.allsolid, "{step:?}");
     }
 
     #[test]
