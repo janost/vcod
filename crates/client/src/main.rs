@@ -1435,9 +1435,13 @@ impl ApplicationHandler for App {
                                 }
                             }
                         }
+                        // A press counts only while the mouse is captured; a
+                        // release always passes so nothing stays held.
                         _ => {
                             if let Some(action) = play_action(code) {
-                                input.key(action, pressed);
+                                if grabbed || !pressed {
+                                    input.key(action, pressed);
+                                }
                             }
                         }
                     },

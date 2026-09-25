@@ -119,7 +119,7 @@ fn slot_of(held: &Held, weapon: u8) -> usize {
 /// wrapping through 1..=5. 0 if none of the other four are set.
 fn step_slot(held: &Held, from: u8, forward: bool) -> u8 {
     let mut n = slot_of(held, from);
-    for _ in 0..5 {
+    for _ in 0..4 {
         n = match forward {
             true if n == *CYCLE_SLOTS.end() => *CYCLE_SLOTS.start(),
             true => n + 1,
@@ -157,6 +157,9 @@ pub struct PlayInput {
     /// pitch at 16000 short units, and the drawn view clamps the same way
     /// (`own_view` in main.rs).
     raw_angles: [i32; 3],
+    /// The sub-unit rest of the mouse motion per axis [pitch, yaw], carried
+    /// so slow motion still turns.
+    mouse_rest: [f32; 2],
 }
 
 impl PlayInput {
@@ -205,8 +208,13 @@ impl PlayInput {
         // Wire pitch is down-positive; `FlyCamera::mouse_delta` is
         // up-positive (`pitch -= dy * SENS`), so this accumulator takes the
         // opposite sign on dy. Yaw keeps `FlyCamera`'s own sign.
-        self.raw_angles[0] += (dy * MOUSE_SENS * SHORT_PER_RAD) as i32;
-        self.raw_angles[1] += (-dx * MOUSE_SENS * SHORT_PER_RAD) as i32;
+        let delta = [dy, -dx];
+        for (axis, d) in delta.into_iter().enumerate() {
+            let total = self.mouse_rest[axis] + d * MOUSE_SENS * SHORT_PER_RAD;
+            let whole = total.trunc();
+            self.raw_angles[axis] += whole as i32;
+            self.mouse_rest[axis] = total - whole;
+        }
     }
 
     pub fn raw_angles(&self) -> [i32; 3] {
@@ -450,6 +458,20 @@ mod tests {
     }
 
     #[test]
+    fn slow_mouse_motion_accumulates() {
+        // 0.01 counts is a third of a short unit, which truncated per event
+        // to nothing.
+        let mut i = PlayInput::default();
+        for _ in 0..1000 {
+            i.mouse(0.01, -0.01);
+        }
+        let per_1000 = 10.0 * MOUSE_SENS * SHORT_PER_RAD;
+        let [pitch, yaw, _] = i.raw_angles();
+        assert!((yaw as f32 + per_1000).abs() <= 1.0, "yaw {yaw}");
+        assert!((pitch as f32 + per_1000).abs() <= 1.0, "pitch {pitch}");
+    }
+
+    #[test]
     fn prone_sets_the_wire_bit_directly() {
         let mut i = PlayInput::default();
         i.key(Action::Prone, true);
@@ -497,7 +519,7 @@ mod tests {
 
     #[test]
     fn next_and_prev_weapon_walk_nonzero_slots_wrapping() {
-        // slot 4 holds 3, slot 5 holds 6, slots 2..3 empty, slot 1 holds 10.
+        // slot 1 holds 10 (in hand), slot 3 holds 3, slot 4 holds 6.
         let mut i = PlayInput::default();
         i.key(Action::NextWeapon, true);
         assert_eq!(i.build(100, &held(10)).weapon, 3);

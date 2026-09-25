@@ -3,12 +3,11 @@
 //! ms is a pmove chop").
 
 use vcod_common::net::msg::UserCmd;
+use vcod_common::net::MAX_MOVE_CMDS;
 
-/// Retail's fixed sim step; a cmd exists only at a multiple of it.
+/// The cmd interval a 125 fps retail client produces, one cmd per frame.
+/// Retail has no fixed sim step; this client picks that rate.
 pub const CMD_MS: i32 = 8;
-/// `MAX_PACKET_USERCMDS` (`docs/protocol-1.1.md`, "How long a cmd is
-/// simulated for"): a packet carries at most this many cmds, oldest dropped.
-pub const MAX_PACKET_CMDS: usize = 32;
 
 /// Which server times to build cmds for, one call per rendered frame. Ticks
 /// at multiples of [`CMD_MS`] since the last call; a small backward step in
@@ -22,7 +21,7 @@ pub struct CmdClock {
 
 impl CmdClock {
     /// The server times of the cmds to build now, oldest first. First call
-    /// (or a restart) returns `[server_now]`; capped at [`MAX_PACKET_CMDS`],
+    /// (or a restart) returns `[server_now]`; capped at [`MAX_MOVE_CMDS`],
     /// keeping the most recent ticks when a hitch produced more.
     pub fn due(&mut self, server_now: i32) -> Vec<i32> {
         let Some(last) = self.last else {
@@ -41,7 +40,7 @@ impl CmdClock {
             return Vec::new();
         }
         self.last = Some(last + CMD_MS * k_max);
-        let count = (k_max as usize).min(MAX_PACKET_CMDS);
+        let count = (k_max as usize).min(MAX_MOVE_CMDS);
         let start_k = k_max - count as i32 + 1;
         (start_k..=k_max).map(|k| last + CMD_MS * k).collect()
     }
@@ -63,7 +62,7 @@ pub struct CmdRing {
 
 impl CmdRing {
     /// The previous packet's new cmds followed by `new`, at most
-    /// [`MAX_PACKET_CMDS`] with the most recent kept.
+    /// [`MAX_MOVE_CMDS`] with the most recent kept.
     pub fn packet(&mut self, new: &[UserCmd]) -> Vec<UserCmd> {
         let mut packet: Vec<UserCmd> = self
             .last_new
@@ -71,8 +70,8 @@ impl CmdRing {
             .copied()
             .chain(new.iter().copied())
             .collect();
-        if packet.len() > MAX_PACKET_CMDS {
-            let excess = packet.len() - MAX_PACKET_CMDS;
+        if packet.len() > MAX_MOVE_CMDS {
+            let excess = packet.len() - MAX_MOVE_CMDS;
             packet.drain(0..excess);
         }
         self.last_new = new.to_vec();
@@ -101,7 +100,7 @@ mod tests {
         let mut c = CmdClock::default();
         c.due(0);
         let t = c.due(10_000);
-        assert_eq!(t.len(), MAX_PACKET_CMDS);
+        assert_eq!(t.len(), MAX_MOVE_CMDS);
         assert!(t.windows(2).all(|w| w[0] < w[1]));
         assert_eq!(*t.last().unwrap(), 10_000 - 10_000 % CMD_MS);
     }

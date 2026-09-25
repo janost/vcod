@@ -881,7 +881,7 @@ impl<T: Transport> NetClient<T> {
 /// `send_cmds` caps a single `clc_move` here, same as the server's
 /// `MAX_PACKET_USERCMDS` (`crates/server/src/server.rs`); more cmds than
 /// this keeps only the most recent ones.
-const MAX_MOVE_CMDS: usize = 32;
+pub const MAX_MOVE_CMDS: usize = 32;
 
 /// `ps.delta_angles`, in usercmd angle order [pitch, yaw, roll].
 pub const DELTA_ANGLE_FIELDS: [&str; 3] = ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"];
