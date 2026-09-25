@@ -29,12 +29,13 @@ engineering setup works.
   hold verified format and engine facts with binary addresses as evidence. Read
   the research doc before touching the subsystem it covers; extend it when you
   learn something new instead of leaving the fact in a commit message.
-- `private/`, `docs/design/` and `tmp/` are gitignored. `docs/design/` holds
-  the per-project design documents. `private/` is for material that must
+- `private/`, `docs/design/`, `docs/superpowers/` and `tmp/` are gitignored.
+  `docs/design/` holds the per-project design documents, `docs/superpowers/`
+  the specs and implementation plans. `private/` is for material that must
   not ship: the GPL sources read as lineage (Quake III Arena, RTCW-MP, ioq3,
   CoDExtended), the retail 1.1d Linux dedicated server and its homepath,
   Ghidra decompilations, and old task plans. `tmp/` is scratch: probe captures
-  land there. `private/` and `docs/design/` exist only on my machine, so a
+  land there. `private/`, `docs/design/` and `docs/superpowers/` exist only on my machine, so a
   public clone does not have them.
 - Feature work happens on a branch in a worktree; master is merge-only.
   Conventional commit prefixes (`feat:`, `fix:`, `docs:`, `test:`, `perf:`,
