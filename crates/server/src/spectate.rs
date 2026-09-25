@@ -1738,6 +1738,43 @@ mod tests {
         assert_eq!(sim.anim.legs(), before, "no land anim, no toggle flip");
     }
 
+    /// The land anim's timer half: a fast landing while the last land anim
+    /// still holds the legs (`legsTimer` running) raises no second one.
+    #[test]
+    fn a_landing_inside_the_last_land_anim_plays_none() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let inputs = AnimInputs {
+            anims: &anims,
+            weapon: "m1carbine_mp",
+            weapon_class: "rifle",
+        };
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.ps.on_ground = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1000, &[], &mut 1u64);
+        sim.ps.on_ground = false;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1050, &[], &mut 1u64);
+        sim.ps.on_ground = true;
+        sim.land_anim = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1100, &[], &mut 1u64);
+        assert_eq!(anims.name(sim.anim.legs()), Some("pb_standjump_land"));
+        let first = sim.anim.legs();
+        // Airborne and down again inside the clause's `duration 100`.
+        sim.ps.on_ground = false;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1120, &[], &mut 1u64);
+        sim.ps.on_ground = true;
+        sim.land_anim = true;
+        sim.update_anims(&inputs, &NULL_USERCMD, 1150, &[], &mut 1u64);
+        assert_eq!(
+            sim.anim.legs(),
+            first,
+            "the held land anim is not restarted"
+        );
+    }
+
     /// Leaving the ground is not jumping. Retail's own mp_pavlov capture backs
     /// off a ledge at `run_back` and reads the run loop (index 93) while
     /// airborne, so a fall keeps whatever the legs were doing; raising the

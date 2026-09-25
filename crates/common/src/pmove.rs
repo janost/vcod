@@ -2385,6 +2385,35 @@ mod tests {
         assert!(events.is_empty(), "{events:?}");
     }
 
+    /// The land anim's speed half: a 200-unit fall lands faster than
+    /// `LAND_ANIM_SPEED` and reports it on the landing move only; a
+    /// one-unit drop never does.
+    #[test]
+    fn only_a_fast_landing_reports_the_land_anim() {
+        let w = dirt_flat();
+        let idle = PmInput::default();
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 200.0), 0.0);
+        ps.on_ground = false;
+        let mut reported = Vec::new();
+        for i in 0..500 {
+            let was = ps.on_ground;
+            pmove(&mut ps, &idle, &w, 8.0 / 1000.0, &[]);
+            if ps.land_anim {
+                reported.push((i, was, ps.on_ground));
+            }
+        }
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert_eq!((reported[0].1, reported[0].2), (false, true));
+
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 1.0), 0.0);
+        ps.on_ground = false;
+        for _ in 0..20 {
+            pmove(&mut ps, &idle, &w, 8.0 / 1000.0, &[]);
+            assert!(!ps.land_anim);
+        }
+        assert!(ps.on_ground);
+    }
+
     #[test]
     fn landing_sound_bands_follow_fall_height() {
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
