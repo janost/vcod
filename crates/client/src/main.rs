@@ -5,6 +5,8 @@ mod fx;
 mod hud;
 mod hud_text;
 mod loading;
+#[allow(dead_code)] // wired in by the --connect join task
+mod play;
 mod probe;
 mod quick_chat;
 mod renderer;
