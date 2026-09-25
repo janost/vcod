@@ -673,6 +673,30 @@ in the capture land one unit above the mount origin with 200 and 199 on temp
 entities and the teleport bit flipped; the facing is not separable from the
 probe's own view there.
 
+VERIFIED, `TeleportPlayer`: each temp entity takes the player's
+`s.clientNum` (gentity +0x90, the entity netfield at offset 144; stores
+0x513b7 and 0x513d3). The 200 is made at `ps.origin` (`client+0x14`,
+0x513a6) and the 199 at the destination argument before the one-unit lift
+(0x513c5). VERIFIED, `G_TempEntity` (0x67938): no `svFlags` store, and the
+origin goes through three truncating `fistp`/`fild` pairs before
+`G_SetOrigin` (0x67995..0x67a0c). INFERRED: the pair is culled by PVS like
+any entity, not broadcast, and carries an origin snapped toward zero.
+
+VERIFIED, `SetClientViewAngle` (0x41e30): a test of `ps.pm_flags & 1`
+(0x41e56) and of `ps.eFlags` byte 1 against 0xc0 (0x41e60) in front of a
+block that reads `ps.proneDirection` (+0x368) through `AngleDelta` and
+`AngleNormalize180`; then, per axis, `ANGLE2SHORT(angle)` truncated, masked
+with 0xffff, minus the dword at `client+0x20f8 + 4i`, stored to
+`ps.delta_angles[i]` (0x42060..0x42098); then the angles stored to the
+entity's +0x140..0x148 and to `ps.viewangles` (0x4209f..0x420e1). The ps
+offsets are the CoDMP.exe playerstate netfield table's (`pm_flags` 12,
+`eFlags` 128, `delta_angles` 72, `viewangles` 192, `proneDirection` 872).
+INFERRED: `client+0x20f8` is `pers.cmd.angles`, the last cmd's; the prone
+block clamps the asked angles to the prone cone only for a prone player off
+a gun; +0x140 is `r.currentAngles`. VERIFIED: `setPlayerAngles` (player
+method 11, 0x44df0) is `Scr_GetVector(0)` and one `SetClientViewAngle` call
+(0x44e60).
+
 The triggers, INFERRED from the call sites:
 
 - the use key: `Cmd_Activate_f` sets the busy byte to 2 (section 4.1), and
