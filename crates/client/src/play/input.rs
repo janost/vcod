@@ -230,7 +230,12 @@ impl PlayInput {
                 self.pending_weapon = Some(candidate);
             }
         }
-        if self.pending_weapon == Some(held.weapon) {
+        // Read, or no longer held at all (a death, a map change): either way
+        // the cmd goes back to following the playerstate.
+        if self
+            .pending_weapon
+            .is_some_and(|w| w == held.weapon || !held.slots.contains(&w))
+        {
             self.pending_weapon = None;
         }
     }
@@ -334,6 +339,21 @@ mod tests {
         assert_eq!(i.build(116, &held(3)).weapon, 3);
         // Released: follows the playerstate again.
         assert_eq!(i.build(124, &held(10)).weapon, 10);
+    }
+
+    #[test]
+    fn a_switch_to_a_weapon_no_longer_held_is_dropped() {
+        let mut i = PlayInput::default();
+        i.key(Action::Slot(3), true);
+        assert_eq!(i.build(100, &held(10)).weapon, 3);
+        // A map change: no snapshot yet, then a loadout without the colt.
+        assert_eq!(i.build(108, &Held::default()).weapon, 0);
+        let other = Held {
+            weapon: 12,
+            slots: [0, 12, 0, 0, 0, 0, 0, 0],
+            stance: Stance::Stand,
+        };
+        assert_eq!(i.build(116, &other).weapon, 12);
     }
 
     #[test]
