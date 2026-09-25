@@ -299,8 +299,8 @@ pub struct PlayerState {
     pub waterjump_ms: f32,
     /// Remaining player-clip push penalty, `pm_time` with `pm_flags` 0x100;
     /// 0 when free. Quarters `walk_move`'s accel and softens ground friction
-    /// to 0.3 of its control term while it runs (plan-phase read 3,
-    /// `docs/research/cod11-player-clip.md`). Task 5 sets it.
+    /// to 0.3 of its control term while it runs (`docs/research/cod11-player-clip.md`).
+    /// `StuckInClient`'s push sets it (`crates/server/src/game/stuck.rs`).
     pub knockback_ms: f32,
     /// Touching a climbable surface (trace hit with SURF_LADDER) this frame.
     pub on_ladder: bool,
@@ -2089,7 +2089,7 @@ mod tests {
     }
 
     /// `PM_WalkMove`'s accel and `PM_Friction`'s ground control both scale
-    /// down while the knockback timer runs (plan-phase read 3).
+    /// down while the knockback timer runs.
     #[test]
     fn knockback_quarters_accel_and_softens_friction() {
         let w = flat();
@@ -2125,7 +2125,7 @@ mod tests {
     }
 
     /// `PM_DropTimers` zeroes the timer once the frame's ms reach it, and
-    /// otherwise subtracts (plan-phase read 3).
+    /// otherwise subtracts.
     #[test]
     fn knockback_runs_out() {
         let w = flat();

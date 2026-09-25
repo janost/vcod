@@ -1,5 +1,5 @@
 //! `StuckInClient`: retail's push that separates two overlapping players
-//! (docs/research/cod11-player-clip.md, "Plan-phase reads" 2).
+//! (docs/research/cod11-player-clip.md, "StuckInClient").
 
 use glam::{Vec2, Vec3};
 use vcod_common::movetrace::{CONTENTS_BODY, CONTENTS_CORPSE};
@@ -9,10 +9,7 @@ use vcod_common::movetrace::{CONTENTS_BODY, CONTENTS_CORPSE};
 /// frame is seen with its post-push contents.
 #[derive(Clone, Copy, Debug)]
 pub struct StuckView {
-    /// `pm_flags & PMF_OWN_VIEW`: set for a connected client in sessionState
-    /// 0 or 1 (playing or dead), clear for a spectator, an intermission
-    /// client or one still on the connect menu. A clear `own_view` anywhere
-    /// in the scan order aborts the whole thing.
+    /// `pm_flags & PMF_OWN_VIEW`; a clear one anywhere in the scan aborts it.
     pub own_view: bool,
     /// sessionState 0: playing, not dead.
     pub playing: bool,
@@ -31,8 +28,7 @@ pub struct Push {
     pub other_vel: Vec2,
 }
 
-/// `-1 - rand()/2^30`, retail's jitter term (rodata 0x72d30 read as an
-/// overflowed `RAND_MAX + 1`); `rand` is the caller's 31-bit `rand()`.
+/// `-1 - rand()/2^30`, retail's jitter term; `rand` is the caller's 31-bit `rand()`.
 fn jitter(rand: &mut impl FnMut() -> u32) -> f32 {
     -1.0 - rand() as f32 / (1u32 << 30) as f32
 }

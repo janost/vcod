@@ -10,13 +10,15 @@ use crate::configstrings;
 use crate::console;
 use crate::game::host::{ClientEvent, SpawnMode};
 use crate::game::script;
+use crate::game::stuck::{stuck_in_client, StuckView};
 use crate::game::temp_entity;
-use crate::spectate::ClientSim;
+use crate::spectate::{ClientSim, PmType};
 use crate::world::{TestEntities, World};
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+use vcod_common::movetrace::CONTENTS_CORPSE;
 use vcod_common::net::connectionless::{build_oob, parse_connect, parse_oob, Info};
 use vcod_common::net::gamestate::{self, Gamestate};
 use vcod_common::net::huffman::Huffman;
@@ -1751,11 +1753,10 @@ impl Server {
     /// One slot's `StuckInClient` view: `None` for a free slot, `own_view`
     /// false for a connected client with no sim yet, a spectator or an
     /// intermission client.
-    fn stuck_view(c: &Option<Client>) -> Option<crate::game::stuck::StuckView> {
-        use crate::spectate::PmType;
+    fn stuck_view(c: &Option<Client>) -> Option<StuckView> {
         let client = c.as_ref()?;
         let Some(sim) = client.sim.as_ref() else {
-            return Some(crate::game::stuck::StuckView {
+            return Some(StuckView {
                 own_view: false,
                 playing: false,
                 health: 0,
@@ -1767,7 +1768,7 @@ impl Server {
                 speed: 0.0,
             });
         };
-        Some(crate::game::stuck::StuckView {
+        Some(StuckView {
             own_view: sim.pm_type == PmType::Normal,
             playing: sim.pm_type == PmType::Normal && !sim.dead,
             health: sim.health,
@@ -2953,22 +2954,26 @@ impl Server {
                 self.sv_time_ms,
             );
             mirror_vitals(&mut self.clients, rt);
-            // Slot order, retail's arrival order stand-in: `update_contents`
-            // then, for a live sim, `StuckInClient` off a view rebuilt this
-            // slot so an earlier slot's fresh contents (BODY, or CORPSE if it
-            // was just marked stuck) are seen, before `end_frame` links it.
+            // `G_RunFrame`'s own slot order (0x50ab0-0x50ad7), not arrival
+            // order: that applies only to `ClientThink` (`replay_moves`).
+            // `update_contents` then, for a live sim, `StuckInClient` off a
+            // view rebuilt this slot so an earlier slot's fresh contents
+            // (BODY, or CORPSE if it was just marked stuck) are seen. No
+            // link follows a CORPSE write here: `end_frame` is
+            // `P_DamageFeedback` and never relinks, so the pushed player's
+            // `solid` stays packed on the wire until its own next cmd runs
+            // `relink`.
             for slot in 0..self.clients.len() {
                 let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
                     continue;
                 };
                 sim.update_contents();
-                let live =
-                    sim.pm_type == crate::spectate::PmType::Normal && !sim.dead && sim.health > 0;
+                let live = sim.pm_type == PmType::Normal && !sim.dead && sim.health > 0;
                 if live {
-                    let views: Vec<Option<crate::game::stuck::StuckView>> =
+                    let views: Vec<Option<StuckView>> =
                         self.clients.iter().map(Self::stuck_view).collect();
                     let rand = || (vcod_common::rng::xorshift(&mut self.rng) >> 33) as u32;
-                    if let Some(push) = crate::game::stuck::stuck_in_client(slot, &views, rand) {
+                    if let Some(push) = stuck_in_client(slot, &views, rand) {
                         let me = self.clients[slot]
                             .as_mut()
                             .and_then(|c| c.sim.as_mut())
@@ -2978,7 +2983,7 @@ impl Server {
                         me.ps.knockback_ms = 300.0;
                         // The caller marks only self a corpse (0x411b8); the
                         // partner marks itself on its own turn through the scan.
-                        me.contents = vcod_common::movetrace::CONTENTS_CORPSE;
+                        me.contents = CONTENTS_CORPSE;
                         let other = self.clients[push.other]
                             .as_mut()
                             .and_then(|c| c.sim.as_mut())

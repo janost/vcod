@@ -296,17 +296,26 @@ fn stuck_player_solid_reads_zero_after_its_next_cmd() {
     let spot = Rig::origin(&r.ca);
     r.sv.place_client(Rig::num(&r.ca), spot, 0.0);
     r.sv.place_client(Rig::num(&r.cb), spot, 180.0);
-    // The first end frame marks A a corpse; A's next cmd relinks it with
-    // that, and the snapshot after reads it.
+    // Tick 1's end frame marks both corpses (they start fully overlapped),
+    // but nothing relinks until each plays its next cmd, so tick 1's
+    // snapshot still carries the standing box (6684943, the same pack as
+    // line 283's `settle`) and tick 2's, relinked from the corpse mark,
+    // reads 0.
     let mut seen = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..2 {
         let (a, b) = (common::holding(&r.ca), common::holding(&r.cb));
         r.step(&a, &b);
         seen.push(r.solid_of_a_seen_by_b());
     }
-    assert!(
-        seen.contains(&Some(0)),
-        "A's solid never read 0 while stuck: {seen:?}"
+    assert_eq!(
+        seen[0],
+        Some(6684943),
+        "A's solid should still be packed on the snapshot straight after the stuck frame: {seen:?}"
+    );
+    assert_eq!(
+        seen[1],
+        Some(0),
+        "A's solid should read 0 once A's next cmd has relinked the corpse mark: {seen:?}"
     );
 }
 
@@ -338,85 +347,6 @@ fn overlapping_pair_pushes_apart() {
     assert!(d >= 30.0, "the pair is still {d:.2} apart after 1 s");
 }
 
-/// A third socket, for the test that needs a spectator holding a slot beside
-/// the pushed pair.
-const ADDR_C: std::net::SocketAddr =
-    std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 31339);
-
-/// `common::step`, parameterized on the address: the spectator here needs a
-/// third socket distinct from `common::ADDR`/`ADDR_B`.
-fn step_solo(
-    sv: &mut Server,
-    addr: std::net::SocketAddr,
-    q: &Rc<RefCell<Queues>>,
-    cl: &mut Client,
-    now: Instant,
-) -> Vec<NetEvent> {
-    let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
-    for p in pending {
-        sv.handle_packet(addr, &p, now);
-    }
-    sv.tick(now);
-    for (to, p) in sv.take_outgoing() {
-        assert_eq!(to, addr);
-        q.borrow_mut().to_client.push_back(p);
-    }
-    cl.pump_at(now)
-}
-
-/// `common::connect`, parameterized on address and qport.
-fn connect_solo(
-    sv: &mut Server,
-    addr: std::net::SocketAddr,
-    q: &Rc<RefCell<Queues>>,
-    now: &mut Instant,
-    qport: u16,
-) -> Client {
-    let mut cl = NetClient::start_with_qport(ClientEnd(q.clone()), *now, qport);
-    for _ in 0..40 {
-        *now += Duration::from_millis(250);
-        let events = step_solo(sv, addr, q, &mut cl, *now);
-        if events.contains(&NetEvent::GamestateReady) {
-            return cl;
-        }
-        assert!(
-            !events.iter().any(|e| matches!(e, NetEvent::Dropped(_))),
-            "{events:?}"
-        );
-    }
-    panic!("the spectator never reached a gamestate");
-}
-
-/// `common::step_pair`, extended to a third address: the spectator's own
-/// packets are routed here too, so its snapshots do not spill into either
-/// player's queue the way a two-way router would.
-fn step_trio(
-    sv: &mut Server,
-    s: (std::net::SocketAddr, &Rc<RefCell<Queues>>, &mut Client),
-    a: (std::net::SocketAddr, &Rc<RefCell<Queues>>, &mut Client),
-    b: (std::net::SocketAddr, &Rc<RefCell<Queues>>, &mut Client),
-    now: Instant,
-) -> (Vec<NetEvent>, Vec<NetEvent>, Vec<NetEvent>) {
-    for (addr, q) in [(s.0, s.1), (a.0, a.1), (b.0, b.1)] {
-        let pending: Vec<Vec<u8>> = q.borrow_mut().to_server.drain(..).collect();
-        for p in pending {
-            sv.handle_packet(addr, &p, now);
-        }
-    }
-    sv.tick(now);
-    for (to, p) in sv.take_outgoing() {
-        let q = if to == s.0 {
-            s.1
-        } else if to == a.0 {
-            a.1
-        } else {
-            b.1
-        };
-        q.borrow_mut().to_client.push_back(p);
-    }
-    (s.2.pump_at(now), a.2.pump_at(now), b.2.pump_at(now))
-}
-
 #[test]
 fn a_spectator_anywhere_disables_the_push() {
     let Some((mut sv, mut now)) = server() else {
@@ -426,7 +356,7 @@ fn a_spectator_anywhere_disables_the_push() {
     let qs = Rc::new(RefCell::new(Queues::default()));
     // Connects alone first, so it is the only client the slot table has ever
     // seen and holds slot 0 once the pair joins beside it.
-    let mut cs = connect_solo(&mut sv, ADDR_C, &qs, &mut now, 0x2000);
+    let mut cs = common::connect_at(&mut sv, common::ADDR_C, &qs, &mut now, 0x2000);
 
     let qa = Rc::new(RefCell::new(Queues::default()));
     let qb = Rc::new(RefCell::new(Queues::default()));
@@ -441,9 +371,9 @@ fn a_spectator_anywhere_disables_the_push() {
         cs.send_frame(&vcod_common::net::msg::NULL_USERCMD);
         ca.send_frame(&vcod_common::net::msg::NULL_USERCMD);
         cb.send_frame(&vcod_common::net::msg::NULL_USERCMD);
-        let (_, ea, eb) = step_trio(
+        let (_, ea, eb) = common::step_trio(
             &mut sv,
-            (ADDR_C, &qs, &mut cs),
+            (common::ADDR_C, &qs, &mut cs),
             (common::ADDR, &qa, &mut ca),
             (common::ADDR_B, &qb, &mut cb),
             now,
@@ -488,9 +418,9 @@ fn a_spectator_anywhere_disables_the_push() {
         let b = common::holding(&cb);
         ca.send_frame(&a);
         cb.send_frame(&b);
-        step_trio(
+        common::step_trio(
             &mut sv,
-            (ADDR_C, &qs, &mut cs),
+            (common::ADDR_C, &qs, &mut cs),
             (common::ADDR, &qa, &mut ca),
             (common::ADDR_B, &qb, &mut cb),
             now,
