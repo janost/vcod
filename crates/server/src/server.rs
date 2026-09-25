@@ -2755,6 +2755,15 @@ impl Server {
                 let Some(sim) = c.sim.as_mut() else {
                     continue;
                 };
+                // `ClientSpawn` lets go of a gun first (turrets doc 8). The
+                // teleport's events go out only for a spawn into play, the
+                // `sessionstate` the script set ahead of the spawn.
+                let temps = rt.release_turret(s.slot, sim);
+                if s.mode == SpawnMode::Player {
+                    for te in temps {
+                        rt.push_temp_entity(te);
+                    }
+                }
                 match s.mode {
                     SpawnMode::Player => sim.become_player(s.origin, s.yaw_deg, cmd_angles),
                     SpawnMode::Spectator => sim.become_spectator(s.origin, s.yaw_deg, cmd_angles),
@@ -2882,6 +2891,7 @@ impl Server {
                 let Some(c) = c.as_mut() else { continue };
                 let buttons = moved[slot].last_buttons.unwrap_or(c.last_cmd.buttons);
                 if let Some(sim) = c.sim.as_mut() {
+                    rt.apply_turret_releases(slot, sim);
                     shots.extend(rt.turret_think_client(
                         slot,
                         sim,
@@ -2889,6 +2899,7 @@ impl Server {
                     ));
                 }
             }
+            rt.drop_turret_releases();
             if !shots.is_empty() {
                 let mut turret_hits = Vec::new();
                 {

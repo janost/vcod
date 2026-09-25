@@ -112,7 +112,7 @@ const HINT_MG42: i32 = 6;
 /// A manned gun's shot and its cooldown alias, both on the gun's own ring
 /// (`docs/research/cod11-events-and-fx.md` section 1, turrets doc 6.3, 6.4).
 const EV_FIRE_WEAPON_MG42: i32 = 168;
-const EV_SOUND_ALIAS: i32 = 172;
+pub(crate) const EV_SOUND_ALIAS: i32 = 172;
 
 pub struct ScriptRuntime {
     vm: Vm,
@@ -484,10 +484,25 @@ impl ScriptRuntime {
             return;
         };
         let old = std::mem::replace(&mut self.host.client_old_buttons[slot], buttons);
+        let pressed = buttons & !old & vcod_common::net::msg::BUTTON_USE != 0;
+        // `Cmd_Activate_f`'s busy byte (0x4848e), which has no `pm_type`
+        // gate: a gunner's press asks for the release and does nothing else
+        // (turrets doc 4.1).
+        let mut release_asked = false;
+        if pressed {
+            if let Some(rec) = self
+                .host
+                .turrets
+                .values_mut()
+                .find(|r| r.owner == Some(slot))
+            {
+                rec.busy = 2;
+                release_asked = true;
+            }
+        }
         if self.host.client_pm_type.get(slot).copied().unwrap_or(0) > TOUCH_MAX_PM_TYPE {
             return;
         }
-        let pressed = buttons & !old & vcod_common::net::msg::BUTTON_USE != 0;
         let host = &mut self.host;
         self.vm.with_cx(|cx| {
             use vcod_gsc::Host;
@@ -502,13 +517,7 @@ impl ScriptRuntime {
                     .push((client, "touch", vec![Value::Entity(id)]));
                 crate::game::item::touch(host, cx, id, slot, true);
             }
-            if !pressed {
-                return;
-            }
-            // `Cmd_Activate_f`'s busy byte (0x4848e): a gunner's press asks
-            // for the release and does nothing else (turrets doc 4.1).
-            if let Some(rec) = host.turrets.values_mut().find(|r| r.owner == Some(slot)) {
-                rec.busy = 2;
+            if !pressed || release_asked {
                 return;
             }
             let v = host.client_vitals[slot];
@@ -544,7 +553,10 @@ impl ScriptRuntime {
         let ops = std::mem::take(&mut self.host.turret_ops);
         let mut out = Vec::new();
         for op in ops {
-            let TurretOp::Mount { slot: s, turret } = op;
+            let TurretOp::Mount { slot: s, turret } = op else {
+                self.host.turret_ops.push(op);
+                continue;
+            };
             debug_assert_eq!(s, slot, "a mount is drained after its own cmd's pass");
             let host = &mut self.host;
             let angles = self
@@ -577,10 +589,13 @@ impl ScriptRuntime {
             .iter()
             .find(|(_, r)| r.owner == Some(slot))?
             .0;
-        // The release arm is task 10's; until then a gun asked to let go, or
-        // a gunner no longer playing, runs no frame.
+        // A gun asked to let go, or a gunner no longer playing (dead,
+        // spectating), is released instead (0x5235c, 0x5236b).
         let playing = sim.pm_type == crate::spectate::PmType::Normal && !sim.dead;
         if self.host.turrets[&id].busy != 1 || !playing {
+            for te in self.release_turret(slot, sim) {
+                self.push_temp_entity(te);
+            }
             return None;
         }
         let host = &mut self.host;
@@ -590,14 +605,9 @@ impl ScriptRuntime {
                 crate::game::item::angles_of(host, cx, id),
             )
         });
-        let cs = &self.host.configstrings;
         let rec = self.host.turrets.get_mut(&id)?;
-        let alias = |name: &Option<String>| {
-            name.as_deref()
-                .and_then(|n| crate::configstrings::sound_alias_index(cs, n))
-                .unwrap_or(0)
-        };
-        let (loop_index, stop_index) = (alias(&rec.def.loop_sound), alias(&rec.def.stop_sound));
+        let (loop_index, stop_index) =
+            crate::game::turret::sound_indices(rec, &self.host.configstrings);
 
         sim.viewlocked = 1;
         sim.viewlocked_ent = id.0;
@@ -634,6 +644,63 @@ impl ScriptRuntime {
             }
         }
         shot
+    }
+
+    /// `G_ClientStopUsingTurret` (0x53054, turrets doc 8) on the gun `slot`
+    /// mans, if any: the record freed, the gun's loop cut and the gunner put
+    /// back where it mounted, its new origin mirrored to script. Returns
+    /// `TeleportPlayer`'s temp entities for the caller to queue.
+    pub fn release_turret(
+        &mut self,
+        slot: usize,
+        sim: &mut crate::spectate::ClientSim,
+    ) -> Vec<crate::game::temp_entity::TempEntity> {
+        let Some((id, rec)) = self
+            .host
+            .turrets
+            .iter_mut()
+            .find(|(_, r)| r.owner == Some(slot))
+        else {
+            return Vec::new();
+        };
+        let id = *id;
+        let Some((_, origin, stance)) = crate::game::turret::release(rec) else {
+            return Vec::new();
+        };
+        if let Some(ent) = self.host.ents.get_mut(id) {
+            ent.loop_sound = 0;
+        }
+        let temps = crate::game::turret::release_sim(sim, slot, origin, stance);
+        self.set_client_origin(slot, sim.origin());
+        temps
+    }
+
+    /// The sim half of every release `GameHost::free_entity` queued for
+    /// `slot` (`G_FreeTurret`, turrets doc 8), each temp entity queued.
+    pub fn apply_turret_releases(&mut self, slot: usize, sim: &mut crate::spectate::ClientSim) {
+        let ops = std::mem::take(&mut self.host.turret_ops);
+        for op in ops {
+            match op {
+                TurretOp::Release {
+                    slot: s,
+                    origin,
+                    stance,
+                } if s == slot => {
+                    for te in crate::game::turret::release_sim(sim, slot, origin, stance) {
+                        self.push_temp_entity(te);
+                    }
+                    self.set_client_origin(slot, sim.origin());
+                }
+                op => self.host.turret_ops.push(op),
+            }
+        }
+    }
+
+    /// Drops the releases queued for a slot with no sim to apply them to.
+    pub fn drop_turret_releases(&mut self) {
+        self.host
+            .turret_ops
+            .retain(|op| !matches!(op, TurretOp::Release { .. }));
     }
 
     /// `Cmd_Kill_f`: the `kill` client command, which is the `suicide` builtin
@@ -1302,6 +1369,14 @@ impl ScriptRuntime {
                     // freed entity otherwise (`Vm::kill_threads_of`).
                     self.vm.kill_threads_of(Target::Entity(id));
                 }
+                // `G_FreeEntity` on the player (turrets doc 8): a gun it
+                // manned is unowned, its loop left to the unmanned think.
+                for rec in self.host.turrets.values_mut() {
+                    if rec.owner == Some(slot) {
+                        rec.owner = None;
+                        rec.busy = 0;
+                    }
+                }
                 self.host.ents.free_client(slot);
             }
         }
@@ -1541,6 +1616,7 @@ impl ScriptRuntime {
         // what `probe_delete`'s post-wait count measures.
         let host = &mut self.host;
         self.vm.with_cx(|cx| host.run_entity_thinks(cx, now_ms));
+        self.host.run_turret_thinks();
         // The body queue is not in the object table, so its own think -- the
         // 250 ms `eFlags` 0x800 clear -- runs beside the table's.
         self.host
@@ -2947,6 +3023,19 @@ mod tests {
         assert!(rt.host.turret_ops.is_empty());
         assert_eq!(rt.host.turrets[&gun].busy, 2);
         assert!(!rt.host.ents.get(fg42).unwrap().item.unwrap().taken);
+    }
+
+    /// `Cmd_Activate_f` has no `pm_type` gate (turrets doc 4.1): a gunner
+    /// past the touch pass's gate still asks for the release.
+    #[test]
+    fn a_gunners_press_asks_for_the_release_whatever_its_pm_type() {
+        let (mut rt, gun) = turret_rig();
+        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        mount_queued(&mut rt, 0);
+        rt.item_pass(0, 0, EYE, AT_GUN);
+        rt.set_client_pm_type(0, 6);
+        rt.item_pass(0, vcod_common::net::msg::BUTTON_USE, EYE, AT_GUN);
+        assert_eq!(rt.host.turrets[&gun].busy, 2);
     }
 
     const EYE: [f32; 3] = [0.0, 0.0, 60.0];

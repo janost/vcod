@@ -422,3 +422,182 @@ fn a_round_on_the_target_lands_in_the_frame_it_was_fired() {
     let after = rig.target.snapshots().newest().unwrap().ps.health();
     assert!(after < before, "health {after} on the shot's own snapshot");
 }
+
+/// The gun's `angles2` as the target's newest snapshot carries it: the
+/// gunner's own view is gone once it disconnects.
+fn target_gun_angles2(rig: &Rig) -> Option<[f32; 3]> {
+    let p = &PROTOCOL_V1;
+    let gun = rig
+        .target
+        .snapshots()
+        .newest()?
+        .entities
+        .get(&rig.gun)?
+        .clone();
+    Some([0, 1, 2].map(|i| gun.field_f32(p, &format!("angles2[{i}]"))))
+}
+
+/// The gunner's use press on the gun lets go in the frame of the use cmd:
+/// back a unit above where it stood to mount, the lock and the stand bits
+/// gone, `viewlocked_entNum` 1023 (turrets doc 12.7); the barrel keeps its
+/// place on that snapshot and walks home 10 degrees a frame after it (12.8).
+#[test]
+fn use_on_the_gun_lets_go_and_the_barrel_walks_home() {
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    let before = rig.hold(1).origin;
+    rig.tap(BUTTON_USE);
+    let yaw = rig.gun_yaw();
+    for _ in 0..3 {
+        rig.look([0.0, yaw + 30.0]);
+    }
+    let held = rig.hold(1);
+    assert_eq!(held.viewlocked, 1);
+    let h = rig.still();
+    let s = rig.frame([
+        UserCmd {
+            buttons: h.buttons | BUTTON_USE,
+            ..h
+        },
+        h,
+    ]);
+    assert_eq!((s.viewlocked, s.viewlocked_ent), (0, 1023));
+    assert_eq!(s.e_flags & 0xC000, 0);
+    assert!(
+        (s.origin[2] - (before[2] + 1.0)).abs() < 0.01
+            && (s.origin[0] - before[0]).abs() < 0.01
+            && (s.origin[1] - before[1]).abs() < 0.01,
+        "released at {:?}, mounted from {before:?}",
+        s.origin
+    );
+    assert_eq!(
+        s.turret_angles2[1], held.turret_angles2[1],
+        "the release snapshot keeps the barrel"
+    );
+    let next = rig.hold(1);
+    assert!(
+        (next.turret_angles2[1] - (held.turret_angles2[1] - 10.0)).abs() < 0.01,
+        "{:?} after {:?}",
+        next.turret_angles2,
+        held.turret_angles2
+    );
+    let s = rig.hold(20);
+    assert_eq!(s.turret_angles2[1], 0.0);
+}
+
+/// `turret_think_client`'s `sessionstate` test (turrets doc 8): a gunner
+/// killed on the gun lets go that frame, and the gun is free for its next
+/// life. The corpse is cloned off a released player, so it carries no
+/// mounted bits.
+#[test]
+fn a_death_releases_the_turret() {
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    rig.tap(BUTTON_USE);
+    assert_eq!(rig.hold(2).viewlocked, 1);
+    // Past the flood window the `u` taps and menu answers opened.
+    rig.hold(20);
+    let s = rig.command("kill");
+    let s = if s.pm_type == 6 { s } else { rig.hold(2) };
+    assert_eq!(s.pm_type, 6, "dead");
+    assert_eq!(s.viewlocked, 0);
+    assert_eq!(s.e_flags & 0xC000, 0);
+    assert_eq!(s.turret_loop, 0);
+    let p = &PROTOCOL_V1;
+    let corpses: Vec<i32> = rig
+        .target
+        .snapshots()
+        .newest()
+        .unwrap()
+        .entities
+        .iter()
+        .filter(|(&n, _)| (64..72).contains(&n))
+        .map(|(_, e)| e.field_i32(p, "eFlags"))
+        .collect();
+    assert!(!corpses.is_empty(), "the corpse is in the target's view");
+    assert!(corpses.iter().all(|f| f & 0xC000 == 0), "{corpses:?}");
+    rig.hold(50); // the death anim and the callback's 2 s wait
+                  // `waitRespawnButton` polls `useButtonPressed`, the frame's last cmd,
+                  // which a tap has already released.
+    let h = rig.still();
+    let held = UserCmd {
+        buttons: h.buttons | BUTTON_USE,
+        ..h
+    };
+    rig.frame([held, held]);
+    let s = rig.hold(40); // the gsc places the gunner again
+    assert_eq!(s.pm_type, 0, "respawned");
+    rig.tap(BUTTON_USE);
+    assert_eq!(
+        rig.hold(2).viewlocked,
+        1,
+        "the gun is free for the next life"
+    );
+}
+
+/// Both boundaries build the level again, turrets and sims with it: a
+/// `map_restart` leaves nobody on the gun.
+#[test]
+fn a_level_boundary_forgets_every_mount() {
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    rig.tap(BUTTON_USE);
+    assert_eq!(rig.hold(2).viewlocked, 1);
+    rig.sv.push_console("map_restart");
+    let s = rig.hold(60);
+    assert_eq!(s.viewlocked, 0);
+    assert_eq!(s.e_flags & 0xC000, 0);
+}
+
+/// `G_FreeEntity` calls `G_FreeTurret` (turrets doc 8): deleting a manned
+/// gun lets its gunner go.
+#[test]
+fn deleting_a_manned_turret_releases_its_gunner() {
+    // Counted from map load; the joins, the placement and the mount take
+    // about 5.5 s of it.
+    let Some(mut rig) = rig_with(&[("probe_delete_after", "10")]) else {
+        return;
+    };
+    rig.tap(BUTTON_USE);
+    assert_eq!(rig.hold(2).viewlocked, 1);
+    let mut s = rig.hold(1);
+    for _ in 0..200 {
+        if s.viewlocked == 0 {
+            break;
+        }
+        s = rig.hold(1);
+    }
+    let gone = rig
+        .gunner
+        .snapshots()
+        .newest()
+        .is_some_and(|snap| !snap.entities.contains_key(&rig.gun));
+    assert!(gone, "released by the delete, not by anything else");
+    assert_eq!(s.viewlocked, 0);
+    assert_eq!(s.viewlocked_ent, 1023);
+    assert_eq!(s.e_flags & 0xC000, 0);
+}
+
+/// A gunner who drops: `G_FreeEntity` on the player clears the gun's owner
+/// (turrets doc 8), so the unmanned think takes the barrel home.
+#[test]
+fn a_gunner_who_disconnects_leaves_the_gun_to_walk_home() {
+    let Some(mut rig) = rig_with(&[]) else {
+        return;
+    };
+    rig.tap(BUTTON_USE);
+    let yaw = rig.gun_yaw();
+    for _ in 0..3 {
+        rig.look([0.0, yaw + 30.0]);
+    }
+    let held = target_gun_angles2(&rig).expect("the gun in the target's view");
+    assert!(held[1] > 20.0, "{held:?}");
+    rig.sv
+        .handle_packet(common::ADDR, b"\xff\xff\xff\xffdisconnect", rig.now);
+    rig.hold(10);
+    let s = target_gun_angles2(&rig).unwrap();
+    assert_eq!(s[1], 0.0, "{s:?}");
+}

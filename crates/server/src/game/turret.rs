@@ -344,6 +344,76 @@ pub fn muzzle(
     (player + Vec3::from(forward) * reach).into()
 }
 
+/// `EV_STANCE_FORCE_STAND`/`_CROUCH`/`_PRONE` (`cod11-events-and-fx.md`).
+const EV_STANCE_FORCE_STAND: i32 = 140;
+const EV_STANCE_FORCE_CROUCH: i32 = 141;
+const EV_STANCE_FORCE_PRONE: i32 = 142;
+/// `viewlocked_entNum` after a release (turrets doc 12.7).
+const ENTITYNUM_NONE: u32 = 1023;
+
+/// The record half of `G_ClientStopUsingTurret` (0x53054, turrets doc 8):
+/// the gun is free and its loop timer spent. Returns the gunner's slot and
+/// the spot and stance it mounted from, `None` for a gun nobody mans. The
+/// caller writes the gun's `loopSound` 0.
+pub fn release(rec: &mut TurretRecord) -> Option<(usize, [f32; 3], Option<Stance>)> {
+    let slot = rec.owner.take()?;
+    rec.busy = 0;
+    rec.loop_left_ms = 0;
+    rec.firing = false;
+    rec.fresh_mount = false;
+    Some((slot, rec.mount_origin, rec.mount_stance.take()))
+}
+
+/// The player half: the stance event for the saved stance, `TeleportPlayer`
+/// back to the mount spot facing the current view, and the lock let go.
+/// Returns `TeleportPlayer`'s temp entities for the caller to queue. The
+/// stance itself is the client's to restore off the event (12.7).
+pub fn release_sim(
+    sim: &mut ClientSim,
+    slot: usize,
+    origin: [f32; 3],
+    stance: Option<Stance>,
+) -> Vec<crate::game::temp_entity::TempEntity> {
+    if let Some(stance) = stance {
+        sim.add_event(
+            match stance {
+                Stance::Prone => EV_STANCE_FORCE_PRONE,
+                Stance::Crouch => EV_STANCE_FORCE_CROUCH,
+                Stance::Stand => EV_STANCE_FORCE_STAND,
+            },
+            0,
+        );
+    }
+    let temps = sim.teleport_player(slot, origin, sim.view_angles());
+    sim.mounted_on = None;
+    sim.ps.mounted = None;
+    sim.viewlocked = 0;
+    sim.viewlocked_ent = ENTITYNUM_NONE;
+    sim.gunfx = 0;
+    sim.firing = false;
+    temps
+}
+
+/// An unmanned barrel's turn per frame, 200 degrees a second (turrets doc 9).
+const SLEW_STEP: f32 = 10.0;
+
+/// `turret_think`'s 0x524cc (turrets doc 9): an unmanned barrel steps toward
+/// (rest pitch, 0), each axis capped at 10 degrees on its own; the pitch is
+/// then capped again against where it started, the refused part carried in
+/// `angles2[2]`. The stock gun never sets the record flags that retarget the
+/// second cap, so they are left out.
+pub fn slew_home(rec: &mut TurretRecord) {
+    let entry = rec.angles2[0];
+    rec.angles2[0] += rec.angles2[2];
+    let target = [rec.rest_pitch, 0.0];
+    for (i, t) in target.into_iter().enumerate() {
+        rec.angles2[i] += angle_subtract(t, rec.angles2[i]).clamp(-SLEW_STEP, SLEW_STEP);
+    }
+    let stepped = rec.angles2[0];
+    rec.angles2[0] = entry + angle_subtract(stepped, entry).clamp(-SLEW_STEP, SLEW_STEP);
+    rec.angles2[2] = stepped - rec.angles2[0];
+}
+
 /// One round a manned gun fired this frame, for the server's trace.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TurretShot {
@@ -354,12 +424,32 @@ pub struct TurretShot {
     pub rifle_bullet: bool,
 }
 
-/// What the use key did to a turret, queued by `ScriptRuntime::item_pass`
-/// and applied to the sim by the server right after it, since the host holds
-/// the record and the server the sim.
+/// A turret change the host made that the sim has to follow, since the host
+/// holds the record and the server the sim. A mount is queued by
+/// `ScriptRuntime::item_pass` and applied right after it; a release by
+/// `GameHost::free_entity` on a manned gun, applied in `ClientEndFrame`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TurretOp {
-    Mount { slot: usize, turret: EntId },
+    Mount {
+        slot: usize,
+        turret: EntId,
+    },
+    Release {
+        slot: usize,
+        origin: [f32; 3],
+        stance: Option<Stance>,
+    },
+}
+
+/// The gun's loop and stop aliases as `CS_SOUNDS` indices, 0 for one the
+/// table does not hold.
+pub fn sound_indices(rec: &TurretRecord, cs: &[String]) -> (i32, i32) {
+    let alias = |name: &Option<String>| {
+        name.as_deref()
+            .and_then(|n| crate::configstrings::sound_alias_index(cs, n))
+            .unwrap_or(0)
+    };
+    (alias(&rec.def.loop_sound), alias(&rec.def.stop_sound))
 }
 
 #[cfg(test)]
@@ -583,6 +673,110 @@ mod tests {
         let back = -3.0 - (-45.1);
         assert!((m[0] - (100.0 + back - 0.06)).abs() < 0.01, "{m:?}");
         assert!((m[2] - (20.9 + reach)).abs() < 0.01, "{m:?}");
+    }
+
+    #[test]
+    fn release_hands_back_the_mount_spot_and_frees_the_gun() {
+        let mut r = rec();
+        mount(
+            &mut r,
+            2,
+            [-40.0, 0.0, 0.0],
+            Stance::Crouch,
+            [0.0; 3],
+            [0.0; 3],
+        );
+        r.loop_left_ms = 100;
+        r.firing = true;
+        let (slot, origin, stance) = release(&mut r).unwrap();
+        assert_eq!(
+            (slot, origin, stance),
+            (2, [-40.0, 0.0, 0.0], Some(Stance::Crouch))
+        );
+        assert_eq!((r.owner, r.busy, r.loop_left_ms), (None, 0, 0));
+        assert!(!r.firing && !r.fresh_mount);
+        assert!(release(&mut r).is_none(), "releasing twice is a no-op");
+    }
+
+    /// The sim half (turrets doc 8 and 12.7): the stance event on the ring,
+    /// back to the mount spot a unit up, 200 and 199, the lock let go.
+    #[test]
+    fn release_sim_puts_the_gunner_back_and_unlocks_the_view() {
+        let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+        sim.become_player([0.0; 3], 0.0, [0; 3]);
+        mount_sim(&mut sim, 298, TurretStance::Stand, [0.0, 90.0, 0.0]);
+        sim.firing = true;
+        sim.gunfx = 1;
+        let seq = sim.ring.seq;
+        let temps = release_sim(&mut sim, 3, [10.0, 20.0, 30.0], Some(Stance::Crouch));
+        assert_eq!(sim.ring.seq, seq + 1);
+        assert_eq!(sim.ring.events[(seq & 3) as usize], 141);
+        assert_eq!(sim.origin(), [10.0, 20.0, 31.0]);
+        let events: Vec<i32> = temps.iter().map(|t| t.event).collect();
+        assert_eq!(events, vec![200, 199]);
+        assert_eq!(
+            (sim.viewlocked, sim.viewlocked_ent, sim.gunfx),
+            (0, 1023, 0)
+        );
+        assert_eq!(
+            (sim.mounted_on, sim.ps.mounted, sim.firing),
+            (None, None, false)
+        );
+        assert_eq!(sim.view_angles()[1], 90.0, "the view it had on the gun");
+    }
+
+    #[test]
+    fn the_saved_stance_picks_the_force_event_and_none_sends_none() {
+        for (stance, event) in [
+            (Some(Stance::Stand), Some(140)),
+            (Some(Stance::Crouch), Some(141)),
+            (Some(Stance::Prone), Some(142)),
+            (None, None),
+        ] {
+            let mut sim = ClientSim::spectator([0.0; 3], 0.0, [0; 3]);
+            sim.become_player([0.0; 3], 0.0, [0; 3]);
+            release_sim(&mut sim, 0, [0.0; 3], stance);
+            let got = (sim.ring.seq > 0).then(|| sim.ring.events[0]);
+            assert_eq!(got, event, "{stance:?}");
+        }
+    }
+
+    #[test]
+    fn an_unowned_barrel_walks_home_ten_degrees_a_frame() {
+        let mut r = rec(); // rest -63
+        r.angles2 = [0.0, 25.0, 0.0];
+        slew_home(&mut r);
+        assert_eq!((r.angles2[0], r.angles2[1]), (-10.0, 15.0));
+        for _ in 0..10 {
+            slew_home(&mut r);
+        }
+        assert_eq!(r.angles2, [-63.0, 0.0, 0.0]);
+    }
+
+    /// The crouch remount's slew in the capture (turrets doc 12.8): each
+    /// axis capped on its own, yaw done on a 1.6 step while pitch takes 10.
+    #[test]
+    fn the_captured_slew_replays() {
+        let mut r = rec();
+        r.rest_pitch = -72.0;
+        r.angles2 = [-13.6, -41.6, 0.0];
+        let want = [
+            (-23.6, -31.6),
+            (-33.6, -21.6),
+            (-43.6, -11.6),
+            (-53.6, -1.6),
+            (-63.6, 0.0),
+            (-72.0, 0.0),
+        ];
+        for (pitch, yaw) in want {
+            slew_home(&mut r);
+            assert!(
+                (r.angles2[0] - pitch).abs() < 1e-3 && (r.angles2[1] - yaw).abs() < 1e-3,
+                "{:?} against ({pitch}, {yaw})",
+                r.angles2
+            );
+            assert_eq!(r.angles2[2], 0.0);
+        }
     }
 
     #[test]
