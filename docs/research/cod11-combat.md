@@ -3128,6 +3128,20 @@ ordering, and every "when" and "otherwise" in it, which are branch conditions.
   (`+0x218`). INFERRED: the missile is a zero-sized point that nothing can
   target, since `G_Spawn` hands back a zeroed record.
 
+What the client draws it with is the weapon, not `s.index`. VERIFIED: every
+`!missile` line of the lone grenade capture
+(`crates/server/tests/fixtures/playerstate/mp_carentan-tdm-grenade.txt`)
+reads `weapon=8 index=0`. VERIFIED: `cgame_mp_x86.dll` (1.1)'s weapon field
+table names `projectileModel` at def offset `0x31C` (the table entry at
+`0x30075D2C`), the weapon setup registers that string as a model (trap `7`)
+into the per-weapon slot at `0x301A6A64`, and the only reader of that slot is
+the function at `0x3001B3F0`, which indexes the per-weapon block by the
+entity's `+0xC8`, `s.weapon`. INFERRED: that function is the missile's draw,
+and it draws nothing once `s.eFlags` carries `0x100`, which is the explode's
+flag (13). vcod's client draws an `eType` 4 the same way
+(`EntityVisual::Missile`, `crates/client/src/entities.rs`); it used to read
+`s.index`, and every grenade flew invisible.
+
 ### 11.2 The trajectory
 
 VERIFIED: the offsets, immediates and call targets named in the list below.

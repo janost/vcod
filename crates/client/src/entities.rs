@@ -62,6 +62,10 @@ pub enum EntityVisual {
     /// Dropped weapon: the raw `index`, 1-based into configstring 7. Resolved
     /// to a `worldModel` in `build_instances`, which has `fs`.
     Item(usize),
+    /// Flying missile: its `weapon`, 1-based into configstring 7, resolved to
+    /// that weapon's `projectileModel` in `build_instances`. The wire's
+    /// `index` is 0 on a retail grenade (docs/research/cod11-combat.md, 11.1).
+    Missile(usize),
     /// Inline BSP submodel (`"*N"` configstring).
     Submodel(usize),
     None,
@@ -123,7 +127,14 @@ pub fn resolve_visual(
             }
             EntityVisual::Player { body, attachments }
         }
-        ET_GENERAL | ET_MISSILE | ET_SCRIPTMOVER | ET_MOVER => {
+        ET_MISSILE => {
+            let weapon = ent.field_i32(p, "weapon");
+            if weapon <= 0 {
+                return EntityVisual::None;
+            }
+            EntityVisual::Missile(weapon as usize)
+        }
+        ET_GENERAL | ET_SCRIPTMOVER | ET_MOVER => {
             let mi = ent.field_i32(p, "index");
             if mi <= 0 {
                 return EntityVisual::None;
@@ -971,6 +982,24 @@ pub fn build_instances(
                     bones: None,
                 });
             }
+            EntityVisual::Missile(index) => {
+                let Some(def) = weapon_name_for_index(&weapon_names, index as i32)
+                    .and_then(|name| resolve_weapon_def(weapon_cache, fs, name))
+                else {
+                    continue;
+                };
+                let Some(model) = def.projectile_model.clone() else {
+                    continue;
+                };
+                let Some(handle) = resolve_model(model_cache, renderer, fs, &model) else {
+                    continue;
+                };
+                out.push(DynamicModelInstance {
+                    model: handle,
+                    transform,
+                    bones: None,
+                });
+            }
             EntityVisual::Item(index) => {
                 let Some(name) = weapon_name_for_index(&weapon_names, index as i32) else {
                     if warned_items.insert(format!("oob:{index}")) {
@@ -1122,8 +1151,20 @@ mod tests {
         let p = &PROTOCOL_V1;
         let cs = cs_table();
         let none = BTreeMap::new();
+        // A missile draws its weapon's projectile, whatever `index` says.
+        let mut grenade = ent(ET_MISSILE, 0, 0);
+        grenade.fields[EntityState::field_index(p, "weapon").unwrap()] = 8;
+        assert_eq!(
+            resolve_visual(&grenade, &none, &cs, p),
+            EntityVisual::Missile(8)
+        );
         assert_eq!(
             resolve_visual(&ent(ET_MISSILE, 0, 9), &none, &cs, p),
+            EntityVisual::None,
+            "no weapon, no projectile"
+        );
+        assert_eq!(
+            resolve_visual(&ent(ET_GENERAL, 0, 9), &none, &cs, p),
             EntityVisual::Model("crate_misc1".into())
         );
         assert_eq!(
