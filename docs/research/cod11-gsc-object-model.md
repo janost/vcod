@@ -920,12 +920,12 @@ VERIFIED, read out of the module, and so is the pool geometry (1024 records
 of 124 bytes, from the `index <= 0x3ff` loop bound and the 0x7c stride).
 What each "retail" cell then says the code at that address *does* is
 INFERRED: that is instruction sequencing and branch conditions read off the
-disassembly, and nothing in this section was measured against a running
-retail server.
+disassembly. `placeSpawnpoint` is the one builtin here measured against a
+running retail server, in 16.1.
 
 | builtin | table | address | retail | ours |
 |---|---|---|---|---|
-| `placeSpawnpoint` | entity methods 37 | 0x5bedc | INFERRED: point-traces from the origin up 128 (0x5bf45), then down 262144 (0x5bf91) with contents mask 0x2810011, moves the entity to the endpoint, stores the second trace's result word at results+0x28 into `gentity_t+0x7c` (which field that is, is a further inference: the ground entity), prints `WARNING: Spawn point entity %i is in solid at (%i, %i, %i)` when a third trace at the placed position starts solid | both traces, the solid test and the move, against our own solid+playerclip mask; nothing stored for `gentity_t+0x7c`, since our trace carries no entity identity |
+| `placeSpawnpoint` | entity methods 37 | 0x5bedc | VERIFIED: three calls to `trap_TraceCapsule` (0x5bf72, 0x5bfb8, 0x5bff4, `R_386_PC32` relocations), each passing `playerMins` and `playerMaxs` (`R_386_32` relocations onto 0x7dce8 and 0x7dcf4, whose `.data` reads (-15, -15, 0) and (15, 15, 72)), contents mask 0x2810011 and the entity's own number; the constants 128 (0x5bf45) and 262144 (0x5bf91). INFERRED: the first sweeps that player capsule from the origin up 128, the second from the first's endpoint down 262144, the entity moves to the second's endpoint, the second trace's result word at results+0x28 goes into `gentity_t+0x7c` (which field that is, is a further inference: the ground entity), and the third, zero-length at that endpoint, prints `WARNING: Spawn point entity %i is in solid at (%i, %i, %i)` when it starts solid | all three traces as the same capsule under the same mask (`CollisionWorld::box_trace`), and the move; nothing stored for `gentity_t+0x7c`, since our trace carries no entity identity. 16.1 is the measurement |
 | `setClientNameMode` | functions 89 | 0x5f208 | INFERRED: matches the argument against `auto_change` and `manual_change`, stores 0 or 1 in `level+0x210`, `Scr_Error("Unknown mode")` otherwise. The two constants are `scr_const+0xfc`/`+0xfe`, named by `GScr_LoadConsts` 0x58550, both VERIFIED data reads. So is the claim that the only two readers of `level+0x210` in the module are `ClientUserinfoChanged` (0x421eb) and the name-change path at 0x5ba99: the relocation table has exactly four `level+0x210` sites, these two and this function's own pair | recorded on the host, both errors faithful; nothing reads it until clients exist |
 | `newHudElem` | functions 77 | 0x4b184 | INFERRED: first free `g_hudelems` record, zeroed but for `fontscale` 1.0 (0x4b19b), a packed white `color` (0x4b1d9), `archived` 1 (0x4b1fc) and owner `0x3ff` (0x4b249); `Scr_Error("out of hudelems")` when full | the allocation, the pool size, the failure and all four defaults |
 | `<hudelem> setTimer` | hudelem methods 2 | 0x4b8e4 | INFERRED: exactly one parameter, seconds to milliseconds with the x87 rounding mode set to round-up (0x4b942), rejects a result not above zero, zeroes +0x30..+0x48 and +0x60/+0x64/+0x68, then writes the element type 4 at +0x0 and the absolute end time `level.time + ms` at +0x5c | faithful, the clear included |
@@ -947,6 +947,35 @@ on, is docs/research/cod11-hud-protocol.md section 5.
 
 `thread addBotClients()` is commented out in the shipped `dm.gsc`, so nothing
 in the stock bootstrap reaches `addTestClient`.
+
+### 16.1 `placeSpawnpoint` drops a player capsule, measured
+
+`probe_placespawn.gsc` runs as the gametype, calls `placeSpawnpoint` on every
+`mp_deathmatch_spawn` and logs the origin before and after. VERIFIED, run
+2026-09-26 against the retail 1.1d server on all twelve stock maps: 383
+spawnpoints, committed as
+`crates/server/tests/fixtures/spawnpoints/placespawn-retail.txt`. VERIFIED, the
+same capture: mp_harbor's entity 241, at (-10548, -8572, -4), lands at z 0.12,
+and entity 137, at (-8144, -6952, 120), at z 8.12.
+
+VERIFIED, our collision on the same map: the origin of entity 241 is 4 units
+inside a caulk brush whose top is the snow floor at z 0, and on the vertical
+line through entity 137 there is nothing between z 120 and that floor.
+INFERRED, off those two readings against retail's: a point drop cannot land
+137 at 8.12, which only a shape reaching sideways does, and retail's upward
+sweep out of 241's brush does not stop at the floor's underside, which is
+where a point trace against our facet clip stopped before falling through
+the whole world.
+
+VERIFIED, `crates/server/tests/placespawn_ab.rs` on the same fixture: with the
+point drop vcod put 17 spawnpoints more than 3 units off retail's height,
+harbor's 137 and mp_depot's 96 by 8, and harbor's 241 at z -262144, below the
+world. VERIFIED, a `--net-probe` joined to vcod on mp_harbor with its spawn
+forced to that point: `groundEntityNum` 1023 and a falling origin on every
+snapshot, z -633838 and 24461 units a second down after 32 s. With the
+capsule, every spawnpoint is within 2.63 units of retail and 318 of the 383
+are within the two decimals the log prints. What the remaining 65 differ by is
+not pinned.
 
 ## 17. Placed weapons register their item at spawn, before any script runs
 

@@ -7,6 +7,7 @@
 use crate::configstrings::CsRange;
 use crate::game::entity::{ThinkFn, FIRST_HUD_ELEM};
 use crate::game::host::{GameHost, LinkOp, SpawnMode, SpawnRequest};
+use crate::game::trigger::{PLAYER_MAXS, PLAYER_MINS};
 use crate::server::MAX_CLIENTS;
 use glam::Vec3;
 use vcod_gsc::{ArrayKey, Cx, EntId, ErrorKind, Host, Target, Value};
@@ -433,18 +434,15 @@ pub fn get_entity_number(
 }
 
 /// `self placeSpawnpoint()` (entity method 37, `game.mp.i386.so` 0x5bedc):
-/// drops a spawnpoint onto the floor at map load. Retail point-traces from
-/// the entity origin up 128 units, then from there straight down 262144,
-/// moves the entity to the endpoint, keeps one word of the second trace's
-/// result in `gentity_t+0x7c`, and prints "Spawn point entity %i is in
-/// solid" when a third trace at the new origin starts solid.
+/// drops a spawnpoint onto the floor at map load. All three of retail's
+/// traces are `trap_TraceCapsule` with `playerMins`/`playerMaxs` and mask
+/// 0x2810011 (docs/research/cod11-gsc-object-model.md, section 16): up 128
+/// from the origin, down 262144 from there, and a zero-length test at the
+/// endpoint, which only feeds the "in solid" warning. A point drop put
+/// mp_harbor's entity 241 below the world (`tests/placespawn_ab.rs`).
 ///
-/// Both traces and the move are faithful; two things are not. Retail traces
-/// with contents mask 0x2810011, ours takes solid and playerclip
-/// (`CollisionWorld::box_trace`), so the two disagree over any brush whose
-/// contents are in one mask and not the other. And our trace carries no
-/// entity identity, so the `+0x7c` word goes unrecorded. Neither is
-/// observable until players spawn, which is a later stage.
+/// The one thing not carried is the `gentity_t+0x7c` word retail keeps off
+/// the second trace: ours carries no entity identity.
 pub fn place_spawnpoint(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -462,24 +460,23 @@ pub fn place_spawnpoint(
         return Ok(Value::Undefined);
     };
     let start = Vec3::from(origin);
+    let (mins, maxs) = (Vec3::from(PLAYER_MINS), Vec3::from(PLAYER_MAXS));
     let up = world.collision.box_trace(
         start,
         start + Vec3::new(0.0, 0.0, CEILING_CHECK),
-        Vec3::ZERO,
-        Vec3::ZERO,
+        mins,
+        maxs,
     );
     let down = world.collision.box_trace(
         up.endpos,
         up.endpos - Vec3::new(0.0, 0.0, DROP_DISTANCE),
-        Vec3::ZERO,
-        Vec3::ZERO,
+        mins,
+        maxs,
     );
-    // Retail's third trace is a point test at the placed position, not a
-    // reading off the drop: `placeSpawnpoint` warns about where the
-    // spawnpoint ended up.
+    // The third trace tests where the spawnpoint ended up, not the drop.
     let placed_in_solid = world
         .collision
-        .box_trace(down.endpos, down.endpos, Vec3::ZERO, Vec3::ZERO)
+        .box_trace(down.endpos, down.endpos, mins, maxs)
         .startsolid;
     if placed_in_solid {
         log::warn!(
@@ -803,6 +800,39 @@ mod tests {
             assert!(
                 placed[2].abs() < 1.0,
                 "expected the floor at z = 0, got {placed:?}"
+            );
+        });
+    }
+
+    /// The drop is a player-sized capsule, not a point: a spawnpoint 10
+    /// units short of a 40-unit ledge lands on the ledge, which the capsule's
+    /// 15-unit radius overhangs, where a point would fall past it to the
+    /// floor. The same shape stops a spawnpoint that starts inside a floor
+    /// brush from dropping out of the world, which is what mp_harbor's
+    /// entity 241 did (`crates/server/tests/placespawn_ab.rs`).
+    #[test]
+    fn placespawnpoint_drops_a_player_capsule() {
+        let (mut vm, mut host) = fixture();
+        host.world = Some(Rc::new(World {
+            collision: vcod_common::collision::test_world(&[(
+                Vec3::new(20.0, -64.0, 0.0),
+                Vec3::new(100.0, 64.0, 40.0),
+            )]),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        }));
+        vm.with_cx(|cx| {
+            let e = host.ents.spawn(cx).unwrap();
+            let origin = cx.intern_folded("origin");
+            host.set_field(cx, e, origin, Value::Vector([10.0, 0.0, 100.0]))
+                .unwrap();
+            place_spawnpoint(&mut host, cx, Some(Target::Entity(e)), &[]).unwrap();
+            let Value::Vector(placed) = host.get_field(cx, e, origin) else {
+                panic!("a spawnpoint keeps a vector origin");
+            };
+            assert!(
+                (placed[2] - 40.0).abs() < 1.0,
+                "expected the ledge top at z = 40, got {placed:?}"
             );
         });
     }
