@@ -276,6 +276,35 @@ position `cent->lerpOrigin`. `EV_PLAY_FX_DIR` first does
 Persistent `ET_FX` entities use the same effect array but take the id from
 `es.scale` (216) and the direction from `es.origin2` (92 to 100).
 
+The server half is the `playFx` builtin, `functions[66]` at
+`game.mp.i386.so` 0x5b148. VERIFIED: it refuses fewer than 2 or more than 3
+arguments with the usage string at 0x77a00, reads `Scr_GetInt(0)` and
+`Scr_GetVector(1)`, and has two `G_TempEntity` calls, one with event 0xbf
+(`EV_PLAY_FX`, 0x5b25a) and one with 0xc0 (`EV_PLAY_FX_DIR`, 0x5b228), each
+followed by a store of the id's low byte at `ent+0xa0` (`eventParm`). The
+0xc0 arm also stores `DirToByte` of the `VectorNormalize`d third argument at
+`ent+0xd8` (`scale`, 0x5b24f), and the function formats
+`"playFx called with (0 0 0) forward direction (effect = %s)\n"` (0x77a80)
+into a `Scr_Error`. INFERRED, off the `Scr_GetNumParam() == 3` branch at
+0x5b19a: the third argument picks the 0xc0 arm. INFERRED, off the `fucompp`
+against zero at 0x5b1c1: the error is the arm a zero-length vector takes.
+VERIFIED: nothing in the function writes `svFlags`. INFERRED: the event is
+sent by PVS like any bare temp entity.
+
+VERIFIED: the id is `G_EffectIndex`'s (0x65fa4), which `loadFx` (0x5ef88)
+returns unchanged: the scan runs `i` from 1 while `i < 0x40`, compares
+`configstring(0x30c + i)` with `strcasecmp`, and a new effect is written at
+`0x30c + i` and `i` returned. So `level._effect[...]` holds `1..63`, never a
+configstring number.
+
+VERIFIED, `pak5.pk3`: `fx/explosions/mp_bomb.efx` ends in a `Sound` block
+naming `explo_rock`, and `maps/MP/gametypes/sd.gsc`'s `bomb_countdown` makes no
+sound call of its own: it deletes the defuse trigger and `level.bombmodel`,
+then `playfx(level._effect["bombexplosion"], origin)` and
+`radiusDamage(origin, 500, 2000, 1000)`. INFERRED: the S&D explosion is heard
+only through the effect, so a server that does not raise `EV_PLAY_FX` has a
+silent bomb.
+
 ### Others worth knowing
 
 | Event | Fields read |

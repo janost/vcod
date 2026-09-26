@@ -60,6 +60,8 @@ pub struct TempEntity {
     pub weapon: i32,
     /// `clientNum`, which only the caller that fills it in carries.
     pub client_num: i32,
+    /// `scale`, which `EV_PLAY_FX_DIR` spends on its `DirToByte` direction.
+    pub scale: i32,
     pub origin: [f32; 3],
     pub scope: Scope,
 }
@@ -82,6 +84,7 @@ pub fn build(te: &TempEntity, number: u32, p: &Protocol) -> EntityState {
     set("attackerEntityNum", te.attacker);
     set("weapon", te.weapon);
     set("clientNum", te.client_num);
+    set("_union.scale", te.scale);
     for (axis, v) in te.origin.iter().enumerate() {
         set(
             &format!("pos.trBase[{axis}]"),
@@ -134,6 +137,7 @@ mod tests {
             weapon: 0,
             origin: [0.0; 3],
             client_num: 0,
+            scale: 0,
             scope: Scope::Broadcast,
         }
     }
@@ -149,6 +153,7 @@ mod tests {
             weapon: 0,
             origin: [1.0, 2.0, 3.0],
             client_num: 0,
+            scale: 0,
             scope: Scope::Broadcast,
         };
         let p = &PROTOCOL_V1;
