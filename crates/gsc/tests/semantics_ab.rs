@@ -188,6 +188,10 @@ fn captures() -> BTreeMap<String, (Vec<String>, Option<String>)> {
 ///
 /// The seven `probe_stale_*` probes free an entity or a hudelem and read
 /// the handle back, which needs the object table and its deferred free.
+///
+/// `probe_placespawn` drops every spawnpoint through the map's collision,
+/// which is `vcod-common`'s; `crates/server/tests/placespawn_ab.rs` runs it
+/// on every stock map against a fixture of its own.
 const RUN_IN_SERVER_CRATE: &[&str] = &[
     "probe_bootstrap",
     "probe_cvar",
@@ -197,6 +201,7 @@ const RUN_IN_SERVER_CRATE: &[&str] = &[
     "probe_persist_exit",
     "probe_persist_exit_save",
     "probe_persist_restart",
+    "probe_placespawn",
     "probe_stale_ent_method",
     "probe_stale_ent_read",
     "probe_stale_ent_write",

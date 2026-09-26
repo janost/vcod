@@ -29,6 +29,10 @@
 //! `destroy()` has freed its object needs this crate's object table and its
 //! deferred free, and nothing in them depends on the map's own entities.
 //!
+//! `probe_placespawn` is claimed here and run in `placespawn_ab.rs`, which
+//! drops the spawnpoints of all twelve stock maps rather than this capture's
+//! one.
+//!
 //! `probe_ents`, `probe_delete` and `probe_bootstrap` need `COD_DIR`;
 //! without the paks they return early, like every other game-data test in
 //! the workspace. `probe_cvar` and `probe_not_string` need no game data and
