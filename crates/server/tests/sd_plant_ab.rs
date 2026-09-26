@@ -822,3 +822,78 @@ fn the_defuse_and_the_lookat_match_retail_on_mp_carentan() {
         "slot 0 still shown after the defuse"
     );
 }
+
+/// Where `getPlant` put the retail capture's charge, on the flak88 beside
+/// bombzone_A (object-model doc, 23.6).
+const CHARGE: [f32; 3] = [-176.8, 2473.1, -22.956871];
+/// Two of `client-probes/probe_bomb.gsc`'s stations round that charge: in the
+/// open 26 units off, and across the flak. Retail's fuse blast damaged
+/// neither (combat doc, 14.4).
+const OPEN_STATION: [f32; 3] = [-196.0, 2455.0, -22.0];
+const FLAK_STATION: [f32; 3] = [-112.0, 2446.0, -22.0];
+const EV_PLAY_FX: i32 = 191;
+const EV_OBITUARY: i32 = 201;
+const ET_EVENTS: i32 = 12;
+
+/// The charge left alone: when the fuse runs out, `bomb_countdown`'s
+/// `playfx` reaches the wire as the bomb effect's event, and its
+/// `radiusDamage` hurts neither player, since the flak88 script models the
+/// charge sits on stop every `CanDamage` trace.
+#[test]
+fn the_charge_blows_on_the_wire_and_its_flak_shields_the_blast() {
+    let Some(mut rig) = rig() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let attacker = common::parse_sd_fixture(&read(ATTACKER));
+    plant(&mut rig, &attacker, false);
+    rig.place(0, OPEN_STATION, [0.0; 3]);
+    rig.place(1, FLAK_STATION, [0.0; 3]);
+    let p = &PROTOCOL_V1;
+    let bomb_fx = (1..64)
+        .find(|i| rig.sv.configstring(780 + i) == "fx/explosions/mp_bomb.efx")
+        .expect("sd.gsc loads the bomb effect") as i32;
+    let charge = rig
+        .ca
+        .snapshots()
+        .newest()
+        .unwrap()
+        .entities
+        .values()
+        .any(|e| dist(e.origin(p), CHARGE) < 0.01);
+    assert!(charge, "the charge is not where the retail plant put it");
+
+    let (mut fx_seen, mut obituaries, mut damage) = ([false; 2], 0, Vec::new());
+    for _ in 0..1300 {
+        rig.idle();
+        for (n, cl) in [&rig.ca, &rig.cb].into_iter().enumerate() {
+            for e in cl.snapshots().newest().unwrap().entities.values() {
+                let ev = e.field_i32(p, "eType") - ET_EVENTS;
+                if ev == EV_PLAY_FX && e.field_i32(p, "eventParm") == bomb_fx {
+                    // `G_TempEntity` truncates the origin.
+                    assert_eq!(e.origin(p), CHARGE.map(f32::trunc));
+                    fx_seen[n] = true;
+                }
+                obituaries += usize::from(ev == EV_OBITUARY);
+            }
+        }
+        let log = rig.sv.script_log();
+        damage.extend(
+            log[rig.drained.min(log.len())..]
+                .iter()
+                .filter(|l| l.contains("MOD_EXPLOSIVE"))
+                .cloned(),
+        );
+        rig.drained = log.len();
+        if fx_seen.iter().any(|s| *s) {
+            break;
+        }
+    }
+    assert_eq!(
+        fx_seen,
+        [true, true],
+        "the bomb effect's event on each client"
+    );
+    assert_eq!(obituaries, 0, "the blast killed someone");
+    assert_eq!(damage, Vec::<String>::new(), "the blast damaged someone");
+}

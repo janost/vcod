@@ -396,6 +396,7 @@ pub fn radius_damage(
         victims.push(standing_victim(id.0 as usize, Vec3::from(stands)));
     }
     let world = host.world.clone();
+    let models = host.placed_script_models(cx);
     let hits = crate::game::combat::radius_damage(
         at,
         radius,
@@ -407,6 +408,7 @@ pub fn radius_damage(
         "MOD_EXPLOSIVE",
         &victims,
         world.as_deref().map(|w| &w.collision),
+        &models,
     );
     let (mod_, none) = (cx.intern_exact("MOD_EXPLOSIVE"), cx.intern_exact("none"));
     let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
@@ -551,10 +553,7 @@ pub fn bullet_trace(
 }
 
 /// The nearest live `script_model` a `bulletTrace` segment crosses closer
-/// than `best`: fraction, world normal, entity. Retail's locational trace
-/// clips a script model's xmodel collision at its origin and angles, hidden
-/// or `notSolid()`ed alike (docs/research/cod11-combat.md 2.7), so `solid`
-/// is not read.
+/// than `best`: fraction, world normal, entity.
 fn script_model_hit(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -563,48 +562,15 @@ fn script_model_hit(
     ignore: Option<EntId>,
     best: f32,
 ) -> Option<(f32, Vec3, Option<EntId>)> {
-    let classname = cx.intern_folded("classname");
-    let model = cx.intern_folded("model");
-    let origin = cx.intern_folded("origin");
-    let angles = cx.intern_folded("angles");
-    let ids: Vec<EntId> = host
-        .ents
-        .iter_inuse()
-        .map(|(id, _)| id)
-        .filter(|id| Some(*id) != ignore)
-        .collect();
     let mut hit = None;
     let mut best = best;
-    for id in ids {
-        let Value::String(c) = host.get_field(cx, id, classname) else {
-            continue;
-        };
-        if cx.resolve(c) != "script_model" {
+    for m in host.placed_script_models(cx) {
+        if Some(m.id) == ignore {
             continue;
         }
-        let Value::String(m) = host.get_field(cx, id, model) else {
-            continue;
-        };
-        let name = cx.resolve(m).to_string();
-        let Some(tris) = host.xmodel_tris(&name) else {
-            continue;
-        };
-        let at = |v: Value| match v {
-            Value::Vector(v) => Vec3::from(v),
-            _ => Vec3::ZERO,
-        };
-        let o = at(host.get_field(cx, id, origin));
-        let axis = vcod_common::props::rotation(at(host.get_field(cx, id, angles)));
-        let local = |p: Vec3| axis.transpose() * (p - o);
-        if let Some((f, n, _)) = vcod_common::collision::clip_model_tris(
-            local(start),
-            local(end),
-            &tris,
-            vcod_common::collision::MASK_SHOT,
-            best,
-        ) {
+        if let Some((f, n)) = m.clip(start, end, vcod_common::collision::MASK_SHOT, best) {
             best = f;
-            hit = Some((f, axis * n, Some(id)));
+            hit = Some((f, n, Some(m.id)));
         }
     }
     hit
