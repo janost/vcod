@@ -92,9 +92,9 @@ runs, in order:
 |---|---|---|
 | pre | fn 0x30778 | pre-move bookkeeping |
 | | saves old water level into pml | drives EV_WATER_TOUCH/LEAVE at frame end (events 144/145, fired at 0x3435F/0x3438B) |
-| | fn 0x316F4 | spectator bbox setup, stance transitions, viewheight lerp, **ground jump**, ground snap |
+| | fn 0x316F4 | spectator bbox setup, stance transitions, viewheight lerp, the prone dive (read as the ground jump until 2026-09-27, "Jumps"), ground snap |
 | | fn 0x30474 | ground trace, walking/steep-slope categorisation, landing events |
-| | `PM_UpdateAimDownSightFlag` etc. | weapon/stance updates |
+| | `PM_UpdateAimDownSightFlag` etc. | weapon/stance updates, then `PM_UpdatePronePitch` (0x342dd) |
 | | fn 0x336E8 | **ladder probe**, sets/clears `PMF_LADDER` + `vLadderVec` |
 | move | dispatch at 0x34305 | `pm_flags & PMF_LADDER` -> `PM_LadderMove` (0x33944); `pml.walking` (pml+0x2c) set -> `PM_WalkMove` (0x2F258); otherwise `PM_AirMove` (0x2F03C) |
 | post | fns 0x30474, 0x30778 again | re-categorise |
@@ -150,6 +150,14 @@ one rises 34 (`a_125_fps_jump_goes_higher` in `pmove.rs`).
 ## Jumps (there are two)
 
 **Ground jump**, inside fn 0x316F4 at 0x31CC0:
+
+Correction, 2026-09-27: the block at 0x31CC0 is not the ground jump. It sits
+on `PM_CheckDuck`'s arm for a prone press on a player not yet prone, and it
+is the prone dive ("Going prone", under "Prone" below). INFERRED, from that
+enclosing branch; VERIFIED live, the dive capture. The heights 34/24 and the
+`pm_flags` 0x20 gate below belong to the dive; the ground jump's own
+takeoff is still to be read, and `bump_ab.rs`'s `TAKEOFF` gap (retail 249.8,
+ours 233.2) is the port of this block standing in for it.
 
 - Gated on: `pm_flags & 0x20` clear. A second gate read off this block as
   `cmd.forwardmove != 0` was a misread, and the code that ported it kept a
@@ -280,6 +288,150 @@ retail server's console: `bg_prone_yawcap` 85, `bg_prone_softyawedge` 1,
 writers in the module are this function and the static prone-entry routine
 around 0x31c60, which also writes both pitch fields through
 `PitchForYawOnNormal` and `AngleDelta`.
+
+What the section above leaves out, read on 2026-09-27 with
+`tools/re/annotate_func.py` and measured with the prone crawl capture below:
+
+- **The body also swings while the player moves.** INFERRED, from the branch
+  at 0x330c0: inside the soft edge the swing still runs when the usercmd's
+  `forwardmove`/`rightmove` word (`cmd+0x14`, compared as one 16-bit value)
+  is non-zero and the delta is not zero, so a crawling player's body follows
+  the view from the first degree. VERIFIED live: in both prone captures
+  `proneDirection` moved on 172 snapshots, and a mover that swung only past
+  the soft edge held it still on 99 of them.
+- **The yaw cap measures before the swing and places after it.** INFERRED,
+  from 0x3306d-0x3307b and 0x331c8-0x33265: the excess pushed into
+  `delta_angles[1]` is computed from the delta taken before the swing, and the
+  view is then set to `AngleNormalize360(proneDirection -/+ bg_prone_yawcap)`
+  off the direction the swing just stored at 0x33193. A server that measured
+  the excess after the swing pushed `delta_angles` short by one frame's swing
+  and read 0.88 degrees off retail's on the capture's cap.
+- **The pitch cap.** VERIFIED: the constants 45.0 and -45.0 at rodata
+  0x70c94 and 0x70c98, loaded at 0x332a7 and 0x332be; the push lands in
+  `delta_angles[0]` at 0x33311 and the view is rebuilt off `ps+0x370` at
+  0x33320-0x33345. INFERRED, from that sequence: with
+  `d = AngleNormalize180(AngleDelta(proneTorsoPitch, viewangles[0]))`, a `d`
+  past 45 either way adds `ANGLE2SHORT(d -/+ 45)` (truncated) to
+  `delta_angles[0]` and sets the view pitch to
+  `AngleNormalize180(proneTorsoPitch -/+ 45)`. So a prone view pitches at most
+  45 degrees off the ground's pitch along the view, not off level. VERIFIED
+  live: at street `commandTime` 49392 the view held at 40.91 with
+  `proneTorsoPitch` -4.09 while the cmd kept asking for more and
+  `delta_angles[0]` walked from 65411 down to 59339.
+- **The fit trace starts at 24.** VERIFIED: every caller passes 30.0 as the
+  height (0x70bdc, 0x70c8c, 0x70c9c, 0x70d20) and the function subtracts the
+  6.0 half box (0x70178) from it before adding the origin's z. INFERRED, from
+  the arithmetic between 0x2d57a and the trace: the backwards sweep runs
+  24 units above the feet. VERIFIED live: with the sweep at 11 the mover
+  refused swings on the mound that retail took, 3.7 degrees of
+  `proneDirection` apart; at 24 the gap is 0.5.
+
+### The prone pitches, `PM_UpdatePronePitch` (0x3338c)
+
+VERIFIED: `PmoveSingle`'s normal arm calls it at 0x342dd, after the ground
+trace, the ADS flag and the walking flag and before the move dispatch;
+`PM_UpdateViewAngles` runs at 0x340fc, before the stance. The rate 70.0 at
+rodata 0x70ca4 multiplies `pml.frametime` at 0x33504 and 0x33601.
+
+INFERRED, from 0x3338c-0x3368d: on a prone player, each of
+`proneDirectionPitch` (ps+0x36c) and `proneTorsoPitch` (ps+0x370) moves
+toward a target by at most `70 * frametime` degrees a frame and is folded by
+`AngleNormalize180`. The targets are `PitchForYawOnNormal(proneDirection,
+n)` and `PitchForYawOnNormal(viewangles[1], n)` with `n` the ground trace's
+plane normal while `pml.groundPlane` is set, and 0 otherwise. The airborne
+branch also runs `BG_CheckProne` and raises event 141 with `pm_flags` 0x8000
+on a refusal; no capture has shown either.
+
+`PitchForYawOnNormal` (0x3d274): VERIFIED, the constants: pi/180 (double at
+0x72a10), -180.0 and pi (doubles at 0x72a20, 0x72a28), 360.0 (0x72a30), and
+the degenerate answers 270.0 and 90.0 (0x72a18, 0x72a1c). INFERRED, from the
+x87 sequence: the yaw's horizontal unit vector is projected onto the plane,
+and the result is `-atan2(z, |xy|)` in degrees, wrapped into 0..360; a
+projection with no horizontal part answers 270 when it points up, else 90.
+VERIFIED live: the street's first prone snapshot reads both pitches 355.91,
+which is -4.09 facing up a street whose normal leans 0.07 toward -y.
+
+### Going prone, the tail of `PM_CheckDuck` (0x316f4)
+
+VERIFIED, the constants: 34.0 and 24.0 (0x70be8, 0x70bec), 255.0 (0x70bf0),
+0.25 (0x70bf8), -45.0 and 45.0 (0x70bfc, 0x70c00). INFERRED, from
+0x31ca1-0x31f50, on the frame a prone press is taken:
+
+- a non-zero `forwardmove`/`rightmove` word (0x31cae) clears `pm_flags`
+  0x400 and the ADS flag; then, with the ADS flag clear and a non-zero
+  `forwardmove` byte (0x31ccb-0x31cd3), `pm_flags` 0x4 is set and a player on
+  the ground is thrown upward at `sqrt(2 * height * gravity)`, height 34 when
+  `pm_flags & 3` was clear before the frame (0x317e8) and 24 otherwise, with
+  `groundEntityNum` 1023 and `aimSpreadScale` 255. Since the move clears the
+  ADS flag first, any forward or back cmd dives;
+- `proneDirection` takes `viewangles[1]` (0x31dfc), `proneDirectionPitch`
+  takes `PitchForYawOnNormal` off a 0.25-unit trace down, or 0 when it misses
+  or starts solid (0x31e57-0x31ea7), and `proneTorsoPitch` takes that pitch
+  clamped to within 45 of the view's (0x31ed6-0x31f4a).
+
+INFERRED, from the three stores that clear `pm_flags` 0x4 (0x31971, 0x319a6,
+0x31a13), on the arms where the prone key is up or the fit refuses the press:
+the flag lives as long as the prone key is held. VERIFIED:
+`PM_GetViewHeightLerpTime` (0x345b8) returns 200 for the prone target when
+`pm_flags & 4` is set and `bg_duck2prone_time` otherwise.
+
+VERIFIED live, the street capture's forward press at `commandTime` 69991:
+`groundEntityNum` 1023, `velocity[2]` 195 one snapshot after a run at 224,
+`pm_flags` 0x40005, and the eye from 60 to 11 in about 300 ms against the
+still press's 550. The backward press dives the same way; the sideways press
+does not.
+
+### The landing damp
+
+`PM_CrashLand` (0x2fd68) multiplies the velocity by 0.67 (0x70a38, at
+0x300dd) on a damage-free landing of 12 units or more
+(`cod11-sound-system.md`, "Landing"). VERIFIED live: every dive lands with
+it, the street's forward dive going from 224 to 125 within the landing
+snapshot, and a mover without it read 2.2 to 2.7 units ahead of retail on
+the snapshot after each dive landed.
+
+### What the prone crawl capture measured
+
+`--save-slope --probe-prone <uphill yaw>` against
+`tools/run_probe.sh client-probes/probe_prone mp_carentan +set probe_teleport 1
++set probe_spot street|mound` (fixtures
+`crates/server/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms-prone-*.txt`):
+a still prone press, crawls up, down and across the grade, a 150-degree turn
+past the cap, a crawl with the view swinging, a pitch sweep to +/-80, a crawl
+looking down, a turn and crawl downhill, and prone presses while running
+forward, back and sideways, with the sight held and from a crouch. The
+street is the 4-degree street at (900 1930), the mound the 19-degree terrain
+at (-224 60). `playerstate_slope_ab.rs` replays the cmds on our mover,
+rebased on retail's state at every snapshot.
+
+VERIFIED, against the mover before this section's fixes: each dive read up
+to 10.7 units off retail, `proneDirection` stood still through 99 of
+retail's 172 swinging snapshots, the view pitch read 39.1 degrees off on the
+street and 48.7 on the mound where retail's cap held it, and the yaw cap's
+`delta_angles[1]` 0.88 off. Each of those is a correction a retail client
+predicting its own prone movement takes from the server, which is the
+"twitches sometimes when proning" of the hand check. After them: origin
+|dz| at most 0.17 on the mound up to `commandTime` 84000, one street row
+past a unit (2.7, a sideways prone press, below), `proneDirection` within
+0.5 degrees, both pitches within 1.42 and the view and `delta_angles` within
+one 16-bit step.
+
+Still apart, and not modelled:
+
+- the speed while the eye drops into prone: a sideways press keeps most of
+  its run speed across the drop on retail and ours takes the prone speed at
+  once (2.7 units on one row);
+- which of two terrain facets the ground trace names under a crawl, 1.4
+  degrees of prone pitch on the mound;
+- a prone player wedged airborne against the `clip_nosight` brush behind
+  the mound's crest, where the capture's last three presses ended; the gate
+  stops at 84000 for that reason;
+- the ground samples of `BG_CheckProneValid` past its first trace, the
+  prone-position revert after a step (`PM_VerifyPronePosition`, port note 5),
+  event 141 and `pm_flags` 0x8000 and 0x400, and `fTorsoHeight`,
+  `fTorsoPitch` and `fWaistPitch`;
+- the eye's shape through a stance change: retail's prone drop is not
+  linear, dipping to 15.8 and back to 17.9 before settling at 11.
 
 ### Why it matters to a server
 
@@ -957,7 +1109,7 @@ and the `wbuttons` 0x4 factor.
 |---|---|---|
 | 0x01 | PRONE | tested everywhere stance matters (e.g. 0x3455A) |
 | 0x02 | CROUCH | 0x34590 pattern |
-| 0x04 | set by the ground-jump gate; read by viewheight-lerp timing | 0x31CD5, 0x345C9 |
+| 0x04 | the prone dive, set by a prone press on a moving player; read by viewheight-lerp timing | 0x31CD5, 0x345C9 ("Going prone") |
 | 0x10 | LADDER | set at 0x33937, cleared at 0x3377C/0x2ED7A |
 | 0x80 | affects ladder-anim speed-scale choice | 0x323D7 |
 | 0x20 | ADS held (blocks ground jump); set/cleared by PM_UpdateAimDownSightFlag | set @0x372A4/0x372B7, clear @0x3ABDC, tested at 0x31CCB |

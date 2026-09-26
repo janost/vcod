@@ -92,10 +92,15 @@ const ANIM_FIELDS: &[&str] = &["legsAnim", "torsoAnim"];
 
 /// Poses whose anim nothing derives yet, with the reason. The guard below
 /// fails on an entry that starts matching, so this cannot rot into a lie.
-/// Empty is the goal and it is empty: `ads_stand` was the entry, and it
-/// earned itself back when the animscript's `ads` condition started reading
-/// the ADS flag instead of a hardcoded false.
-const ANIM_GAPS: &[(&str, &str)] = &[];
+/// `ads_stand` was an entry, and it earned itself back when the animscript's
+/// `ads` condition started reading the ADS flag instead of a hardcoded false.
+const ANIM_GAPS: &[(&str, &str)] = &[(
+    "land",
+    "ours takes off at 233.2 where retail's ground jump leaves at 249.8 \
+     (bump_ab.rs TAKEOFF), so our landing frame starts at -207 and misses the \
+     -220 the land anim needs; the pose was skipped as moving until the \
+     landing damp took our 15 units/s of slope drift down to the idle speed",
+)];
 
 /// `pm_flags` bits retail sets that the mover has no source for: the map, the
 /// pose that shows it, the bit, and why. Excepted bit by bit and pose by pose,

@@ -950,8 +950,9 @@ trace @0x328cc), water enter/leave 144/145, forced stance 140/141/142.
   `PlayerState::land_anim` (the move's starting vertical speed below -220)
   and on no event anim holding the legs.
 - Fall damage does not exist locally, so only the damage-free landing ladder
-  applies; the x0.67 hard-landing velocity damp is not ported (movement, not
-  sound).
+  applies. Its x0.67 velocity damp on a landing of 12 units or more is ported
+  (`pmove::crash_land`); the prone dive is what measured it
+  (`cod11-mantle.md`, "The landing damp").
 - Foliage rustle (139) is not ported.
 
 ### Ambient without a server
