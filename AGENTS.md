@@ -299,6 +299,15 @@ engineering setup works.
   predicting on our snapshots sees as a correction, so it is the number a
   view twitch report turns into. Both committed fixtures are retail
   evidence and a run against ours overwrites them.
+  `--probe-prone <uphill yaw>` swaps the walk for a prone crawl and a set of
+  prone presses on a moving player (the dive), from where
+  `client-probes/probe_prone` under `tools/run_probe.sh` puts the player
+  (`+set probe_teleport 1 +set probe_spot street|mound`, yaw 90 and 270),
+  and `--capture-tag prone-<spot>` names the fixture; each snapshot line then
+  carries the stance and prone fields as well. The same gate replays both
+  committed crawls and also holds the prone view to retail's: the body's
+  yaw, both prone pitches, the view angles and the `delta_angles` the caps
+  push (`docs/research/cod11-mantle.md`, "Prone").
   `--probe-triggers` is the touch pass's walk: it joins, reads the map's
   trigger brushes out of the BSP entity and model lumps, and walks at them one
   at a time, nearest unvisited first, steering round buildings with a

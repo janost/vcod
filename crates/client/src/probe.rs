@@ -64,6 +64,9 @@ pub struct Save {
     pub playerstate: bool,
     pub motion: bool,
     pub slope: bool,
+    /// `--probe-prone <yaw>`: the slope capture's walk is [`ProneScript`]
+    /// instead of the route, facing up the grade along that world yaw.
+    pub prone: Option<f32>,
     pub combat: bool,
     pub ads: bool,
     pub grenade: bool,
@@ -171,6 +174,7 @@ pub fn probe(
         playerstate: save_playerstate,
         motion: save_motion,
         slope: save_slope,
+        prone: prone_uphill,
         combat: save_combat,
         ads: save_ads,
         grenade: save_grenade,
@@ -204,8 +208,11 @@ pub fn probe(
     let save_combat = save_combat || save_ads || save_grenade || probe_sway;
     // The fixture is the route's output, so the capture drives the same walk;
     // the slope measurement walks it too, with the sight held.
-    let slope = slope || save_slope;
-    let pvs = pvs || save_entities || slope;
+    // The prone crawl is the slope capture on another script.
+    let prone_crawl = prone_uphill.is_some();
+    let slope = slope || save_slope || prone_crawl;
+    let pvs = pvs || save_entities || (slope && !prone_crawl);
+    let mut prone = ProneScript::new(prone_uphill.unwrap_or(0.0));
     let mut slope_stats = SlopeStats::default();
     let mut slope_capture = SlopeCapture::default();
     // Every mode that needs a spawned player drives the same stock-menu join;
@@ -217,6 +224,7 @@ pub fn probe(
         || save_target
         || netchan_capture
         || pvs
+        || prone_crawl
         || triggers
         || save_plant
         || save_defuse
@@ -593,6 +601,10 @@ pub fn probe(
             // No `hold_view_yaw`: the walk steers at a world position, so its
             // yaw is a bearing rather than a heading off the spawn's facing.
             cmd = trigger_probe.cmd();
+        } else if prone_crawl && prone.running() {
+            // No `hold_view_yaw`: the script's angles are world angles, which
+            // `send_frame` rebases on each snapshot's `delta_angles`.
+            cmd = prone.cmd(now);
         } else if pvs && pvs_probe.running() {
             cmd = pvs_probe.cmd();
             if slope {
@@ -650,7 +662,7 @@ pub fn probe(
             }
             if slope && join.settled(now) {
                 slope_stats.observe(now, s);
-                if save_slope {
+                if save_slope && (!prone_crawl || prone.recording()) {
                     slope_capture.observe(s);
                 }
             }
@@ -888,6 +900,22 @@ pub fn probe(
                             wrote_playerstate = true;
                             break;
                         }
+                    } else if prone_crawl {
+                        if prone.step(now, s) {
+                            if save_slope {
+                                write_slope_fixture(
+                                    client.configstrings(),
+                                    &join,
+                                    &slope_capture,
+                                    cmd_ms,
+                                    prone_crawl,
+                                    tag.as_deref(),
+                                    overwrite,
+                                )?;
+                                wrote_playerstate = true;
+                            }
+                            break;
+                        }
                     } else if pvs {
                         if pvs_probe.step(now, s) {
                             pvs_probe.report();
@@ -897,6 +925,7 @@ pub fn probe(
                                     &join,
                                     &slope_capture,
                                     cmd_ms,
+                                    false,
                                     tag.as_deref(),
                                     overwrite,
                                 )?;
@@ -947,6 +976,7 @@ pub fn probe(
             &join,
             &slope_capture,
             cmd_ms,
+            prone_crawl,
             tag.as_deref(),
             overwrite,
         )?;
@@ -5535,19 +5565,26 @@ impl SlopeCapture {
         // the ring.
         let seq = i("eventSequence");
         let mut steps = Vec::new();
+        let mut events = Vec::new();
         if let Some(prev) = self.prev_seq {
             let gained = ((seq - prev) & 0xff).min(4);
             for k in (seq - gained)..seq {
                 let slot = (k & 3) as usize;
-                if i(&format!("events[{slot}]")) == 143 {
-                    steps.push((i(&format!("eventParms[{slot}]")) - 128).to_string());
+                let (ev, parm) = (
+                    i(&format!("events[{slot}]")),
+                    i(&format!("eventParms[{slot}]")),
+                );
+                if ev == 143 {
+                    steps.push((parm - 128).to_string());
                 }
+                events.push(format!("{ev}:{parm}"));
             }
         }
         self.prev_seq = Some(seq);
         let line = format!(
             "!snap msg={} t={} ct={} origin={},{},{} vel={},{},{} ground={} view={},{},{} \
-             frac={} da={},{},{} pm_flags={} step={} leanf={} weapon={} weaponstate={}",
+             frac={} da={},{},{} pm_flags={} step={} leanf={} weapon={} weaponstate={} \
+             eflags={} vh={} pdir={} pdirpitch={} ptorso={} torso={},{},{} mdir={} ev={}",
             snap.message_num,
             snap.server_time,
             i("commandTime"),
@@ -5570,6 +5607,16 @@ impl SlopeCapture {
             f("leanf"),
             i("weapon"),
             i("weaponstate"),
+            i("eFlags"),
+            f("viewHeightCurrent"),
+            f("proneDirection"),
+            f("proneDirectionPitch"),
+            f("proneTorsoPitch"),
+            f("fTorsoHeight"),
+            f("fTorsoPitch"),
+            f("fWaistPitch"),
+            i("movementDir"),
+            events.join(","),
         );
         self.snaps.push((self.cmds.len(), line));
     }
@@ -5583,12 +5630,19 @@ fn write_slope_fixture(
     join: &JoinProbe,
     capture: &SlopeCapture,
     cmd_ms: u64,
+    prone: bool,
     tag: Option<&str>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
     let serverinfo = configstrings.first().map(String::as_str).unwrap_or("");
     let key = |k: &str| net::info_value_for_key(serverinfo, k).unwrap_or("?");
-    let (map, gametype) = (key("mapname"), key("g_gametype"));
+    let map = key("mapname");
+    // A client-probe gametype runs `dm::main` under its own name; the replay
+    // needs the gametype whose rules the map was loaded under.
+    let gametype = match key("g_gametype") {
+        g if g.starts_with("probe_") => "dm",
+        g => g,
+    };
     let mut out = String::new();
     out.push_str(
         "# Retail CoD 1.1d dedicated server playerstate along a walked route, per usercmd.\n",
@@ -5598,14 +5652,27 @@ fn write_slope_fixture(
         join.team, join.weapon
     ));
     out.push_str("# sv_maxclients 8, sv_pure 0, stock scr_* defaults, one client on the server.\n");
-    out.push_str(&format!(
-        "# Captured with tools/run_server.sh and --net-probe --save-slope --probe-cmd-ms {cmd_ms}:\n"
-    ));
-    out.push_str("# the --probe-pvs route with the sight held, from a random spawn. !cmd is a\n");
+    if prone {
+        out.push_str(&format!(
+            "# Captured with tools/run_probe.sh client-probes/probe_prone {map} +set probe_teleport 1\n\
+             # +set probe_spot <spot> and --net-probe --save-slope --probe-prone --probe-cmd-ms {cmd_ms}:\n"
+        ));
+        out.push_str(
+            "# the ProneScript crawl from the gsc's placement (g_gametype probe_prone runs\n",
+        );
+        out.push_str("# dm::main, so the file is named dm). !cmd is a\n");
+    } else {
+        out.push_str(&format!(
+            "# Captured with tools/run_server.sh and --net-probe --save-slope --probe-cmd-ms {cmd_ms}:\n"
+        ));
+        out.push_str(
+            "# the --probe-pvs route with the sight held, from a random spawn. !cmd is a\n",
+        );
+    }
     out.push_str("# usercmd as it went on the wire (angles already rebased on delta_angles),\n");
     out.push_str("# !snap the playerstate the next snapshot carried, with ct its commandTime.\n");
     out.push_str("# Floats are printed exactly; step lists the EV_STEP_VIEW parms the snapshot\n");
-    out.push_str("# brought, minus the 128 bias.\n");
+    out.push_str("# brought, minus the 128 bias, and ev every event:parm it brought.\n");
     out.push_str(&format!("# cmd_ms {cmd_ms}\n"));
     let mut next_snap = capture.snaps.iter().peekable();
     for (i, c) in capture.cmds.iter().enumerate() {
@@ -5647,6 +5714,176 @@ fn write_slope_fixture(
         capture.snaps.len()
     );
     Ok(())
+}
+
+/// One step of [`prone_script`]: from `at_ms` on, until the next step, hold
+/// these inputs, with the view moving linearly from the previous step's
+/// angles to this one's over the step. Yaw is degrees off the uphill
+/// heading, pitch positive down the way the wire reads it.
+struct ProneStep {
+    at_ms: u64,
+    buttons: u8,
+    wbuttons: u8,
+    forward: i8,
+    right: i8,
+    yaw: f32,
+    pitch: f32,
+}
+
+/// The prone crawl `--probe-prone` runs from the placement, facing up the
+/// grade: settle, lie down, crawl up, down and both ways across, turn past
+/// the 85-degree yaw cap and back, crawl while the view swings, sweep the
+/// pitch past +/-45 of the ground, crawl looking down, turn round and crawl
+/// downhill, then stand. Then the prone press on a moving player: running
+/// forward, backward and sideways, forward with the sight held, and forward
+/// from a crouch, each followed by a crawl and a stand.
+fn prone_script() -> Vec<ProneStep> {
+    use net::msg::{BUTTON_ADS, WBUTTON_CROUCH, WBUTTON_PRONE};
+    const P: u8 = WBUTTON_PRONE;
+    const C: u8 = WBUTTON_CROUCH;
+    let step = |at_ms, buttons, wbuttons, forward, right, yaw, pitch| ProneStep {
+        at_ms,
+        buttons,
+        wbuttons,
+        forward,
+        right,
+        yaw,
+        pitch,
+    };
+    vec![
+        step(0, 0, 0, 0, 0, 0.0, 0.0),
+        step(1000, 0, P, 0, 0, 0.0, 0.0),
+        step(3000, 0, P, 127, 0, 0.0, 0.0),
+        step(7000, 0, P, -127, 0, 0.0, 0.0),
+        step(11000, 0, P, 0, 127, 0.0, 0.0),
+        step(14000, 0, P, 0, -127, 0.0, 0.0),
+        step(17000, 0, P, 0, 0, 0.0, 0.0),
+        step(19500, 0, P, 0, 0, 150.0, 0.0),
+        step(21000, 0, P, 0, 0, 150.0, 0.0),
+        step(23500, 0, P, 0, 0, 0.0, 0.0),
+        step(24500, 0, P, 127, 0, 60.0, 0.0),
+        step(25500, 0, P, 127, 0, -60.0, 0.0),
+        step(26500, 0, P, 127, 0, 60.0, 0.0),
+        step(27500, 0, P, 127, 0, 0.0, 0.0),
+        step(28000, 0, P, 0, 0, 0.0, 0.0),
+        step(30000, 0, P, 0, 0, 0.0, 80.0),
+        step(32000, 0, P, 0, 0, 0.0, -80.0),
+        step(33000, 0, P, 0, 0, 0.0, 70.0),
+        step(37000, 0, P, 127, 0, 0.0, 70.0),
+        step(38000, 0, P, 0, 0, 0.0, 0.0),
+        step(41000, 0, P, 0, 0, 180.0, 0.0),
+        step(45000, 0, P, 0, 0, 180.0, 0.0),
+        step(49000, 0, P, 127, 0, 180.0, 0.0),
+        step(50000, 0, 0, 0, 0, 0.0, 0.0),
+        step(52000, 0, 0, 127, 0, 0.0, 0.0),
+        step(53000, 0, P, 127, 0, 0.0, 0.0),
+        step(55500, 0, 0, 0, 0, 0.0, 0.0),
+        step(57500, 0, 0, -127, 0, 0.0, 0.0),
+        step(58500, 0, P, -127, 0, 0.0, 0.0),
+        step(61000, 0, 0, 0, 0, 0.0, 0.0),
+        step(63000, 0, 0, 0, 127, 0.0, 0.0),
+        step(64000, 0, P, 0, 127, 0.0, 0.0),
+        step(66500, 0, 0, 0, 0, 0.0, 0.0),
+        step(68500, BUTTON_ADS, 0, 127, 0, 0.0, 0.0),
+        step(69500, BUTTON_ADS, P, 127, 0, 0.0, 0.0),
+        step(72000, 0, 0, 0, 0, 0.0, 0.0),
+        step(74000, 0, C, 0, 0, 0.0, 0.0),
+        step(75000, 0, C, 127, 0, 0.0, 0.0),
+        step(76000, 0, P, 127, 0, 0.0, 0.0),
+        step(78500, 0, 0, 0, 0, 0.0, 0.0),
+        step(80500, 0, 0, 0, 0, 0.0, 0.0),
+    ]
+}
+
+/// How long after the first spawned snapshot the crawl starts:
+/// `probe_prone.gsc` places the player within about a second of the spawn,
+/// and the fall onto the grade settles well inside the rest.
+const PRONE_PLACE_WAIT: Duration = Duration::from_millis(3000);
+
+/// Runs [`prone_script`] with its yaws off `uphill`. The angles are world
+/// view angles, which `send_frame` rebases on each snapshot's
+/// `delta_angles`, so the view holds the script's heading under a prone cap
+/// that pushes it, the way `hold_view_yaw` holds the route's.
+struct ProneScript {
+    uphill: f32,
+    first_spawned: Option<Instant>,
+    started: Option<Instant>,
+    steps: Vec<ProneStep>,
+    done: bool,
+}
+
+impl ProneScript {
+    fn new(uphill: f32) -> Self {
+        Self {
+            uphill,
+            first_spawned: None,
+            started: None,
+            steps: prone_script(),
+            done: false,
+        }
+    }
+
+    fn running(&self) -> bool {
+        !self.done
+    }
+
+    /// The capture opens once the crawl starts, so the teleport is not in it.
+    fn recording(&self) -> bool {
+        self.started.is_some()
+    }
+
+    fn cmd(&self, now: Instant) -> net::msg::UserCmd {
+        let Some(started) = self.started else {
+            return net::msg::NULL_USERCMD;
+        };
+        let ms = now.duration_since(started).as_millis() as u64;
+        let i = self.steps.iter().rposition(|s| s.at_ms <= ms).unwrap_or(0);
+        let cur = &self.steps[i];
+        // The view eases from the previous step's angles to this one's
+        // across this step.
+        let (yaw, pitch) = match (i.checked_sub(1), self.steps.get(i + 1)) {
+            (Some(p), Some(next)) => {
+                let prev = &self.steps[p];
+                let t = (ms - cur.at_ms) as f32 / (next.at_ms - cur.at_ms) as f32;
+                (
+                    prev.yaw + (cur.yaw - prev.yaw) * t,
+                    prev.pitch + (cur.pitch - prev.pitch) * t,
+                )
+            }
+            _ => (cur.yaw, cur.pitch),
+        };
+        let word = |deg: f32| (deg * 65536.0 / 360.0).round() as i32 & 0xffff;
+        net::msg::UserCmd {
+            angles: [word(pitch), word(self.uphill + yaw), 0],
+            forward: cur.forward,
+            right: cur.right,
+            buttons: cur.buttons,
+            wbuttons: cur.wbuttons,
+            ..net::msg::NULL_USERCMD
+        }
+    }
+
+    /// Feeds a spawned player's snapshot in; true once the script is over.
+    fn step(&mut self, now: Instant, snap: &net::snapshot::Snapshot) -> bool {
+        let p = &net::protocol::PROTOCOL_V1;
+        let Some(started) = self.started else {
+            let first = *self.first_spawned.get_or_insert(now);
+            if now.duration_since(first) >= PRONE_PLACE_WAIT {
+                self.started = Some(now);
+                let o = snap.ps.origin(p);
+                println!(
+                    "PRONE start at [{:.1},{:.1},{:.1}] facing {:.0}",
+                    o[0], o[1], o[2], self.uphill
+                );
+            }
+            return false;
+        };
+        let end = self.steps.last().map_or(0, |s| s.at_ms);
+        if now.duration_since(started).as_millis() as u64 >= end {
+            self.done = true;
+        }
+        self.done
+    }
 }
 
 /// One leg of the `--probe-pvs` route: a heading relative to where the spawn

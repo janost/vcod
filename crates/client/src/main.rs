@@ -268,6 +268,15 @@ struct Args {
     /// vcod-server overwrites it.
     #[arg(long)]
     save_slope: bool,
+    /// With --save-slope or --probe-slope: a prone crawl instead of the
+    /// route, from where `client-probes/probe_prone` puts the player on
+    /// mp_carentan (`+set probe_teleport 1`, `probe_spot` street or mound),
+    /// with the value the world yaw up the grade (90 on the street, 270 on
+    /// the mound): prone, crawl up, down and across the grade, turn past the
+    /// prone yaw cap, sweep the pitch past the prone pitch clamp, crawl
+    /// looking down and downhill, stand. Tag the fixture with --capture-tag.
+    #[arg(long, value_name = "UPHILL_YAW")]
+    probe_prone: Option<f32>,
     /// Milliseconds between usercmds the probe sends. A retail client at 125
     /// fps sends one every 8 ms; the default is what every capture so far
     /// was taken with.
@@ -714,6 +723,7 @@ fn main() -> Result<()> {
                 playerstate: args.save_playerstate,
                 motion: args.save_motion,
                 slope: args.save_slope,
+                prone: args.probe_prone,
                 combat: args.save_combat,
                 ads: args.save_ads,
                 grenade: args.save_grenade,
