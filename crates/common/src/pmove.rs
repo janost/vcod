@@ -35,8 +35,10 @@ pub const SCALE_LEAN: f32 = 0.4;
 /// The wade slowdown `1 - waterlevel / 3 * WADE_SCALE` in the same scale
 /// (rodata 0x70890).
 const WADE_SCALE: f32 = 0.5;
-/// Ground-jump heights: vz = sqrt(2 * height * GRAVITY). Retail rodata
-/// 0x70BE8/0x70BEC, applied in fn 0x316F4 @0x31CC0 (game.mp.i386.so).
+/// Prone-dive heights: vz = sqrt(2 * height * GRAVITY). Retail rodata
+/// 0x70BE8/0x70BEC, applied in fn 0x316F4 @0x31CC0 (game.mp.i386.so). The
+/// ground jump borrows them until its own takeoff is read
+/// (docs/research/cod11-mantle.md, "Jumps").
 pub const JUMP_HEIGHT_STAND: f32 = 34.0;
 pub const JUMP_HEIGHT_LOW: f32 = 24.0;
 // Accelerate/friction/stopspeed: retail CoD 1.1 rodata (game.mp.i386.so),
@@ -106,6 +108,12 @@ pub const PRONE_YAWCAP: f32 = 85.0;
 /// The body only starts turning once the view is this far off it.
 pub const PRONE_SOFT_EDGE: f32 = PRONE_YAWCAP - 5.0;
 pub const PRONE_SWING_DEG_PER_SEC: f32 = 55.0;
+/// How far the prone view may pitch off `proneTorsoPitch`, rodata 0x70c94
+/// and 0x70c98 (`PM_UpdateViewAngles`).
+pub const PRONE_PITCHCAP: f32 = 45.0;
+/// The rate `proneDirectionPitch` and `proneTorsoPitch` ease toward the
+/// ground's pitch, rodata 0x70ca4 (`PM_UpdatePronePitch`).
+pub const PRONE_PITCH_DEG_PER_SEC: f32 = 70.0;
 pub const PRONE_BODY_LENGTH: f32 = 54.0;
 const PRONE_BODY_HALF_BOX: f32 = 6.0;
 
@@ -295,6 +303,23 @@ pub struct PlayerState {
     /// Retail applies it to `delta_angles`; the caller owns that, so pmove
     /// reports it rather than writing it.
     pub view_yaw_correction: f32,
+    /// The same for the prone pitch clamp, on `delta_angles[0]`, in the
+    /// wire's pitch convention (positive down).
+    pub view_pitch_correction: f32,
+    /// `ps.proneDirectionPitch`: the ground's pitch along the body, eased
+    /// toward it while prone. Degrees, wire convention.
+    pub prone_direction_pitch: f32,
+    /// `ps.proneTorsoPitch`: the ground's pitch along the view, eased the
+    /// same way; the prone pitch clamp is centred on it.
+    pub prone_torso_pitch: f32,
+    /// Retail's `pm_flags` 0x4: the prone press landed on a player moving
+    /// forward or back, which throws it into the air (the dive). Held while
+    /// the prone key is, and it shortens the eye's drop to 200 ms.
+    pub prone_dive: bool,
+    /// The plane the last ground trace hit, walkable or not, and not while
+    /// the velocity carries the player off it: retail's `pml.groundPlane`
+    /// and its normal. Only the prone pitch reads it.
+    ground_plane: Option<Vec3>,
     /// 0 dry, 1 feet, 2 waist, 3 eyes under (RTCW waterlevel).
     pub water_level: u32,
     /// Remaining control lock while flying out of water; 0 when free.
@@ -450,6 +475,11 @@ impl PlayerState {
             lean: 0.0,
             prone_direction: 0.0,
             view_yaw_correction: 0.0,
+            view_pitch_correction: 0.0,
+            prone_direction_pitch: 0.0,
+            prone_torso_pitch: 0.0,
+            prone_dive: false,
+            ground_plane: None,
             water_level: 0,
             waterjump_ms: 0.0,
             knockback_ms: 0.0,
@@ -590,6 +620,8 @@ pub fn pmove(
     weapons: &[Option<WeaponDef>],
 ) -> Vec<PmEvent> {
     let dt = dt.min(MAX_FRAME_MS / 1000.0);
+    ps.view_yaw_correction = 0.0;
+    ps.view_pitch_correction = 0.0;
     ps.since_jump_ms += dt * 1000.0;
     // retail clears the held-jump latch post-move when upmove drops (@0x34135)
     if !input.jump {
@@ -644,8 +676,10 @@ pub fn pmove(
     if ps.on_ground {
         ps.air_speed_peak = 0.0;
     }
+    // `PM_UpdateViewAngles` runs ahead of the stance (`PmoveSingle` 0x340fc),
+    // so the prone clamps read last frame's stance and pitches.
+    update_prone_view(ps, input, world, dt);
     update_stance(ps, input, world, dt);
-    update_prone_yaw(ps, world, dt);
     update_lean(ps, input, world, dt);
     set_water_level(ps, world);
     ground_trace(ps, world, MASK_PLAYERSOLID);
@@ -656,6 +690,8 @@ pub fn pmove(
     // `PM_UpdatePlayerWalkingFlag` follows it in the same arm (0x342d8), so
     // the walk reads the ADS flag this frame just set.
     ps.walking = walking_flag(ps, input);
+    // Then `PM_UpdatePronePitch` (0x342dd), off this frame's ground plane.
+    update_prone_pitch(ps, dt);
     if ps.waterjump_ms > 0.0 {
         ps.waterjump_ms -= dt * 1000.0;
         if ps.waterjump_ms < 0.0 {
@@ -673,15 +709,11 @@ pub fn pmove(
     } else if ps.water_level > 1 {
         water_move(ps, input, world, dt, MASK_PLAYERSOLID, Some(&mut events));
     } else {
-        // retail ground jump (fn 0x316F4 @0x31CC0): stance-dependent height,
-        // horizontal velocity kept. Its bit-0x20 check (@0x31ccb) reads the
-        // ADS-active flag PM_UpdateAimDownSightFlag maintains, which
-        // `ps.ads_active` carries (combat doc, 1.13). What the check does
-        // with it was not read, so the gate is still not ported. No cooldown
-        // timer exists on this path
-        // either (ps.jumpTime is never written here). The forwardmove gate
-        // this used to carry was a misread: retail jumps standing still
-        // (docs/research/cod11-mantle.md, "Jumps").
+        // The ground jump: stance-dependent height, horizontal velocity kept.
+        // The heights were read off fn 0x316F4 @0x31CC0, which is the prone
+        // dive (`enter_prone`), not this; the jump's own takeoff is unread and
+        // `bump_ab.rs`'s TAKEOFF gap is what that costs. Retail jumps standing
+        // still (docs/research/cod11-mantle.md, "Jumps").
         if input.jump && ps.on_ground {
             let height = match ps.stance {
                 Stance::Stand => JUMP_HEIGHT_STAND,
@@ -745,11 +777,12 @@ fn linked_move(
 ) {
     // `PM_UpdateViewAngles`, ahead of the dispatch in every arm; under a link
     // the lean skips its wall clamp (0x32c63).
-    update_prone_yaw(ps, world, dt);
+    update_prone_view(ps, input, world, dt);
     update_lean_unclamped(ps, input, dt);
     // The arm's first store: `groundEntityNum` 1023, `pml.walking` and
     // `pml.groundPlane` 0.
     ps.on_ground = false;
+    ps.ground_plane = None;
     ps.ground_normal = Vec3::Z;
     ps.ground_surface_flags = 0;
     weapon::update_ads_flag(
@@ -987,16 +1020,27 @@ fn ladder_step_event(
     });
 }
 
-/// Landing sound from `PM_CrashLand`'s damage-free ladder (@0x30130): the
-/// fall height `v^2 / 2g` of the landing speed, nothing at or under 4 units,
-/// a walk-step to 8, a run-step to 12, a land event past that
-/// (docs/research/cod11-sound-system.md, "Landing").
+/// `PM_CrashLand`'s damage-free ladder (@0x30130) on the fall height
+/// `v^2 / 2g` of the landing speed: nothing at or under 4 units, a walk-step
+/// to 8, a run-step to 12, and past that a land event and the velocity damped
+/// to 0.67 (rodata 0x70a38, applied at 0x300dd; docs/research/cod11-sound-system.md,
+/// "Landing"). A fall past `bg_fallDamageMinHeight` damps by its damage
+/// instead, which is not modelled.
 fn crash_land(ps: &mut PlayerState, events: &mut Vec<PmEvent>) {
     let speed = std::mem::take(&mut ps.air_speed_peak);
-    if let Some(ev) = landing_event(speed * speed / (2.0 * GRAVITY), ps) {
+    let height = speed * speed / (2.0 * GRAVITY);
+    if height >= LANDING_DAMP_HEIGHT && ps.water_level < 3 {
+        ps.velocity *= LANDING_DAMP;
+    }
+    if let Some(ev) = landing_event(height, ps) {
         events.push(ev);
     }
 }
+
+/// The fall height from which a landing plays the land event and damps the
+/// velocity (rodata 0x70a18).
+const LANDING_DAMP_HEIGHT: f32 = 12.0;
+const LANDING_DAMP: f32 = 0.67;
 
 fn landing_event(height: f32, ps: &PlayerState) -> Option<PmEvent> {
     if ps.water_level >= 3 {
@@ -1010,7 +1054,7 @@ fn landing_event(height: f32, ps: &PlayerState) -> Option<PmEvent> {
     if mat == 0 {
         return None;
     }
-    let id = if height >= 12.0 {
+    let id = if height >= LANDING_DAMP_HEIGHT {
         EV_LANDING_BASE + mat
     } else if height >= 8.0 {
         EV_FOOTSTEP_RUN_BASE + mat
@@ -1063,15 +1107,20 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f
     };
     // Retail refuses a prone the body does not fit in, which is why a player
     // facing a wall stays standing.
-    if desired == Stance::Prone && before != Stance::Prone {
-        if prone_fits(world, ps.origin, ps.yaw.to_degrees()) {
-            ps.prone_direction = normalize180(ps.yaw.to_degrees());
-        } else {
-            desired = before;
-        }
+    let entering_prone = desired == Stance::Prone && before != Stance::Prone;
+    if entering_prone && !prone_fits(world, ps.origin, ps.yaw.to_degrees()) {
+        desired = before;
+    }
+    // The dive flag lives as long as the prone key is held (`PM_CheckDuck`
+    // 0x316f4 clears it on every other arm).
+    if !input.prone || desired != Stance::Prone {
+        ps.prone_dive = false;
     }
     if desired.height() <= ps.stance.height() {
         ps.stance = desired;
+        if entering_prone && desired == Stance::Prone {
+            enter_prone(ps, input, world);
+        }
     } else {
         let maxs = Vec3::new(HALF_WIDTH, HALF_WIDTH, desired.height());
         let t = world.box_trace(ps.origin, ps.origin, ps.mins(), maxs, MASK_PLAYERSOLID);
@@ -1091,7 +1140,11 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f
         }
         ps.view_lerp_target = ps.stance.view_height();
         ps.view_lerp_down = ps.stance.view_height() < before.view_height();
-        let ms = if ps.stance == Stance::Prone || before == Stance::Prone {
+        // A dive drops the eye in 200 ms, not 400 (`PM_GetViewHeightLerpTime`
+        // 0x345b8 on `pm_flags` 0x4).
+        let ms = if ps.stance == Stance::Prone && ps.prone_dive {
+            VIEW_LERP_MS
+        } else if ps.stance == Stance::Prone || before == Stance::Prone {
             VIEW_LERP_PRONE_MS
         } else {
             VIEW_LERP_MS
@@ -1107,14 +1160,15 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f
 /// `!cmd->forwardmove` gate), and prone blocks leaning.
 /// Whether a body may lie down at `origin` facing `yaw_deg`: retail sweeps a
 /// 12-unit cube 54 units straight *backwards* from the facing, which is where
-/// the body goes (`BG_CheckProneValid` 0x2d428, first trace at 0x2d57a).
-/// Sloped-ground pitch, the rest of that function, is an animation output and
-/// is not modelled.
+/// the body goes (`BG_CheckProneValid` 0x2d428, first trace at 0x2d57a). Not
+/// modelled: the ground samples along the body that follow it on the ground,
+/// which can refuse a bent body and write `fTorsoHeight`, `fTorsoPitch` and
+/// `fWaistPitch`, and the partial clearance they accept.
 pub fn prone_fits(world: &MoveWorld, origin: Vec3, yaw_deg: f32) -> bool {
     let back = (yaw_deg + 180.0).to_radians();
     let dir = Vec3::new(back.cos(), back.sin(), 0.0);
-    // Retail traces from the player's origin, which sits at the feet.
-    let start = origin + Vec3::Z * VIEW_PRONE;
+    // The cube's top at the prone height every caller passes (30).
+    let start = origin + Vec3::Z * (HEIGHT_PRONE - PRONE_BODY_HALF_BOX);
     let end = start + dir * PRONE_BODY_LENGTH;
     let half = Vec3::splat(PRONE_BODY_HALF_BOX);
     let t = world.box_trace(start, end, -half, half, MASK_DEADSOLID);
@@ -1127,23 +1181,90 @@ fn normalize180(deg: f32) -> f32 {
     (deg + 180.0).rem_euclid(360.0) - 180.0
 }
 
-/// The prone body swinging to follow the view, and the view capped to the cone
-/// around the body. Retail runs both in `PM_UpdateViewAngles` (0x32d7c); the
-/// cap is enforced by pushing `delta_angles`, so the correction is reported
-/// here and the caller applies it to whatever owns the view
+/// The frame a player goes prone, the tail of `PM_CheckDuck`'s prone arm
+/// (0x31ca9-0x31f50): a press on a player moving forward or back throws it
+/// into the air, the body takes the view's yaw, and both prone pitches start
+/// from the ground under it (docs/research/cod11-mantle.md, "Prone").
+fn enter_prone(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld) {
+    // Retail tests the ADS flag here too, but a move clears it first, so a
+    // forward or back cmd always dives.
+    if input.forward != 0.0 {
+        ps.prone_dive = true;
+        if ps.on_ground {
+            let height = if ps.ducked {
+                JUMP_HEIGHT_LOW
+            } else {
+                JUMP_HEIGHT_STAND
+            };
+            ps.velocity.z = (2.0 * height * GRAVITY).sqrt();
+            ps.on_ground = false;
+            ps.ground_plane = None;
+        }
+        ps.aim_spread_scale = 255.0;
+    }
+    let view_yaw = ps.yaw.to_degrees();
+    ps.prone_direction = normalize180(view_yaw);
+    let t = world.box_trace(
+        ps.origin,
+        ps.origin - Vec3::Z * 0.25,
+        ps.mins(),
+        ps.maxs(),
+        MASK_PLAYERSOLID,
+    );
+    ps.prone_direction_pitch = if t.fraction < 1.0 && !t.startsolid {
+        pitch_for_yaw_on_normal(ps.prone_direction, t.normal)
+    } else {
+        0.0
+    };
+    // The torso starts on the ground's pitch, but no further than the cap
+    // from the view, so lying down never yanks the view.
+    let view_pitch = -ps.pitch.to_degrees();
+    let d = angle_delta(ps.prone_direction_pitch, view_pitch);
+    ps.prone_torso_pitch = if d < -PRONE_PITCHCAP {
+        view_pitch - PRONE_PITCHCAP
+    } else if d > PRONE_PITCHCAP {
+        view_pitch + PRONE_PITCHCAP
+    } else {
+        ps.prone_direction_pitch
+    };
+}
+
+/// The pitch, wire convention (positive down), of the yaw's direction laid
+/// on a plane: `PitchForYawOnNormal` (0x3d274), in 0..360.
+fn pitch_for_yaw_on_normal(yaw_deg: f32, normal: Vec3) -> f32 {
+    let (sin, cos) = yaw_deg.to_radians().sin_cos();
+    let fwd = Vec3::new(cos, sin, 0.0);
+    let inv = 1.0 / normal.length_squared();
+    let p = fwd - normal * (fwd.dot(normal) * inv * inv);
+    if p.x == 0.0 && p.y == 0.0 {
+        return if p.z > 0.0 { 270.0 } else { 90.0 };
+    }
+    let pitch = -p.z.atan2(p.truncate().length()).to_degrees();
+    if pitch < 0.0 {
+        pitch + 360.0
+    } else {
+        pitch
+    }
+}
+
+/// The prone half of `PM_UpdateViewAngles` (0x32d7c): the body swinging to
+/// follow the view, the view capped to the yaw cone around the body and
+/// pitched no further than the cap off `proneTorsoPitch`. Retail enforces
+/// both caps by pushing `delta_angles`, so the corrections are reported here
+/// and the caller applies them to whatever owns the view
 /// (docs/research/cod11-mantle.md, "Prone").
-fn update_prone_yaw(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
-    ps.view_yaw_correction = 0.0;
+fn update_prone_view(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f32) {
     if ps.stance != Stance::Prone {
         return;
     }
     let view = ps.yaw.to_degrees();
     let delta = normalize180(ps.prone_direction - view);
-    // The body only starts to turn past the soft edge, and only into a
-    // direction it still fits in.
-    if delta.abs() > PRONE_SOFT_EDGE {
+    // The body turns past the soft edge, and inside it whenever the player
+    // moves (0x330bd), and only into a direction it still fits in.
+    let moving = input.forward != 0.0 || input.right != 0.0;
+    if delta.abs() > PRONE_SOFT_EDGE || (moving && delta != 0.0) {
         let step = PRONE_SWING_DEG_PER_SEC * dt;
-        let candidate = if step >= delta.abs() {
+        let candidate = if step > delta.abs() {
             view
         } else if delta > 0.0 {
             ps.prone_direction - step
@@ -1151,15 +1272,48 @@ fn update_prone_yaw(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
             ps.prone_direction + step
         };
         if prone_fits(world, ps.origin, candidate) {
-            ps.prone_direction = normalize180(candidate);
+            ps.prone_direction = candidate;
         }
     }
-    let delta = normalize180(ps.prone_direction - view);
+    // The cap measures the excess before the swing and places the view
+    // after it (0x331c8-0x33235).
     if delta.abs() > PRONE_YAWCAP {
-        let excess = delta - PRONE_YAWCAP.copysign(delta);
-        ps.view_yaw_correction = excess;
-        ps.yaw = (view + excess).to_radians();
+        ps.view_yaw_correction = delta - PRONE_YAWCAP.copysign(delta);
+        ps.yaw = (ps.prone_direction - PRONE_YAWCAP.copysign(delta)).to_radians();
     }
+    let view_pitch = -ps.pitch.to_degrees();
+    let d = angle_delta(ps.prone_torso_pitch, view_pitch);
+    if d.abs() > PRONE_PITCHCAP {
+        ps.view_pitch_correction = d - PRONE_PITCHCAP.copysign(d);
+        ps.pitch = -normalize180(ps.prone_torso_pitch - PRONE_PITCHCAP.copysign(d)).to_radians();
+    }
+}
+
+/// `PM_UpdatePronePitch` (0x3338c): both prone pitches ease toward the
+/// ground's pitch under the body and under the view, or toward level with no
+/// ground plane under the player. Not modelled: its refusal event (141) and
+/// `pm_flags` 0x8000, which no capture has raised.
+fn update_prone_pitch(ps: &mut PlayerState, dt: f32) {
+    if ps.stance != Stance::Prone {
+        return;
+    }
+    let rate = PRONE_PITCH_DEG_PER_SEC * dt;
+    let ease = |cur: f32, target: f32| {
+        let d = angle_delta(target, cur);
+        if d == 0.0 {
+            return cur;
+        }
+        normalize180(cur + d.clamp(-rate, rate))
+    };
+    let (body, view) = match ps.ground_plane {
+        Some(n) => (
+            pitch_for_yaw_on_normal(ps.prone_direction, n),
+            pitch_for_yaw_on_normal(ps.yaw.to_degrees(), n),
+        ),
+        None => (0.0, 0.0),
+    };
+    ps.prone_direction_pitch = ease(ps.prone_direction_pitch, body);
+    ps.prone_torso_pitch = ease(ps.prone_torso_pitch, view);
 }
 
 fn update_lean(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f32) {
@@ -1228,6 +1382,7 @@ fn ground_trace(ps: &mut PlayerState, world: &MoveWorld, mask: u32) {
         mask,
     );
     let thrown_off = thrown_off_ground(ps, t.normal);
+    ps.ground_plane = (t.fraction < 1.0 && !thrown_off).then_some(t.normal);
     if t.fraction < 1.0 && t.normal.z >= MIN_WALK_NORMAL && !thrown_off {
         ps.on_ground = true;
         // `groundEntityNum` is the trace's own entity (0x30732).
@@ -2947,11 +3102,10 @@ mod tests {
             "body at {}, expected {swung}",
             ps.prone_direction
         );
-        // 150 degrees off a body at -5.5 is past the 85 cap, so the view is
-        // pushed back to exactly the cap.
-        let delta = ps.prone_direction - 150.0;
+        // 150 degrees off the body is past the 85 cap: the push is measured
+        // off the body before the swing, the view placed on the cap after it.
         assert!(
-            (ps.view_yaw_correction - (delta + PRONE_YAWCAP)).abs() < 0.01,
+            (ps.view_yaw_correction - (-150.0 + PRONE_YAWCAP)).abs() < 0.01,
             "correction {}",
             ps.view_yaw_correction
         );
@@ -2959,6 +3113,103 @@ mod tests {
             ((ps.yaw.to_degrees() - ps.prone_direction).abs() - PRONE_YAWCAP).abs() < 0.01,
             "the view ends exactly on the cap"
         );
+    }
+
+    /// A crawling player's body follows the view inside the soft edge, which
+    /// a still one's does not (`PM_UpdateViewAngles` 0x330c0).
+    #[test]
+    fn a_crawl_swings_the_body_inside_the_soft_edge() {
+        let w = flat();
+        let w = MoveWorld::bare(&w);
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 20);
+        let prone = PmInput {
+            prone: true,
+            ..Default::default()
+        };
+        tick(&mut ps, &prone, &w, 60);
+        ps.yaw = 30f32.to_radians();
+        let crawl = PmInput {
+            right: 1.0,
+            ..prone
+        };
+        pmove(&mut ps, &crawl, &w, 0.05, &[]);
+        let swung = PRONE_SWING_DEG_PER_SEC * 0.05;
+        assert!(
+            (ps.prone_direction - swung).abs() < 0.01,
+            "body at {}, expected {swung}",
+            ps.prone_direction
+        );
+    }
+
+    /// The prone view pitches at most 45 degrees off the ground's pitch along
+    /// it, level ground here, and the excess goes to `delta_angles[0]`.
+    #[test]
+    fn a_prone_view_pitch_is_capped_off_the_ground() {
+        let w = flat();
+        let w = MoveWorld::bare(&w);
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 20);
+        let prone = PmInput {
+            prone: true,
+            ..Default::default()
+        };
+        tick(&mut ps, &prone, &w, 60);
+        assert_eq!(ps.prone_torso_pitch, 0.0);
+        // Camera convention: positive up. 60 down is past the cap by 15.
+        ps.pitch = (-60f32).to_radians();
+        pmove(&mut ps, &prone, &w, 0.05, &[]);
+        assert!((ps.pitch.to_degrees() + PRONE_PITCHCAP).abs() < 0.01);
+        assert!(
+            (ps.view_pitch_correction + 15.0).abs() < 0.01,
+            "correction {}",
+            ps.view_pitch_correction
+        );
+    }
+
+    /// A prone press on a player moving forward throws it into the air at the
+    /// standing dive's speed, and holds `pm_flags` 0x4 while the key is down.
+    #[test]
+    fn a_prone_press_while_running_dives() {
+        let w = flat();
+        let w = MoveWorld::bare(&w);
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        let run = PmInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        tick(&mut ps, &run, &w, 30);
+        assert!(ps.on_ground);
+        let dive = PmInput { prone: true, ..run };
+        pmove(&mut ps, &dive, &w, 0.008, &[]);
+        assert_eq!(ps.stance, Stance::Prone);
+        assert!(ps.prone_dive);
+        assert!(!ps.on_ground);
+        let takeoff = (2.0 * JUMP_HEIGHT_STAND * GRAVITY).sqrt();
+        assert!(
+            (ps.velocity.z - (takeoff - GRAVITY * 0.008)).abs() < 1.0,
+            "vz {}",
+            ps.velocity.z
+        );
+        // A sideways press does not dive.
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        let strafe = PmInput {
+            right: 1.0,
+            ..Default::default()
+        };
+        tick(&mut ps, &strafe, &w, 30);
+        pmove(
+            &mut ps,
+            &PmInput {
+                prone: true,
+                ..strafe
+            },
+            &w,
+            0.008,
+            &[],
+        );
+        assert!(!ps.prone_dive);
+        assert!(ps.on_ground);
     }
 
     #[test]

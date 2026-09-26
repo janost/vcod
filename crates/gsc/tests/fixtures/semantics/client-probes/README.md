@@ -284,6 +284,30 @@ cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-turret --probe-secs 170
 The server's `PROBE` lines and `games_mp.log`'s `D;`/`K;` records are the
 retail evidence a later capture reads; this probe itself writes no fixture.
 
+## probe_prone
+
+The prone slope capture's server half. Under `probe_teleport 1` it puts each
+spawning allied player on a mp_carentan grade once per spawn, and logs
+`PROBE place <time> <clientnum> <origin> <yaw>`: `probe_spot street` is the
+4-degree street at (900 1930), `probe_spot mound` the 19-degree terrain mound
+at (-224 60). The spots were picked with a throwaway ground-normal scan over
+our collision world; on any other map the thread logs `PROBE teleport
+unsupported <map>`. The client holds its own heading, so the yaw the gsc sets
+does not matter to the capture.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=118 \
+    tools/run_probe.sh client-probes/probe_prone mp_carentan +set probe_teleport 1 +set probe_spot street
+# second shell, about 10 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-slope --probe-prone 90 \
+    --probe-cmd-ms 8 --capture-tag prone-street --probe-secs 105
+```
+
+The mound run is the same with `probe_spot mound`, `--probe-prone 270` and
+`--capture-tag prone-mound`. It writes
+`crates/server/tests/fixtures/playerstate/mp_carentan-dm-slope-8ms-prone-<spot>.txt`,
+named `dm` because retail runs the probe as gametype `probe_prone`.
+
 ## probe_bump
 
 Player-vs-player clipping's server half. Under `probe_teleport 1` it puts

@@ -24,6 +24,7 @@ const EF_PRONE: i32 = 0x40;
 /// The mounted-gun bits, one value per gun stance (docs/research/cod11-turrets.md 4.4).
 const EF_MOUNTED: i32 = 0xC000;
 const PMF_DUCKED: i32 = 0x2;
+const PMF_PRONE_DIVE: i32 = 0x4;
 const PMF_JUMP_HELD: i32 = 0x8;
 const PMF_BACKWARDS_RUN: i32 = 0x40;
 
@@ -97,11 +98,14 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     }
     ps.lean = float("leanf") * super::LEAN_MAX;
     ps.prone_direction = float("proneDirection");
+    ps.prone_direction_pitch = float("proneDirectionPitch");
+    ps.prone_torso_pitch = float("proneTorsoPitch");
     ps.movement_dir = s8("movementDir");
     ps.bob_cycle = int("bobCycle") as u8;
 
     let pm_flags = int("pm_flags");
     ps.ducked = pm_flags & PMF_DUCKED != 0;
+    ps.prone_dive = pm_flags & PMF_PRONE_DIVE != 0;
     ps.jump_latched = pm_flags & PMF_JUMP_HELD != 0;
     ps.backwards_run = pm_flags & PMF_BACKWARDS_RUN != 0;
     ps.ads_active = pm_flags & weapon::PMF_ADS != 0;
@@ -119,6 +123,7 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
             ps.stance.view_height(),
             ps.view_height_cur,
             ps.ducked,
+            ps.prone_dive,
             command_time - view_lerp_start,
         );
     }
@@ -187,9 +192,11 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
 /// standing target can have are 200 ms or more apart. So a single transition
 /// comes out exact; a stance changed again mid-lerp started from a height no
 /// stance has and comes out approximate.
-fn lerp_speed(target: f32, cur: f32, ducked: bool, elapsed_ms: i32) -> f32 {
+fn lerp_speed(target: f32, cur: f32, ducked: bool, dive: bool, elapsed_ms: i32) -> f32 {
     let pace = |from: f32| {
-        let ms = if from == super::VIEW_PRONE || target == super::VIEW_PRONE {
+        let ms = if dive && target == super::VIEW_PRONE {
+            super::VIEW_LERP_MS
+        } else if from == super::VIEW_PRONE || target == super::VIEW_PRONE {
             super::VIEW_LERP_PRONE_MS
         } else {
             super::VIEW_LERP_MS
@@ -299,10 +306,12 @@ fn step(
     pred.ps.pitch = (-view[0]).to_radians();
     pred.ps.linked = pred.pm_type == PM_NORMAL_LINKED;
     let events = super::pmove(&mut pred.ps, &pm_input(cmd), world, dt, weapons);
-    // The prone cone's push on the view (docs/research/cod11-mantle.md, "Prone").
-    if pred.ps.view_yaw_correction != 0.0 {
-        pred.delta_angles[1] =
-            (pred.delta_angles[1] + (pred.ps.view_yaw_correction * ANGLE2SHORT) as i32) & 0xffff;
+    // The prone caps' push on the view (docs/research/cod11-mantle.md, "Prone").
+    let corrections = [pred.ps.view_pitch_correction, pred.ps.view_yaw_correction];
+    for (i, c) in corrections.into_iter().enumerate() {
+        if c != 0.0 {
+            pred.delta_angles[i] = (pred.delta_angles[i] + (c * ANGLE2SHORT) as i32) & 0xffff;
+        }
     }
     pred.view_lerp_start = if pred.ps.view_height_settled() {
         0

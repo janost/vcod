@@ -56,6 +56,8 @@ const EV_PLAYER_TELEPORT_IN: i32 = 199;
 const EV_PLAYER_TELEPORT_OUT: i32 = 200;
 const PMF_DUCKED: i32 = 0x2;
 const PMF_PRONE: i32 = 0x1;
+/// The prone dive (`pmove::PlayerState::prone_dive`).
+const PMF_PRONE_DIVE: i32 = 0x4;
 /// Held jump, retail's 0x8 (set @0x2ec34, cleared @0x34135); the capture reads
 /// `pm_flags` 0x40008 on the first airborne frame.
 const PMF_JUMP_HELD: i32 = 0x8;
@@ -748,13 +750,19 @@ impl ClientSim {
                 let events = pmove::pmove(&mut self.ps, &pm_input(cmd), &w, dt, weapons);
                 self.jumped |= self.ps.jumped;
                 self.land_anim |= self.ps.land_anim;
-                // Retail holds a prone view inside the cone around the body by
-                // pushing `delta_angles`, so the client's own prediction lands
-                // in the same place (docs/research/cod11-mantle.md, "Prone").
-                if self.ps.view_yaw_correction != 0.0 {
-                    self.delta_angles[1] = (self.delta_angles[1]
-                        + (self.ps.view_yaw_correction * ANGLE2SHORT) as i32)
-                        & 0xffff;
+                // Retail holds a prone view inside the cone around the body and
+                // the pitch cap off the ground by pushing `delta_angles`, so the
+                // client's own prediction lands in the same place, and the view
+                // the snapshot and the aim carry is the capped one
+                // (docs/research/cod11-mantle.md, "Prone").
+                let corrections = [self.ps.view_pitch_correction, self.ps.view_yaw_correction];
+                let capped = [-self.ps.pitch.to_degrees(), self.ps.yaw.to_degrees()];
+                for (i, c) in corrections.into_iter().enumerate() {
+                    if c != 0.0 {
+                        self.delta_angles[i] =
+                            (self.delta_angles[i] + (c * ANGLE2SHORT) as i32) & 0xffff;
+                        self.view_angles[i] = capped[i];
+                    }
                 }
                 // The stamp is the serverTime the lerp began, so it is taken
                 // on the frame the eye first trails its target.
@@ -1359,6 +1367,11 @@ impl ClientSim {
                     PMF_PRONE
                 } else {
                     0
+                }
+                | if self.ps.prone_dive {
+                    PMF_PRONE_DIVE
+                } else {
+                    0
                 };
             let jump_held = if self.ps.jump_latched {
                 PMF_JUMP_HELD
@@ -1406,6 +1419,16 @@ impl ClientSim {
             // The body's own yaw while prone; the client centres its view cone
             // on it, so a zero here aims the cone at world north.
             set("proneDirection", self.ps.prone_direction.to_bits() as i32);
+            // The ground's pitch under the body and under the view; the
+            // client centres its prone pitch cap on the second.
+            set(
+                "proneDirectionPitch",
+                self.ps.prone_direction_pitch.to_bits() as i32,
+            );
+            set(
+                "proneTorsoPitch",
+                self.ps.prone_torso_pitch.to_bits() as i32,
+            );
             // 8 bits on the wire, so a leftward angle travels as its
             // unsigned byte; `angles2[1]` on the entity carries the signed
             // value as a float.
