@@ -929,8 +929,12 @@ retail's dead entity (`probe_stale_handle` in §9).
     trap clips the ray against the other entities' models (3.1's dispatch
     chain). INFERRED, from those two: on retail a player standing between the
     blast and the victim blocks a probe and costs the victim a third of the
-    damage. VERIFIED: vcod's `can_damage` (`crate::game::combat`) traces the
-    collision world alone, so here only geometry ever takes a probe away.
+    damage. VERIFIED, retail live run of `client-probes/probe_blastbody`
+    (`docs/research/cod11-combat.md` 14.4): a player 130 units down the line
+    took 13 of a flat 20 with another standing at 70 on the same line and 20
+    without. VERIFIED: vcod's `can_damage` (`crate::game::combat`) traces the
+    collision world and the script models, never a player, and charged 20
+    both times.
   - **The victim walk.** VERIFIED: retail walks `trap_EntitiesInBox` over a
     `radius * sqrt(2)` box, and the loop body reads `takedamage` and the
     entity's own bounds (14.1). INFERRED, since the skip is a branch: it takes

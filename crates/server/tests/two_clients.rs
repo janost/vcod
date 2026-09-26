@@ -1052,6 +1052,7 @@ fn a_broadcast_temp_entity_skips_the_cull_and_a_scoped_one_does_not() {
         weapon: 0,
         origin,
         client_num: 0,
+        scale: 0,
         scope,
     };
     sv.test_push_temp_entity(te(1, outside, Scope::Broadcast));

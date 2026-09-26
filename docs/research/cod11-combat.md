@@ -1273,8 +1273,9 @@ contents and the two 18-unit traces meet nothing (object-model doc 23.6).
 
 vcod: the `bulletTrace` builtin clips every live `script_model` whose xmodel
 has collision, loaded once per model name, with the segment moved into the
-entity's frame. The weapon traces, `CanDamage` and the missile do not see
-script models yet, though they are the same syscall on retail.
+entity's frame. `CanDamage` clips the same set (14.4); the weapon traces and
+the missile do not see script models yet, though they are the same syscall on
+retail.
 
 ---
 
@@ -3691,6 +3692,58 @@ VERIFIED: its pain frame reads `aimSpreadScale` 94.00 off a counter that was
 0. INFERRED: section 6's step 5 adds `damage * 100 / maxHealth` there, so
 retail charged 94, which is what the falloff gives at the 78 units the replay
 measures between the blast and the thrower.
+
+### 14.4 What stops a blast, measured
+
+Two client probes, run 2026-09-26 against the retail 1.1d server and against
+`vcod-server` with four `--net-probe --probe-team` clients each (allies, axis,
+allies, axis), `sd` rules on mp_carentan. The recipe and the raw lines are in
+`crates/gsc/tests/fixtures/semantics/client-probes/README.md`.
+
+`probe_bomb` puts the charge where the committed plant capture's `getPlant`
+put it, `(-176.8, 2473.1, -22.96)`, on the plate of the flak88 script model
+beside `bombzone_A` (2.7, and the object-model doc 23.6), stands clients 0
+to 3 at `(-196, 2455, -22)` in the open 26 units off and at
+`(-84, 2511, -22)`, `(-112, 2446, -22)` and `(-77, 2473, -32)` across the
+flak, runs four `radiusDamage(…, 500, 20, 20)`s with the bomb model still
+standing, then the stock `bomb_countdown`, whose fuse deletes the intact
+flak, shows its `_d` twin and deletes the bomb model before its own
+`radiusDamage(origin, 500, 2000, 1000)`. VERIFIED, the servers'
+`games_mp.log` `D;` and `K;` records and the probe's health line after the
+fuse:
+
+| blast | retail | vcod before | vcod after |
+|---|---|---|---|
+| at the charge | none | 0: 20 | none |
+| 20 above the charge | 0: 20 | 0: 20 | 0: 20 |
+| at `bombtrigger getorigin()`, which reads the charge | none | 0: 20 | none |
+| 40 above client 0's feet | 0: 20 | 0: 20, 2: 13, 3: 6 | 0: 20, 2: 6, 3: 6 |
+| the fuse | none, all four at 100 | 0 killed, 1944 | none |
+
+"vcod before" is the server without script models in `CanDamage`; "after"
+is the one this section describes. INFERRED, off the first, third and fifth
+rows against 2.7: the flak models and the bomb model are script models, they
+stop `CanDamage`'s locational traces, and the second chance's
+`trap_Trace` (mask 0x11) does not see them, so a charge sitting on the flak
+harms nobody, even a player 26 units away in the open. A charge planted on
+open floor is not what this run measured.
+
+`probe_blastbody` puts client 0 at `(-226, 2424, -32)` and client 1 at
+`(-269, 2381, -32)`, 70 and 130 units down one line from a blast at
+`(-176.8, 2473.1, 7)`, parks the other two out of range, blasts
+`radiusDamage(…, 500, 20, 20)`, moves client 0 to `(-300, 2473, -24)` off the
+line and blasts again. VERIFIED: retail charged client 1 13 with client 0 in
+the line and 20 without it; vcod charged 20 both times. INFERRED: 13 is
+`(int)(20 * 2/3)`, so client 0's body took three of the five probes, which is
+the body shielding `cod11-gsc-language.md`'s `radiusDamage` entry read off
+`CanDamage`'s pass entity. INFERRED, off the blast sitting inside client 0's
+box: the same shielding is what leaves retail's fourth row above at 0 for
+clients 2 and 3.
+
+vcod: `can_damage` traces the collision world and every live script model
+(`GameHost::placed_script_models`, the set `bulletTrace` clips), and the
+second chance traces the world alone with mask 0x11 and no static models.
+Player bodies still do not stop a probe.
 
 ---
 

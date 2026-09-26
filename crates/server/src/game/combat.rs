@@ -450,6 +450,7 @@ fn fire_round(
                     weapon: 0,
                     origin: point.into(),
                     client_num: 0,
+                    scale: 0,
                     scope: Scope::AllBut(slot),
                 }),
                 hit: Some(Hit {
@@ -476,6 +477,7 @@ fn fire_round(
                 weapon: 0,
                 origin: t.endpos.into(),
                 client_num: 0,
+                scale: 0,
                 scope: Scope::Broadcast,
             }),
             hit: None,
@@ -639,6 +641,7 @@ pub fn melee_fire(
                     weapon,
                     origin: point.into(),
                     client_num: 0,
+                    scale: 0,
                     scope: Scope::Broadcast,
                 }),
                 hit: Some(Hit {
@@ -667,6 +670,7 @@ pub fn melee_fire(
                 weapon,
                 origin: t.endpos.into(),
                 client_num: 0,
+                scale: 0,
                 scope: Scope::Broadcast,
             }),
             hit: None,
@@ -681,6 +685,7 @@ pub fn melee_fire(
                 weapon,
                 origin: end.into(),
                 client_num: 0,
+                scale: 0,
                 scope: Scope::Broadcast,
             }),
             hit: None,
@@ -697,6 +702,29 @@ const SECOND_CHANCE_RANGE: f32 = 0.2;
 const SECOND_CHANCE_SHARE: f32 = 0.1;
 /// The half-width of `CanDamage`'s probe rectangle (14.3).
 const CAN_DAMAGE_HALF_WIDTH: f32 = 15.0;
+/// The second chance's `trap_Trace` mask, SOLID and GLASS (14.1). A plain
+/// trace, so no static model stops it, and a script model's 0x2080 shares no
+/// bit with the mask.
+const SECOND_CHANCE_MASK: u32 = 0x11;
+
+/// A linked `script_model`'s collision as a locational trace meets it: the
+/// xmodel's surfaces at the entity's origin and angles (combat doc, 2.7).
+pub struct PlacedModel {
+    pub id: EntId,
+    pub origin: Vec3,
+    pub axis: glam::Mat3,
+    pub tris: std::rc::Rc<[vcod_common::collision::ModelTri]>,
+}
+
+impl PlacedModel {
+    /// The segment's first hit on this model closer than `best`: fraction
+    /// and world normal.
+    pub fn clip(&self, start: Vec3, end: Vec3, mask: u32, best: f32) -> Option<(f32, Vec3)> {
+        let local = |p: Vec3| self.axis.transpose() * (p - self.origin);
+        vcod_common::collision::clip_model_tris(local(start), local(end), &self.tris, mask, best)
+            .map(|(f, n, _)| (f, self.axis * n))
+    }
+}
 
 /// One candidate for a blast. Every one of them is a client here: nothing
 /// else on this server has `takedamage` set, so the brush-model arms of
@@ -714,8 +742,14 @@ pub struct BlastVictim {
 /// `CanDamage`'s client arm (combat doc, 14.3): five traces at the body
 /// centre and at the corners of a 30-unit-wide, body-tall rectangle held
 /// broadside to the blast. None clear is 0, four or five is 1, anything
-/// between is `count / 3`.
-pub fn can_damage(at: Vec3, v: &BlastVictim, world: &CollisionWorld) -> f32 {
+/// between is `count / 3`. Each is a locational trace, so `models` stop it
+/// as the world does.
+pub fn can_damage(
+    at: Vec3,
+    v: &BlastVictim,
+    world: &CollisionWorld,
+    models: &[PlacedModel],
+) -> f32 {
     let mid = (v.eye + v.origin) * 0.5;
     let mut to_blast = at - v.origin;
     to_blast.z = 0.0;
@@ -732,10 +766,9 @@ pub fn can_damage(at: Vec3, v: &BlastVictim, world: &CollisionWorld) -> f32 {
     let clear = probes
         .iter()
         .filter(|p| {
-            world
-                .point_trace(at, **p, vcod_common::collision::MASK_BLAST, true)
-                .fraction
-                >= 1.0
+            let mask = vcod_common::collision::MASK_BLAST;
+            world.point_trace(at, **p, mask, true).fraction >= 1.0
+                && models.iter().all(|m| m.clip(at, **p, mask, 1.0).is_none())
         })
         .count();
     match clear {
@@ -752,7 +785,8 @@ pub fn can_damage(at: Vec3, v: &BlastVictim, world: &CollisionWorld) -> f32 {
 /// chance's tenth when the trace to its box midpoint was blocked and that
 /// midpoint is inside `radius * 0.2`. Distance is origin to origin, which is
 /// what retail measures for anything that is not a brush model. `attacker`
-/// is `None` for a blast the world set off. Without a `world` nothing is
+/// is `None` for a blast the world set off. `models` stop `CanDamage`'s
+/// traces and not the second chance's. Without a `world` nothing is
 /// traced and every candidate inside the radius takes the falloff whole,
 /// which is what a unit test wants and what a host with no map has.
 #[allow(clippy::too_many_arguments)]
@@ -767,6 +801,7 @@ pub fn radius_damage(
     mod_: &'static str,
     victims: &[BlastVictim],
     world: Option<&CollisionWorld>,
+    models: &[PlacedModel],
 ) -> Vec<Hit> {
     let radius = radius.max(1.0);
     let mut hits = Vec::new();
@@ -780,12 +815,13 @@ pub fn radius_damage(
         // ratios a script picks.
         let points =
             outer as f64 + (1.0 - dist as f64 / radius as f64) * (inner as f64 - outer as f64);
-        let fraction = world.map_or(1.0, |w| can_damage(at, v, w));
+        let fraction = world.map_or(1.0, |w| can_damage(at, v, w, models));
         let damage = if fraction > 0.0 {
             (fraction as f64 * points) as i32
         } else {
             let mid = v.origin + (v.mins + v.maxs) * 0.5;
-            let blocked = world.is_some_and(|w| w.shot_trace(at, mid).fraction < 1.0);
+            let blocked = world
+                .is_some_and(|w| w.point_trace(at, mid, SECOND_CHANCE_MASK, false).fraction < 1.0);
             if !blocked || (mid - at).length() >= radius * SECOND_CHANCE_RANGE {
                 continue;
             }
@@ -1245,6 +1281,7 @@ mod tests {
             "MOD_GRENADE_SPLASH",
             &v,
             None,
+            &[],
         );
         let by: std::collections::BTreeMap<usize, i32> =
             hits.iter().map(|h| (h.victim, h.damage)).collect();
@@ -1274,7 +1311,7 @@ mod tests {
         let near = blast_victim(1, 50.0);
         let far = blast_victim(2, 100.0);
         let open = vcod_common::collision::test_world(&[]);
-        assert_eq!(can_damage(at, &far, &open), 1.0);
+        assert_eq!(can_damage(at, &far, &open, &[]), 1.0);
 
         // Close to the victim and waist-high: the body centre and the two
         // low probes are behind it, the two shoulder ones clear it.
@@ -1282,14 +1319,14 @@ mod tests {
             Vec3::new(80.0, -64.0, 0.0),
             Vec3::new(88.0, 64.0, 40.0),
         )]);
-        assert!((can_damage(at, &far, &waist) - 2.0 / 3.0).abs() < 1e-6);
+        assert!((can_damage(at, &far, &waist, &[]) - 2.0 / 3.0).abs() < 1e-6);
 
         let wall = vcod_common::collision::test_world(&[(
             Vec3::new(20.0, -64.0, 0.0),
             Vec3::new(28.0, 64.0, 128.0),
         )]);
-        assert_eq!(can_damage(at, &far, &wall), 0.0);
-        assert_eq!(can_damage(at, &near, &wall), 0.0);
+        assert_eq!(can_damage(at, &far, &wall, &[]), 0.0);
+        assert_eq!(can_damage(at, &near, &wall, &[]), 0.0);
 
         let blast = |v: &BlastVictim, w: &vcod_common::collision::CollisionWorld| {
             radius_damage(
@@ -1303,6 +1340,7 @@ mod tests {
                 "MOD_GRENADE_SPLASH",
                 std::slice::from_ref(v),
                 Some(w),
+                &[],
             )
         };
         // Two thirds of the falloff at 100 units: 87.14 * 2/3.
@@ -1314,5 +1352,56 @@ mod tests {
         assert_eq!(second[0].damage, 10);
         // Behind the same wall but past `radius * 0.2`: nothing at all.
         assert!(blast(&far, &wall).is_empty());
+    }
+
+    /// A script model shields a blast the way the world does, since
+    /// `CanDamage` traces it on retail (combat doc, 14.4), but it does not
+    /// block the second chance's plain trace: a victim hidden behind one
+    /// close in takes nothing, where a world wall there gives a tenth.
+    #[test]
+    fn a_script_model_shields_a_blast_and_leaves_no_second_chance() {
+        use vcod_common::collision::ModelTri;
+        let at = Vec3::new(0.0, 0.0, 8.0);
+        let near = blast_victim(1, 50.0);
+        // One quad facing the blast at x 24, 128 across and 128 tall.
+        let (a, b, c, d) = (
+            Vec3::new(0.0, -64.0, 0.0),
+            Vec3::new(0.0, 64.0, 0.0),
+            Vec3::new(0.0, 64.0, 128.0),
+            Vec3::new(0.0, -64.0, 128.0),
+        );
+        let face = |tri| ModelTri {
+            tri,
+            contents: 1,
+            surface_flags: 0,
+        };
+        let wall = PlacedModel {
+            id: EntId(200, 0),
+            origin: Vec3::new(24.0, 0.0, 0.0),
+            axis: glam::Mat3::IDENTITY,
+            tris: std::rc::Rc::from(vec![face([a, c, b]), face([a, d, c])]),
+        };
+        let open = vcod_common::collision::test_world(&[]);
+        assert_eq!(can_damage(at, &near, &open, &[]), 1.0);
+        let models = std::slice::from_ref(&wall);
+        assert_eq!(can_damage(at, &near, &open, models), 0.0);
+        let hits = radius_damage(
+            at,
+            350.0,
+            120.0,
+            5.0,
+            None,
+            None,
+            "none",
+            "MOD_EXPLOSIVE",
+            std::slice::from_ref(&near),
+            Some(&open),
+            models,
+        );
+        assert!(
+            hits.is_empty(),
+            "{:?}",
+            hits.iter().map(|h| h.damage).collect::<Vec<_>>()
+        );
     }
 }

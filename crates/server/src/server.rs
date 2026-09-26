@@ -1453,7 +1453,9 @@ impl Server {
 
     /// Test-facing, beside `test_clear_line`: `CanDamage`'s fraction for a
     /// standing player whose feet are at `feet`, from a blast at `at`
-    /// (combat doc, 14.3). 0 is a player the blast cannot see at all.
+    /// (combat doc, 14.3), against the world alone: the script models the
+    /// live blast also meets are left out. 0 is a player the blast cannot
+    /// see at all.
     pub fn test_can_damage(&self, at: [f32; 3], feet: [f32; 3]) -> f32 {
         let Some(world) = self.world.as_ref() else {
             return 1.0;
@@ -1467,7 +1469,7 @@ impl Server {
             maxs: glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
             eye: feet + glam::Vec3::Z * Stance::Stand.view_height(),
         };
-        crate::game::combat::can_damage(glam::Vec3::from(at), &v, &world.collision)
+        crate::game::combat::can_damage(glam::Vec3::from(at), &v, &world.collision, &[])
     }
 
     /// Test-facing: where a standing player dropped at `p` comes to rest,
@@ -2805,6 +2807,11 @@ impl Server {
             // Each blast becomes hits before `deliver_hits` runs, so a
             // grenade damages on the frame it goes off (combat doc, 14.1).
             let collision = self.world.as_ref().map(|w| &w.collision);
+            let models = if self.pending_explosions.is_empty() {
+                Vec::new()
+            } else {
+                rt.placed_script_models()
+            };
             for x in &self.pending_explosions {
                 let Some(def) = weapons.get(x.weapon as usize) else {
                     continue;
@@ -2831,6 +2838,7 @@ impl Server {
                     "MOD_GRENADE_SPLASH",
                     &victims,
                     collision,
+                    &models,
                 ));
             }
             // The client commands the packet pass queued, on this frame's

@@ -670,6 +670,7 @@ impl ClientSim {
             attacker: 0,
             weapon: 0,
             client_num: client_num as i32,
+            scale: 0,
             origin: at,
             scope: Scope::Pvs,
         };

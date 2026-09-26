@@ -1497,6 +1497,12 @@ impl ScriptRuntime {
         self.host.temp_entities.push(te);
     }
 
+    /// `GameHost::placed_script_models`, for a blast the sim side charges.
+    pub fn placed_script_models(&mut self) -> Vec<crate::game::combat::PlacedModel> {
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| host.placed_script_models(cx))
+    }
+
     /// The same list, drained. A temp entity lives for one frame, so the
     /// snapshot build takes them rather than reading them
     /// (`crate::game::temp_entity`).

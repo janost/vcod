@@ -493,6 +493,44 @@ impl GameHost {
         tris
     }
 
+    /// Every live `script_model` whose xmodel has collision, where a
+    /// locational trace meets it: hidden or `notSolid()`ed alike, so neither
+    /// is read (docs/research/cod11-combat.md 2.7).
+    pub fn placed_script_models(&mut self, cx: &mut Cx) -> Vec<crate::game::combat::PlacedModel> {
+        let classname = cx.intern_folded("classname");
+        let model = cx.intern_folded("model");
+        let origin = cx.intern_folded("origin");
+        let angles = cx.intern_folded("angles");
+        let ids: Vec<EntId> = self.ents.iter_inuse().map(|(id, _)| id).collect();
+        let vec = |v: Value| match v {
+            Value::Vector(v) => glam::Vec3::from(v),
+            _ => glam::Vec3::ZERO,
+        };
+        let mut out = Vec::new();
+        for id in ids {
+            let Value::String(c) = self.get_field(cx, id, classname) else {
+                continue;
+            };
+            if cx.resolve(c) != "script_model" {
+                continue;
+            }
+            let Value::String(m) = self.get_field(cx, id, model) else {
+                continue;
+            };
+            let name = cx.resolve(m).to_string();
+            let Some(tris) = self.xmodel_tris(&name) else {
+                continue;
+            };
+            out.push(crate::game::combat::PlacedModel {
+                id,
+                origin: vec(self.get_field(cx, id, origin)),
+                axis: vcod_common::props::rotation(vec(self.get_field(cx, id, angles))),
+                tris,
+            });
+        }
+        out
+    }
+
     /// Queues `op` for the client's sim and applies it to the host's mirror
     /// now. Every weapon op goes through here; a push straight onto
     /// `client_weapon_ops` leaves the mirror stale for the rest of the frame.

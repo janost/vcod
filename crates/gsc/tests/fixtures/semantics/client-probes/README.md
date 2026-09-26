@@ -339,3 +339,74 @@ All six files are retail evidence. A walker run against `vcod-server`
 overwrites the untagged one and refuses the tagged ones without
 `--overwrite-fixture`: move them to `tmp/` and `git checkout` the fixture
 directory after.
+
+## probe_bomb and probe_blastbody
+
+Who a scripted blast reaches, for `docs/research/cod11-combat.md` 14.4. Both
+call `maps\mp\gametypes\sd::main()` and wait for four playing clients after
+the match-start restart, so the recipe is four `--probe-team` clients, two per
+team, started a couple of seconds apart:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=110 \
+    tools/run_probe.sh client-probes/probe_bomb mp_carentan
+# second shell, about 6 s later:
+for t in allies axis allies axis; do
+    cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team $t --probe-secs 100 &
+    sleep 2
+done
+```
+
+`probe_blastbody` takes the same recipe with 60 s on the server. Against ours
+the server half is
+`vcod-server mp_carentan --gametype-script crates/gsc/tests/fixtures/semantics/client-probes/probe_bomb.gsc`,
+whose log carries the same lines as `script: …`. Nothing here writes a
+fixture.
+
+`probe_bomb` stands the four on fixed stations round the committed plant
+capture's charge, `radiusDamage`s at and near it four times at a flat 20, then
+replays the tail of `sd.gsc`'s plant and lets the stock `bomb_countdown` run
+out. Retail, 2026-09-26, the first round of the run:
+
+```
+0:16 PROBE place 0 (-196.00, 2455.00, -22.00)
+0:16 PROBE place 1 (-84.00, 2511.00, -22.00)
+0:16 PROBE place 2 (-112.00, 2446.00, -22.00)
+0:16 PROBE place 3 (-77.00, 2473.00, -32.00)
+0:16 PROBE bomb (-176.80, 2473.10, -22.96)
+0:16 PROBE trigger getorigin (-176.80, 2473.10, -22.96) origin (-176.80, 2473.10, -22.96)
+0:17 PROBE blast at_bomb
+0:18 PROBE blast above_bomb
+0:18 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:19 PROBE blast trigger_getorigin
+0:20 PROBE blast above_player0
+0:20 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:21 PROBE before 0 100 playing (-197.05, 2454.00, -21.88)
+0:21 PROBE before 1 100 playing (-84.00, 2511.00, -21.88)
+0:21 PROBE before 2 100 playing (-112.00, 2446.00, -21.88)
+0:21 PROBE before 3 100 playing (-77.00, 2473.00, -31.87)
+1:21 W;allies;vcod;vcod
+1:21 L;axis;vcod;vcod
+1:22 PROBE after 0 100 playing (-197.05, 2454.00, -21.88)
+1:22 PROBE after 1 100 playing (-84.00, 2511.00, -21.88)
+1:22 PROBE after 2 100 playing (-112.00, 2446.00, -21.88)
+1:22 PROBE after 3 100 playing (-77.00, 2473.00, -31.87)
+```
+
+`probe_blastbody` puts two clients on one line from a blast in the open and
+blasts twice at a flat 20, the second time with the front one moved off the
+line. Retail, 2026-09-26:
+
+```
+0:17 PROBE place 0 (-226.00, 2424.00, -32.00)
+0:17 PROBE place 1 (-269.00, 2381.00, -32.00)
+0:17 PROBE place 2 (400.00, 3272.00, -23.88)
+0:17 PROBE place 3 (224.00, -1280.00, 1.86)
+0:18 PROBE blast shielded
+0:18 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:18 D;1;axis;vcod;-1;world;;none;13;MOD_EXPLOSIVE;none
+0:20 PROBE blast unshielded (-300.00, 2473.00, -31.87) (-269.73, 2380.27, -31.87)
+0:20 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:20 D;1;axis;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:21 PROBE done
+```

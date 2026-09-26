@@ -269,6 +269,14 @@ impl Allocators {
         let slot = self.index(cs, CsRange::Shader, name)?;
         Ok((slot - CsRange::Shader.bounds().0) as i32 + 1)
     }
+
+    /// The same for `G_EffectIndex` (0x65fa4), scanning from `i = 1` and
+    /// writing `0x30c + i`: the effect id `loadFX` returns and `EV_PLAY_FX`
+    /// carries, resolved through configstring `780 + n`.
+    pub fn effect_index(&mut self, cs: &mut [String], name: &str) -> Result<i32, ErrorKind> {
+        let slot = self.index(cs, CsRange::Effect, name)?;
+        Ok((slot - CsRange::Effect.bounds().0) as i32 + 1)
+    }
 }
 
 /// `GScr_GetScriptMenuIndex` (0x5c73c): the offset within `CsRange::Menu` of
