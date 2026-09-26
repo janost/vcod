@@ -188,6 +188,7 @@ impl OnlineView {
         let (_, ms_in, trend) = self.clock.update(ps.weap_anim, frac, now_ms);
         let trend = held_trend(&mut self.trend, trend, frac);
 
+        w.pose_sight(frac, frac >= 1.0 || trend > 0);
         let def = &w.def;
         let wanted = weapon::view_anim(def, ps.weap_anim, frac, trend, clip_empty);
         let idle = weapon::view_anim(def, 0, frac, trend, clip_empty);

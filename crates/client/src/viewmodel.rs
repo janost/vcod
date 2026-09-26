@@ -70,8 +70,11 @@ pub fn load_anims(
     let [hands, gun] = models else {
         return None;
     };
-    // same order as set_viewmodel, so bone_sets[i] matches model i
-    let skeleton = skeleton::Skeleton::build(&[hands, gun]);
+    // Same order as set_viewmodel, so bone_sets[i] matches model i. The gun
+    // hangs off `tag_weapon` whatever its root is called: the carbine's root
+    // is `tag_origin` (docs/research/xmodel-v14-format.md, "Model space and
+    // the view basis").
+    let skeleton = skeleton::Skeleton::build_grafted(&[(hands, None), (gun, Some("tag_weapon"))]);
 
     let mut anims = HashMap::new();
     for which in weapon::WeaponAnim::ALL {
@@ -93,14 +96,38 @@ pub fn load_anims(
         return None;
     }
 
+    // Seeded with idle: a first clip that keys only `tag_torso` (a sight
+    // already rising at the spawn) would leave the arms at the zeroed bind.
+    let mut pose = skeleton::PoseBuffer::new(&skeleton);
+    let (idle, binding) = &anims[&weapon::WeaponAnim::Idle];
+    pose.apply(idle, binding, 0.0);
     let def = weapon::WeaponDef::from_map(weapon);
     Some(ViewWeapon {
-        pose: skeleton::PoseBuffer::new(&skeleton),
+        pose,
         skeleton,
         state: weapon::WeaponState::new(def.clone()),
         def,
         anims,
     })
+}
+
+impl ViewWeapon {
+    /// Poses the sight layer: `AdsUp` at `frac` while `raising`, else
+    /// `AdsDown` at `1 - frac`. Retail keeps one of the two weighted at all
+    /// times, so the hip position is `AdsDown`'s last frame, not the bind
+    /// pose (docs/research/xanim-v14-format.md, "The sight layer"). Call it
+    /// before the main clip, which then overrides whatever it keys.
+    pub fn pose_sight(&mut self, frac: f32, raising: bool) {
+        let (which, t) = if raising {
+            (weapon::WeaponAnim::AdsUp, frac)
+        } else {
+            (weapon::WeaponAnim::AdsDown, 1.0 - frac)
+        };
+        if let Some((clip, binding)) = self.anims.get(&which) {
+            let t = t.clamp(0.0, 1.0) * clip.duration();
+            self.pose.apply(clip, binding, clip.frame_pos(t, false));
+        }
+    }
 }
 
 /// Model space (X forward, Y left, Z up, tag_view at the eye) to view space
@@ -248,6 +275,58 @@ mod tests {
         assert!(
             poses.iter().any(|p| p != &poses[0]),
             "the gun never moved across 240 frames"
+        );
+    }
+
+    /// Model-space `tag_flash` (X forward, Y left, Z up) after the sight layer
+    /// at `frac` and the idle clip on top, as a frame at rest draws it.
+    fn rest_flash(w: &mut ViewWeapon, frac: f32) -> glam::Vec3 {
+        w.pose_sight(frac, frac > 0.0);
+        let (idle, binding) = &w.anims[&weapon::WeaponAnim::Idle];
+        w.pose.apply(idle, binding, 0.0);
+        let bi = w.skeleton.bone_index("tag_flash").expect("tag_flash");
+        w.pose.bone_world(&w.skeleton, bi).0
+    }
+
+    /// At the hip the muzzle sits right of and below the eye; with the sight
+    /// up it is on the view axis. The carbine's gun root is `tag_origin`, so
+    /// it moves at all only through the `tag_weapon` graft.
+    #[test]
+    fn hip_holds_the_gun_low_right_and_the_sight_centres_it() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        for name in ["kar98k_mp", "m1carbine_mp"] {
+            let (_, rig) = load_view_weapon(&fs, name).expect("viewmodel");
+            let mut w = rig.expect("anim rig");
+            let hip = rest_flash(&mut w, 0.0);
+            assert!(hip.y < -2.0 && hip.z < -2.0, "{name} hip {hip}");
+            let sight = rest_flash(&mut w, 1.0);
+            assert!(
+                sight.y.abs() < 0.5 && sight.z.abs() < 1.0,
+                "{name} sight {sight}"
+            );
+        }
+    }
+
+    /// A sight already rising on the rig's first frame keys only `tag_torso`;
+    /// the arms still hold the idle pose instead of the zeroed bind.
+    #[test]
+    fn a_fresh_rig_holds_the_idle_arms() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let (_, rig) = load_view_weapon(&fs, "m1carbine_mp").expect("carbine viewmodel");
+        let mut w = rig.expect("anim rig");
+        w.pose_sight(0.5, true);
+        let at = |w: &ViewWeapon, bone: &str| {
+            let bi = w.skeleton.bone_index(bone).expect(bone);
+            w.pose.bone_world(&w.skeleton, bi).0
+        };
+        let reach = at(&w, "bip01 l hand").distance(at(&w, "tag_torso"));
+        assert!(
+            reach > 5.0,
+            "the left hand collapsed onto tag_torso: {reach}"
         );
     }
 

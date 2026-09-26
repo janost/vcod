@@ -2299,6 +2299,7 @@ impl ApplicationHandler for App {
                                     reload: *reload_edge,
                                 },
                             );
+                            w.pose_sight(out.ads_frac, *ads_held);
                             let clip = w
                                 .anims
                                 .get(&out.anim)
