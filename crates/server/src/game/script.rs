@@ -1036,6 +1036,17 @@ impl ScriptRuntime {
         std::mem::take(&mut self.host.client_commands)
     }
 
+    /// A server command `Server` sends on the script's behalf, queued behind
+    /// the ones the script queued so far so the two keep retail's order.
+    pub fn queue_client_command(&mut self, slot: usize, text: String) {
+        self.host.client_commands.push((slot, text));
+    }
+
+    /// The clients `player_die` ran on since the last call, in that order.
+    pub fn take_deaths(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.host.deaths)
+    }
+
     /// The spawns the script performed this frame, in call order. `Server`
     /// applies them to the client sims; nothing here can reach one.
     pub fn take_client_spawns(&mut self) -> Vec<SpawnRequest> {

@@ -1630,3 +1630,227 @@ fn a_wall_shields_a_player_from_a_blast() {
     );
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }
+
+/// A spectator in slot 0, connected first and never joined, following B, and
+/// the A/B pair of the shot test beside it: A faces +x at B, 40 units away.
+struct Followed {
+    sv: vcod_server::Server,
+    q: [Rc<RefCell<Queues>>; 3],
+    cs: Client,
+    ca: Client,
+    cb: Client,
+    now: Instant,
+    nb: usize,
+}
+
+impl Followed {
+    fn new() -> Option<Self> {
+        let fs = vcod_common::testing::game_fs()?;
+        let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+        let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+        let mut now = Instant::now();
+        let mut sv = vcod_server::Server::new(cfg(), now);
+        sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+        sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+        let q: [Rc<RefCell<Queues>>; 3] = Default::default();
+        let cs = common::connect_at(&mut sv, common::ADDR_C, &q[0], &mut now, 0x2000);
+        let ca = Client::start_with_qport(common::ClientEnd(q[1].clone()), now, 0x2001);
+        let cb = Client::start_with_qport(common::ClientEnd(q[2].clone()), now, 0x2002);
+        let mut r = Followed {
+            sv,
+            q,
+            cs,
+            ca,
+            cb,
+            now,
+            nb: 0,
+        };
+        let mut ja = common::Join::new("allies", "m1carbine_mp");
+        let mut jb = common::Join::new("allies", "m1carbine_mp");
+        let null = vcod_common::net::msg::NULL_USERCMD;
+        for _ in 0..600 {
+            let [_, ea, eb] = r.step(&null, &null, &null);
+            for (events, join, cl) in [(ea, &mut ja, &mut r.ca), (eb, &mut jb, &mut r.cb)] {
+                for e in events {
+                    if let NetEvent::ServerCommand(tokens) = e {
+                        join.on_server_command(&tokens, cl, r.now);
+                    }
+                }
+            }
+            if ja.settled(r.now) && jb.settled(r.now) {
+                break;
+            }
+        }
+        assert!(
+            ja.settled(r.now) && jb.settled(r.now),
+            "the pair never joined"
+        );
+        let num = |c: &Client| {
+            c.snapshots()
+                .newest()
+                .unwrap()
+                .ps
+                .field_i32(&PROTOCOL_V1, "clientNum") as usize
+        };
+        assert_eq!(num(&r.cs), 0, "the spectator connected first");
+        let (na, nb) = (num(&r.ca), num(&r.cb));
+        r.nb = nb;
+        // `probe_passthru`'s flat brush floor, whatever dm spawned the pair on.
+        let spot = [1132.0, -376.0, -151.875];
+        assert!(
+            r.sv.test_clear_line(spot, 0.0, 40.0),
+            "no clear 40 units along +x from the spawn"
+        );
+        r.sv.place_client(na, spot, 0.0);
+        r.sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+        // Attack taps cycle the follow forward until it lands on B.
+        let attack = vcod_common::net::msg::UserCmd {
+            buttons: vcod_common::net::msg::BUTTON_ATTACK,
+            ..null
+        };
+        for _ in 0..4 {
+            if r.followed() == Some(nb) {
+                break;
+            }
+            let (a, b) = r.holding();
+            r.step(&attack, &a, &b);
+            r.step(&null, &a, &b);
+            r.step(&null, &a, &b);
+        }
+        assert_eq!(r.followed(), Some(nb), "the spectator never followed B");
+        for _ in 0..20 {
+            let (a, b) = r.holding();
+            r.step(&null, &a, &b);
+        }
+        Some(r)
+    }
+
+    /// The slot the spectator's frame copies, `None` while it flies free.
+    fn followed(&self) -> Option<usize> {
+        let s = self.cs.snapshots().newest()?;
+        (s.ps.field_i32(&PROTOCOL_V1, "pm_flags") & 0x10000 != 0)
+            .then(|| s.ps.field_i32(&PROTOCOL_V1, "clientNum") as usize)
+    }
+
+    /// A still and B facing back at it, each sending the weapon it holds.
+    fn holding(
+        &self,
+    ) -> (
+        vcod_common::net::msg::UserCmd,
+        vcod_common::net::msg::UserCmd,
+    ) {
+        let mut b = common::holding(&self.cb);
+        b.angles = [0, angle_short(180.0), 0];
+        (common::holding(&self.ca), b)
+    }
+
+    /// One frame, each client's server commands back in slot order.
+    fn step(
+        &mut self,
+        s: &vcod_common::net::msg::UserCmd,
+        a: &vcod_common::net::msg::UserCmd,
+        b: &vcod_common::net::msg::UserCmd,
+    ) -> [Vec<NetEvent>; 3] {
+        self.now += Duration::from_millis(50);
+        self.cs.send_frame(s);
+        self.ca.send_frame(a);
+        self.cb.send_frame(b);
+        let (es, ea, eb) = common::step_trio(
+            &mut self.sv,
+            (common::ADDR_C, &self.q[0], &mut self.cs),
+            (common::ADDR, &self.q[1], &mut self.ca),
+            (common::ADDR_B, &self.q[2], &mut self.cb),
+            self.now,
+        );
+        [es, ea, eb]
+    }
+
+    /// Frames until the spectator's copy of B reads health 0, with the
+    /// scoreboards each client was sent on each: the death frame's index and
+    /// every `b` by frame, client and tokens.
+    fn until_dead(
+        &mut self,
+        mut cmds: impl FnMut(
+            usize,
+            &Self,
+        ) -> (
+            vcod_common::net::msg::UserCmd,
+            vcod_common::net::msg::UserCmd,
+        ),
+    ) -> (usize, Vec<(usize, usize, Vec<String>)>) {
+        let mut pushed = Vec::new();
+        for frame in 0..80 {
+            let (a, b) = cmds(frame, self);
+            let events = self.step(&vcod_common::net::msg::NULL_USERCMD, &a, &b);
+            for (client, events) in events.into_iter().enumerate() {
+                for e in events {
+                    if let NetEvent::ServerCommand(t) = e {
+                        if t.first().map(String::as_str) == Some("b") {
+                            pushed.push((frame, client, t));
+                        }
+                    }
+                }
+            }
+            if self.cs.snapshots().newest().unwrap().ps.health() == 0 {
+                assert_eq!(self.followed(), Some(self.nb));
+                return (frame, pushed);
+            }
+        }
+        panic!("B did not die");
+    }
+
+    /// B's `(score, deaths)` in a `b` scoreboard's rows.
+    fn row_of_b(&self, b: &[String]) -> (i64, i64) {
+        let cells: Vec<i64> = b[4..].iter().map(|s| s.parse().unwrap()).collect();
+        let row = cells
+            .chunks(5)
+            .find(|c| c[0] == self.nb as i64)
+            .expect("no row for B");
+        (row[1], row[3])
+    }
+}
+
+/// `player_die`'s walk (combat doc 5.1 step 9) on a bullet death: the
+/// spectator following B is pushed the scoreboard once, in the packet of the
+/// frame whose copy of B first reads health 0, with the kill already scored,
+/// and the players are pushed none. The retail follow run read its `b` on that
+/// frame for a head shot and for a `kill` (`cod11-spectator-follow.md` 9).
+#[test]
+fn a_shot_death_pushes_the_scoreboard_to_the_victims_follower() {
+    use vcod_common::net::msg::{BUTTON_ADS, BUTTON_ATTACK};
+    let Some(mut r) = Followed::new() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    // Two taps down the sight 30 frames apart: two head hits of 67.
+    let (death, pushed) = r.until_dead(|frame, r| {
+        let (mut a, b) = r.holding();
+        a.buttons = BUTTON_ADS;
+        if frame % 30 == 0 {
+            a.buttons |= BUTTON_ATTACK;
+        }
+        (a, b)
+    });
+    assert_eq!(pushed.len(), 1, "{pushed:?}");
+    let (frame, client, b) = &pushed[0];
+    assert_eq!((*frame, *client), (death, 0), "{pushed:?}");
+    assert_eq!(r.row_of_b(b), (0, 1), "the push reads the scored death");
+    assert_eq!(r.sv.script_aborts(), Vec::<String>::new());
+}
+
+/// The same walk off `Cmd_Kill_f`, whose `player_die` runs inside B's own
+/// packet: the push rides the death frame, B's row already `-1` and one death.
+#[test]
+fn a_kill_pushes_the_scoreboard_to_the_victims_follower() {
+    let Some(mut r) = Followed::new() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    r.cb.send_reliable("kill");
+    let (death, pushed) = r.until_dead(|_, r| r.holding());
+    assert_eq!(pushed.len(), 1, "{pushed:?}");
+    let (frame, client, b) = &pushed[0];
+    assert_eq!((*frame, *client), (death, 0), "{pushed:?}");
+    assert_eq!(r.row_of_b(b), (-1, 1), "the push reads the suicide scored");
+    assert_eq!(r.sv.script_aborts(), Vec::<String>::new());
+}

@@ -533,34 +533,110 @@ fn pass_followers_on(
     }
 }
 
-/// Returns the slots whose death this mirror is the first to see.
-fn mirror_vitals(clients: &mut [Option<Client>], rt: &script::ScriptRuntime) -> Vec<usize> {
-    let mut died = Vec::new();
-    for (slot, c) in clients.iter_mut().enumerate() {
-        if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-            if mirror_vitals_of(sim, rt, slot) {
-                died.push(slot);
+/// `DeathmatchScoreboardMessage` (`.so` 0x459c0): `b <numRows> <axis>
+/// <allies>{ <client> <score> <ping> <time> <icon>}*`, one row per online
+/// client (`docs/research/cod11-hud-protocol.md` section 3).
+///
+/// The score, the deaths and the status icon come from the script's own
+/// client fields, which is where every gametype writes them. `ping` is 0:
+/// the netchan keeps no round-trip estimate, and 0 renders as a number
+/// where retail's `-1` renders as "-" for a client still connecting.
+fn scoreboard(clients: &[Option<Client>], mut rt: Option<&mut script::ScriptRuntime>) -> String {
+    let mut field = |slot: usize, name: &str| rt.as_deref_mut()?.client_field(slot, name);
+    let mut online: Vec<usize> = clients
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, c)| c.as_ref().map(|_| slot))
+        .collect();
+    let mut rows = BTreeMap::new();
+    for &slot in &online {
+        let num = |v: Option<String>| v.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        let score = num(field(slot, "score"));
+        let deaths = num(field(slot, "deaths"));
+        let spectator = field(slot, "sessionteam").is_some_and(|t| t == "spectator");
+        let icon = field(slot, "statusicon").filter(|n| !n.is_empty());
+        rows.insert(slot, (score, deaths, spectator, icon));
+    }
+    // `level.sortedClients[]`'s order, `SortRanks` (.so 0x50090): a
+    // connecting client last, then spectators last among themselves by
+    // slot, then score descending, then deaths ascending; ties keep the
+    // slot order (hud protocol doc, section 3).
+    online.sort_by_key(|&slot| {
+        let connecting = clients[slot]
+            .as_ref()
+            .is_some_and(|c| c.state == ClientState::Connected);
+        let (score, deaths, spectator, _) = &rows[&slot];
+        (connecting, *spectator, -score, *deaths, slot)
+    });
+    // Tokens 2 and 3 are the two team scores, axis before allies, the
+    // order `DeathmatchScoreboardMessage` pushes them in (map-cycle doc,
+    // 6.3). Both retail captures read 0 in each: `dm` writes neither.
+    let [axis, allies] = rt.as_deref().map_or([0, 0], |rt| rt.host.team_scores);
+    let configstrings = rt.as_deref().map_or(&[][..], |rt| rt.configstrings());
+    let mut text = format!("b {} {axis} {allies}", online.len());
+    for slot in online {
+        let (score, deaths, _, icon) = &rows[&slot];
+        let icon = status_icon_index(configstrings, icon.as_deref());
+        text.push_str(&format!(" {slot} {score} 0 {deaths} {icon}"));
+    }
+    text
+}
+
+/// A client's `.statusicon` as the 1-based index into `CsRange::StatusIcon`
+/// the scoreboard row carries, or 0 when there is none or it names an
+/// icon nothing precached. The client resolves `20 + n` for an `n` in
+/// `1..8` (hud protocol doc, section 3).
+fn status_icon_index(configstrings: &[String], name: Option<&str>) -> usize {
+    let Some(name) = name else { return 0 };
+    let (first, last) = crate::configstrings::CsRange::StatusIcon.bounds();
+    configstrings
+        .get(first..=last)
+        .and_then(|range| range.iter().position(|cs| cs == name))
+        .map_or(0, |i| i + 1)
+}
+
+/// `player_die`'s walk (combat doc 5.1 step 9) for each death since the last
+/// drain: every spectator following the victim is sent the scoreboard,
+/// queued behind what the killed callback queued. Run after each script entry
+/// that can kill, before anything else queues a command.
+fn queue_death_scoreboards(clients: &[Option<Client>], rt: &mut script::ScriptRuntime) {
+    for victim in rt.take_deaths() {
+        for (slot, c) in clients.iter().enumerate() {
+            let Some(sim) = c.as_ref().and_then(|c| c.sim.as_ref()) else {
+                continue;
+            };
+            if sim.follow.target == Some(victim)
+                && session_of(Some(&mut *rt), slot, sim).state == follow::SessionState::Spectator
+            {
+                let text = scoreboard(clients, Some(&mut *rt));
+                rt.queue_client_command(slot, text);
             }
         }
     }
-    died
 }
 
-/// [`mirror_vitals`] for one client: whether it saw the death first.
-fn mirror_vitals_of(sim: &mut ClientSim, rt: &script::ScriptRuntime, slot: usize) -> bool {
+/// The host's vitals onto every sim.
+fn mirror_vitals(clients: &mut [Option<Client>], rt: &script::ScriptRuntime) {
+    for (slot, c) in clients.iter_mut().enumerate() {
+        if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
+            mirror_vitals_of(sim, rt, slot);
+        }
+    }
+}
+
+/// [`mirror_vitals`] for one client.
+fn mirror_vitals_of(sim: &mut ClientSim, rt: &script::ScriptRuntime, slot: usize) {
     if sim.pm_type != crate::spectate::PmType::Normal {
-        return false;
+        return;
     }
     let v = rt.client_vitals(slot);
     sim.health = v.health;
     sim.max_health = v.max_health;
-    if !v.dead {
+    if v.dead {
+        sim.die();
+    } else {
         sim.dead = false;
-        return false;
     }
-    let first = !sim.dead;
-    sim.die();
-    first
 }
 
 /// One `WeaponOp` against a client's playerstate. The op is an edge the
@@ -1682,78 +1758,9 @@ impl Server {
         &self.pending_explosions
     }
 
-    /// `DeathmatchScoreboardMessage` (`.so` 0x459c0): `b <numRows> <axis>
-    /// <allies>{ <client> <score> <ping> <time> <icon>}*`, one row per online
-    /// client (`docs/research/cod11-hud-protocol.md` section 3).
-    ///
-    /// The score, the deaths and the status icon come from the script's own
-    /// client fields, which is where every gametype writes them. `ping` is 0:
-    /// the netchan keeps no round-trip estimate, and 0 renders as a number
-    /// where retail's `-1` renders as "-" for a client still connecting.
+    /// [`scoreboard`] for this server's clients.
     fn scoreboard(&mut self) -> String {
-        let mut online: Vec<usize> = self
-            .clients
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, c)| c.as_ref().map(|_| slot))
-            .collect();
-        // `level.sortedClients[]`'s order, `SortRanks` (.so 0x50090): a
-        // connecting client last, then spectators last among themselves by
-        // slot, then score descending, then deaths ascending; ties keep the
-        // slot order (hud protocol doc, section 3).
-        let mut key = |slot: usize| {
-            let connecting = self.clients[slot]
-                .as_ref()
-                .is_some_and(|c| c.state == ClientState::Connected);
-            let spectator = self
-                .client_field(slot, "sessionteam")
-                .is_some_and(|t| t == "spectator");
-            let mut num = |name: &str| {
-                self.client_field(slot, name)
-                    .and_then(|s| s.parse::<i64>().ok())
-                    .unwrap_or(0)
-            };
-            (connecting, spectator, -num("score"), num("deaths"), slot)
-        };
-        online.sort_by_key(|&slot| key(slot));
-        // Tokens 2 and 3 are the two team scores, axis before allies, the
-        // order `DeathmatchScoreboardMessage` pushes them in (map-cycle doc,
-        // 6.3). Both retail captures read 0 in each: `dm` writes neither.
-        let [axis, allies] = self
-            .script
-            .as_ref()
-            .map_or([0, 0], |rt| rt.host.team_scores);
-        let mut text = format!("b {} {axis} {allies}", online.len());
-        for slot in online {
-            let mut field = |name: &str| {
-                self.client_field(slot, name)
-                    .and_then(|s| s.parse::<i64>().ok())
-                    .unwrap_or(0)
-            };
-            let score = field("score");
-            let deaths = field("deaths");
-            let icon = self.status_icon_index(slot);
-            text.push_str(&format!(" {slot} {score} 0 {deaths} {icon}"));
-        }
-        text
-    }
-
-    /// A client's `.statusicon` as the 1-based index into `CsRange::StatusIcon`
-    /// the scoreboard row carries, or 0 when the field is empty or names an
-    /// icon nothing precached. The client resolves `20 + n` for an `n` in
-    /// `1..8` (hud protocol doc, section 3).
-    fn status_icon_index(&mut self, slot: usize) -> usize {
-        let Some(name) = self
-            .client_field(slot, "statusicon")
-            .filter(|n| !n.is_empty())
-        else {
-            return 0;
-        };
-        let (first, last) = crate::configstrings::CsRange::StatusIcon.bounds();
-        self.configstrings[first..=last]
-            .iter()
-            .position(|cs| *cs == name)
-            .map_or(0, |i| i + 1)
+        scoreboard(&self.clients, self.script.as_mut())
     }
 
     /// Test-facing: the seed the spread and the melee rolls draw from, so a
@@ -3059,7 +3066,6 @@ impl Server {
         }
 
         let mut client_commands = Vec::new();
-        let mut died: Vec<usize> = Vec::new();
         let mut console_lines: Vec<String> = Vec::new();
         let mut ranks_dirty = false;
         // A client that dropped between the packet and here has nothing left
@@ -3176,7 +3182,9 @@ impl Server {
                 }
             }
             rt.deliver_hits(hits, self.sv_time_ms);
+            queue_death_scoreboards(&self.clients, rt);
             rt.run_frame(self.sv_time_ms);
+            queue_death_scoreboards(&self.clients, rt);
             // `self spawn(origin, angles)` moves the sim, which no builtin
             // can reach; this is where the queue lands. Before the weapons,
             // because a spawn resets the whole playerstate and would wipe the
@@ -3333,7 +3341,7 @@ impl Server {
                 &mut self.rng,
                 self.sv_time_ms,
             );
-            died.extend(mirror_vitals(&mut self.clients, rt));
+            mirror_vitals(&mut self.clients, rt);
             self.archive.set_on(rt.archive_on());
             // `G_RunFrame`'s own slot order (0x50ab0-0x50ad7), not arrival
             // order (docs/research/cod11-player-clip.md 4.2, 6). No link
@@ -3491,6 +3499,7 @@ impl Server {
                     })
                     .collect();
                 apply_effects(rt, turret_effects, self.sv_time_ms);
+                queue_death_scoreboards(&self.clients, rt);
                 mirror_weapons(&mut self.clients, rt);
                 apply_weapon_ops(&mut self.clients, rt, &weapons);
                 apply_sim_ops(
@@ -3501,7 +3510,7 @@ impl Server {
                     &mut self.rng,
                     self.sv_time_ms,
                 );
-                died.extend(mirror_vitals(&mut self.clients, rt));
+                mirror_vitals(&mut self.clients, rt);
                 for slot in feedback_now {
                     if let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) {
                         sim.end_frame(self.sv_time_ms);
@@ -3545,24 +3554,6 @@ impl Server {
         // than send, and this is where the queue reaches the netchan.
         for (slot, cmd) in client_commands {
             self.send_server_command(slot, &cmd);
-        }
-        // `player_die` sends `Cmd_Score_f` to every spectator whose follow
-        // target is the victim (combat doc, 4.2 step 9).
-        for victim in died {
-            for slot in 0..self.clients.len() {
-                let Some(sim) = self.clients[slot].as_ref().and_then(|c| c.sim.as_ref()) else {
-                    continue;
-                };
-                if sim.follow.target != Some(victim) {
-                    continue;
-                }
-                if session_of(self.script.as_mut(), slot, sim).state
-                    == follow::SessionState::Spectator
-                {
-                    let text = self.scoreboard();
-                    self.send_server_command(slot, &text);
-                }
-            }
         }
         // `G_RunFrame`'s inlined drain (map-cycle doc, 6.3): a frame that
         // moved a score pushes the scoreboard to every client in
@@ -3851,6 +3842,7 @@ impl Server {
             // trigger half, and the use key after both.
             if let Some(rt) = self.script.as_mut() {
                 rt.touch_triggers_with_buttons(t.slot, now_ms, t.buttons);
+                queue_death_scoreboards(&self.clients, rt);
                 rt.item_pass(t.slot, t.buttons, t.eye, t.view);
                 // The mount lands inside the use cmd (turrets doc 12.1), so
                 // it reaches the sim before the next cmd's pass runs.
@@ -3985,6 +3977,7 @@ impl Server {
             &mut self.rng,
             now_ms,
         );
+        queue_death_scoreboards(&self.clients, rt);
     }
 
     /// `FireWeapon` inside the cmd that raised it: the trace against the
@@ -4093,6 +4086,7 @@ impl Server {
                 &mut self.rng,
                 now_ms,
             );
+            queue_death_scoreboards(&self.clients, rt);
             relink(bodies, &self.clients, victim);
         }
     }
@@ -7156,17 +7150,20 @@ mod tests {
         );
     }
 
-    /// `player_die`'s walk (combat doc, 4.2 step 9): a spectator following
-    /// the victim is sent the scoreboard on the death, and nobody else is.
+    /// `player_die`'s walk (combat doc, 5.1 step 9): a spectator following
+    /// the victim is sent the scoreboard on the death, and nobody else is. A
+    /// health mirror that reads the client dead is not a death.
     #[test]
     fn a_death_sends_its_followers_the_scoreboard() {
         let mut rig = FollowRig::new();
         rig.press(msg::BUTTON_ATTACK);
         let scoreboards = |cmds: Vec<String>| cmds.iter().filter(|c| c.contains(":b ")).count();
         assert_eq!(scoreboards(rig.commands()), 0);
-        rig.script().host.client_vitals[2].dead = true;
+        rig.script().host.die(2);
         assert_eq!(scoreboards(rig.commands()), 0);
         rig.script().host.client_vitals[1].dead = true;
+        assert_eq!(scoreboards(rig.commands()), 0);
+        rig.script().host.die(1);
         assert_eq!(scoreboards(rig.commands()), 1);
     }
 
