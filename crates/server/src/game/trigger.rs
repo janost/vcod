@@ -405,20 +405,29 @@ pub fn segment_enters_hulls(
         .min_by(|a, b| a.total_cmp(b))
 }
 
-/// The lookat trigger the client's aim ray enters first, if the world does
-/// not stop it sooner: `G_CheckForPreventFriendlyFire`'s first trace, mask
-/// 0x20000001 (docs/research/cod11-gsc-object-model.md 23.1). `aim` is
-/// `[pitch, yaw]` in wire degrees, the pair `ClientSim::aim_angles` returns.
-/// A lookat with brushes is entered through them, one without through its
-/// box.
+/// The lookat trigger the client's aim ray enters first, if nothing
+/// `G_CheckForPreventFriendlyFire`'s two traces meet stops it sooner: the
+/// world, and any live body but the aimer's own (`pass`), posed at `now_ms`
+/// and ranked through `riflePriorityMap` when `rifle`
+/// (docs/research/cod11-gsc-object-model.md 23.1). `aim` is `[pitch, yaw]`
+/// in wire degrees, the pair `ClientSim::aim_angles` returns. A lookat with
+/// brushes is entered through them, one without through its box. The bodies
+/// are `GameHost::client_bodies`.
 ///
-/// Not modelled: retail's second trace (0x22802001, a body in front of the
-/// trigger), so a player standing between the aimer and the lookat does not
-/// block ours where it blocks retail's. Also unmeasured: retail's single
-/// trace ends the function on whatever entity it hits first, so an
-/// intervening non-lookat trigger brush may stop it on the wrong classname;
-/// ours skips every other kind and reaches the lookat behind it.
-pub fn aim_trace(host: &mut GameHost, cx: &mut Cx, eye: [f32; 3], aim: [f32; 2]) -> Option<EntId> {
+/// Not modelled: script models (0x2080, which the second mask's 0x2000
+/// meets). Also unmeasured: retail's traces end on whatever entity they hit
+/// first, so an intervening non-lookat trigger brush may stop it on the
+/// wrong classname; ours skips every other kind and reaches the lookat
+/// behind it.
+pub fn aim_trace(
+    host: &mut GameHost,
+    cx: &mut Cx,
+    pass: usize,
+    eye: [f32; 3],
+    aim: [f32; 2],
+    rifle: bool,
+    now_ms: i32,
+) -> Option<EntId> {
     // `CalcMuzzlePoints` truncates the muzzle point toward zero (23.1).
     let start = Vec3::from(eye).trunc();
     let (yaw, pitch) = crate::game::combat::aim_radians(aim);
@@ -428,10 +437,13 @@ pub fn aim_trace(host: &mut GameHost, cx: &mut Cx, eye: [f32; 3], aim: [f32; 2])
         pitch.sin(),
     );
     let end = start + forward * AIM_TRACE_RANGE;
-    let world_f = host
-        .world
-        .as_ref()
-        .map_or(1.0, |w| w.collision.shot_trace(start, end).fraction);
+    // The second trace's mask less the lookat bit and BODY, which no brush
+    // carries; it holds every world bit the first one does.
+    let world_f = host.world.as_ref().map_or(1.0, |w| {
+        w.collision
+            .point_trace(start, end, AIM_WORLD_MASK, true)
+            .fraction
+    });
     let rows: Vec<(EntId, Trigger)> = host
         .triggers
         .iter()
@@ -461,8 +473,41 @@ pub fn aim_trace(host: &mut GameHost, cx: &mut Cx, eye: [f32; 3], aim: [f32; 2])
             }
         }
     }
-    best.map(|(_, id)| id)
+    let (lookat_f, id) = best?;
+    let bodies: Vec<_> = host.client_bodies.iter().flatten().cloned().collect();
+    let (fs, anims) = (host.fs.clone(), host.anims.clone());
+    let mut bones = match (fs.as_deref(), anims.as_deref()) {
+        (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
+            fs,
+            anims,
+            rigs: &mut host.hit_rigs,
+            now_ms,
+        }),
+        _ => None,
+    };
+    let priority = if rifle {
+        &crate::game::combat::RIFLE_PRIORITY
+    } else {
+        &crate::game::combat::BULLET_PRIORITY
+    };
+    let body = crate::game::combat::trace_bodies(
+        start,
+        end,
+        pass,
+        &bodies,
+        lookat_f,
+        priority,
+        bones.as_mut(),
+    );
+    match body {
+        Some((_, f, _)) if f < lookat_f => None,
+        _ => Some(id),
+    }
 }
+
+/// `G_CheckForPreventFriendlyFire`'s second mask, 0x22802001, with the
+/// `trigger_lookat` bit (0x20000000) and BODY taken out: the world half of it.
+const AIM_WORLD_MASK: u32 = 0x0080_2001;
 
 /// Do two absolute boxes overlap, the test `trap_EntitiesInBox` performs.
 pub fn boxes_overlap(a: ([f32; 3], [f32; 3]), b: ([f32; 3], [f32; 3])) -> bool {
@@ -890,9 +935,9 @@ mod tests {
             let near = place_at(&mut host, cx, TriggerKind::Multiple, [100.0, 0.0, 0.0]);
             let far = place_at(&mut host, cx, TriggerKind::LookAt, [300.0, 0.0, 0.0]);
             let farther = place_at(&mut host, cx, TriggerKind::LookAt, [500.0, 0.0, 0.0]);
-            let hit = aim_trace(&mut host, cx, [0.0, 0.0, 60.0], [0.0, 0.0]);
+            let hit = aim_trace(&mut host, cx, 0, [0.0, 0.0, 60.0], [0.0, 0.0], false, 0);
             assert_eq!(hit, Some(far));
-            let miss = aim_trace(&mut host, cx, [0.0, 0.0, 60.0], [0.0, 90.0]);
+            let miss = aim_trace(&mut host, cx, 0, [0.0, 0.0, 60.0], [0.0, 90.0], false, 0);
             assert_eq!(miss, None);
             let _ = (near, farther);
         });
@@ -924,11 +969,14 @@ mod tests {
             );
             host.world = world(&[]);
             assert_eq!(
-                aim_trace(&mut host, cx, [0.0, 0.0, 60.0], [0.0, 0.0]),
+                aim_trace(&mut host, cx, 0, [0.0, 0.0, 60.0], [0.0, 0.0], false, 0),
                 Some(id)
             );
             host.world = world(&[(Vec3::new(150.0, -64.0, 0.0), Vec3::new(160.0, 64.0, 128.0))]);
-            assert_eq!(aim_trace(&mut host, cx, [0.0, 0.0, 60.0], [0.0, 0.0]), None);
+            assert_eq!(
+                aim_trace(&mut host, cx, 0, [0.0, 0.0, 60.0], [0.0, 0.0], false, 0),
+                None
+            );
         });
     }
 
@@ -946,11 +994,19 @@ mod tests {
             // Straight down into the brush half, and straight down into the
             // bulge past the diagonal.
             assert_eq!(
-                aim_trace(&mut host, cx, [60.0, 60.0, 200.0], [90.0, 0.0]),
+                aim_trace(&mut host, cx, 0, [60.0, 60.0, 200.0], [90.0, 0.0], false, 0),
                 Some(zone)
             );
             assert_eq!(
-                aim_trace(&mut host, cx, [200.0, 200.0, 200.0], [90.0, 0.0]),
+                aim_trace(
+                    &mut host,
+                    cx,
+                    0,
+                    [200.0, 200.0, 200.0],
+                    [90.0, 0.0],
+                    false,
+                    0
+                ),
                 None
             );
         });

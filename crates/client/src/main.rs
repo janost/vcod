@@ -2134,8 +2134,11 @@ impl ApplicationHandler for App {
                                                     fx::registry::Resolved::Tracer {
                                                         muzzle,
                                                         impact,
+                                                        flesh,
                                                     } => {
-                                                        self.fx.spawn_tracer(muzzle, impact, time);
+                                                        self.fx.spawn_tracer(
+                                                            muzzle, impact, flesh, time, dt,
+                                                        );
                                                     }
                                                     fx::registry::Resolved::Known => {}
                                                     fx::registry::Resolved::Unknown => {
@@ -2401,8 +2404,13 @@ impl ApplicationHandler for App {
                                                     self.fx.spawn(&self.fs, &path, at, time);
                                                 self.audio.play_fx(&self.fs, sounds);
                                             }
-                                            fx::registry::Resolved::Tracer { muzzle, impact } => {
-                                                self.fx.spawn_tracer(muzzle, impact, time);
+                                            fx::registry::Resolved::Tracer {
+                                                muzzle,
+                                                impact,
+                                                flesh,
+                                            } => {
+                                                self.fx
+                                                    .spawn_tracer(muzzle, impact, flesh, time, dt);
                                             }
                                             _ => {}
                                         }

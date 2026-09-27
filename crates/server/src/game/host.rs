@@ -287,9 +287,10 @@ pub struct GameHost {
     /// alongside `client_pm_type`, for `isOnGround`
     /// (`docs/research/cod11-gsc-object-model.md`, 23.5).
     pub client_on_ground: Vec<bool>,
-    /// Each client's eye and `[pitch, yaw]` aim as the tick left them, for
-    /// the aim trace `Server::tick` runs after the script frame.
-    pub client_aim: Vec<([f32; 3], [f32; 2])>,
+    /// Each client's eye, `[pitch, yaw]` aim and `rifleBullet` weapon flag
+    /// as the tick left them, for the aim trace `Server::tick` runs after the
+    /// script frame.
+    pub client_aim: Vec<([f32; 3], [f32; 2], bool)>,
     /// What the last aim trace entered, for `isLookingAt`
     /// (`docs/research/cod11-gsc-object-model.md`, 23.1).
     pub client_lookat: Vec<Option<EntId>>,
@@ -316,6 +317,10 @@ pub struct GameHost {
     /// `Server::replay_moves` before the script frame. `cloneplayer` copies
     /// the slot's entry into the body queue; nothing else reads it.
     pub client_entity_states: Vec<Option<vcod_common::net::msg::EntityState>>,
+    /// Each live, playing client's body as the tick's moves left it, mirrored
+    /// in beside `client_entity_states`: what a scripted blast's `CanDamage`
+    /// traces meet (combat doc, 14.4). `None` for a client with no body.
+    pub client_bodies: Vec<Option<crate::game::combat::HitBody>>,
     /// What `finishPlayerDamage` did to a client this frame, drained by
     /// `Server` after `run_frame` and applied to the sim once each.
     pub client_sim_ops: Vec<(usize, SimOp)>,
@@ -448,6 +453,11 @@ pub struct GameHost {
     pub xmodel_collision: HashMap<String, Option<Rc<[ModelTri]>>>,
     /// `level+0x1d5c`, the 32 most recent drops (`crate::game::item`).
     pub drop_ring: crate::game::item::DropRing,
+    /// The player animtree and the rig cache a locational trace poses a body
+    /// with, for the builtins that trace players. `anims` is `None` until
+    /// `Server` hands it over, and on a host with no paks.
+    pub anims: Option<Rc<vcod_common::animtree::PlayerAnims>>,
+    pub hit_rigs: crate::game::hitrig::HitRigs,
 }
 
 /// Fixed non-zero xorshift64* seed. Any non-zero constant works; a zero
@@ -557,7 +567,7 @@ impl GameHost {
             client_buttons: vec![0; MAX_CLIENTS],
             client_pm_type: vec![0; MAX_CLIENTS],
             client_on_ground: vec![false; MAX_CLIENTS],
-            client_aim: vec![([0.0; 3], [0.0; 2]); MAX_CLIENTS],
+            client_aim: vec![([0.0; 3], [0.0; 2], false); MAX_CLIENTS],
             client_lookat: vec![None; MAX_CLIENTS],
             trigger_fires: Vec::new(),
             client_old_buttons: vec![0; MAX_CLIENTS],
@@ -565,6 +575,7 @@ impl GameHost {
             client_grenade_ms: vec![0; MAX_CLIENTS],
             client_height: vec![vcod_common::pmove::HEIGHT_STAND; MAX_CLIENTS],
             client_entity_states: vec![None; MAX_CLIENTS],
+            client_bodies: vec![None; MAX_CLIENTS],
             client_sim_ops: Vec::new(),
             client_link_ops: Vec::new(),
             weapons: std::rc::Rc::new(crate::weapons::WeaponTable::empty()),
@@ -597,6 +608,8 @@ impl GameHost {
             client_objectives: vec![[Objective::default(); MAX_OBJECTIVES]; MAX_CLIENTS],
             xmodel_collision: HashMap::new(),
             drop_ring: Default::default(),
+            anims: None,
+            hit_rigs: Default::default(),
         }
     }
 

@@ -264,6 +264,19 @@ fn apply_weapon_ops(
     }
 }
 
+/// A standing player with its feet at `feet`, as a blast candidate in slot 0.
+fn standing_blast_victim(feet: [f32; 3]) -> crate::game::combat::BlastVictim {
+    use vcod_common::pmove::{Stance, HALF_WIDTH};
+    let feet = glam::Vec3::from(feet);
+    crate::game::combat::BlastVictim {
+        slot: 0,
+        origin: feet,
+        mins: glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
+        maxs: glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
+        eye: feet + glam::Vec3::Z * Stance::Stand.view_height(),
+    }
+}
+
 /// What script did to each sim, applied once: events, `setOrigin`,
 /// `setPlayerAngles` and the damage the callback did.
 fn apply_sim_ops(
@@ -463,7 +476,7 @@ pub struct Server {
     script: Option<crate::game::script::ScriptRuntime>,
     /// The player animtree, its wire index and the animscript. `None` on a
     /// host with no paks, where every client keeps index 0.
-    anims: Option<vcod_common::animtree::PlayerAnims>,
+    anims: Option<Rc<vcod_common::animtree::PlayerAnims>>,
     /// Every weapon file, parsed once at load: the animscript tests
     /// `weaponClass` every frame and the frame loop must not read a pk3.
     /// `Rc` so a snapshot/move closure can hold it without borrowing `self`.
@@ -1460,16 +1473,52 @@ impl Server {
         let Some(world) = self.world.as_ref() else {
             return 1.0;
         };
-        use vcod_common::pmove::{Stance, HALF_WIDTH};
-        let feet = glam::Vec3::from(feet);
-        let v = crate::game::combat::BlastVictim {
-            slot: 0,
-            origin: feet,
-            mins: glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
-            maxs: glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
-            eye: feet + glam::Vec3::Z * Stance::Stand.view_height(),
+        let v = standing_blast_victim(feet);
+        crate::game::combat::can_damage(glam::Vec3::from(at), &v, &world.collision, &[], &[], None)
+    }
+
+    /// Test-facing, beside `test_can_damage`: the same standing victim at
+    /// `feet`, against the world, the script models and every live player's
+    /// posed body but `slot`'s own, which is the victim's pass entity
+    /// (combat doc, 14.4).
+    pub fn test_can_damage_among_players(
+        &mut self,
+        at: [f32; 3],
+        feet: [f32; 3],
+        slot: usize,
+    ) -> f32 {
+        let Some(world) = self.world.as_ref() else {
+            return 1.0;
         };
-        crate::game::combat::can_damage(glam::Vec3::from(at), &v, &world.collision, &[])
+        let bodies: Vec<crate::game::combat::HitBody> = self
+            .clients
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| c.as_ref()?.sim.as_ref()?.hit_body(i))
+            .collect();
+        let models = self
+            .script
+            .as_mut()
+            .map_or_else(Vec::new, |rt| rt.placed_script_models());
+        let mut bones = match (self.fs.as_deref(), self.anims.as_deref()) {
+            (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
+                fs,
+                anims,
+                rigs: &mut self.hit_rigs,
+                now_ms: self.sv_time_ms,
+            }),
+            _ => None,
+        };
+        let mut v = standing_blast_victim(feet);
+        v.slot = slot;
+        crate::game::combat::can_damage(
+            glam::Vec3::from(at),
+            &v,
+            &world.collision,
+            &models,
+            &bodies,
+            bones.as_mut(),
+        )
     }
 
     /// Test-facing: where a standing player dropped at `p` comes to rest,
@@ -2044,7 +2093,7 @@ impl Server {
         self.fs = Some(fs.clone());
         if !restart {
             self.anims = match vcod_common::animtree::PlayerAnims::load(&fs) {
-                Ok(a) => Some(a),
+                Ok(a) => Some(Rc::new(a)),
                 Err(e) => {
                     log::warn!("player anims: {e:#}, players will not animate");
                     None
@@ -2064,7 +2113,7 @@ impl Server {
         };
         let source = crate::game::script::PakScripts::new(fs.clone(), self.script_overlay.clone());
         let rng_seed = vcod_common::rng::xorshift(&mut self.rng);
-        let rt = crate::game::script::ScriptRuntime::load_from(
+        let mut rt = crate::game::script::ScriptRuntime::load_from(
             Box::new(source),
             fs,
             &self.cfg.map,
@@ -2077,6 +2126,7 @@ impl Server {
             rng_seed,
             carry,
         )?;
+        rt.set_player_anims(self.anims.clone());
         let mut configstrings = rt.configstrings().to_vec();
         rt.cvars()
             .write_mirror(&mut configstrings)
@@ -2667,7 +2717,7 @@ impl Server {
             let collision = self.world.as_ref().map(|w| &w.collision);
             // The locational trace's context, absent on a host with no paks
             // or no animtree; a shot then lands at hit location `none`.
-            let mut bones = match (self.fs.as_deref(), self.anims.as_ref()) {
+            let mut bones = match (self.fs.as_deref(), self.anims.as_deref()) {
                 (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
                     fs,
                     anims,
@@ -2812,6 +2862,22 @@ impl Server {
             } else {
                 rt.placed_script_models()
             };
+            let bodies: Vec<crate::game::combat::HitBody> = if self.pending_explosions.is_empty() {
+                Vec::new()
+            } else {
+                sims.iter()
+                    .filter_map(|(slot, s)| s.hit_body(*slot))
+                    .collect()
+            };
+            let mut bones = match (self.fs.as_deref(), self.anims.as_deref()) {
+                (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
+                    fs,
+                    anims,
+                    rigs: &mut self.hit_rigs,
+                    now_ms: self.sv_time_ms,
+                }),
+                _ => None,
+            };
             for x in &self.pending_explosions {
                 let Some(def) = weapons.get(x.weapon as usize) else {
                     continue;
@@ -2839,6 +2905,8 @@ impl Server {
                     &victims,
                     collision,
                     &models,
+                    &bodies,
+                    bones.as_mut(),
                 ));
             }
             // The client commands the packet pass queued, on this frame's
@@ -2966,7 +3034,7 @@ impl Server {
             // What script did to each sim, applied once, then the health
             // mirror and the frame's damage feedback, in that order:
             // `P_DamageFeedback` reads the health the hit left.
-            let anims = self.anims.as_ref();
+            let anims = self.anims.as_deref();
             apply_sim_ops(
                 &mut self.clients,
                 rt,
@@ -3021,6 +3089,12 @@ impl Server {
             // (object-model doc 23.1). The `pm_type` goes with it: a spawn
             // above changed it with no cmd, and the runtime's gate is what
             // clears a dead or spectating client's `isLookingAt` and hint.
+            // Every body first, at the origin the sim ops and the re-anchor
+            // left, since any of them can stand in another client's aim.
+            for (slot, c) in self.clients.iter().enumerate() {
+                let sim = c.as_ref().and_then(|c| c.sim.as_ref());
+                rt.set_client_body(slot, sim.and_then(|s| s.hit_body(slot)));
+            }
             for (slot, c) in self.clients.iter_mut().enumerate() {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
                     rt.set_client_pm_type(slot, sim.wire_pm_type());
@@ -3028,7 +3102,11 @@ impl Server {
                     // here, so the ground reading script sees next frame is
                     // taken again after it.
                     rt.set_client_on_ground(slot, sim.on_ground());
-                    rt.set_client_aim(slot, sim.ps.view().eye.into(), sim.aim_angles());
+                    let rifle = self
+                        .weapon_table
+                        .get(sim.ps.weapon as usize)
+                        .is_some_and(|d| d.sounds.rifle_bullet);
+                    rt.set_client_aim(slot, sim.ps.view().eye.into(), sim.aim_angles(), rifle);
                     rt.aim_lookat(slot, self.sv_time_ms);
                     let (hint, string) =
                         rt.cursor_hint_pass(slot, sim.ps.view().eye.into(), sim.view_angles());
@@ -3051,7 +3129,7 @@ impl Server {
                         slot,
                         sim,
                         buttons & vcod_common::net::msg::BUTTON_ATTACK != 0,
-                        self.anims.as_ref().map(|a| (a, &mut self.hit_rigs)),
+                        self.anims.as_deref().map(|a| (a, &mut self.hit_rigs)),
                     ));
                 }
             }
@@ -3066,7 +3144,7 @@ impl Server {
                         .filter_map(|(i, c)| Some((i, c.as_ref()?.sim.as_ref()?)))
                         .collect();
                     let collision = self.world.as_ref().map(|w| &w.collision);
-                    let mut bones = match (self.fs.as_deref(), self.anims.as_ref()) {
+                    let mut bones = match (self.fs.as_deref(), self.anims.as_deref()) {
                         (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
                             fs,
                             anims,
@@ -3115,7 +3193,7 @@ impl Server {
                 apply_sim_ops(
                     &mut self.clients,
                     rt,
-                    self.anims.as_ref(),
+                    self.anims.as_deref(),
                     &weapons,
                     &mut self.rng,
                     self.sv_time_ms,
@@ -3377,7 +3455,7 @@ impl Server {
                 }
                 // The animation the client should be playing, from the state the
                 // moves just produced and the input that produced it.
-                if let (Some(anims), Some(cmd)) = (self.anims.as_ref(), last_cmd) {
+                if let (Some(anims), Some(cmd)) = (self.anims.as_deref(), last_cmd) {
                     let index = sim.ps.weapon as usize;
                     let weapon = crate::items::item_name(index).unwrap_or_default();
                     let class = self.weapon_table.class(index);
@@ -3446,8 +3524,9 @@ impl Server {
             }
         }
         // The state each player ended the tick in, mirrored onto the host for
-        // `cloneplayer`: a builtin cannot reach a sim, and the corpse is the
-        // dying player's entity state (`crate::game::bodies`). Written here,
+        // `cloneplayer` and for the bodies a scripted blast traces: a builtin
+        // cannot reach a sim, and the corpse is the dying player's entity
+        // state (`crate::game::bodies`). Written here,
         // before the script frame, because that is the frame the script clones
         // in; `send_snapshots` re-reads a newborn body afterwards so the death
         // animation the script raised after the clone still lands on it.
@@ -3462,6 +3541,7 @@ impl Server {
                 // run later in this tick, so what they read is this frame's
                 // and not the last one's.
                 rt.set_client_grenade_ms(slot, sim.map_or(0, |(s, _)| s.ps.grenade_time_left_ms));
+                rt.set_client_body(slot, sim.and_then(|(s, _)| s.hit_body(slot)));
                 if let Some((s, _)) = sim {
                     rt.set_client_height(slot, (s.ps.maxs() - s.ps.mins()).z);
                 }

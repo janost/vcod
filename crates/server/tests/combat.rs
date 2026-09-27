@@ -910,9 +910,10 @@ fn frag_index() -> u8 {
 /// `G_RadiusDamage` end to end (combat doc, 14.1): a frag thrown at the
 /// ground behind the thrower hurts him and the player 150 units the other
 /// way, each by the falloff at his own distance from where it came to rest
-/// scaled by `CanDamage`'s share of clear probes, which the chair the frag
-/// rolls behind on this spawn reads off the same static-model clip a
-/// bullet does.
+/// scaled by `CanDamage`'s share of clear probes. The chair the frag rolls
+/// behind on this spawn blocks probes through the same static-model clip a
+/// bullet meets, and the thrower's own body, standing between the blast and
+/// the target, blocks more of the target's (14.4).
 /// Retail's own pair capture is the same arithmetic: a blast at
 /// (1329, 3297, -22) left the target at (1192, 3296, -23.9) on health 26, 74
 /// off a distance of 137, and the thrower 151 units out on 30.
@@ -966,8 +967,9 @@ fn a_thrown_grenade_damages_a_player_in_its_blast() {
         frag_index(),
         (180.0, 80.0),
     );
+    let num = |c: &Client| c.snapshots().newest().unwrap().ps.field_i32(p, "clientNum") as usize;
     for (who, feet, cl) in [("thrower", a_feet, &ca), ("target", b_feet, &cb)] {
-        let fraction = sv.test_can_damage(at, feet);
+        let fraction = sv.test_can_damage_among_players(at, feet, num(cl));
         assert!(
             fraction > 0.0,
             "{who} is walled off from the blast, {:.0} units away",
@@ -982,6 +984,10 @@ fn a_thrown_grenade_damages_a_player_in_its_blast() {
             dist(at, feet)
         );
     }
+    assert!(
+        sv.test_can_damage_among_players(at, b_feet, num(&cb)) < sv.test_can_damage(at, b_feet),
+        "the thrower's body stood in the target's line"
+    );
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }
 

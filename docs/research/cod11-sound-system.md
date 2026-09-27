@@ -888,10 +888,12 @@ per-frame rounding quantizes the effective period (at fixed 8 ms frames the
   material 0 -> EV_NONE; else `base + mat` with bases run 1, walk 24 (walk
   key), prone 47 (@0x32156-0x321a3).
 
-**Jump**: the ordinary ground jump (fn 0x316F4 @0x31CC0) emits **no event**.
-Only `PM_Jump`'s ladder push-off / steep-slope launch emits `EV_JUMP_*`
-(70 + mat from the then-current ground-trace flags; material 0 -> nothing)
-(@0x2ed7a-0x2edb9). Jump grunts on ordinary jumps are animscript business.
+**Jump**: every jump, ground or ladder push-off, is `PM_CheckJump` (0x2eb98,
+`cod11-mantle.md`, "Jumps"), and every one emits `EV_JUMP_*` (70 + mat from
+the then-current ground-trace flags; material 0 or `sf & 0x2000` -> nothing)
+(@0x2ed90-0x2edb9). VERIFIED on the wire: the motion captures' takeoffs add
+75 (carentan) and 74 (pavlov). An earlier read here said the ground jump
+emits none; it was reading the prone dive at 0x31CC0.
 
 **Landing** (`PM_CrashLand` @0x2fd68, called by the ground-trace helper on an
 air -> ground transition): water level 3 skips; damage-free impact ladder on
@@ -939,10 +941,10 @@ trace @0x328cc), water enter/leave 144/145, forced stance 140/141/142.
   is not replicated.
 - Stances are instant in vcod, so the viewheight-lerp classification and the
   transition blend between speed scales have no equivalent.
-- The ladder push-off jump itself landed separately (movement side); its
-  `EV_JUMP_*` event reads the last ground trace's material like retail, which
-  in practice means push-offs from the base are audible and mid-wall push-offs
-  are not (the downward trace of a climb hits nothing). The 299 ms quiet
+- Every jump's `EV_JUMP_*` event reads the last ground trace's material like
+  retail (`pmove::check_jump`), which on a ladder means push-offs from the
+  base are audible and mid-wall push-offs are not (the downward trace of a
+  climb hits nothing). The 299 ms quiet
   window after a push-off gates the climb steps.
 - The fall height comes from the fastest downward speed sampled while
   airborne (within one frame of gravity of retail's kinematic value), squared

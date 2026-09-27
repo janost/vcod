@@ -389,14 +389,32 @@ pub fn radius_damage(
         .collect();
     let origin_field = cx.intern_folded("origin");
     let mut victims = Vec::new();
+    let mut bodies = Vec::new();
     for id in candidates {
         let Value::Vector(stands) = host.get_field(cx, id, origin_field) else {
             continue;
         };
-        victims.push(standing_victim(id.0 as usize, Vec3::from(stands)));
+        let slot = id.0 as usize;
+        victims.push(standing_victim(slot, Vec3::from(stands)));
+        // The pose the tick's moves left, at the origin a `setOrigin` earlier
+        // this frame may have moved it to.
+        if let Some(mut body) = host.client_bodies.get(slot).cloned().flatten() {
+            body.origin = Vec3::from(stands);
+            bodies.push(body);
+        }
     }
     let world = host.world.clone();
     let models = host.placed_script_models(cx);
+    let (fs, anims) = (host.fs.clone(), host.anims.clone());
+    let mut bones = match (fs.as_deref(), anims.as_deref()) {
+        (Some(fs), Some(anims)) => Some(crate::game::combat::BoneTraceCtx {
+            fs,
+            anims,
+            rigs: &mut host.hit_rigs,
+            now_ms: host.level_time_ms,
+        }),
+        _ => None,
+    };
     let hits = crate::game::combat::radius_damage(
         at,
         radius,
@@ -409,6 +427,8 @@ pub fn radius_damage(
         &victims,
         world.as_deref().map(|w| &w.collision),
         &models,
+        &bodies,
+        bones.as_mut(),
     );
     let (mod_, none) = (cx.intern_exact("MOD_EXPLOSIVE"), cx.intern_exact("none"));
     let callback = cx.func_ref(CALLBACK_SETUP, "CodeCallback_PlayerDamage");
@@ -885,6 +905,95 @@ mod tests {
         );
         assert_eq!(rt.client_vitals(1).health, 100);
         assert!(!rt.client_vitals(1).dead);
+    }
+
+    /// A live player standing between a scripted blast and another player
+    /// shields it (combat doc, 14.4): its body is where script last put it,
+    /// so a blocker `setOrigin`ed onto the line in the same frame as the
+    /// blast stops every probe, and the victim behind it, inside the radius
+    /// but past the second chance's reach, takes nothing. Moved off the line
+    /// on the next frame, it lets the full falloff through. With no paks the
+    /// body is its link box.
+    #[test]
+    fn a_body_in_the_line_shields_a_scripted_blast() {
+        const SCRIPT: &str = r#"
+            main() {
+                wait 1;
+                players = getentarray("player", "classname");
+                for (i = 0; i < players.size; i++)
+                {
+                    if (players[i] getEntityNumber() == 1)
+                        players[i] setorigin((50, 0, 0));
+                }
+                radiusDamage((0, 0, 8), 300, 20, 20);
+                wait 1;
+                for (i = 0; i < players.size; i++)
+                {
+                    if (players[i] getEntityNumber() == 1)
+                        players[i] setorigin((50, 200, 0));
+                }
+                radiusDamage((0, 0, 8), 300, 20, 20);
+            }
+            CodeCallback_PlayerConnect() {}
+            CodeCallback_PlayerDamage(eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc) {
+                if (!isdefined(self.hits))
+                    self.hits = 0;
+                self.hits = self.hits + 1;
+                self.took = iDamage;
+            }
+            CodeCallback_PlayerKilled(eInflictor, eAttacker, iDamage, sMeansOfDeath, sWeapon, vDir, sHitLoc) {}
+        "#;
+        let mut rt = ScriptRuntime::for_test_at(CALLBACK_SETUP, SCRIPT);
+        rt.host.world = Some(Rc::new(World {
+            collision: vcod_common::collision::test_world(&[]),
+            vis: vcod_common::bsp::Visibility::none(),
+            spawn: ([0.0, 0.0, 64.0], 0.0),
+        }));
+        for (slot, name) in [(0, "victim"), (1, "blocker")] {
+            rt.push_client_event(ClientEvent::Connect {
+                slot,
+                name: name.into(),
+            });
+        }
+        rt.run_frame(50);
+        let feet = [[100.0, 0.0, 0.0], [300.0, 300.0, 0.0]];
+        for slot in [0, 1] {
+            rt.host.client_vitals[slot] = Vitals {
+                health: 100,
+                max_health: 100,
+                dead: false,
+            };
+            rt.set_client_origin(slot, feet[slot]);
+            rt.set_client_body(
+                slot,
+                Some(crate::game::combat::HitBody {
+                    slot,
+                    origin: Vec3::from(feet[slot]),
+                    yaw: 0.0,
+                    mins: Vec3::new(-15.0, -15.0, 0.0),
+                    maxs: Vec3::new(15.0, 15.0, 72.0),
+                    assembly: Default::default(),
+                    legs: 0,
+                    torso: 0,
+                    legs_start_ms: 0,
+                    torso_start_ms: 0,
+                    torso_pitch: 0.0,
+                    lean: 0.0,
+                }),
+            );
+        }
+        rt.run_frame(1100);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(
+            rt.client_field(0, "took").as_deref(),
+            Some("Undefined"),
+            "the blocker's body stopped every probe"
+        );
+        assert_eq!(rt.client_field(1, "took").as_deref(), Some("20"));
+        rt.run_frame(2200);
+        assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
+        assert_eq!(rt.client_field(0, "took").as_deref(), Some("20"));
+        assert_eq!(rt.client_field(0, "hits").as_deref(), Some("1"));
     }
 
     /// `setPlayerIgnoreRadiusDamage` (combat doc, 14.2) is a level flag the
