@@ -3703,6 +3703,7 @@ impl TargetProbe {
                 self.trace.push(s);
             }
             for ev in self.tracker.drain(snap, p) {
+                print_bullet_hit(ms, &ev);
                 if ev.event == EV_OBITUARY {
                     println!(
                         "  obituary +{ms}ms victim {} attacker {} parm {}",
@@ -3825,6 +3826,20 @@ const TRACKED_EVENTS: [i32; 9] = [
     crate::fx::registry::EV_ROCKET_EXPLODE,
     crate::fx::registry::EV_ROCKET_EXPLODE_NOMARKS,
 ];
+/// Prints a bullet impact (173 to 176) with the fields that say who it was
+/// for: which of the pair a client is sent is the single-client rule
+/// (docs/research/cod11-events-and-fx.md, section 2). Stdout only; no
+/// fixture carries these.
+fn print_bullet_hit(ms: u128, ev: &vcod_common::net::events::GameEvent) {
+    use crate::fx::registry::{EV_BULLET_HIT_CLIENT_LARGE, EV_BULLET_HIT_SMALL};
+    if (EV_BULLET_HIT_SMALL..=EV_BULLET_HIT_CLIENT_LARGE).contains(&ev.event) {
+        println!(
+            "  bullethit +{ms}ms ev {} parm {} surfType {} other {} clientNum {} entity {} pos {:?}",
+            ev.event, ev.parm, ev.surf_type, ev.other_entity_num, ev.client_num, ev.entity_num, ev.pos
+        );
+    }
+}
+
 /// How close the approach walks before it shoots. A clear trace across a whole
 /// map is still a shot the spread throws off a player-sized target: one
 /// capture spent its taps that way from 3200 units out and another from 1950,
@@ -4704,6 +4719,7 @@ impl HitProbe {
                 self.trace.push(s);
             }
             for ev in self.tracker.drain(snap, p) {
+                print_bullet_hit(ms, &ev);
                 if TRACKED_EVENTS.contains(&ev.event) {
                     println!(
                         "  event +{ms}ms ev {} parm {} entity {}",

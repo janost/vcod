@@ -588,12 +588,13 @@ engineering setup works.
   op after, so a `dropItem` in the script frame sees what the pass took. The
   entity states `cloneplayer` reads and the posed bodies a scripted blast
   traces are mirrored last in that pass. Then the
-  queued attacks themselves (a trace each, an impact temp entity and a hit per
+  queued attacks themselves (a trace each, a wall impact temp entity and a hit per
   player struck), then each client's last cmd buttons for `useButtonPressed`,
   then the missiles fly and any due fuse explodes, then the blasts become
   hits, then the client commands that start a script thread (`kill`, `mr`),
   which the packet pass only queues because it runs before the clock advances,
-  then `deliver_hits` so the damage callback has run before script, then the
+  then `deliver_hits` so the damage callback has run before script (its
+  `finishPlayerDamage` raises a bullet weapon's flesh impacts), then the
   script frame, then the script's spawns, then the switches the weapon
   machine made (its takes already landed at their cmd's touch, and only
   there), then the weapon mirrors (held, current, viewmodel, the

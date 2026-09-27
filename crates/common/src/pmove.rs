@@ -1279,7 +1279,12 @@ fn view_height_adjust(ps: &mut PlayerState, msec: i32) {
 /// The running leg's length (the duration pick at 0x30b46-0x30b98, the same
 /// as `PM_GetViewHeightLerpTime` 0x345b8).
 fn view_lerp_duration(ps: &PlayerState) -> i32 {
-    match (ps.view_lerp_target, ps.view_lerp_down, ps.prone_dive) {
+    view_lerp_length(ps.view_lerp_target, ps.view_lerp_down, ps.prone_dive)
+}
+
+/// `PM_GetViewHeightLerpTime(ps, target, down)`, `dive` being `pm_flags` 0x4.
+fn view_lerp_length(target: f32, down: bool, dive: bool) -> i32 {
+    match (target, down, dive) {
         (VIEW_PRONE, _, true) => VIEW_LERP_DIVE_MS,
         (VIEW_PRONE, _, false) => VIEW_LERP_PRONE_MS,
         (VIEW_CROUCH, true, true) => VIEW_LERP_DIVE_DUCK_MS,
@@ -2765,6 +2770,43 @@ mod tests {
         assert_eq!(ps.view_height(), VIEW_PRONE);
         assert_eq!(ps.view_lerp_ms, None);
         assert_eq!(stance_speed_scale(&ps), SCALE_PRONE);
+    }
+
+    /// The hip cone's minimum follows the same two legs, linearly in time
+    /// from one end's minimum to the other's (combat doc 2.1).
+    #[test]
+    fn a_prone_press_blends_the_hip_spread_minimum_across_both_legs() {
+        use weapon::{hip_spread_min, SpreadStance};
+        let def = WeaponDef {
+            hip_spread_stand_min: 3.0,
+            hip_spread_ducked_min: 2.0,
+            hip_spread_prone_min: 1.0,
+            ..WeaponDef::default()
+        };
+        let w = flat();
+        let w = MoveWorld::bare(&w);
+        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+        tick(&mut ps, &PmInput::default(), &w, 50);
+        let min =
+            |ps: &PlayerState, time: i32| hip_spread_min(&def, &SpreadStance::of(ps, 0, time));
+        assert_eq!(min(&ps, 0), 3.0);
+
+        let prone = PmInput {
+            prone: true,
+            ..PmInput::default()
+        };
+        tick(&mut ps, &prone, &w, 1);
+        assert_eq!(ps.view_lerp_ms, Some(0));
+        assert_eq!(min(&ps, 0), 3.0);
+        assert_eq!(min(&ps, 75), 2.5, "half the 150 ms leg down to crouch");
+        assert_eq!(min(&ps, -10), 3.0, "a clock behind the leg's stamp");
+        tick(&mut ps, &prone, &w, 19);
+        assert_eq!(min(&ps, 0), 2.0, "the prone leg's start");
+        tick(&mut ps, &prone, &w, 25);
+        assert_eq!(min(&ps, 0), 1.5, "half the 400 ms leg to prone");
+        assert_eq!(min(&ps, 1000), 1.0, "a clock past the leg's end");
+        tick(&mut ps, &prone, &w, 25);
+        assert_eq!(min(&ps, 0), 1.0);
     }
 
     /// `movementDir` is the legs' heading off the view, which the player

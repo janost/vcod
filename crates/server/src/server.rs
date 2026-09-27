@@ -199,6 +199,9 @@ pub(crate) struct Shot {
     /// The aim the cmd's aim block left (`ClientSim::aim_angles`), which
     /// down a sight is the swayed gun rather than the view (combat doc, 15).
     pub aim: [f32; 2],
+    /// The stance and the eye's leg the hip minimum is read off, at the
+    /// cmd's `commandTime` against the frame's clock (combat doc, 2.1).
+    pub stance: vcod_common::pmove::weapon::SpreadStance,
 }
 
 /// One attack a client's weapon step took this tick. The weapon index each
@@ -2774,6 +2777,7 @@ impl Server {
                         def,
                         name,
                         shot.ads,
+                        &shot.stance,
                         shot.aim,
                         &sims,
                         collision,
@@ -3397,6 +3401,11 @@ impl Server {
                                     weapon,
                                     ads: sim.ps.weapon_pos_frac == 1.0,
                                     aim: sim.aim_angles(),
+                                    stance: vcod_common::pmove::weapon::SpreadStance::of(
+                                        &sim.ps,
+                                        cmd.server_time,
+                                        now_ms,
+                                    ),
                                 }))
                             }
                             EV_FIRE_MELEE => self.pending_attacks.push(Attack::Swing {
@@ -3699,6 +3708,9 @@ impl Server {
             // and its prediction judders (docs/protocol-1.1.md).
             let command_time = c.last_processed_st;
             let message_num = c.netchan.outgoing_sequence;
+            // The frame's `ps.clientNum`, which the single-client flags test
+            // against; a follow would make it the followed player's.
+            let client_num = slot;
 
             // Retail sends a client only what its own position can see, so
             // the list is per client rather than one list cloned into every
@@ -3715,7 +3727,9 @@ impl Server {
             // `SVF_BROADCAST` does (docs/protocol-1.1.md, "Which entities a
             // client is sent").
             for (te, (n, e)) in temps.iter().zip(&temp_states) {
-                if temp_entity::visible_to(te, slot) && te.scope != temp_entity::Scope::Broadcast {
+                if temp_entity::visible_to(te, client_num)
+                    && te.scope != temp_entity::Scope::Broadcast
+                {
                     sendable.insert(*n, e.clone());
                 }
             }
@@ -3736,7 +3750,7 @@ impl Server {
                 visible.extend(rt.missiles().entities(self.proto));
             }
 
-            let mut ps = sim.to_wire(self.proto, slot as i32, command_time);
+            let mut ps = sim.to_wire(self.proto, client_num as i32, command_time);
             // The script's HUD elements, filtered for this client the way
             // `HudElem_UpdateClient` filters them; retail rebuilds both
             // arrays into the playerstate once per client per frame, so

@@ -930,13 +930,58 @@ other `min + (hipSpreadMax - min) * client->0x2240` where `min` is
 `BG_GetMinSpreadForWeapon(ps, weapon, level.time)`. INFERRED: the `adsSpread`
 arm is the one an equal comparison takes.
 
-VERIFIED, `BG_GetMinSpreadForWeapon` `0x37114`: it compares
-`ps->viewHeightCurrent` against `ps->viewHeightTarget` and
-`ps->viewHeightLerpTime` against 0, tests `pm_flags & 1` and `pm_flags & 2`,
-and loads `hipSpreadProneMin`, `hipSpreadDuckedMin` and `hipSpreadStandMin`
-off those tests. VERIFIED: a second path blends two of the three by a fraction
-clamped to 0..1. INFERRED: the settled stance picks one of the three outright
-and the blend is what a stance still lerping takes.
+`BG_GetMinSpreadForWeapon` `0x37114`, read with `tools/re/annotate_func.py`
+on 2026-09-27 (field names as in `cod11-mantle.md`, "The eye through a
+stance change"). VERIFIED: it compares `viewHeightCurrent` (ps+0xD0, float)
+against `viewHeightLerpTarget` (ps+0xD8, loaded as an int) at `0x37140` and
+`viewHeightLerpTime` (ps+0xD4) against 0 at `0x3714c`, and its first path
+tests `pm_flags & 1` and `& 2` and loads `hipSpreadProneMin` (weapon def
+`+0x244`), `hipSpreadDuckedMin` (`+0x240`) or `hipSpreadStandMin` (`+0x23C`).
+INFERRED, from the branches: that path is taken when the eye equals the
+leg's target or no leg runs, prone first, then the crouch latch, then
+standing.
+
+VERIFIED, the second path: it calls `PM_GetViewHeightLerpTime(ps,
+viewHeightLerpTarget, viewHeightLerpDown)` at `0x3718d`, subtracts
+`viewHeightLerpTime` from its own third argument, divides by the call's
+answer as integers loaded to x87 (`0x37192`-`0x371a4`) and clamps the
+quotient against `fldz` and `fld1` (`0x371a6`-`0x371c5`); then it compares
+`viewHeightLerpTarget` with the prone height (ps+0x33C, `0x371cd`) and the
+standing height (ps+0x344, `0x371e3`) and tests `viewHeightLerpDown`
+(`0x37200`), loads two of the three minimums per arm and ends in `fsub`,
+`fmulp`, `faddp` (`0x3721d`-`0x37221`). INFERRED, from the loads' order: the
+result is `from + (to - from) * f` with `f` the leg's elapsed time over its
+length, clamped to 0..1, and
+
+- a leg to the prone height blends ducked to prone;
+- a leg to the standing height blends ducked to standing;
+- any other leg, the ones to the crouch height, blends standing to ducked
+  going down and prone to ducked going up.
+
+So every leg blends, the standing-crouch ones included, and the blend is
+linear in time, not along the eye's curve: halfway through the 400 ms leg
+to prone the minimum is halfway between ducked and prone while the eye is
+at 15 of the 40-to-11 drop. `PM_GetViewHeightLerpTime` (`0x345b8`) is the
+leg-length pick that section of the mantle doc gives.
+
+VERIFIED: `FireWeapon` passes `level.time` (`level+0x1E8`, `0x68ee4`) as the
+third argument, and the `.so` has no other caller. VERIFIED: the cgame's
+copy is `0x3000fa50`, the same three comparisons, the same weapon-def
+offsets and the same four arms, reading the playerstate at `0x3020715c` and
+called only from the crosshair at `0x30016be6` with the time off
+`[0x301e2160] + 8`. INFERRED: that is `cg.snap->serverTime`, `0x301e2160`
+being `cg.snap` (`cod11-sound-system.md` section 3), so the crosshair reads
+the leg against the snapshot the client interpolates from.
+
+**As implemented.** `pmove::weapon::hip_spread_min` ports the function over
+a `SpreadStance` (the three flags, the eye and the leg, timed against the
+caller's clock), reusing the leg-length pick `pmove::view_height_adjust`
+runs on. The server takes the stance at the cmd that raised the shot,
+against the tick's clock, and `spread_deg` reads it; the crosshair reads
+the predicted playerstate, or the snapshot's fields when not predicting,
+against the serverTime of the snapshot the render clock interpolates from.
+No committed capture separates it: none records a shot's impact beside a
+stance change.
 
 `PM_AdjustAimSpreadScale` `0x385e8` (dll `0x30011050`) is what moves
 `aimSpreadScale` between shots. VERIFIED: `PmoveSingle` calls it once, at
@@ -1879,7 +1924,32 @@ conditions.
 
 INFERRED: the two `gentity+0xF4` writes are the entity-shared visibility flags
 and the pair sends the plain impact to everybody but the victim and the
-client-flavoured one to the victim alone.
+client-flavoured one to the victim alone. The engine's side of that, which
+compares `r.singleClient` with the snapshot's `ps.clientNum` rather than the
+slot, and the retail run that measured both halves, are
+`docs/research/cod11-events-and-fx.md` section 2.
+
+VERIFIED: the attacker pointer the two `otherEntityNum` writes read
+(`ebp-0x40`) starts as `g_entities + 0xc49d8` (`0x43778`), entity 1022 at
+the gentity size `0x314`, and is replaced only by `Scr_GetEntity` at
+`0x43864`. INFERRED: a call with no attacker entity names the world.
+
+INFERRED, from the weapon test and 4.2's step 5: the pair follows the weapon
+the callback was handed, not the means of death, so a melee hit with a rifle
+raises it beside `EV_MELEE_HIT`, a turret round raises it off the gunner's
+weapon, and a grenade's blast, whose inflictor carries the frag, raises
+none. VERIFIED live for melee, 2026-09-27 (events-and-fx doc section 2): each
+landed swing put a 174 with `surfType` 7 in the swinger's snapshot and a 176
+in the victim's. INFERRED from the callback being the only site: a hit the
+gametype's `Callback_PlayerDamage` refuses before calling
+`finishPlayerDamage`, a teammate's with friendly fire off, raises no impact
+at all, since `Bullet_Fire_Extended` raises none on a client (2.4 step 2).
+
+**As implemented.** `finish_player_damage`
+(`crates/server/src/game/builtins/combat.rs`) raises the pair through
+`combat::flesh_impacts` on a `weaponType bullet` weapon, before its own
+guard against a dead victim, and `bullet_fire` raises no impact on a player.
+`self->flags & 1` is not modelled.
 
 **Health, and the order**, `0x43b7e` onward. VERIFIED: the offsets,
 immediates, event numbers and call targets named in the list below.
@@ -2770,7 +2840,7 @@ in-process test and the headless run cover that path). PENDING.
 
 Named here so a reader of sections 1 to 7 does not assume the code follows
 them: rifle rounds passing through a player at half damage (2.3); the
-`pm_time` stun (4.5); the view kick of 6's step 6; events 175 and 176;
+`pm_time` stun (4.5); the view kick of 6's step 6;
 `EV_CROUCH_PAIN` (188);
 the `EV_RAISE_WEAPON` (155) retail raises on the death frame beside `EV_DEATH`;
 the direct-hit `MOD_GRENADE` arm (13.1), which a stock frag cannot reach
