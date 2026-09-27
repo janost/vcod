@@ -297,13 +297,16 @@ fn apply_sim_ops(
         else {
             continue;
         };
-        apply_sim_op(sim, op, anims, weapons, rng, now_ms);
+        apply_sim_op(sim, rt, slot, op, anims, weapons, rng, now_ms);
     }
 }
 
 /// One op of [`apply_sim_ops`].
+#[allow(clippy::too_many_arguments)]
 fn apply_sim_op(
     sim: &mut ClientSim,
+    rt: &mut script::ScriptRuntime,
+    slot: usize,
     op: crate::game::host::SimOp,
     anims: Option<&vcod_common::animtree::PlayerAnims>,
     weapons: &crate::weapons::WeaponTable,
@@ -313,7 +316,13 @@ fn apply_sim_op(
     use crate::game::host::SimOp;
     match op {
         SimOp::Event { event, parm } => sim.add_event(event, parm),
-        SimOp::SetOrigin { origin } => sim.teleport(origin),
+        // The host's copy too: the weapon mirror put the pre-teleport
+        // origin back over the builtin's write, and a callback ahead of the
+        // client's next cmd reads it.
+        SimOp::SetOrigin { origin } => {
+            sim.teleport(origin);
+            rt.set_client_origin(slot, sim.origin());
+        }
         SimOp::SetViewAngles { angles } => sim.set_view_angle(angles),
         SimOp::Damaged { .. } => {
             let index = sim.ps.weapon as usize;
@@ -668,7 +677,7 @@ fn apply_callback_ops(
         apply_weapon_op(sim, op, weapons);
     }
     for op in sim_ops {
-        apply_sim_op(sim, op, anims, weapons, rng, now_ms);
+        apply_sim_op(sim, rt, slot, op, anims, weapons, rng, now_ms);
     }
     mirror_weapons_of(sim, rt, slot);
     mirror_vitals_of(sim, rt, slot);
