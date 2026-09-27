@@ -985,7 +985,7 @@ and `"33"` at `0x72d1c`, `0x72d1e`, `0x72d29`). VERIFIED. Both default off, so
 a stock server runs the 66 ms chop.
 
 **What vcod does.** `replay_moves` (`crates/server/src/server.rs`) runs the
-chop and the 1000 ms arrears bound, and leaves `last_processed_st` -- what
+chop and the 1000 ms arrears bound (`pmove::cmd::chop` in `vcod-common`), and leaves `last_processed_st` -- what
 goes out as `commandTime` -- at the cmd's own clock.
 `crates/server/tests/hitching_client.rs` pins it: a spectator silent for
 600 ms and then sending one cmd covers the whole gap, about 250 units, where
@@ -1002,8 +1002,8 @@ server.
 The vcod client predicts on the same rule. Each frame it rebuilds the sim
 playerstate from the newest snapshot and replays every cmd it sent with a
 `serverTime` past that snapshot's `commandTime` through `pmove::predict`,
-which is the per-cmd step the server runs, the chop and the arrears bound
-included (`crates/client/src/play/predict.rs`). A history that no longer
+which runs the server's own per-cmd step (`pmove::cmd`), the chop and the
+arrears bound included (`crates/client/src/play/predict.rs`). A history that no longer
 reaches back to `commandTime` draws the interpolated snapshots rather than
 replaying from the wrong base, and a correction a new snapshot brings is
 eased out over 100 ms. Retail's cgame registers the cvar for that as

@@ -1,5 +1,8 @@
-//! The weapon index table, a copy of the server's `WeaponTable::from_defs`
-//! (docs/protocol-1.1.md, "How `ammo[]` and `ammoclip[]` are indexed").
+//! The weapon index table: every weapon file in configstring 7's order, with
+//! the ammo, clip and shared-cap indexes the wire's arrays are read by
+//! (docs/protocol-1.1.md, "How `ammo[]` and `ammoclip[]` are indexed"). The
+//! server's `WeaponTable` and the client's predictor both index through
+//! [`assign_indices`].
 
 use crate::pk3::Pk3Fs;
 use crate::weapon::WeaponDef;
@@ -19,8 +22,9 @@ pub fn from_configstring(fs: &Pk3Fs, cs7: &str) -> Vec<Option<WeaponDef>> {
     defs
 }
 
-/// Copy of `WeaponTable::from_defs`, `crates/server/src/weapons.rs`; keep in
-/// step until the dedupe.
+/// Assigns the ammo, clip and shared-cap indexes in index order. Ammo and
+/// clip names each get their own table, so the two indexes never share a
+/// namespace.
 pub fn assign_indices(defs: &mut [Option<WeaponDef>]) {
     let mut ammo_names: Vec<String> = Vec::new();
     let mut clip_names: Vec<String> = Vec::new();
@@ -33,7 +37,9 @@ pub fn assign_indices(defs: &mut [Option<WeaponDef>]) {
     }
 }
 
-/// Lowercase, look up, append on a miss; the first index handed out is 1.
+/// Lowercase, look up, append on a miss. The first name handed out is 1, not
+/// 0: the retail hit capture's spawn line reads the colt's clip at 3 and the
+/// carbine's at 10, one above where a 0-based walk puts them.
 fn name_index(table: &mut Vec<String>, name: &str) -> usize {
     let lower = name.to_ascii_lowercase();
     match table.iter().position(|n| *n == lower) {

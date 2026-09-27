@@ -12,7 +12,7 @@
 //! ordering are retail CoD 1.1's, which differ in most of them.
 
 use crate::game::entity::ObjectTable;
-use crate::spectate::{ClientSim, EventRing, PmType};
+use crate::spectate::{ClientSim, PmType};
 use glam::Vec3;
 use vcod_common::collision::{sound_material, CollisionWorld, CONTENTS_WATER};
 use vcod_common::net::events::dir_to_byte;
@@ -21,6 +21,7 @@ use vcod_common::net::protocol::{Protocol, ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::net::trajectory::{
     Trajectory, DEFAULT_GRAVITY, TR_GRAVITY, TR_LINEAR, TR_STATIONARY,
 };
+use vcod_common::pmove::cmd::EventRing;
 use vcod_common::pmove::PlayerState;
 use vcod_common::weapon::WeaponDef;
 use vcod_gsc::{Cx, EntId, ErrorKind, Value};

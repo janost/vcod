@@ -383,7 +383,7 @@ struct LivePhase {
 fn live_phase(fs: &Pk3Fs, bsp: &bsp::Bsp, net: &net::NetClient<net::UdpTransport>) -> Phase {
     let world = collision::CollisionWorld::build(bsp, &props::collision_tris(fs, &bsp.entities));
     let gametype = net::info_value_for_key(net.configstring(0), "g_gametype").unwrap_or("");
-    play::predict::unlink_script_brushes(&world, &bsp.entities, gametype);
+    world.unlink_script_brushes(&bsp.entities, gametype);
     Phase::Live(Box::new(LivePhase {
         world,
         weapons: vcod_common::weapon_table::from_configstring(fs, net.configstring(7)),
@@ -2114,9 +2114,9 @@ impl ApplicationHandler for App {
                                             evs.extend(
                                                 predicted_events
                                                     .take_predicted(
-                                                        pred.event_sequence,
-                                                        pred.events,
-                                                        pred.event_parms,
+                                                        pred.ring.seq,
+                                                        pred.ring.events,
+                                                        pred.ring.parms,
                                                     )
                                                     .into_iter()
                                                     .map(|(_, event, parm)| {

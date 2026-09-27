@@ -83,24 +83,6 @@ pub struct WeaponTable {
     defs: Vec<Option<WeaponDef>>,
 }
 
-/// The name-table walk `docs/protocol-1.1.md` ("How `ammo[]` and
-/// `ammoclip[]` are indexed") describes: lowercase, look up, append on a
-/// miss. Ammo and clip names each get their own table, so the two indexes
-/// never share a namespace. The first name handed out is 1, not 0: the retail
-/// hit capture's spawn line reads the colt's clip at 3 and the carbine's at
-/// 10, one above where a 0-based walk puts them, which
-/// `the_first_index_handed_out_is_one` pins against that line.
-fn name_index(table: &mut Vec<String>, name: &str) -> usize {
-    let lower = name.to_ascii_lowercase();
-    match table.iter().position(|n| *n == lower) {
-        Some(i) => i + 1,
-        None => {
-            table.push(lower);
-            table.len()
-        }
-    }
-}
-
 impl WeaponTable {
     /// `crate::items::NUM_ITEMS` `None`s: every index resolves, none carry a
     /// weapon. For tests and hosts with no paks mounted.
@@ -124,18 +106,11 @@ impl WeaponTable {
         WeaponTable::from_defs(defs)
     }
 
-    /// Assigns the ammo, clip and shared-cap indexes in index order, the walk
-    /// `load` does over the parsed files. A test hands it hand-built defs.
+    /// Indexes the parsed files through
+    /// `vcod_common::weapon_table::assign_indices`, the walk the client's
+    /// table runs too. A test hands it hand-built defs.
     pub fn from_defs(mut defs: Vec<Option<WeaponDef>>) -> WeaponTable {
-        let mut ammo_names: Vec<String> = Vec::new();
-        let mut clip_names: Vec<String> = Vec::new();
-        let mut cap_names: Vec<String> = Vec::new();
-        for def in defs.iter_mut().flatten() {
-            def.ammo_index = name_index(&mut ammo_names, &def.ammo_name);
-            def.clip_index = name_index(&mut clip_names, &def.clip_name);
-            def.shared_cap_index = (!def.shared_ammo_cap_name.is_empty())
-                .then(|| name_index(&mut cap_names, &def.shared_ammo_cap_name));
-        }
+        vcod_common::weapon_table::assign_indices(&mut defs);
         WeaponTable { defs }
     }
 

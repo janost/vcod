@@ -24,12 +24,10 @@ use std::collections::BTreeMap;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::MoveWorld;
 use vcod_common::net::msg;
-use vcod_common::net::msg::{
-    UserCmd, BUTTON_ADS, BUTTON_ATTACK, BUTTON_MELEE, BUTTON_USE, NULL_USERCMD, WBUTTON_CROUCH,
-    WBUTTON_LEAN_LEFT, WBUTTON_LEAN_RIGHT, WBUTTON_PRONE, WBUTTON_RELOAD,
-};
+use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
 use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD, PROTOCOL_V1};
-use vcod_common::pmove::{pmove, predict, PlayerState, PmInput};
+use vcod_common::pmove::cmd::{self, EventRing};
+use vcod_common::pmove::{predict, PlayerState};
 use vcod_common::weapon::WeaponDef;
 
 /// What the retail server said the player was after some cmd.
@@ -146,39 +144,8 @@ fn parse_fixture(text: &str) -> Vec<Line> {
     out
 }
 
-/// `spectate::pm_input`, which is private to the server crate; the same
-/// mapping so the replay reads the cmd the way the server does.
-fn pm_input(cmd: &UserCmd) -> PmInput {
-    PmInput {
-        forward: f32::from(cmd.forward) / 127.0,
-        right: f32::from(cmd.right) / 127.0,
-        jump: cmd.up > 0,
-        crouch: cmd.wbuttons & WBUTTON_CROUCH != 0,
-        prone: cmd.wbuttons & WBUTTON_PRONE != 0,
-        walk_slow: false,
-        lean_left: cmd.wbuttons & WBUTTON_LEAN_LEFT != 0,
-        lean_right: cmd.wbuttons & WBUTTON_LEAN_RIGHT != 0,
-        attack: cmd.buttons & BUTTON_ATTACK != 0,
-        melee: cmd.buttons & BUTTON_MELEE != 0,
-        reload: cmd.wbuttons & WBUTTON_RELOAD != 0,
-        ads: cmd.buttons & BUTTON_ADS != 0,
-        use_button: cmd.buttons & BUTTON_USE != 0,
-        weapon: cmd.weapon,
-        angles: [cmd.angles[0], cmd.angles[1]],
-    }
-}
-
-const ANGLE2SHORT: f32 = 65536.0 / 360.0;
-
-fn short_deg(v: i32) -> f32 {
-    let deg = v as f32 / ANGLE2SHORT;
-    (deg + 180.0).rem_euclid(360.0) - 180.0
-}
-
-/// The server's `replay_moves` clocking for one cmd: `PmoveSingle` steps of
-/// at most `MAX_FRAME_MS` from the last processed clock up to the cmd's, with
-/// the prone caps' corrections pushed into `da` the way `ClientSim::step`
-/// pushes them into `delta_angles`.
+/// One cmd the way the server's `replay_moves` runs it: [`cmd::chop`] and
+/// [`cmd::player_step`], the prone caps' corrections landing in `da`.
 fn run_cmd(
     ps: &mut PlayerState,
     cmd: &UserCmd,
@@ -191,19 +158,9 @@ fn run_cmd(
     if dt_ms <= 0 {
         return;
     }
-    let mut base = *last_st;
-    while base != cmd.server_time {
-        let msec = (cmd.server_time - base).min(vcod_common::pmove::MAX_FRAME_MS as i32);
-        base += msec;
-        ps.yaw = short_deg(cmd.angles[1] + da[1]).to_radians();
-        ps.pitch = -short_deg(cmd.angles[0] + da[0]).to_radians();
-        pmove(ps, &pm_input(cmd), world, msec as f32 / 1000.0, weapons);
-        let corrections = [ps.view_pitch_correction, ps.view_yaw_correction];
-        for (i, c) in corrections.into_iter().enumerate() {
-            if c != 0.0 {
-                da[i] = (da[i] + (c * ANGLE2SHORT) as i32) & 0xffff;
-            }
-        }
+    let mut ring = EventRing::default();
+    for (step, dt) in cmd::chop(*last_st, cmd) {
+        cmd::player_step(ps, da, &mut ring, &step, dt, world, weapons);
     }
     *last_st = cmd.server_time;
     // `SLOPE_TRACE=<ct>`: print every cmd within 60 ms before that clock.
@@ -320,7 +277,7 @@ struct Row {
 /// Where the cmd asked to go, in the world: forward and right against the
 /// cmd's yaw, the way `PM_CmdScale`'s caller builds the wish.
 fn wish_dir(cmd: &UserCmd, da: [i32; 3]) -> Vec3 {
-    let yaw = short_deg(cmd.angles[1] + da[1]).to_radians();
+    let yaw = cmd::view_angles(cmd.angles, da)[1].to_radians();
     let forward = Vec3::new(yaw.cos(), yaw.sin(), 0.0);
     let right = Vec3::new(yaw.sin(), -yaw.cos(), 0.0);
     (forward * f32::from(cmd.forward) + right * f32::from(cmd.right)).normalize_or_zero()
@@ -510,7 +467,7 @@ impl ViewDelta {
         let pf = r.retail.prone.as_ref()?;
         let da = |i: usize| {
             let d = (r.ours_da[i] - r.retail.delta_angles[i]) as i16;
-            (f32::from(d) / ANGLE2SHORT).abs()
+            (f32::from(d) / cmd::ANGLE2SHORT).abs()
         };
         Some(Self {
             direction: angle_off(r.ours.prone_direction, pf.direction).abs(),
@@ -776,35 +733,6 @@ fn check(map: &str, gametype: &str, cmd_ms: u32) {
     check_path(map, gametype, &path, &SLOPE, None);
 }
 
-/// What the stock gametype script does to the map's brush models before a
-/// client walks: `_gameobjects::main` `delete()`s every entity carrying a
-/// `script_gameobjectname` the gametype did not list (`dm.gsc:78`,
-/// `tdm.gsc:78`: their own name; `sd.gsc:123`: `sd`, `bombzone`,
-/// `blocker`), and a deleted `script_brushmodel` takes its brushes out of
-/// the clip. The server's `delete` builtin does this at run time; the
-/// replay has no script, so it applies the rule itself.
-fn unlink_gameobjects(world: &CollisionWorld, entities: &str, gametype: &str) {
-    let allowed: &[&str] = match gametype {
-        "sd" => &["sd", "bombzone", "blocker"],
-        g => &[g][..],
-    };
-    for block in vcod_common::bsp::entity_blocks(entities) {
-        let Some(name) = block.get("script_gameobjectname") else {
-            continue;
-        };
-        if allowed.contains(&name.as_str()) {
-            continue;
-        }
-        if let Some(n) = block
-            .get("model")
-            .and_then(|m| m.strip_prefix('*'))
-            .and_then(|n| n.parse::<usize>().ok())
-        {
-            world.set_model_linked(n, false);
-        }
-    }
-}
-
 /// `until` drops the rows from that `commandTime` on.
 fn check_path(map: &str, gametype: &str, path: &str, tol: &Tolerance, until: Option<i32>) {
     let Some(fs) = vcod_common::testing::game_fs() else {
@@ -815,7 +743,7 @@ fn check_path(map: &str, gametype: &str, path: &str, tol: &Tolerance, until: Opt
     let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse");
     let world = vcod_server::world::World::from_bsp(&bsp, Some(&fs)).collision;
-    unlink_gameobjects(&world, &bsp.entities, gametype);
+    world.unlink_script_brushes(&bsp.entities, gametype);
     let weapons = vcod_server::weapons::WeaponTable::load(&fs);
     let mut rows = replay(&lines, &world, weapons.defs());
     if let Some(ct) = until {

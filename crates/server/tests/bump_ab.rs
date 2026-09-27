@@ -36,12 +36,10 @@ use glam::Vec3;
 use std::collections::BTreeMap;
 use vcod_common::collision::CollisionWorld;
 use vcod_common::movetrace::{Body, MoveWorld, CONTENTS_BODY};
-use vcod_common::net::msg::{
-    UserCmd, BUTTON_ADS, BUTTON_ATTACK, BUTTON_MELEE, BUTTON_USE, NULL_USERCMD, WBUTTON_CROUCH,
-    WBUTTON_LEAN_LEFT, WBUTTON_LEAN_RIGHT, WBUTTON_PRONE, WBUTTON_RELOAD,
-};
+use vcod_common::net::msg::{UserCmd, NULL_USERCMD};
 use vcod_common::net::protocol::ENTITYNUM_NONE;
-use vcod_common::pmove::{pmove, PlayerState, PmInput, PMF_TIME_KNOCKBACK};
+use vcod_common::pmove::cmd::{self, ANGLE2SHORT};
+use vcod_common::pmove::{pmove, PlayerState, PMF_TIME_KNOCKBACK};
 use vcod_common::weapon::WeaponDef;
 
 const FIXTURE: &str = "mp_carentan-dm-bump-walker.txt";
@@ -85,8 +83,6 @@ fn parse_vec3(s: &str) -> Vec3 {
     let v: Vec<f32> = s.split(',').map(|x| x.parse().expect("a float")).collect();
     Vec3::new(v[0], v[1], v[2])
 }
-
-const ANGLE2SHORT: f32 = 65536.0 / 360.0;
 
 fn parse_fixture(text: &str) -> Fixture {
     let header = text
@@ -172,32 +168,6 @@ fn parse_fixture(text: &str) -> Fixture {
     }
 }
 
-/// `spectate::pm_input`, which is private to the server crate.
-fn pm_input(cmd: &UserCmd) -> PmInput {
-    PmInput {
-        forward: f32::from(cmd.forward) / 127.0,
-        right: f32::from(cmd.right) / 127.0,
-        jump: cmd.up > 0,
-        crouch: cmd.wbuttons & WBUTTON_CROUCH != 0,
-        prone: cmd.wbuttons & WBUTTON_PRONE != 0,
-        walk_slow: false,
-        lean_left: cmd.wbuttons & WBUTTON_LEAN_LEFT != 0,
-        lean_right: cmd.wbuttons & WBUTTON_LEAN_RIGHT != 0,
-        attack: cmd.buttons & BUTTON_ATTACK != 0,
-        melee: cmd.buttons & BUTTON_MELEE != 0,
-        reload: cmd.wbuttons & WBUTTON_RELOAD != 0,
-        ads: cmd.buttons & BUTTON_ADS != 0,
-        use_button: cmd.buttons & BUTTON_USE != 0,
-        weapon: cmd.weapon,
-        angles: [cmd.angles[0], cmd.angles[1]],
-    }
-}
-
-fn short_deg(v: i32) -> f32 {
-    let deg = v as f32 / ANGLE2SHORT;
-    (deg + 180.0).rem_euclid(360.0) - 180.0
-}
-
 /// The server's `replay_moves` clocking for one cmd.
 fn run_cmd(
     ps: &mut PlayerState,
@@ -210,13 +180,9 @@ fn run_cmd(
     if cmd.server_time.wrapping_sub(*last_st) <= 0 {
         return;
     }
-    ps.yaw = short_deg(cmd.angles[1] + da[1]).to_radians();
-    ps.pitch = -short_deg(cmd.angles[0] + da[0]).to_radians();
-    let mut base = *last_st;
-    while base != cmd.server_time {
-        let msec = (cmd.server_time - base).min(vcod_common::pmove::MAX_FRAME_MS as i32);
-        base += msec;
-        pmove(ps, &pm_input(cmd), world, msec as f32 / 1000.0, weapons);
+    cmd::apply_view(ps, cmd.angles, da);
+    for (step, dt) in cmd::chop(*last_st, cmd) {
+        pmove(ps, &cmd::pm_input(&step), world, dt, weapons);
     }
     *last_st = cmd.server_time;
     // `BUMP_TRACE=<ct>`: print every cmd within 60 ms before that clock.
@@ -508,28 +474,8 @@ fn load() -> Option<(CollisionWorld, vcod_server::weapons::WeaponTable)> {
         .expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse");
     let world = vcod_server::world::World::from_bsp(&bsp, Some(&fs)).collision;
-    unlink_gameobjects(&world, &bsp.entities, "dm");
+    world.unlink_script_brushes(&bsp.entities, "dm");
     Some((world, vcod_server::weapons::WeaponTable::load(&fs)))
-}
-
-/// `playerstate_slope_ab.rs`'s: what `_gameobjects::main` deletes before a
-/// client walks.
-fn unlink_gameobjects(world: &CollisionWorld, entities: &str, gametype: &str) {
-    for block in vcod_common::bsp::entity_blocks(entities) {
-        let Some(name) = block.get("script_gameobjectname") else {
-            continue;
-        };
-        if name == gametype {
-            continue;
-        }
-        if let Some(n) = block
-            .get("model")
-            .and_then(|m| m.strip_prefix('*'))
-            .and_then(|n| n.parse::<usize>().ok())
-        {
-            world.set_model_linked(n, false);
-        }
-    }
 }
 
 fn fixture() -> Fixture {
