@@ -474,28 +474,8 @@ fn load() -> Option<(CollisionWorld, vcod_server::weapons::WeaponTable)> {
         .expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse");
     let world = vcod_server::world::World::from_bsp(&bsp, Some(&fs)).collision;
-    unlink_gameobjects(&world, &bsp.entities, "dm");
+    world.unlink_script_brushes(&bsp.entities, "dm");
     Some((world, vcod_server::weapons::WeaponTable::load(&fs)))
-}
-
-/// `playerstate_slope_ab.rs`'s: what `_gameobjects::main` deletes before a
-/// client walks.
-fn unlink_gameobjects(world: &CollisionWorld, entities: &str, gametype: &str) {
-    for block in vcod_common::bsp::entity_blocks(entities) {
-        let Some(name) = block.get("script_gameobjectname") else {
-            continue;
-        };
-        if name == gametype {
-            continue;
-        }
-        if let Some(n) = block
-            .get("model")
-            .and_then(|m| m.strip_prefix('*'))
-            .and_then(|n| n.parse::<usize>().ok())
-        {
-            world.set_model_linked(n, false);
-        }
-    }
 }
 
 fn fixture() -> Fixture {

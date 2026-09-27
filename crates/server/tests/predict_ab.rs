@@ -49,7 +49,7 @@ fn weapon_index(cs7: &str, name: &str) -> u8 {
 }
 
 /// A map's collision world the way `World::from_bsp` builds it, and the
-/// entity string for the spawn and `unlink_gameobjects`.
+/// entity string for the spawn and `unlink_script_brushes`.
 fn load_world(fs: &vcod_common::pk3::Pk3Fs, map: &str) -> (CollisionWorld, String) {
     let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse");
@@ -664,30 +664,6 @@ fn parse_fixture(text: &str) -> Vec<Line> {
     out
 }
 
-/// Copy of `playerstate_slope_ab.rs`'s: what the stock gametype script's
-/// `_gameobjects::main` deletes before a client walks.
-fn unlink_gameobjects(world: &CollisionWorld, entities: &str, gametype: &str) {
-    let allowed: &[&str] = match gametype {
-        "sd" => &["sd", "bombzone", "blocker"],
-        g => &[g][..],
-    };
-    for block in vcod_common::bsp::entity_blocks(entities) {
-        let Some(name) = block.get("script_gameobjectname") else {
-            continue;
-        };
-        if allowed.contains(&name.as_str()) {
-            continue;
-        }
-        if let Some(n) = block
-            .get("model")
-            .and_then(|m| m.strip_prefix('*'))
-            .and_then(|n| n.parse::<usize>().ok())
-        {
-            world.set_model_linked(n, false);
-        }
-    }
-}
-
 /// Retail's snapshot as a wire playerstate: the fields the fixture carries,
 /// a standing eye, and the weapon the cmds hold.
 fn wire_from(snap: &Snap, weapon: u8) -> msg::PlayerState {
@@ -832,7 +808,7 @@ fn predictor_replays_retail_slope_runs() {
             .entry((map.to_owned(), gametype.to_owned()))
             .or_insert_with(|| {
                 let (world, entities) = load_world(&fs, map);
-                unlink_gameobjects(&world, &entities, gametype);
+                world.unlink_script_brushes(&entities, gametype);
                 world
             });
         let text = std::fs::read_to_string(path).unwrap();

@@ -965,6 +965,42 @@ impl CollisionWorld {
             .is_none_or(|m| m.load(Ordering::Relaxed))
     }
 
+    /// Unlinks the brush models the stock map-load scripts take out of the
+    /// clip, for a world no script runs on (the client's predictor, the
+    /// gates): `_gameobjects::main` `delete()`s every entity whose
+    /// `script_gameobjectname` the gametype does not list (`dm.gsc:78`,
+    /// `tdm.gsc:78`: their own name; `sd.gsc:123`: `sd`, `bombzone`,
+    /// `blocker`), and `_load.gsc` `notsolid()`s every exploder brush model.
+    pub fn unlink_script_brushes(&self, entities: &str, gametype: &str) {
+        let allowed: &[&str] = match gametype {
+            "sd" => &["sd", "bombzone", "blocker"],
+            "re" => &["re", "retrieval"],
+            g => &[g][..],
+        };
+        for block in crate::bsp::entity_blocks(entities) {
+            let deleted = block
+                .get("script_gameobjectname")
+                .is_some_and(|name| !allowed.contains(&name.as_str()));
+            let exploder = block
+                .get("classname")
+                .is_some_and(|c| c == "script_brushmodel")
+                && block.contains_key("script_exploder")
+                && block
+                    .get("targetname")
+                    .is_some_and(|t| t == "exploder" || t == "exploderchunk");
+            if !deleted && !exploder {
+                continue;
+            }
+            if let Some(n) = block
+                .get("model")
+                .and_then(|m| m.strip_prefix('*'))
+                .and_then(|n| n.parse::<usize>().ok())
+            {
+                self.set_model_linked(n, false);
+            }
+        }
+    }
+
     fn brush_linked(&self, brush: &BrushPlanes) -> bool {
         self.model_linked(brush.model as usize)
     }
@@ -1521,6 +1557,21 @@ pub fn synthetic_world_tris(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// mp_depot's `*1` is an exploder and a `bombzone`, so `sd` keeps the
+    /// gameobject and `_load.gsc` still takes it out; `*2` carries
+    /// `script_exploder` with no targetname and stays solid.
+    #[test]
+    fn mp_depots_exploder_leaves_the_clip_under_sd() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let bsp = crate::bsp::parse(&fs.read("maps/mp/mp_depot.bsp").unwrap()).unwrap();
+        let world = CollisionWorld::build(&bsp, &[]);
+        world.unlink_script_brushes(&bsp.entities, "sd");
+        assert!(!world.model_linked(1));
+        assert!(world.model_linked(2));
+    }
 
     /// A prop wall at x = 5000 facing -x, two triangles wound outward.
     fn prop_wall(contents: u32) -> [ModelTri; 2] {

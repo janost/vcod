@@ -733,35 +733,6 @@ fn check(map: &str, gametype: &str, cmd_ms: u32) {
     check_path(map, gametype, &path, &SLOPE, None);
 }
 
-/// What the stock gametype script does to the map's brush models before a
-/// client walks: `_gameobjects::main` `delete()`s every entity carrying a
-/// `script_gameobjectname` the gametype did not list (`dm.gsc:78`,
-/// `tdm.gsc:78`: their own name; `sd.gsc:123`: `sd`, `bombzone`,
-/// `blocker`), and a deleted `script_brushmodel` takes its brushes out of
-/// the clip. The server's `delete` builtin does this at run time; the
-/// replay has no script, so it applies the rule itself.
-fn unlink_gameobjects(world: &CollisionWorld, entities: &str, gametype: &str) {
-    let allowed: &[&str] = match gametype {
-        "sd" => &["sd", "bombzone", "blocker"],
-        g => &[g][..],
-    };
-    for block in vcod_common::bsp::entity_blocks(entities) {
-        let Some(name) = block.get("script_gameobjectname") else {
-            continue;
-        };
-        if allowed.contains(&name.as_str()) {
-            continue;
-        }
-        if let Some(n) = block
-            .get("model")
-            .and_then(|m| m.strip_prefix('*'))
-            .and_then(|n| n.parse::<usize>().ok())
-        {
-            world.set_model_linked(n, false);
-        }
-    }
-}
-
 /// `until` drops the rows from that `commandTime` on.
 fn check_path(map: &str, gametype: &str, path: &str, tol: &Tolerance, until: Option<i32>) {
     let Some(fs) = vcod_common::testing::game_fs() else {
@@ -772,7 +743,7 @@ fn check_path(map: &str, gametype: &str, path: &str, tol: &Tolerance, until: Opt
     let bsp_path = fs.resolve_map(map).expect("map in the mounted paks");
     let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).expect("read the bsp")).expect("parse");
     let world = vcod_server::world::World::from_bsp(&bsp, Some(&fs)).collision;
-    unlink_gameobjects(&world, &bsp.entities, gametype);
+    world.unlink_script_brushes(&bsp.entities, gametype);
     let weapons = vcod_server::weapons::WeaponTable::load(&fs);
     let mut rows = replay(&lines, &world, weapons.defs());
     if let Some(ct) = until {
