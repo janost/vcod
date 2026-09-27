@@ -8,7 +8,7 @@ use crate::spectate::ClientSim;
 use glam::{Quat, Vec3};
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::bonetrace::{bone_trace, PriorityMap};
-use vcod_common::collision::{sound_material, CollisionWorld};
+use vcod_common::collision::{sound_material, CollisionWorld, CONTENTS_GLASS};
 use vcod_common::net::events::dir_to_byte;
 use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::pk3::Pk3Fs;
@@ -235,6 +235,11 @@ const BULLET_RANGE: f32 = 8192.0;
 /// The deepest `Bullet_Fire_Extended` recursion that still traces; the
 /// first call is depth 0 (combat doc, 2.3).
 const MAX_BULLET_DEPTH: i32 = 12;
+/// A glass leg's next start is `0.25 / d` past the pane along the ray, where
+/// `d` is the cosine off the pane's normal, and none under 0.125
+/// (`.rodata 0x79c64` and `0x79c60`, combat doc 2.4, step 3).
+const GLASS_NUDGE: f32 = 0.25;
+const GLASS_MIN_COS: f32 = 0.125;
 
 /// The aim block's wire-convention degrees as the sim's radians: yaw as is,
 /// pitch negated (positive down on the wire, up in the sim).
@@ -407,8 +412,10 @@ fn located_damage(damage: i32, multiplier: f32) -> i32 {
 /// One bullet from `muzzle` to `end`: `Bullet_Fire_Extended`'s recursion as
 /// a loop (combat doc, 2.3 and 2.4). A player hit carries `damage` through
 /// the location multiplier; a rifle round then goes on from the hit point
-/// with that player as the pass entity and `damage / 2`, until it meets the
-/// world, nothing, or a halving that leaves no damage.
+/// with that player as the pass entity and `damage / 2`. Any round goes on
+/// through glass at the same damage, after the pane's own impact. It ends on
+/// any other surface, on nothing, on a halving that leaves no damage, or
+/// after 13 legs.
 #[allow(clippy::too_many_arguments)]
 fn fire_round(
     shooter: usize,
@@ -484,7 +491,19 @@ fn fire_round(
                         scope: Scope::Broadcast,
                     });
                 }
-                break;
+                if world.is_none_or(|w| w.hit_contents(&t) & CONTENTS_GLASS == 0) {
+                    break;
+                }
+                // Glass (2.4, step 3): on at full damage past the pane, with
+                // no nudge at a grazing angle.
+                let dir = (end - start).normalize();
+                let d = -t.normal.dot(dir);
+                let nudge = if d >= GLASS_MIN_COS {
+                    GLASS_NUDGE / d
+                } else {
+                    0.0
+                };
+                start = t.endpos + dir * nudge;
             }
             Traced::Nothing => break,
         }
@@ -1327,6 +1346,71 @@ mod tests {
         let r = fire(&weak, &sims, &wall, &mut rng);
         assert_eq!(only(&r.hits, "1 / 2 carries nothing on").victim, 1);
         assert!(r.impacts.is_empty());
+    }
+
+    /// Combat doc 2.4, step 3: any round raises the pane's impact and goes on
+    /// through glass at full damage; one meeting it at under 0.125 of the
+    /// normal is not nudged, meets the pane again at every leg and ends
+    /// there when the depth runs out.
+    #[test]
+    fn a_round_goes_on_through_glass_at_full_damage() {
+        let world = vcod_common::collision::synthetic_world(
+            &[
+                ("textures/test/solid", 0x1, 0),
+                ("textures/test/glass", 0x8000010, 0x900000),
+            ],
+            &[
+                (0, [-1024.0, -1024.0, -16.0], [1024.0, 1024.0, 0.0]),
+                (1, [40.0, -1024.0, 0.0], [42.0, 1024.0, 128.0]),
+                (0, [300.0, -64.0, 0.0], [308.0, 64.0, 128.0]),
+            ],
+        );
+        let mut a = new_for_test([0.0, 0.0, 0.0], 0.0);
+        let b = new_for_test([100.0, 0.0, 0.0], 180.0);
+        let mut rng = 1u64;
+
+        let r = fire(
+            &zero_spread_carbine(),
+            &[(0, &a), (1, &b)],
+            &world,
+            &mut rng,
+        );
+        let got: Vec<(usize, i32)> = r.hits.iter().map(|h| (h.victim, h.damage)).collect();
+        assert_eq!(got, [(1, 45)], "B behind the pane at full damage");
+        let at: Vec<(f32, i32)> = r
+            .impacts
+            .iter()
+            .map(|t| (t.origin[0], t.surf_type))
+            .collect();
+        assert_eq!(r.impacts.len(), 2, "{at:?}");
+        assert!((at[0].0 - 40.0).abs() < 0.2 && at[0].1 == 9, "{at:?}");
+        assert!((at[1].0 - 300.0).abs() < 0.2, "the wall behind B, {at:?}");
+
+        let mut m = HashMap::new();
+        m.insert("damage".to_string(), "30".to_string());
+        let r = fire(
+            &WeaponDef::from_map(&m),
+            &[(0, &a), (1, &b)],
+            &world,
+            &mut rng,
+        );
+        assert_eq!(only(&r.hits, "the colt round past the pane").damage, 30);
+        assert_eq!(only(&r.impacts, "the pane").surf_type, 9);
+
+        // 84 degrees off the pane's normal: cos 0.105.
+        a.ps.yaw = 84f32.to_radians();
+        let r = fire(
+            &zero_spread_carbine(),
+            &[(0, &a), (1, &b)],
+            &world,
+            &mut rng,
+        );
+        assert!(r.hits.is_empty());
+        assert_eq!(r.impacts.len(), 13, "one per leg, all on the pane");
+        assert!(r
+            .impacts
+            .iter()
+            .all(|t| t.surf_type == 9 && (t.origin[0] - 40.0).abs() < 0.2));
     }
 
     /// Combat doc 4.5: the plain copy carries the direction twice and goes

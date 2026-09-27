@@ -506,7 +506,8 @@ engineering setup works.
   `meleeattack` clause's lines. What the machine does not cover yet is the two
   turn movetypes. A shot is a trace against the world
   and every live player's box, a rifle round goes on through each player it
-  hits at half damage, a hit runs the stock
+  hits at half damage, any round goes on through glass at full damage (a
+  pane passes rounds and never breaks), a hit runs the stock
   `CodeCallback_PlayerDamage`, and `finishPlayerDamage` is where health,
   knockback, the pain and death events and `CodeCallback_PlayerKilled`
   happen (`crates/server/src/game/combat.rs`, `docs/research/cod11-combat.md`).

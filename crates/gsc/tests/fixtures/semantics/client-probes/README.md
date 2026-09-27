@@ -539,3 +539,36 @@ round:
 The sweep spends its taps within about 20 s, so the back player is in line
 behind a live front one for only a few of them: this run caught one pass,
 at 33600.
+
+## probe_glass
+
+Whether a round goes on through a window pane, for
+`docs/research/cod11-combat.md` 2.4, step 3. Under `probe_teleport 1` on
+mp_depot it stands every axis player at (-848 -3656), 76 units behind the
+glass brush at x -772..-764, and every allied player at (-748 -3656), 16
+units in front of it, facing each other, once per spawn; the sweep's
+120-unit range is met from the spot, so the shooter never has to walk round
+the pane. The damage log is `probe_passthru`'s. Three shells:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=200 \
+    tools/run_probe.sh client-probes/probe_glass mp_depot +set probe_teleport 1
+# second shell, about 8 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-target --probe-team axis --probe-secs 180
+# third shell, about 14 s after that:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-hit --probe-sweep --probe-team allies --probe-secs 150
+```
+
+Against ours the server half is `vcod-server mp_depot --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_glass.gsc --set
+probe_teleport=1`. The target writes
+`crates/server/tests/fixtures/playerstate/mp_depot-probe_glass-hit-target.txt`,
+which is nobody's evidence: delete it after. The shooter's `bullethit` lines
+carry the pane's impact and the flesh one behind it. Retail, 2026-09-27, the
+first hits:
+
+```
+1:32 PROBE damage 92600 0 180 0 MOD_PISTOL_BULLET head (-840.35, -3655.53, 27.39) (-848.00, -3656.00, -39.88)
+1:48 PROBE damage 108850 0 180 0 MOD_PISTOL_BULLET head (-840.68, -3655.10, 24.69) (-848.00, -3656.00, -39.88)
+2:18 PROBE damage 138350 0 107 0 MOD_PISTOL_BULLET torso_upper (-839.14, -3656.68, 18.99) (-848.00, -3656.00, -38.99)
+```
