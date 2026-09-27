@@ -3642,9 +3642,15 @@ the attacker: vcod hands the callbacks the world entity too.
 
 VERIFIED: `CanDamage` is `0x4A098`, `0x35C` bytes, takes `(targ, origin)` and
 returns a float on the x87 stack rather than an integer. VERIFIED: both of its
-arms trace five times with `trap_LocationalTrace(&tr, origin, point,
+arms trace five times with `trap_LocationalTrace(&tr, point, origin,
 targ->s.number, 0x02802091, bulletPriorityMap)`, the same mask
-`fire_grenade` gives a missile (11.1). VERIFIED: the only call to it in the
+`fire_grenade` gives a missile (11.1): the pushes at `0x4A283..0x4A29E` (and
+`0x4A3A3..0x4A3BE` on the other arm) put the probe point (`ebx`) in the
+`start` slot and `origin` (`[ebp+0xC]`) in the `end` slot, the order 2.3
+reads off `Bullet_Fire_Extended`'s call to the same trap. INFERRED: so each
+probe traces from the victim toward the blast, which matters wherever a clip
+is one-sided, as a model's collision surface is (the mantle doc, "Static
+models are clipped as a segment"). VERIFIED: the only call to it in the
 module is at `0x4A601`, inside `G_RadiusDamage`.
 
 **With no client** (`targ+0x158` zero). VERIFIED: the five points are built
@@ -3710,16 +3716,20 @@ flak, shows its `_d` twin and deletes the bomb model before its own
 `games_mp.log` `D;` and `K;` records and the probe's health line after the
 fuse:
 
-| blast | retail | vcod before | vcod after |
-|---|---|---|---|
-| at the charge | none | 0: 20 | none |
-| 20 above the charge | 0: 20 | 0: 20 | 0: 20 |
-| at `bombtrigger getorigin()`, which reads the charge | none | 0: 20 | none |
-| 40 above client 0's feet | 0: 20 | 0: 20, 2: 13, 3: 6 | 0: 20, 2: 6, 3: 6 |
-| the fuse | none, all four at 100 | 0 killed, 1944 | none |
+| blast | retail | vcod, world | vcod, script models | vcod, bodies too |
+|---|---|---|---|---|
+| at the charge | none | 0: 20 | none | none |
+| 20 above the charge | 0: 20 | 0: 20 | 0: 20 | 0: 20 |
+| at `bombtrigger getorigin()`, which reads the charge | none | 0: 20 | none | none |
+| 40 above client 0's feet | 0: 20 | 0: 20, 2: 13, 3: 6 | 0: 20, 2: 6, 3: 6 | 0: 20 |
+| the fuse | none, all four at 100 | 0 killed, 1944 | none | none |
 
-"vcod before" is the server without script models in `CanDamage`; "after"
-is the one this section describes. INFERRED, off the first, third and fifth
+The three vcod columns are the server with the world alone in `CanDamage`,
+with the script models added, and with the player bodies added as well,
+which is the one this section describes; the last was run on 2026-09-27.
+INFERRED, off the blast sitting inside client 0's box: client 0's bones stop
+the probes from clients 2 and 3 on the fourth row, which is the shielding the
+`probe_blastbody` rows below measure directly. INFERRED, off the first, third and fifth
 rows against 2.7: the flak models and the bomb model are script models, they
 stop `CanDamage`'s locational traces, and the second chance's
 `trap_Trace` (mask 0x11) does not see them, so a charge sitting on the flak
@@ -3730,18 +3740,63 @@ open floor is not what this run measured.
 `(-269, 2381, -32)`, 70 and 130 units down one line from a blast at
 `(-176.8, 2473.1, 7)`, parks the other two out of range, blasts
 `radiusDamage(…, 500, 20, 20)`, moves client 0 to `(-300, 2473, -24)` off the
-line and blasts again. VERIFIED: retail charged client 1 13 with client 0 in
-the line and 20 without it; vcod charged 20 both times. INFERRED: 13 is
-`(int)(20 * 2/3)`, so client 0's body took three of the five probes, which is
-the body shielding `cod11-gsc-language.md`'s `radiusDamage` entry read off
-`CanDamage`'s pass entity. INFERRED, off the blast sitting inside client 0's
-box: the same shielding is what leaves retail's fourth row above at 0 for
-clients 2 and 3.
+line and blasts again, then puts client 0 back on its station, turns it
+through the yaws 0 to 315 in steps of 45 with `setPlayerAngles`, one blast
+each, and last `suicide()`s it and blasts over its corpse. Each yaw row logs
+client 0's `angles` and both origins as they read before the blast. Client 0
+is the allied probe, which joins with `m1carbine_mp`.
 
-vcod: `can_damage` traces the collision world and every live script model
-(`GameHost::placed_script_models`, the set `bulletTrace` clips), and the
-second chance traces the world alone with mask 0x11 and no static models.
-Player bodies still do not stop a probe.
+VERIFIED, two retail runs on 2026-09-27, the `D;` records for client 1,
+beside what `a_body_in_the_line_shields_a_blast_the_way_the_retail_probe_measured`
+(`crates/server/src/game/combat.rs`) reads for the same geometry with client 0
+posed as an idle carbine player at the yaw its `angles` read:
+
+| row | client 0 `angles` yaw | client 1 origin | retail | vcod replay |
+|---|---|---|---|---|
+| shielded | 0 | `(-269, 2381)` | 13, 13 | 13 |
+| unshielded | -- | `(-269.8, 2380.2)` | 20, 20 | 20 |
+| yaw rows reading 0 | 0 | `(-270.9, 2379.1)` to `(-274.7, 2375.3)` | 13 (nine rows) | 13 |
+| yaw rows reading 0 | 0 | `(-275.4, 2374.6)`, `(-275.8, 2374.2)` | 6, 6 | 6 |
+| yaw 135 | 135 | `(-273.3, 2376.7)` | none | none |
+| yaw 180 | 180 | `(-273.3, 2376.7)` | 6 | 6 |
+| yaw 225, 270, 315 | as set | `(-273.3, 2376.7)` | none | none |
+| corpse | -- | `(-273.3, 2376.7)`, `(-276.5, 2373.5)` | 20, 20 | 20 |
+
+VERIFIED: client 0 took 20 on every row it stood through. VERIFIED: the first
+run's `angles` read 0 through the yaw 90 row and the set yaw from 135 on, and
+the second run's read 0 on every row. INFERRED: `setPlayerAngles` did not
+land on the rows reading 0, since those match the yaw 0 rows' damage and the
+rows reading 135 to 315 do not; rows are filed by the yaw read back, and what
+kept the call from landing is not established. INFERRED: client 1 drifts
+between rows under the blasts' knockback.
+
+INFERRED, off 3.1 and 14.3: every probe is a locational trace with the
+victim as its pass entity and mask 0x02802091, which carries
+`CONTENTS_BODY` (0x02000000), the contents a playing player's end frame
+writes (`docs/research/cod11-player-clip.md`, 1.2), and not
+`CONTENTS_CORPSE` (0x04000000), which is what `player_die` writes (5.1,
+step 10). So a live player's posed bones stop a probe, ranked through
+`bulletPriorityMap` like a pistol round's, the victim's own body never does,
+and a corpse or a dead player does not. INFERRED: 13 is `(int)(20 * 2/3)`,
+two of five probes clear; 6 is `(int)(20 / 3)`, one; none is zero clear
+with the second chance out of reach at 130 units. VERIFIED: the corpse rows
+read 20.
+
+vcod: `can_damage` traces each probe from the probe to the blast, against
+the collision world, every live script model (`GameHost::placed_script_models`,
+the set `bulletTrace` clips) and every other live, playing client's posed
+body (`HitBody`, through the same `trace_bodies` a bullet uses), posed at
+the tick's clock; the second chance traces the world alone with mask 0x11 and
+no static models. A grenade's blast takes its bodies from the sims; the
+`radiusDamage` builtin takes the pose `Server` mirrors onto the host before
+the script frame (`GameHost::client_bodies`) at the script `origin` of each
+client, so a `setOrigin` earlier in the frame moves the body.
+The replay column above holds at every anim phase the test pose was tried
+at but one: at yaw 135 one of nine phases reads 6 where retail read none,
+since the body's yaw and its pose decide which probes the bones cross.
+VERIFIED, the same probe against `vcod-server` on 2026-09-27: client 1 took
+13 shielded, 20 unshielded, 13 on each of the eight yaw rows, whose `angles`
+all read 0 there too, and 20 behind the corpse.
 
 ---
 

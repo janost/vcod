@@ -381,7 +381,8 @@ for t in allies axis allies axis; do
 done
 ```
 
-`probe_blastbody` takes the same recipe with 60 s on the server. Against ours
+`probe_blastbody` takes the same recipe with 120 s on the server and
+`--probe-secs 110` on the clients. Against ours
 the server half is
 `vcod-server mp_carentan --gametype-script crates/gsc/tests/fixtures/semantics/client-probes/probe_bomb.gsc`,
 whose log carries the same lines as `script: …`. Nothing here writes a
@@ -418,19 +419,81 @@ out. Retail, 2026-09-26, the first round of the run:
 ```
 
 `probe_blastbody` puts two clients on one line from a blast in the open and
-blasts twice at a flat 20, the second time with the front one moved off the
-line. Retail, 2026-09-26:
+blasts at a flat 20: once, once with the front one moved off the line, once
+per yaw 0 to 315 in steps of 45 with the front one back on its station and
+turned by `setPlayerAngles`, and once over its corpse. Each yaw row logs the front client's `angles` as they read back: the call did not
+land on every row, and the rows are read by the logged yaw. Retail,
+2026-09-27, the first run from the yaw rows on (the rows above them read as
+the second run's):
 
 ```
-0:17 PROBE place 0 (-226.00, 2424.00, -32.00)
-0:17 PROBE place 1 (-269.00, 2381.00, -32.00)
-0:17 PROBE place 2 (400.00, 3272.00, -23.88)
-0:17 PROBE place 3 (224.00, -1280.00, 1.86)
-0:18 PROBE blast shielded
-0:18 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
-0:18 D;1;axis;vcod;-1;world;;none;13;MOD_EXPLOSIVE;none
-0:20 PROBE blast unshielded (-300.00, 2473.00, -31.87) (-269.73, 2380.27, -31.87)
-0:20 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
-0:20 D;1;axis;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
-0:21 PROBE done
+0:23 PROBE blast yaw 0 (0.00, 0.00, 0.00) (-226.00, 2424.00, -31.87) (-271.00, 2379.00, -31.99)
+0:23 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:23 D;1;axis;vcod;-1;world;;none;13;MOD_EXPLOSIVE;none
+0:25 PROBE blast yaw 45 (0.00, 0.00, 0.00) (-226.00, 2424.00, -31.99) (-271.77, 2378.23, -31.99)
+0:25 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:25 D;1;axis;vcod;-1;world;;none;13;MOD_EXPLOSIVE;none
+0:28 PROBE blast yaw 90 (0.00, 0.00, 0.00) (-226.00, 2424.00, -31.87) (-272.53, 2377.47, -31.99)
+0:28 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:28 D;1;axis;vcod;-1;world;;none;13;MOD_EXPLOSIVE;none
+0:30 PROBE blast yaw 135 (0.00, 135.00, 0.00) (-226.00, 2424.00, -31.00) (-273.30, 2376.70, -31.99)
+0:30 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:33 PROBE blast yaw 180 (0.00, 180.00, 0.00) (-226.00, 2424.00, -31.00) (-273.30, 2376.70, -31.99)
+0:33 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:33 D;1;axis;vcod;-1;world;;none;6;MOD_EXPLOSIVE;none
+0:35 PROBE blast yaw 225 (0.00, 225.00, 0.00) (-226.00, 2424.00, -31.00) (-273.30, 2376.70, -31.99)
+0:35 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:38 PROBE blast yaw 270 (0.00, 270.00, 0.00) (-226.00, 2424.00, -31.00) (-273.30, 2376.70, -31.99)
+0:38 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:40 PROBE blast yaw 315 (0.00, 315.00, 0.00) (-226.00, 2424.00, -31.00) (-273.30, 2376.70, -31.99)
+0:40 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:42 K;0;allies;vcod;0;allies;vcod;none;100000;MOD_SUICIDE;none
+0:44 PROBE blast corpse dead (-273.30, 2376.70, -31.99)
+0:44 D;1;axis;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:45 PROBE done
 ```
+
+The second run, whole:
+
+```
+0:18 PROBE place 0 (-226.00, 2424.00, -32.00) (0.00, 0.00, 0.00)
+0:18 PROBE place 1 (-269.00, 2381.00, -32.00) (0.00, 0.00, 0.00)
+0:18 PROBE place 2 (400.00, 3272.00, -23.88) (0.00, 0.00, 0.00)
+0:18 PROBE place 3 (224.00, -1280.00, 1.86) (0.00, 0.00, 0.00)
+0:19 PROBE blast shielded
+0:19 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:19 D;1;axis;vcod;-1;world;;none;13;MOD_EXPLOSIVE;none
+0:21 PROBE blast unshielded (-300.00, 2473.00, -31.87) (-269.77, 2380.23, -31.87)
+0:21 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:21 D;1;axis;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:24 PROBE blast yaw 0 (0.00, 0.00, 0.00) (-226.00, 2424.00, -31.87) (-270.94, 2379.06, -31.87)
+0:24 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:24 D;1;axis;vcod;-1;world;;none;13;MOD_EXPLOSIVE;none
+0:26 PROBE blast yaw 45 (0.00, 0.00, 0.00) (-226.00, 2424.00, -31.87) (-271.71, 2378.29, -31.87)
+0:26 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:26 D;1;axis;vcod;-1;world;;none;13;MOD_EXPLOSIVE;none
+0:29 PROBE blast yaw 90 (0.00, 0.00, 0.00) (-226.00, 2424.00, -31.87) (-272.71, 2377.30, -31.87)
+0:29 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:29 D;1;axis;vcod;-1;world;;none;13;MOD_EXPLOSIVE;none
+0:31 PROBE blast yaw 135 (0.00, 0.00, 0.00) (-226.00, 2424.00, -31.87) (-272.71, 2377.30, -31.87)
+0:31 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:31 D;1;axis;vcod;-1;world;;none;13;MOD_EXPLOSIVE;none
+0:34 PROBE blast yaw 180 (0.00, 0.00, 0.00) (-226.00, 2424.00, -31.87) (-273.80, 2376.20, -31.87)
+0:34 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:34 D;1;axis;vcod;-1;world;;none;13;MOD_EXPLOSIVE;none
+0:36 PROBE blast yaw 225 (0.00, 0.00, 0.00) (-226.00, 2424.00, -31.78) (-274.66, 2375.34, -31.87)
+0:36 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:36 D;1;axis;vcod;-1;world;;none;13;MOD_EXPLOSIVE;none
+0:39 PROBE blast yaw 270 (0.00, 0.00, 0.00) (-226.00, 2424.00, -31.87) (-275.36, 2374.64, -31.87)
+0:39 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:39 D;1;axis;vcod;-1;world;;none;6;MOD_EXPLOSIVE;none
+0:41 PROBE blast yaw 315 (0.00, 0.00, 0.00) (-226.00, 2424.00, -31.87) (-275.80, 2374.21, -31.87)
+0:41 D;0;allies;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:41 D;1;axis;vcod;-1;world;;none;6;MOD_EXPLOSIVE;none
+0:43 K;0;allies;vcod;0;allies;vcod;none;100000;MOD_SUICIDE;none
+0:45 PROBE blast corpse dead (-276.51, 2373.49, -31.87)
+0:45 D;1;axis;vcod;-1;world;;none;20;MOD_EXPLOSIVE;none
+0:46 PROBE done
+```
+
+What the rows measure is `docs/research/cod11-combat.md` 14.4.

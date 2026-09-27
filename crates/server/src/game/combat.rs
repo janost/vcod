@@ -4,7 +4,7 @@
 
 use crate::game::hitrig::HitRigs;
 use crate::game::temp_entity::{Scope, TempEntity};
-use crate::spectate::{ClientSim, PmType};
+use crate::spectate::ClientSim;
 use glam::{Quat, Vec3};
 use vcod_common::animtree::PlayerAnims;
 use vcod_common::bonetrace::{bone_trace, PriorityMap};
@@ -499,9 +499,54 @@ enum Traced {
     Nothing,
 }
 
+/// A live player's body as a locational trace meets it (combat doc, section
+/// 3): the link box is the broad phase and the posed bones are the hit. Only a
+/// playing client has one: its contents are BODY, the bit the bullet and the
+/// blast masks both carry, where a corpse's CORPSE and a dead or spectating
+/// client's 0 meet neither.
+#[derive(Clone, Debug)]
+pub struct HitBody {
+    pub slot: usize,
+    /// `r.currentOrigin`, at the feet.
+    pub origin: Vec3,
+    /// Radians. A player entity is yaw-only.
+    pub yaw: f32,
+    pub mins: Vec3,
+    pub maxs: Vec3,
+    pub assembly: crate::game::hitrig::Assembly,
+    /// Wire `legsAnim` / `torsoAnim` and the serverTime each last started.
+    pub legs: i32,
+    pub torso: i32,
+    pub legs_start_ms: i32,
+    pub torso_start_ms: i32,
+    /// Degrees.
+    pub torso_pitch: f32,
+    /// A fraction of full lean.
+    pub lean: f32,
+}
+
+impl HitBody {
+    pub fn pose_inputs<'a>(
+        &self,
+        anims: &'a PlayerAnims,
+        now_ms: i32,
+    ) -> vcod_common::playerpose::PoseInputs<'a> {
+        vcod_common::playerpose::PoseInputs {
+            anims,
+            legs: self.legs,
+            torso: self.torso,
+            legs_start_ms: self.legs_start_ms,
+            torso_start_ms: self.torso_start_ms,
+            now_ms,
+            torso_pitch: self.torso_pitch,
+            waist_pitch: 0.0,
+            lean: self.lean,
+        }
+    }
+}
+
 /// The trace a bullet and a swing both make (combat doc, sections 2.2, 2.5
-/// and 3): the world, then every live player's link box in the order the ray
-/// reaches them, and the first one whose bones it scores.
+/// and 3): the world, then every live player's body.
 fn trace_attack(
     muzzle: Vec3,
     end: Vec3,
@@ -509,34 +554,64 @@ fn trace_attack(
     sims: &[(usize, &ClientSim)],
     world: Option<&CollisionWorld>,
     priority: &PriorityMap,
-    mut bones: Option<&mut BoneTraceCtx>,
+    bones: Option<&mut BoneTraceCtx>,
 ) -> Traced {
     let trace = world.map(|w| w.shot_trace(muzzle, end));
     let world_fraction = trace.as_ref().map_or(1.0, |t| t.fraction);
-    // The link box is the broad phase only: retail's locational trace then
-    // has to score a bone, and a ray can cross the column and meet none
-    // (combat doc, section 3). Candidates in the order the ray reaches them,
-    // and the first one whose bones it does score is the victim.
-    let mut candidates: Vec<(usize, &ClientSim, f32)> = sims
+    let bodies: Vec<HitBody> = sims
         .iter()
-        .filter(|(slot, sim)| *slot != attacker && sim.pm_type == PmType::Normal && !sim.dead)
-        .filter_map(|(slot, sim)| {
-            let lo = sim.ps.origin + sim.ps.mins();
-            let hi = sim.ps.origin + sim.ps.maxs();
-            let t = ray_box(muzzle, end, lo, hi)?;
-            (t < world_fraction).then_some((*slot, *sim, t))
+        .filter_map(|(s, sim)| sim.hit_body(*s))
+        .collect();
+    if let Some((slot, fraction, hitloc)) = trace_bodies(
+        muzzle,
+        end,
+        attacker,
+        &bodies,
+        world_fraction,
+        priority,
+        bones,
+    ) {
+        return Traced::Player {
+            slot,
+            fraction,
+            hitloc,
+        };
+    }
+    match trace {
+        Some(t) if t.fraction < 1.0 => Traced::World(t),
+        _ => Traced::Nothing,
+    }
+}
+
+/// The body a segment scores nearer than `limit`, skipping `pass`: slot,
+/// fraction along `start..end` and hit location. The link box is the broad
+/// phase only: retail's locational trace then has to score a bone, and a ray
+/// can cross the column and meet none (combat doc, section 3). Candidates in
+/// the order the ray reaches them, and the first one whose bones it does
+/// score is the answer.
+fn trace_bodies(
+    start: Vec3,
+    end: Vec3,
+    pass: usize,
+    bodies: &[HitBody],
+    limit: f32,
+    priority: &PriorityMap,
+    mut bones: Option<&mut BoneTraceCtx>,
+) -> Option<(usize, f32, &'static str)> {
+    let mut candidates: Vec<(&HitBody, f32)> = bodies
+        .iter()
+        .filter(|b| b.slot != pass)
+        .filter_map(|b| {
+            let t = ray_box(start, end, b.origin + b.mins, b.origin + b.maxs)?;
+            (t < limit).then_some((b, t))
         })
         .collect();
-    candidates.sort_by(|a, b| a.2.total_cmp(&b.2));
-    for (slot, sim, box_t) in candidates {
-        // No paks, no rig: the shot still lands, at no location, which the
+    candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
+    for (body, box_t) in candidates {
+        // No paks, no rig: the trace still lands, at no location, which the
         // shipped multiplier table reads as full damage.
         let Some(ctx) = bones.as_mut() else {
-            return Traced::Player {
-                slot,
-                fraction: box_t,
-                hitloc: "none",
-            };
+            return Some((body.slot, box_t, "none"));
         };
         let BoneTraceCtx {
             fs,
@@ -544,35 +619,24 @@ fn trace_attack(
             rigs,
             now_ms,
         } = &mut **ctx;
-        let Some(skel) = rigs.rig(fs, &sim.assembly) else {
-            return Traced::Player {
-                slot,
-                fraction: box_t,
-                hitloc: "none",
-            };
+        let Some(skel) = rigs.rig(fs, &body.assembly) else {
+            return Some((body.slot, box_t, "none"));
         };
-        let inputs = sim.pose_inputs(anims, *now_ms);
+        let inputs = body.pose_inputs(anims, *now_ms);
         let pose = pose_player(&skel, &inputs, |name| rigs.clip(fs, name));
-        // Into the victim's own frame: a player entity is yaw-only and its
-        // `tag_origin` sits at the feet.
-        let inv = Quat::from_rotation_z(-sim.ps.yaw);
-        let (ls, le) = (inv * (muzzle - sim.ps.origin), inv * (end - sim.ps.origin));
+        // Into the body's own frame: its `tag_origin` sits at the feet.
+        let inv = Quat::from_rotation_z(-body.yaw);
+        let (ls, le) = (inv * (start - body.origin), inv * (end - body.origin));
         let Some(hit) = bone_trace(&skel, &pose, ls, le, priority) else {
             continue;
         };
-        return Traced::Player {
-            slot,
-            fraction: hit.fraction,
-            hitloc: HITLOC_NAMES
-                .get(hit.hit_location as usize)
-                .copied()
-                .unwrap_or("none"),
-        };
+        let hitloc = HITLOC_NAMES
+            .get(hit.hit_location as usize)
+            .copied()
+            .unwrap_or("none");
+        return Some((body.slot, hit.fraction, hitloc));
     }
-    match trace {
-        Some(t) if t.fraction < 1.0 => Traced::World(t),
-        _ => Traced::Nothing,
-    }
+    None
 }
 
 /// The two a swing spawns a temp entity for
@@ -742,13 +806,16 @@ pub struct BlastVictim {
 /// `CanDamage`'s client arm (combat doc, 14.3): five traces at the body
 /// centre and at the corners of a 30-unit-wide, body-tall rectangle held
 /// broadside to the blast. None clear is 0, four or five is 1, anything
-/// between is `count / 3`. Each is a locational trace, so `models` stop it
-/// as the world does.
+/// between is `count / 3`. Each is a locational trace from the probe to the
+/// blast with the victim as its pass entity, so `models` and every other
+/// body in `bodies` stop it as the world does (14.4).
 pub fn can_damage(
     at: Vec3,
     v: &BlastVictim,
     world: &CollisionWorld,
     models: &[PlacedModel],
+    bodies: &[HitBody],
+    mut bones: Option<&mut BoneTraceCtx>,
 ) -> f32 {
     let mid = (v.eye + v.origin) * 0.5;
     let mut to_blast = at - v.origin;
@@ -763,12 +830,22 @@ pub fn can_damage(
         mid - across + up,
         mid - across - up,
     ];
+    let mask = vcod_common::collision::MASK_BLAST;
     let clear = probes
         .iter()
-        .filter(|p| {
-            let mask = vcod_common::collision::MASK_BLAST;
-            world.point_trace(at, **p, mask, true).fraction >= 1.0
-                && models.iter().all(|m| m.clip(at, **p, mask, 1.0).is_none())
+        .filter(|&&p| {
+            world.point_trace(p, at, mask, true).fraction >= 1.0
+                && models.iter().all(|m| m.clip(p, at, mask, 1.0).is_none())
+                && trace_bodies(
+                    p,
+                    at,
+                    v.slot,
+                    bodies,
+                    1.0,
+                    &BULLET_PRIORITY,
+                    bones.as_deref_mut(),
+                )
+                .is_none()
         })
         .count();
     match clear {
@@ -785,8 +862,8 @@ pub fn can_damage(
 /// chance's tenth when the trace to its box midpoint was blocked and that
 /// midpoint is inside `radius * 0.2`. Distance is origin to origin, which is
 /// what retail measures for anything that is not a brush model. `attacker`
-/// is `None` for a blast the world set off. `models` stop `CanDamage`'s
-/// traces and not the second chance's. Without a `world` nothing is
+/// is `None` for a blast the world set off. `models` and `bodies` stop
+/// `CanDamage`'s traces and not the second chance's. Without a `world` nothing is
 /// traced and every candidate inside the radius takes the falloff whole,
 /// which is what a unit test wants and what a host with no map has.
 #[allow(clippy::too_many_arguments)]
@@ -802,6 +879,8 @@ pub fn radius_damage(
     victims: &[BlastVictim],
     world: Option<&CollisionWorld>,
     models: &[PlacedModel],
+    bodies: &[HitBody],
+    mut bones: Option<&mut BoneTraceCtx>,
 ) -> Vec<Hit> {
     let radius = radius.max(1.0);
     let mut hits = Vec::new();
@@ -815,7 +894,9 @@ pub fn radius_damage(
         // ratios a script picks.
         let points =
             outer as f64 + (1.0 - dist as f64 / radius as f64) * (inner as f64 - outer as f64);
-        let fraction = world.map_or(1.0, |w| can_damage(at, v, w, models));
+        let fraction = world.map_or(1.0, |w| {
+            can_damage(at, v, w, models, bodies, bones.as_deref_mut())
+        });
         let damage = if fraction > 0.0 {
             (fraction as f64 * points) as i32
         } else {
@@ -1282,6 +1363,8 @@ mod tests {
             &v,
             None,
             &[],
+            &[],
+            None,
         );
         let by: std::collections::BTreeMap<usize, i32> =
             hits.iter().map(|h| (h.victim, h.damage)).collect();
@@ -1311,7 +1394,7 @@ mod tests {
         let near = blast_victim(1, 50.0);
         let far = blast_victim(2, 100.0);
         let open = vcod_common::collision::test_world(&[]);
-        assert_eq!(can_damage(at, &far, &open, &[]), 1.0);
+        assert_eq!(can_damage(at, &far, &open, &[], &[], None), 1.0);
 
         // Close to the victim and waist-high: the body centre and the two
         // low probes are behind it, the two shoulder ones clear it.
@@ -1319,14 +1402,14 @@ mod tests {
             Vec3::new(80.0, -64.0, 0.0),
             Vec3::new(88.0, 64.0, 40.0),
         )]);
-        assert!((can_damage(at, &far, &waist, &[]) - 2.0 / 3.0).abs() < 1e-6);
+        assert!((can_damage(at, &far, &waist, &[], &[], None) - 2.0 / 3.0).abs() < 1e-6);
 
         let wall = vcod_common::collision::test_world(&[(
             Vec3::new(20.0, -64.0, 0.0),
             Vec3::new(28.0, 64.0, 128.0),
         )]);
-        assert_eq!(can_damage(at, &far, &wall, &[]), 0.0);
-        assert_eq!(can_damage(at, &near, &wall, &[]), 0.0);
+        assert_eq!(can_damage(at, &far, &wall, &[], &[], None), 0.0);
+        assert_eq!(can_damage(at, &near, &wall, &[], &[], None), 0.0);
 
         let blast = |v: &BlastVictim, w: &vcod_common::collision::CollisionWorld| {
             radius_damage(
@@ -1341,6 +1424,8 @@ mod tests {
                 std::slice::from_ref(v),
                 Some(w),
                 &[],
+                &[],
+                None,
             )
         };
         // Two thirds of the falloff at 100 units: 87.14 * 2/3.
@@ -1363,7 +1448,9 @@ mod tests {
         use vcod_common::collision::ModelTri;
         let at = Vec3::new(0.0, 0.0, 8.0);
         let near = blast_victim(1, 50.0);
-        // One quad facing the blast at x 24, 128 across and 128 tall.
+        // One quad at x 24, 128 across and 128 tall, facing the victim: the
+        // clip is one-sided and `CanDamage` traces from the victim's probes
+        // toward the blast.
         let (a, b, c, d) = (
             Vec3::new(0.0, -64.0, 0.0),
             Vec3::new(0.0, 64.0, 0.0),
@@ -1379,12 +1466,12 @@ mod tests {
             id: EntId(200, 0),
             origin: Vec3::new(24.0, 0.0, 0.0),
             axis: glam::Mat3::IDENTITY,
-            tris: std::rc::Rc::from(vec![face([a, c, b]), face([a, d, c])]),
+            tris: std::rc::Rc::from(vec![face([a, b, c]), face([a, c, d])]),
         };
         let open = vcod_common::collision::test_world(&[]);
-        assert_eq!(can_damage(at, &near, &open, &[]), 1.0);
+        assert_eq!(can_damage(at, &near, &open, &[], &[], None), 1.0);
         let models = std::slice::from_ref(&wall);
-        assert_eq!(can_damage(at, &near, &open, models), 0.0);
+        assert_eq!(can_damage(at, &near, &open, models, &[], None), 0.0);
         let hits = radius_damage(
             at,
             350.0,
@@ -1397,11 +1484,141 @@ mod tests {
             std::slice::from_ref(&near),
             Some(&open),
             models,
+            &[],
+            None,
         );
         assert!(
             hits.is_empty(),
             "{:?}",
             hits.iter().map(|h| h.damage).collect::<Vec<_>>()
         );
+    }
+
+    /// A standing box body for the no-paks path, where the link box is the
+    /// whole hit.
+    fn box_body(slot: usize, x: f32) -> HitBody {
+        HitBody {
+            slot,
+            origin: Vec3::new(x, 0.0, 0.0),
+            yaw: 0.0,
+            mins: Vec3::new(-15.0, -15.0, 0.0),
+            maxs: Vec3::new(15.0, 15.0, 72.0),
+            assembly: Default::default(),
+            legs: 0,
+            torso: 0,
+            legs_start_ms: 0,
+            torso_start_ms: 0,
+            torso_pitch: 0.0,
+            lean: 0.0,
+        }
+    }
+
+    /// `CanDamage` traces with the victim as its pass entity, so another
+    /// player's body in the line stops a probe and the victim's own does not
+    /// (combat doc, 14.4). With no rig to pose, the link box is the hit.
+    #[test]
+    fn another_body_in_the_line_stops_the_probes_and_the_victims_own_does_not() {
+        let at = Vec3::new(0.0, 0.0, 8.0);
+        let far = blast_victim(2, 100.0);
+        let open = vcod_common::collision::test_world(&[]);
+        let own = [box_body(2, 100.0)];
+        assert_eq!(can_damage(at, &far, &open, &[], &own, None), 1.0);
+        let front = [box_body(1, 50.0), box_body(2, 100.0)];
+        assert_eq!(can_damage(at, &far, &open, &[], &front, None), 0.0);
+    }
+
+    /// `client-probes/probe_blastbody` on the retail server (combat doc,
+    /// 14.4): a 20-damage `radiusDamage` at 130 units, with an allied
+    /// carbine player standing 70 units down the same line at each yaw its
+    /// `angles` read back, and with its corpse there instead. The back
+    /// player's origin drifts between rows under the blasts' knockback, which
+    /// is what takes the last two yaw-0 rows from 13 to 6.
+    #[test]
+    fn a_body_in_the_line_shields_a_blast_the_way_the_retail_probe_measured() {
+        let Some(fs) = vcod_common::testing::game_fs() else {
+            return;
+        };
+        let anims = vcod_common::animtree::PlayerAnims::load(&fs).expect("the player anims");
+        let world = vcod_common::collision::test_world(&[]);
+        let mut rigs = HitRigs::default();
+        // Carentan's floor at -32 onto the test world's at 0.
+        let shift = Vec3::new(226.0, -2424.0, 32.0);
+        let at = Vec3::new(-176.8, 2473.1, 7.0) + shift;
+        let front_feet = Vec3::new(-226.0, 2424.0, -31.87) + shift;
+        // (front yaw, back x, back y, damage); `None` is the corpse.
+        let rows: [(Option<f32>, f32, f32, i32); 18] = [
+            (Some(0.0), -269.0, 2381.0, 13),
+            (Some(0.0), -271.0, 2379.0, 13),
+            (Some(0.0), -271.77, 2378.23, 13),
+            (Some(0.0), -272.53, 2377.47, 13),
+            (Some(0.0), -270.94, 2379.06, 13),
+            (Some(0.0), -271.71, 2378.29, 13),
+            (Some(0.0), -272.71, 2377.30, 13),
+            (Some(0.0), -273.80, 2376.20, 13),
+            (Some(0.0), -274.66, 2375.34, 13),
+            (Some(0.0), -275.36, 2374.64, 6),
+            (Some(0.0), -275.80, 2374.21, 6),
+            (Some(135.0), -273.30, 2376.70, 0),
+            (Some(180.0), -273.30, 2376.70, 6),
+            (Some(225.0), -273.30, 2376.70, 0),
+            (Some(270.0), -273.30, 2376.70, 0),
+            (Some(315.0), -273.30, 2376.70, 0),
+            (None, -273.30, 2376.70, 20),
+            (None, -276.51, 2373.49, 20),
+        ];
+        for (yaw, bx, by, want) in rows {
+            let back_feet = Vec3::new(bx, by, -31.99) + shift;
+            let mut back = new_for_test(back_feet.into(), 225.0);
+            back.assembly = stock_assembly();
+            let mut bodies = vec![back.hit_body(1).expect("a live body")];
+            if let Some(yaw) = yaw {
+                let mut front = new_for_test(front_feet.into(), yaw);
+                front.assembly = stock_assembly();
+                front.ps.on_ground = true;
+                let inputs = crate::spectate::AnimInputs {
+                    anims: &anims,
+                    weapon: "m1carbine_mp",
+                    weapon_class: "rifle",
+                };
+                front.update_anims(
+                    &inputs,
+                    &vcod_common::net::msg::NULL_USERCMD,
+                    0,
+                    &[],
+                    &mut 1u64,
+                );
+                bodies.push(front.hit_body(0).expect("a live body"));
+            }
+            let victim = BlastVictim {
+                slot: 1,
+                origin: back_feet,
+                mins: Vec3::new(-15.0, -15.0, 0.0),
+                maxs: Vec3::new(15.0, 15.0, 72.0),
+                eye: back_feet + Vec3::Z * 60.0,
+            };
+            let mut ctx = BoneTraceCtx {
+                fs: &fs,
+                anims: &anims,
+                rigs: &mut rigs,
+                now_ms: 0,
+            };
+            let hits = radius_damage(
+                at,
+                500.0,
+                20.0,
+                20.0,
+                None,
+                None,
+                "none",
+                "MOD_EXPLOSIVE",
+                std::slice::from_ref(&victim),
+                Some(&world),
+                &[],
+                &bodies,
+                Some(&mut ctx),
+            );
+            let got = hits.first().map_or(0, |h| h.damage);
+            assert_eq!(got, want, "front yaw {yaw:?}, back at ({bx}, {by})");
+        }
     }
 }
