@@ -881,9 +881,9 @@ never pasted decompiler output or disassembly listings.
   looking. `Attack::Throw` therefore has to be taken off the raised event
   during `replay_moves`, before the sim moves on. It must not travel:
   `eventParms[i]` is an 8-bit netfield and a 4000 ms fuse arrives as 160,
-  where retail's throw frame reads `eventParms=0,0,0,0`, so `ClientSim::step`
-  writes 0 to the ring for those two events and keeps the fuse in the returned
-  `PmEvent`.
+  where retail's throw frame reads `eventParms=0,0,0,0`, so
+  `pmove::cmd::player_step` writes 0 to the ring for those two events and
+  keeps the fuse in the returned `PmEvent`.
 - The explode rides the missile's own entity, not a temp entity. It flips its
   `eType` to 0, sets `eFlags` 256 and writes `EV_GRENADE_EXPLODE` on its own
   ring, so anything filtering entities on `eType == 4` drops exactly the frame
@@ -911,16 +911,26 @@ never pasted decompiler output or disassembly listings.
   `_gameobjects::main` `delete()`s every entity whose `script_gameobjectname`
   the gametype did not list, which takes carentan's two bombzone
   `script_brushmodel`s out of every gametype but `sd`; the `delete` builtin
-  unlinks the model and the slope gate applies the script's rule itself.
+  unlinks the model, and a world no script runs on (the predictor, the
+  gates) applies the script's rule through
+  `CollisionWorld::unlink_script_brushes`.
   `solid()`/`notSolid()` are the other half of the same thing: retail's
   `SP_script_brushmodel` gives an exploder brush model no spawn state of its
   own, and `_load.gsc` is what `notsolid()`s the four on mp_depot, mp_powcamp
   and mp_rocket, so a builtin that writes the flag without touching the clip
   leaves three stock maps carrying collision retail does not.
-- `pmove/predict.rs` and `weapon_table.rs` in `vcod-common` are copies of
-  `ClientSim::step`, `replay_moves` and `WeaponTable::from_defs` until the
-  dedupe: change them together. `crates/server/tests/predict_ab.rs` is the
-  gate, and it needs the paks, so CI skips it.
+- A playing client's cmd step has one implementation, `pmove/cmd.rs` in
+  `vcod-common`: `chop` is `Pmove`'s 66 ms walk with the arrears bound and
+  `player_step` is one `PmoveSingle` with the view, the prone caps' push on
+  `delta_angles` and the event ring. The server's `replay_moves` and
+  `ClientSim::step` wrap it with what only the server does (the aim block,
+  the flood resync, dead, spectator and intermission arms, anims, the
+  link); the client's predictor (`pmove/predict.rs`) runs it on a sim
+  rebuilt by `from_wire`. The weapon index walk is `weapon_table.rs`'s
+  `assign_indices` for both ends, and `CollisionWorld::unlink_script_brushes`
+  is the map-load scripts' clip rule for every world no script runs on.
+  `crates/server/tests/predict_ab.rs` holds the wire round trip, and it needs
+  the paks, so CI skips it.
 - A stock frag bounces off a live player rather than detonating on it.
   `fraggrenade_mp` spells `damage` 0, and retail's direct-hit `MOD_GRENADE`
   arm is gated on that field, so the contact applies the soft damping and the
