@@ -593,13 +593,16 @@ arg0 = `surfType`, arg1 = the string `"tag_flash"`. Both pass the event's own
 `es.surfType`, and for 175/176 the server writes the literal 7 (section 2), so
 INFERRED: a client hit always takes the flesh branch below. It returns at once when
 `cg_tracerchance` (value at `0x301df448`) is `<= 0` or when `CG_GetMuzzlePoint`
-@ `0x30039440` cannot resolve `tag_flash` on the shooter entity. Unless the
-shooter is the entity being viewed first person, it rolls
+@ `0x30039440` cannot resolve `tag_flash` on the shooter entity. A shooter
+that is the body the view rides skips the roll and the tracer and goes
+straight to the whizby: VERIFIED, `test [snap+0x18],0x50000` at `0x300395c8`
+and `cmp ebx,[snap+0xb8]` at `0x300395d1`, whose `je` lands on the whizby
+call at `0x30039628`. Any other shooter rolls
 `rand() < cg_tracerchance * RAND_MAX`. On success a flesh hit
 (`surfType == 7`) calls the segment setup at `0x30039340` directly, and every
 other surface calls `CG_SpawnTracer` @ `0x30038f30` with the muzzle point and
-the impact position. In every case it then calls
-`CG_BulletWhizby` @ `0x30038dc0`, which plays the whiz-by sound near the
+the impact position. INFERRED, from the branches above: in every case it then
+calls `CG_BulletWhizby` @ `0x30038dc0`, which plays the whiz-by sound near the
 `cg.refdef` origin.
 
 `0x30039340` is the flesh branch's one-frame segment, drawn once at a random
@@ -617,9 +620,12 @@ The tracer is drawn with the shader `gfx/misc/tracer`
 
 The "viewing this entity first person" suppression is
 `(cg.snap->ps.pm_flags & 0x50000) && shooterEnt == cg.snap->ps.clientNum`, see
-section 7. For a follow-spectator that means the followed player's own tracers
-are suppressed by the retail client; vcod draws them from the view muzzle
-instead. The test never suppresses a 175/176: those reach only the victim's
+section 7; `snap+0x18` and `snap+0xb8` are `ps+0xc` (`pm_flags`) and `ps+0xac`
+(`clientNum`), INFERRED from the snapshot header ahead of `ps`. VERIFIED, the
+routine reads no other flag and no cvar besides `cg_tracerchance`: no third
+person, no sight test. So a playing client never sees its own tracers, and a
+follow-spectator never sees the followed player's. vcod applies the same test
+(`fx::registry::view_body`). The test never suppresses a 175/176: those reach only the victim's
 `ps.clientNum` (section 2), and INFERRED, the shooter of the round is never the
 player it hit, since a bullet trace skips its own shooter.
 
