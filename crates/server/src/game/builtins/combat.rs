@@ -39,10 +39,9 @@ const EV_OBITUARY: i32 = 201;
 /// caller continues, which is what lets the stock damage callback read
 /// `self.sessionstate` on its next line and find it `"dead"`.
 ///
-/// Retail also raises the flesh impact events here; `bullet_fire` raises
-/// them with the shot instead, so a hit the script refuses (friendly fire
-/// off) still shows an impact. The 250 clamp and `pm_time` of 4.5's
-/// knockback are the sim's.
+/// A bullet weapon's hit raises its two flesh impacts here and nowhere else,
+/// so a hit the script refuses (friendly fire off) shows none. The 250 clamp
+/// and `pm_time` of 4.5's knockback are the sim's.
 pub fn finish_player_damage(
     host: &mut GameHost,
     cx: &mut Cx,
@@ -67,6 +66,30 @@ pub fn finish_player_damage(
         }
         _ => None,
     };
+    let dir = match dir {
+        Value::Vector(d) => Vec3::from(*d).normalize_or_zero().into(),
+        _ => [0.0; 3],
+    };
+    let point = match point {
+        Value::Vector(p) => *p,
+        _ => [0.0; 3],
+    };
+    let bullet = match weapon {
+        Value::String(w) => crate::configstrings::weapon_index(cx.resolve(*w))
+            .and_then(|i| host.weapons.get(i))
+            .filter(|d| d.weapon_type == "bullet")
+            .map(|d| d.sounds.rifle_bullet),
+        _ => None,
+    };
+    if let Some(rifle_bullet) = bullet {
+        // No attacker entity reads as `g_entities[ENTITYNUM_WORLD]` (4.5).
+        let other = match attacker {
+            Value::Entity(a) => a.0,
+            _ => ENTITYNUM_WORLD,
+        };
+        let pair = crate::game::combat::flesh_impacts(point, dir, rifle_bullet, other, slot);
+        host.temp_entities.extend(pair);
+    }
     let attacker_origin = match attacker {
         Value::Entity(a) => {
             let origin = cx.intern_folded("origin");
@@ -87,18 +110,11 @@ pub fn finish_player_damage(
         v.health = 0;
         v.dead = true;
     }
-    let dir = match dir {
-        Value::Vector(d) => Vec3::from(*d).normalize_or_zero().into(),
-        _ => [0.0; 3],
-    };
     host.client_sim_ops.push((
         slot,
         SimOp::Damaged {
             damage,
-            point: match point {
-                Value::Vector(p) => *p,
-                _ => [0.0; 3],
-            },
+            point,
             dir,
             knockback: dflags & DFLAG_NO_KNOCKBACK == 0,
             attacker: attacker_slot,

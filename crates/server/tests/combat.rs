@@ -39,7 +39,7 @@ fn cfg() -> vcod_server::ServerConfig {
 /// The damage path end to end, on the retail hit capture's numbers (combat
 /// doc, section 8.4): A puts a carbine round into B's head from 40 units
 /// down the sight, and B's next snapshot reads health 33, `damageCount` 67,
-/// `EV_PAIN` 33, the flesh impact reaches A and not B; a second round kills,
+/// `EV_PAIN` 33, the flesh impact reaches A and the client impact B; a second round kills,
 /// and B reads `pm_type` 6, `EV_DEATH`, the dead yaw toward A, and both are
 /// sent the `MOD_HEAD_SHOT` obituary.
 ///
@@ -149,13 +149,38 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     assert_eq!(sb.ps.field_i32(p, "eventParms[0]"), 33);
     let vx = sb.ps.field_f32(p, "velocity[0]");
     assert!(vx > 70.0, "the knockback pushes B along the shot, {vx}");
-    let flesh = |snap: &vcod_common::net::snapshot::Snapshot| {
+    // The carbine is a `rifleBullet` weapon, so the large pair: 174 for
+    // everyone but the victim, 176 for the victim alone.
+    let event = |snap: &vcod_common::net::snapshot::Snapshot, ev: i32| {
         snap.entities
             .values()
-            .any(|e| e.field_i32(p, "eType") == 12 + 174 && e.field_i32(p, "surfType") == 7)
+            .find(|e| e.field_i32(p, "eType") == 12 + ev)
+            .cloned()
     };
-    assert!(flesh(sa), "A is sent the flesh impact");
-    assert!(!flesh(sb), "the victim is not");
+    let plain = event(sa, 174).expect("A is sent the flesh impact");
+    assert!(event(sb, 174).is_none(), "the victim is not");
+    let client = event(sb, 176).expect("the victim is sent the client impact");
+    assert!(event(sa, 176).is_none(), "A is not");
+    let along_x = vcod_common::net::events::dir_to_byte([1.0, 0.0, 0.0]);
+    for (name, want) in [
+        ("surfType", 7),
+        ("otherEntityNum", na as i32),
+        ("eventParm", along_x),
+        ("_union.scale", along_x),
+        ("clientNum", 0),
+    ] {
+        assert_eq!(plain.field_i32(p, name), want, "174 {name}");
+    }
+    for (name, want) in [
+        ("surfType", 7),
+        ("otherEntityNum", na as i32),
+        ("eventParm", 0),
+        ("_union.scale", 0),
+        ("clientNum", nb as i32),
+    ] {
+        assert_eq!(client.field_i32(p, name), want, "176 {name}");
+    }
+    assert_eq!(plain.origin(p), client.origin(p), "both at the hit point");
     // No pain animation: retail's hit frame keeps the standing idle, or the
     // run the knockback selects for a frame (combat doc, 3.4).
     let legs = sa.entities[&(nb as u32)].field_i32(p, "legsAnim") & 511;
@@ -711,7 +736,18 @@ fn a_melee_swing_hits_and_the_kill_shows_the_melee_icon() {
         }
         hits += 1;
         if hits == 1 {
-            after_first = Some(cb.snapshots().newest().unwrap().ps.health());
+            let sb = cb.snapshots().newest().unwrap();
+            after_first = Some(sb.ps.health());
+            // The swing's weapon is the carbine, a `weaponType` bullet, so
+            // `finishPlayerDamage` raises the flesh pair beside the melee hit,
+            // as the 2026-09-27 retail melee run read (combat doc 4.5).
+            let has = |snap: &vcod_common::net::snapshot::Snapshot, ev: i32| {
+                snap.entities
+                    .values()
+                    .any(|e| e.field_i32(p, "eType") == 12 + ev)
+            };
+            assert!(has(sa, 174) && !has(sa, 176), "A is sent the plain copy");
+            assert!(has(sb, 176) && !has(sb, 174), "B is sent the client copy");
         } else {
             break;
         }

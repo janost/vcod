@@ -1879,7 +1879,32 @@ conditions.
 
 INFERRED: the two `gentity+0xF4` writes are the entity-shared visibility flags
 and the pair sends the plain impact to everybody but the victim and the
-client-flavoured one to the victim alone.
+client-flavoured one to the victim alone. The engine's side of that, which
+compares `r.singleClient` with the snapshot's `ps.clientNum` rather than the
+slot, and the retail run that measured both halves, are
+`docs/research/cod11-events-and-fx.md` section 2.
+
+VERIFIED: the attacker pointer the two `otherEntityNum` writes read
+(`ebp-0x40`) starts as `g_entities + 0xc49d8` (`0x43778`), entity 1022 at
+the gentity size `0x314`, and is replaced only by `Scr_GetEntity` at
+`0x43864`. INFERRED: a call with no attacker entity names the world.
+
+INFERRED, from the weapon test and 4.2's step 5: the pair follows the weapon
+the callback was handed, not the means of death, so a melee hit with a rifle
+raises it beside `EV_MELEE_HIT`, a turret round raises it off the gunner's
+weapon, and a grenade's blast, whose inflictor carries the frag, raises
+none. VERIFIED live for melee, 2026-09-27 (events-and-fx doc section 2): each
+landed swing put a 174 with `surfType` 7 in the swinger's snapshot and a 176
+in the victim's. INFERRED from the callback being the only site: a hit the
+gametype's `Callback_PlayerDamage` refuses before calling
+`finishPlayerDamage`, a teammate's with friendly fire off, raises no impact
+at all, since `Bullet_Fire_Extended` raises none on a client (2.4 step 2).
+
+**As implemented.** `finish_player_damage`
+(`crates/server/src/game/builtins/combat.rs`) raises the pair through
+`combat::flesh_impacts` on a `weaponType bullet` weapon, before its own
+guard against a dead victim, and `bullet_fire` raises no impact on a player.
+`self->flags & 1` is not modelled.
 
 **Health, and the order**, `0x43b7e` onward. VERIFIED: the offsets,
 immediates, event numbers and call targets named in the list below.
@@ -2770,7 +2795,7 @@ in-process test and the headless run cover that path). PENDING.
 
 Named here so a reader of sections 1 to 7 does not assume the code follows
 them: rifle rounds passing through a player at half damage (2.3); the
-`pm_time` stun (4.5); the view kick of 6's step 6; events 175 and 176;
+`pm_time` stun (4.5); the view kick of 6's step 6;
 `EV_CROUCH_PAIN` (188);
 the `EV_RAISE_WEAPON` (155) retail raises on the death frame beside `EV_DEATH`;
 the direct-hit `MOD_GRENADE` arm (13.1), which a stock frag cannot reach

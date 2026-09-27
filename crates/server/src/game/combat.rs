@@ -206,9 +206,9 @@ pub struct Hit {
 }
 
 pub struct ShotResult {
-    /// The impact event: a wall hit for everyone, or a flesh hit for everyone
-    /// but the victim. `None` when the bullet hit nothing, or a surface that
-    /// asks for no impact.
+    /// The impact event of a wall hit or of a melee swing. `None` when the
+    /// bullet hit nothing, a surface that asks for no impact, or a player:
+    /// a bullet's flesh impacts are `finishPlayerDamage`'s ([`flesh_impacts`]).
     pub impact: Option<TempEntity>,
     pub hit: Option<Hit>,
 }
@@ -217,6 +217,10 @@ pub struct ShotResult {
 /// (`docs/research/cod11-events-and-fx.md` section 1).
 const EV_BULLET_HIT_SMALL: i32 = 173;
 const EV_BULLET_HIT_LARGE: i32 = 174;
+/// `EV_BULLET_HIT_CLIENT_SMALL` / `EV_BULLET_HIT_CLIENT_LARGE`, the victim's
+/// copy of a flesh hit (`docs/research/cod11-events-and-fx.md` section 2).
+const EV_BULLET_HIT_CLIENT_SMALL: i32 = 175;
+const EV_BULLET_HIT_CLIENT_LARGE: i32 = 176;
 /// The flesh `surfType` `finishPlayerDamage` hardcodes (combat doc, 4.5).
 const SURF_FLESH: i32 = 7;
 /// The surface flag that suppresses the impact effect (combat doc, 2.3).
@@ -439,20 +443,8 @@ fn fire_round(
             let point = muzzle + (end - muzzle) * fraction;
             let damage = located_damage(round.damage, hitlocs.multiplier(hitloc));
             ShotResult {
-                impact: Some(TempEntity {
-                    event,
-                    parm: dir_to_byte(forward.into()),
-                    surf_type: SURF_FLESH,
-                    other: shooter as u32,
-                    // `G_TempEntity` zeroes the state; only the obituary and
-                    // the melee events fill it.
-                    attacker: 0,
-                    weapon: 0,
-                    origin: point.into(),
-                    client_num: 0,
-                    scale: 0,
-                    scope: Scope::AllBut(slot),
-                }),
+                // `Bullet_Fire_Extended` raises no impact on a client (2.4).
+                impact: None,
                 hit: Some(Hit {
                     victim: slot,
                     attacker: shooter,
@@ -484,6 +476,47 @@ fn fire_round(
         },
         _ => none,
     }
+}
+
+/// The pair `finishPlayerDamage` raises at `point` for a hit with a
+/// `weaponType` bullet weapon (combat doc 4.5): the plain flesh impact for
+/// every snapshot but the victim's (`svFlags` 0x2000) and the client one for
+/// the victim's alone (0x800). `dir` is the callback's `vDir` normalized, or
+/// zero; `attacker` is `otherEntityNum`, the world when no entity was passed.
+pub fn flesh_impacts(
+    point: [f32; 3],
+    dir: [f32; 3],
+    rifle_bullet: bool,
+    attacker: u32,
+    victim: usize,
+) -> [TempEntity; 2] {
+    let (plain, client) = if rifle_bullet {
+        (EV_BULLET_HIT_LARGE, EV_BULLET_HIT_CLIENT_LARGE)
+    } else {
+        (EV_BULLET_HIT_SMALL, EV_BULLET_HIT_CLIENT_SMALL)
+    };
+    let byte = dir_to_byte(dir);
+    let base = TempEntity {
+        event: plain,
+        parm: byte,
+        surf_type: SURF_FLESH,
+        other: attacker,
+        attacker: 0,
+        weapon: 0,
+        client_num: 0,
+        scale: byte,
+        origin: point,
+        scope: Scope::AllBut(victim),
+    };
+    let client = TempEntity {
+        event: client,
+        parm: 0,
+        scale: 0,
+        client_num: victim as i32,
+        scope: Scope::Only(victim),
+        ..base
+    };
+    [base, client]
 }
 
 /// What an attack's trace found: the nearest live player whose bones the ray
@@ -1142,10 +1175,7 @@ mod tests {
             hit.point
         );
         assert!((hit.dir[0] - 1.0).abs() < 1e-5);
-        let te = r.impact.expect("a flesh impact");
-        assert_eq!((te.event, te.surf_type), (174, 7));
-        assert_eq!(te.scope, Scope::AllBut(1));
-        assert_eq!(te.other, 0);
+        assert!(r.impact.is_none(), "the flesh pair is the callback's");
 
         // Looking down: the floor, broadcast, with the floor's material.
         a.ps.pitch = -1.2;
@@ -1187,11 +1217,7 @@ mod tests {
         assert_eq!(hit.weapon, "m1carbine_mp");
         assert!((hit.point[0] - 85.0).abs() < 0.01, "{:?}", hit.point);
         assert!((hit.point[2] - 40.0).abs() < 0.01, "{:?}", hit.point);
-        let te = r.impact.expect("a flesh impact");
-        assert_eq!(
-            (te.event, te.surf_type, te.scope),
-            (174, 7, Scope::AllBut(1))
-        );
+        assert!(r.impact.is_none(), "the flesh pair is the callback's");
     }
 
     /// `G_Damage` multiplies on the x87 stack and truncates (combat doc 4.2):
@@ -1239,7 +1265,41 @@ mod tests {
             (hit.mod_, hit.dflags, hit.damage),
             ("MOD_PISTOL_BULLET", 0, 30)
         );
-        assert_eq!(r.impact.unwrap().event, 173);
+    }
+
+    /// Combat doc 4.5: the plain copy carries the direction twice and goes
+    /// to everyone but the victim, the client copy carries the victim's
+    /// number and no direction and goes to the victim alone; `rifleBullet`
+    /// picks the large pair.
+    #[test]
+    fn a_flesh_hit_is_a_plain_copy_for_others_and_a_client_copy_for_the_victim() {
+        let [plain, client] = flesh_impacts([85.5, 0.0, 40.0], [1.0, 0.0, 0.0], false, 3, 1);
+        let x = dir_to_byte([1.0, 0.0, 0.0]);
+        assert_eq!(
+            (
+                plain.event,
+                plain.parm,
+                plain.scale,
+                plain.surf_type,
+                plain.other
+            ),
+            (173, x, x, 7, 3)
+        );
+        assert_eq!((plain.client_num, plain.scope), (0, Scope::AllBut(1)));
+        assert_eq!(
+            (
+                client.event,
+                client.parm,
+                client.scale,
+                client.surf_type,
+                client.other
+            ),
+            (175, 0, 0, 7, 3)
+        );
+        assert_eq!((client.client_num, client.scope), (1, Scope::Only(1)));
+        assert_eq!(plain.origin, client.origin);
+        let [plain, client] = flesh_impacts([0.0; 3], [0.0; 3], true, 1022, 0);
+        assert_eq!((plain.event, client.event), (174, 176));
     }
 
     fn melee_carbine() -> WeaponDef {

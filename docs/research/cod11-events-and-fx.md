@@ -212,10 +212,13 @@ CG_BulletHitWall(event=eax, pos=cent->lerpOrigin, surfType=ebx=es.surfType,
                  attacker=es.otherEntityNum, dirA, dirB);   // 0x30039640
 ```
 
-A flesh hit reaches everyone else as one of these with `surfType == 7`: the
-player-hit path (`game.mp.i386.so 0x43ab5` to `0x43af1`) hardcodes
-`te->s.surfType = 7` and sets the gentity's `svFlags` byte at `+0xf5 |= 0x20`
-with `r.singleClient = victim` (send-to-all-but-victim).
+A flesh hit reaches everyone else as one of these with `surfType == 7`.
+VERIFIED: the player-hit path in `finishPlayerDamage`
+(`game.mp.i386.so 0x43ab5` to `0x43b0a`) hardcodes `te->s.surfType = 7`,
+writes `DirToByte` of the normalized `vDir` to both `eventParm` and `scale`,
+ORs `0x20` into the `svFlags` byte at `+0xf5` (that is, `svFlags |= 0x2000`)
+and stores the victim's `ps->clientNum` in `r.singleClient` (`+0xf8`). The
+delivery rule under the next event says what `0x2000` does with it.
 
 ### `EV_BULLET_HIT_CLIENT_SMALL` (175) / `EV_BULLET_HIT_CLIENT_LARGE` (176)
 
@@ -225,11 +228,16 @@ with `r.singleClient = victim` (send-to-all-but-victim).
 te->s.surfType       (136) = 7;                   // always flesh
 te->s.otherEntityNum (116) = attacker entity number;
 te->s.clientNum      (144) = victim's clientNum;
-te->r.svFlags        (244) = 0x800;               // single-client delivery
+te->r.svFlags        (244) = 0x800;               // a store, not an OR
 te->r.singleClient   (248) = victim's clientNum;
 ```
 
-No direction bytes. Consumer, `CG_EntityPreEvent` case 175/176 @ `0x3001e8d9`:
+No direction bytes. VERIFIED: with no attacker entity passed,
+`otherEntityNum` is 1022, since the attacker pointer starts as
+`g_entities + 0xc49d8` (`0x43778`) and `0xc49d8` is `1022 * 0x314`, the
+gentity size the `imul` at `0x4379b` indexes by. The pair and the conditions
+it is raised on (a `weaponType` 0 weapon, melee included) are
+`docs/research/cod11-combat.md` 4.5. Consumer, `CG_EntityPreEvent` case 175/176 @ `0x3001e8d9`:
 `CG_BulletHitFlesh(pos=cent->lerpOrigin, surfType=es.surfType, attacker=es.otherEntityNum)`
 @ `0x300396f0`. VERIFIED, the register loads at `0x3001e8d9`..`0x3001e8ea`:
 `edx = es+0x74` (`otherEntityNum`, pushed), `edi = es+0x88` (`surfType`),
@@ -256,10 +264,39 @@ entity pass `0x808e298` at `0x808f301`. VERIFIED: that pass tests `svFlags`
 (`gentity+0xf4`) for `0x800` at `0x808e322` and compares `r.singleClient`
 (`+0xf8`) with that argument at `0x808e32a`, and tests `0x2000` at
 `0x808e336` against the same compare at `0x808e345`. INFERRED from those
-branches: 175/176 go only to the snapshots whose `ps.clientNum` is the victim,
-and the plain 173/174 flesh copy to every other. A follow-spectator's
-`ps.clientNum` is the followed player's (section 7), so INFERRED: whoever
-follows the victim receives the victim's 175/176 and not the 173/174 copy.
+branches: an entity with `0x800` is skipped when `r.singleClient` differs from
+the snapshot's `ps.clientNum` (`jne` at `0x808e330`), and one with `0x2000` is
+skipped when it equals it (`je` at `0x808e34b`). So 175/176 go only to the
+snapshots whose `ps.clientNum` is the victim, and the plain 173/174 flesh copy
+to every other. Both carry no `SVF_BROADCAST`, so both are PVS-culled after
+that. A follow-spectator's `ps.clientNum` is the followed player's (section
+7), so INFERRED: whoever follows the victim receives the victim's 175/176 and
+not the 173/174 copy.
+
+VERIFIED live, 2026-09-27, the retail 1.1d server running
+`client-probes/probe_bump` as the gametype with `+set probe_teleport 1`, a
+`--probe-target` client and a `--save-hit --probe-sweep` client placed 200
+units apart, both printing every 173 to 176 they drained:
+
+- The victim (client 0) received 176 on every hit, `surfType` 7,
+  `otherEntityNum` 1 (the shooter), `eventParm` 0, and no 174 with
+  `surfType` 7 in the same frame. The shooter received the 174 with
+  `surfType` 7 at the same origin on the same frame, `eventParm` 52 or 53,
+  and no 176.
+- During the victim's killcam the victim received the 174 flesh copies of the
+  shots that had killed it, at their original origins, and no 176. Those
+  frames carried health 100 and `eFlags` with `0x400`. VERIFIED: the stock
+  `maps/mp/gametypes/dm.gsc` `killcam` (`pak5.pk3`) sets
+  `self.spectatorclient` to the attacker's number and `self.archivetime` to
+  the delay plus 7. INFERRED: a killcam frame is the killer's archived
+  playerstate, so its `ps.clientNum` is the killer's and the `0x2000` test
+  lets the plain copy through. This is the
+  delivery rule keyed on the frame's `ps.clientNum` and not on the slot the
+  snapshot goes to.
+- A second run with `--probe-melee` on both halves, target in slot 1: each
+  swing that landed (`D;` lines with `MOD_MELEE`) put a 174 with `surfType` 7
+  and `eventParm` 111 or 112 in the swinger's snapshot beside the `EV_MELEE_HIT`,
+  and a 176 with `clientNum` 1 in the victim's.
 
 VERIFIED live (2026-08-24, 51.195.89.86:28960, 100s capture during active
 combat, taken by a free-flying spectator): 175/176 never arrived while 173
@@ -268,6 +305,11 @@ its own, so this matches the delivery rule above; it does not show that the
 events are unused. vcod resolves 175/176 in play mode and while following,
 through the same path as 173/174 minus the impact effect
 (`crates/client/src/fx/registry.rs`, `crates/client/src/audio/cues.rs`).
+vcod's server raises the pair in `finishPlayerDamage`
+(`crates/server/src/game/builtins/combat.rs`, `combat::flesh_impacts`) and
+filters it per snapshot against the frame's `ps.clientNum`
+(`crates/server/src/game/temp_entity.rs`); it has no killcam and no follow, so
+that number is always the client's own.
 
 ### `EV_GRENADE_BOUNCE` (177), `EV_GRENADE_EXPLODE` (178), `EV_ROCKET_EXPLODE` (179) / `_NOMARKS` (180)
 

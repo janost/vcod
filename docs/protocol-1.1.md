@@ -453,8 +453,10 @@ and `+0x164`; and the immediates `0x01`, `0x18`, `0x0800`, `0x2000` and
 INFERRED, since every clause below is a branch condition, the per-entity rule
 is: skip an entity whose `+0xf0` is zero; skip one whose `+0xf4` has `0x01`
 set; with `0x0800` set send it only to the client in `+0xf8`, and with `0x2000`
-set send it to every client except that one; never send a client its own
-entity, which is the entity whose number equals `ps.clientNum`; send
+set send it to every client except that one, where "the client" is the
+snapshot's `ps.clientNum`, a followed or killcam player's number rather than
+the slot's (`docs/research/cod11-events-and-fx.md` section 2); never send a
+client its own entity, which is the entity whose number equals `ps.clientNum`; send
 unconditionally if `+0xf4` has either bit of `0x18`; otherwise require the
 entity's area to connect to the client's and at least one of its `+0x118`
 clusters to be set in the client's PVS row, with a scan up to `+0x15c` when the

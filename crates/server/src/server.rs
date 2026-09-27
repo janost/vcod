@@ -3699,6 +3699,9 @@ impl Server {
             // and its prediction judders (docs/protocol-1.1.md).
             let command_time = c.last_processed_st;
             let message_num = c.netchan.outgoing_sequence;
+            // The frame's `ps.clientNum`, which the single-client flags test
+            // against; a follow would make it the followed player's.
+            let client_num = slot;
 
             // Retail sends a client only what its own position can see, so
             // the list is per client rather than one list cloned into every
@@ -3715,7 +3718,9 @@ impl Server {
             // `SVF_BROADCAST` does (docs/protocol-1.1.md, "Which entities a
             // client is sent").
             for (te, (n, e)) in temps.iter().zip(&temp_states) {
-                if temp_entity::visible_to(te, slot) && te.scope != temp_entity::Scope::Broadcast {
+                if temp_entity::visible_to(te, client_num)
+                    && te.scope != temp_entity::Scope::Broadcast
+                {
                     sendable.insert(*n, e.clone());
                 }
             }
@@ -3736,7 +3741,7 @@ impl Server {
                 visible.extend(rt.missiles().entities(self.proto));
             }
 
-            let mut ps = sim.to_wire(self.proto, slot as i32, command_time);
+            let mut ps = sim.to_wire(self.proto, client_num as i32, command_time);
             // The script's HUD elements, filtered for this client the way
             // `HudElem_UpdateClient` filters them; retail rebuilds both
             // arrays into the playerstate once per client per frame, so
