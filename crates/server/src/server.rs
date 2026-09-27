@@ -199,6 +199,9 @@ pub(crate) struct Shot {
     /// The aim the cmd's aim block left (`ClientSim::aim_angles`), which
     /// down a sight is the swayed gun rather than the view (combat doc, 15).
     pub aim: [f32; 2],
+    /// The stance and the eye's leg the hip minimum is read off, at the
+    /// cmd's `commandTime` against the frame's clock (combat doc, 2.1).
+    pub stance: vcod_common::pmove::weapon::SpreadStance,
 }
 
 /// One attack a client's weapon step took this tick. The weapon index each
@@ -2774,6 +2777,7 @@ impl Server {
                         def,
                         name,
                         shot.ads,
+                        &shot.stance,
                         shot.aim,
                         &sims,
                         collision,
@@ -3397,6 +3401,11 @@ impl Server {
                                     weapon,
                                     ads: sim.ps.weapon_pos_frac == 1.0,
                                     aim: sim.aim_angles(),
+                                    stance: vcod_common::pmove::weapon::SpreadStance::of(
+                                        &sim.ps,
+                                        cmd.server_time,
+                                        now_ms,
+                                    ),
                                 }))
                             }
                             EV_FIRE_MELEE => self.pending_attacks.push(Attack::Swing {

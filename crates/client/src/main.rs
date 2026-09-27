@@ -1066,6 +1066,7 @@ fn loading_frame(
             clients: &no_clients,
             protocol: &net::protocol::PROTOCOL_V1,
             server_time: 0,
+            snap_time: 0,
             fs,
             menu: None,
             ps: None,
@@ -2045,6 +2046,9 @@ impl ApplicationHandler for App {
                                         // The render clock, so hudelem tweens and
                                         // timers move between snapshots.
                                         server_time: render_time.unwrap_or(0),
+                                        snap_time: render_time
+                                            .and_then(|t| net.snapshots().two_for_time(t))
+                                            .map_or(0, |(a, _)| a.server_time),
                                         fs: &self.fs,
                                         menu: menu_view.as_ref().map(|(_, v)| v),
                                         ps: newest.map(|s| &s.ps),

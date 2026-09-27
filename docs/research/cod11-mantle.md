@@ -602,7 +602,8 @@ and falls through 86, 75, 66, 52 and 41, where the blended wish slides from
 
 vcod: `pmove::view_height_adjust` ports the function without the offset
 term, `move_stance` the stance test, `view_lerp_frac` 0x308cc and
-`stance_speed_scale` the blend. `PlayerState::view_lerp_ms` is `cmd.serverTime
+`stance_speed_scale` the blend; `pmove::weapon::hip_spread_min` reads the
+same legs for the hip cone (`cod11-combat.md` 2.1). `PlayerState::view_lerp_ms` is `cmd.serverTime
 - viewHeightLerpTime`; the server and the predictor turn it into the wire
 stamp. The prone captures do not record the three lerp fields, so the gate
 carries our own leg across each rebase and holds the eye to retail's `vh`
