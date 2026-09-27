@@ -34,13 +34,20 @@ const _: () = {
 /// Who a temp entity is sent to. Retail spells this in `r.svFlags`:
 /// `SVF_BROADCAST` (8) sends to everyone regardless of PVS, and the
 /// single-client flags send to or withhold from one
-/// (`docs/protocol-1.1.md`, "Which entities a client is sent").
+/// (`docs/protocol-1.1.md`, "Which entities a client is sent"). The two
+/// single-client arms name a client number, which the snapshot compares with
+/// its own `ps.clientNum`, not with the slot it is written for
+/// (`docs/research/cod11-events-and-fx.md` section 2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
     Broadcast,
     /// Everyone, culled by PVS: a bare `G_TempEntity` sets no `svFlags`.
     Pvs,
+    /// `svFlags` 0x2000 with `r.singleClient`: every snapshot but this
+    /// client's, culled by PVS.
     AllBut(usize),
+    /// `svFlags` 0x800 with `r.singleClient`: this client's snapshot alone,
+    /// culled by PVS.
     Only(usize),
 }
 
@@ -111,14 +118,15 @@ pub fn advance(cursor: u32, count: usize) -> u32 {
     (cursor + count as u32) % TEMP_COUNT
 }
 
-/// Whether one client's snapshot may carry this temp entity at all. A
-/// `Broadcast` one still skips the PVS cull; the other three are culled
-/// like any other entity once this says yes (`crate::server`).
-pub fn visible_to(te: &TempEntity, slot: usize) -> bool {
+/// Whether a snapshot whose `ps.clientNum` is `client_num` may carry this
+/// temp entity at all. A `Broadcast` one still skips the PVS cull; the other
+/// three are culled like any other entity once this says yes
+/// (`crate::server`).
+pub fn visible_to(te: &TempEntity, client_num: usize) -> bool {
     match te.scope {
         Scope::Broadcast | Scope::Pvs => true,
-        Scope::AllBut(s) => s != slot,
-        Scope::Only(s) => s == slot,
+        Scope::AllBut(s) => s != client_num,
+        Scope::Only(s) => s == client_num,
     }
 }
 
