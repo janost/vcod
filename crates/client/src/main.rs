@@ -1009,6 +1009,21 @@ fn start_loading(
     })
 }
 
+/// Reopens the pk3 search path after a download. The menus and localized
+/// strings read off the old one are dropped with it, since the new paks may
+/// carry files the old ones lacked.
+fn reopen_fs(
+    mod_dir: &std::path::Path,
+    fs: &mut Pk3Fs,
+    localized: &mut vcod_common::localize::Localized,
+    menus: &mut hud::menu::MenuCache,
+) -> Result<()> {
+    *fs = Pk3Fs::open(mod_dir)?;
+    *localized = vcod_common::localize::Localized::load(fs);
+    *menus = hud::menu::MenuCache::default();
+    Ok(())
+}
+
 /// Parse the map, upload it to the GPU and hand back the live phase.
 #[allow(clippy::too_many_arguments)]
 fn load_map(
@@ -1766,8 +1781,13 @@ impl ApplicationHandler for App {
                                         }
                                     }
                                     loading::Action::Reopen => {
-                                        match Pk3Fs::open(&self.game_dir.join(&self.mod_dir)) {
-                                            Ok(reopened) => self.fs = reopened,
+                                        match reopen_fs(
+                                            &self.game_dir.join(&self.mod_dir),
+                                            &mut self.fs,
+                                            &mut self.localized,
+                                            &mut self.menus,
+                                        ) {
+                                            Ok(()) => *menu_view = None,
                                             Err(e) => fatal = Some(e),
                                         }
                                     }
@@ -2541,6 +2561,50 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_pk3(dir: &std::path::Path, file: &str, entries: &[(&str, &str)]) {
+        use std::io::Write;
+        let mut z = zip::ZipWriter::new(std::fs::File::create(dir.join(file)).unwrap());
+        for (name, content) in entries {
+            z.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(content.as_bytes()).unwrap();
+        }
+        z.finish().unwrap();
+    }
+
+    /// A downloaded pak can carry the menus and strings the paks before it
+    /// lacked; a miss cached against the old search path must not outlive it.
+    #[test]
+    fn reopen_reads_menus_and_strings_off_the_new_paks() {
+        let dir = tempfile::tempdir().unwrap();
+        make_pk3(dir.path(), "pak0.pk3", &[("readme.txt", "")]);
+        let mut fs = Pk3Fs::open(dir.path()).unwrap();
+        let mut localized = vcod_common::localize::Localized::load(&fs);
+        let mut menus = hud::menu::MenuCache::default();
+        assert!(menus.get(&fs, "team_mod").is_none());
+
+        make_pk3(
+            dir.path(),
+            "zzz_mod.pk3",
+            &[
+                (
+                    "ui_mp/scriptmenus/team_mod.menu",
+                    r#"{ menuDef { name "team_mod"
+      itemDef { name "a" visible 1 text "@MODMENU_ALLIES" action { scriptMenuResponse "allies"; } }
+    } }"#,
+                ),
+                (
+                    "localizedstrings/english/modmenu.str",
+                    "REFERENCE ALLIES\nLANG_ENGLISH \"Allies\"\n",
+                ),
+            ],
+        );
+        reopen_fs(dir.path(), &mut fs, &mut localized, &mut menus).unwrap();
+        let menu = menus.get(&fs, "team_mod").expect("menu from the new pak");
+        let v = hud::menu::view(menu, &localized, |_| None);
+        assert_eq!(v.rows[0].label, "Allies");
+    }
 
     /// Snapshots arrive at 20 Hz and the window redraws at 60 Hz, so render
     /// time must advance every frame, not per snapshot.
