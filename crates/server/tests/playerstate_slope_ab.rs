@@ -231,10 +231,18 @@ fn run_cmd(
     }
 }
 
+/// The eye's running leg, which retail sends (`viewHeightLerpTime`,
+/// `viewHeightLerpTarget`, `viewHeightLerpDown`) and the capture does not
+/// record: the stamp, the leg's target and its direction.
+type EyeLeg = (i32, f32, bool);
+
 /// A `PlayerState` standing where retail's snapshot says, holding the weapon
 /// the cmds carry. A capture that carries the stance fields is rebuilt the
-/// way a predicting client rebuilds it, through `predict::from_wire`.
-fn state_from(snap: &Snap, weapon: u8) -> PlayerState {
+/// way a predicting client rebuilds it, through `predict::from_wire`, with
+/// the eye's leg taken from `eye`, our own run's, since the walk scale reads
+/// it (docs/research/cod11-mantle.md, "The eye through a stance change");
+/// the report's `vh` column is what holds our leg to retail's.
+fn state_from(snap: &Snap, weapon: u8, eye: Option<EyeLeg>) -> PlayerState {
     if let Some(pf) = &snap.prone {
         let p = &PROTOCOL_V1;
         let mut w = msg::PlayerState::null(p);
@@ -258,6 +266,16 @@ fn state_from(snap: &Snap, weapon: u8) -> PlayerState {
             },
         );
         set("viewHeightCurrent", pf.view_height.to_bits() as i32);
+        // The capture has no `jumpTime` either; stamping it at the snapshot
+        // keeps the 500 ms jump gate shut across a rebase, as it was before
+        // `commandTime` was set.
+        set("commandTime", snap.ct);
+        set("jumpTime", snap.ct);
+        if let Some((stamp, target, down)) = eye {
+            set("viewHeightLerpTime", stamp);
+            set("viewHeightLerpTarget", target as i32);
+            set("viewHeightLerpDown", i32::from(down));
+        }
         set("proneDirection", pf.direction.to_bits() as i32);
         set("proneDirectionPitch", pf.direction_pitch.to_bits() as i32);
         set("proneTorsoPitch", pf.torso_pitch.to_bits() as i32);
@@ -345,7 +363,7 @@ fn replay(lines: &[Line], world: &CollisionWorld, weapons: &[Option<WeaponDef>])
             _ => None,
         })
         .unwrap_or(0);
-    let mut free = state_from(&first, weapon);
+    let mut free = state_from(&first, weapon, None);
     let mut free_st = first.ct;
     let mut rebased = free;
     let mut rebased_st = first.ct;
@@ -395,7 +413,12 @@ fn replay(lines: &[Line], world: &CollisionWorld, weapons: &[Option<WeaponDef>])
             normal: ground_normal(world, s.origin),
             wish,
         });
-        rebased = state_from(s, weapon);
+        let eye = (
+            rebased.view_lerp_stamp(rebased_st),
+            rebased.view_lerp_target,
+            rebased.view_lerp_down,
+        );
+        rebased = state_from(s, weapon, Some(eye));
         rebased_st = s.ct;
         // Retail's cmds were rebased on retail's `delta_angles`, so the free
         // run takes them too.
@@ -478,6 +501,8 @@ struct ViewDelta {
     torso_pitch: f32,
     view: [f32; 2],
     delta_angles: [f32; 2],
+    /// The eye, in units.
+    view_height: f32,
 }
 
 impl ViewDelta {
@@ -496,6 +521,7 @@ impl ViewDelta {
                 angle_off(r.ours.yaw.to_degrees(), r.retail.view[1]).abs(),
             ],
             delta_angles: [da(0), da(1)],
+            view_height: (r.ours.view_height() - pf.view_height).abs(),
         })
     }
 
@@ -509,6 +535,7 @@ impl ViewDelta {
                 self.delta_angles[0].max(o.delta_angles[0]),
                 self.delta_angles[1].max(o.delta_angles[1]),
             ],
+            view_height: self.view_height.max(o.view_height),
         }
     }
 
@@ -687,28 +714,31 @@ const SLOPE: Tolerance = Tolerance {
 };
 
 /// What the prone crawls may read, from the measurement of 2026-09-27 with
-/// the dive, the landing damp, the body swing while moving, the pitch cap and
-/// the fit trace at 24 (docs/research/cod11-mantle.md, "Prone"). The street
-/// reads |dz| max 0.125 and dxy p99 0.233, max 2.7 on the one row past a
-/// unit, a sideways prone press whose speed retail blends across the eye's
-/// drop; the mound to [`MOUND_UNTIL`] reads |dz| p99 0.128, max 0.173 and
-/// dxy max 0.52. The view: the body's yaw within 0.5 degrees, both prone
-/// pitches within 1.42, where our terrain trace names the other of two
-/// facets under a crawl, and the view angles and `delta_angles` within one
-/// 16-bit step. Before those the dives read 10.7 units off, the body stood
-/// still for 99 snapshots of retail's swing and the pitch cap was missing
-/// outright, 38.8 degrees on the street and 48.8 on the mound.
+/// the dive, the landing damp, the body swing while moving, the pitch cap,
+/// the fit trace at 24 and the eye's legs with the walk scale blended across
+/// them (docs/research/cod11-mantle.md, "Prone" and "The eye through a
+/// stance change"). The street reads |dz| max 0.125 and dxy p99 0.048, max
+/// 0.43; the mound to [`MOUND_UNTIL`] reads |dz| p99 0.129, max 0.173 and
+/// dxy max 0.52; neither has a row past a unit. The view: the body's yaw
+/// within 0.5 degrees, both prone pitches within 1.42, where our terrain
+/// trace names the other of two facets under a crawl, the view angles and
+/// `delta_angles` within one 16-bit step, and the eye on retail's to the
+/// printed hundredth. Before those the dives read 10.7 units off, the body
+/// stood still for 99 snapshots of retail's swing, the pitch cap was missing
+/// outright, 38.8 degrees on the street and 48.8 on the mound, and a
+/// sideways prone press read 2.7 units off.
 const PRONE: Tolerance = Tolerance {
     p95_z: 0.02,
     p95_xy: 0.05,
     p99_z: 0.2,
     p99_xy: 0.6,
     max_z: 0.5,
-    outlier_share: 0.015,
+    outlier_share: 0.0,
     view: Some(ViewTolerance {
         direction: 1.0,
         pitches: 2.0,
         view: 0.1,
+        view_height: 0.01,
     }),
 };
 
@@ -735,6 +765,7 @@ struct ViewTolerance {
     direction: f32,
     pitches: f32,
     view: f32,
+    view_height: f32,
 }
 
 fn check(map: &str, gametype: &str, cmd_ms: u32) {
@@ -824,7 +855,8 @@ fn check_path(map: &str, gametype: &str, path: &str, tol: &Tolerance, until: Opt
             v.direction <= t.direction
                 && v.direction_pitch <= t.pitches
                 && v.torso_pitch <= t.pitches
-                && v.view.iter().chain(&v.delta_angles).all(|&d| d <= t.view),
+                && v.view.iter().chain(&v.delta_angles).all(|&d| d <= t.view)
+                && v.view_height <= t.view_height,
             "{path}: the prone view parts from retail's: {v:?}"
         );
     }
