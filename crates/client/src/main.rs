@@ -260,6 +260,12 @@ struct Args {
     /// stands. Writes no fixture; prints its playerstate while a push is on it.
     #[arg(long, conflicts_with = "save_bump")]
     probe_bump_target: bool,
+    /// With `--net-probe`: stay a spectator and press the follow buttons
+    /// (attack, attack, melee, the sight held 2 s, attack, 6 s apart from 8 s
+    /// in), printing every snapshot whose clientNum, pm_type, pm_flags or
+    /// eFlags moved. Writes no fixture.
+    #[arg(long)]
+    probe_follow: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -749,6 +755,7 @@ fn main() -> Result<()> {
                 turret: args.save_turret,
                 bump: args.save_bump,
                 bump_target: args.probe_bump_target,
+                follow: args.probe_follow,
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,

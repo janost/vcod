@@ -8,6 +8,7 @@
 use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
 use crate::console;
+use crate::follow;
 use crate::game::host::{ClientEvent, SpawnMode};
 use crate::game::script;
 use crate::game::stuck::{stuck_in_client, StuckView};
@@ -313,7 +314,140 @@ fn apply_sim_ops(
 /// intermission arm nor `SpectatorClientEndFrame` copies `ent->health` into
 /// the playerstate, so both keep the zero their own spawn left (map-cycle
 /// doc, 6.2; `spectate.rs`, `become_spectator`).
-fn mirror_vitals(clients: &mut [Option<Client>], rt: &script::ScriptRuntime) {
+/// What the follow reads for `slot`: the script's fields when the slot has
+/// a client entity, the sim's own mode when it has none.
+fn session_of(
+    rt: Option<&mut script::ScriptRuntime>,
+    slot: usize,
+    sim: &ClientSim,
+) -> follow::Session {
+    rt.and_then(|rt| rt.client_session(slot))
+        .unwrap_or_else(|| follow::Session::unscripted(sim.pm_type == PmType::Spectator))
+}
+
+/// Whether `slot` holds a client a follow may copy: `GetFollowPlayerState`
+/// (`game.mp.i386.so` 0x415c4) refuses one whose own-view bit is off.
+fn followable(clients: &[Option<Client>], slot: usize) -> bool {
+    clients
+        .get(slot)
+        .and_then(Option::as_ref)
+        .and_then(|c| c.sim.as_ref())
+        .is_some_and(|s| s.own_view)
+}
+
+/// `ClientEndFrame`'s follow half for one slot, in slot order: a playing or
+/// dead client takes the own-view bit a follow copies, and a spectator runs
+/// `SpectatorClientEndFrame` (0x40760). A forced follow of a client that
+/// cannot be copied writes -1 back into `spectatorclient`; a follow that
+/// finds nothing to copy is `StopFollowing`, which writes it too.
+fn follow_end_frame(
+    clients: &mut [Option<Client>],
+    slot: usize,
+    rt: &mut script::ScriptRuntime,
+    collision: Option<&vcod_common::collision::CollisionWorld>,
+) {
+    let Some(sim) = clients[slot].as_ref().and_then(|c| c.sim.as_ref()) else {
+        return;
+    };
+    let session = session_of(Some(rt), slot, sim);
+    fn sim_mut(clients: &mut [Option<Client>], slot: usize) -> &mut ClientSim {
+        clients[slot].as_mut().and_then(|c| c.sim.as_mut()).unwrap()
+    }
+    match session.state {
+        // A client script moved out of spectating without a `spawn` would
+        // take retail's `ClientSpawn` arm here (0x40f82); that is not
+        // modelled, the follow just ends.
+        follow::SessionState::Playing | follow::SessionState::Dead => {
+            let sim = sim_mut(clients, slot);
+            sim.own_view = true;
+            sim.follow = Default::default();
+            return;
+        }
+        follow::SessionState::Intermission => {
+            let sim = sim_mut(clients, slot);
+            sim.own_view = false;
+            sim.follow = Default::default();
+            return;
+        }
+        follow::SessionState::Spectator => {}
+    }
+    sim_mut(clients, slot).own_view = false;
+    let mut forced = session.spectator_client;
+    let mut target = sim_mut(clients, slot).follow.target;
+    if forced >= 0 {
+        // A replay the script asked for: there is no archive to take it
+        // from, and retail with an empty one would copy the live client
+        // instead. Nothing is copied and the fields are left for the
+        // script's own `archivetime <= delay` branch.
+        if session.killcam {
+            sim_mut(clients, slot).stop_following(collision);
+            return;
+        }
+        target = Some(forced as usize);
+        if !followable(clients, forced as usize) {
+            rt.set_client_spectator_client(slot, -1);
+            forced = -1;
+            target = None;
+        }
+    }
+    match target.filter(|t| followable(clients, *t)) {
+        Some(t) => {
+            let ts = clients[t].as_ref().and_then(|c| c.sim.as_ref()).unwrap();
+            let view = (ts.ps.view().eye.into(), ts.view_angles());
+            sim_mut(clients, slot).follow = follow::Follow {
+                target: Some(t),
+                on: true,
+                forced: forced >= 0,
+                view: Some(view),
+            };
+        }
+        None => {
+            sim_mut(clients, slot).stop_following(collision);
+            if session.spectator_client != -1 {
+                rt.set_client_spectator_client(slot, -1);
+            }
+        }
+    }
+}
+
+/// `ClientDisconnect`'s pass over the spectators following `gone`
+/// (0x42b25..0x42b5b): each cycles on to the next client, or stops.
+fn pass_followers_on(
+    clients: &mut [Option<Client>],
+    gone: usize,
+    mut rt: Option<&mut script::ScriptRuntime>,
+    collision: Option<&vcod_common::collision::CollisionWorld>,
+) {
+    for slot in 0..clients.len() {
+        let Some(sim) = clients[slot].as_ref().and_then(|c| c.sim.as_ref()) else {
+            continue;
+        };
+        if sim.follow.target != Some(gone) {
+            continue;
+        }
+        let session = session_of(rt.as_deref_mut(), slot, sim);
+        if session.state != follow::SessionState::Spectator {
+            continue;
+        }
+        let next = (session.spectator_client < 0)
+            .then(|| follow::cycle(Some(gone), 1, clients.len(), |t| followable(clients, t)))
+            .flatten();
+        let sim = clients[slot].as_mut().and_then(|c| c.sim.as_mut()).unwrap();
+        match next {
+            Some(t) => sim.follow.target = Some(t),
+            None => {
+                sim.stop_following(collision);
+                if let (Some(rt), true) = (rt.as_deref_mut(), session.spectator_client != -1) {
+                    rt.set_client_spectator_client(slot, -1);
+                }
+            }
+        }
+    }
+}
+
+/// Returns the slots whose death this mirror is the first to see.
+fn mirror_vitals(clients: &mut [Option<Client>], rt: &script::ScriptRuntime) -> Vec<usize> {
+    let mut died = Vec::new();
     for (slot, c) in clients.iter_mut().enumerate() {
         if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
             if sim.pm_type == crate::spectate::PmType::Normal {
@@ -321,6 +455,9 @@ fn mirror_vitals(clients: &mut [Option<Client>], rt: &script::ScriptRuntime) {
                 sim.health = v.health;
                 sim.max_health = v.max_health;
                 if v.dead {
+                    if !sim.dead {
+                        died.push(slot);
+                    }
                     sim.die();
                 } else {
                     sim.dead = false;
@@ -328,6 +465,7 @@ fn mirror_vitals(clients: &mut [Option<Client>], rt: &script::ScriptRuntime) {
             }
         }
     }
+    died
 }
 
 /// One `WeaponOp` against a client's playerstate. The op is an edge the
@@ -1616,6 +1754,8 @@ impl Server {
         let Some(c) = self.clients[slot].take() else {
             return;
         };
+        let collision = self.world.as_ref().map(|w| &w.collision);
+        pass_followers_on(&mut self.clients, slot, self.script.as_mut(), collision);
         if let Some(rt) = self.script.as_mut() {
             rt.push_client_event(ClientEvent::Disconnect(slot));
         }
@@ -2798,6 +2938,7 @@ impl Server {
         }
 
         let mut client_commands = Vec::new();
+        let mut died: Vec<usize> = Vec::new();
         let mut console_lines: Vec<String> = Vec::new();
         let mut ranks_dirty = false;
         // A client that dropped between the packet and here has nothing left
@@ -3040,11 +3181,15 @@ impl Server {
                 &mut self.rng,
                 self.sv_time_ms,
             );
-            mirror_vitals(&mut self.clients, rt);
+            died.extend(mirror_vitals(&mut self.clients, rt));
             // `G_RunFrame`'s own slot order (0x50ab0-0x50ad7), not arrival
             // order (docs/research/cod11-player-clip.md 4.2, 6). No link
-            // follows a CORPSE write here.
+            // follows a CORPSE write here. The follow half goes first, so a
+            // spectator reads the own-view bit a lower slot took this frame
+            // and a higher slot's from the last one, as retail's loop does.
+            let collision = self.world.as_ref().map(|w| &w.collision);
             for slot in 0..self.clients.len() {
+                follow_end_frame(&mut self.clients, slot, rt, collision);
                 let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
                     continue;
                 };
@@ -3195,7 +3340,7 @@ impl Server {
                     &mut self.rng,
                     self.sv_time_ms,
                 );
-                mirror_vitals(&mut self.clients, rt);
+                died.extend(mirror_vitals(&mut self.clients, rt));
                 for slot in feedback_now {
                     if let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) {
                         sim.end_frame(self.sv_time_ms);
@@ -3239,6 +3384,24 @@ impl Server {
         // than send, and this is where the queue reaches the netchan.
         for (slot, cmd) in client_commands {
             self.send_server_command(slot, &cmd);
+        }
+        // `player_die` sends `Cmd_Score_f` to every spectator whose follow
+        // target is the victim (combat doc, 4.2 step 9).
+        for victim in died {
+            for slot in 0..self.clients.len() {
+                let Some(sim) = self.clients[slot].as_ref().and_then(|c| c.sim.as_ref()) else {
+                    continue;
+                };
+                if sim.follow.target != Some(victim) {
+                    continue;
+                }
+                if session_of(self.script.as_mut(), slot, sim).state
+                    == follow::SessionState::Spectator
+                {
+                    let text = self.scoreboard();
+                    self.send_server_command(slot, &text);
+                }
+            }
         }
         // `G_RunFrame`'s inlined drain (map-cycle doc, 6.3): a frame that
         // moved a score pushes the scoreboard to every client in
@@ -3296,6 +3459,19 @@ impl Server {
         // 12.1), so a client's cmds after a use press wait for the touch pass
         // and run in a second round: a mount lands before them, as retail's
         // does.
+        // `SpectatorThink` reads the other clients' own-view bits as the
+        // last end frame left them, and each spectator's forced follow.
+        let max_clients = self.clients.len();
+        let followable_now: Vec<bool> = (0..max_clients)
+            .map(|slot| followable(&self.clients, slot))
+            .collect();
+        let spectating: Vec<Option<i32>> = (0..max_clients)
+            .map(|slot| {
+                let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
+                let s = session_of(self.script.as_mut(), slot, sim);
+                (s.state == follow::SessionState::Spectator).then_some(s.spectator_client)
+            })
+            .collect();
         let mut use_held: Vec<bool> = (0..self.clients.len())
             .map(|slot| {
                 self.script.as_ref().is_some_and(|rt| {
@@ -3340,22 +3516,39 @@ impl Server {
                     if dt_ms <= 0 {
                         continue;
                     }
-                    // The aim block runs once per cmd, on the whole cmd, before
-                    // the chop (`ClientThink_real` 0x40169-0x40456).
-                    sim.update_aim(dt_ms, now_ms, weapons.defs());
+                    let prev_buttons = std::mem::replace(&mut sim.last_buttons, cmd.buttons);
+                    // A spectator's buttons move its follow, and a follow the
+                    // last end frame landed runs no pmove at all.
+                    let mut frozen = false;
+                    if let Some(forced) = spectating[slot] {
+                        sim.spectator_think(
+                            forced,
+                            prev_buttons,
+                            cmd.buttons,
+                            max_clients,
+                            |t| followable_now[t],
+                            collision,
+                        );
+                        frozen = sim.follow.on;
+                    }
                     let mut raised = Vec::new();
                     let mut take = None;
-                    // A hitching client's gap is simulated, not discarded: see
-                    // `cmd::chop`.
-                    for (step, dt) in vcod_common::pmove::cmd::chop(c.last_processed_st, &cmd) {
-                        raised.extend(sim.step(
-                            &step,
-                            dt,
-                            collision.map(|w| MoveWorld::new(w, &bodies, slot as u32)),
-                            weapons.defs(),
-                        ));
-                        bodies.retain(|b| b.entity != slot as u32);
-                        bodies.extend(sim.body(slot as u32));
+                    if !frozen {
+                        // The aim block runs once per cmd, on the whole cmd,
+                        // before the chop (`ClientThink_real` 0x40169-0x40456).
+                        sim.update_aim(dt_ms, now_ms, weapons.defs());
+                        // A hitching client's gap is simulated, not
+                        // discarded: see `cmd::chop`.
+                        for (step, dt) in vcod_common::pmove::cmd::chop(c.last_processed_st, &cmd) {
+                            raised.extend(sim.step(
+                                &step,
+                                dt,
+                                collision.map(|w| MoveWorld::new(w, &bodies, slot as u32)),
+                                weapons.defs(),
+                            ));
+                            bodies.retain(|b| b.entity != slot as u32);
+                            bodies.extend(sim.body(slot as u32));
+                        }
                     }
                     for e in &raised {
                         let weapon = sim.ps.weapon;
@@ -3668,7 +3861,28 @@ impl Server {
             .collect();
         self.temp_cursor = temp_entity::advance(cursor, temp_states.len());
 
-        for slot in 0..self.clients.len() {
+        // A follower's frame is the followed client's: its playerstate with
+        // the follow flags patched in, its eye for the cull and its number
+        // for the single-client scopes (`SpectatorClientEndFrame` 0x40896,
+        // `SV_BuildClientSnapshot` 0x808f25f). Built up front, since the loop
+        // below holds each slot mutably.
+        let follow_frames: Vec<Option<(usize, msg::PlayerState, [f32; 3])>> =
+            (0..self.clients.len())
+                .map(|slot| {
+                    let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
+                    let t = sim.follow.target.filter(|_| sim.follow.on)?;
+                    let tc = self.clients.get(t)?.as_ref()?;
+                    let ts = tc.sim.as_ref()?;
+                    let mut ps = ts.to_wire(self.proto, t as i32, tc.last_processed_st);
+                    let own = sim.to_wire(self.proto, slot as i32, 0);
+                    let ef = msg::PlayerState::field_index(self.proto, "eFlags").unwrap();
+                    follow::patch_wire(&mut ps, self.proto, sim.follow.forced, own.fields[ef]);
+                    Some((t, ps, ts.eye_origin()))
+                })
+                .collect();
+
+        for (slot, follow_frame) in follow_frames.iter().enumerate() {
+            let follow_frame = follow_frame.as_ref();
             let Some(c) = self.clients[slot].as_mut() else {
                 continue;
             };
@@ -3687,8 +3901,8 @@ impl Server {
             let command_time = c.last_processed_st;
             let message_num = c.netchan.outgoing_sequence;
             // The frame's `ps.clientNum`, which the single-client flags test
-            // against; a follow would make it the followed player's.
-            let client_num = slot;
+            // against and whose entity the frame leaves out.
+            let client_num = follow_frame.map_or(slot, |f| f.0);
 
             // Retail sends a client only what its own position can see, so
             // the list is per client rather than one list cloned into every
@@ -3697,7 +3911,7 @@ impl Server {
             sendable.extend(
                 client_entities
                     .iter()
-                    .filter(|(n, _)| **n != slot as u32)
+                    .filter(|(n, _)| **n != client_num as u32)
                     .map(|(n, e)| (*n, e.clone())),
             );
             // A scoped temp entity is culled like any other entity; a
@@ -3711,10 +3925,9 @@ impl Server {
                     sendable.insert(*n, e.clone());
                 }
             }
+            let eye = follow_frame.map_or_else(|| sim.eye_origin(), |f| f.2);
             let mut visible = match collision_vis {
-                Some(vis) => {
-                    crate::world::visible_entities(vis, sim.eye_origin(), &sendable, self.proto)
-                }
+                Some(vis) => crate::world::visible_entities(vis, eye, &sendable, self.proto),
                 None => sendable,
             };
             for (te, (n, e)) in temps.iter().zip(&temp_states) {
@@ -3728,17 +3941,29 @@ impl Server {
                 visible.extend(rt.missiles().entities(self.proto));
             }
 
-            let mut ps = sim.to_wire(self.proto, client_num as i32, command_time);
+            let mut ps = match follow_frame {
+                Some(f) => f.1.clone(),
+                None => sim.to_wire(self.proto, client_num as i32, command_time),
+            };
             // The script's HUD elements, filtered for this client the way
             // `HudElem_UpdateClient` filters them; retail rebuilds both
             // arrays into the playerstate once per client per frame, so
-            // they are read here rather than carried on the sim.
-            let team = per_slot.get(slot).map_or(script::TEAM_SPECTATOR, |p| p.2);
+            // they are read here rather than carried on the sim. A follower
+            // keeps the followed client's archived half and objectives, which
+            // ride the copied playerstate, and gets its own unarchived half.
+            let team_of = |s: usize| per_slot.get(s).map_or(script::TEAM_SPECTATOR, |p| p.2);
+            let team = team_of(slot);
             if let Some(rt) = self.script.as_mut() {
                 let (archived, current) = rt.hud_elems(slot, team);
-                ps.arrays.hud_archived = archived;
                 ps.arrays.hud_current = current;
-                ps.arrays.objectives = rt.objectives_for(slot, team);
+                if follow_frame.is_none() {
+                    ps.arrays.hud_archived = archived;
+                    ps.arrays.objectives = rt.objectives_for(slot, team);
+                } else {
+                    let t = client_num;
+                    ps.arrays.hud_archived = rt.hud_elems(t, team_of(t)).0;
+                    ps.arrays.objectives = rt.objectives_for(t, team_of(t));
+                }
             }
             let frame = snapshot::Snapshot {
                 server_time: self.sv_time_ms,
@@ -6189,6 +6414,336 @@ mod tests {
         assert!(
             sv.take_outgoing().is_empty(),
             "nothing before the gamestate is acked"
+        );
+    }
+
+    /// A spectator in slot 0 on a real netchan and two players put straight
+    /// into slots 1 and 2 with no socket, under a script that does nothing
+    /// but give every client an entity. The players' `sessionstate` is set
+    /// to playing by hand, which is what makes them followable.
+    struct FollowRig {
+        sv: Server,
+        nc: Netchan,
+        ring: SnapshotRing,
+        chain: MoveChain,
+        now: Instant,
+        st: i32,
+    }
+
+    const FOLLOW_P1: [f32; 3] = [200.0, 0.0, 0.0];
+    const FOLLOW_P2: [f32; 3] = [-300.0, 100.0, 0.0];
+
+    impl FollowRig {
+        fn new() -> Self {
+            let now = Instant::now();
+            let mut sv = Server::new(cfg(), now);
+            sv.load_world(World {
+                collision: test_world(&[]),
+                vis: vcod_common::bsp::Visibility::single_cluster(),
+                spawn: ([0.0, 0.0, 64.0], 0.0),
+            });
+            install_script(
+                &mut sv,
+                crate::game::script::ScriptRuntime::for_test("main() {}"),
+            );
+            let nc = begun(&mut sv, now);
+            let chain = MoveChain::new(sv.checksum_feed);
+            let mut rig = FollowRig {
+                sv,
+                nc,
+                ring: SnapshotRing::new(),
+                chain,
+                now,
+                st: 0,
+            };
+            rig.add_player(1, FOLLOW_P1, 90.0);
+            rig.add_player(2, FOLLOW_P2, 180.0);
+            rig.step(0);
+            for slot in 1..3 {
+                rig.script().set_client_state_for_test(slot, "playing");
+            }
+            rig.step(0);
+            rig
+        }
+
+        fn script(&mut self) -> &mut crate::game::script::ScriptRuntime {
+            self.sv.script.as_mut().unwrap()
+        }
+
+        fn add_player(&mut self, slot: usize, origin: [f32; 3], yaw: f32) {
+            let mut c = Client::new(
+                addr(6 + slot as u16),
+                0x3000 + slot as u16,
+                0,
+                format!("\\name\\p{slot}"),
+                self.now,
+            );
+            c.is_bot = true;
+            let mut sim = ClientSim::spectator(origin, yaw, [0; 3]);
+            sim.become_player(origin, yaw, [0; 3]);
+            c.sim = Some(sim);
+            self.sv.clients[slot] = Some(c);
+            self.script().push_client_event(ClientEvent::Connect {
+                slot,
+                name: format!("p{slot}"),
+            });
+        }
+
+        fn sim(&self, slot: usize) -> &ClientSim {
+            self.sv.clients[slot]
+                .as_ref()
+                .unwrap()
+                .sim
+                .as_ref()
+                .unwrap()
+        }
+
+        fn sim_mut(&mut self, slot: usize) -> &mut ClientSim {
+            self.sv.clients[slot]
+                .as_mut()
+                .unwrap()
+                .sim
+                .as_mut()
+                .unwrap()
+        }
+
+        /// One cmd from the spectator holding `buttons`, and the frame it
+        /// lands in.
+        fn step(&mut self, buttons: u8) -> vcod_common::net::snapshot::Snapshot {
+            self.st += 50;
+            self.now += std::time::Duration::from_millis(50);
+            let ack = self.nc.incoming_sequence as i32;
+            let cmd = UserCmd {
+                server_time: self.st,
+                buttons,
+                ..Default::default()
+            };
+            let ops = self.chain.ops(ack, &[cmd]);
+            let pkt = self
+                .nc
+                .build_out(i32::from(self.sv.server_id), ack, 0, &ops, &Huffman::new())
+                .unwrap();
+            self.sv.handle_packet(addr(5), &pkt, self.now);
+            latest_snapshot(&mut self.sv, &mut self.nc, &mut self.ring, self.now)
+        }
+
+        /// One frame with no input, and every server command it carried, as
+        /// `<reliable sequence>:<text>`, each once: a command leaves in a
+        /// packet of its own and again in the snapshot's.
+        fn commands(&mut self) -> Vec<String> {
+            self.st += 50;
+            self.now += std::time::Duration::from_millis(50);
+            let huff = Huffman::new();
+            self.sv.tick(self.now);
+            let mut out = Vec::new();
+            for (_, pkt) in self.sv.take_outgoing() {
+                if let Ok(Some(m)) = self.nc.process_in(&pkt, &huff) {
+                    let mut r = MsgReader::new(&m[4..], &huff);
+                    while !r.is_overflowed() && r.read_byte() == msg::SVC_SERVER_COMMAND {
+                        let seq = r.read_long();
+                        out.push(format!("{seq}:{}", r.read_big_string()));
+                    }
+                }
+            }
+            out.sort();
+            out.dedup();
+            out
+        }
+
+        /// A press and the release after it; the frame of the press.
+        fn press(&mut self, buttons: u8) -> vcod_common::net::snapshot::Snapshot {
+            let s = self.step(buttons);
+            self.step(0);
+            s
+        }
+    }
+
+    fn ps_i32(s: &vcod_common::net::snapshot::Snapshot, name: &str) -> i32 {
+        s.ps.field_i32(&PROTOCOL_V1, name)
+    }
+
+    /// Retail's run (docs/research/cod11-spectator-follow.md): an attack
+    /// press from free flight lands on the first playing slot after 0, and
+    /// the frame is that client's playerstate with the own-view bit swapped
+    /// for the follow bit. The followed client's own entity is not sent,
+    /// the other one still is.
+    #[test]
+    fn attack_rides_the_next_playing_client_with_its_playerstate() {
+        let mut rig = FollowRig::new();
+        let free = rig.step(0);
+        assert_eq!(ps_i32(&free, "clientNum"), 0);
+        assert!(free.entities.contains_key(&1) && free.entities.contains_key(&2));
+
+        let s = rig.press(msg::BUTTON_ATTACK);
+        assert_eq!(ps_i32(&s, "clientNum"), 1);
+        assert_eq!(ps_i32(&s, "pm_type"), 0);
+        assert_eq!(ps_i32(&s, "pm_flags") & 0x70000, 0x10000);
+        assert_eq!(s.ps.origin(&PROTOCOL_V1), FOLLOW_P1);
+        assert!(!s.entities.contains_key(&1), "the followed client's entity");
+        assert!(s.entities.contains_key(&2));
+    }
+
+    #[test]
+    fn attack_cycles_forward_and_melee_back() {
+        let mut rig = FollowRig::new();
+        assert_eq!(ps_i32(&rig.press(msg::BUTTON_ATTACK), "clientNum"), 1);
+        let s = rig.press(msg::BUTTON_ATTACK);
+        assert_eq!(ps_i32(&s, "clientNum"), 2);
+        assert_eq!(s.ps.origin(&PROTOCOL_V1), FOLLOW_P2);
+        assert_eq!(ps_i32(&rig.press(msg::BUTTON_MELEE), "clientNum"), 1);
+        // A held button is one press.
+        rig.step(msg::BUTTON_ATTACK);
+        assert_eq!(ps_i32(&rig.step(msg::BUTTON_ATTACK), "clientNum"), 2);
+    }
+
+    /// The sight bit's press ends the follow, and the spectator is left
+    /// where `StopFollowing` puts it off the followed eye.
+    #[test]
+    fn a_sight_press_ends_a_free_follow_behind_the_eye() {
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        let (eye, view) = (rig.sim(1).ps.view().eye, rig.sim(1).view_angles());
+        let s = rig.step(msg::BUTTON_ADS);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(ps_i32(&s, "pm_flags") & 0x10000, 0);
+        let (spot, _) = crate::follow::stop_spot(None, eye.into(), view);
+        let o = s.ps.origin(&PROTOCOL_V1);
+        assert!(
+            (glam::Vec3::from(o) - glam::Vec3::from(spot)).length() < 0.5,
+            "{o:?} against {spot:?}"
+        );
+        assert!(s.entities.contains_key(&1));
+        // The release is the other edge, and there is nothing left to end.
+        assert_eq!(ps_i32(&rig.step(0), "clientNum"), 0);
+    }
+
+    /// The single-client scope is tested against the frame's
+    /// `ps.clientNum`, so the follower of a hit client is sent that client's
+    /// own 176 and not the 174 everyone else gets.
+    #[test]
+    fn a_follower_is_sent_the_followed_clients_own_flesh_impact() {
+        use crate::game::temp_entity::{Scope, TempEntity};
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        let te = |event, scope| TempEntity {
+            event,
+            parm: 0,
+            surf_type: 7,
+            other: 2,
+            attacker: 2,
+            weapon: 0,
+            client_num: 0,
+            scale: 0,
+            origin: FOLLOW_P1,
+            scope,
+        };
+        rig.sv.test_push_temp_entity(te(176, Scope::Only(1)));
+        rig.sv.test_push_temp_entity(te(174, Scope::AllBut(1)));
+        let s = rig.step(0);
+        let events: Vec<i32> = s
+            .entities
+            .values()
+            .map(|e| e.field_i32(&PROTOCOL_V1, "eType") - temp_entity::ET_EVENTS)
+            .collect();
+        assert!(events.contains(&176), "{events:?}");
+        assert!(!events.contains(&174), "{events:?}");
+    }
+
+    /// A dead client keeps its own-view bit, so the follow stays on the
+    /// body; the frame it goes spectator it has lost the bit and the
+    /// follower is let go behind the dead eye (the retail sd run).
+    #[test]
+    fn a_dead_client_is_still_followed_and_a_spectating_one_lets_go() {
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        rig.script().host.client_vitals[1].dead = true;
+        rig.script().set_client_state_for_test(1, "dead");
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 1);
+        assert_eq!(ps_i32(&s, "pm_type"), 6);
+
+        let (eye, view) = (rig.sim(1).ps.view().eye, rig.sim(1).view_angles());
+        rig.script().set_client_state_for_test(1, "spectator");
+        rig.sim_mut(1)
+            .become_spectator([0.0, 0.0, 300.0], 0.0, [0; 3]);
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        let (spot, _) = crate::follow::stop_spot(None, eye.into(), view);
+        let o = s.ps.origin(&PROTOCOL_V1);
+        assert!(
+            (glam::Vec3::from(o) - glam::Vec3::from(spot)).length() < 0.5,
+            "{o:?} against {spot:?}"
+        );
+    }
+
+    /// `player_die`'s walk (combat doc, 4.2 step 9): a spectator following
+    /// the victim is sent the scoreboard on the death, and nobody else is.
+    #[test]
+    fn a_death_sends_its_followers_the_scoreboard() {
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        let scoreboards = |cmds: Vec<String>| cmds.iter().filter(|c| c.contains(":b ")).count();
+        assert_eq!(scoreboards(rig.commands()), 0);
+        rig.script().host.client_vitals[2].dead = true;
+        assert_eq!(scoreboards(rig.commands()), 0);
+        rig.script().host.client_vitals[1].dead = true;
+        assert_eq!(scoreboards(rig.commands()), 1);
+    }
+
+    /// `ClientDisconnect` moves every follower of the leaving client on to
+    /// the next one, and lets it go when there is none.
+    #[test]
+    fn a_dropped_client_passes_its_followers_on() {
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        rig.sv.drop_client(1, "EXE_DISCONNECTED");
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 2);
+        rig.sv.drop_client(2, "EXE_DISCONNECTED");
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(ps_i32(&s, "pm_flags") & 0x10000, 0);
+    }
+
+    /// A script's `spectatorclient` is a forced follow: both bits on the
+    /// frame, the buttons do nothing to it, and one naming a slot with
+    /// nothing to follow is written back to -1.
+    #[test]
+    fn a_forced_follow_carries_both_bits_and_an_empty_slot_is_cleared() {
+        let mut rig = FollowRig::new();
+        rig.script()
+            .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(2));
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 2);
+        assert_eq!(ps_i32(&s, "pm_flags") & 0x70000, 0x30000);
+        assert_eq!(ps_i32(&rig.press(msg::BUTTON_ATTACK), "clientNum"), 2);
+        assert_eq!(ps_i32(&rig.step(msg::BUTTON_ADS), "clientNum"), 2);
+
+        rig.script()
+            .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(5));
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(
+            rig.script().client_field(0, "spectatorclient").as_deref(),
+            Some("-1")
+        );
+    }
+
+    /// A forced follow with a replay behind it is the killcam, which has no
+    /// archive to come from here: nothing is copied, and the fields are left
+    /// for the script's own `archivetime <= delay` branch to clear.
+    #[test]
+    fn a_killcam_follow_copies_nothing() {
+        let mut rig = FollowRig::new();
+        rig.script()
+            .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(1));
+        rig.script()
+            .set_client_field_for_test(0, "archivetime", vcod_gsc::Value::Float(9.0));
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(
+            rig.script().client_field(0, "spectatorclient").as_deref(),
+            Some("1")
         );
     }
 }

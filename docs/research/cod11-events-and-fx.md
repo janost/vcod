@@ -308,8 +308,9 @@ through the same path as 173/174 minus the impact effect
 vcod's server raises the pair in `finishPlayerDamage`
 (`crates/server/src/game/builtins/combat.rs`, `combat::flesh_impacts`) and
 filters it per snapshot against the frame's `ps.clientNum`
-(`crates/server/src/game/temp_entity.rs`); it has no killcam and no follow, so
-that number is always the client's own.
+(`crates/server/src/game/temp_entity.rs`). It models the follow and not the
+killcam, so a follower's frame carries the followed client's number
+(`cod11-spectator-follow.md`).
 
 ### `EV_GRENADE_BOUNCE` (177), `EV_GRENADE_EXPLODE` (178), `EV_ROCKET_EXPLODE` (179) / `_NOMARKS` (180)
 
@@ -640,7 +641,8 @@ tracer-chance roll.
 ## 7. Detecting spectator-follow state in `playerState`
 
 Confirmed: `ps.clientNum != our own client number` means we are following
-someone.
+someone. The server side of the follow (buttons, cycle, let-go, disconnect,
+live measurements) is `cod11-spectator-follow.md`.
 
 `SpectatorClientEndFrame` @ `game.mp.i386.so 0x40760` is the whole story. When
 `client->sess.spectatorClient >= 0` the server copies the followed player's

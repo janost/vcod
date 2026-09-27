@@ -206,6 +206,11 @@ compares every player's `sessionstate` against strings and a fatal
 `spawn_client` seeds the field with that string. The other four custom
 getters' pre-write readings are still unmeasured.
 
+`spectatorclient` reads -1 before script writes it, not the 0 the
+`gclient_t` zeroing would leave. VERIFIED: `ClientConnect` stores -1 at
+`client+0x20d4` (0x42534), the field's offset, after its `bzero`. What the
+field does is `cod11-spectator-follow.md`.
+
 The engine, not script, puts that handle there. VERIFIED live on the retail
 1.1d server with `crates/gsc/tests/fixtures/semantics/client-probes/probe_pers.gsc`,
 run 2026-08-31 on mp_pavlov with one connected client (that directory's README

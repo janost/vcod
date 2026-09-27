@@ -352,6 +352,8 @@ impl ObjectTable {
             .iter()
             .map(|f| match (f.name, f.ty) {
                 ("sessionstate", _) => Value::String(cx.intern_exact("spectator")),
+                // `ClientConnect` writes -1 after the zeroing (0x42534).
+                ("spectatorclient", _) => Value::Int(-1),
                 (_, crate::game::fields::FieldType::Int) => Value::Int(0),
                 (_, crate::game::fields::FieldType::Float) => Value::Float(0.0),
                 _ => Value::Undefined,
