@@ -10,7 +10,7 @@ use crate::play::input::{EF_CROUCH, EF_PRONE};
 use vcod_common::localize::Localized;
 use vcod_common::net::msg::Objective;
 use vcod_common::pmove::weapon::{hip_spread_min, SpreadStance};
-use vcod_common::weapon::WeaponDef;
+use vcod_common::weapon::{SightDirection, WeaponDef};
 
 /// Hint strings (`serverCursorHintString`) index configstrings from here.
 pub const CS_HINT_STRINGS: usize = 1212;
@@ -309,28 +309,6 @@ pub fn arm_offset(
         (640.0 / fov_x * spread).max(def.reticle_min_ofs),
         (480.0 / fov_y * spread).max(def.reticle_min_ofs),
     )
-}
-
-/// Which way the sight last started moving: set when `fWeaponPosFrac` leaves
-/// 0 or 1 upward, cleared when it leaves downward, held otherwise, and only
-/// tracked for a weapon with `aimDownSight`.
-#[derive(Default)]
-pub struct SightDirection {
-    prev: f32,
-    raising: bool,
-}
-
-impl SightDirection {
-    pub fn step(&mut self, weapon: Option<&WeaponDef>, frac: f32) -> bool {
-        if weapon.is_some_and(|d| d.aim_down_sight) {
-            let at_rest = |f: f32| f == 0.0 || f == 1.0;
-            if !at_rest(frac) && at_rest(self.prev) && frac != self.prev {
-                self.raising = self.prev <= frac;
-            }
-            self.prev = frac;
-        }
-        self.raising
-    }
 }
 
 /// The crosshair's quads, none at full sight or with no reticle. Its images
