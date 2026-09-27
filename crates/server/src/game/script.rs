@@ -1234,17 +1234,63 @@ impl ScriptRuntime {
             .client_field(slot, "spectatorclient")
             .and_then(|v| v.parse().ok())
             .unwrap_or(-1);
-        let killcam = self
-            .host
-            .client_archive_asked
-            .get(slot)
-            .copied()
-            .unwrap_or(false);
+        let archive_ms = self.client_archive_ms(slot);
         Some(Session {
             state,
             spectator_client,
-            killcam,
+            archive_ms,
         })
+    }
+
+    /// A client's `archivetime` in the milliseconds the engine reads, 0 for
+    /// a slot with no client entity.
+    pub fn client_archive_ms(&mut self, slot: usize) -> i32 {
+        let i = crate::game::fields::archive_time_index();
+        self.client_entity(slot)
+            .and_then(|ent| self.host.ents.get(ent))
+            .and_then(|e| e.client.as_ref())
+            .map_or(0, |c| crate::game::host::archive_time_ms(c[i]))
+    }
+
+    /// The engine's own write to `archivetime`: the archive's trim and
+    /// `SpectatorClientEndFrame`'s retry store milliseconds straight into the
+    /// field (`crate::archive`).
+    pub fn set_client_archive_ms(&mut self, slot: usize, ms: i32) {
+        let Some(ent) = self.client_entity(slot) else {
+            return;
+        };
+        let i = crate::game::fields::archive_time_index();
+        if let Some(c) = self.host.ents.get_mut(ent).and_then(|e| e.client.as_mut()) {
+            c[i] = Value::Int(ms);
+        }
+    }
+
+    /// `ClientEndFrame`'s own `ClientSpawn` (0x40f82): the memset takes the
+    /// weapons and the ammo with the rest of the playerstate, and the
+    /// entity is at the new spot. Unlike the `spawn` builtin it leaves the
+    /// health, which the dead end of a killcam reads 0 on.
+    pub fn engine_client_spawn(&mut self, slot: usize, origin: [f32; 3], yaw_deg: f32) {
+        if let Some(w) = self.host.client_weapons.get_mut(slot) {
+            *w = crate::weapons::PlayerWeapons::default();
+        }
+        if let Some(a) = self.host.client_ammo.get_mut(slot) {
+            *a = crate::game::host::AmmoArrays::default();
+        }
+        self.set_client_origin(slot, origin);
+        let Some(ent) = self.client_entity(slot) else {
+            return;
+        };
+        use vcod_gsc::Host;
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let field = cx.intern_folded("angles");
+            let _ = host.set_field(cx, ent, field, Value::Vector([0.0, yaw_deg, 0.0]));
+        });
+    }
+
+    /// Whether script has turned the frame archive on (`setarchive`).
+    pub fn archive_on(&self) -> bool {
+        self.host.archive_on
     }
 
     /// The engine's own write to `spectatorclient`: `SpectatorClientEndFrame`
@@ -1423,9 +1469,6 @@ impl ScriptRuntime {
                 }
                 if let Some(b) = self.host.client_old_buttons.get_mut(slot) {
                     *b = 0;
-                }
-                if let Some(a) = self.host.client_archive_asked.get_mut(slot) {
-                    *a = false;
                 }
                 self.host.reset_client_objectives(slot);
                 // The carried `pers`, if the boundary this client crossed

@@ -3,8 +3,8 @@
 How a spectator's view rides another client: where the state lives, which
 buttons move it, what the copied playerstate carries and what the spectator
 keeps of its own, when a follow ends and where the spectator is left, which
-entities a follower is sent, and what the killcam, which rides the same
-fields, would need on top.
+entities a follower is sent, and the killcam, which rides the same fields
+with a replay behind them (section 12).
 
 Evidence rules as everywhere in this directory. This document carries no
 document-level default: every claim carries its own label. VERIFIED is a byte
@@ -76,7 +76,7 @@ against 2 on `cl+0x20d0` ahead of the call.
 
 ## 4. Who can be followed
 
-- VERIFIED: `trap_GetArchivedPlayerState` is game syscall 0x42 (0x73bac),
+- VERIFIED: `trap_GetArchivedPlayerState` is game syscall 0x42 (0x63bac),
   which `cod_lnxded` dispatches to 0x808ef7c.
 - INFERRED (0x808ef8f..0x808efc1): with no archived frame for the requested
   age (0x808eeb8 answers none) and an age below 1, it asks the game module's
@@ -205,7 +205,7 @@ after going active, and prints every snapshot whose `clientNum`, `pm_type`,
   `level.playercam`; every gametype's `main` calls `setarchive(true)`
   (dm.gsc 118).
 - VERIFIED: `setarchive` is the builtin at 0x5f704, which passes its bool to
-  syscall 0x45 (0x73c7c); `cod_lnxded` 0x808b4ac stores it and allocates the
+  syscall 0x45 (`trap_SetArchive`, 0x63c7c); `cod_lnxded` 0x808b4ac stores it and allocates the
   archive's buffers (0x440000, 0x2130000, 0x2580, 0x2000000 and 0x3800
   bytes) the first time it is set.
 
@@ -231,36 +231,239 @@ Where it is not retail's:
   frame writes (the pain event, the damage feedback, the dead `pm_type`).
 - After a follow ends vcod's spectator is its own playerstate again, velocity
   zero; retail keeps the rest of the copy (section 7).
-- A `sessionstate` moved off spectator without a `spawn` while following
-  takes retail's `ClientSpawn` arm in `ClientEndFrame` (object-model doc,
-  the `ps.clientNum != ent->s.number` branch); vcod just drops the follow.
-- A forced follow with `archivetime` above 0 is the killcam, which vcod does
-  not serve: nothing is copied and the fields are left for the stock
-  `archivetime <= delay` branch, which reads the 0 vcod stores and clears
-  them. Retail with an empty archive would follow the attacker live instead
-  (section 5's retry reaches age 0).
 
-## 12. What the killcam would need
+## 12. The killcam
 
-- The archive. INFERRED from `cod_lnxded` 0x808fb84, which runs only while
-  `setarchive` is on: every frame it writes a frame record into a ring of
-  0x200 (0x83b67f0), a record of 0x2130 bytes per connected client into a
-  ring of 0x1000 (0x83b67ec) holding that client's playerstate as export 8
-  answers it, and a record of 0x110 bytes per linked entity into a ring of
-  0x4000 (0x83b67e8), and writes the same through the `MSG` delta writers.
-- The age. INFERRED from 0x808eeb8: the requested age is converted to frames
-  through `sv_fps` (0x808eef4) and clamped to the last 0x4b0 frames
-  (0x808ef09), and the clamp is written back to the script's `archivetime`,
-  which is what the stock `wait 0.05; if(self.archivetime <= delay)` reads.
-- The time shift. INFERRED from 0x808ef7c's adds after the copy: the
-  record's age is added to each non-zero one of `commandTime`, `ps+0x10`,
-  `ps+0x38`, `ps+0x64`, `ps+0xd4` and `ps+0x3e0`, to four time fields in
-  each of the 31 archived HUD elements, and to `ps+0x20cc`.
-- The entities. INFERRED from the branch at 0x808f211 on the archived frame:
-  the snapshot builder takes a killcam frame's entity list from the archive,
-  not from the live world.
-- vcod would need a ring of every client's wire playerstate and entity list
-  per frame, the seconds-to-milliseconds `archivetime` setter with the trim
-  written back, the time shift, a snapshot path that sends the archived
-  entity list to a spectator whose `archivetime` is above 0, and
-  `ClientEndFrame`'s `ClientSpawn` arm for the return to `dead`.
+A killcam is a forced follow whose copy comes out of the engine's frame
+archive, `archivetime` back, with every time in it moved forward by the
+record's age, and whose snapshot takes its entities from the same archived
+frame. The stock scripts drive it; the engine's part is the archive, the
+lookup, the copy's retry, the shift and the snapshot's entity source.
+
+### 12.1 What the stock scripts ask for
+
+- VERIFIED, `maps/MP/gametypes/dm.gsc` and `tdm.gsc` in `pak5.pk3`: a kill by
+  another player threads `killcam(attackerNum, delay)` after
+  `Callback_PlayerKilled`'s `wait delay` (2), unless `scr_forcerespawn` is
+  above 0 (dm.gsc 541). `sd.gsc` and `re.gsc` do it only while the victim's
+  team still has a live player and the round has not ended (sd.gsc 843, 849).
+  No stock script reads a `scr_killcam` cvar; there is no switch other than
+  `scr_forcerespawn`.
+- VERIFIED, dm.gsc 754..851: `killcam` sets `sessionstate` `"spectator"`,
+  `spectatorclient` the attacker and `archivetime` `delay + 7`, waits 0.05,
+  gives up (dm: back to `"dead"` and `respawn()`) if `archivetime <= delay`,
+  draws five unarchived elements (two bars, title, skip text, a tenths timer
+  of `archivetime - delay`), then waits for `waitKillcamTime`'s
+  `wait (archivetime - 0.05)` or a use press after a release. The end writes
+  `spectatorclient` -1 and `archivetime` 0; dm and tdm also write
+  `sessionstate` `"dead"` and thread `respawn()`, sd and re leave the client
+  a spectator.
+- VERIFIED, sd.gsc 1147..1158: `roundcam` with a bomb camera spawns the
+  spectator at the camera and writes `archivetime` without a
+  `spectatorclient`, which is the entity half of the replay alone (12.6).
+
+### 12.2 `archivetime`
+
+- VERIFIED: its setter (`game.mp.i386.so` 0x41db8) multiplies
+  `Scr_GetFloat`'s value by 1000.0 (0x7306c), stores it with `fistp` under the
+  control word with 0xc00 set, which truncates toward zero, at `cl+0x20dc`.
+  Its getter (0x41dfc) loads that integer and multiplies by 0.001 (0x73070).
+  The field is milliseconds; script sees seconds.
+- VERIFIED: `vmMain` (0x50dd4) cases 0x12 and 0x13 read and write
+  `level + 0x20dc + n * 0x22c4`, which is the engine's access to the same
+  milliseconds.
+
+### 12.3 The archive
+
+- VERIFIED: `setarchive` (0x5f704) calls `Scr_GetBool` (relocation at
+  0x5f712) and `trap_SetArchive` (0x5f718). `cod_lnxded` 0x808b4ac stores the
+  flag at 0x83b67c8 (section 10 has the allocations).
+- VERIFIED: 0x808b2c8 stores 0 into the flag and into the counters at
+  0x83b67cc, 0x83b67d8, 0x83b67dc, 0x83b67e0 and 0x83b67e4; `SV_SpawnServer`
+  (0x808a220, the `Server: %s` banner) stores the same zeros inline, and the
+  restart (0x8083de4, the `g_gametype variable change -- restarting.` string)
+  calls 0x808b2c8. INFERRED: every map load and every restart turns the
+  archive off and empties it, and it is the new level's `main`, calling
+  `setarchive(true)`, that turns it back on.
+- INFERRED from 0x808fb84, which `SV_Frame` calls after each `G_RunFrame` and
+  after the snapshots: while the flag is on, every server frame is kept. A
+  full record (frame number, `svs.time`, and the ranges of its client and
+  entity records) is written at most once per `sv_fps` frames; the others go
+  as a delta message into a 0x2000000-byte stream indexed by a 0x4b0-slot
+  table, which 0x808e68c decodes back into records on demand. A frame holds
+  every connected client's `clientState` (game export 0x11) and, where
+  export 8 answers (section 4, the own-view bit), its playerstate, and every
+  linked entity that is not `SVF_NOCLIENT` and has clusters or a broadcast
+  bit, with its `svFlags`, `singleClient` and linked box.
+
+### 12.4 The lookup and the trim (0x808eeb8)
+
+- INFERRED: with the flag off it answers nothing and leaves the age alone,
+  and so does an age below 1. Otherwise the frame is the frame count less
+  `sv_fps * age / 1000`. A frame older than the count less 0x4b0 is clamped
+  there and the age rewritten as `0x4b0 * 1000 / sv_fps`; a frame before the
+  first is clamped to 0 and the age rewritten as `count * 1000 / sv_fps`. The
+  first frame from there on that decodes is the answer; none sets the age to
+  0. The age is passed by pointer, so every rewrite lands in `archivetime`
+  (12.2), which is what the stock `wait 0.05; if(self.archivetime <= delay)`
+  reads a frame later.
+
+### 12.5 The copy and its retry
+
+- INFERRED (`SpectatorClientEndFrame` 0x407c1..0x40859, with section 5): a
+  forced follow clamps a negative age to 0 and asks
+  `trap_GetArchivedPlayerState` (0x808ef7c); each failure lowers the age 50
+  and asks again, down to an age of 0, where no frame is found and the live
+  client is copied if export 8 answers for it. A follow that still has
+  nothing writes -1 to `spectatorclient` and the target.
+- INFERRED (0x808ef7c): a frame that is found but holds no record for the
+  client, or a record whose playerstate export 8 refused, is a failure with
+  no live fallback. So the retry settles on the first archived frame where
+  the followed client had a view of its own.
+- VERIFIED live, the two tdm runs of 12.9: a killcam's age was 9000 whenever
+  the attacker had been playing that long, and 6600 and 7500 when it had
+  joined 6.6 and 7.5 s before the killcam's first frame. The committed
+  capture `crates/server/tests/fixtures/playerstate/mp_carentan-tdm-hit-target.txt`
+  reads 8650: its replayed origins lie on the shooter capture's trail 8650 ms
+  back, and the replay's first frame shows the shooter standing at its spawn
+  before its first move.
+
+### 12.6 The shift and the snapshot
+
+- VERIFIED stores in 0x808ef7c after the 0x834-dword copy: the age, `svs.time`
+  (0x83b67a4) less the record's time (`+4`), is added to each non-zero dword
+  at `ps+0x0`, `+0x10`, `+0x38`, `+0x64`, `+0xd4` and `+0x3e0`, which the
+  playerstate netfield table names `commandTime`, `pm_time`,
+  `iFoliageSoundTime`, `jumpTime`, `viewHeightLerpTime` and `shellshockTime`;
+  to each non-zero `+0x24`, `+0x44`, `+0x54` and `+0x5c` of the 31 0x70-byte
+  elements from `ps+0x1338`, the archived HUD half, which are `fadeStartTime`,
+  `scaleStartTime`, `moveStartTime` and `time`
+  (`cod11-gsc-object-model.md`'s HUD tweens); and to `ps+0x20cc`, `deltaTime`,
+  unconditionally.
+- VERIFIED: `ClientEndFrame` zeroes `ps+0x20cc` before anything else
+  (0x40eb4), so a live frame's `deltaTime` is 0 and a replay's is the age.
+- INFERRED (0x808f130, `SV_BuildClientSnapshot`): every snapshot reads the
+  client's `archivetime` through export 0x12, runs the lookup and writes the
+  age back through 0x13, whether or not the client follows anyone. With a
+  frame, the entities are that frame's records culled from the playerstate's
+  eye against their linked boxes (0x808e4a8), with the single-client tests
+  against `ps.clientNum` and the `clientNum` entity left out only while
+  `pm_flags` 0x10000 is set, and the roster is that frame's client records.
+  Each entity's non-zero `+0x10`, `+0x34`, `+0x54` and `+0x58`, which are
+  `pos.trTime`, `apos.trTime`, `time` and `time2`, take the age.
+- VERIFIED live: `deltaTime` read the age on every replayed frame and 0
+  everywhere else; `serverTime - commandTime` read 0..34 through the replay
+  as it does live; the archived round clock's `time` read 1809000 where the
+  live one read 1800000, and the killcam's own five elements, unarchived,
+  were unshifted and first sent on the replay's second frame.
+- VERIFIED live: the victim's own entity was sent alive in the replay, and
+  its corpse was not: the entity went and body 64 came on the same replayed
+  frame, one age after the live death; a respawn and second death inside a
+  replay window showed one age late the same way. The attacker was never in
+  its own replay. The committed hit-target capture carries the kill's
+  obituary twice, the second 8650 ms after the first, the archived temp
+  entity sent again.
+
+### 12.7 The end
+
+- INFERRED (`ClientEndFrame`, 0x40f45 and 0x40f82): the playing and dead arm
+  runs only while `ps.clientNum` is the client's own number; a playerstate
+  still holding a copy takes the other branch, `ClientSpawn` at the copy's
+  `origin` with the angles `(0, viewangles[1], 0)`.
+- VERIFIED: `ClientSpawn` calls `ClientEndFrame` (relocation at 0x42a75) and
+  `ClientThink_real` (0x42a82). INFERRED: the spawn's own end frame takes the
+  arm its `sessionstate` names, so a `"dead"` one is a dead player at once.
+- VERIFIED live, tdm, every natural end: the frame one age after the first
+  replayed frame reads the victim's own `clientNum`, `pm_type` 6, `pm_flags`
+  0x40800, `eFlags` 0x18 where the replay read 0x10, weapon 0, health 0,
+  `serverTime - commandTime` 0, the replay's last origin and yaw with pitch
+  0, and both HUD arrays empty; the next frame has the clock and the respawn
+  text back. The committed hit-target capture's end frame reads health 0,
+  `pm_type` 6, `eventSequence` 0, no clip and no reserve, the teleport bit
+  flipped, at the replay's last origin, one age after its first frame.
+  INFERRED: `ClientSpawn` flips the bit of the copied `eFlags`, and its
+  memset clears the HUD after the frame's HUD update.
+- VERIFIED live, tdm: a use press 3500 ms into the replay went from the last
+  replayed frame straight to the victim alive at a spawn, with no dead frame
+  between, in all three runs. INFERRED: `waitSkipKillcamButton`'s notify
+  resumed `killcam`, and `respawn`'s `waitRespawnButton`, past its opening
+  `wait 0`, read the same press, all inside one frame.
+- INFERRED, from the natural length being the age exactly: `waitKillcamTime`,
+  started after `killcam`, resumed `killcam`'s `waittill("end_killcam")` on
+  the frame of its own notify.
+- VERIFIED live, sd: at the end the victim read the attacker with `pm_flags`
+  0x10000, `deltaTime` 0, no teleport flip and no empty frame, and kept
+  following it live for the remaining 100 s; its use presses did nothing.
+  INFERRED: section 5's live copy through the target the forced follow left
+  behind.
+
+### 12.8 What the runs did not separate
+
+- Whether the dead spawn's origin and yaw are the last replayed copy's or the
+  attacker's live ones: the shooter stood still at every end.
+- Whether the replay's roster is the archived one: nothing in the roster
+  changed inside any replay window.
+- The objectives on the end frame: the probe did not print them.
+
+### 12.9 The retail runs
+
+2026-09-27, `tools/run_server.sh mp_carentan +set g_gametype tdm +set
+scr_friendlyfire 1` (and `sd`) on port 29016. The victim was
+`--net-probe --probe-killcam --probe-team allies`, which stands still, never
+sends `kill`, presses use 20 s after each death (or, with
+`--probe-killcam-skip-ms 3500`, that long into the replay) and prints every
+snapshot from its death to 3 s after it is alive again; the shooter was
+`--save-hit --probe-sweep --probe-team allies`, which writes no fixture. Six
+natural tdm killcams, three skipped ones and one sd killcam. The logs are not
+committed; the committed evidence is the earlier tdm hit pair, which caught a
+killcam of its own, and `crates/server/tests/killcam_ab.rs` holds both its
+reading and our server's schedule to it.
+
+### 12.10 vcod
+
+`crates/server/src/archive.rs` is the archive: while script has
+`setarchive(true)` on, `Server::archive_frame` keeps, after each frame's
+snapshots, the entities and roster they were built from and every client's
+own-view playerstate, eye, view and feet, in a ring of 0x4b0 frames that every
+level load clears. `Archive::lookup` is 12.4 and `Archive::player_state` is
+0x808ef7c. `follow_end_frame` runs 12.5's retry and writes the trimmed age
+back into `archivetime`, which the host keeps in milliseconds (12.2);
+`send_snapshots` builds a replay's playerstate out of the archived frame
+(`archive::replayed_ps`, 12.6) and sends any client whose `archivetime` names
+a frame that frame's entities and roster, shifted. A playing or dead client
+whose last frame was a copy is spawned at the copy (`spawn_from_copy`, 12.7),
+its teleport bit the copy's flipped and its weapons and ammo gone, and its HUD
+arrays go out empty on that frame. `crates/server/tests/killcam.rs` runs the
+stock dm killcam end to end, the skip included.
+
+VERIFIED live against ours, 2026-09-27, `vcod-server mp_carentan
+--gametype-script .../client-probes/probe_passthru.gsc --set probe_teleport=1
+--set scr_friendlyfire=1` on port 29015 with the 12.9 probes (victim on
+axis): five killcams, each starting 2000 ms after the death; the first, the
+shooter having spawned 5.2 s before it, read `deltaTime` 5200 and ended 5200
+ms after its first frame, the rest 9000; the end frame read the victim's own
+number, `pm_type` 6, the replay's last origin, pitch 0, `eFlags` 0x10 where
+the replay read 0x18, weapon 0 and both HUD arrays empty. The same run with
+`--probe-killcam-skip-ms 3500` went from the last replayed frame to the
+victim alive at a spawn, with no dead frame between, three times out of
+three.
+
+Two scheduler rules came with it, both off 12.7's timings: a notify that
+wakes a thread started before the notifier resumes it in the same frame's
+pass, and a `wait 0` reached in the frame's pass resumes in that pass
+(`vcod-gsc`'s `step_runnable`).
+
+Where it is not retail's:
+
+- The archive is whole frames in memory, an entity unchanged since the last
+  frame shared rather than copied, not a delta stream. Every frame of the last
+  0x4b0 is kept; retail loses one when its stream wraps. INFERRED from the
+  sizes: a busy level can wrap 32 MB inside a minute of frames.
+- The replay is culled by vcod's own box-cluster test from the archived
+  view eye, where retail takes box leaves from the archived abs box.
+- `pm_flags` 0x800 (`PMF_RESPAWNED`, `cod11-mantle.md`) is not set on the dead
+  spawn, nor on any vcod spawn: ours reads 0x40000 where retail reads 0x40800.
+  The dead spawn's eye starts its drop from the standing height, where
+  retail's first dead frame already reads 42, and its `commandTime` is the
+  client's last cmd (`serverTime - commandTime` 33) rather than the frame's
+  (0).

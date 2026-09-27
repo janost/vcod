@@ -462,6 +462,17 @@ engineering setup works.
   section 9, a dm and an sd run). It writes no fixture, but the target half
   writes its own: move it to `tmp/` and `git checkout` the fixture directory
   after.
+  `--probe-killcam` is the killcam's victim: it joins `--probe-team`, stands
+  still, never sends `kill` (a suicide gets no killcam), presses use 20 s
+  after each death so the replay runs out on its own, or
+  `--probe-killcam-skip-ms N` into the replay to skip it, and prints a
+  `KILLCAM` line per snapshot from the death to 3 s after the respawn:
+  `clientNum`, `pm_flags`, `deltaTime`, the player and body entities, the
+  roster and both HUD arrays. A `--save-hit --probe-sweep` shooter on the same
+  team under tdm with `scr_friendlyfire 1` does the killing; against ours,
+  the `probe_passthru` gametype with `probe_teleport=1` and the victim on
+  axis puts the two in each other's sight. It writes no fixture; what it
+  measured is `docs/research/cod11-spectator-follow.md` section 12.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
@@ -559,8 +570,17 @@ engineering setup works.
   followed eye, a script's `spectatorclient` forces it, a dead client is still
   followed and a spectating or leaving one is not, and the follower is sent
   the followed client's playerstate with `pm_flags` 0x10000, culled from its
-  eye and scoped by its number. Not modelled: the killcam (section 12 of that
-  doc is what it needs), `enableLinkTo`, a linked player on a moving
+  eye and scoped by its number. The killcam rides the same follow: while
+  script has `setarchive(true)` on, every frame's playerstates, entities and
+  roster go into a ring of 1200 frames (`crates/server/src/archive.rs`); a
+  forced follow with `archivetime` above 0 copies the followed client as that
+  ring had it that long ago, retried 50 ms younger until a frame answers, with
+  the trim written back into `archivetime`; a client whose `archivetime`
+  names a frame is sent that frame's entities and roster, every time shifted
+  by the age; and the stock script's return to `dead` with the replay still
+  in the playerstate spawns the client where the replay left it
+  (`docs/research/cod11-spectator-follow.md` section 12). Not modelled:
+  `enableLinkTo`, a linked player on a moving
   parent, and script models in weapon, missile and lookat traces. A mounted MG (`crates/server/src/game/turret.rs`,
   `docs/research/cod11-turrets.md`) mounts inside the use cmd that presses it,
   locks the gunner's pmove and view to the gun's arc, and aims, fires and
@@ -626,8 +646,10 @@ engineering setup works.
   the deaths it sees first, whose followers are sent the scoreboard with the
   frame's server commands), then
   slot by slot the follow half of `ClientEndFrame` (a playing or dead client
-  takes the own-view bit a follow copies, a spectator lands its follow or
-  lets go, reading a lower slot's bit from this frame), the contents write, `StuckInClient`'s scan for a live player
+  takes the own-view bit a follow copies, and is first spawned where a copy
+  still in its playerstate stood; a spectator lands its follow, out of the
+  archive when `archivetime` asks for a replay, or lets go, reading a lower
+  slot's bit from this frame), the contents write, `StuckInClient`'s scan for a live player
   (the push and its CORPSE mark, which reach the wire `solid` only at the
   pushed player's next cmd) and `end_frame`, then `ClientEndFrame`'s aim
   trace per playing client, off the frame's final eye and aim with `pm_type` and `on_ground` mirrored again
@@ -642,8 +664,11 @@ engineering setup works.
   then the console lines, configstring changes, server commands and
   intermission scoreboard the script queued go out, and last the entities are
   built once and culled and written per client, a follower's frame being its
-  target's playerstate, eye and number. A dropped client's followers are
-  passed on at the drop, outside the tick. Origin, `pm_type`,
+  target's playerstate, eye and number (a replay's out of the archived
+  frame), and a client whose `archivetime` names an archived frame being sent
+  that frame's entities and roster instead of this one's; after the
+  snapshots the frame itself is archived, while `setarchive` is on. A dropped
+  client's followers are passed on at the drop, outside the tick. Origin, `pm_type`,
   `on_ground`, yaw, the ammo arrays, the last-round take and the current
   weapon, but only the one a move switched to, are the mirrors that no longer
   wait for the post-script pass: the touch pass needs this cmd's values, not
@@ -1028,6 +1053,13 @@ never pasted decompiler output or disassembly listings.
   lean, so a sighted carbine walk is 89.7 and a plain run 224 (the mantle
   doc, "The wish speed"). The motion gate never compared velocity, which is
   how 190 flat survived for a month.
+- A notify wakes a thread started before the notifier inside the same
+  frame, and a `wait 0` reached in the frame's pass resumes before the frame
+  ends: the retail killcam lasts exactly its age and its skip respawns with
+  no dead frame between, and both break with a one-frame lag
+  (`docs/research/cod11-gsc-language.md`, the notify paragraph). The packet
+  pass leaves a `wait 0` for the frame, so a `for(;;) wait 0;` loop spins to
+  the frame's thread cap.
 - A thread's own `notify` does not fire its own `endon`. A thread that
   `endon`s an event and then notifies that event itself survives and runs on;
   every *other* thread's `endon` on it still kills. Measured with

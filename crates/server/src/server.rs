@@ -336,16 +336,21 @@ fn followable(clients: &[Option<Client>], slot: usize) -> bool {
 }
 
 /// `ClientEndFrame`'s follow half for one slot, in slot order: a playing or
-/// dead client takes the own-view bit a follow copies, and a spectator runs
-/// `SpectatorClientEndFrame` (0x40760). A forced follow of a client that
-/// cannot be copied writes -1 back into `spectatorclient`; a follow that
-/// finds nothing to copy is `StopFollowing`, which writes it too.
+/// dead client takes the own-view bit a follow copies, or is spawned where a
+/// copy still in its playerstate left it, and a spectator runs
+/// `SpectatorClientEndFrame` (0x40760). A forced follow's copy is taken
+/// `archivetime` back, retried 50 ms younger each time it fails down to a
+/// live one, and the age it settled on is written back; a forced follow that
+/// finds nothing writes -1 back into `spectatorclient`, and so does a follow
+/// that finds nothing to copy, which is `StopFollowing`.
 fn follow_end_frame(
     clients: &mut [Option<Client>],
     slot: usize,
     rt: &mut script::ScriptRuntime,
+    archive: &crate::archive::Archive,
     collision: Option<&vcod_common::collision::CollisionWorld>,
 ) {
+    use crate::archive::Source;
     let Some(sim) = clients[slot].as_ref().and_then(|c| c.sim.as_ref()) else {
         return;
     };
@@ -354,11 +359,17 @@ fn follow_end_frame(
         clients[slot].as_mut().and_then(|c| c.sim.as_mut()).unwrap()
     }
     match session.state {
-        // A client script moved out of spectating without a `spawn` would
-        // take retail's `ClientSpawn` arm here (0x40f82); that is not
-        // modelled, the follow just ends.
         follow::SessionState::Playing | follow::SessionState::Dead => {
-            let sim = sim_mut(clients, slot);
+            let c = clients[slot].as_mut().unwrap();
+            let cmd_angles = c.last_cmd.angles;
+            let sim = c.sim.as_mut().unwrap();
+            // The copy is still the playerstate, whose `clientNum` is not
+            // this client's: `ClientSpawn` at its feet and yaw (0x40f82).
+            if let (true, Some(copied)) = (sim.follow.on, sim.follow.copied) {
+                let playing = session.state == follow::SessionState::Playing;
+                sim.spawn_from_copy(&copied, playing, cmd_angles);
+                rt.engine_client_spawn(slot, copied.origin, copied.angles[1]);
+            }
             sim.own_view = true;
             sim.follow = Default::default();
             return;
@@ -372,33 +383,64 @@ fn follow_end_frame(
         follow::SessionState::Spectator => {}
     }
     sim_mut(clients, slot).own_view = false;
+    let mut age = session.archive_ms;
     let mut forced = session.spectator_client;
     let mut target = sim_mut(clients, slot).follow.target;
+    let mut source = Source::None;
     if forced >= 0 {
-        // A replay the script asked for: there is no archive to take it
-        // from, and retail with an empty one would copy the live client
-        // instead. Nothing is copied and the fields are left for the
-        // script's own `archivetime <= delay` branch.
-        if session.killcam {
-            sim_mut(clients, slot).stop_following(collision);
-            return;
+        let t = forced as usize;
+        target = Some(t);
+        loop {
+            age = age.max(0);
+            source = archive.player_state(t, &mut age, followable(clients, t));
+            if source != Source::None || age == 0 {
+                break;
+            }
+            age -= 50;
         }
-        target = Some(forced as usize);
-        if !followable(clients, forced as usize) {
+        if source == Source::None {
             rt.set_client_spectator_client(slot, -1);
             forced = -1;
             target = None;
         }
     }
-    match target.filter(|t| followable(clients, *t)) {
-        Some(t) => {
+    if source == Source::None {
+        if let Some(t) = target {
+            source = archive.player_state(t, &mut age, followable(clients, t));
+        }
+    }
+    if age != session.archive_ms {
+        rt.set_client_archive_ms(slot, age);
+    }
+    let copied = match (target, source) {
+        (Some(t), Source::Live) => {
             let ts = clients[t].as_ref().and_then(|c| c.sim.as_ref()).unwrap();
-            let view = (ts.ps.view().eye.into(), ts.view_angles());
+            Some(follow::Copied {
+                eye: ts.ps.view().eye.into(),
+                angles: ts.view_angles(),
+                origin: ts.origin(),
+                teleport_bit: ts.teleport_bit(),
+                frame: None,
+            })
+        }
+        (Some(_), Source::Archived { frame, view }) => Some(follow::Copied {
+            eye: view.eye,
+            angles: view.angles,
+            origin: view.origin,
+            teleport_bit: view.ps.field_i32(&PROTOCOL_V1, "eFlags")
+                & crate::spectate::EF_TELEPORT_BIT
+                != 0,
+            frame: Some(frame),
+        }),
+        _ => None,
+    };
+    match copied {
+        Some(copied) => {
             sim_mut(clients, slot).follow = follow::Follow {
-                target: Some(t),
+                target,
                 on: true,
                 forced: forced >= 0,
-                view: Some(view),
+                copied: Some(copied),
             };
         }
         None => {
@@ -690,6 +732,18 @@ pub struct Server {
     /// A fresh LOS trace per bot per tick was the other half of the 24-bot
     /// CPU load; a bot does not need a new verdict every 50 ms.
     bot_enemies: BTreeMap<usize, (i32, Option<crate::bots::EnemyView>)>,
+    /// The frames the killcam replays, kept while script has `setarchive`
+    /// on and cleared by every level load (`crate::archive`).
+    archive: crate::archive::Archive,
+}
+
+/// A follower's frame: the followed client's number, its playerstate with
+/// the follow flags patched in, its eye, and whether it is a replay.
+struct FollowFrame {
+    target: usize,
+    ps: msg::PlayerState,
+    eye: [f32; 3],
+    replay: bool,
 }
 
 /// OOB argument text, minus a trailing line terminator.
@@ -816,6 +870,7 @@ impl Server {
             bots: BTreeMap::new(),
             bots_spawned: false,
             bot_enemies: BTreeMap::new(),
+            archive: Default::default(),
         };
         // `(rand() << 16) ^ rand() ^ Sys_Milliseconds()`, SV_SpawnServer 0x808a3e0.
         sv.checksum_feed = (sv.rand() << 16) ^ sv.rand() ^ (now.elapsed().as_millis() as i32);
@@ -2270,6 +2325,9 @@ impl Server {
         self.configstrings = configstrings;
         self.sync_sent_configstrings();
         self.script = Some(rt);
+        // `SV_SpawnServer` and `SV_MapRestart` both clear it, the flag
+        // included, and the new level's `main` turns it back on.
+        self.archive.clear();
         Ok(())
     }
 
@@ -3182,6 +3240,7 @@ impl Server {
                 self.sv_time_ms,
             );
             died.extend(mirror_vitals(&mut self.clients, rt));
+            self.archive.set_on(rt.archive_on());
             // `G_RunFrame`'s own slot order (0x50ab0-0x50ad7), not arrival
             // order (docs/research/cod11-player-clip.md 4.2, 6). No link
             // follows a CORPSE write here. The follow half goes first, so a
@@ -3189,7 +3248,7 @@ impl Server {
             // and a higher slot's from the last one, as retail's loop does.
             let collision = self.world.as_ref().map(|w| &w.collision);
             for slot in 0..self.clients.len() {
-                follow_end_frame(&mut self.clients, slot, rt, collision);
+                follow_end_frame(&mut self.clients, slot, rt, &self.archive, collision);
                 let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
                     continue;
                 };
@@ -3861,25 +3920,84 @@ impl Server {
             .collect();
         self.temp_cursor = temp_entity::advance(cursor, temp_states.len());
 
+        // What every snapshot this frame takes its entities from, and what
+        // the archive keeps of the frame. A missile carries `SVF_BROADCAST`
+        // (combat doc, 11.1), so it skips the cull the way a broadcast temp
+        // entity does.
+        let mut culled: BTreeMap<u32, Rc<msg::EntityState>> =
+            entities.into_iter().map(|(n, e)| (n, Rc::new(e))).collect();
+        culled.extend(client_entities.into_iter().map(|(n, e)| (n, Rc::new(e))));
+        let live = crate::archive::WorldFrame {
+            culled,
+            temps: temps
+                .iter()
+                .zip(temp_states)
+                .map(|(te, (_, e))| (te.scope, Rc::new(e)))
+                .collect(),
+            broadcast: self.script.as_ref().map_or_else(BTreeMap::new, |rt| {
+                rt.missiles()
+                    .entities(self.proto)
+                    .map(|(n, e)| (n, Rc::new(e)))
+                    .collect()
+            }),
+            roster: Rc::new(roster),
+        };
+
         // A follower's frame is the followed client's: its playerstate with
         // the follow flags patched in, its eye for the cull and its number
         // for the single-client scopes (`SpectatorClientEndFrame` 0x40896,
-        // `SV_BuildClientSnapshot` 0x808f25f). Built up front, since the loop
-        // below holds each slot mutably.
-        let follow_frames: Vec<Option<(usize, msg::PlayerState, [f32; 3])>> =
-            (0..self.clients.len())
-                .map(|slot| {
-                    let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
-                    let t = sim.follow.target.filter(|_| sim.follow.on)?;
-                    let tc = self.clients.get(t)?.as_ref()?;
-                    let ts = tc.sim.as_ref()?;
-                    let mut ps = ts.to_wire(self.proto, t as i32, tc.last_processed_st);
-                    let own = sim.to_wire(self.proto, slot as i32, 0);
-                    let ef = msg::PlayerState::field_index(self.proto, "eFlags").unwrap();
-                    follow::patch_wire(&mut ps, self.proto, sim.follow.forced, own.fields[ef]);
-                    Some((t, ps, ts.eye_origin()))
+        // `SV_BuildClientSnapshot` 0x808f25f). A copy the end frame took out
+        // of the archive is that frame's, its times shifted by the age
+        // (0x808ef7c). Built up front, since the loop below holds each slot
+        // mutably.
+        let now = self.sv_time_ms;
+        let follow_frames: Vec<Option<FollowFrame>> = (0..self.clients.len())
+            .map(|slot| {
+                let sim = self.clients[slot].as_ref()?.sim.as_ref()?;
+                let t = sim.follow.target.filter(|_| sim.follow.on)?;
+                let own = sim.to_wire(self.proto, slot as i32, 0);
+                let ef = msg::PlayerState::field_index(self.proto, "eFlags").unwrap();
+                let (mut ps, eye, replay) = match sim.follow.copied.and_then(|c| c.frame) {
+                    Some(index) => {
+                        let f = self.archive.frame(index)?;
+                        let view = f.clients.get(t)?.as_ref()?;
+                        let ps = crate::archive::replayed_ps(view, now - f.time, self.proto);
+                        (ps, view.eye, true)
+                    }
+                    None => {
+                        let tc = self.clients.get(t)?.as_ref()?;
+                        let ts = tc.sim.as_ref()?;
+                        let ps = ts.to_wire(self.proto, t as i32, tc.last_processed_st);
+                        (ps, ts.eye_origin(), false)
+                    }
+                };
+                follow::patch_wire(&mut ps, self.proto, sim.follow.forced, own.fields[ef]);
+                Some(FollowFrame {
+                    target: t,
+                    ps,
+                    eye,
+                    replay,
                 })
-                .collect();
+            })
+            .collect();
+
+        // `SV_BuildClientSnapshot` reads each client's `archivetime` again and
+        // takes the entities and the roster from the frame it names, times
+        // shifted by the age, whether or not the client follows anyone
+        // (0x808f1ab..0x808f211); the trim is written back as it is there.
+        let sources: Vec<Option<(i32, i32)>> = (0..self.clients.len())
+            .map(|slot| {
+                let rt = self.script.as_mut()?;
+                let asked = rt.client_archive_ms(slot);
+                let mut age = asked;
+                let index = self.archive.lookup(&mut age);
+                if age != asked {
+                    rt.set_client_archive_ms(slot, age);
+                }
+                let f = self.archive.frame(index?)?;
+                Some((index?, now - f.time))
+            })
+            .collect();
 
         for (slot, follow_frame) in follow_frames.iter().enumerate() {
             let follow_frame = follow_frame.as_ref();
@@ -3902,47 +4020,21 @@ impl Server {
             let message_num = c.netchan.outgoing_sequence;
             // The frame's `ps.clientNum`, which the single-client flags test
             // against and whose entity the frame leaves out.
-            let client_num = follow_frame.map_or(slot, |f| f.0);
+            let client_num = follow_frame.map_or(slot, |f| f.target);
 
             // Retail sends a client only what its own position can see, so
             // the list is per client rather than one list cloned into every
             // frame (docs/protocol-1.1.md, "Which entities a client is sent").
-            let mut sendable = entities.clone();
-            sendable.extend(
-                client_entities
-                    .iter()
-                    .filter(|(n, _)| **n != client_num as u32)
-                    .map(|(n, e)| (*n, e.clone())),
-            );
-            // A scoped temp entity is culled like any other entity; a
-            // broadcast one skips the cull, which is what retail's
-            // `SVF_BROADCAST` does (docs/protocol-1.1.md, "Which entities a
-            // client is sent").
-            for (te, (n, e)) in temps.iter().zip(&temp_states) {
-                if temp_entity::visible_to(te, client_num)
-                    && te.scope != temp_entity::Scope::Broadcast
-                {
-                    sendable.insert(*n, e.clone());
-                }
-            }
-            let eye = follow_frame.map_or_else(|| sim.eye_origin(), |f| f.2);
-            let mut visible = match collision_vis {
-                Some(vis) => crate::world::visible_entities(vis, eye, &sendable, self.proto),
-                None => sendable,
+            let eye = follow_frame.map_or_else(|| sim.eye_origin(), |f| f.eye);
+            let (world, shift) = match sources[slot] {
+                Some((index, shift)) => (&self.archive.frame(index).unwrap().world, shift),
+                None => (&live, 0),
             };
-            for (te, (n, e)) in temps.iter().zip(&temp_states) {
-                if te.scope == temp_entity::Scope::Broadcast {
-                    visible.insert(*n, e.clone());
-                }
-            }
-            // A missile carries `SVF_BROADCAST` too (combat doc, 11.1), so
-            // it skips the cull the way a broadcast temp entity does.
-            if let Some(rt) = self.script.as_ref() {
-                visible.extend(rt.missiles().entities(self.proto));
-            }
+            let visible = world.entities_for(client_num, eye, collision_vis, shift, self.proto);
+            let roster = (*world.roster).clone();
 
             let mut ps = match follow_frame {
-                Some(f) => f.1.clone(),
+                Some(f) => f.ps.clone(),
                 None => sim.to_wire(self.proto, client_num as i32, command_time),
             };
             // The script's HUD elements, filtered for this client the way
@@ -3956,14 +4048,24 @@ impl Server {
             if let Some(rt) = self.script.as_mut() {
                 let (archived, current) = rt.hud_elems(slot, team);
                 ps.arrays.hud_current = current;
-                if follow_frame.is_none() {
-                    ps.arrays.hud_archived = archived;
-                    ps.arrays.objectives = rt.objectives_for(slot, team);
-                } else {
-                    let t = client_num;
-                    ps.arrays.hud_archived = rt.hud_elems(t, team_of(t)).0;
-                    ps.arrays.objectives = rt.objectives_for(t, team_of(t));
+                match follow_frame {
+                    None => {
+                        ps.arrays.hud_archived = archived;
+                        ps.arrays.objectives = rt.objectives_for(slot, team);
+                    }
+                    Some(f) if !f.replay => {
+                        let t = client_num;
+                        ps.arrays.hud_archived = rt.hud_elems(t, team_of(t)).0;
+                        ps.arrays.objectives = rt.objectives_for(t, team_of(t));
+                    }
+                    Some(_) => {}
                 }
+            }
+            // `ClientSpawn`'s memset ran after the frame's HUD update
+            // (the retail killcam's end frame reads both arrays empty).
+            if sim.hud_cleared {
+                ps.arrays.hud_archived.clear();
+                ps.arrays.hud_current.clear();
             }
             let frame = snapshot::Snapshot {
                 server_time: self.sv_time_ms,
@@ -3972,7 +4074,7 @@ impl Server {
                 snap_flags: self.snap_flag_server_bit,
                 ps,
                 entities: visible,
-                clients: roster.clone(),
+                clients: roster,
                 valid: true,
             };
 
@@ -4044,6 +4146,45 @@ cmds {processed} span {span} queued {queued} ack {} behind {ack_behind} {base_de
                 self.outbox.push((c.addr, pkt));
             }
         }
+        for c in self.clients.iter_mut().flatten() {
+            if let Some(sim) = c.sim.as_mut() {
+                sim.hud_cleared = false;
+            }
+        }
+        self.archive_frame(live);
+    }
+
+    /// `SV_ArchiveSnapshot` (`cod_lnxded` 0x808fb84), after the frame's
+    /// snapshots: the entities and roster they were built from, and every
+    /// client's own view as `GetFollowPlayerState` would answer it, which a
+    /// spectating or intermission client has none of.
+    fn archive_frame(&mut self, world: crate::archive::WorldFrame) {
+        if !self.archive.is_on() {
+            return;
+        }
+        let clients = (0..self.clients.len())
+            .map(|slot| {
+                let c = self.clients[slot].as_ref()?;
+                let sim = c.sim.as_ref().filter(|s| s.own_view)?;
+                let mut ps = sim.to_wire(self.proto, slot as i32, c.last_processed_st);
+                if let Some(rt) = self.script.as_mut() {
+                    let team = rt.client_team(slot);
+                    ps.arrays.hud_archived = rt.hud_elems(slot, team).0;
+                    ps.arrays.objectives = rt.objectives_for(slot, team);
+                }
+                Some(Rc::new(crate::archive::ArchivedView {
+                    ps,
+                    eye: sim.ps.view().eye.into(),
+                    angles: sim.view_angles(),
+                    origin: sim.origin(),
+                }))
+            })
+            .collect();
+        self.archive.push(crate::archive::Frame {
+            time: self.sv_time_ms,
+            world,
+            clients,
+        });
     }
 }
 
@@ -6729,21 +6870,203 @@ mod tests {
         );
     }
 
-    /// A forced follow with a replay behind it is the killcam, which has no
-    /// archive to come from here: nothing is copied, and the fields are left
-    /// for the script's own `archivetime <= delay` branch to clear.
+    /// With no archive (no `setarchive(true)`) a killcam's age finds no
+    /// frame, the retry lowers it to 0 and the copy is the live one; the 0 is
+    /// what the stock `archivetime <= delay` check reads back.
     #[test]
-    fn a_killcam_follow_copies_nothing() {
+    fn with_the_archive_off_a_killcam_follows_live_and_reads_back_zero() {
         let mut rig = FollowRig::new();
         rig.script()
             .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(1));
         rig.script()
             .set_client_field_for_test(0, "archivetime", vcod_gsc::Value::Float(9.0));
         let s = rig.step(0);
-        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(ps_i32(&s, "clientNum"), 1);
+        assert_eq!(ps_i32(&s, "pm_flags") & 0x70000, 0x30000);
+        assert_eq!(ps_i32(&s, "deltaTime"), 0);
         assert_eq!(
-            rig.script().client_field(0, "spectatorclient").as_deref(),
+            rig.script().client_field(0, "archivetime").as_deref(),
+            Some("0")
+        );
+    }
+
+    /// Steps `frames` frames with the archive on, players 1 and 2 moving
+    /// 10 units a frame, and returns where each stood by server time.
+    fn archive_moving(rig: &mut FollowRig, frames: i32) -> BTreeMap<i32, ([f32; 3], [f32; 3])> {
+        rig.script().host.archive_on = true;
+        let mut trail = BTreeMap::new();
+        for i in 0..frames {
+            let (a, b) = ([10.0 * i as f32, 0.0, 0.0], [0.0, 10.0 * i as f32, 0.0]);
+            rig.sv.test_set_client_origin(1, a);
+            rig.sv.test_set_client_origin(2, b);
+            let s = rig.step(0);
+            trail.insert(s.server_time, (a, b));
+        }
+        trail
+    }
+
+    /// The killcam proper: the forced follow's copy is the followed client
+    /// as the archive had it `archivetime` ago, its `deltaTime` the age, and
+    /// the entity list is that frame's too, times shifted (0x808ef7c,
+    /// 0x808f130).
+    #[test]
+    fn a_killcam_replays_the_followed_client_from_archivetime_ago() {
+        let mut rig = FollowRig::new();
+        let trail = archive_moving(&mut rig, 60);
+        rig.script()
+            .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(1));
+        rig.script()
+            .set_client_field_for_test(0, "archivetime", vcod_gsc::Value::Float(1.0));
+        rig.sv.test_set_client_origin(1, [-50.0, -50.0, 0.0]);
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 1);
+        assert_eq!(ps_i32(&s, "pm_flags") & 0x70000, 0x30000);
+        assert_eq!(ps_i32(&s, "deltaTime"), 1000);
+        let (then_1, then_2) = trail[&(s.server_time - 1000)];
+        assert_eq!(s.ps.origin(&PROTOCOL_V1), then_1);
+        assert!(!s.entities.contains_key(&1));
+        let e2 = &s.entities[&2];
+        assert_eq!(
+            e2.origin(&PROTOCOL_V1),
+            then_2,
+            "entity 2 as the frame had it"
+        );
+        let tr = e2.field_i32(&PROTOCOL_V1, "pos.trTime");
+        let archived_tr = rig
+            .sv
+            .archive
+            .frame(rig.sv.archive.lookup(&mut 1000).unwrap())
+            .unwrap()
+            .world
+            .culled[&2]
+            .field_i32(&PROTOCOL_V1, "pos.trTime");
+        if archived_tr != 0 {
+            assert_eq!(tr, archived_tr + 1000);
+        }
+        assert_eq!(
+            rig.script().client_field(0, "archivetime").as_deref(),
             Some("1")
         );
+        // The age holds: the next frame replays the next archived one.
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "deltaTime"), 1000);
+        assert_eq!(s.ps.origin(&PROTOCOL_V1), trail[&(s.server_time - 1000)].0);
+    }
+
+    /// A stock killcam asks for nine seconds; a level younger than that
+    /// trims the age to what it has, which is what the script reads back.
+    #[test]
+    fn a_young_archive_trims_the_age_the_script_reads_back() {
+        let mut rig = FollowRig::new();
+        archive_moving(&mut rig, 40);
+        rig.script()
+            .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(1));
+        rig.script()
+            .set_client_field_for_test(0, "archivetime", vcod_gsc::Value::Float(9.0));
+        let s = rig.step(0);
+        let age = ps_i32(&s, "deltaTime");
+        assert!((1800..=2000).contains(&age), "{age}");
+        assert_eq!(
+            rig.script().client_field(0, "archivetime").as_deref(),
+            Some(format!("{}", age as f32 / 1000.0).as_str())
+        );
+    }
+
+    /// A frame where the followed client had no view of its own (it was
+    /// spectating) fails, and the age is lowered 50 ms at a time until one
+    /// answers (0x407c1..0x40859).
+    #[test]
+    fn a_killcam_steps_younger_past_frames_the_followed_client_is_missing_from() {
+        let mut rig = FollowRig::new();
+        rig.script().host.archive_on = true;
+        rig.script().set_client_state_for_test(1, "spectator");
+        for _ in 0..40 {
+            rig.step(0);
+        }
+        rig.script().set_client_state_for_test(1, "playing");
+        for _ in 0..10 {
+            rig.step(0);
+        }
+        rig.script()
+            .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(1));
+        rig.script()
+            .set_client_field_for_test(0, "archivetime", vcod_gsc::Value::Float(9.0));
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 1);
+        let age = ps_i32(&s, "deltaTime");
+        assert!((450..=550).contains(&age), "{age}");
+    }
+
+    /// sd's killcam ends without the move back to `dead`: `spectatorclient`
+    /// -1 and `archivetime` 0 leave the follow on the same client, live and
+    /// no longer forced (the retail sd run, spectator-follow doc section 12).
+    #[test]
+    fn a_killcam_left_as_a_spectator_follows_the_same_client_live() {
+        let mut rig = FollowRig::new();
+        archive_moving(&mut rig, 60);
+        rig.script()
+            .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(1));
+        rig.script()
+            .set_client_field_for_test(0, "archivetime", vcod_gsc::Value::Float(1.0));
+        rig.step(0);
+        rig.script()
+            .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(-1));
+        rig.script()
+            .set_client_field_for_test(0, "archivetime", vcod_gsc::Value::Float(0.0));
+        rig.sv.test_set_client_origin(1, [-50.0, -50.0, 0.0]);
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 1);
+        assert_eq!(ps_i32(&s, "pm_flags") & 0x70000, 0x10000);
+        assert_eq!(ps_i32(&s, "deltaTime"), 0);
+        assert_eq!(s.ps.origin(&PROTOCOL_V1), [-50.0, -50.0, 0.0]);
+    }
+
+    /// A spectator with an `archivetime` and nobody to follow (sd's bomb
+    /// camera) keeps its own view and is sent the archived frame's entities
+    /// (0x808f130 reads the age for every client).
+    #[test]
+    fn an_archivetime_without_a_follow_replays_only_the_entities() {
+        let mut rig = FollowRig::new();
+        let trail = archive_moving(&mut rig, 60);
+        rig.script()
+            .set_client_field_for_test(0, "archivetime", vcod_gsc::Value::Float(1.0));
+        rig.sv.test_set_client_origin(2, [-50.0, -50.0, 0.0]);
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(ps_i32(&s, "pm_flags") & 0x10000, 0);
+        assert_eq!(
+            s.entities[&2].origin(&PROTOCOL_V1),
+            trail[&(s.server_time - 1000)].1
+        );
+    }
+
+    /// The stock killcam's end: `spectatorclient` -1, `archivetime` 0 and
+    /// `sessionstate` `dead` with the replay still in the playerstate is
+    /// `ClientEndFrame`'s `ClientSpawn` arm, which leaves a dead client where
+    /// the copy stood.
+    #[test]
+    fn the_killcam_s_end_spawns_a_dead_client_where_the_copy_stood() {
+        let mut rig = FollowRig::new();
+        archive_moving(&mut rig, 60);
+        rig.script()
+            .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(1));
+        rig.script()
+            .set_client_field_for_test(0, "archivetime", vcod_gsc::Value::Float(1.0));
+        let last = rig.step(0);
+        assert_eq!(ps_i32(&last, "clientNum"), 1);
+        rig.script().host.client_vitals[0].dead = true;
+        rig.script()
+            .set_client_field_for_test(0, "spectatorclient", vcod_gsc::Value::Int(-1));
+        rig.script()
+            .set_client_field_for_test(0, "archivetime", vcod_gsc::Value::Float(0.0));
+        rig.script().set_client_state_for_test(0, "dead");
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(ps_i32(&s, "pm_type"), 6);
+        assert_eq!(ps_i32(&s, "pm_flags") & 0x70000, 0x40000);
+        assert_eq!(s.ps.origin(&PROTOCOL_V1), last.ps.origin(&PROTOCOL_V1));
+        assert_eq!(ps_i32(&s, "deltaTime"), 0);
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "pm_type"), 6);
     }
 }
