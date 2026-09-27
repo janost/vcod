@@ -200,7 +200,10 @@ rather than 127. vcod ports the latch and not the 20.
 VERIFIED: 0x800 is set in `ClientSpawn` (0x429d6) and cleared in
 `PmoveSingle` (0x34000) behind tests of `pm_type` and the attack bit
 (0x33f9a-0x33ffc). INFERRED: it is Q3's `PMF_RESPAWNED`, and refuses a jump
-only on a spawn's first cmds until attack is released. Not modelled.
+only on a spawn's first cmds until attack is released. INFERRED, from
+`ClientSpawn`'s closing `ClientThink_real` on a cmd with no buttons
+(`cod11-spectator-follow.md` 13): a live player never carries it past its
+spawn, so the jump gate is unreachable; the flag itself is modelled there.
 
 VERIFIED: 0x2000 is set, with `pm_time` 200, in `PM_CrashLand`
 (0x2ffd7-0x2ffe0) behind a test of `fJumpOriginZ` against +/-0.001
@@ -308,8 +311,8 @@ move; `PlayerState::jump_latched` is 0x8, `since_jump_ms` the delta to
 `jumpTime` and `jump_origin_z` `fJumpOriginZ`, which the ground trace
 zeroes on every hit. `step_slide_move` takes the entry gate, the revert and
 the speed cap above. The server sends `jumpTime` and `fJumpPeak`, and the
-predictor reads both back. Not modelled: 0x800, 0x2000 (unreachable) and
-the chop's `upmove` 20. `crates/server/tests/bump_ab.rs` holds every row of
+predictor reads both back. Not modelled: the 0x800 and 0x2000 gates (both
+unreachable) and the chop's `upmove` 20. `crates/server/tests/bump_ab.rs` holds every row of
 the walker's three jumps to 0.000, and `playerstate_motion_ab.rs` the
 takeoff's fields and the `land` anim, which needs the probe's 16 ms cmds:
 at one cmd a 50 ms frame the landing frame starts at -210, short of the

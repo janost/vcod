@@ -2049,8 +2049,9 @@ fn check_ladder_move(
 /// reset to 128 along the forward, reflected off the plane while facing it.
 /// A held key refused here is taken off the cmd for the rest of the move, as
 /// retail zeroes `cmd.upmove` (0x2ec13), which the ladder's wish reads. Not
-/// modelled: the `PMF_RESPAWNED` gate (0x800), which only the spawn frame's
-/// cmd meets (docs/research/cod11-mantle.md, "Jumps").
+/// modelled: the `PMF_RESPAWNED` gate (0x800), which the spawn's own think
+/// clears before any cmd of a live player (docs/research/cod11-mantle.md,
+/// "Jumps").
 fn check_jump(
     ps: &mut PlayerState,
     input: &mut PmInput,

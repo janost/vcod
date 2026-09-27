@@ -455,13 +455,17 @@ engineering setup works.
   trajectory the client extrapolates rather than per-frame origins.
   `--probe-follow` stays a spectator and presses attack, attack, melee, the
   sight for 2 s and attack, 6 s apart from 8 s after going active, printing
-  every snapshot whose `clientNum`, `pm_type`, `pm_flags` or `eFlags` moved
-  with the origin, view and player entities it carried. Beside a
-  `--probe-team allies` and a `--probe-target --probe-team axis` started
-  first it is the follow measurement (`docs/research/cod11-spectator-follow.md`
-  section 9, a dm and an sd run). It writes no fixture, but the target half
-  writes its own: move it to `tmp/` and `git checkout` the fixture directory
-  after.
+  every snapshot whose `clientNum`, `pm_type`, `pm_flags`, `eFlags`,
+  `health` or `weapon` moved, and the six after it, with the server time,
+  origin, velocity, view, eye heights and player entities it carried.
+  Beside a `--probe-team allies` and a `--probe-target --probe-team axis`
+  started first it is the follow measurement
+  (`docs/research/cod11-spectator-follow.md` section 9, a dm and an sd run);
+  started first itself, with the target second and another follower third,
+  it puts a follower on each side of the target's slot, which is what
+  measured the end-frame slot order (section 5). It writes no fixture, but
+  the target half writes its own: move it to `tmp/` and `git checkout` the
+  fixture directory after.
   `--probe-killcam` is the killcam's victim: it joins `--probe-team`, stands
   still, never sends `kill` (a suicide gets no killcam), presses use 20 s
   after each death so the replay runs out on its own, or
@@ -638,7 +642,9 @@ engineering setup works.
   blasts become hits, then the client commands that start a script thread
   (`kill`, `mr`), which the packet pass only queues because it runs before
   the clock advances, then `deliver_hits` for the blasts so their damage
-  callback has run before script, then the script frame, then the script's spawns, then the switches the weapon
+  callback has run before script, then the script frame, then the script's spawns (each with the spawn's own
+  end frame and think: the own view, `PMF_RESPAWNED` and `commandTime` at
+  the frame's clock), then the switches the weapon
   machine made (its takes already landed at their cmd's touch, and only
   there), then the weapon mirrors (held, current, viewmodel, the
   body a shot is traced against, and the origin back to script), then the
@@ -669,9 +675,13 @@ engineering setup works.
   intermission scoreboard the script queued go out, and last the entities are
   built once and culled and written per client, a follower's frame being its
   target's playerstate, eye and number (a replay's out of the archived
-  frame), and a client whose `archivetime` names an archived frame being sent
-  that frame's entities and roster instead of this one's; after the
-  snapshots the frame itself is archived, while `setarchive` is on. A dropped
+  frame; a live one below its target's slot takes the fields the target's
+  end frame writes from its last frame), a spectator whose follow stopped
+  being that last copy under its own fields, and a client whose
+  `archivetime` names an archived frame being sent that frame's entities and
+  roster instead of this one's; after the snapshots each follower's copy and
+  each playing or dead client's own frame are kept for the next frame, and
+  the frame itself is archived, while `setarchive` is on. A dropped
   client's followers are passed on at the drop, outside the tick. Origin, `pm_type`,
   `on_ground`, yaw, the ammo arrays, the last-round take and the current
   weapon, but only the one a move switched to, are the mirrors that no longer
