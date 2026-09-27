@@ -4460,6 +4460,25 @@ What still differs, each INFERRED from 16.1 and not measured:
 - `turret_think_client` still fires in `ClientEndFrame`'s pass, which is
   where retail's runs (`cod11-turrets.md` 6.1).
 
+VERIFIED, two runs against ours on 2026-09-27, the `probe_passthru` recipe
+of `client-probes/README.md` with one `--probe-target --probe-team axis` and
+one `--save-hit --probe-sweep --probe-team allies` shooter, `vcod-server
+mp_carentan --gametype-script .../probe_passthru.gsc --set probe_teleport=1`,
+eight bullet deaths, each off two head hits of 67: every death frame ends its
+ring on 189 then 155, two past the frame before it, at `pm_type` 6 and
+`torsoAnim` 512, which is 8.4's retail frame. The victim's speed on seven of
+them reads 82, 82, 82, 82, 81, 81 and 79, and on the eighth 89, whose frame
+before still read 16 from the first hit, against retail's 82 (8.4). Seven of
+the eight also carry `EV_ITEM_PICKUP` (146) ahead of the pain: the probe's
+spot is where the last life's `dm.gsc` health pack fell, and the victim's
+cmds behind the first hit now walk over it at 33 health and take it to 58,
+which the `EV_PAIN` parm of 58 reads at the end frame; retail's own capture
+stood elsewhere. The first run also logged one callback reading the
+victim's `self.origin` at its spawn point, 3500 units from the hit, on a
+round that met it in the frame after the gametype's `setOrigin`: the
+teleport's op had not reached the host's copy, which it now does
+(`apply_sim_op`). The second run logged none.
+
 Pinned by `a_bullet_deaths_frame_is_retails`, which holds the victim's death
 frame to the capture's line on health, `pm_type`, the event ring and its
 parms, the damage feedback and `torsoAnim`, and
