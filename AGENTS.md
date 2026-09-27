@@ -437,8 +437,8 @@ engineering setup works.
   `crates/server/tests/bump_ab.rs` replays the walker's cmds on our pmove with
   the target as a body, free-running per phase and rebased on retail's state
   at every snapshot; `BUMP_REPORT=1` prints every row, `BUMP_TRACE=<ct>` prints
-  ours cmd by cmd into that clock, and the jump rows it lets through are its
-  named `GAPS`. `crates/server/tests/stuck_ab.rs` holds both overlap captures
+  ours cmd by cmd into that clock, and any row it lets through is named in
+  `GAPS`, empty since the jump port. `crates/server/tests/stuck_ab.rs` holds both overlap captures
   and our server to the same push properties (`STUCK_REPORT=1`). What they
   measured is `docs/research/cod11-player-clip.md` 9 and 10. All six files are
   retail evidence: a walker run against ours overwrites the untagged fixture
