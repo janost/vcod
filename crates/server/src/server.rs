@@ -7174,6 +7174,10 @@ mod tests {
             vx > 0.0 && vx < 120.0,
             "the copy's velocity, one flight step on: {vx}"
         );
+        // The flight writes the eye heights: retail's stop frame read 0 for
+        // both where the copy read 60.
+        assert_eq!(ps_i32(&stop, "viewHeightTarget"), 0);
+        assert_eq!(stop.ps.field_f32(&PROTOCOL_V1, "viewHeightCurrent"), 0.0);
         for s in [stop, rig.step(msg::BUTTON_ADS), rig.step(0)] {
             assert_eq!(ps_i32(&s, "clientNum"), 0);
             assert_eq!((s.ps.health(), ps_i32(&s, "weapon")), (100, 9));

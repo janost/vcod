@@ -339,6 +339,8 @@ const SPECTATOR_OWNED: &[&str] = &[
     "delta_angles[1]",
     "delta_angles[2]",
     "fWeaponPosFrac",
+    "viewHeightTarget",
+    "viewHeightCurrent",
     "viewmodelIndex",
     "viewlocked",
     "viewlocked_entNum",
