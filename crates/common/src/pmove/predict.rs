@@ -120,15 +120,7 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     ps.view_lerp_target = s8("viewHeightLerpTarget") as f32;
     ps.view_lerp_down = int("viewHeightLerpDown") != 0;
     ps.view_height_cur = float("viewHeightCurrent");
-    if view_lerp_start != 0 {
-        ps.view_height_speed = lerp_speed(
-            ps.stance.view_height(),
-            ps.view_height_cur,
-            ps.ducked,
-            ps.prone_dive,
-            command_time - view_lerp_start,
-        );
-    }
+    ps.view_lerp_ms = (view_lerp_start != 0).then(|| command_time - view_lerp_start);
 
     ps.weapon = int("weapon") as u8;
     ps.weapons_held = u64_pair("weapons[0]", "weapons[1]");
@@ -182,46 +174,6 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
         ]
         .map(int),
     }
-}
-
-/// The eye lerp's pace, which the wire does not carry: `update_stance` fixes
-/// it at a stance change as the whole gap from the stance it left over the
-/// transition's lerp time. The stance it left is not on the wire either. Into
-/// prone, `ducked` names it: entering a crouch sets the flag and entering prone
-/// leaves it. Otherwise each stance the eye lies between it and the target is
-/// tried, and the one whose lerp puts the eye here after `elapsed_ms` wins; the
-/// stamp trails the change by one slice (at most 66 ms), and the two sources a
-/// standing target can have are 200 ms or more apart. So a single transition
-/// comes out exact; a stance changed again mid-lerp started from a height no
-/// stance has and comes out approximate.
-fn lerp_speed(target: f32, cur: f32, ducked: bool, dive: bool, elapsed_ms: i32) -> f32 {
-    let pace = |from: f32| {
-        let ms = if dive && target == super::VIEW_PRONE {
-            super::VIEW_LERP_MS
-        } else if from == super::VIEW_PRONE || target == super::VIEW_PRONE {
-            super::VIEW_LERP_PRONE_MS
-        } else {
-            super::VIEW_LERP_MS
-        };
-        (target - from).abs() / ms * 1000.0
-    };
-    if target == super::VIEW_PRONE {
-        return pace(if ducked {
-            super::VIEW_CROUCH
-        } else {
-            super::VIEW_STAND
-        });
-    }
-    [super::VIEW_STAND, super::VIEW_CROUCH, super::VIEW_PRONE]
-        .into_iter()
-        .filter(|&from| from != target && (from - cur) * (target - cur) <= 0.0)
-        .map(|from| {
-            let speed = pace(from);
-            let implied_ms = (from - cur).abs() / speed * 1000.0;
-            (speed, (implied_ms - elapsed_ms as f32).abs())
-        })
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map_or(0.0, |(speed, _)| speed)
 }
 
 /// Copy of `pm_input`, `crates/server/src/spectate.rs`; keep in step until
@@ -315,13 +267,7 @@ fn step(
             pred.delta_angles[i] = (pred.delta_angles[i] + (c * ANGLE2SHORT) as i32) & 0xffff;
         }
     }
-    pred.view_lerp_start = if pred.ps.view_height_settled() {
-        0
-    } else if pred.view_lerp_start == 0 {
-        cmd.server_time
-    } else {
-        pred.view_lerp_start
-    };
+    pred.view_lerp_start = pred.ps.view_lerp_stamp(cmd.server_time);
     for e in &events {
         // The fire parm is vcod's internal fuse channel, never sent.
         let parm = match e.event {
@@ -551,7 +497,7 @@ mod tests {
     #[test]
     fn a_rebuild_mid_crouch_keeps_the_eye_lerp() {
         lerp_continues(&[0], msg::WBUTTON_CROUCH, 96);
-        lerp_continues(&[0], msg::WBUTTON_CROUCH, 184);
+        lerp_continues(&[0], msg::WBUTTON_CROUCH, 136);
     }
 
     /// Prone to standing crosses the crouch height, where the eye alone

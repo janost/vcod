@@ -1,7 +1,7 @@
 //! The playing client's own first-person weapon: the rig for `ps.weapon`
 //! with the hands `ps.viewmodelIndex` names, posed from `ps.weapAnim`.
 
-use crate::renderer::{VmDraw, VM_FOV_DEG};
+use crate::renderer::VmDraw;
 use crate::viewmodel::{self, ViewWeapon, ViewmodelMotion};
 use glam::Vec3;
 use vcod_common::net::msg;
@@ -9,7 +9,7 @@ use vcod_common::net::protocol::{Protocol, CS_MODELS_V1, ENTITYNUM_NONE};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::predict::Predicted;
 use vcod_common::pmove::weapon::NUM_AMMO;
-use vcod_common::weapon::{self, ViewAnimClock, WeaponAnim, WeaponDef, DEFAULT_FOV};
+use vcod_common::weapon::{self, SightDirection, ViewAnimClock, WeaponAnim, WeaponDef, CG_FOV};
 use vcod_common::xmodel::XModel;
 
 /// The playerstate fields the viewmodel reads, from the prediction when there
@@ -22,7 +22,13 @@ pub struct ViewPs {
     pub ammoclip: [i16; NUM_AMMO],
     pub velocity: Vec3,
     pub on_ground: bool,
+    pub pm_type: i32,
+    /// On a mounted gun: `eFlags & 0xc000` on the wire.
+    pub mounted: bool,
 }
+
+/// `pm_type` at intermission.
+const PM_INTERMISSION: i32 = 5;
 
 impl ViewPs {
     /// `viewmodel_index` comes from the snapshot: prediction does not carry it.
@@ -35,6 +41,8 @@ impl ViewPs {
             ammoclip: pred.ps.ammoclip,
             velocity: pred.ps.velocity,
             on_ground: pred.ps.on_ground,
+            pm_type: pred.pm_type,
+            mounted: pred.ps.mounted.is_some(),
         }
     }
 
@@ -48,6 +56,8 @@ impl ViewPs {
             ammoclip: ps.arrays.ammoclip,
             velocity: Vec3::new(f("velocity[0]"), f("velocity[1]"), f("velocity[2]")),
             on_ground: ps.field_i32(p, "groundEntityNum") as u32 != ENTITYNUM_NONE,
+            pm_type: ps.field_i32(p, "pm_type"),
+            mounted: ps.field_i32(p, "eFlags") & 0xc000 != 0,
         }
     }
 }
@@ -118,6 +128,7 @@ pub struct OnlineView {
     rig: Option<Box<ViewWeapon>>,
     clock: ViewAnimClock,
     trend: i32,
+    sight: SightDirection,
     motion: ViewmodelMotion,
     mouse: (f32, f32),
     /// `tag_flash` as last drawn, view space (X right, Y up, -Z forward):
@@ -161,9 +172,10 @@ impl OnlineView {
         self.rig.is_some().then_some(models)
     }
 
-    /// The viewmodel to draw and the world fov, for `ps` when the view is
-    /// the client's own and alive; `None` draws no viewmodel. `weapons` is
-    /// the configstring 7 table, for the clip index.
+    /// The viewmodel to draw and the horizontal fov both it and the world
+    /// are drawn with, for `ps` when the view is the client's own and alive;
+    /// `None` draws no viewmodel. `weapons` is the configstring 7 table, for
+    /// the clip index and the zoom.
     pub fn frame(
         &mut self,
         weapons: &[Option<WeaponDef>],
@@ -173,17 +185,25 @@ impl OnlineView {
     ) -> (Option<VmDraw>, f32) {
         let mouse = std::mem::take(&mut self.mouse);
         self.flash = None;
+        let held = ps.and_then(|ps| weapons.get(usize::from(ps.weapon))?.as_ref());
+        let fov = ps.map_or(CG_FOV, |ps| {
+            let zooming_in = self.sight.step(held, ps.ads_frac);
+            weapon::view_fov_x(
+                held,
+                ps.ads_frac,
+                zooming_in,
+                ps.pm_type == PM_INTERMISSION,
+                ps.mounted,
+            )
+        });
         let (Some(ps), Some(w)) = (ps, self.rig.as_deref_mut()) else {
             // A respawn whose `weapAnim` matches the pre-death one bit for bit
             // still restarts the raise.
             self.clock = ViewAnimClock::default();
             self.trend = 0;
-            return (None, DEFAULT_FOV);
+            return (None, fov);
         };
-        let clip_empty = weapons
-            .get(usize::from(ps.weapon))
-            .and_then(Option::as_ref)
-            .is_some_and(|d| ps.ammoclip.get(d.clip_index) == Some(&0));
+        let clip_empty = held.is_some_and(|d| ps.ammoclip.get(d.clip_index) == Some(&0));
         let frac = ps.ads_frac;
         let (_, ms_in, trend) = self.clock.update(ps.weap_anim, frac, now_ms);
         let trend = held_trend(&mut self.trend, trend, frac);
@@ -209,7 +229,6 @@ impl OnlineView {
             .map(|m| w.pose.skin_matrices(&w.skeleton, m))
             .collect();
 
-        let fov = DEFAULT_FOV + (def.ads_zoom_fov - DEFAULT_FOV) * frac;
         let mut damp = 1.0 + (def.ads_view_bob_mult - 1.0) * frac;
         damp *= 1.0 + (def.ads_bob_factor - 1.0) * frac;
         let ground_speed = if ps.on_ground {
@@ -230,6 +249,7 @@ impl OnlineView {
         (
             Some(VmDraw {
                 transform,
+                fov_x: fov,
                 bone_sets,
             }),
             fov,
@@ -237,18 +257,15 @@ impl OnlineView {
     }
 
     /// The drawn viewmodel's `tag_flash` in world space, for the camera at
-    /// `eye` with basis `(forward, right, up)` and vertical `fov`. The
-    /// viewmodel has its own projection, so the point is scaled across the
-    /// view axis to where the world camera draws it on the same pixel.
+    /// `eye` with basis `(forward, right, up)`. The viewmodel shares the
+    /// world's fov, so view space maps straight onto the camera basis.
     pub fn muzzle(
         &self,
         eye: Vec3,
         (forward, right, up): (Vec3, Vec3, Vec3),
-        fov: f32,
     ) -> Option<(Vec3, Vec3)> {
         let (pos, dir) = self.flash?;
-        let k = (fov.to_radians() / 2.0).tan() / (VM_FOV_DEG.to_radians() / 2.0).tan();
-        let world = |v: Vec3| right * v.x * k + up * v.y * k - forward * v.z;
+        let world = |v: Vec3| right * v.x + up * v.y - forward * v.z;
         Some((eye + world(pos), world(dir).normalize_or_zero()))
     }
 }
@@ -274,6 +291,8 @@ mod tests {
             ammoclip: [0; NUM_AMMO],
             velocity: Vec3::ZERO,
             on_ground: true,
+            pm_type: 0,
+            mounted: false,
         }
     }
 
@@ -299,7 +318,7 @@ mod tests {
         assert_eq!(view.built_for, Some(None));
         let (draw, fov) = view.frame(&[], Some(&ps(0, 82)), 0.016, 0.0);
         assert!(draw.is_none());
-        assert_eq!(fov, DEFAULT_FOV);
+        assert_eq!(fov, CG_FOV);
     }
 
     #[test]
@@ -365,18 +384,11 @@ mod tests {
     }
 
     /// The flash lands on the pixel the viewmodel's projection draws its
-    /// `tag_flash` at, whatever the world fov.
+    /// `tag_flash` at: the same fov as the world, only a nearer near plane.
     #[test]
     fn muzzle_lands_where_the_viewmodel_draws_it() {
         let aspect = 16.0 / 9.0;
         let at = Vec3::new(3.0, -2.5, -22.0);
-        let vm_proj = glam::camera::rh::proj::directx::perspective(
-            VM_FOV_DEG.to_radians(),
-            aspect,
-            1.0,
-            500.0,
-        );
-        let want = vm_proj.project_point3(at);
         let mut view = OnlineView {
             flash: Some((at, Vec3::NEG_Z)),
             ..OnlineView::default()
@@ -384,8 +396,10 @@ mod tests {
         let eye = Vec3::new(100.0, -40.0, 60.0);
         let (yaw, pitch) = (0.7_f32, -0.3_f32);
         let basis = crate::camera::basis(yaw, pitch);
-        for fov in [DEFAULT_FOV, 55.0] {
-            let (pos, dir) = view.muzzle(eye, basis, fov).expect("drawn");
+        for fov in [CG_FOV, 50.0] {
+            let want = crate::camera::perspective(fov, aspect, crate::renderer::VM_NEAR, 500.0)
+                .project_point3(at);
+            let (pos, dir) = view.muzzle(eye, basis).expect("drawn");
             let got = crate::camera::view_proj_from(eye, yaw, pitch, 0.0, fov, aspect)
                 .project_point3(pos);
             assert!(
@@ -395,7 +409,7 @@ mod tests {
             assert!(dir.dot(basis.0) > 0.999, "along the view: {dir}");
         }
         view.flash = None;
-        assert!(view.muzzle(eye, basis, DEFAULT_FOV).is_none());
+        assert!(view.muzzle(eye, basis).is_none());
     }
 
     /// The real carbine with the US hands, driven through a hip shot and a
@@ -450,7 +464,7 @@ mod tests {
         let mut sighted = ps(1, 82);
         sighted.ads_frac = 1.0;
         let (up, fov) = pose(&mut view, &sighted, 1000.0);
-        assert!(fov < DEFAULT_FOV, "the sight zooms");
+        assert_eq!(fov, 65.0, "the sight zooms to the carbine's adsZoomFov");
         for i in 1..=30 {
             let now = 1000.0 + f64::from(i) * 16.0;
             assert_eq!(pose(&mut view, &sighted, now).0, up, "a raised sight holds");

@@ -1066,6 +1066,7 @@ fn loading_frame(
             clients: &no_clients,
             protocol: &net::protocol::PROTOCOL_V1,
             server_time: 0,
+            snap_time: 0,
             fs,
             menu: None,
             ps: None,
@@ -2003,7 +2004,7 @@ impl ApplicationHandler for App {
                                     );
 
                                     let (muzzle_pos, muzzle_dir) = view
-                                        .muzzle(cam.pos, (cam_forward, cam_right, cam_up), fov)
+                                        .muzzle(cam.pos, (cam_forward, cam_right, cam_up))
                                         .unwrap_or_else(|| {
                                             view_muzzle(cam.pos, cam_forward, cam_right, cam_up)
                                         });
@@ -2045,6 +2046,9 @@ impl ApplicationHandler for App {
                                         // The render clock, so hudelem tweens and
                                         // timers move between snapshots.
                                         server_time: render_time.unwrap_or(0),
+                                        snap_time: render_time
+                                            .and_then(|t| net.snapshots().two_for_time(t))
+                                            .map_or(0, |(a, _)| a.server_time),
                                         fs: &self.fs,
                                         menu: menu_view.as_ref().map(|(_, v)| v),
                                         ps: newest.map(|s| &s.ps),
@@ -2318,8 +2322,13 @@ impl ApplicationHandler for App {
                                     .map(|m| w.pose.skin_matrices(&w.skeleton, m))
                                     .collect();
                             }
-                            fov = camera::DEFAULT_FOV_DEG
-                                + (w.def.ads_zoom_fov - camera::DEFAULT_FOV_DEG) * out.ads_frac;
+                            fov = weapon::view_fov_x(
+                                Some(&w.def),
+                                out.ads_frac,
+                                *ads_held,
+                                false,
+                                false,
+                            );
                             damp = 1.0 + (w.def.ads_view_bob_mult - 1.0) * out.ads_frac;
                             damp *= 1.0 + (w.def.ads_bob_factor - 1.0) * out.ads_frac;
                             if let Some(cue) = out.cue {
@@ -2465,6 +2474,7 @@ impl ApplicationHandler for App {
                             },
                             Some(renderer::VmDraw {
                                 transform: motion.transform(),
+                                fov_x: fov,
                                 bone_sets,
                             }),
                         )

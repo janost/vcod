@@ -9,7 +9,8 @@ use super::HudQuad;
 use crate::play::input::{EF_CROUCH, EF_PRONE};
 use vcod_common::localize::Localized;
 use vcod_common::net::msg::Objective;
-use vcod_common::weapon::WeaponDef;
+use vcod_common::pmove::weapon::{hip_spread_min, SpreadStance};
+use vcod_common::weapon::{SightDirection, WeaponDef};
 
 /// Hint strings (`serverCursorHintString`) index configstrings from here.
 pub const CS_HINT_STRINGS: usize = 1212;
@@ -42,6 +43,9 @@ pub struct PlayerView<'a> {
     pub ammoclip: &'a [i16; 64],
     /// 0..255.
     pub aim_spread_scale: f32,
+    /// What the hip minimum is read off, timed against retail's
+    /// `cg.snap->serverTime`.
+    pub spread_stance: SpreadStance,
     pub ads_frac: f32,
     /// World degrees.
     pub view_yaw: f32,
@@ -294,45 +298,17 @@ fn weapon_info(def: &WeaponDef, p: &PlayerView, cx: &Context, v: &Virtual, out: 
 /// for the side arms and `y` for the top and bottom ones.
 pub fn arm_offset(
     def: &WeaponDef,
-    eflags: i32,
+    stance: &SpreadStance,
     aim_spread_scale: f32,
     shrink: f32,
     (fov_x, fov_y): (f32, f32),
 ) -> (f32, f32) {
-    let min = if eflags & EF_PRONE != 0 {
-        def.hip_spread_prone_min
-    } else if eflags & EF_CROUCH != 0 {
-        def.hip_spread_ducked_min
-    } else {
-        def.hip_spread_stand_min
-    };
+    let min = hip_spread_min(def, stance);
     let spread = (aim_spread_scale / 255.0 * (def.hip_spread_max - min) + min) * shrink;
     (
         (640.0 / fov_x * spread).max(def.reticle_min_ofs),
         (480.0 / fov_y * spread).max(def.reticle_min_ofs),
     )
-}
-
-/// Which way the sight last started moving: set when `fWeaponPosFrac` leaves
-/// 0 or 1 upward, cleared when it leaves downward, held otherwise, and only
-/// tracked for a weapon with `aimDownSight`.
-#[derive(Default)]
-pub struct SightDirection {
-    prev: f32,
-    raising: bool,
-}
-
-impl SightDirection {
-    pub fn step(&mut self, weapon: Option<&WeaponDef>, frac: f32) -> bool {
-        if weapon.is_some_and(|d| d.aim_down_sight) {
-            let at_rest = |f: f32| f == 0.0 || f == 1.0;
-            if !at_rest(frac) && at_rest(self.prev) && frac != self.prev {
-                self.raising = self.prev <= frac;
-            }
-            self.prev = frac;
-        }
-        self.raising
-    }
 }
 
 /// The crosshair's quads, none at full sight or with no reticle. Its images
@@ -377,7 +353,7 @@ pub fn crosshair(
     let Some(side) = &def.reticle_side else {
         return;
     };
-    let (ox, oy) = arm_offset(def, p.eflags, p.aim_spread_scale, shrink, p.fov);
+    let (ox, oy) = arm_offset(def, &p.spread_stance, p.aim_spread_scale, shrink, p.fov);
     let arm_rgba = [1.0, 1.0, 1.0, arm_alpha(p.aim_spread_scale)];
     let s = def.reticle_side_size * shrink;
     // Top, right, bottom, left: direction, the arm's corner in sizes, and a
@@ -635,6 +611,7 @@ mod tests {
             ammo,
             ammoclip: ammo,
             aim_spread_scale: 0.0,
+            spread_stance: SpreadStance::default(),
             ads_frac: 0.0,
             view_yaw: 0.0,
             eye: [0.0; 3],
@@ -654,21 +631,23 @@ mod tests {
     fn crosshair_arms_open_with_the_spread_scale() {
         let def = carbine();
         // Standing, 1.5 degrees at scale 0 and 5 at 255, 640/80 px a degree.
-        let (x, y) = arm_offset(&def, 0, 0.0, 1.0, (80.0, 64.0));
+        let stand = SpreadStance::default();
+        let (x, y) = arm_offset(&def, &stand, 0.0, 1.0, (80.0, 64.0));
         assert!(close(x, 12.0) && close(y, 11.25), "{x} {y}");
-        let (x, y) = arm_offset(&def, 0, 255.0, 1.0, (80.0, 64.0));
+        let (x, y) = arm_offset(&def, &stand, 255.0, 1.0, (80.0, 64.0));
         assert!(close(x, 40.0) && close(y, 37.5), "{x} {y}");
         // Prone reads its own minimum, and `reticleMinOfs` floors it.
-        let (x, _) = arm_offset(&def, EF_PRONE, 0.0, 1.0, (80.0, 64.0));
+        let prone = SpreadStance {
+            prone: true,
+            ..stand
+        };
+        let (x, _) = arm_offset(&def, &prone, 0.0, 1.0, (80.0, 64.0));
         assert!(close(x, 4.0), "{x}");
         let floored = WeaponDef {
             reticle_min_ofs: 17.0,
             ..carbine()
         };
-        assert_eq!(
-            arm_offset(&floored, EF_PRONE, 0.0, 1.0, (80.0, 64.0)).0,
-            17.0
-        );
+        assert_eq!(arm_offset(&floored, &prone, 0.0, 1.0, (80.0, 64.0)).0, 17.0);
     }
 
     #[test]

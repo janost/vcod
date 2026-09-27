@@ -975,7 +975,9 @@ table (`{name, offset, type}` records around `0x30075558`): `displayName`
 
 INFERRED, off `0x30016760` and `0x3000fa50`: the hip spread in degrees is
 `min + (max - min) * aimSpreadScale / 255`, `min` being the prone minimum when
-`pm_flags & 1`, the ducked one when `& 2` and the standing one otherwise, and
+`pm_flags & 1`, the ducked one when `& 2` and the standing one otherwise, or
+a blend of two of them while the eye's stance leg runs (`0x3000fa50` is the
+cgame's `BG_GetMinSpreadForWeapon`, `cod11-combat.md` 2.1), and
 it is multiplied by a sight shrink factor. Each arm then sits
 `spread * 640 / fov_x` virtual pixels off the centre horizontally and
 `spread * 480 / fov_y` vertically, floored at `reticleMinOfs`. VERIFIED: the

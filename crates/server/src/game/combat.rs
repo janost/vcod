@@ -13,6 +13,7 @@ use vcod_common::net::events::dir_to_byte;
 use vcod_common::net::protocol::{ENTITYNUM_NONE, ENTITYNUM_WORLD};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::playerpose::pose_player;
+use vcod_common::pmove::weapon::{hip_spread_min, SpreadStance};
 use vcod_common::pmove::PlayerState;
 use vcod_common::weapon::WeaponDef;
 use vcod_gsc::EntId;
@@ -235,22 +236,17 @@ pub fn aim_radians(aim: [f32; 2]) -> (f32, f32) {
 }
 
 /// The cone's half-angle in degrees for this shot (combat doc, 2.1): the
-/// stance's hip minimum blended toward `hipSpreadMax` by `aimSpreadScale`,
-/// or the same blend from `adsSpread` off a settled sight. `ads` is
-/// `fWeaponPosFrac == 1.0`, the exact compare retail's two arms split on,
-/// and not the usercmd's sight bit: the sight is up for the whole of a
-/// transition and the cone is the hip one until it lands.
-fn spread_deg(def: &WeaponDef, sim: &ClientSim, ads: bool) -> f32 {
-    use vcod_common::pmove::Stance;
+/// hip minimum `stance` gives blended toward `hipSpreadMax` by
+/// `aimSpreadScale`, or the same blend from `adsSpread` off a settled sight.
+/// `ads` is `fWeaponPosFrac == 1.0`, the exact compare retail's two arms
+/// split on, and not the usercmd's sight bit: the sight is up for the whole
+/// of a transition and the cone is the hip one until it lands.
+fn spread_deg(def: &WeaponDef, sim: &ClientSim, ads: bool, stance: &SpreadStance) -> f32 {
     let scale = sim.ps.aim_spread_scale / 255.0;
     let min = if ads {
         def.ads_spread
     } else {
-        match sim.ps.stance {
-            Stance::Prone => def.hip_spread_prone_min,
-            Stance::Crouch => def.hip_spread_ducked_min,
-            Stance::Stand => def.hip_spread_stand_min,
-        }
+        hip_spread_min(def, stance)
     };
     min + (def.hip_spread_max - min) * scale
 }
@@ -314,7 +310,7 @@ pub fn muzzle_point(ps: &PlayerState) -> Vec3 {
 /// world and every live player's box, and then against the bones of whoever
 /// the box test found (combat doc, sections 2 and 3). `sims` is every client
 /// with a sim, the shooter among them; `ads` is whether the shot left a
-/// settled sight; `aim` is the pitch and yaw the cmd's aim block left
+/// settled sight; `stance` is what the hip minimum is read off; `aim` is the pitch and yaw the cmd's aim block left
 /// (`ClientSim::aim_angles`, combat doc 15), which down a sight is the
 /// swayed gun rather than the view; `weapon_name` is what the callback is
 /// told (`BG_GetInfoForWeapon(weapon)->name`). Damage is `weaponDef.damage`
@@ -327,6 +323,7 @@ pub fn bullet_fire(
     def: &WeaponDef,
     weapon_name: &str,
     ads: bool,
+    stance: &SpreadStance,
     aim: [f32; 2],
     sims: &[(usize, &ClientSim)],
     world: Option<&CollisionWorld>,
@@ -351,7 +348,7 @@ pub fn bullet_fire(
     let right = Vec3::new(yaw.sin(), -yaw.cos(), 0.0);
     let up = right.cross(forward);
     let (x, y) = gun_random(rng);
-    let r = spread_deg(def, me, ads).to_radians().tan() * BULLET_RANGE;
+    let r = spread_deg(def, me, ads, stance).to_radians().tan() * BULLET_RANGE;
     let end = muzzle + forward * BULLET_RANGE + right * (x * r) + up * (y * r);
 
     let round = Round {
@@ -1073,6 +1070,7 @@ mod tests {
             def,
             "m1carbine_mp",
             false,
+            &SpreadStance::of(ps, 0, 0),
             [-ps.pitch.to_degrees(), ps.yaw.to_degrees()],
             sims,
             Some(world),
@@ -1136,6 +1134,7 @@ mod tests {
             &zero_spread_carbine(),
             "m1carbine_mp",
             false,
+            &SpreadStance::of(&a.ps, 0, 0),
             a.aim_angles(),
             &[(0, &a), (1, &b)],
             Some(&world),

@@ -186,8 +186,9 @@ inside 500 ms of the last one (the delta must exceed 499); on `pm_flags`
 the prone height; while a lerp toward the crouch height runs; unless
 `upmove` is 10 or more; and while 0x8, the held-jump latch, is set, in which
 case `upmove` is also zeroed for the rest of the frame. So only a standing
-player jumps, and a held key jumps once. vcod's stance snaps, so its four
-stance and lerp gates reduce to the stance being standing.
+player jumps, and a held key jumps once. The four stance and lerp gates are
+the same test the walk's scale and accel make ("The eye through a stance
+change"), and vcod's `move_stance` is that test.
 
 VERIFIED: the latch is set by the jump (0x2ec36) and cleared in
 `PmoveSingle` when `cmd.upmove` is 9 or less (0x3412d-0x34135), and `Pmove`
@@ -493,6 +494,125 @@ it, the street's forward dive going from 224 to 125 within the landing
 snapshot, and a mover without it read 2.2 to 2.7 units ahead of retail on
 the snapshot after each dive landed.
 
+### The eye through a stance change
+
+Read out of `game.mp.i386.so` on 2026-09-27 with
+`tools/re/annotate_func.py`. The function at 0x309d8 has no symbol; this
+doc calls it `PM_ViewHeightAdjust`. Field offsets are CoDExtended's
+`shared.h`: `viewHeightTarget` ps+0xcc (int), `viewHeightCurrent` ps+0xd0
+(float), `viewHeightLerpTime` ps+0xd4, `viewHeightLerpTarget` ps+0xd8,
+`viewHeightLerpDown` ps+0xdc, and the prone, crouch and standing heights at
+ps+0x33c, ps+0x340 and ps+0x344.
+
+VERIFIED: `PM_CheckDuck` (0x316f4) calls it at 0x31833, beside a store of
+`deadViewHeight` (ps+0x348) into ps+0xcc, and at 0x31fd3; `PmoveSingle`
+calls `PM_CheckDuck` at 0x342c9 and `PM_WalkMove` at 0x3431b. INFERRED,
+from that order: the walk reads the eye and the leg this frame left.
+
+The legs' lengths. VERIFIED, 0x30b46-0x30b98: the immediates 200 (0xc8),
+150 (0x96) and 100 (0x64) and the cvars `bg_duck2prone_time` and
+`bg_prone2duck_time` (400 each), picked off `viewHeightLerpTarget`,
+`viewHeightLerpDown` and `pm_flags` 0x4. INFERRED, from the branches: a leg
+to the prone height takes 200 ms on 0x4 (the dive) and `bg_duck2prone_time`
+otherwise; a leg down to the crouch height 100 ms on 0x4 and 150 otherwise;
+a leg up to the crouch height `bg_prone2duck_time`; any other leg 200.
+`PM_GetViewHeightLerpTime` (0x345b8) makes the same pick.
+
+The curves. VERIFIED, five tables of 12-byte records `{int percent, float
+height, int offset}` ending at percent -1, in `.data` (raw values, no
+`.rel.data` entry in any of them):
+
+| table | percent: height |
+|---|---|
+| 0x7c730, down to crouch | 0:60, 1:59.5, 4:58.5, 30:56, 80:44, 90:41.5, 95:40.5, 100:40 |
+| 0x7c79c, up to standing | 0:40, 5:40.5, 10:41.5, 20:44, 70:56, 96:58.5, 99:59.5, 100:60 |
+| 0x7c808, down to prone | 0:40, 11:38, 22:33, 34:25, 45:16, 50:15, 55:16, 70:18, 90:17, 100:11 |
+| 0x7c88c, the dive | 0:40, 100:11 |
+| 0x7c8b0, up to crouch | 0:11, 5:10, 30:21, 50:25, 67:31, 83:34, 100:40 |
+
+The offset word is 0 in every record. INFERRED, from 0x30b9d-0x31059: each
+frame of a running leg takes `percent = (cmd.serverTime -
+viewHeightLerpTime) * 100 / length` in integers, clamped to 0..100, and sets
+`viewHeightCurrent` linearly between the two records either side of it; at
+100 the eye takes `viewHeightLerpTarget` and `viewHeightLerpTime` and ps+0xe0
+are zeroed (0x30bcf-0x30bfe). INFERRED, from 0x3106e-0x3113f: a change of
+more than 0.05 (double at 0x70bc0) in the interpolated offset pushes the
+origin along the view's horizontal forward through `PM_StepSlideMove`; with
+every offset 0 that never runs.
+
+Starting a leg. INFERRED, from 0x315f2-0x316df: with no leg running and the
+eye off `viewHeightTarget`, `viewHeightLerpTime` takes `cmd.serverTime` and
+the leg aims at the next stance height on the way: toward prone,
+`viewHeightLerpDown` 1 and the crouch height while the eye is above it,
+else prone; toward crouch, down while the eye is above it; toward standing,
+up, and the crouch height while the eye is below it. So standing to prone
+and back are two legs each. INFERRED, from the jump at 0x30c01 to 0x31149:
+the frame a leg ends falls through to this start, so the second leg is
+stamped on the same frame. INFERRED, from 0x31149-0x312d4: a target on the
+other side of a running leg's direction turns it back, `percent` becoming
+`100 - percent`, `viewHeightLerpDown` flipping, `viewHeightLerpTarget`
+moving to the leg's other end and `viewHeightLerpTime` set to
+`cmd.serverTime - (int)(percent * 0.01 * length)` (0.01 float at 0x70bcc,
+the truncating store at 0x312c6); a target further along the same way waits
+for the leg to end. INFERRED, from 0x30a58-0x30b27: a target that is no
+stance height, the dead one, zeroes `viewHeightLerpTime` and moves the eye at
+180 (0x70bb8) times the frame time, the 180 per second of
+`cod11-combat.md` 8.1.
+
+VERIFIED live, the street capture's sideways prone press, first cmd at
+80958: `vh` reads 56.673077 at `commandTime` 80993 (percent 23 of the 150 ms
+leg down to crouch, 58.5 - 19/26 * 2.5), 41.5 at 81094 (percent 90), then
+38.909092 at 81135, 27 ms into a 400 ms leg to prone stamped at 81108
+(percent 6, 40 - 6/11 * 2), 15.8 at 81293 (percent 46) and 17.95 at 81394
+(percent 71). That is the dip the section below used to list as not
+modelled. The dive's 300 ms is its 100 and 200 ms legs.
+
+The walk scale. VERIFIED, 0x2e7a1-0x2e7f0: reads of `pm_flags` 0x1,
+`viewHeightLerpTarget` against the prone height, `viewHeightLerpTime`,
+`viewHeightLerpTarget` against the crouch height, `viewHeightLerpDown` and
+`pm_flags` 0x2; then two calls of 0x308cc, with (crouch, prone) at 0x2e810
+and (prone, crouch) at 0x2e868, and the loads of `proneSpeedScale`
+(ps+0x354) and `crouchSpeedScale` (ps+0x358) beside each. INFERRED, from
+the branches:
+
+- the stance the rest of the block falls back to is prone on `pm_flags`
+  0x1, on a `viewHeightLerpTarget` at the prone height, or on a running leg
+  up to the crouch height; else crouch on `pm_flags` 0x2 or on any running
+  leg to the crouch height; else standing. The same test, inlined, picks the
+  walk's accel at 0x2f436-0x2f490 and refuses a jump at 0x2ebc8-0x2ec03;
+- 0x308cc answers 0 with no leg running, when its second argument is not
+  `viewHeightLerpTarget`, or when that is the crouch height and the leg did
+  not start at its first argument (prone going up, standing going down);
+  otherwise `(cmd.serverTime - viewHeightLerpTime) / length` as a float,
+  clamped to 0..1 (0x3099f-0x309c9);
+- a non-zero fraction `f` from crouch to prone scales the wish by
+  `f * proneSpeedScale + (1 - f) * crouchSpeedScale` (0x2e82d-0x2e8a0), one
+  from prone to crouch by `f * crouchSpeedScale + (1 - f) * proneSpeedScale`,
+  and only when both are 0 does the fallback stance pick one scale.
+
+So a prone press from standing crawls through the leg down to crouch, since
+`pm_flags` 0x1 is already set, and then runs from crouch speed down to
+prone speed across the leg to prone; standing up does the mirror, then runs
+at full speed through the leg up to standing; the standing-crouch legs
+never blend. VERIFIED live, the same press: the strafe's 224 * 0.8 = 179
+decays to `vel` 141 and 112 at 80993 and 81035 under the prone wish and
+reads 27 at 81094 after a step, then climbs to 70 and 98 at 81135 and 81193
+and falls through 86, 75, 66, 52 and 41, where the blended wish slides from
+116 at the leg's start toward 27.
+
+vcod: `pmove::view_height_adjust` ports the function without the offset
+term, `move_stance` the stance test, `view_lerp_frac` 0x308cc and
+`stance_speed_scale` the blend; `pmove::weapon::hip_spread_min` reads the
+same legs for the hip cone (`cod11-combat.md` 2.1). `PlayerState::view_lerp_ms` is `cmd.serverTime
+- viewHeightLerpTime`; the server and the predictor turn it into the wire
+stamp. The prone captures do not record the three lerp fields, so the gate
+carries our own leg across each rebase and holds the eye to retail's `vh`
+instead. VERIFIED, vcod measurement (2026-09-27, `playerstate_slope_ab.rs`
+with `SLOPE_REPORT=1`, rebased): the street's max dxy went from 2.736 to
+0.429, its p99 from 0.233 to 0.048 and its rows past a unit from 1 to 0;
+the mound (0.522, none past a unit) and the two route captures did not
+move; the eye matches retail's printed `vh` on all 2851 prone rows.
+
 ### What the prone crawl capture measured
 
 `--save-slope --probe-prone <uphill yaw>` against
@@ -514,16 +634,14 @@ street and 48.7 on the mound where retail's cap held it, and the yaw cap's
 `delta_angles[1]` 0.88 off. Each of those is a correction a retail client
 predicting its own prone movement takes from the server, which is the
 "twitches sometimes when proning" of the hand check. After them: origin
-|dz| at most 0.17 on the mound up to `commandTime` 84000, one street row
-past a unit (2.7, a sideways prone press, below), `proneDirection` within
-0.5 degrees, both pitches within 1.42 and the view and `delta_angles` within
-one 16-bit step.
+|dz| at most 0.17 on the mound up to `commandTime` 84000, no row past a
+unit on either spot (the last, 2.7 units on a sideways prone press, went
+with the walk scale's blend, "The eye through a stance change"),
+`proneDirection` within 0.5 degrees, both pitches within 1.42, the view and
+`delta_angles` within one 16-bit step and the eye on retail's.
 
 Still apart, and not modelled:
 
-- the speed while the eye drops into prone: a sideways press keeps most of
-  its run speed across the drop on retail and ours takes the prone speed at
-  once (2.7 units on one row);
 - which of two terrain facets the ground trace names under a crawl, 1.4
   degrees of prone pitch on the mound;
 - a prone player wedged airborne against the `clip_nosight` brush behind
@@ -532,9 +650,7 @@ Still apart, and not modelled:
 - the ground samples of `BG_CheckProneValid` past its first trace, the
   prone-position revert after a step (`PM_VerifyPronePosition`, port note 5),
   event 141 and `pm_flags` 0x8000 and 0x400, and `fTorsoHeight`,
-  `fTorsoPitch` and `fWaistPitch`;
-- the eye's shape through a stance change: retail's prone drop is not
-  linear, dipping to 15.8 and back to 17.9 before settling at 11.
+  `fTorsoPitch` and `fWaistPitch`.
 
 ### Why it matters to a server
 
@@ -1179,6 +1295,8 @@ The walk scale, 0x2e690. VERIFIED, each a read of the instruction named:
   between the prone and crouch heights (`ps.viewHeightLerpTarget` at ps+0xd8
   against ps+0x33c and ps+0x340, the fraction from 0x308cc) by the two
   blended by the fraction.
+  Which scale, and when the blend applies, is in "The eye through a stance
+  change".
 - `pm->waterlevel` (pm+0xd9, the byte fn 0x30778 writes 0 to 3 at
   0x30786-0x308b9) non-zero multiplies by `1 - waterlevel / 3.0 * 0.5`
   (0x70888, 0x70890; 0x2e8d7-0x2e8fd).
@@ -1229,8 +1347,8 @@ at 40, 42 is 224 * 0.4 * 0.65.
 
 vcod: `pmove::wish` and `pmove::wish_air` port the two, with
 `PlayerState::walking` as the flag and `WeaponDef::move_speed_scale` as the
-weapon factor. Not ported: the crouch-to-prone blend across the eye lerp
-and the `wbuttons` 0x4 factor.
+weapon factor, and `stance_speed_scale` as the stance block. Not ported:
+the `wbuttons` 0x4 factor.
 
 ## State reference (observed pm_flags bits, internal ps+0xC)
 
