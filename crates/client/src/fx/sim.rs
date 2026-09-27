@@ -24,10 +24,12 @@ const TRACER_WIDTH: f32 = 0.8;
 const TRACER_SPEED: f32 = 4500.0;
 /// `cg_tracerlength` default, cvar row @ 0x30074e84. The full streak length.
 const TRACER_LENGTH: f32 = 160.0;
-/// Shorter shots draw no tracer: `ds:0x30069524` guard at 0x30039370.
-const TRACER_MIN_DIST: f32 = 100.0;
-/// Near-end bias along the shot: `ds:0x3006958c` at 0x300393a8.
-const TRACER_HEAD_START: f32 = 50.0;
+/// Flesh branch only: shorter shots draw nothing (`ds:0x30069524` at 0x30039370).
+const TRACER_FLESH_MIN_DIST: f32 = 100.0;
+/// Flesh branch only: the segment's near end is drawn from
+/// `[50, dist - 10)` (`ds:0x3006958c`, `ds:0x30069590` at 0x300393a0).
+const TRACER_FLESH_NEAR: f32 = 50.0;
+const TRACER_FLESH_SPREAD_CUT: f32 = 60.0;
 /// Registered in CG_RegisterGraphics @ 0x30020da0.
 const TRACER_SHADER: &str = "gfx/misc/tracer";
 
@@ -534,6 +536,46 @@ fn push_quads(
     }
 }
 
+/// Retail's moving tracer: `CG_SpawnTracer` @ 0x30038f30 starts a linear
+/// trajectory at the muzzle, `CG_AddLocalEntities` @ 0x300201b0 draws
+/// `[p, p + length*dir]` off it (0x3001ffe0) until it expires, so the tail
+/// leaves the muzzle. Lifetime in seconds: the tail's travel to
+/// `impact - length*dir`, truncated to whole ms.
+fn moving_tracer_life(muzzle: Vec3, impact: Vec3) -> f32 {
+    let dir = (impact - muzzle).normalize_or_zero();
+    let travel = (impact - dir * TRACER_LENGTH - muzzle).length();
+    (travel * 1000.0 / TRACER_SPEED).trunc() / 1000.0
+}
+
+/// A tracer as a stretch particle: `head` leads, the tail trails `len` back
+/// along `vel`.
+fn tracer_particle(spawn: f32, life: f32, head: Vec3, vel: Vec3, len: f32) -> Particle {
+    Particle {
+        spawn,
+        life,
+        pos: head,
+        vel,
+        accel: Vec3::ZERO,
+        gravity: 0.0,
+        rot: 0.0,
+        rot_delta: 0.0,
+        size0: TRACER_WIDTH,
+        size1: TRACER_WIDTH,
+        len0: len,
+        len1: len,
+        alpha0: 1.0,
+        alpha1: 1.0,
+        rgb0: Vec3::ONE,
+        rgb1: Vec3::ONE,
+        physics: false,
+        impact_kills: false,
+        surface: None,
+        shader: TRACER_SHADER.to_string(),
+        cullrange: 0.0,
+        is_light: false,
+    }
+}
+
 pub struct FxSystem {
     cache: HashMap<String, Option<Effect>>,
     warned: HashSet<String>,
@@ -613,48 +655,57 @@ impl FxSystem {
         sounds
     }
 
-    /// One tracer streak from `muzzle` towards `impact`, per the retail
-    /// client's hardcoded tracer (grammar doc R8). False when the chance
-    /// roll or the distance gate drops the shot.
-    pub fn spawn_tracer(&mut self, muzzle: Vec3, impact: Vec3, now: f32) -> bool {
+    /// One tracer from `muzzle` towards `impact`, per the retail client's
+    /// hardcoded tracer (grammar doc R8). `flesh` is `surfType == 7`, which
+    /// retail draws as a one-frame segment instead of a moving streak.
+    /// `frame_dt` is the frame's length in seconds, for the spawn back-date.
+    /// False when the chance roll or the flesh distance gate drops the shot.
+    pub fn spawn_tracer(
+        &mut self,
+        muzzle: Vec3,
+        impact: Vec3,
+        flesh: bool,
+        now: f32,
+        frame_dt: f32,
+    ) -> bool {
+        if self.rng.next_f32() >= TRACER_CHANCE {
+            return false;
+        }
         let delta = impact - muzzle;
         let dist = delta.length();
-        if dist < TRACER_MIN_DIST || self.rng.next_f32() >= TRACER_CHANCE {
-            return false;
-        }
-        let dir = delta / dist;
-        let travel = dist - TRACER_HEAD_START;
-        if travel <= 0.0 {
-            return false;
-        }
-        push_capped(
-            &mut self.particles,
-            Particle {
-                spawn: now,
-                life: travel / TRACER_SPEED,
-                pos: muzzle + dir * TRACER_HEAD_START,
-                vel: dir * TRACER_SPEED,
-                accel: Vec3::ZERO,
-                gravity: 0.0,
-                rot: 0.0,
-                rot_delta: 0.0,
-                size0: TRACER_WIDTH,
-                size1: TRACER_WIDTH,
-                len0: TRACER_LENGTH,
-                len1: TRACER_LENGTH,
-                alpha0: 1.0,
-                alpha1: 1.0,
-                rgb0: Vec3::ONE,
-                rgb1: Vec3::ONE,
-                physics: false,
-                impact_kills: false,
-                surface: None,
-                shader: TRACER_SHADER.to_string(),
-                cullrange: 0.0,
-                is_light: false,
-            },
-            MAX_PARTICLES,
-        );
+        let dir = delta.normalize_or_zero();
+        let p = if flesh {
+            if dist < TRACER_FLESH_MIN_DIST {
+                return false;
+            }
+            let near = TRACER_FLESH_NEAR + (dist - TRACER_FLESH_SPREAD_CUT) * self.rng.next_f32();
+            let far = (near + TRACER_LENGTH).min(dist);
+            tracer_particle(
+                now,
+                // Drawn on the spawn frame only; `step` drops it before it moves.
+                f32::MIN_POSITIVE,
+                muzzle + dir * far,
+                dir,
+                far - near,
+            )
+        } else {
+            // `(rand() % cg.frametime) / 2` in whole ms.
+            let frame_ms = (frame_dt * 1000.0) as u64;
+            let back = if frame_ms == 0 {
+                0.0
+            } else {
+                ((self.rng.next_u64() % frame_ms) / 2) as f32 / 1000.0
+            };
+            let vel = dir * TRACER_SPEED;
+            tracer_particle(
+                now - back,
+                moving_tracer_life(muzzle, impact),
+                muzzle + dir * TRACER_LENGTH + vel * back,
+                vel,
+                TRACER_LENGTH,
+            )
+        };
+        push_capped(&mut self.particles, p, MAX_PARTICLES);
         true
     }
 
@@ -1155,56 +1206,153 @@ mod tests {
         assert!((height - 6.0).abs() < 1e-4, "{height}");
     }
 
-    #[test]
-    fn tracer_uses_the_clients_own_dimensions() {
-        let mut s = FxSystem::new();
-        let muzzle = Vec3::ZERO;
-        let impact = Vec3::new(4000.0, 0.0, 0.0);
-        // Chance roll is 0.4; retry until one lands.
-        let mut spawned = false;
-        for _ in 0..50 {
-            if s.spawn_tracer(muzzle, impact, 0.0) {
-                spawned = true;
-                break;
-            }
-        }
-        assert!(spawned);
-        let q = s.build_quads(Vec3::new(0.0, -500.0, 0.0), Vec3::X, Vec3::Z, 0.0);
-        assert_eq!(q.len(), 1);
-        assert_eq!(q[0].shader, "gfx/misc/tracer");
-        let len = (Vec3::from(q[0].verts[1]) - Vec3::from(q[0].verts[0])).length();
-        let width = (Vec3::from(q[0].verts[2]) - Vec3::from(q[0].verts[1])).length();
-        assert!((len - 160.0).abs() < 1e-3, "{len}");
-        assert!((width - 1.6).abs() < 1e-3, "{width}");
-        // Head starts 50 units out from the muzzle and travels at 4500 u/s.
-        let xs: Vec<f32> = q[0].verts.iter().map(|v| v[0]).collect();
-        let head = xs.iter().cloned().fold(f32::MIN, f32::max);
-        assert!((head - 50.0).abs() < 1e-3, "{head}");
-        s.step(0.01, 0.01, None);
-        let q = s.build_quads(Vec3::new(0.0, -500.0, 0.0), Vec3::X, Vec3::Z, 0.01);
-        let head2 = q[0].verts.iter().map(|v| v[0]).fold(f32::MIN, f32::max);
-        assert!((head2 - (50.0 + 45.0)).abs() < 1e-2, "{head2}");
+    /// Retries past the 0.4 chance roll; false if 50 rolls all failed.
+    fn spawn_tracer_retrying(
+        s: &mut FxSystem,
+        impact: Vec3,
+        flesh: bool,
+        now: f32,
+        frame_dt: f32,
+    ) -> bool {
+        (0..50).any(|_| s.spawn_tracer(Vec3::ZERO, impact, flesh, now, frame_dt))
+    }
+
+    /// The one tracer's (tail, head) x along a +x shot, and its width.
+    fn tracer_extent(s: &FxSystem, now: f32) -> Option<(f32, f32, f32)> {
+        let q = s.build_quads(Vec3::new(0.0, -500.0, 0.0), Vec3::X, Vec3::Z, now);
+        let q = q.first()?;
+        assert_eq!(q.shader, "gfx/misc/tracer");
+        let xs = q.verts.map(|v| v[0]);
+        let width = (Vec3::from(q.verts[2]) - Vec3::from(q.verts[1])).length();
+        Some((
+            xs.iter().cloned().fold(f32::MAX, f32::min),
+            xs.iter().cloned().fold(f32::MIN, f32::max),
+            width,
+        ))
     }
 
     #[test]
-    fn tracer_is_skipped_for_short_shots() {
+    fn tracer_tail_leaves_the_muzzle_and_the_head_leads_by_its_length() {
         let mut s = FxSystem::new();
-        for _ in 0..50 {
-            assert!(!s.spawn_tracer(Vec3::ZERO, Vec3::new(80.0, 0.0, 0.0), 0.0));
+        let impact = Vec3::new(4000.0, 0.0, 0.0);
+        assert!(spawn_tracer_retrying(&mut s, impact, false, 0.0, 0.0));
+        let (tail, head, width) = tracer_extent(&s, 0.0).unwrap();
+        assert!(tail.abs() < 1e-3, "tail {tail} must sit on the muzzle");
+        assert!((head - 160.0).abs() < 1e-3, "{head}");
+        assert!((width - 1.6).abs() < 1e-3, "{width}");
+        // p(t) = muzzle + 4500 * t along the shot, head = p + 160.
+        let mut now = 0.0;
+        for _ in 0..40 {
+            s.step(0.02, now + 0.02, None);
+            now += 0.02;
+            let Some((tail, head, _)) = tracer_extent(&s, now) else {
+                break;
+            };
+            assert!((tail - 4500.0 * now).abs() < 1e-2, "{now}: {tail}");
+            assert!((head - tail - 160.0).abs() < 1e-2, "{now}: {head}");
+            assert!(head <= impact.x + 1e-2, "{now}: {head} past the impact");
         }
+    }
+
+    #[test]
+    fn tracer_lives_until_its_tail_reaches_length_short_of_the_impact() {
+        let mut s = FxSystem::new();
+        // (4000 - 160) / 4500 s = 853.33 ms, truncated to 853.
+        assert!(spawn_tracer_retrying(
+            &mut s,
+            Vec3::new(4000.0, 0.0, 0.0),
+            false,
+            0.0,
+            0.0
+        ));
+        s.step(0.853, 0.853, None);
+        let (_, head, _) = tracer_extent(&s, 0.853).unwrap();
+        assert!((head - (0.853 * 4500.0 + 160.0)).abs() < 1e-1, "{head}");
+        s.step(0.002, 0.855, None);
+        assert!(tracer_extent(&s, 0.855).is_none());
+    }
+
+    #[test]
+    fn tracer_backdate_moves_the_tail_ahead_never_behind() {
+        let mut s = FxSystem::new();
+        let impact = Vec3::new(4000.0, 0.0, 0.0);
+        for i in 0..200 {
+            s.clear();
+            let now = i as f32;
+            assert!(spawn_tracer_retrying(&mut s, impact, false, now, 0.016));
+            let (tail, head, _) = tracer_extent(&s, now).unwrap();
+            // `(rand() % 16) / 2` ms, so at most 7 ms of travel.
+            assert!((0.0..=4500.0 * 0.007 + 1e-2).contains(&tail), "{tail}");
+            assert!((head - tail - 160.0).abs() < 1e-2);
+        }
+    }
+
+    #[test]
+    fn tracer_short_of_its_length_still_starts_at_the_muzzle() {
+        // Retail's moving branch has no distance gate.
+        let mut s = FxSystem::new();
+        assert!(spawn_tracer_retrying(
+            &mut s,
+            Vec3::new(80.0, 0.0, 0.0),
+            false,
+            0.0,
+            0.0
+        ));
+        let (tail, head, _) = tracer_extent(&s, 0.0).unwrap();
+        assert!(
+            tail.abs() < 1e-3 && (head - 160.0).abs() < 1e-3,
+            "{tail} {head}"
+        );
+    }
+
+    #[test]
+    fn flesh_tracer_is_a_one_frame_segment_inside_the_shot() {
+        let mut s = FxSystem::new();
+        for i in 0..100 {
+            s.clear();
+            let now = i as f32;
+            assert!(spawn_tracer_retrying(
+                &mut s,
+                Vec3::new(1000.0, 0.0, 0.0),
+                true,
+                now,
+                0.016
+            ));
+            let (near, far, _) = tracer_extent(&s, now).unwrap();
+            // near in [50, 1000 - 10), far = min(near + 160, 1000).
+            assert!((50.0..990.0).contains(&near), "{near}");
+            assert!(
+                (far - (near + 160.0).min(1000.0)).abs() < 1e-2,
+                "{near} {far}"
+            );
+            s.step(0.016, now + 0.016, None);
+            assert!(tracer_extent(&s, now + 0.016).is_none());
+        }
+    }
+
+    #[test]
+    fn flesh_tracer_is_skipped_for_short_shots() {
+        let mut s = FxSystem::new();
+        assert!(!spawn_tracer_retrying(
+            &mut s,
+            Vec3::new(80.0, 0.0, 0.0),
+            true,
+            0.0,
+            0.0
+        ));
         assert_eq!(s.counts().0, 0);
     }
 
     #[test]
     fn clear_drops_particles_and_decals_but_keeps_the_cache() {
         let mut fx = FxSystem::new();
-        // Chance roll is 0.4; retry until a tracer lands.
-        for _ in 0..50 {
-            if fx.spawn_tracer(Vec3::ZERO, Vec3::new(4000.0, 0.0, 0.0), 0.0) {
-                break;
-            }
-        }
-        assert!(fx.counts().0 > 0);
+        assert!(spawn_tracer_retrying(
+            &mut fx,
+            Vec3::new(4000.0, 0.0, 0.0),
+            false,
+            0.0,
+            0.0
+        ));
         fx.cache.insert("x".into(), None);
         fx.clear();
         assert_eq!(fx.counts(), (0, 0, 0));
