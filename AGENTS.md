@@ -593,9 +593,9 @@ engineering setup works.
   aim trace, releasing back to the gunner's own stance on a second use, a
   kill, or the gun's own deletion. The scriptent mover verbs move things and their trajectories reach the wire
   (`docs/research/cod11-movers.md`). A probe run against it reproduces the
-  retail death capture field for field except for two: the `EV_RAISE_WEAPON`
-  the death frame does not raise, and the `legsAnim` the respawn frame
-  carries a frame late (`docs/research/cod11-combat.md` section 9). What the
+  retail death capture field for field except for one: the `legsAnim` the
+  respawn frame carries a frame late (`docs/research/cod11-combat.md`
+  section 9). What the
   map-cycle probes measured of it is `docs/research/cod11-map-cycle.md`
   section 8.
 - The tick, in order: the console drains first (a `map`, `map_restart` or
@@ -609,7 +609,12 @@ engineering setup works.
   slot moves against an earlier one's new position; it is also where the
   weapon machine queues a frame's shots, swings and throws; a client's cmds after a use press wait for the
   touch pass and run in a second round, so a mount lands inside the use cmd,
-  and the anim update also runs per round, off that round's last cmd). Each cmd's origin, `pm_type`, `on_ground`, view
+  and a `kill` splits them the same way at the place in the stream it
+  arrived, retail running a packet's client commands ahead of its usercmds:
+  it runs after that round's touch pass with the callback's drop and death
+  op applied to the sim there and then, so the cmds behind it move alive at
+  the `pm_type` the last end frame wrote; the anim update also runs per
+  round, off that round's last cmd). Each cmd's origin, `pm_type`, `on_ground`, view
   yaw, buttons, the `ps.weapon` a move switched to and the `clipOnly` weapon a
   last round spent are recorded as it runs, and once every client has moved
   this round, each client's ammo and clip arrays are copied onto the host (`client_ammo`,
@@ -639,9 +644,8 @@ engineering setup works.
   then, in that same order (its `finishPlayerDamage` raises a bullet
   weapon's flesh impacts, so they number between the legs' own the way
   retail's do), then the missiles fly and any due fuse explodes, then the
-  blasts become hits, then the client commands that start a script thread
-  (`kill`, `mr`), which the packet pass only queues because it runs before
-  the clock advances, then `deliver_hits` for the blasts so their damage
+  blasts become hits, then the `mr` menu responses, which the packet pass
+  only queues because it runs before the clock advances, then `deliver_hits` for the blasts so their damage
   callback has run before script, then the script frame, then the script's spawns (each with the spawn's own
   end frame and think: the own view, `PMF_RESPAWNED` and `commandTime` at
   the frame's clock), then the switches the weapon
@@ -661,7 +665,8 @@ engineering setup works.
   archive when `archivetime` asks for a replay, or lets go, reading a lower
   slot's bit from this frame), the contents write, `StuckInClient`'s scan for a live player
   (the push and its CORPSE mark, which reach the wire `solid` only at the
-  pushed player's next cmd) and `end_frame`, then `ClientEndFrame`'s aim
+  pushed player's next cmd) and `end_frame` (the dead `pm_type` the cmds
+  read is written here, off the death), then `ClientEndFrame`'s aim
   trace per playing client, off the frame's final eye and aim with `pm_type` and `on_ground` mirrored again
   beside it and every client's posed body mirrored again ahead of the first, whose fire wakes its waiters at the next tick's script frame,
   and beside it the cursor hint for the item the use key would pick now,

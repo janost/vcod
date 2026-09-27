@@ -277,15 +277,15 @@ slot 2 one as 6, both rode the respawn with `commandTime` equal to
 `serverTime`, and the sight press left `health` 100, `weapon` 9 and both eye
 heights 0 on the free frames, as retail's run read.
 
+The death frame's `weapon`, `viewHeightTarget` and `eventSequence` were
+not retail's in those runs: a `kill` read `weapon` 0, `viewHeightTarget` 60
+and `eventSequence` 2 on retail and 9, 8 and 1 on ours, in both followers'
+copies. Ours ran the `kill` after the frame's cmds; it now runs ahead of the
+cmds of its own packet, which still read `pm_type` 0 until the end frame
+(`cod11-combat.md` 9.2 has the addresses and the fix).
+
 Where it is not retail's:
 
-- The death frame's `weapon`, `viewHeightTarget` and `eventSequence`: in the
-  three-probe dm runs a `kill` read `weapon` 0, `viewHeightTarget` 60 and
-  `eventSequence` 2 on retail and 9, 8 and 1 on ours, in both followers'
-  copies. INFERRED: retail's
-  victim ran its cmds at `pm_type` 0 after the kill and before its end
-  frame; ours runs the `kill` after the frame's cmds, so the weapon empties
-  on the next cmd (section 13) and the dead eye target is written at once.
 - `P_DamageFeedback`'s `EV_PAIN` goes on the target's ring in its end frame,
   so a lower follower sees it a frame late on retail (INFERRED, section 5);
   ours copies the ring current.

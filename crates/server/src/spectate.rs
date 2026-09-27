@@ -231,9 +231,16 @@ pub struct ClientSim {
     /// frame; the host is where the script's `self.health` lands.
     pub health: i32,
     pub max_health: i32,
-    /// Killed and not yet respawned: `PM_DEAD` on the wire, the dead move,
-    /// no weapon step, no feedback.
+    /// Killed and not yet respawned: no entity, no feedback, no anims.
     pub dead: bool,
+    /// `ps.pm_type > 5` as the last end frame wrote it off `dead`
+    /// (`ClientEndFrame` 0x41079): the wire's `PM_DEAD` and what the cmds
+    /// read, so the cmds a death lands ahead of still run the live move
+    /// (`docs/research/cod11-combat.md` 9.2).
+    pm_dead: bool,
+    /// The last move ran the dead arm, whose `PM_CheckDuck` targets
+    /// `deadViewHeight`.
+    dead_eye: bool,
     /// `linkTo`'s record, `gentity_t+0x2e4`. Not `linked()`, which is about
     /// whether the other clients are sent an entity for this one.
     pub link_to: Option<Link>,
@@ -418,6 +425,8 @@ impl ClientSim {
             health: 0,
             max_health: 0,
             dead: false,
+            pm_dead: false,
+            dead_eye: false,
             damage: DamageAccum::default(),
             feedback: DamageFeedback::default(),
             dead_yaw: 0,
@@ -490,6 +499,7 @@ impl ClientSim {
         self.hud_cleared = true;
         if !playing {
             self.dead = true;
+            self.pm_dead = true;
             self.contents = 0;
             self.relink();
         }
@@ -536,7 +546,7 @@ impl ClientSim {
     /// `ps.pm_type` as the wire carries it. The touch pass gates on it, so it
     /// is read outside `to_wire` too.
     pub fn wire_pm_type(&self) -> i32 {
-        match (self.pm_type, self.dead) {
+        match (self.pm_type, self.pm_dead) {
             (PmType::Normal, true) if self.link_to.is_some() => PM_DEAD_LINKED,
             (PmType::Normal, false) if self.link_to.is_some() => PM_NORMAL_LINKED,
             (PmType::Normal, true) => PM_DEAD,
@@ -573,6 +583,8 @@ impl ClientSim {
         // `ClientSpawn`'s memset: the damage fields read 0 again after a
         // respawn (combat doc, 8.4), and so does the dead yaw.
         self.dead = false;
+        self.pm_dead = false;
+        self.dead_eye = false;
         self.damage = DamageAccum::default();
         self.feedback = DamageFeedback::default();
         self.dead_yaw = 0;
@@ -628,6 +640,7 @@ impl ClientSim {
                     for dt in [pmove::MAX_FRAME_MS, SPAWN_THINK_MS - pmove::MAX_FRAME_MS] {
                         pmove::dead_move(&mut self.ps, &w, dt / 1000.0);
                     }
+                    self.dead_eye = true;
                 }
             }
             _ => self.respawned = false,
@@ -825,9 +838,10 @@ impl ClientSim {
         // A dead player's view is frozen and its body falls and slides;
         // nothing it presses reaches the mover or the weapon (combat doc,
         // 1.12 and 6, the `pm_type > 5` returns).
-        if self.dead {
+        if self.pm_dead {
             if let Some(w) = world {
                 pmove::dead_move(&mut self.ps, &w, dt);
+                self.dead_eye = true;
             }
             // `PM_Weapon`'s `pm_type > 5` arm, behind its `PMF_RESPAWNED`
             // return (0x390ee..0x390fe).
@@ -866,6 +880,7 @@ impl ClientSim {
                 )
             }
             (PmType::Normal, Some(w)) => {
+                self.dead_eye = false;
                 // The cmds see the link the last frame's script left, so the
                 // linking frame's run free and the unlinking frame's linked
                 // (object-model doc, 23.2).
@@ -1211,6 +1226,9 @@ impl ClientSim {
     /// left. A dead player's feedback never runs, so the killing hit leaves
     /// all four fields as the last surviving hit left them (8.4).
     pub fn end_frame(&mut self, now_ms: i32) {
+        // `ClientEndFrame` writes `pm_type` (0x41079) ahead of its
+        // `P_DamageFeedback` call (0x41128).
+        self.pm_dead = self.dead;
         if self.dead || self.damage.taken <= 0 || self.max_health <= 0 {
             return;
         }
@@ -1450,7 +1468,7 @@ impl ClientSim {
             // `PM_CheckDuck` (cgame 0x30009de0) targets `deadViewHeight` for
             // `pm_type >= 6`; the client re-derives it, so this only keeps the
             // wire honest.
-            let target = if self.dead {
+            let target = if self.dead_eye {
                 pmove::VIEW_DEAD
             } else {
                 self.ps.stance.view_height()
@@ -1516,7 +1534,7 @@ impl ClientSim {
             // The stance lerp's stamp; the dead eye's drop is not one.
             set(
                 "viewHeightLerpTime",
-                if self.dead {
+                if self.dead_eye {
                     0
                 } else {
                     self.view_lerp_start.unwrap_or(0)
@@ -2635,6 +2653,7 @@ mod tests {
             ENTITYNUM_NONE as i32
         );
         sim.dead = true;
+        sim.end_frame(0);
         assert_eq!(sim.wire_pm_type(), PM_DEAD_LINKED);
         // A spawn unlinks: `ClientSpawn` calls `G_EntUnlink`.
         sim.become_player([0.0; 3], 0.0, NULL_USERCMD.angles);

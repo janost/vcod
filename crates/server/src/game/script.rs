@@ -1081,6 +1081,29 @@ impl ScriptRuntime {
         std::mem::take(&mut self.host.client_weapon_ops)
     }
 
+    /// `slot`'s share of [`Self::take_weapon_ops`] and
+    /// [`Self::take_sim_ops`], for a death the move pass lands before the
+    /// client's next cmd; every other client's stay queued.
+    pub fn take_ops_of(
+        &mut self,
+        slot: usize,
+    ) -> (
+        Vec<crate::game::host::WeaponOp>,
+        Vec<crate::game::host::SimOp>,
+    ) {
+        fn split<T>(all: &mut Vec<(usize, T)>, slot: usize) -> Vec<T> {
+            let (mine, rest) = std::mem::take(all)
+                .into_iter()
+                .partition::<Vec<_>, _>(|(s, _)| *s == slot);
+            *all = rest;
+            mine.into_iter().map(|(_, op)| op).collect()
+        }
+        (
+            split(&mut self.host.client_weapon_ops, slot),
+            split(&mut self.host.client_sim_ops, slot),
+        )
+    }
+
     /// One client's viewmodel index, read every frame for the same reason
     /// `client_weapons` is.
     pub fn client_viewmodel(&self, slot: usize) -> i32 {

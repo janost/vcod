@@ -2823,8 +2823,8 @@ retail's, field for field: `health` 0, `damageEvent`/`damageCount`/`damageYaw`/
 `damagePitch` 0, `pm_type` 6, `eFlags` 16, `deadViewHeight` 8,
 `viewHeightCurrent` 60.0, `legsAnim` 18, `torsoAnim` 512, `weaponstate` 0,
 `stats[1]` 0, `clip=3:7,6:3` and `ammo=3:56` -- the held carbine's index 10
-gone from both arrays -- and zero velocity. The one field that differs is
-`eventSequence`, 1 against retail's 2, for the reason 9.2's last entry gives.
+gone from both arrays -- and zero velocity. `eventSequence` read 1 against
+retail's 2 in that run; 9.2 has the cause and the fix.
 
 VERIFIED, the respawn frame against retail's, field for field: `health` 100,
 `pm_type` 0, `eFlags` **24**, `eventSequence` 0 with an empty ring, and
@@ -2875,10 +2875,43 @@ the kill.
 
 ### 9.2 What differs
 
-VERIFIED: **the death frame is missing `EV_RAISE_WEAPON`.** Retail's death
-raises two events, 189 then 155, and reads `eventSequence` 2; vcod raises 189
-alone and reads 1. It is the one field of the death frame that still differs,
-and it is in 9.4's list.
+Closed on 2026-09-27, the `kill` death frame:
+
+- **The death frame was missing `EV_RAISE_WEAPON`.** VERIFIED, run: retail's
+  `kill` death raises two events, 189 then 155, and reads `eventSequence` 2;
+  vcod raised 189 alone and read 1. VERIFIED, the three-probe follow run
+  (`cod11-spectator-follow.md` 9): the same frame reads `weapon` 0 and
+  `viewHeightTarget` 60 on retail, where vcod read the carbine and 8.
+  VERIFIED, `cod_lnxded`: `SV_ExecuteClientMessage` (0x80872ec) reads the
+  2-bit op, calls `SV_ClientCommand` (0x8086e08) while it reads 2, and only
+  then calls `SV_UserMove` (0x8086fa4) for an op of 0 or 1; `SV_ClientCommand`
+  hands the command to `SV_ExecuteClientCommand` (0x8086d58), whose call
+  into the game module (0x8092158) passes 6, and `SV_UserMove` makes the same
+  call with 7 once per cmd. INFERRED, off Q3's export numbering: 6 is
+  `ClientCommand` and 7 `ClientThink`. VERIFIED,
+  `game.mp.i386.so`: `ClientEndFrame` stores `pm_type` 6 (7 linked) off a
+  `sessionState` of 1 (0x41057..0x41079) and 0 or 1 otherwise (0x410a7);
+  `ClientThink_real` (0x3fee0) holds no store to `ps+0x4`. INFERRED: a
+  packet's client commands run ahead of its usercmds, and the cmds behind a
+  `kill` still read the `pm_type` 0 the last end frame wrote, so they run
+  the live move: `PM_Weapon` finds the carbine the death dropped gone and
+  goes down to empty hands with its `EV_RAISE_WEAPON` (1.8), and
+  `PM_CheckDuck` still targets the standing eye. vcod ran `kill` after the
+  frame's cmds and read the death straight into the move, so its first dead
+  cmd came a frame later. Fixed: `client_command` marks where in the cmd
+  stream the `kill` arrived, `replay_moves` runs it there (the callback, the
+  drop and the death op all land before the next cmd), and the sim's
+  `pm_type` is the one its end frame wrote (`ClientSim::end_frame`), with the
+  wire's `viewHeightTarget` off the last move's arm. Pinned by
+  `the_kill_commands_death_frame_is_retails` (`tests/combat.rs`), with 1.8's
+  pickup rule from the same day.
+- Not closed: a bullet death. VERIFIED, 8.4: retail's bullet death frame
+  reads events `[187, 189, 155]`. INFERRED: the 155 comes from cmds of the
+  victim's own that reached retail after the shooter's in the same frame;
+  vcod runs every client's cmds before any shot is traced
+  (`docs/protocol-1.1.md`, the divergence list's slot-order entry), so its
+  victim has no cmd between the death and the end frame, and its death frame
+  reads 187 and 189 alone.
 
 VERIFIED: **the respawn frame carries `legsAnim` 0 where retail carries 634.**
 It is one frame: the next one reads 634 and every frame after it. INFERRED:
@@ -2982,7 +3015,8 @@ in-process test and the headless run cover that path). PENDING.
 Named here so a reader of sections 1 to 7 does not assume the code follows
 them: the `pm_time` stun (4.5); the view kick of 6's step 6;
 `EV_CROUCH_PAIN` (188);
-the `EV_RAISE_WEAPON` (155) retail raises on the death frame beside `EV_DEATH`;
+the `EV_RAISE_WEAPON` (155) retail raises on a bullet death frame beside
+`EV_DEATH` (9.2);
 the direct-hit `MOD_GRENADE` arm (13.1), which a stock frag cannot reach
 because its file spells `damage` 0; the pitch rate `G_MissileLandAngles`
 redraws at a bounce (11.2); and the splash event 173 and the water mask of
