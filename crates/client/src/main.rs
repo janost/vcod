@@ -523,17 +523,26 @@ const INTERP_DELAY_MS: i32 = 100;
 /// Server now = newest snapshot time plus wall time since it was first seen,
 /// so interpolation sweeps between 20 Hz snapshots instead of stepping. A new
 /// snapshot re-anchors: continuous when on schedule, a snap after a long gap.
+/// One per live map, so a new gamestate starts it afresh.
 struct ServerClock {
     /// (newest snapshot server time, local ms it was first seen).
     anchor: Option<(i32, f64)>,
+    /// The last time returned; a late snapshot re-anchors behind it.
+    drawn: i32,
 }
 
 impl ServerClock {
     fn new() -> Self {
-        Self { anchor: None }
+        Self {
+            anchor: None,
+            drawn: i32::MIN,
+        }
     }
 
     /// Server time to interpolate at; `local_ms` is a monotonic wall clock.
+    /// Never below a time already returned: the clock holds until a late
+    /// snapshot's anchor catches up rather than stepping entities and the
+    /// HUD's timers back.
     fn render_time(&mut self, local_ms: f64, newest: i32) -> i32 {
         match self.anchor {
             Some((t, _)) if t == newest => {}
@@ -541,7 +550,8 @@ impl ServerClock {
         }
         let (anchor_time, anchor_local) = self.anchor.unwrap();
         let server_now = anchor_time as f64 + (local_ms - anchor_local);
-        (server_now - INTERP_DELAY_MS as f64) as i32
+        self.drawn = self.drawn.max((server_now - INTERP_DELAY_MS as f64) as i32);
+        self.drawn
     }
 }
 
@@ -1007,6 +1017,21 @@ fn start_loading(
     Ok(Phase::Loading {
         loader: loading::MapLoader::new(map, candidates),
     })
+}
+
+/// Reopens the pk3 search path after a download. The menus and localized
+/// strings read off the old one are dropped with it, since the new paks may
+/// carry files the old ones lacked.
+fn reopen_fs(
+    mod_dir: &std::path::Path,
+    fs: &mut Pk3Fs,
+    localized: &mut vcod_common::localize::Localized,
+    menus: &mut hud::menu::MenuCache,
+) -> Result<()> {
+    *fs = Pk3Fs::open(mod_dir)?;
+    *localized = vcod_common::localize::Localized::load(fs);
+    *menus = hud::menu::MenuCache::default();
+    Ok(())
 }
 
 /// Parse the map, upload it to the GPU and hand back the live phase.
@@ -1653,21 +1678,14 @@ impl ApplicationHandler for App {
                             }
                         }
 
-                        match join.open() {
-                            None => *menu_view = None,
-                            Some(open)
-                                if menu_view
-                                    .as_ref()
-                                    .is_some_and(|(name, _)| *name == open.name) => {}
-                            Some(open) => {
-                                *menu_view = self.menus.get(&self.fs, &open.name).map(|menu| {
-                                    let view = hud::menu::view(menu, &self.localized, |c| {
-                                        join.cvars.get(c, net.configstrings())
-                                    });
-                                    (open.name.clone(), view)
-                                });
-                            }
-                        }
+                        hud::menu::sync(
+                            menu_view,
+                            join,
+                            &mut self.menus,
+                            &self.fs,
+                            &self.localized,
+                            net.configstrings(),
+                        );
 
                         // One quick-chat line per second, played and shown
                         // like a chat line (retail queues text + alias).
@@ -1774,8 +1792,13 @@ impl ApplicationHandler for App {
                                         }
                                     }
                                     loading::Action::Reopen => {
-                                        match Pk3Fs::open(&self.game_dir.join(&self.mod_dir)) {
-                                            Ok(reopened) => self.fs = reopened,
+                                        match reopen_fs(
+                                            &self.game_dir.join(&self.mod_dir),
+                                            &mut self.fs,
+                                            &mut self.localized,
+                                            &mut self.menus,
+                                        ) {
+                                            Ok(()) => *menu_view = None,
                                             Err(e) => fatal = Some(e),
                                         }
                                     }
@@ -2559,6 +2582,50 @@ impl ApplicationHandler for App {
 mod tests {
     use super::*;
 
+    fn make_pk3(dir: &std::path::Path, file: &str, entries: &[(&str, &str)]) {
+        use std::io::Write;
+        let mut z = zip::ZipWriter::new(std::fs::File::create(dir.join(file)).unwrap());
+        for (name, content) in entries {
+            z.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(content.as_bytes()).unwrap();
+        }
+        z.finish().unwrap();
+    }
+
+    /// A downloaded pak can carry the menus and strings the paks before it
+    /// lacked; a miss cached against the old search path must not outlive it.
+    #[test]
+    fn reopen_reads_menus_and_strings_off_the_new_paks() {
+        let dir = tempfile::tempdir().unwrap();
+        make_pk3(dir.path(), "pak0.pk3", &[("readme.txt", "")]);
+        let mut fs = Pk3Fs::open(dir.path()).unwrap();
+        let mut localized = vcod_common::localize::Localized::load(&fs);
+        let mut menus = hud::menu::MenuCache::default();
+        assert!(menus.get(&fs, "team_mod").is_none());
+
+        make_pk3(
+            dir.path(),
+            "zzz_mod.pk3",
+            &[
+                (
+                    "ui_mp/scriptmenus/team_mod.menu",
+                    r#"{ menuDef { name "team_mod"
+      itemDef { name "a" visible 1 text "@MODMENU_ALLIES" action { scriptMenuResponse "allies"; } }
+    } }"#,
+                ),
+                (
+                    "localizedstrings/english/modmenu.str",
+                    "REFERENCE ALLIES\nLANG_ENGLISH \"Allies\"\n",
+                ),
+            ],
+        );
+        reopen_fs(dir.path(), &mut fs, &mut localized, &mut menus).unwrap();
+        let menu = menus.get(&fs, "team_mod").expect("menu from the new pak");
+        let v = hud::menu::view(menu, &localized, |_| None);
+        assert_eq!(v.rows[0].label, "Allies");
+    }
+
     /// Snapshots arrive at 20 Hz and the window redraws at 60 Hz, so render
     /// time must advance every frame, not per snapshot.
     #[test]
@@ -2626,6 +2693,21 @@ mod tests {
         assert!(
             (after - before).abs() <= 8,
             "render time jumped across the snapshot seam: {before} -> {after}"
+        );
+    }
+
+    /// A snapshot arriving late re-anchors behind the time already drawn; the
+    /// clock holds there instead of stepping back.
+    #[test]
+    fn interp_clock_never_runs_backwards() {
+        let mut clock = ServerClock::new();
+        clock.render_time(0.0, 10_000);
+        let before = clock.render_time(70.0, 10_000);
+        let after = clock.render_time(70.0, 10_050);
+        let later = clock.render_time(100.0, 10_050);
+        assert!(
+            before <= after && after <= later,
+            "render time ran backwards: {before} -> {after} -> {later}"
         );
     }
 

@@ -2467,9 +2467,11 @@ dependencies = [
  "kira",
  "log",
  "pollster",
+ "tempfile",
  "vcod-common",
  "wgpu",
  "winit",
+ "zip",
 ]
 
 [[package]]
