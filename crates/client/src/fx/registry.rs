@@ -208,6 +208,8 @@ pub enum Resolved {
     Tracer {
         muzzle: Vec3,
         impact: Vec3,
+        /// `surfType == 7`, which retail draws as a one-frame segment.
+        flesh: bool,
     },
     Known,
     Unknown,
@@ -300,6 +302,7 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
                 out.push(Resolved::Tracer {
                     muzzle: muzzle_pos,
                     impact,
+                    flesh: SURFACE_NAMES.get(surf as usize) == Some(&"flesh"),
                 });
             }
             known_or(out)
@@ -527,9 +530,14 @@ mod tests {
         let rs = resolve_with(&e, &ImpactTable::default(), &ctx);
         assert_eq!(rs.len(), 1, "{rs:?}"); // impact itself was a blank cell
         match &rs[0] {
-            Resolved::Tracer { muzzle, impact } => {
+            Resolved::Tracer {
+                muzzle,
+                impact,
+                flesh,
+            } => {
                 assert_eq!(*muzzle, Vec3::ZERO);
                 assert_eq!(*impact, Vec3::new(10.0, 0.0, 0.0));
+                assert!(!flesh);
             }
             other => panic!("{other:?}"),
         }
@@ -549,7 +557,8 @@ mod tests {
         e.other_entity_num = 7;
         let rs = resolve_with(&e, &ImpactTable::default(), &ctx);
         assert!(
-            rs.iter().any(|r| matches!(r, Resolved::Tracer { .. })),
+            rs.iter()
+                .any(|r| matches!(r, Resolved::Tracer { flesh: true, .. })),
             "{rs:?}"
         );
     }
