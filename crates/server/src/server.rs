@@ -9,6 +9,7 @@ use crate::client::{sanitize_name, Client, ClientState};
 use crate::configstrings;
 use crate::console;
 use crate::follow;
+use crate::game::combat::Effect;
 use crate::game::host::{ClientEvent, SpawnMode};
 use crate::game::script;
 use crate::game::stuck::{stuck_in_client, StuckView};
@@ -306,6 +307,18 @@ fn apply_sim_ops(
                 });
                 sim.take_damage(&op, inputs.as_ref(), rng, now_ms);
             }
+        }
+    }
+}
+
+/// An attack's effects in the order it raised them: an impact goes on the
+/// wire and a hit runs the damage callback there and then, so the flesh pair
+/// a leg's callback raises numbers below the next leg's wall impact.
+fn apply_effects(rt: &mut script::ScriptRuntime, effects: Vec<Effect>, now_ms: i32) {
+    for e in effects {
+        match e {
+            Effect::Impact(te) => rt.push_temp_entity(te),
+            Effect::Hit(h) => rt.deliver_hits(vec![h], now_ms),
         }
     }
 }
@@ -1636,6 +1649,12 @@ impl Server {
             .map_or(0, |i| i + 1)
     }
 
+    /// Test-facing: the seed the spread and the melee rolls draw from, so a
+    /// gate that needs a shot to land where it did once can have it again.
+    pub fn test_seed_rng(&mut self, seed: u64) {
+        self.rng = seed | 1;
+    }
+
     /// Whether a shot fired from eye height at `origin` along `yaw_deg`
     /// reaches `dist` without hitting anything. Test-facing, like
     /// `place_client`: a gate that puts one client in front of another has to
@@ -2895,11 +2914,11 @@ impl Server {
         let weapons = self.weapon_table.clone();
 
         // Then the frame's shots, against the world the moves left: each is
-        // a trace, an impact for the snapshot and, on a player, a hit the
-        // damage callback is handed before the script frame runs
+        // a trace per leg, an impact for the snapshot and, on a player, a
+        // hit the damage callback is handed before the script frame runs
         // (`crate::game::combat`).
         let mut hits = Vec::new();
-        let mut impacts = Vec::new();
+        let mut effects = Vec::new();
         let mut throws: Vec<(usize, u8, i32, glam::Vec3, glam::Vec3, i32)> = Vec::new();
         {
             let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
@@ -2990,8 +3009,7 @@ impl Server {
                     ),
                     Attack::Throw { .. } => continue,
                 };
-                impacts.extend(r.impacts);
-                hits.extend(r.hits);
+                effects.extend(r.effects);
             }
         }
 
@@ -3014,9 +3032,10 @@ impl Server {
                     );
                 }
             }
-            for te in impacts {
-                rt.push_temp_entity(te);
-            }
+            // Each round's impacts and damage callbacks in the order it met
+            // them, ahead of the missiles: retail fires inside the usercmd,
+            // before `G_RunFrame` (combat doc 2.4).
+            apply_effects(rt, effects, self.sv_time_ms);
             // The throws the weapon step queued, then one `G_RunMissile`
             // each. Retail's missile pass runs ahead of the damage
             // callbacks, and a usercmd is executed between frames, so a
@@ -3106,8 +3125,7 @@ impl Server {
                 ));
             }
             // The client commands the packet pass queued, on this frame's
-            // clock: retail runs `Cmd_Kill_f` ahead of the damage callbacks
-            // too, and a thread started here sees `level.time` already
+            // clock: a thread started here sees `level.time` already
             // advanced, which is what a `cloneplayer` in it needs.
             for (slot, cmd) in queued {
                 match cmd {
@@ -3336,7 +3354,7 @@ impl Server {
             }
             rt.drop_turret_releases();
             if !shots.is_empty() {
-                let mut turret_hits = Vec::new();
+                let mut turret_effects = Vec::new();
                 {
                     let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
                         .clients
@@ -3373,22 +3391,21 @@ impl Server {
                             &self.hitlocs,
                             bones.as_mut(),
                         );
-                        for te in r.impacts {
-                            rt.push_temp_entity(te);
-                        }
-                        turret_hits.extend(r.hits);
+                        turret_effects.extend(r.effects);
                     }
                 }
                 // The damage callback runs here, after the script frame, so
                 // what it leaves is applied again. A victim numbered above its
                 // gunner takes its feedback this frame; one below had its
                 // `ClientEndFrame` already and takes it on the next.
-                let feedback_now: Vec<usize> = turret_hits
+                let feedback_now: Vec<usize> = turret_effects
                     .iter()
-                    .filter(|h| h.victim > h.attacker)
-                    .map(|h| h.victim)
+                    .filter_map(|e| match e {
+                        Effect::Hit(h) if h.victim > h.attacker => Some(h.victim),
+                        _ => None,
+                    })
                     .collect();
-                rt.deliver_hits(turret_hits, self.sv_time_ms);
+                apply_effects(rt, turret_effects, self.sv_time_ms);
                 mirror_weapons(&mut self.clients, rt);
                 apply_weapon_ops(&mut self.clients, rt, &weapons);
                 apply_sim_ops(
