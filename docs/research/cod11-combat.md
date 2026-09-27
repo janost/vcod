@@ -2193,6 +2193,44 @@ list below. INFERRED: the numbering and every condition in it.
 and the corpse are the gametype script's job, through `self.sessionstate` and
 the `clonePlayer` method.
 
+**The two suicides.** `Cmd_Kill_f` (`0x495c8`) and the `suicide` player
+method (`0x45358`, entry 26 of `player_methods` at `0x733dc`, per
+`tools/re/dump_builtins.py`) make the same `player_die` call.
+
+- VERIFIED: `Cmd_Kill_f` compares `client->sess.sessionState`
+  (`client+0x20D0`) against 0 at `0x495d7`. INFERRED: its `jne` to the
+  epilogue means only a playing client can `kill`.
+- VERIFIED: both clear bit 0 of `self+0x17C` (`0x495e0`, `0x453ba`) and store
+  0 to `self+0x230` (`0x495e7`, `0x453c1`) and to `client+0xF4` (`0x495f1`,
+  `0x453cb`). INFERRED: those are Quake III's `flags &= ~FL_GODMODE`,
+  `health` and `ps.stats[STAT_HEALTH]`, written 0 where Quake III writes -999.
+- VERIFIED: the call pushes `self` three times, `0x186A0` (100000), `0x16`
+  and three zeros (`0x495fb`..`0x4960b`, `0x453d5`..`0x453e5`). INFERRED,
+  off the argument names above: inflictor and attacker are the player,
+  damage 100000, `mod` 22 (`MOD_SUICIDE`, 4.1), and weapon, `dir` and
+  `hitLoc` all 0.
+- VERIFIED: `player_die` tests the weapon argument at `0x49a89`. INFERRED:
+  a weapon of 0 skips step 3's mounted-gun substitution.
+- VERIFIED: `Scr_PlayerKilled` pushes `hitLoc` through
+  `G_GetHitLocationString` (`0x5cb4c`), tests `dir` against 0 (`0x5cb5d`)
+  with `Scr_AddUndefined` on one arm (`0x5cb70`), and pushes
+  `BG_GetInfoForWeapon(weapon)->name` (`0x5cb7f`, `0x5cb84`). It ends in
+  `Scr_ExecEntThread(self, g_scr_data+0x1C, 7)` (`0x5cbf6`). INFERRED: a
+  suicide's `vDir` is undefined, the callback takes seven arguments, and
+  there is no `psOffsetTime`.
+- VERIFIED: the weapon loader behind `BG_SetupWeaponInfo`'s call at
+  `0x368e2` (`0x35adc`) allocates a `0x41C`-byte def (`0x35b55`), stores it
+  as `weaponDefs[0]` (`0x35b61`), and hands `def+4` and the `.rodata`
+  string `"none"` at `0x70f6b` to `0x35a54` (`0x35bb5`). INFERRED: `0x35a54`
+  copies the string in, so weapon 0's name is `"none"`.
+- VERIFIED, run: retail logs both the same way. `probe_blastbody`'s
+  `suicide()` on an sd player logged
+  `K;0;allies;vcod;0;allies;vcod;none;100000;MOD_SUICIDE;none`
+  (`crates/gsc/tests/fixtures/semantics/client-probes/README.md`,
+  `probe_bomb and probe_blastbody`). The `probe_glass` run of 2026-09-27,
+  whose `--probe-target` sends `kill` every 45 s, logged
+  `K;0;;vcod;0;;vcod;none;100000;MOD_SUICIDE;none` at 0:22 and 1:07.
+
 ### 5.2 `G_SpawnPlayerClone` and the body queue
 
 VERIFIED: `G_SpawnPlayerClone` is `0x67888`. VERIFIED: the offsets,
@@ -2889,6 +2927,19 @@ Closed on 2026-09-27, the bullet death frame:
   cmd's rounds inside it (16.2). Pinned by `a_bullet_deaths_frame_is_retails`
   and `a_player_killed_earlier_in_the_frame_stops_no_later_round`
   (`tests/combat.rs`).
+
+Closed on 2026-09-27, the killed callback's arguments on a suicide:
+
+- **A `kill` or `suicide()` handed the script the held weapon and damage 0.**
+  VERIFIED, ours, `the_kill_command_suicides_a_player` run before the fix:
+  dm's `K;` record ended `m1carbine_mp;0;MOD_SUICIDE;none` where retail's
+  ends `none;100000;MOD_SUICIDE;none` (5.1, "The two suicides"). VERIFIED,
+  ours: `vDir` reached the callback as `(0, 0, 0)`; INFERRED, 5.1: retail's
+  is undefined. Fixed: both paths pass damage 100000, `"none"` and an
+  undefined `vDir`. The sim's damage stays 0: VERIFIED, 8.1, the four damage
+  fields read 0 across every death by `kill`. Pinned by the `K;` check in
+  `the_kill_command_suicides_a_player` (`tests/combat.rs`) and by
+  `suicide_kills_the_player_and_runs_the_killed_callback`.
 
 Closed on 2026-09-27, the `kill` death frame and the respawn frame:
 
