@@ -523,17 +523,26 @@ const INTERP_DELAY_MS: i32 = 100;
 /// Server now = newest snapshot time plus wall time since it was first seen,
 /// so interpolation sweeps between 20 Hz snapshots instead of stepping. A new
 /// snapshot re-anchors: continuous when on schedule, a snap after a long gap.
+/// One per live map, so a new gamestate starts it afresh.
 struct ServerClock {
     /// (newest snapshot server time, local ms it was first seen).
     anchor: Option<(i32, f64)>,
+    /// The last time returned; a late snapshot re-anchors behind it.
+    drawn: i32,
 }
 
 impl ServerClock {
     fn new() -> Self {
-        Self { anchor: None }
+        Self {
+            anchor: None,
+            drawn: i32::MIN,
+        }
     }
 
     /// Server time to interpolate at; `local_ms` is a monotonic wall clock.
+    /// Never below a time already returned: the clock holds until a late
+    /// snapshot's anchor catches up rather than stepping entities and the
+    /// HUD's timers back.
     fn render_time(&mut self, local_ms: f64, newest: i32) -> i32 {
         match self.anchor {
             Some((t, _)) if t == newest => {}
@@ -541,7 +550,8 @@ impl ServerClock {
         }
         let (anchor_time, anchor_local) = self.anchor.unwrap();
         let server_now = anchor_time as f64 + (local_ms - anchor_local);
-        (server_now - INTERP_DELAY_MS as f64) as i32
+        self.drawn = self.drawn.max((server_now - INTERP_DELAY_MS as f64) as i32);
+        self.drawn
     }
 }
 
@@ -2673,6 +2683,21 @@ mod tests {
         assert!(
             (after - before).abs() <= 8,
             "render time jumped across the snapshot seam: {before} -> {after}"
+        );
+    }
+
+    /// A snapshot arriving late re-anchors behind the time already drawn; the
+    /// clock holds there instead of stepping back.
+    #[test]
+    fn interp_clock_never_runs_backwards() {
+        let mut clock = ServerClock::new();
+        clock.render_time(0.0, 10_000);
+        let before = clock.render_time(70.0, 10_000);
+        let after = clock.render_time(70.0, 10_050);
+        let later = clock.render_time(100.0, 10_050);
+        assert!(
+            before <= after && after <= later,
+            "render time ran backwards: {before} -> {after} -> {later}"
         );
     }
 
