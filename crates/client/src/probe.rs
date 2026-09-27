@@ -8719,15 +8719,21 @@ const FOLLOW_SCRIPT: &[(u64, u64, u8, &str)] = &[
 ];
 
 /// `--probe-follow`: stays a spectator, presses [`FOLLOW_SCRIPT`] and prints
-/// every snapshot whose `clientNum`, `pm_type`, `pm_flags` or `eFlags` moved,
-/// with the origin, the view and the player entities the snapshot carried.
-/// Writes no fixture.
+/// every snapshot whose `clientNum`, `pm_type`, `pm_flags`, `eFlags`,
+/// `health` or `weapon` moved, and the [`FOLLOW_BURST`] snapshots after each
+/// such change, with the origin, velocity, view and the player entities the
+/// snapshot carried. Writes no fixture.
 #[derive(Default)]
 struct FollowProbe {
     active_at: Option<Instant>,
     announced: usize,
-    last: Option<(i32, i32, i32, i32)>,
+    last: Option<(i32, i32, i32, i32, i32, i32)>,
+    burst: usize,
 }
+
+/// How many snapshots the follow probe prints after a change, so what a
+/// frame keeps of the one before it is in the log beside the change.
+const FOLLOW_BURST: usize = 6;
 
 impl FollowProbe {
     fn cmd(&mut self, now: Instant) -> net::msg::UserCmd {
@@ -8753,9 +8759,16 @@ impl FollowProbe {
             s.ps.field_i32(p, "pm_type"),
             s.ps.field_i32(p, "pm_flags"),
             s.ps.field_i32(p, "eFlags"),
+            s.ps.arrays.stats[0],
+            s.ps.field_i32(p, "weapon"),
         );
         if self.last == Some(key) {
-            return;
+            if self.burst == 0 {
+                return;
+            }
+            self.burst -= 1;
+        } else {
+            self.burst = FOLLOW_BURST;
         }
         self.last = Some(key);
         let ms = self
@@ -8763,10 +8776,17 @@ impl FollowProbe {
             .map_or(0, |t| now.saturating_duration_since(t).as_millis());
         let o = s.ps.origin(p);
         let players: Vec<u32> = s.entities.keys().copied().filter(|n| *n < 64).collect();
+        let v = [
+            s.ps.field_f32(p, "velocity[0]"),
+            s.ps.field_f32(p, "velocity[1]"),
+            s.ps.field_f32(p, "velocity[2]"),
+        ];
         println!(
-            "FOLLOW t={ms} snap {} clientNum={} pm_type={} pm_flags={:#x} eFlags={:#x} \
-ct={} origin=[{:.1},{:.1},{:.1}] view=[{:.1},{:.1}] viewheight={} health={} weapon={} players={players:?}",
+            "FOLLOW t={ms} snap {} st={} clientNum={} pm_type={} pm_flags={:#x} eFlags={:#x} \
+ct={} origin=[{:.1},{:.1},{:.1}] vel=[{:.1},{:.1},{:.1}] view=[{:.1},{:.1}] viewheight={} \
+viewcur={:.1} health={} weapon={} damageEvent={} evseq={} players={players:?}",
             s.message_num,
+            s.server_time,
             key.0,
             key.1,
             key.2,
@@ -8775,11 +8795,17 @@ ct={} origin=[{:.1},{:.1},{:.1}] view=[{:.1},{:.1}] viewheight={} health={} weap
             o[0],
             o[1],
             o[2],
+            v[0],
+            v[1],
+            v[2],
             s.ps.field_f32(p, "viewangles[0]"),
             s.ps.field_f32(p, "viewangles[1]"),
             s.ps.field_i32(p, "viewHeightTarget"),
+            s.ps.field_f32(p, "viewHeightCurrent"),
             s.ps.arrays.stats[0],
             s.ps.field_i32(p, "weapon"),
+            s.ps.field_i32(p, "damageEvent"),
+            s.ps.field_i32(p, "eventSequence"),
         );
     }
 }

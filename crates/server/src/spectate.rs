@@ -23,6 +23,13 @@ const PLAYER_EFLAGS: i32 = 16;
 const PLAYER_TR_DURATION: i32 = 50;
 
 const PMF_OWN_VIEW: i32 = 0x40000;
+/// `PMF_RESPAWNED`: set by every spawn, cleared by the first `PmoveSingle`
+/// at `pm_type` 5 or below without attack held
+/// (docs/research/cod11-spectator-follow.md, 13).
+const PMF_RESPAWNED: i32 = 0x800;
+/// How far behind the frame `ClientSpawn` puts `commandTime` before its own
+/// think runs the client up to it (0x42a48).
+const SPAWN_THINK_MS: f32 = 100.0;
 
 /// Stance bits in `eFlags` and `pm_flags`, measured off the retail server
 /// under each input (`crates/server/tests/fixtures/playerstate/*-motion.txt`):
@@ -282,8 +289,8 @@ pub struct ClientSim {
     /// Who this spectator's view rides (`crate::follow`).
     pub follow: crate::follow::Follow,
     /// `pm_flags` 0x40000 as the last end frame left it: a playing or dead
-    /// client, which is what a follow may copy. `ClientSpawn`'s memset
-    /// clears it until the next end frame.
+    /// client, which is what a follow may copy. `ClientSpawn`'s own end
+    /// frame sets it for a player and clears it for anyone else.
     pub own_view: bool,
     /// The buttons of the last cmd this client ran, `client+0x21e8`, which
     /// the next cmd's edges are taken against. The spawn's memset zeroes it.
@@ -292,7 +299,56 @@ pub struct ClientSim {
     /// copy, whose memset leaves the frame's HUD arrays empty; the snapshot
     /// consumes it.
     pub hud_cleared: bool,
+    /// `pm_flags` 0x800 ([`PMF_RESPAWNED`]).
+    respawned: bool,
+    /// The last frame a follow sent this spectator, the copy with its flags
+    /// patched: the playerstate `StopFollowing` writes over.
+    pub follow_wire: Option<msg::PlayerState>,
+    /// What a stopped follow left in the playerstate, until the next spawn.
+    residue: Option<Residue>,
+    /// This client's own frame as its last `ClientEndFrame` left it, `None`
+    /// since a spawn, whose own end frame is this frame's.
+    pub end_frame_wire: Option<msg::PlayerState>,
 }
+
+/// A stopped follow's copy, under the fields a spectator's own frame writes.
+struct Residue {
+    wire: msg::PlayerState,
+    /// A cmd has run `SpectatorThink`'s free-flight arm since the stop, which
+    /// writes `pm_type` and `speed` (0x3fb94, 0x3fb9b).
+    moved: bool,
+}
+
+/// What a free spectator's frame writes over a stopped follow's copy:
+/// `StopFollowing`'s stores (0x46a28), `SpectatorThink`'s flight and
+/// `SpectatorClientEndFrame`'s (spectator-follow doc, 7 and 5).
+const SPECTATOR_OWNED: &[&str] = &[
+    "commandTime",
+    "clientNum",
+    "pm_flags",
+    "origin[0]",
+    "origin[1]",
+    "origin[2]",
+    "velocity[0]",
+    "velocity[1]",
+    "velocity[2]",
+    "viewangles[0]",
+    "viewangles[1]",
+    "viewangles[2]",
+    "delta_angles[0]",
+    "delta_angles[1]",
+    "delta_angles[2]",
+    "fWeaponPosFrac",
+    "viewHeightTarget",
+    "viewHeightCurrent",
+    "viewmodelIndex",
+    "viewlocked",
+    "viewlocked_entNum",
+    "gunfx",
+    "shellshockIndex",
+    "shellshockTime",
+    "shellshockDuration",
+];
 
 /// Everything the animscript needs that the sim does not own: the script
 /// itself, the name-to-index lookup, and the weapon the client holds.
@@ -385,6 +441,10 @@ impl ClientSim {
             own_view: false,
             last_buttons: 0,
             hud_cleared: false,
+            respawned: false,
+            follow_wire: None,
+            residue: None,
+            end_frame_wire: None,
         }
     }
 
@@ -395,6 +455,7 @@ impl ClientSim {
     /// caller must supply the real value rather than assume zero.
     pub fn become_player(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
         self.respawn(PmType::Normal, origin, yaw_deg, cmd_angles);
+        self.spawn_think(None);
     }
 
     /// The other half of the same builtin: `spawnSpectator()` parks a client
@@ -402,6 +463,7 @@ impl ClientSim {
     /// angles)`, so a spectator moves for exactly the reasons a player does.
     pub fn become_spectator(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
         self.respawn(PmType::Spectator, origin, yaw_deg, cmd_angles);
+        self.spawn_think(None);
         // As the intermission camera below: the spectator arm copies no
         // health either, so a player parked as a spectator after a death
         // reads 0 where its entity still holds 100 (the retail round-restart
@@ -414,12 +476,14 @@ impl ClientSim {
     /// playerstate is still a follow's copy is spawned at the copy's feet and
     /// yaw. The copy's `eFlags` are what the spawn flips the teleport bit of,
     /// and a dead one's own end frame takes the dead arm, so it is a dead
-    /// player with no contents (the stock killcam's return to `dead`).
+    /// player with no contents (the stock killcam's return to `dead`), whose
+    /// eye the spawn's own think starts dropping in `world`.
     pub fn spawn_from_copy(
         &mut self,
         copied: &crate::follow::Copied,
         playing: bool,
         cmd_angles: [i32; 3],
+        world: Option<MoveWorld<'_>>,
     ) {
         self.teleport_bit = copied.teleport_bit;
         self.respawn(PmType::Normal, copied.origin, copied.angles[1], cmd_angles);
@@ -429,6 +493,7 @@ impl ClientSim {
             self.contents = 0;
             self.relink();
         }
+        self.spawn_think(world);
     }
 
     /// `eFlags` 0x8 as the wire carries it.
@@ -441,6 +506,7 @@ impl ClientSim {
     /// point for the level's last ten seconds (map-cycle doc, section 6).
     pub fn become_intermission(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
         self.respawn(PmType::Intermission, origin, yaw_deg, cmd_angles);
+        self.spawn_think(None);
         // `ClientSpawn` zeroes the whole `gclient_t` and `ClientEndFrame`'s
         // intermission arm never copies `ent->health` back into the
         // playerstate, so the capture's `pm_type=5` traces read health 0
@@ -527,12 +593,15 @@ impl ClientSim {
         // The memset again, which keeps only `sess` and writes -1 to the
         // follow target after it (0x4282c).
         self.follow = Default::default();
-        self.own_view = false;
         self.last_buttons = 0;
         // Every spawn consumes a flip, a spectator's and the intermission
         // camera's included: retail's capture reads 16 on a respawn's
         // spectator frame and 24 on the next one (map-cycle doc, 8.2).
         self.teleport_bit = !self.teleport_bit;
+        self.respawned = true;
+        self.follow_wire = None;
+        self.residue = None;
+        self.end_frame_wire = None;
         // `G_SetClientContents`, then the spawn's link.
         self.contents = if mode == PmType::Normal {
             CONTENTS_BODY
@@ -540,6 +609,29 @@ impl ClientSim {
             0
         };
         self.relink();
+    }
+
+    /// `ClientSpawn`'s closing `ClientThink_real` (0x42a82): a cmd with no
+    /// buttons 100 ms past the `commandTime` the spawn set (0x42a6f), which
+    /// the caller moves up to the frame's clock. The intermission arm runs no
+    /// pmove and a dead one keeps the flag, so only a live or spectating spawn
+    /// loses `PMF_RESPAWNED` here; a dead one's eye drops those 100 ms. The
+    /// live arm's own 100 ms of null-cmd pmove is not run.
+    fn spawn_think(&mut self, world: Option<MoveWorld<'_>>) {
+        // The spawn's own `ClientEndFrame` (0x42a75) ahead of the think: its
+        // playing and dead arm gives the client its own view at once.
+        self.own_view = self.pm_type == PmType::Normal;
+        match (self.pm_type, self.dead) {
+            (PmType::Intermission, _) => {}
+            (PmType::Normal, true) => {
+                if let Some(w) = world {
+                    for dt in [pmove::MAX_FRAME_MS, SPAWN_THINK_MS - pmove::MAX_FRAME_MS] {
+                        pmove::dead_move(&mut self.ps, &w, dt / 1000.0);
+                    }
+                }
+            }
+            _ => self.respawned = false,
+        }
     }
 
     /// `ClientEndFrame`'s contents write, once per frame before `end_frame`.
@@ -638,14 +730,20 @@ impl ClientSim {
 
     /// `StopFollowing` (0x46a28): the follow is dropped, and a spectator
     /// whose last frame was a copy is left behind and above the followed
-    /// eye, looking where it looked pitched down 15 (`follow::stop_spot`).
-    /// The copy's velocity is not carried over.
+    /// eye, looking where it looked pitched down 15 (`follow::stop_spot`),
+    /// with the copy's velocity and the rest of the copy under its own
+    /// fields ([`SPECTATOR_OWNED`]).
     pub fn stop_following(&mut self, collision: Option<&vcod_common::collision::CollisionWorld>) {
         if let (true, Some(c)) = (self.follow.on, self.follow.copied) {
             let (spot, angles) = crate::follow::stop_spot(collision, c.eye, c.angles);
             self.ps.origin = spot.into();
-            self.ps.velocity = Vec3::ZERO;
+            self.ps.velocity = c.velocity.into();
+            self.teleport_bit = c.teleport_bit;
             self.set_view_angle(angles);
+            self.residue = self
+                .follow_wire
+                .take()
+                .map(|wire| Residue { wire, moved: false });
         }
         self.follow = Default::default();
     }
@@ -731,6 +829,11 @@ impl ClientSim {
             if let Some(w) = world {
                 pmove::dead_move(&mut self.ps, &w, dt);
             }
+            // `PM_Weapon`'s `pm_type > 5` arm, behind its `PMF_RESPAWNED`
+            // return (0x390ee..0x390fe).
+            if !self.respawned {
+                self.ps.weapon = 0;
+            }
             self.relink();
             return Vec::new();
         }
@@ -750,6 +853,9 @@ impl ClientSim {
             // `Server::FALLBACK_SPAWN` keeps running. Both fly rather than
             // collide, so a player on a failed load noclips.
             (PmType::Spectator, _) | (PmType::Normal, None) => {
+                if let Some(r) = &mut self.residue {
+                    r.moved = true;
+                }
                 self.view_angles = cmd::apply_view(&mut self.ps, cmd.angles, self.delta_angles);
                 pmove::spectator_move(
                     &mut self.ps,
@@ -1384,6 +1490,7 @@ impl ClientSim {
             } else {
                 0
             };
+            let respawned = if self.respawned { PMF_RESPAWNED } else { 0 };
             let knockback = if self.ps.knockback_ms > 0.0 {
                 pmove::PMF_TIME_KNOCKBACK
             } else {
@@ -1392,6 +1499,7 @@ impl ClientSim {
             set(
                 "pm_flags",
                 PMF_OWN_VIEW
+                    | respawned
                     | stance_pmflags
                     | jump_held
                     | backwards
@@ -1458,6 +1566,9 @@ impl ClientSim {
             // 1.13 and 2.1).
             set("fWeaponPosFrac", self.ps.weapon_pos_frac.to_bits() as i32);
             set("aimSpreadScale", self.ps.aim_spread_scale.to_bits() as i32);
+        }
+        if !player && self.respawned {
+            set("pm_flags", PMF_RESPAWNED);
         }
         set("viewlocked", i32::from(self.viewlocked));
         set("viewlocked_entNum", self.viewlocked_ent as i32);
@@ -1564,6 +1675,31 @@ impl ClientSim {
         // has no teammate to name until `TeamplayInfoMessage` exists.
         w.arrays.stats[3] = NO_TEAMMATE;
         w.arrays.stats[5] = i32::from(self.spawn_count);
+        match &self.residue {
+            Some(r) => r.under(w, p),
+            None => w,
+        }
+    }
+}
+
+impl Residue {
+    /// The copy with `own`'s [`SPECTATOR_OWNED`] fields written over it, its
+    /// `pm_type` and `speed` once a cmd has flown, and its `eFlags` with the
+    /// mount bits cleared (0x46b8c) and the teleport bit the sim flips.
+    fn under(&self, own: msg::PlayerState, p: &Protocol) -> msg::PlayerState {
+        let idx = |name| msg::PlayerState::field_index(p, name).unwrap();
+        let mut w = self.wire.clone();
+        let flown: &[&str] = if self.moved {
+            &["pm_type", "speed"]
+        } else {
+            &[]
+        };
+        for name in SPECTATOR_OWNED.iter().chain(flown) {
+            w.fields[idx(name)] = own.fields[idx(name)];
+        }
+        let ef = idx("eFlags");
+        w.fields[ef] = (w.fields[ef] & !(EF_MOUNTED_STAND | EF_TELEPORT_BIT))
+            | (own.fields[ef] & EF_TELEPORT_BIT);
         w
     }
 }
@@ -1684,6 +1820,52 @@ mod tests {
         assert_eq!(w.field_i32(p, "eFlags"), 24);
         assert_eq!(w.health(), 0, "the spawn's memset is never written back");
         assert_eq!(w.field_i32(p, "eventSequence"), 0);
+    }
+
+    /// `PMF_RESPAWNED` (`pm_flags` 0x800): every spawn sets it, and the
+    /// spawn's own null cmd clears it again wherever `PmoveSingle` runs with
+    /// `pm_type` 5 or below. So a live or spectating spawn never shows it, a
+    /// dead spawn (the killcam's end, retail's 0x40800) and the intermission
+    /// camera keep it, and the next spawn's think takes it off.
+    #[test]
+    fn only_a_dead_spawn_and_the_intermission_camera_keep_pmf_respawned() {
+        let p = &PROTOCOL_V1;
+        let world = vcod_common::collision::test_world(&[]);
+        let pm_flags = |sim: &ClientSim| sim.to_wire(p, 0, 0).field_i32(p, "pm_flags");
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        assert_eq!(pm_flags(&sim) & PMF_RESPAWNED, 0);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        assert_eq!(pm_flags(&sim), PMF_OWN_VIEW);
+
+        let copied = crate::follow::Copied {
+            eye: [0.0, 0.0, 68.0],
+            angles: [0.0, 90.0, 0.0],
+            origin: [0.0, 0.0, 8.0],
+            velocity: [0.0; 3],
+            teleport_bit: false,
+            frame: None,
+        };
+        sim.spawn_from_copy(
+            &copied,
+            false,
+            NULL_USERCMD.angles,
+            Some(MoveWorld::bare(&world)),
+        );
+        // The think's 100 ms of dead pmove: 60 less 18.
+        assert_eq!(sim.ps.view_height(), 42.0);
+        assert_eq!(pm_flags(&sim), PMF_OWN_VIEW | PMF_RESPAWNED);
+        let idle = UserCmd {
+            server_time: 50,
+            ..NULL_USERCMD
+        };
+        sim.step(&idle, 0.05, Some(MoveWorld::bare(&world)), &[]);
+        assert_eq!(pm_flags(&sim), PMF_OWN_VIEW | PMF_RESPAWNED);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        assert_eq!(pm_flags(&sim), PMF_OWN_VIEW);
+
+        sim.become_intermission([384.0, -624.0, 184.0], 90.0, NULL_USERCMD.angles);
+        assert_eq!(pm_flags(&sim), PMF_RESPAWNED);
     }
 
     fn cmd(forward: i8, pitch_short: i32, yaw_short: i32) -> UserCmd {

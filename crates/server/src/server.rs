@@ -362,6 +362,7 @@ fn follow_end_frame(
     rt: &mut script::ScriptRuntime,
     archive: &crate::archive::Archive,
     collision: Option<&vcod_common::collision::CollisionWorld>,
+    now: i32,
 ) {
     use crate::archive::Source;
     let Some(sim) = clients[slot].as_ref().and_then(|c| c.sim.as_ref()) else {
@@ -377,10 +378,13 @@ fn follow_end_frame(
             let cmd_angles = c.last_cmd.angles;
             let sim = c.sim.as_mut().unwrap();
             // The copy is still the playerstate, whose `clientNum` is not
-            // this client's: `ClientSpawn` at its feet and yaw (0x40f82).
+            // this client's: `ClientSpawn` at its feet and yaw (0x40f82),
+            // whose own think runs the client up to the frame's clock.
             if let (true, Some(copied)) = (sim.follow.on, sim.follow.copied) {
                 let playing = session.state == follow::SessionState::Playing;
-                sim.spawn_from_copy(&copied, playing, cmd_angles);
+                let world = collision.map(vcod_common::movetrace::MoveWorld::bare);
+                sim.spawn_from_copy(&copied, playing, cmd_angles, world);
+                c.last_processed_st = now;
                 rt.engine_client_spawn(slot, copied.origin, copied.angles[1]);
             }
             sim.own_view = true;
@@ -432,6 +436,7 @@ fn follow_end_frame(
                 eye: ts.ps.view().eye.into(),
                 angles: ts.view_angles(),
                 origin: ts.origin(),
+                velocity: ts.ps.velocity.into(),
                 teleport_bit: ts.teleport_bit(),
                 frame: None,
             })
@@ -440,6 +445,9 @@ fn follow_end_frame(
             eye: view.eye,
             angles: view.angles,
             origin: view.origin,
+            velocity: std::array::from_fn(|i| {
+                view.ps.field_f32(&PROTOCOL_V1, &format!("velocity[{i}]"))
+            }),
             teleport_bit: view.ps.field_i32(&PROTOCOL_V1, "eFlags")
                 & crate::spectate::EF_TELEPORT_BIT
                 != 0,
@@ -3174,6 +3182,11 @@ impl Server {
                         sim.become_intermission(s.origin, s.yaw_deg, cmd_angles)
                     }
                 }
+                // The spawn's own think runs a player or a spectator up to
+                // the frame's clock; the intermission arm runs no pmove.
+                if s.mode != SpawnMode::Intermission {
+                    c.last_processed_st = self.sv_time_ms;
+                }
             }
             // The machine's own switches first: `pickup` writes `ps.weapon`
             // when a drop ends, and the mirror below would put the old
@@ -3266,7 +3279,14 @@ impl Server {
             // and a higher slot's from the last one, as retail's loop does.
             let collision = self.world.as_ref().map(|w| &w.collision);
             for slot in 0..self.clients.len() {
-                follow_end_frame(&mut self.clients, slot, rt, &self.archive, collision);
+                follow_end_frame(
+                    &mut self.clients,
+                    slot,
+                    rt,
+                    &self.archive,
+                    collision,
+                    self.sv_time_ms,
+                );
                 let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
                     continue;
                 };
@@ -3984,7 +4004,11 @@ impl Server {
                     None => {
                         let tc = self.clients.get(t)?.as_ref()?;
                         let ts = tc.sim.as_ref()?;
-                        let ps = ts.to_wire(self.proto, t as i32, tc.last_processed_st);
+                        let mut ps = ts.to_wire(self.proto, t as i32, tc.last_processed_st);
+                        // The end-frame loop runs in slot order.
+                        if let (true, Some(last)) = (slot < t, ts.end_frame_wire.as_ref()) {
+                            follow::before_end_frame(&mut ps, last, self.proto);
+                        }
                         (ps, ts.eye_origin(), false)
                     }
                 };
@@ -3997,6 +4021,24 @@ impl Server {
                 })
             })
             .collect();
+
+        // What a follow leaves in the spectator's playerstate when it stops,
+        // and each followable client's frame as this end frame left it.
+        for (slot, f) in follow_frames.iter().enumerate() {
+            let Some(c) = self.clients[slot].as_mut() else {
+                continue;
+            };
+            let command_time = c.last_processed_st;
+            let Some(sim) = c.sim.as_mut() else {
+                continue;
+            };
+            if let Some(f) = f {
+                sim.follow_wire = Some(f.ps.clone());
+            }
+            sim.end_frame_wire = sim
+                .own_view
+                .then(|| sim.to_wire(self.proto, slot as i32, command_time));
+        }
 
         // `SV_BuildClientSnapshot` reads each client's `archivetime` again and
         // takes the entities and the roster from the frame it names, times
@@ -6816,6 +6858,7 @@ mod tests {
         rig.press(msg::BUTTON_ATTACK);
         rig.script().host.client_vitals[1].dead = true;
         rig.script().set_client_state_for_test(1, "dead");
+        rig.step(0);
         let s = rig.step(0);
         assert_eq!(ps_i32(&s, "clientNum"), 1);
         assert_eq!(ps_i32(&s, "pm_type"), 6);
@@ -7081,9 +7124,118 @@ mod tests {
         assert_eq!(ps_i32(&s, "clientNum"), 0);
         assert_eq!(ps_i32(&s, "pm_type"), 6);
         assert_eq!(ps_i32(&s, "pm_flags") & 0x70000, 0x40000);
-        assert_eq!(s.ps.origin(&PROTOCOL_V1), last.ps.origin(&PROTOCOL_V1));
+        // Horizontally: the rig has no floor under the copy for the spawn's
+        // dead think to settle on.
+        let (o, l) = (s.ps.origin(&PROTOCOL_V1), last.ps.origin(&PROTOCOL_V1));
+        assert_eq!(o[..2], l[..2]);
         assert_eq!(ps_i32(&s, "deltaTime"), 0);
         let s = rig.step(0);
         assert_eq!(ps_i32(&s, "pm_type"), 6);
+    }
+
+    /// Script moving a free follower to `playing` with no spawn of its own:
+    /// `ClientEndFrame` finds the copy still in the playerstate and spawns
+    /// the client there, alive (spectator-follow doc, 12.7).
+    #[test]
+    fn a_follower_script_puts_in_play_is_spawned_where_the_copy_stood() {
+        let mut rig = FollowRig::new();
+        let last = rig.press(msg::BUTTON_ATTACK);
+        assert_eq!(ps_i32(&last, "clientNum"), 1);
+        rig.script().set_client_state_for_test(0, "playing");
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(ps_i32(&s, "pm_type"), 0);
+        assert_eq!(ps_i32(&s, "pm_flags") & 0x70000, 0x40000);
+        assert_eq!(s.ps.origin(&PROTOCOL_V1), FOLLOW_P1);
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(ps_i32(&s, "pm_type"), 0);
+    }
+
+    /// `StopFollowing` (0x46a28) writes the spot, the view, `clientNum` and
+    /// a handful of weapon fields, and never the velocity; the rest of the
+    /// copy stays in the spectator's playerstate until something writes it
+    /// (the retail dm run: `health` 100 and `weapon` 9 on every free frame
+    /// after the sight press).
+    #[test]
+    fn a_stopped_follow_keeps_the_rest_of_the_copy() {
+        let mut rig = FollowRig::new();
+        rig.script().host.client_vitals[1].health = 100;
+        rig.script().set_client_weapon(1, 9);
+        rig.sim_mut(1).ps.velocity = glam::Vec3::new(120.0, 0.0, 0.0);
+        rig.press(msg::BUTTON_ATTACK);
+        let copy = rig.step(0);
+        assert_eq!((copy.ps.health(), ps_i32(&copy, "weapon")), (100, 9));
+        let stop = rig.step(msg::BUTTON_ADS);
+        assert_eq!(ps_i32(&stop, "clientNum"), 0);
+        assert_eq!(ps_i32(&stop, "pm_type"), 4);
+        let vx = stop.ps.field_f32(&PROTOCOL_V1, "velocity[0]");
+        assert!(
+            vx > 0.0 && vx < 120.0,
+            "the copy's velocity, one flight step on: {vx}"
+        );
+        // The flight writes the eye heights: retail's stop frame read 0 for
+        // both where the copy read 60.
+        assert_eq!(ps_i32(&stop, "viewHeightTarget"), 0);
+        assert_eq!(stop.ps.field_f32(&PROTOCOL_V1, "viewHeightCurrent"), 0.0);
+        for s in [stop, rig.step(msg::BUTTON_ADS), rig.step(0)] {
+            assert_eq!(ps_i32(&s, "clientNum"), 0);
+            assert_eq!((s.ps.health(), ps_i32(&s, "weapon")), (100, 9));
+        }
+    }
+
+    /// The same stop from the end frame, the followed client gone
+    /// spectator: until the follower's next cmd runs `SpectatorThink`'s
+    /// free-flight arm the frame keeps the copy's `pm_type` (the retail sd
+    /// run: 6, then 4).
+    #[test]
+    fn an_end_frame_stop_keeps_the_copy_s_pm_type_until_the_next_cmd() {
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        rig.script().host.client_vitals[1].dead = true;
+        rig.script().set_client_state_for_test(1, "dead");
+        rig.step(0);
+        rig.step(0);
+        rig.script().set_client_state_for_test(1, "spectator");
+        rig.sim_mut(1)
+            .become_spectator([0.0, 0.0, 300.0], 0.0, [0; 3]);
+        // This frame's cmd runs while the follow is still on; the stop is
+        // the end frame's.
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(ps_i32(&s, "pm_type"), 6);
+        assert_eq!(ps_i32(&rig.step(0), "pm_type"), 4);
+    }
+
+    /// `G_RunFrame`'s end-frame loop runs in slot order, so a follower
+    /// numbered below its target copies it before the target's own
+    /// `ClientEndFrame` has run: what that end frame writes reaches the
+    /// follower a frame late. The retail dm run: the death frame read
+    /// `health` 0 and `pm_type` 0 in slot 0 and 6 in slot 2.
+    #[test]
+    fn a_follower_below_its_target_reads_the_end_frame_s_fields_a_frame_late() {
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        rig.script().host.client_vitals[1].dead = true;
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 1);
+        assert_eq!(s.ps.health(), 0);
+        assert_eq!(ps_i32(&s, "pm_type"), 0);
+        assert_eq!(ps_i32(&rig.step(0), "pm_type"), 6);
+    }
+
+    /// `ClientSpawn` runs the spawned client's own `ClientEndFrame`
+    /// (0x42a75), whose playing arm sets the own-view bit, so a follower
+    /// numbered below it copies the new life on the spawn's frame rather
+    /// than finding nothing and letting go (the retail dm run: slot 0 read
+    /// slot 1's respawn frame).
+    #[test]
+    fn a_follower_below_its_target_rides_the_target_s_respawn() {
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        rig.sim_mut(1).become_player(FOLLOW_P2, 0.0, [0; 3]);
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 1);
+        assert_eq!(s.ps.origin(&PROTOCOL_V1), FOLLOW_P2);
     }
 }

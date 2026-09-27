@@ -327,6 +327,12 @@ fn ours_trims_and_ends_the_killcam_as_retail_does() {
     }
     assert_eq!(spawn.ps.field_i32(p, "clientNum"), nb as i32);
     assert_eq!(spawn.ps.field_i32(p, "pm_type"), PM_DEAD);
+    // Retail's live runs read 0x40800: the own view and `PMF_RESPAWNED`.
+    assert_eq!(spawn.ps.field_i32(p, "pm_flags"), 0x40800);
+    // The spawn's own think ran its 100 ms of dead pmove up to the frame's
+    // clock: the eye has dropped 18 and `commandTime` is the frame's.
+    assert_eq!(spawn.ps.field_i32(p, "commandTime"), spawn.server_time);
+    assert_eq!(spawn.ps.field_f32(p, "viewHeightCurrent"), 42.0);
     assert_eq!(spawn.ps.health(), 0);
     assert_eq!(spawn.ps.field_i32(p, "eventSequence"), 0);
     assert!(spawn.ps.arrays.ammoclip.iter().all(|c| *c == 0));

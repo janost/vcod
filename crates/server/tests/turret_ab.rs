@@ -936,7 +936,7 @@ const GAPS: &[(&str, &str)] = &[
         ENTRY_POINT,
     ),
     (
-        "[target] impact t=34900: ours only 174@[1517.0, 1611.0",
+        "[target] impact t=34900: ours only 174@[1518.0, 1611.0",
         ENTRY_POINT,
     ),
     (
@@ -990,7 +990,7 @@ const KILLING_ROUND: &str = "the killing round meets a victim the round before k
     and lands about 4 units nearer the gun along the ray than retail's; neither half of the capture \
     carries the victim's origin, so whether the knockback or the pose differs is open";
 const ENTRY_POINT: &str = "the wounding round enters the target's body one truncation step \
-    lower in x and y than retail's, along the same ray: where it enters is the posed bone box \
+    lower in y than retail's, along the same ray: where it enters is the posed bone box \
     the locational trace meets (cod11-combat.md 3.4), not the turret";
 const CROUCH_DROP: &str = "the crouch release's one-unit drop reads grounded 0.2 above the \
     floor on ours and airborne at the same height on retail, which lands a frame later; the \

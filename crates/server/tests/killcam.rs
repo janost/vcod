@@ -156,6 +156,11 @@ fn a_kill_replays_the_killer_from_nine_seconds_back_then_returns() {
     };
     let p = &PROTOCOL_V1;
     let killed_at = rig.walk_then_kill();
+    // `PM_Weapon`'s dead arm empties `ps.weapon` on the victim's next cmd
+    // (0x390fe); the retail follow run reads 0 on every dead frame.
+    let dead = rig.step(&NULL_USERCMD, &NULL_USERCMD);
+    assert_eq!(dead.ps.field_i32(p, "pm_type"), PM_DEAD);
+    assert_eq!(dead.ps.field_i32(p, "weapon"), 0);
 
     // From dm's two-second `delay` on, B is sent A as the archive had it
     // `delay + 7` seconds back, for exactly that long.
@@ -252,5 +257,8 @@ fn a_use_press_skips_the_killcam_straight_to_the_respawn() {
     assert_eq!(back.ps.field_i32(p, "clientNum"), rig.nb as i32);
     assert_eq!(back.ps.field_i32(p, "pm_type"), 0, "a dead frame between");
     assert_eq!(back.ps.health(), 100);
+    // `ClientSpawn`'s own think runs the new life up to the frame's clock
+    // (the retail follow run's respawn frame reads `commandTime` = serverTime).
+    assert_eq!(back.ps.field_i32(p, "commandTime"), back.server_time);
     assert_eq!(rig.sv.script_aborts(), Vec::<String>::new());
 }

@@ -3,8 +3,9 @@
 How a spectator's view rides another client: where the state lives, which
 buttons move it, what the copied playerstate carries and what the spectator
 keeps of its own, when a follow ends and where the spectator is left, which
-entities a follower is sent, and the killcam, which rides the same fields
-with a replay behind them (section 12).
+entities a follower is sent, the killcam, which rides the same fields
+with a replay behind them (section 12), and what a spawn leaves in the
+playerstate (section 13).
 
 Evidence rules as everywhere in this directory. This document carries no
 document-level default: every claim carries its own label. VERIFIED is a byte
@@ -36,9 +37,9 @@ them. `cl` is a `gclient_t`, whose playerstate sits at `cl+0`.
   and a local (0x427ea, 0x42824), a `bzero` of the whole 0x22c4-byte
   `gclient_t` (0x42804) and a store of -1 at `cl+0x21d4` (0x4282c). INFERRED
   from their order: a spawn
-  keeps `spectatorclient` and `archivetime` and drops the follow target, and
-  its zeroed playerstate carries none of the three `pm_flags` bits until the
-  next end frame.
+  keeps `spectatorclient` and `archivetime` and drops the follow target. Its
+  zeroed playerstate gets the own-view bit back from the spawn's own
+  `ClientEndFrame` (section 13).
 
 ## 2. The buttons: `SpectatorThink`
 
@@ -101,7 +102,23 @@ against 2 on `cl+0x20d0` ahead of the call.
 `ClientEndFrame` calls it for `sessionState` 2 (0x40f24, 0x40f30; object-model
 doc). INFERRED from `G_RunFrame`'s loop: it runs in slot order, so a
 spectator reads a lower slot's own-view bit from this frame and a higher
-slot's from the last.
+slot's from the last, and copies a higher slot before that slot's own end
+frame has run.
+
+- VERIFIED stores in `ClientEndFrame`'s playing and dead arm: the own-view
+  bit (0x40fb0), `ps.stats` health (0x40fa4), `viewmodelIndex` (0x40fb4),
+  `pm_type` (0x4103c, 0x4104e, 0x41079), `gravity` (0x410cc), `speed`
+  (0x41100), and the calls to `G_CheckForCursorHints` (0x41119),
+  `P_DamageFeedback` (0x41128) and `G_GetNonPVSFriendlyInfo`, whose answer
+  goes to `iCompassFriendInfo` (0x41201).
+- VERIFIED live, the three-probe dm run of section 9: on the frame the
+  followed client in slot 1 killed itself, the follower in slot 0 read
+  `pm_type` 0 and the one in slot 2 read 6, the target's own frame read 6,
+  and all three read `health` 0, `weapon` 0 and `eventSequence` 2; the next
+  frame read 6 in both followers. INFERRED: the lower follower's copy
+  carries the fields the target's end frame writes one frame late, and the
+  rest current; health reads current because the kill wrote it before the
+  end frame did.
 
 - VERIFIED stores: `svFlags` loses 0x2 and gains 0x1 (0x40778..0x40782),
   `ent+0x171` 0 (0x40788), `r.contents` 0 (0x4078f), `cl+0x220c` and
@@ -159,10 +176,19 @@ slot's from the last.
   `ps+0x374` 0, `ps+0x378` 0x3ff, `ps+0x380` 0 (0x46b93..0x46ba7),
   `pm_flags` loses 0x10020 (0x46bb1), the trace end becomes `ps.origin`
   (0x46bc8..0x46bd7), and `ps+0x3dc..0x3e4` are zeroed (0x46be7..0x46bfb).
+- VERIFIED: none of `StopFollowing`'s own stores is to `ps.velocity`
+  (`ps+0x20..0x28`). INFERRED: nor do its callees `G_SetOrigin` and
+  `SetClientViewAngle` write it, so the copy's velocity stays.
+- VERIFIED: `SpectatorThink`'s free-flight arm stores `pm_type` 4 and
+  `speed` 400 (0x3fb94, 0x3fb9b) ahead of its `Pmove` (0x3fc02).
 - VERIFIED live, dm: the sight press put the spectator at the followed eye
   moved 27.9 back and 7 up (fraction 0.7, a wall behind), pitch 15, and its
   `health` 100 and `weapon` 9 were still the followed client's. INFERRED: the
   rest of the copied playerstate stays until something writes it.
+- VERIFIED live, the three-probe dm run: `health` 100 and `weapon` 9 stayed
+  on every free frame from the sight press to the next follow 6 s later; the
+  press frame read `pm_type` 4, `viewHeightTarget` 0 and `viewHeightCurrent`
+  0.0 where the copy before it read 60 for both.
 - VERIFIED live, sd: when the followed client went spectator 2 s after its
   death, the follower's next frame read its own `clientNum`, 40 back and 10
   up from the dead eye (view height 8), pitch 15, and still `pm_type` 6; the
@@ -195,6 +221,18 @@ after going active, and prints every snapshot whose `clientNum`, `pm_type`,
 - VERIFIED live, sd: at the round's restart the follower, which had been
   following slot 0, read its own `clientNum` and `pm_type` 4 at the
   spectator spawn. INFERRED: that is `ClientSpawn`'s drop of the target.
+- The three-probe dm run, 2026-09-27 on port 29018: `--probe-follow` in slot
+  0, `--probe-target --probe-team axis` in slot 1 and a second
+  `--probe-follow` in slot 2, each started 1.5 s after the one before. The
+  probe now also prints `serverTime`, the velocity, both eye heights,
+  `health`, `weapon`, `damageEvent` and `eventSequence`, and every snapshot
+  for six after any change. Both followers rode slot 1 through its death at
+  23750 and its respawn at 26800, whose frame read `commandTime` 26800 in
+  both. Sections 5, 7 and 13 cite it as "the three-probe dm run".
+- The intermission run, the same day and port: `+set scr_dm_timelimit 1`,
+  `--probe-follow` and a `--probe-team axis` player. The follower's
+  intermission frames read `pm_type` 5, `pm_flags` 0x800, `commandTime`
+  59950 at `serverTime` 60050, 60100 and 60150, and `viewangles` 0, 90.
 
 ## 10. Script
 
@@ -222,15 +260,39 @@ mirror sees first sends the scoreboard to the victim's followers (section
 wire playerstate, eye and number. `spectatorclient` starts at -1 and is written back to -1 where
 retail writes it.
 
+The follower's frame is built when the snapshot is written, from the
+followed client's state after its own end frame; for a follower numbered
+below its target, `follow::before_end_frame` puts back the fields section
+5 lists as the target's last frame had them (`ClientSim::end_frame_wire`,
+kept after each frame's snapshots and dropped by a spawn, whose own end
+frame is that frame's). `StopFollowing` keeps the copy's velocity, and the
+last copy (`ClientSim::follow_wire`) stays under the spectator's own frame
+until the next spawn: `spectate::SPECTATOR_OWNED` names the fields the
+spectator writes over it, `pm_type` and `speed` joining them once a cmd has
+flown.
+
+VERIFIED live against ours, the three-probe dm recipe of section 9 on port
+29017: the slot 0 follower read the death frame as `pm_type` 0, then 6, the
+slot 2 one as 6, both rode the respawn with `commandTime` equal to
+`serverTime`, and the sight press left `health` 100, `weapon` 9 and both eye
+heights 0 on the free frames, as retail's run read.
+
 Where it is not retail's:
 
-- The follower's frame is built when the snapshot is written, from the
-  followed client's state after its own end frame. INFERRED from section 5's
-  slot order: retail's copy for a follower numbered below its target predates
-  that target's end frame by one frame, which shows in the fields the end
-  frame writes (the pain event, the damage feedback, the dead `pm_type`).
-- After a follow ends vcod's spectator is its own playerstate again, velocity
-  zero; retail keeps the rest of the copy (section 7).
+- The death frame's `weapon`, `viewHeightTarget` and `eventSequence`: in the
+  three-probe dm runs a `kill` read `weapon` 0, `viewHeightTarget` 60 and
+  `eventSequence` 2 on retail and 9, 8 and 1 on ours, in both followers'
+  copies. INFERRED: retail's
+  victim ran its cmds at `pm_type` 0 after the kill and before its end
+  frame; ours runs the `kill` after the frame's cmds, so the weapon empties
+  on the next cmd (section 13) and the dead eye target is written at once.
+- `P_DamageFeedback`'s `EV_PAIN` goes on the target's ring in its end frame,
+  so a lower follower sees it a frame late on retail (INFERRED, section 5);
+  ours copies the ring current.
+- The rest of a stopped copy is kept whole except the owned fields; the
+  `pm_flags` bits `StopFollowing` leaves (everything but 0x10020) and
+  whatever else the spectator's `Pmove` writes are not measured. The press
+  frame's pitch 15 reads 0 on ours.
 
 ## 12. The killcam
 
@@ -435,8 +497,11 @@ back into `archivetime`, which the host keeps in milliseconds (12.2);
 a frame that frame's entities and roster, shifted. A playing or dead client
 whose last frame was a copy is spawned at the copy (`spawn_from_copy`, 12.7),
 its teleport bit the copy's flipped and its weapons and ammo gone, and its HUD
-arrays go out empty on that frame. `crates/server/tests/killcam.rs` runs the
-stock dm killcam end to end, the skip included.
+arrays go out empty on that frame; the spawn's own think (section 13) sets
+`PMF_RESPAWNED`, drops the dead eye to 42 and puts `commandTime` at the
+frame's clock, which `killcam_ab.rs` holds to retail's 0x40800 and lead 0.
+`crates/server/tests/killcam.rs` runs the stock dm killcam end to end, the
+skip included.
 
 VERIFIED live against ours, 2026-09-27, `vcod-server mp_carentan
 --gametype-script .../client-probes/probe_passthru.gsc --set probe_teleport=1
@@ -462,9 +527,55 @@ Where it is not retail's:
   sizes: a busy level can wrap 32 MB inside a minute of frames.
 - The replay is culled by vcod's own box-cluster test from the archived
   view eye, where retail takes box leaves from the archived abs box.
-- `pm_flags` 0x800 (`PMF_RESPAWNED`, `cod11-mantle.md`) is not set on the dead
-  spawn, nor on any vcod spawn: ours reads 0x40000 where retail reads 0x40800.
-  The dead spawn's eye starts its drop from the standing height, where
-  retail's first dead frame already reads 42, and its `commandTime` is the
-  client's last cmd (`serverTime - commandTime` 33) rather than the frame's
-  (0).
+
+## 13. Spawns
+
+Every `self spawn(origin, angles)` and `ClientEndFrame`'s spawn arm (12.7)
+end in `ClientSpawn`, and its last few instructions are what a spawned
+client's first frame reads.
+
+- VERIFIED: `ClientSpawn` sets `pm_flags` 0x800 (0x429d6), puts `commandTime`
+  at `level.time - 100` (0x42a48, 0x42a6f), and calls `ClientEndFrame`
+  (0x42a75) and then `ClientThink_real` (0x42a82) with a local cmd it zeroes
+  (0x42a2f), stamped `level.time` (0x42a42), angles the negated
+  `delta_angles` (0x42a4e..0x42a69). INFERRED: the spawned client's own end
+  frame runs before the frame's end-frame loop, so a player has its own view
+  at once (section 5), and the think runs it 100 ms of pmove up to the
+  frame's clock on a cmd with no buttons.
+- VERIFIED: `PmoveSingle` clears 0x800 (0x34000) past a `pm_type` compare
+  against 5 (0x33f9a, 0x33fed) and an attack-bit test (0x33ff8). INFERRED: a
+  pmove at `pm_type` 5 or below with attack up clears it, so the spawn's own
+  think clears it for a player and a spectator, and a dead spawn and the
+  intermission camera, whose `ClientThink_real` arm runs no pmove, keep it.
+  The jump gate on it (`cod11-mantle.md`, "Jumps") is unreachable.
+- VERIFIED live: the killcam's dead spawn read `pm_flags` 0x40800 and
+  `serverTime - commandTime` 0 (12.7); the three-probe dm run's respawn frame
+  read `commandTime` equal to `serverTime` in both followers' copies; the
+  intermission run read `pm_flags` 0x800 and `commandTime` 100 below the
+  spawn frame's `serverTime`, unchanged on the frames after.
+- VERIFIED (`cod11-combat.md` 1.12): `PM_Weapon` returns at once on
+  `pm_flags` 0x800 (0x390ee) and stores 0 into `ps.weapon` when `pm_type`
+  is above 5 (0x390f8, 0x390fe);
+  `PmoveSingle`'s dispatch sends `pm_type` 6 to 0x34274 (jump table 0x70ce8),
+  whose unmounted path reaches the `PM_Weapon` call at 0x34331. INFERRED:
+  every dead player's move empties `ps.weapon`, which is why a dead client
+  and its followers read `weapon` 0 (the three-probe dm run, and the sd
+  round-restart target's death frames).
+
+vcod: `ClientSim::respawn` sets the flag and `spawn_think` is the spawn's own
+end frame and think, which sets the own view for a player, clears the flag
+unless the client is dead or at intermission, and runs a dead spawn's 100 ms
+of `dead_move`, the eye dropping 18 units to 42. Every caller but the
+intermission's puts the client's `commandTime` at the frame's clock. A dead
+sim's step writes `ps.weapon` 0 unless the flag is set, and the switch
+reaches the script host as the weapon machine's own do.
+
+Where it is not retail's:
+
+- A player's or spectator's think is only its flag and its clock: the 100 ms
+  of null-cmd pmove is not run. INFERRED from the negated `delta_angles` on
+  that cmd: retail's spawn frame reads `viewangles` 0 whatever the spawn
+  yaw, where ours reads the spawn yaw. The three-probe dm run's spawn had yaw
+  0 and cannot tell the two apart.
+- The intermission camera's frozen `commandTime`: ours keeps advancing it
+  with the client's cmds.

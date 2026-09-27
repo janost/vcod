@@ -73,6 +73,7 @@ pub struct Copied {
     /// Degrees, wire convention.
     pub angles: [f32; 3],
     pub origin: [f32; 3],
+    pub velocity: [f32; 3],
     /// `eFlags` 0x8, the teleport bit, of the copy.
     pub teleport_bit: bool,
     /// The archived frame the copy came from, `None` for a live one.
@@ -131,6 +132,34 @@ pub fn stop_spot(
         None => end,
     };
     (spot.into(), [view[0] + 15.0, view[1], view[2]])
+}
+
+/// The playerstate fields `ClientEndFrame`'s playing and dead arm writes
+/// (0x40f45 onward), which a follower numbered below its target copies
+/// before that end frame has run (docs/research/cod11-spectator-follow.md,
+/// section 5).
+const END_FRAME_FIELDS: &[&str] = &[
+    "pm_type",
+    "gravity",
+    "speed",
+    "viewmodelIndex",
+    "damageEvent",
+    "damageYaw",
+    "damagePitch",
+    "damageCount",
+    "serverCursorHint",
+    "serverCursorHintVal",
+    "serverCursorHintString",
+    "iCompassFriendInfo",
+];
+
+/// A copy taken ahead of the target's own end frame: `last`'s
+/// [`END_FRAME_FIELDS`] over `ps`.
+pub fn before_end_frame(ps: &mut msg::PlayerState, last: &msg::PlayerState, p: &Protocol) {
+    for name in END_FRAME_FIELDS {
+        let i = msg::PlayerState::field_index(p, name).unwrap();
+        ps.fields[i] = last.fields[i];
+    }
 }
 
 /// The flag patch `SpectatorClientEndFrame` puts on the copied playerstate
