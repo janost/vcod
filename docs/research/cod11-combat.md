@@ -544,6 +544,22 @@ conditions.
   (`EV_RAISE_WEAPON`, 155) unless the new weapon is the old one's alt, sets
   `weaponTime` from `raiseTime` (or `altRaiseTime`), sets `weapAnim` to
   `WEAP_RAISE` (or `WEAP_ALTSWITCHTO`), and sets `aimSpreadScale` to 255.0.
+- Same function, the arm taken when the old weapon is 0 (read in the cgame
+  copy at `cgame_mp_x86.dll` `0x300107c0`, whose `BG` code the game module
+  shares): VERIFIED, it stores `weaponstate` 1, `weaponTime` from the new
+  weapon's `raiseTime` (`def+0x204`), `aimSpreadScale` 255.0 and `WEAP_RAISE`
+  (10) and returns, and the function's one store of `0x9B` into the event
+  ring (`ps+0x88 + (eventSequence & 3) * 4`) is outside that arm. INFERRED:
+  a raise out of empty hands raises no `EV_RAISE_WEAPON`, and a change to
+  weapon 0 from a real weapon does, weapon 0 raising on its own def's
+  `raiseTime`. VERIFIED, three captures agree: the grenade capture's
+  `throw_down` moves `eventSequence` 15 to 16 with a 155 on the frame
+  `weaponstate` leaves 3 after the last frag, a step that ends on `weapon`
+  0 (9.5); every `kill` death frame in the
+  `dm` hit-target capture reads 189 then 155 (8.1), with `weapon` 0 in the
+  follow runs (`cod11-spectator-follow.md` 5);
+  and both swaps in `mp_carentan-dm-pickup.txt` read `weapon` 0 to the new
+  weapon at 34800 and 36300 with `eventSequence` unmoved.
 - dll `0x30010a30`, inlined in the `.so` at `0x392b4`: `weaponstate` 1 is
   cleared to 0 and `weapAnim` set to `WEAP_IDLE` with the toggle flipped,
   unconditionally, on the frame after.
