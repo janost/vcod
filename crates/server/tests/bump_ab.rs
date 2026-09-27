@@ -224,7 +224,8 @@ fn state_from(snap: &Snap, yaw_deg: f32, weapon: u8) -> PlayerState {
 }
 
 fn adopt_push(ps: &mut PlayerState, snap: &Snap) {
-    ps.knockback_ms = if snap.pm_flags & PMF_TIME_KNOCKBACK != 0 {
+    ps.knockback_flags = snap.pm_flags & PMF_TIME_KNOCKBACK;
+    ps.knockback_ms = if ps.knockback_flags != 0 {
         snap.pm_time as f32
     } else {
         0.0

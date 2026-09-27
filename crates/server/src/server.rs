@@ -3364,6 +3364,7 @@ impl Server {
                         me.ps.velocity.x = push.self_vel.x;
                         me.ps.velocity.y = push.self_vel.y;
                         me.ps.knockback_ms = 300.0;
+                        me.ps.knockback_flags |= vcod_common::pmove::PMF_TIME_KNOCKBACK;
                         // The caller marks only self a corpse (0x411b8); the
                         // partner marks itself on its own turn through the scan.
                         me.contents = CONTENTS_CORPSE;
@@ -3374,6 +3375,7 @@ impl Server {
                         other.ps.velocity.x = push.other_vel.x;
                         other.ps.velocity.y = push.other_vel.y;
                         other.ps.knockback_ms = 300.0;
+                        other.ps.knockback_flags |= vcod_common::pmove::PMF_TIME_KNOCKBACK;
                     }
                 }
                 self.clients[slot]

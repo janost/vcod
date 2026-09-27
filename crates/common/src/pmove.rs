@@ -69,6 +69,10 @@ pub const OVERCLIP: f32 = 1.001;
 /// `pm_flags` bit 0x100, the player-clip knockback timer
 /// (`docs/research/cod11-player-clip.md`, `PM_DropTimers` 0x32a44).
 pub const PMF_TIME_KNOCKBACK: i32 = 0x100;
+/// `pm_flags` bit 0x200, the timer a damage knockback starts
+/// (`docs/research/cod11-combat.md` 4.5): no ground friction, a walk accel of
+/// 1 and gravity on the ground while it runs.
+pub const PMF_TIME_DAMAGE: i32 = 0x200;
 /// `PM_Friction`'s ground control multiplier while the knockback timer runs
 /// (0x2e51c).
 const KNOCKBACK_FRICTION_SCALE: f32 = 0.3;
@@ -379,11 +383,14 @@ pub struct PlayerState {
     pub water_level: u32,
     /// Remaining control lock while flying out of water; 0 when free.
     pub waterjump_ms: f32,
-    /// Remaining player-clip push penalty, `pm_time` with `pm_flags` 0x100;
-    /// 0 when free. Quarters `walk_move`'s accel and softens ground friction
-    /// to 0.3 of its control term while it runs (`docs/research/cod11-player-clip.md`).
-    /// `StuckInClient`'s push sets it (`crates/server/src/game/stuck.rs`).
+    /// `pm_time`: what is left of the knockback timer, 0 when free.
     pub knockback_ms: f32,
+    /// The `pm_flags` bits riding `knockback_ms`, cleared with it.
+    /// [`PMF_TIME_KNOCKBACK`], `StuckInClient`'s push
+    /// (`crates/server/src/game/stuck.rs`), quarters `walk_move`'s accel and
+    /// softens ground friction to 0.3 of its control term
+    /// (`docs/research/cod11-player-clip.md`); [`PMF_TIME_DAMAGE`] is a hit's.
+    pub knockback_flags: i32,
     /// Touching a climbable surface (trace hit with SURF_LADDER) this frame.
     pub on_ladder: bool,
     /// Plane normal of that surface; persists while off the wall so the
@@ -542,6 +549,7 @@ impl PlayerState {
             water_level: 0,
             waterjump_ms: 0.0,
             knockback_ms: 0.0,
+            knockback_flags: 0,
             on_ladder: false,
             ladder_normal: Vec3::ZERO,
             since_jump_ms: f32::INFINITY,
@@ -668,11 +676,12 @@ pub struct PmInput {
 fn drop_knockback(ps: &mut PlayerState, dt: f32) {
     if ps.knockback_ms > 0.0 {
         let ms = dt * 1000.0;
-        ps.knockback_ms = if ms >= ps.knockback_ms {
-            0.0
+        if ms >= ps.knockback_ms {
+            ps.knockback_ms = 0.0;
+            ps.knockback_flags = 0;
         } else {
-            ps.knockback_ms - ms
-        };
+            ps.knockback_ms -= ms;
+        }
     }
 }
 
@@ -1650,9 +1659,10 @@ fn friction(ps: &mut PlayerState, on_ladder: bool, dt: f32) {
         return;
     }
     let mut drop = 0.0;
-    if ps.on_ground && ps.water_level <= 1 {
+    // A hit's knockback slides free of the ground term (0x2e4fb).
+    if ps.on_ground && ps.water_level <= 1 && ps.knockback_flags & PMF_TIME_DAMAGE == 0 {
         let mut control = speed.max(PM_STOPSPEED);
-        if ps.knockback_ms > 0.0 {
+        if ps.knockback_flags & PMF_TIME_KNOCKBACK != 0 {
             control *= KNOCKBACK_FRICTION_SCALE;
         }
         drop += control * PM_FRICTION * dt;
@@ -1823,12 +1833,15 @@ fn walk_move(
         return;
     }
     let (dir, wishspeed) = wish(ps, input, weapon);
+    let knocked = ps.knockback_flags & PMF_TIME_DAMAGE != 0;
     let mut accel = match move_stance(ps) {
+        // 0x2f4a2
+        _ if knocked => 1.0,
         Stance::Stand => PM_ACCELERATE,
         Stance::Crouch => PM_DUCKED_ACCELERATE,
         Stance::Prone => PM_PRONE_ACCELERATE,
     };
-    if ps.knockback_ms > 0.0 {
+    if ps.knockback_flags & PMF_TIME_KNOCKBACK != 0 {
         accel *= KNOCKBACK_ACCEL_SCALE;
     }
     // along the slope, so it costs no speed
@@ -1840,6 +1853,11 @@ fn walk_move(
     let add = wishspeed - current;
     if add > 0.0 {
         ps.velocity += dir * (accel * dt * wishspeed.max(WALK_ACCEL_FLOOR)).min(add);
+    }
+    // Q3's knockback gravity (0x2f59c), which the clip below turns into
+    // ground speed.
+    if knocked {
+        ps.velocity.z -= GRAVITY * dt;
     }
     // The clip onto the ground keeps the speed whenever it leaves the
     // velocity pointing the same way (0x2f5b8-0x2f6b3), so a landing that
@@ -2531,6 +2549,7 @@ mod tests {
         let mut free = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.1), 0.0);
         let mut kb = free;
         kb.knockback_ms = 300.0;
+        kb.knockback_flags = PMF_TIME_KNOCKBACK;
         // One frame can't separate a 0.25 accel scale from snap_velocity's
         // rounding, which alone moves either side by up to 0.5; ten frames
         // of walk accel put both well clear of that noise floor.
@@ -2549,9 +2568,37 @@ mod tests {
         slide.velocity = Vec3::new(190.0, 0.0, 0.0);
         let mut slide_kb = slide;
         slide_kb.knockback_ms = 300.0;
+        slide_kb.knockback_flags = PMF_TIME_KNOCKBACK;
         pmove(&mut slide, &PmInput::default(), &mw, 0.008, &[]);
         pmove(&mut slide_kb, &PmInput::default(), &mw, 0.008, &[]);
         assert!(slide_kb.velocity.x > slide.velocity.x);
+    }
+
+    /// A hit's knockback timer (`pm_flags` 0x200) takes the ground friction
+    /// away, and the gravity `PM_WalkMove` adds under it is folded into
+    /// ground speed by the clip; the drop ends it ahead of the walk.
+    #[test]
+    fn a_damage_knockback_slides_free_of_friction() {
+        let w = flat();
+        let mw = MoveWorld::bare(&w);
+        let mut ps = PlayerState::spawn(Vec3::new(0.0, 0.0, 0.1), 0.0);
+        pmove(&mut ps, &PmInput::default(), &mw, 0.008, &[]);
+        ps.velocity = Vec3::new(80.0, 0.0, 0.0);
+        ps.knockback_ms = 50.0;
+        ps.knockback_flags = PMF_TIME_DAMAGE;
+        let mut free = ps;
+        free.knockback_ms = 0.0;
+        free.knockback_flags = 0;
+        for _ in 0..6 {
+            pmove(&mut ps, &PmInput::default(), &mw, 0.008, &[]);
+            pmove(&mut free, &PmInput::default(), &mw, 0.008, &[]);
+        }
+        assert!(ps.velocity.x >= 80.0, "{}", ps.velocity.x);
+        assert!(free.velocity.x < 70.0, "{}", free.velocity.x);
+        assert_eq!(ps.knockback_ms, 2.0);
+        pmove(&mut ps, &PmInput::default(), &mw, 0.008, &[]);
+        assert_eq!((ps.knockback_ms, ps.knockback_flags), (0.0, 0));
+        assert!(ps.velocity.x < 80.0, "friction is back, {}", ps.velocity.x);
     }
 
     /// `PM_DropTimers` zeroes the timer once the frame's ms reach it, and
