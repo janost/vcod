@@ -46,7 +46,7 @@ const EF_PRONE: i32 = 0x40;
 /// The same bit `bodies::EFLAGS_ANIM_TOGGLE` inverts per body-queue push, for
 /// the same reason: a changed `eFlags` is what makes a client stop carrying
 /// the previous occupant of that entity number forward.
-const EF_TELEPORT_BIT: i32 = 0x8;
+pub(crate) const EF_TELEPORT_BIT: i32 = 0x8;
 /// The mounted-gun bits by the gun's stance (turrets doc, 4.4 and 12.1).
 const EF_MOUNTED_STAND: i32 = 0xC000;
 const EF_MOUNTED_DUCK: i32 = 0x8000;
@@ -288,6 +288,10 @@ pub struct ClientSim {
     /// The buttons of the last cmd this client ran, `client+0x21e8`, which
     /// the next cmd's edges are taken against. The spawn's memset zeroes it.
     pub last_buttons: u8,
+    /// This frame's `ClientEndFrame` spawned the client out of a follow's
+    /// copy, whose memset leaves the frame's HUD arrays empty; the snapshot
+    /// consumes it.
+    pub hud_cleared: bool,
 }
 
 /// Everything the animscript needs that the sim does not own: the script
@@ -380,6 +384,7 @@ impl ClientSim {
             follow: Default::default(),
             own_view: false,
             last_buttons: 0,
+            hud_cleared: false,
         }
     }
 
@@ -403,6 +408,32 @@ impl ClientSim {
         // target reads `pm_type=4 health=0` on every such frame).
         self.health = 0;
         self.max_health = 0;
+    }
+
+    /// `ClientEndFrame`'s spawn arm (0x40f82): a playing or dead client whose
+    /// playerstate is still a follow's copy is spawned at the copy's feet and
+    /// yaw. The copy's `eFlags` are what the spawn flips the teleport bit of,
+    /// and a dead one's own end frame takes the dead arm, so it is a dead
+    /// player with no contents (the stock killcam's return to `dead`).
+    pub fn spawn_from_copy(
+        &mut self,
+        copied: &crate::follow::Copied,
+        playing: bool,
+        cmd_angles: [i32; 3],
+    ) {
+        self.teleport_bit = copied.teleport_bit;
+        self.respawn(PmType::Normal, copied.origin, copied.angles[1], cmd_angles);
+        self.hud_cleared = true;
+        if !playing {
+            self.dead = true;
+            self.contents = 0;
+            self.relink();
+        }
+    }
+
+    /// `eFlags` 0x8 as the wire carries it.
+    pub fn teleport_bit(&self) -> bool {
+        self.teleport_bit
     }
 
     /// The third mode, through the same `self spawn(origin, angles)`:
@@ -610,8 +641,8 @@ impl ClientSim {
     /// eye, looking where it looked pitched down 15 (`follow::stop_spot`).
     /// The copy's velocity is not carried over.
     pub fn stop_following(&mut self, collision: Option<&vcod_common::collision::CollisionWorld>) {
-        if let (true, Some((eye, view))) = (self.follow.on, self.follow.view) {
-            let (spot, angles) = crate::follow::stop_spot(collision, eye, view);
+        if let (true, Some(c)) = (self.follow.on, self.follow.copied) {
+            let (spot, angles) = crate::follow::stop_spot(collision, c.eye, c.angles);
             self.ps.origin = spot.into();
             self.ps.velocity = Vec3::ZERO;
             self.set_view_angle(angles);

@@ -301,9 +301,9 @@ pub struct GameHost {
     /// Each client's previous cmd buttons, for the use key's rising edge
     /// (`ClientThink_real` 0x40106..0x4011d).
     pub client_old_buttons: Vec<u8>,
-    /// Whether the client's last `archivetime` write was above 0, which is a
-    /// killcam asking for a replay; the field itself reads 0.
-    pub client_archive_asked: Vec<bool>,
+    /// `setarchive`'s flag: whether the engine keeps a frame archive for
+    /// the killcam (`crate::archive`).
+    pub archive_on: bool,
     /// `(entity, event, args)` for every `"touch"` and `"trigger"` the item
     /// pass raised since the last script frame, notified at its start the
     /// way `trigger_fires` are.
@@ -574,7 +574,7 @@ impl GameHost {
             client_lookat: vec![None; MAX_CLIENTS],
             trigger_fires: Vec::new(),
             client_old_buttons: vec![0; MAX_CLIENTS],
-            client_archive_asked: vec![false; MAX_CLIENTS],
+            archive_on: false,
             item_notifies: Vec::new(),
             client_grenade_ms: vec![0; MAX_CLIENTS],
             client_height: vec![vcod_common::pmove::HEIGHT_STAND; MAX_CLIENTS],
@@ -986,6 +986,9 @@ impl Host for GameHost {
             // read has no error channel, so a client-less entity reads
             // undefined and the write path carries the error.
             Route::Client(i) => match &e.client {
+                Some(c) if i == fields::archive_time_index() => {
+                    Value::Float(archive_time_seconds(archive_time_ms(c[i])))
+                }
                 Some(c) => c[i],
                 None => Value::Undefined,
             },
@@ -1057,36 +1060,13 @@ impl Host for GameHost {
                 if !type_accepts(ty, value) {
                     return Err(ErrorKind::BadType("wrong type for a client field"));
                 }
-                // `archivetime` is how long a client's frames are kept for a
-                // killcam to replay, which vcod does not have and will not
-                // (`docs/design/2026-09-02-stage6-combat-design.md`). Retail's
-                // own code trims the value down to what it can actually serve;
-                // storing zero is that trim taken to its end, and it is what
-                // makes every stock gametype's `if(self.archivetime <= delay)`
-                // fall through to `respawn()` instead of into the killcam.
-                // What the skipped branch would have done on retail: copy the
-                // attacker's archived playerstate over the victim's every
-                // frame (`SpectatorClientEndFrame` 0x40760, pm_flags
-                // 0x10000|0x20000), then on the way back to "dead" an engine
-                // `ClientSpawn` from `ClientEndFrame`'s `ps.clientNum !=
-                // ent->s.number` check (0x40f45/0x40f82). None of it reaches
-                // the wire here; the one killcam frame sends nothing new,
-                // because the follow pass leaves a client alone while
-                // `client_archive_asked` says it wants a replay
-                // (docs/research/cod11-spectator-follow.md, 11 and 12).
-                c[i] = match fields::CLIENT_FIELDS[i].name {
-                    "archivetime" => {
-                        let asked = match value {
-                            Value::Int(n) => n > 0,
-                            Value::Float(f) => f > 0.0,
-                            _ => false,
-                        };
-                        if let Some(a) = self.client_archive_asked.get_mut(ent.0 as usize) {
-                            *a = asked;
-                        }
-                        Value::Int(0)
-                    }
-                    _ => value,
+                // `archivetime` is milliseconds behind the float script
+                // sees (0x41db8, 0x41dfc), and the engine trims it in place
+                // (`crate::archive`).
+                c[i] = if i == fields::archive_time_index() {
+                    Value::Int(archive_time_from_seconds(value))
+                } else {
+                    value
                 };
                 // Retail reaches `CalculateRanks` from the client field
                 // setter (`game.mp.i386.so` relocations at 0x418ef and
@@ -1105,6 +1085,29 @@ impl Host for GameHost {
             }
         }
     }
+}
+
+/// The milliseconds a client's stored `archivetime` holds.
+pub fn archive_time_ms(v: Value) -> i32 {
+    match v {
+        Value::Int(ms) => ms,
+        _ => 0,
+    }
+}
+
+/// `archivetime`'s setter (`game.mp.i386.so` 0x41db8): seconds times 1000.0
+/// (0x7306c), truncated toward zero.
+fn archive_time_from_seconds(v: Value) -> i32 {
+    match v {
+        Value::Float(f) => (f64::from(f) * 1000.0) as i32,
+        Value::Int(n) => n.saturating_mul(1000),
+        _ => 0,
+    }
+}
+
+/// `archivetime`'s getter (0x41dfc): the milliseconds times 0.001 (0x73070).
+fn archive_time_seconds(ms: i32) -> f32 {
+    (f64::from(ms) * f64::from(0.001f32)) as f32
 }
 
 /// The integer a health field takes; retail's int setter truncates a float.
@@ -1539,41 +1542,29 @@ mod tests {
         });
     }
 
-    /// `archivetime` stores 0 whatever the script wrote: nothing archives
-    /// frames for a killcam, so a gametype's `if(self.archivetime <= delay)`
-    /// has to fall through to `respawn()` rather than stall waiting for a
-    /// replay that never comes.
+    /// `archivetime` is milliseconds under the seconds script reads: the
+    /// setter truncates toward zero and the getter scales back (0x41db8,
+    /// 0x41dfc).
     #[test]
-    fn archivetime_reads_back_zero_whatever_was_written() {
-        let (mut vm, mut host) = fixture();
-        vm.with_cx(|cx| {
-            let c = host.ents.spawn_client(cx, 0, None).unwrap();
-            let atom = cx.intern_folded("archivetime");
-            host.set_field(cx, c, atom, Value::Int(9)).unwrap();
-            assert_eq!(host.get_field(cx, c, atom), Value::Int(0));
-            host.set_field(cx, c, atom, Value::Float(2.5)).unwrap();
-            assert_eq!(host.get_field(cx, c, atom), Value::Int(0));
-            // The neighbouring numeric fields still store what they are given.
-            let other = cx.intern_folded("spectatorclient");
-            host.set_field(cx, c, other, Value::Int(3)).unwrap();
-            assert_eq!(host.get_field(cx, c, other), Value::Int(3));
-        });
-    }
-
-    /// What the script asked for is kept apart from what it reads back: a
-    /// follow with a replay behind it is the killcam, which the follow pass
-    /// has no archive to serve.
-    #[test]
-    fn a_non_zero_archivetime_marks_the_client_as_asking_for_a_replay() {
+    fn archivetime_is_whole_milliseconds() {
         let (mut vm, mut host) = fixture();
         vm.with_cx(|cx| {
             let c = host.ents.spawn_client(cx, 2, None).unwrap();
             let atom = cx.intern_folded("archivetime");
-            assert!(!host.client_archive_asked[2]);
+            let ms = |host: &GameHost| {
+                archive_time_ms(
+                    host.ents.get(c).unwrap().client.as_ref().unwrap()
+                        [fields::archive_time_index()],
+                )
+            };
             host.set_field(cx, c, atom, Value::Int(9)).unwrap();
-            assert!(host.client_archive_asked[2]);
-            host.set_field(cx, c, atom, Value::Float(0.0)).unwrap();
-            assert!(!host.client_archive_asked[2]);
+            assert_eq!(host.get_field(cx, c, atom), Value::Float(9.0));
+            assert_eq!(ms(&host), 9000);
+            host.set_field(cx, c, atom, Value::Float(1.0009)).unwrap();
+            assert_eq!(ms(&host), 1000);
+            assert_eq!(host.get_field(cx, c, atom), Value::Float(1.0));
+            host.set_field(cx, c, atom, Value::Float(-0.0507)).unwrap();
+            assert_eq!(ms(&host), -50);
         });
     }
 }

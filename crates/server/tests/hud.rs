@@ -192,11 +192,32 @@ fn only_the_killed_client_is_sent_the_respawn_text() {
         }
     }
     assert_eq!(cb.snapshots().newest().unwrap().ps.health(), 0, "B is dead");
-    // The text is 2.05 s behind the death: `Callback_PlayerKilled` waits 2 s
-    // before it threads the killcam, the killcam waits another 0.05 s and
-    // then bounces straight into `respawn()` because `archivetime` is 0
-    // here, and `waitRespawnButton` opens with a `wait 0` of its own.
-    for _ in 0..50 {
+    // `Callback_PlayerKilled` waits 2 s and threads the killcam, whose five
+    // elements (two bars, the title, the skip text and the timer) are B's
+    // alone; once the replay runs out it threads `respawn()`, and
+    // `waitRespawnButton` opens with a `wait 0` of its own before the text.
+    let mut killcam_seen = false;
+    for _ in 0..260 {
+        ca.send_frame(&ads);
+        cb.send_frame(&NULL_USERCMD);
+        step(&mut sv, &mut ca, &mut cb);
+        let sb = cb.snapshots().newest().unwrap();
+        if sb.ps.field_i32(p, "pm_flags") & 0x10000 != 0 {
+            killcam_seen |= sb.ps.arrays.hud_current.len() == 5;
+            assert!(ca
+                .snapshots()
+                .newest()
+                .unwrap()
+                .ps
+                .arrays
+                .hud_current
+                .is_empty());
+        } else if killcam_seen {
+            break;
+        }
+    }
+    assert!(killcam_seen, "B was sent no killcam elements");
+    for _ in 0..5 {
         ca.send_frame(&ads);
         cb.send_frame(&NULL_USERCMD);
         step(&mut sv, &mut ca, &mut cb);

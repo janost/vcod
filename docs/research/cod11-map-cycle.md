@@ -1119,14 +1119,13 @@ pass; vcod dispatched the event at the top of `G_RunFrame`'s counterpart
 instead, which put the `waittill` one frame late. Fixed:
 `ScriptRuntime::run_frame` opens with a packet pass that dispatches the
 netcode's events on the previous frame's clock and then steps whatever is
-`Runnable`: the callbacks and their notifies, plus any waiter a later thread
-woke at the end of the previous frame's thread pass. The callback is therefore
+`Runnable`: the callbacks and their notifies. The callback is therefore
 parked on `menuresponse` before the `t 0` it queued can be answered, and the
 `sd` gates now answer the menu the instant it opens instead of a frame later.
-INFERRED, off that pass stepping a state rather than a list of woken threads:
-the second case resumes on the previous frame's clock and ahead of the entity
-think pass. Neither capture separates it from a thread the same frame's
-callbacks woke, so its cadence against retail is unmeasured.
+A waiter a later-started thread woke used to be left `Runnable` by the frame's
+pass and resumed here, on the previous frame's clock; the frame's pass now
+takes it, which `probe_notify_frame` measures (`cod11-gsc-language.md`, the
+thread pick paragraph).
 
 The `sd` half of the run is therefore still unmeasured against retail: the
 elimination-driven restart, the team scores, the win announcements and the

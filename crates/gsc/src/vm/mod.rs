@@ -417,6 +417,9 @@ pub struct Vm {
     /// both deterministic.
     threads: Vec<Thread>,
     next_thread: u32,
+    /// The order threads were queued in, for the scheduler's last-in,
+    /// first-out pick (`Thread::seq`).
+    next_seq: u64,
     /// Instructions a thread may run in one scheduling step before it is
     /// aborted with `ErrorKind::Budget`. Every instruction counts against
     /// it, `Call`/`CallPtr` included, so unbounded recursion is caught the
@@ -475,6 +478,7 @@ impl Vm {
             size_atom,
             threads: Vec::new(),
             next_thread: 0,
+            next_seq: 0,
             budget: 1_000_000,
             now_ms: 0,
             spawn_depth: 0,

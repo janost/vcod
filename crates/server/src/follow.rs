@@ -31,9 +31,9 @@ pub struct Session {
     pub state: SessionState,
     /// `spectatorclient`, the forced follow; negative for none.
     pub spectator_client: i32,
-    /// The script asked for a replay (`archivetime` above 0), which vcod has
-    /// no archive to serve.
-    pub killcam: bool,
+    /// `archivetime` in milliseconds: how far back a follow's copy is taken
+    /// from, the killcam's replay age.
+    pub archive_ms: i32,
 }
 
 impl Session {
@@ -47,7 +47,7 @@ impl Session {
                 SessionState::Playing
             },
             spectator_client: -1,
-            killcam: false,
+            archive_ms: 0,
         }
     }
 }
@@ -61,9 +61,22 @@ pub struct Follow {
     pub on: bool,
     /// `pm_flags` 0x20000 as the last end frame left it.
     pub forced: bool,
-    /// The followed client's eye and view angles at the last copy, which is
-    /// what `StopFollowing` reads off the spectator's copied playerstate.
-    pub view: Option<([f32; 3], [f32; 3])>,
+    /// What the last copy put in the spectator's playerstate, which
+    /// `StopFollowing` and `ClientEndFrame`'s spawn arm read back.
+    pub copied: Option<Copied>,
+}
+
+/// The followed client as the last copy had it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Copied {
+    pub eye: [f32; 3],
+    /// Degrees, wire convention.
+    pub angles: [f32; 3],
+    pub origin: [f32; 3],
+    /// `eFlags` 0x8, the teleport bit, of the copy.
+    pub teleport_bit: bool,
+    /// The archived frame the copy came from, `None` for a live one.
+    pub frame: Option<i32>,
 }
 
 /// `Cmd_FollowCycle_f` (`game.mp.i386.so` 0x4902c): step from the current

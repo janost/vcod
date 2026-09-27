@@ -197,14 +197,20 @@ pub fn reset_timeout(
     Ok(Value::Undefined)
 }
 
-/// `setArchive(name, value)`: unmeasured no-op. Nothing in the corpus reads
-/// a cvar's archive flag back.
+/// `setarchive(on)` (`game.mp.i386.so` 0x5f704): the flag goes to the
+/// engine (syscall 0x45), which keeps a frame archive for the killcam while
+/// it is set (docs/research/cod11-spectator-follow.md, section 12).
 pub fn set_archive(
-    _host: &mut GameHost,
+    host: &mut GameHost,
     _cx: &mut Cx,
     _recv: Option<Target>,
-    _args: &[Value],
+    args: &[Value],
 ) -> Result<Value, ErrorKind> {
+    host.archive_on = match args.first() {
+        Some(Value::Int(n)) => *n != 0,
+        Some(Value::Float(f)) => *f != 0.0,
+        _ => return Err(ErrorKind::BadType("setarchive takes a bool")),
+    };
     Ok(Value::Undefined)
 }
 

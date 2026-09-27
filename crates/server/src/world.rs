@@ -40,18 +40,20 @@ pub fn visible_entities(
     let from = vis.cluster_at(eye);
     entities
         .iter()
-        .filter(|(_, e)| {
-            let o = e.origin(p);
-            let (mins, maxs) = crate::game::wire::link_box(e.field_i32(p, "eType"));
-            let at =
-                |b: [f32; 3], pad: f32| [o[0] + b[0] + pad, o[1] + b[1] + pad, o[2] + b[2] + pad];
-            let clusters = vis.clusters_in_box(at(mins, -LINK_EPSILON), at(maxs, LINK_EPSILON));
-            // An entity whose box touches no cluster at all is skipped, the
-            // way the module's loop skips one with `numClusters == 0`.
-            clusters.iter().any(|&c| vis.visible(from, c))
-        })
+        .filter(|(_, e)| entity_visible(vis, from, e, p))
         .map(|(n, e)| (*n, e.clone()))
         .collect()
+}
+
+/// [`visible_entities`]' test for one entity, from the cluster `from`.
+pub fn entity_visible(vis: &bsp::Visibility, from: i32, e: &EntityState, p: &Protocol) -> bool {
+    let o = e.origin(p);
+    let (mins, maxs) = crate::game::wire::link_box(e.field_i32(p, "eType"));
+    let at = |b: [f32; 3], pad: f32| [o[0] + b[0] + pad, o[1] + b[1] + pad, o[2] + b[2] + pad];
+    let clusters = vis.clusters_in_box(at(mins, -LINK_EPSILON), at(maxs, LINK_EPSILON));
+    // An entity whose box touches no cluster at all is skipped, the way the
+    // module's loop skips one with `numClusters == 0`.
+    clusters.iter().any(|&c| vis.visible(from, c))
 }
 
 impl World {

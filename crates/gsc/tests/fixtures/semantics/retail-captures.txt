@@ -208,6 +208,17 @@ PROBE notify_order first
 PROBE notify_order second
 PROBE notify_done 1
 
+# probe_notify_frame
+PROBE notify_frame notify 6
+PROBE notify_frame after_notify 6
+PROBE notify_frame resume early 6
+PROBE notify_frame resume early_wait0 6
+PROBE notify_frame past_wait0 early_wait0 6
+PROBE notify_frame resume late 6
+PROBE notify_frame resume late_wait0 6
+PROBE notify_frame past_wait0 late_wait0 6
+PROBE notify_frame done 20
+
 # probe_persist_exit
 PROBE before_game_str kept
 PROBE before_game_num 7
@@ -385,3 +396,22 @@ PROBE_FATAL cannot cast undefined to bool
 # probe_truthy_vec
 PROBE at truthy_zero_vector
 PROBE_FATAL cannot cast vector to bool
+
+# probe_wait0_loop
+PROBE wait0_loop frame 0 i 1000
+PROBE wait0_loop frame 1 i 1000
+PROBE wait0_loop frame 2 i 1000
+PROBE wait0_loop frame 3 i 1000
+PROBE wait0_loop frame 4 i 1000
+PROBE wait0_loop done 1000
+
+# probe_wait0_yield
+PROBE wait0_yield a before
+PROBE wait0_yield b before
+PROBE wait0_yield b after
+PROBE wait0_yield a after
+PROBE wait0_yield d before
+PROBE wait0_yield d after
+PROBE wait0_yield c before
+PROBE wait0_yield c after
+PROBE wait0_yield done 1

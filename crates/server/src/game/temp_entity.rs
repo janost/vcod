@@ -123,10 +123,18 @@ pub fn advance(cursor: u32, count: usize) -> u32 {
 /// three are culled like any other entity once this says yes
 /// (`crate::server`).
 pub fn visible_to(te: &TempEntity, client_num: usize) -> bool {
-    match te.scope {
-        Scope::Broadcast | Scope::Pvs => true,
-        Scope::AllBut(s) => s != client_num,
-        Scope::Only(s) => s == client_num,
+    te.scope.admits(client_num)
+}
+
+impl Scope {
+    /// [`visible_to`] for the scope alone, which is what an archived frame
+    /// keeps of a temp entity.
+    pub fn admits(self, client_num: usize) -> bool {
+        match self {
+            Scope::Broadcast | Scope::Pvs => true,
+            Scope::AllBut(s) => s != client_num,
+            Scope::Only(s) => s == client_num,
+        }
     }
 }
 
