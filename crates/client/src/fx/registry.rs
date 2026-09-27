@@ -59,7 +59,7 @@ pub const EV_BULLET_TRACER: i32 = 171;
 pub const EV_SOUND_ALIAS: i32 = 172;
 pub const EV_BULLET_HIT_SMALL: i32 = 173;
 pub const EV_BULLET_HIT_LARGE: i32 = 174;
-/// Delivered to the victim only; never reaches a spectator (doc section 2).
+/// Delivered to the victim and to whoever follows it (doc section 2).
 pub const EV_BULLET_HIT_CLIENT_SMALL: i32 = 175;
 pub const EV_BULLET_HIT_CLIENT_LARGE: i32 = 176;
 pub const EV_GRENADE_BOUNCE: i32 = 177;
@@ -275,18 +275,23 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
 
         // eventParm is the byte-dir surface normal; `ev.dir` (origin2) is zero
         // on these events (doc section 2). Retail draws the tracer from here,
-        // in `CG_BulletHitWall`, not from the fire event: `EV_BULLET_TRACER`
-        // has no MP case (doc section 6). `other_entity_num` is the shooter.
-        EV_BULLET_HIT_SMALL | EV_BULLET_HIT_LARGE => {
+        // in `CG_BulletHitWall` and `CG_BulletHitFlesh`, not from the fire
+        // event: `EV_BULLET_TRACER` has no MP case (doc section 6).
+        // `other_entity_num` is the shooter. The client-hit pair is the
+        // victim's copy of a flesh hit and carries no effect of its own.
+        EV_BULLET_HIT_SMALL
+        | EV_BULLET_HIT_LARGE
+        | EV_BULLET_HIT_CLIENT_SMALL
+        | EV_BULLET_HIT_CLIENT_LARGE => {
             let mut out = Vec::new();
-            let kind = if ev.event == EV_BULLET_HIT_SMALL {
-                ImpactKind::BulletSmallNormal
-            } else {
-                ImpactKind::BulletLargeNormal
+            let kind = match ev.event {
+                EV_BULLET_HIT_SMALL => Some(ImpactKind::BulletSmallNormal),
+                EV_BULLET_HIT_LARGE => Some(ImpactKind::BulletLargeNormal),
+                _ => None,
             };
             let surf = ev.surf_type.clamp(0, SURFACE_NAMES.len() as i32 - 1) as u8;
             let impact = Vec3::from(ev.pos);
-            if let Some(path) = table.get(kind, surf) {
+            if let Some(path) = kind.and_then(|kind| table.get(kind, surf)) {
                 out.push(Resolved::Spawn {
                     path: path.to_string(),
                     at: SpawnAt::Surface {
@@ -396,8 +401,6 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
         | EV_MELEE_MISS
         | EV_BULLET_TRACER
         | EV_SOUND_ALIAS
-        | EV_BULLET_HIT_CLIENT_SMALL
-        | EV_BULLET_HIT_CLIENT_LARGE
         | EV_MOLOTOV_EXPLODE
         | EV_MOLOTOV_EXPLODE_NOMARKS
         | EV_CUSTOM_EXPLODE
@@ -563,6 +566,45 @@ mod tests {
         );
     }
 
+    /// `CG_BulletHitFlesh` hands `CG_Tracer` the same shooter, impact and
+    /// `surfType` the wall path does and spawns no effect.
+    #[test]
+    fn client_hit_draws_the_flesh_tracer_and_no_effect() {
+        let mut muzzles = HashMap::new();
+        muzzles.insert(7u32, (Vec3::new(0.0, 0.0, 60.0), Vec3::X));
+        let weapon_flash = HashMap::new();
+        let ctx = ResolveCtx {
+            muzzles: &muzzles,
+            weapon_flash: &weapon_flash,
+            view_flash: None,
+        };
+        let mut table = ImpactTable::default();
+        for kind in [ImpactKind::BulletSmallNormal, ImpactKind::BulletLargeNormal] {
+            table
+                .map
+                .insert((kind, 7), "fx/impacts/flesh_hit.efx".to_string());
+        }
+        for id in [EV_BULLET_HIT_CLIENT_SMALL, EV_BULLET_HIT_CLIENT_LARGE] {
+            let mut e = ev(id, 0, 7, [300.0, 0.0, 50.0]);
+            e.other_entity_num = 7;
+            match resolve_with(&e, &table, &ctx).as_slice() {
+                [Resolved::Tracer {
+                    muzzle,
+                    impact,
+                    flesh: true,
+                }] => {
+                    assert_eq!(*muzzle, Vec3::new(0.0, 0.0, 60.0));
+                    assert_eq!(*impact, Vec3::new(300.0, 0.0, 50.0));
+                }
+                other => panic!("event {id}: {other:?}"),
+            }
+            // A shooter with no muzzle this frame: `CG_GetMuzzlePoint` fails.
+            e.other_entity_num = 8;
+            let rs = resolve_with(&e, &table, &ctx);
+            assert!(matches!(rs.as_slice(), [Resolved::Known]), "{rs:?}");
+        }
+    }
+
     #[test]
     fn footstep_and_landing_groups_are_known_not_unknown() {
         for id in [
@@ -588,8 +630,6 @@ mod tests {
             EV_GRENADE_BOUNCE,
             EV_GRENADE_EXPLODE,
             EV_ROCKET_EXPLODE,
-            EV_BULLET_HIT_CLIENT_SMALL,
-            EV_BULLET_HIT_CLIENT_LARGE,
             EV_OBITUARY,
         ] {
             let e = ev(id, 0, 0, [0.0, 0.0, 0.0]);
