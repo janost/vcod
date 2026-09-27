@@ -173,7 +173,9 @@ impl SnapshotRing {
     }
 
     /// `(a, b)` with `a.server_time <= t < b.server_time` and nothing valid
-    /// between. `None` outside the buffered range.
+    /// between. Outside the buffered range, the nearest valid frame as both,
+    /// so a snapshot arriving late holds the scene rather than emptying it.
+    /// `None` only with no valid frame.
     pub fn two_for_time(&self, t: i32) -> Option<(&Snapshot, &Snapshot)> {
         let mut valid: Vec<&Snapshot> = self
             .slots
@@ -182,10 +184,16 @@ impl SnapshotRing {
             .filter(|s| s.valid)
             .collect();
         valid.sort_by_key(|s| s.server_time);
-        valid
-            .windows(2)
-            .find(|w| w[0].server_time <= t && t < w[1].server_time)
-            .map(|w| (w[0], w[1]))
+        let (first, last) = (*valid.first()?, *valid.last()?);
+        if t < first.server_time {
+            return Some((first, first));
+        }
+        Some(
+            valid
+                .windows(2)
+                .find(|w| w[0].server_time <= t && t < w[1].server_time)
+                .map_or((last, last), |w| (w[0], w[1])),
+        )
     }
 }
 
@@ -669,10 +677,15 @@ mod tests {
         // on a boundary that frame is the earlier of the pair
         let (a, b) = ring.two_for_time(150).unwrap();
         assert_eq!((a.server_time, b.server_time), (150, 200));
-        // outside the buffered range
-        assert!(ring.two_for_time(50).is_none());
-        assert!(ring.two_for_time(200).is_none());
-        assert!(ring.two_for_time(999).is_none());
+        // outside the buffered range the nearest frame is held
+        let held = |t| {
+            let (a, b) = ring.two_for_time(t).unwrap();
+            assert!(std::ptr::eq(a, b), "{t} holds one frame");
+            a.server_time
+        };
+        assert_eq!(held(50), 100);
+        assert_eq!(held(200), 200);
+        assert_eq!(held(999), 200);
     }
 
     #[test]
@@ -687,8 +700,10 @@ mod tests {
         ring.newest_num = Some(3);
 
         assert!(ring.newest().is_none(), "newest must skip an invalid frame");
-        assert!(
-            ring.two_for_time(175).is_none(),
+        let (a, b) = ring.two_for_time(175).unwrap();
+        assert_eq!(
+            (a.server_time, b.server_time),
+            (150, 150),
             "an invalid upper bound is not a straddle"
         );
     }
