@@ -3089,6 +3089,12 @@ impl Server {
             // (object-model doc 23.1). The `pm_type` goes with it: a spawn
             // above changed it with no cmd, and the runtime's gate is what
             // clears a dead or spectating client's `isLookingAt` and hint.
+            // Every body first, at the origin the sim ops and the re-anchor
+            // left, since any of them can stand in another client's aim.
+            for (slot, c) in self.clients.iter().enumerate() {
+                let sim = c.as_ref().and_then(|c| c.sim.as_ref());
+                rt.set_client_body(slot, sim.and_then(|s| s.hit_body(slot)));
+            }
             for (slot, c) in self.clients.iter_mut().enumerate() {
                 if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
                     rt.set_client_pm_type(slot, sim.wire_pm_type());
@@ -3096,7 +3102,11 @@ impl Server {
                     // here, so the ground reading script sees next frame is
                     // taken again after it.
                     rt.set_client_on_ground(slot, sim.on_ground());
-                    rt.set_client_aim(slot, sim.ps.view().eye.into(), sim.aim_angles());
+                    let rifle = self
+                        .weapon_table
+                        .get(sim.ps.weapon as usize)
+                        .is_some_and(|d| d.sounds.rifle_bullet);
+                    rt.set_client_aim(slot, sim.ps.view().eye.into(), sim.aim_angles(), rifle);
                     rt.aim_lookat(slot, self.sv_time_ms);
                     let (hint, string) =
                         rt.cursor_hint_pass(slot, sim.ps.view().eye.into(), sim.view_angles());

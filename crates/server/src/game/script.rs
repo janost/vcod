@@ -847,10 +847,11 @@ impl ScriptRuntime {
     }
 
     /// A client's eye (lean included) and `[pitch, yaw]` aim as the tick left
-    /// them, for `aim_lookat`.
-    pub fn set_client_aim(&mut self, slot: usize, eye: [f32; 3], aim: [f32; 2]) {
+    /// them, for `aim_lookat`, and whether the held weapon is a `rifleBullet`
+    /// one, which picks the priority map the trace ranks bones with.
+    pub fn set_client_aim(&mut self, slot: usize, eye: [f32; 3], aim: [f32; 2], rifle: bool) {
         if let Some(a) = self.host.client_aim.get_mut(slot) {
-            *a = (eye, aim);
+            *a = (eye, aim, rifle);
         }
     }
 
@@ -877,11 +878,11 @@ impl ScriptRuntime {
             self.host.client_lookat[slot] = None;
             return;
         }
-        let (eye, aim) = self.host.client_aim[slot];
+        let (eye, aim, rifle) = self.host.client_aim[slot];
         let host = &mut self.host;
         let hit = self
             .vm
-            .with_cx(|cx| crate::game::trigger::aim_trace(host, cx, eye, aim));
+            .with_cx(|cx| crate::game::trigger::aim_trace(host, cx, slot, eye, aim, rifle, now_ms));
         self.host.client_lookat[slot] = hit;
         if let Some(id) = hit {
             if self.host.triggers.fire(id, now_ms, &mut |_| 0) {
@@ -2484,7 +2485,7 @@ mod tests {
         rt.spawn_client_for_test(0, [0.9, 0.0, 0.0]);
         rt.set_client_state_for_test(0, "playing");
         rt.set_client_pm_type(0, 0);
-        rt.set_client_aim(0, [0.9, 0.0, 60.9], [0.0, 0.0]);
+        rt.set_client_aim(0, [0.9, 0.0, 60.9], [0.0, 0.0], false);
         rt.aim_lookat(0, 50);
         rt.run_frame(100);
         assert_eq!(rt.level_field("hits"), Value::Int(1));
@@ -2517,7 +2518,7 @@ mod tests {
         rt.set_client_state_for_test(0, "playing");
         rt.set_client_pm_type(0, 0);
 
-        rt.set_client_aim(0, [0.0, 0.0, 60.0], [0.0, 0.0]);
+        rt.set_client_aim(0, [0.0, 0.0, 60.0], [0.0, 0.0], false);
         rt.aim_lookat(0, 50);
         rt.run_frame(50);
         assert_eq!(rt.level_field("hits"), Value::Int(1), "one notify");
@@ -2527,7 +2528,7 @@ mod tests {
         assert_eq!(rt.level_field("looking"), Value::Int(1));
 
         // Aimed away: no fire, and the answer drops.
-        rt.set_client_aim(0, [0.0, 0.0, 60.0], [0.0, 90.0]);
+        rt.set_client_aim(0, [0.0, 0.0, 60.0], [0.0, 90.0], false);
         rt.aim_lookat(0, 150);
         rt.run_frame(150);
         assert_eq!(rt.level_field("hits"), Value::Int(1));
@@ -2536,12 +2537,71 @@ mod tests {
         assert_eq!(rt.level_field("looking"), Value::Int(0));
 
         // Every frame it is aimed at, since `G_Trigger` gates nothing.
-        rt.set_client_aim(0, [0.0, 0.0, 60.0], [0.0, 0.0]);
+        rt.set_client_aim(0, [0.0, 0.0, 60.0], [0.0, 0.0], false);
         rt.aim_lookat(0, 250);
         rt.run_frame(250);
         rt.aim_lookat(0, 300);
         rt.run_frame(300);
         assert_eq!(rt.level_field("hits"), Value::Int(3));
+    }
+
+    /// A live body between the eye and a `trigger_lookat` stops the aim
+    /// trace's second pass (mask 0x22802001 carries BODY), so neither the
+    /// fire nor `isLookingAt` happens; the aimer's own body is the pass
+    /// entity and never does (object-model doc 23.1). Moved aside, it fires.
+    #[test]
+    fn a_body_between_the_eye_and_a_lookat_blocks_the_fire_and_islookingat() {
+        let mut rt = ScriptRuntime::for_test("main() { level.hits = 0; }");
+        rt.install_for_test(
+            "trigger_think() { for(;;) { self waittill(\"trigger\", other); \
+             level.hits = level.hits + 1; } }\n\
+             check() { level.looking = self islookingat(level.zone); }",
+        );
+        let zone = rt.spawn_map_entity_for_test([300.0, 0.0, 0.0]);
+        rt.triggers_mut().register(
+            zone,
+            crate::game::trigger::TriggerKind::LookAt,
+            crate::game::trigger::TriggerShape::boxed([-20.0, -20.0, 40.0], [20.0, 20.0, 80.0]),
+            0,
+            0,
+        );
+        rt.set_level_field_for_test("zone", Value::Entity(zone));
+        rt.start_thread_for_test(zone, "trigger_think", 0);
+        rt.run_frame(0);
+        let player = rt.spawn_client_for_test(0, [0.0, 0.0, 0.0]);
+        rt.set_client_state_for_test(0, "playing");
+        rt.set_client_pm_type(0, 0);
+        let body = |slot: usize, x: f32, y: f32| crate::game::combat::HitBody {
+            slot,
+            origin: glam::Vec3::new(x, y, 0.0),
+            yaw: 0.0,
+            mins: glam::Vec3::new(-15.0, -15.0, 0.0),
+            maxs: glam::Vec3::new(15.0, 15.0, 72.0),
+            assembly: Default::default(),
+            legs: 0,
+            torso: 0,
+            legs_start_ms: 0,
+            torso_start_ms: 0,
+            torso_pitch: 0.0,
+            lean: 0.0,
+        };
+        rt.set_client_body(0, Some(body(0, 0.0, 0.0)));
+        rt.set_client_body(1, Some(body(1, 150.0, 0.0)));
+        rt.set_client_aim(0, [0.0, 0.0, 60.0], [0.0, 0.0], false);
+        rt.aim_lookat(0, 50);
+        rt.run_frame(50);
+        assert_eq!(rt.level_field("hits"), Value::Int(0), "the body blocks");
+        rt.start_thread_for_test(player, "check", 50);
+        rt.run_frame(100);
+        assert_eq!(rt.level_field("looking"), Value::Int(0));
+
+        rt.set_client_body(1, Some(body(1, 150.0, 100.0)));
+        rt.aim_lookat(0, 150);
+        rt.run_frame(150);
+        assert_eq!(rt.level_field("hits"), Value::Int(1), "moved aside");
+        rt.start_thread_for_test(player, "check", 150);
+        rt.run_frame(200);
+        assert_eq!(rt.level_field("looking"), Value::Int(1));
     }
 
     /// A script `delete()` takes the trigger row with the entity, and the

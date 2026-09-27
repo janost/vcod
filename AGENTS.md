@@ -541,10 +541,10 @@ engineering setup works.
   (`docs/research/cod11-items.md`); the launch flight, respawn,
   `CONTENTS_NODROP` and `cg_predictItems`'s event choice are not modelled,
   and `trigger_use` stays on the touch pass rather than joining the use key's
-  scan. Not modelled: the killcam, a body
-  between the eye and a lookat (retail's second trace), `enableLinkTo`, a
-  linked player on a moving parent, and script models in weapon and missile
-  traces. A mounted MG (`crates/server/src/game/turret.rs`,
+  scan. A live body between the eye and a lookat
+  stops the aim trace's second pass the way its posed bones stop a bullet.
+  Not modelled: the killcam, `enableLinkTo`, a linked player on a moving
+  parent, and script models in weapon, missile and lookat traces. A mounted MG (`crates/server/src/game/turret.rs`,
   `docs/research/cod11-turrets.md`) mounts inside the use cmd that presses it,
   locks the gunner's pmove and view to the gun's arc, and aims, fires and
   loops its sound in `turret_think_client`'s own pass after `ClientEndFrame`'s
@@ -607,7 +607,7 @@ engineering setup works.
   (the push and its CORPSE mark, which reach the wire `solid` only at the
   pushed player's next cmd) and `end_frame`, then `ClientEndFrame`'s aim
   trace per playing client, off the frame's final eye and aim with `pm_type` and `on_ground` mirrored again
-  beside it, whose fire wakes its waiters at the next tick's script frame,
+  beside it and every client's posed body mirrored again ahead of the first, whose fire wakes its waiters at the next tick's script frame,
   and beside it the cursor hint for the item the use key would pick now,
   then each gunner's `turret_think_client` (the gunner half of a release
   a deleted gun queued, then aim, fire, loop sound, or the release itself on
