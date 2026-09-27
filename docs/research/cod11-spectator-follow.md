@@ -288,7 +288,12 @@ not retail's in those runs: a `kill` read `weapon` 0, `viewHeightTarget` 60
 and `eventSequence` 2 on retail and 9, 8 and 1 on ours, in both followers'
 copies. Ours ran the `kill` after the frame's cmds; it now runs ahead of the
 cmds of its own packet, which still read `pm_type` 0 until the end frame
-(`cod11-combat.md` 9.2 has the addresses and the fix).
+(`cod11-combat.md` 9.2 has the addresses and the fix). VERIFIED live against
+ours, the same recipe rerun on port 29019 after the fix: the target's death
+frame read `events` 189, 155 and `eventSequence` 2; the slot 0 follower read
+it as `pm_type` 0, `viewHeightTarget` 60, `weapon` 0 and `eventSequence` 2,
+then 6 and 8, and the slot 2 one as 6 with the same rest; each respawn frame
+read `legsAnim` 634; and the sight press read pitch 15, then 0.
 
 A stopped copy keeps `pm_flags` less 0x10020, `StopFollowing`'s store
 (0x46bb1), and the spectator's `viewangles` are on the wire, so the press
