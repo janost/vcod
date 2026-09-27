@@ -1053,13 +1053,14 @@ never pasted decompiler output or disassembly listings.
   lean, so a sighted carbine walk is 89.7 and a plain run 224 (the mantle
   doc, "The wish speed"). The motion gate never compared velocity, which is
   how 190 flat survived for a month.
-- A notify wakes a thread started before the notifier inside the same
-  frame, and a `wait 0` reached in the frame's pass resumes before the frame
-  ends: the retail killcam lasts exactly its age and its skip respawns with
-  no dead frame between, and both break with a one-frame lag
-  (`docs/research/cod11-gsc-language.md`, the notify paragraph). The packet
-  pass leaves a `wait 0` for the frame, so a `for(;;) wait 0;` loop spins to
-  the frame's thread cap.
+- Threads due in the same frame resume newest-queued first, and a `wait 0`
+  resumes at once, ahead of everything else due that frame; a notify's
+  waiters resume after the notifier's step, in start order. Retail printed
+  all three (`probe_wait0_yield`, `probe_wait0_loop`, `probe_notify_frame`;
+  `docs/research/cod11-gsc-language.md`, the thread pick paragraph), and the
+  killcam's exact length and its skip's missing dead frame depend on them.
+  An unbounded `wait 0` loop stalls a retail server for good; ours ends the
+  pass at `MAX_THREADS_PER_FRAME`.
 - A thread's own `notify` does not fire its own `endon`. A thread that
   `endon`s an event and then notifies that event itself survives and runs on;
   every *other* thread's `endon` on it still kills. Measured with

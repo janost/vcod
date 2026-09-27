@@ -1,6 +1,7 @@
 //! The frame scheduler. A thread suspends by being left unstepped, which is
 //! the whole reason the compiler emits bytecode rather than walking the AST.
 
+use std::cmp::Reverse;
 use std::rc::Rc;
 
 use crate::atom::Atom;
@@ -34,6 +35,9 @@ pub(crate) struct Thread {
     pub frames: Vec<Frame>,
     pub state: ThreadState,
     pub endons: Vec<(Target, Atom)>,
+    /// When it was last queued: among threads due at the same time, the
+    /// latest queued runs first (`Vm::step_runnable`).
+    pub seq: u64,
 }
 
 impl Vm {
@@ -118,11 +122,13 @@ impl Vm {
         let frame = self.make_frame(func, f, recv, args);
         let id = ThreadId(self.next_thread);
         self.next_thread += 1;
+        let seq = self.queue_seq();
         self.threads.push(Thread {
             id,
             frames: vec![frame],
             state: ThreadState::Runnable,
             endons: Vec::new(),
+            seq,
         });
         if self.spawn_depth < Self::MAX_SPAWN_DEPTH {
             self.spawn_depth += 1;
@@ -208,7 +214,9 @@ impl Vm {
             }
         }
 
-        for t in &mut self.threads {
+        // Queued newest first, so that the pick, last in first out, resumes
+        // them in start order (`probe_notify`, `probe_notify_frame`).
+        for t in self.threads.iter_mut().rev() {
             let matches_wait = matches!(
                 &t.state,
                 ThreadState::WaitingNotify { target: wt, event: we, .. }
@@ -222,6 +230,8 @@ impl Vm {
             else {
                 unreachable!("matches_wait only true for WaitingNotify");
             };
+            t.seq = self.next_seq;
+            self.next_seq += 1;
             let frame = t
                 .frames
                 .last_mut()
@@ -280,9 +290,11 @@ impl Vm {
             Ok(Step::Suspend(Suspend::Wait { seconds })) => {
                 let delay_ms = (seconds.max(0.0) * 1000.0) as i32;
                 let deadline = self.now_ms + delay_ms;
+                let seq = self.queue_seq();
                 if let Some(idx) = self.threads.iter().position(|t| t.id == id) {
                     self.threads[idx].frames = frames;
                     self.threads[idx].state = ThreadState::WaitingUntil(deadline);
+                    self.threads[idx].seq = seq;
                 }
             }
             Ok(Step::Suspend(Suspend::WaitTill {
@@ -336,63 +348,41 @@ impl Vm {
         }
     }
 
-    /// A ceiling on how many ids the id-ascending watermark walk visits in
-    /// one `run_frame` call -- not how many threads it actually steps:
-    /// the walk picks the next id regardless of state, and `step_thread`
-    /// is the one that returns early for a non-`Runnable` thread, so a
-    /// waiting thread costs an iteration here without being stepped.
-    /// `spawn`'s own `MAX_SPAWN_DEPTH` bounds any *one* nested spawn
-    /// chain's native-stack depth, but a spawn bomb's chain still unwinds
-    /// leaving one fresh dangling thread behind for this very walk to
-    /// pick straight back up -- so without a separate cap here, the walk
-    /// would discover an unending sequence of "one more thread" and this
-    /// call would never return, hanging the server's frame loop outright.
-    /// Since the watermark restarts at `None` every call, a VM holding
-    /// more live threads than this constant would walk only the same
-    /// lowest-id prefix every frame and never reach the rest -- silent,
-    /// permanent starvation past this many concurrently live threads.
-    /// 1,000 is still far above any real frame (CoD's own entity cap is
-    /// 1024) while keeping a spawn bomb's worst-case per-frame cost
-    /// bounded to roughly a tenth of what 10,000 cost.
-    const MAX_THREADS_PER_FRAME: u32 = 1_000;
+    /// A ceiling on how many thread steps one pass takes. Retail has none: a
+    /// thread looping on `wait 0` stalls its frame for good, printing
+    /// `WARNING: potential infinite loop in script.` about once a second
+    /// (`cod_lnxded` 0x80a5b8c; docs/research/cod11-gsc-language.md). The
+    /// cap keeps a server here alive through such a script, and a spawn
+    /// bomb, at the cost of leaving the rest of the frame's threads for the
+    /// next one. It sits well above what a real frame steps: the stock
+    /// scripts step a few hundred at most, and `probe_wait0_loop`'s
+    /// thousand `wait 0` turns in one frame have to fit.
+    const MAX_THREADS_PER_FRAME: u32 = 10_000;
 
-    /// Runs one server frame: promotes every `WaitingUntil` thread whose
-    /// deadline has passed to `Runnable`, then hands over to
-    /// [`Vm::step_runnable`], which walks ids in ascending
-    /// order, up to `MAX_THREADS_PER_FRAME` of them, stepping
-    /// (`step_thread`) whichever are `Runnable`. A thread spawned
-    /// mid-frame (a threaded call, run immediately by `spawn`) is visited
-    /// too, since its id is higher than the watermark that admitted it;
-    /// the watermark is a `ThreadId`, not a cached index, since a step's
-    /// deferred notify can add, remove or reorder `self.threads` before
-    /// the walk reaches its next entry. The errors are collected and
-    /// returned rather than propagated, so one bad thread never stops the
-    /// rest of the server.
+    fn queue_seq(&mut self) -> u64 {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        seq
+    }
+
+    /// Runs one server frame: every thread whose `wait` has come due, and
+    /// every thread a notify woke, one at a time until none is left
+    /// (`Vm::step_runnable`). The errors are collected and returned rather
+    /// than propagated, so one bad thread never stops the rest of the
+    /// server.
     pub fn run_frame(&mut self, host: &mut dyn Host, now_ms: i32) -> Vec<ScriptError> {
         self.now_ms = now_ms;
-        for t in &mut self.threads {
-            if let ThreadState::WaitingUntil(deadline) = t.state {
-                if deadline <= now_ms {
-                    t.state = ThreadState::Runnable;
-                }
-            }
-        }
         self.step_runnable(host, true)
     }
 
-    /// The deadline wake of [`Vm::run_frame`] left out: steps whatever is
-    /// already `Runnable` and nothing else, so a `wait` that has come due
-    /// stays parked for the frame proper.
+    /// [`Vm::run_frame`] without the waits: steps the threads a notify woke
+    /// and nothing else, so a `wait`, a `wait 0` included, stays parked for
+    /// the frame proper.
     ///
     /// This is the caller's packet pass -- the host has just started or
     /// notified something outside the frame and wants those threads run to
     /// their next suspend on the clock it happened at, which is what retail's
-    /// `SV_ExecuteClientMessage` callbacks get. Waking deadlines here instead
-    /// would step a thread looping on `wait 0` twice per server frame.
-    ///
-    /// "Whatever is `Runnable`" is the callbacks and the threads their
-    /// notifies woke: the frame's own pass leaves nothing `Runnable` behind,
-    /// since it walks again for a waiter a later thread woke
+    /// `SV_ExecuteClientMessage` callbacks get
     /// (docs/research/cod11-map-cycle.md, 8.3).
     pub fn run_runnable(&mut self, host: &mut dyn Host, now_ms: i32) -> Vec<ScriptError> {
         if !self
@@ -406,69 +396,52 @@ impl Vm {
         self.step_runnable(host, false)
     }
 
-    /// The walk both passes share. `frame` is the frame's own pass, where a
-    /// `wait` that comes due inside the pass (a `wait 0`) resumes before it
-    /// ends.
+    /// The pick both passes share, measured against retail by
+    /// `probe_wait0_yield`, `probe_wait0_loop` and `probe_notify_frame`: the
+    /// earliest due time first, a notify's wake counting as due now, and
+    /// among threads due at the same time the one queued last. A `wait 0`
+    /// is due now and queued last, so it resumes at once, ahead of every
+    /// other thread due this frame; a notify's waiters are queued newest
+    /// first, so they resume in start order after the notifier's step.
+    /// `frame` is the frame's own pass. The packet pass takes woken threads
+    /// only, in start order: the callbacks of several clients' packets and
+    /// the waiters their notifies woke are all woken before it runs, where
+    /// retail runs each packet's to completion in arrival order, so no pick
+    /// among them is retail's, and start order is the one the connect and
+    /// menu gates were taken with.
     fn step_runnable(&mut self, host: &mut dyn Host, frame: bool) -> Vec<ScriptError> {
         let mut errors = Vec::new();
-        let mut last_id: Option<u32> = None;
         let mut steps = 0;
-        // `self.threads` stays sorted by id -- `spawn` only ever appends
-        // (`next_thread` is monotonic), and `notify`'s kill pass only
-        // removes, which preserves order -- so the next id above the
-        // watermark is a binary search, not a linear scan: O(n log n)
-        // total for a frame instead of the O(n²) the old `filter` +
-        // `min_by_key` walk cost once a frame holds many live threads.
-        //
-        // A notify can wake a thread below the watermark, and in the frame's
-        // own pass a `wait 0` comes due at once; retail resumes both before
-        // the frame is over, so the walk starts over from the lowest id until
-        // a walk finds nothing left to run. A stepped thread is never
-        // `Runnable` after its step, so none runs twice unless woken again.
+        let now = self.now_ms;
         while steps < Self::MAX_THREADS_PER_FRAME {
-            let idx = self
+            let next = self
                 .threads
-                .partition_point(|t| last_id.is_some_and(|l| t.id.0 <= l));
-            let Some(t) = self.threads.get(idx) else {
-                if frame {
-                    let now = self.now_ms;
-                    for t in &mut self.threads {
-                        if matches!(t.state, ThreadState::WaitingUntil(d) if d <= now) {
-                            t.state = ThreadState::Runnable;
-                        }
+                .iter()
+                .filter_map(|t| match t.state {
+                    ThreadState::Runnable if frame => Some((now, Reverse(t.seq), t.id)),
+                    // The packet pass keeps start order (see the doc comment).
+                    ThreadState::Runnable => Some((now, Reverse(0), t.id)),
+                    ThreadState::WaitingUntil(d) if frame && d <= now => {
+                        Some((d, Reverse(t.seq), t.id))
                     }
-                }
-                if self
-                    .threads
-                    .iter()
-                    .any(|t| matches!(t.state, ThreadState::Runnable))
-                {
-                    last_id = None;
-                    continue;
-                }
-                break;
+                    _ => None,
+                })
+                .min();
+            let Some((_, _, tid)) = next else {
+                return errors;
             };
-            let tid = t.id;
-            last_id = Some(tid.0);
+            if let Some(t) = self.threads.iter_mut().find(|t| t.id == tid) {
+                t.state = ThreadState::Runnable;
+            }
             self.step_thread(host, tid, &mut errors);
             steps += 1;
         }
-        if steps == Self::MAX_THREADS_PER_FRAME
-            && self
-                .threads
-                .partition_point(|t| last_id.is_some_and(|l| t.id.0 <= l))
-                < self.threads.len()
-        {
-            // Was silent before: a VM past this many concurrently live
-            // threads just stopped simulating the rest with nothing in the
-            // log to say why. Still doesn't step them -- reaping starved
-            // threads is a design question for the next project -- but a
-            // triage now has something to search for.
-            log::warn!(
-                "gsc: MAX_THREADS_PER_FRAME ({}) reached in one run_frame call; threads above the watermark are starved this frame",
-                Self::MAX_THREADS_PER_FRAME
-            );
-        }
+        // Was silent before: a frame past the cap just stopped simulating the
+        // rest with nothing in the log to say why.
+        log::warn!(
+            "gsc: MAX_THREADS_PER_FRAME ({}) reached in one pass; the threads still due wait for the next",
+            Self::MAX_THREADS_PER_FRAME
+        );
         errors
     }
 
@@ -937,11 +910,9 @@ mod tests {
     }
 
     /// A notify from a later-started thread wakes an earlier-started waiter
-    /// inside the same frame, as retail's synchronous notify does: the stock
-    /// killcam's `waittill("end_killcam")` resumes on the frame its own
-    /// `waitKillcamTime` child notifies it, which the retail tdm hit capture
-    /// shows as a replay exactly `archivetime` long
-    /// (docs/research/cod11-spectator-follow.md, section 12).
+    /// inside the same frame (`probe_notify_frame`): the stock killcam's
+    /// `waittill("end_killcam")` resumes on the frame its own
+    /// `waitKillcamTime` child notifies it.
     #[test]
     fn a_later_thread_s_notify_resumes_an_earlier_waiter_in_the_same_frame() {
         let mut vm = vm_with(
@@ -962,11 +933,7 @@ mod tests {
     }
 
     /// A `wait 0` reached inside a frame's pass resumes before the frame is
-    /// over, the way the retail skip of a killcam goes from the replay to the
-    /// respawned player with no dead frame between: `waitRespawnButton`
-    /// opens with `wait 0` and still spawns on the frame of the press
-    /// (docs/research/cod11-spectator-follow.md, section 12). The packet pass
-    /// leaves one for the frame.
+    /// over (`probe_wait0_yield`); the packet pass leaves one for the frame.
     #[test]
     fn a_wait_0_inside_the_frame_resumes_in_the_same_frame() {
         let mut vm = vm_with(r#"f() { wait 1; wait 0; seen(); }"#);
@@ -1267,33 +1234,24 @@ mod tests {
         );
     }
 
-    /// Past `MAX_THREADS_PER_FRAME` (1,000) live threads, the ones above
-    /// the id watermark are starved for the frame -- `run_frame`'s walk
-    /// still only visits the lowest 1,000 ids, whether that walk is the old
-    /// linear scan or the `partition_point` binary search it was replaced
-    /// with. This pins the behavior (and, incidentally, that the
-    /// replacement didn't change it) rather than the `log::warn!` that now
-    /// also fires when it happens, which nothing in this suite captures.
+    /// A thread looping on `wait 0` is picked again after every turn, so it
+    /// takes the whole pass; retail stalls the frame on it for good, and the
+    /// cap here ends the pass instead, the other threads due waiting for the
+    /// next one.
     #[test]
-    fn starving_past_max_threads_per_frame_leaves_the_excess_unstepped_this_frame() {
-        let mut vm = vm_with("main() { wait 1; done(); }");
+    fn a_wait_0_spin_ends_the_pass_at_the_cap() {
+        let mut vm = vm_with(
+            r#"main() { wait 0.05; done(); }
+            spin() { wait 0.05; for (;;) wait 0; }"#,
+        );
         let mut host = TestHost::default();
-        let f = vm.func_ref("test/script", "main");
-        for _ in 0..1002 {
-            vm.start_thread(&mut host, 0, f, None, vec![]);
-        }
-        assert_eq!(
-            vm.thread_count(),
-            1002,
-            "all spawned, all waiting on their own wait"
-        );
-
-        vm.run_frame(&mut host, 2000);
-        assert_eq!(
-            vm.thread_count(),
-            2,
-            "the two threads past the watermark were starved this frame"
-        );
+        let main = vm.func_ref("test/script", "main");
+        let spin = vm.func_ref("test/script", "spin");
+        vm.start_thread(&mut host, 0, main, None, vec![]);
+        vm.start_thread(&mut host, 0, spin, None, vec![]);
+        vm.run_frame(&mut host, 50);
+        assert!(!host.calls.iter().any(|(n, _)| n == "done"));
+        assert_eq!(vm.thread_count(), 2);
     }
 
     /// The `now_ms = 0` every other `start_thread` test in this suite

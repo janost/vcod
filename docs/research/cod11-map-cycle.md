@@ -1124,8 +1124,8 @@ parked on `menuresponse` before the `t 0` it queued can be answered, and the
 `sd` gates now answer the menu the instant it opens instead of a frame later.
 A waiter a later-started thread woke used to be left `Runnable` by the frame's
 pass and resumed here, on the previous frame's clock; the frame's pass now
-walks again for it, which the retail killcam's length measures
-(`cod11-spectator-follow.md` 12.7).
+takes it, which `probe_notify_frame` measures (`cod11-gsc-language.md`, the
+thread pick paragraph).
 
 The `sd` half of the run is therefore still unmeasured against retail: the
 elimination-driven restart, the team scores, the win announcements and the

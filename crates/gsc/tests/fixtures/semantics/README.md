@@ -175,3 +175,16 @@ this crate.
 so need a client to connect before they log anything. `capture_probes.sh`
 cannot drive one and `semantics_ab.rs` does not pair them; that directory's
 own README carries the two-shell run recipe and each probe's measurement.
+
+`probe_notify_frame`, `probe_wait0_yield` and `probe_wait0_loop` measure the
+order a frame's threads resume in, against a frame counter a ticker bumps or
+against each other's log lines: earliest due first, then the last queued
+first, so a `wait 0` resumes at once and a notify's waiters resume after the
+notifier's step in start order (`docs/research/cod11-gsc-language.md`, the
+thread pick paragraph). `probe_wait0_loop` bounds its loop at a thousand
+turns on purpose: an unbounded `for(;;) wait 0;` never lets a retail frame
+end, printing the engine's `potential infinite loop` warning about once a
+second at either `developer` setting, so the server never reaches the next
+`logPrint` and the capture would be empty. That run was taken by hand, with
+`developer 0`, and is described in the same paragraph rather than captured
+here.

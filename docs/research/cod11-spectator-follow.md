@@ -387,10 +387,12 @@ lookup, the copy's retry, the shift and the snapshot's entity source.
   replayed frame straight to the victim alive at a spawn, with no dead frame
   between, in all three runs. INFERRED: `waitSkipKillcamButton`'s notify
   resumed `killcam`, and `respawn`'s `waitRespawnButton`, past its opening
-  `wait 0`, read the same press, all inside one frame.
-- INFERRED, from the natural length being the age exactly: `waitKillcamTime`,
-  started after `killcam`, resumed `killcam`'s `waittill("end_killcam")` on
-  the frame of its own notify.
+  `wait 0`, read the same press, all inside one frame; `probe_wait0_yield`
+  measures that a `wait 0` resumes inside its frame.
+- VERIFIED, `probe_notify_frame` (`cod11-gsc-language.md`, the thread pick):
+  a notify's waiters resume on the notifier's frame, whichever was started
+  first, which is why `waitKillcamTime`'s notify ends `killcam` on the frame
+  the age runs out and the natural length is the age exactly.
 - VERIFIED live, sd: at the end the victim read the attacker with `pm_flags`
   0x10000, `deltaTime` 0, no teleport flip and no empty frame, and kept
   following it live for the remaining 100 s; its use presses did nothing.
@@ -448,10 +450,9 @@ the replay read 0x18, weapon 0 and both HUD arrays empty. The same run with
 victim alive at a spawn, with no dead frame between, three times out of
 three.
 
-Two scheduler rules came with it, both off 12.7's timings: a notify that
-wakes a thread started before the notifier resumes it in the same frame's
-pass, and a `wait 0` reached in the frame's pass resumes in that pass
-(`vcod-gsc`'s `step_runnable`).
+The scheduler's pick came with it (`vcod-gsc`'s `step_runnable`,
+`cod11-gsc-language.md`'s thread pick paragraph, measured by three retail
+probes): 12.7's timings break with a one-frame lag without it.
 
 Where it is not retail's:
 

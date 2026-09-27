@@ -541,17 +541,52 @@ check) with a different message text, which the harness does not compare.
 **Notify wake order: start order, VERIFIED.** Two threads waiting on one
 event on `level` wake in the order they were started.
 
-**A notify and a `wait 0` resolve inside the frame, INFERRED from the retail
-killcam's timings (`cod11-spectator-follow.md` 12.7).** A killcam lasts
-exactly its age, so `waitKillcamTime`'s notify resumed `killcam`, the thread
-that started it, on the same frame; and a skipped one goes from the replay to
-the respawned player with no dead frame between, so `waitRespawnButton`'s
-opening `wait 0` resumed inside the frame it was reached in. vcod's frame pass
-(`Vm::run_frame`) walks the threads again, from the lowest id, while any is
-left runnable, a `wait` due by the frame's clock counting as runnable; the
-packet pass (`Vm::run_runnable`) leaves a `wait 0` for the frame. A woken
-thread still runs after the pass reaches it rather than inside the notify, so
-the order of two things inside one frame can differ from retail's.
+**The thread pick: due time first, then last queued first, VERIFIED
+(`probe_notify_frame`, `probe_wait0_yield`, `probe_wait0_loop`, retail
+2026-09-27).** Retail resumes the threads of a frame one at a time, the one
+due earliest first, and among threads due at the same time the one that was
+queued last. Four consequences, each printed by retail:
+
+- Two threads whose `wait 0.1` falls due on the same frame resume newest
+  first: `probe_wait0_yield`'s `d` before `c`, both started in that order
+  from `main`. The same probe's `a` and `b`, which each `wait 0` from `main`
+  at load, resume `b` then `a`. `probe_notify_frame`'s frame counter, bumped
+  by a ticker started first, still reads the new frame at the notifier and
+  at `main`'s own `wait 1`: the ticker queued its wait later, so it goes
+  first.
+- A `wait 0` reached inside a frame is due now and queued last, so the thread
+  resumes at once, before any other thread due that frame:
+  `probe_wait0_yield`'s `d` logs `before` and `after` with nothing between,
+  and `probe_wait0_loop`'s thousand turns of `i++; wait 0` all land in one
+  frame, ahead of a logger due on the same frame but queued earlier. With no
+  bound the loop never lets the frame end: retail printed `WARNING:
+  potential infinite loop in script.` 16 times in a 20 s run, at `developer`
+  0 and 1 alike, and logged nothing else after the loop started. VERIFIED:
+  `cod_lnxded` 0x80a5b8c pushes that string (0x80d7d60) after an `rdtsc` at
+  0x80a5b63; INFERRED from the two: the warning is a time budget, not a
+  count. The
+  `ERROR: ... killing thread` arm next to it was never reached.
+- A notify does not run its waiters inside the notifying statement:
+  `probe_notify_frame`'s notifier logs past its `notify` first. The waiters
+  resume in the same frame, after the notifier's step, in start order
+  whether they were started before or after the notifier (`probe_notify` is
+  the same order). A waiter that then does `wait 0` resumes at once, before
+  the next waiter.
+- INFERRED: a killcam therefore lasts exactly its age and its skip respawns with no
+  dead frame between (`cod11-spectator-follow.md` 12.7): `waitKillcamTime`'s
+  notify resumes `killcam`, which started it, on the same frame, and
+  `waitRespawnButton`'s opening `wait 0` resumes on the frame it was reached.
+
+vcod's `Vm::step_runnable` is that pick: a `wait` stamps the thread with a
+queue number, a notify stamps its waiters newest first, and the frame's pass
+takes the earliest due, highest stamp until nothing is due. Where it is not
+retail's: the pass stops after `MAX_THREADS_PER_FRAME` (10,000) steps and
+leaves the rest for the next frame, where retail stalls for good; and the
+packet pass (`Vm::run_runnable`) takes woken threads only, in start order,
+leaving a `wait 0` for the frame; neither is measured. A last-queued-first
+pick there reordered the two gate clients' joins and moved their spawn
+points, so what retail does when several clients' packets land in one frame
+is the open question.
 
 **A receiver-less call keeps the caller's `self`, VERIFIED (`probe_self`).**
 A plain `f()`, a `[[ptr]]()` and a `thread f()` all inherit the calling
