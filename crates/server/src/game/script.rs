@@ -956,6 +956,18 @@ impl ScriptRuntime {
         }
     }
 
+    /// A client's body as the tick's moves left it, for a scripted blast.
+    pub fn set_client_body(&mut self, slot: usize, body: Option<crate::game::combat::HitBody>) {
+        if let Some(b) = self.host.client_bodies.get_mut(slot) {
+            *b = body;
+        }
+    }
+
+    /// The animtree a builtin poses a body with.
+    pub fn set_player_anims(&mut self, anims: Option<Rc<vcod_common::animtree::PlayerAnims>>) {
+        self.host.anims = anims;
+    }
+
     /// A client's `ps.grenadeTimeLeft` as the tick's moves left it, for the
     /// death drop (`docs/research/cod11-combat.md` 5.1 step 5). 0 for a slot
     /// with no sim.

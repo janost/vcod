@@ -518,8 +518,9 @@ engineering setup works.
   spawns an `eType` 4 that flies on a gravity trajectory, bounces off world
   and props, comes to rest, and explodes on its own ring at the end of its
   fuse, with the blast walking live clients through retail's linear falloff
-  and `CanDamage`'s five-trace fraction. A player killed mid-cook drops the
-  live one. A level ends the way retail's does, in script: `exitLevel` and
+  and `CanDamage`'s five-trace fraction, whose probes the world, script
+  models and every other live player's posed bones stop. A player killed
+  mid-cook drops the live one. A level ends the way retail's does, in script: `exitLevel` and
   `map_restart` queue a console line, and the console
   (`crates/server/src/console.rs`) runs `map`, `map_restart` and `map_rotate`
   off `sv_mapRotation`, so a `dm` time limit reaches the intermission, the
@@ -542,8 +543,8 @@ engineering setup works.
   and `trigger_use` stays on the touch pass rather than joining the use key's
   scan. Not modelled: the killcam, a body
   between the eye and a lookat (retail's second trace), `enableLinkTo`, a
-  linked player on a moving parent, and script models in weapon, blast and
-  missile traces. A mounted MG (`crates/server/src/game/turret.rs`,
+  linked player on a moving parent, and script models in weapon and missile
+  traces. A mounted MG (`crates/server/src/game/turret.rs`,
   `docs/research/cod11-turrets.md`) mounts inside the use cmd that presses it,
   locks the gunner's pmove and view to the gun's arc, and aims, fires and
   loops its sound in `turret_think_client`'s own pass after `ClientEndFrame`'s
@@ -585,7 +586,8 @@ engineering setup works.
   op, both applied after the script frame; the ammo it reads is the host's
   mirror, copied from each sim once per round before the pass and moved by every weapon
   op after, so a `dropItem` in the script frame sees what the pass took. The
-  entity states `cloneplayer` reads are mirrored last in that pass. Then the
+  entity states `cloneplayer` reads and the posed bodies a scripted blast
+  traces are mirrored last in that pass. Then the
   queued attacks themselves (a trace each, an impact temp entity and a hit per
   player struck), then each client's last cmd buttons for `useButtonPressed`,
   then the missiles fly and any due fuse explodes, then the blasts become
