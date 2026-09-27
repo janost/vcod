@@ -841,10 +841,6 @@ pub struct Server {
     /// `weaponClass` every frame and the frame loop must not read a pk3.
     /// `Rc` so a snapshot/move closure can hold it without borrowing `self`.
     weapon_table: Rc<crate::weapons::WeaponTable>,
-    /// The grenades this tick's moves threw, in the order they happened.
-    /// Filled by `replay_moves`, drained by `tick` into missiles; a shot or
-    /// a swing is traced inside the cmd that took it.
-    pending_attacks: Vec<Attack>,
     /// The number of the last client packet executed, bots' included: what
     /// `replay_moves` orders every client's cmds and `kill`s by.
     packet_seq: u64,
@@ -1038,7 +1034,6 @@ impl Server {
             script: None,
             anims: None,
             weapon_table: Rc::new(crate::weapons::WeaponTable::empty()),
-            pending_attacks: Vec::new(),
             packet_seq: 0,
             pending_explosions: Vec::new(),
             cvar_overrides: Vec::new(),
@@ -2597,7 +2592,6 @@ impl Server {
         // Step 5: the game module is unloaded, its object table with it, and
         // step 8's `memset(&sv, 0, ...)` takes everything the level queued.
         self.script = None;
-        self.pending_attacks.clear();
         self.pending_explosions.clear();
         self.pending_script_commands.clear();
         self.weapon_changes.clear();
@@ -2719,7 +2713,6 @@ impl Server {
         let (_, carry) = self.lift_persistence();
         // Step 4's six counters: what this level queued and nothing else,
         // since a restart keeps the map and its collision.
-        self.pending_attacks.clear();
         self.pending_explosions.clear();
         self.pending_script_commands.clear();
         self.weapon_changes.clear();
@@ -3030,41 +3023,7 @@ impl Server {
         let moved = self.replay_moves();
         let weapons = self.weapon_table.clone();
 
-        // Then the frame's throws, which spawn their missiles below; the
-        // shots and swings were traced inside their own cmds.
         let mut hits = Vec::new();
-        let mut throws: Vec<(usize, u8, i32, glam::Vec3, glam::Vec3, i32)> = Vec::new();
-        for attack in std::mem::take(&mut self.pending_attacks) {
-            let Attack::Throw {
-                slot,
-                weapon,
-                fuse_left_ms,
-                aim,
-            } = attack
-            else {
-                continue;
-            };
-            let me = self.clients[slot].as_ref().and_then(|c| c.sim.as_ref());
-            // The throw leaves the thrower's eye at the weapon file's speed
-            // (combat doc, 11.3); the missile pass below is what spawns it.
-            if let (Some(me), Some(def)) = (me, weapons.get(weapon as usize)) {
-                let (origin, velocity) = crate::game::missile::throw_velocity(&me.ps, aim, def);
-                // The projectile's model, indexed when the item was
-                // registered (`GameHost::register_item`). A miss means the
-                // map load stopped registering it and the client has no model
-                // to draw the grenade with, which is silent on the wire.
-                let name = def.projectile_model.as_deref().unwrap_or_default();
-                let model = crate::configstrings::weapon_model_index(&self.configstrings, name);
-                if model == 0 && !name.is_empty() {
-                    log::warn!(
-                        "the grenade client {slot} threw carries {name:?}, \
-                         which nothing precached"
-                    );
-                }
-                throws.push((slot, weapon, model, origin, velocity, fuse_left_ms));
-            }
-        }
-
         let mut client_commands = Vec::new();
         let mut console_lines: Vec<String> = Vec::new();
         let mut ranks_dirty = false;
@@ -3083,23 +3042,10 @@ impl Server {
                     );
                 }
             }
-            // The throws the weapon step queued, then one `G_RunMissile`
-            // each. Retail's missile pass runs ahead of the damage
-            // callbacks, and a usercmd is executed between frames, so a
-            // grenade thrown on this tick was armed on the last one and has
-            // already flown a frame by the time the snapshot goes out
-            // (`docs/research/cod11-combat.md` sections 11 and 12).
-            for (slot, weapon, model, origin, velocity, fuse_left_ms) in throws {
-                rt.fire_grenade(
-                    slot,
-                    weapon,
-                    model,
-                    origin,
-                    velocity,
-                    fuse_left_ms,
-                    self.sv_time_ms.wrapping_sub(FRAME_MS),
-                );
-            }
+            // One `G_RunMissile` each. A grenade thrown on this tick was
+            // spawned inside its cmd on the last frame's `level.time`, so it
+            // has already flown a frame by the time the snapshot goes out
+            // (`docs/research/cod11-combat.md` 11.4).
             let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
                 .clients
                 .iter()
@@ -3591,9 +3537,8 @@ impl Server {
     /// Each cmd is `ClientThink_real`: the move, then the shots and swings it
     /// raised, traced and delivered to the damage callback there and then
     /// against every client as its own packets so far left it, then the touch
-    /// pass (combat doc, 16). Returns what each slot replayed, for the trace
-    /// line `send_snapshots` writes. The throws land in `pending_attacks`,
-    /// which the missile path drains.
+    /// pass (combat doc, 16). A throw spawns its missile there too. Returns
+    /// what each slot replayed, for the trace line `send_snapshots` writes.
     fn replay_moves(&mut self) -> Vec<MoveSummary> {
         use vcod_common::movetrace::{Body, MoveWorld};
         use vcod_common::pmove::weapon::{EV_FIRE_MELEE, EV_FIRE_WEAPON, EV_FIRE_WEAPON_LASTSHOT};
@@ -3729,8 +3674,8 @@ impl Server {
                     bodies.extend(sim.body(slot as u32));
                 }
             }
-            // `ClientEvents` (0x3fd24): this cmd's shots and swings, fired
-            // below before its touch pass.
+            // `ClientEvents` (0x3fd24): this cmd's shots, swings and throws,
+            // fired below before its touch pass.
             let mut attacks = Vec::new();
             for e in &raised {
                 let weapon = sim.ps.weapon;
@@ -3741,7 +3686,7 @@ impl Server {
                     // A grenade's fire event is the throw, and the parm is
                     // what is left of the fuse (combat doc, 1.11).
                     EV_FIRE_WEAPON | EV_FIRE_WEAPON_LASTSHOT if grenade => {
-                        self.pending_attacks.push(Attack::Throw {
+                        attacks.push(Attack::Throw {
                             slot,
                             weapon,
                             fuse_left_ms: e.parm,
@@ -3980,10 +3925,52 @@ impl Server {
         queue_death_scoreboards(&self.clients, rt);
     }
 
+    /// `FireWeapon`'s grenade arm: `fire_grenade` from the muzzle this cmd
+    /// left, stamped with the `level.time` a cmd runs under, the frame before
+    /// the one being built (combat doc, 11.3 and 11.4).
+    fn throw(
+        &mut self,
+        slot: usize,
+        weapon: u8,
+        fuse_left_ms: i32,
+        aim: [f32; 2],
+        weapons: &crate::weapons::WeaponTable,
+    ) {
+        let (Some(me), Some(def)) = (
+            self.clients[slot].as_ref().and_then(|c| c.sim.as_ref()),
+            weapons.get(weapon as usize),
+        ) else {
+            return;
+        };
+        let (origin, velocity) = crate::game::missile::throw_velocity(&me.ps, aim, def);
+        // The projectile's model, indexed when the item was registered
+        // (`GameHost::register_item`). A miss means the map load stopped
+        // registering it and the client has no model to draw the grenade
+        // with, which is silent on the wire.
+        let name = def.projectile_model.as_deref().unwrap_or_default();
+        let model = crate::configstrings::weapon_model_index(&self.configstrings, name);
+        if model == 0 && !name.is_empty() {
+            log::warn!("the grenade client {slot} threw carries {name:?}, which nothing precached");
+        }
+        let level_ms = self.sv_time_ms.wrapping_sub(FRAME_MS);
+        if let Some(rt) = self.script.as_mut() {
+            rt.fire_grenade(
+                slot,
+                weapon,
+                model,
+                origin,
+                velocity,
+                fuse_left_ms,
+                level_ms,
+            );
+        }
+    }
+
     /// `FireWeapon` inside the cmd that raised it: the trace against the
     /// world and every client as it stands now, and each impact and damage
     /// callback in the order the round met them, so a player one round kills
-    /// is out of the way of the next (combat doc, 16).
+    /// is out of the way of the next (combat doc, 16). A throw spawns its
+    /// missile here instead (11.4).
     fn fire(
         &mut self,
         attack: Attack,
@@ -3994,7 +3981,15 @@ impl Server {
         let (attacker, weapon) = match attack {
             Attack::Shot(s) => (s.slot, s.weapon),
             Attack::Swing { slot, weapon, .. } => (slot, weapon),
-            Attack::Throw { .. } => return,
+            Attack::Throw {
+                slot,
+                weapon,
+                fuse_left_ms,
+                aim,
+            } => {
+                self.throw(slot, weapon, fuse_left_ms, aim, weapons);
+                return;
+            }
         };
         let Some(def) = weapons.get(weapon as usize) else {
             return;
@@ -6068,19 +6063,75 @@ mod tests {
             let cmd = frag_throw_cmd(i, st, frag);
             sv.clients[0].as_mut().unwrap().pending.push(cmd.into());
             sv.replay_moves();
-            let thrown = sv
-                .pending_attacks
-                .iter()
-                .any(|a| matches!(a, Attack::Throw { .. }));
+            let rt = sv.script.as_ref().unwrap();
+            let thrown = rt.missiles().entities(sv.proto).next().is_some();
             if thrown {
                 assert!(
-                    !sv.script.as_ref().unwrap().host.client_weapons[0].holds(frag),
+                    !rt.host.client_weapons[0].holds(frag),
                     "the spent frag was still held when its cmd's touch ran"
                 );
                 return;
             }
         }
         panic!("the frag was never thrown");
+    }
+
+    /// `FireWeapon` spawns the grenade inside the release cmd (combat doc,
+    /// 11.4): a run queued behind the release in the same tick leaves the
+    /// missile where the release stood, stamped with the frame before.
+    #[test]
+    fn a_throw_leaves_from_its_own_cmd_not_the_tick_s_last() {
+        let Some((mut sv, st, frag)) = last_frag_in_hand("main() {}") else {
+            return;
+        };
+        let now = Instant::now();
+        for i in 0..20 {
+            let cmd = frag_throw_cmd(i, st, frag);
+            sv.clients[0].as_mut().unwrap().pending.push(cmd.into());
+            sv.tick(now);
+        }
+        let stood = sv.clients[0]
+            .as_ref()
+            .unwrap()
+            .sim
+            .as_ref()
+            .unwrap()
+            .origin();
+        let release = frag_throw_cmd(20, st, frag);
+        let run = UserCmd {
+            server_time: release.server_time + 300,
+            forward: 127,
+            ..release
+        };
+        let c = sv.clients[0].as_mut().unwrap();
+        c.pending.push(release.into());
+        c.pending.push(run.into());
+        sv.tick(now);
+        let ran = sv.clients[0]
+            .as_ref()
+            .unwrap()
+            .sim
+            .as_ref()
+            .unwrap()
+            .origin();
+        assert!(
+            (glam::Vec3::from(ran) - glam::Vec3::from(stood)).length() > 30.0,
+            "the run behind the release moved {stood:?} to {ran:?}"
+        );
+        let rt = sv.script.as_ref().unwrap();
+        let (_, e) = rt
+            .missiles()
+            .entities(sv.proto)
+            .next()
+            .expect("the release threw nothing");
+        let traj = vcod_common::net::trajectory::Trajectory::read(&e, sv.proto, "pos");
+        assert_eq!(traj.tr_time, sv.sv_time_ms - FRAME_MS);
+        assert_eq!(
+            [traj.base.x, traj.base.y],
+            [stood[0].trunc(), stood[1].trunc()],
+            "the grenade left from {:?}, not the release's {stood:?}",
+            traj.base
+        );
     }
 
     /// The take happens once, at the cmd's touch: a frag the script gives
