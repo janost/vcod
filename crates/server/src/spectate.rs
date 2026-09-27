@@ -306,6 +306,9 @@ pub struct ClientSim {
     pub follow_wire: Option<msg::PlayerState>,
     /// What a stopped follow left in the playerstate, until the next spawn.
     residue: Option<Residue>,
+    /// This client's own frame as its last `ClientEndFrame` left it, `None`
+    /// since a spawn, whose own end frame is this frame's.
+    pub end_frame_wire: Option<msg::PlayerState>,
 }
 
 /// A stopped follow's copy, under the fields a spectator's own frame writes.
@@ -439,6 +442,7 @@ impl ClientSim {
             respawned: false,
             follow_wire: None,
             residue: None,
+            end_frame_wire: None,
         }
     }
 
@@ -596,6 +600,7 @@ impl ClientSim {
         self.respawned = true;
         self.follow_wire = None;
         self.residue = None;
+        self.end_frame_wire = None;
         // `G_SetClientContents`, then the spawn's link.
         self.contents = if mode == PmType::Normal {
             CONTENTS_BODY

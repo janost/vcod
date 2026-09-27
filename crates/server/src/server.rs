@@ -4004,7 +4004,11 @@ impl Server {
                     None => {
                         let tc = self.clients.get(t)?.as_ref()?;
                         let ts = tc.sim.as_ref()?;
-                        let ps = ts.to_wire(self.proto, t as i32, tc.last_processed_st);
+                        let mut ps = ts.to_wire(self.proto, t as i32, tc.last_processed_st);
+                        // The end-frame loop runs in slot order.
+                        if let (true, Some(last)) = (slot < t, ts.end_frame_wire.as_ref()) {
+                            follow::before_end_frame(&mut ps, last, self.proto);
+                        }
                         (ps, ts.eye_origin(), false)
                     }
                 };
@@ -4018,13 +4022,22 @@ impl Server {
             })
             .collect();
 
-        // What a follow leaves in the spectator's playerstate when it stops.
+        // What a follow leaves in the spectator's playerstate when it stops,
+        // and each followable client's frame as this end frame left it.
         for (slot, f) in follow_frames.iter().enumerate() {
-            if let (Some(f), Some(sim)) =
-                (f, self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()))
-            {
+            let Some(c) = self.clients[slot].as_mut() else {
+                continue;
+            };
+            let command_time = c.last_processed_st;
+            let Some(sim) = c.sim.as_mut() else {
+                continue;
+            };
+            if let Some(f) = f {
                 sim.follow_wire = Some(f.ps.clone());
             }
+            sim.end_frame_wire = sim
+                .own_view
+                .then(|| sim.to_wire(self.proto, slot as i32, command_time));
         }
 
         // `SV_BuildClientSnapshot` reads each client's `archivetime` again and
@@ -6845,6 +6858,7 @@ mod tests {
         rig.press(msg::BUTTON_ATTACK);
         rig.script().host.client_vitals[1].dead = true;
         rig.script().set_client_state_for_test(1, "dead");
+        rig.step(0);
         let s = rig.step(0);
         assert_eq!(ps_i32(&s, "clientNum"), 1);
         assert_eq!(ps_i32(&s, "pm_type"), 6);
@@ -7187,5 +7201,22 @@ mod tests {
         assert_eq!(ps_i32(&s, "clientNum"), 0);
         assert_eq!(ps_i32(&s, "pm_type"), 6);
         assert_eq!(ps_i32(&rig.step(0), "pm_type"), 4);
+    }
+
+    /// `G_RunFrame`'s end-frame loop runs in slot order, so a follower
+    /// numbered below its target copies it before the target's own
+    /// `ClientEndFrame` has run: what that end frame writes reaches the
+    /// follower a frame late. The retail dm run: the death frame read
+    /// `health` 0 and `pm_type` 0 in slot 0 and 6 in slot 2.
+    #[test]
+    fn a_follower_below_its_target_reads_the_end_frame_s_fields_a_frame_late() {
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        rig.script().host.client_vitals[1].dead = true;
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 1);
+        assert_eq!(s.ps.health(), 0);
+        assert_eq!(ps_i32(&s, "pm_type"), 0);
+        assert_eq!(ps_i32(&rig.step(0), "pm_type"), 6);
     }
 }
