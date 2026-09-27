@@ -983,13 +983,31 @@ impl CollisionWorld {
                 break;
             }
         }
-        for (prim, lo, hi) in &self.prims {
-            if let Prim::Brush(b) = prim {
-                if p.cmple(*hi).all() && p.cmpge(*lo).all() {
-                    let brush = &self.brushes[*b as usize];
-                    if self.brush_linked(brush) && brush.planes.iter().all(|&(n, d)| n.dot(p) <= d)
-                    {
-                        out |= brush.content_flags;
+        if self.nodes.is_empty() {
+            return out;
+        }
+        // The traces' BVH: pmove samples this on every step.
+        let mut stack = vec![0u32];
+        while let Some(i) = stack.pop() {
+            let node = &self.nodes[i as usize];
+            if !(p.cmple(node.hi).all() && p.cmpge(node.lo).all()) {
+                continue;
+            }
+            if node.count == 0 {
+                stack.push(node.first);
+                stack.push(node.second);
+                continue;
+            }
+            let first = node.first as usize;
+            for (prim, lo, hi) in &self.prims[first..first + node.count as usize] {
+                if let Prim::Brush(b) = prim {
+                    if p.cmple(*hi).all() && p.cmpge(*lo).all() {
+                        let brush = &self.brushes[*b as usize];
+                        if self.brush_linked(brush)
+                            && brush.planes.iter().all(|&(n, d)| n.dot(p) <= d)
+                        {
+                            out |= brush.content_flags;
+                        }
                     }
                 }
             }
@@ -2386,6 +2404,45 @@ mod tests {
         );
         assert!(t.fraction < 1.0 && t.normal.z > 0.9, "{t:?}");
         assert_eq!(super::sound_material(t.surface_flags), 6);
+    }
+
+    /// The BVH walk reports what a scan of every brush does, on and off
+    /// brushes: each prim's centre and corners, where the walk's node bounds
+    /// are tightest.
+    #[test]
+    fn point_contents_matches_a_scan_of_every_brush() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let bsp = crate::bsp::parse(&fs.read("maps/mp/mp_carentan.bsp").unwrap()).unwrap();
+        let world = CollisionWorld::build(&bsp, &[]);
+        let scan = |p: Vec3| {
+            let water = world.water.iter().any(|v| {
+                p.cmple(v.hi).all()
+                    && p.cmpge(v.lo).all()
+                    && v.planes.iter().all(|&(n, d)| n.dot(p) <= d)
+            });
+            world
+                .prims
+                .iter()
+                .filter_map(|(prim, _, _)| match prim {
+                    Prim::Brush(b) => Some(&world.brushes[*b as usize]),
+                    _ => None,
+                })
+                .filter(|b| world.brush_linked(b) && b.planes.iter().all(|&(n, d)| n.dot(p) <= d))
+                .fold(if water { CONTENTS_WATER } else { 0 }, |c, b| {
+                    c | b.content_flags
+                })
+        };
+        let mut hits = 0;
+        for &(_, lo, hi) in world.prims.iter().step_by(7) {
+            for p in [(lo + hi) * 0.5, lo, hi, hi + Vec3::ONE] {
+                let want = scan(p);
+                hits += usize::from(want != 0);
+                assert_eq!(world.point_contents(p), want, "at {p}");
+            }
+        }
+        assert!(hits > 100, "only {hits} samples inside a brush");
     }
 
     /// mp_harbor carries both stock-MP water and ladders; both must survive

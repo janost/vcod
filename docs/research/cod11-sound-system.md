@@ -534,10 +534,11 @@ or the shooter's start point cannot be computed (entity has no model, syscall
 
 Flesh hits do **not** skip it: `CG_BulletHitFlesh` = `FUN_300396f0` @
 `0x300396f0` (cases 175/176) plays `bullet_small_<surf>` / `bullet_large_<surf>`
-at the impact as `ENTITYNUM_WORLD` and then calls the same `FUN_30039590`. On a
-public server 175/176 never reach spectators (events-and-fx doc, section 2), so
-for vcod flesh hits arrive as 173/174 with `surfType == 7` and take the
-`FUN_30039640` path, which is the same thing.
+at the impact as `ENTITYNUM_WORLD` and then calls the same `FUN_30039590`.
+175/176 reach only the victim and whoever follows it; everyone else gets the
+flesh hit as 173/174 with `surfType == 7` through `FUN_30039640`
+(events-and-fx doc, section 2). vcod plays the same alias and runs the same
+whizby test for all four.
 
 Inferred: `FUN_30039590`'s "own body" test compares the **attacker** entity
 (`es.otherEntityNum`, in `EBX`) with `ps.clientNum`, so when following a player
