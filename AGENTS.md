@@ -650,7 +650,8 @@ engineering setup works.
   callback has run before script, then the script frame, then the script's spawns (each with the spawn's own
   end frame and think: the own view, `PMF_RESPAWNED` and `commandTime` at
   the frame's clock, and for a player the think's 100 ms of null-cmd pmove
-  and an anim pick), then the switches the weapon
+  and an anim pick; the intermission camera's `commandTime` stays 100 ms
+  behind the spawn's frame), then the switches the weapon
   machine made (its takes already landed at their cmd's touch, and only
   there), then the weapon mirrors (held, current, viewmodel, the
   body a shot is traced against, and the origin back to script), then the

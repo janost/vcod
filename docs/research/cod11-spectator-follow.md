@@ -570,7 +570,10 @@ player runs the live arm's 100 ms too (`ClientSim::spawn_move`, on the
 zeroed cmd with the negated `delta_angles`), and the tick picks its anims
 after it, which is what puts the standing idle on the spawn frame
 (`cod11-combat.md` 9.2). Every caller but the
-intermission's puts the client's `commandTime` at the frame's clock. A dead
+intermission's puts the client's `commandTime` at the frame's clock; the
+intermission camera's reads the spawn's frame less 100 until the next spawn,
+whatever cmds it sends (`ClientSim::become_intermission`), as the
+intermission run read. A dead
 sim's step writes `ps.weapon` 0 unless the flag is set, and the switch
 reaches the script host as the weapon machine's own do.
 
@@ -581,5 +584,3 @@ Where it is not retail's:
   not run. INFERRED from the negated `delta_angles` on that cmd: a spawned
   player's frame reads `viewangles` 0 whatever the spawn yaw, on retail and
   now on ours; the three-probe dm run's spawn had yaw 0 and cannot tell.
-- The intermission camera's frozen `commandTime`: ours keeps advancing it
-  with the client's cmds.

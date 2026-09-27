@@ -316,6 +316,10 @@ pub struct ClientSim {
     /// This client's own frame as its last `ClientEndFrame` left it, `None`
     /// since a spawn, whose own end frame is this frame's.
     pub end_frame_wire: Option<msg::PlayerState>,
+    /// The intermission camera's `ps.commandTime`: `ClientSpawn` puts it
+    /// 100 ms behind the spawn's frame and nothing on that arm moves it
+    /// (`docs/research/cod11-spectator-follow.md` 13).
+    frozen_command_time: Option<i32>,
 }
 
 /// A stopped follow's copy, under the fields a spectator's own frame writes.
@@ -454,6 +458,7 @@ impl ClientSim {
             follow_wire: None,
             residue: None,
             end_frame_wire: None,
+            frozen_command_time: None,
         }
     }
 
@@ -514,8 +519,16 @@ impl ClientSim {
     /// The third mode, through the same `self spawn(origin, angles)`:
     /// `spawnIntermission()` parks the client at the map's intermission
     /// point for the level's last ten seconds (map-cycle doc, section 6).
-    pub fn become_intermission(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
+    /// `now_ms` is the spawn's frame.
+    pub fn become_intermission(
+        &mut self,
+        origin: [f32; 3],
+        yaw_deg: f32,
+        cmd_angles: [i32; 3],
+        now_ms: i32,
+    ) {
         self.respawn(PmType::Intermission, origin, yaw_deg, cmd_angles);
+        self.frozen_command_time = Some(now_ms.wrapping_sub(SPAWN_THINK_MS as i32));
         self.spawn_think(None);
         // `ClientSpawn` zeroes the whole `gclient_t` and `ClientEndFrame`'s
         // intermission arm never copies `ent->health` back into the
@@ -614,6 +627,7 @@ impl ClientSim {
         self.follow_wire = None;
         self.residue = None;
         self.end_frame_wire = None;
+        self.frozen_command_time = None;
         // `G_SetClientContents`, then the spawn's link.
         self.contents = if mode == PmType::Normal {
             CONTENTS_BODY
@@ -1461,7 +1475,10 @@ impl ClientSim {
             w.fields[msg::PlayerState::field_index(p, name).unwrap()] = v;
         };
         set("clientNum", client_num);
-        set("commandTime", command_time);
+        set(
+            "commandTime",
+            self.frozen_command_time.unwrap_or(command_time),
+        );
         // Mode-dependent.
         set("pm_type", self.wire_pm_type());
         // The stance bits ride only on a live player's word; a spectator and
@@ -1838,7 +1855,7 @@ mod tests {
         sim.max_health = 100;
         assert!(sim.linked(), "a live player is linked");
 
-        sim.become_intermission([384.0, -624.0, 184.0], 90.0, NULL_USERCMD.angles);
+        sim.become_intermission([384.0, -624.0, 184.0], 90.0, NULL_USERCMD.angles, 60050);
         let at = sim.ps.origin;
         let forward = UserCmd {
             forward: 127,
@@ -1855,8 +1872,11 @@ mod tests {
         assert_eq!(sim.ps.origin, at, "the intermission camera moved");
         assert!(!sim.linked(), "the intermission camera is linked");
 
-        let w = sim.to_wire(p, 0, 0);
+        let w = sim.to_wire(p, 0, 60150);
         assert_eq!(w.field_i32(p, "pm_type"), PM_INTERMISSION);
+        // Where the spawn put it, 100 ms behind its frame, whatever the cmds
+        // since: the retail intermission run reads 59950 at 60050 to 60150.
+        assert_eq!(w.field_i32(p, "commandTime"), 59950);
         assert_eq!(w.field_i32(p, "eFlags"), 24);
         assert_eq!(w.health(), 0, "the spawn's memset is never written back");
         assert_eq!(w.field_i32(p, "eventSequence"), 0);
@@ -1904,7 +1924,7 @@ mod tests {
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         assert_eq!(pm_flags(&sim), PMF_OWN_VIEW);
 
-        sim.become_intermission([384.0, -624.0, 184.0], 90.0, NULL_USERCMD.angles);
+        sim.become_intermission([384.0, -624.0, 184.0], 90.0, NULL_USERCMD.angles, 0);
         assert_eq!(pm_flags(&sim), PMF_RESPAWNED);
     }
 

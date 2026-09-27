@@ -3231,7 +3231,7 @@ impl Server {
                     }
                     SpawnMode::Spectator => sim.become_spectator(s.origin, s.yaw_deg, cmd_angles),
                     SpawnMode::Intermission => {
-                        sim.become_intermission(s.origin, s.yaw_deg, cmd_angles)
+                        sim.become_intermission(s.origin, s.yaw_deg, cmd_angles, self.sv_time_ms)
                     }
                 }
                 // The spawn's own think runs a player or a spectator up to
