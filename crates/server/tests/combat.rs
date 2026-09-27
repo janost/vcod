@@ -149,8 +149,14 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     assert_eq!(sb.ps.field_i32(p, "eventSequence"), 1);
     assert_eq!(sb.ps.field_i32(p, "events[0]"), 187);
     assert_eq!(sb.ps.field_i32(p, "eventParms[0]"), 33);
+    // 80 along the shot, less one frame of friction: B's packet came in
+    // behind A's, so its 50 ms cmd ran after the hit and outlasted the 50 ms
+    // slide the knockback started (combat doc, 4.5 and 16).
     let vx = sb.ps.field_f32(p, "velocity[0]");
-    assert!(vx > 70.0, "the knockback pushes B along the shot, {vx}");
+    assert!(
+        (40.0..80.0).contains(&vx),
+        "the knockback pushes B along the shot, {vx}"
+    );
     // The carbine is a `rifleBullet` weapon, so the large pair: 174 for
     // everyone but the victim, 176 for the victim alone. The round goes on
     // through B (combat doc 2.4, step 5), and the 174 it may leave on the
@@ -237,9 +243,12 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     assert_eq!(sb.ps.health(), 0);
     assert_eq!(sb.ps.field_i32(p, "pm_type"), 6);
     assert_eq!(sb.ps.arrays.stats[1], 180, "A stands at bearing 180 from B");
-    assert_eq!(sb.ps.field_i32(p, "eventSequence"), 2);
+    // B's cmd behind the shot disarms it, as retail's bullet death reads
+    // `events=187,189,155` (combat doc, 8.4).
+    assert_eq!(sb.ps.field_i32(p, "eventSequence"), 3);
     assert_eq!(sb.ps.field_i32(p, "events[1]"), 189);
     assert_eq!(sb.ps.field_i32(p, "eventParms[1]"), 0);
+    assert_eq!(sb.ps.field_i32(p, "events[2]"), 155);
     assert_eq!(
         sb.ps.field_i32(p, "damageEvent"),
         1,
@@ -287,7 +296,7 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     let sb = cb.snapshots().newest().unwrap();
     assert_eq!(
         sb.ps.field_i32(p, "eventSequence"),
-        2,
+        3,
         "a corpse takes no more hits"
     );
 
@@ -773,6 +782,227 @@ fn the_kill_commands_death_frame_is_retails() {
     assert_eq!(respawn.ps.health(), 100);
     assert_eq!(respawn.ps.field_i32(p, "eventSequence"), 0);
     assert_eq!(respawn.ps.field_i32(p, "legsAnim"), 634);
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+}
+
+/// The retail capture's bullet death frame, as `key=value` pairs: the first
+/// `!trace` of `mp_carentan-tdm-hit-target.txt` that reads health 0 with a
+/// damage event behind it (combat doc, 8.4).
+fn retail_bullet_death() -> std::collections::BTreeMap<String, String> {
+    let text = include_str!("fixtures/playerstate/mp_carentan-tdm-hit-target.txt");
+    let line = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("!trace "))
+        .find(|l| l.contains(" health=0 ") && l.contains(" damageEvent=1 "))
+        .expect("the capture's bullet death");
+    line.split_whitespace()
+        .filter_map(|kv| kv.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// A bullet death frame against retail's. The shooter's packet runs ahead of
+/// the victim's, as `SV_ExecuteClientMessage` runs packets in arrival order,
+/// and the round and its damage callback run inside the shooter's cmd, so
+/// the victim's cmd behind it still moves at `pm_type` 0 and disarms: the
+/// capture reads `EV_PAIN` from the first hit, `EV_DEATH`, then
+/// `EV_RAISE_WEAPON` (combat doc, 8.4 and 16).
+#[test]
+fn a_bullet_deaths_frame_is_retails() {
+    use vcod_common::net::msg::{UserCmd, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD};
+
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+    let p = &PROTOCOL_V1;
+    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+    let num = |c: &vcod_common::net::NetClient<common::ClientEnd>| {
+        c.snapshots().newest().unwrap().ps.field_i32(p, "clientNum") as usize
+    };
+    let (na, nb) = (num(&ca), num(&cb));
+    let spot = ca.snapshots().newest().unwrap().ps.origin(p);
+    assert!(
+        sv.test_clear_line(spot, 0.0, 40.0),
+        "no clear 40 units along +x from the spawn"
+    );
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+    // Both hold the carbine, as a retail client's cmd says (AGENTS.md).
+    let sight = UserCmd {
+        buttons: BUTTON_ADS,
+        weapon: carbine,
+        ..NULL_USERCMD
+    };
+    let fire = UserCmd {
+        buttons: BUTTON_ADS | BUTTON_ATTACK,
+        ..sight
+    };
+    let facing_a = UserCmd {
+        angles: [0, 32768, 0],
+        weapon: carbine,
+        ..NULL_USERCMD
+    };
+    let mut step = |sv: &mut vcod_server::Server, a: &UserCmd, b: &UserCmd| {
+        ca.send_frame(a);
+        cb.send_frame(b);
+        now += Duration::from_millis(50);
+        common::step_pair(sv, (&qa, &mut ca), (&qb, &mut cb), now);
+        (
+            ca.snapshots().newest().unwrap().clone(),
+            cb.snapshots().newest().unwrap().clone(),
+        )
+    };
+    for _ in 0..40 {
+        step(&mut sv, &sight, &facing_a);
+    }
+    // The seed `a_shot_takes_health_and_a_second_one_kills` puts both rounds
+    // into B's head with: 67 and 67, the capture's own two hits.
+    sv.test_seed_rng(1);
+    let (_, hit) = step(&mut sv, &fire, &facing_a);
+    assert_eq!(hit.ps.health(), 33, "the first round, the capture's 67");
+    assert_eq!(hit.ps.field_i32(p, "eventSequence"), 1);
+    for _ in 0..30 {
+        step(&mut sv, &sight, &facing_a);
+    }
+    let (_, death) = step(&mut sv, &fire, &facing_a);
+    let retail = retail_bullet_death();
+    let ours = |name: &str| death.ps.field_i32(p, name).to_string();
+    let list = |name: &str| {
+        (0..4)
+            .map(|i| death.ps.field_i32(p, &format!("{name}[{i}]")).to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    for (field, value) in [
+        ("health", death.ps.health().to_string()),
+        ("pm_type", ours("pm_type")),
+        ("eventSequence", ours("eventSequence")),
+        ("events", list("events")),
+        ("eventParms", list("eventParms")),
+        ("damageEvent", ours("damageEvent")),
+        ("damageCount", ours("damageCount")),
+        ("torsoAnim", ours("torsoAnim")),
+    ] {
+        assert_eq!(value, retail[field], "the death frame's {field}");
+    }
+    assert_eq!(death.ps.field_i32(p, "weapon"), 0, "the disarm ran");
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+}
+
+/// A player one packet's round kills is out of the way of a later packet's
+/// round in the same frame: `player_die` leaves the body `CONTENTS_CORPSE`,
+/// which the shot mask leaves out (combat doc, 16). A kills B, then C's
+/// round, fired along the same line from beyond B, reaches A. With every
+/// shot traced after every move, B still stood in it and took the round.
+#[test]
+fn a_player_killed_earlier_in_the_frame_stops_no_later_round() {
+    use vcod_common::net::msg::{UserCmd, BUTTON_ADS, BUTTON_ATTACK, NULL_USERCMD};
+
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let q: [Rc<RefCell<Queues>>; 3] = Default::default();
+    // The thompson is no `rifleBullet`, so its round stops on the first
+    // player it meets (combat doc 2.4, step 5).
+    let [mut ca, mut cb, mut cc] = common::join_trio(
+        &mut sv,
+        [&q[0], &q[1], &q[2]],
+        &mut now,
+        [
+            ("allies", "thompson_mp"),
+            ("allies", "m1carbine_mp"),
+            ("allies", "thompson_mp"),
+        ],
+    );
+    let p = &PROTOCOL_V1;
+    let num = |c: &vcod_common::net::NetClient<common::ClientEnd>| {
+        c.snapshots().newest().unwrap().ps.field_i32(p, "clientNum") as usize
+    };
+    let (na, nb, nc) = (num(&ca), num(&cb), num(&cc));
+    // `probe_passthru`'s flat brush floor, clear 300 units along +x.
+    let spot = [1032.0, -376.0, -151.875];
+    assert!(
+        sv.test_clear_line(spot, 0.0, 80.0),
+        "no clear 80 units along +x from the spawn"
+    );
+    sv.place_client(na, spot, 0.0);
+    sv.place_client(nb, [spot[0] + 40.0, spot[1], spot[2]], 180.0);
+    sv.place_client(nc, [spot[0] + 80.0, spot[1], spot[2]], 180.0);
+    let thompson = vcod_server::configstrings::weapon_index("thompson_mp").unwrap() as u8;
+    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+    let a_sight = UserCmd {
+        buttons: BUTTON_ADS,
+        weapon: thompson,
+        ..NULL_USERCMD
+    };
+    let c_sight = UserCmd {
+        angles: [0, 32768, 0],
+        ..a_sight
+    };
+    let fire = |c: UserCmd| UserCmd {
+        buttons: BUTTON_ADS | BUTTON_ATTACK,
+        ..c
+    };
+    let b_idle = UserCmd {
+        angles: [0, 32768, 0],
+        weapon: carbine,
+        ..NULL_USERCMD
+    };
+    let mut step = |sv: &mut vcod_server::Server, a: UserCmd, c: UserCmd| {
+        ca.send_frame(&a);
+        cb.send_frame(&b_idle);
+        cc.send_frame(&c);
+        now += Duration::from_millis(50);
+        common::step_trio(
+            sv,
+            (common::ADDR, &q[0], &mut ca),
+            (common::ADDR_B, &q[1], &mut cb),
+            (common::ADDR_C, &q[2], &mut cc),
+            now,
+        );
+        [&ca, &cb, &cc].map(|c| c.snapshots().newest().unwrap().clone())
+    };
+    for _ in 0..40 {
+        step(&mut sv, a_sight, c_sight);
+    }
+    sv.test_seed_rng(1);
+    let [_, b, _] = step(&mut sv, fire(a_sight), c_sight);
+    let hurt = b.ps.health();
+    assert!((1..100).contains(&hurt), "A's first round left B at {hurt}");
+    for _ in 0..30 {
+        step(&mut sv, a_sight, c_sight);
+    }
+    // One frame: A's packet kills B, then C fires down the same line.
+    let [a, b, _] = step(&mut sv, fire(a_sight), fire(c_sight));
+    assert_eq!(b.ps.field_i32(p, "pm_type"), 6, "A's second round killed B");
+    assert!(
+        a.ps.health() < 100,
+        "C's round stopped on B's body instead of reaching A"
+    );
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }
 

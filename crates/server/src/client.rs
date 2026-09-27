@@ -23,6 +23,21 @@ pub enum ClientState {
     Active,
 }
 
+/// A usercmd waiting for the tick, stamped with the packet it arrived in:
+/// the tick replays every client's packets in that order, which is the
+/// order retail's `SV_ExecuteClientMessage` ran them in.
+#[derive(Clone, Copy, Debug)]
+pub struct QueuedCmd {
+    pub packet: u64,
+    pub cmd: UserCmd,
+}
+
+impl From<UserCmd> for QueuedCmd {
+    fn from(cmd: UserCmd) -> Self {
+        QueuedCmd { packet: 0, cmd }
+    }
+}
+
 pub struct Client {
     pub addr: SocketAddr,
     pub netchan: ServerNetchan,
@@ -46,11 +61,11 @@ pub struct Client {
     pub last_processed_st: i32,
     /// Usercmds received but not yet replayed, oldest first. Bounded so a
     /// flooded client cannot build unbounded latency.
-    pub pending: Vec<UserCmd>,
-    /// A `kill` this client sent, as the `serverTime` of the newest cmd
-    /// queued ahead of it: retail runs a packet's client commands before its
-    /// usercmds, so the death lands before the first cmd past this.
-    pub kill_after: Option<i32>,
+    pub pending: Vec<QueuedCmd>,
+    /// A `kill` this client sent, as the packet it came in: retail runs a
+    /// packet's client commands before its usercmds, so the death lands
+    /// ahead of that packet's cmds and behind every earlier packet's.
+    pub kill_at: Option<u64>,
     /// The last usercmd successfully decoded from this message stream; the
     /// delta base for the next clc_move (`cl->lastUsercmd`). Omitted fields
     /// decode against it, so it commits only after a whole message parses.
@@ -91,7 +106,7 @@ impl Client {
             message_ack: 0,
             last_processed_st: 0,
             pending: Vec::new(),
-            kill_after: None,
+            kill_at: None,
             last_cmd: NULL_USERCMD,
             sim: None,
             is_bot: false,
@@ -111,7 +126,7 @@ impl Client {
         self.sim = None;
         self.frames = vec![None; SV_PACKET_BACKUP];
         self.pending.clear();
-        self.kill_after = None;
+        self.kill_at = None;
         self.last_cmd = NULL_USERCMD;
         self.last_processed_st = 0;
     }
@@ -126,7 +141,7 @@ impl Client {
         self.sim = None;
         self.frames = vec![None; SV_PACKET_BACKUP];
         self.pending.clear();
-        self.kill_after = None;
+        self.kill_at = None;
     }
 
     /// The frame sent as `message_num`, if still in the ring.
