@@ -315,7 +315,8 @@ Lump 25 is `f32 xyz` per vertex and lump 26 `u16` per index, both shared by the 
 | `SCALE_CROUCH` | 0.65 | retail's wire `ps.crouchSpeedScale` |
 | `SCALE_PRONE` | 0.15 | retail's wire `ps.proneSpeedScale` |
 | `SCALE_BACK / SCALE_STRAFE / SCALE_LEAN` | 0.7 / 0.8 / 0.4 | retail's wire `ps.backSpeedScale`, `strafeSpeedScale`, `leanSpeedScale`, applied by the walk cmd scale at 0x2e690 |
-| `JUMP_HEIGHT_STAND / LOW` | 34 / 24 | retail rodata 0x70BE8/0x70BEC; vz = sqrt(2 * height * gravity). The forwardmove gate this row used to name was a misread, corrected 2026-09-01 against a live capture (`cod11-mantle.md`, "Jumps") |
+| `JUMP_HEIGHT` | 39 | retail rodata 0x708C8/0x708CC: `PM_CheckJump`'s vz = sqrt(78 * gravity) = 249.8 and `fJumpOriginZ` 39 up (`cod11-mantle.md`, "Jumps") |
+| `DIVE_HEIGHT_STAND / LOW` | 34 / 24 | retail rodata 0x70BE8/0x70BEC; the prone dive's vz = sqrt(2 * height * gravity), which vcod's ground jump took until 2026-09-27 (`cod11-mantle.md`, "Going prone") |
 | `PM_ACCELERATE` | 9 | retail rodata 0x70844; Q3's is 10, RTCW-MP's 10 too - the community-documented "Q3 exact copy" was wrong |
 | `PM_DUCKED_ACCELERATE / PM_PRONE_ACCELERATE` | 12 / 19 | retail rodata; selected in `PM_WalkMove` @0x2f4b0-0x2f4ca (`cod11-mantle.md`, "The walk's accel floor") |
 | `PM_AIRACCELERATE` | 1 | retail rodata 0x70848, same as Q3 |

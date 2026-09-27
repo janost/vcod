@@ -988,8 +988,9 @@ goes out as `commandTime` -- at the cmd's own clock.
 `crates/server/tests/hitching_client.rs` pins it: a spectator silent for
 600 ms and then sending one cmd covers the whole gap, about 250 units, where
 the single clamped step it used to take covered 16. The `PMF_JUMP_HELD`
-`upmove` force is not modelled; vcod's own held-jump latch survives a chop
-instead. The two `level.time` clamps are not implemented either: they are a
+`upmove` force of 20 is not modelled; vcod's held-jump latch survives a chop
+without it, and only the later steps' air wish differs
+(`docs/research/cod11-mantle.md`, "Jumps"). The two `level.time` clamps are not implemented either: they are a
 speed-cheat guard rather than part of the dt rule, and vcod seeds a client's
 `commandTime` from the entering cmd's own clock (`enter_world`) where retail
 leaves it at whatever `ClientSpawn` wrote, so a window measured against
@@ -1087,7 +1088,7 @@ One field remains unestablished: `legsAnim` 634, which is animation index 122 wi
 
 ### The view-height lerp, and fields a settled capture cannot see
 
-The eye eases between stances while the collision box snaps, and the client predicts the ease itself. Four playerstate fields carry it: `viewHeightCurrent` (float, the eye now), `viewHeightTarget` (signed byte, the stance's height), `viewHeightLerpDown` (1 bit, set when the eye is on its way down) and **`viewHeightLerpTime`**, which is the `serverTime` the lerp started at and reads 0 once it settles.
+The eye eases between stances while the collision box snaps, and the client predicts the ease itself. Four playerstate fields carry it: `viewHeightCurrent` (float, the eye now), `viewHeightTarget` (signed byte, the stance's height), `viewHeightLerpDown` (1 bit, set when the eye is on its way down) and **`viewHeightLerpTime`**, which is the `serverTime` the lerp started at and reads 0 once it settles. A lerp between standing and prone is two legs through the crouch height, each stamped when it starts, with `viewHeightLerpTarget` naming the leg's end (`docs/research/cod11-mantle.md`, "The eye through a stance change").
 
 That last one is the trap. VERIFIED live 2026-09-01 by tracing the retail server per snapshot through a crouch: `viewHeightLerpTime` read 86666 while `serverTime` ran 86700, 86750, 86800 with the eye at 57.92, 52.64, 44.72, and dropped to 0 at 86850 with the eye settled at 40. Every value it takes outside a transition is 0, so a capture of a settled pose -- which is what both playerstate gates take -- pins it at 0 and proves nothing. A server that always sends 0 tells the client the lerp began at time zero; the client's prediction snaps its eye straight to the target and the next snapshot drags it back, once per snapshot, for as long as the transition lasts. It reads as the camera shaking for about half a second on every stance change.
 

@@ -36,11 +36,16 @@ pub const SCALE_LEAN: f32 = 0.4;
 /// (rodata 0x70890).
 const WADE_SCALE: f32 = 0.5;
 /// Prone-dive heights: vz = sqrt(2 * height * GRAVITY). Retail rodata
-/// 0x70BE8/0x70BEC, applied in fn 0x316F4 @0x31CC0 (game.mp.i386.so). The
-/// ground jump borrows them until its own takeoff is read
-/// (docs/research/cod11-mantle.md, "Jumps").
-pub const JUMP_HEIGHT_STAND: f32 = 34.0;
-pub const JUMP_HEIGHT_LOW: f32 = 24.0;
+/// 0x70BE8/0x70BEC, applied in fn 0x316F4 @0x31CC0 (game.mp.i386.so).
+pub const DIVE_HEIGHT_STAND: f32 = 34.0;
+pub const DIVE_HEIGHT_LOW: f32 = 24.0;
+/// `PM_CheckJump` (0x2eb98): vz = sqrt(g * 78) and `fJumpOriginZ` 39 above
+/// the takeoff (rodata 0x708c8/0x708cc), so the jump's apex and its origin
+/// are one height (docs/research/cod11-mantle.md, "Jumps").
+pub const JUMP_HEIGHT: f32 = 39.0;
+/// The jump's `aimSpreadScale` kick and its cap (rodata 0x708dc/0x708e0).
+const JUMP_SPREAD_ADD: f32 = 64.0;
+const JUMP_SPREAD_MAX: f32 = 255.0;
 // Accelerate/friction/stopspeed: retail CoD 1.1 rodata (game.mp.i386.so),
 // loaded by PM_Friction @0x2e460 and the movers.
 pub const PM_ACCELERATE: f32 = 9.0;
@@ -93,11 +98,61 @@ pub const LEAN_MAX: f32 = 28.0; // eye offset in units; roll is lean/2 degrees
 pub const LEAN_TIME_TO_MS: f32 = 340.0;
 pub const LEAN_TIME_FROM_MS: f32 = 350.0;
 
-/// Viewheight lerp times: PM_GetViewHeightLerpTime @0x345B8 (200 ms for the
-/// stand/crouch family) and the bg_duck2prone_time/bg_prone2duck_time
-/// defaults (400, docs/research/cod11-server-handshake.md).
-pub const VIEW_LERP_MS: f32 = 200.0;
-pub const VIEW_LERP_PRONE_MS: f32 = 400.0;
+/// The eye's lerp times in ms, per leg (`PM_ViewHeightAdjust` 0x309d8,
+/// docs/research/cod11-mantle.md, "The eye through a stance change"): the
+/// `bg_duck2prone_time`/`bg_prone2duck_time` defaults into and out of prone,
+/// and the immediates of the other legs.
+const VIEW_LERP_PRONE_MS: i32 = 400;
+const VIEW_LERP_DIVE_MS: i32 = 200;
+const VIEW_LERP_DUCK_MS: i32 = 150;
+const VIEW_LERP_DIVE_DUCK_MS: i32 = 100;
+const VIEW_LERP_STAND_MS: i32 = 200;
+
+/// The eye's curve per leg, `(percent, height)` waypoints from `.data`
+/// 0x7c730..0x7c8f0; the third word of each record, an origin offset, is 0
+/// throughout.
+const VIEW_CURVE_STAND_CROUCH: &[(i32, f32)] = &[
+    (0, 60.0),
+    (1, 59.5),
+    (4, 58.5),
+    (30, 56.0),
+    (80, 44.0),
+    (90, 41.5),
+    (95, 40.5),
+    (100, 40.0),
+];
+const VIEW_CURVE_CROUCH_STAND: &[(i32, f32)] = &[
+    (0, 40.0),
+    (5, 40.5),
+    (10, 41.5),
+    (20, 44.0),
+    (70, 56.0),
+    (96, 58.5),
+    (99, 59.5),
+    (100, 60.0),
+];
+const VIEW_CURVE_CROUCH_PRONE: &[(i32, f32)] = &[
+    (0, 40.0),
+    (11, 38.0),
+    (22, 33.0),
+    (34, 25.0),
+    (45, 16.0),
+    (50, 15.0),
+    (55, 16.0),
+    (70, 18.0),
+    (90, 17.0),
+    (100, 11.0),
+];
+const VIEW_CURVE_DIVE_PRONE: &[(i32, f32)] = &[(0, 40.0), (100, 11.0)];
+const VIEW_CURVE_PRONE_CROUCH: &[(i32, f32)] = &[
+    (0, 11.0),
+    (5, 10.0),
+    (30, 21.0),
+    (50, 25.0),
+    (67, 31.0),
+    (83, 34.0),
+    (100, 40.0),
+];
 
 /// Prone tunables, from the retail server: `bg_prone_yawcap` 85 and
 /// `bg_prone_softyawedge` 1 are cvars, the 55 deg/s swing rate and the
@@ -147,12 +202,11 @@ pub const LADDER_ACCELERATE: f32 = 9.0;
 pub const PM_LADDER_FRICTION: f32 = 16.0;
 /// RTCW's grab-from-above push into the wall (`ladderforward`).
 pub const LADDER_PUSH_SPEED: f32 = 200.0;
-/// Re-grab lock after a ladder push-off: pm_ladderJumpTime = 300 int
+/// Re-grab lock after any jump: pm_ladderJumpTime = 300 int
 /// (rodata 0x70830, compared as delta <= 299 @0x33822).
 pub const LADDER_REGRAB_LOCK_MS: f32 = 300.0;
-/// Re-jump gate on the ladder push-off: cmd.serverTime - ps.jumpTime > 499
-/// (@0x2ebb3).
-pub const LADDER_REJUMP_COOLDOWN_MS: f32 = 500.0;
+/// Re-jump gate on every jump: cmd.serverTime - ps.jumpTime > 499 (@0x2ebb3).
+pub const JUMP_COOLDOWN_MS: f32 = 500.0;
 /// Horizontal reset along the reflected forward when leaving a ladder
 /// (pm_ladderPushOff, rodata 0x708d8).
 pub const LADDER_PUSHOFF_SPEED: f32 = 128.0;
@@ -184,7 +238,7 @@ const STEP_VIEW_BIAS: i32 = 128;
 /// (rodata 0x70f14/0x70f10, applied @0x35770).
 const STEP_SCALE_BASE: f32 = 0.2;
 const STEP_SCALE_GAIN: f32 = 0.8;
-/// Ladder climb steps stay quiet this long after a push-off
+/// Ladder climb steps stay quiet this long after a jump
 /// (`cmd.serverTime - ps->jumpTime <= 0x12b`, @0x323b9-0x323c8).
 const LADDER_STEP_QUIET_MS: f32 = 299.0;
 /// Water-material footstep ids (base + 20), fixed regardless of ground surface.
@@ -334,14 +388,17 @@ pub struct PlayerState {
     /// Plane normal of that surface; persists while off the wall so the
     /// airborne probe can stick with the ladder we left.
     pub ladder_normal: Vec3,
-    /// ms elapsed since the last ladder push-off; INFINITY when never. Retail
-    /// stamps cmd.serverTime into ps.jumpTime on the ladder/steep jumps only
-    /// and compares deltas (@0x2ebb3, @0x33822) - there is no ground-jump
-    /// timer to port.
+    /// ms elapsed since the last jump, ground or ladder; INFINITY when never.
+    /// Retail stamps cmd.serverTime into ps.jumpTime after either (@0x2f279,
+    /// @0x33964) and compares deltas (@0x2ebb3, @0x33822).
     pub since_jump_ms: f32,
-    /// A held jump key blocks another ladder push-off until released
-    /// (pm_flags bit 0x8: set @0x2ec34, cleared @0x34135 when upmove <= 9).
+    /// A held jump key blocks another jump until released (pm_flags bit 0x8:
+    /// set @0x2ec36, cleared @0x34135 when upmove <= 9).
     pub jump_latched: bool,
+    /// Retail's `fJumpOriginZ` (ps+0x68, wire `fJumpPeak`): the takeoff height
+    /// plus [`JUMP_HEIGHT`] from a jump until the ground trace next hits, 0
+    /// otherwise. Only an airborne step reads it.
+    pub jump_origin_z: f32,
     /// Footstep phase counter, retail `ps->bobCycle` (ps+0x8). Steps fire on
     /// 128-tick crossings.
     pub bob_cycle: u8,
@@ -361,8 +418,9 @@ pub struct PlayerState {
     /// Eased eye height; trails `stance.view_height()` after a stance change
     /// (retail lerps the view while the bbox snaps).
     view_height_cur: f32,
-    /// Lerp pace in units/s, fixed per transition when the stance flips.
-    view_height_speed: f32,
+    /// Milliseconds into the eye's current leg, retail's `cmd.serverTime -
+    /// viewHeightLerpTime`; `None` while no leg runs (`viewHeightLerpTime` 0).
+    view_lerp_ms: Option<i32>,
     /// Retail's `pm_flags` 0x2: set on entering a crouch, cleared on standing,
     /// and left alone by prone, so a prone entered from a crouch carries it
     /// and one entered from standing does not (both measured,
@@ -487,13 +545,14 @@ impl PlayerState {
             ladder_normal: Vec3::ZERO,
             since_jump_ms: f32::INFINITY,
             jump_latched: false,
+            jump_origin_z: 0.0,
             bob_cycle: 0,
             movement_dir: 0,
             move_start: origin,
             ground_surface_flags: 0,
             air_speed_peak: 0.0,
             view_height_cur: Stance::Stand.view_height(),
-            view_height_speed: 0.0,
+            view_lerp_ms: None,
             ducked: false,
             // Retail leaves the target at 0 until the first stance change.
             view_lerp_target: 0.0,
@@ -551,6 +610,12 @@ impl PlayerState {
     /// Whether the eye has caught up with the stance it is easing towards.
     pub fn view_height_settled(&self) -> bool {
         (self.view_height_cur - self.stance.view_height()).abs() < 0.01
+    }
+
+    /// `viewHeightLerpTime` for a playerstate whose `commandTime` is
+    /// `server_time`: the time the running leg began, or 0.
+    pub fn view_lerp_stamp(&self, server_time: i32) -> i32 {
+        self.view_lerp_ms.map_or(0, |ms| server_time - ms)
     }
 
     /// Eye and angles with the lean offset; roll = lean/2 degrees (RTCW).
@@ -709,25 +774,15 @@ pub fn pmove(
     } else if ps.water_level > 1 {
         water_move(ps, input, world, dt, MASK_PLAYERSOLID, Some(&mut events));
     } else {
-        // The ground jump: stance-dependent height, horizontal velocity kept.
-        // The heights were read off fn 0x316F4 @0x31CC0, which is the prone
-        // dive (`enter_prone`), not this; the jump's own takeoff is unread and
-        // `bump_ab.rs`'s TAKEOFF gap is what that costs. Retail jumps standing
-        // still (docs/research/cod11-mantle.md, "Jumps").
-        if input.jump && ps.on_ground {
-            let height = match ps.stance {
-                Stance::Stand => JUMP_HEIGHT_STAND,
-                _ => JUMP_HEIGHT_LOW,
-            };
-            ps.velocity.z = (2.0 * height * GRAVITY).sqrt();
-            ps.on_ground = false;
-            ps.jumped = true;
-        }
+        // `PM_WalkMove` opens with `PM_CheckJump` (0x2f261); a jump runs the
+        // air mover instead and stamps `jumpTime` after it (0x2f279).
+        let mut cmd = *input;
+        let jumped = ps.on_ground && check_jump(ps, &mut cmd, None, &mut events);
         if ps.on_ground {
             friction(ps, ps.on_ladder, dt);
             walk_move(
                 ps,
-                input,
+                &cmd,
                 weapon_def,
                 world,
                 dt,
@@ -735,7 +790,10 @@ pub fn pmove(
                 Some(&mut events),
             );
         } else {
-            air_move(ps, input, world, dt, MASK_PLAYERSOLID, Some(&mut events));
+            air_move(ps, &cmd, world, dt, MASK_PLAYERSOLID, Some(&mut events));
+        }
+        if jumped {
+            ps.since_jump_ms = 0.0;
         }
     }
     ground_trace(ps, world, MASK_PLAYERSOLID);
@@ -863,8 +921,9 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
         air_move(ps, &idle, world, dt, MASK_DEADSOLID, None);
     }
     ground_trace(ps, world, MASK_DEADSOLID);
-    ps.view_height_speed = DEAD_VIEW_LERP_SPEED;
-    let step = ps.view_height_speed * dt;
+    // A target no stance has drops any leg and moves at a flat rate (0x30a84).
+    ps.view_lerp_ms = None;
+    let step = DEAD_VIEW_LERP_SPEED * dt;
     let gap = VIEW_DEAD - ps.view_height_cur;
     ps.view_height_cur += gap.clamp(-step, step);
     // `pm_type` 6 takes the default arm, tail and snap included.
@@ -903,7 +962,7 @@ fn footsteps(
             ps.bob_cycle = 0;
         }
     } else if ps.on_ladder {
-        // quiet for 299 ms after a push-off (@0x323b9)
+        // quiet for 299 ms after a jump (@0x323b9)
         if ps.since_jump_ms > LADDER_STEP_QUIET_MS {
             let k = if input.walk_slow {
                 LADDER_STEP_K_WALK
@@ -1129,31 +1188,179 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f
         }
     }
 
-    // The bbox snaps; the eye eases. PM_GetViewHeightLerpTime (@0x345B8):
-    // 200 ms stand/crouch family, the 400 ms bg_duck2prone_time/
-    // bg_prone2duck_time defaults into and out of prone.
     if ps.stance != before {
         match ps.stance {
             Stance::Crouch => ps.ducked = true,
             Stance::Stand => ps.ducked = false,
             Stance::Prone => {}
         }
-        ps.view_lerp_target = ps.stance.view_height();
-        ps.view_lerp_down = ps.stance.view_height() < before.view_height();
-        // A dive drops the eye in 200 ms, not 400 (`PM_GetViewHeightLerpTime`
-        // 0x345b8 on `pm_flags` 0x4).
-        let ms = if ps.stance == Stance::Prone && ps.prone_dive {
-            VIEW_LERP_MS
-        } else if ps.stance == Stance::Prone || before == Stance::Prone {
-            VIEW_LERP_PRONE_MS
-        } else {
-            VIEW_LERP_MS
-        };
-        ps.view_height_speed = (ps.stance.view_height() - ps.view_height_cur).abs() / ms * 1000.0;
     }
-    let step = ps.view_height_speed * dt;
-    let gap = ps.stance.view_height() - ps.view_height_cur;
-    ps.view_height_cur += gap.clamp(-step, step);
+    // The bbox snaps; the eye eases.
+    view_height_adjust(ps, (dt * 1000.0).round() as i32);
+}
+
+/// Retail's `PM_ViewHeightAdjust` (0x309d8), called at the end of
+/// `PM_CheckDuck`: the eye walks a curve per leg, and a leg only ever spans
+/// neighbouring stances, so standing to prone is two legs through the crouch
+/// height (docs/research/cod11-mantle.md, "The eye through a stance change").
+fn view_height_adjust(ps: &mut PlayerState, msec: i32) {
+    let target = ps.stance.view_height();
+    let mut pct = 0;
+    if let Some(ms) = ps.view_lerp_ms.as_mut() {
+        *ms += msec;
+        pct = (*ms * 100 / view_lerp_duration(ps)).clamp(0, 100);
+        if pct == 100 {
+            ps.view_height_cur = ps.view_lerp_target;
+            ps.view_lerp_ms = None;
+        } else {
+            ps.view_height_cur = view_curve_height(view_curve(ps), pct);
+        }
+    }
+    if ps.view_lerp_ms.is_some() {
+        if target == ps.view_lerp_target {
+            return;
+        }
+        let reverses = if ps.view_lerp_down {
+            target > ps.view_lerp_target
+        } else {
+            target < ps.view_lerp_target
+        };
+        if !reverses {
+            return;
+        }
+        // Turn back mid-leg: the same stretch of the other leg's clock.
+        pct = 100 - pct;
+        ps.view_lerp_down = !ps.view_lerp_down;
+        let t = ps.view_lerp_target;
+        ps.view_lerp_target = match (ps.view_lerp_down, t) {
+            (true, VIEW_STAND) => VIEW_CROUCH,
+            (true, VIEW_CROUCH) => VIEW_PRONE,
+            (false, VIEW_PRONE) => VIEW_CROUCH,
+            (false, VIEW_CROUCH) => VIEW_STAND,
+            _ => t,
+        };
+        if pct == 100 {
+            ps.view_height_cur = ps.view_lerp_target;
+            ps.view_lerp_ms = None;
+        } else {
+            // x87 product of the int percent, the float 0.01 at rodata
+            // 0x70bcc and the int duration, truncated (0x312a5-0x312c6).
+            let into = f64::from(pct) * f64::from(0.01f32) * f64::from(view_lerp_duration(ps));
+            ps.view_lerp_ms = Some(into as i32);
+        }
+        return;
+    }
+    if target == ps.view_height_cur {
+        return;
+    }
+    ps.view_lerp_ms = Some(0);
+    let cur = ps.view_height_cur;
+    (ps.view_lerp_down, ps.view_lerp_target) = match ps.stance {
+        Stance::Prone => (
+            true,
+            if cur > VIEW_CROUCH {
+                VIEW_CROUCH
+            } else {
+                VIEW_PRONE
+            },
+        ),
+        Stance::Crouch => (cur > VIEW_CROUCH, VIEW_CROUCH),
+        Stance::Stand => (
+            false,
+            if cur < VIEW_CROUCH {
+                VIEW_CROUCH
+            } else {
+                VIEW_STAND
+            },
+        ),
+    };
+}
+
+/// The running leg's length (the duration pick at 0x30b46-0x30b98, the same
+/// as `PM_GetViewHeightLerpTime` 0x345b8).
+fn view_lerp_duration(ps: &PlayerState) -> i32 {
+    match (ps.view_lerp_target, ps.view_lerp_down, ps.prone_dive) {
+        (VIEW_PRONE, _, true) => VIEW_LERP_DIVE_MS,
+        (VIEW_PRONE, _, false) => VIEW_LERP_PRONE_MS,
+        (VIEW_CROUCH, true, true) => VIEW_LERP_DIVE_DUCK_MS,
+        (VIEW_CROUCH, true, false) => VIEW_LERP_DUCK_MS,
+        (VIEW_CROUCH, false, _) => VIEW_LERP_PRONE_MS,
+        _ => VIEW_LERP_STAND_MS,
+    }
+}
+
+fn view_curve(ps: &PlayerState) -> &'static [(i32, f32)] {
+    match (ps.view_lerp_target, ps.view_lerp_down, ps.prone_dive) {
+        (VIEW_PRONE, _, true) => VIEW_CURVE_DIVE_PRONE,
+        (VIEW_PRONE, _, false) => VIEW_CURVE_CROUCH_PRONE,
+        (VIEW_CROUCH, true, _) => VIEW_CURVE_STAND_CROUCH,
+        (VIEW_CROUCH, false, _) => VIEW_CURVE_PRONE_CROUCH,
+        _ => VIEW_CURVE_CROUCH_STAND,
+    }
+}
+
+/// The eye at `pct` of a leg: linear between the waypoints either side.
+fn view_curve_height(curve: &[(i32, f32)], pct: i32) -> f32 {
+    let Some(i) = curve.iter().position(|&(p, _)| p >= pct) else {
+        return curve[0].1;
+    };
+    let (p1, h1) = curve[i];
+    if p1 == pct || i == 0 {
+        return h1;
+    }
+    let (p0, h0) = curve[i - 1];
+    let t = f64::from(pct - p0) / f64::from(p1 - p0);
+    (f64::from(h0) + t * f64::from(h1 - h0)) as f32
+}
+
+/// Retail's stance for the walk's scale and accel and the jump's gate, one
+/// test inlined three times (0x2e7a1, 0x2f436, 0x2ebc8): the eye's leg counts
+/// as much as the flags, so a player standing up out of prone keeps prone's
+/// accel and cannot jump until the eye reaches the crouch height.
+fn move_stance(ps: &PlayerState) -> Stance {
+    let lerping = ps.view_lerp_ms.is_some();
+    if ps.stance == Stance::Prone
+        || ps.view_lerp_target == VIEW_PRONE
+        || (lerping && ps.view_lerp_target == VIEW_CROUCH && !ps.view_lerp_down)
+    {
+        Stance::Prone
+    } else if ps.ducked || (lerping && ps.view_lerp_target == VIEW_CROUCH) {
+        Stance::Crouch
+    } else {
+        Stance::Stand
+    }
+}
+
+/// How far the running leg has come from `from` toward `to`, 0..1, or 0 when
+/// that is not the leg running (0x308cc).
+fn view_lerp_frac(ps: &PlayerState, from: f32, to: f32) -> f32 {
+    let Some(ms) = ps.view_lerp_ms else {
+        return 0.0;
+    };
+    if to != ps.view_lerp_target {
+        return 0.0;
+    }
+    let from_ok =
+        (from == VIEW_PRONE && !ps.view_lerp_down) || (from == VIEW_STAND && ps.view_lerp_down);
+    if to == VIEW_CROUCH && !from_ok {
+        return 0.0;
+    }
+    (ms as f32 / view_lerp_duration(ps) as f32).clamp(0.0, 1.0)
+}
+
+/// The walk scale's stance factor (0x2e7a1-0x2e8d2): across a leg between
+/// crouch and prone the two scales blend by the leg's progress, otherwise
+/// [`move_stance`]'s own.
+fn stance_speed_scale(ps: &PlayerState) -> f32 {
+    let f = view_lerp_frac(ps, VIEW_CROUCH, VIEW_PRONE);
+    if f != 0.0 {
+        return f * SCALE_PRONE + (1.0 - f) * SCALE_CROUCH;
+    }
+    let f = view_lerp_frac(ps, VIEW_PRONE, VIEW_CROUCH);
+    if f != 0.0 {
+        return f * SCALE_CROUCH + (1.0 - f) * SCALE_PRONE;
+    }
+    move_stance(ps).speed_scale()
 }
 
 /// RTCW `bg_pmove.c` `PM_UpdateLean`. Differences: leans while moving (no
@@ -1192,9 +1399,9 @@ fn enter_prone(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld) {
         ps.prone_dive = true;
         if ps.on_ground {
             let height = if ps.ducked {
-                JUMP_HEIGHT_LOW
+                DIVE_HEIGHT_LOW
             } else {
-                JUMP_HEIGHT_STAND
+                DIVE_HEIGHT_STAND
             };
             ps.velocity.z = (2.0 * height * GRAVITY).sqrt();
             ps.on_ground = false;
@@ -1381,6 +1588,10 @@ fn ground_trace(ps: &mut PlayerState, world: &MoveWorld, mask: u32) {
         ps.maxs(),
         mask,
     );
+    // Any hit ends the jump's step allowance, thrown off or not (0x305c8).
+    if t.fraction < 1.0 {
+        ps.jump_origin_z = 0.0;
+    }
     let thrown_off = thrown_off_ground(ps, t.normal);
     ps.ground_plane = (t.fraction < 1.0 && !thrown_off).then_some(t.normal);
     if t.fraction < 1.0 && t.normal.z >= MIN_WALK_NORMAL && !thrown_off {
@@ -1456,14 +1667,14 @@ fn friction(ps: &mut PlayerState, on_ladder: bool, dt: f32) {
 /// `speed * max / (127 * total)` over the cmd bytes, with a backpedal read
 /// through `backSpeedScale` and a strafe through `strafeSpeedScale` before
 /// the max is taken, then `walkSpeedScale` on the ADS walk and otherwise
-/// `runSpeedScale` with `leanSpeedScale` on a lean, the stance scale, the
-/// wade scale and the weapon's `moveSpeedScale`. The cmd magnitude then
+/// `runSpeedScale` with `leanSpeedScale` on a lean, the stance scale
+/// ([`stance_speed_scale`]), the wade scale and the weapon's `moveSpeedScale`. The cmd magnitude then
 /// multiplies back in, so a lone full key wishes `SPEED_RUN` and a diagonal
 /// wishes no more (docs/research/cod11-mantle.md, "The wish speed").
 ///
 /// `walk_slow` is the client's own fly-mode key and takes the walk scale.
-/// Not ported: the crouch-to-prone blend across the eye lerp, and the
-/// `wbuttons` 0x4 factor (0.4, rodata 0x70894), which no measured key sets.
+/// Not ported: the `wbuttons` 0x4 factor (0.4, rodata 0x70894), which no
+/// measured key sets.
 fn wish(ps: &PlayerState, input: &PmInput, weapon: Option<&WeaponDef>) -> (Vec3, f32) {
     let (f, r) = (input.forward * 127.0, input.right * 127.0);
     let max = if f < 0.0 { -f * SCALE_BACK } else { f }.max(r.abs() * SCALE_STRAFE);
@@ -1477,7 +1688,7 @@ fn wish(ps: &PlayerState, input: &PmInput, weapon: Option<&WeaponDef>) -> (Vec3,
     } else if ps.lean != 0.0 {
         scale *= SCALE_LEAN;
     }
-    scale *= ps.stance.speed_scale();
+    scale *= stance_speed_scale(ps);
     scale *= 1.0 - ps.water_level as f32 / 3.0 * WADE_SCALE;
     if let Some(w) = weapon.filter(|w| w.move_speed_scale > 0.0) {
         scale *= w.move_speed_scale;
@@ -1606,7 +1817,7 @@ fn walk_move(
         return;
     }
     let (dir, wishspeed) = wish(ps, input, weapon);
-    let mut accel = match ps.stance {
+    let mut accel = match move_stance(ps) {
         Stance::Stand => PM_ACCELERATE,
         Stance::Crouch => PM_DUCKED_ACCELERATE,
         Stance::Prone => PM_PRONE_ACCELERATE,
@@ -1624,7 +1835,14 @@ fn walk_move(
     if add > 0.0 {
         ps.velocity += dir * (accel * dt * wishspeed.max(WALK_ACCEL_FLOOR)).min(add);
     }
+    // The clip onto the ground keeps the speed whenever it leaves the
+    // velocity pointing the same way (0x2f5b8-0x2f6b3), so a landing that
+    // still carries its fall turns it into ground speed.
+    let (before, speed) = (ps.velocity, ps.velocity.length());
     ps.velocity = clip_velocity(ps.velocity, ps.ground_normal);
+    if ps.velocity.dot(before) > 0.0 {
+        ps.velocity = ps.velocity.normalize_or_zero() * speed;
+    }
     // Standing still skips the move but not the legs: retail jumps straight
     // to PM_SetMovementDir (@0x2f6db), which is what keeps a prone player's
     // legs following its body while it turns on the spot.
@@ -1755,7 +1973,7 @@ fn check_ladder_move(
         ps.on_ladder = false;
         return None;
     }
-    // skip detection within pm_ladderJumpTime of a push-off (@0x33822): this
+    // skip detection within pm_ladderJumpTime of a jump (@0x33822): this
     // is what makes a push-off actually leave the wall
     if ps.since_jump_ms < LADDER_REGRAB_LOCK_MS {
         ps.on_ladder = false;
@@ -1817,33 +2035,60 @@ fn check_ladder_move(
     ladder.then_some((normal, ladderforward))
 }
 
-/// Retail `PM_Jump` body (@0x2eb98), reached from a ladder only. vz =
-/// sqrt(GRAVITY * 78) scaled x0.75 leaving the wall (@0x708c8/0x708d0);
-/// horizontal reset to 128 along the horizontal forward reflected off the
-/// ladder plane while facing it (@0x2eca2-0x2ed36, coefficient -2.0
-/// @0x708d4), else along the plain forward. The weapon-state gates at
-/// @0x2ebcc-0x2ec03 have no vcod counterpart; events/anim are out of scope.
-fn ladder_push_off(ps: &mut PlayerState, input: &PmInput, normal: Vec3) -> bool {
-    if !input.jump
-        || ps.stance != Stance::Stand
-        || ps.jump_latched
-        || ps.since_jump_ms <= LADDER_REJUMP_COOLDOWN_MS - 1.0
+/// Retail `PM_CheckJump` (0x2eb98), called from `PM_WalkMove` and
+/// `PM_LadderMove`; `ladder` is the ladder plane when the latter. Refused
+/// inside 500 ms of the last jump, on a held key and to anything but a
+/// standing player. vz = sqrt(g * 78) with horizontal velocity kept, and
+/// `fJumpOriginZ` 39 up. Off a ladder, vz is scaled 0.75 and the horizontal
+/// reset to 128 along the forward, reflected off the plane while facing it.
+/// A held key refused here is taken off the cmd for the rest of the move, as
+/// retail zeroes `cmd.upmove` (0x2ec13), which the ladder's wish reads. Not
+/// modelled: the `PMF_RESPAWNED` gate (0x800), which only the spawn frame's
+/// cmd meets (docs/research/cod11-mantle.md, "Jumps").
+fn check_jump(
+    ps: &mut PlayerState,
+    input: &mut PmInput,
+    ladder: Option<Vec3>,
+    events: &mut Vec<PmEvent>,
+) -> bool {
+    if ps.since_jump_ms <= JUMP_COOLDOWN_MS - 1.0 || move_stance(ps) != Stance::Stand || !input.jump
     {
         return false;
     }
-    let f = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0).normalize_or_zero();
-    // reflection only when looking into the wall (n.forward < 0, @0x2ecd5)
-    let dir = if normal.dot(forward3(ps)) < 0.0 {
-        let d2 = f.x * normal.x + f.y * normal.y;
-        (f - normal * (2.0 * d2)).normalize_or_zero()
-    } else {
-        f
-    };
-    ps.velocity.x = dir.x * LADDER_PUSHOFF_SPEED;
-    ps.velocity.y = dir.y * LADDER_PUSHOFF_SPEED;
-    ps.velocity.z = (GRAVITY * 78.0).sqrt() * 0.75;
-    ps.on_ladder = false;
+    if ps.jump_latched {
+        input.jump = false;
+        return false;
+    }
+    ps.on_ground = false;
+    ps.ground_plane = None;
     ps.jump_latched = true;
+    ps.velocity.z = (2.0 * JUMP_HEIGHT * GRAVITY).sqrt();
+    ps.jump_origin_z = ps.origin.z + JUMP_HEIGHT;
+    if let Some(normal) = ladder {
+        ps.velocity.z *= 0.75;
+        let f = Vec3::new(ps.yaw.cos(), ps.yaw.sin(), 0.0).normalize_or_zero();
+        // reflection only when looking into the wall (n.forward < 0, @0x2ecd5)
+        let dir = if normal.dot(forward3(ps)) < 0.0 {
+            let d2 = f.x * normal.x + f.y * normal.y;
+            (f - normal * (2.0 * d2)).normalize_or_zero()
+        } else {
+            f
+        };
+        ps.velocity.x = dir.x * LADDER_PUSHOFF_SPEED;
+        ps.velocity.y = dir.y * LADDER_PUSHOFF_SPEED;
+        ps.on_ladder = false;
+    }
+    // 70 + material off the last ground trace; material 0 or the silent
+    // surfaceparm emits nothing (@0x2ed90-0x2edb9).
+    let sf = ps.ground_surface_flags;
+    let mat = crate::collision::sound_material(sf);
+    if mat != 0 && sf & SURF_NO_SOUND == 0 {
+        events.push(PmEvent {
+            event: EV_JUMP_BASE + mat,
+            parm: 0,
+        });
+    }
+    ps.aim_spread_scale = (ps.aim_spread_scale + JUMP_SPREAD_ADD).min(JUMP_SPREAD_MAX);
     ps.jumped = true;
     true
 }
@@ -1862,21 +2107,13 @@ fn ladder_move(
 ) {
     // retail tries the push-off first; a jump runs the normal mover this
     // frame and stamps jumpTime (@0x3394c-0x33964)
-    if ladder_push_off(ps, input, normal) {
-        // PM_Jump @0x2eda8-0x2edb9: 70 + material off the last ground trace;
-        // material 0 or the silent surfaceparm emits nothing
-        let sf = ps.ground_surface_flags;
-        let mat = crate::collision::sound_material(sf);
-        if mat != 0 && sf & SURF_NO_SOUND == 0 {
-            events.push(PmEvent {
-                event: EV_JUMP_BASE + mat,
-                parm: 0,
-            });
-        }
-        air_move(ps, input, world, dt, MASK_PLAYERSOLID, Some(events));
+    let mut cmd = *input;
+    if check_jump(ps, &mut cmd, Some(normal), events) {
+        air_move(ps, &cmd, world, dt, MASK_PLAYERSOLID, Some(events));
         ps.since_jump_ms = 0.0;
         return;
     }
+    let input = &cmd;
 
     if ladderforward {
         let push = -LADDER_PUSH_SPEED;
@@ -2099,7 +2336,7 @@ fn step_slide_move(
     mask: u32,
     events: Option<&mut Vec<PmEvent>>,
 ) {
-    let step_size = if ps.stance == Stance::Prone {
+    let mut step_size = if ps.stance == Stance::Prone {
         STEPSIZE_PRONE
     } else {
         STEPSIZE
@@ -2108,11 +2345,25 @@ fn step_slide_move(
     let start_v = ps.velocity;
     let slide = slide_move(ps, world, dt, gravity, mask);
     let blocked = slide.blocked;
-    // Retail takes the down pass on every grounded frame, not only a blocked
-    // one: `PM_StepSlideMove` (0x350ec) tests `groundEntityNum` and jumps into
-    // the body when the player is on something, where Q3 returns as soon as
-    // the slide succeeded (docs/research/cod11-mantle.md, "The ground snap").
-    if !blocked && !ps.on_ground {
+    // The entry gate (0x35057-0x35112). Retail takes the down pass on every
+    // grounded frame, not only a blocked one, where Q3 returns as soon as the
+    // slide succeeded (docs/research/cod11-mantle.md, "The ground snap"). In
+    // the air it steps only a blocked move: one still under its jump's origin,
+    // with the step cut to reach no higher than that origin, or a climb up a
+    // ladder ("The jump's step").
+    let mut jump_step = false;
+    if blocked && !ps.on_ground && ps.jump_origin_z.abs() > 0.001 && start_o.z < ps.jump_origin_z {
+        let reach = ps.jump_origin_z - start_o.z;
+        if reach < 1.0 {
+            return;
+        }
+        step_size = reach.min(STEPSIZE);
+        jump_step = true;
+    }
+    let through = ps.on_ground || jump_step || blocked && ps.on_ladder && ps.velocity.z > 0.0;
+    // A start inside a solid steps out of it as before: retail never has a
+    // player there (the revert below), and vcod's tests do.
+    if !through && !slide.stuck {
         return;
     }
     let (mins, maxs) = (ps.mins(), ps.maxs());
@@ -2174,10 +2425,14 @@ fn step_slide_move(
     // A start inside a solid keeps its step out of it: retail's test would
     // put it back, but retail never has a player there, since its spawns sit
     // 0.125 up, and vcod's tests and its fallback spawn do.
+    // A jump's step that ends at or above the jump's origin is reverted too
+    // (0x35450-0x35468).
     let v = ps.velocity.truncate();
     let flat = v.dot((down_o - start_o).truncate());
     let stepped = v.dot((ps.origin - start_o).truncate());
-    if !slide.stuck && flat + STEP_REVERT_EPS > stepped {
+    if !slide.stuck && flat + STEP_REVERT_EPS > stepped
+        || jump_step && ps.origin.z >= ps.jump_origin_z
+    {
         ps.origin = down_o;
         ps.velocity = down_v;
         // The ground snap proper (0x354cc-0x3557b): a reverted move on a
@@ -2198,17 +2453,21 @@ fn step_slide_move(
             }
         }
     }
+    // A jump's step that rose is held to the speed that just reaches the
+    // jump's origin, and to none within 0.1 of it (0x355a4-0x35655).
+    if jump_step && ps.origin.z > down_o.z {
+        let left = ps.jump_origin_z - ps.origin.z;
+        ps.velocity.z = if left < 0.1 {
+            0.0
+        } else {
+            ps.velocity.z.min((2.0 * left * GRAVITY).sqrt())
+        };
+    }
     // The step-up and the snap both reach this, and so does a reverted step:
-    // retail's tail is past every arm of the move (@0x35659). It is out of
-    // reach in the air, though: retail's blocked arm rejoins the same
-    // `groundEntityNum` test when `fJumpOriginZ` is 0 (@0x3507d), so the only
-    // airborne step it announces is the jump-origin allowance vcod does not
-    // model. Ours still steps a blocked airborne move, and must not announce
-    // that one.
-    if let Some(events) = events {
-        if ps.on_ground {
-            step_view(ps, events, start_o.z, down_o.z, step_size);
-        }
+    // retail's tail is past every arm of the move (@0x35659), so everything
+    // the entry gate let through announces its step.
+    if let Some(events) = events.filter(|_| through) {
+        step_view(ps, events, start_o.z, down_o.z, step_size);
     }
 }
 
@@ -2469,37 +2728,43 @@ mod tests {
         }
     }
 
-    /// Stance changes ease the eye instead of snapping: 200 ms for the
-    /// stand/crouch family, 400 ms into/out of prone
-    /// (PM_GetViewHeightLerpTime @0x345B8; bg_duck2prone_time/
-    /// bg_prone2duck_time default 400, docs/research/cod11-server-handshake.md).
+    /// Standing to prone is two legs of the eye, 150 ms down to the crouch
+    /// height and 400 ms on along a curve that dips to 15 at half way, and the
+    /// walk scale is prone's through the first and blends from crouch's
+    /// through the second (docs/research/cod11-mantle.md, "The eye through a
+    /// stance change"; the street capture's sideways press is the evidence).
     #[test]
-    fn viewheight_lerps_on_stance_change() {
+    fn a_prone_press_walks_the_eye_through_the_crouch_height() {
         let w = flat();
         let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50); // settle on the ground
         assert_eq!(ps.view_height(), VIEW_STAND);
 
-        let crouch = PmInput {
-            crouch: true,
-            ..PmInput::default()
-        };
-        tick(&mut ps, &crouch, &w, 12); // ~100 ms: partway down
-        let mid = ps.view_height();
-        assert!(mid < VIEW_STAND - 2.0 && mid > VIEW_CROUCH + 2.0, "{mid}");
-        tick(&mut ps, &crouch, &w, 14); // ~200 ms total: settled
-        assert_eq!(ps.view_height(), VIEW_CROUCH);
-
         let prone = PmInput {
             prone: true,
             ..PmInput::default()
         };
-        tick(&mut ps, &prone, &w, 25); // ~200 ms: prone runs at the 400 ms pace
-        let mid = ps.view_height();
-        assert!(mid > VIEW_PRONE + 2.0 && mid < VIEW_CROUCH, "{mid}");
-        tick(&mut ps, &prone, &w, 26); // ~400 ms total
+        tick(&mut ps, &prone, &w, 1);
+        assert_eq!(
+            (ps.view_lerp_target, ps.view_lerp_down),
+            (VIEW_CROUCH, true)
+        );
+        assert_eq!(stance_speed_scale(&ps), SCALE_PRONE);
+        tick(&mut ps, &prone, &w, 19); // 152 ms: the crouch leg is done
+        assert_eq!(
+            (ps.view_lerp_target, ps.view_lerp_ms),
+            (VIEW_PRONE, Some(0))
+        );
+        assert_eq!(ps.view_height(), VIEW_CROUCH);
+        tick(&mut ps, &prone, &w, 25); // 200 ms into the prone leg
+        assert_eq!(ps.view_height(), 15.0);
+        let half = SCALE_PRONE * 0.5 + SCALE_CROUCH * 0.5;
+        assert!((stance_speed_scale(&ps) - half).abs() < 1e-6);
+        tick(&mut ps, &prone, &w, 25);
         assert_eq!(ps.view_height(), VIEW_PRONE);
+        assert_eq!(ps.view_lerp_ms, None);
+        assert_eq!(stance_speed_scale(&ps), SCALE_PRONE);
     }
 
     /// `movementDir` is the legs' heading off the view, which the player
@@ -2838,7 +3103,7 @@ mod tests {
         assert!(events.iter().all(|e| e.event == EV_FOOTSTEP_RUN_BASE + 21));
     }
 
-    /// PM_Jump @0x2eda8: the push-off event carries the last ground trace's
+    /// PM_CheckJump @0x2eda8: the push-off event carries the last ground trace's
     /// material; from mid-wall (no ground under the climb) it stays silent.
     #[test]
     fn push_off_jump_event_reads_the_last_ground() {
@@ -2925,6 +3190,12 @@ mod tests {
         assert!(!events.is_empty(), "climbing must step once quiet");
     }
 
+    /// `check_jump` off a ladder plane, the way `ladder_move` calls it.
+    fn push_off(ps: &mut PlayerState, input: &PmInput, normal: Vec3) -> bool {
+        let mut cmd = *input;
+        check_jump(ps, &mut cmd, Some(normal), &mut Vec::new())
+    }
+
     fn ladder_push_off_ran(ps: &PlayerState) -> bool {
         ps.jump_latched && ps.since_jump_ms == 0.0
     }
@@ -2972,14 +3243,14 @@ mod tests {
     }
 
     #[test]
-    fn ground_jump_apex_matches_stance_height() {
+    fn ground_jump_apex_is_the_jump_height() {
         let w = flat();
         let w = MoveWorld::bare(&w);
         let run = PmInput {
             forward: 1.0,
             ..Default::default()
         };
-        // retail: vz = sqrt(2 * height * g), height 34 standing (0x70be8)
+        // retail: vz = sqrt(2 * 39 * g) standing (0x708c8)
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50); // settle
         let mut apex = 0.0f32;
@@ -2996,33 +3267,33 @@ mod tests {
             apex = apex.max(ps.origin.z);
         }
         assert!(
-            (apex - JUMP_HEIGHT_STAND).abs() < 2.0,
-            "standing apex {apex}, expected ~{}",
-            JUMP_HEIGHT_STAND
+            (apex - JUMP_HEIGHT).abs() < 2.0,
+            "standing apex {apex}, expected ~{JUMP_HEIGHT}"
         );
         assert!(ps.on_ground);
+    }
 
-        // crouched jumps too, at the lower 24-unit height (0x70bec)
-        let launch = PmInput {
-            forward: 1.0,
-            jump: true,
-            crouch: true,
-            ..Default::default()
-        };
-        let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
-        ps.stance = Stance::Crouch;
-        tick(&mut ps, &launch, &w, 50); // settle crouched
-        let mut apex = 0.0f32;
-        pmove(&mut ps, &launch, &w, 1.0 / 125.0, &[]);
-        for _ in 0..200 {
-            pmove(&mut ps, &launch, &w, 1.0 / 125.0, &[]);
-            apex = apex.max(ps.origin.z);
+    /// `PM_CheckJump` refuses `pm_flags` 0x1 and 0x2 (0x2ebc8, 0x2ebf5): a
+    /// crouched or prone player holding jump stays on the ground.
+    #[test]
+    fn neither_a_crouch_nor_a_prone_jumps() {
+        let w = flat();
+        let w = MoveWorld::bare(&w);
+        for (crouch, prone) in [(true, false), (false, true)] {
+            let hold = PmInput {
+                crouch,
+                prone,
+                ..Default::default()
+            };
+            let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
+            tick(&mut ps, &hold, &w, 80); // settle into the stance
+            assert_ne!(ps.stance, Stance::Stand);
+            let hop = PmInput { jump: true, ..hold };
+            for _ in 0..60 {
+                pmove(&mut ps, &hop, &w, 1.0 / 125.0, &[]);
+                assert!(ps.on_ground && !ps.jumped, "crouch {crouch} prone {prone}");
+            }
         }
-        assert!(
-            (apex - JUMP_HEIGHT_LOW).abs() < 2.0,
-            "crouch apex {apex}, expected ~{}",
-            JUMP_HEIGHT_LOW
-        );
     }
 
     /// Retail sweeps a 12-unit box 54 units behind the facing before it lets a
@@ -3185,7 +3456,7 @@ mod tests {
         assert_eq!(ps.stance, Stance::Prone);
         assert!(ps.prone_dive);
         assert!(!ps.on_ground);
-        let takeoff = (2.0 * JUMP_HEIGHT_STAND * GRAVITY).sqrt();
+        let takeoff = (2.0 * DIVE_HEIGHT_STAND * GRAVITY).sqrt();
         assert!(
             (ps.velocity.z - (takeoff - GRAVITY * 0.008)).abs() < 1.0,
             "vz {}",
@@ -3236,8 +3507,8 @@ mod tests {
             apex = apex.max(ps.origin.z);
         }
         assert!(
-            (apex - JUMP_HEIGHT_STAND).abs() < 2.0,
-            "standing apex {apex}, expected ~{JUMP_HEIGHT_STAND}"
+            (apex - JUMP_HEIGHT).abs() < 2.0,
+            "standing apex {apex}, expected ~{JUMP_HEIGHT}"
         );
     }
 
@@ -3288,7 +3559,7 @@ mod tests {
     }
 
     /// At 8 ms a frame's gravity is 6.4 and the snap keeps 6 of it, so a
-    /// 125 fps jump tops out over two units above the 34 a 20 ms one reaches.
+    /// 125 fps jump tops out over two units above the 39 a 20 ms one reaches.
     #[test]
     fn a_125_fps_jump_goes_higher() {
         let apex = |dt: f32| {
@@ -3309,60 +3580,57 @@ mod tests {
             apex
         };
         let (fast, slow) = (apex(0.008), apex(0.02));
-        assert!((slow - JUMP_HEIGHT_STAND).abs() < 1.0, "20 ms apex {slow}");
+        assert!((slow - JUMP_HEIGHT).abs() < 1.0, "20 ms apex {slow}");
         assert!(fast - slow > 1.5, "8 ms apex {fast}, 20 ms {slow}");
     }
 
+    /// A held key jumps once: the latch (`pm_flags` 0x8) holds until the key
+    /// is released, and a press inside 500 ms of the last jump is refused
+    /// (`PM_CheckJump` 0x2ebb3, 0x2ec0d).
     #[test]
-    fn ground_jumps_chain_while_holding_forward_and_jump() {
-        // no cooldown to port: retail's ps.jumpTime is written only by the
-        // ladder push-off (@0x33964) and steep-slope jump (@0x2f279), never
-        // by the ground jump; its bit-0x20 gate is ADS idle state, not a timer
+    fn a_held_jump_does_not_chain_and_a_repress_waits_out_the_cooldown() {
         let w = flat();
         let w = MoveWorld::bare(&w);
+        let dt = 1.0 / 125.0;
         let hop = PmInput {
             forward: 1.0,
             jump: true,
             ..Default::default()
         };
+        let run = PmInput { jump: false, ..hop };
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50); // settle
         let mut launches = 0;
-        let mut prev_vz = ps.velocity.z;
         for _ in 0..300 {
-            pmove(&mut ps, &hop, &w, 1.0 / 125.0, &[]);
-            if prev_vz < 100.0 && ps.velocity.z > 200.0 {
-                launches += 1;
-            }
-            prev_vz = ps.velocity.z;
+            pmove(&mut ps, &hop, &w, dt, &[]);
+            launches += usize::from(ps.jumped);
         }
-        assert!(launches >= 3, "expected chained jumps, got {launches}");
-    }
+        assert_eq!(launches, 1, "a held key jumps once");
+        assert!(ps.on_ground && ps.jump_latched);
 
-    #[test]
-    fn prone_jumps_at_the_low_height() {
-        // bit 0x20 (the ground jump's extra gate @0x31ccb) is set only while
-        // the ADS button is held (@0x37247); without ADS modeled, prone jumps
-        // like crouch at the 24-unit height (@0x70bec)
-        let w = flat();
-        let w = MoveWorld::bare(&w);
-        let hop = PmInput {
-            forward: 1.0,
-            jump: true,
-            prone: true,
-            ..Default::default()
-        };
+        // Released for a frame and pressed again, well past 500 ms: jumps.
+        pmove(&mut ps, &run, &w, dt, &[]);
+        assert!(!ps.jump_latched);
+        pmove(&mut ps, &hop, &w, dt, &[]);
+        assert!(ps.jumped);
+
+        // Land, then re-press inside the cooldown: a full flight outlasts the
+        // 500 ms, so the jump is cut short by taking its vertical speed away.
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
-        tick(&mut ps, &hop, &w, 50); // settle prone
-        let mut apex = 0.0f32;
-        for _ in 0..60 {
-            pmove(&mut ps, &hop, &w, 1.0 / 125.0, &[]);
-            apex = apex.max(ps.origin.z);
+        tick(&mut ps, &PmInput::default(), &w, 50);
+        pmove(&mut ps, &hop, &w, dt, &[]);
+        assert!(ps.jumped);
+        ps.velocity.z = 0.0;
+        tick(&mut ps, &run, &w, 20);
+        assert!(ps.on_ground, "landed");
+        assert!(ps.since_jump_ms < JUMP_COOLDOWN_MS);
+        pmove(&mut ps, &hop, &w, dt, &[]);
+        assert!(!ps.jumped, "a jump inside 500 ms of the last is refused");
+        while ps.since_jump_ms <= JUMP_COOLDOWN_MS - 1.0 {
+            pmove(&mut ps, &run, &w, dt, &[]);
         }
-        assert!(
-            (apex - JUMP_HEIGHT_LOW).abs() < 2.5,
-            "prone apex {apex}, expected ~{JUMP_HEIGHT_LOW}"
-        );
+        pmove(&mut ps, &hop, &w, dt, &[]);
+        assert!(ps.jumped, "and taken once the 500 ms are up");
     }
 
     /// The step tail: the vertical jump the step added rides `EV_STEP_VIEW`
@@ -3429,6 +3697,62 @@ mod tests {
         assert!(events.is_empty(), "{events:?}");
     }
 
+    /// In the air only a jump steps, and never past its origin
+    /// (`PM_StepSlideMove` 0x35057-0x35112, 0x35450; docs/research/cod11-mantle.md,
+    /// "The jump's step").
+    #[test]
+    fn an_airborne_step_needs_a_jump_and_stops_at_its_origin() {
+        // A ledge 14 high 20 units ahead of an airborne player at 10.
+        let w = test_world(&[(Vec3::new(50.0, -200.0, 0.0), Vec3::new(1024.0, 200.0, 14.0))]);
+        let w = MoveWorld::bare(&w);
+        let fly = |jump_origin_z: f32| {
+            let mut ps = PlayerState::spawn(Vec3::new(30.0, 0.0, 10.0), 0.0);
+            ps.jump_origin_z = jump_origin_z;
+            let mut events = Vec::new();
+            ps.velocity = Vec3::new(200.0, 0.0, 0.0);
+            step_slide_move(
+                &mut ps,
+                &w,
+                0.05,
+                false,
+                MASK_PLAYERSOLID,
+                Some(&mut events),
+            );
+            (ps, events)
+        };
+        // A fall, no jump: held at the face.
+        let (ps, events) = fly(0.0);
+        assert!(
+            ps.origin.z == 10.0 && ps.origin.x < 36.0,
+            "at {}",
+            ps.origin
+        );
+        assert!(events.is_empty());
+        // Under a jump's origin: steps onto the ledge and announces it.
+        let (ps, events) = fly(39.0);
+        assert!(
+            (ps.origin.z - 14.0).abs() < 0.2 && ps.origin.x > 36.0,
+            "at {}",
+            ps.origin
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, EV_STEP_VIEW);
+        // An origin the ledge top is past: the step is reverted.
+        let (ps, _) = fly(13.0);
+        assert!(
+            ps.origin.z == 10.0 && ps.origin.x < 36.0,
+            "at {}",
+            ps.origin
+        );
+        // Already above the origin: no step at all.
+        let (ps, _) = fly(9.0);
+        assert!(
+            ps.origin.z == 10.0 && ps.origin.x < 36.0,
+            "at {}",
+            ps.origin
+        );
+    }
+
     #[test]
     fn prone_steps_lower_than_standing() {
         // retail picks the 10-unit step height off pm_flags bit 0x1
@@ -3436,6 +3760,7 @@ mod tests {
         let w = test_world(&[(Vec3::new(50.0, -200.0, 0.0), Vec3::new(1024.0, 200.0, 14.0))]);
         let w = MoveWorld::bare(&w);
         let mut stand = PlayerState::spawn(Vec3::new(30.0, 0.0, 0.0), 0.0);
+        stand.on_ground = true;
         stand.velocity = Vec3::new(200.0, 0.0, 0.0);
         for _ in 0..20 {
             stand.velocity.x = 200.0;
@@ -3448,6 +3773,7 @@ mod tests {
         );
 
         let mut prone = PlayerState::spawn(Vec3::new(30.0, 0.0, 0.0), 0.0);
+        prone.on_ground = true;
         prone.stance = Stance::Prone;
         for _ in 0..20 {
             prone.velocity.x = 200.0;
@@ -3624,6 +3950,7 @@ mod tests {
         let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         ps.stance = Stance::Crouch;
+        ps.ducked = true;
         let crouched = PmInput {
             forward: 1.0,
             crouch: true,
@@ -4129,14 +4456,14 @@ mod tests {
     }
 
     #[test]
-    fn ladder_push_off_gate_matrix() {
-        // PM_Jump gates @0x2ebb3-0x2ec13: 500 ms since the last push-off, not
-        // crouched/prone, jump key released since the previous one
+    fn jump_gate_matrix() {
+        // PM_CheckJump gates @0x2ebb3-0x2ec13: 500 ms since the last jump,
+        // standing, jump key released since the previous one
         let n = Vec3::new(-1.0, 0.0, 0.0);
         let mk = |stance: Stance| {
             let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
             ps.stance = stance;
-            ps.on_ladder = true;
+            ps.ducked = stance == Stance::Crouch;
             ps.since_jump_ms = 10000.0;
             ps
         };
@@ -4144,42 +4471,63 @@ mod tests {
             jump: true,
             ..Default::default()
         };
+        let try_jump = |ps: &mut PlayerState, input: &PmInput, ladder: Option<Vec3>| {
+            let mut cmd = *input;
+            check_jump(ps, &mut cmd, ladder, &mut Vec::new())
+        };
 
+        // Off the ground: vz = sqrt(78 * g) = 249.8, the horizontal kept and
+        // the jump origin 39 up.
         let mut ps = mk(Stance::Stand);
-        assert!(ladder_push_off(&mut ps, &jump, n));
-        // facing straight into the wall (yaw 0, normal -1): reflection sends
-        // the push straight back; vz = sqrt(78 * g) * 0.75 = 187.35
+        ps.velocity = Vec3::new(100.0, 20.0, 0.0);
+        assert!(try_jump(&mut ps, &jump, None));
+        assert!((ps.velocity.z - 249.8).abs() < 0.05, "vz {}", ps.velocity.z);
+        assert_eq!((ps.velocity.x, ps.velocity.y), (100.0, 20.0));
+        assert_eq!(ps.jump_origin_z, JUMP_HEIGHT);
+        assert!(ps.jump_latched && !ps.on_ground);
+        assert_eq!(ps.aim_spread_scale, JUMP_SPREAD_ADD);
+
+        // Off a ladder, facing straight into the wall (yaw 0, normal -1):
+        // reflection sends the push straight back; vz = 249.8 * 0.75 = 187.35
+        let mut ps = mk(Stance::Stand);
+        ps.on_ladder = true;
+        assert!(try_jump(&mut ps, &jump, Some(n)));
         assert!((ps.velocity.z - 187.35).abs() < 0.1, "vz {}", ps.velocity.z);
         assert!((ps.velocity.x + 128.0).abs() < 0.1, "vx {}", ps.velocity.x);
         assert!(ps.velocity.y.abs() < 0.1);
-        assert!(ps.jump_latched);
+        assert!(!ps.on_ladder);
 
-        let mut ps = mk(Stance::Stand);
-        ps.since_jump_ms = LADDER_REJUMP_COOLDOWN_MS - 1.0;
-        assert!(!ladder_push_off(&mut ps, &jump, n), "inside the cooldown");
+        for ladder in [None, Some(n)] {
+            let mut ps = mk(Stance::Stand);
+            ps.since_jump_ms = JUMP_COOLDOWN_MS - 1.0;
+            assert!(!try_jump(&mut ps, &jump, ladder), "inside the cooldown");
 
-        // boundary: retail allows at delta > 499, so exactly 500 passes
-        let mut ps = mk(Stance::Stand);
-        ps.since_jump_ms = LADDER_REJUMP_COOLDOWN_MS;
-        assert!(ladder_push_off(&mut ps, &jump, n), "500 ms allows");
+            // boundary: retail allows at delta > 499, so exactly 500 passes
+            let mut ps = mk(Stance::Stand);
+            ps.since_jump_ms = JUMP_COOLDOWN_MS;
+            assert!(try_jump(&mut ps, &jump, ladder), "500 ms allows");
 
-        let mut ps = mk(Stance::Stand);
-        ps.jump_latched = true;
-        assert!(
-            !ladder_push_off(&mut ps, &jump, n),
-            "held key must release first"
-        );
+            // a held key is refused and taken off the cmd
+            let mut ps = mk(Stance::Stand);
+            ps.jump_latched = true;
+            let mut cmd = jump;
+            assert!(
+                !check_jump(&mut ps, &mut cmd, ladder, &mut Vec::new()),
+                "held key must release first"
+            );
+            assert!(!cmd.jump);
 
-        let mut ps = mk(Stance::Crouch);
-        assert!(!ladder_push_off(&mut ps, &jump, n), "crouch refuses");
-        let mut ps = mk(Stance::Prone);
-        assert!(!ladder_push_off(&mut ps, &jump, n), "prone refuses");
+            let mut ps = mk(Stance::Crouch);
+            assert!(!try_jump(&mut ps, &jump, ladder), "crouch refuses");
+            let mut ps = mk(Stance::Prone);
+            assert!(!try_jump(&mut ps, &jump, ladder), "prone refuses");
 
-        let mut ps = mk(Stance::Stand);
-        assert!(
-            !ladder_push_off(&mut ps, &PmInput::default(), n),
-            "no jump key"
-        );
+            let mut ps = mk(Stance::Stand);
+            assert!(
+                !try_jump(&mut ps, &PmInput::default(), ladder),
+                "no jump key"
+            );
+        }
     }
 
     #[test]
@@ -4367,7 +4715,7 @@ mod tests {
         let n = Vec3::new(-1.0, 0.0, 0.0);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         ps.pitch = 45f32.to_radians();
-        assert!(ladder_push_off(
+        assert!(push_off(
             &mut ps,
             &PmInput {
                 jump: true,
@@ -4386,7 +4734,7 @@ mod tests {
         // (@0x2ed36) and only then scales x/y by 128 (@0x2ed5a)
         let n = Vec3::new(-2.0, 0.0, 1.0).normalize();
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
-        assert!(ladder_push_off(
+        assert!(push_off(
             &mut ps,
             &PmInput {
                 jump: true,

@@ -93,27 +93,31 @@ const ANIM_FIELDS: &[&str] = &["legsAnim", "torsoAnim"];
 /// Poses whose anim nothing derives yet, with the reason. The guard below
 /// fails on an entry that starts matching, so this cannot rot into a lie.
 /// `ads_stand` was an entry, and it earned itself back when the animscript's
-/// `ads` condition started reading the ADS flag instead of a hardcoded false.
-const ANIM_GAPS: &[(&str, &str)] = &[(
-    "land",
-    "ours takes off at 233.2 where retail's ground jump leaves at 249.8 \
-     (bump_ab.rs TAKEOFF), so our landing frame starts at -207 and misses the \
-     -220 the land anim needs; the pose was skipped as moving until the \
-     landing damp took our 15 units/s of slope drift down to the idle speed",
-)];
+/// `ads` condition started reading the ADS flag instead of a hardcoded false;
+/// `land` earned itself back with retail's 249.8 takeoff and the probe's
+/// 16 ms cmds ([`send_at_probe_rate`]).
+const ANIM_GAPS: &[(&str, &str)] = &[];
 
-/// `pm_flags` bits retail sets that the mover has no source for: the map, the
+/// `pm_flags` bits where the capture and the mover disagree, with the map, the
 /// pose that shows it, the bit, and why. Excepted bit by bit and pose by pose,
 /// so every other bit of `pm_flags` is still compared at that pose and the
 /// whole word everywhere else. The guard below fails on an entry that starts
 /// matching.
-/// The held-jump latch entry that used to sit here is gone: the retaken
-/// pavlov capture reads 0x8 clear at `jump_takeoff`, the same as ours and as
-/// carentan's, so there is nothing left to except.
-/// Empty is the goal and it is empty: the two `ads_stand` entries for
-/// `pm_flags` 0x20 and 0x80 earned themselves back when pmove took retail's
-/// ADS flag (combat doc, 1.13).
-const PM_FLAG_GAPS: &[(&str, &str, i32, &str)] = &[];
+/// The two `ads_stand` entries for `pm_flags` 0x20 and 0x80 earned themselves
+/// back when pmove took retail's ADS flag (combat doc, 1.13). The two left are
+/// the capture's, not the mover's.
+const PM_FLAG_GAPS: &[(&str, &str, i32, &str)] = &[
+    ("mp_carentan", "jump_takeoff", 0x8, HELD_JUMP_WENT_COMPACT),
+    ("mp_pavlov", "jump_takeoff", 0x8, HELD_JUMP_WENT_COMPACT),
+];
+/// Both captures predate the full-branch usercmd writer (2026-09-02 against
+/// 60c66a8's 2026-09-05), so the held jump's second cmd went out compact and
+/// retail decoded its `up` off the playerstate-built base, which is 0
+/// (docs/protocol-1.1.md, "The base cmd is built from the playerstate"); the
+/// latch clears on `upmove <= 9` (0x34135). The replay holds 127 as the
+/// `!input` line says, and so does the bump walker's full-branch capture,
+/// which reads 0x8 set through the whole jump (`bump_ab.rs`).
+const HELD_JUMP_WENT_COMPACT: &str = "held jump decoded as released";
 
 /// The bits of `name` not compared at `label` on `map`, from [`PM_FLAG_GAPS`].
 fn gap_mask(map: &str, label: &str, name: &str) -> i32 {
@@ -350,7 +354,7 @@ fn ours(map: &str, poses: &[Pose], join: (&str, &str), fs: vcod_common::pk3::Pk3
         let mut last_moving = None;
         for _ in 0..HOLD_FRAMES {
             now += Duration::from_millis(50);
-            cl.send_frame(&pose.input);
+            send_at_probe_rate(&mut cl, &pose.input);
             common::step(&mut sv, &q, &mut cl, now);
             let Some(ps) = cl.snapshots().newest().map(|s| s.ps.clone()) else {
                 continue;
@@ -386,6 +390,33 @@ fn ours(map: &str, poses: &[Pose], join: (&str, &str), fs: vcod_common::pk3::Pk3
         out.settled.push(sampled);
     }
     out
+}
+
+/// One server frame's worth of the probe's cmds: it sends one every 16 ms,
+/// three to a frame, and the land anim depends on it. Off the 249.8 takeoff,
+/// 16 ms steps start the landing frame near -237, past the -220 the land
+/// anim needs (`LAND_ANIM_SPEED`); one 50 ms cmd a frame starts it at -210.
+/// `send_frame`'s stamp, quantizing and `delta_angles` rebase, per cmd.
+fn send_at_probe_rate<T: vcod_common::net::Transport>(
+    cl: &mut vcod_common::net::NetClient<T>,
+    input: &UserCmd,
+) {
+    let now = cl.server_clock_ms();
+    let da = cl
+        .snapshots()
+        .newest()
+        .map(|s| vcod_common::net::DELTA_ANGLE_FIELDS.map(|n| s.ps.field_i32(&PROTOCOL_V1, n)));
+    let cmds = [now - 34, now - 17, now].map(|t| {
+        let mut c = *input;
+        c.server_time = t;
+        if let Some(da) = da {
+            for (a, d) in c.angles.iter_mut().zip(da) {
+                *a = (*a - d) & 0xffff;
+            }
+        }
+        c
+    });
+    cl.send_cmds(&cmds);
 }
 
 fn check(map: &str, gametype: &str) {

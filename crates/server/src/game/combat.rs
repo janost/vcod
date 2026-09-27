@@ -589,7 +589,7 @@ fn trace_attack(
 /// can cross the column and meet none (combat doc, section 3). Candidates in
 /// the order the ray reaches them, and the first one whose bones it does
 /// score is the answer.
-fn trace_bodies(
+pub fn trace_bodies(
     start: Vec3,
     end: Vec3,
     pass: usize,
