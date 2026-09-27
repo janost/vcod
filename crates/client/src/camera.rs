@@ -1,7 +1,7 @@
 use glam::{Mat4, Quat, Vec3};
 
-/// Default (non-ADS) vertical FOV, degrees.
-pub const DEFAULT_FOV_DEG: f32 = vcod_common::weapon::DEFAULT_FOV;
+/// Default (non-ADS) horizontal FOV, degrees.
+pub const DEFAULT_FOV_DEG: f32 = vcod_common::weapon::CG_FOV;
 
 /// Frame projection planes; the sky pass sizes its box off them
 /// (`box_size(Z_FAR, Z_NEAR)`).
@@ -22,19 +22,31 @@ pub fn basis(yaw: f32, pitch: f32) -> (Vec3, Vec3, Vec3) {
     (forward, right, up)
 }
 
+/// The vertical fov for a horizontal `fov_x` across a viewport `aspect`
+/// wide, both in degrees: retail's refdef keeps `fov_x` and derives this
+/// (docs/research/xmodel-v14-format.md, "The view fov").
+pub fn fov_y(fov_x: f32, aspect: f32) -> f32 {
+    2.0 * ((fov_x / 2.0).to_radians().tan() / aspect)
+        .atan()
+        .to_degrees()
+}
+
+/// A projection `fov_x` degrees wide across a viewport `aspect` wide.
+pub fn perspective(fov_x: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
+    glam::camera::rh::proj::directx::perspective(
+        fov_y(fov_x, aspect).to_radians(),
+        aspect,
+        near,
+        far,
+    )
+}
+
 /// Positive roll (leaning right) rotates the world counterclockwise, as CoD
-/// does. `fov_deg` is vertical.
-pub fn view_proj_from(
-    pos: Vec3,
-    yaw: f32,
-    pitch: f32,
-    roll: f32,
-    fov_deg: f32,
-    aspect: f32,
-) -> Mat4 {
+/// does. `fov_x` is horizontal.
+pub fn view_proj_from(pos: Vec3, yaw: f32, pitch: f32, roll: f32, fov_x: f32, aspect: f32) -> Mat4 {
     let (forward, _, _) = basis(yaw, pitch);
     let up = Quat::from_axis_angle(forward, roll) * Vec3::Z;
-    glam::camera::rh::proj::directx::perspective(fov_deg.to_radians(), aspect, Z_NEAR, Z_FAR)
+    perspective(fov_x, aspect, Z_NEAR, Z_FAR)
         * glam::camera::rh::view::look_to_mat4(pos, forward, up)
 }
 
@@ -274,7 +286,29 @@ mod tests {
         assert!(wide > 0.0, "-Y is right, got {wide}");
         assert!(
             zoomed > wide,
-            "fov 50 must magnify vs fov 75, got {zoomed} vs {wide}"
+            "fov 50 must magnify vs fov 80, got {zoomed} vs {wide}"
         );
+    }
+
+    /// Retail's refdef at `cg_fov 80`: 64.4 degrees tall at 4:3, 55.3 at
+    /// 16:10, and a 50-degree sight 38.6 tall at 4:3.
+    #[test]
+    fn fov_y_keeps_the_horizontal_fov() {
+        let close = |a: f32, b: f32| (a - b).abs() < 0.05;
+        assert!(
+            close(fov_y(80.0, 4.0 / 3.0), 64.37),
+            "{}",
+            fov_y(80.0, 4.0 / 3.0)
+        );
+        assert!(close(fov_y(80.0, 1.6), 55.35), "{}", fov_y(80.0, 1.6));
+        assert!(
+            close(fov_y(50.0, 4.0 / 3.0), 38.55),
+            "{}",
+            fov_y(50.0, 4.0 / 3.0)
+        );
+        // The edges of the view sit at +-1 in clip space across the width.
+        let p = perspective(80.0, 1.6, 1.0, 100.0);
+        let edge = p.project_point3(Vec3::new(-(40.0f32.to_radians().tan()), 0.0, -1.0));
+        assert!((edge.x + 1.0).abs() < 1e-5, "{edge}");
     }
 }

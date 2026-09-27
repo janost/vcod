@@ -11,8 +11,69 @@ use crate::pk3::Pk3Fs;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
-/// Degrees.
-pub const DEFAULT_FOV: f32 = 75.0;
+/// Retail's `cg_fov` default: horizontal degrees across the whole view
+/// (docs/research/xmodel-v14-format.md, "The view fov").
+pub const CG_FOV: f32 = 80.0;
+
+/// The view's horizontal fov in degrees, as retail's cgame computes it each
+/// frame: `CG_FOV` zoomed toward `adsZoomFov` over the last `adsZoomInFrac`
+/// (sight rising, `zooming_in`) or `adsZoomOutFrac` of the sight fraction,
+/// 90 at intermission and 55 on a mounted gun. The viewmodel is drawn with
+/// the same fov (docs/research/xmodel-v14-format.md, "The view fov").
+pub fn view_fov_x(
+    def: Option<&WeaponDef>,
+    frac: f32,
+    zooming_in: bool,
+    intermission: bool,
+    mounted: bool,
+) -> f32 {
+    if mounted {
+        return 55.0;
+    }
+    if intermission {
+        return 90.0;
+    }
+    let mut fov = CG_FOV;
+    if let Some(def) = def.filter(|d| d.aim_down_sight) {
+        if frac == 1.0 {
+            fov = def.ads_zoom_fov;
+        } else if frac != 0.0 {
+            let tail = if zooming_in {
+                def.ads_zoom_in_frac
+            } else {
+                def.ads_zoom_out_frac
+            };
+            let into = frac - (1.0 - tail);
+            if into > 0.0 {
+                fov -= (fov - def.ads_zoom_fov) * into / tail;
+            }
+        }
+    }
+    fov
+}
+
+/// Which way the sight last started moving: set when `fWeaponPosFrac` leaves
+/// 0 or 1 upward, cleared when it leaves downward, held otherwise, and only
+/// tracked for a weapon with `aimDownSight`. Retail's zoom and crosshair
+/// shrink both read it (docs/research/cod11-hud-protocol.md, "Crosshair").
+#[derive(Default)]
+pub struct SightDirection {
+    prev: f32,
+    raising: bool,
+}
+
+impl SightDirection {
+    pub fn step(&mut self, weapon: Option<&WeaponDef>, frac: f32) -> bool {
+        if weapon.is_some_and(|d| d.aim_down_sight) {
+            let at_rest = |f: f32| f == 0.0 || f == 1.0;
+            if !at_rest(frac) && at_rest(self.prev) && frac != self.prev {
+                self.raising = self.prev <= frac;
+            }
+            self.prev = frac;
+        }
+        self.raising
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum WeaponAnim {
@@ -291,7 +352,11 @@ pub struct WeaponDef {
     /// what is left of the raise. `panzerfaust_mp` is the one stock MP file
     /// that sets it.
     pub ads_fire: bool,
-    pub ads_zoom_fov: f32, // DEFAULT_FOV means no zoom
+    /// Horizontal degrees; `CG_FOV` when the file names none.
+    pub ads_zoom_fov: f32,
+    /// The tail of the sight fraction the zoom runs over, rising and falling.
+    pub ads_zoom_in_frac: f32,
+    pub ads_zoom_out_frac: f32,
     pub ads_view_bob_mult: f32,
     /// Second ADS bob multiplier the files carry separately; 1.0 changes
     /// nothing, thompson/springfield ship 0 (bob frozen when fully aimed).
@@ -606,7 +671,9 @@ impl WeaponDef {
             ads_trans_out: parse_num(map, "adsTransOutTime", 0.0),
             ads_reload_trans_time: parse_num(map, "adsReloadTransTime", 0.0),
             ads_fire: parse_bool(map, "adsFire", false),
-            ads_zoom_fov: parse_num(map, "adsZoomFov", DEFAULT_FOV),
+            ads_zoom_fov: parse_num(map, "adsZoomFov", CG_FOV),
+            ads_zoom_in_frac: parse_num(map, "adsZoomInFrac", 0.0),
+            ads_zoom_out_frac: parse_num(map, "adsZoomOutFrac", 0.0),
             ads_view_bob_mult: parse_num(map, "adsViewBobMult", 1.0),
             ads_bob_factor: parse_num(map, "adsBobFactor", 1.0),
             semi_auto: parse_bool(map, "semiAuto", false),
@@ -1737,6 +1804,41 @@ mod tests {
         assert_eq!(
             ms, 10.0,
             "no clip length applies to a clip that never loaded"
+        );
+    }
+
+    /// Retail's zoom: none until the fraction enters the tail, then linear
+    /// to `adsZoomFov` at 1, the tail picked by the sight's direction.
+    #[test]
+    fn the_sight_zooms_over_the_tail_of_the_fraction() {
+        let kar = WeaponDef {
+            aim_down_sight: true,
+            ads_zoom_fov: 50.0,
+            ads_zoom_in_frac: 0.5,
+            ads_zoom_out_frac: 0.25,
+            ..def()
+        };
+        let fov = |frac, zooming_in| view_fov_x(Some(&kar), frac, zooming_in, false, false);
+        assert_eq!(fov(0.0, true), CG_FOV);
+        assert_eq!(fov(0.4, true), CG_FOV, "short of the in tail");
+        assert!((fov(0.75, true) - 65.0).abs() < 1e-4, "{}", fov(0.75, true));
+        assert_eq!(fov(1.0, true), 50.0);
+        assert_eq!(fov(0.7, false), CG_FOV, "short of the out tail");
+        assert!((fov(0.875, false) - 65.0).abs() < 1e-4);
+        let no_sight = WeaponDef {
+            aim_down_sight: false,
+            ..kar.clone()
+        };
+        assert_eq!(view_fov_x(Some(&no_sight), 1.0, true, false, false), CG_FOV);
+        assert_eq!(
+            view_fov_x(None, 0.0, false, true, false),
+            90.0,
+            "intermission"
+        );
+        assert_eq!(
+            view_fov_x(Some(&kar), 1.0, true, true, true),
+            55.0,
+            "mounted"
         );
     }
 }

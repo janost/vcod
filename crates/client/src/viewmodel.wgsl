@@ -1,9 +1,9 @@
-// First-person viewmodel: own projection, bind pose baked into the vertices,
-// placed in view space by the motion transform. Unlit; a key light stands in
-// for the engine's light grid.
+// First-person viewmodel: the world's fov with its own near plane, bind pose
+// baked into the vertices, placed in view space by the motion transform.
+// Unlit; a key light stands in for the engine's light grid.
 
 struct VmUniform {
-    proj: mat4x4<f32>,      // viewmodel projection (own FOV)
+    proj: mat4x4<f32>,      // viewmodel projection (world fov, own near plane)
     model: mat4x4<f32>,     // motion transform (view space)
     light_dir: vec4<f32>,   // view-space, normalized, w unused
 };
