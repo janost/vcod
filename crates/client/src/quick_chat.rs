@@ -57,6 +57,12 @@ impl QuickChat {
         }
     }
 
+    /// A download reopened the search path: the voice chat files load again
+    /// on the next line.
+    pub fn reopen(&mut self) {
+        self.tables = None;
+    }
+
     /// The `j`/`k`/`l` handler; true when the command was quick chat. argv
     /// layout per the research doc: `[letter, scope, ?, clientNum, category,
     /// originX, originY, originZ]`.

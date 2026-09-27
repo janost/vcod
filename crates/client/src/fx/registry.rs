@@ -4,7 +4,7 @@
 use crate::fx::sim::SpawnAt;
 use glam::Vec3;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, PoisonError, RwLock};
 use vcod_common::net::events::{byte_to_dir, GameEvent};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::weapon::WeaponDef;
@@ -178,21 +178,12 @@ fn load(fs: &Pk3Fs) -> ImpactTable {
     }
 }
 
-static TABLE: OnceLock<ImpactTable> = OnceLock::new();
+static TABLE: LazyLock<RwLock<ImpactTable>> = LazyLock::new(RwLock::default);
 
-/// Call once before any event is drained; `resolve()` reads an empty table
-/// otherwise.
+/// Loads the table off `fs`: at startup, and again whenever a download
+/// reopens the search path. `resolve()` reads an empty table before the first.
 pub fn init(fs: &Pk3Fs) {
-    if TABLE.set(load(fs)).is_err() {
-        log::warn!(
-            "fx {IMPACTS_CSV_PATH}: init() called after the table was already set (e.g. by an \
-             earlier resolve()); this call's parse is discarded and the earlier table stays live"
-        );
-    }
-}
-
-fn table() -> &'static ImpactTable {
-    TABLE.get_or_init(ImpactTable::default)
+    *TABLE.write().unwrap_or_else(PoisonError::into_inner) = load(fs);
 }
 
 /// `Known` is a recognized event with nothing to draw. `Unknown` is an id this
@@ -282,7 +273,8 @@ fn is_footstep_group(event: i32) -> bool {
 /// Resolve one drained [`GameEvent`] against the cached table and this
 /// frame's muzzles.
 pub fn resolve(ev: &GameEvent, ctx: &ResolveCtx) -> Vec<Resolved> {
-    resolve_with(ev, table(), ctx)
+    let table = TABLE.read().unwrap_or_else(PoisonError::into_inner);
+    resolve_with(ev, &table, ctx)
 }
 
 fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Resolved> {
@@ -452,6 +444,7 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock;
     use vcod_common::net::events::BYTE_DIRS;
 
     fn ev(event: i32, parm: i32, surf_type: i32, pos: [f32; 3]) -> GameEvent {

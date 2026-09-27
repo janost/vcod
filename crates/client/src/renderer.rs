@@ -2410,6 +2410,17 @@ impl Renderer {
         Ok(())
     }
 
+    /// A download reopened the search path: reparse the shader scripts the
+    /// next `load_world` classifies against, and drop the fx and HUD textures
+    /// resolved off the old paks, misses included.
+    pub fn reopen(&mut self, fs: &Pk3Fs) {
+        self.shaders = assets::load_shaders(fs);
+        self.shader_lib = ShaderLib::load(fs);
+        self.lib_warn_count = self.shader_lib.warn_count();
+        self.fx.textures.clear();
+        self.hud_pass.textures.clear();
+    }
+
     /// Drops the map and every model uploaded for it, so no `ModelHandle`
     /// from the old map can index a new upload.
     pub fn unload_world(&mut self) {

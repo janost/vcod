@@ -143,6 +143,12 @@ impl OnlineView {
         self.mouse.1 += dy;
     }
 
+    /// A download reopened the search path, and a pak can replace a model
+    /// under the same name: rebuild the rig on the next `sync_rig`.
+    pub fn reopen(&mut self) {
+        self.built_for = None;
+    }
+
     /// Rebuilds the rig when the weapon or hands `ps` names changed. Returns
     /// the new models (hands, gun) for the renderer to upload.
     pub fn sync_rig(

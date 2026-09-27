@@ -1019,18 +1019,36 @@ fn start_loading(
     })
 }
 
-/// Reopens the pk3 search path after a download. The menus and localized
-/// strings read off the old one are dropped with it, since the new paks may
-/// carry files the old ones lacked.
+/// Reopens the pk3 search path after a download. Everything read off the old
+/// one is read again or dropped to reload lazily, since a new pak may carry
+/// files the old ones lacked or replace one under the same name. The GPU
+/// half is `Renderer::reopen`, the viewmodel rig `OnlineView::reopen`.
+#[allow(clippy::too_many_arguments)]
 fn reopen_fs(
     mod_dir: &std::path::Path,
     fs: &mut Pk3Fs,
     localized: &mut vcod_common::localize::Localized,
     menus: &mut hud::menu::MenuCache,
+    hud: &mut Option<hud::Hud>,
+    audio: &mut audio::AudioSystem,
+    fx: &mut fx::sim::FxSystem,
+    quick_chat: &mut quick_chat::QuickChat,
 ) -> Result<()> {
     *fs = Pk3Fs::open(mod_dir)?;
     *localized = vcod_common::localize::Localized::load(fs);
     *menus = hud::menu::MenuCache::default();
+    match hud {
+        Some(h) => {
+            if let Err(e) = h.reopen(fs) {
+                log::warn!("hud: {e}, keeping the fonts already loaded");
+            }
+        }
+        None => *hud = hud::Hud::new(fs).ok(),
+    }
+    audio.reopen(fs);
+    fx.reopen();
+    fx::registry::init(fs);
+    quick_chat.reopen();
     Ok(())
 }
 
@@ -1797,8 +1815,16 @@ impl ApplicationHandler for App {
                                             &mut self.fs,
                                             &mut self.localized,
                                             &mut self.menus,
+                                            &mut self.hud,
+                                            &mut self.audio,
+                                            &mut self.fx,
+                                            &mut self.quick_chat,
                                         ) {
-                                            Ok(()) => *menu_view = None,
+                                            Ok(()) => {
+                                                *menu_view = None;
+                                                r.reopen(&self.fs);
+                                                view.reopen();
+                                            }
                                             Err(e) => fatal = Some(e),
                                         }
                                     }
@@ -2587,15 +2613,61 @@ impl ApplicationHandler for App {
 mod tests {
     use super::*;
 
-    fn make_pk3(dir: &std::path::Path, file: &str, entries: &[(&str, &str)]) {
+    fn make_pk3(dir: &std::path::Path, file: &str, entries: &[(&str, &[u8])]) {
         use std::io::Write;
         let mut z = zip::ZipWriter::new(std::fs::File::create(dir.join(file)).unwrap());
         for (name, content) in entries {
             z.start_file(*name, zip::write::SimpleFileOptions::default())
                 .unwrap();
-            z.write_all(content.as_bytes()).unwrap();
+            z.write_all(content).unwrap();
         }
         z.finish().unwrap();
+    }
+
+    /// The state `reopen_fs` rebuilds, as it stands when a download lands:
+    /// loaded off the old paks, the aliases filtered for the current map.
+    struct Reopened {
+        localized: vcod_common::localize::Localized,
+        menus: hud::menu::MenuCache,
+        hud: Option<hud::Hud>,
+        audio: audio::AudioSystem,
+        fx: fx::sim::FxSystem,
+        quick_chat: quick_chat::QuickChat,
+    }
+
+    impl Reopened {
+        fn load(fs: &Pk3Fs) -> Reopened {
+            let mut audio = audio::AudioSystem::new(
+                fs,
+                audio::AudioOpts {
+                    enabled: false,
+                    volume: 1.0,
+                },
+            );
+            audio.on_gamestate("mp_mod");
+            Reopened {
+                localized: vcod_common::localize::Localized::load(fs),
+                menus: hud::menu::MenuCache::default(),
+                hud: hud::Hud::new(fs).ok(),
+                audio,
+                fx: fx::sim::FxSystem::new(),
+                quick_chat: quick_chat::QuickChat::new(1),
+            }
+        }
+
+        fn reopen(&mut self, dir: &std::path::Path, fs: &mut Pk3Fs) {
+            reopen_fs(
+                dir,
+                fs,
+                &mut self.localized,
+                &mut self.menus,
+                &mut self.hud,
+                &mut self.audio,
+                &mut self.fx,
+                &mut self.quick_chat,
+            )
+            .unwrap();
+        }
     }
 
     /// A downloaded pak can carry the menus and strings the paks before it
@@ -2603,11 +2675,10 @@ mod tests {
     #[test]
     fn reopen_reads_menus_and_strings_off_the_new_paks() {
         let dir = tempfile::tempdir().unwrap();
-        make_pk3(dir.path(), "pak0.pk3", &[("readme.txt", "")]);
+        make_pk3(dir.path(), "pak0.pk3", &[("readme.txt", b"")]);
         let mut fs = Pk3Fs::open(dir.path()).unwrap();
-        let mut localized = vcod_common::localize::Localized::load(&fs);
-        let mut menus = hud::menu::MenuCache::default();
-        assert!(menus.get(&fs, "team_mod").is_none());
+        let mut s = Reopened::load(&fs);
+        assert!(s.menus.get(&fs, "team_mod").is_none());
 
         make_pk3(
             dir.path(),
@@ -2615,20 +2686,95 @@ mod tests {
             &[
                 (
                     "ui_mp/scriptmenus/team_mod.menu",
-                    r#"{ menuDef { name "team_mod"
+                    br#"{ menuDef { name "team_mod"
       itemDef { name "a" visible 1 text "@MODMENU_ALLIES" action { scriptMenuResponse "allies"; } }
     } }"#,
                 ),
                 (
                     "localizedstrings/english/modmenu.str",
-                    "REFERENCE ALLIES\nLANG_ENGLISH \"Allies\"\n",
+                    b"REFERENCE ALLIES\nLANG_ENGLISH \"Allies\"\n",
                 ),
             ],
         );
-        reopen_fs(dir.path(), &mut fs, &mut localized, &mut menus).unwrap();
-        let menu = menus.get(&fs, "team_mod").expect("menu from the new pak");
-        let v = hud::menu::view(menu, &localized, |_| None);
+        s.reopen(dir.path(), &mut fs);
+        let menu = s.menus.get(&fs, "team_mod").expect("menu from the new pak");
+        let v = hud::menu::view(menu, &s.localized, |_| None);
         assert_eq!(v.rows[0].label, "Allies");
+    }
+
+    /// The fonts, the sound aliases, the effect files and the impact table
+    /// are read off the search path too, and a miss there must not outlive
+    /// it either.
+    #[test]
+    fn reopen_reads_fonts_aliases_and_effects_off_the_new_paks() {
+        use audio::cues::{Cue, Source};
+        let dir = tempfile::tempdir().unwrap();
+        make_pk3(dir.path(), "pak0.pk3", &[("readme.txt", b"")]);
+        let mut fs = Pk3Fs::open(dir.path()).unwrap();
+        let mut s = Reopened::load(&fs);
+        assert!(s.hud.is_none(), "no fonts in the old paks");
+        let shout = || Cue {
+            alias: "mod_shout".to_string(),
+            source: Source::Point(Vec3::ZERO),
+            delay_s: 0.0,
+        };
+        s.audio.play(&fs, shout());
+        assert_eq!(s.audio.stats().misses, 1);
+        let at = fx::sim::SpawnAt::Point { pos: Vec3::ZERO };
+        assert!(s.fx.spawn(&fs, "fx/mod/shout.efx", at, 0.0).is_empty());
+
+        // `parse_font_dat` takes any file of the right length.
+        let font = vec![0u8; 20552];
+        make_pk3(
+            dir.path(),
+            "zzz_mod.pk3",
+            &[
+                ("fonts/fontImage_16.dat", &font),
+                ("fonts/fontImage_24.dat", &font),
+                (
+                    "soundaliases/mod.csv",
+                    b"name,file\nmod_shout,mod/shout.wav\n",
+                ),
+                (
+                    "fx/mod/shout.efx",
+                    b"Sound\n{\n\tsounds\n\t[\n\t\tmod_shout\n\t]\n}\n",
+                ),
+                (
+                    "fx/iw_impacts.csv",
+                    b"bullet_small_normal,concrete,fx/mod/hit.efx\n",
+                ),
+            ],
+        );
+        s.reopen(dir.path(), &mut fs);
+        assert!(s.hud.is_some(), "fonts from the new pak");
+        s.audio.play(&fs, shout());
+        assert_eq!(s.audio.stats().misses, 1, "alias from the new pak");
+        let sounds = s.fx.spawn(&fs, "fx/mod/shout.efx", at, 0.0);
+        assert_eq!(sounds.len(), 1, "effect from the new pak");
+        assert_eq!(sounds[0].alias, "mod_shout");
+
+        let hit = net::events::GameEvent {
+            event: fx::registry::EV_BULLET_HIT_SMALL,
+            parm: 0,
+            entity_num: 40,
+            client_num: -1,
+            weapon: 0,
+            surf_type: 5, // concrete
+            pos: [0.0; 3],
+            dir: [0.0; 3],
+            other_entity_num: 40,
+            attacker_entity_num: -1,
+        };
+        let ctx = fx::registry::ResolveCtx {
+            muzzles: &HashMap::new(),
+            weapon_flash: &HashMap::new(),
+            view_flash: None,
+            view_body: None,
+        };
+        match fx::registry::resolve(&hit, &ctx).as_slice() {
+            [fx::registry::Resolved::Spawn { path, .. }] => assert_eq!(path, "fx/mod/hit.efx"),
+            other => panic!("impact table from the new pak: {other:?}"),
+        }
     }
 
     /// Snapshots arrive at 20 Hz and the window redraws at 60 Hz, so render
