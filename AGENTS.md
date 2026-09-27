@@ -514,7 +514,8 @@ engineering setup works.
   index out of `mp/playeranim.script`, and a swing draws among the
   `meleeattack` clause's lines. What the machine does not cover yet is the two
   turn movetypes. A shot is a trace against the world
-  and every live player's box, a hit runs the stock
+  and every live player's box, a rifle round goes on through each player it
+  hits at half damage, a hit runs the stock
   `CodeCallback_PlayerDamage`, and `finishPlayerDamage` is where health,
   knockback, the pain and death events and `CodeCallback_PlayerKilled`
   happen (`crates/server/src/game/combat.rs`, `docs/research/cod11-combat.md`).
@@ -606,8 +607,8 @@ engineering setup works.
   op after, so a `dropItem` in the script frame sees what the pass took. The
   entity states `cloneplayer` reads and the posed bodies a scripted blast
   traces are mirrored last in that pass. Then the
-  queued attacks themselves (a trace each, a wall impact temp entity and a hit per
-  player struck), then each client's last cmd buttons for `useButtonPressed`,
+  queued attacks themselves (a trace per leg of each round, a wall impact
+  temp entity and a hit per player struck), then each client's last cmd buttons for `useButtonPressed`,
   then the missiles fly and any due fuse explodes, then the blasts become
   hits, then the client commands that start a script thread (`kill`, `mr`),
   which the packet pass only queues because it runs before the clock advances,

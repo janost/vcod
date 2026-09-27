@@ -932,22 +932,6 @@ const LATE: &[i32] = &[24736, 30148];
 /// the reason, which `docs/research/cod11-turrets.md` 13 carries too.
 const GAPS: &[(&str, &str)] = &[
     (
-        "[target] event t=34900: retail only (174, 52, ",
-        PASS_THROUGH,
-    ),
-    (
-        "[target] impact t=34900: retail only 174@[1248.0, 1308.0",
-        PASS_THROUGH,
-    ),
-    (
-        "[target] event t=34950: retail only (174, 52, ",
-        PASS_THROUGH,
-    ),
-    (
-        "[target] impact t=34950: retail only 174@[1248.0, 1312.0",
-        PASS_THROUGH,
-    ),
-    (
         "[target] impact t=34900: retail only 174@[1518.0, 1612.0",
         ENTRY_POINT,
     ),
@@ -999,9 +983,6 @@ const GAPS: &[(&str, &str)] = &[
     ("[refused] legs_anim t=40250", SANDBAG),
 ];
 
-const PASS_THROUGH: &str = "a round stops at the first player it hits: the rifle-bullet \
-    pass-through that puts retail's second impact on the world behind the target is not \
-    modelled";
 const END_FRAME: &str = "entity states are built at snapshot time, and a client dead by then \
     has none: retail copies the victim's state in its own ClientEndFrame, ahead of the \
     gunner's, so the kill snapshot still carries it with the pain the round before raised";

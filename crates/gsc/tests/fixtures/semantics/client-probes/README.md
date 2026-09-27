@@ -497,3 +497,45 @@ The second run, whole:
 ```
 
 What the rows measure is `docs/research/cod11-combat.md` 14.4.
+
+## probe_passthru
+
+Whether a rifle round goes on through the player it hits, for
+`docs/research/cod11-combat.md` 2.4. Under `probe_teleport 1` on mp_carentan
+it stands the lower-numbered axis player on `probe_bump`'s spot, the other
+axis player 100 units behind it along +x and the allied player 200 units in
+front, all facing +x, once per spawn. It wraps `dm.gsc`'s damage callback to
+log `PROBE damage <time> <victim> <iDamage> <iDFlags> <mod> <hitloc> <vPoint>
+<origin>` first, so two hits in one frame share a time. Four shells:
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=200 \
+    tools/run_probe.sh client-probes/probe_passthru mp_carentan +set probe_teleport 1
+# second and third shell, about 8 s and 14 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-target --probe-team axis --probe-secs 180
+# fourth shell, about 18 s after that, once both targets have killed
+# themselves once and respawned:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --save-hit --probe-sweep --probe-team allies --probe-secs 150
+```
+
+Against ours the server half is `vcod-server mp_carentan --gametype-script
+crates/gsc/tests/fixtures/semantics/client-probes/probe_passthru.gsc --set
+probe_teleport=1`. The two targets write
+`crates/server/tests/fixtures/playerstate/mp_carentan-probe_passthru-hit-target.txt`,
+which is nobody's evidence: delete it after. Retail, 2026-09-27, the first
+round:
+
+```
+0:24 PROBE place 24600 0 axis (1132.00, -376.00, -151.88)
+0:28 PROBE place 28100 1 axis (1232.00, -376.00, -151.88)
+0:30 PROBE place 30650 2 allies (932.00, -376.00, -151.88)
+0:33 PROBE damage 33600 0 40 32 MOD_RIFLE_BULLET torso_upper (1122.40, -376.23, -90.13) (1132.00, -375.95, -151.87)
+0:33 PROBE damage 33600 1 33 32 MOD_RIFLE_BULLET head (1229.84, -377.40, -85.77) (1232.00, -376.00, -151.88)
+0:33 PROBE damage 33950 0 67 32 MOD_RIFLE_BULLET head (1134.93, -375.65, -82.77) (1135.53, -375.95, -151.88)
+0:34 PROBE damage 34350 0 67 32 MOD_RIFLE_BULLET head (1143.72, -374.13, -86.55) (1143.27, -375.55, -151.88)
+0:34 PROBE damage 34700 1 67 32 MOD_RIFLE_BULLET head (1231.67, -376.03, -84.59) (1234.30, -376.00, -151.88)
+```
+
+The sweep spends its taps within about 20 s, so the back player is in line
+behind a live front one for only a few of them: this run caught one pass,
+at 33600.

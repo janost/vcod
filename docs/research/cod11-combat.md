@@ -1163,8 +1163,10 @@ numbering, and every "when", "unless" and "otherwise" in it.
    continues:
    `start` is moved to `trace.endpos` nudged along the ray by `0.25 / d` where
    `d` is minus the dot of the normal with the ray and the nudge is skipped
-   when `d <= 0.125`, and the function recurses at the same damage with
-   `depth + 1`. The 0.125 and 0.25 are `.rodata 0x79c60` and `0x79c64`.
+   when `d < 0.125` (the `fcom` at `0x68b5b` and the `and ah,5` / `jne` after
+   it, which jumps to a `fldz` on C0 or C2), and the function recurses at the
+   same damage, with the same `passEnt` and `depth + 1`. The 0.125 and 0.25
+   are `.rodata 0x79c60` and `0x79c64`.
 4. Otherwise, when the hit entity's `takedamage` byte (`gentity+0x171`) is
    set, `G_Damage(hitEnt, attacker, attacker, params, trace.endpos, damage,
    dflags, mod, trace.hitLoc)`. INFERRED: `params` is passed where `G_Damage`
@@ -1184,6 +1186,62 @@ VERIFIED: 2 and 1 are `MOD_RIFLE_BULLET` and `MOD_PISTOL_BULLET`
 only for a rifle bullet, step 5 means a rifle round passes through the player
 it hits and carries half its damage to whatever is behind, and a pistol round
 stops on the first player.
+
+VERIFIED, the step 5 call's pushes (`0x68c14`..`0x68c2e`): the shooter and
+`params` arguments passed on unchanged, `depth + 1`, the halved damage, the
+caller's own `end`, `&trace.endpos` as `start`, the caller's `attacker`, and
+the hit entity as `passEnt`. VERIFIED: the halving is `(damage + (damage >>>
+31)) >> 1` on the incoming `damage` argument (`0x68c02`..`0x68c0d`), C's
+truncation toward zero, and not on the location-multiplied value `G_Damage`
+computes. VERIFIED: the two tests step 5 rests on, the hit entity's client
+pointer (`gentity+0x158`, `0x68bf3`) and `dflags` (`0x68bfc`), sit after the
+`G_Damage` call at `0x68beb`. INFERRED, off the `je` at `0x68bc7` to the
+epilogue: step 5 is reached only on the `takedamage` arm, and the first
+player's damage callback runs before the round's next leg is traced.
+VERIFIED: both callers start `depth` at 0 (`push 0x0` at `0x68ff2` in
+`FireWeapon` and at `0x691a7` in `Bullet_Fire`). INFERRED: so a round has at
+most 13 legs; each keeps the shot's `end` and so runs on along the same line;
+each passes only the player the leg before it hit, so a later leg cannot meet
+that player again; and each is a whole call, so a world surface a later leg
+reaches raises its own 173/174 by step 2 and a second player takes `damage /
+2` through its own location multiplier by step 4, for as long as the halving
+leaves a positive damage.
+
+Measured on retail, 2026-09-27: `client-probes/probe_passthru` (its section
+in that directory's README) on mp_carentan stood two `--probe-target` clients
+100 units apart on one line and a `--save-hit --probe-sweep` shooter with the
+carbine (`damage` 45) 200 units in front of the first, and logged every damage
+callback with the frame's time ahead of `dm.gsc`'s own. VERIFIED, that log:
+at server time 33600 the front player took 40 at `torso_upper` and the back
+one 33 at `head`, both with `iDFlags` 32; the same back player took 67 at
+`head` from a direct round at 34700. INFERRED: 40 is `(int)(45 * 0.9)` and 33
+is `(int)(22 * 1.5)`, the 45 halved and then put through the back player's own
+multiplier. VERIFIED, the shooter's drained events for that frame: a 174 with
+`surfType` 7 at (1122 -376 -90) and another at (1229 -377 -85), and a 174 with
+`surfType` 10 at (3941 -406 24), on the world behind both. VERIFIED, the
+same day's one-target run of `cod11-events-and-fx.md` section 2: every hit put
+a world 174 behind the target in the hit's own snapshot beside the flesh copy,
+the first at (1925 -413 -119) behind a flesh hit at (1122 -376 -91). The turret
+capture shows the same behind its target (`cod11-turrets.md` 12.5).
+
+**As implemented.** `fire_round` (`crates/server/src/game/combat.rs`) runs
+the recursion as a loop of at most 13 legs: a player hit becomes a hit at the
+leg's damage through its multiplier, and a `rifleBullet` round goes on from
+the hit point along the same line with that player passed and the damage
+halved, until a leg meets the world (its impact), nothing, or a halving to 0.
+VERIFIED, the same probe run against ours (`vcod-server mp_carentan
+--gametype-script .../probe_passthru.gsc --set probe_teleport=1`): at 39550
+the front player took 67 at `head` and the back one 33 at `head` in one frame,
+with a world 174 behind them; and the turret gate's two world impacts behind
+its target now read retail's (1248 1308) and (1248 1312) to the unit
+(`cod11-turrets.md` 13.1). Two differences. Every leg of a round is traced
+before any damage callback runs, where retail runs the first player's callback
+before it traces the next leg. INFERRED: nothing a later leg reads is written
+by that callback, so the order shows on the wire only as the temp entities'
+slot order. VERIFIED, the two runs' 33600 and 39550 frames: retail's flesh
+174s took entities 176 and 178 and its wall 174 took 180, where ours put the
+wall 174 at 960 and the flesh ones at 961 and 963. And step 3's glass continuation is not modelled: the collision trace
+does not report the contents it stopped on.
 
 **Damage does not fall off with distance.** VERIFIED: nothing in
 `Bullet_Fire_Extended`, `Bullet_Fire` or `FireWeapon` reads the trace fraction
@@ -2839,8 +2897,8 @@ in-process test and the headless run cover that path). PENDING.
 ### 9.4 What is not modelled at all
 
 Named here so a reader of sections 1 to 7 does not assume the code follows
-them: rifle rounds passing through a player at half damage (2.3); the
-`pm_time` stun (4.5); the view kick of 6's step 6;
+them: a round continuing through a surface of contents `0x10` (2.4, step
+3); the `pm_time` stun (4.5); the view kick of 6's step 6;
 `EV_CROUCH_PAIN` (188);
 the `EV_RAISE_WEAPON` (155) retail raises on the death frame beside `EV_DEATH`;
 the direct-hit `MOD_GRENADE` arm (13.1), which a stock frag cannot reach
