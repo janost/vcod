@@ -492,6 +492,8 @@ fn a_shot_takes_health_and_a_second_one_kills() {
 /// capture. B asks to die; B's next snapshot reads `pm_type` 6 and both
 /// clients are sent the obituary with victim == attacker and the
 /// `MOD_SUICIDE` parm 0x96 the capture measured (`cod11-combat.md` 8.3).
+/// dm's `K;` line carries the weapon, damage and hit location retail's
+/// `player_die` call passes (5.1).
 ///
 /// The corpse it leaves is the same one a bullet leaves: the death animation
 /// and a settled trajectory. A client command runs during the packet pass, a
@@ -598,6 +600,19 @@ fn the_kill_command_suicides_a_player() {
     assert_eq!(seen_a, expect, "A's obituary");
     assert_eq!(seen_b, expect, "B's obituary");
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
+    let kills: Vec<&String> = sv
+        .script_log()
+        .iter()
+        .filter(|l| l.starts_with("K;"))
+        .collect();
+    assert_eq!(kills.len(), 1, "{kills:?}");
+    assert!(
+        kills[0]
+            .trim_end()
+            .ends_with(";none;100000;MOD_SUICIDE;none"),
+        "{}",
+        kills[0]
+    );
 
     // A corpse landed in the queue's first slot, the same as a shot death.
     let corpse = sb

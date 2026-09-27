@@ -290,10 +290,12 @@ pub fn obituary(
 /// so it runs before its own next instruction, while the client command has
 /// nothing waiting on it and starts one.
 ///
-/// `None` for a client that is already dead. The damage is zero and the
+/// `None` for a client that is already dead. The sim's damage is zero and the
 /// knockback off, so the sim raises `EV_DEATH` and nothing else: the dead yaw
 /// stays 0, which is what the retail hit capture's own suicides read
-/// (`docs/research/cod11-combat.md` section 8.4, `stats[1]` 0).
+/// (`docs/research/cod11-combat.md` section 8.4, `stats[1]` 0). The callback
+/// gets what both retail callers hand `player_die`: damage 100000, weapon 0
+/// (`"none"`), no direction and hit location 0 (5.1).
 pub fn suicide_effects(host: &mut GameHost, cx: &mut Cx, slot: usize) -> Option<Vec<Value>> {
     if host.client_vitals.get(slot)?.dead {
         return None;
@@ -313,16 +315,15 @@ pub fn suicide_effects(host: &mut GameHost, cx: &mut Cx, slot: usize) -> Option<
     ));
     drop_cooking_grenade(host, cx, slot);
     let me = Value::Entity(host.ents.handle(slot as u32)?);
-    let weapon = host.client_weapons[slot].current as usize;
-    let weapon = crate::items::item_name(weapon).unwrap_or("none");
+    let none = Value::String(cx.intern_exact("none"));
     Some(vec![
         me,
         me,
-        Value::Int(0),
+        Value::Int(100000),
         Value::String(cx.intern_exact("MOD_SUICIDE")),
-        Value::String(cx.intern_exact(weapon)),
-        Value::Vector([0.0; 3]),
-        Value::String(cx.intern_exact("none")),
+        none,
+        Value::Undefined,
+        none,
     ])
 }
 
@@ -1252,7 +1253,9 @@ mod tests {
     /// vitals go to zero, the sim gets a fatal `Damaged` with no damage and
     /// no knockback, and `CodeCallback_PlayerKilled` runs before the calling
     /// thread continues -- the same ordering a fatal `finishPlayerDamage`
-    /// gets. `MOD_SUICIDE` and the held weapon are what reach the callback.
+    /// gets. The callback sees `player_die`'s arguments from the builtin's
+    /// call (0x453e5): damage 100000, `MOD_SUICIDE`, weapon 0 as `"none"`,
+    /// no direction and hit location `"none"`, whatever the player holds.
     #[test]
     fn suicide_kills_the_player_and_runs_the_killed_callback() {
         const SCRIPT: &str = r#"
@@ -1267,6 +1270,9 @@ mod tests {
                 self.sessionstate = "dead";
                 self.mod = sMeansOfDeath;
                 self.weap = sWeapon;
+                self.dmg = iDamage;
+                self.dir = isDefined(vDir);
+                self.loc = sHitLoc;
                 self.killer = eAttacker getEntityNumber();
             }
         "#;
@@ -1285,7 +1291,10 @@ mod tests {
         assert!(rt.aborts().is_empty(), "{:?}", rt.aborts());
         assert_eq!(rt.client_field(0, "after").as_deref(), Some("dead"));
         assert_eq!(rt.client_field(0, "mod").as_deref(), Some("MOD_SUICIDE"));
-        assert_eq!(rt.client_field(0, "weap").as_deref(), Some("m1carbine_mp"));
+        assert_eq!(rt.client_field(0, "weap").as_deref(), Some("none"));
+        assert_eq!(rt.client_field(0, "dmg").as_deref(), Some("100000"));
+        assert_eq!(rt.client_field(0, "dir").as_deref(), Some("0"));
+        assert_eq!(rt.client_field(0, "loc").as_deref(), Some("none"));
         assert_eq!(rt.client_field(0, "killer").as_deref(), Some("0"));
         assert_eq!(rt.client_vitals(0).health, 0);
         assert!(rt.client_vitals(0).dead);
