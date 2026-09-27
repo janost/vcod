@@ -3024,15 +3024,13 @@ right. Fixed in `step_slide_move`, pinned by
   whenever a fire, a melee finish or a weapon change happens while
   `pm_flags & 1`, and the ADS flag update ORs it in on the same prone arm
   (1.13), so it is prone-specific.
-- UNRESOLVED: `cod11-mantle.md`, "Jumps", reads the ground jump as writing
-  255 into `ps.aimSpreadScale` and the ladder push-off as adding 64. Neither
-  is modelled here, because the first does not square with the captures: both
-  motion fixtures sample the first airborne frame of a jump and read 66.28
-  (carentan) and 67.81 (pavlov), where a 255 written on the takeoff frame
-  would still read above 229 one 50 ms frame of halved decay later. 2.1's
-  airborne terms alone produce a small climb from 0, which is the shape the
-  two samples have. Settling it needs a per-snapshot trace through a jump,
-  not another read.
+- Settled 2026-09-27: the 255 `cod11-mantle.md` once had the ground jump
+  write into `ps.aimSpreadScale` was the prone dive's block; every jump
+  adds 64, capped at 255 (`PM_CheckJump` 0x2edc6-0x2edf3, `cod11-mantle.md`,
+  "Jumps"). VERIFIED: both motion fixtures sample 16 ms after the takeoff
+  and read 66.28 (carentan) and 67.81 (pavlov) from 0. INFERRED: 64 plus one
+  frame of 2.1's airborne climb; vcod's replay of the carentan capture
+  climbs 2.4 a cmd after the 64. `pmove::check_jump` adds it.
 - UNVERIFIED: the meaning of bit `0x10` of the trace word at offset 32, which
   is what makes a bullet continue through a surface at full damage.
 - UNVERIFIED: what `Bullet_Endpos` (`0x69624`) is for; nothing on this path

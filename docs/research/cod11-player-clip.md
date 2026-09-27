@@ -452,8 +452,8 @@ head-on and passes at 30.0276, 30.0764 and 30.0183 on the glance, and 1484
 rebased rows outside the gate's `GAPS` match retail to 0.000 in both z and
 xy with no ground disagreement.
 
-`GAPS` holds nine rows, all from a jump, each with the most it may miss by.
-VERIFIED, the measured size of each:
+`GAPS` held nine rows until 2026-09-27, all from a jump. VERIFIED, the
+measured size of each before the jump port:
 
 | kind | rows (phase, `commandTime`) | measured |
 |---|---|---|
@@ -461,7 +461,11 @@ VERIFIED, the measured size of each:
 | `AIR_STEP` | stand/jump 39483, 39533 | dxy 0.093, 0.103 |
 | `REJUMP` | stand/jump 39682, stand/land 39732, crouch/land 70882, prone/land 97666 | dz 3.754, 10.664, 10.667 (dxy 4.12), 7.473 (dxy 2.78) |
 
-What each is, and why none is a clipping difference, is section 12.
+VERIFIED, as run on 2026-09-27: with `PM_CheckJump`, the jump's step and
+the walk's speed-keeping ground clip ported (`cod11-mantle.md`, "Jumps" and
+"The ground clip keeps the speed"), every one of the nine reads 0.000 in
+both the free and the rebased run and `GAPS` is empty. What each was is
+section 12.
 
 ## 10. What the overlap captures measured
 
@@ -609,28 +613,30 @@ The gates:
 
 ## 12. Divergences and not modelled
 
-- **The jump port.** The three kinds of row in `GAPS` (section 9.4) are
-  pmove differences a jump into the target exposed, none a clipping one. One
-  follow-up closes all three: port `PM_Jump` with `PM_StepSlideMove`'s
-  jump-step allowance.
+- **The jump port**, closed 2026-09-27. The three kinds of row `GAPS`
+  held (section 9.4) were pmove differences a jump into the target exposed,
+  none a clipping one.
   - `TAKEOFF`, dz 0.54 to 0.55 on each jump's first row. VERIFIED: the
     retail walker's first airborne row (walker line 1077) has risen 7.808
-    from the floor with `pm_flags` 262152 (0x40008). INFERRED: that fits a
-    takeoff at 249.8, `sqrt(g * 78)`, which is `PM_Jump` (0x2eb98) and its
-    39/78 pair (`cod11-mantle.md`, "Jumps (there are two)"). Ours takes the
-    stance-path jump at 233.2 with no 0x8.
+    from the floor with `pm_flags` 262152 (0x40008). Ours took the prone
+    dive's 233.2 (`cod11-mantle.md`, "Jumps"); it now takes `PM_CheckJump`'s
+    `sqrt(g * 78)`, 249.8.
   - `AIR_STEP`, dxy 0.093 and 0.103 at stand/jump 39483 and 39533. Ours
-    steps the blocked airborne move over the standing target's shoulder and
-    comes down 30.01 from it; retail holds the side at 30.1248. INFERRED:
-    retail steps an airborne move only while below `fJumpOriginZ`, by at
-    most `fJumpOriginZ - z` (the prologue at 0x350ec). The dispatcher's
-    primitive choice (next item) is an alternative cause the capture does
-    not rule out.
+    stepped the blocked airborne move over the standing target's shoulder
+    and came down 30.01 from it; retail holds the side at 30.1248. Ours now
+    steps in the air only under the jump's origin (`cod11-mantle.md`, "The
+    jump's step"), and the free run, which carries the origin from its own
+    takeoff, holds the side too.
   - `REJUMP`, dz 3.754 to 10.667. VERIFIED: at stand/jump `commandTime`
     39682 (walker line 1125) the retail walker is on the ground with
     `pm_flags` 0x40008 and every cmd up to that clock holds up 127, and the
-    next row (line 1131) is still on the ground. INFERRED: `PM_Jump` refuses
-    while 0x8 is set. Ours jumps again off the landing.
+    next row (line 1131) is still on the ground. Ours jumped again off the
+    landing; it now keeps the latch. The crouch and prone landings then still
+    missed by 4.75 and 3.17 in xy: both land while the push's knockback
+    timer runs, with the fall still in the velocity on the grounded frame
+    (crouch/jump 70832 reads `vel=-111,4,-175` on ground 1022), and retail's
+    walk turns that into ground speed (`cod11-mantle.md`, "The ground clip
+    keeps the speed").
 - **The dispatcher's primitive choice** (`cod_lnxded` 0x8055c04) is not
   ported: ours traces the cylinder and both spheres and keeps the nearest.
   The two agree on every row of the bump capture; no capture covers a

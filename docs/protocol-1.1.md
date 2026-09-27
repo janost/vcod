@@ -988,8 +988,9 @@ goes out as `commandTime` -- at the cmd's own clock.
 `crates/server/tests/hitching_client.rs` pins it: a spectator silent for
 600 ms and then sending one cmd covers the whole gap, about 250 units, where
 the single clamped step it used to take covered 16. The `PMF_JUMP_HELD`
-`upmove` force is not modelled; vcod's own held-jump latch survives a chop
-instead. The two `level.time` clamps are not implemented either: they are a
+`upmove` force of 20 is not modelled; vcod's held-jump latch survives a chop
+without it, and only the later steps' air wish differs
+(`docs/research/cod11-mantle.md`, "Jumps"). The two `level.time` clamps are not implemented either: they are a
 speed-cheat guard rather than part of the dt rule, and vcod seeds a client's
 `commandTime` from the entering cmd's own clock (`enter_world`) where retail
 leaves it at whatever `ClientSpawn` wrote, so a window measured against

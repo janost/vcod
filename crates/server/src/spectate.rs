@@ -296,6 +296,10 @@ pub struct ClientSim {
     /// several moves still raises the event. Leaving the ground is not enough:
     /// a ledge and a ladder do that without a jump.
     jumped: bool,
+    /// `ps.jumpTime`: the serverTime of the step the last jump took, 0 since
+    /// the spawn. The client's own prediction refuses a jump inside 500 ms
+    /// of it (docs/research/cod11-mantle.md, "Jumps").
+    jump_time: i32,
     /// A landing since the last `update_anims` fast enough for the land
     /// anim (`PlayerState::land_anim`).
     land_anim: bool,
@@ -420,6 +424,7 @@ impl ClientSim {
             was_airborne: false,
             strafing: None,
             jumped: false,
+            jump_time: 0,
             land_anim: false,
             link_to: None,
             cursor_hint: 0,
@@ -537,6 +542,7 @@ impl ClientSim {
         self.was_airborne = false;
         self.strafing = None;
         self.jumped = false;
+        self.jump_time = 0;
         self.land_anim = false;
         // `ClientSpawn`'s memset: the damage fields read 0 again after a
         // respawn (combat doc, 8.4), and so does the dead yaw.
@@ -749,6 +755,9 @@ impl ClientSim {
                 self.ps.linked = self.link_to.is_some();
                 let events = pmove::pmove(&mut self.ps, &pm_input(cmd), &w, dt, weapons);
                 self.jumped |= self.ps.jumped;
+                if self.ps.jumped {
+                    self.jump_time = cmd.server_time;
+                }
                 self.land_anim |= self.ps.land_anim;
                 // Retail holds a prone view inside the cone around the body and
                 // the pitch cap off the ground by pushing `delta_angles`, so the
@@ -1398,6 +1407,8 @@ impl ClientSim {
                     | pmove::weapon::ads_pm_flags(&self.ps),
             );
             set("pm_time", self.ps.knockback_ms as i32);
+            set("jumpTime", self.jump_time);
+            set("fJumpPeak", self.ps.jump_origin_z.to_bits() as i32);
             // The client predicts its own eye lerp; without these it restarts
             // from our value every snapshot and the view shakes for as long
             // as the lerp lasts.
@@ -1605,6 +1616,41 @@ mod tests {
     use crate::game::turret::TurretStance;
     use vcod_common::net::msg::NULL_USERCMD;
     use vcod_common::net::protocol::{ENTITYNUM_NONE, PROTOCOL_V1};
+
+    /// A jump's clock and origin travel as `jumpTime` and `fJumpPeak`, and
+    /// the predictor reads the 500 ms cooldown back off them
+    /// (docs/research/cod11-mantle.md, "Jumps").
+    #[test]
+    fn a_jump_puts_its_clock_and_origin_on_the_wire() {
+        let p = &PROTOCOL_V1;
+        let world = vcod_common::collision::test_world(&[]);
+        let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
+        let mut t = 1000;
+        for _ in 0..20 {
+            t += 50;
+            let idle = UserCmd {
+                server_time: t,
+                ..NULL_USERCMD
+            };
+            sim.step(&idle, 0.05, Some(MoveWorld::bare(&world)), &[]);
+        }
+        assert!(sim.ps.on_ground);
+        let takeoff_z = sim.ps.origin.z;
+        let jump = UserCmd {
+            server_time: t + 16,
+            up: 127,
+            ..NULL_USERCMD
+        };
+        sim.step(&jump, 0.016, Some(MoveWorld::bare(&world)), &[]);
+        let w = sim.to_wire(p, 0, t + 16);
+        assert_eq!(w.field_i32(p, "jumpTime"), t + 16);
+        assert_eq!(w.field_f32(p, "fJumpPeak"), takeoff_z + pmove::JUMP_HEIGHT);
+        let back = vcod_common::pmove::predict::from_wire(p, &w, Some(&jump));
+        assert_eq!(back.ps.since_jump_ms, 0.0);
+        assert_eq!(back.ps.jump_origin_z, takeoff_z + pmove::JUMP_HEIGHT);
+        assert!(back.ps.jump_latched);
+    }
 
     /// The intermission camera (map-cycle doc 6.2, and the `pm_type=5`
     /// traces in `tests/fixtures/netchan/mp_carentan-dm-mapchange.txt`):
