@@ -71,7 +71,9 @@ impl Join {
                 };
                 let Some(name) = usize::try_from(idx)
                     .ok()
-                    .and_then(|i| configstrings.get(1180 + i))
+                    .map(|i| SCRIPT_MENUS.start + i)
+                    .filter(|cs| SCRIPT_MENUS.contains(cs))
+                    .and_then(|cs| configstrings.get(cs))
                     .filter(|n| !n.is_empty())
                 else {
                     log::warn!("t {idx}: no script menu at that configstring index");
@@ -231,6 +233,17 @@ mod tests {
     fn a_t_naming_an_empty_slot_opens_nothing() {
         let mut j = Join::new(None, None);
         assert!(j.on_server_command(&toks("t 9"), &cs(), 3).is_empty());
+        assert!(j.open().is_none());
+    }
+
+    /// Index 32 is past the 32 script-menu slots: cs 1212 is the first hint
+    /// string, not a menu.
+    #[test]
+    fn a_t_past_the_script_menu_range_opens_nothing() {
+        let mut cs = cs();
+        cs[1212] = "team_hintstring".into();
+        let mut j = Join::new(Some("allies".into()), None);
+        assert!(j.on_server_command(&toks("t 32"), &cs, 3).is_empty());
         assert!(j.open().is_none());
     }
 
