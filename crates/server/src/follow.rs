@@ -73,6 +73,7 @@ pub struct Copied {
     /// Degrees, wire convention.
     pub angles: [f32; 3],
     pub origin: [f32; 3],
+    pub velocity: [f32; 3],
     /// `eFlags` 0x8, the teleport bit, of the copy.
     pub teleport_bit: bool,
     /// The archived frame the copy came from, `None` for a live one.

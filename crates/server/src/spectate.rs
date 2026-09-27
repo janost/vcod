@@ -301,7 +301,49 @@ pub struct ClientSim {
     pub hud_cleared: bool,
     /// `pm_flags` 0x800 ([`PMF_RESPAWNED`]).
     respawned: bool,
+    /// The last frame a follow sent this spectator, the copy with its flags
+    /// patched: the playerstate `StopFollowing` writes over.
+    pub follow_wire: Option<msg::PlayerState>,
+    /// What a stopped follow left in the playerstate, until the next spawn.
+    residue: Option<Residue>,
 }
+
+/// A stopped follow's copy, under the fields a spectator's own frame writes.
+struct Residue {
+    wire: msg::PlayerState,
+    /// A cmd has run `SpectatorThink`'s free-flight arm since the stop, which
+    /// writes `pm_type` and `speed` (0x3fb94, 0x3fb9b).
+    moved: bool,
+}
+
+/// What a free spectator's frame writes over a stopped follow's copy:
+/// `StopFollowing`'s stores (0x46a28), `SpectatorThink`'s flight and
+/// `SpectatorClientEndFrame`'s (spectator-follow doc, 7 and 5).
+const SPECTATOR_OWNED: &[&str] = &[
+    "commandTime",
+    "clientNum",
+    "pm_flags",
+    "origin[0]",
+    "origin[1]",
+    "origin[2]",
+    "velocity[0]",
+    "velocity[1]",
+    "velocity[2]",
+    "viewangles[0]",
+    "viewangles[1]",
+    "viewangles[2]",
+    "delta_angles[0]",
+    "delta_angles[1]",
+    "delta_angles[2]",
+    "fWeaponPosFrac",
+    "viewmodelIndex",
+    "viewlocked",
+    "viewlocked_entNum",
+    "gunfx",
+    "shellshockIndex",
+    "shellshockTime",
+    "shellshockDuration",
+];
 
 /// Everything the animscript needs that the sim does not own: the script
 /// itself, the name-to-index lookup, and the weapon the client holds.
@@ -395,6 +437,8 @@ impl ClientSim {
             last_buttons: 0,
             hud_cleared: false,
             respawned: false,
+            follow_wire: None,
+            residue: None,
         }
     }
 
@@ -550,6 +594,8 @@ impl ClientSim {
         // spectator frame and 24 on the next one (map-cycle doc, 8.2).
         self.teleport_bit = !self.teleport_bit;
         self.respawned = true;
+        self.follow_wire = None;
+        self.residue = None;
         // `G_SetClientContents`, then the spawn's link.
         self.contents = if mode == PmType::Normal {
             CONTENTS_BODY
@@ -675,14 +721,20 @@ impl ClientSim {
 
     /// `StopFollowing` (0x46a28): the follow is dropped, and a spectator
     /// whose last frame was a copy is left behind and above the followed
-    /// eye, looking where it looked pitched down 15 (`follow::stop_spot`).
-    /// The copy's velocity is not carried over.
+    /// eye, looking where it looked pitched down 15 (`follow::stop_spot`),
+    /// with the copy's velocity and the rest of the copy under its own
+    /// fields ([`SPECTATOR_OWNED`]).
     pub fn stop_following(&mut self, collision: Option<&vcod_common::collision::CollisionWorld>) {
         if let (true, Some(c)) = (self.follow.on, self.follow.copied) {
             let (spot, angles) = crate::follow::stop_spot(collision, c.eye, c.angles);
             self.ps.origin = spot.into();
-            self.ps.velocity = Vec3::ZERO;
+            self.ps.velocity = c.velocity.into();
+            self.teleport_bit = c.teleport_bit;
             self.set_view_angle(angles);
+            self.residue = self
+                .follow_wire
+                .take()
+                .map(|wire| Residue { wire, moved: false });
         }
         self.follow = Default::default();
     }
@@ -792,6 +844,9 @@ impl ClientSim {
             // `Server::FALLBACK_SPAWN` keeps running. Both fly rather than
             // collide, so a player on a failed load noclips.
             (PmType::Spectator, _) | (PmType::Normal, None) => {
+                if let Some(r) = &mut self.residue {
+                    r.moved = true;
+                }
                 self.view_angles = cmd::apply_view(&mut self.ps, cmd.angles, self.delta_angles);
                 pmove::spectator_move(
                     &mut self.ps,
@@ -1611,6 +1666,31 @@ impl ClientSim {
         // has no teammate to name until `TeamplayInfoMessage` exists.
         w.arrays.stats[3] = NO_TEAMMATE;
         w.arrays.stats[5] = i32::from(self.spawn_count);
+        match &self.residue {
+            Some(r) => r.under(w, p),
+            None => w,
+        }
+    }
+}
+
+impl Residue {
+    /// The copy with `own`'s [`SPECTATOR_OWNED`] fields written over it, its
+    /// `pm_type` and `speed` once a cmd has flown, and its `eFlags` with the
+    /// mount bits cleared (0x46b8c) and the teleport bit the sim flips.
+    fn under(&self, own: msg::PlayerState, p: &Protocol) -> msg::PlayerState {
+        let idx = |name| msg::PlayerState::field_index(p, name).unwrap();
+        let mut w = self.wire.clone();
+        let flown: &[&str] = if self.moved {
+            &["pm_type", "speed"]
+        } else {
+            &[]
+        };
+        for name in SPECTATOR_OWNED.iter().chain(flown) {
+            w.fields[idx(name)] = own.fields[idx(name)];
+        }
+        let ef = idx("eFlags");
+        w.fields[ef] = (w.fields[ef] & !(EF_MOUNTED_STAND | EF_TELEPORT_BIT))
+            | (own.fields[ef] & EF_TELEPORT_BIT);
         w
     }
 }
@@ -1753,6 +1833,7 @@ mod tests {
             eye: [0.0, 0.0, 68.0],
             angles: [0.0, 90.0, 0.0],
             origin: [0.0, 0.0, 8.0],
+            velocity: [0.0; 3],
             teleport_bit: false,
             frame: None,
         };

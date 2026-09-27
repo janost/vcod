@@ -436,6 +436,7 @@ fn follow_end_frame(
                 eye: ts.ps.view().eye.into(),
                 angles: ts.view_angles(),
                 origin: ts.origin(),
+                velocity: ts.ps.velocity.into(),
                 teleport_bit: ts.teleport_bit(),
                 frame: None,
             })
@@ -444,6 +445,9 @@ fn follow_end_frame(
             eye: view.eye,
             angles: view.angles,
             origin: view.origin,
+            velocity: std::array::from_fn(|i| {
+                view.ps.field_f32(&PROTOCOL_V1, &format!("velocity[{i}]"))
+            }),
             teleport_bit: view.ps.field_i32(&PROTOCOL_V1, "eFlags")
                 & crate::spectate::EF_TELEPORT_BIT
                 != 0,
@@ -4014,6 +4018,15 @@ impl Server {
             })
             .collect();
 
+        // What a follow leaves in the spectator's playerstate when it stops.
+        for (slot, f) in follow_frames.iter().enumerate() {
+            if let (Some(f), Some(sim)) =
+                (f, self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()))
+            {
+                sim.follow_wire = Some(f.ps.clone());
+            }
+        }
+
         // `SV_BuildClientSnapshot` reads each client's `archivetime` again and
         // takes the entities and the roster from the frame it names, times
         // shifted by the age, whether or not the client follows anyone
@@ -7123,5 +7136,56 @@ mod tests {
         let s = rig.step(0);
         assert_eq!(ps_i32(&s, "clientNum"), 0);
         assert_eq!(ps_i32(&s, "pm_type"), 0);
+    }
+
+    /// `StopFollowing` (0x46a28) writes the spot, the view, `clientNum` and
+    /// a handful of weapon fields, and never the velocity; the rest of the
+    /// copy stays in the spectator's playerstate until something writes it
+    /// (the retail dm run: `health` 100 and `weapon` 9 on every free frame
+    /// after the sight press).
+    #[test]
+    fn a_stopped_follow_keeps_the_rest_of_the_copy() {
+        let mut rig = FollowRig::new();
+        rig.script().host.client_vitals[1].health = 100;
+        rig.script().set_client_weapon(1, 9);
+        rig.sim_mut(1).ps.velocity = glam::Vec3::new(120.0, 0.0, 0.0);
+        rig.press(msg::BUTTON_ATTACK);
+        let copy = rig.step(0);
+        assert_eq!((copy.ps.health(), ps_i32(&copy, "weapon")), (100, 9));
+        let stop = rig.step(msg::BUTTON_ADS);
+        assert_eq!(ps_i32(&stop, "clientNum"), 0);
+        assert_eq!(ps_i32(&stop, "pm_type"), 4);
+        let vx = stop.ps.field_f32(&PROTOCOL_V1, "velocity[0]");
+        assert!(
+            vx > 0.0 && vx < 120.0,
+            "the copy's velocity, one flight step on: {vx}"
+        );
+        for s in [stop, rig.step(msg::BUTTON_ADS), rig.step(0)] {
+            assert_eq!(ps_i32(&s, "clientNum"), 0);
+            assert_eq!((s.ps.health(), ps_i32(&s, "weapon")), (100, 9));
+        }
+    }
+
+    /// The same stop from the end frame, the followed client gone
+    /// spectator: until the follower's next cmd runs `SpectatorThink`'s
+    /// free-flight arm the frame keeps the copy's `pm_type` (the retail sd
+    /// run: 6, then 4).
+    #[test]
+    fn an_end_frame_stop_keeps_the_copy_s_pm_type_until_the_next_cmd() {
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        rig.script().host.client_vitals[1].dead = true;
+        rig.script().set_client_state_for_test(1, "dead");
+        rig.step(0);
+        rig.step(0);
+        rig.script().set_client_state_for_test(1, "spectator");
+        rig.sim_mut(1)
+            .become_spectator([0.0, 0.0, 300.0], 0.0, [0; 3]);
+        // This frame's cmd runs while the follow is still on; the stop is
+        // the end frame's.
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(ps_i32(&s, "pm_type"), 6);
+        assert_eq!(ps_i32(&rig.step(0), "pm_type"), 4);
     }
 }
