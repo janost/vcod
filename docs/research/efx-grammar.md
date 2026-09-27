@@ -621,21 +621,80 @@ spawner's `if (cullrange == 0)` branch skips the distance check entirely.
 wide with the `gfx/effects/antiaircraft_tracer` shader). It is not what a
 rifle bullet draws.
 
-`CG_Tracer` @ `cgame_mp_x86.dll 0x30039590` rolls `cg_tracerchance` and passes
-the muzzle/impact pair to a hardcoded quad. The segment setup at `0x30039340`:
+`CG_Tracer` @ `cgame_mp_x86.dll 0x30039590` rolls `cg_tracerchance` and
+hands the muzzle/impact pair to one of two hardcoded paths, picked by the
+surface type argument: VERIFIED, `cmp [esp+0x20],7` at `0x300395fb` sends
+`surfType == 7` (flesh) to the segment setup at `0x30039340` with a pushed 0,
+and every other surface to `CG_SpawnTracer` @ `0x30038f30`.
+
+**Every surface but flesh: a moving streak.** `CG_SpawnTracer` takes the
+impact in `eax` and the muzzle in `ecx` (VERIFIED, `0x30039604` and
+`0x30039600`) and allocates a local entity (`CG_AllocLocalEntity` @
+`0x3001ff50`) whose fields it writes as follows, all VERIFIED from
+`0x30038f30`..`0x300390af`:
+
+```
+dir       = VectorNormalize(impact - muzzle)          // 0x30039cc0
+travel    = |impact - cg_tracerlength*dir - muzzle|   // sqrt @ 0x3005ac90
+le+0x08   = 2                                         // leType
+le+0x18   = 2                                         // pos.trType, TR_LINEAR
+le+0x1c   = cg.time - (rand() % cg.frametime) / 2     // pos.trTime, integer ms
+le+0x24   = muzzle                                    // pos.trBase
+le+0x30   = cg_tracerSpeed * dir                      // pos.trDelta
+le+0x10   = trTime - ftol(travel * -1000 / cg_tracerSpeed)   // endTime
+```
+
+The field names in the comments are INFERRED, from how `0x3001ffe0`,
+`CG_AddLocalEntities` and `BG_EvaluateTrajectory` read those offsets. The
+`-1000.0` is `ds:0x30069594`. VERIFIED: `ftol` @ `0x3005a890` is a
+`fistp` with a truncation fix-up, so the lifetime is `travel / speed` in whole
+ms, truncated. The two globals read at `0x30039029` and `0x3003904d`
+(`0x30207144`, `0x30207148`) are named `cg.frametime` and `cg.time` here
+INFERRED from use: the second is what `CG_AddLocalEntities` compares
+`endTime` against.
+
+`CG_AddLocalEntities` @ `0x300201b0` frees an entity once `0x30207148 >=
+le+0x10` (VERIFIED, `cmp`/`jl` at `0x300201c9`) and dispatches `leType` 2 to
+`0x3001ffe0` (VERIFIED, `0x3002021a`), which evaluates the trajectory at
+`cg.time` through `BG_EvaluateTrajectory` @ `0x30005470` (VERIFIED: its jump
+table at `0x3000575c` sends type 2 to `0x300054a0`, `trBase + trDelta *
+(time - trTime) * 0.001`, the `0.001` at `ds:0x300693c0`), normalizes
+`trDelta` and draws `CG_DrawTracer(p, p + cg_tracerlength * dir)` (VERIFIED,
+`0x30020007`..`0x30020045`). So the trajectory point is the tail:
+
+```
+p(t) = muzzle + cg_tracerSpeed * dir * (t - trTime)
+draw [p(t), p(t) + cg_tracerlength * dir] while t < endTime
+```
+
+The tail starts on the muzzle, or ahead of it by the half-frame back-date,
+and the head reaches the impact on the last frame. There is no minimum
+distance on this path (VERIFIED: `CG_SpawnTracer` reads no constant but
+`-1000.0`), and a shot shorter than `cg_tracerlength` draws its whole streak
+past the impact for `(length - dist) / speed`.
+
+**Flesh: a one-frame segment.** The setup at `0x30039340` (VERIFIED,
+`0x30039343`..`0x30039426`):
 
 ```
 len = VectorNormalize(end - start)
-if (len < 100.0)                       return          // ds:0x30069524
-frac    = 50.0 + (len - 60.0)*rand01                   // ds:0x3006958c / 0x30069590
+if (len < 100.0 && arg == 0)            return          // ds:0x30069524
+frac    = 50.0 + (len - 60.0) * rand() * (1/32768)     // ds:0x3006958c / 0x30069590 / 0x300693b4
 endDist = min(frac + cg_tracerlength, len)             // ds:0x302999e8
 CG_DrawTracer(start + frac*dir, start + endDist*dir)
 ```
 
-and CG_DrawTracer @ `0x300390c0` emits one quad whose corners are
+It allocates nothing and only adds the quad to the scene, so it is drawn on
+the frame of the event and never again. INFERRED: the syscall `0x40` at the
+end of `CG_DrawTracer` adds a polygon to this frame's scene; it is the same
+call the other one-shot quads go through.
+
+CG_DrawTracer @ `0x300390c0` emits one quad whose corners are
 `A ± cg_tracerwidth*side` / `B ± cg_tracerwidth*side`, `side` being the
 normalized screen-space perpendicular to the segment, with the
 `gfx/misc/tracer` shader (registered in CG_RegisterGraphics @ `0x30020da0`).
+VERIFIED, from the vertex writes: `u` runs along the segment, 1 at `B` (the
+head) and 0 at `A` (the tail).
 
 Cvar defaults, read out of the cgame's cvar table at `0x30074e54`..`0x30074e8c`:
 
@@ -646,8 +705,11 @@ Cvar defaults, read out of the cgame's cvar table at `0x30074e54`..`0x30074e8c`:
 | `cg_tracerSpeed` | `0x301de900` | `0x301de908` | `4500` |
 | `cg_tracerlength` | `0x302999e0` | `0x302999e8` | `160` (the full streak length) |
 
-This also corrects the events doc's naming: `0x30039340` is the tracer segment
-setup, not `CG_BloodSpray`.
+This also corrects the events doc's naming: `0x30039340` is the flesh tracer's
+segment setup, not `CG_BloodSpray`. An earlier version of this section read
+that routine as the setup for every tracer; vcod then anchored a moving
+streak's head 50 units out, which put its tail 110 units behind the muzzle
+for its first two frames.
 
 ## What vcod implements from this, and what it doesn't
 

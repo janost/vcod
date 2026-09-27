@@ -522,23 +522,22 @@ arg0 = `surfType`, arg1 = the string `"tag_flash"`. It returns at once when
 `cg_tracerchance` (value at `0x301df448`) is `<= 0` or when `CG_GetMuzzlePoint`
 @ `0x30039440` cannot resolve `tag_flash` on the shooter entity. Unless the
 shooter is the entity being viewed first person, it rolls
-`rand() < cg_tracerchance * RAND_MAX` and on success calls `CG_SpawnTracer`
-@ `0x30038f30` with the muzzle point and the impact position; `CG_SpawnTracer`
-tail-calls the segment setup at `0x30039340`. In every case it then calls
+`rand() < cg_tracerchance * RAND_MAX`. On success a flesh hit
+(`surfType == 7`) calls the segment setup at `0x30039340` directly, and every
+other surface calls `CG_SpawnTracer` @ `0x30038f30` with the muzzle point and
+the impact position. In every case it then calls
 `CG_BulletWhizby` @ `0x30038dc0`, which plays the whiz-by sound near the
 `cg.refdef` origin.
 
-`0x30039340` is the shared tracer segment-setup routine, the `len`/`frac`/`endDist`
-computation that both `CG_BulletHitWall` and `CG_BulletHitFlesh` reach through
-`CG_SpawnTracer` (decompiled against `CoDMP.exe`, see
-`docs/research/efx-grammar.md` section R8). Earlier I had it
-labelled `CG_BloodSpray`, called only when `surfType == 7`; neither decompile
-pass found a flesh-specific branch, so vcod draws the same tracer quad for
-every surface type.
-
-`CG_SpawnTracer` allocates a local entity with type 2, start/end and a velocity
-scaled by the tracer-speed constant, and randomly back-dates its spawn time by
-up to half a frame. The tracer is drawn with the shader `gfx/misc/tracer`
+`0x30039340` is the flesh branch's one-frame segment, drawn once at a random
+distance along the shot. `CG_SpawnTracer` allocates a local entity with type 2
+whose linear trajectory starts at the muzzle and moves at `cg_tracerSpeed`,
+back-dates its start by up to half a frame, and lives until that point is
+`cg_tracerlength` short of the impact; `CG_AddLocalEntities` draws the streak
+from the trajectory point forward. Earlier I had `0x30039340` labelled
+`CG_BloodSpray`, and then read it as the setup for every tracer. The formulas
+and addresses for both branches are in `docs/research/efx-grammar.md`, R8.
+The tracer is drawn with the shader `gfx/misc/tracer`
 (registered in `CG_RegisterGraphics` @ `0x30020da0`, handle stored at
 `0x301d5abc`). Cvars: `cg_tracerchance` (value at `0x301df448`),
 `cg_tracerSpeed`, `cg_tracerlength`, `cg_tracerwidth`.

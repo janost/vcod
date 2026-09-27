@@ -106,7 +106,7 @@ scale ("The wish speed" below), accelerate (`pm_accelerate` = 9.0 ground /
 had the two movers swapped and 0x2F258 down as a steep-slope mover:
 VERIFIED, 0x2F258 opens with a call to 0x2eb98 whose non-zero return goes to
 0x2F03C (0x2f26a), Q3's `PM_CheckJump` then `PM_AirMove` at the top of
-`PM_WalkMove`, and the dispatch tests `pml+0x2c` (0x34312), the `walking`
+`PM_WalkMove` ("Jumps"), and the dispatch tests `pml+0x2c` (0x34312), the `walking`
 slot of the `pml_t` layout the rest of this module matches.
 
 ### The tail of the default arm
@@ -147,69 +147,172 @@ A consequence Q3 players know: at 8 ms a frame's gravity is 6.4 and the snap
 keeps about 6 of it, so a 125 fps jump rises about 36 units where a 20 ms
 one rises 34 (`a_125_fps_jump_goes_higher` in `pmove.rs`).
 
-## Jumps (there are two)
+## Jumps
 
-**Ground jump**, inside fn 0x316F4 at 0x31CC0:
+Read out of `game.mp.i386.so` on 2026-09-27 with `tools/re/annotate_func.py`.
+Every jump a player takes, off the ground or off a ladder, is one function,
+`PM_CheckJump` at 0x2eb98. Two earlier reads of this section were wrong
+about it: the block at 0x31cc0 that it called the ground jump is the prone
+dive ("Going prone", under "Prone"), and 0x2eb98 was down as a push-off
+reached from a ladder and a steep-slope mover only, where the "steep-slope
+mover" 0x2f258 is `PM_WalkMove` ("Frame flow"). The dive's heights 34 and 24
+were what vcod jumped at until the 2026-09-27 port.
 
-Correction, 2026-09-27: the block at 0x31CC0 is not the ground jump. It sits
-on `PM_CheckDuck`'s arm for a prone press on a player not yet prone, and it
-is the prone dive ("Going prone", under "Prone" below). INFERRED, from that
-enclosing branch; VERIFIED live, the dive capture. The heights 34/24 and the
-`pm_flags` 0x20 gate below belong to the dive; the ground jump's own
-takeoff is still to be read, and `bump_ab.rs`'s `TAKEOFF` gap (retail 249.8,
-ours 233.2) is the port of this block standing in for it.
+### Who calls it
 
-- Gated on: `pm_flags & 0x20` clear. A second gate read off this block as
-  `cmd.forwardmove != 0` was a misread, and the code that ported it kept a
-  player standing still from ever jumping. VERIFIED live 2026-09-01: a probe
-  holding `upmove` 127 with `forwardmove` 0 against the retail server leaves
-  the ground (`groundEntityNum` 1023, `velocity[2]` 197 one frame later,
-  `aimSpreadScale` 255 as below), so whatever that comparison reads, it is not
-  forwardmove. Bit 0x20 is
-  the ADS (aim-down-sight) flag, not a timer: `PM_UpdateAimDownSightFlag`
-  (@0x37230) sets it while the ADS button is held - unconditionally when not
-  prone, behind idle checks when prone - and clears it otherwise, with a second
-  unconditional clearer at 0x3ABDC. So holding ADS blocks the ground jump; no
-  stance does. There is NO time comparison anywhere in this block:
-  `ps.jumpTime` (ps+0x64) is written only by the ladder push-off stamp
-  (@0x33964) and the steep-slope mover (@0x2F279).
-- Jump height depends on stance: standing (`(pm_flags & 3) == 0`, flag derived
-  at 0x317E8) gives height 34 units, crouched/prone gives 24. Vertical velocity
-  is `sqrt(2 * height * gravity)` with gravity read from `ps.gravity` (int,
-  ps+0x3C): 233.2 standing / 196.0 crouched at gravity 800 (constants 34.0 and
-  24.0 at 0x70BE8/0x70BEC).
-- Sets `groundEntityNum = 1023`, zeroes the pml walking and steep-slope flags,
-  writes 255 into `ps.aimSpreadScale` (ps+0x3D8).
+VERIFIED: the full disassembly has two calls to 0x2eb98, at 0x2f261 (the
+first instruction of `PM_WalkMove`) and at 0x3394c (inside
+`PM_LadderMove`). VERIFIED: on a non-zero return `PM_WalkMove` calls
+`PM_AirMove` (0x2f26a), stores `cmd.serverTime` (pm+4) into `ps.jumpTime`
+(ps+0x64, 0x2f279) and returns (0x2f27c). INFERRED: a player on walkable
+ground jumps at the top of the walk move, the jump frame flies rather than
+walks, and `jumpTime` is stamped after that flight, on every jump.
 
-**Ladder/waterjump-path jump** ("PM_Jump", exported-callable body at 0x2EB98),
-called from `PM_LadderMove` and the steep-slope mover only:
+### The gates
 
-- Requires `cmd.serverTime - ps.jumpTime > 499` (500 ms cooldown, compare at
-  0x2EBB3), not prone, not crouched (@0x2EBF5), not blocked by two higher pm_flags bits (0x800/0x2000),
-  and `cmd.upmove > 9`.
-- Vertical velocity `sqrt(gravity * 78)` = ~250 at gravity 800 (constants 78.0
-  and 39.0 at 0x708C8/0x708CC); sets `ps.fJumpOriginZ` (ps+0x68) =
-  origin.z + 39.
-- Horizontal velocity is *reset* to 128 units along a direction vector
-  (`pm_ladderPushOff` = 128.0, rodata 0x7082C, applied at 0x2ED5A):
-  - on a ladder the direction is the push-off away from the ladder plane
-    (composition @0x2EC7E..0x2ED36: dot of vLadderVec with the FULL pitched
-    pml.forward gates reflection @0x2ECAA-0x2ECD3; the reflected vector is
-    built from a flattened forward copy whose z lane is a literal zero,
-    normalized in 3D @0x2ED36, then x/y alone scale by 128 @0x2ED5A - so the
-    horizontal push is exactly 128 at any pitch) and vertical velocity is
-    first scaled by 0.75 (0x708D0);
-  - off a ladder the direction is the horizontal forward from pml.
-- Clears `PMF_LADDER`, fires `EV_JUMP_*` (base 70 + surface index; hardcoded
-  83 = `EV_JUMP_METAL` when leaving a ladder, 0x2ED86), adds 64 to
-  `aimSpreadScale`, fires anim event JUMP (3) or JUMPBK (4) depending on the
-  sign of forwardmove, then callers store `cmd.serverTime` into
-  `ps.jumpTime`.
+VERIFIED, the reads at the top of 0x2eb98, in order: `cmd.serverTime -
+ps.jumpTime` against 0x1f3 (0x2ebb3); `pm_flags` 0x800 (0x2ebbe), 0x2000
+(0x2ebc3) and 0x1 (0x2ebc8); `viewHeightLerpTarget` (ps+0xd8) against
+`proneViewHeight` (ps+0x33c, 0x2ebd2); `viewHeightLerpTime` (ps+0xd4),
+`crouchViewHeight` (ps+0x340) and `viewHeightLerpDown` (ps+0xdc) at
+0x2ebda-0x2ebf3; `pm_flags` 0x2 (0x2ebf5); the lerp time and the crouch
+height again (0x2ebf9-0x2ec03); `cmd.upmove` (pm+0x1a) against 9
+(0x2ec05); `pm_flags` 0x8 (0x2ec0d), and on it a store of 0 into
+`cmd.upmove` (0x2ec13). Field offsets are CoDExtended's `shared.h`.
 
-Note vcod implements the stance-dependent ground jump described above
-(heights 34/24, `sqrt(2*height*gravity)`, forwardmove gate); its old flat
-`JUMP_VELOCITY = 250.0` constant is gone. The ladder push-off path is
-ported too - port note 4 lists exactly what landed.
+INFERRED, from the branches, each of which returns 0: a jump is refused
+inside 500 ms of the last one (the delta must exceed 499); on `pm_flags`
+0x800 or 0x2000; prone (0x1) or crouched (0x2); while the eye's target is
+the prone height; while a lerp toward the crouch height runs; unless
+`upmove` is 10 or more; and while 0x8, the held-jump latch, is set, in which
+case `upmove` is also zeroed for the rest of the frame. So only a standing
+player jumps, and a held key jumps once. vcod's stance snaps, so its four
+stance and lerp gates reduce to the stance being standing.
+
+VERIFIED: the latch is set by the jump (0x2ec36) and cleared in
+`PmoveSingle` when `cmd.upmove` is 9 or less (0x3412d-0x34135), and `Pmove`
+writes 20 into `cmd.upmove` after each `PmoveSingle` while 0x8 is set
+(0x344f2-0x344f8). INFERRED: a cmd chopped into several steps keeps the
+latch through all of them, and its later steps' air wish reads `upmove` 20
+rather than 127. vcod ports the latch and not the 20.
+
+VERIFIED: 0x800 is set in `ClientSpawn` (0x429d6) and cleared in
+`PmoveSingle` (0x34000) behind tests of `pm_type` and the attack bit
+(0x33f9a-0x33ffc). INFERRED: it is Q3's `PMF_RESPAWNED`, and refuses a jump
+only on a spawn's first cmds until attack is released. Not modelled.
+
+VERIFIED: 0x2000 is set, with `pm_time` 200, in `PM_CrashLand`
+(0x2ffd7-0x2ffe0) behind a test of `fJumpOriginZ` against +/-0.001
+(0x2ffb3-0x2ffd1), and cleared by `PM_DropTimers`. VERIFIED: the ground
+trace (fn 0x30474) zeroes `fJumpOriginZ` on every hit at 0x305c8, ahead of
+its only call to `PM_CrashLand` at 0x30721. INFERRED: that landing lockout
+never arms. VERIFIED on the wire: the bump walker lands at stand/jump
+`commandTime` 39682 with `pm_flags` 0x40008 and `pm_time` 0. Not modelled.
+
+### The takeoff
+
+VERIFIED, the stores once past the gates: `pml.groundPlane` (pml+0x30) and
+`pml.walking` (pml+0x2c) zeroed (0x2ec20, 0x2ec2a); `pm_flags |= 0x8`
+(0x2ec36); `groundEntityNum` 0x3ff (0x2ec3c); `velocity[2] =
+sqrt(ps.gravity * 78.0)` (0x2ec45-0x2ec52, 78.0 at rodata 0x708c8);
+`fJumpOriginZ` (ps+0x68) `= origin[2] + 39.0` (0x2ec57-0x2ec60, 39.0 at
+0x708cc). At gravity 800 the takeoff is 249.8, and `39 = 249.8^2 / (2 * 800)`
+is the jump's apex, so `fJumpOriginZ` is the height the jump peaks at.
+INFERRED: the horizontal velocity is left alone.
+
+VERIFIED, on the wire: both motion captures sample `jump_takeoff` at
+`commandTime` 59082 (carentan) and 58082 (pavlov) with `jumpTime` 16 ms
+earlier and `velocity[2]` 224, which is 249.8 less two 16 ms frames of
+gravity through the snap (237, 224). `fJumpPeak`, the wire name of
+`fJumpOriginZ` (netfield offset 104), reads -0.875 over an origin at
+-39.875 and 272.343 over 233.343, 39 up in both, and 0 at `land`. The bump
+walker's first airborne row (stand/jump 39083) reads `velocity[2]` 223.
+
+### Off a ladder
+
+VERIFIED: 0x2ec63-0x2ec69 test `pm_flags` 0x10 and jump past the whole
+push-off block (0x2ec6f-0x2ed7a) when it is clear. Inside it: `velocity[2]`
+is scaled by 0.75 (0x2ec72, rodata 0x708d0); a flattened copy of
+`pml.forward` is normalized (0x2ec7e-0x2eca0); its reflection off
+`vLadderVec` (ps+0x58) with the -2.0 at 0x708d4 is taken when the dot of
+`vLadderVec` with the full pitched `pml.forward` is below zero
+(0x2ecaa-0x2ecd3, reflection 0x2ece3-0x2ed36), normalized in 3D (0x2ed36),
+and x and y alone scale by `pm_ladderPushOff` 128.0 (0x2ed5a, 0x7082c);
+`pm_flags` 0x10 is cleared (0x2ed7a). INFERRED: only a ladder push-off
+resets the horizontal velocity, to exactly 128 along the forward reflected
+off a wall the player faces, or along the plain forward otherwise. An
+earlier read had "off a ladder, along the horizontal forward" as the ground
+case; it is the not-facing arm of the ladder block.
+
+VERIFIED: 0x2ed80 tests 0x10 again right after that clear and picks event
+0x53 on it (0x2ed86). INFERRED: unreachable.
+
+### The event, the spread and the anim
+
+VERIFIED: the event is 0 when the last ground trace's surface flags
+(pml+0x50) carry 0x2000, otherwise `(flags & 0x1f00000) >> 20`, 0 when that
+is 0 and `+ 0x46` otherwise (0x2ed90-0x2eda8), handed to
+`BG_AddPredictableEventToPlayerstate` (0x2edb9), which returns without
+writing on event 0 (0x2e31e). VERIFIED, on the wire: the carentan capture's
+takeoff adds event 75 and pavlov's 74, `EV_JUMP_*` on materials 5 and 4.
+An earlier read in `cod11-sound-system.md` said the ground jump emits no
+event.
+
+VERIFIED: `aimSpreadScale` (ps+0x3d8) takes 64.0 (0x708dc), capped at 255.0
+(0x708e0), at 0x2edc6-0x2edf3; `BG_AnimScriptEvent(ps, 3, 0, 1)` or `(ps, 4,
+0, 1)` on the sign of `cmd.forwardmove` (pm+0x18) at 0x2ee02-0x2ee19
+(`JUMP`, `JUMPBK`); the function returns 1 (0x2ee5e). VERIFIED, on the wire:
+the takeoff samples read `aimSpreadScale` 66.285 and 67.815 from 0 before.
+
+### The jump's step
+
+`PM_StepSlideMove`'s entry gate, 0x35057-0x35112. VERIFIED, the reads: the
+slide's blocked result (0x35057), `fJumpOriginZ` against -0.001 and 0.001
+(0x3505f-0x3507d, rodata 0x70ef0/0x70ef4), `groundEntityNum` against 0x3ff
+(0x3507f), the entry height against `fJumpOriginZ` (0x3508c), and the step
+size set to 18 (0x3509b) and compared with the room left under the origin
+(0x350a7-0x350ce); on the unblocked side `groundEntityNum` again (0x350ec),
+`pm_flags` 0x10 (0x350f5) and `velocity[2]` against 0 (0x350ff).
+
+INFERRED, from those branches: a grounded move always goes on to the body.
+An airborne one goes on only when it was blocked, `fJumpOriginZ` is set and
+the move started below it, with the step size cut to `fJumpOriginZ - z`
+where that is under 18 and the move returning unstepped where that is under
+1 (0x350ce); or when it is on a ladder moving up. Every other airborne move
+returns before the step-up and before the event tail.
+
+VERIFIED: the flag that path sets (`edi`, 0x350da) is read at 0x35450,
+where a step the revert test kept is tested against `fJumpOriginZ`
+(0x35458-0x35468), and at 0x355a4, where a step that rose past the plain
+slide's height (0x355b4-0x355c7) computes `fJumpOriginZ - z` (0x355cd),
+zeroes `velocity[2]` under 0.1 (0x355d2-0x355e4, rodata 0x70f00) and
+otherwise stores `sqrt(2 * that * ps.gravity)` when it is the smaller
+(0x355f0-0x35652). INFERRED: a jump's step that ends at or above the jump's
+origin is reverted like any other that got nowhere, and one that rose may
+climb no faster than what just reaches the origin. So a jump plus a step
+never rises past the jump's own apex. The tail at 0x35659 is past all of it,
+so a jump's step announces itself and pays the velocity scale like a
+grounded one ("The step event and the velocity scale").
+
+VERIFIED, on the wire: at stand/jump 39483 and 39533 the retail walker,
+falling past the standing target's shoulder 3 to 7 units under its jump's
+origin, holds the target's side at 30.1248; a mover that stepped every
+blocked airborne move went over the shoulder and came down 30.01 from it
+(`cod11-player-clip.md`, section 12).
+
+### vcod
+
+`pmove::check_jump` is `PM_CheckJump`, called from the walk and the ladder
+move; `PlayerState::jump_latched` is 0x8, `since_jump_ms` the delta to
+`jumpTime` and `jump_origin_z` `fJumpOriginZ`, which the ground trace
+zeroes on every hit. `step_slide_move` takes the entry gate, the revert and
+the speed cap above. The server sends `jumpTime` and `fJumpPeak`, and the
+predictor reads both back. Not modelled: 0x800, 0x2000 (unreachable) and
+the chop's `upmove` 20. `crates/server/tests/bump_ab.rs` holds every row of
+the walker's three jumps to 0.000, and `playerstate_motion_ab.rs` the
+takeoff's fields and the `land` anim, which needs the probe's 16 ms cmds:
+at one cmd a 50 ms frame the landing frame starts at -210, short of the
+-220 `PM_CrashLand` wants.
 
 ## Prone: the fit check, the body swing and the yaw cap
 
@@ -472,8 +575,8 @@ So ladders are brushes flagged at the material level, not entities.
 
 **Movement**, `PM_LadderMove` (exported, 0x33944):
 
-- First calls the PM_Jump body above; if it jumped (push-off), runs the normal
-  mover and stores `jumpTime`, done.
+- First calls `PM_CheckJump` ("Jumps"); if it jumped (push-off), runs the
+  normal mover and stores `jumpTime`, done.
 - Otherwise builds wish velocity from forward/rightmove projected onto the
   ladder plane via `ProjectPointOnPlane`, applies `pm_ladderfriction` (16.0)
   and `pm_ladderScale` (0.5) speed scaling, moves with the normal mover, and
@@ -511,7 +614,7 @@ only place those values are ever produced - there is no non-ladder route to
   while PRONE (constants 18.0/10.0 at 0x70EEC/0x70EE8; the chooser at 0x35045
   tests pm_flags bit 0x1 = PRONE - an earlier read of this file said
   walking && !on-ladder, contradicted by its own bytes). Uses `ps.fJumpOriginZ` (compared ±0.001) as
-  part of the step decision.
+  part of the step decision ("The jump's step", under "Jumps").
 - The ground-trace function (0x30474) classifies the ground contact: impact
   velocity along the normal > 10 leaves the ground and fires the JUMP/JUMPBK
   anim events; normal.z >= 0.7 marks walking; anything flatter sets the pml
@@ -931,14 +1034,10 @@ That is why the retail capture's parms run negative: the ground snap alone
 raises the event.
 
 INFERRED, from the control flow of 0x35057-0x35112: the entry gate lets an
-airborne player through only on the jump-origin allowance. A blocked move whose
-`fJumpOriginZ` is inside +/-0.001 rejoins the unblocked path at 0x350e5 and
-takes the same `groundEntityNum` test, so with that field 0 an airborne frame
-returns before the step-up. vcod does not model `fJumpOriginZ` and its gate
-lets a blocked airborne move step, which is a divergence in the step; the
-event and the scale are held to retail's reachable set by an explicit
-on-ground test in `step_slide_move`, since announcing a step retail never
-takes would put a view jolt on a client that retail's would not.
+airborne player through only on the jump-origin allowance or up a ladder,
+and everything it lets through reaches the tail ("Jumps", "The jump's
+step"). vcod ports the gate, so the event and the scale run for exactly
+those moves.
 
 VERIFIED: `PM_VerifyPronePosition` (0x346e0) returns 1 when `pm_flags & 1` is
 clear. INFERRED, from its control flow: with the bit set it runs the prone fit
@@ -1016,6 +1115,36 @@ retail for half the 1463 snapshots of the 8 ms route.
 The friction's own floor stays the flat 100 of 0x2e500 (`PM_STOPSPEED`).
 vcod scaled it by stance until this floor was found, because without it a
 crawl's 4.33 gain per frame lost to that friction's 4.40.
+
+### The ground clip keeps the speed
+
+VERIFIED, in `PM_WalkMove` past the accelerate: 0x2f5b8-0x2f5d9 store the
+velocity's 3D length; 0x2f5dc-0x2f5f1 keep a copy of the velocity;
+0x2f5f4-0x2f64b clip it onto the ground plane (pml+0x44) with the 1.001
+overclip at rodata 0x708f4; 0x2f654-0x2f672 dot the clipped velocity with
+the copy and compare it with 0; 0x2f685 calls `VectorNormalize` on it and
+0x2f694-0x2f6b3 scale all three components by the stored length. INFERRED,
+off the `jne` at 0x2f67c: whenever the clip leaves the velocity pointing
+the same way, it keeps its speed. Q3 has the same rescale with no test. A
+grounded frame whose velocity still carries a fall turns the fall into
+ground speed.
+
+VERIFIED, 0x2f58c-0x2f5b5: gravity is applied to `velocity[2]` ahead of all
+this when the ground's surface flags (pml+0x50) carry 0x2 or `pm_flags`
+0x200 is set. INFERRED: Q3's slick-or-knockback gravity with CoD's own
+bits. Not modelled; vcod's knockback timer is 0x100, which this does not
+test.
+
+VERIFIED, off the bump walker (`mp_carentan-dm-bump-walker.txt`): after
+the push at crouch/jump 70633 the walker lands under the knockback timer at
+70832 on ground 1022 with `vel=-111,4,-175`, and the next snapshot, 70882,
+reads `vel=-186,8,0` with up and forward released. A mover that clipped
+without the rescale read `-93,4,0` there and 4.75 units short; with it the
+row, and prone/land's likewise, match to 0.000. VERIFIED, vcod measurement
+(2026-09-27, `playerstate_slope_ab.rs` with `SLOPE_REPORT=1`): the rescale
+takes the 8 ms route's free-run median dxy from 0.024 to 0.021 and its rows
+past a unit from 2 to 1, the prone street's free-run median from 0.021 to
+0.010, and moves nothing on the 25 ms route.
 
 ## The wish speed
 
@@ -1112,10 +1241,13 @@ and the `wbuttons` 0x4 factor.
 | 0x04 | the prone dive, set by a prone press on a moving player; read by viewheight-lerp timing | 0x31CD5, 0x345C9 ("Going prone") |
 | 0x10 | LADDER | set at 0x33937, cleared at 0x3377C/0x2ED7A |
 | 0x80 | affects ladder-anim speed-scale choice | 0x323D7 |
-| 0x20 | ADS held (blocks ground jump); set/cleared by PM_UpdateAimDownSightFlag | set @0x372A4/0x372B7, clear @0x3ABDC, tested at 0x31CCB |
+| 0x08 | held-jump latch: set by a jump, cleared when `upmove` <= 9 | set @0x2EC36, clear @0x34135, tested at 0x2EC0D ("Jumps") |
+| 0x20 | ADS held (blocks the prone dive); set/cleared by PM_UpdateAimDownSightFlag | set @0x372A4/0x372B7, clear @0x3ABDC, tested at 0x31CCB |
+| 0x800 | Q3's `PMF_RESPAWNED`: set at spawn, cleared once attack is up; refuses a jump | set @0x429D6, clear @0x34000, tested at 0x2EBBE |
+| 0x2000 | 200 ms landing lockout after a jump; refuses a jump, never arms ("Jumps") | set @0x2FFE0, tested at 0x2EBC3 |
 
 (`PMF_PRONE`, `PMF_CROUCH`, `PMF_LADDER`, `PMF_SLIDING=0x100` agree with
-CoDExtended's `shared.h`; bits 0x04/0x80/0x800/0x2000 are INFERRED from
+CoDExtended's `shared.h`; bits 0x04/0x08/0x80/0x800/0x2000 are INFERRED from
 usage sites only.)
 
 ## Tunables (all read directly from rodata, VERIFIED values)
@@ -1149,9 +1281,10 @@ step 18/10.
 
 Status after the pmove work landed on this branch:
 
-1. SHIPPED - stance-dependent ground jump: `vz = sqrt(2 * height * gravity)`,
-   height 34 standing / 24 crouched-prone, forwardmove gate, horizontal
-   velocity kept.
+1. SHIPPED - `PM_CheckJump` ("Jumps"): standing only, 500 ms cooldown,
+   held-key latch, `vz = sqrt(78 * gravity)` with the horizontal kept,
+   `fJumpOriginZ` and the jump's step, `EV_JUMP_*` and the spread kick. The
+   stance-dependent 34/24 jump shipped before it was the prone dive's.
 2. SHIPPED - friction 5.5, accelerate 9, stopspeed 100, stance accelerates
    12 ducked / 19 prone, and the walk's accel floor of 100 ("The walk's
    accel floor"). The stance-scaled stopspeed vcod carried until 2026-09-23
