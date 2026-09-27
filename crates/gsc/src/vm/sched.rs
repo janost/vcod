@@ -377,7 +377,7 @@ impl Vm {
                 }
             }
         }
-        self.step_runnable(host)
+        self.step_runnable(host, true)
     }
 
     /// The deadline wake of [`Vm::run_frame`] left out: steps whatever is
@@ -390,11 +390,9 @@ impl Vm {
     /// `SV_ExecuteClientMessage` callbacks get. Waking deadlines here instead
     /// would step a thread looping on `wait 0` twice per server frame.
     ///
-    /// "Whatever is `Runnable`" is two sets, not just the callbacks and the
-    /// threads their notifies woke: a waiter that a later thread woke at the
-    /// end of the previous frame's pass is `Runnable` too, and resumes here,
-    /// on the previous frame's clock and ahead of the host's own entity
-    /// pass. Nothing measures what cadence retail gives that second case
+    /// "Whatever is `Runnable`" is the callbacks and the threads their
+    /// notifies woke: the frame's own pass leaves nothing `Runnable` behind,
+    /// since it walks again for a waiter a later thread woke
     /// (docs/research/cod11-map-cycle.md, 8.3).
     pub fn run_runnable(&mut self, host: &mut dyn Host, now_ms: i32) -> Vec<ScriptError> {
         if !self
@@ -405,11 +403,13 @@ impl Vm {
             return Vec::new();
         }
         self.now_ms = now_ms;
-        self.step_runnable(host)
+        self.step_runnable(host, false)
     }
 
-    /// The walk both passes share.
-    fn step_runnable(&mut self, host: &mut dyn Host) -> Vec<ScriptError> {
+    /// The walk both passes share. `frame` is the frame's own pass, where a
+    /// `wait` that comes due inside the pass (a `wait 0`) resumes before it
+    /// ends.
+    fn step_runnable(&mut self, host: &mut dyn Host, frame: bool) -> Vec<ScriptError> {
         let mut errors = Vec::new();
         let mut last_id: Option<u32> = None;
         let mut steps = 0;
@@ -419,11 +419,33 @@ impl Vm {
         // watermark is a binary search, not a linear scan: O(n log n)
         // total for a frame instead of the O(n²) the old `filter` +
         // `min_by_key` walk cost once a frame holds many live threads.
+        //
+        // A notify can wake a thread below the watermark, and in the frame's
+        // own pass a `wait 0` comes due at once; retail resumes both before
+        // the frame is over, so the walk starts over from the lowest id until
+        // a walk finds nothing left to run. A stepped thread is never
+        // `Runnable` after its step, so none runs twice unless woken again.
         while steps < Self::MAX_THREADS_PER_FRAME {
             let idx = self
                 .threads
                 .partition_point(|t| last_id.is_some_and(|l| t.id.0 <= l));
             let Some(t) = self.threads.get(idx) else {
+                if frame {
+                    let now = self.now_ms;
+                    for t in &mut self.threads {
+                        if matches!(t.state, ThreadState::WaitingUntil(d) if d <= now) {
+                            t.state = ThreadState::Runnable;
+                        }
+                    }
+                }
+                if self
+                    .threads
+                    .iter()
+                    .any(|t| matches!(t.state, ThreadState::Runnable))
+                {
+                    last_id = None;
+                    continue;
+                }
                 break;
             };
             let tid = t.id;
@@ -912,6 +934,56 @@ mod tests {
             "witness still ran"
         );
         assert_eq!(vm.thread_count(), 0);
+    }
+
+    /// A notify from a later-started thread wakes an earlier-started waiter
+    /// inside the same frame, as retail's synchronous notify does: the stock
+    /// killcam's `waittill("end_killcam")` resumes on the frame its own
+    /// `waitKillcamTime` child notifies it, which the retail tdm hit capture
+    /// shows as a replay exactly `archivetime` long
+    /// (docs/research/cod11-spectator-follow.md, section 12).
+    #[test]
+    fn a_later_thread_s_notify_resumes_an_earlier_waiter_in_the_same_frame() {
+        let mut vm = vm_with(
+            r#"waiter() { level waittill("go"); seen(); }
+            notifier() { wait 1; level notify("go"); }"#,
+        );
+        let mut host = TestHost::default();
+        let waiter = vm.func_ref("test/script", "waiter");
+        let notifier = vm.func_ref("test/script", "notifier");
+        vm.start_thread(&mut host, 0, waiter, None, vec![]);
+        vm.start_thread(&mut host, 0, notifier, None, vec![]);
+        vm.run_frame(&mut host, 1000);
+        assert!(
+            host.calls.iter().any(|(n, _)| n == "seen"),
+            "the waiter was left for the next pass"
+        );
+        assert_eq!(vm.thread_count(), 0);
+    }
+
+    /// A `wait 0` reached inside a frame's pass resumes before the frame is
+    /// over, the way the retail skip of a killcam goes from the replay to the
+    /// respawned player with no dead frame between: `waitRespawnButton`
+    /// opens with `wait 0` and still spawns on the frame of the press
+    /// (docs/research/cod11-spectator-follow.md, section 12). The packet pass
+    /// leaves one for the frame.
+    #[test]
+    fn a_wait_0_inside_the_frame_resumes_in_the_same_frame() {
+        let mut vm = vm_with(r#"f() { wait 1; wait 0; seen(); }"#);
+        let mut host = TestHost::default();
+        let f = vm.func_ref("test/script", "f");
+        vm.start_thread(&mut host, 0, f, None, vec![]);
+        vm.run_frame(&mut host, 1000);
+        assert!(host.calls.iter().any(|(n, _)| n == "seen"));
+
+        let mut vm = vm_with(r#"g() { wait 0; seen(); }"#);
+        let mut host = TestHost::default();
+        let g = vm.func_ref("test/script", "g");
+        vm.start_thread(&mut host, 1000, g, None, vec![]);
+        vm.run_runnable(&mut host, 1000);
+        assert!(host.calls.is_empty(), "the packet pass ran the wait 0");
+        vm.run_frame(&mut host, 1050);
+        assert!(host.calls.iter().any(|(n, _)| n == "seen"));
     }
 
     /// A thread whose first act is spawning another, unboundedly, recurses

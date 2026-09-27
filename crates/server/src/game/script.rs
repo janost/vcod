@@ -1944,23 +1944,24 @@ mod tests {
     const TEST_RNG_SEED: u64 = 1;
 
     /// The packet pass runs the threads the netcode's events woke and
-    /// nothing else. It carries no deadline wake of its own, so a thread
-    /// looping on `wait 0` advances exactly one iteration per server frame;
-    /// waking deadlines there stepped it twice, once at the previous frame's
-    /// clock and again at this one's.
+    /// nothing else: it carries no deadline wake of its own, so a `wait 0`
+    /// waits for the frame's pass. There it comes due at once and resumes
+    /// before the frame is over (`vcod-gsc`'s `step_runnable`), so a loop on
+    /// `wait 0` runs until the pass's thread cap, every frame.
     #[test]
-    fn a_wait_zero_loop_advances_once_per_server_frame() {
+    fn a_wait_zero_loop_runs_in_the_frame_pass_and_not_the_packet_pass() {
         let mut rt = ScriptRuntime::for_test(
             "main() { level.n = 0; for(;;) { wait 0; level.n = level.n + 1; } }",
         );
-        for frame in 1..=5 {
-            rt.run_frame(frame * 50);
-            assert_eq!(
-                rt.level_field("n"),
-                Value::Int(frame),
-                "after {frame} frames"
-            );
-        }
+        let n = |rt: &mut ScriptRuntime| match rt.level_field("n") {
+            Value::Int(n) => n,
+            other => panic!("{other:?}"),
+        };
+        rt.run_frame(50);
+        let after_one = n(&mut rt);
+        assert!(after_one > 1, "{after_one}");
+        rt.vm.run_runnable(&mut rt.host, 50);
+        assert_eq!(n(&mut rt), after_one, "the packet pass stepped the loop");
     }
 
     /// `run_thinks` still runs ahead of the frame's thread pass, which is

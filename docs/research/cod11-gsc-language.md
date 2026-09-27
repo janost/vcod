@@ -541,6 +541,18 @@ check) with a different message text, which the harness does not compare.
 **Notify wake order: start order, VERIFIED.** Two threads waiting on one
 event on `level` wake in the order they were started.
 
+**A notify and a `wait 0` resolve inside the frame, INFERRED from the retail
+killcam's timings (`cod11-spectator-follow.md` 12.7).** A killcam lasts
+exactly its age, so `waitKillcamTime`'s notify resumed `killcam`, the thread
+that started it, on the same frame; and a skipped one goes from the replay to
+the respawned player with no dead frame between, so `waitRespawnButton`'s
+opening `wait 0` resumed inside the frame it was reached in. vcod's frame pass
+(`Vm::run_frame`) walks the threads again, from the lowest id, while any is
+left runnable, a `wait` due by the frame's clock counting as runnable; the
+packet pass (`Vm::run_runnable`) leaves a `wait 0` for the frame. A woken
+thread still runs after the pass reaches it rather than inside the notify, so
+the order of two things inside one frame can differ from retail's.
+
 **A receiver-less call keeps the caller's `self`, VERIFIED (`probe_self`).**
 A plain `f()`, a `[[ptr]]()` and a `thread f()` all inherit the calling
 frame's `self`, and the callee reads the caller's fields off it. This is what
