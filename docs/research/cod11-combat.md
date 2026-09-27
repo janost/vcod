@@ -2165,6 +2165,8 @@ list below. INFERRED: the numbering and every condition in it.
    client whose `sess.sessionState` is 2 and whose `spectatorClient`
    (`client+0x21D4`) is this entity's number. VERIFIED: the walk's stride over
    the client array is `0x22C4`, which is `sizeof(gclient_t)`.
+   `cod11-spectator-follow.md` 4 has the compares' addresses and the retail
+   run that measured the push.
 10. `self->angles[2] = 0`; `self->takedamage = 1`; `self+0x118 = 0x4000000`.
     INFERRED: `self+0x118` is the entity's contents mask and `0x4000000` is
     the corpse contents, on the strength of `player_die` writing it between an

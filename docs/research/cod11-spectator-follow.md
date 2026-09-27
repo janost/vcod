@@ -93,9 +93,27 @@ against 2 on `cl+0x20d0` ahead of the call.
 - VERIFIED live, both runs of section 9: the follower stayed on the target
   through its death (`pm_type` 6, `health` 0) and, in dm, through its respawn
   at a new spot.
-- INFERRED, from `cod11-combat.md` 4.2 step 9: `player_die` sends
-  `Cmd_Score_f` to every spectator whose target is the victim, so a follower
-  is pushed the scoreboard on the death.
+- VERIFIED, `player_die` (0x49a48, `cod11-combat.md` 5.1 step 9): the call
+  to `Scr_PlayerKilled` is at 0x49bb6; the loop after it compares
+  `cl+0x20ec` with 2 (0x49bd9), `cl+0x20d0` with 2 (0x49be2) and `cl+0x21d4`
+  with the victim's entity number (0x49bed), calls `Cmd_Score_f` (0x49bf9)
+  and steps 0x22c4 (0x49c07). `Cmd_Score_f` (0x48f8c) calls
+  `DeathmatchScoreboardMessage` (0x459c0), whose one send is
+  `trap_SendServerCommand` (0x45b42).
+- INFERRED, from those compares and their order: every connected spectator
+  whose follow target is the victim is sent the `b` scoreboard, once per
+  death, after the killed callback has run to its first `wait`, so the rows
+  carry the score and deaths that callback wrote. Nobody else is sent one.
+- VERIFIED: `player_die` is reached from `Cmd_Kill_f` (call at 0x4960b), from
+  the `suicide` builtin (0x45358, call at 0x453e5) and through the `die`
+  pointer at `gentity+0x218`, which `ClientSpawn` sets to `player_die`
+  (0x42753) and `finishPlayerDamage` calls (`cod11-combat.md` 4.5). INFERRED:
+  so the walk runs inside whatever did the killing: the `kill` command's
+  packet, the shooter's cmd, the touch pass, the blast, the script frame.
+- VERIFIED live, the scoreboard run of section 9: the follower was pushed
+  the `b` in the packet of the death frame for a `kill` and for a head shot,
+  the frame on which its copy first read `health` 0, and none after it had
+  let go of the victim.
 
 ## 5. The copy: `SpectatorClientEndFrame`
 
@@ -229,6 +247,22 @@ after going active, and prints every snapshot whose `clientNum`, `pm_type`,
   for six after any change. Both followers rode slot 1 through its death at
   23750 and its respawn at 26800, whose frame read `commandTime` 26800 in
   both. Sections 5, 7 and 13 cite it as "the three-probe dm run".
+- The scoreboard run, 2026-09-27 on port 29023: `tools/run_probe.sh
+  client-probes/probe_passthru mp_carentan +set probe_teleport 1`, then
+  `--probe-follow` in slot 0, `--probe-target --probe-team axis` in slot 1
+  2 s later and a `--save-hit --probe-sweep --probe-team allies` shooter in
+  slot 2 50 s after that. The probe prints each `b` it is pushed as a
+  `FOLLOW b` line beside the snapshot of its packet; it never sends `score`.
+  VERIFIED live: two pushes, `b 2 0 0 1 -1 0 1 1 0 0 0 0 0` with snapshot
+  `serverTime` 23850 after the target's `kill` (`K;` `MOD_SUICIDE`), and
+  `b 3 0 0 2 1 0 0 0 1 -1 0 2 1 0 0 0 0 0` at 65400 after the shooter's
+  second head hit (`K;` `MOD_HEAD_SHOT`). On both frames the follower's copy
+  read `health` 0, `weapon` 0 and `pm_type` 0, and `pm_type` 6 on the next.
+  The target's row reads `score` -1 and one death after the `kill`, and
+  after the head shot two deaths and the shooter's row `score` 1. The
+  follower's copy gave way to its own `clientNum` at 67450, and the four
+  deaths after that pushed nothing. INFERRED: the let-go is the killcam
+  making the target a spectator, section 4's followability.
 - The intermission run, the same day and port: `+set scr_dm_timelimit 1`,
   `--probe-follow` and a `--probe-team axis` player. The follower's
   intermission frames read `pm_type` 5, `pm_flags` 0x800, `commandTime`
@@ -254,9 +288,12 @@ patch; `ClientSim::spectator_think` and `stop_following` are sections 2 and
 7; `Server::replay_moves` runs the think per cmd for a client whose
 `sessionstate` is spectator and skips its pmove while the follow is on;
 `follow_end_frame` is section 5 in the end-frame slot loop;
-`pass_followers_on` is section 8 from `drop_client`; a death the vitals
-mirror sees first sends the scoreboard to the victim's followers (section
-4); `send_snapshots` builds a follower's frame from the followed client's
+`pass_followers_on` is section 8 from `drop_client`; `GameHost::die`, the
+one place a client dies, queues the death, and `queue_death_scoreboards` is
+section 4's walk, run right after each callback that can kill (a hit's, the
+`kill` command's, the touch pass's, the blasts' and a turret round's) and
+after the script frame, with the `b` queued behind the commands the
+callback queued; `send_snapshots` builds a follower's frame from the followed client's
 wire playerstate, eye and number. `spectatorclient` starts at -1 and is written back to -1 where
 retail writes it.
 
@@ -306,8 +343,21 @@ reproduce that for the same reason. Ours read pitch 0 on the press frame
 until 2026-09-27, when `to_wire` wrote `viewangles` for a player alone and
 the copy's `pm_flags` gave way to the spectator's own.
 
+VERIFIED live against ours, section 9's scoreboard recipe on port 29024
+with `vcod-server --gametype-script` running `probe_passthru`: the follower
+was pushed `b 2 0 0 1 -1 0 1 1 0 0 0 0 0` at 23850 after the `kill` and
+`b 3 0 0 2 1 0 0 0 1 -1 0 2 1 0 0 0 0 0` at 63550 after the second head hit,
+each on the frame whose copy first read `health` 0 at `pm_type` 0, as
+retail's run read.
+
 Where it is not retail's:
 
+- A death inside the script frame walks when the frame ends rather than
+  when its callback returns: the `suicide` builtin, which every stock
+  gametype's team menu calls on a live player changing teams, and a scripted
+  `radiusDamage`. A command another thread of that frame queues after the
+  death then goes out ahead of the `b`, and the rows read the frame's end.
+  INFERRED, from ours' order; no run has measured it on either server.
 - The rest of a stopped copy is kept whole except the owned fields; whatever
   the spectator's `Pmove` writes into `pm_flags` after the stop is not
   measured, and ours writes nothing there.

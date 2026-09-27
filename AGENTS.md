@@ -457,7 +457,9 @@ engineering setup works.
   sight for 2 s and attack, 6 s apart from 8 s after going active, printing
   every snapshot whose `clientNum`, `pm_type`, `pm_flags`, `eFlags`,
   `health` or `weapon` moved, and the six after it, with the server time,
-  origin, velocity, view, eye heights and player entities it carried.
+  origin, velocity, view, eye heights and player entities it carried, and
+  every `b` scoreboard it is pushed as a `FOLLOW b` line beside the snapshot
+  of the packet that carried it; it never asks for one.
   Beside a `--probe-team allies` and a `--probe-target --probe-team axis`
   started first it is the follow measurement
   (`docs/research/cod11-spectator-follow.md` section 9, a dm and an sd run);
@@ -625,7 +627,13 @@ engineering setup works.
   way and its own later cmds still move alive and disarm
   (`docs/research/cod11-combat.md` 16); then the touch pass, and a
   `trigger_hurt` death in it lands on the sim the same way; a throw is
-  queued for the missile pass. The anim update runs per client off its last
+  queued for the missile pass. Every death is `GameHost::die`, whichever
+  path ran it, and right after each callback that can kill returns (a hit's,
+  the `kill`'s, the touch pass's, and later the blasts', the script frame's
+  and a turret round's) `player_die`'s walk queues the scoreboard to each
+  spectator following the victim, behind what the killed callback queued, so
+  it rides the death frame's packet (`docs/research/cod11-spectator-follow.md`
+  4). The anim update runs per client off its last
   cmd, at the end and wherever a kill, a hit, a use press or a
   `trigger_hurt` death breaks into its cmds. The host mirror after each move
   is its origin, `pm_type`, `on_ground`, view yaw, the `ps.weapon` a move
@@ -666,9 +674,7 @@ engineering setup works.
   pins every linked client to its parent plus the offset and releases a link
   whose parent is gone, then the sim ops the script left (events, `setOrigin`,
   `setPlayerAngles`, the damage the callback did), then the vitals mirror (health, and the damage
-  feedback `P_DamageFeedback` computes from the health the hit left, and
-  the deaths it sees first, whose followers are sent the scoreboard with the
-  frame's server commands), then
+  feedback `P_DamageFeedback` computes from the health the hit left), then
   slot by slot the follow half of `ClientEndFrame` (a playing or dead client
   takes the own-view bit a follow copies, and is first spawned where a copy
   still in its playerstate stood; a spectator lands its follow, out of the
