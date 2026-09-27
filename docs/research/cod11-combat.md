@@ -1166,7 +1166,15 @@ numbering, and every "when", "unless" and "otherwise" in it.
    when `d < 0.125` (the `fcom` at `0x68b5b` and the `and ah,5` / `jne` after
    it, which jumps to a `fldz` on C0 or C2), and the function recurses at the
    same damage, with the same `passEnt` and `depth + 1`. The 0.125 and 0.25
-   are `.rodata 0x79c60` and `0x79c64`.
+   are `.rodata 0x79c60` and `0x79c64`. VERIFIED: the ray is `end - start`
+   of this call normalized (`0x68b12`..`0x68b35`), the nudged point is
+   stored through the `start` pointer itself (`[edi]`, loaded from the
+   argument at `0x68899`, stores at `0x68b7c`..`0x68b94`), and the recursion
+   pushes the incoming `passEnt` and `attacker` (`0x68baa`, `0x68bae`).
+   INFERRED, off the `je` at `0x68b0c` and the `jmp` to the epilogue at
+   `0x68bb7`: a glass hit never reaches `G_Damage`, its own impact is step
+   2's, and a pistol round passes glass as a rifle round does, since the
+   test is ahead of any read of `dflags`.
 4. Otherwise, when the hit entity's `takedamage` byte (`gentity+0x171`) is
    set, `G_Damage(hitEnt, attacker, attacker, params, trace.endpos, damage,
    dflags, mod, trace.hitLoc)`. INFERRED: `params` is passed where `G_Damage`
@@ -1228,20 +1236,79 @@ capture shows the same behind its target (`cod11-turrets.md` 12.5).
 the recursion as a loop of at most 13 legs: a player hit becomes a hit at the
 leg's damage through its multiplier, and a `rifleBullet` round goes on from
 the hit point along the same line with that player passed and the damage
-halved, until a leg meets the world (its impact), nothing, or a halving to 0.
+halved, and any round goes on past glass from the nudged point, until a leg
+meets any other surface (its impact), nothing, or a halving to 0.
 VERIFIED, the same probe run against ours (`vcod-server mp_carentan
 --gametype-script .../probe_passthru.gsc --set probe_teleport=1`): at 39550
 the front player took 67 at `head` and the back one 33 at `head` in one frame,
 with a world 174 behind them; and the turret gate's two world impacts behind
 its target now read retail's (1248 1308) and (1248 1312) to the unit
-(`cod11-turrets.md` 13.1). Two differences. Every leg of a round is traced
-before any damage callback runs, where retail runs the first player's callback
-before it traces the next leg. INFERRED: nothing a later leg reads is written
-by that callback, so the order shows on the wire only as the temp entities'
-slot order. VERIFIED, the two runs' 33600 and 39550 frames: retail's flesh
-174s took entities 176 and 178 and its wall 174 took 180, where ours put the
-wall 174 at 960 and the flesh ones at 961 and 963. And step 3's glass continuation is not modelled: the collision trace
-does not report the contents it stopped on.
+(`cod11-turrets.md` 13.1). VERIFIED, the two runs' 33600 and 39550 frames:
+retail's flesh 174s took entities 176 and 178 and its wall 174 took 180,
+where ours then put the wall 174 at 960 and the flesh ones at 961 and 963,
+because ours traced every leg of a round and ran the damage callbacks later,
+where retail runs a leg's callback before it traces the next leg.
+
+`fire_round` still traces every leg first, but returns what the round did as
+one ordered list of impacts and hits, and the server applies it in that
+order: an impact goes on the wire, a hit runs `CodeCallback_PlayerDamage` on
+the spot, so the flesh pair `finishPlayerDamage` raises numbers between the
+leg's impacts the way retail's does. The turret pass applies its rounds the
+same way. INFERRED: tracing ahead changes nothing else within a round. The
+next leg passes the player the callback ran on, a corpse that callback
+clones is `CONTENTS_CORPSE`, which the shot mask 0x2802031 leaves out, and
+no stock damage or kill callback moves another player. The list is applied
+in the attack slot of the tick, ahead of the missiles, the blasts and the
+queued `kill` and `mr` commands, which is where retail's shot runs too: its
+`FireWeapon` is inside the usercmd, ahead of `G_RunFrame`. INFERRED, not
+measured: what still differs is across rounds of one tick. Every round of a
+tick is traced against the players as the move pass left them, so a player
+one round kills still stops a later round of the same tick (another shooter's,
+or a turret's next), where retail's later round meets whatever contents the
+death left the victim with before its end frame.
+
+Glass, measured on retail, 2026-09-27: `client-probes/probe_glass` (its
+section in that directory's README) on mp_depot stood a `--probe-target`
+client 76 units behind the pane brush at x -772..-764 (lump 4 brush 434,
+material `glass@window2a` 0x8000010) and a `--save-hit --probe-sweep`
+shooter 16 units in front of it, with the enfield (`damage` 120,
+`rifleBullet` 0). VERIFIED, the server's log: the target took 180 at `head`
+three times, 107 at `torso_upper`, 72 at `left_arm_upper`, 60 at
+`left_arm_lower` and 48 at `right_foot`, `iDFlags` 0, each 120 through the location's own
+multiplier and none halved. VERIFIED, the shooter's drained events: each of
+those taps put a 173 on the pane's +x face at x -763 in the same snapshot as
+the flesh 173 behind it at x -840, the pane's with the lower entity number
+(169 and 179 at +65984 ms). VERIFIED, lump 4: that face's side is
+`textures/common/caulk`, surface flags 0x400a0, and every pane impact read
+`surfType` 0. INFERRED: the impact takes the side's surface flags, not the
+brush material's 0x900000, which Q3's `trace.surfaceFlags = side->surfaceFlags`
+also does. VERIFIED: the pane's other face, x -772, is side material
+`glass_nosight@fwindow5` 0x8000010, and the render soup drawn there is a
+different lump-0 entry of that name, contents 0x1; the round went on
+through both.
+
+Glass does not break in MP. VERIFIED: `game.mp.i386.so` carries no
+`func_glass` string, and its only strings naming glass are the six
+`EV_*_GLASS` movement events. VERIFIED: the one stock script that breaks
+windows is single-player `maps/_window.gsc` (`pak4.pk3`), which waits on
+`targetname "window"` damage triggers, and no stock MP map's entity lump
+carries a `window` targetname or a classname naming `glass` or `damage`.
+INFERRED: a pane passes rounds and stays.
+
+vcod follows step 3: `CollisionWorld::hit_contents` reads the contents word
+off the prim a trace stopped on, glass brushes (contents 0x10 without SOLID)
+enter the clip, and `fire_round` goes on past one from the nudged point.
+VERIFIED, the same probe run against ours on the same day: the target took
+180 at `head` and 107 at `torso_upper` through the pane, the pane's 173
+numbered below the flesh one. Two differences remain. Ours reports the
+brush material's surface flags for every face, so its pane impacts read
+`surfType` 9 where retail's caulk face reads 0; per-side flags are a change
+to every brush trace and are not made here. And a round meeting glass at
+under 0.125 of its normal is not nudged, so each later leg starts where the
+last stopped and meets the pane again at fraction 0 until the depth runs out:
+13 impacts on the pane and nothing behind it. INFERRED from step 3 and Q3's
+`CM_TraceThroughBrush`, whose `SURFACE_CLIP_EPSILON` leaves `endpos` 0.125 in
+front of the plane; no capture has a grazing shot.
 
 **Damage does not fall off with distance.** VERIFIED: nothing in
 `Bullet_Fire_Extended`, `Bullet_Fire` or `FireWeapon` reads the trace fraction
@@ -2897,8 +2964,7 @@ in-process test and the headless run cover that path). PENDING.
 ### 9.4 What is not modelled at all
 
 Named here so a reader of sections 1 to 7 does not assume the code follows
-them: a round continuing through a surface of contents `0x10` (2.4, step
-3); the `pm_time` stun (4.5); the view kick of 6's step 6;
+them: the `pm_time` stun (4.5); the view kick of 6's step 6;
 `EV_CROUCH_PAIN` (188);
 the `EV_RAISE_WEAPON` (155) retail raises on the death frame beside `EV_DEATH`;
 the direct-hit `MOD_GRENADE` arm (13.1), which a stock frag cannot reach

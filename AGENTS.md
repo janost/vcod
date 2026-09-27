@@ -515,7 +515,8 @@ engineering setup works.
   `meleeattack` clause's lines. What the machine does not cover yet is the two
   turn movetypes. A shot is a trace against the world
   and every live player's box, a rifle round goes on through each player it
-  hits at half damage, a hit runs the stock
+  hits at half damage, any round goes on through glass at full damage (a
+  pane passes rounds and never breaks), a hit runs the stock
   `CodeCallback_PlayerDamage`, and `finishPlayerDamage` is where health,
   knockback, the pain and death events and `CodeCallback_PlayerKilled`
   happen (`crates/server/src/game/combat.rs`, `docs/research/cod11-combat.md`).
@@ -608,13 +609,16 @@ engineering setup works.
   entity states `cloneplayer` reads and the posed bodies a scripted blast
   traces are mirrored last in that pass. Then the
   queued attacks themselves (a trace per leg of each round, a wall impact
-  temp entity and a hit per player struck), then each client's last cmd buttons for `useButtonPressed`,
-  then the missiles fly and any due fuse explodes, then the blasts become
-  hits, then the client commands that start a script thread (`kill`, `mr`),
-  which the packet pass only queues because it runs before the clock advances,
-  then `deliver_hits` so the damage callback has run before script (its
-  `finishPlayerDamage` raises a bullet weapon's flesh impacts), then the
-  script frame, then the script's spawns, then the switches the weapon
+  temp entity and a hit per player struck, in the order the round met them),
+  then each client's last cmd buttons for `useButtonPressed`, then the
+  attacks' impacts go out and their hits run the damage callback there and
+  then, in that same order (its `finishPlayerDamage` raises a bullet
+  weapon's flesh impacts, so they number between the legs' own the way
+  retail's do), then the missiles fly and any due fuse explodes, then the
+  blasts become hits, then the client commands that start a script thread
+  (`kill`, `mr`), which the packet pass only queues because it runs before
+  the clock advances, then `deliver_hits` for the blasts so their damage
+  callback has run before script, then the script frame, then the script's spawns, then the switches the weapon
   machine made (its takes already landed at their cmd's touch, and only
   there), then the weapon mirrors (held, current, viewmodel, the
   body a shot is traced against, and the origin back to script), then the
@@ -635,7 +639,7 @@ engineering setup works.
   and beside it the cursor hint for the item the use key would pick now,
   then each gunner's `turret_think_client` (the gunner half of a release
   a deleted gun queued, then aim, fire, loop sound, or the release itself on
-  a use press or a death), whose rounds are traced and handed to the damage callback right there, with the
+  a use press or a death), whose rounds are traced and their impacts and hits applied in order right there, with the
   weapons mirrored again and the sim ops, weapon ops and health that callback
   leaves applied a second time, closing with a second `end_frame` for a
   victim numbered above its gunner,

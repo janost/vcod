@@ -1403,7 +1403,7 @@ may carry 0xC000; no capture covers it.
   as long as the trigger is held. INFERRED and unmeasured: whether retail's
   flag ever separates from the gun's own shot for a turret gunner
   specifically is not covered by any capture.
-- The turret pass's damage callback (`deliver_hits`) runs after the tick's
+- The turret pass's damage callback (`apply_effects`, one `deliver_hits` per hit, in round order) runs after the tick's
   one `take_link_ops` drain, so a `linkTo`/`unlink` or a client spawn its
   script notify queues waits for the next tick's drain rather than reaching
   this frame's wire.

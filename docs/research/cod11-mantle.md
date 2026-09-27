@@ -981,7 +981,12 @@ stop at a window pane and a `misc_model` lamp's glass surface (contents
 vcod: `props::collision_tris` hands every collision surface with non-zero
 `contents` to the world as `ModelTri`s; `CollisionWorld::shot_trace` and
 `missile_trace` clip them by the bare segment with those epsilons and
-masks, `box_trace` never does. The bounce parm a prop carries is now the
+masks, `box_trace` never does. Glass brushes, whose words carry no SOLID
+bit, enter the clip beside the SOLID and PLAYERCLIP ones, and a world-model
+render soup lying on a pane's faces does not: mp_depot draws a pane's outer
+face with a lump-0 entry whose contents are 0x1, where the brush's own word
+is 0x8000010, and retail's round goes on through it
+(`cod11-combat.md` 2.4). The bounce parm a prop carries is now the
 surface's own (21 on the crate stack), which `missile_ab` compares.
 
 ### Terrain is a swept sphere, a patch is a facet

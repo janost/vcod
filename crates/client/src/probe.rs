@@ -4600,7 +4600,10 @@ impl HitProbe {
             self.los = match &self.world {
                 Some(w) => LOS_HEIGHTS.iter().any(|h| {
                     let at = glam::Vec3::new(o[0], o[1], o[2] + h);
-                    w.shot_trace(eye.into(), at).fraction >= LOS_FRACTION
+                    // Glass is left out: a round goes on through a pane.
+                    let mask =
+                        vcod_common::collision::MASK_SHOT & !vcod_common::collision::CONTENTS_GLASS;
+                    w.point_trace(eye.into(), at, mask, true).fraction >= LOS_FRACTION
                 }),
                 None => false,
             };

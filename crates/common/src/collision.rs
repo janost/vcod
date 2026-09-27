@@ -45,6 +45,9 @@ pub const MASK_BLAST: u32 = 0x2802091;
 /// with the entity's `clipmask` and falls back to 0x11, SOLID and GLASS,
 /// and no store into `fire_grenade`'s entity (0x643ac) was found.
 pub const MASK_MISSILE: u32 = CONTENTS_SOLID | CONTENTS_GLASS;
+/// The brush contents that enter the clip as brushes. Glass carries no SOLID
+/// bit (mp_depot's panes are 0x8000010) and is in every mask above.
+const CLIP_BRUSH: u32 = CONTENTS_SOLID | CONTENTS_PLAYERCLIP | CONTENTS_GLASS;
 const TRACE_MASK_MOVE: u32 = MASK_PLAYERSOLID;
 const TRACE_MASK_SHOT: u32 = MASK_SHOT;
 
@@ -610,7 +613,7 @@ pub struct CollisionWorld {
     tris_terrain: Vec<bool>,
     nodes: Vec<BvhNode>,
     prims: Vec<(Prim, Vec3, Vec3)>,
-    water: Vec<WaterVolume>,
+    water: Vec<Volume>,
     /// Per lump-27 model, whether its brushes are in the clip. Retail holds
     /// a submodel's brushes only through the entity that links them, so a
     /// deleted `script_brushmodel` takes its brushes out; `set_model_linked`
@@ -622,8 +625,9 @@ pub struct CollisionWorld {
     model_entity: Vec<AtomicU32>,
 }
 
-/// A water brush as clip planes plus its axial bounds for the cheap reject.
-struct WaterVolume {
+/// A brush as clip planes plus its axial bounds for the cheap reject: a
+/// water volume, or a pane at build time.
+struct Volume {
     planes: Vec<(Vec3, f32)>,
     lo: Vec3,
     hi: Vec3,
@@ -718,6 +722,7 @@ impl CollisionWorld {
     pub fn build(bsp: &Bsp, model_tris: &[ModelTri]) -> Self {
         let mut brushes = Vec::new();
         let mut water = Vec::new();
+        let mut panes: Vec<Volume> = Vec::new();
         let mut t = Tris {
             tris: Vec::new(),
             surf: Vec::new(),
@@ -773,22 +778,28 @@ impl CollisionWorld {
                 .skip(brush_range.start)
             {
                 let mat = &bsp.materials[b.material as usize];
-                if placement.trigger
-                    || mat.content_flags & (CONTENTS_SOLID | CONTENTS_PLAYERCLIP | CONTENTS_WATER)
-                        == 0
-                {
+                if placement.trigger || mat.content_flags & (CLIP_BRUSH | CONTENTS_WATER) == 0 {
                     continue;
                 }
                 let mut planes = Vec::new();
                 let (lo, hi) = brush_side_planes(bsp, b, placement.origin, &mut planes);
                 if mat.content_flags & CONTENTS_WATER != 0 {
-                    water.push(WaterVolume {
+                    water.push(Volume {
                         planes: planes.clone(),
                         lo,
                         hi,
                     });
                 }
-                if mat.content_flags & (CONTENTS_SOLID | CONTENTS_PLAYERCLIP) != 0 {
+                if mi == 0
+                    && mat.content_flags & (CONTENTS_GLASS | CONTENTS_SOLID) == CONTENTS_GLASS
+                {
+                    panes.push(Volume {
+                        planes: planes.clone(),
+                        lo,
+                        hi,
+                    });
+                }
+                if mat.content_flags & CLIP_BRUSH != 0 {
                     let idx = brushes.len() as u32;
                     brushes.push(BrushPlanes {
                         planes,
@@ -862,6 +873,18 @@ impl CollisionWorld {
                 })
             })
         };
+        // A pane's faces draw with their sides' materials, some of them
+        // SOLID (mp_depot's `glass_nosight@fwindow5` outer faces), where the
+        // clip takes the brush's glass word alone.
+        let on_pane = |tri: &[Vec3; 3]| {
+            panes.iter().any(|p| {
+                tri.iter().all(|v| {
+                    v.cmpge(p.lo - Vec3::splat(0.5)).all()
+                        && v.cmple(p.hi + Vec3::splat(0.5)).all()
+                        && p.planes.iter().all(|&(n, d)| n.dot(*v) <= d + 0.5)
+                })
+            })
+        };
         let world_model = &bsp.models[0];
         let soup_range = world_model.first_soup as usize
             ..(world_model.first_soup + world_model.num_soups) as usize;
@@ -880,6 +903,9 @@ impl CollisionWorld {
                 };
                 let tri = [p(0), p(2), p(1)];
                 if !terrain_by_vertex.is_empty() && draws_terrain(&tri) {
+                    continue;
+                }
+                if on_pane(&tri) {
                     continue;
                 }
                 t.push(tri, mat.surface_flags, contents, false);
@@ -944,6 +970,19 @@ impl CollisionWorld {
             Some(_) => ENTITYNUM_WORLD,
             None if trace.fraction < 1.0 => ENTITYNUM_WORLD,
             None => ENTITYNUM_NONE,
+        }
+    }
+
+    /// The contents word of what a trace stopped on, the locational trace's
+    /// `+32` (docs/research/cod11-combat.md 3.2): a brush's material word, a
+    /// prop surface's own, a triangle's kept bits. 0 for a miss and for a
+    /// body, whose contents live on its entity.
+    pub fn hit_contents(&self, trace: &Trace) -> u32 {
+        match trace.hit {
+            Some(Prim::Brush(b)) => self.brushes[b as usize].content_flags,
+            Some(Prim::Tri(t)) => self.tris_contents[t as usize],
+            Some(Prim::Model(t)) => self.model_tris[t as usize].contents,
+            Some(Prim::Body(_)) | None => 0,
         }
     }
 
@@ -1587,6 +1626,47 @@ mod tests {
             surface_flags: 21 << 20,
         };
         [mt([a, c, b]), mt([a, d, c])]
+    }
+
+    /// A window pane (contents 0x8000010, no SOLID bit) is a brush every
+    /// mask meets, and the trace names its contents; a shot that starts
+    /// inside it, where a glass leg's nudge puts the next one, leaves it,
+    /// through a SOLID soup drawn on its far face.
+    #[test]
+    fn a_glass_brush_clips_and_reports_its_contents() {
+        let glass = 0x8000010;
+        let face = |x: f32| {
+            let c = |y: f32, z: f32| Vec3::new(x, y, z);
+            [
+                [c(-64.0, 0.0), c(64.0, 0.0), c(64.0, 128.0)],
+                [c(-64.0, 0.0), c(64.0, 128.0), c(-64.0, 128.0)],
+            ]
+        };
+        let world = synthetic_world_tris(
+            &[
+                ("textures/test/solid", CONTENTS_SOLID, 0),
+                ("textures/test/glass", glass, 0x900000),
+            ],
+            &[(1, [40.0, -64.0, 0.0], [42.0, 64.0, 128.0])],
+            &face(42.0),
+        );
+        let (start, end) = (Vec3::new(0.0, 0.0, 60.0), Vec3::new(100.0, 0.0, 60.0));
+        let t = world.shot_trace(start, end);
+        assert!(
+            (t.endpos.x - (40.0 - SURFACE_CLIP_EPSILON)).abs() < 1e-3,
+            "{t:?}"
+        );
+        assert_eq!(world.hit_contents(&t), glass);
+        assert_eq!(sound_material(t.surface_flags), 9);
+        let mins = Vec3::new(-15.0, -15.0, 0.0);
+        let maxs = Vec3::new(15.0, 15.0, 70.0);
+        let moved = world.box_trace(start - Vec3::Z * 60.0, end - Vec3::Z * 60.0, mins, maxs);
+        assert!(moved.fraction < 1.0, "a player stops at the pane");
+        assert!(world.missile_trace(start, end).fraction < 1.0);
+
+        let inside = world.shot_trace(Vec3::new(40.125, 0.0, 60.0), end);
+        assert_eq!(inside.fraction, 1.0, "{inside:?}");
+        assert_eq!(world.hit_contents(&inside), 0);
     }
 
     /// A prop's triangles stop a shot through them, front face only,

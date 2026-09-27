@@ -135,6 +135,8 @@ fn a_shot_takes_health_and_a_second_one_kills() {
         buttons: BUTTON_ADS | BUTTON_ATTACK,
         ..NULL_USERCMD
     };
+    // A seed whose spread carries the round on past B into a wall A sees.
+    sv.test_seed_rng(1);
     ca.send_frame(&fire);
     cb.send_frame(&facing_a);
     step(&mut sv, &mut ca, &mut cb);
@@ -160,6 +162,21 @@ fn a_shot_takes_health_and_a_second_one_kills() {
             .cloned()
     };
     let plain = event(sa, 174).expect("A is sent the flesh impact");
+    // B's callback runs before the round's next leg is traced, so the flesh
+    // pair it raises numbers below the wall impact behind B (combat doc 2.4).
+    let number = |snap: &vcod_common::net::snapshot::Snapshot, flesh: bool| {
+        snap.entities
+            .iter()
+            .find(|(_, e)| {
+                e.field_i32(p, "eType") == 12 + 174 && (e.field_i32(p, "surfType") == 7) == flesh
+            })
+            .map(|(n, _)| *n)
+    };
+    let wall = number(sa, false).expect("the round goes on through B into the world");
+    assert!(
+        number(sa, true).unwrap() < wall,
+        "the flesh impact numbers below the wall behind"
+    );
     assert!(event(sb, 174).is_none(), "the victim is not");
     let client = event(sb, 176).expect("the victim is sent the client impact");
     assert!(event(sa, 176).is_none(), "A is not");
