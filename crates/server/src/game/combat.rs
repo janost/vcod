@@ -335,10 +335,13 @@ fn bullet_mod(rifle_bullet: bool) -> (&'static str, i32) {
     }
 }
 
-/// Where a shot, a swing or a throw starts: the eye plus lean, each
-/// component truncated toward zero (combat doc 2.1).
+/// Where a shot, a swing or a throw starts: the origin truncated toward zero
+/// (`ClientEvents` reads the snapped `s.pos.trBase`), then the eye height and
+/// lean, then each component truncated again (combat doc 2.1).
 pub fn muzzle_point(ps: &PlayerState) -> Vec3 {
-    ps.view().eye.trunc()
+    // `PlayerState::view`'s offset, added to the snapped origin.
+    let right = Vec3::new(ps.yaw.sin(), -ps.yaw.cos(), 0.0);
+    (ps.origin.trunc() + Vec3::Z * ps.view_height() + right * ps.lean).trunc()
 }
 
 /// A player's shot: from the eye along the view with spread, against the

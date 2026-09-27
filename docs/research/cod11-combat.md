@@ -928,6 +928,23 @@ calls `G_AddLean` on it (`0x68e25`) and rewrites each component through
 off the three sitting past the call: the lean is applied before the
 truncation.
 
+The origin it starts from is already whole. VERIFIED: `ClientThink_real`
+calls `BG_PlayerStateToEntityStateExtrapolate` (`0x2d004`, call at
+`0x404f2`) or `BG_PlayerStateToEntityState` (`0x2cbe8`, call at `0x40510`),
+picked on `g_smoothClients` (relocation at `0x404cc`), each with a snap
+argument of 1 (`0x404d3`, `0x40503`); both truncate `s.pos.trBase` under a
+control word `| 0xc00` when that argument is non-zero (`0x2cc30..0x2cca2`,
+`0x2d1db..0x2d25a`); `ClientThink_real` copies `s.pos.trBase` into
+`r.currentOrigin` at `0x4051e..0x40533`, ahead of the `ClientEvents` call at
+`0x40589`, and writes the unsnapped `ps.origin` (`client+0x14`) back into
+`r.currentOrigin` at `0x405c7..0x405dc`, past `G_TouchTriggers`. INFERRED,
+off that order: `FireWeapon` reads a truncated origin, so the muzzle is
+`trunc(trunc(origin) + (0, 0, viewHeightCurrent) + lean)`, which differs from
+`trunc(eye)` by one unit on z wherever the feet sit at a negative fractional
+height. VERIFIED: both throws of the pair capture
+(`mp_carentan-tdm-grenade-shooter.txt`) stand at z -23.9 and leave from
+`trBase` z 37, where `trunc(eye)` is 36 (11.4).
+
 VERIFIED: the melee swing's muzzle is built by `FireWeaponMelee` (`0x69504`),
 which calls `Weapon_Melee` (`0x69614`): the same `ps+0xD0` add (`0x6957e`),
 the same `G_AddLean` call (`0x6958f`) and the same three truncations
@@ -3489,7 +3506,9 @@ start point to `self->r.currentOrigin` with `client+0xD0` added to z, calls
 INFERRED: `client+0xD0` is the view height, since `CanDamage` adds the same
 field to the same origin for the same purpose (14.3). INFERRED: that start
 point is the muzzle, since the same local is what `FireWeapon` hands
-`Bullet_Fire_Extended` as the trace start (2.3).
+`Bullet_Fire_Extended` as the trace start (2.3). INFERRED: inside a cmd
+`r.currentOrigin` is the snapped `s.pos.trBase`, so the throw leaves from a
+whole-unit origin plus the view height (2.1).
 
 VERIFIED, `FireWeapon` `0x69003`-`0x6909F`: on the `weaponType == 1` arm it
 builds `velocity = forward * (float)weapDef->projectileSpeed (0x314)` with
@@ -3519,6 +3538,58 @@ encoding with `2m` in `st(0)` and `1.0` in `st(1)`. INFERRED: with glibc's
 `(-160, 0]`, so the death drop is not isotropic at all and the negative
 constant looks like a sign slip in the shipped code. This corrects 5.1's
 step 5, which called it "a random direction ... and a speed of 160.0".
+
+### 11.4 When a throw spawns, and when it first moves
+
+VERIFIED, `fire_grenade` (`0x543AC`): it stamps `s.pos.trTime` (`0x544b6`)
+and `s.apos.trTime` (`0x54565`) with `level+0x1E8`, and `nextthink` with
+`level+0x1E8` plus `grenadeTimeLeft` (`0x543d3`) or plus `0x9C4`, 2500
+(`0x543e0..0x543e5`). VERIFIED: `G_RunFrame` (`0x50478`) stores
+`level+0x1E8` into `level+0x1EC` and its argument into `level+0x1E8`
+(`0x50487..0x50499`), and `gettime` answers `level+0x1E8`
+(`cod11-gsc-object-model.md` 23.1). INFERRED: `level+0x1E8` is
+`level.time` and `level+0x1EC` `level.previousTime`.
+
+VERIFIED: the calls `fire_grenade` makes are `G_Spawn`,
+`BG_GetInfoForWeapon`, `Scr_SetString`, `vectoangles`,
+`AngleNormalize360` and `flrand` twice, and the calls `FireWeapon`'s
+grenade arm makes are `fire_grenade` (`0x6904d`) and `VectorNormalize`
+(`0x69058`): neither links the entity or calls `G_RunMissile`. VERIFIED:
+`G_RunMissile`'s one caller is `G_RunEntity` (`0x502bc`, call at `0x50375`
+on `s.eType == 4`), which `G_RunFrame` calls for every `inuse` entity from
+the loop at `0x50930` (`0x50949`, `0x50955`), past its clock stores.
+
+INFERRED, off 16.1's packet order and the above: a throw runs inside its
+release cmd, between frames, on the previous frame's `level.time`; the
+missile does not move in that cmd, and its first `G_RunMissile` is the next
+`G_RunFrame`'s, which evaluates the arc one frame past `trTime`. The fuse
+counts from the same previous-frame `level.time`.
+
+VERIFIED, the pair capture `mp_carentan-tdm-grenade-shooter.txt`: the first
+throw's missile first reaches the wire on the snapshot at `serverTime`
+1193050 reading `trTime` 1193000, `trBase` (1443, 3394, 37) and `trDelta`
+(-873, -342, -85), and its `origin` there, 1399.3 on x, is the arc evaluated
+50 ms past `trTime`; the second reads `trTime` 1202250 on the snapshot at
+1202300 and `trBase` (1449, 3399, 37). The thrower's feet read
+(1443.8, 3394.7, -23.9) and (1449.0, 3399.2, -23.9) on those snapshots and
+its velocity is zero, which is why both deltas are whole (11.3).
+
+**As implemented.** `Server::replay_moves` takes the grenade's fire event
+off the cmd like a shot's and `Server::throw`, beside `fire`, runs
+`throw_velocity` on the thrower's sim as that cmd left it, before the cmd's
+touch pass, and spawns the missile stamped with the frame before the one
+being built; the missile pass in `tick` then flies it on the new frame's
+clock, as it does every other missile. A thrower killed by a later cmd of the
+same tick has thrown already. `combat::muzzle_point` truncates the origin
+before adding the eye height and lean (2.1), which moves every shot and
+swing as well as the throw. Pinned by
+`a_throw_s_first_frame_matches_retail_s_capture`
+(`crates/server/tests/combat.rs`), which puts a thrower where each of the
+capture's two throws stood and holds `trTime`, `trBase` exactly and
+`trDelta` to within two units of it, and
+`a_throw_leaves_from_its_own_cmd_not_the_tick_s_last`
+(`crates/server/src/server.rs`), a run queued behind the release in the same
+tick.
 
 ---
 
@@ -4415,7 +4486,9 @@ VERIFIED, `FireWeapon` (0x68d68): it branches on `weaponDef+0x70`, 0 to
 `Weapon_RocketLauncher_Fire` (0x690b1); the muzzle is `ent+0x134` with
 `ps+0xd0` added on z (0x68df0..0x68e25), and the pitch and yaw are
 `client+0x220c` and `+0x2210` (0x68dcc..0x68ddb), the aim 15.1 describes.
-`FireWeaponMelee` calls `Weapon_Melee` at 0x69614.
+`FireWeaponMelee` calls `Weapon_Melee` at 0x69614. INFERRED: `ent+0x134`
+is the snapped origin while a cmd runs (2.1), and a throw's missile is
+spawned inside its cmd and first moved by the next `G_RunFrame` (11.4).
 
 **The callback runs inside the shot.** VERIFIED: `Scr_PlayerDamage` calls
 `Scr_ExecEntThread` at 0x5cb15 and `Scr_FreeThread` on its result at
@@ -4488,8 +4561,9 @@ numbers each client packet, a bot's cmd is a packet of its own numbered
 after the real ones, each queued cmd and `kill` carries its packet's number,
 and the replay takes the lowest number across all clients each time, a
 `kill` ahead of its packet's cmds. Per cmd it runs the move, mirrors what the
-move left onto the host, fires the shots and swings the cmd raised, and then
-runs the touch pass, the item pass and the use key. A shot is traced against
+move left onto the host, fires the shots and swings the cmd raised and
+spawns the missile of any throw it raised (11.4), and then runs the touch
+pass, the item pass and the use key. A shot is traced against
 every client as its own packets so far left it; each impact goes out and
 each hit runs `CodeCallback_PlayerDamage` there and then, and what the
 callback queued for the victim (the damage, the death, the drop) is applied
@@ -4504,9 +4578,6 @@ What still differs, each INFERRED from 16.1 and not measured:
 - The packets of a tick run at the tick, after the clock has advanced;
   retail runs them as they arrive, on the previous frame's `level.time`
   (15.6's 50 ms). Their relative order is the same.
-- A throw is still spawned in the tick's missile slot, off the eye the
-  thrower's last cmd of the tick left, where retail's `fire_grenade` runs in
-  the throw's own cmd.
 - A body is posed off the anims its own last round left, which is this
   tick's for a player the frame's hits or `kill` interrupted and the last
   tick's otherwise.

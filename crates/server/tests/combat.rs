@@ -1400,6 +1400,128 @@ fn a_thrown_grenade_damages_a_player_in_its_blast() {
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }
 
+/// 11.2 to 11.4: a throw's first frame on the wire, pinned to retail's pair
+/// capture `fixtures/playerstate/mp_carentan-tdm-grenade-shooter.txt`. Both
+/// throws there stand still at z -23.9 and read `trBase` z 37: the muzzle is
+/// the snapped origin plus 60, not the eye truncated, which would read 36.
+/// `trTime` is the frame before the one the missile first reaches the wire
+/// on, and `trDelta` is whole because the thrower stood still.
+#[test]
+fn a_throw_s_first_frame_matches_retail_s_capture() {
+    use vcod_common::net::msg::{UserCmd, BUTTON_ATTACK, NULL_USERCMD};
+
+    // (feet, view pitch and yaw, retail's trBase, retail's trDelta), the two
+    // `!missile` lines that follow each throw's release.
+    let throws = [
+        (
+            [1443.8, 3394.7, -23.9],
+            (12.3, -158.6),
+            [1443.0, 3394.0, 37.0],
+            [-873.0, -342.0, -85.0],
+        ),
+        (
+            [1449.0, 3399.2, -23.9],
+            (45.0, -68.1),
+            [1449.0, 3399.0, 37.0],
+            [253.0, -629.0, -558.0],
+        ),
+    ];
+    for (feet, (pitch, yaw), want_base, want_delta) in throws {
+        let Some(pair) = two_placed(|_, _| [1192.0, 3296.0, -23.0]) else {
+            eprintln!("COD_DIR unset or has no main/: skipping");
+            return;
+        };
+        let Pair {
+            mut sv,
+            mut ca,
+            mut cb,
+            qa,
+            qb,
+            mut now,
+        } = pair;
+        let p = &PROTOCOL_V1;
+        let na = ca
+            .snapshots()
+            .newest()
+            .unwrap()
+            .ps
+            .field_i32(p, "clientNum") as usize;
+        sv.place_client(na, feet, yaw);
+        let mut step = |sv: &mut vcod_server::Server, a: &mut Client, b: &mut Client| {
+            now += Duration::from_millis(50);
+            common::step_pair(sv, (&qa, a), (&qb, b), now);
+        };
+        let frag = frag_index();
+        let aimed = UserCmd {
+            angles: [angle_short(pitch), angle_short(yaw), 0],
+            weapon: frag,
+            ..NULL_USERCMD
+        };
+        raise_frag(
+            &mut sv,
+            &mut step,
+            &mut ca,
+            &mut cb,
+            &NULL_USERCMD,
+            &aimed,
+            frag,
+        );
+        let cook = UserCmd {
+            buttons: BUTTON_ATTACK,
+            ..aimed
+        };
+        for _ in 0..20 {
+            ca.send_frame(&cook);
+            cb.send_frame(&NULL_USERCMD);
+            step(&mut sv, &mut ca, &mut cb);
+        }
+        let stood = ca.snapshots().newest().unwrap().ps.origin(p);
+        assert!(
+            dist(stood, feet) < 0.2,
+            "the thrower settled at {stood:?}, not retail's {feet:?}"
+        );
+        let mut first = None;
+        for _ in 0..40 {
+            ca.send_frame(&aimed);
+            cb.send_frame(&NULL_USERCMD);
+            step(&mut sv, &mut ca, &mut cb);
+            let snap = ca.snapshots().newest().unwrap();
+            if let Some(e) = snap
+                .entities
+                .values()
+                .find(|e| e.field_i32(p, "eType") == ET_MISSILE)
+            {
+                let v = |f: &str| e.field_f32(p, f);
+                first = Some((
+                    snap.server_time,
+                    e.field_i32(p, "pos.trTime"),
+                    [v("pos.trBase[0]"), v("pos.trBase[1]"), v("pos.trBase[2]")],
+                    [
+                        v("pos.trDelta[0]"),
+                        v("pos.trDelta[1]"),
+                        v("pos.trDelta[2]"),
+                    ],
+                ));
+                break;
+            }
+        }
+        let (server_time, tr_time, base, delta) = first.expect("the release threw nothing");
+        assert_eq!(
+            tr_time,
+            server_time - 50,
+            "trTime is the level.time the throw cmd ran under"
+        );
+        assert_eq!(base, want_base, "trBase off the muzzle at {feet:?}");
+        // The capture's view angles are printed to a tenth of a degree, which
+        // at 960 units a second is most of a unit on each component.
+        assert!(
+            dist(delta, want_delta) < 2.0,
+            "trDelta {delta:?} against retail's {want_delta:?}"
+        );
+        assert_eq!(sv.script_aborts(), Vec::<String>::new());
+    }
+}
+
 /// 5.1 step 5 and 11.3: a player killed with a grenade cooking drops it live
 /// where he stood, `r.currentOrigin` with z raised by 40, and the velocity is
 /// three `rand()` draws whose signs put x and y in (-480, -160] and z in
