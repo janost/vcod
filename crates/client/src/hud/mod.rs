@@ -21,6 +21,7 @@ use vcod_common::net::protocol::Protocol;
 use vcod_common::net::NetEvent;
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::pmove::predict::Predicted;
+use vcod_common::pmove::weapon::SpreadStance;
 use vcod_common::pmove::Stance;
 use vcod_common::weapon::WeaponDef;
 
@@ -74,6 +75,10 @@ pub struct HudFrame<'a> {
     pub protocol: &'a Protocol,
     /// Server-clock ms.
     pub server_time: i32,
+    /// The serverTime of the snapshot the render clock interpolates from,
+    /// retail's `cg.snap->serverTime`, which the crosshair's stance blend
+    /// reads the eye's leg against.
+    pub snap_time: i32,
     /// Lazy weapon-file loads for killfeed icons.
     pub fs: &'a Pk3Fs,
     /// The server's open script menu, if any; drawn on top of everything else.
@@ -277,7 +282,7 @@ impl Hud {
 fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
     let int = |name: &str| ps.field_i32(f.protocol, name);
     let mut eflags = int("eFlags");
-    let (weapon, ammo, ammoclip, aim_spread_scale, ads_frac) = match f.predicted {
+    let (weapon, ammo, ammoclip, aim_spread_scale, spread_stance, ads_frac) = match f.predicted {
         Some(pred) => {
             let s = &pred.ps;
             eflags &= !(EF_CROUCH | EF_PRONE);
@@ -291,16 +296,32 @@ fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
                 &s.ammo,
                 &s.ammoclip,
                 s.aim_spread_scale,
+                SpreadStance::of(s, pred.command_time, f.snap_time),
                 s.weapon_pos_frac,
             )
         }
-        None => (
-            int("weapon") as usize,
-            &ps.arrays.ammo,
-            &ps.arrays.ammoclip,
-            ps.field_f32(f.protocol, "aimSpreadScale"),
-            ps.field_f32(f.protocol, "fWeaponPosFrac"),
-        ),
+        None => {
+            let pm_flags = int("pm_flags");
+            let lerp_time = int("viewHeightLerpTime");
+            let stance = SpreadStance {
+                prone: pm_flags & 0x1 != 0,
+                ducked: pm_flags & 0x2 != 0,
+                view_height: ps.field_f32(f.protocol, "viewHeightCurrent"),
+                // A signed byte on the wire, which reads back unsigned.
+                lerp_target: f32::from(int("viewHeightLerpTarget") as u8 as i8),
+                lerp_down: int("viewHeightLerpDown") != 0,
+                dive: pm_flags & 0x4 != 0,
+                into_leg_ms: (lerp_time != 0).then(|| f.snap_time - lerp_time),
+            };
+            (
+                int("weapon") as usize,
+                &ps.arrays.ammo,
+                &ps.arrays.ammoclip,
+                ps.field_f32(f.protocol, "aimSpreadScale"),
+                stance,
+                ps.field_f32(f.protocol, "fWeaponPosFrac"),
+            )
+        }
     };
     PlayerView {
         client_num: int("clientNum"),
@@ -311,6 +332,7 @@ fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
         ammo,
         ammoclip,
         aim_spread_scale,
+        spread_stance,
         ads_frac,
         view_yaw: f.view_yaw,
         eye: f.eye,
@@ -352,6 +374,7 @@ mod tests {
             clients,
             protocol: &PROTOCOL_V1,
             server_time: 0,
+            snap_time: 0,
             fs,
             menu: None,
             ps: Some(ps),
@@ -376,6 +399,11 @@ mod tests {
         set("eFlags", 0x10);
         set("aimSpreadScale", 200f32.to_bits() as i32);
         set("serverCursorHintString", 255);
+        set("pm_flags", 0x5);
+        set("viewHeightCurrent", 30f32.to_bits() as i32);
+        set("viewHeightLerpTarget", 11);
+        set("viewHeightLerpDown", 1);
+        set("viewHeightLerpTime", 1000);
         ps.arrays.ammoclip[10] = 5;
         let mut pred = Predicted {
             ps: vcod_common::pmove::PlayerState::spawn(glam::Vec3::ZERO, 0.0),
@@ -392,7 +420,25 @@ mod tests {
         pred.ps.stance = Stance::Crouch;
         let (fs, loc, clients) = (Pk3Fs::empty(), Localized::default(), BTreeMap::new());
 
-        let snap = player_view(&ps, &frame(&ps, None, &fs, &loc, &clients));
+        let snap = player_view(
+            &ps,
+            &HudFrame {
+                snap_time: 1100,
+                ..frame(&ps, None, &fs, &loc, &clients)
+            },
+        );
+        assert_eq!(
+            snap.spread_stance,
+            SpreadStance {
+                prone: true,
+                ducked: false,
+                view_height: 30.0,
+                lerp_target: 11.0,
+                lerp_down: true,
+                dive: true,
+                into_leg_ms: Some(100),
+            }
+        );
         assert_eq!(
             (snap.ammoclip[10], snap.aim_spread_scale, snap.eflags),
             (5, 200.0, 0x10)

@@ -340,6 +340,70 @@ fn angle_delta_deg(a: i32, b: i32) -> f32 {
     (d + 180.0).rem_euclid(360.0) - 180.0
 }
 
+/// What `BG_GetMinSpreadForWeapon` reads off a playerstate: the stance flags
+/// and the eye's leg, the leg timed against the caller's clock. The default
+/// is a settled stand.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SpreadStance {
+    /// `pm_flags` 0x1 and 0x2.
+    pub prone: bool,
+    pub ducked: bool,
+    /// `viewHeightCurrent`, `viewHeightLerpTarget`, `viewHeightLerpDown`.
+    pub view_height: f32,
+    pub lerp_target: f32,
+    pub lerp_down: bool,
+    /// `pm_flags` 0x4, which shortens the dive's legs.
+    pub dive: bool,
+    /// `time - viewHeightLerpTime`; `None` while `viewHeightLerpTime` is 0.
+    pub into_leg_ms: Option<i32>,
+}
+
+impl SpreadStance {
+    /// `ps` as it stands at `command_time`, read at `time`.
+    pub fn of(ps: &PlayerState, command_time: i32, time: i32) -> Self {
+        SpreadStance {
+            prone: ps.stance == Stance::Prone,
+            ducked: ps.ducked,
+            view_height: ps.view_height_cur,
+            lerp_target: ps.view_lerp_target,
+            lerp_down: ps.view_lerp_down,
+            dive: ps.prone_dive,
+            into_leg_ms: ps
+                .view_lerp_ms
+                .map(|_| time - ps.view_lerp_stamp(command_time)),
+        }
+    }
+}
+
+/// `BG_GetMinSpreadForWeapon` (`game.mp.i386.so` 0x37114, dll 0x3000fa50),
+/// combat doc 2.1: the hip cone's minimum, blended linearly in time between
+/// the two ends of a running leg of the eye, not along its curve.
+pub fn hip_spread_min(def: &WeaponDef, s: &SpreadStance) -> f32 {
+    let (stand, ducked, prone) = (
+        def.hip_spread_stand_min,
+        def.hip_spread_ducked_min,
+        def.hip_spread_prone_min,
+    );
+    let into = match s.into_leg_ms {
+        Some(ms) if s.view_height != s.lerp_target => ms,
+        _ if s.prone => return prone,
+        _ if s.ducked => return ducked,
+        _ => return stand,
+    };
+    let length = super::view_lerp_length(s.lerp_target, s.lerp_down, s.dive);
+    let f = (f64::from(into) / f64::from(length)).clamp(0.0, 1.0);
+    let (from, to) = if s.lerp_target == super::VIEW_PRONE {
+        (ducked, prone)
+    } else if s.lerp_target == super::VIEW_STAND {
+        (ducked, stand)
+    } else if s.lerp_down {
+        (stand, ducked)
+    } else {
+        (prone, ducked)
+    };
+    (f64::from(from) + (f64::from(to) - f64::from(from)) * f) as f32
+}
+
 /// One frame of the weapon machine. `dt_ms` is retail's `pml.msec`.
 pub fn pm_weapon(
     ps: &mut PlayerState,
@@ -2074,5 +2138,60 @@ mod tests {
         give(&mut ps, 9, 5);
         assert!(holds(&ps, 3) && holds(&ps, 9) && !holds(&ps, 4));
         assert_eq!(slot_words(&ps), [3 << 8, 9 << 8]);
+    }
+
+    /// The legs up blend toward the crouch and standing minimums, a dive's
+    /// legs run on their shorter lengths, and an eye already at the leg's
+    /// end reads the stance flags (combat doc 2.1).
+    #[test]
+    fn the_hip_spread_minimum_blends_every_leg_of_the_eye() {
+        let def = WeaponDef {
+            hip_spread_stand_min: 3.0,
+            hip_spread_ducked_min: 2.0,
+            hip_spread_prone_min: 1.0,
+            ..WeaponDef::default()
+        };
+        let leg = |target: f32, down: bool, dive: bool, ms: i32| SpreadStance {
+            prone: false,
+            ducked: false,
+            view_height: 30.0,
+            lerp_target: target,
+            lerp_down: down,
+            dive,
+            into_leg_ms: Some(ms),
+        };
+        let min = |s: SpreadStance| hip_spread_min(&def, &s);
+        assert_eq!(
+            min(leg(40.0, false, false, 100)),
+            1.25,
+            "prone up to crouch, 400 ms"
+        );
+        assert_eq!(
+            min(leg(60.0, false, false, 50)),
+            2.25,
+            "crouch up to standing, 200 ms"
+        );
+        assert_eq!(
+            min(leg(40.0, true, true, 50)),
+            2.5,
+            "a dive's 100 ms leg to crouch"
+        );
+        assert_eq!(
+            min(leg(11.0, true, true, 100)),
+            1.5,
+            "a dive's 200 ms leg to prone"
+        );
+        let settled = SpreadStance {
+            view_height: 40.0,
+            ducked: true,
+            ..leg(40.0, true, false, 75)
+        };
+        assert_eq!(min(settled), 2.0);
+        let idle = SpreadStance {
+            prone: true,
+            into_leg_ms: None,
+            ..settled
+        };
+        assert_eq!(min(idle), 1.0);
     }
 }

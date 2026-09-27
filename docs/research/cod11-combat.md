@@ -930,13 +930,58 @@ other `min + (hipSpreadMax - min) * client->0x2240` where `min` is
 `BG_GetMinSpreadForWeapon(ps, weapon, level.time)`. INFERRED: the `adsSpread`
 arm is the one an equal comparison takes.
 
-VERIFIED, `BG_GetMinSpreadForWeapon` `0x37114`: it compares
-`ps->viewHeightCurrent` against `ps->viewHeightTarget` and
-`ps->viewHeightLerpTime` against 0, tests `pm_flags & 1` and `pm_flags & 2`,
-and loads `hipSpreadProneMin`, `hipSpreadDuckedMin` and `hipSpreadStandMin`
-off those tests. VERIFIED: a second path blends two of the three by a fraction
-clamped to 0..1. INFERRED: the settled stance picks one of the three outright
-and the blend is what a stance still lerping takes.
+`BG_GetMinSpreadForWeapon` `0x37114`, read with `tools/re/annotate_func.py`
+on 2026-09-27 (field names as in `cod11-mantle.md`, "The eye through a
+stance change"). VERIFIED: it compares `viewHeightCurrent` (ps+0xD0, float)
+against `viewHeightLerpTarget` (ps+0xD8, loaded as an int) at `0x37140` and
+`viewHeightLerpTime` (ps+0xD4) against 0 at `0x3714c`, and its first path
+tests `pm_flags & 1` and `& 2` and loads `hipSpreadProneMin` (weapon def
+`+0x244`), `hipSpreadDuckedMin` (`+0x240`) or `hipSpreadStandMin` (`+0x23C`).
+INFERRED, from the branches: that path is taken when the eye equals the
+leg's target or no leg runs, prone first, then the crouch latch, then
+standing.
+
+VERIFIED, the second path: it calls `PM_GetViewHeightLerpTime(ps,
+viewHeightLerpTarget, viewHeightLerpDown)` at `0x3718d`, subtracts
+`viewHeightLerpTime` from its own third argument, divides by the call's
+answer as integers loaded to x87 (`0x37192`-`0x371a4`) and clamps the
+quotient against `fldz` and `fld1` (`0x371a6`-`0x371c5`); then it compares
+`viewHeightLerpTarget` with the prone height (ps+0x33C, `0x371cd`) and the
+standing height (ps+0x344, `0x371e3`) and tests `viewHeightLerpDown`
+(`0x37200`), loads two of the three minimums per arm and ends in `fsub`,
+`fmulp`, `faddp` (`0x3721d`-`0x37221`). INFERRED, from the loads' order: the
+result is `from + (to - from) * f` with `f` the leg's elapsed time over its
+length, clamped to 0..1, and
+
+- a leg to the prone height blends ducked to prone;
+- a leg to the standing height blends ducked to standing;
+- any other leg, the ones to the crouch height, blends standing to ducked
+  going down and prone to ducked going up.
+
+So every leg blends, the standing-crouch ones included, and the blend is
+linear in time, not along the eye's curve: halfway through the 400 ms leg
+to prone the minimum is halfway between ducked and prone while the eye is
+at 15 of the 40-to-11 drop. `PM_GetViewHeightLerpTime` (`0x345b8`) is the
+leg-length pick that section of the mantle doc gives.
+
+VERIFIED: `FireWeapon` passes `level.time` (`level+0x1E8`, `0x68ee4`) as the
+third argument, and the `.so` has no other caller. VERIFIED: the cgame's
+copy is `0x3000fa50`, the same three comparisons, the same weapon-def
+offsets and the same four arms, reading the playerstate at `0x3020715c` and
+called only from the crosshair at `0x30016be6` with the time off
+`[0x301e2160] + 8`. INFERRED: that is `cg.snap->serverTime`, `0x301e2160`
+being `cg.snap` (`cod11-sound-system.md` section 3), so the crosshair reads
+the leg against the snapshot the client interpolates from.
+
+**As implemented.** `pmove::weapon::hip_spread_min` ports the function over
+a `SpreadStance` (the three flags, the eye and the leg, timed against the
+caller's clock), reusing the leg-length pick `pmove::view_height_adjust`
+runs on. The server takes the stance at the cmd that raised the shot,
+against the tick's clock, and `spread_deg` reads it; the crosshair reads
+the predicted playerstate, or the snapshot's fields when not predicting,
+against the serverTime of the snapshot the render clock interpolates from.
+No committed capture separates it: none records a shot's impact beside a
+stance change.
 
 `PM_AdjustAimSpreadScale` `0x385e8` (dll `0x30011050`) is what moves
 `aimSpreadScale` between shots. VERIFIED: `PmoveSingle` calls it once, at
