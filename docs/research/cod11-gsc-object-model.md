@@ -1818,6 +1818,34 @@ INFERRED, off the two masks alone: the first trace decides whether anything
 solid or a lookat volume is reached before the world, the second whether a
 body stands in front.
 
+VERIFIED: both traces push the same `start` (`lea esi,[ebp-0x58]`, 0x4f93d)
+and `end` (`lea edi,[ebp-0x3c]`, 0x4f92b), and both push `*ent`, the dword at
+`ent+0`, as the pass entity (0x4f943, 0x4f968), which is `s.number`.
+VERIFIED: the classname compare at 0x4f995 reads the entity number the second
+trace wrote to `[ebp-0x8]` (0x4f97e), not the first's.
+
+VERIFIED, the bits: 0x22802001 is 0x20000000 (the `trigger_lookat` contents,
+22.1), 0x02000000 (`CONTENTS_BODY`, what a playing client's end frame writes,
+`docs/research/cod11-player-clip.md` 1.2), 0x00800000, 0x2000 and
+`CONTENTS_SOLID`. It carries neither `CONTENTS_CORPSE` (0x04000000) nor 0x10
+or 0x20, and 0x20000001 is a subset of it.
+
+INFERRED, off those four: the aimer's own body never stops either trace; a
+live, playing player's body anywhere else on the segment ends the second
+trace on a client entity whose classname is not `trigger_lookat`, so nothing
+fires and `client+0x2260` stays at the 0 stored on entry; a corpse, a dead
+player and a spectator (contents 0 or CORPSE) do not; and since the second
+mask holds every bit of the first, the first trace changes the answer only by
+ending the function early. The second trace is a locational one, so a body
+stops it where the posed bones do, ranked through the same priority map a
+bullet from the held weapon takes (`docs/research/cod11-combat.md` 3.1),
+and not across the whole link box.
+
+VERIFIED: `G_GetActivateEnt`'s visibility trace, the one the cursor hint and
+the use key's pick rest on, is a `trap_Trace` with mask 0x11
+(`docs/research/cod11-items.md` 2.1), which carries no BODY bit. INFERRED: a
+body in the line gates neither of them, only the lookat.
+
 VERIFIED, of `G_Trigger` (0x656f0): it tests `Scr_IsSystemActive(1)`'s
 answer (0x6570b), compares the counter at `level+0x29ec` against 0x100
 (0x65714), calls `Scr_AddEntity(toucher)` and
@@ -1981,6 +2009,21 @@ whole sweep logged zero fires, and the fires began once that client dropped.
 INFERRED, off that pairing and the second trace's mask and classname compare
 above: a live body between the eye and the trigger is what stops the fire, and
 this capture's gsc probe teleports the planter away for that reason.
+
+vcod: `trigger::aim_trace` takes the world with the second mask's world bits
+(0x802001) and the static models, the lookat the segment enters first, and
+then every other live, playing client's body (`GameHost::client_bodies`,
+refreshed from the sims just before the pass, so a `setOrigin` or a
+re-anchor that frame moves it) through the same `trace_bodies` a bullet and a
+blast use, with the aimer as the pass entity and the held weapon's priority
+map. A body whose bones the segment scores short of the lookat's entry
+answers no lookat. Not modelled: script models, which the second mask's
+0x2000 meets through their 0x2080 contents (`docs/research/cod11-combat.md`
+2.7). VERIFIED, stock `sd.gsc`: the planted charge is one, and the plant
+moves `bombtrigger` to its origin. Whether its mesh ever reaches past the
+trigger's box toward an aimer is not measured. The "moved aside, it fires" half is the pre-change
+run above, where the fires began once the planter dropped; no retail run with
+a body stepping in and out of the line has been taken.
 
 
 ### 23.2 `linkTo`, `unlink`, `enableLinkTo`

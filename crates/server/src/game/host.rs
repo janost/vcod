@@ -287,9 +287,10 @@ pub struct GameHost {
     /// alongside `client_pm_type`, for `isOnGround`
     /// (`docs/research/cod11-gsc-object-model.md`, 23.5).
     pub client_on_ground: Vec<bool>,
-    /// Each client's eye and `[pitch, yaw]` aim as the tick left them, for
-    /// the aim trace `Server::tick` runs after the script frame.
-    pub client_aim: Vec<([f32; 3], [f32; 2])>,
+    /// Each client's eye, `[pitch, yaw]` aim and `rifleBullet` weapon flag
+    /// as the tick left them, for the aim trace `Server::tick` runs after the
+    /// script frame.
+    pub client_aim: Vec<([f32; 3], [f32; 2], bool)>,
     /// What the last aim trace entered, for `isLookingAt`
     /// (`docs/research/cod11-gsc-object-model.md`, 23.1).
     pub client_lookat: Vec<Option<EntId>>,
@@ -566,7 +567,7 @@ impl GameHost {
             client_buttons: vec![0; MAX_CLIENTS],
             client_pm_type: vec![0; MAX_CLIENTS],
             client_on_ground: vec![false; MAX_CLIENTS],
-            client_aim: vec![([0.0; 3], [0.0; 2]); MAX_CLIENTS],
+            client_aim: vec![([0.0; 3], [0.0; 2], false); MAX_CLIENTS],
             client_lookat: vec![None; MAX_CLIENTS],
             trigger_fires: Vec::new(),
             client_old_buttons: vec![0; MAX_CLIENTS],
