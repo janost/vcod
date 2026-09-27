@@ -1889,6 +1889,10 @@ impl ApplicationHandler for App {
                                         if let Some((a, b)) =
                                             net.snapshots().two_for_time(render_time)
                                         {
+                                            // No straddling pair: one frame, held.
+                                            if std::ptr::eq(a, b) {
+                                                self.interp_misses += 1;
+                                            }
                                             let oa = Vec3::from(a.ps.origin(p));
                                             let ob = Vec3::from(b.ps.origin(p));
                                             let f = ((render_time - a.server_time) as f32
@@ -1930,17 +1934,6 @@ impl ApplicationHandler for App {
                                                 cam.pitch =
                                                     -camera::lerp_angle(va_a[0], va_b[0], f)
                                                         .to_radians();
-                                            }
-                                        } else if let Some(newest) = net.snapshots().newest() {
-                                            self.interp_misses += 1;
-                                            // too few snapshots to straddle; sit on newest
-                                            cam.pos = Vec3::from(newest.ps.origin(p))
-                                                + Vec3::Z
-                                                    * newest.ps.field_f32(p, "viewHeightCurrent");
-                                            if snapshot_view {
-                                                let va = newest.ps.viewangles(p);
-                                                cam.yaw = va[1].to_radians();
-                                                cam.pitch = -va[0].to_radians();
                                             }
                                         }
                                     }
