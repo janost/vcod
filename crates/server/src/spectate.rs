@@ -316,6 +316,10 @@ pub struct ClientSim {
     /// This client's own frame as its last `ClientEndFrame` left it, `None`
     /// since a spawn, whose own end frame is this frame's.
     pub end_frame_wire: Option<msg::PlayerState>,
+    /// The ring as it stood before this frame's end frame put `EV_PAIN` on
+    /// it, which a follower numbered below this client copies; `None` on a
+    /// frame without one. Dropped after the frame's snapshots.
+    pub ring_before_pain: Option<EventRing>,
     /// The intermission camera's `ps.commandTime`: `ClientSpawn` puts it
     /// 100 ms behind the spawn's frame and nothing on that arm moves it
     /// (`docs/research/cod11-spectator-follow.md` 13).
@@ -458,6 +462,7 @@ impl ClientSim {
             follow_wire: None,
             residue: None,
             end_frame_wire: None,
+            ring_before_pain: None,
             frozen_command_time: None,
         }
     }
@@ -1291,6 +1296,7 @@ impl ClientSim {
         }
         self.kick.time_ms = now_ms.wrapping_sub(20);
         if now_ms.wrapping_sub(self.pain_after_ms) > 0 {
+            self.ring_before_pain = Some(self.ring);
             let percent = (self.health as f32 * 100.0 / self.max_health as f32) as i32;
             self.add_event(EV_PAIN, percent.clamp(0, 100));
             self.pain_after_ms = now_ms.wrapping_add(PAIN_DEBOUNCE_MS);

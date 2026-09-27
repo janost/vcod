@@ -684,7 +684,8 @@ engineering setup works.
   built once and culled and written per client, a follower's frame being its
   target's playerstate, eye and number (a replay's out of the archived
   frame; a live one below its target's slot takes the fields the target's
-  end frame writes from its last frame), a spectator whose follow stopped
+  end frame writes from its last frame, and its event ring without the
+  `EV_PAIN` that end frame added), a spectator whose follow stopped
   being that last copy under its own fields, and a client whose
   `archivetime` names an archived frame being sent that frame's entities and
   roster instead of this one's; after the snapshots each follower's copy and

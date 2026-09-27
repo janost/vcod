@@ -265,7 +265,13 @@ followed client's state after its own end frame; for a follower numbered
 below its target, `follow::before_end_frame` puts back the fields section
 5 lists as the target's last frame had them (`ClientSim::end_frame_wire`,
 kept after each frame's snapshots and dropped by a spawn, whose own end
-frame is that frame's). `StopFollowing` keeps the copy's velocity, and the
+frame is that frame's), and the event ring as it stood before the target's
+`P_DamageFeedback` added `EV_PAIN` (`ClientSim::ring_before_pain`), so the
+pain reaches that follower a frame late. VERIFIED: `P_DamageFeedback` is
+called from `ClientEndFrame` (0x41128) and adds event `0xBB` (`cod11-combat.md`
+6, step 9). INFERRED, from the slot order section 5's `pm_type` reading
+measured: a lower follower copies the ring before it; no retail run has put a
+non-fatal hit on a followed client. `StopFollowing` keeps the copy's velocity, and the
 last copy (`ClientSim::follow_wire`) stays under the spectator's own frame
 until the next spawn: `spectate::SPECTATOR_OWNED` names the fields the
 spectator writes over it, `pm_type` and `speed` joining them once a cmd has
@@ -286,9 +292,6 @@ cmds of its own packet, which still read `pm_type` 0 until the end frame
 
 Where it is not retail's:
 
-- `P_DamageFeedback`'s `EV_PAIN` goes on the target's ring in its end frame,
-  so a lower follower sees it a frame late on retail (INFERRED, section 5);
-  ours copies the ring current.
 - The rest of a stopped copy is kept whole except the owned fields; the
   `pm_flags` bits `StopFollowing` leaves (everything but 0x10020) and
   whatever else the spectator's `Pmove` writes are not measured. The press

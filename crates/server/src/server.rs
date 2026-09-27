@@ -4113,6 +4113,13 @@ impl Server {
                         if let (true, Some(last)) = (slot < t, ts.end_frame_wire.as_ref()) {
                             follow::before_end_frame(&mut ps, last, self.proto);
                         }
+                        // `P_DamageFeedback`'s `EV_PAIN` is that end frame's too.
+                        if let (true, Some(ring)) = (slot < t, ts.ring_before_pain) {
+                            ring.write(&mut |name, v| {
+                                let i = msg::PlayerState::field_index(self.proto, name).unwrap();
+                                ps.fields[i] = v;
+                            });
+                        }
                         (ps, ts.eye_origin(), false)
                     }
                 };
@@ -4142,6 +4149,7 @@ impl Server {
             sim.end_frame_wire = sim
                 .own_view
                 .then(|| sim.to_wire(self.proto, slot as i32, command_time));
+            sim.ring_before_pain = None;
         }
 
         // `SV_BuildClientSnapshot` reads each client's `archivetime` again and
@@ -7326,6 +7334,38 @@ mod tests {
         assert_eq!(s.ps.health(), 0);
         assert_eq!(ps_i32(&s, "pm_type"), 0);
         assert_eq!(ps_i32(&rig.step(0), "pm_type"), 6);
+    }
+
+    /// `P_DamageFeedback` puts `EV_PAIN` on the ring inside the target's own
+    /// end frame, so a follower below it copies the ring without it and sees
+    /// the pain a frame late (spectator-follow doc, 5).
+    #[test]
+    fn a_follower_below_its_target_sees_its_pain_a_frame_late() {
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        let seq = ps_i32(&rig.step(0), "eventSequence");
+        rig.script().host.client_vitals[1].health = 67;
+        rig.script().host.client_vitals[1].max_health = 100;
+        rig.script().host.client_sim_ops.push((
+            1,
+            crate::game::host::SimOp::Damaged {
+                damage: 33,
+                point: FOLLOW_P1,
+                dir: [1.0, 0.0, 0.0],
+                knockback: false,
+                attacker: Some(2),
+                attacker_origin: Some(FOLLOW_P2),
+                fatal: false,
+            },
+        ));
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 1);
+        assert_eq!(s.ps.health(), 67);
+        assert_eq!(ps_i32(&s, "eventSequence"), seq, "the pain rode early");
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "eventSequence"), seq + 1);
+        assert_eq!(ps_i32(&s, &format!("events[{}]", seq & 3)), 187);
+        assert_eq!(ps_i32(&s, &format!("eventParms[{}]", seq & 3)), 67);
     }
 
     /// `ClientSpawn` runs the spawned client's own `ClientEndFrame`
