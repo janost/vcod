@@ -628,6 +628,13 @@ impl FxSystem {
         self.cache.insert(path.to_string(), effect);
     }
 
+    /// A download reopened the search path: effect files parse again, and a
+    /// miss may now resolve.
+    pub fn reopen(&mut self) {
+        self.cache.clear();
+        self.warned.clear();
+    }
+
     /// A new map: world-space particles and decals are meaningless there.
     pub fn clear(&mut self) {
         self.particles.clear();

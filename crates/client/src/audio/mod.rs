@@ -75,6 +75,8 @@ pub struct AudioSystem {
     /// `aliases_all` filtered by loadspec for the current map; empty before
     /// the first gamestate.
     aliases: AliasTable,
+    /// The map `aliases` was filtered for.
+    map: Option<String>,
     bank: SoundBank,
     table: VoiceTable,
     handles: HashMap<VoiceId, Handle>,
@@ -138,6 +140,7 @@ impl AudioSystem {
             manager,
             aliases_all: AliasTable::load(fs),
             aliases: AliasTable::default(),
+            map: None,
             bank: SoundBank::default(),
             table: VoiceTable::new(),
             handles: HashMap::new(),
@@ -165,6 +168,7 @@ impl AudioSystem {
     /// to the old table.
     pub fn on_gamestate(&mut self, map: &str) {
         self.aliases = self.aliases_all.for_map(map);
+        self.map = Some(map.to_string());
         self.table.clear();
         // A dropped kira handle keeps playing.
         for (_, mut h) in self.handles.drain() {
@@ -178,6 +182,20 @@ impl AudioSystem {
         self.loop_voices.clear();
         self.stats.voices = 0;
         log::info!("audio: {} aliases apply on {map}", self.aliases.len());
+    }
+
+    /// A download reopened the search path: reload the alias csvs, drop every
+    /// decoded sound, and redo the current map's `on_gamestate` against the
+    /// new table.
+    pub fn reopen(&mut self, fs: &Pk3Fs) {
+        self.aliases_all = AliasTable::load(fs);
+        self.bank = SoundBank::default();
+        self.missed.clear();
+        self.warned_loops.clear();
+        match self.map.clone() {
+            Some(map) => self.on_gamestate(&map),
+            None => self.weapon_sounds.clear(),
+        }
     }
 
     pub fn set_listener(

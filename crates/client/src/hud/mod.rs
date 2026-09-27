@@ -118,6 +118,18 @@ impl Hud {
         })
     }
 
+    /// A download reopened the search path: reload the fonts, and drop the
+    /// kill icons read out of the old weapon files. A font the new paks do
+    /// not parse keeps the old one.
+    pub fn reopen(&mut self, fs: &Pk3Fs) -> Result<(), String> {
+        let text = font::load_font(fs, SIZE_TEXT)?;
+        let header = font::load_font(fs, SIZE_HEADER)?;
+        self.font_text = text;
+        self.font_header = header;
+        self.kill_icons.clear();
+        Ok(())
+    }
+
     /// Net does not filter `ServerCommand`; `Scoreboard::on_server_command`
     /// ignores anything but `b`.
     pub fn on_net_event(&mut self, ev: &NetEvent, now: f32) {

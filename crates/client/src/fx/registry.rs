@@ -4,7 +4,7 @@
 use crate::fx::sim::SpawnAt;
 use glam::Vec3;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, PoisonError, RwLock};
 use vcod_common::net::events::{byte_to_dir, GameEvent};
 use vcod_common::pk3::Pk3Fs;
 use vcod_common::weapon::WeaponDef;
@@ -178,21 +178,12 @@ fn load(fs: &Pk3Fs) -> ImpactTable {
     }
 }
 
-static TABLE: OnceLock<ImpactTable> = OnceLock::new();
+static TABLE: LazyLock<RwLock<ImpactTable>> = LazyLock::new(RwLock::default);
 
-/// Call once before any event is drained; `resolve()` reads an empty table
-/// otherwise.
+/// Loads the table off `fs`: at startup, and again whenever a download
+/// reopens the search path. `resolve()` reads an empty table before the first.
 pub fn init(fs: &Pk3Fs) {
-    if TABLE.set(load(fs)).is_err() {
-        log::warn!(
-            "fx {IMPACTS_CSV_PATH}: init() called after the table was already set (e.g. by an \
-             earlier resolve()); this call's parse is discarded and the earlier table stays live"
-        );
-    }
-}
-
-fn table() -> &'static ImpactTable {
-    TABLE.get_or_init(ImpactTable::default)
+    *TABLE.write().unwrap_or_else(PoisonError::into_inner) = load(fs);
 }
 
 /// `Known` is a recognized event with nothing to draw. `Unknown` is an id this
@@ -226,6 +217,22 @@ pub struct ResolveCtx<'a> {
     /// `viewFlashEffect` of playerState-ring fire events
     /// (`entity_num == u32::MAX`); `None` while none is drawn.
     pub view_flash: Option<&'a [Option<WeaponDef>]>,
+    /// The shooter whose bullet hits draw no tracer; see [`view_body`].
+    pub view_body: Option<u32>,
+}
+
+/// `ps.pm_flags` bits that attach the view to a player body: 0x40000 our own
+/// live one, 0x10000 a followed one (docs/research/cod11-events-and-fx.md 7).
+const PMF_VIEW_BODY: i32 = 0x50000;
+
+/// The body the view rides, whose shots `CG_Tracer` draws no tracer for
+/// (docs/research/cod11-events-and-fx.md 6): `ps.clientNum` while `pm_flags`
+/// carries [`PMF_VIEW_BODY`], else none.
+pub fn view_body(pm_flags: i32, ps_client_num: i32) -> Option<u32> {
+    if pm_flags & PMF_VIEW_BODY == 0 {
+        return None;
+    }
+    u32::try_from(ps_client_num).ok()
 }
 
 /// Class-based guess when `ctx.weapon_flash` has no entry. Every MG42/PTRS41
@@ -266,7 +273,8 @@ fn is_footstep_group(event: i32) -> bool {
 /// Resolve one drained [`GameEvent`] against the cached table and this
 /// frame's muzzles.
 pub fn resolve(ev: &GameEvent, ctx: &ResolveCtx) -> Vec<Resolved> {
-    resolve_with(ev, table(), ctx)
+    let table = TABLE.read().unwrap_or_else(PoisonError::into_inner);
+    resolve_with(ev, &table, ctx)
 }
 
 fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Resolved> {
@@ -303,7 +311,11 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
             // Every surface type, flesh included (doc section 6). Not
             // `fx/tagged/tracers.efx`, which is the AA gun's tracer. Chance
             // roll, distance gate and geometry live in `FxSystem::spawn_tracer`.
-            if let Some(&(muzzle_pos, _)) = ctx.muzzles.get(&ev.other_entity_num) {
+            let muzzle = ctx
+                .muzzles
+                .get(&ev.other_entity_num)
+                .filter(|_| ctx.view_body != Some(ev.other_entity_num));
+            if let Some(&(muzzle_pos, _)) = muzzle {
                 out.push(Resolved::Tracer {
                     muzzle: muzzle_pos,
                     impact,
@@ -432,6 +444,7 @@ fn resolve_with(ev: &GameEvent, table: &ImpactTable, ctx: &ResolveCtx) -> Vec<Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock;
     use vcod_common::net::events::BYTE_DIRS;
 
     fn ev(event: i32, parm: i32, surf_type: i32, pos: [f32; 3]) -> GameEvent {
@@ -457,6 +470,7 @@ mod tests {
             muzzles: EMPTY_MUZZLES.get_or_init(HashMap::new),
             weapon_flash: EMPTY_FLASH.get_or_init(HashMap::new),
             view_flash: None,
+            view_body: None,
         }
     }
 
@@ -527,6 +541,7 @@ mod tests {
             muzzles: &muzzles,
             weapon_flash: &weapon_flash,
             view_flash: None,
+            view_body: None,
         };
         let mut e = ev(EV_BULLET_HIT_SMALL, 0, 5, [10.0, 0.0, 0.0]); // concrete, blank cell
         e.other_entity_num = 7;
@@ -555,6 +570,7 @@ mod tests {
             muzzles: &muzzles,
             weapon_flash: &weapon_flash,
             view_flash: None,
+            view_body: None,
         };
         let mut e = ev(EV_BULLET_HIT_SMALL, 0, 7, [10.0, 0.0, 0.0]);
         e.other_entity_num = 7;
@@ -564,6 +580,44 @@ mod tests {
                 .any(|r| matches!(r, Resolved::Tracer { flesh: true, .. })),
             "{rs:?}"
         );
+    }
+
+    /// `CG_Tracer` draws nothing for the body the view rides, ours or a
+    /// followed one, and still resolves the impact.
+    #[test]
+    fn the_viewed_bodys_hits_draw_no_tracer() {
+        let mut muzzles = HashMap::new();
+        muzzles.insert(3u32, (Vec3::ZERO, Vec3::X));
+        muzzles.insert(7u32, (Vec3::ZERO, Vec3::X));
+        let weapon_flash = HashMap::new();
+        let mut table = ImpactTable::default();
+        table.map.insert(
+            (ImpactKind::BulletSmallNormal, 5),
+            "fx/impacts/small_concrete.efx".to_string(),
+        );
+        let resolve_for = |pm_flags, ps_client, shooter| {
+            let ctx = ResolveCtx {
+                muzzles: &muzzles,
+                weapon_flash: &weapon_flash,
+                view_flash: None,
+                view_body: view_body(pm_flags, ps_client),
+            };
+            let mut e = ev(EV_BULLET_HIT_SMALL, 0, 5, [10.0, 0.0, 0.0]);
+            e.other_entity_num = shooter;
+            resolve_with(&e, &table, &ctx)
+        };
+        let tracer = |rs: &[Resolved]| rs.iter().any(|r| matches!(r, Resolved::Tracer { .. }));
+        for (pm_flags, what) in [(0x40000, "playing"), (0x30000, "following")] {
+            let rs = resolve_for(pm_flags, 3, 3);
+            assert!(!tracer(&rs), "{what}: {rs:?}");
+            assert!(matches!(rs.as_slice(), [Resolved::Spawn { .. }]), "{rs:?}");
+            assert!(
+                tracer(&resolve_for(pm_flags, 3, 7)),
+                "{what}: another shooter"
+            );
+        }
+        // A free spectator's `ps.clientNum` is its own, and the view rides no body.
+        assert!(tracer(&resolve_for(0x20000, 3, 3)));
     }
 
     /// `CG_BulletHitFlesh` hands `CG_Tracer` the same shooter, impact and
@@ -577,6 +631,7 @@ mod tests {
             muzzles: &muzzles,
             weapon_flash: &weapon_flash,
             view_flash: None,
+            view_body: None,
         };
         let mut table = ImpactTable::default();
         for kind in [ImpactKind::BulletSmallNormal, ImpactKind::BulletLargeNormal] {
@@ -715,6 +770,7 @@ mod tests {
                 muzzles: &muzzles,
                 weapon_flash: &weapon_flash,
                 view_flash: None,
+                view_body: None,
             },
         );
         assert_eq!(rs.len(), 1, "{rs:?}");
@@ -756,6 +812,7 @@ mod tests {
                 muzzles: &muzzles,
                 weapon_flash: &weapon_flash,
                 view_flash: None,
+                view_body: None,
             },
         );
         assert_eq!(rs.len(), 1, "{rs:?}");
@@ -781,6 +838,7 @@ mod tests {
             muzzles: &muzzles,
             weapon_flash: &weapon_flash,
             view_flash: None,
+            view_body: None,
         };
 
         let mut thompson = ev(EV_FIRE_WEAPON, 0, 0, [0.0; 3]);
@@ -822,6 +880,7 @@ mod tests {
             muzzles: &muzzles,
             weapon_flash: &weapon_flash,
             view_flash: Some(&weapons),
+            view_body: None,
         };
         let path = |entity_num, weapon| {
             let mut e = ev(EV_FIRE_WEAPON, 0, 0, [0.0; 3]);
@@ -857,6 +916,7 @@ mod tests {
             muzzles: &muzzles,
             weapon_flash: &weapon_flash,
             view_flash: None,
+            view_body: None,
         };
         let mut e = ev(EV_BULLET_HIT_SMALL, 0, 1, [10.0, 20.0, 30.0]);
         e.other_entity_num = 7;
