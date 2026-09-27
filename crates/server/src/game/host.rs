@@ -301,6 +301,9 @@ pub struct GameHost {
     /// Each client's previous cmd buttons, for the use key's rising edge
     /// (`ClientThink_real` 0x40106..0x4011d).
     pub client_old_buttons: Vec<u8>,
+    /// Whether the client's last `archivetime` write was above 0, which is a
+    /// killcam asking for a replay; the field itself reads 0.
+    pub client_archive_asked: Vec<bool>,
     /// `(entity, event, args)` for every `"touch"` and `"trigger"` the item
     /// pass raised since the last script frame, notified at its start the
     /// way `trigger_fires` are.
@@ -571,6 +574,7 @@ impl GameHost {
             client_lookat: vec![None; MAX_CLIENTS],
             trigger_fires: Vec::new(),
             client_old_buttons: vec![0; MAX_CLIENTS],
+            client_archive_asked: vec![false; MAX_CLIENTS],
             item_notifies: Vec::new(),
             client_grenade_ms: vec![0; MAX_CLIENTS],
             client_height: vec![vcod_common::pmove::HEIGHT_STAND; MAX_CLIENTS],
@@ -1066,9 +1070,22 @@ impl Host for GameHost {
                 // 0x10000|0x20000), then on the way back to "dead" an engine
                 // `ClientSpawn` from `ClientEndFrame`'s `ps.clientNum !=
                 // ent->s.number` check (0x40f45/0x40f82). None of it reaches
-                // the wire here; the one killcam frame sends nothing new.
+                // the wire here; the one killcam frame sends nothing new,
+                // because the follow pass leaves a client alone while
+                // `client_archive_asked` says it wants a replay
+                // (docs/research/cod11-spectator-follow.md, 11 and 12).
                 c[i] = match fields::CLIENT_FIELDS[i].name {
-                    "archivetime" => Value::Int(0),
+                    "archivetime" => {
+                        let asked = match value {
+                            Value::Int(n) => n > 0,
+                            Value::Float(f) => f > 0.0,
+                            _ => false,
+                        };
+                        if let Some(a) = self.client_archive_asked.get_mut(ent.0 as usize) {
+                            *a = asked;
+                        }
+                        Value::Int(0)
+                    }
                     _ => value,
                 };
                 // Retail reaches `CalculateRanks` from the client field
@@ -1502,6 +1519,8 @@ mod tests {
     /// It is what lets `self.deaths++` and `attacker.score++` run on a
     /// client that has neither yet; `.pers` is still the array
     /// `spawn_client` seeded, and a string field is still undefined.
+    /// `spectatorclient` is the exception: `ClientConnect` writes -1 into it
+    /// after the zeroing.
     #[test]
     fn a_numeric_client_field_starts_at_zero() {
         let (mut vm, mut host) = fixture();
@@ -1513,7 +1532,7 @@ mod tests {
             };
             assert_eq!(read(&mut host, cx, "score"), Value::Int(0));
             assert_eq!(read(&mut host, cx, "deaths"), Value::Int(0));
-            assert_eq!(read(&mut host, cx, "spectatorclient"), Value::Int(0));
+            assert_eq!(read(&mut host, cx, "spectatorclient"), Value::Int(-1));
             assert_eq!(read(&mut host, cx, "archivetime"), Value::Float(0.0));
             assert_eq!(read(&mut host, cx, "statusicon"), Value::Undefined);
             assert!(matches!(read(&mut host, cx, "pers"), Value::Array(_)));
@@ -1538,6 +1557,23 @@ mod tests {
             let other = cx.intern_folded("spectatorclient");
             host.set_field(cx, c, other, Value::Int(3)).unwrap();
             assert_eq!(host.get_field(cx, c, other), Value::Int(3));
+        });
+    }
+
+    /// What the script asked for is kept apart from what it reads back: a
+    /// follow with a replay behind it is the killcam, which the follow pass
+    /// has no archive to serve.
+    #[test]
+    fn a_non_zero_archivetime_marks_the_client_as_asking_for_a_replay() {
+        let (mut vm, mut host) = fixture();
+        vm.with_cx(|cx| {
+            let c = host.ents.spawn_client(cx, 2, None).unwrap();
+            let atom = cx.intern_folded("archivetime");
+            assert!(!host.client_archive_asked[2]);
+            host.set_field(cx, c, atom, Value::Int(9)).unwrap();
+            assert!(host.client_archive_asked[2]);
+            host.set_field(cx, c, atom, Value::Float(0.0)).unwrap();
+            assert!(!host.client_archive_asked[2]);
         });
     }
 }

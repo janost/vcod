@@ -296,6 +296,29 @@ impl Visibility {
         }
     }
 
+    /// Test helper: one open cluster holding every point, so every linked
+    /// entity is sent to everyone.
+    #[doc(hidden)]
+    pub fn single_cluster() -> Self {
+        Visibility {
+            planes: vec![Plane {
+                normal: [0.0, 0.0, 1.0],
+                dist: 0.0,
+            }],
+            nodes: vec![Node {
+                plane: 0,
+                children: [-1, -1],
+                mins: [0; 3],
+                maxs: [0; 3],
+            }],
+            leafs: vec![Leaf {
+                cluster: 0,
+                cell: 0,
+            }],
+            pvs: None,
+        }
+    }
+
     /// The leaf a point falls in, by walking the tree from node 0. The engine
     /// descends the same way for its camera cell (`0x4e2be0`): a point on the
     /// plane takes the back child.

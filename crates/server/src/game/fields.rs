@@ -413,6 +413,16 @@ pub fn score_index() -> usize {
         .expect("CLIENT_FIELDS carries score")
 }
 
+/// `Route::Client`'s index for `.spectatorclient`, which the follow pass
+/// writes back to -1 the way the engine does. Panics for the same reason
+/// [`pers_index`] does.
+pub fn spectator_client_index() -> usize {
+    CLIENT_FIELDS
+        .iter()
+        .position(|f| f.name == "spectatorclient")
+        .expect("CLIENT_FIELDS carries spectatorclient")
+}
+
 /// The same count over the HUD table, which is one shorter than the table:
 /// `color` and `alpha` share an offset and so share a slot.
 pub fn hud_slot_count() -> usize {

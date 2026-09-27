@@ -1219,6 +1219,46 @@ impl ScriptRuntime {
         }
     }
 
+    /// What the follow pass reads off a client's script fields, `None` for a
+    /// slot with no client entity. A `sessionstate` outside the four legal
+    /// strings reads as playing, the arm `ClientEndFrame` falls through to.
+    pub fn client_session(&mut self, slot: usize) -> Option<crate::follow::Session> {
+        use crate::follow::{Session, SessionState};
+        let state = match self.client_field(slot, "sessionstate")?.as_str() {
+            "spectator" => SessionState::Spectator,
+            "dead" => SessionState::Dead,
+            "intermission" => SessionState::Intermission,
+            _ => SessionState::Playing,
+        };
+        let spectator_client = self
+            .client_field(slot, "spectatorclient")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(-1);
+        let killcam = self
+            .host
+            .client_archive_asked
+            .get(slot)
+            .copied()
+            .unwrap_or(false);
+        Some(Session {
+            state,
+            spectator_client,
+            killcam,
+        })
+    }
+
+    /// The engine's own write to `spectatorclient`: `SpectatorClientEndFrame`
+    /// and `StopFollowing` put -1 there without going through script.
+    pub fn set_client_spectator_client(&mut self, slot: usize, v: i32) {
+        let Some(ent) = self.client_entity(slot) else {
+            return;
+        };
+        let i = crate::game::fields::spectator_client_index();
+        if let Some(c) = self.host.ents.get_mut(ent).and_then(|e| e.client.as_mut()) {
+            c[i] = Value::Int(v);
+        }
+    }
+
     /// A client's attachments as the roster carries them: up to six
     /// `(attachModelIndex, attachTagIndex)` pairs, the model resolving through
     /// `configstring 268 + index` and the tag through `108 + index`
@@ -1383,6 +1423,9 @@ impl ScriptRuntime {
                 }
                 if let Some(b) = self.host.client_old_buttons.get_mut(slot) {
                     *b = 0;
+                }
+                if let Some(a) = self.host.client_archive_asked.get_mut(slot) {
+                    *a = false;
                 }
                 self.host.reset_client_objectives(slot);
                 // The carried `pers`, if the boundary this client crossed
@@ -1799,6 +1842,19 @@ impl ScriptRuntime {
             .with_cx(|cx| host.ents.spawn_client(cx, slot, None).unwrap());
         self.set_client_origin(slot, origin);
         id
+    }
+
+    /// Writes a client field through the field setter, the way script does.
+    pub fn set_client_field_for_test(&mut self, slot: usize, name: &str, v: Value) {
+        use vcod_gsc::Host;
+        let Some(ent) = self.client_entity(slot) else {
+            return;
+        };
+        let host = &mut self.host;
+        self.vm.with_cx(|cx| {
+            let field = cx.intern_folded(name);
+            host.set_field(cx, ent, field, v).unwrap();
+        });
     }
 
     /// A client's `sessionstate`, which `spawn_client` leaves at

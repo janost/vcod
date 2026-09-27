@@ -279,6 +279,15 @@ pub struct ClientSim {
     /// The entity `solid`, packed at the last link from the box and contents
     /// then, never at end frame (docs/research/cod11-player-clip.md).
     pub linked_solid: i32,
+    /// Who this spectator's view rides (`crate::follow`).
+    pub follow: crate::follow::Follow,
+    /// `pm_flags` 0x40000 as the last end frame left it: a playing or dead
+    /// client, which is what a follow may copy. `ClientSpawn`'s memset
+    /// clears it until the next end frame.
+    pub own_view: bool,
+    /// The buttons of the last cmd this client ran, `client+0x21e8`, which
+    /// the next cmd's edges are taken against. The spawn's memset zeroes it.
+    pub last_buttons: u8,
 }
 
 /// Everything the animscript needs that the sim does not own: the script
@@ -368,6 +377,9 @@ impl ClientSim {
             last_cmd_angles: cmd_angles,
             contents: 0,
             linked_solid: 0,
+            follow: Default::default(),
+            own_view: false,
+            last_buttons: 0,
         }
     }
 
@@ -481,6 +493,11 @@ impl ClientSim {
         // Retail's respawn frame reads an empty ring at sequence 0
         // (combat doc, 9.2).
         self.ring.clear();
+        // The memset again, which keeps only `sess` and writes -1 to the
+        // follow target after it (0x4282c).
+        self.follow = Default::default();
+        self.own_view = false;
+        self.last_buttons = 0;
         // Every spawn consumes a flip, a spectator's and the intermission
         // camera's included: retail's capture reads 16 on a respawn's
         // spectator frame and 24 on the next one (map-cycle doc, 8.2).
@@ -553,6 +570,53 @@ impl ClientSim {
                 0
             }
             | if self.firing { EF_FIRING } else { 0 }
+    }
+
+    /// `SpectatorThink`'s button half (`game.mp.i386.so` 0x3fab8) for one
+    /// cmd whose buttons are `buttons`, after the previous cmd's `prev`:
+    /// either edge of the sight bit ends a free follow, an attack press cycles
+    /// forward and otherwise a melee press backward. `forced` is the script's
+    /// `spectatorclient`; a forced follow neither ends nor cycles here.
+    pub fn spectator_think(
+        &mut self,
+        forced: i32,
+        prev: u8,
+        buttons: u8,
+        max_clients: usize,
+        followable: impl Fn(usize) -> bool,
+        collision: Option<&vcod_common::collision::CollisionWorld>,
+    ) {
+        if forced < 0 && self.follow.target.is_some() && (buttons ^ prev) & msg::BUTTON_ADS != 0 {
+            self.stop_following(collision);
+        }
+        let pressed = |bit: u8| buttons & bit != 0 && prev & bit == 0;
+        let dir = if pressed(msg::BUTTON_ATTACK) {
+            1
+        } else if pressed(msg::BUTTON_MELEE) {
+            -1
+        } else {
+            return;
+        };
+        if forced < 0 {
+            if let Some(t) = crate::follow::cycle(self.follow.target, dir, max_clients, followable)
+            {
+                self.follow.target = Some(t);
+            }
+        }
+    }
+
+    /// `StopFollowing` (0x46a28): the follow is dropped, and a spectator
+    /// whose last frame was a copy is left behind and above the followed
+    /// eye, looking where it looked pitched down 15 (`follow::stop_spot`).
+    /// The copy's velocity is not carried over.
+    pub fn stop_following(&mut self, collision: Option<&vcod_common::collision::CollisionWorld>) {
+        if let (true, Some((eye, view))) = (self.follow.on, self.follow.view) {
+            let (spot, angles) = crate::follow::stop_spot(collision, eye, view);
+            self.ps.origin = spot.into();
+            self.ps.velocity = Vec3::ZERO;
+            self.set_view_angle(angles);
+        }
+        self.follow = Default::default();
     }
 
     /// `setOrigin` on a player: the origin moves and the teleport bit flips,
