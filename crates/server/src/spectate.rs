@@ -1223,6 +1223,11 @@ impl ClientSim {
             if kb > 0 && has_dir {
                 self.ps.velocity += dir * (kb as f32 * KNOCKBACK_UNITS);
             }
+            // The slide it starts, when no timer runs yet (0x43a22-0x43a4a).
+            if kb > 0 && self.ps.knockback_ms == 0.0 {
+                self.ps.knockback_ms = (kb * 2).clamp(50, 200) as f32;
+                self.ps.knockback_flags |= pmove::PMF_TIME_DAMAGE;
+            }
         }
         self.damage.taken += damage;
         self.damage.from = has_dir.then_some(dir);
@@ -1554,11 +1559,7 @@ impl ClientSim {
                 0
             };
             let respawned = if self.respawned { PMF_RESPAWNED } else { 0 };
-            let knockback = if self.ps.knockback_ms > 0.0 {
-                pmove::PMF_TIME_KNOCKBACK
-            } else {
-                0
-            };
+            let knockback = self.ps.knockback_flags;
             set(
                 "pm_flags",
                 PMF_OWN_VIEW
@@ -2727,6 +2728,7 @@ mod tests {
         let mut sim = ClientSim::spectator([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         sim.ps.knockback_ms = 300.0;
+        sim.ps.knockback_flags = pmove::PMF_TIME_KNOCKBACK;
         let ws = sim.to_wire(p, 0, 0);
         assert_eq!(
             ws.fields[msg::PlayerState::field_index(p, "pm_time").unwrap()],
@@ -2739,6 +2741,7 @@ mod tests {
         );
 
         sim.ps.knockback_ms = 0.0;
+        sim.ps.knockback_flags = 0;
         let ws = sim.to_wire(p, 0, 0);
         assert_eq!(
             ws.fields[msg::PlayerState::field_index(p, "pm_time").unwrap()],

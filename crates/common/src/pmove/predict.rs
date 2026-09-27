@@ -103,7 +103,8 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     ps.jump_origin_z = float("fJumpPeak");
     ps.backwards_run = pm_flags & PMF_BACKWARDS_RUN != 0;
     ps.ads_active = pm_flags & weapon::PMF_ADS != 0;
-    ps.knockback_ms = if pm_flags & super::PMF_TIME_KNOCKBACK != 0 {
+    ps.knockback_flags = pm_flags & (super::PMF_TIME_KNOCKBACK | super::PMF_TIME_DAMAGE);
+    ps.knockback_ms = if ps.knockback_flags != 0 {
         int("pm_time") as f32
     } else {
         0.0

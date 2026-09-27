@@ -220,6 +220,50 @@ pub fn join_pair_logged(
     (ca, cb, ja, jb)
 }
 
+/// Three clients through the stock menus, as [`join_pair`] does two, at
+/// [`ADDR`], [`ADDR_B`] and [`ADDR_C`] and stepped with [`step_trio`], so each
+/// frame's packets reach the server in that order.
+pub fn join_trio(
+    sv: &mut Server,
+    q: [&Rc<RefCell<Queues>>; 3],
+    now: &mut Instant,
+    picks: [(&str, &str); 3],
+) -> [NetClient<ClientEnd>; 3] {
+    let mut cl: [NetClient<ClientEnd>; 3] = std::array::from_fn(|i| {
+        NetClient::start_with_qport(ClientEnd(q[i].clone()), *now, 0x2001 + i as u16)
+    });
+    let mut joins: [Join; 3] = std::array::from_fn(|i| Join::new(picks[i].0, picks[i].1));
+    for _ in 0..600 {
+        *now += Duration::from_millis(50);
+        for c in cl.iter_mut() {
+            c.send_frame(&vcod_common::net::msg::NULL_USERCMD);
+        }
+        let [a, b, c] = &mut cl;
+        let events = step_trio(
+            sv,
+            (ADDR, q[0], a),
+            (ADDR_B, q[1], b),
+            (ADDR_C, q[2], c),
+            *now,
+        );
+        for (i, events) in <[Vec<NetEvent>; 3]>::from(events).into_iter().enumerate() {
+            for e in events {
+                match e {
+                    NetEvent::ServerCommand(tokens) => {
+                        joins[i].on_server_command(&tokens, &mut cl[i], *now)
+                    }
+                    NetEvent::Dropped(r) => panic!("dropped mid-join: {r}"),
+                    _ => {}
+                }
+            }
+        }
+        if joins.iter().all(|j| j.settled(*now)) {
+            break;
+        }
+    }
+    cl
+}
+
 /// Drives an already-built client through the connect handshake at `addr`
 /// until its gamestate lands. Shared by [`connect`] and [`connect_at`], which
 /// differ only in how the client is built (a real client is one per process
