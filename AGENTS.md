@@ -453,6 +453,15 @@ engineering setup works.
   `docs/research/cod11-movers.md`: seconds, deltas on the axis verbs, a
   trapezoidal velocity profile with accel and decel in seconds of ramp, and a
   trajectory the client extrapolates rather than per-frame origins.
+  `--probe-follow` stays a spectator and presses attack, attack, melee, the
+  sight for 2 s and attack, 6 s apart from 8 s after going active, printing
+  every snapshot whose `clientNum`, `pm_type`, `pm_flags` or `eFlags` moved
+  with the origin, view and player entities it carried. Beside a
+  `--probe-team allies` and a `--probe-target --probe-team axis` started
+  first it is the follow measurement (`docs/research/cod11-spectator-follow.md`
+  section 9, a dm and an sd run). It writes no fixture, but the target half
+  writes its own: move it to `tmp/` and `git checkout` the fixture directory
+  after.
   `--probe-team <allies|axis>` picks which team the stock menu is answered
   with, and on its own makes the probe join and then report the roster
   (`num:team=N "name"`) once a second, writing no fixture; two probes with
@@ -545,7 +554,14 @@ engineering setup works.
   and `trigger_use` stays on the touch pass rather than joining the use key's
   scan. A live body between the eye and a lookat
   stops the aim trace's second pass the way its posed bones stop a bullet.
-  Not modelled: the killcam, `enableLinkTo`, a linked player on a moving
+  A spectator follows a client the way retail's does
+  (`crates/server/src/follow.rs`, `docs/research/cod11-spectator-follow.md`):
+  attack cycles forward, melee back, either sight edge lets go behind the
+  followed eye, a script's `spectatorclient` forces it, a dead client is still
+  followed and a spectating or leaving one is not, and the follower is sent
+  the followed client's playerstate with `pm_flags` 0x10000, culled from its
+  eye and scoped by its number. Not modelled: the killcam (section 12 of that
+  doc is what it needs), `enableLinkTo`, a linked player on a moving
   parent, and script models in weapon, missile and lookat traces. A mounted MG (`crates/server/src/game/turret.rs`,
   `docs/research/cod11-turrets.md`) mounts inside the use cmd that presses it,
   locks the gunner's pmove and view to the gun's arc, and aims, fires and
@@ -562,6 +578,8 @@ engineering setup works.
   `map_rotate` line an earlier frame's script queued reloads the level before
   anything else runs), then expired clients, then the bots queue their cmds,
   then the clock advances, then each client's queued usercmds (`replay_moves`,
+  a spectator's cmd running `SpectatorThink`'s buttons first, the follow
+  cycle and let-go, and no pmove while its follow is on; otherwise
   one pmove step per cmd against every other client's capsule, the mover's
   own entry in that body list rewritten after each of its steps so a later
   slot moves against an earlier one's new position; it is also where the
@@ -608,8 +626,12 @@ engineering setup works.
   pins every linked client to its parent plus the offset and releases a link
   whose parent is gone, then the sim ops the script left (events, `setOrigin`,
   `setPlayerAngles`, the damage the callback did), then the vitals mirror (health, and the damage
-  feedback `P_DamageFeedback` computes from the health the hit left), then
-  slot by slot the contents write, `StuckInClient`'s scan for a live player
+  feedback `P_DamageFeedback` computes from the health the hit left, and
+  the deaths it sees first, whose followers are sent the scoreboard with the
+  frame's server commands), then
+  slot by slot the follow half of `ClientEndFrame` (a playing or dead client
+  takes the own-view bit a follow copies, a spectator lands its follow or
+  lets go, reading a lower slot's bit from this frame), the contents write, `StuckInClient`'s scan for a live player
   (the push and its CORPSE mark, which reach the wire `solid` only at the
   pushed player's next cmd) and `end_frame`, then `ClientEndFrame`'s aim
   trace per playing client, off the frame's final eye and aim with `pm_type` and `on_ground` mirrored again
@@ -623,7 +645,9 @@ engineering setup works.
   victim numbered above its gunner,
   then the console lines, configstring changes, server commands and
   intermission scoreboard the script queued go out, and last the entities are
-  built once and culled and written per client. Origin, `pm_type`,
+  built once and culled and written per client, a follower's frame being its
+  target's playerstate, eye and number. A dropped client's followers are
+  passed on at the drop, outside the tick. Origin, `pm_type`,
   `on_ground`, yaw, the ammo arrays, the last-round take and the current
   weapon, but only the one a move switched to, are the mirrors that no longer
   wait for the post-script pass: the touch pass needs this cmd's values, not

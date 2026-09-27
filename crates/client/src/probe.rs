@@ -89,6 +89,8 @@ pub struct Save {
     pub bump: bool,
     /// `--probe-bump-target`: the player-clip target, no fixture.
     pub bump_target: bool,
+    /// `--probe-follow`: a spectator pressing the follow buttons, no fixture.
+    pub follow: bool,
 }
 
 /// Which script the two halves of the hit capture run. The target's own
@@ -190,6 +192,7 @@ pub fn probe(
         turret: save_turret,
         bump: save_bump,
         bump_target: probe_bump_target,
+        follow: probe_follow,
     } = save;
     // The two map-cycle captures record the same lines; the flag picks the
     // role and, for the round restart, which half of the pair this probe is.
@@ -301,6 +304,7 @@ pub fn probe(
     let mut wrote_bump = false;
     let mut bump_spawned = false;
     let mut bump_target = BumpTarget::default();
+    let mut follow = FollowProbe::default();
     // The fixture is named for the map the run started on, which is not the
     // map cs 0 holds once the rotation has moved on.
     let mut first_map = String::new();
@@ -540,7 +544,7 @@ pub fn probe(
         // from `ps.weapon`, which is what retail reads as the request. It
         // overrides the follow below until the switch lands.
         let mut weapon_switch: Option<u8> = None;
-        if client.state() == NetState::Active && !joining {
+        if client.state() == NetState::Active && !joining && !probe_follow {
             let active_at = *reached_active.get_or_insert(now);
             let dt = now.duration_since(active_at).as_secs() % 30;
             if (5..7).contains(&dt) {
@@ -597,6 +601,8 @@ pub fn probe(
             cmd = bump.cmd();
         } else if probe_bump_target {
             cmd = bump_target.cmd();
+        } else if probe_follow && client.state() == NetState::Active {
+            cmd = follow.cmd(now);
         } else if triggers && trigger_probe.running() {
             // No `hold_view_yaw`: the walk steers at a world position, so its
             // yaw is a bearing rather than a heading off the spawn's facing.
@@ -665,6 +671,9 @@ pub fn probe(
                 if save_slope && (!prone_crawl || prone.recording()) {
                     slope_capture.observe(s);
                 }
+            }
+            if probe_follow {
+                follow.observe(now, s);
             }
             watch.check_sounds(s, client.configstrings());
             watch.check_movers(s);
@@ -8677,6 +8686,84 @@ impl BumpStance {
         } else {
             BumpStance::Stand
         }
+    }
+}
+
+/// The follow probe's presses, from the moment it goes active: when, how long
+/// the bits are held, and what they are. Retail's `SpectatorThink`
+/// (`game.mp.i386.so` 0x3fab8) cycles forward on an attack press, backward on
+/// a melee press, and stops a free follow on either edge of the sight bit.
+const FOLLOW_SCRIPT: &[(u64, u64, u8, &str)] = &[
+    (8_000, 200, net::msg::BUTTON_ATTACK, "attack"),
+    (14_000, 200, net::msg::BUTTON_ATTACK, "attack"),
+    (20_000, 200, net::msg::BUTTON_MELEE, "melee"),
+    (26_000, 2_000, net::msg::BUTTON_ADS, "ads"),
+    (32_000, 200, net::msg::BUTTON_ATTACK, "attack"),
+];
+
+/// `--probe-follow`: stays a spectator, presses [`FOLLOW_SCRIPT`] and prints
+/// every snapshot whose `clientNum`, `pm_type`, `pm_flags` or `eFlags` moved,
+/// with the origin, the view and the player entities the snapshot carried.
+/// Writes no fixture.
+#[derive(Default)]
+struct FollowProbe {
+    active_at: Option<Instant>,
+    announced: usize,
+    last: Option<(i32, i32, i32, i32)>,
+}
+
+impl FollowProbe {
+    fn cmd(&mut self, now: Instant) -> net::msg::UserCmd {
+        let t0 = *self.active_at.get_or_insert(now);
+        let ms = now.duration_since(t0).as_millis() as u64;
+        let mut cmd = net::msg::UserCmd::default();
+        for (i, (at, hold, bits, name)) in FOLLOW_SCRIPT.iter().enumerate() {
+            if (*at..at + hold).contains(&ms) {
+                cmd.buttons |= bits;
+                if i >= self.announced {
+                    self.announced = i + 1;
+                    println!("FOLLOW press {name} at {ms} ms, held {hold} ms");
+                }
+            }
+        }
+        cmd
+    }
+
+    fn observe(&mut self, now: Instant, s: &net::snapshot::Snapshot) {
+        let p = &net::protocol::PROTOCOL_V1;
+        let key = (
+            s.ps.field_i32(p, "clientNum"),
+            s.ps.field_i32(p, "pm_type"),
+            s.ps.field_i32(p, "pm_flags"),
+            s.ps.field_i32(p, "eFlags"),
+        );
+        if self.last == Some(key) {
+            return;
+        }
+        self.last = Some(key);
+        let ms = self
+            .active_at
+            .map_or(0, |t| now.saturating_duration_since(t).as_millis());
+        let o = s.ps.origin(p);
+        let players: Vec<u32> = s.entities.keys().copied().filter(|n| *n < 64).collect();
+        println!(
+            "FOLLOW t={ms} snap {} clientNum={} pm_type={} pm_flags={:#x} eFlags={:#x} \
+ct={} origin=[{:.1},{:.1},{:.1}] view=[{:.1},{:.1}] viewheight={} health={} weapon={} players={players:?}",
+            s.message_num,
+            key.0,
+            key.1,
+            key.2,
+            key.3,
+            s.ps.field_i32(p, "commandTime"),
+            o[0],
+            o[1],
+            o[2],
+            s.ps.field_f32(p, "viewangles[0]"),
+            s.ps.field_f32(p, "viewangles[1]"),
+            s.ps.field_i32(p, "viewHeightTarget"),
+            s.ps.arrays.stats[0],
+            s.ps.field_i32(p, "weapon"),
+        );
     }
 }
 
