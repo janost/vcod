@@ -107,6 +107,8 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
     ps.ducked = pm_flags & PMF_DUCKED != 0;
     ps.prone_dive = pm_flags & PMF_PRONE_DIVE != 0;
     ps.jump_latched = pm_flags & PMF_JUMP_HELD != 0;
+    ps.since_jump_ms = command_time.wrapping_sub(int("jumpTime")) as f32;
+    ps.jump_origin_z = float("fJumpPeak");
     ps.backwards_run = pm_flags & PMF_BACKWARDS_RUN != 0;
     ps.ads_active = pm_flags & weapon::PMF_ADS != 0;
     ps.knockback_ms = if pm_flags & super::PMF_TIME_KNOCKBACK != 0 {

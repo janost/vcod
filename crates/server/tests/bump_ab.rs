@@ -24,8 +24,11 @@
 //! the next interval from the pushed state like any other, and the free run
 //! adopts retail's velocity and timer at the snapshots `PUSHES` names.
 //!
-//! Rows that miss for a pmove jump difference rather than a clipping one are
-//! named in `GAPS`. Set `BUMP_REPORT=1` to print every snapshot's delta, and
+//! Rows that miss for a reason other than clipping are named in `GAPS`, which
+//! is empty. The fixture carries no `fJumpPeak`, so a rebased run starts
+//! airborne without a jump's step allowance; the free run carries its own
+//! from the takeoff, and both hold every jump row. Set
+//! `BUMP_REPORT=1` to print every snapshot's delta, and
 //! `BUMP_TRACE=<ct>` to print ours cmd by cmd into that clock. Needs
 //! `COD_DIR`; without the paks the replay returns early.
 
@@ -566,32 +569,12 @@ fn captured_solid_values_are_the_three_stance_packs_at_a_fixed_spot() {
 
 /// Rebased rows the mover misses for reasons outside player clipping: the
 /// phase, the snapshot `commandTime`, the most the row may miss by (the
-/// larger of |dz| and dxy, a ground disagreement aside) and which of the
-/// three pmove jump differences the walker's jump exposed
-/// (docs/research/cod11-player-clip.md, "What the bump capture measured").
-/// Kept out of the per-row bound and checked to still miss, so an entry that
-/// starts matching fails, and to miss by no more than its bound.
-const GAPS: &[(&str, i32, f32, &str)] = &[
-    ("stand/jump", 39083, 0.6, TAKEOFF),
-    ("stand/jump", 39483, 0.12, AIR_STEP),
-    ("stand/jump", 39533, 0.12, AIR_STEP),
-    ("stand/jump", 39682, 4.0, REJUMP),
-    ("stand/land", 39732, 11.0, REJUMP),
-    ("crouch/jump", 70232, 0.6, TAKEOFF),
-    ("crouch/land", 70882, 11.0, REJUMP),
-    ("prone/jump", 97033, 0.6, TAKEOFF),
-    ("prone/land", 97666, 8.0, REJUMP),
-];
-/// Retail's forward jump leaves at 249.8 (`PM_Jump`'s `sqrt(g * 78)`), ours
-/// at 233.2: 0.54-0.55 low on the first row.
-const TAKEOFF: &str = "takeoff speed";
-/// Ours jumps again off the landing with up still held; retail's held-jump
-/// latch (`pm_flags` 0x8) refuses: 3.8-10.7 high.
-const REJUMP: &str = "held-jump latch";
-/// Ours steps a blocked airborne move up and over the target's shoulder and
-/// comes down 30.01 from it; retail steps only under `fJumpOriginZ` and holds
-/// the side at 30.125: 0.09-0.10 in xy.
-const AIR_STEP: &str = "airborne step";
+/// larger of |dz| and dxy, a ground disagreement aside) and why. Kept out of
+/// the per-row bound and checked to still miss, so an entry that starts
+/// matching fails, and to miss by no more than its bound. Empty since the
+/// walker's jump took retail's `PM_CheckJump`, its air step and the walk's
+/// speed-keeping ground clip (docs/research/cod11-mantle.md, "Jumps").
+const GAPS: &[(&str, i32, f32, &str)] = &[];
 
 /// The most a row outside `GAPS` may differ from retail, per axis.
 const ROW_TOLERANCE: f32 = 0.01;
