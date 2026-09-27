@@ -10,6 +10,7 @@ use vcod_common::pk3::Pk3Fs;
 
 use super::font::{self, Font};
 use super::HudQuad;
+use crate::play::join::Join;
 
 /// One selectable row: the localized label, the response it sends, and the
 /// `execKey` (if any) that answers it directly without moving the selection.
@@ -157,6 +158,36 @@ pub fn build(
     }
 }
 
+/// Keeps `drawn`, the menu on screen keyed by its name, in step with the one
+/// `join` holds open. A menu with no `.menu` file is closed in `join` too, so
+/// the handshake never waits on a menu that cannot draw.
+pub fn sync(
+    drawn: &mut Option<(String, MenuView)>,
+    join: &mut Join,
+    menus: &mut MenuCache,
+    fs: &Pk3Fs,
+    loc: &Localized,
+    configstrings: &[String],
+) {
+    let Some(open) = join.open() else {
+        *drawn = None;
+        return;
+    };
+    if drawn.as_ref().is_some_and(|(name, _)| *name == open.name) {
+        return;
+    }
+    match menus.get(fs, &open.name) {
+        Some(menu) => {
+            let v = view(menu, loc, |c| join.cvars.get(c, configstrings));
+            *drawn = Some((open.name.clone(), v));
+        }
+        None => {
+            join.close();
+            *drawn = None;
+        }
+    }
+}
+
 /// One parsed menu per stock name, lazily loaded from
 /// `ui_mp/scriptmenus/<name>.menu`; a missing file caches as `None` so a
 /// server naming a bad menu is only tried, and warned about, once.
@@ -232,6 +263,26 @@ mod tests {
     } }"#,
         );
         assert_eq!(view(&unkeyed, &Localized::default(), |_| None).selected, 0);
+    }
+
+    #[test]
+    fn a_menu_with_no_file_closes_in_join_too() {
+        let mut cs = vec![String::new(); 1300];
+        cs[1180] = "team_missing".into();
+        let mut join = Join::new(None, None);
+        join.on_server_command(&["t".into(), "0".into()], &cs, 3);
+        assert!(join.open().is_some());
+        let mut drawn = None;
+        sync(
+            &mut drawn,
+            &mut join,
+            &mut MenuCache::default(),
+            &Pk3Fs::empty(),
+            &Localized::default(),
+            &cs,
+        );
+        assert!(drawn.is_none());
+        assert!(join.open().is_none());
     }
 
     #[test]

@@ -1652,21 +1652,14 @@ impl ApplicationHandler for App {
                             }
                         }
 
-                        match join.open() {
-                            None => *menu_view = None,
-                            Some(open)
-                                if menu_view
-                                    .as_ref()
-                                    .is_some_and(|(name, _)| *name == open.name) => {}
-                            Some(open) => {
-                                *menu_view = self.menus.get(&self.fs, &open.name).map(|menu| {
-                                    let view = hud::menu::view(menu, &self.localized, |c| {
-                                        join.cvars.get(c, net.configstrings())
-                                    });
-                                    (open.name.clone(), view)
-                                });
-                            }
-                        }
+                        hud::menu::sync(
+                            menu_view,
+                            join,
+                            &mut self.menus,
+                            &self.fs,
+                            &self.localized,
+                            net.configstrings(),
+                        );
 
                         // One quick-chat line per second, played and shown
                         // like a chat line (retail queues text + alias).
