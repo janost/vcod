@@ -91,6 +91,10 @@ pub struct Save {
     pub bump_target: bool,
     /// `--probe-follow`: a spectator pressing the follow buttons, no fixture.
     pub follow: bool,
+    /// `--probe-killcam`: a victim that waits its killcam out, no fixture.
+    pub killcam: bool,
+    /// `--probe-killcam-skip-ms`: press use this long into the killcam.
+    pub killcam_skip_ms: Option<u64>,
 }
 
 /// Which script the two halves of the hit capture run. The target's own
@@ -193,6 +197,8 @@ pub fn probe(
         bump: save_bump,
         bump_target: probe_bump_target,
         follow: probe_follow,
+        killcam: probe_killcam,
+        killcam_skip_ms,
     } = save;
     // The two map-cycle captures record the same lines; the flag picks the
     // role and, for the round restart, which half of the pair this probe is.
@@ -235,6 +241,7 @@ pub fn probe(
         || save_turret
         || save_bump
         || probe_bump_target
+        || probe_killcam
         || team.is_some();
     // A sweep is a measurement, not a fixture: it walks a table of pitch
     // offsets instead of aiming at the eye, so the numbers it produces are not
@@ -305,6 +312,7 @@ pub fn probe(
     let mut bump_spawned = false;
     let mut bump_target = BumpTarget::default();
     let mut follow = FollowProbe::default();
+    let mut killcam = KillcamProbe::new(killcam_skip_ms);
     // The fixture is named for the map the run started on, which is not the
     // map cs 0 holds once the rotation has moved on.
     let mut first_map = String::new();
@@ -459,6 +467,9 @@ pub fn probe(
                     }
                 }
                 NetEvent::ServerCommand(tokens) => {
+                    if probe_killcam {
+                        killcam.on_server_command(now, &tokens);
+                    }
                     if save_pickup {
                         pickup.on_server_command(now, &tokens);
                     }
@@ -603,6 +614,8 @@ pub fn probe(
             cmd = bump_target.cmd();
         } else if probe_follow && client.state() == NetState::Active {
             cmd = follow.cmd(now);
+        } else if probe_killcam {
+            cmd = killcam.cmd(now);
         } else if triggers && trigger_probe.running() {
             // No `hold_view_yaw`: the walk steers at a world position, so its
             // yaw is a bearing rather than a heading off the spawn's facing.
@@ -674,6 +687,10 @@ pub fn probe(
             }
             if probe_follow {
                 follow.observe(now, s);
+            }
+            if probe_killcam && join.settled(now) {
+                let me = client.gamestate().map_or(-1, |g| g.client_num);
+                killcam.observe(now, me, s);
             }
             watch.check_sounds(s, client.configstrings());
             watch.check_movers(s);
@@ -8762,6 +8779,232 @@ ct={} origin=[{:.1},{:.1},{:.1}] view=[{:.1},{:.1}] viewheight={} health={} weap
             s.ps.field_i32(p, "weapon"),
         );
     }
+}
+
+/// How long after a death the killcam probe first presses use, so a stock
+/// 9 s killcam (2 s dying, `archivetime` 9) runs out on its own first.
+const KILLCAM_USE_AFTER_DEATH: Duration = Duration::from_secs(20);
+/// How long each use press is held: one server frame and a half, so the
+/// script's 50 ms `useButtonPressed` poll sees it.
+const KILLCAM_PRESS: Duration = Duration::from_millis(80);
+/// How long the probe keeps tracing once it is alive again.
+const KILLCAM_TAIL: Duration = Duration::from_secs(3);
+
+/// `--probe-killcam`: stands still, never sends `kill`, and prints a
+/// `KILLCAM` line per snapshot from each death until [`KILLCAM_TAIL`] after
+/// the respawn. Use is pressed [`KILLCAM_USE_AFTER_DEATH`] after the death
+/// and once a second after that, or `skip_ms` after the killcam starts (the
+/// first frame following another client). Writes no fixture.
+#[derive(Default)]
+struct KillcamProbe {
+    skip_ms: Option<u64>,
+    start: Option<Instant>,
+    /// Seen alive once: the connect's own spectator frames are not a death.
+    spawned: bool,
+    died_at: Option<Instant>,
+    killcam_at: Option<Instant>,
+    skipped: bool,
+    alive_at: Option<Instant>,
+    used_at: Option<Instant>,
+    press_until: Option<Instant>,
+    traced: Option<u32>,
+    last_key: Option<(i32, i32, i32)>,
+}
+
+impl KillcamProbe {
+    fn new(skip_ms: Option<u64>) -> Self {
+        KillcamProbe {
+            skip_ms,
+            ..Default::default()
+        }
+    }
+
+    fn ms(&self, now: Instant) -> u128 {
+        self.start
+            .map_or(0, |t| now.saturating_duration_since(t).as_millis())
+    }
+
+    /// From the death until the tail after the respawn has run out.
+    fn in_window(&self, now: Instant) -> bool {
+        self.died_at.is_some() || self.alive_at.is_some_and(|t| now - t < KILLCAM_TAIL)
+    }
+
+    fn cmd(&self, now: Instant) -> net::msg::UserCmd {
+        let press = self.press_until.is_some_and(|t| now < t);
+        net::msg::UserCmd {
+            buttons: if press { BUTTON_USE } else { 0 },
+            ..net::msg::NULL_USERCMD
+        }
+    }
+
+    fn on_server_command(&self, now: Instant, tokens: &[String]) {
+        if self.in_window(now) {
+            println!("KILLCAM t={} server: {}", self.ms(now), tokens.join(" "));
+        }
+    }
+
+    fn observe(&mut self, now: Instant, me: i32, s: &net::snapshot::Snapshot) {
+        let p = &net::protocol::PROTOCOL_V1;
+        self.start.get_or_insert(now);
+        let ms = self.ms(now);
+        let i = |n: &str| s.ps.field_i32(p, n);
+        let (client_num, pm_type, pm_flags) = (i("clientNum"), i("pm_type"), i("pm_flags"));
+        let following = pm_flags & 0x10000 != 0;
+        let alive = pm_type == PM_NORMAL && client_num == me && !following;
+
+        if alive {
+            self.spawned = true;
+            if let Some(d) = self.died_at.take() {
+                println!(
+                    "KILLCAM t={ms} alive again at serverTime {}, {} ms after the death",
+                    s.server_time,
+                    now.duration_since(d).as_millis()
+                );
+                self.alive_at = Some(now);
+                self.killcam_at = None;
+                self.skipped = false;
+                self.used_at = None;
+            }
+        } else if self.spawned && self.died_at.is_none() {
+            println!(
+                "KILLCAM t={ms} death seen at serverTime {} (pm_type {pm_type})",
+                s.server_time
+            );
+            self.died_at = Some(now);
+            self.alive_at = None;
+        }
+        if self.died_at.is_some() && self.killcam_at.is_none() && (following || client_num != me) {
+            println!(
+                "KILLCAM t={ms} killcam starts at serverTime {} (clientNum {client_num}, pm_flags {pm_flags:#x})",
+                s.server_time
+            );
+            self.killcam_at = Some(now);
+        }
+
+        // The presses.
+        if let Some(dead) = self.died_at {
+            let skip_due = match (self.skip_ms, self.killcam_at) {
+                (Some(skip), Some(kc)) => {
+                    !self.skipped && now.duration_since(kc) >= Duration::from_millis(skip)
+                }
+                _ => false,
+            };
+            let respawn_due = now.duration_since(dead) >= KILLCAM_USE_AFTER_DEATH
+                && self
+                    .used_at
+                    .is_none_or(|t| now.duration_since(t) >= TARGET_USE_RETRY);
+            if skip_due || respawn_due {
+                println!(
+                    "KILLCAM t={ms} use press ({}) at serverTime {}",
+                    if skip_due { "skip" } else { "respawn" },
+                    s.server_time
+                );
+                self.skipped |= skip_due;
+                self.used_at = Some(now);
+                self.press_until = Some(now + KILLCAM_PRESS);
+            }
+        }
+
+        if !self.in_window(now) || self.traced == Some(s.message_num) {
+            return;
+        }
+        self.traced = Some(s.message_num);
+        let key = (client_num, pm_type, pm_flags);
+        if self.last_key != Some(key) {
+            println!(
+                "KILLCAM t={ms} change at serverTime {}: clientNum {client_num} pm_type {pm_type} pm_flags {pm_flags:#x} (was {:?})",
+                s.server_time, self.last_key
+            );
+            self.last_key = Some(key);
+        }
+        let o = s.ps.origin(p);
+        let v = s.ps.viewangles(p);
+        let players: Vec<String> = s
+            .entities
+            .iter()
+            .filter(|(n, _)| **n < 64)
+            .map(|(n, e)| {
+                let eo = e.origin(p);
+                let et = e.field_i32(p, "eType");
+                format!("{n}:e{et}@{:.0},{:.0},{:.0}", eo[0], eo[1], eo[2])
+            })
+            .collect();
+        let bodies: Vec<u32> = s
+            .entities
+            .keys()
+            .copied()
+            .filter(|n| (64..72).contains(n))
+            .collect();
+        let roster: Vec<String> = s
+            .clients
+            .iter()
+            .map(|(n, c)| format!("{n}:{}", c.field_i32(p, "team")))
+            .collect();
+        let command_time = i("commandTime");
+        println!(
+            "KILLCAM t={ms} msg={} st={} clientNum={client_num} pm_type={pm_type} pm_flags={pm_flags:#x} \
+eFlags={:#x} ct={command_time} st-ct={} deltaTime={} origin={:.1},{:.1},{:.1} view={:.1},{:.1} \
+weapon={} health={} ents={} players=[{}] bodies={bodies:?} roster=[{}] hudA={} [{}] hudC={} [{}]",
+            s.message_num,
+            s.server_time,
+            i("eFlags"),
+            s.server_time - command_time,
+            i("deltaTime"),
+            o[0],
+            o[1],
+            o[2],
+            v[0],
+            v[1],
+            i("weapon"),
+            s.ps.arrays.stats[0],
+            s.entities.len(),
+            players.join(" "),
+            roster.join(" "),
+            hud_count(&s.ps.arrays.hud_archived),
+            killcam_hud_str(&s.ps.arrays.hud_archived),
+            hud_count(&s.ps.arrays.hud_current),
+            killcam_hud_str(&s.ps.arrays.hud_current),
+        );
+    }
+}
+
+fn hud_count(elems: &[net::msg::HudElem]) -> usize {
+    elems
+        .iter()
+        .filter(|e| **e != net::msg::HudElem::default())
+        .count()
+}
+
+/// Every non-empty element as `type/text/shader/value x,y col time dur
+/// fade scale move`, the last five being the fields that carry a server time.
+fn killcam_hud_str(elems: &[net::msg::HudElem]) -> String {
+    use net::msg::hud_field as h;
+    elems
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| **e != net::msg::HudElem::default())
+        .map(|(n, e)| {
+            format!(
+                "#{n}:ty{}/tx{}/sh{}/v{} {},{} col={:#x} time={} dur={} fade={}+{} scale={}+{} move={}+{}",
+                e.get(h::TYPE),
+                e.get(h::TEXT),
+                e.get(h::SHADER),
+                e.get_f32(h::VALUE),
+                e.get(h::X),
+                e.get(h::Y),
+                e.get(h::COLOR),
+                e.get(h::TIME),
+                e.get(h::DURATION),
+                e.get(h::FADE_START_TIME),
+                e.get(h::FADE_TIME),
+                e.get(h::SCALE_START_TIME),
+                e.get(h::SCALE_TIME),
+                e.get(h::MOVE_START_TIME),
+                e.get(h::MOVE_TIME),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `--probe-bump-target`: stands on the gsc's spot and runs the stance

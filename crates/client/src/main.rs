@@ -266,6 +266,16 @@ struct Args {
     /// eFlags moved. Writes no fixture.
     #[arg(long)]
     probe_follow: bool,
+    /// With `--net-probe` and `--probe-team`: the killcam victim. Stands
+    /// still, never sends `kill`, presses use 20 s after each death and once a
+    /// second after that, and prints a `KILLCAM` line per snapshot from the
+    /// death until 3 s after the respawn. Writes no fixture.
+    #[arg(long)]
+    probe_killcam: bool,
+    /// With `--probe-killcam`: press use this many ms after the killcam starts
+    /// (the first frame following another client) instead, to skip it.
+    #[arg(long, requires = "probe_killcam")]
+    probe_killcam_skip_ms: Option<u64>,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -756,6 +766,8 @@ fn main() -> Result<()> {
                 bump: args.save_bump,
                 bump_target: args.probe_bump_target,
                 follow: args.probe_follow,
+                killcam: args.probe_killcam,
+                killcam_skip_ms: args.probe_killcam_skip_ms,
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,
