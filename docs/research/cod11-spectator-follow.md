@@ -265,7 +265,13 @@ followed client's state after its own end frame; for a follower numbered
 below its target, `follow::before_end_frame` puts back the fields section
 5 lists as the target's last frame had them (`ClientSim::end_frame_wire`,
 kept after each frame's snapshots and dropped by a spawn, whose own end
-frame is that frame's). `StopFollowing` keeps the copy's velocity, and the
+frame is that frame's), and the event ring as it stood before the target's
+`P_DamageFeedback` added `EV_PAIN` (`ClientSim::ring_before_pain`), so the
+pain reaches that follower a frame late. VERIFIED: `P_DamageFeedback` is
+called from `ClientEndFrame` (0x41128) and adds event `0xBB` (`cod11-combat.md`
+6, step 9). INFERRED, from the slot order section 5's `pm_type` reading
+measured: a lower follower copies the ring before it; no retail run has put a
+non-fatal hit on a followed client. `StopFollowing` keeps the copy's velocity, and the
 last copy (`ClientSim::follow_wire`) stays under the spectator's own frame
 until the next spawn: `spectate::SPECTATOR_OWNED` names the fields the
 spectator writes over it, `pm_type` and `speed` joining them once a cmd has
@@ -277,22 +283,34 @@ slot 2 one as 6, both rode the respawn with `commandTime` equal to
 `serverTime`, and the sight press left `health` 100, `weapon` 9 and both eye
 heights 0 on the free frames, as retail's run read.
 
+The death frame's `weapon`, `viewHeightTarget` and `eventSequence` were
+not retail's in those runs: a `kill` read `weapon` 0, `viewHeightTarget` 60
+and `eventSequence` 2 on retail and 9, 8 and 1 on ours, in both followers'
+copies. Ours ran the `kill` after the frame's cmds; it now runs ahead of the
+cmds of its own packet, which still read `pm_type` 0 until the end frame
+(`cod11-combat.md` 9.2 has the addresses and the fix). VERIFIED live against
+ours, the same recipe rerun on port 29019 after the fix: the target's death
+frame read `events` 189, 155 and `eventSequence` 2; the slot 0 follower read
+it as `pm_type` 0, `viewHeightTarget` 60, `weapon` 0 and `eventSequence` 2,
+then 6 and 8, and the slot 2 one as 6 with the same rest; each respawn frame
+read `legsAnim` 634; and the sight press read pitch 15, then 0.
+
+A stopped copy keeps `pm_flags` less 0x10020, `StopFollowing`'s store
+(0x46bb1), and the spectator's `viewangles` are on the wire, so the press
+frame reads the stop's pitch 15. VERIFIED, `PM_UpdateViewAngles` (0x32d7c,
+`docs/protocol-1.1.md`, "View angles"): a spectator's `viewangles` are the
+cmd's angles plus `delta_angles`, which `SetClientViewAngle` has just set so
+that the stop cmd's own angles sum to the stop view. INFERRED: the frames
+after it read 0 on retail because the probe subtracts the new delta, and ours
+reproduce that for the same reason. Ours read pitch 0 on the press frame
+until 2026-09-27, when `to_wire` wrote `viewangles` for a player alone and
+the copy's `pm_flags` gave way to the spectator's own.
+
 Where it is not retail's:
 
-- The death frame's `weapon`, `viewHeightTarget` and `eventSequence`: in the
-  three-probe dm runs a `kill` read `weapon` 0, `viewHeightTarget` 60 and
-  `eventSequence` 2 on retail and 9, 8 and 1 on ours, in both followers'
-  copies. INFERRED: retail's
-  victim ran its cmds at `pm_type` 0 after the kill and before its end
-  frame; ours runs the `kill` after the frame's cmds, so the weapon empties
-  on the next cmd (section 13) and the dead eye target is written at once.
-- `P_DamageFeedback`'s `EV_PAIN` goes on the target's ring in its end frame,
-  so a lower follower sees it a frame late on retail (INFERRED, section 5);
-  ours copies the ring current.
-- The rest of a stopped copy is kept whole except the owned fields; the
-  `pm_flags` bits `StopFollowing` leaves (everything but 0x10020) and
-  whatever else the spectator's `Pmove` writes are not measured. The press
-  frame's pitch 15 reads 0 on ours.
+- The rest of a stopped copy is kept whole except the owned fields; whatever
+  the spectator's `Pmove` writes into `pm_flags` after the stop is not
+  measured, and ours writes nothing there.
 
 ## 12. The killcam
 
@@ -565,17 +583,24 @@ client's first frame reads.
 vcod: `ClientSim::respawn` sets the flag and `spawn_think` is the spawn's own
 end frame and think, which sets the own view for a player, clears the flag
 unless the client is dead or at intermission, and runs a dead spawn's 100 ms
-of `dead_move`, the eye dropping 18 units to 42. Every caller but the
-intermission's puts the client's `commandTime` at the frame's clock. A dead
+of `dead_move`, the eye dropping 18 units to 42. A script's `spawn` of a
+player or a spectator runs its think's 100 ms too (`ClientSim::spawn_move`,
+on the zeroed cmd with the negated `delta_angles`), and the tick picks a
+player's anims after it, which is what puts the standing idle on the spawn
+frame
+(`cod11-combat.md` 9.2). Every caller but the
+intermission's puts the client's `commandTime` at the frame's clock; the
+intermission camera's reads the spawn's frame less 100 until the next spawn,
+whatever cmds it sends (`ClientSim::become_intermission`), as the
+intermission run read. A dead
 sim's step writes `ps.weapon` 0 unless the flag is set, and the switch
 reaches the script host as the weapon machine's own do.
 
 Where it is not retail's:
 
-- A player's or spectator's think is only its flag and its clock: the 100 ms
-  of null-cmd pmove is not run. INFERRED from the negated `delta_angles` on
-  that cmd: retail's spawn frame reads `viewangles` 0 whatever the spawn
-  yaw, where ours reads the spawn yaw. The three-probe dm run's spawn had yaw
-  0 and cannot tell the two apart.
-- The intermission camera's frozen `commandTime`: ours keeps advancing it
-  with the client's cmds.
+- A player spawned out of a follow's copy (12.7) gets only the flag and the
+  clock: its 100 ms of null-cmd pmove is not run. INFERRED from the negated
+  `delta_angles` on that cmd: a spawned player's or spectator's frame reads
+  `viewangles` 0 whatever the spawn yaw, on retail and on ours, whose script
+  spawns run the cmd; the three-probe dm run's spawn had yaw 0 and cannot
+  tell.

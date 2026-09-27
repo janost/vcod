@@ -172,11 +172,10 @@ enum ClientOp {
     Move(Vec<UserCmd>),
 }
 
-/// A client command whose whole effect is to start or release a script
-/// thread. `client_command` parses it out of the packet and `tick` runs it,
-/// so it lands on the frame the rest of the script frame runs on.
+/// A client command whose whole effect is to release a script thread.
+/// `client_command` parses it out of the packet and `tick` runs it, so it
+/// lands on the frame the rest of the script frame runs on.
 enum ScriptCommand {
-    Kill,
     MenuResponse(i32, String),
 }
 
@@ -226,23 +225,28 @@ pub(crate) enum Attack {
 fn mirror_weapons(clients: &mut [Option<Client>], rt: &mut script::ScriptRuntime) {
     for (slot, c) in clients.iter_mut().enumerate() {
         if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-            let w = rt.client_weapons(slot);
-            sim.ps.weapons_held = w.held;
-            sim.ps.weapon_slots = w.slots;
-            sim.ps.weapon = w.current;
-            sim.viewmodel_index = rt.client_viewmodel(slot);
-            // The body, head and helmet the character script dressed the
-            // client in: what a shot at it is traced against.
-            if let Some(a) = rt.client_assembly(slot) {
-                if a != sim.assembly {
-                    sim.assembly = a;
-                }
-            }
-            // And back the other way: the sim owns where a player is, so the
-            // script's copy is written from it every frame.
-            rt.set_client_origin(slot, sim.origin());
+            mirror_weapons_of(sim, rt, slot);
         }
     }
+}
+
+/// [`mirror_weapons`] for one client.
+fn mirror_weapons_of(sim: &mut ClientSim, rt: &mut script::ScriptRuntime, slot: usize) {
+    let w = rt.client_weapons(slot);
+    sim.ps.weapons_held = w.held;
+    sim.ps.weapon_slots = w.slots;
+    sim.ps.weapon = w.current;
+    sim.viewmodel_index = rt.client_viewmodel(slot);
+    // The body, head and helmet the character script dressed the
+    // client in: what a shot at it is traced against.
+    if let Some(a) = rt.client_assembly(slot) {
+        if a != sim.assembly {
+            sim.assembly = a;
+        }
+    }
+    // And back the other way: the sim owns where a player is, so the
+    // script's copy is written from it every frame.
+    rt.set_client_origin(slot, sim.origin());
 }
 
 /// The weapon ops script queued, each applied once.
@@ -285,7 +289,6 @@ fn apply_sim_ops(
     rng: &mut u64,
     now_ms: i32,
 ) {
-    use crate::game::host::SimOp;
     for (slot, op) in rt.take_sim_ops() {
         let Some(sim) = clients
             .get_mut(slot)
@@ -294,19 +297,32 @@ fn apply_sim_ops(
         else {
             continue;
         };
-        match op {
-            SimOp::Event { event, parm } => sim.add_event(event, parm),
-            SimOp::SetOrigin { origin } => sim.teleport(origin),
-            SimOp::SetViewAngles { angles } => sim.set_view_angle(angles),
-            SimOp::Damaged { .. } => {
-                let index = sim.ps.weapon as usize;
-                let inputs = anims.map(|anims| crate::spectate::AnimInputs {
-                    anims,
-                    weapon: crate::items::item_name(index).unwrap_or_default(),
-                    weapon_class: weapons.class(index),
-                });
-                sim.take_damage(&op, inputs.as_ref(), rng, now_ms);
-            }
+        apply_sim_op(sim, op, anims, weapons, rng, now_ms);
+    }
+}
+
+/// One op of [`apply_sim_ops`].
+fn apply_sim_op(
+    sim: &mut ClientSim,
+    op: crate::game::host::SimOp,
+    anims: Option<&vcod_common::animtree::PlayerAnims>,
+    weapons: &crate::weapons::WeaponTable,
+    rng: &mut u64,
+    now_ms: i32,
+) {
+    use crate::game::host::SimOp;
+    match op {
+        SimOp::Event { event, parm } => sim.add_event(event, parm),
+        SimOp::SetOrigin { origin } => sim.teleport(origin),
+        SimOp::SetViewAngles { angles } => sim.set_view_angle(angles),
+        SimOp::Damaged { .. } => {
+            let index = sim.ps.weapon as usize;
+            let inputs = anims.map(|anims| crate::spectate::AnimInputs {
+                anims,
+                weapon: crate::items::item_name(index).unwrap_or_default(),
+                weapon_class: weapons.class(index),
+            });
+            sim.take_damage(&op, inputs.as_ref(), rng, now_ms);
         }
     }
 }
@@ -513,22 +529,29 @@ fn mirror_vitals(clients: &mut [Option<Client>], rt: &script::ScriptRuntime) -> 
     let mut died = Vec::new();
     for (slot, c) in clients.iter_mut().enumerate() {
         if let Some(sim) = c.as_mut().and_then(|c| c.sim.as_mut()) {
-            if sim.pm_type == crate::spectate::PmType::Normal {
-                let v = rt.client_vitals(slot);
-                sim.health = v.health;
-                sim.max_health = v.max_health;
-                if v.dead {
-                    if !sim.dead {
-                        died.push(slot);
-                    }
-                    sim.die();
-                } else {
-                    sim.dead = false;
-                }
+            if mirror_vitals_of(sim, rt, slot) {
+                died.push(slot);
             }
         }
     }
     died
+}
+
+/// [`mirror_vitals`] for one client: whether it saw the death first.
+fn mirror_vitals_of(sim: &mut ClientSim, rt: &script::ScriptRuntime, slot: usize) -> bool {
+    if sim.pm_type != crate::spectate::PmType::Normal {
+        return false;
+    }
+    let v = rt.client_vitals(slot);
+    sim.health = v.health;
+    sim.max_health = v.max_health;
+    if !v.dead {
+        sim.dead = false;
+        return false;
+    }
+    let first = !sim.dead;
+    sim.die();
+    first
 }
 
 /// One `WeaponOp` against a client's playerstate. The op is an edge the
@@ -1367,17 +1390,24 @@ impl Server {
             }
             // `Cmd_Kill_f`: the same death `self suicide()` gives, asked for
             // by the client. The retail hit capture's death half is this
-            // command (combat doc, section 8). Queued rather than run: it
-            // starts `CodeCallback_PlayerKilled`, and script runs in the
-            // tick's script slot on the tick's clock.
-            "kill" => self
-                .pending_script_commands
-                .push((slot, ScriptCommand::Kill)),
+            // command (combat doc, section 8). `SV_ExecuteClientMessage`
+            // (0x80872ec) runs a packet's client commands ahead of its
+            // usercmds, so the move pass runs it ahead of the cmds that came
+            // with it (combat doc, 9.2).
+            "kill" => {
+                if let Some(c) = self.clients[slot].as_mut() {
+                    let after = c
+                        .pending
+                        .last()
+                        .map_or(c.last_processed_st, |m| m.server_time);
+                    c.kill_after.get_or_insert(after);
+                }
+            }
             // `Cmd_MenuResponse_f`: the client answering a menu `openMenu`
             // opened. Unlike the entry notify this fires straight through:
             // nothing is armed by it, and a notify no thread is parked on is
-            // simply lost, which is what retail does too. Queued with `kill`,
-            // since the notify releases threads.
+            // simply lost, which is what retail does too. Queued, since the
+            // notify releases threads.
             "mr" => {
                 if let Some((index, response)) =
                     parse_menu_response(trimmed, i32::from(self.server_id))
@@ -3137,9 +3167,6 @@ impl Server {
             // advanced, which is what a `cloneplayer` in it needs.
             for (slot, cmd) in queued {
                 match cmd {
-                    ScriptCommand::Kill => {
-                        rt.kill_client(slot, self.sv_time_ms);
-                    }
                     ScriptCommand::MenuResponse(index, response) => {
                         rt.menu_response(slot, index, &response)
                     }
@@ -3176,10 +3203,43 @@ impl Server {
                     }
                 }
                 match s.mode {
-                    SpawnMode::Player => sim.become_player(s.origin, s.yaw_deg, cmd_angles),
-                    SpawnMode::Spectator => sim.become_spectator(s.origin, s.yaw_deg, cmd_angles),
+                    SpawnMode::Player => {
+                        sim.become_player(s.origin, s.yaw_deg, cmd_angles);
+                        if let Some(w) = self.world.as_ref() {
+                            sim.spawn_move(
+                                vcod_common::movetrace::MoveWorld::bare(&w.collision),
+                                self.sv_time_ms,
+                            );
+                        }
+                        // `ClientSpawn` runs inside `self spawn()`, ahead of
+                        // the loadout the script gives after it, so the
+                        // think animates empty hands.
+                        if let Some(anims) = self.anims.as_deref() {
+                            let index = sim.ps.weapon as usize;
+                            sim.update_anims(
+                                &crate::spectate::AnimInputs {
+                                    anims,
+                                    weapon: crate::items::item_name(index).unwrap_or_default(),
+                                    weapon_class: self.weapon_table.class(index),
+                                },
+                                &vcod_common::net::msg::NULL_USERCMD,
+                                self.sv_time_ms,
+                                &[],
+                                &mut self.rng,
+                            );
+                        }
+                    }
+                    SpawnMode::Spectator => {
+                        sim.become_spectator(s.origin, s.yaw_deg, cmd_angles);
+                        if let Some(w) = self.world.as_ref() {
+                            sim.spawn_move(
+                                vcod_common::movetrace::MoveWorld::bare(&w.collision),
+                                self.sv_time_ms,
+                            );
+                        }
+                    }
                     SpawnMode::Intermission => {
-                        sim.become_intermission(s.origin, s.yaw_deg, cmd_angles)
+                        sim.become_intermission(s.origin, s.yaw_deg, cmd_angles, self.sv_time_ms)
                     }
                 }
                 // The spawn's own think runs a player or a spectator up to
@@ -3578,12 +3638,20 @@ impl Server {
         loop {
             let mut split = false;
             let mut touched: Vec<Touched> = Vec::new();
+            // The `kill`s due ahead of each client's next cmd, run after the
+            // round's touch pass the way a use press splits one.
+            let mut kills: Vec<usize> = Vec::new();
             for (slot, m) in moved.iter_mut().enumerate() {
                 let Some(c) = self.clients[slot].as_mut() else {
                     continue;
                 };
                 let Some(sim) = c.sim.as_mut() else {
+                    c.kill_after = None;
                     continue;
+                };
+                // Past the `kill`'s place in the stream.
+                let past = |kill: Option<i32>, cmd: &UserCmd| {
+                    kill.is_some_and(|t| cmd.server_time.wrapping_sub(t) > 0)
                 };
                 // What the client held going in, so a switch the machine made is
                 // told apart from a playerstate reset between ticks.
@@ -3598,6 +3666,9 @@ impl Server {
                 let mut events = Vec::new();
                 while !c.pending.is_empty() {
                     let cmd = c.pending[0];
+                    if past(c.kill_after, &cmd) {
+                        break;
+                    }
                     if m.processed >= MAX_CMDS_PER_TICK {
                         // The resync keeps the newest two cmds and sets the base
                         // as if only the last replays, so the penultimate may
@@ -3726,6 +3797,13 @@ impl Server {
                         break;
                     }
                 }
+                if c.kill_after.is_some()
+                    && c.pending.first().is_none_or(|cmd| past(c.kill_after, cmd))
+                {
+                    c.kill_after = None;
+                    kills.push(slot);
+                    split |= !c.pending.is_empty();
+                }
                 if sim.ps.weapon != held {
                     self.weapon_changes.push((slot, sim.ps.weapon));
                 }
@@ -3793,6 +3871,40 @@ impl Server {
                             crate::game::turret::mount_sim(sim, turret, stance, view);
                         }
                     }
+                }
+                // `Cmd_Kill_f`, and what it did to the sim before the cmds
+                // behind it run: the drop takes the weapon they switch away
+                // from, and `EV_DEATH` goes on the ring ahead of their events.
+                // `pm_type` stays until the end frame, so they still move
+                // alive (combat doc, 9.2).
+                for slot in kills {
+                    let Some(c) = self.clients[slot].as_mut() else {
+                        continue;
+                    };
+                    let st = c.last_processed_st;
+                    let Some(sim) = c.sim.as_mut() else { continue };
+                    // What `cloneplayer` and the dropped cook read.
+                    rt.set_client_entity_state(slot, Some(sim.to_entity(self.proto, slot, st)));
+                    rt.set_client_grenade_ms(slot, sim.ps.grenade_time_left_ms);
+                    if !rt.kill_client(slot, now_ms) {
+                        continue;
+                    }
+                    let (weapon_ops, sim_ops) = rt.take_ops_of(slot);
+                    for op in weapon_ops {
+                        apply_weapon_op(sim, op, &weapons);
+                    }
+                    for op in sim_ops {
+                        apply_sim_op(
+                            sim,
+                            op,
+                            self.anims.as_deref(),
+                            &weapons,
+                            &mut self.rng,
+                            now_ms,
+                        );
+                    }
+                    mirror_weapons_of(sim, rt, slot);
+                    mirror_vitals_of(sim, rt, slot);
                 }
             }
             if !split {
@@ -4009,6 +4121,13 @@ impl Server {
                         if let (true, Some(last)) = (slot < t, ts.end_frame_wire.as_ref()) {
                             follow::before_end_frame(&mut ps, last, self.proto);
                         }
+                        // `P_DamageFeedback`'s `EV_PAIN` is that end frame's too.
+                        if let (true, Some(ring)) = (slot < t, ts.ring_before_pain) {
+                            ring.write(&mut |name, v| {
+                                let i = msg::PlayerState::field_index(self.proto, name).unwrap();
+                                ps.fields[i] = v;
+                            });
+                        }
                         (ps, ts.eye_origin(), false)
                     }
                 };
@@ -4038,6 +4157,7 @@ impl Server {
             sim.end_frame_wire = sim
                 .own_view
                 .then(|| sim.to_wire(self.proto, slot as i32, command_time));
+            sim.ring_before_pain = None;
         }
 
         // `SV_BuildClientSnapshot` reads each client's `archivetime` again and
@@ -7163,12 +7283,21 @@ mod tests {
         rig.script().host.client_vitals[1].health = 100;
         rig.script().set_client_weapon(1, 9);
         rig.sim_mut(1).ps.velocity = glam::Vec3::new(120.0, 0.0, 0.0);
+        rig.sim_mut(1).ps.ducked = true;
         rig.press(msg::BUTTON_ATTACK);
         let copy = rig.step(0);
         assert_eq!((copy.ps.health(), ps_i32(&copy, "weapon")), (100, 9));
+        assert_eq!(ps_i32(&copy, "pm_flags"), 0x10000 | 0x2);
         let stop = rig.step(msg::BUTTON_ADS);
         assert_eq!(ps_i32(&stop, "clientNum"), 0);
         assert_eq!(ps_i32(&stop, "pm_type"), 4);
+        // `StopFollowing` takes 0x10020 off the copy's flags and leaves the
+        // rest (0x46bb1), and `SetClientViewAngle` pitches the view down 15,
+        // which the stop cmd's own `PM_UpdateViewAngles` keeps: retail's stop
+        // frame read pitch 15.
+        assert_eq!(ps_i32(&stop, "pm_flags"), 0x2);
+        let pitch = stop.ps.field_f32(&PROTOCOL_V1, "viewangles[0]");
+        assert!((pitch - 15.0).abs() < 0.01, "{pitch}");
         let vx = stop.ps.field_f32(&PROTOCOL_V1, "velocity[0]");
         assert!(
             vx > 0.0 && vx < 120.0,
@@ -7222,6 +7351,38 @@ mod tests {
         assert_eq!(s.ps.health(), 0);
         assert_eq!(ps_i32(&s, "pm_type"), 0);
         assert_eq!(ps_i32(&rig.step(0), "pm_type"), 6);
+    }
+
+    /// `P_DamageFeedback` puts `EV_PAIN` on the ring inside the target's own
+    /// end frame, so a follower below it copies the ring without it and sees
+    /// the pain a frame late (spectator-follow doc, 5).
+    #[test]
+    fn a_follower_below_its_target_sees_its_pain_a_frame_late() {
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        let seq = ps_i32(&rig.step(0), "eventSequence");
+        rig.script().host.client_vitals[1].health = 67;
+        rig.script().host.client_vitals[1].max_health = 100;
+        rig.script().host.client_sim_ops.push((
+            1,
+            crate::game::host::SimOp::Damaged {
+                damage: 33,
+                point: FOLLOW_P1,
+                dir: [1.0, 0.0, 0.0],
+                knockback: false,
+                attacker: Some(2),
+                attacker_origin: Some(FOLLOW_P2),
+                fatal: false,
+            },
+        ));
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 1);
+        assert_eq!(s.ps.health(), 67);
+        assert_eq!(ps_i32(&s, "eventSequence"), seq, "the pain rode early");
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "eventSequence"), seq + 1);
+        assert_eq!(ps_i32(&s, &format!("events[{}]", seq & 3)), 187);
+        assert_eq!(ps_i32(&s, &format!("eventParms[{}]", seq & 3)), 67);
     }
 
     /// `ClientSpawn` runs the spawned client's own `ClientEndFrame`

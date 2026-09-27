@@ -667,6 +667,115 @@ fn the_kill_command_suicides_a_player() {
     );
 }
 
+/// The `kill` death frame, field for field against retail's. Retail runs a
+/// packet's client commands ahead of its usercmds, and those cmds still read
+/// the `pm_type` 0 the last end frame wrote: the carbine the death dropped
+/// goes down to empty hands with `EV_RAISE_WEAPON` behind `EV_DEATH`, and the
+/// eye target is still the standing one. The `dm` hit-target capture reads
+/// `events=189,155` and `eventSequence` 2 off 0 on all three deaths; the
+/// three-probe follow run read `weapon` 0 and `viewHeightTarget` 60 there and
+/// 8 a frame later (`cod11-spectator-follow.md` 5 and 11).
+#[test]
+fn the_kill_commands_death_frame_is_retails() {
+    use vcod_common::net::msg::NULL_USERCMD;
+
+    let Some(fs) = vcod_common::testing::game_fs() else {
+        eprintln!("COD_DIR unset or has no main/: skipping");
+        return;
+    };
+    let bsp_path = fs.resolve_map(MAP).expect("map in the mounted paks");
+    let bsp = vcod_common::bsp::parse(&fs.read(&bsp_path).unwrap()).unwrap();
+    let mut now = Instant::now();
+    let mut sv = vcod_server::Server::new(cfg(), now);
+    sv.load_world(vcod_server::world::World::from_bsp(&bsp, Some(&fs)));
+    sv.load_scripts(Rc::new(fs)).expect("load the scripts");
+    let qa = Rc::new(RefCell::new(Queues::default()));
+    let qb = Rc::new(RefCell::new(Queues::default()));
+    let (mut ca, mut cb) = common::join_pair(
+        &mut sv,
+        &qa,
+        &qb,
+        &mut now,
+        ("allies", "m1carbine_mp"),
+        ("allies", "m1carbine_mp"),
+    );
+    let p = &PROTOCOL_V1;
+    let carbine = vcod_server::configstrings::weapon_index("m1carbine_mp").unwrap() as u8;
+    // The byte a retail client sends: the weapon it holds.
+    let holding = vcod_common::net::msg::UserCmd {
+        weapon: carbine,
+        ..NULL_USERCMD
+    };
+    let mut step = |sv: &mut vcod_server::Server, ca: &mut _, cb: &mut _| {
+        now += Duration::from_millis(50);
+        common::step_pair(sv, (&qa, ca), (&qb, cb), now)
+    };
+    for _ in 0..40 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&holding);
+        step(&mut sv, &mut ca, &mut cb);
+    }
+    let alive = cb.snapshots().newest().unwrap().clone();
+    assert_eq!(alive.ps.field_i32(p, "weapon"), i32::from(carbine));
+    let seq = alive.ps.field_i32(p, "eventSequence");
+
+    cb.send_reliable("kill");
+    ca.send_frame(&NULL_USERCMD);
+    cb.send_frame(&holding);
+    step(&mut sv, &mut ca, &mut cb);
+    let death = cb.snapshots().newest().unwrap().clone();
+    assert_eq!(death.ps.field_i32(p, "pm_type"), 6, "the kill's own frame");
+    assert_eq!(death.ps.health(), 0);
+    let event = |s: &vcod_common::net::snapshot::Snapshot, at: i32| {
+        s.ps.field_i32(p, &format!("events[{}]", at & 3))
+    };
+    assert_eq!(death.ps.field_i32(p, "eventSequence"), seq + 2);
+    assert_eq!(
+        (event(&death, seq), event(&death, seq + 1)),
+        (189, 155),
+        "EV_DEATH, then the disarm's EV_RAISE_WEAPON"
+    );
+    assert_eq!(death.ps.field_i32(p, "weapon"), 0);
+    assert_eq!(death.ps.field_i32(p, "viewHeightTarget"), 60);
+    assert_eq!(death.ps.field_f32(p, "viewHeightCurrent"), 60.0);
+
+    ca.send_frame(&NULL_USERCMD);
+    cb.send_frame(&holding);
+    step(&mut sv, &mut ca, &mut cb);
+    let after = cb.snapshots().newest().unwrap();
+    assert_eq!(after.ps.field_i32(p, "viewHeightTarget"), 8);
+    assert!(after.ps.field_f32(p, "viewHeightCurrent") < 60.0);
+    assert_eq!(after.ps.field_i32(p, "eventSequence"), seq + 2);
+
+    // The respawn frame already carries the standing idle: every respawn in
+    // the capture reads `legsAnim` 634 on its first frame (combat doc, 9.2).
+    for _ in 0..50 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&holding);
+        step(&mut sv, &mut ca, &mut cb);
+    }
+    let use_ = vcod_common::net::msg::UserCmd {
+        buttons: vcod_common::net::msg::BUTTON_USE,
+        ..holding
+    };
+    let mut respawn = None;
+    for _ in 0..40 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&use_);
+        step(&mut sv, &mut ca, &mut cb);
+        let s = cb.snapshots().newest().unwrap();
+        if s.ps.field_i32(p, "pm_type") == 0 {
+            respawn = Some(s.clone());
+            break;
+        }
+    }
+    let respawn = respawn.expect("B never respawned");
+    assert_eq!(respawn.ps.health(), 100);
+    assert_eq!(respawn.ps.field_i32(p, "eventSequence"), 0);
+    assert_eq!(respawn.ps.field_i32(p, "legsAnim"), 634);
+    assert_eq!(sv.script_aborts(), Vec::<String>::new());
+}
+
 /// `Weapon_Melee` (combat doc, 2.5): a swing at a player inside 64 units
 /// traces the same way a bullet does, spawns an `EV_MELEE_HIT` temp entity
 /// naming the victim, and hurts it for `meleeDamage + rand()%5` through the

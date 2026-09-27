@@ -231,9 +231,16 @@ pub struct ClientSim {
     /// frame; the host is where the script's `self.health` lands.
     pub health: i32,
     pub max_health: i32,
-    /// Killed and not yet respawned: `PM_DEAD` on the wire, the dead move,
-    /// no weapon step, no feedback.
+    /// Killed and not yet respawned: no entity, no feedback, no anims.
     pub dead: bool,
+    /// `ps.pm_type > 5` as the last end frame wrote it off `dead`
+    /// (`ClientEndFrame` 0x41079): the wire's `PM_DEAD` and what the cmds
+    /// read, so the cmds a death lands ahead of still run the live move
+    /// (`docs/research/cod11-combat.md` 9.2).
+    pm_dead: bool,
+    /// The last move ran the dead arm, whose `PM_CheckDuck` targets
+    /// `deadViewHeight`.
+    dead_eye: bool,
     /// `linkTo`'s record, `gentity_t+0x2e4`. Not `linked()`, which is about
     /// whether the other clients are sent an entity for this one.
     pub link_to: Option<Link>,
@@ -309,6 +316,14 @@ pub struct ClientSim {
     /// This client's own frame as its last `ClientEndFrame` left it, `None`
     /// since a spawn, whose own end frame is this frame's.
     pub end_frame_wire: Option<msg::PlayerState>,
+    /// The ring as it stood before this frame's end frame put `EV_PAIN` on
+    /// it, which a follower numbered below this client copies; `None` on a
+    /// frame without one. Dropped after the frame's snapshots.
+    pub ring_before_pain: Option<EventRing>,
+    /// The intermission camera's `ps.commandTime`: `ClientSpawn` puts it
+    /// 100 ms behind the spawn's frame and nothing on that arm moves it
+    /// (`docs/research/cod11-spectator-follow.md` 13).
+    frozen_command_time: Option<i32>,
 }
 
 /// A stopped follow's copy, under the fields a spectator's own frame writes.
@@ -325,7 +340,6 @@ struct Residue {
 const SPECTATOR_OWNED: &[&str] = &[
     "commandTime",
     "clientNum",
-    "pm_flags",
     "origin[0]",
     "origin[1]",
     "origin[2]",
@@ -418,6 +432,8 @@ impl ClientSim {
             health: 0,
             max_health: 0,
             dead: false,
+            pm_dead: false,
+            dead_eye: false,
             damage: DamageAccum::default(),
             feedback: DamageFeedback::default(),
             dead_yaw: 0,
@@ -445,6 +461,8 @@ impl ClientSim {
             follow_wire: None,
             residue: None,
             end_frame_wire: None,
+            ring_before_pain: None,
+            frozen_command_time: None,
         }
     }
 
@@ -490,6 +508,7 @@ impl ClientSim {
         self.hud_cleared = true;
         if !playing {
             self.dead = true;
+            self.pm_dead = true;
             self.contents = 0;
             self.relink();
         }
@@ -504,8 +523,16 @@ impl ClientSim {
     /// The third mode, through the same `self spawn(origin, angles)`:
     /// `spawnIntermission()` parks the client at the map's intermission
     /// point for the level's last ten seconds (map-cycle doc, section 6).
-    pub fn become_intermission(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
+    /// `now_ms` is the spawn's frame.
+    pub fn become_intermission(
+        &mut self,
+        origin: [f32; 3],
+        yaw_deg: f32,
+        cmd_angles: [i32; 3],
+        now_ms: i32,
+    ) {
         self.respawn(PmType::Intermission, origin, yaw_deg, cmd_angles);
+        self.frozen_command_time = Some(now_ms.wrapping_sub(SPAWN_THINK_MS as i32));
         self.spawn_think(None);
         // `ClientSpawn` zeroes the whole `gclient_t` and `ClientEndFrame`'s
         // intermission arm never copies `ent->health` back into the
@@ -536,7 +563,7 @@ impl ClientSim {
     /// `ps.pm_type` as the wire carries it. The touch pass gates on it, so it
     /// is read outside `to_wire` too.
     pub fn wire_pm_type(&self) -> i32 {
-        match (self.pm_type, self.dead) {
+        match (self.pm_type, self.pm_dead) {
             (PmType::Normal, true) if self.link_to.is_some() => PM_DEAD_LINKED,
             (PmType::Normal, false) if self.link_to.is_some() => PM_NORMAL_LINKED,
             (PmType::Normal, true) => PM_DEAD,
@@ -573,6 +600,8 @@ impl ClientSim {
         // `ClientSpawn`'s memset: the damage fields read 0 again after a
         // respawn (combat doc, 8.4), and so does the dead yaw.
         self.dead = false;
+        self.pm_dead = false;
+        self.dead_eye = false;
         self.damage = DamageAccum::default();
         self.feedback = DamageFeedback::default();
         self.dead_yaw = 0;
@@ -602,6 +631,7 @@ impl ClientSim {
         self.follow_wire = None;
         self.residue = None;
         self.end_frame_wire = None;
+        self.frozen_command_time = None;
         // `G_SetClientContents`, then the spawn's link.
         self.contents = if mode == PmType::Normal {
             CONTENTS_BODY
@@ -616,7 +646,7 @@ impl ClientSim {
     /// the caller moves up to the frame's clock. The intermission arm runs no
     /// pmove and a dead one keeps the flag, so only a live or spectating spawn
     /// loses `PMF_RESPAWNED` here; a dead one's eye drops those 100 ms. The
-    /// live arm's own 100 ms of null-cmd pmove is not run.
+    /// live arm's 100 ms of null-cmd pmove is [`Self::spawn_move`].
     fn spawn_think(&mut self, world: Option<MoveWorld<'_>>) {
         // The spawn's own `ClientEndFrame` (0x42a75) ahead of the think: its
         // playing and dead arm gives the client its own view at once.
@@ -628,10 +658,34 @@ impl ClientSim {
                     for dt in [pmove::MAX_FRAME_MS, SPAWN_THINK_MS - pmove::MAX_FRAME_MS] {
                         pmove::dead_move(&mut self.ps, &w, dt / 1000.0);
                     }
+                    self.dead_eye = true;
                 }
             }
             _ => self.respawned = false,
         }
+    }
+
+    /// The live and spectating arms of the spawn's own think, which
+    /// `spawn_think` leaves to a caller with a world: 100 ms of pmove up to
+    /// `now_ms` on a cmd with no buttons and no move, whose angles are the
+    /// negated `delta_angles` (`ClientSpawn` 0x42a2f..0x42a69), so the spawn
+    /// frame's `viewangles` read 0. It is what puts the standing idle on a
+    /// player's spawn frame (combat doc, 9.2). `pers.cmd` is not that cmd, so
+    /// the client's own angles stay what `set_view_angle` rebases on.
+    pub fn spawn_move(&mut self, world: MoveWorld<'_>, now_ms: i32) {
+        if self.pm_type == PmType::Intermission || self.pm_dead {
+            return;
+        }
+        let cmd = UserCmd {
+            server_time: now_ms,
+            angles: self.delta_angles.map(|a| a.wrapping_neg() & 0xffff),
+            ..msg::NULL_USERCMD
+        };
+        let own = self.last_cmd_angles;
+        for (step, dt) in cmd::chop(now_ms.wrapping_sub(SPAWN_THINK_MS as i32), &cmd) {
+            self.step(&step, dt, Some(world), &[]);
+        }
+        self.last_cmd_angles = own;
     }
 
     /// `ClientEndFrame`'s contents write, once per frame before `end_frame`.
@@ -825,9 +879,10 @@ impl ClientSim {
         // A dead player's view is frozen and its body falls and slides;
         // nothing it presses reaches the mover or the weapon (combat doc,
         // 1.12 and 6, the `pm_type > 5` returns).
-        if self.dead {
+        if self.pm_dead {
             if let Some(w) = world {
                 pmove::dead_move(&mut self.ps, &w, dt);
+                self.dead_eye = true;
             }
             // `PM_Weapon`'s `pm_type > 5` arm, behind its `PMF_RESPAWNED`
             // return (0x390ee..0x390fe).
@@ -866,6 +921,7 @@ impl ClientSim {
                 )
             }
             (PmType::Normal, Some(w)) => {
+                self.dead_eye = false;
                 // The cmds see the link the last frame's script left, so the
                 // linking frame's run free and the unlinking frame's linked
                 // (object-model doc, 23.2).
@@ -1211,6 +1267,9 @@ impl ClientSim {
     /// left. A dead player's feedback never runs, so the killing hit leaves
     /// all four fields as the last surviving hit left them (8.4).
     pub fn end_frame(&mut self, now_ms: i32) {
+        // `ClientEndFrame` writes `pm_type` (0x41079) ahead of its
+        // `P_DamageFeedback` call (0x41128).
+        self.pm_dead = self.dead;
         if self.dead || self.damage.taken <= 0 || self.max_health <= 0 {
             return;
         }
@@ -1237,6 +1296,7 @@ impl ClientSim {
         }
         self.kick.time_ms = now_ms.wrapping_sub(20);
         if now_ms.wrapping_sub(self.pain_after_ms) > 0 {
+            self.ring_before_pain = Some(self.ring);
             let percent = (self.health as f32 * 100.0 / self.max_health as f32) as i32;
             self.add_event(EV_PAIN, percent.clamp(0, 100));
             self.pain_after_ms = now_ms.wrapping_add(PAIN_DEBOUNCE_MS);
@@ -1421,7 +1481,10 @@ impl ClientSim {
             w.fields[msg::PlayerState::field_index(p, name).unwrap()] = v;
         };
         set("clientNum", client_num);
-        set("commandTime", command_time);
+        set(
+            "commandTime",
+            self.frozen_command_time.unwrap_or(command_time),
+        );
         // Mode-dependent.
         set("pm_type", self.wire_pm_type());
         // The stance bits ride only on a live player's word; a spectator and
@@ -1450,7 +1513,7 @@ impl ClientSim {
             // `PM_CheckDuck` (cgame 0x30009de0) targets `deadViewHeight` for
             // `pm_type >= 6`; the client re-derives it, so this only keeps the
             // wire honest.
-            let target = if self.dead {
+            let target = if self.dead_eye {
                 pmove::VIEW_DEAD
             } else {
                 self.ps.stance.view_height()
@@ -1516,7 +1579,7 @@ impl ClientSim {
             // The stance lerp's stamp; the dead eye's drop is not one.
             set(
                 "viewHeightLerpTime",
-                if self.dead {
+                if self.dead_eye {
                     0
                 } else {
                     self.view_lerp_start.unwrap_or(0)
@@ -1640,17 +1703,15 @@ impl ClientSim {
         {
             set(axis, self.ps.velocity[i].to_bits() as i32);
         }
-        // A player's `viewangles` is on the wire, a spectator's is not, and
-        // the split is measured on both sides: docs/protocol-1.1.md,
-        // "View angles". The client rebuilds the view from
-        // `delta_angles` either way, so it is the delta that always travels.
-        if player {
-            for (i, axis) in ["viewangles[0]", "viewangles[1]", "viewangles[2]"]
-                .iter()
-                .enumerate()
-            {
-                set(axis, self.view_angles[i].to_bits() as i32);
-            }
+        // Every mode's: `PM_UpdateViewAngles` writes it for a `pm_type`
+        // below 5, and a spawn's `SetClientViewAngle` is all the
+        // intermission camera and a dead player keep (docs/protocol-1.1.md,
+        // "View angles").
+        for (i, axis) in ["viewangles[0]", "viewangles[1]", "viewangles[2]"]
+            .iter()
+            .enumerate()
+        {
+            set(axis, self.view_angles[i].to_bits() as i32);
         }
         for (i, axis) in ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"]
             .iter()
@@ -1684,11 +1745,13 @@ impl ClientSim {
 
 impl Residue {
     /// The copy with `own`'s [`SPECTATOR_OWNED`] fields written over it, its
-    /// `pm_type` and `speed` once a cmd has flown, and its `eFlags` with the
-    /// mount bits cleared (0x46b8c) and the teleport bit the sim flips.
+    /// `pm_type` and `speed` once a cmd has flown, its `pm_flags` less the
+    /// follow and ADS bits (0x46bb1), and its `eFlags` with the mount bits
+    /// cleared (0x46b8c) and the teleport bit the sim flips.
     fn under(&self, own: msg::PlayerState, p: &Protocol) -> msg::PlayerState {
         let idx = |name| msg::PlayerState::field_index(p, name).unwrap();
         let mut w = self.wire.clone();
+        w.fields[idx("pm_flags")] &= !(crate::follow::PMF_FOLLOW | pmove::weapon::PMF_ADS);
         let flown: &[&str] = if self.moved {
             &["pm_type", "speed"]
         } else {
@@ -1798,7 +1861,7 @@ mod tests {
         sim.max_health = 100;
         assert!(sim.linked(), "a live player is linked");
 
-        sim.become_intermission([384.0, -624.0, 184.0], 90.0, NULL_USERCMD.angles);
+        sim.become_intermission([384.0, -624.0, 184.0], 90.0, NULL_USERCMD.angles, 60050);
         let at = sim.ps.origin;
         let forward = UserCmd {
             forward: 127,
@@ -1815,8 +1878,18 @@ mod tests {
         assert_eq!(sim.ps.origin, at, "the intermission camera moved");
         assert!(!sim.linked(), "the intermission camera is linked");
 
-        let w = sim.to_wire(p, 0, 0);
+        let w = sim.to_wire(p, 0, 60150);
         assert_eq!(w.field_i32(p, "pm_type"), PM_INTERMISSION);
+        // Where the spawn put it, 100 ms behind its frame, whatever the cmds
+        // since: the retail intermission run reads 59950 at 60050 to 60150.
+        assert_eq!(w.field_i32(p, "commandTime"), 59950);
+        // The spawn's view, whatever the cmds turned: `PM_UpdateViewAngles`
+        // returns at `pm_type` 5, and the map-change capture reads 0, 90 on
+        // every intermission frame.
+        let view: Vec<f32> = (0..3)
+            .map(|i| f32::from_bits(w.field_i32(p, &format!("viewangles[{i}]")) as u32))
+            .collect();
+        assert_eq!(view, [0.0, 90.0, 0.0]);
         assert_eq!(w.field_i32(p, "eFlags"), 24);
         assert_eq!(w.health(), 0, "the spawn's memset is never written back");
         assert_eq!(w.field_i32(p, "eventSequence"), 0);
@@ -1864,7 +1937,7 @@ mod tests {
         sim.become_player([0.0, 0.0, 8.0], 0.0, NULL_USERCMD.angles);
         assert_eq!(pm_flags(&sim), PMF_OWN_VIEW);
 
-        sim.become_intermission([384.0, -624.0, 184.0], 90.0, NULL_USERCMD.angles);
+        sim.become_intermission([384.0, -624.0, 184.0], 90.0, NULL_USERCMD.angles, 0);
         assert_eq!(pm_flags(&sim), PMF_RESPAWNED);
     }
 
@@ -2500,28 +2573,32 @@ mod tests {
     /// `spawn_delta_angles` that put the yaw in the wrong slot must fail here
     /// as well.
     ///
-    /// A spectator's `viewangles` stays unwritten however far its view has
-    /// turned; the player half is
+    /// A spectator's `viewangles` is the same sum a player's is:
+    /// `PM_UpdateViewAngles` takes its normal arm below `pm_type` 5
+    /// (docs/protocol-1.1.md, "View angles"); the player half is
     /// [`a_players_viewangles_carry_the_summed_view`].
     #[test]
-    fn delta_angles_carry_the_spawn_yaw_and_a_spectators_viewangles_stay_unwritten() {
+    fn delta_angles_carry_the_spawn_yaw_into_a_spectators_viewangles() {
         let p = &PROTOCOL_V1;
+        let yaw = |sim: &ClientSim| {
+            f32::from_bits(sim.to_wire(p, 0, 0).field_i32(p, "viewangles[1]") as u32)
+        };
         let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 90.0, NULL_USERCMD.angles);
         let ps = sim.to_wire(p, 0, 0);
         assert_eq!(ps.field_i32(p, "delta_angles[0]"), 0);
         assert_eq!(ps.field_i32(p, "delta_angles[1]"), 16_384);
-        assert_eq!(ps.field_i32(p, "viewangles[0]"), 0);
-        assert_eq!(ps.field_i32(p, "viewangles[1]"), 0);
+        assert_eq!(yaw(&sim), 90.0);
 
-        // The probe that took the capture sends cmd.angles = [0,0,0] and
-        // never moves its view; step must add delta_angles back or the sim
-        // faces 0 instead of the spawn's 90.
+        // A cmd of raw zeros faces the spawn's 90: step must add
+        // delta_angles back.
         sim.step(&cmd(0, 0, 0), 0.05, None, &[]);
         assert_eq!(sim.ps.yaw.to_degrees(), 90.0);
-        // Turning does not put it on the wire either: the two spectator
-        // captures read 0 with `delta_angles[1]` 16384 throughout.
-        sim.step(&cmd(0, 0, 8192), 0.05, None, &[]);
-        assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "viewangles[1]"), 0);
+        assert_eq!(yaw(&sim), 90.0);
+        // A client that subtracts the delta, as every vcod probe does, sends
+        // -16384 for a view of 0 and reads 0 back: the two spectator
+        // captures' zeros beside `delta_angles[1]` 16384.
+        sim.step(&cmd(0, 0, -16_384 & 0xffff), 0.05, None, &[]);
+        assert_eq!(yaw(&sim), 0.0);
     }
 
     /// The player half: a spawned client's `viewangles` is on the wire and is
@@ -2635,6 +2712,7 @@ mod tests {
             ENTITYNUM_NONE as i32
         );
         sim.dead = true;
+        sim.end_frame(0);
         assert_eq!(sim.wire_pm_type(), PM_DEAD_LINKED);
         // A spawn unlinks: `ClientSpawn` calls `G_EntUnlink`.
         sim.become_player([0.0; 3], 0.0, NULL_USERCMD.angles);

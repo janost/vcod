@@ -47,6 +47,10 @@ pub struct Client {
     /// Usercmds received but not yet replayed, oldest first. Bounded so a
     /// flooded client cannot build unbounded latency.
     pub pending: Vec<UserCmd>,
+    /// A `kill` this client sent, as the `serverTime` of the newest cmd
+    /// queued ahead of it: retail runs a packet's client commands before its
+    /// usercmds, so the death lands before the first cmd past this.
+    pub kill_after: Option<i32>,
     /// The last usercmd successfully decoded from this message stream; the
     /// delta base for the next clc_move (`cl->lastUsercmd`). Omitted fields
     /// decode against it, so it commits only after a whole message parses.
@@ -87,6 +91,7 @@ impl Client {
             message_ack: 0,
             last_processed_st: 0,
             pending: Vec::new(),
+            kill_after: None,
             last_cmd: NULL_USERCMD,
             sim: None,
             is_bot: false,
@@ -106,6 +111,7 @@ impl Client {
         self.sim = None;
         self.frames = vec![None; SV_PACKET_BACKUP];
         self.pending.clear();
+        self.kill_after = None;
         self.last_cmd = NULL_USERCMD;
         self.last_processed_st = 0;
     }
@@ -120,6 +126,7 @@ impl Client {
         self.sim = None;
         self.frames = vec![None; SV_PACKET_BACKUP];
         self.pending.clear();
+        self.kill_after = None;
     }
 
     /// The frame sent as `message_num`, if still in the ring.

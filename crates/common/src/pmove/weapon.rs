@@ -728,18 +728,21 @@ fn pickup(ps: &mut PlayerState, weapons: &[Option<WeaponDef>], events: &mut Vec<
     // The two arms are exclusive and each writes `weapAnim` once: the same
     // weapon back in hand goes idle, a different one raises. The capture's
     // `to_frag` counts the toggle flips that prove it (section 1.14).
-    let raising = ps.weapon != old;
-    if let (true, Some(def)) = (raising, weapon_def(weapons, ps.weapon)) {
-        ps.weaponstate = WEAPON_RAISING;
-        ps.weapon_time_ms = ms(def.raise_time);
-        // A weapon coming up starts with the cone wide open (section 1.8).
-        ps.aim_spread_scale = 255.0;
-        set_anim(ps, WEAP_RAISE);
-        push(events, EV_RAISE_WEAPON);
+    if ps.weapon == old {
+        ps.weaponstate = WEAPON_READY;
+        set_anim(ps, WEAP_IDLE);
         return;
     }
-    ps.weaponstate = WEAPON_READY;
-    set_anim(ps, WEAP_IDLE);
+    // Empty hands raise too, on weapon 0's `raiseTime` of 0. The event keys
+    // off the weapon that went down, not the one coming up (section 1.8).
+    ps.weaponstate = WEAPON_RAISING;
+    ps.weapon_time_ms = weapon_def(weapons, ps.weapon).map_or(0, |d| ms(d.raise_time));
+    // A weapon coming up starts with the cone wide open (section 1.8).
+    ps.aim_spread_scale = 255.0;
+    set_anim(ps, WEAP_RAISE);
+    if old != 0 {
+        push(events, EV_RAISE_WEAPON);
+    }
 }
 
 /// The other half of the ladder rule. Retail's pickup takes `cmd.weapon`, so a
@@ -1404,10 +1407,18 @@ mod tests {
             weapon: 1,
             ..Default::default()
         };
+        // The change to 0 raises empty hands, and the event with it: the
+        // retail grenade capture's `throw_down` moves `eventSequence` by one
+        // 155 on the frame `weapon` reads 0.
+        let mut ev = Vec::new();
+        while ps.weapon != 0 {
+            ev.extend(step(&mut ps, &w, &asks_for_the_frag, 1));
+        }
+        assert_eq!(ev, vec![EV_RAISE_WEAPON]);
         step(&mut ps, &w, &asks_for_the_frag, 40);
-        // A change to 0 happens and stays there while the client keeps asking
-        // for a weapon it does not own: the retail grenade capture's
-        // `idle_after` reads `weapon` 0 under exactly that input.
+        // It stays there while the client keeps asking for a weapon it does
+        // not own: the retail grenade capture's `idle_after` reads `weapon` 0
+        // under exactly that input.
         assert_eq!(ps.weapon, 0);
         assert_eq!(ps.weaponstate, WEAPON_READY);
 
@@ -1416,9 +1427,13 @@ mod tests {
             ..Default::default()
         };
         let ev = step(&mut ps, &w, &asks_for_the_carbine, 1);
-        // Weapon 0 has no drop time, so the raise lands on the same frame.
-        assert_eq!(ev, vec![EV_RAISE_WEAPON]);
+        // Weapon 0 has no drop time, so the raise lands on the same frame,
+        // and a raise out of empty hands raises no event: both retail swaps
+        // of the pickup capture read `weapon` 0 to the new one with
+        // `eventSequence` unmoved.
+        assert!(ev.is_empty(), "{ev:?}");
         assert_eq!(ps.weapon, 2);
+        assert_eq!(ps.weaponstate, WEAPON_RAISING);
         step(&mut ps, &w, &asks_for_the_carbine, 20);
         assert_eq!(ps.weaponstate, WEAPON_READY);
         assert_eq!(
@@ -1985,13 +2000,15 @@ mod tests {
         ps.on_ladder = true;
         assert_eq!(run(&mut ps, &w, false, 1), vec![EV_PUTAWAY_WEAPON]);
         assert_eq!(ps.weaponstate, WEAPON_DROPPING);
-        run(&mut ps, &w, false, 14);
+        assert_eq!(run(&mut ps, &w, false, 14), vec![EV_RAISE_WEAPON]);
         assert_eq!(ps.weapon, 0, "0.67 s of dropTime and the hands are empty");
+        run(&mut ps, &w, false, 1);
         assert_eq!(ps.weaponstate, WEAPON_READY);
         // Nothing happens for as long as the climb lasts.
         assert!(run(&mut ps, &w, false, 20).is_empty());
         ps.on_ladder = false;
-        assert_eq!(run(&mut ps, &w, false, 1), vec![EV_RAISE_WEAPON]);
+        // Out of empty hands: no event.
+        assert!(run(&mut ps, &w, false, 1).is_empty());
         assert_eq!(ps.weapon, 1);
         assert_eq!(ps.weaponstate, WEAPON_RAISING);
     }
