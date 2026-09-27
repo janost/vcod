@@ -362,6 +362,7 @@ fn follow_end_frame(
     rt: &mut script::ScriptRuntime,
     archive: &crate::archive::Archive,
     collision: Option<&vcod_common::collision::CollisionWorld>,
+    now: i32,
 ) {
     use crate::archive::Source;
     let Some(sim) = clients[slot].as_ref().and_then(|c| c.sim.as_ref()) else {
@@ -377,10 +378,13 @@ fn follow_end_frame(
             let cmd_angles = c.last_cmd.angles;
             let sim = c.sim.as_mut().unwrap();
             // The copy is still the playerstate, whose `clientNum` is not
-            // this client's: `ClientSpawn` at its feet and yaw (0x40f82).
+            // this client's: `ClientSpawn` at its feet and yaw (0x40f82),
+            // whose own think runs the client up to the frame's clock.
             if let (true, Some(copied)) = (sim.follow.on, sim.follow.copied) {
                 let playing = session.state == follow::SessionState::Playing;
-                sim.spawn_from_copy(&copied, playing, cmd_angles);
+                let world = collision.map(vcod_common::movetrace::MoveWorld::bare);
+                sim.spawn_from_copy(&copied, playing, cmd_angles, world);
+                c.last_processed_st = now;
                 rt.engine_client_spawn(slot, copied.origin, copied.angles[1]);
             }
             sim.own_view = true;
@@ -3174,6 +3178,11 @@ impl Server {
                         sim.become_intermission(s.origin, s.yaw_deg, cmd_angles)
                     }
                 }
+                // The spawn's own think runs a player or a spectator up to
+                // the frame's clock; the intermission arm runs no pmove.
+                if s.mode != SpawnMode::Intermission {
+                    c.last_processed_st = self.sv_time_ms;
+                }
             }
             // The machine's own switches first: `pickup` writes `ps.weapon`
             // when a drop ends, and the mirror below would put the old
@@ -3266,7 +3275,14 @@ impl Server {
             // and a higher slot's from the last one, as retail's loop does.
             let collision = self.world.as_ref().map(|w| &w.collision);
             for slot in 0..self.clients.len() {
-                follow_end_frame(&mut self.clients, slot, rt, &self.archive, collision);
+                follow_end_frame(
+                    &mut self.clients,
+                    slot,
+                    rt,
+                    &self.archive,
+                    collision,
+                    self.sv_time_ms,
+                );
                 let Some(sim) = self.clients[slot].as_mut().and_then(|c| c.sim.as_mut()) else {
                     continue;
                 };
@@ -7081,7 +7097,10 @@ mod tests {
         assert_eq!(ps_i32(&s, "clientNum"), 0);
         assert_eq!(ps_i32(&s, "pm_type"), 6);
         assert_eq!(ps_i32(&s, "pm_flags") & 0x70000, 0x40000);
-        assert_eq!(s.ps.origin(&PROTOCOL_V1), last.ps.origin(&PROTOCOL_V1));
+        // Horizontally: the rig has no floor under the copy for the spawn's
+        // dead think to settle on.
+        let (o, l) = (s.ps.origin(&PROTOCOL_V1), last.ps.origin(&PROTOCOL_V1));
+        assert_eq!(o[..2], l[..2]);
         assert_eq!(ps_i32(&s, "deltaTime"), 0);
         let s = rig.step(0);
         assert_eq!(ps_i32(&s, "pm_type"), 6);

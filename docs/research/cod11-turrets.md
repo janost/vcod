@@ -1468,8 +1468,9 @@ What it lets through, each a `GAPS` line in the gate:
 - The killing round's impact at 34950 lands about 4 units nearer the gun
   along the ray than retail's: ours (1517, 1612), VERIFIED retail (1514,
   1609) at fixture line 1068. The wounding round's at 34900 enters one
-  truncation step lower in x and y (ours 1517, 1611; retail 1518, 1612 at
-  line 1057). The victim was
+  truncation step lower in y (ours 1518, 1611; retail 1518, 1612 at
+  line 1057); ours read (1517, 1611) until the spawn's own think ran each
+  client up to the frame's clock (`cod11-spectator-follow.md` 13). The victim was
   knocked back by the round before, and neither half of the capture carries
   its origin, so whether the knockback or the pose differs is open.
 - The crouch release's one-unit drop: at 38900 ours reads grounded 0.2 above

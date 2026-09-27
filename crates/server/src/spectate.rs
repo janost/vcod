@@ -27,6 +27,9 @@ const PMF_OWN_VIEW: i32 = 0x40000;
 /// at `pm_type` 5 or below without attack held
 /// (docs/research/cod11-spectator-follow.md, 13).
 const PMF_RESPAWNED: i32 = 0x800;
+/// How far behind the frame `ClientSpawn` puts `commandTime` before its own
+/// think runs the client up to it (0x42a48).
+const SPAWN_THINK_MS: f32 = 100.0;
 
 /// Stance bits in `eFlags` and `pm_flags`, measured off the retail server
 /// under each input (`crates/server/tests/fixtures/playerstate/*-motion.txt`):
@@ -402,7 +405,7 @@ impl ClientSim {
     /// caller must supply the real value rather than assume zero.
     pub fn become_player(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
         self.respawn(PmType::Normal, origin, yaw_deg, cmd_angles);
-        self.spawn_think();
+        self.spawn_think(None);
     }
 
     /// The other half of the same builtin: `spawnSpectator()` parks a client
@@ -410,7 +413,7 @@ impl ClientSim {
     /// angles)`, so a spectator moves for exactly the reasons a player does.
     pub fn become_spectator(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
         self.respawn(PmType::Spectator, origin, yaw_deg, cmd_angles);
-        self.spawn_think();
+        self.spawn_think(None);
         // As the intermission camera below: the spectator arm copies no
         // health either, so a player parked as a spectator after a death
         // reads 0 where its entity still holds 100 (the retail round-restart
@@ -423,12 +426,14 @@ impl ClientSim {
     /// playerstate is still a follow's copy is spawned at the copy's feet and
     /// yaw. The copy's `eFlags` are what the spawn flips the teleport bit of,
     /// and a dead one's own end frame takes the dead arm, so it is a dead
-    /// player with no contents (the stock killcam's return to `dead`).
+    /// player with no contents (the stock killcam's return to `dead`), whose
+    /// eye the spawn's own think starts dropping in `world`.
     pub fn spawn_from_copy(
         &mut self,
         copied: &crate::follow::Copied,
         playing: bool,
         cmd_angles: [i32; 3],
+        world: Option<MoveWorld<'_>>,
     ) {
         self.teleport_bit = copied.teleport_bit;
         self.respawn(PmType::Normal, copied.origin, copied.angles[1], cmd_angles);
@@ -438,7 +443,7 @@ impl ClientSim {
             self.contents = 0;
             self.relink();
         }
-        self.spawn_think();
+        self.spawn_think(world);
     }
 
     /// `eFlags` 0x8 as the wire carries it.
@@ -451,7 +456,7 @@ impl ClientSim {
     /// point for the level's last ten seconds (map-cycle doc, section 6).
     pub fn become_intermission(&mut self, origin: [f32; 3], yaw_deg: f32, cmd_angles: [i32; 3]) {
         self.respawn(PmType::Intermission, origin, yaw_deg, cmd_angles);
-        self.spawn_think();
+        self.spawn_think(None);
         // `ClientSpawn` zeroes the whole `gclient_t` and `ClientEndFrame`'s
         // intermission arm never copies `ent->health` back into the
         // playerstate, so the capture's `pm_type=5` traces read health 0
@@ -554,12 +559,23 @@ impl ClientSim {
         self.relink();
     }
 
-    /// `ClientSpawn`'s closing `ClientThink_real` (0x42a82), a cmd with no
-    /// buttons: the intermission arm runs no pmove and a dead one keeps the
-    /// flag, so only a live or spectating spawn loses `PMF_RESPAWNED` here.
-    fn spawn_think(&mut self) {
-        if self.pm_type != PmType::Intermission && !self.dead {
-            self.respawned = false;
+    /// `ClientSpawn`'s closing `ClientThink_real` (0x42a82): a cmd with no
+    /// buttons 100 ms past the `commandTime` the spawn set (0x42a6f), which
+    /// the caller moves up to the frame's clock. The intermission arm runs no
+    /// pmove and a dead one keeps the flag, so only a live or spectating spawn
+    /// loses `PMF_RESPAWNED` here; a dead one's eye drops those 100 ms. The
+    /// live arm's own 100 ms of null-cmd pmove is not run.
+    fn spawn_think(&mut self, world: Option<MoveWorld<'_>>) {
+        match (self.pm_type, self.dead) {
+            (PmType::Intermission, _) => {}
+            (PmType::Normal, true) => {
+                if let Some(w) = world {
+                    for dt in [pmove::MAX_FRAME_MS, SPAWN_THINK_MS - pmove::MAX_FRAME_MS] {
+                        pmove::dead_move(&mut self.ps, &w, dt / 1000.0);
+                    }
+                }
+            }
+            _ => self.respawned = false,
         }
     }
 
@@ -1735,7 +1751,14 @@ mod tests {
             teleport_bit: false,
             frame: None,
         };
-        sim.spawn_from_copy(&copied, false, NULL_USERCMD.angles);
+        sim.spawn_from_copy(
+            &copied,
+            false,
+            NULL_USERCMD.angles,
+            Some(MoveWorld::bare(&world)),
+        );
+        // The think's 100 ms of dead pmove: 60 less 18.
+        assert_eq!(sim.ps.view_height(), 42.0);
         assert_eq!(pm_flags(&sim), PMF_OWN_VIEW | PMF_RESPAWNED);
         let idle = UserCmd {
             server_time: 50,
