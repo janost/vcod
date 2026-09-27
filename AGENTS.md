@@ -625,9 +625,10 @@ engineering setup works.
   what the callback queued for the victim applied to its sim before any
   later cmd runs, so a player one round kills is out of every later round's
   way and its own later cmds still move alive and disarm
-  (`docs/research/cod11-combat.md` 16); then the touch pass, and a
-  `trigger_hurt` death in it lands on the sim the same way; a throw is
-  queued for the missile pass. Every death is `GameHost::die`, whichever
+  (`docs/research/cod11-combat.md` 16); a throw spawns its missile there
+  too, off the muzzle that cmd left and stamped with the frame before, so a
+  thrower a later cmd kills has thrown already (11.4); then the touch pass,
+  and a `trigger_hurt` death in it lands on the sim the same way. Every death is `GameHost::die`, whichever
   path ran it, and right after each callback that can kill returns (a hit's,
   the `kill`'s, the touch pass's, and later the blasts', the script frame's
   and a turret round's) `player_die`'s walk queues the scoreboard to each
@@ -657,9 +658,8 @@ engineering setup works.
   op after, so a `dropItem` in the script frame sees what the pass took. The
   entity states `cloneplayer` reads and the posed bodies a scripted blast
   traces are mirrored again last in that pass. Then each client's last cmd
-  buttons for `useButtonPressed`, then the throws spawn their missiles, off
-  the eye each thrower's last cmd left, then the missiles fly and any due
-  fuse explodes, then the
+  buttons for `useButtonPressed`, then the missiles fly, a throw from this
+  tick's first flight included, and any due fuse explodes, then the
   blasts become hits, then the `mr` menu responses, which the packet pass
   only queues because it runs before the clock advances, then `deliver_hits` for the blasts so their damage
   callback has run before script, then the script frame, then the script's spawns (each with the spawn's own
