@@ -98,11 +98,61 @@ pub const LEAN_MAX: f32 = 28.0; // eye offset in units; roll is lean/2 degrees
 pub const LEAN_TIME_TO_MS: f32 = 340.0;
 pub const LEAN_TIME_FROM_MS: f32 = 350.0;
 
-/// Viewheight lerp times: PM_GetViewHeightLerpTime @0x345B8 (200 ms for the
-/// stand/crouch family) and the bg_duck2prone_time/bg_prone2duck_time
-/// defaults (400, docs/research/cod11-server-handshake.md).
-pub const VIEW_LERP_MS: f32 = 200.0;
-pub const VIEW_LERP_PRONE_MS: f32 = 400.0;
+/// The eye's lerp times in ms, per leg (`PM_ViewHeightAdjust` 0x309d8,
+/// docs/research/cod11-mantle.md, "The eye through a stance change"): the
+/// `bg_duck2prone_time`/`bg_prone2duck_time` defaults into and out of prone,
+/// and the immediates of the other legs.
+const VIEW_LERP_PRONE_MS: i32 = 400;
+const VIEW_LERP_DIVE_MS: i32 = 200;
+const VIEW_LERP_DUCK_MS: i32 = 150;
+const VIEW_LERP_DIVE_DUCK_MS: i32 = 100;
+const VIEW_LERP_STAND_MS: i32 = 200;
+
+/// The eye's curve per leg, `(percent, height)` waypoints from `.data`
+/// 0x7c730..0x7c8f0; the third word of each record, an origin offset, is 0
+/// throughout.
+const VIEW_CURVE_STAND_CROUCH: &[(i32, f32)] = &[
+    (0, 60.0),
+    (1, 59.5),
+    (4, 58.5),
+    (30, 56.0),
+    (80, 44.0),
+    (90, 41.5),
+    (95, 40.5),
+    (100, 40.0),
+];
+const VIEW_CURVE_CROUCH_STAND: &[(i32, f32)] = &[
+    (0, 40.0),
+    (5, 40.5),
+    (10, 41.5),
+    (20, 44.0),
+    (70, 56.0),
+    (96, 58.5),
+    (99, 59.5),
+    (100, 60.0),
+];
+const VIEW_CURVE_CROUCH_PRONE: &[(i32, f32)] = &[
+    (0, 40.0),
+    (11, 38.0),
+    (22, 33.0),
+    (34, 25.0),
+    (45, 16.0),
+    (50, 15.0),
+    (55, 16.0),
+    (70, 18.0),
+    (90, 17.0),
+    (100, 11.0),
+];
+const VIEW_CURVE_DIVE_PRONE: &[(i32, f32)] = &[(0, 40.0), (100, 11.0)];
+const VIEW_CURVE_PRONE_CROUCH: &[(i32, f32)] = &[
+    (0, 11.0),
+    (5, 10.0),
+    (30, 21.0),
+    (50, 25.0),
+    (67, 31.0),
+    (83, 34.0),
+    (100, 40.0),
+];
 
 /// Prone tunables, from the retail server: `bg_prone_yawcap` 85 and
 /// `bg_prone_softyawedge` 1 are cvars, the 55 deg/s swing rate and the
@@ -368,8 +418,9 @@ pub struct PlayerState {
     /// Eased eye height; trails `stance.view_height()` after a stance change
     /// (retail lerps the view while the bbox snaps).
     view_height_cur: f32,
-    /// Lerp pace in units/s, fixed per transition when the stance flips.
-    view_height_speed: f32,
+    /// Milliseconds into the eye's current leg, retail's `cmd.serverTime -
+    /// viewHeightLerpTime`; `None` while no leg runs (`viewHeightLerpTime` 0).
+    view_lerp_ms: Option<i32>,
     /// Retail's `pm_flags` 0x2: set on entering a crouch, cleared on standing,
     /// and left alone by prone, so a prone entered from a crouch carries it
     /// and one entered from standing does not (both measured,
@@ -501,7 +552,7 @@ impl PlayerState {
             ground_surface_flags: 0,
             air_speed_peak: 0.0,
             view_height_cur: Stance::Stand.view_height(),
-            view_height_speed: 0.0,
+            view_lerp_ms: None,
             ducked: false,
             // Retail leaves the target at 0 until the first stance change.
             view_lerp_target: 0.0,
@@ -559,6 +610,12 @@ impl PlayerState {
     /// Whether the eye has caught up with the stance it is easing towards.
     pub fn view_height_settled(&self) -> bool {
         (self.view_height_cur - self.stance.view_height()).abs() < 0.01
+    }
+
+    /// `viewHeightLerpTime` for a playerstate whose `commandTime` is
+    /// `server_time`: the time the running leg began, or 0.
+    pub fn view_lerp_stamp(&self, server_time: i32) -> i32 {
+        self.view_lerp_ms.map_or(0, |ms| server_time - ms)
     }
 
     /// Eye and angles with the lean offset; roll = lean/2 degrees (RTCW).
@@ -864,8 +921,9 @@ pub fn dead_move(ps: &mut PlayerState, world: &MoveWorld, dt: f32) {
         air_move(ps, &idle, world, dt, MASK_DEADSOLID, None);
     }
     ground_trace(ps, world, MASK_DEADSOLID);
-    ps.view_height_speed = DEAD_VIEW_LERP_SPEED;
-    let step = ps.view_height_speed * dt;
+    // A target no stance has drops any leg and moves at a flat rate (0x30a84).
+    ps.view_lerp_ms = None;
+    let step = DEAD_VIEW_LERP_SPEED * dt;
     let gap = VIEW_DEAD - ps.view_height_cur;
     ps.view_height_cur += gap.clamp(-step, step);
     // `pm_type` 6 takes the default arm, tail and snap included.
@@ -1130,31 +1188,179 @@ fn update_stance(ps: &mut PlayerState, input: &PmInput, world: &MoveWorld, dt: f
         }
     }
 
-    // The bbox snaps; the eye eases. PM_GetViewHeightLerpTime (@0x345B8):
-    // 200 ms stand/crouch family, the 400 ms bg_duck2prone_time/
-    // bg_prone2duck_time defaults into and out of prone.
     if ps.stance != before {
         match ps.stance {
             Stance::Crouch => ps.ducked = true,
             Stance::Stand => ps.ducked = false,
             Stance::Prone => {}
         }
-        ps.view_lerp_target = ps.stance.view_height();
-        ps.view_lerp_down = ps.stance.view_height() < before.view_height();
-        // A dive drops the eye in 200 ms, not 400 (`PM_GetViewHeightLerpTime`
-        // 0x345b8 on `pm_flags` 0x4).
-        let ms = if ps.stance == Stance::Prone && ps.prone_dive {
-            VIEW_LERP_MS
-        } else if ps.stance == Stance::Prone || before == Stance::Prone {
-            VIEW_LERP_PRONE_MS
-        } else {
-            VIEW_LERP_MS
-        };
-        ps.view_height_speed = (ps.stance.view_height() - ps.view_height_cur).abs() / ms * 1000.0;
     }
-    let step = ps.view_height_speed * dt;
-    let gap = ps.stance.view_height() - ps.view_height_cur;
-    ps.view_height_cur += gap.clamp(-step, step);
+    // The bbox snaps; the eye eases.
+    view_height_adjust(ps, (dt * 1000.0).round() as i32);
+}
+
+/// Retail's `PM_ViewHeightAdjust` (0x309d8), called at the end of
+/// `PM_CheckDuck`: the eye walks a curve per leg, and a leg only ever spans
+/// neighbouring stances, so standing to prone is two legs through the crouch
+/// height (docs/research/cod11-mantle.md, "The eye through a stance change").
+fn view_height_adjust(ps: &mut PlayerState, msec: i32) {
+    let target = ps.stance.view_height();
+    let mut pct = 0;
+    if let Some(ms) = ps.view_lerp_ms.as_mut() {
+        *ms += msec;
+        pct = (*ms * 100 / view_lerp_duration(ps)).clamp(0, 100);
+        if pct == 100 {
+            ps.view_height_cur = ps.view_lerp_target;
+            ps.view_lerp_ms = None;
+        } else {
+            ps.view_height_cur = view_curve_height(view_curve(ps), pct);
+        }
+    }
+    if ps.view_lerp_ms.is_some() {
+        if target == ps.view_lerp_target {
+            return;
+        }
+        let reverses = if ps.view_lerp_down {
+            target > ps.view_lerp_target
+        } else {
+            target < ps.view_lerp_target
+        };
+        if !reverses {
+            return;
+        }
+        // Turn back mid-leg: the same stretch of the other leg's clock.
+        pct = 100 - pct;
+        ps.view_lerp_down = !ps.view_lerp_down;
+        let t = ps.view_lerp_target;
+        ps.view_lerp_target = match (ps.view_lerp_down, t) {
+            (true, VIEW_STAND) => VIEW_CROUCH,
+            (true, VIEW_CROUCH) => VIEW_PRONE,
+            (false, VIEW_PRONE) => VIEW_CROUCH,
+            (false, VIEW_CROUCH) => VIEW_STAND,
+            _ => t,
+        };
+        if pct == 100 {
+            ps.view_height_cur = ps.view_lerp_target;
+            ps.view_lerp_ms = None;
+        } else {
+            // x87 product of the int percent, the float 0.01 at rodata
+            // 0x70bcc and the int duration, truncated (0x312a5-0x312c6).
+            let into = f64::from(pct) * f64::from(0.01f32) * f64::from(view_lerp_duration(ps));
+            ps.view_lerp_ms = Some(into as i32);
+        }
+        return;
+    }
+    if target == ps.view_height_cur {
+        return;
+    }
+    ps.view_lerp_ms = Some(0);
+    let cur = ps.view_height_cur;
+    (ps.view_lerp_down, ps.view_lerp_target) = match ps.stance {
+        Stance::Prone => (
+            true,
+            if cur > VIEW_CROUCH {
+                VIEW_CROUCH
+            } else {
+                VIEW_PRONE
+            },
+        ),
+        Stance::Crouch => (cur > VIEW_CROUCH, VIEW_CROUCH),
+        Stance::Stand => (
+            false,
+            if cur < VIEW_CROUCH {
+                VIEW_CROUCH
+            } else {
+                VIEW_STAND
+            },
+        ),
+    };
+}
+
+/// The running leg's length (the duration pick at 0x30b46-0x30b98, the same
+/// as `PM_GetViewHeightLerpTime` 0x345b8).
+fn view_lerp_duration(ps: &PlayerState) -> i32 {
+    match (ps.view_lerp_target, ps.view_lerp_down, ps.prone_dive) {
+        (VIEW_PRONE, _, true) => VIEW_LERP_DIVE_MS,
+        (VIEW_PRONE, _, false) => VIEW_LERP_PRONE_MS,
+        (VIEW_CROUCH, true, true) => VIEW_LERP_DIVE_DUCK_MS,
+        (VIEW_CROUCH, true, false) => VIEW_LERP_DUCK_MS,
+        (VIEW_CROUCH, false, _) => VIEW_LERP_PRONE_MS,
+        _ => VIEW_LERP_STAND_MS,
+    }
+}
+
+fn view_curve(ps: &PlayerState) -> &'static [(i32, f32)] {
+    match (ps.view_lerp_target, ps.view_lerp_down, ps.prone_dive) {
+        (VIEW_PRONE, _, true) => VIEW_CURVE_DIVE_PRONE,
+        (VIEW_PRONE, _, false) => VIEW_CURVE_CROUCH_PRONE,
+        (VIEW_CROUCH, true, _) => VIEW_CURVE_STAND_CROUCH,
+        (VIEW_CROUCH, false, _) => VIEW_CURVE_PRONE_CROUCH,
+        _ => VIEW_CURVE_CROUCH_STAND,
+    }
+}
+
+/// The eye at `pct` of a leg: linear between the waypoints either side.
+fn view_curve_height(curve: &[(i32, f32)], pct: i32) -> f32 {
+    let Some(i) = curve.iter().position(|&(p, _)| p >= pct) else {
+        return curve[0].1;
+    };
+    let (p1, h1) = curve[i];
+    if p1 == pct || i == 0 {
+        return h1;
+    }
+    let (p0, h0) = curve[i - 1];
+    let t = f64::from(pct - p0) / f64::from(p1 - p0);
+    (f64::from(h0) + t * f64::from(h1 - h0)) as f32
+}
+
+/// Retail's stance for the walk's scale and accel and the jump's gate, one
+/// test inlined three times (0x2e7a1, 0x2f436, 0x2ebc8): the eye's leg counts
+/// as much as the flags, so a player standing up out of prone keeps prone's
+/// accel and cannot jump until the eye reaches the crouch height.
+fn move_stance(ps: &PlayerState) -> Stance {
+    let lerping = ps.view_lerp_ms.is_some();
+    if ps.stance == Stance::Prone
+        || ps.view_lerp_target == VIEW_PRONE
+        || (lerping && ps.view_lerp_target == VIEW_CROUCH && !ps.view_lerp_down)
+    {
+        Stance::Prone
+    } else if ps.ducked || (lerping && ps.view_lerp_target == VIEW_CROUCH) {
+        Stance::Crouch
+    } else {
+        Stance::Stand
+    }
+}
+
+/// How far the running leg has come from `from` toward `to`, 0..1, or 0 when
+/// that is not the leg running (0x308cc).
+fn view_lerp_frac(ps: &PlayerState, from: f32, to: f32) -> f32 {
+    let Some(ms) = ps.view_lerp_ms else {
+        return 0.0;
+    };
+    if to != ps.view_lerp_target {
+        return 0.0;
+    }
+    let from_ok =
+        (from == VIEW_PRONE && !ps.view_lerp_down) || (from == VIEW_STAND && ps.view_lerp_down);
+    if to == VIEW_CROUCH && !from_ok {
+        return 0.0;
+    }
+    (ms as f32 / view_lerp_duration(ps) as f32).clamp(0.0, 1.0)
+}
+
+/// The walk scale's stance factor (0x2e7a1-0x2e8d2): across a leg between
+/// crouch and prone the two scales blend by the leg's progress, otherwise
+/// [`move_stance`]'s own.
+fn stance_speed_scale(ps: &PlayerState) -> f32 {
+    let f = view_lerp_frac(ps, VIEW_CROUCH, VIEW_PRONE);
+    if f != 0.0 {
+        return f * SCALE_PRONE + (1.0 - f) * SCALE_CROUCH;
+    }
+    let f = view_lerp_frac(ps, VIEW_PRONE, VIEW_CROUCH);
+    if f != 0.0 {
+        return f * SCALE_CROUCH + (1.0 - f) * SCALE_PRONE;
+    }
+    move_stance(ps).speed_scale()
 }
 
 /// RTCW `bg_pmove.c` `PM_UpdateLean`. Differences: leans while moving (no
@@ -1461,14 +1667,14 @@ fn friction(ps: &mut PlayerState, on_ladder: bool, dt: f32) {
 /// `speed * max / (127 * total)` over the cmd bytes, with a backpedal read
 /// through `backSpeedScale` and a strafe through `strafeSpeedScale` before
 /// the max is taken, then `walkSpeedScale` on the ADS walk and otherwise
-/// `runSpeedScale` with `leanSpeedScale` on a lean, the stance scale, the
-/// wade scale and the weapon's `moveSpeedScale`. The cmd magnitude then
+/// `runSpeedScale` with `leanSpeedScale` on a lean, the stance scale
+/// ([`stance_speed_scale`]), the wade scale and the weapon's `moveSpeedScale`. The cmd magnitude then
 /// multiplies back in, so a lone full key wishes `SPEED_RUN` and a diagonal
 /// wishes no more (docs/research/cod11-mantle.md, "The wish speed").
 ///
 /// `walk_slow` is the client's own fly-mode key and takes the walk scale.
-/// Not ported: the crouch-to-prone blend across the eye lerp, and the
-/// `wbuttons` 0x4 factor (0.4, rodata 0x70894), which no measured key sets.
+/// Not ported: the `wbuttons` 0x4 factor (0.4, rodata 0x70894), which no
+/// measured key sets.
 fn wish(ps: &PlayerState, input: &PmInput, weapon: Option<&WeaponDef>) -> (Vec3, f32) {
     let (f, r) = (input.forward * 127.0, input.right * 127.0);
     let max = if f < 0.0 { -f * SCALE_BACK } else { f }.max(r.abs() * SCALE_STRAFE);
@@ -1482,7 +1688,7 @@ fn wish(ps: &PlayerState, input: &PmInput, weapon: Option<&WeaponDef>) -> (Vec3,
     } else if ps.lean != 0.0 {
         scale *= SCALE_LEAN;
     }
-    scale *= ps.stance.speed_scale();
+    scale *= stance_speed_scale(ps);
     scale *= 1.0 - ps.water_level as f32 / 3.0 * WADE_SCALE;
     if let Some(w) = weapon.filter(|w| w.move_speed_scale > 0.0) {
         scale *= w.move_speed_scale;
@@ -1611,7 +1817,7 @@ fn walk_move(
         return;
     }
     let (dir, wishspeed) = wish(ps, input, weapon);
-    let mut accel = match ps.stance {
+    let mut accel = match move_stance(ps) {
         Stance::Stand => PM_ACCELERATE,
         Stance::Crouch => PM_DUCKED_ACCELERATE,
         Stance::Prone => PM_PRONE_ACCELERATE,
@@ -1845,9 +2051,8 @@ fn check_jump(
     ladder: Option<Vec3>,
     events: &mut Vec<PmEvent>,
 ) -> bool {
-    // Retail's stance gates are pm_flags 0x1 and 0x2 and two eye-lerp
-    // targets; vcod's stance snaps, so all four reduce to this.
-    if ps.since_jump_ms <= JUMP_COOLDOWN_MS - 1.0 || ps.stance != Stance::Stand || !input.jump {
+    if ps.since_jump_ms <= JUMP_COOLDOWN_MS - 1.0 || move_stance(ps) != Stance::Stand || !input.jump
+    {
         return false;
     }
     if ps.jump_latched {
@@ -2523,37 +2728,43 @@ mod tests {
         }
     }
 
-    /// Stance changes ease the eye instead of snapping: 200 ms for the
-    /// stand/crouch family, 400 ms into/out of prone
-    /// (PM_GetViewHeightLerpTime @0x345B8; bg_duck2prone_time/
-    /// bg_prone2duck_time default 400, docs/research/cod11-server-handshake.md).
+    /// Standing to prone is two legs of the eye, 150 ms down to the crouch
+    /// height and 400 ms on along a curve that dips to 15 at half way, and the
+    /// walk scale is prone's through the first and blends from crouch's
+    /// through the second (docs/research/cod11-mantle.md, "The eye through a
+    /// stance change"; the street capture's sideways press is the evidence).
     #[test]
-    fn viewheight_lerps_on_stance_change() {
+    fn a_prone_press_walks_the_eye_through_the_crouch_height() {
         let w = flat();
         let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         tick(&mut ps, &PmInput::default(), &w, 50); // settle on the ground
         assert_eq!(ps.view_height(), VIEW_STAND);
 
-        let crouch = PmInput {
-            crouch: true,
-            ..PmInput::default()
-        };
-        tick(&mut ps, &crouch, &w, 12); // ~100 ms: partway down
-        let mid = ps.view_height();
-        assert!(mid < VIEW_STAND - 2.0 && mid > VIEW_CROUCH + 2.0, "{mid}");
-        tick(&mut ps, &crouch, &w, 14); // ~200 ms total: settled
-        assert_eq!(ps.view_height(), VIEW_CROUCH);
-
         let prone = PmInput {
             prone: true,
             ..PmInput::default()
         };
-        tick(&mut ps, &prone, &w, 25); // ~200 ms: prone runs at the 400 ms pace
-        let mid = ps.view_height();
-        assert!(mid > VIEW_PRONE + 2.0 && mid < VIEW_CROUCH, "{mid}");
-        tick(&mut ps, &prone, &w, 26); // ~400 ms total
+        tick(&mut ps, &prone, &w, 1);
+        assert_eq!(
+            (ps.view_lerp_target, ps.view_lerp_down),
+            (VIEW_CROUCH, true)
+        );
+        assert_eq!(stance_speed_scale(&ps), SCALE_PRONE);
+        tick(&mut ps, &prone, &w, 19); // 152 ms: the crouch leg is done
+        assert_eq!(
+            (ps.view_lerp_target, ps.view_lerp_ms),
+            (VIEW_PRONE, Some(0))
+        );
+        assert_eq!(ps.view_height(), VIEW_CROUCH);
+        tick(&mut ps, &prone, &w, 25); // 200 ms into the prone leg
+        assert_eq!(ps.view_height(), 15.0);
+        let half = SCALE_PRONE * 0.5 + SCALE_CROUCH * 0.5;
+        assert!((stance_speed_scale(&ps) - half).abs() < 1e-6);
+        tick(&mut ps, &prone, &w, 25);
         assert_eq!(ps.view_height(), VIEW_PRONE);
+        assert_eq!(ps.view_lerp_ms, None);
+        assert_eq!(stance_speed_scale(&ps), SCALE_PRONE);
     }
 
     /// `movementDir` is the legs' heading off the view, which the player
@@ -3739,6 +3950,7 @@ mod tests {
         let w = MoveWorld::bare(&w);
         let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
         ps.stance = Stance::Crouch;
+        ps.ducked = true;
         let crouched = PmInput {
             forward: 1.0,
             crouch: true,
@@ -4251,6 +4463,7 @@ mod tests {
         let mk = |stance: Stance| {
             let mut ps = PlayerState::spawn(Vec3::ZERO, 0.0);
             ps.stance = stance;
+            ps.ducked = stance == Stance::Crouch;
             ps.since_jump_ms = 10000.0;
             ps
         };

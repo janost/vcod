@@ -773,13 +773,9 @@ impl ClientSim {
                         self.view_angles[i] = capped[i];
                     }
                 }
-                // The stamp is the serverTime the lerp began, so it is taken
-                // on the frame the eye first trails its target.
-                self.view_lerp_start = if self.ps.view_height_settled() {
-                    None
-                } else {
-                    self.view_lerp_start.or(Some(cmd.server_time))
-                };
+                // The stamp is the serverTime the eye's running leg began.
+                let stamp = self.ps.view_lerp_stamp(cmd.server_time);
+                self.view_lerp_start = (stamp != 0).then_some(stamp);
                 // The fire event's parm is vcod's internal fuse channel, and
                 // `eventParms[i]` is 8 bits: a 4000 ms fuse would reach a
                 // client as 160 where retail writes 0.
