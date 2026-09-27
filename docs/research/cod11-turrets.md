@@ -1376,9 +1376,10 @@ may carry 0xC000; no capture covers it.
   `inflictor->s.weapon` on, and the gun's `s.weapon` is
   `mg42_bipod_stand_mp` (section 11), so the inflictor `G_Damage` saw was
   not the gun, whatever `Bullet_Fire` was handed at 0x522f1.
-- A round stops at the first player it hits. The pass-through 12.5 shows (a
-  second impact on the world behind the target) is not modelled, the same as
-  for a carried rifle's round.
+- A round goes on through each player it hits at half damage, the same as
+  a carried rifle's (`cod11-combat.md` 2.4, step 5), so the second impact
+  12.5 shows on the world behind the target is raised here too; 13.1's
+  replay reads it at retail's (1248, 1308) and (1248, 1312).
 - The hit-location product is taken wider than a float before the
   truncation, as the x87 takes it: `60 * 0.9` reads 53 as in 12.6, where a float
   product rounds to 54 first.
@@ -1459,8 +1460,6 @@ read.
 
 What it lets through, each a `GAPS` line in the gate:
 
-- The target phase's second impact behind the target at 34900 and 34950:
-  the pass-through above.
 - The kill snapshot, 34950: VERIFIED (12.5), retail's carries the victim's
   entity with the `EV_PAIN` (parm 47) the round before raised; INFERRED
   (12.5), copied in the victim's own `ClientEndFrame` ahead of the gunner's. Ours builds entity states at the
@@ -1569,8 +1568,8 @@ plays on the frame after that, the same two-frame shape 12.4 reads.
 
 VERIFIED, D5/D6: the target phase's two hitting rounds land at (1517,
 1611) and (1516, 1612), each about a unit off retail's (1518, 1612) --
-the truncation-step difference 13.1 already attributes to the pass-through
-gap, reproduced here rather than newly found. The kill's `EV_OBITUARY`
+the truncation-step difference 13.1 already attributes to where the round
+enters the posed bone box, reproduced here rather than newly found. The kill's `EV_OBITUARY`
 (201) rides the same snapshot as the killing round's fire event, as 12.5
 reads; the wounding round's `EV_PAIN` on the victim's own entity does not
 reach the gunner's snapshot, the entity-state-at-snapshot gap 13.1 already

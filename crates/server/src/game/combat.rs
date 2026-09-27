@@ -206,12 +206,16 @@ pub struct Hit {
     pub hitloc: &'static str,
 }
 
+#[derive(Default)]
 pub struct ShotResult {
-    /// The impact event of a wall hit or of a melee swing. `None` when the
-    /// bullet hit nothing, a surface that asks for no impact, or a player:
-    /// a bullet's flesh impacts are `finishPlayerDamage`'s ([`flesh_impacts`]).
-    pub impact: Option<TempEntity>,
-    pub hit: Option<Hit>,
+    /// The impact event of a wall hit or of a melee swing. Empty when the
+    /// bullet hit nothing, a surface that asks for no impact, or only
+    /// players: a bullet's flesh impacts are `finishPlayerDamage`'s
+    /// ([`flesh_impacts`]).
+    pub impacts: Vec<TempEntity>,
+    /// In the order the round met them: a rifle round goes on through each
+    /// player it hits (combat doc 2.4, step 5).
+    pub hits: Vec<Hit>,
 }
 
 /// `EV_BULLET_HIT_SMALL` / `EV_BULLET_HIT_LARGE`
@@ -228,6 +232,9 @@ const SURF_FLESH: i32 = 7;
 const SURF_NO_IMPACT: u32 = 0x4;
 /// How far a bullet travels: `muzzle + forward * 8192` (combat doc, 2.2).
 const BULLET_RANGE: f32 = 8192.0;
+/// The deepest `Bullet_Fire_Extended` recursion that still traces; the
+/// first call is depth 0 (combat doc, 2.3).
+const MAX_BULLET_DEPTH: i32 = 12;
 
 /// The aim block's wire-convention degrees as the sim's radians: yaw as is,
 /// pitch negated (positive down on the wire, up in the sim).
@@ -314,9 +321,8 @@ pub fn muzzle_point(ps: &PlayerState) -> Vec3 {
 /// (`ClientSim::aim_angles`, combat doc 15), which down a sight is the
 /// swayed gun rather than the view; `weapon_name` is what the callback is
 /// told (`BG_GetInfoForWeapon(weapon)->name`). Damage is `weaponDef.damage`
-/// through the hit-location table with no distance term (2.4). A rifle
-/// round's pass through the first player at half damage (2.4, step 5) is
-/// not modelled: the shot stops at its first hit.
+/// through the hit-location table with no distance term (2.4), halved at
+/// each player a rifle round passes through (2.4, step 5).
 #[allow(clippy::too_many_arguments)]
 pub fn bullet_fire(
     shooter: usize,
@@ -331,12 +337,8 @@ pub fn bullet_fire(
     bones: Option<&mut BoneTraceCtx>,
     rng: &mut u64,
 ) -> ShotResult {
-    let none = ShotResult {
-        impact: None,
-        hit: None,
-    };
     let Some((_, me)) = sims.iter().find(|(slot, _)| *slot == shooter) else {
-        return none;
+        return ShotResult::default();
     };
     let muzzle = muzzle_point(&me.ps);
     let (yaw, pitch) = aim_radians(aim);
@@ -402,7 +404,11 @@ fn located_damage(damage: i32, multiplier: f32) -> i32 {
     (damage as f64 * multiplier as f64) as i32
 }
 
-/// One bullet from `muzzle` to `end`: the trace, the impact and the hit.
+/// One bullet from `muzzle` to `end`: `Bullet_Fire_Extended`'s recursion as
+/// a loop (combat doc, 2.3 and 2.4). A player hit carries `damage` through
+/// the location multiplier; a rifle round then goes on from the hit point
+/// with that player as the pass entity and `damage / 2`, until it meets the
+/// world, nothing, or a halving that leaves no damage.
 #[allow(clippy::too_many_arguments)]
 fn fire_round(
     shooter: usize,
@@ -413,66 +419,77 @@ fn fire_round(
     sims: &[(usize, &ClientSim)],
     world: Option<&CollisionWorld>,
     hitlocs: &HitLocTable,
-    bones: Option<&mut BoneTraceCtx>,
+    mut bones: Option<&mut BoneTraceCtx>,
 ) -> ShotResult {
-    let none = ShotResult {
-        impact: None,
-        hit: None,
-    };
+    let mut out = ShotResult::default();
     let priority = if round.rifle_bullet {
         &RIFLE_PRIORITY
     } else {
         &BULLET_PRIORITY
     };
-    let traced = trace_attack(muzzle, end, shooter, sims, world, priority, bones);
     let event = if round.rifle_bullet {
         EV_BULLET_HIT_LARGE
     } else {
         EV_BULLET_HIT_SMALL
     };
     let (mod_, dflags) = bullet_mod(round.rifle_bullet);
-    match traced {
-        Traced::Player {
-            slot,
-            fraction,
-            hitloc,
-        } => {
-            let point = muzzle + (end - muzzle) * fraction;
-            let damage = located_damage(round.damage, hitlocs.multiplier(hitloc));
-            ShotResult {
+    let (mut start, mut pass, mut damage) = (muzzle, shooter, round.damage);
+    for _ in 0..=MAX_BULLET_DEPTH {
+        match trace_attack(
+            start,
+            end,
+            pass,
+            sims,
+            world,
+            priority,
+            bones.as_deref_mut(),
+        ) {
+            Traced::Player {
+                slot,
+                fraction,
+                hitloc,
+            } => {
+                let point = start + (end - start) * fraction;
                 // `Bullet_Fire_Extended` raises no impact on a client (2.4).
-                impact: None,
-                hit: Some(Hit {
+                out.hits.push(Hit {
                     victim: slot,
                     attacker: shooter,
                     inflictor: None,
-                    damage,
+                    damage: located_damage(damage, hitlocs.multiplier(hitloc)),
                     dflags,
                     mod_,
                     weapon: round.weapon_name.to_string(),
                     point: point.into(),
                     dir: forward.into(),
                     hitloc,
-                }),
+                });
+                damage /= 2;
+                if dflags & DFLAG_PASSTHRU == 0 || damage <= 0 {
+                    break;
+                }
+                (start, pass) = (point, slot);
             }
+            Traced::World(t) => {
+                if t.surface_flags & SURF_NO_IMPACT == 0 {
+                    out.impacts.push(TempEntity {
+                        event,
+                        parm: dir_to_byte(t.normal.into()),
+                        surf_type: sound_material(t.surface_flags),
+                        other: shooter as u32,
+                        attacker: 0,
+                        weapon: 0,
+                        origin: t.endpos.into(),
+                        client_num: 0,
+                        scale: 0,
+                        scope: Scope::Broadcast,
+                    });
+                }
+                break;
+            }
+            Traced::Nothing => break,
         }
-        Traced::World(t) if t.surface_flags & SURF_NO_IMPACT == 0 => ShotResult {
-            impact: Some(TempEntity {
-                event,
-                parm: dir_to_byte(t.normal.into()),
-                surf_type: sound_material(t.surface_flags),
-                other: shooter as u32,
-                attacker: 0,
-                weapon: 0,
-                origin: t.endpos.into(),
-                client_num: 0,
-                scale: 0,
-                scope: Scope::Broadcast,
-            }),
-            hit: None,
-        },
-        _ => none,
     }
+    out
 }
 
 /// The pair `finishPlayerDamage` raises at `point` for a hit with a
@@ -696,12 +713,8 @@ pub fn melee_fire(
     bones: Option<&mut BoneTraceCtx>,
     rng: &mut u64,
 ) -> ShotResult {
-    let none = ShotResult {
-        impact: None,
-        hit: None,
-    };
     let Some((_, me)) = sims.iter().find(|(slot, _)| *slot == attacker) else {
-        return none;
+        return ShotResult::default();
     };
     let muzzle = muzzle_point(&me.ps);
     let (yaw, pitch) = aim_radians(aim);
@@ -723,7 +736,7 @@ pub fn melee_fire(
             let damage = def.melee_damage + (vcod_common::rng::xorshift(rng) % 5) as i32;
             let damage = located_damage(damage, hitlocs.multiplier(hitloc));
             ShotResult {
-                impact: Some(TempEntity {
+                impacts: vec![TempEntity {
                     event: EV_MELEE_HIT,
                     // The bone trace answers no normal. Retail's is the
                     // bone's own, which the melee capture reads as the swing
@@ -737,8 +750,8 @@ pub fn melee_fire(
                     client_num: 0,
                     scale: 0,
                     scope: Scope::Broadcast,
-                }),
-                hit: Some(Hit {
+                }],
+                hits: vec![Hit {
                     victim: slot,
                     attacker,
                     inflictor: None,
@@ -749,13 +762,13 @@ pub fn melee_fire(
                     point: point.into(),
                     dir: forward.into(),
                     hitloc,
-                }),
+                }],
             }
         }
         // A swing that meets nothing still raises the miss: `Weapon_Melee`
         // spawns one of the two events on every path.
         Traced::World(t) => ShotResult {
-            impact: Some(TempEntity {
+            impacts: vec![TempEntity {
                 event: EV_MELEE_MISS,
                 parm: dir_to_byte(t.normal.into()),
                 surf_type: sound_material(t.surface_flags),
@@ -766,11 +779,11 @@ pub fn melee_fire(
                 client_num: 0,
                 scale: 0,
                 scope: Scope::Broadcast,
-            }),
-            hit: None,
+            }],
+            hits: Vec::new(),
         },
         Traced::Nothing => ShotResult {
-            impact: Some(TempEntity {
+            impacts: vec![TempEntity {
                 event: EV_MELEE_MISS,
                 parm: 0,
                 surf_type: 0,
@@ -781,8 +794,8 @@ pub fn melee_fire(
                 client_num: 0,
                 scale: 0,
                 scope: Scope::Broadcast,
-            }),
-            hit: None,
+            }],
+            hits: Vec::new(),
         },
     }
 }
@@ -960,6 +973,11 @@ pub fn radius_damage(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    fn only<'a, T>(v: &'a [T], what: &str) -> &'a T {
+        assert_eq!(v.len(), 1, "{what}");
+        &v[0]
+    }
 
     #[test]
     fn the_flagged_mods_are_the_seven_the_builtin_tags() {
@@ -1142,7 +1160,7 @@ mod tests {
             Some(&mut ctx),
             &mut rng,
         );
-        let hit = r.hit.expect("the shot reached B");
+        let hit = only(&r.hits, "the shot reached B");
         assert_eq!(hit.hitloc, "head");
         assert_eq!(hit.damage, 67, "45 through the head multiplier");
     }
@@ -1157,7 +1175,7 @@ mod tests {
         let def = zero_spread_carbine();
         let mut rng = 1u64;
         let r = fire(&def, &[(0, &a), (1, &b)], &world, &mut rng);
-        let hit = r.hit.expect("the shot reached B");
+        let hit = only(&r.hits, "the shot reached B");
         assert_eq!(hit.victim, 1);
         assert_eq!(hit.attacker, 0);
         assert_eq!(
@@ -1174,13 +1192,13 @@ mod tests {
             hit.point
         );
         assert!((hit.dir[0] - 1.0).abs() < 1e-5);
-        assert!(r.impact.is_none(), "the flesh pair is the callback's");
+        assert!(r.impacts.is_empty(), "the flesh pair is the callback's");
 
         // Looking down: the floor, broadcast, with the floor's material.
         a.ps.pitch = -1.2;
         let r = fire(&def, &[(0, &a), (1, &b)], &world, &mut rng);
-        assert!(r.hit.is_none());
-        let te = r.impact.expect("a wall impact");
+        assert!(r.hits.is_empty());
+        let te = only(&r.impacts, "a wall impact");
         assert_eq!(te.event, 174);
         assert_ne!(te.surf_type, 7);
         assert_eq!(te.scope, Scope::Broadcast);
@@ -1208,7 +1226,7 @@ mod tests {
             &table,
             None,
         );
-        let hit = r.hit.expect("the round reached B");
+        let hit = only(&r.hits, "the round reached B");
         assert_eq!((hit.victim, hit.attacker), (1, 0));
         assert_eq!(hit.inflictor, None);
         assert_eq!(hit.damage, 60);
@@ -1216,7 +1234,7 @@ mod tests {
         assert_eq!(hit.weapon, "m1carbine_mp");
         assert!((hit.point[0] - 85.0).abs() < 0.01, "{:?}", hit.point);
         assert!((hit.point[2] - 40.0).abs() < 0.01, "{:?}", hit.point);
-        assert!(r.impact.is_none(), "the flesh pair is the callback's");
+        assert!(r.impacts.is_empty(), "the flesh pair is the callback's");
     }
 
     /// `G_Damage` multiplies on the x87 stack and truncates (combat doc 4.2):
@@ -1241,15 +1259,15 @@ mod tests {
             Vec3::new(48.0, 64.0, 128.0),
         )]);
         let r = fire(&def, &[(0, &a), (1, &b)], &wall, &mut rng);
-        assert!(r.hit.is_none(), "the wall is nearer than B");
-        assert!(r.impact.is_some_and(|te| (te.origin[0] - 40.0).abs() < 0.2));
+        assert!(r.hits.is_empty(), "the wall is nearer than B");
+        assert!((only(&r.impacts, "the wall impact").origin[0] - 40.0).abs() < 0.2);
 
         let open = vcod_common::collision::test_world(&[]);
         b.dead = true;
         let r = fire(&def, &[(0, &a), (1, &b)], &open, &mut rng);
-        assert!(r.hit.is_none(), "a dead player is not hit again");
+        assert!(r.hits.is_empty(), "a dead player is not hit again");
         assert!(
-            r.impact.is_none(),
+            r.impacts.is_empty(),
             "and the open floor is out of range of a level shot"
         );
 
@@ -1259,11 +1277,56 @@ mod tests {
         m.insert("damage".to_string(), "30".to_string());
         let colt = WeaponDef::from_map(&m);
         let r = fire(&colt, &[(0, &a), (1, &b)], &open, &mut rng);
-        let hit = r.hit.unwrap();
+        let hit = only(&r.hits, "the colt round");
         assert_eq!(
             (hit.mod_, hit.dflags, hit.damage),
             ("MOD_PISTOL_BULLET", 0, 30)
         );
+    }
+
+    /// Combat doc 2.4, step 5: a rifle round goes on from the hit point past
+    /// the player it hit, at half its damage, into the next player and then
+    /// the wall behind; a pistol round stops on the first player, and so
+    /// does a rifle round whose halving leaves nothing.
+    #[test]
+    fn a_rifle_round_passes_through_a_player_at_half_damage_and_a_pistol_round_stops() {
+        let a = new_for_test([0.0, 0.0, 0.0], 0.0);
+        let b = new_for_test([100.0, 0.0, 0.0], 180.0);
+        let c = new_for_test([200.0, 0.0, 0.0], 180.0);
+        let sims = [(0, &a), (1, &b), (2, &c)];
+        let wall = vcod_common::collision::test_world(&[(
+            Vec3::new(300.0, -64.0, 0.0),
+            Vec3::new(308.0, 64.0, 128.0),
+        )]);
+        let mut rng = 1u64;
+
+        let r = fire(&zero_spread_carbine(), &sims, &wall, &mut rng);
+        let got: Vec<(usize, i32)> = r.hits.iter().map(|h| (h.victim, h.damage)).collect();
+        assert_eq!(got, [(1, 45), (2, 22)], "B at full damage, C at 45 / 2");
+        assert!(
+            (r.hits[1].point[0] - 185.0).abs() < 0.01,
+            "{:?}",
+            r.hits[1].point
+        );
+        assert_eq!(
+            r.hits[1].dir, r.hits[0].dir,
+            "both carry the shot's forward"
+        );
+        let te = only(&r.impacts, "the wall behind C");
+        assert_eq!(te.event, 174);
+        assert!((te.origin[0] - 300.0).abs() < 0.2, "{:?}", te.origin);
+
+        let mut m = HashMap::new();
+        m.insert("damage".to_string(), "30".to_string());
+        let r = fire(&WeaponDef::from_map(&m), &sims, &wall, &mut rng);
+        assert_eq!(only(&r.hits, "the colt round").victim, 1);
+        assert!(r.impacts.is_empty(), "the pistol round ends in B");
+
+        let mut weak = zero_spread_carbine();
+        weak.damage = 1;
+        let r = fire(&weak, &sims, &wall, &mut rng);
+        assert_eq!(only(&r.hits, "1 / 2 carries nothing on").victim, 1);
+        assert!(r.impacts.is_empty());
     }
 
     /// Combat doc 4.5: the plain copy carries the direction twice and goes
@@ -1335,12 +1398,12 @@ mod tests {
         };
         let mut rng = 1u64;
         let r = swing(&[(0, &a), (1, &near)], &mut rng);
-        let hit = r.hit.expect("the swing reached B");
+        let hit = only(&r.hits, "the swing reached B");
         assert_eq!(hit.victim, 1);
         assert_eq!(hit.mod_, "MOD_MELEE");
         assert_eq!(hit.dflags, 0);
         assert!((50..55).contains(&hit.damage), "{}", hit.damage);
-        let te = r.impact.expect("the hit event");
+        let te = only(&r.impacts, "the hit event");
         assert_eq!(te.event, EV_MELEE_HIT);
         assert_eq!(te.other, 1, "the hit names the victim");
         assert_eq!(te.surf_type, SURF_FLESH);
@@ -1348,8 +1411,8 @@ mod tests {
         assert_eq!(te.scope, Scope::Broadcast, "the victim is sent it too");
 
         let r = swing(&[(0, &a), (1, &far)], &mut rng);
-        assert!(r.hit.is_none(), "100 units is out of reach");
-        let te = r.impact.expect("the miss event");
+        assert!(r.hits.is_empty(), "100 units is out of reach");
+        let te = only(&r.impacts, "the miss event");
         assert_eq!(te.event, EV_MELEE_MISS);
         assert_eq!(te.other, ENTITYNUM_NONE);
     }
@@ -1380,7 +1443,7 @@ mod tests {
             None,
             &mut rng,
         );
-        let hit = r.hit.expect("the swing reached B");
+        let hit = only(&r.hits, "the swing reached B");
         assert_eq!(hit.damage, located_damage(base, 0.9));
     }
 
