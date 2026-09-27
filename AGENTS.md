@@ -593,9 +593,10 @@ engineering setup works.
   aim trace, releasing back to the gunner's own stance on a second use, a
   kill, or the gun's own deletion. The scriptent mover verbs move things and their trajectories reach the wire
   (`docs/research/cod11-movers.md`). A probe run against it reproduces the
-  retail death capture field for field except for one: the `legsAnim` the
-  respawn frame carries a frame late (`docs/research/cod11-combat.md`
-  section 9). What the
+  retail `kill` death capture field for field, death and respawn frames
+  included; a bullet death's frame still lacks the `EV_RAISE_WEAPON`
+  retail's victim raises in cmds that arrive after the shot
+  (`docs/research/cod11-combat.md` section 9). What the
   map-cycle probes measured of it is `docs/research/cod11-map-cycle.md`
   section 8.
 - The tick, in order: the console drains first (a `map`, `map_restart` or
@@ -648,7 +649,8 @@ engineering setup works.
   only queues because it runs before the clock advances, then `deliver_hits` for the blasts so their damage
   callback has run before script, then the script frame, then the script's spawns (each with the spawn's own
   end frame and think: the own view, `PMF_RESPAWNED` and `commandTime` at
-  the frame's clock), then the switches the weapon
+  the frame's clock, and for a player the think's 100 ms of null-cmd pmove
+  and an anim pick), then the switches the weapon
   machine made (its takes already landed at their cmd's touch, and only
   there), then the weapon mirrors (held, current, viewmodel, the
   body a shot is traced against, and the origin back to script), then the

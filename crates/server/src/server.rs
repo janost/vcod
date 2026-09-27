@@ -3203,7 +3203,32 @@ impl Server {
                     }
                 }
                 match s.mode {
-                    SpawnMode::Player => sim.become_player(s.origin, s.yaw_deg, cmd_angles),
+                    SpawnMode::Player => {
+                        sim.become_player(s.origin, s.yaw_deg, cmd_angles);
+                        if let Some(w) = self.world.as_ref() {
+                            sim.spawn_move(
+                                vcod_common::movetrace::MoveWorld::bare(&w.collision),
+                                self.sv_time_ms,
+                            );
+                        }
+                        // `ClientSpawn` runs inside `self spawn()`, ahead of
+                        // the loadout the script gives after it, so the
+                        // think animates empty hands.
+                        if let Some(anims) = self.anims.as_deref() {
+                            let index = sim.ps.weapon as usize;
+                            sim.update_anims(
+                                &crate::spectate::AnimInputs {
+                                    anims,
+                                    weapon: crate::items::item_name(index).unwrap_or_default(),
+                                    weapon_class: self.weapon_table.class(index),
+                                },
+                                &vcod_common::net::msg::NULL_USERCMD,
+                                self.sv_time_ms,
+                                &[],
+                                &mut self.rng,
+                            );
+                        }
+                    }
                     SpawnMode::Spectator => sim.become_spectator(s.origin, s.yaw_deg, cmd_angles),
                     SpawnMode::Intermission => {
                         sim.become_intermission(s.origin, s.yaw_deg, cmd_angles)

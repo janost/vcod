@@ -935,10 +935,7 @@ const GAPS: &[(&str, &str)] = &[
         "[target] impact t=34900: retail only 174@[1518.0, 1612.0",
         ENTRY_POINT,
     ),
-    (
-        "[target] impact t=34900: ours only 174@[1518.0, 1611.0",
-        ENTRY_POINT,
-    ),
+    ("[target] impact t=34900: ours only 174@[151", ENTRY_POINT),
     (
         "[target] event t=34950: retail only (187, 47, \"client 0\")",
         END_FRAME,
@@ -989,9 +986,10 @@ const END_FRAME: &str = "entity states are built at snapshot time, and a client 
 const KILLING_ROUND: &str = "the killing round meets a victim the round before knocked back, \
     and lands about 4 units nearer the gun along the ray than retail's; neither half of the capture \
     carries the victim's origin, so whether the knockback or the pose differs is open";
-const ENTRY_POINT: &str = "the wounding round enters the target's body one truncation step \
-    lower in y than retail's, along the same ray: where it enters is the posed bone box \
-    the locational trace meets (cod11-combat.md 3.4), not the turret";
+const ENTRY_POINT: &str = "the wounding round enters the target's body a truncation step \
+    off retail's along the same ray: where it enters is the posed bone box the locational \
+    trace meets (cod11-combat.md 3.4), whose idle phase runs from the target's spawn, which \
+    the two joins do not put at the same time; not the turret";
 const CROUCH_DROP: &str = "the crouch release's one-unit drop reads grounded 0.2 above the \
     floor on ours and airborne at the same height on retail, which lands a frame later; the \
     stand release lands on the same frame on both, and the capture holds one of each";
@@ -1249,9 +1247,11 @@ fn angle_off(a: f32, b: f32) -> f32 {
 
 /// Every `!trace` and `!turret` field, the drained events and the impacts,
 /// snapshot by snapshot, one row per field that differs, reading
-/// `[phase] field t=T: retail .. ours ..`. `delta_angles` and the gunner's
-/// `eventSequence` are compared as their change from the first pair: the
-/// join leaves each side its own offset. The gunner's ring slots are
+/// `[phase] field t=T: retail .. ours ..`. `delta_angles`, the gunner's
+/// `eventSequence` and its `legsAnim` restart toggle are compared as their
+/// change from the first pair: the join leaves each side its own offset, the
+/// toggle's off the anims its random spawn point's think and landing played.
+/// The gunner's ring slots are
 /// compared as the drained events, one row per event only one side raised.
 fn diff(cap: &Capture, ours: &[Sample]) -> Vec<String> {
     let anims = vcod_common::testing::game_fs().and_then(|fs| PlayerAnims::load(&fs).ok());
@@ -1268,6 +1268,7 @@ fn diff(cap: &Capture, ours: &[Sample]) -> Vec<String> {
     let r0 = retail[&o0.t];
     let delta0 = [0, 1, 2].map(|i| (o0.delta_angles[i] - r0.delta_angles[i]) & 0xffff);
     let seq0 = (o0.event_sequence - r0.event_sequence) & 0xff;
+    let legs0 = (o0.legs_anim ^ r0.legs_anim) & ANIM_TOGGLEBIT;
     for o in ours {
         let r = retail[&o.t];
         let (phase, t) = (phase_of[&o.t], o.t);
@@ -1300,7 +1301,7 @@ fn diff(cap: &Capture, ours: &[Sample]) -> Vec<String> {
             turret_ring,
             turret_parms
         );
-        row("legs_anim", anim(r.legs_anim), anim(o.legs_anim));
+        row("legs_anim", anim(r.legs_anim), anim(o.legs_anim ^ legs0));
         row("torso_anim", anim(r.torso_anim), anim(o.torso_anim));
         if dist(r.origin, o.origin) > ORIGIN_EPS {
             row(

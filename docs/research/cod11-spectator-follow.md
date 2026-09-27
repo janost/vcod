@@ -565,17 +565,21 @@ client's first frame reads.
 vcod: `ClientSim::respawn` sets the flag and `spawn_think` is the spawn's own
 end frame and think, which sets the own view for a player, clears the flag
 unless the client is dead or at intermission, and runs a dead spawn's 100 ms
-of `dead_move`, the eye dropping 18 units to 42. Every caller but the
+of `dead_move`, the eye dropping 18 units to 42. A script's `spawn` of a
+player runs the live arm's 100 ms too (`ClientSim::spawn_move`, on the
+zeroed cmd with the negated `delta_angles`), and the tick picks its anims
+after it, which is what puts the standing idle on the spawn frame
+(`cod11-combat.md` 9.2). Every caller but the
 intermission's puts the client's `commandTime` at the frame's clock. A dead
 sim's step writes `ps.weapon` 0 unless the flag is set, and the switch
 reaches the script host as the weapon machine's own do.
 
 Where it is not retail's:
 
-- A player's or spectator's think is only its flag and its clock: the 100 ms
-  of null-cmd pmove is not run. INFERRED from the negated `delta_angles` on
-  that cmd: retail's spawn frame reads `viewangles` 0 whatever the spawn
-  yaw, where ours reads the spawn yaw. The three-probe dm run's spawn had yaw
-  0 and cannot tell the two apart.
+- A spectator's think, and a player's spawned out of a follow's copy
+  (12.7), are only the flag and the clock: their 100 ms of null-cmd pmove is
+  not run. INFERRED from the negated `delta_angles` on that cmd: a spawned
+  player's frame reads `viewangles` 0 whatever the spawn yaw, on retail and
+  now on ours; the three-probe dm run's spawn had yaw 0 and cannot tell.
 - The intermission camera's frozen `commandTime`: ours keeps advancing it
   with the client's cmds.

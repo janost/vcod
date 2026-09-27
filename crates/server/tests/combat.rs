@@ -746,6 +746,33 @@ fn the_kill_commands_death_frame_is_retails() {
     assert_eq!(after.ps.field_i32(p, "viewHeightTarget"), 8);
     assert!(after.ps.field_f32(p, "viewHeightCurrent") < 60.0);
     assert_eq!(after.ps.field_i32(p, "eventSequence"), seq + 2);
+
+    // The respawn frame already carries the standing idle: every respawn in
+    // the capture reads `legsAnim` 634 on its first frame (combat doc, 9.2).
+    for _ in 0..50 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&holding);
+        step(&mut sv, &mut ca, &mut cb);
+    }
+    let use_ = vcod_common::net::msg::UserCmd {
+        buttons: vcod_common::net::msg::BUTTON_USE,
+        ..holding
+    };
+    let mut respawn = None;
+    for _ in 0..40 {
+        ca.send_frame(&NULL_USERCMD);
+        cb.send_frame(&use_);
+        step(&mut sv, &mut ca, &mut cb);
+        let s = cb.snapshots().newest().unwrap();
+        if s.ps.field_i32(p, "pm_type") == 0 {
+            respawn = Some(s.clone());
+            break;
+        }
+    }
+    let respawn = respawn.expect("B never respawned");
+    assert_eq!(respawn.ps.health(), 100);
+    assert_eq!(respawn.ps.field_i32(p, "eventSequence"), 0);
+    assert_eq!(respawn.ps.field_i32(p, "legsAnim"), 634);
     assert_eq!(sv.script_aborts(), Vec::<String>::new());
 }
 

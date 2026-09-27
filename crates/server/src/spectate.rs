@@ -628,7 +628,7 @@ impl ClientSim {
     /// the caller moves up to the frame's clock. The intermission arm runs no
     /// pmove and a dead one keeps the flag, so only a live or spectating spawn
     /// loses `PMF_RESPAWNED` here; a dead one's eye drops those 100 ms. The
-    /// live arm's own 100 ms of null-cmd pmove is not run.
+    /// live arm's 100 ms of null-cmd pmove is [`Self::spawn_move`].
     fn spawn_think(&mut self, world: Option<MoveWorld<'_>>) {
         // The spawn's own `ClientEndFrame` (0x42a75) ahead of the think: its
         // playing and dead arm gives the client its own view at once.
@@ -645,6 +645,28 @@ impl ClientSim {
             }
             _ => self.respawned = false,
         }
+    }
+
+    /// The live arm of the spawn's own think, which `spawn_think` leaves to
+    /// a caller with a world: 100 ms of pmove up to `now_ms` on a cmd with no
+    /// buttons and no move, whose angles are the negated `delta_angles`
+    /// (`ClientSpawn` 0x42a2f..0x42a69). It is what puts the standing idle
+    /// on the spawn frame (combat doc, 9.2). `pers.cmd` is not that cmd, so
+    /// the client's own angles stay what `set_view_angle` rebases on.
+    pub fn spawn_move(&mut self, world: MoveWorld<'_>, now_ms: i32) {
+        if self.pm_type != PmType::Normal || self.pm_dead {
+            return;
+        }
+        let cmd = UserCmd {
+            server_time: now_ms,
+            angles: self.delta_angles.map(|a| a.wrapping_neg() & 0xffff),
+            ..msg::NULL_USERCMD
+        };
+        let own = self.last_cmd_angles;
+        for (step, dt) in cmd::chop(now_ms.wrapping_sub(SPAWN_THINK_MS as i32), &cmd) {
+            self.step(&step, dt, Some(world), &[]);
+        }
+        self.last_cmd_angles = own;
     }
 
     /// `ClientEndFrame`'s contents write, once per frame before `end_frame`.

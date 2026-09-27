@@ -2828,8 +2828,8 @@ retail's 2 in that run; 9.2 has the cause and the fix.
 
 VERIFIED, the respawn frame against retail's, field for field: `health` 100,
 `pm_type` 0, `eFlags` **24**, `eventSequence` 0 with an empty ring, and
-`clip=3:7,6:3,10:15 ammo=3:56,10:400`. The one field of that frame that
-differs is `legsAnim`, in 9.2.
+`clip=3:7,6:3,10:15 ammo=3:56,10:400`. `legsAnim` read 0 against retail's
+634 in that run; 9.2 has the cause and the fix.
 
 VERIFIED: over a 130 s run of three deaths and three respawns, `eFlags`
 alternates 16 and 24 the way retail's captures do (38 samples against 51 here,
@@ -2875,7 +2875,7 @@ the kill.
 
 ### 9.2 What differs
 
-Closed on 2026-09-27, the `kill` death frame:
+Closed on 2026-09-27, the `kill` death frame and the respawn frame:
 
 - **The death frame was missing `EV_RAISE_WEAPON`.** VERIFIED, run: retail's
   `kill` death raises two events, 189 then 155, and reads `eventSequence` 2;
@@ -2905,6 +2905,22 @@ Closed on 2026-09-27, the `kill` death frame:
   wire's `viewHeightTarget` off the last move's arm. Pinned by
   `the_kill_commands_death_frame_is_retails` (`tests/combat.rs`), with 1.8's
   pickup rule from the same day.
+- **The respawn frame carried `legsAnim` 0 where retail carries 634.**
+  VERIFIED, run: one frame, the next reading 634 and every frame after it.
+  VERIFIED, `game.mp.i386.so`: `ClientSpawn` ends in `ClientThink_real`
+  (0x42a82) on a zeroed cmd stamped `level.time` (0x42a2f, 0x42a42), 100 ms
+  past the `commandTime` it set (0x42a48, 0x42a6f), with angles the negated
+  `delta_angles` (0x42a4e..0x42a69). INFERRED: that think runs the live
+  player 100 ms of pmove, whose animscript pick puts the standing idle on
+  the spawn frame; vcod ran no move there, and its animscript picks nothing
+  until a move has run. Fixed: `ClientSim::spawn_move` runs that cmd for a
+  spawned player and the tick picks its anims straight after, pinned by the
+  respawn half of `the_kill_commands_death_frame_is_retails`. VERIFIED: the
+  capture's respawn frames read velocities of (5, 5, -1) and (0, 1, 0).
+  INFERRED: the think's 100 ms fall onto the floor. VERIFIED, ours: a
+  `turret_ab` join whose spawn point sits 2.6 units above a slope lands at
+  11 units/s and plays `pb_combatrun_forward_loop` on its spawn frame, so
+  that gate compares the legs toggle as its change from the first sample.
 - Not closed: a bullet death. VERIFIED, 8.4: retail's bullet death frame
   reads events `[187, 189, 155]`. INFERRED: the 155 comes from cmds of the
   victim's own that reached retail after the shooter's in the same frame;
@@ -2912,11 +2928,6 @@ Closed on 2026-09-27, the `kill` death frame:
   (`docs/protocol-1.1.md`, the divergence list's slot-order entry), so its
   victim has no cmd between the death and the end frame, and its death frame
   reads 187 and 189 alone.
-
-VERIFIED: **the respawn frame carries `legsAnim` 0 where retail carries 634.**
-It is one frame: the next one reads 634 and every frame after it. INFERRED:
-the animscript picks nothing until a move has run, so the spawn frame goes out
-before the standing idle is chosen, where retail's already carries it.
 
 Closed on 2026-09-07, found on 2026-09-06 by the `--save-ads` capture on
 `kar98k_sniper_mp` (`mp_carentan-tdm-ads-sniper`, the one that answered the
