@@ -768,6 +768,11 @@ impl ClientSim {
             if let Some(w) = world {
                 pmove::dead_move(&mut self.ps, &w, dt);
             }
+            // `PM_Weapon`'s `pm_type > 5` arm, behind its `PMF_RESPAWNED`
+            // return (0x390ee..0x390fe).
+            if !self.respawned {
+                self.ps.weapon = 0;
+            }
             self.relink();
             return Vec::new();
         }
