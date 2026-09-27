@@ -7086,4 +7086,23 @@ mod tests {
         let s = rig.step(0);
         assert_eq!(ps_i32(&s, "pm_type"), 6);
     }
+
+    /// Script moving a free follower to `playing` with no spawn of its own:
+    /// `ClientEndFrame` finds the copy still in the playerstate and spawns
+    /// the client there, alive (spectator-follow doc, 12.7).
+    #[test]
+    fn a_follower_script_puts_in_play_is_spawned_where_the_copy_stood() {
+        let mut rig = FollowRig::new();
+        let last = rig.press(msg::BUTTON_ATTACK);
+        assert_eq!(ps_i32(&last, "clientNum"), 1);
+        rig.script().set_client_state_for_test(0, "playing");
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(ps_i32(&s, "pm_type"), 0);
+        assert_eq!(ps_i32(&s, "pm_flags") & 0x70000, 0x40000);
+        assert_eq!(s.ps.origin(&PROTOCOL_V1), FOLLOW_P1);
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 0);
+        assert_eq!(ps_i32(&s, "pm_type"), 0);
+    }
 }
