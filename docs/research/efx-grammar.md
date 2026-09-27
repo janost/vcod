@@ -621,7 +621,9 @@ spawner's `if (cullrange == 0)` branch skips the distance check entirely.
 wide with the `gfx/effects/antiaircraft_tracer` shader). It is not what a
 rifle bullet draws.
 
-`CG_Tracer` @ `cgame_mp_x86.dll 0x30039590` rolls `cg_tracerchance` and
+`CG_Tracer` @ `cgame_mp_x86.dll 0x30039590`, called from `CG_BulletHitWall`
+(173/174) and `CG_BulletHitFlesh` (175/176, always `surfType` 7; events doc
+section 2), rolls `cg_tracerchance` and
 hands the muzzle/impact pair to one of two hardcoded paths, picked by the
 surface type argument: VERIFIED, `cmp [esp+0x20],7` at `0x300395fb` sends
 `surfType == 7` (flesh) to the segment setup at `0x30039340` with a pushed 0,
@@ -716,7 +718,7 @@ for its first two frames.
 Implemented in `crates/client/src/fx/sim.rs`: R3 (unflagged curves hold
 `start`; `length` only on `Tail`/`Line`), R4's half-extent reading, R5 (tail anchoring and full length), R6's
 spawn-flag handling, R7's per-key defaults, and R8 (`FxSystem::spawn_tracer`,
-fed by `Resolved::Tracer`).
+fed by `Resolved::Tracer` from 173 to 176).
 
 Not implemented, deliberately:
 

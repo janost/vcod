@@ -231,14 +231,43 @@ te->r.singleClient   (248) = victim's clientNum;
 
 No direction bytes. Consumer, `CG_EntityPreEvent` case 175/176 @ `0x3001e8d9`:
 `CG_BulletHitFlesh(pos=cent->lerpOrigin, surfType=es.surfType, attacker=es.otherEntityNum)`
-@ `0x300396f0`. It spawns no effect at all, only the per-surface sound alias
-(same tables as the wall path) and the tracer/whiz-by path of section 6.
+@ `0x300396f0`. VERIFIED, the register loads at `0x3001e8d9`..`0x3001e8ea`:
+`edx = es+0x74` (`otherEntityNum`, pushed), `edi = es+0x88` (`surfType`),
+`ecx = cent+0x1f8`, `eax` the event id. What the function does:
+
+- VERIFIED: `cmp eax,0xaf` at `0x300396f1` picks the alias table,
+  `0x301d5eec` for 175 and `0x301d5f48` for 176, indexed by `surfType`. These
+  are the tables `CG_BulletHitWall` reads its impact sound from for 173 and
+  174 (`0x3003964d`, `0x30039664`).
+- VERIFIED: it calls `0x30021bf0` with `0x3fe` (`ENTITYNUM_WORLD`) and the
+  impact position, the same call the wall path plays its impact sound through.
+- VERIFIED: it tail-calls `CG_Tracer` @ `0x30039590` at `0x30039721` with
+  `eax = otherEntityNum`, `esi` still the impact position, and the pushed pair
+  `surfType`, `ds:0x3007486c` (`"tag_flash"`), which is the argument shape
+  `CG_BulletHitWall` passes at `0x300396dc`.
+- VERIFIED: its body (`0x300396f0`..`0x3003972b`) holds no `push 0xe4`, the
+  effect syscall the wall path spawns its impact `.efx` through, so a client
+  hit draws no effect.
+
+Delivery, `cod_lnxded` (the 1.1d engine binary). VERIFIED: the snapshot
+builder loads `esi = ps+0xac` (`ps.clientNum`) from the frame's playerstate at
+`0x808f25f`, after copying it in, and pushes it as the second argument of the
+entity pass `0x808e298` at `0x808f301`. VERIFIED: that pass tests `svFlags`
+(`gentity+0xf4`) for `0x800` at `0x808e322` and compares `r.singleClient`
+(`+0xf8`) with that argument at `0x808e32a`, and tests `0x2000` at
+`0x808e336` against the same compare at `0x808e345`. INFERRED from those
+branches: 175/176 go only to the snapshots whose `ps.clientNum` is the victim,
+and the plain 173/174 flesh copy to every other. A follow-spectator's
+`ps.clientNum` is the followed player's (section 7), so INFERRED: whoever
+follows the victim receives the victim's 175/176 and not the 173/174 copy.
 
 VERIFIED live (2026-08-24, 51.195.89.86:28960, 100s capture during active
-combat): 175/176 never arrived while 173 with `surfType == 7` appeared 38
-times. The single-client delivery reading is confirmed; vcod can ignore
-175/176 entirely. Flesh hits reach spectators as ordinary 173/174 events
-with the flesh surfType.
+combat, taken by a free-flying spectator): 175/176 never arrived while 173
+with `surfType == 7` appeared 38 times. A free spectator's `ps.clientNum` is
+its own, so this matches the delivery rule above; it does not show that the
+events are unused. vcod resolves 175/176 in play mode and while following,
+through the same path as 173/174 minus the impact effect
+(`crates/client/src/fx/registry.rs`, `crates/client/src/audio/cues.rs`).
 
 ### `EV_GRENADE_BOUNCE` (177), `EV_GRENADE_EXPLODE` (178), `EV_ROCKET_EXPLODE` (179) / `_NOMARKS` (180)
 
@@ -518,7 +547,9 @@ events. There is no per-shot tracer event on the wire in CoD 1.1 multiplayer.
 The real path is `CG_Tracer` @ `0x30039590`, tail-called by both
 `CG_BulletHitWall` (`0x300396dc`) and `CG_BulletHitFlesh` (`0x30039721`) with
 `eax = es.otherEntityNum` (the shooter), `esi = impact position`,
-arg0 = `surfType`, arg1 = the string `"tag_flash"`. It returns at once when
+arg0 = `surfType`, arg1 = the string `"tag_flash"`. Both pass the event's own
+`es.surfType`, and for 175/176 the server writes the literal 7 (section 2), so
+INFERRED: a client hit always takes the flesh branch below. It returns at once when
 `cg_tracerchance` (value at `0x301df448`) is `<= 0` or when `CG_GetMuzzlePoint`
 @ `0x30039440` cannot resolve `tag_flash` on the shooter entity. Unless the
 shooter is the entity being viewed first person, it rolls
@@ -545,7 +576,10 @@ The tracer is drawn with the shader `gfx/misc/tracer`
 The "viewing this entity first person" suppression is
 `(cg.snap->ps.pm_flags & 0x50000) && shooterEnt == cg.snap->ps.clientNum`, see
 section 7. For a follow-spectator that means the followed player's own tracers
-are suppressed by the retail client; vcod can choose to draw them.
+are suppressed by the retail client; vcod draws them from the view muzzle
+instead. The test never suppresses a 175/176: those reach only the victim's
+`ps.clientNum` (section 2), and INFERRED, the shooter of the round is never the
+player it hit, since a bullet trace skips its own shooter.
 
 Practical consequence for vcod: to draw tracers, hook `EV_BULLET_HIT_*`, take
 `es.otherEntityNum` as the shooter, resolve that entity's muzzle
@@ -634,10 +668,9 @@ retail DLLs and irrelevant to vcod.
 
 ## Open items
 
-Only one claim in this document was not settled from the binaries: whether a
-follow-spectator receives `EV_BULLET_HIT_CLIENT_SMALL/LARGE` (175/176) for the
-player being followed. The server marks them `svFlags = 0x800` +
-`r.singleClient = victim`, which is single-client delivery keyed on the real
-client slot. The live capture in section 2 (2026-08-24, 51.195.89.86:28960)
-settled it: 175/176 never arrived, so vcod ignores them and treats
-`173/174 with surfType == 7` as the only flesh-hit signal.
+None. The one claim this section used to hold, whether a follow-spectator
+receives `EV_BULLET_HIT_CLIENT_SMALL/LARGE` (175/176) for the player being
+followed, is settled from the engine binary in section 2: the single-client
+test compares against the snapshot's `ps.clientNum`, not the client slot. The
+earlier reading, that the 2026-08-24 capture meant vcod could ignore 175/176,
+came from a free-flying spectator, which that rule never sends them to.

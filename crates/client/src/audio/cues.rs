@@ -284,9 +284,13 @@ pub fn resolve(ev: &GameEvent, ctx: &CueCtx) -> Vec<Cue> {
 
         // impacts, sections 6, 7a and 7c. The whizby test runs for every
         // surface, flesh included, from the shooter's (`otherEntityNum`)
-        // muzzle; no muzzle yet means no whizby.
-        EV_BULLET_HIT_SMALL | EV_BULLET_HIT_LARGE => {
-            let prefix = if e == EV_BULLET_HIT_SMALL {
+        // muzzle; no muzzle yet means no whizby. The client-hit pair is the
+        // victim's copy of a flesh hit and reads the same alias tables.
+        EV_BULLET_HIT_SMALL
+        | EV_BULLET_HIT_LARGE
+        | EV_BULLET_HIT_CLIENT_SMALL
+        | EV_BULLET_HIT_CLIENT_LARGE => {
+            let prefix = if matches!(e, EV_BULLET_HIT_SMALL | EV_BULLET_HIT_CLIENT_SMALL) {
                 "bullet_small"
             } else {
                 "bullet_large"
@@ -749,6 +753,26 @@ mod tests {
         let cues = whizby_case(Vec3::new(70.0, 0.0, 0.0), 7);
         assert_eq!(cues[0].alias, "bullet_small_flesh");
         assert!(cues.iter().any(|q| q.alias == "whizby"));
+    }
+
+    #[test]
+    fn client_hits_play_the_flesh_alias_and_the_whizby() {
+        for (id, alias) in [
+            (EV_BULLET_HIT_CLIENT_SMALL, "bullet_small_flesh"),
+            (EV_BULLET_HIT_CLIENT_LARGE, "bullet_large_flesh"),
+        ] {
+            let cs = vec![];
+            let ws = HashMap::new();
+            let mut mz = HashMap::new();
+            mz.insert(7u32, (Vec3::new(0.0, -500.0, 0.0), Vec3::Y));
+            let mut e = ev(id);
+            e.other_entity_num = 7;
+            e.pos = [0.0, 500.0, 0.0];
+            e.surf_type = 7;
+            let mut c = ctx(&cs, &ws, &mz);
+            c.listener_pos = Vec3::new(70.0, 0.0, 0.0);
+            assert_eq!(names(&resolve(&e, &c)), vec![alias, "whizby"]);
+        }
     }
 
     #[test]
