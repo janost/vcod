@@ -3229,7 +3229,15 @@ impl Server {
                             );
                         }
                     }
-                    SpawnMode::Spectator => sim.become_spectator(s.origin, s.yaw_deg, cmd_angles),
+                    SpawnMode::Spectator => {
+                        sim.become_spectator(s.origin, s.yaw_deg, cmd_angles);
+                        if let Some(w) = self.world.as_ref() {
+                            sim.spawn_move(
+                                vcod_common::movetrace::MoveWorld::bare(&w.collision),
+                                self.sv_time_ms,
+                            );
+                        }
+                    }
                     SpawnMode::Intermission => {
                         sim.become_intermission(s.origin, s.yaw_deg, cmd_angles, self.sv_time_ms)
                     }
@@ -7275,12 +7283,21 @@ mod tests {
         rig.script().host.client_vitals[1].health = 100;
         rig.script().set_client_weapon(1, 9);
         rig.sim_mut(1).ps.velocity = glam::Vec3::new(120.0, 0.0, 0.0);
+        rig.sim_mut(1).ps.ducked = true;
         rig.press(msg::BUTTON_ATTACK);
         let copy = rig.step(0);
         assert_eq!((copy.ps.health(), ps_i32(&copy, "weapon")), (100, 9));
+        assert_eq!(ps_i32(&copy, "pm_flags"), 0x10000 | 0x2);
         let stop = rig.step(msg::BUTTON_ADS);
         assert_eq!(ps_i32(&stop, "clientNum"), 0);
         assert_eq!(ps_i32(&stop, "pm_type"), 4);
+        // `StopFollowing` takes 0x10020 off the copy's flags and leaves the
+        // rest (0x46bb1), and `SetClientViewAngle` pitches the view down 15,
+        // which the stop cmd's own `PM_UpdateViewAngles` keeps: retail's stop
+        // frame read pitch 15.
+        assert_eq!(ps_i32(&stop, "pm_flags"), 0x2);
+        let pitch = stop.ps.field_f32(&PROTOCOL_V1, "viewangles[0]");
+        assert!((pitch - 15.0).abs() < 0.01, "{pitch}");
         let vx = stop.ps.field_f32(&PROTOCOL_V1, "velocity[0]");
         assert!(
             vx > 0.0 && vx < 120.0,

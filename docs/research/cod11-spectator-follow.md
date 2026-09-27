@@ -290,12 +290,22 @@ copies. Ours ran the `kill` after the frame's cmds; it now runs ahead of the
 cmds of its own packet, which still read `pm_type` 0 until the end frame
 (`cod11-combat.md` 9.2 has the addresses and the fix).
 
+A stopped copy keeps `pm_flags` less 0x10020, `StopFollowing`'s store
+(0x46bb1), and the spectator's `viewangles` are on the wire, so the press
+frame reads the stop's pitch 15. VERIFIED, `PM_UpdateViewAngles` (0x32d7c,
+`docs/protocol-1.1.md`, "View angles"): a spectator's `viewangles` are the
+cmd's angles plus `delta_angles`, which `SetClientViewAngle` has just set so
+that the stop cmd's own angles sum to the stop view. INFERRED: the frames
+after it read 0 on retail because the probe subtracts the new delta, and ours
+reproduce that for the same reason. Ours read pitch 0 on the press frame
+until 2026-09-27, when `to_wire` wrote `viewangles` for a player alone and
+the copy's `pm_flags` gave way to the spectator's own.
+
 Where it is not retail's:
 
-- The rest of a stopped copy is kept whole except the owned fields; the
-  `pm_flags` bits `StopFollowing` leaves (everything but 0x10020) and
-  whatever else the spectator's `Pmove` writes are not measured. The press
-  frame's pitch 15 reads 0 on ours.
+- The rest of a stopped copy is kept whole except the owned fields; whatever
+  the spectator's `Pmove` writes into `pm_flags` after the stop is not
+  measured, and ours writes nothing there.
 
 ## 12. The killcam
 
@@ -569,9 +579,10 @@ vcod: `ClientSim::respawn` sets the flag and `spawn_think` is the spawn's own
 end frame and think, which sets the own view for a player, clears the flag
 unless the client is dead or at intermission, and runs a dead spawn's 100 ms
 of `dead_move`, the eye dropping 18 units to 42. A script's `spawn` of a
-player runs the live arm's 100 ms too (`ClientSim::spawn_move`, on the
-zeroed cmd with the negated `delta_angles`), and the tick picks its anims
-after it, which is what puts the standing idle on the spawn frame
+player or a spectator runs its think's 100 ms too (`ClientSim::spawn_move`,
+on the zeroed cmd with the negated `delta_angles`), and the tick picks a
+player's anims after it, which is what puts the standing idle on the spawn
+frame
 (`cod11-combat.md` 9.2). Every caller but the
 intermission's puts the client's `commandTime` at the frame's clock; the
 intermission camera's reads the spawn's frame less 100 until the next spawn,
@@ -582,8 +593,9 @@ reaches the script host as the weapon machine's own do.
 
 Where it is not retail's:
 
-- A spectator's think, and a player's spawned out of a follow's copy
-  (12.7), are only the flag and the clock: their 100 ms of null-cmd pmove is
-  not run. INFERRED from the negated `delta_angles` on that cmd: a spawned
-  player's frame reads `viewangles` 0 whatever the spawn yaw, on retail and
-  now on ours; the three-probe dm run's spawn had yaw 0 and cannot tell.
+- A player spawned out of a follow's copy (12.7) gets only the flag and the
+  clock: its 100 ms of null-cmd pmove is not run. INFERRED from the negated
+  `delta_angles` on that cmd: a spawned player's or spectator's frame reads
+  `viewangles` 0 whatever the spawn yaw, on retail and on ours, whose script
+  spawns run the cmd; the three-probe dm run's spawn had yaw 0 and cannot
+  tell.

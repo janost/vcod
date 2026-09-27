@@ -340,7 +340,6 @@ struct Residue {
 const SPECTATOR_OWNED: &[&str] = &[
     "commandTime",
     "clientNum",
-    "pm_flags",
     "origin[0]",
     "origin[1]",
     "origin[2]",
@@ -666,14 +665,15 @@ impl ClientSim {
         }
     }
 
-    /// The live arm of the spawn's own think, which `spawn_think` leaves to
-    /// a caller with a world: 100 ms of pmove up to `now_ms` on a cmd with no
-    /// buttons and no move, whose angles are the negated `delta_angles`
-    /// (`ClientSpawn` 0x42a2f..0x42a69). It is what puts the standing idle
-    /// on the spawn frame (combat doc, 9.2). `pers.cmd` is not that cmd, so
+    /// The live and spectating arms of the spawn's own think, which
+    /// `spawn_think` leaves to a caller with a world: 100 ms of pmove up to
+    /// `now_ms` on a cmd with no buttons and no move, whose angles are the
+    /// negated `delta_angles` (`ClientSpawn` 0x42a2f..0x42a69), so the spawn
+    /// frame's `viewangles` read 0. It is what puts the standing idle on a
+    /// player's spawn frame (combat doc, 9.2). `pers.cmd` is not that cmd, so
     /// the client's own angles stay what `set_view_angle` rebases on.
     pub fn spawn_move(&mut self, world: MoveWorld<'_>, now_ms: i32) {
-        if self.pm_type != PmType::Normal || self.pm_dead {
+        if self.pm_type == PmType::Intermission || self.pm_dead {
             return;
         }
         let cmd = UserCmd {
@@ -1703,17 +1703,15 @@ impl ClientSim {
         {
             set(axis, self.ps.velocity[i].to_bits() as i32);
         }
-        // A player's `viewangles` is on the wire, a spectator's is not, and
-        // the split is measured on both sides: docs/protocol-1.1.md,
-        // "View angles". The client rebuilds the view from
-        // `delta_angles` either way, so it is the delta that always travels.
-        if player {
-            for (i, axis) in ["viewangles[0]", "viewangles[1]", "viewangles[2]"]
-                .iter()
-                .enumerate()
-            {
-                set(axis, self.view_angles[i].to_bits() as i32);
-            }
+        // Every mode's: `PM_UpdateViewAngles` writes it for a `pm_type`
+        // below 5, and a spawn's `SetClientViewAngle` is all the
+        // intermission camera and a dead player keep (docs/protocol-1.1.md,
+        // "View angles").
+        for (i, axis) in ["viewangles[0]", "viewangles[1]", "viewangles[2]"]
+            .iter()
+            .enumerate()
+        {
+            set(axis, self.view_angles[i].to_bits() as i32);
         }
         for (i, axis) in ["delta_angles[0]", "delta_angles[1]", "delta_angles[2]"]
             .iter()
@@ -1747,11 +1745,13 @@ impl ClientSim {
 
 impl Residue {
     /// The copy with `own`'s [`SPECTATOR_OWNED`] fields written over it, its
-    /// `pm_type` and `speed` once a cmd has flown, and its `eFlags` with the
-    /// mount bits cleared (0x46b8c) and the teleport bit the sim flips.
+    /// `pm_type` and `speed` once a cmd has flown, its `pm_flags` less the
+    /// follow and ADS bits (0x46bb1), and its `eFlags` with the mount bits
+    /// cleared (0x46b8c) and the teleport bit the sim flips.
     fn under(&self, own: msg::PlayerState, p: &Protocol) -> msg::PlayerState {
         let idx = |name| msg::PlayerState::field_index(p, name).unwrap();
         let mut w = self.wire.clone();
+        w.fields[idx("pm_flags")] &= !(crate::follow::PMF_FOLLOW | pmove::weapon::PMF_ADS);
         let flown: &[&str] = if self.moved {
             &["pm_type", "speed"]
         } else {
@@ -1883,6 +1883,13 @@ mod tests {
         // Where the spawn put it, 100 ms behind its frame, whatever the cmds
         // since: the retail intermission run reads 59950 at 60050 to 60150.
         assert_eq!(w.field_i32(p, "commandTime"), 59950);
+        // The spawn's view, whatever the cmds turned: `PM_UpdateViewAngles`
+        // returns at `pm_type` 5, and the map-change capture reads 0, 90 on
+        // every intermission frame.
+        let view: Vec<f32> = (0..3)
+            .map(|i| f32::from_bits(w.field_i32(p, &format!("viewangles[{i}]")) as u32))
+            .collect();
+        assert_eq!(view, [0.0, 90.0, 0.0]);
         assert_eq!(w.field_i32(p, "eFlags"), 24);
         assert_eq!(w.health(), 0, "the spawn's memset is never written back");
         assert_eq!(w.field_i32(p, "eventSequence"), 0);
@@ -2566,28 +2573,32 @@ mod tests {
     /// `spawn_delta_angles` that put the yaw in the wrong slot must fail here
     /// as well.
     ///
-    /// A spectator's `viewangles` stays unwritten however far its view has
-    /// turned; the player half is
+    /// A spectator's `viewangles` is the same sum a player's is:
+    /// `PM_UpdateViewAngles` takes its normal arm below `pm_type` 5
+    /// (docs/protocol-1.1.md, "View angles"); the player half is
     /// [`a_players_viewangles_carry_the_summed_view`].
     #[test]
-    fn delta_angles_carry_the_spawn_yaw_and_a_spectators_viewangles_stay_unwritten() {
+    fn delta_angles_carry_the_spawn_yaw_into_a_spectators_viewangles() {
         let p = &PROTOCOL_V1;
+        let yaw = |sim: &ClientSim| {
+            f32::from_bits(sim.to_wire(p, 0, 0).field_i32(p, "viewangles[1]") as u32)
+        };
         let mut sim = ClientSim::spectator([0.0, 0.0, 64.0], 90.0, NULL_USERCMD.angles);
         let ps = sim.to_wire(p, 0, 0);
         assert_eq!(ps.field_i32(p, "delta_angles[0]"), 0);
         assert_eq!(ps.field_i32(p, "delta_angles[1]"), 16_384);
-        assert_eq!(ps.field_i32(p, "viewangles[0]"), 0);
-        assert_eq!(ps.field_i32(p, "viewangles[1]"), 0);
+        assert_eq!(yaw(&sim), 90.0);
 
-        // The probe that took the capture sends cmd.angles = [0,0,0] and
-        // never moves its view; step must add delta_angles back or the sim
-        // faces 0 instead of the spawn's 90.
+        // A cmd of raw zeros faces the spawn's 90: step must add
+        // delta_angles back.
         sim.step(&cmd(0, 0, 0), 0.05, None, &[]);
         assert_eq!(sim.ps.yaw.to_degrees(), 90.0);
-        // Turning does not put it on the wire either: the two spectator
-        // captures read 0 with `delta_angles[1]` 16384 throughout.
-        sim.step(&cmd(0, 0, 8192), 0.05, None, &[]);
-        assert_eq!(sim.to_wire(p, 0, 0).field_i32(p, "viewangles[1]"), 0);
+        assert_eq!(yaw(&sim), 90.0);
+        // A client that subtracts the delta, as every vcod probe does, sends
+        // -16384 for a view of 0 and reads 0 back: the two spectator
+        // captures' zeros beside `delta_angles[1]` 16384.
+        sim.step(&cmd(0, 0, -16_384 & 0xffff), 0.05, None, &[]);
+        assert_eq!(yaw(&sim), 0.0);
     }
 
     /// The player half: a spawned client's `viewangles` is on the wire and is

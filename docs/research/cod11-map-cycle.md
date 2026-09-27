@@ -1069,7 +1069,11 @@ INFERRED, from `ClientSim::to_wire` leaving `viewangles` unwritten and
 `docs/protocol-1.1.md`, "View angles": the heading is on the wire in
 the other field and a client that adds `delta_angles` back arrives at the same
 90. Whether a retail client's intermission camera actually faces the same way
-is not settled by a headless capture and is on the hand-check list.
+is not settled by a headless capture and is on the hand-check list. Closed on
+2026-09-27: `PM_UpdateViewAngles` returns at `pm_type` 5 and a spawn's
+`SetClientViewAngle` writes the field (`docs/protocol-1.1.md`, "View
+angles"), and `to_wire` now writes the sim's view in every mode, so the
+camera reads the spawn's 0, 90.
 
 VERIFIED, the `dm` run: the `loadingnewmap` line and the gamestate reached the
 probe in the same millisecond, where retail left 1493 ms between them.

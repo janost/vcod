@@ -649,8 +649,8 @@ engineering setup works.
   only queues because it runs before the clock advances, then `deliver_hits` for the blasts so their damage
   callback has run before script, then the script frame, then the script's spawns (each with the spawn's own
   end frame and think: the own view, `PMF_RESPAWNED` and `commandTime` at
-  the frame's clock, and for a player the think's 100 ms of null-cmd pmove
-  and an anim pick; the intermission camera's `commandTime` stays 100 ms
+  the frame's clock, and for a player or spectator the think's 100 ms of
+  null-cmd pmove, with a player's anim pick after it; the intermission camera's `commandTime` stays 100 ms
   behind the spawn's frame), then the switches the weapon
   machine made (its takes already landed at their cmd's touch, and only
   there), then the weapon mirrors (held, current, viewmodel, the
