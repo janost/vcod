@@ -93,7 +93,7 @@ pub struct HudFrame<'a> {
     /// The camera's yaw in degrees, and its eye.
     pub view_yaw: f32,
     pub eye: [f32; 3],
-    /// The drawn vertical fov, degrees.
+    /// The drawn horizontal fov, degrees.
     pub fov: f32,
     /// An entity's current origin, for objectives placed on one.
     pub entity_origin: &'a dyn Fn(i32) -> Option<[f32; 3]>,
@@ -314,7 +314,10 @@ fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
         ads_frac,
         view_yaw: f.view_yaw,
         eye: f.eye,
-        fov: (fov_x_4_3(f.fov), f.fov),
+        fov: (
+            f.fov,
+            crate::camera::fov_y(f.fov, f.screen_w / f.screen_h.max(1.0)),
+        ),
         objectives: &ps.arrays.objectives,
         cursor_hint: int("serverCursorHint"),
         // Playerstate fields arrive unsigned; retail's -1 is 255.
@@ -326,14 +329,6 @@ fn player_view<'a>(ps: &'a PlayerState, f: &HudFrame<'a>) -> PlayerView<'a> {
             count: int("damageCount"),
         },
     }
-}
-
-/// The horizontal fov across the 640x480 virtual screen for a vertical
-/// `fov_y`, both in degrees.
-fn fov_x_4_3(fov_y: f32) -> f32 {
-    2.0 * ((fov_y / 2.0).to_radians().tan() * 4.0 / 3.0)
-        .atan()
-        .to_degrees()
 }
 
 #[cfg(test)]
@@ -366,7 +361,7 @@ mod tests {
             localized: loc,
             view_yaw: 0.0,
             eye: [0.0; 3],
-            fov: 75.0,
+            fov: 80.0,
             entity_origin: &|_| None,
         }
     }
@@ -403,7 +398,7 @@ mod tests {
             (5, 200.0, 0x10)
         );
         assert_eq!(snap.cursor_hint_string, -1, "retail's -1 arrives as 255");
-        assert_eq!(snap.fov, (fov_x_4_3(75.0), 75.0));
+        assert_eq!(snap.fov, (80.0, crate::camera::fov_y(80.0, 640.0 / 480.0)));
 
         let own = player_view(&ps, &frame(&ps, Some(&pred), &fs, &loc, &clients));
         assert_eq!(
@@ -450,12 +445,6 @@ mod tests {
         let header = hud.font_header.page.clone();
         assert!(following.contains(&header), "header for a spectator");
         assert!(!own.contains(&header), "no header while playing");
-    }
-
-    #[test]
-    fn the_virtual_screen_fov_is_4_3_wide() {
-        // A 90-degree 4:3 frustum is 73.74 degrees tall.
-        assert!((fov_x_4_3(73.739_8) - 90.0).abs() < 1e-3);
     }
 
     #[test]

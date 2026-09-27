@@ -29,10 +29,10 @@ const _: () = assert!(std::mem::size_of::<VmVert>() == 52);
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const MSAA_SAMPLES: u32 = 4;
 
-/// The viewmodel has its own projection. CoD draws the weapon at a fixed FOV
-/// regardless of the world's, with a much nearer near plane.
-pub const VM_FOV_DEG: f32 = 65.0;
-const VM_NEAR: f32 = 1.0;
+/// The viewmodel shares the world's fov but has its own near plane, retail's
+/// `r_znear_depthhack` default (docs/research/xmodel-v14-format.md, "The
+/// view fov").
+pub const VM_NEAR: f32 = 0.1;
 const VM_FAR: f32 = 500.0;
 /// Depth-range fraction the viewmodel is squeezed into, so the world cannot poke through it.
 const VM_DEPTH_RANGE: f32 = 0.3;
@@ -269,6 +269,8 @@ pub fn pack_instances(
 /// that model's GPU buffer as it was.
 pub struct VmDraw {
     pub transform: glam::Mat4,
+    /// Horizontal degrees, the world view's own.
+    pub fov_x: f32,
     pub bone_sets: Vec<Vec<glam::Mat4>>,
 }
 
@@ -2976,7 +2978,7 @@ impl Renderer {
         }
         let draw_vm = match &vm {
             Some(draw) if !self.vm_pass.models.is_empty() => {
-                let uniform = vm_uniform(draw.transform, self.aspect());
+                let uniform = vm_uniform(draw.transform, draw.fov_x, self.aspect());
                 self.queue.write_buffer(
                     &self.vm_pass.uniform_buf,
                     0,
@@ -4179,13 +4181,8 @@ fn create_dynamic_pass(
 }
 
 /// The models are unlit; the fixed key light stands in for the engine's light grid.
-fn vm_uniform(model: glam::Mat4, aspect: f32) -> [f32; 36] {
-    let proj = glam::camera::rh::proj::directx::perspective(
-        VM_FOV_DEG.to_radians(),
-        aspect,
-        VM_NEAR,
-        VM_FAR,
-    );
+fn vm_uniform(model: glam::Mat4, fov_x: f32, aspect: f32) -> [f32; 36] {
+    let proj = crate::camera::perspective(fov_x, aspect, VM_NEAR, VM_FAR);
     // upper-left key light, view space
     let light = glam::Vec4::new(-0.4, 0.8, 0.4, 0.0).normalize();
     let mut out = [0.0f32; 36];

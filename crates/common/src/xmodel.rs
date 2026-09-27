@@ -45,8 +45,9 @@ pub struct VmVert {
     pub bone_weights: [f32; 4],
 }
 
-/// `pos`/`rot` are the composed world bind; `local_*` the unbaked local,
-/// after the viewhands zeroing.
+/// `pos`/`rot` are the world bind the mesh is skinned against; `local_*` the
+/// unbaked local, after the viewhands zeroing. On viewhands `pos` is the bind
+/// the mesh implies, not the composition of the zeroed locals.
 pub struct Bone {
     pub name: String,
     pub parent: i32,
@@ -349,7 +350,20 @@ fn decode_tri_strip(r: &mut Reader, triangle_count: usize) -> Result<Vec<u16>> {
 
 /// Bakes every vertex into model space through its primary bone; `bones`
 /// must hold composed world binds.
-fn parse_surfs(data: &[u8], bones: &[Bone]) -> Result<Vec<Surface>> {
+/// One vertex as stored: every weight carries its own bone-local position.
+struct RawVert {
+    normal: [f32; 3],
+    uv: [f32; 2],
+    /// `(bone, bone-local position, influence)`, the primary first.
+    weights: Vec<(u16, Vec3, f32)>,
+}
+
+struct RawSurface {
+    verts: Vec<RawVert>,
+    indices: Vec<u16>,
+}
+
+fn parse_surfs(data: &[u8]) -> Result<Vec<RawSurface>> {
     let mut r = Reader::new(data);
     let version = r.u16()?;
     ensure!(
@@ -375,15 +389,8 @@ fn parse_surfs(data: &[u8], bones: &[Bone]) -> Result<Vec<Surface>> {
             "surface {si} has a strip index past its {vertex_count} vertices"
         );
 
-        struct RawVert {
-            normal: [f32; 3],
-            uv: [f32; 2],
-            bone: u16,
-            weight_count: u16,
-            local_pos: Vec3,
-            primary_influence: f32,
-        }
-        let mut raws = Vec::with_capacity(vertex_count);
+        let mut verts = Vec::with_capacity(vertex_count);
+        let mut extra_counts = Vec::with_capacity(vertex_count);
         for _ in 0..vertex_count {
             let normal = [r.f32()?, r.f32()?, r.f32()?];
             let uv = [r.f32()?, r.f32()?];
@@ -394,42 +401,88 @@ fn parse_surfs(data: &[u8], bones: &[Bone]) -> Result<Vec<Surface>> {
             };
             let local_pos = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
             let primary_influence = if weight_count != 0 { r.f32()? } else { 1.0 };
-            raws.push(RawVert {
+            verts.push(RawVert {
                 normal,
                 uv,
-                bone,
-                weight_count,
-                local_pos,
-                primary_influence,
+                weights: vec![(bone, local_pos, primary_influence)],
             });
+            extra_counts.push(weight_count);
         }
         // Extra weights follow as a second pass over all vertices.
-        let mut extras: Vec<Vec<(u16, f32)>> = Vec::with_capacity(vertex_count);
-        for rv in &raws {
-            let mut vert_extras = Vec::with_capacity(rv.weight_count as usize);
-            for _ in 0..rv.weight_count {
+        for (v, &count) in verts.iter_mut().zip(&extra_counts) {
+            for _ in 0..count {
                 let bone = r.u16()?;
-                r.skip(12)?; // per-weight bone-local position, unused
+                let local_pos = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
                 let influence = r.f32()?;
-                vert_extras.push((bone, influence));
+                v.weights.push((bone, local_pos, influence));
             }
-            extras.push(vert_extras);
         }
+        surfaces.push(RawSurface { verts, indices });
+    }
+    Ok(surfaces)
+}
 
-        let mut verts = Vec::with_capacity(vertex_count);
-        for (rv, vert_extras) in raws.iter().zip(&extras) {
-            let bone = bones.get(rv.bone as usize).ok_or_else(|| {
-                anyhow!(
-                    "surface {si} vertex references bone {} out of range",
-                    rv.bone
-                )
+/// Rewrites the bind position of every viewhands bone that shares a vertex
+/// with another bone to the one the mesh's per-weight positions imply. The
+/// stored positions are placeholders, so skinning a blended vertex against
+/// them misplaces it by up to 12 units; the per-weight positions agree on
+/// each bone pair's offset to 0.003 (docs/research/xmodel-v14-format.md,
+/// "xmodelsurfs/<lod>"). A connected group keeps its first bone's position.
+fn recover_viewhands_bind(bones: &mut [Bone], surfaces: &[RawSurface]) {
+    // (a, b) -> summed `pos_b - pos_a` and its sample count.
+    let mut offsets: HashMap<(usize, usize), (Vec3, u32)> = HashMap::new();
+    for v in surfaces.iter().flat_map(|s| &s.verts) {
+        let (p, p_pos, _) = v.weights[0];
+        let Some(primary) = bones.get(p as usize) else {
+            continue;
+        };
+        let at_primary = primary.rot * p_pos;
+        for &(i, i_pos, _) in &v.weights[1..] {
+            let Some(other) = bones.get(i as usize) else {
+                continue;
+            };
+            let d = at_primary - other.rot * i_pos;
+            let (a, b) = (p as usize, i as usize);
+            for (key, d) in [((a, b), d), ((b, a), -d)] {
+                let e = offsets.entry(key).or_insert((Vec3::ZERO, 0));
+                e.0 += d;
+                e.1 += 1;
+            }
+        }
+    }
+    let mut placed = vec![false; bones.len()];
+    for start in 0..bones.len() {
+        if placed[start] || !offsets.keys().any(|&(a, _)| a == start) {
+            continue;
+        }
+        placed[start] = true;
+        let mut queue = vec![start];
+        while let Some(a) = queue.pop() {
+            for (&(from, to), &(sum, n)) in &offsets {
+                if from == a && !placed[to] {
+                    bones[to].pos = bones[a].pos + sum / n as f32;
+                    placed[to] = true;
+                    queue.push(to);
+                }
+            }
+        }
+    }
+}
+
+/// Bakes each vertex into model space through its primary bone's bind.
+fn bake_surfs(raw: Vec<RawSurface>, bones: &[Bone]) -> Result<Vec<Surface>> {
+    let mut surfaces = Vec::with_capacity(raw.len());
+    for (si, rs) in raw.into_iter().enumerate() {
+        let mut verts = Vec::with_capacity(rs.verts.len());
+        for rv in &rs.verts {
+            let (primary, local_pos, _) = rv.weights[0];
+            let bone = bones.get(primary as usize).ok_or_else(|| {
+                anyhow!("surface {si} vertex references bone {primary} out of range")
             })?;
-            let pos = bone.rot * rv.local_pos + bone.pos;
+            let pos = bone.rot * local_pos + bone.pos;
             let normal = bone.rot * Vec3::from_array(rv.normal);
 
-            let mut weights: Vec<(u16, f32)> = Vec::with_capacity(1 + vert_extras.len());
-            weights.push((rv.bone, rv.primary_influence));
-            weights.extend(vert_extras.iter().copied());
+            let mut weights: Vec<(u16, f32)> = rv.weights.iter().map(|&(b, _, w)| (b, w)).collect();
             weights.sort_by(|a, b| b.1.total_cmp(&a.1));
             weights.truncate(4);
             let total: f32 = weights.iter().map(|(_, w)| w).sum();
@@ -456,7 +509,7 @@ fn parse_surfs(data: &[u8], bones: &[Bone]) -> Result<Vec<Surface>> {
         }
         surfaces.push(Surface {
             verts,
-            indices,
+            indices: rs.indices,
             material: si,
         });
     }
@@ -470,8 +523,12 @@ fn parse_model(name: &str, desc: &[u8], parts: &[u8], surfs: &[u8]) -> Result<XM
         .as_bytes()
         .last()
         .ok_or_else(|| anyhow!("empty model name"))?;
-    let bones = parse_parts(parts, model_type)?;
-    let surfaces = parse_surfs(surfs, &bones)?;
+    let mut bones = parse_parts(parts, model_type)?;
+    let raw = parse_surfs(surfs)?;
+    if model_type == b'4' {
+        recover_viewhands_bind(&mut bones, &raw);
+    }
+    let surfaces = bake_surfs(raw, &bones)?;
     ensure!(
         surfaces.len() == descriptor.materials.len(),
         "surface count {} does not match material count {}",
@@ -867,6 +924,37 @@ mod tests {
         let (desc, parts, surfs) = synthetic_model([0, 1, 5]);
         let err = err_of(parse_model("m2", &desc, &parts, &surfs));
         assert!(err.contains("index"), "got: {err}");
+    }
+
+    /// Skinned against the recovered bind, every weight of a blended hands
+    /// vertex puts it on the same point; against the stored placeholders the
+    /// weights disagree by up to 12 units.
+    #[test]
+    fn viewhands_weights_agree_on_the_recovered_bind() {
+        let Some(fs) = crate::testing::game_fs() else {
+            return;
+        };
+        let lod = "viewmodel_hands_new4";
+        let parts = fs.read(&format!("xmodelparts/{lod}")).unwrap();
+        let raw = parse_surfs(&fs.read(&format!("xmodelsurfs/{lod}")).unwrap()).unwrap();
+        let spread = |bones: &[Bone]| {
+            let mut worst = 0.0f32;
+            for v in raw.iter().flat_map(|s| &s.verts) {
+                let at = |(b, p, _): (u16, Vec3, f32)| {
+                    let bone = &bones[b as usize];
+                    bone.rot * p + bone.pos
+                };
+                let primary = at(v.weights[0]);
+                for &w in &v.weights[1..] {
+                    worst = worst.max(primary.distance(at(w)));
+                }
+            }
+            worst
+        };
+        let mut bones = parse_parts(&parts, b'4').unwrap();
+        assert!(spread(&bones) > 10.0, "{}", spread(&bones));
+        recover_viewhands_bind(&mut bones, &raw);
+        assert!(spread(&bones) < 0.02, "{}", spread(&bones));
     }
 
     #[test]

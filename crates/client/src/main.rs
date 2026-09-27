@@ -2003,7 +2003,7 @@ impl ApplicationHandler for App {
                                     );
 
                                     let (muzzle_pos, muzzle_dir) = view
-                                        .muzzle(cam.pos, (cam_forward, cam_right, cam_up), fov)
+                                        .muzzle(cam.pos, (cam_forward, cam_right, cam_up))
                                         .unwrap_or_else(|| {
                                             view_muzzle(cam.pos, cam_forward, cam_right, cam_up)
                                         });
@@ -2318,8 +2318,13 @@ impl ApplicationHandler for App {
                                     .map(|m| w.pose.skin_matrices(&w.skeleton, m))
                                     .collect();
                             }
-                            fov = camera::DEFAULT_FOV_DEG
-                                + (w.def.ads_zoom_fov - camera::DEFAULT_FOV_DEG) * out.ads_frac;
+                            fov = weapon::view_fov_x(
+                                Some(&w.def),
+                                out.ads_frac,
+                                *ads_held,
+                                false,
+                                false,
+                            );
                             damp = 1.0 + (w.def.ads_view_bob_mult - 1.0) * out.ads_frac;
                             damp *= 1.0 + (w.def.ads_bob_factor - 1.0) * out.ads_frac;
                             if let Some(cue) = out.cue {
@@ -2465,6 +2470,7 @@ impl ApplicationHandler for App {
                             },
                             Some(renderer::VmDraw {
                                 transform: motion.transform(),
+                                fov_x: fov,
                                 bone_sets,
                             }),
                         )
