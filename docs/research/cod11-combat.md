@@ -1274,14 +1274,9 @@ same way. INFERRED: tracing ahead changes nothing else within a round. The
 next leg passes the player the callback ran on, a corpse that callback
 clones is `CONTENTS_CORPSE`, which the shot mask 0x2802031 leaves out, and
 no stock damage or kill callback moves another player. The list is applied
-in the attack slot of the tick, ahead of the missiles, the blasts and the
-queued `kill` and `mr` commands, which is where retail's shot runs too: its
-`FireWeapon` is inside the usercmd, ahead of `G_RunFrame`. INFERRED, not
-measured: what still differs is across rounds of one tick. Every round of a
-tick is traced against the players as the move pass left them, so a player
-one round kills still stops a later round of the same tick (another shooter's,
-or a turret's next), where retail's later round meets whatever contents the
-death left the victim with before its end frame.
+inside the cmd that fired the round, before the next cmd of any client runs,
+which is where retail's `FireWeapon` runs (16): a player one round kills is
+out of the way of every later round of the frame.
 
 Glass, measured on retail, 2026-09-27: `client-probes/probe_glass` (its
 section in that directory's README) on mp_depot stood a `--probe-target`
@@ -2043,6 +2038,10 @@ INFERRED: with the stock `g_knockback` the push is four units per second per
 point of `knockback`, so a 45-damage carbine hit on a standing player adds
 `(int)(45 * 0.3) = 13`, that is 52 units per second along the shot direction,
 and a prone player takes `(int)(45 * 0.02) = 0` and is not moved at all.
+
+**As implemented.** `ClientSim::take_damage` (`crates/server/src/spectate.rs`)
+adds the velocity and starts the timer; what the timer does in pmove is
+16.1's last paragraph.
 
 **Impact feedback**, `0x43a5b` onward. VERIFIED: the offsets, immediates,
 event numbers and call targets named in the list below. INFERRED: the
@@ -2875,6 +2874,20 @@ the kill.
 
 ### 9.2 What differs
 
+Closed on 2026-09-27, the bullet death frame:
+
+- **The bullet death frame was missing `EV_RAISE_WEAPON`.** VERIFIED, 8.4:
+  retail's reads events `[187, 189, 155]`; vcod's read 187 and 189 alone.
+  INFERRED: the 155 comes from cmds of the victim's own that reached retail
+  behind the shooter's in the same frame (16.1); vcod ran every client's
+  cmds before it traced any shot, so its victim had no cmd between the death
+  and the end frame. A second consequence of the same order: a player one
+  round killed still stopped a later round of the same tick. Fixed: the tick
+  runs the packets in the order the server executed them and fires each
+  cmd's rounds inside it (16.2). Pinned by `a_bullet_deaths_frame_is_retails`
+  and `a_player_killed_earlier_in_the_frame_stops_no_later_round`
+  (`tests/combat.rs`).
+
 Closed on 2026-09-27, the `kill` death frame and the respawn frame:
 
 - **The death frame was missing `EV_RAISE_WEAPON`.** VERIFIED, run: retail's
@@ -2921,13 +2934,6 @@ Closed on 2026-09-27, the `kill` death frame and the respawn frame:
   `turret_ab` join whose spawn point sits 2.6 units above a slope lands at
   11 units/s and plays `pb_combatrun_forward_loop` on its spawn frame, so
   that gate compares the legs toggle as its change from the first sample.
-- Not closed: a bullet death. VERIFIED, 8.4: retail's bullet death frame
-  reads events `[187, 189, 155]`. INFERRED: the 155 comes from cmds of the
-  victim's own that reached retail after the shooter's in the same frame;
-  vcod runs every client's cmds before any shot is traced
-  (`docs/protocol-1.1.md`, the divergence list's slot-order entry), so its
-  victim has no cmd between the death and the end frame, and its death frame
-  reads 187 and 189 alone.
 
 Closed on 2026-09-07, found on 2026-09-06 by the `--save-ads` capture on
 `kar98k_sniper_mp` (`mp_carentan-tdm-ads-sniper`, the one that answered the
@@ -3024,14 +3030,10 @@ in-process test and the headless run cover that path). PENDING.
 ### 9.4 What is not modelled at all
 
 Named here so a reader of sections 1 to 7 does not assume the code follows
-them: the `pm_time` stun (4.5); the view kick of 6's step 6;
-`EV_CROUCH_PAIN` (188);
-the `EV_RAISE_WEAPON` (155) retail raises on a bullet death frame beside
-`EV_DEATH` (9.2);
-the direct-hit `MOD_GRENADE` arm (13.1), which a stock frag cannot reach
-because its file spells `damage` 0; the pitch rate `G_MissileLandAngles`
-redraws at a bounce (11.2); and the splash event 173 and the water mask of
-12.1. Item pickup is modelled; `docs/research/cod11-items.md` is its own
+them: the view kick of 6's step 6; `EV_CROUCH_PAIN` (188); the direct-hit
+`MOD_GRENADE` arm (13.1), which a stock frag cannot reach because its file
+spells `damage` 0; the pitch rate `G_MissileLandAngles` redraws at a bounce
+(11.2); and the splash event 173 and the water mask of 12.1. Item pickup is modelled; `docs/research/cod11-items.md` is its own
 research doc.
 
 Melee (1.10, 2.5) and grenades (1.11, 11 to 14) were absent from the run 9.1
@@ -4316,3 +4318,151 @@ angles as well as the bytes); `Attack::Shot`, `Swing` and `Throw` carry the
 aim, and `bullet_fire`, `melee_fire` and `throw_velocity` fire along it.
 Left out on purpose: the gun-kick spring (zero on a server), `eFlags 0xc000`
 (no mounted MG), and the shellshock scale (client-side).
+
+---
+
+## 16. Where a shot runs in the frame
+
+### 16.1 Retail: one packet at a time, the shot inside its cmd
+
+**Packets.** VERIFIED, `cod_lnxded`: `SV_ExecuteClientMessage` (0x80872ec)
+has one caller, 0x808ca57, inside `SV_PacketEvent` (my name, 0x808c870, which
+holds the 9-byte header read at 0x808c9d1); `SV_PacketEvent` is called from
+`Com_EventLoop` (my name, 0x806bed4, the function holding "Com_EventLoop:
+oversize packet") at 0x806bfec and 0x806c1b8; the frame function 0x806ce88
+calls `Com_EventLoop` in the loop at 0x806cfe0..0x806d001 and then
+`SV_Frame` (my name, 0x808cdf8) at 0x806d0e4, whose `VM_Call` with 10 at
+0x808d1fa is vmMain case 10, `G_RunFrame` (0x50ea4). INFERRED: a packet is
+executed as it is drained, between game frames and never inside one, so
+within a server frame every client's cmds, and the shots in them, run in
+packet arrival order, and `G_RunFrame`'s `ClientEndFrame` pass runs after all
+of them.
+
+**A cmd.** VERIFIED, `game.mp.i386.so`, the calls `ClientThink_real`
+(0x3fee0) makes after its gates: `Pmove` at 0x40466,
+`BG_PlayerStateToEntityState` at 0x404f2 and 0x40510, `r.currentOrigin` from
+`s.pos.trBase` at 0x4051e..0x40533, the bounds from the pmove's at
+0x40539..0x40569, `ClientEvents` (0x3fd24) at 0x40589 with the
+`eventSequence` saved at 0x4003b, `trap_LinkEntity` at 0x40595,
+`G_TouchTriggers` at 0x405b3, `ClientImpacts` at 0x40614 and `Cmd_Activate_f`
+at 0x4064e. INFERRED: that is their order, so a cmd's shot is fired after its
+move and before its link and its touch pass, from the origin the move left.
+
+VERIFIED, `ClientEvents`: its loop starts at `max(old, eventSequence - 4)`
+(0x3fd3c..0x3fd4b) and runs while below `ps+0x84` (0x3fea1), reading
+`ps+0x88` and `ps+0x98` at `i & 3`; its jump table at `.rodata 0x72c84` (base
+159) sends 159, 160, 161 and 168 to `FireWeapon` (call at 0x3fe36), 165 to
+`FireWeaponMelee` (0x3fe44), 196 to `Drop_Weapon` (0x3fe8c), and 116 to 138,
+the landing pains, to `G_Damage` with means of death 0x15 (0x3fe0d).
+INFERRED: the events one cmd raised, from every 66 ms chop of it, are fired
+inside that cmd.
+
+VERIFIED, `FireWeapon` (0x68d68): it branches on `weaponDef+0x70`, 0 to
+`Bullet_Fire_Extended` (0x68ff9), 1 to `fire_grenade` (0x6904d) and 2 to
+`Weapon_RocketLauncher_Fire` (0x690b1); the muzzle is `ent+0x134` with
+`ps+0xd0` added on z (0x68df0..0x68e25), and the pitch and yaw are
+`client+0x220c` and `+0x2210` (0x68dcc..0x68ddb), the aim 15.1 describes.
+`FireWeaponMelee` calls `Weapon_Melee` at 0x69614.
+
+**The callback runs inside the shot.** VERIFIED: `Scr_PlayerDamage` calls
+`Scr_ExecEntThread` at 0x5cb15 and `Scr_FreeThread` on its result at
+0x5cb21, and `Scr_PlayerKilled` does the same at 0x5cc04 and 0x5cc10; both
+reach the engine through the table `Scr_FarHook` copies into 0xc0fc0
+(0x6c6f0), entry 43 `ExecEntThreadNum` and 83 `FreeThread`. VERIFIED,
+`cod_lnxded`: entry 43 is 0x80a9674, which calls 0x809f3bc and then
+0x80a79c4, and 0x80a79c4 calls the interpreter loop 0x80a45f0 (its opcode
+table at 0x80a4630). INFERRED: `CodeCallback_PlayerDamage`, and the
+`CodeCallback_PlayerKilled` a killing `finishPlayerDamage` reaches, run to
+their first `wait` inside `G_Damage`, inside the shooter's cmd, and every
+later cmd of the frame, the shooter's or anyone's, sees what they wrote.
+
+**What a later cmd meets.** VERIFIED, `player_die` (0x49a48), its stores in
+order of address: `ent+0x258` the attacker (0x49ac2), `Scr_PlayerKilled`
+(0x49bb6), `takedamage` 1, `r.contents` 0x4000000 (0x49c28), the unlink
+(0x49d68), `maxs[2]` 30.0 and the link (0x49d7d), health 0 and the relink
+(0x49d9d); there is no store to `ps+0x4` (`pm_type`), to `client+0x20d0`
+(`sessionState`) or to `r.svFlags`. VERIFIED: `ClientThink_real` tests no
+`sessionState` of 1 and no health before `Pmove`; its session tests there are
+the intermission arm (0x3ffca..0x4000a) and the spectator arm, which calls
+`SpectatorThink` at 0x4001d; its trace mask is 0x810011 when `pm_type > 5`
+and 0x2810011 otherwise (0x40092..0x400a4), and `PmoveSingle` clears
+0x2000000 on `pm_type > 5` (0x33e60..0x33e66). VERIFIED: the shot mask
+0x2802031 (0x688fe, and `Weapon_Melee` 0x68758) and both pmove masks leave
+0x4000000 out. INFERRED, from all of that:
+
+- a player one round kills stops no later round of the frame, and blocks no
+  later mover;
+- its own later cmds of the frame still run a live `Pmove` at `pm_type` 0,
+  since only `ClientEndFrame` writes the dead one (5.4), so `PM_Weapon` finds
+  the weapon the death dropped gone and raises `EV_RAISE_WEAPON` on the way
+  to empty hands (1.8), exactly as behind a `kill` (9.2); each rewrites the
+  bounds (0x40539..0x40569) and relinks, while `r.contents` stays
+  `player_die`'s CORPSE, since `ClientThink_real` has no store to
+  `ent+0x118`.
+
+VERIFIED, 8.4's bullet death: events `[187, 189, 155]` over `eventSequence`
+3, the 187 left from the first hit, and velocity `(-1, 82, 0)` where the
+first hit's frame read 80. INFERRED: the victim's cmds that arrived behind
+the shooter's ran after the kill, disarmed, and slid under the knockback
+timer below, whose ground gravity the walk's clip turns into ground speed
+(`cod11-mantle.md`, "The ground clip keeps the speed"), which is the 2 units.
+
+**The pose a round is traced against.** VERIFIED: `G_DObjCalcPose`
+(0x67314) is reached through vmMain case 13 (0x50ed0), which `cod_lnxded`'s
+entity clip 0x809105c calls at 0x8091254 after its bounds test; its only
+other caller is `ClientEndFrame` at 0x414dc under `g_debugLocDamage`.
+INFERRED: the pose is computed at the trace, off the anim state
+`ClientEndFrame`'s `BG_PlayerAnimation` (0x41486) last set, which is the
+previous frame's, at wherever the body is linked now.
+
+**The knockback timer a hit starts.** VERIFIED: `finishPlayerDamage` stores
+`clamp(knockback * 2, 50, 200)` into `pm_time` (`ps+0x10`) only when it
+reads 0, and ORs 0x200 into `pm_flags` (0x43a22..0x43a4a), both on the arm
+where the knockback is non-zero (4.5). VERIFIED, in pmove: `PM_Friction`
+tests `pm_flags` 0x200 at 0x2e4fb and jumps past the ground term;
+`PM_WalkMove` takes an accel of 1.0 on it (0x2f4a2) and, on it, subtracts
+`ps.gravity * frametime` from `velocity[2]` (0x2f59c..0x2f5b5);
+`PmoveSingle` calls `PM_DropTimers` (0x342f9) ahead of `PM_WalkMove`
+(0x3431b). INFERRED: for the timer's 50 to 200 ms a hit player slides with
+no ground friction, and a cmd as long as the timer runs its walk with the
+timer already dropped.
+
+### 16.2 As implemented
+
+`Server::replay_moves` (`crates/server/src/server.rs`) runs every packet
+since the last tick in the order the server executed it: `handle_packet`
+numbers each client packet, a bot's cmd is a packet of its own numbered
+after the real ones, each queued cmd and `kill` carries its packet's number,
+and the replay takes the lowest number across all clients each time, a
+`kill` ahead of its packet's cmds. Per cmd it runs the move, mirrors what the
+move left onto the host, fires the shots and swings the cmd raised, and then
+runs the touch pass, the item pass and the use key. A shot is traced against
+every client as its own packets so far left it; each impact goes out and
+each hit runs `CodeCallback_PlayerDamage` there and then, and what the
+callback queued for the victim (the damage, the death, the drop) is applied
+to its sim before any later cmd runs. A `trigger_hurt` that kills the mover
+inside its touch pass is applied the same way. `finishPlayerDamage`'s timer
+is `ClientSim::take_damage`, carried as `knockback_flags` beside
+`knockback_ms` (`vcod_common::pmove`), and the wire's `pm_flags` and
+`pm_time` carry it.
+
+What still differs, each INFERRED from 16.1 and not measured:
+
+- The packets of a tick run at the tick, after the clock has advanced;
+  retail runs them as they arrive, on the previous frame's `level.time`
+  (15.6's 50 ms). Their relative order is the same.
+- A throw is still spawned in the tick's missile slot, off the eye the
+  thrower's last cmd of the tick left, where retail's `fire_grenade` runs in
+  the throw's own cmd.
+- A body is posed off the anims its own last round left, which is this
+  tick's for a player the frame's hits or `kill` interrupted and the last
+  tick's otherwise.
+- `turret_think_client` still fires in `ClientEndFrame`'s pass, which is
+  where retail's runs (`cod11-turrets.md` 6.1).
+
+Pinned by `a_bullet_deaths_frame_is_retails`, which holds the victim's death
+frame to the capture's line on health, `pm_type`, the event ring and its
+parms, the damage feedback and `torsoAnim`, and
+`a_player_killed_earlier_in_the_frame_stops_no_later_round`
+(`crates/server/tests/combat.rs`), and
+`a_damage_knockback_slides_free_of_friction` (`vcod_common::pmove`).

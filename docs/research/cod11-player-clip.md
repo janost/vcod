@@ -642,23 +642,22 @@ The gates:
   The two agree on every row of the bump capture; no capture covers a
   vertical landing on a body, since retail never let one happen (section
   9.3), and no gate covers geometry where the two could differ.
-- **Arrival order.** VERIFIED: `SV_UserMove`'s per-cmd loop calls
-  0x8092158 at 0x80872cb with the pointer at 0x80e30c4, 7 and the client's
-  slot index. INFERRED: that is the game VM's `ClientThink`, run per cmd as
-  each client's packet is parsed, so clients' moves interleave in packet
-  arrival order and a later packet moves against an earlier one's new
-  position. `replay_moves` runs each client's queued cmds in slot order
-  instead. Who moved first decides
-  who stops against whom when two players close on each other inside one
-  frame. `docs/protocol-1.1.md` lists it under "What vcod's server does that
-  retail does not".
-- **A `trigger_hurt` kill during the move pass.** It runs the damage
-  callback inside that cmd's touch pass, but the sim's `dead`, and with it
-  the CORPSE contents, lands only at `mirror_vitals` after the script frame,
-  so the victim still blocks the higher slots' moves in that tick.
+- **Arrival order**, closed 2026-09-27. VERIFIED: `SV_UserMove`'s per-cmd
+  loop calls 0x8092158 at 0x80872cb with the pointer at 0x80e30c4, 7 and the
+  client's slot index. INFERRED: that is the game VM's `ClientThink`, run per
+  cmd as each client's packet is parsed, so clients' moves interleave in
+  packet arrival order and a later packet moves against an earlier one's new
+  position. `replay_moves` ran each client's queued cmds in slot order; it
+  now runs them in the order the server executed their packets
+  (`cod11-combat.md` 16.2).
+- **A `trigger_hurt` kill during the move pass**, closed 2026-09-27. It ran
+  the damage callback inside that cmd's touch pass, but the sim's `dead`, and
+  with it the CORPSE contents, landed only at `mirror_vitals` after the
+  script frame, so the victim still blocked later movers in that tick.
   VERIFIED: retail's `player_die` writes CORPSE at 0x49c28. INFERRED: it
   does so at the kill, so a retail victim stops blocking within the frame.
-  A stock map's only `trigger_hurt` is the kill volume under the floor.
+  The callback's ops now reach the sim straight after that touch pass. A
+  stock map's only `trigger_hurt` is the kill volume under the floor.
 - **The landing stun** (section 8) is not modelled. A follow-up with the
   jump port.
 - **A client that sends no cmds** keeps the `solid` of its last link. That

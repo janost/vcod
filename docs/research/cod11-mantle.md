@@ -1256,8 +1256,8 @@ ground speed.
 VERIFIED, 0x2f58c-0x2f5b5: gravity is applied to `velocity[2]` ahead of all
 this when the ground's surface flags (pml+0x50) carry 0x2 or `pm_flags`
 0x200 is set. INFERRED: Q3's slick-or-knockback gravity with CoD's own
-bits. Not modelled; vcod's knockback timer is 0x100, which this does not
-test.
+bits. 0x200 is the timer a hit starts (`cod11-combat.md` 16.1), which vcod
+carries beside the player-clip push's 0x100; the slick arm is not modelled.
 
 VERIFIED, off the bump walker (`mp_carentan-dm-bump-walker.txt`): after
 the push at crouch/jump 70633 the walker lands under the knockback timer at

@@ -594,35 +594,46 @@ engineering setup works.
   kill, or the gun's own deletion. The scriptent mover verbs move things and their trajectories reach the wire
   (`docs/research/cod11-movers.md`). A probe run against it reproduces the
   retail `kill` death capture field for field, death and respawn frames
-  included; a bullet death's frame still lacks the `EV_RAISE_WEAPON`
-  retail's victim raises in cmds that arrive after the shot
-  (`docs/research/cod11-combat.md` section 9). What the
+  included, and a bullet death's frame carries the `EV_RAISE_WEAPON`
+  retail's victim raises in the cmds that arrive behind the shot
+  (`docs/research/cod11-combat.md` sections 9 and 16). What the
   map-cycle probes measured of it is `docs/research/cod11-map-cycle.md`
   section 8.
 - The tick, in order: the console drains first (a `map`, `map_restart` or
   `map_rotate` line an earlier frame's script queued reloads the level before
   anything else runs), then expired clients, then the bots queue their cmds,
-  then the clock advances, then each client's queued usercmds (`replay_moves`,
-  a spectator's cmd running `SpectatorThink`'s buttons first, the follow
-  cycle and let-go, and no pmove while its follow is on; otherwise
-  one pmove step per cmd against every other client's capsule, the mover's
-  own entry in that body list rewritten after each of its steps so a later
-  slot moves against an earlier one's new position; it is also where the
-  weapon machine queues a frame's shots, swings and throws; a client's cmds after a use press wait for the
-  touch pass and run in a second round, so a mount lands inside the use cmd,
-  and a `kill` splits them the same way at the place in the stream it
-  arrived, retail running a packet's client commands ahead of its usercmds:
-  it runs after that round's touch pass with the callback's drop and death
-  op applied to the sim there and then, so the cmds behind it move alive at
-  the `pm_type` the last end frame wrote; the anim update also runs per
-  round, off that round's last cmd). Each cmd's origin, `pm_type`, `on_ground`, view
-  yaw, buttons, the `ps.weapon` a move switched to and the `clipOnly` weapon a
-  last round spent are recorded as it runs, and once every client has moved
-  this round, each client's ammo and clip arrays are copied onto the host (`client_ammo`,
-  which every `GameHost::weapon_op` then moves in place, and ops still queued
-  are re-applied on top) and the rest are mirrored onto the host cmd by cmd,
-  the take included, with the touch pass after each, the item half of it after
-  the trigger half and the use key after both -- the same use key whose rising
+  then the clock advances, then every packet queued since the last tick in
+  the order the server executed it (`replay_moves`: `handle_packet` numbers
+  each client packet, a bot's cmd is a packet of its own numbered after them,
+  and the replay takes the lowest number across all clients each time, a
+  packet's `kill` ahead of its cmds, retail running a packet's client
+  commands ahead of its usercmds; the `kill` applies the callback's drop and
+  death op to the sim there and then, so the cmds behind it move alive at the
+  `pm_type` the last end frame wrote). Each cmd is one `ClientThink_real`: a
+  spectator's cmd runs `SpectatorThink`'s buttons first, the follow cycle
+  and let-go, and no pmove while its follow is on; otherwise one pmove step
+  per cmd against every other client's capsule, the mover's own entry in
+  that body list rewritten after each of its steps so a later packet moves
+  against an earlier one's new position; then what the move left is mirrored
+  onto the host; then the shots and swings the cmd raised are fired, each
+  traced against every client as its own packets so far left it, each wall
+  impact out and each hit's damage callback run there and then in the order
+  the round met them (its `finishPlayerDamage` raises a bullet weapon's flesh
+  impacts, so they number between the legs' own the way retail's do), and
+  what the callback queued for the victim applied to its sim before any
+  later cmd runs, so a player one round kills is out of every later round's
+  way and its own later cmds still move alive and disarm
+  (`docs/research/cod11-combat.md` 16); then the touch pass, and a
+  `trigger_hurt` death in it lands on the sim the same way; a throw is
+  queued for the missile pass. The anim update runs per client off its last
+  cmd, at the end and wherever a kill, a hit, a use press or a
+  `trigger_hurt` death breaks into its cmds. The host mirror after each move
+  is its origin, `pm_type`, `on_ground`, view yaw, the `ps.weapon` a move
+  switched to and the `clipOnly` weapon a last round spent, the take
+  included, its entity state, cook, height and ammo and clip arrays
+  (`client_ammo`, which every `GameHost::weapon_op` then moves in place, and
+  ops still queued are re-applied on top), and the touch pass reads it: the
+  item half after the trigger half and the use key after both -- the same use key whose rising
   edge arms a turret mount there, once the gun's arc allows it -- the way retail updates
   `r.currentOrigin` and calls `G_TouchTriggers` inside `ClientThink`; a
   trigger the pass fires is queued, not woken, and its `waittill` threads are
@@ -634,17 +645,13 @@ engineering setup works.
   damage callback there and then. The item pass writes weapons and health onto
   the host at once and queues its ammo as weapon ops and its event as a sim
   op, both applied after the script frame; the ammo it reads is the host's
-  mirror, copied from each sim once per round before the pass and moved by every weapon
+  mirror, copied from the mover's sim before each cmd's pass and moved by every weapon
   op after, so a `dropItem` in the script frame sees what the pass took. The
   entity states `cloneplayer` reads and the posed bodies a scripted blast
-  traces are mirrored last in that pass. Then the
-  queued attacks themselves (a trace per leg of each round, a wall impact
-  temp entity and a hit per player struck, in the order the round met them),
-  then each client's last cmd buttons for `useButtonPressed`, then the
-  attacks' impacts go out and their hits run the damage callback there and
-  then, in that same order (its `finishPlayerDamage` raises a bullet
-  weapon's flesh impacts, so they number between the legs' own the way
-  retail's do), then the missiles fly and any due fuse explodes, then the
+  traces are mirrored again last in that pass. Then each client's last cmd
+  buttons for `useButtonPressed`, then the throws spawn their missiles, off
+  the eye each thrower's last cmd left, then the missiles fly and any due
+  fuse explodes, then the
   blasts become hits, then the `mr` menu responses, which the packet pass
   only queues because it runs before the clock advances, then `deliver_hits` for the blasts so their damage
   callback has run before script, then the script frame, then the script's spawns (each with the spawn's own
@@ -692,10 +699,10 @@ engineering setup works.
   each playing or dead client's own frame are kept for the next frame, and
   the frame itself is archived, while `setarchive` is on. A dropped
   client's followers are passed on at the drop, outside the tick. Origin, `pm_type`,
-  `on_ground`, yaw, the ammo arrays, the last-round take and the current
-  weapon, but only the one a move switched to, are the mirrors that no longer
-  wait for the post-script pass: the touch pass needs this cmd's values, not
-  last tick's, so anything reading them on the host between the move pass and
+  `on_ground`, yaw, the ammo arrays, the entity state, the last-round take and
+  the current weapon, but only the one a move switched to, are the mirrors
+  that no longer wait for the post-script pass: the touch pass and the damage
+  callbacks need this cmd's values, not last tick's, so anything reading them on the host between the move pass and
   the script frame sees the post-move values. The re-anchor writes a linked
   client's origin again after the script frame, so this tick's touch passes
   ran at the un-anchored spot. Move anything else across that order and a
