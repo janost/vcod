@@ -482,6 +482,9 @@ pub fn probe(
                             let ms = target_probe.elapsed_ms(now);
                             target_probe.scoreboards.push((ms, tokens.join(" ")));
                         }
+                        if probe_follow {
+                            follow.on_scoreboard(now, client.snapshots().newest(), &tokens);
+                        }
                         continue;
                     }
                     println!("serverCommand: {tokens:?}");
@@ -8750,6 +8753,28 @@ impl FollowProbe {
             }
         }
         cmd
+    }
+
+    /// A `b` scoreboard: the probe never sends `score`, so every one is a
+    /// push. Printed beside the snapshot of the packet that carried it, whose
+    /// commands the client parses ahead of the snapshot.
+    fn on_scoreboard(&self, now: Instant, s: Option<&net::snapshot::Snapshot>, tokens: &[String]) {
+        let p = &net::protocol::PROTOCOL_V1;
+        let ms = self
+            .active_at
+            .map_or(0, |t| now.saturating_duration_since(t).as_millis());
+        let (snap, st, num, pm_type) = s.map_or((0, 0, -1, -1), |s| {
+            (
+                s.message_num,
+                s.server_time,
+                s.ps.field_i32(p, "clientNum"),
+                s.ps.field_i32(p, "pm_type"),
+            )
+        });
+        println!(
+            "FOLLOW b t={ms} snap {snap} st={st} clientNum={num} pm_type={pm_type}: {}",
+            tokens.join(" ")
+        );
     }
 
     fn observe(&mut self, now: Instant, s: &net::snapshot::Snapshot) {

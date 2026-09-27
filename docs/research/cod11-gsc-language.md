@@ -766,8 +766,9 @@ is why a `dm` client is put back through the team menu after a restart and an
 fatal script error. The setter writes configstring 5 for axis and 6 for
 allies, formatted `%i`, and dirties the flag whose drain pushes the `b`
 scoreboard to every client in intermission. It and `CalculateRanks` are the
-only two writers of that flag, so a team score write is one of exactly two
-ways a scoreboard goes out unasked.
+only two writers of that flag. The one other scoreboard that goes out unasked
+is `player_die`'s, to the victim's followers
+(`docs/research/cod11-spectator-follow.md` 4).
 
 **`playLocalSound(alias)` reaches one client only.** VERIFIED
 (`docs/research/cod11-sound-system.md`, section 9): it allocates the alias the

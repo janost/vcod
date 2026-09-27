@@ -107,8 +107,7 @@ pub fn finish_player_damage(
     v.health -= damage;
     let fatal = v.health <= 0;
     if fatal {
-        v.health = 0;
-        v.dead = true;
+        host.die(slot);
     }
     host.client_sim_ops.push((
         slot,
@@ -296,12 +295,10 @@ pub fn obituary(
 /// stays 0, which is what the retail hit capture's own suicides read
 /// (`docs/research/cod11-combat.md` section 8.4, `stats[1]` 0).
 pub fn suicide_effects(host: &mut GameHost, cx: &mut Cx, slot: usize) -> Option<Vec<Value>> {
-    let v = host.client_vitals.get_mut(slot)?;
-    if v.dead {
+    if host.client_vitals.get(slot)?.dead {
         return None;
     }
-    v.health = 0;
-    v.dead = true;
+    host.die(slot);
     host.client_sim_ops.push((
         slot,
         SimOp::Damaged {
