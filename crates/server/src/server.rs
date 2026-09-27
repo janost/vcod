@@ -7219,4 +7219,19 @@ mod tests {
         assert_eq!(ps_i32(&s, "pm_type"), 0);
         assert_eq!(ps_i32(&rig.step(0), "pm_type"), 6);
     }
+
+    /// `ClientSpawn` runs the spawned client's own `ClientEndFrame`
+    /// (0x42a75), whose playing arm sets the own-view bit, so a follower
+    /// numbered below it copies the new life on the spawn's frame rather
+    /// than finding nothing and letting go (the retail dm run: slot 0 read
+    /// slot 1's respawn frame).
+    #[test]
+    fn a_follower_below_its_target_rides_the_target_s_respawn() {
+        let mut rig = FollowRig::new();
+        rig.press(msg::BUTTON_ATTACK);
+        rig.sim_mut(1).become_player(FOLLOW_P2, 0.0, [0; 3]);
+        let s = rig.step(0);
+        assert_eq!(ps_i32(&s, "clientNum"), 1);
+        assert_eq!(s.ps.origin(&PROTOCOL_V1), FOLLOW_P2);
+    }
 }

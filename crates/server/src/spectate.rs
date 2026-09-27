@@ -289,8 +289,8 @@ pub struct ClientSim {
     /// Who this spectator's view rides (`crate::follow`).
     pub follow: crate::follow::Follow,
     /// `pm_flags` 0x40000 as the last end frame left it: a playing or dead
-    /// client, which is what a follow may copy. `ClientSpawn`'s memset
-    /// clears it until the next end frame.
+    /// client, which is what a follow may copy. `ClientSpawn`'s own end
+    /// frame sets it for a player and clears it for anyone else.
     pub own_view: bool,
     /// The buttons of the last cmd this client ran, `client+0x21e8`, which
     /// the next cmd's edges are taken against. The spawn's memset zeroes it.
@@ -591,7 +591,6 @@ impl ClientSim {
         // The memset again, which keeps only `sess` and writes -1 to the
         // follow target after it (0x4282c).
         self.follow = Default::default();
-        self.own_view = false;
         self.last_buttons = 0;
         // Every spawn consumes a flip, a spectator's and the intermission
         // camera's included: retail's capture reads 16 on a respawn's
@@ -617,6 +616,9 @@ impl ClientSim {
     /// loses `PMF_RESPAWNED` here; a dead one's eye drops those 100 ms. The
     /// live arm's own 100 ms of null-cmd pmove is not run.
     fn spawn_think(&mut self, world: Option<MoveWorld<'_>>) {
+        // The spawn's own `ClientEndFrame` (0x42a75) ahead of the think: its
+        // playing and dead arm gives the client its own view at once.
+        self.own_view = self.pm_type == PmType::Normal;
         match (self.pm_type, self.dead) {
             (PmType::Intermission, _) => {}
             (PmType::Normal, true) => {
