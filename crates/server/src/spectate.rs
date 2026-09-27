@@ -1158,31 +1158,33 @@ impl ClientSim {
         self.anim.legs()
     }
 
-    /// What the locational trace poses this client's bones from: the two
-    /// live anim indices with the phase each is at, and the aim the spine
-    /// layer bends by.
+    /// This client's body as a locational trace meets it, `None` unless it
+    /// is alive and playing. The pose is the two live anim indices with the
+    /// phase each is at, and the aim the spine layer bends by.
     ///
     /// The waist pitch is 0 and the torso pitch is the client's own view
     /// pitch. Retail splits the two across `fWaistPitch` and `fTorsoPitch`
     /// with constants that are not decoded
     /// (`docs/research/player-model-anim-system.md`), and this server sends
     /// neither field, so there is nothing better to read.
-    pub fn pose_inputs<'a>(
-        &self,
-        anims: &'a vcod_common::animtree::PlayerAnims,
-        now_ms: i32,
-    ) -> vcod_common::playerpose::PoseInputs<'a> {
-        vcod_common::playerpose::PoseInputs {
-            anims,
+    pub fn hit_body(&self, slot: usize) -> Option<crate::game::combat::HitBody> {
+        if self.pm_type != PmType::Normal || self.dead {
+            return None;
+        }
+        Some(crate::game::combat::HitBody {
+            slot,
+            origin: self.ps.origin,
+            yaw: self.ps.yaw,
+            mins: self.ps.mins(),
+            maxs: self.ps.maxs(),
+            assembly: self.assembly.clone(),
             legs: self.anim.legs(),
             torso: self.anim.torso(),
             legs_start_ms: self.anim.legs_start_ms(),
             torso_start_ms: self.anim.torso_start_ms(),
-            now_ms,
             torso_pitch: self.ps.pitch.to_degrees(),
-            waist_pitch: 0.0,
             lean: self.ps.lean / vcod_common::pmove::LEAN_MAX,
-        }
+        })
     }
 
     /// `ps.delta_angles`, what a bot's absolute cmd angles must subtract to
