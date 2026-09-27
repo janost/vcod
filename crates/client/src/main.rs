@@ -2036,7 +2036,7 @@ impl ApplicationHandler for App {
                                     // `other_entity_num`, and the body the camera rides
                                     // (ours, or the followed player's) is excluded from
                                     // the muzzle map, so key the view muzzle under it too
-                                    // or its shots get no tracer.
+                                    // for the whizby; its tracer is `view_body`'s call.
                                     if let Ok(num) = u32::try_from(skip_num) {
                                         muzzles.insert(num, (muzzle_pos, muzzle_dir));
                                     }
@@ -2095,6 +2095,10 @@ impl ApplicationHandler for App {
                                             muzzles: &muzzles,
                                             weapon_flash: &weapon_flash,
                                             view_flash: vm.is_some().then_some(weapons.as_slice()),
+                                            view_body: fx::registry::view_body(
+                                                newest.ps.field_i32(p, "pm_flags"),
+                                                ps_client,
+                                            ),
                                         };
                                         // Our own ring plays off the prediction, and
                                         // the snapshot's copy of it is skipped. The
@@ -2416,6 +2420,7 @@ impl ApplicationHandler for App {
                                         muzzles: &muzzles,
                                         weapon_flash: &HashMap::new(),
                                         view_flash: None,
+                                        view_body: None,
                                     };
                                     let ev = net::events::GameEvent {
                                         event: fx::registry::EV_BULLET_HIT_SMALL,
