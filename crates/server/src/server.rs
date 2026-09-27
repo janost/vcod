@@ -28,7 +28,6 @@ use vcod_common::net::msg::{
 use vcod_common::net::netchan::{ClientMessage, ServerNetchan, MAX_RELIABLE_COMMANDS};
 use vcod_common::net::protocol::{Protocol, PROTOCOL_V1};
 use vcod_common::net::{com_hash_key, info_value_for_key, snapshot};
-use vcod_common::pmove::MAX_FRAME_MS;
 
 /// `MAX_CHALLENGES`, server.h:198.
 const MAX_CHALLENGES: usize = 1024;
@@ -60,12 +59,6 @@ const MAX_PACKET_USERCMDS: u8 = 32;
 const MAX_PENDING_CMDS: usize = 64;
 /// pmove steps per snapshot tick; a flood beyond this fast-forwards.
 const MAX_CMDS_PER_TICK: usize = 32;
-/// `Pmove`'s catch-up (`game.mp.i386.so` 0x34492): a client further in arrears
-/// than this has the excess dropped rather than simulated, which also bounds
-/// the chop loop to 16 steps per cmd. `docs/protocol-1.1.md`, "How long a cmd
-/// is simulated for", has the rest of retail's rule, including the two clamps
-/// vcod does not apply.
-const MAX_PMOVE_ARREARS_MS: i32 = 1000;
 /// `SV_ClientCommand`'s flood window (`cod_lnxded` 0x8086f5f, `add eax,0x320`):
 /// a non-exempt client command opens 800 ms during which every further
 /// non-exempt one from an active client is dropped before the game sees it
@@ -3347,32 +3340,17 @@ impl Server {
                     if dt_ms <= 0 {
                         continue;
                     }
-                    // A hitching client's gap is simulated, not discarded: retail
-                    // walks `commandTime` up to the cmd's clock in steps of at most
-                    // `MAX_FRAME_MS`, each its own `PmoveSingle`, and drops only
-                    // the arrears past `MAX_PMOVE_ARREARS_MS`.
-                    let mut base = c.last_processed_st;
-                    if dt_ms > MAX_PMOVE_ARREARS_MS {
-                        base = cmd.server_time - MAX_PMOVE_ARREARS_MS;
-                    }
                     // The aim block runs once per cmd, on the whole cmd, before
                     // the chop (`ClientThink_real` 0x40169-0x40456).
                     sim.update_aim(dt_ms, now_ms, weapons.defs());
                     let mut raised = Vec::new();
                     let mut take = None;
-                    while base != cmd.server_time {
-                        let msec = (cmd.server_time - base).min(MAX_FRAME_MS as i32);
-                        base += msec;
-                        // Each step runs on a cmd stamped at its own end, which is
-                        // what the loop hands `PmoveSingle` (0x344e4) and what that
-                        // then leaves in `commandTime` (0x34074).
-                        let step = UserCmd {
-                            server_time: base,
-                            ..cmd
-                        };
+                    // A hitching client's gap is simulated, not discarded: see
+                    // `cmd::chop`.
+                    for (step, dt) in vcod_common::pmove::cmd::chop(c.last_processed_st, &cmd) {
                         raised.extend(sim.step(
                             &step,
-                            msec as f32 / 1000.0,
+                            dt,
                             collision.map(|w| MoveWorld::new(w, &bodies, slot as u32)),
                             weapons.defs(),
                         ));

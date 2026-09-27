@@ -1,12 +1,13 @@
-//! The client's predictor (`vcod_common::pmove::predict`) against the two
-//! things it copies: the server's own per-cmd step, and retail's mover.
+//! The client's predictor (`vcod_common::pmove::predict`) against the
+//! server's sim and against retail's mover.
 //!
 //! `predictor_matches_the_server_step` runs a scripted cmd stream through
 //! `ClientSim` the way `replay_moves` does and, every fifth cmd, rebuilds the
 //! predictor from the playerstate the server would send, round-tripped
 //! through the wire codec, then runs the next cmds on both and compares the
-//! fields prediction draws from. Same code on the same inputs, so everything is exact
-//! except what the wire itself narrows. The event ring's half,
+//! fields prediction draws from. Both run `pmove::cmd`'s step, so what this
+//! pins is `from_wire` against `to_wire` and the predictor's wrapping against
+//! the server's: everything is exact except what the wire itself narrows. The event ring's half,
 //! `predictor_ring_matches_the_server_step`, needed `bobCycle` on the wire
 //! before it could pass; it does now.
 //!
@@ -31,9 +32,7 @@ use vcod_common::weapon::WeaponDef;
 use vcod_server::spectate::ClientSim;
 
 const P: &Protocol = &PROTOCOL_V1;
-const ANGLE2SHORT: f32 = 65536.0 / 360.0;
-/// `replay_moves`' arrears cap, `crates/server/src/server.rs`.
-const MAX_PMOVE_ARREARS_MS: i32 = 1000;
+const ANGLE2SHORT: f32 = pm::cmd::ANGLE2SHORT;
 
 /// Retail's configstring 7 on mp_carentan dm.
 fn retail_cs7() -> &'static str {
@@ -151,21 +150,11 @@ impl Run<'_> {
         if dt_ms <= 0 {
             return;
         }
-        let mut base = self.st;
-        if dt_ms > MAX_PMOVE_ARREARS_MS {
-            base = cmd.server_time - MAX_PMOVE_ARREARS_MS;
-        }
         self.sim.update_aim(dt_ms, cmd.server_time, self.weapons);
-        while base != cmd.server_time {
-            let msec = (cmd.server_time - base).min(pm::MAX_FRAME_MS as i32);
-            base += msec;
-            let step = UserCmd {
-                server_time: base,
-                ..*cmd
-            };
+        for (step, dt) in pm::cmd::chop(self.st, cmd) {
             self.sim.step(
                 &step,
-                msec as f32 / 1000.0,
+                dt,
                 Some(MoveWorld::new(self.world, &self.bodies, 0)),
                 self.weapons,
             );
@@ -258,18 +247,18 @@ impl Run<'_> {
         // `eventSequence` and the slots are 8 bits on the wire.
         check(
             "event_sequence",
-            (ring.seq & 0xff).to_string(),
-            self.pred.event_sequence.to_string(),
+            ring.seq.to_string(),
+            self.pred.ring.seq.to_string(),
         );
         check(
             "events",
             format!("{:?}", ring.events.map(|e| e & 0xff)),
-            format!("{:?}", self.pred.events),
+            format!("{:?}", self.pred.ring.events),
         );
         check(
             "event_parms",
             format!("{:?}", ring.parms.map(|e| e & 0xff)),
-            format!("{:?}", self.pred.event_parms),
+            format!("{:?}", self.pred.ring.parms),
         );
         self.record(bad);
     }

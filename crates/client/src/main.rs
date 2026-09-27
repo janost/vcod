@@ -2114,9 +2114,9 @@ impl ApplicationHandler for App {
                                             evs.extend(
                                                 predicted_events
                                                     .take_predicted(
-                                                        pred.event_sequence,
-                                                        pred.events,
-                                                        pred.event_parms,
+                                                        pred.ring.seq,
+                                                        pred.ring.events,
+                                                        pred.ring.parms,
                                                     )
                                                     .into_iter()
                                                     .map(|(_, event, parm)| {

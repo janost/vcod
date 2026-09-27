@@ -411,9 +411,7 @@ mod tests {
             delta_angles: [0; 3],
             command_time: 0,
             view_lerp_start: 0,
-            event_sequence: 0,
-            events: [0; 4],
-            event_parms: [0; 4],
+            ring: Default::default(),
         };
         pred.ps.ammoclip[10] = 4;
         pred.ps.aim_spread_scale = 50.0;

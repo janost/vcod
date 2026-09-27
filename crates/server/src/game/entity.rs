@@ -30,7 +30,7 @@ use crate::game::fields::{
     engine_slot_count, hud_slot_count, pers_index, route_hud, Route, CLIENT_FIELDS, HUD_WHITE,
 };
 use crate::server::MAX_CLIENTS;
-use crate::spectate::EventRing;
+use vcod_common::pmove::cmd::EventRing;
 use vcod_gsc::{Atom, Cx, EntId, ErrorKind, StructId, Value};
 
 /// One script-visible object. `engine` is indexed by the dense slot

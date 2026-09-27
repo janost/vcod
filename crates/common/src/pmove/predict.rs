@@ -1,19 +1,14 @@
 //! Client-side prediction's shared half: the sim playerstate rebuilt from a
-//! snapshot's wire playerstate, and the per-cmd step the server runs on it.
-//! Both are copies of server code (`crates/server/src/spectate.rs`,
-//! `crates/server/src/server.rs`); keep them in step until the dedupe.
+//! snapshot's wire playerstate, and the server's own per-cmd step
+//! ([`super::cmd`]) run on it.
 
-use super::{weapon, PlayerState, PmInput, Stance};
+use super::cmd::{self, EventRing};
+use super::{weapon, PlayerState, Stance};
 use crate::movetrace::MoveWorld;
 use crate::net::msg::{self, UserCmd};
 use crate::net::protocol::{Protocol, ENTITYNUM_NONE};
 use crate::weapon::WeaponDef;
 use glam::Vec3;
-
-/// ANGLE2SHORT units per degree.
-const ANGLE2SHORT: f32 = 65536.0 / 360.0;
-/// What `Pmove` keeps of a long cmd; the rest is dropped.
-const MAX_PMOVE_ARREARS_MS: i32 = 1000;
 
 const PM_NORMAL: i32 = 0;
 const PM_NORMAL_LINKED: i32 = 1;
@@ -39,10 +34,7 @@ pub struct Predicted {
     pub command_time: i32,
     /// `viewHeightLerpTime`; 0 while the eye is settled.
     pub view_lerp_start: i32,
-    /// `eventSequence`, kept in the wire's 8 bits.
-    pub event_sequence: i32,
-    pub events: [i32; 4],
-    pub event_parms: [i32; 4],
+    pub ring: EventRing,
 }
 
 /// Whether a `pm_type` is one the client predicts: normal and linked.
@@ -164,121 +156,49 @@ pub fn from_wire(p: &Protocol, w: &msg::PlayerState, last_cmd: Option<&UserCmd>)
             .map(|n| int(n) & 0xffff),
         command_time,
         view_lerp_start,
-        event_sequence: int("eventSequence") & 0xff,
-        events: ["events[0]", "events[1]", "events[2]", "events[3]"].map(int),
-        event_parms: [
-            "eventParms[0]",
-            "eventParms[1]",
-            "eventParms[2]",
-            "eventParms[3]",
-        ]
-        .map(int),
+        ring: EventRing {
+            events: ["events[0]", "events[1]", "events[2]", "events[3]"].map(int),
+            parms: [
+                "eventParms[0]",
+                "eventParms[1]",
+                "eventParms[2]",
+                "eventParms[3]",
+            ]
+            .map(int),
+            seq: int("eventSequence") & 0xff,
+        },
     }
 }
 
-/// Copy of `pm_input`, `crates/server/src/spectate.rs`; keep in step until
-/// the dedupe.
-pub fn pm_input(cmd: &UserCmd) -> PmInput {
-    PmInput {
-        forward: f32::from(cmd.forward) / 127.0,
-        right: f32::from(cmd.right) / 127.0,
-        jump: cmd.up > 0,
-        crouch: cmd.wbuttons & msg::WBUTTON_CROUCH != 0,
-        prone: cmd.wbuttons & msg::WBUTTON_PRONE != 0,
-        walk_slow: false,
-        lean_left: cmd.wbuttons & msg::WBUTTON_LEAN_LEFT != 0,
-        lean_right: cmd.wbuttons & msg::WBUTTON_LEAN_RIGHT != 0,
-        attack: cmd.buttons & msg::BUTTON_ATTACK != 0,
-        melee: cmd.buttons & msg::BUTTON_MELEE != 0,
-        reload: cmd.wbuttons & msg::WBUTTON_RELOAD != 0,
-        ads: cmd.buttons & msg::BUTTON_ADS != 0,
-        use_button: cmd.buttons & msg::BUTTON_USE != 0,
-        weapon: cmd.weapon,
-        angles: [cmd.angles[0], cmd.angles[1]],
-    }
-}
-
-fn short_deg(v: i32) -> f32 {
-    let deg = v as f32 / ANGLE2SHORT;
-    (deg + 180.0).rem_euclid(360.0) - 180.0
-}
-
-/// Copy of `view_angles`, `crates/server/src/spectate.rs`: degrees, wire
-/// convention (pitch positive down).
-pub fn view_angles(cmd_angles: [i32; 3], delta_angles: [i32; 3]) -> [f32; 3] {
-    [
-        short_deg(cmd_angles[0] + delta_angles[0]),
-        short_deg(cmd_angles[1] + delta_angles[1]),
-        short_deg(cmd_angles[2] + delta_angles[2]),
-    ]
-}
-
-/// One usercmd, the way `replay_moves` (`crates/server/src/server.rs`) runs
-/// it: a cmd already run is skipped, arrears past a second are dropped, and
-/// the rest is chopped into `MAX_FRAME_MS` steps.
+/// One usercmd, the way the server's `replay_moves` runs it: a cmd already
+/// run is skipped, and the rest goes through [`cmd::chop`] and
+/// [`cmd::player_step`], the server's own step.
 pub fn run_cmd(
     pred: &mut Predicted,
     cmd: &UserCmd,
     world: &MoveWorld,
     weapons: &[Option<WeaponDef>],
 ) {
-    let dt_ms = cmd.server_time.wrapping_sub(pred.command_time);
-    if dt_ms <= 0 {
+    if cmd.server_time.wrapping_sub(pred.command_time) <= 0 {
         return;
     }
-    let mut base = pred.command_time;
-    if dt_ms > MAX_PMOVE_ARREARS_MS {
-        base = cmd.server_time - MAX_PMOVE_ARREARS_MS;
-    }
-    while base != cmd.server_time {
-        let msec = (cmd.server_time - base).min(super::MAX_FRAME_MS as i32);
-        base += msec;
-        let slice = UserCmd {
-            server_time: base,
-            ..*cmd
-        };
-        step(pred, &slice, msec as f32 / 1000.0, world, weapons);
-    }
-    pred.command_time = cmd.server_time;
-}
-
-/// Copy of `ClientSim::step`'s player arm, `crates/server/src/spectate.rs`,
-/// minus what only the server does; keep in step until the dedupe.
-fn step(
-    pred: &mut Predicted,
-    cmd: &UserCmd,
-    dt: f32,
-    world: &MoveWorld,
-    weapons: &[Option<WeaponDef>],
-) {
     // Dead, spectator and intermission states are drawn from the snapshot.
-    if !predictable(pred.pm_type) {
-        return;
-    }
-    let view = view_angles(cmd.angles, pred.delta_angles);
-    pred.ps.yaw = view[1].to_radians();
-    pred.ps.pitch = (-view[0]).to_radians();
-    pred.ps.linked = pred.pm_type == PM_NORMAL_LINKED;
-    let events = super::pmove(&mut pred.ps, &pm_input(cmd), world, dt, weapons);
-    // The prone caps' push on the view (docs/research/cod11-mantle.md, "Prone").
-    let corrections = [pred.ps.view_pitch_correction, pred.ps.view_yaw_correction];
-    for (i, c) in corrections.into_iter().enumerate() {
-        if c != 0.0 {
-            pred.delta_angles[i] = (pred.delta_angles[i] + (c * ANGLE2SHORT) as i32) & 0xffff;
+    if predictable(pred.pm_type) {
+        pred.ps.linked = pred.pm_type == PM_NORMAL_LINKED;
+        for (step, dt) in cmd::chop(pred.command_time, cmd) {
+            let out = cmd::player_step(
+                &mut pred.ps,
+                &mut pred.delta_angles,
+                &mut pred.ring,
+                &step,
+                dt,
+                world,
+                weapons,
+            );
+            pred.view_lerp_start = out.view_lerp_start;
         }
     }
-    pred.view_lerp_start = pred.ps.view_lerp_stamp(cmd.server_time);
-    for e in &events {
-        // The fire parm is vcod's internal fuse channel, never sent.
-        let parm = match e.event {
-            weapon::EV_FIRE_WEAPON | weapon::EV_FIRE_WEAPON_LASTSHOT => 0,
-            _ => e.parm,
-        };
-        let slot = (pred.event_sequence & 3) as usize;
-        pred.events[slot] = e.event;
-        pred.event_parms[slot] = parm;
-        pred.event_sequence = (pred.event_sequence + 1) & 0xff;
-    }
+    pred.command_time = cmd.server_time;
 }
 
 #[cfg(test)]
@@ -533,7 +453,7 @@ mod tests {
         t += 8;
         let c = UserCmd {
             wbuttons: msg::WBUTTON_PRONE,
-            angles: [0, (150.0 * ANGLE2SHORT) as i32, 0],
+            angles: [0, (150.0 * cmd::ANGLE2SHORT) as i32, 0],
             ..cmd(t)
         };
         run_cmd(&mut pred, &c, &world, &[]);
@@ -577,10 +497,10 @@ mod tests {
             };
             run_cmd(&mut pred, &c, &world, &weapons);
         }
-        assert_eq!(pred.event_sequence, 0, "pullback and throw, wrapped");
-        assert_eq!(pred.events[2], weapon::EV_PULLBACK_WEAPON);
-        assert_eq!(pred.events[3], weapon::EV_FIRE_WEAPON);
-        assert_eq!(pred.event_parms[3], 0);
+        assert_eq!(pred.ring.seq, 0, "pullback and throw, wrapped");
+        assert_eq!(pred.ring.events[2], weapon::EV_PULLBACK_WEAPON);
+        assert_eq!(pred.ring.events[3], weapon::EV_FIRE_WEAPON);
+        assert_eq!(pred.ring.parms[3], 0);
         assert_eq!(pred.ps.ammoclip[1], 2);
     }
 }

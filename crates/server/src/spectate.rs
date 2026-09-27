@@ -6,7 +6,8 @@ use vcod_common::movetrace::{Body, MoveWorld, CONTENTS_BODY, CONTENTS_CORPSE};
 use vcod_common::net::msg::{self, UserCmd};
 use vcod_common::net::protocol::Protocol;
 use vcod_common::net::trajectory;
-use vcod_common::pmove::{self, PmEvent, PmInput};
+use vcod_common::pmove::cmd::{self, view_angles, EventRing, ANGLE2SHORT};
+use vcod_common::pmove::{self, PmEvent};
 use vcod_common::weapon::WeaponDef;
 
 /// `pm_flags`' own-body bit, third of the view-source group: a live client
@@ -134,42 +135,6 @@ const NO_CURSOR_HINT_STRING: i32 = 0xff;
 /// cannot tell it from client 63 (docs/protocol-1.1.md, "Block 1").
 const NO_TEAMMATE: i32 = 63;
 
-/// ANGLE2SHORT units per degree (codextended shared.h).
-const ANGLE2SHORT: f32 = 65536.0 / 360.0;
-
-fn short_deg(v: i32) -> f32 {
-    let deg = v as f32 / ANGLE2SHORT;
-    (deg + 180.0).rem_euclid(360.0) - 180.0
-}
-
-/// A usercmd's input words as pmove's per-frame input. The stance bits are
-/// level, and a crouched or prone client holds `up` at -127 for as long as it
-/// is down, so only a positive `up` is a jump. `walk_slow` has no wire source:
-/// CoD 1 has one move speed and no walk key, and pmove's walk scale is
-/// reachable only from the client's own fly mode. Bit table and evidence:
-/// docs/protocol-1.1.md, "Usercmd input bits".
-fn pm_input(cmd: &UserCmd) -> PmInput {
-    PmInput {
-        forward: f32::from(cmd.forward) / 127.0,
-        right: f32::from(cmd.right) / 127.0,
-        jump: cmd.up > 0,
-        crouch: cmd.wbuttons & msg::WBUTTON_CROUCH != 0,
-        prone: cmd.wbuttons & msg::WBUTTON_PRONE != 0,
-        walk_slow: false,
-        lean_left: cmd.wbuttons & msg::WBUTTON_LEAN_LEFT != 0,
-        lean_right: cmd.wbuttons & msg::WBUTTON_LEAN_RIGHT != 0,
-        attack: cmd.buttons & msg::BUTTON_ATTACK != 0,
-        melee: cmd.buttons & msg::BUTTON_MELEE != 0,
-        reload: cmd.wbuttons & msg::WBUTTON_RELOAD != 0,
-        ads: cmd.buttons & msg::BUTTON_ADS != 0,
-        use_button: cmd.buttons & msg::BUTTON_USE != 0,
-        weapon: cmd.weapon,
-        // Raw, the way `PM_AdjustAimSpreadScale` reads them: the turn term is
-        // a delta between two cmds, so the view offset both carry cancels.
-        angles: [cmd.angles[0], cmd.angles[1]],
-    }
-}
-
 /// `ANGLE2SHORT(spawn_angle) - cmd.angles`, RTCW's `SetClientViewAngle`
 /// (docs/protocol-1.1.md, "View angles"). `cmd_angles` is the
 /// client's last-known angles at the moment of this spawn. Only a fresh
@@ -182,18 +147,6 @@ fn spawn_delta_angles(yaw_deg: f32, cmd_angles: [i32; 3]) -> [i32; 3] {
         -cmd_angles[0],
         (yaw_deg * ANGLE2SHORT) as i32 - cmd_angles[1],
         -cmd_angles[2],
-    ]
-}
-
-/// `PM_UpdateViewAngles`: `ps.viewangles[i] = SHORT2ANGLE(cmd.angles[i] +
-/// delta_angles[i])`, per axis, wire convention (pitch positive down). Only a
-/// player's reaches the wire; see the `viewangles` write in
-/// [`ClientSim::to_wire`] and docs/protocol-1.1.md, "View angles".
-fn view_angles(cmd_angles: [i32; 3], delta_angles: [i32; 3]) -> [f32; 3] {
-    [
-        short_deg(cmd_angles[0] + delta_angles[0]),
-        short_deg(cmd_angles[1] + delta_angles[1]),
-        short_deg(cmd_angles[2] + delta_angles[2]),
     ]
 }
 
@@ -210,42 +163,6 @@ pub enum PmType {
     /// (docs/research/cod11-map-cycle.md section 6.2). Nothing moves it and
     /// nothing it presses is read.
     Intermission,
-}
-
-/// The four-slot event ring a playerstate or an entity carries: written at
-/// `events[seq & 3]` with the counter bumped after it, so the new slots of a
-/// frame are the ones *below* the sequence
-/// (`docs/research/cod11-combat.md` section 7).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct EventRing {
-    pub events: [i32; 4],
-    pub parms: [i32; 4],
-    /// Eight bits on the wire; kept wide here and masked at the write.
-    pub seq: i32,
-}
-
-impl EventRing {
-    /// `G_AddEvent`: the slot first, the counter after.
-    pub fn add(&mut self, event: i32, parm: i32) {
-        let slot = (self.seq & 3) as usize;
-        self.events[slot] = event;
-        self.parms[slot] = parm;
-        self.seq = self.seq.wrapping_add(1);
-    }
-
-    pub fn clear(&mut self) {
-        *self = EventRing::default();
-    }
-
-    /// `eventSequence` and the four slots, through whatever setter the
-    /// caller writes its entity or playerstate fields with.
-    pub fn write(&self, set: &mut impl FnMut(&str, i32)) {
-        set("eventSequence", self.seq & 0xff);
-        for (i, (ev, parm)) in self.events.iter().zip(&self.parms).enumerate() {
-            set(&format!("events[{i}]"), *ev);
-            set(&format!("eventParms[{i}]"), *parm);
-        }
-    }
 }
 
 /// One client's simulated state. `pm_type` selects the movement path, the way
@@ -729,10 +646,6 @@ impl ClientSim {
         if self.pm_type == PmType::Intermission {
             return Vec::new();
         }
-        self.view_angles = view_angles(cmd.angles, self.delta_angles);
-        self.ps.yaw = self.view_angles[1].to_radians();
-        // Wire pitch is positive down; the sim stores the camera's convention.
-        self.ps.pitch = -self.view_angles[0].to_radians();
         match (self.pm_type, world) {
             // Taken by the early return above.
             (PmType::Intermission, _) => {}
@@ -741,53 +654,39 @@ impl ClientSim {
             // mounts no map, and a server whose world failed to load, which
             // `Server::FALLBACK_SPAWN` keeps running. Both fly rather than
             // collide, so a player on a failed load noclips.
-            (PmType::Spectator, _) | (PmType::Normal, None) => pmove::spectator_move(
-                &mut self.ps,
-                f32::from(cmd.forward) / 127.0,
-                f32::from(cmd.right) / 127.0,
-                f32::from(cmd.up) / 127.0,
-                dt,
-            ),
+            (PmType::Spectator, _) | (PmType::Normal, None) => {
+                self.view_angles = cmd::apply_view(&mut self.ps, cmd.angles, self.delta_angles);
+                pmove::spectator_move(
+                    &mut self.ps,
+                    f32::from(cmd.forward) / 127.0,
+                    f32::from(cmd.right) / 127.0,
+                    f32::from(cmd.up) / 127.0,
+                    dt,
+                )
+            }
             (PmType::Normal, Some(w)) => {
                 // The cmds see the link the last frame's script left, so the
                 // linking frame's run free and the unlinking frame's linked
                 // (object-model doc, 23.2).
                 self.ps.linked = self.link_to.is_some();
-                let events = pmove::pmove(&mut self.ps, &pm_input(cmd), &w, dt, weapons);
+                let out = cmd::player_step(
+                    &mut self.ps,
+                    &mut self.delta_angles,
+                    &mut self.ring,
+                    cmd,
+                    dt,
+                    &w,
+                    weapons,
+                );
+                self.view_angles = out.view;
+                self.view_lerp_start = (out.view_lerp_start != 0).then_some(out.view_lerp_start);
                 self.jumped |= self.ps.jumped;
                 if self.ps.jumped {
                     self.jump_time = cmd.server_time;
                 }
                 self.land_anim |= self.ps.land_anim;
-                // Retail holds a prone view inside the cone around the body and
-                // the pitch cap off the ground by pushing `delta_angles`, so the
-                // client's own prediction lands in the same place, and the view
-                // the snapshot and the aim carry is the capped one
-                // (docs/research/cod11-mantle.md, "Prone").
-                let corrections = [self.ps.view_pitch_correction, self.ps.view_yaw_correction];
-                let capped = [-self.ps.pitch.to_degrees(), self.ps.yaw.to_degrees()];
-                for (i, c) in corrections.into_iter().enumerate() {
-                    if c != 0.0 {
-                        self.delta_angles[i] =
-                            (self.delta_angles[i] + (c * ANGLE2SHORT) as i32) & 0xffff;
-                        self.view_angles[i] = capped[i];
-                    }
-                }
-                // The stamp is the serverTime the eye's running leg began.
-                let stamp = self.ps.view_lerp_stamp(cmd.server_time);
-                self.view_lerp_start = (stamp != 0).then_some(stamp);
-                // The fire event's parm is vcod's internal fuse channel, and
-                // `eventParms[i]` is 8 bits: a 4000 ms fuse would reach a
-                // client as 160 where retail writes 0.
-                for e in &events {
-                    let parm = match e.event {
-                        pmove::weapon::EV_FIRE_WEAPON | pmove::weapon::EV_FIRE_WEAPON_LASTSHOT => 0,
-                        _ => e.parm,
-                    };
-                    self.add_event(e.event, parm);
-                }
                 self.relink();
-                return events;
+                return out.events;
             }
         }
         self.relink();
@@ -2161,59 +2060,6 @@ mod tests {
         assert_eq!(leanf(&sim), -1.0, "a full left lean is -1");
         sim.ps.lean = pmove::LEAN_MAX / 2.0;
         assert_eq!(leanf(&sim), 0.5, "a half right lean is +0.5");
-    }
-
-    /// The bit table measured off a retail 1.1 client on 2026-09-01, one case
-    /// per movement verb. Evidence and the full table:
-    /// docs/protocol-1.1.md, "Usercmd input bits".
-    #[test]
-    fn wire_bits_map_to_movement_verbs() {
-        let of = |buttons: u8, wbuttons: u8, up: i8| {
-            pm_input(&UserCmd {
-                buttons,
-                wbuttons,
-                up,
-                ..Default::default()
-            })
-        };
-        assert!(of(0, 0, 127).jump);
-        let crouch = of(0, msg::WBUTTON_CROUCH, -127);
-        assert!(crouch.crouch && !crouch.prone);
-        let prone = of(0, msg::WBUTTON_PRONE, -127);
-        assert!(prone.prone && !prone.crouch);
-        assert!(of(0, msg::WBUTTON_LEAN_LEFT, 0).lean_left);
-        assert!(of(0, msg::WBUTTON_LEAN_RIGHT, 0).lean_right);
-        // A crouched or prone client holds `up` at -127 for as long as it
-        // stays down, so only a positive `up` is a jump.
-        assert!(!crouch.jump && !prone.jump);
-    }
-
-    /// The weapon bits reach the weapon half of pmove, and nothing else: CoD 1
-    /// has a single move speed with no walk key, so no input reaches pmove's
-    /// walk scale.
-    #[test]
-    fn weapon_bits_reach_the_weapon_input_only() {
-        let all = pm_input(&UserCmd {
-            buttons: 0xff,
-            wbuttons: msg::WBUTTON_RELOAD,
-            weapon: 7,
-            ..Default::default()
-        });
-        assert!(all.attack && all.melee && all.reload && all.ads && all.use_button);
-        assert_eq!(all.weapon, 7);
-        assert!(!all.walk_slow);
-        assert_eq!(
-            PmInput {
-                attack: false,
-                melee: false,
-                reload: false,
-                ads: false,
-                use_button: false,
-                weapon: 0,
-                ..all
-            },
-            PmInput::default()
-        );
     }
 
     /// One field of the retail player capture the `playerstate_ab` gate diffs
