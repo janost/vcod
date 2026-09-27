@@ -2792,8 +2792,8 @@ impl Server {
                     ),
                     Attack::Throw { .. } => continue,
                 };
-                impacts.extend(r.impact);
-                hits.extend(r.hit);
+                impacts.extend(r.impacts);
+                hits.extend(r.hits);
             }
         }
 
@@ -3169,10 +3169,10 @@ impl Server {
                             &self.hitlocs,
                             bones.as_mut(),
                         );
-                        if let Some(te) = r.impact {
+                        for te in r.impacts {
                             rt.push_temp_entity(te);
                         }
-                        turret_hits.extend(r.hit);
+                        turret_hits.extend(r.hits);
                     }
                 }
                 // The damage callback runs here, after the script frame, so

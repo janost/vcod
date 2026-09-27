@@ -150,11 +150,13 @@ fn a_shot_takes_health_and_a_second_one_kills() {
     let vx = sb.ps.field_f32(p, "velocity[0]");
     assert!(vx > 70.0, "the knockback pushes B along the shot, {vx}");
     // The carbine is a `rifleBullet` weapon, so the large pair: 174 for
-    // everyone but the victim, 176 for the victim alone.
+    // everyone but the victim, 176 for the victim alone. The round goes on
+    // through B (combat doc 2.4, step 5), and the 174 it may leave on the
+    // world behind is not the flesh copy.
     let event = |snap: &vcod_common::net::snapshot::Snapshot, ev: i32| {
         snap.entities
             .values()
-            .find(|e| e.field_i32(p, "eType") == 12 + ev)
+            .find(|e| e.field_i32(p, "eType") == 12 + ev && e.field_i32(p, "surfType") == 7)
             .cloned()
     };
     let plain = event(sa, 174).expect("A is sent the flesh impact");
