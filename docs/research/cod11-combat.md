@@ -1243,13 +1243,29 @@ VERIFIED, the same probe run against ours (`vcod-server mp_carentan
 the front player took 67 at `head` and the back one 33 at `head` in one frame,
 with a world 174 behind them; and the turret gate's two world impacts behind
 its target now read retail's (1248 1308) and (1248 1312) to the unit
-(`cod11-turrets.md` 13.1). Two differences. Every leg of a round is traced
-before any damage callback runs, where retail runs the first player's callback
-before it traces the next leg. INFERRED: nothing a later leg reads is written
-by that callback, so the order shows on the wire only as the temp entities'
-slot order. VERIFIED, the two runs' 33600 and 39550 frames: retail's flesh
-174s took entities 176 and 178 and its wall 174 took 180, where ours put the
-wall 174 at 960 and the flesh ones at 961 and 963.
+(`cod11-turrets.md` 13.1). VERIFIED, the two runs' 33600 and 39550 frames:
+retail's flesh 174s took entities 176 and 178 and its wall 174 took 180,
+where ours then put the wall 174 at 960 and the flesh ones at 961 and 963,
+because ours traced every leg of a round and ran the damage callbacks later,
+where retail runs a leg's callback before it traces the next leg.
+
+`fire_round` still traces every leg first, but returns what the round did as
+one ordered list of impacts and hits, and the server applies it in that
+order: an impact goes on the wire, a hit runs `CodeCallback_PlayerDamage` on
+the spot, so the flesh pair `finishPlayerDamage` raises numbers between the
+leg's impacts the way retail's does. The turret pass applies its rounds the
+same way. INFERRED: tracing ahead changes nothing else within a round. The
+next leg passes the player the callback ran on, a corpse that callback
+clones is `CONTENTS_CORPSE`, which the shot mask 0x2802031 leaves out, and
+no stock damage or kill callback moves another player. The list is applied
+in the attack slot of the tick, ahead of the missiles, the blasts and the
+queued `kill` and `mr` commands, which is where retail's shot runs too: its
+`FireWeapon` is inside the usercmd, ahead of `G_RunFrame`. INFERRED, not
+measured: what still differs is across rounds of one tick. Every round of a
+tick is traced against the players as the move pass left them, so a player
+one round kills still stops a later round of the same tick (another shooter's,
+or a turret's next), where retail's later round meets whatever contents the
+death left the victim with before its end frame.
 
 Glass, measured on retail, 2026-09-27: `client-probes/probe_glass` (its
 section in that directory's README) on mp_depot stood a `--probe-target`
