@@ -1002,12 +1002,13 @@ The pickup arithmetic never touches a player entity's fields directly:
 `crate::game::item::inventory` copies the host's `client_weapons`,
 `client_ammo` and `client_vitals` mirrors into an `Inventory`, `touch_item`
 mutates a copy of it, and `write_back` copies the weapons and health onto the
-host at once and queues every changed ammo or clip count as a `WeaponOp`,
-applied to the sim after the script frame like every other weapon op, so a
-`dropItem` call in the same script frame reads what an earlier pickup already
-took. An empty-clip drop is picked up empty, the way its `-1` count or clip
-reads (section 4.1). The use key's own scan filters every ungrabbable
-candidate out with `can_grab` before it scores or traces the survivors,
+host at once and queues every changed ammo or clip count as a `WeaponOp`
+and the event as a `SimOp`. `GameHost::weapon_op` moves the host's ammo
+mirror as it queues, so a `dropItem` call later in the tick reads what an
+earlier pickup already took, and the ops reach the toucher's sim at the end
+of that cmd's passes (13.2). An empty-clip drop is picked up empty, the way
+its `-1` count or clip reads (section 4.1). The use key's own scan filters
+every ungrabbable candidate out with `can_grab` before it scores or traces the survivors,
 matching `G_GetActivateEnt`'s list once the ungrabbable entries it scores
 10000 units behind are cut (section 2.1).
 
@@ -1016,9 +1017,9 @@ fires at the top of the next script frame rather than inline with the touch
 that raised it (13.1); the settle is a floor trace rather than `G_RunItem`'s
 flight (section 11); and `trigger_use` stays on the touch pass rather than
 joining the use key's scan inside `G_GetActivateEnt` (section 11), along with
-the rest of that section's list. The retail-capture gate's one `GAPS` ruling
-is 13.2's swap disarm, one frame late, with no snapshot ever reading `weapon`
-0; section 13.4 is a further live run against ours rather than the gate.
+the rest of that section's list. The retail-capture gate has no `GAPS`
+ruling since 13.2; section 13.4 is a further live run against ours rather
+than the gate.
 
 `crates/server/tests/pickup_ab.rs` replays section 12's capture against
 vcod: the probe as the gametype under the recipe's `probe_teleport 1` and
@@ -1054,23 +1055,53 @@ unmeasured: where retail drains a trigger's notifies relative to the `wait`
 pass; vcod keeps them where they were so the trigger and S&D gates keep
 their baselines.
 
-### 13.2 The swap disarm lands a frame late
+### 13.2 A pickup reaches the playerstate inside its cmd
+
+VERIFIED: `ClientThink_real` calls `G_TouchTriggers` at 0x405b3 and
+`Cmd_Activate_f` at 0x4064e (section 1). VERIFIED: `Add_Ammo` stores the
+summed reserve through `cl+0x10c` at 0x4ca76; `BG_GivePlayerWeapon` calls
+`Com_BitSet` on `cl+0x30c` (`ps.weapons`) at 0x36a90; `BG_TakePlayerWeapon`
+clears the held bit at 0x36c73 (section 8); `Pickup_Weapon` writes
+`ps.weaponslots` at 0x4d09b; `G_AddEvent` and `G_AddPredictableEvent` write
+`ps.events` and bump `ps.eventSequence` (section 7). INFERRED: a pickup's
+ammo, held bits, slots and event are in the toucher's playerstate when the
+touch pass or the use key returns, inside its cmd, so the client's next
+`Pmove` and any damage callback that runs on it before then read them.
+
+vcod's item pass writes the weapons and health onto the host and queues the
+ammo and the event as ops. Until 2026-10-05 those ops reached the sim after
+the script frame, unless a round hit the toucher later in the same tick: the
+hit's `ScriptRuntime::take_ops_of` took every op queued for the victim, the
+pickup's beside its own callback's, and landed them at the hit. One pickup
+thus reached the sim at a hit in one tick and after the script frame in
+another. `Server::replay_moves` now applies everything queued for the mover
+at the end of each cmd's touch pass, item pass and use key, with its weapons
+and vitals mirrored (`apply_callback_ops`, the hit's own path), so a hit
+finds only its own callback's ops. A non-lethal `trigger_hurt`'s damage, the
+other thing the touch pass queues for the mover, lands there too; a lethal
+one already did. Pinned by `a_walk_over_pickup_lands_before_the_next_cmd`
+(`crates/server/src/server.rs`), which reads the ammo and a 148 ahead of the
+next cmd's shot on the ring straight after the move pass.
 
 VERIFIED, sections 12.6 and 12.7: each swap snapshot (34750 and 36250) reads
 `weapon` 0 with 155 beside the 146, and the next reads the new weapon.
-VERIFIED, the gate on vcod: the 146 is on the same snapshot with `weapon`
-still the old one, and the 155 is on the next beside the new weapon; no
-snapshot reads `weapon` 0. INFERRED: vcod runs every cmd's pmove before the
-deferred touch pass, so the disarm that retail's tap frame runs on the unheld
-`ps.weapon` (section 5) runs on the next tick's first cmd, and that tick's
-later cmd, which already carries the new weapon byte, raises the new weapon
-before the snapshot goes out.
+VERIFIED, the gate on vcod before the change: the 146 on that snapshot with
+`weapon` still the old one, and the 155 on the next beside the new weapon.
+INFERRED: the held bits the swap cleared reached the sim only after the
+script frame, so the disarm that retail's next cmd runs on the unheld
+`ps.weapon` (section 5) ran a tick late. VERIFIED, the gate on vcod after
+it: both swap snapshots read retail's shape, and the gate's `swap disarm one
+frame late` row and the shift that excused it are gone.
 
-Ruling: accepted, not restructured. Moving the touch pass inside each cmd's
-move is a tick-order redesign for a one-frame raise delay; a retail client
-sees the raise one snapshot late and no `weapon` 0 frame. The gate's `GAPS`
-row `swap disarm one frame late` excuses exactly this shape, one frame, on
-`weapon` and 155 only.
+The change exposed one thing in the gate's replay. VERIFIED, the client
+fixture: the cmd stamped 29300 carries `weapon` 6, the cmd before it 12, and
+both it and the `a 6` line are logged at ms 2357, the 29300 trace's; retail's
+putaway 156 is on the 29350 snapshot. INFERRED: the probe built that cmd
+after reading the `a 6` the 29300 snapshot's packet carried, so retail ran
+it in the next frame. The replay's `(t, t + 50]` grid put it in the 29300
+frame, where only the deferred pickup had kept the switch from starting; the
+replay now holds a weapon byte that answers the frame's own `a N` back one
+frame.
 
 ### 13.3 The cursor hint on the locked drop
 
@@ -1109,7 +1140,8 @@ VERIFIED, the ring, each difference with its ruling:
 
 - Both swaps (`use2`, `late`): retail's snapshot reads the 146 and the 155
   with `weapon` 0; ours reads the 146 with the old weapon and the 155 with
-  the new one on the next snapshot. The one-frame lag of 13.2, as ruled.
+  the new one on the next snapshot. The one-frame lag 13.2 has since
+  removed.
 - `use1` and `switch`: the putaway 156 carries parm 9 on ours and 0 on
   retail. Both are the two pmove divergences the gate found; neither is item
   pickup and neither is fixed here. Ruling: open, outside item pickup
