@@ -273,6 +273,7 @@ fn standing_blast_victim(feet: [f32; 3]) -> crate::game::combat::BlastVictim {
     crate::game::combat::BlastVictim {
         slot: 0,
         origin: feet,
+        link_origin: feet.trunc(),
         mins: glam::Vec3::new(-HALF_WIDTH, -HALF_WIDTH, 0.0),
         maxs: glam::Vec3::new(HALF_WIDTH, HALF_WIDTH, Stance::Stand.height()),
         eye: feet + glam::Vec3::Z * Stance::Stand.view_height(),
@@ -3096,6 +3097,7 @@ impl Server {
                     .map(|(slot, s)| crate::game::combat::BlastVictim {
                         slot: *slot,
                         origin: s.ps.origin,
+                        link_origin: s.link_origin(),
                         mins: s.ps.mins(),
                         maxs: s.ps.maxs(),
                         eye: s.ps.view().eye,
@@ -3372,6 +3374,11 @@ impl Server {
                     if let Some(string) = string {
                         sim.cursor_hint_string = string;
                     }
+                    // `BG_PlayerAnimation` (0x41486) runs after this slot's
+                    // aim trace: a higher slot's trace meets this frame's
+                    // pose, a lower one's met the last (combat doc 16.1).
+                    sim.commit_pose();
+                    rt.set_client_body(slot, sim.hit_body(slot));
                 }
             }
             // `turret_think_client`, last in `ClientEndFrame` (turrets doc
@@ -4000,8 +4007,7 @@ impl Server {
         let Some(def) = weapons.get(weapon as usize) else {
             return;
         };
-        // The bodies are posed off the anims their last round left, where
-        // retail's pose reads the last end frame's (combat doc, 16.1).
+        // The bodies are posed off the last end frame (combat doc, 16.1).
         let effects = {
             let sims: Vec<(usize, &crate::spectate::ClientSim)> = self
                 .clients

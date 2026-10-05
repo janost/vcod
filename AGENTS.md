@@ -639,7 +639,8 @@ engineering setup works.
   it rides the death frame's packet (`docs/research/cod11-spectator-follow.md`
   4). The anim update runs per client off its last
   cmd, at the end and wherever a kill, a hit, a use press or a
-  `trigger_hurt` death breaks into its cmds. The host mirror after each move
+  `trigger_hurt` death breaks into its cmds; it feeds the wire, while a
+  posed body's bones stay what the last end frame committed (below). The host mirror after each move
   is its origin, `pm_type`, `on_ground`, view yaw, the `ps.weapon` a move
   switched to and the `clipOnly` weapon a last round spent, the take
   included, its entity state, cook, height and ammo and clip arrays
@@ -690,6 +691,10 @@ engineering setup works.
   trace per playing client, off the frame's final eye and aim with `pm_type` and `on_ground` mirrored again
   beside it and every client's posed body mirrored again ahead of the first, whose fire wakes its waiters at the next tick's script frame,
   and beside it the cursor hint for the item the use key would pick now,
+  and after it that slot's `commit_pose` (`BG_PlayerAnimation`'s place:
+  models, anim channels, pitch and lean), the pose every later round, blast
+  probe and aim trace meets until the next end frame, at wherever the body's
+  cmds have moved it since (`docs/research/cod11-combat.md` 16.1),
   then each gunner's `turret_think_client` (the gunner half of a release
   a deleted gun queued, then aim, fire, loop sound, or the release itself on
   a use press or a death), whose rounds are traced and their impacts and hits applied in order right there, with the
