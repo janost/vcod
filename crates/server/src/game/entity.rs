@@ -272,8 +272,20 @@ impl ObjectTable {
         };
         let id = EntId(n, self.ent_gens[n as usize]);
         let script = cx.new_struct();
+        let mut engine = vec![Value::Undefined; engine_slot_count()];
+        // `.origin` and `.angles` are `r.currentOrigin` and
+        // `r.currentAngles`, vectors on every entity: retail's
+        // `script_brushmodel`s with neither key read `(0, 0, 0)` for both
+        // (docs/research/cod11-movers.md, section 11).
+        for name in ["origin", "angles"] {
+            if let crate::game::fields::Route::Engine { slot, .. } =
+                crate::game::fields::route_entity(name)
+            {
+                engine[slot] = Value::Vector([0.0; 3]);
+            }
+        }
         self.ents[id.0 as usize] = Some(GEntity {
-            engine: vec![Value::Undefined; engine_slot_count()],
+            engine,
             client: None,
             script,
             solid: true,

@@ -803,6 +803,48 @@ impl ScriptRuntime {
         std::mem::take(&mut self.host.client_link_ops)
     }
 
+    /// This frame's brush model moves (`crate::game::mover::Step`).
+    pub fn take_mover_steps(&mut self) -> Vec<crate::game::mover::Step> {
+        std::mem::take(&mut self.host.mover_steps)
+    }
+
+    /// The push `step` asked for was blocked: the mover holds a frame.
+    pub fn stall_mover(&mut self, step: &crate::game::mover::Step) {
+        self.host.movers.stall(step);
+        if let Some(world) = &self.host.world {
+            world
+                .collision
+                .set_model_pose(step.model, step.from.0, step.from.1);
+        }
+    }
+
+    /// Where a link parent is this frame, origin and angles, `None` once it
+    /// has been freed. `G_RunFrame` runs a linked entity's parent ahead of it
+    /// (0x50939-0x50955), so a mover parent is read on its own clock, the
+    /// level time, a frame ahead of the `.origin` script reads
+    /// (docs/research/cod11-movers.md, section 13).
+    pub fn link_anchor(&mut self, id: EntId) -> Option<([f32; 3], [f32; 3])> {
+        use vcod_gsc::Host;
+        let origin = self.entity_origin_of(id)?;
+        let host = &mut self.host;
+        let angles = self.vm.with_cx(|cx| {
+            let field = cx.intern_folded("angles");
+            match host.get_field(cx, id, field) {
+                Value::Vector(v) => v,
+                _ => [0.0; 3],
+            }
+        });
+        let (pos, apos) = self
+            .host
+            .movers
+            .pose_at(id, self.host.level_time_ms)
+            .unwrap_or((None, None));
+        Some((
+            pos.map_or(origin, |v| v.to_array()),
+            apos.map_or(angles, |v| v.to_array()),
+        ))
+    }
+
     /// Any live entity's `.origin`, `None` once it has been freed. The link
     /// re-anchor reads the parent through it, and a freed parent is what
     /// releases a successful planter: `sd.gsc` never unlinks it, the

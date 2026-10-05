@@ -20,9 +20,8 @@
 //! replayed, because their entity numbers belong to a live map load and a
 //! client's PVS and the shape they carry is the same one.
 //!
-//! What nothing here covers is the moving clip: a `script_brushmodel`'s
-//! brushes do not follow its trajectory, and the capture has none to compare
-//! against (`crate::game::mover`, and the movers doc's section 10).
+//! The moving clip and the push it drives are `ride_ab.rs`'s, against a
+//! second capture (the movers doc's sections 11 to 13).
 //!
 //! Needs no game data.
 

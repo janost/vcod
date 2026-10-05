@@ -1388,6 +1388,18 @@ impl ClientSim {
         self.delta_angles
     }
 
+    /// A rotating pusher turns its riders' view with it: `G_TryPushingEntity`
+    /// adds the yaw it moved, in short units, to `delta_angles[1]`
+    /// (docs/research/cod11-movers.md, section 12).
+    pub fn turn_delta_yaw(&mut self, short: i32) {
+        self.set_delta_yaw(self.delta_angles[1] + short);
+    }
+
+    /// `delta_angles[1]` as a blocked push found it.
+    pub fn set_delta_yaw(&mut self, short: i32) {
+        self.delta_angles[1] = short & 0xffff;
+    }
+
     /// `ps.viewangles`, degrees, wire convention (pitch positive down).
     pub fn view_angles(&self) -> [f32; 3] {
         self.view_angles

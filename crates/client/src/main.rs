@@ -282,6 +282,13 @@ struct Args {
     /// no fixture.
     #[arg(long)]
     probe_fall: bool,
+    /// With `--net-probe` and `--probe-team`: stand still and print a `RIDE`
+    /// line per snapshot with the origin, velocity, ground entity and view
+    /// yaw, the mover push and ride capture's wire half;
+    /// `client-probes/probe_ride` moves the brush model under the player.
+    /// Writes no fixture.
+    #[arg(long)]
+    probe_ride: bool,
     /// Walk the --probe-slope route and write every usercmd sent and every
     /// snapshot's movement fields to
     /// crates/server/tests/fixtures/playerstate/<map>-<gametype>-slope-<ms>ms.txt,
@@ -775,6 +782,7 @@ fn main() -> Result<()> {
                 killcam: args.probe_killcam,
                 killcam_skip_ms: args.probe_killcam_skip_ms,
                 fall: args.probe_fall,
+                ride: args.probe_ride,
             },
             args.capture_tag.clone(),
             args.overwrite_fixture,

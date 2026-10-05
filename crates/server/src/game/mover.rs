@@ -17,12 +17,10 @@
 //! what the capture shows retail doing: `getorigin()` and `.angles` both read
 //! the interpolated value on every frame of a move.
 //!
-//! Not here: the moving clip. A `script_brushmodel`'s brushes are baked into
-//! the world BVH at load and do not follow its trajectory, so a moving one
-//! collides where it was placed. No stock map under any stock gametype keeps
-//! a moving brush model -- mp_pavlov's two are deleted by `_gameobjects`
-//! before a client can reach them -- and the movers doc has no capture of
-//! that half to build against (its section 10).
+//! A brush model's clip follows its trajectory one frame ahead of what
+//! script reads, on retail's `G_MoverTeam` clock, and each move is handed to
+//! the server as a [`Step`] whose riders and blocked players it pushes
+//! (docs/research/cod11-movers.md, sections 11 and 12).
 
 use crate::game::host::GameHost;
 use glam::Vec3;
@@ -53,10 +51,50 @@ struct Plan {
 }
 
 impl Plan {
+    /// Where the plan has the group at `t`, without retiring anything: the
+    /// segments chained the way [`Plan::advance`] will chain them.
+    fn at(&self, t: i32) -> Vec3 {
+        let mut cur = self.current;
+        let mut queue = self.queue.iter();
+        if self.notify.is_none() {
+            return cur.evaluate(t);
+        }
+        loop {
+            let end = cur.tr_time + cur.tr_duration;
+            if t < end {
+                return cur.evaluate(t);
+            }
+            match queue.next() {
+                Some(next) => {
+                    let base = cur.evaluate(end);
+                    cur = Trajectory {
+                        tr_time: end,
+                        base,
+                        ..*next
+                    };
+                }
+                None if cur.tr_type == TR_GRAVITY => return cur.evaluate(t),
+                None => return cur.evaluate(end),
+            }
+        }
+    }
+
+    /// `G_MoverTeam`'s blocked arm: the running segment starts a frame later,
+    /// so the group holds where it was for this frame.
+    fn stall(&mut self) {
+        if self.notify.is_some() {
+            self.current.tr_time += crate::server::FRAME_MS;
+        }
+    }
+}
+
+impl Plan {
     /// Starts a verb: the queue replaces whatever was running. A second verb
     /// on a moving entity taking over rather than queueing behind it is
     /// UNVERIFIED (movers doc, section 10); it is the reading that keeps one
-    /// group to one trajectory, which is all the wire can carry.
+    /// group to one trajectory, which is all the wire can carry. The caller
+    /// sets `current` stationary at the origin script reads first, so a verb
+    /// on a moving entity starts from there, not from the old trajectory.
     fn start(&mut self, now_ms: i32, segments: Vec<Trajectory>, notify: &'static str) {
         let mut q: std::collections::VecDeque<Trajectory> = segments.into();
         let Some(mut first) = q.pop_front() else {
@@ -118,6 +156,23 @@ pub struct Movers {
 struct Mover {
     pos: Plan,
     apos: Plan,
+    /// Where the clip of a brush model mover was put last frame, origin and
+    /// angles; `None` for anything else and before its first frame.
+    clip: Option<(Vec3, Vec3)>,
+}
+
+/// One frame's move of a brush model mover, for the server to push players
+/// with: `G_MoverPush`'s `move` and `amove` are `to - from`
+/// (docs/research/cod11-movers.md, section 12).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Step {
+    pub ent: EntId,
+    /// The entity number a player standing on the brushes reads as ground.
+    pub number: u32,
+    /// The lump-27 model its brushes are.
+    pub model: usize,
+    pub from: (Vec3, Vec3),
+    pub to: (Vec3, Vec3),
 }
 
 /// One notify the integrator owes script this frame.
@@ -138,12 +193,31 @@ impl Movers {
         self.rows.remove(&id);
     }
 
+    /// The origin and angles a mover's plans put it at `t`, ahead of what
+    /// script reads, `None` for a group no verb has run on.
+    pub fn pose_at(&self, id: EntId, t: i32) -> Option<(Option<Vec3>, Option<Vec3>)> {
+        let m = self.rows.get(&id)?;
+        let at = |p: &Plan| p.started.then(|| p.at(t));
+        Some((at(&m.pos), at(&m.apos)))
+    }
+
+    /// A push the step asked for was blocked: the mover holds this frame
+    /// where it was, every trajectory a frame later, and its clip goes back
+    /// to `step.from`.
+    pub fn stall(&mut self, step: &Step) {
+        if let Some(m) = self.rows.get_mut(&step.ent) {
+            m.pos.stall();
+            m.apos.stall();
+            m.clip = Some(step.from);
+        }
+    }
+
     /// `moveto` and the three axis verbs, which differ only in how the
     /// caller builds `dest` (movers doc, section 3: the axis verbs take a
     /// delta, `moveto` a destination).
     pub fn move_to(&mut self, id: EntId, now_ms: i32, from: Vec3, dest: Vec3, m: Ramp) {
         let row = self.rows.entry(id).or_default();
-        row.pos.current.base = from;
+        row.pos.current = stationary(from);
         row.pos.start(now_ms, m.segments(dest - from), MOVEDONE);
     }
 
@@ -152,7 +226,7 @@ impl Movers {
     /// axis, where the two agree, and a multi-axis `rotateto` is UNVERIFIED.
     pub fn rotate_to(&mut self, id: EntId, now_ms: i32, from: Vec3, dest: Vec3, m: Ramp) {
         let row = self.rows.entry(id).or_default();
-        row.apos.current.base = from;
+        row.apos.current = stationary(from);
         row.apos.start(now_ms, m.segments(dest - from), ROTATEDONE);
     }
 
@@ -160,7 +234,7 @@ impl Movers {
     /// gravity trajectory, bounded only in when the notify comes.
     pub fn move_gravity(&mut self, id: EntId, now_ms: i32, from: Vec3, velocity: Vec3, secs: f32) {
         let row = self.rows.entry(id).or_default();
-        row.pos.current.base = from;
+        row.pos.current = stationary(from);
         row.pos.start(
             now_ms,
             vec![Trajectory {
@@ -205,7 +279,8 @@ impl Movers {
 /// fields. Angles are normalized into 0..360 the way the script side reads
 /// them; the wire keeps the raw value (movers doc, section 8).
 pub fn run(host: &mut GameHost, cx: &mut vcod_gsc::Cx) -> Vec<Done> {
-    let now_ms = host.level_time_ms - crate::server::FRAME_MS;
+    let level_ms = host.level_time_ms;
+    let now_ms = level_ms - crate::server::FRAME_MS;
     let mut movers = std::mem::take(&mut host.movers);
     movers.rows.retain(|id, _| host.ents.get(*id).is_some());
 
@@ -237,10 +312,72 @@ pub fn run(host: &mut GameHost, cx: &mut vcod_gsc::Cx) -> Vec<Done> {
             let atom = cx.intern_folded(name);
             let _ = host.set_field(cx, id, atom, vcod_gsc::Value::Vector(v));
         }
+        clip_step(host, cx, id, m, level_ms);
     }
 
     host.movers = movers;
     done
+}
+
+/// A brush model mover's clip, moved to where its plans have it at the
+/// level time and handed on as a [`Step`] when it moved. That is
+/// `G_MoverTeam`'s clock: the entity pass runs after the script frame, so
+/// the clip is a frame ahead of the `getorigin()` above (movers doc,
+/// sections 8 and 11).
+fn clip_step(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId, m: &mut Mover, level_ms: i32) {
+    let Some(model) = submodel(host, cx, id) else {
+        return;
+    };
+    let Some(world) = host.world.clone() else {
+        return;
+    };
+    let field = |host: &mut GameHost, cx: &mut vcod_gsc::Cx, name: &str| {
+        let atom = cx.intern_folded(name);
+        match host.get_field(cx, id, atom) {
+            vcod_gsc::Value::Vector(v) => Vec3::from(v),
+            _ => Vec3::ZERO,
+        }
+    };
+    let origin = field(host, cx, "origin");
+    let angles = field(host, cx, "angles");
+    let at = |m: &Mover, t: i32| {
+        (
+            if m.pos.started { m.pos.at(t) } else { origin },
+            if m.apos.started { m.apos.at(t) } else { angles },
+        )
+    };
+    let to = at(m, level_ms);
+    let from = m
+        .clip
+        .unwrap_or_else(|| at(m, level_ms - crate::server::FRAME_MS));
+    m.clip = Some(to);
+    if from == to {
+        return;
+    }
+    world.collision.set_model_pose(model, to.0, to.1);
+    if !world.collision.model_linked(model) {
+        return;
+    }
+    host.mover_steps.push(Step {
+        ent: id,
+        number: id.0,
+        model,
+        from,
+        to,
+    });
+}
+
+/// The `N` of an entity whose `.model` is `"*N"`, N > 0.
+fn submodel(host: &mut GameHost, cx: &mut vcod_gsc::Cx, id: EntId) -> Option<usize> {
+    let atom = cx.intern_folded("model");
+    let vcod_gsc::Value::String(m) = host.get_field(cx, id, atom) else {
+        return None;
+    };
+    cx.resolve(m)
+        .strip_prefix('*')?
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| n > 0)
 }
 
 /// A verb's duration and its two ramps, all in seconds, and the segment
@@ -307,6 +444,15 @@ impl Ramp {
             });
         }
         out
+    }
+}
+
+/// A group at rest at `at`, what a verb starts from.
+fn stationary(at: Vec3) -> Trajectory {
+    Trajectory {
+        tr_type: TR_STATIONARY,
+        base: at,
+        ..Trajectory::default()
     }
 }
 
@@ -389,6 +535,33 @@ mod tests {
         assert_eq!(plan.current.tr_type, TR_STATIONARY);
         assert!((plan.current.base.z - 688.0).abs() < 0.01);
         assert_eq!(plan.advance(4000), None, "the notify comes once");
+    }
+
+    /// `at` reads ahead without retiring anything, chaining the segments the
+    /// way `advance` will; a stall holds the running segment a frame, and
+    /// the notify comes that much later (movers doc, section 12).
+    #[test]
+    fn a_stall_holds_the_plan_a_frame() {
+        let mut plan = Plan::default();
+        plan.current.base = Vec3::new(0.0, 0.0, 592.0);
+        plan.start(
+            1000,
+            Ramp::new(2.0, 0.5, 0.5).segments(Vec3::new(0.0, 0.0, 96.0)),
+            MOVEDONE,
+        );
+        assert!(
+            (plan.at(2500).z - 672.0).abs() < 0.01,
+            "{}",
+            plan.at(2500).z
+        );
+        assert!((plan.at(5000).z - 688.0).abs() < 0.01);
+        assert_eq!(plan.current.tr_type, TR_ACCELERATE, "at retired nothing");
+
+        let before = plan.at(1200);
+        plan.stall();
+        assert_eq!(plan.at(1250), before);
+        assert_eq!(plan.advance(3000), None);
+        assert_eq!(plan.advance(3050), Some(MOVEDONE));
     }
 
     /// `movegravity` is the one verb that does not settle: retail's entity

@@ -112,6 +112,8 @@ either: the people on it signed up for Call of Duty.
 - Mounted MG42s: mount with use, aim inside the gun's arc, fire, dismount.
 - Map triggers (`trigger_multiple`, `trigger_hurt`, `trigger_use`,
   `trigger_lookat`), and script movers whose trajectories reach the wire.
+  A moving brush model carries the players on it and shoves the ones in its
+  way, and a player linked to a moving entity rides it.
 - Intermission, `map_restart`, and `sv_mapRotation` the way retail runs them,
   with the next map's gamestate sent on the live connection.
 - Spectator follow mode and the killcam, replayed out of a ring of archived
@@ -174,7 +176,7 @@ console, no key rebinding. You get command-line flags and the binds below.
 - `re` (Retrieval) and `bel` (Behind Enemy Lines) run through the same
   script path, but I haven't checked either against retail.
 - Item respawn, an item's launch arc and `CONTENTS_NODROP` aren't modelled.
-- A player linked to a moving entity doesn't ride it.
+- A moving brush model pushes players only, not items, grenades or corpses.
 - No rcon, no anti-cheat, no PunkBuster, no master server heartbeat.
 
 **Rendering and sound**

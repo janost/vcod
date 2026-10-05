@@ -329,6 +329,29 @@ COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=75 \
 cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-fall --probe-secs 65
 ```
 
+## probe_ride
+
+The mover push and ride capture's server half. It renames mp_carentan's two
+bombzone brush models' `script_gameobjectname` to `dm` so `_gameobjects`
+keeps them, and under `probe_teleport 1` stands each spawned allied player on
+model `*5`'s plank slab and moves it one verb per phase (up, down, across, a
+2-degree yaw, a push, the slab lowered onto the player's head), then links
+the player to a `script_origin` and moves and turns that. Every server frame
+of a phase logs `PROBE f <phase> <time> <player origin> <mover origin> <mover
+angles>`. The client half prints a `RIDE` line per snapshot. Neither half
+writes a file; the 2026-10-05 run is in
+`crates/server/tests/fixtures/movers/mp_carentan-dm-ride.txt` (the server's
+`PROBE` lines) and `-ride-wire.txt` (the client's `RIDE` and trajectory lines
+in the phase window), which `crates/server/tests/ride_ab.rs` replays and
+`docs/research/cod11-movers.md` 11 to 13 reads.
+
+```
+COD_LNXDED_HOME=<absolute, no '+'> PROBE_SECS=115 \
+    tools/run_probe.sh client-probes/probe_ride mp_carentan +set probe_teleport 1
+# second shell, about 6 s later:
+cargo run -p vcod -- --net-probe 127.0.0.1:28970 --probe-team allies --probe-ride --probe-secs 104
+```
+
 ## probe_bump
 
 Player-vs-player clipping's server half. Under `probe_teleport 1` it puts
